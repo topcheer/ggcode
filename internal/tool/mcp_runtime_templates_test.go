@@ -1,9 +1,5 @@
 package tool
 
-// Companion test for the sa-148 resource templates render line in
-// list_mcp_capabilities: shown only when a server publishes templates, so
-// legacy servers keep their output byte-identical.
-
 import (
 	"context"
 	"encoding/json"

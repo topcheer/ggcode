@@ -4,29 +4,6 @@ import (
 	"strings"
 )
 
-// truncation_advisory.go provides tool-specific continuation guidance when
-// guardToolOutput truncates a tool result.
-//
-// Research basis: Anthropic's "Effective Agents" (2025) and "Context Engineering"
-// papers emphasize that agents need actionable feedback when context is managed.
-// Silent truncation forces agents into blind re-querying (wasteful, often repeats
-// the same large call). A tool-specific advisory tells the agent exactly HOW to
-// retrieve the missing data efficiently.
-//
-// Competitor analysis:
-//   - Claude Code: shows truncation notice with line count, suggests /more
-//   - Cursor: paginates large outputs with "Show More" UI
-//   - Aider: avoids truncation by using targeted git diffs
-//   - Cline/OpenHands: truncates with a note but no actionable guidance
-//
-// Our approach: when guardToolOutput truncates, append a tool-specific advisory
-// string that recommends the most efficient retrieval strategy for that tool type.
-// This is purely mechanical (no LLM cost) and reduces wasteful retry loops.
-
-// truncationAdvisory generates a tool-specific guidance string appended after
-// the truncation marker when guardToolOutput truncates a tool result.
-// toolName is the name of the tool that produced the output.
-// originalLen is the byte length of the original (pre-truncation) output.
 func truncationAdvisory(toolName string, originalLen int) string {
 	sizeStr := formatBytes(originalLen)
 	var advice string
@@ -77,9 +54,7 @@ func truncationAdvisory(toolName string, originalLen int) string {
 			"Use browser actions (extract, evaluate, screenshot) to target specific elements instead of full-page content."
 
 	case "task_output", "a2a_get_task":
-		// Deterministic snapshots: re-running with identical arguments returns
-		// byte-identical content, so the generic "tighter scope" advice is
-		// unexecutable and induces 2-4 wasted re-call loops (#365).
+
 		if toolName == "task_output" {
 			advice = "Task output (" + sizeStr + ") was truncated. task_output returns the same snapshot on every call — " +
 				"re-running it will not yield more. Re-call once with the tail_lines parameter to page through the end, " +
@@ -90,15 +65,10 @@ func truncationAdvisory(toolName string, originalLen int) string {
 		}
 
 	default:
-		// MCP tools (mcp__server__tool) and other scope-less deterministic
-		// tools share a distinct problem: the generic advice below is
-		// unexecutable for them. Handle the known families first (#365).
+
 		switch {
 		case strings.HasPrefix(toolName, "mcp__"):
-			// MCP tool parameters are fixed by the server schema — the agent
-			// often has no scope-narrowing parameter available. The
-			// server-side result cap may also have already fired before this
-			// guard (#365).
+
 			advice = "MCP tool output (" + sizeStr + ") was truncated under context pressure. " +
 				"The tool's parameters are defined by the MCP server schema — if none of them can narrow the result, " +
 				"re-calling will return the same content and be truncated again. Prefer a different tool for the specific " +
@@ -112,27 +82,21 @@ func truncationAdvisory(toolName string, originalLen int) string {
 	return "\n[Truncation advisory: " + advice + "]"
 }
 
-// advisoryForTruncation is called when guardToolOutput truncates a result.
-// It returns the advisory string to append, or "" if no advisory is needed
-// (e.g., for very small truncations where the head-tail is sufficient).
 func advisoryForTruncation(toolName string, originalLen int) string {
-	// Only add advisory for outputs that were meaningfully large.
-	// Below 8KB, the head-tail preservation already captures most content.
+
 	if originalLen < 8*1024 {
 		return ""
 	}
 	return truncationAdvisory(toolName, originalLen)
 }
 
-// withTruncationAdvisory appends a tool-specific advisory to already-truncated
-// content. This is the integration point called from the agent loop.
 func withTruncationAdvisory(truncatedContent, toolName string, originalLen int) string {
 	advisory := advisoryForTruncation(toolName, originalLen)
 	if advisory == "" {
 		return truncatedContent
 	}
 	if strings.HasSuffix(truncatedContent, advisory) {
-		return truncatedContent // idempotent
+		return truncatedContent
 	}
 	return truncatedContent + advisory
 }

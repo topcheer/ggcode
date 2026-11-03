@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// writeConfig writes a minimal ggcode.yaml with the given fallback vendor.
 func writeConfig(t *testing.T, path, fbVendor string) {
 	t.Helper()
 	yaml := "language: en\n"
@@ -44,7 +43,6 @@ func TestConfigHotReload_FallbackRefresh(t *testing.T) {
 	w := NewConfigHotReload(cfgPath, access)
 	w.interval = 10 * time.Millisecond
 
-	// Edit: add a fallback.
 	writeConfig(t, cfgPath, "anthropic")
 	w.pollOnce()
 
@@ -69,7 +67,6 @@ func TestConfigHotReload_VendorDefsRefresh(t *testing.T) {
 
 	w := NewConfigHotReload(cfgPath, access)
 
-	// Simulate a vendors.yaml change (fresh config with different vendor map).
 	fresh, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -91,13 +88,11 @@ func TestConfigHotReload_InvalidYAMLKeepsLastGood(t *testing.T) {
 	access := newTestAccess(t, cfgPath)
 	w := NewConfigHotReload(cfgPath, access)
 
-	// Break the file mid-edit (editors do this transiently).
 	if err := os.WriteFile(cfgPath, []byte("vendor: [broken"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	w.pollOnce()
 
-	// Last good fallback must survive.
 	if !access.cfg.Fallback.IsConfigured() {
 		t.Fatal("broken yaml must not wipe the last good config")
 	}
@@ -111,10 +106,6 @@ func TestConfigHotReload_NoChangeNoRefresh(t *testing.T) {
 	access := newTestAccess(t, cfgPath)
 	w := NewConfigHotReload(cfgPath, access)
 
-	// Baseline is seeded at Start; without Start, seed manually via one
-	// poll (which will treat the file as changed the first time). Simulate
-	// steady state instead: poll twice with no edits and assert no panic
-	// and config stays consistent.
 	for i := 0; i < 2; i++ {
 		w.pollOnce()
 	}
@@ -129,7 +120,7 @@ func TestConfigHotReload_SessionSelectionPreserved(t *testing.T) {
 	writeConfig(t, cfgPath, "")
 
 	access := newTestAccess(t, cfgPath)
-	// Simulate a session-scoped model override (TUI /model, #541 semantics).
+
 	access.cfg.Model = "glm-5.2-custom"
 
 	w := NewConfigHotReload(cfgPath, access)
@@ -142,8 +133,6 @@ func TestConfigHotReload_SessionSelectionPreserved(t *testing.T) {
 	}
 	w.applyFreshConfig(fresh)
 
-	// Vendor/Endpoint/Model selection is session-scoped: file edits must
-	// not stomp a live session's model choice.
 	if access.cfg.Model != "glm-5.2-custom" {
 		t.Fatalf("session model selection stomped by reload: %q", access.cfg.Model)
 	}
@@ -161,7 +150,6 @@ func TestConfigHotReload_ConcurrentAccessUnderRefresh(t *testing.T) {
 	w.interval = 5 * time.Millisecond
 	w.Start(ctx)
 
-	// Concurrent Get/Set while the watcher refreshes - race detector bait.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -176,10 +164,6 @@ func TestConfigHotReload_ConcurrentAccessUnderRefresh(t *testing.T) {
 	<-done
 	cancel()
 
-	// Start's poll loop may still be inside a pollOnce (config.Load and the
-	// api-key migration can rewrite ggcode.yaml on disk) when the test ends.
-	// t.TempDir's RemoveAll then races that write and fails with
-	// "directory not empty". Wait until the loop has quiesced before cleanup.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		w.mu.Lock()
@@ -193,9 +177,7 @@ func TestConfigHotReload_ConcurrentAccessUnderRefresh(t *testing.T) {
 }
 
 func TestApplyFreshConfigRefreshesFallbacks(t *testing.T) {
-	// Regression for #1482: applyFreshConfig copied only the legacy single
-	// Fallback field, leaving the modern Fallbacks array frozen at the
-	// startup snapshot despite the "config refreshed" log.
+
 	a := &configAccess{cfg: &config.Config{}}
 	a.cfg.Fallbacks = []config.FallbackConfig{{Vendor: "old"}}
 	w := &ConfigHotReload{access: a}

@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// C-behavioral (harness mirrored from TestLanChatSendStarTriggersBroadcast):
-// a MIXED list carrying "*" must take the broadcast path - the old code
-// dropped the "*" into unresolved and sent only to named nodes.
 func TestIssue4553C_MixedListWildcardBroadcastsBehavioral(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 	hub.HandlePresence(lanchat.Participant{

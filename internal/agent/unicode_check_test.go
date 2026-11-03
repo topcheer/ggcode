@@ -6,9 +6,9 @@ import (
 )
 
 func TestCheckUnicodeChars_SmartQuotes(t *testing.T) {
-	// Smart quotes introduced by an edit
+
 	old := "x := \"hello\"\n"
-	new_ := "x := “hello”\n" // left/right double quotes
+	new_ := "x := “hello”\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result == "" {
@@ -23,9 +23,9 @@ func TestCheckUnicodeChars_SmartQuotes(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_NonBreakingSpace(t *testing.T) {
-	// Non-breaking space in indentation
+
 	old := "func main() {\n    return\n}\n"
-	new_ := "func main() {\n\u00a0   return\n}\n" // NBSP instead of regular space
+	new_ := "func main() {\n\u00a0   return\n}\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result == "" {
@@ -40,9 +40,9 @@ func TestCheckUnicodeChars_NonBreakingSpace(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_ZeroWidthSpace(t *testing.T) {
-	// Zero-width space in identifier
+
 	old := "var myVar int\n"
-	new_ := "var my\u200bVar int\n" // zero-width space inserted in identifier
+	new_ := "var my\u200bVar int\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result == "" {
@@ -57,9 +57,9 @@ func TestCheckUnicodeChars_ZeroWidthSpace(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_DeltaDetection(t *testing.T) {
-	// Pre-existing smart quotes should NOT trigger warning (delta detection)
+
 	old := "// This is “clever” code\n\n"
-	new_ := "// This is “clever” code with more\n\n" // same quotes, just added text
+	new_ := "// This is “clever” code with more\n\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result != "" {
@@ -68,9 +68,9 @@ func TestCheckUnicodeChars_DeltaDetection(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_PartialDeltaDetection(t *testing.T) {
-	// One pre-existing + one new smart quote: only the new one should trigger
+
 	old := "// This is “clever”\n\n"
-	new_ := "// This is “clever” and “even better”\n\n" // 2 existing + 2 new
+	new_ := "// This is “clever” and “even better”\n\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result == "" {
@@ -82,7 +82,7 @@ func TestCheckUnicodeChars_PartialDeltaDetection(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_NoProblematicChars(t *testing.T) {
-	// Normal ASCII content — no warning
+
 	old := ""
 	new_ := "package main\n\nfunc main() {\n\tprintln(\"hello world\")\n}\n"
 
@@ -93,7 +93,7 @@ func TestCheckUnicodeChars_NoProblematicChars(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_EmDashWarning(t *testing.T) {
-	// Em-dash in comment — warning severity
+
 	old := "// This is a comment\n"
 	new_ := "// This is a comment \u2014 with an em-dash\n"
 
@@ -110,7 +110,7 @@ func TestCheckUnicodeChars_EmDashWarning(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_BOM(t *testing.T) {
-	// BOM character introduced mid-file
+
 	old := "var data = []byte{}\n"
 	new_ := "var data = []byte{\ufeff}\n"
 
@@ -124,9 +124,9 @@ func TestCheckUnicodeChars_BOM(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_FullWidthParen(t *testing.T) {
-	// Fullwidth parens — visually similar but break parsers
+
 	old := "fmt.Println(x)\n"
-	new_ := "fmt.Println\uff08x\uff09\n" // fullwidth parens
+	new_ := "fmt.Println\uff08x\uff09\n"
 
 	result := checkUnicodeChars("main.go", old, new_)
 	if result == "" {
@@ -138,7 +138,7 @@ func TestCheckUnicodeChars_FullWidthParen(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_LineNumber(t *testing.T) {
-	// Verify line number is reported correctly
+
 	old := "line1\nline2\nline3\n"
 	new_ := "line1\nline2\nline3 ‘quoted’\n"
 
@@ -152,19 +152,16 @@ func TestCheckUnicodeChars_LineNumber(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_WarningCap(t *testing.T) {
-	// Introduce many different problematic chars to test the cap
+
 	old := ""
 	var newContent strings.Builder
 	newContent.WriteString("\u2018\u201c\u00a0\u200b\u2014\u2013\uff01\uff08\uff09\uff1b\uff1d\uff5b\uff5d\u00b7\u2026")
-	// That's 15 different problematic character types
 
 	result := checkUnicodeChars("main.go", old, newContent.String())
 	if result == "" {
 		t.Fatal("expected warning")
 	}
 
-	// Count how many specific character types are listed
-	// Each type listing contains " - " prefix and U+
 	lines := strings.Split(result, "\n")
 	typeLines := 0
 	for _, l := range lines {
@@ -175,7 +172,7 @@ func TestCheckUnicodeChars_WarningCap(t *testing.T) {
 	if typeLines > maxUnicodeWarnings {
 		t.Errorf("expected at most %d character types listed, got %d", maxUnicodeWarnings, typeLines)
 	}
-	// Should have a "...and N more" message
+
 	if typeLines == 15 {
 		t.Error("expected cap to limit displayed types, but all 15 shown")
 	}
@@ -189,7 +186,7 @@ func TestCheckUnicodeChars_EmptyNewContent(t *testing.T) {
 }
 
 func TestCheckUnicodeChars_IntegrationWithWriteIntegrity(t *testing.T) {
-	// Verify that checkWriteIntegrity catches smart quotes via the Unicode check
+
 	old := "var x = \"hello\"\n"
 	new_ := "var x = “hello”\n"
 
@@ -197,16 +194,12 @@ func TestCheckUnicodeChars_IntegrationWithWriteIntegrity(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected write integrity to catch Unicode chars")
 	}
-	// It might be capped, but should produce a warning
+
 	if !strings.Contains(result, "Post-write integrity check") {
 		t.Errorf("should have integrity check header, got: %s", result)
 	}
 }
 
-// TestCheckUnicodeChars_CJKContextDowngraded pins #1217: smart quotes and
-// fullwidth punctuation introduced on lines containing CJK script (Chinese
-// comments, strings, prose) must NOT carry an ASCII replacement directive -
-// they are standard CJK typography and replacing them corrupts content.
 func TestCheckUnicodeChars_CJKContextDowngraded(t *testing.T) {
 	old := ""
 	new_ := "s := \"x\"\n// 注释里的“中文引号”（全角括号）——省略号…\n"
@@ -226,9 +219,6 @@ func TestCheckUnicodeChars_CJKContextDowngraded(t *testing.T) {
 	}
 }
 
-// TestCheckUnicodeChars_CJKInvisibleStillFlagged pins the invisible-char
-// exemption of #1217: zero-width characters on CJK lines are never
-// legitimate typography and keep their removal directive.
 func TestCheckUnicodeChars_CJKInvisibleStillFlagged(t *testing.T) {
 	result := checkUnicodeChars("main.go", "", "注释\u200b内容\n")
 	if result == "" {
@@ -239,9 +229,6 @@ func TestCheckUnicodeChars_CJKInvisibleStillFlagged(t *testing.T) {
 	}
 }
 
-// TestCheckUnicodeChars_MixedContextKeepsError: the same character type on
-// both a CJK line and a pure-ASCII line stays actionable - any non-CJK
-// instance (likely a broken delimiter) keeps the replacement directive.
 func TestCheckUnicodeChars_MixedContextKeepsError(t *testing.T) {
 	new_ := "// 中文“引号”\nx := “broken”\n"
 	result := checkUnicodeChars("main.go", "", new_)
@@ -253,9 +240,6 @@ func TestCheckUnicodeChars_MixedContextKeepsError(t *testing.T) {
 	}
 }
 
-// TestUnicodeCheck_ExcludesProseFiles pins the #1217 registration gate:
-// unicode-check must not apply to LangAny (prose: .md/.txt), where curly
-// quotes and fullwidth punctuation are legitimate typography.
 func TestUnicodeCheck_ExcludesProseFiles(t *testing.T) {
 	for _, c := range allChecks {
 		if c.Name != "unicode-check" {

@@ -1,21 +1,5 @@
 package agent
 
-// Companion tests for issues #951, #952, #953.
-//
-// #951 (protocol-level run abort): batch-loop detectors inject pure-text user
-// guidance between an open assistant(tool_use) message and its closing
-// user(tool_result) message. ensureMessagesSendable now defers that guidance
-// and re-appends it AFTER the tool_result blocks, restoring a legal sequence.
-//
-// #952 (metering bugs): (a) originalContentLen is captured BEFORE the detector
-// chain so guidance never inflates token-waste metering; (b) cross-detector
-// consensus uses explicit recordFiring calls (checkOnly) instead of the fragile
-// baseline-offset content scan; dead scan tags removed.
-//
-// #953 (detector defects): (a) syncVerifyAndGate reports an explicit `passed`
-// flag so retry-round passes skip redundant async verify; (b) a FAILED edit no
-// longer resets the futile-cycle epoch.
-
 import (
 	"context"
 	"os"
@@ -26,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
-
-// --- #951: batch-injected guidance reordering ---
 
 func newValidationAgent() *Agent {
 	return NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
@@ -41,8 +23,7 @@ func TestEnsureMessagesSendableReordersInBatchGuidance(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{
 			provider.ToolUseBlock("t1", "read_file", []byte(`{"path":"a.go"}`)),
 		}},
-		// Illegal injection (#951): detector guidance added mid-batch, before
-		// the batch's tool_results are enqueued.
+
 		{Role: "user", Content: []provider.ContentBlock{
 			provider.TextBlock("[Reversibility] think twice before this destructive action"),
 		}},
@@ -57,17 +38,14 @@ func TestEnsureMessagesSendableReordersInBatchGuidance(t *testing.T) {
 	if len(out) != 4 {
 		t.Fatalf("expected 4 messages after repair, got %d: %#v", len(out), out)
 	}
-	// The assistant(tool_use) message must be IMMEDIATELY followed by a user
-	// message containing the matching tool_result — no pure-text user message
-	// in between (strict providers reject that with a non-retryable 400).
+
 	if out[1].Role != "assistant" || len(out[1].Content) != 1 || out[1].Content[0].Type != "tool_use" {
 		t.Fatalf("out[1] should be the assistant tool_use message, got %#v", out[1])
 	}
 	if out[2].Role != "user" || len(out[2].Content) == 0 || out[2].Content[0].Type != "tool_result" || out[2].Content[0].ToolID != "t1" {
 		t.Fatalf("out[2] must start with the tool_result for t1, got %#v", out[2])
 	}
-	// The deferred guidance text must be merged into that same user message,
-	// AFTER the tool_result block.
+
 	if len(out[2].Content) != 2 || out[2].Content[1].Type != "text" ||
 		!strings.Contains(out[2].Content[1].Text, "[Reversibility]") {
 		t.Fatalf("guidance text must follow the tool_result block in out[2], got %#v", out[2])
@@ -85,8 +63,7 @@ func TestEnsureMessagesSendableFlushesGuidanceWhenNeverClosed(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{
 			provider.ToolUseBlock("t1", "read_file", []byte(`{"path":"a.go"}`)),
 		}},
-		// Guidance injected mid-batch, and the conversation ends before the
-		// tool_result message ever arrives.
+
 		{Role: "user", Content: []provider.ContentBlock{
 			provider.TextBlock("[Scope Narrow] you dropped a requirement"),
 		}},
@@ -94,8 +71,6 @@ func TestEnsureMessagesSendableFlushesGuidanceWhenNeverClosed(t *testing.T) {
 
 	out := a.ensureMessagesSendable(msgs)
 
-	// Expected: synthetic tool_result closes t1, with the guidance text
-	// merged after the tool_result block in that same message.
 	if len(out) != 3 {
 		t.Fatalf("expected 3 messages, got %d: %#v", len(out), out)
 	}
@@ -133,14 +108,9 @@ func TestEnsureMessagesSendableKeepsCleanSequenceUnchanged(t *testing.T) {
 	}
 }
 
-// --- #952: consensus explicit firing + dead tag cleanup ---
-
 func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
 	s := newConsensusState()
 
-	// Simulate detectors recording their firings explicitly (#952). All three
-	// land on the same step, mirroring the batch-loop pattern where several
-	// detectors fire for one tool result.
 	s.recordFiring("Failure Mode", 1)
 	s.recordFiring("Error Cascade", 1)
 	s.recordFiring("Convergence Lock", 1)
@@ -157,34 +127,22 @@ func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
 func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
 	s := newConsensusState()
 
-	// #952 follow-up: scanAndCheck and its dead-tag list were removed;
-	// live detectors record explicitly. Raw content can no longer record
-	// firings at all, so the dead-tag concern is moot.
-
-	// Live detectors still work through the explicit recordFiring path.
 	s.recordFiring("Error Rush", 1)
 	s.recordFiring("Tunnel Vision", 1)
 	if got := s.checkOnly(); got != "" {
-		// Two detectors is below the threshold of 3 — no alert expected.
+
 		t.Fatalf("two live tags are below threshold, expected no alert, got: %s", got)
 	}
-	// Third firing crosses the threshold of 3 distinct detectors within the
-	// window; the alert is returned by this checkOnly call itself (it fires
-	// the alert and enters cooldown).
+
 	s.recordFiring("Analysis Paralysis", 1)
 	if got := s.checkOnly(); got == "" {
 		t.Fatal("three live tags across scans should trigger consensus")
 	}
 }
 
-// --- #952-1: token-waste metering uses originalLen, immune to guidance pollution ---
-
 func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 	s := newTokenWasteBudgetState()
 
-	// Simulate what the agent loop does AFTER the #952-1 fix: content carries
-	// appended detector guidance (100 chars), but originalLen (10) is what the
-	// loop captured BEFORE the detector chain.
 	polluted := strings.Repeat("x", 100)
 	s.recordToolResultLen("read_file", polluted, 10, false, false, nil)
 
@@ -204,11 +162,6 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 	}
 }
 
-// TestAgentGoOriginalContentLenCapturedBeforeDetectorChain pins the
-// #952/#1819-case-2 metering capture contract: the length metered into
-// token-waste must be taken AFTER output shrink (compress/guard) and
-// BEFORE guidance hints are appended, so metering reflects the real
-// context cost in both directions (#553 inflation and #1819 shrink).
 func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
 	src, err := os.ReadFile("agent.go")
 	if err != nil {
@@ -228,14 +181,9 @@ func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
 	}
 }
 
-// --- #953-1: syncVerifyAndGate return contract ---
-
 func TestSyncVerifyAndGateReturnContract(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 
-	// No working directory, no code changes: the gate must decline to run and
-	// must NOT report a pass. Verifies the new two-value contract
-	// (shouldContinue, passed) that the agent loop now destructures.
 	shouldContinue, passed := a.syncVerifyAndGate(context.Background(), &RunStats{}, 0)
 	if shouldContinue {
 		t.Fatal("expected shouldContinue=false when verification cannot run")
@@ -245,14 +193,9 @@ func TestSyncVerifyAndGateReturnContract(t *testing.T) {
 	}
 }
 
-// --- #953-2: failed edit must not reset the futile-cycle epoch ---
-
 func runFutileCycleScenario(t *testing.T, editPath, oldText, newText string) *Agent {
 	t.Helper()
 
-	// Real temp workspace: the agent's executeFileTool wrapper intercepts
-	// edit_file and reads the target file before delegating, so a successful
-	// edit requires the file to actually exist in the working directory.
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir+"/src", 0o755); err != nil {
 		t.Fatalf("mkdir src: %v", err)
@@ -264,15 +207,14 @@ func runFutileCycleScenario(t *testing.T, editPath, oldText, newText string) *Ag
 	}
 
 	registry := tool.NewRegistry()
-	// read_file mock: productive read results.
+
 	if err := registry.Register(mockTool{
 		name:   "read_file",
 		result: tool.Result{Content: "package main\n\nfunc main() {}"},
 	}); err != nil {
 		t.Fatalf("register read_file: %v", err)
 	}
-	// edit_file: intercepted by executeFileTool (diff preview + checkpointing),
-	// so no mock result is needed; success/failure comes from the real args.
+
 	if err := registry.Register(mockTool{name: "edit_file"}); err != nil {
 		t.Fatalf("register edit_file: %v", err)
 	}
@@ -316,15 +258,9 @@ func runFutileCycleScenario(t *testing.T, editPath, oldText, newText string) *Ag
 }
 
 func TestFutileCycleFailedEditDoesNotResetEpoch(t *testing.T) {
-	// Target file does not exist: computeFileChange fails, the edit result is
-	// an error, no state mutation happened. (Real edit_file arg key is
-	// "file_path"; computeFileChange reads the file directly.)
+
 	a := runFutileCycleScenario(t, "src/missing.go", "A", "B")
 
-	// A FAILED edit mutates nothing: the epoch must stay open (no write
-	// boundary), so the anchor-recovery re-reads are part of the SAME epoch
-	// and no epoch-pair comparison (and no false "[futile-cycle]" warning)
-	// can fire.
 	if len(a.futileCycle.pastEpochs) != 0 {
 		t.Fatalf("failed edit must not finalize an epoch, got %d past epochs", len(a.futileCycle.pastEpochs))
 	}
@@ -334,12 +270,9 @@ func TestFutileCycleFailedEditDoesNotResetEpoch(t *testing.T) {
 }
 
 func TestFutileCycleSuccessfulEditStillDetectsRevisit(t *testing.T) {
-	// Real file with matching old_text: the edit succeeds and finalizes the
-	// read epoch.
+
 	a := runFutileCycleScenario(t, "src/a.go", "const X = 1", "const X = 2")
 
-	// Control: a SUCCESSFUL edit finalizes the epoch; re-reading the identical
-	// file set afterwards is a genuine futile cycle and must still be caught.
 	if len(a.futileCycle.pastEpochs) == 0 {
 		t.Fatalf("successful edit must finalize the read epoch (currentEpoch=%d, warnings=%d)",
 			len(a.futileCycle.currentEpoch), a.futileCycle.warningsFired)

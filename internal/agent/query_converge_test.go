@@ -18,7 +18,7 @@ func TestQueryConvergeNoWarningAfterAction(t *testing.T) {
 	q.recordToolCall("grep", `{"pattern":"auth handler function"}`, 2)
 	q.recordToolCall("grep", `{"pattern":"authentication handlers"}`, 3)
 	q.recordToolCall("edit_file", `{"file_path":"test.go"}`, 4)
-	// Code action resets, should not warn
+
 	if msg := q.maybeWarn(5); msg != "" {
 		t.Fatalf("expected no warning after code action, got: %s", msg)
 	}
@@ -53,7 +53,7 @@ func TestQueryConvergeSameIterationNoWarning(t *testing.T) {
 	q.recordToolCall("grep", `{"pattern":"authentication handler"}`, 1)
 	q.recordToolCall("grep", `{"pattern":"auth handler"}`, 1)
 	q.recordToolCall("grep", `{"pattern":"authentication"}`, 1)
-	// All same iteration - not a convergence loop
+
 	if msg := q.maybeWarn(1); msg != "" {
 		t.Fatalf("expected no warning for same-iteration queries, got: %s", msg)
 	}
@@ -67,9 +67,7 @@ func TestQueryConvergeWarnCap(t *testing.T) {
 	if msg1 := q.maybeWarn(4); msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second warning ESCALATES (cap 2 per run per the field contract; the
-	// old cap-1 encoding was the #3570 defect - the second escalation was
-	// unreachable and the detector went silent after one hint)
+
 	q.recordToolCall("grep", `{"pattern":"authentication login"}`, 5)
 	q.recordToolCall("grep", `{"pattern":"auth login handler"}`, 6)
 	msg2 := q.maybeWarn(7)
@@ -82,7 +80,7 @@ func TestQueryConvergeWarnCap(t *testing.T) {
 	if q.warnCount != 2 {
 		t.Fatalf("expected warnCount=2, got %d", q.warnCount)
 	}
-	// Third is capped
+
 	q.recordToolCall("grep", `{"pattern":"auth handler login session"}`, 8)
 	if msg3 := q.maybeWarn(9); msg3 != "" {
 		t.Fatalf("expected no third warning, got: %s", msg3)
@@ -119,7 +117,7 @@ func TestQCJaccard(t *testing.T) {
 func TestQCJaccardPartial(t *testing.T) {
 	a := qcTokenize("authentication handler login")
 	b := qcTokenize("authentication handler logout")
-	// intersection: authentication, handler = 2; union: 4 -> 0.5
+
 	sim := qcJaccard(a, b)
 	if sim < 0.4 || sim > 0.6 {
 		t.Fatalf("expected ~0.5 similarity, got %f", sim)

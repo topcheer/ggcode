@@ -8,24 +8,12 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// ModeSwitcher switches the agent's permission mode and remembers the
-// previous mode so that exit_plan_mode can restore it.
 type ModeSwitcher interface {
-	// Mode returns the current permission mode.
 	Mode() permission.PermissionMode
-	// SetMode switches to the given mode and notifies the UI.
 	SetMode(mode permission.PermissionMode)
-	// RememberMode saves the given mode as the "previous" mode so it
-	// can be restored by a later mode switch. Returns the mode that
-	// was previously remembered (SupervisedMode if none).
 	RememberMode(mode permission.PermissionMode) permission.PermissionMode
-	// RestoreMode returns the remembered mode, or the given fallback.
 	RestoreMode(fallback permission.PermissionMode) permission.PermissionMode
 }
-
-// ————————————————————————————————————————
-// EnterPlanMode
-// ————————————————————————————————————————
 
 type EnterPlanModeTool struct {
 	Switcher ModeSwitcher
@@ -54,11 +42,6 @@ func (t EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (Result
 		return Result{IsError: true, Content: "enter_plan_mode: mode switcher not available"}, nil
 	}
 
-	// Remember the current mode (by asking the switcher what it has)
-	// before switching to plan mode, so exit_plan_mode can restore it.
-	// #858: RememberMode saves its ARGUMENT as the mode to restore — passing
-	// the TARGET mode meant plan->exit always restored the hardcoded fallback
-	// on daemon/desktop. Query the real current mode instead.
 	current := t.Switcher.Mode()
 	previous := t.Switcher.RememberMode(current)
 
@@ -71,10 +54,6 @@ func (t EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (Result
 
 	return Result{Content: fmt.Sprintf("Entered plan mode%s. All tools are now read-only. Explore the codebase, design your approach, then call exit_plan_mode with the plan.\n", modeInfo)}, nil
 }
-
-// ————————————————————————————————————————
-// ExitPlanMode
-// ————————————————————————————————————————
 
 type ExitPlanModeTool struct {
 	Switcher    ModeSwitcher
@@ -122,16 +101,11 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 	if args.Plan == "" {
 		return Result{IsError: true, Content: "plan content is required"}, nil
 	}
-	// #1697 case 3: guard on PlanMode - without it, a call OUTSIDE any plan
-	// period still "restored" (previous plan cycle's Supervised, silently
-	// DOWNGRADING a user who had switched to bypass in between; or the
-	// zero-value "" for a first-ever call, feeding SetMode an invalid
-	// mode).
+
 	if t.Switcher.Mode() != permission.PlanMode {
 		return Result{IsError: true, Content: "exit_plan_mode: not in plan mode (nothing to exit)"}, nil
 	}
 
-	// Always restore the mode from before entering plan mode.
 	mode := t.Switcher.RestoreMode(t.DefaultMode)
 
 	t.Switcher.SetMode(mode)

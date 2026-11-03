@@ -21,9 +21,6 @@ func TestTodoWriteDescriptionEncouragesMeaningfulMilestones(t *testing.T) {
 	}
 }
 
-// TestTodoWriteCloneIsolation pins #1707 case 1: cloning (what Registry.Clone
-// does per teammate) must yield an INDEPENDENT instance - mutating the
-// clone's session must not flip the original's todo file.
 func TestTodoWriteCloneIsolation(t *testing.T) {
 	orig := NewTodoWrite("leader-session")
 	clone, ok := orig.Clone().(*TodoWrite)

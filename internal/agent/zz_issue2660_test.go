@@ -1,22 +1,13 @@
 package agent
 
-// Issue #2660 regression tests: commentCodeIndicators keyword path lacked the
-// prose guard that the call-pattern heuristic (#526) already had. Godoc prose
-// containing keyword substrings ("if ", "case ", "new ", "return ") was
-// flagged as commented-out code.
-
 import (
 	"strings"
 	"testing"
 )
 
-// TestIssue2660KeywordPathProseGuard pins the direct unit behavior: prose
-// containing a code-keyword substring must NOT look like code; genuine bare
-// code statements still must.
 func TestIssue2660KeywordPathProseGuard(t *testing.T) {
 	prose := []string{
-		// Each of these contains a keyword indicator as a substring but reads
-		// as natural language (has prose signal words).
+
 		"Print the value if it is set",
 		"Returns a new connection for the pool",
 		"Switch on the mode that was requested",
@@ -33,7 +24,7 @@ func TestIssue2660KeywordPathProseGuard(t *testing.T) {
 	}
 
 	code := []string{
-		// Genuine commented-out code: keyword hit without prose words.
+
 		"return nil",
 		"if err != nil",
 		"for i := 0; i",
@@ -50,9 +41,6 @@ func TestIssue2660KeywordPathProseGuard(t *testing.T) {
 	}
 }
 
-// TestIssue2660GodocProseBlockNotFlagged pins the end-to-end behavior from the
-// issue: a 3+ line godoc-style prose comment containing keyword substrings on
-// every line must NOT be reported as a commented-out code block.
 func TestIssue2660GodocProseBlockNotFlagged(t *testing.T) {
 	newContent := strings.Join([]string{
 		"package foo",
@@ -70,9 +58,6 @@ func TestIssue2660GodocProseBlockNotFlagged(t *testing.T) {
 	}
 }
 
-// TestIssue2660RealCommentedCodeStillFlagged pins the true-positive side: a
-// 3+ line block of genuine commented-out code (keywords, no prose) is still
-// reported - the guard suppresses prose only, not code.
 func TestIssue2660RealCommentedCodeStillFlagged(t *testing.T) {
 	newContent := strings.Join([]string{
 		"package foo",

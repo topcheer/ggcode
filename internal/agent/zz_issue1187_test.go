@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #1187: the Test*/Benchmark* name exemption must apply only to _test.go
-// files. Production functions legitimately named Test* (health probes,
-// connection testers like TestIMConnection / TestEndpointConnection) must
-// still be checked.
-
 const pcProdSrc = `package p
 
 func ProbeConnection(host, port, scheme, user, pass, extra string) error { return nil }
@@ -33,8 +28,6 @@ func TestParamCountProdTestPrefixFuncFlagged(t *testing.T) {
 	}
 }
 
-// In a _test.go file the exemption keeps working (test functions may take
-// many params; the go test toolchain only compiles them from _test.go).
 func TestParamCountTestFileExemptionKept(t *testing.T) {
 	src := `package p
 
@@ -49,7 +42,6 @@ func TestFoo(a, b, c, d, e, f string) {
 	}
 }
 
-// Same-named Benchmark exemption in _test.go only.
 func TestParamCountBenchProdFlagged(t *testing.T) {
 	src := `package p
 
@@ -65,7 +57,6 @@ func BenchmarkLoad(a, b, c, d, e, f string) {
 	}
 }
 
-// The exemption tightening must not break plain production checking.
 func TestParamCountProdStillChecked(t *testing.T) {
 	if warns := checkExcessiveParams("p.go", "", pcProdSrc); len(warns) < 2 {
 		t.Fatalf("both 6-param production functions must be flagged, got %d warnings", len(warns))

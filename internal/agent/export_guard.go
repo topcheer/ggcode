@@ -1,36 +1,5 @@
 package agent
 
-// export_guard.go implements Export/Signature Change Detection — a deterministic
-// post-edit guard that warns when edits to Go files remove or change exported
-// symbols (functions, methods, types, interfaces, constants, variables).
-//
-// This catches the #1 source of downstream compilation errors in agent-generated
-// code: the agent renames, removes, or rewrites an exported function's signature
-// without realizing that other packages depend on it.
-//
-// Research basis: "Regression Guard" pattern (Agensi, Exceeds AI 2026) —
-// "behavioral contract checks caught a breaking signature change that both
-// tsc and vite build silently passed." Our implementation uses Go AST parsing
-// and git HEAD comparison instead of behavioral contracts, making it zero-cost
-// and applicable to any Go codebase.
-//
-// Competitor mapping:
-//   - GitHub Copilot: no runtime breaking-change detection during edits
-//   - Cursor: warns about unused imports but not removed exports
-//   - Claude Code: relies on post-build compiler errors (too late)
-//   - OpenHands: no export-level change analysis
-//
-// Our approach:
-//  1. After a successful edit to a .go file, read the file's content from git
-//     HEAD (the last committed version).
-//  2. Parse exported symbols from both HEAD and current versions using go/ast.
-//  3. Diff: report removed exports and changed function signatures.
-//  4. Inject a targeted warning listing the specific breaking changes and
-//     advising the agent to search for and update downstream callers.
-//
-// The guard fires at most once per file per run to avoid noise on iterative
-// edits. Parsing is microseconds-fast (single file, stdlib only).
-
 import (
 	"fmt"
 	"go/ast"
@@ -43,10 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// exportGuardState tracks which files have already been checked to avoid
-// repeating the same warning on iterative edits.
 type exportGuardState struct {
-	checked map[string]bool // file paths already analyzed this run
+	checked map[string]bool
 }
 
 func newExportGuardState() *exportGuardState {
@@ -59,34 +26,27 @@ func (s *exportGuardState) reset() {
 	s.checked = make(map[string]bool)
 }
 
-// exportSymbol represents a single exported symbol with enough information to
-// detect removals and signature changes.
 type exportSymbol struct {
-	Name      string // e.g., "Foo" or "Bar_Method" (methods prefixed with receiver type)
-	Kind      string // "func", "method", "type", "const", "var"
-	Signature string // normalized signature for func/method (param+return types), empty for others
+	Name      string
+	Kind      string
+	Signature string
 }
 
-// breakingChange represents a detected breaking change.
 type breakingChange struct {
 	Symbol string
-	Kind   string // "removed", "signature-changed"
-	Detail string // old → new signature for signature-changed
+	Kind   string
+	Detail string
 }
 
-// checkExportGuard runs breaking-change analysis on a Go file after a successful
-// edit. Returns a guidance string if breaking changes are found, "" otherwise.
 func (a *Agent) checkExportGuard(filePath string) string {
 	if a.exportGuard == nil || filePath == "" {
 		return ""
 	}
 
-	// Only check Go source files (not test files — test exports are internal).
 	if !strings.HasSuffix(filePath, ".go") || strings.HasSuffix(filePath, "_test.go") {
 		return ""
 	}
 
-	// Fire at most once per file per run.
 	abs := filePath
 	if !filepath.IsAbs(abs) && a.workingDir != "" {
 		abs = filepath.Join(a.workingDir, filePath)
@@ -97,35 +57,21 @@ func (a *Agent) checkExportGuard(filePath string) string {
 
 	oldSyms := gitHeadExportSymbols(a.workingDir, filePath)
 	if oldSyms == nil {
-		// File not tracked in git or parse error in HEAD version — can't
-		// compare. Do NOT burn the once-per-run marker here (#502): a mid-run
-		// commit can make the comparison possible for later edits of this
-		// file, and the burned marker kept the guard silent for exactly the
-		// breaking changes it exists to catch.
+
 		return ""
 	}
 
 	newSyms := parseExportedSymbols(abs)
 	if newSyms == nil {
-		// Current file unparseable — other guards will catch syntax errors.
-		// Do NOT burn the marker here (#1043): if parsing fails now but
-		// succeeds later (after a syntax fix), we want to check again.
+
 		return ""
 	}
-	// Issue #1043(a): burn the once-per-run marker ONLY when the check
-	// completes AND reports changes. #1460-A: burning on a completed-but-
-	// EMPTY diff let the run's first harmless edit (comment/unexported
-	// tweak) consume the single check - the second edit renaming an
-	// exported symbol then hit the early-return and stayed silent, the
-	// exact #1 scenario the guard exists for. The exported-symbol set
-	// tracks the LATEST file content regardless of which edit produced
-	// it, so an empty diff carries no 'already checked' information.
+
 	a.exportGuard.checked[abs] = true
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 	if len(changes) == 0 {
-		// Empty diff: no report, no burn - the next edit may introduce the
-		// breaking change this guard exists to catch.
+
 		delete(a.exportGuard.checked, abs)
 		return ""
 	}
@@ -134,12 +80,8 @@ func (a *Agent) checkExportGuard(filePath string) string {
 	return formatBreakingChangeWarning(filePath, changes)
 }
 
-// gitHeadExportSymbols reads a Go file from git HEAD and returns its exported
-// symbols. Returns nil if the file isn't tracked in git or can't be parsed.
 func gitHeadExportSymbols(workingDir, filePath string) []exportSymbol {
-	// Reuse the hardened HEAD-content helper: it handles absolute paths,
-	// subdir-relative rebasing onto the repo root, and timeouts (#1541),
-	// all of which the previous inline `git show` invocation got wrong.
+
 	content, err := gitFileContentAtHEAD(workingDir, filePath)
 	if err != nil {
 		debug.Log("export-guard", "git show HEAD:%s failed: %v", filePath, err)
@@ -148,8 +90,6 @@ func gitHeadExportSymbols(workingDir, filePath string) []exportSymbol {
 	return parseExportedSymbolsFromSource([]byte(content))
 }
 
-// parseExportedSymbols reads a Go source file from disk and returns its
-// exported symbols. Returns nil on parse error.
 func parseExportedSymbols(filePath string) []exportSymbol {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -162,8 +102,6 @@ func parseExportedSymbols(filePath string) []exportSymbol {
 	return extractExportedSymbols(file)
 }
 
-// parseExportedSymbolsFromSource parses Go source from a byte slice and returns
-// its exported symbols.
 func parseExportedSymbolsFromSource(src []byte) []exportSymbol {
 	file, _, err := parseGoSource("", string(src), 0)
 	if err != nil {
@@ -172,8 +110,6 @@ func parseExportedSymbolsFromSource(src []byte) []exportSymbol {
 	return extractExportedSymbols(file)
 }
 
-// extractExportedSymbols scans an AST file and collects all exported symbols
-// with their signatures. Skips init, main, and test-prefixed functions.
 func extractExportedSymbols(file *ast.File) []exportSymbol {
 	var syms []exportSymbol
 
@@ -188,11 +124,9 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 				strings.HasPrefix(name, "Benchmark") ||
 				strings.HasPrefix(name, "Example") ||
 				strings.HasPrefix(name, "Fuzz") {
-				continue // test helpers
+				continue
 			}
 
-			// Issue #1043(c): use funcSignatureWithReceiver for methods
-			// to include receiver type (value vs pointer) in the fingerprint.
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				recvType := receiverTypeName(d.Recv.List[0].Type)
 				if recvType != "" {
@@ -213,7 +147,7 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 			}
 
 		case *ast.GenDecl:
-			// Handle type, const, var declarations.
+
 			for _, spec := range d.Specs {
 				switch s := spec.(type) {
 				case *ast.TypeSpec:
@@ -222,11 +156,11 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 						signature := ""
 						if ifaceType, ok := s.Type.(*ast.InterfaceType); ok {
 							kind = "interface"
-							// Bug B fix: record method set fingerprint for interfaces
+
 							signature = extractInterfaceMethodFingerprint(ifaceType)
 						} else if structType, ok := s.Type.(*ast.StructType); ok {
 							kind = "struct"
-							// Issue #1043(b): record field set fingerprint for structs
+
 							signature = extractStructFieldFingerprint(structType)
 						}
 						syms = append(syms, exportSymbol{
@@ -236,8 +170,7 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 						})
 					}
 				case *ast.ValueSpec:
-					// const or var
-					// Issue #1092: record type signature to detect type changes
+
 					kind := "var"
 					if d.Tok == token.CONST {
 						kind = "const"
@@ -263,13 +196,8 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 	return syms
 }
 
-// normalizeFuncSignature creates a string fingerprint of a function's signature
-// (type parameters, receiver, parameter and result types) so that signature
-// changes can be detected.
-// e.g., func Foo(a int, b string) error → "(int,string)(error)"
-// With receiver: func (r *MyType) Foo() error → "ptr-recv:MyType()()()"
 func normalizeFuncSignature(ft *ast.FuncType) string {
-	// Issue #1043(c): include type parameters
+
 	typeParams := ""
 	if ft.TypeParams != nil && len(ft.TypeParams.List) > 0 {
 		typeParams = normalizeFieldList(ft.TypeParams)
@@ -283,10 +211,6 @@ func normalizeFuncSignature(ft *ast.FuncType) string {
 	return fmt.Sprintf("<%s>(%s)(%s)", typeParams, params, results)
 }
 
-// funcSignatureWithReceiver creates a fingerprint that includes receiver type.
-// Used for method signatures to distinguish between value and pointer receivers.
-// Issue #1043(c): value vs pointer receivers must be different.
-// Issue #1092: remove len(recv.List[0].Names) > 0 check to detect unnamed receivers.
 func funcSignatureWithReceiver(recv *ast.FieldList, ft *ast.FuncType) string {
 	recvPrefix := ""
 	if recv != nil && len(recv.List) > 0 {
@@ -304,12 +228,8 @@ func funcSignatureWithReceiver(recv *ast.FieldList, ft *ast.FuncType) string {
 	return sig
 }
 
-// normalizeType converts an AST type expression to a normalized string representation.
-// Used for struct fields, receiver types, and type spec signatures.
-// Issue #1101: expand support for chan, func, interface, struct types
-// instead of returning "complex" placeholder.
 func normalizeType(expr ast.Expr) string {
-	// Handle basic types and qualified identifiers
+
 	if ident, ok := expr.(*ast.Ident); ok {
 		return ident.Name
 	}
@@ -318,23 +238,23 @@ func normalizeType(expr ast.Expr) string {
 			return xIdent.Name + "." + selector.Sel.Name
 		}
 	}
-	// Handle pointer types: strip the * prefix
+
 	if star, ok := expr.(*ast.StarExpr); ok {
 		return "*" + normalizeType(star.X)
 	}
-	// Handle slice types
+
 	if array, ok := expr.(*ast.ArrayType); ok {
 		if array.Len == nil {
 			return "[]" + normalizeType(array.Elt)
 		}
-		// Issue #1101 #C: preserve array length
+
 		return "[" + exprString(array.Len) + "]" + normalizeType(array.Elt)
 	}
-	// Handle map types
+
 	if mp, ok := expr.(*ast.MapType); ok {
 		return "map[" + normalizeType(mp.Key) + "]" + normalizeType(mp.Value)
 	}
-	// Issue #1101 #3: Handle channel types with direction
+
 	if chanType, ok := expr.(*ast.ChanType); ok {
 		prefix := "chan "
 		if chanType.Dir == ast.SEND {
@@ -344,11 +264,11 @@ func normalizeType(expr ast.Expr) string {
 		}
 		return prefix + normalizeType(chanType.Value)
 	}
-	// Issue #1101 #2: Handle function types
+
 	if fnType, ok := expr.(*ast.FuncType); ok {
 		return "func" + normalizeFuncSignature(fnType)
 	}
-	// Issue #1101 #5: Handle interface types
+
 	if iface, ok := expr.(*ast.InterfaceType); ok {
 		fingerprint := extractInterfaceMethodFingerprint(iface)
 		if fingerprint != "" {
@@ -356,7 +276,7 @@ func normalizeType(expr ast.Expr) string {
 		}
 		return "interface{}"
 	}
-	// Issue #1101 #B: Handle struct types
+
 	if structType, ok := expr.(*ast.StructType); ok {
 		fingerprint := extractStructFieldFingerprint(structType)
 		if fingerprint != "" {
@@ -367,11 +287,6 @@ func normalizeType(expr ast.Expr) string {
 	return "unknown"
 }
 
-// extractInterfaceMethodFingerprint creates a sorted string fingerprint of all
-// method names and signatures in an interface. Used by Bug B fix to detect
-// when methods are added or removed from exported interfaces.
-// Issue #1043(c): now uses funcSignatureWithReceiver to include receiver info.
-// Issue #1101 #5: add support for embedded interfaces.
 func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	if ifaceType.Methods == nil {
 		return ""
@@ -380,18 +295,16 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	var methods []string
 	for _, field := range ifaceType.Methods.List {
 		if len(field.Names) > 0 {
-			// Regular method declaration
+
 			if ft, ok := field.Type.(*ast.FuncType); ok {
 				for _, name := range field.Names {
-					// Issue #1043(c): interface methods have no receiver field,
-					// but we still use the unified signature for consistency
+
 					sig := normalizeFuncSignature(ft)
 					methods = append(methods, name.Name+":"+sig)
 				}
 			}
 		} else {
-			// Issue #1101 #5: handle embedded interface types
-			// e.g., type Foo interface { io.Reader; BarMethod() }
+
 			if embeddedType := normalizeType(field.Type); embeddedType != "" {
 				methods = append(methods, "embed:"+embeddedType)
 			}
@@ -401,10 +314,6 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	return strings.Join(methods, "|")
 }
 
-// extractStructFieldFingerprint creates a sorted string fingerprint of all
-// exported field names and types in a struct. Used by Issue #1043(b) to detect
-// when fields are added, removed, or renamed from exported structs.
-// Issue #1101 #B: add support for embedded struct/interface fields.
 func extractStructFieldFingerprint(structType *ast.StructType) string {
 	if structType.Fields == nil {
 		return ""
@@ -412,10 +321,9 @@ func extractStructFieldFingerprint(structType *ast.StructType) string {
 
 	var fields []string
 	for _, field := range structType.Fields.List {
-		// Issue #1101 #B: handle embedded fields (field.Names is empty)
-		// e.g., type Foo struct { Mutex; Name string }
+
 		if len(field.Names) > 0 {
-			// Regular named fields
+
 			for _, name := range field.Names {
 				if name.IsExported() {
 					ty := normalizeType(field.Type)
@@ -423,7 +331,7 @@ func extractStructFieldFingerprint(structType *ast.StructType) string {
 				}
 			}
 		} else {
-			// Embedded anonymous field
+
 			ty := normalizeType(field.Type)
 			if ty != "" {
 				fields = append(fields, "embed:"+ty)
@@ -434,8 +342,6 @@ func extractStructFieldFingerprint(structType *ast.StructType) string {
 	return strings.Join(fields, "|")
 }
 
-// normalizeFieldList extracts a comma-separated type string from an AST
-// FieldList (used for params and returns).
 func normalizeFieldList(fl *ast.FieldList) string {
 	if fl == nil {
 		return ""
@@ -445,7 +351,7 @@ func normalizeFieldList(fl *ast.FieldList) string {
 		typeStr := exprString(field.Type)
 		n := len(field.Names)
 		if n == 0 {
-			// unnamed parameter/result
+
 			parts = append(parts, typeStr)
 		} else {
 			for range field.Names {
@@ -456,8 +362,6 @@ func normalizeFieldList(fl *ast.FieldList) string {
 	return strings.Join(parts, ",")
 }
 
-// exprString converts an AST expression to a simplified type string.
-// Issue #1101: add support for channel direction and array length.
 func exprString(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -468,16 +372,15 @@ func exprString(expr ast.Expr) string {
 		return exprString(e.X) + "." + e.Sel.Name
 	case *ast.ArrayType:
 		if e.Len == nil {
-			// Slice: []T
+
 			return "[]" + exprString(e.Elt)
 		}
-		// Issue #1101 #C: preserve array length for detection
-		// Array: [N]T (e.g., [5]int)
+
 		return "[" + exprString(e.Len) + "]" + exprString(e.Elt)
 	case *ast.MapType:
 		return "map[" + exprString(e.Key) + "]" + exprString(e.Value)
 	case *ast.ChanType:
-		// Issue #1101 #3: preserve channel direction
+
 		prefix := "chan "
 		if e.Dir == ast.SEND {
 			prefix = "chan<- "
@@ -494,17 +397,13 @@ func exprString(expr ast.Expr) string {
 	case *ast.Ellipsis:
 		return "..." + exprString(e.Elt)
 	case *ast.BasicLit:
-		// For array length literals (e.g., "5")
+
 		return e.Value
 	default:
 		return "expr"
 	}
 }
 
-// diffExportSymbols compares old and new symbol sets, returning breaking changes.
-// A change is "breaking" if:
-//   - A symbol exists in old but not in new (removed).
-//   - A func/method has the same name but a different signature (signature-changed).
 func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 	oldMap := make(map[string]exportSymbol, len(old))
 	for _, s := range old {
@@ -517,7 +416,6 @@ func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 
 	var changes []breakingChange
 
-	// Check for removed or changed symbols.
 	for key, oldSym := range oldMap {
 		newSym, exists := newMap[key]
 		if !exists {
@@ -527,10 +425,7 @@ func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 				Detail: oldSym.Kind,
 			})
 		} else if oldSym.Signature != newSym.Signature && (oldSym.Signature != "" || newSym.Signature != "") {
-			// Issue #1101 #B: a fingerprint that empties out (e.g. a struct
-			// losing its last/embedded field) or appears (interface gaining
-			// its first method) is a real signature change. Only two empty
-			// signatures (kinds that never record one) count as unchanged.
+
 			changes = append(changes, breakingChange{
 				Symbol: oldSym.Name,
 				Kind:   "signature-changed",
@@ -539,7 +434,6 @@ func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 		}
 	}
 
-	// Sort for deterministic output.
 	sort.Slice(changes, func(i, j int) bool {
 		if changes[i].Symbol != changes[j].Symbol {
 			return changes[i].Symbol < changes[j].Symbol
@@ -550,8 +444,6 @@ func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 	return changes
 }
 
-// formatBreakingChangeWarning produces the guidance string injected into the
-// tool result.
 func formatBreakingChangeWarning(filePath string, changes []breakingChange) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("[Breaking Change Warning] Edits to %s modified or removed %d exported symbol(s):\n",

@@ -49,7 +49,7 @@ func TestCFDep_EditThenTestSameBatch(t *testing.T) {
 
 func TestCFDep_IndependentCallsNoWarn(t *testing.T) {
 	s := newCFDepState()
-	// Two independent read-only calls -- no dependency.
+
 	names := []string{"read_file", "grep"}
 	args := []json.RawMessage{
 		mustRawJSON(t, map[string]interface{}{"path": "a.go"}),
@@ -63,7 +63,7 @@ func TestCFDep_IndependentCallsNoWarn(t *testing.T) {
 
 func TestCFDep_BuildCommandNotBuildLike(t *testing.T) {
 	s := newCFDepState()
-	// write_file + run_command(echo) -- echo is not build-like.
+
 	names := []string{"write_file", "run_command"}
 	args := []json.RawMessage{
 		mustRawJSON(t, map[string]interface{}{"path": "main.go"}),
@@ -137,7 +137,7 @@ func TestCFDep_ModInitThenGet(t *testing.T) {
 
 func TestCFDep_MaxWarnings(t *testing.T) {
 	s := newCFDepState()
-	// First batch: should warn.
+
 	names1 := []string{"write_file", "run_command"}
 	args1 := []json.RawMessage{
 		mustRawJSON(t, map[string]interface{}{"path": "a.go"}),
@@ -148,13 +148,11 @@ func TestCFDep_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second batch: should still warn (maxWarnings=2).
 	w2 := s.recordBatch(names1, args1, 2)
 	if w2 == "" {
 		t.Fatal("expected second warning")
 	}
 
-	// Third batch: should NOT warn (max reached).
 	w3 := s.recordBatch(names1, args1, 3)
 	if w3 != "" {
 		t.Fatalf("expected no more warnings after max, got: %s", w3)
@@ -168,12 +166,11 @@ func TestCFDep_Reset(t *testing.T) {
 		mustRawJSON(t, map[string]interface{}{"path": "a.go"}),
 		mustRawJSON(t, map[string]interface{}{"command": "go build"}),
 	}
-	// Exhaust warnings.
+
 	s.recordBatch(names, args, 1)
 	s.recordBatch(names, args, 2)
-	s.recordBatch(names, args, 3) // third, no warn
+	s.recordBatch(names, args, 3)
 
-	// Reset should re-enable warnings.
 	s.reset()
 	w := s.recordBatch(names, args, 4)
 	if w == "" {
@@ -208,7 +205,6 @@ func TestCFDep_StartCommandVariant(t *testing.T) {
 }
 
 func TestCFDep_RecordToolCallBatchNilAgent(t *testing.T) {
-	// Should not panic with nil agent.
 	var a *Agent
 	warn := a.recordToolCallBatch(nil, 1)
 	if warn != "" {
@@ -242,7 +238,7 @@ func TestCommandIsBuildLike(t *testing.T) {
 }
 
 func TestExtractFileOpsMkdirTarget(t *testing.T) {
-	// With mkdir source.
+
 	got := extractFileOpsMkdirTarget(map[string]interface{}{
 		"operations": []interface{}{
 			map[string]interface{}{"action": "mkdir", "source": "foo"},
@@ -252,7 +248,6 @@ func TestExtractFileOpsMkdirTarget(t *testing.T) {
 		t.Fatalf("expected 'foo', got %q", got)
 	}
 
-	// No mkdir action.
 	got = extractFileOpsMkdirTarget(map[string]interface{}{
 		"operations": []interface{}{
 			map[string]interface{}{"action": "delete", "source": "foo"},
@@ -262,7 +257,6 @@ func TestExtractFileOpsMkdirTarget(t *testing.T) {
 		t.Fatalf("expected empty for non-mkdir, got %q", got)
 	}
 
-	// Nil args.
 	got = extractFileOpsMkdirTarget(nil)
 	if got != "" {
 		t.Fatalf("expected empty for nil, got %q", got)

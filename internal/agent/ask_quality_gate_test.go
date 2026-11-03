@@ -30,14 +30,10 @@ func askArgs(t *testing.T, title, prompt string, labels []string) string {
 	return string(b)
 }
 
-// TestAskGateBlocksSelfAnswerable: codebase-fact questions must not spend
-// a user interruption.
 func TestAskGateBlocksSelfAnswerable(t *testing.T) {
 	a := &Agent{askQualityGate: newAskQualityGateState()}
 	cases := [][2]string{
-		// #3473: the bare "which version" form is gone (lexically
-		// indistinguishable from preference asks); the explicit file
-		// mention is the lookupable form that stays blocked.
+
 		{"Version", "Check go.mod: which version is declared for the module?"},
 		{"Existence", "Does the file config.go exist?"},
 		{"Signature", "What is the signature of NewManager?"},
@@ -53,36 +49,29 @@ func TestAskGateBlocksSelfAnswerable(t *testing.T) {
 	}
 }
 
-// TestAskGateBlocksDuplicate: the same question twice in one run is zero
-// information gain; different wording that differs only in case/whitespace
-// counts as the same question.
 func TestAskGateBlocksDuplicate(t *testing.T) {
 	a := &Agent{askQualityGate: newAskQualityGateState()}
 	args := askArgs(t, "Deploy target", "Deploy to staging or production?", []string{"staging", "production"})
 	if block, _ := a.checkAskQualityGate(args); block != "" {
 		t.Fatalf("first ask must pass, got block: %s", block)
 	}
-	// #3474: the gate is read-only now - the fingerprint is recorded only
-	// after a SUCCESSFUL execution (markAskAskedQG, wired in agent.go's
-	// result pipeline). Simulate that success, then re-asks are duplicates.
+
 	a.markAskAskedQG(args)
 	if block, _ := a.checkAskQualityGate(args); block == "" {
 		t.Fatal("identical re-ask must be blocked")
 	}
-	// Case/whitespace variant is still a duplicate.
+
 	variant := askArgs(t, "  deploy   TARGET ", "Deploy  to staging or production?", []string{"production", "Staging"})
 	if block, _ := a.checkAskQualityGate(variant); block == "" {
 		t.Fatal("normalized variant re-ask must be blocked")
 	}
-	// A genuinely different question passes.
+
 	other := askArgs(t, "Rollback plan", "Should we keep a rollback checkpoint?", []string{"yes", "no"})
 	if block, _ := a.checkAskQualityGate(other); block != "" {
 		t.Fatalf("genuinely new question must pass, got: %s", block)
 	}
 }
 
-// TestAskGateSafeDefaultAdvisory: a safe-default choice yields an advisory,
-// never a block.
 func TestAskGateSafeDefaultAdvisory(t *testing.T) {
 	a := &Agent{askQualityGate: newAskQualityGateState()}
 	args := askArgs(t, "Migration", "Run the destructive migration?", []string{"Skip (safe)", "Run now"})
@@ -95,8 +84,6 @@ func TestAskGateSafeDefaultAdvisory(t *testing.T) {
 	}
 }
 
-// TestAskGateResetAndPassThrough: reset re-opens asking; nil gate and
-// malformed JSON are pass-throughs (schema validation is the tool's job).
 func TestAskGateResetAndPassThrough(t *testing.T) {
 	g := newAskQualityGateState()
 	a := &Agent{askQualityGate: g}

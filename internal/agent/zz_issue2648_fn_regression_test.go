@@ -2,13 +2,6 @@ package agent
 
 import "testing"
 
-// Regression guard for the false-negative found in the #2648 mutual-exclusion
-// handling: clearing haveClose on a mutually-exclusive send let later
-// NON-exclusive sends escape detection. Fix: skip only, keep the close marker.
-
-// Exclusive send AFTER close must not clear the marker: the trailing
-// non-exclusive send executes after close when cond==false (guaranteed
-// "send on closed channel" panic) and must be flagged.
 func TestSendAfterClose_ExclusiveThenNonExclusiveSend(t *testing.T) {
 	src := `package p
 func f(cond bool, ch chan int) {
@@ -25,7 +18,6 @@ func f(cond bool, ch chan int) {
 	}
 }
 
-// Pure exclusive pair (close in then, send in else) still must not warn.
 func TestSendAfterClose_PureExclusivePairStillSilent(t *testing.T) {
 	src := `package p
 func f(cond bool, ch chan int) {
@@ -41,8 +33,6 @@ func f(cond bool, ch chan int) {
 	}
 }
 
-// Multiple exclusive sends between close and a non-exclusive send: every
-// exclusive one is skipped, the final one still warns.
 func TestSendAfterClose_MultipleExclusiveThenNonExclusive(t *testing.T) {
 	src := `package p
 func f(a, b bool, ch chan int) {

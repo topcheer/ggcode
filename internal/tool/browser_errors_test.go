@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// sa-136: typed browser failure channel. Pure-function tests (no Chrome).
-// The probe-refined paths (ELEMENT_NOT_FOUND vs ELEMENT_NOT_VISIBLE) need
-// a live tab and are exercised via the classifier + format contract here.
-
 func TestClassifyBrowserError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -37,8 +33,7 @@ func TestClassifyBrowserError(t *testing.T) {
 }
 
 func TestRetryHintFor(t *testing.T) {
-	// Every category except UNKNOWN must carry an actionable hint - a typed
-	// error code without a recovery move does not change agent behavior.
+
 	for _, code := range []browserErrCode{
 		browserErrElementNotFound,
 		browserErrElementNotVisible,
@@ -57,7 +52,7 @@ func TestRetryHintFor(t *testing.T) {
 
 func TestBrowserActionFailure_Format(t *testing.T) {
 	b := &Browser{}
-	// Non-timeout category with a selector: no probe attempted, code kept.
+
 	res := b.browserActionFailure("click", context.Background(), "#x", errors.New("dial tcp: connection refused"))
 	if !res.IsError {
 		t.Fatal("result must be an error result")
@@ -75,8 +70,7 @@ func TestBrowserActionFailure_Format(t *testing.T) {
 
 func TestBrowserActionFailure_TimeoutWithoutProbeCtx(t *testing.T) {
 	b := &Browser{}
-	// Timeout error but no tab ctx (nil): must degrade to plain TIMEOUT,
-	// never panic, never guess element-missing.
+
 	res := b.browserActionFailure("click", nil, "#x", errors.New("context deadline exceeded"))
 	if !strings.Contains(res.Content, "[error_code=TIMEOUT]") {
 		t.Fatalf("nil probe ctx should keep TIMEOUT: %q", res.Content)

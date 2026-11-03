@@ -19,7 +19,6 @@ func mustJSONIdempot(t *testing.T, v map[string]interface{}) json.RawMessage {
 func TestBuildIdempotency_RedundantBuildNoEdits(t *testing.T) {
 	s := newBuildIdempotencyState()
 
-	// Iteration 1: first build -- no warning expected.
 	w1 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 1)
@@ -27,7 +26,6 @@ func TestBuildIdempotency_RedundantBuildNoEdits(t *testing.T) {
 		t.Fatalf("first build should not warn, got: %s", w1)
 	}
 
-	// Iteration 2: no edits, second build -- should warn.
 	w2 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 2)
@@ -45,17 +43,14 @@ func TestBuildIdempotency_RedundantBuildNoEdits(t *testing.T) {
 func TestBuildIdempotency_BuildAfterEditNoWarning(t *testing.T) {
 	s := newBuildIdempotencyState()
 
-	// First build.
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go build ./...",
 	}), 1)
 
-	// Edit a file.
 	s.recordToolCall("edit_file", mustJSONIdempot(t, map[string]interface{}{
 		"file_path": "main.go",
 	}), 2)
 
-	// Second build -- should NOT warn because there was an edit.
 	w3 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go build ./...",
 	}), 3)
@@ -82,12 +77,10 @@ func TestBuildIdempotency_NonBuildCommandNoWarning(t *testing.T) {
 func TestBuildIdempotency_MaxWarnings(t *testing.T) {
 	s := newBuildIdempotencyState()
 
-	// First build.
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "make test",
 	}), 1)
 
-	// Redundant build 1 -- should warn.
 	w2 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "make test",
 	}), 2)
@@ -95,7 +88,6 @@ func TestBuildIdempotency_MaxWarnings(t *testing.T) {
 		t.Fatal("first redundant build should warn")
 	}
 
-	// Redundant build 2 -- should warn.
 	w3 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "make test",
 	}), 3)
@@ -103,7 +95,6 @@ func TestBuildIdempotency_MaxWarnings(t *testing.T) {
 		t.Fatal("second redundant build should warn")
 	}
 
-	// Redundant build 3 -- should NOT warn (max 2 warnings).
 	w4 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "make test",
 	}), 4)
@@ -124,7 +115,6 @@ func TestBuildIdempotency_Reset(t *testing.T) {
 
 	s.reset()
 
-	// After reset, a build should not warn.
 	w := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 3)
@@ -136,7 +126,6 @@ func TestBuildIdempotency_Reset(t *testing.T) {
 func TestBuildIdempotency_MultipleBuildTools(t *testing.T) {
 	s := newBuildIdempotencyState()
 
-	// go test then npm test -- different commands with 0 edits.
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 1)
@@ -144,16 +133,11 @@ func TestBuildIdempotency_MultipleBuildTools(t *testing.T) {
 	w2 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "npm test",
 	}), 2)
-	// #1441-A: a DIFFERENT command with 0 edits must NOT warn - the old
-	// behavior (codified by this very test) fired on the standard
-	// build->test->lint chain, claiming "re-running go test" (never run
-	// this run) and "guaranteed identical" (build passing does not
-	// guarantee test passing). The guarantee holds only for the SAME
-	// command.
+
 	if w2 != "" {
 		t.Fatalf("different build command with 0 edits must not warn: %q", w2)
 	}
-	// The SAME command with 0 edits still warns (true redundancy).
+
 	w3 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "npm test",
 	}), 3)
@@ -174,7 +158,6 @@ func TestBuildIdempotency_WriteFileCountsAsEdit(t *testing.T) {
 		"content": "package main",
 	}), 2)
 
-	// Build after write_file -- should NOT warn.
 	w3 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 3)
@@ -232,20 +215,19 @@ func TestDetectBuildTestCommand(t *testing.T) {
 }
 
 func TestDetectBuildTestCommand_EnvVarPrefix(t *testing.T) {
-	// Commands with env var prefixes should still be detected.
+
 	isBuild, label, key := detectBuildTestCommand("GOOS=linux go build ./...")
 	if !isBuild || label != "go build" {
 		t.Errorf("env-prefixed go build: isBuild=%v label=%q", isBuild, label)
 	}
-	// #2640: build-affecting env stays in the identity key so
-	// cross-compile and native builds never compare equal.
+
 	if key != "goos=linux|go build ./..." {
 		t.Errorf("identity key = %q, want goos=linux|go build ./...", key)
 	}
 }
 
 func TestDetectBuildTestCommand_CommentPrefix(t *testing.T) {
-	// Commands with leading comment lines should still be detected.
+
 	isBuild, label, _ := detectBuildTestCommand("# build everything\ngo build ./...")
 	if !isBuild || label != "go build" {
 		t.Errorf("comment-prefixed go build: isBuild=%v label=%q", isBuild, label)
@@ -292,11 +274,6 @@ func indexOfIdempot(s, substr string) int {
 	return -1
 }
 
-// TestShellMutatesSourcesCommonWriteSurfaces pins #1678 case 1: the
-// whitelist missed redirections (the MOST common write surface) plus
-// tee/cp/mv/git-restore class commands - the cache-hit note "no source
-// files have changed" was literally false, tripled across #1486's three
-// consumers.
 func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 	mutating := []string{
 		"echo 'package main' > main.go",
@@ -318,20 +295,18 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 			t.Errorf("must be detected as source mutation: %q", cmd)
 		}
 	}
-	// Quoted redirection-like content must NOT trip the token check.
+
 	for _, cmd := range []string{
 		`echo "a>b"`,
 		`grep 'foo > bar' file.go`,
 		"go build ./...",
 		"ls -la",
-		// #1875: the canonical noise-suppression idiom - redirecting into
-		// a /dev/* device mutates nothing and must not count.
+
 		"go build ./... > /dev/null",
 		"go test ./internal/agent/ > /dev/null 2>&1",
 		"cargo build 2>/dev/null",
 		"make lint >/dev/stderr",
-		// #1875 case 2: quoted content containing a dot is still string
-		// content, not a path (the old code tripped on `v1.2'`).
+
 		`grep 'use > v1.2' readme`,
 		`echo "see > v1.2.md" docs`,
 	} {
@@ -339,7 +314,7 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 			t.Errorf("false positive on non-mutating command: %q", cmd)
 		}
 	}
-	// Real redirection into a file-shaped target still counts.
+
 	for _, cmd := range []string{
 		"echo hi > out.txt",
 		"go build ./... > build.log",
@@ -351,23 +326,19 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 	}
 }
 
-// TestBuildIdempotency_SameLabelDifferentCommand pins #2640: commands that
-// normalize to the SAME coarse label but are NOT the same command (different
-// package targets, different -run filters) must not trigger the "guaranteed
-// identical" warning — the target may have never run this session.
 func TestBuildIdempotency_SameLabelDifferentCommand(t *testing.T) {
 	s := newBuildIdempotencyState()
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./internal/a/",
 	}), 1)
-	// Scenario A: different package, same "go test" label.
+
 	w := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./internal/b/",
 	}), 2)
 	if w != "" {
 		t.Fatalf("scenario A: different package target must not warn, got: %s", w)
 	}
-	// Scenario C: different -run filter, same package.
+
 	w = s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test -run TestFoo ./internal/b/",
 	}), 3)
@@ -376,8 +347,6 @@ func TestBuildIdempotency_SameLabelDifferentCommand(t *testing.T) {
 	}
 }
 
-// TestBuildIdempotency_GOOSChangesIdentity pins #2640 scenario B: a
-// cross-compile rebuild after a native build is NOT redundant.
 func TestBuildIdempotency_GOOSChangesIdentity(t *testing.T) {
 	s := newBuildIdempotencyState()
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
@@ -391,24 +360,17 @@ func TestBuildIdempotency_GOOSChangesIdentity(t *testing.T) {
 	}
 }
 
-// TestShellMutatesSources_GoGenerateCrossCommand (#2655 follow-up): `go
-// generate` rewrites sources via generator scripts. command_cache.go already
-// refuses to cache it (excludePrefixes), but the cross-command case rides on
-// THIS predicate: a cached `go test` must be invalidated when a later `go
-// generate` rewrites the tree, or the next `go test` replays the
-// pre-generation result for the full TTL.
 func TestShellMutatesSources_GoGenerateCrossCommand(t *testing.T) {
 	for _, cmd := range []string{
 		"go generate ./...",
 		"go generate ./internal/gen/",
-		"curl --output config.yaml https://example.com/cfg", // long-option form
+		"curl --output config.yaml https://example.com/cfg",
 	} {
 		if !shellMutatesSources(cmd) {
 			t.Errorf("shellMutatesSources(%q) = false, want true (#2655 follow-up)", cmd)
 		}
 	}
-	// Read-only git plumbing must stay non-mutating: git fetch touches .git
-	// internals only, never the working tree.
+
 	for _, cmd := range []string{
 		"git fetch origin",
 		"git status",
@@ -418,8 +380,7 @@ func TestShellMutatesSources_GoGenerateCrossCommand(t *testing.T) {
 			t.Errorf("shellMutatesSources(%q) = true, want false (read-only FP guard)", cmd)
 		}
 	}
-	// The #2655 trigger composed with go generate, mirroring agent.go's
-	// post-execution invalidation gate.
+
 	cc := newCommandCache()
 	res := tool.Result{Content: "PASS pre-generation"}
 	cmd := "# verify\ngo test ./..."

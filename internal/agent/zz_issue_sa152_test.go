@@ -1,9 +1,5 @@
 package agent
 
-// sa-152 probes: trajectory→training-data export (RLVR/SFT outlet).
-// P1 reward bounds, P2 secret masking, P3 JSONL round-trip + rolling cap,
-// P4 opt-in gate + substance gate, P5 message redaction shape.
-
 import (
 	"encoding/json"
 	"os"
@@ -15,13 +11,8 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// fakeKey builds a syntactically valid secret-shaped string from halves so
-// the pattern detector has a real target to mask, without ever writing a
-// literal secret-shaped token into the source file.
 func fakeKey(prefix, body string) string { return prefix + body }
 
-// redactedMarker builds the expected mask token in two pieces so this test
-// source never contains a literal redaction placeholder.
 func redactedMarker(name string) string {
 	return "[" + strings.ToUpper("redacted") + ":" + name + "]"
 }
@@ -36,8 +27,6 @@ func sa152Stats(success bool, tools map[string]int, errCount, compact int) *RunS
 	return s
 }
 
-// P1a: a clean diverse run scores high; P1b: an error-heavy failed run
-// scores below the success-only baseline.
 func TestSA152_RewardBounds(t *testing.T) {
 	good := sa152Stats(true, map[string]int{"read_file": 2, "edit_file": 1, "run_command": 1}, 0, 0)
 	rg := computeTrainReward(good)
@@ -54,7 +43,6 @@ func TestSA152_RewardBounds(t *testing.T) {
 	}
 }
 
-// P2: secret values in any text field are masked.
 func TestSA152_RedactTrainText(t *testing.T) {
 	anthKey := fakeKey("sk-ant-", "abc123def456ghi789jkl012")
 	ghKey := fakeKey("ghp_", strings.Repeat("A", 40))
@@ -71,7 +59,6 @@ func TestSA152_RedactTrainText(t *testing.T) {
 	}
 }
 
-// P3: JSONL append round-trip and the 200-entry rolling cap.
 func TestSA152_JSONLRoundTripAndCap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "training-samples.jsonl")
 	sample := TrainSample{
@@ -117,7 +104,6 @@ func TestSA152_JSONLRoundTripAndCap(t *testing.T) {
 	}
 }
 
-// P4: the opt-in gate and the substance gate.
 func TestSA152_Gates(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(trainExportEnv, "0")
@@ -129,20 +115,19 @@ func TestSA152_Gates(t *testing.T) {
 	}
 
 	t.Setenv(trainExportEnv, "1")
-	// Substance gate: 2 tool calls < 3 minimum.
+
 	thin := sa152Stats(true, map[string]int{"grep": 2}, 0, 0)
 	a.maybeExportTrainingSample(dir, thin)
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", trainExportFile)); err == nil {
 		t.Fatal("trivial run must not be exported")
 	}
-	// No contextManager: silent no-op.
+
 	a.maybeExportTrainingSample(dir, stats)
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", trainExportFile)); err == nil {
 		t.Fatal("nil contextManager must not export")
 	}
 }
 
-// P5: image blocks dropped, secrets masked, message count preserved.
 func TestSA152_RedactTrainMessages(t *testing.T) {
 	msgs := make([]provider.Message, trainExportMaxMessages+10)
 	for i := range msgs {

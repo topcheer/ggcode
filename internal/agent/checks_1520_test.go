@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #1520 case B pin: a goto target label after a goto must not be reported
-// unreachable - `goto done; done: cleanup()` is reachable via the jump.
 func Test1520GotoLabelNotUnreachable(t *testing.T) {
 	newContent := `package p
 func f(err error) {
@@ -27,7 +25,6 @@ func f(err error) {
 	}
 }
 
-// #1520 case C pin: the classic two-line uintptr round-trip must be caught.
 func Test1520TwoLineUintptrRoundTrip(t *testing.T) {
 	src := `package p
 import "unsafe"
@@ -42,7 +39,6 @@ func g(p *byte, q *byte) {
 	}
 }
 
-// #1520 case D pin: the unused-parameter hint must not list deletion first.
 func Test1520UnusedParamHintNonDestructive(t *testing.T) {
 	src := `package p
 type handler struct{}

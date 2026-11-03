@@ -12,12 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// R24 (#3368) wiring-level coverage: the Ask gate must (a) audit
-// approve/deny decisions, and (b) suppress re-asks after repeated denials
-// (ATR-2026-00118 pattern 1). The throttle unit tests live in
-// internal/permission/ask_throttle_test.go; these prove the agent-side
-// wiring in executeToolWithPermission.
-
 type stubAskPolicy struct{ mode permission.PermissionMode }
 
 func (p *stubAskPolicy) Check(toolName string, input json.RawMessage) (permission.Decision, error) {
@@ -33,8 +27,6 @@ func (p *stubAskPolicy) BlocksAutoApprove(toolName string, input json.RawMessage
 }
 func (p *stubAskPolicy) SetOverride(toolName string, decision permission.Decision) {}
 
-// Deny and approve decisions must land in the audit chain as first-class
-// approval events, not only as downstream tool errors.
 func TestAskGateAuditsApproveAndDeny(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	lg, err := audit.Open(path, "sess-r24")
@@ -58,11 +50,8 @@ func TestAskGateAuditsApproveAndDeny(t *testing.T) {
 	}
 	tc := provider.ToolCallDelta{Name: "edit_file", Arguments: json.RawMessage(`{"file_path":"/tmp/a/x.go"}`)}
 
-	// 1st call: user approves. The tool itself is not registered on this
-	// bare Agent, so execution fails - but the APPROVAL must be audited
-	// before execution is attempted.
 	a.executeToolWithPermission(context.Background(), tc)
-	// 2nd call: user denies.
+
 	a.executeToolWithPermission(context.Background(), tc)
 
 	rep, err := audit.Verify(path)
@@ -74,8 +63,6 @@ func TestAskGateAuditsApproveAndDeny(t *testing.T) {
 	}
 }
 
-// After the same key is denied twice, a third attempt must NOT prompt the
-// user again: the ask throttle answers deny directly.
 func TestAskGateThrottleSuppressesThirdAsk(t *testing.T) {
 	a := &Agent{
 		policy:      &stubAskPolicy{mode: permission.AutoMode},
@@ -97,9 +84,7 @@ func TestAskGateThrottleSuppressesThirdAsk(t *testing.T) {
 	if prompts != 2 {
 		t.Fatalf("expected exactly 2 user prompts (3rd suppressed), got %d", prompts)
 	}
-	// The suppressed third denial must be labeled as throttled.
-	// (Second and third results are denials; the third must carry the
-	// throttle guidance.)
+
 	last := a.executeToolWithPermission(context.Background(), tc)
 	if !strings.Contains(last.Content, "denied twice") {
 		t.Errorf("suppressed re-ask missing throttle guidance:\n%s", last.Content)
@@ -109,7 +94,6 @@ func TestAskGateThrottleSuppressesThirdAsk(t *testing.T) {
 	}
 }
 
-// A nil throttle must not panic the Ask path (zero-value Agent safety).
 func TestAskGateNilThrottleSafe(t *testing.T) {
 	a := &Agent{policy: &stubAskPolicy{mode: permission.AutoMode}}
 	a.onApproval = func(ctx context.Context, name, args string) permission.Decision {
@@ -117,5 +101,5 @@ func TestAskGateNilThrottleSafe(t *testing.T) {
 	}
 	res := a.executeToolWithPermission(context.Background(),
 		provider.ToolCallDelta{Name: "read_file", Arguments: json.RawMessage(`{}`)})
-	_ = res // no panic is the assertion
+	_ = res
 }

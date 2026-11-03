@@ -14,13 +14,9 @@ import (
 
 func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error) {
 	switch p.Action {
-	// ── Mouse ──
+
 	case "click":
-		// #1665: the schema promises button applies to click actions; the
-		// hardcoded "left" silently ignored button="right" (which would
-		// open a context menu on Windows/Wayland but ACTIVATED on macOS -
-		// a destructive misclick surface). mouseClick already supports all
-		// buttons; wire the parameter through.
+
 		return mouseClick(ctx, p.X, p.Y, p.Button, 1)
 	case "double_click":
 		return mouseClick(ctx, p.X, p.Y, p.Button, 2)
@@ -41,7 +37,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "modifier_click":
 		return modifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 
-	// ── Keyboard ──
 	case "type":
 		return typeText(ctx, p.Text)
 	case "key_press", "key_combo":
@@ -49,7 +44,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "hold_key":
 		return holdKey(ctx, p.Text, p.Duration)
 
-	// ── Window management ──
 	case "set_window_bounds":
 		return setWindowBounds(ctx, p)
 	case "list_windows":
@@ -70,15 +64,12 @@ tell application %s
   set miniaturized of front window to true
 end tell`, applescriptQuote(p.Text)))
 	case "maximize_window":
-		// macOS doesn't have true maximize; use fullscreen. #4058: set to
-		// true (idempotent), NOT `not fullscreen` (toggle) — a retry must not
-		// exit fullscreen. Matches Windows ShowWindow(swMaximize) semantics.
+
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
   set fullscreen of front window to true
 end tell`, applescriptQuote(p.Text)))
 
-	// ── Application ──
 	case "open":
 		return openTarget(ctx, p)
 	case "launch_app":
@@ -106,7 +97,6 @@ tell application "System Events"
   return name of first process whose frontmost is true
 end tell`)
 
-	// ── Accessibility tree / composite ──
 	case "menu_select":
 		return menuSelect(ctx, p)
 	case "snapshot_ui":
@@ -127,17 +117,11 @@ end tell`)
 	}
 }
 
-// mouseClick moves to (x,y) then performs N clicks via Swift CGEvent.
-// Zero external dependencies — uses system swift + CoreGraphics.
 func mouseClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
-	// #4691: bare lowercase comparisons let "Right"/"RIGHT"/typos silently
-	// fall through to the LEFT branch - a right-click request clicking left
-	// is a dangerous misdirection (opens context-menu expectations aside,
-	// it acts on the wrong target). Normalize, then REJECT unknown buttons
-	// like mouseButtonEvent/:171 already does.
+
 	button = strings.ToLower(strings.TrimSpace(button))
 	if button == "" {
-		button = "left" // schema default: absent/empty button means left click
+		button = "left"
 	}
 	if button != "left" && button != "right" && button != "middle" {
 		return Result{IsError: true, Content: fmt.Sprintf("unknown button %q (left, right, middle)", button)}, nil
@@ -151,8 +135,7 @@ func mouseClick(ctx context.Context, x, y int, button string, count int) (Result
 		downType = ".otherMouseDown"
 		upType = ".otherMouseUp"
 	}
-	// For the middle button, CGEvent needs mouseButton .center (button 2);
-	// left/right both use .left because the event type encodes the button.
+
 	swiftButton := ".left"
 	if button == "middle" {
 		swiftButton = ".center"
@@ -171,10 +154,6 @@ for _ in 0..<%d {
 `, x, y, count, downType, swiftButton, upType, swiftButton))
 }
 
-// mouseButtonEvent posts a single button-down or button-up event at
-// (x,y). Splitting press/release lets agents build long-press and
-// cross-call drag interactions (down ... move ... up) that a one-shot
-// click cannot express.
 func mouseButtonEvent(ctx context.Context, x, y int, button string, down bool) (Result, error) {
 	typeStr := "Up"
 	if down {
@@ -208,10 +187,6 @@ e?.post(tap: .cghidEventTap)
 `, x, y, swiftType, swiftBtn))
 }
 
-// holdKey presses a key/combo, holds it for durationMs, then releases.
-// Uses AppleScript for the press/hold/release since CGEvent key events
-// require virtual-key code mapping that AppleSystemEvents gets right for
-// named keys.
 func holdKey(ctx context.Context, keys string, durationMs int) (Result, error) {
 	duration, err := holdKeyDurationClamp(durationMs)
 	if err != nil {
@@ -220,11 +195,7 @@ func holdKey(ctx context.Context, keys string, durationMs int) (Result, error) {
 	if strings.TrimSpace(keys) == "" {
 		return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo like 'shift' or 'cmd+tab')")
 	}
-	// #1673: System Events' `key down` accepts ONLY modifier-key constants.
-	// An ordinary key name ("w") compiles into an AppleScript that fails at
-	// runtime ("Can't make ... into type modifier key") - hold_key was DOA
-	// for non-modifier keys while the helper's comment claimed both forms
-	// worked. Fail fast with a truthful message instead.
+
 	for _, p := range strings.Split(keys, "+") {
 		switch strings.ToLower(strings.TrimSpace(p)) {
 		case "cmd", "command", "meta", "super", "ctrl", "control", "alt", "option", "opt", "shift":
@@ -232,7 +203,7 @@ func holdKey(ctx context.Context, keys string, durationMs int) (Result, error) {
 			return Result{}, fmt.Errorf("hold_key supports modifier keys only (cmd/ctrl/alt/shift, optionally combined like 'cmd+shift'); System Events cannot hold ordinary key %q - use key_press for taps", p)
 		}
 	}
-	// AppleScript: key down, delay, key up.
+
 	script := fmt.Sprintf(`
 tell application "System Events"
   key down %s
@@ -242,9 +213,6 @@ end tell`, applescriptKeyLiteral(keys), float64(duration)/1000.0, applescriptKey
 	return appleScriptResult(ctx, script)
 }
 
-// applescriptKeyLiteral converts "cmd+tab" to AppleScript key down syntax:
-// key down {command down, tab}. System Events accepts both key names and
-// modifier-down tokens in the list.
 func applescriptKeyLiteral(keys string) string {
 	parts := strings.Split(keys, "+")
 	var tokens []string
@@ -272,7 +240,6 @@ func applescriptKeyLiteral(keys string) string {
 	return "{" + strings.Join(tokens, ", ") + "}"
 }
 
-// mouseMove moves the cursor to (x,y) via Swift CGEvent.
 func mouseMove(ctx context.Context, x, y int) (Result, error) {
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
@@ -283,20 +250,16 @@ e?.post(tap: .cghidEventTap)
 `, x, y))
 }
 
-// mouseDrag drags from (x,y) to (toX,toY) via Swift CGEvent. When durationMs
-// > 0 the move is interpolated into intermediate mouseDragged events so
-// trajectory-sensitive targets (sliders, Dock tear-offs, drag-and-drop with
-// spring loading) register a real drag path instead of a teleport.
 func mouseDrag(ctx context.Context, x, y, toX, toY, durationMs int) (Result, error) {
 	steps := 0
-	intervalMs := 8 // ~125 events/sec — enough for targets to track motion
+	intervalMs := 8
 	if durationMs > 0 {
 		steps = durationMs / intervalMs
 		if steps < 2 {
 			steps = 2
 		}
 		if steps > 250 {
-			steps = 250 // cap event count; 250 events over >=2s is still smooth
+			steps = 250
 		}
 	}
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
@@ -333,17 +296,8 @@ eUp?.post(tap: .cghidEventTap)
 `, x, y, toX, toY, steps, intervalMs))
 }
 
-// scrollPixelsPerStep converts the schema's "steps" contract into CGEvent
-// pixels. #1003: the shared schema defines amount as "number of steps"
-// (Windows sends +-120 per step, X11 repeats one click per step), but macOS
-// CGEvent units:.pixel consumed amount raw - a default scroll of 1 pixel was
-// imperceptible against native wheel lines of hundreds of pixels, and agents
-// retried with bigger amounts that stayed sub-visible. 40px/step matches a
-// typical smooth-scrolling line height, so N steps move roughly the same
-// content distance on every platform.
 const scrollPixelsPerStep = 40
 
-// mouseScroll scrolls at (x,y) in the given direction via Swift CGEvent.
 func mouseScroll(ctx context.Context, x, y int, direction string, amount int) (Result, error) {
 	yDelta := amount * scrollPixelsPerStep
 	if direction == "down" {
@@ -358,12 +312,6 @@ e?.post(tap: .cghidEventTap)
 `, x, y, yDelta))
 }
 
-// typeText types a string via Swift CGEvent keyboard events.
-// Uses CGEventCreateKeyboardEvent at HID level for maximum compatibility,
-// including Electron-based editors (VS Code, Cursor) where AppleScript
-// keystroke is unreliable.
-// listWindowsAppleScript enumerates every foreground app process and its
-// windows via System Events.
 func listWindowsAppleScript(ctx context.Context) (Result, error) {
 	return appleScriptResult(ctx, `
 tell application "System Events"
@@ -381,12 +329,7 @@ end tell`)
 }
 
 func typeText(ctx context.Context, text string) (Result, error) {
-	// Build a Swift script that types each character via CGEvent.
-	// CGEventCreateKeyboardEvent with keyCode 0 + unicode payload works
-	// for arbitrary Unicode characters without needing key code mapping.
-	// Control characters MUST be escaped: a raw newline/tab inside the
-	// double-quoted Swift literal is a compile error ("unterminated string
-	// literal" / "unprintable ASCII character found in source file").
+
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
 let text = "%s"
@@ -405,12 +348,6 @@ for char in text {
 `, swiftStringLiteral(text)))
 }
 
-// swiftStringLiteral escapes a Go string for safe embedding inside a
-// Swift double-quoted string literal. Backslash and quote are escaped, and
-// every control character (< 0x20) becomes a \n/\r/\t or \u{XX} escape so
-// multi-line input compiles instead of failing with a Swift syntax error.
-// NOTE: \u{XX} is Swift-only syntax — do NOT reuse this for AppleScript
-// (osascript rejects it with -2741); use appleScriptStringLiteral there.
 func swiftStringLiteral(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -436,13 +373,6 @@ func swiftStringLiteral(s string) string {
 	return b.String()
 }
 
-// jxaStringLiteral escapes a Go string for safe embedding inside a
-// JavaScript (JXA) double-quoted string literal. Backslash and quote are
-// escaped, control characters become \n/\r/\t or a JS \uXXXX escape, and
-// every other rune (BMP or astral, emoji included) is written through as
-// raw UTF-8. #4478: Go's %q emits Go-only \U escapes for astral runes,
-// which JXA rejects with a SyntaxError - UI labels with emoji made every
-// find_element/find_and_click/wait_and_click probe fail.
 func jxaStringLiteral(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -468,9 +398,6 @@ func jxaStringLiteral(s string) string {
 	return b.String()
 }
 
-// runSwiftCGEvent runs an inline Swift script that uses CoreGraphics
-// CGEvent API for mouse events. Zero external dependencies — swift
-// and CoreGraphics are pre-installed on every macOS system.
 func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "swift", "-e", code)
 	out, err := cmd.CombinedOutput()
@@ -480,20 +407,12 @@ func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 	return Result{Content: "OK"}, nil
 }
 
-// modifierClick holds modifier keys down while clicking (multi-select,
-// force-open-in-new-tab, etc.). modifiers is a normalized spec like
-// "cmd+shift"; button honors the schema contract (#1665 fixed the plain
-// click path, modifier_click had the same contract breach — #3876).
 func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifiers)
 	if err != nil {
 		return Result{}, err
 	}
-	// Same event-type encoding as mouseClick: the CGEventType encodes the
-	// button; the middle button additionally needs mouseButton .center.
-	// #4440: middle was silently left-clicked here (the #1665/#3876 fixes
-	// only covered the plain click path), and unknown buttons erred the
-	// same way - mirror mouseClick's full button mapping instead.
+
 	downType, upType := ".leftMouseDown", ".leftMouseUp"
 	swiftButton := ".left"
 	switch button {
@@ -506,20 +425,20 @@ func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Res
 	default:
 		return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
 	}
-	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
+
 	var flags uint64
 	for _, m := range mods {
 		switch m {
 		case "cmd":
-			flags |= 1 << 20 // kCGEventFlagMaskCommand
+			flags |= 1 << 20
 		case "ctrl":
-			flags |= 1 << 18 // kCGEventFlagMaskControl
+			flags |= 1 << 18
 		case "alt":
-			flags |= 1 << 19 // kCGEventFlagMaskAlternate
+			flags |= 1 << 19
 		case "shift":
-			flags |= 1 << 17 // kCGEventFlagMaskShift
+			flags |= 1 << 17
 		case "fn":
-			flags |= 1 << 23 // kCGEventFlagMaskSecondaryFn
+			flags |= 1 << 23
 		}
 	}
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
@@ -537,10 +456,8 @@ eUp?.post(tap: .cghidEventTap)
 `, x, y, flags, downType, swiftButton, upType, swiftButton))
 }
 
-// mousePosition returns the current cursor position in logical pixels.
 func mousePosition(ctx context.Context) (Result, error) {
-	// Cannot reuse runSwiftCGEvent here: it discards stdout. This action
-	// must return the printed coordinates.
+
 	cmd := exec.CommandContext(ctx, "swift", "-e", `
 import CoreGraphics
 import Foundation
@@ -556,8 +473,6 @@ print(Int(loc.x), Int(loc.y))
 	return Result{Content: strings.TrimSpace(string(out))}, nil
 }
 
-// openTarget opens a URL or file path with the default handler, or a
-// specific app when p.App is set.
 func openTarget(ctx context.Context, p desktopParams) (Result, error) {
 	target := strings.TrimSpace(p.Text)
 	if target == "" {
@@ -574,15 +489,11 @@ func openTarget(ctx context.Context, p desktopParams) (Result, error) {
 	return Result{Content: "OK: opened " + target}, nil
 }
 
-// setWindowBounds positions and sizes the frontmost window of the given
-// app (or the frontmost app when p.App is empty).
 func setWindowBounds(ctx context.Context, p desktopParams) (Result, error) {
 	if p.ToX <= 0 || p.ToY <= 0 {
 		return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 	}
-	// #4440: honor p.App (same #2587 fix shape as menuSelect) - the old
-	// script hardcoded the frontmost process, so set_window_bounds(app:
-	// "Safari") silently moved the frontmost Chrome window and reported OK.
+
 	target := "(first process whose frontmost is true)"
 	if name := strings.TrimSpace(p.App); name != "" {
 		target = fmt.Sprintf("(first application process whose name is %s)", applescriptQuote(name))
@@ -596,9 +507,6 @@ tell application "System Events"
 end tell`, target, p.X, p.Y, p.ToX, p.ToY))
 }
 
-// menuSelect clicks a menu bar item by path, e.g. "File > Export…".
-// Uses System Events UI scripting; works even when the app does not
-// expose standard AppleScript menus.
 func menuSelect(ctx context.Context, p desktopParams) (Result, error) {
 	script, err := buildMenuSelectScript(p)
 	if err != nil {
@@ -607,15 +515,6 @@ func menuSelect(ctx context.Context, p desktopParams) (Result, error) {
 	return appleScriptResult(ctx, script)
 }
 
-// buildMenuSelectScript constructs the System Events menu-walk script.
-// #2587: the schema promises `app` addresses the target menu bar
-// ("or the app whose menu bar to use (for 'menu_select', default
-// frontmost)"). The old script hardcoded `first process whose frontmost
-// is true` and silently ignored p.App - with Chrome frontmost, a
-// menu_select(app: "Safari") clicked CHROME's menus and the tool still
-// reported OK. When p.App is set, address the process by name instead;
-// a wrong name surfaces as an osascript -1728 error (not a silent
-// misclick).
 func buildMenuSelectScript(p desktopParams) (string, error) {
 	parts, err := parseMenuPath(p.Text)
 	if err != nil {
@@ -631,14 +530,9 @@ tell application "System Events"
   tell ` + target + `
     tell menu bar 1
 `)
-	// Click the top-level menu bar item to open its menu.
+
 	sb.WriteString(fmt.Sprintf("      click menu bar item %s\n", applescriptQuote(parts[0])))
-	// Walk down: each level is "menu item X of menu X of <parent chain> of menu bar item P1".
-	// Clicking an intermediate submenu item opens the next menu; the final
-	// click selects. #819: a submenu is named after its PARENT item (System
-	// Events), so 'menu %s' must carry parts[depth-1], not parts[depth] —
-	// the old self-named chain referenced a nonexistent menu and every
-	// depth>=2 selection failed with -1728.
+
 	for depth := 1; depth < len(parts); depth++ {
 		var chain strings.Builder
 		chain.WriteString(fmt.Sprintf("menu item %s of menu %s",
@@ -654,8 +548,6 @@ tell application "System Events"
 	return sb.String(), nil
 }
 
-// snapshotUI returns the accessibility tree of the frontmost application
-// as a JSON array of elements with role, label, frame (x,y,w,h), and enabled.
 func snapshotUI(ctx context.Context, maxDepth int) (Result, error) {
 	if maxDepth <= 0 {
 		maxDepth = 8
@@ -727,9 +619,6 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
-// findElement searches the accessibility tree for elements whose label
-// contains the search text (case-insensitive). Returns matching elements
-// with their coordinates.
 func findElement(ctx context.Context, searchText string, maxDepth int) (Result, error) {
 	if maxDepth <= 0 {
 		maxDepth = 8
@@ -794,7 +683,6 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
-// findAndClick finds a UI element by text and clicks its center.
 func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result, error) {
 	findRes, err := findElement(ctx, searchText, maxDepth)
 	if err != nil {
@@ -816,11 +704,6 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 		return Result{Content: fmt.Sprintf("No UI element found matching %q", searchText)}, nil
 	}
 
-	// #4897: preorder DFS puts PARENTS before descendants, so a window/
-	// container whose title contains the search term (on macOS the AXWindow
-	// name IS the window title - "Save Changes?" shadows the Save button)
-	// matched first and got clicked. Pick the SMALLEST-frame match instead:
-	// the actual control is always smaller than the window containing it.
 	best := -1
 	var bestArea float64
 	for i, m := range matches {
@@ -845,21 +728,17 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 	return Result{Content: fmt.Sprintf("Found %d matches for %q but none had clickable coordinates", len(matches), searchText)}, nil
 }
 
-// waitAndClick polls for a UI element and clicks it when it appears.
 func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs int) (Result, error) {
 	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
 	pollInterval := 200 * time.Millisecond
-	// #4440: timeoutMs <= 0 previously meant the loop body never ran - an
-	// immediately-visible element still reported "Timed out". Poll at
-	// least once regardless of the deadline.
+
 	lastDetail := ""
 	for first := true; first || time.Now().Before(deadline); first = false {
 		res, err := findAndClick(ctx, searchText, maxDepth)
 		if err == nil && !strings.Contains(res.Content, "No UI element") && !strings.Contains(res.Content, "none had clickable") {
 			return res, nil
 		}
-		// #4440: keep the real failure reason (osascript error, missing
-		// accessibility permission) instead of masking it as a timeout.
+
 		if err != nil {
 			lastDetail = fmt.Sprintf(": last error: %v", err)
 		}
@@ -869,14 +748,12 @@ func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs in
 		case <-time.After(pollInterval):
 		}
 	}
-	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms%s", searchText, timeoutMs, lastDetail)}, nil // #4091: consumers gate on IsError (termGuard, spec memo)
+	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms%s", searchText, timeoutMs, lastDetail)}, nil
 }
 
-// runJXA runs a JavaScript for Automation script via osascript.
 func runJXA(ctx context.Context, script string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script)
-	// #4440: Output() discarded stderr; appleScriptResult already
-	// appends it (#2587) - JXA failures kept the same diagnostic gap.
+
 	out, err := cmd.Output()
 	if err != nil {
 		var stderr string
@@ -895,7 +772,6 @@ func runJXA(ctx context.Context, script string) (Result, error) {
 	return Result{Content: result}, nil
 }
 
-// displayInfo returns logical and physical display dimensions and the scale factor.
 func displayInfo(ctx context.Context) (Result, error) {
 	script := `
 ObjC.import('AppKit');
@@ -924,14 +800,9 @@ ObjC.import('AppKit');
 
 var keyCodeMap = map[string]int{
 	"return": 36, "enter": 76, "tab": 48, "space": 49,
-	// #4054: backspace was missing and fell through to the keystroke
-	// fallback, typing the literal text "backspace" into the focused
-	// control with a fake success. Apple key code 51 is the backspace key.
+
 	"backspace": 51, "delete": 51,
-	// #4055: "delete" is backspace on macOS but forward delete on
-	// Windows/Linux (xdotool Delete / VK_DELETE). Keep the legacy macOS
-	// mapping for compatibility, and expose unambiguous names for the
-	// forward direction (Fn+Delete, key code 117).
+
 	"forward-delete": 117, "forwarddelete": 117,
 	"esc": 53, "escape": 53,
 	"home": 115, "end": 119,
@@ -943,13 +814,8 @@ var keyCodeMap = map[string]int{
 	"f9": 101, "f10": 109, "f11": 103, "f12": 111,
 }
 
-// keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
-// to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
-	// #3876: strings.Split never returns an empty slice (len(parts)==0 was
-	// unreachable dead code), so an empty combo or a trailing "+" silently
-	// produced `keystroke ""` and an opaque osascript error. Reject both
-	// shapes up front, mirroring normalizeModifiers' empty-segment check.
+
 	if strings.TrimSpace(combo) == "" {
 		return Result{}, fmt.Errorf("empty key combo")
 	}
@@ -989,21 +855,11 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	if code, ok := keyCodeMap[keyLower]; ok {
 		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
 	} else {
-		// #4054: a multi-char purely-alphabetic key that is not in the map is
-		// almost certainly a mistyped key NAME (e.g. "backspace" before the
-		// map entry existed, or "f13") — typing it literally is a silent
-		// wrong action with a fake success. Reject it and list supported
-		// names (Windows-side precedent: only single chars reach the literal
-		// fallback). Text to type belongs to the 'type' action; digits and
-		// mixed strings keep the keystroke fallback for key_combo tails.
+
 		if unknownAlphaKeyName(keyLower) {
 			return Result{IsError: true, Content: fmt.Sprintf("unknown key name %q; supported keys: return, enter, tab, space, backspace, delete, forward-delete, esc, escape, home, end, pageup, pagedown, arrowleft/right/up/down, f1-f12; single characters are typed literally", key)}, nil
 		}
-		// Escape the key for embedding in an AppleScript double-quoted
-		// string; applies to the single-char branch too (a literal " would
-		// otherwise break the script). Control characters must NOT use the
-		// Swift \u{XX} form — osascript rejects it with -2741 (#217); emit
-		// them via `character id N` instead.
+
 		if containsControlChar(key) {
 			script = fmt.Sprintf(`tell application "System Events" to keystroke (character id %d)%s`, firstControlChar(key), modList)
 			return appleScriptResult(ctx, script)
@@ -1015,10 +871,6 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	return appleScriptResult(ctx, script)
 }
 
-// appleScriptStringLiteral escapes for AppleScript double-quoted strings.
-// AppleScript recognizes \\ \" \n \r \t but NOT Swift's \u{XX} — control
-// characters other than those five are not embeddable at all; callers
-// route them through `character id N` (#217).
 func appleScriptStringLiteral(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -1042,8 +894,6 @@ func appleScriptStringLiteral(s string) string {
 	return b.String()
 }
 
-// containsControlChar reports whether s has any C0 control character that
-// AppleScript literals cannot represent (#217).
 func containsControlChar(s string) bool {
 	for _, r := range s {
 		if r < 0x20 {
@@ -1053,8 +903,6 @@ func containsControlChar(s string) bool {
 	return false
 }
 
-// firstControlChar returns the first C0 control code in s (callers only use
-// it after containsControlChar).
 func firstControlChar(s string) int {
 	for _, r := range s {
 		if r < 0x20 {
@@ -1068,9 +916,7 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	out, err := cmd.Output()
 	if err != nil {
-		// #2587: surface the osascript stderr (e.g. the -1728 "Can't get
-		// application process" text for a wrong `app` name) - a bare
-		// "exit status 1" left the failure cause invisible to the model.
+
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
 			return Result{}, fmt.Errorf("osascript failed: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
@@ -1084,13 +930,10 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 	return Result{Content: result}, nil
 }
 
-// applescriptQuote escapes a user-supplied string for safe embedding inside
-// AppleScript double-quoted strings.
 func applescriptQuote(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
-	// #3876: raw newlines/tabs inside `tell application "..."` produce
-	// osascript -2739 syntax errors; escape like swiftStringLiteral does.
+
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	s = strings.ReplaceAll(s, "\r", "\\r")
 	s = strings.ReplaceAll(s, "\t", "\\t")

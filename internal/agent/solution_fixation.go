@@ -1,48 +1,5 @@
 package agent
 
-// Solution Fixation Detector - Diagnosis Anchoring in Failed Edit Clusters
-//
-// Research basis:
-//   - Anchoring Effect in LLMs (arXiv:2505.15392, IEEE 2026): LLMs anchor
-//     heavily on their first hypothesis/diagnosis and are slow to abandon it
-//     even in the face of contradicting evidence.
-//   - AgentDebug / "Where LLM Agents Fail" (arXiv:2509.25370): agents that
-//     don't learn from failures keep repeating variations of the same
-//     approach, achieving up to 26% improvement when given principled
-//     debugging feedback that forces re-diagnosis.
-//   - ACONIC (IBM Research 2026): heuristic decomposition without formal
-//     constraint analysis causes agents to fixate on one sub-problem.
-//
-// The core insight: when an LLM coding agent encounters a failure, it forms
-// a root-cause hypothesis ("the bug is in auth.go's token validation"). It
-// then tries fix after fix in that same location. Each failed fix is evidence
-// against the hypothesis - but the anchoring effect means the agent keeps
-// trying variations instead of stepping back and reconsidering whether the
-// diagnosis itself is wrong.
-//
-// Distinction from existing detectors:
-//   - error_strategy_loop.go: same ERROR CATEGORY recurring (the error text
-//     pattern repeats). This detector tracks the FIX LOCATION, not the error.
-//   - fix_cascade.go: edit->verify->fail->edit cycle (structural cycle across
-//     different errors). This detector specifically targets SAME-FILE clusters.
-//   - edit_fail_recovery.go: single edit failure -> recovery hint. This detector
-//     fires only after MULTIPLE failures on the same target.
-//   - edit_oscillation.go: same-file semantic content reversal (undo/redo).
-//     This detector fires on FAILED edits, not content reversals.
-//   - premature_commitment.go: behavioral commitment pattern. This detector
-//     is about diagnosis-level fixation in debugging.
-//
-// What this detects: 3+ FAILED edit attempts targeting the same file (or
-// same pair of files) within a sliding window of 12 tool calls. This
-// pattern means the agent is anchored on "the problem is HERE" and keeps
-// hammering the same location without reconsidering its root-cause analysis.
-//
-// Design:
-//   - Zero LLM cost - pure file-path tracking + failure counting
-//   - Fires at most 2 times per run
-//   - Non-blocking: guidance injected as user message, agent continues
-//   - Threshold: 3+ failed edits to the same file within window of 12
-
 import (
 	"encoding/json"
 	"fmt"
@@ -51,26 +8,21 @@ import (
 )
 
 const (
-	fixationThreshold   = 3 // failed edits on same file to trigger
+	fixationThreshold   = 3
 	fixationWindow      = 12
 	maxFixationWarnings = 2
 )
 
-// fixationEntry tracks ONE tool call in the sliding window. filePaths holds
-// every file the call targeted (multi_file_edit / multi_file_write touch all
-// entries of files[], so a failed batch edit is attributed to each file it
-// touched, #639); nil for non-edit calls, which still advance the window
-// because the documented window unit is "12 tool calls", not "12 edits".
 type fixationEntry struct {
 	filePaths []string
 	isError   bool
 }
 
 type solutionFixationState struct {
-	recentCalls  []fixationEntry // sliding window of the last 12 tool calls (any kind)
-	failedByFile map[string]int  // failed edit count per file in current window
+	recentCalls  []fixationEntry
+	failedByFile map[string]int
 	warningCount int
-	firedFor     map[string]bool // files we already warned about this run
+	firedFor     map[string]bool
 }
 
 func newSolutionFixationState() *solutionFixationState {
@@ -88,17 +40,6 @@ func (s *solutionFixationState) reset() {
 	s.firedFor = make(map[string]bool)
 }
 
-// agentMutationEditTools is the single canonical set of file-mutating edit
-// tools shared across the behavior detectors (#639). Before it existed,
-// solution_fixation, error_rush, and momentum_loss each kept a private edit
-// list and the three drifted apart: multi_file_write / batch_replace /
-// lsp_rename were mutations for one detector and invisible to another, so
-// the same failed edit fed the detectors inconsistently (and multi_file_edit
-// was missing from error_rush's mutation list entirely).
-//
-// strategyFixationIsMutation (strategy_fixation.go) intentionally stays a
-// separate predicate: it gates a different recording pipeline whose semantics
-// are verified by its own tests.
 var agentMutationEditTools = map[string]bool{
 	"edit_file":        true,
 	"write_file":       true,
@@ -108,23 +49,14 @@ var agentMutationEditTools = map[string]bool{
 	"notebook_edit":    true,
 	"batch_replace":    true,
 	"lsp_rename":       true,
-	// #1704 case 5: file_ops delete/move are file mutations - a failed
-	// file_ops is an edit failure for fixation purposes; its omission
-	// made the detector blind to that failure class.
+
 	"file_ops": true,
 }
 
-// isAgentMutationEditTool reports whether the tool mutates files.
 func isAgentMutationEditTool(name string) bool {
 	return agentMutationEditTools[name]
 }
 
-// extractFilePathsFromEditArgs extracts ALL target file paths from edit
-// tool arguments. A failed multi_file_edit / multi_file_write touches every
-// entry of files[] — attributing only Files[0] meant three failed batches
-// with reordered entries scattered one failure across three files and the
-// per-file threshold was structurally unreachable (#639).
-// Returns nil if no path can be extracted.
 func extractFilePathsFromEditArgs(args string) []string {
 	args = strings.TrimSpace(args)
 	if args == "" {
@@ -138,11 +70,6 @@ func extractFilePathsFromEditArgs(args string) []string {
 		Files    []struct {
 			Path string `json:"path"`
 		} `json:"files"`
-		// #2956: file_ops passes its targets as operations[].source /
-		// operations[].destination, not as a top-level path. Without this
-		// field the extractor returned nil for every file_ops call, so failed
-		// deletes/moves never incremented failedByFile and the #1704 case-5
-		// file_ops inclusion in agentMutationEditTools was a half-fix.
 		Operations []struct {
 			Action      string `json:"action"`
 			Source      string `json:"source"`
@@ -165,9 +92,7 @@ func extractFilePathsFromEditArgs(args string) []string {
 		for _, f := range parsed.Files {
 			add(f.Path)
 		}
-		// #2956: attribute file_ops targets - source for delete/move/mkdir,
-		// destination for move/mkdir (both endpoints of a failed move are
-		// fixation-relevant targets).
+
 		for _, op := range parsed.Operations {
 			add(op.Source)
 			add(op.Destination)
@@ -177,7 +102,6 @@ func extractFilePathsFromEditArgs(args string) []string {
 		}
 	}
 
-	// Fallback: lightweight extraction of "file_path":"..." or "path":"..."
 	for _, field := range []string{"file_path", "path", "notebook_path"} {
 		if v := extractJSONStringFieldFixation(args, field); v != "" {
 			add(v)
@@ -186,7 +110,6 @@ func extractFilePathsFromEditArgs(args string) []string {
 	return dedupePathsFixation(paths)
 }
 
-// dedupePathsFixation removes duplicate paths while preserving order.
 func dedupePathsFixation(paths []string) []string {
 	if len(paths) <= 1 {
 		return paths
@@ -203,7 +126,6 @@ func dedupePathsFixation(paths []string) []string {
 	return out
 }
 
-// extractJSONStringFieldFixation does a lightweight scan for "field":"value" pattern.
 func extractJSONStringFieldFixation(jsonStr, field string) string {
 	needle := `"` + field + `"`
 	idx := strings.Index(jsonStr, needle)
@@ -230,18 +152,9 @@ func normalizePathFixation(p string) string {
 	if p == "" {
 		return ""
 	}
-	// Normalize separators (Windows paths too) and keep the FULL cleaned
-	// path as the counting key. The old base-name reduction merged same-named
-	// files across directories (cmd/a/main.go vs internal/b/main.go), so
-	// failures against 4 DIFFERENT targets could stack into a false "fixated
-	// on the same location" warning (#393).
+
 	p = strings.ReplaceAll(p, "\\", "/")
-	// #1496 D: path.Clean semantics - collapse "./" prefixes, trailing
-	// slashes and redundant segments so x.go / ./x.go / x.go/ share ONE
-	// counting key. Previously they split into three keys of 1 failure
-	// each and never reached the fixation threshold; the common recovery
-	// move (retry with an absolute path after a failure) silently reset
-	// the counter. Base-name merging stays OFF per #393.
+
 	for strings.HasPrefix(p, "./") {
 		p = p[2:]
 	}
@@ -252,21 +165,13 @@ func normalizePathFixation(p string) string {
 	if p == "" || p == "." {
 		return ""
 	}
-	// A path that normalizes to a bare separator carries no file identity.
+
 	if p == "/" {
 		return ""
 	}
 	return p
 }
 
-// recordToolCall records one tool call result. Called after EVERY tool
-// execution: the window advances on all tool calls (the documented unit is
-// "a sliding window of 12 tool calls"), while only mutation-edit calls with
-// an extractable path feed the per-file failure counts.
-//
-// #639: the window previously advanced only on edit calls, so failures
-// separated by dozens of healthy non-edit calls could still stack 3 failures
-// on one file and fire a false anchoring warning on long runs.
 func (s *solutionFixationState) recordToolCall(toolName, args string, isError bool) {
 	var paths []string
 	if isAgentMutationEditTool(toolName) {
@@ -282,7 +187,6 @@ func (s *solutionFixationState) recordToolCall(toolName, args string, isError bo
 		}
 	}
 
-	// Evict oldest entry if window exceeded
 	if len(s.recentCalls) > fixationWindow {
 		old := s.recentCalls[0]
 		s.recentCalls = s.recentCalls[1:]
@@ -297,7 +201,6 @@ func (s *solutionFixationState) recordToolCall(toolName, args string, isError bo
 	}
 }
 
-// checkAndWarn returns a guidance message if solution fixation is detected.
 func (s *solutionFixationState) checkAndWarn() string {
 	if s.warningCount >= maxFixationWarnings {
 		return ""
@@ -307,17 +210,13 @@ func (s *solutionFixationState) checkAndWarn() string {
 	worstCount := 0
 	for f, c := range s.failedByFile {
 		if s.firedFor[f] {
-			continue // already warned about this file
+			continue
 		}
 		if c > worstCount {
 			worstCount = c
 			worstFiles = []string{f}
 		} else if c == worstCount && worstCount > 0 {
-			// #2956 followup: a failed file_ops move attributes BOTH endpoints
-			// (source+destination) - ties at the max count must ALL be listed,
-			// not whichever the map iterator happens to yield first (the old
-			// single-pick made the warning nondeterministic and the move-source
-			// probe flaky on CI).
+
 			worstFiles = append(worstFiles, f)
 		}
 	}

@@ -15,39 +15,16 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// ScanTodos implements a codebase-wide technical-debt marker scanner.
-//
-// Unlike diff_scan (which only checks git diffs) or code_health (which measures
-// cyclomatic complexity), this tool surveys the ENTIRE codebase for TODO, FIXME,
-// HACK, XXX, BUG, NOTE, and WORKAROUND comments — the markers developers leave
-// to track known issues, planned work, and shortcuts.
-//
-// Competitor mapping:
-//   - Linear/Zendesk: dedicated TODO debt tracking dashboards
-//   - SonarQube: tracks TODO/FIXME as code smells with age-based severity
-//   - IntelliJ IDEA: highlights and aggregates TODO comments by pattern
-//   - TODO Tree (VS Code extension): side-panel tree view of all TODOs
-//   - leasot: npm package for multi-language TODO scanning
-//
-// Our implementation adds:
-//   - Optional git-blame staleness detection (>90 days = higher priority)
-//   - Severity categorization (FIXME/BUG > TODO > HACK/XXX > NOTE)
-//   - Author attribution (who created the marker)
-//   - File-level and category-level summaries
-//   - Language-agnostic (works on any text file with common source extensions)
-
-// TodoMarker represents a single TODO/FIXME/etc. marker found in the codebase.
 type TodoMarker struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
-	Category string `json:"category"` // TODO, FIXME, HACK, XXX, BUG, NOTE, WORKAROUND
-	Severity string `json:"severity"` // critical, high, medium, low
-	Text     string `json:"text"`     // the comment text after the marker
-	Author   string `json:"author"`   // git blame author (if available)
-	Age      string `json:"age"`      // human-readable age (if git blame available)
+	Category string `json:"category"`
+	Severity string `json:"severity"`
+	Text     string `json:"text"`
+	Author   string `json:"author"`
+	Age      string `json:"age"`
 }
 
-// todoCategorySeverity maps marker categories to severity levels.
 var todoCategorySeverity = map[string]string{
 	"FIXME":      "critical",
 	"BUG":        "critical",
@@ -58,10 +35,6 @@ var todoCategorySeverity = map[string]string{
 	"NOTE":       "low",
 }
 
-// todoMarkerOrder defines the search order for markers within a line.
-// Longer markers come first to prevent false matches (e.g., "BUG" inside
-// "WORKAROUND: for bug 123"). This is critical because map iteration order
-// in Go is randomized.
 var todoMarkerOrder = []string{
 	"WORKAROUND",
 	"FIXME",
@@ -72,7 +45,6 @@ var todoMarkerOrder = []string{
 	"XXX",
 }
 
-// todoSeverityOrder defines priority ordering for sorting.
 var todoSeverityOrder = map[string]int{
 	"critical": 0,
 	"high":     1,
@@ -80,7 +52,6 @@ var todoSeverityOrder = map[string]int{
 	"low":      3,
 }
 
-// scanTodoSourceExtensions lists file extensions that are scanned.
 var scanTodoSourceExtensions = map[string]bool{
 	".go": true, ".rs": true, ".py": true, ".js": true, ".ts": true,
 	".jsx": true, ".tsx": true, ".java": true, ".kt": true, ".scala": true,
@@ -93,7 +64,6 @@ var scanTodoSourceExtensions = map[string]bool{
 	".ml": true, ".fs": true, ".vim": true, ".r": true, ".pl": true,
 }
 
-// scanTodoSkipDirs are directories that are never scanned.
 var scanTodoSkipDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, ".vendor": true,
 	"dist": true, "build": true, "target": true, "__pycache__": true,
@@ -102,7 +72,6 @@ var scanTodoSkipDirs = map[string]bool{
 	".pytest_cache": true, ".idea": true, ".vscode": true,
 }
 
-// ScanTodosTool implements the scan_todos tool.
 type ScanTodosTool struct {
 	WorkingDir string
 }
@@ -178,7 +147,6 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		args.MaxResults = 50
 	}
 
-	// Parse category filter
 	var categoryFilter map[string]bool
 	if args.Categories != "" {
 		valid := make(map[string]bool, len(todoMarkerOrder))
@@ -191,9 +159,7 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 			if c == "" {
 				continue
 			}
-			// #1701 case 4: an unknown category used to be silently
-			// accepted and filtered EVERYTHING out - the tool reported
-			// "Codebase is clean." for a typo like "FOO".
+
 			if !valid[c] {
 				return Result{IsError: true, Content: fmt.Sprintf("unknown category %q; valid: TODO, FIXME, HACK, XXX, BUG, NOTE, WORKAROUND", c)}, nil
 			}
@@ -208,12 +174,10 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("scan failed: %v", err)}, nil
 	}
 
-	// Enrich with git blame if requested
 	if args.IncludeBlame && len(markers) > 0 {
 		enrichWithBlame(absDir, markers, args.StaleDays)
 	}
 
-	// Sort by severity (critical first), then by file, then by line
 	sort.Slice(markers, func(i, j int) bool {
 		si := todoSeverityOrder[markers[i].Severity]
 		sj := todoSeverityOrder[markers[j].Severity]
@@ -226,7 +190,6 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return markers[i].Line < markers[j].Line
 	})
 
-	// Truncate to max results
 	total := len(markers)
 	truncated := false
 	if len(markers) > args.MaxResults {
@@ -239,8 +202,6 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: content}, nil
 }
 
-// limitedBuf caps captured stdout at 8MB (#1701 case 6: blame porcelain
-// is verbose; pathological files must not balloon agent memory).
 type limitedBuf struct {
 	b []byte
 }
@@ -254,24 +215,19 @@ func (w *limitedBuf) Write(p []byte) (int, error) {
 		}
 		w.b = append(w.b, p[:room]...)
 	}
-	// Always report full consumption so the command never sees EPIPE.
+
 	return len(p), nil
 }
 
 func (w *limitedBuf) bytes() []byte { return w.b }
 
-// scanDirectoryForTodos walks the directory tree and collects all markers.
 func scanDirectoryForTodos(rootDir string, categoryFilter map[string]bool) ([]TodoMarker, int, error) {
 	var markers []TodoMarker
 	filesScanned := 0
 
 	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			// #1701 case 2: an unreadable/nonexistent ROOT used to be
-			// swallowed here and the tool reported "Codebase is clean."
-			// with filesScanned == 0 - the same misleading-success class
-			// #1510 fixed for code-health. Only NON-root paths are
-			// skipped.
+
 			if path == rootDir {
 				return err
 			}
@@ -293,7 +249,7 @@ func scanDirectoryForTodos(rootDir string, categoryFilter map[string]bool) ([]To
 		filesScanned++
 		fileMarkers, err := scanFileForTodos(path, categoryFilter)
 		if err != nil {
-			return nil // skip files with read errors
+			return nil
 		}
 		markers = append(markers, fileMarkers...)
 		return nil
@@ -302,7 +258,6 @@ func scanDirectoryForTodos(rootDir string, categoryFilter map[string]bool) ([]To
 	return markers, filesScanned, err
 }
 
-// scanFileForTodos reads a single file and extracts all markers.
 func scanFileForTodos(path string, categoryFilter map[string]bool) ([]TodoMarker, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -312,7 +267,7 @@ func scanFileForTodos(path string, categoryFilter map[string]bool) ([]TodoMarker
 
 	var markers []TodoMarker
 	scanner := bufio.NewScanner(f)
-	// Increase buffer for long lines
+
 	scanner.Buffer(make([]byte, 0, 65536), 65536)
 	lineNum := 0
 
@@ -328,12 +283,10 @@ func scanFileForTodos(path string, categoryFilter map[string]bool) ([]TodoMarker
 	return markers, scanner.Err()
 }
 
-// extractTodoMarker checks if a line contains a TODO/FIXME/etc. marker and
-// returns a TodoMarker if so. Returns nil otherwise.
 func extractTodoMarker(file string, lineNum int, line string, categoryFilter map[string]bool) *TodoMarker {
 	upper := strings.ToUpper(line)
 	for _, cat := range todoMarkerOrder {
-		// Search for the category keyword as a word boundary
+
 		idx := findMarkerIndex(upper, cat)
 		if idx < 0 {
 			continue
@@ -341,15 +294,15 @@ func extractTodoMarker(file string, lineNum int, line string, categoryFilter map
 		if categoryFilter != nil && !categoryFilter[cat] {
 			continue
 		}
-		// Extract the text after the marker
+
 		textStart := idx + len(cat)
 		if textStart >= len(line) {
 			textStart = len(line)
 		}
 		text := strings.TrimSpace(line[textStart:])
-		// Strip leading colon, dash, or space separators
+
 		text = strings.TrimLeft(text, ":- \t")
-		// Truncate long text
+
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
@@ -364,8 +317,6 @@ func extractTodoMarker(file string, lineNum int, line string, categoryFilter map
 	return nil
 }
 
-// findMarkerIndex finds the index of a TODO-like marker in a line, respecting
-// word boundaries. Returns -1 if not found.
 func findMarkerIndex(upperLine, marker string) int {
 	searchStart := 0
 	for {
@@ -374,7 +325,7 @@ func findMarkerIndex(upperLine, marker string) int {
 			return -1
 		}
 		absIdx := searchStart + idx
-		// Check word boundary before
+
 		if absIdx > 0 {
 			before := upperLine[absIdx-1]
 			if (before >= 'A' && before <= 'Z') || (before >= '0' && before <= '9') || before == '_' {
@@ -382,7 +333,7 @@ func findMarkerIndex(upperLine, marker string) int {
 				continue
 			}
 		}
-		// Check word boundary after
+
 		afterIdx := absIdx + len(marker)
 		if afterIdx < len(upperLine) {
 			after := upperLine[afterIdx]
@@ -395,10 +346,8 @@ func findMarkerIndex(upperLine, marker string) int {
 	}
 }
 
-// enrichWithBlame runs git blame on files containing markers and fills in
-// author and age information.
 func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
-	// Group markers by file to minimize git blame calls
+
 	fileMarkers := make(map[string][]int)
 	for i := range markers {
 		relPath, err := filepath.Rel(rootDir, markers[i].File)
@@ -411,10 +360,7 @@ func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
 	staleThreshold := time.Now().AddDate(0, 0, -staleDays)
 
 	for relPath, indices := range fileMarkers {
-		// Run git blame for this file
-		// #1701 case 6: bound the call - plain Command with unbounded
-		// Output could hang or balloon on pathological files. 30s per
-		// file, 8MB stdout cap (blame porcelain is verbose).
+
 		blameCtx, cancelBlame := context.WithTimeout(context.Background(), 30*time.Second)
 		cmd := exec.CommandContext(blameCtx, "git", "blame", "--line-porcelain", "--date=iso", relPath)
 		cmd.Dir = rootDir
@@ -426,10 +372,9 @@ func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
 			continue
 		}
 		output := lb.bytes()
-		// Parse git blame output
+
 		blameInfo := parseGitBlame(output)
 
-		// Apply blame info to markers
 		for _, idx := range indices {
 			if idx >= len(markers) {
 				continue
@@ -440,7 +385,7 @@ func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
 				if !info.date.IsZero() {
 					markers[idx].Age = formatAge(info.date)
 					if info.date.Before(staleThreshold) {
-						// Upgrade severity for stale markers (but don't downgrade)
+
 						if todoSeverityOrder[markers[idx].Severity] > todoSeverityOrder["high"] {
 							markers[idx].Severity = "high"
 						}
@@ -451,13 +396,11 @@ func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
 	}
 }
 
-// blameLineInfo holds parsed git blame data for a single line.
 type blameLineInfo struct {
 	author string
 	date   time.Time
 }
 
-// parseGitBlame parses --line-porcelain output into a map of line number → info.
 func parseGitBlame(output []byte) map[int]blameLineInfo {
 	result := make(map[int]blameLineInfo)
 	lines := strings.Split(string(output), "\n")
@@ -467,13 +410,7 @@ func parseGitBlame(output []byte) map[int]blameLineInfo {
 	var date time.Time
 
 	for _, line := range lines {
-		// Header lines: "hash origLine finalLine"
-		// #1006: git blame --line-porcelain output ends with \n, so Split
-		// always yields a trailing empty line. && binds tighter than ||, so
-		// the old form evaluated the 'a'-'f' clause on line[0] without the
-		// length guard - a guaranteed index-out-of-range panic that crashed
-		// the whole process (no recover on this path). Guard first, then
-		// group the two character ranges explicitly.
+
 		if len(line) > 0 && ((line[0] >= '0' && line[0] <= '9') || (line[0] >= 'a' && line[0] <= 'f')) {
 			parts := strings.Fields(line)
 			if len(parts) >= 3 {
@@ -494,10 +431,7 @@ func parseGitBlame(output []byte) map[int]blameLineInfo {
 			}
 		}
 		if strings.HasPrefix(line, "author-tz ") {
-			// End of author metadata for this entry (#862): porcelain emits
-			// author -> author-mail -> author-time -> author-tz; storing at
-			// author-mail left date permanently zero (author-time unseen yet),
-			// killing Age/stale_days. author-tz is the last author field.
+
 			if currentLine > 0 {
 				result[currentLine] = blameLineInfo{author: author, date: date}
 			}
@@ -506,7 +440,6 @@ func parseGitBlame(output []byte) map[int]blameLineInfo {
 	return result
 }
 
-// formatAge returns a human-readable age string.
 func formatAge(t time.Time) string {
 	days := int(time.Since(t).Hours() / 24)
 	if days < 1 {
@@ -521,7 +454,6 @@ func formatAge(t time.Time) string {
 	return fmt.Sprintf("%dy%dmo", days/365, (days%365)/30)
 }
 
-// formatTodoReport renders the scan results as a readable report.
 func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned int, truncated, includeBlame bool) string {
 	var b strings.Builder
 
@@ -537,7 +469,6 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 		return b.String()
 	}
 
-	// Category summary
 	catCounts := make(map[string]int)
 	sevCounts := make(map[string]int)
 	fileCounts := make(map[string]int)
@@ -560,7 +491,6 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 	b.WriteString(strings.Join(parts, ", "))
 	b.WriteString("\n\n")
 
-	// Severity summary
 	if sevCounts["critical"] > 0 || sevCounts["high"] > 0 {
 		b.WriteString("**Severity:** ")
 		sevParts := []string{}
@@ -580,7 +510,6 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 		b.WriteString("\n\n")
 	}
 
-	// Top files
 	if len(fileCounts) > 1 {
 		type fc struct {
 			file  string
@@ -603,7 +532,6 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 		b.WriteString("\n")
 	}
 
-	// Detailed markers
 	b.WriteString("### Markers\n\n")
 	if includeBlame {
 		b.WriteString("| Severity | Category | File:Line | Text | Author | Age |\n")
@@ -621,7 +549,7 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 		if text == "" {
 			text = "(no description)"
 		}
-		// Escape pipe characters in text for markdown table
+
 		text = strings.ReplaceAll(text, "|", "\\|")
 
 		if includeBlame {
@@ -644,7 +572,6 @@ func formatTodoReport(markers []TodoMarker, basePath string, total, filesScanned
 	return b.String()
 }
 
-// Clone returns an independent copy of this tool.
 func (t ScanTodosTool) Clone() Tool {
 	return &ScanTodosTool{WorkingDir: t.WorkingDir}
 }

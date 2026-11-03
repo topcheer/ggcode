@@ -10,14 +10,13 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Table-driven classification (InterruptBench arXiv:2604.00892 typing).
 func TestClassifyInterruption(t *testing.T) {
 	cases := []struct {
 		name string
 		text string
 		want InterruptionKind
 	}{
-		// Retraction: whole-message stop phrases only.
+
 		{"bare stop", "stop", InterruptionRetractStop},
 		{"stop with punctuation", "Stop! ", InterruptionRetractStop},
 		{"please cancel", "please cancel", InterruptionRetractStop},
@@ -26,32 +25,27 @@ func TestClassifyInterruption(t *testing.T) {
 		{"cn 算了吧", "算了吧。", InterruptionRetractStop},
 		{"cn 请停止", "请停止", InterruptionRetractStop},
 		{"cn 别做了", "别做了", InterruptionRetractStop},
-		// NOT retraction: carries task content (constraint, not withdrawal).
+
 		{"stop adding tests", "stop adding tests", InterruptionAddition},
 		{"cancel timer refactor", "cancel the timer refactor task", InterruptionAddition},
 		{"dont commit", "don't commit to main", InterruptionAddition},
-		// Revision: explicit redirection markers.
-		// #4180: bare "instead"/"rather than"/bare CJK 改为/改成 removed
-		// (everyday refinement vocabulary - the FP family #4121 started).
-		// Rows below pin the surviving strong forms.
+
 		{"instead of that", "instead of that, parse the CSV directly", InterruptionRevision},
 		{"switch to plan", "switch to plan B", InterruptionRevision},
 		{"cn 改成方案", "改成方案B", InterruptionRevision},
 		{"cn 换成方案", "换成方案B再跑", InterruptionRevision},
 		{"cn 换个思路", "换个思路，直接用批处理", InterruptionRevision},
-		// NOT revision (#4180 FP family): ordinary refinement stays Addition.
+
 		{"bare instead refinement", "use buffered I/O instead of the streaming reader, it's simpler", InterruptionAddition},
 		{"bare instead library", "use the retry library instead", InterruptionAddition},
 		{"cn 改为 rename", "把变量名改为 camelCase 再继续", InterruptionAddition},
 		{"cn 改成 reorder", "改成先跑测试再构建", InterruptionAddition},
 		{"rather than comparison", "rather than a mutex, use an atomic counter here", InterruptionAddition},
-		// Addition: default.
+
 		{"plain guidance", "also add a README", InterruptionAddition},
 		{"change of plans (legacy test text)", "change of plans", InterruptionAddition},
 		{"empty", "", InterruptionAddition},
-		// Insert: complex separate task brief (composite signal: >=120 runes
-		// AND >=2 sentence units, no revision marker). Conservative - see
-		// looksLikeInsertedTask; full hit/miss matrix in zz_issue_insert_class_test.go.
+
 		{"long multi-sentence brief => insert",
 			"Please also review the billing module for double-charge bugs. The finance team reported duplicated invoices on renewals. Reproduce with the fixture in testdata/billing, then propose a minimal fix with tests.",
 			InterruptionInsert},
@@ -67,8 +61,6 @@ func TestClassifyInterruption(t *testing.T) {
 	}
 }
 
-// The addition preamble must stay byte-identical to the pre-typing guidance
-// text so existing steering behavior is unchanged.
 func TestInterruptionPreambleAdditionUnchanged(t *testing.T) {
 	const legacy = "New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue."
 	if got := interruptionPreamble(InterruptionAddition); got != legacy {
@@ -82,15 +74,11 @@ func TestInterruptionPreambleAdditionUnchanged(t *testing.T) {
 	}
 }
 
-// End-to-end retraction-stop: a whole-message stop phrase must (1) inject the
-// retraction notice, (2) abort the run with context.Canceled (riding the r445
-// snapshot path), (3) never reach another LLM call.
 func TestRunStreamRetractStopAbortsRun(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("working...")}}},
-			// Second response exists ONLY to detect the bug: if the loop kept
-			// running after retraction it would consume this.
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("should not be reached")}}},
 		},
 	}
@@ -108,20 +96,17 @@ func TestRunStreamRetractStopAbortsRun(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("retraction must abort with context.Canceled, got %v", err)
 	}
-	// Exactly one LLM call happened before the withdrawal landed; the second
-	// staged response must never be consumed.
+
 	if len(mp.capturedMsgs) != 1 {
 		t.Fatalf("expected exactly 1 LLM call before retraction abort, got %d", len(mp.capturedMsgs))
 	}
-	// The injected notice must be in the conversation context so a future
-	// resume sees the withdrawal directive.
+
 	found := false
 	for _, m := range a.contextManager.Messages() {
 		if m.Role != "user" {
 			continue
 		}
-		// The preamble and the user text ride as separate blocks of the
-		// SAME injected message - match at message level.
+
 		hasDirective, hasText := false, false
 		for _, b := range m.Content {
 			if b.Type != "text" {
@@ -143,8 +128,6 @@ func TestRunStreamRetractStopAbortsRun(t *testing.T) {
 	}
 }
 
-// End-to-end revision: redirection marker keeps the run alive but injects the
-// goal-supersession preamble alongside the user text.
 func TestRunStreamRevisionInjectsSupersession(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{

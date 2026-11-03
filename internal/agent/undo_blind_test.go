@@ -33,11 +33,9 @@ func TestUndoBlind_UndoOpMarksFile(t *testing.T) {
 func TestUndoBlind_BlindMutationAfterUndo(t *testing.T) {
 	s := newUndoBlindState()
 
-	// Step 1: undo_edit on main.go
 	args, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	s.recordToolCall("undo_edit", args)
 
-	// Step 2: edit main.go WITHOUT re-reading -> should warn
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	msg := s.recordToolCall("edit_file", editArgs)
 	if msg == "" {
@@ -48,15 +46,12 @@ func TestUndoBlind_BlindMutationAfterUndo(t *testing.T) {
 func TestUndoBlind_ReadClearsPending(t *testing.T) {
 	s := newUndoBlindState()
 
-	// undo_edit on main.go
 	args, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	s.recordToolCall("undo_edit", args)
 
-	// read_file clears the pending state
 	readArgs, _ := json.Marshal(map[string]string{"path": "main.go"})
 	s.recordToolCall("read_file", readArgs)
 
-	// edit_file now should NOT warn
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	msg := s.recordToolCall("edit_file", editArgs)
 	if msg != "" {
@@ -67,7 +62,6 @@ func TestUndoBlind_ReadClearsPending(t *testing.T) {
 func TestUndoBlind_MaxWarnings(t *testing.T) {
 	s := newUndoBlindState()
 
-	// First undo + blind edit -> warning
 	args1, _ := json.Marshal(map[string]string{"file_path": "a.go"})
 	s.recordToolCall("undo_edit", args1)
 	editArgs1, _ := json.Marshal(map[string]string{"file_path": "a.go"})
@@ -76,7 +70,6 @@ func TestUndoBlind_MaxWarnings(t *testing.T) {
 		t.Error("expected first warning")
 	}
 
-	// Second undo + blind edit -> warning
 	args2, _ := json.Marshal(map[string]string{"file_path": "b.go"})
 	s.recordToolCall("undo_edit", args2)
 	editArgs2, _ := json.Marshal(map[string]string{"file_path": "b.go"})
@@ -85,7 +78,6 @@ func TestUndoBlind_MaxWarnings(t *testing.T) {
 		t.Error("expected second warning")
 	}
 
-	// Third undo + blind edit -> no warning (capped)
 	args3, _ := json.Marshal(map[string]string{"file_path": "c.go"})
 	s.recordToolCall("undo_edit", args3)
 	editArgs3, _ := json.Marshal(map[string]string{"file_path": "c.go"})
@@ -98,7 +90,6 @@ func TestUndoBlind_MaxWarnings(t *testing.T) {
 func TestUndoBlind_GitResetWildcard(t *testing.T) {
 	s := newUndoBlindState()
 
-	// git_reset without file path -> wildcard
 	args, _ := json.Marshal(map[string]string{"mode": "hard"})
 	s.recordToolCall("git_reset", args)
 
@@ -106,7 +97,6 @@ func TestUndoBlind_GitResetWildcard(t *testing.T) {
 		t.Error("expected wildcard pending after git_reset without file")
 	}
 
-	// Any edit should trigger warning
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "any.go"})
 	msg := s.recordToolCall("edit_file", editArgs)
 	if msg == "" {
@@ -117,11 +107,9 @@ func TestUndoBlind_GitResetWildcard(t *testing.T) {
 func TestUndoBlind_DifferentFileNoWarn(t *testing.T) {
 	s := newUndoBlindState()
 
-	// undo_edit on main.go
 	args, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	s.recordToolCall("undo_edit", args)
 
-	// edit on DIFFERENT file -> should NOT warn
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "other.go"})
 	msg := s.recordToolCall("edit_file", editArgs)
 	if msg != "" {
@@ -132,7 +120,6 @@ func TestUndoBlind_DifferentFileNoWarn(t *testing.T) {
 func TestUndoBlind_GitCheckoutNoFile(t *testing.T) {
 	s := newUndoBlindState()
 
-	// git_checkout with branch arg (no file)
 	args, _ := json.Marshal(map[string]string{"branch": "feature-x"})
 	s.recordToolCall("git_checkout", args)
 
@@ -147,9 +134,8 @@ func TestUndoBlind_GitRevertWithMessage(t *testing.T) {
 	args, _ := json.Marshal(map[string]string{"commit": "abc123"})
 	s.recordToolCall("git_revert", args)
 
-	// git_revert doesn't have file_path, so no specific tracking
 	if len(s.pendingUndoFiles) > 0 {
-		// Only a wildcard or empty is expected
+
 		if len(s.pendingUndoFiles) != 1 || !s.pendingUndoFiles["*"] {
 			t.Errorf("expected at most wildcard, got %v", s.pendingUndoFiles)
 		}
@@ -221,11 +207,9 @@ func TestUndoBlind_IsRead(t *testing.T) {
 func TestUndoBlind_WriteFileAfterUndo(t *testing.T) {
 	s := newUndoBlindState()
 
-	// undo_edit on main.go
 	args, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	s.recordToolCall("undo_edit", args)
 
-	// write_file on main.go WITHOUT re-reading -> should warn
 	writeArgs, _ := json.Marshal(map[string]string{"path": "main.go"})
 	msg := s.recordToolCall("write_file", writeArgs)
 	if msg == "" {
@@ -236,7 +220,6 @@ func TestUndoBlind_WriteFileAfterUndo(t *testing.T) {
 func TestUndoBlind_NonUndoOpNoTracking(t *testing.T) {
 	s := newUndoBlindState()
 
-	// Regular tool call should not set any pending
 	args, _ := json.Marshal(map[string]string{"file_path": "main.go"})
 	s.recordToolCall("grep", args)
 

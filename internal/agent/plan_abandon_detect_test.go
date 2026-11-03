@@ -86,10 +86,9 @@ func TestHasCompletionSignal(t *testing.T) {
 }
 
 func TestPlanAbandonDetection(t *testing.T) {
-	// Test the full pattern: plan declared, then completion in later iteration.
+
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
-	// Iteration 1: agent declares a plan with 4 future-tense steps.
 	planText := "Here's my plan:\n" +
 		"1. I'll read the auth module\n" +
 		"2. Next, I'll fix the token refresh logic\n" +
@@ -101,7 +100,6 @@ func TestPlanAbandonDetection(t *testing.T) {
 		t.Errorf("Expected no warning on plan declaration, got: %s", hint)
 	}
 
-	// Iteration 2: agent claims completion without evidence of executing all steps.
 	completionText := "The task is now complete. The fix has been applied."
 
 	hint = a.maybeWarnPlanAbandon(completionText, nil)
@@ -126,7 +124,6 @@ func TestPlanAbandonNoCompletion(t *testing.T) {
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
 	a.maybeWarnPlanAbandon(planText, nil)
 
-	// Next iteration: no completion signal.
 	workText := "I've read the file and I'm working on the fix now."
 	hint := a.maybeWarnPlanAbandon(workText, nil)
 	if hint != "" {
@@ -137,8 +134,6 @@ func TestPlanAbandonNoCompletion(t *testing.T) {
 func TestPlanAbandonSameIterationCompletion(t *testing.T) {
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
-	// Plan and completion in the same text - should not trigger because
-	// the plan hasn't had time to be abandoned yet.
 	text := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests\n\nThe task is now complete."
 	hint := a.maybeWarnPlanAbandon(text, nil)
 	if hint != "" {
@@ -149,7 +144,6 @@ func TestPlanAbandonSameIterationCompletion(t *testing.T) {
 func TestPlanAbandonTooFewSteps(t *testing.T) {
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
-	// Only 2 steps - below threshold of 3.
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug"
 	a.maybeWarnPlanAbandon(planText, nil)
 
@@ -164,11 +158,10 @@ func TestPlanAbandonMaxWarnings(t *testing.T) {
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
 	for round := 0; round < 3; round++ {
-		// Declare plan.
+
 		planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
 		a.maybeWarnPlanAbandon(planText, nil)
 
-		// Claim completion.
 		completionText := "The task is complete."
 		hint := a.maybeWarnPlanAbandon(completionText, nil)
 
@@ -187,7 +180,6 @@ func TestPlanAbandonMaxWarnings(t *testing.T) {
 func TestPlanAbandonReset(t *testing.T) {
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
-	// Set up a plan.
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
 	a.maybeWarnPlanAbandon(planText, nil)
 

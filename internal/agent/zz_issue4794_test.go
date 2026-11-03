@@ -14,9 +14,6 @@ func ghArgs(t *testing.T, cmd string) string {
 	return string(b)
 }
 
-// #4794 (S-24): read-only gh issue/pr/run/release triage commands must
-// classify as read-only so the irreversibility advisory stops interrupting
-// pure-read patrol rounds.
 func TestIssue4794_GhReadOnlyTriageCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"gh issue list --repo topcheer/ggcode --state open --limit 100",
@@ -36,9 +33,6 @@ func TestIssue4794_GhReadOnlyTriageCommands(t *testing.T) {
 	}
 }
 
-// Mutating gh commands must stay OUT of the whitelist: merge/close/create/
-// comment/delete/reopen mutate repository state, and `gh api` is
-// method-ambiguous (-X POST) even though its default is GET.
 func TestIssue4794_GhWriteCommandsStayGated(t *testing.T) {
 	for _, cmd := range []string{
 		"gh pr merge 4870 --merge --admin",
@@ -49,7 +43,7 @@ func TestIssue4794_GhWriteCommandsStayGated(t *testing.T) {
 		"gh api -X POST repos/topcheer/ggcode/pages/builds",
 		"gh release create v1.2.3",
 		"gh run rerun 41288527298",
-		"gh issue 4794", // bare resource subcommand prompts interactively
+		"gh issue 4794",
 		"gh repo delete topcheer/ggcode",
 	} {
 		if irrevIsReadOnlyCommand(ghArgs(t, cmd)) {
@@ -58,8 +52,6 @@ func TestIssue4794_GhWriteCommandsStayGated(t *testing.T) {
 	}
 }
 
-// Compound commands: read-only gh steps chained with && stay read-only;
-// any write step disqualifies the whole command (per-segment rule).
 func TestIssue4794_GhChainedSegments(t *testing.T) {
 	if !irrevIsReadOnlyCommand(ghArgs(t, "gh issue list --json number && gh pr list --json number")) {
 		t.Error("chain of two read-only gh steps should be read-only")

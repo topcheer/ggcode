@@ -125,7 +125,7 @@ func validate(inputs []string) {
 	}
 }
 `
-	// newCode adds an unrelated line but keeps the same regex-in-loop
+
 	newCode := oldCode + "// done\n"
 	warnings := checkRegexLoop("test.go", oldCode, newCode)
 	if len(warnings) != 0 {
@@ -183,8 +183,7 @@ func validate(inputs []string) {
 	}
 }
 `
-	// regex compile inside a FuncLit nested in a loop should NOT be flagged
-	// because it's a separate scope (may be called via goroutine etc.)
+
 	warnings := checkRegexLoop("test.go", "", newCode)
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for regex compile in nested func literal, got: %v", warnings)

@@ -16,14 +16,14 @@ func TestValidateBrowserProfileName(t *testing.T) {
 		{"work", false},
 		{"personal-2", false},
 		{"qa_h1.x", false},
-		{"default", false}, // caller handles reserved words before validating
+		{"default", false},
 		{"", true},
-		{"$(date +%H%M%S)", true}, // the literal incident name
+		{"$(date +%H%M%S)", true},
 		{"btnfix-$(date +%H%M%S)", true},
 		{"has space", true},
 		{"../escape", true},
 		{"a/b", true},
-		{".hidden-start", true}, // must start alnum
+		{".hidden-start", true},
 		{"shell;rm", true},
 	}
 	for _, c := range cases {
@@ -37,11 +37,11 @@ func TestValidateBrowserProfileName(t *testing.T) {
 func TestEvictLRUBrowserProfiles(t *testing.T) {
 	b := &Browser{profiles: make(map[string]*browserProfile)}
 	base := time.Now().Add(-time.Hour)
-	// Five fake profiles, distinct lastUsed.
+
 	for i, name := range []string{"p1", "p2", "p3", "p4", "p5"} {
 		b.profiles[name] = &browserProfile{
 			lastUsed:    base.Add(time.Duration(i) * time.Minute),
-			allocCancel: func() {}, // no-op; evict calls it
+			allocCancel: func() {},
 			tabs:        make(map[string]*browserTab),
 		}
 	}
@@ -64,14 +64,14 @@ func TestSingletonLockPID(t *testing.T) {
 	if pid := singletonLockPID(dir); pid != 0 {
 		t.Errorf("missing SingletonLock should return 0, got %d", pid)
 	}
-	// Chrome format: <hostname>-<pid>
+
 	if err := os.Symlink("Mac-Studio.local-54991", filepath.Join(dir, "SingletonLock")); err != nil {
 		t.Fatal(err)
 	}
 	if pid := singletonLockPID(dir); pid != 54991 {
 		t.Errorf("expected pid 54991, got %d", pid)
 	}
-	// Unparseable target.
+
 	dir2 := t.TempDir()
 	if err := os.Symlink("not-a-pid", filepath.Join(dir2, "SingletonLock")); err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestProcessAlive(t *testing.T) {
 	if processAlive(os.Getpid()) != true {
 		t.Error("own process must be alive")
 	}
-	// pid 2^22 range is beyond most systems' pid_max; signal 0 should fail.
+
 	if processAlive(4194304) {
 		t.Log("pid 4194304 unexpectedly alive on this system; skipping strict assert")
 	}
@@ -96,13 +96,12 @@ func TestProcessAlive(t *testing.T) {
 
 func TestGCStaleBrowserProfiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("GGCODE_BROWSER_PROFILE_TTL_DAYS", "1") // 24h TTL
+	t.Setenv("GGCODE_BROWSER_PROFILE_TTL_DAYS", "1")
 	root := browserProfilesRoot()
 	if err := os.MkdirAll(root, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// dead-old: no SingletonLock, mtime pushed past TTL -> removed.
 	deadOld := filepath.Join(root, "dead-old")
 	if err := os.MkdirAll(deadOld, 0755); err != nil {
 		t.Fatal(err)
@@ -112,14 +111,11 @@ func TestGCStaleBrowserProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// dead-young: no lock, recent mtime (< 24h TTL) -> kept.
 	deadYoung := filepath.Join(root, "dead-young")
 	if err := os.MkdirAll(deadYoung, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// owned-live: lock points at OUR pid -> kept even when old.
-	// (symlink first: creating it would refresh the dir mtime)
 	ownedLive := filepath.Join(root, "owned-live")
 	if err := os.MkdirAll(ownedLive, 0755); err != nil {
 		t.Fatal(err)
@@ -131,7 +127,6 @@ func TestGCStaleBrowserProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// owned-dead: lock points at an obviously dead pid, old mtime -> removed.
 	ownedDead := filepath.Join(root, "owned-dead")
 	if err := os.MkdirAll(ownedDead, 0755); err != nil {
 		t.Fatal(err)
@@ -144,7 +139,7 @@ func TestGCStaleBrowserProfiles(t *testing.T) {
 	}
 
 	b := &Browser{profiles: make(map[string]*browserProfile)}
-	// Mark one profile as live in-memory: its dir must survive.
+
 	liveMem := filepath.Join(root, "live-mem")
 	if err := os.MkdirAll(liveMem, 0755); err != nil {
 		t.Fatal(err)

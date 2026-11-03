@@ -1,21 +1,11 @@
 package agent
 
-// #1490 regressions:
-//   - A: ErrorRate/ToolEfficiency must use the untruncated ErrorCount,
-//     not len(Errors) (capped at 10 for the reflection prompt) - a run
-//     with 22 failures in 25 calls used to score 10/25.
-//   - C: an inner for-range's skip-invalid pattern (err != nil ->
-//     continue) must NOT be absorbed as retry evidence for the OUTER
-//     loop, which then got flagged missing-backoff.
-
 import (
 	"go/parser"
 	"go/token"
 	"testing"
 )
 
-// Case A: 15 recorded errors, 25 tool calls - ErrorRate must reflect
-// 15 (old code read len(Errors)=10).
 func TestIssue1490A_ErrorCountNotCapped(t *testing.T) {
 	s := &RunStats{Iterations: 20, Success: false}
 	s.ToolCalls = map[string]int{"edit_file": 25}
@@ -30,18 +20,14 @@ func TestIssue1490A_ErrorCountNotCapped(t *testing.T) {
 	}
 	scorer := NewResponseQualityScorer(10)
 	entry := scorer.computeScore(s, "test", "m")
-	if entry.Signals.ErrorRate < 0.74 { // 15/20; old code computed 10/20 = 0.5
+	if entry.Signals.ErrorRate < 0.74 {
 		t.Fatalf("ErrorRate = %.2f, want >= 0.74 (15 errors / 20 iterations)", entry.Signals.ErrorRate)
 	}
-	if entry.Signals.ToolEfficiency > 0.41 { // (25-15)/25 = 0.4; old code (25-10)/25 = 0.6
+	if entry.Signals.ToolEfficiency > 0.41 {
 		t.Fatalf("ToolEfficiency = %.2f, want <= 0.41 (10 failed of 25)", entry.Signals.ToolEfficiency)
 	}
 }
 
-// Case C: the issue's exact shape - an unbounded outer loop whose body
-// is an inner for-range with a skip-invalid continue. The outer loop is
-// NOT a retry loop (no error-continue at its own level) and must not be
-// flagged missing-backoff.
 func TestIssue1490C_InnerRangeContinueNotAbsorbed(t *testing.T) {
 	src := `package x
 func drain(w writer, q []item) {
@@ -67,9 +53,6 @@ func drain(w writer, q []item) {
 	}
 }
 
-// Case C companion: a REAL retry loop (error-continue at the loop's own
-// level, no backoff) must still be flagged - the barrier only stops
-// nested-loop absorption, not genuine detection.
 func TestIssue1490C_RealRetryLoopStillFlagged(t *testing.T) {
 	src := `package x
 func poll(c client) {

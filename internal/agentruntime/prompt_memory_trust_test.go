@@ -1,12 +1,5 @@
 package agentruntime
 
-// r483 probe: contextual authorization for the auto-memory inline channel.
-// The old header ("is immediately relevant. Apply it to your work without
-// re-reading") asserted relevance and suppressed verification for
-// machine-aggregated memory that may carry untrusted text from prior
-// sessions. The section is now reference data wrapped in <memory-source>
-// trust boundaries, mirroring <skill-source> (r482).
-
 import (
 	"strings"
 	"testing"
@@ -59,8 +52,7 @@ func TestRenderInlineMemories_NeutralizesForgedClose(t *testing.T) {
 	if !strings.Contains(out, "step1") || !strings.Contains(out, "step2") {
 		t.Errorf("body must be preserved, got:\n%s", out)
 	}
-	// Each entry gets exactly one real closing tag; two Project entries + one
-	// Global entry = 3.
+
 	if c := strings.Count(out, "</memory-source>"); c != 3 {
 		t.Errorf("expected 3 closing tags, got %d:\n%s", c, out)
 	}

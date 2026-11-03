@@ -26,8 +26,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// browserProfile holds a Chrome instance with its own allocator.
-// Each profile = one Chrome process with its own user-data-dir.
 type browserProfile struct {
 	allocCtx    context.Context
 	allocCancel context.CancelFunc
@@ -35,44 +33,20 @@ type browserProfile struct {
 	lastUsed    time.Time
 }
 
-// browserTab holds state for a single browser tab within a profile.
 type browserTab struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// Browser provides Go-native browser automation via Chrome DevTools Protocol (CDP).
-//
-// This replaces the Playwright MCP server dependency, eliminating Node.js overhead
-// (~100-200MB RAM) while keeping full SPA/JavaScript support. Uses chromedp to
-// control Chrome/Chromium directly from Go.
-//
-// Features:
-//   - Full JavaScript execution (SPA support: React, Vue, Angular, etc.)
-//   - Cookie/session persistence across actions within a profile
-//   - Multiple Chrome profiles (each with its own cookies, extensions, settings)
-//   - Multiple parallel sessions (tabs) within each profile
-//   - Navigation, clicking, typing, screenshots, JS evaluation
-//
-// Requires: Chrome or Chromium installed on the system.
-// For lightweight non-JS scraping, use web_fetch instead.
 type Browser struct {
 	profiles map[string]*browserProfile
 	mu       sync.Mutex
 	gcOnce   sync.Once
-	// gcStop is closed by Close to terminate the background profile-GC
-	// loop (#2096 bug A): the goroutine otherwise runs forever, holding a
-	// reference to this Browser while NewBrowser re-registers with every
-	// agent build - long-lived hosts accumulated one immortal goroutine
-	// (and a pinned Browser) per browser-using session.
-	gcStop  chan struct{}
-	gcClose sync.Once
-	// refs holds per-tab element-ref snapshots (#4854): snapshot assigns
-	// @eN refs; selector-taking actions resolve them; navigation invalidates.
-	refs *browserRefRegistry
+	gcStop   chan struct{}
+	gcClose  sync.Once
+	refs     *browserRefRegistry
 }
 
-// NewBrowser creates a new CDP-based browser tool.
 func NewBrowser() *Browser {
 	return &Browser{
 		profiles: make(map[string]*browserProfile),
@@ -83,26 +57,21 @@ func NewBrowser() *Browser {
 
 func (b *Browser) Name() string { return "browser" }
 
-// Close shuts down all browser profiles and their Chrome processes.
-// Implements the Closer interface for graceful cleanup on agent exit.
 func (b *Browser) Close() error {
 	b.mu.Lock()
-	// #2096 bug A: stop the GC loop so Close fully tears the Browser
-	// down. gcClose guards a second Close (double close panics); a nil
-	// gcStop (direct &Browser{} construction in tests) skips the stop and
-	// the loop simply never observes a signal, preserving old behavior.
+
 	if b.gcStop != nil {
 		b.gcClose.Do(func() { close(b.gcStop) })
 	}
 	defer b.mu.Unlock()
 
 	for name, p := range b.profiles {
-		// Cancel all tab contexts within the profile
+
 		for _, tab := range p.tabs {
 			tab.cancel()
 		}
 		p.tabs = nil
-		// Cancel the allocator (kills the Chrome process)
+
 		p.allocCancel()
 		delete(b.profiles, name)
 	}
@@ -200,9 +169,6 @@ func (b *Browser) Parameters() json.RawMessage {
 }`)
 }
 
-// browserActionArgs is the Execute input schema (#2612: extracted from
-// the inline anonymous struct so the action handler table below can be
-// unit-tested per action).
 type browserActionArgs struct {
 	Action      string `json:"action"`
 	URL         string `json:"url"`
@@ -221,14 +187,9 @@ type browserActionArgs struct {
 	WaitFor     string `json:"wait_for"`
 	WaitTimeout int    `json:"wait_timeout"`
 	Headless    *bool  `json:"headless"`
-	OutputPath  string `json:"output_path"` // screenshot: also save the PNG to this local file
+	OutputPath  string `json:"output_path"`
 }
 
-// browserActions dispatches tool actions to per-action handlers (#2612:
-// replaces the 20-case switch that pushed Execute to cyclomatic complexity
-// 41 / 144 lines). Each handler validates its own required arguments and
-// delegates to the do* method unchanged; error copy is pinned byte-for-byte
-// by TestBrowserExecuteValidationCharacterization.
 var browserActions = map[string]func(*Browser, context.Context, *browserActionArgs) (Result, error){
 	"navigate": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		if a.URL == "" {
@@ -333,10 +294,7 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Path == "" {
 			return errResult("path is required for upload action")
 		}
-		// #4880: upload is a selector-taking action like its six siblings -
-		// the snapshot contract promises @eN support. Passing the raw arg
-		// straight to chromedp meant every @eN upload stalled the full
-		// 15s timeout (selector never matches) instead of resolving.
+
 		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
 		if !ok {
 			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
@@ -367,7 +325,7 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		}
 		return b.doDrag(ctx, a.Profile, a.Session, a.Selector, a.Value, a.Headless)
 	},
-	// #4854 (P1-1): snapshot returns the @eN ref tree for this tab.
+
 	"snapshot": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		tab, err := b.getSession(a.Profile, a.Session, a.Headless)
 		if err != nil {
@@ -381,8 +339,7 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		}
 		return Result{Content: renderRefTree(entries) + "\n\nUse a ref (e.g. '@e3') in the selector parameter of click/type/extract/select/hover/upload/scroll. Refs stay valid until this tab navigates."}, nil
 	},
-	// #4854 (P2): open_tab navigates a URL directly — the link-target
-	// equivalent of --new-tab, bypassing click pre-checks entirely.
+
 	"open_tab": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		if a.URL == "" {
 			return errResult("url is required for open_tab action")
@@ -418,12 +375,8 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	return handler(b, ctx, &args)
 }
 
-// minChromeMajorVersion is the minimum Chrome version required for reliable
-// CDP support. Chrome < 90 may have missing or incompatible CDP domains.
 const minChromeMajorVersion = 90
 
-// chromeNotFoundHelp returns a human-friendly error message when Chrome
-// cannot be found, with platform-specific install instructions.
 func chromeNotFoundHelp() string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -435,8 +388,6 @@ func chromeNotFoundHelp() string {
 	}
 }
 
-// findChromeExecutable locates a Chrome/Chromium binary across platforms.
-// Returns the path if found, empty string otherwise.
 func findChromeExecutable() string {
 	var locations []string
 	switch runtime.GOOS {
@@ -453,17 +404,13 @@ func findChromeExecutable() string {
 			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Google\Chrome\Application\chrome.exe`),
 			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Chromium\Application\chrome.exe`),
-			// Edge fallback: same Chromium engine, full CDP support. Windows
-			// ships Edge on virtually every machine, so "no Chrome installed"
-			// no longer means "browser tool unavailable". Chrome stays first
-			// (a deliberate Chrome install wins), Edge is the zero-install
-			// floor. --version output parses identically ("Microsoft Edge 138.x").
+
 			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Microsoft\Edge\Application\msedge.exe`),
 		}
 	default:
-		// Linux and other Unix-like systems
+
 		locations = []string{
 			"google-chrome-stable",
 			"google-chrome",
@@ -482,7 +429,7 @@ func findChromeExecutable() string {
 		if path, err := exec.LookPath(p); err == nil {
 			return path
 		}
-		// For absolute paths, check directly
+
 		if filepath.IsAbs(p) {
 			if info, err := os.Stat(p); err == nil && !info.IsDir() {
 				return p
@@ -492,23 +439,11 @@ func findChromeExecutable() string {
 	return ""
 }
 
-// getChromeVersion returns the major version number of the installed Chrome.
-// Returns 0 if the version cannot be determined (non-fatal - we warn but don't block).
-//
-// Windows hang guard: chrome.exe is a GUI-subsystem binary; under
-// antivirus/EDR hooks or sandboxed service sessions, `chrome --version`
-// may never write output and never exit. The old cmd.Output() had no
-// deadline, so this pre-flight step could hang an entire browser action
-// indefinitely - and because a failed profile start is not cached, EVERY
-// subsequent action re-ran this chain, presenting as "all browser calls
-// time out". The version probe is advisory only, so a timeout just means
-// version 0 (warn path), never a hang.
 func getChromeVersion(chromePath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, chromePath, "--version")
-	// Kill the whole process tree on deadline: Chrome on Windows spawns
-	// launcher children that outlive the direct child otherwise.
+
 	cmd.Cancel = func() error {
 		return cmd.Process.Kill()
 	}
@@ -517,7 +452,6 @@ func getChromeVersion(chromePath string) int {
 		return 0
 	}
 
-	// Output format: "Google Chrome 149.0.7827.201" or "Chromium 132.0.6834.110"
 	re := regexp.MustCompile(`(\d+)\.`)
 	match := re.FindStringSubmatch(string(output))
 	if len(match) < 2 {
@@ -530,8 +464,6 @@ func getChromeVersion(chromePath string) int {
 	return ver
 }
 
-// getProfile returns an existing Chrome profile or lazily creates one.
-// Each profile has its own Chrome allocator (separate process, cookies, data dir).
 func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -541,32 +473,25 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		return p, nil
 	}
 
-	// Profile-name hygiene: agents have passed shell syntax like
-	// "$(date +%H%M%S)" literally as a profile name, littering the
-	// browser-profiles root with metacharacter directories.
 	if name != "system" && name != "default" {
 		if err := validateBrowserProfileName(name); err != nil {
 			return nil, err
 		}
 	}
 
-	// Reclaim disk from dead profiles before possibly creating a new one.
 	b.startBrowserProfileGC()
 
-	// Pre-flight check: verify Chrome/Chromium is installed
 	chromePath := findChromeExecutable()
 	if chromePath == "" {
 		return nil, fmt.Errorf("%s\n\nThe browser tool requires Chrome or Chromium to be installed on this system.", chromeNotFoundHelp())
 	}
 
-	// Check version - warn (but don't block) if too old
 	chromeVersion := getChromeVersion(chromePath)
 	if chromeVersion > 0 && chromeVersion < minChromeMajorVersion {
-		// Non-fatal: older Chrome may work for basic operations
+
 		fmt.Fprintf(os.Stderr, "[browser] WARNING: Chrome %d detected, recommended version is %d+\n", chromeVersion, minChromeMajorVersion)
 	}
 
-	// Build allocator options
 	headlessMode := true
 	if headless != nil {
 		headlessMode = *headless
@@ -592,14 +517,6 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		opts = append(opts, chromedp.Headless)
 	}
 
-	// Profile-specific data directory. 'system' deliberately does NOT reuse
-	// the user's real Chrome user data dir (user report, Windows 2026-09-24):
-	// while Chrome is already running the dir is locked and a new chrome.exe
-	// just forwards the launch to the existing instance and exits, so chromedp
-	// never gets a DevTools endpoint; Chrome 136+ additionally refuses CDP
-	// debugging on the default user data dir. Instead 'system' is a dedicated
-	// persistent profile under ~/.ggcode/browser-profiles/system - a fresh
-	// instance by default, with login state persisted across ggcode sessions.
 	if name != "default" {
 		dataDir := filepath.Join(homeDir(), ".ggcode", "browser-profiles", name)
 		if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -607,7 +524,6 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		}
 		opts = append(opts, chromedp.UserDataDir(dataDir))
 	}
-	// "default" profile uses chromedp's temp dir (ephemeral, cleaned on exit)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
@@ -618,13 +534,11 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 	}
 	p.touch()
 	b.profiles[name] = p
-	// Enforce the concurrent-Chrome cap: evict least-recently-used
-	// profiles so one session cannot hold a dozen idle browser processes.
+
 	b.evictLRUBrowserProfiles()
 	return p, nil
 }
 
-// getSession returns an existing tab or creates a new one within the profile.
 func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*browserTab, error) {
 	p, err := b.getProfile(profileName, headless)
 	if err != nil {
@@ -632,13 +546,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	}
 
 	b.mu.Lock()
-	// #2096 bug B: getProfile released b.mu before returning p, so an
-	// evictLRUBrowserProfiles sweep in that window may have removed p and
-	// cancelled its allocCtx - creating a tab on it fails with an
-	// unrelated "failed to create browser tab: context canceled". No
-	// concurrent trigger exists today (browser calls are serialized per
-	// agent), but the type is written thread-safely; re-validate and
-	// re-resolve once instead of failing on a stale pointer.
+
 	if cur, ok := b.profiles[profileName]; !ok || cur != p {
 		b.mu.Unlock()
 		p, err = b.getProfile(profileName, headless)
@@ -661,27 +569,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	}
 
 	taskCtx, cancel := chromedp.NewContext(p.allocCtx)
-	// Tab-start timeout: this first Run boots Chrome if the profile is
-	// fresh and performs the DevTools handshake + new-target dance. Both
-	// the allocator's internal wsURL wait (20s) and the handshake can be
-	// stretched past usefulness on heavily instrumented Windows machines
-	// (AV/EDR hooking every chrome.exe child), leaving a half-alive
-	// process that neither starts nor errors - taskCtx has no deadline of
-	// its own, so the Run would hang the whole action.
-	//
-	// The bound must NOT be a WithTimeout wrapper passed to Run: chromedp
-	// binds the tab session's run loop to the context handed to the first
-	// Run (attachTarget -> go c.Target.run(ctx)), and its docs warn "it's
-	// generally a bad idea to use a context timeout on the first Run call,
-	// as it will stop the entire browser". The previous implementation
-	// called startCancel() right after Run returned, killing the session
-	// at birth while the browser process lived on - every browser action
-	// then failed with "context canceled" (reported on Windows 2026-09,
-	// reproduced on all platforms). Instead, race Run against a timer in a
-	// goroutine: on success nothing is cancelled and the tab lives; on
-	// timeout we cancel taskCtx itself, which tears down the half-alive
-	// bootstrap cleanly, and the next action retries rather than stacking
-	// zombie Chrome processes.
+
 	startDone := make(chan error, 1)
 	safego.Go("browser.tabStart", func() { startDone <- chromedp.Do(taskCtx) })
 	select {
@@ -695,12 +583,6 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 		return nil, fmt.Errorf("failed to create browser tab: startup handshake timed out after 60s (Chrome/Edge boot is too slow or blocked by AV/EDR on this machine)")
 	}
 
-	// Auto-dismiss JS dialogs (alert/confirm/prompt/beforeunload) to prevent
-	// Chrome from hanging when a page shows a dialog. Dialogs are dismissed
-	// (not accepted) so automation can continue.
-	// chromedp v0.21: ListenTarget is replaced by the typed Events iterator
-	// (page.JavascriptDialogOpening is the typed event handle); subscribing
-	// buffers events without loss. The loop ends when taskCtx is cancelled.
 	safego.Go("browser.dialogHandler", func() {
 		for _, evErr := range chromedp.Events(taskCtx, page.JavascriptDialogOpening) {
 			if evErr != nil {
@@ -716,14 +598,6 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	return tab, nil
 }
 
-// isAllowedNavScheme reports whether rawURL uses a scheme permitted for
-// browser navigation (#741). Only http/https are allowed: file:// navigation
-// turns the browser into an unauthenticated local-file reader that bypasses
-// the workspace sandbox read_file enforces, and chrome:// exposes browser
-// internals - neither can be reached through any other vetted channel.
-// Schemeless input is also rejected (chromedp would treat it as a search or
-// relative file path, which is ambiguous and can land on file:// after
-// redirect).
 func isAllowedNavScheme(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -736,7 +610,6 @@ func isAllowedNavScheme(rawURL string) bool {
 	return false
 }
 
-// doNavigate opens a URL and optionally waits for an element.
 func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, waitFor string, waitTimeout int, headless *bool) (Result, error) {
 	if !isAllowedNavScheme(rawURL) {
 		return Result{IsError: true, Content: fmt.Sprintf("navigation refused: only http/https URLs are allowed (got %q). file:// and other schemes bypass the workspace sandbox (#741). Use the read_file tool for local file access, subject to permission checks.", rawURL)}, nil
@@ -754,7 +627,6 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+15)*time.Second)
 	defer cancel()
 
-	// Propagate caller cancellation
 	safego.Go("browser.cancelPropagate", func() {
 		select {
 		case <-ctx.Done():
@@ -769,13 +641,12 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 
 	title, _ := chromedp.Run(timeoutCtx, chromedp.Title())
 	finalURL, _ := chromedp.Run(timeoutCtx, chromedp.Location())
-	// #4854: navigation invalidates this tab's @eN ref snapshot.
+
 	b.refs.invalidate(browserRefKey(profile, session))
 
 	return Result{Content: fmt.Sprintf("Navigated to: %s\nTitle: %s\nURL: %s\nProfile: %s\nSession: %s\n\nUse action 'content' for page text, 'extract' with selector, or 'screenshot' for visual capture.", rawURL, title, finalURL, profile, session)}, nil
 }
 
-// doClick clicks an element.
 func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitFor string, waitTimeout int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -785,21 +656,10 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
-	// #4854 (P1-2): click validity pre-check — fail EARLY when the click
-	// point is covered by another element (consent banner/modal), or the
-	// target is hidden/disabled/out-of-viewport, naming the covering
-	// element so the agent can dismiss it instead of looping on "clicked,
-	// nothing happened". A CDP-level probe error is not a block (the flow
-	// below surfaces real failures); only a decoded verdict blocks.
 	if res := b.runClickPrecheck(timeoutCtx, selector); res != nil && !res.OK {
 		return Result{IsError: true, Content: formatClickBlocked(selector, res)}, nil
 	}
 
-	// r34 post-action effect verification: CDP click "success" only means
-	// the event dispatched — overlays, JS interception, or stale nodes all
-	// return ok with zero effect, the #1 source of cascading agent errors in
-	// 2026 computer-use postmortems. Capture state BEFORE clicking so the
-	// after-check has a baseline.
 	urlBefore, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateBefore := b.evaluateClickState(timeoutCtx, selector)
 
@@ -812,18 +672,13 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	}
 
 	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
-		// sa-136: typed failure channel - probe distinguishes element-missing
-		// from hidden/timeout so the agent picks the right recovery move.
+
 		return b.browserActionFailure("click", tab.ctx, selector, err), nil
 	}
 
 	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateAfter := b.evaluateClickState(timeoutCtx, selector)
-	// #4879: a click that NAVIGATES must invalidate this tab's @eN ref
-	// snapshot - same as doNavigate/doBack. The stale-refs check below used
-	// to detect navigation (note even said "confirmed (navigation)") and
-	// return anyway, leaving a next-page @eN lookup free to silently target
-	// the wrong element.
+
 	if urlAfter != urlBefore {
 		b.refs.invalidate(browserRefKey(profile, session))
 	}
@@ -831,25 +686,10 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
 }
 
-// evaluateClickState reads the selector's state-bearing attributes
-// (checked / selected / aria-expanded / aria-checked). Empty string means
-// none present (or evaluation failed - conservative). Extracted so doClick
-// can capture the same reading before AND after the click (#3407).
-// stateProbeFailed is the sentinel evaluateClickState returns when the
-// CDP probe itself errors: distinct from "" (no state attribute) so
-// clickEffectNote can refuse to CONFIRM on a failed baseline read - the
-// state-branch mirror of the urlBefore!="" hardening from the #3398
-// review (a probe failure must never masquerade as evidence).
 const stateProbeFailed = "\x00probe-failed"
 
 func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string) string {
-	// #3407 mirror defect: the JS chain `e.checked||e.selected||...` returns
-	// a BOOLEAN true on a successfully checked checkbox/radio/option; the
-	// old `var stateExpr string` + Evaluate(&stateExpr) made chromedp's
-	// json.Unmarshal fail on `bool -> string` EVERY time, so a successful
-	// check was reported as no-effect 100% of the time (the false-negative
-	// mirror of the truthy-string false-positive #3410 fixed). Unmarshal to
-	// any and dispatch by concrete type.
+
 	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
 		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
 	raw, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](expr))
@@ -859,15 +699,10 @@ func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string
 	if v := stateFromRaw(raw); v != "" {
 		return v
 	}
-	// No state attribute at all is indistinguishable from a probe that
-	// returned an empty string - treat as no signal, not as failure.
+
 	return ""
 }
 
-// stateFromRaw dispatches the raw CDP JSON value of the state expression.
-// A checked checkbox/radio arrives as JSON true (#3407 mirror: unmarshaling
-// into a string failed on every such click); attribute reads arrive as
-// strings; anything else (nil, numbers) carries no state signal here.
 func stateFromRaw(raw any) string {
 	switch v := raw.(type) {
 	case bool:
@@ -882,26 +717,12 @@ func stateFromRaw(raw any) string {
 	}
 }
 
-// clickEffectNote verifies the click produced an observable effect (r34):
-// navigation, or a CHANGE in the selector's state-bearing attributes
-// (checked / aria-expanded / aria-checked) versus the pre-click baseline
-// (#3407). Absent both, it appends follow-up guidance so the agent
-// re-extracts instead of assuming the click landed. Guidance, not error —
-// SPA clicks legitimately change nothing addressable from here.
 func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string {
-	// r34 hardening (#3398 review, verdict 5990361368): an empty baseline
-	// (Location failed before the click) must never count as navigation -
-	// urlBefore=="" && urlAfter!="" would falsely emit "effect: confirmed"
-	// and unlock the spiral gate on zero evidence.
+
 	if urlBefore != "" && urlAfter != urlBefore && urlAfter != "" {
 		return fmt.Sprintf("\neffect: confirmed (navigation to %s)", urlAfter)
 	}
-	// #3407: state confirmation requires a CHANGE versus the baseline, not
-	// mere attribute presence. aria-expanded="false" is a truthy non-empty
-	// STRING in the JS || chain, so a collapsed menu reported "confirmed"
-	// even when the click changed nothing - unconfirmed by zero evidence,
-	// the exact inversion of the #3398 discipline. Comparing against
-	// stateBefore also keeps legitimate collapses (true->false) confirmed.
+
 	if stateAfter != "" && stateAfter != stateProbeFailed && stateBefore != stateProbeFailed && stateAfter != stateBefore {
 		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateAfter)
 	}
@@ -909,7 +730,6 @@ func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string
 		"follow up with action 'extract'/'screenshot' to confirm the click landed before building on it"
 }
 
-// doType clears an input field and types text into it.
 func (b *Browser) doType(ctx context.Context, profile, session, selector, text, waitFor string, waitTimeout int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -937,7 +757,6 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 	return Result{Content: fmt.Sprintf("Typed into %s: %q", selector, text)}, nil
 }
 
-// doExtract gets text content from the page or specific elements.
 func (b *Browser) doExtract(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1006,7 +825,6 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 		return Result{Content: sb.String()}, nil
 	}
 
-	// Full page text
 	if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
 	}
@@ -1017,7 +835,6 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 	return Result{Content: pageText}, nil
 }
 
-// doScreenshot captures a PNG screenshot.
 func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool, outputPath string) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1027,8 +844,6 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
 	defer cancel()
 
-	// #4854 (P2): hide native scrollbars for the capture so headless
-	// screenshots are visually consistent; restored right after (best-effort).
 	_, _ = chromedp.Run(timeoutCtx, chromedp.Evaluate[string](`(() => {
 		const s = document.createElement('style');
 		s.id = 'ggcode-hide-scrollbars';
@@ -1062,10 +877,7 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 
 	content := fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included as an image block for visual analysis.", len(buf))
 	if outputPath != "" {
-		// Optional local save: downstream tools that need a REAL file path
-		// (im send_file, external vision pipelines) can't consume an
-		// in-context base64 block. Resolve to an absolute path so the
-		// model can pass it on verbatim.
+
 		abs, err := filepath.Abs(outputPath)
 		if err != nil {
 			abs = outputPath
@@ -1084,7 +896,6 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	}, nil
 }
 
-// doEvaluate runs arbitrary JavaScript in the page context.
 func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, frame string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1094,9 +905,6 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
 	defer cancel()
 
-	// When frame is set, wrap the expression to execute inside the iframe's
-	// contentDocument (same-origin only). This allows evaluating JS and
-	// extracting/clicking elements within iframes.
 	actualExpr := expression
 	if frame != "" {
 		actualExpr = fmt.Sprintf(`(() => {
@@ -1120,7 +928,6 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 	return Result{Content: fmt.Sprintf("Result:\n%s", resultStr)}, nil
 }
 
-// doWait waits for an element to appear.
 func (b *Browser) doWait(ctx context.Context, profile, session, selector string, timeout int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1136,7 +943,6 @@ func (b *Browser) doWait(ctx context.Context, profile, session, selector string,
 	return Result{Content: fmt.Sprintf("Element appeared: %s", selector)}, nil
 }
 
-// doLinks extracts all links from the page.
 func (b *Browser) doLinks(ctx context.Context, profile, session string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1190,7 +996,6 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 	return Result{Content: sb.String()}, nil
 }
 
-// doScroll scrolls the page or scrolls an element into view.
 func (b *Browser) doScroll(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1215,7 +1020,6 @@ func (b *Browser) doScroll(ctx context.Context, profile, session, selector strin
 	return Result{Content: "Scrolled to bottom of page."}, nil
 }
 
-// doBack navigates back in history.
 func (b *Browser) doBack(ctx context.Context, profile, session string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1230,12 +1034,11 @@ func (b *Browser) doBack(ctx context.Context, profile, session string, headless 
 	}
 
 	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
-	// #4854: back is navigation - refs from the previous page are dead.
+
 	b.refs.invalidate(browserRefKey(profile, session))
 	return Result{Content: fmt.Sprintf("Navigated back. Current URL: %s", urlAfter)}, nil
 }
 
-// doContent gets structured page content.
 func (b *Browser) doContent(ctx context.Context, profile, session string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1286,7 +1089,6 @@ func (b *Browser) doContent(ctx context.Context, profile, session string, headle
 	return Result{Content: sb.String()}, nil
 }
 
-// doStatus lists all active browser profiles and sessions.
 func (b *Browser) doStatus() (Result, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1333,7 +1135,6 @@ func (b *Browser) doStatus() (Result, error) {
 	return Result{Content: sb.String()}, nil
 }
 
-// doCloseSession closes a browser tab and removes the session.
 func (b *Browser) doCloseSession(profile, session string) (Result, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1352,7 +1153,6 @@ func (b *Browser) doCloseSession(profile, session string) (Result, error) {
 	return Result{Content: fmt.Sprintf("Closed session '%s' in profile '%s'.", session, profile)}, nil
 }
 
-// formatJSResult converts a JavaScript evaluation result to a readable string.
 func formatJSResult(result interface{}) string {
 	if result == nil {
 		return "undefined"
@@ -1382,7 +1182,6 @@ func formatJSResult(result interface{}) string {
 	}
 }
 
-// doSelect selects an option in a <select> dropdown element.
 func (b *Browser) doSelect(ctx context.Context, profile, session, selector, value, waitFor string, waitTimeout int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1396,7 +1195,6 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
 	}
 
-	// Try to set the value via JS - this handles both value and visible text matching
 	js := fmt.Sprintf(`(() => {
 		const sel = document.querySelector(%q);
 		if (!sel) return { ok: false, error: 'element not found' };
@@ -1438,7 +1236,6 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 	return Result{Content: fmt.Sprintf("Selected '%s' (%s) in %s", value, selectedText, selector)}, nil
 }
 
-// doHover hovers over an element to trigger menus, tooltips, etc.
 func (b *Browser) doHover(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1448,7 +1245,6 @@ func (b *Browser) doHover(ctx context.Context, profile, session, selector string
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
 	defer cancel()
 
-	// Use chromedp.EmulateHover via JS dispatchEvent for reliability
 	js := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%q);
 		if (!el) return false;
@@ -1468,7 +1264,6 @@ func (b *Browser) doHover(ctx context.Context, profile, session, selector string
 	return Result{Content: fmt.Sprintf("Hovered over: %s", selector)}, nil
 }
 
-// doPress simulates a keyboard key press on the focused element or the page.
 func (b *Browser) doPress(ctx context.Context, profile, session, key string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1478,7 +1273,6 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 10*time.Second)
 	defer cancel()
 
-	// Map common key names to CDP key values
 	keyMap := map[string]string{
 		"enter":     "\r",
 		"tab":       "\t",
@@ -1489,11 +1283,6 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 
 	lowerKey := strings.ToLower(key)
 
-	// Map all supported keys for KeyEvent dispatch. Named keys MUST use the
-	// kb package's private-use rune constants (#1312): KeyEvent feeds its
-	// argument through kb.Encode per rune, and passing the ASCII name
-	// ("ArrowDown") typed the literal text into the focused element instead
-	// of pressing the key - 27 key events of garbage, reported as success.
 	var cdpKeyName string
 	if mapped, ok := keyMap[lowerKey]; ok {
 		cdpKeyName = mapped
@@ -1531,7 +1320,6 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	return Result{Content: fmt.Sprintf("Pressed key: %s", key)}, nil
 }
 
-// doUpload sets a file on an <input type="file"> element.
 func (b *Browser) doUpload(ctx context.Context, profile, session, selector, filePath string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1550,18 +1338,13 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	defer cancel()
 
 	if err := chromedp.Do(timeoutCtx,
-		// WaitReady, NOT WaitVisible - many sites hide the real <input type="file">
-		// with display:none and use a styled button. SetUploadFiles only needs the
-		// DOM node to exist, not be visible.
+
 		chromedp.WaitReady(chromedp.CSS(selector)),
 		chromedp.SetUploadFiles(chromedp.CSS(selector), []string{absPath}),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
 	}
 
-	// r34 post-action effect verification: SetUploadFiles "ok" does not mean
-	// the file landed — React controlled inputs and shadow DOM routinely clear
-	// .files right after. Read back the node state; zero files is a hard error.
 	countExpr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);return e&&e.files?e.files.length:-1;})()`, selector)
 	fileCount, countErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[int](countExpr))
 	if countErr == nil && fileCount == 0 {
@@ -1574,8 +1357,6 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s%s", absPath, selector, countNote)}, nil
 }
 
-// doCookies manages browser cookies. With no args, gets all cookies.
-// With name+value+url, sets a cookie. With name+url (no value), deletes.
 func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, rawURL string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1624,7 +1405,6 @@ func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, 
 	return Result{Content: sb.String()}, nil
 }
 
-// doResize changes the browser viewport size for responsive testing.
 func (b *Browser) doResize(ctx context.Context, profile, session string, width, height int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1648,7 +1428,6 @@ func (b *Browser) doResize(ctx context.Context, profile, session string, width, 
 	return Result{Content: fmt.Sprintf("Viewport resized to %dx%d", width, height)}, nil
 }
 
-// doWaitNot waits for an element to disappear (not present in DOM).
 func (b *Browser) doWaitNot(ctx context.Context, profile, session, selector string, timeout int, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1664,7 +1443,6 @@ func (b *Browser) doWaitNot(ctx context.Context, profile, session, selector stri
 	return Result{Content: fmt.Sprintf("Element disappeared: %s", selector)}, nil
 }
 
-// doDrag simulates drag-and-drop from source to target via HTML5 drag events.
 func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targetSel string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1708,7 +1486,6 @@ func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targe
 	return Result{Content: fmt.Sprintf("Dragged %s to %s", sourceSel, targetSel)}, nil
 }
 
-// homeDir returns the user's home directory.
 func homeDir() string {
 	home, _ := os.UserHomeDir()
 	return home

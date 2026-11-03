@@ -9,12 +9,9 @@ import (
 	"testing"
 )
 
-// r15: tag→text drill-down sidecar. writeGuidanceHints must rewrite (not
-// append) so each tag keeps exactly one most-recent record, keeping the
-// file bounded across runs regardless of how often detectors fire.
 func TestWriteGuidanceHintsRewriteSemantics(t *testing.T) {
 	a := &Agent{}
-	// Same tag recorded twice: only the most recent text survives.
+
 	a.recordGuidanceHint("## Detector A", "first version", "2026-10-09T10:00:00Z")
 	a.recordGuidanceHint("## Detector A", "second version", "2026-10-09T11:00:00Z")
 	a.recordGuidanceHint("ACT NOW: verify", "verify before claiming done", "2026-10-09T11:30:00Z")
@@ -42,8 +39,7 @@ func TestWriteGuidanceHintsRewriteSemantics(t *testing.T) {
 	if recs["## Detector A"] != "second version" {
 		t.Errorf("expected most-recent text to win, got %q", recs["## Detector A"])
 	}
-	// Rewrite semantics: a second write with a smaller map must shrink the
-	// file (stale tags do not linger from earlier runs).
+
 	a2 := &Agent{}
 	a2.recordGuidanceHint("ACT NOW: verify", "only tag", "2026-10-09T12:00:00Z")
 	a2.writeGuidanceHints(dir)
@@ -53,7 +49,6 @@ func TestWriteGuidanceHintsRewriteSemantics(t *testing.T) {
 	}
 }
 
-// Empty inputs are silent no-ops (no file created).
 func TestWriteGuidanceHintsNoop(t *testing.T) {
 	a := &Agent{}
 	dir := t.TempDir()
@@ -61,8 +56,8 @@ func TestWriteGuidanceHintsNoop(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", "memory", "guidance-hints.jsonl")); !os.IsNotExist(err) {
 		t.Error("no file expected when nothing was recorded")
 	}
-	a.recordGuidanceHint("", "text", "ts") // empty tag ignored
-	a.recordGuidanceHint("tag", "", "ts")  // empty text ignored
+	a.recordGuidanceHint("", "text", "ts")
+	a.recordGuidanceHint("tag", "", "ts")
 	if len(a.guidanceHints) != 0 {
 		t.Errorf("empty tag/text must be ignored, got %d entries", len(a.guidanceHints))
 	}

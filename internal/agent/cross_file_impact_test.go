@@ -33,10 +33,6 @@ const privateConst = 1
 		names[s.name] = s.category
 	}
 
-	// #1450-A: extraction is UNexported-only - the same-directory scan's
-	// scope is exactly the set of files that can reference unexported
-	// symbols (one-dir-one-package). Exported symbols' main referencers
-	// live outside the package and were never covered by this detector.
 	checks := map[string]string{
 		"privateFunc":  "func",
 		"privateConst": "const",
@@ -150,7 +146,7 @@ func TestReferencesAnyImpactSymbol(t *testing.T) {
 }
 
 func TestImpactReceiverTypeName(t *testing.T) {
-	// Test pointer receiver.
+
 	src := "package p\nfunc (r *myType) foo() {}\n"
 	syms := extractImpactSymbols(src, "test.go")
 	found := false
@@ -163,7 +159,6 @@ func TestImpactReceiverTypeName(t *testing.T) {
 		t.Error("expected method (*myType).foo")
 	}
 
-	// Test value receiver.
 	src2 := "package p\nfunc (r myType) bar() {}\n"
 	syms2 := extractImpactSymbols(src2, "test.go")
 	found2 := false
@@ -198,26 +193,22 @@ func TestCheckCrossFileImpact_NoFiles(t *testing.T) {
 func TestCheckCrossFileImpact_FiresOnce(t *testing.T) {
 	a := &Agent{crossFileImpact: newCrossFileImpactState()}
 	stats := &RunStats{}
-	// #1773 case 6: entry no longer burns the flag - an empty run (no Go
-	// files, nothing produced) leaves the gate ARMED so a later
-	// qualifying state can still produce its warning.
+
 	_ = a.checkCrossFileImpact(stats)
 	if a.crossFileImpact.fired {
 		t.Error("empty analysis must NOT burn the once-per-run flag (#1773 case 6)")
 	}
-	// Manually simulate the "producing output" claim point.
+
 	a.crossFileImpact.mu.Lock()
 	a.crossFileImpact.fired = true
 	a.crossFileImpact.mu.Unlock()
-	// Second call - short-circuits.
+
 	msg := a.checkCrossFileImpact(stats)
 	if msg != "" {
 		t.Error("expected empty on second call (already fired)")
 	}
 }
 
-// #1773 case 5: a sibling LOCAL variable sharing the deleted
-// package-level symbol name is not a cross-file impact.
 func TestReferencesAnyImpactSymbolScopeDiscrimination(t *testing.T) {
 	removed := []impactRemovedSymbol{{name: "userCount", category: "var"}}
 	local := "package b\n\nfunc f() int {\n\tuserCount := 3\n\treturn userCount\n}\n"
@@ -230,8 +221,6 @@ func TestReferencesAnyImpactSymbolScopeDiscrimination(t *testing.T) {
 	}
 }
 
-// #1773 case 2: JSON5 is a superset of JSON - legal JSON5 must not be
-// reported as broken config.
 func TestConfigSyntaxJSON5Skipped(t *testing.T) {
 	if w := configSyntaxCheck("config.json5", "{unquoted: single, trailing: [1,2,],}"); w != "" {
 		t.Fatalf("legal JSON5 must be skipped, got %q", w)

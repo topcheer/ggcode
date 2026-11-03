@@ -11,9 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// blockingWaitTool simulates wait_agent: blocks for the given duration, then
-// returns a marker result. Records its start time so tests can prove
-// concurrent execution via overlap.
 type blockingWaitTool struct {
 	name     string
 	blockFor time.Duration
@@ -59,9 +56,6 @@ func newWaitTestAgent(tools ...tool.Tool) *Agent {
 	}
 }
 
-// TestPreExecuteWaitTools_ConcurrentExecution proves multiple wait_agent
-// calls in one batch execute concurrently: three 150ms waits must complete
-// in well under 3*150ms (sequential would be >=450ms).
 func TestPreExecuteWaitTools_ConcurrentExecution(t *testing.T) {
 	w := &blockingWaitTool{name: "wait_agent", blockFor: 150 * time.Millisecond, marker: "done"}
 	a := newWaitTestAgent(w)
@@ -83,11 +77,11 @@ func TestPreExecuteWaitTools_ConcurrentExecution(t *testing.T) {
 			t.Errorf("results[%d].Content = %q, want %q", idx, got, want)
 		}
 	}
-	// Concurrent: total elapsed must be far below the sequential 450ms.
+
 	if elapsed >= 400*time.Millisecond {
 		t.Fatalf("waits appear sequential: elapsed %v (sequential would be >=450ms)", elapsed)
 	}
-	// Overlap proof: all three started before the first finished.
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.started) != 3 || len(w.finished) != 3 {
@@ -101,8 +95,6 @@ func TestPreExecuteWaitTools_ConcurrentExecution(t *testing.T) {
 	}
 }
 
-// TestPreExecuteWaitTools_SingleWaitNotParallelized: a lone wait call must
-// keep the plain sequential path (nil result map).
 func TestPreExecuteWaitTools_SingleWaitNotParallelized(t *testing.T) {
 	w := &blockingWaitTool{name: "wait_agent", blockFor: 10 * time.Millisecond}
 	a := newWaitTestAgent(w)
@@ -115,8 +107,6 @@ func TestPreExecuteWaitTools_SingleWaitNotParallelized(t *testing.T) {
 	}
 }
 
-// TestPreExecuteWaitTools_NonWaitToolsIgnored: mixed batches only pick up
-// wait-family calls.
 func TestPreExecuteWaitTools_NonWaitToolsIgnored(t *testing.T) {
 	w := &blockingWaitTool{name: "wait_agent", blockFor: 10 * time.Millisecond}
 	a := newWaitTestAgent(w)
@@ -129,8 +119,6 @@ func TestPreExecuteWaitTools_NonWaitToolsIgnored(t *testing.T) {
 	}
 }
 
-// TestPreExecuteWaitTools_CancelPropagates: cancelling the context cancels
-// in-flight waits (they return no results instead of hanging).
 func TestPreExecuteWaitTools_CancelPropagates(t *testing.T) {
 	w := &blockingWaitTool{name: "wait_agent", blockFor: 5 * time.Second}
 	a := newWaitTestAgent(w)
@@ -154,8 +142,6 @@ func TestPreExecuteWaitTools_CancelPropagates(t *testing.T) {
 	}
 }
 
-// progressEmittingWaitTool blocks briefly while emitting progress through
-// the ctx-injected callback (mirrors WaitForSnapshotWithProgress).
 type progressEmittingWaitTool struct{ name string }
 
 func (p *progressEmittingWaitTool) Name() string { return p.name }
@@ -173,8 +159,6 @@ func (p *progressEmittingWaitTool) Execute(ctx context.Context, input json.RawMe
 	return tool.Result{Content: "ok"}, nil
 }
 
-// TestPreExecuteWaitTools_ProgressBoundPerToolID: concurrent waits must
-// stream progress tagged with their own tool ID (per-slot TUI rendering).
 func TestPreExecuteWaitTools_ProgressBoundPerToolID(t *testing.T) {
 	w := &progressEmittingWaitTool{name: "wait_agent"}
 	a := newWaitTestAgent(w)

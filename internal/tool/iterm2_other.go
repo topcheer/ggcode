@@ -8,9 +8,6 @@ import (
 	"runtime"
 )
 
-// ── Stub for unsupported platforms (Linux, Windows, etc.) ────────────────────
-// iTerm2 is macOS-only, so all actions return an error on other platforms.
-
 func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 	if !iterm2Available() {
 		return Result{Content: "iterm2: not detected (TERM_PROGRAM != iTerm.app)"}

@@ -15,20 +15,6 @@ import (
 	"time"
 )
 
-// ── AppleScript helpers ──────────────────────────────────────────────────────
-//
-// iTerm2 has one of the richest AppleScript dictionaries among macOS terminals.
-// Key objects:
-//   - application → windows, create window/tab
-//   - window → tabs, current tab
-//   - tab → sessions, select
-//   - session → write text, execute command, split vertically/horizontally,
-//               select, close, name, tty, columns, rows, is at shell prompt
-//
-// Detection: TERM_PROGRAM=iTerm.app, LC_TERMINAL=iTerm2
-
-// iterm2SessionSpecifier builds an AppleScript reference to a session.
-// If sessionID is empty, it targets the current session.
 func iterm2SessionSpecifier(sessionID string) string {
 	if sessionID == "" {
 		return "current session of current tab of front window"
@@ -36,9 +22,6 @@ func iterm2SessionSpecifier(sessionID string) string {
 	return "theSession"
 }
 
-// iterm2SessionLookup returns AppleScript traversal code that finds a session by ID.
-// Returns empty string for current session (no lookup needed).
-// The found session is stored in variable "theSession".
 func iterm2SessionLookup(ctx context.Context, sessionID string) string {
 	if sessionID == "" {
 		return ""
@@ -61,13 +44,6 @@ func iterm2SessionLookup(ctx context.Context, sessionID string) string {
 	if theSession is missing value then error "Session not found: %s"`, escapedID, escapedID)
 }
 
-// iterm2WriteText writes text to a session using iTerm2's native AppleScript.
-// Unlike Warp/Ghostty, iTerm2 has a native "write text" command that types
-// directly into the target session without needing System Events.
-// #2594: `newline NO` is REQUIRED - iTerm2.sdef defaults write's newline
-// parameter to yes, which turned the pure-input action into "type text AND
-// press Return". kitty (send-text) and ghostty (input text) are pure input;
-// send_key exists separately when the caller wants execution.
 func iterm2WriteText(ctx context.Context, sessionID, text string) error {
 	spec := iterm2SessionSpecifier(sessionID)
 	lookup := iterm2SessionLookup(ctx, sessionID)
@@ -82,8 +58,6 @@ end tell`, lookup, spec, escapeAS(text))
 	return err
 }
 
-// ── Action implementations (macOS) ───────────────────────────────────────────
-
 func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 	if !iterm2Available() {
 		return Result{Content: "iterm2: not detected (TERM_PROGRAM != iTerm.app)"}
@@ -93,17 +67,14 @@ func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 	b.WriteString("iterm2: detected\n")
 	b.WriteString(fmt.Sprintf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 
-	// iTerm2 version
 	if v, err := runAppleScript(ctx, `tell application "iTerm" to get version`); err == nil {
 		b.WriteString(fmt.Sprintf("version: %s\n", v))
 	}
 
-	// App path
 	if p, err := runAppleScript(ctx, `tell application "iTerm" to get path to`); err == nil && p != "" {
 		b.WriteString(fmt.Sprintf("app path: %s\n", p))
 	}
 
-	// Current session info
 	if name, err := runAppleScript(ctx, `tell application "iTerm" to get name of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session name: %s\n", name))
 	}
@@ -117,7 +88,6 @@ func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 		b.WriteString(fmt.Sprintf("rows: %s\n", rows))
 	}
 
-	// Session ID (iTerm2 assigns a numeric ID to each session)
 	if sid, err := runAppleScript(ctx, `tell application "iTerm" to get id of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session ID: %s", sid))
 	}
@@ -195,20 +165,17 @@ func (t *Iterm2Tool) executeSplit(ctx context.Context, sessionID, direction stri
 		wd = t.workingDir()
 	}
 
-	// Map direction to iTerm2 split command
 	var splitCmd string
 	switch dir {
 	case "right", "down":
-		// iTerm2 default split is vertically (creates a right pane) for
-		// "split vertically" and horizontally (creates a bottom pane) for
-		// "split horizontally".
+
 		if dir == "right" {
 			splitCmd = "vertically"
 		} else {
 			splitCmd = "horizontally"
 		}
 	case "left", "up":
-		// iTerm2 always creates new panes to the right/bottom.
+
 		if dir == "left" {
 			splitCmd = "vertically"
 		} else {
@@ -216,7 +183,6 @@ func (t *Iterm2Tool) executeSplit(ctx context.Context, sessionID, direction stri
 		}
 	}
 
-	// Build the script
 	var script string
 	targetSpec := iterm2SessionSpecifier(sessionID)
 	lookup := iterm2SessionLookup(ctx, sessionID)
@@ -252,13 +218,8 @@ end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)))
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 split failed: %v", err)}
 	}
 
-	// Size adjustment: iTerm2 doesn't have a native AppleScript split size
-	// ratio. We can use the 'split pane' approach or resize after split.
-	// For now, note the limitation if size was requested.
 	if size > 0 && size < 100 {
-		// We could use System Events to adjust split, but iTerm2's split
-		// resize isn't directly scriptable via AppleScript. The split is
-		// created at 50/50 by default.
+
 		return Result{Content: fmt.Sprintf("iterm2 split created: direction=%s (size=%d%% not yet applied, iTerm2 defaults to 50/50), session_id=%s", dir, size, out)}
 	}
 	return Result{Content: fmt.Sprintf("iterm2 split created: direction=%s, session_id=%s", dir, out)}
@@ -284,8 +245,7 @@ tell application "iTerm"
 	end tell
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else if wd != "" {
-		// #3140: #2589 cd-only contract for tab/window (same as the
-		// ghostty tab branch) - working_dir alone must still cd.
+
 		script = fmt.Sprintf(`
 tell application "iTerm"
 	activate
@@ -334,7 +294,7 @@ tell application "iTerm"
 	return id of current session of newWindow
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else if wd != "" {
-		// #3140: symmetric cd-only branch for new_window.
+
 		script = fmt.Sprintf(`
 tell application "iTerm"
 	activate
@@ -436,10 +396,7 @@ func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) R
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 input failed: %v", err)}
 	}
-	// #1691 case 2: escapeAS silently DROPS C0 control characters (except
-	// tab/nl/cr) - the caller believed the full text was delivered while
-	// the terminal received corrupted content with no error. Report the
-	// stripped characters honestly instead.
+
 	stripped := countDroppedControlRunes(text)
 	note := ""
 	if stripped > 0 {
@@ -462,8 +419,6 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 		return Result{IsError: true, Content: "key is required for send_key action"}
 	}
 
-	// Map key names to terminal escape sequences.
-	// This avoids System Events / Accessibility permission requirements.
 	keyLower := strings.ToLower(key)
 	escMap := map[string]string{
 		"enter": "\r", "return": "\r",
@@ -471,8 +426,7 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 		"tab":       "\t",
 		"space":     " ",
 		"backspace": "\x7f",
-		// #849: forward delete is ESC[3~ (kitty sends the same) - mapping it
-		// to DEL erased the character LEFT of the cursor.
+
 		"delete": "\x1b[3~",
 		"up":     "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
 		"home": "\x1b[H", "end": "\x1b[F",
@@ -484,27 +438,16 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 
 	var data string
 	if seq, ok := escMap[keyLower]; ok {
-		// #4450: the escMap branch used to ignore modifiers entirely,
-		// sending the bare sequence while the Result still claimed
-		// "modifiers+key sent" - a #2625-style false success. Modifier
-		// escapes for these keys are not implemented; fail explicitly
-		// instead of silently sending the wrong keystroke.
+
 		if strings.TrimSpace(modifiers) != "" {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (modifiers are only supported with single-character keys)", modifiers, key)}
 		}
 		data = seq
 	} else if len(key) == 1 {
-		// Single character - apply modifier transformations.
+
 		data = key
 		mods := strings.ToLower(modifiers)
-		// #4550: cmd/shift/meta (and any unrecognized modifier) have no
-		// terminal-escape representation in this legacy path - the old code
-		// silently sent the bare character and reported success, injecting
-		// the letter into the target session's input line while the agent
-		// believed cmd+c had been sent (data pollution + false success).
-		// Fail explicitly, per this file's own contract ("we fail explicitly
-		// rather than lie to the caller", #4450/#2625) and kitty's
-		// sendKeyViaAction unsupported-combo semantics.
+
 		hasCtrl := false
 		hasOpt := false
 		for _, tok := range strings.FieldsFunc(mods, func(r rune) bool {
@@ -520,17 +463,12 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 			}
 		}
 		if hasCtrl {
-			// Ctrl+letter → control code
+
 			ch := strings.ToUpper(key)
 			if ch[0] >= 'A' && ch[0] <= 'Z' {
 				data = string(rune(ch[0] - 'A' + 1))
 			} else {
-				// #2625: ctrl with a non-letter (digit, symbol) has no
-				// terminal representation; silently sending the bare key
-				// injected an unexpected character while the Result still
-				// claimed "ctrl+<key> sent" - a false success the agent
-				// builds on. Fail explicitly, aligned with kitty's
-				// sendKeyViaAction unsupported-combo error.
+
 				return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (ctrl is only supported with letters a-z)", modifiers, key)}
 			}
 		}
@@ -561,28 +499,12 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 		increment = 20
 	}
 
-	// iTerm2 doesn't have a direct AppleScript resize for individual panes,
-	// but we can use the "adjust split" via System Events menu.
-	// The menu items are: "Edit" > "Split Panes" submenu.
-	// Alternatively, we can use keyboard shortcuts: Cmd+[ / Cmd+] for resize.
-	//
-	// For now, use keyboard shortcuts which are the most reliable approach:
-	// Cmd+Alt+[ = shrink vertically, Cmd+Alt+] = grow vertically
-	// Cmd+Shift+Alt+[ = shrink horizontally, Cmd+Shift+Alt+] = grow horizontally
-	//
-	// However, these are user-configurable. A more reliable approach is to
-	// resize the window itself via AppleScript.
-
-	// Focus target session. #4550 附带: the discarded Result hid focus
-	// failures - the resize keystrokes then went to whatever pane happened
-	// to be focused. Propagate the error instead of ignoring it.
 	if sessionID != "" {
 		if res := t.executeFocus(ctx, sessionID); res.IsError {
 			return res
 		}
 	} else {
-		// #1691 case 5: swallow + no ctx were both wrong - route through
-		// the shared helper (ctx-aware, stderr captured).
+
 		if _, err := runAppleScript(ctx, `tell application "iTerm" to activate`); err != nil {
 			debug.Log("tool", "iterm2 resize activate failed: %v", err)
 		}
@@ -593,18 +515,13 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	if ax == "" {
 		ax = "horizontal"
 	}
-	// #4450: any unrecognized value used to fall into the vertical else
-	// branch while the success message echoed the caller's typo back
-	// ("grew width by 20" while actually adding rows). Mirror kitty's
-	// explicit whitelist (kitty_impl.go resize).
+
 	switch ax {
 	case "horizontal", "vertical":
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("invalid axis %q (use horizontal or vertical)", axis)}
 	}
 
-	// Use iTerm2's native AppleScript to adjust columns/rows directly.
-	// This avoids the need for Accessibility/System Events permissions.
 	spec := iterm2SessionSpecifier(sessionID)
 	lookup := iterm2SessionLookup(ctx, sessionID)
 	var script string
@@ -668,7 +585,7 @@ end tell`, lookup, spec)
 
 	out, err := runAppleScript(ctx, script)
 	if err != nil {
-		// Fallback: try using capture() which may not be available in all versions
+
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 get_text failed: %v", err)}
 	}
 
@@ -703,9 +620,6 @@ func (t *Iterm2Tool) executeProfile(ctx context.Context, sessionID, profileName 
 		return Result{IsError: true, Content: "text (profile name) is required for profile action"}
 	}
 
-	// iTerm2's "profile name" AppleScript property is read-only.
-	// Use the proprietary escape sequence ESC]1337;SetProfile=Name BEL
-	// to switch the profile for the target session.
 	esc := fmt.Sprintf("\x1b]1337;SetProfile=%s\x07", profileName)
 	if err := t.iterm2WriteToTTY(ctx, sessionID, esc); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 profile switch failed: %v", err)}
@@ -714,9 +628,6 @@ func (t *Iterm2Tool) executeProfile(ctx context.Context, sessionID, profileName 
 	return Result{Content: fmt.Sprintf("iterm2 profile switched: %s", profileName)}
 }
 
-// iterm2WriteToTTY writes a raw string directly to the session's TTY device,
-// bypassing both System Events and the shell. This is used for escape
-// sequences (badge, mark, clear) that must not be interpreted by the shell.
 func (t *Iterm2Tool) iterm2WriteToTTY(ctx context.Context, sessionID, data string) error {
 	spec := iterm2SessionSpecifier(sessionID)
 	lookup := iterm2SessionLookup(ctx, sessionID)
@@ -749,10 +660,6 @@ end tell`, lookup, spec)
 }
 
 func (t *Iterm2Tool) executeBadge(ctx context.Context, sessionID, badgeText string) Result {
-	// iTerm2 supports per-session badges via the OSC 1337 escape sequence:
-	// ESC ] 1337 ; SetBadgeFormat = BASE64(text) BEL
-	// We write the escape sequence directly to the session's TTY device
-	// to avoid interference from the shell or TUI raw mode.
 
 	if badgeText == "" {
 		err := t.iterm2WriteToTTY(ctx, sessionID, "\033]1337;SetBadgeFormat=\007")
@@ -793,16 +700,6 @@ func (t *Iterm2Tool) executeBroadcast(ctx context.Context, subAction string) Res
 	return Result{Content: fmt.Sprintf("iterm2 broadcast: %s", sub)}
 }
 
-// buildBroadcastScript returns the AppleScript for a broadcast sub-action
-// and whether the sub-action is valid. #2593: the real menu tree (iTerm2
-// 3.7.x MainMenu.nib) nests all broadcast items under the "Broadcast Input"
-// SUBMENU of Shell, with different titles than the old code guessed: toggle
-// maps to toggleBroadcastingToCurrentSession:, on to the enable actions, off
-// to "Send Input to Current Session Only" (disableBroadcasting:). The old
-// titles ("Toggle Broadcasting to Current Split Pane" / "Stop Broadcasting
-// Input") appear 0 times in the nib, and bare "Broadcast Input" is the
-// submenu PARENT - clicking it only hovered the submenu, producing a silent
-// fake success.
 func buildBroadcastScript(sub string) (string, bool) {
 	var script string
 	switch sub {
@@ -838,8 +735,7 @@ func (t *Iterm2Tool) executeMark(ctx context.Context, subAction string) Result {
 
 	switch sub {
 	case "set":
-		// Use OSC 1337 escape sequence written directly to TTY - no
-		// Accessibility permission needed.
+
 		err := t.iterm2WriteToTTY(ctx, "", "\033]1337;SetMark\007")
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 mark set failed: %v", err)}
@@ -847,8 +743,7 @@ func (t *Iterm2Tool) executeMark(ctx context.Context, subAction string) Result {
 		return Result{Content: "iterm2 mark: set"}
 
 	case "next", "prev", "clear":
-		// No known escape sequence for jump/clear marks - needs keyboard
-		// shortcuts via System Events, which requires Accessibility.
+
 		script := fmt.Sprintf(`
 tell application "iTerm" to activate
 tell application "System Events"
@@ -875,9 +770,7 @@ end tell`, sub, sub, sub)
 }
 
 func (t *Iterm2Tool) executeClear(ctx context.Context, sessionID string) Result {
-	// Clear screen + scrollback via escape sequence written to TTY.
-	// ESC[2J = clear screen, ESC[3J = clear scrollback, ESC[H = cursor home.
-	// No Accessibility permission needed.
+
 	err := t.iterm2WriteToTTY(ctx, sessionID, "\033[2J\033[3J\033[H")
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 clear failed: %v", err)}
@@ -890,7 +783,6 @@ func (t *Iterm2Tool) executeMenuAction(ctx context.Context, menuItem string) Res
 		return Result{IsError: true, Content: "text (menu item name) is required for action"}
 	}
 
-	// Search all menus for the item (same pattern as Warp)
 	script := fmt.Sprintf(`
 tell application "iTerm" to activate
 tell application "System Events"
@@ -929,9 +821,7 @@ return "not found"`, escapeAS(menuItem))
 }
 
 func (t *Iterm2Tool) executeReloadConfig(ctx context.Context) Result {
-	// iTerm2 does not have a native AppleScript command to reload preferences.
-	// System Events UI scripting requires Accessibility permissions.
-	// Best effort: try the menu item; if it fails, inform the user.
+
 	script := `
 tell application "iTerm" to activate
 tell application "System Events"

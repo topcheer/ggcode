@@ -1,10 +1,5 @@
 package agent
 
-// zz_llm_overseer_test.go -- r489 companion tests: SICA semantic-level
-// LLM overseer. Covers verdict parsing robustness, dormancy gates
-// (no aux model / short run / cadence / budget), and end-to-end hint
-// emission via a mock aux provider.
-
 import (
 	"context"
 	"strings"
@@ -15,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// llmOverseerMockProvider returns a canned text response per call.
 type llmOverseerMockProvider struct {
 	resp   string
 	called int
@@ -55,7 +49,7 @@ func newLLMOverseerTestAgent(t *testing.T) *Agent {
 	if a.auxResolved == nil {
 		t.Fatal("SetAuxModel must arm aux routing for a distinct model")
 	}
-	// Minimal overseer so trajectory snapshot works.
+
 	a.overseer = newOverseerState()
 	return a
 }
@@ -64,7 +58,7 @@ func TestLLMOverseerParseVerdict(t *testing.T) {
 	cases := []struct {
 		name    string
 		raw     string
-		want    string // expected verdict, "" = expect nil
+		want    string
 		wantNil bool
 	}{
 		{"plain JSON", `{"verdict":"on_track","evidence":"e","suggestion":"s"}`, "on_track", false},
@@ -97,12 +91,10 @@ func TestLLMOverseerParseVerdict(t *testing.T) {
 func TestLLMOverseerDormancy(t *testing.T) {
 	a := newLLMOverseerTestAgent(t)
 
-	// Gate 1: no trajectory -> no call even when iteration qualifies.
 	if got := a.llmOverseerCheck(llmOverseerMinIters); got != "" {
 		t.Fatalf("empty trajectory must not trigger a call, got %q", got)
 	}
 
-	// Gate 2: short run. (#4073 adaptation: recordToolCall takes iteration.)
 	a.overseer.recordToolCall("read_file", false, "a.go", "ok", 1)
 	if got := a.llmOverseerCheck(5); got != "" {
 		t.Fatalf("short run must be dormant, got %q", got)
@@ -111,7 +103,6 @@ func TestLLMOverseerDormancy(t *testing.T) {
 		t.Fatalf("short run must not consume budget, callsDone=%d", a.llmOverseer.callsDone)
 	}
 
-	// Gate 3: no aux model at all.
 	bare := NewAgent(&llmOverseerMockProvider{}, tool.NewRegistry(), "sys", 5)
 	bare.overseer = newOverseerState()
 	bare.overseer.recordToolCall("read_file", false, "a.go", "ok", 1)
@@ -126,7 +117,7 @@ func TestLLMOverseerDormancy(t *testing.T) {
 func TestLLMOverseerWrongApproachEmitsHint(t *testing.T) {
 	a := newLLMOverseerTestAgent(t)
 	mock := &llmOverseerMockProvider{resp: `{"verdict":"wrong_approach","evidence":"entries 4-9 repeat the same grep","suggestion":"read the specific file instead"}`}
-	a.auxProvider = mock // bypass provider.NewProvider with unreachable endpoint
+	a.auxProvider = mock
 
 	for i := 0; i < 10; i++ {
 		a.overseer.recordToolCall("grep", false, "pat", "ok", 1)
@@ -146,7 +137,6 @@ func TestLLMOverseerWrongApproachEmitsHint(t *testing.T) {
 		t.Fatalf("exactly one aux call expected, got %d", mock.called)
 	}
 
-	// Cadence gate: immediate re-check must not call again.
 	if got := a.llmOverseerCheck(llmOverseerMinIters + 1); got != "" || mock.called != 1 {
 		t.Fatalf("cadence gate violated: hint=%q calls=%d", got, mock.called)
 	}
@@ -168,7 +158,7 @@ func TestLLMOverseerOnTrackSilent(t *testing.T) {
 
 func TestLLMOverseerBudgetAndFailureSilence(t *testing.T) {
 	a := newLLMOverseerTestAgent(t)
-	// Malformed reply -> silent "".
+
 	mock := &llmOverseerMockProvider{resp: "not json at all"}
 	a.auxProvider = mock
 	a.overseer.recordToolCall("grep", false, "x", "ok", 1)
@@ -177,8 +167,6 @@ func TestLLMOverseerBudgetAndFailureSilence(t *testing.T) {
 		t.Fatalf("malformed verdict must degrade silently, got %q", got)
 	}
 
-	// Budget: two calls consumed -> further due checks stay silent even
-	// with a good verdict wired in.
 	a.llmOverseer.lastIter = 0
 	a.llmOverseer.callsDone = llmOverseerMaxCalls
 	mock.resp = `{"verdict":"wrong_approach","evidence":"e","suggestion":"s"}`

@@ -4,7 +4,7 @@ import "testing"
 
 func TestEditAbandon_NoWarnBelowThreshold(t *testing.T) {
 	s := newEditAbandonState()
-	// Only 1 edited file -- below minEditedFiles of 2
+
 	s.recordToolCall("edit_file", `{"path":"a.go"}`)
 	s.recordToolCall("read_file", `{"path":"b.go"}`)
 	s.recordToolCall("read_file", `{"path":"c.go"}`)
@@ -18,7 +18,7 @@ func TestEditAbandon_NoWarnWhenReadingEditedFiles(t *testing.T) {
 	s := newEditAbandonState()
 	s.recordToolCall("edit_file", `{"path":"a.go"}`)
 	s.recordToolCall("edit_file", `{"path":"b.go"}`)
-	// Reading the SAME edited files resets attention shift
+
 	s.recordToolCall("read_file", `{"path":"a.go"}`)
 	s.recordToolCall("read_file", `{"path":"b.go"}`)
 	s.recordToolCall("read_file", `{"path":"a.go"}`)
@@ -32,18 +32,18 @@ func TestEditAbandon_NoWarnWhenReadingEditedFiles(t *testing.T) {
 
 func TestEditAbandon_WarnsOnAttentionShift(t *testing.T) {
 	s := newEditAbandonState()
-	// Edit two files
+
 	s.recordToolCall("edit_file", `{"path":"a.go"}`)
 	s.recordToolCall("edit_file", `{"path":"b.go"}`)
-	// Shift attention to unrelated files (3 consecutive)
+
 	s.recordToolCall("read_file", `{"path":"c.go"}`)
 	s.recordToolCall("read_file", `{"path":"d.go"}`)
 	s.recordToolCall("read_file", `{"path":"e.go"}`)
-	// totalCalls=5, below minTotalCalls of 6
+
 	if msg := s.maybeWarn(); msg != "" {
 		t.Fatalf("expected no warning below minTotalCalls, got: %s", msg)
 	}
-	// One more unrelated call to reach totalCalls=6
+
 	s.recordToolCall("grep", `{"pattern":"foo"}`)
 	if msg := s.maybeWarn(); msg == "" {
 		t.Fatal("expected warning for abandoned edits")
@@ -81,7 +81,7 @@ func TestEditAbandon_LSPDiagnosticsIsVerify(t *testing.T) {
 
 func TestEditAbandon_MaxWarningsPerRun(t *testing.T) {
 	s := newEditAbandonState()
-	// Build up abandoned edits
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"path":"f`+string(rune('a'+i))+`.go"}`)
 	}
@@ -92,7 +92,7 @@ func TestEditAbandon_MaxWarningsPerRun(t *testing.T) {
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// New edits allow re-trigger
+
 	s.recordToolCall("edit_file", `{"path":"new.go"}`)
 	for i := 0; i < 4; i++ {
 		s.recordToolCall("read_file", `{"path":"y`+string(rune('a'+i))+`.go"}`)
@@ -123,10 +123,10 @@ func TestEditAbandon_PartialShiftDoesNotTrigger(t *testing.T) {
 	s := newEditAbandonState()
 	s.recordToolCall("edit_file", `{"path":"a.go"}`)
 	s.recordToolCall("edit_file", `{"path":"b.go"}`)
-	// Only 2 consecutive unrelated calls (below threshold of 3)
+
 	s.recordToolCall("read_file", `{"path":"c.go"}`)
 	s.recordToolCall("read_file", `{"path":"d.go"}`)
-	// Then return to an edited file
+
 	s.recordToolCall("read_file", `{"path":"a.go"}`)
 	s.recordToolCall("read_file", `{"path":"e.go"}`)
 	s.recordToolCall("read_file", `{"path":"f.go"}`)

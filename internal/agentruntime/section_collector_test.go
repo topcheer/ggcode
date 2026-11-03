@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// TestSectionCollectorConcurrentRefresh verifies that refresh() collects all
-// sections, populates the cache, and detects changes (non-idle first pass).
 func TestSectionCollectorConcurrentRefresh(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/x\n\ngo 1.26\n"), 0o644); err != nil {
@@ -34,7 +32,6 @@ func TestSectionCollectorConcurrentRefresh(t *testing.T) {
 		t.Error("first refresh should not be idle")
 	}
 
-	// Second refresh with no changes should flip to idle.
 	go func() { sc.refresh() }()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -54,15 +51,11 @@ func TestSectionCollectorConcurrentRefresh(t *testing.T) {
 	}
 }
 
-// TestInitGlobalSectionCollectorBudget verifies the first-refresh budget path:
-// InitGlobalSectionCollector returns even if a section is very slow. A temp
-// dir with no project markers makes sections fast, so this mainly asserts the
-// budget logic does not hang or panic.
 func TestInitGlobalSectionCollectorBudget(t *testing.T) {
 	root := t.TempDir()
 	InitGlobalSectionCollector(root)
 	defer StopGlobalSectionCollector()
-	// Within the budget (empty dir = fast sections), snapshot should be ready.
+
 	snap, ok := GlobalSectionSnapshot()
 	if !ok {
 		t.Fatal("no snapshot after init")

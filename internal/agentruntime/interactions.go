@@ -13,20 +13,20 @@ type InteractionBroker struct {
 	mu          sync.Mutex
 	approvals   map[string]approvalWaiter
 	askUsers    map[string]askUserWaiter
-	approvalSeq uint64 // #1657: registration order, makes FirstPending* deterministic
+	approvalSeq uint64
 	askSeq      uint64
 }
 
 type approvalWaiter struct {
 	request ApprovalRequest
 	resp    chan permission.Decision
-	seq     uint64 // registration order (#1657)
+	seq     uint64
 }
 
 type askUserWaiter struct {
 	request AskUserRequest
 	resp    chan toolpkg.AskUserResponse
-	seq     uint64 // registration order (#1657)
+	seq     uint64
 }
 
 func NewInteractionBroker() *InteractionBroker {
@@ -48,18 +48,13 @@ func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalReque
 		return decision
 	case <-ctx.Done():
 		b.removeApproval(req.ID)
-		// #1482: ResolveApproval may have buffered a decision and already
-		// acknowledged it to the UI before ctx.Done fired. Draining first
-		// honors an approval the user sees as granted instead of racing
-		// into a bare Deny.
+
 		select {
 		case decision := <-ch:
 			return decision
 		default:
 		}
-		// #3370: run cancelled/expired without a user decision - report the
-		// non-decision outcome instead of a bare Deny so downstream audit,
-		// approval memory and the ask throttle do not blame the user.
+
 		return permission.DecisionFromContext(ctx.Err())
 	}
 }
@@ -76,8 +71,7 @@ func (b *InteractionBroker) AwaitAskUser(ctx context.Context, req AskUserRequest
 		return response, nil
 	case <-ctx.Done():
 		b.removeAskUser(req.ID)
-		// #1482: same race as AwaitApproval - a response the UI already
-		// acknowledged must not be discarded when ctx.Done fires first.
+
 		select {
 		case response := <-ch:
 			return response, nil
@@ -131,9 +125,6 @@ func (b *InteractionBroker) PendingAskUser(id string) (AskUserRequest, bool) {
 	return waiter.request, true
 }
 
-// PendingApprovals returns all pending approval requests in registration
-// order (#1657 case 2): text-path callers need to know when a bare "y" is
-// ambiguous (2+ pending) and to offer index-based disambiguation.
 func (b *InteractionBroker) PendingApprovals() []ApprovalRequest {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -152,10 +143,6 @@ func (b *InteractionBroker) PendingApprovals() []ApprovalRequest {
 func (b *InteractionBroker) FirstPendingApproval() (ApprovalRequest, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// #1657: with 2+ pending approvals (parallel tool calls), Go map
-	// iteration order is random - a text "y" landed on an arbitrary one,
-	// which could be the more dangerous request. "First" must mean the
-	// earliest-registered one, deterministically.
 	var earliest approvalWaiter
 	for _, waiter := range b.approvals {
 		if earliest.seq == 0 || waiter.seq < earliest.seq {
@@ -171,8 +158,6 @@ func (b *InteractionBroker) FirstPendingApproval() (ApprovalRequest, bool) {
 func (b *InteractionBroker) FirstPendingAskUser() (AskUserRequest, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// #1657: same as FirstPendingApproval - earliest registration wins,
-	// not an arbitrary map-iteration entry.
 	var earliest askUserWaiter
 	for _, waiter := range b.askUsers {
 		if earliest.seq == 0 || waiter.seq < earliest.seq {
@@ -215,11 +200,7 @@ func (b *InteractionBroker) CancelAll() ([]ApprovalRequest, []AskUserRequest) {
 	for _, waiter := range approvals {
 		approvalRequests = append(approvalRequests, waiter.request)
 		select {
-		// #3376: a stopped/cancelled run is NOT a user rejection. CancelAll
-		// fires on desktop stop / run interruption - push the #3370/#3372
-		// non-decision variant so audit records ask_timeout and the approval
-		// memory + ask throttle stay clean (the askUser path below already
-		// carries an explicit cancellation response).
+
 		case waiter.resp <- permission.Cancelled:
 		default:
 		}

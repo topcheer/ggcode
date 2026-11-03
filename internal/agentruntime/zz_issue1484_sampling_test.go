@@ -1,13 +1,5 @@
 package agentruntime
 
-// #1484 case C regression: the MCP sampling handler used to guess
-// stopReason from Usage.OutputTokens >= maxTokens - false-positiving on
-// naturally-long output that was never truncated, and making the
-// stop_sequence branch unreachable. Since #1484-C the provider relays
-// the REAL stop reason through ChatResponse.StopReason; the handler
-// prefers it and keeps the length heuristic only as a fallback for
-// providers that report nothing.
-
 import (
 	"context"
 	"testing"
@@ -16,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// fakeSamplingProvider embeds the interface so only Chat/Name need stubs.
 type fakeSamplingProvider struct {
 	provider.Provider
 	chat provider.ChatResponse
@@ -43,10 +34,6 @@ func textResp(text string, outputTokens int, stopReason string) provider.ChatRes
 	}
 }
 
-// Truth wins over the heuristic: provider says max_tokens with output
-// BELOW the budget (old code would have reported end_turn from the
-// heuristic? no - old code reported max_tokens only on >=; here truth
-// reports a truncation the length heuristic could not see).
 func TestIssue1484C_TruthBeatsHeuristic(t *testing.T) {
 	p := &fakeSamplingProvider{chat: textResp("cut", 30, "max_tokens")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)
@@ -58,9 +45,6 @@ func TestIssue1484C_TruthBeatsHeuristic(t *testing.T) {
 	}
 }
 
-// The old false positive dies: natural output >= budget with provider
-// saying end_turn must report end_turn, not the old heuristic's
-// max_tokens guess.
 func TestIssue1484C_NaturalLengthNotMisreported(t *testing.T) {
 	p := &fakeSamplingProvider{chat: textResp("long natural answer", 100, "end_turn")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)
@@ -72,8 +56,6 @@ func TestIssue1484C_NaturalLengthNotMisreported(t *testing.T) {
 	}
 }
 
-// stop_sequence becomes reachable: the provider relays it and the
-// handler passes it through (MCP spec value).
 func TestIssue1484C_StopSequenceRelayed(t *testing.T) {
 	p := &fakeSamplingProvider{chat: textResp("ok", 5, "stop_sequence")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)
@@ -85,8 +67,6 @@ func TestIssue1484C_StopSequenceRelayed(t *testing.T) {
 	}
 }
 
-// Non-MCP values (e.g. refusal) fold to end_turn: the MCP spec allows
-// only end_turn / stop_sequence / max_tokens.
 func TestIssue1484C_NonMCPValueFoldsToEndTurn(t *testing.T) {
 	p := &fakeSamplingProvider{chat: textResp("no", 5, "refusal")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)
@@ -98,8 +78,6 @@ func TestIssue1484C_NonMCPValueFoldsToEndTurn(t *testing.T) {
 	}
 }
 
-// Fallback preserved: providers reporting nothing keep the pre-#1484-C
-// length heuristic (backward compatibility for silent backends).
 func TestIssue1484C_HeuristicFallbackWhenProviderSilent(t *testing.T) {
 	p := &fakeSamplingProvider{chat: textResp("cut", 100, "")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)

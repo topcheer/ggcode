@@ -62,12 +62,12 @@ func TestGlobInvalidInput(t *testing.T) {
 
 func TestGlobMissingPattern(t *testing.T) {
 	g := Glob{}
-	// Empty pattern → filepath.Glob returns error or empty result
+
 	result, err := g.Execute(context.Background(), json.RawMessage(`{"pattern":"","directory":"/tmp"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic
+
 	t.Logf("result: %s", result.Content)
 }
 
@@ -90,7 +90,7 @@ func TestGlobNonexistentDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic, may return error or no matches
+
 	t.Logf("result: %s", result.Content)
 }
 
@@ -116,7 +116,7 @@ func TestGlobRecursivePattern(t *testing.T) {
 
 func TestFilterByTrackedExactKeyNotSuffix(t *testing.T) {
 	dir := t.TempDir()
-	// Only root main.go is tracked; build/main.go and xxmain.go are NOT.
+
 	tracked := map[string]struct{}{"main.go": {}}
 	matches := []string{
 		filepath.Join(dir, "main.go"),

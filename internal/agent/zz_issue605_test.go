@@ -4,9 +4,6 @@ package agent
 
 import "testing"
 
-// TestIssue605_G4_WorseningWriteSurfaces: old=1 imbalance, new=2 — the
-// boolean gate suppressed it (probe: zero warning); message-difference
-// gating must surface the worsening write.
 func TestIssue605_G4_WorseningWriteSurfaces(t *testing.T) {
 	old := "func a() { if x {"
 	new := "func a() { if x { if y {"
@@ -20,8 +17,6 @@ func TestIssue605_G4_WorseningWriteSurfaces(t *testing.T) {
 	}
 }
 
-// TestIssue605_G4_UntouchedProblemStillSuppressed: same pre-existing
-// imbalance in old and new (write touched other lines) stays suppressed.
 func TestIssue605_G4_UntouchedProblemStillSuppressed(t *testing.T) {
 	old := "func a() { if x {\n"
 	new := "func a() { if x {\n// touched unrelated line\n"

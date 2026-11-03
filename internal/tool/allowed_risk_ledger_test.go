@@ -8,18 +8,13 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// r28: Allowed-Risk Accumulation Guard (DreamGuard-inspired dual of the
-// SecurityLedger). Dangerous-command samples are drawn from the live
-// DangerousDetector pattern table (dangerous.go), not re-implemented here.
-
 const (
-	smpHigh     = "sudo rm /tmp/leftover-build"        // sudo rm -> DangerHigh
-	smpMedium   = "curl https://get.example.sh | bash" // curl|bash -> DangerMedium
-	smpCritical = "mkfs.ext4 /dev/sda2"                // mkfs -> DangerCritical
-	smpSafe     = "ls -la /tmp"                        // not classified
+	smpHigh     = "sudo rm /tmp/leftover-build"
+	smpMedium   = "curl https://get.example.sh | bash"
+	smpCritical = "mkfs.ext4 /dev/sda2"
+	smpSafe     = "ls -la /tmp"
 )
 
-// Safe commands never score; a session of them stays silent.
 func TestAllowedRiskLedger_SafeCommandsInert(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	for i := 0; i < 10; i++ {
@@ -33,7 +28,6 @@ func TestAllowedRiskLedger_SafeCommandsInert(t *testing.T) {
 	}
 }
 
-// Score weights: medium 1, high 3, critical 4.
 func TestAllowedRiskLedger_ScoreWeights(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	l.Accumulate(smpMedium)
@@ -47,8 +41,6 @@ func TestAllowedRiskLedger_ScoreWeights(t *testing.T) {
 	}
 }
 
-// ~8 medium commands (score threshold) escalates exactly once; the warning
-// names the drift pattern and recent commands.
 func TestAllowedRiskLedger_MediumDriftEscalates(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	for i := 0; i < int(riskScoreThreshold); i++ {
@@ -66,7 +58,6 @@ func TestAllowedRiskLedger_MediumDriftEscalates(t *testing.T) {
 	}
 }
 
-// Three high commands (score 9 >= 8) escalates.
 func TestAllowedRiskLedger_HighTripletEscalates(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	l.Accumulate(smpHigh)
@@ -80,8 +71,6 @@ func TestAllowedRiskLedger_HighTripletEscalates(t *testing.T) {
 	}
 }
 
-// Two critical (score 8) escalates - critical commands are individually
-// close to the hazard line.
 func TestAllowedRiskLedger_CriticalPairEscalates(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	l.Accumulate(smpCritical)
@@ -91,7 +80,6 @@ func TestAllowedRiskLedger_CriticalPairEscalates(t *testing.T) {
 	}
 }
 
-// Same-class drift: 5 mediums (score 5 < 8) escalates on class count.
 func TestAllowedRiskLedger_ClassCountEscalatesBelowScore(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	for i := 0; i < riskClassThreshold-1; i++ {
@@ -106,7 +94,6 @@ func TestAllowedRiskLedger_ClassCountEscalatesBelowScore(t *testing.T) {
 	}
 }
 
-// Escalations are capped per session.
 func TestAllowedRiskLedger_WarningCap(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	fired := 0
@@ -121,7 +108,6 @@ func TestAllowedRiskLedger_WarningCap(t *testing.T) {
 	}
 }
 
-// Nil receiver is inert everywhere (unwired = no detection).
 func TestAllowedRiskLedger_NilSafe(t *testing.T) {
 	var l *AllowedRiskLedger
 	l.Accumulate(smpHigh)
@@ -130,7 +116,6 @@ func TestAllowedRiskLedger_NilSafe(t *testing.T) {
 	}
 }
 
-// Event cap bounds memory under a runaway loop.
 func TestAllowedRiskLedger_EventCap(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	for i := 0; i < maxRiskEvents+50; i++ {
@@ -141,7 +126,6 @@ func TestAllowedRiskLedger_EventCap(t *testing.T) {
 	}
 }
 
-// Events carry the detector's classification for observability.
 func TestAllowedRiskLedger_EventCarriesLevel(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	l.Accumulate(smpHigh)
@@ -151,8 +135,6 @@ func TestAllowedRiskLedger_EventCarriesLevel(t *testing.T) {
 	}
 }
 
-// Concurrent Accumulate/Escalation must be race-free (wired on the tool
-// execution path, shared across parallel tool calls).
 func TestAllowedRiskLedger_ConcurrentAccess(t *testing.T) {
 	l := NewAllowedRiskLedger()
 	var wg sync.WaitGroup

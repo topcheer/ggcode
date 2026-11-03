@@ -1,17 +1,5 @@
 package agent
 
-// Regression tests for GitHub issues #1135, #1136 and #1137 on the N+1
-// I/O-in-loop detector (nplus1_loop_check.go).
-//
-//   - #1135: generic method suffixes (.Get/.Save/.Delete/.Do/.Find/...) must
-//     require a storage/HTTP receiver signal; pure in-memory receivers such
-//     as cache or registry must not be flagged. Precise SQL/HTTP names
-//     (Query/QueryRow/Exec/...) stay receiver-independent.
-//   - #1136: delta keys are position-independent (function name plus
-//     normalized call text); token.Pos is display-only, matching the #1128
-//     fix pattern in nil_deref_check.go.
-//   - #1137: nested loops must report each I/O call site exactly once.
-
 import (
 	"go/parser"
 	"go/token"
@@ -38,8 +26,6 @@ const issue1135SrcTail = `
 }
 `
 
-// TestIssue1135_MemoryCacheGetNotFlagged verifies that pure in-memory
-// cache.Get / m.Delete calls are no longer treated as database I/O (#1135).
 func TestIssue1135_MemoryCacheGetNotFlagged(t *testing.T) {
 	src := `package main
 
@@ -59,8 +45,6 @@ func work(cache *Cache, m *KVStore) []byte {
 	}
 }
 
-// TestIssue1135_RegistryFindAndGroupDoNotFlagged covers registry.Find and
-// errgroup-style group.Do - neither carries a storage/HTTP receiver signal.
 func TestIssue1135_RegistryFindAndGroupDoNotFlagged(t *testing.T) {
 	src := `package main
 
@@ -83,8 +67,6 @@ func lookup(registry *Registry, group *Group, ids []string) error {
 	}
 }
 
-// TestIssue1135_DBReceiverFindStillFlagged verifies real database Find calls
-// on storage-flavored receivers still trigger the detector (#1135).
 func TestIssue1135_DBReceiverFindStillFlagged(t *testing.T) {
 	src := `package main
 
@@ -106,8 +88,6 @@ func loadUsers(userDB *DB, ids []int) []*User {
 	}
 }
 
-// TestIssue1135_RedisHGetWithSignalFlagged - rdb.HGet keeps firing because
-// the rdb receiver carries a "db" signal (#1135).
 func TestIssue1135_RedisHGetWithSignalFlagged(t *testing.T) {
 	src := `package main
 
@@ -123,8 +103,6 @@ func loadFields(rdb *redis.Client, ids []int) {
 	}
 }
 
-// TestIssue1135_HttpClientDoWithSignalFlagged - httpClient.Do keeps firing
-// because the receiver name contains an http signal (#1135).
 func TestIssue1135_HttpClientDoWithSignalFlagged(t *testing.T) {
 	src := `package main
 
@@ -144,8 +122,6 @@ func pingAll(httpClient *http.Client, urls []string) {
 	}
 }
 
-// TestIssue1135_GenericMethodWithoutSignalSilenced confirms a generic .Get on
-// an unsignaled receiver stays silent while precise QueryRow stays broad.
 func TestIssue1135_GenericVsPreciseReceivers(t *testing.T) {
 	generic := issue1135SrcBase + "\t\t_ = opts.Get(\"mode\")\n" + issue1135SrcTail
 	warnings := checkNPlus1Loop("main.go", "", generic)
@@ -160,9 +136,6 @@ func TestIssue1135_GenericVsPreciseReceivers(t *testing.T) {
 	}
 }
 
-// TestIssue1136_InsertionAboveTargetNoReWarn reproduces the #1136 complaint:
-// inserting code above the flagged function used to shift token.Pos offsets,
-// making new delta keys diverge from old ones and re-warn identical calls.
 func TestIssue1136_InsertionAboveTargetNoReWarn(t *testing.T) {
 	oldSrc := `package main
 
@@ -175,7 +148,7 @@ func fetch(db *DB, ids []int) []int {
 	return res
 }
 `
-	// Same target function, with an unrelated helper inserted above it.
+
 	newSrc := `package main
 
 func padHelper(n int) int {
@@ -200,8 +173,6 @@ func fetch(db *DB, ids []int) []int {
 	}
 }
 
-// TestIssue1136_CommentInsideLoopNoReWarn verifies key stability when only a
-// comment line is added near the I/O call inside the loop body.
 func TestIssue1136_CommentInsideLoopNoReWarn(t *testing.T) {
 	oldSrc := `package main
 
@@ -232,9 +203,6 @@ func fetch(db *DB, ids []int) []int {
 	}
 }
 
-// TestIssue1136_DeltaKeyPositionIndependent asserts at unit level that two
-// parses of an identical call produce equal position-independent keys while
-// their display positions legitimately differ.
 func TestIssue1136_DeltaKeyPositionIndependent(t *testing.T) {
 	srcA := `package main
 
@@ -278,9 +246,6 @@ func f(db *DB, xs []int) {
 	}
 }
 
-// TestIssue1136_SecondIdenticalCallReportsOnce verifies count-based deltas:
-// adding one more identical call inside an already-flagged loop produces
-// exactly one new warning, not duplicates.
 func TestIssue1136_SecondIdenticalCallReportsOnce(t *testing.T) {
 	oldSrc := `package main
 
@@ -314,9 +279,6 @@ func fetch(db *DB, ids []int) []int {
 	}
 }
 
-// TestIssue1137_NestedLoopSingleCount verifies a single I/O call nested in a
-// doubly-nested loop is counted exactly once (#1137); the previous two-pass
-// implementation produced duplicate patterns that consumed the quota.
 func TestIssue1137_NestedLoopSingleCount(t *testing.T) {
 	newSrc := `package main
 
@@ -345,8 +307,6 @@ func matrixScan(db *DB, n int) {
 	}
 }
 
-// TestIssue1137_TripleNestingSingleCount extends the single-count guarantee
-// to three levels of loop nesting.
 func TestIssue1137_TripleNestingSingleCount(t *testing.T) {
 	newSrc := `package main
 
@@ -376,8 +336,6 @@ func cubeScan(db *DB, n int) {
 	}
 }
 
-// TestIssue1137_TwoDistinctCallsTwoWarnings guards against over-dedup: two
-// different I/O calls in the same nested structure remain two findings.
 func TestIssue1137_TwoDistinctCallsTwoWarnings(t *testing.T) {
 	newSrc := `package main
 

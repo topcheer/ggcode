@@ -34,7 +34,7 @@ func TestOscillationReset(t *testing.T) {
 
 func TestOscillationNoReversal(t *testing.T) {
 	o := newOscillationState()
-	// Edit file once - no reversal possible
+
 	o.addSignature("foo.go", "oldA", "newA", 1)
 	if msg := o.check(); msg != "" {
 		t.Fatalf("expected no warning with single edit, got: %s", msg)
@@ -43,14 +43,10 @@ func TestOscillationNoReversal(t *testing.T) {
 
 func TestOscillationSimpleProgression(t *testing.T) {
 	o := newOscillationState()
-	// Two different edits to the same file, both progressing forward
+
 	o.addSignature("foo.go", "oldA", "newA", 1)
 	o.addSignature("foo.go", "newA", "newB", 2)
-	// newA appears as new_text then as old_text - that's a normal progression,
-	// not a reversal, because the reversal detector counts when new_text matches
-	// a PRIOR old_text (re-adding something removed) or old_text matches a PRIOR
-	// new_text (removing something added). Here newA was new_text, then became
-	// old_text. That IS counted as 1 reversal. But threshold is 2, so no warning.
+
 	if msg := o.check(); msg != "" {
 		t.Fatalf("expected no warning below threshold, got: %s", msg)
 	}
@@ -58,11 +54,11 @@ func TestOscillationSimpleProgression(t *testing.T) {
 
 func TestOscillationDetectsBackAndForth(t *testing.T) {
 	o := newOscillationState()
-	// Edit 1: change A -> B
+
 	o.addSignature("foo.go", "contentA", "contentB", 1)
-	// Edit 2: change B -> A (revert)
+
 	o.addSignature("foo.go", "contentB", "contentA", 2)
-	// Edit 3: change A -> B again (re-apply)
+
 	o.addSignature("foo.go", "contentA", "contentB", 3)
 
 	msg := o.check()
@@ -109,11 +105,11 @@ func TestOscillationIdenticalOldNewSkipped(t *testing.T) {
 
 func TestOscillationMultipleFiles(t *testing.T) {
 	o := newOscillationState()
-	// File 1: oscillating
+
 	o.addSignature("a.go", "A", "B", 1)
 	o.addSignature("a.go", "B", "A", 2)
 	o.addSignature("a.go", "A", "B", 3)
-	// File 2: not oscillating
+
 	o.addSignature("b.go", "X", "Y", 1)
 
 	msg := o.check()
@@ -149,26 +145,19 @@ func TestOscillationRecordEditMultiEdit(t *testing.T) {
 
 func TestOscillationMaxTracked(t *testing.T) {
 	o := newOscillationState()
-	// Fill up to max tracked
+
 	for i := 0; i < oscillationMaxTracked; i++ {
 		o.addSignature("file"+string(rune('a'+i))+".go", "old", "new", 1)
 	}
-	// Try to add a new file beyond capacity
+
 	o.addSignature("overflow.go", "old", "new", 1)
 	if _, exists := o.signatures["overflow.go"]; exists {
 		t.Fatal("should not track new files beyond max")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Issue #308 regression tests: false positives from empty-side signatures and
-// from count-only (direction-unaware) reversal detection.
-// ---------------------------------------------------------------------------
-
 func TestOscillationRepeatedDeletionsNoFalsePositive(t *testing.T) {
-	// Four normal line deletions: each is a pure deletion (new_text empty).
-	// Previously all deletions shared the hash("") signature, so 4 deletions
-	// counted as reversals=2 and fired a false warning (issue #308 defect A).
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "line1\n", "", 1)
 	o.addSignature("foo.go", "line2\n", "", 2)
@@ -177,8 +166,7 @@ func TestOscillationRepeatedDeletionsNoFalsePositive(t *testing.T) {
 	if msg := o.check(); msg != "" {
 		t.Fatalf("expected no warning for 4 normal deletions, got: %s", msg)
 	}
-	// Each deletion records only its non-empty old_text signature (the empty
-	// new_text side is skipped — it used to record the shared hash("") sig).
+
 	if len(o.signatures["foo.go"]) != 4 {
 		t.Fatalf("expected 4 old-side signatures for pure deletions, got %d", len(o.signatures["foo.go"]))
 	}
@@ -190,7 +178,7 @@ func TestOscillationRepeatedDeletionsNoFalsePositive(t *testing.T) {
 }
 
 func TestOscillationRepeatedInsertionsNoFalsePositive(t *testing.T) {
-	// Four normal insertions: each is a pure insertion (old_text empty).
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "", "line1\n", 1)
 	o.addSignature("foo.go", "", "line2\n", 2)
@@ -210,9 +198,7 @@ func TestOscillationRepeatedInsertionsNoFalsePositive(t *testing.T) {
 }
 
 func TestOscillationBatchReplaceRepeatedNoFalsePositive(t *testing.T) {
-	// Fixing a repeated pattern with identical arguments three times (e.g.
-	// renaming a symbol in multiple spots with the same old->new pair) is
-	// forward progress, not oscillation (issue #308 defect B).
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "oldName", "newName", 1)
 	o.addSignature("foo.go", "oldName", "newName", 2)
@@ -223,8 +209,7 @@ func TestOscillationBatchReplaceRepeatedNoFalsePositive(t *testing.T) {
 }
 
 func TestOscillationChainedProgressionNoFalsePositive(t *testing.T) {
-	// Progressive chained edits A->B->C->D: each edit's old_text is the prior
-	// edit's new_text. This is forward progress, not a reversal.
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "A", "B", 1)
 	o.addSignature("foo.go", "B", "C", 2)
@@ -236,8 +221,7 @@ func TestOscillationChainedProgressionNoFalsePositive(t *testing.T) {
 }
 
 func TestOscillationTrueBackAndForthStillDetected(t *testing.T) {
-	// True A->B->A->B oscillation must still fire: the agent re-adds content
-	// it previously removed as old_text (direction-aware reversal detection).
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "contentA", "contentB", 1)
 	o.addSignature("foo.go", "contentB", "contentA", 2)
@@ -248,8 +232,7 @@ func TestOscillationTrueBackAndForthStillDetected(t *testing.T) {
 }
 
 func TestOscillationRevertThenRestoreStillDetected(t *testing.T) {
-	// A->B then revert to A twice (agent undoes, redoes its own undo) is
-	// oscillation even with only two distinct contents.
+
 	o := newOscillationState()
 	o.addSignature("foo.go", "A", "B", 1)
 	o.addSignature("foo.go", "B", "A", 2)

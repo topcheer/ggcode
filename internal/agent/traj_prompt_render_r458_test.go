@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// r458: learning store consumption probes (render for prompt injection).
-
 func writeLearnings(t *testing.T, dir string, ls []trajectoryLearning) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {
@@ -33,7 +31,7 @@ func mkLearning(ts time.Time, typ, cat, insight string) trajectoryLearning {
 func TestRenderPromptSection_EmptyAndAbsent(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	s := newTrajIntelState()
 	if got := s.RenderPromptSection(dir); got != "" {
@@ -49,7 +47,7 @@ func TestRenderPromptSection_EmptyAndAbsent(t *testing.T) {
 func TestRenderPromptSection_RendersAndDedupes(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	base := time.Now().Add(-time.Hour)
 	writeLearnings(t, dir, []trajectoryLearning{
@@ -76,7 +74,7 @@ func TestRenderPromptSection_RendersAndDedupes(t *testing.T) {
 func TestRenderPromptSection_Budgets(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	base := time.Now()
 	var ls []trajectoryLearning
@@ -100,7 +98,7 @@ func TestRenderPromptSection_Budgets(t *testing.T) {
 func TestRenderPromptSection_TeammateEntriesIncluded(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	base := time.Now().Add(-time.Hour)
 	writeLearnings(t, dir, []trajectoryLearning{

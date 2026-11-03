@@ -8,19 +8,16 @@ import (
 func TestSerialRead_BasicStreak(t *testing.T) {
 	s := newSerialReadState()
 
-	// Turn 1: single read
 	s.recordToolCall("read_file")
 	if w := s.endTurn(1); w != "" {
 		t.Fatalf("should not fire on turn 1, got: %s", w)
 	}
 
-	// Turn 2: single read
 	s.recordToolCall("grep")
 	if w := s.endTurn(2); w != "" {
 		t.Fatalf("should not fire on turn 2, got: %s", w)
 	}
 
-	// Turn 3: single read → should fire
 	s.recordToolCall("git_log")
 	w := s.endTurn(3)
 	if w == "" {
@@ -40,14 +37,12 @@ func TestSerialRead_ResetByMutation(t *testing.T) {
 	s.recordToolCall("grep")
 	s.endTurn(2)
 
-	// Turn 3 has a mutation → streak resets
 	s.recordToolCall("edit_file")
 	s.recordToolCall("read_file")
 	if w := s.endTurn(3); w != "" {
 		t.Fatalf("should not fire when turn has mutation, got: %s", w)
 	}
 
-	// Turn 4: single read → streak should be back to 1
 	s.recordToolCall("read_file")
 	if w := s.endTurn(4); w != "" {
 		t.Fatalf("should not fire right after reset, got: %s", w)
@@ -63,14 +58,12 @@ func TestSerialRead_ResetByMultipleReads(t *testing.T) {
 	s.recordToolCall("grep")
 	s.endTurn(2)
 
-	// Turn 3 has 2 reads → not a single-read turn, streak resets
 	s.recordToolCall("read_file")
 	s.recordToolCall("grep")
 	if w := s.endTurn(3); w != "" {
 		t.Fatalf("should not fire on multi-read turn, got: %s", w)
 	}
 
-	// Streak should be 0 now
 	s.recordToolCall("read_file")
 	if w := s.endTurn(4); w != "" {
 		t.Fatalf("should be streak=1 after reset, got: %s", w)
@@ -96,24 +89,19 @@ func TestSerialRead_FiresOncePerRun(t *testing.T) {
 func TestSerialRead_Reset(t *testing.T) {
 	s := newSerialReadState()
 
-	// Build up streak
 	for i := 1; i <= 2; i++ {
 		s.recordToolCall("read_file")
 		s.endTurn(i)
 	}
 
-	// Leave an in-progress LSP turn so lspStreak/currentTurnTool are non-zero.
 	s.recordToolCall("lsp_hover")
 
 	s.reset()
 
-	// Reset must clear all per-run state, including the LSP streak and the
-	// in-progress turn label, so a new run cannot inherit stale labels.
 	if s.lspStreak != 0 || s.currentTurnTool != "" {
 		t.Fatalf("reset should clear lspStreak and currentTurnTool, got lspStreak=%d currentTurnTool=%q", s.lspStreak, s.currentTurnTool)
 	}
 
-	// After reset, 2 single reads should not fire (need 3)
 	for i := 1; i <= 2; i++ {
 		s.recordToolCall("read_file")
 		if w := s.endTurn(i); w != "" {
@@ -131,7 +119,6 @@ func TestSerialRead_NonReadToolBreaksStreak(t *testing.T) {
 	s.recordToolCall("grep")
 	s.endTurn(2)
 
-	// run_command is NOT a read-only tool
 	s.recordToolCall("run_command")
 	if w := s.endTurn(3); w != "" {
 		t.Fatalf("run_command should break streak, got: %s", w)

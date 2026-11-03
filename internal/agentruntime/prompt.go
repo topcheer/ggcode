@@ -48,8 +48,6 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			customCmdNames = append(customCmdNames, name)
 		}
 	}
-	// Include available models from the active endpoint so the LLM can choose
-	// appropriate models for sub-agents via spawn_agent's 'model' parameter.
 	var availableModels []string
 	if cfg != nil {
 		if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
@@ -59,16 +57,11 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
-	// NOTE: shared-workspace alert is NOT statically appended for the main
-	// agent — the daemon registers it via Agent.SetSystemPromptInjector so it
-	// is re-evaluated every iteration (restart/resume + late presence). The
-	// sub-agent builder below keeps the static form (sub-agents are one-shot).
+
 	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
 		prompt += "\n\n" + styleGuidance
 	}
-	// I/O-heavy sections are pre-computed by a background collector.
-	// If the collector isn't initialized (pipe mode, tests), fall back to
-	// direct computation.
+
 	if snap, ok := GlobalSectionSnapshot(); ok {
 		prompt += snap.Overview
 		prompt += snap.Modified
@@ -96,7 +89,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			prompt += "\n\n## Skills\n" + skillsPrompt
 		}
 	}
-	if mode.IsCruiseMode() { // two-mode refactor: cruise rides on bypass
+	if mode.IsCruiseMode() {
 		prompt += "\n\n## Autopilot\n" +
 			"You are in bypass (cruise) mode — work autonomously until the Goal is fully achieved.\n" +
 			"\n" +
@@ -122,10 +115,9 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	if strings.TrimSpace(remoteAgentsInfo) != "" {
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
 	}
-	// Main interactive prompt: no single task yet, gate stays off.
+
 	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "")
 
-	// Named subagent templates
 	namedAgentInfo := buildNamedAgentHint(workingDir)
 	if namedAgentInfo != "" {
 		prompt += "\n\n" + namedAgentInfo
@@ -134,8 +126,6 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	return prompt, promptSkillRefs
 }
 
-// buildNamedAgentHint reads named subagent templates from disk and returns
-// a prompt section listing them. Returns empty string if none exist.
 func buildNamedAgentHint(workingDir string) string {
 	store := subagent.NewTemplateStore(workingDir)
 	templates, err := store.List()
@@ -157,30 +147,20 @@ func buildNamedAgentHint(workingDir string) string {
 	return sb.String()
 }
 
-// SubAgentPromptContext holds the context needed to build a sub-agent or teammate
-// system prompt. It is captured once at setup time and reused for every spawn.
 type SubAgentPromptContext struct {
 	Cfg              *config.Config
 	WorkingDir       string
 	Registry         *tool.Registry
-	CommandMgr       *commands.Manager // used for skills only; slash commands are excluded
+	CommandMgr       *commands.Manager
 	GlobalAutoMem    *memory.AutoMemory
 	ProjectAutoMem   *memory.AutoMemory
-	GitStatus        func() string // lazy, called at prompt-build time
-	RemoteAgentsInfo func() string // lazy, called at prompt-build time
+	GitStatus        func() string
+	RemoteAgentsInfo func() string
 }
 
-// BuildSubAgentSystemPrompt builds a system prompt for a sub-agent that mirrors
-// the main agent's prompt (tools, environment, memory, LSP guidance, skills,
-// remote agents, git status) but with these differences:
-//   - No custom slash commands list
-//   - No autopilot section (permission mode is always bypass)
-//   - No ask_user tool (sub-agents cannot interact with the user)
-//   - Cannot spawn further sub-agents
 func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string) string {
 	prompt := buildSharedAgentPrompt(ctx, task)
 
-	// Append sub-agent specific constraints
 	roleLine := "You are running as a sub-agent."
 	if agentType != "" {
 		roleLine = fmt.Sprintf("You are running as a %s sub-agent.", agentType)
@@ -193,10 +173,6 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 	prompt += "- Provide a concise result when the task is complete.\n"
 	prompt += "- Do not use emoji with Variation Selector-16 (VS16, U+FE0F) in your output.\n"
 
-	// r388 (FastContext, Kim et al. 2026): exploration output must be a
-	// structured region list, not free-form notes - the parent consumes the
-	// selected regions directly as targeted reads instead of re-scanning
-	// prose for paths (+5.5 SWE-Bench, 60% fewer tokens in the paper).
 	if strings.EqualFold(agentType, "Explore") {
 		prompt += "\n## Output Contract (Explore)\n"
 		prompt += "End your result with a `## Regions` section listing every code region that matters for this task, one per line, in this exact format:\n"
@@ -204,20 +180,15 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 		prompt += "Use workspace-relative paths with real line ranges (from your reads). These lines are parsed so the parent agent can issue targeted reads; free text alone is not enough.\n"
 	}
 
-	// Append the task
 	prompt += "\n\n## Task\nComplete the following task independently:\n" + task
 
 	return prompt
 }
 
-// BuildTeammateSystemPrompt builds a system prompt for a swarm teammate that
-// mirrors the main agent's prompt but with teammate-specific constraints.
 func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string) string {
-	// Teammates work inbox/board tasks, not one fixed task string - keep
-	// the memory gate off so standing workspace rules stay inline.
+
 	prompt := buildSharedAgentPrompt(ctx, "")
 
-	// Append teammate-specific constraints
 	prompt += "\n\n## Teammate Constraints\n"
 	prompt += fmt.Sprintf("You are a teammate named %q in team %q.\n", name, teamName)
 	prompt += "Work like a professional collaborative team member.\n"
@@ -238,17 +209,10 @@ func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string)
 	return prompt
 }
 
-// buildSharedAgentPrompt assembles the common portion of the system prompt
-// (DefaultSystemPrompt, tools, git status, memory, skills, remote agents)
-// shared between sub-agents and teammates. It does NOT include autopilot,
-// slash commands, or any role-specific constraints. task, when non-empty,
-// feeds the sa-113 memory relevance gate (unrelated persistent memories
-// stay index-only instead of being inlined).
 func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
-	// 1. Gather sorted tool names from the registry
+
 	toolNames := sortedToolNames(ctx.Registry)
 
-	// 2. Build base prompt (same as main agent but with NO custom slash commands)
 	workingDir := ctx.WorkingDir
 	gitStatus := ""
 	if ctx.GitStatus != nil {
@@ -259,7 +223,6 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		extraPrompt = ctx.Cfg.ExtraPrompt
 		language = ctx.Cfg.Language
 	}
-	// Include available models from the active endpoint for sub-agent prompt.
 	var availableModels []string
 	if ctx.Cfg != nil {
 		if vc, ok := ctx.Cfg.Vendors[ctx.Cfg.Vendor]; ok {
@@ -277,7 +240,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 			prompt += "\n\n" + styleGuidance
 		}
 	}
-	// Sub-agent prompts also use the background collector when available.
+
 	if snap, ok := GlobalSectionSnapshot(); ok {
 		prompt += snap.Overview
 		prompt += snap.Modified
@@ -293,15 +256,12 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
-		// #1493: f9231dde added multi-language symbol sections to the main
-		// fallback only; this sub-agent fallback kept 7 sections and lost
-		// TS/Python symbol awareness on collector-uninitialized paths.
+
 		prompt += buildTSSymbolsSection(workingDir)
 		prompt += buildPythonSymbolsSection(workingDir)
 		prompt += buildPackageDepsSection(workingDir)
 	}
 
-	// 3. Add skills (same as main agent)
 	if ctx.CommandMgr != nil {
 		skillsPrompt, _ := BuildSkillsSystemPromptWithPromptRefs(ctx.CommandMgr.List())
 		if skillsPrompt != "" {
@@ -309,23 +269,17 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		}
 	}
 
-	// 4. Add remote agents info (same as main agent)
 	if ctx.RemoteAgentsInfo != nil {
 		if remoteInfo := strings.TrimSpace(ctx.RemoteAgentsInfo()); remoteInfo != "" {
 			prompt += "\n\n## Remote Agents\n" + remoteInfo
 		}
 	}
 
-	// 5. Add auto memory (same as main agent; sub-agents pass their task so
-	// the sa-113 relevance gate can drop unrelated persistent memories to
-	// index-only - a focused sub-agent should not carry every standing rule).
 	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task)
 
 	return prompt
 }
 
-// sortedToolNames returns a sorted slice of tool names from the registry.
-// Sorting ensures deterministic system prompt output across runs.
 func sortedToolNames(registry *tool.Registry) []string {
 	if registry == nil {
 		return make([]string, 0)
@@ -339,30 +293,14 @@ func sortedToolNames(registry *tool.Registry) []string {
 	return names
 }
 
-// memSource groups curated memory entries from one scope (Global or Project).
 type memSource struct {
 	name      string
 	inline    []memory.MemoryEntry
 	indexOnly []string
 }
 
-// appendAutoMemory adds auto-memory content to the prompt. Persistent
-// memories (architecture decisions, build processes, design docs) are inlined
-// directly so the agent has immediate access to cross-session knowledge
-// without needing to read_file. Other memories are listed as a title-only
-// index the agent can selectively read when relevant.
-//
-// This implements the "hill climbing" loop: every session's learnings
-// compound into automatically available context for future sessions.
-//
-// task (sa-113): when non-empty, persistent entries lexically unrelated
-// to it degrade from inline to index-only.
 func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task string) string {
-	// r438 memory repair loop (after TEPA arXiv:2604.07429-style pollution
-	// revocation, human-in-the-loop variant): surface unresolved sleep-time
-	// consolidation findings so the agent can supersede/rewrite the stale or
-	// contradictory entries explicitly. Independent of curated content - even
-	// an otherwise empty store may need repairs.
+
 	repair := memoryRepairBlock(globalAutoMem, projectAutoMem)
 	if repair != "" {
 		prompt += "\n\n## Memory Repair\n" + repair
@@ -390,8 +328,6 @@ func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoM
 	return strings.TrimSpace(prompt)
 }
 
-// memoryRepairBlock merges repair suggestions from both scopes (global
-// first, then project; each block is already capped and self-describing).
 func memoryRepairBlock(globalAutoMem, projectAutoMem *memory.AutoMemory) string {
 	var parts []string
 	for _, am := range []*memory.AutoMemory{globalAutoMem, projectAutoMem} {
@@ -405,8 +341,6 @@ func memoryRepairBlock(globalAutoMem, projectAutoMem *memory.AutoMemory) string 
 	return strings.Join(parts, "\n")
 }
 
-// collectMemSources loads curated entries from both global and project memory,
-// returning only non-empty sources.
 func collectMemSources(globalAutoMem, projectAutoMem *memory.AutoMemory, task string) []memSource {
 	var sources []memSource
 	add := func(name string, am *memory.AutoMemory) {
@@ -431,19 +365,10 @@ func collectMemSources(globalAutoMem, projectAutoMem *memory.AutoMemory, task st
 	return sources
 }
 
-// memSourceTag is the trust-boundary marker wrapping auto-memory bodies
-// injected into the system prompt (r483, contextual authorization for the
-// memory channel). Mirrors <skill-source> (r482): machine-aggregated
-// third-party-derived data is presented as reference data, not standing
-// instructions.
 const memSourceTag = "memory-source"
 
 var memSourceCloseRe = regexp.MustCompile(`(?i)<\s*/\s*memory-source\s*>`)
 
-// wrapMemSource wraps an auto-memory body in a <memory-source> trust
-// boundary; forged closing tags (any case/whitespace variant) are
-// neutralized so the region cannot be terminated early (same escaping
-// discipline as wrapSkillSource / untrusted_tool_output.go).
 func wrapMemSource(name, body string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -452,14 +377,6 @@ func wrapMemSource(name, body string) string {
 	return fmt.Sprintf("<%s name=%q>\n%s\n</%s>", memSourceTag, name, memSourceCloseRe.ReplaceAllString(body, "<\u200b/memory-source>"), memSourceTag)
 }
 
-// renderInlineMemories produces the inlined persistent-memory section.
-// Returns empty string if no inline entries exist.
-//
-// Header is deliberately neutral (reference data, not instructions):
-// auto-memory entries are machine-aggregated and may carry text copied
-// from untrusted sources (web pages, tool output) in prior sessions, so
-// the section must not assert relevance or suppress verification
-// (r483; previously "Apply it to your work without re-reading").
 func renderInlineMemories(sources []memSource) string {
 	var sb strings.Builder
 	wroteHeader := false
@@ -479,8 +396,6 @@ func renderInlineMemories(sources []memSource) string {
 	return sb.String()
 }
 
-// renderIndexMemories produces the title-only index section for transient,
-// evolving, and oversized memories. Returns empty string if none exist.
 func renderIndexMemories(sources []memSource) string {
 	var sb strings.Builder
 	wroteHeader := false

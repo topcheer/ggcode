@@ -44,8 +44,7 @@ type User struct {
 	Password string
 }
 `
-	// #1492-A: an untagged exported sensitive field IS serialized under its
-	// field name - the old expectation of 0 warnings was the blind spot.
+
 	warnings := checkSensitiveJSONExposure("test.go", "", src)
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning for untagged sensitive field, got %d: %v", len(warnings), warnings)
@@ -132,8 +131,7 @@ type Account struct {
 }
 
 func TestCheckSensitiveJSONExposure_SensitiveGoNameButSafeJSONName(t *testing.T) {
-	// If the Go field name is "PasswordHash" but json tag is "hash",
-	// the Go field name is still sensitive.
+
 	src := `package main
 
 type User struct {
@@ -181,20 +179,14 @@ type Foo struct {
 	}
 }
 
-// contains and containsStr already defined in reflection_test.go
-
-// TestSensitiveJSON_EmbeddedFieldNoPanic pins fix #173: an embedded field
-// with a sensitive json tag must not panic (recover would kill ALL warnings).
 func TestSensitiveJSON_EmbeddedFieldNoPanic(t *testing.T) {
 	src := "package main\ntype Auth struct{}\ntype User struct {\n\tID int\n\tAuth `json:\"token\"`\n\tPassword string `json:\"password\"`\n}\n"
-	w := checkSensitiveJSONExposure("a.go", "", src) // must not panic
+	w := checkSensitiveJSONExposure("a.go", "", src)
 	if len(w) == 0 {
 		t.Fatal("Password field warning must survive the embedded tagged field")
 	}
 }
 
-// TestSensitiveJSON_DeltaSuppress pins fix #173: pre-existing sensitive
-// fields must not be re-reported on unrelated edits.
 func TestSensitiveJSON_DeltaSuppress(t *testing.T) {
 	old := "package main\ntype User struct {\n\tPassword string `json:\"password\"`\n}\n"
 	newC := "package main\n// comment\n\ntype User struct {\n\tPassword string `json:\"password\"`\n}\n"

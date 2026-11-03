@@ -9,61 +9,15 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Unread-file edit guard + stale-read detection.
-//
-// Research basis: Claude Code and Cursor both enforce "read-before-edit"
-// semantics. When an agent edits a file it hasn't read in the current
-// session, it is operating on assumed content — a leading cause of failed
-// edits and broken code. Aider similarly warns when editing files not in
-// its chat context.
-//
-// This guard tracks files read via read_file/multi_file_read during the
-// current run. When an edit tool targets a file that was never read (or
-// was read so long ago it was likely compacted away), it injects a concise
-// hint to re-read before editing.
-//
-// Stale-read detection (external modification awareness):
-// Beyond tracking whether a file was read, we also capture the file's mtime
-// at read time. When the agent later edits the file, we check whether the
-// file has changed on disk since the last read. This catches the common
-// multi-agent and concurrent-editing failure mode where:
-//   - The user edits a file in their IDE while the agent is working
-//   - Another agent (via lanchat/a2a) modifies a shared file
-//   - A git pull or format-on-save changes the file between read and edit
-// In these cases, the agent's old_text anchor is based on stale content,
-// and the edit may silently clobber the external changes or fail entirely.
-//
-// Design:
-//   - Tracks normalized file paths in a set, reset each run.
-//   - Fires at most once per file per run (avoids nagging).
-//   - Only checks edit_file and multi_edit_file (NOT write_file — creating
-//     new files doesn't require prior reads).
-//   - multi_file_edit: checks each file in the batch.
-//   - Skips files created by write_file earlier in the run (agent knows
-//     their content from creating them).
-//   - Stale-read check uses os.Stat (non-blocking, <1ms).
-
-// unreadEditState tracks which files have been read during the current run.
 type unreadEditState struct {
-	// filesRead stores normalized paths of files the agent has read.
 	filesRead map[string]bool
 
-	// filesCreated stores normalized paths of files the agent created
-	// via write_file during this run. These don't need prior reads.
 	filesCreated map[string]bool
 
-	// warnedFiles tracks files for which the unread-edit hint has fired.
-	// Prevents duplicate warnings for the same file within a run.
 	warnedFiles map[string]bool
 
-	// readMtime stores the file modification time captured at read time.
-	// Used for stale-read detection: if the file's mtime has changed since
-	// the last read, the agent's edit may be based on stale content.
 	readMtime map[string]time.Time
 
-	// baseDir anchors relative paths to the workspace root (#1559-C):
-	// "a.go" (read) and "/repo/a.go" (edit) must key the same map entry.
-	// Empty until SetWorkingDir wires it - Clean-only until then.
 	baseDir string
 }
 
@@ -83,39 +37,20 @@ func (s *unreadEditState) reset() {
 	s.readMtime = make(map[string]time.Time)
 }
 
-// normalizePath converts a file path to a consistent form for comparison.
-// Trimmed and cleaned of trailing slashes - sufficient for dedup when the
-// caller feeds one path form. See unreadEditState.normalize for the
-// workspace-anchored variant the guard states use (#1559-C: the old
-// comment claimed "Lowercased" and no lowercasing ever existed).
 func normalizePath(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.TrimRight(p, "/")
 	return p
 }
 
-// normalize anchors the path to the workspace root before keying: a
-// relative read ("internal/agent/foo.go") and an absolute edit
-// ("/repo/internal/agent/foo.go") previously landed on two map keys, so
-// recordEdit never found the prior read (missed stale-read reports) and
-// uniqueTargets double-counted. Mirrors normalizeCompanionPath semantics.
 func (s *unreadEditState) normalize(path string) string {
 	return normalizeCompanionPath(s.baseDir, strings.TrimSpace(path))
 }
 
-// recordRead marks a file as read. Called after successful read_file/multi_file_read.
-// Also captures the file's modification time for stale-read detection.
 func (s *unreadEditState) recordRead(path string) {
 	s.recordReadWindow(path, false)
 }
 
-// recordReadWindow records a read; when windowed (read_file with
-// offset/limit), the file is NOT marked fully read (#1782 case 3:
-// `read_file {offset:2000, limit:50}` used to set filesRead=true and a
-// follow-up edit_file outside the window passed the unread guard
-// silently). A windowed read still refreshes the staleness baseline and
-// mtime - the agent did look at the file, so the stale/mtime sentinels
-// keep their semantics; only the fully-read flag is withheld.
 func (s *unreadEditState) recordReadWindow(path string, windowed bool) {
 	if path == "" {
 		return
@@ -124,23 +59,14 @@ func (s *unreadEditState) recordReadWindow(path string, windowed bool) {
 	if !windowed {
 		s.filesRead[n] = true
 	}
-	// Re-reading the file refreshes the staleness baseline: any future
-	// external modification after this read must be able to re-warn, so
-	// clear the stale warning key (fix #162 — the key was never cleared,
-	// making the stale warning once-per-run regardless of later changes).
+
 	delete(s.warnedFiles, n+"\x00stale")
-	// Capture mtime for stale-read detection. If the stat fails (e.g., file
-	// was deleted between read and this call), skip — the edit guard will
-	// catch it via the unread check or the tool itself will error.
+
 	if info, err := os.Stat(path); err == nil {
 		s.readMtime[n] = info.ModTime()
 	}
 }
 
-// recordWrite refreshes the staleness baseline after the agent's own
-// successful edit (fix #168: the edit itself bumps mtime, so without a
-// refresh every normal read→edit cycle false-positived as "modified on
-// disk" — amplified by the #162 re-warn fix into every edit iteration).
 func (s *unreadEditState) recordWrite(path string) {
 	if path == "" {
 		return
@@ -150,8 +76,6 @@ func (s *unreadEditState) recordWrite(path string) {
 	delete(s.warnedFiles, n+"\x00stale")
 }
 
-// recordCreated marks a file as created via write_file. These are exempt
-// from the unread-edit check since the agent authored their content.
 func (s *unreadEditState) recordCreated(path string) {
 	if path == "" {
 		return
@@ -159,15 +83,11 @@ func (s *unreadEditState) recordCreated(path string) {
 	s.filesCreated[s.normalize(path)] = true
 }
 
-// hasBeenRead returns true if the file was read or created during this run.
 func (s *unreadEditState) hasBeenRead(path string) bool {
 	n := s.normalize(path)
 	return s.filesRead[n] || s.filesCreated[n]
 }
 
-// checkUnreadEdit returns a non-empty hint if the agent is editing a file
-// it hasn't read in this run. Returns "" if the file was read, created,
-// or already warned about.
 func (s *unreadEditState) checkUnreadEdit(path string) string {
 	if path == "" {
 		return ""
@@ -184,44 +104,31 @@ func (s *unreadEditState) checkUnreadEdit(path string) string {
 	return "You are editing this file without reading it first in this session. Read it with read_file to ensure your edit targets the actual content."
 }
 
-// checkStaleRead returns a non-empty warning if the file was read earlier in
-// this run but has since been modified on disk (by the user, another agent,
-// or a git operation). The agent's edit may be based on stale content.
-// Returns "" if the file hasn't been read, hasn't changed, or was already
-// warned about for staleness.
 func (s *unreadEditState) checkStaleRead(path string) string {
 	if path == "" {
 		return ""
 	}
 	n := s.normalize(path)
 
-	// Only check files that were read (not created — those are agent-authored).
 	readAt, wasRead := s.readMtime[n]
 	if !wasRead {
 		return ""
 	}
 
-	// If the file was also created/written by the agent after reading, skip
-	// — the agent knows the latest content.
 	if s.filesCreated[n] {
 		return ""
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return "" // File may not exist anymore; the tool itself will handle the error.
+		return ""
 	}
 
 	currentMtime := info.ModTime()
 	if !currentMtime.After(readAt) {
-		return "" // File hasn't changed since the last read.
+		return ""
 	}
 
-	// Avoid duplicate stale warnings — but allow re-warning if the file
-	// changes again after a stale warning (the agent may have re-read it).
-	// We use warnedFiles for both unread and stale, but only skip if the
-	// stale warning was already issued for this exact mtime.
-	// Simple approach: warn once per stale state, then let the agent decide.
 	if s.warnedFiles[n+"\x00stale"] {
 		return ""
 	}
@@ -234,8 +141,6 @@ func (s *unreadEditState) checkStaleRead(path string) string {
 		"Re-read the file with read_file before editing to avoid clobbering external changes."
 }
 
-// extractObjectArrayPaths extracts "path" fields from an array of objects.
-// Used by multi_file_edit and multi_file_read where files is [{"path": ...}, ...].
 func extractObjectArrayPaths(m map[string]any) []string {
 	files, ok := m["files"].([]any)
 	if !ok {
@@ -252,8 +157,6 @@ func extractObjectArrayPaths(m map[string]any) []string {
 	return paths
 }
 
-// extractStringArrayPaths extracts string elements from a "files" array.
-// Used by batch_replace where files is ["/a/foo.go", "/b/bar.go", ...].
 func extractStringArrayPaths(m map[string]any) []string {
 	files, ok := m["files"].([]any)
 	if !ok {
@@ -268,7 +171,6 @@ func extractStringArrayPaths(m map[string]any) []string {
 	return paths
 }
 
-// extractEditFilePaths returns file paths from edit tool arguments.
 func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	if len(args) == 0 {
 		return nil
@@ -295,12 +197,7 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	case "notebook_edit":
 		return extractSinglePath(m, "notebook_path")
 	case "file_ops":
-		// operations[] carries source/destination per op. mkdir creates a
-		// directory: it edits no file content, and its source is a brand-new
-		// path that can never have been read, so feeding it to the
-		// read-before-edit check guarantees a false positive. Skip mkdir ops;
-		// delete/move stay in the bookkeeping (freshness/readHash still want
-		// to know the path changed hands).
+
 		if ops, ok := m["operations"].([]any); ok {
 			var paths []string
 			for _, o := range ops {
@@ -321,16 +218,10 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 		}
 		return nil
 	}
-	// #1547: the agent.go success-recording block (fileEditingTools gate,
-	// sourceMutatingTools' 9 members) previously let these 5 tools through
-	// the gate but extracted zero paths from them - editFailRecovery
-	// resets, fileFreshness, readHash, unread-edit and the rest of the
-	// per-file bookkeeping silently no-oped for them (#1454-C's stated
-	// 3->9 goal actually landed as 3->4).
+
 	return nil
 }
 
-// extractSinglePath returns the first matching key from a map as a single-element slice.
 func extractSinglePath(m map[string]any, keys ...string) []string {
 	for _, k := range keys {
 		if p, ok := m[k].(string); ok {
@@ -340,10 +231,6 @@ func extractSinglePath(m map[string]any, keys ...string) []string {
 	return nil
 }
 
-// extractReadFilePaths returns file paths from read tool arguments.
-// readArgsHaveWindow reports whether read_file / multi_file_read args
-// carry an explicit offset/limit window (#463) — such reads fetch a chunk
-// of the file, not the whole thing.
 func readArgsHaveWindow(args json.RawMessage) bool {
 	if len(args) == 0 {
 		return false
@@ -399,7 +286,6 @@ func extractReadFilePaths(toolName string, args json.RawMessage) []string {
 	return nil
 }
 
-// extractCreateFilePaths returns the path from write_file/multi_file_write.
 func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 	if len(args) == 0 {
 		return nil
@@ -425,12 +311,7 @@ func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 			}
 			return paths
 		}
-		// #1520: batch_replace deliberately NOT treated as "created" - its
-		// files[] are EXISTING files being batch-modified. Recording them via
-		// recordCreated (the mutatesSourceTree branch in agent.go) made every
-		// later edit_file on those files skip BOTH the unread and the stale-read
-		// checks (filesCreated short-circuits both). write_file/multi_file_write
-		// create; batch_replace only rewrites existing files.
+
 	}
 	return nil
 }

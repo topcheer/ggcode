@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// ApplyProjectMemoryToAgent seeds the agent with project memory file paths and
-// injects an index-based hint rather than the full file contents. Full content
-// is loaded on demand via read_file or the path-triggered dynamic loader.
 func ApplyProjectMemoryToAgent(agentInst *agent.Agent, workingDir string) ([]string, error) {
 	if agentInst == nil || strings.TrimSpace(workingDir) == "" {
 		return nil, nil

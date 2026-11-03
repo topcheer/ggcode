@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-// expandHomePath expands a leading tilde to the user's home directory (#568).
-// `~`, `~/`, and `~/x` resolve under $HOME; `~user` (another user's home) is
-// left untouched — only the current user's tilde is expanded here. When HOME
-// is not set the path is returned unchanged so callers keep their existing
-// behavior instead of silently writing into a literal "~" directory.
 func expandHomePath(path string) string {
 	if len(path) == 0 || path[0] != '~' {
 		return path
@@ -28,15 +23,9 @@ func expandHomePath(path string) string {
 		}
 		return filepath.Join(home, path[2:])
 	}
-	return path // "~user" or "~user/x" — not the current user's home
+	return path
 }
 
-// resolveToolPath resolves a tool file path against the tool's WorkingDir.
-// Relative paths are joined with workingDir so sub-agent calls with relative
-// paths do not silently land in the process CWD (#542). If the path is already
-// absolute it is used as-is (after cleaning). A leading ~ is expanded to the
-// user's home directory so weak-model paths like "~/notes.txt" do not land in
-// a literal "~" directory under the working dir (#568).
 func resolveToolPath(path, workingDir string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -49,7 +38,6 @@ func resolveToolPath(path, workingDir string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
-// WriteFile implements the write_file tool.
 type WriteFile struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -110,24 +98,16 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// Create parent directories so weak LLMs don't have to issue an extra
-	// run_command(mkdir) call for new files in fresh subdirectories.
 	if dir := filepath.Dir(args.Path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error creating parent directory: %v", err)}, nil
 		}
-		// #1311 S3: narrow the parent-directory symlink TOCTOU window.
-		// MkdirAll follows symlinks; if the parent chain was swapped for a
-		// link pointing outside the sandbox between the SandboxCheck above
-		// and here, the fresh dirs landed outside. Re-resolve and re-check
-		// the final path before any bytes are written (the file-level
-		// rename semantics already prevent replacing an existing link).
+
 		if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
 			return Result{IsError: true, Content: "Error: path not allowed by sandbox policy (parent directory changed)"}, nil
 		}
 	}
 
-	// Check if file already exists (for overwrite awareness)
 	fileExists := false
 	var oldSize int64
 	if info, err := os.Stat(args.Path); err == nil {
@@ -135,21 +115,9 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		oldSize = info.Size()
 	}
 
-	// Stale-read guard: if the file was modified externally since the agent's
-	// last read/write, refuse the overwrite to prevent silent data loss.
-	// #2318: hold the per-path write mutex across the ENTIRE
-	// CheckStale→ReadFile→gofmt→no-op-check→baseline→rename sequence.
-	// Without it, a parallel write_file to the same path (same-process
-	// batch calls) could pass its own stale check inside our window and
-	// the later rename silently clobbered the earlier write.
 	unlockWrite := LockWritePath(args.Path)
 	defer unlockWrite()
-	// This is critical in multi-agent scenarios where concurrent edits can
-	// cause lost updates.
-	// #881: run the guard whenever the file EXISTS, not only when size>0 —
-	// external truncation to 0 bytes is the most extreme staleness, yet it
-	// was exactly the case that bypassed the guard (CheckStale does not
-	// depend on size).
+
 	if fileExists {
 		if stale, since := defaultFileTracker.CheckStale(args.Path); stale {
 			return Result{IsError: true, Content: fmt.Sprintf(
@@ -160,7 +128,6 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		}
 	}
 
-	// Capture old content before overwriting (for diff feedback).
 	var oldContent string
 	if oldSize > 0 {
 		if data, err := os.ReadFile(args.Path); err == nil {
@@ -171,10 +138,6 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	writeData := []byte(args.Content)
 	writeData, fmtChanged := formatGoBytes(args.Path, writeData)
 
-	// No-op guard: if the file already exists with identical content,
-	// skip the write to avoid unnecessary mtime changes, checkpoint saves,
-	// and cache invalidation (e.g. the LLM retried a write_file with the
-	// same content it just wrote).
 	if oldSize > 0 && string(writeData) == oldContent {
 		return Result{Content: fmt.Sprintf(
 			"No change: %s already contains the requested content (%d bytes). Skipping write.",
@@ -182,8 +145,6 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		)}, nil
 	}
 
-	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
-	// can diff and show only newly introduced issues.
 	CaptureDiagnosticBaseline(t.WorkingDir, args.Path)
 
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
@@ -194,8 +155,7 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	newSize := len(writeData)
 	var msg string
 	if oldSize > 0 {
-		// #442: the old form appended "(was %d bytes)" repeating oldSize —
-		// no new information, just noise on every overwrite.
+
 		msg = fmt.Sprintf("Overwrote %s: %d bytes → %d bytes", args.Path, oldSize, newSize)
 	} else {
 		msg = fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)
@@ -204,18 +164,11 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.Path, string(writeData))
-	// #1652 case 2: edit_file(:214)/read_file both guard conflict markers,
-	// but the overwrite path did not - overwriting a file whose content
-	// carries <<<<<<< markers passed unflagged.
+
 	msg += CheckContentForConflicts(string(writeData))
 	msg += criticalFileWarning(args.Path)
 	msg += blindWriteWarning(args.Path)
-	// #1358: record our own write like edit_file/multi_edit do - the
-	// temp+rename produces a new mtime, so without this the NEXT write's
-	// CheckStale misreports "modified externally since last read" on every
-	// read->write->write sequence. Placed AFTER blindWriteWarning so the
-	// first blind overwrite still warns (HasBeenSeen is read-vs-written
-	// agnostic) while subsequent writes are no longer misreported stale.
+
 	defaultFileTracker.RecordWrite(args.Path)
 	msg += compactDiff(oldContent, string(writeData))
 	msg += syntaxCheck(args.Path, writeData)

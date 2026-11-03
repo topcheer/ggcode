@@ -8,30 +8,18 @@ import (
 	"time"
 )
 
-// CurrentTimeTool returns the agent's current wall-clock time.
-//
-// Rationale (Temporal Context Injection, 2026 baseline practice): the
-// static temporal header injected into the system prompt is anchored to
-// session start for KV-cache stability, so it goes stale in long-running
-// sessions that cross midnight, daylight-saving transitions, or simply
-// run for hours. This tool is the sanctioned mechanism for fetching fresh
-// real-world time state mid-session instead of trusting the stale header.
 type CurrentTimeTool struct{}
 
-// NewCurrentTimeTool creates a new CurrentTimeTool.
 func NewCurrentTimeTool() *CurrentTimeTool {
 	return &CurrentTimeTool{}
 }
 
-// Name returns the unique tool identifier.
 func (t *CurrentTimeTool) Name() string { return "current_time" }
 
-// Description returns a human-readable description shown to the LLM.
 func (t *CurrentTimeTool) Description() string {
 	return "Get the current date and time. Use this whenever the actual wall-clock time matters (e.g. 'today', 'this week', deadline math, log timestamp interpretation), or when the session has been running long enough that the time noted in the system prompt may be stale. Accepts an optional IANA timezone name (default: system local timezone)."
 }
 
-// Parameters returns a JSON Schema describing the tool's input.
 func (t *CurrentTimeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
   "type": "object",
@@ -45,14 +33,11 @@ func (t *CurrentTimeTool) Parameters() json.RawMessage {
 }`)
 }
 
-// Execute returns the current time, optionally rendered in a requested timezone.
 func (t *CurrentTimeTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	now := time.Now()
 	loc := now.Location()
 	tzName := strings.TrimSpace(string(input))
 
-	// Accept both an object: {"timezone": "..."} and a bare IANA string.
-	// Empty object / null / empty string all mean "use the local timezone".
 	requested := ""
 	if tzName != "" && tzName != "null" && tzName != "{}" {
 		requested = strings.Trim(tzName, `"`)
@@ -63,7 +48,7 @@ func (t *CurrentTimeTool) Execute(ctx context.Context, input json.RawMessage) (R
 			if err := json.Unmarshal(input, &req); err == nil && strings.TrimSpace(req.Timezone) != "" {
 				requested = strings.TrimSpace(req.Timezone)
 			} else {
-				requested = "" // malformed object: fall back to local timezone
+				requested = ""
 			}
 		}
 	}

@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// GitBranchList implements the git_branch_list tool.
 type GitBranchList struct{ WorkingDir string }
 
 func (t GitBranchList) Name() string { return "git_branch_list" }
@@ -66,8 +65,6 @@ func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{Content: "No branches found."}, nil
 	}
 
-	// Cap output — repos with hundreds of branches (especially --remotes)
-	// would flood the context.
 	const maxBranchLines = 100
 	lines := strings.Split(trimmed, "\n")
 	if len(lines) > maxBranchLines {
@@ -79,7 +76,6 @@ func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitBranchList) Clone() Tool {
 	return &GitBranchList{WorkingDir: t.WorkingDir}
 }

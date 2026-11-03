@@ -1,10 +1,5 @@
 package agent
 
-// #3481 probe: a cd-prefixed build-system verify command (`cd /repo &&
-// make verify-ci`, or the multi-line flattened form) left `cd` as
-// tokens[0], so psBuildSystemVerify never dispatched on the real command
-// and hyphen/underscore variants never reached segment-first position.
-
 import (
 	"strings"
 	"testing"
@@ -12,12 +7,12 @@ import (
 
 func TestIssue3481_CdPrefixedVerifyCommands(t *testing.T) {
 	positive := []string{
-		"cd /repo && make verify-ci",  // the issue's headline case
-		"cd /repo\nmake verify-ci",    // multi-line flattened
-		"cd /repo && npm run test",    // npm dispatcher via runner
-		"cd app && go test ./...",     // cd + runner still recognized
-		"cd /repo && make check",      // whitelisted target
-		"cd /repo && ./gradlew check", // gradle wrapper
+		"cd /repo && make verify-ci",
+		"cd /repo\nmake verify-ci",
+		"cd /repo && npm run test",
+		"cd app && go test ./...",
+		"cd /repo && make check",
+		"cd /repo && ./gradlew check",
 	}
 	for _, cmd := range positive {
 		if !psIsVerifyCommand(cmd) {
@@ -25,9 +20,9 @@ func TestIssue3481_CdPrefixedVerifyCommands(t *testing.T) {
 		}
 	}
 	negative := []string{
-		"cd /repo && make clean",  // hygiene target is not verification
-		"cd /repo && npm run dev", // service target is not verification
-		"cd /repo && echo done",   // not a verify command at all
+		"cd /repo && make clean",
+		"cd /repo && npm run dev",
+		"cd /repo && echo done",
 	}
 	for _, cmd := range negative {
 		if psIsVerifyCommand(cmd) {
@@ -44,8 +39,8 @@ func TestIssue3481_StripCdPrefixShapes(t *testing.T) {
 		{"cd /repo && make verify-ci", []string{"make", "verify-ci"}},
 		{"cd /repo\nmake test", []string{"make", "test"}},
 		{"cd .. && cd sub && go build ./...", []string{"go", "build", "./..."}},
-		{"make test", []string{"make", "test"}}, // no cd: untouched
-		{"cd", nil},                             // bare cd: everything consumed
+		{"make test", []string{"make", "test"}},
+		{"cd", nil},
 	}
 	for _, tc := range cases {
 		got := psStripCdPrefix(strings.Fields(tc.in))

@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// ————————————————————————————————————————
-// SwarmTaskCreate
-// ————————————————————————————————————————
-
 type SwarmTaskCreateTool struct {
 	Manager *swarm.Manager
 }
@@ -81,12 +77,7 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 
 	metadata := map[string]string{}
 	if args.Assignee != "" {
-		// #1705 case 2: validate the assignee BEFORE creating the task.
-		// idle_runner matches assignee against teammate IDs only, so an
-		// unknown ID (typo) or a NAME left the task permanently stranded:
-		// metadata carried the bogus assignee, the poller skipped it
-		// (assignee mismatch), and the create-then-warn fallback below
-		// kept it invisible on the board forever.
+
 		team, ok := t.Manager.GetTeam(args.TeamID)
 		if !ok {
 			return Result{IsError: true, Content: fmt.Sprintf("team %q not found", args.TeamID)}, nil
@@ -112,15 +103,9 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 
 	created := tm.Create(args.Subject, args.Description, "", metadata)
 
-	// Dependency wiring (#research-task-deps): the task engine has
-	// supported BlockedBy edges (with cycle detection) all along, but the
-	// swarm tool surface never exposed them - agents could not declare
-	// ordering, so 2026 Agent-Teams-style "shared task list with
-	// dependency tracking" was unreachable from the board.
 	if len(args.DependsOn) > 0 {
 		if _, err := tm.Update(created.ID, task.UpdateOptions{AddBlockedBy: args.DependsOn}); err != nil {
-			// Bad edge (unknown ID or cycle): drop the half-wired task so
-			// the board never accumulates tasks whose deps could not link.
+
 			tm.Delete(created.ID)
 			t.Manager.EmitBoardUpdated(args.TeamID)
 			return Result{IsError: true, Content: fmt.Sprintf("depends_on rejected (task not created): %v", err)}, nil
@@ -128,10 +113,6 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 	t.Manager.EmitBoardUpdated(args.TeamID)
 
-	// If an assignee is specified, push the task directly into their inbox
-	// for immediate execution (bypasses the polling delay) - unless an
-	// unmet dependency keeps the task blocked: delivering a blocked task
-	// would have the teammate start work whose prerequisites are not done.
 	if args.Assignee != "" && len(unmetDependencies(tm, created.ID)) == 0 {
 		prompt := formatTaskPrompt(created)
 		err := t.Manager.SendToTeammate(args.TeamID, args.Assignee, swarm.MailMessage{
@@ -140,16 +121,12 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 			Type:    "task",
 		})
 		if err != nil {
-			// Assignee inbox full or not found — task stays on board,
-			// poller will pick it up later. Log but don't fail.
+
 			out, _ := json.Marshal(created)
 			return Result{Content: string(out) + fmt.Sprintf("\nWarning: could not deliver to %q: %v (task stays on board for polling)\n", args.Assignee, err)}, nil
 		}
 	}
 
-	// No specific assignee: notify idle runners so they can claim immediately
-	// instead of waiting for the next poller tick. A blocked task stays
-	// parked: runners re-check on completion of its dependencies.
 	if args.Assignee == "" && len(unmetDependencies(tm, created.ID)) == 0 {
 		t.Manager.NotifyIdleRunners(args.TeamID)
 	}
@@ -162,7 +139,6 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// formatTaskPrompt builds the agent prompt from a task for inbox delivery.
 func formatTaskPrompt(tk task.Task) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Task: %s\n", tk.Subject))
@@ -178,14 +154,6 @@ func formatTaskPrompt(tk task.Task) string {
 	return sb.String()
 }
 
-// ————————————————————————————————————————
-// SwarmTaskList
-// ————————————————————————————————————————
-
-// unmetDependencies returns the IDs of the given task's BlockedBy
-// dependencies that are not yet completed. An unknown board state returns
-// the full list (fail-closed: better to keep a task parked than to let it
-// run ahead of an unverifiable prerequisite).
 func unmetDependencies(tm *task.Manager, taskID string) []string {
 	tk, ok := tm.Get(taskID)
 	if !ok {
@@ -274,10 +242,6 @@ func (t SwarmTaskListTool) Execute(_ context.Context, input json.RawMessage) (Re
 	return Result{Content: sb.String()}, nil
 }
 
-// ————————————————————————————————————————
-// SwarmTaskClaim
-// ————————————————————————————————————————
-
 type SwarmTaskClaimTool struct {
 	Manager *swarm.Manager
 }
@@ -333,13 +297,6 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	// #1343: tasks created with an assignee are direct-delivered to that
-	// teammate's inbox. The poller (idle_runner) already skips them; the
-	// claim tool must enforce the same rule so another teammate's agent
-	// cannot steal a directly-assigned pending task and run it twice.
-	// Dependency gate (#research-task-deps): claiming a task whose
-	// dependencies are not all completed would run work ahead of its
-	// prerequisites; the board auto-unblocks the moment they complete.
 	if existing, ok := tm.Get(args.TaskID); ok {
 		if assignee := existing.Metadata["assignee"]; assignee != "" && assignee != args.Owner {
 			return Result{IsError: true, Content: fmt.Sprintf(
@@ -352,13 +309,7 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 				args.TaskID, unmet)}, nil
 		}
 	}
-	// #861/#4781: the claim goes through the board's cross-process
-	// single-winner path - advisory file lock + durable-board loser check +
-	// ExpectedStatus CAS + synchronous persist. In-process races are caught
-	// by the CAS; cross-seat races (two ggcode instances, each with its own
-	// in-memory board and an async snapshot) are caught by the loser check,
-	// which names the winning owner instead of letting the last async write
-	// silently steal ownership.
+
 	updated, err := t.Manager.ClaimTaskSingleWinner(args.TeamID, args.TaskID, args.Owner)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -367,10 +318,6 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 	out, _ := json.Marshal(updated)
 	return Result{Content: string(out) + "\n"}, nil
 }
-
-// ————————————————————————————————————————
-// SwarmTaskComplete
-// ————————————————————————————————————————
 
 type SwarmTaskCompleteTool struct {
 	Manager *swarm.Manager
@@ -421,21 +368,6 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	// #1705 case 2: duplicate-complete guard. The tool layer has no caller
-	// identity, so full ownership enforcement lives with the claim path's
-	// ExpectedStatus (#861); what IS enforceable here is idempotence - a
-	// second complete on an already-completed task (stale board view,
-	// double-fire) must not silently succeed and bump board counters.
-	//
-	// #2794: the pre-check below narrows the race but cannot close it (Get
-	// and Update are separate acquisitions of m.mu). The atomic guarantee
-	// is the conditional Update itself: the ExpectedStatus CAS pins the
-	// observed status, so a concurrent duplicate (second complete, or a
-	// racing status Write) fails inside the lock instead of silently
-	// flipping a completed task back. Get routes the CAS expectation;
-	// completing either Pending (per #1705 semantics - direct complete of
-	// an unclaimed/assigned task is legal, ownership lives elsewhere) or
-	// InProgress (claim flow) is allowed, Completed is not.
 	cur, ok := tm.Get(args.TaskID)
 	if !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("task %s not found", args.TaskID)}, nil
@@ -444,7 +376,7 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 	case task.StatusCompleted:
 		return Result{IsError: true, Content: fmt.Sprintf("task %s is already completed (owner %q)", cur.ID, cur.Owner)}, nil
 	case task.StatusInProgress:
-	default: // pending or any other non-terminal state
+	default:
 	}
 	expected := task.TaskStatus(cur.Status)
 	completed := task.TaskStatus(task.StatusCompleted)

@@ -6,11 +6,6 @@ import (
 	"time"
 )
 
-// #3229: user_edit rules are template-generated; two rules for DIFFERENT
-// files tokenize to near-identical sets (Jaccard 0.8+ for any file pair),
-// so the >=0.75 similarity merge silently swallowed every rule after the
-// first file. Both files' rules must coexist.
-
 func userEditRuleFor(base string, turns int) Rule {
 	return Rule{
 		ID:           "ue_" + base,
@@ -25,9 +20,6 @@ func userEditRuleFor(base string, turns int) Rule {
 	}
 }
 
-// TestAddRule_DistinctUserEditFilesCoexist: two user_edit rules for
-// different files must both be stored, each keeping its own ToolPattern
-// and HitCount (no cross-file absorption).
 func TestAddRule_DistinctUserEditFilesCoexist(t *testing.T) {
 	rs := NewRuleStore(t.TempDir())
 	rs.AddRule(userEditRuleFor("trial_fork.go", 2))
@@ -51,8 +43,6 @@ func TestAddRule_DistinctUserEditFilesCoexist(t *testing.T) {
 	}
 }
 
-// TestDeduplicateRules_PreservesDistinctUserEditFiles: the 0.55 dedup
-// pass must not merge user_edit rules bound to different files either.
 func TestDeduplicateRules_PreservesDistinctUserEditFiles(t *testing.T) {
 	rs := NewRuleStore(t.TempDir())
 	rs.AddRule(userEditRuleFor("user_edit_ratchet_test.go", 2))
@@ -65,9 +55,6 @@ func TestDeduplicateRules_PreservesDistinctUserEditFiles(t *testing.T) {
 	}
 }
 
-// TestAddRule_SameFileUserEditStillMerges: the guard must not weaken the
-// original dedup semantics for the SAME file - repeated promotion of one
-// file's rule stays one rule.
 func TestAddRule_SameFileUserEditStillMerges(t *testing.T) {
 	rs := NewRuleStore(t.TempDir())
 	r1 := userEditRuleFor("same.go", 2)

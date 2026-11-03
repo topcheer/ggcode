@@ -2,14 +2,11 @@ package agent
 
 import "testing"
 
-// #4241: record side is 0-based while maybeWarn's call site is 1-based; the
-// mixed radix narrowed the indicator window by one turn. After the fix the
-// recorded iter is normalized to 1-based, so a distance-3 pair must merge.
 func TestIssue4241_IndicatorWindowRadix(t *testing.T) {
 	cd := newCriteriaDriftState()
-	// Real trigger phrase (same as the existing test suite uses).
-	cd.recordAssistantText("The requirement is really only the happy path.", 0) // 0-based call-site
-	cd.recordAssistantText("The requirement is really only the fast path.", 3)  // distance 3
+
+	cd.recordAssistantText("The requirement is really only the happy path.", 0)
+	cd.recordAssistantText("The requirement is really only the fast path.", 3)
 	if len(cd.indicators) < 2 {
 		t.Fatalf("expected >=2 indicators recorded, got %d", len(cd.indicators))
 	}
@@ -20,8 +17,6 @@ func TestIssue4241_IndicatorWindowRadix(t *testing.T) {
 	}
 }
 
-// #4242: pure read-only runs must NOT get the edit-scoped reminder; an edit
-// within the recency window must re-enable it.
 func TestIssue4242_EditRelevanceGate(t *testing.T) {
 	ca := newConstraintAmnesiaState()
 	ca.recordConstraints("do not modify the auth module", 1)

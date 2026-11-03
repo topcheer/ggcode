@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// mkIntentRule builds a rule with hit history for injection tests.
 func mkIntentRule(rule, taskType string, hits int, lastSeen time.Time) Rule {
 	return Rule{
 		Category: "convention", Rule: rule, ToolPattern: "x" + rule,
@@ -15,9 +14,6 @@ func mkIntentRule(rule, taskType string, hits int, lastSeen time.Time) Rule {
 	}
 }
 
-// TestTopRulesForPromptFiltered_PrefersSameIntent verifies the core P1
-// behavior: when at least 2 rules share the run's task type, injection
-// is restricted to them; other-type rules no longer consume slots.
 func TestTopRulesForPromptFiltered_PrefersSameIntent(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -36,8 +32,6 @@ func TestTopRulesForPromptFiltered_PrefersSameIntent(t *testing.T) {
 	}
 }
 
-// TestTopRulesForPromptFiltered_ThinSubsetFallsBack: a single same-intent
-// rule must not starve injection - the global ranking takes over.
 func TestTopRulesForPromptFiltered_ThinSubsetFallsBack(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -52,8 +46,6 @@ func TestTopRulesForPromptFiltered_ThinSubsetFallsBack(t *testing.T) {
 	}
 }
 
-// TestTopRulesForPromptFiltered_LegacyUntaggedStayGlobal: rules persisted
-// before this change (empty TaskType) remain eligible in every intent.
 func TestTopRulesForPromptFiltered_LegacyUntaggedStayGlobal(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -67,8 +59,6 @@ func TestTopRulesForPromptFiltered_LegacyUntaggedStayGlobal(t *testing.T) {
 	}
 }
 
-// TestTopRulesForPromptFiltered_OtherIntentDisablesFilter: classifyTaskType
-// returns "other" for unmatched prompts; filtering must be a no-op there.
 func TestTopRulesForPromptFiltered_OtherIntentDisablesFilter(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -80,8 +70,6 @@ func TestTopRulesForPromptFiltered_OtherIntentDisablesFilter(t *testing.T) {
 	}
 }
 
-// TestAddRuleInheritsRunIntent: rules learned mid-run (error ratchet,
-// user-edit ratchet) pick up the run's intent tag automatically.
 func TestAddRuleInheritsRunIntent(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -93,7 +81,6 @@ func TestAddRuleInheritsRunIntent(t *testing.T) {
 		t.Fatalf("AddRule must inherit runIntent, got %+v", rules)
 	}
 
-	// Explicit TaskType is never overwritten.
 	rs.AddRule(mkIntentRule("explicit", "test", 1, time.Now()))
 	rules = rs.Rules()
 	found := false
@@ -109,7 +96,6 @@ func TestAddRuleInheritsRunIntent(t *testing.T) {
 		t.Fatal("explicit rule missing from store")
 	}
 
-	// Intent "other" must not tag.
 	rs.SetRunIntent("other")
 	rs.AddRule(mkIntentRule("unclassified", "", 1, time.Now()))
 	rules = rs.Rules()

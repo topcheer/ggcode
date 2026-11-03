@@ -1,10 +1,5 @@
 package agent
 
-// #3547 probe: multi_file_write and notebook_edit are write-class tools and
-// must expose their target paths to path-predicated invariants. The old
-// invariantTargetPath had no case for either (and opOf didn't even classify
-// notebook_edit), so PathGlob-style rules silently never fired.
-
 import "testing"
 
 func TestIssue3547_MultiFileWriteTargetExtracted(t *testing.T) {
@@ -15,7 +10,7 @@ func TestIssue3547_MultiFileWriteTargetExtracted(t *testing.T) {
 	if got := invariantTargetPath("multi_file_write", args); got != "/repo/a.go" {
 		t.Fatalf("multi_file_write target = %q, want /repo/a.go (first file)", got)
 	}
-	// Degenerate shapes fall back to empty (best-effort, like batch_replace).
+
 	if got := invariantTargetPath("multi_file_write", []byte(`{"files":[]}`)); got != "" {
 		t.Fatalf("empty files list should yield empty target, got %q", got)
 	}
@@ -35,7 +30,7 @@ func TestIssue3547_NotebookEditClassifiedAndExtracted(t *testing.T) {
 }
 
 func TestIssue3547_ExistingTargetsUnchanged(t *testing.T) {
-	// Regression guard: the pre-existing write-family extractions are intact.
+
 	if got := invariantTargetPath("write_file", []byte(`{"file_path":"/w/f.go"}`)); got != "/w/f.go" {
 		t.Fatalf("write_file target regressed: %q", got)
 	}

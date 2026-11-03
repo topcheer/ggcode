@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// #3863 A: the go-test gate must reject commands that merely EMBED the
-// words inside a quoted pattern (awk '/go test/{...}' ci.log, rg 'go test')
-// while accepting real invocations (incl. env-prefixed and piped).
 func TestIssue3863_GoTestTokenGate(t *testing.T) {
 	logDump := "--- FAIL: TestX\nFAIL\tpkg/a\t0.1s\n"
 
@@ -41,13 +38,10 @@ func TestIssue3863_GoTestTokenGate(t *testing.T) {
 	}
 }
 
-// #3863 C: a truncated tail that lost its own FAIL<tab>pkg summary must
-// fall back to the LAST resolved package instead of splitting the same
-// test into a pkg-qualified and a bare fingerprint.
 func TestIssue3863_TruncatedTailMergesToLastPkg(t *testing.T) {
 	c := newTestFailCollector()
 	out := "=== RUN TestX\n--- FAIL: TestX\nFAIL\tpkg/a\t0.1s\n" +
-		"=== RUN TestX\n--- FAIL: TestX\n" // truncated: summary line lost
+		"=== RUN TestX\n--- FAIL: TestX\n"
 	c.record("go test ./...", out)
 	if len(c.counts) != 1 || c.counts["pkg/a.TestX"] != 2 {
 		t.Fatalf("truncated tail must merge into last pkg key, got %v", c.counts)
@@ -57,9 +51,6 @@ func TestIssue3863_TruncatedTailMergesToLastPkg(t *testing.T) {
 	}
 }
 
-// #3863 B: a cross-run recurring environment-flaky test failure (store
-// already holds WeakRare Count=1) must NOT upgrade to WeakForgetting.
-// #3863 D: the same run seeds via the (now sole) first-sighting arm.
 func TestIssue3863_TestFailNeverUpgradesToForgetting(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {

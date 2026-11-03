@@ -8,12 +8,6 @@ import (
 	"time"
 )
 
-// #3222 probes: both silent under-reporting paths of crash recovery.
-
-// TestCheckCrashedRun_OldRunningJournalWithLivePID: a running journal older
-// than crashLivePIDTrustWindow whose PID happens to be alive (PID reuse after
-// reboot) must be reported as a crash suspect, not silently treated as
-// concurrent access.
 func TestCheckCrashedRun_OldRunningJournalWithLivePID(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
@@ -21,12 +15,10 @@ func TestCheckCrashedRun_OldRunningJournalWithLivePID(t *testing.T) {
 	dir := journalDirFunc()
 	path := filepath.Join(dir, "reused-session_"+journalFileName)
 
-	// Our own test process PID is guaranteed alive - simulates an unrelated
-	// process holding the crashed run's PID after a reboot.
 	entry := RunJournalEntry{
 		SessionID:  "reused-session",
 		State:      "running",
-		StartTime:  time.Now().Add(-5 * time.Hour), // > 4h trust window
+		StartTime:  time.Now().Add(-5 * time.Hour),
 		PID:        os.Getpid(),
 		UserPrompt: "pid reuse probe",
 	}
@@ -40,14 +32,12 @@ func TestCheckCrashedRun_OldRunningJournalWithLivePID(t *testing.T) {
 	if info.SessionID != "reused-session" {
 		t.Errorf("session_id = %q", info.SessionID)
 	}
-	// Reported = consumed: journal removed like the normal crash path.
+
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("journal should be removed after crash-suspect report")
 	}
 }
 
-// TestCheckCrashedRun_YoungRunningJournalWithLivePID: a young running journal
-// with a live PID is genuine concurrent access - unchanged, returns nil.
 func TestCheckCrashedRun_YoungRunningJournalWithLivePID(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
@@ -57,7 +47,7 @@ func TestCheckCrashedRun_YoungRunningJournalWithLivePID(t *testing.T) {
 	entry := RunJournalEntry{
 		SessionID: "concurrent-session",
 		State:     "running",
-		StartTime: time.Now().Add(-10 * time.Minute), // < 4h trust window
+		StartTime: time.Now().Add(-10 * time.Minute),
 		PID:       os.Getpid(),
 	}
 	data, _ := json.Marshal(entry)
@@ -78,7 +68,7 @@ func writeJournalFile(t *testing.T, dir, session, state string, age time.Duratio
 		SessionID: session,
 		State:     state,
 		StartTime: time.Now().Add(-age),
-		PID:       999999, // dead
+		PID:       999999,
 	}
 	data, _ := json.Marshal(entry)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
@@ -91,23 +81,19 @@ func writeJournalFile(t *testing.T, dir, session, state string, age time.Duratio
 	return path
 }
 
-// TestCleanupOldJournals_RetainsRunningState: a >24h running journal must
-// survive cleanup so /resume can still report it (path B fix).
 func TestCleanupOldJournals_RetainsRunningState(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
 	dir := journalDirFunc()
 
-	runningPath := writeJournalFile(t, dir, "late-resume", "running", 30*24*time.Hour/10) // 3 days
-	// 3 days > 24h maxAge but < 7d hard delete: must be retained.
+	runningPath := writeJournalFile(t, dir, "late-resume", "running", 30*24*time.Hour/10)
+
 	CleanupOldJournals(24 * time.Hour)
 	if _, err := os.Stat(runningPath); err != nil {
 		t.Fatal("running journal older than maxAge must be retained for crash reporting")
 	}
 }
 
-// TestCleanupOldJournals_RemovesCompletedAndExpiredRunning: completed files
-// go at maxAge; running files go only at the hard-delete window.
 func TestCleanupOldJournals_RemovesCompletedAndExpiredRunning(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
@@ -130,15 +116,13 @@ func TestCleanupOldJournals_RemovesCompletedAndExpiredRunning(t *testing.T) {
 	}
 }
 
-// TestCleanupOldJournals_RetainsCorruptEvidence: a >24h corrupt journal is
-// crash-suspect evidence (#1666) and gets the running-state retention grace.
 func TestCleanupOldJournals_RetainsCorruptEvidence(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
 	dir := journalDirFunc()
 
 	path := filepath.Join(dir, "torn-write_"+journalFileName)
-	os.WriteFile(path, []byte(`{"state":"run`), 0o644) // torn JSON
+	os.WriteFile(path, []byte(`{"state":"run`), 0o644)
 	past := time.Now().Add(-3 * 24 * time.Hour)
 	os.Chtimes(path, past, past)
 

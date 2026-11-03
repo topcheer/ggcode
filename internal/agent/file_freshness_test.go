@@ -38,7 +38,6 @@ func TestFileFreshnessSentinel_DetectsExternalChange(t *testing.T) {
 
 	s.recordRead(f)
 
-	// Simulate external modification with a future mtime
 	future := time.Now().Add(5 * time.Second)
 	os.Chtimes(f, future, future)
 
@@ -55,9 +54,7 @@ func TestFileFreshnessSentinel_DetectsExternalChange(t *testing.T) {
 }
 
 func TestFileFreshnessSentinel_DetectsExternalChangeAfterAgentWrite(t *testing.T) {
-	// Issue #1055: after the agent writes a file, external changes (formatters,
-	// concurrent edits) should still be detected. Changed from permanent
-	// agentWritten exemption to mtime-based comparison.
+
 	s := newFileFreshnessSentinel()
 
 	dir := t.TempDir()
@@ -65,9 +62,8 @@ func TestFileFreshnessSentinel_DetectsExternalChangeAfterAgentWrite(t *testing.T
 	os.WriteFile(f, []byte("package main\n"), 0644)
 
 	s.recordRead(f)
-	s.recordWrite(f) // Agent wrote it after reading
+	s.recordWrite(f)
 
-	// External modification with a future mtime (e.g., formatter, another agent)
 	future := time.Now().Add(5 * time.Second)
 	os.Chtimes(f, future, future)
 
@@ -97,7 +93,6 @@ func TestFileFreshnessSentinel_NotifiesOncePerFile(t *testing.T) {
 		t.Fatal("expected first notification")
 	}
 
-	// Second check at the same iteration should not re-notify
 	msg2 := s.maybeCheckStaleFiles(2)
 	if msg2 != "" {
 		t.Fatalf("expected no duplicate notification, got %q", msg2)
@@ -113,30 +108,24 @@ func TestFileFreshnessSentinel_ThrottledByInterval(t *testing.T) {
 	os.WriteFile(f1, []byte("package main\n"), 0644)
 	os.WriteFile(f2, []byte("package main\n"), 0644)
 
-	// Read both files
 	s.recordRead(f1)
 	s.recordRead(f2)
 
-	// Modify f1 externally
 	future := time.Now().Add(5 * time.Second)
 	os.Chtimes(f1, future, future)
 
-	// Check at iteration 1 - should detect f1
 	msg1 := s.maybeCheckStaleFiles(1)
 	if msg1 == "" {
 		t.Fatal("expected notification at iteration 1")
 	}
 
-	// Now modify f2 as well
 	os.Chtimes(f2, future, future)
 
-	// Check at iteration 2 - should be throttled (not enough iterations since last check)
 	msg2 := s.maybeCheckStaleFiles(2)
 	if msg2 != "" {
 		t.Fatalf("expected throttled skip at iteration 2, got %q", msg2)
 	}
 
-	// Check at iteration 4 (1 + 3 = 4) - should detect f2
 	msg4 := s.maybeCheckStaleFiles(4)
 	if msg4 == "" {
 		t.Fatal("expected notification for f2 at iteration 4")
@@ -152,7 +141,6 @@ func TestFileFreshnessSentinel_RecordReadClearsAgentWritten(t *testing.T) {
 
 	s.recordRead(f)
 
-	// External change detected
 	future := time.Now().Add(5 * time.Second)
 	os.Chtimes(f, future, future)
 
@@ -161,10 +149,8 @@ func TestFileFreshnessSentinel_RecordReadClearsAgentWritten(t *testing.T) {
 		t.Fatal("expected stale notification on first check")
 	}
 
-	// Agent re-reads the file, updating its tracked mtime
 	s.recordRead(f)
 
-	// Second check should not re-notify (file is now fresh from the agent's perspective)
 	msg2 := s.maybeCheckStaleFiles(4)
 	if msg2 != "" {
 		t.Fatalf("agent re-read should clear stale notification, got %q", msg2)
@@ -197,7 +183,6 @@ func TestFileFreshnessSentinel_DeletedFile(t *testing.T) {
 
 	s.recordRead(f)
 
-	// Delete the file
 	os.Remove(f)
 
 	msg := s.maybeCheckStaleFiles(1)
@@ -208,8 +193,8 @@ func TestFileFreshnessSentinel_DeletedFile(t *testing.T) {
 
 func TestFileFreshnessSentinel_EmptyPath(t *testing.T) {
 	s := newFileFreshnessSentinel()
-	s.recordRead("")  // should be no-op
-	s.recordWrite("") // should be no-op
+	s.recordRead("")
+	s.recordWrite("")
 	if len(s.readMtimes) != 0 || len(s.writeMtimes) != 0 {
 		t.Fatal("empty path should be ignored")
 	}
@@ -220,9 +205,9 @@ func TestShortenForDisplay(t *testing.T) {
 		input    string
 		contains string
 	}{
-		{"/a/b/c.go", "/a/b/c.go"},          // short path kept as-is
-		{"/a/b/c/d/e/f.go", ".../d/e/f.go"}, // long path shortened
-		{"/foo/bar.go", "/foo/bar.go"},      // 3 components kept
+		{"/a/b/c.go", "/a/b/c.go"},
+		{"/a/b/c/d/e/f.go", ".../d/e/f.go"},
+		{"/foo/bar.go", "/foo/bar.go"},
 	}
 	for _, tt := range tests {
 		got := shortenForDisplay(tt.input)

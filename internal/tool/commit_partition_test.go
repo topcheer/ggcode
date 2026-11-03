@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- parseFileChanges ---
-
 func TestParseFileChanges_Basic(t *testing.T) {
 	diff := `diff --git a/internal/agent/loop.go b/internal/agent/loop.go
 --- a/internal/agent/loop.go
@@ -54,8 +52,6 @@ func TestParseFileChanges_Empty(t *testing.T) {
 	}
 }
 
-// --- testToSourceBase ---
-
 func TestTestToSourceBase(t *testing.T) {
 	cases := []struct {
 		testBase string
@@ -68,9 +64,9 @@ func TestTestToSourceBase(t *testing.T) {
 		{"user_test.py", "user.py"},
 		{"user_spec.rb", "user.rb"},
 		{"math_test.rs", "math.rs"},
-		{"notatest.go", ""}, // not a test file (no _test suffix)
-		{"random.txt", ""},  // unknown extension
-		{"config.yaml", ""}, // config, not test
+		{"notatest.go", ""},
+		{"random.txt", ""},
+		{"config.yaml", ""},
 	}
 	for _, tc := range cases {
 		got := testToSourceBase(tc.testBase)
@@ -80,10 +76,8 @@ func TestTestToSourceBase(t *testing.T) {
 	}
 }
 
-// --- SuggestCommitPartition ---
-
 func TestSuggestCommitPartition_CohesiveReturnsNil(t *testing.T) {
-	// Single source file + its test should be one group — no partition needed.
+
 	diff := `diff --git a/handler.go b/handler.go
 --- a/handler.go
 +++ b/handler.go
@@ -128,11 +122,11 @@ diff --git a/config.yaml b/config.yaml
 	if len(groups) < 2 {
 		t.Fatalf("expected at least 2 groups, got %d", len(groups))
 	}
-	// Source group should be first (most lines).
+
 	if groups[0].Category != CatSource {
 		t.Errorf("expected first group to be source, got %v", groups[0].Category)
 	}
-	// Should have source, docs, and config groups.
+
 	cats := make(map[FileCategory]bool)
 	for _, g := range groups {
 		cats[g.Category] = true
@@ -166,7 +160,6 @@ diff --git a/README.md b/README.md
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 groups (source+test merged, docs separate), got %d", len(groups))
 	}
-	// Find the source group and verify it includes the test file.
 	var sourceGroup *CommitGroup
 	for i := range groups {
 		if groups[i].Category == CatSource {
@@ -183,7 +176,7 @@ diff --git a/README.md b/README.md
 }
 
 func TestSuggestCommitPartition_DirectorySeparation(t *testing.T) {
-	// Two source files in different directories should be separate groups.
+
 	diff := `diff --git a/internal/agent/loop.go b/internal/agent/loop.go
 --- a/internal/agent/loop.go
 +++ b/internal/agent/loop.go
@@ -207,7 +200,7 @@ diff --git a/internal/tool/util.go b/internal/tool/util.go
 }
 
 func TestSuggestCommitPartition_SortedBySize(t *testing.T) {
-	// Two source files in DIFFERENT directories so they form separate groups.
+
 	diff := `diff --git a/pkg/big.go b/pkg/big.go
 --- a/pkg/big.go
 +++ b/pkg/big.go
@@ -233,8 +226,6 @@ func TestSuggestCommitPartition_SortedBySize(t *testing.T) {
 			groups[0].TotalLines(), groups[1].TotalLines())
 	}
 }
-
-// --- FormatCommitPartition ---
 
 func TestFormatCommitPartition_Empty(t *testing.T) {
 	if s := FormatCommitPartition(nil); s != "" {
@@ -276,10 +267,7 @@ diff --git a/README.md b/README.md
 	}
 }
 
-// --- Integration with AnalyzeCommitScope via git_commit ---
-
 func TestSuggestCommitPartition_LargeGroupTruncation(t *testing.T) {
-	// 7 source files in one dir + 1 doc in another → group has >5 files.
 	var diff string
 	for i := 0; i < 7; i++ {
 		diff += "diff --git a/pkg/file" + string(rune('a'+i)) + ".go b/pkg/file" + string(rune('a'+i)) + ".go\n"
@@ -295,9 +283,6 @@ func TestSuggestCommitPartition_LargeGroupTruncation(t *testing.T) {
 	}
 }
 
-// #1319: deleted files ("--- a/path" + "+++ /dev/null") dropped out of the
-// partition plan entirely, and their -N lines leaked into the next parsed
-// file (handler.go +5/-2 plus deleted dead.go -20 inflated to +5/-22).
 func TestParseFileChanges_DeletedFileAndNoLeak(t *testing.T) {
 	diff := "diff --git a/internal/agent/handler.go b/internal/agent/handler.go\n" +
 		"--- a/internal/agent/handler.go\n" +

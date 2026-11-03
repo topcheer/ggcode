@@ -12,8 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// fakeNamedAgentProvider implements provider.Provider WITHOUT
-// ClonableWithModel, for the #551-C unsupported-override test.
 type fakeNamedAgentProvider struct{}
 
 func (fakeNamedAgentProvider) Name() string { return "fake" }
@@ -27,7 +25,6 @@ func (fakeNamedAgentProvider) CountTokens(ctx context.Context, msgs []provider.M
 	return 0, nil
 }
 
-// clonableFakeProvider implements ClonableWithModel.
 type clonableFakeProvider struct{ fakeNamedAgentProvider }
 
 func (clonableFakeProvider) CloneWithModel(model string) provider.Provider {
@@ -49,9 +46,6 @@ func newNamedAgentTestEnv(t *testing.T, prov provider.Provider, available []stri
 	return mgr, tool
 }
 
-// TestIssue551C_NamedAgentModelWhitelist verifies use_namedagent rejects a
-// template whose model override is not on the AvailableModels whitelist —
-// the same gate spawn_agent has had (L131-148) (#551-C).
 func TestIssue551C_NamedAgentModelWhitelist(t *testing.T) {
 	mgr, tool := newNamedAgentTestEnv(t, clonableFakeProvider{}, []string{"glm-5.3", "glm-5.2"})
 
@@ -73,12 +67,10 @@ func TestIssue551C_NamedAgentModelWhitelist(t *testing.T) {
 		t.Fatalf("error message lacks model/availability info: %s", res.Content)
 	}
 
-	// No zombie sub-agent entry should be created.
 	if agents := mgr.List(); len(agents) != 0 {
 		t.Fatalf("rejected model left %d zombie sub-agent entries", len(agents))
 	}
 
-	// A whitelisted model passes the gate.
 	if err := tool.Store.Save(subagent.NamedAgentTemplate{
 		Name:  "probe-ok",
 		Model: "glm-5.3",
@@ -94,10 +86,6 @@ func TestIssue551C_NamedAgentModelWhitelist(t *testing.T) {
 	}
 }
 
-// TestIssue551C_NamedAgentProviderWithoutModelOverrideSupport verifies the
-// provider cannot silently ignore a model override: when the provider does
-// not implement ClonableWithModel, use_namedagent errors instead of
-// spawning on the parent model (#551-C).
 func TestIssue551C_NamedAgentProviderWithoutModelOverrideSupport(t *testing.T) {
 	mgr, tool := newNamedAgentTestEnv(t, fakeNamedAgentProvider{}, []string{"glm-5.3", "glm-5.3-air"})
 

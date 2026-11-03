@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-// #2164 regression suite: variable-receiver method calls across files must
-// be resolved via stdlib go/types when the syntax-only visitor records a
-// near miss, with zero false positives on same-named methods of unrelated
-// types and conservative misses for anything unresolved.
-
-// buildImpactScenario parses old/new edited content, extracts removed
-// symbols, and returns the pieces the typed pass consumes.
 func buildImpactScenario(t *testing.T, oldSrc, newSrc, siblingSrc string) (names map[string]bool, owners map[string]map[string]bool, sibFile *ast.File, fset *token.FileSet, newFile *ast.File) {
 	t.Helper()
 	removed := extractImpactRemovedSymbols(oldSrc, newSrc, "a.go")
@@ -33,7 +26,6 @@ func buildImpactScenario(t *testing.T, oldSrc, newSrc, siblingSrc string) (names
 	return names, owners, sib, fset, nf
 }
 
-// resolveScenario runs the full two-pass pipeline (visitor + typed pass).
 func resolveScenario(t *testing.T, oldSrc, newSrc, siblingSrc string) bool {
 	t.Helper()
 	names, owners, sib, fset, nf := buildImpactScenario(t, oldSrc, newSrc, siblingSrc)
@@ -97,9 +89,7 @@ func TestImpact2164TypeFullyRemovedStaysMiss(t *testing.T) {
 }
 
 func TestImpact2164GenericOwnerHit(t *testing.T) {
-	// extractImpactRemovedSymbols does not model generic receivers, so build
-	// the name tables manually and verify the typed resolution path only.
-	// (extracted from: func (b *Box[T]) run() {} removed from Box)
+
 	names := map[string]bool{"run": true}
 	owners := map[string]map[string]bool{"run": {"Box": true}}
 	fset := token.NewFileSet()
@@ -153,9 +143,7 @@ func TestImpact2164NilAndUnresolvedInputsSafe(t *testing.T) {
 }
 
 func TestImpact2164NearMissCap(t *testing.T) {
-	// A sibling with more than maxImpactNearMiss variable-receiver call
-	// sites must record at most maxImpactNearMiss candidates (bounded typed
-	// pass work) and still stay a miss at the syntax level.
+
 	names := map[string]bool{"run": true}
 	owners := map[string]map[string]bool{"run": {"Server": true}}
 	src := "package p\n\ntype Server struct{}\n\n"

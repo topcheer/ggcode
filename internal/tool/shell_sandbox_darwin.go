@@ -9,16 +9,6 @@ import (
 	"strings"
 )
 
-// sandboxWrap rewrites the command to run under the macOS Seatbelt via
-// sandbox-exec. The profile follows the broad-deny/specific-allow shape
-// verified against sandbox-exec itself:
-//
-//	(allow default)              - reads, exec, signals, local IPC stay free
-//	(deny file-write*)           - deny ALL writes first
-//	(allow file-write* subpaths) - re-allow the containment roots
-//
-// Later, more specific rules win over the earlier broad deny (verified
-// empirically: /tmp write succeeds, $HOME write fails with EPERM).
 func sandboxWrap(cmd *exec.Cmd, workspace string, p *SandboxPolicy) (bool, error) {
 	bin, err := exec.LookPath("sandbox-exec")
 	if err != nil {
@@ -35,8 +25,6 @@ func sandboxWrap(cmd *exec.Cmd, workspace string, p *SandboxPolicy) (bool, error
 	return true, nil
 }
 
-// seatbeltProfile builds the profile string passed via sandbox-exec -p.
-// The directives form (no (profile ...) wrapper) is what -p expects.
 func seatbeltProfile(workspace string, p *SandboxPolicy) (string, error) {
 	allowPaths := []string{"/dev/null"}
 
@@ -59,8 +47,7 @@ func seatbeltProfile(workspace string, p *SandboxPolicy) (string, error) {
 	if err := addPath(workspace); err != nil {
 		return "", err
 	}
-	// Temp roots: the per-user TMPDIR plus the shared /tmp spelling. Build
-	// systems, compilers and test frameworks write here unconditionally.
+
 	if err := addPath(os.TempDir()); err != nil {
 		return "", err
 	}

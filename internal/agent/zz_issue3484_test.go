@@ -1,19 +1,10 @@
 package agent
 
-// zz_issue3484_test.go -- regression nail for #3484: the refusal-ledger
-// read-only run_command exemption must not cover commands that carry shell
-// write evidence (redirection, find write-flags, git --output). Those fall
-// through to normal entry matching and are blocked when they hit a refused
-// target.
-
 import (
 	"strings"
 	"testing"
 )
 
-// TestIssue3484ReadOnlyExemptionBypassClosed: every write-evidence shape
-// from the issue reproduction table must be BLOCKED when it targets the
-// refused file.
 func TestIssue3484ReadOnlyExemptionBypassClosed(t *testing.T) {
 	l := &refusalLedger{workingDir: t.TempDir()}
 	l.record("don't touch config.yaml", "nl", refusalKindDirect)
@@ -39,9 +30,6 @@ func TestIssue3484ReadOnlyExemptionBypassClosed(t *testing.T) {
 	}
 }
 
-// TestIssue3484ReadOnlyExemptionStillWorks: genuinely read-only shapes
-// (no write evidence) stay exempt even when they mention the refused
-// target - harmless verification (#3469 note preserved).
 func TestIssue3484ReadOnlyExemptionStillWorks(t *testing.T) {
 	l := &refusalLedger{workingDir: t.TempDir()}
 	l.record("don't touch config.yaml", "nl", refusalKindDirect)
@@ -55,7 +43,7 @@ func TestIssue3484ReadOnlyExemptionStillWorks(t *testing.T) {
 		`find . -name config.yaml`,
 		`ls -la`,
 		`echo hi`,
-		`cat x <<EOF_MARKER`, // heredoc opener is input-side, no `>`
+		`cat x <<EOF_MARKER`,
 	}
 	for _, cmd := range readonly {
 		if msg := l.checkBlocked("run_command", `{"command":"`+cmd+`"}`); msg != "" {
@@ -64,8 +52,6 @@ func TestIssue3484ReadOnlyExemptionStillWorks(t *testing.T) {
 	}
 }
 
-// TestIssue3484WriteEvidencePattern: unit-nail the pattern itself so a future
-// regex tweak cannot silently reopen a bypass shape.
 func TestIssue3484WriteEvidencePattern(t *testing.T) {
 	must := []string{
 		`> f`, `>> f`, `1> f`, `2> f`, `&> f`, `2>> f`,

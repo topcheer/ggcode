@@ -1,14 +1,5 @@
 package tool
 
-// Regression probes for #3164: content lines whose source starts with
-// "++" (rendered "+++" in the diff) or "--"/"---" (rendered "---"/more)
-// were misread as file headers and skipped by the +/- counters - the
-// Additions/Deletions heuristics undercounted. Real headers ("+++ b/x",
-// "+++ /dev/null", "--- a/x") are consumed by the earlier regex
-// branches; a "+++" line is a residual header only when IMMEDIATELY
-// after a consumed minus-side header, and "--- /dev/null" is the only
-// literal minus-side header left.
-
 import (
 	"testing"
 )
@@ -22,8 +13,6 @@ func findChange3164(files []FileChangeInfo, path string) *FileChangeInfo {
 	return nil
 }
 
-// Content lines starting with "++"/"--"/"----" in a normal (a/..b/)
-// modified-file diff must be counted.
 func TestIssue3164_HeaderShapedContentCounted(t *testing.T) {
 	diff := `diff --git a/docs/guide.md b/docs/guide.md
 index 111..222 100644
@@ -45,8 +34,7 @@ index 111..222 100644
 	if fc == nil {
 		t.Fatalf("file missing from parsed changes: %+v", files)
 	}
-	// adds: plain new, ++++ hr, +++ nested, ++ marker = 4
-	// dels: plain old, ---- hr, --- note, -- marker = 4
+
 	if fc.Additions != 4 {
 		t.Errorf("Additions = %d, want 4 (header-shaped content counted, #3164)", fc.Additions)
 	}
@@ -55,9 +43,6 @@ index 111..222 100644
 	}
 }
 
-// New-file diffs: "--- /dev/null" followed by "+++ b/x" must stay a
-// header pair (0 phantom adds), while header-shaped CONTENT inside the
-// hunk still counts.
 func TestIssue3164_NewFileHeaderPairStillSkipped(t *testing.T) {
 	diff := `diff --git a/new.md b/new.md
 new file mode 100644
@@ -73,8 +58,7 @@ index 000..333
 	if fc == nil {
 		t.Fatalf("new.md missing from parsed changes: %+v", files)
 	}
-	// "+++ b/new.md" is a header (adjacent to "--- /dev/null"), NOT an add.
-	// adds: first real line + the header-shaped content = 2.
+
 	if fc.Additions != 2 {
 		t.Errorf("Additions = %d, want 2 (header pair skipped, content counted)", fc.Additions)
 	}
@@ -83,7 +67,6 @@ index 000..333
 	}
 }
 
-// Deleted-file diffs: "--- a/x" + "+++ /dev/null" keep 0/0 semantics.
 func TestIssue3164_DeletedFileStillZero(t *testing.T) {
 	diff := `diff --git a/gone.go b/gone.go
 deleted file mode 100644

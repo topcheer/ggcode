@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// Guard tests for issues #1150 and #1151.
-
-// #1150: test commands (go test / cargo test / pytest) imply compilation
-// and type checking success, so running any of them must arm the compile
-// and typecheck verification categories. Otherwise legitimate statements
-// like "the code compiles cleanly" after a green go test get misflagged as
-// phantom verifications.
 func TestIssue1150_TestCommandsArmCompileAndTypecheck(t *testing.T) {
 	cases := []struct {
 		name string
@@ -44,8 +37,6 @@ func TestIssue1150_TestCommandsArmCompileAndTypecheck(t *testing.T) {
 	}
 }
 
-// #1150 negative control: without any verification command, compile and
-// typecheck outcome claims must still be flagged.
 func TestIssue1150_CompileTypecheckClaimsStillFlaggedWithoutCommand(t *testing.T) {
 	s := newPhantomVerifyState()
 	claims := s.detectPhantomClaims("The code compiles cleanly and there are no type errors.")
@@ -62,8 +53,6 @@ func TestIssue1150_CompileTypecheckClaimsStillFlaggedWithoutCommand(t *testing.T
 	}
 }
 
-// #1144 companion: failed verification runs must not arm categories either,
-// keeping the #593/#350 semantics intact alongside the #1150 regex widening.
 func TestIssue1150_FailedTestCommandDoesNotArmCategories(t *testing.T) {
 	s := newPhantomVerifyState()
 	s.recordToolCall("run_command", "go test ./...", true)
@@ -72,10 +61,6 @@ func TestIssue1150_FailedTestCommandDoesNotArmCategories(t *testing.T) {
 	}
 }
 
-// #1151: reading exactly 2 files beyond the edit target (both non-target,
-// no search performed) must exempt the first edit. The old condition
-// required total reads >= 3 including edit targets, so this valid case
-// warned spuriously.
 func TestIssue1151_TwoBeyondTargetReadsExemptWithoutSearch(t *testing.T) {
 	s := newPrematureCommitState()
 	s.recordExploration("read_file", []string{"/proj/pkg/bar.go"})
@@ -87,10 +72,6 @@ func TestIssue1151_TwoBeyondTargetReadsExemptWithoutSearch(t *testing.T) {
 	}
 }
 
-// #1151 second direction: with multiple edit targets, reading 3 files of
-// which only 1 is beyond the targets must now warn. The old total-read
-// cutoff (len(filesRead) >= 3) over-exempted this case because target reads
-// inflated the count.
 func TestIssue1151_MultiTargetWithSingleBeyondReadWarns(t *testing.T) {
 	s := newPrematureCommitState()
 	s.recordExploration("read_file", []string{"/proj/pkg/a.go"})
@@ -106,7 +87,6 @@ func TestIssue1151_MultiTargetWithSingleBeyondReadWarns(t *testing.T) {
 	}
 }
 
-// #1151 baseline: 1 beyond-target read was and remains insufficient.
 func TestIssue1151_SingleBeyondTargetReadInsufficient(t *testing.T) {
 	s := newPrematureCommitState()
 	s.recordExploration("read_file", []string{"/proj/pkg/target.go"})

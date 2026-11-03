@@ -1,27 +1,14 @@
 package agent
 
-// Regression tests for issue #705: the #698 commit-hint fix was inert when the
-// LLM passed RELATIVE tool paths — FilesEdited records the literal
-// pre-execution argument (extractPathsFromToolCall runs before the tool layer
-// resolves it against WorkingDir), while the porcelain side is absolutized, so
-// intersectFileSets compared "src/foo.go" against "<abs>/src/foo.go" and the
-// intersection was always empty. Both sides must be absolutized against
-// workingDir before intersecting.
-
 import (
 	"strings"
 	"testing"
 )
 
-// #705 core scenario: relative-path edit_file argument, file actually dirty.
 func TestIssue705_RelativeEditedPathIntersectsDirtyTree(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
 
-	// NOTE: files must be TRACKED — plain `git status --porcelain` collapses
-	// wholly-untracked directories to "?? src/" (directory, not file), which
-	// is orthogonal to #705. The real-world scenario is an edit to an existing
-	// tracked file, so commit a base first, then the agent's edit dirties it.
 	writeFileT(t, dir+"/src/foo.go", "base")
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-qm", "base")
@@ -43,7 +30,6 @@ func TestIssue705_RelativeEditedPathIntersectsDirtyTree(t *testing.T) {
 	}
 }
 
-// Mixed absolute/relative edit list — both forms must match.
 func TestIssue705_MixedAbsoluteAndRelativeEdits(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
@@ -65,13 +51,10 @@ func TestIssue705_MixedAbsoluteAndRelativeEdits(t *testing.T) {
 	}
 }
 
-// Negative stays negative: a relative path that is NOT dirty must still not
-// fire (absolutizing must not create false positives from user dirt).
 func TestIssue705_RelativePathNotDirtyNoHint(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
 
-	// User dirt only; the agent's relative-path edit was committed via shell.
 	writeFileT(t, dir+"/user_untracked.go", "user")
 	writeFileT(t, dir+"/agent.go", "committed")
 	runGit(t, dir, "add", "agent.go")
@@ -86,7 +69,6 @@ func TestIssue705_RelativePathNotDirtyNoHint(t *testing.T) {
 	}
 }
 
-// Sub-directory relative paths ("pkg/internal/x.go") resolve correctly too.
 func TestIssue705_NestedRelativePath(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir

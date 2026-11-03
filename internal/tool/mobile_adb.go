@@ -14,20 +14,13 @@ import (
 	"time"
 )
 
-// androidBackend implements mobileBackend using ADB (Android Debug Bridge).
-// Works on all platforms where adb is installed.
 type androidBackend struct {
 	adbPath string
 
-	// #1694 case 2: last parsed snapshot tree per device, with @eN IDs
-	// stamped by formatSnapshot. Lets tap/type/swipe resolve element refs
-	// the description promises instead of erroring on every ref call.
 	mu        sync.Mutex
 	snapshots map[string]*uiElement
 }
 
-// resolveRef maps an @eN reference from the device's last snapshot to the
-// element's center coordinates (#1694 case 2).
 func (a *androidBackend) resolveRef(device, ref string) (int, int, error) {
 	if !strings.HasPrefix(ref, "@e") {
 		return 0, 0, fmt.Errorf("invalid element reference %q (expected @eN)", ref)
@@ -58,7 +51,7 @@ func (a *androidBackend) defaultDevice() string {
 		}
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && (fields[1] == "device" || fields[1] == "emulator") {
-			// Prefer transport_id for reliable targeting of wireless devices
+
 			if tid := extractTransportID(fields); tid != "" {
 				return tid
 			}
@@ -70,7 +63,6 @@ func (a *androidBackend) defaultDevice() string {
 	return firstDevice
 }
 
-// extractTransportID finds the transport_id:NNNN field and returns the numeric ID.
 func extractTransportID(fields []string) string {
 	for _, f := range fields {
 		if strings.HasPrefix(f, "transport_id:") {
@@ -80,8 +72,6 @@ func extractTransportID(fields []string) string {
 	return ""
 }
 
-// adbDeviceArgs returns the appropriate adb flags for targeting a specific device.
-// Numeric values are treated as transport IDs (-t), everything else as serial (-s).
 func adbDeviceArgs(device string) []string {
 	if device == "" {
 		return nil
@@ -115,7 +105,7 @@ func (a *androidBackend) devices(ctx context.Context) (Result, error) {
 				info += " " + f
 			}
 			sb.WriteString(fmt.Sprintf("  %s [%s]%s\n", serial, state, info))
-			// Hint: show transport_id separately for reliable targeting
+
 			if tid := extractTransportID(fields); tid != "" {
 				sb.WriteString(fmt.Sprintf("    (use device=\"%s\" with transport_id for reliable targeting)\n", tid))
 			}
@@ -129,8 +119,7 @@ func (a *androidBackend) devices(ctx context.Context) (Result, error) {
 }
 
 func (a *androidBackend) boot(ctx context.Context, device string) (Result, error) {
-	// Android emulators are booted via emulator command, not adb.
-	// adb can wait for device to be ready.
+
 	args := adbDeviceArgs(device)
 	args = append(args, "wait-for-device")
 	out, _, err := runCommand(ctx, 30*time.Second, a.adbPath, args...)
@@ -182,7 +171,7 @@ func (a *androidBackend) close(ctx context.Context, device, pkg string) (Result,
 
 func (a *androidBackend) snapshot(ctx context.Context, device string) (Result, error) {
 	args := adbDeviceArgs(device)
-	// Dump UI hierarchy to device, then pull it
+
 	dumpArgs := append(args, "shell", "uiautomator", "dump", "/sdcard/window_dump.xml")
 	_, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, dumpArgs...)
 	if err != nil {
@@ -200,13 +189,10 @@ func (a *androidBackend) snapshot(ctx context.Context, device string) (Result, e
 		return Result{IsError: true, Content: "failed to parse UI hierarchy"}, nil
 	}
 
-	// Get device info
 	devInfo := fmt.Sprintf("Platform: Android\nDevice: %s", device)
 
 	formatted := formatSnapshot(root, devInfo)
-	// #1694 case 2: formatSnapshot stamps @eN IDs onto the tree as it
-	// numbers elements - cache the stamped tree so later tap/type/swipe
-	// calls can resolve the references this output advertises.
+
 	a.mu.Lock()
 	if a.snapshots == nil {
 		a.snapshots = make(map[string]*uiElement)
@@ -228,9 +214,6 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{IsError: true, Content: fmt.Sprintf("failed to create temp file: %v", err)}, nil
 	}
 	cmd.Stdout = f
-	// #1694 case 7: stderr was discarded - the 0-byte check below catches
-	// the common offline case, but adb's actual error message ("device
-	// offline", "not found") was lost for every other failure mode.
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	err = cmd.Run()
@@ -251,18 +234,12 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{Content: fmt.Sprintf("Screenshot captured (%d bytes, PNG).", len(data))}, nil
 	}
 
-	// #4575: adb screencap -p always emits PNG and no transcoding happens
-	// here - honoring the format/quality args produced PNG bytes labeled
-	// image/jpeg with a "JPEG" description, contradicting the schema
-	// contract and strict decoders. Return PNG truthfully; quality is
-	// documented as PNG-only on this backend.
 	return imageResult(data, "png", quality,
 		fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included for visual analysis.", len(data))), nil
 }
 
 func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
-	// #1694 case 2: resolve @eN against the cached snapshot instead of
-	// erroring - the snapshot output advertises these references.
+
 	if ref != "" {
 		cx, cy, err := a.resolveRef(device, ref)
 		if err != nil {
@@ -280,7 +257,7 @@ func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) 
 }
 
 func (a *androidBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
-	// #1694 case 2: a ref carries its own target from the last snapshot.
+
 	if ref != "" {
 		cx, cy, err := a.resolveRef(device, ref)
 		if err != nil {
@@ -288,19 +265,9 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		x, y = cx, cy
 	}
-	// Tap the field first if coordinates provided
-	// #1694 case 1: x=0/y=0 are LEGAL edge coordinates - the old x>0||y>0
-	// skipped the pre-tap there (text landed wherever focus was).
-	// #1694 case 2: ref-resolved coordinates arrive here too - they must
-	// pre-tap the resolved element center (the ref == "" guard would skip
-	// it and type into whatever holds focus).
+
 	if x != 0 || y != 0 {
-		// #840: include the device selector - without it, multi-device setups
-		// fail 'more than one device/emulator', the error was swallowed below,
-		// and the text went to whatever holds focus while the tool reported
-		// success. #1694: the swallow itself was the unfixed half - a failed
-		// pre-tap now fails LOUD (typing into the wrong control while
-		// reporting success is the worse outcome).
+
 		preArgs := adbDeviceArgs(device)
 		preArgs = append(preArgs, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
 		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, preArgs...); err != nil {
@@ -308,19 +275,11 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	// #4457: adb input text has NO escape syntax - AOSP Input.java
-	// unconditionally decodes %s back to a space on the device. A literal
-	// %s in user text would silently arrive as a space while we report
-	// success. Refuse instead of corrupting the payload.
+
 	if strings.Contains(text, "%s") {
 		return Result{IsError: true, Content: fmt.Sprintf("text contains literal %%s, which adb input text cannot type (the device would decode it to a space and corrupt the payload) - use clipboard paste or type in segments without %%s")}, nil
 	}
-	// #1330: modern adb (shell v2) joins args and runs them through the
-	// device-side /bin/sh, so metacharacters (;, $(), backticks, |, &&)
-	// executed as shell on the device. Single-quote the whole text with
-	// POSIX escaping (' -> '"'"'); %s stays as the input-command space
-	// convention (it is inside the quotes, shell-inert, and input text
-	// decodes it back to a space).
+
 	shellSafe := "'" + strings.ReplaceAll(text, "'", `'"'"'`) + "'"
 	shellSafe = strings.ReplaceAll(shellSafe, " ", "%s")
 	args := adbDeviceArgs(device)
@@ -333,8 +292,7 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 }
 
 func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
-	// #1694 case 2: a ref-only swipe used to run (0,0)->(0,0) and report
-	// success. Resolve the ref to the element center as the swipe START.
+
 	if ref != "" {
 		cx, cy, err := a.resolveRef(device, ref)
 		if err != nil {
@@ -342,9 +300,7 @@ func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y int
 		}
 		x, y = cx, cy
 	}
-	// #4576: #1694 only fixed the START; a missing end still swiped to
-	// (0,0) - from the element center straight into the top-left corner,
-	// then reported success. Both ends must be explicit.
+
 	if endX == nil || endY == nil {
 		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
 	}
@@ -372,19 +328,10 @@ func (a *androidBackend) press(ctx context.Context, device, key string) (Result,
 func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int) (Result, error) {
 	args := adbDeviceArgs(device)
 	if pkg != "" {
-		// #847: the old form passed '--pid=$(pidof' as separate argv fragments
-		// with '2>/dev/null' glued to the package name - no shell expands
-		// $(...), so the pidof match almost always failed and every call fell
-		// to the unfiltered fallback. Query the pid first, then filter by it.
+
 		pidArgs := adbDeviceArgs(device)
 		pidArgs = append(pidArgs, "shell", "pidof", pkg)
-		// #1005: runCommand returns (stdout, stderr, error) - #847 wrote the
-		// receive order backwards, so pidof's PID output (stdout) was
-		// discarded and the almost-always-empty stderr became the pid,
-		// making every package-filtered logs call fail with a false
-		// "app is not running" error. Also take the first PID when pidof
-		// returns several space-separated pids for multi-process apps
-		// (logcat --pid= accepts exactly one).
+
 		outPid, _, _ := runCommand(ctx, 5*time.Second, a.adbPath, pidArgs...)
 		pid := strings.TrimSpace(outPid)
 		if fields := strings.Fields(pid); len(fields) > 0 {
@@ -393,8 +340,7 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 		if pid != "" {
 			args = append(args, "shell", "logcat", "-d", "--pid="+pid, "-t", strconv.Itoa(lines))
 		} else {
-			// App not running - no pid to filter by. Fail loud instead of
-			// silently returning unrelated system noise as 'app logs'.
+
 			return Result{IsError: true, Content: fmt.Sprintf("app %q is not running (no pid); cannot filter logcat by package", pkg)}, nil
 		}
 	} else {
@@ -402,19 +348,17 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 	}
 	out, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, args...)
 	if err != nil {
-		// Fallback to simple logcat
+
 		args = adbDeviceArgs(device)
 		args = append(args, "shell", "logcat", "-d", "-t", strconv.Itoa(lines))
 		out, stderr, err = runCommand(ctx, 15*time.Second, a.adbPath, args...)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("logcat failed: %v\n%s", err, stderr)}, nil
 		}
-		// #1694 case 3: the pid filter failed to execute - the fallback is
-		// UNFILTERED logcat. The old `unfiltered` variable was dead code;
-		// surface the downgrade so the agent knows system noise is mixed in.
+
 		out = "[note: pid-filtered logcat failed; showing unfiltered logcat - lines from other processes are mixed in]\n" + out
 	}
-	// Trim to last N lines
+
 	allLines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(allLines) > lines {
 		allLines = allLines[len(allLines)-lines:]
@@ -429,7 +373,6 @@ func (a *androidBackend) listApps(ctx context.Context, device string) (Result, e
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("list apps failed: %v\n%s", err, stderr)}, nil
 	}
-	// Clean up "package:" prefix
 	var sb strings.Builder
 	sb.WriteString("Installed third-party apps:\n")
 	count := 0
@@ -448,29 +391,16 @@ func (a *androidBackend) listApps(ctx context.Context, device string) (Result, e
 	return Result{Content: sb.String()}, nil
 }
 
-// =============================================================================
-// Android UI XML parsing
-// =============================================================================
-
 var androidBoundsRe = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
 
-// parseAndroidUIXML parses the XML output of `adb shell uiautomator dump`.
 func parseAndroidUIXML(xmlData string) *uiElement {
-	// Simple XML parser for the uiautomator hierarchy format.
-	// We don't use encoding/xml because uiautomator output can be malformed.
-	// Instead, we use regex to extract node elements.
+
 	nodeRe := regexp.MustCompile(`<node\b([^>]*?)/?>`)
 	nodes := nodeRe.FindAllStringSubmatch(xmlData, -1)
 	if len(nodes) == 0 {
 		return nil
 	}
 
-	// Build root from first non-nil node. (#4457: parseAndroidNode returns
-	// nil when a node has no label AND an unparseable Rect - uiautomator
-	// dumps malformed XML like this when bounds are missing or an attribute
-	// value contains '>' and the outer regex truncates the attr list. The
-	// old code only nil-checked children; a nil root panicked on the append
-	// below.)
 	var root *uiElement
 	first := 0
 	for ; first < len(nodes); first++ {
@@ -481,9 +411,7 @@ func parseAndroidUIXML(xmlData string) *uiElement {
 	if root == nil {
 		return nil
 	}
-	// Android XML is a flat list but hierarchical via parent pointers.
-	// In practice, uiautomator dump creates a nested hierarchy.
-	// For simplicity, we flatten into root's children.
+
 	for i := first + 1; i < len(nodes); i++ {
 		child := parseAndroidNode(nodes[i][1])
 		if child != nil {
@@ -491,7 +419,6 @@ func parseAndroidUIXML(xmlData string) *uiElement {
 		}
 	}
 
-	// Trim the tree to avoid excessive depth
 	trimTree(root, 0)
 
 	return root
@@ -501,7 +428,7 @@ func parseAndroidNode(attrs string) *uiElement {
 	el := &uiElement{Type: "view", Platform: "android"}
 
 	if v := xmlAttr(attrs, "class"); v != "" {
-		// Simplify Android class names
+
 		el.Type = simplifyAndroidClass(v)
 	}
 	if v := xmlAttr(attrs, "text"); v != "" {
@@ -527,7 +454,6 @@ func parseAndroidNode(attrs string) *uiElement {
 		}
 	}
 
-	// Skip nodes with no useful info
 	if el.Label == "" && el.Rect == nil {
 		return nil
 	}
@@ -536,26 +462,17 @@ func parseAndroidNode(attrs string) *uiElement {
 }
 
 func simplifyAndroidClass(class string) string {
-	// Android.Widget.Button -> button
-	// android.widget.TextView -> text
-	// #839: uiautomator output can be malformed ('View', 'Layout', 'android.widget.',
-	// even '.'); TrimSuffix can empty the last segment and [:1] panicked with
-	// slice bounds out of range, crashing the whole process. Guard first.
+
 	parts := strings.Split(class, ".")
 	last := parts[len(parts)-1]
 	last = strings.TrimSuffix(last, "View")
 	last = strings.TrimSuffix(last, "Layout")
 	if last == "" {
 		if len(parts) > 1 && parts[len(parts)-2] != "" {
-			// class like 'android.widget.View' - use the package segment.
-			// #3194: the fallback segment itself may be empty (class="." ->
-			// ["",""]; class=".View" -> "" after trim) - only use it when
-			// non-empty, else degrade below instead of panicking on an
-			// empty rune slice at [:1].
+
 			last = parts[len(parts)-2]
 		} else {
-			// Degenerate input ('.', '..', '.View', ...): return the raw
-			// string lowercased rather than panicking the snapshot.
+
 			return strings.ToLower(strings.TrimSpace(class))
 		}
 	}
@@ -563,7 +480,6 @@ func simplifyAndroidClass(class string) string {
 	return last
 }
 
-// xmlAttr extracts an attribute value from a string of XML attributes.
 func xmlAttr(attrs, name string) string {
 	re := regexp.MustCompile(name + `="([^"]*)"`)
 	m := re.FindStringSubmatch(attrs)
@@ -573,16 +489,11 @@ func xmlAttr(attrs, name string) string {
 	return ""
 }
 
-// trimTree removes deeply nested empty nodes to keep output token-efficient.
 func trimTree(el *uiElement, depth int) {
 	if el == nil {
 		return
 	}
-	// #4480: at depth > 8 the old code just returned, leaving the 9th-level
-	// node's ENTIRE subtree unpruned - the opposite of the "avoid excessive
-	// depth" intent (every descendant survived, only the recursion stopped).
-	// Keep the node itself (its parent already filtered it in) but cut the
-	// subtree: clear Children instead of returning untouched.
+
 	if depth > 8 {
 		el.Children = nil
 		return
@@ -597,7 +508,6 @@ func trimTree(el *uiElement, depth int) {
 	el.Children = filtered
 }
 
-// androidKeyCode maps common key names to Android keycodes.
 func androidKeyCode(key string) string {
 	switch strings.ToLower(key) {
 	case "home":
@@ -623,7 +533,7 @@ func androidKeyCode(key string) string {
 	case "recent", "app_switch":
 		return "187"
 	default:
-		// Allow raw keycodes
+
 		return key
 	}
 }

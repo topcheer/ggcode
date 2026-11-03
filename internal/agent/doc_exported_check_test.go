@@ -68,7 +68,7 @@ func ExportedFunc() {}
 }
 
 func TestCheckMissingExportedDocs_PreExistingNoWarning(t *testing.T) {
-	// Exported func was already missing a doc before the edit - should not warn.
+
 	old := `package foo
 
 func ExportedFunc() {}
@@ -123,7 +123,7 @@ func ExportedThing() {}
 }
 
 func TestCheckMissingExportedDocs_ConstGroupMultiSpec(t *testing.T) {
-	// In a multi-spec const group, each exported const needs its own doc.
+
 	newSrc := `package foo
 
 const (
@@ -138,7 +138,7 @@ const (
 }
 
 func TestCheckMissingExportedDocs_SingleSpecDocOnGenDecl(t *testing.T) {
-	// Single-spec declaration: doc on the GenDecl is sufficient.
+
 	newSrc := `package foo
 
 // Config holds settings.
@@ -180,7 +180,7 @@ var DefaultPort = 8080
 }
 
 func TestCheckMissingExportedDocs_MethodOnUnexportedType(t *testing.T) {
-	// Exported method on unexported receiver type - not truly reachable externally.
+
 	newSrc := `package foo
 
 type myStruct struct{}

@@ -1,16 +1,5 @@
 package agent
 
-// Tests for issue #1159: phantom-verify command classification adopts the
-// established disciplines from premature_success.go:
-// 1) issue #350 - bare build-system invocations ("make", "make clean",
-//    "npm run dev") must NOT arm verification categories; only whitelisted
-//    verify targets do;
-// 2) issue #553 - keyword matching is restricted to command position, so
-//    echoed or grepped text containing "go test" must not arm anything.
-// Guards for issues #1144 (JSON extraction) and #1150/#1151 (test implies
-// compile/typecheck) live in zz_issue1144_test.go / zz_issue1150_1151_test.go
-// and must keep passing.
-
 import (
 	"testing"
 )
@@ -80,8 +69,7 @@ func TestPhantomIssue1159NpmAndJvmTargetsFollowWhitelist(t *testing.T) {
 }
 
 func TestPhantomIssue1159MidlineQuotedGoTestDoesNotArm(t *testing.T) {
-	// Issue #553 discipline: only command-position occurrences count. This
-	// line searches for the words instead of running tests.
+
 	for _, cmd := range []string{
 		`grep -rn "go test" .`,
 		`echo 'remember to go test ./...' > NOTES.md`,
@@ -113,8 +101,7 @@ func TestPhantomIssue1159RealVerificationsStillArm(t *testing.T) {
 }
 
 func TestPhantomIssue1159TestImpliesCompileAndTypecheck(t *testing.T) {
-	// Issues #1150/#1151 behavior preserved: go test implies compile and
-	// typecheck happened too.
+
 	cats := phantomIssue1159Run(t, "run_command", "go test ./...")
 	for _, c := range []string{phantomCatTest, phantomCatCompile, phantomCatTypecheck} {
 		if !cats[c] {
@@ -132,12 +119,12 @@ func TestPhantomIssue1159FailedCommandDoesNotArm(t *testing.T) {
 }
 
 func TestPhantomIssue1159NonCommandToolsUnaffected(t *testing.T) {
-	// File-content tools must never classify their payloads (#593 P1).
+
 	cats := phantomIssue1159Run(t, "write_file", "docs about how to go test things and make targets")
 	if cats[phantomCatTest] || cats[phantomCatBuild] {
 		t.Errorf("write_file payload leaked into classification: %v", cats)
 	}
-	// CI checks still count as verification via ci_status (#593 P3).
+
 	cats = phantomIssue1159Run(t, "ci_status", "{}")
 	if len(cats) != 0 && !cats[phantomCatCI] {
 		t.Errorf("unexpected categories for ci_status: %v", cats)

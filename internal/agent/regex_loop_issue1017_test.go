@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #1017 regression tests: instance-based delta (not count comparison) and
-// nested-loop dedup.
-
-// Equal-count pattern swap must now be reported: OLD1/OLD2 replaced by the
-// same number of NEW patterns — count comparison suppressed this entirely.
 func TestRegexLoopEqualCountSwapReported(t *testing.T) {
 	oldSrc := `package p
 import "regexp"
@@ -36,8 +31,6 @@ func f() {
 	}
 }
 
-// Adding one instance must only report the NEW pattern, not re-flag the
-// untouched old instance (over-report bug #1017).
 func TestRegexLoopDeltaReportsOnlyNewInstance(t *testing.T) {
 	oldSrc := `package p
 import "regexp"
@@ -65,7 +58,6 @@ func f() {
 	}
 }
 
-// A nested loop must count each compile call once.
 func TestRegexLoopNestedNoDoubleCount(t *testing.T) {
 	src := `package p
 import "regexp"
@@ -83,8 +75,6 @@ func f(xs []string) {
 	}
 }
 
-// Old nested (double-counted as 2 by the old code) vs new single-level:
-// the new pattern must be reported despite old raw count >= new raw count.
 func TestRegexLoopNestedPollutionFixed(t *testing.T) {
 	oldSrc := `package p
 import "regexp"

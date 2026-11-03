@@ -18,77 +18,36 @@ import (
 )
 
 const (
-	maxOutputSize = 100 * 1024 // 100KB
+	maxOutputSize = 100 * 1024
 )
 
-// RunCommand implements the run_command tool for executing shell commands.
 type RunCommand struct {
-	// WorkingDir is the fixed working directory set by the agent.
-	// LLM-provided working_dir is ignored to prevent sandbox escape.
 	WorkingDir string
-	// JobManager is used to auto-background long-running commands.
 	JobManager *CommandJobManager
-	// Policy provides the current permission mode. When set and the mode
-	// is Bypass or Autopilot, "Ask" gate results are automatically downgraded
-	// to Allow (with a warning log) instead of blocking execution.
-	Policy permission.PermissionPolicy
-	// OutputTee, if non-nil, receives a copy of stdout/stderr in real time.
-	// Used by the TUI to mirror command output to a tmux pane.
-	OutputTee io.Writer
-	// OnPreExec, if non-nil, is called just before the command starts.
-	OnPreExec func(command, description string)
+	Policy     permission.PermissionPolicy
+	OutputTee  io.Writer
+	OnPreExec  func(command, description string)
 
-	// OmittedOutputSpiller, if non-nil, receives the middle section that
-	// truncateMiddle is about to drop from oversized stdout/stderr and may
-	// return a notice line (e.g. a spill-file reference) to embed in the
-	// truncation marker. The agent wires this to its shared output
-	// offloader so the omitted middle stays recoverable from disk instead
-	// of being silently discarded before the central agent-loop spill point
-	// ever sees the result (r382 Offload-valve gap).
 	OmittedOutputSpiller func(source, omitted string) string
-	// OnPostExec, if non-nil, is called after the command finishes.
-	OnPostExec func(exitCode int, err error)
-	// Sandbox, if non-nil and Enabled, wraps every agent-driven shell spawn
-	// in an OS-level containment sandbox (Seatbelt on macOS). See
-	// shell_sandbox.go for the policy model.
-	Sandbox *SandboxPolicy
-	// SecLedger (research round sa-216) records every denial (gate block,
-	// bypass-downgraded ask, sandbox EPERM) and surfaces an escalation
-	// warning when one denial source fires repeatedly - the behavioral
-	// fingerprint of sandbox probing. Nil-safe: unwired = no detection.
-	SecLedger *SecurityLedger
-	// RiskLedger (r28, DreamGuard-inspired) is the ALLOWED-side dual of
-	// SecLedger: every gate-PASSED dangerous-classified command
-	// accumulates session-level risk, and a crossing escalates a notice
-	// onto the result - individually-permitted steps drifting toward a
-	// hazardous state. Nil-safe: unwired = no detection.
-	RiskLedger *AllowedRiskLedger
+	OnPostExec           func(exitCode int, err error)
+	Sandbox              *SandboxPolicy
+	SecLedger            *SecurityLedger
+	RiskLedger           *AllowedRiskLedger
 }
 
-// autoBackgroundDelay is how long a dev-server-like command runs before
-// being automatically moved to a background job.
 const autoBackgroundDelay = 15 * time.Second
 
-// stalledCommandDelay is how long a normal (non-dev-server) command runs
-// before being automatically moved to a background job. This prevents
-// unexpectedly slow commands from blocking the agent loop for the full
-// 30-minute timeout. The model can then decide to wait_command, check
-// output, or continue with other work.
 const stalledCommandDelay = 120 * time.Second
 
-// guiCommands are commands that launch GUI applications and should return
-// immediately rather than waiting for process exit.
 var guiCommands = []string{
-	"open",     // macOS: open file/app
-	"xdg-open", // Linux: open file/app
-	"start",    // Windows: start command (via bash)
-	"code",     // VS Code
-	"cursor",   // Cursor editor
-	"windsurf", // Windsurf editor
+	"open",
+	"xdg-open",
+	"start",
+	"code",
+	"cursor",
+	"windsurf",
 }
 
-// devServerPrefixes are command prefixes that typically start long-running
-// dev servers. These should auto-background after autoBackgroundDelay.
 var devServerPrefixes = []string{
 	"npm start",
 	"npm run dev",
@@ -114,8 +73,6 @@ var devServerPrefixes = []string{
 	"docker-compose up",
 }
 
-// isGUICommand returns true if the command launches a GUI application
-// and should return immediately after starting.
 func isGUICommand(cmd string) bool {
 	firstWord := firstShellWord(cmd)
 	for _, gc := range guiCommands {
@@ -126,8 +83,6 @@ func isGUICommand(cmd string) bool {
 	return false
 }
 
-// isDevServerCommand returns true if the command likely starts a dev server
-// or other long-running foreground process.
 func isDevServerCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
 	for _, prefix := range devServerPrefixes {
@@ -138,14 +93,12 @@ func isDevServerCommand(cmd string) bool {
 	return false
 }
 
-// firstShellWord extracts the first word of a shell command,
-// handling quoted strings.
 func firstShellWord(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return ""
 	}
-	// Handle quoted first word
+
 	if cmd[0] == '"' || cmd[0] == '\'' {
 		quote := cmd[0]
 		for i := 1; i < len(cmd); i++ {
@@ -155,7 +108,7 @@ func firstShellWord(cmd string) string {
 		}
 		return cmd[1:]
 	}
-	// Unquoted: split on whitespace
+
 	for i, c := range cmd {
 		if c == ' ' || c == '\t' {
 			return cmd[:i]
@@ -200,8 +153,6 @@ func (t RunCommand) Parameters() json.RawMessage {
 }`)
 }
 
-// isBypassMode returns true when the permission policy allows
-// automatic execution of Ask-level commands (Bypass or Autopilot).
 func (t RunCommand) isBypassMode() bool {
 	if t.Policy == nil {
 		return false
@@ -216,10 +167,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		WorkingDir  string `json:"working_dir"`
 		Timeout     int    `json:"timeout"`
 		Description string `json:"description"`
-		// DryRun rehearses instead of executing (r451 command rehearsal):
-		// a lexical preview of write targets / destructive segments is
-		// returned. Zero execution - the command is never spawned.
-		DryRun bool `json:"dry_run"`
+		DryRun      bool   `json:"dry_run"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -237,10 +185,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		debug.Log("run_command", "description: %s", args.Description)
 	}
 
-	// Snapshot tracked file mtimes before execution so we can detect which
-	// previously-read files were modified by this command (e.g. gofmt, sed -i,
-	// git checkout, protoc). This gives the agent proactive staleness feedback
-	// instead of waiting for a stale-read error on the next edit_file.
 	mtimeSnapshot := defaultFileTracker.SnapshotTracked()
 
 	gate := NewCommandGate()
@@ -257,14 +201,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.Command = cleanedCmd
 	}
 	preWarning := preWarn
-	// r25 command cost hints: clock starts after the gate has passed so
-	// approval wait time never inflates the recorded duration.
+
 	costStart := time.Now()
-	// r28: the gate PASSED - the allowed-side dual of SecLedger.Record on
-	// the blocked branch above. If the command is dangerous-classified its
-	// risk accumulates on the session ledger; a threshold crossing rides
-	// the result as a prefix notice (preWarning prefixes every main-path
-	// return below).
+
 	t.RiskLedger.Accumulate(args.Command)
 	if esc := t.RiskLedger.Escalation(); esc != "" {
 		preWarning += esc + "\n\n"
@@ -273,35 +212,20 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	if args.Timeout <= 0 {
 		args.Timeout = int(defaultCommandTimeout / time.Second)
 	}
-	// #513: clamp before the seconds→nanoseconds multiplication.
-	// time.Duration(x)*time.Second has no overflow guard — e.g. 9223372037s
-	// wraps negative (WithTimeout expires instantly, command killed at 0s)
-	// and 18446744074s wraps to a positive ~290ms. Values above one day
-	// are never meaningful for a shell command.
+
 	if args.Timeout > maxCommandTimeoutSeconds {
 		args.Timeout = maxCommandTimeoutSeconds
 	}
 
-	// #568: GUI commands also return immediately after Start — if their ctx
-	// derived from the request context, the deferred cancel would SIGTERM and
-	// then SIGKILL the app within ~100ms of the tool call returning, while the
-	// success message ("GUI application launched") still told the agent it
-	// worked. GUI apps must live on a Background-derived ctx like managed jobs.
 	isGUI := isGUICommand(args.Command)
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if t.JobManager != nil || isGUI {
 		if isGUI {
-			// #1245: a detached GUI app must not carry a timeout timer at
-			// all. The timer is armed at creation and fires independently of
-			// Wait, so `code`/`cursor` still running 30 minutes later were
-			// process-group SIGKILLed. Plain WithCancel: the only thing that
-			// can ever fire is guiWait's cancel after the app process exits.
+
 			cmdCtx, cancel = context.WithCancel(context.Background())
 		} else {
-			// Managed background jobs outlive this tool call, so their
-			// context must not derive from the request context or be
-			// deferred here — but they keep the timeout clock (#568 scope).
+
 			cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
 		}
 	} else {
@@ -314,34 +238,16 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
 	}
 	configureCommandCancellation(cmd)
-	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir.
-	// #4787 (S-16): validate liveness and re-resolve to the nearest live
-	// ancestor — a dead WorkingDir makes EVERY spawn fail fork/exec-ENOENT
-	// wholesale, which previously surfaced as an unexplained 1-8min outage.
-	// The background-job path already does this (#4791); the main path now
-	// matches it instead of setting a possibly-dead cmd.Dir.
+
 	if t.WorkingDir != "" {
 		cmd.Dir = NearestLiveDir(t.WorkingDir)
 	}
 
-	// Normalize the terminal environment for all commands so that CLI tools
-	// produce clean, deterministic output suitable for LLM consumption:
-	//   - TERM=dumb: suppresses terminfo-based color, cursor movement, and
-	//     interactive UI (progress bars, spinners) from ncurses/tput-based tools
-	//   - NO_COLOR=1: the no-color.org standard honored by Go, Rust, Node,
-	//     Python (pytest, rich), and many CLI frameworks; prevents color codes
-	//     at the source rather than relying on post-hoc ANSI stripping
-	//   - COLUMNS=120: consistent wrapping width so table/list output (kubectl,
-	//     terraform, pytest -v) wraps predictably regardless of the user's
-	//     actual terminal width
-	//   - CI=true: signals non-interactive mode to tools that check for CI
-	//     (npm, cargo, gradle, gcloud, etc.), suppressing interactive prompts
-	//     and progress bars
 	cmd.Env = normalizedCommandEnv()
 	if isGitCommand(args.Command) {
 		cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
 	}
-	// Inject Co-Authored-By trailer for git commit commands
+
 	if isGitCommitCommand(args.Command) {
 		args.Command = injectCoAuthorTrailer(args.Command)
 		newCmd, _, cmdErr := util.NewShellCommandContext(cmdCtx, args.Command)
@@ -351,7 +257,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		cmd = newCmd
 		configureCommandCancellation(cmd)
 		if t.WorkingDir != "" {
-			cmd.Dir = NearestLiveDir(t.WorkingDir) // #4787: liveness-checked, see above
+			cmd.Dir = NearestLiveDir(t.WorkingDir)
 		}
 		cmd.Env = normalizedCommandEnv()
 		if isGitCommand(args.Command) {
@@ -359,16 +265,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		}
 	}
 
-	// Layered OS-level containment: wrap the resolved shell spawn so the
-	// KERNEL (not the heuristic gates above) enforces the write/network
-	// boundary. Skipped for GUI launches - detached editors/builders need
-	// their real file system access (#568/#1245).
 	sandboxed := false
 	if !isGUI {
 		wrapped, wrapErr := wrapShellCommandOS(cmd, t.WorkingDir, t.Sandbox)
 		if wrapErr != nil {
-			// Fail closed: an opted-in sandbox that cannot be enforced must
-			// never silently degrade into an unsandboxed execution.
+
 			return Result{IsError: true, Content: "Error: " + wrapErr.Error()}, nil
 		}
 		sandboxed = wrapped
@@ -378,30 +279,21 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		t.OnPreExec(args.Command, args.Description)
 	}
 
-	// Extract progress callback for streaming (if available).
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
 	var stdout, stderr = newBoundedOutputWriter(2 * maxOutputSize), newBoundedOutputWriter(2 * maxOutputSize)
 	var pwOut, pwErr *streamingProgressWriter
 	pwOut, pwErr = t.wireCommandOutput(cmd, stdout, stderr, progressFn)
 
-	// GUI commands: start and return immediately.
 	if isGUI {
 		if err := cmd.Start(); err != nil {
-			// Release the timeout timer now — nothing else owns cancel on this
-			// early-return path.
+
 			cancel()
 			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
 		}
-		// Detach — don't wait for exit. The guiWait goroutine owns cancel and
-		// fires it after the app process exits; GUI apps carry no timeout
-		// clock at all, so a long-lived editor is never killed by the tool
-		// call returning (#568) nor by a delayed timer (#1245).
+
 		safego.Go("tool.runCommand.guiWait", func() {
-			// #1699 case 4: the non-GUI success/failure paths both invoke
-			// OnPostExec, but the GUI path never did - hooks mounted on
-			// post-exec never saw GUI launches. Mirror the completion
-			// semantics once the app process exits.
+
 			waitErr := cmd.Wait()
 			cancel()
 			if t.OnPostExec != nil {
@@ -415,11 +307,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
 
-	// For non-GUI commands, start the process and race between
-	// completion and auto-background delay. This prevents slow commands
-	// from blocking the agent loop.
-	// - Dev server commands: 15s threshold (known long-running)
-	// - Other commands: 120s threshold (stalled detection)
 	if t.JobManager != nil {
 		delay := stalledCommandDelay
 		if isDevServerCommand(args.Command) {
@@ -430,13 +317,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	err = cmd.Run()
 
-	// #4787 (S-16): a spawn-level shell failure ("fork/exec /bin/sh: no
-	// such file or directory") is an environmental outage that typically
-	// self-heals within minutes — NOT a strategy problem with this command.
-	// Give the channel one probe-with-backoff: if it already recovered,
-	// transparently re-run the exact same command (no gate re-run, no
-	// second approval); otherwise the degraded-mode hint is appended below
-	// so the agent retries the health probe instead of pivoting strategy.
 	if isSpawnEnoentFailure(err) {
 		time.Sleep(shellOutageBackoff)
 		if util.ShellAvailable() {
@@ -448,11 +328,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		}
 	}
 
-	// Flush any output that landed inside the last 300ms throttle window:
-	// Write() only buffers lines while throttled, so a command finishing
-	// mid-window would never emit its final tail (the streaming view would
-	// silently miss the last burst). The terminal-state SetResult replaces
-	// the body afterwards, so this only affects the last streaming frame.
 	if progressFn != nil {
 		if pwOut != nil {
 			pwOut.flush()
@@ -466,19 +341,13 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	errOutput := util.StripANSI(stderr.String())
 
 	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
-	// r25 command cost hints: file the observed duration and surface it
-	// (plus history-based advice) in the result, where the next planning
-	// turn reads it. arXiv 2607.27250: operational cost warnings are the
-	// one context component that measurably changes agent command choice.
-	// (Backgrounded/GUI branches return earlier with no completion time,
-	// so reaching here means the command ran synchronously to completion.)
+
 	elapsed := time.Since(costStart)
 	recordCommandCost(args.Command, elapsed)
 	if costLine := formatCommandCost(args.Command, elapsed); costLine != "" {
 		result.Content += "\n\n" + costLine
 	}
-	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
-	// config knob so the agent adapts instead of retrying blindly.
+
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
 		t.SecLedger.Record("sandbox", "eperm", args.Command)
 		result.Content += sandboxEPERMHint
@@ -486,22 +355,15 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 			result.Content += "\n" + esc
 		}
 	}
-	// #4787 (S-16): still failing after the probe-retry above (or the probe
-	// itself failed) — surface the shell-degraded signal.
+
 	if isSpawnEnoentFailure(err) {
 		result.Content += "\n\n" + shellDegradedHint()
 	}
 	return result, nil
 }
 
-// finalizeCommandResult assembles the tool Result after cmd.Run() returns:
-// truncation (head+tail), STDERR sectioning, failure diagnostics with exit
-// code, mtime-diff file-change notices, and the structured build/test
-// summary prefix. Inputs are the already-stripped stdout/stderr strings.
 func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
-	// Truncate output if too large — keep both head and tail.
-	// For most commands (tests, builds, lints), the important info is at the
-	// end (error messages, test results). Keeping only the head would lose it.
+
 	output = truncateMiddleSpill(output, maxOutputSize, "output", t.OmittedOutputSpiller)
 	errOutput = truncateMiddleSpill(errOutput, maxOutputSize, "stderr", t.OmittedOutputSpiller)
 
@@ -518,8 +380,7 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	}
 
 	if runErr != nil {
-		// #2588: normalize signal kills (-1) to 128+N so OnPostExec and
-		// buildFailureMessage see 137/139, not an uninterpretable -1.
+
 		exitCode := exitCodeFromErr(runErr)
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, runErr)
@@ -537,9 +398,6 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 		return Result{Content: preWarning + "Command completed with no output." + fileChanges}
 	}
 
-	// Build/test output intelligence: prepend structured summary when available
-	// so the agent sees actionable results first, reducing context consumption
-	// for large test/build outputs.
 	summary := summarizeCommandOutput(command, sb.String())
 	if summary != "" {
 		return Result{Content: preWarning + summary + sb.String() + fileChanges}
@@ -548,42 +406,27 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	return Result{Content: preWarning + sb.String() + fileChanges}
 }
 
-// truncateMiddle keeps the first 40% and last 50% of output, inserting a
-// "[... N lines omitted ...]" marker in between. This ensures the agent sees
-// both the beginning (context/setup) and the end (errors, results, exit status)
-// of long outputs like test runs, build logs, and linter output.
-//
-// Truncation is line-aware: head and tail boundaries are snapped to the
-// nearest newline so the output doesn't contain partial lines. This makes
-// the truncated output much easier for the agent to parse.
 func truncateMiddle(s string, maxLen int, label string) string {
 	return truncateMiddleSpill(s, maxLen, label, nil)
 }
 
-// truncateMiddleSpill is truncateMiddle with an optional spiller hook: when
-// non-nil it receives the omitted middle and its return value (if non-empty)
-// is appended to the truncation marker so the dropped section stays
-// recoverable (see RunCommand.OmittedOutputSpiller).
 func truncateMiddleSpill(s string, maxLen int, label string, spiller func(source, omitted string) string) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	headSize := maxLen * 2 / 5 // 40% of budget for the head
-	tailSize := maxLen / 2     // 50% of budget for the tail
+	headSize := maxLen * 2 / 5
+	tailSize := maxLen / 2
 
-	// Snap head to rune boundary first, then to end of current line.
 	headEnd := util.SnapToRuneStart(s, headSize)
 	if idx := strings.Index(s[headEnd:], "\n"); idx >= 0 && idx <= headSize/2 {
 		headEnd = headEnd + idx
 	}
 
-	// Snap tail to rune boundary first, then to start of next line.
 	tailStart := util.SnapToRuneStart(s, len(s)-tailSize)
 	if idx := strings.Index(s[tailStart:], "\n"); idx >= 0 && idx <= tailSize/2 {
 		tailStart = tailStart + idx + 1
 	}
 
-	// If snapping causes overlap, fall back to rune-safe offsets.
 	if headEnd >= tailStart {
 		headEnd = util.SnapToRuneStart(s, headSize)
 		tailStart = util.SnapToRuneStart(s, len(s)-tailSize)
@@ -592,7 +435,6 @@ func truncateMiddleSpill(s string, maxLen int, label string, spiller func(source
 	head := s[:headEnd]
 	tail := s[tailStart:]
 
-	// Count omitted lines for a more useful message
 	omittedText := s[headEnd:tailStart]
 	omittedLines := strings.Count(omittedText, "\n")
 
@@ -606,10 +448,6 @@ func truncateMiddleSpill(s string, maxLen int, label string, spiller func(source
 	return head + marker + tail
 }
 
-// executeWithAutoBackground starts a command as a managed job and waits up to
-// the given delay. If the command finishes quickly, its output is returned
-// directly. If it runs longer than the delay, the already-managed job ID is
-// returned. The job manager owns the process and performs the only Wait call.
 func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration, progressFn ToolProgressFunc) (Result, error) {
 	if t.JobManager == nil {
 		return Result{IsError: true, Content: "command job manager not available"}, nil
@@ -621,8 +459,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	}
 	if snapshot != nil && snapshot.Status == CommandJobFailed {
 		t.JobManager.forget(snapshot.ID)
-		// #4787 (S-16): spawn-level shell failure on the managed-job path —
-		// same degraded-mode signal as the synchronous path.
+
 		content := snapshot.ErrText
 		if isSpawnEnoentFailureText(content) {
 			content += "\n\n" + shellDegradedHint()
@@ -634,15 +471,11 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 		return Result{IsError: true, Content: "failed to start command job"}, nil
 	}
 
-	// Stream job output in real-time during the wait period.
-	// Poll every 300ms, pushing the last 5 lines to the TUI via progressFn.
-	// #1097: pass ctx for proper cancellation.
 	streamJobOutput(ctx, job, delay, progressFn)
 	snap := t.JobManager.snapshot(job)
 	snapshot = &snap
 	if snapshot.Status == CommandJobRunning {
-		// Command is still running in background — pane footer will be
-		// written when the user checks the job output or stops it.
+
 		return Result{Content: fmt.Sprintf(
 			"Command is still running after %v. Automatically moved to background (job %s).\nUse `read_command_output` to check progress or `stop_command` to stop it.",
 			delay, snapshot.ID,
@@ -661,7 +494,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	if t.OnPostExec != nil {
 		t.OnPostExec(0, nil)
 	}
-	// Build/test output intelligence for auto-background completed commands
+
 	if summary := summarizeCommandOutput(command, content); summary != "" {
 		return Result{Content: summary + content}, nil
 	}
@@ -685,13 +518,10 @@ func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
 	if sb.Len() == 0 {
 		return "Command completed with no output."
 	}
-	// #1118: job snapshots had no total-output byte cap; reuse truncateMiddle
-	// semantics here so the auto-background return path cannot stream the full
-	// ring buffer (up to 400 x per-line cap) into agent context.
+
 	return capCommandOutputText(sb.String(), "command output")
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t RunCommand) Clone() Tool {
 	return &RunCommand{
 		WorkingDir: t.WorkingDir,
@@ -701,20 +531,13 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 		Sandbox:    t.Sandbox,
-		// #3293: the session-level security ledger must survive the clone.
-		// Sub-agent registries clone every tool (spawn_agent / trial_fork /
-		// skill / swarm / desktop); dropping the pointer silently blinded
-		// sandbox-probe detection for every sub-agent's run_command calls.
+
 		SecLedger: t.SecLedger,
-		// r28: same survival requirement for the allowed-risk dual.
+
 		RiskLedger: t.RiskLedger,
 	}
 }
 
-// retryCommandFromCmd returns the command string the first spawn actually
-// ran. Prefer the exec.Cmd's own args (the git-commit trailer branch and
-// any future command rewrites are captured there verbatim); fall back to
-// args.Command from the original request.
 func retryCommandFromCmd(failed *exec.Cmd, fallback string) string {
 	if len(failed.Args) >= 3 {
 		return failed.Args[len(failed.Args)-1]
@@ -722,18 +545,8 @@ func retryCommandFromCmd(failed *exec.Cmd, fallback string) string {
 	return fallback
 }
 
-// shellOutageBackoff is the pause before the #4787 (S-16) health probe:
-// long enough to ride out a brief scheduler hiccup, short enough that the
-// retry still lands inside the same tool call.
 const shellOutageBackoff = 2 * time.Second
 
-// isSpawnEnoentFailure reports whether err is a SHELL-CHANNEL spawn failure
-// ("fork/exec <shell>: no such file or directory" on the shell binary
-// itself, returned by exec's Start path) as seen in #4787 / S-16 windows.
-// It deliberately does NOT match:
-//   - inner-command "command not found" (that's the command's own problem)
-//   - chdir ENOENT ("chdir <dir>: no such file or directory") — dead cwd,
-//     which NearestLiveDir already fixes before spawn
 func isSpawnEnoentFailure(err error) bool {
 	if err == nil {
 		return false
@@ -741,8 +554,6 @@ func isSpawnEnoentFailure(err error) bool {
 	return isSpawnEnoentFailureText(err.Error())
 }
 
-// isSpawnEnoentFailureText is isSpawnEnoentFailure for already-rendered
-// error text (job snapshots carry ErrText, not error values).
 func isSpawnEnoentFailureText(s string) bool {
 	if s == "" {
 		return false
@@ -755,10 +566,6 @@ func isSpawnEnoentFailureText(s string) bool {
 	return strings.Contains(c, "no such file or directory")
 }
 
-// shellDegradedHint is the #4787 (S-16) degraded-mode signal appended to
-// spawn-failure results. The health-probe command doubles as the marker the
-// strategy-stagnation detector exempts from gating: probing IS the recovery
-// strategy during a shell outage.
 func shellDegradedHint() string {
 	return "[SHELL-DEGRADED] The shell channel failed to spawn (fork/exec ENOENT on the shell itself). " +
 		"This is a transient host-level outage observed to self-heal in 1-8 minutes (#4787). " +
@@ -767,11 +574,6 @@ func shellDegradedHint() string {
 		"When it succeeds, re-run the original command unchanged."
 }
 
-// rebuildShellCommand rebuilds the exec.Cmd for the #4787 (S-16) retry after
-// a shell channel self-heals: same command, same liveness-checked cwd, the
-// FIRST attempt's already-normalized env, and a fresh OS-sandbox wrap when
-// one was applied to the first attempt. Output writers are reused (a
-// spawn-level failure wrote nothing).
 func (t RunCommand) rebuildShellCommand(ctx context.Context, command string, failed *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc, sandboxed bool) (*exec.Cmd, *streamingProgressWriter, *streamingProgressWriter, error) {
 	cmd2, _, err := util.NewShellCommandContext(ctx, command)
 	if err != nil {
@@ -791,20 +593,14 @@ func (t RunCommand) rebuildShellCommand(ctx context.Context, command string, fai
 	return cmd2, pw2o, pw2e, nil
 }
 
-// diagnoseCommandFailure analyzes command output for common error patterns
-// and returns a helpful hint appended to the error message. This gives the
-// agent immediate context about likely causes without needing a separate
-// diagnostic step.
 func diagnoseCommandFailure(stdout, stderr string) string {
 	combined := stdout + "\n" + stderr
 	var hints []string
 
-	// "command not found" — likely missing dependency or typo
 	if strings.Contains(combined, "command not found") || strings.Contains(combined, "not recognized as") {
 		hints = append(hints, "Hint: command not found — check if the tool is installed and in PATH")
 	}
 
-	// Go compilation errors
 	if strings.Contains(combined, "undefined:") && strings.Contains(combined, ".go") {
 		hints = append(hints, "Hint: Go undefined reference — check for missing imports or renamed symbols")
 	}
@@ -815,12 +611,10 @@ func diagnoseCommandFailure(stdout, stderr string) string {
 		hints = append(hints, "Hint: Go package not found — check import path or run 'go mod tidy'")
 	}
 
-	// Python import errors
 	if strings.Contains(combined, "ModuleNotFoundError") || strings.Contains(combined, "ImportError") {
 		hints = append(hints, "Hint: Python module missing — install with pip or check virtual environment")
 	}
 
-	// Node/npm errors
 	if strings.Contains(combined, "Cannot find module") && strings.Contains(combined, "node") {
 		hints = append(hints, "Hint: Node module missing — run 'npm install' or 'yarn install'")
 	}
@@ -828,17 +622,14 @@ func diagnoseCommandFailure(stdout, stderr string) string {
 		hints = append(hints, "Hint: npm script failed — check the script output above for the actual error")
 	}
 
-	// Permission denied
 	if strings.Contains(combined, "permission denied") {
 		hints = append(hints, "Hint: permission denied — check file permissions or ownership")
 	}
 
-	// Port already in use
 	if strings.Contains(combined, "address already in use") || strings.Contains(combined, "port is already allocated") {
 		hints = append(hints, "Hint: port conflict — another process may be using the same port")
 	}
 
-	// Make: no rule
 	if strings.Contains(combined, "No rule to make target") {
 		hints = append(hints, "Hint: Makefile target not found — check spelling or run 'make help' for available targets")
 	}
@@ -849,14 +640,9 @@ func diagnoseCommandFailure(stdout, stderr string) string {
 	return "[Diagnostics]\n" + strings.Join(hints, "\n")
 }
 
-// streamJobOutput polls a running command job's output and pushes the last
-// 5 lines to the TUI via the progress callback. Polls every 300ms for
-// near-real-time streaming. Returns when the job finishes, ctx is canceled,
-// or the delay expires. #1097: added ctx.Done() for proper cancellation.
 func streamJobOutput(ctx context.Context, job *CommandJob, delay time.Duration, progressFn ToolProgressFunc) {
 	if progressFn == nil {
-		// No progress callback — fall back to simple wait.
-		// #1097: pass ctx instead of Background for proper cancellation.
+
 		_ = waitForCommandJob(ctx, job, delay)
 		return
 	}
@@ -867,35 +653,32 @@ func streamJobOutput(ctx context.Context, job *CommandJob, delay time.Duration, 
 	defer ticker.Stop()
 
 	for {
-		// #1097: check if caller canceled the context.
+
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
 
-		// Read current output snapshot.
 		snap := snapshotJobLines(job, 5)
 		if snap != "" {
 			progressFn("", "run_command", snap)
 		}
 
-		// Check if job is done.
 		if isFinishedCommandStatus(jobSnapshotStatus(job)) {
 			return
 		}
 
-		// Check deadline.
 		if !time.Now().Before(deadline) {
 			return
 		}
 
 		select {
 		case <-ctx.Done():
-			// #1097: caller canceled, exit immediately.
+
 			return
 		case <-job.done:
-			// Final read after job completes.
+
 			snap := snapshotJobLines(job, 5)
 			if snap != "" {
 				progressFn("", "run_command", snap)
@@ -907,7 +690,6 @@ func streamJobOutput(ctx context.Context, job *CommandJob, delay time.Duration, 
 	}
 }
 
-// snapshotJobLines reads the last n lines from a running job's ring buffer.
 func snapshotJobLines(job *CommandJob, n int) string {
 	job.mu.Lock()
 	defer job.mu.Unlock()
@@ -934,12 +716,6 @@ func snapshotJobLines(job *CommandJob, n int) string {
 	return sb.String()
 }
 
-// applyCommandGate runs the Allow/Ask/Block gate and interactive-command
-// warnings for one command. Returns (cleanedCmd, preExecutionWarning,
-// blockedReason): blockedReason non-empty means the caller must return it
-// verbatim as an error result; cleanedCmd replaces the command when the
-// gate normalized it; preExecutionWarning is prefixed to the final result
-// content so the agent can self-correct.
 func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleanedCmd, preWarning, blocked string) {
 	gateResult := gate.Check(command)
 	if gateResult.IsBlocked() {
@@ -947,35 +723,24 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 		return "", "", gateResult.Reason
 	}
 	if gateResult.NeedsConfirmation() {
-		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
-		// These modes assume the user trusts the agent — the command is
-		// still logged as a warning for audit purposes.
+
 		if t.isBypassMode() {
 			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-			// #4273: no SecLedger.Record here. A downgraded-allow is NOT a
-			// denial - the command runs - and feeding it into the denial
-			// ledger produced the factually-wrong "was denied N times"
-			// escalation banner on ordinary bypass workflows (the PS deploy
-			// chain report). Real probing is still covered: the BLOCKED path
-			// above records ("gate","block") separately.
+
 		} else {
 			debug.Log("run_command", "ASK: %s", gateResult.Reason)
-			// Caller returns this verbatim — the agent loop interprets the
-			// prefix as "needs user permission" and prompts.
+
 			return "", "", "⚠️ " + gateResult.Reason
 		}
 	}
 	for _, w := range gateResult.Warnings {
 		debug.Log("run_command", "WARNING: %s", w)
 	}
-	// Surface interactive-command warnings via the result content so the
-	// agent can self-correct before the timeout fires.
+
 	if interactive := gate.InteractiveCommandWarning(command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
 	}
-	// #4273: no escalation banner rides on bypass-downgraded asks - a
-	// downgraded-allow is not a denial, so a probing-pattern notice would
-	// be factually wrong. Blocked commands carry their own escalation.
+
 	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != command {
 		debug.Log("run_command", "cleaned command: %s → %s", command, gateResult.CleanedCmd)
 		cleanedCmd = gateResult.CleanedCmd
@@ -983,9 +748,6 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 	return cleanedCmd, preWarning, ""
 }
 
-// buildFailureMessage assembles the error-path result body: combined output,
-// optional structured summary, the raw failure, and layered diagnostics
-// (root-cause hint, shell-compat hint, exit-code interpretation).
 func (t RunCommand) buildFailureMessage(command, combinedOutput, errOutput string, err error, exitCode int) string {
 	var msg string
 	if summary := summarizeCommandOutput(command, combinedOutput); summary != "" {
@@ -1006,27 +768,16 @@ func (t RunCommand) buildFailureMessage(command, combinedOutput, errOutput strin
 	return msg
 }
 
-// streamingProgressWriter wraps an io.Writer and pushes the last 5 lines
-// of output to the TUI via a progress callback. Used for the direct cmd.Run()
-// path (no JobManager) to provide real-time streaming.
 type streamingProgressWriter struct {
 	buf      io.Writer
 	extra    io.Writer
 	progress ToolProgressFunc
-	// pending accumulates raw chunks since the last emission. ANSI
-	// stripping and line splitting are deferred to emit time: they used
-	// to run per chunk at PIPE-READ rate, so high-volume commands (builds,
-	// installs) burned CPU in the pipe-pump goroutines and the resulting
-	// GC pressure stalled the TUI render thread (typing/spinner jank).
 	pending  []byte
-	lastBody string // most recent emitted tail (flush re-emits)
+	lastBody string
 	lastEmit time.Time
 	mu       sync.Mutex
 }
 
-// maxPendingProgress bounds the raw chunk backlog between throttled
-// emissions. Only the tail is shown, so older bytes are droppable; a
-// runaway command must not grow memory unbounded.
 const maxPendingProgress = 16 * 1024
 
 func newStreamingProgressWriter(buf io.Writer, extra io.Writer, progress ToolProgressFunc) *streamingProgressWriter {
@@ -1039,9 +790,9 @@ func newStreamingProgressWriter(buf io.Writer, extra io.Writer, progress ToolPro
 
 func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	// Write to the underlying buffer first.
+
 	w.buf.Write(p)
-	// Write to extra tee if present.
+
 	if w.extra != nil {
 		w.extra.Write(p)
 	}
@@ -1049,13 +800,10 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	w.pending = append(w.pending, p...)
 	if len(w.pending) > maxPendingProgress {
-		// Keep only the tail.
+
 		w.pending = w.pending[len(w.pending)-maxPendingProgress:]
 	}
 
-	// Throttle progress emission to 300ms. The FIRST write emits
-	// immediately (lastEmit zero) so output starts scrolling at once;
-	// within a window, chunks just accumulate into pending.
 	if !w.lastEmit.IsZero() && time.Since(w.lastEmit) < 300*time.Millisecond {
 		w.mu.Unlock()
 		return n, nil
@@ -1069,8 +817,6 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// emitTailLocked drains pending into the "[...] last-5-lines" body
-// (must hold w.mu). Processing happens here, not per chunk.
 func (w *streamingProgressWriter) emitTailLocked() string {
 	text := util.StripANSI(string(w.pending))
 	w.pending = w.pending[:0]
@@ -1095,16 +841,11 @@ func (w *streamingProgressWriter) emitTailLocked() string {
 	return sb.String()
 }
 
-// flush forces one final progress emission of the tail, bypassing the
-// 300ms throttle. Call after the command exits so the last throttled
-// window of output is not lost from the streaming view.
 func (w *streamingProgressWriter) flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.pending) == 0 {
-		// Unconditional tail emission (legacy semantics): with nothing
-		// new since the last emit, re-emit the last body so callers that
-		// flush after command exit always get a final event.
+
 		if w.lastBody != "" {
 			w.progress("", "run_command", w.lastBody)
 		}
@@ -1115,37 +856,18 @@ func (w *streamingProgressWriter) flush() {
 	w.progress("", "run_command", body)
 }
 
-// commandEnvOverrides are environment variables injected into every command
-// to normalize terminal behavior for clean, deterministic LLM-consumable output.
 var commandEnvOverrides = []string{
-	"TERM=dumb",   // Suppress color, cursor movement, progress bars
-	"NO_COLOR=1",  // no-color.org standard; prevents color at the source
-	"COLUMNS=120", // Consistent wrapping width for tables and lists
-	"CI=true",     // Non-interactive mode for npm, cargo, gradle, etc.
+	"TERM=dumb",
+	"NO_COLOR=1",
+	"COLUMNS=120",
+	"CI=true",
 }
 
-// normalizedCommandEnv returns os.Environ() with terminal normalization
-// overrides applied. Later entries take precedence in Go's cmd.Env semantics,
-// so the overrides replace any user-set TERM, NO_COLOR, COLUMNS, or CI values.
 func normalizedCommandEnv() []string {
-	// #2284-A: strip config-managed secret names first - an arbitrary
-	// child shell must not inherit (and be able to dump) every key
-	// ggcode injected into the process env. Values stay in the process
-	// env for same-process ${VAR} expansion; only child inheritance is
-	// blocked (R240 audit option 2).
+
 	return append(util.StripSecretEnv(os.Environ()), commandEnvOverrides...)
 }
 
-// wireCommandOutput attaches stdout/stderr capture to the cmd with the best
-// available pipeline: streaming progress writers (live TUI tail + tee +
-// buffer) when a progress callback exists, plain tee+buffer otherwise, or
-// buffer-only. Returns the progress writers (nil, nil when progress is off)
-// so the caller can flush them after exit.
-//
-// Buffers are boundedOutputWriter (not bytes.Buffer): command output volume
-// is untrusted and raw buffers grew to gigabytes on heavy builds, slowing
-// the whole process via memory pressure. Retention cap mirrors the
-// post-run truncateMiddle budget (maxOutputSize per stream).
 func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
 	if progressFn != nil {
 		var tee io.Writer

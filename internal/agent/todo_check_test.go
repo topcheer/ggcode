@@ -161,7 +161,6 @@ func TestCodeChangedInRun_NilMap(t *testing.T) {
 	}
 }
 
-// Helper to isolate HOME for todo tests.
 func withTestHomeTodos(t *testing.T) {
 	t.Helper()
 	tmpHome := t.TempDir()

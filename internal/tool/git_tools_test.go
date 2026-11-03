@@ -37,13 +37,13 @@ func TestGitDiffDescriptionRemindsInspection(t *testing.T) {
 
 func TestGitStatusBasic(t *testing.T) {
 	gs := GitStatus{}
-	// Running in the project repo — should work
+
 	input, _ := json.Marshal(map[string]string{"path": "."})
 	result, err := gs.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic — may be clean or have changes
+
 	t.Logf("git status: %s", result.Content)
 }
 
@@ -77,7 +77,7 @@ func TestGitDiffBasic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic — may be clean or have diffs
+
 	t.Logf("git diff: %d chars", len(result.Content))
 }
 
@@ -99,7 +99,7 @@ func TestGitDiffCached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic
+
 	t.Logf("git diff --cached: %d chars", len(result.Content))
 }
 
@@ -134,7 +134,7 @@ func TestGitLogZeroCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Zero count → defaults to 10
+
 	t.Logf("git log zero count: %s", result.Content)
 }
 

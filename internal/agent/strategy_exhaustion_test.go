@@ -18,13 +18,12 @@ func TestStrategyExhaustion_NoTriggerOnSuccess(t *testing.T) {
 func TestStrategyExhaustion_SameStrategyRepeatedNoTrigger(t *testing.T) {
 	s := newStrategyExhaustionState()
 	errContent := "undefined: foo"
-	// Same error + same recovery pattern = errStrategyLoop territory, not ours.
+
 	for i := 0; i < 8; i++ {
 		s.recordToolCall("edit_file", false, "", i*3)
 		s.recordToolCall("run_command", false, "", i*3+1)
 		msg := s.recordToolCall("run_command", true, errContent, i*3+2)
-		// Even after many iterations, if it's the SAME strategy repeated,
-		// we should not trigger (that's errStrategyLoop's job).
+
 		if msg != "" {
 			t.Fatalf("should not trigger for repeated same strategy at iteration %d, got: %s", i, msg)
 		}
@@ -35,34 +34,29 @@ func TestStrategyExhaustion_TriggersOnDiverseStrategies(t *testing.T) {
 	s := newStrategyExhaustionState()
 	errContent := "build error: undefined: foo"
 
-	// Strategy 1: edit + build
 	s.recordToolCall("edit_file", false, "", 1)
 	s.recordToolCall("run_command", false, "", 2)
-	s.recordToolCall("run_command", true, errContent, 3) // occurrence 1
+	s.recordToolCall("run_command", true, errContent, 3)
 
-	// Strategy 2: grep + edit + build (different tool set)
 	s.recordToolCall("grep", false, "", 4)
 	s.recordToolCall("edit_file", false, "", 5)
 	s.recordToolCall("run_command", false, "", 6)
-	s.recordToolCall("run_command", true, errContent, 7) // occurrence 2, strategy #2
+	s.recordToolCall("run_command", true, errContent, 7)
 
-	// Strategy 3: lsp + multi_edit + build
 	s.recordToolCall("lsp_definition", false, "", 8)
 	s.recordToolCall("multi_edit_file", false, "", 9)
 	s.recordToolCall("run_command", false, "", 10)
-	s.recordToolCall("run_command", true, errContent, 11) // occurrence 3, strategy #3
+	s.recordToolCall("run_command", true, errContent, 11)
 
-	// Strategy 4: read + write + test
 	s.recordToolCall("read_file", false, "", 12)
 	s.recordToolCall("write_file", false, "", 13)
 	s.recordToolCall("run_command", false, "", 14)
-	s.recordToolCall("run_command", true, errContent, 15) // occurrence 4, strategy #4
+	s.recordToolCall("run_command", true, errContent, 15)
 
-	// Strategy 5: glob + file_ops + test
 	s.recordToolCall("glob", false, "", 16)
 	s.recordToolCall("file_ops", false, "", 17)
 	s.recordToolCall("run_command", false, "", 18)
-	msg := s.recordToolCall("run_command", true, errContent, 19) // occurrence 5, strategy #5
+	msg := s.recordToolCall("run_command", true, errContent, 19)
 
 	if msg == "" {
 		t.Fatal("expected strategy exhaustion warning after 4+ distinct strategies + recurrence")
@@ -80,7 +74,7 @@ func TestStrategyExhaustion_MaxWarnings(t *testing.T) {
 	errContent := "build error: undefined: foo"
 
 	triggerExhaustion := func(iteration int) string {
-		// Each call uses a different tool sequence to create a new strategy.
+
 		strategies := [][]string{
 			{"edit_file", "run_command"},
 			{"grep", "edit_file", "run_command"},
@@ -97,14 +91,10 @@ func TestStrategyExhaustion_MaxWarnings(t *testing.T) {
 		return s.recordToolCall("run_command", true, errContent, base)
 	}
 
-	// First exhaustion: should warn.
 	msg1 := triggerExhaustion(0)
-	// Burn through strategies to get first trigger.
-	// Actually we need 5 occurrences (first + 4 distinct strategies).
-	// Let's simplify: just verify cap is enforced.
+
 	_ = msg1
 
-	// Force enough iterations to potentially trigger multiple times.
 	warnings := 0
 	for i := 0; i < 20; i++ {
 		msg := triggerExhaustion(i)
@@ -121,7 +111,6 @@ func TestStrategyExhaustion_ResetClearsState(t *testing.T) {
 	s := newStrategyExhaustionState()
 	errContent := "build error: undefined: foo"
 
-	// Generate some state.
 	s.recordToolCall("run_command", true, errContent, 1)
 	s.recordToolCall("edit_file", false, "", 2)
 	s.recordToolCall("run_command", true, errContent, 3)
@@ -142,7 +131,6 @@ func TestStrategyExhaustion_ResetClearsState(t *testing.T) {
 func TestStrategyExhaustion_DifferentErrorsNoTrigger(t *testing.T) {
 	s := newStrategyExhaustionState()
 
-	// Each error is different, so no single error recurs enough.
 	errors := []string{
 		"undefined: foo",
 		"undefined: bar",
@@ -160,8 +148,7 @@ func TestStrategyExhaustion_DifferentErrorsNoTrigger(t *testing.T) {
 }
 
 func TestStrategyExhaustion_FingerprintNormalization(t *testing.T) {
-	// Errors that differ only in variable parts (line numbers, file paths)
-	// should produce the same fingerprint.
+
 	err1 := "/path/to/file.go:42:5: undefined: foo"
 	err2 := "/different/path.go:100:20: undefined: foo"
 
@@ -186,23 +173,18 @@ func TestStrategyExhaustion_FingerprintDifferentErrors(t *testing.T) {
 }
 
 func TestStrategyExhaustion_StrategySignature(t *testing.T) {
-	// Same tool sequence = same signature.
+
 	sig1 := seStrategySignature([]string{"edit_file", "run_command"})
 	sig2 := seStrategySignature([]string{"edit_file", "run_command"})
 	if sig1 != sig2 {
 		t.Fatal("identical sequences should have same signature")
 	}
 
-	// #1498 case C: different ORDER = same signature (order-sensitivity let
-	// pure noise fabricate distinct strategies); different TOOL SET =
-	// different signature. grep is a read-only observation tool and is
-	// dropped from signatures entirely.
 	sig3 := seStrategySignature([]string{"run_command", "edit_file"})
 	if sig1 != sig3 {
 		t.Fatal("different order of the same recovery set must have same signature")
 	}
 
-	// Different recovery tools = different signature.
 	sig4 := seStrategySignature([]string{"edit_file", "write_file"})
 	if sig1 == sig4 {
 		t.Fatal("different recovery tool sets should have different signature")
@@ -213,10 +195,8 @@ func TestStrategyExhaustion_EmptyToolsNoSignature(t *testing.T) {
 	s := newStrategyExhaustionState()
 	errContent := "build error"
 
-	// First occurrence: no prior tools, so no strategy signature.
 	s.recordToolCall("run_command", true, errContent, 1)
 
-	// Immediate second occurrence without any intervening tools.
 	msg := s.recordToolCall("run_command", true, errContent, 2)
 	if msg != "" {
 		t.Fatalf("should not trigger with empty strategy signatures, got: %s", msg)

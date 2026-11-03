@@ -1,24 +1,10 @@
 package agent
 
-// Issue #1206 tests: guidance byte-cap accounting symmetry.
-//
-// injectGuidance was gated by guidanceBudgetBytesPerTurn but never charged
-// it: tool-result hints (allowDeduped) filled the pool while iteration-level
-// detector guidance only read it. A tool-error-heavy turn could silently
-// starve every subsequent detector advisory, and unlimited iteration-level
-// injections never filled the pool for tool hints either.
-//
-// Fixed by charging the shared pool on every successful injectGuidance
-// delivery, exactly like the tool-hint path.
-
 import (
 	"strings"
 	"testing"
 )
 
-// injectGuidance must CHARGE the shared byte pool on delivery: a first large
-// injection consumes the budget that a later (count-legal) injection is then
-// gated against.
 func TestIssue1206_InjectGuidanceChargesBytePool(t *testing.T) {
 	a, _ := issue677Agent(t)
 
@@ -39,8 +25,6 @@ func TestIssue1206_InjectGuidanceChargesBytePool(t *testing.T) {
 	}
 }
 
-// Cross-path symmetry: bytes charged by the tool-result hint path
-// (allowDeduped) must gate injectGuidance, proving one shared pool.
 func TestIssue1206_ToolHintBytesStarveDetectorGuidance(t *testing.T) {
 	a, _ := issue677Agent(t)
 
@@ -49,21 +33,16 @@ func TestIssue1206_ToolHintBytesStarveDetectorGuidance(t *testing.T) {
 		t.Fatal("tool hint should pass within the byte pool")
 	}
 
-	// Count budget untouched, but the shared byte pool is nearly full.
 	detectorMsg := "[error-rush] " + strings.Repeat("w", 300)
 	if a.injectGuidance(detectorMsg) {
 		t.Fatal("detector guidance must be gated by tool-hint bytes in the shared pool (1900+300 > 2048)")
 	}
-	// The count budget is shared too (#1197 semantics: tool hints consume the
-	// same allow() count) - the tool hint took count slot 1, and the byte-
-	// suppressed detector message must not consume a slot.
+
 	if a.guidanceBudget.injected != 1 {
 		t.Fatalf("injected = %d, want 1 (tool hint's slot; byte suppression must not consume the count budget)", a.guidanceBudget.injected)
 	}
 }
 
-// Reverse direction: iteration-level injections must fill the pool so a later
-// tool hint is bounded by them.
 func TestIssue1206_IterationBytesBoundLaterToolHints(t *testing.T) {
 	a, _ := issue677Agent(t)
 
@@ -77,9 +56,6 @@ func TestIssue1206_IterationBytesBoundLaterToolHints(t *testing.T) {
 	}
 }
 
-// Small injections within both caps must not interfere. Note the count
-// budget is shared across both paths (guidanceBudgetPerTurn = 2): advisory
-// + tool hint fill it, so a third injection is count-suppressed by design.
 func TestIssue1206_SmallInjectionsCoexist(t *testing.T) {
 	a, _ := issue677Agent(t)
 

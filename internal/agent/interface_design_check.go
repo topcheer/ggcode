@@ -1,45 +1,5 @@
 package agent
 
-// interface_design_check.go implements Go Interface Design & Abstraction
-// Intelligence -- deterministic detection of interface design anti-patterns
-// in Go source files after a write or edit.
-//
-// This catches design smells that harm maintainability and type safety but
-// that the Go compiler cannot detect:
-//
-//  1. Fat Interface -- interface with too many methods (>7), violating the
-//     Interface Segregation Principle (ISP). Large interfaces force
-//     implementers to satisfy methods they don't need.
-//  2. Non-idiomatic single-method interface naming -- a single-method
-//     interface whose method name is a generic verb (Do, Run, Execute, ...)
-//     that doesn't derive from the interface name. Go convention: Reader →
-//     Read, Closer → Close.
-//  3. Returning any/interface{} -- exported functions returning `any` or
-//     `interface{}` erase type safety at every call site.
-//  4. Interface method using any/interface{} -- interface methods with `any`
-//     params or returns weaken the type contract.
-//  5. Exported interface with unexported method -- limits implementations to
-//     the current package, defeating the purpose of an exported interface.
-//  6. Single implementation (unnecessary abstraction) -- a newly-introduced
-//     interface with >=2 methods that has only one implementer in the
-//     package. Go proverb: "The bigger the interface, the weaker the
-//     abstraction."
-//
-// All checks are:
-//   - Delta-aware: only report issues newly introduced by the edit (compares
-//     old vs new content per interface/function).
-//   - Deterministic: pure AST analysis, zero LLM cost.
-//   - Non-blocking: warnings are advisory, edits are not reverted.
-//   - Bounded: at most idMaxWarnings per file.
-//
-// Competitor mapping:
-//   - golangci-lint: `interfacebloat` (fat interface), `iface` analyzer --
-//     run on-demand, not at write time.
-//   - Claude Code / Cursor / Copilot: rely on post-build tools or LSP.
-//   - OpenHands / Devin: no interface design analysis.
-//   - Our advantage: real-time, delta-aware, zero-config detection at write
-//     time, before the developer even runs a linter.
-
 import (
 	"bytes"
 	"fmt"
@@ -53,31 +13,19 @@ import (
 )
 
 const (
-	// idMaxInterfaceMethods is the ISP threshold. Interfaces exceeding this
-	// method count should be split into smaller, focused interfaces.
 	idMaxInterfaceMethods = 7
 
-	// idMaxWarnings caps the number of interface-design warnings per file to
-	// avoid overwhelming the agent's context.
 	idMaxWarnings = 5
 
-	// idMinMethodsForSingleImpl is the minimum method count for the
-	// single-implementation check. Interfaces with fewer methods are commonly
-	// used for mocking/testing and are not flagged.
 	idMinMethodsForSingleImpl = 2
 )
 
-// idGenericMethodNames lists overly generic method names that reduce interface
-// clarity. A single-method interface using one of these names should use a more
-// descriptive verb instead (e.g., Reader → Read, not Reader → Do).
 var idGenericMethodNames = map[string]bool{
 	"Do": true, "Run": true, "Execute": true, "Process": true,
 	"Handle": true, "Perform": true, "Call": true, "Apply": true,
 	"Work": true, "Action": true, "Operate": true, "Invoke": true,
 }
 
-// idInterfaceInfo captures design-relevant metadata about an interface,
-// extracted from source for delta-aware comparison.
 type idInterfaceInfo struct {
 	MethodCount   int
 	MethodNames   []string
@@ -85,14 +33,10 @@ type idInterfaceInfo struct {
 	UsesAny       bool
 }
 
-// idFuncReturnInfo captures whether a function returns any/interface{}.
 type idFuncReturnInfo struct {
 	ReturnsAny bool
 }
 
-// checkInterfaceDesign is the entry point for interface design checks. It uses
-// the pre-parsed GoAST from CheckContext and compares against old content for
-// delta-awareness. Returns a slice of advisory warning strings.
 func checkInterfaceDesign(ctx CheckContext) []string {
 	if ctx.GoAST == nil {
 		return nil
@@ -121,11 +65,6 @@ func checkInterfaceDesign(ctx CheckContext) []string {
 	return warnings
 }
 
-// ---------------------------------------------------------------------------
-// Check 1: Fat Interface (ISP violation)
-// ---------------------------------------------------------------------------
-
-// idCheckFatInterfaces warns about interfaces exceeding the ISP method threshold.
 func idCheckFatInterfaces(file *ast.File, oldIfaces map[string]idInterfaceInfo) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
@@ -147,7 +86,7 @@ func idCheckFatInterfaces(file *ast.File, oldIfaces map[string]idInterfaceInfo) 
 				continue
 			}
 			if old, exists := oldIfaces[ts.Name.Name]; exists && old.MethodCount > idMaxInterfaceMethods {
-				continue // already fat before the edit -- delta-aware skip
+				continue
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"Interface '%s' has %d methods (>%d threshold): violates the Interface Segregation Principle (ISP). "+
@@ -158,12 +97,6 @@ func idCheckFatInterfaces(file *ast.File, oldIfaces map[string]idInterfaceInfo) 
 	return warnings
 }
 
-// ---------------------------------------------------------------------------
-// Check 2: Non-idiomatic single-method interface naming
-// ---------------------------------------------------------------------------
-
-// idCheckNaming warns about single-method interfaces using generic method names
-// that don't derive from the interface name.
 func idCheckNaming(file *ast.File, oldIfaces map[string]idInterfaceInfo) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
@@ -196,15 +129,12 @@ func idCheckNaming(file *ast.File, oldIfaces map[string]idInterfaceInfo) []strin
 	return warnings
 }
 
-// idNamingIssue returns a warning for non-idiomatic naming, or "" if OK.
-// Idiomatic single-method interfaces have method names that are prefixes of the
-// interface name (Read → Reader, Close → Closer).
 func idNamingIssue(ifaceName, methodName string) string {
 	lowerIface := strings.ToLower(ifaceName)
 	lowerMethod := strings.ToLower(methodName)
 
 	if strings.HasPrefix(lowerIface, lowerMethod) {
-		return "" // idiomatic: method derives from interface name
+		return ""
 	}
 	if idGenericMethodNames[methodName] {
 		return fmt.Sprintf(
@@ -215,12 +145,6 @@ func idNamingIssue(ifaceName, methodName string) string {
 	return ""
 }
 
-// ---------------------------------------------------------------------------
-// Check 3: Interface method using any/interface{}
-// ---------------------------------------------------------------------------
-
-// idCheckInterfaceAny warns about interface methods using any/interface{} in
-// params or returns, which weakens the type contract.
 func idCheckInterfaceAny(file *ast.File, oldIfaces map[string]idInterfaceInfo) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
@@ -252,12 +176,6 @@ func idCheckInterfaceAny(file *ast.File, oldIfaces map[string]idInterfaceInfo) [
 	return warnings
 }
 
-// ---------------------------------------------------------------------------
-// Check 4: Exported interface with unexported method
-// ---------------------------------------------------------------------------
-
-// idCheckUnexportedMethod warns about exported interfaces containing unexported
-// methods, which restricts implementations to the current package.
 func idCheckUnexportedMethod(file *ast.File, oldIfaces map[string]idInterfaceInfo) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
@@ -289,12 +207,6 @@ func idCheckUnexportedMethod(file *ast.File, oldIfaces map[string]idInterfaceInf
 	return warnings
 }
 
-// ---------------------------------------------------------------------------
-// Check 5: Returning any/interface{}
-// ---------------------------------------------------------------------------
-
-// idCheckReturningAny warns about exported functions/methods returning
-// any/interface{}, which erases type safety at call sites.
 func idCheckReturningAny(file *ast.File, oldFuncs map[string]idFuncReturnInfo) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
@@ -303,7 +215,7 @@ func idCheckReturningAny(file *ast.File, oldFuncs map[string]idFuncReturnInfo) [
 			continue
 		}
 		if !fn.Name.IsExported() {
-			continue // only flag exported functions
+			continue
 		}
 		if !idResultsReturnAny(fn.Type.Results.List) {
 			continue
@@ -320,12 +232,6 @@ func idCheckReturningAny(file *ast.File, oldFuncs map[string]idFuncReturnInfo) [
 	return warnings
 }
 
-// ---------------------------------------------------------------------------
-// Check 6: Single implementation (unnecessary abstraction)
-// ---------------------------------------------------------------------------
-
-// idCheckSingleImpl warns about newly-introduced interfaces with >=2 methods
-// that have only one implementation in the package.
 func idCheckSingleImpl(ctx CheckContext, oldIfaces map[string]idInterfaceInfo) []string {
 	newIfaces := idFindNewInterfaces(ctx.GoAST, oldIfaces)
 	if len(newIfaces) == 0 {
@@ -352,8 +258,6 @@ func idCheckSingleImpl(ctx CheckContext, oldIfaces map[string]idInterfaceInfo) [
 	return warnings
 }
 
-// idCollectPackageTypes gathers type→methods maps from the package directory
-// (excluding the current file) plus the current file's own methods.
 func idCollectPackageTypes(ctx CheckContext) map[string]map[string]bool {
 	pkgTypes := scanPackageTypeMethods(filepath.Dir(ctx.FilePath), ctx.FilePath, "")
 	allTypes := make(map[string]map[string]bool)
@@ -366,13 +270,6 @@ func idCollectPackageTypes(ctx CheckContext) map[string]map[string]bool {
 	return allTypes
 }
 
-// ---------------------------------------------------------------------------
-// AST helper functions
-// ---------------------------------------------------------------------------
-
-// idCountMethods counts named methods plus embedded interfaces in an interface
-// type. Embedded interfaces are counted as 1 each (conservative lower bound
-// since their actual method count requires type-checking).
 func idCountMethods(it *ast.InterfaceType) int {
 	if it.Methods == nil {
 		return 0
@@ -382,13 +279,12 @@ func idCountMethods(it *ast.InterfaceType) int {
 		if len(field.Names) > 0 {
 			count += len(field.Names)
 		} else {
-			count++ // embedded interface
+			count++
 		}
 	}
 	return count
 }
 
-// idMethodNames returns the names of named methods in an interface.
 func idMethodNames(it *ast.InterfaceType) []string {
 	if it.Methods == nil {
 		return nil
@@ -402,8 +298,6 @@ func idMethodNames(it *ast.InterfaceType) []string {
 	return names
 }
 
-// idInterfaceHasUnexportedMethod checks if an interface has any unexported
-// named methods.
 func idInterfaceHasUnexportedMethod(it *ast.InterfaceType) bool {
 	if it.Methods == nil {
 		return false
@@ -418,8 +312,6 @@ func idInterfaceHasUnexportedMethod(it *ast.InterfaceType) bool {
 	return false
 }
 
-// idInterfaceUsesAny checks if any named method in the interface uses
-// any/interface{} in its params or returns.
 func idInterfaceUsesAny(it *ast.InterfaceType) bool {
 	if it.Methods == nil {
 		return false
@@ -436,8 +328,6 @@ func idInterfaceUsesAny(it *ast.InterfaceType) bool {
 	return false
 }
 
-// idFuncTypeUsesAny checks if a function type uses any/interface{} in params
-// or returns.
 func idFuncTypeUsesAny(ft *ast.FuncType) bool {
 	if ft.Params != nil {
 		for _, p := range ft.Params.List {
@@ -456,7 +346,6 @@ func idFuncTypeUsesAny(ft *ast.FuncType) bool {
 	return false
 }
 
-// idIsAnyType checks if an expression represents `any` or `interface{}`.
 func idIsAnyType(expr ast.Expr) bool {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -467,7 +356,6 @@ func idIsAnyType(expr ast.Expr) bool {
 	return false
 }
 
-// idResultsReturnAny checks if any return type is bare any/interface{}.
 func idResultsReturnAny(results []*ast.Field) bool {
 	for _, field := range results {
 		if idIsAnyType(field.Type) {
@@ -477,9 +365,6 @@ func idResultsReturnAny(results []*ast.Field) bool {
 	return false
 }
 
-// idRecvTypeName extracts the receiver type name, stripping pointer indirection.
-// Handles generic receivers like `func (f *Foo[T]) M()` by preserving the
-// IndexExpr form (Foo[T]) instead of returning empty string (#1066).
 func idRecvTypeName(expr ast.Expr) string {
 	if star, ok := expr.(*ast.StarExpr); ok {
 		expr = star.X
@@ -487,15 +372,13 @@ func idRecvTypeName(expr ast.Expr) string {
 	if ident, ok := expr.(*ast.Ident); ok {
 		return ident.Name
 	}
-	// #1066: Handle generic receivers like *Foo[T] or Foo[T]
+
 	if index, ok := expr.(*ast.IndexExpr); ok {
-		return gofmtExpr(index) // returns "Foo[T]" for idFuncKey
+		return gofmtExpr(index)
 	}
 	return ""
 }
 
-// gofmtExpr formats an AST expression back to Go source code.
-// Used for generic receiver names like "Foo[T]" (#1066).
 func gofmtExpr(expr ast.Expr) string {
 	var buf bytes.Buffer
 	fset := token.NewFileSet()
@@ -506,7 +389,6 @@ func gofmtExpr(expr ast.Expr) string {
 	return buf.String()
 }
 
-// idFuncKey generates a unique key for a function (receiver type + name).
 func idFuncKey(fn *ast.FuncDecl) string {
 	if fn.Name == nil {
 		return ""
@@ -518,7 +400,6 @@ func idFuncKey(fn *ast.FuncDecl) string {
 	return recv + fn.Name.Name
 }
 
-// idFuncDisplayName returns a human-readable function name.
 func idFuncDisplayName(fn *ast.FuncDecl) string {
 	if fn.Name == nil {
 		return "<anonymous>"
@@ -531,7 +412,6 @@ func idFuncDisplayName(fn *ast.FuncDecl) string {
 	return fn.Name.Name
 }
 
-// idFindNewInterfaces returns method sets for interfaces not present in oldIfaces.
 func idFindNewInterfaces(file *ast.File, oldIfaces map[string]idInterfaceInfo) map[string]map[string]bool {
 	result := make(map[string]map[string]bool)
 	for _, decl := range file.Decls {
@@ -557,7 +437,6 @@ func idFindNewInterfaces(file *ast.File, oldIfaces map[string]idInterfaceInfo) m
 	return result
 }
 
-// idMethodSet extracts method names from an interface as a set.
 func idMethodSet(it *ast.InterfaceType) map[string]bool {
 	methods := make(map[string]bool)
 	if it.Methods == nil {
@@ -571,7 +450,6 @@ func idMethodSet(it *ast.InterfaceType) map[string]bool {
 	return methods
 }
 
-// idScanFileMethods scans an AST file for receiver type → method name set.
 func idScanFileMethods(file *ast.File) map[string]map[string]bool {
 	result := make(map[string]map[string]bool)
 	for _, decl := range file.Decls {
@@ -591,7 +469,6 @@ func idScanFileMethods(file *ast.File) map[string]map[string]bool {
 	return result
 }
 
-// idCountImplementers counts types that implement all methods in ifaceMethods.
 func idCountImplementers(ifaceMethods map[string]bool, typeMethods map[string]map[string]bool) int {
 	count := 0
 	for _, methods := range typeMethods {
@@ -602,7 +479,6 @@ func idCountImplementers(ifaceMethods map[string]bool, typeMethods map[string]ma
 	return count
 }
 
-// idImplementsAll checks if a type's method set covers all interface methods.
 func idImplementsAll(ifaceMethods, typeMethods map[string]bool) bool {
 	for m := range ifaceMethods {
 		if !typeMethods[m] {
@@ -612,11 +488,6 @@ func idImplementsAll(ifaceMethods, typeMethods map[string]bool) bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Old-content extraction (for delta-aware comparison)
-// ---------------------------------------------------------------------------
-
-// idExtractInterfaces parses source and returns interface info by name.
 func idExtractInterfaces(src string) map[string]idInterfaceInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -651,7 +522,6 @@ func idExtractInterfaces(src string) map[string]idInterfaceInfo {
 	return result
 }
 
-// idExtractFuncReturns parses source and returns function return info by key.
 func idExtractFuncReturns(src string) map[string]idFuncReturnInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -677,11 +547,6 @@ func idExtractFuncReturns(src string) map[string]idFuncReturnInfo {
 	return result
 }
 
-// ---------------------------------------------------------------------------
-// Utility functions
-// ---------------------------------------------------------------------------
-
-// idSliceEqual checks if two string slices are equal.
 func idSliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

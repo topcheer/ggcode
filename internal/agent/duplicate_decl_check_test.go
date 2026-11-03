@@ -98,7 +98,7 @@ const MaxRetries = 5 // duplicate!
 }
 
 func TestCheckDuplicateDeclarations_NoFalsePositiveDifferentMethods(t *testing.T) {
-	// Methods with the same name on different types are NOT duplicates.
+
 	old := `package main
 
 type Dog struct{}
@@ -121,8 +121,7 @@ func (c *Cat) Speak() string { return "meow" } // NOT a duplicate — different 
 }
 
 func TestCheckDuplicateDeclarations_PreExistingDuplicateNotFlagged(t *testing.T) {
-	// If the old content already had duplicates, don't re-flag them
-	// (they're pre-existing, not introduced by this edit).
+
 	old := `package main
 
 func foo() {}
@@ -175,8 +174,6 @@ func TestCheckDuplicateDeclarations_EmptyContent(t *testing.T) {
 	}
 }
 
-// --- Python tests ---
-
 func TestCheckDuplicateDeclarations_PythonDuplicateFunction(t *testing.T) {
 	old := `def process(data):
     return data
@@ -220,8 +217,6 @@ class User:  # duplicate!
 		t.Errorf("expected warning about duplicate class User, got: %s", result)
 	}
 }
-
-// --- JavaScript/TypeScript tests ---
 
 func TestCheckDuplicateDeclarations_JSDuplicateFunction(t *testing.T) {
 	old := `function calculate(x) {
@@ -271,5 +266,3 @@ func TestCheckDuplicateDeclarations_UnsupportedLanguage(t *testing.T) {
 		t.Errorf("expected empty result for unsupported language, got: %s", result)
 	}
 }
-
-// --- Integration test via checkWriteIntegrity ---

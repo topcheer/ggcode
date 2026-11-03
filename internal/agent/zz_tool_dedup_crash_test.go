@@ -10,11 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Crash-restore idempotency window (tool_dedup_crash.go): after a crash,
-// session resume re-seeds the dedup ledger from the per-session sidecar so a
-// replayed mutating call is suppressed instead of re-executing the side
-// effect (ACRFence arXiv:2603.20625 / arXiv:2608.29381).
-
 func withCrashSidecarDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -37,7 +32,6 @@ func writeSidecar(t *testing.T, sessionID string, calls []crashMutatingCall) {
 	}
 }
 
-// 1. Seeded replay is suppressed with the crash-window advisory.
 func TestCrashDedupSuppressesReplayedCall(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-supp"
@@ -63,7 +57,6 @@ func TestCrashDedupSuppressesReplayedCall(t *testing.T) {
 	}
 }
 
-// 2. Outside the 30-minute crash window, replay proceeds (no suppression).
 func TestCrashDedupWindowExpiry(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-old"
@@ -79,8 +72,6 @@ func TestCrashDedupWindowExpiry(t *testing.T) {
 	}
 }
 
-// 3. The crash fingerprint is epoch-free: pre-crash file mutations bumping
-// the epoch must not mask a non-file mutating replay (im send).
 func TestCrashDedupEpochFreeFingerprint(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-epoch"
@@ -88,19 +79,18 @@ func TestCrashDedupEpochFreeFingerprint(t *testing.T) {
 		{Name: "im", Args: `{"m":"push"}`, At: time.Now().Add(-3 * time.Minute)},
 	})
 	l := newToolDedupLedger()
-	l.record("edit_file", `{"path":"a.go"}`, tool.Result{Content: "edited"}) // bumps epoch
+	l.record("edit_file", `{"path":"a.go"}`, tool.Result{Content: "edited"})
 	SeedCrashDedup(&Agent{sessionID: sid, toolDedup: l}, sid)
 	if res := l.suppressDuplicate("im", `{"m":"push"}`); res == nil {
 		t.Fatal("epoch bump masked crash-window replay")
 	}
 }
 
-// 4. Torn sidecar tail (crash mid-append) is skipped, intact lines survive.
 func TestCrashDedupTornTailTolerated(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-torn"
 	good, _ := json.Marshal(crashMutatingCall{Name: "im", Args: `{"m":"y"}`, At: time.Now().Add(-time.Minute)})
-	torn := `{"n":"im","a":"{broken` // mid-write cut
+	torn := `{"n":"im","a":"{broken`
 	if err := os.WriteFile(crashSidecarPath(sid), append(append(good, '\n'), []byte(torn)...), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +100,6 @@ func TestCrashDedupTornTailTolerated(t *testing.T) {
 	}
 }
 
-// 5. SeedCrashDedup is one-shot: the sidecar is consumed (removed), a second
-// call is a no-op.
 func TestCrashDedupSeedOneShot(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-once"
@@ -128,31 +116,29 @@ func TestCrashDedupSeedOneShot(t *testing.T) {
 	}
 }
 
-// 6. MarkRunning/MarkCompleted clear the sidecar (clean-run hygiene).
 func TestCrashSidecarClearedOnJournalLifecycle(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-lifecycle"
 	if err := os.WriteFile(crashSidecarPath(sid), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	MarkCompleted(sid, true, 1, 0) // clean unwind removes the sidecar
+	MarkCompleted(sid, true, 1, 0)
 	if _, err := os.Stat(crashSidecarPath(sid)); !os.IsNotExist(err) {
 		t.Fatal("MarkCompleted did not clear sidecar")
 	}
 	os.WriteFile(crashSidecarPath(sid), []byte("{}\n"), 0o644)
-	MarkRunning(sid, "fresh run", os.Getpid()) // fresh run invalidates old sidecar
+	MarkRunning(sid, "fresh run", os.Getpid())
 	if _, err := os.Stat(crashSidecarPath(sid)); !os.IsNotExist(err) {
 		t.Fatal("MarkRunning did not clear stale sidecar")
 	}
 }
 
-// 7. appendCrashSidecar skips non-mutating tools and honors the kill switch.
 func TestAppendCrashSidecarGating(t *testing.T) {
 	withCrashSidecarDir(t)
 	sid := "crash-append"
 	t.Setenv("GGCODE_TOOL_DEDUP", "")
 	a := &Agent{sessionID: sid, toolDedup: newToolDedupLedger()}
-	a.appendCrashSidecar("read_file", `{}`) // non-mutating: no sidecar line
+	a.appendCrashSidecar("read_file", `{}`)
 	a.appendCrashSidecar("im", `{"m":"1"}`)
 	data, err := os.ReadFile(crashSidecarPath(sid))
 	if err != nil {

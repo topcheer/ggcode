@@ -1,51 +1,21 @@
 package agent
 
-// Shell-to-Native Tool Suggestions - Smart Tool Selection
-//
-// Trend: Claude Code, Cursor, and Cline all steer agents toward using native
-// tools instead of raw shell commands when a better tool exists. When an agent
-// uses run_command to do something a native tool does better (e.g., cat file
-// instead of read_file, grep in shell instead of the grep tool, git log
-// instead of git_log), the output lacks line numbers, structured metadata,
-// deduplication, memoization, and other tool-specific enhancements.
-//
-// Gap in ggcode: the agent could use cat foo.go via run_command and get raw
-// text without line numbers - making subsequent edit_file calls harder because
-// the agent can't reference line numbers. Or use grep -rn pattern in shell and
-// lose the structured output, glob filtering, and context lines the grep tool
-// provides.
-//
-// This module inspects run_command arguments and, when it detects a shell command
-// that duplicates a native tool, appends a short hint suggesting the native tool.
-// The hint fires at most once per pattern per run to avoid nagging.
-//
-// Design:
-//   - Only triggers on run_command / start_command tool calls
-//   - Pattern matching on the command string, not on output
-//   - Hints are brief (1 line) and suggest a concrete native tool
-//   - Each hint pattern fires at most once per run
-//   - Non-blocking: the command still executes
-
 import (
 	"regexp"
 	"strings"
 	"sync"
 )
 
-// shellCommandToolNames are the tools that execute raw shell commands.
 var shellCommandToolNames = map[string]bool{
 	"run_command":   true,
 	"start_command": true,
 }
 
-// shellNativePattern defines a shell command pattern and its native tool suggestion.
 type shellNativePattern struct {
 	regex      *regexp.Regexp
 	suggestion string
 }
 
-// shellNativePatterns maps shell command patterns to native tool suggestions.
-// Patterns are checked in order; first match wins.
 var shellNativePatterns = []shellNativePattern{
 	{
 		regex:      regexp.MustCompile(`^\s*(cat|head|tail)\s+`),
@@ -93,7 +63,6 @@ var shellNativePatterns = []shellNativePattern{
 	},
 }
 
-// shellNativeHintState tracks which patterns have already fired to avoid repetition.
 type shellNativeHintState struct {
 	mu       sync.Mutex
 	firedSet map[string]bool
@@ -111,7 +80,6 @@ func (s *shellNativeHintState) reset() {
 	s.firedSet = make(map[string]bool)
 }
 
-// extractCommandFromArgs parses the tool arguments JSON and returns the command string.
 func extractShellCommandFromArgs(args []byte) string {
 	s := string(args)
 	idx := strings.Index(s, `"command"`)
@@ -144,9 +112,6 @@ func extractShellCommandFromArgs(args []byte) string {
 	return b.String()
 }
 
-// maybeShellNativeHint checks if a run_command call duplicates a native tool
-// and returns a suggestion hint. Returns empty string if no suggestion applies
-// or if this pattern already fired in this run.
 func (s *shellNativeHintState) maybeShellNativeHint(toolName string, args []byte) string {
 	if !shellCommandToolNames[toolName] {
 		return ""

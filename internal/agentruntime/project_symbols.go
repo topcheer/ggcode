@@ -14,50 +14,18 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Symbol-level codebase awareness for the system prompt.
-//
-// Research basis: Aider's "repo map" uses tree-sitter to rank and display the
-// most important symbols (classes, functions, methods) from the codebase,
-// giving the LLM structural awareness without reading every file. This yields
-// measurable improvements in navigation and edit accuracy because the model
-// knows which files define which symbols before deciding where to make changes.
-//
-// ggcode already has a directory-level "Project layout" section and LSP tools
-// for on-demand symbol lookup, but neither gives the model a zero-cost overview
-// of package APIs at session start. This module fills that gap for Go projects
-// by parsing .go files with go/ast and extracting exported type and function
-// declarations into a compact, budget-limited summary injected into the system
-// prompt.
-
 const (
-	// symbolMapMaxPackages caps the number of packages shown to keep the system
-	// prompt small even in monorepos with hundreds of packages.
-	symbolMapMaxPackages = 25
-	// symbolMapMaxPerPkg limits symbols listed per package line.
-	symbolMapMaxPerPkg = 10
-	// symbolMapTimeBudget is the maximum wall-clock time spent parsing. This
-	// ensures system-prompt construction stays fast even for large repos.
-	symbolMapTimeBudget = 200 * time.Millisecond
-	// symbolMapMaxFilesPerPackage bounds a single uninterruptible ParseDir
-	// call (#1493-C): the filter runs per file before parsing, so a giant
-	// package stops admitting files at this count.
+	symbolMapMaxPackages        = 25
+	symbolMapMaxPerPkg          = 10
+	symbolMapTimeBudget         = 200 * time.Millisecond
 	symbolMapMaxFilesPerPackage = 200
 )
 
-// buildGoPackageSymbolsSection generates a compact summary of exported Go
-// types and functions for each package in the workspace. Returns an empty
-// string if the project is not Go or has no parseable packages.
-//
-// The summary is injected into the system prompt after the project layout and
-// commands sections, giving the model symbol-level awareness without any tool
-// calls.
 func buildGoPackageSymbolsSection(root string) string {
 	if root == "" {
 		return ""
 	}
 
-	// Quick pre-check: bail out immediately for non-Go projects to avoid
-	// wasting time scanning directories.
 	if !hasGoSource(root) {
 		return ""
 	}
@@ -137,8 +105,6 @@ func buildGoPackageSymbolsSection(root string) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// hasGoSource performs a fast two-level check for any .go file to decide
-// whether symbol-map construction is worthwhile.
 func hasGoSource(root string) bool {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -166,12 +132,9 @@ func hasGoSource(root string) bool {
 	return false
 }
 
-// collectGoPackageDirs finds directories at depth 0–2 that contain non-test
-// Go source files. It respects overviewSkipDirs and hidden directories.
 func collectGoPackageDirs(root string, deadline time.Time) []string {
 	var dirs []string
 
-	// Root level
 	if dirHasGoFiles(root) {
 		dirs = append(dirs, root)
 	}
@@ -194,16 +157,12 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 			dirs = append(dirs, dir1)
 		}
 
-		// Depth 2
 		level2, err := os.ReadDir(dir1)
 		if err != nil {
 			continue
 		}
 		for _, e2 := range level2 {
-			// #1493-C: the depth-1 loop checks the deadline but this inner
-			// loop did not - a deep tree with many level-2 dirs blew the
-			// 200ms soft budget (the collector goroutine churns CPU on
-			// giant workspaces for seconds).
+
 			if time.Now().After(deadline) {
 				return dirs
 			}
@@ -220,8 +179,6 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 	return dirs
 }
 
-// dirHasGoFiles reports whether a directory contains at least one non-test
-// .go file.
 func dirHasGoFiles(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -239,17 +196,9 @@ func dirHasGoFiles(dir string) bool {
 	return false
 }
 
-// extractPackageSymbols parses all non-test .go files in a directory and
-// returns a sorted, deduplicated list of exported type and function names,
-// plus the number of files parsed.
 func extractPackageSymbols(dir string) ([]string, int) {
 	fset := token.NewFileSet()
-	// #1493-C: ParseDir itself is uninterruptible - a single giant package
-	// (this repo's internal/agent is 290+ files) parses for far longer than
-	// the 200ms soft budget with no checkpoint inside. Cap the number of
-	// files per package: the filter runs per file BEFORE parsing, so
-	// returning false skips the parse; symbol coverage of a 200-file
-	// package is already comprehensive for prompt purposes.
+
 	fileCount := 0
 	pkgs, firstErr := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
 		name := fi.Name()
@@ -260,8 +209,6 @@ func extractPackageSymbols(dir string) ([]string, int) {
 		return fileCount <= symbolMapMaxFilesPerPackage
 	}, parser.SkipObjectResolution)
 
-	// Even if ParseDir returns an error, it may still return partial ASTs.
-	// We log the error but proceed with whatever we got.
 	if firstErr != nil {
 		debug.Log("agentruntime", "symbol map: parse error in %s: %v", filepath.Base(dir), firstErr)
 	}
@@ -279,9 +226,7 @@ func extractPackageSymbols(dir string) ([]string, int) {
 			for _, decl := range file.Decls {
 				switch d := decl.(type) {
 				case *ast.FuncDecl:
-					// Only top-level exported functions (skip methods to
-					// keep the list compact — the receiver type is already
-					// listed as a type symbol).
+
 					if d.Recv == nil && d.Name.IsExported() {
 						seen[d.Name.Name+"()"] = true
 					}

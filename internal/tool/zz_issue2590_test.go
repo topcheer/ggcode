@@ -1,12 +1,5 @@
 package tool
 
-// #2590 regression: git_blame's revision and git_checkout's start_point are
-// REVSPECS, not ref names. validateRefName's check-ref-format character
-// rules wrongly refused HEAD~N / HEAD^ / HEAD@{N} / main~3 while git_show
-// (same family) accepted them - and the error text leaked "start_point"
-// wording into blame's context. The revspec guard keeps the real #1687
-// case-4 injection vector (leading '-') and the range guard ('..').
-
 import (
 	"strings"
 	"testing"
@@ -31,15 +24,12 @@ func TestIssue2590_InjectionVectorStillRefused(t *testing.T) {
 			t.Errorf("validateRevspec(%q) = nil, want error (option injection / range)", rev)
 		}
 	}
-	// EMBEDDED control characters stay refused (trailing whitespace is
-	// legitimately trimmed, mirroring the #1687 case-2 trim-copy fix).
+
 	if err := validateRevspec("HEAD~1\x01"); err == nil {
 		t.Error("embedded control character in revspec not refused")
 	}
 }
 
-// The blame tool must surface the fixed wording - no more "start_point"
-// leak from the ref-name validator into the revision context.
 func TestIssue2590_BlameErrorWordingHasNoStartPointLeak(t *testing.T) {
 	err := validateRevspec("-L10,20")
 	if err == nil || !strings.Contains(err.Error(), "revision") {

@@ -55,10 +55,6 @@ func (q *PendingQueue[T]) Consume() (PendingMessage[T], bool) {
 	return item, true
 }
 
-// PopLastVisible removes and returns the last non-hidden, non-meta item from the queue.
-// Returns false if no visible item exists. Used for the Up-arrow de-queue feature:
-// when the agent is busy, the user can press Up to pull their last queued message
-// back into the input box for editing.
 func (q *PendingQueue[T]) PopLastVisible() (PendingMessage[T], bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

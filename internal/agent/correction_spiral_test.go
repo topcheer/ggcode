@@ -6,7 +6,7 @@ import (
 
 func TestCorrectionSpiral_NoSpiral(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Alternating errors with decreasing severity - not a spiral
+
 	s.errorSequence = []int{sevCompile, sevParse, sevLint}
 	msg := s.maybeWarn(5)
 	if msg != "" {
@@ -25,7 +25,7 @@ func TestCorrectionSpiral_InsufficientData(t *testing.T) {
 
 func TestCorrectionSpiral_EscalationDetected(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Classic spiral: syntax → compile → runtime → crash
+
 	s.errorSequence = []int{sevParse, sevCompile, sevRuntime, sevCrash}
 	msg := s.maybeWarn(10)
 	if msg == "" {
@@ -38,7 +38,7 @@ func TestCorrectionSpiral_EscalationDetected(t *testing.T) {
 
 func TestCorrectionSpiral_PlateauAllowed(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Two escalations with one plateau - still a spiral
+
 	s.errorSequence = []int{sevParse, sevCompile, sevCompile, sevRuntime}
 	msg := s.maybeWarn(10)
 	if msg == "" {
@@ -48,7 +48,7 @@ func TestCorrectionSpiral_PlateauAllowed(t *testing.T) {
 
 func TestCorrectionSpiral_TooManyRegressions(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Escalation then regression - not a clean spiral
+
 	s.errorSequence = []int{sevParse, sevRuntime, sevCompile, sevLint}
 	msg := s.maybeWarn(10)
 	if msg != "" {
@@ -59,23 +59,21 @@ func TestCorrectionSpiral_TooManyRegressions(t *testing.T) {
 func TestCorrectionSpiral_SecondWarning(t *testing.T) {
 	s := newCorrectionSpiralState()
 	s.errorSequence = []int{sevParse, sevCompile, sevRuntime, sevCrash}
-	// First warning
+
 	msg1 := s.maybeWarn(10)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Need to wait 5 iterations
+
 	msg2 := s.maybeWarn(12)
 	if msg2 != "" {
 		t.Fatal("expected no warning too soon after first")
 	}
-	// #1538: a re-warn also requires NEW failure evidence - a frozen
-	// sequence (read-only investigation) must stay silent even after the
-	// spacing window passes.
+
 	if msg3 := s.maybeWarn(16); msg3 != "" {
 		t.Fatal("expected no re-warn on frozen sequence")
 	}
-	// Second warning after spacing AND new evidence.
+
 	s.errorSequence = append(s.errorSequence, sevCrash)
 	msg3 := s.maybeWarn(16)
 	if msg3 == "" {
@@ -84,7 +82,7 @@ func TestCorrectionSpiral_SecondWarning(t *testing.T) {
 	if s.warningCount != 2 {
 		t.Errorf("expected warningCount=2, got %d", s.warningCount)
 	}
-	// Third should be capped
+
 	msg4 := s.maybeWarn(25)
 	if msg4 != "" {
 		t.Fatal("expected no third warning (capped at 2)")
@@ -93,7 +91,7 @@ func TestCorrectionSpiral_SecondWarning(t *testing.T) {
 
 func TestCorrectionSpiral_RecordEditAndVerify(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Simulate: edit → verify fail (syntax) → edit → verify fail (compile) → edit → verify fail (runtime)
+
 	s.recordEdit(1)
 	s.recordVerifyResult("run_command", "syntax error: unexpected token", true, 2)
 
@@ -125,11 +123,9 @@ func TestCorrectionSpiral_GreenBuildResets(t *testing.T) {
 	s.recordEdit(3)
 	s.recordVerifyResult("run_command", "compile error", true, 4)
 
-	// Green build - should reset pendingEdit
 	s.recordEdit(5)
 	s.recordVerifyResult("run_command", "build successful", false, 6)
 
-	// This error should not be recorded (pendingEdit was reset by success)
 	s.recordVerifyResult("run_command", "panic: nil pointer", true, 7)
 
 	if s.pendingEdit {
@@ -171,7 +167,7 @@ func TestCSClassifySeverity(t *testing.T) {
 		{"syntax error: unexpected semicolon", sevParse},
 		{"./main.go:10:2: undefined: foo", sevCompile},
 		{"lint: unused variable", sevLint},
-		{"some unknown error", sevCompile}, // default
+		{"some unknown error", sevCompile},
 	}
 
 	for _, tt := range tests {
@@ -197,33 +193,22 @@ func TestCSIsEditTool(t *testing.T) {
 	}
 }
 
-// TestCSIsVerifyTool was removed with csIsVerifyTool (#491): verify
-// classification now happens on command CONTENT in the agent.go wiring
-// (run_command + psIsVerifyCommand), never on tool name alone. See
-// TestCorrectionSpiral_WiringGateShape in detector_shell_channel_test.go.
-
 func TestCorrectionSpiral_SequenceCapped(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// Record more than 12 entries
+
 	for i := 0; i < 15; i++ {
 		s.errorSequence = append(s.errorSequence, sevCompile)
 	}
-	// Should be capped by append logic, but we check maybeWarn still works
-	// Even though all same severity (no escalation), should not warn
+
 	msg := s.maybeWarn(20)
 	if msg != "" {
 		t.Error("expected no warning for flat severity sequence")
 	}
 }
 
-// TestCorrectionSpiralGreenClearsErrorSequence pins #1449-B: the comment
-// always said "a green build breaks the spiral" but only pendingEdit was
-// reset - the healthy progression (sev1 -> green -> sev3 -> green -> sev5)
-// accumulated [1,3,5] and fired the STOP/revert guidance on a trajectory
-// where every problem was fixed.
 func TestCorrectionSpiralGreenClearsErrorSequence(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// edit -> error(sev1) -> GREEN -> edit -> error(sev3) -> GREEN -> edit -> error(sev5)
+
 	for _, sev := range []struct {
 		iter int
 		msg  string
@@ -244,10 +229,6 @@ func TestCorrectionSpiralGreenClearsErrorSequence(t *testing.T) {
 	}
 }
 
-// Regression for #1538: the second (heaviest) warning must require NEW
-// error-sequence entries - read-only investigation freezes the sequence
-// and the iteration-distance gate alone re-fired the CRITICAL "revert and
-// start over" on identical evidence.
 func TestCorrectionSpiralNoNewEvidenceNoRewarn(t *testing.T) {
 	s := newCorrectionSpiralState()
 	s.errorSequence = []int{1, 3, 5}
@@ -255,43 +236,36 @@ func TestCorrectionSpiralNoNewEvidenceNoRewarn(t *testing.T) {
 	if got == "" {
 		t.Fatal("first warning must fire on 3-pair escalation")
 	}
-	// No new entries; distance satisfied - must NOT re-warn.
+
 	if got := s.maybeWarn(20); got != "" {
 		t.Fatalf("re-warn on frozen sequence must not fire: %.80s", got)
 	}
-	// New entry - re-warn allowed.
+
 	s.errorSequence = append(s.errorSequence, 6)
 	if got := s.maybeWarn(20); got == "" {
 		t.Fatal("warning must re-fire after new failure evidence")
 	}
 }
 
-// TestCorrectionSpiralCapSnapshotNotDeadlocked pins #1726 case 1: a first
-// warning firing exactly at len==12 (the cap) must not deadlock the second
-// - every later append caps back to 12, but the monotonic counter keeps
-// growing and counts as new evidence.
 func TestCorrectionSpiralCapSnapshotNotDeadlocked(t *testing.T) {
 	s := newCorrectionSpiralState()
-	// 12 entries with the escalation shape: front < back.
+
 	s.errorSequence = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 	if got := s.maybeWarn(5); got == "" {
 		t.Fatal("first warning must fire at len==12")
 	}
-	// Frozen at the cap: no re-warn.
+
 	if got := s.maybeWarn(20); got != "" {
 		t.Fatal("frozen sequence must not re-warn")
 	}
-	// New correction: len stays 12 (capped) but the counter grows.
+
 	s.pendingEdit = true
-	s.recordVerifyResult("go test", "exit status 1", true, 0) // appends+caps+increments the counter
+	s.recordVerifyResult("go test", "exit status 1", true, 0)
 	if got := s.maybeWarn(20); got == "" {
 		t.Fatal("second warning must fire - counter growth is new evidence (#1726 case 1)")
 	}
 }
 
-// TestCorrectionSpiralGreenResetsSnapshot pins #1726 case 2: a green result
-// clears the evidence AND the warning snapshot - a fresh spiral must not
-// inherit the old threshold.
 func TestCorrectionSpiralGreenResetsSnapshot(t *testing.T) {
 	s := newCorrectionSpiralState()
 	s.errorSequence = []int{1, 2, 3, 4}
@@ -299,7 +273,7 @@ func TestCorrectionSpiralGreenResetsSnapshot(t *testing.T) {
 		t.Fatal("first warning must fire")
 	}
 	s.pendingEdit = true
-	s.recordVerifyResult("go test", "ok", false, 0) // green boundary
+	s.recordVerifyResult("go test", "ok", false, 0)
 	if s.lastWarnedSeqLen != 0 || s.lastWarnedTotal != 0 {
 		t.Fatalf("green must reset both snapshots, got len=%d total=%d", s.lastWarnedSeqLen, s.lastWarnedTotal)
 	}

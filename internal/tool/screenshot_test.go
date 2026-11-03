@@ -19,15 +19,13 @@ func TestScreenshotToolDescription(t *testing.T) {
 	if desc == "" {
 		t.Fatal("description should not be empty")
 	}
-	// Must mention key capabilities.
+
 	for _, want := range []string{"screenshot", "window", "display"} {
 		if !containsStr(desc, want) {
 			t.Errorf("description missing %q", want)
 		}
 	}
 }
-
-// Use existing containsStr from run_command_test.go
 
 func TestScreenshotToolParameters(t *testing.T) {
 	tool := ScreenshotTool{}
@@ -70,15 +68,12 @@ func TestScreenshotToolInvalidParams(t *testing.T) {
 }
 
 func TestScreenshotToolListDisplaysAction(t *testing.T) {
-	// Use list_displays action which is lightweight — no image decode.
-	// On headless CI it returns an error result, on a real machine it
-	// returns display info. Either way, no panic and no OOM from
-	// decoding a large screenshot.
+
 	tool := ScreenshotTool{}
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list_displays"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should either succeed or return a graceful error, never panic.
+
 	_ = result
 }

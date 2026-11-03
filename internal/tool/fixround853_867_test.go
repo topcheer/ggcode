@@ -1,8 +1,5 @@
 package tool
 
-// Guard tests for the #853-#867 fix round. Each test pins the new semantics
-// so a regression reintroduces a visible failure instead of silent drift.
-
 import (
 	"context"
 	"encoding/json"
@@ -27,10 +24,6 @@ func notebookExec(t *testing.T, tool NotebookEdit, rawArgs string) (Result, erro
 	return tool.Execute(context.Background(), json.RawMessage(rawArgs))
 }
 
-// notebookArgs builds a JSON object, marshalling values correctly so Windows
-// paths with backslashes stay valid JSON escapes (a raw `+path+` concat
-// produces invalid escape sequences like \U on Windows and would make every
-// guard here fail before exercising the notebook semantics it pins).
 func notebookArgs(t *testing.T, kv map[string]any) string {
 	t.Helper()
 	b, err := json.Marshal(kv)
@@ -40,9 +33,6 @@ func notebookArgs(t *testing.T, kv map[string]any) string {
 	return string(b)
 }
 
-// TestNotebookReplaceMarkdownStripsOutputs (#853): replacing a markdown cell
-// must not write outputs/execution_count (nbformat forbids them on non-code
-// cells).
 func TestNotebookReplaceMarkdownStripsOutputs(t *testing.T) {
 	path := writeTestNotebook(t, `{"cells":[{"cell_type":"markdown","source":["# Old"],"metadata":{}}],"metadata":{},"nbformat":4}`)
 	tool := NotebookEdit{}
@@ -67,8 +57,6 @@ func TestNotebookReplaceMarkdownStripsOutputs(t *testing.T) {
 	}
 }
 
-// TestNotebookReplaceRequiresSource (#854): omitting source must error, not
-// silently wipe the cell content.
 func TestNotebookReplaceRequiresSource(t *testing.T) {
 	path := writeTestNotebook(t, `{"cells":[{"cell_type":"code","source":["print(1)"],"metadata":{}}],"metadata":{},"nbformat":4}`)
 	tool := NotebookEdit{}
@@ -85,8 +73,6 @@ func TestNotebookReplaceRequiresSource(t *testing.T) {
 	}
 }
 
-// TestHasPathPrefixSegment (#867): nested monorepo artifacts match; config
-// look-alikes do not.
 func TestHasPathPrefixSegment(t *testing.T) {
 	cases := []struct {
 		path, prefix string
@@ -108,7 +94,6 @@ func TestHasPathPrefixSegment(t *testing.T) {
 	}
 }
 
-// TestTaskIDLessNumeric (#866): task-2 < task-10 numerically.
 func TestTaskIDLessNumeric(t *testing.T) {
 	if !taskIDLess("task-2", "task-10") {
 		t.Fatal("string order used: task-10 should sort after task-2")
@@ -121,15 +106,13 @@ func TestTaskIDLessNumeric(t *testing.T) {
 	}
 }
 
-// TestDetectCommentBlocksFileAdjacency (#860): comment lines separated by
-// context lines (gap in file line numbers) must NOT be flagged as one block.
 func TestDetectCommentBlocksFileAdjacency(t *testing.T) {
 	file := &reviewDiffFile{
 		path: "main.go",
 		addedLines: []reviewDiffLine{
 			{1, "//	if err != nil {"},
 			{2, "//		return fmt.Errorf(\"bad\")"},
-			// gap: line 3 is a context line (not added)
+
 			{4, "//	for i := 0; i < 10; i++ {"},
 			{5, "//		_ = i"},
 		},
@@ -140,8 +123,6 @@ func TestDetectCommentBlocksFileAdjacency(t *testing.T) {
 	}
 }
 
-// TestZeroErrorsWordBoundary (#859): "Found 10 errors" must not be filtered
-// by the zero-error exclusion; "Found 0 errors" must be.
 func TestZeroErrorsWordBoundary(t *testing.T) {
 	zero := regexp.MustCompile(`\b0 errors`)
 	if zero.MatchString(strings.ToLower("found 10 errors in 2 files.")) {

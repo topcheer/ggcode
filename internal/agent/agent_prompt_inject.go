@@ -10,44 +10,16 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// maybeInjectDynamicSystemPrompt builds the system prompt from scratch on
-// every run, ensuring dynamic content and ratchet rules never accumulate
-// across runs. The build order is:
-//
-//  1. Base system prompt (always present, marked cacheable)
-//  2. Dynamic system prompt from injector callback (if set)
-//  3. Top learned ratchet rules (if any exist for this workspace)
-//  4. Playbook strategy hints (if any exist for this workspace)
-//
-// The static base (layer 1) is emitted as a separate content block with
-// Cache=true so providers like Anthropic can cache it across turns even
-// when the dynamic layers (2-4) change between runs. This follows the
-// "Don't Break the Cache" finding (arXiv:2601.06007): placing stable
-// content at the start with its own cache breakpoint maximises KV cache
-// reuse, saving 40-80% of system prompt token costs.
-//
-// This function is called once at the start of each agent Run().
 func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	a.mu.Lock()
 	base := a.baseSystemPrompt
 	fn := a.systemPromptInjector
 	a.mu.Unlock()
 
-	// Stamp the harness configuration (system prompt + check registry + tool
-	// set) into the debug ring. Deferred so it captures the prompt rebuilt by
-	// this function on every return path; logs only on change (first run or
-	// scaffolding mutation). See harness_fingerprint.go for rationale.
 	defer a.logHarnessFingerprint()
 
-	// Collect dynamic layers.
 	var dynamicParts []string
 
-	// Layer 1.5: autopilot goal (must survive compaction).
-	// The goal is injected into the system prompt rather than the conversation
-	// body so it persists across context compaction. Without this, the main
-	// agent loses sight of its objective after summarization — only the
-	// strategist remembers it. This is the "Goal Mode" pattern (Codex CLI /goal):
-	// a persistent directive that survives compaction and interruptions.
 	if a.currentMode().IsCruiseMode() {
 		if goal := a.getAutopilotGoal(); goal != "" {
 			dynamicParts = append(dynamicParts, fmt.Sprintf(
@@ -59,7 +31,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		}
 	}
 
-	// Layer 2: dynamic system prompt from external injector.
 	if fn != nil {
 		extra := strings.TrimSpace(fn())
 		if extra != "" {
@@ -67,8 +38,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		}
 	}
 
-	// Layer 2.5: named prompt layers (e.g. resume reconciliation). Same
-	// dynamic bucket as layer 2 — rebuilt every run, never cached.
 	for _, layer := range a.systemPromptLayers {
 		if layer.fn == nil {
 			continue
@@ -78,13 +47,9 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		}
 	}
 
-	// Layer 3: proactive ratchet rules.
-	// #3227: shared singleton - per-run instances lost updates.
-	// Task-intent filter (#3266 research P1): rules learned in
-	// same-task-type runs rank first, mirroring playbook matchesIntent.
 	if rs := a.getRuleStore(); rs != nil {
 		intent := classifyTaskType(runPrompt)
-		rs.SetRunIntent(intent) // newly learned rules inherit the tag
+		rs.SetRunIntent(intent)
 		rulesText := rs.TopRulesForPromptFiltered(5, intent)
 		if rulesText != "" {
 			dynamicParts = append(dynamicParts, rulesText)
@@ -92,7 +57,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		}
 	}
 
-	// Layer 4: playbook strategy hints (ACE-inspired).
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if pb := NewPlaybook(workingDir); pb != nil {
 			playbookText := pb.HintsForPrompt(runPrompt, 3)
@@ -101,36 +65,25 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
 			}
 		}
-		// r458: past-run trajectory learnings re-injection - the third leg
-		// of the extract->persist->re-inject distillation loop. Includes
-		// teammate experience folded in by r457's ingest.
+
 		if a.trajIntel != nil {
 			if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
 				dynamicParts = append(dynamicParts, sec)
 				debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
 			}
 		}
-		// r413: persisted failure attribution memory - which file/tool was
-		// the causal suspect in past failed runs of this task type.
+
 		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
 			dynamicParts = append(dynamicParts, ft)
 			debug.Log("agent", "Injected failure attribution memory into system prompt")
 		}
 	}
 
-	// Skip entirely when there is no system prompt and no dynamic content.
-	// This preserves backward compatibility: tests and setups that rely on
-	// the absence of a system message are not disturbed.
-	// Anchor temporal context to session start and fold it into the cacheable
-	// base layer (Temporal Context Injection baseline practice).
 	base = a.withTemporalContext(base)
 	if base == "" && len(dynamicParts) == 0 {
 		return
 	}
 
-	// Build the full prompt text to check if it changed since last injection.
-	// This avoids redundant countTokens + UpdateFirstSystemMessage calls on
-	// every agent iteration when the prompt content is identical.
 	var fullText string
 	if len(dynamicParts) == 0 {
 		fullText = base
@@ -142,9 +95,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	}
 	a.lastInjectedSystemPrompt = fullText
 
-	// System prompt budget check: warn if the prompt is excessively large.
-	// A system prompt consuming >15% of the context window significantly
-	// reduces available conversation space and accelerates compaction.
 	ctxWindow := a.contextManager.ContextWindow()
 	if ctxWindow > 0 {
 		estTokens := context.EstimateTokens(fullText)
@@ -159,8 +109,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		return
 	}
 
-	// Build content blocks: static base (cacheable) + dynamic (not cached).
-	// When there is no dynamic content, emit a single cached block.
 	if len(dynamicParts) == 0 {
 		cm.UpdateFirstSystemMessage(provider.Message{
 			Role:    "system",
@@ -179,13 +127,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	})
 }
 
-// temporalContextLine renders the session-anchored temporal header. The
-// timestamp is anchored to the agent's session start (lazily captured on
-// first call) rather than sampled on every invocation, so the rendered
-// bytes stay identical across all iterations of a run. This preserves
-// KV-cache prefix reuse within the session (see #2445 prefix-stability
-// findings); sessions that outlive the header's freshness are expected to
-// call the current_time tool for a live reading instead.
 func (a *Agent) temporalContextLine() string {
 	a.mu.Lock()
 	if a.temporalAnchor.IsZero() {
@@ -202,11 +143,6 @@ func (a *Agent) temporalContextLine() string {
 		now.Format("2006-01-02"), now.Format("Monday"), now.Format("15:04"), name, utcOffset)
 }
 
-// withTemporalContext prepends the temporal header to a non-empty base
-// system prompt. Placement at the very start of the system prompt follows
-// temporal-grounding research showing date-sensitive reasoning is most
-// reliable when the timestamp leads the prompt. Empty bases stay empty so
-// setups that rely on the absence of a system message are undisturbed.
 func (a *Agent) withTemporalContext(base string) string {
 	if strings.TrimSpace(base) == "" {
 		return base
@@ -214,6 +150,4 @@ func (a *Agent) withTemporalContext(base string) string {
 	return a.temporalContextLine() + "\n\n" + base
 }
 
-// maybeInjectRatchetRules is a no-op retained for backward compatibility.
-// Ratchet rule injection is now handled by maybeInjectDynamicSystemPrompt.
 func (a *Agent) maybeInjectRatchetRules() {}

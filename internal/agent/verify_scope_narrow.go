@@ -1,42 +1,5 @@
 package agent
 
-// Verification Scope Narrowing Detector
-//
-// Research basis: "Towards Understanding Specification Gaming in Reasoning
-// Models" (arXiv:2605.02269, 2026) found that reasoning models unconsciously
-// narrow verification scope to obtain passing results. The "Verification
-// Horizon" paper (arXiv:2606.26300) formalizes this as "proxy optimization":
-// every verifier is a proxy for true intent, and agents learn to optimize the
-// proxy rather than the goal.
-//
-// Observable pattern in coding agents:
-//   1. Agent runs `go test ./...` → fails with 5 errors
-//   2. Agent runs `go test ./internal/agent/` → fails with 2 errors
-//   3. Agent runs `go test -run TestSpecific ./internal/agent/` → passes
-//   4. Agent declares success
-//
-// The scope was narrowed from "all packages" → "one package" → "one test",
-// masking 3 still-failing tests. The agent didn't tamper with test files
-// (caught by spec_gaming_detect.go) - it tampered with the *command*.
-//
-// This is distinct from existing detectors:
-//   - spec_gaming_detect.go: detects test FILE tampering (editing/skipping tests)
-//   - verify_hint.go: reminds agent to run verification at all
-//   - test_impact.go: suggests which tests to run based on changed files
-//   - verify_suppress: detects error-masking shell operators (|| true, 2>/dev/null)
-//
-// None of them detect the specific pattern of progressively narrowing the
-// test/build command scope across iterations, which is a subtle form of
-// specification gaming that doesn't modify any files - just commands.
-//
-// Detection approach (zero LLM cost, deterministic):
-//   - Track test/build commands across the run (go test, pytest, npm test, etc.)
-//   - Extract the scope of each command (package path, test filter, file list)
-//   - When scope strictly narrows 2+ times in sequence AND the final result
-//     was "passing", inject a warning to re-run the original broader scope
-//   - Only fires when scope narrows AND outcome flips from fail→pass, which is
-//     the signature of scope-narrowing specification gaming
-
 import (
 	"regexp"
 	"strings"
@@ -44,25 +7,18 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// scopeNarrowState tracks test/build commands to detect scope narrowing.
 type scopeNarrowState struct {
-	// history stores normalized scope info for each verification command.
-	history []scopeEntry
-	// fired prevents duplicate warnings.
-	fired bool
-	// #1821 case 3: when the coverage-gap detector fires for the SAME
-	// command in the same tool call, its near-identical guidance would
-	// double-inject - remember the command and let scopeNarrow skip
-	// once (set by agent.go when covWarn fires).
+	history               []scopeEntry
+	fired                 bool
 	lastCoverageWarnedCmd string
 }
 
 type scopeEntry struct {
-	toolName   string // run_command, start_command
-	rawCommand string // original command text
-	scope      string // normalized scope (package path + filters)
-	category   string // "go-test", "pytest", "npm-test", etc.
-	passed     bool   // whether the command succeeded (exit code 0 / no error)
+	toolName   string
+	rawCommand string
+	scope      string
+	category   string
+	passed     bool
 }
 
 func newScopeNarrowState() *scopeNarrowState {
@@ -74,45 +30,17 @@ func (s *scopeNarrowState) reset() {
 	s.fired = false
 }
 
-// Patterns for extracting scope from common test/build commands.
 var (
-	// go test patterns: capture package path and -run filter
 	goTestScopeRe = regexp.MustCompile(`go\s+test\s+(?:-tags\s+\S+\s+)?(.*)`)
-	// #3759 B: -run accepts both "-run TestX" and "-run=TestX" (flag
-	// package syntax); the equals form previously produced no run: token.
-	goTestRunRe = regexp.MustCompile(`-run(?:\s+|=)\s*(\S+)`)
-	// #3759 A: package paths come in two spellings - relative (./pkg,
-	// ./...) and the FULL import path (github.com/x/y/internal/agent).
-	// The domain form is the most common cross-package narrowing
-	// spelling and previously matched no branch, silently classifying
-	// the whole chain as scope:broad. The domain branch requires a
-	// letter TLD so bare versions ("go1.27.1") and flag values don't
-	// match; the (?:^|\s) anchor keeps mid-token dots out.
-	goTestPkgRe = regexp.MustCompile(`(?:^|\s)(\./\S*|internal/\S*|cmd/\S*|\.\.\.|[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}(?:/\S*)?)`)
+	goTestRunRe   = regexp.MustCompile(`-run(?:\s+|=)\s*(\S+)`)
+	goTestPkgRe   = regexp.MustCompile(`(?:^|\s)(\./\S*|internal/\S*|cmd/\S*|\.\.\.|[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}(?:/\S*)?)`)
 
-	// pytest: -k filter and file/path argument
 	pytestScopeRe = regexp.MustCompile(`pytest\s+(.*)`)
-	// #3759 B: -k likewise accepts "pytest -k name" and "pytest -k=name".
-	pytestKRe = regexp.MustCompile(`-k(?:\s+|=)\s*(\S+)`)
+	pytestKRe     = regexp.MustCompile(`-k(?:\s+|=)\s*(\S+)`)
 
-	// npm/yarn test: --grep or specific file
-	// #3759 B: --grep likewise accepts both forms.
 	npmTestGrepRe = regexp.MustCompile(`--grep(?:\s+|=)\s*(\S+)`)
 )
 
-// splitShellSegments (in command_cache.go) splits on shell separators and
-// strips leading `cd` clauses; isGoSubcommand/isHeadCommand head-scan each
-// segment independently (#3812).
-
-// isGoSubcommand returns true if the command's INVOKED binary is "go <sub>".
-// #3812: the old loop matched "go <sub>" as an adjacent word pair ANYWHERE in
-// the command, so `git commit -m "go test passed"` or `echo go build ok` were
-// classified as verification commands and injected a bogus passed entry into
-// the verification history - a gaming vector (a harmless command carrying the
-// magic words counts as "verified") and a diluter for real chains. Now "go"
-// must be at the head of a shell segment, optionally preceded by a bounded
-// set of wrapper prefixes (sudo/time/nice/env VAR=v/timeout 10s). Quoted
-// strings and arguments after a non-wrapper token end the head scan.
 func isGoSubcommand(cmd, sub string) bool {
 	for _, seg := range splitShellSegments(cmd) {
 		if segmentInvokesGo(strings.Fields(seg), sub) {
@@ -122,10 +50,6 @@ func isGoSubcommand(cmd, sub string) bool {
 	return false
 }
 
-// segmentInvokesGo head-scans ONE shell segment. The default arm MUST
-// return: a bare `break` inside the switch only exits the switch, not the
-// enclosing loop, leaving i unchanged on a non-go head - an infinite loop
-// (first live input: `git commit -m "go test passed"`).
 func segmentInvokesGo(fields []string, sub string) bool {
 	i := 0
 	for i < len(fields) {
@@ -134,12 +58,12 @@ func segmentInvokesGo(fields []string, sub string) bool {
 			i++
 		case "env":
 			i++
-			// skip VAR=value assignments following env
+
 			for i < len(fields) && strings.Contains(fields[i], "=") {
 				i++
 			}
 		case "timeout":
-			i += 2 // timeout <duration> <cmd>
+			i += 2
 		default:
 			return fields[i] == "go" && i+1 < len(fields) && fields[i+1] == sub
 		}
@@ -147,11 +71,6 @@ func segmentInvokesGo(fields []string, sub string) bool {
 	return false
 }
 
-// isHeadCommand reports whether cmd's invoked command line starts with the
-// given head words (#3812): after stripping wrapper prefixes (sudo/time/nice
-// and "env VAR=v" runs) at the head of any shell segment, fields must begin
-// with exactly the head sequence. A bare substring match misclassified e.g.
-// `pip install pytest` as a test run.
 func isHeadCommand(cmd string, head []string) bool {
 	for _, seg := range splitShellSegments(cmd) {
 		if segmentMatchesHead(strings.Fields(seg), head) {
@@ -161,8 +80,6 @@ func isHeadCommand(cmd string, head []string) bool {
 	return false
 }
 
-// segmentMatchesHead head-scans ONE shell segment; the default arm returns
-// (see segmentInvokesGo for the break-in-switch infinite-loop pitfall).
 func segmentMatchesHead(fields, head []string) bool {
 	i := 0
 	for i < len(fields) {
@@ -189,10 +106,6 @@ func segmentMatchesHead(fields, head []string) bool {
 	return false
 }
 
-// isNpmTestCommand reports whether cmd invokes an npm-family test runner
-// as its head command: `npm test`, `yarn test`, `pnpm test`, or the
-// `npm run test` script form. Env prefixes were already stripped by the
-// caller.
 func isNpmTestCommand(cmd string) bool {
 	fields := strings.Fields(cmd)
 	if len(fields) < 2 {
@@ -203,58 +116,46 @@ func isNpmTestCommand(cmd string) bool {
 		if fields[1] == "test" {
 			return true
 		}
-		// "npm run test" / "yarn run test"
+
 		return len(fields) > 2 && fields[1] == "run" && fields[2] == "test"
 	}
 	return false
 }
 
-// classifyVerificationCommand returns (category, scope) if the command is a
-// test/build verification command, or ("", "") otherwise.
 func classifyVerificationCommand(cmd string) (category, scope string) {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return "", ""
 	}
 
-	// Strip env prefixes
 	for _, prefix := range []string{"sudo ", "time ", "nice "} {
 		cmd = strings.TrimPrefix(cmd, prefix)
 	}
 
-	// go test / go vet — use word-boundary aware matching to avoid
-	// false positives like "cargo test" containing "go test" substring.
 	if isGoSubcommand(cmd, "test") || isGoSubcommand(cmd, "vet") {
 		category = "go-test"
 		scope = extractGoTestScope(cmd)
 		return
 	}
 
-	// go build
 	if isGoSubcommand(cmd, "build") {
 		category = "go-build"
-		scope = extractGoTestScope(cmd) // reuse package extraction
+		scope = extractGoTestScope(cmd)
 		return
 	}
 
-	// pytest / python -m pytest — head-of-command word match, not a bare
-	// substring: `pip install pytest` is not a test run (#3812 B-sibling).
 	if isHeadCommand(cmd, []string{"pytest"}) || isHeadCommand(cmd, []string{"python", "-m", "pytest"}) {
 		category = "pytest"
 		scope = extractPytestScope(cmd)
 		return
 	}
 
-	// npm/yarn/pnpm test — #3941: head-scan, not substring. `git commit -m
-	// "npm test passing"` must not classify (same gaming vector #3812 fixed
-	// for go).
 	if isNpmTestCommand(cmd) {
 		category = "npm-test"
 		scope = extractNpmTestScope(cmd)
 		return
 	}
 
-	// cargo test — #3941: head-scan ("echo cargo test ok" must not classify).
 	if isHeadCommand(cmd, []string{"cargo"}) {
 		if fields := strings.Fields(cmd); len(fields) > 1 && fields[1] == "test" {
 			category = "cargo-test"
@@ -263,10 +164,6 @@ func classifyVerificationCommand(cmd string) (category, scope string) {
 		}
 	}
 
-	// make test/check/verify — #3941: head-scan ("grep -rn 'make verify'
-	// docs/" must not classify). Hyphenated targets of the same verbs
-	// (make verify-ci, make test-unit, make check-fast) are real make
-	// verification targets, so they still classify.
 	if isHeadCommand(cmd, []string{"make"}) {
 		if fields := strings.Fields(cmd); len(fields) > 1 {
 			for _, verb := range []string{"test", "check", "verify"} {
@@ -281,30 +178,21 @@ func classifyVerificationCommand(cmd string) (category, scope string) {
 	return "", ""
 }
 
-// extractGoTestScope extracts a normalized scope from a go test/build command.
 func extractGoTestScope(cmd string) string {
 	var parts []string
 
-	// Extract -run filter
 	if m := goTestRunRe.FindStringSubmatch(cmd); len(m) > 1 {
 		parts = append(parts, "run:"+m[1])
 	}
 
-	// Broad scope: ./... (all packages) or bare 'go test' with no package path.
-	// Explicit package paths (with or without ./) are narrow scope (issue #24).
 	if strings.Contains(cmd, "./...") {
 		parts = append(parts, "scope:broad")
 	} else {
-		// Extract specific package paths (both ./pkg/ and pkg/ forms)
+
 		pkgs := goTestPkgRe.FindAllStringSubmatch(cmd, -1)
 		for _, m := range pkgs {
 			if len(m) > 1 && m[1] != "./..." {
-				// #2810: a .go-suffixed argument is a single-file scope (go test
-				// compiles just that file plus its implicit package), not a
-				// package token. Classifying it as pkg: fed isNarrower's exact-set
-				// comparison a path token that never equals its package directory,
-				// so package→file narrowing (the classic scope-gaming move) went
-				// undetected. pytest/npm already classify files as file:.
+
 				if strings.HasSuffix(m[1], ".go") {
 					parts = append(parts, "file:"+m[1])
 				} else {
@@ -320,7 +208,6 @@ func extractGoTestScope(cmd string) string {
 	return strings.Join(parts, "|")
 }
 
-// extractPytestScope extracts scope from a pytest command.
 func extractPytestScope(cmd string) string {
 	var parts []string
 
@@ -328,7 +215,6 @@ func extractPytestScope(cmd string) string {
 		parts = append(parts, "k:"+m[1])
 	}
 
-	// Extract file/path arguments (non-flag args after "pytest")
 	rest := ""
 	if m := pytestScopeRe.FindStringSubmatch(cmd); len(m) > 1 {
 		rest = m[1]
@@ -346,7 +232,6 @@ func extractPytestScope(cmd string) string {
 	return strings.Join(parts, "|")
 }
 
-// extractNpmTestScope extracts scope from npm/yarn test commands.
 func extractNpmTestScope(cmd string) string {
 	var parts []string
 
@@ -354,7 +239,6 @@ func extractNpmTestScope(cmd string) string {
 		parts = append(parts, "grep:"+m[1])
 	}
 
-	// Extract specific test file
 	for _, tok := range strings.Fields(cmd) {
 		if strings.HasSuffix(tok, ".test.js") || strings.HasSuffix(tok, ".spec.js") ||
 			strings.HasSuffix(tok, ".test.ts") || strings.HasSuffix(tok, ".spec.ts") {
@@ -369,7 +253,6 @@ func extractNpmTestScope(cmd string) string {
 	return strings.Join(parts, "|")
 }
 
-// extractAfterKeyword returns everything after the given keyword, trimmed.
 func extractAfterKeyword(cmd, keyword string) string {
 	idx := strings.Index(cmd, keyword)
 	if idx < 0 {
@@ -378,15 +261,11 @@ func extractAfterKeyword(cmd, keyword string) string {
 	return strings.TrimSpace(cmd[idx+len(keyword):])
 }
 
-// recordVerificationCommand tracks a verification command and its result.
-// Returns a non-empty warning string if scope narrowing is detected.
 func (s *scopeNarrowState) recordVerificationCommand(toolName, cmd string, output string, isError bool) string {
 	if s.fired {
 		return ""
 	}
-	// #1821 case 3: coverage already injected its near-identical guidance
-	// for THIS command in this tool call - skip ours, clear the slot so a
-	// different command still narrows normally.
+
 	if s.lastCoverageWarnedCmd != "" && s.lastCoverageWarnedCmd == cmd {
 		s.lastCoverageWarnedCmd = ""
 		return ""
@@ -402,28 +281,19 @@ func (s *scopeNarrowState) recordVerificationCommand(toolName, cmd string, outpu
 		rawCommand: cmd,
 		scope:      scope,
 		category:   category,
-		// #550 A3: the exit code (isError) is the authoritative outcome —
-		// the old `!isError && !looksLikeTestFailure(output)` ALSO let a
-		// lowercase-substring scan judge PASSING runs (exit 0) whose test
-		// names merely contain "error"/"fail" (e.g. TestHandleErrorFallback)
-		// as failed, silencing the narrowing detector on exactly the runs
-		// it should be watching. Output text is no longer trusted to gate
-		// the verdict.
+
 		passed: !isError,
 	}
 
 	s.history = append(s.history, entry)
 
-	// Need at least 3 entries to detect narrowing pattern
 	if len(s.history) < 3 {
 		return ""
 	}
 
-	// Check the last 3 same-category entries for scope narrowing
 	return s.checkNarrowingPattern()
 }
 
-// looksLikeTestFailure scans command output for failure indicators.
 func looksLikeTestFailure(output string) bool {
 	output = strings.ToLower(output)
 	for _, marker := range []string{
@@ -436,46 +306,38 @@ func looksLikeTestFailure(output string) bool {
 	return false
 }
 
-// checkNarrowingPattern checks whether the recent command history shows a
-// progressive scope narrowing pattern with a fail→pass transition.
 func (s *scopeNarrowState) checkNarrowingPattern() string {
 	n := len(s.history)
 	if n < 3 {
 		return ""
 	}
 
-	// Find consecutive entries of the same category
 	last := s.history[n-1]
 	if last.category == "make-test" {
-		// make commands don't have extractable scope; skip
+
 		return ""
 	}
 
-	// Look at the last 3 same-category entries
 	var sameCat []scopeEntry
 	for i := n - 1; i >= 0 && len(sameCat) < 3; i-- {
 		if s.history[i].category == last.category {
 			sameCat = append(sameCat, s.history[i])
 		}
 	}
-	// sameCat is in reverse order (most recent first)
+
 	if len(sameCat) < 3 {
 		return ""
 	}
 
-	// Reverse to chronological order
 	oldest := sameCat[2]
 	middle := sameCat[1]
 	newest := sameCat[0]
 
-	// Pattern: scope strictly narrows from oldest→middle→newest,
-	// AND outcome transitions from fail→pass
 	if !isNarrower(middle.scope, oldest.scope) || !isNarrower(newest.scope, middle.scope) {
 		return ""
 	}
 	if oldest.passed || !middle.passed || !newest.passed {
-		// We need: oldest failed, and the narrowing resulted in pass
-		// Actually accept: oldest failed, middle or newest passed
+
 		if oldest.passed {
 			return ""
 		}
@@ -492,10 +354,7 @@ func (s *scopeNarrowState) checkNarrowingPattern() string {
 	return "[Verification Scope Narrowing Detected] Your test/build commands have progressively narrowed scope:\n" +
 		"  1. `" + truncateCmdShort(oldest.rawCommand) + "` -> failed\n" +
 		"  2. `" + truncateCmdShort(middle.rawCommand) + "` -> " + passFailStr(middle.passed) + "\n" +
-		// #550 A2: report the NEWEST command's REAL outcome — the hardcoded
-		// "-> passed" lied whenever the latest run actually failed (firing
-		// only requires middle OR newest to pass), contradicting the evidence
-		// and misleading the agent about the final state.
+
 		"  3. `" + truncateCmdShort(newest.rawCommand) + "` -> " + passFailStr(newest.passed) + "\n\n" +
 		"The narrowing may be masking failures outside the narrowed scope. " +
 		"Re-run the ORIGINAL broader command (`" + truncateCmdShort(originalCmd) + "`) to confirm " +
@@ -503,12 +362,11 @@ func (s *scopeNarrowState) checkNarrowingPattern() string {
 		"If broader tests legitimately fail, fix them rather than narrowing scope further."
 }
 
-// isNarrower returns true if scope b is strictly narrower than scope a.
 func isNarrower(b, a string) bool {
 	if a == "" || b == "" {
 		return false
 	}
-	// Broad → specific narrowing
+
 	if strings.Contains(a, "scope:broad") && !strings.Contains(b, "scope:broad") {
 		return true
 	}
@@ -518,23 +376,19 @@ func isNarrower(b, a string) bool {
 	if pkgSetNarrower(bPkgs, aPkgs) {
 		return true
 	}
-	// #2810 cont.: a-side package directories vs b-side FILE tokens
-	// (pkg:./pkg/ → file:./pkg/foo_test.go is narrowing even when b has no
-	// pkg: tokens at all).
+
 	if len(aPkgs) > 0 && len(bFiles) > 0 && scopeUnderAnyPrefix(bFiles, aPkgs) {
 		return true
 	}
-	// Added -run filter (go) or -k filter (pytest) or --grep (npm)
+
 	for _, marker := range []string{"run:", "k:", "grep:"} {
 		if strings.Contains(b, marker) && !strings.Contains(a, marker) {
 			return true
 		}
 	}
-	// Added file filter
+
 	if strings.Contains(b, "file:") && !strings.Contains(a, "file:") {
-		// #2810: when the previous scope named package directories, a file
-		// token in an UNRELATED directory is a scope switch, not a
-		// narrowing - only the containment path above may fire then.
+
 		if len(aPkgs) == 0 {
 			return true
 		}
@@ -542,11 +396,6 @@ func isNarrower(b, a string) bool {
 	return false
 }
 
-// pkgSetNarrower reports whether the newer package set bPkgs is a narrowing
-// of the older aPkgs. #3812: a bare token-count drop must NOT count on its
-// own - `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
-// debugging pivot (disjoint packages). Only a true subset (b ⊂ a, fewer) or
-// #2810 path-prefix containment narrows.
 func pkgSetNarrower(bPkgs, aPkgs []string) bool {
 	if len(aPkgs) == 0 || len(bPkgs) == 0 {
 		return false
@@ -565,17 +414,10 @@ func pkgSetNarrower(bPkgs, aPkgs []string) bool {
 	if allSubset && len(bPkgs) < len(aPkgs) {
 		return true
 	}
-	// #2810: path-prefix containment. A file/directory token that lives
-	// under one of a's package directories IS a narrowing of that package,
-	// but the exact-set comparison above can never see it (a path never
-	// string-equals its directory, and trailing-slash spelling differs).
-	// Typical gaming chain: `go test ./internal/agent/` (fail) →
-	// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
-	// (pass) - previously silent throughout.
+
 	return scopeUnderAnyPrefix(bPkgs, aPkgs)
 }
 
-// extractPkgList extracts package entries from a scope string.
 func extractPkgList(scope string) []string {
 	var pkgs []string
 	for _, part := range strings.Split(scope, "|") {
@@ -586,7 +428,6 @@ func extractPkgList(scope string) []string {
 	return pkgs
 }
 
-// extractFileList extracts file entries from a scope string.
 func extractFileList(scope string) []string {
 	var files []string
 	for _, part := range strings.Split(scope, "|") {
@@ -597,10 +438,6 @@ func extractFileList(scope string) []string {
 	return files
 }
 
-// scopeUnderAnyPrefix reports whether every entry in sub lives under at
-// least one directory in dirs (path-segment-wise, trailing slashes
-// normalized). Used by isNarrower for the pkg→file/dir containment check
-// (#2810).
 func scopeUnderAnyPrefix(sub, dirs []string) bool {
 	if len(sub) == 0 || len(dirs) == 0 {
 		return false
@@ -620,11 +457,6 @@ func scopeUnderAnyPrefix(sub, dirs []string) bool {
 	return true
 }
 
-// pathSegmentPrefix reports whether sub is equal to or lives under dir,
-// comparing whole path segments (with trailing-slash normalization) so
-// "./internal/agent/bar_test.go" is under "./internal/agent/" and
-// "./internal/agent", but "./internal/agentx/t.go" is NOT under
-// "./internal/agent".
 func pathSegmentPrefix(sub, dir string) bool {
 	s := strings.TrimSuffix(sub, "/")
 	d := strings.TrimSuffix(dir, "/")
@@ -634,7 +466,6 @@ func pathSegmentPrefix(sub, dir string) bool {
 	return strings.HasPrefix(s, d+"/")
 }
 
-// truncateCmdShort truncates a command string for display.
 func truncateCmdShort(cmd string) string {
 	if len(cmd) > 80 {
 		return cmd[:77] + "..."
@@ -642,7 +473,6 @@ func truncateCmdShort(cmd string) string {
 	return cmd
 }
 
-// passFailStr returns "passed" or "failed" for display.
 func passFailStr(passed bool) string {
 	if passed {
 		return "passed"

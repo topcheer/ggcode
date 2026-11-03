@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// ACPAgentRegistry is an interface for discovering and using ACP agents.
-// Implemented by acp.ClientManager to avoid circular imports.
 type ACPAgentRegistry interface {
 	Available() []string
 	AgentInfo(name string) (title, description string, ok bool)
@@ -98,30 +96,24 @@ func (s *pendingToolEventStore) take(toolID, toolName string) (pendingToolEventM
 	return queue[0], true
 }
 
-// ACPAgentClient is an interface for sending prompts to an ACP agent.
-// Implemented by acp.Client.
 type ACPAgentClient interface {
 	Prompt(ctx context.Context, prompt string) (*ACPPromptResult, error)
 	PromptStream(ctx context.Context, prompt string, onEvent func(ACPPromptEvent)) (*ACPPromptResult, error)
 	Close() error
 }
 
-// ACPPromptResult is the result from an ACP agent prompt execution.
 type ACPPromptResult struct {
 	Text       string
 	StopReason string
 	ToolCalls  []ACPToolCallSummary
 }
 
-// ACPToolCallSummary is a summary of a tool call made by the agent.
 type ACPToolCallSummary struct {
 	Name   string
 	Title  string
 	Status string
 }
 
-// DelegateTool delegates a task to an external ACP agent.
-// The tool is only registered when at least one ACP agent is discovered.
 type DelegateTool struct {
 	Manager           ACPAgentRegistry
 	SubAgentManager   *subagent.Manager
@@ -269,10 +261,6 @@ func (t DelegateTool) executeAsync(
 	safego.Go("delegate-tool", func() {
 		defer client.Close()
 
-		// #4436 Bug3: a panic in the PromptStream callback (or the stream
-		// loop itself) used to kill this goroutine without completing the
-		// sub-agent, leaving it stuck "running" forever. Recover, surface
-		// the panic as an error event, and complete the task.
 		defer func() {
 			if r := recover(); r != nil {
 				err := fmt.Errorf("delegate panic: %v", r)
@@ -289,11 +277,7 @@ func (t DelegateTool) executeAsync(
 		}()
 
 		runCtx, cancel := context.WithCancel(mgr.RootContext())
-		// #4692: without this defer, cancel only ran on the SetCancel-false
-		// branch and on user-initiated Cancel - the success/error completion
-		// paths leaked the cancelCtx node on RootContext's children map
-		// forever (RootContext is process-scoped). cancel is idempotent, so
-		// a later user Cancel is a harmless no-op.
+
 		defer cancel()
 		if !mgr.SetCancel(id, cancel) {
 			cancel()

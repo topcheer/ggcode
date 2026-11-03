@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// helper: create a directory-based skill on disk
 func createTestSkillDir(t *testing.T, parent, name string) string {
 	t.Helper()
 	dir := filepath.Join(parent, name)
@@ -58,7 +57,7 @@ func TestExportSkill_DirectoryBased(t *testing.T) {
 	if len(manifest.Files) < 2 {
 		t.Errorf("expected at least 2 files in manifest, got %d", len(manifest.Files))
 	}
-	// Verify the file exists
+
 	if _, err := os.Stat(outPath); os.IsNotExist(err) {
 		t.Error("output file was not created")
 	}
@@ -99,7 +98,7 @@ func TestImportSkill_RoundTrip(t *testing.T) {
 		Path:    filepath.Join(skillDir, "SKILL.md"),
 		Version: "2.1.0",
 	}
-	// Export
+
 	manifest, _, err := exportSkill(cmd, outPath)
 	if err != nil {
 		t.Fatalf("exportSkill failed: %v", err)
@@ -108,7 +107,6 @@ func TestImportSkill_RoundTrip(t *testing.T) {
 		t.Fatalf("expected at least 2 files, got %d", len(manifest.Files))
 	}
 
-	// Import to a different directory
 	destDir := filepath.Join(tmp, "imported")
 	importedManifest, importedDir, err := importSkill(outPath, destDir)
 	if err != nil {
@@ -120,11 +118,11 @@ func TestImportSkill_RoundTrip(t *testing.T) {
 	if importedManifest.Version != "2.1.0" {
 		t.Errorf("expected version '2.1.0', got %q", importedManifest.Version)
 	}
-	// Verify SKILL.md exists in imported dir
+
 	if _, err := os.Stat(filepath.Join(importedDir, "SKILL.md")); os.IsNotExist(err) {
 		t.Error("SKILL.md not found in imported skill directory")
 	}
-	// Verify helper.go exists
+
 	if _, err := os.Stat(filepath.Join(importedDir, "helper.go")); os.IsNotExist(err) {
 		t.Error("helper.go not found in imported skill directory")
 	}
@@ -132,7 +130,7 @@ func TestImportSkill_RoundTrip(t *testing.T) {
 
 func TestImportSkill_PathTraversalBlocked(t *testing.T) {
 	tmp := t.TempDir()
-	// Craft a malicious bundle with a path-traversal entry
+
 	outPath := filepath.Join(tmp, "malicious.ggskill")
 	f, err := os.Create(outPath)
 	if err != nil {
@@ -141,11 +139,9 @@ func TestImportSkill_PathTraversalBlocked(t *testing.T) {
 	gw := gzip.NewWriter(f)
 	tw := tar.NewWriter(gw)
 
-	// Write a fake manifest
 	manifestJSON := []byte(`{"name":"evil","files":["../../etc/passwd"]}`)
 	writeTarEntry(tw, "manifest.json", manifestJSON)
 
-	// Write the malicious file
 	writeTarEntry(tw, "../../etc/passwd", []byte("hacked"))
 
 	tw.Close()
@@ -161,7 +157,7 @@ func TestImportSkill_PathTraversalBlocked(t *testing.T) {
 
 func TestImportSkill_InvalidBundle(t *testing.T) {
 	tmp := t.TempDir()
-	// Write a random file that is not a valid gzip
+
 	badPath := filepath.Join(tmp, "bad.ggskill")
 	if err := os.WriteFile(badPath, []byte("not a gzip file"), 0644); err != nil {
 		t.Fatal(err)
@@ -213,34 +209,28 @@ func TestSanitizeSkillName(t *testing.T) {
 }
 
 func TestSkillDirFromPath(t *testing.T) {
-	// Directory-based skill
+
 	got := skillDirFromPath("/home/user/.ggcode/skills/my-skill/SKILL.md")
 	if got != "/home/user/.ggcode/skills/my-skill" {
 		t.Errorf("expected skill dir, got %q", got)
 	}
-	// Standalone file
+
 	got = skillDirFromPath("/home/user/.ggcode/commands/standalone.md")
 	if got != "" {
 		t.Errorf("expected empty for standalone file, got %q", got)
 	}
-	// Empty path
+
 	got = skillDirFromPath("")
 	if got != "" {
 		t.Errorf("expected empty for empty input, got %q", got)
 	}
 }
 
-// #1341: the compressed-stream LimitedReader does not bound total
-// decompressed bytes. A gzip bomb (many all-zero tar entries, each under
-// the per-file cap) must be rejected by the cumulative cap, not expand
-// into the files map.
 func TestImportSkill_GzipBombRejected(t *testing.T) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
-	// Manifest first, then many ~1MB zero entries. Total decompressed
-	// far exceeds MaxSkillBundleSize but compressed size stays tiny.
 	manifest, _ := json.Marshal(&SkillManifest{Name: "bomb", Version: "1"})
 	hdr := &tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifest))}
 	if err := tw.WriteHeader(hdr); err != nil {
@@ -248,7 +238,7 @@ func TestImportSkill_GzipBombRejected(t *testing.T) {
 	}
 	tw.Write(manifest)
 	chunk := make([]byte, 1024*1024)
-	for i := 0; i < 40; i++ { // 40MB decompressed total
+	for i := 0; i < 40; i++ {
 		hdr := &tar.Header{Name: fmt.Sprintf("blob%d.bin", i), Mode: 0o644, Size: int64(len(chunk))}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatal(err)
@@ -266,7 +256,7 @@ func TestImportSkill_GzipBombRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing file (sanity)")
 	}
-	// Direct readBundle check: cumulative cap must fire.
+
 	m, files, err := readBundle(bytes.NewReader(buf.Bytes()))
 	if err == nil {
 		t.Fatalf("expected gzip bomb rejection, got manifest=%v files=%d", m != nil, len(files))

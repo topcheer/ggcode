@@ -1,44 +1,5 @@
 package agent
 
-// intervention_ledger.go -- Intervention Point Ledger (proactive defer, V1).
-//
-// Research basis:
-//   - CMU ML Blog (2026-04) "When Should AI Step Aside?": agents should learn
-//     not only to act but to DEFER - anticipating when a human wants to take
-//     over. CowCorpus (400 real human-agent sessions, 4200+ interleaved
-//     actions with step-level intervention annotations) shows intervention
-//     precursors are learnable, and that the human-agent boundary should be
-//     adaptive (user-specific), not fixed rules.
-//   - Learning-to-defer formalization: Madras/Pitassi/Zemel "Predict
-//     Responsibly: Improving Fairness and Accuracy by Learning to Defer".
-//
-// Gap in this codebase (audited r395): mid-run steering (#1472/r229) provides
-// the intervention CHANNEL (can the user interject) but nothing learns the
-// intervention TIMING. ApprovalMemory learns auto-approve (opposite
-// direction, permission layer). No persistent record of where users actually
-// interrupted exists, so a user who has taken over at the same kind of step
-// three times gets no adaptation on the fourth.
-//
-// V1 scope (deliberately conservative - stats, not a model):
-//   - record(): when a mid-run interruption lands, persist the tool the agent
-//     had most recently executed + iteration depth. Tool NAMES and counts
-//     only - never arguments, never content (privacy).
-//   - hint(): before/around executing a tool whose category historically
-//     drew >=3 interruptions (within the recency window), append a
-//     NON-BLOCKING note to that tool's result asking the agent to state its
-//     intent before the next such action. This converts the supervision cost
-//     from "must interrupt" (high) to "glance and see" (low) - the defer
-//     posture without an annoying ask-first gate. V1 deliberately does NOT
-//     ask the user a question: in a TUI the user is already watching, and a
-//     blocking prompt on a guessed pattern would cost more trust than it
-//     buys.
-//   - Stored under <workspace>/.ggcode/interventions.json, rolling window,
-//     workspace-scoped. `/interventions clear` wipes the profile.
-//
-// Protocol safety: the hint is appended to the tool RESULT content (same
-// pattern as effect_ledger.go and command_cache.go annotations); no message
-// is inserted between tool_calls and tool_results.
-
 import (
 	"encoding/json"
 	"os"
@@ -50,27 +11,23 @@ import (
 
 const (
 	interventionMaxEntries    = 200
-	interventionHintThreshold = 3 // distinct interruptions on the same tool
+	interventionHintThreshold = 3
 	interventionRecencyWindow = 14 * 24 * time.Hour
-	interventionHintCooldown  = 24 * time.Hour // one hint per tool per day
+	interventionHintCooldown  = 24 * time.Hour
 	interventionLedgerFile    = "interventions.json"
 )
 
-// interventionEntry is one recorded user takeover.
 type interventionEntry struct {
-	Tool      string `json:"tool"` // tool the agent had just executed (or "" if none yet)
-	Iteration int    `json:"iter"` // loop iteration the run had reached
+	Tool      string `json:"tool"`
+	Iteration int    `json:"iter"`
 	Ts        int64  `json:"ts"`
 }
 
-// interventionLedgerData is the on-disk JSON structure.
 type interventionLedgerData struct {
-	Entries []interventionEntry `json:"entries"`
-	// HintedAt tracks last-hint wall time per tool to enforce the cooldown.
-	HintedAt map[string]int64 `json:"hinted_at,omitempty"`
+	Entries  []interventionEntry `json:"entries"`
+	HintedAt map[string]int64    `json:"hinted_at,omitempty"`
 }
 
-// interventionLedger records user interruptions and surfaces defer hints.
 type interventionLedger struct {
 	mu         sync.Mutex
 	workingDir string
@@ -113,8 +70,6 @@ func (l *interventionLedger) saveLocked() {
 	}
 }
 
-// record persists one intervention. Never blocks: ledger failures are
-// silently dropped - the hint is an optimization, not an invariant.
 func (l *interventionLedger) record(tool string, iteration int) {
 	if l == nil {
 		return
@@ -133,8 +88,6 @@ func (l *interventionLedger) record(tool string, iteration int) {
 	l.saveLocked()
 }
 
-// recentCount returns how many interventions on this tool fall inside the
-// recency window.
 func (l *interventionLedger) recentCount(tool string) int {
 	tool = sanitizeInterventionTool(tool)
 	cutoff := time.Now().Add(-interventionRecencyWindow).Unix()
@@ -147,9 +100,6 @@ func (l *interventionLedger) recentCount(tool string) int {
 	return n
 }
 
-// hint returns a non-blocking defer note when the tool being executed has
-// historically drawn repeated takeovers and no hint fired recently. Empty
-// string means no hint. Callers append the note to the tool result.
 func (l *interventionLedger) hint(tool string) string {
 	if l == nil {
 		return ""
@@ -177,7 +127,6 @@ func (l *interventionLedger) hint(tool string) string {
 		" action, state in one sentence what you are about to do and why, so the user can veto cheaply instead of interrupting."
 }
 
-// clear wipes the profile (backing /interventions clear).
 func (l *interventionLedger) clear() {
 	if l == nil {
 		return
@@ -188,9 +137,6 @@ func (l *interventionLedger) clear() {
 	l.saveLocked()
 }
 
-// recordIntervention attributes a user takeover to the tool the agent had
-// most recently executed (r395). Called from the agent loop when
-// injectPendingInterruptions() reports that mid-run guidance landed.
 func (a *Agent) recordIntervention(iteration int) {
 	a.mu.RLock()
 	tool := a.lastExecutedTool
@@ -198,8 +144,6 @@ func (a *Agent) recordIntervention(iteration int) {
 	a.interventionLedger.record(tool, iteration)
 }
 
-// sanitizeInterventionTool normalizes a tool name for the profile: strip
-// whitespace, lowercase, cap length. Arguments are never recorded.
 func sanitizeInterventionTool(tool string) string {
 	tool = strings.ToLower(strings.TrimSpace(tool))
 	if len(tool) > 64 {
@@ -222,12 +166,10 @@ func interventionItoa(n int) string {
 	return string(b[i:])
 }
 
-// ClearInterventions wipes the takeover history (/interventions clear).
 func (a *Agent) ClearInterventions() {
 	a.interventionLedger.clear()
 }
 
-// InterventionSummary renders the takeover history for the user.
 func (a *Agent) InterventionSummary() string {
 	a.interventionLedger.mu.Lock()
 	defer a.interventionLedger.mu.Unlock()

@@ -125,7 +125,7 @@ func worker(ch chan int) {
 }
 `
 	warnings := checkChannelSafety("worker.go", oldSrc, newSrc)
-	// double-close already existed, but send-after-close is new
+
 	foundSend := false
 	for _, w := range warnings {
 		if strings.Contains(w, "send") {

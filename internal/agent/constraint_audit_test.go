@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// r392 (AREX constraint-wise audit): structurally-listed multi-requirement
-// tasks get a per-item audit prompt; prose and single-item tasks do not.
 func TestConstraintAuditListedTask(t *testing.T) {
 	c := newConstraintAuditState()
 	c.observe("Please do the following:\n1. add retry to the uploader\n2. fix the config parser bug\n3. write tests for both")
@@ -32,8 +30,6 @@ func TestConstraintAuditBulletList(t *testing.T) {
 	}
 }
 
-// #3093: Chinese ordinal list forms (步骤1：/ 一、) must be recognized,
-// while prose starting with ordinal-like characters must not be.
 func TestConstraintAuditChineseOrdinals(t *testing.T) {
 	c := newConstraintAuditState()
 	c.observe("请完成：\n步骤1：修改配置解析\n步骤2：补充单元测试\n步骤3：更新文档说明")
@@ -53,7 +49,6 @@ func TestConstraintAuditChineseOrdinals(t *testing.T) {
 		t.Errorf("audit must list ordinal items verbatim: %s", msg)
 	}
 
-	// Prose starting with ordinal-like chars must NOT be list items.
 	c3 := newConstraintAuditState()
 	c3.observe("一定要修复这个重试逻辑，一定要加日志，一定要有测试")
 	if msg := c3.checkAndInject(); msg != "" {
@@ -63,10 +58,10 @@ func TestConstraintAuditChineseOrdinals(t *testing.T) {
 
 func TestConstraintAuditIgnoresNonTasks(t *testing.T) {
 	cases := []string{
-		"Fix the login bug", // single prose item
-		"List all files in the config package:\n- a\n- b", // read-only task
-		"Explain this log:\n```go\n1. x\n2. y\n```",       // fenced code only
-		"1. only one item here",                           // below min items
+		"Fix the login bug",
+		"List all files in the config package:\n- a\n- b",
+		"Explain this log:\n```go\n1. x\n2. y\n```",
+		"1. only one item here",
 	}
 	for _, p := range cases {
 		c := newConstraintAuditState()
@@ -92,7 +87,7 @@ func TestConstraintAuditCodeFenceSkipped(t *testing.T) {
 func TestConstraintAuditObserveOnceAndReset(t *testing.T) {
 	c := newConstraintAuditState()
 	c.observe("1. first task\n2. second task")
-	c.observe("1. other\n2. other2") // ignored: first message defines the task
+	c.observe("1. other\n2. other2")
 	msg := c.checkAndInject()
 	if !strings.Contains(msg, "first task") {
 		t.Errorf("first task list must win: %s", msg)

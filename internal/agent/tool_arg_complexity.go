@@ -1,45 +1,5 @@
 package agent
 
-// Think-Augmented Function Calling (arXiv:2601.18282v2, sa-131 NEW_GAP):
-// pre-dispatch argument-complexity scoring that triggers a per-parameter
-// granular justification round for high-complexity WRITE calls.
-//
-// Gap (three-point evidence, sa-131): the existing pre-flight path is a pure
-// presence check (tool_required_check.go: schema-driven required keys), the
-// adaptive-effort loop is function-level POST-hoc feedback
-// (adaptive_effort.go: error-rate -> effort tier), and tool-target-mismatch
-// is an after-the-fact detector. Nothing asks the model to JUSTIFY critical
-// parameter choices BEFORE a complex write dispatches.
-//
-// Mechanics (mirrors the preflightRequiredCheck one-retry-round contract):
-//   - Deterministic, zero-LLM complexity heuristics per write tool family.
-//   - score >= per-tool threshold AND write-class tool AND no rationale
-//     attached: reject once with an error that names the heavy parameters;
-//     the resent call passes via the intent-key memo.
-//   - Read-only tools never trigger (their complexity is cheap to undo).
-//
-// v2 calibration (gate-recalib round, Oct 2026) fixing two field defects:
-//   - Defect A: the gate demanded an `arg_rationale` field that no tool
-//     schema declared, so schema-strict models could not comply at all.
-//     The field is now injected into write-tool schemas (see
-//     injectArgRationaleSchema) and is stripped before dispatch.
-//   - Defect B: the fired-once memo keyed on the RAW argument bytes, but an
-//     LLM resend is never byte-identical (key order, whitespace, added
-//     description), so "identical" retries re-fired forever. The memo now
-//     keys on a NORMALIZED INTENT projection (heavy-parameter shapes, not
-//     bytes), and a per-run fire budget (3) fails the gate open instead of
-//     looping. Gate state moved from a package-level sync.Map to run-scoped
-//     state (reset each turn with the other detectors).
-//   - run_command threshold raised 4 -> 8: legitimate build/test pipelines
-//     commonly carry 4-6 pipes and were being choked. Destructive tokens
-//     were re-tiered (+8 hard / +2 soft) so single dangerous commands still
-//     fire, and PowerShell dialect scoring was added (backticks are
-//     continuation characters there, not substitution; Remove-Item /
-//     Format-Volume / reg delete are the destructive forms).
-//   - edit_file relaxed: pure large edits now need a 200+ line anchor (was
-//     100), with an 80+ buffer tier; the delete-semantics weight is kept so
-//     bulk deletions still justify themselves.
-
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -52,27 +12,15 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Per-tool complexity thresholds: the score at which a write-class call
-// must carry an arg_rationale. run_command needs 8 (pipes/substitution are
-// legitimate plumbing); every other write tool stays at 4.
 const (
 	argComplexityDefaultThreshold = 4
 	argComplexityRunCmdThreshold  = 8
 )
 
-// argComplexityMaxFires bounds how many times the gate may reject within a
-// single run. Fail-open after the budget is spent: a mis-calibrated score
-// must cost three round-trips, never an unbounded loop.
 const argComplexityMaxFires = 3
 
-// argRationaleField is the optional justification argument. Any non-blank
-// value passes: the point is the justification round-trip, not grading the
-// prose. It is injected into write-tool schemas (so schema-strict models
-// can send it) and stripped before the call dispatches.
 const argRationaleField = "arg_rationale"
 
-// argComplexityWriteTools are the write-class tools whose complexity score
-// participates. Everything else (reads, searches, git status) is exempt.
 var argComplexityWriteTools = map[string]bool{
 	"run_command":      true,
 	"edit_file":        true,
@@ -90,9 +38,6 @@ var argComplexityWriteTools = map[string]bool{
 	"git_commit":       true,
 }
 
-// argComplexityGateState is the run-scoped gate state (defect B/C fix):
-// fired holds normalized intent keys that already burned their
-// justification round, and fires counts rejections against the budget.
 type argComplexityGateState struct {
 	mu    sync.Mutex
 	fired map[string]struct{}
@@ -103,8 +48,6 @@ func newArgComplexityGateState() *argComplexityGateState {
 	return &argComplexityGateState{fired: make(map[string]struct{})}
 }
 
-// reset clears the memo and budget (wired next to irrevGate.reset in
-// reset_turn.go so every turn starts with a fresh gate).
 func (s *argComplexityGateState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,7 +55,6 @@ func (s *argComplexityGateState) reset() {
 	s.fires = 0
 }
 
-// argComplexityThresholdFor returns the per-tool score threshold.
 func argComplexityThresholdFor(name string) int {
 	if name == "run_command" {
 		return argComplexityRunCmdThreshold
@@ -120,19 +62,11 @@ func argComplexityThresholdFor(name string) int {
 	return argComplexityDefaultThreshold
 }
 
-// scoreArgComplexity returns a deterministic complexity score for the call
-// plus the parameter names that carried the weight (for the error message).
-// Unknown tools score 0.
-// editPair is one old/new edit from either multi-tool shape.
 type editPair struct {
 	OldText string `json:"old_text"`
 	NewText string `json:"new_text"`
 }
 
-// parseMultiEditsForComplexity aggregates the edit pairs from BOTH
-// multi-tool shapes (#4875): multi_edit_file's top-level "edits" array and
-// multi_file_edit's per-file "files"[].edits nesting. Returns nil when the
-// args match neither shape (unknown tools/unparseable input).
 func parseMultiEditsForComplexity(args map[string]json.RawMessage) []editPair {
 	if raw, ok := args["edits"]; ok {
 		var edits []editPair
@@ -183,9 +117,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 		}
 	case "edit_file":
 		old := str("old_text")
-		// v2: pure edits need a 200+ line anchor to fire (was 100+4 /
-		// 30+2); 80+ is a buffer tier that only fires combined with
-		// delete semantics or replace_all below.
+
 		switch {
 		case strings.Count(old, "\n") >= 200:
 			add(4, "old_text")
@@ -202,12 +134,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			}
 		}
 	case "multi_edit_file", "multi_file_edit":
-		// #4875: the two tools have DIFFERENT edits shapes - multi_edit_file
-		// carries a top-level "edits" array, multi_file_edit nests per-file
-		// edits under "files"[].edits. Reading args["edits"] for both meant
-		// every legal multi_file_edit call deterministically missed (!ok ->
-		// break): score always 0, delete semantics unreachable - the largest
-		// blast-radius write tool was invisible to the complexity gate.
+
 		edits := parseMultiEditsForComplexity(args)
 		switch {
 		case len(edits) >= 15:
@@ -254,9 +181,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			add(4, "mode")
 		}
 	case "git_revert":
-		// #4647: was a dead override-table entry - no case, always 0.
-		// no_commit rewrites history in place (like reset --hard): +4.
-		// A normal revert creates an undoable commit: +2.
+
 		if b, ok := args["no_commit"]; ok {
 			var bval bool
 			if json.Unmarshal(b, &bval) == nil && bval {
@@ -267,9 +192,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			add(2, "revert")
 		}
 	case "git_checkout":
-		// Plain branch switches are routine and carry their own dirty-tree
-		// guard: 0. Creating from an explicit start_point (arbitrary
-		// commit/tag, often mid-rebase surgery) is the heavier shape: +2.
+
 		if b, ok := args["create"]; ok {
 			var bval bool
 			if json.Unmarshal(b, &bval) == nil && bval && str("start_point") != "" {
@@ -277,8 +200,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			}
 		}
 	case "git_add":
-		// Staging the whole tree at once (".", 10+ paths) widens the blast
-		// radius of whatever commit follows: +2.
+
 		if raw, ok := args["files"]; ok {
 			var files []string
 			if json.Unmarshal(raw, &files) == nil && (len(files) >= 10 || (len(files) == 1 && files[0] == ".")) {
@@ -286,9 +208,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			}
 		}
 	case "git_commit":
-		// all=true auto-stages every tracked modification (scope creep into
-		// files the caller never named); very long messages often smuggle
-		// rationale that belongs in the diff review: +2 each.
+
 		if b, ok := args["all"]; ok {
 			var bval bool
 			if json.Unmarshal(b, &bval) == nil && bval {
@@ -299,9 +219,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			add(2, "message")
 		}
 	case "notebook_edit":
-		// #4647: dead entry, no case. Deleting a cell destroys content the
-		// next tool result will not show: +3. Replacing a large cell body
-		// mirrors write_file's 200-line tier: +2.
+
 		switch str("operation") {
 		case "delete":
 			add(3, "operation")
@@ -314,9 +232,6 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 	return score, heavy
 }
 
-// PowerShell dialect markers: any of these in a command means backticks are
-// line-continuation/escape characters (NOT command substitution) and the PS
-// token tables apply (rm/curl still hit as aliases).
 func shellLooksPowerShell(cmd string) bool {
 	for _, m := range []string{"$env:", "-Recurse", "Invoke-", "Remove-Item", "Set-ExecutionPolicy", "iwr ", "Format-Volume", "Get-ChildItem", "Out-Null"} {
 		if strings.Contains(cmd, m) {
@@ -326,44 +241,32 @@ func shellLooksPowerShell(cmd string) bool {
 	return false
 }
 
-// Hard (destructive, hard-to-undo) tokens: a single occurrence fires the
-// run_command gate on its own (+8 each, capped at 16).
 var shellHardTokens = []string{
 	"rm -rf",
 	"git reset --hard",
-	// "git push --force" moved to pushForceScore (#4877): substring matching
-	// (a) missed the -f / +refspec equivalents entirely, and (b) scored the
-	// safer --force-with-lease prefix-superset at the same +8 hard weight as
-	// bare force - contradicting git_destructive_detect's own warning-level
-	// tiering for the lease variant.
-	"Remove-Item -Recurse -Force", // PS rm -rf equivalent
-	"Format-Volume",               // PS disk wipe
+
+	"Remove-Item -Recurse -Force",
+	"Format-Volume",
 	"reg delete",
 }
 
-// Soft (risky-but-not-destructive) tokens: +2 each, capped at 6. Alone they
-// never fire the threshold-8 gate; they combine with structure weight.
 var shellSoftTokens = []string{
 	"curl",
 	"wget",
 	"chmod 777",
 	"sudo",
-	"Invoke-WebRequest", // PS curl equivalent
+	"Invoke-WebRequest",
 	"iwr",
 	"Set-ExecutionPolicy Bypass",
 }
 
-// splitShellSubcommands splits a compound command into its individual
-// subcommands on the shell sequencing operators (&& || ; and newlines).
-// Sequences inside $() / backticks are left intact within their segment -
-// a substitution belongs to the one subcommand that expands it.
 func splitShellSubcommands(cmd string) []string {
 	if !strings.ContainsAny(cmd, "&;\n") {
 		return []string{cmd}
 	}
 	var parts []string
 	var cur strings.Builder
-	depth := 0 // inside $(...) nesting
+	depth := 0
 	inBacktick := false
 	inSingle, inDouble := false, false
 	for i := 0; i < len(cmd); i++ {
@@ -374,7 +277,7 @@ func splitShellSubcommands(cmd string) []string {
 		case c == '"' && !inSingle:
 			inDouble = !inDouble
 		case (inSingle || inDouble):
-			// quoted content: no operator handling
+
 		case c == '`':
 			inBacktick = !inBacktick
 		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(' && !inBacktick:
@@ -386,12 +289,12 @@ func splitShellSubcommands(cmd string) []string {
 		case c == ')' && depth > 0 && !inBacktick:
 			depth--
 		case depth > 0 || inBacktick:
-			// inside substitution: separators are inert
+
 		case c == '&' && i+1 < len(cmd) && cmd[i+1] == '&', c == ';':
 			parts = append(parts, cur.String())
 			cur.Reset()
 			if c == '&' {
-				i++ // consume the second '&'
+				i++
 			}
 			continue
 		case c == '|' && i+1 < len(cmd) && cmd[i+1] == '|':
@@ -407,7 +310,7 @@ func splitShellSubcommands(cmd string) []string {
 		cur.WriteByte(c)
 	}
 	parts = append(parts, cur.String())
-	// Drop empties (trailing separators, blank lines).
+
 	out := parts[:0]
 	for _, p := range parts {
 		if strings.TrimSpace(p) != "" {
@@ -420,17 +323,6 @@ func splitShellSubcommands(cmd string) []string {
 	return out
 }
 
-// scoreShellComplexityChained (#4780 / S-09): score a compound command
-// PER SUBCOMMAND and take the maximum, instead of scoring the whole string.
-// The whole-string aggregation rejected entire multi-action commands
-// (merge + comment + patrol) whose combined argv crossed the threshold even
-// though every step was individually safe - forcing costly step-splitting.
-// Per-sub max keeps the gate's promise (a genuinely heavy subcommand still
-// fires: hard tokens, substitution density, and pipeline depth are all
-// counted within their own segment) while safe read-only verbs chained
-// together no longer aggregate. The destructive-pattern layer
-// (reversibility_check) is separate and still matches anywhere in the
-// string.
 func scoreShellComplexityChained(cmd string) int {
 	subs := splitShellSubcommands(cmd)
 	if len(subs) <= 1 {
@@ -445,19 +337,6 @@ func scoreShellComplexityChained(cmd string) int {
 	return max
 }
 
-// pushForceScore returns (hard, mid) tier weights for the force forms of a
-// git push inside cmd (#4877), token-matched the way
-// git_destructive_detect.isForcePushCommand does it rather than by
-// substring, so the three spellings of the same hazard tier equally and the
-// safe lease variant gets its own mid weight:
-//   - bare --force, short-flag clusters (-f, -fv), and +refspec force
-//     ("git push origin +main")  -> hard 8
-//   - --force-with-lease[=expect] -> mid 4 (the safer form; scoring it hard
-//     nudged agents away from the variant the destructive guard recommends)
-//
-// Non-force pushes and unrelated commands score 0/0. Scanning stops at the
-// first shell sequencing boundary so a later segment's tokens never
-// misattribute to this push.
 func pushForceScore(cmd string) (hard, mid int) {
 	fields := strings.Fields(cmd)
 	for i := 1; i < len(fields); i++ {
@@ -475,19 +354,16 @@ func pushForceScore(cmd string) (hard, mid int) {
 				return 0, 4
 			}
 			if strings.HasPrefix(t, "+") {
-				return 8, 0 // +refspec force form
+				return 8, 0
 			}
 			if strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "--") && strings.Contains(t, "f") {
-				return 8, 0 // -f / -fv / -fn flag clusters
+				return 8, 0
 			}
 		}
 	}
 	return 0, 0
 }
 
-// scoreShellComplexity scores a shell command: length, pipelines (capped:
-// build/test plumbing legitimately chains 5-8 stages), command substitution
-// (dialect-aware for backticks), and destructive-token tiers.
 func scoreShellComplexity(cmd string) int {
 	ps := shellLooksPowerShell(cmd)
 	n := 0
@@ -496,8 +372,7 @@ func scoreShellComplexity(cmd string) int {
 	} else if len(cmd) > 200 {
 		n += 1
 	}
-	// #4647: "a || b" contributes 2 '|' characters but 0 pipelines -
-	// subtract the logical-or pairs so they are not double-counted.
+
 	pipes := strings.Count(cmd, "|") - 2*strings.Count(cmd, "||")
 	if pipes > 4 {
 		n += 4
@@ -506,7 +381,7 @@ func scoreShellComplexity(cmd string) int {
 	}
 	subs := strings.Count(cmd, "$(")
 	if !ps {
-		subs += strings.Count(cmd, "`") // PS: backtick is an escape, not substitution
+		subs += strings.Count(cmd, "`")
 	}
 	if subs > 2 {
 		n += 3
@@ -519,16 +394,14 @@ func scoreShellComplexity(cmd string) int {
 			hard += 8
 		}
 	}
-	// #4877: token-level git push force tiers (see pushForceScore) - the
-	// lease mid weight mirrors the bare Remove-Item +5 precedent (below the
-	// threshold-8 gate alone, but visible in the score).
+
 	if pfHard, pfMid := pushForceScore(cmd); pfHard > 0 || pfMid > 0 {
 		if hard < 16 {
 			hard += pfHard
 		}
 		hard += pfMid
 	}
-	// Bare Remove-Item (no -Force suffix pair) still warrants a mid weight.
+
 	if ps && hard == 0 && strings.Contains(cmd, "Remove-Item") {
 		hard += 5
 	}
@@ -542,7 +415,6 @@ func scoreShellComplexity(cmd string) int {
 	return n
 }
 
-// scoreFileOpsDeletes scores file_ops payloads by recursive deletes.
 func scoreFileOpsDeletes(args map[string]json.RawMessage) int {
 	raw, ok := args["operations"]
 	if !ok {
@@ -568,11 +440,6 @@ func scoreFileOpsDeletes(args map[string]json.RawMessage) int {
 	return n
 }
 
-// argComplexityIntentKey hashes tool + a NORMALIZED PROJECTION of the heavy
-// parameters (defect B fix). The projection depends only on the values that
-// drove the score, bucketed where prose jitter is irrelevant, so a resent
-// call with different key order / whitespace / added description / reworded
-// (but same-intent) arguments still memo-hits and passes.
 func argComplexityIntentKey(toolName string, call map[string]json.RawMessage) string {
 	str := func(key string) string {
 		var s string
@@ -598,9 +465,7 @@ func argComplexityIntentKey(toolName string, call map[string]json.RawMessage) st
 		proj["replace_all"] = replaceAll
 		proj["file_path"] = strings.TrimSpace(str("file_path"))
 	case "multi_edit_file", "multi_file_edit":
-		// #4875: shape-aware aggregation (see parseMultiEditsForComplexity)
-		// - the old top-level-only read made every multi_file_edit call share
-		// one constant intent key (0 edits, 0 deletes).
+
 		edits := parseMultiEditsForComplexity(call)
 		deletes := 0
 		for _, e := range edits {
@@ -643,8 +508,7 @@ func argComplexityIntentKey(toolName string, call map[string]json.RawMessage) st
 	case "git_reset":
 		proj["hard"] = strings.Contains(str("mode"), "hard")
 	default:
-		// No projection: canonicalize the whole call minus volatile fields.
-		// json.Marshal of a map sorts keys, giving a stable byte form.
+
 		canon := make(map[string]json.RawMessage, len(call))
 		for k, v := range call {
 			if k == argRationaleField || k == "description" {
@@ -666,9 +530,6 @@ func hashArgIntent(toolName string, proj []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// preflightArgComplexityCheck runs beside preflightRequiredCheck in
-// safeExecute. Returns a non-nil Result when a high-complexity write call
-// must first justify its parameters (one round-trip, then passes).
 func preflightArgComplexityCheck(gate *argComplexityGateState, t tool.Tool, args json.RawMessage) *tool.Result {
 	name := t.Name()
 	if !argComplexityWriteTools[name] || len(args) == 0 {
@@ -676,20 +537,18 @@ func preflightArgComplexityCheck(gate *argComplexityGateState, t tool.Tool, args
 	}
 	var call map[string]json.RawMessage
 	if err := json.Unmarshal(args, &call); err != nil {
-		return nil // malformed: the tool's own parse will speak
+		return nil
 	}
 	if gate == nil {
-		return nil // stateless caller (tests of other detectors): pass
+		return nil
 	}
-	// A justification already attached: pass (and record it for
-	// observability). Checked before scoring on purpose.
 	var rationale string
 	_ = json.Unmarshal(call[argRationaleField], &rationale)
 	if strings.TrimSpace(rationale) != "" {
 		debug.Log("agent", "arg-complexity gate satisfied by %s rationale (%d chars)", name, len(rationale))
 		return nil
 	}
-	// Same normalized intent already burned its justification round: pass.
+
 	key := argComplexityIntentKey(name, call)
 	gate.mu.Lock()
 	_, fired := gate.fired[key]
@@ -702,8 +561,7 @@ func preflightArgComplexityCheck(gate *argComplexityGateState, t tool.Tool, args
 	if score < argComplexityThresholdFor(name) {
 		return nil
 	}
-	// Budget exhausted: fail open (log-only). A wrong score must cost
-	// round-trips, never trap the run.
+
 	if !budgetLeft {
 		debug.Log("agent", "arg-complexity gate budget exhausted (%d fires); passing %s score=%d", argComplexityMaxFires, name, score)
 		return nil
@@ -717,9 +575,6 @@ func preflightArgComplexityCheck(gate *argComplexityGateState, t tool.Tool, args
 	return &r
 }
 
-// stripArgRationale removes the gate-only justification field from the call
-// before dispatch so the tool never sees it (Go decoding would ignore it,
-// but keeping it out of audit payloads and tool logs is cleaner).
 func stripArgRationale(args json.RawMessage) json.RawMessage {
 	if len(args) == 0 || !strings.Contains(string(args), argRationaleField) {
 		return args
@@ -739,7 +594,6 @@ func stripArgRationale(args json.RawMessage) json.RawMessage {
 	return b
 }
 
-// formatArgRationaleRequest renders the one-retry-round justification error.
 func formatArgRationaleRequest(toolName string, score int, heavy []string) string {
 	var sb strings.Builder
 	sb.WriteString("high-impact call: complexity score ")

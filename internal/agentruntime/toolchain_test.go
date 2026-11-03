@@ -16,7 +16,7 @@ func TestDetectToolchain_GoProject(t *testing.T) {
 	if len(versions) == 0 {
 		t.Skip("go not installed — skipping live probe")
 	}
-	// If go is installed, we should detect it
+
 	found := false
 	for _, v := range versions {
 		if strings.HasPrefix(v, "Go: ") {
@@ -31,7 +31,7 @@ func TestDetectToolchain_GoProject(t *testing.T) {
 
 func TestDetectToolchain_NoMarkers(t *testing.T) {
 	root := t.TempDir()
-	// Empty dir — no project markers
+
 	versions := detectToolchain(root)
 	if len(versions) != 0 {
 		t.Errorf("expected no toolchain detection for empty dir, got %v", versions)
@@ -58,7 +58,7 @@ func TestDetectToolchain_NodeProject(t *testing.T) {
 
 	resetToolchainCache()
 	versions := detectToolchain(root)
-	// Node/npm may or may not be installed; just verify no crash
+
 	for _, v := range versions {
 		if !strings.Contains(v, ": ") {
 			t.Errorf("malformed toolchain line: %q", v)
@@ -70,7 +70,6 @@ func TestDetectToolchain_CacheWorks(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
 
-	// Ensure go is available; if not, skip
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")
 	}
@@ -87,7 +86,6 @@ func TestDetectToolchain_CacheWorks(t *testing.T) {
 		}
 	}
 
-	// Verify cache was populated
 	toolchainCacheMu.RLock()
 	cached, ok := toolchainCache["go"]
 	toolchainCacheMu.RUnlock()
@@ -141,8 +139,6 @@ func TestToolchainHasMarker(t *testing.T) {
 	}
 }
 
-// TestDetectToolchain_DoesNotProbeIrrelevantTools verifies that a pure Go
-// project doesn't trigger probes for Node/Python/Rust.
 func TestDetectToolchain_DoesNotProbeIrrelevantTools(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
@@ -153,12 +149,9 @@ func TestDetectToolchain_DoesNotProbeIrrelevantTools(t *testing.T) {
 	toolchainCacheMu.RLock()
 	defer toolchainCacheMu.RUnlock()
 
-	// go should be cached (if installed), but node/python/cargo must NOT be
 	for _, bin := range []string{"node", "npm", "python3", "cargo"} {
 		if _, ok := toolchainCache[bin]; ok {
-			// Only fail if the cache has a non-empty result — an empty cache
-			// entry means the binary was probed but not found, which shouldn't
-			// happen either.
+
 			t.Errorf("binary %q should not have been probed for Go project", bin)
 		}
 	}

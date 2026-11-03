@@ -1,30 +1,5 @@
 package tool
 
-// Agent-defined parameterized tools (r13, Voyager-style dynamic skill
-// synthesis, arXiv:2607.10113 taxonomy): the agent defines a named tool
-// with a JSON-Schema parameter contract and a handler expressed as the
-// macro step DSL, then calls it as a first-class parametrized tool.
-//
-// Layering vs existing assets:
-//   - macro (sa-148): read-only step SEQUENCES with positional {{1}}..{{9}}
-//     substitution - replay convenience, no parameter contract.
-//   - define_tool (this): same step DSL but with a declared
-//     params_schema (JSON Schema, named {{param}} placeholders), so a
-//     defined tool is a reusable parameterized abstraction ("check_pat",
-//     "find_usage") rather than a fixed sequence.
-//   - skills (.ggskill): prompt-layer knowledge; define_tool is
-//     tool-layer behavior.
-//
-// Security model (parity with macro.go): steps may only compose
-// read-only tools. The r13 backlog sketch suggested opening the
-// whitelist to edit_file/run_command, but tool-layer dispatch executes
-// Registry tools directly - the agent's per-call permission gating (UI
-// diff preview, approval flow) lives ABOVE the tool layer, so write
-// steps would silently bypass approvals. That is rejected at define
-// time with an explanatory error; a write-capable define_tool needs
-// agent-layer integration first. define_tool cannot call define_tool or
-// macro (not read-only), so recursion is structurally impossible.
-
 import (
 	"context"
 	"encoding/json"
@@ -45,17 +20,10 @@ const (
 	defineToolMaxEntries = 50
 )
 
-// defineToolNameRe: distinct namespace from macros avoids confusion in
-// lists; allows a trailing "?" hint convention? No - keep the same
-// conservative charset as macro names.
 var defineToolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{2,40}$`)
 
-// paramPlaceholderRe matches {{name}} in step-arg string templates.
 var paramPlaceholderRe = regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
 
-// definedToolDef is one agent-defined tool: a name, a JSON-Schema
-// parameter contract, and a handler of read-only steps whose string
-// leaves may reference {{param}} placeholders.
 type definedToolDef struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description,omitempty"`
@@ -69,14 +37,9 @@ type definedToolStore struct {
 	Entries map[string]*definedToolDef `json:"entries"`
 }
 
-// DefineTool implements the "define_tool" builtin: define / call / list /
-// get / delete agent-defined parametrized tools. Storage follows the
-// cmd_snippet/macro convention: <workingDir>/.ggcode/define_tools.json.
 type DefineTool struct {
 	WorkingDir string
-	// Registry is used at call time to look up step tools by name (same
-	// late-binding contract as MacroTool / CodeExecution).
-	Registry *Registry
+	Registry   *Registry
 
 	mu       sync.Mutex
 	filePath string
@@ -175,7 +138,6 @@ func (t *DefineTool) doDefine(name, description string, schema json.RawMessage, 
 	if len(steps) < 1 || len(steps) > defineToolMaxSteps {
 		return Result{IsError: true, Content: fmt.Sprintf("steps must be 1..%d, got %d", defineToolMaxSteps, len(steps))}, nil
 	}
-	// Schema: optional but must be an object; cap properties.
 	var schemaDoc struct {
 		Type       string                 `json:"type"`
 		Properties map[string]interface{} `json:"properties"`
@@ -214,7 +176,7 @@ func (t *DefineTool) doDefine(name, description string, schema json.RawMessage, 
 	}
 	now := time.Now().UTC()
 	if old, ok := store.Entries[name]; ok {
-		now = old.CreatedAt // preserve original creation on overwrite
+		now = old.CreatedAt
 	}
 	store.Entries[name] = &definedToolDef{
 		Name: name, Description: description,
@@ -245,24 +207,18 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 	if def == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("defined tool %q not found (action=list to see names)", name)}, nil
 	}
-	// Validate required params, then reject unknown params (typo guard).
 	var schemaDoc struct {
 		Properties map[string]interface{} `json:"properties"`
 		Required   []string               `json:"required"`
 	}
 	if len(def.ParamsSchema) > 0 {
-		// #4436: fail closed - a corrupted embedded schema previously fell
-		// through with a zero-value schemaDoc, silently skipping required-param
-		// validation and the unknown-param typo guard.
+
 		if err := json.Unmarshal(def.ParamsSchema, &schemaDoc); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("tool %q has an invalid params schema (corrupted definition?): %v", def.Name, err)}, nil
 		}
 	}
 	for _, req := range schemaDoc.Required {
-		// #4687: a JSON null value passes the key-existence check but is not a
-		// usable param - the placeholder substitution would Marshal(nil) into
-		// the literal string "null", silently grepping for "null" instead of
-		// erroring. Treat null as missing.
+
 		v, ok := params[req]
 		if !ok || v == nil {
 			return Result{IsError: true, Content: fmt.Sprintf("missing required param %q", req)}, nil
@@ -277,12 +233,7 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 	var b strings.Builder
 	total := 0
 	for i, s := range def.Steps {
-		// #4221: re-validate the read-only whitelist at EXECUTION time, not
-		// just at define time. Definitions persist in workspace-shared
-		// plaintext (.ggcode/define_tools.json); a hand-crafted file loaded
-		// by loadLocked skips doDefine's check entirely, and nested Execute
-		// bypasses the agent-level approval that guards top-level calls -
-		// a smuggled run_command/write_file step would run unapproved.
+
 		if _, ok := readOnlyToolNames[s.Tool]; !ok {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: tool %q is not read-only. This definition was not created via the define action (the on-disk store allows arbitrary content) - refusing to execute a write-capable nested step without the normal per-call approval flow.", i+1, s.Tool)}, nil
 		}
@@ -380,11 +331,6 @@ func (t *DefineTool) doDelete(name string) (Result, error) {
 	return Result{Content: fmt.Sprintf("defined tool %q deleted", name)}, nil
 }
 
-// substituteParamPlaceholders replaces {{param}} references in any string
-// leaf of the args template with the JSON-encoded param value (trimmed of
-// the enclosing quotes so the leaf stays a plain string; numeric and
-// boolean params keep their literal form). An unknown placeholder name is
-// an error - silent leftover {{x}} in a grep pattern wastes a run.
 func substituteParamPlaceholders(template json.RawMessage, params map[string]interface{}) (json.RawMessage, error) {
 	if len(template) == 0 {
 		return json.RawMessage("{}"), nil
@@ -408,11 +354,7 @@ func substituteParamPlaceholders(template json.RawMessage, params map[string]int
 					err = fmt.Errorf("placeholder {{%s}} has no matching param", name)
 					return m
 				}
-				// #4051: string params substitute their RAW value - the old
-				// Marshal+trim kept inner JSON escapes as literal two-byte
-				// sequences (\" \\ \n), so a grep pattern "say \"hi\"" became
-				// `say \"hi\"` and silently matched nothing. Marshal stays for
-				// numbers/bools, whose bare literal form is the goal.
+
 				if s, ok := val.(string); ok {
 					return s
 				}
@@ -459,7 +401,6 @@ func substituteParamPlaceholders(template json.RawMessage, params map[string]int
 	return out, nil
 }
 
-// jsonIsObject reports whether raw decodes to a JSON object.
 func jsonIsObject(raw json.RawMessage) bool {
 	var doc map[string]interface{}
 	return json.Unmarshal(raw, &doc) == nil
@@ -480,8 +421,6 @@ func sortedKeys(m map[string]interface{}) []string {
 	sort.Strings(keys)
 	return keys
 }
-
-// ---- Storage helpers (cmd_snippet/macro convention) ----
 
 func (t *DefineTool) storePath() string {
 	if t.filePath == "" {
@@ -508,8 +447,7 @@ func (t *DefineTool) loadLocked() (*definedToolStore, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, store); err != nil {
-		// Corrupt store: quarantine, start fresh (same fail-open contract
-		// as the macro store; never wedge the tool on a bad file).
+
 		_ = os.Rename(t.storePath(), t.storePath()+".corrupt")
 		t.cache = &definedToolStore{Entries: map[string]*definedToolDef{}}
 		return t.cache, nil

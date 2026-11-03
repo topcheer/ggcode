@@ -11,12 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #3778: mid-run guidance injected on the FINAL iteration is persisted in
-// context but can never reach an LLM call this run. The post-loop block
-// used to fall into the generic "max iterations (N) reached" sentinel -
-// polluting the errors.Is terminal-state classification contract that
-// sub-agents/ACP loops/cron rely on. It must return the dedicated
-// ErrGuidanceAtBudget sentinel instead.
 func TestIssue3778_GuidanceOnFinalIterationReturnsDedicatedSentinel(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -27,7 +21,7 @@ func TestIssue3778_GuidanceOnFinalIterationReturnsDedicatedSentinel(t *testing.T
 		},
 	}
 	registry := newTestRegistry(t)
-	a := NewAgent(mp, registry, "", 1) // maxIter=1: the only iteration IS the final one
+	a := NewAgent(mp, registry, "", 1)
 	guidance := false
 	a.SetInterruptionHandler(func() []provider.ContentBlock {
 		if guidance {
@@ -52,8 +46,6 @@ func TestIssue3778_GuidanceOnFinalIterationReturnsDedicatedSentinel(t *testing.T
 	}
 }
 
-// Without guidance on the final iteration, the classic max-iterations
-// sentinel path is unchanged.
 func TestIssue3778_NoGuidanceKeepsClassicSentinel(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -70,7 +62,7 @@ func TestIssue3778_NoGuidanceKeepsClassicSentinel(t *testing.T) {
 	if err := registry.Register(countingTool{name: "count", executed: &countCount}); err != nil {
 		t.Fatalf("register countingTool: %v", err)
 	}
-	a := NewAgent(mp, registry, "", 1) // tool-loop exhaustion, no interruption handler
+	a := NewAgent(mp, registry, "", 1)
 
 	err := a.RunStream(context.Background(), "do work", func(ev provider.StreamEvent) {})
 	if err == nil {

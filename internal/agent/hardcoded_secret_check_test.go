@@ -45,7 +45,7 @@ func TestCheckHardcodedSecrets_GitHubTokenIntroduced(t *testing.T) {
 }
 
 func TestCheckHardcodedSecrets_PreExistingNotFlagged(t *testing.T) {
-	// If the secret was already in oldContent, it should NOT be flagged
+
 	old := `const accessKey = "AKIAIOSFODNN7EXAMPLE"`
 	new := old + "\n// added comment\n"
 	warnings := checkHardcodedSecrets("config.go", old, new)
@@ -87,10 +87,10 @@ func TestCheckHardcodedSecrets_TestDataExempt(t *testing.T) {
 }
 
 func TestCheckHardcodedSecrets_AssignmentInConfigNotFlagged(t *testing.T) {
-	// assignment_secret should not be flagged in YAML/JSON config files
+
 	new := "api_key: AIzaSyB1234567890abcdefghijklmnopqrstuvwxyz"
 	warnings := checkHardcodedSecrets("config.yaml", "", new)
-	// GCP key pattern should still match, but assignment_secret should not
+
 	for _, w := range warnings {
 		if strings.Contains(w, "assignment_secret") {
 			t.Errorf("assignment_secret should not be flagged in config file")
@@ -99,10 +99,7 @@ func TestCheckHardcodedSecrets_AssignmentInConfigNotFlagged(t *testing.T) {
 }
 
 func TestCheckHardcodedSecrets_AssignmentInSourceCode(t *testing.T) {
-	// assignment_secret SHOULD be flagged in Go source code. Fix #247: the
-	// previous test only t.Logf'd on zero warnings (never failed) and used a
-	// 24-char sample (AKIA + 20) that missed the \b(AKIA[0-9A-Z]{16})\b pattern.
-	// Use an exact AKIA + 16-char key so the aws_access_key pattern must match.
+
 	new := `apiKey := "AKIAIOSFODNN7EXAMPLE"`
 	warnings := checkHardcodedSecrets("main.go", "", new)
 	if len(warnings) == 0 {
@@ -119,10 +116,6 @@ func TestCheckHardcodedSecrets_AssignmentInSourceCode(t *testing.T) {
 	}
 }
 
-// TestHardcodedSecret_CredentialsDirNotExempt pins fix #247: production
-// directory names (`credentials/`, `secrets/`, `.secrets/`) must NOT be
-// exempt — a real AWS key written into internal/credentials/store.go must
-// still warn.
 func TestHardcodedSecret_CredentialsDirNotExempt(t *testing.T) {
 	new := `var accessKey = "AKIAIOSFODNN7EXAMPLE"`
 	w := checkHardcodedSecrets("internal/credentials/store.go", "", new)
@@ -139,15 +132,13 @@ func TestHardcodedSecret_SecretsDirNotExempt(t *testing.T) {
 	}
 }
 
-// TestHardcodedSecret_TestDataStillExempt: test-semantics directory segments
-// remain exempt, including segment-exact forms without trailing slash.
 func TestHardcodedSecret_TestDataStillExempt(t *testing.T) {
 	new := `const token = "ghp_1234567890abcdefghijklmnopqrstuvwxyz"`
 	for _, p := range []string{
 		"testdata/fixtures/config.go",
-		"src/testdata/config.go",   // segment without trailing content
-		"internal/mocks/client.go", // bare mocks segment
-		"api_testdata/handlers.go", // suffixed segment
+		"src/testdata/config.go",
+		"internal/mocks/client.go",
+		"api_testdata/handlers.go",
 	} {
 		if w := checkHardcodedSecrets(p, "", new); len(w) != 0 {
 			t.Errorf("expected %s to be exempt, got %d warnings", p, len(w))
@@ -155,8 +146,6 @@ func TestHardcodedSecret_TestDataStillExempt(t *testing.T) {
 	}
 }
 
-// TestPathHasSegment covers the segment-boundary helper (#247): substring
-// similarity must not exempt unrelated paths.
 func TestPathHasSegment(t *testing.T) {
 	if !pathHasSegment("a/testdata/b.go", "testdata") {
 		t.Error("testdata segment should match")
@@ -222,9 +211,6 @@ func TestFormatSecretWarning(t *testing.T) {
 	}
 }
 
-// TestHardcodedSecret_ReplacementDetected pins fix #171: swapping a fake key
-// for a REAL credential of the same pattern family (remove-1-add-1, net 0)
-// must still warn.
 func TestHardcodedSecret_ReplacementDetected(t *testing.T) {
 	oldSrc := "package main\nvar k = \"AKIAIOSFODNN7EXAMPLE\"\n"
 	newSrc := "package main\nvar k = \"AKIAIOSFODNN7REALKEY\"\n"

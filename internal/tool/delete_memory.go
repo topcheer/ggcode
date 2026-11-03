@@ -8,23 +8,16 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// DeleteMemoryTool lets the agent remove a specific memory entry that is
-// outdated, incorrect, or no longer relevant. This complements save_memory to
-// give the agent full lifecycle control over persistent memories.
 type DeleteMemoryTool struct {
 	globalMem  *memory.AutoMemory
 	projectMem *memory.AutoMemory
 	afterSave  func()
 }
 
-// NewDeleteMemoryTool creates a delete_memory tool with global and project memory.
 func NewDeleteMemoryTool(globalMem, projectMem *memory.AutoMemory) *DeleteMemoryTool {
 	return &DeleteMemoryTool{globalMem: globalMem, projectMem: projectMem}
 }
 
-// SetAfterSave configures a callback that runs after memory is deleted.
-// Callers can use this to refresh any in-memory prompt state that includes
-// auto memory from disk.
 func (t *DeleteMemoryTool) SetAfterSave(fn func()) {
 	t.afterSave = fn
 }

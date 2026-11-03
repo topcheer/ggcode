@@ -28,15 +28,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// permissionDeniedMessage renders the policy-deny result for the model
-// (#1209). The current permission mode is included so the model can
-// attribute the denial correctly: in plan mode every non-readonly tool is
-// denied, and without the mode in the message the model misattributes the
-// failures to its own parameters and enters a degenerate retry loop.
-// switch_mode is always allowed (IsAlwaysAllowedTool), so it is the
-// self-rescue channel in autonomous sessions where no user is watching -
-// the old "ask the user to press Shift+Tab" advice was dead-end guidance
-// there.
 func (a *Agent) permissionDeniedMessage(toolName string) string {
 	mode := a.currentMode()
 	var b strings.Builder
@@ -53,31 +44,25 @@ func (a *Agent) permissionDeniedMessage(toolName string) string {
 	return b.String()
 }
 
-// executeToolWithPermission checks the permission policy before executing a tool.
-// If the policy returns Ask, the approval handler is consulted interactively.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 
-	// Don't log permission check - permission decision below is sufficient
 	a.mu.RLock()
 	policy := a.policy
 	onApproval := a.onApproval
 	a.mu.RUnlock()
 	if policy != nil {
 		decision, err := policy.Check(tc.Name, tc.Arguments)
-		// Only log non-trivial permission decisions (deny/error), not every allow
+
 		if err != nil {
 			return tool.Result{Content: fmt.Sprintf("permission check error: %v", err), IsError: true}
 		}
 
 		switch decision {
 		case permission.Deny:
-			// #4692-lineage audit gap: policy-rule denials were the ONLY
-			// silent permission outcome - user denials were recorded but
-			// the configured rule firing left zero trace. Governance/audit
-			// consumers need the policy's effect too.
+
 			a.auditToolResult(tc.Name, tc.Arguments, audit.StatusPolicyDenied,
 				"denied by permission policy (mode-independent rule)", 0, "")
 			return tool.Result{
@@ -85,28 +70,19 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				IsError: true,
 			}
 		case permission.Ask:
-			// Mode-scoped memory (#1281): approvals learned under another
-			// permission mode must not survive a mode switch.
+
 			if a.approvalMemory != nil && policy != nil {
 				a.approvalMemory.EnsureModeScope(policy.Mode())
 			}
-			// Check learned approval memory: if the user has approved this
-			// pattern 3+ times, auto-approve to reduce prompt fatigue.
-			// #1281: a memory hit is NOT authoritative for dangerous commands
-			// or exfiltration - danger detectors outrank learned patterns
-			// (the old path let `git push origin main` x3 later auto-run
-			// `git push origin master --force`, same two-token key).
+
 			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) &&
 				!(policy != nil && policy.BlocksAutoApprove(tc.Name, tc.Arguments)) {
 				debug.Log("approval-memory", "auto-approved %s (learned pattern)", tc.Name)
-				// Fall through to execution - treated as Allow.
+
 				break
 			}
 			if onApproval != nil {
-				// Approval-fatigue circuit breaker (ATR-2026-00118 pattern 1):
-				// the same key already denied twice within the window is denied
-				// WITHOUT re-prompting - the Nth identical popup only harvests a
-				// reflexive approve.
+
 				if a.askThrottle.ShouldSuppress(tc.Name, tc.Arguments) {
 					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "suppressed by ask throttle (repeated denial)", 0, "")
 					debug.Log("approval-throttle", "suppressed re-ask for %s (denied twice recently)", tc.Name)
@@ -117,8 +93,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
-					// ATR-2026-00118: denial is a first-class auditable event
-					// (who denied what when), not just a downstream error.
+
 					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate", 0, "")
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
@@ -130,11 +105,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 					}
 				}
 				if resp.IsNonDecision() {
-					// #3370: timeout/cancellation - fail-closed, but the user made
-					// NO decision: audit as ask_timeout, skip approval-memory (a
-					// non-decision must not enter the learning sample) and skip the
-					// ask throttle (two timeouts must not suppress later asks with
-					// a false "denied twice" message).
+
 					note := "approval timed out (no user response)"
 					if resp == permission.Cancelled {
 						note = "approval cancelled (run interrupted or request displaced)"
@@ -146,14 +117,13 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 						IsError: true,
 					}
 				}
-				// User approved - record for future auto-approval and audit the
-				// approval decision (ATR-2026-00118 / ESCALATE.md trail).
+
 				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserApproved, "", 0, "")
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
 			} else {
-				// No approval handler → deny by default
+
 				return tool.Result{
 					Content: fmt.Sprintf("Permission denied for tool %q. No approval handler available (running in non-interactive mode).", tc.Name),
 					IsError: true,
@@ -166,20 +136,14 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	result := a.executeToolWithTimeout(ctx, tc)
 	toolDur := time.Since(toolStart)
 
-	// Log slow tool calls for performance debugging
 	if toolDur > slowToolThreshold {
 		debug.Log("agent", "slow tool: %s took %v", tc.Name, toolDur)
 	}
 
-	// Latency baseline outlier detection: warn the agent when a read/search
-	// tool call is dramatically slower than its established baseline, so it
-	// can self-optimize (narrow scope, use offset/limit, etc.).
 	if latencyHint := a.latencyTracker.RecordAndCheck(tc.Name, toolDur); latencyHint != "" {
 		a.appendGuidance(&result, latencyHint)
 	}
 
-	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)
-	// Fire tool metric (non-blocking - caller must handle asynchronously).
 	errMsg := ""
 	if result.IsError {
 		errMsg = truncateString(result.Content, 200)
@@ -195,30 +159,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	return result
 }
 
-// defaultToolTimeout is the maximum time a single tool call can take when no
-// adaptive or category-specific timeout applies. This is the hard ceiling -
-// the adaptive system may compute a lower timeout based on tool category and
-// historical latency data (see adaptive_timeout.go).
-//
-// Most tools finish in milliseconds; this catches hung tools (stuck network
-// requests, deadlocked processes). Tools that legitimately need more time
-// (run_command, start_command) implement their own internal timeouts.
 const defaultToolTimeout = 5 * time.Minute
 
-// slowToolThreshold logs a debug warning when a tool takes longer than expected.
 const slowToolThreshold = 30 * time.Second
 
-// toolsWithoutTimeout lists tools that manage their own timeout or have
-// inherently unbounded execution time. These are NOT wrapped with the
-// defaultToolTimeout deadline:
-//   - run_command/start_command/etc: implement their own timeout (default 30min)
-//   - sleep: explicitly waits for a duration
-//   - wait_agent/use_namedagent/delegate: spawn sub-agents that may run for
-//     many minutes or hours; they have their own internal lifecycle and timeouts
-//   - ask_user: blocks indefinitely waiting for human input
-//   - task_output: polls a background task that may still be running
 var toolsWithoutTimeout = map[string]bool{
-	// Command lifecycle (own timeout)
+
 	"run_command":         true,
 	"start_command":       true,
 	"wait_command":        true,
@@ -226,35 +172,24 @@ var toolsWithoutTimeout = map[string]bool{
 	"write_command_input": true,
 	"stop_command":        true,
 	"sleep":               true,
-	// Sub-agent / delegation (inherently long-running)
+
 	"wait_agent":       true,
 	"use_namedagent":   true,
 	"delegate":         true,
 	"spawn_agent":      true,
 	"task_output":      true,
 	"teammate_results": true,
-	// Human-in-the-loop (unbounded wait)
+
 	"ask_user": true,
 }
 
-// executeToolWithTimeout wraps executeTool with a deadline. If the tool
-// exceeds the computed timeout, it cancels the context (to signal the tool
-// to abort) and returns a timeout error result.
-//
-// The timeout is computed adaptively (see adaptive_timeout.go):
-//   - Category-based defaults provide sensible bounds per tool type
-//   - Historical latency data tightens the timeout once enough samples exist
-//   - Hard floor (10s) and ceiling (5min) bounds prevent extremes
 func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if toolsWithoutTimeout[tc.Name] {
 		return a.executeTool(ctx, tc)
 	}
 
-	// Compute the adaptive timeout for this tool.
 	timeout := a.latencyTracker.computeAdaptiveTimeout(tc.Name)
 
-	// Create a cancellable sub-context so that on timeout we can signal
-	// the tool to abort (tools that check ctx.Done() will exit promptly).
 	toolCtx, cancel := context.WithCancel(ctx)
 
 	defer cancel()
@@ -281,7 +216,7 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 
 	select {
 	case <-timer.C:
-		cancel() // signal the tool goroutine to abort
+		cancel()
 		debug.Log("agent", "tool timeout: %s exceeded %v", tc.Name, timeout)
 		return tool.Result{
 			Content: fmt.Sprintf("Tool %q timed out after %v. If this is a long-running operation, consider using start_command instead.", tc.Name, timeout),
@@ -294,22 +229,10 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 	}
 }
 
-// executeTool runs pre-hooks, executes the tool, then runs post-hooks.
-// File-editing tools (edit_file, write_file) are routed to executeFileTool
-// for diff preview and checkpointing.
-//
-// The thin wrapper at this seam consults the duplicate-suppression ledger
-// (tool_dedup.go) before dispatching mutating tool calls: an exact duplicate
-// of a recently-successful mutating call replays the prior result instead of
-// re-executing the side effect (Agent Mesh S2 seam, arXiv:2608.26225).
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
-	// MAST I1: inherit the parent's established user constraints into the
-	// delegation task before anything else (deterministic append, so the
-	// duplicate-suppression ledger below still sees a stable signature).
+
 	tc = a.inheritDelegationConstraints(tc)
-	// sa-85: every executed command feeds the workflow step-attempt ledger
-	// (attribution for future violations). Blocked calls never reach here -
-	// they did not run, so they are not attempts.
+
 	runTraced := func() tool.Result {
 		res := a.executeToolInner(ctx, tc)
 		a.wfTraceRecord(tc, res)
@@ -318,21 +241,9 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
 		return *suppressed
 	}
-	// r454: declarative invariants (deterministic, file-declared) run at
-	// this choke point BEFORE execution. block-mode violations reject the
-	// call outright (sealed into the audit ledger as invalid); warn-mode
-	// violations proceed and append a notice to the result.
-	// r26 workflow-spec precondition gate: a guarded command whose declared
-	// prerequisites have no grounded artifacts yet is a block/warn violation
-	// with the counterexample step named (runs before the invariant engine -
-	// workflow ordering is the coarser contract).
+
 	if wf := a.workflowEngineLazy(); wf != nil {
 		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
-			// #3860 B: a block step with no ArtifactGlob renders
-			// `no artifact matching ""` - pointing at an artifact contract that
-			// does not exist. Commands-only prerequisites speak in "command was
-			// never executed" terms instead, matching wfAttemptAttribution's
-			// last==nil semantics.
 			var msg string
 			if wv.WantGlob == "" {
 				msg = fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and the guarded command for that prerequisite was not executed this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
@@ -352,23 +263,13 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
-			// #3671-1: warn-mode workflow still EXECUTES the real tool (same
-			// runTraced as the normal path) - a successful side effect must hit
-			// the crash sidecar exactly like the invariant-warn branch and the
-			// normal path (#3366 semantics), or a post-crash restore replays the
-			// call as if it never happened and repeats the write.
+
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
-			// #4648: warn-mode still EXECUTES the tool - a successful write
-			// product must reach the created_by_run ledger exactly like the
-			// normal path, or the deletion guard misjudges self-created files.
+
 			a.recordWriteProducts(tc, res)
-			// #3859 B: ground before returning - this branch used to skip the
-			// shared grounding block entirely, so a command that BOTH hit a
-			// warn guard AND was a step's ground command left that step
-			// un-grounded forever (commands-only soft deadlock), and
-			// warn-matching commands never probed for produced artifacts.
+
 			a.groundWorkflowAfterTool(tc, res)
 			res.Content += "\n\n" + msg
 			return res
@@ -385,49 +286,32 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
-			// #3366: failed calls are never sidecar-recorded - a post-crash
-			// restore would otherwise replay them as if they had happened,
-			// suppressing legitimate retries (mirrors record()'s IsError skip).
+
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
-			// #4648: same as the workflow-warn branch above - warn-executed
-			// writes must register their products for created_by_run parity.
+
 			a.recordWriteProducts(tc, res)
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
-			// #3859 B: same grounding gap as the workflow-warn branch - a
-			// warn-matching invariant must not forfeit artifact probing and
-			// step grounding for commands that succeeded.
+
 			a.groundWorkflowAfterTool(tc, res)
 			return res
 		}
 	}
 	res := runTraced()
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
-	// #3366: see the invariant branch above - errors never hit the sidecar.
+
 	if !res.IsError {
 		a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 	}
-	// r454: register successful write-class products for the
-	// created_by_run predicate ("only delete what this run created").
-	// Operation granularity (#3254): a batch file_ops call registers every
-	// write-class target it produced, not just the first classified op.
-	// #4648: extracted so the warn branches above share the exact same
-	// registration instead of silently skipping it.
+
 	a.recordWriteProducts(tc, res)
-	// r26: same products ground workflow-step completion (artifact_glob).
+
 	a.groundWorkflowAfterTool(tc, res)
 	return res
 }
 
-// recordWriteProducts registers every write-class target a successful
-// (or warn-mode-executed) tool call produced for the invariant engine's
-// created_by_run predicate. #4648: the workflow-warn and invariant-warn
-// branches execute the real tool just like the normal path, so their
-// successful writes must reach the ledger identically - previously the
-// warn branches skipped registration and the deletion guard then blocked
-// the agent from deleting files it had itself just created.
 func (a *Agent) recordWriteProducts(tc provider.ToolCallDelta, res tool.Result) {
 	if res.IsError {
 		return
@@ -443,11 +327,6 @@ func (a *Agent) recordWriteProducts(tc provider.ToolCallDelta, res tool.Result) 
 	}
 }
 
-// groundWorkflowAfterTool is the shared post-success grounding pass for
-// every executed tool call (normal path and both warn branches, #3859):
-// write-class targets complete steps directly, and successful command
-// executions (run_command AND start_command) probe the disk for declared
-// step artifacts (#3414).
 func (a *Agent) groundWorkflowAfterTool(tc provider.ToolCallDelta, res tool.Result) {
 	wf := a.workflowEngineLazy()
 	if wf == nil || res.IsError {
@@ -463,9 +342,6 @@ func (a *Agent) groundWorkflowAfterTool(tc provider.ToolCallDelta, res tool.Resu
 	}
 }
 
-// invariantEngineLazy builds the engine on first use, anchored to the
-// agent's working dir (reads <dir>/.ggcode/invariants.json merged over
-// ~/.ggcode/invariants.json). nil when inert (no working dir).
 func (a *Agent) invariantEngineLazy() *invariantEngine {
 	a.mu.RLock()
 	e := a.invEngine
@@ -486,23 +362,15 @@ func (a *Agent) invariantEngineLazy() *invariantEngine {
 	return a.invEngine
 }
 
-// auditInvariantWarn logs a warn-mode match (block-mode goes through the
-// full audit event path; warn-mode calls execute normally, so there is no
-// separate audit event - a debug line preserves observability).
 func auditInvariantWarn(toolName, id string) {
 	debug.Log("agent", "[invariants] WARN %s on %s", id, toolName)
 }
 
-// executeToolInner is the original executeTool body; see executeTool.
 func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 
-	// Inject progress callback for streaming tools (e.g. run_command, wait_command).
-	// This is done here (not in executeToolWithTimeout) because tools like
-	// run_command and wait_command are in toolsWithoutTimeout and bypass that
-	// function entirely. If ToolProgressKey is already set, don't overwrite.
 	if a.onToolProgress != nil && ctx.Value(tool.ToolProgressKey{}) == nil {
 		fn := a.onToolProgress
 		toolID := tc.ID
@@ -513,15 +381,10 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		))
 	}
 
-	// MCP Tool Search meta-tool: handled agent-side (not registry-backed) so
-	// it never appears in ToDefinitions and activation state stays per-agent.
 	if tc.Name == ToolSearchToolName && a.toolSearch != nil {
 		return a.toolSearch.executeResult(tc.Arguments)
 	}
 
-	// Anthropic Memory Tool: client-side executor for the API-declared
-	// memory_20250818 tool. Never registry-backed, so it stays out of
-	// ToDefinitions for every other provider.
 	if tc.Name == memoryToolName && a.memoryTool != nil {
 		return a.memoryTool.executeResult(tc.Arguments, a.workingDir)
 	}
@@ -530,34 +393,16 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	if !ok {
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
 	}
-	// Deferred MCP tool called by name (history carry-over or model prior):
-	// activate its schema so subsequent requests stay consistent with tools
-	// the conversation already references, then execute normally.
+
 	if a.toolSearch != nil && a.toolSearch.maybeAutoActivate(tc.Name) {
 		debug.Log("agent", "tool search: auto-activated schema for %s called by name", tc.Name)
 	}
 
-	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
-	// goolm) and weaker models produce arguments that are *almost* valid JSON
-	// but fail strict parsing due to stream truncation, trailing commas, smart
-	// quotes, or surrounding markdown fences. When this happens, every
-	// downstream pre-processor (CoerceArguments, ValidateRequiredParams, etc.)
-	// silently bails out on json.Unmarshal failure, and the tool itself fails
-	// with a confusing "invalid input" error - wasting a full agent iteration.
-	//
-	// RepairJSON is a no-op for already-valid JSON (fast path via json.Valid).
-	// It is already applied in the OpenAI streaming path (provider layer), but
-	// not for other providers (Gemini, Anthropic) or for inline tool calls.
-	// Applying it here in the agent pipeline ensures ALL providers benefit.
 	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
 		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
 		tc.Arguments = repaired
 	} else if trimmed := bytes.TrimSpace(tc.Arguments); len(trimmed) > 0 && !json.Valid(trimmed) {
-		// Repair failed and the arguments remain unparsable. Returning an
-		// actionable error now is better than letting the tool fail later
-		// with a confusing low-level "invalid arguments" message: the model
-		// gets told exactly what is wrong and how to resend (dynamic
-		// fallback principle — reject what cannot be salvaged, but explain).
+
 		detail := describeJSONError(trimmed)
 		debug.Log("agent", "arguments for tool %s are unrecoverable JSON: %s", tc.Name, detail)
 		return tool.Result{
@@ -569,43 +414,23 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
-	// Schema-aware argument coercion: weak models (open-weight models via
-	// goolm, third-party endpoints) frequently send string values for
-	// integer/number/boolean parameters (e.g. {"offset": "50"}). Without
-	// coercion this causes a json.Unmarshal type error, wasting a full loop
-	// iteration. CoerceArguments is a no-op when args are already well-typed.
 	coercedArgs := tool.CoerceArguments(t.Parameters(), tc.Arguments)
 	if !bytes.Equal(coercedArgs, tc.Arguments) {
 		debug.Log("agent", "coerced arguments for tool %s", tc.Name)
 		tc.Arguments = coercedArgs
 	}
 
-	// Enum value auto-correction: weak models frequently send near-miss enum
-	// values (case mismatch like "JSON" instead of "json", or typos like
-	// "overwite" instead of "overwrite"). CoerceEnumValues silently fixes
-	// unambiguous corrections, saving a wasted agent loop iteration.
 	enumCorrected := tool.CoerceEnumValues(t.Parameters(), tc.Arguments)
 	if !bytes.Equal(enumCorrected, tc.Arguments) {
 		debug.Log("agent", "enum-corrected arguments for tool %s", tc.Name)
 		tc.Arguments = enumCorrected
 	}
 
-	// Description fallback: "description" is a UI-only activity label for most
-	// tools, yet weak models routinely omit it. Rejecting the whole call over a
-	// cosmetic label wastes a full LLM round-trip, so when the schema requires
-	// an activity-label description and the model omitted it, inject a derived
-	// fallback and proceed. Semantic description args (create_skill, cmd_snippet
-	// save, ...) are NOT auto-filled - see InjectDescriptionFallback.
 	if withFallback := tool.InjectDescriptionFallback(t.Parameters(), tc.Arguments, tc.Name); !bytes.Equal(withFallback, tc.Arguments) {
 		debug.Log("agent", "injected fallback description label for tool %s", tc.Name)
 		tc.Arguments = withFallback
 	}
 
-	// Schema-aware required-parameter validation: catches missing required
-	// fields before tool execution, giving the model a clear error message
-	// instead of a confusing downstream failure. This complements
-	// CoerceArguments (which fixes types, not omissions) and is a no-op for
-	// tools that already call CheckRequired internally.
 	if missingMsg := tool.ValidateRequiredParams(t.Parameters(), tc.Arguments, tc.Name); missingMsg != "" {
 		debug.Log("agent", "required param validation failed for %s: %s", tc.Name, missingMsg)
 		return tool.Result{
@@ -614,10 +439,6 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
-	// Schema-constraint validation: catches enum violations, out-of-range
-	// numbers, and string length violations before execution. Weak models
-	// frequently send invalid enum values (e.g. "xyz" for ["read","write"])
-	// or out-of-range offsets. Early detection saves a wasted tool iteration.
 	if constraintMsg := tool.ValidateSchemaConstraints(t.Parameters(), tc.Arguments); constraintMsg != "" {
 		debug.Log("agent", "schema constraint validation failed for %s: %s", tc.Name, constraintMsg)
 		return tool.Result{
@@ -626,11 +447,6 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
-	// r23 refusal ledger (arXiv 2605.00055): a persisted user refusal that
-	// deterministically matches this write-class call is a HARD error, not a
-	// reminder - prior refusals must be enforceable constraints. Deliberately
-	// does not apply to read-class tools (a "don't touch" refusal targets
-	// mutation; blocking reads breaks harmless verification).
 	if blockMsg := a.refusalLedger.checkBlocked(tc.Name, string(tc.Arguments)); blockMsg != "" {
 		debug.Log("agent", "refusal ledger blocked %s", tc.Name)
 		return tool.Result{
@@ -639,14 +455,8 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
-	// Git destructive operation detection: inspect shell commands and git_*
-	// tool calls for irreversible operations (reset --hard, force push, clean
-	// -fd, rm -rf, etc.). Advisory only - injects a warning but does not block.
 	destructiveWarning := a.checkGitDestructive(tc.Name, tc.Arguments)
 
-	// Strip unknown parameters: some models hallucinate extra parameters that
-	// aren't in the tool schema. Removing them prevents confusing failures in
-	// tools that use strict deserialization. No-op when all params are known.
 	strippedArgs := tool.StripUnknownParams(t.Parameters(), tc.Arguments)
 	if !bytes.Equal(strippedArgs, tc.Arguments) {
 		debug.Log("agent", "stripped unknown params for tool %s", tc.Name)
@@ -664,22 +474,11 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		RawInput:   string(tc.Arguments),
 	}
 
-	// Pre-tool-use hooks
-	// Run once here for all tools - do NOT repeat in executeMultiFileTool/executeFileTool
-	// Fix #1035: file-edit tools route to specialized functions but hooks should run exactly once
 	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
 	if !preResult.Allowed {
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
 
-	// For file-editing tools: read old content, compute new, show diff, save checkpoint
-	// #1547 case A: every tool implementing PreviewChanges routes through
-	// the dry-run/preview/checkpoint path. Previously only multi_file_edit
-	// did - multi_edit_file, multi_file_write and batch_replace (the
-	// fan-out writers whose blast radius is largest) fell through to bare
-	// safeExecute with NO pre-write gate: one wrong batch edit punched
-	// through N files with only the post-write integrity floor left.
-	// notebook_edit/lsp_rename/file_ops stay exempt (no faithful preview).
 	if tc.Name == "multi_file_edit" || tc.Name == "multi_edit_file" ||
 		tc.Name == "multi_file_write" || tc.Name == "batch_replace" {
 		if previewer, ok := t.(interface {
@@ -695,22 +494,15 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		return a.executeUndoEdit(ctx, tc, env)
 	}
 
-	// Sync working directory for tools that have a WorkingDir field.
 	syncToolWorkingDir(t, workDir)
 
 	a.mu.Lock()
-	a.lastTool = t.Name() // Update for next tool
+	a.lastTool = t.Name()
 	a.mu.Unlock()
 
-	// Execute the actual tool (with panic recovery + transient retry)
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
-	// Shell-mutation checkpointing (checkpoint-exclusions fix): editor tools
-	// snapshot their writes, but mutations THROUGH run_command (sed -i,
-	// go fmt -w, codegen, patch) were invisible to undo_edit/revert - a
-	// misleading restore. Capture the pre-state so the post-execution diff
-	// can record normal checkpoints. No-op outside git workspaces.
 	var shellPre *shellSnapshot
 	if tc.Name == "run_command" {
 		a.mu.RLock()
@@ -721,24 +513,15 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 	toolStart := time.Now()
-	// Non-atomic failure semantics (arXiv:2608.02645): if this exact mutating
-	// call previously ended ambiguous (timeout/cancel/panic), the model is
-	// re-issuing blind -- annotate the result with double-apply risk.
+
 	prevMutAmbiguous := a.mutateLedger.lookupAmbiguous(t.Name(), tc.Arguments)
 	result := a.executeWithTransientRetry(ctx, t.Name(), tc.Arguments, func(execCtx context.Context, args []byte) (tool.Result, error) {
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
-	// Classify the outcome of mutating calls (pre-exec rejection vs ambiguous
-	// mid-execution failure) and append verify-before-retry guidance. No-op
-	// for read-only tools and clean results without an outstanding ambiguous
-	// attempt.
+
 	result = a.annotateMutatingOutcome(t.Name(), tc.Arguments, result, prevMutAmbiguous)
 
-	// Diff pre/post workspace state and checkpoint shell-made mutations so
-	// undo_edit and checkpoint revert cover them uniformly. Skipped when the
-	// command failed (partial state mid-pipeline is NOT a finished mutation
-	// worth snapshotting) or when no pre-state was captured.
 	if shellPre != nil && !result.IsError {
 		a.mu.RLock()
 		shellCpMgr := a.checkpoints
@@ -748,7 +531,6 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
-	// Post-tool-use hooks
 	postEnv := env
 	postEnv.ToolSuccess = !result.IsError
 	if result.IsError {
@@ -761,44 +543,17 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		result.Content += "\n" + postResult.Output
 	}
 
-	// Append fallback hint for tool errors - context-aware alternative
-	// tool suggestions that save 1-2 wasted agent iterations.
-	// #1197: routed through appendGuidance (budget + tag dedup) instead of a
-	// direct Content += - the direct append bypassed the per-turn guidance
-	// budget and duplicated the agent.go toolFallbackCheck pathway, stacking
-	// an extra unbudgeted hint onto every failing result.
-	// #3641: the search tools' headline scenario ("When grep returns
-	// nothing...") never fired - grep renders zero matches as a SUCCESS
-	// result (by contract, grep.go), and the hint path was gated on
-	// IsError alone. Successful results of the search/LSP tools now also
-	// go through toolFallbackHint; the hint itself decides via
-	// lspFallbackHint (non-empty successes return ""
-	// unchanged, so no other tool or success path is affected).
-	// #3673: this is now the SINGLE engine for zero-match success hints
-	// (agent.go's toolFallbackCheck is IsError-gated again) and the
-	// coverage set matches isZeroMatchSuccess exactly.
 	if result.IsError || toolFallbackHintOnSuccess(t.Name()) {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
-			// Trim the hint's leading newline: appendGuidance inserts its own
-			// "\n\n" separator, which would otherwise yield a triple newline.
+
 			a.appendGuidance(&result, strings.TrimLeft(hint, "\n"))
 		}
 	}
 
-	// Append destructive git operation warning (if any was detected pre-execution).
-	// #1197 (follow-up): also routed through appendGuidance - it was the last
-	// detector hint still direct-appended, invisible to the guidance budget.
-	// It is critical-tagged ([git-destructive]) so it still bypasses the count
-	// cap; only dedup + byte limits apply.
 	if destructiveWarning != "" {
 		a.appendGuidance(&result, destructiveWarning)
 	}
 
-	// Prompt injection defense (unified pipeline): scan tool results that
-	// may contain adversarial content from external sources (web pages,
-	// files, command output, MCP servers). Wraps suspicious content with a
-	// security notice and untrusted-content delimiters. Idempotent, so the
-	// later guard call in RunStreamWithContent on the same result is a no-op.
 	if !result.IsError {
 		result.Content = guardPromptInjection(tc.Name, tc.Arguments, result.Content)
 	}
@@ -830,11 +585,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	a.mu.RUnlock()
-	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
-	// Pre-write dry-run validation: check all planned edits for fatal errors
-	// before any file is written. Blocks the entire batch if any file has a
-	// guaranteed-failure condition (syntax error, corruption, etc.).
 	if err == nil && len(plans) > 0 {
 		planBatch := make([]fileEditPlan, 0, len(plans))
 		for _, p := range plans {
@@ -857,33 +608,21 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
-	// #1786 case 1 (multi-file leg): same TOCTOU as the single-file path -
-	// plan.OldContent comes from the PreviewChanges first read, and the
-	// diffConfirm pause above opens an arbitrary window for external
-	// writers. Refresh each stale plan baseline so per-file undo restores
-	// the true pre-write state instead of erasing external changes.
 	for i := range plans {
 		cur, rerr := os.ReadFile(plans[i].Path)
 		if rerr != nil {
-			continue // unreadable now = executor will surface its own error
+			continue
 		}
 		if string(cur) != plans[i].OldContent {
 			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
 			plans[i].OldContent = string(cur)
 		}
-		// #3512: the same drift window applies to existence - a file planned
-		// as "create" may have been created by an external writer while we
-		// paused at diffConfirm. If it is on disk now, undo must RESTORE its
-		// external content, not remove the file.
+
 		if !plans[i].Existed {
 			plans[i].Existed = true
 		}
 	}
-	// #3690: the refresh above mirrors the single-file leg's #1786 handling,
-	// but that leg also RE-RUNS its dry-run gate on the refreshed baseline
-	// (a drifted file must not slip a guaranteed-failure write through the
-	// gate that only validated the pre-pause pair). Same asymmetry fixed
-	// here: rebuild the batch from the refreshed baselines and re-validate.
+
 	refreshedBatch := make([]fileEditPlan, 0, len(plans))
 	for _, p := range plans {
 		if diff.HasChanges(p.OldContent, p.NewContent) {
@@ -912,7 +651,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	if cpMgr != nil && len(plans) > 0 {
-		a.stampEditIntent() // sa-91 edit provenance: stamp active task before saving
+		a.stampEditIntent()
 		var outcome tool.MultiFileEditContent
 		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
 			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
@@ -921,29 +660,17 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			}
 			for _, path := range outcome.WrittenPaths {
 				if plan, ok := planByPath[path]; ok {
-					// #3512: multi_file_write can CREATE files - the checkpoint
-					// must record that so undo removes the file instead of
-					// writing back "" (issue #554 B, multi-file leg).
+
 					cpMgr.SaveWithExistence(path, plan.OldContent, plan.NewContent, tc.Name, plan.Existed)
 				}
 			}
 		}
 	}
 
-	// Post-write integrity check: validate each written file's content.
-	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
-	// NOTHING - running the read-back comparison against unwritten plans
-	// flagged every plan as a "post-write mismatch" with a wrong semantic
-	// ("write may be partial") on EVERY preview.
 	var dryProbe struct {
 		DryRun bool `json:"dry_run"`
 	}
 	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
-	// #2143 P2: partial_success mode reports per-file outcomes -
-	// written_paths is authoritative (a pointer probe distinguishes "tool
-	// reports no such field" from "field present but empty", i.e. all
-	// files failed). Unwritten files keep their old disk content and must
-	// not trip the mismatch check.
 	var wpProbe struct {
 		WrittenPaths *[]string `json:"written_paths"`
 	}
@@ -957,36 +684,18 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	if !result.IsError && len(plans) > 0 && !isDryRun {
 		a.runPostWriteWarnings(&result, plans, func(path, oldContent, newContent string) string {
 			if writtenSet != nil && !writtenSet[path] {
-				return "" // not actually written (failed/skipped in partial mode)
+				return ""
 			}
-			// #2138: the multi-file tools (multi_file_write/edit,
-			// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
-			// for .go files unconditionally - passing the raw plan.NewContent
-			// here made every gofmt-touched write report a fake post-write
-			// mismatch (#2132 fixed only the single-file leg). Mirror the
-			// write-time formatting so mismatch means REAL drift here too.
+
 			mirrored := mirrorWriteTimeGoFormat(path, newContent)
 			return checkWriteIntegrity(path, oldContent, mirrored)
 		}, writtenSet)
 	}
 
-	// Post-write missing test companion detection for multi-file edits.
-	// #3853: mirror the #2143 P1/P2 filters - a dry-run preview writes
-	// nothing, and in partial_success mode only written_paths actually
-	// landed. Unwritten plans used to emit companion warnings and eat the
-	// shared per-turn guidance budget (#1864 case 2), crowding out real
-	// warnings elsewhere in the turn.
 	if !result.IsError && !isDryRun {
 		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS, writtenSet)
 	}
 
-	// Post-write hardcoded credential detection for multi-file edits
-	// (#601 W2): the per-plan checkWriteIntegrity loop above already runs the
-	// registry's "hardcoded-secret" check for each file; the direct duplicate
-	// call below was removed so each secret surfaces exactly once (the
-	// registry copy respects the maxIntegrityWarnings cap).
-
-	// Post-write debug statement detection for multi-file edits.
 	if !result.IsError && !isDryRun {
 		a.runPostWriteWarnings(&result, plans, checkDebugStmts, writtenSet)
 	}
@@ -1006,10 +715,6 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	return result
 }
 
-// runPostWriteWarnings runs checker over each changed plan and appends
-// non-empty warnings to the result via appendGuidance - the shared per-turn
-// budget path (#1864 case 2: the direct += appends let N plans stack 3N
-// warning blocks that neither charged the count cap nor the 2048-byte pool).
 func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string, writtenSet map[string]bool) {
 	if len(plans) == 0 {
 		return
@@ -1017,7 +722,7 @@ func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFi
 	var warnings []string
 	for _, plan := range plans {
 		if writtenSet != nil && !writtenSet[plan.Path] {
-			continue // #3853: not actually written (failed/skipped in partial mode)
+			continue
 		}
 		if diff.HasChanges(plan.OldContent, plan.NewContent) {
 			if w := checker(plan.Path, plan.OldContent, plan.NewContent); w != "" {
@@ -1030,46 +735,26 @@ func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFi
 	}
 }
 
-// safeExecute calls t.Execute with panic recovery and context-aware cancellation.
-// If the tool panics (e.g. nil pointer dereference from an unset dependency), it returns
-// an error result instead of crashing the entire application.
-//
-// The tool runs in a goroutine. If ctx is cancelled (e.g. user pressed Esc/Ctrl+C),
-// safeExecute returns immediately with a cancellation result instead of blocking
-// forever on a tool that ignores its context parameter. The goroutine may continue
-// running in the background (we can't kill it), but the agent loop is unblocked.
 func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
 	startTime := time.Now()
-	// Pre-flight required-parameter check (schema-driven, #first-call-fail
-	// root cause): reject before dispatch with an error that embeds each
-	// missing parameter's schema description, so the LLM fixes the call in
-	// one retry instead of guessing from a bare parameter name.
+
 	if r := preflightRequiredCheck(t, args); r != nil {
-		// Rejected before execution - from a governance standpoint this is
-		// an audited action attempt, not silence (audit.StatusInvalid).
+
 		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
-	// Pre-flight argument-complexity gate (sa-131, arXiv:2601.18282):
-	// high-complexity WRITE calls must first justify their heavy parameters;
-	// the same-intent resend always passes (normalized intent memo, defect B
-	// fix) and the per-run fire budget fails the gate open.
+
 	if r := preflightArgComplexityCheck(a.argComplexityGate, t, args); r != nil {
 		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
-	// Strip the gate-only justification field before dispatch: tools never
-	// see arg_rationale (it is consumed by the gate above).
+
 	args = stripArgRationale(args)
-	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
-	// results without ever invoking the real tool. See tool_tape.go. A tape
-	// miss returns an explicit error result - never a silent live fallback.
+
 	if res, err, handled := a.replayToolCall(t.Name(), args); handled {
 		return res, err
 	}
-	// Fill-aware tools (MCP adapter) shrink their own result cap to stay
-	// under the context-pressure guard's limits, keeping head-only
-	// truncation the single cut (#365, wiring fixed in #369).
+
 	if ft, ok := t.(interface{ SetContextFill(float64) }); ok {
 		fill := 0.0
 		if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
@@ -1103,9 +788,7 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		return r.result, r.err
 	case <-ctx.Done():
 		debug.Log("agent", "tool %s cancelled via context (Execute did not honor cancellation, goroutine leaked)", t.Name())
-		// The tape skips cancellations (they reflect the harness, not the
-		// tool); the audit ledger deliberately records them - a cancelled
-		// side-effecting action is exactly what an auditor needs to see.
+
 		a.auditToolResult(t.Name(), args, audit.StatusCancelled,
 			"cancelled via context; tool may still be finishing in the background", time.Since(startTime))
 		return tool.Result{
@@ -1115,30 +798,23 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 	}
 }
 
-// executeFileTool handles edit_file and write_file with diff preview and checkpointing.
 func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.ToolCallDelta, env hooks.HookEnv) tool.Result {
 	a.mu.Lock()
 	cpMgr := a.checkpoints
 	diffFn := a.diffConfirm
 	a.mu.Unlock()
 
-	// Determine file path and compute old/new content
 	filePath, oldContent, newContent, fileExisted, err := a.computeFileChange(tc)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("file change error: %v", err), IsError: true}
 	}
 
-	// Pre-write dry-run validation: check proposed content for fatal errors
-	// (syntax errors, binary corruption, content loss, conflict markers)
-	// BEFORE writing. Blocks the write if a guaranteed-failure condition is
-	// detected, saving a full write-detect-recover iteration cycle.
 	if diff.HasChanges(oldContent, newContent) {
 		if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
 			return tool.Result{Content: blockMsg, IsError: true}
 		}
 	}
 
-	// Show diff and ask for confirmation if diffConfirm is set
 	if diffFn != nil && diff.HasChanges(oldContent, newContent) {
 		diffText := diff.Stats(oldContent, newContent) + "\n" + diff.UnifiedDiff(oldContent, newContent, 3)
 		if !diffFn(ctx, filePath, diffText) {
@@ -1146,28 +822,16 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		}
 	}
 
-	// Pre-tool-use hooks
 	a.mu.RLock()
 	hookCfg2 := a.hookConfig
 	a.mu.RUnlock()
-	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
-	// #1786 case 1 (TOCTOU): the oldContent baseline was read at
-	// computeFileChange; the diffConfirm pause above can last arbitrarily
-	// long, and an external writer (user, another agent, formatter) may
-	// have rewritten the file since. The executor below re-reads from disk,
-	// but the CHECKPOINT would still save the STALE first read - undo_edit
-	// would then silently erase the external changes. Re-read now: if the
-	// baseline is stale, refresh it (and fileExisted) so undo restores the
-	// true pre-write state, and tell the model what happened.
 	if fileExisted {
 		if cur, rerr := os.ReadFile(filePath); rerr == nil && string(cur) != oldContent {
 			debug.Log("agent", "#1786 baseline drift on %s: refreshing checkpoint baseline (%d -> %d bytes)",
 				filePath, len(oldContent), len(cur))
 			oldContent = string(cur)
-			// The dry-run gate above validated the ORIGINAL pair; re-run it
-			// on the refreshed baseline so a drifted file does not slip a
-			// guaranteed-failure write through the gate.
+
 			if diff.HasChanges(oldContent, newContent) {
 				if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
 					return tool.Result{Content: blockMsg, IsError: true}
@@ -1175,17 +839,10 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 			}
 		}
 	} else if cur, rerr := os.ReadFile(filePath); rerr == nil {
-		// File was created externally between plan and write: undo semantics
-		// change from remove to restore.
+
 		fileExisted = true
 		oldContent = string(cur)
-		// #3671-2: the drift branch above re-runs the dry-run gate on its
-		// refreshed baseline; this externally-created branch flips Existed and
-		// swaps oldContent (a " from nothing" overwrite of real external
-		// content) without re-running it - the exact asymmetry #3690 fixed on
-		// the multi-file leg. Run the gate on the external content too: the
-		// empty-loss and conflict-marker checks are baseline-relative and this
-		// is now the real baseline.
+
 		if diff.HasChanges(oldContent, newContent) {
 			if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
 				return tool.Result{Content: blockMsg, IsError: true}
@@ -1193,7 +850,6 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		}
 	}
 
-	// Execute the actual tool (with panic recovery)
 	fileStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	fileDur := time.Since(fileStart)
@@ -1201,60 +857,32 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
-	// Save checkpoint. fileExisted distinguishes a file-creating write from an
-	// overwrite so undo removes vs restores the file correctly (issue #554 B).
 	if cpMgr != nil && !result.IsError {
-		a.stampEditIntent() // sa-91 edit provenance: stamp active task before saving
+		a.stampEditIntent()
 		cpMgr.SaveWithExistence(filePath, oldContent, newContent, tc.Name, fileExisted)
 	}
 
-	// Post-write integrity check: validate file content for syntax errors,
-	// binary corruption, or content loss. Catches issues immediately so the
-	// agent can fix them in the same turn instead of wasting a build cycle.
 	if !result.IsError {
-		// #2132: write_file/edit_file persist gofmt-FORMATTED bytes for .go
-		// files (formatGoBytes) while newContent here held the RAW argument
-		// - every gofmt-touched write then mismatched and skipped ALL
-		// registered integrity checks. Mirror the same formatting so the
-		// comparison is apples-to-apples and mismatch means REAL drift.
+
 		newContent = mirrorWriteTimeGoFormat(filePath, newContent)
 		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
-			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
+			a.appendGuidance(&result, warning)
 		}
-		// #1786 case 2 / #2132: the drift report now lives INSIDE
-		// checkWriteIntegrity (single message, checks still run against the
-		// disk bytes on real drift). The separate read-back + Note here was
-		// a duplicate report of the same condition - removed.
+
 	}
 
-	// Post-write missing test companion detection: warn when production Go
-	// code is written without a corresponding _test.go file. Advisory and
-	// non-blocking. Only fires for significant changes (new files with 10+
-	// substantive lines, or edits adding new exported functions).
 	if !result.IsError {
 		if warning := CheckMissingTestCompanionWithFS(filePath, oldContent, newContent); warning != "" {
-			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
+			a.appendGuidance(&result, warning)
 		}
 	}
 
-	// Post-write hardcoded credential detection (#601 W2): previously this
-	// site ran checkHardcodedSecrets directly AND the "hardcoded-secret"
-	// registry entry ran it again - same check, same input, two copies of
-	// every warning, with the registry copy subject to the
-	// maxIntegrityWarnings cap and the direct copy not (behavior drifted with
-	// registration order). The registry (wired in #334/#341) is now the
-	// single source of truth; the duplicated direct call was removed.
-
-	// Post-write debug statement detection: warn when the agent introduces
-	// leftover debug print statements (fmt.Println, console.log, etc.) that
-	// are typically added during debugging and forgotten.
 	if !result.IsError {
 		if debugWarning := checkDebugStmts(filePath, oldContent, newContent); debugWarning != "" {
-			a.appendGuidance(&result, debugWarning) // #1864 case 2: budgeted path
+			a.appendGuidance(&result, debugWarning)
 		}
 	}
 
-	// Post-tool-use hooks
 	postEnv := env
 	postEnv.ToolSuccess = !result.IsError
 	if result.IsError {
@@ -1270,13 +898,8 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	return result
 }
 
-// computeFileChange reads the old content and computes the new content for a file tool call.
-// fileExisted (the fourth return value) reports whether the target file existed
-// on disk before the tool call; it is false only when write_file creates a new
-// file. The checkpoint layer needs it to distinguish "created file" from
-// "edited a pre-existing empty file" - OldContent=="" alone cannot (issue #554 B/C).
 func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldContent, newContent string, fileExisted bool, err error) {
-	fileExisted = true // assume present; write_file on a missing path flips it to false
+	fileExisted = true
 	switch tc.Name {
 	case "edit_file":
 		var args struct {
@@ -1291,16 +914,11 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 		filePath = args.FilePath
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			// File may not exist yet - that's OK for write_file, but edit_file needs it
+
 			return "", "", "", false, fmt.Errorf("cannot read file: %w", err)
 		}
 		oldContent = string(data)
-		// #601 W1: the simulated edit must mirror the REAL edit_file tool's
-		// semantics (replace_all, line-number anchors, fuzzy matching, the
-		// uniqueness guard). This simulation feeds dry-run validation, diff
-		// preview, and checkpoint snapshots - a divergence lets real writes
-		// escape downstream detectors (nil-map-write, sql-injection, ...) and
-		// corrupts undo data.
+
 		newContent, err = simulateEditFile(oldContent, args.OldText, args.NewText, args.ReplaceAll)
 		if err != nil {
 			return "", "", "", false, err
@@ -1318,9 +936,7 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 		filePath = args.Path
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			// File does not exist yet - this write creates it. Capture that
-			// fact so the checkpoint can undo by removing the file instead of
-			// writing back an empty buffer (issue #554 B).
+
 			if os.IsNotExist(err) {
 				fileExisted = false
 				oldContent = ""
@@ -1338,31 +954,10 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 	}
 }
 
-// replaceFirst replaces the first occurrence of old in s with new.
 func replaceFirst(s, old, new string) string {
 	return strings.Replace(s, old, new, 1)
 }
 
-// ---------------------------------------------------------------------------
-// #601 W1: edit_file simulation - a faithful port of the real tool's
-// replacement semantics (internal/tool/edit_file.go + edit_match.go).
-// The sim-prefixed helpers are kept semantically identical to their
-// internal/tool counterparts so that simulateEditFile(content, ...) and
-// EditFile.Execute(...) produce byte-identical results for the same input.
-// internal/tool cannot be reused directly (its matching helpers are
-// unexported), and re-deriving simplistic behavior (the old literal
-// replaceFirst) is what caused the simulation/real divergence this issue
-// fixes. Known limitation: the real tool gofmt's .go files before writing
-// (formatGoBytes); already-formatted content is unaffected.
-// ---------------------------------------------------------------------------
-
-// simulateEditFile mirrors the core of EditFile.Execute: resolve old_text
-// (exact → read_file wrapper strip → line-number anchor → indent/CRLF/
-// trailing/fuzzy fallbacks), enforce the uniqueness guard, adjust new_text
-// with the same transform, and apply the replacement (all occurrences,
-// anchored splice, or first-only). Returns an error exactly where the real
-// tool returns an IsError result (empty old_text, no match, non-unique
-// match without replace_all) so the pipeline fails the same way.
 func simulateEditFile(content, oldText, newText string, replaceAll bool) (string, error) {
 	if oldText == "" {
 		return "", fmt.Errorf("Error: old_text is required")
@@ -1375,10 +970,7 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	if !replaceAll && count > 1 && !mr.anchored {
 		return "", fmt.Errorf("old_text found %d times in file - must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
 	}
-	// #604 T2 mirror: the real edit_file re-counts under lenient semantics
-	// when a fallback transform folded semantically-duplicate blocks into
-	// one canonical match - the simulation must refuse identically or it
-	// diverges from the tool (the #601 dual-side lock exists for this).
+
 	if !replaceAll && !mr.anchored && count <= 1 {
 		if loose, _ := tool.LenientRecount(content, oldText, mr.transform); loose > 1 {
 			return "", fmt.Errorf("old_text matched %d times in file under whitespace-tolerant matching - must be unique. Add context to disambiguate or set replace_all=true", loose)
@@ -1387,11 +979,7 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	if mr.transform != "" {
 		newText = simAdjustNewText(content, newText, mr)
 	} else if strings.Contains(oldText, "\r\n") && !strings.Contains(newText, "\r\n") {
-		// #2138 annex 1: mirror edit_file's #1676 case 3 branch - a CRLF
-		// old_text with LF-only new_text lands CRLF-converted in the real
-		// tool, but the simulation kept the LF bytes and every such edit
-		// on non-Go files (no formatGoBytes rescue) then tripped a fake
-		// post-write mismatch at the integrity gate.
+
 		newText = strings.ReplaceAll(newText, "\n", "\r\n")
 	}
 	if replaceAll {
@@ -1403,18 +991,15 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	return replaceFirst(content, mr.canonical, newText), nil
 }
 
-// simMatchResult mirrors tool.matchResult: describes a successful old_text
-// resolution against the file content.
 type simMatchResult struct {
-	canonical string // the actual bytes in content that will be replaced
-	transform string // diagnostic tag for which fallback fired ("" = exact)
-	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
-	trim      string // for leading-indent-shift: prefix to trim from new_text lines
-	start     int    // byte offset of canonical in content when the match is anchored
+	canonical string
+	transform string
+	shift     string
+	trim      string
+	start     int
 	anchored  bool
 }
 
-// simResolveOldText mirrors tool.resolveOldText.
 func simResolveOldText(content, oldText string) simMatchResult {
 	if oldText == "" {
 		return simMatchResult{}
@@ -1597,8 +1182,6 @@ func simTryReadFileLineAnchor(content, oldText string) simMatchResult {
 	return mr
 }
 
-// simAdjustNewText mirrors tool.adjustNewText: applies the transform that
-// located old_text to new_text so the replacement stays consistent.
 func simAdjustNewText(content, newText string, mr simMatchResult) string {
 	out := newText
 	if strings.Contains(mr.transform, "read-file-wrapper-stripped") {
@@ -1607,7 +1190,7 @@ func simAdjustNewText(content, newText string, mr simMatchResult) string {
 		}
 	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		// #3854: padded-prefix strip, mirroring tool.adjustNewText.
+
 		out = simStripPaddedLineNumberPrefixes(out, content)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
@@ -1627,8 +1210,6 @@ func simAdjustNewText(content, newText string, mr simMatchResult) string {
 	return out
 }
 
-// simStripLineNumberPrefix mirrors tool.stripLineNumberPrefix: removes
-// "  42\t" style prefixes if a clear majority of non-empty lines have them.
 func simStripLineNumberPrefix(text string) string {
 	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	matched, nonEmpty := 0, 0
@@ -1655,15 +1236,9 @@ func simStripLineNumberPrefix(text string) string {
 	return strings.Join(out, "\n")
 }
 
-// simPaddedLineNumberPrefixRE mirrors tool.paddedLineNumberPrefixRE
-// (#3854): at least one leading space before the digits.
 var simPaddedLineNumberPrefixRE = regexp.MustCompile(`^\s{1,12}\d+\t`)
 var simBareLineNumberPrefixRE = regexp.MustCompile(`^(\d+)\t`)
 
-// simStripPaddedLineNumberPrefixes mirrors
-// tool.stripPaddedLineNumberPrefixes (#3854): padded prefixes always
-// strip; column-0 digit+TAB strips only when the number is a plausible
-// line number of the file (readFileRange width-1 form, TestIssue601_W1).
 func simStripPaddedLineNumberPrefixes(text, content string) string {
 	maxLine := strings.Count(content, "\n") + 1
 	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
@@ -1742,7 +1317,6 @@ func simTrimReadFileWrapperLines(text string) (string, bool) {
 	return trimmed, true
 }
 
-// simTryCRLFMatch mirrors tool.tryCRLFMatch.
 func simTryCRLFMatch(content, oldText string) string {
 	if !strings.Contains(content, "\r\n") {
 		return ""
@@ -1760,7 +1334,6 @@ func simTryCRLFMatch(content, oldText string) string {
 	return ""
 }
 
-// simLeadingWhitespace mirrors tool.leadingWhitespace.
 func simLeadingWhitespace(s string) string {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
@@ -1769,7 +1342,6 @@ func simLeadingWhitespace(s string) string {
 	return s[:i]
 }
 
-// simTryLeadingIndentShift mirrors tool.tryLeadingIndentShift.
 func simTryLeadingIndentShift(content, oldText string) (canonical, shift, trim string) {
 	oldLines := strings.Split(oldText, "\n")
 	contentLines := strings.Split(content, "\n")
@@ -1843,7 +1415,6 @@ func simTryLeadingIndentShift(content, oldText string) (canonical, shift, trim s
 	return "", "", ""
 }
 
-// simApplyLeadingIndentShift mirrors tool.applyLeadingIndentShift.
 func simApplyLeadingIndentShift(text, shift string) string {
 	if shift == "" {
 		return text
@@ -1874,7 +1445,6 @@ func simTrimLeadingIndentShift(text, trim string) string {
 	return strings.Join(lines, "\n")
 }
 
-// simTryTrailingWhitespaceMatch mirrors tool.tryTrailingWhitespaceMatch.
 func simTryTrailingWhitespaceMatch(content, oldText string) string {
 	contentLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldText, "\n")
@@ -1905,7 +1475,6 @@ func simTryTrailingWhitespaceMatch(content, oldText string) string {
 	return ""
 }
 
-// simTryFuzzyLineMatch mirrors tool.tryFuzzyLineMatch.
 func simTryFuzzyLineMatch(content, oldText string) string {
 	oldLines := strings.Split(oldText, "\n")
 	if len(oldLines) == 0 {
@@ -1933,8 +1502,6 @@ func simTryFuzzyLineMatch(content, oldText string) string {
 	return ""
 }
 
-// simNormalizeIndentation mirrors tool.normalizeIndentation: converts the
-// indentation of text to match the file's tab/space style.
 func simNormalizeIndentation(fileContent, text string) string {
 	fileUsesTabs := false
 	fileTabWidth := 0
@@ -2050,16 +1617,6 @@ func simGCD(a, b int) int {
 	return a
 }
 
-// executeUndoEdit handles the undo_edit tool by routing to the checkpoint manager.
-// Supports three actions: "undo" (revert last edit), "list" (show checkpoints),
-// and "revert" (roll back to a specific checkpoint by ID).
-// executeUndoEdit runs the undo_edit tool. #1083: post-tool-use hooks must
-// run here too - undo/revert restore file contents on disk (checkpoint
-// restore -> AtomicWriteFile/os.Remove), so user hooks like format-on-save,
-// audit logging, or notifications must observe the change. The generic
-// post-hook block in executeTool is unreachable because undo_edit returns
-// early, and neither of its specialized siblings (executeFileTool/
-// executeMultiFileTool) skips the post stage.
 func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta, env hooks.HookEnv) tool.Result {
 	result := a.executeUndoEditInner(ctx, tc)
 
@@ -2106,10 +1663,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 	case "undo":
 		cp, err := cpMgr.Undo("agent")
 		if err != nil {
-			// #3671-3: distinguish "stack empty" (benign, sentinel) from
-			// IO/corruption failures - the old uniform "Nothing to undo"
-			// label made the LLM read a corrupt checkpoint store as an
-			// empty stack and diagnose from wrong disk state.
+
 			if errors.Is(err, checkpoint.ErrNothingToUndo) {
 				return tool.Result{
 					IsError: true,
@@ -2121,21 +1675,12 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 				Content: fmt.Sprintf("Undo failed (checkpoint store error, not an empty stack): %v", err),
 			}
 		}
-		// Existed (not OldContent=="") distinguishes created files from
-		// pre-existing empty files (issue #554 B/C). With Existed=false the
-		// manager has already REMOVED the file, so the report must say so -
-		// claiming "restored" would mislead the agent about disk state.
+
 		isNew := !cp.Existed
-		// #1559-A: clear the file's read/edit bookkeeping HERE, at the
-		// source with cp.FilePath in hand. The old wiring inside agent.go's
-		// fileEditingTools block was triply unreachable for undo_edit (the
-		// gate's 9 members exclude it; extractEditFilePaths has no undo_edit
-		// shape; the per-path loop never ran) - #1459's "undo_edit clears
-		// read/edit bookkeeping" was a no-op its unit test only pinned by
-		// calling recordUndo directly.
+
 		a.expiredRead.recordUndo(cp.FilePath)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
-		// Include a diff summary of what changed
+
 		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {
 			result += "\n\n" + diff.Stats(cp.NewContent, cp.OldContent)
 		}
@@ -2163,21 +1708,15 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 				Content: "checkpoint_id is required for action=revert. Use action=list to see available checkpoint IDs.",
 			}
 		}
-		cp, revertedFiles, err := cpMgr.RevertWithFilesSource(args.CheckpointID, "agent") // #1708: agent self-revert must not narrate as user rejection (#1449-A)
+		cp, revertedFiles, err := cpMgr.RevertWithFilesSource(args.CheckpointID, "agent")
 		if err != nil {
 			return tool.Result{
 				IsError: true,
 				Content: fmt.Sprintf("Revert failed: %v", err),
 			}
 		}
-		isNew := !cp.Existed // not OldContent=="": pre-existing empty files are edits, not creations (#554 C)
-		// #1770: revert rewrites the file exactly like undo does - without
-		// clearing the expired-read ledger, the next edit of the same file
-		// hit stale readBeforeEdit and injected a misleading "read has
-		// expired" note. #1559 fixed the undo branch only.
-		// #1879 case 1: revert rewrites EVERY co-existing file (not just
-		// cp.FilePath) - clear the ledger for the full reverted set or the
-		// stale-read hint resurfaces on the other files.
+		isNew := !cp.Existed
+
 		for _, f := range revertedFiles {
 			a.expiredRead.recordUndo(f)
 		}
@@ -2214,23 +1753,12 @@ func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
 	return out.String(), hasChanges
 }
 
-// toolWorkingDirMu is a safety-net mutex for syncToolWorkingDir. With Registry.Clone(),
-// each agent has its own tool instances and this mutex should never be contended.
-// It exists as a last resort in case a tool without a Clone() implementation is
-// shared between agents and has a WorkingDir field that needs mutation.
 var toolWorkingDirMu sync.Mutex
 
-// syncToolWorkingDir uses reflection to set the WorkingDir field on tools
-// that have one. This ensures tools always use the agent's current working
-// directory, even after it changes (e.g., after enter_worktree).
-//
-// Note: With Registry.Clone(), each agent has independent tool instances, so
-// this reflection is only mutating per-agent copies. The mutex is a safety net.
 func syncToolWorkingDir(t tool.Tool, dir string) {
 	toolWorkingDirMu.Lock()
 	defer toolWorkingDirMu.Unlock()
 
-	// Dereference pointer if needed
 	v := reflect.ValueOf(t)
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
@@ -2247,8 +1775,6 @@ func syncToolWorkingDir(t tool.Tool, dir string) {
 	}
 }
 
-// truncateString truncates s to at most maxLen runes, appending "..." if truncated.
-// Uses rune-based truncation to avoid breaking multi-byte UTF-8 characters.
 func truncateString(s string, maxLen int) string {
 	if maxLen < 0 {
 		return s
@@ -2263,8 +1789,6 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen-3]) + "..."
 }
 
-// describeJSONError summarizes why tool-call arguments failed to parse as
-// JSON, for actionable error messages returned to the model.
 func describeJSONError(raw []byte) string {
 	var v any
 	err := json.Unmarshal(raw, &v)

@@ -1,22 +1,5 @@
 package tool
 
-// recall_compacted: agent-invocable re-retrieval of compacted context.
-//
-// Research basis: Context Engineering (Anthropic, 2025) — compaction is
-// "necessary but not sufficient"; the complementary decision is what to
-// RE-RETRIEVE. When an LLM summarization replaces earlier turns or a
-// mechanical pass stubs out a superseded tool_result, verbatim details (a
-// command's exact output, an error string, a file path) leave the live
-// window. The archive in internal/context/compacted_archive.go keeps that
-// text retrievable; this tool exposes it to the model.
-//
-// Design mirrors compact_context (CAT): a late-bound Searcher closure is
-// attached by cmd wiring (agentruntime.RegisterRecallCompactedTool) after
-// agent construction. Read-only, session-scoped, no filesystem or external
-// side effects; always allowed (permission.IsAlwaysAllowedTool). Blocked
-// for sub-agents is NOT needed — the archive lives on the sub-agent's own
-// context manager and reading it is harmless.
-
 import (
 	"context"
 	"encoding/json"
@@ -24,11 +7,7 @@ import (
 	"strings"
 )
 
-// RecallCompactedTool implements the recall_compacted tool.
 type RecallCompactedTool struct {
-	// Searcher queries the owning agent's compacted archive and returns the
-	// model-readable result body. Empty return means nothing was found or
-	// the runtime has no archive.
 	Searcher func(query string, limit int) string
 }
 

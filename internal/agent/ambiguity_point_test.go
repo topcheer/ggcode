@@ -29,9 +29,7 @@ func TestAmbiguityPointDetection(t *testing.T) {
 			wantMsg: true,
 		},
 		{
-			// #1438-A: bare 'better' hit ordinary sentences whose metric was
-			// already in them; the narrowed table no longer fires here - the
-			// guidance would have been category-mismatched noise.
+
 			name:    "optimize with metric in sentence no longer fires",
 			prompt:  "Optimize the database query for better performance",
 			wantMsg: false,
@@ -57,10 +55,7 @@ func TestAmbiguityPointDetection(t *testing.T) {
 			wantMsg: true,
 		},
 		{
-			// #1521: bare 'recent' dropped per #1438-A - the phrase shape
-			// "recent entries" below the bare entry never matched, and the
-			// bare word flagged ordinary sentences like "check the recent
-			// commits". Reversed expectation.
+
 			name:    "vague quantity recent",
 			prompt:  "Show me the recent entries from the log",
 			wantMsg: false,
@@ -112,8 +107,7 @@ func TestAmbiguityPointDetection(t *testing.T) {
 					t.Errorf("message should contain 'Ambiguity Detection', got: %s", msg[:min(60, len(msg))])
 				}
 				if tt.category != "" && !strings.Contains(msg, tt.category) {
-					// Check the category appears in the suggestion text instead
-					// Some categories are matched differently in output
+
 				}
 			} else {
 				if msg != "" {
@@ -164,7 +158,7 @@ func TestAmbiguityPointMaxSignals(t *testing.T) {
 	a := &Agent{
 		ambiguityPoint: newAmbiguityPointState(),
 	}
-	// Prompt with many ambiguity sources
+
 	prompt := "Refactor the module to remove duplicates, sort the results, " +
 		"improve error handling with a fallback, and optimize for better performance"
 
@@ -173,7 +167,6 @@ func TestAmbiguityPointMaxSignals(t *testing.T) {
 		t.Fatal("expected guidance message for multi-ambiguity prompt")
 	}
 
-	// Count numbered items (should be capped at 3)
 	count := strings.Count(msg, "\n  ")
 	if count > 3 {
 		t.Errorf("expected at most 3 signals, got %d", count)
@@ -184,7 +177,7 @@ func TestAmbiguityPointMultipleCategoriesNotDuplicated(t *testing.T) {
 	a := &Agent{
 		ambiguityPoint: newAmbiguityPointState(),
 	}
-	// "sort" appears twice but should only generate one sort-order signal
+
 	prompt := "Sort the results and then sort the output by date"
 
 	msg := a.checkAmbiguityPoints(prompt)
@@ -192,7 +185,6 @@ func TestAmbiguityPointMultipleCategoriesNotDuplicated(t *testing.T) {
 		t.Fatal("expected guidance message")
 	}
 
-	// Count occurrences of "sort-ordering" category
 	sortCount := strings.Count(msg, ambSortOrder)
 	if sortCount > 1 {
 		t.Errorf("expected at most 1 sort-order signal, got %d", sortCount)
@@ -204,7 +196,6 @@ func TestAmbiguityQuickTaskSkip(t *testing.T) {
 		ambiguityPoint: newAmbiguityPointState(),
 	}
 
-	// These should be skipped (start with informational phrases)
 	infoPrompts := []string{
 		"what is the remove duplicates function doing",
 		"explain how the sorted list works",
@@ -220,34 +211,26 @@ func TestAmbiguityQuickTaskSkip(t *testing.T) {
 	}
 }
 
-// TestAmbiguityPointCJKAndGate pins #1438-B/C: the highest-value Chinese
-// patterns now trigger (the primary user language had zero coverage), and
-// the lowered gate lets short vague directions through.
 func TestAmbiguityPointCJKAndGate(t *testing.T) {
-	// fired is once-per-run: a FRESH state per prompt (the initial version
-	// reused one Agent and the 2nd+ prompts silently skipped).
+
 	for _, cjk := range []string{"请优化一下这个函数的性能", "帮我把这个列表去重一下", "帮我排个序", "帮我把这个函数改个名"} {
 		a := &Agent{ambiguityPoint: newAmbiguityPointState()}
 		if msg := a.checkAmbiguityPoints(cjk); msg == "" {
 			t.Fatalf("CJK prompt %q not detected", cjk)
 		}
 	}
-	// Gate: 6 chars still blocks bare one-word commands...
+
 	gateA := &Agent{ambiguityPoint: newAmbiguityPointState()}
 	if msg := gateA.checkAmbiguityPoints("run"); msg != "" {
 		t.Fatal("one-word command should stay gated")
 	}
-	// ...but two-word vague directions pass the gate AND the table.
+
 	a2 := &Agent{ambiguityPoint: newAmbiguityPointState()}
 	if msg := a2.checkAmbiguityPoints("make it better"); msg == "" {
 		t.Fatal("short vague direction missed (gate overshot)")
 	}
 }
 
-// Regression for #1521: #1438-A claimed bare latest/recent were dropped but
-// left them in place - "upgrade to the latest version" kept hitting the
-// quantity suggestion, and the new phrase shapes were unreachable (bare
-// word matched first, category dedup ate the phrases).
 func TestAmbiguityBareLatestRecentDropped(t *testing.T) {
 	a := &Agent{ambiguityPoint: newAmbiguityPointState()}
 	if w := a.checkAmbiguityPoints("upgrade to the latest version"); w != "" {
@@ -257,7 +240,7 @@ func TestAmbiguityBareLatestRecentDropped(t *testing.T) {
 	if w := a2.checkAmbiguityPoints("check the recent commits"); w != "" {
 		t.Fatalf("bare 'recent' must not fire: %s", w)
 	}
-	// The phrase shapes remain live now that the bare words are gone.
+
 	a3 := &Agent{ambiguityPoint: newAmbiguityPointState()}
 	if w := a3.checkAmbiguityPoints("show me the latest items"); w == "" {
 		t.Fatal("'latest items' phrase shape must still fire")

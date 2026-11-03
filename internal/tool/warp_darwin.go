@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// executeStatus reports whether Warp is detected and basic info.
 func (w *WarpTool) executeStatus() Result {
 	if !warpAvailable() {
 		return Result{Content: "warp: not detected (TERM_PROGRAM != WarpTerminal)"}
@@ -18,22 +17,17 @@ func (w *WarpTool) executeStatus() Result {
 	return Result{Content: fmt.Sprintf("warp: detected\nworking dir: %s", w.workingDir())}
 }
 
-// clickMenu clicks a menu item in Warp via System Events.
-// Warp has full menu structure: File, Edit, View, Tab, Blocks, AI, Drive, Window, Help.
 func (w *WarpTool) clickMenu(ctx context.Context, menuItem string) Result {
-	// First activate Warp to ensure menu is accessible
+
 	activate := `tell application "Warp" to activate`
 	if err := exec.CommandContext(ctx, "osascript", "-e", activate).Run(); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("warp: failed to activate Warp: %v", err)}
 	}
 
-	// Small delay to ensure Warp is frontmost
 	if err := warpSleep(ctx, 50*time.Millisecond); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("warp: cancelled before clicking %q: %v", menuItem, err)}
 	}
 
-	// Click the menu item by searching all menu bar items
-	// Warp's menus: File, Edit, View, Tab, Blocks, AI, Drive, Window, Help
 	script := fmt.Sprintf(`
 tell application "System Events"
     tell process "Warp"
@@ -70,14 +64,11 @@ return "not found"`, menuItem)
 	return Result{Content: fmt.Sprintf("warp: %s", menuItem)}
 }
 
-// executeInput sends text to the currently focused Warp pane.
 func (w *WarpTool) executeInput(ctx context.Context, text string) Result {
 	if text == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
-	// #880: propagate sendKeys failures — previously a failed keystroke
-	// script (e.g. multiline before escaping) reported success and the
-	// follow-up enter key executed whatever stale content the pane held.
+
 	if err := w.sendKeys(ctx, text); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("warp: input failed: %v", err)}
 	}
@@ -88,7 +79,6 @@ func (w *WarpTool) executeInput(ctx context.Context, text string) Result {
 	return Result{Content: fmt.Sprintf("warp: input sent: %s", preview)}
 }
 
-// executeSendKey sends a keyboard event to Warp.
 func (w *WarpTool) executeSendKey(ctx context.Context, key string, modifiers string) Result {
 	if key == "" {
 		return Result{IsError: true, Content: "key is required for send_key action"}
@@ -110,25 +100,21 @@ func (w *WarpTool) executeSendKey(ctx context.Context, key string, modifiers str
 
 	keyCode, ok := keyMap[strings.ToLower(key)]
 	if !ok {
-		// Single character — use keystroke
-		// #1348: sendKeystroke errors were discarded and the tool reported
-		// unconditional success - now propagated.
+
 		if err := w.sendKeystroke(ctx, key, modifiers); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("warp: send_key failed: %v", err)}
 		}
 		return Result{Content: fmt.Sprintf("warp: key sent: %s (%s)", key, formatMods(modifiers))}
 	}
 
-	// Use key code for special keys
 	if err := w.sendKeyCode(ctx, keyCode, modifiers); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("warp: send_key failed: %v", err)}
 	}
 	return Result{Content: fmt.Sprintf("warp: key sent: %s (%s)", key, formatMods(modifiers))}
 }
 
-// sendKeys types text into Warp using System Events keystroke.
 func (w *WarpTool) sendKeys(ctx context.Context, text string) error {
-	// Activate Warp first
+
 	if err := exec.CommandContext(ctx, "osascript", "-e", `tell application "Warp" to activate`).Run(); err != nil {
 		return fmt.Errorf("activate Warp: %w", err)
 	}
@@ -136,10 +122,6 @@ func (w *WarpTool) sendKeys(ctx context.Context, text string) error {
 		return fmt.Errorf("cancelled before typing: %w", err)
 	}
 
-	// Escape backslash, double quote, and control chars for AppleScript
-	// string literals. #880: raw newlines/tabs are FORBIDDEN in AppleScript
-	// literals — a multiline text produced a syntax-error script, the error
-	// was discarded, and the tool reported success while nothing was typed.
 	escaped := strings.ReplaceAll(text, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
 	escaped = strings.ReplaceAll(escaped, "\r", "\\r")
@@ -153,7 +135,6 @@ func (w *WarpTool) sendKeys(ctx context.Context, text string) error {
 	return nil
 }
 
-// sendKeystroke sends a single character keystroke with optional modifiers.
 func (w *WarpTool) sendKeystroke(ctx context.Context, key string, modifiers string) error {
 	if err := exec.CommandContext(ctx, "osascript", "-e", `tell application "Warp" to activate`).Run(); err != nil {
 		return fmt.Errorf("activate Warp: %w", err)
@@ -173,7 +154,6 @@ func (w *WarpTool) sendKeystroke(ctx context.Context, key string, modifiers stri
 	return nil
 }
 
-// sendKeyCode sends a key code with optional modifiers.
 func (w *WarpTool) sendKeyCode(ctx context.Context, code string, modifiers string) error {
 	if err := exec.CommandContext(ctx, "osascript", "-e", `tell application "Warp" to activate`).Run(); err != nil {
 		return fmt.Errorf("activate Warp: %w", err)
@@ -193,7 +173,6 @@ func (w *WarpTool) sendKeyCode(ctx context.Context, code string, modifiers strin
 	return nil
 }
 
-// parseModifiers converts "control,shift" to " using {control down, shift down}"
 func parseModifiers(mods string) (string, error) {
 	if mods == "" {
 		return "", nil
@@ -206,12 +185,9 @@ func parseModifiers(mods string) (string, error) {
 		case "shift", "control", "option", "command":
 			valid = append(valid, p+" down")
 		case "":
-			// empty segment from a trailing comma - skip
+
 		default:
-			// #1709 case 1: unknown tokens ("ctrl"/"cmd"/"alt" synonyms)
-			// were silently DROPPED - 'ctrl+c' degraded to typing a bare
-			// 'c' into Warp while reporting success. Reject loudly (#880
-			// family) with the legal values so the caller can retry.
+
 			return "", fmt.Errorf("unknown modifier %q (legal: shift, control, option, command)", p)
 		}
 	}

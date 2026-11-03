@@ -1,16 +1,12 @@
 package tool
 
-// #3492 probe: a node sitting EXACTLY at cap depth with no outgoing edges
-// is a COMPLETE closure - it must not be flagged Truncated. Only a capped
-// node with a real unexplored dep edge sets Truncated.
-
 import (
 	"strings"
 	"testing"
 )
 
 func TestIssue3492_LeafAtCapDepthNotTruncated(t *testing.T) {
-	// s1->s2->s3->s4, cap 3: s4 is popped at depth 3 (capped) and is a leaf.
+
 	lookup := closureSkillLookup{
 		"s1": mkSkill("s1", "s2"),
 		"s2": mkSkill("s2", "s3"),
@@ -27,8 +23,7 @@ func TestIssue3492_LeafAtCapDepthNotTruncated(t *testing.T) {
 }
 
 func TestIssue3492_NodeAtCapWithUnvisitedDepIsTruncated(t *testing.T) {
-	// s1->s2->s3->s4->s5, cap 3: s4 is popped at depth 3 (capped) and its
-	// dep s5 is unexplored - Truncated must be set (real truncation).
+
 	lookup := closureSkillLookup{
 		"s1": mkSkill("s1", "s2"),
 		"s2": mkSkill("s2", "s3"),
@@ -43,8 +38,7 @@ func TestIssue3492_NodeAtCapWithUnvisitedDepIsTruncated(t *testing.T) {
 }
 
 func TestIssue3492_CappedNodeAllDepsVisitedNotTruncated(t *testing.T) {
-	// Diamond: s1 -> {s2, s3}; s3 deps s2 (already visited). Cap 1: s2/ss3
-	// popped at depth 1; s3's dep s2 is visited -> complete, not truncated.
+
 	lookup := closureSkillLookup{
 		"s1": mkSkill("s1", "s2", "s3"),
 		"s2": mkSkill("s2"),

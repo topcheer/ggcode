@@ -7,43 +7,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Plan Adherence Trend (r34): the plan-drift gate (plan_drift.go) internally
-// computes an unaddressed-items ratio but collapses it into a fire-once
-// binary warning, so gradual drift across a long run is invisible until the
-// final reminder. This companion exposes that same coverage ratio as a
-// continuous score (1.0 = every plan item backed by tool-facied evidence)
-// sampled during execution, following 2026 observability practice of
-// trace-level plan-adherence scoring (futureagi "LLM Agent Architectures
-// 2026": span/trace/persona three-layer evals; trace level scores task
-// completion, plan adherence, and budget).
-//
-// Zero LLM cost, deterministic; distinct from trajectory-confidence
-// (confidence.go scores tool success rate, NOT plan coverage - its own
-// comment in verification_debt.go concedes the plan dimension is untracked).
-
 const (
-	// planAdherenceSampleGap: minimum tool calls between recorded samples
-	// (the score is recomputed cheaply; this throttles history + log noise).
-	planAdherenceSampleGap = 5
-	// planAdherenceMaxSamples caps history growth for very long runs.
+	planAdherenceSampleGap  = 5
 	planAdherenceMaxSamples = 50
 )
 
-// planAdherenceSample is one recorded point of the adherence trend.
 type planAdherenceSample struct {
-	ToolCalls int     // cumulative tool-call count at sample time
-	Score     float64 // 1 - unaddressed/total over captured plan items
+	ToolCalls int
+	Score     float64
 }
 
-// planAdherenceTrend tracks the adherence score across a run.
 type planAdherenceTrend struct {
-	toolCalls int                   // cumulative tool calls observed
-	samples   []planAdherenceSample // recorded trend points
+	toolCalls int
+	samples   []planAdherenceSample
 }
 
-// noteToolCall samples plan adherence after a tool call, honoring the
-// sample gap. Items come from the owning planDriftState; empty plans are a
-// no-op (score is undefined without a plan).
 func (t *planAdherenceTrend) noteToolCall(items []planItem, runStats *RunStats) {
 	if t == nil || len(items) == 0 || runStats == nil {
 		return
@@ -65,7 +43,6 @@ func (t *planAdherenceTrend) noteToolCall(items []planItem, runStats *RunStats) 
 	debug.Log("agent", "plan adherence %.2f at tool call %d (prev %.2f)", score, t.toolCalls, prev)
 }
 
-// Samples returns the recorded trend points (oldest first).
 func (t *planAdherenceTrend) Samples() []planAdherenceSample {
 	if t == nil {
 		return nil
@@ -73,9 +50,6 @@ func (t *planAdherenceTrend) Samples() []planAdherenceSample {
 	return t.samples
 }
 
-// trendSummary renders a compact one-line trend for logs and future
-// observability export, e.g. "plan adherence trend: 0.40 -> 0.60 (n=2)".
-// Empty string when no samples were recorded.
 func (t *planAdherenceTrend) trendSummary() string {
 	if t == nil || len(t.samples) == 0 {
 		return ""
@@ -86,10 +60,6 @@ func (t *planAdherenceTrend) trendSummary() string {
 		first, last, len(t.samples), t.toolCalls)
 }
 
-// computePlanAdherence returns the fraction of captured plan items whose
-// keywords are covered by tool-faced work evidence (same coverage rule as
-// checkPlanDrift: an item counts as addressed when at least half its
-// keywords appear in the work corpus).
 func computePlanAdherence(items []planItem, runStats *RunStats) float64 {
 	if len(items) == 0 {
 		return 1

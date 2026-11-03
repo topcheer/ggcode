@@ -1,39 +1,5 @@
 package agent
 
-// interface_compliance_check.go implements Post-Edit Interface Implementation
-// Completeness Detection - a deterministic post-edit guard that warns when an
-// edit to a Go interface changes its method set in a way that breaks existing
-// implementations in the same package.
-//
-// This catches a common LLM failure mode: the agent adds a new method to an
-// interface (or renames/removes one) without updating all concrete types that
-// implement it. The compiler only catches this when the type is explicitly
-// assigned to the interface (var _ I = T{}), so silently-broken implementations
-// can persist until runtime.
-//
-// Competitor mapping:
-//   - Claude Code: relies on post-build compiler errors (too late)
-//   - Cursor: real-time LSP diagnostics can catch this, but only for the
-//     current file being edited - not across files in the package
-//   - GitHub Copilot: no interface-level compliance analysis
-//   - OpenHands: no interface compliance detection
-//
-// Our approach:
-//  1. After a successful edit to a .go file, parse the new content for
-//     interface declarations and their method sets.
-//  2. Compare against the old content (delta-aware): only check interfaces
-//     whose method sets changed.
-//  3. For each changed interface, scan all other .go files in the same
-//     package directory for concrete types that have methods matching the
-//     interface name (duck-typing heuristic).
-//  4. Report types that are missing methods required by the updated interface.
-//
-// Safety:
-//   - Delta-aware: only fires when interface method sets actually change
-//   - Single-directory scan (same package) - fast, no recursive traversal
-//   - Non-blocking: warning injected into tool result, edit is not reverted
-//   - At most once per file per run
-
 import (
 	"fmt"
 	"go/ast"
@@ -47,26 +13,17 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// interfaceMethodSet represents the method signatures required by an interface.
 type interfaceMethodSet struct {
-	Name    string            // interface name (e.g., "Reader")
-	Methods map[string]string // method name → normalized signature
+	Name    string
+	Methods map[string]string
 }
 
-// complianceViolation represents a type missing one or more interface methods.
 type complianceViolation struct {
 	InterfaceName  string
 	TypeName       string
 	MissingMethods []string
 }
 
-// checkInterfaceCompliance detects when an edit changes an interface's method
-// set in a way that may break existing implementations. Returns a guidance
-// string if violations are found, "" otherwise.
-//
-// This is integrated as a delta-aware check within the post-write integrity
-// pipeline (not a separate guard) so it runs synchronously after every edit
-// to a Go file.
 func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 	if !strings.HasSuffix(filePath, ".go") || strings.HasSuffix(filePath, "_test.go") {
 		return ""
@@ -75,7 +32,6 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Parse both old and new content to extract interface method sets.
 	oldInterfaces := extractInterfaceMethodSets(oldContent)
 	newInterfaces := extractInterfaceMethodSets(newContent)
 
@@ -83,16 +39,15 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Delta: find interfaces whose method sets changed.
 	var changedInterfaces []interfaceMethodSet
 	for name, newMS := range newInterfaces {
 		oldMS, existed := oldInterfaces[name]
 		if !existed {
-			// New interface - check if any existing types partially implement it.
+
 			changedInterfaces = append(changedInterfaces, interfaceMethodSet{Name: name, Methods: newMS})
 			continue
 		}
-		// Compare method sets.
+
 		if !methodSetsEqual(oldMS, newMS) {
 			changedInterfaces = append(changedInterfaces, interfaceMethodSet{Name: name, Methods: newMS})
 		}
@@ -102,9 +57,6 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Scan the package directory for types that may implement these interfaces.
-	// Bug C fix: Also parse type declarations from the new content to include
-	// types defined in the edited file (for proper embedded promotion detection).
 	pkgDir := filepath.Dir(filePath)
 	typeMethods := scanPackageTypeMethods(pkgDir, filePath, newContent)
 	if len(typeMethods) == 0 {
@@ -114,8 +66,7 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 	var violations []complianceViolation
 	for _, iface := range changedInterfaces {
 		for typeName, methods := range typeMethods {
-			// Check if this type has at least one method matching the interface
-			// (duck-typing heuristic: only check types that partially implement).
+
 			overlap := false
 			for methodName := range iface.Methods {
 				if _, ok := methods[methodName]; ok {
@@ -127,7 +78,6 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 				continue
 			}
 
-			// Find missing methods.
 			var missing []string
 			for methodName := range iface.Methods {
 				if _, ok := methods[methodName]; !ok {
@@ -153,8 +103,6 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 	return formatComplianceWarning(filePath, violations)
 }
 
-// extractInterfaceMethodSets parses Go source and returns a map of interface
-// name → required method signatures.
 func extractInterfaceMethodSets(src string) map[string]map[string]string {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -197,7 +145,6 @@ func extractInterfaceMethodSets(src string) map[string]map[string]string {
 	return result
 }
 
-// methodSetsEqual compares two interface method signature maps for equality.
 func methodSetsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
@@ -210,24 +157,17 @@ func methodSetsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// scanPackageTypeMethods reads all .go files in the same directory (excluding
-// the edited file and test files) and builds a map of type name → set of
-// method names. This enables duck-typing checks without full type-checking.
-// It handles method promotion from embedded structs (Bug C fix).
-// The newContent parameter allows parsing types from the edited file for
-// proper embedded promotion detection.
 func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[string]bool {
-	// First pass: collect all type declarations (for embedded field info)
-	typeDecls := make(map[string][]string) // type name → list of embedded type names
+
+	typeDecls := make(map[string][]string)
 	var filesToProcess []*ast.File
 
-	// Parse the newContent (edited file) to include its types
 	if strings.TrimSpace(newContent) != "" {
 		fset := token.NewFileSet()
 		newFile, err := parser.ParseFile(fset, "", newContent, 0)
 		if err == nil {
 			filesToProcess = append(filesToProcess, newFile)
-			// Collect type declarations from new content
+
 			for _, decl := range newFile.Decls {
 				genDecl, ok := decl.(*ast.GenDecl)
 				if !ok || genDecl.Tok != token.TYPE {
@@ -242,11 +182,10 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 					if !ok {
 						continue
 					}
-					// Extract embedded fields
 					var embedded []string
 					if structType.Fields != nil {
 						for _, field := range structType.Fields.List {
-							// Embedded field: has no field names
+
 							if len(field.Names) == 0 {
 								embeddedName := receiverTypeName(field.Type)
 								if embeddedName != "" {
@@ -261,7 +200,6 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 		}
 	}
 
-	// Parse other files in the directory
 	entries, err := os.ReadDir(dir)
 	if err == nil {
 		excludeBase := filepath.Base(excludeFile)
@@ -274,7 +212,7 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 				continue
 			}
 			if name == excludeBase {
-				continue // skip the file being edited (already parsed as newContent)
+				continue
 			}
 
 			path := filepath.Join(dir, name)
@@ -285,7 +223,6 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 			}
 			filesToProcess = append(filesToProcess, file)
 
-			// Collect type declarations for embedded field info
 			for _, decl := range file.Decls {
 				genDecl, ok := decl.(*ast.GenDecl)
 				if !ok || genDecl.Tok != token.TYPE {
@@ -300,11 +237,10 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 					if !ok {
 						continue
 					}
-					// Extract embedded fields
 					var embedded []string
 					if structType.Fields != nil {
 						for _, field := range structType.Fields.List {
-							// Embedded field: has no field names
+
 							if len(field.Names) == 0 {
 								embeddedName := receiverTypeName(field.Type)
 								if embeddedName != "" {
@@ -319,7 +255,6 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 		}
 	}
 
-	// Second pass: collect all methods
 	methods := make(map[string]map[string]bool)
 	for _, file := range filesToProcess {
 		for _, decl := range file.Decls {
@@ -338,15 +273,14 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 		}
 	}
 
-	// Third pass: promote methods from embedded types (depth-first, handle cycles)
 	result := make(map[string]map[string]bool)
 	for typeName, ownMethods := range methods {
-		// Start with own methods
+
 		completeMethods := make(map[string]bool)
 		for m := range ownMethods {
 			completeMethods[m] = true
 		}
-		// Promote from embedded types
+
 		promoteEmbeddedMethods(typeName, typeDecls, methods, completeMethods, make(map[string]bool))
 		result[typeName] = completeMethods
 	}
@@ -354,8 +288,6 @@ func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[
 	return result
 }
 
-// promoteEmbeddedMethods recursively promotes methods from embedded types.
-// Uses visited map to detect and break cycles.
 func promoteEmbeddedMethods(
 	typeName string,
 	typeDecls map[string][]string,
@@ -370,18 +302,17 @@ func promoteEmbeddedMethods(
 
 	embedded := typeDecls[typeName]
 	for _, embName := range embedded {
-		// Add all methods from embedded type
+
 		if embMethods, ok := methods[embName]; ok {
 			for m := range embMethods {
 				completeMethods[m] = true
 			}
 		}
-		// Recurse into embedded type's own embeddings
+
 		promoteEmbeddedMethods(embName, typeDecls, methods, completeMethods, visited)
 	}
 }
 
-// formatComplianceWarning produces the guidance string injected into the tool result.
 func formatComplianceWarning(filePath string, violations []complianceViolation) string {
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].InterfaceName != violations[j].InterfaceName {

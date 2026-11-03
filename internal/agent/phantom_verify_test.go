@@ -8,19 +8,16 @@ import (
 func TestPhantomVerifyState_recordToolCall(t *testing.T) {
 	s := newPhantomVerifyState()
 
-	// Running a test command should mark test category as run
 	s.recordToolCall("run_command", "go test ./internal/agent/", false)
 	if !s.categoriesRun[phantomCatTest] {
 		t.Error("expected test category to be marked as run after 'go test' command")
 	}
 
-	// Running a build command should mark build category as run
 	s.recordToolCall("run_command", "go build ./...", false)
 	if !s.categoriesRun[phantomCatBuild] {
 		t.Error("expected build category to be marked as run after 'go build' command")
 	}
 
-	// A non-verification tool call should not mark any category
 	s2 := newPhantomVerifyState()
 	s2.recordToolCall("read_file", "/some/path/file.go", false)
 	for cat := range s2.categoriesRun {
@@ -30,7 +27,7 @@ func TestPhantomVerifyState_recordToolCall(t *testing.T) {
 
 func TestDetectPhantomClaims_testClaimWithoutCommand(t *testing.T) {
 	s := newPhantomVerifyState()
-	// No verification commands run
+
 	text := "I implemented the feature. All tests pass and the build compiles successfully."
 	claims := s.detectPhantomClaims(text)
 
@@ -52,7 +49,7 @@ func TestDetectPhantomClaims_testClaimWithoutCommand(t *testing.T) {
 
 func TestDetectPhantomClaims_testClaimWithCommandNotFlagged(t *testing.T) {
 	s := newPhantomVerifyState()
-	// Run a test command first
+
 	s.recordToolCall("run_command", "go test ./internal/agent/", false)
 	text := "All tests pass."
 	claims := s.detectPhantomClaims(text)
@@ -158,7 +155,7 @@ func TestDetectPhantomClaims_dedupBySentence(t *testing.T) {
 	s := newPhantomVerifyState()
 	text := "All tests pass. All tests pass."
 	claims := s.detectPhantomClaims(text)
-	// Should dedupe to at most one claim per category per sentence
+
 	testCount := 0
 	for _, c := range claims {
 		if c.category == phantomCatTest {
@@ -217,10 +214,6 @@ func TestMaybeWarnPhantomVerify_includesCategory(t *testing.T) {
 	}
 }
 
-// TestPhantomEverRunEditInvalidation pins #1598-A: the session-level
-// everRun exemption survives untouched back-references but is cleared by a
-// successful edit - a fresh post-edit "tests passed" claim must be checked
-// again (the detector's core false-completion target).
 func TestPhantomEverRunEditInvalidation(t *testing.T) {
 	s := newPhantomVerifyState()
 	s.categoriesEverRun["test"] = true

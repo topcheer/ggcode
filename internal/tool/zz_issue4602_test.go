@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// TestIssue4602_EXDEVSuccessDropsRestoredSourceKey (#4602): after the EXDEV
-// fallback's copy+RemoveAll succeed, the source key that the failure-entry
-// restore re-created must be dropped - the tracker must not keep a read
-// record for a path that no longer exists (recreating the file at the source
-// path would then skip the #4448 blind-write warning). Source-pinned: a real
-// EXDEV needs two filesystems; the guard's presence in the success branch is
-// the contract.
 func TestIssue4602_EXDEVSuccessDropsRestoredSourceKey(t *testing.T) {
 	b, err := os.ReadFile("file_ops.go")
 	if err != nil {
@@ -23,11 +16,10 @@ func TestIssue4602_EXDEVSuccessDropsRestoredSourceKey(t *testing.T) {
 	if removeAllAt < 0 {
 		t.Fatal("EXDEV RemoveAll branch not found - file_ops.go drifted")
 	}
-	// The cleanup guard must sit after the RemoveAll error return, before the
-	// read-state carry-over comment block.
-	carryAt := strings.Index(src, "// Carry the read-state over to the new path")
+
+	carryAt := strings.Index(src, "defaultFileTracker.RecordRead(destination)")
 	if carryAt < 0 {
-		t.Fatal("carry-over comment not found - file_ops.go drifted")
+		t.Fatal("carry-over to destination not found - file_ops.go drifted")
 	}
 	between := src[removeAllAt:carryAt]
 	if !strings.Contains(between, "RemoveTracking(source)") {

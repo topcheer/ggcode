@@ -1,15 +1,5 @@
 package agent
 
-// Regression probes for #3072 (experience_recall, r379 decision-time half):
-//   V1: the injection header asserted "A similar failure pattern was seen"
-//       unconditionally, but retrieval is lexical over task+error text - a
-//       task-keyword hit is NOT a confirmed failure-pattern match.
-//   V2: decision-time recall never deduped against the run-start injection;
-//       the shared task prefix made the same cases re-surface mid-run.
-//   V3: the error excerpt took the FIRST 240 runes, which in Go build/test
-//       output is package-path and === RUN noise while the actionable error
-//       sits at the end.
-
 import (
 	"path/filepath"
 	"strings"
@@ -28,7 +18,6 @@ func seed3072Store(t *testing.T, dir string) {
 	}
 }
 
-// V1: header must be conditional wording, not a failure-pattern assertion.
 func TestIssue3072_ConditionalWording(t *testing.T) {
 	dir := t.TempDir()
 	seed3072Store(t, dir)
@@ -49,7 +38,6 @@ func TestIssue3072_ConditionalWording(t *testing.T) {
 	}
 }
 
-// V2: cases injected at run-start must not be re-injected at decision time.
 func TestIssue3072_NoReinjectionOfRunStartCases(t *testing.T) {
 	dir := t.TempDir()
 	store := memory.NewExperienceStore(filepath.Join(dir, ".ggcode", "memory", "experience"))
@@ -60,7 +48,6 @@ func TestIssue3072_NoReinjectionOfRunStartCases(t *testing.T) {
 	}
 	a := &Agent{workingDir: dir}
 
-	// Simulate the run-start injection path.
 	if idx := a.recallExperience("fix login test"); idx == "" {
 		t.Fatal("run-start recall found nothing")
 	}
@@ -68,16 +55,12 @@ func TestIssue3072_NoReinjectionOfRunStartCases(t *testing.T) {
 		t.Fatal("run-start recall did not track injected case IDs")
 	}
 
-	// Same case would rank first for the failure query too - it must be
-	// excluded now (only case in the store => recall stays empty).
 	if got := a.maybeRecallExperienceOnFailure("fix login test",
 		"login test failed: SessionValidator asserted wall time, flaky: exit status 1"); got != "" {
 		t.Fatalf("run-start case re-injected at decision time (V2): %q", got)
 	}
 }
 
-// V2 companion: with a second distinct relevant case, exclusion picks the
-// OTHER case instead of duplicating the run-start one.
 func TestIssue3072_ExclusionPicksFreshCase(t *testing.T) {
 	dir := t.TempDir()
 	store := memory.NewExperienceStore(filepath.Join(dir, ".ggcode", "memory", "experience"))
@@ -105,26 +88,25 @@ func TestIssue3072_ExclusionPicksFreshCase(t *testing.T) {
 	}
 }
 
-// V3: long error output must keep the TAIL (real Go errors) not head noise.
 func TestIssue3072_TailBiasedTruncation(t *testing.T) {
 	var b strings.Builder
-	b.WriteString("=== RUN TestAll\n") // head noise
+	b.WriteString("=== RUN TestAll\n")
 	for i := 0; i < 200; i++ {
 		b.WriteString("package/internal/subpkg fixture line ")
 		b.WriteString(strings.Repeat("x", 8))
 		b.WriteString("\n")
 	}
-	b.WriteString("--- FAIL: TestAll: session.go:42: SessionValidator asserted wall time\n") // the real error
+	b.WriteString("--- FAIL: TestAll: session.go:42: SessionValidator asserted wall time\n")
 	long := b.String()
 
 	got := truncateErrorForQuery(long)
 	if !strings.Contains(got, "SessionValidator asserted wall time") {
 		t.Fatal("tail error line lost by truncation (V3)")
 	}
-	if len([]rune(got)) > 80+160+16 { // head + tail + separator slack
+	if len([]rune(got)) > 80+160+16 {
 		t.Fatalf("truncation budget exceeded: %d runes", len([]rune(got)))
 	}
-	// Short errors pass through untouched.
+
 	short := "boom: exit status 1"
 	if truncateErrorForQuery(short) != short {
 		t.Fatalf("short error mutated: %q", truncateErrorForQuery(short))

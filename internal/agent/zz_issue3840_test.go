@@ -1,9 +1,5 @@
 package agent
 
-// #3840 probes: a start_command LAUNCH is not a test result. The launch
-// error must not write lastBuildFailed / realBuildOrTestRunThisRun; only a
-// completed run_command execution may.
-
 import (
 	"encoding/json"
 	"testing"
@@ -21,16 +17,12 @@ func mustMarshal3840(s string) json.RawMessage {
 
 func TestIssue3840_BackgroundLaunchWritesNoEvidence(t *testing.T) {
 	a := NewAgent(nil, nil, "sys", 5)
-	// A failed foreground test sets the failure flag (baseline sanity).
+
 	issue3840Reset(t, a, "run_command", "go test ./...", true)
 	if !a.postEditVerify.lastBuildFailed {
 		t.Fatal("baseline: run_command failure must set lastBuildFailed")
 	}
 
-	// Successful background LAUNCH of the same test must NOT clear the
-	// failure flag (the background outcome is unknown). The real-evidence
-	// gate write is deliberately KEPT for launches (#3796: spawn+read-back
-	// is a legitimate verification pattern).
 	a.postEditVerify.realBuildOrTestRunThisRun = false
 	issue3840Reset(t, a, "start_command", "go test ./...", false)
 	if !a.postEditVerify.lastBuildFailed {

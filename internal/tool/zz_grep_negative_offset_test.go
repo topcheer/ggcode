@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// Panic-guard regression test: offset/head_limit arrive as model-generated
-// JSON. A negative offset used to reach lines[start:end] with only an upper
-// clamp and panicked the CLI process ("slice bounds out of range"). The
-// Execute entry point now normalizes both to 0, so negative values must
-// behave exactly like their zero values in every output mode.
 func TestGrepNegativeOffsetNoPanic(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {

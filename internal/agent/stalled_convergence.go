@@ -1,42 +1,5 @@
 package agent
 
-// Stalled Convergence Detector
-//
-// Research basis:
-//   - SICA (arXiv 2504.15228): self-improving coding agents exhibit
-//     "convergence stagnation" -- error counts decrease slowly but plateau,
-//     indicating the agent is patching symptoms rather than root causes.
-//   - ODCV-Bench (arXiv 2512.20798): outcome-driven constraint violations
-//     where agents optimize a partial metric (error count) without actually
-//     achieving the goal (compilation/test success).
-//   - Anthropic Context Engineering (Sep 2025): agents get stuck in
-//     "diminishing returns" loops where each iteration yields smaller
-//     improvements until progress effectively halts.
-//
-// Problem: AI coding agents fixing build/test errors often show a pattern:
-//   Iteration 1: 20 errors -> edit -> 15 errors (good progress)
-//   Iteration 2: 15 errors -> edit -> 13 errors (decelerating)
-//   Iteration 3: 13 errors -> edit -> 12 errors (plateauing)
-//   Iteration 4: 12 errors -> edit -> 12 errors (stalled)
-//   Iteration 5: 12 errors -> edit -> 11 errors (trivial)
-// The agent is stuck in a local optimum -- each fix only addresses a
-// surface symptom while the root cause persists. No existing detector
-// catches this "slow bleed" pattern.
-//
-// Detection: Track error counts across verification runs. When 3+
-// consecutive verifications show diminishing improvements (delta < 30%
-// of the initial delta), inject guidance to step back and reconsider
-// the approach rather than continuing to patch individual errors.
-//
-// What this does NOT duplicate:
-//   - error_regression.go: detects error count INCREASES (opposite direction)
-//   - fix_cascade.go: detects edit->fail CYCLES (same errors returning)
-//   - recurring_error.go: detects same error FINGERPRINT recurring
-//   - compounding_failure.go: tracks aggregate failure RATE, not trend slope
-//   - convergence_lock.go: fires after SUCCESS (post-verification drift)
-//
-// Design: zero LLM cost, deterministic. Fires at most twice per run.
-
 import (
 	"fmt"
 	"strconv"
@@ -46,21 +9,13 @@ import (
 )
 
 const (
-	// stalledMinSamples: minimum number of verification data points before
-	// assessing trend (we need at least 3: initial, improved, stalled).
 	stalledMinSamples = 2
 
-	// maxStalledWarnings caps how many stagnation warnings fire per run.
 	maxStalledWarnings = 2
 
-	// stalledDecelRatio: if the latest delta is less than this fraction of
-	// the peak delta, the convergence has effectively stalled.
 	stalledDecelRatio = 0.3
 )
 
-// stalledConvergenceCheckCommand is the Agent-level wrapper that checks
-// whether a verification command result shows a stalled convergence pattern.
-// Returns guidance if stagnation is detected.
 func (a *Agent) stalledConvergenceCheckCommand(toolName string, args []byte, content string, isError bool) string {
 	if a.stalledConvergence == nil {
 		return ""
@@ -75,16 +30,11 @@ func (a *Agent) stalledConvergenceCheckCommand(toolName string, args []byte, con
 	return a.stalledConvergence.recordVerify(content, isError)
 }
 
-// stalledConvergenceState tracks error count trends across verifications
-// to detect stalled convergence patterns.
 type stalledConvergenceState struct {
-	// errorHistory records error counts from successive verifications.
 	errorHistory []int
 
-	// hadEdits tracks whether edits occurred since last verification.
 	hadEdits bool
 
-	// warningCount tracks how many stagnation warnings fired this run.
 	warningCount int
 }
 
@@ -98,31 +48,19 @@ func (s *stalledConvergenceState) reset() {
 	s.warningCount = 0
 }
 
-// recordEdit notes that a file edit occurred.
 func (s *stalledConvergenceState) recordEdit() {
 	s.hadEdits = true
 }
 
-// recordVerify processes a verification result and returns guidance if
-// stalled convergence is detected.
 func (s *stalledConvergenceState) recordVerify(content string, failed bool) string {
 	currentErrors := countVerifyErrors(content)
 
-	// #3596: a SUCCESSFUL verification resolves the current error set --
-	// the convergence episode is over. Appending the (typically zero)
-	// count instead would poison every later delta: any real error count
-	// after a 0 yields d > 0, permanently failing isStalledConvergence's
-	// non-increasing gate for the rest of the run in mixed verify flows
-	// (`go build && go test`, lint-then-test). Restart the sequence so
-	// the next failure opens a fresh episode.
 	if !failed {
 		s.errorHistory = nil
 		s.hadEdits = false
 		return ""
 	}
 
-	// No edits since the last verification: keep the sample for baseline,
-	// but don't assess trend without edits.
 	if !s.hadEdits {
 		s.errorHistory = append(s.errorHistory, currentErrors)
 		s.hadEdits = false
@@ -132,12 +70,10 @@ func (s *stalledConvergenceState) recordVerify(content string, failed bool) stri
 	s.errorHistory = append(s.errorHistory, currentErrors)
 	s.hadEdits = false
 
-	// Need at least stalledMinSamples+1 data points to assess a trend.
 	if len(s.errorHistory) < stalledMinSamples+1 {
 		return ""
 	}
 
-	// Cap history to avoid unbounded growth.
 	if len(s.errorHistory) > 10 {
 		s.errorHistory = s.errorHistory[len(s.errorHistory)-10:]
 	}
@@ -157,32 +93,23 @@ func (s *stalledConvergenceState) recordVerify(content string, failed bool) stri
 	return ""
 }
 
-// isStalledConvergence analyzes the error count history to detect a
-// decelerating convergence pattern.
-//
-// Pattern: errors are decreasing (overall trend is down) but the rate
-// of improvement has decelerated to near-zero -- the last delta is less
-// than stalledDecelRatio of the peak delta.
 func isStalledConvergence(history []int) bool {
 	n := len(history)
 	if n < stalledMinSamples+1 {
 		return false
 	}
 
-	// Compute deltas between consecutive verifications.
 	deltas := make([]int, 0, n-1)
 	for i := 1; i < n; i++ {
 		deltas = append(deltas, history[i]-history[i-1])
 	}
 
-	// The errors should be non-increasing (overall downward or flat).
 	for _, d := range deltas {
 		if d > 0 {
-			return false // error count increased -- not convergence
+			return false
 		}
 	}
 
-	// Find the peak improvement (most negative delta = biggest improvement).
 	peakImprovement := 0
 	for _, d := range deltas {
 		if d < peakImprovement {
@@ -190,32 +117,22 @@ func isStalledConvergence(history []int) bool {
 		}
 	}
 
-	// If there was never a meaningful improvement, this isn't "stalled
-	// convergence" -- it's just a flat error count (other detectors handle that).
 	if peakImprovement > -1 {
 		return false
 	}
 
-	// Check the last delta: if it's near-zero relative to peak,
-	// convergence has stalled. With 3+ samples, we need at least the
-	// last delta to be small. With 4+ samples, we also check the
-	// second-to-last to confirm the stall is persistent.
 	lastDelta := deltas[len(deltas)-1]
-	peakAbs := -peakImprovement // make positive
+	peakAbs := -peakImprovement
 	if peakAbs == 0 {
 		return false
 	}
 
-	// Last delta deceleration ratio: |lastDelta| / peakAbs
 	lastRatio := float64(absInt(lastDelta)) / float64(peakAbs)
 
-	// Stalled: last delta is less than stalledDecelRatio of peak.
 	if lastRatio >= stalledDecelRatio {
 		return false
 	}
 
-	// With 4+ samples (3+ deltas), also require the second-to-last delta
-	// to be decelerated, confirming a persistent stall.
 	if len(deltas) >= 3 {
 		prevDelta := deltas[len(deltas)-2]
 		prevRatio := float64(absInt(prevDelta)) / float64(peakAbs)
@@ -227,7 +144,6 @@ func isStalledConvergence(history []int) bool {
 	return true
 }
 
-// absInt returns the absolute value of an integer.
 func absInt(n int) int {
 	if n < 0 {
 		return -n
@@ -235,7 +151,6 @@ func absInt(n int) int {
 	return n
 }
 
-// stalledGuidance generates the guidance message for stalled convergence.
 func stalledGuidance(history []int) string {
 	last := history[len(history)-1]
 	histStr := make([]string, len(history))

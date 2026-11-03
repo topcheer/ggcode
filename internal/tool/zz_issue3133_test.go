@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #3133 V2 probe: the scan must accept combined-diff hunk headers
-// (@@@ ... +e,f @@@ - unmerged paths during cherry-pick/rebase) and
-// report issue lines at the NEW-file line numbers of the last +
-// section; the old regex anchored exactly two @ and left newLineNum
-// carrying the previous hunk's residue.
 func TestIssue3133_CombinedHunkHeaderLineNumbers(t *testing.T) {
 	diff := "diff --git a/conflict.go b/conflict.go\n" +
 		"--- a/conflict.go\n" +
@@ -44,8 +39,6 @@ func TestIssue3133_PlainHunkStillWorks(t *testing.T) {
 	}
 }
 
-// V2 residual-flush probe: a combined header after a plain hunk must
-// RESET the counter (no carry-over residue).
 func TestIssue3133_CombinedHeaderResetsCounter(t *testing.T) {
 	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n+TODO: first\n" +
 		"--- a/b.go\n+++ b/b.go\n@@@ -1 +1,2 @@@\n ctx\n+TODO: second\n"

@@ -11,13 +11,10 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// ——— SwarmTaskCreate ———
-
 func TestSwarmTaskCreateTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
-	// #1705 case 2: assignee must be a real teammate ID - spawn one so the
-	// legacy expectation (assignee accepted) holds under the new gate.
+
 	tmSnap, err := mgr.SpawnTeammate(team.ID, "worker", "32", nil)
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
@@ -116,7 +113,7 @@ func TestFormatTaskPromptEmphasizesCollaborationRules(t *testing.T) {
 		"avoid duplicate effort",
 		"one clear handoff task",
 		"teammate runner will update the task board",
-		// #351: inbox prompt must carry the acceptance-criteria reminder.
+
 		"acceptance criteria",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -156,13 +153,10 @@ func TestSwarmTaskCreateTool_TeamNotFound(t *testing.T) {
 	}
 }
 
-// ——— SwarmTaskList ———
-
 func TestSwarmTaskListTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
 
-	// Create some tasks first
 	createTool := SwarmTaskCreateTool{Manager: mgr}
 	for i := 0; i < 3; i++ {
 		input, _ := json.Marshal(map[string]interface{}{
@@ -223,13 +217,10 @@ func TestSwarmTaskListTool_Empty(t *testing.T) {
 	}
 }
 
-// ——— SwarmTaskClaim ———
-
 func TestSwarmTaskClaimTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
 
-	// Create a task
 	createTool := SwarmTaskCreateTool{Manager: mgr}
 	input, _ := json.Marshal(map[string]interface{}{
 		"team_id": team.ID,
@@ -237,7 +228,6 @@ func TestSwarmTaskClaimTool(t *testing.T) {
 	})
 	createResult, _ := createTool.Execute(context.Background(), input)
 
-	// Parse task ID from result
 	var created struct {
 		ID string `json:"id"`
 	}
@@ -247,7 +237,6 @@ func TestSwarmTaskClaimTool(t *testing.T) {
 		t.Fatalf("failed to parse task ID from: %q", createResult.Content)
 	}
 
-	// Claim it
 	tool := SwarmTaskClaimTool{Manager: mgr}
 	input, _ = json.Marshal(map[string]string{
 		"team_id": team.ID,
@@ -264,13 +253,10 @@ func TestSwarmTaskClaimTool(t *testing.T) {
 	}
 }
 
-// ——— SwarmTaskComplete ———
-
 func TestSwarmTaskCompleteTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
 
-	// Create and claim a task
 	createTool := SwarmTaskCreateTool{Manager: mgr}
 	input, _ := json.Marshal(map[string]interface{}{
 		"team_id": team.ID,
@@ -292,7 +278,6 @@ func TestSwarmTaskCompleteTool(t *testing.T) {
 	})
 	claimTool.Execute(context.Background(), claimInput)
 
-	// Complete it
 	tool := SwarmTaskCompleteTool{Manager: mgr}
 	input, _ = json.Marshal(map[string]string{
 		"team_id": team.ID,
@@ -308,12 +293,9 @@ func TestSwarmTaskCompleteTool(t *testing.T) {
 	}
 }
 
-// ——— Integration: Full swarm workflow ———
-
 func TestSwarmWorkflow(t *testing.T) {
 	mgr := swarmTestManager(t)
 
-	// 1. Create team
 	teamCreate := TeamCreateTool{Manager: mgr}
 	input, _ := json.Marshal(map[string]string{
 		"name":      "workflow-team",
@@ -333,7 +315,6 @@ func TestSwarmWorkflow(t *testing.T) {
 		t.Fatalf("failed to parse team ID from: %q", result.Content)
 	}
 
-	// 2. Create tasks
 	taskCreate := SwarmTaskCreateTool{Manager: mgr}
 	for _, subj := range []string{"Research", "Implement", "Test"} {
 		input, _ := json.Marshal(map[string]interface{}{
@@ -346,7 +327,6 @@ func TestSwarmWorkflow(t *testing.T) {
 		}
 	}
 
-	// 3. List tasks
 	taskList := SwarmTaskListTool{Manager: mgr}
 	input, _ = json.Marshal(map[string]string{"team_id": teamID})
 	result, _ = taskList.Execute(context.Background(), input)
@@ -354,7 +334,6 @@ func TestSwarmWorkflow(t *testing.T) {
 		t.Fatalf("step 3 failed: %s", result.Content)
 	}
 
-	// 4. Delete team
 	teamDelete := TeamDeleteTool{Manager: mgr}
 	input, _ = json.Marshal(map[string]string{"team_id": teamID})
 	result, _ = teamDelete.Execute(context.Background(), input)
@@ -364,8 +343,7 @@ func TestSwarmWorkflow(t *testing.T) {
 }
 
 func TestSwarmTaskCreateTool_NoAssigneeNotifiesIdleRunners(t *testing.T) {
-	// When no assignee is specified, the tool should call NotifyIdleRunners
-	// so idle teammates can claim immediately instead of waiting for poller.
+
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
 
@@ -384,7 +362,6 @@ func TestSwarmTaskCreateTool_NoAssigneeNotifiesIdleRunners(t *testing.T) {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
 
-	// Verify the task was created (no panic from NotifyIdleRunners)
 	if !strings.Contains(result.Content, "Unassigned task") {
 		t.Errorf("result should contain task subject, got: %s", result.Content)
 	}
@@ -401,7 +378,7 @@ func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
 	if !strings.Contains(createParams, "direct-delivered") || !strings.Contains(createParams, "do not also call swarm_task_claim") {
 		t.Fatalf("swarm_task_create assignee schema should warn about direct delivery: %s", createParams)
 	}
-	// #351: the description parameter must guide a task contract.
+
 	if !strings.Contains(createParams, "acceptance criteria") {
 		t.Fatalf("swarm_task_create description schema should guide acceptance criteria: %s", createParams)
 	}
@@ -417,8 +394,6 @@ func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
 	}
 }
 
-// #1343: claim must refuse tasks directly assigned to a different
-// teammate (poller-parity guard) while allowing the assignee itself.
 func TestSwarmTaskClaimRejectsAssignedToOther(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("team-a", "leader")
@@ -443,7 +418,6 @@ func TestSwarmTaskClaimRejectsAssignedToOther(t *testing.T) {
 		return json.RawMessage(fmt.Sprintf(`{"team_id":%q,"task_id":%q,"owner":%q,"description":"x"}`, team.ID, tt.ID, owner))
 	}
 
-	// Another teammate must be rejected.
 	res, err := tool.Execute(context.Background(), input("tm-3"))
 	if err != nil {
 		t.Fatal(err)
@@ -456,7 +430,6 @@ func TestSwarmTaskClaimRejectsAssignedToOther(t *testing.T) {
 		t.Fatal("rejected claim must not move the task to in_progress")
 	}
 
-	// The assignee itself (and unassigned tasks) still claim normally.
 	res, err = tool.Execute(context.Background(), input("tm-2"))
 	if err != nil {
 		t.Fatal(err)

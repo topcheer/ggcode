@@ -191,7 +191,7 @@ func f3(e sync.Cond) {}
 	if len(result) == 0 {
 		t.Fatal("expected warnings, got none")
 	}
-	// Should be capped at maxCopylockWarnings + 1 truncation message
+
 	if len(result) > maxCopylockWarnings+1 {
 		t.Fatalf("expected at most %d warnings, got %d", maxCopylockWarnings+1, len(result))
 	}

@@ -2,9 +2,6 @@ package tool
 
 import "testing"
 
-// TestRmLongFlagDispersed verifies #384: dispersed long-flag rm forms with
-// the target path between the flags must hit block/ask, not fall through
-// to Allow.
 func TestRmLongFlagDispersed(t *testing.T) {
 	g := NewCommandGate()
 	r := g.Check("rm --force /etc --recursive")

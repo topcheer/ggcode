@@ -8,21 +8,6 @@ import (
 	"time"
 )
 
-// #3249: the r447 negative-signal channel was wired to the agent's own
-// undo_edit tool (self-correction) instead of user-initiated undo paths
-// (TUI /undo -> checkpoint restore), so agent self-corrections silently
-// recycled rules learned from REAL user rewrites, while true user undos
-// bumped mtimes that CheckTurnBoundary then misread as POSITIVE signals.
-// These tests pin the corrected attribution:
-//   - agent self-undo (NoteAgentUndo): wrote[] cleanup only - pending
-//     observations and promoted rules must survive, negHits untouched.
-//   - user undo (RecordUserUndo -> NoteNegativeSignal): cancels pending,
-//     repetition retires rules (already pinned in user_edit_negative_test.go).
-//   - source-level wiring pin: agent.go's undo_edit branch must not call
-//     NoteNegativeSignal.
-
-// TestIssue3249AgentUndoPreservesPending: agent self-undo must NOT cancel a
-// pending observation accumulated from a real user rewrite.
 func TestIssue3249AgentUndoPreservesPending(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "main.go")
@@ -50,8 +35,6 @@ func TestIssue3249AgentUndoPreservesPending(t *testing.T) {
 	}
 }
 
-// TestIssue3249AgentUndoNeverRetiresRule: any number of agent self-undos
-// must never recycle a promoted user_edit rule.
 func TestIssue3249AgentUndoNeverRetiresRule(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "main.go")
@@ -70,9 +53,6 @@ func TestIssue3249AgentUndoNeverRetiresRule(t *testing.T) {
 	}
 }
 
-// TestIssue3249AgentUndoNeutralizesMtimeBump: end-to-end - the undo's own
-// mtime bump must not be misread as a user rewrite at the turn boundary.
-// Control arm proves the bump IS detected when the write is still tracked.
 func TestIssue3249AgentUndoNeutralizesMtimeBump(t *testing.T) {
 	run := func(withUndo bool) int {
 		o, dir := newTestObserver(t)
@@ -84,7 +64,7 @@ func TestIssue3249AgentUndoNeutralizesMtimeBump(t *testing.T) {
 		if withUndo {
 			o.NoteAgentUndo(f)
 		}
-		// Simulate the undo_edit restore rewriting the file (mtime bump).
+
 		if err := os.WriteFile(f, []byte("v0\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -105,8 +85,6 @@ func TestIssue3249AgentUndoNeutralizesMtimeBump(t *testing.T) {
 	}
 }
 
-// TestIssue3249RecordUserUndoDelegates: the exported TUI/desktop bridge must
-// reach the observer's true negative-signal path (user rejection semantics).
 func TestIssue3249RecordUserUndoDelegates(t *testing.T) {
 	o, dir := newTestObserver(t)
 	a := &Agent{}
@@ -137,9 +115,6 @@ func TestIssue3249RecordUserUndoDelegates(t *testing.T) {
 	}
 }
 
-// TestIssue3249WiringSourcePin: agent.go's undo_edit branch must route to
-// NoteAgentUndo, never NoteNegativeSignal (source-level regression pin,
-// same discipline as the #1644 scheduler pin).
 func TestIssue3249WiringSourcePin(t *testing.T) {
 	data, err := os.ReadFile("agent.go")
 	if err != nil {
@@ -150,7 +125,7 @@ func TestIssue3249WiringSourcePin(t *testing.T) {
 	if i < 0 {
 		t.Fatal("undo_edit branch not found in agent.go")
 	}
-	// Window: the branch body extends a few hundred bytes past the match.
+
 	end := i + 700
 	if end > len(src) {
 		end = len(src)

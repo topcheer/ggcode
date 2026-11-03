@@ -20,7 +20,6 @@ func TestErrorRushState_SingleError(t *testing.T) {
 	s.recordToolCall("run_command", "build failed", true)
 	s.recordToolCall("edit_file", "ok", false)
 
-	// Only 1 error, below threshold of 2
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected no warning with single error, got: %s", msg)
 	}
@@ -48,7 +47,7 @@ func TestErrorRushState_TwoErrorsThenReadBreaksPattern(t *testing.T) {
 	s := newErrorRushState()
 	s.recordToolCall("run_command", "build failed", true)
 	s.recordToolCall("run_command", "test failed", true)
-	// Diagnostic read breaks the blind-fix pattern
+
 	s.recordToolCall("read_file", "file content", false)
 	s.recordToolCall("edit_file", "ok", false)
 
@@ -80,7 +79,7 @@ func TestErrorRushState_ErrorSnippetIncluded(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected warning")
 	}
-	// Should include relevant error snippet
+
 	if !strings.Contains(msg, "Last error:") {
 		t.Errorf("warning should include error snippet, got: %s", msg)
 	}
@@ -88,7 +87,7 @@ func TestErrorRushState_ErrorSnippetIncluded(t *testing.T) {
 
 func TestErrorRushState_MaxWarns(t *testing.T) {
 	s := newErrorRushState()
-	// First rush
+
 	s.recordToolCall("run_command", "error 1", true)
 	s.recordToolCall("run_command", "error 2", true)
 	s.recordToolCall("edit_file", "ok", false)
@@ -98,7 +97,6 @@ func TestErrorRushState_MaxWarns(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second rush -- suppressed (1 per run, batch 2 guidance-noise cleanup)
 	s.recordToolCall("run_command", "error 3", true)
 	s.recordToolCall("run_command", "error 4", true)
 	s.recordToolCall("edit_file", "ok", false)
@@ -108,7 +106,6 @@ func TestErrorRushState_MaxWarns(t *testing.T) {
 		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
-	// Third rush -- should be capped
 	s.recordToolCall("run_command", "error 5", true)
 	s.recordToolCall("run_command", "error 6", true)
 	s.recordToolCall("edit_file", "ok", false)
@@ -137,7 +134,6 @@ func TestErrorRushState_Reset(t *testing.T) {
 func TestErrorRushState_RepeatWarningEscalates(t *testing.T) {
 	s := newErrorRushState()
 
-	// First rush
 	s.recordToolCall("run_command", "error 1", true)
 	s.recordToolCall("run_command", "error 2", true)
 	s.recordToolCall("edit_file", "ok", false)
@@ -149,8 +145,6 @@ func TestErrorRushState_RepeatWarningEscalates(t *testing.T) {
 		t.Logf("first warning: %s", msg1)
 	}
 
-	// Second rush -- suppressed (1 per run, batch 2 guidance-noise cleanup).
-	// Escalation wording is no longer reachable in a single run.
 	s.recordToolCall("run_command", "error 3", true)
 	s.recordToolCall("run_command", "error 4", true)
 	s.recordToolCall("edit_file", "ok", false)
@@ -191,23 +185,20 @@ func TestErrorRushState_SuccessfulBuildResetsStreak(t *testing.T) {
 	s := newErrorRushState()
 	s.recordToolCall("run_command", "error 1", true)
 	s.recordToolCall("run_command", "error 2", true)
-	// A successful non-error, non-diagnostic tool resets the streak
+
 	s.recordToolCall("git_status", "clean", false)
 	s.recordToolCall("edit_file", "ok", false)
 
-	// consecutiveErrors was reset by the successful git_status call
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected no warning after successful tool reset streak, got: %s", msg)
 	}
 }
 
-// #149: the first warning must report the error streak that TRIGGERED the
-// rush (snapshot), not the already-reset zero.
 func TestErrorRushState_FirstWarnReportsStreak(t *testing.T) {
 	s := newErrorRushState()
 	s.recordToolCall("run_command", "exit 1", true)
 	s.recordToolCall("run_command", "exit 1", true)
-	s.recordToolCall("edit_file", "", false) // blind fix: streak resets here
+	s.recordToolCall("edit_file", "", false)
 	g := s.check()
 	if g == "" {
 		t.Fatal("expected guidance")

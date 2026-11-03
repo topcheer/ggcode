@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// fakeSkillLookup implements SkillLookup for testing.
 type fakeSkillLookup struct {
 	skills map[string]*commands.Command
 }
@@ -26,7 +25,6 @@ func (f fakeSkillLookup) SkillNames() []string {
 	return names
 }
 
-// fakeSkillLookup also satisfies skillUsageRecorder.
 func (f fakeSkillLookup) RecordUsage(name string) {}
 
 func makeFakeSkills() fakeSkillLookup {
@@ -160,7 +158,7 @@ func TestSkillSearch_ExactNameRanking(t *testing.T) {
 		"description": "test",
 	})
 	result, _ := tool.Execute(t.Context(), input)
-	// Exact match "deploy" should rank before "deploy-advanced"
+
 	deployIdx := strings.Index(result.Content, "- deploy:")
 	advancedIdx := strings.Index(result.Content, "deploy-advanced")
 	if deployIdx < 0 || advancedIdx < 0 {

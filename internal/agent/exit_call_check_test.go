@@ -216,7 +216,7 @@ func handler() {
 	if len(warnings) == 0 {
 		t.Fatal("expected at least one warning")
 	}
-	// Should mention both functions.
+
 	if !strings.Contains(warnings[0], "os.Exit") || !strings.Contains(warnings[0], "log.Fatal") {
 		t.Logf("warning text: %s", warnings[0])
 	}

@@ -1,29 +1,5 @@
 package agent
 
-// Session Time Budget — per-run wall-clock soft-convergence ladder (r415).
-//
-// The token dimension (session_token_budget.go) already implements the
-// BAGEN-style mid-run budget awareness: 80% convergence guidance, 95%
-// finalize pressure, 100% wind-down stop. The time dimension had only the
-// hard SessionTimeout (ctx cancellation) — no progressive signal the LLM
-// can perceive and react to. This file mirrors the token state machine for
-// wall-clock time:
-//
-//   - storage:  SetSessionTimeBudget (agent.go) -> setAgentSessionTimeBudget
-//   - getter:   Agent.SessionTimeBudget()
-//   - check:    Agent.RecordSessionTimeUsage() evaluates elapsed-vs-budget
-//     after each LLM call, from the run-start timestamp set by
-//     resetSessionTimeUsage() (called at the same site as
-//     resetSessionTokenUsage).
-//
-// Distinct from SessionTimeout: the timeout is a hard ctx deadline (kill);
-// this budget is a soft ladder (steer). A run may legitimately configure
-// both — budget 10m steers at 8m/9.5m, timeout 30m kills at 30m.
-//
-// State lives in a package-level sync.Map keyed by *Agent, mirroring the
-// token budget's storage pattern (issue #543 confined agent.go edits to
-// setter bodies; the pattern stuck).
-
 import (
 	"fmt"
 	"sync"
@@ -33,29 +9,20 @@ import (
 )
 
 const (
-	// sessionTimeBudgetWarnThreshold: inject convergence guidance when this
-	// fraction of the time budget has elapsed.
 	sessionTimeBudgetWarnThreshold = 0.80
 
-	// sessionTimeBudgetUrgentThreshold: inject urgent finalize pressure.
 	sessionTimeBudgetUrgentThreshold = 0.95
 
-	// sessionTimeBudgetStopThreshold: wind down when fully elapsed. Not a
-	// kill — the run is told to conclude and summarize (an in-flight LLM
-	// call cannot be cheaply aborted without losing its output).
 	sessionTimeBudgetStopThreshold = 1.0
 )
 
-var agentSessionTimeBudgets sync.Map // map[*Agent]*sessionTimeBudgetState
+var agentSessionTimeBudgets sync.Map
 
-// sessionTimeBudgetState tracks wall-clock elapsed time against a
-// configurable per-run budget.
 type sessionTimeBudgetState struct {
 	mu       sync.Mutex
-	budget   time.Duration // 0 = no enforcement
-	runStart time.Time     // zero until the first reset/record of a run
+	budget   time.Duration
+	runStart time.Time
 
-	// Threshold flags so each fires at most once per run.
 	warn80Given bool
 	warn95Given bool
 	stopGiven   bool
@@ -73,8 +40,6 @@ func sessionTimeBudgetStateFor(a *Agent) *sessionTimeBudgetState {
 	return v.(*sessionTimeBudgetState)
 }
 
-// setAgentSessionTimeBudget stores the configured budget. 0 disables
-// enforcement and clears any previously set budget.
 func setAgentSessionTimeBudget(a *Agent, budget time.Duration) {
 	if a == nil {
 		return
@@ -85,8 +50,6 @@ func setAgentSessionTimeBudget(a *Agent, budget time.Duration) {
 	st.mu.Unlock()
 }
 
-// SessionTimeBudget returns the configured per-run wall-clock budget
-// (0 = not configured / unlimited).
 func (a *Agent) SessionTimeBudget() time.Duration {
 	if a == nil {
 		return 0
@@ -97,10 +60,6 @@ func (a *Agent) SessionTimeBudget() time.Duration {
 	return st.budget
 }
 
-// RecordSessionTimeUsage evaluates elapsed wall-clock time against the
-// budget. Returns a guidance message when a threshold is crossed for the
-// first time, and stop=true when the budget is fully elapsed. Call after
-// each LLM response, next to RecordSessionTokenUsage.
 func (a *Agent) RecordSessionTimeUsage() (string, bool) {
 	if a == nil {
 		return "", false
@@ -112,17 +71,13 @@ func (a *Agent) RecordSessionTimeUsage() (string, bool) {
 		return "", false
 	}
 	if st.runStart.IsZero() {
-		// Defensive: a consumer that never got the run-start reset still
-		// gets a first observation now rather than an instant 100%.
+
 		st.runStart = time.Now()
 		return "", false
 	}
 	return st.checkLocked(time.Since(st.runStart))
 }
 
-// resetSessionTimeUsage clears per-run elapsed state (budget config kept)
-// and re-arms the run-start timestamp. Called at the same site as
-// resetSessionTokenUsage.
 func (a *Agent) resetSessionTimeUsage() {
 	if a == nil {
 		return
@@ -136,16 +91,12 @@ func (a *Agent) resetSessionTimeUsage() {
 	st.mu.Unlock()
 }
 
-// checkLocked evaluates thresholds; the caller holds st.mu.
 func (s *sessionTimeBudgetState) checkLocked(elapsed time.Duration) (string, bool) {
 	if s.budget <= 0 {
 		return "", false
 	}
 	pct := float64(elapsed) / float64(s.budget)
 
-	// Urgent 95% evaluated before the stop so the finalize guidance always
-	// fires once even when a long call jumps straight past 100% (mirrors
-	// the token ladder's ordering rationale, #543).
 	if pct >= sessionTimeBudgetUrgentThreshold && !s.warn95Given {
 		s.warn95Given = true
 		s.warn80Given = true

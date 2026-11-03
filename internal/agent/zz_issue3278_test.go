@@ -1,11 +1,5 @@
 package agent
 
-// Probes for #3278: /traj clear only purged the workspace tier while the
-// renderer kept injecting global-tier fillers - visible in /traj list
-// but unkillable without a manual rm. The fix adds a global-tier clear
-// (same lock discipline) plus a remaining-count helper that powers the
-// bare-clear hint.
-
 import (
 	"os"
 	"path/filepath"
@@ -35,7 +29,7 @@ func TestIssue3278_ClearGlobalAndRemaining(t *testing.T) {
 	if n, err := TrajGlobalRemaining(); err != nil || n != 0 {
 		t.Fatalf("after clear: n=%d err=%v (want 0)", n, err)
 	}
-	// Idempotent: second clear on an absent file is fine.
+
 	if err := TrajClearGlobalLearnings(); err != nil {
 		t.Fatalf("clear global must be idempotent: %v", err)
 	}

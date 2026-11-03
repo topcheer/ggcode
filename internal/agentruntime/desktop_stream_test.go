@@ -209,9 +209,7 @@ func TestDesktopSemanticPreservesToolCallIDForResult(t *testing.T) {
 }
 
 func TestHandleDesktopStreamEventErrorResetsRound(t *testing.T) {
-	// Regression for #1482: the Error branch used to leave the round
-	// populated, so an aborted turn's partial text leaked into the next
-	// turn's EmitRoundSummary.
+
 	round := &IMRoundState{}
 	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "partial output"}, round, nil, nil)
 	if round.Text() != "partial output" {

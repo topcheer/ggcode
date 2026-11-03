@@ -1,8 +1,5 @@
 package agent
 
-// sa-140 (TVAE, arXiv:2604.05477): structured expectation declaration,
-// deterministic per-step verification, asymmetric immediate feedback.
-
 import (
 	"strings"
 	"testing"
@@ -61,8 +58,7 @@ func mkTC(name string) provider.ToolCallDelta { return provider.ToolCallDelta{Na
 
 func TestRecordPredictionPreferStructuredDeclaration(t *testing.T) {
 	s := newForesightCalibrateState()
-	// Multi-tool turn WITH tool-attributed declaration: must be recorded
-	// (legacy path skips multi-tool turns entirely).
+
 	s.recordPrediction("checking now\nEXPECT: grep >=1_match", []provider.ToolCallDelta{mkTC("read_file"), mkTC("grep")}, 3)
 	if len(s.predictions) != 1 {
 		t.Fatalf("want 1 attributed declaration, got %d", len(s.predictions))
@@ -71,7 +67,7 @@ func TestRecordPredictionPreferStructuredDeclaration(t *testing.T) {
 	if p.toolName != "grep" || p.expectCheck != ">=1_match" || p.iteration != 3 {
 		t.Fatalf("prediction = %+v", p)
 	}
-	// Consumption: grep result (empty) violates >=1_match -> immediate warning.
+
 	hint := s.checkCalibration("read_file", "file contents here", false, 3)
 	if hint != "" {
 		t.Fatalf("read_file must not consume grep-attributed declaration, got %q", hint)
@@ -84,7 +80,7 @@ func TestRecordPredictionPreferStructuredDeclaration(t *testing.T) {
 
 func TestAsymmetricNegativeDeclarationSilent(t *testing.T) {
 	s := newForesightCalibrateState()
-	// Declared failure but succeeded: false alarm -- counted, NOT injected.
+
 	s.recordPrediction("EXPECT: run_command fail", []provider.ToolCallDelta{mkTC("run_command")}, 1)
 	hint := s.checkCalibration("run_command", "ok\nexit code 0", false, 1)
 	if hint != "" {
@@ -97,7 +93,7 @@ func TestAsymmetricNegativeDeclarationSilent(t *testing.T) {
 
 func TestLegacyRegexFallbackIntact(t *testing.T) {
 	s := newForesightCalibrateState()
-	// No EXPECT marker: legacy free-text prediction path still works.
+
 	s.recordPrediction("The test should pass now.", []provider.ToolCallDelta{mkTC("run_command")}, 2)
 	if len(s.predictions) != 1 {
 		t.Fatalf("legacy prediction not recorded, got %d", len(s.predictions))
@@ -105,7 +101,7 @@ func TestLegacyRegexFallbackIntact(t *testing.T) {
 	if s.predictions[0].expectCheck != "" {
 		t.Fatalf("legacy path must leave expectCheck empty, got %q", s.predictions[0].expectCheck)
 	}
-	// Legacy path keeps threshold semantics: single mismatch injects nothing.
+
 	if hint := s.checkCalibration("run_command", "exit code 1", false, 2); hint != "" {
 		t.Fatalf("legacy path must respect threshold of 3, got %q", hint)
 	}

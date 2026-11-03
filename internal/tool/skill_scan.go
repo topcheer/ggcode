@@ -8,31 +8,11 @@ import (
 	"strings"
 )
 
-// Skill import content scan (#r481, "Malicious Agent Skills in the Wild").
-//
-// A .ggskill bundle is a prompt by another name: the SKILL.md body is
-// injected as a USER message when the skill loads, and companion scripts
-// run when executed. importSkill (skill_portable.go) already enforces the
-// STRUCTURAL guards (path traversal, archive bombs, SSRF, manifest
-// validation) but performs zero CONTENT inspection - a malicious bundle
-// that passes those checks lands on disk silently and enters the prompt
-// stream the next time it is invoked.
-//
-// scanSkillDir walks the freshly imported skill directory and flags
-// high-confidence malicious patterns. It is ADVISORY and non-blocking
-// (import still succeeds): false positives must not lock users out of
-// their own skills, but the warnings make the injection surface visible
-// at import time instead of at exploitation time.
-
-// scanSkillPattern couples one high-confidence detection with the label
-// reported to the user.
 type scanSkillPattern struct {
 	label   string
 	pattern *regexp.Regexp
 }
 
-// Instruction-injection patterns: text that tries to override the
-// assistant's standing instructions when the skill body is injected.
 var skillInjectionPatterns = []scanSkillPattern{
 	{
 		label:   "instruction-override attempt",
@@ -44,8 +24,6 @@ var skillInjectionPatterns = []scanSkillPattern{
 	},
 }
 
-// Dangerous-command patterns: remote pipe-to-shell execution, recursive
-// root deletion, and credential exfiltration via outbound requests.
 var skillCommandPatterns = []scanSkillPattern{
 	{
 		label:   "remote pipe-to-shell",
@@ -61,8 +39,6 @@ var skillCommandPatterns = []scanSkillPattern{
 	},
 }
 
-// suspiciousSkillRunes: zero-width and bidi-override codepoints that can
-// hide injection text from human review of the skill source.
 var suspiciousSkillRunes = map[rune]string{
 	'\u200b': "zero-width space", '\u200c': "zero-width non-joiner",
 	'\u200d': "zero-width joiner", '\u200e': "left-to-right mark",
@@ -77,12 +53,10 @@ var suspiciousSkillRunes = map[rune]string{
 
 const scanSkillMaxFileBytes = 256 * 1024
 
-// scanSkillText scans one file's content and returns human-readable
-// warnings. Exposed for tests.
 func scanSkillText(relName string, content []byte) []string {
 	var warns []string
 	if idx := strings.IndexByte(string(content), 0); idx >= 0 {
-		return nil // binary file - skip pattern scanning entirely
+		return nil
 	}
 	text := string(content)
 	for _, grp := range [][]scanSkillPattern{skillInjectionPatterns, skillCommandPatterns} {
@@ -107,8 +81,6 @@ func scanSkillText(relName string, content []byte) []string {
 	return warns
 }
 
-// scanSkillDir walks an imported skill directory and scans every
-// reasonably-sized text file for malicious patterns.
 func scanSkillDir(dir string) []string {
 	var warns []string
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {

@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #4503 pin: TunnelHost.Close must stop the active share's BROKER as well
-// as the session - after DetachOnlineBroker the online broker is nil but
-// ref.broker lives on, and its outLoop/textTick leaked until process exit.
 func TestIssue4503_CloseStopsDetachedBroker(t *testing.T) {
 	b, err := os.ReadFile("tunnel_host.go")
 	if err != nil {

@@ -240,15 +240,14 @@ func (b Big) Mutate() {
 	if len(warnings) != 5 {
 		t.Fatalf("expected 5 warnings (capped), got %d: %v", len(warnings), warnings)
 	}
-	// Last entry should be the truncation notice
+
 	if !contains(warnings[4], "potentially more") {
 		t.Errorf("last warning should be truncation notice: %s", warnings[4])
 	}
 }
 
 func TestValueRecvMutation_ReceiverTypeShort(t *testing.T) {
-	// vrmReceiverTypeShort extracts type name from AST expressions.
-	// nil returns "?"
+
 	if got := vrmReceiverTypeShort(nil); got != "?" {
 		t.Errorf("expected '?' for nil, got %q", got)
 	}

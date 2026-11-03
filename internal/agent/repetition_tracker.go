@@ -9,59 +9,19 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// repetitionTracker implements semantic-level repetition detection that goes
-// beyond the exact-match loop detector in loop_detect.go.
-//
-// Research basis: SICA's async overseer (Robeyns et al. 2025, arXiv:2504.15228)
-// monitors the agent's execution trajectory for pathological patterns. The key
-// insight from Reflexion (Shinn et al. 2023) and the Iterative Refinement Loop
-// is that agents often get stuck in "near-miss loops" — repeatedly attempting
-// to edit the same file with slightly different arguments, each attempt failing
-// for the same underlying reason.
-//
-// The exact-match loop detector misses these because each attempt has different
-// arguments. This tracker operates at a higher level of abstraction:
-// "same tool + same file + error" = semantic repetition, regardless of arg
-// differences.
-//
-// Detection modes:
-//  1. Failed-edit clustering: N+ failed edits to the same file path
-//     (edit_file, write_file, multi_edit_file, multi_file_edit).
-//  2. Repeated failed searches: N+ failed search_files/grep calls with
-//     semantically similar patterns (same directory or overlapping terms).
-//  3. Read-edit-read cycle: reading the same file >3 times interleaved with
-//     failed edits to it — the agent is "refreshing" without understanding.
-//
-// Intervention escalation (per file):
-//   - 3 failed edits → gentle hint: re-read the file, check whitespace
-//   - 5 failed edits → strong warning: try a completely different approach
-//   - 7 failed edits → escalate: suggest ask_user or skip this change
-//
-// All interventions fire at most once per escalation level per file per run.
-
 const (
-	failedEditSoftThreshold = 3 // gentle hint
-	failedEditHardThreshold = 5 // strong warning
-	failedEditEscThreshold  = 7 // escalate to ask_user
+	failedEditSoftThreshold = 3
+	failedEditHardThreshold = 5
+	failedEditEscThreshold  = 7
 )
 
 type repetitionTracker struct {
 	mu sync.Mutex
 
-	// failedEditsByFile counts failed edit attempts per file path.
-	// Key is the normalized file path from tool args.
 	failedEditsByFile map[string]int
 
-	// firedLevels tracks which escalation level has fired for each file.
-	// Prevents duplicate interventions at the same level.
-	// Key: "filepath:level" (e.g., "main.go:soft")
 	firedLevels map[string]bool
 
-	// lastEditFile removed (#333): dead field — declared for read-edit-read
-	// cycle detection but never read; cycle detection uses failedEditsByFile.
-
-	// readAfterFailedEdit counts read_file calls to a file that had a recent
-	// failed edit, without a successful edit in between.
 	readAfterFailedEdit map[string]int
 }
 
@@ -73,8 +33,6 @@ func newRepetitionTracker() *repetitionTracker {
 	}
 }
 
-// recordEditAttempt tracks a file-editing tool call result.
-// Returns guidance text if intervention is needed, "" otherwise.
 func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMessage, isError bool) string {
 	if !fileEditingTools[toolName] {
 		return ""
@@ -84,9 +42,7 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 	if filePath == "" {
 		return ""
 	}
-	// #556: shared rune-safe key so edit-side and read-side counters agree
-	// even for >80-rune paths (the read side previously keyed on a truncated
-	// hint from overseer.extractFileHint, so the two sides never matched).
+
 	filePath = repetitionFileKey(filePath)
 
 	rt.mu.Lock()
@@ -95,7 +51,7 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 	if isError {
 		rt.failedEditsByFile[filePath]++
 	} else {
-		// Successful edit — reset counters for this file.
+
 		rt.failedEditsByFile[filePath] = 0
 		rt.readAfterFailedEdit[filePath] = 0
 		return ""
@@ -107,9 +63,6 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 	return rt.checkEscalation(filePath, count)
 }
 
-// failedEditSnapshot copies the per-file failed-edit counters for
-// run-end weakness-signal collection (sa-112); mu-guarded because parallel
-// tool batches record from worker goroutines.
 func (rt *repetitionTracker) failedEditSnapshot() map[string]int {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -120,28 +73,20 @@ func (rt *repetitionTracker) failedEditSnapshot() map[string]int {
 	return out
 }
 
-// recordReadAttempt tracks read_file calls that follow failed edits to the
-// same file. This detects the "read-edit-fail-read-edit-fail" cycle.
-// Returns guidance if the cycle threshold is exceeded.
 func (rt *repetitionTracker) recordReadAttempt(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	// #556: same shared key as the edit side — see repetitionFileKey.
+
 	filePath = repetitionFileKey(filePath)
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	// Only count reads of files with recent failed edits.
 	if rt.failedEditsByFile[filePath] > 0 {
 		rt.readAfterFailedEdit[filePath]++
 	}
 
-	// If we've read the file 3+ times after failed edits, suggest stepping back.
-	// Note: the ":cycle" level is once per run (never cleared on a successful
-	// edit), unlike the soft/hard/escalate counters which reset — intentional,
-	// consistent with "fire at most once per escalation level" in the header.
 	cycleKey := filePath + ":cycle"
 	if rt.readAfterFailedEdit[filePath] >= 3 && !rt.firedLevels[cycleKey] {
 		rt.firedLevels[cycleKey] = true
@@ -161,9 +106,8 @@ func (rt *repetitionTracker) recordReadAttempt(filePath string) string {
 	return ""
 }
 
-// checkEscalation returns guidance based on the failed-edit count for a file.
 func (rt *repetitionTracker) checkEscalation(filePath string, count int) string {
-	// Escalation ladder: each level fires once.
+
 	if count >= failedEditEscThreshold {
 		key := filePath + ":escalate"
 		if rt.firedLevels[key] {
@@ -216,7 +160,6 @@ func (rt *repetitionTracker) checkEscalation(filePath string, count int) string 
 	return ""
 }
 
-// reset clears all tracking state for a new run.
 func (rt *repetitionTracker) reset() {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -225,25 +168,16 @@ func (rt *repetitionTracker) reset() {
 	rt.readAfterFailedEdit = make(map[string]int)
 }
 
-// normalizeFilePath canonicalizes a file path for tracking purposes.
-// Strips leading "./" and resolves to a consistent form.
 func normalizeFilePath(path string) string {
 	path = strings.TrimSpace(path)
-	// Strip leading "./" which varies between tools.
+
 	for strings.HasPrefix(path, "./") {
 		path = path[2:]
 	}
-	// Lowercase for case-insensitive matching (handles case-only differences
-	// that cause false negatives on case-insensitive filesystems like macOS)
-	// (#333). Trade-off: on case-sensitive filesystems this merges counters of
-	// two truly distinct files differing only by case — acceptable: worst case
-	// is one premature soft hint at 3 failures, far lighter than the escalate
-	// false-negative this normalization prevents.
+
 	return strings.ToLower(path)
 }
 
-// truncateRunesSafe truncates s to at most max runes without ever slicing
-// through a multi-byte sequence.
 func truncateRunesSafe(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -252,25 +186,11 @@ func truncateRunesSafe(s string, max int) string {
 	return string(r[:max])
 }
 
-// repetitionFileKey is the canonical tracker key for a file path, shared by
-// the edit side (recordEditAttempt) and the read side (recordReadAttempt).
-// #556: previously the edit side keyed on the full normalized path while the
-// read side keyed on a truncated hint (overseer.go extractFileHint: >80-rune
-// paths become 77 runes + a literal "..." suffix), so for long paths the two
-// counters diverged and the read-edit-fail cycle detector never fired
-// (probe: one.go=3, two.go=0). Both sides now converge on a 77-rune key:
-// the edit side truncates to 77, the read side strips the "..." marker and
-// truncates to 77 (paths <=80 runes pass through extractFileHint unchanged
-// and truncate identically here).
 func repetitionFileKey(path string) string {
 	p := strings.TrimSuffix(normalizeFilePath(path), "...")
 	return truncateRunesSafe(p, 77)
 }
 
-// --- Agent integration ---
-
-// repetitionCheckEdit is called from the agent loop after a file-editing tool
-// completes. It tracks the result and returns guidance if intervention is needed.
 func (a *Agent) repetitionCheckEdit(toolName string, args json.RawMessage, isError bool) string {
 	if a.repetition == nil {
 		return ""
@@ -278,8 +198,6 @@ func (a *Agent) repetitionCheckEdit(toolName string, args json.RawMessage, isErr
 	return a.repetition.recordEditAttempt(toolName, args, isError)
 }
 
-// repetitionCheckRead is called from the agent loop after a read_file tool
-// completes. It detects read-edit-fail cycles.
 func (a *Agent) repetitionCheckRead(filePath string) string {
 	if a.repetition == nil {
 		return ""
@@ -287,7 +205,6 @@ func (a *Agent) repetitionCheckRead(filePath string) string {
 	return a.repetition.recordReadAttempt(filePath)
 }
 
-// resetRepetitionTracker clears all repetition tracking for a new run.
 func (a *Agent) resetRepetitionTracker() {
 	if a.repetition == nil {
 		return

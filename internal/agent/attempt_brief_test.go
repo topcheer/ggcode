@@ -24,7 +24,7 @@ func TestAttemptBriefNoFireBelowThreshold(t *testing.T) {
 	s := newAttemptBriefState()
 	s.recordOutcome("edit_file", "a.go", false, 1, "not unique")
 	s.recordOutcome("grep", "pat", false, 2, "no match")
-	// only 2 failures, need 3
+
 	if msg := s.maybeBrief(3); msg != "" {
 		t.Fatalf("expected no brief below threshold, got: %s", msg)
 	}
@@ -35,7 +35,7 @@ func TestAttemptBriefNoFireSingleTool(t *testing.T) {
 	s.recordOutcome("edit_file", "a.go", false, 1, "not unique")
 	s.recordOutcome("edit_file", "b.go", false, 2, "not unique")
 	s.recordOutcome("edit_file", "c.go", false, 3, "not unique")
-	// 3 failures but only 1 distinct tool
+
 	if msg := s.maybeBrief(4); msg != "" {
 		t.Fatalf("expected no brief for single tool, got: %s", msg)
 	}
@@ -74,11 +74,11 @@ func TestAttemptBriefMaxFireCount(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first brief")
 	}
-	second := s.maybeBrief(10) // after cooldown
+	second := s.maybeBrief(10)
 	if second == "" {
 		t.Fatal("expected second brief")
 	}
-	third := s.maybeBrief(20) // exceeds maxAttemptBriefFire=2
+	third := s.maybeBrief(20)
 	if third != "" {
 		t.Fatalf("expected no third brief, got: %s", third)
 	}
@@ -93,7 +93,7 @@ func TestAttemptBriefCooldown(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first brief")
 	}
-	// Within cooldown window - should not fire
+
 	second := s.maybeBrief(5)
 	if second != "" {
 		t.Fatalf("expected no brief during cooldown, got: %s", second)
@@ -105,7 +105,7 @@ func TestAttemptBriefExcludesSuccesses(t *testing.T) {
 	s.recordOutcome("edit_file", "a.go", false, 1, "not unique")
 	s.recordOutcome("grep", "pat", false, 2, "no match")
 	s.recordOutcome("read_file", "c.go", true, 3, "")
-	// Only 2 failures despite 3 calls
+
 	if msg := s.maybeBrief(4); msg != "" {
 		t.Fatalf("expected no brief with only 2 failures, got: %s", msg)
 	}
@@ -179,16 +179,14 @@ func TestDedupBrief(t *testing.T) {
 	}
 }
 
-// #342: fail→fix→re-run→pass must clear the failure; an unbroken success
-// streak must never fire a brief; each fire reports only NEW failures.
 func TestAttemptBriefSuccessClearsStaleFailures(t *testing.T) {
 	s := newAttemptBriefState()
-	// Three one-off failures, each immediately corrected by a successful re-run.
+
 	for i := 0; i < 3; i++ {
 		s.recordOutcome("read_file", "/tmp/a.go", false, i*2, "not found")
 		s.recordOutcome("read_file", "/tmp/a.go", true, i*2+1, "")
 	}
-	// Long unbroken success streak.
+
 	for i := 8; i < 20; i++ {
 		s.recordOutcome("edit_file", "/tmp/b.go", true, i, "")
 	}
@@ -197,7 +195,6 @@ func TestAttemptBriefSuccessClearsStaleFailures(t *testing.T) {
 	}
 }
 
-// #342: the same failure batch must not be reused for a second fire.
 func TestAttemptBriefNoBatchReuse(t *testing.T) {
 	s := newAttemptBriefState()
 	s.recordOutcome("read_file", "/tmp/a.go", false, 1, "not found")
@@ -207,34 +204,26 @@ func TestAttemptBriefNoBatchReuse(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first brief")
 	}
-	// No new failures since; second fire must not repeat the same batch.
+
 	if msg := s.maybeBrief(12); msg != "" {
 		t.Fatalf("second fire reused stale batch: %s", msg)
 	}
 }
 
-// TestAttemptBriefWatermarkOffByOne pins #1439-A: after a fire at the end
-// of iteration k (lastFireIter=k+1), failures from iteration k+1 itself
-// MUST count as new - the strict '>' dropped them (k+1 > k+1 false),
-// silencing the failure-dense stretch right after a fire and, combined
-// with the ring window + fire cap, permanently blocking the second brief.
 func TestAttemptBriefWatermarkOffByOne(t *testing.T) {
 	s := newAttemptBriefState()
-	// First fire: 3 distinct-tool failures at iteration 2; brief checked at
-	// iteration 6 (cooldown 4: lastFireIter starts at -4, 6-(-4) >= 4).
+
 	for _, tool := range []string{"run_command", "edit_file", "grep"} {
 		s.recordOutcome(tool, "t"+tool, false, 2, "boom")
 	}
 	if msg := s.maybeBrief(6); msg == "" {
 		t.Fatal("first brief should fire")
 	}
-	// Post-fire failures at iteration 6 (the maybeBrief convention: entries
-	// carry i, watermark carries i+1) must count as NEW for the next fire.
+
 	for _, tool := range []string{"run_command", "edit_file", "grep"} {
 		s.recordOutcome(tool, "u"+tool, false, 6, "boom2")
 	}
-	// The watermark (6 after the fire) must NOT drop the iteration-6
-	// failures: with the old strict '>' every one was dropped (6 > 6 false).
+
 	kept := 0
 	for _, e := range s.entries {
 		if !e.success && e.iter >= s.lastFireIter {
@@ -244,7 +233,7 @@ func TestAttemptBriefWatermarkOffByOne(t *testing.T) {
 	if kept != 3 {
 		t.Fatalf("post-fire failures dropped by watermark: kept=%d want 3", kept)
 	}
-	// And the second fire can actually trigger once cooldown passes.
+
 	if msg := s.maybeBrief(11); msg == "" {
 		t.Fatal("second brief should fire with fresh post-fire failures")
 	}

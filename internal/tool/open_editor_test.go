@@ -56,7 +56,6 @@ func TestOpenEditor_DetectEditorPriority(t *testing.T) {
 	t.Setenv("VISUAL", "emacs")
 	t.Setenv("GGCODE_EDITOR", "")
 
-	// VISUAL should win over EDITOR
 	got := detectEditor()
 	if got != "emacs" {
 		t.Errorf("expected 'emacs' (VISUAL), got %q", got)
@@ -84,7 +83,6 @@ func TestOpenEditor_BuildCommandVSCode(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.go")
 	os.WriteFile(tmpFile, []byte("package main\n"), 0644)
 
-	// VS Code with line number
 	cmd, info := buildEditorCommand("code", tmpFile, 42, 0)
 	if info.platformOpener || info.lineDropped {
 		t.Fatalf("known editor must honor line: %+v", info)
@@ -92,7 +90,7 @@ func TestOpenEditor_BuildCommandVSCode(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected non-nil command")
 	}
-	// Should use --goto with file:line
+
 	found := false
 	for _, arg := range cmd.Args {
 		if strings.Contains(arg, ":42") {
@@ -104,7 +102,6 @@ func TestOpenEditor_BuildCommandVSCode(t *testing.T) {
 		t.Errorf("expected :42 in args, got %v", cmd.Args)
 	}
 
-	// VS Code with line and column
 	cmd, _ = buildEditorCommand("code", tmpFile, 42, 10)
 	found = false
 	for _, arg := range cmd.Args {
@@ -122,7 +119,6 @@ func TestOpenEditor_BuildCommandVim(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.go")
 	os.WriteFile(tmpFile, []byte("package main\n"), 0644)
 
-	// Vim with line number
 	cmd, _ := buildEditorCommand("vim", tmpFile, 10, 0)
 	if cmd == nil {
 		t.Fatal("expected non-nil command")
@@ -161,25 +157,21 @@ func TestOpenEditor_BuildCommandFallback(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.txt")
 	os.WriteFile(tmpFile, []byte("hello\n"), 0644)
 
-	// Unknown editor should still produce a command
 	cmd, info := buildEditorCommand("myeditor", tmpFile, 0, 0)
 	if cmd == nil {
 		t.Fatal("expected non-nil command for unknown editor")
 	}
-	// #1697 case 2: the fallback must flag what it actually did so the
-	// success message can be honest.
+
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		if !info.platformOpener {
 			t.Fatalf("unknown editor on %s must set platformOpener", runtime.GOOS)
 		}
 	}
 	if !info.lineDropped {
-		// lineDropped only set when a line was requested; this call has none.
+
 	}
 }
 
-// #1697 case 2: a requested line on an unknown editor must be reported as
-// dropped, never silently swallowed.
 func TestOpenEditor_FallbackReportsDroppedLine(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "x.txt")
 	os.WriteFile(tmpFile, []byte("hi\n"), 0644)
@@ -190,14 +182,12 @@ func TestOpenEditor_FallbackReportsDroppedLine(t *testing.T) {
 }
 
 func TestOpenEditor_NoEditorDetected(t *testing.T) {
-	// Clear all env vars
+
 	t.Setenv("EDITOR", "")
 	t.Setenv("VISUAL", "")
 	t.Setenv("GGCODE_EDITOR", "")
 	t.Setenv("GID_EDITOR", "")
 
-	// detectEditor will try LookPath for IDEs, which might find something.
-	// We just verify it doesn't crash.
 	_ = detectEditor()
 }
 
@@ -206,7 +196,7 @@ func TestOpenEditor_IdeLaunchers(t *testing.T) {
 	if len(launchers) == 0 {
 		t.Error("expected non-empty IDE launcher list")
 	}
-	// Verify code is in the list
+
 	found := false
 	for _, l := range launchers {
 		if l == "code" {
@@ -219,7 +209,7 @@ func TestOpenEditor_IdeLaunchers(t *testing.T) {
 }
 
 func TestOpenEditor_LaunchAndVerify(t *testing.T) {
-	// Use a real script as the "editor" to verify the launch mechanism works.
+
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "fake-editor.sh")
 	markerPath := filepath.Join(tmpDir, "marker")
@@ -234,15 +224,8 @@ func TestOpenEditor_LaunchAndVerify(t *testing.T) {
 		t.Fatalf("startDetached failed: %v", err)
 	}
 
-	// Wait for the detached process to complete (it exits immediately after
-	// writing the marker). This is more reliable than polling under CI load
-	// where the detached process may be starved of CPU.
-	// Ignore the error — the process may have already exited (ESRCH) when
-	// running in a new session.
 	_ = cmd.Wait()
 
-	// Fall back to polling if Wait() didn't catch the process (can happen
-	// with Setsid on some platforms).
 	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(markerPath); err == nil {
 			break

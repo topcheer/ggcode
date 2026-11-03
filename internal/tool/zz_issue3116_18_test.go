@@ -1,7 +1,5 @@
 package tool
 
-// Regression probes for the #3116/#3117/#3118 tool-domain triple.
-
 import (
 	"context"
 	"encoding/json"
@@ -11,9 +9,6 @@ import (
 	"sync"
 	"testing"
 )
-
-// --- #3116: compile-keyword whitelist must not silently drop real Go
-// compile errors whose wording shares no keyword with the old list.
 
 func TestIssue3116_ImportedNotUsedSummarized(t *testing.T) {
 	out := `./internal/foo/bar.go:5:2: "fmt" imported and not used`
@@ -37,21 +32,18 @@ func TestIssue3116_RedeclaredMissingReturnDuplicate(t *testing.T) {
 }
 
 func TestIssue3116_NoKeywordRegression(t *testing.T) {
-	// Info lines that structurally match must still be excluded.
+
 	for _, line := range []string{
-		`./x.go:3:1: other declaration of foo`, // 'declaration' alone is not a keyword
+		`./x.go:3:1: other declaration of foo`,
 	} {
-		// 'other declaration of x' contains neither keyword; assert dropped.
+
 		_ = line
 	}
-	// Direct: a line with no keywords is dropped.
+
 	if s := summarizeGoBuildOutput(`./x.go:3:1: something innocuous`); s != "" {
 		t.Errorf("non-error line summarized: %q", s)
 	}
 }
-
-// --- #3117 A: Clone'd instances sharing the store file must not
-// last-writer-wins each other's entries.
 
 func TestIssue3117_CloneInstancesShareStoreSafely(t *testing.T) {
 	dir := t.TempDir()
@@ -84,7 +76,6 @@ func TestIssue3117_CloneInstancesShareStoreSafely(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Both entries must survive the interleaved saves.
 	res, err := parent.Execute(context.Background(), mustJSON3116(t, map[string]any{"action": "list"}))
 	if err != nil || res.IsError {
 		t.Fatalf("list: %v %+v", err, res)
@@ -105,23 +96,20 @@ func mustJSON3116(t *testing.T, v any) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-// --- #3117 B: an auto-save must not shadow a user entry with the same name.
-
 func TestIssue3117_AutoSnippetDoesNotShadowUserEntry(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir}
 
-	// User creates "deploy" with their own command.
 	if res, err := tool.Execute(context.Background(), mustJSON3116(t, map[string]any{
 		"action": "save", "name": "deploy", "command": "make deploy-prod",
 	})); err != nil || res.IsError {
 		t.Fatalf("user save: %v %+v", err, res)
 	}
-	// Auto-capture later saves a DIFFERENT command under the same name.
+
 	if _, err := tool.SaveAutoSnippet("deploy", "make deploy-staging", "", nil); err != nil {
 		t.Fatalf("auto save: %v", err)
 	}
-	// doGet must return the USER's command, not the auto one.
+
 	res, err := tool.Execute(context.Background(), mustJSON3116(t, map[string]any{"action": "get", "name": "deploy"}))
 	if err != nil || res.IsError {
 		t.Fatalf("get: %v %+v", err, res)
@@ -129,7 +117,7 @@ func TestIssue3117_AutoSnippetDoesNotShadowUserEntry(t *testing.T) {
 	if !strings.Contains(res.Content, "deploy-prod") || strings.Contains(res.Content, "deploy-staging") {
 		t.Fatalf("user entry shadowed by auto snippet: %s", res.Content)
 	}
-	// The auto entry survives under its disambiguated name.
+
 	res2, err := tool.Execute(context.Background(), mustJSON3116(t, map[string]any{"action": "get", "name": "deploy-auto"}))
 	if err != nil || res2.IsError {
 		t.Fatalf("get auto: %v %+v", err, res2)
@@ -139,30 +127,20 @@ func TestIssue3117_AutoSnippetDoesNotShadowUserEntry(t *testing.T) {
 	}
 }
 
-// --- #3118: ci_status list must work under a detached HEAD.
-
 func TestIssue3118_ListUsableUnderDetachedHEAD(t *testing.T) {
-	// The probe is structural: invoke Execute with a working dir that has
-	// no resolvable branch. ghRepoInfo would need network; instead verify
-	// the ordering contract directly - currentBranch failure must not be
-	// raised for list. Simulated via the fake-gh pattern when available;
-	// here we assert the code path by calling with a dir whose git lookup
-	// fails and checking the error is NOT the branch error.
-	dir := t.TempDir() // not a git repo: currentBranch would fail here
+
+	dir := t.TempDir()
 	tool := &CIStatusTool{WorkingDir: dir}
 	_, err := tool.Execute(context.Background(), mustJSON3116(t, map[string]any{"action": "list"}))
 	if err == nil {
-		return // environment resolved; nothing to assert structurally
+		return
 	}
-	// With an invalid dir the failure must come from repo resolution
-	// (ghRepoInfo), never from branch resolution (list has none).
+
 	msg := err.Error()
 	if strings.Contains(msg, "branch") {
 		t.Fatalf("list failed on branch resolution (detached-HEAD regression): %s", msg)
 	}
 }
-
-// --- store file atomicity companion (#3117 A hardening): no tmp residue.
 
 func TestIssue3117_PersistLeavesNoTmpArtifacts(t *testing.T) {
 	dir := t.TempDir()

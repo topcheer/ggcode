@@ -84,7 +84,7 @@ func process(db *sql.DB) {
 }
 
 func TestCheckNPlus1Loop_DeltaAware(t *testing.T) {
-	// The I/O in loop pattern already exists in old content.
+
 	old := `package main
 
 import "database/sql"
@@ -154,8 +154,7 @@ func TestCheckNPlus1Loop_NonGoFile(t *testing.T) {
 }
 
 func TestCheckNPlus1Loop_FuncLitExclusion(t *testing.T) {
-	// I/O inside a function literal within a loop should NOT trigger
-	// (it's likely a goroutine or callback, which is a different pattern).
+
 	new := `package main
 
 import "sync"

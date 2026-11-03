@@ -1,9 +1,5 @@
 package agent
 
-// #3491: constant-conditional W4 delta gate regression tests.
-// A file with a pre-existing intentional `if false` debug block must not
-// re-report it on unrelated edits, zero-delta writes, or line shifts.
-
 import (
 	"strings"
 	"testing"
@@ -22,7 +18,7 @@ func main() {
 `
 
 func TestConstantConditional_DeltaGate_PreexistingNotReReported(t *testing.T) {
-	// Unrelated edit: change a string literal far from the debug block.
+
 	edited := strings.Replace(ccPreexistingSrc, `"real work"`, `"real work v2"`, 1)
 	got := checkConstantConditional("main.go", ccPreexistingSrc, edited)
 	if len(got) != 0 {
@@ -38,8 +34,7 @@ func TestConstantConditional_DeltaGate_ZeroDeltaSkipped(t *testing.T) {
 }
 
 func TestConstantConditional_DeltaGate_NewInstanceOfSameCondSurfaces(t *testing.T) {
-	// Add a SECOND `if false` while the pre-existing one remains: the new
-	// instance must surface (count subtraction keeps one, reports one).
+
 	edited := strings.Replace(ccPreexistingSrc, "func main() {", "func main() {\n\tif false {\n\t\tprintln(\"another debug\")\n\t}", 1)
 	got := checkConstantConditional("main.go", ccPreexistingSrc, edited)
 	if len(got) != 1 {
@@ -51,8 +46,7 @@ func TestConstantConditional_DeltaGate_NewInstanceOfSameCondSurfaces(t *testing.
 }
 
 func TestConstantConditional_DeltaGate_NewDifferentCondSurfaces(t *testing.T) {
-	// Pre-existing `if false` stays; a NEW `if true` is a different
-	// fingerprint and must surface.
+
 	edited := strings.Replace(ccPreexistingSrc, "func main() {", "func main() {\n\tif true {\n\t\tprintln(\"always runs\")\n\t}", 1)
 	got := checkConstantConditional("main.go", ccPreexistingSrc, edited)
 	if len(got) != 1 {
@@ -64,9 +58,7 @@ func TestConstantConditional_DeltaGate_NewDifferentCondSurfaces(t *testing.T) {
 }
 
 func TestConstantConditional_DeltaGate_LineShiftNotReReported(t *testing.T) {
-	// Insert lines ABOVE the pre-existing debug block: its line number
-	// moves (7 -> 10) but the position-independent fingerprint must not
-	// treat it as new (#1527 case D rationale).
+
 	edited := strings.Replace(ccPreexistingSrc, "func main() {",
 		"func main() {\n\t// added comment line 1\n\t// added comment line 2\n\t// added comment line 3", 1)
 	got := checkConstantConditional("main.go", ccPreexistingSrc, edited)
@@ -76,8 +68,7 @@ func TestConstantConditional_DeltaGate_LineShiftNotReReported(t *testing.T) {
 }
 
 func TestConstantConditional_DeltaGate_RemovalClearsWarnings(t *testing.T) {
-	// Removing the debug block entirely: nothing constant-conditional
-	// remains, no warning either.
+
 	edited := strings.Replace(ccPreexistingSrc, "	if false {\n\t\tfmt.Println(\"debug block kept on purpose\")\n\t}\n", "", 1)
 	got := checkConstantConditional("main.go", ccPreexistingSrc, edited)
 	if len(got) != 0 {

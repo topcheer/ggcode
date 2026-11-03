@@ -1,9 +1,5 @@
 package agent
 
-// #3929 probes: the checkout/switch branch-create exemption must hold ONLY
-// for the no-start-point form - `checkout -b <new> <start-point>` replaces
-// tracked content when start-point != HEAD.
-
 import "testing"
 
 func TestIssue3929_StartPointFormIsMutating(t *testing.T) {
@@ -11,12 +7,12 @@ func TestIssue3929_StartPointFormIsMutating(t *testing.T) {
 		cmd string
 		ro  bool
 	}{
-		{"git checkout -b fix origin/main", false},         // catch-up flow: tree rewritten
-		{"git checkout -B fix v1.2.3", false},              // tag start-point
-		{"git switch -c new HEAD~3", false},                // detached start-point
-		{"git checkout -b fix", true},                      // HEAD-anchored: unchanged (#3864 B)
-		{"git switch -c fix", true},                        // unchanged
-		{"git checkout -b fix --track origin/main", false}, // --track carries a start-point (positional)
+		{"git checkout -b fix origin/main", false},
+		{"git checkout -B fix v1.2.3", false},
+		{"git switch -c new HEAD~3", false},
+		{"git checkout -b fix", true},
+		{"git switch -c fix", true},
+		{"git checkout -b fix --track origin/main", false},
 	}
 	for _, c := range cases {
 		ro, found := classifyGitCommandLine(c.cmd)
@@ -29,8 +25,6 @@ func TestIssue3929_StartPointFormIsMutating(t *testing.T) {
 	}
 }
 
-// The structured git_checkout tool: create=true stays read-only only
-// WITHOUT a start_point (#3929 second path).
 func TestIssue3929_StructuredCheckoutStartPointMutating(t *testing.T) {
 	if !isReadOnlyGitInvocation("git_checkout", `{"branch":"fix","create":true}`) {
 		t.Fatal("create from HEAD stays read-only (#3864 B)")

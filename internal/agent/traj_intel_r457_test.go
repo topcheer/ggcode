@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// r457: teammate experience ingest probes (read side).
-
 func writeLedger(t *testing.T, dir string, entries []map[string]any) {
 	t.Helper()
 	var b strings.Builder
@@ -53,15 +51,14 @@ func TestIngestTeammateExperience_Idempotent(t *testing.T) {
 	writeLedger(t, dir, []map[string]any{
 		{"ts": ts, "team_id": "t1", "teammate": "tm-1", "digest": "did a thing"},
 	})
-	// First ingest folds into the pending buffer, then a persist writes it
-	// to the main store (simulating the post-run flow).
+
 	s := newTrajIntelState()
 	s.ingestTeammateExperience(dir)
 	s.filePath = filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl")
 	if err := s.persistLocked(); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
-	// Second ingest must see the high-water mark in the FILE and skip all.
+
 	s.learnings = nil
 	s.ingestTeammateExperience(dir)
 	if len(s.learnings) != 0 {
@@ -72,7 +69,7 @@ func TestIngestTeammateExperience_Idempotent(t *testing.T) {
 func TestIngestTeammateExperience_AbsentLedgerNoop(t *testing.T) {
 	dir := t.TempDir()
 	s := newTrajIntelState()
-	s.ingestTeammateExperience(dir) // no ledger file - must be a clean no-op
+	s.ingestTeammateExperience(dir)
 	if len(s.learnings) != 0 {
 		t.Fatal("absent ledger must ingest nothing")
 	}

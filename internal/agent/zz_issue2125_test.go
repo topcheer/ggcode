@@ -1,13 +1,5 @@
 package agent
 
-// #2125 regression, two detectors:
-//   - normalizeIntegrityMsg normalized EVERY digit run, collapsing the
-//     #605 G4 count suffixes ("(2 unclosed total)" == "(3 unclosed total)")
-//     so only a 1→2 worsening surfaced; 2→3, 3→4 ... were silent.
-//   - checkEditBlastRadius built line sets from UNtrimmed content while the
-//     denominator used trimmed, so cleaning up trailing blank lines
-//     produced "modified 13 of 20 lines (65%)" and tripped the gate.
-
 import (
 	"strings"
 	"testing"
@@ -37,7 +29,7 @@ func TestNormalizeStillCollapsesLineRefs(t *testing.T) {
 	if normalizeIntegrityMsg(c) != normalizeIntegrityMsg(d) {
 		t.Fatal("opened-at line refs must normalize")
 	}
-	// A count that is NOT a line ref keeps its digits (content counts).
+
 	e := "missing closing quote followed by 3 '#'"
 	f := "missing closing quote followed by 5 '#'"
 	if normalizeIntegrityMsg(e) == normalizeIntegrityMsg(f) {
@@ -46,7 +38,7 @@ func TestNormalizeStillCollapsesLineRefs(t *testing.T) {
 }
 
 func TestBlastRadiusIgnoresTrailingBlankCleanup(t *testing.T) {
-	// 20 body lines + 13 trailing blanks; the edit only deletes the blanks.
+
 	body := strings.Repeat("func line%d() {}\n", 20)
 	old := body + strings.Repeat("\n", 13)
 	if got := checkEditBlastRadius("f.go", old, body); got != "" {

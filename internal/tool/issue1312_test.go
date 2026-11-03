@@ -1,16 +1,5 @@
 package tool
 
-// Regression test for GitHub issue #1312: the nine named keys must map to
-// chromedp kb private-use rune constants, NOT their ASCII names. KeyEvent
-// feeds its argument through kb.Encode per rune; an ASCII name like
-// "ArrowDown" matches no key mapping and gets typed into the focused
-// element as literal text while the tool reports success.
-//
-// doPress needs a live Chrome tab, so the mapping itself cannot be unit
-// tested end-to-end; this pins the kb contract instead: every named-key
-// constant is a single rune outside printable ASCII (private-use area),
-// which is exactly the property the old ASCII-name mapping violated.
-
 import (
 	"testing"
 
@@ -36,8 +25,7 @@ func TestIssue1312_NamedKeysUseKbRuneConstants(t *testing.T) {
 			continue
 		}
 		r := runes[0]
-		// kb named keys live in the Unicode private-use area; a printable
-		// ASCII value means someone mapped the literal name again.
+
 		if r >= 0x20 && r < 0x7F {
 			t.Errorf("%s: kb constant %q is printable ASCII (regressed to literal name?)", name, val)
 		}

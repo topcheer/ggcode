@@ -14,38 +14,22 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// maxTodoItems limits the number of todo items in a single todo_write call.
-// The todo summary is reinjected into context after compaction, so excessive
-// items waste context space. 50 is generous for complex multi-phase work.
 const maxTodoItems = 50
 
-// Todo represents a single todo item.
 type Todo struct {
 	ID      string `json:"id"`
 	Content string `json:"content"`
-	Status  string `json:"status"` // "pending", "in_progress", "done"
+	Status  string `json:"status"`
 }
 
-// todosDir returns the global directory for session-scoped todo files:
-// ~/.ggcode/todos/
 func todosDir() string {
 	return filepath.Join(config.HomeDir(), ".ggcode", "todos")
 }
 
-// SweepStaleTodoFiles removes session todo files under ~/.ggcode/todos that
-// have not been modified for olderThan.
-//
-// #3346 (sa-247 audit): todo files are written at HOME level (one JSON per
-// session, global across workspaces) and nothing ever deleted them - same
-// unbounded-growth shape as the sessions dir before #3337. Session-scoped
-// todo lists lose all value once the session is long gone; 30d retention
-// keeps them well beyond any plausible resume window while bounding the
-// directory. mtime is the liveness signal: todo_write rewrites the whole
-// file on every update.
 func SweepStaleTodoFiles(olderThan time.Duration) int {
 	entries, err := os.ReadDir(todosDir())
 	if err != nil {
-		return 0 // no todos dir yet - nothing to sweep
+		return 0
 	}
 	cutoff := time.Now().Add(-olderThan)
 	removed := 0
@@ -55,7 +39,7 @@ func SweepStaleTodoFiles(olderThan time.Duration) int {
 		}
 		info, err := entry.Info()
 		if err != nil || info.ModTime().After(cutoff) {
-			continue // unreadable or recently touched - keep
+			continue
 		}
 		if err := os.Remove(filepath.Join(todosDir(), entry.Name())); err != nil {
 			debug.Log("todo-write", "sweep: removing stale todo file %s: %v", entry.Name(), err)
@@ -69,13 +53,6 @@ func SweepStaleTodoFiles(olderThan time.Duration) int {
 	return removed
 }
 
-// TodoFilePath returns the path to the todo file for a given session ID.
-// The path is ~/.ggcode/todos/<sessionID>.json — global, not per-workspace.
-// If sessionID is empty, returns a "_default" fallback path. This is purely
-// defensive — normal callers always pass a real session ID (or pipe pseudo-ID).
-// The _default file should never be created in normal operation because
-// TodoWrite.currentPath() returns "" when sessionID is empty, preventing
-// Execute/ClearTodos from reaching TodoFilePath("").
 func TodoFilePath(sessionID string) string {
 	id := strings.TrimSpace(sessionID)
 	if id == "" {
@@ -84,38 +61,27 @@ func TodoFilePath(sessionID string) string {
 	return filepath.Join(todosDir(), id+".json")
 }
 
-// TodoWrite implements the todo_write tool — manages a session-scoped todo list.
 type TodoWrite struct {
 	mu        sync.Mutex
-	sessionID string // current session ID; determines the todo file path
+	sessionID string
 }
 
-// NewTodoWrite creates a TodoWrite tool bound to the given session ID.
-// If sessionID is empty, the tool is unbound until SetSessionID is called.
 func NewTodoWrite(sessionID string) *TodoWrite {
 	return &TodoWrite{sessionID: sessionID}
 }
 
-// SetSessionID updates the session ID, switching which todo file is used.
 func (t *TodoWrite) SetSessionID(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.sessionID = id
 }
 
-// Clone satisfies the Cloner contract (#1707 case 1): Registry.Clone shares
-// non-Cloner instances across teammates, so a teammate's SetSessionID(tmID)
-// flipped the SHARED instance's sessionID - the leader's todo persistence
-// file became the teammate's, and the teammate's ClearTodos deleted the
-// file the leader was using. Each clone owns its sessionID.
 func (t *TodoWrite) Clone() Tool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return &TodoWrite{sessionID: t.sessionID}
 }
 
-// ClearTodos removes the todo file for the current session (if any).
-// This is called on agent stop to prevent permanent todo residue.
 func (t *TodoWrite) ClearTodos() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -126,8 +92,6 @@ func (t *TodoWrite) ClearTodos() {
 	_ = os.Remove(path)
 }
 
-// currentPath returns the todo file path for the current session.
-// Returns empty string if sessionID is unset.
 func (t *TodoWrite) currentPath() string {
 	if strings.TrimSpace(t.sessionID) == "" {
 		return ""
@@ -184,7 +148,6 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Validate
 	if len(args.Todos) > maxTodoItems {
 		return Result{IsError: true, Content: fmt.Sprintf("too many todo items: got %d, max %d. Consolidate or remove completed items.", len(args.Todos), maxTodoItems)}, nil
 	}
@@ -199,7 +162,7 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 		ids[td.ID] = struct{}{}
 		switch td.Status {
 		case "pending", "in_progress", "done":
-			// valid — multiple in_progress allowed for swarm/team workflows
+
 		default:
 			return Result{IsError: true, Content: fmt.Sprintf("invalid status %q for todo %q (must be pending, in_progress, or done)", td.Status, td.ID)}, nil
 		}
@@ -217,7 +180,6 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{Content: "Todos cleared\n"}, nil
 	}
 
-	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to create directory: %v", err)}, nil
 	}
@@ -230,7 +192,6 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: fmt.Sprintf("write failed: %v", err)}, nil
 	}
 
-	// Build summary
 	var sb strings.Builder
 	pending, progress, done := 0, 0, 0
 	for _, td := range args.Todos {
@@ -258,7 +219,6 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return Result{Content: sb.String()}, nil
 }
 
-// ListTodos reads and returns all todos from the current session's file.
 func (t *TodoWrite) ListTodos() ([]Todo, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

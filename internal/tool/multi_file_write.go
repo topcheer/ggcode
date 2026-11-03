@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-// MultiFileWrite creates or overwrites multiple files in a single call.
-// Parent directories are created automatically if they do not exist.
 type MultiFileWrite struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -89,11 +87,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q: must be atomic or partial_success", mode)}, nil
 	}
 
-	// Deduplicate paths: last write wins (same semantics as calling write_file twice).
-	// This is more forgiving than rejecting duplicates — the LLM may logically
-	// group writes but accidentally repeat a path.
-	// Build a new slice to avoid mutating the slice we are iterating over.
-	seen := make(map[string]int) // cleaned path → index in deduped slice
+	seen := make(map[string]int)
 	dedupedFiles := make([]struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -104,7 +98,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			return Result{IsError: true, Content: fmt.Sprintf("invalid path %q: %v", f.Path, err)}, nil
 		}
 		if idx, ok := seen[path]; ok {
-			// Overwrite existing entry (last wins).
+
 			dedupedFiles[idx].Content = f.Content
 		} else {
 			seen[path] = len(dedupedFiles)
@@ -116,7 +110,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 	args.Files = dedupedFiles
 
-	// Enforce total payload size to prevent context window flooding.
 	var totalBytes int
 	for _, f := range args.Files {
 		totalBytes += len(f.Content)
@@ -127,7 +120,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	type writeResult struct {
 		Path   string `json:"path"`
-		Status string `json:"status"` // "written" or "error"
+		Status string `json:"status"`
 		Bytes  int    `json:"bytes,omitempty"`
 		Error  string `json:"error,omitempty"`
 	}
@@ -135,7 +128,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	results := make([]writeResult, 0, len(args.Files))
 	hasError := false
 
-	// In atomic mode, do all sandbox checks before any writes.
 	if mode == "atomic" {
 		for _, f := range args.Files {
 			if t.SandboxCheck != nil && !t.SandboxCheck(f.Path) {
@@ -157,16 +149,12 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	failed := 0
 	skipped := 0
 
-	// In atomic mode, capture original content of existing files so we can
-	// roll back on mid-batch failure (matching multi_edit's applyAtomicPlans).
 	type originalState struct {
 		existed bool
 		content []byte
 	}
 	snapshots := make(map[string]originalState, len(args.Files))
 
-	// Capture diagnostic baselines BEFORE any writes so post-edit
-	// diagnostics can diff and show only newly introduced issues.
 	for _, f := range args.Files {
 		CaptureDiagnosticBaseline(t.WorkingDir, f.Path)
 		if mode == "atomic" {
@@ -178,8 +166,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
-	// Capture blind-write warnings BEFORE any writes or RecordWrite calls,
-	// because RecordWrite inside the loop would mark files as seen.
 	blindWarnings := make(map[string]string, len(args.Files))
 	for _, f := range args.Files {
 		if w := blindWriteWarning(f.Path); w != "" {
@@ -188,7 +174,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 
 	for _, f := range args.Files {
-		// Check for cancellation before each file write.
+
 		if ctx.Err() != nil {
 			failed++
 			results = append(results, writeResult{
@@ -199,7 +185,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
-		// Sandbox check for partial_success mode (per-file).
 		if t.SandboxCheck != nil && !t.SandboxCheck(f.Path) {
 			failed++
 			results = append(results, writeResult{
@@ -210,7 +195,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
-		// Create parent directories.
 		dir := filepath.Dir(f.Path)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			failed++
@@ -222,12 +206,8 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
-		// #2327: hold the per-path write mutex across stale-check→write for
-		// this file, same as write_file. Unlocked, a parallel write to the
-		// same path could pass its own stale check inside our window.
 		unlockW := LockWritePath(f.Path)
-		// Stale-read guard: refuse to overwrite if the file was modified
-		// externally since the agent's last read/write.
+
 		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
 			if stale, since := defaultFileTracker.CheckStale(f.Path); stale {
 				unlockW()
@@ -241,12 +221,8 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			}
 		}
 
-		// Write the file using atomic write (temp+rename) to prevent
-		// corruption on crash/mid-write failure. Consistent with all
-		// other file writing tools in the package.
 		writeData, _ := formatGoBytes(f.Path, []byte(f.Content))
 
-		// No-op guard: skip if existing content is identical.
 		if oldData, rErr := os.ReadFile(f.Path); rErr == nil && string(writeData) == string(oldData) {
 			unlockW()
 			skipped++
@@ -269,7 +245,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
-		// Record the new mtime so subsequent writes don't see false staleness.
 		defaultFileTracker.RecordWrite(f.Path)
 		unlockW()
 
@@ -281,9 +256,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		})
 	}
 
-	// Atomic mode rollback: if any write failed, restore all previously
-	// written files to their original content to honor the all-or-nothing
-	// contract. This prevents partial state from leaking to disk.
 	if mode == "atomic" && failed > 0 && written > 0 {
 		restored := 0
 		var rollbackErrs []string
@@ -296,12 +268,9 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			if !ok {
 				continue
 			}
-			// #1331: rollback errors were silently discarded - a failed
-			// restore (disk full, permission change) left new content on
-			// disk while the summary still claimed all-or-nothing.
+
 			if snap.existed {
-				// #2327: rollback restores must also take the per-path lock so
-				// they serialize against a concurrent writer of the same file.
+
 				unlockR := LockWritePath(r.Path)
 				if err := atomicWriteFile(r.Path, snap.content, 0o644); err != nil {
 					rollbackErrs = append(rollbackErrs, fmt.Sprintf("%s: restore failed: %v", r.Path, err))
@@ -317,12 +286,11 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 				restored++
 			}
 			defaultFileTracker.RecordWrite(r.Path)
-			// #1331: keep per-file detail consistent with the summary - a
-			// "written" line under a "written=0" summary contradicts itself.
+
 			r.Status = "rolled_back"
 		}
-		written = 0 // all rolled back
-		// Recount failed: all non-skipped files are effectively failed.
+		written = 0
+
 		failed = len(args.Files) - skipped
 		if len(rollbackErrs) > 0 {
 			sbWarning := fmt.Sprintf("atomic rollback INCOMPLETE - %d file(s) could not be restored; disk state is NOT all-or-nothing:\n%s",
@@ -331,7 +299,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
-	// Build summary.
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[multi_file_write] requested=%d written=%d failed=%d skipped=%d\n", len(args.Files), written, failed, skipped))
 	for _, r := range results {
@@ -349,53 +316,40 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	isError := false
 	if mode == "atomic" && failed > 0 {
-		// This shouldn't happen in atomic mode (all-or-nothing), but guard anyway.
+
 		isError = true
 	}
 
-	// Scan written files for potential secrets.
 	for _, f := range args.Files {
 		if warning := scanAndWarn(f.Path, f.Content); warning != "" {
 			sb.WriteString(warning)
 		}
 	}
 
-	// Warn about critical infrastructure files.
 	for _, f := range args.Files {
 		if warning := criticalFileWarning(f.Path); warning != "" {
 			sb.WriteString(warning)
 		}
 	}
 
-	// Warn about blind overwrites (existing files the agent never read).
 	for _, f := range args.Files {
 		if w, ok := blindWarnings[f.Path]; ok {
 			sb.WriteString(w)
 		}
 	}
 
-	// Syntax validation for written source files.
 	for _, f := range args.Files {
 		if syn := syntaxCheck(f.Path, []byte(f.Content)); syn != "" {
 			sb.WriteString(syn)
 		}
 	}
 
-	// Post-edit LSP diagnostics for written source files.
 	for _, f := range args.Files {
 		if diag := postEditDiagnostics(t.WorkingDir, f.Path); diag != "" {
 			sb.WriteString(diag)
 		}
 	}
 
-	// #2145: return the MultiFileEditContent JSON shape (like the
-	// multi_file_edit family) with the human-readable ✓/✗ lines in
-	// Summary. The previous plain-text result made every downstream
-	// JSON probe fail structurally: the #2143 integrity loop's
-	// written_paths gate (and the checkpoint unmarshal) never saw the
-	// per-file outcome, so partial_success mode kept reporting false
-	// post-write mismatches for files the summary itself listed as
-	// failed - and the tool never stored undo checkpoints.
 	out := MultiFileEditContent{
 		Mode:         "multi_file_write(" + mode + ")",
 		PlannedFiles: len(args.Files),

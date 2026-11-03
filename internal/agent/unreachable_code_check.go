@@ -12,30 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Unreachable / dead code detection for Go files after agent edits.
-//
-// Research basis: "Dead code elimination" is a classic compiler optimization,
-// but AI agents frequently INTRODUCE unreachable code during refactoring:
-//   - Adding an early return but leaving code after it
-//   - Inserting a panic() or log.Fatal() call but leaving cleanup code below
-//   - Writing `if true { ... } else { ... }` with code in the dead branch
-//   - Adding a break/continue but leaving code after it in the loop body
-//
-// go vet's "unreachable code" check covers case #1 (code after terminating
-// statements) but only at the statement level within a block. It does NOT
-// catch dead branches (if false), and agents don't always run go vet inline.
-// This check provides immediate feedback in the same iteration.
-//
-// Delta-aware: only flags unreachable code introduced by this edit.
-
-// maxUnreachableWarnings caps the number of unreachable-code warnings per write.
 const maxUnreachableWarnings = 3
 
-// checkUnreachableCode detects code that can never execute due to preceding
-// terminating statements or impossible branches. Only fires for .go files and
-// only for issues introduced by the current edit (delta-aware via text matching).
-//
-// Returns a slice of warning strings (empty if no issues).
 func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" || strings.TrimSpace(newContent) == "" {
 		return nil
@@ -65,12 +43,6 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 			return true
 		}
 
-		// #1520 case B: `goto done; done: cleanup()` - the label target and
-		// everything after it ARE reachable via the goto, yet BranchStmt
-		// (any position, tok included) was treated as a hard terminator.
-		// Conservative zero-FP rule: if any "dead" statement is a label
-		// targeted by ANY goto in the file, skip the report for this block
-		// (no control-flow analysis - we cannot soundly rank reachability).
 		if gotoTargetLabels == nil {
 			gotoTargetLabels = collectGotoLabels(goAST)
 		}
@@ -82,7 +54,6 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 
 		pos := fset.Position(deadStmts[0].Pos())
 
-		// Delta filter: render the dead statement to text and check old content.
 		snippet := renderNode(fset, deadStmts[0])
 		if snippet != "" && strings.Contains(oldContent, snippet) {
 			return true
@@ -101,7 +72,6 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 		return true
 	})
 
-	// Check for dead branches: if false { ... } or if true { ... } else { ... }
 	ast.Inspect(goAST, func(n ast.Node) bool {
 		ifs, ok := n.(*ast.IfStmt)
 		if !ok {
@@ -115,7 +85,6 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 
 		pos := fset.Position(deadBranch.Pos())
 
-		// Delta filter via text rendering.
 		snippet := renderNode(fset, deadBranch.List[0])
 		if snippet != "" && strings.Contains(oldContent, snippet) {
 			return true
@@ -141,8 +110,6 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// renderNode serializes an AST node back to source text using go/format.
-// Returns empty string on error.
 func renderNode(fset *token.FileSet, node ast.Node) string {
 	var buf bytes.Buffer
 	if err := format.Node(&buf, fset, node); err != nil {
@@ -151,8 +118,6 @@ func renderNode(fset *token.FileSet, node ast.Node) string {
 	return buf.String()
 }
 
-// collectGotoLabels returns the set of labels targeted by goto statements
-// anywhere in the file (#1520 case B).
 func collectGotoLabels(file *ast.File) map[string]bool {
 	targets := map[string]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -164,10 +129,6 @@ func collectGotoLabels(file *ast.File) map[string]bool {
 	return targets
 }
 
-// findTerminatingStmt returns the index of the first statement in the list that
-// unconditionally terminates control flow (return, panic, continue, break, goto),
-// or -1 if none found. Only non-last terminators matter (those make subsequent
-// code unreachable).
 func findTerminatingStmt(stmts []ast.Stmt) int {
 	for i, s := range stmts {
 		if i == len(stmts)-1 {
@@ -185,8 +146,6 @@ func findTerminatingStmt(stmts []ast.Stmt) int {
 	return -1
 }
 
-// isTerminatingCall checks if an expression statement is a call to a function
-// that never returns (panic, log.Fatal, log.Panic, os.Exit, runtime.Goexit).
 func isTerminatingCall(stmt ast.Stmt) bool {
 	exprStmt, ok := stmt.(*ast.ExprStmt)
 	if !ok {
@@ -220,7 +179,6 @@ func isTerminatingCall(stmt ast.Stmt) bool {
 	return false
 }
 
-// terminatingStmtName returns a human-readable name for the terminating statement.
 func terminatingStmtName(stmt ast.Stmt) string {
 	switch s := stmt.(type) {
 	case *ast.ReturnStmt:
@@ -244,7 +202,6 @@ func terminatingStmtName(stmt ast.Stmt) string {
 	return "terminating statement"
 }
 
-// stmtDescription returns a short description of a statement for warning context.
 func stmtDescription(stmt ast.Stmt) string {
 	switch s := stmt.(type) {
 	case *ast.AssignStmt:
@@ -282,9 +239,6 @@ func stmtDescription(stmt ast.Stmt) string {
 	return ""
 }
 
-// analyzeDeadBranch checks an if statement for dead branches caused by
-// constant boolean conditions (if true / if false).
-// Returns the dead branch (if any) and a description string.
 func analyzeDeadBranch(ifs *ast.IfStmt) (*ast.BlockStmt, string) {
 	lit, ok := ifs.Cond.(*ast.Ident)
 	if !ok {

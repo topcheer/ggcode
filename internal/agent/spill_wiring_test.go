@@ -7,12 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// r382 wiring coverage: NewAgent must wire the run_command omitted-middle
-// spill hook when the registry contains a RunCommand, must not panic on a
-// nil registry (the 5a95aa5a2 hotfix), and must tolerate registries that
-// lack run_command entirely. The nil case previously panicked inside
-// Registry.Get (nil receiver deref) and broke
-// TestMaybeInjectDynamicSystemPromptIncludesTemporal on CI.
 func TestRunCommandSpillWiring(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{

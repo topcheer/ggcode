@@ -7,34 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Unverified Success Claim Detector
-//
-// Research basis: "Premature Completion" anti-pattern (agentpatterns.ai, 2026),
-// SRI Lab/ETH Zurich "Fixing correct code" study, and SWE-EVO (arxiv 2512.18470)
-// "Premature Termination" failure mode. All four independent teams found that
-// agents produce confident-sounding success claims ("tests pass", "build succeeds",
-// "all fixed") in their text WITHOUT having actually run verification commands.
-//
-// The gap: ggcode has sync-verify (build check after edits), fulfillment_gate
-// (keyword overlap at exit), and verification_debt (accumulated edit tracking).
-// But NONE of them cross-reference the agent's NATURAL LANGUAGE claims against
-// actual verification tool usage. An agent that says "all tests pass" in its
-// final response but never ran `go test` or any test command is making an
-// unverified success claim.
-//
-// This detector fills that gap with a deterministic, zero-LLM-cost heuristic:
-//   1. CLAIM DETECTION: scan the agent's response text for success phrases
-//      ("tests pass", "build succeeds", "verified", "all passing", etc.)
-//   2. VERIFICATION CHECK: cross-reference against CommandsRun to see if a
-//      build/test/verification command was actually executed
-//   3. CROSS-CHECK: also check if verify-related tools (lsp_diagnostics, etc.)
-//      were used as alternative verification
-//
-// The detector fires AT MOST ONCE per run, injecting a reminder that gives
-// the agent a chance to actually run verification before returning.
-
-// successClaimPhrases are phrases that indicate the agent is asserting
-// verification results in its response text. These are lowercased for matching.
 var successClaimPhrases = []string{
 	"tests pass", "all tests pass", "test passes", "tests are passing",
 	"all passing", "tests passing", "unit tests pass",
@@ -51,8 +23,6 @@ var successClaimPhrases = []string{
 	"type checks", "type checking passes",
 }
 
-// verificationToolNames are tools that serve as alternative verification
-// (beyond explicit build/test shell commands).
 var verificationToolNames = map[string]bool{
 	"lsp_diagnostics": true,
 	"code_health":     true,
@@ -60,7 +30,6 @@ var verificationToolNames = map[string]bool{
 	"scan_todos":      true,
 }
 
-// unverifiedClaimState tracks whether the detector has already fired this run.
 type unverifiedClaimState struct {
 	fired bool
 }
@@ -73,19 +42,6 @@ func (u *unverifiedClaimState) reset() {
 	u.fired = false
 }
 
-// checkUnverifiedClaim scans the agent's response for success claims that
-// lack corresponding verification tool usage. Returns a non-empty message
-// if an unverified claim is detected.
-//
-// Parameters:
-//   - assistantText: the agent's final response text
-//   - runStats: accumulated stats from the run
-//
-// Returns "" when:
-//   - the detector already fired this run
-//   - no success claims found in the response
-//   - verification commands were actually run
-//   - verification tools (diagnostics, etc.) were used
 func (a *Agent) checkUnverifiedClaim(assistantText string, runStats *RunStats) string {
 	if a.unverifiedClaim.fired {
 		return ""
@@ -96,25 +52,21 @@ func (a *Agent) checkUnverifiedClaim(assistantText string, runStats *RunStats) s
 		return ""
 	}
 
-	// Step 1: Detect success claims in the response text.
 	claims := detectSuccessClaims(text)
 	if len(claims) == 0 {
 		return ""
 	}
 
-	// Step 2: Check if build/test verification commands were actually run.
 	if hasVerificationCommands(runStats) {
 		debug.Log("unverified-claim", "claims found (%v) but verification commands present — OK", claims[:min(3, len(claims))])
 		return ""
 	}
 
-	// Step 3: Check if verification-related tools were used as alternative.
 	if hasVerificationTools(runStats) {
 		debug.Log("unverified-claim", "claims found (%v) but verification tools present — OK", claims[:min(3, len(claims))])
 		return ""
 	}
 
-	// Claims found but no verification performed — inject reminder.
 	a.unverifiedClaim.fired = true
 	debug.Log("unverified-claim", "unverified success claims detected: %v", claims[:min(3, len(claims))])
 
@@ -128,10 +80,6 @@ func (a *Agent) checkUnverifiedClaim(assistantText string, runStats *RunStats) s
 	)
 }
 
-// detectSuccessClaims returns the matching success-claim phrases found in text.
-// Matching is word-bounded (#407): the bare phrase "verified" previously
-// matched inside "unverified" / "not yet verified" / "unvalidated", turning
-// negated contexts into false success claims.
 func detectSuccessClaims(text string) []string {
 	lower := strings.ToLower(text)
 	var found []string
@@ -145,8 +93,6 @@ func detectSuccessClaims(text string) []string {
 	return found
 }
 
-// containsWordBounded reports whether phrase occurs in lower with
-// non-alphanumeric boundaries on both sides. Inputs must be lowercase.
 func containsWordBounded(lower, phrase string) bool {
 	p := strings.ToLower(phrase)
 	for from := 0; ; {
@@ -169,8 +115,6 @@ func claimIsWordByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
 }
 
-// isBuildTestCommand checks if a command is a build/test/lint command.
-// Extracted from deleted behavior_pattern.go module.
 func isBuildTestCommand(lower string) bool {
 	prefixes := []string{
 		"go build", "go test", "go vet",
@@ -185,8 +129,7 @@ func isBuildTestCommand(lower string) bool {
 			return true
 		}
 	}
-	// #437: "make " matched ANY target (make clean/tidy), letting the agent
-	// claim "tests pass" after a cleanup. Only verify-ish targets count.
+
 	if strings.HasPrefix(lower, "make") {
 		rest := strings.TrimPrefix(lower, "make")
 		if strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") {
@@ -198,8 +141,7 @@ func isBuildTestCommand(lower string) bool {
 			}
 		}
 	}
-	// Direct test runners — #437: word-boundary match so "cat jestfile.txt"
-	// (bare Contains on "jest") no longer suppresses the detector.
+
 	for _, runner := range []string{"pytest", "jest", "vitest"} {
 		if claimContainsWord(lower, runner) {
 			return true
@@ -208,8 +150,6 @@ func isBuildTestCommand(lower string) bool {
 	return false
 }
 
-// containsWord reports whether s contains w delimited by non-word bytes
-// (alphanumeric/underscore boundaries).
 func claimContainsWord(s, w string) bool {
 	for i := 0; i+len(w) <= len(s); i++ {
 		if s[i:i+len(w)] != w {
@@ -224,18 +164,11 @@ func claimContainsWord(s, w string) bool {
 	return false
 }
 
-// hasVerificationCommands checks whether any build/test/lint command was run.
 func hasVerificationCommands(runStats *RunStats) bool {
 	for _, cmd := range runStats.CommandsRun {
 		lower := strings.ToLower(stripCommandComment(cmd))
 		if isBuildTestCommand(lower) {
-			// #1521 case D: a FAILED test run is not verification - the
-			// target scenario is exactly "ran the tests (they failed) and
-			// still declared them passing". Existence-only checking made
-			// the failed run satisfy the exemption. The command string is
-			// cross-checked against the run's collected error text: a
-			// build/test command whose failure signature appears there
-			// does not count.
+
 			if commandFailed(runStats, cmd) {
 				continue
 			}
@@ -245,9 +178,6 @@ func hasVerificationCommands(runStats *RunStats) bool {
 	return false
 }
 
-// commandFailed reports whether the run's collected Errors mention this
-// build/test command failing (exit-status/non-zero markers near the
-// command text, or FAIL/exit status lines referencing it).
 func commandFailed(runStats *RunStats, cmd string) bool {
 	if len(runStats.Errors) == 0 {
 		return false
@@ -256,17 +186,7 @@ func commandFailed(runStats *RunStats, cmd string) bool {
 	if base == "" {
 		return false
 	}
-	// Use the first two tokens (binary + subcommand, e.g. "go test",
-	// "cargo build") as the anchor - error lines usually quote the command
-	// or its failure output. #2500: the old single-token bare Contains
-	// matched "go" inside "cargo" and inside ".go" file paths (word
-	// boundaries do not help there - '.' is a legal boundary byte before
-	// "go"), so a single unrelated tool error (edit_file failure quoting a
-	// *.go path, a failed cargo build) invalidated the exemption for a
-	// SUCCESSFUL "go test" run and made the detector fire on verified
-	// claims. A two-token anchor misses only error lines that quote the
-	// bare binary without its subcommand - the safe direction (exemption
-	// kept, no false reminder).
+
 	fields := strings.Fields(base)
 	if len(fields) == 0 {
 		return false
@@ -284,7 +204,6 @@ func commandFailed(runStats *RunStats, cmd string) bool {
 	return false
 }
 
-// hasVerificationTools checks whether verification-related tools were used.
 func hasVerificationTools(runStats *RunStats) bool {
 	for toolName := range runStats.ToolCalls {
 		if verificationToolNames[toolName] {

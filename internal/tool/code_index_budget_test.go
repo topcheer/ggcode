@@ -9,12 +9,9 @@ import (
 	"testing"
 )
 
-// TestCodeIndexTermBudget (#1625): the total-term budget must truncate the
-// build so a working directory that parents many repositories cannot balloon
-// resident memory to tens of gigabytes.
 func TestCodeIndexTermBudget(t *testing.T) {
 	dir := t.TempDir()
-	// 200 files, each with ~50 distinct terms => ~10k terms total.
+
 	for i := 0; i < 200; i++ {
 		content := "package p\n"
 		for j := 0; j < 50; j++ {
@@ -26,7 +23,7 @@ func TestCodeIndexTermBudget(t *testing.T) {
 	}
 
 	m := NewCodeIndexManager(dir)
-	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "300") // tight budget: ~6 files
+	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "300")
 	defer m.Stop()
 
 	m.doBuild(context.Background())
@@ -36,15 +33,12 @@ func TestCodeIndexTermBudget(t *testing.T) {
 	if !m.ready {
 		t.Fatal("index should be ready after build")
 	}
-	// Each file contributes ~50+ distinct terms; a 300-term budget must stop
-	// well before all 200 files (~10k terms) are indexed.
+
 	if got := len(m.index.docs); got > 12 {
 		t.Fatalf("term budget not enforced: indexed %d docs (~%d terms), expected <= ~6 docs", got, got*51)
 	}
 }
 
-// TestCodeIndexTermBudgetUnlimited: GGCODE_CODE_INDEX_MAX_TERMS < 0 restores
-// legacy unbounded behavior.
 func TestCodeIndexTermBudgetUnlimited(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 10; i++ {
@@ -93,8 +87,6 @@ func itoa(i int) string {
 	return string(b)
 }
 
-// TestNestedGitRepoExcluded pins the walk boundary: a nested git
-// repository's sibling sources never enter the index (parent-dir start).
 func TestNestedGitRepoExcluded(t *testing.T) {
 	root := t.TempDir()
 	inner := filepath.Join(root, "vendored-clone")
@@ -102,7 +94,7 @@ func TestNestedGitRepoExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitDir := filepath.Join(inner, ".git")
-	if err := os.MkdirAll(gitDir, 0o755); err != nil { // dir form (clone)
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(inner, "src", "lib.go"), []byte("package inner\nfunc F() {}\n"), 0o644); err != nil {
@@ -129,9 +121,6 @@ func TestNestedGitRepoExcluded(t *testing.T) {
 	}
 }
 
-// TestNestedGitRepoScanAndMarkDirtyExcluded pins #1669: the #1625 exclusion
-// must hold on the incremental channels too - scanForExternalChanges' walk
-// (5min tick) and MarkDirty (agent edits) both skip nested-repo files.
 func TestNestedGitRepoScanAndMarkDirtyExcluded(t *testing.T) {
 	root := t.TempDir()
 	inner := filepath.Join(root, "vendored-clone")
@@ -149,7 +138,6 @@ func TestNestedGitRepoScanAndMarkDirtyExcluded(t *testing.T) {
 	}
 	m := NewCodeIndexManager(root)
 
-	// --- Case 2: MarkDirty filters nested-repo edit paths ---
 	m.MarkDirty([]string{filepath.Join(root, "main.go"), filepath.Join(inner, "src", "lib.go")})
 	m.mu.RLock()
 	dirtyCount := len(m.dirtyFiles)
@@ -162,8 +150,6 @@ func TestNestedGitRepoScanAndMarkDirtyExcluded(t *testing.T) {
 		t.Fatalf("only the root file must be dirty, got %d entries", dirtyCount)
 	}
 
-	// --- Case 1: scanForExternalChanges walk skips nested repos ---
-	// Prime the in-memory index + disk cache so the scan has a baseline.
 	m.index = &bm25Index{docs: []bm25Doc{{path: "main.go"}}}
 	pi := persistedIndex{Version: codeIndexVersion, Docs: []persistedDoc{{Path: "main.go", Mtime: 1}}}
 	raw, _ := json.Marshal(pi)
@@ -181,7 +167,6 @@ func TestNestedGitRepoScanAndMarkDirtyExcluded(t *testing.T) {
 	m.mu.RUnlock()
 }
 
-// TestInNestedRepoDirect pins the MarkDirty filter's predicate directly.
 func TestInNestedRepoDirect(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "vendored", ".git"), 0o755); err != nil {

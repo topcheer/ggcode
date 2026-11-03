@@ -1,42 +1,5 @@
 package agent
 
-// Copylock Detection in Go Code (Check #54)
-//
-// Problem: AI coding agents frequently produce Go code that passes sync types
-// (sync.Mutex, sync.RWMutex, sync.WaitGroup, sync.Cond, sync.Once, sync.Map,
-// sync.Pool) by VALUE instead of by pointer. Go's sync primitives contain
-// internal state (mutex fields, counters, flags) that MUST NOT be copied.
-// Copying a sync type silently breaks locking semantics:
-//   - Two separate copies of a Mutex protect different state -- no mutual exclusion.
-//   - Copying a WaitGroup loses the counter, causing Add/Done/Wait mismatches.
-//   - Copying a sync.Once can cause initialization to run twice.
-//
-// `go vet -copylocks` catches this post-build, but no AI coding agent detects
-// it at WRITE time. This check provides immediate, zero-dependency, zero-LLM-cost
-// detection using Go's standard AST parser.
-//
-// Competitor analysis:
-//   - Claude Code: no write-time detection (relies on go vet)
-//   - Cursor: no detection (go vet may catch post-save, inconsistent)
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//   - Windsurf: no detection
-//   - GitHub Copilot: no detection
-//
-// Approach: AST-based analysis. For each function, find:
-//  1. Function parameters whose type is a sync type (value, not pointer).
-//  2. Function return types that are sync types (value, not pointer).
-//  3. Receiver types that are sync types (value receiver on a struct embedding sync.Mutex).
-//
-// #1447-B: body-level copies (range value copies, deref assignments,
-// call-site value passing) are NOT analyzed - detecting them without
-// go/types requires type inference from variable names, which pure-AST
-// heuristics cannot do soundly (the variable NAME is not its TYPE).
-// go vet's copylocks covers the body forms at CI time; this detector's
-// write-time value is the signature triage above.
-//
-// Only NEW occurrences introduced by this edit are flagged (delta-aware).
-
 import (
 	"fmt"
 	"go/ast"
@@ -45,12 +8,8 @@ import (
 	"strings"
 )
 
-// maxCopylockWarnings limits warnings per write to avoid noise.
 const maxCopylockWarnings = 4
 
-// syncTypes are Go standard library types that contain internal state that
-// MUST NOT be copied. Passing them by value silently breaks their semantics.
-// These mirror go vet's copylocks analyzer.
 var syncTypes = map[string]bool{
 	"sync.Mutex":     true,
 	"sync.RWMutex":   true,
@@ -61,15 +20,12 @@ var syncTypes = map[string]bool{
 	"sync.Pool":      true,
 }
 
-// copylockIssue represents a detected copylock violation.
 type copylockIssue struct {
 	pos      token.Position
 	message  string
-	funcName string // enclosing function — content-fingerprint delta key (#213)
+	funcName string
 }
 
-// checkCopylock detects sync types passed/returned by value in Go source.
-// Returns warnings for value-copy violations.
 func checkCopylock(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -88,10 +44,8 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: only flag issues at positions not present in old content.
 	oldPositions := collectOldCopylockPositions(filePath, oldContent)
 
-	// First pass: count total new issues (excluding pre-existing ones)
 	var totalNewIssues int
 	for _, issue := range issues {
 		if !oldPositions[issue.funcName+"|"+issue.message] {
@@ -99,7 +53,6 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 		}
 	}
 
-	// Second pass: build warnings list with truncation
 	var warnings []string
 	for _, issue := range issues {
 		if oldPositions[issue.funcName+"|"+issue.message] {
@@ -119,8 +72,6 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// collectOldCopylockPositions parses old content and returns a set of line
-// numbers where copylock issues existed. Used for delta-aware filtering.
 func collectOldCopylockPositions(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return nil
@@ -133,9 +84,7 @@ func collectOldCopylockPositions(filePath, oldContent string) map[string]bool {
 	if len(oldIssues) == 0 {
 		return nil
 	}
-	// Content fingerprint, not line numbers (#213): line keys both
-	// re-reported pre-existing issues after edits above them AND silently
-	// suppressed new violations that happened to land on an old line.
+
 	result := make(map[string]bool, len(oldIssues))
 	for _, issue := range oldIssues {
 		result[issue.funcName+"|"+issue.message] = true
@@ -143,39 +92,24 @@ func collectOldCopylockPositions(filePath, oldContent string) map[string]bool {
 	return result
 }
 
-// findCopylockIssues walks the AST and finds all copylock violations.
 func findCopylockIssues(fset *token.FileSet, file *ast.File) []copylockIssue {
 	var issues []copylockIssue
 
-	// First pass: collect named struct types that contain sync fields.
 	lockStructs := findLockContainingStructs(file)
 
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok {
 			for _, issue := range checkFuncDeclCopylocks(fset, fn, lockStructs) {
-				issue.funcName = fn.Name.Name // delta key component (#213)
+				issue.funcName = fn.Name.Name
 				issues = append(issues, issue)
 			}
-			// #1536 case A: the body-level scan added in 5bd1ab3d (range
-			// value copies, deref assignments, call-arg copies) was "reverted"
-			// by 9c6bb693 as comment-only - the code kept running with no test
-			// coverage while the header went back to claiming bodies are not
-			// analyzed. Its name-based type matching (syncOrLockStruct resolves
-			// the variable NAME, not the TYPE) made exactly the false positives
-			// the revert message predicted: `for _, Cache := range caches`
-			// (caches []*Cache - pointer copy, legal) hit lockStructs["Cache"]
-			// and fired on every Go file write. This is the real revert: the
-			// scan is deleted, matching the header comment and the zero-test
-			// reality. Signature-path scanning (above) keeps its #213 delta keys.
+
 		}
 	}
 
 	return issues
 }
 
-// findLockContainingStructs scans type declarations for structs that embed or
-// contain a sync field by value. Returns a set of type names that are unsafe
-// to copy (pass/return/receive by value).
 func findLockContainingStructs(file *ast.File) map[string]bool {
 	result := make(map[string]bool)
 
@@ -202,8 +136,6 @@ func findLockContainingStructs(file *ast.File) map[string]bool {
 	return result
 }
 
-// structContainsSync returns true if the struct has at least one field whose
-// type is a bare (non-pointer) sync type.
 func structContainsSync(st *ast.StructType) bool {
 	for _, field := range st.Fields.List {
 		if identifySyncValueType(field.Type) != "" {
@@ -213,16 +145,12 @@ func structContainsSync(st *ast.StructType) bool {
 	return false
 }
 
-// checkFuncDeclCopylocks inspects a function declaration for copylock violations
-// in parameters, return values, and receiver.
 func checkFuncDeclCopylocks(fset *token.FileSet, fn *ast.FuncDecl, lockStructs map[string]bool) []copylockIssue {
 	if fn == nil {
 		return nil
 	}
 	var issues []copylockIssue
 
-	// Check value receiver (e.g., func (s Server) Lock() - if Server embeds sync.Mutex,
-	// a value receiver copies it).
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		for _, field := range fn.Recv.List {
 			if typeName := syncOrLockStruct(field.Type, lockStructs); typeName != "" {
@@ -235,7 +163,6 @@ func checkFuncDeclCopylocks(fset *token.FileSet, fn *ast.FuncDecl, lockStructs m
 		}
 	}
 
-	// Check parameters.
 	if fn.Type != nil && fn.Type.Params != nil {
 		for _, field := range fn.Type.Params.List {
 			if typeName := syncOrLockStruct(field.Type, lockStructs); typeName != "" {
@@ -249,7 +176,6 @@ func checkFuncDeclCopylocks(fset *token.FileSet, fn *ast.FuncDecl, lockStructs m
 		}
 	}
 
-	// Check return types.
 	if fn.Type != nil && fn.Type.Results != nil {
 		for _, field := range fn.Type.Results.List {
 			if typeName := syncOrLockStruct(field.Type, lockStructs); typeName != "" {
@@ -265,8 +191,6 @@ func checkFuncDeclCopylocks(fset *token.FileSet, fn *ast.FuncDecl, lockStructs m
 	return issues
 }
 
-// syncOrLockStruct checks if the type is a direct sync type OR a named struct
-// known to contain sync fields. Returns the type name if unsafe to copy, "" otherwise.
 func syncOrLockStruct(expr ast.Expr, lockStructs map[string]bool) string {
 	if name := identifySyncValueType(expr); name != "" {
 		return name
@@ -277,10 +201,8 @@ func syncOrLockStruct(expr ast.Expr, lockStructs map[string]bool) string {
 	return ""
 }
 
-// identifySyncValueType returns the sync type name if the given expression
-// is a bare (non-pointer) reference to a sync type. Returns "" otherwise.
 func identifySyncValueType(expr ast.Expr) string {
-	// Selector expression: e.g., "sync.Mutex"
+
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return ""
@@ -296,7 +218,6 @@ func identifySyncValueType(expr ast.Expr) string {
 	return ""
 }
 
-// fieldNames returns a comma-separated string of field names.
 func fieldNames(field *ast.Field) string {
 	if len(field.Names) == 0 {
 		return "_"

@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #1831 cases 1+2 pin: an external write between speculation and hit is a
-// MISS (was: served for up to 30s and then memoized as immortal).
 func Test1831SpeculatorFreshness(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.txt")
@@ -18,21 +16,19 @@ func Test1831SpeculatorFreshness(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{"file_path": p, "limit": 100})
 
 	sp := newSpeculator()
-	fp, fm, fs := statSnapshotFor("read_file", args) // snapshot at speculation time (#3611)
+	fp, fm, fs := statSnapshotFor("read_file", args)
 	sp.store("read_file", args, tool.Result{Content: "content of v0"}, fp, fm, fs)
 
 	if _, ok := sp.getCached("read_file", args); !ok {
 		t.Fatal("unchanged file must stay a hit")
 	}
-	// External write: miss even well within the 30s TTL.
+
 	os.WriteFile(p, []byte("v1-external"), 0o644)
 	if _, ok := sp.getCached("read_file", args); ok {
 		t.Fatal("external write must invalidate the speculative hit (TTL alone was not freshness)")
 	}
 }
 
-// #1831 case 3 pin: hasCached re-verifies freshness before the pre-execution
-// batch decides to skip a would-be-fresh execution.
 func Test1831HasCachedFreshness(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "g.txt")
@@ -51,10 +47,9 @@ func Test1831HasCachedFreshness(t *testing.T) {
 	}
 }
 
-// #1831 sentinel pins: appearing-since-speculation is drift; still-absent is not.
 func Test1831SpeculatorAbsenceSemantics(t *testing.T) {
 	dir := t.TempDir()
-	// Appeared after speculation.
+
 	p := filepath.Join(dir, "new.txt")
 	args, _ := json.Marshal(map[string]any{"file_path": p})
 	sp := newSpeculator()
@@ -64,7 +59,7 @@ func Test1831SpeculatorAbsenceSemantics(t *testing.T) {
 	if _, ok := sp.getCached("read_file", args); ok {
 		t.Fatal("file appearing after speculation must read as drift")
 	}
-	// Still absent: no false drift.
+
 	p2 := filepath.Join(dir, "never.txt")
 	args2, _ := json.Marshal(map[string]any{"file_path": p2})
 	sp2 := newSpeculator()

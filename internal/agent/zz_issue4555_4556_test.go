@@ -2,18 +2,6 @@
 
 package agent
 
-// Regression tests for GitHub issues #4555 and #4556:
-//
-// #4555: extractErrorLines over-filtered noise. Bare substring filters
-//   swallowed real failure lines: "AssertionError: expected error, got no
-//   error" (contains "no error"), "RuntimeError: completed without error"
-//   (contains "without error"), and unified-diff deletion bodies like
-//   "-errors.New(...)" matched the flag-echo filter.
-//
-// #4556: sdHasCaveatWindowed negation detection used bare HasSuffix, so
-//   "with piano however..." (suffix "no") and "I cannot however..." (suffix
-//   "not") neutralized real caveats, logging hedged declarations as unhedged.
-
 import (
 	"strings"
 	"testing"
@@ -72,10 +60,6 @@ func TestIssue4555_FlagEchoStillFiltered(t *testing.T) {
 	}
 }
 
-// #4556: a caveat preceded by a non-negator word ending in "no"/"not"
-// ("piano", "cannot") must NOT be neutralized — the declaration is hedged.
-// Call shape mirrors the #4539 tests: declStart/declEnd bracket the
-// declaration phrase itself.
 func TestIssue4556_PianoSuffixNotNegated(t *testing.T) {
 	text := "the task is complete, works with piano however the e2e suite is red"
 	lower := strings.ToLower(text)
@@ -95,7 +79,7 @@ func TestIssue4556_CannotSuffixNotNegated(t *testing.T) {
 }
 
 func TestIssue4556_RealNegatorStillNeutralizes(t *testing.T) {
-	// "no remaining issues" — the hedge is negated, so this caveat must NOT fire.
+
 	text := "the task is complete, no remaining issues but the docs still need work"
 	lower := strings.ToLower(text)
 	decl := strings.Index(lower, "task is complete")

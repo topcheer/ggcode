@@ -14,10 +14,6 @@ func TestCheckHardcodedPaths_NoPaths(t *testing.T) {
 	}
 }
 
-// #733: substring matching exempted non-fixture paths that merely CONTAIN
-// an exempt word (mockserver, remocks, myfixturesnote). Segment-exact
-// matching (pathHasSegment, same as the #247 fix) must exempt only real
-// fixture segments while real hardcoded paths in lookalike dirs warn.
 func TestCheckHardcodedPaths_FixtureExemptionSegmentExact(t *testing.T) {
 	old := "package main\n"
 	new := `package main
@@ -40,7 +36,6 @@ const dbConfig = "/Users/john/secrets/db-config.json"
 		}
 	}
 
-	// Real fixture directories stay exempt.
 	if warnings := checkHardcodedPaths("internal/mocks/config.go", old, new); len(warnings) != 0 {
 		t.Errorf("real mocks segment should stay exempt, got: %v", warnings)
 	}
@@ -134,7 +129,7 @@ func TestCheckHardcodedPaths_WindowsForwardSlashIntroduced(t *testing.T) {
 }
 
 func TestCheckHardcodedPaths_PreExistingNotFlagged(t *testing.T) {
-	// If the path was already in oldContent, it should NOT be flagged.
+
 	old := `const configPath = "/Users/john/project/config.yaml"`
 	new := old + "\n// added comment\n"
 	warnings := checkHardcodedPaths("config.go", old, new)
@@ -173,7 +168,7 @@ func TestCheckHardcodedPaths_MakefileExempt(t *testing.T) {
 }
 
 func TestCheckHardcodedPaths_SystemPathNotFlagged(t *testing.T) {
-	// System-standard paths like /usr/bin, /tmp, /var/log should NOT be flagged.
+
 	old := "package main\n"
 	new := `package main
 

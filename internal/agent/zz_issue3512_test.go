@@ -1,11 +1,5 @@
 package agent
 
-// Issue #3512: multi_file_write creating a NEW file must record
-// Existed=false on the checkpoint so undo REMOVES the file instead of
-// writing back "" and leaving a 0-byte husk (issue #554 B, multi-file leg).
-// The single-file path (executeFileTool) already used SaveWithExistence;
-// executeMultiFileTool called the unconditional Save.
-
 import (
 	"context"
 	"encoding/json"
@@ -31,7 +25,6 @@ func newIssue3512Agent(t *testing.T) (*Agent, *checkpoint.Manager) {
 	return a, cpMgr
 }
 
-// Tool-level: PreviewChanges must classify create vs overwrite.
 func TestIssue3512_PreviewChangesFlagsExistence(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "exists.txt")
@@ -62,8 +55,6 @@ func TestIssue3512_PreviewChangesFlagsExistence(t *testing.T) {
 	}
 }
 
-// Agent-level end-to-end: undo after a creating multi_file_write must REMOVE
-// the file, not truncate it to 0 bytes.
 func TestIssue3512_UndoRemovesCreatedFile(t *testing.T) {
 	dir := t.TempDir()
 	created := filepath.Join(dir, "created.txt")
@@ -99,8 +90,6 @@ func TestIssue3512_UndoRemovesCreatedFile(t *testing.T) {
 	}
 }
 
-// Agent-level: overwriting a PRE-EXISTING file must keep Existed=true so
-// undo restores the old content (regression guard for the same change).
 func TestIssue3512_UndoRestoresOverwrittenFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "existing.txt")

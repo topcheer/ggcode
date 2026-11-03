@@ -55,7 +55,7 @@ func process(name string, count int) {
 }
 
 func TestCheckLoggingIntel_NoWarningForSensitiveInFormatString(t *testing.T) {
-	// "password" appears only inside the string literal, not as a variable arg
+
 	newContent := `package auth
 
 import "log"
@@ -117,7 +117,7 @@ func auth() {
 	log.Printf("token: %s", token)
 }
 `
-	// Same content - no new patterns introduced
+
 	warnings := checkLoggingIntel("internal/api/auth.go", oldContent, oldContent)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for unchanged content, got: %v", warnings)
@@ -247,7 +247,6 @@ func verify(token string, password string) {
 }
 
 func TestCheckLoggingIntel_MaxWarningsCap(t *testing.T) {
-	// Generate many sensitive log lines to test the cap
 	var lines []string
 	lines = append(lines, "package api", "", `import "log"`, "")
 	for i := 0; i < 20; i++ {
@@ -280,9 +279,7 @@ func TestHasSensitiveVarRef_AsIdentifier(t *testing.T) {
 }
 
 func TestStripStringLiterals(t *testing.T) {
-	// #1623 side note 1: the JS-default wrapper is gone; state the
-	// language explicitly (these cases are JS-shaped: single quotes,
-	// backticks).
+
 	tests := []struct {
 		input  string
 		expect string
@@ -334,7 +331,6 @@ func TestTruncateForLog(t *testing.T) {
 	}
 }
 
-// #1098 Bug 1: word boundaries - should NOT flag variables like tokenCount, maxTokens
 func TestCheckLoggingIntel_WordBoundariesNoFalsePositive(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -394,7 +390,6 @@ func parse() {
 	}
 }
 
-// #1098 Bug 2: init() filtering - log.Fatal in init() should NOT be flagged
 func TestCheckLoggingIntel_InitFuncNotFlagged(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -447,7 +442,7 @@ func main() {
 	}
 }
 `,
-			wantWarn: false, // main package is exempt
+			wantWarn: false,
 		},
 	}
 
@@ -462,7 +457,6 @@ func main() {
 	}
 }
 
-// #1098 Bug 3: comment stripping - comments should not trigger false positives
 func TestCheckLoggingIntel_CommentStripping(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -527,7 +521,6 @@ func reset(pw string) {
 	}
 }
 
-// #1098 Bug 3: test stripGoComments helper
 func TestStripGoComments(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -538,8 +531,7 @@ func TestStripGoComments(t *testing.T) {
 			expect: "\nfunc f() {}",
 		},
 		{
-			// #1109 Item A2: newlines inside block comments are preserved so
-			// reported line numbers stay aligned with the original source.
+
 			input:  "/* multi\nline */func f() {}",
 			expect: "\nfunc f() {}",
 		},
@@ -560,7 +552,6 @@ func TestStripGoComments(t *testing.T) {
 	}
 }
 
-// #1098 Bug 2: test stripInitFuncs helper
 func TestStripInitFuncs(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -587,8 +578,6 @@ func TestStripInitFuncs(t *testing.T) {
 	}
 }
 
-// TestStripLiterals_1581 pins #1581-A: Go raw-string ${} is literal text
-// (stripped whole, no false sensitive-ref), JS template ${} stays live.
 func TestStripLiterals_1581(t *testing.T) {
 	goRaw := stripStringLiteralsFor("log.Printf(`curl -H \"Authorization: Bearer ${GITHUB_TOKEN}\"`)", false)
 	if strings.Contains(strings.ToUpper(goRaw), "GITHUB_TOKEN") {
@@ -600,9 +589,6 @@ func TestStripLiterals_1581(t *testing.T) {
 	}
 }
 
-// Regression for #1623: the FINAL sensitive-name check must keep stage 1's
-// word-boundary semantics - Contains matched "token" inside "maxTokenCount"
-// left in the stripped text.
 func TestContainsWordBoundary(t *testing.T) {
 	if containsWordBoundary("printf(maxtokencount)", "token") {
 		t.Fatal("substring inside an identifier must NOT match")
@@ -615,11 +601,6 @@ func TestContainsWordBoundary(t *testing.T) {
 	}
 }
 
-// #1623 main case: stage-2 must honor stage-1s
-
-// #1623 main case: stage-2 must honor stage-1's word-boundary semantics -
-// a message literal containing "token" plus an argument whose ident merely
-// CONTAINS the sensitive word (maxTokenCount) is correct code, not a leak.
 func TestHasSensitiveVarRef_1623WordBoundaryFinalVerdict(t *testing.T) {
 	args := `"token issued for %s", maxTokenCount`
 	matches := []string{"token"}

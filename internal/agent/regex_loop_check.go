@@ -1,47 +1,5 @@
 package agent
 
-// Regex Compile-in-Loop Detection
-//
-// Trend: AI Agent Performance Awareness — Expensive Operation in Loop
-//
-// Problem: AI coding agents frequently generate Go code that compiles regex
-// patterns inside for/range loops using regexp.Compile, regexp.MustCompile,
-// regexp.CompilePOSIX, or regexp.MustCompilePOSIX. Each call re-parses and
-// compiles the pattern from scratch — an O(m) operation where m is the pattern
-// length — even when the pattern string is identical across iterations.
-//
-//   for _, input := range inputs {
-//       re := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`) // compiled N times!
-//       if re.MatchString(input) { ... }
-//   }
-//
-// For N iterations, this wastes O(N*m) CPU and allocates N Regexp objects
-// that are immediately garbage-collected. Benchmark: compiling a typical
-// regex takes ~5-20 microseconds; for N=10,000 iterations that's 50-200ms
-// of wasted CPU.
-//
-// Correct pattern: compile once at package level and reuse.
-//
-//   var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-//
-//   for _, input := range inputs {
-//       if dateRe.MatchString(input) { ... }
-//   }
-//
-// Competitor analysis:
-//   - Claude Code: no detection (relies on external profilers)
-//   - Cursor: lint-on-save does not flag regex compile in loops
-//   - Cline/OpenHands: reactive only — caught by profiling
-//   - Aider: no detection
-//   - go vet: does not flag regex compile in loops
-//   - staticcheck: does not flag regex compile in loops
-//   - gocritic: no equivalent check
-//
-// This check provides immediate, zero-dependency feedback at write time.
-// It is distinct from loop_perf_check (string concat) and nplus1_loop_check
-// (I/O in loops) — regex compilation is a CPU-bound cost, not I/O or
-// allocation-pattern.
-
 import (
 	"fmt"
 	"go/ast"
@@ -51,7 +9,6 @@ import (
 	"strings"
 )
 
-// regexCompileFuncs lists regexp package functions that compile patterns.
 var regexCompileFuncs = map[string]bool{
 	"regexp.Compile":          true,
 	"regexp.MustCompile":      true,
@@ -59,23 +16,16 @@ var regexCompileFuncs = map[string]bool{
 	"regexp.MustCompilePOSIX": true,
 }
 
-// regexLoopIssue records a single regex-compile-in-loop occurrence.
 type regexLoopIssue struct {
-	funcName string // e.g., "regexp.MustCompile"
-	pattern  string // source text of the pattern argument (fingerprint)
+	funcName string
+	pattern  string
 	pos      token.Pos
 }
 
-// fingerprint identifies a compile-in-loop instance by function + pattern
-// expression, independent of position (positions shift across edits, so the
-// delta comparison must be instance-based, not count-based #1017).
 func (i regexLoopIssue) fingerprint() string {
 	return i.funcName + "|" + i.pattern
 }
 
-// checkRegexLoop detects regexp.Compile/MustCompile/CompilePOSIX/MustCompilePOSIX
-// calls inside for/range loops in Go code. Returns warning strings.
-// Delta-aware: only flags patterns newly introduced by this edit.
 func checkRegexLoop(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -89,19 +39,8 @@ func checkRegexLoop(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta: subtract patterns already present in old content by fingerprint
-	// set difference, NOT count comparison. Count comparison both under-
-	// reports (replacing OLD1/OLD2 with NEW1/NEW2 keeps counts equal, so newly
-	// introduced patterns pass silently) and over-reports (an added instance
-	// makes untouched old instances count as "new") (#1017).
 	if strings.TrimSpace(oldContent) != "" {
-		// #1488 case C(b): MULTISET delta, not set difference. The set form
-		// suppressed an ADDED instance of an already-present pattern (same
-		// pattern in a second loop stayed unflagged after an edit grew 1
-		// occurrence to 2) - #1017 fixed count-comparison, but the set
-		// difference reintroduced the under-report for the same-fingerprint
-		// growth case. Decrement per match: only the surplus occurrences
-		// count as newly introduced.
+
 		oldFPs := make(map[string]int)
 		for _, oi := range findRegexInLoops(filePath, oldContent) {
 			oldFPs[oi.fingerprint()]++
@@ -150,9 +89,6 @@ func checkRegexLoop(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// findRegexInLoops parses Go source and returns all regex-compile-in-loop
-// occurrences. Scans for/range loop bodies (recursively through nested
-// if/switch/select blocks) but skips nested function literals.
 func findRegexInLoops(filename, src string) []regexLoopIssue {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -164,12 +100,7 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 
 	var results []regexLoopIssue
 
-	// #1488 case C(a): resolve import aliases to canonical package names -
-	// `import r "regexp"` yields the call name "r.MustCompile", which the
-	// regexCompileFuncs table (canonical "regexp.*" keys) never matched:
-	// alias-importing files were completely undetected. Map every local
-	// alias of "regexp" back to the canonical prefix.
-	alias := make(map[string]string) // local name -> canonical pkg
+	alias := make(map[string]string)
 	for _, imp := range file.Imports {
 		path := strings.Trim(imp.Path.Value, `"`)
 		if path != "regexp" {
@@ -192,9 +123,6 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 		return name
 	}
 
-	// The outer Inspect visits nested loop statements after already scanning
-	// them as part of the enclosing loop body, so the same call is reached
-	// twice with the same position — dedup by pos (#1017).
 	seenPos := make(map[token.Pos]bool)
 
 	ast.Inspect(file, func(n ast.Node) bool {

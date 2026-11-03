@@ -174,7 +174,7 @@ func TestProjectCommandsSection_IncludesLintAndFormat(t *testing.T) {
 
 func TestProjectCommandsSection_LintOnlyNoBuildSystem(t *testing.T) {
 	dir := t.TempDir()
-	// Only a golangci config, no Makefile or go.mod
+
 	writeFile(t, dir, ".golangci.yml", "linters:\n  enable: []\n")
 
 	section := projectCommandsSection(dir)
@@ -193,8 +193,6 @@ func TestProjectCommandsSection_EmptyWhenNothing(t *testing.T) {
 		t.Errorf("expected empty section for bare dir, got:\n%s", section)
 	}
 }
-
-// --- helpers ---
 
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -217,9 +215,6 @@ func containsStr(s, sub string) bool {
 	return false
 }
 
-// Regression for #1489: Taskfile target detection used bare Contains, so
-// tail-suffixed task names (e2e_test:, build-ci:) matched test:/ci: and
-// injected nonexistent verify/lint/format commands into the system prompt.
 func TestDetectCommands_TaskfileSuffixNoFalseHit(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Taskfile.yml"),
@@ -246,9 +241,6 @@ func TestDetectCommands_TaskfileExactTargetStillHits(t *testing.T) {
 	}
 }
 
-// TestTaskfileHasTargetBlockScoped pins #1681 case 1: only keys inside the
-// top-level tasks: block are targets - a vars member or a cmds script line
-// with the same name must NOT count.
 func TestTaskfileHasTargetBlockScoped(t *testing.T) {
 	tf := `version: '3'
 
@@ -277,8 +269,6 @@ tasks:
 	}
 }
 
-// #1885 case 2: column-0 comments are legal inside a YAML tasks: block and
-// must not end it; CRLF files must detect targets at all.
 func TestTaskfileHasTargetCommentAndCRLF(t *testing.T) {
 	tf := "tasks:\n  build:\n    cmds:\n      - echo hi\n# column-zero comment inside the block\n  test:\n    cmds:\n      - echo test\n"
 	if !taskfileHasTarget(tf, "test") {
@@ -288,7 +278,7 @@ func TestTaskfileHasTargetCommentAndCRLF(t *testing.T) {
 	if !taskfileHasTarget(crlf, "build") {
 		t.Error("CRLF taskfile must detect targets (tasks:\\r never matched)")
 	}
-	// Blank CRLF lines must not reset block state mid-tasks.
+
 	midBlank := "tasks:\r\n  build:\r\n\r\n  test:\r\n"
 	if !taskfileHasTarget(midBlank, "test") {
 		t.Error("blank CRLF line must not end the tasks: block")

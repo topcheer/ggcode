@@ -24,13 +24,10 @@ func TestResearchReportGate(t *testing.T) {
 	}
 }
 
-// TestOverseerRetrievalCounters pins the r365 recordToolCall counting:
-// successful searches/fetches accumulate; errors (retries against the same
-// source) must not inflate the multi-hop signal; other tools stay at zero.
 func TestOverseerRetrievalCounters(t *testing.T) {
 	o := newOverseerState()
 	o.recordToolCall("web_search", false, "", "", 999)
-	o.recordToolCall("web_search", true, "", "", 999) // failed retry: not counted
+	o.recordToolCall("web_search", true, "", "", 999)
 	o.recordToolCall("web_fetch", false, "", "", 999)
 	o.recordToolCall("read_file", false, "/x.go", "", 999)
 	if o.searchCalls != 1 || o.fetchCalls != 1 {

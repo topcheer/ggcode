@@ -119,7 +119,7 @@ diff --git a/build/output.o b/build/output.o
 }
 
 func TestAnalyzeStagingQualityFormat(t *testing.T) {
-	// Verify the output format includes actionable guidance.
+
 	diff := `diff --git a/.DS_Store b/.DS_Store
 +++ b/.DS_Store
 +BINARY
@@ -143,7 +143,6 @@ diff --git a/dist/app.js b/dist/app.js
 }
 
 func TestAnalyzeStagingQualityMaxWarnings(t *testing.T) {
-	// Generate 15+ staged artifact files to test capping.
 	var lines []string
 	for i := 0; i < 15; i++ {
 		lines = append(lines, "+++ b/dist/file"+string(rune('a'+i))+".js")
@@ -152,9 +151,7 @@ func TestAnalyzeStagingQualityMaxWarnings(t *testing.T) {
 
 	result := AnalyzeStagingQuality(diff)
 	if !strings.Contains(result, "and") && !strings.Contains(result, "more") {
-		// With 15 files and maxStagingWarnings=10, should show truncation.
-		// But since each file only produces 1 issue and we cap at 10, there
-		// should be a "... and 5 more" message.
+
 		if !strings.Contains(result, "more") {
 			t.Logf("result (no truncation needed if <= cap): %s", result[:min(len(result), 200)])
 		}
@@ -162,7 +159,7 @@ func TestAnalyzeStagingQualityMaxWarnings(t *testing.T) {
 }
 
 func TestCheckStagingFileSingleIssue(t *testing.T) {
-	// A file should only produce one issue (deduplication).
+
 	issues := checkStagingFile("dist/app.min.js")
 	if len(issues) != 1 {
 		t.Errorf("expected 1 issue for dist/app.min.js (dedup), got %d", len(issues))

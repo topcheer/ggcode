@@ -13,23 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Adversarial evaluator gate (generator-evaluator separation).
-//
-// Anthropic's "Harness design for long-running apps" (2026-03) documents the
-// GAN-inspired pattern: a generator agent that reviews its own work is
-// reliably lenient ("agents confidently praise their own output"). The
-// countermeasure is an independent evaluator with a FRESH context that never
-// saw the generator's reasoning, a skeptical system prompt, and an explicit
-// grading rubric. ggcode's existing end-of-task gates are deterministic
-// oracles (build/test/lint via verify.go, spec-gaming/companion/complexity
-// heuristics); none can judge semantic quality. This gate closes that gap:
-//
-//	task done → collect run diff → fresh-context LLM evaluator
-//	  → PASS  → completion proceeds
-//	  → FAIL  → findings injected as user message → generator repairs
-//
-// Cost is bounded: one evaluator call per round, max 2 rounds per task,
-// skipped when nothing changed / plan mode / provider unavailable.
 const (
 	adversarialReviewMaxRounds  = 2
 	adversarialReviewTimeout    = 120 * time.Second
@@ -57,7 +40,6 @@ VERDICT: FAIL
 - <finding 1: file/line reference + what is wrong + what should happen>
 - <finding 2 ...>`
 
-// SetAdversarialReview enables/disables the independent evaluator gate.
 func (a *Agent) SetAdversarialReview(enabled bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -66,17 +48,12 @@ func (a *Agent) SetAdversarialReview(enabled bool) {
 	a.adversarialReviewLastRun = ""
 }
 
-// AdversarialReviewEnabled reports whether the evaluator gate is active.
 func (a *Agent) AdversarialReviewEnabled() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.adversarialReview
 }
 
-// checkAdversarialReviewGate runs the independent evaluator over the run's
-// diff and returns a feedback message for the generator when the evaluator
-// returns FAIL with findings. Returns "" on pass, skip, or evaluator failure
-// (evaluator unavailability must never block completion).
 func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunStats, taskPrompt string) string {
 	a.mu.RLock()
 	enabled := a.adversarialReview
@@ -88,7 +65,7 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 	if !codeChangedInRun(runStats) {
 		return ""
 	}
-	// Per-task round budget: reset when the task prompt changes.
+
 	a.mu.Lock()
 	if taskPrompt != a.adversarialReviewLastRun {
 		a.adversarialReviewLastRun = taskPrompt
@@ -123,9 +100,6 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 		findings, rounds+1, adversarialReviewMaxRounds)
 }
 
-// runAdversarialEvaluator performs the isolated LLM review: system rubric +
-// single user message with task and diff. No main-loop history is included,
-// so the evaluator cannot be anchored by the generator's own narrative.
 func (a *Agent) runAdversarialEvaluator(ctx context.Context, taskPrompt, diff string) (verdict, findings string) {
 	a.mu.RLock()
 	prov := a.provider
@@ -169,9 +143,6 @@ func (a *Agent) runAdversarialEvaluator(ctx context.Context, taskPrompt, diff st
 	return parseAdversarialVerdict(text)
 }
 
-// parseAdversarialVerdict extracts the VERDICT line and findings from the
-// evaluator output. Malformed output (no recognizable verdict) is treated as
-// PASS so a broken evaluator never injects junk guidance into the loop.
 func parseAdversarialVerdict(text string) (verdict, findings string) {
 	lines := strings.Split(text, "\n")
 	verdict = "PASS"
@@ -186,7 +157,7 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 		if strings.Contains(upper, "FAIL") {
 			verdict = "FAIL"
 		} else if !strings.Contains(upper, "PASS") {
-			continue // ambiguous verdict line, keep looking
+			continue
 		}
 		break
 	}
@@ -199,9 +170,6 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 	return verdict, findings
 }
 
-// collectAdversarialDiff gathers the working-tree diff (committed + staged +
-// unstaged vs HEAD) plus untracked file names for the evaluator. Best effort:
-// returns "" outside a git repo or on any exec failure.
 func (a *Agent) collectAdversarialDiff() string {
 	workingDir := a.WorkingDir()
 
@@ -220,8 +188,6 @@ func (a *Agent) collectAdversarialDiff() string {
 	}
 	diff := string(out)
 
-	// Untracked new files are invisible to `git diff HEAD`; surface their
-	// names so the evaluator can at least reason about scope.
 	st, _, err := util.NewShellCommandContext(cmdCtx, "git status --porcelain")
 	if err == nil {
 		st.Dir = workingDir

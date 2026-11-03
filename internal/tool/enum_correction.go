@@ -7,40 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Enum Value Correction - Fault-Tolerant Tool Argument Handling
-//
-// Research basis: Modern AI agents (Claude Code, Cursor, Windsurf) all face
-// the problem of weak models (local models, smaller open-weight models, models
-// behind third-party endpoints) producing near-miss enum values in tool calls.
-// Common patterns:
-//
-//   - Case mismatch: "JSON" instead of "json", "TRUE" instead of "true"
-//   - Typo: "concise" instead of "compact", "overwite" instead of "overwrite"
-//   - Abbreviation: "dir" instead of "directory"
-//
-// Without correction, each invalid enum value wastes a full agent loop
-// iteration: the model sends the value, gets an error, retries. With many
-// enum parameters across many tools, this compounds into significant waste.
-//
-// Two-layer approach:
-//
-//  1. Auto-correction (CoerceEnumValues): for unambiguous corrections
-//     (case-insensitive match, or a single closest match within edit distance
-//     2), silently fix the value. This is safe because the correction is
-//     deterministic and unambiguous.
-//
-//  2. Suggestion (suggestClosestEnum): for ambiguous cases (multiple close
-//     matches), include "did you mean 'X'?" in the validation error message
-//     to guide the model to the right value without guessing.
-
-// CoerceEnumValues auto-corrects enum parameter values in tool arguments.
-// It handles:
-//   - Case-insensitive exact match: "JSON" → "json" (always auto-corrected)
-//   - Single closest match within edit distance 2: "concise" → "compact"
-//     (auto-corrected only when exactly one candidate is close enough)
-//
-// Returns the (possibly corrected) arguments JSON. No-op when the schema
-// can't be parsed or no enum fields exist.
 func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMessage {
 	if len(schema) == 0 || len(args) == 0 {
 		return args
@@ -79,16 +45,9 @@ func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMess
 			continue
 		}
 		if len(spec.Enum) == 0 || spec.Type != "string" {
-			continue // only correct string enums
+			continue
 		}
 
-		// Extract the provided string value.
-		// #4443: parse as JSON first - the raw-message Trim used to leave
-		// escape debris ("a\"b" kept the backslash) and fed non-string
-		// values (true/numbers) into string matching, letting the
-		// Levenshtein<=2 tolerance silently rewrite a polluted provided
-		// value to the WRONG enum. Unparseable/non-string values skip
-		// correction (the original schema error stands).
 		var provided string
 		if err := json.Unmarshal(val, &provided); err != nil {
 			continue
@@ -98,14 +57,13 @@ func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMess
 			continue
 		}
 
-		// Check if it already matches exactly (no correction needed).
 		if enumContains(spec.Enum, val) {
 			continue
 		}
 
 		corrected := findBestEnumMatch(provided, spec.Enum)
 		if corrected == "" {
-			continue // no good match
+			continue
 		}
 
 		debug.Log("agent", "enum correction: %s %q → %q", fieldName, provided, corrected)
@@ -124,18 +82,9 @@ func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMess
 	return out
 }
 
-// findBestEnumMatch finds the best correction for a provided enum value.
-// Returns the corrected value, or "" if no good correction exists.
-//
-// Correction priority:
-//  1. Case-insensitive exact match (e.g., "JSON" → "json")
-//  2. Single closest match within Levenshtein distance 2 (e.g., "overwite" → "overwrite")
-//
-// If multiple candidates are equally close, no correction is made (ambiguous).
 func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 	provided = strings.ToLower(provided)
 
-	// Layer 1: case-insensitive exact match.
 	for _, e := range enum {
 		candidate := strings.TrimSpace(strings.Trim(string(e), `"`))
 		if strings.ToLower(candidate) == provided {
@@ -143,27 +92,15 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 		}
 	}
 
-	// Layer 2: closest match within edit distance 2, gated by a
-	// length-proportional cap (#3135): a fixed distance of 2 is a typo for
-	// long values but a semantic FLIP for short ones - "on" is distance 2
-	// from "no" (two substitutions), "dist-syd" distance 1 from "dist-sha",
-	// and correcting either silently executes the opposite of what the
-	// model asked for. For candidates <= 3 chars, require distance <= 1
-	// AND a shared first character ("off"->"of" passes; "on"->"no" does
-	// not). For longer candidates, cap at max(1, len/4).
 	var closeCandidates []string
-	minDist := 3 // only accept distance <= 2
+	minDist := 3
 	for _, e := range enum {
 		candidate := strings.TrimSpace(strings.Trim(string(e), `"`))
 		lower := strings.ToLower(candidate)
 		dist := levenshtein(provided, lower)
 		maxDist := max(1, len(lower)/4)
 		if len(lower) <= 3 {
-			// Short values: same first rune + distance 1 is the only
-			// unambiguous typo shape (e.g. "off" -> "of").
-			// #4700: an empty-string enum member (legal JSON Schema) has
-			// len(lower)==0 - lower[0] below would panic. An empty candidate
-			// is never a typo target, skip it.
+
 			if len(lower) == 0 || dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
 				continue
 			}
@@ -178,7 +115,6 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 		}
 	}
 
-	// Only auto-correct when there's exactly one closest match.
 	if len(closeCandidates) == 1 {
 		return closeCandidates[0]
 	}
@@ -186,14 +122,9 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 	return ""
 }
 
-// suggestClosestEnum returns the closest valid enum value for a provided
-// invalid value, or "" if no close match exists. Used to enhance error
-// messages with "did you mean?" hints. Unlike findBestEnumMatch, this
-// returns a suggestion even when multiple candidates are close (picks
-// the single best).
 func suggestClosestEnum(provided string, enum []json.RawMessage) string {
 	providedLower := strings.ToLower(provided)
-	bestDist := 3 // max distance to suggest
+	bestDist := 3
 	bestMatch := ""
 
 	for _, e := range enum {
@@ -205,7 +136,6 @@ func suggestClosestEnum(provided string, enum []json.RawMessage) string {
 		}
 	}
 
-	// Only suggest if within reasonable distance.
 	if bestDist <= 2 && bestMatch != "" {
 		return bestMatch
 	}

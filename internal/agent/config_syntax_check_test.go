@@ -68,7 +68,7 @@ nested:
 }
 
 func TestConfigSyntaxCheck_InvalidYAML(t *testing.T) {
-	// Tabs are not allowed in YAML
+
 	invalid := "name: test\n\tsomething: bad"
 	warn := configSyntaxCheck("config.yaml", invalid)
 	if warn == "" {
@@ -110,9 +110,9 @@ ports = [ 8001, 8001, 8002 ]
 }
 
 func TestConfigSyntaxCheck_InvalidTOML(t *testing.T) {
-	// TOML doesn't allow this syntax
+
 	invalid := `title = "bad"`
-	invalid += "\n[owner\nname = " // broken section header + incomplete
+	invalid += "\n[owner\nname = "
 	warn := configSyntaxCheck("Cargo.toml", invalid)
 	if warn == "" {
 		t.Fatal("expected warning for invalid TOML, got none")
@@ -156,7 +156,7 @@ func TestConfigSyntaxCheck_ValidSVG(t *testing.T) {
 }
 
 func TestConfigSyntaxCheck_JSONC(t *testing.T) {
-	// JSON with comments
+
 	valid := `{
   // This is a comment
   "name": "test",
@@ -181,10 +181,10 @@ func TestConfigSyntaxCheck_JSONCInvalid(t *testing.T) {
 }
 
 func TestConfigSyntaxCheck_LargeFile(t *testing.T) {
-	// Build a file > maxConfigFileSize (512KB)
+
 	large := `{"data": "`
 	large += strings.Repeat("x", 600*1024)
-	large += `"}` // valid JSON but oversized
+	large += `"}`
 	if warn := configSyntaxCheck("large.json", large); warn != "" {
 		t.Errorf("expected no warning for oversized file (skipped), got: %s", warn)
 	}
@@ -223,7 +223,7 @@ func TestStripJSONComments_BlockComments(t *testing.T) {
 }
 
 func TestStripJSONComments_StringWithCommentChars(t *testing.T) {
-	// Comments inside strings should be preserved
+
 	input := `{
 	  "url": "http://example.com", // real comment
 	  "regex": "//not a comment"
@@ -232,7 +232,7 @@ func TestStripJSONComments_StringWithCommentChars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stripJSONComments() unexpected error: %v", err)
 	}
-	// The string value should be preserved
+
 	if !strings.Contains(result, "//not a comment") {
 		t.Errorf("comment-like chars inside string should be preserved, got: %s", result)
 	}
@@ -242,18 +242,13 @@ func TestStripJSONComments_StringWithCommentChars(t *testing.T) {
 }
 
 func TestConfigSyntaxCheck_IntegrationValidYAML(t *testing.T) {
-	// Valid YAML should not produce warnings
+
 	warn := checkWriteIntegrity("deployment.yaml", "", "key: value\nlist:\n  - a\n  - b\n")
 	if warn != "" {
 		t.Errorf("expected no warning for valid YAML write, got: %s", warn)
 	}
 }
 
-// TestCheckConfigSyntaxCIWorkflowListBlockScalar pins #1446-B: a list item
-// opening a block scalar (`- run: |`, the standard CI step shape) must set
-// the block-scalar state BEFORE the list-item skip - its shell body's
-// same-prefixed lines were read as duplicate mapping keys and a legitimate
-// .gitea/workflows file got a Critical 'syntax error' report.
 func TestCheckConfigSyntaxCIWorkflowListBlockScalar(t *testing.T) {
 	src := "jobs:\n" +
 		"  build:\n" +
@@ -271,10 +266,6 @@ func TestCheckConfigSyntaxCIWorkflowListBlockScalar(t *testing.T) {
 	}
 }
 
-// Regression for #1534: keyless list-item block scalars (`- |` in Argo/
-// Flux/k8s shapes) and headers with trailing comments (`| # note`) never
-// engaged the block state, so the shell body's same-prefixed lines were
-// reported as duplicate mapping keys (Critical).
 func TestValidateYAMLKeylessBlockScalar(t *testing.T) {
 	keyless := "script:\n  - |\n    echo \"phase 1: build\"\n    echo \"phase 1: build\"\n"
 	if dups := validateYAML(keyless, "f.yaml"); len(dups) != 0 {
@@ -286,11 +277,8 @@ func TestValidateYAMLKeylessBlockScalar(t *testing.T) {
 	}
 }
 
-// TestConfigSyntaxCheck_ListBlockScalarEdges pins #1721 cases 1+2: the
-// nested keyless form and the quoted-key-with-colon form must both engage
-// the block scalar (body lines are content, not duplicate mapping keys).
 func TestConfigSyntaxCheck_ListBlockScalarEdges(t *testing.T) {
-	// Case 1: list of lists of block scalars ('- - |').
+
 	nested := `
 matrix:
   - - |
@@ -302,7 +290,7 @@ matrix:
 	if warn := configSyntaxCheck("ci.yaml", nested); warn != "" {
 		t.Errorf("case 1: nested keyless block must not warn, got: %s", warn)
 	}
-	// Case 2: quoted key containing a colon opens a block scalar.
+
 	quoted := `
 endpoints:
   - "host:port": |
@@ -312,7 +300,7 @@ endpoints:
 	if warn := configSyntaxCheck("cfg.yaml", quoted); warn != "" {
 		t.Errorf("case 2: quoted-key block must not warn, got: %s", warn)
 	}
-	// A REAL duplicate after a block must still be caught (negative side).
+
 	realDup := `
 - run: |
     echo hi

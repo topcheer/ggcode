@@ -2,7 +2,6 @@ package agent
 
 import "testing"
 
-// #1494 case A pin: Record + reset wiring exists and tiers fire.
 func Test1494SessionBudgetTiers(t *testing.T) {
 	a := &Agent{}
 	a.SetSessionTokenBudget(1000)
@@ -10,22 +9,21 @@ func Test1494SessionBudgetTiers(t *testing.T) {
 	if _, stop := a.RecordSessionTokenUsage(900, 0); stop {
 		t.Fatal("80% must be guidance, not stop")
 	}
-	msg, stop := a.RecordSessionTokenUsage(60, 0) // 96%
+	msg, stop := a.RecordSessionTokenUsage(60, 0)
 	if stop || msg == "" {
 		t.Fatalf("95%% must warn: stop=%v msg=%q", stop, msg)
 	}
-	_, stop = a.RecordSessionTokenUsage(100, 0) // 106%
+	_, stop = a.RecordSessionTokenUsage(100, 0)
 	if !stop {
 		t.Fatal("100%+ must stop")
 	}
-	// Reset clears the latched stop (per-run freshness).
+
 	a.resetSessionTokenUsage()
 	if _, stop := a.RecordSessionTokenUsage(10, 0); stop {
 		t.Fatal("after reset the budget must re-arm")
 	}
 }
 
-// #1494 case C pin: editing a source file addresses a command-class error.
 func Test1494EditAddressesCommandError(t *testing.T) {
 	st := newSilentErrorStateFor1494()
 	st.recordToolError("run_command", "go build ./...", "exit status 1", 1)
@@ -34,7 +32,6 @@ func Test1494EditAddressesCommandError(t *testing.T) {
 	}
 }
 
-// #1494 case D pin: uncovered-tool successes are not advancement.
 func Test1494UncoveredToolNoAdvancement(t *testing.T) {
 	st := newSilentErrorStateFor1494()
 	st.recordToolError("edit_file", "/a/foo.go", "anchor not found", 1)
@@ -45,8 +42,6 @@ func Test1494UncoveredToolNoAdvancement(t *testing.T) {
 	}
 }
 
-// #1494 case E pins: empty-key errors survive unrelated clears; sibling
-// paths do not cross-clear.
 func Test1494ClearBoundaryAndEmptyKey(t *testing.T) {
 	st := newSilentErrorStateFor1494()
 	st.recordToolError("web_search", "", "boom", 1)

@@ -6,12 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 )
 
-// sa-117: crashResumeTask extracts the interrupted task prompt for the
-// /continue-task confirm-to-resume flow. The corrupt-journal placeholder
-// ("<journal corrupted: ...>", built by run_journal.go CheckCrashedRun)
-// names an evidence file, not a task - it must never be re-dispatched as a
-// user prompt.
-
 func TestCrashResumeTaskExtraction(t *testing.T) {
 	cases := []struct {
 		name string

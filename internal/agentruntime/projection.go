@@ -59,14 +59,7 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 	if broker == nil || ses == nil || strings.TrimSpace(ses.ID) == "" {
 		return state, nil
 	}
-	// #1493-B: replay-then-switch. SwitchSession used to run FIRST, so a
-	// transient PrepareProjectionReplay failure (disk full/permission/corrupt
-	// store) left a HALF-SWITCHED broker: the new session was active but the
-	// authority epoch stayed 1 and no event recorder was bound - stale-epoch
-	// events were refused by the store guard (or worse, a residual HIGHER
-	// epoch from a previous session persisted with the wrong value) and new
-	// events silently stopped persisting. Everything that can fail now
-	// happens before the first mutating call.
+
 	if store != nil {
 		epoch, replay, err := PrepareProjectionReplay(store, ses)
 		if err != nil {
@@ -86,9 +79,6 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 	return state, nil
 }
 
-// HydrateProjectionReplayFromSessionLedger is deprecated.
-// Tunnel events are no longer stored in session JSONL — the projection store
-// is the sole source. This function is now a no-op, retained for API compatibility.
 func HydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, ses *session.Session, replay []tunnel.GatewayMessage) ([]tunnel.GatewayMessage, error) {
 	return replay, nil
 }

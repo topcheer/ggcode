@@ -79,20 +79,18 @@ func TestOvercorrectionDetection(t *testing.T) {
 func TestOvercorrectionCascade(t *testing.T) {
 	s := newOvercorrectionState()
 
-	// First overcorrection: trivial error, massive fix
 	s.pendingErr = severityTrivial
 	hint1 := s.recordEdit(6000, "a.go")
 	if hint1 == "" {
 		t.Fatal("expected warning for first overcorrection")
 	}
 
-	// Second overcorrection: should trigger cascade
 	s.pendingErr = severityTrivial
 	hint2 := s.recordEdit(7000, "b.go")
 	if hint2 == "" {
 		t.Fatal("expected cascade warning for second consecutive overcorrection")
 	}
-	// Cascade warning should mention "overcorrection"
+
 	if !overcorrectionContains(hint2, "overcorrection") {
 		t.Errorf("cascade warning should mention 'consecutive', got: %s", hint2)
 	}
@@ -111,13 +109,10 @@ func TestOvercorrectionMaxWarn(t *testing.T) {
 }
 
 func TestOvercorrectionSmallEditKeepsPendingErr(t *testing.T) {
-	// A sub-minimum edit is deemed too small to assess, so it must not
-	// consume the pending error anchor: a later assessable edit following a
-	// small edit should still be recorded against the original severity.
+
 	s := newOvercorrectionState()
 	s.pendingErr = severitySevere
 
-	// Small edit: no warning, and pendingErr must survive.
 	hint := s.recordEdit(overcorrectionMinEditBytes-1, "a.go")
 	if hint != "" {
 		t.Fatalf("small edit should never warn, got: %s", hint)
@@ -126,9 +121,6 @@ func TestOvercorrectionSmallEditKeepsPendingErr(t *testing.T) {
 		t.Fatalf("small edit must not consume pendingErr, got %v", s.pendingErr)
 	}
 
-	// Large edit afterwards must still be recorded as an entry (assessed
-	// against the preserved severe severity), not silently dropped by the
-	// pendingErr==severityNone early return.
 	hint = s.recordEdit(20000, "a.go")
 	if s.pendingErr != severityNone {
 		t.Fatalf("assessable edit should consume pendingErr, got %v", s.pendingErr)
@@ -194,19 +186,17 @@ func TestClassifyErrorSeverity(t *testing.T) {
 }
 
 func TestClassifyDiagnosticSeverity(t *testing.T) {
-	// Non-error result with lint warning
+
 	hint := classifyDiagnosticSeverity("run_command", "Warning: unused import 'fmt'")
 	if hint != severityTrivial {
 		t.Errorf("expected severityTrivial for unused import warning, got %d", hint)
 	}
 
-	// No warning patterns
 	hint = classifyDiagnosticSeverity("run_command", "all tests passed")
 	if hint != severityNone {
 		t.Errorf("expected severityNone for clean result, got %d", hint)
 	}
 
-	// Non-command tool
 	hint = classifyDiagnosticSeverity("read_file", "some content")
 	if hint != severityNone {
 		t.Errorf("expected severityNone for read_file, got %d", hint)

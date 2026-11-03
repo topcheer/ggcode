@@ -10,14 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// #3288 regression. Staggered completion is the norm in real parallel runs:
-// the pre-fix poll loop re-made snapsFinal every iteration and skipped
-// terminal candidates, so earlier-terminal candidates' final snapshots were
-// zero values at the break - ranking degraded to empty trajectories, winner
-// result text vanished, and the auction-close leader baseline never matched.
-
-// staggerSnaps: cand-1 is terminal (completed, real result) from poll 1;
-// cand-2 stays Running for 2 polls then fails for real.
 type staggerSnaps struct {
 	cand2Polls atomic.Int32
 }
@@ -36,9 +28,6 @@ func (f *staggerSnaps) Snapshot(id string) (subagent.Snapshot, bool) {
 }
 func (f *staggerSnaps) RunningCount() int { return 0 }
 
-// Probe 1: the early-terminal candidate must keep its final snapshot into
-// the ranking/report phase - no zero-value ID/Status, real result text, and
-// a real (non-placeholder) trajectory.
 func TestBONStaggeredEarlyFinalSnapshotSurvives(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &staggerSnaps{}
@@ -68,8 +57,6 @@ func TestBONStaggeredEarlyFinalSnapshotSurvives(t *testing.T) {
 	}
 }
 
-// Probe 2: same-round terminal snapshots (the shape existing tests already
-// cover) must not regress.
 func TestBONSameRoundTerminalsIntact(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
@@ -86,10 +73,6 @@ func TestBONSameRoundTerminalsIntact(t *testing.T) {
 	}
 }
 
-// staggerYieldSnaps: leader completes on poll 1 with ToolCallCount=2; a
-// laggard keeps Running with ToolCallCount above the yield factor, then is
-// cancelled. The auction-close scan must see the leader's REAL spend from
-// the preserved terminal snapshot.
 type staggerYieldSnaps struct {
 	polls     atomic.Int32
 	cancelled atomic.Bool
@@ -118,11 +101,6 @@ func (f *staggerYieldSnaps) Cancel(id string) bool {
 	return false
 }
 
-// Probe 3: auction-close leader baseline (#3070). The leader finished
-// early; the preserved snapshot must let the scan see StatusCompleted +
-// ToolCallCount and yield the over-spending laggard. Pre-fix, the re-made
-// snapsFinal zeroed the leader, leaderSpend never went >= 0, and the close
-// was a silent no-op.
 func TestBONStaggeredAuctionCloseLeaderBaseline(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &staggerYieldSnaps{}

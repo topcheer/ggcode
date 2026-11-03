@@ -1,7 +1,5 @@
 package agent
 
-// r407: progressive autonomy dial - deterministic rule tests.
-
 import (
 	"strings"
 	"testing"
@@ -23,7 +21,7 @@ func TestAutonomyDial_PromotionSuggestion(t *testing.T) {
 	if !strings.Contains(got, "autonomy-dial") || !strings.Contains(got, "switch_mode") {
 		t.Fatalf("expected promotion suggestion, got %q", got)
 	}
-	// One-shot gate: second evaluation silent.
+
 	if again := s.suggest(); again != "" {
 		t.Fatalf("promotion suggestion must be one-shot, got %q", again)
 	}
@@ -34,7 +32,7 @@ func TestAutonomyDial_DenialsBlockPromotionAndSugggerstDemotion(t *testing.T) {
 	for i := 0; i < autonomyPromoteStreak+5; i++ {
 		s.record(false, "ok")
 	}
-	// A single denial mid-window kills the clean streak...
+
 	s.record(true, "Error: permission denied by policy for git push")
 	if s.consecutiveOK != 0 {
 		t.Fatalf("denial must reset consecutiveOK, got %d", s.consecutiveOK)
@@ -42,7 +40,7 @@ func TestAutonomyDial_DenialsBlockPromotionAndSugggerstDemotion(t *testing.T) {
 	if s.denyCount != 1 {
 		t.Fatalf("denial must be counted, got %d", s.denyCount)
 	}
-	// ...and enough denials suggest demotion instead.
+
 	for i := 1; i < autonomyDemoteDenies; i++ {
 		s.record(true, "user rejected the approval request")
 	}
@@ -68,7 +66,7 @@ func TestAutonomyDial_ErrStreakSuggestsDemotion(t *testing.T) {
 
 func TestAutonomyDial_CleanSuccessWithDenialWordIsNotDenial(t *testing.T) {
 	s := newAutonomyDialState()
-	// A successful grep result ABOUT permission code must not read as a denial.
+
 	s.record(false, "internal/agent/permission_guard.go: permission denied messages live here")
 	if s.denyCount != 0 {
 		t.Fatalf("clean success must not count as denial, denyCount=%d", s.denyCount)
@@ -87,8 +85,7 @@ func TestAutonomyDial_ResetReopensWindow(t *testing.T) {
 	if s.consecutiveOK != 0 || s.denyCount != 0 || s.errStreak != 0 {
 		t.Fatalf("reset must clear counters: %+v", s)
 	}
-	// Suggestion gates are window-scoped: after reset, a fresh accumulation
-	// of denials legitimately re-suggests demotion (new evidence, new window).
+
 	s.record(true, "permission denied")
 	s.record(true, "permission denied")
 	s.record(true, "permission denied")
@@ -106,22 +103,17 @@ func TestAutonomyDial_ErrorInterruptsStreak(t *testing.T) {
 	if s.consecutiveOK != 0 || s.errStreak != 1 {
 		t.Fatalf("error must reset streak and count errStreak: %+v", s)
 	}
-	// Streak must rebuild from zero: one more success is not enough.
+
 	if got := s.suggest(); got != "" {
 		t.Fatalf("broken streak must not suggest promotion, got %q", got)
 	}
 }
 
-// Wiring probe: a permission-mode transition through SetPermissionPolicy
-// must re-open the autonomy-dial observation window (r407 anti-contamination
-// semantics, mirroring approval-memory's EnsureModeScope).
 func TestAutonomyDial_ModeTransitionResetsWindow(t *testing.T) {
 	mp := &mockProvider{}
 	a := NewAgent(mp, tool.NewRegistry(), "", 1)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode))
 
-	// Simulate an in-flight observation window (as if the run loop had
-	// recorded these results).
 	for i := 0; i < autonomyPromoteStreak; i++ {
 		a.autonomyDial.record(false, "ok")
 	}
@@ -129,7 +121,6 @@ func TestAutonomyDial_ModeTransitionResetsWindow(t *testing.T) {
 		t.Fatalf("setup: streak not recorded, got %d", a.autonomyDial.consecutiveOK)
 	}
 
-	// Switching the mode must clear the window.
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode))
 	if a.autonomyDial.consecutiveOK != 0 || a.autonomyDial.suggestedUp {
 		t.Fatalf("mode transition must reset the dial window: %+v", a.autonomyDial)

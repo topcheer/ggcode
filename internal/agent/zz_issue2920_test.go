@@ -1,18 +1,7 @@
 package agent
 
-// #2920: collectFuncSliceDecls built one flat name-keyed decl map for the
-// whole function unit with unconditional last-write-wins, ignoring lexical
-// scoping. A nested shadowing declaration whose capability flag differed
-// from the outer declaration flipped the entry: false positive on correctly
-// preallocated loops (Trigger A) or missed detection on zero-cap ones
-// (Trigger B). The fix merges conflicting same-name declarations
-// conservatively as hasMakeCapacity=true (suppress the advisory).
-
 import "testing"
 
-// Trigger A: outer slice preallocated via make, inner block legally shadows
-// with a zero-cap composite literal. The loop appends to the OUTER
-// (preallocated) slice, so no advisory may fire.
 func TestIssue2920ShadowedZeroCapLiteralNoFalsePositive(t *testing.T) {
 	code := `package main
 func g(items []int, slow bool) []int {
@@ -32,8 +21,6 @@ func g(items []int, slow bool) []int {
 	}
 }
 
-// Trigger A via the var-decl path: same shape but the shadow is a plain
-// `var out []int` inside the nested block.
 func TestIssue2920ShadowedVarDeclNoFalsePositive(t *testing.T) {
 	code := `package main
 func g(items []int, cond bool) []int {
@@ -53,10 +40,6 @@ func g(items []int, cond bool) []int {
 	}
 }
 
-// Trigger B counterpart: outer zero-cap + nested make-capable shadow. The
-// conservative merge treats the name as having capacity, so this is
-// deliberately NOT flagged (accepted under-report; pinned here so a future
-// scope-aware rewrite must consciously revisit this semantics).
 func TestIssue2920ConflictingShadowConservativelySuppressed(t *testing.T) {
 	code := `package main
 func g(items []int, cond bool) []int {
@@ -76,7 +59,6 @@ func g(items []int, cond bool) []int {
 	}
 }
 
-// No shadowing: the plain zero-cap loop keeps its advisory (detector teeth).
 func TestIssue2920UnshadowedZeroCapStillFlagged(t *testing.T) {
 	code := `package main
 func g(items []int) []int {

@@ -1,16 +1,11 @@
 package agent
 
-// zz_issue3739_cjk_sentiment_test.go -- companion tests for CJK negative
-// feedback detection (#3739). Before the fix, pure-Chinese corrections
-// ("错了" "停下" "别改了") matched no pattern, and such messages RESET the
-// escalation counter accumulated by English negatives.
-
 import "testing"
 
 func TestIssue3739CJKRejection(t *testing.T) {
 	cases := map[string]string{
 		"错了":      negCatRejection,
-		"不对，重新来":  negCatRedirection, // 不对/错了 vs 重新来 priority: rejection listed first
+		"不对，重新来":  negCatRedirection,
 		"你改错了文件":  negCatRejection,
 		"不行":      negCatRejection,
 		"还是不对":    negCatRejection,
@@ -20,7 +15,7 @@ func TestIssue3739CJKRejection(t *testing.T) {
 		"别改了":     negCatFrustration,
 		"烦死了":     negCatFrustration,
 	}
-	// Note: "不对，重新来" hits rejection first (priority order), so fix expectation.
+
 	cases["不对，重新来"] = negCatRejection
 	for msg, want := range cases {
 		if got := detectNegativeFeedback(msg); got != want {
@@ -41,8 +36,7 @@ func TestIssue3739CJKWhitelistStillPositive(t *testing.T) {
 }
 
 func TestIssue3739MixedLanguageNoCounterReset(t *testing.T) {
-	// Scenario B from the issue: English negative then Chinese negative must
-	// ESCALATE, not reset.
+
 	s := &userSentimentState{}
 	fb1 := s.analyzeAndUpdate("wrong file, revert it")
 	if fb1.Level != 1 {
@@ -62,7 +56,7 @@ func TestIssue3739MixedLanguageNoCounterReset(t *testing.T) {
 }
 
 func TestIssue3739CJKLongMessageRedirectionOpener(t *testing.T) {
-	// Long Chinese message: redirection fires only as an opener (<40 chars in).
+
 	long := "算了，我们换个思路吧，因为刚才那个方案在这个代码库里行不通，我详细解释一下原因，首先……后面还有很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多很多"
 	if got := detectNegativeFeedback(long); got != negCatRedirection {
 		t.Errorf("long Chinese redirection opener = %q, want %q", got, negCatRedirection)
@@ -70,9 +64,7 @@ func TestIssue3739CJKLongMessageRedirectionOpener(t *testing.T) {
 }
 
 func TestIssue3739PureChineseDoesNotResetEnglishCounters(t *testing.T) {
-	// A NEUTRAL Chinese message (no negative signal) legitimately resets -
-	// that is pre-existing designed behavior. What must NOT happen after the
-	// fix is a Chinese NEGATIVE being misread as neutral.
+
 	s := &userSentimentState{}
 	s.analyzeAndUpdate("stop")
 	fb := s.analyzeAndUpdate("别改了，先停下")

@@ -1,9 +1,5 @@
 package agent
 
-// #3799 probes: indented numbered verdicts recover their constraint number,
-// and nested value-receiver mutations (potential pointer fields) are
-// conservatively exempt instead of false-flagged.
-
 import (
 	"go/ast"
 	"go/parser"
@@ -16,9 +12,9 @@ func TestIssue3799_IndentedNumberedVerdictRecoversNum(t *testing.T) {
 		line string
 		want int
 	}{
-		{"  1. [not done] evidence tail", 1}, // markdown indented list reply
-		{"1. [not done] x", 1},               // flush-left unchanged
-		{"[not done] x", 0},                  // unnumbered stays 0
+		{"  1. [not done] evidence tail", 1},
+		{"1. [not done] x", 1},
+		{"[not done] x", 0},
 	} {
 		m := verdictLineRe.FindStringSubmatch(tc.line)
 		if len(m) == 0 {
@@ -49,12 +45,11 @@ func vrmParseExpr(t *testing.T, src string) ast.Expr {
 }
 
 func TestIssue3799_NestedSelectorExempt(t *testing.T) {
-	// Nested chain through a potential POINTER field: pure AST cannot
-	// prove visibility, so the checker must not claim the mutation.
+
 	if got := vrmExtractRecvField(vrmParseExpr(t, "c.state.ready"), "c"); got != "" {
 		t.Fatalf("nested selector chain must be exempt, got %q", got)
 	}
-	// One-level chain still extracts the field name.
+
 	if got := vrmExtractRecvField(vrmParseExpr(t, "c.top"), "c"); got != "top" {
 		t.Fatalf("direct selector must still extract 'top', got %q", got)
 	}

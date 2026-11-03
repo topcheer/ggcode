@@ -30,7 +30,6 @@ func TestBatchReplace_Literal(t *testing.T) {
 		t.Fatalf("expected success: %s", res.Content)
 	}
 
-	// Verify content changed.
 	data, _ := os.ReadFile(f1)
 	if string(data) != "newName := 1\nnewName++\n" {
 		t.Fatalf("unexpected content in f1: %q", string(data))
@@ -63,13 +62,11 @@ func TestBatchReplace_DryRun(t *testing.T) {
 		t.Fatalf("expected success: %s", res.Content)
 	}
 
-	// File should NOT be changed in dry_run mode.
 	data, _ := os.ReadFile(f1)
 	if string(data) != original {
 		t.Fatalf("file should not change in dry_run mode: %q", string(data))
 	}
 
-	// Output should mention dry_run.
 	var content batchReplaceContent
 	if err := json.Unmarshal([]byte(res.Content), &content); err != nil {
 		t.Fatal(err)
@@ -186,7 +183,6 @@ func TestBatchReplace_SandboxBlocked(t *testing.T) {
 	})
 
 	res, _ := tool.Execute(context.Background(), input)
-	// Sandbox blocked files get "error" status per-file, which sets IsError.
 	var content batchReplaceContent
 	json.Unmarshal([]byte(res.Content), &content)
 	if content.FilesError == 0 {

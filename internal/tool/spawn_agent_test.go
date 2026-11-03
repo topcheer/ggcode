@@ -43,7 +43,7 @@ func TestSpawnAgentWithManager(t *testing.T) {
 
 	s := SpawnAgentTool{
 		Manager:  mgr,
-		Provider: nil, // no provider — sub-agent will fail, but spawn itself should succeed
+		Provider: nil,
 	}
 
 	input, _ := json.Marshal(map[string]interface{}{
@@ -61,7 +61,6 @@ func TestSpawnAgentWithManager(t *testing.T) {
 		t.Errorf("expected spawn message: %s", result.Content)
 	}
 
-	// Give the goroutine a moment to start
 	time.Sleep(100 * time.Millisecond)
 }
 
@@ -167,7 +166,6 @@ func TestSpawnAgentRejectsUnknownTools(t *testing.T) {
 		Tools:    reg,
 	}
 
-	// Unknown tool name should be rejected
 	input, _ := json.Marshal(map[string]interface{}{
 		"task":  "test task",
 		"tools": []string{"read_file", "nonexistent_tool"},
@@ -183,7 +181,6 @@ func TestSpawnAgentRejectsUnknownTools(t *testing.T) {
 		t.Errorf("expected 'nonexistent_tool' in error message, got: %s", result.Content)
 	}
 
-	// Valid tool names should be accepted
 	input2, _ := json.Marshal(map[string]interface{}{
 		"task":  "test task",
 		"tools": []string{"read_file", "write_file"},
@@ -199,17 +196,12 @@ func TestSpawnAgentRejectsUnknownTools(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// TestSpawnAgentDescriptionDocumentsLimit ensures the tool description keeps
-// documenting the concurrency cap so the LLM knows spawns beyond it reject.
 func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
 	desc := SpawnAgentTool{}.Description()
 	if !strings.Contains(desc, "16 sub-agents") {
 		t.Errorf("spawn_agent description must document the 16-concurrent limit, got: %s", desc)
 	}
-	// Delegation economics contract (#349): the LLM must see the context-copy
-	// cost so it only fans out independent tasks. Since the P0-2 symmetry
-	// fix the description must ALSO carry the benefit side (protect main
-	// context) so independent complex tasks are delegated, not folded in.
+
 	if !strings.Contains(desc, "context-copy token cost") {
 		t.Errorf("spawn_agent description must document the delegation cost, got: %s", desc)
 	}
@@ -218,9 +210,6 @@ func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
 	}
 }
 
-// #351: delegation must be contract-based - the task parameter guides the
-// LLM to define acceptance criteria and evidence, and wait_agent reminds it
-// to verify results against those criteria.
 func TestSpawnAgentTaskParameterDocumentsContract(t *testing.T) {
 	params := string(SpawnAgentTool{}.Parameters())
 	if !strings.Contains(params, "acceptance criteria") {
@@ -232,10 +221,6 @@ func TestSpawnAgentTaskParameterDocumentsContract(t *testing.T) {
 	}
 }
 
-// TestSpawnAgentLaunchDirectCompanion covers the exported Launch method
-// (extracted from Execute for the best_of_n orchestrator, r377): it must
-// register the run with the manager and return the id, without going
-// through JSON argument parsing.
 func TestSpawnAgentLaunchDirectCompanion(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{
 		MaxConcurrent: 2,
@@ -247,7 +232,7 @@ func TestSpawnAgentLaunchDirectCompanion(t *testing.T) {
 	id, worktree, err := s.Launch(context.Background(), LaunchOptions{
 		Task:      "launch companion task",
 		Name:      "direct launch",
-		Isolation: "", // shared cwd: no worktree expected
+		Isolation: "",
 	})
 	if err != nil {
 		t.Fatalf("Launch error: %v", err)

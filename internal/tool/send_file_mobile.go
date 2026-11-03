@@ -8,15 +8,10 @@ import (
 	"strings"
 )
 
-// MobileFileSender is the subset of the tunnel broker needed by the mobile
-// file tool. Defined here (not by importing internal/tunnel) so the tool
-// package keeps zero reverse dependencies; the TUI injects a broker adapter
-// at share start (tunnel.go), the same pattern SetIMManager uses for IM.
 type MobileFileSender interface {
 	SendFileToMobile(ctx context.Context, path, caption string) (MobileFileSendResult, error)
 }
 
-// MobileFileSendResult mirrors tunnel.MobileFileResult without the import.
 type MobileFileSendResult struct {
 	FileID   string
 	Filename string
@@ -26,10 +21,6 @@ type MobileFileSendResult struct {
 	SHA256   string
 }
 
-// MobileFileTool lets the agent push a file (any format, ≤50 MiB) to the
-// connected mobile app over the encrypted tunnel. Chunking, sha256
-// verification and the size cap are enforced by the tunnel layer; this tool
-// is the thin, discoverable agent surface.
 type MobileFileTool struct {
 	Sender MobileFileSender
 }
@@ -58,8 +49,6 @@ func (t MobileFileTool) Parameters() json.RawMessage {
 	}`)
 }
 
-// Execute validates params and delegates to the injected sender. Errors are
-// returned as error Results (the agent relays them), carrying the why+fix.
 func (t MobileFileTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	if t.Sender == nil {
 		return Result{IsError: true, Content: "No mobile device is connected. Start a mobile share session (QR) first, then retry."}, nil
@@ -93,7 +82,6 @@ func (t MobileFileTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	return Result{Content: sb.String()}, nil
 }
 
-// humanSize renders bytes in a compact human-readable form.
 func humanSize(n int64) string {
 	const unit = 1024
 	if n < unit {

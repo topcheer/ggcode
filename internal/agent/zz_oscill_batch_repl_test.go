@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// Detector self-health scan round 3 found recordEdit handled only 2 of 9
-// source-mutating tools: a batch_replace A->B followed by B->A (classic
-// semantic oscillation) was silently unrecorded. multi_file_edit's
-// per-file edits were equally invisible. Threshold is 2 content reversals,
-// so each test drives a full double round-trip.
 func TestOscillationBatchReplaceReversal(t *testing.T) {
 	o := newOscillationState()
 	o.recordEdit("batch_replace", json.RawMessage(`{"pattern":"alpha","replacement":"beta","files":["a.go","b.go"]}`), 1)

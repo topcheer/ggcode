@@ -8,33 +8,27 @@ import (
 func TestLastGoodCheckpoint_BasicLifecycle(t *testing.T) {
 	c := newLastGoodCheckpoint()
 
-	// Before any verification, no guidance.
 	if g := c.revertGuidance(); g != "" {
 		t.Fatalf("expected empty guidance before baseline, got: %s", g)
 	}
 
-	// Record some edits before first verify.
 	c.recordFileEdit("/foo/bar.go", "")
 	c.recordFileEdit("/foo/baz.go", "")
 
-	// First verify passes -- snapshot taken.
 	c.recordVerifyPass()
 	if len(c.lastGoodFiles) != 2 {
 		t.Fatalf("expected 2 lastGoodFiles after pass, got %d", len(c.lastGoodFiles))
 	}
-	// Since-last-good should be empty after a pass.
+
 	if len(c.filesModifiedSinceLastGood) != 0 {
 		t.Fatalf("expected 0 filesModifiedSinceLastGood after pass, got %d", len(c.filesModifiedSinceLastGood))
 	}
 
-	// Now make more edits that introduce regressions.
-	c.recordFileEdit("/foo/bar.go", "") // modify existing
-	c.recordFileEdit("/foo/new.go", "") // new file
+	c.recordFileEdit("/foo/bar.go", "")
+	c.recordFileEdit("/foo/new.go", "")
 
-	// Verify fails -- no snapshot update.
 	c.recordVerifyFail()
 
-	// Should have guidance listing files modified since last good.
 	g := c.revertGuidance()
 	if g == "" {
 		t.Fatal("expected non-empty guidance after fail with modified files")
@@ -57,7 +51,6 @@ func TestLastGoodCheckpoint_NoGuidanceAfterPass(t *testing.T) {
 	c.recordVerifyPass()
 	c.recordFileEdit("/b.go", "")
 
-	// No verify fail yet, so no guidance needed.
 	if g := c.revertGuidance(); g != "" {
 		t.Fatalf("expected empty guidance without a fail cycle, got: %s", g)
 	}
@@ -87,10 +80,8 @@ func TestLastGoodCheckpoint_Reset(t *testing.T) {
 func TestLastGoodCheckpoint_NewFilesOnly(t *testing.T) {
 	c := newLastGoodCheckpoint()
 
-	// First pass with no files.
 	c.recordVerifyPass()
 
-	// Add only new files.
 	c.recordFileEdit("/new1.go", "")
 	c.recordFileEdit("/new2.go", "")
 	c.recordVerifyFail()
@@ -102,7 +93,7 @@ func TestLastGoodCheckpoint_NewFilesOnly(t *testing.T) {
 	if !strings.Contains(g, "/new1.go") {
 		t.Errorf("guidance should mention /new1.go, got: %s", g)
 	}
-	// Should not suggest git checkout for new-only files (they weren't modified).
+
 	if strings.Contains(g, "git checkout") {
 		t.Errorf("should not suggest git checkout for new-only files, got: %s", g)
 	}
@@ -115,7 +106,6 @@ func TestLastGoodCheckpoint_MaxFilesLimit(t *testing.T) {
 	c := newLastGoodCheckpoint()
 	c.recordVerifyPass()
 
-	// Record more than checkpointMaxFiles modified files.
 	for i := 0; i < checkpointMaxFiles+5; i++ {
 		c.recordFileEdit("/file"+string(rune('a'+i))+".go", "")
 	}

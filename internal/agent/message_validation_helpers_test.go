@@ -54,7 +54,6 @@ func TestFilterToolResults(t *testing.T) {
 		t.Fatalf("expected open list to shrink to [t1], got %+v", updated)
 	}
 
-	// All-closing batch leaves the open list empty.
 	kept2, updated2, dropped2 := filterToolResults([]provider.ContentBlock{
 		{Type: "tool_result", ToolID: "t1"},
 	}, updated)
@@ -86,7 +85,7 @@ func TestStripToolResultImages(t *testing.T) {
 	if !reflect.DeepEqual(stripped.Content[1], orig[1]) || !reflect.DeepEqual(stripped.Content[2], orig[2]) {
 		t.Fatalf("non-image blocks must pass through unchanged")
 	}
-	// Caller's slice must never be mutated.
+
 	if len(orig[0].Images) != 1 {
 		t.Fatalf("original slice was mutated: %+v", orig[0])
 	}

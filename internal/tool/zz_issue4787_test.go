@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// #4787 (S-16): intermittent wholesale fork/exec-ENOENT shell outages
-// (1-8min, self-healing) had no shell-health signal, misclassified as
-// structural, and probe retries were cut by the stagnation gate.
-
 func TestIssue4787_SpawnEnoentClassifier(t *testing.T) {
 	cases := []struct {
 		name string
@@ -48,10 +44,6 @@ func TestIssue4787_ShellDegradedHintMentionsProbe(t *testing.T) {
 	}
 }
 
-// The main run_command path (no JobManager — the agent configuration from
-// builtin.go) must recover when WorkingDir dies mid-session: the #4791 fix
-// only covered the background-job path; #4787/S-16 requires the main path's
-// cmd.Dir to be liveness-checked too.
 func TestIssue4787_RunCommandRecoversAfterWorkdirRemoved(t *testing.T) {
 	root := t.TempDir()
 	dead := filepath.Join(root, "worktree-abc")
@@ -60,7 +52,6 @@ func TestIssue4787_RunCommandRecoversAfterWorkdirRemoved(t *testing.T) {
 	}
 	rc := RunCommand{WorkingDir: dead}
 
-	// Healthy run inside the still-alive dir.
 	input := json.RawMessage(`{"command": "pwd"}`)
 	res, err := rc.Execute(context.Background(), input)
 	if err != nil {
@@ -70,8 +61,6 @@ func TestIssue4787_RunCommandRecoversAfterWorkdirRemoved(t *testing.T) {
 		t.Fatalf("healthy run should succeed, got: %s", res.Content)
 	}
 
-	// Worktree removed mid-session (S-16 trigger shape: every subsequent
-	// spawn previously failed fork/exec-ENOENT wholesale on the main path).
 	if err := os.RemoveAll(dead); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +77,6 @@ func TestIssue4787_RunCommandRecoversAfterWorkdirRemoved(t *testing.T) {
 	}
 }
 
-// The health-probe command itself must succeed through the normal tool path
-// (it is what the degraded hint tells the agent to run).
 func TestIssue4787_HealthProbeCommandRuns(t *testing.T) {
 	rc := RunCommand{WorkingDir: t.TempDir()}
 	input := json.RawMessage(`{"command": "echo ggcode-shell-health-probe-ok"}`)
@@ -105,15 +92,12 @@ func TestIssue4787_HealthProbeCommandRuns(t *testing.T) {
 	}
 }
 
-// isSpawnEnoentFailure must accept a nil error.
 func TestIssue4787_NilErrorIsNotSpawnFailure(t *testing.T) {
 	if isSpawnEnoentFailure(nil) {
 		t.Fatal("nil error must not be a spawn failure")
 	}
 }
 
-// The backoff must be short enough that a probe-retry cycle stays inside a
-// typical tool-call timeout budget.
 func TestIssue4787_BackoffBounded(t *testing.T) {
 	if shellOutageBackoff > 5*time.Second {
 		t.Fatalf("shellOutageBackoff %v too long for an in-call retry", shellOutageBackoff)

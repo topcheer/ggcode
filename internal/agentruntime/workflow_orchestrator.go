@@ -1,29 +1,3 @@
-// Package agentruntime: dynamic workflow orchestration (r436).
-//
-// Research basis: Anthropic "Introducing dynamic workflows in Claude Code"
-// (2026-05-28, GA) — orchestration externalization. The agent writes a
-// structured task graph (decompose → parallel-solve → adversarial verify →
-// synthesize) and an independent runtime executes it; the parent agent's
-// context receives only the final synthesized answer, not intermediate
-// results. This structurally prevents the three single-loop failure modes
-// turn-by-turn delegation cannot: agentic laziness (the graph enumerates
-// every step; the runtime enforces completion), self-preferential bias
-// (verifier sub-agents are independent contexts trying to REFUTE each
-// finding), and goal drift (constraints live in the graph, not in a
-// compactable conversation).
-//
-// Difference from prior art in this repo (deliberate boundaries):
-//   - r416 dag-tool-execution schedules TOOLS within one turn; this
-//     orchestrates SUB-AGENTS across a whole task.
-//   - swarm/teammate is a persistent team with a human/agent-curated board;
-//     this is a one-shot generated task graph that runs to completion.
-//   - best_of_n (r377) races N candidates on ONE task; this runs N
-//     DIFFERENT tasks with dependencies and per-step verification.
-//
-// Reuse: the spawn pipeline is exactly best_of_n's — CandidateSpawner
-// (tool.SpawnAgentTool via Launch) + SnapshotSource (*subagent.Manager).
-// Sub-agents cannot nest (subAgentBlockedTools), so workflow fan-out depth
-// is hard-capped at one level.
 package agentruntime
 
 import (
@@ -39,60 +13,37 @@ import (
 )
 
 const (
-	// workflowMaxSteps bounds graph size: 16 steps at one level of nesting
-	// already dwarfs what one turn-by-turn delegation loop manages reliably.
-	workflowMaxSteps = 16
-	// workflowMaxRetries bounds the per-step transient-failure retry budget
-	// (LLMCompiler task-fetching semantics: a transient worker failure
-	// requeues instead of poisoning the downstream chain).
-	workflowMaxRetries = 2
-	// workflowLayerCap bounds per-layer concurrency: the session-wide spawn
-	// budget is 16 slots shared with the parent's own tool calls, so a
-	// workflow layer takes at most half of it.
-	workflowLayerCap = 8
-	// workflowDefaultPoll mirrors bestOfNDefaultPoll.
+	workflowMaxSteps    = 16
+	workflowMaxRetries  = 2
+	workflowLayerCap    = 8
 	workflowDefaultPoll = 2 * time.Second
 )
 
-// WorkflowStep is one node of the generated task graph. The LLM emits these
-// as JSON via the workflow_run tool; the runtime never interprets free-form
-// scripts (no JS sandbox needed — Anthropic's semantics, a reviewable
-// subset of its surface).
 type WorkflowStep struct {
-	ID        string   `json:"id"`
-	Task      string   `json:"task"`
-	DependsOn []string `json:"dependsOn,omitempty"`
-	Verifier  string   `json:"verifier,omitempty"` // adversarial refute prompt; "" = no verification
-	Tools     []string `json:"tools,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	// Retries is the per-step transient-failure retry budget (0..2). A
-	// worker that ends Failed/Cancelled, a verifier REJECTED verdict, or a
-	// launch error requeues the step instead of poisoning its downstream
-	// chain (LLMCompiler task-fetching semantics). Default 0 = old
-	// one-strike behavior, byte-identical for existing callers.
-	Retries    int    `json:"retries,omitempty"`
-	workerID   string // runtime: sub-agent ID
-	verifierID string // runtime: verifier sub-agent ID
+	ID         string   `json:"id"`
+	Task       string   `json:"task"`
+	DependsOn  []string `json:"dependsOn,omitempty"`
+	Verifier   string   `json:"verifier,omitempty"`
+	Tools      []string `json:"tools,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Retries    int      `json:"retries,omitempty"`
+	workerID   string
+	verifierID string
 }
 
-// WorkflowSpec is the full generated graph.
 type WorkflowSpec struct {
 	Steps     []WorkflowStep `json:"steps"`
-	Synthesis string         `json:"synthesis"` // instruction for the final synthesizer
+	Synthesis string         `json:"synthesis"`
 }
 
-// WorkflowReport is what the parent context receives — step one-liners and
-// the synthesized answer, never intermediate artifacts.
 type WorkflowReport struct {
 	StepLines  []string
 	Synthesis  string
 	Err        string
 	Partial    bool
-	LiveStepID map[string]string // step ID -> still-running sub-agent ID (Partial only)
+	LiveStepID map[string]string
 }
 
-// Validate checks spec sanity: non-empty, unique IDs, resolvable deps,
-// acyclic, size caps. Returns the Kahn topological layers on success.
 func (s *WorkflowSpec) Validate() ([][]int, error) {
 	if s == nil || len(s.Steps) == 0 {
 		return nil, fmt.Errorf("workflow: steps is required (1..%d)", workflowMaxSteps)
@@ -119,7 +70,7 @@ func (s *WorkflowSpec) Validate() ([][]int, error) {
 			return nil, fmt.Errorf("workflow: step %q retries %d out of range 0..%d", st.ID, st.Retries, workflowMaxRetries)
 		}
 	}
-	// Kahn layering over DependsOn edges; a cycle leaves unreachable nodes.
+
 	indeg := make([]int, len(s.Steps))
 	dependents := make([][]int, len(s.Steps))
 	for i, st := range s.Steps {
@@ -149,7 +100,7 @@ func (s *WorkflowSpec) Validate() ([][]int, error) {
 	}
 	visited := 0
 	for len(queue) > 0 {
-		sort.Ints(queue) // deterministic layer order
+		sort.Ints(queue)
 		var next []int
 		for _, i := range queue {
 			visited++
@@ -166,16 +117,10 @@ func (s *WorkflowSpec) Validate() ([][]int, error) {
 	if visited != len(s.Steps) {
 		return nil, fmt.Errorf("workflow: dependency cycle detected (%d of %d steps reachable)", visited, len(s.Steps))
 	}
-	// Layer width is no longer a hard error (research sa-123): the runtime
-	// schedules a ready set bounded by workflowLayerCap, so wide graphs queue
-	// instead of being rejected.
+
 	return layers, nil
 }
 
-// downstreamDepth returns, per step ID, the length of the longest chain from
-// that step to a sink (itself counted). Computed by reverse topological DP
-// over the Kahn layers from Validate; used to prioritize the longest
-// downstream chain (critical path) when the in-flight window is contended.
 func (s *WorkflowSpec) downstreamDepth(layers [][]int) map[string]int {
 	dependents := make(map[string][]string, len(s.Steps))
 	for _, st := range s.Steps {
@@ -199,21 +144,8 @@ func (s *WorkflowSpec) downstreamDepth(layers [][]int) map[string]int {
 	return depth
 }
 
-// workflowTaskSuffix makes each worker self-sufficient and forces an
-// explicit evidence line, mirroring best_of_n's candidateTaskSuffix.
 const workflowTaskSuffix = "\n\nYou are one step of a parallel workflow graph. Work self-sufficiently: no coordination with other steps, no assumptions about them. Downstream steps only see your final message, so state your concrete result and evidence explicitly (files touched, command outcomes, findings list)."
 
-// RunWorkflow executes the graph layer by layer. Semantics per step:
-//  1. Launch a worker sub-agent (independent context).
-//  2. On completion with a Verifier prompt, launch an adversarial verifier
-//     sub-agent that must try to REFUTE the worker's result. A verifier
-//     verdict starting with REJECTED strikes the step's output from the
-//     synthesis inputs (it stays in the report as refuted).
-//  3. After all layers, one synthesizer sub-agent folds surviving outputs
-//     into the single answer the parent context receives.
-//
-// Context cancellation yields Partial with live step IDs; running workers
-// are NOT cancelled (the parent may wait_agent them).
 func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, spec WorkflowSpec, poll time.Duration) WorkflowReport {
 	rep := WorkflowReport{LiveStepID: map[string]string{}}
 	if poll <= 0 {
@@ -225,17 +157,11 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 		return rep
 	}
 
-	results := make([]string, len(spec.Steps))     // worker final messages
-	refuted := make([]bool, len(spec.Steps))       // adversarial-verdict strike
-	statuses := make([]string, len(spec.Steps))    // terminal status per step
-	blocking := make([]string, 0, len(spec.Steps)) // refuted/broken step IDs
+	results := make([]string, len(spec.Steps))
+	refuted := make([]bool, len(spec.Steps))
+	statuses := make([]string, len(spec.Steps))
+	blocking := make([]string, 0, len(spec.Steps))
 
-	// Ready-set scheduling with critical-path priority (research sa-123,
-	// latency-aware orchestration): a step launches the moment its last
-	// dependency reaches a terminal state instead of waiting for its whole
-	// Kahn layer to drain, and when the in-flight window (workflowLayerCap)
-	// is contended the longest downstream chain goes first. Single-layer
-	// graphs and uncontended windows behave exactly like the old barrier.
 	depth := spec.downstreamDepth(layers)
 	idx := make(map[string]int, len(spec.Steps))
 	depsLeft := make([]int, len(spec.Steps))
@@ -250,9 +176,9 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	readyLess := func(a, b int) bool {
 		da, db := depth[spec.Steps[a].ID], depth[spec.Steps[b].ID]
 		if da != db {
-			return da > db // deepest downstream chain first
+			return da > db
 		}
-		return a < b // stable tie-break by spec order
+		return a < b
 	}
 	var ready []int
 	for i := range spec.Steps {
@@ -272,10 +198,7 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			}
 		}
 	}
-	// retryStep requeues a transiently failed step while its retry budget
-	// lasts, instead of striking it and poisoning downstream consumers.
-	// Returns true when the step was requeued (caller must NOT release or
-	// mark blocking).
+
 	attempts := make([]int, len(spec.Steps))
 	retryStep := func(i int, reason string) bool {
 		st := &spec.Steps[i]
@@ -283,14 +206,13 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			return false
 		}
 		attempts[i]++
-		doneStep[i] = true // free the in-flight slot; relaunched on requeue
+		doneStep[i] = true
 		rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] %s — retrying (attempt %d/%d)", st.ID, reason, attempts[i], st.Retries))
 		ready = append(ready, i)
 		sort.Slice(ready, func(x, y int) bool { return readyLess(ready[x], ready[y]) })
 		return true
 	}
-	// finalize records a terminal step, runs its adversarial verifier when
-	// configured, then releases dependents into the ready set.
+
 	finalize := func(i int, status, result string) {
 		switch status {
 		case string(subagent.StatusFailed), string(subagent.StatusCancelled):
@@ -328,12 +250,7 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	var act []inFlight
 	for len(ready) > 0 || len(act) > 0 {
 		if ctx.Err() != nil {
-			// #3537: the loop-top cancellation exit must honor the same
-			// Partial contract as the select branch below - LiveStepID
-			// carries every still-running worker, and we return WITHOUT
-			// synthesis (ctx is dead; the parent may wait_agent the live
-			// workers). The old bare `break` dropped the IDs and fell
-			// through to synthesis.
+
 			rep.Partial = true
 			for _, a := range act {
 				if !doneStep[a.i] {
@@ -342,14 +259,12 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			}
 			return rep
 		}
-		// Fill the in-flight window. Blocked (poisoned) and launch-failed
-		// steps free their slot immediately and release their dependents.
+
 		for len(ready) > 0 && len(act) < workflowLayerCap {
 			i := ready[0]
 			ready = ready[1:]
 			st := &spec.Steps[i]
-			// A refuted dependency poisons downstream consumers: surface the
-			// break instead of silently building on struck output.
+
 			poisoned := false
 			for _, d := range st.DependsOn {
 				for _, b := range blocking {
@@ -384,11 +299,10 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				continue
 			}
 			st.workerID = id
-			doneStep[i] = false // reset in case this launch is a retry
+			doneStep[i] = false
 			act = append(act, inFlight{i, id})
 		}
 
-		// Poll in-flight workers to terminal state (best_of_n pattern).
 		for _, a := range act {
 			if doneStep[a.i] {
 				continue
@@ -403,11 +317,7 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				finalize(a.i, string(s.Status), s.Result)
 			}
 		}
-		// #3544: compact finalized entries EVERY round. The old compaction
-		// ran only when every in-flight step had finished (allDone), so a
-		// finished step kept occupying a workflowLayerCap slot until its
-		// whole batch drained - ready downstream steps starved below the
-		// cap even though the window had free capacity.
+
 		kept := act[:0]
 		for _, a := range act {
 			if !doneStep[a.i] {
@@ -431,8 +341,6 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 		}
 	}
 
-	// Synthesis: fold SURVIVING step outputs into one answer via a final
-	// sub-agent; the parent context gets this, not the raw outputs.
 	var synthInput strings.Builder
 	fmt.Fprintf(&synthInput, "Synthesis instruction: %s\n\nStep outcomes (REFUTED steps were struck by adversarial verification; BLOCKED steps lost a refuted dependency):\n", spec.Synthesis)
 	anySurviving := false
@@ -476,12 +384,8 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	return rep
 }
 
-// verifierTaskPrefix frames the adversarial contract: the verifier's job is
-// to try to BREAK the worker's claim, not to rubber-stamp it.
 const verifierTaskPrefix = "You are an ADVERSARIAL VERIFIER for a workflow step. Your job is to try to REFUTE the worker's result: re-check its evidence, re-run narrow checks, look for missed edge cases and overclaims. If the result does not hold up, start your final message with 'REJECTED:' followed by the disproof. If it survives your attack, start your final message with 'UPHELD:' followed by the strongest residual caveat.\n\nVerification focus:\n"
 
-// runVerifier launches one verifier and returns its first final-message
-// token line ("REJECTED:..." / "UPHELD:..."), or "" when it could not run.
 func runVerifier(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, st *WorkflowStep, workerResult string, poll time.Duration) string {
 	id, _, err := spawner.Launch(ctx, tool.LaunchOptions{
 		Name:        "wf-verify-" + st.ID,
@@ -499,7 +403,6 @@ func runVerifier(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	return strings.TrimSpace(s.Result)
 }
 
-// waitOne polls a single sub-agent to terminal state.
 func waitOne(ctx context.Context, snaps SnapshotSource, id string, poll time.Duration) (subagent.Snapshot, bool) {
 	for {
 		s, ok := snaps.Snapshot(id)
@@ -518,7 +421,6 @@ func waitOne(ctx context.Context, snaps SnapshotSource, id string, poll time.Dur
 	}
 }
 
-// firstLine clips a message to its first line for one-liner report entries.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
@@ -529,9 +431,6 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// WorkflowRunnerFor wires the cycle-breaker: internal/tool cannot import
-// internal/agentruntime, so the registration sites pass SpawnAgentTool and
-// the Manager in. Mirrors BestOfNRunnerFor.
 func WorkflowRunnerFor(sp CandidateSpawner, snaps SnapshotSource) func(context.Context, tool.WorkflowRequest) string {
 	return func(ctx context.Context, req tool.WorkflowRequest) string {
 		var spec WorkflowSpec
@@ -543,8 +442,6 @@ func WorkflowRunnerFor(sp CandidateSpawner, snaps SnapshotSource) func(context.C
 	}
 }
 
-// Format renders the report the parent context receives: workflow header,
-// per-step one-liners, and the synthesized answer.
 func (r WorkflowReport) Format() string {
 	var b strings.Builder
 	if r.Err != "" {

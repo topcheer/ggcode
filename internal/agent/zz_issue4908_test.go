@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4908: the warn-once latch must be consumed only when a warning is
-// actually emitted. A first validation while the tree is on main must NOT
-// silence the guard for a later mid-run switch to a fix branch; and a
-// mid-run switch to a NEW branch must warn again (per-branch latch).
 func zz4908Repo(t *testing.T, branch string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -41,7 +37,6 @@ func TestIssue4908_MainFirstDoesNotConsumeLatch(t *testing.T) {
 	resetSharedTreeBranchGuard()
 	t.Cleanup(resetSharedTreeBranchGuard)
 
-	// First validation on main: silent, latch untouched.
 	dirMain := zz4908Repo(t, "main")
 	if w := zz4908Run(t, dirMain, "go build ./..."); w != "" {
 		t.Fatalf("on main the guard must stay silent, got %q", w)
@@ -53,7 +48,6 @@ func TestIssue4908_MainFirstDoesNotConsumeLatch(t *testing.T) {
 		t.Fatalf("silent main validation must not consume the latch, got %q", latch)
 	}
 
-	// Later validation on a fix branch (mid-run switch scenario): warns.
 	dirFix := zz4908Repo(t, "fix/issue-4908")
 	w := zz4908Run(t, dirFix, "go build ./...")
 	if w == "" {
@@ -75,7 +69,7 @@ func TestIssue4908_PerBranchLatchMidRunSwitch(t *testing.T) {
 	if w2 := zz4908Run(t, dir, "go build ./..."); w2 != "" {
 		t.Fatalf("same-branch re-validation must stay quiet, got %q", w2)
 	}
-	// Mid-run switch to a NEW branch: warns again.
+
 	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "-b", "fix/second").CombinedOutput(); err != nil {
 		t.Skipf("git unavailable: %v %s", err, out)
 	}

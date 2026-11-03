@@ -19,12 +19,10 @@ func TestBgOrphan_NoWarnImmediatelyAfterStart(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev", "description": "dev server"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// Same iteration -- should not warn
 	if msg := s.checkOrphanedCommands(1); msg != "" {
 		t.Fatalf("expected no warning at same iteration, got: %s", msg)
 	}
 
-	// One iteration later -- still under threshold (bgOrphanThreshold=2)
 	if msg := s.checkOrphanedCommands(2); msg != "" {
 		t.Fatalf("expected no warning 1 iteration later, got: %s", msg)
 	}
@@ -36,7 +34,6 @@ func TestBgOrphan_WarnsAfterThreshold(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev", "description": "dev server"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// 3 iterations later (gap=2, meets threshold)
 	msg := s.checkOrphanedCommands(3)
 	if msg == "" {
 		t.Fatal("expected orphan warning after threshold iterations")
@@ -58,11 +55,9 @@ func TestBgOrphan_NoWarnAfterOutputCheck(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// Agent reads output at iteration 2 -- resets the timer
 	readArgs := json.RawMessage(`{"job_id": "job-1"}`)
 	s.recordOutputCheck(readArgs, "Status: running\nTotal lines: 1", 2)
 
-	// At iteration 3, gap is only 1 -- should not warn
 	if msg := s.checkOrphanedCommands(3); msg != "" {
 		t.Fatalf("expected no warning after recent output check, got: %s", msg)
 	}
@@ -74,11 +69,9 @@ func TestBgOrphan_StopCommandClearsTracking(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// Stop the command
 	stopArgs := json.RawMessage(`{"job_id": "job-1"}`)
 	s.recordStopCommand(stopArgs)
 
-	// Should not warn since job was stopped
 	if msg := s.checkOrphanedCommands(5); msg != "" {
 		t.Fatalf("expected no warning after stop, got: %s", msg)
 	}
@@ -87,14 +80,12 @@ func TestBgOrphan_StopCommandClearsTracking(t *testing.T) {
 func TestBgOrphan_MaxInjections(t *testing.T) {
 	s := newBgOrphanState()
 
-	// Start multiple jobs
 	for i := 0; i < 5; i++ {
 		result := `{"job_id": "job-` + string(rune('1'+i)) + `", "status": "started"}`
 		args := json.RawMessage(`{"command": "echo test"}`)
 		s.recordStartCommand(args, result, 1)
 	}
 
-	// Each check can produce one warning per unique job, but total injections capped at 3
 	warnCount := 0
 	for iter := 3; iter <= 10; iter++ {
 		if msg := s.checkOrphanedCommands(iter); msg != "" {
@@ -132,14 +123,11 @@ func TestBgOrphan_NoRepeatWarningForSameJob(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// First warning
 	msg1 := s.checkOrphanedCommands(3)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second check at later iteration -- should not warn again for same job
-	// (but could if we haven't hit max injections yet)
 	msg2 := s.checkOrphanedCommands(5)
 	if msg2 != "" {
 		t.Fatalf("expected no repeat warning for same job, got: %s", msg2)
@@ -152,16 +140,13 @@ func TestBgOrphan_ReWarnAfterRecheck(t *testing.T) {
 	args := json.RawMessage(`{"command": "npm run dev"}`)
 	s.recordStartCommand(args, result, 1)
 
-	// First warning
 	if msg := s.checkOrphanedCommands(3); msg == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Agent rechecks output -- clears warning state
 	readArgs := json.RawMessage(`{"job_id": "job-1"}`)
 	s.recordOutputCheck(readArgs, "Status: running\nTotal lines: 2", 3)
 
-	// Goes stale again
 	msg := s.checkOrphanedCommands(6)
 	if msg == "" {
 		t.Fatal("expected re-warning after going stale again")
@@ -231,20 +216,15 @@ func TestBgOrphan_TruncateBgCmd(t *testing.T) {
 		t.Errorf("expected length 50, got %d", len(got))
 	}
 
-	// Comment stripping
 	withComment := "# my description\necho hello"
 	if got := truncateBgCmd(withComment, 100); got != "echo hello" {
 		t.Errorf("expected comment stripped, got: %q", got)
 	}
 }
 
-// TestBgOrphanTerminalStatusExitsTracking pins #1440-A: a read_command_output
-// snapshot showing a TERMINAL status removes the job from tracking - a
-// completed job must not cycle false orphan warnings until the injection
-// budget burns out, leaving genuinely orphaned jobs silent.
 func TestBgOrphanTerminalStatusExitsTracking(t *testing.T) {
 	s := newBgOrphanState()
-	// recordStartCommand extracts the job ID from the RESULT snapshot.
+
 	s.recordStartCommand(json.RawMessage("{\"command\":\"sleep 1\"}"), "Job ID: job-1\nStatus: running", 1)
 	if len(s.activeJobs) == 0 {
 		t.Fatal("job not tracked after start")
@@ -256,10 +236,6 @@ func TestBgOrphanTerminalStatusExitsTracking(t *testing.T) {
 	}
 }
 
-// TestBGOrphanEvictedJobReadStopsCycle pins #1771 case 2: reading an
-// evicted ("not found") job must remove it from tracking - the old loop
-// waited for a Status: line that never comes, re-warning every 2 iters
-// until the injection budget burned out.
 func TestBGOrphanEvictedJobReadStopsCycle(t *testing.T) {
 	s := newBgOrphanState()
 	s.mu.Lock()
@@ -275,12 +251,6 @@ func TestBGOrphanEvictedJobReadStopsCycle(t *testing.T) {
 	}
 }
 
-// Regression for #1879 case 2: a RUNNING job whose own stdout merely
-// QUOTES the not-found phrase (self-referential test output) must NOT be
-// removed from tracking - only the error channel (a line starting with
-// "Error: command job" containing "not found") is the removal signal.
-// The old full-text substring match deleted such a job and the detector
-// went permanently silent when it later genuinely orphaned.
 func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
 	s := newBgOrphanState()
 	s.mu.Lock()
@@ -288,7 +258,6 @@ func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
 	s.mu.Unlock()
 	args := json.RawMessage(`{"job_id":"job-7"}`)
 
-	// Self-referential output: phrases present, but inside normal stdout.
 	quoted := "=== RUN TestCommandJobs\n--- FAIL: TestCommandJobs\ncommand job \"job-9\" not found\nFAIL\nStatus: running"
 	s.recordOutputCheck(args, quoted, 5)
 	s.mu.Lock()
@@ -298,7 +267,6 @@ func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
 		t.Fatal("running job quoting the phrase in stdout must stay tracked")
 	}
 
-	// The genuine error channel still removes it.
 	s.recordOutputCheck(args, "Error: command job \"job-7\" not found", 7)
 	s.mu.Lock()
 	_, still = s.activeJobs["job-7"]
@@ -308,23 +276,18 @@ func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
 	}
 }
 
-// #1712 case 5: a bare "Status: completed" line ECHOED by program output
-// (build logs) must NOT retire a still-running jobs
-
-// #1712 case 5: a bare "Status: completed" line ECHOED by program output
-// (build logs) must NOT retire a still-running job's tracker.
 func TestBgOrphanEchoedStatusDoesNotRetire1712(t *testing.T) {
 	s := newBgOrphanState()
 	s.recordStartCommand(json.RawMessage("{\"command\":\"make test\"}"), "Job ID: job-9\nStatus: running", 1)
 	if len(s.activeJobs) == 0 {
 		t.Fatal("job not tracked after start")
 	}
-	// Echoed build output with no Job ID header.
+
 	s.recordOutputCheck(json.RawMessage(`{"job_id": "job-9"}`), "=== RUN TestX\nStatus: completed (cached)\n--- PASS", 2)
 	if len(s.activeJobs) != 1 {
 		t.Fatalf("echoed status must not retire tracking, tracked=%d", len(s.activeJobs))
 	}
-	// Real manager block still retires.
+
 	s.recordOutputCheck(json.RawMessage(`{"job_id": "job-9"}`), "Job ID: job-9\nStatus: completed", 3)
 	if len(s.activeJobs) != 0 {
 		t.Fatal("manager status block must retire tracking")

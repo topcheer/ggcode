@@ -6,12 +6,10 @@ import (
 	"testing"
 )
 
-// TestProbe1569 pins #1569: substring -f in branch names must not fire,
-// dry-run clean must not fire, +refspec force must fire.
 func TestProbe1569(t *testing.T) {
 	cases := []struct {
 		cmd      string
-		wantName string // "" = expect no fire
+		wantName string
 	}{
 		{"git push origin hot-fix", ""},
 		{"git push origin bug-fix", ""},
@@ -39,8 +37,6 @@ func TestProbe1569(t *testing.T) {
 	}
 }
 
-// TestProbe1600 pins #1600: separator-bounded scanning, long-form
-// dry-run/force, and lease-not-masking.
 func TestProbe1600(t *testing.T) {
 	cases := []struct {
 		cmd      string

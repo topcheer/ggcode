@@ -1,52 +1,5 @@
 package agent
 
-// Concurrent Map Access Detection in Go Code
-//
-// Problem: AI coding agents frequently generate Go code that accesses maps
-// from multiple goroutines without proper synchronization. Go's runtime
-// detects this at runtime with a fatal crash:
-//
-//	fatal error: concurrent map writes
-//	fatal error: concurrent map read and map write
-//
-// These crashes are non-recoverable (they abort the entire process) and are
-// among the most common production incidents in Go services. Unlike data
-// races (which require -race flag to detect), concurrent map access crashes
-// happen unconditionally whenever the timing aligns.
-//
-// Common LLM failure modes this check catches:
-//  1. Map declared as struct field, written in one goroutine, read in another
-//     without a mutex: `go s.process()` where process reads/writes s.items
-//  2. Map accessed inside a goroutine spawned by a method that also modifies
-//     the same map: `go func() { m[key] = val }()` without sync
-//  3. Map passed to a goroutine and concurrently modified by the caller
-//  4. Map used as a cache shared across goroutines with no synchronization
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external -race testing)
-//   - Cursor: go vet does NOT catch this (it only checks for some race patterns)
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//   - GitHub Copilot: no automatic detection
-//
-// go vet does NOT detect concurrent map access. The -race detector catches
-// it at runtime but only if the concurrent path is actually exercised during
-// testing. staticcheck does not check this either.
-//
-// Approach: Heuristic AST-based analysis. For each function, if it (a) spawns
-// goroutines via `go` statements AND (b) has map read/write operations on the
-// same map variable, AND (c) does NOT use sync primitives (Mutex, RWMutex,
-// sync.Map) to protect those accesses, flag as a potential concurrent map
-// access. This is conservative: it only flags within a single function scope
-// where both the goroutine spawn and map access coexist without sync.
-//
-// False positive mitigation:
-//   - Channels: if the map is only accessed through channel-mediated patterns,
-//     we skip (hard to detect precisely, but we check for obvious sync usage)
-//   - sync.Map: explicitly excluded (designed for concurrent use)
-//   - Functions with Mutex/RWMutex/Locker calls are excluded
-//   - Delta-aware: only flags patterns newly introduced by this edit
-
 import (
 	"fmt"
 	"go/ast"
@@ -56,17 +9,13 @@ import (
 	"strings"
 )
 
-// concurrentMapInstance represents a potential concurrent map access.
 type concurrentMapInstance struct {
-	posStr   string // human-readable position
-	fp       string // content fingerprint: funcName|mapName (delta key)
-	mapName  string // the map variable name
-	goCalled bool   // whether this is in a goroutine context
+	posStr   string
+	fp       string
+	mapName  string
+	goCalled bool
 }
 
-// checkConcurrentMapAccess detects potential concurrent map access in Go code
-// where maps are accessed both directly and inside spawned goroutines without
-// synchronization. Delta-aware: only flags NEW instances.
 func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 	if filepath.Ext(filePath) != ".go" || strings.TrimSpace(newContent) == "" {
 		return ""
@@ -82,14 +31,10 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Delta check: compare against old content positions (fix #140/#142).
 	var oldLines map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findConcurrentMapAccess(token.NewFileSet(), func() *ast.File {
-			// Parse with the SAME filePath as the new content (#220): parsing
-			// with "" made posStr keys "file.go:N" vs ".:N" — never equal,
-			// so the skip below was dead code and every edit re-reported
-			// pre-existing patterns.
+
 			f, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
 			return f
 		}()) {
@@ -114,29 +59,15 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 		reported++
 	}
 	if reported == 0 {
-		// Everything was pre-existing: emit nothing rather than a bare
-		// header — callers treat any non-empty string as a warning.
+
 		return ""
 	}
 	return b.String()
 }
 
-// findConcurrentMapAccess performs heuristic detection of potential concurrent
-// map access within each function. A function is flagged if:
-//  1. It contains at least one `go` statement (goroutine spawn)
-//  2. It has map write operations (m[k] = v, delete(m, k))
-//  3. It does NOT declare or use sync primitives (Mutex, RWMutex, sync.Map)
-//
-// We focus on map WRITES because those are the ones that cause fatal crashes.
-// Map reads combined with concurrent writes also crash, but if we detect the
-// write pattern we already flag it.
 func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMapInstance {
 	var instances []concurrentMapInstance
 
-	// #1533-A: package-level `var counters map[string]int` is the canonical
-	// cross-goroutine shared-registry shape - the top-level GenDecl loop used
-	// to be skipped entirely (only FuncDecls were analyzed), so the detector's
-	// headline scenario went silent after #1445 required declaration proof.
 	pkgMaps := map[string]bool{}
 	for _, topDecl := range file.Decls {
 		gd, ok := topDecl.(*ast.GenDecl)
@@ -168,14 +99,11 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 			continue
 		}
 
-		// Collect function-level info (#1445-A: the FuncDecl seeds map-typed
-		// params/receivers into the declaration-proof set internally).
 		info := analyzeFuncForMapConcurrency(fn, pkgMaps)
 		if len(info.unsyncMapWrites) == 0 || !info.hasGoStatement {
 			continue
 		}
 
-		// Flag each unsynchronized map write.
 		for mapName, pos := range info.unsyncMapWrites {
 			p := fset.Position(pos)
 			instances = append(instances, concurrentMapInstance{
@@ -190,30 +118,24 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 	return instances
 }
 
-// mapConcurrencyInfo holds analysis results for a function body.
 type mapConcurrencyInfo struct {
 	hasGoStatement  bool
-	hasSync         bool                 // uses Mutex, RWMutex, sync.Map, or Locker
-	unsyncMapWrites map[string]token.Pos // map var name -> position of first write
-	mapDeclared     map[string]bool      // #1445-A: names PROVEN to be maps
+	hasSync         bool
+	unsyncMapWrites map[string]token.Pos
+	mapDeclared     map[string]bool
 }
 
-// analyzeFuncForMapConcurrency inspects a function for concurrent map
-// access patterns (#1445-A: takes the FuncDecl so map-typed params and
-// receivers seed the declaration-proof set BEFORE the write scan).
 func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) mapConcurrencyInfo {
 	body := fn.Body
 	info := mapConcurrencyInfo{
 		unsyncMapWrites: make(map[string]token.Pos),
 		mapDeclared:     make(map[string]bool),
 	}
-	// #1533-A: package-level maps are proof BEFORE the inspect pass - the
-	// write detection consults mapDeclared while walking, so seeding after
-	// the call (as an earlier draft did) was a no-op.
+
 	for name := range pkgMaps {
 		info.mapDeclared[name] = true
 	}
-	// Params/receiver declared as maps are proof (func worker(m map...)).
+
 	seed := func(fl *ast.FieldList) {
 		if fl == nil {
 			return
@@ -229,14 +151,6 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 	seed(fn.Type.Params)
 	seed(fn.Recv)
 
-	// #1445-A pass 1: collect names PROVEN to be maps - the old check
-	// counted ANY indexed assignment (`out[i] = v` on a slice, `arr[0]`,
-	// struct-slice rows) as a map write, so the extremely common fan-out
-	// pattern (parallel goroutines filling a preallocated slice) fired
-	// "map 'out' accessed without sync" on an object that was never a map
-	// (the #511 tombstone lesson repeating). Without go/types we prove
-	// map-ness from the declaration shapes: make(map[...]), var x map[...],
-	// or a map composite literal.
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.AssignStmt:
@@ -262,10 +176,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 						}
 						continue
 					}
-					// #1533-B: `var m = make(map[string]int)` and
-					// `var m = map[string]int{}` fall between the DeclStmt
-					// (Type-only) and AssignStmt (isMapValuedExpr) branches -
-					// the idiomatic inferred declaration was never proven.
+
 					for i, val := range vs.Values {
 						if isMapValuedExpr(val) && i < len(vs.Names) {
 							info.mapDeclared[vs.Names[i].Name] = true
@@ -283,12 +194,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 			info.hasGoStatement = true
 
 		case *ast.SelectorExpr:
-			// Detect sync.Map usage: sync.Map or field of type accessed via
-			// sync.Map methods (Store, Load, LoadOrStore, Delete, Range).
-			// Only MUTUAL-EXCLUSION or concurrent-safe-map types count (#218):
-			// WaitGroup/Once/Pool provide no map protection — counting them
-			// cleared all warnings for the most common fan-out crash pattern
-			// (goroutines writing a map under wg.Add/Done).
+
 			if ident, ok := node.X.(*ast.Ident); ok {
 				if ident.Name == "sync" && node.Sel != nil {
 					switch node.Sel.Name {
@@ -299,7 +205,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 			}
 
 		case *ast.CallExpr:
-			// Detect Lock/Unlock/RLock/RUnlock method calls as evidence of sync.
+
 			if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil {
 				switch sel.Sel.Name {
 				case "Lock", "Unlock", "RLock", "RUnlock", "TryLock", "TryRLock":
@@ -307,12 +213,10 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 				}
 			}
 
-			// Detect mutex type declarations via make or struct literal.
 			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "Lock" {
 				info.hasSync = true
 			}
 
-			// Detect delete(m, k) -- another map write operation.
 			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "delete" && len(node.Args) > 0 {
 				if mapName := mapVarName(node.Args[0]); mapName != "" {
 					if _, exists := info.unsyncMapWrites[mapName]; !exists {
@@ -322,9 +226,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 			}
 
 		case *ast.IncDecStmt:
-			// #1533-C: m[k]++ (concurrent counters are a top real-world
-			// concurrent-map crash shape) - IncDecStmt is NOT an AssignStmt,
-			// so it escaped the switch entirely.
+
 			if idx, ok := node.X.(*ast.IndexExpr); ok {
 				name := mapVarName(idx.X)
 				if name != "" && (strings.Contains(name, ".") || info.mapDeclared[name]) {
@@ -335,8 +237,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 			}
 
 		case *ast.AssignStmt:
-			// Detect map write: m[k] = v  (#1533-C: and m[k] += v etc. -
-			// compound assignments used to be filtered out alongside :=/=).
+
 			isAssignTok := node.Tok == token.ASSIGN || node.Tok == token.DEFINE ||
 				node.Tok == token.ADD_ASSIGN || node.Tok == token.SUB_ASSIGN ||
 				node.Tok == token.MUL_ASSIGN || node.Tok == token.QUO_ASSIGN ||
@@ -347,10 +248,7 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 			if isAssignTok {
 				for _, lhs := range node.Lhs {
 					if idx, ok := lhs.(*ast.IndexExpr); ok {
-						// #1445-A: plain identifiers need declaration proof (a
-						// slice out[i]=v is not a map write); struct-field
-						// selectors keep the conservative old behavior (the
-						// field's type lives outside this function).
+
 						name := mapVarName(idx.X)
 						isMapWrite := name != "" && (strings.Contains(name, ".") || info.mapDeclared[name])
 						if isMapWrite {
@@ -365,7 +263,6 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 		return true
 	})
 
-	// If the function uses sync primitives, clear the warnings.
 	if info.hasSync {
 		info.unsyncMapWrites = make(map[string]token.Pos)
 	}
@@ -373,9 +270,6 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 	return info
 }
 
-// mapVarName extracts the variable name from a map expression, handling
-// simple identifiers (m), selector expressions (s.items), and returning
-// empty string for complex expressions.
 func mapVarName(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -390,9 +284,6 @@ func mapVarName(expr ast.Expr) string {
 	}
 }
 
-// isMapValuedExpr reports whether an expression yields a map: a
-// make(map[...]) call, a map type conversion, or a map composite literal
-// (#1445-A declaration proof, pass 1).
 func isMapValuedExpr(e ast.Expr) bool {
 	switch v := e.(type) {
 	case *ast.CallExpr:

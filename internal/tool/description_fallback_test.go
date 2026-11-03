@@ -15,7 +15,6 @@ const uiLabelSchema = `{
 	"required": ["pattern", "description"]
 }`
 
-// Semantic description (e.g. create_skill): the description IS the payload.
 const semanticSchema = `{
 	"type": "object",
 	"properties": {
@@ -43,7 +42,7 @@ func TestInjectDescriptionFallback_MissingUILabel(t *testing.T) {
 	if !strings.Contains(m["description"], "TODO") {
 		t.Errorf("fallback should mention primary arg, got %q", m["description"])
 	}
-	// Injected args must now pass required validation - the rejection loop is broken.
+
 	if msg := ValidateRequiredParams(json.RawMessage(uiLabelSchema), out, ""); msg != "" {
 		t.Errorf("after fallback, validation should pass, got: %s", msg)
 	}
@@ -73,7 +72,7 @@ func TestInjectDescriptionFallback_PresentLeftAlone(t *testing.T) {
 }
 
 func TestInjectDescriptionFallback_SemanticDescriptionNotInjected(t *testing.T) {
-	// create_skill-style: description is user data; missing must still reject.
+
 	in := json.RawMessage(`{"name": "deploy"}`)
 	out := InjectDescriptionFallback(json.RawMessage(semanticSchema), in, "create_skill")
 	if string(out) != string(in) {

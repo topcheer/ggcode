@@ -11,8 +11,8 @@ import (
 
 func TestMultiEdit_FallbackChain(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.txt") // .txt: isolate edit-matching from Go auto-format
-	// Tab-indented file, CRLF line endings on the second site.
+	fp := filepath.Join(dir, "test.txt")
+
 	content := "package main\n\nfunc a() {\n\tprintln(\"a\")\n}\nfunc b() {\r\n\tprintln(\"b\")\r\n}\n"
 	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -21,12 +21,12 @@ func TestMultiEdit_FallbackChain(t *testing.T) {
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
 		"edits": []map[string]string{
-			// edit 1: spaces instead of tab — exercises indent normalization.
+
 			{
 				"old_text": "func a() {\n    println(\"a\")\n}",
 				"new_text": "func a() {\n    println(\"AAA\")\n}",
 			},
-			// edit 2: LF instead of CRLF — exercises CRLF fallback.
+
 			{
 				"old_text": "func b() {\n\tprintln(\"b\")\n}",
 				"new_text": "func b() {\n\tprintln(\"BBB\")\n}",
@@ -45,7 +45,7 @@ func TestMultiEdit_FallbackChain(t *testing.T) {
 	if !strings.Contains(gs, `println("AAA")`) || !strings.Contains(gs, `println("BBB")`) {
 		t.Errorf("unexpected content: %q", gs)
 	}
-	// CRLF on the second site must be preserved.
+
 	if !strings.Contains(gs, "func b() {\r\n\tprintln(\"BBB\")\r\n}") {
 		t.Errorf("CRLF preservation failed: %q", gs)
 	}
@@ -69,7 +69,7 @@ func TestMultiEdit_NotFoundIncludesHint(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error for missing match")
 	}
-	// Hint may vary, but the message should be more than just "not found".
+
 	if !strings.Contains(res.Content, "edits[0]") {
 		t.Errorf("expected edit index in error; got: %s", res.Content)
 	}
@@ -367,8 +367,7 @@ func TestResolveOldText_PreservesUnchangedOnExactMatch(t *testing.T) {
 }
 
 func TestStripLineNumberPrefix_NoFalsePositive(t *testing.T) {
-	// Single line that happens to have digits + tab prefix should not be
-	// treated as line-numbered (requires >=2 such lines).
+
 	in := "42\tprice: 12.99"
 	if got := stripLineNumberPrefix(in); got != in {
 		t.Errorf("expected no-op on single-line digit-tab input; got %q", got)
@@ -390,9 +389,7 @@ func TestFindMatchLineNumbers(t *testing.T) {
 }
 
 func TestResolveOldText_FuzzyLineMatch(t *testing.T) {
-	// File uses 4-space indent, old_text uses tab indent.
-	// This should be caught by normalizeIndentation, but if not,
-	// the fuzzy line match should still succeed.
+
 	content := "    fn main() {\n    \tprintln!(\"hello\");\n    }\n"
 	oldText := "\tfn main() {\n\t\tprintln!(\"hello\");\n\t}\n"
 	mr := resolveOldText(content, oldText)
@@ -405,14 +402,14 @@ func TestResolveOldText_FuzzyLineMatch(t *testing.T) {
 }
 
 func TestTryFuzzyLineMatch_MixedIndentation(t *testing.T) {
-	// File uses mixed tab+space, old_text uses spaces only.
+
 	content := "\tpub fn start(&mut self) {\n\t\tself.running = true;\n\t}\n"
 	oldText := "    pub fn start(&mut self) {\n        self.running = true;\n    }\n"
 	result := tryFuzzyLineMatch(content, oldText)
 	if result == "" {
 		t.Fatal("expected fuzzy match to find the block despite mixed indentation")
 	}
-	// Result should be the file's actual bytes.
+
 	if !strings.Contains(result, "\tpub fn start") {
 		t.Errorf("result should contain file's tab-indented text; got %q", result)
 	}
@@ -428,16 +425,14 @@ func TestTryFuzzyLineMatch_NoMatch(t *testing.T) {
 }
 
 func TestLenientRecount_RstripOnlyIndentSignificant(t *testing.T) {
-	// #821 semantics: trailing-whitespace-tolerant counting ignores only
-	// TRAILING whitespace; leading indentation stays significant. A second
-	// block differing purely in indent must not inflate the count.
+
 	content := "fn a() {\n\t\tinner()\n\t}\n\nfn a() {\ninner()\n}\n"
 	old := "fn a() {\ninner()\n}\n"
 	n, lines := LenientRecount(content, old, "trailing-whitespace-tolerant")
 	if n != 1 {
 		t.Fatalf("rstrip-only recount should ignore the indent-differing block; got count %d (lines %v)", n, lines)
 	}
-	// The fully-trim fuzzy form collapses both blocks, so its recount is 2.
+
 	n2, _ := LenientRecount(content, old, "fuzzy-trim")
 	if n2 != 2 {
 		t.Fatalf("fully-trimmed recount should count both blocks; got %d", n2)
@@ -445,8 +440,7 @@ func TestLenientRecount_RstripOnlyIndentSignificant(t *testing.T) {
 }
 
 func TestLenientRecount_CRLFConverted(t *testing.T) {
-	// crlf-converted recount must count against the file's CRLF bytes, not
-	// the LF probe (an LF probe would count 0 and fail-open).
+
 	content := "fn a() {}\r\nfn a() {}\r\n"
 	n, _ := LenientRecount(content, "fn a() {}\n", "crlf-converted")
 	if n != 2 {

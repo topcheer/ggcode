@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #2268/#2269 bundle pins.
-
-// #2269: the streaming range reader must surface the conflict warning on
-// RAW lines - the caller-side guard on line-numbered text never fired.
 func TestIssue2269StreamingConflictGuardFires(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "big.go")
@@ -34,7 +30,7 @@ func TestIssue2269StreamingConflictGuardFires(t *testing.T) {
 	if !strings.Contains(got, "[WARNING]") || !strings.Contains(got, "conflict") {
 		t.Errorf("streaming read with conflict markers must carry the warning, got tail: %q", tailN(got, 200))
 	}
-	// sanity: the marker line itself is still visible in the range
+
 	if !strings.Contains(got, "<<<<<<< HEAD") {
 		t.Error("marker line should still be visible in output")
 	}
@@ -55,9 +51,6 @@ func TestIssue2269CleanRangeNoWarning(t *testing.T) {
 	}
 }
 
-// #2269 R100: a LONE ======= (setext underline) or >>>>>>> outside a
-// conflict region must NOT fire - the first cut fired on all three
-// markers independently (review sa-211 false positive).
 func TestIssue2269LoneMarkersNoWarning(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "doc.md")

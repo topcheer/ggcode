@@ -9,16 +9,6 @@ import (
 	"time"
 )
 
-// #3146 probes: the r413 failure-attribution memory was a monotonic
-// false-positive amplifier - no TTL, no decay, no success-clearing path.
-// A fixed file kept its "recurring suspect" hint forever (only natural
-// eviction was being pushed out by 20 newer entries). The fix adds:
-//   - time-first eviction in pruneFailureEntries (LastSeen older than
-//     failureEntryTTL is presumed fixed)
-//   - a render-side staleness guard in FailureHintsForPrompt (entries
-//     unseen for failureHintStaleAfter are skipped, covering the window
-//     between TTL expiry and the next write)
-
 func write3146Store(t *testing.T, dir string, entries []PlaybookFailureEntry) {
 	t.Helper()
 	b, err := json.Marshal(entries)
@@ -33,8 +23,6 @@ func write3146Store(t *testing.T, dir string, entries []PlaybookFailureEntry) {
 	}
 }
 
-// Prune evicts expired entries even when the store is NOT over capacity:
-// a presumably-fixed suspect must not survive just because there is room.
 func TestIssue3146_PruneEvictsExpired(t *testing.T) {
 	now := time.Now()
 	in := []PlaybookFailureEntry{
@@ -47,8 +35,6 @@ func TestIssue3146_PruneEvictsExpired(t *testing.T) {
 	}
 }
 
-// Render skips stale entries: a hint for an unseen-for-two-weeks suspect
-// must not occupy budget while the store awaits its next write.
 func TestIssue3146_RenderSkipsStale(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -69,7 +55,6 @@ func TestIssue3146_RenderSkipsStale(t *testing.T) {
 	}
 }
 
-// All-stale store renders empty (not a bare header block).
 func TestIssue3146_AllStaleRendersEmpty(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -83,7 +68,6 @@ func TestIssue3146_AllStaleRendersEmpty(t *testing.T) {
 	}
 }
 
-// Fresh entries still render with the recurring-suspect note (regression).
 func TestIssue3146_FreshStillRenders(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -98,8 +82,6 @@ func TestIssue3146_FreshStillRenders(t *testing.T) {
 	}
 }
 
-// #3142 review follow-up: the 400-char truncation must land on a line
-// boundary, never mid-rune (CJK hint content).
 func TestIssue3146_TruncationAtLineBoundary(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()

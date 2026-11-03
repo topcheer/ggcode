@@ -39,7 +39,6 @@ func TestSilentError_ActionAddressesSameResource(t *testing.T) {
 	s := newSilentErrorState()
 	s.recordToolError("edit_file", "/foo.go", "error", 1)
 
-	// Same resource = addresses the error, should not count as silent advancement.
 	msg := s.recordToolAction("edit_file", "/foo.go")
 	if msg != "" {
 		t.Errorf("expected no guidance, got %s", msg)
@@ -53,7 +52,6 @@ func TestSilentError_DifferentResourceIsAdvancement(t *testing.T) {
 	s := newSilentErrorState()
 	s.recordToolError("edit_file", "/foo.go", "error", 1)
 
-	// Different resource = silent advancement.
 	msg := s.recordToolAction("edit_file", "/bar.go")
 	if msg != "" {
 		t.Errorf("expected no guidance at count=1, got %s", msg)
@@ -66,15 +64,12 @@ func TestSilentError_DifferentResourceIsAdvancement(t *testing.T) {
 func TestSilentError_FiresAfterThreshold(t *testing.T) {
 	s := newSilentErrorState()
 
-	// Error 1, then advance.
 	s.recordToolError("edit_file", "/foo.go", "error 1", 1)
 	s.recordToolAction("run_command", "ls")
 
-	// Error 2, then advance.
 	s.recordToolError("edit_file", "/bar.go", "error 2", 2)
 	s.recordToolAction("run_command", "pwd")
 
-	// Error 3, then advance - should fire.
 	s.recordToolError("edit_file", "/baz.go", "error 3", 3)
 	msg := s.recordToolAction("run_command", "date")
 
@@ -89,15 +84,12 @@ func TestSilentError_FiresAfterThreshold(t *testing.T) {
 func TestSilentError_DoesNotFireWhenAddressingErrors(t *testing.T) {
 	s := newSilentErrorState()
 
-	// Error 1, then address it.
 	s.recordToolError("edit_file", "/foo.go", "error 1", 1)
 	s.recordToolAction("edit_file", "/foo.go")
 
-	// Error 2, then address it.
 	s.recordToolError("run_command", "go build", "build error", 2)
 	s.recordToolAction("run_command", "go build")
 
-	// Error 3, then address it.
 	s.recordToolError("edit_file", "/bar.go", "error 3", 3)
 	msg := s.recordToolAction("read_file", "/bar.go")
 
@@ -108,11 +100,9 @@ func TestSilentError_DoesNotFireWhenAddressingErrors(t *testing.T) {
 
 func TestSilentError_PrefixMatchAddressesError(t *testing.T) {
 	s := newSilentErrorState()
-	// Error on a build command.
+
 	s.recordToolError("run_command", "go build ./...", "build error", 1)
 
-	// Agent runs a targeted build on a subpackage - should count as addressing.
-	// "go build ./pkg/..." has prefix match with "go build".
 	msg := s.recordToolAction("run_command", "go build ./pkg/")
 	if msg != "" {
 		t.Errorf("expected no guidance for prefix match, got %s", msg)
@@ -142,12 +132,11 @@ func TestSilentError_MaxTracked(t *testing.T) {
 
 func TestSilentError_EmptyResourceKeyNotTracked(t *testing.T) {
 	s := newSilentErrorState()
-	// Some tools don't produce resource keys.
+
 	s.recordToolError("lsp_hover", "", "error", 1)
-	// Empty resource key can't be matched, so nothing should fire.
+
 	msg := s.recordToolAction("run_command", "ls")
-	// With no resource keys to match against, every action is a silent advancement,
-	// but we need 3 to fire. Let's add more errors.
+
 	if msg != "" {
 		t.Errorf("expected no guidance at count 1, got: %s", msg)
 	}
@@ -198,7 +187,6 @@ func TestSilentError_BuildGuidance(t *testing.T) {
 	s.recordToolError("run_command", "go build", "compilation failed", 2)
 	s.recordToolError("edit_file", "/bar.go", "anchor mismatch", 3)
 
-	// Trigger 3 silent advancements to hit threshold.
 	msg := ""
 	for i := 0; i < silentErrorThreshold; i++ {
 		msg = s.recordToolAction("read_file", "/unrelated.go")
@@ -213,9 +201,7 @@ func TestSilentError_BuildGuidance(t *testing.T) {
 
 func TestSilentError_EnvironmentalCommandNotSeeded(t *testing.T) {
 	s := newSilentErrorState()
-	// sa-29: read-only/environmental git commands fail transiently on
-	// connectivity; they must not seed unresolved errors that later
-	// indict ordinary read-only progress as "silent error advancement".
+
 	s.recordToolError("run_command", "git fetch origin main", "could not resolve host", 1)
 	s.recordToolError("run_command", "git ls-remote origin", "connection refused", 2)
 	if len(s.unresolvedErrors) != 0 {
@@ -225,7 +211,6 @@ func TestSilentError_EnvironmentalCommandNotSeeded(t *testing.T) {
 		t.Errorf("expected no guidance for read-only progress, got %q", msg)
 	}
 
-	// Code-actionable commands still seed.
 	s.recordToolError("run_command", "go build", "build error", 3)
 	if len(s.unresolvedErrors) != 1 {
 		t.Errorf("expected 1 unresolved error for go build, got %d", len(s.unresolvedErrors))
@@ -237,7 +222,7 @@ func TestSilentError_EnvironmentalCommandHelper(t *testing.T) {
 		"git fetch origin main": true,
 		"git ls-remote origin":  true,
 		"git clone https://x":   true,
-		"git pull --rebase":     false, // can fail on merge conflicts: code-actionable
+		"git pull --rebase":     false,
 		"go build ./...":        false,
 		"git status":            false,
 		"git":                   false,

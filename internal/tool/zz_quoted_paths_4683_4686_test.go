@@ -5,12 +5,8 @@ import (
 	"testing"
 )
 
-// #4686/#4683: quoted diff paths (spaces / non-ASCII, git always quotes)
-// must flow through every consumer of the shared header regexes instead of
-// silently vanishing files from commit plans.
-
 func TestQuotedHeaderRegexes(t *testing.T) {
-	// +++ quoted
+
 	m := diffFileHeader.FindStringSubmatch(`+++ b/"my file.go"`)
 	if m == nil {
 		t.Fatal("quoted +++ header must match (#4686)")
@@ -18,7 +14,7 @@ func TestQuotedHeaderRegexes(t *testing.T) {
 	if got := diffHeaderPath(m); got != "my file.go" {
 		t.Fatalf("quoted +++ path = %q, want my file.go", got)
 	}
-	// --- quoted
+
 	m = diffOldFileHeader.FindStringSubmatch(`--- a/"my file.go"`)
 	if m == nil {
 		t.Fatal("quoted --- header must match (#4686)")
@@ -26,15 +22,13 @@ func TestQuotedHeaderRegexes(t *testing.T) {
 	if got := diffHeaderPath(m); got != "my file.go" {
 		t.Fatalf("quoted --- path = %q, want my file.go", got)
 	}
-	// bare forms still work
+
 	m = diffFileHeader.FindStringSubmatch("+++ b/plain.go")
 	if m == nil || diffHeaderPath(m) != "plain.go" {
 		t.Fatalf("bare +++ must keep working, m=%v", m)
 	}
 }
 
-// The commit-partition flow must not drop a quoted-path file: git renders
-// the FIRST file of a diff with quoted headers when the name has spaces.
 func TestQuotedPathSurvivesPartition(t *testing.T) {
 	diff := strings.Join([]string{
 		`diff --git "a/my file.go" "b/my file.go"`,
@@ -58,8 +52,6 @@ func TestQuotedPathSurvivesPartition(t *testing.T) {
 	}
 }
 
-// #4683-C: quoted-path binaries must register (they bypassed the check
-// 100% before - the same miss class as #4047).
 func TestQuotedBinaryHeaderRegisters(t *testing.T) {
 	for _, line := range []string{
 		`Binary files "a/my file.png" and "b/my file.png" differ`,
@@ -72,13 +64,8 @@ func TestQuotedBinaryHeaderRegisters(t *testing.T) {
 	}
 }
 
-// #4683-A: a deleted CONTENT line starting with "--- a/" must not poison
-// lastOldFile - only a header followed by its +++ counterpart counts.
 func TestContentLineOldHeaderGuard(t *testing.T) {
-	// Same shape as TestQuotedPathSurvivesPartition plus one fake
-	// "--- a/..." content line inside the hunk: the guard (next line must
-	// be a +++ header) must reject it, the real file must survive, and no
-	// phantom "fake content" entry may appear.
+
 	diff := strings.Join([]string{
 		`diff --git "a/my file.go" "b/my file.go"`,
 		`index 111..222 100644`,

@@ -12,11 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// DebugLogTool lets the LLM inspect recent debug log entries from the
-// in-memory ring buffer and optionally export them to a temp file.
-// This is useful for diagnosing issues with internal subsystems (agent loop,
-// provider calls, IM adapters, etc.) without needing to read log
-// files from disk.
 type DebugLogTool struct{}
 
 func (t DebugLogTool) Name() string { return "debug_log" }
@@ -116,11 +111,6 @@ func (t DebugLogTool) doRead(lines int, category string) (Result, error) {
 	return Result{Content: b.String()}, nil
 }
 
-// sanitizeLogNamePart makes a user-supplied filter (category/keyword) safe
-// to embed in an export filename (#1320): raw parts were joined into the
-// path, so a keyword like "../../../etc/foo" escaped the temp dir and
-// truncated-arbitrary-path-wrote a .log file. Strips path separators,
-// parent refs, and control/null bytes; keeps it readable.
 func sanitizeLogNamePart(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -132,7 +122,7 @@ func sanitizeLogNamePart(s string) string {
 		}
 	}
 	out := b.String()
-	// Collapse any surviving traversal-ish sequences.
+
 	for strings.Contains(out, "..") {
 		out = strings.ReplaceAll(out, "..", "_")
 	}
@@ -143,12 +133,11 @@ func sanitizeLogNamePart(s string) string {
 }
 
 func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, error) {
-	// For export, allow up to 2000 lines
+
 	if lines > 2000 {
 		lines = 2000
 	}
 
-	// Get all entries (bypass the 200 limit by calling RingHistoryMax)
 	entries := debug.RingHistoryMax(lines, category)
 	count, capacity := debug.RingStats()
 
@@ -156,7 +145,6 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 		return Result{Content: fmt.Sprintf("No debug log entries to export (ring buffer: %d/%d entries).", count, capacity)}, nil
 	}
 
-	// Apply keyword filter if provided
 	filtered := entries
 	if keyword != "" {
 		kwLower := strings.ToLower(keyword)
@@ -173,7 +161,6 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 		return Result{Content: fmt.Sprintf("No entries matched filters (category=%q keyword=%q). Total in buffer: %d/%d", category, keyword, count, capacity)}, nil
 	}
 
-	// Write to temp file
 	ts := time.Now().Format("20060102-150405")
 	filename := fmt.Sprintf("ggcode-debug-%s", ts)
 	if category != "" {
@@ -185,9 +172,7 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 	filename += ".log"
 
 	tmpDir := os.TempDir()
-	// Defense in depth (#1320): the sanitized parts can no longer carry
-	// path separators or "..", but Base() guarantees the final name stays
-	// inside tmpDir even if a future edit reintroduces traversal.
+
 	path := filepath.Join(tmpDir, filepath.Base(filename))
 
 	f, err := os.Create(path)
@@ -195,9 +180,6 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 		return Result{IsError: true, Content: fmt.Sprintf("failed to create temp file: %v", err)}, nil
 	}
 
-	// #3128 V3: surface write failures instead of reporting success over a
-	// truncated file - exports are routinely shared over IM / used for
-	// forensics, so a silent partial export is worse than an error.
 	written := 0
 	var writeErr error
 	header := fmt.Sprintf("# ggcode debug log export\n# Time: %s\n# Category filter: %q\n# Keyword filter: %q\n# Entries: %d (of %d in buffer, capacity %d)\n\n",

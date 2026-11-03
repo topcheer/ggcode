@@ -1,52 +1,5 @@
 package agent
 
-// Working-Tree Invalidation Awareness -- Cross-File State Invalidation Detection
-//
-// Research basis:
-//   - "The Evolution of Tool Use in LLM Agents" (arXiv:2603.22862, 2026):
-//     identifies "intermediate state" as a core unsolved dimension in
-//     multi-tool orchestration. As agents operate over long trajectories,
-//     the environment changes underneath them -- and they lose track of
-//     whether their cached observations are still valid.
-//   - "Reducing Cost of LLM Agents with Trajectory Reduction" (AgentDiet,
-//     arXiv:2509.23586, FSE 2026): shows 39.9%-59.7% of input tokens are
-//     waste, with "expired information" (valid-when-produced but now-stale
-//     tool output) as a major contributor.
-//   - "Before the Tool Call" (arXiv:2603.20953): emphasizes that agents
-//     lack mechanisms to track whether their context is consistent with
-//     the real world state.
-//
-// Problem: AI coding agents read files into context (read_file, grep,
-// multi_file_read), building a mental model of the codebase. Then they
-// issue a git state-changing operation (git_checkout, git_reset,
-// git_stash pop/apply, git_pull, git_revert, git_merge) that modifies
-// files on disk. After such an operation, the file contents the agent
-// "remembers" may no longer match what's on disk. If the agent then
-// edits a file based on stale memory, the edit will fail or produce
-// incorrect results.
-//
-// This is distinct from existing detectors:
-//   - expired_read_check.go: tracks SELF-invalidation (read → edit same file).
-//     This detector tracks CROSS-file invalidation (git op invalidates
-//     ALL previously-read files simultaneously).
-//   - unread_edit_guard.go: warns when editing a file NOT previously read.
-//     This detector warns when a git operation invalidates files that
-//     WERE previously read.
-//   - search_result_invalidation: tracks search/grep result staleness.
-//     This detector tracks file-content staleness from git mutations.
-//   - action_annihilate: tracks side-effect cancellation pairs.
-//     This detector tracks environment-context divergence.
-//
-// What it detects: When the agent executes a git state-changing tool call
-// after having read files in this run, it warns that all prior file reads
-// are potentially stale and should be re-read before editing.
-//
-// Design:
-//   - Zero LLM cost -- pure set tracking + heuristic matching
-//   - Fires at most maxWTInvalidationWarnings (2) times per run
-//   - Non-blocking: hint appended to tool result, execution proceeds
-//   - Tracks both read paths and time-sequence to provide specific guidance
-
 import (
 	"encoding/json"
 	"fmt"
@@ -57,50 +10,31 @@ import (
 )
 
 const (
-	// maxWTInvalidationWarnings: cap total warnings per run.
 	maxWTInvalidationWarnings = 2
 
-	// minReadsBeforeWarning: minimum number of files read before a git
-	// mutation is worth warning about. With 0-1 reads, the blast radius
-	// is trivial and re-reading is cheap.
 	minReadsBeforeWarning = 2
 )
 
-// wtInvalidationState tracks file reads and detects cross-file
-// invalidation when git state-changing operations modify the working tree.
 type wtInvalidationState struct {
-	// readFiles tracks normalized paths of files read in this run (set
-	// semantics; a re-read refreshes freshness but does not grow the set).
 	readFiles map[string]bool
 
-	// warnedCount tracks how many invalidation warnings fired this run.
 	warnedCount int
 
-	// readsSinceWarning counts read EVENTS since the last mutation
-	// warning - re-reads included (#1232: the previous suppression
-	// compared set size, so an agent that obeyed the warning and re-read
-	// the same files got zero further protection while its just-refreshed
-	// caches went stale on the next mutation).
 	readsSinceWarning int
 }
 
-// newWTInvalidationState creates a fresh working-tree invalidation tracker.
 func newWTInvalidationState() *wtInvalidationState {
 	return &wtInvalidationState{
 		readFiles: make(map[string]bool),
 	}
 }
 
-// reset clears all tracking state (called at the start of a new user turn).
 func (w *wtInvalidationState) reset() {
 	w.readFiles = make(map[string]bool)
 	w.warnedCount = 0
 	w.readsSinceWarning = 0
 }
 
-// recordRead tracks a file path read by the agent. Every call is a read
-// EVENT: re-reading a path refreshes its cached freshness and therefore
-// counts toward the since-warning suppression reset (#1232).
 func (w *wtInvalidationState) recordRead(path string) {
 	normalized := normalizeWTPath(path)
 	if normalized == "" {
@@ -110,8 +44,6 @@ func (w *wtInvalidationState) recordRead(path string) {
 	w.readsSinceWarning++
 }
 
-// isWTMutatingTool returns true if the tool name is a git state-changing
-// operation that could invalidate previously-read file contents.
 func isWTMutatingTool(toolName string) bool {
 	switch toolName {
 	case "git_checkout", "git_reset", "git_stash", "git_pull",
@@ -122,34 +54,20 @@ func isWTMutatingTool(toolName string) bool {
 	}
 }
 
-// readOnlyGitSubcommands are git subcommands that never modify the working
-// tree. Their execution must NOT invalidate cached file reads (#544 Bug B).
 var readOnlyGitSubcommands = map[string]bool{
 	"status": true,
 	"list":   true,
 	"diff":   true,
 	"log":    true,
 	"show":   true,
-	"branch": true, // guarded further: only without -d/-D/--delete/-m/--move
+	"branch": true,
 }
 
-// readOnlyStashActions are git_stash `action` values that only inspect.
 var readOnlyStashActions = map[string]bool{
 	"list": true,
 	"show": true,
 }
 
-// treePreservingGitSubcommands are git subcommands whose MUTATING forms
-// still never alter working-tree tracked content (sa-31, #3823-A).
-// fetch/push and ls-remote only update remote-tracking refs; tag,
-// remote, reflog, add (index only) and commit (creates a ref, never
-// checked-out content) stay inside .git metadata; init/clone touch no
-// tracked file; rev-parse, blame, ls-files, describe, cat-file and fsck
-// inspect; config writes repo config, not tracked files; worktree is
-// deliberately NOT a blanket entry - see treePreservingWorktreeSubs. None of them can make a cached read
-// stale, so they must not trigger the invalidation warning. First-hand FP:
-// the pre-task `git fetch origin main` fired the warning on every run that
-// had already read two or more files.
 var treePreservingGitSubcommands = map[string]bool{
 	"fetch":     true,
 	"push":      true,
@@ -163,24 +81,18 @@ var treePreservingGitSubcommands = map[string]bool{
 	"cat-file":  true,
 	"config":    true,
 	"reflog":    true,
-	"add":       true, // staging: index-only, never tracked content
-	"commit":    true, // creates a ref; checked-out content untouched
+	"add":       true,
+	"commit":    true,
 	"init":      true,
 	"clone":     true,
 	"fsck":      true,
 }
 
-// treePreservingWorktreeSubs are the `git worktree` subcommands that do
-// not remove directories (#3823-B). add creates a new worktree (metadata
-// plus a new dir); list is bookkeeping; remove deletes a whole directory
-// and is deliberately absent, so `git worktree remove` still warns.
 var treePreservingWorktreeSubs = map[string]bool{
 	"list": true,
 	"add":  true,
 }
 
-// wtArgFields unmarshals the tool-arguments JSON object (best-effort;
-// malformed JSON yields nil).
 func wtArgFields(argsJSON string) map[string]any {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
@@ -189,32 +101,10 @@ func wtArgFields(argsJSON string) map[string]any {
 	return m
 }
 
-// isReadOnlyGitInvocation returns true when a mutating-classified git tool
-// call is actually read-only per its arguments (#544): checkMutation used to
-// discard arguments entirely, so `git stash list` (read-only) invalidated
-// every previously-read file. Classification:
-//
-//   - git_stash: the dedicated `action` field (enum in the tool schema) —
-//     list/show inspect, everything else (incl. the schema default push)
-//     mutates. The free-text `description` field is never consulted.
-//   - other tools: any string field containing a `git` token — the
-//     subcommand after `git` decides (status/list/diff/log/show are
-//     read-only; fetch/push/tag/remote/rev-parse/... are tree-preserving
-//     (sa-31): they mutate refs or repo metadata at most, never tracked
-//     working-tree content; `branch` is read-only unless
-//     -d/-D/--delete/-m/--move; `stash` is read-only only as
-//     `stash list`/`stash show`).
-//
-// gitBranchMutatingFlags are `git branch` flags that turn a listing command
-// into a mutating one.
 var gitBranchMutatingFlags = map[string]bool{
 	"-d": true, "-D": true, "--delete": true, "-m": true, "--move": true,
 }
 
-// isShellBoundaryToken reports whether a whitespace-split token separates
-// two commands in a shell line (`&&`, `||`, `;`, `|`). Flag scans for one
-// subcommand must stop here: a later command's `-m` (e.g. `git log -m`)
-// belongs to that command, not to `git branch` (#3841).
 func isShellBoundaryToken(tok string) bool {
 	switch tok {
 	case "&&", "||", ";", "|":
@@ -223,14 +113,6 @@ func isShellBoundaryToken(tok string) bool {
 	return false
 }
 
-// classifyGitCommandLine classifies one candidate command line. It scans
-// EVERY `git` invocation on the line and reports the line as read-only only
-// when every classified git command preserves the working tree. Compound
-// commands such as `git fetch && git reset --hard` are common; the previous
-// first-match-return classification accepted the leading `fetch` and never
-// inspected `reset --hard`, suppressing a real invalidation warning (sa-31
-// false negative). Returns (readOnly, true) when at least one git command
-// is found; (false, false) when the line contains no git command.
 func classifyGitCommandLine(line string) (readOnly, found bool) {
 	fields := strings.Fields(line)
 	readOnly = true
@@ -238,39 +120,25 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		if filepath.Base(fields[idx]) != "git" || idx+1 >= len(fields) {
 			continue
 		}
-		// #3782-B: git accepts global flags before the subcommand
-		// (`git -C /other/repo status`, `git --no-pager diff`, `git -c
-		// core.autocrlf=false log`). The old fields[idx+1] grab treated the
-		// flag as the subcommand, fell to the default branch, and classified
-		// every -C-form invocation as mutating - a false "tree mutated"
-		// warning that burned the maxWTInvalidationWarnings budget in
-		// multi-repo workflows. Skip known global flags (and their values)
-		// before reading the subcommand.
+
 		subIdx := skipGitGlobalFlags(fields, idx+1)
 		if subIdx >= len(fields) {
-			return false, true // flags but no subcommand: treat as mutating (conservative)
+			return false, true
 		}
 		sub := strings.ToLower(fields[subIdx])
 		switch {
 		case sub == "stash":
 			found = true
 			if subIdx+1 >= len(fields) {
-				return false, true // bare `git stash` defaults to push (mutating)
+				return false, true
 			}
 			if !readOnlyStashActions[strings.ToLower(fields[subIdx+1])] {
 				readOnly = false
 			}
 		case sub == "branch":
-			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
-			// (conservative classification preserved from #544).
+
 			found = true
-			// #3841: stop at the first compound-command boundary token.
-			// Scanning to end-of-line made `git branch && git log -m` (the
-			// merge-diff flag) or `git branch -a && echo "use -m to move"`
-			// classify as mutating - a read-only chain burned the
-			// maxWTInvalidationWarnings budget so real mutations went
-			// unwarned. Every other branch inspects at most one or two
-			// tokens; this was the only scan-to-EOL path.
+
 			for _, f := range fields[subIdx+1:] {
 				if isShellBoundaryToken(f) {
 					break
@@ -280,29 +148,13 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 				}
 			}
 		case sub == "worktree":
-			// #3823-B: second-level token decides. list/add preserve every
-			// directory; remove/prune/... delete or lock directories whose
-			// files the agent may have cached reads for (cross-worktree
-			// collaboration is the norm in this repo).
+
 			found = true
 			if subIdx+1 >= len(fields) || !treePreservingWorktreeSubs[strings.ToLower(fields[subIdx+1])] {
 				readOnly = false
 			}
 		case sub == "checkout" || sub == "switch":
-			// #3864 B: `git checkout -b <new>` / `git switch -c <new>` create a
-			// branch from HEAD and switch - tracked content is untouched, a
-			// pure ref operation like the already-exempted add/commit. Two
-			// false "tree mutated" warnings here exhaust the budget and the
-			// NEXT, real checkout goes unwarned. Branch creation only; a
-			// target checkout (diff content) or a -- boundary stays mutating.
-			// #3929: the exemption holds ONLY for the no-start-point form.
-			// `checkout -b <new> <start-point>` == branch <new> <sp> +
-			// checkout <new> - when start-point != HEAD the tracked content IS
-			// replaced (git-tested in the issue), and the flag-only check
-			// exempted it - a silent miss on the common
-			// 'checkout -b fix origin/main' catch-up flow. Positional args
-			// after the create flag: exactly one (the name) = HEAD-anchored
-			// exemption; two or more (name + start-point) = mutating.
+
 			found = true
 			creating := false
 			positionals := 0
@@ -315,7 +167,7 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 					continue
 				}
 				if strings.HasPrefix(f, "-") {
-					continue // other flags (e.g. --track) carry no positional
+					continue
 				}
 				positionals++
 			}
@@ -323,10 +175,7 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 				readOnly = false
 			}
 		case sub == "reset":
-			// #3864 C: --soft moves HEAD only; --mixed (the default when no
-			// mode is given) additionally resets the index - neither touches
-			// working-tree files. --hard rewrites the tree; a `-- pathspec`
-			// form resets file content. Only the tree-touching forms warn.
+
 			found = true
 			softMixed := true
 			sawBoundary := false
@@ -346,29 +195,27 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 				readOnly = false
 			}
 		case readOnlyGitSubcommands[sub], treePreservingGitSubcommands[sub]:
-			found = true // cannot make cached reads stale
+			found = true
 		default:
-			return false, true // any other git subcommand: not read-only
+			return false, true
 		}
 	}
 	return readOnly, found
 }
 
-// skipGitGlobalFlags returns the index of the first token after `git` that
-// is not a known global flag (or a value consumed by a value-taking flag).
 func skipGitGlobalFlags(fields []string, start int) int {
 	i := start
 	for i < len(fields) {
 		f := fields[i]
 		switch {
 		case f == "-C" || f == "-c" || f == "--git-dir" || f == "--work-tree":
-			i += 2 // flag + its value
+			i += 2
 		case f == "--no-pager" || f == "--no-optional-locks" || f == "--literal-pathspecs":
-			i++ // boolean global flag
+			i++
 		case f == "--no-replace-objects" || f == "--bare" || f == "--paginate" || f == "--no-paginate":
-			i++ // boolean global flag (#3864 D: unlisted flags were read as the subcommand)
+			i++
 		case strings.HasPrefix(f, "--git-dir=") || strings.HasPrefix(f, "--work-tree=") || strings.HasPrefix(f, "-C") && f != "-C":
-			i++ // inline-value form
+			i++
 		default:
 			return i
 		}
@@ -382,22 +229,6 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 		return false
 	}
 
-	// The executed command line is the most authoritative signal (#544): a
-	// schema-default action=push wrapped around an actual `git stash list`
-	// command must still classify as read-only. Scan string fields first.
-	// #1527 case B: skip the free-text `description` field — it is the
-	// git tools' MANDATORY activity label (LLM-generated, near-guaranteed
-	// to mention a git verb), so "检查 git log 后执行 reset" matched the
-	// read-only `log` token FIRST and the real reset's invalidation
-	// warning was swallowed; likewise a stash description mentioning
-	// `list` bypassed the action=push classification.
-	// #3782-A: the old loop returned on the FIRST field containing a git
-	// command, so with A="git log" (read-only) and B="git reset --hard"
-	// the result depended on map iteration order - half the runs swallowed
-	// the reset's invalidation warning. Aggregate instead: a field with a
-	// git command that is NOT read-only disqualifies the whole invocation,
-	// no matter which field it sits in (same AND semantics the sa-31
-	// compound-command fix applied inside classifyGitCommandLine).
 	anyFound := false
 	for k, v := range m {
 		if k == "description" {
@@ -418,31 +249,22 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 		return true
 	}
 
-	// No git command found in any string field: for git_stash, fall back to
-	// the dedicated `action` field (list/show inspect, everything else —
-	// including the schema default push — mutates).
 	if toolName == "git_stash" {
 		if action, ok := m["action"].(string); ok {
 			return readOnlyStashActions[strings.ToLower(strings.TrimSpace(action))]
 		}
 	}
-	// #3864 B/C structured-field exemptions (the string scan above sees
-	// structured fields as bare tokens like "true"/"soft" and never finds
-	// a git subcommand):
-	// git_checkout create=true only adds and switches a ref - tracked
-	// content untouched. #3929: with a start_point the checkout lands on
-	// that revspec's content (validateRevspec-confirmed), so it mutates.
+
 	if toolName == "git_checkout" {
 		if create, ok := m["create"].(bool); ok && create {
 			if sp, ok := m["start_point"].(string); ok && sp != "" {
-				return false // create-from-start-point rewrites the tree (#3929)
+				return false
 			}
 			return true
 		}
 		return false
 	}
-	// git_reset mode soft/mixed: ref/index only (same semantics as the
-	// command-line classifier above); hard (schema default) rewrites files.
+
 	if toolName == "git_reset" {
 		if mode, ok := m["mode"].(string); ok {
 			switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -455,10 +277,6 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	return false
 }
 
-// runCommandMutatesTree reports whether a run_command call's command line
-// performs a mutating git operation (#1527 case C): run_command is the most
-// common tree-mutating path yet was never fed to checkMutation (the
-// isWTMutatingTool gate lists only the 8 dedicated git_* tools).
 func runCommandMutatesTree(argsJSON string) bool {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
@@ -472,13 +290,8 @@ func runCommandMutatesTree(argsJSON string) bool {
 	return found && !readOnly
 }
 
-// checkMutation is called after a git state-changing tool call executes.
-// If there are enough previously-read files to warrant a warning, it
-// returns a guidance message. Otherwise returns "".
 func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) string {
-	// #544 Bug B: read-only invocations (e.g. `git stash list`) never
-	// invalidate cached reads — the second parameter was previously
-	// discarded, misjudging read-only subcommands as mutating.
+
 	if isReadOnlyGitInvocation(toolName, argsJSON) {
 		return ""
 	}
@@ -488,9 +301,7 @@ func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) st
 	if len(w.readFiles) < minReadsBeforeWarning {
 		return ""
 	}
-	// If no read events since the last mutation warning, don't repeat:
-	// consecutive git operations with zero reads in between are noise.
-	// Re-reads of already-seen paths DO count as events (#1232).
+
 	if w.readsSinceWarning == 0 {
 		return ""
 	}
@@ -498,7 +309,6 @@ func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) st
 	w.warnedCount++
 	w.readsSinceWarning = 0
 
-	// Build a short list of affected paths for the warning.
 	var paths []string
 	count := 0
 	for p := range w.readFiles {
@@ -525,17 +335,12 @@ func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) st
 	)
 }
 
-// extractWTReadPath and extractMultiReadPaths were removed (#500): the
-// agent loop records reads via extractFilePathsFromArgs (batch-aware),
-// which covers read_file and every file in multi_file_read's files array.
-
-// normalizeWTPath normalizes a file path for deduplication.
 func normalizeWTPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
 	}
-	// Remove leading ./
+
 	path = strings.TrimPrefix(path, "./")
 	return path
 }

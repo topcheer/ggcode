@@ -1,10 +1,5 @@
 package agentruntime
 
-// #3376 probe: CancelAll (desktop stop / run interruption) must resolve a
-// pending approval with the #3372 non-decision variant - Cancelled, not
-// Deny - so the audit trail, approval memory, and ask throttle never
-// attribute a stopped run to the user.
-
 import (
 	"context"
 	"testing"
@@ -22,7 +17,6 @@ func TestIssue3376_CancelAllResolvesApprovalAsCancelled(t *testing.T) {
 		decCh <- b.AwaitApproval(context.Background(), req)
 	}()
 
-	// Wait until the waiter is registered, then stop the run.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		b.mu.Lock()

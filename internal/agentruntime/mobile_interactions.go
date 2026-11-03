@@ -60,12 +60,6 @@ func PushTunnelAskUserResponse(broker *tunnel.Broker, requestID string, response
 	ApplyTunnelStateUpdate(broker, update)
 }
 
-// PushTunnelAskUserResult closes a pending mobile ask-user card after the
-// request is gone on the agent side (#4493, the #4250 closure pattern):
-// the 15-minute timeout (or a stale late answer) left the card showing
-// "waiting" forever. The status stays in the established vocabulary
-// ("cancelled") so mobile clients that key on submitted/cancelled close
-// the card regardless of the underlying reason.
 func PushTunnelAskUserResult(broker *tunnel.Broker, requestID string, update TunnelStateUpdate) {
 	if broker == nil || strings.TrimSpace(requestID) == "" {
 		return

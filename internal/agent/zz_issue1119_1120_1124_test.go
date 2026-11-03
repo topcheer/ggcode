@@ -1,25 +1,9 @@
 package agent
 
-// Regression tests for GitHub issues #1119, #1120, #1124 against
-// internal/agent/logging_intel_check.go.
-//
-//	#1119: old/new delta keys must anchor on position-insensitive content
-//	       (normalized call text), not line numbers; inserting a comment line
-//	       above retained instances must not re-flag them.
-//	#1120: goLogCallRe must not anchor on the start of a physical line;
-//	       log.Printf / defer log.Printf / single-line if bodies /
-//	       semicolon-chained calls must all be detected.
-//	#1124: stripInitFuncs must skip string literals during brace balancing so
-//	       a '}' or '{' inside a message cannot early-terminate the scan,
-//	       wedge the counter past EOF, or swallow genuine log.Fatal calls
-//	       after the init body.
-
 import (
 	"strings"
 	"testing"
 )
-
-// ---------- #1119 ----------
 
 const issue1119Base = `package auth
 
@@ -71,8 +55,7 @@ func TestIssue1119InsertCommentAboveNoRefire(t *testing.T) {
 }
 
 func TestIssue1119ChangedArgStillFlags(t *testing.T) {
-	// Guard against over-normalization: changing the sensitive identifier is a
-	// semantic change and must still surface as a new instance.
+
 	newContent := strings.Replace(issue1119Base,
 		"log.Printf(\"req=%s token=%s\", req, token)",
 		"log.Printf(\"req=%s password=%s\", req, password)", 1)
@@ -94,26 +77,24 @@ func TestIssue1119KeyIgnoresLineAndFormatting(t *testing.T) {
 		t.Fatalf("keys must be line-independent:\n%q\nvs\n%q",
 			normalizeLogCallKey(a), normalizeLogCallKey(b))
 	}
-	// Whitespace-only formatting churn: spacing outside and inside the call
-	// (including inside the format string) must not split identity.
+
 	c := findGoSensitiveInst(t, strings.Replace(base,
 		"log.Printf(\"s=%s\", secret)", "log.Printf( \"s = %s\" , secret )", 1))
 	if normalizeLogCallKey(c) != normalizeLogCallKey(a) {
 		t.Fatalf("whitespace-only churn must not split identity:\n%q\nvs\n%q",
 			normalizeLogCallKey(c), normalizeLogCallKey(a))
 	}
-	// A different identifier is a real change.
+
 	d := findGoSensitiveInst(t, strings.Replace(base, "\"s=%s\", secret", "\"s=%s\", password", 1))
 	if normalizeLogCallKey(d) == normalizeLogCallKey(a) {
 		t.Fatal("different sensitive identifier must produce a different key")
 	}
-	// A semantically different message is also a real change (#1109B parity).
+
 	e := findGoSensitiveInst(t, strings.Replace(base, "\"s=%s\"", "\"user login failed\"", 1))
 	if normalizeLogCallKey(e) == normalizeLogCallKey(a) {
 		t.Fatal("different log message text must produce a different key")
 	}
-	// Fatal-family instances are keyed by their normalized call text:
-	// identical texts at any line share one identity; differing texts do not.
+
 	fSrcA := "package lib\n\nimport \"log\"\n\nfunc a() {\n\tlog.Fatal(\"x\")\n}\n"
 	f1 := findFatalInLibForTest(t, fSrcA, "internal/lib/a.go")
 	f2 := findFatalInLibForTest(t, "package lib\n\nimport \"log\"\n\n\n\nfunc a() {\n\tlog.Fatal(\"x\")\n}\n\n\n\nfunc b() {}\n", "internal/lib/b.go")
@@ -134,8 +115,6 @@ func findFatalInLibForTest(t *testing.T, src, filePath string) loggingIntelInsta
 	}
 	return insts[0]
 }
-
-// ---------- #1120 ----------
 
 const issue1120Scaffold = "package lib\n\nimport \"log\"\n\nvar doWork = func() {}\n\n" +
 	"func hit(secret string) {\n"
@@ -200,12 +179,8 @@ func TestIssue1120CatalogIdentifierNoFalsePositive(t *testing.T) {
 	}
 }
 
-// ---------- #1124 ----------
-
 func TestIssue1124BraceInsideMessageNoEarlyExit(t *testing.T) {
-	// FP-A shape: a '}' inside the string previously closed the depth counter
-	// immediately, leaking the rest of the init body (with its own Fatal)
-	// back into the analyzed source as a false positive.
+
 	raw := "func init() { m := \"}\"; if bad { log.Fatal(\"init config broken\") }\n}\nfunc reg() {}\n"
 	got := stripInitFuncs(raw)
 	want := "\nfunc reg() {}\n"
@@ -218,9 +193,7 @@ func TestIssue1124BraceInsideMessageNoEarlyExit(t *testing.T) {
 }
 
 func TestIssue1124OpenBraceInsideMessageNoWedge(t *testing.T) {
-	// FP-B shape: '{' inside the string previously pushed depth permanently
-	// above zero, running off end-of-file and swallowing everything after the
-	// init - including genuine log.Fatal calls in later functions.
+
 	raw := "func init() { t := \"template{root={x}}\"; setup(t)\n}\n" +
 		"func reg() { log.Fatal(\"should flag\") }\n"
 	got := stripInitFuncs(raw)
@@ -248,9 +221,7 @@ func TestIssue1124EscapedQuoteThenBraceStripsCleanly(t *testing.T) {
 }
 
 func TestIssue1124UnterminatedStringLeavesSourceUntouched(t *testing.T) {
-	// Unterminated raw string inside init: scanner cannot know where the body
-	// ends, so the whole file is left untouched (same lenient contract as the
-	// unterminated-init test in logging_intel_check_test.go).
+
 	raw := "func init() { r := `raw { open \n\tkeepGoing() }\nfunc tail() { log.Fatal(\"tail\") }"
 	got := stripInitFuncs(raw)
 	if got != raw {
@@ -259,8 +230,7 @@ func TestIssue1124UnterminatedStringLeavesSourceUntouched(t *testing.T) {
 }
 
 func TestIssue1124MultiInitStillAllStripped(t *testing.T) {
-	// Cross-check that the string-aware loop did not regress multi-init
-	// handling from logging_intel_check_test.go.
+
 	raw := "func init() { a := \"}\"; x() }\nfunc init() { b := \"{\"; y() }\n" +
 		"func reg() { log.Fatal(\"flagged\") }\n"
 	got := stripInitFuncs(raw)

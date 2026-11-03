@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// r409: save_memory surfaces the memory-poisoning quarantine decision in its
-// result instead of silently persisting an injection payload.
 func TestSaveMemoryTool_TaintNoteOnPoisonedContent(t *testing.T) {
 	dir := t.TempDir()
 	am := memory.NewProjectAutoMemory(dir)
@@ -25,7 +23,6 @@ func TestSaveMemoryTool_TaintNoteOnPoisonedContent(t *testing.T) {
 		t.Fatalf("missing taint note in result: %q", out.Content)
 	}
 
-	// Clean save: no note.
 	out2, err := tool.Execute(context.Background(), json.RawMessage(
 		`{"key":"deploy-runbook2","content":"plain steps"}`))
 	if err != nil {

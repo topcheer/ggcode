@@ -5,15 +5,6 @@ import (
 	"time"
 )
 
-// #3284 regression probes. Both defects share one root cause: the
-// category-single-row ledger meant any row not appended by the current
-// select was deleted by the full rewrite.
-//
-//  1. released-key suppression window died on the FIRST subsequent select
-//     (pause path dropped the row; the next rotation re-claimed blind).
-//  2. control-arm counters reset on every rotation day, so sparse
-//     workspaces never accumulated HoldoutRuns >= min runs.
-
 func find3284Row(t *testing.T, dir string, key string) trajHoldoutEntry {
 	t.Helper()
 	ledger, _ := loadHoldoutLedger(trajHoldoutPath(dir))
@@ -32,10 +23,6 @@ func ledger3284Size(t *testing.T, dir string) int {
 	return len(ledger)
 }
 
-// Probe 1 (issue timing): day100 verdict releases K1; day101 slot rotates
-// to K2 (K1's released row must SURVIVE that rewrite); day103 slot rotates
-// back to K1 - still inside the window, so no blind re-claim, and the row
-// still carries its original ReleasedUntil.
 func TestHoldout3284_ReleasedRowSurvivesRotation(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -56,7 +43,6 @@ func TestHoldout3284_ReleasedRowSurvivesRotation(t *testing.T) {
 	}
 	k1s := trajHoldoutKeyString(k1)
 
-	// Verdict release: row persists with suppression window.
 	hp := trajHoldoutPath(dir)
 	ledger, _ := loadHoldoutLedger(hp)
 	for i := range ledger {
@@ -66,8 +52,6 @@ func TestHoldout3284_ReleasedRowSurvivesRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// day101: slot lands on a different key - K2 is claimed, K1's released
-	// row must survive the rewrite (pre-fix: silently deleted).
 	trajHoldoutDay = func() int64 { return 101 }
 	held101 := trajHoldoutSelect(dir, entries)
 	if len(held101) != 1 || held101[k1] {
@@ -78,9 +62,6 @@ func TestHoldout3284_ReleasedRowSurvivesRotation(t *testing.T) {
 		t.Fatalf("released row must survive day101 rotation with window intact: %+v", row)
 	}
 
-	// day103: slot rotates back to K1 - inside the window, so the category
-	// pauses (nothing held from it) and K1 is not blindly re-claimed with
-	// fresh counters.
 	trajHoldoutDay = func() int64 { return 103 }
 	held103 := trajHoldoutSelect(dir, entries)
 	if held103[k1] {
@@ -92,9 +73,6 @@ func TestHoldout3284_ReleasedRowSurvivesRotation(t *testing.T) {
 	}
 }
 
-// Probe 2: repeated same-day selects after a release - the second select
-// hits the pause path; the third must still see the row (pre-fix: second
-// select deleted the row, third re-claimed blind).
 func TestHoldout3284_PauseThenThirdSelect(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -120,25 +98,19 @@ func TestHoldout3284_PauseThenThirdSelect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Second select, same day: pause path - row must survive.
 	if held2 := trajHoldoutSelect(dir, entries); held2[k1] {
 		t.Fatalf("released key must stay suppressed, got %v", held2)
 	}
 	if ledger3284Size(t, dir) == 0 {
 		t.Fatal("pause path deleted the released row (defect 1)")
 	}
-	// Third select, same day: still suppressed, still present.
+
 	if held3 := trajHoldoutSelect(dir, entries); held3[k1] {
 		t.Fatalf("third select re-claimed released key, got %v", held3)
 	}
 	find3284Row(t, dir, trajHoldoutKeyString(k1))
 }
 
-// Probe 3: cross-day counter accumulation through the SELECT path. K2 is
-// held on day1 with existing counters; day2 rotates to K1 - K2's row (and
-// its counters) must survive; day3 rotates back to K2 and the streak
-// continues with preserved HoldoutRuns (pre-fix: every rotation day reset
-// the counters, so sparse workspaces never reached min runs).
 func TestHoldout3284_CrossDayCounterAccumulation(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -163,7 +135,6 @@ func TestHoldout3284_CrossDayCounterAccumulation(t *testing.T) {
 		}
 	}
 
-	// Give the held key some accumulated runs, then rotate away (day201).
 	hp := trajHoldoutPath(dir)
 	ledger, _ := loadHoldoutLedger(hp)
 	for i := range ledger {
@@ -180,12 +151,12 @@ func TestHoldout3284_CrossDayCounterAccumulation(t *testing.T) {
 	if len(held2) != 1 || !held2[k2] {
 		t.Fatalf("day201 must rotate to the other key, got %v", held2)
 	}
-	// K1's row with its counters must survive the rotation.
+
 	row := find3284Row(t, dir, trajHoldoutKeyString(k1))
 	if row.HoldoutRuns != 3 {
 		t.Fatalf("rotation must not reset counters (defect 2): %+v", row)
 	}
-	// day202 rotates back to K1: streak continues with preserved counters.
+
 	trajHoldoutDay = func() int64 { return 202 }
 	held3 := trajHoldoutSelect(dir, entries)
 	if len(held3) != 1 || !held3[k1] {

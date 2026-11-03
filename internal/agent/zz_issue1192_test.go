@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #1192: the delta fingerprint (fnName|varName) has no rename
-// tolerance. A pure function rename re-reported an existing leak and burned
-// the single maxIntegrityWarnings slot. Mirrors the nil_deref_check suffixKey
-// fallback (#1179) with the #1186 lesson applied: token/multiset based, each
-// old instance suppresses at most one new instance.
-
 func TestResourceLeakRenameNotReported(t *testing.T) {
 	old := `package p
 import "os"
@@ -19,7 +13,7 @@ func loadFoo() {
 	_ = f
 }
 `
-	// Pure rename: same body, different function name.
+
 	renamed := `package p
 import "os"
 func loadBar() {
@@ -68,8 +62,7 @@ func loadFoo() {
 	_ = f
 }
 `
-	// Old function still exists; a new same-shape instance in another
-	// function is genuinely new and must be reported.
+
 	edited := old + `
 func loadOther() {
 	f, _ := os.Open("x")
@@ -86,8 +79,7 @@ func loadOther() {
 }
 
 func TestResourceLeakRenameMultisetNoCrossAbsorption(t *testing.T) {
-	// #1186 lesson: rename fallback consumes one token per old instance, so a
-	// rename cannot also absorb a second, genuinely new same-shape instance.
+
 	old := `package p
 import "os"
 func loadFoo() {
@@ -117,7 +109,7 @@ func loadExtra() {
 }
 
 func TestResourceLeakTwoRenamedTwoTokens(t *testing.T) {
-	// Two old leaks, both functions renamed: both suppressed, nothing new.
+
 	old := `package p
 import "os"
 func loadFoo() {
@@ -146,8 +138,7 @@ func loadQux() {
 }
 
 func TestResourceLeakRenameFallbackRequiresOldNameGone(t *testing.T) {
-	// If the old function name still exists in the new file, the fallback
-	// must not fire: the same-shape instance elsewhere is new.
+
 	old := `package p
 import "os"
 func loadFoo() {

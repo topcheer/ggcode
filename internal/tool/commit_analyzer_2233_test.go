@@ -2,7 +2,6 @@ package tool
 
 import "testing"
 
-// #2233 probe: a pure R100 rename diff must register the file.
 func TestParseDiffStatsPureRename(t *testing.T) {
 	diff := `diff --git a/old/path.go b/new/path.go
 similarity index 100%
@@ -18,7 +17,6 @@ rename to new/path.go
 	}
 }
 
-// Mixed: a rename plus a normal edit - both land in the set.
 func TestParseDiffStatsRenamePlusEdit(t *testing.T) {
 	diff := `diff --git a/old.go b/new.go
 similarity index 100%

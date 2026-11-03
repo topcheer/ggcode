@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// pendingProjectMemoryForTool scans a tool call's arguments for candidate file
-// paths and returns the content of any unloaded project memory files found.
 func (a *Agent) pendingProjectMemoryForTool(tc provider.ToolCallDelta) (content string, files []string, target string) {
 	targets := projectMemoryTargetsForTool(tc.Name, tc.Arguments)
 	if len(targets) == 0 {
@@ -30,10 +28,7 @@ func (a *Agent) pendingProjectMemoryForTool(tc provider.ToolCallDelta) (content 
 		if resolved == "" {
 			continue
 		}
-		// AGENTS.md nested discovery: walk from the target's directory up to
-		// the repository root so monorepo-level memory files (e.g.
-		// packages/api/AGENTS.md) are discovered when the agent touches files
-		// inside that subtree. Deeper files are returned last (closest wins).
+
 		projectFiles, err := memory.NestedProjectMemoryFilesForPath(resolved)
 		if err != nil || len(projectFiles) == 0 {
 			continue
@@ -61,8 +56,6 @@ func (a *Agent) pendingProjectMemoryForTool(tc provider.ToolCallDelta) (content 
 	return "", nil, ""
 }
 
-// projectMemoryTargetsForTool extracts candidate file paths from a tool call's
-// JSON arguments by recursively scanning for keys that represent file paths.
 func projectMemoryTargetsForTool(toolName string, raw json.RawMessage) []string {
 	if !toolCanTriggerProjectMemory(toolName) {
 		return nil
@@ -77,8 +70,6 @@ func projectMemoryTargetsForTool(toolName string, raw json.RawMessage) []string 
 	return targets
 }
 
-// collectProjectMemoryTargets recursively walks a JSON structure and collects
-// string values whose key name suggests a file path.
 func collectProjectMemoryTargets(value any, key string, seen map[string]struct{}, out *[]string) {
 	switch v := value.(type) {
 	case map[string]any:
@@ -105,16 +96,11 @@ func collectProjectMemoryTargets(value any, key string, seen map[string]struct{}
 	}
 }
 
-// toolCanTriggerProjectMemory returns true for tools whose arguments may
-// contain file paths that could trigger project memory loading.
 func toolCanTriggerProjectMemory(toolName string) bool {
 	switch toolName {
 	case "read_file", "write_file", "edit_file", "list_directory", "glob", "search_files", "code_search":
 		return true
-	// #1437-C: the multi_* batch tools were missing - multi_file_read on a
-	// new directory silently skipped the GGCODE.md injection that a single
-	// read_file of the SAME directory would trigger (the array parsing at
-	// the call site already handles files[].path).
+
 	case "multi_file_read", "multi_edit_file", "multi_file_edit", "multi_file_write", "batch_replace", "grep":
 		return true
 	default:
@@ -122,26 +108,18 @@ func toolCanTriggerProjectMemory(toolName string) bool {
 	}
 }
 
-// projectMemoryPathKey returns true for JSON key names that typically hold
-// file or directory paths.
 func projectMemoryPathKey(key string) bool {
 	switch key {
 	case "path", "file_path", "file", "filename", "directory":
 		return true
 	case "files":
-		// #1518 case C: batch_replace's files[] is a BARE string array -
-		// with "files" rejected here every element was dropped and the
-		// whitelist entry for batch_replace was effectively dead (no project
-		// memory injection ever fired for it). Object-shaped files[] (multi_*
-		// tools) are unaffected - their nested "path" keys already qualify.
+
 		return true
 	default:
 		return false
 	}
 }
 
-// normalizeProjectMemoryPath resolves a relative path against the working
-// directory and returns a clean absolute path. Returns "" for invalid inputs.
 func normalizeProjectMemoryPath(target, workingDir string) string {
 	trimmed := strings.TrimSpace(target)
 	if trimmed == "" || strings.Contains(trimmed, "://") {

@@ -122,14 +122,13 @@ def broken():
 }
 
 func TestCheckDelimiterBalance_JSON(t *testing.T) {
-	// Valid JSON should pass.
+
 	content := `{"name": "test", "values": [1, 2, {"nested": true}]}`
 	result := checkDelimiterBalance("config.json", content)
 	if result != "" {
 		t.Errorf("expected no warning for valid JSON, got: %s", result)
 	}
 
-	// Invalid JSON with unclosed array.
 	content = `{"name": "test", "values": [1, 2, 3}`
 	result = checkDelimiterBalance("config.json", content)
 	if result == "" {
@@ -237,7 +236,7 @@ func TestCheckDelimiterBalance_BacktickStrings(t *testing.T) {
 }
 
 func TestCheckDelimiterBalance_GoFileSkipped(t *testing.T) {
-	// Go files should be skipped (go/parser handles them).
+
 	content := `package main
 
 func broken() {
@@ -407,7 +406,6 @@ func TestUnclosedStringLine(t *testing.T) {
 	}
 }
 
-// fix #237: Rust lifetimes ('a) must not be treated as string starts.
 func TestCheckDelimiterBalance_RustLifetimeNoFalsePositive(t *testing.T) {
 	content := `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
 	if x.len() > y.len() { x } else { y }
@@ -443,10 +441,6 @@ func TestCheckDelimiterBalance_RustUnterminatedRawString(t *testing.T) {
 	}
 }
 
-// fix #276: Rust allows any number of hashes in raw strings (r##"..."##).
-// Content containing "# requires multi-hash delimiters; the old scanner only
-// recognized r#"..."# and misparsed r## content as a plain double-quoted
-// string, shifting tokens and causing false "unterminated string" reports.
 func TestCheckDelimiterBalance_RustMultiHashRawString(t *testing.T) {
 	content := "fn f() {\n\tlet s = r##\"text with \"# inside\"##;\n\tlet t = \"ok\";\n}\n"
 	if got := checkDelimiterBalance("lib.rs", content); got != "" {
@@ -454,8 +448,6 @@ func TestCheckDelimiterBalance_RustMultiHashRawString(t *testing.T) {
 	}
 }
 
-// fix #276: single-hash raw strings (r#"..."#) must keep working, including
-// content with plain quotes.
 func TestCheckDelimiterBalance_RustSingleHashRawStringStillWorks(t *testing.T) {
 	content := "fn f() {\n\tlet s = r#\"quote \" and { brace\"#;\n\tlet t = \"ok\";\n}\n"
 	if got := checkDelimiterBalance("lib.rs", content); got != "" {
@@ -463,7 +455,6 @@ func TestCheckDelimiterBalance_RustSingleHashRawStringStillWorks(t *testing.T) {
 	}
 }
 
-// fix #276: an unterminated multi-hash raw string must be reported.
 func TestCheckDelimiterBalance_RustUnterminatedMultiHashRawString(t *testing.T) {
 	content := "fn f() {\n\tlet s = r##\"never closed\n}\n"
 	got := checkDelimiterBalance("lib.rs", content)

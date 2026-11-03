@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #3109 probe: coerceNumber must reject non-finite values ("inf",
-// "Infinity", "nan", any case) instead of emitting "+Inf"/"NaN" into the
-// RawMessage - those are not legal JSON tokens and downstream
-// json.Unmarshal fails with an opaque error that never names the field.
 func TestIssue3109CoerceNumberRejectsNonFinite(t *testing.T) {
 	for _, s := range []string{`"inf"`, `"Infinity"`, `"INF"`, `"-Infinity"`, `"nan"`, `"NaN"`, `"+Inf"`} {
 		out, ok := coerceNumber(json.RawMessage(s))
@@ -24,7 +20,6 @@ func TestIssue3109CoerceNumberRejectsNonFinite(t *testing.T) {
 	}
 }
 
-// #3109 probe: the emitted value must always be a legal JSON number token.
 func TestIssue3109CoerceNumberEmitsLegalJSON(t *testing.T) {
 	for _, s := range []string{`"3.14"`, `"42"`, `"-0.5"`, `"1e10"`} {
 		out, ok := coerceNumber(json.RawMessage(s))
@@ -39,12 +34,6 @@ func TestIssue3109CoerceNumberEmitsLegalJSON(t *testing.T) {
 	}
 }
 
-// #3110 probe: update+Move half-migrated state. The parent dir is made
-// read-only AFTER sub/ is created writable, so WriteFile(sub/moved.md)
-// succeeds while Remove(<parent>/old.md) fails (needs parent write
-// permission). The error must disclose BOTH paths - a bare "removing old
-// failed" makes the model mistake the state for an exists-conflict and
-// loop (delete+add hits the already-written target).
 func TestIssue3110MoveRemoveFailureDisclosesBothPaths(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
@@ -79,7 +68,7 @@ func TestIssue3110MoveRemoveFailureDisclosesBothPaths(t *testing.T) {
 	if !strings.Contains(msg, "old.md") {
 		t.Fatalf("error does not name the remaining old path: %q", msg)
 	}
-	// The disclosed state must be TRUE: the target really is on disk.
+
 	written, rerr := os.ReadFile(filepath.Join(sub, "moved.md"))
 	if rerr != nil {
 		t.Fatalf("target not actually written (disclosure would be a lie): %v", rerr)

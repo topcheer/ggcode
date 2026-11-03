@@ -10,13 +10,8 @@ import (
 	"unicode/utf8"
 )
 
-// TestWebFetchTruncationRuneSafe pins #1353: truncation must be rune-based,
-// not byte-based - a 20000-byte cut through CJK content produced invalid
-// UTF-8 and shrank Chinese pages to ~6600 chars against the documented 20000.
 func TestWebFetchTruncationRuneSafe(t *testing.T) {
-	// ~30000 CJK chars (90000 bytes): well past the cap in BOTH units, so
-	// rune-based truncation keeps 20000 chars while byte-based would cut
-	// at 20000 bytes (6600 chars) mid-rune.
+
 	page := "<html><body>" + strings.Repeat("汉", 30000) + "</body></html>"
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, page)

@@ -7,61 +7,32 @@ import (
 	"unicode"
 )
 
-// ── BM25 ranking engine ──────────────────────────────────────────
-//
-// BM25 (Best Matching 25) is the ranking function used by Lucene,
-// Elasticsearch, and Solr. It ranks documents by term frequency and
-// inverse document frequency, making it far more effective than plain
-// keyword matching for natural-language queries like "where do we
-// handle authentication errors".
-//
-// This is a lightweight, in-memory implementation that builds an index
-// from file contents and scores them against a query. No persistence,
-// no external dependencies — pure computation.
-
 const (
-	bm25K1 = 1.2  // term frequency saturation parameter
-	bm25B  = 0.75 // length normalization parameter
+	bm25K1 = 1.2
+	bm25B  = 0.75
 )
 
-// bm25Doc represents a single indexed document (file).
 type bm25Doc struct {
 	path   string
-	tf     map[string]int // term frequency in this document
-	length int            // total number of terms
-	// mtime is the file's mtime AT THE MOMENT the content (tf) was read -
-	// #4573: persistIndex writes THIS value, never a re-Stat at persist
-	// time, so the cache pair {mtime, tf} always refers to the same
-	// instant. Ephemeral (never-persisted) indexes leave it zero.
-	mtime int64
+	tf     map[string]int
+	length int
+	mtime  int64
 }
 
-// bm25Index is an ephemeral index built from a set of files.
 type bm25Index struct {
 	docs      []bm25Doc
-	df        map[string]int // document frequency per term
+	df        map[string]int
 	avgLength float64
 }
 
-// tokenizeForSearch splits source code into searchable terms.
-// It handles camelCase, snake_case, kebab-case, and PascalCase splitting,
-// removes common programming-language stopwords, and lowercases everything.
-// tokenizeForSearch splits source code into searchable terms (with query
-// expansion). Used at query time so that searching for "auth" also matches
-// "authentication", "authenticate", etc.
 func tokenizeForSearch(text string) []string {
 	return tokenizeRaw(text, true)
 }
 
-// tokenizeForIndex splits source code into index terms WITHOUT expansion.
-// The index stores only terms that actually appear in the file; query-side
-// expansion handles synonym matching. This prevents index bloat.
 func tokenizeForIndex(text string) []string {
 	return tokenizeRaw(text, false)
 }
 
-// tokenizeRaw is the core tokenizer. When expand is true, each term is
-// also checked against the synonym map and stemmer for better recall.
 func tokenizeRaw(text string, expand bool) []string {
 	var terms []string
 	var current strings.Builder
@@ -73,8 +44,6 @@ func tokenizeRaw(text string, expand bool) []string {
 		word := current.String()
 		current.Reset()
 
-		// Split camelCase / PascalCase and snake_case (#805):
-		// "HttpRequest" -> "http","request"; "user_id" -> "user","id"
 		for _, part := range splitCamelCase(word) {
 			for _, sub := range splitSnake(part) {
 				sub = strings.ToLower(sub)
@@ -104,16 +73,10 @@ func tokenizeRaw(text string, expand bool) []string {
 	return terms
 }
 
-// isTokenRune returns true for characters that form part of an identifier
-// or keyword: letters, digits, and underscore.
 func isTokenRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
-// splitSnake splits snake_case identifiers (#805): '_' was a token rune
-// and splitCamelCase only splits at case transitions, so 'user_id' indexed
-// as ONE token and never matched query 'id' — systematic recall failure for
-// the most common Go/Python identifier style.
 func splitSnake(w string) []string {
 	parts := strings.Split(w, "_")
 	out := parts[:0]
@@ -125,8 +88,6 @@ func splitSnake(w string) []string {
 	return out
 }
 
-// splitCamelCase splits a word at camelCase boundaries.
-// e.g., "BM25Index" → ["bm25", "index"], "httpClient" → ["http", "client"]
 func splitCamelCase(word string) []string {
 	if word == "" {
 		return nil
@@ -137,22 +98,21 @@ func splitCamelCase(word string) []string {
 	runes := []rune(word)
 
 	for i, r := range runes {
-		// Transition: lowercase → uppercase (camelCase boundary)
+
 		if i > 0 && unicode.IsUpper(r) && unicode.IsLower(runes[i-1]) {
 			if current.Len() > 0 {
 				parts = append(parts, current.String())
 				current.Reset()
 			}
 		}
-		// Transition: uppercase → uppercase followed by lowercase (acronym boundary)
-		// e.g., "HTTPRequest" → "HTTP", "Request"
+
 		if i > 0 && i < len(runes)-1 && unicode.IsUpper(r) && unicode.IsUpper(runes[i-1]) && unicode.IsLower(runes[i+1]) {
 			if current.Len() > 0 {
 				parts = append(parts, current.String())
 				current.Reset()
 			}
 		}
-		// Transition: digit → letter (e.g., "BM25Index" → "BM25", "Index")
+
 		if i > 0 && unicode.IsLetter(r) && unicode.IsDigit(runes[i-1]) {
 			if current.Len() > 0 {
 				parts = append(parts, current.String())
@@ -167,9 +127,8 @@ func splitCamelCase(word string) []string {
 	return parts
 }
 
-// codeStopwords are common tokens that carry little meaning in code search.
 var codeStopwords = map[string]bool{
-	// Language keywords
+
 	"func": true, "var": true, "const": true, "type": true, "struct": true,
 	"interface": true, "package": true, "import": true, "return": true,
 	"if": true, "else": true, "for": true, "range": true, "switch": true,
@@ -181,7 +140,6 @@ var codeStopwords = map[string]bool{
 	"true": true, "false": true, "new": true, "from": true, "let": true,
 	"function": true, "export": true, "module": true, "require": true,
 
-	// Common identifiers / boilerplate
 	"err": true, "error": true, "ctx": true, "context": true,
 	"args": true, "params": true, "opts": true,
 	"result": true, "res": true, "req": true, "request": true,
@@ -189,7 +147,6 @@ var codeStopwords = map[string]bool{
 	"name": true, "test": true, "mock": true, "stub": true,
 	"todo": true, "fixme": true, "hack": true,
 
-	// Common English stopwords
 	"the": true, "a": true, "an": true, "is": true, "are": true,
 	"was": true, "were": true, "be": true, "been": true, "being": true,
 	"have": true, "has": true, "had": true, "do": true, "does": true,
@@ -208,11 +165,6 @@ var codeStopwords = map[string]bool{
 	"use": true, "used": true, "using": true,
 }
 
-// expandTerm returns synonym and stem variants of a single token for
-// query-side expansion. This dramatically improves recall: searching for
-// "auth" also matches "authentication", "db" matches "database", "configs"
-// matches "config". The returned slice does NOT include the original term
-// (the caller already has it); it contains only the additional variants.
 func expandTerm(term string) []string {
 	var variants []string
 	seen := map[string]bool{term: true}
@@ -224,13 +176,12 @@ func expandTerm(term string) []string {
 		}
 	}
 
-	// 1. Synonym / abbreviation expansion.
 	if syns, ok := codeSynonyms[term]; ok {
 		for _, s := range syns {
 			add(s)
 		}
 	}
-	// Reverse lookup: if the term is a value in the synonym map, add the key.
+
 	for key, syns := range codeSynonyms {
 		for _, s := range syns {
 			if s == term {
@@ -239,21 +190,16 @@ func expandTerm(term string) []string {
 		}
 	}
 
-	// 2. Light stemming (suffix stripping) for English word forms.
 	add(stem(term))
 
 	return variants
 }
 
-// stem performs lightweight suffix stripping to normalise word forms.
-// e.g., "authentication" → "authenticat(e)", "running" → "run",
-// "configs" → "config". NOT a full Porter stemmer — just common suffixes.
 func stem(word string) string {
 	if len(word) <= 3 {
 		return word
 	}
 
-	// Order matters: longer suffixes first.
 	suffixes := []string{
 		"ization", "ational", "fulness", "ousness", "iveness",
 		"ation", "ments", "tions", "ement", "ables", "ibles",
@@ -265,7 +211,7 @@ func stem(word string) string {
 	for _, suf := range suffixes {
 		if strings.HasSuffix(word, suf) && len(word)-len(suf) >= 3 {
 			base := word[:len(word)-len(suf)]
-			// Restore common verb forms: "authenticat" → "authenticate".
+
 			if strings.HasSuffix(base, "at") || strings.HasSuffix(base, "iz") {
 				base += "e"
 			}
@@ -276,12 +222,8 @@ func stem(word string) string {
 	return word
 }
 
-// codeSynonyms maps abbreviations and short forms to their expanded forms.
-// Used for query-side expansion only — the index stores terms verbatim.
-// When a user searches for "auth", we also score against "authentication",
-// "authenticate", "authorize", etc.
 var codeSynonyms = map[string][]string{
-	// Authentication / authorization
+
 	"auth":   {"authentication", "authenticate", "authorize", "authorization"},
 	"login":  {"signin", "logon", "authenticate"},
 	"logout": {"signout", "logoff"},
@@ -293,24 +235,20 @@ var codeSynonyms = map[string][]string{
 	"perm":   {"permission", "permissions"},
 	"rbac":   {"role", "roles"},
 
-	// Database
 	"db":   {"database", "databases", "sql"},
 	"repo": {"repository", "repositories"},
 	"crud": {"create", "read", "update", "delete"},
 	"ddl":  {"schema", "migration"},
 
-	// Configuration
 	"config": {"configuration", "configure", "settings", "preference"},
 	"env":    {"environment"},
 
-	// Infrastructure / DevOps
 	"k8s":    {"kubernetes"},
 	"deploy": {"deployment", "deployments"},
 	"svc":    {"service", "services"},
 	"ns":     {"namespace", "namespaces"},
 	"cron":   {"schedule", "scheduler"},
 
-	// API / networking
 	"api":  {"endpoint", "endpoints"},
 	"rest": {"api", "resource"},
 	"grpc": {"rpc", "proto"},
@@ -319,11 +257,9 @@ var codeSynonyms = map[string][]string{
 	"req":  {"request", "requests"},
 	"resp": {"response", "responses"},
 
-	// Testing
 	"spec":   {"specification", "specifications"},
 	"assert": {"assertion", "expect"},
 
-	// Misc development
 	"impl":  {"implementation", "implement"},
 	"init":  {"initialize", "initialization", "setup"},
 	"util":  {"utility", "helper", "helpers"},
@@ -354,8 +290,6 @@ var codeSynonyms = map[string][]string{
 	"retry": {"retries", "backoff"},
 }
 
-// buildBM25Index creates an ephemeral index from the given file contents.
-// fileContents is a map of relative path → raw file content.
 func buildBM25Index(fileContents map[string]string) *bm25Index {
 	idx := &bm25Index{
 		df: make(map[string]int),
@@ -363,7 +297,6 @@ func buildBM25Index(fileContents map[string]string) *bm25Index {
 
 	var totalLength int
 
-	// Process files in sorted order for deterministic behavior.
 	paths := make([]string, 0, len(fileContents))
 	for p := range fileContents {
 		paths = append(paths, p)
@@ -372,7 +305,7 @@ func buildBM25Index(fileContents map[string]string) *bm25Index {
 
 	for _, path := range paths {
 		content := fileContents[path]
-		terms := tokenizeForIndex(content) // index without expansion
+		terms := tokenizeForIndex(content)
 		if len(terms) == 0 {
 			continue
 		}
@@ -390,7 +323,6 @@ func buildBM25Index(fileContents map[string]string) *bm25Index {
 		idx.docs = append(idx.docs, doc)
 		totalLength += len(terms)
 
-		// Update document frequency
 		for term := range tf {
 			idx.df[term]++
 		}
@@ -403,13 +335,11 @@ func buildBM25Index(fileContents map[string]string) *bm25Index {
 	return idx
 }
 
-// bm25Result holds the score for a single document.
 type bm25Result struct {
 	path  string
 	score float64
 }
 
-// score ranks all documents against the query terms using BM25.
 func (idx *bm25Index) score(queryTerms []string, topK int) []bm25Result {
 	if len(idx.docs) == 0 || len(queryTerms) == 0 {
 		return nil
@@ -427,10 +357,9 @@ func (idx *bm25Index) score(queryTerms []string, topK int) []bm25Result {
 			}
 
 			df := idx.df[term]
-			// IDF with smoothing to prevent negative scores for very common terms
+
 			idf := math.Log(1 + (float64(N-df)+0.5)/(float64(df)+0.5))
 
-			// BM25 term score
 			tfNorm := float64(tf) * (bm25K1 + 1)
 			denom := float64(tf) + bm25K1*(1-bm25B+bm25B*float64(doc.length)/idx.avgLength)
 			score += idf * tfNorm / denom
@@ -441,7 +370,6 @@ func (idx *bm25Index) score(queryTerms []string, topK int) []bm25Result {
 		}
 	}
 
-	// Sort by score descending, then by path for determinism
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].score != results[j].score {
 			return results[i].score > results[j].score

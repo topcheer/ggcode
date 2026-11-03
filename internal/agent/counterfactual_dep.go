@@ -9,105 +9,50 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Counterfactual Dependency Assumption Detector
-//
-// Research basis:
-//   - "Counterfactual Planning for Generalizable Agents' Actions" (AAAI 2025):
-//     introduces counterfactual reasoning over planned actions -- agents should
-//     consider "what if the prior step failed?" before proceeding. When agents
-//     assume prior steps succeeded without verification, they build on a false
-//     causal model of the world.
-//   - OpenAI community documentation of parallel tool calling failures (2025):
-//     "Parallel tool calling where there is an ordering dependency" -- agents
-//     emit write + compile in parallel, but compile depends on write completing
-//     first. The false assumption is that parallel emission implies independent
-//     execution.
-//   - SWE-bench trajectory analysis: ~12% of failing trajectories contain at
-//     least one step where the agent acted on the assumption of a prior step's
-//     success before that step completed or was verified.
-//
-// Problem: AI coding agents sometimes issue tool calls that logically depend on
-// a prior call's completion, but emit them in the same batch (parallel) or
-// before verifying the prior call succeeded. The agent assumes a causal ordering
-// that doesn't hold. Examples:
-//
-//	write_file("main.go") + run_command("go build")   // build needs the file
-//	edit_file(X) + run_command("go test")             // test needs the edit
-//	file_ops(mkdir, "dir") + write_file("dir/f")      // write needs the dir
-//	run_command("git checkout B") + edit_file(X)      // edit needs the branch
-//	run_command("go mod init") + run_command("go get") // get needs the module
-//
-// Each false-dependency assumption risks: the dependent call operates on stale
-// or nonexistent state, producing spurious errors that the agent then chases --
-// compounding wasted iterations. The fix is simple: if call B depends on call A,
-// emit A first, verify its result, then emit B.
-//
-// This detector is deterministic and zero-LLM-cost. It identifies
-// dependency-ordered pairs within a single assistant turn's parallel tool call
-// batch (cross-batch sequencing is the recommended correct pattern and is
-// intentionally NOT flagged).
-
-// ---------------------------------------------------------------------------
-// Dependency pair definitions
-// ---------------------------------------------------------------------------
-
-// depPair defines a producer-consumer relationship: the "consumer" tool
-// logically depends on the side effect of the "producer" tool.
 type depPair struct {
 	producer string
 	consumer string
-	// argMatch returns true if the consumer's arguments reference the
-	// producer's target (file path, dir, branch, etc.). If nil, any
-	// co-occurrence is flagged.
 	argMatch func(producerArgs, consumerArgs map[string]interface{}) bool
 }
 
-// depPairs is the set of known producer-consumer dependency patterns.
 var depPairs = []depPair{
-	// write_file → run_command(build/compile/test): build needs the file
+
 	{producer: "write_file", consumer: "run_command", argMatch: depWriteThenBuild},
-	// write_file → start_command(build/compile/test): same, background variant
+
 	{producer: "write_file", consumer: "start_command", argMatch: depWriteThenBuild},
-	// edit_file → run_command(build/compile/test): build needs the edit applied
+
 	{producer: "edit_file", consumer: "run_command", argMatch: depEditThenBuild},
 	{producer: "edit_file", consumer: "start_command", argMatch: depEditThenBuild},
-	// multi_edit_file → run_command(build/compile/test)
+
 	{producer: "multi_edit_file", consumer: "run_command", argMatch: depMultiEditThenBuild},
 	{producer: "multi_edit_file", consumer: "start_command", argMatch: depMultiEditThenBuild},
-	// file_ops(mkdir) → write_file: write needs the directory to exist
+
 	{producer: "file_ops", consumer: "write_file", argMatch: depMkdirThenWrite},
-	// file_ops(mkdir) → edit_file: edit needs the file (and its dir) to exist
+
 	{producer: "file_ops", consumer: "edit_file", argMatch: depMkdirThenWrite},
-	// run_command(git checkout) → edit_file: edit assumes the branch context
+
 	{producer: "run_command", consumer: "edit_file", argMatch: depCheckoutThenEdit},
 	{producer: "run_command", consumer: "multi_edit_file", argMatch: depCheckoutThenEdit},
-	// run_command(git checkout) → write_file
+
 	{producer: "run_command", consumer: "write_file", argMatch: depCheckoutThenEdit},
-	// run_command(go mod init/tidy) → run_command(go get/build): get/build needs module
+
 	{producer: "run_command", consumer: "run_command", argMatch: depModInitThenGet},
-	// start_command(go mod init) → run_command(go get/build)
+
 	{producer: "start_command", consumer: "run_command", argMatch: depModInitThenGet},
 }
 
-// depWriteThenBuild: write_file creates a file, then a build/test command runs.
-// Match when the command contains build/test/compile/run keywords (common case
-// for the canonical write-then-build pattern).
 func depWriteThenBuild(_ map[string]interface{}, consumerArgs map[string]interface{}) bool {
 	return commandIsBuildLike(consumerArgs)
 }
 
-// depEditThenBuild: edit_file modifies a file, then build/test runs.
 func depEditThenBuild(_ map[string]interface{}, consumerArgs map[string]interface{}) bool {
 	return commandIsBuildLike(consumerArgs)
 }
 
-// depMultiEditThenBuild: multi_edit_file modifies files, then build/test runs.
 func depMultiEditThenBuild(_ map[string]interface{}, consumerArgs map[string]interface{}) bool {
 	return commandIsBuildLike(consumerArgs)
 }
 
-// depMkdirThenWrite: file_ops(mkdir) creates a dir, then write_file/edit_file
-// writes into it. Match when write path is under the mkdir path.
 func depMkdirThenWrite(producerArgs, consumerArgs map[string]interface{}) bool {
 	mkdirPath := extractFileOpsMkdirTarget(producerArgs)
 	if mkdirPath == "" {
@@ -123,18 +68,11 @@ func depMkdirThenWrite(producerArgs, consumerArgs map[string]interface{}) bool {
 	return strings.HasPrefix(writePath, mkdirPath+"/") || writePath == mkdirPath
 }
 
-// depCheckoutThenEdit: git checkout switches branch, then edit/write assumes
-// the new branch context.
 func depCheckoutThenEdit(producerArgs, _ map[string]interface{}) bool {
 	cmd := strings.ToLower(extractStringArg(producerArgs, "command"))
 	return strings.Contains(cmd, "git checkout") || strings.Contains(cmd, "git switch") || strings.Contains(cmd, "git rebase")
 }
 
-// depModInitThenGet: go mod init/tidy then go get/build/get/install.
-// #2681: the consumer must actually consume the module - a go command that
-// resolves the module graph (get/build/install/run/test/vet). The old
-// producer-only check matched ANY following run_command, flagging read-only
-// commands (git status, ls, cat go.mod) as dependency violations.
 func depModInitThenGet(producerArgs, consumerArgs map[string]interface{}) bool {
 	cmd := strings.ToLower(extractStringArg(producerArgs, "command"))
 	if !(strings.Contains(cmd, "go mod init") || strings.Contains(cmd, "go mod tidy") || strings.Contains(cmd, "go mod download")) {
@@ -149,16 +87,6 @@ func depModInitThenGet(producerArgs, consumerArgs map[string]interface{}) bool {
 	return false
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// buildCommandPrefixes are command forms that consume code written by the
-// producer call. Matched as SEGMENT PREFIXES (the command or any &&/||/;/|/newline
-// separated segment starts with the prefix, optionally followed by a space) -
-// never as bare substrings. #3499: bare "build"/"tsc" Contains matched
-// zero-relation commands like "cat logs/build.log" or "grep tsc", flagging
-// independent parallel calls as dependency violations.
 var buildCommandPrefixes = []string{
 	"go build", "go test", "go vet", "go run", "go install", "go generate",
 	"cargo build", "cargo test", "cargo check", "cargo run",
@@ -189,7 +117,6 @@ func commandIsBuildLike(args map[string]interface{}) bool {
 	return false
 }
 
-// extractStringArg safely extracts a string-typed argument from a raw args map.
 func extractStringArg(args map[string]interface{}, key string) string {
 	if args == nil {
 		return ""
@@ -205,12 +132,11 @@ func extractStringArg(args map[string]interface{}, key string) string {
 	return s
 }
 
-// extractFileOpsMkdirTarget gets the path from a file_ops call where action=mkdir.
 func extractFileOpsMkdirTarget(args map[string]interface{}) string {
 	if args == nil {
 		return ""
 	}
-	// file_ops uses "operations" array; each op has action + source/destination.
+
 	ops, ok := args["operations"]
 	if !ok {
 		return ""
@@ -237,28 +163,21 @@ func extractFileOpsMkdirTarget(args map[string]interface{}) string {
 	return ""
 }
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 type cfDepState struct {
 	mu          sync.Mutex
-	warnCount   int // warnings emitted this run
+	warnCount   int
 	maxWarnings int
 }
 
 func newCFDepState() *cfDepState {
 	return &cfDepState{
-		maxWarnings: 2, // max 2 warnings per run to avoid noise
+		maxWarnings: 2,
 	}
 }
 
 type cfDepAction struct {
-	tool string
-	args map[string]interface{}
-	// batchID groups tool calls emitted in the same assistant turn (parallel batch).
-	// Retained for call-site signature stability; within-batch checks infer
-	// grouping from the slice itself.
+	tool    string
+	args    map[string]interface{}
 	batchID int
 }
 
@@ -268,9 +187,6 @@ func (s *cfDepState) reset() {
 	s.warnCount = 0
 }
 
-// recordBatch records all tool calls from a single assistant turn (one parallel
-// batch) and returns a warning if a dependency violation is detected within the
-// batch. toolNames and rawArgs must be parallel slices.
 func (s *cfDepState) recordBatch(toolNames []string, rawArgsList []json.RawMessage, batchID int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -279,7 +195,6 @@ func (s *cfDepState) recordBatch(toolNames []string, rawArgsList []json.RawMessa
 		return ""
 	}
 
-	// Parse all args first.
 	batch := make([]cfDepAction, 0, len(toolNames))
 	for i, name := range toolNames {
 		var args map[string]interface{}
@@ -292,13 +207,9 @@ func (s *cfDepState) recordBatch(toolNames []string, rawArgsList []json.RawMessa
 	return s.checkBatchLocked(batch)
 }
 
-// checkBatchLocked looks for dependency violations within a single parallel
-// batch. Cross-batch sequencing (emit A in turn N, B in turn N+1) is the
-// recommended correct pattern and is not checked.
 func (s *cfDepState) checkBatchLocked(batch []cfDepAction) string {
 	var violations []string
 
-	// 1. Within-batch: two calls in the same batch where consumer depends on producer.
 	for i := 0; i < len(batch); i++ {
 		for j := 0; j < len(batch); j++ {
 			if i == j {
@@ -308,7 +219,7 @@ func (s *cfDepState) checkBatchLocked(batch []cfDepAction) string {
 			consumer := batch[j]
 			if w := s.matchDepPair(producer, consumer); w != "" {
 				violations = append(violations, w)
-				break // one violation per consumer is enough
+				break
 			}
 		}
 	}
@@ -321,15 +232,13 @@ func (s *cfDepState) checkBatchLocked(batch []cfDepAction) string {
 	return ""
 }
 
-// matchDepPair checks if a producer-consumer dependency holds between two actions.
-// If sameBatch is true, any match is a violation (parallel emission of dependent ops).
 func (s *cfDepState) matchDepPair(producer, consumer cfDepAction) string {
 	for _, dp := range depPairs {
 		if dp.producer != producer.tool || dp.consumer != consumer.tool {
 			continue
 		}
 		if dp.argMatch == nil {
-			// Generic co-occurrence match.
+
 			return dp.producer + " → " + dp.consumer
 		}
 		if dp.argMatch(producer.args, consumer.args) {
@@ -354,13 +263,6 @@ func formatCFDepWarning(violations []string) string {
 	return b.String()
 }
 
-// ---------------------------------------------------------------------------
-// Wiring shim
-// ---------------------------------------------------------------------------
-
-// recordToolCallBatch is called from the agent loop when a batch of parallel
-// tool calls has been parsed. It returns a non-empty guidance string if a
-// counterfactual dependency assumption is detected.
 func (a *Agent) recordToolCallBatch(toolCalls []provider.ToolCallDelta, batchID int) string {
 	if a == nil || a.cfDep == nil {
 		return ""

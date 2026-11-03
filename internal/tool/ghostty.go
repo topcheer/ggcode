@@ -8,14 +8,6 @@ import (
 	"strings"
 )
 
-// GhosttyTool lets the agent manage Ghostty terminal panes, tabs, and windows
-// when ggcode is running inside Ghostty.
-//
-// Platform support:
-//   - macOS: Uses the Ghostty AppleScript API (via osascript)
-//   - Linux: Uses GIO DBus Actions (via gdbus) for IPC with the Ghostty GTK app
-//
-// See ghostty_actions_darwin.go and ghostty_actions_linux.go for implementations.
 type GhosttyTool struct {
 	WorkingDir string
 }
@@ -116,7 +108,6 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "action is required"}, nil
 	}
 
-	// Status doesn't require Ghostty to be running — it reports detection.
 	if action == "status" {
 		return g.executeStatus(ctx), nil
 	}
@@ -157,13 +148,9 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 }
 
-// ── Detection (shared) ─────────────────────────────────────────────────────
-
 func ghosttyAvailable() bool {
 	return os.Getenv("TERM_PROGRAM") == "ghostty"
 }
-
-// ── Utility (shared) ────────────────────────────────────────────────────────
 
 func (g *GhosttyTool) workingDir() string {
 	if g != nil && strings.TrimSpace(g.WorkingDir) != "" {

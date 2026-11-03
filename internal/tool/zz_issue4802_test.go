@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// gitIn runs git in dir (tests must never touch the real repo checkout -
-// a missing cmd.Dir once created a stray branch in the working repo).
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -20,15 +18,10 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// #4802 (S-34): when `git worktree add -b <name>` collides with a branch
-// that already exists in the main tree, the bare git fatal used to dead-end
-// agents (inducing main-tree checkout fallback). The error must now carry
-// the existing branch's head and actionable next moves.
 func TestIssue4802_BranchCollisionGuidance(t *testing.T) {
 	dir := initTestGitRepo(t)
 	tool := EnterWorktree{WorkingDir: dir}
 
-	// Create the colliding branch in the main tree.
 	gitIn(t, dir, "branch", "collide4802")
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"collide4802"}`))
@@ -46,21 +39,15 @@ func TestIssue4802_BranchCollisionGuidance(t *testing.T) {
 	gitIn(t, dir, "worktree", "prune")
 }
 
-// #4802: when the colliding branch is held by a live worktree, the guidance
-// must point at that worktree (reuse it) instead of suggesting add (which
-// git refuses for a checked-out branch).
 func TestIssue4802_HeldByWorktreePointsAtIt(t *testing.T) {
 	dir := initTestGitRepo(t)
 	tool := EnterWorktree{WorkingDir: dir}
 
-	// First worktree on branch held4802 succeeds.
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"held4802"}`))
 	if err != nil || res.IsError {
 		t.Fatalf("first creation failed: %v %s", err, res.Content)
 	}
-	// Free the branch name at the path level (dir entry) but the branch
-	// stays held in git's eyes only while the worktree exists; after
-	// removal the branch is free, so a retry must succeed (no regression).
+
 	gitIn(t, dir, "worktree", "remove", "--force", dir+"/.ggcode/worktrees/held4802")
 	res2, err2 := tool.Execute(context.Background(), json.RawMessage(`{"name":"held4802"}`))
 	if err2 != nil {

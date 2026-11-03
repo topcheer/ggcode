@@ -13,102 +13,47 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// r26 (Lean4Agent-inspired, arXiv:2606.06523): stateful per-workflow
-// declaration on top of the stateless per-call invariants engine (r454).
-//
-// Frontier claim: agents need machine-checkable WORKFLOW specifications -
-// step ordering (preconditions: "release requires tests-passed"), artifact
-// grounding (which file(s) prove a step happened) and end-of-run
-// postcondition audits - so "I finished, steps 1-4 done" can be checked
-// against declared artifacts instead of trusted. The invariants engine
-// (r454) already gives stateless per-call rules; this adds the missing
-// stateful layer: WHICH step a call belongs to and whether its declared
-// prerequisites produced their artifacts this run.
-//
-// Like invariants, everything is opt-in: with no workflow-spec.json (the
-// default) the engine is inert and behavior is byte-for-byte unchanged.
-// Theorem-prover-grade formal verification (Lean/TLA+) stays BACKLOG by
-// design - this is the lightweight Go-native subset.
-
-// WorkflowStep is one declared step. A step is COMPLETE this run when a
-// tool call produced a path matching ArtifactGlob (grounded completion -
-// no "trust me" completion flag). A step with OnCommands additionally
-// guards commands: executing a matching command before every step in
-// Requires is complete is a violation (block or warn).
 type WorkflowStep struct {
 	ID           string   `json:"id"`
-	ArtifactGlob string   `json:"artifact_glob,omitempty"` // product(s) proving completion
-	OnCommands   []string `json:"on_commands,omitempty"`   // command globs (prefix*/suffix*/*infix*) this step guards; empty = artifact-only node
-	Requires     []string `json:"requires,omitempty"`      // step IDs that must be complete first
-	Mode         string   `json:"mode"`                    // warn | block (default block: step ordering is usually a hard contract)
+	ArtifactGlob string   `json:"artifact_glob,omitempty"`
+	OnCommands   []string `json:"on_commands,omitempty"`
+	Requires     []string `json:"requires,omitempty"`
+	Mode         string   `json:"mode"`
 	Message      string   `json:"message,omitempty"`
 }
 
-// WorkflowViolation reports a precondition breach with the counterexample
-// step (the Lean4Agent "debuggable violation" property: not just "denied"
-// but WHICH prerequisite is missing and what would prove it).
 type WorkflowViolation struct {
-	Step     WorkflowStep
-	Missing  string // unmet prerequisite step ID
-	WantGlob string // artifact that would have proven it
-	Command  string // the guarded command that triggered the check
-	// sa-85 structural attribution: recent attempts (outcome + artifact
-	// grounding) of the MISSING step's guarded commands, so the rejection can
-	// say where execution broke (never ran / failed / no artifact).
-	Attempts    []StepAttempt
-	LastAttempt *StepAttempt
-	// #3836 B: lifetime (non-evicting) per-step count says the step ran at
-	// least once this session, even when the sliding trace window no longer
-	// holds its entry. Drives the downgraded attribution wording.
-	AttemptedEver bool
-	// #3822: set when Missing references a step ID that does not exist
-	// in the merged spec (typo) - the requirement is unsatisfiable and
-	// the violation must say so instead of rendering "never attempted".
+	Step            WorkflowStep
+	Missing         string
+	WantGlob        string
+	Command         string
+	Attempts        []StepAttempt
+	LastAttempt     *StepAttempt
+	AttemptedEver   bool
 	UnknownRequires bool
 }
 
-// workflowSpecFileDoc is the user-facing contract (mirrors invariantFile).
 type workflowSpecFileDoc struct {
 	Steps []WorkflowStep `json:"steps"`
 }
 
-// workflowEngine holds merged steps + the run's completed-step registry.
-// Lazily built on first use (nil-safe via wfEngineLazy).
 type workflowEngine struct {
-	mu        sync.RWMutex
-	steps     map[string]WorkflowStep
-	order     []string // declaration order for deterministic iteration
-	loaded    bool
-	loadDir   string    // dir whose .ggcode/workflow-spec.json to read
-	startedAt time.Time // #3414: freshness anchor for on-disk artifact probing
-	completed sync.Map  // step ID -> struct{} (grounded by artifact this run)
-	// #3822: declaring step ID -> requires entries that reference no
-	// declared step (typo) - populated at spec merge time for diagnostics.
-	unknownReq map[string][]string
-	// sa-85 failure ledger: outcomes of executed guarded commands, kept on a
-	// dedicated lock (never taken while holding traceMu) so attribution reads
-	// stay safe inside checkPreconditions' e.mu critical section.
-	traceMu sync.Mutex
-	trace   []StepAttempt
-	// #3836 B: per-step lifetime attempt counts. The trace is a shared
-	// 30-entry sliding window; a low-frequency prerequisite (run once) is
-	// evicted once ~30 later attempts land, after which recentAttempts
-	// returns nil and wfAttemptAttribution wrongly asserted "never
-	// attempted" about a step that DID run. This map never evicts, so
-	// attribution can distinguish "never attempted" from "attempt record
-	// fell out of the recent window".
+	mu            sync.RWMutex
+	steps         map[string]WorkflowStep
+	order         []string
+	loaded        bool
+	loadDir       string
+	startedAt     time.Time
+	completed     sync.Map
+	unknownReq    map[string][]string
+	traceMu       sync.Mutex
+	trace         []StepAttempt
 	attemptCounts map[string]int
-	// #3850: fire-once latch for the end-of-run outstanding-steps audit.
-	// Guarded by mu; see outstandingMessageOnce.
-	auditFired bool
+	auditFired    bool
 }
 
 const workflowSpecFileName = "workflow-spec.json"
 
-// loadWorkflowSpec merges ~/.ggcode/workflow-spec.json (user scope) with
-// <dir>/.ggcode/workflow-spec.json (project scope); same-ID project steps
-// override user steps. Parse failure degrades to the other scope (same
-// fail-open policy as invariants - a guardrail, not a jail).
 func (e *workflowEngine) loadWorkflowSpec() {
 	if e.loaded {
 		return
@@ -129,7 +74,7 @@ func (e *workflowEngine) loadWorkflowSpec() {
 		}
 		data, err := os.ReadFile(filepath.Join(scope.dir, workflowSpecFileName))
 		if err != nil {
-			continue // absent = no steps from this scope
+			continue
 		}
 		var f workflowSpecFileDoc
 		if err := json.Unmarshal(data, &f); err != nil {
@@ -149,15 +94,10 @@ func (e *workflowEngine) loadWorkflowSpec() {
 			if _, dup := e.steps[st.ID]; !dup {
 				e.order = append(e.order, st.ID)
 			}
-			e.steps[st.ID] = st // project scope runs last: overrides user
+			e.steps[st.ID] = st
 		}
 	}
-	// #3822: every Requires entry must reference a declared step ID.
-	// A typo (requires:"tests" vs id:"test") makes isComplete/
-	// groundIfFresh permanently false: block mode rejects the guarded
-	// commands forever with an attribution of "never attempted" - the
-	// most common spec error was the least debuggable one. Detect at
-	// merge time and mark the declaring steps.
+
 	e.unknownReq = nil
 	for _, st := range e.steps {
 		for _, req := range st.Requires {
@@ -172,7 +112,6 @@ func (e *workflowEngine) loadWorkflowSpec() {
 	}
 }
 
-// isComplete reports whether a step's artifacts were produced this run.
 func (e *workflowEngine) isComplete(id string) bool {
 	if id == "" {
 		return false
@@ -181,8 +120,6 @@ func (e *workflowEngine) isComplete(id string) bool {
 	return ok
 }
 
-// recordCompletion grounds a step as complete when a produced path matches
-// its artifact glob (called with every write-class product of this run).
 func (e *workflowEngine) recordCompletion(path string) {
 	if path == "" {
 		return
@@ -201,42 +138,20 @@ func (e *workflowEngine) recordCompletion(path string) {
 	}
 }
 
-// wfClockSkew is the wall-clock tolerance applied when comparing artifact
-// mtime against the engine anchor. Both timestamps come from CLOCK_REALTIME
-// (no monotonic component), and CI runners / NTP-adjusted hosts can step the
-// clock backwards between `time.Now()` (anchor) and the kernel stamping the
-// file write, making a genuinely fresh artifact look stale - which deadlocks
-// block mode on a step that actually completed (observed twice consecutively
-// on GitHub Actions runners, PR #3490). A 2s grace window absorbs that skew
-// while keeping pre-run artifacts (minutes old) correctly stale.
 const wfClockSkew = 2 * time.Second
 
-// globFreshOnDisk reports whether pattern resolves to at least one file
-// on disk whose mtime is at or after the engine's freshness anchor (#3414),
-// modulo the wfClockSkew wall-clock tolerance.
-// Patterns are interpreted relative to the working dir (the parent of
-// loadDir); absolute patterns are used as-is.
 func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 	if pattern == "" || e.startedAt.IsZero() {
-		// Zero anchor (engine built outside workflowEngineLazy, e.g. tests):
-		// freshness is unprovable - conservatively do not ground.
+
 		return false
 	}
-	// #3425: pattern language MUST be invariantGlobMatch - the same one the
-	// write path (recordCompletion) uses. The previous filepath.Glob probe
-	// had no ** superglob: "**/coverage.out" matched neither a top-level
-	// coverage.out nor a/b/coverage.out, so exec-produced artifacts with
-	// superglob specs never grounded and the block safety net (groundIfFresh)
-	// failed the same way - both guards dead at once. Walk the working dir
-	// and match RELATIVE paths, exactly the shape invariantGlobMatch expects.
-	// Only .git is pruned (write-path products inside .git are covered by
-	// recordCompletion; exec artifacts do not materialize there).
-	base := filepath.Dir(e.loadDir) // == working dir
+
+	base := filepath.Dir(e.loadDir)
 	found := false
 	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && d.IsDir() {
-				return fs.SkipDir // unreadable subtree: skip, keep scanning
+				return fs.SkipDir
 			}
 			return nil
 		}
@@ -250,13 +165,7 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, p)
-		// #3780 A: absolute patterns are used AS-IS (the comment contract
-		// above and the write path's recordCompletion match absolute tool
-		// paths directly). The old code always matched against the RELATIVE
-		// path, so an absolute artifact_glob compiled to a leading-"/"
-		// literal regex that a relative path can never satisfy - probe and
-		// groundIfFresh silently dead for absolute specs, and block mode
-		// rejected already-completed steps.
+
 		cand := filepath.ToSlash(rel)
 		if filepath.IsAbs(pattern) {
 			cand = filepath.ToSlash(p)
@@ -274,13 +183,6 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 	return found
 }
 
-// probeArtifactsOnDisk grounds every incomplete step whose artifact_glob
-// now matches a file produced since the engine anchor (#3414). Called
-// after successful run_command calls: exec products (go test
-// -coverprofile=..., make bin/*) never flow through invariantOpTargets,
-// so without this probe the flagship spec shape deadlocked block mode on
-// steps that had actually completed. Grounding still requires a REAL,
-// FRESH artifact on disk - no trust-me completion flag.
 func (e *workflowEngine) probeArtifactsOnDisk() {
 	e.loadWorkflowSpec()
 	e.mu.RLock()
@@ -300,10 +202,6 @@ func (e *workflowEngine) probeArtifactsOnDisk() {
 	}
 }
 
-// groundIfFresh is the targeted, block-path self-heal (#3414 option 3 as
-// a safety net): before a run_command is rejected for an unmet
-// prerequisite, the engine re-checks the disk for that step's artifact.
-// Returns true when the requirement got grounded by the check.
 func (e *workflowEngine) groundIfFresh(id string) bool {
 	if id == "" {
 		return false
@@ -323,29 +221,6 @@ func (e *workflowEngine) groundIfFresh(id string) bool {
 	return true
 }
 
-// commandMatches reports whether cmd matches any OnCommands glob of the
-// step. Globs use the same semantics as invariant tool matching: a leading
-// or trailing "*" (prefix/suffix match); a bare "*" matches everything.
-//
-// #3860 A: the raw command string is preprocessed exactly like the
-// verify_hint gate family (#2122 compound split, #3751 env-assignment
-// strip) - same package helpers, no duplicated logic. Without this,
-// `cd pkg && go test ./...` and `GOFLAGS=-p=1 go test ./...` both bypassed
-// every guarded `go test*` pattern: no precondition check, no attempt
-// accounting, no grounding, while the step's verification silently never
-// ran. Each compound segment is matched independently, so the guarded verb
-// is seen wherever it appears in the pipeline.
-//
-// #3860 A (infix tightening): a `*x*` glob previously matched any string
-// merely CONTAINING x, so `echo push done` grounded a `*push*` step.
-// Infix globs now require the core to appear as an EXACT word of the
-// segment (`go test ./...` still matches `*test*`) and skip segments
-// whose verb only talks about work (echo/printf/true/false/:) instead
-// of doing it.
-// benignReportVerbs list commands that merely TALK about a thing instead
-// of doing it. An infix `*x*` glob must not let `echo push done` ground a
-// `*push*` step (#3860 A): the core appears as a word, but the verb makes
-// the segment a no-op statement.
 var benignReportVerbs = map[string]bool{
 	"echo": true, "printf": true, "true": true, "false": true, ":": true, "#": true,
 }
@@ -374,11 +249,7 @@ func commandMatches(patterns []string, cmd string) bool {
 			}
 			switch {
 			case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
-				// #3860 A (infix tightening): was contains-anywhere, so
-				// `echo push done` completed a `*push*` step. Now the core
-				// must appear as an exact word of the segment AND the verb
-				// must not be a report-only builtin (`go test ./...` keeps
-				// matching `*test*`; `pushy-comment` no longer does).
+
 				if benignReportVerbs[strings.Fields(seg)[0]] {
 					continue
 				}
@@ -406,12 +277,6 @@ func commandMatches(patterns []string, cmd string) bool {
 	return false
 }
 
-// checkPreconditions evaluates a run_command call: when it matches a
-// guarded step's OnCommands, every Requires step must already be complete.
-// Returns the FIRST block-mode violation (strongest action wins), else the
-// first warn-mode one - the counterexample names the unmet prerequisite
-// and the artifact that would prove it (debuggable violation, not a bare
-// denial).
 func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessage) *WorkflowViolation {
 	if !isCommandExecTool(toolName) {
 		return nil
@@ -436,11 +301,7 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 			if e.isComplete(req) {
 				continue
 			}
-			// #3414 safety net: before rejecting, re-check the disk for
-			// the prerequisite's artifact - a successful command may have
-			// produced it without a write-class tool call (exec products
-			// never flow through invariantOpTargets). Fresh file on disk
-			// grounds the requirement instead of blocking.
+
 			if e.groundIfFresh(req) {
 				continue
 			}
@@ -462,14 +323,12 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 			if warnHit == nil {
 				warnHit = v
 			}
-			break // first unmet prerequisite is the counterexample
+			break
 		}
 	}
 	return warnHit
 }
 
-// outstandingSteps lists declared steps not yet grounded by artifacts this
-// run (end-of-run postcondition audit input).
 func (e *workflowEngine) outstandingSteps() []WorkflowStep {
 	e.loadWorkflowSpec()
 	e.mu.RLock()
@@ -484,9 +343,6 @@ func (e *workflowEngine) outstandingSteps() []WorkflowStep {
 	return out
 }
 
-// outstandingMessage renders the end-of-run audit: which declared steps
-// have no grounded artifacts yet. Empty when the spec is absent or fully
-// complete (inert by default).
 func (e *workflowEngine) outstandingMessage() string {
 	if e == nil {
 		return ""
@@ -502,11 +358,6 @@ func (e *workflowEngine) outstandingMessage() string {
 	return fmt.Sprintf("[workflow-spec] Declared steps with no produced artifacts yet this run: %s. If you are about to declare the task complete, verify these steps actually happened or state which ones were skipped.", strings.Join(ids, "; "))
 }
 
-// outstandingMessageOnce wraps outstandingMessage with a fire-once latch
-// (#3850): the end-of-run audit is computed on EVERY stop attempt; without
-// the latch the caller's `continue` would re-inject the same reminder every
-// iteration for the rest of the run. First non-empty message wins and arms
-// the latch; subsequent calls return "".
 func (e *workflowEngine) outstandingMessageOnce() string {
 	if e == nil {
 		return ""
@@ -524,8 +375,6 @@ func (e *workflowEngine) outstandingMessageOnce() string {
 	return m
 }
 
-// workflowEngineLazy mirrors invariantEngineLazy: anchored to the agent's
-// working dir, nil when inert (no working dir).
 func (a *Agent) workflowEngineLazy() *workflowEngine {
 	a.mu.RLock()
 	e := a.wfEngine

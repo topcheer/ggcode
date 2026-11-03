@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #4778 (S-06): worktree creation bases branches on the fetched origin/main
-// tip instead of local HEAD; fallback to local main carries an explicit
-// warning naming the base commit.
 func zz4778Git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -22,7 +19,7 @@ func zz4778Git(t *testing.T, dir string, args ...string) string {
 }
 
 func TestIssue4778_WorktreeBasesOnOriginMain(t *testing.T) {
-	// origin bare repo with main at commit B; local clone stuck at A.
+
 	origin := t.TempDir()
 	zz4778Git(t, origin, "init", "-q", "--bare", "-b", "main", origin)
 	seed := t.TempDir()
@@ -34,10 +31,10 @@ func TestIssue4778_WorktreeBasesOnOriginMain(t *testing.T) {
 	zz4778Git(t, seed, "push", "-q", "origin", "main")
 	local := t.TempDir()
 	zz4778Git(t, seed, "clone", "-q", origin, local)
-	// Advance origin/main to B behind the local clone's back.
+
 	zz4778Git(t, seed, "commit", "--allow-empty", "-m", "B")
 	zz4778Git(t, seed, "push", "-q", "origin", "main")
-	// Local HEAD is at A (origin/main at B after fetch).
+
 	localB := zz4778Git(t, local, "ls-remote", origin, "refs/heads/main")
 
 	tool := EnterWorktree{WorkingDir: local}
@@ -48,8 +45,8 @@ func TestIssue4778_WorktreeBasesOnOriginMain(t *testing.T) {
 	if !strings.Contains(res.Content, "Base: origin/main") {
 		t.Fatalf("result must name the origin/main base:\n%s", res.Content)
 	}
-	// The worktree branch must point at the REMOTE tip B, not local HEAD A.
-	wt := t.TempDir() // placeholder; real path parsed from worktree list
+
+	wt := t.TempDir()
 	_ = wt
 	wtPath := zz4778Git(t, local, "worktree", "list", "--porcelain")
 	_ = wtPath
@@ -61,13 +58,12 @@ func TestIssue4778_WorktreeBasesOnOriginMain(t *testing.T) {
 }
 
 func TestIssue4778_FallbackToLocalMainWarns(t *testing.T) {
-	// No remote at all: local main fallback with explicit warning.
+
 	dir := t.TempDir()
 	zz4778Git(t, dir, "init", "-q", "-b", "main")
 	zz4778Git(t, dir, "config", "user.email", "t@t")
 	zz4778Git(t, dir, "config", "user.name", "t")
-	// Commit a DIFFERENT tip on a feature branch and check it out, so
-	// HEAD != main and the test proves the base is main, not HEAD.
+
 	zz4778Git(t, dir, "commit", "--allow-empty", "-m", "m1")
 	mainTip := zz4778Git(t, dir, "rev-parse", "main")
 	zz4778Git(t, dir, "checkout", "-q", "-b", "feat")

@@ -1,10 +1,5 @@
 package agentruntime
 
-// #2239: MCP sampling's stopSequences were parsed and then dropped - the
-// provider layer had no socket at all. The handler now sets them on
-// providers implementing StopSequenceSetter inside the shared #1612-A lock
-// window and restores the previous value after the chat.
-
 import (
 	"context"
 	"encoding/json"
@@ -19,13 +14,13 @@ type stopSeqStubProvider struct {
 	mu       sync.Mutex
 	seqs     []string
 	sets     [][]string
-	override *provider.SamplingOverride // #2248 contract
+	override *provider.SamplingOverride
 }
 
 func (s *stopSeqStubProvider) Name() string { return "stub" }
 
 func (s *stopSeqStubProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
-	// Record what was live DURING the chat.
+
 	s.mu.Lock()
 	live := s.seqs
 	if s.override != nil && len(s.override.StopSequences) > 0 {
@@ -49,8 +44,6 @@ func (s *stopSeqStubProvider) CountTokens(ctx context.Context, messages []provid
 
 func (s *stopSeqStubProvider) SetStopSequences(seqs []string) { s.seqs = seqs }
 
-// #2248: the handler now swaps ONE atomic override pointer instead of
-// field writes; the stub records the live override during the chat.
 func (s *stopSeqStubProvider) SetSamplingOverride(o *provider.SamplingOverride) { s.override = o }
 func (s *stopSeqStubProvider) SamplingOverride() *provider.SamplingOverride     { return s.override }
 func (s *stopSeqStubProvider) StopSequences() []string                          { return s.seqs }
@@ -88,11 +81,11 @@ func TestIssue2239NoSequencesLeavesProviderUntouched(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	if len(stub.sets) != 1 && stub.sets[0] != nil {
-		// chat still ran; sequences untouched
+
 	}
 	if got := stub.StopSequences(); len(got) != 1 || got[0] != "PREV" {
 		t.Fatalf("empty request must not touch provider sequences, got %v", got)
 	}
 }
 
-var _ = json.RawMessage{} // keep json import if params shapes change
+var _ = json.RawMessage{}

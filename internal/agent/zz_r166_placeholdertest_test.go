@@ -1,13 +1,5 @@
 package agent
 
-// REGRESSION TEST for issue #730 (fixed): comment and docstring MENTIONS
-// of placeholder patterns (panic/raise/throw) must NOT fire the placeholder
-// detector — substringLineMultiset comparison now runs on comment-stripped
-// content (fix #730, same family as #723/#728). The three mention cases
-// must emit 0 warnings; the control case (real placeholder) must stay at 1.
-//
-// Repro: go test -tags goolm -run 'TestR166PlaceholderCommentFP' -v ./internal/agent/
-
 import "testing"
 
 func TestR166PlaceholderCommentFP(t *testing.T) {

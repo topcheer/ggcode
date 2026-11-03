@@ -1,9 +1,5 @@
 package agent
 
-// #3823 companion: git add/commit are tree-preserving (index/ref only),
-// while `git worktree remove` deletes a whole directory and must NOT be
-// exempted from the invalidation warning.
-
 import "testing"
 
 func TestIssue3823_CommitAddTreePreserving(t *testing.T) {

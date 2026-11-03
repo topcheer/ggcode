@@ -1,10 +1,5 @@
 package agent
 
-// #3541 probe: the weak-hash security-context gate must actually gate. The
-// old fourth term contains("hash") was subsumed by the hashlib.md5/sha1
-// prefix itself, so EVERY MD5/SHA1 use was flagged - including legit file
-// checksums and cache digests.
-
 import "testing"
 
 func TestIssue3541_LegitChecksumNotFlagged(t *testing.T) {

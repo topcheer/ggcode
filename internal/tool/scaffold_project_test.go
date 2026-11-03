@@ -40,7 +40,6 @@ func TestScaffoldProject_Go(t *testing.T) {
 		t.Error("expected at least 1 file created")
 	}
 
-	// Verify key files exist.
 	mustExist := []string{
 		"go.mod",
 		"cmd/my-app/main.go",
@@ -56,7 +55,6 @@ func TestScaffoldProject_Go(t *testing.T) {
 		}
 	}
 
-	// Verify module path in go.mod.
 	modData, _ := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if !scaffoldContains(string(modData), "github.com/test/my-app") {
 		t.Errorf("go.mod should contain module path")
@@ -128,7 +126,6 @@ func TestScaffoldProject_Python(t *testing.T) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	// Python package name should be sanitized to my_cool_app.
 	mustExist := []string{
 		"pyproject.toml",
 		"my_cool_app/__init__.py",
@@ -180,7 +177,6 @@ func TestScaffoldProject_NoOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	tool := ScaffoldProject{WorkingDir: dir}
 
-	// Pre-create a file that the template would generate.
 	existing := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(existing, []byte("# custom\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -209,7 +205,6 @@ func TestScaffoldProject_NoOverwrite(t *testing.T) {
 		t.Error("expected at least 1 file skipped (pre-existing .gitignore)")
 	}
 
-	// Verify the pre-existing file was not overwritten.
 	data, _ := os.ReadFile(existing)
 	if string(data) != "# custom\n" {
 		t.Errorf("pre-existing file was overwritten: got %q", string(data))
@@ -251,7 +246,6 @@ func TestScaffoldProject_DefaultOutputDir(t *testing.T) {
 	dir := t.TempDir()
 	tool := ScaffoldProject{WorkingDir: dir}
 
-	// No output_dir -- should default to WorkingDir.
 	input := scaffoldMustMarshal(t, map[string]interface{}{
 		"language":     "go",
 		"project_name": "defdir",
@@ -269,8 +263,6 @@ func TestScaffoldProject_DefaultOutputDir(t *testing.T) {
 		t.Errorf("expected go.mod in WorkingDir: %v", err)
 	}
 }
-
-// --- Helpers ---
 
 func scaffoldMustMarshal(t *testing.T, v interface{}) json.RawMessage {
 	t.Helper()

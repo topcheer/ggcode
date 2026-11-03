@@ -2,7 +2,6 @@ package agent
 
 import "testing"
 
-// #218: WaitGroup fan-out writing a map must be flagged.
 func TestConcurrentMap_WaitGroupNotSync(t *testing.T) {
 	src := `package main
 import "sync"
@@ -20,7 +19,6 @@ func fanout(items []int, results map[int]int) {
 	}
 }
 
-// Mutex still suppresses.
 func TestConcurrentMap_MutexSuppresses(t *testing.T) {
 	src := `package main
 import "sync"
@@ -35,7 +33,6 @@ func f(m map[int]int, mu *sync.Mutex) {
 	}
 }
 
-// #220: pre-existing pattern in old content must not re-report.
 func TestConcurrentMap_DeltaSuppressesPreexisting(t *testing.T) {
 	src := `package main
 func f(results map[int]int, items []int) {

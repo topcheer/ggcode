@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4774 (S-02): a broadcast timeout must be reported as UNKNOWN delivery -
-// distinct from both success and definite failure - and the report must
-// surface per-recipient outcomes. lanchat is fire-and-forget UDP; a nil
-// return only means "handed to transport", never "delivered".
 type zz4774TimeoutErr struct{}
 
 func (zz4774TimeoutErr) Error() string   { return "i/o timeout" }
@@ -61,7 +57,7 @@ func TestIssue4774OutcomeListCap(t *testing.T) {
 	var b strings.Builder
 	appendOutcomeLines(&b, entries)
 	out := b.String()
-	if got := strings.Count(out, "\n"); got != outcomeListCap+1 { // capped lines + the "and N more" line
+	if got := strings.Count(out, "\n"); got != outcomeListCap+1 {
 		t.Fatalf("cap not enforced: %d lines rendered (cap %d):\n%s", got-1, outcomeListCap, out)
 	}
 	if !strings.Contains(out, "...and 12 more") {

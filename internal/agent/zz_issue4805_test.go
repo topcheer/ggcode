@@ -15,9 +15,6 @@ func coArgs(t *testing.T, branch, path string, create bool) json.RawMessage {
 	return b
 }
 
-// #4805 (S-38): checking the shared main tree out to a non-main branch must
-// carry the fleet-baseline advisory at SWITCH time (the #4803 guard only
-// fires later, on validation runs).
 func TestIssue4805_CheckoutAdvisoryOnSharedTree(t *testing.T) {
 	a := &Agent{workingDir: "/Volumes/new/ggai/ggcode"}
 
@@ -33,8 +30,6 @@ func TestIssue4805_CheckoutAdvisoryOnSharedTree(t *testing.T) {
 	}
 }
 
-// Silent cases: returning to the trunk, worktree paths (explicit or via
-// agent cwd), other tools, missing branch arg.
 func TestIssue4805_CheckoutAdvisorySilentCases(t *testing.T) {
 	a := &Agent{workingDir: "/Volumes/new/ggai/ggcode"}
 

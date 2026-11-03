@@ -1,15 +1,5 @@
 package agent
 
-// RecallCompacted powers the recall_compacted tool: re-retrieval of
-// conversation content removed by compaction (Context Engineering,
-// Anthropic 2025 — "compaction is necessary but not sufficient").
-//
-// The agent's contextManager is the ctxpkg.ContextManager interface; the
-// search entry point is intentionally NOT added to that interface (mock
-// implementers stay untouched). Instead we bind via a local interface
-// assertion against the concrete hit type, the same late-binding pattern
-// RequestAutoCompact uses for CompactSupersededReads.
-
 import (
 	"fmt"
 	"strings"
@@ -17,19 +7,12 @@ import (
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 )
 
-// recallCompactedSearcher is the locally-asserted capability: implemented
-// by *ctxpkg.Manager, invisible to ContextManager mocks.
 type recallCompactedSearcher interface {
 	SearchCompactedArchive(query string, limit int) []ctxpkg.CompactedHit
 }
 
-// defaultRecallLimit caps hits per call; the tool's default matches.
 const defaultRecallLimit = 5
 
-// RecallCompacted searches the owning agent's archive of compacted-away
-// content and returns a model-readable result body. Empty string means
-// no matches (or no archive). Bound to the recall_compacted tool by cmd
-// wiring (agentruntime.RegisterRecallCompactedTool).
 func (a *Agent) RecallCompacted(query string, limit int) string {
 	if limit <= 0 {
 		limit = defaultRecallLimit
@@ -42,7 +25,7 @@ func (a *Agent) RecallCompacted(query string, limit int) string {
 	}
 	s, ok := cm.(recallCompactedSearcher)
 	if !ok {
-		return "" // context manager has no archive (e.g. test mock)
+		return ""
 	}
 	hits := s.SearchCompactedArchive(query, limit)
 	if len(hits) == 0 {

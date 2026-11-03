@@ -5,16 +5,13 @@ import "testing"
 func TestFutileCycle_BasicCycle(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1: read files A, B, C, D
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
 	f.recordRead("src/d.go")
 
-	// Write finalizes epoch 1
 	f.recordWrite()
 
-	// Epoch 2: read the same files again without writing
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
@@ -29,24 +26,20 @@ func TestFutileCycle_BasicCycle(t *testing.T) {
 func TestFutileCycle_WriteBreaksCycle(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
 	f.recordWrite()
 
-	// Epoch 2: read different files
 	f.recordRead("src/d.go")
 	f.recordRead("src/e.go")
 	f.recordRead("src/f.go")
 	f.recordWrite()
 
-	// Epoch 3: read epoch 1 files again (but write happened in between)
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
 
-	// Should still detect overlap since no write in this epoch yet
 	msg := f.maybeWarn(8)
 	if msg == "" {
 		t.Fatal("expected warning for revisiting epoch 1 read set")
@@ -56,13 +49,11 @@ func TestFutileCycle_WriteBreaksCycle(t *testing.T) {
 func TestFutileCycle_NoCycle(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
 	f.recordWrite()
 
-	// Epoch 2: completely different files
 	f.recordRead("src/d.go")
 	f.recordRead("src/e.go")
 	f.recordRead("src/f.go")
@@ -76,7 +67,6 @@ func TestFutileCycle_NoCycle(t *testing.T) {
 func TestFutileCycle_MinReadSetNotMet(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Only 2 files - below futileMinReadSet threshold
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordWrite()
@@ -93,13 +83,11 @@ func TestFutileCycle_MinReadSetNotMet(t *testing.T) {
 func TestFutileCycle_MaxWarnings(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1
 	for i := 0; i < 5; i++ {
 		f.recordRead("src/file" + string(rune('a'+i)) + ".go")
 	}
 	f.recordWrite()
 
-	// Epoch 2: same files
 	for i := 0; i < 5; i++ {
 		f.recordRead("src/file" + string(rune('a'+i)) + ".go")
 	}
@@ -109,8 +97,6 @@ func TestFutileCycle_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second epoch: suppressed (1 per run, batch 2 guidance-noise cleanup;
-	// fresh warning only after compaction resets the counter).
 	f.recordWrite()
 	for i := 0; i < 5; i++ {
 		f.recordRead("src/file" + string(rune('a'+i)) + ".go")
@@ -121,7 +107,6 @@ func TestFutileCycle_MaxWarnings(t *testing.T) {
 		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
-	// Third should be suppressed (max 2)
 	f.recordWrite()
 	for i := 0; i < 5; i++ {
 		f.recordRead("src/file" + string(rune('a'+i)) + ".go")
@@ -135,7 +120,6 @@ func TestFutileCycle_MaxWarnings(t *testing.T) {
 func TestFutileCycle_PartialOverlap(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1: 5 files
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
@@ -143,7 +127,6 @@ func TestFutileCycle_PartialOverlap(t *testing.T) {
 	f.recordRead("src/e.go")
 	f.recordWrite()
 
-	// Epoch 2: 3 of 5 same files, plus 2 new -- 3 shared out of 7 union = 0.43 < 0.7
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
@@ -159,7 +142,6 @@ func TestFutileCycle_PartialOverlap(t *testing.T) {
 func TestFutileCycle_HighOverlap(t *testing.T) {
 	f := newFutileCycleState()
 
-	// Epoch 1: 5 files
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")
@@ -167,7 +149,6 @@ func TestFutileCycle_HighOverlap(t *testing.T) {
 	f.recordRead("src/e.go")
 	f.recordWrite()
 
-	// Epoch 2: same 5 files + 1 new -- Jaccard = 5/6 = 0.83 >= 0.7
 	f.recordRead("src/a.go")
 	f.recordRead("src/b.go")
 	f.recordRead("src/c.go")

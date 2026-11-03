@@ -9,12 +9,10 @@ import (
 func TestTrajIntel_ExtractInsights_NilOrShort(t *testing.T) {
 	s := newTrajIntelState()
 
-	// Nil stats -> no learnings
 	if l := s.extractInsights(nil); l != nil {
 		t.Errorf("nil stats should produce no learnings, got %d", len(l))
 	}
 
-	// Short run (< 3 iterations) -> no learnings
 	stats := &RunStats{Iterations: 2}
 	if l := s.extractInsights(stats); l != nil {
 		t.Errorf("short run should produce no learnings, got %d", len(l))
@@ -54,7 +52,7 @@ func TestTrajIntel_ExtractInsights_Recovery(t *testing.T) {
 		Success:     true,
 		ToolCalls:   map[string]int{"edit_file": 3, "read_file": 2, "run_command": 1},
 		Errors:      []string{"edit failed: old_text not found"},
-		ErrorCount:  1, // #1490-A
+		ErrorCount:  1,
 		FilesEdited: []string{"a.go"},
 	}
 
@@ -77,7 +75,7 @@ func TestTrajIntel_ExtractInsights_OverExploration(t *testing.T) {
 		Success:     true,
 		ToolCalls:   map[string]int{"read_file": 15, "grep": 5, "search_files": 3},
 		Errors:      []string{},
-		FilesEdited: []string{"a.go"}, // only 1 edit
+		FilesEdited: []string{"a.go"},
 	}
 
 	learnings := s.extractInsights(stats)
@@ -97,9 +95,9 @@ func TestTrajIntel_ExtractInsights_HighErrorRate(t *testing.T) {
 	stats := &RunStats{
 		Iterations:  8,
 		Success:     false,
-		ToolCalls:   map[string]int{"edit_file": 6, "run_command": 4}, // 10 total
-		Errors:      []string{"err1", "err2", "err3"},                 // 30% error rate
-		ErrorCount:  3,                                                // #1490-A
+		ToolCalls:   map[string]int{"edit_file": 6, "run_command": 4},
+		Errors:      []string{"err1", "err2", "err3"},
+		ErrorCount:  3,
 		FilesEdited: []string{},
 	}
 
@@ -123,7 +121,7 @@ func TestTrajIntel_ExtractInsights_ContextPressure(t *testing.T) {
 		ToolCalls:         map[string]int{"edit_file": 1},
 		FilesEdited:       []string{"a.go"},
 		ContextPeakTokens: 90000,
-		ContextWindow:     100000, // 90% usage
+		ContextWindow:     100000,
 	}
 
 	learnings := s.extractInsights(stats)
@@ -145,7 +143,7 @@ func TestTrajIntel_ExtractInsights_NoProgressFailure(t *testing.T) {
 		Success:     false,
 		ToolCalls:   map[string]int{"read_file": 3},
 		Errors:      []string{"permission denied"},
-		ErrorCount:  1, // #1490-A
+		ErrorCount:  1,
 		FilesEdited: []string{},
 	}
 
@@ -177,7 +175,6 @@ func TestTrajIntel_Persist(t *testing.T) {
 
 	s.maybeExtractAndPersist(dir, stats)
 
-	// Verify file was created
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		t.Fatalf("expected file to exist: %v", err)
@@ -192,7 +189,6 @@ func TestTrajIntel_RollingWindowTrim(t *testing.T) {
 	s := newTrajIntelState()
 	s.filePath = filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl")
 
-	// Write 60 entries (should trim to 50).
 	for i := 0; i < 60; i++ {
 		stats := &RunStats{
 			Iterations:  5,
@@ -205,7 +201,6 @@ func TestTrajIntel_RollingWindowTrim(t *testing.T) {
 		s.maybeExtractAndPersist(dir, stats)
 	}
 
-	// Read and count entries.
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		t.Fatalf("read file: %v", err)
@@ -242,23 +237,20 @@ func TestIsReadHeavy(t *testing.T) {
 }
 
 func TestSummarizeErrors(t *testing.T) {
-	// Empty
+
 	if got := summarizeErrors([]string{}); got != "none" {
 		t.Errorf("empty errors should return 'none', got %q", got)
 	}
 
-	// Single error
 	if got := summarizeErrors([]string{"file not found"}); got != "file not found" {
 		t.Errorf("single error mismatch: got %q", got)
 	}
 
-	// Multiple errors
 	got := summarizeErrors([]string{"error one", "error two", "error three"})
 	if got == "none" || got == "error one" {
 		t.Errorf("expected summary with 'more', got %q", got)
 	}
 
-	// Long error truncation
 	longErr := ""
 	for i := 0; i < 200; i++ {
 		longErr += "x"

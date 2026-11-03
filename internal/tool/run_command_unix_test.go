@@ -95,7 +95,7 @@ func testRunCommandContextCancelStopsDetachedDescendants(t *testing.T, ignoreTer
 	if err != nil {
 		t.Fatalf("read detached pid file: %v", err)
 	}
-	// File may exist but be empty if shell hasn't written PID yet.
+
 	content := strings.TrimSpace(string(pidBytes))
 	if content == "" {
 		deadline := time.Now().Add(2 * time.Second)
@@ -141,14 +141,8 @@ func testRunCommandContextCancelStopsDetachedDescendants(t *testing.T, ignoreTer
 	}
 }
 
-// TestRunCommand_GUIAppNotKilledByTimeoutTimer pins #1245: GUI-detached
-// commands must carry no timeout timer at all. The old code armed a
-// WithTimeout at cmdCtx creation; the timer fired independently of Wait and
-// process-group-SIGKILLed long-lived GUI apps (editors) at the timeout —
-// even though the comment claimed otherwise. With "sleep" masquerading as a
-// GUI command, the child must outlive the 1s timeout.
 func TestRunCommand_GUIAppNotKilledByTimeoutTimer(t *testing.T) {
-	// Make isGUICommand treat "sleep" as a GUI launcher for this test.
+
 	guiCommands = append(guiCommands, "sleep")
 	defer func() { guiCommands = guiCommands[:len(guiCommands)-1] }()
 
@@ -165,11 +159,9 @@ func TestRunCommand_GUIAppNotKilledByTimeoutTimer(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
-		_ = syscall.Kill(-pid, syscall.SIGKILL) // process group
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	})
 
-	// Old behavior: timer SIGKILLs at ~1s (timeout) + ~100ms grace.
-	// Surviving past 2.5s proves no armed timer exists.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {

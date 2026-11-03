@@ -5,17 +5,10 @@ import (
 	"testing"
 )
 
-// #4479 bug 1: per-instance caches on one shared store file. Two tool
-// instances (Registry.Clone hands each teammate its own) that both load
-// before either saves used to silently drop the other's writes: the second
-// whole-file rename overwrote the first. save must re-read disk fresh and
-// merge (union).
 func TestIssue4479_CrossInstanceLostUpdateMerged(t *testing.T) {
 	a, dir := newKGTool(t)
-	b := &KnowledgeGraphTool{WorkingDir: dir} // second "seat"
+	b := &KnowledgeGraphTool{WorkingDir: dir}
 
-	// Both seats load while the disk is still empty - each now holds an
-	// empty snapshot and never re-reads on its own.
 	sa, err := a.load()
 	if err != nil {
 		t.Fatal(err)
@@ -25,21 +18,17 @@ func TestIssue4479_CrossInstanceLostUpdateMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seat A writes first.
 	sa.Nodes["node-a"] = &kgNode{Title: "A", Type: "note"}
 	if err := a.save(sa); err != nil {
 		t.Fatal(err)
 	}
 
-	// Seat B (stale, empty cache) writes second: without merge-on-save this
-	// rename silently dropped node-a.
 	sb.Nodes["node-b"] = &kgNode{Title: "B", Type: "note"}
 	sb.Edges = append(sb.Edges, kgEdge{From: "node-b", To: "node-a", Type: "relates-to"})
 	if err := b.save(sb); err != nil {
 		t.Fatal(err)
 	}
 
-	// A FRESH instance (no stale cache) must see both seats' work.
 	c := &KnowledgeGraphTool{WorkingDir: dir}
 	sc, err := c.load()
 	if err != nil {
@@ -56,8 +45,6 @@ func TestIssue4479_CrossInstanceLostUpdateMerged(t *testing.T) {
 	}
 }
 
-// Same-id collision: the saving seat's version wins (it was built on the
-// latest state that seat saw), disk-only nodes are preserved.
 func TestIssue4479_MergePrefersMemOnCollision(t *testing.T) {
 	_, dir := newKGTool(t)
 	a := &KnowledgeGraphTool{WorkingDir: dir}
@@ -67,9 +54,8 @@ func TestIssue4479_MergePrefersMemOnCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seat B never saw that write and re-creates the id with new content.
 	b := &KnowledgeGraphTool{WorkingDir: dir}
-	sb, _ := b.load() // reads disk: sees "disk version"
+	sb, _ := b.load()
 	sb.Nodes["shared"] = &kgNode{Title: "mem version", Type: "note"}
 	sb.Nodes["disk-only"] = &kgNode{Title: "kept", Type: "note"}
 	if err := b.save(sb); err != nil {
@@ -86,8 +72,6 @@ func TestIssue4479_MergePrefersMemOnCollision(t *testing.T) {
 	}
 }
 
-// Guard: the merged store must round-trip through JSON with no nil maps
-// (load's own migration relies on this shape).
 func TestIssue4479_MergedStoreRoundTrips(t *testing.T) {
 	disk := &kgStore{Nodes: nil, Edges: nil}
 	mem := &kgStore{Nodes: map[string]*kgNode{"x": {Title: "x"}}, Edges: []kgEdge{}}

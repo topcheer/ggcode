@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #2904: checkJSTSAntiPatterns was dead code (never registered) and had no
-// comment/string stripping. These tests pin both: the registry wiring (so it
-// can never silently become dead code again) and the stripping behavior.
-
-// TestJSTSAntiPatternRegisteredInWriteIntegrity pins the registry wiring.
 func TestJSTSAntiPatternRegisteredInWriteIntegrity(t *testing.T) {
 	for _, c := range allChecks {
 		if c.Name == "jsts-antipattern" {
@@ -31,9 +26,6 @@ func TestJSTSAntiPatternRegisteredInWriteIntegrity(t *testing.T) {
 	t.Fatal("jsts-antipattern not found in allChecks - dead code regression (#2904)")
 }
 
-// TestJSTSAntiPatternCommentAndStringMentionsNotFlagged covers defect 2:
-// mentions of anti-patterns inside comments or string literals must not be
-// reported as newly introduced anti-patterns.
 func TestJSTSAntiPatternCommentAndStringMentionsNotFlagged(t *testing.T) {
 	cases := []struct {
 		name string
@@ -65,17 +57,12 @@ func TestJSTSAntiPatternCommentAndStringMentionsNotFlagged(t *testing.T) {
 	}
 }
 
-// TestJSTSAntiPatternCommentDirectiveStillFlagged: @ts-* directives are
-// comment-form by nature - they must still be detected in comments (strings-
-// only view keeps comments) while string mentions stay silent.
 func TestJSTSAntiPatternCommentDirectiveStillFlagged(t *testing.T) {
 	if w := checkJSTSAntiPatterns("src/app.ts", "", "// @ts-ignore\nconst x = 1;\n"); w == "" {
 		t.Fatal("expected @ts-ignore warning for comment directive, got none")
 	}
 }
 
-// TestJSTSAntiPatternRealCodeStillFlagged ensures stripping did not neuter
-// detection of actual code anti-patterns.
 func TestJSTSAntiPatternRealCodeStillFlagged(t *testing.T) {
 	new := "var counter = 1;\nif (a == b) {}\n"
 	w := checkJSTSAntiPatterns("src/app.ts", "", new)
@@ -90,8 +77,6 @@ func TestJSTSAntiPatternRealCodeStillFlagged(t *testing.T) {
 	}
 }
 
-// TestJSTSAntiPatternDeltaStillGated: fixing code (removing an anti-pattern)
-// must not warn even though the string form still mentions it.
 func TestJSTSAntiPatternDeltaStillGated(t *testing.T) {
 	old := "var counter = 1;\n"
 	new := "// removed var counter\nlet counter = 1;\n"

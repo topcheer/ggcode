@@ -7,7 +7,7 @@ import (
 
 func TestDryRunValidate_GoSyntaxError(t *testing.T) {
 	old := "package main\n\nfunc main() {}\n"
-	// Missing closing brace - guaranteed syntax error
+
 	newContent := "package main\n\nfunc main() {\n"
 
 	msg := dryRunValidate("test.go", old, newContent)
@@ -56,7 +56,7 @@ func TestDryRunValidate_ContentLoss(t *testing.T) {
 }
 
 func TestDryRunValidate_NewFileEmpty(t *testing.T) {
-	// New file (old content empty) becoming empty should NOT trigger content loss
+
 	msg := dryRunValidate("new.txt", "", "")
 	if msg != "" {
 		t.Errorf("expected no fatal error for new empty file, got: %s", msg)
@@ -74,7 +74,7 @@ func TestDryRunValidate_MergeConflict(t *testing.T) {
 }
 
 func TestDryRunValidate_NoChange(t *testing.T) {
-	// Identical content should pass (no real change)
+
 	content := "package main\n\nfunc main() {}\n"
 	msg := dryRunValidate("test.go", content, content)
 	if msg != "" {
@@ -83,7 +83,7 @@ func TestDryRunValidate_NoChange(t *testing.T) {
 }
 
 func TestDryRunValidate_NonGoFile(t *testing.T) {
-	// Non-Go files should skip syntax check but still check for corruption
+
 	old := "console.log('hello')"
 	newContent := "console.log('world')"
 
@@ -124,19 +124,14 @@ func TestDryRunValidateBatch_AllValid(t *testing.T) {
 	}
 }
 
-// TestDryRunValidate_ConflictResolutionNotBlocked pins #1454-B: resolving
-// PRE-EXISTING conflict markers (git merge awaiting resolution) via a
-// per-hunk edit_file must pass pre-write validation - the old whole-file
-// count blocked the very operation that fixes conflicts with 'remove ALL
-// markers'. Only markers the edit ADDS stay fatal.
 func TestDryRunValidate_ConflictResolutionNotBlocked(t *testing.T) {
 	old := "package p\n\nvar a int\n<<<<<<< HEAD\na = 1\n=======\na = 2\n>>>>>>> other\n\nfunc f() { _ = a }\n"
-	// Resolve ONE hunk: new content drops all markers for this block.
+
 	newContent := "package p\n\nvar a = 2\n\nfunc f() { _ = a }\n"
 	if msg := dryRunValidate("test.go", old, newContent); msg != "" {
 		t.Fatalf("conflict resolution blocked by pre-write gate: %s", msg)
 	}
-	// INTRODUCING markers stays fatal.
+
 	clean := "package p\n\na := 1\n"
 	withMarkers := "package p\n<<<<<<< HEAD\na := 1\n>>>>>>> x\n"
 	if msg := dryRunValidate("test.go", clean, withMarkers); msg == "" {

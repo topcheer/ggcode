@@ -1,10 +1,5 @@
 package agentruntime
 
-// SEP-1577 (MCP 2025-11-25): tool-enabled sampling end-to-end through the
-// agentruntime bridge - tools forwarded to the provider, tool_use response
-// blocks relayed with stopReason "toolUse", tool_result messages mapped to
-// provider tool-result blocks.
-
 import (
 	"context"
 	"encoding/json"
@@ -52,17 +47,15 @@ func TestSEP1577_ToolsForwardedAndToolUseRelayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Tools reach the provider in its native shape.
+
 	if len(p.gotTools) != 1 || p.gotTools[0].Name != "get_weather" || string(p.gotTools[0].Parameters) != `{"type":"object"}` {
 		t.Fatalf("tools not forwarded: %+v", p.gotTools)
 	}
-	// tool_use blocks relayed as array content with stopReason toolUse.
+
 	if res.StopReason != "toolUse" || len(res.Blocks) != 1 || res.Blocks[0].Type != "tool_use" || res.Blocks[0].ID != "call_1" {
 		t.Fatalf("tool_use not relayed: %+v", res)
 	}
-	// maxTokens budget still honored through the shared-provider path.
-	// (indirectly covered by the #1484/#1612 tests; here just sanity-check
-	// the plain-text fallback path below.)
+
 }
 
 func TestSEP1577_ToolResultMessageMapped(t *testing.T) {
@@ -101,8 +94,7 @@ func TestSEP1577_ToolResultMessageMapped(t *testing.T) {
 }
 
 func TestSEP1577_StaleToolUseStopReasonWithoutBlocks(t *testing.T) {
-	// Provider claims toolUse but emitted no tool_use blocks: must fall
-	// back to end_turn instead of sending an unbalanced toolUse result.
+
 	p := &recordingSamplingProvider{chat: textResp("plain", 10, "toolUse")}
 	res, err := mcpSamplingHandlerWith(context.Background(), samplingParams(64), p)
 	if err != nil {

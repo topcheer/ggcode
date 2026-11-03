@@ -2,28 +2,14 @@ package agent
 
 import "testing"
 
-// Regression tests for GitHub issue #1178.
-//
-// #1178: intent phrases were matched with bare strings.Contains, so "let me
-// fix" also matched inside "let me fixate". The fabricated fix category,
-// combined with a real verify category, produced 2+ distinct stated
-// categories and flipped the #1162 multi-intent exemption on - silencing a
-// genuine single-intent misalignment. The fix adds word-boundary matching
-// (ASCII word bytes on both sides of the match, regexp \b equivalent).
-
-// TestIssue1178_FixateDoesNotFabricateFixCategory drives the issue's exact
-// scenario: "let me fixate" must not fabricate the fix category, so the
-// single verify intent is NOT multi-intent and must escalate at window close
-// instead of draining silently.
 func TestIssue1178_FixateDoesNotFabricateFixCategory(t *testing.T) {
 	s := newReasonActionState()
 	text := "Let me fixate on the diff. I'll run the tests shortly."
-	// Statement turn: fix action against a verify-only statement.
+
 	if hint := s.checkAlignment(text, []toolCallInfo{{Name: "edit_file"}}); hint != "" {
 		t.Fatalf("statement turn must not escalate: %s", hint)
 	}
-	// Drain the tolerance window; the verify intent must escalate because
-	// the fake fix category no longer grants the multi-intent exemption.
+
 	hint := ""
 	for i := 0; hint == "" && i < raAlignmentWindow+2; i++ {
 		hint = s.checkAlignment(text, []toolCallInfo{{Name: "edit_file"}})
@@ -36,8 +22,6 @@ func TestIssue1178_FixateDoesNotFabricateFixCategory(t *testing.T) {
 	}
 }
 
-// TestIssue1178_ExtractIntentsWordBoundary pins the boundary semantics of
-// the low-level classifier directly.
 func TestIssue1178_ExtractIntentsWordBoundary(t *testing.T) {
 	cases := []struct {
 		text    string
@@ -59,9 +43,6 @@ func TestIssue1178_ExtractIntentsWordBoundary(t *testing.T) {
 	}
 }
 
-// TestIssue1178_ExtractIntentsStillDetectsRealPhrases guards against the
-// opposite regression: genuine phrases ending at real boundaries must keep
-// working (trailing punctuation, whitespace, and end-of-text).
 func TestIssue1178_ExtractIntentsStillDetectsRealPhrases(t *testing.T) {
 	cases := []struct {
 		text    string
@@ -88,9 +69,6 @@ func TestIssue1178_ExtractIntentsStillDetectsRealPhrases(t *testing.T) {
 	}
 }
 
-// TestIssue1178_FindIntentPhraseConsistentWithExtract pins that the phrase
-// reported in warnings uses the same boundary rule as classification (#1178):
-// a category found by extractRAIntents must always yield its phrase.
 func TestIssue1178_FindIntentPhraseConsistentWithExtract(t *testing.T) {
 	text := "Let me fix the bug and verify."
 	cats := extractRAIntents(text)

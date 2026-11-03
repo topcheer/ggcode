@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// r357: the agent edited source this run, ran NO build/test command, and a
-// build system exists -> the stop must be gated with a concrete receipt
-// command naming the edited file's package.
 func TestFinalTurnEvidenceGate_BlocksEditsWithoutVerify(t *testing.T) {
 	dir := t.TempDir()
 	writeGoModule(t, dir)
@@ -25,7 +22,6 @@ func TestFinalTurnEvidenceGate_BlocksEditsWithoutVerify(t *testing.T) {
 	}
 }
 
-// Already verified this run -> stop is allowed (receipt exists).
 func TestFinalTurnEvidenceGate_VerifiedRunAllowed(t *testing.T) {
 	dir := t.TempDir()
 	writeGoModule(t, dir)
@@ -34,14 +30,12 @@ func TestFinalTurnEvidenceGate_VerifiedRunAllowed(t *testing.T) {
 	}
 }
 
-// No edits -> nothing to gate (docs-only or pure-answer runs).
 func TestFinalTurnEvidenceGate_NoEditsAllowed(t *testing.T) {
 	if msg := finalTurnEvidenceGate(0, "", false, false, t.TempDir()); msg != "" {
 		t.Fatalf("no edits must pass, got %q", msg)
 	}
 }
 
-// No build system -> no canonical receipt to demand.
 func TestFinalTurnEvidenceGate_NoBuildSystemAllowed(t *testing.T) {
 	dir := t.TempDir()
 	if msg := finalTurnEvidenceGate(3, filepath.Join(dir, "x.go"), false, false, dir); msg != "" {
@@ -49,7 +43,6 @@ func TestFinalTurnEvidenceGate_NoBuildSystemAllowed(t *testing.T) {
 	}
 }
 
-// The gate fires at most once per run - the second stop is allowed.
 func TestFinalTurnEvidenceGate_FiresOnlyOnce(t *testing.T) {
 	dir := t.TempDir()
 	writeGoModule(t, dir)

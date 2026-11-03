@@ -29,7 +29,7 @@ func TestRedactSecrets_AWSSecretKey(t *testing.T) {
 }
 
 func TestRedactSecrets_GitHubToken(t *testing.T) {
-	// Build token at runtime to avoid triggering GitHub Secret Scanning.
+
 	ghToken := "ghp_" + strings.Repeat("a", 36)
 	content := "GITHUB_TOKEN=" + ghToken
 	result := redactSecrets("run_command", content)
@@ -99,7 +99,7 @@ func TestRedactSecrets_JWT(t *testing.T) {
 }
 
 func TestRedactSecrets_GCPAPIKey(t *testing.T) {
-	// Build key at runtime to avoid triggering GitHub Secret Scanning.
+
 	gcpKey := "AIza" + strings.Repeat("a", 35)
 	content := "key: " + gcpKey
 	result := redactSecrets("read_file", content)
@@ -112,7 +112,7 @@ func TestRedactSecrets_GCPAPIKey(t *testing.T) {
 }
 
 func TestRedactSecrets_StripeKey(t *testing.T) {
-	// Build key at runtime to avoid triggering GitHub Secret Scanning.
+
 	stripeKey := "sk_test_" + strings.Repeat("x", 24)
 	content := "stripe_key: " + stripeKey
 	result := redactSecrets("read_file", content)
@@ -122,7 +122,7 @@ func TestRedactSecrets_StripeKey(t *testing.T) {
 }
 
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
-	// Short values that are NOT secrets should not be flagged
+
 	content := `port: 8080
 host: localhost
 debug: true
@@ -137,19 +137,19 @@ url: http://example.com:3000/api/v1`
 }
 
 func TestRedactSecrets_NoFalsePositiveOnHexIDs(t *testing.T) {
-	// Git commit hashes, UUIDs, and other non-secret hex strings
+
 	content := `commit: abc123def456789012345678901234567890abcd
 uuid: 550e8400-e29b-41d4-a716-446655440000
 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 	result := redactSecrets("read_file", content)
-	// These should NOT be redacted since they don't match secret patterns
+
 	if !strings.Contains(result, "550e8400") {
 		t.Errorf("UUID should not be redacted, got: %s", result)
 	}
 }
 
 func TestRedactSecrets_SkipsNonContentTools(t *testing.T) {
-	// edit_file is not in externalContentTools — should not be scanned
+
 	content := `api_key: "sk-test1234567890abcdefghij"`
 	result := redactSecrets("edit_file", content)
 	if result != content {
@@ -193,7 +193,7 @@ func TestRedactSecrets_EmptyContent(t *testing.T) {
 }
 
 func TestRedactSecrets_PreservesContext(t *testing.T) {
-	// The key name and surrounding structure should be preserved
+
 	content := `database:
   host: db.example.com
   port: 5432
@@ -221,9 +221,6 @@ func TestRedactSecrets_GitLabToken(t *testing.T) {
 	}
 }
 
-// Regression for #1491: multi_file_write and batch_replace are equivalent
-// write entry points; omitting them from the redaction guard let agents
-// bypass the placeholder check by switching tools.
 func TestIsFileWriteToolCoversAllWriteEntries(t *testing.T) {
 	for _, name := range []string{
 		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
@@ -240,10 +237,6 @@ func TestIsFileWriteToolCoversAllWriteEntries(t *testing.T) {
 	}
 }
 
-// TestRedactPreservesTrailingQuote pins #1682 case 2: the value-group
-// splice must keep everything after the value in the ORIGINAL match -
-// `API_KEY: "abcdef123"` kept its content but lost the closing quote,
-// corrupting JSON/YAML and later edit_file anchors.
 func TestRedactPreservesTrailingQuote(t *testing.T) {
 	in := `API_KEY: "abcdefghij1234567890"`
 	out := redactSecrets("read_file", in)
@@ -258,8 +251,6 @@ func TestRedactPreservesTrailingQuote(t *testing.T) {
 	}
 }
 
-// TestRedactDashFamilyKeys pins #1682 case 3: sk-/sk-proj-/sk-ant- bare
-// values (curl logs, env dumps without a key name) must be caught.
 func TestRedactDashFamilyKeys(t *testing.T) {
 	for _, in := range []string{
 		"curl -H 'Authorization: Bearer sk-proj-AbCdEf1234567890GhIjKlMnOpQrStUvWx",

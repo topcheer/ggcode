@@ -1,10 +1,5 @@
 package agentruntime
 
-// Tests for issue #1158: teammate_working must not replay the teammate's
-// historical text tail under a fixed msgID; each new task must produce its
-// own message identity so mobile clients (which join chunks by msgID and do
-// not dedup) stop seeing repeated tails.
-
 import (
 	"strings"
 	"testing"
@@ -17,8 +12,7 @@ func TestWorkingTaskStartMessageNeverReplaysStaleHistoryTail(t *testing.T) {
 		ID:          "tm-7",
 		Name:        "worker",
 		CurrentTask: "task one",
-		// Historical buffer holds the previous task's final text - the exact
-		// data that used to be replayed verbatim by teammate_working.
+
 		Events: []swarm.TeammateEvent{
 			{Type: swarm.TeammateEventText, Text: "stale tail from previous task"},
 		},
@@ -50,7 +44,6 @@ func TestWorkingTaskStartMessageDistinctPerConsecutiveTasks(t *testing.T) {
 	}
 	id1, _, _ := workingTaskStartMessage(taskOne)
 
-	// Second task on the same teammate: history grew with task one's result.
 	taskTwo := swarm.TeammateSnapshot{
 		ID:          "tm-3",
 		CurrentTask: "second task",
@@ -67,8 +60,6 @@ func TestWorkingTaskStartMessageDistinctPerConsecutiveTasks(t *testing.T) {
 		t.Fatalf("second task announcement leaks first task history: %q", text2)
 	}
 
-	// Same snapshot state is deterministic (idempotent re-push joins into the
-	// same mobile-side message instead of creating duplicates).
 	id1b, _, _ := workingTaskStartMessage(taskOne)
 	if id1 != id1b {
 		t.Fatalf("same task state must yield stable msgID: %q vs %q", id1, id1b)

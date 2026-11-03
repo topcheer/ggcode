@@ -61,7 +61,7 @@ func process(ctx context.Context, req *Request) {
 }
 
 func TestCheckContextLeak_NoCtxParam(t *testing.T) {
-	// Function without ctx param should not trigger.
+
 	new := `package main
 
 import "context"
@@ -77,7 +77,7 @@ func start() {
 }
 
 func TestCheckContextLeak_CtxPropagated(t *testing.T) {
-	// context.WithTimeout(ctx, ...) is fine - ctx is propagated.
+
 	new := `package main
 
 import (
@@ -98,7 +98,7 @@ func handler(ctx context.Context) {
 }
 
 func TestCheckContextLeak_DeltaAware(t *testing.T) {
-	// Pre-existing context.TODO should NOT be flagged.
+
 	old := `package main
 
 import "context"
@@ -107,7 +107,7 @@ func handler(ctx context.Context) {
 	doWork(context.TODO())
 }
 `
-	new := old // unchanged
+	new := old
 	result := checkContextLeak("test.go", old, new)
 	if result != "" {
 		t.Errorf("expected no warning for pre-existing context.TODO, got: %s", result)
@@ -115,7 +115,7 @@ func handler(ctx context.Context) {
 }
 
 func TestCheckContextLeak_NewLeakInExistingFunc(t *testing.T) {
-	// New context.TODO introduced in a function that already had ctx param.
+
 	old := `package main
 
 import "context"
@@ -147,7 +147,7 @@ func TestCheckContextLeak_NonGoFile(t *testing.T) {
 }
 
 func TestCheckContextLeak_MethodReceiver(t *testing.T) {
-	// Method with ctx param should also be detected.
+
 	new := `package main
 
 import "context"
@@ -172,7 +172,7 @@ func TestCheckContextLeak_EmptyContent(t *testing.T) {
 }
 
 func TestCheckContextLeak_SyntaxError(t *testing.T) {
-	// File with syntax errors should not crash.
+
 	new := `package main
 
 import "context"
@@ -201,7 +201,7 @@ func handler(ctx context.Context) {
 	if result == "" {
 		t.Fatal("expected context leak warnings")
 	}
-	// Should mention both TODO and Background.
+
 	if !strings.Contains(result, "TODO") {
 		t.Errorf("expected TODO in warnings, got: %s", result)
 	}

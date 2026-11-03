@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #1325: our conflict guidance tells the agent to "run 'git revert
-// --continue'" - the natural mapping is calling this tool again with
-// commit="--continue", which git parses as an option and commits/discards
-// the sequencer's staged changes. Option-looking values must be rejected.
 func TestGitRevertRejectsOptionLikeCommit(t *testing.T) {
 	tool := GitRevert{WorkingDir: t.TempDir()}
 
@@ -29,8 +25,6 @@ func TestGitRevertRejectsOptionLikeCommit(t *testing.T) {
 		}
 	}
 
-	// A normal-looking ref is NOT rejected by this guard (downstream git
-	// handles rev resolution).
 	input, _ := json.Marshal(map[string]string{"commit": "HEAD"})
 	res, err := tool.Execute(context.Background(), input)
 	if err != nil {

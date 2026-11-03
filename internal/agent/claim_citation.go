@@ -1,20 +1,5 @@
 package agent
 
-// claim_citation.go (sa-114): claim-level evidence citation for the FINAL
-// assistant answer.
-//
-// /why (decision_explain.go, r103) attributes tool calls to reasoning —
-// "why did the agent run X". This file answers the complementary question
-// the 2026 agent-trust UX literature puts first: "which recorded evidence
-// backs each claim in the answer the user just read?". The final reply
-// text is scanned deterministically for code anchors (backticked symbols,
-// file.ext(:line) references); each anchor is linked to the most recent
-// tool call whose input or result output contains it. No LLM, no re-ask:
-// the user verifies "the root cause is agent.go:42" against the actual
-// tool output that produced that statement, one /evidence away.
-//
-// Read-only, deterministic, bounded scan windows.
-
 import (
 	"fmt"
 	"regexp"
@@ -32,36 +17,20 @@ const (
 	citeInputScanCap  = 2048
 )
 
-// citeFileRe matches file.ext and file.ext:line references in prose —
-// deliberately looser than causalErrorFileRe (which requires the trailing
-// error-output shape); an answer cites files without error colons too.
 var citeFileRe = regexp.MustCompile(`(?:^|[\s"'(])([\w\-./\\]+\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp|md|yaml|yml|json|toml)(?::\d+)?)`)
 
-// citeBacktickRe extracts short code-shaped spans from backticks: must
-// contain a code-ish character (dot, slash, underscore, colon) so plain
-// quoted words do not become anchors.
-// citeCodeShapeRe accepts code-shaped spans: a code separator character
-// OR camelCase (streamChatResponse carries no separator but is a symbol).
 var citeBacktickRe = regexp.MustCompile("`([^`\n]{2,120})`")
 var citeCodeShapeRe = regexp.MustCompile(`(?:[./_:(]|[a-z][A-Z])`)
 var citeLineNoRe = regexp.MustCompile(`:\d+$`)
 
-// ClaimCitation links one anchor from the final answer to the tool
-// evidence that supports it.
 type ClaimCitation struct {
-	Anchor   string `json:"anchor"`   // `HandleMsg` / internal/agent/agent.go:42
-	Claim    string `json:"claim"`    // answer excerpt around the anchor
-	Tool     string `json:"tool"`     // tool_use name producing the evidence
-	ToolID   string `json:"toolId"`   // paired tool_use block ID
-	Evidence string `json:"evidence"` // tool_result excerpt containing the anchor
+	Anchor   string `json:"anchor"`
+	Claim    string `json:"claim"`
+	Tool     string `json:"tool"`
+	ToolID   string `json:"toolId"`
+	Evidence string `json:"evidence"`
 }
 
-// EvidenceCitations scans the last text-only assistant message for code
-// anchors and links each to the most recent supporting tool call. Returns
-// nil when the conversation has no final answer yet or no anchor finds
-// recorded evidence (unsupported claims are simply not listed — absence
-// of a citation is itself the signal, mirroring citation-based UIs: only
-// verifiable statements carry links).
 func EvidenceCitations(msgs []provider.Message) []ClaimCitation {
 	ansIdx, answer := finalAnswer(msgs)
 	if ansIdx < 0 || answer == "" {
@@ -72,15 +41,13 @@ func EvidenceCitations(msgs []provider.Message) []ClaimCitation {
 		return nil
 	}
 
-	// Collect tool_use blocks newest-first, each with the paired result
-	// output (searched forward, same bounded window /why uses).
 	type call struct {
 		tool, toolID, input, result string
 	}
 	var calls []call
 	for i := ansIdx - 1; i >= 0; i-- {
 		if msgs[i].Role != "assistant" {
-			continue // user tool_result messages interleave the tool turns
+			continue
 		}
 		m := &msgs[i]
 		for bi := len(m.Content) - 1; bi >= 0; bi-- {
@@ -98,7 +65,7 @@ func EvidenceCitations(msgs []provider.Message) []ClaimCitation {
 
 	var out []ClaimCitation
 	for _, a := range anchors {
-		for _, c := range calls { // newest-first: nearest evidence wins
+		for _, c := range calls {
 			if c.toolID == "" {
 				continue
 			}
@@ -121,9 +88,6 @@ func EvidenceCitations(msgs []provider.Message) []ClaimCitation {
 	return out
 }
 
-// finalAnswer returns the index and concatenated text of the last
-// assistant message that carries text but no tool_use — the reply the
-// user actually read.
 func finalAnswer(msgs []provider.Message) (int, string) {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role != "assistant" {
@@ -146,10 +110,6 @@ func finalAnswer(msgs []provider.Message) (int, string) {
 	return -1, ""
 }
 
-// anchorHit reports whether a tool call's input or result output backs
-// the anchor. A file.go:123 anchor also hits on the bare file.go form:
-// read inputs carry paths without line numbers, and read outputs carry
-// "123:" line prefixes rather than "file.go:123".
 func anchorHit(input, result, anchor string) bool {
 	if strings.Contains(input, anchor) || strings.Contains(result, anchor) {
 		return true
@@ -163,8 +123,6 @@ func anchorHit(input, result, anchor string) bool {
 	return false
 }
 
-// extractAnchors pulls backticked code spans first (highest precision),
-// then bare file(:line) references, deduped in first-seen order.
 func extractAnchors(answer string) []string {
 	bt := citeBacktickRe.FindAllStringSubmatch(answer, -1)
 	fl := citeFileRe.FindAllStringSubmatch(answer, -1)
@@ -190,8 +148,6 @@ func extractAnchors(answer string) []string {
 	return out
 }
 
-// findResultOutput returns the raw output of the tool_result paired with
-// toolID (same forward-window discipline as whyFindResult).
 func findResultOutput(msgs []provider.Message, from int, toolID string) (string, bool) {
 	if toolID == "" {
 		return "", false
@@ -206,7 +162,6 @@ func findResultOutput(msgs []provider.Message, from int, toolID string) (string,
 	return "", false
 }
 
-// claimExcerpt renders the answer around the anchor's first occurrence.
 func claimExcerpt(answer, anchor string, max int) string {
 	pos := strings.Index(answer, anchor)
 	if pos < 0 {
@@ -227,7 +182,6 @@ func claimExcerpt(answer, anchor string, max int) string {
 	return s
 }
 
-// evidenceExcerpt centers the anchor occurrence inside the tool output.
 func evidenceExcerpt(result, anchor string, max int) string {
 	if result == "" {
 		return "<no recorded output>"
@@ -256,7 +210,6 @@ func clamp(s string, maxRunes int) string {
 	return string([]rune(s)[:maxRunes]) + "…"
 }
 
-// FormatCitations renders the /evidence output block.
 func FormatCitations(cites []ClaimCitation) string {
 	if len(cites) == 0 {
 		return ""

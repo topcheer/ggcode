@@ -1,32 +1,5 @@
 package agent
 
-// git_destructive_detect.go implements Git Destructive Operation Detection -
-// a pre-execution guard that inspects shell commands and git tool calls for
-// operations that can irreversibly destroy work.
-//
-// Research basis: In 2025-2026, AI coding agents have caused real data loss
-// incidents by running destructive git commands without user awareness:
-//   - Claude Code: agent ran `git reset --hard` losing uncommitted work
-//   - Cursor: agent force-pushed over collaborator commits
-//   - Cline: agent ran `git clean -fd` deleting untracked files
-//   - Industry: GitHub's 2025 survey showed 23% of AI-assisted repos had
-//     at least one force-push or hard-reset incident
-//
-// Our approach:
-//  1. Before executing run_command, start_command, or git_* tools, parse the
-//     command/arguments for destructive patterns.
-//  2. If a destructive pattern is detected, inject a warning into the tool
-//     result (non-blocking - the command still executes).
-//  3. The warning educates the agent about the risk and suggests safer
-//     alternatives (e.g. `git stash` instead of `git reset --hard`).
-//  4. Fires at most once per unique pattern per run to avoid noise.
-//
-// The guard is advisory (non-blocking) because:
-//   - Some destructive operations are intentional (e.g. cleaning up after
-//     a failed experiment)
-//   - Blocking would frustrate legitimate autopilot/cron workflows
-//   - The warning creates awareness so the agent can self-correct
-
 import (
 	"encoding/json"
 	"fmt"
@@ -36,20 +9,13 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// destructivePattern represents a detected destructive git operation pattern.
 type destructivePattern struct {
-	// name is a short identifier for the pattern (e.g., "force_push").
-	name string
-	// severity is "critical" or "warning".
-	severity string
-	// description explains what the operation does and why it's risky.
+	name        string
+	severity    string
 	description string
-	// suggestion is a safer alternative.
-	suggestion string
+	suggestion  string
 }
 
-// gitDestructiveState tracks which patterns have already been warned about
-// in the current run, to avoid repeating warnings.
 type gitDestructiveState struct {
 	warned map[string]bool
 }
@@ -64,93 +30,26 @@ func (s *gitDestructiveState) reset() {
 	s.warned = make(map[string]bool)
 }
 
-// Patterns for detecting destructive git operations in shell command strings.
-// These are compiled once at package init for performance.
 var (
-	// git reset --hard [commit] - #1569-E: optional flags may sit between
-	// reset and --hard (`reset -q --hard`).
-	reGitResetHard = regexp.MustCompile(`\bgit\s+reset\s+(-[a-zA-Z]+\s+)*--hard\b`)
-	// git push --force / --force-with-lease / -f
-	// #1569-A: the flag must start its own token (whitespace-prefixed
-	// short group or --force) - `.*(-f...)` matched the SUBSTRING and
-	// branch names like hot-fix / bug-fix / x-fix produced CRITICAL
-	// false positives. #1569-C: +refspec (git push origin +main) is the
-	// tersest force form and had no pattern at all.
-	// #1569-A/C: force-push detection is token-based (see
-	// isForcePushCommand) - regex substring matching fired CRITICAL on
-	// branch names like hot-fix, missed `push --force` (the single space
-	// between push and the flag is consumed by \s+, leaving the
-	// whitespace-prefixed flag pattern unmatched), and had no pattern at
-	// all for +refspec force pushes.
-	// git push --force-with-lease is less dangerous, warn at lower severity
-	reGitForceWithLease = regexp.MustCompile(`\bgit\s+push\s+.*--force-with-lease\b`)
-	// git clean -fd / -fdx / -f - #1569-B: dry-run forms (-n anywhere in
-	// the flag group) must not fire; the guard's own advice text says
-	// "use git clean -n (dry run) first", yet clean -fdn matched CRITICAL.
-	// #1569-B: clean detection is token-based (isCleanForceCommand) -
-	// dry-run forms (-n in any flag group) must not fire.
-	// git branch -D / --delete --force (case-sensitive: -D is force delete, -d is safe)
-	reGitBranchDelete = regexp.MustCompile(`\bgit\s+branch\s+(-D\b|--delete\s+--force\b)`)
-	// git branch -f <branch> <start> - force-moves a branch pointer (#1464-B)
+	reGitResetHard       = regexp.MustCompile(`\bgit\s+reset\s+(-[a-zA-Z]+\s+)*--hard\b`)
+	reGitForceWithLease  = regexp.MustCompile(`\bgit\s+push\s+.*--force-with-lease\b`)
+	reGitBranchDelete    = regexp.MustCompile(`\bgit\s+branch\s+(-D\b|--delete\s+--force\b)`)
 	reGitBranchForceMove = regexp.MustCompile(`\bgit\s+branch\s+(-f\b|--force\b)`)
-	// git checkout -- . / git restore . (discard all changes)
-	// #1569-D: the old `--\s*\.` shape was the narrowest possible form -
-	// the BARE `git checkout .` (shortest discard-all form) sat in the
-	// blind spot, as did `checkout -f <ref>` / `switch -f` / the
-	// semantically-identical `checkout -B` (which #1464-B's branch -f
-	// warning makes inconsistent), and bare `restore .`.
-	// #1754 case 1: the flag slot only ate SINGLE-DASH flags - the most
-	// common restore-to-HEAD spellings all carry a REF or tree-ish token
-	// (`checkout HEAD -- .`, `restore --source=HEAD .`, `checkout main .`,
-	// `switch -C`) and the trailing `.` anchor broke inside `&&` chains;
-	// every one silently skipped the advisory.
-	// #1886: `--worktree` (long spelling; the -W abbreviation already fit
-	// the single-dash slot) joins the flag alternation, and `;` joins the
-	// chain anchor so semicolon-linked discards cannot slip through.
-	// `--staged` alone stays OUT: `restore --staged .` is a legal unstage;
-	// combined `--staged --worktree .` matches via the --worktree slot.
-	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(?:(?:checkout|switch|restore)\s+(?:(?:-[a-zA-Z]+\s+|--source(?:[= ]\S+)\s+|(?:--staged\s+)?--worktree\s+|[A-Za-z0-9_][\w./=-]*\s+|--\s+)*(?:\.\s*(?:$|&&|--|;)|--\s*\.))|switch\s+-[CcFf]\b)`)
-	// #1886: `git checkout -b feature .` fits the discard-all shape but git
-	// itself rejects -b combined with a pathspec - the advisory would fire
-	// on a doomed command. RE2 has no lookahead, so this is filtered at the
-	// consumer (discardAllFires) instead of inside the big pattern.
-	// #3535: the filter is SEGMENT-scoped - applied per chained subcommand,
-	// never to the whole string. `git checkout -f . && git checkout -b fix`
-	// used to have its first segment's CRITICAL swallowed by the second
-	// segment's -b under whole-string matching.
-	reGitBranchCreate = regexp.MustCompile(`\s-b\s`)
-	// #3535: chain separators for segment-scoped checks. Mirrors the break
-	// set of cleanForceSingleLine (&&, ||, |, &, ;) plus newlines.
-	reChainSep = regexp.MustCompile(`\|\||&&|\||&|;|\n`)
-	// checkout/switch with a force-bearing flag discards local changes to
-	// reach the target state (checkout -f / switch -f / checkout -B main).
-	reGitCheckoutForce = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)
-	// git stash drop / git stash clear
-	reGitStashDrop = regexp.MustCompile(`\bgit\s+stash\s+(drop|clear)\b`)
-	// git rebase (can rewrite history)
-	reGitRebase = regexp.MustCompile(`\bgit\s+rebase\b`)
-	// git filter-branch / git filter-repo (rewrites history)
-	reGitFilterBranch = regexp.MustCompile(`\bgit\s+(filter-branch|filter-repo)\b`)
-	// rm -rf (not git-specific but extremely destructive)
-	// #1569-E: cover -Rf (BSD/macOS capital-R), separated flags (-r -f),
-	// and long options (--recursive --force in either order). The old
-	// character class was case-sensitive and required combined flags.
-	reRmRf = regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f\b|-[a-zA-Z]*f[a-zA-Z]*[rR]\b|-[rR]f\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--recursive\s+--force\b|--force\s+--recursive\b|--recursive\s+-f\b|-f\s+--recursive\b)`)
+	reGitDiscardAll      = regexp.MustCompile(`\bgit\s+(?:(?:checkout|switch|restore)\s+(?:(?:-[a-zA-Z]+\s+|--source(?:[= ]\S+)\s+|(?:--staged\s+)?--worktree\s+|[A-Za-z0-9_][\w./=-]*\s+|--\s+)*(?:\.\s*(?:$|&&|--|;)|--\s*\.))|switch\s+-[CcFf]\b)`)
+	reGitBranchCreate    = regexp.MustCompile(`\s-b\s`)
+	reChainSep           = regexp.MustCompile(`\|\||&&|\||&|;|\n`)
+	reGitCheckoutForce   = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)
+	reGitStashDrop       = regexp.MustCompile(`\bgit\s+stash\s+(drop|clear)\b`)
+	reGitRebase          = regexp.MustCompile(`\bgit\s+rebase\b`)
+	reGitFilterBranch    = regexp.MustCompile(`\bgit\s+(filter-branch|filter-repo)\b`)
+	reRmRf               = regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f\b|-[a-zA-Z]*f[a-zA-Z]*[rR]\b|-[rR]f\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--recursive\s+--force\b|--force\s+--recursive\b|--recursive\s+-f\b|-f\s+--recursive\b)`)
 )
 
-// normalizeGitGlobalFlags rewrites `git -C <path> <sub>` / `git --git-dir=X
-// <sub>` invocations into the bare `git <sub>` form, line by line, so the
-// adjacency-anchored regex family and token helpers see through global flags.
-// #2255 H1: six op classes (reset --hard, branch -D, stash drop, filter-branch,
-// checkout -f, push --force) were silent on every -C variant because the
-// patterns require git and the subcommand to be adjacent.
 func normalizeGitGlobalFlags(cmd string) string {
 	lines := strings.Split(cmd, "\n")
 	for li, line := range lines {
 		toks := strings.Fields(line)
-		// explicit index loop: after a rewrite the scan continues from
-		// the rewritten position (a range variable assignment would not
-		// affect the iteration).
+
 		for i := 0; i < len(toks); i++ {
 			if strings.Trim(toks[i], "\"'") != "git" {
 				continue
@@ -161,18 +60,14 @@ func normalizeGitGlobalFlags(cmd string) string {
 				if !isGitGlobalFlag(ft) {
 					break
 				}
-				// --key=value carries the value inline; bare -C/--git-dir
-				// consume one following token as their value.
+
 				j++
 				if !strings.Contains(ft, "=") && j < len(toks) {
 					j++
 				}
 			}
 			if j > i+1 && j <= len(toks) {
-				// rewrite in place and KEEP SCANNING from the rewritten
-				// position - a later git in the same line still needs its
-				// -C segment stripped (#2255 F4 review residual: `git
-				// status && git -C /b push --force`).
+
 				out := append(append([]string{}, toks[:i+1]...), toks[j:]...)
 				lines[li] = strings.Join(out, " ")
 				toks = out
@@ -183,8 +78,6 @@ func normalizeGitGlobalFlags(cmd string) string {
 	return strings.Join(lines, "\n")
 }
 
-// detectDestructiveInShellCommand analyzes a shell command string for destructive
-// git operations. Returns patterns found, or nil if none.
 func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	if cmd == "" {
 		return nil
@@ -197,7 +90,6 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		result destructivePattern
 	}
 
-	// Check force-with-lease first (less severe) so force-push doesn't shadow it
 	if reGitForceWithLease.MatchString(cmd) {
 		found = append(found, destructivePattern{
 			name:        "force_with_lease",
@@ -224,9 +116,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	}
 
 	if isCleanForceCommand(cmd) {
-		// #1569-B: -n anywhere in the flag group is a dry run - the
-		// suggestion text itself recommends `git clean -n` first, yet
-		// clean -fdn fired CRITICAL. Skip dry-run invocations entirely.
+
 		found = append(found, destructivePattern{
 			name:        "clean_force",
 			severity:    "critical",
@@ -254,12 +144,6 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	// #1569-D: bare checkout/restore . and checkout/switch force forms.
-	// #1886: -b branch-create forms are excluded (git rejects -b with a
-	// pathspec - the advisory would only fire on a doomed command).
-	// #3535: the exclusion is per SEGMENT via discardAllFires, so a real
-	// discard in one chained subcommand can no longer be silenced by an
-	// unrelated -b in a later one.
 	if discardAllFires(cmd) {
 		found = append(found, destructivePattern{
 			name:        "discard_all",
@@ -308,8 +192,6 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	return found
 }
 
-// detectDestructiveInGitTool analyzes arguments from git_* built-in tools
-// (git_reset, git_stash, git_revert, git_checkout) for destructive operations.
 func detectDestructiveInGitTool(toolName string, args json.RawMessage) []destructivePattern {
 	if len(args) == 0 {
 		return nil
@@ -343,15 +225,12 @@ func detectDestructiveInGitTool(toolName string, args json.RawMessage) []destruc
 			})
 		}
 	case "git_checkout":
-		// Branch switches via git_checkout tool are low-risk; not flagged.
+
 	}
 
 	return found
 }
 
-// checkGitDestructive is called before tool execution to check for destructive
-// git operations. Returns a warning string if a destructive pattern is detected
-// (and hasn't been warned yet this run), or empty string otherwise.
 func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) string {
 	if a.destructiveGuard == nil {
 		return ""
@@ -362,7 +241,6 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 
 	switch toolName {
 	case "run_command", "start_command":
-		// Extract the command string from arguments
 		var m map[string]any
 		if err := json.Unmarshal(args, &m); err == nil {
 			if cmd, ok := m["command"].(string); ok {
@@ -373,10 +251,6 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 	case "git_reset", "git_stash", "git_revert", "git_checkout":
 		patterns = detectDestructiveInGitTool(toolName, args)
 	case "file_ops":
-		// #1084: file_ops delete with recursive=true runs os.RemoveAll - the
-		// first-party equivalent of `rm -rf`. Without this branch an agent
-		// could trivially (and naturally, preferring first-party tools) bypass
-		// the shell-command rm -rf warning entirely.
 		var m struct {
 			Operations []struct {
 				Action    string `json:"action"`
@@ -401,10 +275,6 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 		return ""
 	}
 
-	// Filter out already-warned patterns. #1569-A: the key is pattern+
-	// command, not pattern alone - the old once-per-run pattern dedup let
-	// an early FALSE positive (branch name containing -f) permanently mute
-	// a later REAL force push in the same run.
 	var newPatterns []destructivePattern
 	for _, p := range patterns {
 		key := p.name + "|" + shellCmd
@@ -420,7 +290,6 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 
 	debug.Log("git_destructive", "detected %d destructive pattern(s) in tool %s", len(newPatterns), toolName)
 
-	// Build warning message
 	var sb strings.Builder
 	sb.WriteString("\n")
 	hasCritical := false
@@ -451,20 +320,8 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 	return sb.String()
 }
 
-// isForcePushCommand reports whether a git push invocation carries a
-// force signal: --force, a short flag group containing f, or a +refspec.
-// Token-based (#1569): branch names like hot-fix are refspec tokens, not
-// flags, and cannot false-positive.
 func isForcePushCommand(cmd string) bool {
-	// #1609-A: Fields CONSUMES newlines as whitespace, so a multi-line
-	// script's second line ("git push origin main\nmake -f Makefile")
-	// reached the -f scan with no separator token at all. Split into
-	// lines and judge each line independently - a push on ANY line is a
-	// push of this command; a non-push line's flags never leak into
-	// another line's scan.
-	// #2255 H1: strip the global-flag segment first so `git -C /repo push
-	// --force` reaches the adjacency check (toks[i-1]=="git" strict
-	// adjacency never saw past -C).
+
 	cmd = normalizeGitGlobalFlags(cmd)
 	for _, line := range strings.Split(cmd, "\n") {
 		if forcePushSingleLine(line) {
@@ -477,12 +334,7 @@ func isForcePushCommand(cmd string) bool {
 func forcePushSingleLine(cmd string) bool {
 	toks := strings.Fields(cmd)
 	for i, t := range toks {
-		// #1600-C: adjacent-form check must strip surrounding quotes -
-		// 'sh -c "git push --force origin main"' tokenizes to "\"git"
-		// which never equals "git", so the whole invocation was skipped
-		// where the old \b-regex matched through the quote boundary (a
-		// tokenization REGRESSION). Strip a single layer of quotes for
-		// adjacency only.
+
 		st := strings.Trim(t, "\"'")
 		if st != "push" || i == 0 {
 			continue
@@ -491,20 +343,12 @@ func forcePushSingleLine(cmd string) bool {
 			continue
 		}
 		for _, tok := range toks[i+1:] {
-			// #1600-A: stop at command separators - 'git push origin
-			// main; make -f Makefile' is a force-push-free line whose
-			// SECOND command's -f fired CRITICAL before.
-			// #1609-A: NEWLINES too - Fields splits on Unicode whitespace
-			// including \n, so a multi-line script's second line ("git
-			// push origin main\nmake -f Makefile") reached the -f scan
-			// with no separator token at all. Any token carrying a
-			// newline ends this command.
+
 			switch {
 			case tok == "&&" || tok == "||" || tok == "|" || tok == "&":
 				return false
 			case strings.ContainsAny(tok, ";\n"):
-				// 'main; make ...' - the separator glues to the previous
-				// word under Fields splitting; same for embedded newlines.
+
 				return false
 			case strings.HasPrefix(tok, ";"):
 				return false
@@ -513,10 +357,7 @@ func forcePushSingleLine(cmd string) bool {
 			case tok == "--force", tok == "--force-with-lease=false":
 				return true
 			case tok == "--force-with-lease", tok == "--force-with-lease=true":
-				// #1600-D: an explicit lease on THIS token no longer ends
-				// the scan - a later real force flag on the same line was
-				// masked. The lease-does-not-end-scan semantics keep the
-				// lease pattern (lower severity) as the outer reporter.
+
 				continue
 			case strings.HasPrefix(tok, "--"):
 				continue
@@ -533,12 +374,8 @@ func forcePushSingleLine(cmd string) bool {
 	return false
 }
 
-// isCleanForceCommand reports whether a git clean invocation deletes (-f
-// in a flag group) without being a dry run (-n in any flag group)
-// (#1569-B).
 func isCleanForceCommand(cmd string) bool {
-	// #1774 case 1: judge per-line like forcePushSingleLine - Fields
-	// consumes newlines, and a second line's '-f' leaked into the scan.
+
 	for _, line := range strings.Split(cmd, "\n") {
 		if cleanForceSingleLine(line) {
 			return true
@@ -547,9 +384,6 @@ func isCleanForceCommand(cmd string) bool {
 	return false
 }
 
-// isGitGlobalFlag reports whether tok is a flag that may sit BETWEEN 'git'
-// and its subcommand (-C/--no-pager/-c/--git-dir/--work-tree...) -
-// 'git -C /repo clean -fd' must still detect (#1774 case 2).
 func isGitGlobalFlag(tok string) bool {
 	if !strings.HasPrefix(tok, "-") {
 		return false
@@ -560,9 +394,7 @@ func isGitGlobalFlag(tok string) bool {
 		"--no-replace-objects", "--bare", "--no-renames":
 		return true
 	}
-	// -c takes a key=value glued or as the NEXT token; --git-dir /
-	// --work-tree / --namespace likewise - treat them (and their glued
-	// = forms) as consuming one following token.
+
 	return strings.HasPrefix(tok, "-c") || strings.HasPrefix(tok, "--git-dir") ||
 		strings.HasPrefix(tok, "--work-tree") || strings.HasPrefix(tok, "--namespace")
 }
@@ -574,19 +406,13 @@ func cleanForceSingleLine(cmd string) bool {
 		if st != "clean" || i == 0 {
 			continue
 		}
-		// #1774 case 2: the token before 'clean' is either 'git' or a
-		// run of global flags started by 'git' ('git -C /repo clean').
+
 		if !gitChainPrecedes(toks, i) {
 			continue
 		}
 		hasF, hasN := false, false
 		for _, tok := range toks[i+1:] {
-			// #1600-B: long forms too - --dry-run must suppress, --force
-			// must trigger (the short-group-only check fired CRITICAL on
-			// 'git clean --dry-run -fd', which deletes nothing).
-			// #1774 case 1: stop at command separators - 'git clean . &&
-			// rm -f x' is a force-free clean whose SECOND command's -f
-			// fired CRITICAL before (#1600-A fixed push only).
+
 			if tok == "&&" || tok == "||" || tok == "|" || tok == "&" ||
 				strings.ContainsAny(tok, ";\n") || strings.HasPrefix(tok, ";") {
 				break
@@ -613,8 +439,6 @@ func cleanForceSingleLine(cmd string) bool {
 	return false
 }
 
-// gitChainPrecedes reports whether toks[:i] forms 'git [global-flags...]' -
-// either toks[i-1]=="git" or a flag chain rooted at an earlier 'git'.
 func gitChainPrecedes(toks []string, i int) bool {
 	if i == 0 {
 		return false
@@ -622,10 +446,7 @@ func gitChainPrecedes(toks []string, i int) bool {
 	if strings.Trim(toks[i-1], "\"'") == "git" {
 		return true
 	}
-	// Walk backwards from the subcommand: the chain is [git][flag value?]*
-	// so from position i-1 we may see (value, flag) pairs. Step backwards
-	// in PAIRS: if toks[j] is a valued flag's VALUE, toks[j-1] must be the
-	// flag; root at the token before the flag run.
+
 	j := i - 1
 	for j >= 1 {
 		fl := strings.Trim(toks[j], "\"'")
@@ -633,26 +454,20 @@ func gitChainPrecedes(toks []string, i int) bool {
 			return true
 		}
 		if !isGitGlobalFlag(fl) {
-			// Maybe it's a value token: check whether the token before it
-			// is a valued global flag (only when that flag REQUIRES a
-			// separate value).
+
 			prev := strings.Trim(toks[j-1], "\"'")
 			if isGitGlobalFlag(prev) && flagTakesValue(prev) && !strings.Contains(toks[j-1], "=") {
-				j -= 2 // skip value + flag
+				j -= 2
 				continue
 			}
 			return false
 		}
-		// fl IS a global flag: --key=value carries its value; bare valued
-		// flags had their value AFTER them (already consumed by the loop
-		// above on a later iteration), so just step over the flag.
+
 		j--
 	}
 	return j >= 0 && strings.Trim(toks[j], "\"'") == "git"
 }
 
-// flagTakesValue reports whether the global flag requires a separate value
-// token (vs carrying it inline with '=' or taking none).
 func flagTakesValue(fl string) bool {
 	switch {
 	case fl == "-C", strings.HasPrefix(fl, "--git-dir"),
@@ -664,15 +479,6 @@ func flagTakesValue(fl string) bool {
 	return false
 }
 
-// discardAllFires reports whether ANY single chained subcommand of cmd is a
-// discard-all / force-checkout without a same-segment -b. #3535: the #1886
-// doomed-command filter (`git checkout -b name .` - git rejects -b with a
-// pathspec) must only suppress the advisory for the segment that carries
-// the -b. Under the old whole-string form, `git checkout -f . && git
-// checkout -b fix` - a real unconditional discard followed by an unrelated
-// branch create - had its CRITICAL silently swallowed (sa-62 probe).
-// Segment set mirrors reGitDiscardAll's chain awareness (&& and ; anchors,
-// #1754/#1886) and cleanForceSingleLine's break set (adds ||, |, &).
 func discardAllFires(cmd string) bool {
 	for _, seg := range reChainSep.Split(cmd, -1) {
 		if seg == "" {

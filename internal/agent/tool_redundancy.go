@@ -1,54 +1,18 @@
 package agent
 
-// Tool Call Redundancy Analyzer -- Tool Use Optimization
-//
-// Research basis: "Tool Learning for Large Language Models" (Qin et al. 2024,
-// ICLR 2024 survey) identifies tool call efficiency as a critical gap in
-// LLM agents. The ACE Framework (ICLR 2026) catalogs "redundant invocation"
-// as a context waste pattern. Anthropic's "Effective Context Engineering for
-// Agents" (2025) recommends tracking tool call patterns to identify
-// inefficiencies.
-//
-// Gap: ggcode has loop_detect.go which catches CONSECUTIVE identical calls
-// (same tool + same args 3+ times in a row). But it resets when a different
-// call is seen. This means scattered duplicates go undetected:
-//
-//   iter 1: grep "foo"  -> 6 results
-//   iter 2: read file.go
-//   iter 3: grep "foo"  -> same 6 results (loop_detect sees different prev call, resets)
-//   iter 4: edit file.go
-//   iter 5: grep "foo"  -> same 6 results again
-//
-// memoize.go caches the result (avoiding re-execution), but the agent still
-// gets the cached content back and wastes attention re-analyzing it. This
-// analyzer warns the agent that it has called the same tool with the same
-// args N times total, suggesting it already has this information.
-//
-// Competitor analysis:
-//   - Claude Code: no scattered duplicate detection
-//   - Cursor: implicit editor context management
-//   - OpenHands: event-based dedup but no frequency analysis
-//   - Aider: no tracking
-//
-// Design:
-//   - Tracks total call count per fingerprint (tool name + args hash)
-//   - Warns when any fingerprint reaches the scattered threshold (3 total)
-//   - Fires at most 2 times per run (advisory, not blocking)
-//   - Zero LLM cost - hash map lookup
-
 import (
 	"fmt"
 	"strings"
 )
 
 const (
-	scatterDupWarnThreshold = 3 // total occurrences before warning
-	scatterDupMaxWarnings   = 2 // max warnings per run
+	scatterDupWarnThreshold = 3
+	scatterDupMaxWarnings   = 2
 )
 
 type toolRedundancyState struct {
-	counts   map[string]int    // fingerprint -> total call count
-	tools    map[string]string // fingerprint -> tool name (for readable messages)
+	counts   map[string]int
+	tools    map[string]string
 	warnings int
 }
 
@@ -65,11 +29,9 @@ func (t *toolRedundancyState) reset() {
 	t.warnings = 0
 }
 
-// recordCall tracks a tool call and returns guidance if a scattered duplicate
-// pattern is detected (same tool+args called N times, non-consecutively).
 func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 	if t.warnings >= scatterDupMaxWarnings {
-		// Still track for accuracy but don't warn
+
 		fp := fingerprintToolCall(toolName, args)
 		t.counts[fp]++
 		return ""
@@ -82,13 +44,7 @@ func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 	count := t.counts[fp]
 	if count == scatterDupWarnThreshold {
 		t.warnings++
-		// #2343: assert only what the detector can prove. The counts map
-		// totals calls without order, so the old consecutiveness adverb
-		// was unprovable (a 3-in-a-row streak read as scattered); and
-		// memoize expires read_file by mtime, LSP by TTL, git_* by TTL,
-		// so the old "results are in your context" claim was false for
-		// stateful tools - the fresh result may differ from every earlier
-		// one in context.
+
 		return fmt.Sprintf(
 			"Efficiency hint: You have called %s with identical arguments %d times in this session. "+
 				"If the earlier results are still valid for your current question, reuse them "+
@@ -97,7 +53,6 @@ func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 		)
 	}
 
-	// Escalation at higher thresholds
 	if count == scatterDupWarnThreshold*2 {
 		t.warnings++
 		return fmt.Sprintf(
@@ -110,7 +65,6 @@ func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 	return ""
 }
 
-// summary returns a human-readable summary of redundancy patterns for logging.
 func (t *toolRedundancyState) summary() string {
 	if len(t.counts) == 0 {
 		return ""

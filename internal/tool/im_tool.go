@@ -14,9 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// IMManager is the subset of im.Manager methods needed by the IM tool.
-// Defined here to avoid importing internal/im (which would create a cycle
-// via internal/config).
 type IMManager interface {
 	Snapshot() IMSnapshot
 	MuteBinding(adapterName string) error
@@ -27,22 +24,16 @@ type IMManager interface {
 	IsBindingDisabled(adapterName string) bool
 	Emit(ctx context.Context, event IMOutboundEvent) error
 	SendDirect(ctx context.Context, adapter string, event IMOutboundEvent) error
-	// SendFileDirect (#3316): uploads an arbitrary file as a real file
-	// message on adapters that support it. Returns supported=false when
-	// the adapter lacks the capability so the caller falls back to
-	// path-as-text delivery.
 	SendFileDirect(ctx context.Context, adapter string, file IMOutboundFile, caption string) (supported bool, err error)
 	OtherInstancesHaveActiveChannels() bool
 }
 
-// IMSnapshot is a subset of im.StatusSnapshot.
 type IMSnapshot struct {
 	CurrentBindings  []IMChannelBinding
 	DisabledBindings []IMChannelBinding
 	Adapters         []IMAdapterState
 }
 
-// IMChannelBinding is a subset of im.ChannelBinding.
 type IMChannelBinding struct {
 	Adapter   string
 	Platform  string
@@ -50,7 +41,6 @@ type IMChannelBinding struct {
 	Muted     bool
 }
 
-// IMAdapterState is a subset of im.AdapterState.
 type IMAdapterState struct {
 	Name      string
 	Platform  string
@@ -59,13 +49,11 @@ type IMAdapterState struct {
 	LastError string
 }
 
-// IMOutboundEvent is a subset of im.OutboundEvent for sending text.
 type IMOutboundEvent struct {
 	Kind string
 	Text string
 }
 
-// IMOutboundFile (#3316) is one arbitrary file for upload delivery.
 type IMOutboundFile struct {
 	Path     string
 	Filename string
@@ -73,8 +61,6 @@ type IMOutboundFile struct {
 	Data     []byte
 }
 
-// IMTool lets the LLM manage IM adapters and send messages.
-// The manager is injected post-registration via SetManager().
 type IMTool struct {
 	Manager IMManager
 }
@@ -82,10 +68,7 @@ type IMTool struct {
 func (t IMTool) Name() string { return "im" }
 
 func (t IMTool) Description() string {
-	// Registered unconditionally in builtin.go, but many workspaces have no
-	// IM configured: shrink the description instead of advertising actions
-	// and platforms that cannot work (generic descriptions waste context and
-	// invite calls against nonexistent adapters).
+
 	if t.Manager == nil {
 		return "Manage IM adapters and send messages to bound IM channels. " +
 			"No IM manager is available in this session (IM not configured or not started yet)."
@@ -101,9 +84,6 @@ func (t IMTool) Description() string {
 			"No IM adapter is bound in this workspace yet. Bind one from the IM panel (or send it a message) before using this tool."
 	}
 
-	// List only the adapters that actually exist here, with per-adapter
-	// media capability, so the LLM knows which target names are real and
-	// whether send_file uploads media or degrades to path text.
 	mediaCapable := map[string]bool{
 		"qq": true, "telegram": true, "discord": true, "feishu": true,
 		"matrix": true, "whatsapp": true, "slack": true, "mattermost": true,
@@ -219,7 +199,6 @@ func (t IMTool) doStatus() Result {
 		LastError string `json:"last_error,omitempty"`
 	}
 
-	// Build a map of adapter -> binding for cross-referencing
 	bindingMap := make(map[string]IMChannelBinding)
 	for _, b := range snap.CurrentBindings {
 		bindingMap[b.Adapter] = b
@@ -233,7 +212,6 @@ func (t IMTool) doStatus() Result {
 		adapterStateMap[a.Name] = a
 	}
 
-	// Collect all adapter names from both bindings and adapter states
 	allNames := make(map[string]bool)
 	for name := range bindingMap {
 		allNames[name] = true
@@ -276,7 +254,6 @@ func (t IMTool) doStatus() Result {
 		adapters = append(adapters, info)
 	}
 
-	// Sort by name
 	for i := 0; i < len(adapters); i++ {
 		for j := i + 1; j < len(adapters); j++ {
 			if adapters[i].Name > adapters[j].Name {
@@ -291,7 +268,7 @@ func (t IMTool) doStatus() Result {
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("IM Adapters (%d):\n\n", len(adapters)))
-	// Show multi-instance info
+
 	if t.Manager.OtherInstancesHaveActiveChannels() {
 		sb.WriteString("  Note: Other instances in this workspace have active IM channels.\n  Starting a competing adapter may cause conflicts (duplicate connections).\n\n")
 	}
@@ -356,7 +333,6 @@ func (t IMTool) doEnable(adapter string) (Result, error) {
 	return Result{Content: fmt.Sprintf("Adapter %q enabled. Reconnecting...", adapter)}, nil
 }
 
-// findBinding searches both current and disabled bindings for the named adapter.
 func findBinding(snap IMSnapshot, adapter string) (binding *IMChannelBinding, isDisabled bool) {
 	for i := range snap.CurrentBindings {
 		if snap.CurrentBindings[i].Adapter == adapter {
@@ -371,7 +347,6 @@ func findBinding(snap IMSnapshot, adapter string) (binding *IMChannelBinding, is
 	return nil, false
 }
 
-// isAdapterHealthy checks if the adapter is in a healthy/connected state.
 func isAdapterHealthy(snap IMSnapshot, adapter string) bool {
 	for _, a := range snap.Adapters {
 		if a.Name == adapter {
@@ -381,9 +356,6 @@ func isAdapterHealthy(snap IMSnapshot, adapter string) bool {
 	return false
 }
 
-// waitForHealthy polls Snapshot until the adapter becomes healthy or timeout.
-// #1691 case 3: honors ctx cancellation - a cancelled session used to
-// block for the full 15s window.
 func (t IMTool) waitForHealthy(ctx context.Context, adapter string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -420,16 +392,12 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 	isMuted := t.Manager.IsBindingMuted(adapter)
 	healthy := isAdapterHealthy(snap, adapter)
 
-	// Case 1: adapter is active and healthy -> send directly
 	if !isMuted && !isDisabled && healthy {
 		return t.sendAndReport(ctx, adapter, binding.ChannelID, message)
 	}
 
-	// Case 2: adapter is muted or disabled, and auto_start is false
 	if !autoStart {
-		// #848: muted adapters are almost always 'unhealthy' too - checking
-		// health first pointed operators at connection debugging instead of
-		// unmute/auto_start. Mute is the actionable state; check it first.
+
 		stateDesc := "not healthy"
 		if isDisabled {
 			stateDesc = "disabled"
@@ -442,11 +410,8 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		)}, nil
 	}
 
-	// Case 3: auto_start=true - check multi-instance conflict first
 	if t.Manager.OtherInstancesHaveActiveChannels() {
-		// Another instance in the same workspace has active channels.
-		// Starting a competing adapter connection would cause conflicts
-		// (e.g. Telegram bot duplicate polling, Discord gateway clash).
+
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"Cannot auto-start adapter %q: another instance in this workspace already has active IM channels. "+
 				"Starting a competing connection would cause conflicts (duplicate connections). "+
@@ -455,7 +420,6 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		)}, nil
 	}
 
-	// Case 4: auto_start=true, no conflict - activate the adapter
 	var activateErr error
 	if isDisabled {
 		activateErr = t.Manager.EnableBinding(adapter)
@@ -466,14 +430,9 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		return Result{IsError: true, Content: fmt.Sprintf("failed to activate adapter %q: %v", adapter, activateErr)}, nil
 	}
 
-	// #1691 case 4: when neither enable nor unmute applied (adapter was
-	// merely unhealthy, not muted/disabled), no ACTIVATION happened - the
-	// old path idled the full 15s and reported "was activated" untruth-
-	// fully. Only wait when we actually activated something.
 	activated := isDisabled || isMuted
 	if !activated {
-		// Healthy already? Send now. Otherwise surface the state without
-		// the pointless wait.
+
 		if t.waitForHealthy(ctx, adapter, 2*time.Second) {
 			return t.sendAndReport(ctx, adapter, binding.ChannelID, message)
 		}
@@ -483,7 +442,6 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		)}, nil
 	}
 
-	// Wait for adapter to become healthy (max 15 seconds)
 	const healthTimeout = 15 * time.Second
 	if !t.waitForHealthy(ctx, adapter, healthTimeout) {
 		return Result{IsError: true, Content: fmt.Sprintf(
@@ -496,7 +454,6 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 	return t.sendAndReport(ctx, adapter, binding.ChannelID, message)
 }
 
-// sendAndReport sends the message via SendDirect and returns the result.
 func (t IMTool) sendAndReport(ctx context.Context, adapter, channelID, message string) (Result, error) {
 	err := t.Manager.SendDirect(ctx, adapter, IMOutboundEvent{Kind: "text", Text: message})
 	if err != nil {
@@ -505,14 +462,8 @@ func (t IMTool) sendAndReport(ctx context.Context, adapter, channelID, message s
 	return Result{Content: fmt.Sprintf("Message sent via %s (channel: %s).", adapter, truncateStr(channelID, 30))}, nil
 }
 
-// sendFileMaxBytes caps the file size accepted by send_file. Image uploads
-// are already capped at image.MaxSize (20MB) inside the adapters; non-image
-// files travel as path text and need no cap, but validating early gives the
-// LLM an immediate, actionable error instead of an adapter-side failure.
 const sendFileMaxBytes = 20 * 1024 * 1024
 
-// sendFileMIME (#3316): extension table first (authoritative for common
-// types), content sniffing as the fallback for unknown extensions.
 func sendFileMIME(ext string, data []byte) string {
 	switch ext {
 	case ".png":
@@ -550,17 +501,10 @@ func sendFileMIME(ext string, data []byte) string {
 	return "application/octet-stream"
 }
 
-// sendFileImageExts lists extensions that every media-capable adapter
-// (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost/signal/wecom/
-// wechat) can upload as rich media today. Other extensions are delivered as
-// the file path text. (wechat only carries public http(s) image URLs, so
-// local-path images degrade to path text there.)
 var sendFileImageExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 }
 
-// sendFileExamplePath keeps the "must be absolute" hint honest on every
-// platform: Windows users get a drive-letter example instead of /tmp/...
 var sendFileExamplePath = func() string {
 	if runtime.GOOS == "windows" {
 		return `C:\Users\me\Pictures\screenshot.png`
@@ -568,12 +512,6 @@ var sendFileExamplePath = func() string {
 	return "/tmp/screenshot.png"
 }()
 
-// doSendFile pushes a local file to a bound IM channel. The file path is
-// sent as the message text: media-capable adapters extract image paths via
-// ExtractImagesFromText and upload them as rich media (the extraction layer
-// added local-path support for exactly this flow); non-image files arrive
-// as a clickable path line, which is the honest cross-platform baseline.
-// Reuses doSend's full activation/health/multi-instance-conflict pipeline.
 func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, autoStart bool) (Result, error) {
 	path = strings.TrimSpace(path)
 	if adapter == "" {
@@ -582,9 +520,7 @@ func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, a
 	if path == "" {
 		return Result{IsError: true, Content: "file path is required for send_file action"}, nil
 	}
-	// Accept both native absolute paths and Unix-style drive-rooted paths
-	// ("/tmp/x.png" resolves to the current drive root on Windows); mirrors
-	// the permission/sandbox.go precedent for cross-platform path checks.
+
 	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "/") {
 		return Result{IsError: true, Content: fmt.Sprintf("path %q must be absolute (e.g. %s)", path, sendFileExamplePath)}, nil
 	}
@@ -605,11 +541,6 @@ func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, a
 		delivery = "image media upload"
 	}
 
-	// #3316: adapters implementing the FileSender interface get the real
-	// bytes - arbitrary files arrive as downloadable file messages
-	// (documents), images keep their preview semantics per platform. The
-	// adapter is only attempted when it is actually running and healthy;
-	// muted/disabled/unhealthy adapters keep the legacy path-text route.
 	isMuted := t.Manager.IsBindingMuted(adapter)
 	isDisabled := t.Manager.IsBindingDisabled(adapter)
 	snap := t.Manager.Snapshot()
@@ -636,11 +567,9 @@ func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, a
 			}
 			return Result{Content: fmt.Sprintf("File %s (%s, %d bytes) uploaded via %s as %s.", filepath.Base(path), mimeType, info.Size(), adapter, kind)}, nil
 		}
-		// Unsupported: fall through to the legacy path-text delivery.
+
 	}
 
-	// Caption first, path on its own line: the extractor matches paths that
-	// follow whitespace/newlines, so the path must not be glued to CJK text.
 	var sb strings.Builder
 	if c := strings.TrimSpace(caption); c != "" {
 		sb.WriteString(c + "\n")

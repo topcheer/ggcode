@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// #4436 Bug3: a panic inside the delegated PromptStream goroutine must
-// complete the sub-agent with an error instead of leaving it "running"
-// forever (goroutine died, no Complete call).
-
 type panickingAgentRegistry struct{ inner *mockACPAgentRegistry }
 
 func (p *panickingAgentRegistry) Available() []string { return p.inner.Available() }
@@ -41,7 +37,7 @@ func TestIssue4436DelegatePanicCompletesSubAgent(t *testing.T) {
 			"boom": {"Boom Agent", "panics on stream"},
 		},
 	}
-	// Wrap so Get returns the panicking client.
+
 	reg2 := &panickingAgentRegistry{inner: reg}
 
 	mgr := subagent.NewManager(config.SubAgentConfig{})
@@ -58,7 +54,7 @@ func TestIssue4436DelegatePanicCompletesSubAgent(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("execute reported error: %s", res.Content)
 	}
-	// Extract agent id from the startup message.
+
 	fields := strings.Fields(res.Content)
 	id := ""
 	for i, f := range fields {
@@ -75,9 +71,7 @@ func TestIssue4436DelegatePanicCompletesSubAgent(t *testing.T) {
 	for time.Now().Before(deadline) {
 		if sa, ok := mgr.Get(id); ok {
 			if sa.Status != subagent.StatusRunning && sa.Status != subagent.StatusPending {
-				// The fix guarantees Complete() runs on panic: the sub-agent
-				// reaches a terminal state (failed with an error recorded,
-				// never stuck running).
+
 				if sa.Status == subagent.StatusFailed || sa.Status == subagent.StatusCompleted || sa.Status == subagent.StatusCancelled {
 					return
 				}

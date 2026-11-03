@@ -7,24 +7,16 @@ import (
 	"time"
 )
 
-// Issue #1118: the command-job ring buffer bounded only line COUNT
-// (maxCommandLogLines), not bytes. A single multi-MB line was stored whole by
-// addLineLocked and streamed back intact through snapshot /
-// commandSnapshotOutput / formatCommandJobSnapshot. These tests pin the new
-// byte caps: per-line at ingestion, total at the snapshot/format layer.
-
 func bigLine(n int) string {
-	// prefix/suffix lets tests assert head+tail preservation around truncation.
+
 	return "HEAD-" + strings.Repeat("x", n) + "-TAIL"
 }
 
-// TestIssue1118_PerLineCapAtIngestion covers addLineLocked: a single huge line
-// must be truncated before it is stored, with a recognizable marker.
 func TestIssue1118_PerLineCapAtIngestion(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
 	job := m.newJob("cat minified.json", time.Minute, func() {})
 
-	line := bigLine(5 << 20) // 5MB single line, exactly the reported case
+	line := bigLine(5 << 20)
 	job.appendOutput(line + "\n")
 
 	snap := m.snapshot(job)
@@ -43,13 +35,11 @@ func TestIssue1118_PerLineCapAtIngestion(t *testing.T) {
 	}
 }
 
-// TestIssue1118_PartialLineCappedWhileRunning covers appendOutput's partial
-// path: an unterminated dump must stay bounded while the job is still running.
 func TestIssue1118_PartialLineCappedWhileRunning(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
 	job := m.newJob("stream-no-newline", time.Minute, func() {})
 
-	job.appendOutput(bigLine(3 << 20)) // no trailing newline -> lands in partial
+	job.appendOutput(bigLine(3 << 20))
 
 	snap := m.snapshot(job)
 	for i, l := range snap.Lines {
@@ -65,9 +55,6 @@ func TestIssue1118_PartialLineCappedWhileRunning(t *testing.T) {
 	}
 }
 
-// TestIssue1118_TotalCap_CommandSnapshotOutput covers the auto-background
-// return path in run_command.go: many per-line-capped lines still sum to well
-// over any sane budget, so commandSnapshotOutput must apply a total ceiling.
 func TestIssue1118_TotalCap_CommandSnapshotOutput(t *testing.T) {
 	snap := CommandJobSnapshot{
 		ID:     "cmd-cap",
@@ -92,8 +79,6 @@ func TestIssue1118_TotalCap_CommandSnapshotOutput(t *testing.T) {
 	}
 }
 
-// TestIssue1118_TotalCap_FormatCommandJobSnapshot covers the read_command_output /
-// wait_command formatting layer used by production tools.
 func TestIssue1118_TotalCap_FormatCommandJobSnapshot(t *testing.T) {
 	snap := CommandJobSnapshot{
 		ID:           "cmd-fmt",
@@ -119,8 +104,6 @@ func TestIssue1118_TotalCap_FormatCommandJobSnapshot(t *testing.T) {
 	}
 }
 
-// TestIssue1118_LineCountSemanticsUnchanged pins that byte capping does not
-// alter ring-buffer line-count behavior (#513-era semantics).
 func TestIssue1118_LineCountSemanticsUnchanged(t *testing.T) {
 	const overflow = maxCommandLogLines + 50
 	m := NewCommandJobManager(t.TempDir())
@@ -149,8 +132,6 @@ func TestIssue1118_LineCountSemanticsUnchanged(t *testing.T) {
 	}
 }
 
-// TestIssue1118_ReadAndSelectPreserveCaps covers manager.Read: selecting a
-// tail of already-capped lines stays within the total budget end-to-end.
 func TestIssue1118_ReadAndSelectPreserveCaps(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
 	job := m.newJob("noisy build", time.Minute, func() {})

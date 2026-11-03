@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// #435: unknown braced ${name} refs must be flagged, not silently expand to empty.
 func TestInvalidGroupRefsBraced(t *testing.T) {
 	re := regexp.MustCompile(`(a)(b)`)
 	if got := invalidGroupRefs(re, "x${c}y"); got == "" {

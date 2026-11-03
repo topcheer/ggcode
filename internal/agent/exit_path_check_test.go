@@ -52,7 +52,7 @@ func handler(x int) int {
 }
 
 func TestCheckExitPath_NoRedundantElseWithoutTerminator(t *testing.T) {
-	// if-body does NOT end with return/break/continue, so else is fine.
+
 	src := `package foo
 
 func handler(x int) int {
@@ -189,7 +189,7 @@ func TestCheckExitPath_SkipsNonGo(t *testing.T) {
 }
 
 func TestCheckExitPath_NilCheckNoFalsePositive(t *testing.T) {
-	// Classic Go pattern: if err != nil { return err }; no else at all.
+
 	src := `package foo
 
 func handler() error {

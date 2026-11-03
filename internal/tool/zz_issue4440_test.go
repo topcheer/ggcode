@@ -2,9 +2,6 @@ package tool
 
 import "testing"
 
-// #4440 Bug 5: negative Amount/MaxDepth/TimeoutMs used to bypass the ==0
-// defaults (schema "minimum" is not enforced by json.Unmarshal) and flow to
-// the platform layer as-is. clampDesktopDefaults now lower-bounds them.
 func TestIssue4440ClampDesktopDefaults(t *testing.T) {
 	p := desktopParams{Amount: -3, MaxDepth: -1, TimeoutMs: -2500}
 	clampDesktopDefaults(&p)

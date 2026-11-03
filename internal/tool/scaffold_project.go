@@ -13,14 +13,6 @@ import (
 
 const maxScaffoldFiles = 40
 
-// ScaffoldProject generates a multi-file project skeleton from a set of
-// built-in templates (Go, Node/TypeScript, Python, Rust). This eliminates the
-// tedious, error-prone pattern of the agent calling write_file 8-15 times to
-// scaffold a new project, each call consuming a full LLM round-trip.
-//
-// Templates include best-practice defaults: lint configs, CI workflows,
-// .gitignore, README, and entry points -- the same structure the agent would
-// eventually create manually, but in a single deterministic call.
 type ScaffoldProject struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -70,13 +62,11 @@ func (t ScaffoldProject) Parameters() json.RawMessage {
 	}`)
 }
 
-// scaffoldFile represents a single file in a template.
 type scaffoldFile struct {
 	Path    string
 	Content string
 }
 
-// scaffoldResult is the structured output returned to the LLM.
 type scaffoldResult struct {
 	Summary     string               `json:"summary"`
 	Language    string               `json:"language"`
@@ -90,7 +80,7 @@ type scaffoldResult struct {
 
 type scaffoldFileResult struct {
 	Path   string `json:"path"`
-	Status string `json:"status"` // "created", "skipped"
+	Status string `json:"status"`
 }
 
 func (t ScaffoldProject) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -102,7 +92,6 @@ func (t ScaffoldProject) Execute(ctx context.Context, input json.RawMessage) (Re
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	// Resolve output directory (defaults to WorkingDir).
 	outDir := args.OutputDir
 	if outDir == "" {
 		outDir = t.WorkingDir
@@ -113,7 +102,6 @@ func (t ScaffoldProject) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 	args.OutputDir = outDir
 
-	// Sandbox check on the output directory.
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.OutputDir) {
 		return Result{IsError: true, Content: fmt.Sprintf("output_dir not allowed by sandbox policy: %s", args.OutputDir)}, nil
 	}
@@ -131,7 +119,6 @@ func (t ScaffoldProject) Execute(ctx context.Context, input json.RawMessage) (Re
 	return Result{Content: string(content)}, nil
 }
 
-// scaffoldArgs holds validated parameters for a scaffold operation.
 type scaffoldArgs struct {
 	Language    string
 	ProjectName string
@@ -141,8 +128,6 @@ type scaffoldArgs struct {
 	ModulePath  string
 }
 
-// parseScaffoldArgs unmarshals and validates tool input.
-// Returns a non-empty errMsg on failure.
 func parseScaffoldArgs(input json.RawMessage) (scaffoldArgs, string) {
 	var raw struct {
 		Language    string `json:"language"`
@@ -176,7 +161,6 @@ func parseScaffoldArgs(input json.RawMessage) (scaffoldArgs, string) {
 	}, ""
 }
 
-// resolveScaffoldFiles dispatches to the appropriate template generator.
 func resolveScaffoldFiles(args scaffoldArgs) []scaffoldFile {
 	switch args.Language {
 	case "go":
@@ -191,7 +175,6 @@ func resolveScaffoldFiles(args scaffoldArgs) []scaffoldFile {
 	return nil
 }
 
-// writeScaffoldFiles writes each file to disk, skipping existing files.
 func (t ScaffoldProject) writeScaffoldFiles(args scaffoldArgs, files []scaffoldFile) scaffoldResult {
 	result := scaffoldResult{
 		Language:    args.Language,
@@ -203,8 +186,7 @@ func (t ScaffoldProject) writeScaffoldFiles(args scaffoldArgs, files []scaffoldF
 
 	for _, f := range files {
 		fullPath := filepath.Join(args.OutputDir, f.Path)
-		// #870: distinguish exists/sandbox/io so a half-created scaffold is
-		// reported as the failure it is, not '(already exist)'.
+
 		ok, reason := t.tryWriteFile(fullPath, f.Content)
 		if ok {
 			defaultFileTracker.RecordRead(fullPath)
@@ -233,16 +215,12 @@ func (t ScaffoldProject) writeScaffoldFiles(args scaffoldArgs, files []scaffoldF
 	return result
 }
 
-// tryWriteFile attempts to write a single file. Returns (true, "") on
-// success; on failure returns false plus a reason: "exists", "sandbox",
-// or "io" (#870: callers previously labeled every skip 'already exist',
-// hiding permission/IO failures behind a harmless-sounding message).
 func (t ScaffoldProject) tryWriteFile(fullPath, content string) (bool, string) {
 	if t.SandboxCheck != nil && !t.SandboxCheck(fullPath) {
 		return false, "sandbox"
 	}
 	if _, err := os.Stat(fullPath); err == nil {
-		return false, "exists" // file already exists
+		return false, "exists"
 	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return false, "io"
@@ -253,7 +231,6 @@ func (t ScaffoldProject) tryWriteFile(fullPath, content string) (bool, string) {
 	return true, ""
 }
 
-// inputHasField checks whether a JSON input has a specific field set.
 func inputHasField(input json.RawMessage, field string) bool {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(input, &m); err != nil {

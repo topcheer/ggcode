@@ -9,14 +9,12 @@ import (
 func TestIntegrationRecordAndCheck(t *testing.T) {
 	s := newIntegrationState()
 
-	// Record evidence from a grep result.
 	s.recordToolEvidence("grep", "internal/agent/auth.go:42: func Authenticate(token string) error")
 
 	if len(s.pendingEvidence) == 0 {
 		t.Fatal("expected pending evidence to be recorded")
 	}
 
-	// Assistant text that references the file path and symbol.
 	guidance := s.checkIntegration("Let me look at internal/agent/auth.go to fix the Authenticate function")
 	if guidance != "" {
 		t.Fatalf("expected no warning for good integration, got: %s", guidance)
@@ -32,7 +30,6 @@ func TestIntegrationNotIntegratedWarning(t *testing.T) {
 		t.Fatal("expected pending evidence")
 	}
 
-	// Assistant text that doesn't reference any evidence tokens.
 	guidance := s.checkIntegration("Now I will create a new file for the feature.")
 	if guidance == "" {
 		t.Fatal("expected integration warning, got empty")
@@ -104,7 +101,7 @@ func TestIntegrationEmptyAssistantText(t *testing.T) {
 
 func TestIntegrationNoiseFiltered(t *testing.T) {
 	s := newIntegrationState()
-	// Content with mostly noise tokens.
+
 	s.recordToolEvidence("grep", "go.mod: package main\nimport foo\nreturn error")
 	if len(s.pendingEvidence) != 0 {
 		t.Fatalf("expected noise to be filtered, got: %v", s.pendingEvidence)
@@ -119,7 +116,6 @@ func TestIntegrationLineRefIntegration(t *testing.T) {
 		t.Fatalf("expected at least 2 evidence tokens, got %d", len(s.pendingEvidence))
 	}
 
-	// Text referencing line numbers should count as integration.
 	guidance := s.checkIntegration("I see the issue at line 142, let me fix it")
 	if guidance != "" {
 		t.Fatalf("expected no warning for line ref integration, got: %s", guidance)
@@ -128,25 +124,19 @@ func TestIntegrationLineRefIntegration(t *testing.T) {
 
 func TestIntegrationPartialIntegrationOK(t *testing.T) {
 	s := newIntegrationState()
-	// Many evidence tokens but agent references at least 1/3.
+
 	s.recordToolEvidence("read_file", "internal/agent/agent.go:42: func Run\ninternal/agent/loop.go:100: func Loop\ninternal/agent/util.go:50: func Helper")
 
 	if len(s.pendingEvidence) < 2 {
 		t.Fatalf("expected at least 2 evidence tokens, got %d", len(s.pendingEvidence))
 	}
 
-	// Reference at least one file path.
 	guidance := s.checkIntegration("I'll modify internal/agent/agent.go first")
 	if guidance != "" {
 		t.Fatalf("expected no warning for partial integration meeting threshold, got: %s", guidance)
 	}
 }
 
-// --- issue #345 regression tests: "doing" over "saying" ---
-
-// TestIntegrationActThenSummarizeNoFlag covers the canonical non-false-positive
-// flow: read evidence -> edit_file acting on that file -> summary that never
-// echoes the full path. Must NOT trigger a warning.
 func TestIntegrationActThenSummarizeNoFlag(t *testing.T) {
 	s := newIntegrationState()
 
@@ -155,8 +145,6 @@ func TestIntegrationActThenSummarizeNoFlag(t *testing.T) {
 		t.Fatal("expected pending evidence to be recorded")
 	}
 
-	// edit_file result whose content contains the target path (as in
-	// "Replaced 1 occurrence in <path>: ..." / "[Changes]" output).
 	s.recordToolEvidence("edit_file",
 		"Replaced 1 occurrence in internal/agent/auth.go: 3 lines -> 5 lines\n\n[Changes]\n+ token, err := parseToken(tok)")
 
@@ -164,14 +152,11 @@ func TestIntegrationActThenSummarizeNoFlag(t *testing.T) {
 		t.Fatalf("expected evidence consumed by mutating tool, still pending: %v", s.pendingEvidence)
 	}
 
-	// Summary without any full path must not warn.
 	if guidance := s.checkIntegration("Fixed the token validation issue in the auth flow."); guidance != "" {
 		t.Fatalf("expected no warning for act-then-summarize flow, got: %s", guidance)
 	}
 }
 
-// TestIntegrationBaseNameMentionsCount verifies relaxed text matching: the
-// file's base name (not the full path) suffices as integration.
 func TestIntegrationBaseNameMentionsCount(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("grep", "internal/config/loader.go:100: func LoadConfig")
@@ -181,9 +166,6 @@ func TestIntegrationBaseNameMentionsCount(t *testing.T) {
 	}
 }
 
-// TestIntegrationSingleEvidenceFileName verifies the n==1 relaxed rule: a
-// single evidence token counts as integrated when the related file name is
-// mentioned.
 func TestIntegrationSingleEvidenceFileName(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("lsp_definition", "internal/tool/edit_file.go:174: msg += compactDiff(content, string(writeData))")
@@ -197,8 +179,6 @@ func TestIntegrationSingleEvidenceFileName(t *testing.T) {
 	}
 }
 
-// TestIntegrationPackageNameMentionsCount verifies package-name (directory
-// base) mentions count as integration.
 func TestIntegrationPackageNameMentionsCount(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("grep", "internal/tool/edit_file.go:174: func compactDiff")
@@ -208,8 +188,6 @@ func TestIntegrationPackageNameMentionsCount(t *testing.T) {
 	}
 }
 
-// TestIntegrationStillFiresWhenUnused verifies the detector still fires when
-// evidence is entirely unused and no action followed.
 func TestIntegrationStillFiresWhenUnused(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("grep", "internal/config/loader.go:100: func LoadConfig")
@@ -219,8 +197,6 @@ func TestIntegrationStillFiresWhenUnused(t *testing.T) {
 	}
 }
 
-// TestIntegrationEvidenceAppendedNotOverwritten verifies consecutive
-// retrieval calls accumulate evidence instead of overwriting.
 func TestIntegrationEvidenceAppendedNotOverwritten(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("read_file", "internal/agent/auth.go:10: func Login")
@@ -249,7 +225,6 @@ func TestIntegrationEvidenceAppendedNotOverwritten(t *testing.T) {
 	}
 }
 
-// TestIntegrationEvidenceCap verifies the pending evidence cap.
 func TestIntegrationEvidenceCap(t *testing.T) {
 	s := newIntegrationState()
 	for i := 0; i < 6; i++ {
@@ -260,8 +235,6 @@ func TestIntegrationEvidenceCap(t *testing.T) {
 	}
 }
 
-// TestIntegrationPathListExcluded verifies pure path-list browsing output
-// (e.g. grep files_with_matches) does not become must-echo evidence.
 func TestIntegrationPathListExcluded(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("grep", "internal/agent/auth.go\ninternal/agent/agent.go\ninternal/config/loader.go")
@@ -271,9 +244,6 @@ func TestIntegrationPathListExcluded(t *testing.T) {
 	}
 }
 
-// TestIntegrationEvidenceExpiresAfterUnrelatedMutation verifies the
-// penetration limit: pending evidence that a mutating tool did NOT consume
-// still expires instead of surviving to later summaries.
 func TestIntegrationEvidenceExpiresAfterUnrelatedMutation(t *testing.T) {
 	s := newIntegrationState()
 	s.recordToolEvidence("grep", "internal/config/loader.go:100: func LoadConfig")
@@ -281,7 +251,6 @@ func TestIntegrationEvidenceExpiresAfterUnrelatedMutation(t *testing.T) {
 		t.Fatal("expected pending evidence")
 	}
 
-	// Mutating tool whose target hits nothing pending.
 	s.recordToolEvidence("edit_file", "Replaced 1 occurrence in internal/other/thing.go: 1 lines -> 2 lines")
 
 	if len(s.pendingEvidence) != 0 {

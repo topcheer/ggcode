@@ -8,19 +8,10 @@ import (
 	"strings"
 )
 
-// DesktopControlTool provides OS-level mouse, keyboard, window, and
-// application control. On macOS it uses Swift CGEvent (mouse), AppleScript
-// (keyboard/windows/apps) and the Accessibility API (UI tree). On Linux it
-// uses xdotool/wmctrl (X11 only; UI-tree actions unsupported). On Windows
-// it is not yet implemented.
 type DesktopControlTool struct {
 	WorkingDir string
 }
 
-// Clone implements Cloner (#2596 siblings): WorkingDir is currently unused by
-// Execute, but the tool holds mutable state per the Cloner contract; the
-// pointer copy keeps future WorkingDir consumers agent-isolated instead of
-// silently pinning every clone to the original registry's directory.
 func (t DesktopControlTool) Clone() Tool { return &DesktopControlTool{WorkingDir: t.WorkingDir} }
 
 func (DesktopControlTool) Name() string { return "desktop_control" }
@@ -92,7 +83,6 @@ func (DesktopControlTool) Parameters() json.RawMessage {
 }`)
 }
 
-// desktopParams holds parsed parameters for desktop_control.
 type desktopParams struct {
 	Action    string `json:"action"`
 	X         int    `json:"x"`
@@ -109,10 +99,6 @@ type desktopParams struct {
 	TimeoutMs int    `json:"timeout_ms"`
 }
 
-// normalizeModifiers splits a modifier spec like "cmd+shift" or "Ctrl + Option"
-// into normalized canonical tokens (cmd, ctrl, alt, shift, fn). It rejects
-// non-modifier tokens so typos surface as errors instead of silently
-// clicking without the intended modifier.
 func normalizeModifiers(spec string) ([]string, error) {
 	if strings.TrimSpace(spec) == "" {
 		return nil, fmt.Errorf("empty modifier spec")
@@ -156,9 +142,6 @@ func normalizeModifiers(spec string) ([]string, error) {
 	return mods, nil
 }
 
-// parseMenuPath splits a menu path like "View > Sort By > Name" into its
-// trimmed parts, dropping empty segments. Requires at least two parts
-// (menu > item); deeper paths address nested submenus.
 func parseMenuPath(path string) ([]string, error) {
 	parts := strings.Split(path, ">")
 	out := make([]string, 0, len(parts))
@@ -174,9 +157,6 @@ func parseMenuPath(path string) ([]string, error) {
 	return out, nil
 }
 
-// holdKeyDurationClamp bounds the hold_key duration. Anthropic caps wait at
-// 30s; holds longer than that in one call are better expressed as separate
-// mouse_down/key press + sleep + release for observability.
 func holdKeyDurationClamp(ms int) (int, error) {
 	if ms <= 0 {
 		return 0, fmt.Errorf("hold_key requires positive duration (ms)")
@@ -187,16 +167,6 @@ func holdKeyDurationClamp(ms int) (int, error) {
 	return ms, nil
 }
 
-// ─── Linux Wayland backend (ydotool) argv builders ───
-// These are pure functions with no build tag so they can be unit-tested on
-// any platform. The linux-only executor (desktop_control_linux.go) consumes
-// them. ydotool event codes follow linux/input-event-codes.h as used by the
-// ydotool README: BTN_LEFT=0xC0, BTN_RIGHT=0xC1.
-
-// ydoClickCode maps the schema button enum to the ydotool click event
-// code (BTN_LEFT=0xC0, BTN_RIGHT=0xC1, BTN_MIDDLE=0xC2). Pure and
-// platform-untagged (x11ButtonCode precedent) so the #4459 middle-button
-// mapping is unit-testable on every CI runner.
 func ydoClickCode(button string) (string, error) {
 	switch button {
 	case "", "left":
@@ -210,8 +180,6 @@ func ydoClickCode(button string) (string, error) {
 	}
 }
 
-// ydoButtonMask maps the schema button enum to the ydotool click bitmask
-// low bits (0 left, 1 right, 2 middle) used by the down-only/up-only forms.
 func ydoButtonMask(button string) (int, error) {
 	switch button {
 	case "", "left":
@@ -225,39 +193,29 @@ func ydoButtonMask(button string) (int, error) {
 	}
 }
 
-// xdLiteralPattern renders a window-title substring as a literal POSIX
-// regex for xdotool search. The schema documents `text` as a "title
-// substring", but xdotool compiles it as a REGEX — a bare "." or ".*"
-// slipped past the #349 empty-string guard and matched EVERY window,
-// so `%@` closed/minimized the whole desktop session (#4459). Quoting
-// the metacharacters restores the documented literal-substring contract.
 func xdLiteralPattern(p string) string {
 	return regexp.QuoteMeta(strings.TrimSpace(p))
 }
 
-// ydoMoveArgs returns the argv to move the cursor absolutely.
 func ydoMoveArgs(x, y int) []string {
 	return []string{"ydotool", "move", "-a", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y)}
 }
 
-// ydoClickArgs returns the argv to click `clicks` times. ydotool click takes
-// a single event code, so multiple clicks need repeated invocations.
 func ydoClickArgs(button string, clicks int) ([][]string, error) {
-	// #4691: same normalization+rejection as the darwin mouseClick path -
-	// bare lowercase comparisons silently clicked LEFT for "Right"/typos.
+
 	button = strings.ToLower(strings.TrimSpace(button))
 	if button == "" {
-		button = "left" // schema default: absent/empty button means left click
+		button = "left"
 	}
 	if button != "left" && button != "right" && button != "middle" {
 		return nil, fmt.Errorf("unknown button %q (left, right, middle)", button)
 	}
-	code := "0xC0" // BTN_LEFT
+	code := "0xC0"
 	if button == "right" {
-		code = "0xC1" // BTN_RIGHT
+		code = "0xC1"
 	}
 	if button == "middle" {
-		code = "0xC2" // BTN_MIDDLE
+		code = "0xC2"
 	}
 	if clicks < 1 {
 		clicks = 1
@@ -269,9 +227,6 @@ func ydoClickArgs(button string, clicks int) ([][]string, error) {
 	return cmds, nil
 }
 
-// ydoKeyArgs converts a modifier token to ydotool press/release argv pairs
-// using evdev key codes: KEY_LEFTCTRL=29, KEY_LEFTALT=56, KEY_LEFTSHIFT=42,
-// KEY_LEFTMETA=125.
 func ydoModifierKeyArgs(mod string) (press []string, release []string, ok bool) {
 	var code int
 	switch mod {
@@ -291,38 +246,26 @@ func ydoModifierKeyArgs(mod string) (press []string, release []string, ok bool) 
 	return []string{"ydotool", "key", p}, []string{"ydotool", "key", r}, true
 }
 
-// ydoDragArgs returns the argv sequence for a drag: move to start, button
-// down, move to end, button up. ydotool click uses a bitmask: low bits =
-// button number, 0x40 = down-only, 0x80 = up-only, 0xC0 = down+up. There
-// are no -d/-u options (silently ignored upstream), and 0xC0 performs a
-// FULL click — the old args degraded drag into two clicks (#191).
 func ydoDragArgs(x, y, toX, toY int) [][]string {
 	return [][]string{
 		ydoMoveArgs(x, y),
-		{"ydotool", "click", "0x40"}, // BTN_LEFT down only
+		{"ydotool", "click", "0x40"},
 		ydoMoveArgs(toX, toY),
-		{"ydotool", "click", "0x80"}, // BTN_LEFT up only
+		{"ydotool", "click", "0x80"},
 	}
 }
 
-// ydoTypeArgs returns the argv to type text (ydotool type).
 func ydoTypeArgs(text string) []string {
 	return []string{"ydotool", "type", text}
 }
 
-// windowTitleMatches reports whether a window title matches a target spec
-// using the shared desktop_control semantics: case-insensitive substring.
-// Pure and platform-untagged so every backend's matching can be tested from
-// any CI runner.
 func windowTitleMatches(title, needle string) bool {
 	if strings.TrimSpace(needle) == "" {
-		return false // empty target never matches — prevents acting on ALL windows
+		return false
 	}
 	return strings.Contains(strings.ToLower(title), strings.ToLower(needle))
 }
 
-// ATSPIElement is one flattened node of the Linux accessibility tree,
-// produced by the embedded AT-SPI python script.
 type ATSPIElement struct {
 	Role string `json:"role"`
 	Name string `json:"name"`
@@ -332,13 +275,10 @@ type ATSPIElement struct {
 	H    int    `json:"h"`
 }
 
-// atspiCenter returns the center point of an element.
 func atspiCenter(e ATSPIElement) (int, int) {
 	return e.X + e.W/2, e.Y + e.H/2
 }
 
-// atspiFind returns all elements whose name matches needle (shared
-// case-insensitive substring semantics). Pure — unit-testable everywhere.
 func atspiFind(els []ATSPIElement, needle string) []ATSPIElement {
 	var out []ATSPIElement
 	for _, e := range els {
@@ -349,7 +289,6 @@ func atspiFind(els []ATSPIElement, needle string) []ATSPIElement {
 	return out
 }
 
-// atspiFormat renders matched elements as one line each with center coords.
 func atspiFormat(matches []ATSPIElement) string {
 	var sb strings.Builder
 	for _, e := range matches {
@@ -368,10 +307,6 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 	return executeDesktopControl(ctx, params)
 }
 
-// clampDesktopDefaults applies the documented defaults for Button,
-// Direction, Amount, MaxDepth and TimeoutMs. #4440: the zero-checks became
-// lower-bounds - schema "minimum" constraints are not enforced by
-// json.Unmarshal, so negative values used to flow through untouched.
 func clampDesktopDefaults(params *desktopParams) {
 	if params.Button == "" {
 		params.Button = "left"
@@ -390,12 +325,6 @@ func clampDesktopDefaults(params *desktopParams) {
 	}
 }
 
-// unknownAlphaKeyName reports whether key looks like a mistyped key NAME
-// rather than text meant to be typed: longer than one character and purely
-// ASCII letters ("backspace", "f13"). Digits and mixed strings ("123",
-// "a1") stay eligible for literal typing fallbacks (#4054: on macOS an
-// unknown multi-char alphabetic name used to be keystroked literally into
-// the focused control with a fake success).
 func unknownAlphaKeyName(key string) bool {
 	if len(key) <= 1 {
 		return false
@@ -409,10 +338,6 @@ func unknownAlphaKeyName(key string) bool {
 	return true
 }
 
-// xdModifierName maps a normalized modifier (as produced by
-// normalizeModifiers) to the xdotool key name used with keydown/keyup.
-// "cmd" (which normalizeModifiers folds super/win/meta into) maps to
-// "super", xdotool's name. fn has no X mapping and is rejected (#216).
 func xdModifierName(m string) (string, bool) {
 	switch m {
 	case "cmd":

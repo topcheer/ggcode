@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #2598 case A: F-keys must resolve to escape sequences (keyboard events),
-// not fall through to the regular-character branch that types literal "f5".
-// kitty_impl.go is untagged (kitty ships on linux+macos), so no build tag.
 func TestIssue2598_FKeysResolveToEscapeSeq(t *testing.T) {
 	want := map[string]string{
 		"f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS",
@@ -20,14 +17,12 @@ func TestIssue2598_FKeysResolveToEscapeSeq(t *testing.T) {
 			t.Errorf("kittyKeyEscapeSeq(%q) = %q,%v want %q,true", key, got, ok, seq)
 		}
 	}
-	// Unknown multi-character keys still report false (callers handle).
+
 	if _, ok := kittyKeyEscapeSeq("zoom"); ok {
 		t.Error("unknown key must stay unmapped")
 	}
 }
 
-// #2598 case B: positional text payloads must be separated from options
-// with "--" so "-"-prefixed text is sent as text, not parsed as an option.
 func TestIssue2598_SendTextArgsCarrySeparator(t *testing.T) {
 	args := kittySendTextArgs(0, "--help")
 	want := []string{"send-text", "--", "--help"}

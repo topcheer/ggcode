@@ -5,12 +5,8 @@ import (
 	"time"
 )
 
-// --- #364: caveat negation must not short-circuit the whole scan ---
-
 func TestSuccessDeclare_NegatedCaveatPlusLeadingHedge_Vetoed(t *testing.T) {
-	// "no remaining" negates the "remaining" caveat, but "but first" later in
-	// the same sentence is still a hedge — the old return-false short-circuit
-	// recorded this as an unhedged declaration (#364).
+
 	s := newSuccessDeclareState()
 	s.recordAssistantText("There are no remaining issues, but first we need to run the tests, then we're all done.", 0)
 	s.recordToolCall()
@@ -23,8 +19,6 @@ func TestSuccessDeclare_NegatedCaveatPlusLeadingHedge_Vetoed(t *testing.T) {
 		t.Errorf("declaration should not be recorded, got declarationIter=%d", s.declarationIter)
 	}
 }
-
-// --- #364: bare "done" as a code identifier must not claim the slot ---
 
 func TestSuccessDeclare_DoneIdentifierNotDeclaration(t *testing.T) {
 	s := newSuccessDeclareState()
@@ -48,13 +42,9 @@ func TestSuccessDeclare_PlainDoneStillDeclares(t *testing.T) {
 	}
 }
 
-// --- #366: adaptive timeout requires adaptiveMinSamples samples ---
-
 func TestComputeAdaptiveTimeout_UnderMinSamplesUsesCategoryDefault(t *testing.T) {
 	lt := NewLatencyTracker()
-	// A single fast sample must NOT tighten the timeout — the trigger case
-	// from the issue was one 50ms cache-hit grep clamping the next grep to
-	// the 10s floor.
+
 	lt.RecordAndCheck("grep", 50*time.Millisecond)
 	got := lt.computeAdaptiveTimeout("grep")
 	if got != categoryDefaultTimeout(classifyTool("grep")) {
@@ -68,14 +58,11 @@ func TestComputeAdaptiveTimeout_MinSamplesThenTightens(t *testing.T) {
 		lt.RecordAndCheck("grep", 50*time.Millisecond)
 	}
 	got := lt.computeAdaptiveTimeout("grep")
-	// With enough samples the adaptive value clamps to the floor (10s),
-	// which is below the grep category default.
+
 	if got != adaptiveTimeoutFloor {
 		t.Errorf("after %d samples expected floor %v, got %v", adaptiveMinSamples, adaptiveTimeoutFloor, got)
 	}
 }
-
-// --- #381: word-boundary ambiguity matching ---
 
 func TestAmbiguityWordBoundary_RecentlyNotRecent(t *testing.T) {
 	if ambContainsPhrase("i recently rebased, now fix the failing tests", "recent") {
@@ -87,9 +74,7 @@ func TestAmbiguityWordBoundary_RecentlyNotRecent(t *testing.T) {
 }
 
 func TestAmbiguityWordBoundary_CleanupIdentifierNotPhrase(t *testing.T) {
-	// The bare "cleanup" pattern was removed from the table (it collided
-	// with identifiers like cleanupConn); "clean up some/the" phrasings
-	// carry the vague-scope intent instead (#381).
+
 	for _, pat := range ambiguityPatterns {
 		if pat.phrase == "cleanup" {
 			t.Error("bare 'cleanup' should no longer be a pattern entry")
@@ -106,18 +91,12 @@ func TestAmbiguityWordBoundary_PluralTolerated(t *testing.T) {
 	}
 }
 
-// --- #379: causal attribution only for verify-looking output ---
-
 func TestCausalAttribution_SourceReadNotFailure(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "internal/x/a.go", 1)
-	// Successful read of source containing an error literal — used to be
-	// misattributed as a build failure (#379).
+
 	out := s.attributeFailure("func f() error {\n\treturn fmt.Errorf(\"failed to connect\")\n}\n")
 	if out != "" {
 		t.Errorf("source dump must not trigger failure attribution, got: %s", out)
 	}
 }
-
-// Note: the #380 anchor erosion regression test was removed along with the
-// anchor_erosion detector itself (low-certainty monitor purge, 2026-08).

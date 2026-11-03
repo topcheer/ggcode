@@ -19,34 +19,26 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// configAccess implements tool.ConfigAccess backed by *config.Config.
-// It does NOT depend on any UI layer type.
 type configAccess struct {
-	cfgMu      sync.RWMutex // guards cfg pointer swaps and field refreshes (config hot-reload)
+	cfgMu      sync.RWMutex
 	cfg        *config.Config
 	workingDir string
-	agentInst  *agent.Agent // set after agent creation via SetAgent()
-	uiNotify   func()       // optional UI refresh callback after provider changes
+	agentInst  *agent.Agent
+	uiNotify   func()
 	hotReload  *ConfigHotReload
 }
 
-// NewConfigAccess creates a ConfigAccess backed by the given config.
 func NewConfigAccess(cfg *config.Config, workingDir string) *configAccess {
 	return &configAccess{cfg: cfg, workingDir: workingDir}
 }
 
-// SetAgent injects the agent instance for provider hot-reload.
-// Must be called after agent creation.
 func (a *configAccess) SetAgent(ag *agent.Agent) {
 	a.agentInst = ag
 }
 
-// SetUINotify sets an optional callback for UI refresh after provider changes.
 func (a *configAccess) SetUINotify(fn func()) {
 	a.uiNotify = fn
 }
-
-// --- Get ---
 
 func (a *configAccess) Get(key string) (string, error) {
 	a.cfgMu.RLock()
@@ -83,10 +75,6 @@ func (a *configAccess) Get(key string) (string, error) {
 	}
 	return "", fmt.Errorf("unknown config key: %q (use list=true to see all keys)", key)
 }
-
-// Per-section Get dispatchers. Each returns (value, handled, error);
-// handled=false means the key belongs to another section. Section order and
-// case order mirror the original single switch, so routing is unchanged.
 
 func (a *configAccess) getCoreSectionKey(key string) (string, bool, error) {
 	switch {
@@ -242,14 +230,8 @@ func (a *configAccess) getRuntimeSectionKey(key string) (string, bool, error) {
 	return "", false, nil
 }
 
-// --- Set ---
-
 func (a *configAccess) Set(key, value string) error {
-	// Provider-affecting keys: probe before commit. The probe runs OUTSIDE
-	// cfgMu (#957): these helpers snapshot the current selection under the
-	// lock, release it for the network probe, then re-lock to re-validate and
-	// commit. Holding cfgMu across the probe blocked every Get and the
-	// hot-reload watcher for up to the probe timeout.
+
 	switch {
 	case key == "vendor", key == "endpoint", key == "model":
 		return a.setWithProbe(key, value)
@@ -265,7 +247,6 @@ func (a *configAccess) Set(key, value string) error {
 		return fmt.Errorf("config is nil")
 	}
 
-	// Non-provider keys: direct write under the lock, dispatched per section.
 	if handled, err := a.setCoreSectionKey(key, value); handled {
 		return err
 	}
@@ -292,10 +273,6 @@ func (a *configAccess) Set(key, value string) error {
 	}
 	return fmt.Errorf("unknown config key: %q", key)
 }
-
-// Per-section Set dispatchers (called with cfgMu held). Each returns
-// (handled, error); handled=false means the key belongs to another section.
-// Section order and case order mirror the original single switch.
 
 func (a *configAccess) setCoreSectionKey(key, value string) (bool, error) {
 	switch {
@@ -359,9 +336,7 @@ func (a *configAccess) setFallbackSectionKey(key, value string) (bool, error) {
 		return true, a.setFallbackField(&a.cfg.Fallback, strings.TrimPrefix(key, "fallback."), value)
 	case key == "fallbacks":
 		return true, a.setFallbacksList(value)
-	// Exact match first: a plain HasPrefix("fallbacks.") case would shadow
-	// "fallbacks.append" ("append" fails the <N> regex) and reject it with
-	// the very format the error message advertises (#958).
+
 	case key == "fallbacks.append":
 		return true, a.appendFallbackEntry(value)
 	case strings.HasPrefix(key, "fallbacks."):
@@ -442,12 +417,8 @@ func (a *configAccess) setRuntimeSectionKey(key, value string) (bool, error) {
 	return false, nil
 }
 
-// --- List ---
-
 func (a *configAccess) List(section string) (string, error) {
-	// Whole-section read under RLock: the hot-reload watcher refreshes scalar
-	// fields (MaxIterations, KnightConfig, ...) on this same Config object
-	// under the write lock, so an unlocked List is a data race (#957).
+
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
 	if a.cfg == nil {
@@ -489,12 +460,8 @@ func (a *configAccess) List(section string) (string, error) {
 	return sb.String(), nil
 }
 
-// --- Delete ---
-
 func (a *configAccess) Delete(key string) error {
-	// Lock the whole operation: RemoveMCPServer/RemoveIMAdapter mutate the
-	// same maps/slices the hot-reload watcher and locked Set paths touch, so
-	// an unlocked Delete is a concurrent-write race (#957).
+
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	if a.cfg == nil {
@@ -512,22 +479,14 @@ func (a *configAccess) Delete(key string) error {
 		if err := a.cfg.RemoveIMAdapter(name); err != nil {
 			return err
 		}
-		return nil // RemoveIMAdapter already persists
+		return nil
 	default:
 		return fmt.Errorf("delete not supported for %q (only mcp_servers.<name> and im.adapters.<name>)", key)
 	}
 }
 
-// ============================================================================
-// Probe
-// ============================================================================
-
-// probeProviderFn is the seam the Set provider-key paths probe through.
-// Package-level var so tests can stub the network round-trip.
 var probeProviderFn = probeProvider
 
-// probeProvider sends a minimal Chat request to verify the provider works.
-// Returns nil on success (including 429 rate-limit), descriptive error on failure.
 func probeProvider(resolved *config.ResolvedEndpoint) error {
 	prov, err := provider.NewProvider(resolved)
 	if err != nil {
@@ -541,7 +500,7 @@ func probeProvider(resolved *config.ResolvedEndpoint) error {
 		{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("Reply with exactly: OK")}},
 	}, nil)
 	if err != nil {
-		// Allow 429 (rate limit) — the key is valid, just temporarily limited
+
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limit") {
 			debug.Log("config", "probe got 429 rate limit, allowing switch")
 			return nil
@@ -551,12 +510,6 @@ func probeProvider(resolved *config.ResolvedEndpoint) error {
 	return nil
 }
 
-// setWithProbe handles vendor/endpoint/model changes with probe-then-commit.
-// #957: the network probe runs OUTSIDE cfgMu so concurrent Get calls and
-// the hot-reload watcher are not blocked for the probe duration. TOCTOU
-// safety: the pre-probe Vendor/Endpoint/Model snapshot is re-validated under
-// the re-acquired lock before committing; a concurrent change aborts the
-// switch instead of clobbering it.
 func (a *configAccess) setWithProbe(key, value string) error {
 	a.cfgMu.Lock()
 	if a.cfg == nil {
@@ -574,14 +527,12 @@ func (a *configAccess) setWithProbe(key, value string) error {
 		newModel = value
 	}
 
-	// Resolve target (without writing to cfg)
 	testResolved, err := a.cfg.ResolveEndpointSelection(newVendor, newEndpoint, newModel)
 	a.cfgMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("cannot resolve target %s/%s/%s: %w", newVendor, newEndpoint, newModel, err)
 	}
 
-	// Probe — outside the lock.
 	if err := probeProviderFn(testResolved); err != nil {
 		a.cfgMu.RLock()
 		curVendor, curEndpoint, curModel := "", "", ""
@@ -594,7 +545,6 @@ func (a *configAccess) setWithProbe(key, value string) error {
 			curVendor, curEndpoint, curModel)
 	}
 
-	// Probe passed — re-validate and commit under the lock.
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	if a.cfg == nil {
@@ -616,10 +566,6 @@ func (a *configAccess) setWithProbe(key, value string) error {
 	return nil
 }
 
-// ============================================================================
-// API Key helpers
-// ============================================================================
-
 func (a *configAccess) getAPIKey(vendor, endpoint string) (string, error) {
 	resolved, err := a.cfg.ResolveEndpoint(vendor, endpoint)
 	if err != nil {
@@ -631,14 +577,14 @@ func (a *configAccess) getAPIKey(vendor, endpoint string) (string, error) {
 func (a *configAccess) getAPIKeyByPath(path string) (string, error) {
 	parts := strings.SplitN(path, ".", 2)
 	if len(parts) == 1 {
-		// api_key.<vendor> — vendor-level key
+
 		vc, ok := a.cfg.Vendors[parts[0]]
 		if !ok {
 			return "", fmt.Errorf("vendor %q not found", parts[0])
 		}
 		return maskSecret(config.ExpandEnv(vc.APIKey)), nil
 	}
-	// api_key.<vendor>.<endpoint>
+
 	vc, ok := a.cfg.Vendors[parts[0]]
 	if !ok {
 		return "", fmt.Errorf("vendor %q not found", parts[0])
@@ -670,21 +616,20 @@ func (a *configAccess) listAPIKeys() (string, error) {
 }
 
 func (a *configAccess) setAPIKeyWithProbe(value string) error {
-	// #957: snapshot + resolve under the lock, probe outside, re-validate on
-	// commit (same pattern as setWithProbe).
+
 	a.cfgMu.Lock()
 	if a.cfg == nil {
 		a.cfgMu.Unlock()
 		return fmt.Errorf("config is nil")
 	}
 	vendor, endpoint := a.cfg.Vendor, a.cfg.Endpoint
-	// Resolve with current key first to get the endpoint config
+
 	testResolved, err := a.cfg.ResolveEndpoint(vendor, endpoint)
 	a.cfgMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("cannot resolve endpoint: %w", err)
 	}
-	// Override with new key for probe
+
 	testResolved.APIKey = value
 
 	if err := probeProviderFn(testResolved); err != nil {
@@ -708,8 +653,7 @@ func (a *configAccess) setAPIKeyWithProbe(value string) error {
 }
 
 func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
-	// #957: probe runs outside cfgMu (snapshot under lock, network unlocked,
-	// re-lock to commit), same pattern as setWithProbe.
+
 	parts := strings.SplitN(path, ".", 2)
 	if len(parts) == 1 {
 		return a.setVendorAPIKeyWithProbe(parts[0], value)
@@ -717,13 +661,8 @@ func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
 	return a.setEndpointAPIKeyWithProbe(parts[0], parts[1], value)
 }
 
-// setVendorAPIKeyWithProbe probes and commits a vendor-level API key.
 func (a *configAccess) setVendorAPIKeyWithProbe(vendor, value string) error {
-	// #875: the session's endpoint name belongs to the session's VENDOR —
-	// probing vendor X with it either rejects legal keys (endpoint not
-	// configured for X) or probes a same-named wrong endpoint. Prefer an
-	// endpoint of THIS vendor: the session's endpoint if it belongs to the
-	// vendor, else the sole endpoint if unambiguous.
+
 	a.cfgMu.Lock()
 	if a.cfg == nil {
 		a.cfgMu.Unlock()
@@ -737,7 +676,7 @@ func (a *configAccess) setVendorAPIKeyWithProbe(vendor, value string) error {
 					probeEndpoint = name
 				}
 			} else if probeEndpoint != "" {
-				// Ambiguous: can't guess which endpoint to probe.
+
 				a.cfgMu.Unlock()
 				return fmt.Errorf("vendor %s has multiple endpoints and the current session endpoint %q does not belong to it; set the key at endpoint level (vendors.%s.<endpoint>.api_key) so the probe targets the right endpoint", vendor, probeEndpoint, vendor)
 			}
@@ -765,7 +704,6 @@ func (a *configAccess) setVendorAPIKeyWithProbe(vendor, value string) error {
 	return err
 }
 
-// setEndpointAPIKeyWithProbe probes and commits an endpoint-level API key.
 func (a *configAccess) setEndpointAPIKeyWithProbe(vendor, endpoint, value string) error {
 	a.cfgMu.Lock()
 	if a.cfg == nil {
@@ -794,10 +732,6 @@ func (a *configAccess) setEndpointAPIKeyWithProbe(vendor, endpoint, value string
 	return err
 }
 
-// ============================================================================
-// Vendor helpers
-// ============================================================================
-
 func (a *configAccess) listVendors() (string, error) {
 	names := make([]string, 0, len(a.cfg.Vendors))
 	for name := range a.cfg.Vendors {
@@ -815,7 +749,7 @@ func (a *configAccess) getVendorPath(path string) (string, error) {
 		return "", fmt.Errorf("vendor %q not found", parts[0])
 	}
 	if len(parts) == 1 {
-		// Summary of the vendor
+
 		summary := map[string]interface{}{
 			"display_name": vc.DisplayName,
 		}
@@ -827,7 +761,7 @@ func (a *configAccess) getVendorPath(path string) (string, error) {
 		b, _ := json.Marshal(summary)
 		return string(b), nil
 	}
-	// vendors.<name>.endpoints or vendors.<name>.api_key
+
 	sub := parts[1]
 	switch {
 	case sub == "endpoints":
@@ -841,7 +775,7 @@ func (a *configAccess) getVendorPath(path string) (string, error) {
 	case sub == "api_key":
 		return maskSecret(config.ExpandEnv(vc.APIKey)), nil
 	default:
-		// vendors.<name>.endpoints.<ep>
+
 		if strings.HasPrefix(sub, "endpoints.") {
 			epName := strings.TrimPrefix(sub, "endpoints.")
 			ep, ok := vc.Endpoints[epName]
@@ -873,7 +807,7 @@ func (a *configAccess) setVendorPath(path, value string) error {
 	if len(parts) == 1 {
 		return fmt.Errorf("use 'vendors.<name>.endpoints.<ep>' to create/update endpoints")
 	}
-	// vendors.<name>.endpoints.<ep> — expects JSON with protocol, base_url, api_key
+
 	if strings.HasPrefix(parts[1], "endpoints.") {
 		vendor := parts[0]
 		epName := strings.TrimPrefix(parts[1], "endpoints.")
@@ -893,10 +827,6 @@ func (a *configAccess) setVendorPath(path, value string) error {
 	return fmt.Errorf("unknown vendor path for write: vendors.%s", path)
 }
 
-// ============================================================================
-// MCP Server helpers
-// ============================================================================
-
 func (a *configAccess) listMCPServers() (string, error) {
 	if len(a.cfg.MCPServers) == 0 {
 		return "(no MCP servers configured)\n", nil
@@ -912,7 +842,7 @@ func (a *configAccess) listMCPServers() (string, error) {
 func (a *configAccess) getMCPServer(name string) (string, error) {
 	for _, srv := range a.cfg.MCPServers {
 		if srv.Name == name {
-			// Mask secrets in env and headers
+
 			srv = redactMCPServer(srv)
 			b, _ := json.MarshalIndent(srv, "", "  ")
 			return string(b), nil
@@ -928,15 +858,11 @@ func (a *configAccess) setMCPServer(name, value string) error {
 	}
 	srv.Name = name
 
-	// Migrate plaintext secrets in env to keys.env + env refs
 	for key, val := range srv.Env {
 		if config.IsPlaintextSecret(val) {
 			envVar := config.MCPServerEnvVar(name, key)
 			os.Setenv(envVar, val)
-			// #4037: a failed keys.env persist must abort the migration -
-			// replacing the value with ${VAR} anyway loses the secret on
-			// restart (reference expands to empty) while the tool reports
-			// success. Fatal semantics, matching internal/config/api_keys.go.
+
 			if err := config.WriteKeysEnv(map[string]string{envVar: val}); err != nil {
 				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
@@ -944,12 +870,11 @@ func (a *configAccess) setMCPServer(name, value string) error {
 		}
 	}
 
-	// Migrate plaintext secrets in headers
 	for key, val := range srv.Headers {
 		if config.IsPlaintextSecret(val) {
 			envVar := config.MCPServerHeaderEnvVar(name, key)
 			os.Setenv(envVar, val)
-			// #4037: same fatal-on-persist-failure semantics as the env block above.
+
 			if err := config.WriteKeysEnv(map[string]string{envVar: val}); err != nil {
 				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
@@ -960,10 +885,6 @@ func (a *configAccess) setMCPServer(name, value string) error {
 	a.cfg.UpsertMCPServer(srv)
 	return a.cfg.SaveScoped(a.cfg.GetSaveScope())
 }
-
-// ============================================================================
-// IM helpers
-// ============================================================================
 
 func (a *configAccess) listIMAdapters() (string, error) {
 	if len(a.cfg.IM.Adapters) == 0 {
@@ -984,7 +905,7 @@ func (a *configAccess) listIMAdapters() (string, error) {
 func (a *configAccess) getIMAdapter(name string) (string, error) {
 	for adapterName, ad := range a.cfg.IM.Adapters {
 		if adapterName == name {
-			// Mask secrets in extra
+
 			redacted := redactIMAdapter(ad)
 			b, _ := json.MarshalIndent(redacted, "", "  ")
 			return string(b), nil
@@ -994,24 +915,21 @@ func (a *configAccess) getIMAdapter(name string) (string, error) {
 }
 
 func (a *configAccess) setIMAdapterPath(path, value string) error {
-	// im.adapters.<name> — full adapter config as JSON
-	// im.adapters.<name>.<field> — single field
+
 	parts := strings.SplitN(path, ".", 2)
 	adapterName := parts[0]
 
 	if len(parts) == 1 || parts[1] == "" {
-		// Full adapter config
 		var ad config.IMAdapterConfig
 		if err := json.Unmarshal([]byte(value), &ad); err != nil {
 			return fmt.Errorf("invalid IM adapter JSON: %w", err)
 		}
 
-		// Migrate plaintext secrets in extra to keys.env
 		for key, val := range ad.Extra {
 			if strVal, ok := val.(string); ok && config.IsPlaintextSecret(strVal) && config.LooksLikeSecretField(key) {
 				envVar := config.IMAdapterSecretEnvVar(adapterName, key)
 				os.Setenv(envVar, strVal)
-				// #4037: same fatal-on-persist-failure semantics as the MCP paths.
+
 				if err := config.WriteKeysEnv(map[string]string{envVar: strVal}); err != nil {
 					return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 				}
@@ -1022,7 +940,6 @@ func (a *configAccess) setIMAdapterPath(path, value string) error {
 		return a.cfg.AddIMAdapter(adapterName, ad)
 	}
 
-	// Single field: im.adapters.<name>.enabled, im.adapters.<name>.extra.<field>
 	field := parts[1]
 	switch {
 	case field == "enabled":
@@ -1032,11 +949,11 @@ func (a *configAccess) setIMAdapterPath(path, value string) error {
 		}
 		return a.cfg.SetIMAdapterEnabled(adapterName, b)
 	default:
-		// Treat as extra field — check if it's a secret
+
 		if config.LooksLikeSecretField(field) && config.IsPlaintextSecret(value) {
 			envVar := config.IMAdapterSecretEnvVar(adapterName, field)
 			os.Setenv(envVar, value)
-			// #4037: same fatal-on-persist-failure semantics as the MCP paths.
+
 			if err := config.WriteKeysEnv(map[string]string{envVar: value}); err != nil {
 				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
@@ -1045,10 +962,6 @@ func (a *configAccess) setIMAdapterPath(path, value string) error {
 		return a.cfg.SetIMAdapterExtra(adapterName, field, value)
 	}
 }
-
-// ============================================================================
-// A2A helpers
-// ============================================================================
 
 func (a *configAccess) getA2AAuth(key string) (string, error) {
 	auth := a.cfg.A2A.Auth
@@ -1109,11 +1022,11 @@ func (a *configAccess) setA2AAuth(key, value string) error {
 		if err := json.Unmarshal([]byte(value), &oauth2); err != nil {
 			return fmt.Errorf("invalid OAuth2 JSON: %w", err)
 		}
-		// Migrate client_secret
+
 		if config.IsPlaintextSecret(oauth2.ClientSecret) {
 			envVar := config.A2ASecretEnvVar("oauth2_client_secret")
 			os.Setenv(envVar, oauth2.ClientSecret)
-			// #4037: same fatal-on-persist-failure semantics as the MCP paths.
+
 			if err := config.WriteKeysEnv(map[string]string{envVar: oauth2.ClientSecret}); err != nil {
 				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
@@ -1129,7 +1042,7 @@ func (a *configAccess) setA2AAuth(key, value string) error {
 func (a *configAccess) setA2ASecret(field, value string) error {
 	envVar := config.A2ASecretEnvVar(field)
 	os.Setenv(envVar, value)
-	// #4037: same fatal-on-persist-failure semantics as the MCP paths.
+
 	if err := config.WriteKeysEnv(map[string]string{envVar: value}); err != nil {
 		return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 	}
@@ -1140,10 +1053,6 @@ func (a *configAccess) setA2ASecret(field, value string) error {
 	}
 	return a.cfg.SaveScoped(a.cfg.GetSaveScope())
 }
-
-// ============================================================================
-// List sections
-// ============================================================================
 
 func (a *configAccess) listSectionCore() string {
 	return fmt.Sprintf("== Core ==\n  vendor: %s\n  endpoint: %s\n  model: %s\n  language: %s\n  default_mode: %s\n  max_iterations: %d\n  session_token_budget: %d\n  extra_prompt: %s\n  probe_context: %v\n",
@@ -1262,14 +1171,6 @@ func (a *configAccess) setToolPermissions(value string) error {
 	return a.saveAndPatch("tool_permissions", value)
 }
 
-// ============================================================================
-// Persistence
-// ============================================================================
-
-// saveAndPatch persists a config change via SaveScoped.
-// Save() uses merge semantics: existing file content is preserved and only
-// non-zero fields from the current config are overlaid. This prevents
-// concurrent processes from clobbering each other's changes.
 func (a *configAccess) saveAndPatch(key, value string) error {
 	scope := a.cfg.GetSaveScope()
 	if scope == "" {
@@ -1278,15 +1179,11 @@ func (a *configAccess) saveAndPatch(key, value string) error {
 	return a.cfg.SaveScoped(scope)
 }
 
-// ============================================================================
-// Masking & Redaction
-// ============================================================================
-
 func maskSecret(value string) string {
 	if value == "" {
 		return "(not set)"
 	}
-	// If it's an env reference like ${VAR}
+
 	if envVar, ok := config.IsEnvReference(value); ok {
 		expanded := os.Getenv(envVar)
 		if expanded == "" {
@@ -1294,13 +1191,12 @@ func maskSecret(value string) string {
 		}
 		return "${" + envVar + "} (set, " + maskPlaintext(expanded) + ")"
 	}
-	// Plaintext — shouldn't exist in YAML but handle defensively
+
 	return maskPlaintext(value)
 }
 
 func maskPlaintext(s string) string {
-	// Guard on rune count, not byte length: same multibyte divergence as
-	// maskSecret in cmd/ggcode (runes 3-7 panic, 8 runes print unmasked). #745
+
 	r := []rune(s)
 	if len(r) <= 8 {
 		return "****"
@@ -1308,10 +1204,6 @@ func maskPlaintext(s string) string {
 	return string(r[:4]) + strings.Repeat("*", len(r)-8) + string(r[len(r)-4:])
 }
 
-// redactStringMap returns a masked copy of m. The source map is never
-// modified: writing masks into the struct-copied map shared with the live
-// config polluted it — a later Save would persist "${VAR} (set, ****)"
-// garbage over the real env reference (#956).
 func redactStringMap(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
@@ -1324,8 +1216,7 @@ func redactStringMap(m map[string]string) map[string]string {
 }
 
 func redactMCPServer(srv config.MCPServerConfig) config.MCPServerConfig {
-	// Mask env and header values into fresh maps, leaving the live config's
-	// maps untouched (#956).
+
 	srv.Env = redactStringMap(srv.Env)
 	srv.Headers = redactStringMap(srv.Headers)
 	return srv
@@ -1335,8 +1226,7 @@ func redactIMAdapter(ad config.IMAdapterConfig) config.IMAdapterConfig {
 	if ad.Extra == nil {
 		return ad
 	}
-	// Mask secret-looking extra fields into a fresh map, leaving the live
-	// config's map untouched (#956).
+
 	extra := make(map[string]interface{}, len(ad.Extra))
 	for k, v := range ad.Extra {
 		if strVal, ok := v.(string); ok && config.LooksLikeSecretField(k) {
@@ -1349,15 +1239,6 @@ func redactIMAdapter(ad config.IMAdapterConfig) config.IMAdapterConfig {
 	return ad
 }
 
-// reloadProvider rebuilds the provider from current config and applies it
-// to the running agent. Called after vendor/endpoint/model/api_key changes.
-//
-// Shared logic (all entry points):
-//   - ResolveCurrentSelection → ApplyProviderToAgent (provider hot-swap)
-//   - StartAsyncRelayModelLimitRefresh (background context window refresh)
-//
-// UI-specific logic is handled by the uiNotify callback (TUI: session sync,
-// status bar refresh; Desktop: frontend state update).
 func (a *configAccess) reloadProvider() {
 	if a.agentInst == nil {
 		debug.Log("config", "no agent set, skipping provider reload")
@@ -1384,18 +1265,8 @@ func (a *configAccess) reloadProvider() {
 	}
 }
 
-// truncate was removed in #1030: its byte-sliced s[:maxLen] could split a
-// multi-byte rune and inject invalid UTF-8 into config tool output. Both call
-// sites now use the rune-safe util.Truncate (same family as #1029/#745).
-
-// ============================================================================
-// Model Discovery
-// ============================================================================
-
-// getEndpointModels returns the statically configured model list for an endpoint.
-// Key format: vendors.<name>.endpoints.<ep>.models
 func (a *configAccess) getEndpointModels(key string) (string, error) {
-	// Parse: vendors.<vendor>.endpoints.<ep>.models
+
 	parts := strings.SplitN(strings.TrimPrefix(key, "vendors."), ".", 3)
 	if len(parts) < 3 || parts[1] != "endpoints" {
 		return "", fmt.Errorf("invalid key format, expected vendors.<name>.endpoints.<ep>.models")
@@ -1417,10 +1288,8 @@ func (a *configAccess) getEndpointModels(key string) (string, error) {
 	return string(b), nil
 }
 
-// discoverModels calls the provider API to discover available models for an endpoint.
-// Key format: vendors.<name>.endpoints.<ep>.discover_models
 func (a *configAccess) discoverModels(key string) (string, error) {
-	// Parse: vendors.<vendor>.endpoints.<ep>.discover_models
+
 	path := strings.TrimSuffix(key, ".discover_models")
 	vendorEpPath := strings.TrimPrefix(path, "vendors.")
 	parts := strings.SplitN(vendorEpPath, ".", 3)
@@ -1435,9 +1304,6 @@ func (a *configAccess) discoverModels(key string) (string, error) {
 		return "", fmt.Errorf("cannot resolve endpoint %s/%s: %w", vendor, epName, err)
 	}
 
-	// #957: discovery is a network call made while holding only a read lock;
-	// keep the timeout short so pending writers (Set, hot-reload) are not
-	// starved behind it.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1454,20 +1320,8 @@ func (a *configAccess) discoverModels(key string) (string, error) {
 	return string(b), nil
 }
 
-// --- Provider fallback chain access ---
-//
-// Keys:
-//   fallback                    read whole legacy entry (JSON)
-//   fallback.<field>            read/write legacy entry field (enabled/vendor/endpoint/model)
-//   fallbacks                   read whole chain / write as JSON array (replaces)
-//   fallbacks.<N>               read chain entry N (JSON)
-//   fallbacks.<N>.<field>       write chain entry N field
-//   fallbacks.append            append a JSON entry to the chain
-
-// fallbacksIndexRe matches "fallbacks.<N>" and "fallbacks.<N>.<field>".
 var fallbacksIndexRe = regexp.MustCompile(`^fallbacks\.(\d+)(?:\.([a-z_]+))?$`)
 
-// getFallbackField reads one field of a fallback entry.
 func (a *configAccess) getFallbackField(fb config.FallbackConfig, field string) (string, error) {
 	switch field {
 	case "enabled":
@@ -1489,7 +1343,6 @@ func (a *configAccess) getFallbackField(fb config.FallbackConfig, field string) 
 	}
 }
 
-// setFallbackField writes one field of the legacy single fallback entry.
 func (a *configAccess) setFallbackField(fb *config.FallbackConfig, field, value string) error {
 	switch field {
 	case "enabled":
@@ -1510,23 +1363,18 @@ func (a *configAccess) setFallbackField(fb *config.FallbackConfig, field, value 
 	return a.saveAndPatch("fallback."+field, value)
 }
 
-// setFallbacksList replaces the whole fallbacks list from a JSON array.
 func (a *configAccess) setFallbacksList(value string) error {
 	var list []config.FallbackConfig
 	if err := json.Unmarshal([]byte(value), &list); err != nil {
 		return fmt.Errorf("fallbacks must be a JSON array of entries: %w", err)
 	}
-	// #1482 case D note: no lock here - every caller reaches us via Set(),
-	// which already holds cfgMu for the whole dispatch chain (an inner
-	// Lock deadlocks: RWMutex is non-reentrant).
+
 	a.cfg.Fallbacks = list
 	return a.saveAndPatch("fallbacks", value)
 }
 
-// setFallbacksIndexed writes one field of chain entry idxStr.
 func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
-	// #1482 case D note: bounds + write run under Set()'s cfgMu (an inner
-	// Lock deadlocks - RWMutex is non-reentrant).
+
 	idx, err := strconv.Atoi(idxStr)
 	if err != nil || idx < 0 || idx >= len(a.cfg.Fallbacks) {
 		return fmt.Errorf("fallbacks index out of range: %q (chain has %d entries)", idxStr, len(a.cfg.Fallbacks))
@@ -1553,13 +1401,12 @@ func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
 	return a.saveAndPatch("fallbacks."+idxStr+"."+field, value)
 }
 
-// appendFallbackEntry appends one JSON entry to the fallbacks chain.
 func (a *configAccess) appendFallbackEntry(value string) error {
 	var fb config.FallbackConfig
 	if err := json.Unmarshal([]byte(value), &fb); err != nil {
 		return fmt.Errorf("fallbacks.append must be a JSON entry object: %w", err)
 	}
-	// #1482 case D note: under Set()'s cfgMu (inner Lock would deadlock).
+
 	a.cfg.Fallbacks = append(a.cfg.Fallbacks, fb)
 	return a.saveAndPatch("fallbacks.append", value)
 }

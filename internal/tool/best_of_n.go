@@ -9,43 +9,19 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// BestOfNTool implements the best_of_n tool: trajectory-level test-time
-// scaling (arXiv 2506.12928). It launches N independent sub-agent
-// candidates on the SAME task (each isolated in its own git worktree by
-// default), waits for all to finish, and picks a winner by
-// distilled-summary consensus; when no winner is distinguishable it
-// degrades to a sequential-retry conditioning hint distilled from all
-// rollouts.
-//
-// The orchestration itself lives in internal/agentruntime (it needs
-// RankSubagentResults/DistillIntoPrompt, and internal/tool must not import
-// internal/agentruntime — cycle). Registration sites inject the runner via
-// the Run field.
 type BestOfNTool struct {
-	Manager *subagent.Manager
-	Run     func(ctx context.Context, req BestOfNRequest) string
-	// AvailableModels resolves the current endpoint's model list for
-	// per-candidate model validation (r380); nil disables validation.
+	Manager         *subagent.Manager
+	Run             func(ctx context.Context, req BestOfNRequest) string
 	AvailableModels func() []string
 }
 
-// BestOfNRequest is the validated input for one best-of-N orchestration.
 type BestOfNRequest struct {
-	Task      string
-	N         int
-	Tools     []string
-	Isolation string
-	Name      string
-	// Models optionally overrides the model per candidate (r380
-	// cross-model ensemble). Empty = every candidate inherits the parent
-	// runtime model (same-model sampling).
-	Models []string
-	// VerifierModels optionally routes the r439 tie-break discriminator
-	// to a model different from the tied candidates (heterogeneous
-	// verification, arXiv:2512.02304: cross-family verification beats
-	// self-verification, and the benefit shrinks as solver and verifier
-	// converge). The first entry not used by either tied candidate is
-	// picked. Empty = discriminator inherits the parent model (r439).
+	Task           string
+	N              int
+	Tools          []string
+	Isolation      string
+	Name           string
+	Models         []string
 	VerifierModels []string
 }
 
@@ -126,11 +102,7 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	if isolation != "" && isolation != "worktree" && isolation != "none" {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid isolation %q: supported values are \"worktree\" (each candidate in its own worktree) and \"none\" (shared cwd, read-only tasks only)", isolation)}, nil
 	}
-	// r380: a heterogeneous ensemble runs one candidate per model; the
-	// explicit model list is the source of truth for n (mixing n+models with
-	// mismatched lengths would silently drop candidates). Validated against
-	// the RAW args.N so an explicit conflicting n is refused while an omitted
-	// n never collides with the default.
+
 	n := args.N
 	if len(args.Models) > 0 {
 		var modelsErr string
@@ -151,9 +123,6 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	return Result{Content: report}, nil
 }
 
-// validateVerifierModels checks the optional discriminator model list
-// (1-4 entries, each available on the current endpoint). Unlike the
-// candidate list there is no count coupling with n.
 func validateVerifierModels(models []string, availableModels func() []string) string {
 	if len(models) == 0 {
 		return ""
@@ -180,9 +149,6 @@ func validateVerifierModels(models []string, availableModels func() []string) st
 	return ""
 }
 
-// validateBestOfNModels checks the optional per-candidate model list and
-// returns the effective candidate count. Empty models leaves n untouched.
-// A non-empty error string means the request must be refused.
 func validateBestOfNModels(models []string, n int, availableModels func() []string) (int, string) {
 	if len(models) == 0 {
 		return n, ""
@@ -212,7 +178,6 @@ func validateBestOfNModels(models []string, n int, availableModels func() []stri
 	return len(models), ""
 }
 
-// Clone shares Manager and the injected orchestrator across agents.
 func (t BestOfNTool) Clone() Tool {
 	return BestOfNTool{Manager: t.Manager, Run: t.Run, AvailableModels: t.AvailableModels}
 }

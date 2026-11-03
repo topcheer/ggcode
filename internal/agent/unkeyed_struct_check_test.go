@@ -79,13 +79,12 @@ func main() {
 	_ = s
 	_ = c
 }`
-	// Old has Server unkeyed (should be filtered out by delta).
-	// New adds Client unkeyed (should be flagged).
+
 	warnings := checkUnkeyedStruct("server.go", oldSrc, newSrc)
 	if len(warnings) == 0 {
 		t.Fatal("expected warning for new Client unkeyed struct")
 	}
-	// Should NOT flag Server (it was in old content).
+
 	foundClient := false
 	foundServer := false
 	for _, w := range warnings {
@@ -142,8 +141,7 @@ func main() {
 	_ = h
 }`
 	warnings := checkUnkeyedStruct("header.go", "", src)
-	// Qualified type (http.Header) is still flagged, but with hedged wording
-	// because the underlying kind cannot be confirmed without type checking.
+
 	if len(warnings) == 0 {
 		t.Fatal("expected warning for qualified type unkeyed init")
 	}
@@ -158,10 +156,6 @@ func main() {
 	}
 }
 
-// TestUnkeyedStruct_QualifiedNonStructHedged pins #1216: a qualified name may
-// be an array/slice/map/basic alias (pkg.Ints = []int), so positional elements
-// are valid Go. The warning must hedge and must NOT suggest a keyed literal
-// form, which would not compile for those kinds.
 func TestUnkeyedStruct_QualifiedNonStructHedged(t *testing.T) {
 	src := `package main
 
@@ -184,9 +178,6 @@ func f() {
 	}
 }
 
-// TestUnkeyedStruct_ConfirmedStructKeepsStrongWording pins the other half of
-// #1216: structs declared in the same file are confirmed, so the actionable
-// keyed-form suggestion is retained for them.
 func TestUnkeyedStruct_ConfirmedStructKeepsStrongWording(t *testing.T) {
 	src := `package main
 
@@ -207,10 +198,6 @@ func f() {
 	}
 }
 
-// TestUnkeyedStruct_NewSameKeyLiteral pins the multiset delta (#1215):
-// adding a SECOND unkeyed literal of the same type and element count
-// (copy-paste pattern) must be flagged. Set-membership delta filtered it as
-// "pre-existing" because the key (type + element count) matched.
 func TestUnkeyedStruct_NewSameKeyLiteral(t *testing.T) {
 	oldSrc := `package main
 
@@ -242,9 +229,6 @@ func g() {
 	}
 }
 
-// TestUnkeyedStruct_LineShiftNoReflag pins the multiset invariance under
-// line drift: inserting unrelated comment lines above identical literals
-// keeps every per-key count unchanged, so nothing is re-flagged.
 func TestUnkeyedStruct_LineShiftNoReflag(t *testing.T) {
 	oldSrc := `package main
 
@@ -340,8 +324,7 @@ func main() {
 	c := Config{Host: "localhost", 8080, false}
 	_ = c
 }`
-	// Mixed keyed/unkeyed is invalid Go, so parser returns nil.
-	// Verify no panic and graceful handling.
+
 	warnings := checkUnkeyedStruct("mixed.go", "", src)
 	if len(warnings) > 0 {
 		t.Logf("got %d warnings (expected 0 for invalid Go)", len(warnings))
@@ -377,7 +360,7 @@ func main() {
 }
 
 func TestUnkeyedStruct_WarningCap(t *testing.T) {
-	// Generate more than unkeyedMaxWarnings issues.
+
 	src := `package main
 
 type S1 struct { A, B, C int }
@@ -394,7 +377,7 @@ func main() {
 	_ = S5{1, 2, 3}
 }`
 	warnings := checkUnkeyedStruct("cap.go", "", src)
-	// Should cap at unkeyedMaxWarnings + 1 truncation notice.
+
 	if len(warnings) > unkeyedMaxWarnings+1 {
 		t.Errorf("expected at most %d warnings, got %d", unkeyedMaxWarnings+1, len(warnings))
 	}

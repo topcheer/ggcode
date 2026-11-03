@@ -6,11 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-// #4126: a LONG first line (>=100 runes) opening with a strong rejection or
-// frustration word is still course-correction feedback. Previously the isShort
-// gate swallowed it AND analyzeAndUpdate reset consecutiveNegatives, so two
-// detailed corrections in a row restarted the escalation ladder at level 1.
-
 func longCJKWithOpener(opener string) string {
 	filler := strings.Repeat("请按照我下面描述的顺序重新处理每一个步骤并且核对输出，", 6)
 	msg := opener + "，这里你理解错了，" + filler
@@ -59,8 +54,6 @@ func TestIssue4126_EscalationNotResetByLongDetailedCorrection(t *testing.T) {
 	}
 }
 
-// Negative control: a rejection word buried mid-sentence in a long message
-// (past the 40-rune opener window) stays context, not feedback.
 func TestIssue4126_LongMidSentenceWordStillIgnored(t *testing.T) {
 	filler := strings.Repeat("the migration plan covers schema changes and backfills ", 3)
 	msg := filler + "and notes the old index was broken during rollout"

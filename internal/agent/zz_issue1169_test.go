@@ -1,15 +1,7 @@
 package agent
 
-// Regression tests for issue #1169: the reckless-exec detector must match
-// read and edit paths after normalization. An absolute-path read plus a
-// repo-relative-path edit (or vice versa, or a "./" prefix difference) of
-// the same file is explored content, not an unexplored edit. Normalization
-// follows the readValidityKey pattern from read_validity_check.go (fix
-// #557) plus a #627-style unique suffix match.
-
 import "testing"
 
-// Absolute read + relative edit of the same file counts as explored.
 func TestIssue1169_AbsoluteReadRelativeEdit(t *testing.T) {
 	s := newRecklessExecState()
 	s.recordReadTool("read_file", `{"file_path":"/repo/internal/agent/foo.go"}`)
@@ -21,7 +13,6 @@ func TestIssue1169_AbsoluteReadRelativeEdit(t *testing.T) {
 	}
 }
 
-// Reverse direction: relative read + absolute edit.
 func TestIssue1169_RelativeReadAbsoluteEdit(t *testing.T) {
 	s := newRecklessExecState()
 	s.recordReadTool("read_file", `{"file_path":"internal/agent/foo.go"}`)
@@ -33,7 +24,6 @@ func TestIssue1169_RelativeReadAbsoluteEdit(t *testing.T) {
 	}
 }
 
-// "./" prefix and redundant separators must normalize away (#557 pattern).
 func TestIssue1169_DotSlashAndCleanNormalization(t *testing.T) {
 	s := newRecklessExecState()
 	s.recordReadTool("read_file", `{"file_path":"internal//agent/foo.go"}`)
@@ -45,7 +35,6 @@ func TestIssue1169_DotSlashAndCleanNormalization(t *testing.T) {
 	}
 }
 
-// Different files must still count as unexplored.
 func TestIssue1169_DifferentFilesStillUnexplored(t *testing.T) {
 	s := newRecklessExecState()
 	s.recordReadTool("read_file", `{"file_path":"/repo/internal/agent/foo.go"}`)
@@ -55,7 +44,6 @@ func TestIssue1169_DifferentFilesStillUnexplored(t *testing.T) {
 	}
 }
 
-// A read under a longer prefix is still explored via unique suffix match.
 func TestIssue1169_UniqueSuffixMatch(t *testing.T) {
 	s := newRecklessExecState()
 	s.recordReadTool("read_file", `{"file_path":"/repo/deep/nested/dir/internal/agent/foo.go"}`)
@@ -67,7 +55,6 @@ func TestIssue1169_UniqueSuffixMatch(t *testing.T) {
 	}
 }
 
-// recklessPathKey should behave like readValidityKey on normalized input.
 func TestIssue1169_RecklessPathKeyMatchesReadValidityKey(t *testing.T) {
 	cases := []string{"  a/b.go  ", "./a/b.go", "a//b.go"}
 	for _, c := range cases {

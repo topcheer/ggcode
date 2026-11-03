@@ -67,8 +67,7 @@ func TestScanPrematureAbstraction_GenericFramework(t *testing.T) {
 func TestScanPrematureAbstraction_Dedup(t *testing.T) {
 	text := "I created a Factory pattern. I created a Factory pattern again."
 	hits := scanPrematureAbstraction(text)
-	// Both should match but excerpt dedup should reduce
-	// (different surrounding context may still produce different excerpts)
+
 	for _, h := range hits {
 		if h.category != "pattern_inflation" {
 			t.Errorf("expected pattern_inflation, got %s", h.category)
@@ -78,7 +77,7 @@ func TestScanPrematureAbstraction_Dedup(t *testing.T) {
 
 func TestMaybeWarnPrematureAbstraction_BelowThreshold(t *testing.T) {
 	a := &Agent{prematureAbstr: newPrematureAbstrState()}
-	// Only 1 signal - below threshold of 2
+
 	text := "I created a Factory pattern for this."
 	hint := a.maybeWarnPrematureAbstraction(text)
 	if hint != "" {
@@ -105,17 +104,17 @@ func TestMaybeWarnPrematureAbstraction_AtThreshold(t *testing.T) {
 func TestMaybeWarnPrematureAbstraction_MaxWarnings(t *testing.T) {
 	a := &Agent{prematureAbstr: newPrematureAbstrState()}
 	text := "I created a Factory pattern. I've defined an interface so that we can swap implementations."
-	// First call should warn
+
 	hint1 := a.maybeWarnPrematureAbstraction(text)
 	if hint1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second call should warn (max=2)
+
 	hint2 := a.maybeWarnPrematureAbstraction(text)
 	if hint2 == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third call should NOT warn (exceeded max)
+
 	hint3 := a.maybeWarnPrematureAbstraction(text)
 	if hint3 != "" {
 		t.Error("expected no third warning (max exceeded)")
@@ -140,12 +139,12 @@ func TestPrematureAbstrState_Reset(t *testing.T) {
 }
 
 func TestScanPrematureAbstraction_ExcerptTruncation(t *testing.T) {
-	// Long text around the match should be truncated to 80 chars
+
 	longPrefix := strings.Repeat("This is a very long preamble. ", 10)
 	text := longPrefix + "I created a Factory pattern to handle different request types."
 	hits := scanPrematureAbstraction(text)
 	for _, h := range hits {
-		if len(h.excerpt) > 84 { // 80 + "..."
+		if len(h.excerpt) > 84 {
 			t.Errorf("excerpt too long: %d chars: %s", len(h.excerpt), h.excerpt)
 		}
 	}

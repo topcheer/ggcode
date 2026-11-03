@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// Gate-recalib defect A fix: write-tool schemas must declare the optional
-// arg_rationale property (single-point injection in ToDefinitions).
 func TestInjectArgRationaleSchema_WriteToolsGainField(t *testing.T) {
 	params := json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`)
 	out := injectArgRationaleSchema("run_command", params)
@@ -28,7 +26,7 @@ func TestInjectArgRationaleSchema_WriteToolsGainField(t *testing.T) {
 	if _, ok := props["arg_rationale"]; !ok {
 		t.Fatal("arg_rationale must be in properties")
 	}
-	// Required list must not grow: the field is optional.
+
 	if strings.Contains(string(out), `"arg_rationale"`) && strings.Contains(string(out), `"required":["command","arg_rationale"]`) {
 		t.Fatal("arg_rationale must never be required")
 	}

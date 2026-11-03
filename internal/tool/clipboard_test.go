@@ -91,8 +91,6 @@ func TestClipboardTool_InvalidJSON(t *testing.T) {
 	}
 }
 
-// TestClipboardTool_ReadWriteRoundTrip exercises the real clipboard if a
-// utility is available, otherwise skips gracefully.
 func TestClipboardTool_ReadWriteRoundTrip(t *testing.T) {
 	if !ClipboardAvailable() {
 		t.Skip("no clipboard utility available on this platform")
@@ -131,7 +129,7 @@ func TestClipboardTool_ReadWriteRoundTrip(t *testing.T) {
 }
 
 func TestClipboardReadCmd_NoPanic(t *testing.T) {
-	// Should not panic on any platform.
+
 	ctx := context.Background()
 	_, _ = clipboardReadCmd(ctx)
 	_, _ = clipboardWriteCmd(ctx)

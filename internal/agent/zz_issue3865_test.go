@@ -25,10 +25,6 @@ func engine3865(t *testing.T) *workflowEngine {
 	return &workflowEngine{loadDir: gg}
 }
 
-// #3865 C: the FAILED-attempt snippet must carry the TAIL of the output
-// (where build/test errors actually live) and be valid UTF-8 - the head
-// slice quoted the command echo/banner instead of the error, and byte
-// slicing could split a rune mid-sequence.
 func TestIssue3865_ErrSnippetTailAndUTF8(t *testing.T) {
 	e := engine3865(t)
 	long := strings.Repeat("banner line\n", 40) + "# github.com/x/y: undefined: Foo"
@@ -43,19 +39,15 @@ func TestIssue3865_ErrSnippetTailAndUTF8(t *testing.T) {
 	if !strings.Contains(atts[0].ErrSnippet, "undefined: Foo") {
 		t.Fatalf("snippet must carry the tail error line, got: %q", atts[0].ErrSnippet)
 	}
-	// The tail legitimately ends with the filler's last banners; the head
-	// behavior would start from the FIRST banner and MISS the error line -
-	// the Contains check above pins exactly that difference.
-	if len(atts[0].ErrSnippet) > wfErrSnippetMax+8 { // +8: sanitizer may append '?' runes
+
+	if len(atts[0].ErrSnippet) > wfErrSnippetMax+8 {
 		t.Fatalf("snippet length %d exceeds cap+%d", len(atts[0].ErrSnippet), 8)
 	}
 }
 
-// Multi-byte tail: slicing the last 160 bytes of a CJK-heavy output must
-// not produce invalid UTF-8 in the snippet (it is fmt-ed into messages).
 func TestIssue3865_ErrSnippetRuneBoundary(t *testing.T) {
 	e := engine3865(t)
-	content := strings.Repeat("汉", 200) // 600 bytes of multi-byte runes
+	content := strings.Repeat("汉", 200)
 	e.recordAttempt("run_command",
 		json.RawMessage(`{"command":"go test ./..."}`),
 		tool.Result{Content: content, IsError: true})

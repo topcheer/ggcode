@@ -1,27 +1,5 @@
 package agent
 
-// Magic Number Detection for Go source files.
-//
-// Research basis: LLMs frequently generate bare numeric literals in business
-// logic instead of using named constants. This is a well-documented code quality
-// issue flagged by staticcheck (ST1013), golangci-lint (gomnd), and SonarQube.
-// No AI coding agent currently provides inline post-edit magic number detection.
-//
-// Detection approach: AST-based scan for numeric literals in specific contexts
-// where a named constant would be clearer. Delta-aware by value count: only
-// flags numbers whose occurrence count increased in this edit.
-//
-// What it detects:
-//  1. Bare numeric literals in comparisons (x > 100, count < 3)
-//  2. Numeric literals in function arguments (make([]T, 10), time.Sleep(500))
-//  3. Numeric literals in assignments (timeout = 30, retries = 5)
-//
-// Exclusions (false positive prevention):
-//  - 0, 1, 2 (universally understood)
-//  - Const/var declarations (already named)
-//  - Test files (magic numbers expected in test data)
-//  - Type conversions (int(x), byte(s))
-
 import (
 	"fmt"
 	"go/ast"
@@ -56,11 +34,11 @@ func checkMagicNumbers(filePath, oldContent, newContent string) string {
 	collected := collectMagicNumbers(fset, f)
 
 	var found []magicNumberInfo
-	// Track how many of each value we've seen so far in new content.
+
 	newValueCounts := make(map[string]int)
 	for _, mn := range collected {
 		newValueCounts[mn.value]++
-		// Delta-aware: skip if old content had >= this many occurrences.
+
 		if newValueCounts[mn.value] <= oldValueCounts[mn.value] {
 			continue
 		}
@@ -81,7 +59,7 @@ func checkMagicNumbers(filePath, oldContent, newContent string) string {
 		b.WriteString(fmt.Sprintf("  Line %d: %s (in %s)\n", mn.line, mn.value, mn.context))
 	}
 	b.WriteString("Named constants (const timeoutSeconds = 30) improve readability and simplify future changes.")
-	_, _ = b.WriteString("") // ensure builder is used
+	_, _ = b.WriteString("")
 	return b.String()
 }
 

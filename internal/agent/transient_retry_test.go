@@ -11,14 +11,13 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestIsTransientError verifies classification of transient vs permanent errors.
 func TestIsTransientError(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		want    bool
 	}{
-		// Transient errors
+
 		{"timeout", "request timeout after 30s", true},
 		{"lsp not ready", "LSP server not ready, please wait", true},
 		{"connection refused", "dial tcp: connection refused", true},
@@ -29,7 +28,6 @@ func TestIsTransientError(t *testing.T) {
 		{"server crashed", "server crashed unexpectedly", true},
 		{"unavailable", "service unavailable", true},
 
-		// Permanent errors
 		{"permission denied", "permission denied: cannot access file", false},
 		{"unknown tool", "unknown tool: foo. Did you mean bar?", false},
 		{"missing param", "missing required parameter: file_path", false},
@@ -40,10 +38,8 @@ func TestIsTransientError(t *testing.T) {
 		{"invalid args", "invalid argument: offset must be > 0", false},
 		{"sandbox", "path blocked by sandbox policy", false},
 
-		// Ambiguous — transient pattern present but permanent takes priority
 		{"permanent priority", "permission denied during timeout", false},
 
-		// Empty / unknown
 		{"empty", "", false},
 		{"unknown error", "something went wrong in the system", false},
 	}
@@ -58,7 +54,6 @@ func TestIsTransientError(t *testing.T) {
 	}
 }
 
-// TestIsRetryableTool verifies the retryable tool set.
 func TestIsRetryableTool(t *testing.T) {
 	retryable := []string{"read_file", "grep", "lsp_hover", "web_fetch", "git_status", "code_search"}
 	for _, name := range retryable {
@@ -68,7 +63,7 @@ func TestIsRetryableTool(t *testing.T) {
 	}
 
 	nonRetryable := []string{"edit_file", "write_file", "git_commit", "run_command", "git_add", "git_stash",
-		"lsp_rename" /* #1702-4: #1514 moved lsp_rename INTO the retryable set with no test pinning it */}
+		"lsp_rename"}
 	for _, name := range nonRetryable {
 		if isRetryableTool(name) {
 			t.Errorf("isRetryableTool(%q) = true, want false", name)
@@ -76,8 +71,6 @@ func TestIsRetryableTool(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_SuccessOnRetry verifies that a tool that fails
-// transiently once and succeeds on retry returns the successful result.
 func TestExecuteWithTransientRetry_SuccessOnRetry(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
@@ -91,7 +84,6 @@ func TestExecuteWithTransientRetry_SuccessOnRetry(t *testing.T) {
 		return tool.Result{Content: "success"}, nil
 	}
 
-	// Use a retryable tool name so the retry logic kicks in.
 	result := a.executeWithTransientRetry(context.Background(), "lsp_hover", nil, execFn)
 
 	if result.IsError {
@@ -105,8 +97,6 @@ func TestExecuteWithTransientRetry_SuccessOnRetry(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_PermanentErrorNoRetry verifies that permanent
-// errors are not retried.
 func TestExecuteWithTransientRetry_PermanentErrorNoRetry(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
@@ -127,8 +117,6 @@ func TestExecuteWithTransientRetry_PermanentErrorNoRetry(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_NonRetryableToolNoRetry verifies that mutating
-// tools are never retried even on transient errors.
 func TestExecuteWithTransientRetry_NonRetryableToolNoRetry(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
@@ -139,7 +127,6 @@ func TestExecuteWithTransientRetry_NonRetryableToolNoRetry(t *testing.T) {
 		return tool.Result{Content: "timeout", IsError: true}, nil
 	}
 
-	// edit_file is NOT retryable — should only call once.
 	_ = a.executeWithTransientRetry(context.Background(), "edit_file", nil, execFn)
 
 	if calls != 1 {
@@ -147,8 +134,6 @@ func TestExecuteWithTransientRetry_NonRetryableToolNoRetry(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_AllRetriesFail verifies that a tool that always
-// fails transiently exhausts retries and returns the last error.
 func TestExecuteWithTransientRetry_AllRetriesFail(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
@@ -164,17 +149,15 @@ func TestExecuteWithTransientRetry_AllRetriesFail(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error after all retries exhausted")
 	}
-	// 1 initial + maxTransientRetries (2) = 3 total
+
 	if calls != 3 {
 		t.Errorf("expected 3 calls (initial + %d retries), got %d", maxTransientRetries, calls)
 	}
 }
 
-// TestExecuteWithTransientRetry_BudgetExhausted verifies that the per-run retry
-// budget caps the total number of retries.
 func TestExecuteWithTransientRetry_BudgetExhausted(t *testing.T) {
 	a := newTestAgent(t)
-	// Set budget to 0 — no retries allowed even for transient errors.
+
 	a.mu.Lock()
 	a.transientRetryBudget = 0
 	a.mu.Unlock()
@@ -192,15 +175,13 @@ func TestExecuteWithTransientRetry_BudgetExhausted(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_CancellationDuringRetry verifies that context
-// cancellation during the retry backoff aborts promptly.
 func TestExecuteWithTransientRetry_CancellationDuringRetry(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(50 * time.Millisecond) // cancel during backoff
+		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
 
@@ -218,11 +199,9 @@ func TestExecuteWithTransientRetry_CancellationDuringRetry(t *testing.T) {
 	}
 }
 
-// TestResetTransientRetryBudget verifies that reset restores the full budget.
 func TestResetTransientRetryBudget(t *testing.T) {
 	a := newTestAgent(t)
 
-	// Drain budget.
 	a.mu.Lock()
 	a.transientRetryBudget = 0
 	a.mu.Unlock()
@@ -238,8 +217,6 @@ func TestResetTransientRetryBudget(t *testing.T) {
 	}
 }
 
-// TestExecuteWithTransientRetry_ErrorReturn verifies that when execFn returns
-// a Go error (not a tool-level error), it's still classified and retried if transient.
 func TestExecuteWithTransientRetry_ErrorReturn(t *testing.T) {
 	a := newTestAgent(t)
 	a.resetTransientRetryBudget()
@@ -263,16 +240,11 @@ func TestExecuteWithTransientRetry_ErrorReturn(t *testing.T) {
 	}
 }
 
-// newTestAgent creates a minimal Agent for testing transient retry logic.
-// We only need the mutex and transientRetryBudget field.
 func newTestAgent(t *testing.T) *Agent {
 	t.Helper()
 	return &Agent{}
 }
 
-// TestCancellationFlattenNote pins #1779: cancellation/deadline errors
-// flattened into tool results carry an explicit "not a tool failure" note
-// so the agent stops diagnosing what is really the run ending.
 func TestCancellationFlattenNote(t *testing.T) {
 	if got := cancellationFlattenNote(context.Canceled); got != " (cancelled - not a tool failure; the run is ending)" {
 		t.Fatalf("canceled note mismatch: %q", got)
@@ -283,7 +255,7 @@ func TestCancellationFlattenNote(t *testing.T) {
 	if got := cancellationFlattenNote(errors.New("boom")); got != "" {
 		t.Fatalf("ordinary errors must stay unannotated, got %q", got)
 	}
-	// Wrapped cancellation must be detected through the errors.Is chain.
+
 	if got := cancellationFlattenNote(fmt.Errorf("exec: %w", context.Canceled)); got == "" {
 		t.Fatal("wrapped cancellation must still be annotated")
 	}

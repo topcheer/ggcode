@@ -15,7 +15,7 @@ func TestDiffAgainstBaseline_NoBaseline(t *testing.T) {
 	if hasBaseline {
 		t.Error("expected hasBaseline=false when no baseline stored")
 	}
-	// When no baseline exists, all current diags are "new"
+
 	if len(newDiags) != 1 {
 		t.Errorf("expected 1 new diag, got %d", len(newDiags))
 	}
@@ -31,7 +31,6 @@ func TestDiffAgainstBaseline_AllPreExisting(t *testing.T) {
 		{Severity: 2, Message: "inefficient assignment", Range: lsp.Range{Start: lsp.Position{Line: 10}}},
 	}
 
-	// Store baseline directly
 	diagBaselineMu.Lock()
 	diagBaselines[path] = baselineSnapshot{
 		counts: newDiagCounts(baseline),
@@ -39,7 +38,6 @@ func TestDiffAgainstBaseline_AllPreExisting(t *testing.T) {
 	}
 	diagBaselineMu.Unlock()
 
-	// Same diagnostics post-edit (different line numbers due to insertion)
 	postEdit := []lsp.Diagnostic{
 		{Severity: 1, Message: "unused variable: x", Range: lsp.Range{Start: lsp.Position{Line: 7}}},
 		{Severity: 2, Message: "inefficient assignment", Range: lsp.Range{Start: lsp.Position{Line: 12}}},
@@ -102,7 +100,6 @@ func TestDiffAgainstBaseline_ResolvedIssues(t *testing.T) {
 	}
 	diagBaselineMu.Unlock()
 
-	// Post-edit: both issues are gone
 	postEdit := []lsp.Diagnostic{}
 
 	newDiags, resolved, hasBaseline := diffAgainstBaseline(path, postEdit)
@@ -132,7 +129,6 @@ func TestDiffAgainstBaseline_BaselineConsumed(t *testing.T) {
 
 	diffAgainstBaseline(path, baseline)
 
-	// Second call should find no baseline (consumed)
 	_, _, hasBaseline := diffAgainstBaseline(path, baseline)
 	if hasBaseline {
 		t.Error("expected baseline to be consumed after first diff")
@@ -141,7 +137,7 @@ func TestDiffAgainstBaseline_BaselineConsumed(t *testing.T) {
 
 func TestDiffAgainstBaseline_DuplicateDiagnostics(t *testing.T) {
 	path := "/test/dup.go"
-	// File has 2 "unused variable" warnings pre-edit
+
 	baseline := []lsp.Diagnostic{
 		{Severity: 2, Message: "unused variable: a", Range: lsp.Range{Start: lsp.Position{Line: 5}}},
 		{Severity: 2, Message: "unused variable: a", Range: lsp.Range{Start: lsp.Position{Line: 6}}},
@@ -154,7 +150,6 @@ func TestDiffAgainstBaseline_DuplicateDiagnostics(t *testing.T) {
 	}
 	diagBaselineMu.Unlock()
 
-	// Post-edit: 3 "unused variable: a" warnings — one is new
 	postEdit := []lsp.Diagnostic{
 		{Severity: 2, Message: "unused variable: a", Range: lsp.Range{Start: lsp.Position{Line: 5}}},
 		{Severity: 2, Message: "unused variable: a", Range: lsp.Range{Start: lsp.Position{Line: 6}}},
@@ -223,7 +218,7 @@ func TestClearDiagnosticBaseline(t *testing.T) {
 func TestNewDiagCounts(t *testing.T) {
 	diags := []lsp.Diagnostic{
 		{Severity: 1, Message: "error A"},
-		{Severity: 1, Message: "error A"}, // duplicate
+		{Severity: 1, Message: "error A"},
 		{Severity: 2, Message: "warning B"},
 	}
 	dc := newDiagCounts(diags)

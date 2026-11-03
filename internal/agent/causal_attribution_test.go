@@ -7,8 +7,7 @@ import (
 func TestCausalAttribution_RecordAndAttribute(t *testing.T) {
 	s := newCausalAttributionState()
 
-	// Record some edit steps
-	s.recordEdit("read_file", "internal/agent/foo.go", 1) // not an edit tool
+	s.recordEdit("read_file", "internal/agent/foo.go", 1)
 	s.recordEdit("edit_file", "internal/agent/confidence.go", 2)
 	s.recordEdit("edit_file", "internal/agent/agent.go", 3)
 	s.recordEdit("write_file", "internal/agent/causal_attribution.go", 4)
@@ -17,7 +16,6 @@ func TestCausalAttribution_RecordAndAttribute(t *testing.T) {
 		t.Fatalf("expected 3 edits (read_file excluded), got %d", len(s.edits))
 	}
 
-	// Simulate a build failure referencing confidence.go
 	output := `# internal/agent
 ./confidence.go:42:10: undefined: fooBar
 FAIL	github.com/ggcode/internal/agent [build failed]`
@@ -27,7 +25,6 @@ FAIL	github.com/ggcode/internal/agent [build failed]`
 		t.Fatal("expected attribution guidance, got empty")
 	}
 
-	// Should identify confidence.go as the likely cause
 	if !contains(hint, "confidence.go") {
 		t.Errorf("expected hint to reference confidence.go, got: %s", hint)
 	}
@@ -45,12 +42,11 @@ func TestCausalAttribution_SamePackage(t *testing.T) {
 	s.recordEdit("edit_file", "internal/agent/bgorphan_detect.go", 1)
 	s.recordEdit("edit_file", "internal/agent/confidence.go", 2)
 
-	// Error references a different file in the same package
 	output := `./internal/agent/other.go:10:5: cannot use foo (type int) as type string
 FAIL	github.com/ggcode/internal/agent`
 
 	hint := s.attributeFailure(output)
-	// Should still provide attribution based on same-package match
+
 	if hint == "" {
 		t.Fatal("expected attribution for same-package error, got empty")
 	}
@@ -68,7 +64,6 @@ func TestCausalAttribution_NoFailure(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "main.go", 1)
 
-	// Successful output — no failure indicators
 	hint := s.attributeFailure("ok\tpackage main")
 	if hint != "" {
 		t.Errorf("expected empty hint for successful output, got: %s", hint)
@@ -83,7 +78,6 @@ func TestCausalAttribution_MaxWarnings(t *testing.T) {
 
 	failureOutput := "main.go:10: undefined: foo\nFAIL"
 
-	// First 3 warnings should work
 	for i := 0; i < causalMaxWarnings; i++ {
 		hint := s.attributeFailure(failureOutput)
 		if hint == "" {
@@ -91,7 +85,6 @@ func TestCausalAttribution_MaxWarnings(t *testing.T) {
 		}
 	}
 
-	// 4th should be suppressed
 	hint := s.attributeFailure(failureOutput)
 	if hint != "" {
 		t.Errorf("expected hint suppression after max warnings, got: %s", hint)
@@ -116,7 +109,6 @@ func TestCausalAttribution_Reset(t *testing.T) {
 func TestCausalAttribution_SlidingWindow(t *testing.T) {
 	s := newCausalAttributionState()
 
-	// Record more than causalMaxEdits
 	for i := 0; i < causalMaxEdits+5; i++ {
 		s.recordEdit("edit_file", "main.go", i)
 	}
@@ -166,10 +158,6 @@ func TestCausalAttribution_EmptyPath(t *testing.T) {
 	}
 }
 
-// r405: lastSuspect feeds the attribution-experiment arm. #1454-A silent-death
-// pattern: wiring exists but state stays empty - the detector never fires. If
-// the top-suspect computation path stops updating lastSuspect, the experiment
-// arms on "" and silently dies; this probe pins the supply line.
 func TestCausalAttribution_LastSuspectTracksTopSuspect(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "internal/tool/grep.go", 0)
@@ -209,33 +197,25 @@ func TestLooksLikeFailure(t *testing.T) {
 func TestCausalAttribution_RecencyBonus(t *testing.T) {
 	s := newCausalAttributionState()
 
-	// Two edits to same package, neither matches error file exactly
 	s.recordEdit("edit_file", "internal/agent/old.go", 1)
 	s.recordEdit("edit_file", "internal/agent/new.go", 2)
 
-	// Error references a third file in the same package
 	output := "./internal/agent/third.go:10: syntax error\nFAIL"
 
 	hint := s.attributeFailure(output)
 	if hint == "" {
 		t.Fatal("expected attribution hint")
 	}
-	// More recent edit (new.go) should be preferred due to recency bonus
+
 	if !contains(hint, "new.go") {
 		t.Errorf("expected most recent edit (new.go) to be identified as cause, got: %s", hint)
 	}
 }
 
-// TestCausalAttribution_MultiLineGrepNotCmdOutput pins #1442-A layer 2:
-// a multi-line grep-shaped output with a stray failure word and NO
-// compiler/tester feature word must not qualify as command output - its
-// path:line: lines are causalErrorFileRe's exact shape and used to blame
-// innocent edits (probe CRS=84 on a passing test's grep).
 func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "internal/im/crypto.go", 1)
 
-	// 6 lines of grep output mentioning 'failed' in content - no feature word.
 	grepish := "internal/im/crypto.go:40: msg := fmt.Errorf(\"failed to decrypt\")\n" +
 		"internal/im/crypto.go:41: // if decryption failed we bail\n" +
 		"internal/im/crypto.go:42: return nil, err\n" +
@@ -246,7 +226,6 @@ func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
 		t.Fatalf("multi-line grep output misattributed: %s", hint)
 	}
 
-	// The same shape WITH a compiler feature word still attributes.
 	compilery := "./internal/im/crypto.go:10:2: cannot use err (type error)\nFAIL\tgithub.com/x/y\t0.5s\n"
 	s2 := newCausalAttributionState()
 	s2.recordEdit("edit_file", "internal/im/crypto.go", 1)
@@ -255,29 +234,21 @@ func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
 	}
 }
 
-// Regression for #1528: recency alone must not clear the suspect threshold -
-// "git push rejected" carries no file evidence, yet a pure recency rank of
-// 3+ crossed 25 (and 5+ crossed the 50 "references this file" wording),
-// blaming innocent recent edits with a false claim about the error output.
 func TestComputeCRSRecencyAloneInsufficient(t *testing.T) {
 	edit := causalEditStep{filePath: "/w/main.go", dirPath: "/w"}
-	// No error files: even max recency must score zero.
+
 	if got := computeCRS(edit, nil, 10); got != 0 {
 		t.Fatalf("recency without file evidence must score 0, got %d", got)
 	}
-	// With evidence, recency still contributes.
+
 	if got := computeCRS(edit, []string{"/w/main.go"}, 5); got < causalWtErrorFileMatch {
 		t.Fatalf("exact match + recency must include the file-match weight, got %d", got)
 	}
 }
 
-// TestComputeCRSDetail_FileMatchNotInferableFromScore pins #1771 case 1:
-// recency alone (rank 5+, no file-match evidence) must NOT report
-// fileMatch - the old wording branch inferred it from total score >= 50
-// and asserted "error output references this file" for unrelated edits.
 func TestComputeCRSDetail_FileMatchNotInferableFromScore(t *testing.T) {
 	edit := causalEditStep{filePath: "internal/agent/my_edit.go", dirPath: "internal/agent"}
-	// Error file UNRELATED to the edit (different package, different dir).
+
 	score, matched, _ := computeCRSDetail(edit, []string{"cmd/app/main.go:12: oops"}, 8, nil)
 	if matched {
 		t.Fatal("unrelated error file must not set fileMatch")
@@ -285,16 +256,13 @@ func TestComputeCRSDetail_FileMatchNotInferableFromScore(t *testing.T) {
 	if score < causalWtErrorFileMatch {
 		t.Logf("note: recency-heavy score %d still exceeds 50 - wording must rely on fileMatch only", score)
 	}
-	// Matching error file sets it.
+
 	score2, matched2, _ := computeCRSDetail(edit, []string{"internal/agent/my_edit.go"}, 1, nil)
 	if !matched2 || score2 < causalWtErrorFileMatch {
 		t.Fatalf("exact match must set fileMatch with weight, got matched=%v score=%d", matched2, score2)
 	}
 }
 
-// #2218 case A end-to-end: a directory-suffix reference matching two
-// distinct edit paths must not produce the authority wording for the
-// recency winner (companion to the unit-level zz_issue2218 suite).
 func TestCausalAttribution_SuffixAmbiguityEndToEnd(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "pkg/api/types.go", 1)

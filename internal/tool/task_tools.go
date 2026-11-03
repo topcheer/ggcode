@@ -12,13 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// maxTaskSubjectLen limits task subject length. Subjects appear in task_list
-// output and task board UI; excessively long subjects waste context.
 const maxTaskSubjectLen = 200
-
-// ————————————————————————————————————————
-// TaskCreate
-// ————————————————————————————————————————
 
 type TaskCreateTool struct {
 	Manager *task.Manager
@@ -91,19 +85,14 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "subject is required"}, nil
 	}
 	if utf8.RuneCountInString(args.Subject) > maxTaskSubjectLen {
-		// #866/#1346: rune-count, not bytes — CJK subjects were rejected
-		// at less than half the documented length. The gate below used
-		// len() (bytes) while the message already reported runes.
+
 		return Result{IsError: true, Content: fmt.Sprintf("subject too long: %d chars (max %d). Use a shorter title.", utf8.RuneCountInString(args.Subject), maxTaskSubjectLen)}, nil
 	}
 
 	created := t.Manager.Create(args.Subject, args.Description, args.ActiveForm, args.Metadata)
 
-	// Apply dependency links if provided
 	if len(args.AddBlocks) > 0 || len(args.AddBlockedBy) > 0 {
-		// #866: a nonexistent dependency ID leaves the task with zero links;
-		// discarding the error made agents schedule on dependencies that
-		// were never established. Propagate, and return the UPDATED snapshot.
+
 		updated, err := t.Manager.Update(created.ID, task.UpdateOptions{
 			AddBlocks:    args.AddBlocks,
 			AddBlockedBy: args.AddBlockedBy,
@@ -117,10 +106,6 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	out, _ := json.Marshal(created)
 	return Result{Content: string(out) + "\n"}, nil
 }
-
-// ————————————————————————————————————————
-// TaskGet
-// ————————————————————————————————————————
 
 type TaskGetTool struct {
 	Manager *task.Manager
@@ -167,10 +152,6 @@ func (t TaskGetTool) Execute(_ context.Context, input json.RawMessage) (Result, 
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// ————————————————————————————————————————
-// TaskList
-// ————————————————————————————————————————
-
 type TaskListTool struct {
 	Manager *task.Manager
 }
@@ -201,8 +182,7 @@ func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 	if len(tasks) == 0 {
 		return Result{Content: "No tasks.\n"}, nil
 	}
-	// Sort by ID numerically (#866): string sort scrambled 11+ tasks
-	// (task-1, task-10, task-11, task-2, ...), diverging from creation order.
+
 	sort.Slice(tasks, func(i, j int) bool { return taskIDLess(tasks[i].ID, tasks[j].ID) })
 
 	var sb strings.Builder
@@ -219,10 +199,6 @@ func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 	}
 	return Result{Content: sb.String()}, nil
 }
-
-// ————————————————————————————————————————
-// TaskUpdate
-// ————————————————————————————————————————
 
 type TaskUpdateTool struct {
 	Manager *task.Manager
@@ -334,10 +310,6 @@ func (t TaskUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// ————————————————————————————————————————
-// TaskStop
-// ————————————————————————————————————————
-
 type TaskStopTool struct {
 	Manager *task.Manager
 }
@@ -392,24 +364,14 @@ func (t TaskStopTool) Execute(_ context.Context, input json.RawMessage) (Result,
 	return Result{Content: fmt.Sprintf("Task %s stopped (reset to pending)\n", updated.ID)}, nil
 }
 
-// BackgroundTaskProvider retrieves output from background tasks (subagents, shell jobs).
 type BackgroundTaskProvider interface {
 	GetTaskOutput(taskID string) (string, bool)
 }
 
-// DelegationTaskTextProvider is optionally implemented by BackgroundTaskProvider
-// implementations that know the task text behind a completed output (the
-// sub-agent manager). It lets task_output attach the same acceptance
-// checkpoint wait_agent attaches, so retrieving a delegation result through
-// this side path does not bypass delegation validation (r-sa-99: the
-// provenance-paradox bypass - wait_agent validates, task_output didn't).
 type DelegationTaskTextProvider interface {
-	// GetTaskText must return ok=false unless the run is completed and its
-	// result is final; callers inject nothing in that case.
 	GetTaskText(taskID string) (string, bool)
 }
 
-// TaskOutputTool retrieves the output of a background task by ID.
 type TaskOutputTool struct {
 	Provider BackgroundTaskProvider
 }
@@ -466,9 +428,6 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("task %q not found or has no output", args.TaskID)}, nil
 	}
 
-	// tail_lines lets the agent page through a large deterministic snapshot
-	// instead of re-fetching the full output and getting it bisected by the
-	// context-pressure guard every time (#365).
 	if args.TailLines > 0 {
 		lines := strings.Split(output, "\n")
 		if len(lines) > args.TailLines {
@@ -478,12 +437,6 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		}
 	}
 
-	// Delegation validation side path: when this output is a completed
-	// sub-agent result whose task carried acceptance criteria, append the
-	// same checkpoint wait_agent appends, so the parent does not consume the
-	// builder's self-report unvalidated just because it used task_output.
-	// acceptanceReminder is a no-op for shell jobs (no task text), running
-	// tasks (GetTaskText ok=false), and tasks without criteria.
 	if tp, ok := t.Provider.(DelegationTaskTextProvider); ok && args.TailLines == 0 {
 		if taskText, found := tp.GetTaskText(args.TaskID); found {
 			if reminder := acceptanceReminder(taskText, output); reminder != "" {
@@ -495,8 +448,6 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: output}, nil
 }
 
-// taskIDLess orders task IDs numerically ("task-2" < "task-10"), unlike a
-// plain string compare which scrambles lists once IDs reach double digits (#866).
 func taskIDLess(a, b string) bool {
 	ai, aok := splitTaskID(a)
 	bi, bok := splitTaskID(b)

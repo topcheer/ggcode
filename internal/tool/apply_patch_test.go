@@ -38,17 +38,15 @@ func TestParseV4APatch(t *testing.T) {
 		t.Errorf("delete section wrong: %+v", secs[2])
 	}
 
-	// Envelope optional.
 	secs, err = parseV4APatch("*** Add File: a.txt\n+hi\n")
 	if err != nil || len(secs) != 1 {
 		t.Fatalf("envelopeless patch: %v %+v", err, secs)
 	}
 
-	// Unknown directive fails closed.
 	if _, err := parseV4APatch("*** Rewrite World: x\n+q\n"); err == nil {
 		t.Fatal("want error for unknown directive")
 	}
-	// Content before header fails.
+
 	if _, err := parseV4APatch("+stray\n"); err == nil {
 		t.Fatal("want error for stray content")
 	}
@@ -62,7 +60,7 @@ func TestApplyV4AHunks(t *testing.T) {
 			{kind: '-', text: "line2"},
 			{kind: '+', text: "TWO"},
 		}},
-		// Monotonic: the second hunk must match the SECOND "line2" occurrence.
+
 		{lines: []v4aLine{
 			{kind: ' ', text: "line2"},
 			{kind: ' ', text: "line5"},
@@ -78,9 +76,8 @@ func TestApplyV4AHunks(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 
-	// Trailing-whitespace-tolerant context matching.
 	h := []v4aHunk{{lines: []v4aLine{
-		{kind: ' ', text: "line1  "}, // extra trailing ws in patch context
+		{kind: ' ', text: "line1  "},
 		{kind: '-', text: "line2"},
 		{kind: '+', text: "X"},
 	}}}
@@ -93,13 +90,11 @@ func TestApplyV4AHunks(t *testing.T) {
 		}
 	}
 
-	// Context not found fails with a clear message.
 	bad := []v4aHunk{{lines: []v4aLine{{kind: ' ', text: "nope"}}}}
 	if _, err := applyV4AHunks(src, bad); err == nil || !strings.Contains(err.Error(), "context not found") {
 		t.Fatalf("want context-not-found error, got %v", err)
 	}
 
-	// Pure-addition hunk (no ctx/del) is rejected - cannot be located.
 	pure := []v4aHunk{{lines: []v4aLine{{kind: '+', text: "x"}}}}
 	if _, err := applyV4AHunks(src, pure); err == nil {
 		t.Fatal("want error for context-less hunk")
@@ -119,7 +114,6 @@ func TestApplyPatchExecute(t *testing.T) {
 		return res
 	}
 
-	// create_file
 	res := call(t, `{"type":"create_file","path":"docs/hello.md","diff":"*** Add File: docs/hello.md\n+# Hi\n+body\n"}`)
 	if res.IsError {
 		t.Fatalf("create failed: %s", res.Content)
@@ -128,12 +122,11 @@ func TestApplyPatchExecute(t *testing.T) {
 	if err != nil || string(data) != "# Hi\nbody\n" {
 		t.Fatalf("created content: %q err=%v", data, err)
 	}
-	// create on existing file errors.
+
 	if res := call(t, `{"type":"create_file","path":"docs/hello.md","diff":"*** Add File: docs/hello.md\n+x\n"}`); !res.IsError {
 		t.Fatal("create over existing should fail")
 	}
 
-	// update_file
 	patch := "*** Update File: docs/hello.md\n@@\n # Hi\n-body\n+body!\n"
 	res = call(t, `{"type":"update_file","path":"docs/hello.md","diff":`+quote(patch)+`}`)
 	if res.IsError {
@@ -144,13 +137,11 @@ func TestApplyPatchExecute(t *testing.T) {
 		t.Fatalf("updated content: %q", data)
 	}
 
-	// update with unapplicable context -> IsError result (not Go error).
 	res = call(t, `{"type":"update_file","path":"docs/hello.md","diff":"*** Update File: docs/hello.md\n@@\n ghost\n-x\n+y\n"}`)
 	if !res.IsError || !strings.Contains(res.Content, "context not found") {
 		t.Fatalf("want context-not-found IsError, got %+v", res)
 	}
 
-	// delete_file
 	res = call(t, `{"type":"delete_file","path":"docs/hello.md","diff":"*** Delete File: docs/hello.md"}`)
 	if res.IsError {
 		t.Fatalf("delete failed: %s", res.Content)
@@ -159,10 +150,9 @@ func TestApplyPatchExecute(t *testing.T) {
 		t.Fatal("file should be gone")
 	}
 
-	// Bundled multi-section diff: only the addressed section applies.
 	res = call(t, `{"type":"update_file","path":"a.txt","diff":"*** Update File: a.txt\n-x\n+y\n*** Delete File: b.txt\n"}`)
 	if !res.IsError {
-		// a.txt doesn't exist yet; expectation: section selected, open fails.
+
 		t.Fatalf("want error for missing file, got %+v", res)
 	}
 }
@@ -182,14 +172,14 @@ func TestApplyPatchSandboxAndHidden(t *testing.T) {
 	if !res.IsError || blocked != 1 {
 		t.Fatalf("sandbox must gate writes: res=%+v blocked=%d", res, blocked)
 	}
-	// Hidden from definitions - reached only via the Responses apply_patch tool.
+
 	if p.Available() {
 		t.Fatal("apply_patch must stay hidden from ToDefinitions")
 	}
 	if p.Name() != "apply_patch" {
 		t.Fatalf("name: %q", p.Name())
 	}
-	// Nested operation shape also accepted.
+
 	p2 := ApplyPatch{WorkingDir: dir}
 	res, err = p2.Execute(context.Background(), json.RawMessage(
 		`{"operation":{"type":"create_file","path":"nested.txt","diff":"*** Add File: nested.txt\n+ok\n"}}`))

@@ -8,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// TestRecallExperienceMatchesAndSkips covers the recall side of the
-// Experience Case Bank: relevant cases surface as a formatted block,
-// irrelevant or empty stores yield "" (the skip-injection signal), and a
-// workingDir-less agent is a safe no-op.
 func TestRecallExperienceMatchesAndSkips(t *testing.T) {
 	dir := t.TempDir()
 	store := memory.NewExperienceStore(filepath.Join(dir, ".ggcode", "memory", "experience"))
@@ -29,12 +25,10 @@ func TestRecallExperienceMatchesAndSkips(t *testing.T) {
 		t.Fatalf("recall block missing case details: %q", idx)
 	}
 
-	// Unrelated query: nothing relevant, nothing injected.
 	if got := a.recallExperience("write release notes for v2"); got != "" {
 		t.Fatalf("irrelevant query should skip injection, got %q", got)
 	}
 
-	// No workingDir: safe no-op.
 	if got := (&Agent{}).recallExperience("anything"); got != "" {
 		t.Fatalf("missing workingDir should recall nothing, got %q", got)
 	}

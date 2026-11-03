@@ -1,64 +1,27 @@
 package tool
 
-// Merge Conflict Marker Detection for files being read or edited.
-//
-// Research basis: Claude Code highlights conflict markers when viewing files;
-// Cursor shows inline conflict resolution UI; GitHub's web editor warns about
-// unresolved conflicts. Without detection at read time, the AI agent can:
-//   - Read a file with conflict markers and attempt edits on malformed content
-//   - Unwittingly remove or mangle conflict markers during edits
-//   - Waste iterations on builds/tests that fail due to unresolved conflicts
-//   - Commit files that still contain conflict markers
-//
-// ggcode already detects conflict markers at commit time (diff_scan.go), but
-// this is too late — the agent may have already made edits on top of the
-// conflicts. This module provides early detection at read time, giving the
-// agent immediate awareness so it can resolve conflicts before proceeding.
-//
-// Design: zero-LLM-cost, non-blocking. A concise warning is appended to the
-// tool result. The agent sees the conflict regions and can act accordingly.
-
 import (
 	"fmt"
 	"strings"
 )
 
-// conflictMarkerStart matches the beginning of a conflict region: "<<<<<<< HEAD",
-// "<<<<<<< feature-branch", etc. Git always uses 7 angle brackets.
 const conflictMarkerStart = "<<<<<<<"
 
-// conflictMarkerMid matches the separator line: "=======" (7 equals).
 const conflictMarkerMid = "======="
 
-// conflictMarkerEnd matches the end of a conflict region: ">>>>>>> branch-name".
 const conflictMarkerEnd = ">>>>>>>"
 
-// ConflictRegion represents a single unresolved merge conflict in a file.
 type ConflictRegion struct {
-	StartLine int    // line number (1-based) of the "<<<<<<<" marker
-	MidLine   int    // line number of the "=======" separator
-	EndLine   int    // line number of the ">>>>>>>" marker (0 = unclosed)
-	Branch1   string // label after <<<<<<< (e.g. "HEAD")
-	Branch2   string // label after >>>>>>> (e.g. "feature/foo")
-	Unclosed  bool   // #827: no closing >>>>>>> marker was found
+	StartLine int
+	MidLine   int
+	EndLine   int
+	Branch1   string
+	Branch2   string
+	Unclosed  bool
 }
 
-// maxConflictRegions caps the number of conflict regions reported to avoid
-// flooding the agent's context in pathological cases.
 const maxConflictRegions = 5
 
-// DetectMergeConflicts scans file content for git merge conflict markers and
-// returns the conflict regions found. Returns nil if no conflicts are detected.
-//
-// The detection is line-based and matches the standard git conflict format:
-//
-//	<<<<<<< HEAD
-//	  ... our changes ...
-//	=======
-//	  ... their changes ...
-//	>>>>>>> feature/branch
-//
-// Also supports the less common "diff3" style with a "|||||||" base marker.
 func DetectMergeConflicts(content string) []ConflictRegion {
 	lines := strings.Split(content, "\n")
 	var regions []ConflictRegion
@@ -70,17 +33,11 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 		lineNum++
 		trimmed := strings.TrimRight(line, "\r")
 
-		// #3126: exactness guard like the mid marker - a bare prefix match
-		// let " "<<<<<<<" (8 markers) or a literal documentation/fixture
-		// example line open a phantom region. The marker is exactly 7
-		// chars; accept only the bare marker or one followed by a space
-		// (the standard "<<<<<<< HEAD" / "<<<<<<< label" forms).
 		if strings.HasPrefix(trimmed, conflictMarkerStart) &&
 			(len(trimmed) == len(conflictMarkerStart) || trimmed[len(conflictMarkerStart)] == ' ') {
-			// Start of a new conflict region
+
 			if current != nil {
-				// Previous conflict was not properly closed — record it as-is
-				// Fix #1041(b): set Unclosed flag to eliminate state inconsistency
+
 				current.Unclosed = true
 				regions = appendConflictRegion(regions, *current)
 			}
@@ -89,12 +46,12 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 				Branch1:   strings.TrimSpace(strings.TrimPrefix(trimmed, conflictMarkerStart)),
 			}
 		} else if current != nil && strings.HasPrefix(trimmed, conflictMarkerMid) && trimmed == conflictMarkerMid {
-			// Separator line (must be exactly 7 equals, not part of code)
+
 			if current.MidLine == 0 {
 				current.MidLine = lineNum
 			}
 		} else if current != nil && strings.HasPrefix(trimmed, conflictMarkerEnd) {
-			// End of conflict region
+
 			current.EndLine = lineNum
 			current.Branch2 = strings.TrimSpace(strings.TrimPrefix(trimmed, conflictMarkerEnd))
 			regions = appendConflictRegion(regions, *current)
@@ -102,10 +59,8 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 		}
 	}
 
-	// Handle unclosed conflict region
 	if current != nil {
-		// #827: EndLine==0 marks an unclosed region — the old output rendered
-		// 'lines 2-0', self-contradictory.
+
 		current.Unclosed = true
 		regions = appendConflictRegion(regions, *current)
 	}
@@ -113,7 +68,6 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 	return regions
 }
 
-// appendConflictRegion appends a region to the slice, respecting the max cap.
 func appendConflictRegion(regions []ConflictRegion, r ConflictRegion) []ConflictRegion {
 	if len(regions) >= maxConflictRegions {
 		return regions
@@ -121,9 +75,6 @@ func appendConflictRegion(regions []ConflictRegion, r ConflictRegion) []Conflict
 	return append(regions, r)
 }
 
-// FormatConflictWarning builds a concise warning message for the agent when
-// merge conflict markers are detected in a file. Returns empty string if no
-// conflicts are provided.
 func FormatConflictWarning(regions []ConflictRegion) string {
 	if len(regions) == 0 {
 		return ""
@@ -134,7 +85,7 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 
 	if n == 1 {
 		r := regions[0]
-		// #827: render an unclosed region honestly instead of 'lines 2-0'.
+
 		rangeText := fmt.Sprintf("lines %d-%d", r.StartLine, r.EndLine)
 		if r.Unclosed || r.EndLine == 0 {
 			rangeText = fmt.Sprintf("line %d (unclosed conflict marker)", r.StartLine)
@@ -147,10 +98,7 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 			conflictLabel(r.Branch1), conflictLabel(r.Branch2),
 		))
 	} else {
-		// #1652-3: regions are capped at maxConflictRegions - when the cap
-		// is exactly full the file may hold MORE conflicts than listed, and
-		// a precise "5 unresolved" sent the agent hunting for exactly 5.
-		// "at least" costs nothing when 5 was exact.
+
 		countWord := fmt.Sprintf("%d", n)
 		if n >= maxConflictRegions {
 			countWord = fmt.Sprintf("at least %d (list truncated)", n)
@@ -161,7 +109,7 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 			countWord,
 		))
 		for _, r := range regions {
-			// Fix #1041(a): render unclosed regions honestly, not 'Lines X-0'
+
 			rangeText := fmt.Sprintf("Lines %d-%d", r.StartLine, r.EndLine)
 			if r.Unclosed || r.EndLine == 0 {
 				rangeText = fmt.Sprintf("Line %d (unclosed conflict marker)", r.StartLine)
@@ -177,7 +125,6 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 	return sb.String()
 }
 
-// conflictLabel returns a human-readable label for a conflict branch.
 func conflictLabel(label string) string {
 	if label == "" {
 		return "(unknown)"
@@ -185,9 +132,6 @@ func conflictLabel(label string) string {
 	return label
 }
 
-// CheckContentForConflicts is a convenience function that detects conflicts in
-// content and returns a formatted warning string. Returns empty string if no
-// conflicts are found. Used by read_file and edit_file tools.
 func CheckContentForConflicts(content string) string {
 	regions := DetectMergeConflicts(content)
 	return FormatConflictWarning(regions)

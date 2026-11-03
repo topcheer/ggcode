@@ -11,11 +11,11 @@ func TestDescribeTool(t *testing.T) {
 		name        string
 		toolName    string
 		rawArgs     string
-		wantDisplay string // FormatToolInline(DisplayName, Detail)
+		wantDisplay string
 		wantName    string
 		wantDetail  string
 	}{
-		// File operations
+
 		{
 			name: "read_file", toolName: "read_file",
 			rawArgs:     `{"path":"/tmp/test.go"}`,
@@ -59,7 +59,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Edit /tmp/test.go",
 		},
 
-		// Search
 		{
 			name: "glob", toolName: "glob",
 			rawArgs:     `{"pattern":"**/*.go"}`,
@@ -82,7 +81,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Search func Test",
 		},
 
-		// Directory
 		{
 			name: "list_directory with path", toolName: "list_directory",
 			rawArgs:     `{"path":"/tmp/project"}`,
@@ -98,7 +96,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "List /tmp/project",
 		},
 
-		// Commands
 		{
 			name: "swarm_task_create prefers subject", toolName: "swarm_task_create",
 			rawArgs:     `{"team_id":"team-1","subject":"Fix tunnel replay","description":"## plan\n- step"}`,
@@ -191,7 +188,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Background Jobs",
 		},
 
-		// Web
 		{
 			name: "web_fetch", toolName: "web_fetch",
 			rawArgs:     `{"url":"https://example.com/api"}`,
@@ -207,7 +203,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Search golang json marshal",
 		},
 
-		// Productivity
 		{
 			name: "todo_write", toolName: "todo_write",
 			rawArgs:     `{"todos":[{"id":"1","content":"test"}]}`,
@@ -251,7 +246,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Scaffold go",
 		},
 
-		// Git
 		{
 			name: "git_status", toolName: "git_status",
 			rawArgs:     `{}`,
@@ -358,7 +352,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Stash push",
 		},
 
-		// Sleep
 		{
 			name: "sleep seconds", toolName: "sleep",
 			rawArgs:     `{"seconds":5}`,
@@ -374,7 +367,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Sleep 500ms",
 		},
 
-		// Agents
 		{
 			name: "spawn_agent", toolName: "spawn_agent",
 			rawArgs:     `{"description":"fix bug in auth"}`,
@@ -397,7 +389,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "List Agents",
 		},
 
-		// Named agent tools
 		{
 			name: "use_namedagent with name", toolName: "use_namedagent",
 			rawArgs:     `{"name":"architect","task":"design the API"}`,
@@ -431,7 +422,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "List Agents",
 		},
 
-		// Unknown / MCP tools
 		{
 			name: "unknown tool", toolName: "my_mcp_tool",
 			rawArgs:     `{"query":"test"}`,
@@ -447,7 +437,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Custom Tool",
 		},
 
-		// Edge cases
 		{
 			name: "empty args", toolName: "read_file",
 			rawArgs:     `{}`,
@@ -750,11 +739,10 @@ func TestParseStringSlice(t *testing.T) {
 }
 
 func TestDescribeToolJSONRoundTrip(t *testing.T) {
-	// Verify that the presentation output is valid in JSON context
+
 	present := DescribeTool("read_file", `{"path":"/tmp/test.go"}`)
 	title := FormatToolInline(present.DisplayName, present.Detail)
 
-	// Should be serializable as JSON string value without issues
 	m := map[string]string{"title": title}
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -841,7 +829,7 @@ func TestDescribeToolResultExternalWrappers(t *testing.T) {
 }
 
 func TestDescribeToolResultNamedAgent(t *testing.T) {
-	// create_namedagent
+
 	pres, ok := DescribeToolResult(
 		"create_namedagent",
 		`{"name":"code-reviewer","description":"Reviews code","system_prompt":"You review code."}`,
@@ -858,7 +846,6 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("payload = %q", pres.Payload)
 	}
 
-	// create_namedagent (update)
 	pres, ok = DescribeToolResult(
 		"create_namedagent",
 		`{"name":"code-reviewer","description":"Updated"}`,
@@ -872,7 +859,6 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// delete_namedagent
 	pres, ok = DescribeToolResult(
 		"delete_namedagent",
 		`{"name":"old-agent"}`,
@@ -886,7 +872,6 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// list_namedagent (with entries)
 	pres, ok = DescribeToolResult(
 		"list_namedagent",
 		`{}`,
@@ -900,7 +885,6 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// list_namedagent (empty)
 	pres, ok = DescribeToolResult(
 		"list_namedagent",
 		`{}`,
@@ -914,7 +898,6 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// use_namedagent
 	pres, ok = DescribeToolResult(
 		"use_namedagent",
 		`{"name":"architect","task":"design API"}`,
@@ -930,7 +913,7 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 }
 
 func TestDescribeToolResultMultiFile(t *testing.T) {
-	// multi_file_read
+
 	pres, ok := DescribeToolResult(
 		"multi_file_read",
 		`{"files":[{"path":"/a.go"},{"path":"/b.go"}]}`,
@@ -944,7 +927,6 @@ func TestDescribeToolResultMultiFile(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// multi_file_read with failures
 	pres, ok = DescribeToolResult(
 		"multi_file_read",
 		`{"files":[{"path":"/a.go"},{"path":"/missing.go"}]}`,
@@ -958,7 +940,6 @@ func TestDescribeToolResultMultiFile(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// multi_file_write
 	pres, ok = DescribeToolResult(
 		"multi_file_write",
 		`{"files":[{"path":"/a.go","content":"hello\n"},{"path":"/b.go","content":"world\n"}]}`,
@@ -972,7 +953,6 @@ func TestDescribeToolResultMultiFile(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 
-	// multi_file_edit (JSON result)
 	pres, ok = DescribeToolResult(
 		"multi_file_edit",
 		`{"files":[{"path":"/a.go","edits":[{"old_text":"foo","new_text":"bar"}]}]}`,

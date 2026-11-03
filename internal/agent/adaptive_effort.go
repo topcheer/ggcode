@@ -8,43 +8,18 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// AdaptiveEffort automatically adjusts reasoning effort per LLM turn based on
-// the complexity of recent tool interactions. This implements the per-request
-// effort toggle pattern pioneered by Claude Opus 5 and GPT-5.5, where routine
-// operations (file reads, searches) use lower effort to reduce cost and latency,
-// while complex operations (code edits, error recovery, planning) use higher
-// effort for better quality.
-//
-// The adapter only activates when the user has NOT explicitly set a reasoning
-// effort. When the user sets effort via /effort or config, that setting always
-// wins and the adapter stays dormant.
-//
-// Effort classification heuristics (simple, deterministic — no LLM calls):
-//   - Error recovery: recent edit failures or repeated errors → high effort
-//   - Code editing: file edits in recent turns → medium effort
-//   - Exploration: only reads/searches → low effort
-//   - Default: no data yet → empty (provider default)
-
 const (
-	// adaptiveEffortWindow controls how many recent tool interactions to
-	// consider when classifying the current effort context. A small window
-	// keeps the adapter responsive to context shifts (e.g. from exploration
-	// to editing) without over-weighting stale history.
 	adaptiveEffortWindow = 6
 )
 
-// toolComplexity classifies how much reasoning a tool typically needs.
 type toolComplexity int
 
 const (
-	complexityLow    toolComplexity = iota // read-only, search, status
-	complexityMedium                       // file edits, git operations
-	complexityHigh                         // error recovery, verification
+	complexityLow toolComplexity = iota
+	complexityMedium
+	complexityHigh
 )
 
-// effortReadOnlyTools are tools that only read state — no mutations. After a
-// run of these, the next LLM turn can safely use lower effort. Extended from
-// overseer's readOnlyTools with additional status/metadata tools.
 var effortReadOnlyTools = map[string]bool{
 	"read_file":       true,
 	"read_file_range": true,
@@ -72,10 +47,7 @@ var effortReadOnlyTools = map[string]bool{
 	"web_search":      true,
 	"web_fetch":       true,
 	"runtime":         true,
-	// #1836 case 3: todo_write REWRITES the whole todo list - a state-
-	// writing planning tool. Its typical successor turn is planning/
-	// decomposition, exactly the "planning -> higher effort" case in the
-	// module comment - keeping it here downgraded those turns to low.
+
 	"task_list":                  true,
 	"task_get":                   true,
 	"debug_log":                  true,
@@ -86,34 +58,16 @@ var effortReadOnlyTools = map[string]bool{
 	"lsp_incoming_calls":         true,
 	"lsp_outgoing_calls":         true,
 	"lsp_document_highlights":    true,
-	// #1859: dep_graph/scan_todos are pure reads - every other read-only
-	// tool is already here; screenshot too (case 2 - capture-only, and it
-	// keeps the thermal explore ratio honest).
+
 	"dep_graph":  true,
 	"scan_todos": true,
 	"screenshot": true,
 }
 
-// editTools are tools that modify files -- higher stakes, benefit from more reasoning.
-// Aliased to the canonical sourceMutatingTools superset (#738).
 var editTools = sourceMutatingTools
 
-// errorRecoverySignals are tools or patterns that indicate the agent is
-// recovering from a failure — high effort helps avoid repeating mistakes.
-// #1516: this must stay the SAME set as editTools (sourceMutatingTools):
-// the old 3-member literal left write_file/multi_file_write/batch_replace/
-// lsp_rename/file_ops/notebook_edit failures outside the high-effort
-// branch entirely (not even editCount), contradicting the module header
-// 'recent edit failures -> high'. Both consumers read the same table now.
 var errorRecoverySignals = sourceMutatingTools
 
-// paramFormatFailureMarkers identify edit failures that are routine
-// argument problems - the model just needs to re-read and retry with a
-// corrected old_text/new_text. #1836 case 2: the most common edit_file
-// failure (old_text not found) used to count as an error-recovery signal,
-// pushing the next 6 LLM turns to high effort and burning thinking tokens
-// on a simple retry - #1436-A excluded read-tool errors but not edit
-// param errors.
 var paramFormatFailureMarkers = []string{
 	"not found",
 	"no match",
@@ -125,8 +79,6 @@ var paramFormatFailureMarkers = []string{
 	"nothing to",
 }
 
-// isParamFormatEditFailure reports whether an edit-family error is a
-// param-format problem rather than a genuine execution failure.
 func isParamFormatEditFailure(toolName, lowerErrText string) bool {
 	if !errorRecoverySignals[toolName] || lowerErrText == "" {
 		return false
@@ -139,35 +91,26 @@ func isParamFormatEditFailure(toolName, lowerErrText string) bool {
 	return false
 }
 
-// effortEntry records a single tool interaction for effort classification.
 type effortEntry struct {
 	toolName string
 	isError  bool
-	// errText is a short prefix of a failed call's error content (#1836
-	// case 2: param-format failures like edit_file's old_text-not-found
-	// are routine retry material, not recovery puzzles).
-	errText string
+	errText  string
 }
 
-// adaptiveEffortState tracks recent tool interactions and recommends a
-// reasoning effort level for the next LLM turn.
 type adaptiveEffortState struct {
 	mu              sync.Mutex
-	entries         []effortEntry // ring of recent tool results
-	userOverrideSet bool          // true when user explicitly set effort via slash/config
+	entries         []effortEntry
+	userOverrideSet bool
 }
 
 func newAdaptiveEffortState() *adaptiveEffortState {
 	return &adaptiveEffortState{}
 }
 
-// recordToolResult appends a tool interaction to the sliding window.
 func (s *adaptiveEffortState) recordToolResult(toolName string, isError bool) {
 	s.recordToolResultErr(toolName, isError, "")
 }
 
-// recordToolResultErr is recordToolResult with the error text for
-// param-format classification (#1836 case 2).
 func (s *adaptiveEffortState) recordToolResultErr(toolName string, isError bool, errText string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -184,16 +127,6 @@ func (s *adaptiveEffortState) recordToolResultErr(toolName string, isError bool,
 	}
 }
 
-// newAdaptiveEffortStateDetectOverride builds the adapter and honors a
-// CONFIG-level effort already set on the provider. #1836 case 1: the yaml
-// path (`reasoning_effort: high`) sets the provider directly via the
-// registry and never passes through agent.SetReasoningEffort - the only
-// place userOverrideSet was set - so six consecutive read-only tools (a
-// normal exploration streak) silently downgraded turns the user had
-// explicitly configured to high, violating the module's own contract
-// ("user sets effort via /effort or config, that setting always wins and
-// the adapter stays dormant"). Probing the provider's already-set effort
-// restores the contract for the config path.
 func newAdaptiveEffortStateDetectOverride(p provider.Provider) *adaptiveEffortState {
 	s := newAdaptiveEffortState()
 	if p == nil {
@@ -207,33 +140,24 @@ func newAdaptiveEffortStateDetectOverride(p provider.Provider) *adaptiveEffortSt
 	return s
 }
 
-// setUserOverride marks that the user has explicitly set effort — the adapter
-// should stay dormant.
 func (s *adaptiveEffortState) setUserOverride(set bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.userOverrideSet = set
 }
 
-// hasUserOverride returns whether the user has explicitly set effort.
 func (s *adaptiveEffortState) hasUserOverride() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.userOverrideSet
 }
 
-// reset clears the window for a new user turn.
 func (s *adaptiveEffortState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = s.entries[:0]
 }
 
-// recommendedEffort analyzes recent tool interactions and returns the
-// recommended reasoning effort level for the next LLM turn.
-//
-// Returns "" (empty) when no adaptation is needed — the provider's default
-// applies. Returns "low", "medium", or "high" otherwise.
 func (s *adaptiveEffortState) recommendedEffort() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -245,20 +169,13 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 		return ""
 	}
 
-	// Count patterns in the window.
 	recentErrors := 0
 	editCount := 0
 	readOnlyCount := 0
 
 	for _, e := range s.entries {
 		if e.isError {
-			// #1436-A: any error used to bump effort to high - one read-only
-			// grep/LSP miss during exploration poisoned the next 6 turns into
-			// high-effort (cost/latency), directly contradicting the module's
-			// 'reduce cost and latency' charter. Only errors from tools the
-			// errorRecoverySignals set declares (edit-family retries - the
-			// module comment's 'recent EDIT failures -> high' intent that
-			// was never wired) count as recovery signals.
+
 			if errorRecoverySignals[e.toolName] && !isParamFormatEditFailure(e.toolName, e.errText) {
 				recentErrors++
 			}
@@ -271,39 +188,24 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 		}
 	}
 
-	// Decision priority:
-	// 1. Error recovery → high effort (the agent needs to think carefully
-	//    about what went wrong and how to fix it).
-	// 2. Active editing → medium effort (edits benefit from more reasoning
-	//    to avoid mistakes, but don't need the full thinking budget).
-	// 3. Pure exploration → low effort (reading/searching is routine; save
-	//    tokens and latency).
-	// 4. Mixed/unknown → empty (let the provider use its default).
-
 	if recentErrors > 0 {
 		return "high"
 	}
 	if editCount > 0 {
 		return "medium"
 	}
-	// If all recent tools were read-only, use low effort.
+
 	if readOnlyCount == len(s.entries) {
 		return "low"
 	}
 	return ""
 }
 
-// applyAdaptiveEffort checks whether adaptive effort should override the
-// provider's current effort for this turn, and applies it if so. Returns
-// the effort that was applied (or "" if no change was made) and the
-// previous effort so it can be restored.
-//
-// This is called before each streamChatResponse in the agent loop.
 func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 	if a.effortAdapter == nil {
 		return "", ""
 	}
-	// Skip if user has an explicit override.
+
 	if a.effortAdapter.hasUserOverride() {
 		return "", ""
 	}
@@ -313,7 +215,6 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 		return "", ""
 	}
 
-	// Get the provider's current effort so we can restore it after the call.
 	p, ok := a.provider.(interface {
 		ReasoningEffort() string
 	})
@@ -322,7 +223,6 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 	}
 	previous = p.ReasoningEffort()
 
-	// Only apply if the recommendation differs from the current setting.
 	if recommended == previous {
 		return "", previous
 	}
@@ -334,28 +234,17 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 	return "", ""
 }
 
-// restoreEffort restores the provider's reasoning effort to a previous value
-// after an adaptive adjustment.
 func (a *Agent) restoreEffort(previous string) {
-	// #1817 case 1: re-check the override flag at restore time. apply
-	// checked it before the call, but streamChatResponse runs for tens of
-	// seconds - a Ctrl+G in that window sets the user's explicit effort and
-	// parks the adapter; restoring the pre-apply value here would silently
-	// roll the user's fresh setting back to a stale one (flag says dormant,
-	// provider holds the old value).
+
 	if a.effortAdapter != nil && a.effortAdapter.hasUserOverride() {
 		debug.Log("adaptive-effort", "skip restore: user override landed during the call")
 		return
 	}
-	// previous=="" (provider had no explicit effort) is valid: clear back to
-	// "" so the provider returns to its default. The old early-return here
-	// made the restore branch unreachable on the apply path and leaked the
-	// userOverride flag set by the public setter (#356).
+
 	a.setReasoningEffortInternal(previous)
 	debug.Log("adaptive-effort", "restored effort to: %q", previous)
 }
 
-// effortLevelDisplayName returns a user-friendly name for the current effort.
 func effortLevelDisplayName(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "low":

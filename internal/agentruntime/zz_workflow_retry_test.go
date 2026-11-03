@@ -11,22 +11,14 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// wfRetryFake launches deterministic IDs per attempt so a RETRIED step (same
-// wf-<id> name, second Launch) can return a different outcome than the
-// first attempt - the shared wfFake cannot distinguish attempts.
 type wfRetryFake struct {
 	mu       sync.Mutex
 	launches int
-	// attempts maps launch name -> number of times launched.
 	attempts map[string]int
-	// outcomes maps name -> outcome per attempt index (0-based).
-	outcomes map[string][]string // "ok:<result>" or "fail"
-	// outcome maps agent id -> resolved terminal outcome.
-	outcome map[string]string
-	// tasks maps launch name -> task text (last launch wins).
-	tasks map[string]string
-	// running tracks the one-poll terminal flip like wfFake.
-	running map[string]bool
+	outcomes map[string][]string
+	outcome  map[string]string
+	tasks    map[string]string
+	running  map[string]bool
 }
 
 func newWfRetryFake() *wfRetryFake {
@@ -39,7 +31,6 @@ func newWfRetryFake() *wfRetryFake {
 	}
 }
 
-// set scripts the outcomes for a step name, in launch order.
 func (f *wfRetryFake) set(name string, outs ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -66,15 +57,12 @@ func (f *wfRetryFake) Launch(ctx context.Context, opts tool.LaunchOptions) (stri
 	if strings.Contains(opts.Name, "synthesis") {
 		outcome = "ok:SYNTH-OK"
 	}
-	_ = outcome // results derived on demand below via stored map
+	_ = outcome
 	f.outcome[id] = outcome
 	f.tasks[opts.Name] = opts.Task
 	f.running[id] = true
 	return id, "", nil
 }
-
-// outcome stores per-id terminal results.
-// (declared as map on struct via below field)
 
 func (f *wfRetryFake) Snapshot(id string) (subagent.Snapshot, bool) {
 	f.mu.Lock()
@@ -88,7 +76,7 @@ func (f *wfRetryFake) Snapshot(id string) (subagent.Snapshot, bool) {
 		return subagent.Snapshot{ID: id, Status: subagent.StatusFailed, Result: out}, true
 	}
 	if strings.HasPrefix(out, "REJECTED") {
-		// verifier-style first line surfaced as a completed worker result
+
 		return subagent.Snapshot{ID: id, Status: subagent.StatusCompleted, Result: out}, true
 	}
 	return subagent.Snapshot{ID: id, Status: subagent.StatusCompleted, Result: strings.TrimPrefix(out, "ok:")}, true
@@ -114,12 +102,9 @@ func (f *wfRetryFake) taskFor(name string) string {
 	return f.tasks[name]
 }
 
-// TestWorkflowStepRetryRecoversFromTransientFailure: a step whose first
-// worker fails and whose retry succeeds must complete and NOT poison its
-// downstream dependent (LLMCompiler task-fetching semantics).
 func TestWorkflowStepRetryRecoversFromTransientFailure(t *testing.T) {
 	f := newWfRetryFake()
-	// First attempt of the upstream step fails; the retry succeeds.
+
 	f.set("wf-upstream", "fail:LLM 503", "ok:UPSTREAM-OK")
 
 	spec := WorkflowSpec{
@@ -144,24 +129,21 @@ func TestWorkflowStepRetryRecoversFromTransientFailure(t *testing.T) {
 	if !strings.Contains(rep.Synthesis, "UPSTREAM-OK") && !strings.Contains(joined, "upstream") {
 		t.Fatalf("upstream result missing from synthesis:\n%s\n---\n%s", joined, rep.Synthesis)
 	}
-	// The dependent must NOT be blocked.
+
 	for _, ln := range rep.StepLines {
 		if strings.Contains(ln, "downstream") && strings.Contains(ln, "BLOCKED") {
 			t.Fatalf("downstream was poisoned despite retry:\n%s", joined)
 		}
 	}
-	// upstream launched twice, downstream once, synthesis once.
+
 	if got := f.totalLaunches(); got != 4 {
 		t.Fatalf("expected 4 launches (upstream x2 + downstream + synthesis), got %d:\n%s", got, joined)
 	}
 }
 
-// TestWorkflowRetryExhaustedFailsForReal: when the retry budget is
-// exhausted the step strikes for real (status failed in synthesis) -
-// the old one-strike behavior is preserved at the end of the budget.
 func TestWorkflowRetryExhaustedFailsForReal(t *testing.T) {
 	f := newWfRetryFake()
-	f.set("wf-flaky", "fail:always fails") // every attempt fails
+	f.set("wf-flaky", "fail:always fails")
 
 	spec := WorkflowSpec{
 		Steps: []WorkflowStep{
@@ -179,8 +161,7 @@ func TestWorkflowRetryExhaustedFailsForReal(t *testing.T) {
 	if strings.Count(joined, "retrying") != 1 {
 		t.Fatalf("budget 1 must not retry twice:\n%s", joined)
 	}
-	// Budget exhausted: the step's terminal failure must surface in the
-	// synthesizer's input, and the dependent still runs.
+
 	if got := f.launchesFor("wf-flaky"); got != 2 {
 		t.Fatalf("expected wf-flaky launched twice (initial + 1 retry), got %d", got)
 	}
@@ -192,7 +173,6 @@ func TestWorkflowRetryExhaustedFailsForReal(t *testing.T) {
 	}
 }
 
-// TestWorkflowRetriesValidation: out-of-range retries is rejected.
 func TestWorkflowRetriesValidation(t *testing.T) {
 	spec := WorkflowSpec{
 		Steps: []WorkflowStep{
@@ -209,9 +189,6 @@ func TestWorkflowRetriesValidation(t *testing.T) {
 	}
 }
 
-// TestWorkflowRetryDefaultZeroBehaviorUnchanged: Retries=0 keeps the old
-// one-strike semantics - a single failure strikes immediately (no retry
-// StepLine, exactly one launch of the failing step).
 func TestWorkflowRetryDefaultZeroBehaviorUnchanged(t *testing.T) {
 	f := newWfRetryFake()
 	f.set("wf-once", "fail:boom")

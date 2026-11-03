@@ -8,41 +8,10 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Premature success declaration detection.
-//
-// When an agent edits files and then declares success ("all tests pass",
-// "done", "fixed", "task complete") WITHOUT having actually run verification
-// (build, test, lint) after those edits, it's making an unverified success
-// claim. This is one of the most common and costly agent failure modes: the
-// agent believes its work is correct, reports completion, and the user
-// discovers breakage later.
-//
-// Research basis:
-//   - Epistemic Alignment paradigm (Chong et al., Dec 2025): agents should
-//     quantify confidence and avoid claiming knowledge they don't have.
-//   - "Phantom verification" patterns in coding agent evaluations (2025-2026):
-//     agents claim to have verified without actually doing so.
-//
-// This is distinct from:
-//   - phantom_verify: detects claiming a specific verification action that
-//     wasn't performed (e.g., "I ran the tests" when no test tool was called).
-//     This detector catches BROADER success claims ("done", "fixed") that
-//     imply correctness without naming a specific verification action.
-//   - truncated_completeness_fallacy: model stops generating due to output
-//     limits. This detector addresses the agent's JUDGMENT being wrong.
-//   - fulfillment_gate: checks task completion criteria. This detector is
-//     about the TIMING gap between edits and verification.
-
 const (
-	// prematureSuccessMaxFires caps guidance injections per run.
 	prematureSuccessMaxFires = 1
-
-	// verifyCommandPatterns are substrings that indicate a command is a
-	// verification action (build, test, lint, etc.).
-	// Checked against the run_command tool's command argument.
 )
 
-// verifyCmdPatterns are patterns for verification commands.
 var verifyCmdPatterns = []string{
 	"build", "test", "lint", "vet", "verify", "check", "compile",
 	"go test", "go build", "go vet", "npm test",
@@ -50,45 +19,30 @@ var verifyCmdPatterns = []string{
 	"dotnet test", "dotnet build",
 }
 
-// makeVerifyTargets is the whitelist of make targets that count as
-// verification (#350). Aligned with convergence_lock.go's precedent:
-// clean/fmt/tidy and other hygiene targets are NOT verification — a bare
-// "make " substring match previously counted `make clean` as verification
-// and silenced all subsequent success-claim warnings for the whole run.
 var makeVerifyTargets = map[string]bool{
 	"test": true, "tests": true, "verify": true, "ci": true, "build": true,
 	"lint": true, "check": true, "e2e": true, "validate": true, "integration": true,
-	"verify-ci": true, // this repo's canonical full verification target (#748)
+	"verify-ci": true,
 }
 
-// npmVerifyScripts is the whitelist of npm script names that count as
-// verification (#350). dev/start/serve/watch boot a service — they are
-// manual smoke checks at best, not verification.
 var npmVerifyScripts = map[string]bool{
 	"test": true, "tests": true, "build": true, "lint": true, "check": true,
 	"verify": true, "e2e": true, "ci": true, "typecheck": true, "validate": true,
 }
 
-// mvnVerifyPhases whitelists maven phases that count as verification (#350).
 var mvnVerifyPhases = map[string]bool{
 	"test": true, "verify": true, "validate": true, "check": true, "integration-test": true,
 }
 
-// gradleVerifyTasks whitelists gradle tasks that count as verification (#350).
 var gradleVerifyTasks = map[string]bool{
 	"test": true, "check": true, "verify": true, "build": true, "lint": true, "validate": true,
 	"connectedCheck": true, "integrationTest": true,
 }
 
-// cmakeVerifyTargets whitelists cmake invocations that count as
-// verification (#350). A bare "cmake " substring matched configure runs.
 var cmakeVerifyTargets = map[string]bool{
 	"--build": true, "--target": true,
 }
 
-// successClaimPatterns are regex patterns that match success declarations.
-// These are specifically phrased as ASSERTIONS of completion/correctness,
-// not conditional or future-tense references.
 var successClaimPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:all|the)?\s*tests?\s+(?:pass|passed|passing|succeed|succeeded|succeeding)\b`),
 	regexp.MustCompile(`(?i)\bbuild\s+(?:pass|passes|passed|passing|succeed|succeeds|succeeded)\b`),
@@ -99,41 +53,28 @@ var successClaimPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:everything|all)\s+(?:is|looks|seems|appears)\s+(?:good|correct|working|fine|passing)\b`),
 	regexp.MustCompile(`(?i)\bdone\s*[!.]\s*$`),
 	regexp.MustCompile(`(?i)\b(?:implementation|fix|change)\s+(?:is\s+)?(?:complete|finished|done|ready)\b`),
-	// #595: gerund completed-action claims — "After applying the fix, all
-	// tests pass" / "After running the tests, everything passes" / "Once
-	// applied, the fix resolves the issue" are present-tense assertions.
+
 	regexp.MustCompile(`(?i)\beverything\s+(?:passes|passed|works|working|succeeds|succeeded)\b`),
 	regexp.MustCompile(`(?i)\b(?:fix|patch|change)\s+(?:resolves|resolved|fixes|fixed)\b`),
 }
 
-// conditionalGuardWords prevent false positives - if these appear near the
-// success phrase, it's likely conditional/hypothetical, not a declaration.
 var conditionalGuardWords = []string{
 	"if ", "when ", "should ", "would ", "could ", "might ", "may ",
 	"need to ", "want to ", "going to ", "about to ",
 	"once ", "after ", "before ",
-	// #1675 case 2: negation and purpose markers - "no tests passed" /
-	// "0 tests passed" are honest FAILURE reports, not success claims;
-	// reading them as claims let the CRITICAL branch accuse a truthful
-	// report of contradicting a (different) failure.
+
 	"no ", "zero ", "none ", "0 ",
 	"make ",
 }
 
-// ciStatusVerdict classifies a ci_status tool result's bearing on
-// verification state (#1675 case 1).
 type ciStatusVerdict int
 
 const (
-	ciVerdictNone    ciStatusVerdict = iota // logs/list enumeration or unknown text
-	ciVerdictSuccess                        // "CI PASSED" / "✓ ... succeeded"
-	ciVerdictFailure                        // "CI FAILED" / "CI CANCELLED" / failed job/step lines
+	ciVerdictNone ciStatusVerdict = iota
+	ciVerdictSuccess
+	ciVerdictFailure
 )
 
-// ciStatusConclusion inspects the tool output the same way the tool formats
-// it (ci_status.go builds "CI PASSED for ...", "CI FAILED for ...",
-// "CI CANCELLED for ...", "CI IN PROGRESS for ..." plus job/step failure
-// lines for action=logs).
 func ciStatusConclusion(content string) ciStatusVerdict {
 	head := content
 	if len(head) > 512 {
@@ -146,59 +87,42 @@ func ciStatusConclusion(content string) ciStatusVerdict {
 		strings.Contains(head, "(FAILED)") || strings.Contains(head, "Step #") && strings.Contains(head, "FAILED") {
 		return ciVerdictFailure
 	}
-	return ciVerdictNone // logs bodies, list tables, in-progress, unknown
+	return ciVerdictNone
 }
 
-// verifyTools are tool names that constitute verification actions.
-// Aligned with false_premise_check.go fpIsBuildTestTool (#595).
 var verifyTools = map[string]bool{
-	"run_command":         true, // checked further via command argument
-	"start_command":       true, // checked further via command argument
+	"run_command":         true,
+	"start_command":       true,
 	"wait_command":        true,
 	"task_output":         true,
 	"read_command_output": true,
 	"ci_status":           true,
 }
 
-// psEditTools are tool names that modify files (require re-verification).
-// Aliased to the canonical sourceMutatingTools superset (#738).
 var psEditTools = sourceMutatingTools
 
-// psJobRecord captures what agent-side bookkeeping knows about one
-// background command job started via start_command (#1153): whether its
-// originating command qualifies as a verification action, and the raw
-// command text for failure attribution.
 type psJobRecord struct {
 	isVerify bool
 	cmd      string
-	// subAgent marks a #4011 spawn_agent registration: its task_output
-	// result carries no "Status:" snapshot header, so the consumer grades
-	// the terminal outcome via the tool call's IsError instead.
 	subAgent bool
 }
 
-// psMaxTrackedJobs caps the job-id registry so long sessions cannot grow it
-// without bound (#1153). Oldest entries are evicted arbitrarily.
 const psMaxTrackedJobs = 64
 
-// prematureSuccessState tracks edits and verification across a run.
 type prematureSuccessState struct {
 	mu                  sync.Mutex
-	backgroundJobs      map[string]psJobRecord // start_command registry keyed by job_id (#1153)
-	editsSinceVerify    int                    // edits made since last verification
-	everVerified        bool                   // has any verification been done this run?
-	lastVerifyFailed    bool                   // last verification command errored (#350)
+	backgroundJobs      map[string]psJobRecord
+	editsSinceVerify    int
+	everVerified        bool
+	lastVerifyFailed    bool
 	lastVerifyFailedCmd string
-	guidanceFired       int // how many times guidance was injected
+	guidanceFired       int
 }
 
 func newPrematureSuccessState() *prematureSuccessState {
 	return &prematureSuccessState{backgroundJobs: make(map[string]psJobRecord)}
 }
 
-// psExtractJobID parses the "Job ID:" header emitted by the tool layer's
-// formatCommandJobSnapshot rendering, linking a start_command RESULT to its
-// registry key (#1153). Returns "" when absent.
 func psExtractJobID(content string) string {
 	for _, ln := range strings.Split(content, "\n") {
 		ln = strings.TrimSpace(ln)
@@ -209,9 +133,6 @@ func psExtractJobID(content string) string {
 	return ""
 }
 
-// psExtractAgentID parses the "Sub-agent spawned with ID:" header emitted by
-// the spawn_agent tool result, linking the spawn RESULT to a registry key so
-// a later task_output lookup can be attributed (#4011). Returns "" when absent.
 func psExtractAgentID(content string) string {
 	for _, ln := range strings.Split(content, "\n") {
 		ln = strings.TrimSpace(ln)
@@ -222,8 +143,6 @@ func psExtractAgentID(content string) string {
 	return ""
 }
 
-// psParseJobStatus returns the lowercased first token of the "Status:"
-// header of a command-job snapshot rendering, "" when absent (#1153).
 func psParseJobStatus(content string) string {
 	for _, ln := range strings.Split(content, "\n") {
 		ln = strings.TrimSpace(ln)
@@ -239,11 +158,6 @@ func psParseJobStatus(content string) string {
 	return ""
 }
 
-// psTerminalVerifyOutcome classifies snapshot status against the underlying
-// JOB result (#1153): passed is true only for "completed"; failed /
-// cancelled / timed_out are explicit failures. The tools' IsError describes
-// whether the wait/read ACTION succeeded, not the job itself, so running
-// and unknown values are indeterminate and callers change nothing.
 func psTerminalVerifyOutcome(status string) (terminal bool, passed bool) {
 	switch status {
 	case "completed":
@@ -255,8 +169,6 @@ func psTerminalVerifyOutcome(status string) (terminal bool, passed bool) {
 	}
 }
 
-// psMarkVerifiedLocked records a passing verification outcome (#350/#595).
-// Caller must hold p.mu.
 func (p *prematureSuccessState) psMarkVerifiedLocked() {
 	p.editsSinceVerify = 0
 	p.everVerified = true
@@ -264,11 +176,6 @@ func (p *prematureSuccessState) psMarkVerifiedLocked() {
 	p.lastVerifyFailedCmd = ""
 }
 
-// psJobIsVerify reports whether the background job was registered as a
-// verification job (#1773 case 4): the correction-spiral wiring needs it
-// to attribute wait_command/read_command_output results - the final
-// outcome of a long test run is exactly the evidence recordVerifyResult
-// wants, and it used to flow past untouched.
 func (p *prematureSuccessState) psJobIsVerify(jobID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -276,12 +183,6 @@ func (p *prematureSuccessState) psJobIsVerify(jobID string) bool {
 	return ok && rec.isVerify
 }
 
-// psJobCommand returns the command a background job was launched with
-// (#4889): build-idempotency's clearing side needs the ORIGINAL command
-// to key markBuildFailed when the failure surfaces asynchronously through
-// wait_command/read_command_output - the start_command launch itself
-// records the anchor, but the exit status only arrives later on these
-// polling channels.
 func (p *prematureSuccessState) psJobCommand(jobID string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -289,9 +190,6 @@ func (p *prematureSuccessState) psJobCommand(jobID string) (string, bool) {
 	return rec.cmd, ok
 }
 
-// psRegisterJobLocked adds a freshly started background job to the registry
-// keyed by job_id so later waits/reads can be attributed (#1153). Registry
-// size is capped at psMaxTrackedJobs.
 func (p *prematureSuccessState) psRegisterJobLocked(jobID, cmd string) {
 	if p.backgroundJobs == nil {
 		p.backgroundJobs = make(map[string]psJobRecord)
@@ -315,21 +213,6 @@ func (p *prematureSuccessState) reset() {
 	p.guidanceFired = 0
 }
 
-// recordToolCall updates state based on tool calls. isError is the tool
-// result's IsError flag (#350): a FAILED verification must not clear the
-// edit counter - a subsequent success claim would contradict an observed
-// failure, which is worse than claiming success without verifying at all.
-// resultContent is the tool result text, used to correlate background jobs
-// (#1153).
-//
-// Background-job semantics (#1153): start_command only REGISTERS a job
-// (launching is not an outcome, mirroring correctionSpiral excluding
-// start_command from recordVerifyResult); wait_command / read_command_output
-// / task_output are attributed through their job_id, and grading comes from
-// the rendered job Status rather than IsError, which describes the action.
-// #4011: verify-type spawn_agent delegates register the same way (their
-// agent_id is a task_output task ID); sub-agent task_output results carry
-// no rendered Status snapshot, so those records are graded via IsError.
 func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]interface{}, isError bool, resultContent string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -342,20 +225,14 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 	switch {
 	case toolName == "run_command":
 		cmd, _ := args["command"].(string)
-		// Shell commands can rewrite sources without any edit tool
-		// (sed -i, gofmt -w, go generate, redirections). Four sibling
-		// consumers already count that via shellMutatesSources
-		// (build_idempotency, command cache/speculator/memo, reverify,
-		// user_edit_ratchet); without it here, a mutating command left
-		// editsSinceVerify at 0 and the premature-success check short-
-		// circuited - "sed -i ... ; done" passed silently.
+
 		if shellMutatesSources(cmd) {
 			p.editsSinceVerify++
 		}
 		if !psIsVerifyCommand(cmd) {
 			return
 		}
-		// For run_command, IsError reflects the command's own failure.
+
 		if isError {
 			p.lastVerifyFailed = true
 			p.lastVerifyFailedCmd = cmd
@@ -364,10 +241,7 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		p.psMarkVerifiedLocked()
 
 	case toolName == "start_command":
-		// Launching never counts as verifying or failing (#1153): keep the
-		// counters untouched, exactly like correctionSpiral excludes
-		// start_command from recordVerifyResult. Only register the job so a
-		// later wait/read can be attributed.
+
 		if isError {
 			return
 		}
@@ -379,13 +253,7 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		p.psRegisterJobLocked(jobID, cmd)
 
 	case toolName == "spawn_agent":
-		// #4011: a one-shot sub-agent spawned to run a verification task is
-		// the sub-agent equivalent of a start_command verify job. Register
-		// the returned agent_id in the same #1153 registry so the later
-		// task_output lookup (task_output accepts sub-agent task IDs
-		// natively) attributes the outcome instead of silently missing.
-		// Launching never counts as verifying (#1153 parity with the
-		// start_command branch above).
+
 		if isError {
 			return
 		}
@@ -398,8 +266,7 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 			return
 		}
 		p.psRegisterJobLocked(agentID, taskDesc)
-		// Mark the record sub-agent so the task_output consumer grades it
-		// via IsError instead of the command-job Status header (#4011).
+
 		if rec, ok := p.backgroundJobs[agentID]; ok {
 			rec.subAgent = true
 			p.backgroundJobs[agentID] = rec
@@ -412,19 +279,12 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		}
 		rec, tracked := p.backgroundJobs[jobID]
 		if !tracked || !rec.isVerify {
-			// An unregistered or non-verify job finishing says nothing about
-			// the task under development (#1153): conservatively leave
-			// editsSinceVerify and failure markers exactly as they are.
+
 			return
 		}
 		terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(resultContent))
 		if !terminal {
-			// Sub-agent task IDs (#4011): task_output's sub-agent results
-			// carry no command-job "Status:" snapshot — the tool layer
-			// reflects the sub-agent terminal outcome in IsError (the
-			// raw sub-agent output has no parseable status header by
-			// design). Fall back to that channel so a completed
-			// verification run is graded instead of silently skipped.
+
 			if rec.subAgent {
 				delete(p.backgroundJobs, jobID)
 				if isError {
@@ -438,10 +298,10 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 				}
 				p.psMarkVerifiedLocked()
 			}
-			// Still running (poll timeout) or unparsable status (#1153).
+
 			return
 		}
-		// Consumed once terminal so repeated waits do not re-grade.
+
 		delete(p.backgroundJobs, jobID)
 		if passed {
 			p.psMarkVerifiedLocked()
@@ -454,20 +314,13 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 			p.lastVerifyFailedCmd = "background job " + jobID
 		}
 
-	case verifyTools[toolName]: // ci_status and future members
+	case verifyTools[toolName]:
 		if isError {
 			p.lastVerifyFailed = true
 			p.lastVerifyFailedCmd = ""
 			return
 		}
-		// #1675 case 1: ci_status succeeding only means the API call worked -
-		// the run itself may be FAILED/CANCELLED/IN_PROGRESS (and
-		// action=logs/list are read-only enumerations, not verification at
-		// all). The system prompt's own CI-failure triage flow ("use
-		// ci_status action='logs' to read failure details") must NOT clear
-		// the failure memory: only a SUCCESS/passed conclusion counts as
-		// verification; explicit failure records as such; anything else
-		// (logs/list/in-progress) leaves the previous state untouched.
+
 		if toolName == "ci_status" {
 			switch ciStatusConclusion(resultContent) {
 			case ciVerdictSuccess:
@@ -482,27 +335,14 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 	}
 }
 
-// psIsVerifyCommand checks if a command string is a verification action.
-// Single-word patterns use token matching (avoids "check" matching
-// "checkout"); build-system invocations (make/npm run/mvn/gradle/cmake) use
-// target whitelists so hygiene/service commands (make clean, npm run dev)
-// do NOT count as verification (#350).
-// psStripCdPrefix removes leading `cd <path>` segments (with their joining
-// `&&`) from a token stream (#3481). `cd /repo && make verify-ci` and the
-// multi-line flattened form `cd /repo\nmake verify-ci` left `cd` as
-// tokens[0], so psBuildSystemVerify never dispatched on the real build
-// command and hyphen/underscore variants never reached segment-first
-// position - the verify step went unrecognized and the premature-success
-// detector fired on a run that HAD verified. Only leading segments are
-// stripped: cd in the middle of a pipeline is unrelated.
 func psStripCdPrefix(tokens []string) []string {
 	for len(tokens) > 0 && tokens[0] == "cd" {
 		tokens = tokens[1:]
-		// Drop the path argument if present (stop at a joining &&).
+
 		if len(tokens) > 0 && tokens[0] != "&&" {
 			tokens = tokens[1:]
 		}
-		// Drop the joining && so the next real command becomes tokens[0].
+
 		if len(tokens) > 0 && tokens[0] == "&&" {
 			tokens = tokens[1:]
 		}
@@ -521,22 +361,16 @@ func psIsVerifyCommand(cmd string) bool {
 		return false
 	}
 
-	// Build-system dispatch with target whitelists (#350).
 	if isVerify, handled := psBuildSystemVerify(tokens); handled {
 		return isVerify
 	}
 
-	// Generic patterns: phrase patterns use command-position match
-	// (issue #593 P4) to avoid false positives like `grep -n "go test" Makefile`;
-	// single-word patterns only match in COMMAND position (#553).
 	for _, pat := range verifyCmdPatterns {
 		if strings.Contains(pat, " ") {
-			// Multi-word phrases must match at command position, not anywhere
-			// in the string. Use psCommandPositionTokens for the check.
+
 			cmdPosTokens := psCommandPositionTokens(tokens)
 			for t := range cmdPosTokens {
-				// Check if the multi-word pattern matches at this token position
-				// by reconstructing the substring starting from this token.
+
 				if i := indexOfToken(tokens, t); i >= 0 {
 					if i+len(strings.Fields(pat)) <= len(tokens) {
 						substr := strings.Join(tokens[i:i+len(strings.Fields(pat))], " ")
@@ -548,21 +382,12 @@ func psIsVerifyCommand(cmd string) bool {
 			}
 			continue
 		}
-		// #553: a verify verb token (test/build/lint/verify/check/...) is only a
-		// verification action when it appears in COMMAND position — the first
-		// token of a pipeline segment, or the subcommand following a known
-		// runner (go/cargo/python -m/...). Bare token matching at ANY position
-		// let `grep -n test main.go` ("test" is a filename argument) arm
-		// everVerified and silence the detector for the entire run — the same
-		// consequence #483 fixed for hyphen-prefixed variants, but the exact
-		// bare-token match was left behind.
+
 		for t := range psCommandPositionTokens(tokens) {
 			if t == pat {
 				return true
 			}
-			// Hyphen/underscore variants (check-all, test-flight) are only
-			// trusted at SEGMENT-FIRST position — after a runner they are
-			// indistinguishable from script filenames (`go run lint_script.go`).
+
 			if psSegmentFirstTokens(tokens)[t] && (strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_")) {
 				return true
 			}
@@ -571,17 +396,10 @@ func psIsVerifyCommand(cmd string) bool {
 	return false
 }
 
-// psBuildSystemVerify applies the build-system target whitelists (#350) to
-// a tokenized command. It reports (isVerify, handled): handled=false means
-// tokens[0] is not a build-system dispatcher and the caller should fall
-// through to generic pattern matching. Hygiene/service targets (make clean,
-// npm run dev) are NOT verification — a bare substring match previously
-// counted them and silenced the detector for the whole run.
 func psBuildSystemVerify(tokens []string) (isVerify, handled bool) {
 	switch tokens[0] {
 	case "make", "gmake", "mingw32-make":
-		// Only whitelisted targets count; `make` with no explicit target runs
-		// the default goal (often `all`/bootstrap) which is not verification.
+
 		for _, t := range tokens[1:] {
 			if strings.HasPrefix(t, "-") || strings.Contains(t, "=") {
 				continue
@@ -592,7 +410,7 @@ func psBuildSystemVerify(tokens []string) (isVerify, handled bool) {
 		}
 		return false, true
 	case "npm", "yarn", "pnpm", "bun":
-		// npm test / npm run <verify-script> count; dev/start/serve do not.
+
 		if len(tokens) >= 2 {
 			script := ""
 			if tokens[1] == "run" && len(tokens) >= 3 {
@@ -630,23 +448,17 @@ func psBuildSystemVerify(tokens []string) (isVerify, handled bool) {
 	return false, false
 }
 
-// psRunnerPrefixes are commands whose NEXT token is a subcommand verb in
-// command position ("go test", "cargo build", "flutter analyze", "uv run
-// pytest"). Build-system dispatchers (make/npm/mvn/gradle/cmake) are included
-// so their targets are command-position inside compound commands
-// ("cd pkg; make test"), where the tokens[0] switch cannot see them.
 var psRunnerPrefixes = map[string]bool{
 	"go": true, "cargo": true, "uv": true, "poetry": true, "npx": true,
 	"bunx": true, "dotnet": true, "deno": true, "ruby": true, "bundle": true,
 	"flutter": true, "dart": true, "python": true, "python3": true,
-	"run":  true, // uv/poetry/deno run <script> — the script is the real command
+	"run":  true,
 	"make": true, "gmake": true, "mingw32-make": true,
 	"npm": true, "yarn": true, "pnpm": true, "bun": true,
 	"mvn": true, "mvnw": true, "./mvnw": true, "gradle": true, "gradlew": true, "./gradlew": true,
 	"cmake": true,
 }
 
-// indexOfToken returns the index of token in the tokens slice, or -1 if not found.
 func indexOfToken(tokens []string, token string) int {
 	for i, t := range tokens {
 		if t == token {
@@ -656,11 +468,6 @@ func indexOfToken(tokens []string, token string) int {
 	return -1
 }
 
-// psSegmentFirstTokens returns the tokens that occupy the FIRST position of
-// a pipeline/list segment (the tokens[0]-equivalent for each segment). Used
-// for the more permissive hyphen-variant matching: a bare "check-all" or
-// "test-flight" as the command itself is a verification verb, but the same
-// string at a non-first position is almost always a file/dir name.
 func psSegmentFirstTokens(tokens []string) map[string]bool {
 	cmds := make(map[string]bool)
 	segFirst := true
@@ -677,13 +484,6 @@ func psSegmentFirstTokens(tokens []string) map[string]bool {
 	return cmds
 }
 
-// psCommandPositionTokens collects all tokens that occupy COMMAND position
-// in a tokenized shell command (#553): the first token of each pipeline /
-// list segment (split on |, ||, &&, ;) plus the token immediately following
-// a known runner prefix (go, cargo, ...) or a "-m" module flag
-// ("python -m pytest"). Tokens at argument positions (file names, flags)
-// are excluded so filename arguments like `grep -n test main.go` cannot
-// masquerade as verification verbs.
 func psCommandPositionTokens(tokens []string) map[string]bool {
 	cmds := make(map[string]bool)
 	segFirst := true
@@ -709,9 +509,6 @@ func psCommandPositionTokens(tokens []string) map[string]bool {
 	return cmds
 }
 
-// checkSuccessClaim scans assistant text for success declarations and returns
-// guidance text if the claim is unverified (edits were made without subsequent
-// verification). Returns "" if no guidance needed.
 func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -720,22 +517,17 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 		return ""
 	}
 
-	// Must have unverified edits for the claim to be premature.
 	if p.editsSinceVerify == 0 {
 		return ""
 	}
 
-	// Scan for success claim patterns.
 	claimFound := false
 	for _, re := range successClaimPatterns {
 		loc := re.FindStringIndex(assistantText)
 		if loc == nil {
 			continue
 		}
-		// Check for conditional guard words near the match (within 40 chars before).
-		// Exception (#595): "after" and "once" are only guard words when followed
-		// by incomplete verb forms (participles, future tense). Past-tense assertions
-		// like "After applying the fix, all tests pass" are legitimate claims.
+
 		start := loc[0] - 40
 		if start < 0 {
 			start = 0
@@ -747,12 +539,7 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 			if idx == -1 {
 				continue
 			}
-			// For "once " and "after ", only genuinely incomplete/future forms
-			// guard the claim (#595). A gerund + object ("applying the fix",
-			// "running the tests") or a participle ("once applied") denotes a
-			// COMPLETED action, so the claim stands. In-progress/future markers
-			// — "will ", "going to", "pending", "now" right after the guard
-			// word ("After applying now...") — keep the guard.
+
 			if gw == "once " || gw == "after " {
 				afterGuard := strings.ToLower(contextBefore[idx+len(gw):])
 				for _, marker := range []string{"will ", "going to", "pending", "now"} {
@@ -764,7 +551,7 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 				if guarded {
 					break
 				}
-				// Completed-action phrasing is NOT a guard.
+
 				continue
 			}
 			guarded = true
@@ -793,8 +580,7 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 		"3. Only declare success after verification passes with no errors",
 	)
 	if p.lastVerifyFailed {
-		// Stronger contradiction warning (#350): the claim directly contradicts
-		// a verification that just FAILED, which is worse than no verification.
+
 		cmdHint := p.lastVerifyFailedCmd
 		if cmdHint == "" {
 			cmdHint = "(verification command)"

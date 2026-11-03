@@ -7,9 +7,6 @@ import (
 	"syscall"
 )
 
-// configureVerifyCommand sets up process-group isolation so that on
-// timeout we can kill the entire group, preventing orphaned children
-// from keeping stdout/stderr pipes open.
 func configureVerifyCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

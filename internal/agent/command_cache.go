@@ -12,46 +12,20 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Deterministic command result caching.
-//
-// Research basis: Claude Code, Cursor, and Aider all avoid re-running
-// build/test commands when source files haven't changed since the last
-// execution. An agent commonly re-runs `make verify-ci` or `go build ./...`
-// 2-5 times per session, each taking 10-60s. Without caching, every
-// redundant re-run wastes wall-clock time and API iterations.
-//
-// This cache stores results of build/test/verify commands keyed by
-// (command string + working directory). It is invalidated wholesale when
-// ANY file is edited (same invalidation trigger as the speculator and
-// memoize caches). Only commands matching known build/test patterns are
-// cached — network commands, file-modifying commands, and interactive
-// commands are never cached.
-//
-// Safety guarantees:
-//   - First execution always runs and populates the cache.
-//   - Any file edit invalidates ALL cached commands.
-//   - Only deterministic build/test/lint commands are cached.
-//   - Cache entries expire after maxCommandCacheAge to avoid very stale results.
-//   - Cached results are annotated so the model knows it's reused output.
-
 var (
-	// maxCommandCacheAge bounds how long a cached result is considered valid.
-	maxCommandCacheAge = 10 * time.Minute
-	// maxCommandCacheEntries prevents unbounded growth in long autopilot sessions.
+	maxCommandCacheAge     = 10 * time.Minute
 	maxCommandCacheEntries = 32
 )
 
-// commandCache stores results of deterministic build/test commands to skip
-// redundant re-execution when no source files have changed.
 type commandCache struct {
 	mu      sync.Mutex
 	entries map[string]*commandCacheEntry
-	editGen int64 // incremented on every file edit
+	editGen int64
 }
 
 type commandCacheEntry struct {
 	result   tool.Result
-	editGen  int64 // edit generation when stored
+	editGen  int64
 	storedAt time.Time
 }
 
@@ -65,7 +39,6 @@ func cmdCacheKey(command, workDir string) string {
 	return workDir + "\x00" + command
 }
 
-// invalidate clears all cached entries. Called on any file edit.
 func (cc *commandCache) invalidate() {
 	cc.mu.Lock()
 	cc.entries = make(map[string]*commandCacheEntry)
@@ -80,28 +53,18 @@ func (cc *commandCache) reset() {
 	cc.mu.Unlock()
 }
 
-// isCacheableCommand returns true for deterministic build/test/lint commands
-// that are safe to cache. Non-deterministic commands (network, file I/O,
-// interactive) are excluded.
 func isCacheableCommand(command string) bool {
-	// #1530: strip the mandated '# ' activity-comment line FIRST - the old
-	// check keyed on the raw string, so conforming commands were almost
-	// never cached while `# note\n<mutator>; make test` slipped the scan.
+
 	cmd := strings.TrimSpace(stripLeadingShellComment(command))
 	if cmd == "" {
 		return false
 	}
-	// #1443-A + #1530: split on EVERY sequencing separator (&&, ||, ;,
-	// newline) - the &&-only split let `go test ./... ; git checkout .`
-	// bypass the exclusion scan (#1443 revived) - and require every
-	// segment to pass both the exclusion scan and the cacheable whitelist
-	// (a cached `make deploy && make test` replayed the deploy).
+
 	segments := splitShellSegments(cmd)
 	if len(segments) == 0 {
 		return false
 	}
 
-	// Exclude commands that modify state, touch the network, or are interactive.
 	excludePrefixes := []string{
 		"rm ", "mv ", "cp ", "touch ", "mkdir ", "chmod ", "chown ",
 		"curl ", "wget ", "scp ", "rsync ", "ssh ", "ftp ",
@@ -114,12 +77,7 @@ func isCacheableCommand(command string) bool {
 		"brew ", "apt ", "yum ",
 	}
 	for _, seg := range segments {
-		// #1717: cacheability requires the result to depend ONLY on the
-		// files (invalidated on edit) and the fixed segment text. Four
-		// substitution/background forms passed the old three-token scan:
-		// $() and backticks re-evaluate per run (a cached replay skips the
-		// substitution and returns stale output), `<` feeds from files the
-		// cache never watches, and & returns a transient shell-job echo.
+
 		if strings.ContainsAny(seg, "`<>&|") || strings.Contains(seg, "$(") {
 			return false
 		}
@@ -130,21 +88,10 @@ func isCacheableCommand(command string) bool {
 		}
 	}
 
-	// Whitelist of cacheable command prefixes, applied to EVERY segment.
-	// #1443-A: 'make ' matched ANY target (make deploy / make
-	// release-publish cached - repeat deploys silently swallowed, against
-	// the function's own 'deterministic build/test/lint' charter) and
-	// 'go run -tags' executes arbitrary programs. #1530: bare `make` no
-	// longer caches either - it means the Makefile's FIRST target, which
-	// is deploy-first in real projects.
 	cacheablePrefixes := []string{
 		"make build", "make test", "make lint", "make check", "make verify", "make ci",
 		"make\tbuild", "make\ttest", "make\tlint", "make\tcheck", "make\tverify", "make\tci",
-		// #2655: "go fmt" removed - a dead entry since #1028: every `go fmt`
-		// run is classified a source mutation, so its own put (agent.go)
-		// is invalidated in the same iteration and the entry can never hit.
-		// A file-writing command also violates the "deterministic
-		// build/test/lint" charter (cf. excluded `go generate`, `npm install`).
+
 		"go build", "go test", "go vet", "go check", "go lint",
 		"npm test", "npm run test", "npm run build", "npm run lint", "npm run check",
 		"npm run verify", "npm run typecheck", "npm run type-check",
@@ -167,10 +114,6 @@ func isCacheableCommand(command string) bool {
 	return true
 }
 
-// splitShellSegments splits a shell command on every sequencing separator
-// (&&, ||, ;, newline), trims each segment, and strips leading positional
-// `cd <dir>` clauses - cd only relocates, it must not exempt what follows
-// in the same segment (#1530-D: `cd /repo; rm -rf tmp`).
 func splitShellSegments(cmd string) []string {
 	raw := strings.FieldsFunc(cmd, func(r rune) bool { return r == '\n' || r == ';' })
 	var out []string
@@ -220,7 +163,6 @@ func isCacheableSegment(seg string, prefixes []string) bool {
 	return false
 }
 
-// parseRunCommandArgs extracts the command string from a run_command tool call.
 func parseRunCommandArgs(args json.RawMessage) (command, workDir string) {
 	var parsed struct {
 		Command    string `json:"command"`
@@ -232,8 +174,6 @@ func parseRunCommandArgs(args json.RawMessage) (command, workDir string) {
 	return parsed.Command, parsed.WorkingDir
 }
 
-// get returns a cached result if the command is cacheable, was previously
-// executed, and no files have been edited since. Returns (zero, false) otherwise.
 func (cc *commandCache) get(command, workDir string) (tool.Result, bool) {
 	if !isCacheableCommand(command) {
 		return tool.Result{}, false
@@ -246,18 +186,17 @@ func (cc *commandCache) get(command, workDir string) (tool.Result, bool) {
 	if !ok || entry == nil {
 		return tool.Result{}, false
 	}
-	// Check edit generation: if files changed, the cache is stale.
+
 	if entry.editGen != gen {
 		return tool.Result{}, false
 	}
-	// Check age.
+
 	if time.Since(entry.storedAt) > maxCommandCacheAge {
 		return tool.Result{}, false
 	}
 	return entry.result, true
 }
 
-// put stores a command result in the cache. Only called for cacheable commands.
 func (cc *commandCache) put(command, workDir string, result tool.Result) {
 	if !isCacheableCommand(command) {
 		return
@@ -266,7 +205,6 @@ func (cc *commandCache) put(command, workDir string, result tool.Result) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 
-	// Enforce max entries with simple eviction of the oldest entry.
 	if len(cc.entries) >= maxCommandCacheEntries {
 		var oldestKey string
 		var oldestTime time.Time
@@ -286,9 +224,6 @@ func (cc *commandCache) put(command, workDir string, result tool.Result) {
 	}
 }
 
-// checkCommandCache is called before executing run_command. If the result is
-// cached and valid, it returns the cached result with an annotation.
-// Otherwise it returns false and the caller should execute normally.
 func (a *Agent) checkCommandCache(name string, args []byte) (tool.Result, bool) {
 	if name != "run_command" {
 		return tool.Result{}, false
@@ -310,16 +245,11 @@ func (a *Agent) checkCommandCache(name string, args []byte) (tool.Result, bool) 
 	return annotated, true
 }
 
-// storeCommandResult caches a run_command result if the command is cacheable.
 func (a *Agent) storeCommandResult(name string, args []byte, result tool.Result) {
 	if name != "run_command" {
 		return
 	}
-	// #1717: a failed execution (timeout, killed, flaky infra) must not
-	// enter the cache - replays returned the stale failure verbatim with
-	// no [cached] annotation, so a one-off timeout flake masqueraded as a
-	// fresh failure for the full 10-minute TTL and steered later build/
-	// fix decisions. Only successes are deterministic by definition.
+
 	if result.IsError {
 		return
 	}

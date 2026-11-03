@@ -44,11 +44,6 @@ func initTrialRepo(t *testing.T) string {
 	return dir
 }
 
-// trialStubRunner fakes a trial sub-agent: it writes a marker file and commits
-// inside the worktree named in the prompt, unless the prompt contains the
-// "fail-now" sentinel, in which case it errors like a stuck trial would.
-// The "dirty-trial" sentinel skips the commit (#2795 shape: verify-passed
-// work left uncommitted in the worktree).
 type trialStubRunner struct{}
 
 func (r *trialStubRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
@@ -91,8 +86,6 @@ func trialStubFactory(provider.Provider, interface{}, string, int) subagent.Agen
 	return &trialStubRunner{}
 }
 
-// trialStubProvider is a minimal provider.Provider; the factory stub never
-// calls it, so every method is a no-op.
 type trialStubProvider struct{}
 
 func (trialStubProvider) Name() string              { return "stub" }
@@ -195,8 +188,7 @@ func TestTrialForkUnbornRepo(t *testing.T) {
 
 func TestTrialForkRunSelectsWinner(t *testing.T) {
 	root := initTrialRepo(t)
-	// OnUsage is wired but never fires with the stub runner (no real LLM
-	// traffic); it must simply not panic.
+
 	tl := newTrialTool(root, func(provider.TokenUsage) {})
 
 	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
@@ -221,12 +213,11 @@ func TestTrialForkRunSelectsWinner(t *testing.T) {
 		t.Fatalf("expected non-destructive apply hint:\n%s", res.Content)
 	}
 
-	// Winner worktree kept, loser worktree removed, both branches intact.
 	out, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("worktree list: %v: %s", err, out)
 	}
-	if n := strings.Count(string(out), "worktree "); n != 2 { // main + winner
+	if n := strings.Count(string(out), "worktree "); n != 2 {
 		t.Fatalf("expected 2 worktrees (main + winner), got %d:\n%s", n, out)
 	}
 	branches, err := exec.Command("git", "-C", root, "branch", "--format=%(refname:short)").CombinedOutput()
@@ -243,8 +234,6 @@ func TestTrialForkKeepsVerifyPassedUncommittedWinner(t *testing.T) {
 	root := initTrialRepo(t)
 	tl := newTrialTool(root, func(provider.TokenUsage) {})
 
-	// One uncommitted-but-verify-passed trial vs one hard failure: the dirty
-	// trial must win on VerifyPass (100 pts) and be kept despite Commits==0.
 	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
 		Goal:           "add a marker file",
 		Strategies:     []string{"dirty-trial skip-commit", "fail-now"},
@@ -264,17 +253,14 @@ func TestTrialForkKeepsVerifyPassedUncommittedWinner(t *testing.T) {
 		t.Fatalf("expected empty-adopt warning for uncommitted winner:\n%s", res.Content)
 	}
 
-	// #2795: the winner worktree (with its uncommitted TRIAL_MARKER) must
-	// survive cleanupWorktrees instead of being force-deleted.
 	out, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("worktree list: %v: %s", err, out)
 	}
-	if n := strings.Count(string(out), "worktree "); n != 2 { // main + kept winner
+	if n := strings.Count(string(out), "worktree "); n != 2 {
 		t.Fatalf("expected 2 worktrees (main + kept winner), got %d:\n%s", n, out)
 	}
-	// git may report the /private-prefixed realpath on macOS; normalize
-	// before comparing against root.
+
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		realRoot = root
@@ -315,7 +301,7 @@ func TestTrialForkRunAllFailed(t *testing.T) {
 	if !strings.Contains(res.Content, "status: failed") {
 		t.Fatalf("expected failed statuses in report:\n%s", res.Content)
 	}
-	// No trial produced work: all worktrees must be cleaned up.
+
 	out, _ := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
 	if n := strings.Count(string(out), "worktree "); n != 1 {
 		t.Fatalf("expected only the main worktree to remain, got %d:\n%s", n, out)
@@ -323,7 +309,7 @@ func TestTrialForkRunAllFailed(t *testing.T) {
 }
 
 func TestTrialSlug(t *testing.T) {
-	// Explicit checks:
+
 	if got := trialSlug("Direct Approach!", 1, "42"); got != "direct-approach-t1-42" {
 		t.Fatalf("slug = %q", got)
 	}
@@ -348,7 +334,7 @@ func TestScoreAndPickWinner(t *testing.T) {
 	if got := pickWinner(results); got != 1 {
 		t.Fatalf("winner index = %d, want 1", got)
 	}
-	// Ties keep the earlier trial.
+
 	tie := []trialResult{{Index: 1, Status: "completed", Commits: 1}, {Index: 2, Status: "completed", Commits: 1}}
 	if got := pickWinner(tie); got != 0 {
 		t.Fatalf("tie winner index = %d, want 0", got)

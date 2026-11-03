@@ -32,8 +32,8 @@ func TestInputUnderspec_VagueWordsNoIdentifiers(t *testing.T) {
 func TestInputUnderspec_WithFilePath_NoWarning(t *testing.T) {
 	a := &Agent{inputUnderspec: newInputUnderspecState()}
 	hint := a.maybeWarnInputUnderspec("fix the bug")
-	_ = hint // first call may warn
-	// Second call with a file path should NOT warn
+	_ = hint
+
 	a2 := &Agent{inputUnderspec: newInputUnderspecState()}
 	hint2 := a2.maybeWarnInputUnderspec("fix the bug in main.go")
 	if hint2 != "" {
@@ -96,7 +96,7 @@ func TestInputUnderspec_Reset(t *testing.T) {
 
 func TestInputUnderspec_NoActionVerb_Short_NoWarning(t *testing.T) {
 	a := &Agent{inputUnderspec: newInputUnderspecState()}
-	// "hello world" has no action verb, very short
+
 	hint := a.maybeWarnInputUnderspec("hello world greetings")
 	if hint != "" {
 		t.Error("expected no warning for short request without action verb")

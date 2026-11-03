@@ -2,11 +2,6 @@ package agent
 
 import "testing"
 
-// zz_issue2910_test.go pins the #2910 fix: map preallocation warnings must not
-// fire (nor suggest len()) for range sources whose iteration count is
-// unknowable — channels, integer values, and func iterators — while normal
-// slice/map sources keep the len() hint.
-
 func TestIssue2910_RangeChanParamNoWarning(t *testing.T) {
 	code := `package main
 type Item struct{ K string }

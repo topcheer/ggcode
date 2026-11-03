@@ -1,33 +1,5 @@
 package agent
 
-// Context propagation detection for Go files at write time.
-//
-// Research basis: AI coding agents (Claude Code, Cursor, Copilot, Cline)
-// frequently write context.TODO() or context.Background() inside functions
-// that already receive a ctx context.Context parameter. This is a well-known
-// code quality issue ("lost context" / "context leak") that breaks:
-//   - Request cancellation (the ctx parameter won't propagate cancellation)
-//   - Timeout/deadline propagation
-//   - Distributed tracing spans
-//   - Context-scoped values (tenant ID, request ID, auth tokens)
-//
-// Real-world impact: in production Go code, lost context causes requests that
-// can't be cancelled, orphaned goroutines that run past client disconnects,
-// and missing trace spans that make debugging impossible.
-//
-// go vet does NOT catch this pattern. The "context.TODO in a function that
-// has ctx" pattern is a semantic issue that requires understanding the
-// function signature.
-//
-// This check uses go/ast to:
-//  1. Identify functions/methods that have a ctx context.Context parameter
-//  2. Find calls to context.TODO() or context.Background() within that
-//     function body (that don't also pass the ctx parameter)
-//  3. Report them as warnings so the agent can fix the issue immediately
-//
-// The check is delta-aware: only flags context.TODO/Background calls that are
-// NEW (introduced by this edit), not pre-existing ones.
-
 import (
 	"fmt"
 	"go/ast"
@@ -37,14 +9,8 @@ import (
 	"strings"
 )
 
-// maxContextLeakWarnings limits the number of warnings per write.
 const maxContextLeakWarnings = 3
 
-// checkContextLeak detects context.TODO()/context.Background() usage inside
-// functions that receive a ctx context.Context parameter. Only flags NEW
-// occurrences introduced by this edit (delta-aware).
-//
-// Returns a non-empty guidance string if issues are detected, or "" if clean.
 func checkContextLeak(filePath, oldContent, newContent string) string {
 	if filepath.Ext(filePath) != ".go" {
 		return ""
@@ -63,9 +29,6 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Delta check: find context.TODO/Background calls in the old content.
-	// Use content-based fingerprints instead of line numbers to avoid
-	// false positives when lines shift due to edits above the call site.
 	var oldFPs map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
@@ -106,17 +69,13 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 	return b.String()
 }
 
-// contextLeak represents a detected context propagation issue.
 type contextLeak struct {
-	fingerprint string // content-based delta key: enclosingFunc + ":" + contextMethod
-	message     string // human-readable warning
+	fingerprint string
+	message     string
 }
 
-// findContextLeaks walks the AST and finds context.TODO()/context.Background()
-// calls inside functions that have a ctx context.Context parameter (where the
-// ctx parameter is NOT used in the same call expression).
 func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
-	// Per-function-method occurrence counter for stable fingerprints (#215).
+
 	occurrence := map[string]int{}
 	var leaks []contextLeak
 
@@ -156,8 +115,6 @@ func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
 				return true
 			}
 
-			// Skip if ctx is also passed as an argument (e.g.,
-			// context.WithTimeout(ctx, 5s) is fine — it propagates context).
 			for _, arg := range call.Args {
 				if id, ok := arg.(*ast.Ident); ok && id.Name == ctxParamName {
 					return true
@@ -169,11 +126,7 @@ func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
 			if fn.Name != nil {
 				funcName = fn.Name.Name
 			}
-			// Fingerprint must include the receiver type and an occurrence
-			// counter: methods with the same name on different types (the
-			// Handler.ServeHTTP pattern) collapsed to one key, letting an
-			// old leak on type A suppress a NEW leak on type B; multiple
-			// leaks inside one function also cancelled pairwise (#215).
+
 			recvType := ""
 			if fn.Recv != nil && len(fn.Recv.List) > 0 {
 				if ft, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
@@ -199,8 +152,6 @@ func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
 	return leaks
 }
 
-// findContextParam checks if a function's parameter list contains a
-// context.Context parameter and returns its name. Returns "" if not found.
 func findContextParam(params *ast.FieldList) string {
 	if params == nil {
 		return ""
@@ -222,7 +173,6 @@ func findContextParam(params *ast.FieldList) string {
 	return ""
 }
 
-// isContextType returns true if the AST type expression represents context.Context.
 func isContextType(expr ast.Expr) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {

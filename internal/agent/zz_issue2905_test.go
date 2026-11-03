@@ -9,14 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// zz_issue2905_test.go - regression probes for #2905: the fallback
-// checkpoint must (a) not fire on EVERY Run once past the threshold (the
-// old equality dedup never re-matched monotonically growing counts) and
-// (b) write a REAL last message ID instead of "" (an empty-lastMsgID record
-// becoming the latest checkpoint degraded resume positioning).
-
-// stubCompactCM is a minimal ContextManager for checkpoint-path tests. It
-// embeds the interface so unimplemented methods panic loudly if reached.
 type stubCompactCM struct {
 	ctxpkg.ContextManager
 	msgs    []provider.Message
@@ -65,9 +57,8 @@ func TestIssue2905FallbackWritesRealLastMsgID(t *testing.T) {
 
 func TestIssue2905FallbackSpamSuppressed(t *testing.T) {
 	a, lastIDs := newFallbackTestAgent(t, 600)
-	a.maybeFallbackCheckpoint() // first write at count 600
+	a.maybeFallbackCheckpoint()
 
-	// Small growth (below the interval): must NOT fire again.
 	cm := a.contextManager.(*stubCompactCM)
 	cm.msgs = append(cm.msgs, provider.Message{ID: "m-601", Role: "user"})
 	a.maybeFallbackCheckpoint()
@@ -75,7 +66,6 @@ func TestIssue2905FallbackSpamSuppressed(t *testing.T) {
 		t.Fatalf("#2905: fallback fired again after only %d new messages (spam not suppressed): %d writes", 1, len(*lastIDs))
 	}
 
-	// Real growth (>= interval): fires again, still with a real anchor.
 	for i := 0; i < fallbackCheckpointInterval; i++ {
 		cm.msgs = append(cm.msgs, provider.Message{ID: "bulk", Role: "user"})
 	}

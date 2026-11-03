@@ -1,10 +1,5 @@
 package tool
 
-// #3472 probe: dce576ced's stripTrailingComment "//" branch ate BARE URLs -
-// "curl https://example.com" keyed as "curl https:" (colon precedes "//",
-// quote-awareness only protects QUOTED URLs). The fix requires "//" to
-// start a token (preceded by whitespace/line start) to count as a comment.
-
 import "testing"
 
 func TestIssue3472_BareURLKeepsScheme(t *testing.T) {

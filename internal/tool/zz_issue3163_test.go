@@ -1,11 +1,5 @@
 package tool
 
-// #3163 probes: O_EXCL placeholder closes the Stat→AtomicWriteFile TOCTOU
-// window in create_skill. The placeholder is the atomic cross-process gate —
-// a concurrent creator must be rejected even when the file it would collide
-// with is a 0-byte mid-race placeholder, and the write-failure path must not
-// leave that placeholder behind blocking re-creation.
-
 import (
 	"context"
 	"encoding/json"
@@ -34,10 +28,6 @@ func issue3163Create(t *testing.T, dir, name string) Result {
 	return res
 }
 
-// A 0-byte placeholder (the exact mid-race state of a concurrent creator
-// between EXCL success and rename completion) must be rejected — this is the
-// state the pre-fix Stat check also caught, but EXCL must keep catching it
-// when it appears AFTER our own Stat ran.
 func TestIssue3163_ZeroBytePlaceholderBlocksCreate(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, ".ggcode", "skills", "dup")
@@ -56,9 +46,6 @@ func TestIssue3163_ZeroBytePlaceholderBlocksCreate(t *testing.T) {
 	}
 }
 
-// Two sequential EXCL opens on the same path: the second must fail with
-// EEXIST — the kernel-level guarantee the fix relies on (also CREATE_NEW on
-// Windows via Go's os.OpenFile mapping).
 func TestIssue3163_SecondEXCLFails(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "gate")
@@ -73,8 +60,6 @@ func TestIssue3163_SecondEXCLFails(t *testing.T) {
 	}
 }
 
-// Normal creation still succeeds and the final file carries full content
-// (the placeholder is replaced by the rename, never shipped as-is).
 func TestIssue3163_CreateStillSucceedsWithContent(t *testing.T) {
 	dir := t.TempDir()
 	res := issue3163Create(t, dir, "fresh")

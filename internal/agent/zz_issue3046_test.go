@@ -5,14 +5,12 @@ import (
 	"testing"
 )
 
-// #3046 B1: /vN cross-segment major bumps (v2->v3, v3->v4) must be detected,
-// not just v1->v2 (bare-base upgrades).
 func TestIssue3046_B1_CrossSegmentMajorBump(t *testing.T) {
 	cases := []struct {
 		name    string
 		oldReq  string
 		newReq  string
-		wantSub string // "" = expect no warning
+		wantSub string
 	}{
 		{
 			name:    "v2 to v3",
@@ -62,8 +60,6 @@ func TestIssue3046_B1_CrossSegmentMajorBump(t *testing.T) {
 	}
 }
 
-// #3046 B2: upgrading a vulnerable package to a safe version must not be
-// followed by the generic "consider running govulncheck" reminder.
 func TestIssue3046_B2_SafeUpgradeNoScanReminder(t *testing.T) {
 	oldManifest := `{
   "dependencies": {
@@ -89,8 +85,6 @@ func TestIssue3046_B2_SafeUpgradeNoScanReminder(t *testing.T) {
 	}
 }
 
-// #3046 B2 (control): a genuinely unrelated dependency change still gets the
-// generic scan reminder - the suppression must not swallow the fallback.
 func TestIssue3046_B2_UnrelatedChangeStillReminds(t *testing.T) {
 	oldManifest := `{
   "dependencies": {

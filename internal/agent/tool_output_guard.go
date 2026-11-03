@@ -8,44 +8,16 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Context-fill-aware tool output truncation.
-//
-// Research basis: Context engineering (Anthropic 2025, Fundesk 2026) identifies
-// "budget by fill %" as a top technique. Chroma's 2025 study found all frontier
-// models degrade past ~50% context fullness. Tool output is the "silent context
-// killer" — a single 50KB build log consumes ~12K tokens immediately.
-//
-// This guard applies progressive truncation to large tool results BEFORE they
-// enter context, scaling aggressiveness with context fill level:
-//   - < 50% fill: no truncation (let tools handle their own limits)
-//   - 50-65% fill: truncate results > 40KB to 40KB
-//   - 65-75% fill: truncate results > 20KB to 20KB
-//   - 75%+ fill: truncate results > 10KB to 10KB
-//
-// Uses head-tail preservation (first 40% + last 50% + truncation marker) so
-// the agent sees both the beginning (context) and end (errors/results).
-// No LLM cost — purely mechanical.
-
 const (
-	// Context fill thresholds (fraction of compaction threshold).
-	contextFillModerate = 0.50 // Start being conservative
-	contextFillHigh     = 0.65 // More aggressive
-	contextFillCritical = 0.75 // Maximum aggressiveness
+	contextFillModerate = 0.50
+	contextFillHigh     = 0.65
+	contextFillCritical = 0.75
 
-	// Output size limits at each fill level.
-	outputLimitModerate = 40 * 1024 // 40KB at 50% fill
-	outputLimitHigh     = 20 * 1024 // 20KB at 65% fill
-	outputLimitCritical = 10 * 1024 // 10KB at 75% fill
+	outputLimitModerate = 40 * 1024
+	outputLimitHigh     = 20 * 1024
+	outputLimitCritical = 10 * 1024
 )
 
-// guardToolOutput truncates large tool results based on context fill level.
-// contextFill is the ratio of current tokens to compaction threshold (0.0-1.0+).
-// Returns the (possibly truncated) content.
-// toolHeadTailTruncationPrefix is the LINE PREFIX of the head+tail
-// truncation marker guardToolOutput writes. #1554-C: the detector list
-// hardcoded '... [output truncated]' - a DIFFERENT literal that never
-// matched this writer, so head+tail truncations were never detected as
-// degraded reads. Both sides reference this constant now.
 const toolHeadTailTruncationPrefix = "[... output truncated:"
 
 func guardToolOutput(content string, contextFill float64) string {
@@ -72,26 +44,18 @@ func guardToolOutput(content string, contextFill float64) string {
 	return truncated
 }
 
-// truncateHeadTail keeps the first ~40% and last ~50% of content, with a
-// truncation marker in between. It also extracts critical lines (errors,
-// panics, test failures, etc.) from the truncated middle section so the
-// agent doesn't lose actionable diagnostics buried in large outputs.
-// Snaps to rune boundaries to prevent UTF-8 corruption, then to line
-// boundaries for readability.
 func truncateHeadTail(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 
-	// Reserve space for the truncation marker.
 	marker := fmt.Sprintf("\n\n%s %s total, showing head + tail ...]\n\n", toolHeadTailTruncationPrefix, formatBytes(len(s)))
 	usable := maxLen - len(marker)
 	if usable < 1000 {
-		// Limit too small for meaningful truncation; hard-cut at rune boundary.
+
 		return s[:util.SnapToRuneStart(s, maxLen)]
 	}
 
-	// First pass: rough head-tail split to identify the middle section.
 	roughHeadLen := usable * 2 / 5
 	roughTailLen := usable * 3 / 5
 	roughTailStart := len(s) - roughTailLen
@@ -99,17 +63,13 @@ func truncateHeadTail(s string, maxLen int) string {
 		roughTailStart = roughHeadLen
 	}
 
-	// Extract critical lines from the middle section (the part that will be
-	// discarded). If highlights are found, reserve budget for them and shrink
-	// the head-tail allocation proportionally. When no critical lines exist,
-	// behavior is identical to the original implementation.
 	var highlightSection string
 	contentBudget := usable
 	if roughTailStart > roughHeadLen {
 		middle := s[roughHeadLen:roughTailStart]
 		highlights := extractCriticalLines(middle)
 		if len(highlights) > 0 {
-			maxHL := usable / 7 // ~14% of usable budget for highlights
+			maxHL := usable / 7
 			if hlText := formatHighlights(highlights, maxHL); hlText != "" {
 				highlightSection = hlText
 				contentBudget = usable - len(highlightSection)
@@ -117,15 +77,13 @@ func truncateHeadTail(s string, maxLen int) string {
 		}
 	}
 
-	headLen := contentBudget * 2 / 5 // 40% head
-	tailLen := contentBudget * 3 / 5 // 50% tail (errors/results at end are more important)
+	headLen := contentBudget * 2 / 5
+	tailLen := contentBudget * 3 / 5
 
-	// Snap byte offsets to rune boundaries to prevent UTF-8 corruption.
 	head := s[:util.SnapToRuneStart(s, headLen)]
 	tailStart := util.SnapToRuneStart(s, len(s)-tailLen)
 	tail := s[tailStart:]
 
-	// Snap to line boundaries for cleaner output.
 	if idx := strings.LastIndex(head, "\n"); idx > headLen/2 {
 		head = head[:idx]
 	}
@@ -136,8 +94,6 @@ func truncateHeadTail(s string, maxLen int) string {
 	return head + marker + highlightSection + tail
 }
 
-// criticalLinePatterns are substrings that indicate an actionable diagnostic
-// line worth preserving during truncation. Matching is case-insensitive.
 var criticalLinePatterns = []string{
 	"panic:", "panic(", "fatal error", "fatal:",
 	"error:", "error ", " errors ",
@@ -155,16 +111,10 @@ var criticalLinePatterns = []string{
 	"exit code", "exit status",
 }
 
-// maxCriticalLines caps the number of extracted highlight lines to avoid
-// overwhelming the context budget with diagnostics from very noisy logs.
 const maxCriticalLines = 20
 
-// maxCriticalLineLen skips lines longer than this — they are typically stack
-// traces or data dumps that are too verbose to be useful as highlights.
 const maxCriticalLineLen = 300
 
-// extractCriticalLines scans content for lines containing error, warning, or
-// failure patterns. Returns deduplicated lines in order of first appearance.
 func extractCriticalLines(s string) []string {
 	lines := strings.Split(s, "\n")
 	var critical []string
@@ -194,9 +144,6 @@ func extractCriticalLines(s string) []string {
 	return critical
 }
 
-// formatHighlights renders extracted critical lines into a compact section
-// suitable for insertion into truncated output. Returns empty string if the
-// formatted result would exceed maxLen or no lines are provided.
 func formatHighlights(lines []string, maxLen int) string {
 	if len(lines) == 0 {
 		return ""

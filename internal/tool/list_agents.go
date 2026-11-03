@@ -12,12 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ListAgentsTool implements the list_agents tool.
 type ListAgentsTool struct {
-	Manager *subagent.Manager
-	// ParentModel resolves the parent agent's current model name for the
-	// one-shot cascade escalation hint on failed alternate-model runs
-	// (see subagent_cascade.go). Shares CascadeHints with wait_agent.
+	Manager      *subagent.Manager
 	ParentModel  func() string
 	CascadeHints *CascadeHintTracker
 }
@@ -52,14 +48,10 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{Content: "No agent runs have been spawned."}, nil
 	}
 
-	// Sort by creation time
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].CreatedAt.Before(agents[j].CreatedAt)
 	})
 
-	// #1693 case 2: count what is actually SHOWN, not len(agents) - a run
-	// completing between List() and Snapshot() was skipped, leaving the
-	// header count higher than the listed entries.
 	var lines []string
 	for _, sa := range agents {
 		snap, ok := t.Manager.Snapshot(sa.ID)
@@ -103,9 +95,7 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 		sb.WriteString(fmt.Sprintf("    Phase: %s\n", snap.CurrentPhase))
 	}
 	if snap.Status == subagent.StatusCompleted && strings.TrimSpace(snap.Result) != "" {
-		// #3176: the sibling fields above all truncate (80/120) but Result
-		// streamed the full snap.Result on one line - up to the manager's
-		// 100KB cap, a whole-report dump into the context. Same style cap.
+
 		sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(snap.Result, 200)))
 	}
 	if snap.Error != "" {
@@ -118,9 +108,7 @@ func formatSubAgentDuration(snap subagent.Snapshot) string {
 	if snap.StartedAt.IsZero() {
 		return ""
 	}
-	// #1693 case 3: an `end` fallback to StartedAt was written here but
-	// never read (the branches below re-check snap.EndedAt directly) -
-	// removed dead assignment; running durations use time.Since as before.
+
 	if !snap.EndedAt.IsZero() {
 		return fmt.Sprintf(" (%v)", snap.EndedAt.Sub(snap.StartedAt).Round(time.Second))
 	}

@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue2734_test.go — jsClassRe must match inheritance forms
-// (extends/implements), the dominant class shape in real JS/TS. The old
-// `[\{<]`-only pattern silently skipped them, making the duplicate-class
-// check dead code for those forms.
-
 func TestIssue2734JsClassReMatchesInheritanceForms(t *testing.T) {
 	cases := []string{
 		"class Foo {",
@@ -34,10 +29,10 @@ func TestIssue2734JsClassReMatchesInheritanceForms(t *testing.T) {
 
 func TestIssue2734JsClassReStillExcludesNonClasses(t *testing.T) {
 	nonClasses := []string{
-		"  class Foo {",    // indented: nested/block-scoped, not top-level
-		"const classy = {", // not a class decl
+		"  class Foo {",
+		"const classy = {",
 		"// class Foo extends Bar {",
-		"let x = MyClass.class Foo", // not line-start class keyword
+		"let x = MyClass.class Foo",
 	}
 	for _, src := range nonClasses {
 		if jsClassRe.MatchString(src) {
@@ -47,8 +42,7 @@ func TestIssue2734JsClassReStillExcludesNonClasses(t *testing.T) {
 }
 
 func TestIssue2734DuplicateClassWithExtendsDetected(t *testing.T) {
-	// The exact #2734 scenario: agent pastes a second copy of an
-	// existing extends-form class -- must now be flagged at write time.
+
 	old := `export class Foo extends Base {
   run() {}
 }
@@ -68,7 +62,7 @@ export class Foo extends Base {
 }
 
 func TestIssue2734SingleClassWithExtendsNoWarning(t *testing.T) {
-	// Legitimate refactor that switches heritage must not warn (count 1 → 1).
+
 	old := "export class Foo extends Base {\n}\n"
 	new := "export class Foo extends Other implements Iface {\n}\n"
 	if warn := checkDuplicateDeclarations("svc.ts", old, new); warn != "" {

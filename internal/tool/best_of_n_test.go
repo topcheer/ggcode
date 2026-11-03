@@ -80,8 +80,6 @@ func TestBestOfNTool_CloneKeepsWiring(t *testing.T) {
 	}
 }
 
-// r380: per-candidate model list drives n and is validated against the
-// current endpoint's available models.
 func TestBestOfNTool_Models(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{})
 	available := []string{"glm-5.3-flash", "glm-5.2", "glm-4.7"}

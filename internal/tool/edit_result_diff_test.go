@@ -40,7 +40,6 @@ func TestCompactDiff_Addition(t *testing.T) {
 }
 
 func TestCompactDiff_Truncation(t *testing.T) {
-	// Generate a large change with 100 changed lines
 	var oldLines, newLines []string
 	for i := 0; i < 100; i++ {
 		oldLines = append(oldLines, "old "+string(rune('a'+i%26))+string(rune('a'+i/26)))
@@ -53,7 +52,7 @@ func TestCompactDiff_Truncation(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected non-empty diff")
 	}
-	// Should be truncated to maxEditDiffLines + header + truncation marker
+
 	lines := strings.Split(result, "\n")
 	if len(lines) > maxEditDiffLines+5 {
 		t.Errorf("diff should be truncated to ~%d lines, got %d", maxEditDiffLines+5, len(lines))

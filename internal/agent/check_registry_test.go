@@ -36,7 +36,7 @@ func TestIntegrityCheck_AppliesTo(t *testing.T) {
 		query Language
 		want  bool
 	}{
-		{nil, LangGo, true}, // no filter => all
+		{nil, LangGo, true},
 		{[]Language{LangGo}, LangGo, true},
 		{[]Language{LangGo}, LangPython, false},
 		{[]Language{LangGo, LangJSTS}, LangJSTS, true},
@@ -52,7 +52,7 @@ func TestIntegrityCheck_AppliesTo(t *testing.T) {
 }
 
 func TestRunChecksParallel_PanicRecovery(t *testing.T) {
-	// Save and restore allChecks
+
 	saved := allChecks
 	t.Cleanup(func() { allChecks = saved })
 
@@ -109,7 +109,6 @@ func TestRunChecksParallel_ConcurrentSafety(t *testing.T) {
 	var counter int32
 	var mu sync.Mutex
 
-	// Register many checks that increment a shared counter
 	allChecks = make([]IntegrityCheck, 20)
 	for i := range allChecks {
 		allChecks[i] = IntegrityCheck{
@@ -142,7 +141,7 @@ func TestRunChecksParallel_DeterministicOrder(t *testing.T) {
 	}
 
 	ctx := CheckContext{Lang: LangAny}
-	// Run multiple times - order must be deterministic despite parallel execution
+
 	for i := 0; i < 10; i++ {
 		warnings := runChecksParallel(ctx)
 		if len(warnings) != 3 {
@@ -161,8 +160,6 @@ func TestRunChecksParallel_HungCheckTimeout(t *testing.T) {
 	saved := allChecks
 	t.Cleanup(func() { allChecks = saved })
 
-	// block is never closed during the run, simulating a wedged check
-	// (pathological input, blocked external command).
 	block := make(chan struct{})
 	allChecks = []IntegrityCheck{
 		{Name: "hung", Run: func(ctx CheckContext) []string {
@@ -179,23 +176,19 @@ func TestRunChecksParallel_HungCheckTimeout(t *testing.T) {
 	warnings := runChecksParallel(ctx)
 	elapsed := time.Since(start)
 
-	// The hung check must be skipped, not suppress the healthy one.
 	if len(warnings) != 1 || warnings[0] != "healthy warning" {
 		t.Errorf("expected only healthy warning, got %v", warnings)
 	}
-	// The runner must give up on the hung check within roughly one timeout
-	// budget instead of stalling forever. Margin covers scheduling jitter.
+
 	if budget := checkTimeout + 2*time.Second; elapsed > budget {
 		t.Errorf("runChecksParallel blocked %v on a hung check (budget %v); timeout guard failed", elapsed, budget)
 	}
-	// Release the wedged goroutine so the test leaves nothing behind.
+
 	close(block)
 }
 
 func TestFormatWarnings_Cap(t *testing.T) {
-	// More warnings than maxIntegrityWarnings: keep the most critical
-	// (first, per upstream severity ordering) plus one suppression indicator
-	// with an accurate suppressed count.
+
 	warnings := []string{"w1", "w2", "w3", "w4", "w5"}
 	result := formatWarnings(warnings)
 
@@ -221,14 +214,14 @@ func TestFormatWarnings_Cap(t *testing.T) {
 	if indicators != 1 {
 		t.Errorf("expected exactly 1 suppression indicator, got %d: %q", indicators, result)
 	}
-	// The cap must keep the first (highest-severity) warning, not a later one.
+
 	if body[0] != "w1" {
 		t.Errorf("expected first warning w1 to survive the cap, got %q", body[0])
 	}
 }
 
 func TestFormatWarnings_ExactCapNoIndicator(t *testing.T) {
-	// At exactly maxIntegrityWarnings nothing is suppressed: no indicator line.
+
 	result := formatWarnings([]string{"w1"})
 	if strings.Contains(result, "suppressed") {
 		t.Errorf("unexpected suppression indicator at exactly maxIntegrityWarnings: %q", result)
@@ -266,7 +259,7 @@ func TestNewCheckContext_NonGoNoAST(t *testing.T) {
 }
 
 func TestNewCheckContext_GoSyntaxError(t *testing.T) {
-	// Invalid Go code - AST should be nil but language still detected
+
 	ctx := newCheckContext("test.go", "", "package main\n\nfunc broken( {\n")
 	if ctx.GoAST != nil {
 		t.Error("expected GoAST to be nil for invalid Go code")
@@ -277,19 +270,16 @@ func TestNewCheckContext_GoSyntaxError(t *testing.T) {
 }
 
 func TestAllChecksRegistered(t *testing.T) {
-	// Verify that checks are registered (24 after reduction to critical-only)
+
 	if len(allChecks) < 20 {
 		t.Errorf("expected at least 20 registered checks, got %d", len(allChecks))
 	}
 
-	// #1020: a length floor cannot detect a specific check silently going
-	// missing (fc5c4aad stripped regex-loop/nplus1-loop undetected for 15
-	// days). Pin the names whose absence would resurrect that failure mode.
 	mustRegistered := []string{
-		"regex-loop", "nplus1-loop", // #1020 revival
-		"binary-corruption", "merge-conflict-markers", // #601 delta gates
-		"nil-map-write", "append-ignored", // #499 revival class
-		"magic-numbers", "map-prealloc", "missing-prealloc", // #1102 wired orphans
+		"regex-loop", "nplus1-loop",
+		"binary-corruption", "merge-conflict-markers",
+		"nil-map-write", "append-ignored",
+		"magic-numbers", "map-prealloc", "missing-prealloc",
 	}
 	for _, name := range mustRegistered {
 		found := false
@@ -304,7 +294,6 @@ func TestAllChecksRegistered(t *testing.T) {
 		}
 	}
 
-	// Verify no duplicate names
 	seen := make(map[string]bool)
 	for _, c := range allChecks {
 		if seen[c.Name] {

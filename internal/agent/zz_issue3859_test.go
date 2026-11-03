@@ -12,14 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #3859: two grounding gaps.
-//  A: start_command success never probed the disk for step artifacts
-//     (probeArtifactsOnDisk was run_command-only).
-//  B: warn-mode branches (workflow warn + invariant warn) returned early
-//     and skipped grounding entirely - a command that both hit a warn
-//     guard and produced a step's artifact left that step un-grounded
-//     (commands-only soft deadlock).
-
 const spec3859 = `{
   "steps": [
     {"id":"build","artifact_glob":"bin/*"},
@@ -48,7 +40,6 @@ func agent3859(t *testing.T) *Agent {
 	return a
 }
 
-// A: a start_command success must ground the artifact-producing step.
 func TestIssue3859_StartCommandGroundsArtifacts(t *testing.T) {
 	a := agent3859(t)
 	e := a.workflowEngineLazy()
@@ -65,10 +56,6 @@ func TestIssue3859_StartCommandGroundsArtifacts(t *testing.T) {
 	}
 }
 
-// B: the grounding helper is invoked on the warn path - simulate by
-// calling it with a warn-marked result shape (res not IsError) directly;
-// the wiring (call before return in both warn branches) is pinned by the
-// same helper, and an IsError result must NOT ground.
 func TestIssue3859_GroundingHelperGatesOnError(t *testing.T) {
 	a := agent3859(t)
 	e := a.workflowEngineLazy()

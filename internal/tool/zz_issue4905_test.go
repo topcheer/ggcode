@@ -9,10 +9,6 @@ import (
 	"testing"
 )
 
-// TestIssue4905_RemoveDeletesCreationBranchNotCurrent verifies that
-// exit_worktree(action=remove) deletes the branch the worktree was CREATED
-// with (dir-name invariant), not whatever branch happens to be checked out
-// when the tool is called.
 func TestIssue4905_RemoveDeletesCreationBranchNotCurrent(t *testing.T) {
 	mainRepo := initRepo542(t)
 
@@ -22,13 +18,10 @@ func TestIssue4905_RemoveDeletesCreationBranchNotCurrent(t *testing.T) {
 	}
 	runGit542(t, mainRepo, "worktree", "add", "-b", "agent-x", wtDir)
 
-	// The agent switches to a different branch mid-worktree.
 	runGit542(t, wtDir, "switch", "-c", "switched-mid")
 
 	tool := ExitWorktree{WorkingDir: wtDir}
-	// discard_changes: no remotes exist in the fixture, so the init commit
-	// counts as "unpushed" and the fail-closed gate would (correctly) keep
-	// the branch; we are testing the deletion TARGET, so authorize deletion.
+
 	input, _ := json.Marshal(map[string]any{
 		"action":          "remove",
 		"discard_changes": true,
@@ -42,12 +35,10 @@ func TestIssue4905_RemoveDeletesCreationBranchNotCurrent(t *testing.T) {
 		t.Fatalf("unexpected failure: %s", res.Content)
 	}
 
-	// Creation-time branch must be deleted.
 	if out := runGit542(t, mainRepo, "branch", "--list", "agent-x"); out != "" {
 		t.Fatalf("creation-time branch agent-x was not deleted; branches: %s", out)
 	}
-	// The switched-to branch must be KEPT (wrong-target deletion is the bug)
-	// and surfaced in the result.
+
 	if out := runGit542(t, mainRepo, "branch", "--list", "switched-mid"); out == "" {
 		t.Fatal("branch switched-mid (checked out at exit time) was deleted - wrong target")
 	}
@@ -59,9 +50,6 @@ func TestIssue4905_RemoveDeletesCreationBranchNotCurrent(t *testing.T) {
 	}
 }
 
-// TestIssue4905_RemoveDetachedHeadStillCleansBranch verifies the detached-HEAD
-// path: --show-current returns "" there, which used to skip branch cleanup and
-// orphan the creation branch silently.
 func TestIssue4905_RemoveDetachedHeadStillCleansBranch(t *testing.T) {
 	mainRepo := initRepo542(t)
 
@@ -73,7 +61,7 @@ func TestIssue4905_RemoveDetachedHeadStillCleansBranch(t *testing.T) {
 	runGit542(t, wtDir, "switch", "--detach")
 
 	tool := ExitWorktree{WorkingDir: wtDir}
-	// discard_changes for the same no-remote fail-closed gate reason as above.
+
 	input, _ := json.Marshal(map[string]any{
 		"action":          "remove",
 		"discard_changes": true,

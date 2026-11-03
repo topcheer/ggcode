@@ -2,9 +2,6 @@ package agent
 
 import "testing"
 
-// #4121: bare "make it" must not classify an ordinary refinement
-// instruction as a goal Revision - the Revision preamble makes the model
-// abandon valid in-flight work. Explicit redirection markers stay detected.
 func TestIssue4121_MakeItIsNotRevisionMarker(t *testing.T) {
 	refinements := []string{
 		"make it more robust before merging",

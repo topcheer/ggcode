@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// writeGoalGraph writes a minimal goal-graph.json the way the goal_graph
-// tool does, with the given node statuses.
 func writeGoalGraph(t *testing.T, wd string, nodes map[string]*goalFinishNode) {
 	t.Helper()
 	dir := filepath.Join(wd, ".ggcode")
@@ -33,8 +31,6 @@ func goalTestNode(status string, updated time.Time) *goalFinishNode {
 	}
 }
 
-// TestGoalFinishGateFiresOnFreshInProgress: a fresh in_progress leaf must
-// produce the advisory naming the leaf and its next_step.
 func TestGoalFinishGateFiresOnFreshInProgress(t *testing.T) {
 	wd := t.TempDir()
 	writeGoalGraph(t, wd, map[string]*goalFinishNode{
@@ -50,7 +46,6 @@ func TestGoalFinishGateFiresOnFreshInProgress(t *testing.T) {
 	}
 }
 
-// TestGoalFinishGateFireOnce: second call in the same run returns empty.
 func TestGoalFinishGateFireOnce(t *testing.T) {
 	wd := t.TempDir()
 	writeGoalGraph(t, wd, map[string]*goalFinishNode{
@@ -65,8 +60,6 @@ func TestGoalFinishGateFireOnce(t *testing.T) {
 	}
 }
 
-// TestGoalFinishGateSkipsWhenNoInProgress: done/dropped/pending trees and
-// missing trees must stay silent - backlog must not nag completion runs.
 func TestGoalFinishGateSkipsWhenNoInProgress(t *testing.T) {
 	for _, status := range []string{"done", "dropped", "pending"} {
 		wd := t.TempDir()
@@ -78,15 +71,13 @@ func TestGoalFinishGateSkipsWhenNoInProgress(t *testing.T) {
 			t.Fatalf("%s leaf must not fire, got:\n%s", status, msg)
 		}
 	}
-	// No tree at all.
+
 	a := &Agent{workingDir: t.TempDir(), goalFinish: newGoalFinishState()}
 	if msg := a.checkGoalFinishGate(); msg != "" {
 		t.Fatalf("missing goal-graph must stay silent, got:\n%s", msg)
 	}
 }
 
-// TestGoalFinishGateStaleLeafSkipped: an in_progress leaf older than the
-// 7-day freshness window is stall territory, not this gate's.
 func TestGoalFinishGateStaleLeafSkipped(t *testing.T) {
 	wd := t.TempDir()
 	writeGoalGraph(t, wd, map[string]*goalFinishNode{
@@ -98,10 +89,6 @@ func TestGoalFinishGateStaleLeafSkipped(t *testing.T) {
 	}
 }
 
-// TestGoalFinishGateParentNotLeaf (#4626): a normal goal->milestone->task
-// chain with all three levels in_progress must report ONLY the task leaf -
-// parents stay legitimately in_progress while children run, and listing
-// them drowned the max-3 budget in real task leaves.
 func TestGoalFinishGateParentNotLeaf(t *testing.T) {
 	wd := t.TempDir()
 	now := time.Now()
@@ -123,9 +110,6 @@ func TestGoalFinishGateParentNotLeaf(t *testing.T) {
 	}
 }
 
-// TestGoalFinishGateAllTasksDoneParentStaysOpen (#4626): historical graphs
-// where every task is done but the goal was never manually flipped must
-// stay silent - only dangling in_progress LEAVES gate completion.
 func TestGoalFinishGateAllTasksDoneParentStaysOpen(t *testing.T) {
 	wd := t.TempDir()
 	now := time.Now()
@@ -139,9 +123,6 @@ func TestGoalFinishGateAllTasksDoneParentStaysOpen(t *testing.T) {
 	}
 }
 
-// TestGoalFinishGateFiredOnlyOnWarning (#4626): fire-once means at most one
-// WARNING per run, not at most one check - a missing tree on the first call
-// must not latch fired and disable the gate when the file appears later.
 func TestGoalFinishGateFiredOnlyOnWarning(t *testing.T) {
 	a := &Agent{workingDir: t.TempDir(), goalFinish: newGoalFinishState()}
 	if msg := a.checkGoalFinishGate(); msg != "" {
@@ -150,7 +131,7 @@ func TestGoalFinishGateFiredOnlyOnWarning(t *testing.T) {
 	if a.goalFinish.fired {
 		t.Fatal("missing tree must NOT latch fired (read failure is not a warning)")
 	}
-	// Tree appears later in the same run: the gate must still be able to fire.
+
 	writeGoalGraph(t, a.workingDir, map[string]*goalFinishNode{
 		"n1": goalTestNode("in_progress", time.Now()),
 	})

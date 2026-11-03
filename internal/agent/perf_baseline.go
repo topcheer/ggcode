@@ -1,43 +1,5 @@
 package agent
 
-// Agent Performance Baseline & Regression Detection
-//
-// Trend: Agent performance observability is a hot area in 2025-2026. Devin's
-// released /cost tracking. But NONE detect real-time performance regressions
-// across sessions -- they only show current-run stats.
-//
-// Gap: ggcode's RunStats tracks rich per-run metrics (iterations, tool calls,
-// errors, duration, compactions, context peak). But this data is NEVER compared
-// against historical baselines. When the agent starts taking 2x more iterations
-// for similar tasks -- due to prompt changes, tool regressions, model updates,
-// or context bloat -- nobody notices until the user feels slowness.
-//
-// What this does:
-//   1. PERSISTS: After each meaningful run, saves a compact summary to
-//      .ggcode/perf-baseline.json (rolling window of last 50 runs).
-//   2. DETECTS: At the start of the NEXT run, compares recent performance
-//      against the historical baseline (median of the rolling window).
-//   3. WARNS: If current performance has regressed on key metrics (iterations,
-//      error rate, duration), injects a concise advisory so the agent can
-//      adjust strategy (e.g., be more direct, avoid re-reading files).
-//   4. DIAGNOSES: duration/iterations advisories append the regressed run's
-//      shape (iterations, tool calls, top tools, sec/iter) so the feedback
-//      path names the dominant waste pattern instead of only the total.
-//
-// Competitor mapping:
-//   - Claude Code: shows /cost per session, no cross-session comparison
-//   - Cursor: no performance tracking
-//   - Devin: SICA tracks efficiency internally, no user-visible regression alert
-//   - Aider: no tracking
-//
-// Design:
-//   - Zero LLM cost (deterministic statistical comparison)
-//   - Fires at most once per session
-//   - Only fires on REGRESSION (improvements are silent)
-//   - Uses median (not mean) for robustness against outliers
-//   - Requires at least 5 historical runs before comparing
-//   - Persists to .ggcode/ directory (same as playbook, knight-memory, etc.)
-
 import (
 	"encoding/json"
 	"fmt"
@@ -53,34 +15,21 @@ import (
 )
 
 const (
-	// perfBaselineMaxRuns is the rolling window size for historical data.
 	perfBaselineMaxRuns = 50
 
-	// perfBaselineMinRuns is the minimum number of historical runs needed
-	// before regression detection activates. Too few samples → noisy baseline.
 	perfBaselineMinRuns = 5
 
-	// perfBaselineMaxWarns caps how many times the regression warning fires
-	// per session. Once per session is enough — the agent should adapt.
 	perfBaselineMaxWarns = 1
 
-	// perfRegressionFactor is the multiplier over baseline median that
-	// triggers a regression warning. 1.5x means the agent is 50% worse.
 	perfRegressionFactor = 1.5
 
-	// perfErrorRateFactor: if error rate (errors/tool_calls) exceeds baseline
-	// by this factor, trigger a warning.
 	perfErrorRateFactor = 2.0
 
-	// perfBaselineFile is the filename for persisted baseline data.
 	perfBaselineFile = "perf-baseline.json"
 
-	// perfTopToolsCount is how many dominant tools the run-shape
-	// diagnostics line reports per regressed run.
 	perfTopToolsCount = 3
 )
 
-// perfBaselineEntry is a compact summary of a single run for trend analysis.
 type perfBaselineEntry struct {
 	RunID       string `json:"run_id"`
 	Iterations  int    `json:"iter"`
@@ -93,43 +42,20 @@ type perfBaselineEntry struct {
 	Success     bool   `json:"ok"`
 	Timestamp   int64  `json:"ts"`
 
-	// Tokens is this run's total input+output LLM tokens (r394: cost
-	// dimension of the reliability baseline - resource consistency from
-	// "Towards a Science of AI Agent Reliability" (arXiv 2602.16666)
-	// adapted to a single-run harness: per-run token spend vs the rolling
-	// baseline catches prompt bloat, fallback chains landing on pricier
-	// models, and cache misses before they show in duration. 0 for
-	// baselines recorded before this field existed; the regression check
-	// only fires when the baseline carries a value.
 	Tokens int `json:"tok,omitempty"`
 
-	// TopTools holds this run's most-invoked tools as "name:count" entries
-	// (top 3, count desc then name asc). It feeds the regression advisory a
-	// where-did-the-time-go breakdown: an advisory stating only "duration
-	// regressed 9.8x" is a fact the agent cannot act on, while
-	// "run_command:48, read_file:30" points at the behavior to change —
-	// loop-prevention research (arXiv:2607.01641) shows runaway loops
-	// persist exactly when the feedback path carries no specifics, and
-	// AgentDiet (FSE 2026) triages trajectories segment-by-segment for the
-	// same reason. nil for baselines recorded before this field existed.
 	TopTools []string `json:"top_tools,omitempty"`
 }
 
-// perfBaselineData is the on-disk JSON structure.
 type perfBaselineData struct {
 	Runs []perfBaselineEntry `json:"runs"`
 }
 
-// perfBaselineState tracks whether the regression warning has fired this session.
 type perfBaselineState struct {
-	warnCount int
-	// #1180: session-level once-only flag. reset() runs on every user turn
-	// and used to clear warnCount alone, so the same regression warning was
-	// re-injected as a full user message on every subsequent turn - breaking
-	// the "at most once per session" contract. This flag survives reset().
+	warnCount         int
 	warnedThisSession bool
-	historical        []perfBaselineEntry // loaded once per run start
-	baselineMid       perfBaselineEntry   // computed median of historical runs
+	historical        []perfBaselineEntry
+	baselineMid       perfBaselineEntry
 	hasBaseline       bool
 }
 
@@ -137,12 +63,6 @@ func newPerfBaselineState() *perfBaselineState {
 	return &perfBaselineState{}
 }
 
-// reset() re-arms per-user-turn bookkeeping. #1180: it must NOT re-enable
-// the regression warning (warnedThisSession survives), so the once-per-session
-// contract holds across turns. It DOES drop the frozen in-memory snapshot
-// (historical/baselineMid/hasBaseline) so the next run reloads fresh data from
-// disk instead of replaying a stale conclusion; #1167's atomic write keeps
-// that reload safe against concurrent writers.
 func (p *perfBaselineState) reset() {
 	p.warnCount = 0
 	p.hasBaseline = false
@@ -150,13 +70,10 @@ func (p *perfBaselineState) reset() {
 	p.baselineMid = perfBaselineEntry{}
 }
 
-// perfBaselinePath returns the full path to the baseline file.
 func perfBaselinePath(workingDir string) string {
 	return filepath.Join(workingDir, ".ggcode", perfBaselineFile)
 }
 
-// loadPerfBaseline reads historical run data from disk. Returns empty data
-// if the file doesn't exist or can't be parsed.
 func loadPerfBaseline(workingDir string) []perfBaselineEntry {
 	path := perfBaselinePath(workingDir)
 	data, err := os.ReadFile(path)
@@ -171,9 +88,8 @@ func loadPerfBaseline(workingDir string) []perfBaselineEntry {
 	return d.Runs
 }
 
-// savePerfBaseline writes the historical data to disk, atomically.
 func savePerfBaseline(workingDir string, runs []perfBaselineEntry) {
-	// Trim to rolling window.
+
 	if len(runs) > perfBaselineMaxRuns {
 		runs = runs[len(runs)-perfBaselineMaxRuns:]
 	}
@@ -189,19 +105,13 @@ func savePerfBaseline(workingDir string, runs []perfBaselineEntry) {
 		debug.Log("perf-baseline", "failed to marshal: %v", err)
 		return
 	}
-	// #1167: write via temp file + rename so a concurrent session never
-	// observes a truncated or half-written baseline (which would silently
-	// disable regression detection) and a failed write never leaves a
-	// partial file behind. Same pattern as ratchet.go save().
+
 	if err := util.AtomicWriteFile(path, data, 0644); err != nil {
 		debug.Log("perf-baseline", "failed to write: %v", err)
 	}
 }
 
-// computeMedianBaseline calculates the median of key metrics across historical runs.
-// Only successful runs are included in the baseline to avoid skewing by failures.
 func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
-	// Filter to successful runs for a cleaner baseline.
 	var valid []perfBaselineEntry
 	for _, r := range runs {
 		if r.Success {
@@ -225,12 +135,6 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 	}
 }
 
-// modalTopTools builds the baseline tool set for the tool-mix drift check
-// (r386, ASI tool-usage-pattern stability from arXiv 2601.04170): names that
-// appear in at least half of the successful runs' top-3 tool sets, top 3 by
-// frequency. Stored in the same "name:count" shape as run entries, where
-// count here is the number of historical runs containing the tool. Empty
-// when the recorded history predates TopTools persistence.
 func modalTopTools(runs []perfBaselineEntry) []string {
 	freq := make(map[string]int)
 	withTools := 0
@@ -245,7 +149,7 @@ func modalTopTools(runs []perfBaselineEntry) []string {
 		}
 	}
 	if withTools < 3 {
-		return nil // not enough tool-shape history to define a modal set
+		return nil
 	}
 	type nameFreq struct {
 		name string
@@ -274,8 +178,6 @@ func modalTopTools(runs []perfBaselineEntry) []string {
 	return out
 }
 
-// perfTopToolNames extracts the bare tool names from a "name:count" TopTools
-// entry slice.
 func perfTopToolNames(e perfBaselineEntry) []string {
 	if len(e.TopTools) == 0 {
 		return nil
@@ -289,11 +191,9 @@ func perfTopToolNames(e perfBaselineEntry) []string {
 	return names
 }
 
-// jaccardToolSets returns the Jaccard similarity of two tool-name sets
-// (|A∩B| / |A∪B|); 1.0 when identical, 0.0 when disjoint.
 func jaccardToolSets(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
-		return 1 // nothing comparable - treat as consistent, not drifted
+		return 1
 	}
 	setA := make(map[string]bool, len(a))
 	for _, n := range a {
@@ -309,11 +209,8 @@ func jaccardToolSets(a, b []string) float64 {
 	return float64(inter) / float64(union)
 }
 
-// perfToolMixDriftFloor is the Jaccard similarity below which a run's
-// top-tool set counts as drifted from the baseline modal set (r386).
 const perfToolMixDriftFloor = 0.5
 
-// collectX helpers extract a single field into a slice for median computation.
 func collectIterations(runs []perfBaselineEntry) []int {
 	out := make([]int, len(runs))
 	for i, r := range runs {
@@ -372,7 +269,6 @@ func collectTokens(runs []perfBaselineEntry) []int {
 	return out
 }
 
-// medianInt returns the median value of a slice of ints.
 func medianInt(vals []int) int {
 	if len(vals) == 0 {
 		return 0
@@ -387,13 +283,11 @@ func medianInt(vals []int) int {
 	return sorted[mid]
 }
 
-// recordPerfBaseline saves a run summary to the historical data file.
-// Called from maybeReflect (async, non-blocking).
 func recordPerfBaseline(workingDir string, stats *RunStats) {
 	if stats == nil {
 		return
 	}
-	// Skip trivial runs (no meaningful work done).
+
 	totalTC := stats.totalToolCalls()
 	if totalTC < 3 && len(stats.FilesEdited) == 0 && len(stats.CommandsRun) == 0 {
 		return
@@ -403,13 +297,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		RunID:      stats.RunID(),
 		Iterations: stats.Iterations,
 		ToolCalls:  totalTC,
-		// #1490-A: the baseline must store the UNCAPPED counter - len(Errors)
-		// freezes at 10 for the reflection prompt, so a 22-error run and a
-		// 9-error baseline both recorded 10 and error-rate regression
-		// (2x baseline) stayed invisible exactly in the high-error region
-		// it exists to watch. Baselines recorded before this change hold
-		// capped values; the mixed window self-corrects as pre-change
-		// baselines age out of the rolling window (short-lived by design).
+
 		Errors:      stats.ErrorCount,
 		FilesEdited: len(stats.FilesEdited),
 		DurationSec: int(stats.Duration.Round(time.Second).Seconds()),
@@ -423,7 +311,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 
 	runs := loadPerfBaseline(workingDir)
 	runs = append(runs, entry)
-	// Trim to rolling window.
+
 	if len(runs) > perfBaselineMaxRuns {
 		runs = runs[len(runs)-perfBaselineMaxRuns:]
 	}
@@ -432,9 +320,6 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		entry.RunID, entry.Iterations, entry.ToolCalls, entry.Errors, entry.DurationSec)
 }
 
-// maybeInjectPerfRegression checks whether the agent's recent performance has
-// regressed vs. the historical baseline. Called at run start (before iteration 1).
-// Injects a concise advisory into the context if regression is detected.
 func (a *Agent) maybeInjectPerfRegression() {
 	if a.perfBaseline == nil {
 		return
@@ -443,7 +328,6 @@ func (a *Agent) maybeInjectPerfRegression() {
 		return
 	}
 
-	// Load historical data if not yet loaded this session.
 	if !a.perfBaseline.hasBaseline {
 		runs := loadPerfBaseline(a.WorkingDir())
 		if len(runs) < perfBaselineMinRuns {
@@ -456,17 +340,9 @@ func (a *Agent) maybeInjectPerfRegression() {
 
 	mid := a.perfBaseline.baselineMid
 	if mid.Iterations == 0 && mid.ToolCalls == 0 {
-		return // baseline all zeros (shouldn't happen, but defensive)
+		return
 	}
 
-	// Check the last few completed runs for sustained regression.
-	// A single bad run could be an outlier; sustained regression is real.
-	// #1148: only successful runs vote - computeMedianBaseline excludes
-	// failed runs (Success=false from iteration exhaustion, stream errors,
-	// user cancels) because they skew high on iterations/duration/errors;
-	// comparing failed-run metrics against a successful-run median is an
-	// invalid cross-population contrast that systematically crossed every
-	// regression threshold after any two consecutive failures.
 	recent := a.perfBaseline.historical
 	var recent3 []perfBaselineEntry
 	for i := len(recent) - 1; i >= 0 && len(recent3) < 3; i-- {
@@ -475,17 +351,9 @@ func (a *Agent) maybeInjectPerfRegression() {
 		}
 	}
 	if len(recent3) < 3 {
-		return // not enough recent data
+		return
 	}
 
-	// Count how many of the last 3 runs exceeded regression thresholds,
-	// bucketed per metric. Consensus requires at least 2 of 3 recent runs to
-	// regress on the SAME metric -- cross-metric votes (run1 hits iterations,
-	// run2 hits duration) must not pass the gate (#1143). A single run that
-	// regresses on several metrics votes for EACH of them (#2723): metrics
-	// like iterations and duration are strongly correlated, and letting the
-	// first hit monopolize the run's vote systematically hid real 2/3
-	// same-metric consensus.
 	metricCounts := make(map[string]int)
 	for _, r := range recent3 {
 		for _, m := range collectRunRegressionMetrics(r, mid) {
@@ -499,12 +367,10 @@ func (a *Agent) maybeInjectPerfRegression() {
 		return
 	}
 
-	// Build the warning from a run that actually regressed on worstMetric --
-	// the most severe one -- instead of blindly using the latest run (#1143).
 	hitRun := selectWorstPerfHit(recent3, mid, worstMetric)
 
 	a.perfBaseline.warnCount++
-	a.perfBaseline.warnedThisSession = true // #1180: once per session, across resets
+	a.perfBaseline.warnedThisSession = true
 	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun)
 	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", metricCounts[worstMetric], worstMetric)
 
@@ -517,10 +383,6 @@ func (a *Agent) maybeInjectPerfRegression() {
 	})
 }
 
-// checkSingleRunRegression checks if a single run regressed against baseline.
-// Returns (true, metricName) for the first regressed metric in perfMetricOrder
-// priority. Callers that need ALL regressed metrics (voting, worst-run
-// selection) must use collectRunRegressionMetrics (#2723).
 func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 	if hits := collectRunRegressionMetrics(run, baseline); len(hits) > 0 {
 		return true, hits[0]
@@ -528,70 +390,50 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 	return false, ""
 }
 
-// collectRunRegressionMetrics returns EVERY metric this run regressed on,
-// in perfMetricOrder priority (#2723). The old first-hit-only return let a
-// dual-regression run (common: iterations and duration move together) cast
-// a single vote and hid same-metric 2/3 consensus.
 func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
 	var hits []string
-	// Iterations regression: 1.5x baseline
+
 	if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
 		hits = append(hits, "iterations")
 	}
-	// Duration regression: 1.5x baseline (skip if baseline is very short)
+
 	if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
 		hits = append(hits, "duration")
 	}
-	// Error rate regression: 2x baseline error count.
-	// #1143: removed the always-true "baseline.Errors >= 0" guard.
+
 	if baseline.ToolCalls > 0 && run.Errors > 0 && run.ToolCalls > 0 {
 		baseRate := float64(baseline.Errors) / float64(baseline.ToolCalls)
 		runRate := float64(run.Errors) / float64(run.ToolCalls)
 		if baseRate == 0 && runRate > 0.05 {
-			// Baseline had 0 errors, current run has >5% error rate
+
 			hits = append(hits, "error_rate")
 		} else if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
 			hits = append(hits, "error_rate")
 		}
 	}
-	// Token-spend regression (r394): run consumed 2x baseline tokens.
-	// Guarded by a 10k floor so tiny-baseline noise cannot fire; entries
-	// recorded before the field existed read as 0 and never fire.
+
 	if baseline.Tokens >= 10000 && run.Tokens > baseline.Tokens*2 {
 		hits = append(hits, "tokens")
 	}
-	// Context peak regression: context is growing 1.5x baseline
+
 	if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
 		hits = append(hits, "context_usage")
 	}
-	// Compaction regression: significantly more compactions than baseline
+
 	if baseline.Compactions == 0 && run.Compactions >= 3 {
 		hits = append(hits, "compaction")
 	}
-	// Tool-mix drift (r386): the run's dominant tool set diverges from the
-	// historical modal set - e.g. a workflow historically shaped
-	// read_file+grep now dominated by run_command retries. Behavioral-drift
-	// signal from ASI's tool-usage-pattern stability dimension
-	// (arXiv 2601.04170); only comparable when both sides carry TopTools.
+
 	if jaccardToolSets(perfTopToolNames(run), perfTopToolNames(baseline)) < perfToolMixDriftFloor {
 		hits = append(hits, "tool_mix")
 	}
 	return hits
 }
 
-// perfRegressionConsensusRuns is how many of the recent runs must regress on
-// the SAME metric before a warning fires (#1143).
 const perfRegressionConsensusRuns = 2
 
-// perfMetricOrder lists regression metrics in the evaluation priority used by
-// checkSingleRunRegression, keeping worst-metric selection deterministic
-// when multiple metrics reach consensus (#1143).
 var perfMetricOrder = []string{"iterations", "duration", "error_rate", "tokens", "context_usage", "compaction", "tool_mix"}
 
-// pickConsensusPerfMetric returns a metric whose hit count reaches
-// perfRegressionConsensusRuns across recent runs, preferring metrics earlier
-// in perfMetricOrder when several qualify. Empty result means no metric
-// reached same-metric consensus, so no warning should fire (#1143).
 func pickConsensusPerfMetric(hitCounts map[string]int) string {
 	for _, m := range perfMetricOrder {
 		if hitCounts[m] >= perfRegressionConsensusRuns {
@@ -601,16 +443,11 @@ func pickConsensusPerfMetric(hitCounts map[string]int) string {
 	return ""
 }
 
-// selectWorstPerfHit picks, among the recent runs that regressed on the given
-// metric, the run with the most severe (largest) observed value for that
-// metric. Falls back to the latest run defensively; normal callers gate on
-// same-metric consensus first, so at least one hit always exists (#1143).
 func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, metric string) perfBaselineEntry {
 	worst := runs[len(runs)-1]
 	bestVal := -1
 	for _, r := range runs {
-		// Membership via the full collected set, not the first-hit metric: a
-		// dual-regression run IS a hit for duration too (#2723).
+
 		hit := false
 		for _, m := range collectRunRegressionMetrics(r, baseline) {
 			if m == metric {
@@ -623,8 +460,7 @@ func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, me
 		}
 		var v int
 		if metric == "tool_mix" {
-			// Divergence from baseline (100 - similarity%): perfMetricValue
-			// has no baseline param, so tool_mix distance is computed here.
+
 			v = 100 - int(jaccardToolSets(perfTopToolNames(r), perfTopToolNames(baseline))*100)
 		} else {
 			v = perfMetricValue(r, metric)
@@ -637,8 +473,6 @@ func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, me
 	return worst
 }
 
-// perfMetricValue extracts the observed value of a regression metric from a
-// single run entry (#1143).
 func perfMetricValue(entry perfBaselineEntry, metric string) int {
 	switch metric {
 	case "iterations":
@@ -658,7 +492,6 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 	}
 }
 
-// formatPerfRegressionWarning builds a concise advisory message.
 func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, latest perfBaselineEntry) string {
 	switch metric {
 	case "iterations":
@@ -688,9 +521,7 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 			baseline.Compactions, latest.Compactions,
 			"Frequent compaction means context is too large. Prefer narrow, targeted searches over broad exploration.")
 	case "tool_mix":
-		// r386 behavioral drift: no scalar pair to compare, so format the
-		// shape shift directly - modal baseline set vs this run's dominant
-		// tools.
+
 		return fmt.Sprintf("Performance regression notice: dominant tool mix drifted from the project baseline. Baseline modal tools: [%s]; this run: [%s]. The workflow this project historically used has shifted - if this is not a deliberate change of approach, return to the established tool pattern (targeted reads/searches before broad commands).",
 			strings.Join(perfTopToolNames(baseline), ", "),
 			strings.Join(perfTopToolNames(latest), ", "))
@@ -713,9 +544,6 @@ func formatPerfRegressionLine(metricName string, baseline, current int, advice s
 	return out
 }
 
-// topToolMix returns the n most-invoked tools from a per-tool call-count
-// map as "name:count" strings, ordered by count desc then name asc so the
-// output is deterministic across map iterations. An empty map yields nil.
 func topToolMix(m map[string]int, n int) []string {
 	if len(m) == 0 {
 		return nil
@@ -740,11 +568,6 @@ func topToolMix(m map[string]int, n int) []string {
 	return out
 }
 
-// formatRunShapeDiagnostics appends a where-did-the-time-go breakdown to a
-// regression advisory. The bare advisory states a total the agent cannot
-// decompose; the shape line names iterations, per-iteration latency and the
-// dominant tools so rework can be targeted instead of guessed away. Legacy
-// baselines without TopTools degrade gracefully to a counts-only line.
 func formatRunShapeDiagnostics(hit perfBaselineEntry, durSec int) string {
 	out := " Run shape of the regressed run: iterations=" + intToStr(hit.Iterations)
 	out += ", tool_calls=" + intToStr(hit.ToolCalls)
@@ -781,7 +604,7 @@ func intToStr(n int) string {
 }
 
 func floatToString(f float64) string {
-	// Simple formatting: show 1 decimal place
+
 	whole := int(f)
 	frac := int((f - float64(whole)) * 10)
 	if frac < 0 {
@@ -791,7 +614,7 @@ func floatToString(f float64) string {
 }
 
 func trimZeros(s string) string {
-	// Remove trailing ".0" for cleaner output.
+
 	if len(s) >= 2 && s[len(s)-2:] == ".0" {
 		return s[:len(s)-2]
 	}

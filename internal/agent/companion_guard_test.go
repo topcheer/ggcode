@@ -20,7 +20,7 @@ func TestIsTestFilePath(t *testing.T) {
 		{"FooTest.java", true},
 		{"FooTests.java", true},
 		{"FooIT.java", true},
-		// Not test files
+
 		{"foo.go", false},
 		{"agent.go", false},
 		{"foo.py", false},
@@ -164,7 +164,7 @@ func TestCheckCompanionFiles_AlreadyFired(t *testing.T) {
 
 func TestCheckCompanionFiles_TestFileEditedOnly(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Only a test file is edited — no companion check needed.
+
 	testFile := filepath.Join(tmpDir, "foo_test.go")
 	if err := os.WriteFile(testFile, []byte("package test\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestCheckCompanionFiles_TestFileEditedOnly(t *testing.T) {
 
 func TestCheckCompanionFiles_SourceWithoutTestCompanion(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Source file exists, but NO test companion.
+
 	srcFile := filepath.Join(tmpDir, "bar.go")
 	if err := os.WriteFile(srcFile, []byte("package bar\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestCheckCompanionFiles_SourceWithoutTestCompanion(t *testing.T) {
 
 func TestCheckCompanionFiles_SourceWithTestCompanionNotEdited(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Source file and test companion both exist on disk.
+
 	srcFile := filepath.Join(tmpDir, "handler.go")
 	testCompanion := filepath.Join(tmpDir, "handler_test.go")
 	if err := os.WriteFile(srcFile, []byte("package handler\n"), 0644); err != nil {
@@ -210,7 +210,7 @@ func TestCheckCompanionFiles_SourceWithTestCompanionNotEdited(t *testing.T) {
 
 	g := newCompanionGuardState()
 	stats := newRunStats("test")
-	stats.recordFileEdit(srcFile) // Only edit the source, not the test
+	stats.recordFileEdit(srcFile)
 	msg := g.checkCompanionFiles(stats, tmpDir)
 	if msg == "" {
 		t.Fatal("expected non-empty warning message, got empty")
@@ -237,7 +237,7 @@ func TestCheckCompanionFiles_BothEdited(t *testing.T) {
 	g := newCompanionGuardState()
 	stats := newRunStats("test")
 	stats.recordFileEdit(srcFile)
-	stats.recordFileEdit(testFile) // Both edited — no warning
+	stats.recordFileEdit(testFile)
 	msg := g.checkCompanionFiles(stats, tmpDir)
 	if msg != "" {
 		t.Errorf("expected empty message when both source and test edited, got: %s", msg)
@@ -260,7 +260,6 @@ func TestCheckCompanionFiles_FiresOnlyOnce(t *testing.T) {
 		t.Fatal("expected first call to produce warning")
 	}
 
-	// Second call should be empty (already fired).
 	msg2 := g.checkCompanionFiles(stats, tmpDir)
 	if msg2 != "" {
 		t.Errorf("expected second call to be empty (already fired), got: %s", msg2)
@@ -290,7 +289,7 @@ func TestCheckCompanionFiles_MultipleMissingCompanions(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected warning for multiple missing companions")
 	}
-	// All three should be mentioned.
+
 	for _, f := range files {
 		if !contains(msg, f.test) {
 			t.Errorf("expected message to mention %s, got: %s", f.test, msg)
@@ -307,7 +306,7 @@ func TestCheckCompanionFiles_RelativePath(t *testing.T) {
 
 	g := newCompanionGuardState()
 	stats := newRunStats("test")
-	// Edit recorded with relative path.
+
 	stats.recordFileEdit("mod.go")
 	msg := g.checkCompanionFiles(stats, tmpDir)
 	if msg == "" {
@@ -336,7 +335,7 @@ func TestCheckCompanionFiles_PythonConvention(t *testing.T) {
 
 func TestCheckCompanionFiles_SkipsVendorAndGenerated(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Vendor file — should be skipped even if test companion exists.
+
 	vendorSrc := filepath.Join(tmpDir, "vendor", "lib", "foo.go")
 	vendorTest := filepath.Join(tmpDir, "vendor", "lib", "foo_test.go")
 	os.MkdirAll(filepath.Dir(vendorSrc), 0755)
@@ -379,16 +378,12 @@ func TestNormalizeCompanionPath(t *testing.T) {
 			t.Errorf("normalizePath(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
-	// With empty workDir, behavior degrades to Clean (no resolution possible).
+
 	if got := normalizeCompanionPath("", "foo.go"); got != "foo.go" {
 		t.Errorf("normalizePath(empty workDir, relative) = %q, want %q", got, "foo.go")
 	}
 }
 
-// TestCheckCompanionFiles_MixedPathForms (issue #310): when the agent edits
-// the source file with a relative path but the test companion with an
-// absolute path (or vice versa), the edited-set lookup must still match and
-// no false "test files were not updated" warning may fire.
 func TestCheckCompanionFiles_MixedPathForms(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "mixed.go")
@@ -403,7 +398,6 @@ func TestCheckCompanionFiles_MixedPathForms(t *testing.T) {
 	relSrc := "mixed.go"
 	relTest := "mixed_test.go"
 
-	// Case 1: source relative, test absolute.
 	g := newCompanionGuardState()
 	stats := newRunStats("test")
 	stats.recordFileEdit(relSrc)
@@ -412,7 +406,6 @@ func TestCheckCompanionFiles_MixedPathForms(t *testing.T) {
 		t.Errorf("case rel-src/abs-test: expected no warning, got: %s", msg)
 	}
 
-	// Case 2: source absolute, test relative.
 	g2 := newCompanionGuardState()
 	stats2 := newRunStats("test")
 	stats2.recordFileEdit(srcFile)
@@ -421,8 +414,6 @@ func TestCheckCompanionFiles_MixedPathForms(t *testing.T) {
 		t.Errorf("case abs-src/rel-test: expected no warning, got: %s", msg)
 	}
 
-	// Control: with the old Clean-only normalization these mixed forms would
-	// miss, but the warning must still fire when the test truly was not edited.
 	g3 := newCompanionGuardState()
 	stats3 := newRunStats("test")
 	stats3.recordFileEdit(relSrc)

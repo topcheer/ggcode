@@ -10,11 +10,7 @@ import (
 )
 
 func TestMCPElicitationRoutesThroughAskUserTool(t *testing.T) {
-	// Regression for #1484: the elicitation handler depended on a
-	// package-global InteractionBroker whose setter had zero call sites, so
-	// every elicitation/create died at "no interaction broker available".
-	// The fix routes through the session's registered ask_user tool, reusing
-	// the per-surface handler that TUI/daemon/desktop install at startup.
+
 	reg := toolpkg.NewRegistry()
 	ask := toolpkg.NewAskUserTool()
 	ask.SetHandler(func(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
@@ -52,8 +48,7 @@ func TestMCPElicitationRoutesThroughAskUserTool(t *testing.T) {
 }
 
 func TestMCPElicitationNoHandlerErrors(t *testing.T) {
-	// Non-interactive sessions (no surface handler installed) must get a
-	// clear error instead of a hang.
+
 	reg := toolpkg.NewRegistry()
 	if err := reg.Register(toolpkg.NewAskUserTool()); err != nil {
 		t.Fatalf("register ask_user: %v", err)
@@ -72,10 +67,6 @@ func TestMCPElicitationNoHandlerErrors(t *testing.T) {
 	}
 }
 
-// TestMCPElicitationRequiredEmptyDeclines pins #1678 case 2: a required
-// field left EMPTY was silently dropped from the accept content (empty
-// values are skipped) - the MCP server got an accept missing required
-// fields with no error signal. An incomplete answer now declines.
 func TestMCPElicitationRequiredEmptyDeclines(t *testing.T) {
 	reg := toolpkg.NewRegistry()
 	ask := toolpkg.NewAskUserTool()
@@ -83,8 +74,8 @@ func TestMCPElicitationRequiredEmptyDeclines(t *testing.T) {
 		return toolpkg.AskUserResponse{
 			Status: toolpkg.AskUserStatusSubmitted,
 			Answers: []toolpkg.AskUserAnswer{
-				{ID: "name", Answered: true, FreeformText: "alice"}, // filled
-				{ID: "token", Answered: false},                      // required, left empty
+				{ID: "name", Answered: true, FreeformText: "alice"},
+				{ID: "token", Answered: false},
 			},
 		}, nil
 	})
@@ -111,8 +102,6 @@ func TestMCPElicitationRequiredEmptyDeclines(t *testing.T) {
 	}
 }
 
-// TestMissingRequiredFieldsDirect: the helper distinguishes absent, empty-
-// string, and filled values.
 func TestMissingRequiredFieldsDirect(t *testing.T) {
 	schema := mcp.ElicitationSchema{
 		Required: []string{"a", "b", "c"},
@@ -120,7 +109,7 @@ func TestMissingRequiredFieldsDirect(t *testing.T) {
 			"a": {Type: "string"}, "b": {Type: "string"}, "c": {Type: "string"},
 		},
 	}
-	// a filled, b absent, c empty string.
+
 	content := map[string]any{"a": "x", "c": ""}
 	missing := missingRequiredFields(schema, content)
 	if len(missing) != 2 {

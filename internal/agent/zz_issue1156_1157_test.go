@@ -1,14 +1,9 @@
 package agent
 
-// Targeted regression tests for GitHub issues #1156 and #1157.
-// Kept in a separate file so each fix scope stays reviewable.
-
 import (
 	"strings"
 	"testing"
 )
-
-// ---------- #1156: CJK-aware query tokenizer ----------
 
 func TestIssue1156_PureCJKQueryProducesBigrams(t *testing.T) {
 	tokens := qcTokenize("会话管理逻辑")
@@ -58,14 +53,14 @@ func TestIssue1156_MixedQueryIncludesBothScripts(t *testing.T) {
 }
 
 func TestIssue1156_MixedQueriesSharingASCIIOnlyNoLongerIdentical(t *testing.T) {
-	// Before the fix both sides tokenized to {session} giving Jaccard 1.0.
+
 	a := qcTokenize("session管理逻辑")
 	b := qcTokenize("session数据库管理")
 	sim := qcJaccard(a, b)
 	if sim >= 1.0 {
 		t.Fatalf("mixed queries sharing only ASCII must not be identical, got %f", sim)
 	}
-	// Intersection {session, 管理}, union size 7 -> 2/7 (~0.29).
+
 	if sim <= 0 || sim > 0.4 {
 		t.Fatalf("expected partial similarity 2/7 for shared-bigram mixed queries, got %f", sim)
 	}
@@ -88,8 +83,6 @@ func TestIssue1156_CJKPunctuationSplitsRuns(t *testing.T) {
 		t.Fatalf("distinct clauses separated by CJK punctuation must not converge, got %f", sim)
 	}
 }
-
-// ---------- #1157: pointer-slice shape heuristic ----------
 
 func TestIssue1157_PointerCompositeLiteralsSuppressed(t *testing.T) {
 	cases := []struct {
@@ -204,8 +197,7 @@ func bump() {
 }
 
 func TestIssue1157_BareIdentifierKeepsOriginalBehavior(t *testing.T) {
-	// Bare identifiers hide the element type; without type info the detector
-	// keeps its default warning behavior even when the real element is *T.
+
 	src := `package main
 
 type User struct{ Name string }
@@ -234,8 +226,7 @@ func renameAll(ptrs []*User) {
 	}
 }
 `
-	// Adding ONLY a pointer-shaped range must produce zero new issues;
-	// an unsuppressed heuristic would surface p.Val as a second delta hit.
+
 	withPointer := oldSrc + `
 type Item struct{ Val int }
 
@@ -250,7 +241,6 @@ func bumpPtr() {
 			len(warnings), warnings)
 	}
 
-	// Control: adding a value-slice pattern is reported once.
 	withValue := oldSrc + `
 type Item struct{ Val int }
 

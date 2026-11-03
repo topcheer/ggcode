@@ -15,16 +15,8 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-// DepGraphTool implements the dep_graph tool that analyzes Go package-level
-// dependency relationships in a project. It builds an import graph from source
-// files and supports queries: reverse dependencies, import cycles, fan-in/fan-out
-// metrics, and architecture layering analysis.
 type DepGraphTool struct{ WorkingDir string }
 
-// Clone implements Cloner (#2596 siblings): registered by value, a shared
-// non-Cloner instance's WorkingDir cannot be Set via reflection, so cloned
-// agents' dep_graph would resolve the original registry's workspace instead
-// of their own worktree (resolveDir(args.Path, t.WorkingDir) in Execute).
 func (t DepGraphTool) Clone() Tool { return &DepGraphTool{WorkingDir: t.WorkingDir} }
 
 func (t DepGraphTool) Name() string { return "dep_graph" }
@@ -67,7 +59,6 @@ func (t DepGraphTool) Parameters() json.RawMessage {
 	}`)
 }
 
-// pkgNode represents a package in the dependency graph.
 type pkgNode struct {
 	Path      string   `json:"path"`
 	ShortName string   `json:"short_name"`
@@ -76,7 +67,6 @@ type pkgNode struct {
 	FileCount int      `json:"file_count"`
 }
 
-// depGraphResult is the structured output of the tool.
 type depGraphResult struct {
 	ModulePath  string     `json:"module_path,omitempty"`
 	Action      string     `json:"action"`
@@ -116,7 +106,6 @@ func (t DepGraphTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		absDir = dir
 	}
 
-	// Find go.mod to get module path
 	modPath, modRoot := findModulePath(absDir)
 	if modPath == "" {
 		return Result{IsError: true, Content: "no go.mod found - dep_graph requires a Go module"}, nil
@@ -143,8 +132,6 @@ func (t DepGraphTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	return Result{Content: formatDepGraphResult(result)}, nil
 }
 
-// computeReverseEdges populates the Imported field for each node by reversing
-// the forward import edges, then deduplicates.
 func computeReverseEdges(graph map[string]*pkgNode) {
 	for pkg, node := range graph {
 		for _, imp := range node.Imports {
@@ -158,7 +145,6 @@ func computeReverseEdges(graph map[string]*pkgNode) {
 	}
 }
 
-// countEdges returns total forward import edges in the graph.
 func countEdges(graph map[string]*pkgNode) int {
 	count := 0
 	for _, node := range graph {
@@ -167,7 +153,6 @@ func countEdges(graph map[string]*pkgNode) int {
 	return count
 }
 
-// populateActionResult fills the result struct based on the requested action.
 func populateActionResult(result *depGraphResult, args struct {
 	Path       string `json:"path"`
 	Action     string `json:"action"`
@@ -197,7 +182,6 @@ func populateActionResult(result *depGraphResult, args struct {
 	return nil
 }
 
-// findModulePath walks up from dir to find go.mod and returns (modulePath, modRoot).
 func findModulePath(dir string) (string, string) {
 	d := dir
 	for {
@@ -217,8 +201,6 @@ func findModulePath(dir string) (string, string) {
 	return "", ""
 }
 
-// buildDepGraph parses all .go files under modRoot, extracts intra-module imports,
-// and returns a map of package path -> *pkgNode.
 func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]*pkgNode, map[string]int, error) {
 	graph := make(map[string]*pkgNode)
 	fileCount := make(map[string]int)
@@ -236,12 +218,7 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 		if !shouldParseFile(info) {
 			return nil
 		}
-		// #4438: evaluate build constraints with the default build.Context
-		// (host GOOS/GOARCH + release tags, NO custom -tags) so files excluded
-		// from a plain `go build` - e.g. //go:build goolm guards - no longer
-		// pollute the graph with imports of packages that are not compiled.
-		// A constraint-read error falls through to INCLUDE the file: skipping
-		// on transient IO would silently drop real packages from the graph.
+
 		if match, merr := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path)); merr == nil && !match {
 			return nil
 		}
@@ -256,13 +233,10 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 		return nil, nil, err
 	}
 
-	// Dedup and sort imports per package
 	for _, node := range graph {
 		node.Imports = dedupSorted(node.Imports)
 	}
 
-	// Ensure imported packages exist as nodes even if they have no .go files
-	// in the module (edge case: packages only used as imports)
 	for _, node := range graph {
 		for _, imp := range node.Imports {
 			if _, ok := graph[imp]; !ok {
@@ -277,7 +251,6 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 	return graph, fileCount, nil
 }
 
-// shouldSkipDir returns true for directories that should not be traversed.
 func shouldSkipDir(info os.FileInfo) bool {
 	if !info.IsDir() {
 		return false
@@ -287,7 +260,6 @@ func shouldSkipDir(info os.FileInfo) bool {
 		(strings.HasPrefix(name, ".") && name != ".")
 }
 
-// shouldParseFile returns true for non-test .go files.
 func shouldParseFile(info os.FileInfo) bool {
 	if info.IsDir() {
 		return false
@@ -296,11 +268,10 @@ func shouldParseFile(info os.FileInfo) bool {
 	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
 }
 
-// processGoFile parses a single .go file and records its package imports in the graph.
 func processGoFile(fset *token.FileSet, path, modRoot, modulePath string, graph map[string]*pkgNode, fileCount map[string]int) error {
 	f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 	if err != nil {
-		return nil // skip unparseable files
+		return nil
 	}
 
 	relDir, err := filepath.Rel(modRoot, filepath.Dir(path))
@@ -327,9 +298,7 @@ func processGoFile(fset *token.FileSet, path, modRoot, modulePath string, graph 
 
 	for _, imp := range f.Imports {
 		impPath := strings.Trim(imp.Path.Value, `"`)
-		// #1002: require a "/" (or exact) module boundary — a bare prefix
-		// match pulls in prefix-colliding external packages (module
-		// k8s.io/api must not claim k8s.io/apimachinery imports).
+
 		if impPath != modulePath && !strings.HasPrefix(impPath, modulePath+"/") {
 			continue
 		}
@@ -341,7 +310,6 @@ func processGoFile(fset *token.FileSet, path, modRoot, modulePath string, graph 
 	return nil
 }
 
-// shortPkgName returns the last component of a package path, relative to module.
 func shortPkgName(pkgPath, modulePath string) string {
 	if pkgPath == modulePath {
 		return filepath.Base(modulePath)
@@ -353,7 +321,6 @@ func shortPkgName(pkgPath, modulePath string) string {
 	return pkgPath
 }
 
-// dedupSorted returns a sorted, deduplicated slice.
 func dedupSorted(s []string) []string {
 	if len(s) <= 1 {
 		return s
@@ -369,7 +336,6 @@ func dedupSorted(s []string) []string {
 	return out
 }
 
-// buildOverview returns a sorted list of all packages with their metrics.
 func buildOverview(graph map[string]*pkgNode, fileCount map[string]int, maxResults int) []pkgNode {
 	nodes := make([]pkgNode, 0, len(graph))
 	for _, n := range graph {
@@ -384,14 +350,7 @@ func buildOverview(graph map[string]*pkgNode, fileCount map[string]int, maxResul
 	return nodes
 }
 
-// findReverseDeps finds all packages that import the target (directly or transitively).
-// #4438: a bare name matching several distinct packages is ambiguous - it
-// silently unioned unrelated subtrees into one result. It now errors
-// listing the candidates so the caller can pass a longer suffix. Zero
-// matches also errors: silent nil was indistinguishable from "nobody
-// imports this" and hid typos.
 func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) ([]string, error) {
-	// Find matching package(s)
 	var targets []string
 	for pkgPath := range graph {
 		if pkgPath == target || strings.HasSuffix(pkgPath, "/"+target) {
@@ -406,7 +365,6 @@ func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) (
 		return nil, fmt.Errorf("target %q is ambiguous: matches %d packages (%s); use the full import path or a longer suffix", target, len(targets), strings.Join(targets, ", "))
 	}
 
-	// BFS to find all reverse dependencies (transitive)
 	visited := make(map[string]bool)
 	queue := make([]string, 0, len(targets))
 	for _, t := range targets {
@@ -436,20 +394,18 @@ func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) (
 	return result, nil
 }
 
-// findCycles detects import cycles using DFS-based cycle detection.
 func findCycles(graph map[string]*pkgNode, maxResults int) [][]string {
 	var cycles [][]string
 
-	// Build adjacency list
 	adj := make(map[string][]string)
 	for pkg, node := range graph {
 		adj[pkg] = node.Imports
 	}
 
 	const (
-		white = 0 // unvisited
-		gray  = 1 // in progress
-		black = 2 // done
+		white = 0
+		gray  = 1
+		black = 2
 	)
 	color := make(map[string]int)
 	var path []string
@@ -464,7 +420,7 @@ func findCycles(graph map[string]*pkgNode, maxResults int) [][]string {
 
 		for _, dep := range adj[pkg] {
 			if color[dep] == gray {
-				// Found cycle: extract from path
+
 				cycleStart := -1
 				for i, p := range path {
 					if p == dep {
@@ -486,7 +442,6 @@ func findCycles(graph map[string]*pkgNode, maxResults int) [][]string {
 		color[pkg] = black
 	}
 
-	// Process packages in sorted order for deterministic results
 	pkgs := make([]string, 0, len(graph))
 	for pkg := range graph {
 		pkgs = append(pkgs, pkg)
@@ -505,13 +460,12 @@ func findCycles(graph map[string]*pkgNode, maxResults int) [][]string {
 	return cycles
 }
 
-// findHotspots returns the most depended-upon packages (highest fan-in).
 func findHotspots(graph map[string]*pkgNode, maxResults int) []pkgNode {
 	nodes := make([]pkgNode, 0, len(graph))
 	for _, n := range graph {
 		nodes = append(nodes, *n)
 	}
-	// Sort by fan-in (imported_by count) descending
+
 	sort.Slice(nodes, func(i, j int) bool {
 		if len(nodes[i].Imported) != len(nodes[j].Imported) {
 			return len(nodes[i].Imported) > len(nodes[j].Imported)
@@ -524,7 +478,6 @@ func findHotspots(graph map[string]*pkgNode, maxResults int) []pkgNode {
 	return nodes
 }
 
-// formatDepGraphResult produces a human-readable summary.
 func formatDepGraphResult(r depGraphResult) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Dependency Graph: %d packages, %d edges", r.Packages, r.Edges))

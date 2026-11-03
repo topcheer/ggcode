@@ -9,10 +9,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestMCPURLElicitationConsentFlow covers the MCP 2025-11-25 URL mode:
-// consent routes through ask_user as an explicit prompt that displays the
-// target host, the accept response carries no content (the interaction is
-// out-of-band), and cancel/decline map onto the spec's three-action model.
 func TestMCPURLElicitationConsentFlow(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -90,8 +86,7 @@ func TestMCPURLElicitationConsentFlow(t *testing.T) {
 			if len(res.Content) != 0 {
 				t.Fatalf("url mode response must omit content, got %v", res.Content)
 			}
-			// The consent prompt must surface the target host for review
-			// (spec: clearly display the target domain/host).
+
 			if len(captured.Questions) != 1 {
 				t.Fatalf("want 1 consent question, got %d", len(captured.Questions))
 			}

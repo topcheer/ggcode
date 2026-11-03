@@ -7,7 +7,7 @@ import (
 
 func TestIterPressure_NoWarningEarly(t *testing.T) {
 	a := &Agent{iterPressure: newIterPressureState(20)}
-	// Simulate early iterations with edits and verifies
+
 	for i := 1; i <= 10; i++ {
 		a.iterPressure.recordToolCall("edit_file", i)
 		a.iterPressure.recordToolCall("run_command", i)
@@ -20,12 +20,12 @@ func TestIterPressure_NoWarningEarly(t *testing.T) {
 
 func TestIterPressure_WarnsOnDegradation(t *testing.T) {
 	a := &Agent{iterPressure: newIterPressureState(20)}
-	// Early: 4 edits, 4 verifies (ratio = 1.0)
+
 	for i := 1; i <= 4; i++ {
 		a.iterPressure.recordToolCall("edit_file", i)
 		a.iterPressure.recordToolCall("run_command", i)
 	}
-	// Late (after 75% = iter 15): 3 edits, 0 verifies (ratio = 0.0)
+
 	for i := 16; i <= 18; i++ {
 		a.iterPressure.recordToolCall("edit_file", i)
 	}
@@ -40,12 +40,12 @@ func TestIterPressure_WarnsOnDegradation(t *testing.T) {
 
 func TestIterPressure_NoWarnIfStillVerifying(t *testing.T) {
 	a := &Agent{iterPressure: newIterPressureState(20)}
-	// Early: 4 edits, 4 verifies
+
 	for i := 1; i <= 4; i++ {
 		a.iterPressure.recordToolCall("edit_file", i)
 		a.iterPressure.recordToolCall("run_command", i)
 	}
-	// Late: 2 edits, 2 verifies (ratio stays high)
+
 	a.iterPressure.recordToolCall("edit_file", 17)
 	a.iterPressure.recordToolCall("run_command", 17)
 	a.iterPressure.recordToolCall("edit_file", 18)
@@ -58,7 +58,7 @@ func TestIterPressure_NoWarnIfStillVerifying(t *testing.T) {
 
 func TestIterPressure_NoWarnInsufficientEarlyData(t *testing.T) {
 	a := &Agent{iterPressure: newIterPressureState(20)}
-	// Only 1 edit in early phase
+
 	a.iterPressure.recordToolCall("edit_file", 1)
 	a.iterPressure.recordToolCall("edit_file", 17)
 	msg := a.maybeWarnIterPressure(17)

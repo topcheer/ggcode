@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// E2E: 5MB-output command through the real RunCommand pipeline must return
-// bounded output with head+tail content preserved.
 func TestRunCommand_HeavyOutputBounded_E2E(t *testing.T) {
 	r := RunCommand{}
 	args := json.RawMessage(`{"command":"awk 'BEGIN{srand();for(i=1;i<=200000;i++){printf \"HEADMARK-%06d payload line with some content\\n\", i} print \"TAILMARK-final-line\"}'","timeout":120}`)
@@ -29,8 +27,6 @@ func TestRunCommand_HeavyOutputBounded_E2E(t *testing.T) {
 	t.Logf("retained %d bytes from 5MB stream; head+tail OK", len(out))
 }
 
-// E2E: stderr-heavy commands (test suites, linters) must be bounded too -
-// both streams run through independent boundedOutputWriter instances.
 func TestRunCommand_HeavyStderrBounded_E2E(t *testing.T) {
 	r := RunCommand{}
 	args := json.RawMessage(`{"command":"awk 'BEGIN{for(i=1;i<=200000;i++){printf \"ERRHEAD-%06d stderr payload line\\n\", i > \"/dev/stderr\"} print \"ERRTAIL-final\" > \"/dev/stderr\"; print \"stdout-done\"}'","timeout":120}`)

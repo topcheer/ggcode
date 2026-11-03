@@ -1,9 +1,5 @@
 package agent
 
-// sa-85 tests: SkillTracer-style structural failure attribution - a
-// violation must distinguish never-attempted / failed / no-artifact and
-// name the local repair.
-
 import (
 	"encoding/json"
 	"os"
@@ -31,19 +27,8 @@ func testArgs() json.RawMessage {
 	return json.RawMessage(`{"command":"go test ./..."}`)
 }
 
-// wfTestAnchor returns the freshness anchor for tests. Linux inode mtimes
-// come from the COARSE kernel clock (jiffy granularity) while time.Now()
-// uses the fine vDSO clock: a file written immediately after startedAt can
-// carry an mtime from a coarse tick that STARTED BEFORE startedAt, failing
-// globFreshOnDisk's !ModTime().Before(anchor) check. Fast local machines
-// cross a tick boundary first; 2-core CI runners schedule the write inside
-// the stale tick deterministically (2/2 CI, 0/7 local). Anchoring one
-// second in the past keeps the freshness semantics while tolerating the
-// coarse-clock lag (#3487 flake, cross-domain hotfix).
 func wfTestAnchor() time.Time { return time.Now().Add(-time.Second) }
 
-// Failed prerequisite command -> violation carries the failing attempt and
-// the attribution names WHERE it broke plus the local repair.
 func TestWFTrace_FailedAttemptAttributed(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -70,8 +55,6 @@ func TestWFTrace_FailedAttemptAttributed(t *testing.T) {
 	}
 }
 
-// Successful command that produced no artifact -> the third SkillTracer
-// outcome: ran fine, verifiable transition still missing.
 func TestWFTrace_SuccessNoArtifactAttribution(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -92,8 +75,6 @@ func TestWFTrace_SuccessNoArtifactAttribution(t *testing.T) {
 	}
 }
 
-// Prerequisite command never ran -> attribution says so explicitly instead
-// of leaving the agent to guess.
 func TestWFTrace_NeverAttempted(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -112,8 +93,6 @@ func TestWFTrace_NeverAttempted(t *testing.T) {
 	}
 }
 
-// A fresh artifact grounds the step; the trace shows ProducedArtifact and
-// the gate lifts.
 func TestWFTrace_GroundedAttemptLiftsGate(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -135,7 +114,6 @@ func TestWFTrace_GroundedAttemptLiftsGate(t *testing.T) {
 	}
 }
 
-// Unguarded and non-run_command calls leave no trace entries.
 func TestWFTrace_NoTraceForUnguarded(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -149,7 +127,6 @@ func TestWFTrace_NoTraceForUnguarded(t *testing.T) {
 	}
 }
 
-// The ledger is a sliding window: old attempts drop off.
 func TestWFTrace_WindowCap(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -166,7 +143,6 @@ func TestWFTrace_WindowCap(t *testing.T) {
 	}
 }
 
-// Violation attaches at most wfTraceMaxPerViolation attempts.
 func TestWFTrace_ViolationAttemptCap(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -181,7 +157,6 @@ func TestWFTrace_ViolationAttemptCap(t *testing.T) {
 	}
 }
 
-// Concurrent recording and attribution reads stay race-free (run -race).
 func TestWFTrace_ConcurrentSafe(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
 	e.startedAt = wfTestAnchor()
@@ -202,15 +177,12 @@ func TestWFTrace_ConcurrentSafe(t *testing.T) {
 	}
 }
 
-// Agent-side entry: nil-safe on a bare engine (workflowEngineLazy may return
-// nil only when no working dir; recordAttempt itself must tolerate the
-// nil engine the same way the rest of the engine does).
 func TestWFTrace_RecordAttemptNilEngine(t *testing.T) {
 	var e *workflowEngine
-	e.recordAttempt("run_command", testArgs(), tool.Result{Content: "x"}) // must not panic
+	e.recordAttempt("run_command", testArgs(), tool.Result{Content: "x"})
 	if got := e.recentAttempts("tests", 3); got != nil {
 		t.Fatalf("nil engine must return no attempts, got %+v", got)
 	}
 }
 
-var _ = provider.ToolCallDelta{} // keep import stable for future agent-level tests
+var _ = provider.ToolCallDelta{}

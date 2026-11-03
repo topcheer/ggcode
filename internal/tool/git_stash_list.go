@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// GitStashList implements the git_stash_list tool.
 type GitStashList struct{ WorkingDir string }
 
 func (t GitStashList) Name() string { return "git_stash_list" }
@@ -59,7 +58,6 @@ func (t GitStashList) Execute(ctx context.Context, input json.RawMessage) (Resul
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitStashList) Clone() Tool {
 	return &GitStashList{WorkingDir: t.WorkingDir}
 }

@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #4696: the active-window set_window_bounds path must chain
-// getactivewindow -> windowmove %1 before the coordinates - the bare
-// getactivewindow base made the X coordinate parse as the next command
-// name (Unknown command), so the platform-default path always failed.
 func TestIssue4696_ActiveWindowChainFixed(t *testing.T) {
 	data, err := os.ReadFile("desktop_control_linux.go")
 	if err != nil {

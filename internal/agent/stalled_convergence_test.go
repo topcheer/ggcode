@@ -7,8 +7,6 @@ import (
 func TestStalledConvergence_Detected(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// Simulate: 20 -> 15 (big improvement), then 15 -> 14, then 14 -> 14
-	// This shows a decelerating pattern that should trigger.
 	s.recordEdit()
 	got := s.recordVerify(buildResultWithErrors(15), true)
 	if got != "" {
@@ -23,7 +21,7 @@ func TestStalledConvergence_Detected(t *testing.T) {
 
 	s.recordEdit()
 	got = s.recordVerify(buildResultWithErrors(14), true)
-	// 3rd sample: deltas are -5, -1, 0 -- both recent deltas < 30% of peak
+
 	if got == "" {
 		t.Fatal("should detect stalled convergence with decelerating pattern")
 	}
@@ -32,7 +30,6 @@ func TestStalledConvergence_Detected(t *testing.T) {
 func TestStalledConvergence_NotStalled_StillProgressing(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// 20 -> 10 -> 8 -> 6: still good progress, deltas are consistent
 	s.recordEdit()
 	s.recordVerify(buildResultWithErrors(10), true)
 
@@ -49,7 +46,6 @@ func TestStalledConvergence_NotStalled_StillProgressing(t *testing.T) {
 func TestStalledConvergence_NotStalled_Increasing(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// 10 -> 12 -> 14: errors increasing -- not convergence
 	s.recordEdit()
 	s.recordVerify(buildResultWithErrors(12), true)
 
@@ -66,7 +62,6 @@ func TestStalledConvergence_NotStalled_Increasing(t *testing.T) {
 func TestStalledConvergence_MaxWarnings(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// Fire first warning
 	s.recordEdit()
 	s.recordVerify(buildResultWithErrors(15), true)
 	s.recordEdit()
@@ -77,14 +72,12 @@ func TestStalledConvergence_MaxWarnings(t *testing.T) {
 		t.Fatal("first warning should fire")
 	}
 
-	// Continue stalled pattern
 	s.recordEdit()
 	got2 := s.recordVerify(buildResultWithErrors(14), true)
 	if got2 == "" {
 		t.Fatal("second warning should fire")
 	}
 
-	// Third should be capped
 	s.recordEdit()
 	got3 := s.recordVerify(buildResultWithErrors(14), true)
 	if got3 != "" {
@@ -110,7 +103,6 @@ func TestStalledConvergence_Reset(t *testing.T) {
 func TestStalledConvergence_NoEdits(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// Verifications without edits should not trigger
 	s.recordVerify(buildResultWithErrors(15), true)
 	s.recordVerify(buildResultWithErrors(14), true)
 	got := s.recordVerify(buildResultWithErrors(14), true)
@@ -122,7 +114,6 @@ func TestStalledConvergence_NoEdits(t *testing.T) {
 func TestStalledConvergence_Pass(t *testing.T) {
 	s := newStalledConvergenceState()
 
-	// Verification that passes should not trigger
 	s.recordEdit()
 	s.recordVerify(buildResultWithErrors(5), true)
 
@@ -130,7 +121,7 @@ func TestStalledConvergence_Pass(t *testing.T) {
 	s.recordVerify(buildResultWithErrors(3), true)
 
 	s.recordEdit()
-	got := s.recordVerify("OK\n", false) // passes
+	got := s.recordVerify("OK\n", false)
 	if got != "" {
 		t.Fatal("should not fire when verification passes")
 	}
@@ -160,7 +151,6 @@ func TestIsStalledConvergence(t *testing.T) {
 	}
 }
 
-// buildResultWithErrors creates a fake verification output with N error lines.
 func buildResultWithErrors(n int) string {
 	result := ""
 	for i := 0; i < n; i++ {
@@ -169,7 +159,6 @@ func buildResultWithErrors(n int) string {
 	return result
 }
 
-// stalledItoa is a minimal int-to-string for test helpers.
 func stalledItoa(n int) string {
 	if n == 0 {
 		return "0"

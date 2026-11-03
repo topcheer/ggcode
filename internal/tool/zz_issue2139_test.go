@@ -1,11 +1,5 @@
 package tool
 
-// #2139 regression: the delete branch lacked the create branch's
-// leading-dash guard (#2133). No exploitable side effect exists, but
-// name="-d" was silently swallowed as a duplicate option - git exited 0
-// with nothing deleted and the empty-output fallback reported
-// "Deleted tag -d." (fake success).
-
 import (
 	"context"
 	"encoding/json"

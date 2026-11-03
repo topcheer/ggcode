@@ -1,10 +1,5 @@
 package agent
 
-// Regression probe for #3178: the package-level session budget sync.Maps
-// keyed by *Agent pinned the agent (and its whole reference graph) forever
-// - Close must Delete both entries so daemon-style per-request agents are
-// collectable.
-
 import (
 	"testing"
 	"time"
@@ -33,12 +28,11 @@ func TestIssue3178_CloseReleasesBudgetStores(t *testing.T) {
 		t.Fatalf("budget not set: %v", got)
 	}
 	a.Close()
-	// After Close the state entry must be GONE - a fresh lookup returns a
-	// brand-new zero state, observable as budget 0 (not the configured 10m).
+
 	if got := a.SessionTimeBudget(); got != 0 {
 		t.Fatalf("time budget state survived Close (leak, #3178): %v", got)
 	}
-	// Token dimension released together (same storage pattern).
+
 	if got := a.SessionTokenBudget(); got != 0 {
 		t.Fatalf("token budget state survived Close (leak, #3178): %v", got)
 	}
@@ -47,7 +41,7 @@ func TestIssue3178_CloseReleasesBudgetStores(t *testing.T) {
 func TestIssue3178_CloseIdempotentForBudgetStores(t *testing.T) {
 	a := newTestAgent3178(t)
 	a.Close()
-	a.Close() // second Close must not panic or resurrect state
+	a.Close()
 	if got := a.SessionTimeBudget(); got != 0 {
 		t.Fatalf("double Close left state: %v", got)
 	}

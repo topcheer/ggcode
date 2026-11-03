@@ -1,25 +1,5 @@
 package agent
 
-// test_impact_deps.go implements import-graph-based transitive test impact
-// analysis. When a package changes, not only should its own tests run, but
-// also the tests of packages that import it — because those packages' behavior
-// may be affected by the change.
-//
-// This mirrors what JetBrains AI Assistant does: "identifies affected tests
-// from code changes" by traversing the dependency graph. Cursor similarly
-// analyzes which tests are affected by tracking import relationships.
-//
-// Implementation:
-//   - Uses `go list` to build the module's import graph (cached for 5 min)
-//   - Reverses the graph to find downstream consumers of changed packages
-//   - Expands the scoped test command to include those consumers
-//   - Falls back silently if `go list` fails (e.g., build tag issues)
-//
-// Performance: `go list ./...` takes ~1-3s on first call for a medium module.
-// The result is cached for 5 minutes, so subsequent hints are instant. A 15s
-// timeout prevents blocking the agent loop. If it fails or times out, the
-// system falls back to the existing package-level TIA (test_impact.go).
-
 import (
 	"context"
 	"fmt"
@@ -37,10 +17,9 @@ import (
 
 const importGraphTTL = 5 * time.Minute
 
-// importGraphEntry caches the result of `go list` to avoid repeated slow calls.
 type importGraphEntry struct {
-	graph   map[string][]string // importPath -> imported paths
-	modPath string              // module path from go.mod
+	graph   map[string][]string
+	modPath string
 	builtAt time.Time
 }
 
@@ -51,8 +30,6 @@ var importGraphCache struct {
 	building bool
 }
 
-// goModulePath reads go.mod and extracts the module import path.
-// Returns "" if go.mod doesn't exist or can't be parsed.
 func goModulePath(workingDir string) string {
 	goModPath := filepath.Join(workingDir, "go.mod")
 	data, err := os.ReadFile(goModPath)
@@ -69,9 +46,6 @@ func goModulePath(workingDir string) string {
 	return ""
 }
 
-// detectGoBuildTags scans the Makefile for Go build tags (e.g., -tags goolm).
-// This ensures `go list` sees all packages, including those behind build
-// constraints. Returns nil if no tags are found.
 func detectGoBuildTags(workingDir string) []string {
 	for _, mf := range []string{"Makefile", "makefile", "GNUmakefile"} {
 		data, err := os.ReadFile(filepath.Join(workingDir, mf))
@@ -79,29 +53,24 @@ func detectGoBuildTags(workingDir string) []string {
 			continue
 		}
 		content := string(data)
-		// #3619: resolve Makefile variable references first. The repo's
-		// real form is `TAGS := goolm` + `-tags "$(TAGS)"` - the old code
-		// took the next Fields token verbatim and returned the literal
-		// "$(TAGS)" as a build tag.
+
 		vars := makefileVars(content)
 		words := strings.Fields(expandMakefileVars(content, vars))
 		for i, w := range words {
-			// Match -tags <tags> (space-separated)
+
 			if w == "-tags" && i+1 < len(words) {
 				return splitBuildTagList(words[i+1])
 			}
-			// Match -tags=<tags>
+
 			if strings.HasPrefix(w, "-tags=") {
 				return splitBuildTagList(strings.TrimPrefix(w, "-tags="))
 			}
 		}
-		break // found Makefile but no tags — stop searching
+		break
 	}
 	return nil
 }
 
-// makefileVars extracts simple `NAME := value` / `NAME = value` / `NAME ?=
-// value` assignments (first wins, matching make).
 func makefileVars(content string) map[string]string {
 	vars := map[string]string{}
 	for _, ln := range strings.Split(content, "\n") {
@@ -125,8 +94,6 @@ func makefileVars(content string) map[string]string {
 	return vars
 }
 
-// expandMakefileVars substitutes $(NAME) references (two passes so
-// VAR := $(OTHER) chains resolve).
 func expandMakefileVars(s string, vars map[string]string) string {
 	for pass := 0; pass < 2; pass++ {
 		changed := false
@@ -144,7 +111,6 @@ func expandMakefileVars(s string, vars map[string]string) string {
 	return s
 }
 
-// splitBuildTagList trims quotes and splits a -tags argument value.
 func splitBuildTagList(v string) []string {
 	tag := strings.Trim(v, "'\"")
 	tags := strings.Split(tag, ",")
@@ -158,10 +124,6 @@ func splitBuildTagList(v string) []string {
 	return result
 }
 
-// buildImportGraph runs `go list` to build a map of package import paths to
-// their directly imported packages. The result is cached for importGraphTTL
-// to avoid repeated slow calls. Returns nil if the command fails, times out,
-// or the directory is not a Go module.
 func buildImportGraph(workingDir string) (map[string][]string, string) {
 	if workingDir == "" {
 		return nil, ""
@@ -170,42 +132,28 @@ func buildImportGraph(workingDir string) (map[string][]string, string) {
 	importGraphCache.Lock()
 	defer importGraphCache.Unlock()
 
-	// Return cached result if valid.
 	if importGraphCache.dir == workingDir &&
 		time.Since(importGraphCache.data.builtAt) < importGraphTTL &&
 		importGraphCache.data.graph != nil {
 		return importGraphCache.data.graph, importGraphCache.data.modPath
 	}
 
-	// Kick a background build for BOTH the cold case and the stale case.
-	// #1296: previously the stale case just returned the old graph and the
-	// comment claimed a refresh would happen "on next tick" - but the next
-	// tick hit the exact same branches, so the graph was frozen for the
-	// process lifetime and new imports never entered the analysis.
 	kickImportGraphRebuildLocked(workingDir)
 
-	// If no usable cache exists, do NOT block the caller - return nil; the
-	// next call after the background build lands will see the graph. This
-	// prevents the verify-hint path from stalling on `go list` for 1-3s.
 	if importGraphCache.data.graph == nil || importGraphCache.dir != workingDir {
 		return nil, ""
 	}
 
-	// Cache exists but is stale - return stale data immediately; the
-	// refresh was already kicked above.
 	return importGraphCache.data.graph, importGraphCache.data.modPath
 }
 
-// kickImportGraphRebuildLocked starts a deduplicated background `go list`
-// build for workingDir. Callers must hold importGraphCache.
 func kickImportGraphRebuildLocked(workingDir string) {
 	if importGraphCache.building {
 		return
 	}
 	importGraphCache.building = true
 	go func() {
-		// The building flag must reset even when runGoList or the graph
-		// assembly panics, or every later call skips the rebuild forever.
+
 		defer func() {
 			importGraphCache.Lock()
 			importGraphCache.building = false
@@ -215,10 +163,7 @@ func kickImportGraphRebuildLocked(workingDir string) {
 		graph, modPath := runGoList(workingDir)
 		importGraphCache.Lock()
 		if graph != nil {
-			// #1296: bind dir to the data ONLY on success. Writing it at
-			// build START poisoned the cache on failure: dir=new + old graph
-			// meant a different workingDir (worktree/submodule switch in the
-			// same process) served the previous directory's graph as fresh.
+
 			importGraphCache.data = importGraphEntry{
 				graph:   graph,
 				modPath: modPath,
@@ -231,16 +176,10 @@ func kickImportGraphRebuildLocked(workingDir string) {
 	}()
 }
 
-// runGoList executes `go list ./...` and builds the import graph.
-// Returns nil if the command fails or times out.
 func runGoList(workingDir string) (map[string][]string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// #1296: include TestImports and XTestImports edges - the TIA's most
-	// typical case is "library changed, run downstream packages' TESTS",
-	// and a package that only imports the changed package from its _test.go
-	// files was invisible to the old .Imports-only template.
 	args := []string{"list", "-f", "{{.ImportPath}}\x01{{join .Imports \",\"}}\x02{{join .TestImports \",\"}}\x03{{join .XTestImports \",\"}}"}
 	if tags := detectGoBuildTags(workingDir); len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
@@ -257,7 +196,7 @@ func runGoList(workingDir string) (map[string][]string, string) {
 
 	modPath := goModulePath(workingDir)
 	if modPath == "" {
-		// Don't return early, continue with graph building
+
 	}
 
 	graph := make(map[string][]string)
@@ -273,9 +212,7 @@ func runGoList(workingDir string) (map[string][]string, string) {
 		importPath := parts[0]
 		var imports []string
 		if len(parts) == 2 {
-			// #1296: merge Imports + TestImports + XTestImports (the graph
-			// feeds "who is affected by a change here", so test-only edges
-			// belong in the closure just as much as regular ones).
+
 			fields := strings.Split(parts[1], "\x02")
 			imports = appendNonEmpty(imports, strings.Split(fields[0], ","))
 			if len(fields) > 1 {
@@ -291,7 +228,6 @@ func runGoList(workingDir string) (map[string][]string, string) {
 	return graph, modPath
 }
 
-// appendNonEmpty appends the non-empty trimmed elements of src to dst.
 func appendNonEmpty(dst []string, src []string) []string {
 	for _, s := range src {
 		s = strings.TrimSpace(s)
@@ -302,33 +238,12 @@ func appendNonEmpty(dst []string, src []string) []string {
 	return dst
 }
 
-// transitiveImporters returns package directories (relative to workingDir,
-// slash-separated) within the same module that transitively import any of the
-// given changed package directories. This expands the test scope beyond just
-// the changed packages to include their downstream consumers — the core of
-// transitive test impact analysis.
-//
-// The function uses a BFS closure: starting from changed packages, it repeatedly
-// adds all module-internal packages that import anything in the current target
-// set until a fixpoint is reached. This ensures that multi-level dependency chains
-// are fully traversed (e.g., A→B→C where C changed: A imports B, B imports C → A
-// is included).
-//
-// For example, if internal/util changed, internal/safego imports util, and
-// internal/agent imports safego (but not util directly), then internal/agent's
-// tests should also run because they are affected by the change to util via
-// the intermediate dependency.
-//
-// Returns nil if no importers are found. The second return value is false
-// when the import graph itself could not be built (buildImportGraph returned
-// nil), letting callers annotate the degradation (#3648).
 func transitiveImporters(workingDir string, changedDirs []string) ([]string, bool) {
 	graph, modPath := buildImportGraph(workingDir)
 	if graph == nil || len(changedDirs) == 0 {
 		return nil, graph != nil
 	}
 
-	// Build initial target set: modPath/dir for each changed dir.
 	targets := make(map[string]bool, len(changedDirs))
 	for _, d := range changedDirs {
 		targetPath := modPath + "/" + filepath.ToSlash(d)
@@ -336,29 +251,28 @@ func transitiveImporters(workingDir string, changedDirs []string) ([]string, boo
 	}
 	debug.Log("test-impact", "transitiveImporters: initial targets=%v", targets)
 
-	// BFS closure: repeatedly add importers of current targets until fixpoint.
 	seen := make(map[string]bool)
 	iteration := 0
 	for len(targets) > 0 {
 		iteration++
 		debug.Log("test-impact", "transitiveImporters: iteration %d, targets=%d", iteration, len(targets))
-		// Find all packages that import any target in the current set.
+
 		newTargets := make(map[string]bool)
 		for pkgPath, imports := range graph {
-			// Skip if already in the transitive set.
+
 			if seen[pkgPath] {
 				continue
 			}
-			// Skip packages that are already in targets (changed packages or previously added).
+
 			if targets[pkgPath] {
 				continue
 			}
-			// Check if this package imports any target.
+
 			for _, imp := range imports {
 				if targets[imp] {
 					debug.Log("test-impact", "transitiveImporters: found importer %s imports %s", pkgPath, imp)
 					newTargets[pkgPath] = true
-					// Add to seen (all packages in the graph are in the module).
+
 					seen[pkgPath] = true
 					debug.Log("test-impact", "transitiveImporters: marked seen %s", pkgPath)
 					break
@@ -366,11 +280,11 @@ func transitiveImporters(workingDir string, changedDirs []string) ([]string, boo
 			}
 		}
 		debug.Log("test-impact", "transitiveImporters: iteration %d found %d new importers", iteration, len(newTargets))
-		// Add newly discovered importers to targets for the next iteration.
+
 		for pkgPath := range newTargets {
 			targets[pkgPath] = true
 		}
-		// If no new importers were found, we've reached fixpoint.
+
 		if len(newTargets) == 0 {
 			break
 		}
@@ -381,12 +295,10 @@ func transitiveImporters(workingDir string, changedDirs []string) ([]string, boo
 		return nil, true
 	}
 
-	// Collect importers in sorted order for determinism.
 	importers := make([]string, 0, len(seen))
 	for pkgPath := range seen {
 		relDir := strings.TrimPrefix(pkgPath, modPath+"/")
-		// Ensure the package is in the module (relDir should be different from pkgPath
-		// unless the module path is empty or the package is outside the module).
+
 		if relDir != pkgPath && relDir != "" {
 			importers = append(importers, filepath.ToSlash(relDir))
 		} else {
@@ -398,21 +310,6 @@ func transitiveImporters(workingDir string, changedDirs []string) ([]string, boo
 	return importers, true
 }
 
-// impactScopedTestCommandWithDeps builds a `go test` command that covers all
-// changed Go packages AND their transitive importers (downstream consumers).
-// This is the enhanced version of impactScopedTestCommand — it uses the import
-// graph to expand the test scope, ensuring that packages affected by the change
-// (not just the changed packages themselves) have their tests run.
-//
-// The function preserves all changed directories unconditionally; importer
-// directories fill the remaining slots up to a 20-package cap. If truncation
-// occurs, the suffix indicates how many importers were omitted (e.g., "# +5
-// importers omitted").
-//
-// #3648: if the import graph can't be built (cold cache, go list failure),
-// the command degrades to changed-packages-only and is annotated "#
-// import graph unavailable, importers not included" so the agent can tell
-// degradation apart from "no importers exist".
 func impactScopedTestCommandWithDeps(workingDir string) string {
 	if workingDir == "" {
 		return ""
@@ -426,12 +323,8 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		return ""
 	}
 
-	// Find downstream consumers. graphOK=false means the import graph
-	// could not be built (cold cache, go list failure/timeout) - #1296
-	// keeps this non-fatal, but the degradation must be visible.
 	importerDirs, graphOK := transitiveImporters(workingDir, changedDirs)
 
-	// Merge changed dirs and importer dirs, deduplicating.
 	allDirs := make(map[string]bool, len(changedDirs)+len(importerDirs))
 	for _, d := range changedDirs {
 		allDirs[d] = true
@@ -441,24 +334,20 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	}
 
 	if len(allDirs) == 0 {
-		return "" // unreachable in practice (changedDirs non-empty) but stay safe
+		return ""
 	}
 
-	// Build changedSet for quick lookup.
 	changedSet := make(map[string]bool, len(changedDirs))
 	for _, d := range changedDirs {
 		changedSet[d] = true
 	}
 
-	// Convert allDirs to a sorted list for deterministic output.
 	dirList := make([]string, 0, len(allDirs))
 	for d := range allDirs {
 		dirList = append(dirList, d)
 	}
 	sort.Strings(dirList)
 
-	// Separate changed dirs and importers to preserve changed dirs unconditionally.
-	// Cap at 20 packages: changed dirs are always included, importers fill remaining slots.
 	var changedInList, importersInList []string
 	for _, d := range dirList {
 		if changedSet[d] {
@@ -468,13 +357,6 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		}
 	}
 
-	// Build final list: changed dirs first, importers after, under the
-	// total cap. #1502 case F: the old code appended ALL changed dirs
-	// unconditionally ("Cap at 20" never applied when changed dirs alone
-	// exceeded it) and the `# +more` fallback annotated lists that had
-	// omitted NOTHING - 25 changed packages were all listed AND claimed
-	// omission. Enforce the cap on the TOTAL and only annotate real
-	// omissions.
 	const pkgCap = 20
 	finalList := make([]string, 0, pkgCap)
 	var omitted int
@@ -497,9 +379,7 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	for i, d := range finalList {
 		parts[i] = goPkgArg(d)
 	}
-	// #1296: keep go list and go test tag semantics symmetric - a project
-	// gated by build tags (e.g. goolm across the whole tree) made the bare
-	// command fail loudly, sending the agent after a guaranteed failure.
+
 	cmd := "go test"
 	if tags := detectGoBuildTags(workingDir); len(tags) > 0 {
 		cmd += " -tags " + strings.Join(tags, ",")

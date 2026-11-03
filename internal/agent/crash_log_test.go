@@ -10,8 +10,7 @@ import (
 )
 
 func TestWriteCrashLog(t *testing.T) {
-	// ConfigDir derives from HOME; redirect it so tests never touch the
-	// real ~/.ggcode.
+
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
@@ -40,20 +39,13 @@ func TestWriteCrashLog(t *testing.T) {
 func TestWriteCrashLogNilValue(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// A nil panic VALUE must not itself panic inside the crash path. (Note:
-	// Go 1.21+ converts actual panic(nil) calls to *runtime.PanicNilError,
-	// so recover() never yields a bare nil in practice - this guards the
-	// direct-call contract of WriteCrashLog.)
+
 	path := WriteCrashLog("test", nil)
 	if strings.HasPrefix(path, "<") {
 		t.Fatalf("nil panic value must still produce a log, got %q", path)
 	}
 }
 
-// The crash log must include the all-goroutines dump: the panicking
-// goroutine's stack alone hides blockers (e.g. TUI event-loop stalls show
-// innocent goroutines parked on channel sends while the real culprit sits
-// in an Update handler).
 func TestWriteCrashLogIncludesAllGoroutines(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -77,10 +69,6 @@ func TestWriteCrashLogIncludesAllGoroutines(t *testing.T) {
 	}
 }
 
-// TestIssue1637_PrimaryStackTruncationMarked pins #1637: the PRIMARY
-// stack's silent tail-cut (newest-first order drops the recursion ENTRY
-// frame - the root cause) must carry the same explicit marker the
-// all-goroutine dump has had since #1616-A.
 func TestIssue1637_PrimaryStackTruncationMarked(t *testing.T) {
 	const maxStack = 1 << 20
 	huge := make([]byte, maxStack+4096)
@@ -90,17 +78,12 @@ func TestIssue1637_PrimaryStackTruncationMarked(t *testing.T) {
 	huge = append(huge, "\nENTRY-ROOT-FRAME\n"...)
 	got := string(huge)
 	_ = got
-	// Shape check on the fix itself: truncated output must end with the
-	// marker, and the marker constant must exist (shared-literal guard).
+
 	if !strings.Contains("[primary stack truncated at", "[primary stack truncated at") {
 		t.Fatal("marker literal drift")
 	}
 }
 
-// TestPruneCrashLogs pins #1666 case 1: crash loops are a designed-for
-// scenario and each write is up to ~9MiB, so the directory must be pruned -
-// keep the newest crashLogRetention files, delete older ones past the age
-// cap, and never touch files younger than the cap even beyond the count.
 func TestPruneCrashLogs(t *testing.T) {
 	dir := t.TempDir()
 
@@ -115,28 +98,21 @@ func TestPruneCrashLogs(t *testing.T) {
 		}
 	}
 
-	// crashLogRetention old files (deletable: age > cap)...
 	for i := 0; i < crashLogRetention; i++ {
 		newLog(fmt.Sprintf("old-%02d.log", i), crashLogMaxAge+time.Hour)
 	}
-	// ...2 NEW files beyond the retention count but younger than the cap:
-	// must survive (age rule protects them).
+
 	newLog("fresh-1.log", time.Minute)
 	newLog("fresh-2.log", time.Minute)
 
 	pruneCrashLogs(dir)
 
-	// The 2 fresh files must survive regardless of count.
 	for _, name := range []string{"fresh-1.log", "fresh-2.log"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s should survive (younger than cap): %v", name, err)
 		}
 	}
-	// Old files beyond the newest-20 window must be gone. With 22 files
-	// total, the newest 20 are kept: that covers all 20 old files (they
-	// are "newest" relative to each other only among themselves when the
-	// fresh ones are newer) - recompute expectation simply: old files
-	// remaining must be 18 (20 retention - 2 fresh slots).
+
 	oldLeft := 0
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
@@ -149,8 +125,6 @@ func TestPruneCrashLogs(t *testing.T) {
 	}
 }
 
-// TestPruneCrashLogsNoopBelowThreshold: at or below the retention count the
-// prune must be a no-op (no incidental deletion).
 func TestPruneCrashLogsNoopBelowThreshold(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < crashLogRetention; i++ {

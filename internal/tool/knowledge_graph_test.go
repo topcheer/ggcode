@@ -18,7 +18,6 @@ func newKGTool(t *testing.T) (*KnowledgeGraphTool, string) {
 func TestKGAddAndList(t *testing.T) {
 	tool, _ := newKGTool(t)
 
-	// Add a decision node
 	r, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"add","type":"decision","title":"Use Go for backend","content":"Go for performance","status":"accepted","tags":["architecture"]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +26,6 @@ func TestKGAddAndList(t *testing.T) {
 		t.Fatalf("add failed: %s", r.Content)
 	}
 
-	// Add a pattern node with auto-generated id
 	r, err = tool.Execute(context.Background(), json.RawMessage(`{"action":"add","type":"pattern","title":"Repository Pattern","content":"Use repos for data access"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +34,6 @@ func TestKGAddAndList(t *testing.T) {
 		t.Fatalf("add pattern failed: %s", r.Content)
 	}
 
-	// List should show both
 	r, err = tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -55,25 +52,21 @@ func TestKGAddAndList(t *testing.T) {
 func TestKGAddUpdate(t *testing.T) {
 	tool, _ := newKGTool(t)
 
-	// Create
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"add","id":"arch-1","type":"entity","title":"Auth Module","content":"Handles login"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Update same id
 	_, err = tool.Execute(context.Background(), json.RawMessage(`{"action":"add","id":"arch-1","type":"entity","title":"Auth Module v2","content":"Handles login + OAuth"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Query should show updated title
 	r, _ := tool.Execute(context.Background(), json.RawMessage(`{"action":"query","query":"v2"}`))
 	if !contains(r.Content, "Auth Module v2") {
 		t.Errorf("update not reflected: %s", r.Content)
 	}
 
-	// Should only be 1 node
 	r, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"stats"}`))
 	if !contains(r.Content, "1/") {
 		t.Errorf("expected 1 node, got: %s", r.Content)
@@ -83,7 +76,6 @@ func TestKGAddUpdate(t *testing.T) {
 func TestKGLinkAndTrace(t *testing.T) {
 	tool, _ := newKGTool(t)
 
-	// Add 3 nodes
 	for _, p := range []struct{ id, title, typ string }{
 		{"auth", "Auth Module", "entity"},
 		{"oauth", "OAuth Provider", "entity"},
@@ -97,7 +89,6 @@ func TestKGLinkAndTrace(t *testing.T) {
 		}
 	}
 
-	// auth depends-on oauth
 	r, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"link","id":"auth","to":"oauth","type":"depends-on"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -106,11 +97,8 @@ func TestKGLinkAndTrace(t *testing.T) {
 		t.Fatalf("link failed: %s", r.Content)
 	}
 
-	// oauth implements session -- wait, this is backwards for the trace.
-	// oauth relates-to session
 	_, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"link","id":"oauth","to":"session","type":"relates-to"}`))
 
-	// Trace from auth
 	r, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"trace","id":"auth"}`))
 	if !contains(r.Content, "depends-on") {
 		t.Errorf("trace missing depends-on edge: %s", r.Content)
@@ -133,7 +121,6 @@ func TestKGLinkDuplicate(t *testing.T) {
 		t.Fatal("first link should not be duplicate")
 	}
 
-	// Link again
 	r, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"link","id":"a","to":"b","type":"relates-to"}`))
 	if !contains(r.Content, "already exists") {
 		t.Errorf("expected duplicate edge: %s", r.Content)
@@ -230,7 +217,6 @@ func TestKGPersistenceAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// New tool instance, same directory
 	tool2 := &KnowledgeGraphTool{WorkingDir: dir}
 	r, err := tool2.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
 	if err != nil {
@@ -240,7 +226,6 @@ func TestKGPersistenceAcrossInstances(t *testing.T) {
 		t.Errorf("persistence failed - node not found: %s", r.Content)
 	}
 
-	// Verify file exists
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", kgFileName)); os.IsNotExist(err) {
 		t.Error("knowledge-graph.json file not created")
 	}
@@ -287,9 +272,6 @@ func mustMarshal(m map[string]interface{}) json.RawMessage {
 	return b
 }
 
-// #1327: update branch assigned Type unconditionally while nt defaults
-// to "note" - a partial update (id+title, no type) silently reclassified
-// decision/entity nodes as note and the next save persisted it.
 func TestKnowledgeGraphPartialUpdatePreservesType(t *testing.T) {
 	tool, _ := newKGTool(t)
 
@@ -297,7 +279,7 @@ func TestKnowledgeGraphPartialUpdatePreservesType(t *testing.T) {
 	if r, err := tool.Execute(context.Background(), json.RawMessage(add)); err != nil || r.IsError {
 		t.Fatalf("add: %v %s", err, r.Content)
 	}
-	// Partial update carrying id+title+status but NO type.
+
 	upd := `{"action":"add","id":"d1","title":"Use context pinning v2","status":"superseded"}`
 	if r, err := tool.Execute(context.Background(), json.RawMessage(upd)); err != nil || r.IsError {
 		t.Fatalf("update: %v %s", err, r.Content)
@@ -307,7 +289,6 @@ func TestKnowledgeGraphPartialUpdatePreservesType(t *testing.T) {
 		t.Errorf("partial update demoted node type: %s", r.Content)
 	}
 
-	// Explicit type change still works.
 	chg := `{"action":"add","id":"d1","title":"Use context pinning v2","type":"note"}`
 	if r, err := tool.Execute(context.Background(), json.RawMessage(chg)); err != nil || r.IsError {
 		t.Fatalf("explicit change: %v %s", err, r.Content)

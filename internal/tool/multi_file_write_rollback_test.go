@@ -8,30 +8,24 @@ import (
 	"testing"
 )
 
-// TestMultiFileWriteAtomicRollback verifies that when a mid-batch write fails
-// in atomic mode, previously written files are restored to their original content.
-// Regression test for issue #103.
 func TestMultiFileWriteAtomicRollback(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// File A already exists — should be restored on rollback.
 	fileA := filepath.Join(tmpDir, "existing.txt")
 	originalContent := []byte("original content")
 	if err := os.WriteFile(fileA, originalContent, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Mark file A as read so stale-read guard doesn't fire.
+
 	defaultFileTracker.RecordWrite(fileA)
 
-	// File B is in a path that will fail sandbox check.
 	fileB := filepath.Join(tmpDir, "blocked.txt")
 
-	// File C would be written if not for atomic rollback.
 	fileC := filepath.Join(tmpDir, "new.txt")
 
 	tool := MultiFileWrite{
 		SandboxCheck: func(path string) bool {
-			// Block fileB to simulate sandbox violation mid-batch.
+
 			return filepath.Base(path) != "blocked.txt"
 		},
 		WorkingDir: tmpDir,
@@ -67,7 +61,6 @@ func TestMultiFileWriteAtomicRollback(t *testing.T) {
 		t.Error("expected IsError=true for atomic mode with failure")
 	}
 
-	// File A should be restored to original content.
 	data, err := os.ReadFile(fileA)
 	if err != nil {
 		t.Fatalf("failed to read fileA: %v", err)
@@ -76,19 +69,15 @@ func TestMultiFileWriteAtomicRollback(t *testing.T) {
 		t.Errorf("fileA not rolled back: got %q, want %q", string(data), string(originalContent))
 	}
 
-	// File C should not exist (was new, should have been removed on rollback).
 	if _, err := os.Stat(fileC); err == nil {
 		t.Error("fileC should have been removed by rollback (it was newly created)")
 	}
 
-	// File B should not exist.
 	if _, err := os.Stat(fileB); err == nil {
 		t.Error("fileB should not exist (sandbox blocked it)")
 	}
 }
 
-// TestMultiFileWriteAtomicAllSucceed verifies normal atomic mode still works
-// when all writes succeed.
 func TestMultiFileWriteAtomicAllSucceed(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -128,7 +117,6 @@ func TestMultiFileWriteAtomicAllSucceed(t *testing.T) {
 		t.Errorf("expected no error, got: %s", result.Content)
 	}
 
-	// Both files should exist with new content.
 	dataA, _ := os.ReadFile(fileA)
 	if string(dataA) != "hello A" {
 		t.Errorf("fileA: got %q, want %q", string(dataA), "hello A")

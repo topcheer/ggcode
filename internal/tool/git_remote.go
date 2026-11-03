@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// GitRemote implements the git_remote tool.
 type GitRemote struct{ WorkingDir string }
 
 func (t GitRemote) Name() string { return "git_remote" }
@@ -74,7 +73,6 @@ func (t GitRemote) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitRemote) Clone() Tool {
 	return &GitRemote{WorkingDir: t.WorkingDir}
 }

@@ -1,20 +1,5 @@
 package agent
 
-// Issue #601 tests — five defects in the write-integrity pipeline:
-//
-//	W1  computeFileChange's edit_file simulation diverged from the real
-//	    tool (no replace_all field, no line-number-anchor resolution), so
-//	    dry-run validation, diff preview, and checkpoint snapshots saw a
-//	    different result than the actual write.
-//	W2  checkHardcodedSecrets ran twice per write (registry + direct call
-//	    in agent_tool.go), duplicating every secret warning.
-//	W3  formatWarnings' cap truncated by registration index, not severity:
-//	    an early advisory could crowd out a late sql-injection finding.
-//	W4  five structural checks never compared OldContent, re-reporting
-//	    pre-existing problems on every save (old==new triggered 5/5).
-//	W5  checkEditBlastRadius divided by oldLines alone, counting a pure
-//	    append as a >100% rewrite.
-
 import (
 	"context"
 	"encoding/json"
@@ -28,12 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// ---------------------------------------------------------------------------
-// W1: simulation == real edit_file (double-sided diff)
-// ---------------------------------------------------------------------------
-
-// runRealEditFile executes the REAL edit_file tool against a temp file and
-// returns the resulting on-disk content (or the error result content).
 func runRealEditFile(t *testing.T, dir, initialContent string, args map[string]any) (newContent string, isErr bool) {
 	t.Helper()
 	path := filepath.Join(dir, fmt.Sprintf("f%d.txt", len(dir)+len(initialContent)+len(fmt.Sprint(args))))
@@ -61,9 +40,6 @@ func runRealEditFile(t *testing.T, dir, initialContent string, args map[string]a
 	return string(data), false
 }
 
-// TestIssue601_W1_SimMatchesRealTool runs the same inputs through the real
-// edit_file tool and the computeFileChange simulation (via simulateEditFile)
-// and asserts byte-identical outcomes, including error agreement.
 func TestIssue601_W1_SimMatchesRealTool(t *testing.T) {
 	dir := t.TempDir()
 
@@ -73,7 +49,7 @@ func TestIssue601_W1_SimMatchesRealTool(t *testing.T) {
 		oldText        string
 		newText        string
 		replaceAll     bool
-		skipRealNoopOK bool // real tool reports "No change" result; content unchanged
+		skipRealNoopOK bool
 	}{
 		{
 			name:       "replace_all replaces every occurrence",
@@ -142,9 +118,6 @@ func TestIssue601_W1_SimMatchesRealTool(t *testing.T) {
 	}
 }
 
-// TestIssue601_W1_ReplaceAllJSONFieldParses pins the (a) half of W1: the
-// simulation's args struct previously had no replace_all field, so
-// json.Unmarshal silently dropped it.
 func TestIssue601_W1_ReplaceAllJSONFieldParses(t *testing.T) {
 	content := "x\nTOKEN\ny\nTOKEN\nz\n"
 	dir := t.TempDir()
@@ -174,9 +147,6 @@ func TestIssue601_W1_ReplaceAllJSONFieldParses(t *testing.T) {
 	}
 }
 
-// TestIssue601_W1_LineAnchorResolves pins the (b) half of W1: a
-// line-number-anchored old_text ("N\tcontent") previously failed the
-// literal Replace and silently produced a no-op simulation.
 func TestIssue601_W1_LineAnchorResolves(t *testing.T) {
 	content := "alpha\nbeta\ngamma\n"
 	dir := t.TempDir()
@@ -211,13 +181,6 @@ func jsonQuote(s string) string {
 	return string(b)
 }
 
-// ---------------------------------------------------------------------------
-// W2: hardcoded-secret warnings surface exactly once
-// ---------------------------------------------------------------------------
-
-// TestIssue601_W2_SingleSecretWarning verifies the registry is the single
-// source of truth: one introduced AWS key produces exactly one warning
-// (previously the direct call in agent_tool.go appended a duplicate copy).
 func TestIssue601_W2_SingleSecretWarning(t *testing.T) {
 	awsKey := "AKIA" + strings.Repeat("A", 16)
 	old := "region: us-east-1\n"
@@ -236,16 +199,7 @@ func TestIssue601_W2_SingleSecretWarning(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// W3: severity-ranked cap
-// ---------------------------------------------------------------------------
-
-// TestIssue601_W3_SeverityBeatsRegistrationOrder builds a change that
-// triggers BOTH an early-registered advisory (edit-blast-radius, severity
-// default) and a late-registered critical (sql-injection). With
-// maxIntegrityWarnings == 1 the critical one must surface.
 func TestIssue601_W3_SeverityBeatsRegistrationOrder(t *testing.T) {
-	// 25-line old file (>= 20 so blast-radius is armed).
 	var oldB strings.Builder
 	oldB.WriteString("package main\n\nimport \"database/sql\"\n\nfunc old1() { _ = sql.Done }\n")
 	for i := 2; countLines(oldB.String()) < 25; i++ {
@@ -256,8 +210,6 @@ func TestIssue601_W3_SeverityBeatsRegistrationOrder(t *testing.T) {
 		t.Fatalf("test setup: need >=20 old lines, got %d", countLines(oldContent))
 	}
 
-	// New content: fully rewritten (blast-radius >= 60%) AND carrying a SQL
-	// injection pattern (critical, registered far later than blast-radius).
 	var nb strings.Builder
 	nb.WriteString("package main\n\nimport (\n\t\"database/sql\"\n)\n\nfunc q(db *sql.DB, name string) {\n\tdb.Query(\"SELECT * FROM users WHERE name = '\" + name + \"'\")\n}\n")
 	for i := 0; countLines(nb.String()) < 30; i++ {
@@ -265,7 +217,6 @@ func TestIssue601_W3_SeverityBeatsRegistrationOrder(t *testing.T) {
 	}
 	newContent := nb.String()
 
-	// Sanity: both checks fire individually.
 	blast := checkEditBlastRadius("main.go", oldContent, newContent)
 	if blast == "" {
 		t.Fatal("test setup: expected edit-blast-radius to fire on full rewrite")
@@ -275,7 +226,6 @@ func TestIssue601_W3_SeverityBeatsRegistrationOrder(t *testing.T) {
 		t.Fatal("test setup: expected sql-injection to fire")
 	}
 
-	// Registry pipeline: the cap must keep the CRITICAL warning.
 	result := checkWriteIntegrity("main.go", oldContent, newContent)
 	if result == "" {
 		t.Fatal("expected a warning")
@@ -290,13 +240,6 @@ func TestIssue601_W3_SeverityBeatsRegistrationOrder(t *testing.T) {
 
 func countLines(s string) int { return strings.Count(s, "\n") + 1 }
 
-// ---------------------------------------------------------------------------
-// W4: zero-delta / pre-existing problems are not re-reported
-// ---------------------------------------------------------------------------
-
-// TestIssue601_W4_ZeroDeltaNoWarnings: old == new with pre-existing
-// problems (conflict markers, unbalanced delimiters, null bytes) must
-// produce no warnings — the write introduced nothing.
 func TestIssue601_W4_ZeroDeltaNoWarnings(t *testing.T) {
 	bad := "intro\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> dev\nunbalanced (\n\x00\n"
 	if w := checkWriteIntegrity("doc.md", bad, bad); w != "" {
@@ -304,8 +247,6 @@ func TestIssue601_W4_ZeroDeltaNoWarnings(t *testing.T) {
 	}
 }
 
-// TestIssue601_W4_PreExistingProblemNotReReported: a write that appends a
-// clean line to a file that already had problems must not re-report them.
 func TestIssue601_W4_PreExistingProblemNotReReported(t *testing.T) {
 	oldC := "# doc\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> dev\n"
 	newC := oldC + "clean appended line\n"
@@ -314,8 +255,6 @@ func TestIssue601_W4_PreExistingProblemNotReReported(t *testing.T) {
 	}
 }
 
-// TestIssue601_W4_IntroducedProblemStillReported: the gate must not swallow
-// NEW problems — a write that introduces conflict markers is flagged.
 func TestIssue601_W4_IntroducedProblemStillReported(t *testing.T) {
 	oldC := "# doc\nintro\n"
 	newC := "# doc\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> dev\n"
@@ -325,11 +264,9 @@ func TestIssue601_W4_IntroducedProblemStillReported(t *testing.T) {
 	}
 }
 
-// TestIssue601_W4_BinaryCorruptionDeltaGated: null bytes are only reported
-// when this write increases their count.
 func TestIssue601_W4_BinaryCorruptionDeltaGated(t *testing.T) {
 	oldC := "a\x00b\nc\n"
-	touch := "a\x00b\nc\nd\n" // same null count, one clean line appended
+	touch := "a\x00b\nc\nd\n"
 	if w := checkWriteIntegrity("data.bin", oldC, touch); w != "" {
 		t.Fatalf("unchanged null-byte count must not warn, got:\n%s", w)
 	}
@@ -340,10 +277,6 @@ func TestIssue601_W4_BinaryCorruptionDeltaGated(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// W5: pure append is not a >100% rewrite
-// ---------------------------------------------------------------------------
-
 func linesStr(n int) string {
 	var b strings.Builder
 	for i := 1; i <= n; i++ {
@@ -352,24 +285,18 @@ func linesStr(n int) string {
 	return b.String()
 }
 
-// TestIssue601_W5_PureAppendNotRewrite: appending 25 lines to a 20-line
-// file previously computed 125%; it must now stay <= 100% and (for the
-// probe's 15-line case) not trip the 60% accidental-rewrite gate.
 func TestIssue601_W5_PureAppendNotRewrite(t *testing.T) {
 	oldC := linesStr(20)
 
-	// 15-line append: 15/35 = 43% -> no warning (probe case was 75% -> FP).
 	if w := checkWriteIntegrity("notes.md", oldC, oldC+linesStr(15)); w != "" {
 		t.Fatalf("15-line append must not be flagged as rewrite, got:\n%s", w)
 	}
 
-	// 25-line append: 25/45 = 56% -> no warning, and never "125%".
 	w := checkWriteIntegrity("notes.md", oldC, oldC+linesStr(25))
 	if w != "" && strings.Contains(w, "125%") {
 		t.Fatalf("pure append must not exceed 100%%: %s", w)
 	}
 
-	// A true full rewrite still trips the gate: 20 changed / max(20,20) = 100%.
 	var rb strings.Builder
 	for i := 1; i <= 20; i++ {
 		fmt.Fprintf(&rb, "rewritten %d\n", i)
@@ -379,12 +306,9 @@ func TestIssue601_W5_PureAppendNotRewrite(t *testing.T) {
 	}
 }
 
-// TestIssue601_W5_AppendNeverExceeds100Percent: direct unit probe of the
-// denominator — appending 30 lines to a 20-line file yields 30/50 = 60%,
-// and the percentage reported (if any) can never exceed 100.
 func TestIssue601_W5_AppendNeverExceeds100Percent(t *testing.T) {
 	oldC := linesStr(20)
-	newC := oldC + linesStr(80) // 80/100 = 80%: legitimately warns, but <= 100%.
+	newC := oldC + linesStr(80)
 	w := checkEditBlastRadius("notes.md", oldC, newC)
 	if w == "" {
 		t.Fatal("80% append+ context: expected blast-radius warning for a near-total addition")

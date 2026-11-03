@@ -21,58 +21,37 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Rule represents a learned rule extracted from agent errors.
 type Rule struct {
 	ID           string    `json:"id"`
-	Category     string    `json:"category"`               // build | test | git | convention | security
-	Rule         string    `json:"rule"`                   // human-readable rule text
-	MatchPattern string    `json:"match_pattern"`          // regexp to match error OUTPUT (for auto-verify)
-	ToolPattern  string    `json:"tool_pattern,omitempty"` // regexp to match tool ARGS (for injection)
-	FixHint      string    `json:"fix_hint,omitempty"`     // optional actionable hint
+	Category     string    `json:"category"`
+	Rule         string    `json:"rule"`
+	MatchPattern string    `json:"match_pattern"`
+	ToolPattern  string    `json:"tool_pattern,omitempty"`
+	FixHint      string    `json:"fix_hint,omitempty"`
 	HitCount     int       `json:"hit_count"`
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
-	// Source records where the rule was learned from. Empty (pre-r444)
-	// and "error" mean the classic error-driven ratchet path;
-	// "user_edit" (r444) means it was promoted from repeated user
-	// rewrites of agent output. omitempty keeps old agent-rules.json
-	// byte-compatible on rewrite.
-	Source string `json:"source,omitempty"`
-	// TaskType (intent filter) records the classifyTaskType label of the
-	// run that learned this rule (bugfix/test/build/refactor/review/
-	// feature). Empty (legacy or unclassified) rules stay always-eligible
-	// via the global fallback in TopRulesForPromptFiltered. Mirrors the
-	// playbook-side matchesIntent read-path gating (#3266 research P1:
-	// unfiltered top-N injection polluted bugfix runs with release/test
-	// lessons and left the two memory systems inconsistent).
-	TaskType string `json:"task_type,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	TaskType     string    `json:"task_type,omitempty"`
 }
 
 const defaultMaxRules = 60
 
-// Staleness thresholds for ratchet rule lifecycle.
 const (
-	// staleRuleThreshold: rules not hit in this duration are considered stale.
-	staleRuleThreshold = 30 * 24 * time.Hour // 30 days
-	// staleRuleMinHits: rules with HitCount >= this are preserved even if stale.
-	staleRuleMinHits = 3
+	staleRuleThreshold = 30 * 24 * time.Hour
+	staleRuleMinHits   = 3
 )
 
-// RuleStore manages harness rules persisted to .ggcode/agent-rules.json.
 type RuleStore struct {
 	mu         sync.Mutex
 	path       string
 	rules      []Rule
 	loaded     bool
 	maxRules   int
-	regexCache map[string]*regexp.Regexp // pre-compiled patterns to avoid repeated compilation
-	// runIntent is the classifyTaskType label of the current run, set
-	// from prompt injection each run and inherited by newly added rules
-	// whose TaskType is empty (guarded by mu).
-	runIntent string
+	regexCache map[string]*regexp.Regexp
+	runIntent  string
 }
 
-// NewRuleStore creates a RuleStore for the given working directory.
 func NewRuleStore(workingDir string) *RuleStore {
 	if workingDir == "" {
 		return nil
@@ -85,30 +64,8 @@ func NewRuleStore(workingDir string) *RuleStore {
 	}
 }
 
-// getRuleStore returns THE single cached RuleStore for the agent's
-// working directory. The store is created once and reused across ALL
-// consumers (hot-path rule injection, runRatchet, generalizeErrorsWithRetry,
-// asyncVerify, prompt injection) so there is exactly one in-memory truth
-// per agent.
-//
-// #3227: previously runRatchet/generalizeErrorsWithRetry/asyncVerify each
-// built their own NewRuleStore; every instance load()s ONCE and save()
-// overwrites the file with that frozen snapshot, so a long-lived cached
-// instance (held by the user-edit observer) silently erased everything the
-// per-run instances learned - a classic cross-instance lost-update. A
-// single shared instance makes rs.mu cover every read/write by
-// construction.
-//
-// The cache write is guarded by a.mu because asyncVerify reaches this from
-// a background goroutine. Note the single-instance trade-off, deliberate:
-// rules are loaded once per agent session and accumulate in memory;
-// hand-edits to agent-rules.json mid-session are no longer re-read per run
-// (per-run reload was exactly the lost-update vector).
 func (a *Agent) getRuleStore() *RuleStore {
-	// a.mu (RWMutex) guards the cache because asyncVerify reaches this
-	// from a background goroutine. Read a.workingDir UNDER the lock -
-	// calling a.WorkingDir() here would self-deadlock (it takes a.mu.RLock,
-	// and Go mutexes are not reentrant).
+
 	a.mu.Lock()
 	if a.ruleStore != nil {
 		rs := a.ruleStore
@@ -121,29 +78,17 @@ func (a *Agent) getRuleStore() *RuleStore {
 		return nil
 	}
 	rs := NewRuleStore(workingDir)
-	a.ruleStore = rs // cache for future calls
+	a.ruleStore = rs
 	a.mu.Unlock()
 	return rs
 }
 
-// resetRuleStoreLocked drops the cached RuleStore singleton (and the
-// user-edit observer bound to it) so the next getRuleStore call lazily
-// re-anchors to the CURRENT working directory.
-// #3233: the #3227 singleton froze the store at first-build; when the
-// working dir changes mid-session (enter_worktree adoption, SetWorkingDir)
-// rules learned inside a worktree were persisted back into the MAIN
-// tree's agent-rules.json - cross-branch pollution of persistent
-// guidance. Callers must hold a.mu.
 func (a *Agent) resetRuleStoreLocked() {
 	a.ruleStore = nil
-	// The observer holds a direct reference to the old store; without
-	// clearing it too, user-edit tracking would keep writing to the
-	// abandoned directory.
+
 	a.userEditObs = nil
 }
 
-// compilePattern returns a cached compiled regex for the given pattern.
-// This avoids re-compiling the same patterns on every tool call.
 func (rs *RuleStore) compilePattern(pattern string) (*regexp.Regexp, error) {
 	if re, ok := rs.regexCache[pattern]; ok {
 		return re, nil
@@ -195,8 +140,6 @@ func (rs *RuleStore) save() error {
 	return util.AtomicWriteFile(rs.path, data, 0644)
 }
 
-// MatchErrors checks each error against existing rules. Returns matched
-// (with updated hit_count) and unmatched errors.
 func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched []string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -208,17 +151,7 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	for _, errMsg := range errors {
 		found := false
 		for i := range rs.rules {
-			// #4389: same quality floor as the reactive path
-			// (minMatchPatternLen). A non-empty pattern shorter than the
-			// floor is a keyword fragment ("fail") that matches almost any
-			// error output - counting it as a match starves real rule
-			// extraction (the error looks handled) while the rule can never
-			// be injected reactively, the #1008 count-but-invisible shape.
-			// Empty MatchPattern must be skipped too: compilePattern("")
-			// yields a match-everything regex, so user_edit /
-			// preventive-only rules (keyed on ToolPattern alone, r444)
-			// swallowed EVERY error as matched - same #1008 family found by
-			// the #4389 regression test.
+
 			if rs.rules[i].MatchPattern == "" || len(rs.rules[i].MatchPattern) < minMatchPatternLen {
 				continue
 			}
@@ -250,12 +183,6 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	return matched, unmatched
 }
 
-// AddRule adds a new rule, enforcing the max limit with LRU eviction.
-// If a semantically similar rule already exists, it merges hit counts
-// instead of creating a duplicate.
-// RemoveUserEditRules deletes user_edit-sourced rules whose ToolPattern
-// targets base (r447 negative-signal recycling). Returns how many were
-// removed. Error-sourced and LLM rules are never touched.
 func (rs *RuleStore) RemoveUserEditRules(base string) int {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -292,49 +219,25 @@ func (rs *RuleStore) AddRule(r Rule) {
 	if r.HitCount == 0 {
 		r.HitCount = 1
 	}
-	// Inherit the current run's intent so future injections can filter
-	// by task type (legacy rules with empty TaskType stay global).
+
 	if r.TaskType == "" && rs.runIntent != "" && rs.runIntent != "other" {
 		r.TaskType = rs.runIntent
 	}
-	// #1008: Category comes straight from LLM JSON output, where the
-	// prompt's enum (build/test/git/convention/security) is only a soft
-	// constraint - variants like "Build", "lint" or " build " slip through.
-	// Go switch is case-sensitive and categoryMatchesTool defaults to
-	// false, so a non-canonical category made the rule never match any
-	// tool: preventive injection silently dead, /rules counted it but
-	// never listed it, and it still accrued HitCount to squeeze canonical
-	// rules out of the 60-slot LRU. Normalize (trim + lower) and fall back
-	// to "convention" for anything unrecognized.
+
 	r.Category = normalizeRuleCategory(r.Category)
 
-	// #4389: reject degenerate short patterns at the door. The reactive
-	// path refuses to inject rules with a MatchPattern below
-	// minMatchPatternLen, so admitting them here creates rules that only
-	// accrue HitCount and pollute the 60-slot LRU without ever being
-	// injectable. Empty MatchPattern stays legal: user_edit and
-	// preventive-only rules are keyed on ToolPattern alone.
 	if r.MatchPattern != "" && len(r.MatchPattern) < minMatchPatternLen {
 		debug.Log("ratchet", "rejected short MatchPattern rule (%d chars < %d): %q",
 			len(r.MatchPattern), minMatchPatternLen, r.MatchPattern)
 		return
 	}
 
-	// Check for semantic duplicates before adding.
-	// #3229: user_edit rules generated from a fixed template tokenize to
-	// near-identical token sets for ANY two files (Jaccard >= 0.75 always),
-	// but their identity IS the target file. Similarity merge must never
-	// collapse two distinct files - that silently discards every rule after
-	// the first file, degrading r444 to single-file mode.
 	for i := range rs.rules {
 		if userEditIdentityDistinct(rs.rules[i], r) {
 			continue
 		}
 		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
-			// Merge into existing rule: bump hit count and update LastSeen.
-			// #4595: keep the incoming rule's MatchPattern/FixHint when the
-			// existing rule never had one - merging used to silently drop
-			// them, losing auto-verify/injection data on the first merge.
+
 			if rs.rules[i].MatchPattern == "" && r.MatchPattern != "" {
 				rs.rules[i].MatchPattern = r.MatchPattern
 			}
@@ -359,24 +262,17 @@ func (rs *RuleStore) AddRule(r Rule) {
 	debug.Log("ratchet", "added rule %s: %s (match=%s, tool=%s)", r.ID, r.Rule, r.MatchPattern, r.ToolPattern)
 }
 
-// ruleSimilarity returns a 0-1 similarity score between two rules based on
-// Jaccard similarity of normalized word tokens from their Rule text and
-// MatchPattern. If both rules share the same ToolPattern, a bonus is applied
-// since rules targeting the same tool with overlapping keywords are very
-// likely semantic duplicates. Used to prevent near-duplicate rules from
-// accumulating.
 func ruleSimilarity(a, b Rule) float64 {
 	tokensA := tokenizeRule(a)
 	tokensB := tokenizeRule(b)
 	if len(tokensA) == 0 || len(tokensB) == 0 {
 		return 0
 	}
-	// #3229 guard: two user_edit rules bound to DIFFERENT files are never
-	// semantic duplicates regardless of token overlap - see AddRule.
+
 	if userEditIdentityDistinct(a, b) {
 		return 0
 	}
-	// Jaccard similarity: intersection / union
+
 	intersection := 0
 	for t := range tokensA {
 		if tokensB[t] {
@@ -386,34 +282,17 @@ func ruleSimilarity(a, b Rule) float64 {
 	union := len(tokensA) + len(tokensB) - intersection
 	base := float64(intersection) / float64(union)
 
-	// If both rules target the same tool pattern AND already look
-	// semantically related, boost similarity. Rules like "run gofmt before
-	// commit" vs "run gofmt before staging" have low Jaccard but are the
-	// same concept. #4595: the bonus is gated on base >= 0.3 - without the
-	// gate, any two rules sharing a broad ToolPattern (e.g. git_commit.*
-	// or go build|go test) merged at Jaccard 0.45, silently swallowing
-	// semantically unrelated lessons and dropping their MatchPattern/
-	// FixHint in the merge.
 	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" && base >= 0.3 {
 		base += 0.3
 	}
 	return base
 }
 
-// userEditIdentityDistinct reports whether a and b are both user_edit
-// rules (r444) bound to DIFFERENT target files. user_edit rules come from
-// a fixed template whose only variable is the file base name, so any two
-// of them tokenize to near-identical sets (Jaccard 0.8+ for ANY file pair)
-// while carrying distinct identities in ToolPattern. Similarity-based
-// dedup must skip them (#3229): merging silently discarded every rule
-// after the first file and mis-accumulated HitCount onto it.
 func userEditIdentityDistinct(a, b Rule) bool {
 	return a.Source == ruleSourceUserEdit && b.Source == ruleSourceUserEdit &&
 		a.ToolPattern != b.ToolPattern
 }
 
-// tokenizeRule extracts normalized lowercase word tokens from a rule,
-// combining Rule text and MatchPattern. Filters common stopwords.
 func tokenizeRule(r Rule) map[string]bool {
 	stopwords := map[string]bool{
 		"the": true, "a": true, "an": true, "to": true, "is": true,
@@ -425,7 +304,7 @@ func tokenizeRule(r Rule) map[string]bool {
 		"use": true, "using": true, "used": true, "ensure": true,
 	}
 	text := strings.ToLower(r.Rule + " " + r.MatchPattern + " " + r.ToolPattern)
-	// Split on non-alphanumeric
+
 	fields := strings.FieldsFunc(text, func(r rune) bool {
 		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_')
 	})
@@ -439,9 +318,6 @@ func tokenizeRule(r Rule) map[string]bool {
 	return tokens
 }
 
-// DeduplicateRules removes semantically similar rules from the store,
-// merging hit counts into the higher-hit-count rule. This is intended
-// for periodic cleanup of accumulated near-duplicates.
 func (rs *RuleStore) DeduplicateRules() int {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -457,23 +333,13 @@ func (rs *RuleStore) DeduplicateRules() int {
 	for i := 1; i < len(rs.rules); i++ {
 		isDup := false
 		for j := range kept {
-			// #4390: 0.55 merged rule pairs that AddRule had just judged
-			// distinct at its 0.75 enqueue gate - the store contradicted
-			// itself, silently dropping the merged rule's MatchPattern and
-			// FixHint. Align with AddRule's single similarity verdict, and
-			// honor the same #3229 user_edit identity guard: two user_edit
-			// rules bound to different files are distinct by definition.
+
 			if userEditIdentityDistinct(kept[j], rs.rules[i]) {
 				continue
 			}
 			sim := ruleSimilarity(kept[j], rs.rules[i])
 			if sim >= 0.75 {
-				// Merge into the kept rule: sum hit counts, keep latest LastSeen.
-				// #1011: the previous unconditional assignment ran BEFORE this
-				// comparison, making the After check dead (both sides equal) and
-				// silently inverting the semantics to last-wins - a stale
-				// duplicate's LastSeen overwrote the kept rule's fresh one,
-				// tanking recency-weighted scores and eviction order.
+
 				kept[j].HitCount += rs.rules[i].HitCount
 				if rs.rules[i].LastSeen.After(kept[j].LastSeen) {
 					kept[j].LastSeen = rs.rules[i].LastSeen
@@ -499,7 +365,6 @@ func (rs *RuleStore) DeduplicateRules() int {
 	return merged
 }
 
-// Rules returns a copy of all rules.
 func (rs *RuleStore) Rules() []Rule {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -509,46 +374,20 @@ func (rs *RuleStore) Rules() []Rule {
 	return result
 }
 
-// TopRulesForPrompt returns a concise summary of the most relevant rules
-// for proactive injection into the system prompt. Rules are scored by a
-// combined metric of HitCount and recency: recent high-hit rules rank
-// highest, while stale rules (not seen in staleRuleThreshold) are heavily
-// penalized. Only includes rules that have been hit at least once
-// (HitCount > 0), limited to maxRules entries.
-//
-// This implements the "rules as first-class citizens" pattern from the
-// self-improving agent literature: learned rules should be visible to the
-// agent from the start of each run, not just reactively when a tool pattern
-// matches. The recency weighting follows arXiv:2603.07670 which emphasizes
-// that production memory systems must account for staleness.
 func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 	return rs.topRulesForPrompt(maxRules, "")
 }
 
-// SetRunIntent records the classifyTaskType label of the current run so
-// newly added rules inherit it (TaskType tagging) and prompt injection
-// can filter by relevance. Called once per run from prompt assembly.
 func (rs *RuleStore) SetRunIntent(intent string) {
 	rs.mu.Lock()
 	rs.runIntent = intent
 	rs.mu.Unlock()
 }
 
-// TopRulesForPromptFiltered returns the top rules for prompt injection,
-// restricted to rules learned in runs of the same task type when that
-// subset is rich enough (>= 2 entries). This mirrors the playbook-side
-// matchesIntent gating: a bugfix run should not spend its 5 injection
-// slots on release/test lessons, and vice versa. Falls back to the
-// global top-N when the intent subset is too thin (anti-starvation;
-// legacy rules with empty TaskType also live in the global pool).
 func (rs *RuleStore) TopRulesForPromptFiltered(maxRules int, intent string) string {
 	return rs.topRulesForPrompt(maxRules, intent)
 }
 
-// topRulesForPrompt is the shared implementation. filterIntent, when
-// non-empty and not "other", prefers rules whose TaskType matches; the
-// filtered view is used only if it holds at least 2 entries, otherwise
-// the unfiltered ranking applies.
 func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -586,13 +425,6 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 		return ""
 	}
 
-	// Intent view is a QUOTA MIX over UNIVERSAL rules, not a replacement
-	// (#4512): the old len(intentActive)>=2 gate let two weak single-hit
-	// same-intent rules evict every general high-hit rule from the prompt,
-	// permanently. Intent rules lead; remaining slots fill from UNTAGGED
-	// (TaskType=="") universal rules only - other intents stay excluded,
-	// preserving the topic-purity design pinned by
-	// TestTopRulesForPromptFiltered_PrefersSameIntent.
 	if useIntent && len(intentActive) >= 2 {
 		sort.SliceStable(intentActive, func(i, j int) bool {
 			return intentActive[i].score > intentActive[j].score
@@ -616,7 +448,6 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 		active = mixed
 	}
 
-	// Sort by combined score descending (small N, insertion sort)
 	for i := 1; i < len(active); i++ {
 		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
 			active[j], active[j-1] = active[j-1], active[j]
@@ -639,11 +470,6 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 	return b.String()
 }
 
-// recencyWeightedScore computes a combined score from hit count and recency.
-// score = hitCount * recencyWeight, where recencyWeight decays based on
-// days since last seen: weight = 1.0 / (1 + daysSinceLastSeen/7).
-// Rules seen very recently get weight ~1.0; rules seen 7 days ago get ~0.5;
-// rules seen 30+ days ago get < 0.2, effectively deprioritizing stale rules.
 func recencyWeightedScore(hitCount int, lastSeen, now time.Time) float64 {
 	daysSince := now.Sub(lastSeen).Hours() / 24
 	if daysSince < 0 {
@@ -653,9 +479,6 @@ func recencyWeightedScore(hitCount int, lastSeen, now time.Time) float64 {
 	return float64(hitCount) * recencyWeight
 }
 
-// MatchingRulesForTool returns rules whose category matches the tool name
-// and whose ToolPattern (or MatchPattern as fallback) matches the tool
-// arguments. Used for rule injection into tool results.
 func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -666,13 +489,7 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 		if !categoryMatchesTool(r.Category, toolName) {
 			continue
 		}
-		// #1485: no fallback to MatchPattern here. MatchPattern is documented
-		// (and used by the reactive path) as matching error OUTPUT; running it
-		// against tool ARGS is a domain mismatch that both dead-ended the
-		// preventive injection for output-shaped rules and occasionally
-		// injected unrelated build hints into commands whose args merely
-		// contained phrases like "command not found". A rule joins the
-		// preventive path only via an explicit ToolPattern.
+
 		pattern := r.ToolPattern
 		if pattern == "" {
 			continue
@@ -688,12 +505,6 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 	return result
 }
 
-// normalizeRuleCategory canonicalizes a rule category coming from LLM JSON
-// output: trim, lowercase, and fall back to "convention" for anything not
-// in the canonical set. #1008: without this, variants like "Build"/"lint"/
-// " build " never matched any tool (categoryMatchesTool default->false),
-// silently killing preventive injection while /rules counted but never
-// listed them.
 func normalizeRuleCategory(cat string) string {
 	cat = strings.ToLower(strings.TrimSpace(cat))
 	switch cat {
@@ -713,11 +524,7 @@ func categoryMatchesTool(category, toolName string) bool {
 	case "convention":
 		return toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file"
 	case "security":
-		// #4293: security rules used to match EVERY tool, which made this
-		// category the loosest coupling in the store - a security rule with
-		// a broad ToolPattern fired on read/grep/lsp calls it had nothing to
-		// say about. Security lessons are about executing commands, writing
-		// files, and git history; scope them to those tool families.
+
 		return toolName == "run_command" || toolName == "start_command" ||
 			toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file" ||
 			strings.HasPrefix(toolName, "git_")
@@ -726,8 +533,6 @@ func categoryMatchesTool(category, toolName string) bool {
 	}
 }
 
-// evict removes lowest-scoring rules when over the limit.
-// score = hit_count * (1.0 / (1 + days_since_last_seen))
 func (rs *RuleStore) evict() {
 	if len(rs.rules) <= rs.maxRules {
 		return
@@ -753,13 +558,7 @@ func (rs *RuleStore) evict() {
 	})
 	evictCount := len(rs.rules) - rs.maxRules
 	toEvict := make(map[int]bool)
-	// #4511: honor the staleRuleMinHits promise - rules with at least that
-	// many hits are never evicted by the recency-weighted score, so a
-	// high-signal rule merely idle for staleRuleThreshold is not crowded
-	// out by a single-hit newcomer (score is HitCount/(1+days): 3 hits at
-	// 100d scores ~0.03 vs 0.5 for a day-old single hit). If EVERY rule is
-	// protected (pathological), fall back to pure lowest-score eviction -
-	// an unbounded store is worse than breaking the promise.
+
 	picked := 0
 	for i := 0; i < len(scores) && picked < evictCount; i++ {
 		if rs.rules[scores[i].idx].HitCount >= staleRuleMinHits {
@@ -787,15 +586,13 @@ func (rs *RuleStore) evict() {
 	rs.rules = kept
 }
 
-// --- LLM generalization ---
-
 type ratchetResult struct {
-	Action       string `json:"action"`        // "new" | "skip"
-	Category     string `json:"category"`      // build | test | git | convention | security
-	Rule         string `json:"rule"`          // generalized rule
-	MatchPattern string `json:"match_pattern"` // regexp to match error OUTPUT
-	ToolPattern  string `json:"tool_pattern"`  // regexp to match tool ARGS that trigger this error
-	FixHint      string `json:"fix_hint"`      // actionable hint
+	Action       string `json:"action"`
+	Category     string `json:"category"`
+	Rule         string `json:"rule"`
+	MatchPattern string `json:"match_pattern"`
+	ToolPattern  string `json:"tool_pattern"`
+	FixHint      string `json:"fix_hint"`
 	SkipReason   string `json:"skip_reason,omitempty"`
 }
 
@@ -822,8 +619,6 @@ The tool_pattern should match the TOOL arguments (command string, file path) tha
 
 Respond with JSON only. No markdown, no explanation.`
 
-// ProcessErrorsWithLLM sends unmatched errors to the agent's provider for
-// generalization. Uses the current model. Called asynchronously after a run.
 func (a *Agent) ProcessErrorsWithLLM(parentCtx context.Context, errors []string, existingRules []Rule) (*ratchetLLMOutput, error) {
 	if len(errors) == 0 {
 		return &ratchetLLMOutput{}, nil
@@ -835,7 +630,6 @@ func (a *Agent) ProcessErrorsWithLLM(parentCtx context.Context, errors []string,
 		return nil, fmt.Errorf("no provider available for ratchet")
 	}
 
-	// Build existing rules summary
 	ruleSummaries := make([]string, len(existingRules))
 	for i, r := range existingRules {
 		ruleSummaries[i] = fmt.Sprintf("- [%s] %s (match: %s, tool: %s)", r.Category, r.Rule, r.MatchPattern, r.ToolPattern)
@@ -889,13 +683,11 @@ func (a *Agent) ProcessErrorsWithLLM(parentCtx context.Context, errors []string,
 	return &output, nil
 }
 
-// runRatchet is the full pipeline: match -> generalize with retry -> store.
-// Called from reflection after a run with errors.
 func (a *Agent) runRatchet(stats *RunStats) {
 	if len(stats.Errors) == 0 {
 		return
 	}
-	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
+	rs := a.getRuleStore()
 	if rs == nil {
 		return
 	}
@@ -907,8 +699,6 @@ func (a *Agent) runRatchet(stats *RunStats) {
 
 	debug.Log("ratchet", "processing %d unmatched errors (%d matched)", len(unmatched), len(matched))
 
-	// Use the agent's shutdown context as parent so reflection is cancelled
-	// when the agent shuts down, instead of an uncancellable context.Background().
 	parentCtx := a.shutdownCtx
 	if parentCtx == nil {
 		parentCtx = context.Background()
@@ -930,11 +720,6 @@ func truncStr(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// truncTail keeps the LAST maxLen-3 chars of s (head replaced by "...").
-// #4690: truncStr head-truncates, but the #4607 marker-free failure
-// fallback labels its snippet "output tail" - for unmarked failures
-// (signal/segfault/panic) the diagnostic signal lives at the END, so a
-// head cut discarded exactly what the fallback existed to preserve.
 func truncTail(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -942,12 +727,9 @@ func truncTail(s string, maxLen int) string {
 	return "..." + s[len(s)-maxLen+3:]
 }
 
-// generalizeErrorsWithRetry wraps ProcessErrorsWithLLM with retry logic.
-// On final failure, logs a system-level debug message.
-// Returns whatever rules were successfully generalized.
 func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, verifyCmd string) []Rule {
 	const maxRetries = 2
-	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
+	rs := a.getRuleStore()
 	existingRules := []Rule{}
 	if rs != nil {
 		existingRules = rs.Rules()
@@ -985,13 +767,11 @@ func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, 
 		}
 	}
 
-	// All retries exhausted
 	debug.Log("ratchet", "generalization failed after %d attempts for %d errors (cmd: %s): %v",
 		maxRetries+1, len(errors), verifyCmd, lastErr)
 	return nil
 }
 
-// shortUUID returns a random 8-char hex string for rule IDs.
 func shortUUID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)

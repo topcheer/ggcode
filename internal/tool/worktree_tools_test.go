@@ -10,15 +10,13 @@ import (
 	"testing"
 )
 
-// --- Helper ---
-
 func initTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	run := func(name string, args ...string) {
 		cmd := exec.Command(name, args...)
 		cmd.Dir = dir
-		// Skip hooks to avoid triggering external tools in tests
+
 		cmd.Env = append(cmd.Environ(), "GIT_TEMPLATE_DIR=", "GIT_HOOK_DISABLED=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s %v: %s: %v", name, args, string(out), err)
@@ -27,19 +25,16 @@ func initTestGitRepo(t *testing.T) string {
 	run("git", "init")
 	run("git", "config", "user.email", "test@test.com")
 	run("git", "config", "user.name", "Test")
-	// Need at least one commit for worktree add to work
+
 	cmd := exec.Command("sh", "-c", "echo hello > README.md")
 	cmd.Dir = dir
 	cmd.Run()
 	run("git", "add", "README.md")
 	run("git", "commit", "--no-verify", "-m", "initial")
 
-	// Remove hooks to prevent interference
 	exec.Command("rm", "-rf", dir+"/.git/hooks").Run()
 	return dir
 }
-
-// --- isWorktreeNameChar ---
 
 func TestIsWorktreeNameChar(t *testing.T) {
 	valid := "abcXYZ012_-test.name"
@@ -56,8 +51,6 @@ func TestIsWorktreeNameChar(t *testing.T) {
 		}
 	}
 }
-
-// --- EnterWorktree ---
 
 func TestEnterWorktree_Execute(t *testing.T) {
 	dir := initTestGitRepo(t)
@@ -83,7 +76,6 @@ func TestEnterWorktree_Execute(t *testing.T) {
 		t.Errorf("result should not imply all subsequent tool calls automatically switch directories: %s", result.Content)
 	}
 
-	// Verify SuggestedWorkingDir is set to the worktree path
 	if result.SuggestedWorkingDir == "" {
 		t.Error("SuggestedWorkingDir should be set")
 	}
@@ -91,7 +83,6 @@ func TestEnterWorktree_Execute(t *testing.T) {
 		t.Errorf("SuggestedWorkingDir = %q, should contain test-branch", result.SuggestedWorkingDir)
 	}
 
-	// Verify the worktree directory actually exists
 	gitRoot := dir
 	worktreePath := gitRoot + "/.ggcode/worktrees/test-branch"
 	cmd := exec.Command("git", "worktree", "list")
@@ -101,7 +92,6 @@ func TestEnterWorktree_Execute(t *testing.T) {
 		t.Errorf("worktree not found in git worktree list: %s", string(out))
 	}
 
-	// Clean up
 	cmd = exec.Command("git", "worktree", "remove", "--force", worktreePath)
 	cmd.Dir = gitRoot
 	cmd.Run()
@@ -169,7 +159,6 @@ func TestEnterWorktree_DefaultName(t *testing.T) {
 		t.Errorf("expected auto-generated name with wt- prefix: %s", result.Content)
 	}
 
-	// Clean up — extract path from result
 	pathStart := strings.Index(result.Content, dir)
 	if pathStart >= 0 {
 		wtPath := result.Content[pathStart:]
@@ -186,25 +175,20 @@ func TestEnterWorktree_DuplicateName(t *testing.T) {
 	dir := initTestGitRepo(t)
 	tool := EnterWorktree{WorkingDir: dir}
 
-	// First creation should succeed
 	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"name":"dup"}`))
 	if result.IsError {
 		t.Fatalf("first creation failed: %s", result.Content)
 	}
 
-	// Second creation with same name should fail
 	result, _ = tool.Execute(context.Background(), json.RawMessage(`{"name":"dup"}`))
 	if !result.IsError {
 		t.Error("expected error for duplicate worktree name")
 	}
 
-	// Clean up
 	cmd := exec.Command("git", "worktree", "remove", "--force", dir+"/.ggcode/worktrees/dup")
 	cmd.Dir = dir
 	cmd.Run()
 }
-
-// --- ExitWorktree ---
 
 func TestExitWorktree_InvalidJSON(t *testing.T) {
 	dir := initTestGitRepo(t)
@@ -240,7 +224,7 @@ func TestExitWorktree_InvalidAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should either error (not in worktree) or error (invalid action)
+
 	if !result.IsError {
 		t.Error("expected error for invalid action")
 	}
@@ -258,8 +242,6 @@ func TestExitWorktree_NotGitRepo(t *testing.T) {
 		t.Error("expected error for non-git directory")
 	}
 }
-
-// --- findGitRoot ---
 
 func TestFindGitRoot(t *testing.T) {
 	dir := initTestGitRepo(t)
@@ -282,13 +264,10 @@ func TestFindGitRoot_NotGitRepo(t *testing.T) {
 	}
 }
 
-// --- findGitRootFromWorktree ---
-
 func TestFindGitRootFromWorktree(t *testing.T) {
 	dir := initTestGitRepo(t)
 	realDir, _ := filepath.EvalSymlinks(dir)
 
-	// Create a worktree
 	enterTool := EnterWorktree{WorkingDir: dir}
 	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"test-wt"}`))
 	if result.IsError {
@@ -300,18 +279,14 @@ func TestFindGitRootFromWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findGitRootFromWorktree error: %v", err)
 	}
-	// findGitRootFromWorktree returns the git dir (could be .git or the repo root)
-	// Just verify it contains the main repo path
+
 	if !strings.Contains(gitRoot, "TestFindGitRootFromWorktree") {
 		t.Errorf("gitRoot = %q, expected to contain test dir", gitRoot)
 	}
 	_ = realDir
 
-	// Clean up
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
-
-// --- isInsideWorktree ---
 
 func TestIsInsideWorktree_RegularDir(t *testing.T) {
 	dir := initTestGitRepo(t)
@@ -349,14 +324,11 @@ func TestIsInsideWorktree_InsideWorktree(t *testing.T) {
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
 
-// --- Round-trip: create then remove ---
-
 func TestWorktreeRoundTrip(t *testing.T) {
 	dir := initTestGitRepo(t)
 
 	enterTool := EnterWorktree{WorkingDir: dir}
 
-	// Create
 	result, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"roundtrip-test"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -367,12 +339,10 @@ func TestWorktreeRoundTrip(t *testing.T) {
 
 	wtPath := dir + "/.ggcode/worktrees/roundtrip-test"
 
-	// Verify worktree exists
 	if _, err := exec.Command("git", "worktree", "list").CombinedOutput(); err != nil {
 		t.Fatal(err)
 	}
 
-	// Exit from inside the worktree
 	exitTool := ExitWorktree{WorkingDir: wtPath}
 	result, err = exitTool.Execute(context.Background(), json.RawMessage(`{"action":"remove","discard_changes":true}`))
 	if err != nil {
@@ -381,12 +351,11 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("exit failed: %s", result.Content)
 	}
-	// Verify SuggestedWorkingDir points back to main repo
+
 	if result.SuggestedWorkingDir == "" {
 		t.Error("SuggestedWorkingDir should be set after remove")
 	}
 
-	// Verify worktree is gone
 	cmd := exec.Command("git", "worktree", "list")
 	cmd.Dir = dir
 	out, _ := cmd.CombinedOutput()
@@ -400,7 +369,6 @@ func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
 
 	enterTool := EnterWorktree{WorkingDir: dir}
 
-	// Create
 	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"keep-test"}`))
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.Content)
@@ -408,7 +376,6 @@ func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
 
 	wtPath := dir + "/.ggcode/worktrees/keep-test"
 
-	// Exit with keep — should NOT remove
 	exitTool := ExitWorktree{WorkingDir: wtPath}
 	result, err := exitTool.Execute(context.Background(), json.RawMessage(`{"action":"keep"}`))
 	if err != nil {
@@ -417,12 +384,11 @@ func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("exit keep failed: %s", result.Content)
 	}
-	// Verify SuggestedWorkingDir points back to main repo
+
 	if result.SuggestedWorkingDir == "" {
 		t.Error("SuggestedWorkingDir should be set to main repo root")
 	}
 
-	// Verify worktree still exists
 	cmd := exec.Command("git", "worktree", "list")
 	cmd.Dir = dir
 	out, _ := cmd.CombinedOutput()
@@ -430,7 +396,6 @@ func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
 		t.Errorf("worktree should still exist after keep: %s", string(out))
 	}
 
-	// Clean up
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
 
@@ -441,8 +406,6 @@ func TestFindGitRootFromWorktree_NotWorktree(t *testing.T) {
 		t.Error("expected error for non-worktree directory")
 	}
 }
-
-// --- ListWorktree ---
 
 func TestListWorktree_SingleRepo(t *testing.T) {
 	dir := initTestGitRepo(t)
@@ -455,7 +418,7 @@ func TestListWorktree_SingleRepo(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Main repo should appear as a worktree
+
 	if !strings.Contains(result.Content, "worktree") {
 		t.Errorf("expected worktree listing, got: %s", result.Content)
 	}
@@ -464,7 +427,6 @@ func TestListWorktree_SingleRepo(t *testing.T) {
 func TestListWorktree_MultipleWorktrees(t *testing.T) {
 	dir := initTestGitRepo(t)
 
-	// Create two worktrees
 	enterTool := EnterWorktree{WorkingDir: dir}
 	r1, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-alpha"}`))
 	if err != nil {
@@ -482,7 +444,6 @@ func TestListWorktree_MultipleWorktrees(t *testing.T) {
 		t.Fatalf("create wt-beta failed: %s", r2.Content)
 	}
 
-	// List should show all three (main + 2 worktrees)
 	listTool := ListWorktree{WorkingDir: dir}
 	result, err := listTool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
@@ -501,7 +462,6 @@ func TestListWorktree_MultipleWorktrees(t *testing.T) {
 		t.Errorf("expected 3 worktrees, got: %s", result.Content)
 	}
 
-	// Clean up
 	exec.Command("git", "worktree", "remove", "--force", r1.SuggestedWorkingDir).Run()
 	exec.Command("git", "worktree", "remove", "--force", r2.SuggestedWorkingDir).Run()
 }
@@ -509,7 +469,6 @@ func TestListWorktree_MultipleWorktrees(t *testing.T) {
 func TestListWorktree_DirtyDetection(t *testing.T) {
 	dir := initTestGitRepo(t)
 
-	// Create a worktree
 	enterTool := EnterWorktree{WorkingDir: dir}
 	r1, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-dirty"}`))
 	if err != nil {
@@ -520,12 +479,10 @@ func TestListWorktree_DirtyDetection(t *testing.T) {
 	}
 	wtPath := r1.SuggestedWorkingDir
 
-	// Make it dirty
 	cmd := exec.Command("sh", "-c", "echo 'uncommitted' > newfile.txt")
 	cmd.Dir = wtPath
 	cmd.Run()
 
-	// List should show dirty marker
 	listTool := ListWorktree{WorkingDir: dir}
 	result, err := listTool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
@@ -538,7 +495,6 @@ func TestListWorktree_DirtyDetection(t *testing.T) {
 		t.Errorf("expected dirty marker in listing: %s", result.Content)
 	}
 
-	// Clean up
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
 
@@ -555,10 +511,6 @@ func TestListWorktree_NonGitRepo(t *testing.T) {
 	}
 }
 
-// TestExitWorktree_DirtyWithoutForceRefused pins #1356: removing a dirty
-// worktree WITHOUT discard_changes must be refused by git itself (no
-// unconditional --force), while discard_changes=true still removes it.
-// Uses a real git repo so the force-gating actually round-trips to git.
 func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
 	dir := initTestGitRepo(t)
 	enter := EnterWorktree{WorkingDir: dir}
@@ -573,13 +525,10 @@ func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
 		cleanup.Run()
 	}()
 
-	// Dirty the worktree AFTER entering, bypassing the tool's own porcelain
-	// pre-check as closely as a parallel writer would.
 	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("concurrent write"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// The porcelain check should refuse first - same observable contract.
 	exit := ExitWorktree{WorkingDir: wtPath}
 	res, err = exit.Execute(context.Background(), json.RawMessage(`{"action":"remove"}`))
 	if err != nil {
@@ -589,7 +538,6 @@ func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
 		t.Fatalf("expected refusal for dirty worktree without discard_changes, got: %s", res.Content)
 	}
 
-	// discard_changes=true must still remove it (--force restored).
 	res, err = exit.Execute(context.Background(), json.RawMessage(`{"action":"remove","discard_changes":true}`))
 	if err != nil {
 		t.Fatal(err)
@@ -602,11 +550,6 @@ func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
 	}
 }
 
-// TestExitWorktreeRejectsInvalidAction pins #1406-A: every non-"keep"
-// value - typos like "exit"/"close" (beyond distance-2 enum correction)
-// AND a missing action (json.Unmarshal does not enforce required) - used
-// to fall through to the destructive remove branch (worktree deleted +
-// git branch -D). Fail closed now.
 func TestExitWorktreeRejectsInvalidAction(t *testing.T) {
 	tw := ExitWorktree{WorkingDir: t.TempDir()}
 	for _, action := range []string{"", "exit", "close", "delete", "KEEP"} {
@@ -623,9 +566,6 @@ func TestExitWorktreeRejectsInvalidAction(t *testing.T) {
 	}
 }
 
-// #1710 case 5: "." and ".." pass the per-character check (dot allowed) but
-// are path components - they must be rejected by the name gate, not left to
-// git's illegal-branch-name error as the only backstop.
 func Test1710WorktreeNameRejectsPathComponents(t *testing.T) {
 	for _, bad := range []string{".", ".."} {
 		if isSafeWorktreeName(bad) {

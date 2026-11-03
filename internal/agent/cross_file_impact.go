@@ -1,41 +1,5 @@
 package agent
 
-// Cross-File Impact Analysis - pre-completion gate that detects when the
-// agent's edits may have broken references in files it did NOT edit.
-//
-// Problem: When the agent edits a Go file (e.g., renames a function, removes
-// a type, changes a function signature, deletes a method), other files in the
-// package or module that reference that symbol will fail to compile. The agent
-// typically only edits the files it was asked to change and may not realize
-// that its modifications have cascading effects on files it never opened.
-//
-// The existing write-integrity checks (check_registry.go) validate the
-// SYNTAX of individual files after each edit. The change reconciliation gate
-// (change_reconcile.go) detects unexpected side-effect files. But NEITHER
-// detects semantic breakage in OTHER files caused by the agent's edits.
-//
-// This gate fills that gap by:
-//  1. Parsing the DIFF of each Go file the agent edited (old vs new content)
-//  2. Extracting exported symbols that were REMOVED or RENAMED
-//  3. Scanning sibling Go files (same package directory) for references to
-//     those removed symbols
-//  4. Warning the agent about files that may need updates
-//
-// Competitor analysis:
-//   - Claude Code: relies on `go build` to catch these, reactive not proactive
-//   - Cursor: IDE diagnostics flag broken references in real-time
-//   - Cline/OpenHands: no cross-file impact analysis; relies on build errors
-//   - Aider: uses tree-sitter to track function/class changes across files
-//   - Devin: has a dependency graph but doesn't pre-warn about breakage
-//
-// Key design decisions:
-//   - Go-only (other languages lack reliable static analysis without LSP)
-//   - Uses go/ast for precise symbol extraction (function/method/type/var)
-//   - Scans same-directory siblings only (most common breakage pattern)
-//   - Runs at most once per run, before the change reconciliation gate
-//   - Advisory: injects context, doesn't block completion
-//   - Zero LLM cost - pure static analysis
-
 import (
 	"fmt"
 	"go/ast"
@@ -51,7 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// crossFileImpactState tracks whether the impact analysis gate has fired.
 type crossFileImpactState struct {
 	fired bool
 	mu    sync.Mutex
@@ -67,35 +30,23 @@ func (c *crossFileImpactState) reset() {
 	c.fired = false
 }
 
-// maxImpactFiles caps the number of potentially-affected files listed.
 const maxImpactFiles = 8
 
-// maxScanFiles limits how many sibling files to scan per edited file.
 const maxScanFiles = 30
 
-// impactScanTimeout bounds the total analysis to prevent slowdowns in huge repos.
 const impactScanTimeout = 5 * time.Second
 
-// impactRemovedSymbol represents a Go symbol that existed in the old content
-// but not in the new content of an edited file.
 type impactRemovedSymbol struct {
-	name     string // symbol identifier (e.g., "FooBar", "(*T).Method")
-	category string // "func", "type", "method", "var", "const"
+	name     string
+	category string
 }
 
-// fileImpact records a single edited file's removed symbols and the sibling
-// files that reference them.
 type fileImpact struct {
 	editedFile    string
 	removedSyms   []impactRemovedSymbol
 	affectedFiles []string
 }
 
-// checkCrossFileImpact analyzes the agent's edited Go files for removed
-// exported symbols and warns about sibling files that reference them.
-//
-// The gate fires at most once per run. It is advisory - it injects context
-// to help the agent proactively fix dependent files, but doesn't block.
 func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 	if a.crossFileImpact == nil {
 		return ""
@@ -106,28 +57,17 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		return ""
 	}
 	a.crossFileImpact.mu.Unlock()
-	// #1773 case 6: fired used to lock on ENTRY - four early-out paths
-	// (>20 files, 5s deadline, git show failure, zero siblings) burned
-	// the once-per-run flag with NOTHING produced, and the comment's
-	// "fires at most once" really means "produces a warning at most
-	// once". The flag now sets only when a warning is actually about to
-	// be returned; concurrent entrants are safe (idempotent analysis).
 
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
 		return ""
 	}
 
-	// Collect edited Go files.
 	goFiles := editedGoFiles(runStats.FilesEdited)
 	if len(goFiles) == 0 {
 		return ""
 	}
 
-	// #550 C1: every file edited THIS run is excluded from the sibling scan
-	// below — a symbol move (definition removed in a.go, references updated
-	// in b.go) previously flagged the co-edited b.go as "affected by a file
-	// you did NOT edit", a false positive on a fully consistent edit set.
 	editedAbs := absEditedSet(workingDir, goFiles)
 
 	if len(goFiles) > 20 {
@@ -154,11 +94,10 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 
 	totalAffected, totalRemoved := impactTotals(impacts)
 
-	// Real output ahead: claim the once-per-run flag NOW (#1773 case 6).
 	a.crossFileImpact.mu.Lock()
 	if a.crossFileImpact.fired {
 		a.crossFileImpact.mu.Unlock()
-		return "" // a concurrent call already reported
+		return ""
 	}
 	a.crossFileImpact.fired = true
 	a.crossFileImpact.mu.Unlock()
@@ -169,8 +108,6 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 	return warning
 }
 
-// editedGoFiles filters the run's edited-file list down to Go source paths,
-// preserving order.
 func editedGoFiles(files []string) []string {
 	var goFiles []string
 	for _, f := range files {
@@ -181,13 +118,6 @@ func editedGoFiles(files []string) []string {
 	return goFiles
 }
 
-// absEditedSet maps every edited file's cleaned absolute path — the exclusion
-// set for the sibling scan.
-//
-// #550 C1: every file edited THIS run is excluded from the sibling scan — a
-// symbol move (definition removed in a.go, references updated in b.go)
-// previously flagged the co-edited b.go as "affected by a file you did NOT
-// edit", a false positive on a fully consistent edit set.
 func absEditedSet(workingDir string, goFiles []string) map[string]bool {
 	editedAbs := make(map[string]bool, len(goFiles))
 	for _, f := range goFiles {
@@ -200,7 +130,6 @@ func absEditedSet(workingDir string, goFiles []string) map[string]bool {
 	return editedAbs
 }
 
-// impactTotals sums affected-file and removed-symbol counts across impacts.
 func impactTotals(impacts []fileImpact) (affected, removed int) {
 	for _, imp := range impacts {
 		affected += len(imp.affectedFiles)
@@ -209,28 +138,18 @@ func impactTotals(impacts []fileImpact) (affected, removed int) {
 	return affected, removed
 }
 
-// impactPending is a sibling file with #2164 near-miss candidates awaiting
-// typed resolution.
 type impactPending struct {
 	relPath string
 	file    *ast.File
 	near    []impactNearMiss
 }
 
-// impactSiblingScan aggregates one edited file's sibling scan: definite
-// affected files, the parsed sibling ASTs (shared with the typed pass), and
-// near-miss candidates.
 type impactSiblingScan struct {
 	affectedSet map[string]bool
 	pkgFiles    []*ast.File
 	pendings    []impactPending
 }
 
-// analyzeEditedFileImpact runs the full per-file pipeline for one edited Go
-// file — old-vs-new symbol diff, sibling scan, typed near-miss resolution —
-// and returns the impact record, or nil when there is nothing to report
-// (unreadable new content, no committed baseline, no removed symbols, no
-// siblings, no affected files).
 func analyzeEditedFileImpact(workingDir, editedFile string, editedAbs map[string]bool, deadline time.Time) *fileImpact {
 	absPath := editedFile
 	if !filepath.IsAbs(absPath) {
@@ -263,8 +182,6 @@ func analyzeEditedFileImpact(workingDir, editedFile string, editedAbs map[string
 		return nil
 	}
 
-	// Shared file set: sibling ASTs feed both the cheap visitor pass and
-	// the optional #2164 typed pass below.
 	dirFset := token.NewFileSet()
 	scan := scanSiblingsForImpact(dirFset, siblings, editedAbs, workingDir, names, methodOwners, deadline)
 	resolveImpactPendings(dirFset, &scan, absPath, string(newContent), methodOwners, deadline)
@@ -283,11 +200,6 @@ func analyzeEditedFileImpact(workingDir, editedFile string, editedAbs map[string
 	}
 }
 
-// scanSiblingsForImpact walks the sibling files of one edited file, marking
-// definite references in affectedSet. Unparsable siblings fall back to the
-// conservative text scan (unchanged pre-#2164 behavior, #1773 case 5
-// fallback); variable-receiver near misses are collected as pendings for the
-// typed pass.
 func scanSiblingsForImpact(dirFset *token.FileSet, siblings []string, editedAbs map[string]bool, workingDir string, names map[string]bool, methodOwners map[string]map[string]bool, deadline time.Time) impactSiblingScan {
 	scan := impactSiblingScan{affectedSet: make(map[string]bool)}
 	for _, sibling := range siblings {
@@ -295,7 +207,7 @@ func scanSiblingsForImpact(dirFset *token.FileSet, siblings []string, editedAbs 
 			break
 		}
 		if editedAbs[filepath.Clean(sibling)] {
-			continue // co-edited this run — not "a file you did NOT edit" (#550 C1)
+			continue
 		}
 		content, err := os.ReadFile(sibling)
 		if err != nil {
@@ -307,8 +219,7 @@ func scanSiblingsForImpact(dirFset *token.FileSet, siblings []string, editedAbs 
 		}
 		file, perr := parser.ParseFile(dirFset, sibling, content, 0)
 		if perr != nil {
-			// Unparsable siblings fall back to the conservative text scan
-			// (unchanged pre-#2164 behavior, #1773 case 5 fallback).
+
 			for name := range names {
 				if containsGoIdent(string(content), name) {
 					scan.affectedSet[relPath] = true
@@ -330,21 +241,12 @@ func scanSiblingsForImpact(dirFset *token.FileSet, siblings []string, editedAbs 
 	return scan
 }
 
-// resolveImpactPendings upgrades near-miss variable-receiver method calls
-// (s.run()) that the syntax-only visitor conservatively missed, using
-// in-process stdlib go/types over the post-edit package sources - ONLY when
-// a near-miss candidate exists, so the cost stays at zero for the common
-// no-candidate path. No subprocess, no new dependency (governance
-// constraints on #2164: no x/tools, no LSP coupling). Any unresolved
-// receiver stays a miss: the compiler remains the ground truth and the
-// zero-false-positive property of #2100/#2163 is preserved (exact
-// owner-type match required to upgrade).
 func resolveImpactPendings(dirFset *token.FileSet, scan *impactSiblingScan, editedAbsPath, newContent string, methodOwners map[string]map[string]bool, deadline time.Time) {
 	if len(scan.pendings) == 0 || len(methodOwners) == 0 || !time.Now().Before(deadline) {
 		return
 	}
 	if ef, perr := parser.ParseFile(dirFset, editedAbsPath, newContent, 0); perr == nil {
-		scan.pkgFiles = append(scan.pkgFiles, ef) // decl sites may live in the edited file
+		scan.pkgFiles = append(scan.pkgFiles, ef)
 	}
 	infos := impactTypeCheckGroups(dirFset, scan.pkgFiles)
 	for _, p := range scan.pendings {
@@ -358,8 +260,6 @@ func resolveImpactPendings(dirFset *token.FileSet, scan *impactSiblingScan, edit
 	}
 }
 
-// renderImpactWarning formats the advisory message shown to the agent,
-// capping the affected-file listing at maxImpactFiles entries.
 func renderImpactWarning(impacts []fileImpact, totalRemoved, totalAffected int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(
@@ -394,8 +294,6 @@ func renderImpactWarning(impacts []fileImpact, totalRemoved, totalAffected int) 
 	return b.String()
 }
 
-// extractImpactRemovedSymbols parses old and new Go source, returns symbols
-// present in old but absent from new.
 func extractImpactRemovedSymbols(oldContent, newContent, filename string) []impactRemovedSymbol {
 	oldSyms := extractImpactSymbols(oldContent, filename)
 	newSyms := extractImpactSymbols(newContent, filename)
@@ -418,11 +316,6 @@ func extractImpactRemovedSymbols(oldContent, newContent, filename string) []impa
 	return removed
 }
 
-// extractImpactSymbols parses Go source and returns all UNexported top-level
-// declarations (functions, types, variables, constants) and unexported methods
-// (#1450-A: exported symbols' referents live outside the package, which the
-// same-directory sibling scan never intersects - excluded by design; the
-// warning text speaks of internal/same-package symbols, #3502).
 func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 	file, _, err := parseGoSource(filename, src, 0)
 	if err != nil {
@@ -434,13 +327,7 @@ func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			// #1450-A: UNexported only - Go's one-dir-one-package means the
-			// referencers of an unexported symbol are exactly the sibling
-			// files this detector scans, so the extraction and scan scopes
-			// finally intersect. (Exported symbols' main referencers live
-			// OUTSIDE the package - extracting them while scanning only the
-			// same directory covered two disjoint quadrants: high-fan-in
-			// package deletions stayed silent while nothing real was found.)
+
 			if d.Name == nil || ast.IsExported(d.Name.Name) {
 				continue
 			}
@@ -489,7 +376,6 @@ func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 	return syms
 }
 
-// impactReceiverTypeName extracts the type name from a receiver expression.
 func impactReceiverTypeName(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -502,9 +388,6 @@ func impactReceiverTypeName(expr ast.Expr) string {
 	return ""
 }
 
-// findSiblingGoFiles returns Go files in the same directory as the edited
-// file, excluding the edited file itself and test files (unless the edited
-// file is a test file).
 func findSiblingGoFiles(dir, editedFile string, max int) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -538,8 +421,6 @@ func findSiblingGoFiles(dir, editedFile string, max int) []string {
 	return siblings
 }
 
-// impactNameTables splits removed symbols into the bare-name set and the
-// method-name → owner-type set used for selector qualification (#2100).
 func impactNameTables(removed []impactRemovedSymbol) (map[string]bool, map[string]map[string]bool) {
 	names := make(map[string]bool, len(removed))
 	methodOwners := make(map[string]map[string]bool)
@@ -573,22 +454,12 @@ func impactNameTables(removed []impactRemovedSymbol) (map[string]bool, map[strin
 	return names, methodOwners
 }
 
-// referencesAnyImpactSymbol checks whether the given Go source references any
-// of the removed symbols.
 func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 	names, methodOwners := impactNameTables(removed)
 	if len(names) == 0 {
 		return false
 	}
-	// #1773 case 5: scope discrimination. The old text scan matched a
-	// sibling's LOCAL variable that happens to share the deleted
-	// package-level symbol's name - an advisory claiming the agent
-	// "affected a file you did NOT edit" when the local shadow cannot
-	// break compilation. Parse the sibling and only count occurrences
-	// the resolver leaves UNRESOLVED: an ident with Obj != nil is defined
-	// in this file (local var/param/func/receiver), so it does not
-	// reference the cross-file symbol at all. Unparsable siblings fall
-	// back to the conservative text scan.
+
 	file, _, err := parseGoSource("sibling.go", src, 0)
 	if err != nil {
 		for name := range names {
@@ -602,29 +473,19 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 	return found
 }
 
-// walkImpactRefs walks one parsed sibling AST, reporting definite references
-// plus #2164 near-miss candidates (variable-receiver selectors whose method
-// name matches a removed method but whose owner only type info can qualify).
 func walkImpactRefs(file *ast.File, names map[string]bool, methodOwners map[string]map[string]bool) (bool, []impactNearMiss) {
 	v := &impactRefVisitor{names: names, methodOwners: methodOwners}
 	ast.Walk(v, file)
 	return v.found, v.nearMiss
 }
 
-// maxImpactNearMiss caps recorded near-miss candidates per sibling to bound
-// the typed pass work.
 const maxImpactNearMiss = 32
 
-// impactNearMiss is a selector whose method name matches a removed method
-// but whose receiver is a variable (not a type-name chain): x.sel. Only
-// type info can decide whether x's static type owns sel (#2164).
 type impactNearMiss struct {
-	recv ast.Expr // the receiver expression x
-	sel  string   // the selector name sel
+	recv ast.Expr
+	sel  string
 }
 
-// impactRefVisitor walks a sibling AST counting only genuine references
-// to removed symbols (#2100).
 type impactRefVisitor struct {
 	names        map[string]bool
 	methodOwners map[string]map[string]bool
@@ -638,30 +499,24 @@ func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
 	}
 	switch node := n.(type) {
 	case *ast.SelectorExpr:
-		// Method-expression form (Type.method / (*T).method): a genuine
-		// reference only when the receiver's base type owns the removed
-		// method. Anything else (variable receivers, other packages)
-		// cannot be verified and never fires a package-level hit - the
-		// Sel ident itself is never a candidate.
+
 		if owners := v.methodOwners[node.Sel.Name]; len(owners) > 0 {
 			if base := selectorBaseTypeName(node.X); base != "" && owners[base] {
 				v.found = true
 				return nil
 			}
-			// #2164: variable-receiver candidate - only type info can qualify
-			// it. Recorded as a near miss, never a hit (zero-FP invariant).
+
 			if len(v.nearMiss) < maxImpactNearMiss {
 				v.nearMiss = append(v.nearMiss, impactNearMiss{recv: node.X, sel: node.Sel.Name})
 			}
 		}
-		// Walk ONLY the receiver manually - returning a visitor here would
-		// make ast.Walk descend into Sel as a plain Ident candidate too.
+
 		ast.Walk(v, node.X)
 		return nil
 	case *ast.CompositeLit:
 		for _, elt := range node.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				// Field keys are struct metadata, not references.
+
 				ast.Walk(v, kv.Value)
 				continue
 			}
@@ -669,9 +524,7 @@ func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
 		}
 		return nil
 	case *ast.Ident:
-		// Package-level (non-method) symbol: only a standalone unresolved
-		// ident counts. Method bare names never match here - a bare use
-		// cannot reference a method.
+
 		if v.names[node.Name] && len(v.methodOwners[node.Name]) == 0 && node.Obj == nil {
 			v.found = true
 			return nil
@@ -680,8 +533,6 @@ func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
 	return v
 }
 
-// selectorBaseTypeName peels parens/stars off a selector receiver to its
-// base type identifier name ("" when not a plain identifier chain).
 func selectorBaseTypeName(x ast.Expr) string {
 	for {
 		switch e := x.(type) {
@@ -697,7 +548,6 @@ func selectorBaseTypeName(x ast.Expr) string {
 	}
 }
 
-// containsGoIdent checks if name appears as a Go identifier in src.
 func containsGoIdent(src, name string) bool {
 	idx := 0
 	for {
@@ -731,28 +581,17 @@ func isIdentChar(b byte) bool {
 		(b >= '0' && b <= '9') || b == '_'
 }
 
-// gitFileContentAtHEAD returns the file content from the last committed version.
 func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
-	// #1541: tool calls carry ABSOLUTE paths (the schema says "Prefer an
-	// absolute path") and `git show HEAD:<abs>` rejects them outright;
-	// paths relative to a -C SUBDIR break too (git show resolves from the
-	// REPO ROOT). Every production caller fell into the per-file continue,
-	// so the whole detector (including #1450's unexported extraction)
-	// never ran - tests happened to use repo-root relative paths. Resolve
-	// the repo root and normalize against it.
+
 	repoRoot := gitRepoTopLevel(workingDir)
-	// Normalize workingDir to absolute for consistent comparison - a
-	// relative workingDir and the absolute repoRoot never compare equal.
+
 	absWork := workingDir
 	if !filepath.IsAbs(absWork) {
 		if a, err := filepath.Abs(absWork); err == nil {
 			absWork = a
 		}
 	}
-	// #1564: git may report the repo root with a different symlink
-	// resolution than the caller's workingDir (macOS /tmp vs /private/tmp),
-	// which silently defeats the HasPrefix rebase below. Compare through
-	// EvalSymlinks on both sides.
+
 	symWork, symRoot := absWork, repoRoot
 	if r, err := filepath.EvalSymlinks(absWork); err == nil {
 		symWork = r
@@ -768,8 +607,7 @@ func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
 		if base == "" {
 			base = symWork
 		}
-		// Resolve the caller's symlinked absolute path (macOS /tmp vs
-		// /private/tmp) before comparing against the git-reported root.
+
 		if r, err := filepath.EvalSymlinks(target); err == nil {
 			target = r
 		}
@@ -779,7 +617,7 @@ func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
 		}
 		target = rel
 	} else if symRoot != "" && symWork != symRoot && strings.HasPrefix(symWork, symRoot+string(filepath.Separator)) {
-		// Subdir-relative path: rebase onto the repo root.
+
 		target = filepath.Join(strings.TrimPrefix(symWork, symRoot+string(filepath.Separator)), target)
 	}
 	target = filepath.Clean(target)
@@ -789,7 +627,6 @@ func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
 	return runGitShowWithTimeout(workingDir, target, gitDiffTimeout)
 }
 
-// gitRepoTopLevel returns the repository root for workingDir ("" on failure).
 func gitRepoTopLevel(workingDir string) string {
 	cmd := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
 	out, err := runGitCommandWithTimeout(cmd, gitDiffTimeout)
@@ -799,7 +636,6 @@ func gitRepoTopLevel(workingDir string) string {
 	return strings.TrimSpace(out)
 }
 
-// runGitShowWithTimeout runs `git show HEAD:path` with a timeout.
 func runGitShowWithTimeout(workingDir, relPath string, timeout time.Duration) (string, error) {
 	cmd := exec.Command("git", "-C", workingDir, "show", "HEAD:"+relPath)
 	output, err := runGitCommandWithTimeout(cmd, timeout)

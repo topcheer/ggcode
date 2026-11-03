@@ -8,26 +8,13 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// WorkflowRunTool implements the workflow_run tool (r436: orchestration
-// externalization, after Anthropic dynamic workflows). The agent emits a
-// task graph as JSON; an external runtime executes it (parallel workers,
-// adversarial verifiers, one synthesizer); the parent context receives ONLY
-// the final report. Delegation economics mirror spawn_agent: a workflow
-// re-reads context per step and multiplies token cost - use it for jobs too
-// big for one context window (repo-wide audits, many-file migrations),
-// never for tasks a single pass handles fine.
 type WorkflowRunTool struct {
 	Manager *subagent.Manager
-	// Run executes the graph. Production wiring: agentruntime.WorkflowRunnerFor
-	// (cycle-breaker: internal/tool cannot import internal/agentruntime).
-	Run func(ctx context.Context, req WorkflowRequest) string
+	Run     func(ctx context.Context, req WorkflowRequest) string
 }
 
-// WorkflowRequest is the tool-facing request. WorkflowSpec lives in
-// agentruntime; the tool layer only carries the JSON, and the runtime
-// re-validates, so this is a transparent envelope.
 type WorkflowRequest struct {
-	Workflow json.RawMessage `json:"workflow"` // WorkflowSpec JSON: {steps:[{id,task,dependsOn,verifier,tools,model}], synthesis}
+	Workflow json.RawMessage `json:"workflow"`
 	Context  string          `json:"context,omitempty"`
 }
 

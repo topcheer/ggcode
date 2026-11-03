@@ -17,11 +17,11 @@ func TestSandboxPolicyDefaults(t *testing.T) {
 	if !enabled.Enabled {
 		t.Fatal("Enabled=true must stay on")
 	}
-	// Platform default: network allowed (agents need fetch/git push).
+
 	if !enabled.AllowNetwork {
 		t.Fatal("nil AllowNetwork must default to allowed")
 	}
-	// Explicit opt-out is honored.
+
 	denied := false
 	p = NewSandboxPolicy(true, &denied, nil)
 	if p.AllowNetwork {
@@ -77,8 +77,7 @@ func TestResolveSandboxPathExisting(t *testing.T) {
 	if resolved != filepath.Clean(resolved) {
 		t.Fatalf("resolved form must be clean: %q", resolved)
 	}
-	// On symlinked systems (/tmp -> /private/tmp) the resolved form may
-	// differ from cleaned, but EvalSymlinks(cleaned) must equal resolved.
+
 	if real, err := filepath.EvalSymlinks(cleaned); err == nil && real != resolved {
 		t.Fatalf("resolved %q != EvalSymlinks(cleaned) %q", resolved, real)
 	}
@@ -91,7 +90,7 @@ func TestResolveSandboxPathNonExisting(t *testing.T) {
 	if !filepath.IsAbs(resolved) {
 		t.Fatalf("resolved must be absolute: %q", resolved)
 	}
-	// The missing file's dir must be preserved under an existing root.
+
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
@@ -151,9 +150,6 @@ func TestDecodeSandboxLaunchPayloadRejectsBadInput(t *testing.T) {
 	}
 }
 
-// The marker is the argv contract between the run_command rewrite path and
-// the cmd/ggcode main hook. Renaming one side without the other silently
-// breaks every sandboxed Linux command, so pin both spellings.
 func TestSandboxLaunchMarkerExportContract(t *testing.T) {
 	if SandboxLaunchMarker != sandboxLaunchMarker {
 		t.Fatalf("export mismatch: %q != %q", SandboxLaunchMarker, sandboxLaunchMarker)
@@ -182,9 +178,7 @@ func TestSandboxWriteAllowPaths(t *testing.T) {
 		}
 		return false
 	}
-	// Every entry must be absolute and deduplicated; the workspace and the
-	// extra root must be present in their resolved or cleaned spelling
-	// (symlinked roots like /tmp -> /private/tmp legitimately appear twice).
+
 	seen := map[string]bool{}
 	for _, path := range out {
 		if !filepath.IsAbs(path) {

@@ -1,11 +1,5 @@
 package tool
 
-// #3124: when tryLock fails at startup (second ggcode instance on the same
-// workspace), the old code returned without starting backgroundLoop while
-// `started` was already true - MarkDirty signals vanished, the startup
-// snapshot was served forever, and idle release never ran. Probes simulate
-// a competing instance by holding the lock file externally.
-
 import (
 	"os"
 	"path/filepath"
@@ -53,15 +47,12 @@ func TestCodeIndexDegradedInstanceStartsLoop(t *testing.T) {
 
 	m.StartBackgroundIndex()
 
-	// Degraded flag set (not the old silent return).
 	waitCond(t, 2*time.Second, func() bool {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 		return m.degraded
 	}, "degraded flag never set after lock contention")
 
-	// MarkDirty signal must be consumed by the (now running) background
-	// loop instead of rotting in the buffer.
 	tmpFile := filepath.Join(tmp, "probe.go")
 	if err := os.WriteFile(tmpFile, []byte("package p\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -69,13 +60,13 @@ func TestCodeIndexDegradedInstanceStartsLoop(t *testing.T) {
 	m.mu.RLock()
 	ready := m.ready
 	m.mu.RUnlock()
-	m.MarkDirty([]string{tmpFile}) // no-op signal if !ready; dirtyFiles still recorded
+	m.MarkDirty([]string{tmpFile})
 	waitCond(t, 2*time.Second, func() bool {
 		select {
 		case <-m.rebuildCh:
-			return false // still pending: nobody consumed it
+			return false
 		default:
-			return true // consumed (or never fired because !ready)
+			return true
 		}
 	}, "rebuildCh signal never consumed - background loop not running")
 
@@ -97,12 +88,8 @@ func TestCodeIndexDegradedPromotesWhenLockFrees(t *testing.T) {
 		return m.degraded
 	}, "degraded flag never set")
 
-	// Competing instance exits.
 	_ = ext.Close()
 
-	// Next debounced/periodic rebuildDirty acquires the lock and clears
-	// degraded (writer promotion). Drive it via rebuildDirty directly to
-	// avoid waiting a full tick.
 	tmpFile := filepath.Join(tmp, "probe2.go")
 	if err := os.WriteFile(tmpFile, []byte("package p\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -121,10 +108,6 @@ func TestCodeIndexDegradedPromotesWhenLockFrees(t *testing.T) {
 	}
 }
 
-// Sequential-start regression: the normal (lock-holding) path must behave
-// exactly as before - this guards the edit against disturbing the primary
-// flow. The manager in these tests shares the real cache directory keyed
-// by workspace hash; use a unique dir to avoid cross-test interference.
 func TestCodeIndexNormalStartUnchanged(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {

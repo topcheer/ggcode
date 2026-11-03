@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// zz_issue2828_test.go - probe for #2828: isGitPush must see through git
-// global flags (-C <path>, --git-dir=X, -c k=v) exactly like the sibling
-// isDestructiveGitSub (#2255 H1) does, otherwise `git -C /repo push` yields
-// the (git, -C) bigram and the pushing-without-verification gate never fires.
 func TestIssue2828GitPushGlobalFlags(t *testing.T) {
 	positive := []string{
 		"git push",
@@ -36,11 +32,7 @@ func TestIssue2828GitPushGlobalFlags(t *testing.T) {
 			t.Errorf("#2828 isGitPush(%q) = true, want false", s)
 		}
 	}
-	// Note: quoted/comment mentions of "git push" fire both before and after
-	// this fix (adjacent-token posture, same as isDestructiveGitSub) - not a
-	// regression, so no negative assertion on mentions.
 
-	// Plain pushes still fire (no regression on the base case).
 	if !isGitPush("git push --force-with-lease") {
 		t.Errorf("#2828 plain git push stopped firing")
 	}

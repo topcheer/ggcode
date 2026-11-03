@@ -1,36 +1,5 @@
 package agent
 
-// Duplicate Declaration Detection — Post-edit structural duplicate checker.
-//
-// Research basis: AI coding agents frequently produce duplicate declarations
-// when editing existing files:
-//
-//  1. Duplicate imports — the agent adds "import \"fmt\"" when it already exists.
-//  2. Duplicate functions/methods — the agent re-implements a function that
-//     already exists in the file instead of editing the existing one.
-//  3. Duplicate type/struct declarations — the agent pastes a struct definition
-//     that already exists, creating a redeclaration error.
-//  4. Duplicate constants/variables — the agent adds a const/var block that
-//     conflicts with an existing declaration.
-//
-// These are guaranteed compilation errors in most languages. The agent then
-// wastes several iterations debugging "redeclared in this block" errors that
-// could have been caught immediately at write time.
-//
-// Competitor analysis:
-//   - Claude Code: relies on the build cycle to catch these (wastes iterations)
-//   - Cursor: LSP diagnostics may catch them on save, but not inline
-//   - Cline/OpenHands: reactive only — caught by build/test cycle
-//   - Aider: commit-per-edit makes duplicates visible in diff review
-//
-// ggcode's approach: detect duplicate declarations at write time by comparing
-// declaration counts in old vs. new content. Only NEW duplicates (introduced
-// by this edit) are flagged. This is zero-LLM-cost, language-aware, and has
-// near-zero false positives because we only flag exact name collisions.
-//
-// For Go files, we use the AST parser for precise detection. For other
-// languages, we use regex-based heuristics for function/type/import patterns.
-
 import (
 	"fmt"
 	"go/ast"
@@ -40,30 +9,17 @@ import (
 	"strings"
 )
 
-// maxDuplicateWarnings caps the number of duplicate-declaration warnings per write.
 const maxDuplicateWarnings = 3
 
-// checkDuplicateDeclarations detects declarations that were duplicated by this
-// edit — i.e., a function/type/import name that appears 2+ times in the new
-// content but appeared 0 or 1 times in the old content.
-//
-// Returns a non-empty warning string if duplicates were introduced, "" otherwise.
 func checkDuplicateDeclarations(filePath, oldContent, newContent string) string {
 	if strings.TrimSpace(newContent) == "" {
 		return ""
 	}
 
-	// Skip test files — Go test files can legitimately have duplicate helper
-	// names across different test functions (not package-level duplicates, but
-	// our regex heuristics for non-Go languages may false-positive in tests).
 	if isTestFile(filePath) {
 		return ""
 	}
 
-	// #2821: .d.ts files are ambient declaration files whose every function
-	// entry is an overload signature (no body, ';' terminator) — that is the
-	// only legal form there. Counting them as duplicates would misfire on the
-	// file's core idiom.
 	if strings.HasSuffix(filePath, ".d.ts") {
 		return ""
 	}
@@ -80,7 +36,7 @@ func checkDuplicateDeclarations(filePath, oldContent, newContent string) string 
 	case ".js", ".jsx", ".ts", ".tsx":
 		dups = checkJSDuplicateDecls(oldContent, newContent, ext)
 	default:
-		return "" // unsupported language
+		return ""
 	}
 
 	if len(dups) == 0 {
@@ -101,14 +57,12 @@ func checkDuplicateDeclarations(filePath, oldContent, newContent string) string 
 	return b.String()
 }
 
-// dupDecl represents a detected duplicate declaration.
 type dupDecl struct {
-	kind  string // "function", "method", "type", "import", "const", "var"
-	name  string // declaration name
-	count int    // number of occurrences in new content
+	kind  string
+	name  string
+	count int
 }
 
-// formatDuplicateWarning renders a concise warning for a duplicate declaration.
 func formatDuplicateWarning(d dupDecl) string {
 	return fmt.Sprintf(
 		"Duplicate %s %q detected (%d occurrences in file). "+
@@ -117,11 +71,6 @@ func formatDuplicateWarning(d dupDecl) string {
 		d.kind, d.name, d.count)
 }
 
-// --- Go (AST-based) ---
-
-// checkGoDuplicateDecls uses go/parser to detect duplicate package-level
-// declarations introduced by this edit. It compares declaration name counts
-// between old and new content.
 func checkGoDuplicateDecls(filePath, oldContent, newContent string) []dupDecl {
 	oldDecls := collectGoDecls(filePath, oldContent)
 	newDecls := collectGoDecls(filePath, newContent)
@@ -134,13 +83,11 @@ func checkGoDuplicateDecls(filePath, oldContent, newContent string) []dupDecl {
 			continue
 		}
 		oldCount := oldDecls[name]
-		// Only flag if the edit introduced or increased the duplication.
-		// If oldCount >= newCount, the duplicates already existed (e.g. file
-		// had 2 copies and now still has 2).
+
 		if newCount <= oldCount {
 			continue
 		}
-		// Only flag NEW duplicates (count increased from <2 to >=2).
+
 		if oldCount >= 2 {
 			continue
 		}
@@ -159,14 +106,11 @@ func checkGoDuplicateDecls(filePath, oldContent, newContent string) []dupDecl {
 	return dups
 }
 
-// goDeclKey identifies a Go declaration by kind + name.
 type goDeclKey struct {
 	kind string
 	name string
 }
 
-// collectGoDecls parses Go source and counts package-level declarations.
-// Returns a map from declaration key to occurrence count.
 func collectGoDecls(filePath, src string) map[goDeclKey]int {
 	counts := make(map[goDeclKey]int)
 	if strings.TrimSpace(src) == "" {
@@ -175,8 +119,7 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 
 	f, _, err := parseGoSource(filePath, src, 0)
 	if err != nil {
-		// If the file doesn't parse, we can't reliably detect duplicates.
-		// Syntax errors are caught by checkWriteIntegrity; skip here.
+
 		return counts
 	}
 
@@ -186,8 +129,7 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 			if d.Name == nil || d.Name.Name == "" {
 				continue
 			}
-			// For methods (d.Recv != nil), key includes receiver type to
-			// distinguish methods on different types with the same name.
+
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				recvType := receiverTypeName(d.Recv.List[0].Type)
 				if recvType != "" {
@@ -221,21 +163,10 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 	return counts
 }
 
-// --- Python (regex-based) ---
-
-// pythonFuncRe matches top-level and class method function definitions.
-// Group 1 captures leading indentation so methods can be scoped to their
-// enclosing class (#753); group 3 is the function name.
 var pythonFuncRe = regexp.MustCompile(`(?m)^(\s*)(async\s+)?def\s+(\w+)\s*\(`)
 
-// pythonClassRe matches class definitions.
 var pythonClassRe = regexp.MustCompile(`(?m)^class\s+(\w+)\s*[\(:]`)
 
-// checkPythonDuplicateDecls detects duplicate function/class definitions.
-// Methods are scoped to their class (#753): same-name methods in different
-// classes are legal Python idiom (__init__, run, process...) and must not
-// count as duplicates of each other -- mirroring the Go path's method:Recv
-// scoping, which the Python path lacked.
 func checkPythonDuplicateDecls(oldContent, newContent string) []dupDecl {
 	return compareDeclCounts(
 		collectPythonDecls(oldContent),
@@ -243,22 +174,13 @@ func checkPythonDuplicateDecls(oldContent, newContent string) []dupDecl {
 	)
 }
 
-// collectPythonDecls counts Python declarations with class scoping for
-// methods (#753) and nesting scoping for local defs (#2703). Top-level
-// def -> function:<name>; first-level def under the most recent class line
-// -> method:<Class>.<name>; class -> class:<name>. Defs nested inside a
-// method body (indent deeper than the method's own) are LOCAL functions —
-// legal Python idiom in any number — and are skipped entirely. A module-
-// level def (indent 0) after a class clears the class context.
 func collectPythonDecls(src string) map[regexDeclKey]int {
 	counts := make(map[regexDeclKey]int)
 	if strings.TrimSpace(src) == "" {
 		return counts
 	}
 	currentClass := ""
-	// methodIndent is the indentation width of the most recent method under
-	// currentClass; -1 means "no method opened yet". A def indented deeper
-	// than the enclosing method is a nested local def (#2703 scenario 3).
+
 	methodIndent := -1
 	for _, raw := range strings.Split(src, "\n") {
 		line := strings.TrimRight(raw, "\r")
@@ -276,58 +198,33 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 		indent := len(fm[1])
 		switch {
 		case indent == 0:
-			// Module-level def: not a method, and clears any class context
-			// so later module-level defs are not misattributed (#2703).
+
 			currentClass = ""
 			methodIndent = -1
 			counts[regexDeclKey{"function", name}]++
 		case currentClass != "" && methodIndent == -1:
-			// First def at class-body level: a method. Record its indent.
+
 			methodIndent = indent
 			counts[regexDeclKey{"method", currentClass + "." + name}]++
 		case currentClass != "" && indent == methodIndent:
-			// Sibling method of the same class.
+
 			counts[regexDeclKey{"method", currentClass + "." + name}]++
 		case currentClass != "" && indent > methodIndent:
-			// Nested local def inside a method body: legal, skip (#2703).
+
 		default:
-			// Indented def with no class context (or shallower than the
-			// method level): pre-#753 fallback for module-level nested defs.
+
 			counts[regexDeclKey{"function", name}]++
 		}
 	}
 	return counts
 }
 
-// --- JavaScript/TypeScript (regex-based) ---
-
-// jsFuncRe matches TOP-LEVEL function declarations (column 0): "function foo(".
-// Indented "function foo(" is a nested/block-scoped function (legal ES6
-// idiom inside any function body) and is excluded (#2703 scenario 2).
-//
-// #2821: the pattern requires a BODY ("{" after the parameter list and an
-// optional return-type annotation). TypeScript overload signatures
-// ("function foo(s: string): Date;") legally repeat the same name with no
-// body and a ';' terminator — they are not duplicates and must not be
-// counted; only 2+ implementations (both with bodies) are real errors.
 var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\((?:[^;{}()]|\([^()]*\))*\)\s*(?::\s*[^;{=]+)?\s*\{`)
 
-// jsClassRe matches top-level class declarations. #2734: inheritance is the
-// dominant class form in real JS/TS (React components extend Component,
-// services extend Base) -- the old `[\{<]` only matched bare classes and
-// silently excluded `class Foo extends Bar {` / `implements`, making the
-// duplicate-class check dead code for those forms (old/new counts both 0,
-// no failure signal). Match an optional extends/implements heritage list
-// before the `{`/`<` terminator.
 var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+[\w.<>[\]]+)?(?:\s+implements\s+[\w.<>[\],\s]+)?\s*[\{<]`)
 
-// jsConstFuncRe matches top-level "const foo = (" arrow function declarations.
-// Indented const is a block-scoped local (the most common false-positive
-// source — every function body declares const result/options/...) and is
-// excluded (#2703 scenario 1).
 var jsConstFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?\(?`)
 
-// checkJSDuplicateDecls detects duplicate function/class/const declarations.
 func checkJSDuplicateDecls(oldContent, newContent, ext string) []dupDecl {
 	patterns := []regexDeclPattern{
 		{re: jsFuncRe, kind: "function", group: 1},
@@ -337,17 +234,12 @@ func checkJSDuplicateDecls(oldContent, newContent, ext string) []dupDecl {
 	return checkRegexDuplicates(oldContent, newContent, patterns)
 }
 
-// --- Regex-based engine ---
-
-// regexDeclPattern defines a regex pattern for extracting declarations.
 type regexDeclPattern struct {
 	re    *regexp.Regexp
 	kind  string
-	group int // capture group index for the name
+	group int
 }
 
-// checkRegexDuplicates is a generic engine that counts declaration names
-// from old and new content using regex patterns, then flags NEW duplicates.
 func checkRegexDuplicates(oldContent, newContent string, patterns []regexDeclPattern) []dupDecl {
 	return compareDeclCounts(
 		collectRegexDecls(oldContent, patterns),
@@ -355,8 +247,6 @@ func checkRegexDuplicates(oldContent, newContent string, patterns []regexDeclPat
 	)
 }
 
-// compareDeclCounts flags names whose new count reached 2+ while the old
-// count was below 2 (pre-existing duplicates are not re-reported).
 func compareDeclCounts(oldCounts, newCounts map[regexDeclKey]int) []dupDecl {
 	var dups []dupDecl
 	seen := make(map[string]bool)
@@ -387,13 +277,11 @@ func compareDeclCounts(oldCounts, newCounts map[regexDeclKey]int) []dupDecl {
 	return dups
 }
 
-// regexDeclKey identifies a declaration by kind + name (for regex-based detection).
 type regexDeclKey struct {
 	kind string
 	name string
 }
 
-// collectRegexDecls extracts and counts declaration names from source using patterns.
 func collectRegexDecls(src string, patterns []regexDeclPattern) map[regexDeclKey]int {
 	counts := make(map[regexDeclKey]int)
 	if strings.TrimSpace(src) == "" {

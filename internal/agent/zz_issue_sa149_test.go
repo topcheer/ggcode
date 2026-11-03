@@ -1,12 +1,5 @@
 package agent
 
-// sa-149 (GEPA-style policy distillation) probes:
-// (a) maturity gate: only r461-counter-proven entries get distilled,
-// (b) sanitize: refined text entering the system prompt is budget- and
-//     injection-hardened,
-// (c) parse/distill round trip via a mock aux chat,
-// (d) RenderPromptSection prefers Refined over the raw Insight.
-
 import (
 	"context"
 	"encoding/json"
@@ -34,7 +27,6 @@ func pdEntry(t *testing.T, injected, success, fail int, insight, refined string)
 	}
 }
 
-// P1: maturity gate matrix.
 func TestSA149_MatureForDistill(t *testing.T) {
 	good := pdEntry(t, 3, 3, 0, "runs with X took too many iterations", "")
 	if !matureForDistill(good) {
@@ -54,14 +46,13 @@ func TestSA149_MatureForDistill(t *testing.T) {
 			t.Fatalf("%s: must not be mature", c.name)
 		}
 	}
-	// Retired entries (effectiveness-gated) are never polished into policy.
+
 	retired := pdEntry(t, 10, 2, 8, "ins", "")
 	if matureForDistill(retired) {
 		t.Fatal("retired entry must not be distilled")
 	}
 }
 
-// P2: sanitizer budget + injection blocklist.
 func TestSA149_SanitizePolicyText(t *testing.T) {
 	if clean, ok := sanitizePolicyText("Batch reads for X before editing. Verify with one test."); !ok || strings.Contains(clean, "\n") == false && len(clean) == 0 {
 		t.Fatalf("normal text must pass: %q %v", clean, ok)
@@ -89,15 +80,13 @@ func TestSA149_SanitizePolicyText(t *testing.T) {
 	if _, ok := sanitizePolicyText("  \n\t  "); ok {
 		t.Fatal("whitespace-only must be rejected")
 	}
-	// Control characters are stripped but text survives.
+
 	clean, ok = sanitizePolicyText("keep\u0000this")
 	if !ok || strings.Contains(clean, "\u0000") || clean != "keepthis" {
 		t.Fatalf("control char not stripped: %q", clean)
 	}
 }
 
-// P3: response parsing tolerates markdown; range filtering happens in
-// runPolicyDistill, not the parser.
 func TestSA149_ParseDistillResponse(t *testing.T) {
 	resp := "1. First policy.\n- 2. Second policy.\n7. Out of range.\ngarbage line\n3. Third policy."
 	got := parseDistillResponse(resp)
@@ -109,8 +98,6 @@ func TestSA149_ParseDistillResponse(t *testing.T) {
 	}
 }
 
-// P4: distillation round trip with mock chat; injection-y output lines are
-// dropped, the rest map back to entry indices.
 func TestSA149_RunPolicyDistillRoundTrip(t *testing.T) {
 	entries := []trajectoryLearning{
 		pdEntry(t, 4, 4, 0, "insight one", ""),
@@ -129,7 +116,7 @@ func TestSA149_RunPolicyDistillRoundTrip(t *testing.T) {
 	if got[0] != "Batch read-only calls for one." {
 		t.Fatalf("wrong refined text: %q", got[0])
 	}
-	// Chat failure is fail-open: empty map, no panic.
+
 	if got := runPolicyDistill(context.Background(), entries, func(context.Context, string, string) (string, error) {
 		return "", context.DeadlineExceeded
 	}); len(got) != 0 {
@@ -137,8 +124,6 @@ func TestSA149_RunPolicyDistillRoundTrip(t *testing.T) {
 	}
 }
 
-// P5: RenderPromptSection prefers Refined over raw Insight, falls back for
-// unrefined entries.
 func TestSA149_RenderPrefersRefined(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {
@@ -148,7 +133,7 @@ func TestSA149_RenderPrefersRefined(t *testing.T) {
 		pdEntry(t, 5, 5, 0, "raw statistical insight A", "Refined policy A: batch first."),
 	}
 	second := pdEntry(t, 5, 5, 0, "raw statistical insight B", "")
-	second.Category = "pd-probe-cat-b" // distinct category: RenderPromptSection dedupes per category
+	second.Category = "pd-probe-cat-b"
 	mixed = append(mixed, second)
 	var b strings.Builder
 	enc := json.NewEncoder(&b)
@@ -176,7 +161,6 @@ func TestSA149_RenderPrefersRefined(t *testing.T) {
 	}
 }
 
-// P6: batch cap - at most policyDistillBatchMax candidates per call.
 func TestSA149_BatchCap(t *testing.T) {
 	var seen int
 	chat := func(ctx context.Context, system, user string) (string, error) {
@@ -193,10 +177,8 @@ func TestSA149_BatchCap(t *testing.T) {
 	}
 }
 
-// P7: Agent-side wiring - nil-state no-op, fresh-stamp early return (no LLM,
-// store untouched), and expired-stamp path with no store (fail-open no-op).
 func TestSA149_MaybeDistillThrottleWiring(t *testing.T) {
-	// nil trajIntel / empty workingDir: silent no-op.
+
 	a := &Agent{}
 	a.maybeDistillPolicies("")
 	a.maybeDistillPolicies(t.TempDir())
@@ -208,7 +190,6 @@ func TestSA149_MaybeDistillThrottleWiring(t *testing.T) {
 	}
 	a2 := &Agent{trajIntel: newTrajIntelState()}
 
-	// Fresh stamp: early return, nothing written.
 	stamp := filepath.Join(gg, policyDistillStampFile)
 	if err := os.WriteFile(stamp, []byte("1"), 0o644); err != nil {
 		t.Fatal(err)
@@ -218,7 +199,6 @@ func TestSA149_MaybeDistillThrottleWiring(t *testing.T) {
 		t.Fatal("fresh stamp must not create the learnings store")
 	}
 
-	// Expired stamp + no store: fail-open no-op, no panic.
 	if err := os.Chtimes(stamp, time.Now().Add(-2*policyDistillThrottle), time.Now().Add(-2*policyDistillThrottle)); err != nil {
 		t.Fatal(err)
 	}

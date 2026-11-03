@@ -6,11 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestEnsureMessagesSendableStripsInlineUserImages pins the vision-gate fix:
-// user messages carrying standalone image blocks (TUI paste or IM attachment)
-// must be stripped when the active model lacks vision - previously only
-// tool_result images were stripped, so resumed sessions replayed user image
-// blocks to text-only endpoints and 400ed with "content.type 取值范围 ['text']".
 func TestEnsureMessagesSendableStripsInlineUserImages(t *testing.T) {
 	a := &Agent{supportsVision: false}
 	msgs := []provider.Message{
@@ -32,14 +27,12 @@ func TestEnsureMessagesSendableStripsInlineUserImages(t *testing.T) {
 		t.Fatalf("text block must survive: %#v", out[0].Content)
 	}
 
-	// Vision-capable agent: images pass through untouched.
 	v := &Agent{supportsVision: true}
 	outV := v.ensureMessagesSendable(msgs)
 	if len(outV) != 1 || len(outV[0].Content) != 2 {
 		t.Fatalf("vision agent must keep image block: %#v", outV)
 	}
 
-	// Pure-image message degrades to a text placeholder, never an empty block.
 	pure := []provider.Message{{Role: "user", Content: []provider.ContentBlock{
 		provider.ImageBlock("image/jpeg", "anVwbg=="),
 	}}}

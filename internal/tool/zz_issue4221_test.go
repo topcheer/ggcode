@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// #4221: readOnlyToolNames is enforced at DEFINE time only; definitions
-// persist in workspace-shared plaintext (.ggcode/define_tools.json /
-// macros.json), so a hand-crafted file loaded from disk skips that check and
-// nested Execute bypasses agent-level approval. call/run must re-validate
-// every step before executing it.
 func smuggledStore(t *testing.T, dir, file string) {
 	t.Helper()
 	gg := filepath.Join(dir, ".ggcode")

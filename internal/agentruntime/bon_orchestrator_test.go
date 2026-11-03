@@ -11,11 +11,9 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// --- fakes ---
-
 type fakeSpawner struct {
 	calls   []tool.LaunchOptions
-	failAt  int // 1-based launch index that returns an error (0 = never)
+	failAt  int
 	nextErr error
 }
 
@@ -39,8 +37,6 @@ func (f *fakeSnaps) Snapshot(id string) (subagent.Snapshot, bool) {
 
 func (f *fakeSnaps) RunningCount() int { return f.running }
 
-// fakeCancSnaps adds the optional CandidateCanceller capability and records
-// which IDs the orchestrator asked to roll back (#3070).
 type fakeCancSnaps struct {
 	fakeSnaps
 	cancelled []string
@@ -69,8 +65,6 @@ func doneSnap(id, result string, fail bool) subagent.Snapshot {
 	return subagent.Snapshot{ID: id, Status: st, Result: result, Events: evs}
 }
 
-// --- tests ---
-
 func TestRunBestOfN_PicksConsensusWinner(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
@@ -97,7 +91,7 @@ func TestRunBestOfN_PicksConsensusWinner(t *testing.T) {
 	if !strings.Contains(rep.Report, "Winner") || !strings.Contains(rep.Report, "/tmp/wt-") {
 		t.Fatalf("report should surface the winner and its worktree, got:\n%s", rep.Report)
 	}
-	// Every candidate got the independence + verify-yourself suffix.
+
 	for _, c := range sp.calls {
 		if !strings.Contains(c.Task, "INDEPENDENT parallel candidates") {
 			t.Fatalf("candidate task missing suffix: %q", c.Task)
@@ -144,7 +138,7 @@ func TestRunBestOfN_RejectsSubTwo(t *testing.T) {
 
 func TestRunBestOfN_LaunchFailureAbortsCleanly(t *testing.T) {
 	sp := &fakeSpawner{failAt: 2}
-	sn := &fakeSnaps{} // no Cancel capability: IDs must still be exposed
+	sn := &fakeSnaps{}
 	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 2})
 	if rep.Err == "" || !strings.Contains(rep.Err, "candidate 2/2") {
 		t.Fatalf("expected launch-failure abort naming the candidate, got: %q", rep.Err)
@@ -152,8 +146,7 @@ func TestRunBestOfN_LaunchFailureAbortsCleanly(t *testing.T) {
 	if !strings.Contains(rep.Report, "Aborted after 1/2") {
 		t.Fatalf("report should state partial fan-out, got: %q", rep.Report)
 	}
-	// #3070: even without a canceller, the launched candidate must be
-	// exposed (id + worktree) so the parent can clean up, not leaked.
+
 	if len(rep.Candidates) != 1 {
 		t.Fatalf("expected 1 exposed candidate, got %d", len(rep.Candidates))
 	}
@@ -165,11 +158,8 @@ func TestRunBestOfN_LaunchFailureAbortsCleanly(t *testing.T) {
 	}
 }
 
-// TestRunBestOfN_LaunchFailureCancelsLaunchedCandidates: when the snapshot
-// source supports cancellation, a mid-fan-out launch failure rolls back
-// every already-launched candidate instead of leaking goroutines/worktrees.
 func TestRunBestOfN_LaunchFailureCancelsLaunchedCandidates(t *testing.T) {
-	sp := &fakeSpawner{failAt: 3} // candidates 1,2 launch; 3 fails
+	sp := &fakeSpawner{failAt: 3}
 	sn := &fakeCancSnaps{fakeSnaps: fakeSnaps{}}
 	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 3})
 	if rep.Err == "" || !strings.Contains(rep.Err, "candidate 3/3") {
@@ -218,7 +208,7 @@ func TestRunBestOfN_PartialOnCallerCancel(t *testing.T) {
 
 func TestRunBestOfN_DegradedWhenNoConsensus(t *testing.T) {
 	sp := &fakeSpawner{}
-	// Two candidates failing DIFFERENT ways: no majority winner.
+
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": doneSnap("cand-1", "", true),
 		"cand-2": {ID: "cand-2", Status: subagent.StatusFailed, Error: "build timeout",
@@ -252,8 +242,6 @@ func TestBestOfNRunnerForBridgesToolShell(t *testing.T) {
 	}
 }
 
-// r380: per-candidate model mapping - each candidate gets its assigned
-// model; with no Models configured every candidate inherits (Model="").
 func TestRunBestOfN_PerCandidateModels(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
@@ -267,7 +255,7 @@ func TestRunBestOfN_PerCandidateModels(t *testing.T) {
 	if rep.Err != "" {
 		t.Fatalf("unexpected err: %s", rep.Err)
 	}
-	want := []string{"cheap-air", "flagship", "cheap-air"} // cycles when models < n
+	want := []string{"cheap-air", "flagship", "cheap-air"}
 	for i, call := range sp.calls {
 		if call.Model != want[i] {
 			t.Errorf("candidate %d: Model=%q, want %q", i+1, call.Model, want[i])
@@ -275,8 +263,6 @@ func TestRunBestOfN_PerCandidateModels(t *testing.T) {
 	}
 }
 
-// r380: same-model default is preserved - no Models means every Launch
-// carries Model="" (parent runtime model inheritance downstream).
 func TestRunBestOfN_NoModelsInheritsParent(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
@@ -294,10 +280,6 @@ func TestRunBestOfN_NoModelsInheritsParent(t *testing.T) {
 	}
 }
 
-// r478 probes: shared-error correlation sentinel. When all successful
-// candidates return near-identical results, consensus ranking gets a
-// high-confidence winner that may simply be the SAME mistake everywhere -
-// the sentinel must flag it instead of staying silent.
 func TestRunBestOfN_FlagsSharedErrorCorrelation(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
@@ -342,7 +324,6 @@ func TestRunBestOfN_DistinctResultsNoCorrelationFlag(t *testing.T) {
 	}
 }
 
-// Pure-function edges: fewer than two results is not a correlation signal.
 func TestPairwiseResultSimilarityEdges(t *testing.T) {
 	if _, ok := pairwiseResultSimilarity(nil); ok {
 		t.Fatal("nil results must not produce a similarity")
@@ -354,7 +335,7 @@ func TestPairwiseResultSimilarityEdges(t *testing.T) {
 	if !ok || sim != 1.0 {
 		t.Fatalf("identical results => sim=1.0, got %.2f ok=%v", sim, ok)
 	}
-	// Failed candidates never feed the similarity estimate.
+
 	got := successfulResults([]CandidateOutcome{
 		{Status: string(subagent.StatusCompleted), Result: "r1"},
 		{Status: "failed", Result: "same text"},

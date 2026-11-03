@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// #4595: two rules sharing a broad ToolPattern but with unrelated semantics
-// (low Jaccard) must NOT merge - the +0.3 bonus used to lower the effective
-// threshold to Jaccard 0.45, silently swallowing the newcomer.
 func TestIssue4595_UnrelatedSameToolRulesDoNotMerge(t *testing.T) {
 	a := Rule{
 		ID:          "r-a",
@@ -39,8 +36,6 @@ func TestIssue4595_UnrelatedSameToolRulesDoNotMerge(t *testing.T) {
 	}
 }
 
-// The original bonus intent still holds: same concept, low Jaccard, same
-// tool - these SHOULD merge (Jaccard here >= 0.3 gate).
 func TestIssue4595_RelatedSameToolRulesStillMerge(t *testing.T) {
 	a := Rule{
 		ID:          "r-a",
@@ -62,8 +57,6 @@ func TestIssue4595_RelatedSameToolRulesStillMerge(t *testing.T) {
 	}
 }
 
-// #4595: when a merge does happen, the existing rule must inherit the
-// newcomer's MatchPattern/FixHint if it never had them.
 func TestIssue4595_MergeKeepsMatchPatternAndFixHint(t *testing.T) {
 	rs := NewRuleStore(t.TempDir())
 	first := Rule{

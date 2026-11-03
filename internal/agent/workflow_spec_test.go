@@ -10,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// r26: stateful workflow-spec engine (Lean4Agent-inspired). Tests use the
-// lazy loader anchored at a temp project dir with .ggcode/workflow-spec.json.
-
 func newWFEngineWithSpec(t *testing.T, specJSON string) *workflowEngine {
 	t.Helper()
 	dir := t.TempDir()
@@ -37,8 +34,6 @@ const spec3373family = `{
 var runGoTest = provider.ToolCallDelta{Name: "run_command", Arguments: json.RawMessage(`{"command":"go test ./..."}`)}
 var runGitPush = provider.ToolCallDelta{Name: "run_command", Arguments: json.RawMessage(`{"command":"git push origin main"}`)}
 
-// Guarded command whose prerequisite has no artifact yet: block-mode
-// violation naming the counterexample step.
 func TestWorkflowSpec_BlockNamesMissingPrerequisite(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3373family)
 	v := e.checkPreconditions(runGitPush.Name, runGitPush.Arguments)
@@ -53,26 +48,22 @@ func TestWorkflowSpec_BlockNamesMissingPrerequisite(t *testing.T) {
 	}
 }
 
-// Artifact grounding completes a step and lifts the gate on dependents.
 func TestWorkflowSpec_ArtifactGroundsCompletion(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3373family)
-	e.recordCompletion("internal/agent/foo_test.go") // write-tests done
+	e.recordCompletion("internal/agent/foo_test.go")
 	if !e.isComplete("write-tests") {
 		t.Fatal("artifact should ground write-tests")
 	}
-	// run-tests is now allowed (its only prerequisite is complete)...
+
 	if v := e.checkPreconditions(runGoTest.Name, runGoTest.Arguments); v != nil {
 		t.Fatalf("run-tests should pass after write-tests: %v", v.Step.ID)
 	}
-	// ...but release still requires run-tests, which has NO artifact_glob
-	// (artifact ""), so it stays incomplete forever by design -> still blocked.
+
 	if v := e.checkPreconditions(runGitPush.Name, runGitPush.Arguments); v == nil {
 		t.Fatal("release must still be blocked (run-tests has no artifact to ground it)")
 	}
 }
 
-// Steps without artifact_glob (pure gate nodes) are never "outstanding" -
-// only artifact-backed steps appear in the end-of-run audit.
 func TestWorkflowSpec_OutstandingOnlyCountsArtifactSteps(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3373family)
 	msg := e.outstandingMessage()
@@ -88,7 +79,6 @@ func TestWorkflowSpec_OutstandingOnlyCountsArtifactSteps(t *testing.T) {
 	}
 }
 
-// No spec file -> inert everywhere (default path unchanged).
 func TestWorkflowSpec_InertWithoutFile(t *testing.T) {
 	dir := t.TempDir()
 	e := &workflowEngine{loadDir: filepath.Join(dir, ".ggcode")}
@@ -100,7 +90,6 @@ func TestWorkflowSpec_InertWithoutFile(t *testing.T) {
 	}
 }
 
-// Broken JSON degrades to inert (fail-open, mirroring invariants).
 func TestWorkflowSpec_BrokenSpecDegrades(t *testing.T) {
 	e := newWFEngineWithSpec(t, `{"steps": [BROKEN`)
 	if v := e.checkPreconditions(runGitPush.Name, runGitPush.Arguments); v != nil {
@@ -108,7 +97,6 @@ func TestWorkflowSpec_BrokenSpecDegrades(t *testing.T) {
 	}
 }
 
-// Non-run_command tools never trigger the gate.
 func TestWorkflowSpec_OnlyGuardsRunCommand(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3373family)
 	tc := provider.ToolCallDelta{Name: "write_file", Arguments: json.RawMessage(`{"path":"x.go"}`)}
@@ -117,7 +105,6 @@ func TestWorkflowSpec_OnlyGuardsRunCommand(t *testing.T) {
 	}
 }
 
-// Command glob semantics: prefix/suffix/infix/exact.
 func TestWorkflowCommandMatches(t *testing.T) {
 	cases := []struct {
 		patterns []string
@@ -127,7 +114,7 @@ func TestWorkflowCommandMatches(t *testing.T) {
 		{[]string{"git push*"}, "git push origin main", true},
 		{[]string{"git push*"}, "git commit -m x", false},
 		{[]string{"*test*"}, "go test ./...", true},
-		{[]string{"*make"}, "make", true}, // suffix on trimmed pattern
+		{[]string{"*make"}, "make", true},
 		{[]string{"go vet ./..."}, "go vet ./...", true},
 		{[]string{"go vet ./..."}, "go vet", false},
 		{[]string{"*"}, "anything", true},

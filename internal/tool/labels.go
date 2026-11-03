@@ -8,50 +8,36 @@ import (
 	"time"
 )
 
-// ToolPresentation holds the human-readable display info for a tool call.
 type ToolPresentation struct {
-	DisplayName string // e.g. "Read", "Edit", "go test ./..."
-	Detail      string // e.g. "/tmp/test.go", ""
+	DisplayName string
+	Detail      string
 }
 
-// ToolResultPresentation holds shared semantic fields for a rendered tool result.
 type ToolResultPresentation struct {
-	Summary     string // compact always-visible summary
-	Payload     string // optional expanded detail payload
-	PayloadMode string // "", "text", "task_fields", "task_list"
+	Summary     string
+	Payload     string
+	PayloadMode string
 }
 
-// namedAgentModelResolver resolves a named agent template's model override
-// by name. Returns "" if the template has no model override. (Its historical
-// setter was removed as dead code; the resolver is read by DescribeTool's
-// use_namedagent label and stays nil until re-wired.)
 var namedAgentModelResolver func(name string) string
 
-// DescribeTool returns a human-readable presentation for a tool call.
-// It picks the key argument(s) for each tool and formats them compactly.
-// This is the shared implementation used by TUI, daemon, IM, and ACP.
 func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := extractFileTarget(toolName, rawArgs)
 
-	// Tools with special label logic — use specific fields, not generic description
-	// These tools either have no "description" param, or their "description" field
-	// means something different (long requirements instead of brief label).
 	specialLabelTools := map[string]bool{
-		// Commands: use first-line comment as label
+
 		"run_command": true, "start_command": true, "bash": true, "powershell": true,
-		// Agent: description is brief label, but handled specially for truncation
+
 		"spawn_agent": true,
-		// Task: description = detailed requirements, subject = brief title
+
 		"swarm_task_create": true, "task_create": true,
-		// Plan mode: special rendering
+
 		"enter_plan_mode": true, "exit_plan_mode": true,
-		// Teammate: uses name field
+
 		"teammate_spawn": true,
 	}
 
-	// Most tools have a "description" parameter (brief activity label from LLM).
-	// Use it as displayName when available, with detail as fallback context.
 	if !specialLabelTools[toolName] {
 		if desc := strings.TrimSpace(argStr(args, "description")); desc != "" {
 			detail := ""
@@ -93,7 +79,7 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		cmd := firstNonEmpty(argStr(args, "command"), argStr(args, "cmd"))
 		desc := argStr(args, "description")
 		if cmd != "" {
-			// Title priority: description param > first-line comment > command preview
+
 			title := ""
 			if desc != "" {
 				title = desc
@@ -358,12 +344,12 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	case "iterm2":
 		return iterm2Label(args)
 	case "code_execution":
-		// Show "Exec" with a preview of the first meaningful line of code
+
 		code := argStr(args, "code")
 		if code == "" {
 			return toolPres("Exec", "")
 		}
-		// Extract first non-empty, non-comment line as preview
+
 		preview := ""
 		for _, line := range strings.Split(code, "\n") {
 			line = strings.TrimSpace(line)
@@ -375,14 +361,11 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		}
 		return toolPres("Exec", compactSingleLineNoTruncate(preview))
 	default:
-		// MCP tools or unknown — prettify the name
+
 		return toolPres(prettifyToolName(toolName), compactArgsPreview(rawArgs))
 	}
 }
 
-// DescribeExternalToolCall normalizes external/ACP tool calls into the shared
-// display model while preserving richer CLI-provided titles when they add real
-// information beyond the raw tool name.
 func DescribeExternalToolCall(toolName, toolTitle, rawArgs string) ToolPresentation {
 	base := DescribeTool(toolName, rawArgs)
 	title := compactSingleLineNoTruncate(strings.TrimSpace(toolTitle))
@@ -401,8 +384,6 @@ func DescribeExternalToolCall(toolName, toolTitle, rawArgs string) ToolPresentat
 	return toolPres(title, detail)
 }
 
-// FormatToolInline combines DisplayName and Detail into a single display string,
-// matching the TUI format: "Read /tmp/test.go" or "go test ./...".
 func FormatToolInline(name, detail string) string {
 	if detail == "" {
 		return name
@@ -410,9 +391,8 @@ func FormatToolInline(name, detail string) string {
 	return name + " " + detail
 }
 
-// prettifyToolName converts snake_case tool names to Title Case.
 func prettifyToolName(name string) string {
-	// Split on underscores and capitalize each part
+
 	parts := strings.Split(name, "_")
 	for i, p := range parts {
 		if len(p) > 0 {
@@ -422,14 +402,10 @@ func prettifyToolName(name string) string {
 	return strings.Join(parts, " ")
 }
 
-// --- internal helpers ---
-
 func toolPres(name, detail string) ToolPresentation {
 	return ToolPresentation{DisplayName: name, Detail: detail}
 }
 
-// extractFirstLineComment returns the first line's # comment text from a shell command.
-// e.g. "# Run tests\ncd foo && make test" → "Run tests"
 func extractFirstLineComment(cmd string) string {
 	lines := strings.SplitN(cmd, "\n", 2)
 	first := strings.TrimSpace(lines[0])
@@ -506,7 +482,6 @@ func displayFileTarget(s string) string {
 	return strings.TrimRight(s, `/\`)
 }
 
-// SwarmTaskCreateSubject returns the human-facing task subject for swarm_task_create.
 func SwarmTaskCreateSubject(rawArgs string) string {
 	args := parseToolArgs(rawArgs)
 	return firstNonEmpty(
@@ -515,7 +490,6 @@ func SwarmTaskCreateSubject(rawArgs string) string {
 	)
 }
 
-// SwarmTaskCreateResultMarkdown extracts the markdown description from a swarm_task_create result.
 func SwarmTaskCreateResultMarkdown(result string) string {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
@@ -536,7 +510,6 @@ func SwarmTaskCreateResultMarkdown(result string) string {
 	return description
 }
 
-// DescribeToolResult returns shared summary/payload semantics for structured tool results.
 func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
@@ -605,10 +578,6 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 	}, true
 }
 
-// describeLanchatResult formats the lanchat tool result into a human-readable
-// presentation. The "list" action returns JSON that needs full formatting;
-// the send/broadcast actions return a terse confirmation — we enrich it with
-// the message content and recipients extracted from rawArgs.
 func describeLanchatResult(rawArgs, trimmed string, isError bool) (ToolResultPresentation, bool) {
 	args := parseToolArgs(rawArgs)
 	action := argStr(args, "action")
@@ -627,10 +596,8 @@ func describeLanchatResult(rawArgs, trimmed string, isError bool) (ToolResultPre
 	}
 }
 
-// describeLanchatListResult formats the JSON participant list into a
-// human-readable table.
 func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
-	// Handle empty results.
+
 	if strings.Contains(trimmed, "No participants") || strings.Contains(trimmed, "No LAN Chat participants") {
 		return ToolResultPresentation{
 			Summary:     trimmed,
@@ -639,8 +606,6 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 		}, true
 	}
 
-	// Extract the JSON array from the result.
-	// Result format: "Participants (N):\n[...JSON...]"
 	jsonStart := strings.Index(trimmed, "[")
 	if jsonStart < 0 {
 		return ToolResultPresentation{}, false
@@ -665,10 +630,8 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 		return ToolResultPresentation{}, false
 	}
 
-	// Build header line.
 	header := fmt.Sprintf("Participants (%d)", len(peers))
 
-	// Build human-readable lines.
 	var lines []string
 	lines = append(lines, header)
 	for _, p := range peers {
@@ -722,16 +685,9 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 	}, true
 }
 
-// extractNickFromResult extracts the recipient display name from the result
-// string. For "send" action, the result contains "Message sent to <nick> as <role>".
-// If extraction fails, falls back to the original toField.
-// describeLanchatSendResult enriches the terse send/broadcast confirmation
-// with the message content and recipient list from rawArgs, producing a
-// readable "chat log" style display.
 func describeLanchatSendResult(args map[string]any, action, trimmed string, isError bool) (ToolResultPresentation, bool) {
 	message := argStr(args, "message")
 
-	// Build the recipient line from rawArgs.
 	toField := argStr(args, "to")
 	teamField := argStr(args, "team")
 
@@ -749,8 +705,7 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 	var toLine string
 	switch action {
 	case "send":
-		// Use the recipient directly from args — the LLM passes nick names,
-		// not raw nodeIDs. This avoids fragile string parsing of the result.
+
 		toLine = toField
 	case "broadcast":
 		toLine = "your team"
@@ -764,7 +719,6 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 		}
 	}
 
-	// Summary is the compact one-liner.
 	summary := fmt.Sprintf("To: %s", toLine)
 
 	if isError {
@@ -775,11 +729,8 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 		}, true
 	}
 
-	// Extract delivery stats from the result string if available.
-	// Examples: "Sent to 3/3 members of team \"X\"." → "3/3 delivered"
 	deliveryExtra := extractLanchatDeliveryInfo(trimmed)
 
-	// Build header.
 	headerParts := []string{fmt.Sprintf("To: %s", toLine)}
 	if deliveryExtra != "" {
 		headerParts = append(headerParts, deliveryExtra)
@@ -787,13 +738,10 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 	headerParts = append(headerParts, fmt.Sprintf("as %s", identity))
 	header := strings.Join(headerParts, "  ·  ")
 
-	// If no message content in args (shouldn't happen for successful sends),
-	// fall through to raw result.
 	if message == "" {
 		return ToolResultPresentation{}, false
 	}
 
-	// Build full payload: header + blank + message content.
 	payload := header + "\n\n" + strings.TrimSpace(message)
 
 	return ToolResultPresentation{
@@ -803,14 +751,11 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 	}, true
 }
 
-// extractLanchatDeliveryInfo extracts delivery statistics from the result
-// string returned by doSendTeam/doBroadcastTeam.
-// Example: "Sent to 3/5 members of team \"dev-team\"." → "3/5 delivered"
 func extractLanchatDeliveryInfo(result string) string {
-	// "Sent to N/M members of team ..." pattern.
+
 	if strings.HasPrefix(result, "Sent to ") {
 		rest := strings.TrimPrefix(result, "Sent to ")
-		// Extract the N/M part.
+
 		spaceIdx := strings.Index(rest, " ")
 		if spaceIdx > 0 {
 			ratio := rest[:spaceIdx]
@@ -822,8 +767,6 @@ func extractLanchatDeliveryInfo(result string) string {
 	return ""
 }
 
-// describeLanchatHistoryResult formats the JSON message history into a
-// compact list — one line per message with a short content preview.
 func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool) {
 	if strings.Contains(trimmed, "No messages in history") {
 		return ToolResultPresentation{
@@ -855,13 +798,12 @@ func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool)
 	var lines []string
 	lines = append(lines, header)
 	for _, m := range msgs {
-		// Compact content preview: single line, max ~50 chars.
+
 		preview := compactSingleLine(m.Body)
 		if len([]rune(preview)) > 50 {
 			preview = string([]rune(preview)[:50]) + "..."
 		}
 
-		// Format: "  HH:MM:SS  nick → target   preview..."
 		target := m.To
 		if target == "" || target == "all" {
 			target = "all"
@@ -876,8 +818,6 @@ func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool)
 	}, true
 }
 
-// describeLanchatPendingResult formats the JSON pending approvals list into
-// a human-readable display with message_id (needed for approve/reject).
 func describeLanchatPendingResult(trimmed string) (ToolResultPresentation, bool) {
 	if strings.Contains(trimmed, "No pending") {
 		return ToolResultPresentation{
@@ -925,7 +865,6 @@ func describeLanchatPendingResult(trimmed string) (ToolResultPresentation, bool)
 	}, true
 }
 
-// TeamCreateResultText extracts the created team name from a team_create result.
 func TeamCreateResultText(result string) string {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
@@ -1248,7 +1187,6 @@ func nonEmptyTrimmedLines(s string) []string {
 	return out
 }
 
-// StartCommandResultText normalizes start_command results to a simple status label.
 func StartCommandResultText(result string, isError bool) string {
 	if isError {
 		return "Failed"
@@ -1274,7 +1212,7 @@ func StartCommandResultText(result string, isError bool) string {
 }
 
 func extractFileTarget(toolName, rawArgs string) string {
-	// Try known file-path fields first
+
 	args := parseToolArgs(rawArgs)
 	for _, key := range []string{"file_path", "filePath", "path", "directory", "file", "filename"} {
 		if v, ok := args[key].(string); ok && v != "" {
@@ -1296,7 +1234,7 @@ func compactArgsPreview(raw string) string {
 	if len(args) == 0 {
 		return ""
 	}
-	// Shorten file paths
+
 	for _, key := range []string{"file_path", "path", "directory", "file", "filename"} {
 		if v, ok := args[key].(string); ok {
 			args[key] = displayFileTarget(v)
@@ -1390,7 +1328,6 @@ func compactSingleLine(s string) string {
 	return s
 }
 
-// compactSingleLineNoTruncate compacts but never truncates (for command display).
 func compactSingleLineNoTruncate(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	return strings.Join(strings.Fields(s), " ")
@@ -1439,7 +1376,7 @@ func askUserTarget(args map[string]any) string {
 	if args == nil {
 		return ""
 	}
-	// Try to extract a short prompt summary
+
 	if prompt, ok := args["prompt"].(string); ok && prompt != "" {
 		if len([]rune(prompt)) > 60 {
 			return string([]rune(prompt)[:57]) + "…"
@@ -1462,7 +1399,6 @@ func askUserTarget(args map[string]any) string {
 	return ""
 }
 
-// ghosttyLabel produces a display label for ghostty tool calls.
 func ghosttyLabel(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	switch action {
@@ -1520,7 +1456,6 @@ func ghosttyLabel(args map[string]any) ToolPresentation {
 	}
 }
 
-// kittyLabel produces a display label for kitty tool calls.
 func kittyLabel(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	switch action {
@@ -1590,7 +1525,6 @@ func kittyLabel(args map[string]any) ToolPresentation {
 	}
 }
 
-// iterm2Label produces a display label for iterm2 tool calls.
 func iterm2Label(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	switch action {
@@ -1666,7 +1600,6 @@ func iterm2Label(args map[string]any) ToolPresentation {
 	}
 }
 
-// browserLabel renders a human-readable label for the browser tool.
 func browserLabel(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	url := argStr(args, "url")
@@ -1703,7 +1636,6 @@ func browserLabel(args map[string]any) ToolPresentation {
 	}
 }
 
-// screenshotLabel renders a human-readable label for the screenshot tool.
 func screenshotLabel(args map[string]any) ToolPresentation {
 	window := argStr(args, "window")
 	if window != "" {
@@ -1719,7 +1651,6 @@ func screenshotLabel(args map[string]any) ToolPresentation {
 	return toolPres("Screenshot", "")
 }
 
-// mobileDeviceLabel renders a human-readable label for the mobile_device tool.
 func desktopControlLabel(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	x := argStr(args, "x")
@@ -1830,19 +1761,17 @@ func mobileDeviceLabel(args map[string]any) ToolPresentation {
 	}
 }
 
-// describeScreenshotResult summarizes screenshot tool results for multi-end display.
 func describeScreenshotResult(result string, isError bool) ToolResultPresentation {
 	if isError {
 		return ToolResultPresentation{Summary: compactSingleLine(result)}
 	}
-	// Success: result is either an image path or a JSON with image data
+
 	if strings.Contains(result, "saved") || strings.Contains(result, ".png") || strings.Contains(result, ".jpg") {
 		return ToolResultPresentation{Summary: "Screenshot captured"}
 	}
 	return ToolResultPresentation{Summary: "Screenshot OK"}
 }
 
-// describeMobileDeviceResult summarizes mobile_device tool results for multi-end display.
 func describeMobileDeviceResult(rawArgs, result string, isError bool) ToolResultPresentation {
 	if isError {
 		return ToolResultPresentation{Summary: compactSingleLine(result)}
@@ -1868,7 +1797,6 @@ func describeMobileDeviceResult(rawArgs, result string, isError bool) ToolResult
 	}
 }
 
-// describeBrowserResult summarizes browser tool results for multi-end display.
 func describeBrowserResult(rawArgs, result string, isError bool) ToolResultPresentation {
 	if isError {
 		return ToolResultPresentation{Summary: compactSingleLine(result)}
@@ -1898,7 +1826,6 @@ func describeBrowserResult(rawArgs, result string, isError bool) ToolResultPrese
 	}
 }
 
-// extractHTMLTitle extracts the <title> from an HTML string.
 func extractHTMLTitle(s string) string {
 	start := strings.Index(strings.ToLower(s), "<title>")
 	if start < 0 {
@@ -1915,7 +1842,6 @@ func extractHTMLTitle(s string) string {
 	return title
 }
 
-// pluralizeEn returns "1 word" or "N words" in English.
 func pluralizeEn(n int, word string) string {
 	if n == 1 {
 		return "1 " + word
@@ -1931,7 +1857,6 @@ func compactPreview(s string) string {
 	return s
 }
 
-// describeCreateNamedAgentResult formats the create_namedagent result into structured fields.
 func describeCreateNamedAgentResult(rawArgs, result string) ToolResultPresentation {
 	args := parseToolArgs(rawArgs)
 	name := argStr(args, "name")
@@ -1941,14 +1866,13 @@ func describeCreateNamedAgentResult(rawArgs, result string) ToolResultPresentati
 	}
 	summary := fmt.Sprintf("%s agent %s", verb, name)
 
-	// Parse the multi-line result into structured fields
 	var lines []string
 	for _, line := range strings.Split(result, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "Use use_namedagent") {
 			continue
 		}
-		// Skip the first summary line
+
 		if strings.Contains(line, "successfully") {
 			continue
 		}
@@ -1961,7 +1885,6 @@ func describeCreateNamedAgentResult(rawArgs, result string) ToolResultPresentati
 	}
 }
 
-// describeDeleteNamedAgentResult formats the delete_namedagent result.
 func describeDeleteNamedAgentResult(rawArgs, result string) ToolResultPresentation {
 	args := parseToolArgs(rawArgs)
 	name := argStr(args, "name")
@@ -1972,7 +1895,6 @@ func describeDeleteNamedAgentResult(rawArgs, result string) ToolResultPresentati
 	return ToolResultPresentation{Summary: summary}
 }
 
-// describeListNamedAgentResult formats the list_namedagent result with a count summary.
 func describeListNamedAgentResult(result string) ToolResultPresentation {
 	if strings.Contains(result, "No named subagent templates") {
 		return ToolResultPresentation{Summary: "0 agents"}
@@ -1995,7 +1917,6 @@ func describeListNamedAgentResult(result string) ToolResultPresentation {
 	}
 }
 
-// describeUseNamedAgentResult formats the use_namedagent result.
 func describeUseNamedAgentResult(rawArgs, result string) ToolResultPresentation {
 	args := parseToolArgs(rawArgs)
 	name := argStr(args, "name")
@@ -2006,10 +1927,8 @@ func describeUseNamedAgentResult(rawArgs, result string) ToolResultPresentation 
 	return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "text"}
 }
 
-// describeMultiFileReadResult formats the multi_file_read result.
-// Result format: "[multi_file_read summary] requested=N succeeded=N failed=N skipped=N\n\n=== FILE: path ===\n..."
 func describeMultiFileReadResult(result string) ToolResultPresentation {
-	// Extract counts from the summary line
+
 	reqCount := extractIntField(result, "requested=")
 	succCount := extractIntField(result, "succeeded=")
 	failCount := extractIntField(result, "failed=")
@@ -2027,8 +1946,6 @@ func describeMultiFileReadResult(result string) ToolResultPresentation {
 	return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "text"}
 }
 
-// describeMultiFileWriteResult formats the multi_file_write result.
-// Result format: "[multi_file_write] requested=N written=N failed=N\n  ✓ path (N bytes)\n..."
 func describeMultiFileWriteResult(result string) ToolResultPresentation {
 	lines := nonEmptyTrimmedLines(result)
 	written := extractIntField(result, "written=")
@@ -2041,7 +1958,6 @@ func describeMultiFileWriteResult(result string) ToolResultPresentation {
 	if failed > 0 {
 		summary += fmt.Sprintf(", %d failed", failed)
 	}
-	// Extract the file list from result lines
 	var fileList []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -2056,14 +1972,12 @@ func describeMultiFileWriteResult(result string) ToolResultPresentation {
 	}
 }
 
-// describeMultiFileEditResult formats the multi_file_edit result.
-// Result is JSON with a Summary field and per-file Results array.
 func describeMultiFileEditResult(rawArgs, result string) ToolResultPresentation {
 	var data struct {
 		Summary string `json:"summary"`
 	}
 	if json.Unmarshal([]byte(result), &data) == nil && data.Summary != "" {
-		// Count files from rawArgs
+
 		args := parseToolArgs(rawArgs)
 		fileCount := 0
 		if files, ok := args["files"].([]any); ok {
@@ -2075,11 +1989,10 @@ func describeMultiFileEditResult(rawArgs, result string) ToolResultPresentation 
 		}
 		return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "json"}
 	}
-	// Fallback: raw text
+
 	return ToolResultPresentation{Summary: "Edited files", Payload: result, PayloadMode: "text"}
 }
 
-// extractIntField extracts an integer value from "field=N" pattern in text.
 func extractIntField(text, prefix string) int {
 	idx := strings.Index(text, prefix)
 	if idx < 0 {
@@ -2097,8 +2010,6 @@ func extractIntField(text, prefix string) int {
 	return n
 }
 
-// kittyWindowLabel renders the window_id argument for kitty tool calls,
-// showing "(focused)" when omitted instead of a misleading "<nil>" (#852).
 func kittyWindowLabel(args map[string]any) string {
 	if id := argStr(args, "window_id"); id != "" {
 		return "window " + id

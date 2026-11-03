@@ -11,12 +11,10 @@ import (
 func TestDetectBuildSystem(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Empty dir → no build system.
 	if cmd := detectBuildSystem(tmp); cmd != "" {
 		t.Errorf("expected empty build command for empty dir, got %q", cmd)
 	}
 
-	// Go module.
 	goDir := filepath.Join(tmp, "goproject")
 	os.MkdirAll(goDir, 0755)
 	os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module test\n"), 0644)
@@ -24,7 +22,6 @@ func TestDetectBuildSystem(t *testing.T) {
 		t.Errorf("expected 'go build ./...', got %q", cmd)
 	}
 
-	// Makefile.
 	mkDir := filepath.Join(tmp, "mkproject")
 	os.MkdirAll(mkDir, 0755)
 	os.WriteFile(filepath.Join(mkDir, "Makefile"), []byte("build:\n\techo hi\n"), 0644)
@@ -32,7 +29,6 @@ func TestDetectBuildSystem(t *testing.T) {
 		t.Errorf("expected 'make build', got %q", cmd)
 	}
 
-	// Rust (only if cargo is installed).
 	rustDir := filepath.Join(tmp, "rustproject")
 	os.MkdirAll(rustDir, 0755)
 	os.WriteFile(filepath.Join(rustDir, "Cargo.toml"), []byte("[package]\nname=\"t\"\n"), 0644)
@@ -40,24 +36,20 @@ func TestDetectBuildSystem(t *testing.T) {
 		if commandAvailable("cargo") {
 			t.Errorf("expected 'cargo build', got %q", cmd)
 		}
-		// else: cargo not installed, skip is correct behavior
+
 	}
 
-	// Node (only if npm is installed).
 	nodeDir := filepath.Join(tmp, "nodeproject")
 	os.MkdirAll(nodeDir, 0755)
-	// package.json WITH a build script -> deterministic npm run build.
+
 	os.WriteFile(filepath.Join(nodeDir, "package.json"), []byte(`{"scripts":{"build":"tsc"}}`), 0644)
 	if cmd := detectBuildSystem(nodeDir); cmd != "npm run build" {
 		if commandAvailable("npm") {
 			t.Errorf("expected 'npm run build', got %q", cmd)
 		}
-		// else: npm not installed, skip is correct behavior
+
 	}
 
-	// package.json WITHOUT a build script (docs site / library package):
-	// "npm run build" fails with "Missing script" (exit 1) which is not a
-	// code failure - detection must fall through instead of offering it.
 	noScriptDir := filepath.Join(tmp, "noscriptproject")
 	os.MkdirAll(noScriptDir, 0755)
 	os.WriteFile(filepath.Join(noScriptDir, "package.json"), []byte("{}"), 0644)
@@ -65,7 +57,6 @@ func TestDetectBuildSystem(t *testing.T) {
 		t.Errorf("expected no command for package.json without build script, got %q", cmd)
 	}
 
-	// package.json with only a test script -> npm test.
 	testOnlyDir := filepath.Join(tmp, "testonlyproject")
 	os.MkdirAll(testOnlyDir, 0755)
 	os.WriteFile(filepath.Join(testOnlyDir, "package.json"), []byte(`{"scripts":{"test":"jest"}}`), 0644)
@@ -75,18 +66,17 @@ func TestDetectBuildSystem(t *testing.T) {
 		}
 	}
 
-	// Empty working dir.
 	if cmd := detectBuildSystem(""); cmd != "" {
 		t.Errorf("expected empty for empty dir, got %q", cmd)
 	}
 }
 
 func TestCommandAvailable(t *testing.T) {
-	// These binaries should always exist on a dev machine running Go tests.
+
 	if !commandAvailable("go") {
 		t.Error("expected 'go' to be available in PATH")
 	}
-	// A definitely-nonexistent binary.
+
 	if commandAvailable("definitely_not_a_real_binary_xyz123") {
 		t.Error("expected nonexistent binary to be unavailable")
 	}
@@ -97,18 +87,18 @@ func TestVerifyCommandAvailable(t *testing.T) {
 		cmd  string
 		want bool
 	}{
-		{"echo hello", true},                // shell builtin
-		{"sh -c 'echo hi'", true},           // sh is always available
-		{"go build ./...", true},            // go is available (we're running Go tests)
-		{"make build", true},                // make is assumed available
-		{"", false},                         // empty command
-		{"nonexistent_tool_xyz arg", false}, // tool not in PATH
-		{"bash /definitely/not/a/real/script_xyz123.sh", false}, // #941: bash script path checked, missing → unavailable
-		{"bash /etc/hosts", true},                               // #941: existing script path → available
-		{"cd /app && go test ./...", true},                      // #2122: compound, cd skipped
-		{"cd /app && GOFLAGS=-p=1 go test ./...", true},         // #3751: per-segment env prefix stripped
-		{`GREETING="hello world" make test`, true},              // #3751: quoted env value consumed whole
-		{"cd /app && nonexistent_tool_xyz arg", false},          // compound: unavailable segment still unavailable
+		{"echo hello", true},
+		{"sh -c 'echo hi'", true},
+		{"go build ./...", true},
+		{"make build", true},
+		{"", false},
+		{"nonexistent_tool_xyz arg", false},
+		{"bash /definitely/not/a/real/script_xyz123.sh", false},
+		{"bash /etc/hosts", true},
+		{"cd /app && go test ./...", true},
+		{"cd /app && GOFLAGS=-p=1 go test ./...", true},
+		{`GREETING="hello world" make test`, true},
+		{"cd /app && nonexistent_tool_xyz arg", false},
 	}
 	for _, tt := range tests {
 		got := verifyCommandAvailable(tt.cmd)
@@ -146,19 +136,17 @@ func TestIsSourceCodeFile(t *testing.T) {
 }
 
 func TestExtractFilePathFromArgs(t *testing.T) {
-	// edit_file uses "file_path".
+
 	args, _ := json.Marshal(map[string]string{"file_path": "/foo/bar.go"})
 	if got := extractFilePathFromArgs("edit_file", args); got != "/foo/bar.go" {
 		t.Errorf("got %q", got)
 	}
 
-	// write_file uses "path".
 	args, _ = json.Marshal(map[string]string{"path": "/baz/main.py"})
 	if got := extractFilePathFromArgs("write_file", args); got != "/baz/main.py" {
 		t.Errorf("got %q", got)
 	}
 
-	// multi_file_edit uses "files" array with "path".
 	args, _ = json.Marshal(map[string]interface{}{
 		"files": []map[string]string{{"path": "/multi.go"}},
 	})
@@ -166,12 +154,10 @@ func TestExtractFilePathFromArgs(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 
-	// Empty args.
 	if got := extractFilePathFromArgs("edit_file", nil); got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
 
-	// Invalid JSON.
 	if got := extractFilePathFromArgs("edit_file", json.RawMessage(`{invalid`)); got != "" {
 		t.Errorf("expected empty for invalid JSON, got %q", got)
 	}
@@ -185,20 +171,17 @@ func TestPostEditVerifyHintCooldown(t *testing.T) {
 		workingDir: tmp,
 	}
 
-	// First edit: no hint (counter=1, need 3).
 	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
 	hint := a.postEditVerifyHint("edit_file", args)
 	if hint != "" {
 		t.Errorf("expected no hint on 1st edit, got: %s", hint)
 	}
 
-	// Second edit: no hint (counter=2).
 	hint = a.postEditVerifyHint("edit_file", args)
 	if hint != "" {
 		t.Errorf("expected no hint on 2nd edit, got: %s", hint)
 	}
 
-	// Third edit: hint fires (counter=3 = threshold).
 	hint = a.postEditVerifyHint("edit_file", args)
 	if hint == "" {
 		t.Error("expected hint on 3rd edit")
@@ -207,7 +190,6 @@ func TestPostEditVerifyHintCooldown(t *testing.T) {
 		t.Errorf("hint should mention build command, got: %s", hint)
 	}
 
-	// Counter resets, so next two edits should be silent.
 	hint = a.postEditVerifyHint("edit_file", args)
 	if hint != "" {
 		t.Errorf("expected no hint after reset, got: %s", hint)
@@ -216,7 +198,7 @@ func TestPostEditVerifyHintCooldown(t *testing.T) {
 	if hint != "" {
 		t.Errorf("expected no hint, got: %s", hint)
 	}
-	// Third edit again: hint fires.
+
 	hint = a.postEditVerifyHint("edit_file", args)
 	if hint == "" {
 		t.Error("expected hint on 3rd edit after reset")
@@ -229,7 +211,6 @@ func TestPostEditVerifyHintNonSourceSkipped(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// Editing a markdown file should not trigger.
 	args, _ := json.Marshal(map[string]string{"file_path": "/README.md"})
 	hint := a.postEditVerifyHint("edit_file", args)
 	if hint != "" {
@@ -246,7 +227,6 @@ func TestPostEditVerifyHintNonEditToolSkipped(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// read_file is not an editing tool.
 	args, _ := json.Marshal(map[string]string{"path": "/foo.go"})
 	hint := a.postEditVerifyHint("read_file", args)
 	if hint != "" {
@@ -260,7 +240,7 @@ func TestPostEditVerifyHintNoBuildSystem(t *testing.T) {
 	a := &Agent{workingDir: tmp}
 
 	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-	// Fire enough edits to trigger, but no build system → no hint.
+
 	for i := 0; i < 5; i++ {
 		hint := a.postEditVerifyHint("edit_file", args)
 		if hint != "" {
@@ -275,12 +255,10 @@ func TestResetPostEditVerify(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// Do some edits to build up state.
 	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
 	a.postEditVerifyHint("edit_file", args)
 	a.postEditVerifyHint("edit_file", args)
 
-	// Reset.
 	a.resetPostEditVerify()
 
 	if a.postEditVerify.sourceEditsSinceHint != 0 {
@@ -328,8 +306,6 @@ func TestPostEditVerifyHintTargeted(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// Edit a file in a subpackage 3 times → hint should suggest the targeted
-	// `go test ./internal/agent/` AND the full-suite fallback command.
 	args, _ := json.Marshal(map[string]string{"file_path": filepath.Join(sub, "foo.go")})
 	var hint string
 	for i := 0; i < 3; i++ {
@@ -363,7 +339,7 @@ func TestIsVerifyCommand(t *testing.T) {
 		{"just verify", true},
 		{"pytest", true},
 		{"flutter test", true},
-		// Non-verify commands
+
 		{"ls -la", false},
 		{"echo hello", false},
 		{"git status", false},
@@ -385,7 +361,6 @@ func TestMaybeResetVerifyOnCommand(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// Build up edit counter.
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
 	a.postEditVerifyHint("edit_file", editArgs)
 	a.postEditVerifyHint("edit_file", editArgs)
@@ -394,7 +369,6 @@ func TestMaybeResetVerifyOnCommand(t *testing.T) {
 		t.Fatalf("expected counter=2 before build, got %d", a.postEditVerify.sourceEditsSinceHint)
 	}
 
-	// Agent runs "go build ./..." — successful build resets counter.
 	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
 	a.maybeResetVerifyOnCommand("run_command", buildArgs, false)
 
@@ -405,7 +379,6 @@ func TestMaybeResetVerifyOnCommand(t *testing.T) {
 		t.Error("expected lastBuildFailed=false after successful build")
 	}
 
-	// Non-verify command does NOT reset counter.
 	a.postEditVerifyHint("edit_file", editArgs)
 	a.postEditVerifyHint("edit_file", editArgs)
 	lsArgs, _ := json.Marshal(map[string]string{"command": "ls -la"})
@@ -422,7 +395,6 @@ func TestMaybeResetVerifyOnCommand_FailedBuild(t *testing.T) {
 
 	a := &Agent{workingDir: tmp}
 
-	// Agent runs "go build ./..." — FAILED.
 	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
 	a.maybeResetVerifyOnCommand("run_command", buildArgs, true)
 
@@ -433,7 +405,6 @@ func TestMaybeResetVerifyOnCommand_FailedBuild(t *testing.T) {
 		t.Error("expected lastBuildFailed=true after failed build")
 	}
 
-	// Now edit 3 files → hint should include "(which FAILED)" urgency.
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
 	hint1 := a.postEditVerifyHint("edit_file", editArgs)
 	hint2 := a.postEditVerifyHint("edit_file", editArgs)
@@ -454,19 +425,14 @@ func TestMaybeResetVerifyOnCommand_NonRunCommand(t *testing.T) {
 	tmp := t.TempDir()
 	a := &Agent{workingDir: tmp}
 
-	// edit_file tool calls should NOT trigger reset.
 	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go", "command": "go build"})
 	a.maybeResetVerifyOnCommand("edit_file", editArgs, false)
 
-	// Counter unchanged (default 0, but verify it didn't set anything weird)
 	if a.postEditVerify.lastBuildFailed {
 		t.Error("expected lastBuildFailed=false for non-run_command tool")
 	}
 }
 
-// #154: all editing-tool gates must include the full superset so
-// build_idempotency never claims "guaranteed identical result" after
-// multi_file_edit/batch_replace/lsp_rename edits.
 func TestSourceMutatingToolsSuperset(t *testing.T) {
 	required := []string{
 		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
@@ -485,7 +451,6 @@ func TestSourceMutatingToolsSuperset(t *testing.T) {
 	}
 }
 
-// #153: batch_replace files array must be extracted for edit propagation.
 func TestPropagationExtractPaths_BatchReplace(t *testing.T) {
 	args := `{"pattern":"TODO","replacement":"DONE","files":["/a.go","/b.go","/c.go"]}`
 	paths := propagationExtractPaths(args)
@@ -517,28 +482,24 @@ func TestRunTouchedCode(t *testing.T) {
 }
 
 func TestIsNonFailureExit(t *testing.T) {
-	// 127 (command not found) is always a skip for any command.
+
 	if !isNonFailureExit("anything", 127) {
 		t.Error("exit 127 should be non-failure")
 	}
-	// pytest exit 5 (no tests collected) is a skip - not a code defect.
+
 	if !isNonFailureExit("python -m pytest", 5) {
 		t.Error("pytest exit 5 should be non-failure")
 	}
-	// Exit 5 from non-pytest commands is NOT whitelisted (could be real).
+
 	if isNonFailureExit("npm test", 5) {
 		t.Error("exit 5 from non-pytest command should be a failure")
 	}
-	// Real failures stay failures.
+
 	if isNonFailureExit("go build ./...", 1) || isNonFailureExit("go test ./...", 2) {
 		t.Error("real failure exit codes must not be classified as non-failure")
 	}
 }
 
-// TestExtractFilePathFromArgsNotebookAndFileOps pins #1733 case 1: the
-// extractor must learn notebook_edit's notebook_path and file_ops's source
-// - both are fileEditingTools, and a "" return made checkEditInvalidation
-// skip for all four consumers.
 func TestExtractFilePathFromArgsNotebookAndFileOps(t *testing.T) {
 	if got := extractFilePathFromArgs("notebook_edit", json.RawMessage(`{"notebook_path":"/tmp/nb.ipynb","operation":"add"}`)); got != "/tmp/nb.ipynb" {
 		t.Fatalf("notebook_path not extracted: %q", got)
@@ -546,7 +507,7 @@ func TestExtractFilePathFromArgsNotebookAndFileOps(t *testing.T) {
 	if got := extractFilePathFromArgs("file_ops", json.RawMessage(`{"operations":[{"action":"move","source":"/a.txt","destination":"/b.txt"}]}`)); got != "/a.txt" {
 		t.Fatalf("file_ops source not extracted: %q", got)
 	}
-	// Precedence unchanged for the classic shapes.
+
 	if got := extractFilePathFromArgs("edit_file", json.RawMessage(`{"file_path":"/c.txt"}`)); got != "/c.txt" {
 		t.Fatalf("classic file_path regressed: %q", got)
 	}

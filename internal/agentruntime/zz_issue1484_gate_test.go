@@ -1,13 +1,5 @@
 package agentruntime
 
-// #1484 case D regression: sampling was the only LLM-consumption path
-// with no gate - no permission check, no rate cap, not even an off
-// switch. A buggy/malicious MCP server could loop sampling requests and
-// burn the provider budget with no prompt. The gate: a config kill
-// switch (mcp_sampling_disabled, zero value keeps sampling ON) plus a
-// package-level rate cap (60/min) and concurrency cap (2) that apply
-// regardless of the switch.
-
 import (
 	"context"
 	"strings"
@@ -27,7 +19,7 @@ type gateFakeProvider struct {
 func (f *gateFakeProvider) Name() string { return "fake" }
 func (f *gateFakeProvider) Chat(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
 	if f.block != nil {
-		<-f.block // hold the in-flight slot (concurrency-cap test)
+		<-f.block
 	}
 	resp := provider.ChatResponse{
 		Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("ok")}},
@@ -43,7 +35,6 @@ func resetSamplingGate() {
 	samplingGateMu.Unlock()
 }
 
-// The kill switch fails closed with an explanatory error.
 func TestIssue1484D_DisabledSwitchRefuses(t *testing.T) {
 	resetSamplingGate()
 	defer resetSamplingGate()
@@ -54,7 +45,6 @@ func TestIssue1484D_DisabledSwitchRefuses(t *testing.T) {
 	}
 }
 
-// Enabled path passes through the gate untouched.
 func TestIssue1484D_EnabledPasses(t *testing.T) {
 	resetSamplingGate()
 	defer resetSamplingGate()
@@ -68,7 +58,6 @@ func TestIssue1484D_EnabledPasses(t *testing.T) {
 	}
 }
 
-// The per-minute rate cap refuses request 61 even with the switch off.
 func TestIssue1484D_RateCapRefuses(t *testing.T) {
 	resetSamplingGate()
 	defer resetSamplingGate()
@@ -82,7 +71,6 @@ func TestIssue1484D_RateCapRefuses(t *testing.T) {
 	}
 }
 
-// The concurrency cap refuses a third simultaneous sampling chat.
 func TestIssue1484D_ConcurrencyCapRefuses(t *testing.T) {
 	resetSamplingGate()
 	defer resetSamplingGate()
@@ -98,7 +86,7 @@ func TestIssue1484D_ConcurrencyCapRefuses(t *testing.T) {
 			_, _ = h(context.Background(), mcp.SamplingParams{MaxTokens: 16})
 		}()
 	}
-	// Let the two in-flight chats park on the block channel.
+
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		samplingGateMu.Lock()

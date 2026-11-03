@@ -5,8 +5,7 @@ import (
 )
 
 func TestRerankResults_PathBoost(t *testing.T) {
-	// Two results with equal BM25 scores; the one with "auth" in its path
-	// should be boosted above the one without.
+
 	results := []bm25Result{
 		{path: "internal/middleware/util.go", score: 5.0},
 		{path: "internal/auth/login.go", score: 5.0},
@@ -20,7 +19,7 @@ func TestRerankResults_PathBoost(t *testing.T) {
 }
 
 func TestRerankResults_ExactBasenameMatch(t *testing.T) {
-	// Exact basename match should be stronger than directory match.
+
 	results := []bm25Result{
 		{path: "src/database/connection.go", score: 5.0},
 		{path: "src/database/database.go", score: 5.0},
@@ -28,15 +27,13 @@ func TestRerankResults_ExactBasenameMatch(t *testing.T) {
 	queryTerms := []string{"database"}
 	rerankResults(results, queryTerms, nil)
 
-	// "database.go" has exact basename match, should rank first.
 	if results[0].path != "src/database/database.go" {
 		t.Errorf("expected src/database/database.go first, got %s", results[0].path)
 	}
 }
 
 func TestRerankResults_StructuralBoost(t *testing.T) {
-	// Two files with equal BM25, but one defines an exported function matching
-	// the query term. Structural signal should boost it.
+
 	fileContents := map[string]string{
 		"a/caller.go": `package a
 import "fmt"
@@ -68,8 +65,7 @@ func NewCache() *Cache {
 }
 
 func TestRerankResults_BoostCap(t *testing.T) {
-	// A file matching both exact basename and structural should not be boosted
-	// beyond maxBoostCap (3.0x).
+
 	results := []bm25Result{
 		{path: "config.go", score: 1.0},
 		{path: "main.go", score: 0.9},
@@ -77,7 +73,6 @@ func TestRerankResults_BoostCap(t *testing.T) {
 	queryTerms := []string{"config"}
 	rerankResults(results, queryTerms, nil)
 
-	// config.go should be first, but score should be capped at 3.0.
 	if results[0].path != "config.go" {
 		t.Errorf("expected config.go first, got %s", results[0].path)
 	}
@@ -87,7 +82,7 @@ func TestRerankResults_BoostCap(t *testing.T) {
 }
 
 func TestRerankResults_SingleResult(t *testing.T) {
-	// Single result should be returned unchanged.
+
 	results := []bm25Result{
 		{path: "a/b.go", score: 1.0},
 	}
@@ -98,7 +93,7 @@ func TestRerankResults_SingleResult(t *testing.T) {
 }
 
 func TestRerankResults_NoQueryTerms(t *testing.T) {
-	// Empty query terms should not change ordering.
+
 	results := []bm25Result{
 		{path: "z.go", score: 5.0},
 		{path: "a.go", score: 3.0},
@@ -110,7 +105,7 @@ func TestRerankResults_NoQueryTerms(t *testing.T) {
 }
 
 func TestPathBoost_CamelCasePath(t *testing.T) {
-	// camelCase in path segments should be split for matching.
+
 	querySet := map[string]bool{"http": true}
 	boost := pathBoost("internal/httpClient.go", querySet)
 	if boost <= 1.0 {

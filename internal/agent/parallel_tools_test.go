@@ -13,7 +13,7 @@ func TestPreExecuteReadOnly_SingleTool(t *testing.T) {
 		tools:      tool.NewRegistry(),
 		speculator: newSpeculator(),
 	}
-	// Single tool call should not trigger parallel execution.
+
 	calls := []provider.ToolCallDelta{
 		{ID: "1", Name: "read_file", Arguments: []byte(`{"path":"/tmp/test"}`)},
 	}
@@ -44,18 +44,16 @@ func TestPreExecuteReadOnly_NoPanicOnMixedBatch(t *testing.T) {
 		tools:      tool.NewRegistry(),
 		speculator: newSpeculator(),
 	}
-	// Mixed batch with read-only and side-effect tools.
-	// Should not panic even though tools aren't registered.
+
 	calls := []provider.ToolCallDelta{
 		{ID: "1", Name: "edit_file", Arguments: []byte(`{}`)},
 		{ID: "2", Name: "read_file", Arguments: []byte(`{"path":"/tmp/a"}`)},
 		{ID: "3", Name: "run_command", Arguments: []byte(`{}`)},
 		{ID: "4", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
 	}
-	// Tools aren't registered, so Execute will return an error for each.
-	// preExecuteReadOnlyTools should handle this gracefully (results=nil).
+
 	results := a.preExecuteReadOnlyTools(context.Background(), calls)
-	// Results will be nil because tools aren't registered.
+
 	if results != nil {
 		t.Errorf("expected nil when tools not registered, got %d results", len(results))
 	}
@@ -75,9 +73,7 @@ func TestPreExecuteReadOnly_RespectsMaxConcurrent(t *testing.T) {
 		}
 	}
 	results := a.preExecuteReadOnlyTools(context.Background(), calls)
-	// At most parallelMaxConcurrent (3) should be pre-executed.
-	// Since tools aren't registered, they'll all fail — results will be nil.
-	// The key test is no panic/deadlock with many concurrent calls.
+
 	if results != nil && len(results) > parallelMaxConcurrent {
 		t.Errorf("expected at most %d results, got %d", parallelMaxConcurrent, len(results))
 	}
@@ -89,14 +85,14 @@ func TestPreExecuteReadOnly_CancelledContext(t *testing.T) {
 		speculator: newSpeculator(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel()
 
 	calls := []provider.ToolCallDelta{
 		{ID: "1", Name: "read_file", Arguments: []byte(`{"path":"/tmp/a"}`)},
 		{ID: "2", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
 	}
 	results := a.preExecuteReadOnlyTools(ctx, calls)
-	// With cancelled context, all goroutines should return early.
+
 	if results != nil {
 		t.Errorf("expected nil with cancelled context, got %d results", len(results))
 	}
@@ -108,7 +104,7 @@ func TestPreExecuteReadOnly_SkipsMemoizedTools(t *testing.T) {
 		speculator: newSpeculator(),
 		toolMemo:   newToolMemo(),
 	}
-	// Pre-populate memoization cache for read_file.
+
 	memoResult := tool.Result{Content: "cached content"}
 	a.toolMemo.put("read_file", []byte(`{"path":"/tmp/a"}`), memoResult)
 
@@ -117,23 +113,12 @@ func TestPreExecuteReadOnly_SkipsMemoizedTools(t *testing.T) {
 		{ID: "2", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
 	}
 	results := a.preExecuteReadOnlyTools(context.Background(), calls)
-	// read_file was memoized, so only glob should be in the batch.
-	// Since glob isn't registered, results will be nil — the key check is
-	// that no panic occurs and we don't try to pre-execute the memoized tool.
+
 	if results != nil {
 		t.Errorf("expected nil (tools not registered), got %d results", len(results))
 	}
 }
 
-// TestPreExecuteReadOnly_MixedBatchSkipped pins #1475-A's scenario under the
-// conflict-aware scheduler (parallel_scheduling.go): a COLLIDING read - one
-// whose scan scope covers a pending mutation target - must NOT be
-// pre-executed: [edit_file X, read_file X] used to hand back pre-edit
-// content with no annotation and provoked duplicate edits. Under the new
-// semantics this batch still fully skips because every read collides;
-// unrelated reads are pre-executed instead (see
-// TestPreExecuteReadOnly_PartialParallelMixedBatch), and unknown-scope
-// mutators keep the batch-wide skip.
 func TestPreExecuteReadOnly_MixedBatchSkipped(t *testing.T) {
 	a := &Agent{
 		tools:      tool.NewRegistry(),
@@ -146,21 +131,15 @@ func TestPreExecuteReadOnly_MixedBatchSkipped(t *testing.T) {
 	if got := a.preExecuteReadOnlyTools(context.Background(), calls); len(got) != 0 {
 		t.Fatalf("mixed batch pre-executed: %+v", got)
 	}
-	// Pure read-only batch with UNREGISTERED tools executes (errors
-	// gracefully into nil) - the pre-existing behavior for any batch. The
-	// mutation-guard distinction is already proven by the first half; this
-	// re-run documents no panic on the pure path.
+
 	pure := []provider.ToolCallDelta{
 		{ID: "t3", Name: "read_file", Arguments: []byte(`{"path":"/x/a.go"}`)},
 		{ID: "t4", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
 	}
 	got := a.preExecuteReadOnlyTools(context.Background(), pure)
-	_ = got // nil (unregistered) or populated - either is fine here
+	_ = got
 }
 
-// Regression for #1649: delegate must skip mixed-batch pre-execution like a
-// shell command (on assemblies without SubAgentManager its CLI fallback
-// runs synchronously in the serial loop and rewrites the tree).
 func TestPreExecuteReadOnly_SkipsDelegate(t *testing.T) {
 	a := &Agent{
 		tools:      tool.NewRegistry(),

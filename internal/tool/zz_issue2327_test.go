@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-// #2327: the whole write-tool family must serialize on the per-path lock.
-// A write_file and an edit_file racing on the same file used to both pass
-// their own guards inside the unlocked window; the later rename silently
-// clobbered the earlier write. This pin drives two real tool paths against
-// each other through the public helpers and asserts mutual exclusion.
 func TestIssue2327WriteAndEditSerializePerPath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "shared.txt")
@@ -22,23 +17,18 @@ func TestIssue2327WriteAndEditSerializePerPath(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	order := []string{}
-	// #2327-flake hardening: a start barrier makes both goroutines reach the
-	// lock call together. Without it a slow CI runner could schedule the
-	// edit goroutine fully through its critical section before the write
-	// goroutine was even spawned - the order assertions then exercise the
-	// lock from only one side and the "never between" invariant is not
-	// actually under test.
+
 	start := make(chan struct{})
 
 	wg.Add(2)
-	go func() { // edit_file path (holds the lock across read→match→write)
+	go func() {
 		defer wg.Done()
 		<-start
 		unlock := LockWritePath(p)
 		mu.Lock()
 		order = append(order, "edit-start")
 		mu.Unlock()
-		time.Sleep(120 * time.Millisecond) // widen the window on purpose
+		time.Sleep(120 * time.Millisecond)
 		_ = os.WriteFile(p, []byte("base\nedited\n"), 0644)
 		defaultFileTracker.RecordWrite(p)
 		mu.Lock()
@@ -46,7 +36,7 @@ func TestIssue2327WriteAndEditSerializePerPath(t *testing.T) {
 		mu.Unlock()
 		unlock()
 	}()
-	go func() { // write_file path must NOT enter the critical section above
+	go func() {
 		defer wg.Done()
 		<-start
 		unlock := LockWritePath(p)
@@ -58,11 +48,6 @@ func TestIssue2327WriteAndEditSerializePerPath(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	// #2327-flake: the REAL invariant is "write's position is never strictly
-	// between edit-start and edit-end". The old shape (order[2]!="edit-end"
-	// when order[0]=="edit-start") also fired on the perfectly legal serial
-	// order [edit-start, edit-end, write] - edit fully completed, write
-	// acquired afterwards. That false positive is the CI flake.
 	startIdx, writeIdx, endIdx := -1, -1, -1
 	for i, ev := range order {
 		switch ev {
@@ -79,9 +64,6 @@ func TestIssue2327WriteAndEditSerializePerPath(t *testing.T) {
 	}
 }
 
-// multi_file_write per-iteration locking: two batches writing the same path
-// must serialize; the final content is one batch's payload for that file,
-// never a mid-write hybrid.
 func TestIssue2327MultiFileWriteSerializes(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "m.txt")
@@ -97,7 +79,7 @@ func TestIssue2327MultiFileWriteSerializes(t *testing.T) {
 			unlock := LockWritePath(p)
 			if stale, _ := defaultFileTracker.CheckStale(p); stale {
 				unlock()
-				return // guard legitimately refused
+				return
 			}
 			_ = atomicWriteFile(p, []byte(payload), 0644)
 			defaultFileTracker.RecordWrite(p)
@@ -112,8 +94,6 @@ func TestIssue2327MultiFileWriteSerializes(t *testing.T) {
 	}
 }
 
-// The family lock and write_file share the same key space: same path via a
-// symlink alias must map to the same mutex (normalizePath consistency).
 func TestIssue2327AliasSharesLock(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real.txt")
@@ -126,7 +106,7 @@ func TestIssue2327AliasSharesLock(t *testing.T) {
 	unlockReal := LockWritePath(real)
 	acquired := make(chan struct{})
 	go func() {
-		unlockLink := LockWritePath(link) // alias must block on the same mutex
+		unlockLink := LockWritePath(link)
 		close(acquired)
 		unlockLink()
 	}()
@@ -138,10 +118,7 @@ func TestIssue2327AliasSharesLock(t *testing.T) {
 	unlockReal()
 	select {
 	case <-acquired:
-		// #2327-flake hardening: the original 2s timeout was tight enough
-		// that a CI runner under load could starve the waiter goroutine past
-		// it right after unlockReal - a false positive. 5s keeps the test
-		// fast on healthy runners while giving starved schedulers room.
+
 	case <-time.After(5 * time.Second):
 		t.Fatal("alias lock never acquired after unlock")
 	}

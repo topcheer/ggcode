@@ -1,22 +1,10 @@
 package agent
 
-// #3150 probes.
-//
-// V1 (medium): a revert of an UNRELATED file must not flip the attribution
-// experiment to intervened - a passing rerun would otherwise inject a false
-// CONFIRMED verdict on an innocent change.
-//
-// V2 (low): when two edits tie on CRS score, the tie must break to the MORE
-// RECENT edit (recency bias in causality, per the design comment), not the
-// oldest one that happens to be first in append order.
-
 import (
 	"strings"
 	"testing"
 )
 
-// V1: unrelated git restore / pathspec-limited stash must not count as an
-// intervention, so the passing rerun stays silent instead of confirming.
 func TestIssue3150_UnrelatedRevert_NoFalseConfirmed(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -38,8 +26,6 @@ func TestIssue3150_UnrelatedRevert_NoFalseConfirmed(t *testing.T) {
 	}
 }
 
-// V1 true-positive preservation: reverts that DO hit the suspect (named
-// pathspec, bare stash, stash push without pathspec) still arm the verdict.
 func TestIssue3150_SuspectRevert_StillConfirms(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -60,8 +46,6 @@ func TestIssue3150_SuspectRevert_StillConfirms(t *testing.T) {
 	}
 }
 
-// V1 boundary: "git stash push -- " with nothing after the separator is a
-// bare push in effect (empty pathspec), not a pathspec-limited one.
 func TestIssue3150_StashPushTrailingSeparator_CountsAsBare(t *testing.T) {
 	s := r405Arm(t)
 	s.observeCommand("run_command", "git stash push -- ", false, "")
@@ -70,27 +54,10 @@ func TestIssue3150_StashPushTrailingSeparator_CountsAsBare(t *testing.T) {
 	}
 }
 
-// V2: two edits tie on CRS, the top suspect must be the NEWER edit.
-//
-// #3794-B contract: the recency bonus now requires the edit to have
-// actually matched at least one error reference (file/dir/package tier),
-// so a zero-evidence edit can no longer manufacture a tie via recency
-// alone (the pre-#3794 construction - edit B unrelated, 0 evidence +
-// recency 30 - now correctly scores 0). The tie is therefore built from
-// evidence on BOTH sides, with the older edit carrying more dir evidence
-// to offset its lower recency rank:
-//
-// Edit A (olddir/style.css, rank 1): 4 same-dir error hits 5x4 = 20
-//   - recency 1x10 = 10 -> 30.
-//
-// Edit B (newdir/logo.png, rank 2): 2 same-dir error hits 5x2 = 10
-//   - recency 2x10 = 20 -> 30.
-//
-// Both suspects carry real evidence; equal score must resolve to B.
 func TestIssue3150_TieBreakPrefersMostRecentEdit(t *testing.T) {
 	s := newCausalAttributionState()
-	s.recordEdit("edit_file", "olddir/style.css", 1) // older suspect: rank 1, score 30
-	s.recordEdit("edit_file", "newdir/logo.png", 2)  // newer suspect: rank 2, score 30
+	s.recordEdit("edit_file", "olddir/style.css", 1)
+	s.recordEdit("edit_file", "newdir/logo.png", 2)
 
 	output := "build failed\n" +
 		"olddir/e1.go:1: undefined: A\nolddir/e2.go:2: undefined: B\n" +

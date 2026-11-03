@@ -53,9 +53,7 @@ func work(wg *sync.WaitGroup) {
 }
 
 func TestCheckWaitGroup_DoneWithoutAdd(t *testing.T) {
-	// #938: a function RECEIVING *sync.WaitGroup that only calls Done/Wait
-	// is the canonical worker/waiter split - Add() lives in the spawner,
-	// invisible to function-granularity analysis. Must NOT warn.
+
 	new := `package main
 import "sync"
 func work(wg *sync.WaitGroup) {
@@ -72,9 +70,6 @@ func work(wg *sync.WaitGroup) {
 	}
 }
 
-// #938: Done-without-Add still warns when the function OWNS the WaitGroup
-// (declared locally, not received as a parameter) - there is no spawner
-// elsewhere that could call Add().
 func TestCheckWaitGroup_DoneWithoutAddLocalWG(t *testing.T) {
 	new := `package main
 import "sync"
@@ -203,7 +198,7 @@ func TestCheckWaitGroup_InvalidGoSyntax(t *testing.T) {
 }
 
 func TestCheckWaitGroup_DetectsMultiplePatterns(t *testing.T) {
-	// Both: Done without defer AND Add inside goroutine
+
 	new := `package main
 import "sync"
 func work(wg *sync.WaitGroup) {
@@ -220,7 +215,7 @@ func work(wg *sync.WaitGroup) {
 }
 
 func TestCheckWaitGroup_AddBeforeGoNotFlagged(t *testing.T) {
-	// Add is before the go statement - correct pattern, not flagged for race
+
 	new := `package main
 import "sync"
 func work(items []string) {
@@ -248,7 +243,7 @@ func TestFindWaitGroupMisuse_EmptyString(t *testing.T) {
 }
 
 func TestCollectWGStats_NoWGMethods(t *testing.T) {
-	// Should return zero stats for code with no WaitGroup-like method calls
+
 	src := `package main
 func work() {
 	x := 1

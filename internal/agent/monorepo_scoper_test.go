@@ -10,9 +10,9 @@ import (
 
 func TestMonorepoScoper_DetectByMarker(t *testing.T) {
 	tmp := t.TempDir()
-	// Create a pnpm-workspace.yaml marker
+
 	os.WriteFile(filepath.Join(tmp, "pnpm-workspace.yaml"), []byte("packages:\n  - packages/*"), 0644)
-	// Create packages
+
 	for _, pkg := range []string{"pkg-a", "pkg-b", "pkg-c"} {
 		dir := filepath.Join(tmp, pkg)
 		os.MkdirAll(dir, 0755)
@@ -32,7 +32,7 @@ func TestMonorepoScoper_DetectByMarker(t *testing.T) {
 
 func TestMonorepoScoper_DetectByMultiplePackages(t *testing.T) {
 	tmp := t.TempDir()
-	// No marker file, but 3+ packages
+
 	for _, pkg := range []string{"svc-a", "svc-b", "svc-c"} {
 		dir := filepath.Join(tmp, pkg)
 		os.MkdirAll(dir, 0755)
@@ -49,7 +49,7 @@ func TestMonorepoScoper_DetectByMultiplePackages(t *testing.T) {
 
 func TestMonorepoScoper_NotMonorepo(t *testing.T) {
 	tmp := t.TempDir()
-	// Only one package, no markers
+
 	dir := filepath.Join(tmp, "single-pkg")
 	os.MkdirAll(dir, 0755)
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
@@ -80,9 +80,9 @@ func TestMonorepoScoper_ClassifyPackage(t *testing.T) {
 		{filepath.Join(tmp, "users", "src", "index.ts"), "users"},
 		{filepath.Join(tmp, "orders", "lib", "util.go"), "orders"},
 		{filepath.Join(tmp, "billing", "main.go"), "billing"},
-		{filepath.Join(tmp, "shared", "types.ts"), ""}, // cross-cutting
-		{filepath.Join(tmp, "internal", "foo.go"), ""}, // cross-cutting
-		{filepath.Join(tmp, "README.md"), ""},          // root file
+		{filepath.Join(tmp, "shared", "types.ts"), ""},
+		{filepath.Join(tmp, "internal", "foo.go"), ""},
+		{filepath.Join(tmp, "README.md"), ""},
 	}
 
 	for _, tc := range cases {
@@ -108,7 +108,6 @@ func TestMonorepoScoper_ScopeSprawlWarning(t *testing.T) {
 		t.Fatal("expected monorepo detection")
 	}
 
-	// Edit in 4 packages - should trigger warning
 	for _, pkg := range []string{"users", "orders", "billing", "shipping"} {
 		s.recordEdit(filepath.Join(tmp, pkg, "index.ts"))
 	}
@@ -121,7 +120,6 @@ func TestMonorepoScoper_ScopeSprawlWarning(t *testing.T) {
 		t.Errorf("hint should contain monorepo-scope tag: %s", hint)
 	}
 
-	// Should fire only once
 	hint2 := s.maybeWarnScopeSprawl()
 	if hint2 != "" {
 		t.Fatal("expected no second warning (already fired)")
@@ -139,7 +137,6 @@ func TestMonorepoScoper_NoSprawlForTwoPackages(t *testing.T) {
 	s := newMonorepoScoperState()
 	s.detectMonorepo(tmp)
 
-	// Edit in only 2 packages - should NOT trigger
 	s.recordEdit(filepath.Join(tmp, "users", "index.ts"))
 	s.recordEdit(filepath.Join(tmp, "orders", "index.ts"))
 
@@ -166,7 +163,7 @@ func TestMonorepoScoper_Reset(t *testing.T) {
 	if len(s.touchedDirs) != 0 {
 		t.Error("touchedDirs should be empty after reset")
 	}
-	// enabled, rootDir, packages should persist (workspace structure doesn't change)
+
 	if !s.enabled {
 		t.Error("enabled should persist after reset")
 	}
@@ -179,7 +176,7 @@ func TestMonorepoScoper_CrossCuttingDirsNotCounted(t *testing.T) {
 		os.MkdirAll(dir, 0755)
 		os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
 	}
-	// Also create cross-cutting dirs
+
 	for _, d := range []string{"shared", "common", "lib"} {
 		os.MkdirAll(filepath.Join(tmp, d), 0755)
 	}
@@ -187,39 +184,31 @@ func TestMonorepoScoper_CrossCuttingDirsNotCounted(t *testing.T) {
 	s := newMonorepoScoperState()
 	s.detectMonorepo(tmp)
 
-	// Edit in 2 packages + 3 cross-cutting dirs
 	s.recordEdit(filepath.Join(tmp, "users", "index.ts"))
 	s.recordEdit(filepath.Join(tmp, "orders", "index.ts"))
 	s.recordEdit(filepath.Join(tmp, "shared", "types.ts"))
 	s.recordEdit(filepath.Join(tmp, "common", "util.ts"))
 	s.recordEdit(filepath.Join(tmp, "lib", "helper.ts"))
 
-	// Only 2 actual packages touched (cross-cutting dirs excluded)
 	hint := s.maybeWarnScopeSprawl()
 	if hint != "" {
 		t.Fatalf("expected no sprawl warning (only 2 actual packages), got: %s", hint)
 	}
 }
 
-// TestMonorepoScoper_MixedSeparatorsClassify guards the Windows fix: rootDir
-// comes from filepath.Join (native separators) while edit paths arrive as the
-// LLM's literal tool arguments (forward slashes). Before the ToSlash
-// normalization, prefix matching and SplitN both failed on Windows and the
-// detector went permanently silent there. This test pins the mixed form on
-// every platform.
 func TestMonorepoScoper_MixedSeparatorsClassify(t *testing.T) {
 	s := &monorepoScoperState{
 		enabled:  true,
-		rootDir:  filepath.Join(`C:\work`, "repo"), // native-separator root, as detectMonorepo records it
+		rootDir:  filepath.Join(`C:\work`, "repo"),
 		crossPkg: map[string]bool{},
 	}
-	root := `C:/work/repo` // same root, LLM-style forward slashes
+	root := `C:/work/repo`
 	cases := []struct{ path, want string }{
 		{root + "/users/index.ts", "users"},
 		{root + "/orders/lib/util.go", "orders"},
-		{root + "/shared/types.ts", ""}, // cross-cutting
-		{root + "/README.md", ""},       // root file
-		// Native-separator paths must keep working too (same form as rootDir).
+		{root + "/shared/types.ts", ""},
+		{root + "/README.md", ""},
+
 		{filepath.Join(root, "users", "index.ts"), "users"},
 	}
 	for _, tc := range cases {
@@ -230,7 +219,7 @@ func TestMonorepoScoper_MixedSeparatorsClassify(t *testing.T) {
 }
 
 func TestItoa(t *testing.T) {
-	// Verify strconv.Itoa produces expected output (used by formatScopeSprawlHint).
+
 	cases := []struct {
 		input int
 		want  string

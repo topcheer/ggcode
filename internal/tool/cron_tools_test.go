@@ -37,7 +37,6 @@ func TestCronCreateTool_Execute(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
-	// Basic create — fires in ~1 minute
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
 		"cron": "*/5 * * * *",
 		"prompt": "check status",
@@ -112,7 +111,6 @@ func TestCronCreateTool_DefaultRecurring(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
-	// No recurring field → defaults to true
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -135,15 +133,12 @@ func TestCronDeleteTool_Execute(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronDeleteTool{Scheduler: s}
 
-	// Create a job first
 	createTool := CronCreateTool{Scheduler: s}
 	result, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 
-	// Extract job ID
 	var job struct{ ID string }
 	json.Unmarshal([]byte(strings.TrimSpace(result.Content)), &job)
 
-	// Delete it
 	delResult, err := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+job.ID+`"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +150,6 @@ func TestCronDeleteTool_Execute(t *testing.T) {
 		t.Errorf("expected 'deleted' in result, got: %s", delResult.Content)
 	}
 
-	// Verify it's gone
 	if len(s.List()) != 0 {
 		t.Error("job should be deleted")
 	}
@@ -191,7 +185,6 @@ func TestCronListTool_Execute(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronListTool{Scheduler: s}
 
-	// Empty list
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
@@ -200,12 +193,10 @@ func TestCronListTool_Execute(t *testing.T) {
 		t.Errorf("expected empty list message, got: %s", result.Content)
 	}
 
-	// Create two jobs
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"check every 5","recurring":true}`))
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"0 9 * * *","prompt":"morning report","recurring":false}`))
 
-	// List
 	result, err = tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +226,6 @@ func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
-	// Create a recurring job that fires every minute
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
 		"cron": "*/5 * * * *",
 		"prompt": "hello from cron",
@@ -248,7 +238,6 @@ func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
 
-	// Verify the job exists
 	jobs := s.List()
 	if len(jobs) != 1 {
 		t.Errorf("expected 1 job, got %d", len(jobs))
@@ -277,8 +266,6 @@ func TestCronCreateToolDescriptionClarifiesPersistence(t *testing.T) {
 	}
 }
 
-// --- cron_update ---
-
 func TestCronUpdateTool_ChangesPrompt(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
@@ -304,7 +291,7 @@ func TestCronUpdateTool_ChangesPrompt(t *testing.T) {
 	if got.Prompt != "new prompt" {
 		t.Errorf("expected prompt 'new prompt', got %q", got.Prompt)
 	}
-	// Cron should be unchanged
+
 	if got.CronExpr != "*/5 * * * *" {
 		t.Errorf("cron expression should be unchanged, got %q", got.CronExpr)
 	}
@@ -362,7 +349,7 @@ func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
-	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
+	jobID := firstJobID(t, s)
 
 	updateTool := CronUpdateTool{Scheduler: s}
 	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`","cron":"invalid expr"}`))
@@ -370,7 +357,6 @@ func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
 		t.Error("expected error for invalid cron expression")
 	}
 
-	// Original should be unchanged
 	got, _ := s.Get(jobID)
 	if got.CronExpr != "*/5 * * * *" {
 		t.Errorf("cron expression should be unchanged after failed update, got %q", got.CronExpr)
@@ -385,17 +371,14 @@ func TestCronUpdateTool_NilScheduler(t *testing.T) {
 	}
 }
 
-// --- cron_pause / cron_resume ---
-
 func TestCronPauseResumeTool(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
-	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
+	jobID := firstJobID(t, s)
 
-	// Pause
 	pauseTool := CronPauseTool{Scheduler: s}
 	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
@@ -407,7 +390,6 @@ func TestCronPauseResumeTool(t *testing.T) {
 		t.Error("expected Paused=true after pause")
 	}
 
-	// Resume
 	resumeTool := CronResumeTool{Scheduler: s}
 	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
@@ -464,9 +446,8 @@ func TestCronPauseResume_Idempotent(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
-	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
+	jobID := firstJobID(t, s)
 
-	// Double pause should be fine
 	pauseTool := CronPauseTool{Scheduler: s}
 	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
@@ -474,7 +455,6 @@ func TestCronPauseResume_Idempotent(t *testing.T) {
 		t.Error("double pause should not error")
 	}
 
-	// Double resume should be fine
 	resumeTool := CronResumeTool{Scheduler: s}
 	resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
@@ -482,8 +462,6 @@ func TestCronPauseResume_Idempotent(t *testing.T) {
 		t.Error("double resume should not error")
 	}
 }
-
-// --- cron_get ---
 
 func TestCronGetTool_ShowsFullPrompt(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
@@ -499,11 +477,11 @@ func TestCronGetTool_ShowsFullPrompt(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Full prompt must be shown
+
 	if !strings.Contains(result.Content, "short prompt here") {
 		t.Errorf("result should contain full prompt, got: %s", result.Content)
 	}
-	// Should show state, type, cron expr
+
 	for _, want := range []string{"State:", "Type:", "Cron expr:", "*/5 * * * *", "Next fire:"} {
 		if !strings.Contains(result.Content, want) {
 			t.Errorf("result should contain %q, got: %s", want, result.Content)
@@ -517,7 +495,7 @@ func TestCronGetTool_ShowsPausedState(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
-	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
+	jobID := firstJobID(t, s)
 
 	pauseTool := CronPauseTool{Scheduler: s}
 	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
@@ -548,9 +526,6 @@ func TestCronGetTool_NilScheduler(t *testing.T) {
 	}
 }
 
-// firstJobID returns the ID of the scheduler's first job. #1308: job IDs
-// carry a random suffix (cross-process uniqueness), so tests must capture
-// the real ID instead of hardcoding "cron-1".
 func firstJobID(t *testing.T, s *cron.Scheduler) string {
 	t.Helper()
 	jobs := s.List()

@@ -2,8 +2,6 @@ package tool
 
 import "testing"
 
-// #741: browser navigation must only allow http/https — file:// turns the
-// browser into a sandbox-free local file reader.
 func TestIsAllowedNavScheme(t *testing.T) {
 	cases := []struct {
 		url  string
@@ -11,8 +9,8 @@ func TestIsAllowedNavScheme(t *testing.T) {
 	}{
 		{"https://example.com/page", true},
 		{"http://localhost:3000/", true},
-		{"HTTP://EXAMPLE.COM", true},           // scheme is case-insensitive
-		{"file:///Users/x/.ssh/id_rsa", false}, // the #741 attack
+		{"HTTP://EXAMPLE.COM", true},
+		{"file:///Users/x/.ssh/id_rsa", false},
 		{"file:///etc/passwd", false},
 		{"chrome://settings", false},
 		{"chrome://version", false},
@@ -20,11 +18,11 @@ func TestIsAllowedNavScheme(t *testing.T) {
 		{"data:text/html,<script>1</script>", false},
 		{"javascript:alert(1)", false},
 		{"ftp://example.com/file", false},
-		{"/Users/x/relative", false},      // schemeless
-		{"example.com/page", false},       // schemeless
-		{"", false},                       // empty
-		{"http://", false},                // scheme but no host
-		{"https://ex.com\n/../..", false}, // control chars -> parse handles
+		{"/Users/x/relative", false},
+		{"example.com/page", false},
+		{"", false},
+		{"http://", false},
+		{"https://ex.com\n/../..", false},
 	}
 	for _, c := range cases {
 		if got := isAllowedNavScheme(c.url); got != c.want {

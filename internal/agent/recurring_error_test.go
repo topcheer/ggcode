@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestFingerprintBuildErrorExtraction verifies that build error fingerprints
-// are extracted from common compiler/test output formats.
 func TestFingerprintBuildErrorExtraction(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -59,10 +57,8 @@ func TestFingerprintBuildErrorExtraction(t *testing.T) {
 	}
 }
 
-// TestFingerprintStability verifies that the same underlying error produces
-// the same fingerprint even when line numbers and paths differ.
 func TestFingerprintStability(t *testing.T) {
-	// Same error, different line numbers (as would happen after editing above)
+
 	out1 := "# pkg\n./foo.go:42:5: undefined: myFunc\n./foo.go:100:2: cannot use x"
 	out2 := "# pkg\n./foo.go:45:5: undefined: myFunc\n./foo.go:103:2: cannot use x"
 
@@ -77,8 +73,6 @@ func TestFingerprintStability(t *testing.T) {
 	}
 }
 
-// TestFingerprintDifferentErrors verifies that genuinely different errors
-// produce different fingerprints.
 func TestFingerprintDifferentErrors(t *testing.T) {
 	out1 := "./foo.go:42:5: undefined: myFunc"
 	out2 := "./foo.go:42:5: undefined: otherFunc"
@@ -94,10 +88,6 @@ func TestFingerprintDifferentErrors(t *testing.T) {
 	}
 }
 
-// TestPathNormalization verifies path SPELLING variance (./-prefix) merges,
-// per #1486 case D: only leading root markers (./ ../ /) are stripped, so
-// ./internal/agent/foo.go and internal/agent/foo.go share a fingerprint while
-// absolute paths and sibling packages stay distinct (see recurring_1486_test.go).
 func TestPathNormalization(t *testing.T) {
 	out1 := "./internal/agent/foo.go:42:5: undefined: myFunc"
 	out2 := "internal/agent/foo.go:42:5: undefined: myFunc"
@@ -111,32 +101,26 @@ func TestPathNormalization(t *testing.T) {
 	if fp1 != fp2 {
 		t.Errorf("same error with ./ spelling variance should match:\n  fp1=%s\n  fp2=%s", fp1, fp2)
 	}
-	// #1486 case D: absolute vs relative no longer merge (sibling separation) -
-	// this is the deliberate behavior change; pin it explicitly.
+
 	out3 := "/home/user/project/internal/agent/foo.go:42:5: undefined: myFunc"
 	if fp3 := fingerprintBuildError(out3); fp3 == fp1 {
 		t.Errorf("absolute path must stay distinct from relative (#1486 sibling separation)")
 	}
 }
 
-// TestRecurringErrorSoftGuidance tests that soft guidance fires on 2nd occurrence
-// with edits between.
 func TestRecurringErrorSoftGuidance(t *testing.T) {
 	r := newRecurringErrorState()
 
 	errOut := "# pkg\n./foo.go:42:5: undefined: myFunc\nFAIL"
 
-	// First occurrence — no guidance
 	g := r.recordBuildError(errOut)
 	if g != "" {
 		t.Errorf("first occurrence should not produce guidance, got: %s", g)
 	}
 
-	// Simulate edits between
 	r.recordEdit()
 	r.recordEdit()
 
-	// Second occurrence — soft guidance
 	g = r.recordBuildError(errOut)
 	if g == "" {
 		t.Error("second occurrence with edits should produce guidance")
@@ -146,24 +130,20 @@ func TestRecurringErrorSoftGuidance(t *testing.T) {
 	}
 }
 
-// TestRecurringErrorHardGuidance tests escalation to hard guidance at 3rd occurrence.
 func TestRecurringErrorHardGuidance(t *testing.T) {
 	r := newRecurringErrorState()
 
 	errOut := "# pkg\n./foo.go:42:5: undefined: myFunc\nFAIL"
 
-	// First
 	r.recordBuildError(errOut)
 	r.recordEdit()
 
-	// Second — soft
 	g2 := r.recordBuildError(errOut)
 	if g2 == "" || !strings.Contains(g2, "Recurring error") {
 		t.Fatalf("expected soft guidance at 2nd occurrence, got: %q", g2)
 	}
 	r.recordEdit()
 
-	// Third — hard
 	g3 := r.recordBuildError(errOut)
 	if g3 == "" {
 		t.Fatal("expected hard guidance at 3rd occurrence")
@@ -173,24 +153,19 @@ func TestRecurringErrorHardGuidance(t *testing.T) {
 	}
 }
 
-// TestNoGuidanceWithoutEdits verifies that consecutive same errors without edits
-// don't trigger guidance (that's loop_detect's job).
 func TestNoGuidanceWithoutEdits(t *testing.T) {
 	r := newRecurringErrorState()
 
 	errOut := "# pkg\n./foo.go:42:5: undefined: myFunc\nFAIL"
 
-	// First
 	r.recordBuildError(errOut)
 
-	// Second — NO edits between
 	g := r.recordBuildError(errOut)
 	if g != "" {
 		t.Errorf("should not produce guidance without edits between occurrences, got: %s", g)
 	}
 }
 
-// TestDifferentErrorsNoRecurrence verifies that different errors don't trigger.
 func TestDifferentErrorsNoRecurrence(t *testing.T) {
 	r := newRecurringErrorState()
 
@@ -205,7 +180,6 @@ func TestDifferentErrorsNoRecurrence(t *testing.T) {
 	}
 }
 
-// TestReset verifies state is cleared on reset.
 func TestReset(t *testing.T) {
 	r := newRecurringErrorState()
 
@@ -217,7 +191,6 @@ func TestReset(t *testing.T) {
 
 	r.reset()
 
-	// After reset, first occurrence should not produce guidance
 	r.recordBuildError(errOut)
 	r.recordEdit()
 	g := r.recordBuildError(errOut)
@@ -226,7 +199,6 @@ func TestReset(t *testing.T) {
 	}
 }
 
-// TestDedupSameLevel verifies the same guidance level doesn't fire twice.
 func TestDedupSameLevel(t *testing.T) {
 	r := newRecurringErrorState()
 
@@ -234,14 +206,14 @@ func TestDedupSameLevel(t *testing.T) {
 
 	r.recordBuildError(errOut)
 	r.recordEdit()
-	g2a := r.recordBuildError(errOut) // soft fires
+	g2a := r.recordBuildError(errOut)
 
 	if g2a == "" {
 		t.Fatal("expected soft guidance on 2nd occurrence")
 	}
 
 	r.recordEdit()
-	g2b := r.recordBuildError(errOut) // 3rd occurrence, should fire HARD not soft again
+	g2b := r.recordBuildError(errOut)
 
 	if g2b == "" {
 		t.Fatal("expected hard guidance on 3rd occurrence")
@@ -250,7 +222,6 @@ func TestDedupSameLevel(t *testing.T) {
 		t.Errorf("expected hard guidance on 3rd, got: %s", g2b)
 	}
 
-	// 4th occurrence — both levels already fired, should be empty
 	r.recordEdit()
 	g4 := r.recordBuildError(errOut)
 	if g4 != "" {
@@ -258,7 +229,6 @@ func TestDedupSameLevel(t *testing.T) {
 	}
 }
 
-// TestNormalizeErrorLine verifies normalization of volatile elements.
 func TestNormalizeErrorLine(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -293,10 +263,6 @@ func TestNormalizeErrorLine(t *testing.T) {
 	}
 }
 
-// TestStripPathToBasename pins #1486 case D semantics: leading root markers
-// (./ ../ /) are dropped; NAMED segments are KEPT so sibling packages do not
-// collide (the old strip-to-basename merged a/util.go and b/util.go into one
-// fingerprint, inflating recurrence counts).
 func TestStripPathToBasename(t *testing.T) {
 	if got := stripPathToBasename("./internal/agent/foo.go:42: undefined: myFunc"); got != "internal/agent/foo.go:42: undefined: myFunc" {
 		t.Errorf("./-prefix must be stripped, got: %s", got)
@@ -309,9 +275,6 @@ func TestStripPathToBasename(t *testing.T) {
 	}
 }
 
-// (itoa is provided by inline_toolcall_test.go; strconv.Itoa is used in production code.)
-
-// TestAgentRecurringErrorIntegration tests the Agent-level methods.
 func TestAgentRecurringErrorIntegration(t *testing.T) {
 	a := &Agent{
 		recurringError: newRecurringErrorState(),
@@ -320,23 +283,19 @@ func TestAgentRecurringErrorIntegration(t *testing.T) {
 	errOut := "# pkg\n./foo.go:42:5: undefined: myFunc\nFAIL"
 	args := json.RawMessage(`{"command": "go build ./..."}`)
 
-	// First build error — no guidance
 	g := a.recurringErrorCheckCommand("run_command", args, errOut, true)
 	if g != "" {
 		t.Errorf("first occurrence should not produce guidance: %s", g)
 	}
 
-	// Simulate edit
 	a.recurringErrorRecordEdit()
 
-	// Second build error — guidance should fire
 	g = a.recurringErrorCheckCommand("run_command", args, errOut, true)
 	if g == "" {
 		t.Error("second occurrence with edits should produce guidance")
 	}
 }
 
-// TestAgentRecurringErrorNonVerifyCommand verifies non-verify commands are ignored.
 func TestAgentRecurringErrorNonVerifyCommand(t *testing.T) {
 	a := &Agent{
 		recurringError: newRecurringErrorState(),
@@ -345,18 +304,15 @@ func TestAgentRecurringErrorNonVerifyCommand(t *testing.T) {
 	args := json.RawMessage(`{"command": "echo hello"}`)
 	errOut := "Error: something failed"
 
-	// First
 	a.recurringErrorCheckCommand("run_command", args, errOut, true)
 	a.recurringErrorRecordEdit()
 
-	// Second — should NOT fire because echo isn't a verify command
 	g := a.recurringErrorCheckCommand("run_command", args, errOut, true)
 	if g != "" {
 		t.Errorf("non-verify command should not trigger recurrence guidance: %s", g)
 	}
 }
 
-// TestAgentRecurringErrorReset verifies reset clears state.
 func TestAgentRecurringErrorReset(t *testing.T) {
 	a := &Agent{
 		recurringError: newRecurringErrorState(),
@@ -367,10 +323,8 @@ func TestAgentRecurringErrorReset(t *testing.T) {
 	a.recurringErrorRecordEdit()
 	a.recurringErrorCheckCommand("run_command", json.RawMessage(`{"command":"go build ./..."}`), errOut, true)
 
-	// Reset
 	a.resetRecurringError()
 
-	// After reset, 2nd occurrence should fire guidance
 	a.recurringErrorCheckCommand("run_command", json.RawMessage(`{"command":"go build ./..."}`), errOut, true)
 	a.recurringErrorRecordEdit()
 	g := a.recurringErrorCheckCommand("run_command", json.RawMessage(`{"command":"go build ./..."}`), errOut, true)
@@ -379,7 +333,6 @@ func TestAgentRecurringErrorReset(t *testing.T) {
 	}
 }
 
-// TestHasErrorMarkers verifies error detection in output.
 func TestHasErrorMarkers(t *testing.T) {
 	if !hasErrorMarkers("Error: compilation failed") {
 		t.Error("should detect 'Error:' marker")
@@ -398,9 +351,8 @@ func TestHasErrorMarkers(t *testing.T) {
 	}
 }
 
-// TestMaxFingerprintLines verifies only first N error lines form the fingerprint.
 func TestMaxFingerprintLines(t *testing.T) {
-	// Many different errors — only first 5 should form the fingerprint
+
 	out1 := strings.Repeat("./file.go:1:1: undefined: func1\n", 3) +
 		"./file.go:2:1: undefined: func2\n" +
 		"./file.go:3:1: undefined: func3\n" +
@@ -410,23 +362,18 @@ func TestMaxFingerprintLines(t *testing.T) {
 	out2 := strings.Repeat("./file.go:1:1: undefined: func1\n", 3) +
 		"./file.go:2:1: undefined: func2\n" +
 		"./file.go:3:1: undefined: func3\n" +
-		"./file.go:4:1: undefined: DIFFERENT_ERROR\n" + // line 4 differs
+		"./file.go:4:1: undefined: DIFFERENT_ERROR\n" +
 		"./file.go:5:1: undefined: func5\n"
 
 	fp1 := fingerprintBuildError(out1)
 	fp2 := fingerprintBuildError(out2)
 
-	// If maxFingerprintLines < 4, these would match. With 5, they differ.
 	if fp1 == fp2 {
-		// This is acceptable if maxFingerprintLines <= 3, but we set it to 5
-		// so the 4th line should be in the fingerprint. Log for debugging.
+
 		t.Logf("fingerprints match (fp=%s) — maxFingerprintLines may exclude the 4th line", fp1)
 	}
 }
 
-// Regression for #1486: bare substring markers ("fail", "expected") occur in
-// PASS lines of healthy runs (--- PASS: TestFailover). hasErrorMarkers must
-// not flag green build output as errors.
 func TestHasErrorMarkersIgnoresPassLines(t *testing.T) {
 	green := "=== RUN   TestFailover\n--- PASS: TestFailover (0.00s)\n--- PASS: TestExpectedOutput (0.01s)\nPASS\nok  \texample.com/pkg\t0.5s"
 	if hasErrorMarkers(green) {
@@ -437,10 +384,6 @@ func TestHasErrorMarkersIgnoresPassLines(t *testing.T) {
 	}
 }
 
-// TestFingerprintSkipsGreenLines pins #1679 case 1: green lines carrying
-// bare marker substrings (--- PASS: TestFailover, ok  , === RUN
-// TestExpected) must not fill the fingerprint - two DIFFERENT errors
-// whose outputs share green preambles hashed identically as SAME error.
 func TestFingerprintSkipsGreenLines(t *testing.T) {
 	outA := "--- PASS: TestFailover (0.00s)\n--- FAIL: TestAlpha (0.01s)\n    alpha_test.go:12: want 1 got 2\nok  pkg/x 0.5s"
 	outB := "--- PASS: TestFailover (0.00s)\n--- FAIL: TestBeta (0.01s)\n    beta_test.go:34: want 3 got 4\nok  pkg/y 0.6s"

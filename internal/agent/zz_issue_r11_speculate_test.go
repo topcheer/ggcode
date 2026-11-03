@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// r11 speculative argument-layer tests (PASTE arXiv:2603.18897):
-// name-only bigram predictions previously never executed for tools without
-// an argument model — predArgs==nil → skip. These tests pin the expansion.
-
 func TestPredictArgs_EditFileToLspDiagnostics(t *testing.T) {
 	prevArgs := json.RawMessage(`{"file_path":"/src/app.go"}`)
 	result := predictArgs("lsp_diagnostics", "edit_file", prevArgs)
@@ -41,9 +37,7 @@ func TestPredictArgs_WriteFileToLspSymbols(t *testing.T) {
 }
 
 func TestPredictArgs_NoArgTemplateServesAnyPrev(t *testing.T) {
-	// git_status has no linkage pattern, but the constant template must
-	// serve it regardless of the previous tool — and without needing
-	// prevArgs at all.
+
 	for _, prev := range []string{"edit_file", "run_command", "read_file"} {
 		result := predictArgs("git_status", prev, json.RawMessage(`{"irrelevant":true}`))
 		if result == nil {
@@ -53,7 +47,7 @@ func TestPredictArgs_NoArgTemplateServesAnyPrev(t *testing.T) {
 			t.Errorf("expected {} template for git_status after %s, got %s", prev, result)
 		}
 	}
-	// Same for the other two template tools.
+
 	for _, tool := range []string{"git_branch_list", "git_log"} {
 		if got := predictArgs(tool, "edit_file", nil); got == nil {
 			t.Errorf("expected template args for %s with nil prevArgs", tool)
@@ -62,8 +56,7 @@ func TestPredictArgs_NoArgTemplateServesAnyPrev(t *testing.T) {
 }
 
 func TestPredictArgs_LspUnlinkedPrevStillNil(t *testing.T) {
-	// Negative control: lsp_diagnostics after a non-linked previous tool
-	// (and with no template) must stay nil — linkage still gates path tools.
+
 	result := predictArgs("lsp_diagnostics", "run_command", json.RawMessage(`{"file_path":"/x.go"}`))
 	if result != nil {
 		t.Fatalf("expected nil for unlinked run_command→lsp_diagnostics, got %s", result)

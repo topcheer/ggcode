@@ -231,9 +231,6 @@ func process(a, b, c, d []int) {
 	}
 }
 
-// TestCheckLoopVarCapture_Issue1100_DeltaKeyWithFuncName tests that delta
-// suppression uses funcName+varName+kind+loopType to distinguish multiple
-// capture points in the same function.
 func TestCheckLoopVarCapture_Issue1100_DeltaKeyWithFuncName(t *testing.T) {
 	old := `package main
 
@@ -246,9 +243,6 @@ func process(items []int) {
 }
 `
 
-	// Add a second capture point for the same variable in the same function
-	// With old delta key (varName+kind+loopType), this would be suppressed
-	// With new delta key including funcName, this should still be suppressed
 	new := `package main
 
 func process(items []int) {
@@ -265,8 +259,7 @@ func process(items []int) {
 }
 `
 	warnings := checkLoopVarCapture("example.go", old, new)
-	// Both capture points existed in different forms before editing
-	// The second one (defer) is new, so we expect 1 warning
+
 	if len(warnings) != 1 {
 		t.Fatalf("Issue #1100: expected 1 warning (new defer capture), got %d: %v", len(warnings), warnings)
 	}
@@ -275,8 +268,6 @@ func process(items []int) {
 	}
 }
 
-// TestCheckLoopVarCapture_Issue1100_DifferentFuncTriggersDelta tests that
-// the same capture pattern in a different function triggers a warning.
 func TestCheckLoopVarCapture_Issue1100_DifferentFuncTriggersDelta(t *testing.T) {
 	old := `package main
 

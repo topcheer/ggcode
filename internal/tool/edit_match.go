@@ -7,25 +7,15 @@ import (
 	"strings"
 )
 
-// matchResult describes a successful old_text resolution.
 type matchResult struct {
-	canonical string // the actual bytes in content that will be replaced
-	transform string // diagnostic tag for which fallback fired ("" = exact)
-	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
-	trim      string // for leading-indent-shift: prefix to trim from new_text lines
-	start     int    // byte offset of canonical in content when the match is anchored
+	canonical string
+	transform string
+	shift     string
+	trim      string
+	start     int
 	anchored  bool
 }
 
-// resolveOldText tries multiple strategies to locate oldText in content,
-// helping weaker LLMs whose `old_text` argument frequently differs from the
-// file in trivial ways (indentation style, line-number prefix copied from
-// read_file output, CRLF vs LF, trailing whitespace, missing leading
-// indentation).
-//
-// On success, canonical is the exact substring of content that will be
-// substituted (so a strings.Replace targets the right bytes). On failure
-// canonical is "".
 func resolveOldText(content, oldText string) matchResult {
 	if oldText == "" {
 		return matchResult{}
@@ -40,20 +30,14 @@ func resolveOldText(content, oldText string) matchResult {
 		}
 	}
 
-	// 0. read_file line-number anchors. This is the most reliable path for weak
-	// models because it lets them paste numbered lines directly from read_file,
-	// including single-line edits and duplicate text that would otherwise be
-	// ambiguous.
 	if anchored := tryReadFileLineAnchor(content, oldText); anchored.canonical != "" {
 		return anchored
 	}
 
-	// 1. Indentation normalization (tabs <-> spaces).
 	if normalized := normalizeIndentation(content, oldText); normalized != oldText && strings.Contains(content, normalized) {
 		return matchResult{canonical: normalized, transform: "indent-normalized"}
 	}
 
-	// 2. Line-number prefix from read_file output: "   42\t<line>".
 	if stripped := stripLineNumberPrefix(oldText); stripped != oldText {
 		if strings.Contains(content, stripped) {
 			return matchResult{canonical: stripped, transform: "line-numbers-stripped"}
@@ -63,32 +47,18 @@ func resolveOldText(content, oldText string) matchResult {
 		}
 	}
 
-	// 3. CRLF / LF mismatch.
 	if crlf := tryCRLFMatch(content, oldText); crlf != "" {
 		return matchResult{canonical: crlf, transform: "crlf-converted"}
 	}
 
-	// 4. Leading-indent shift: LLM provided the right text but with a
-	// consistent extra/missing base indentation. Match by structural equality
-	// after stripping both leading and trailing whitespace, then return the
-	// file's actual block plus the indent delta to apply to new_text.
 	if canonical, shift, trim := tryLeadingIndentShift(content, oldText); canonical != "" {
 		return matchResult{canonical: canonical, transform: "leading-indent-shift", shift: shift, trim: trim}
 	}
 
-	// 5. Trailing-whitespace tolerance: leading whitespace already matches
-	// (otherwise step 4 would have caught the mismatch first); only the
-	// per-line trailing differs.
 	if trimmed := tryTrailingWhitespaceMatch(content, oldText); trimmed != "" {
 		return matchResult{canonical: trimmed, transform: "trailing-whitespace-tolerant"}
 	}
 
-	// 6. Fuzzy per-line match: strip leading and trailing whitespace from
-	// every line in both the file content and old_text, then compare the
-	// trimmed text. This catches mixed indentation, inconsistent spacing,
-	// and other subtle whitespace differences that the targeted strategies
-	// above miss. The canonical form is the file's actual bytes (not the
-	// trimmed version), so the replacement targets the right location.
 	if canonical := tryFuzzyLineMatch(content, oldText); canonical != "" {
 		return matchResult{canonical: canonical, transform: "fuzzy-line-match"}
 	}
@@ -239,8 +209,6 @@ func tryReadFileLineAnchor(content, oldText string) matchResult {
 	return mr
 }
 
-// adjustNewText applies the same transform that was used to find old_text
-// to new_text, so the replacement remains consistent with the file.
 func adjustNewText(content, newText string, mr matchResult) string {
 	out := newText
 	if strings.Contains(mr.transform, "read-file-wrapper-stripped") {
@@ -249,11 +217,7 @@ func adjustNewText(content, newText string, mr matchResult) string {
 		}
 	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		// #3854: strip only readFileRange-shaped prefixes - at least ONE
-		// leading space before the digits (readFileRange right-aligns line
-		// numbers, so a real pasted prefix always has padding). The old
-		// unconditional strip also removed column-0 digit+TAB content
-		// (TSV rows like "123\tvalue"), silently corrupting data files.
+
 		out = stripPaddedLineNumberPrefixes(out, content)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
@@ -273,16 +237,9 @@ func adjustNewText(content, newText string, mr matchResult) string {
 	return out
 }
 
-// lineNumberPrefixRE matches prefixes produced by readFileRange:
-// up to 6 leading spaces, then 1+ digits, then a tab.
-// We allow more leading spaces in case the LLM reformatted slightly.
 var lineNumberPrefixRE = regexp.MustCompile(`^\s{0,12}\d+\t`)
 var readFileWrapperLineRE = regexp.MustCompile(`^(?:\[(?:indent:|encoding:|Extracted from |File truncated:|File has |multi_file_read summary)|=== (?:FILE|ERROR): |\[end (?:file|error)\]$|\[skipped:)`)
 
-// stripLineNumberPrefix removes "  42\t" style prefixes if a clear majority
-// of non-empty lines have them. This catches the common failure where an
-// LLM pastes back read_file output (which is line-numbered) verbatim as
-// old_text.
 func stripLineNumberPrefix(text string) string {
 	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	matched, nonEmpty := 0, 0
@@ -295,8 +252,7 @@ func stripLineNumberPrefix(text string) string {
 			matched++
 		}
 	}
-	// Require >=2 lines with prefix AND a strong majority, to avoid false
-	// positives on legitimate text that happens to start with digits+TAB.
+
 	if matched < 2 || matched < (nonEmpty/2+1) {
 		return text
 	}
@@ -311,11 +267,6 @@ func stripLineNumberPrefix(text string) string {
 	return strings.Join(out, "\n")
 }
 
-// stripAllLineNumberPrefixes strips prefixes from EVERY line, unguarded -
-// reserved for inputs that are KNOWN reader output (the transform pipeline
-// already proved provenance). Use guardedStripAllLineNumberPrefixes for
-// whole-file content where legitimate TSV/log lines ("digits\t" bodies)
-// must not be mangled (#4442).
 func stripAllLineNumberPrefixes(text string) string {
 	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	for i, l := range lines {
@@ -328,13 +279,6 @@ func stripAllLineNumberPrefixes(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// guardedStripAllLineNumberPrefixes decides whether a whole block is reader
-// output (#4442): majority vote alone cannot distinguish a TSV/log file whose
-// every row starts with digits+TAB, so the second discriminator is that
-// readFileRange numbers appear in STRICTLY INCREASING order (the reader emits
-// ascending line numbers; a range view may start anywhere - #1004's
-// 10,11,12/20,21,22 - but never goes backwards and never repeats). Content
-// whose "prefixes" fail either test passes through untouched.
 func guardedStripAllLineNumberPrefixes(text string) string {
 	lines := strings.Split(text, "\n")
 	matched, nonEmpty := 0, 0
@@ -380,10 +324,6 @@ func atoiSafe4442(s string) int {
 	return n
 }
 
-// countLineAligned occurrences of multi in s: lines must MATCH WHOLE LINES
-// consecutively (#4442 bug 2). A bare strings.Count counts mid-line hits of
-// cross-line probes ("b\nc" matches inside "ab\ncd"), inflating uniqueness
-// counts and rejecting genuinely unique edits.
 func countLineAligned(s, multi string) int {
 	if !strings.Contains(multi, "\n") {
 		return strings.Count(s, multi)
@@ -410,22 +350,10 @@ func countLineAligned(s, multi string) int {
 	return count
 }
 
-// paddedLineNumberPrefixRE is the readFileRange output shape with at least
-// one leading space - the padding the reader always emits when
-// right-aligning line numbers (#3854).
 var paddedLineNumberPrefixRE = regexp.MustCompile(`^\s{1,12}\d+\t`)
 
-// bareLineNumberPrefixRE matches the width-1 readFileRange shape with no
-// leading padding (small files, #3854).
 var bareLineNumberPrefixRE = regexp.MustCompile(`^(\d+)\t`)
 
-// stripPaddedLineNumberPrefixes strips reader-artifact number prefixes
-// from new_text (#3854). A padded prefix (>=1 leading space) is always a
-// reader artifact. A column-0 digit+TAB line is ambiguous: readFileRange
-// emits width-1 numbers with NO padding for small files (pinned by
-// TestIssue601_W1), while TSV rows also start at column 0 - so a column-0
-// prefix strips only when the number is a PLAUSIBLE line number of the
-// file being edited (<= its line count).
 func stripPaddedLineNumberPrefixes(text, content string) string {
 	maxLine := strings.Count(content, "\n") + 1
 	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
@@ -504,8 +432,6 @@ func trimReadFileWrapperLines(text string) (string, bool) {
 	return trimmed, true
 }
 
-// tryCRLFMatch handles the case where the file uses CRLF line endings but
-// the LLM provided LF-only old_text.
 func tryCRLFMatch(content, oldText string) string {
 	if !strings.Contains(content, "\r\n") {
 		return ""
@@ -523,10 +449,6 @@ func tryCRLFMatch(content, oldText string) string {
 	return ""
 }
 
-// fileUsesCRLF reports whether content is predominantly CRLF-terminated.
-// "Predominantly" guards against stray CRLF pairs inside an otherwise LF
-// file (e.g. a pasted Windows snippet): in that case the file's convention
-// is still LF and new_text must not be rewritten to CRLF.
 func fileUsesCRLF(content string) bool {
 	crlf := strings.Count(content, "\r\n")
 	if crlf == 0 {
@@ -536,15 +458,6 @@ func fileUsesCRLF(content string) bool {
 	return crlf > bareLF
 }
 
-// normalizeNewTextEOL converts lone-LF newlines in newText to CRLF when the
-// target file is predominantly CRLF, so a replacement can never introduce
-// mixed line endings (#1676 case 3). The check is content-based (the file's
-// own convention wins), which also covers the single-line old_text case the
-// previous oldText-based condition missed: a one-line match in a CRLF file
-// contains no \r\n at all, yet a multi-line LF new_text still lands in the
-// file verbatim and stays mixed forever (.md/.yaml/.cs have no formatting
-// hook to rescue them). newText already containing CRLF is left untouched,
-// and LF files are never rewritten.
 func normalizeNewTextEOL(content, newText string) string {
 	if !strings.Contains(newText, "\n") || strings.Contains(newText, "\r\n") {
 		return newText
@@ -555,7 +468,6 @@ func normalizeNewTextEOL(content, newText string) string {
 	return strings.ReplaceAll(newText, "\n", "\r\n")
 }
 
-// leadingWhitespace returns the prefix of s that consists of spaces and tabs.
 func leadingWhitespace(s string) string {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
@@ -564,19 +476,6 @@ func leadingWhitespace(s string) string {
 	return s[:i]
 }
 
-// tryLeadingIndentShift handles the very common LLM failure where the
-// model provides the right text but with a consistently different base
-// indentation than the file — e.g. file has "\t\t// foo" but the LLM
-// supplied either "// foo" or "\t\t\t// foo" as old_text.
-//
-// It looks for a contiguous block in content whose lines, after stripping
-// both leading and trailing whitespace, equal the lines of oldText. To
-// guard against unrelated false matches it requires:
-//   - The file and old_text leading whitespace must differ by the same
-//     prefix on every non-empty matched line, in either direction.
-//
-// Returns the canonical block from the file plus the shift to prepend to
-// or trim from each line of new_text.
 func tryLeadingIndentShift(content, oldText string) (canonical, shift, trim string) {
 	oldLines := strings.Split(oldText, "\n")
 	contentLines := strings.Split(content, "\n")
@@ -626,8 +525,6 @@ func tryLeadingIndentShift(content, oldText string) (canonical, shift, trim stri
 			continue
 		}
 
-		// Verify every non-empty line has the same indent delta while
-		// preserving the old_text's relative indentation.
 		consistent := true
 		for j := range sOld {
 			if sOld[j] == "" {
@@ -658,9 +555,6 @@ func tryLeadingIndentShift(content, oldText string) (canonical, shift, trim stri
 	return "", "", ""
 }
 
-// applyLeadingIndentShift prepends shift to every non-empty line of text.
-// Empty lines are left empty so trailing blank lines in new_text don't
-// gain spurious whitespace.
 func applyLeadingIndentShift(text, shift string) string {
 	if shift == "" {
 		return text
@@ -691,10 +585,6 @@ func trimLeadingIndentShift(text, trim string) string {
 	return strings.Join(lines, "\n")
 }
 
-// tryTrailingWhitespaceMatch finds oldText in content by ignoring
-// per-line trailing whitespace differences. Returns the canonical
-// substring from content (with its real trailing whitespace) so that a
-// subsequent strings.Replace targets the exact bytes.
 func tryTrailingWhitespaceMatch(content, oldText string) string {
 	contentLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldText, "\n")
@@ -726,10 +616,6 @@ func tryTrailingWhitespaceMatch(content, oldText string) string {
 	return ""
 }
 
-// findMatchLineNumbers returns the 1-based line numbers where oldText
-// occurs in content, capped at 10 entries. Used to make non-unique-match
-// errors actionable: "matches at lines 42, 87, 153 — add surrounding
-// context to disambiguate".
 func findMatchLineNumbers(content, oldText string) []int {
 	if oldText == "" {
 		return nil
@@ -755,7 +641,6 @@ func findMatchLineNumbers(content, oldText string) []int {
 	return out
 }
 
-// formatMatchLines turns [42, 87, 153] into "42, 87, 153".
 func formatMatchLines(lines []int) string {
 	parts := make([]string, len(lines))
 	for i, n := range lines {
@@ -764,17 +649,6 @@ func formatMatchLines(lines []int) string {
 	return strings.Join(parts, ", ")
 }
 
-// lenientRecount re-counts occurrences of rawOld in content using the same
-// whitespace-insensitive semantics as the fallback resolvers (every line of
-// old_text compared to every line of the file after TrimSpace). #604 T2: the
-// uniqueness gate runs on the canonical (transformed) form, so loose matching
-// can fold several semantically-duplicate blocks into a single byte-exact
-// canonical match — strings.Count then reports 1 and the edit silently
-// replaces the first block. Call this when a fallback transform fired and the
-// byte-exact count is <= 1; a loose count > 1 means the match is not unique
-// under the semantics actually used to locate it, and the caller must return
-// a disambiguation error. Returns the loose match count plus the 1-based
-// start line numbers (capped at 10) for the error message.
 func lenientRecount(content, rawOld string, mr matchResult) (int, []int) {
 	if mr.anchored || mr.transform == "" {
 		return 0, nil
@@ -782,11 +656,6 @@ func lenientRecount(content, rawOld string, mr matchResult) (int, []int) {
 	return lenientRecountRaw(content, rawOld, mr.transform)
 }
 
-// LenientRecount is the exported form for out-of-package mirrors of the
-// edit pipeline (agent_tool.go simulateEditFile, #601 dual-side lock):
-// re-counts occurrences under the whitespace-tolerant semantics the
-// fallback resolvers actually used. Single implementation on the real
-// side; transform "" means no fallback fired (count is 0, gate no-op).
 func LenientRecount(content, rawOld, transform string) (int, []int) {
 	if transform == "" {
 		return 0, nil
@@ -807,36 +676,17 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 	if probe == "" {
 		return 0, nil
 	}
-	// #1004: byte-exact transforms must recount under their own matching
-	// semantics, not full TrimSpace. crlf-converted is a pure LF->CRLF byte
-	// substitution and line-numbers-stripped only strips the "digits\t"
-	// prefix — in both, leading indentation is significant (same reasoning
-	// as #821's rstrip-only fix), so a TrimSpace recount folds away indent
-	// differences and rejects a genuinely unique edit as ambiguous with a
-	// misleading "blocks differ only in whitespace" error.
-	// crlf-converted: content keeps the file's original CRLF bytes, so the
-	// LF-only probe must be converted before counting (count 0 would
-	// fail-open and silently edit the first of several collisions).
+
 	if strings.Contains(transform, "crlf-converted") {
 		return strings.Count(content, strings.ReplaceAll(probe, "\n", "\r\n")), nil
 	}
-	// line-numbers-stripped: count against a prefix-stripped copy of the
-	// file - but GUARDED (#4442 bug 1): real TSV/log lines whose bodies start
-	// with digits+TAB were stripped by the unguarded pass, skewing the
-	// recount into "matched N times" rejections of a unique edit. Counting
-	// is line-aligned (#4442 bug 2): cross-line probes must match whole
-	// consecutive lines, not mid-line substrings.
+
 	if strings.Contains(transform, "line-numbers-stripped") {
 		strippedFile := guardedStripAllLineNumberPrefixes(content)
 		return countLineAligned(strippedFile, probe), nil
 	}
 	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
-	// #821: the counting pass previously trimmed BOTH sides on every line,
-	// but trailing-whitespace-tolerant semantics only ignore TRAILING ws —
-	// leading indentation is significant. A second block differing only in
-	// indent was falsely counted, rejecting a correct unique edit as
-	// ambiguous. Mirror the transform's actual semantics (rstrip-only)
-	// unless the transform itself is the fully-trim fuzzy form.
+
 	rstripOnly := strings.Contains(transform, "trailing-whitespace-tolerant")
 	for _, l := range strings.Split(probe, "\n") {
 		if rstripOnly {
@@ -873,19 +723,12 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 	return count, lines
 }
 
-// tryFuzzyLineMatch compares old_text against the file content by stripping
-// leading/trailing whitespace from every line in both. This catches the most
-// common LLM edit failure: the text content is correct but whitespace (tab vs
-// space, inconsistent indentation depth, trailing spaces) prevents an exact
-// match. Returns the file's actual bytes for the matched block so the
-// replacement targets the right location.
 func tryFuzzyLineMatch(content, oldText string) string {
 	oldLines := strings.Split(oldText, "\n")
 	if len(oldLines) == 0 {
 		return ""
 	}
 
-	// Trim each old_text line for comparison.
 	trimmedOld := make([]string, len(oldLines))
 	for i, l := range oldLines {
 		trimmedOld[i] = strings.TrimSpace(l)
@@ -895,7 +738,6 @@ func tryFuzzyLineMatch(content, oldText string) string {
 	nFile := len(fileLines)
 	nOld := len(trimmedOld)
 
-	// Slide a window over the file lines.
 	for start := 0; start <= nFile-nOld; start++ {
 		matched := true
 		for j := 0; j < nOld; j++ {
@@ -905,7 +747,7 @@ func tryFuzzyLineMatch(content, oldText string) string {
 			}
 		}
 		if matched {
-			// Return the file's actual bytes for this block.
+
 			return strings.Join(fileLines[start:start+nOld], "\n")
 		}
 	}

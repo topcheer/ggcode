@@ -32,9 +32,9 @@ func TestInfoScent_HighNovelty(t *testing.T) {
 
 func TestInfoScent_DecayDetected(t *testing.T) {
 	s := newInfoScentState()
-	// First exploration: 3 novel paths (100% novelty)
+
 	s.recordExploration("grep", `{}`, "a.go:1\nb.go:2\nc.go:3", 1)
-	// Second through fourth: all already-seen paths (0% novelty each)
+
 	s.recordExploration("grep", `{}`, "a.go:1\nb.go:2", 2)
 	s.recordExploration("grep", `{}`, "a.go:1\nb.go:2", 3)
 	s.recordExploration("grep", `{}`, "a.go:1\nb.go:2", 4)
@@ -53,7 +53,7 @@ func TestInfoScent_DecayDetected(t *testing.T) {
 
 func TestInfoScent_MaxInjections(t *testing.T) {
 	s := newInfoScentState()
-	// Trigger decay - all same paths
+
 	s.recordExploration("grep", `{}`, "a.go\nb.go\nc.go", 1)
 	s.recordExploration("grep", `{}`, "a.go\nb.go", 2)
 	s.recordExploration("grep", `{}`, "a.go\nb.go", 3)
@@ -64,15 +64,12 @@ func TestInfoScent_MaxInjections(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Advance past cooldown (4 iterations) and try again -- suppressed
-	// (1 per run, batch 2 guidance-noise cleanup).
 	s.recordExploration("grep", `{}`, "a.go\nb.go", 9)
 	msg2 := s.maybeWarn(9)
 	if msg2 != "" {
 		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
-	// Third should be suppressed
 	s.recordExploration("grep", `{}`, "a.go\nb.go", 14)
 	msg3 := s.maybeWarn(14)
 	if msg3 != "" {
@@ -111,7 +108,6 @@ func TestInfoScent_CooldownBetweenWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Next iteration - should be in cooldown (need 4 iteration gap)
 	msg2 := s.maybeWarn(5)
 	if msg2 != "" {
 		t.Fatalf("expected no warning during cooldown, got: %s", msg2)

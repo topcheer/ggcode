@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// #1512 case C pin: concurrent persistLocked from two states (simulating
-// two Agent instances on one workspace) must not lose entries.
 func Test1512TrajConcurrentPersistNoLostUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trajectory-learnings.jsonl")
@@ -40,7 +38,7 @@ func Test1512TrajConcurrentPersistNoLostUpdate(t *testing.T) {
 	if lines != 4 {
 		t.Fatalf("lost update: 4 concurrent persists must yield 4 entries, got %d", lines)
 	}
-	// No residual tmp files from interleaved writers.
+
 	ents, _ := os.ReadDir(dir)
 	for _, e := range ents {
 		if filepath.Ext(e.Name()) == ".tmp" {

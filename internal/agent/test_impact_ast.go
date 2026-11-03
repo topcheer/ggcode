@@ -1,21 +1,5 @@
 package agent
 
-// test_impact_ast.go implements AST-based function-level test coverage
-// analysis. This goes beyond file-level coverage (test_impact.go) to identify
-// specific exported functions and methods that lack corresponding test
-// functions — directly mirroring GitHub Copilot's "Generate Tests" feature
-// which analyzes function signatures to suggest test generation.
-//
-// Competitor mapping:
-//   - GitHub Copilot: AST-based function signature analysis for test generation
-//   - Cursor: identifies specific functions needing test updates after edits
-//   - JetBrains AI: per-function coverage gap reporting
-//
-// Implementation uses only the Go standard library (go/parser, go/ast) — zero
-// external dependencies, no network calls, no I/O beyond reading source files.
-// Parsing a single Go file takes microseconds, making this suitable for the
-// non-blocking post-edit hint path.
-
 import (
 	"go/ast"
 	"os"
@@ -25,16 +9,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// exportedFuncInfo describes an exported function or method found via AST
-// parsing of a Go source file.
 type exportedFuncInfo struct {
-	DisplayName string // "Foo" for functions, "Bar_Method" for methods
+	DisplayName string
 	IsMethod    bool
 }
 
-// parseExportedFuncs reads a Go source file and returns its exported functions
-// and methods. Returns nil on parse error or when no exported functions exist.
-// Skips special functions (init, main, Test*).
 func parseExportedFuncs(filePath string) []exportedFuncInfo {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -52,13 +31,12 @@ func parseExportedFuncs(filePath string) []exportedFuncInfo {
 			continue
 		}
 		name := fn.Name.Name
-		// Skip unexported, init, main, and test-prefixed functions.
+
 		if !fn.Name.IsExported() {
 			continue
 		}
 		if name == "Test" || strings.HasPrefix(name, "Test") {
-			// These are test helper functions that happen to be exported;
-			// they don't need their own tests.
+
 			continue
 		}
 
@@ -83,8 +61,6 @@ func parseExportedFuncs(filePath string) []exportedFuncInfo {
 	return funcs
 }
 
-// receiverTypeName extracts the type name from a receiver expression,
-// handling both value receivers (Bar) and pointer receivers (*Bar).
 func receiverTypeName(expr ast.Expr) string {
 	if star, ok := expr.(*ast.StarExpr); ok {
 		expr = star.X
@@ -95,20 +71,10 @@ func receiverTypeName(expr ast.Expr) string {
 	return ""
 }
 
-// parseTestFuncNames reads a Go test file and returns the set of function names
-// that start with "Test" (the Go testing convention). Returns nil on parse
-// error or when no test functions exist.
 func parseTestFuncNames(filePath string) (map[string]bool, bool) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		// A MISSING file is not a parse failure (#3662 defect 1, resurrected
-		// by #3649's ok-flag rework and caught by the #3620 word-boundary
-		// invariant probe on main): the sibling-absent case (foo.go with no
-		// foo_test.go) returned ok=false, set anyParseFailed, and the
-		// defect-2 suppression then vetoed every exact-name miss - the
-		// entire no-sibling branch reported nothing, the exact regression
-		// TestIssue3620_WordBoundaryNoPrefixHit pins. Absent = empty set,
-		// parse ok. Real parse failures keep the suppression.
+
 		if os.IsNotExist(err) {
 			return nil, true
 		}
@@ -131,17 +97,6 @@ func parseTestFuncNames(filePath string) (map[string]bool, bool) {
 	return names, true
 }
 
-// untestedExportedFuncs returns the display names of exported functions/methods
-// in a Go source file that have no corresponding test function in its _test.go
-// file. This is the function-level granularity that competitors provide: instead
-// of saying "foo.go has no tests", it says "foo.go: Process, Validate, Handler
-// are untested".
-//
-// Test matching convention:
-//   - Function Foo → TestFoo
-//   - Method (*Bar).Method → TestBar_Method or TestBarMethod
-//
-// Returns nil if the file has no exported functions or can't be parsed.
 func untestedExportedFuncs(workingDir, goFile string) []string {
 	abs := goFile
 	if !filepath.IsAbs(abs) {
@@ -152,11 +107,8 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 		return nil
 	}
 
-	// #3649: tracks whether any candidate test file failed to parse -
-	// exact-name misses are untrustworthy then, so reporting suppresses.
 	anyParseFailed := false
 
-	// Find the corresponding test file.
 	base := filepath.Base(goFile)
 	srcName := strings.TrimSuffix(base, ".go")
 	testFile := filepath.Join(filepath.Dir(abs), srcName+"_test.go")
@@ -166,13 +118,7 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 	}
 	noSibling := len(testFuncs) == 0
 	if noSibling {
-		// #3620: no same-name sibling, but the package may still test this
-		// file's exports from OTHER *_test.go files (Go convention; this
-		// repo's zz_issueNNNN_test.go pattern). Only when the whole
-		// directory has no test file may every export be called untested.
-		// Convention matching merges Test names across the directory;
-		// reference matching catches direct calls (zz tests call exported
-		// functions directly - the Test name never contains the symbol).
+
 		testFiles, _ := filepath.Glob(filepath.Join(filepath.Dir(abs), "*_test.go"))
 		if len(testFiles) == 0 {
 			result := make([]string, 0, len(funcs))
@@ -181,9 +127,7 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 			}
 			return result
 		}
-		// #3649: a sibling _test.go that fails to parse (mid-edit WIP is
-		// routine on this shared tree) must not escalate to "every exported
-		// func untested" - track parse failures separately from empty maps.
+
 		testFuncs = map[string]bool{}
 		for _, tf := range testFiles {
 			names, ok := parseTestFuncNames(tf)
@@ -200,12 +144,12 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 
 	var untested []string
 	for _, f := range funcs {
-		// Primary convention: TestFuncName or TestType_Method
+
 		primary := "Test" + f.DisplayName
 		if testFuncs[primary] {
 			continue
 		}
-		// Fallback convention: TestTypeMethod (no underscore)
+
 		if f.IsMethod {
 			parts := strings.SplitN(f.DisplayName, "_", 2)
 			if len(parts) == 2 {
@@ -215,20 +159,11 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 				}
 			}
 		}
-		// #3649 (defect 1): the reference scan was #3620's no-sibling-only
-		// fallback - sibling files using table-driven naming
-		// (TestParseConfig_tableDriven) or coverage living in another test
-		// file (zz_issue123_test.go) never hit the exact-name map and were
-		// misreported as untested. Fall back to the directory reference
-		// scan in the sibling case too.
+
 		if dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
 			continue
 		}
-		// #3662 defect 2: a METHOD's DisplayName is recvType_Method
-		// ("Foo_Bar"), but tests invoke the method ("x.Bar()") - the
-		// underscore form never appears in test code, so the reference
-		// scan above never matches a method's call sites. Scan the bare
-		// method name too (unconditional, mirroring the #3649 scan above).
+
 		if f.IsMethod {
 			if idx := strings.LastIndex(f.DisplayName, "_"); idx >= 0 {
 				if bare := f.DisplayName[idx+1:]; len(bare) >= 3 {
@@ -238,9 +173,7 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 				}
 			}
 		}
-		// #3649 (defect 2): with a parse-failed sibling we can't trust the
-		// exact-name miss - suppress rather than misreport (advisory hint,
-		// false negatives are cheaper than false positives here).
+
 		if anyParseFailed {
 			continue
 		}
@@ -249,8 +182,6 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 	return untested
 }
 
-// dirTestFilesReferenceSymbol reports whether any *_test.go in dir
-// references symbol as a whole word (#3620 no-sibling reference match).
 func dirTestFilesReferenceSymbol(dir, symbol string) bool {
 	if symbol == "" {
 		return false
@@ -268,9 +199,6 @@ func dirTestFilesReferenceSymbol(dir, symbol string) bool {
 	return false
 }
 
-// funcLevelCoverageGaps analyzes changed Go files and returns per-file lists
-// of untested exported functions. The result is capped (maxFiles files,
-// maxFuncsPerFile functions per file) to avoid bloating the hint.
 type funcCoverageGap struct {
 	File  string
 	Funcs []string
@@ -302,11 +230,6 @@ func funcLevelCoverageGaps(workingDir string, maxFiles, maxFuncsPerFile int) []f
 	return gaps
 }
 
-// identBoundaryReferenced reports whether symbol occurs in src as a
-// complete Go identifier (#3620): "Widget" must not match inside
-// "WidgetExtended". isIdentByte covers the FULL identifier byte set -
-// the shared isWordByte (success_declare.go) is lowercase-specialized and
-// does not treat uppercase as a word byte.
 func identBoundaryReferenced(src, symbol string) bool {
 	for i := 0; i+len(symbol) <= len(src); i++ {
 		if src[i:i+len(symbol)] != symbol {
@@ -321,7 +244,6 @@ func identBoundaryReferenced(src, symbol string) bool {
 	return false
 }
 
-// isIdentByte covers the full Go identifier byte set.
 func isIdentByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

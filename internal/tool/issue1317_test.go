@@ -1,19 +1,5 @@
 package tool
 
-// Regression tests for GitHub issue #1317.
-//
-// A: rebuildDirty mutated the SHARED index (docs append/swap-truncate, df
-// map ++/--) while Search/FilePathFuzzy readers held only the old pointer
-// with no lock - concurrent map read/write is a fatal, unrecoverable
-// process crash. The fix clones the index shell before mutating.
-//
-// B: removeDocFromIndex swaps the tail doc into the vacated slot but the
-// local docIdx map kept the tail doc's old index. A same-batch
-// "delete A + modify B" (B being the tail) then called
-// replaceDocInIndex(idx, staleIdx, ...) - out-of-bounds panic in an
-// unrecovered background goroutine, or wrong-slot replacement (silent
-// index corruption).
-
 import (
 	"os"
 	"path/filepath"
@@ -41,10 +27,6 @@ func issue1317Manager(t *testing.T, files map[string]string) *CodeIndexManager {
 	return m
 }
 
-// B: delete the head doc while modifying the tail doc in one batch. With
-// docs=[a,b,c] removing a swaps c into slot 0; the stale docIdx[c]=2 made
-// the subsequent replaceDocInIndex(idx, 2, newC) panic (index out of
-// range after truncation to len 2) or silently corrupt.
 func TestIssue1317_RemoveThenUpdateSameBatch(t *testing.T) {
 	m := issue1317Manager(t, map[string]string{
 		"a.go": "package a\n\nfunc alpha() {}\n",
@@ -53,8 +35,6 @@ func TestIssue1317_RemoveThenUpdateSameBatch(t *testing.T) {
 	})
 	defer m.Stop()
 
-	// Prime the index via incremental path itself: first rebuild indexes
-	// the dirty set, giving us the exact in-memory state under test.
 	m.mu.Lock()
 	m.dirtyFiles = map[string]int64{
 		filepath.Join(m.workingDir, "a.go"): 1,
@@ -67,8 +47,6 @@ func TestIssue1317_RemoveThenUpdateSameBatch(t *testing.T) {
 		t.Fatalf("prime: expected 3 docs, got %d", got)
 	}
 
-	// Delete a.go, modify c.go - batch order in the dirty map iteration
-	// is random, so run the racy combination repeatedly.
 	for i := 0; i < 20; i++ {
 		if err := os.Remove(filepath.Join(m.workingDir, "a.go")); err != nil {
 			t.Fatalf("remove a.go: %v", err)
@@ -106,7 +84,6 @@ func TestIssue1317_RemoveThenUpdateSameBatch(t *testing.T) {
 			t.Fatalf("iter %d: deleted doc term still indexed", i)
 		}
 
-		// Restore for next iteration.
 		if err := os.WriteFile(filepath.Join(m.workingDir, "a.go"), []byte("package a\n\nfunc alpha() {}\n"), 0o644); err != nil {
 			t.Fatalf("restore a.go: %v", err)
 		}
@@ -117,9 +94,6 @@ func TestIssue1317_RemoveThenUpdateSameBatch(t *testing.T) {
 	}
 }
 
-// A: hammer Search while rebuildDirty mutates. Under -race the old
-// in-place mutation reports immediately; the clone keeps the published
-// pointer immutable.
 func TestIssue1317_ConcurrentSearchDuringRebuild(t *testing.T) {
 	m := issue1317Manager(t, map[string]string{
 		"a.go": "package a\n\nfunc alphaSearchTerm() {}\n",
@@ -138,9 +112,6 @@ func TestIssue1317_ConcurrentSearchDuringRebuild(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := time.Now().Add(2 * time.Second)
 
-	// Writer: flip file content and rebuild. ONE writer, matching the
-	// real trigger path (single debounce background goroutine); the race
-	// under test is rebuild-vs-Search, not rebuild-vs-rebuild.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -159,7 +130,6 @@ func TestIssue1317_ConcurrentSearchDuringRebuild(t *testing.T) {
 		}
 	}()
 
-	// Readers: search concurrently.
 	for r := 0; r < 4; r++ {
 		wg.Add(1)
 		go func() {

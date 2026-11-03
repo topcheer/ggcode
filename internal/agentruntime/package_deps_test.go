@@ -38,7 +38,6 @@ func TestBuildPackageDepsSection_HubPackage(t *testing.T) {
 	dir := t.TempDir()
 	writeMod(t, dir, "example.com/myproj")
 
-	// pkg/util - a hub package imported by 3 others.
 	writePkgFile(t, filepath.Join(dir, "pkg/util/util.go"),
 		"package util\n\nfunc Helper() {}\n")
 	writePkgFile(t, filepath.Join(dir, "pkg/a/a.go"),
@@ -73,7 +72,7 @@ func TestBuildPackageDepsSection_LowFanInFiltered(t *testing.T) {
 		"package a\n\nimport \"example.com/myproj/pkg/util\"\n\nfunc A() { util.Helper() }\n")
 
 	got := buildPackageDepsSection(dir)
-	// Only 1 importer, below depGraphMinFanIn=2.
+
 	if got != "" {
 		t.Fatalf("expected empty for low fan-in (1), got: %q", got)
 	}
@@ -143,8 +142,6 @@ var _ = util.Helper
 	}
 }
 
-// --- local helpers (prefixed to avoid collision with project_commands_test.go) ---
-
 func writePkgFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -160,9 +157,6 @@ func writeMod(t *testing.T, dir, module string) {
 	writePkgFile(t, filepath.Join(dir, "go.mod"), "module "+module+"\n\ngo 1.26\n")
 }
 
-// Regression for #1489: a trailing // comment on the module line (legal per
-// x/mod's modfile lexer) used to leak into the module path, making every
-// import key mismatch and silently dropping the package-deps section.
 func TestReadModulePath_TrailingComment(t *testing.T) {
 	dir := t.TempDir()
 	writeMod(t, dir, "github.com/foo/bar // internal fork")
@@ -171,9 +165,6 @@ func TestReadModulePath_TrailingComment(t *testing.T) {
 	}
 }
 
-// TestReadModulePathTabSeparated pins #1681 case 2: x/mod modfile allows
-// any whitespace between tokens - `module\tfoo` was missed and the whole
-// package-deps section silently dropped.
 func TestReadModulePathTabSeparated(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module\tgithub.com/topcheer/ggcode\n\ngo 1.27\n"), 0644); err != nil {

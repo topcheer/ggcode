@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// TestCodeExecution_BasicConsoleLog verifies that simple JS code runs and
-// returns console.log output.
 func TestCodeExecution_BasicConsoleLog(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -32,7 +30,6 @@ func TestCodeExecution_BasicConsoleLog(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_EmptyCode verifies empty code returns an error.
 func TestCodeExecution_EmptyCode(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -43,7 +40,6 @@ func TestCodeExecution_EmptyCode(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_NoOutput verifies graceful handling when no console.log.
 func TestCodeExecution_NoOutput(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -57,7 +53,6 @@ func TestCodeExecution_NoOutput(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_ToolCall verifies that a tool is callable from JS.
 func TestCodeExecution_ToolCall(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -67,7 +62,6 @@ func TestCodeExecution_ToolCall(t *testing.T) {
 	reg.Register(ReadFile{})
 	ce := CodeExecution{Registry: reg}
 
-	// Use string concatenation (ES5 compatible) instead of template literals.
 	code := fmt.Sprintf(
 		"var r = await tools.read_file({path: %q});\n"+
 			"var lines = r.split(\"\\n\");\n"+
@@ -85,7 +79,7 @@ func TestCodeExecution_ToolCall(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("tool execution error: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "Lines: 3") { // 2 content lines + trailing empty
+	if !strings.Contains(result.Content, "Lines: 3") {
 		t.Errorf("expected 'Lines: 3', got: %s", result.Content)
 	}
 	if !strings.Contains(result.Content, "First:") {
@@ -96,7 +90,6 @@ func TestCodeExecution_ToolCall(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_MultiToolBatch verifies multiple tool calls in one script.
 func TestCodeExecution_MultiToolBatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("content A"), 0644)
@@ -136,23 +129,19 @@ func TestCodeExecution_MultiToolBatch(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_SecurityNoFS verifies the sandbox cannot access Node.js APIs.
 func TestCodeExecution_SecurityNoFS(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
 
-	// require is not defined in goja — calling it should throw a ReferenceError.
-	// goja does NOT treat this as a syntax error; it throws at runtime.
 	result, err := ce.Execute(context.Background(), json.RawMessage(
 		fmt.Sprintf(`{"code": %q}`, "require('fs');"),
 	))
-	// Should produce an error (ReferenceError: require is not defined).
+
 	if err == nil && !result.IsError {
 		t.Error("expected error for require('fs'), but got none")
 	}
 }
 
-// TestCodeExecution_JSControlFlow verifies loops and conditionals work.
 func TestCodeExecution_JSControlFlow(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -185,7 +174,6 @@ func TestCodeExecution_JSControlFlow(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_Timeout verifies that long-running code is interrupted.
 func TestCodeExecution_Timeout(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -211,7 +199,6 @@ func TestCodeExecution_Timeout(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_ErrorHandling verifies that JS errors are captured.
 func TestCodeExecution_ErrorHandling(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -224,7 +211,6 @@ func TestCodeExecution_ErrorHandling(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_StdoutTruncation verifies stdout is capped.
 func TestCodeExecution_StdoutTruncation(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -241,7 +227,6 @@ func TestCodeExecution_StdoutTruncation(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_WriteToolsExcluded verifies write tools are not available.
 func TestCodeExecution_WriteToolsExcluded(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(WriteFile{})
@@ -268,10 +253,6 @@ func TestCodeExecution_WriteToolsExcluded(t *testing.T) {
 	}
 }
 
-// #1316: a runaway console.log loop must be interrupted as soon as the
-// captured output hits the 1MB hard cap - not accumulate host memory for
-// the full 30s timeout window (the VM is process-embedded, so an
-// unbounded Builder was an unbounded host allocation).
 func TestCodeExecution_RunawayConsoleLogInterrupted(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}
@@ -284,22 +265,19 @@ func TestCodeExecution_RunawayConsoleLogInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected tool error: %v", err)
 	}
-	// The loop MUST fail: either the interrupt surfaced as an execution
-	// error or the result is an error result with the limit message.
+
 	if !result.IsError {
 		t.Fatalf("expected error result from runaway loop, got: %.200s", result.Content)
 	}
 	if !strings.Contains(result.Content, "bytes limit") {
 		t.Errorf("expected stdout-limit message, got: %.200s", result.Content)
 	}
-	// Interrupt must fire at the 1MB cap, far below the 30s timeout.
+
 	if elapsed > 10*time.Second {
 		t.Fatalf("interrupt took %v - cap not enforced during execution", elapsed)
 	}
 }
 
-// #1645 case 2: error paths must carry partial output. A runtime error
-// after console.log used to discard everything captured before it.
 func TestCodeExecution_RuntimeErrorKeepsPartialOutput(t *testing.T) {
 	reg := NewRegistry()
 	ce := CodeExecution{Registry: reg}

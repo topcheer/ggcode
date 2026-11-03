@@ -21,20 +21,11 @@ import (
 )
 
 const (
-	defaultCommandTimeout = 30 * time.Minute
-	// #513: hard ceiling for user-provided timeout seconds. The naive
-	// time.Duration(sec)*time.Second multiplication overflows int64 above
-	// ~9.22e9 seconds (wraps negative → WithTimeout expires instantly) —
-	// clamp before multiplying anywhere a seconds value enters Duration math.
-	maxCommandTimeoutSeconds = 86400 // one day
+	defaultCommandTimeout    = 30 * time.Minute
+	maxCommandTimeoutSeconds = 86400
 	maxCommandLogLines       = 400
-	// #1118: the ring buffer bounded only line COUNT, so a single pathological
-	// line (e.g. a multi-MB minified JSON blob) was stored unbounded and
-	// streamed back in full on every read_command_output/wait_command poll.
-	// Cap each buffered line's bytes at ingestion, and cap total formatted
-	// output at the snapshot/format layer.
-	maxCommandLineBytes     = 8 * 1024
-	maxCommandSnapshotBytes = 64 * 1024
+	maxCommandLineBytes      = 8 * 1024
+	maxCommandSnapshotBytes  = 64 * 1024
 )
 
 type CommandJobStatus string
@@ -85,32 +76,15 @@ type CommandJobSnapshot struct {
 type CommandJobManager struct {
 	workingDir string
 
-	mu     sync.Mutex
-	nextID int
-	jobs   map[string]*CommandJob
-	// finishedOrder records job IDs in completion order so finished jobs
-	// can be evicted oldest-first (#1318: completed jobs used to live in
-	// the map forever - unbounded memory plus ever-growing list_commands
-	// output over long sessions).
+	mu            sync.Mutex
+	nextID        int
+	jobs          map[string]*CommandJob
 	finishedOrder []string
 
-	// outputTee is an optional writer that receives a copy of all command
-	// stdout/stderr in real time. Set per-call by StartCommandTool.
 	outputTee io.Writer
 
-	// sandbox, when non-nil and Enabled, wraps managed job spawns in the
-	// OS-level containment sandbox (same policy as run_command).
 	sandbox *SandboxPolicy
 
-	// r71 lifecycle governance: concurrently RUNNING jobs are capped and new
-	// spawns are refused while the ggcode process holds more than
-	// maxJobMemBytes of OS-obtained memory. Both are sampled at spawn time
-	// (no background goroutines); thresholds resolve from env with safe
-	// defaults. Unbounded parallel background jobs were the documented OOM
-	// vector on memory-constrained machines (build/test jobs die with exit
-	// 137), matching the harness-engineering guidance that the cheap caps
-	// (a bounded running set + a resource floor) are the floor for
-	// production loops.
 	maxRunningJobs int
 	maxJobMemBytes uint64
 }
@@ -125,22 +99,10 @@ func NewCommandJobManager(workingDir string) *CommandJobManager {
 }
 
 const (
-	// maxRunningJobsDefault caps concurrently RUNNING managed jobs. It is a
-	// safety floor, not a throughput limit: finished jobs never count, and
-	// the cap is per-manager (the agent's long-lived manager). 8 covers the
-	// practical parallel-build/test workload while preventing the runaway
-	// pattern where every retry piles another build onto an
-	// already-swapping machine.
 	maxRunningJobsDefault = 8
-	// jobMemLimitDefault is the process memory ceiling (bytes obtained from
-	// the OS, runtime.MemStats.Sys) beyond which new background jobs are
-	// refused. Overridden by GGCODE_JOB_MEM_LIMIT, or derived from
-	// GOMEMLIMIT (x1.5) when that env is set.
-	jobMemLimitDefault = uint64(3) << 30
+	jobMemLimitDefault    = uint64(3) << 30
 )
 
-// jobEnvPositiveInt resolves an env override to a positive int, falling back
-// to def on missing/invalid values (0 disables the cap).
 func jobEnvPositiveInt(name string, def int) int {
 	v := strings.TrimSpace(os.Getenv(name))
 	if v == "" {
@@ -152,10 +114,6 @@ func jobEnvPositiveInt(name string, def int) int {
 	return def
 }
 
-// resolveJobMemLimit picks the memory-pressure ceiling for new background
-// jobs. Precedence: GGCODE_JOB_MEM_LIMIT (bytes) > GOMEMLIMIT*1.5 (the Go
-// runtime reports the env-configured soft limit via SetMemoryLimit(-1)) >
-// jobMemLimitDefault. Invalid values fall through to the next tier.
 func resolveJobMemLimit() uint64 {
 	if n, err := strconv.ParseUint(strings.TrimSpace(os.Getenv("GGCODE_JOB_MEM_LIMIT")), 10, 64); err == nil && n > 0 {
 		return n
@@ -166,18 +124,12 @@ func resolveJobMemLimit() uint64 {
 	return jobMemLimitDefault
 }
 
-// jobMemSampleFn samples the process's OS-obtained memory in bytes. A
-// package-level seam so tests can inject a value without allocating.
 var jobMemSampleFn = func() uint64 {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	return ms.Sys
 }
 
-// admissionBlockReason returns a non-empty actionable message when the
-// manager must refuse a new background job right now: either the concurrent
-// running-job cap is reached, or the process is above its memory ceiling.
-// Read-only; safe to call before the manager takes ownership of the spawn.
 func (m *CommandJobManager) admissionBlockReason() string {
 	m.mu.Lock()
 	running := 0
@@ -206,13 +158,6 @@ func (m *CommandJobManager) admissionBlockReason() string {
 	return strings.Join(reasons, "; ")
 }
 
-// ShutdownAll cancels every running job and waits up to wait for each to
-// terminate, returning the number of running jobs reaped. Called at session
-// and process shutdown (TUI quit, /restart exec handoff, pipe/ACP exit) so
-// managed children — especially detach=true services — do not outlive the
-// harness as orphan processes. Cancelled jobs stay in the map as terminal
-// entries so a late read_command_output still shows why they stopped; normal
-// finished-job eviction reclaims them.
 func (m *CommandJobManager) ShutdownAll(wait time.Duration) int {
 	m.mu.Lock()
 	var running []*CommandJob
@@ -221,9 +166,6 @@ func (m *CommandJobManager) ShutdownAll(wait time.Duration) int {
 			running = append(running, j)
 		}
 	}
-	// Collect cancels, then cancel OUTSIDE m.mu: cancel wakes the job's
-	// waiter goroutine, whose finish path re-enters m.mu (recordFinish) —
-	// cancelling under the lock would serially block on it.
 	var cancels []context.CancelFunc
 	for _, j := range running {
 		j.mu.Lock()
@@ -256,29 +198,18 @@ func (m *CommandJobManager) ShutdownAll(wait time.Duration) int {
 	return reaped
 }
 
-// SetOutputTee sets an optional writer that receives a copy of stdout/stderr.
-// Pass nil to disable. This is used by the TUI to mirror command output to a
-// tmux command pane. The tee applies to the next Start/StartExisting call.
 func (m *CommandJobManager) SetOutputTee(w io.Writer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.outputTee = w
 }
 
-// SetSandboxPolicy wires the OS-level containment policy applied to every
-// managed job spawn. Pass nil to disable.
 func (m *CommandJobManager) SetSandboxPolicy(p *SandboxPolicy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sandbox = p
 }
 
-// NearestLiveDir returns dir unchanged when it still exists. When it has
-// been removed (deleted worktree, unmounted volume), it walks up to the
-// nearest still-existing ancestor directory. "" is returned only when even
-// the filesystem root is unreachable - callers treat "" as "inherit the
-// process working dir". #4791 (S-21): dead-cwd command sessions must
-// recover, not fail every spawn forever.
 func NearestLiveDir(dir string) string {
 	if dir == "" {
 		return ""
@@ -291,7 +222,7 @@ func NearestLiveDir(dir string) string {
 			return d
 		}
 		if d == filepath.Dir(d) {
-			return "" // reached "/" without a live dir
+			return ""
 		}
 	}
 }
@@ -305,21 +236,14 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	var jobCtx context.Context
 	var cancel context.CancelFunc
 	if detach {
-		// Detached mode: no timeout, runs until natural exit or stop_command.
-		// Still use context.Background() so it's not tied to the request context.
+
 		jobCtx, cancel = context.WithCancel(context.Background())
-		timeout = 0 // signals "no timeout" in snapshot display
+		timeout = 0
 	} else {
 		if timeout <= 0 {
 			timeout = defaultCommandTimeout
 		}
-		// #1756 case 1: derive from the PASSED ctx. Callers that must NOT tie
-		// the job to a request context (the agent tool path, whose ctx dies
-		// when the tool call returns) pass context.Background() explicitly;
-		// callers that need cancellation (the TUI shell Esc chain, whose ctx
-		// lives until #910's shellCancelFunc fires) get it. The old hardcoded
-		// Background made the ctx parameter a dead parameter - Esc cancelled
-		// a context nobody listened to and `!tail -f` leaked for 30 minutes.
+
 		jobCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	cmd, _, err := util.NewShellCommandContext(jobCtx, command)
@@ -327,9 +251,7 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 		cancel()
 		job := m.newJob(command, timeout, cancel)
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to resolve shell: %v", err))
-		// #3126: a failed job is terminal - register it for eviction like
-		// waitForJob does, or it stays in m.jobs forever (evictFinished
-		// only drains finishedOrder, and this path never appended).
+
 		m.mu.Lock()
 		m.recordFinishLocked(job)
 		m.evictFinishedLocked()
@@ -339,37 +261,19 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	}
 	configureCommandCancellation(cmd)
 	if m.workingDir != "" {
-		// #4791 (S-21): a persistent command session whose workingDir was a
-		// git worktree (or any directory) that has since been REMOVED fails
-		// every subsequent fork/exec with ENOENT-class errors - and a `cd`
-		// prefix cannot save a session that cannot even spawn. Validate cwd
-		// liveness before each spawn; a dead cwd re-resolves to the nearest
-		// still-existing ancestor (falling back to the process cwd) so the
-		// session recovers instead of dying permanently.
+
 		live := NearestLiveDir(m.workingDir)
 		cmd.Dir = live
 	}
-	// #2350: this is the one path that builds its own exec.Cmd (via
-	// util.NewShellCommandContext), and a nil cmd.Env inherits the FULL
-	// parent environment - including every config-managed secret
-	// RegisterSecretEnv put into the process env (#2284-A threat model).
-	// The run_command main path strips at :282/:298; Manager.Start bypassed
-	// it, so `start_command printenv` dumped all keys into job output.
-	// Apply the same normalization (StripSecretEnv + TERM/NO_COLOR/...).
-	// StartExisting is NOT touched: it reuses a cmd the caller already
-	// configured (run_command path arrives pre-stripped).
+
 	cmd.Env = normalizedCommandEnv()
 
-	// OS-level containment for managed jobs: the same kernel-enforced
-	// boundary run_command applies, so auto-backgrounding a command cannot
-	// be used to escape the sandbox policy.
 	if m.sandbox != nil && m.sandbox.Enabled {
 		if _, wrapErr := wrapShellCommandOS(cmd, m.workingDir, m.sandbox); wrapErr != nil {
 			cancel()
 			job := m.newJob(command, timeout, cancel)
 			job.finish(CommandJobFailed, wrapErr.Error())
-			// #3126: ditto - terminal failed job must enter the eviction
-			// ledger or it leaks a map slot per failed start.
+
 			m.mu.Lock()
 			m.recordFinishLocked(job)
 			m.evictFinishedLocked()
@@ -381,17 +285,13 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 
 	_, snapshot, err := m.startExisting(jobCtx, command, timeout, cancel, cmd)
 	if err != nil {
-		// Refusal/ownership never happened: release the ctx/timer tree.
+
 		cancel()
 		return nil, err
 	}
 	return snapshot, nil
 }
 
-// StartExisting starts an already-configured command as a managed background job.
-// The manager owns the command after this call and is the only code that waits
-// on it. The caller must not call Wait or cancel the command context after a
-// successful start; use Stop/Wait helpers on the returned job instead.
 func (m *CommandJobManager) StartExisting(ctx context.Context, cmd *exec.Cmd, command string, timeout time.Duration, cancel context.CancelFunc) (*CommandJob, *CommandJobSnapshot, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -413,19 +313,16 @@ func (m *CommandJobManager) StartExisting(ctx context.Context, cmd *exec.Cmd, co
 }
 
 func (m *CommandJobManager) startExisting(ctx context.Context, command string, timeout time.Duration, cancel context.CancelFunc, cmd *exec.Cmd) (*CommandJob, *CommandJobSnapshot, error) {
-	// r71 admission gate: refuse BEFORE the manager takes ownership of the
-	// spawn. The caller keeps cancel ownership on error and must cancel it
-	// (Start's wrapper and executeWithAutoBackground both do).
+
 	if reason := m.admissionBlockReason(); reason != "" {
 		return nil, nil, fmt.Errorf("background job refused: %s", reason)
 	}
 	job := m.newJob(command, timeout, cancel)
 	writer := &commandJobWriter{job: job}
 
-	// If a tee writer is set, mirror stdout/stderr through it in real time.
 	m.mu.Lock()
 	tee := m.outputTee
-	m.outputTee = nil // one-shot: consumed by this call
+	m.outputTee = nil
 	m.mu.Unlock()
 
 	if tee != nil {
@@ -452,8 +349,7 @@ func (m *CommandJobManager) startExisting(ctx context.Context, command string, t
 		_ = stdin.Close()
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to start command: %v", err))
-		// #3126: terminal failed job - enter the eviction ledger (this is
-		// the path a NUL-byte or otherwise unspawnable command takes).
+
 		m.mu.Lock()
 		m.recordFinishLocked(job)
 		m.evictFinishedLocked()
@@ -504,10 +400,7 @@ func (m *CommandJobManager) Wait(ctx context.Context, id string, wait time.Durat
 	if err := waitForCommandJob(ctx, job, wait); err != nil {
 		return CommandJobSnapshot{}, err
 	}
-	// #1650-2: NOT m.Read(id) - that re-fetches by ID, and between the
-	// wake-up and the second lookup a burst of 20 newer finished jobs can
-	// evict this one (cap=20), turning a normal completion into "command
-	// job not found". We already hold the job; snapshot it directly.
+
 	snap := m.snapshot(job)
 	snap.Lines, snap.TruncatedHead = selectCommandLines(snap.Lines, snap.BufferedFrom, tailLines, sinceLine)
 	return snap, nil
@@ -544,11 +437,6 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	if appendNewline {
 		input += "\n"
 	}
-	// #4431 bug 1: a naked io.WriteString on a full pipe (child stopped
-	// reading, e.g. a wedged dev server) blocked forever - no ctx, no
-	// deadline, and the call cannot be interrupted after cancellation.
-	// StdinPipe returns *os.File, so a write deadline bounds the write;
-	// non-file writers keep the old blocking behavior.
 	const stdinWriteTimeout = 10 * time.Second
 	if f, ok := stdin.(*os.File); ok {
 		_ = f.SetWriteDeadline(time.Now().Add(stdinWriteTimeout))
@@ -598,8 +486,7 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 			errMsg += "\n" + compatHint
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			// #2588: ee.ExitCode() is -1 on signal kills; normalize to
-			// 128+N so the signal diagnostics (137 OOM etc.) fire.
+
 			if exitIntel := interpretExitCode(exitCodeFromErr(ee)); exitIntel != "" {
 				errMsg += "\n" + exitIntel
 			}
@@ -608,29 +495,22 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 	default:
 		job.finish(CommandJobCompleted, "")
 	}
-	// Record completion and evict the oldest finished jobs beyond the
-	// retention cap (#1318). forget() may already have removed this job
-	// (run_command quick path) - recordFinish tolerates that.
+
 	m.mu.Lock()
 	m.recordFinishLocked(job)
 	m.evictFinishedLocked()
 	m.mu.Unlock()
 }
 
-// maxFinishedJobs caps how many terminal jobs stay readable after
-// completion. The most recent ones remain available for late
-// read_command_output / wait_command polling; older ones are dropped.
 const maxFinishedJobs = 20
 
 func (m *CommandJobManager) recordFinishLocked(job *CommandJob) {
 	if _, ok := m.jobs[job.ID]; !ok {
-		return // already forgotten
+		return
 	}
 	m.finishedOrder = append(m.finishedOrder, job.ID)
 }
 
-// evictFinishedLocked drops the oldest terminal jobs while more than
-// maxFinishedJobs remain. Running jobs are never evicted.
 func (m *CommandJobManager) evictFinishedLocked() {
 	finished := 0
 	for _, id := range m.finishedOrder {
@@ -649,7 +529,7 @@ func (m *CommandJobManager) evictFinishedLocked() {
 		delete(m.jobs, id)
 		finished--
 	}
-	// Compact the order slice: drop IDs no longer in the map.
+
 	kept := m.finishedOrder[:0]
 	for _, id := range m.finishedOrder {
 		if _, ok := m.jobs[id]; ok {
@@ -696,7 +576,7 @@ func (m *CommandJobManager) snapshot(job *CommandJob) CommandJobSnapshot {
 		Timeout:       job.Timeout,
 		StartedAt:     job.StartedAt,
 		EndedAt:       job.EndedAt,
-		TotalLines:    job.TotalLines, // #513: completed lines only — the trailing partial line is NOT counted; once the next chunk completes it, appendOutput increments TotalLines and since_line polling returns it (counting the partial here made the merged complete line permanently invisible to pollers).
+		TotalLines:    job.TotalLines,
 		BufferedFrom:  job.BufferedFrom,
 		Lines:         lines,
 		Duration:      endedAt.Sub(job.StartedAt).Round(time.Second),
@@ -722,8 +602,7 @@ func (j *CommandJob) appendOutput(chunk string) {
 		j.partial = ""
 		parts = parts[:len(parts)-1]
 	} else {
-		// #1118: an unterminated streaming line accumulates into partial;
-		// cap it too or a no-newline dump flows back whole via snapshot().
+
 		j.partial = truncateJobLine(parts[len(parts)-1])
 		parts = parts[:len(parts)-1]
 	}
@@ -742,9 +621,6 @@ func (j *CommandJob) flushPartial() {
 	j.partial = ""
 }
 
-// isTerminal reports whether the job has reached a terminal status.
-// Lock discipline: finish() writes Status under j.mu, so callers holding
-// only the manager lock must read through here (#1318 eviction path).
 func (j *CommandJob) isTerminal() bool {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -761,11 +637,7 @@ func (j *CommandJob) finish(status CommandJobStatus, errText string) {
 	j.ErrText = errText
 	j.EndedAt = time.Now()
 	done := j.done
-	// #659: call cancel before dropping the reference. Auto-background jobs
-	// derive their ctx from context.WithTimeout(context.Background(), ...) in
-	// run_command with no deferred cancel; without this call, every
-	// quick-terminal job leaked the timer/ctx tree until the timeout (up to
-	// 24h) expired. cancel is idempotent.
+
 	if j.cancel != nil {
 		j.cancel()
 	}
@@ -781,9 +653,7 @@ func (j *CommandJob) finish(status CommandJobStatus, errText string) {
 
 func (j *CommandJob) addLineLocked(line string) {
 	j.TotalLines++
-	// #1118: bound per-line bytes so one oversized line cannot push megabytes
-	// into agent context through later snapshots. Line-count semantics
-	// (TotalLines / BufferedFrom sliding window) are unchanged.
+
 	line = truncateJobLine(line)
 	if len(j.Lines) == maxCommandLogLines {
 		j.Lines = j.Lines[1:]
@@ -816,8 +686,7 @@ func selectCommandLines(lines []string, bufferedFrom, tailLines, sinceLine int) 
 	truncated := false
 	if sinceLine > 0 {
 		if sinceLine >= bufferedFrom {
-			// sinceLine is the last line the caller has already seen.
-			// We want lines AFTER sinceLine, so add 1 to skip it.
+
 			start = sinceLine - bufferedFrom + 1
 			if start < 0 {
 				start = 0
@@ -841,10 +710,6 @@ func selectCommandLines(lines []string, bufferedFrom, tailLines, sinceLine int) 
 	return append([]string(nil), selected...), truncated
 }
 
-// truncateJobLine bounds a single buffered command-output line to
-// maxCommandLineBytes (#1118). It keeps head and tail in the spirit of
-// truncateMiddle so callers still see the line start plus the most recent
-// bytes (where errors usually live), split by a clearly recognizable marker.
 func truncateJobLine(line string) string {
 	if len(line) <= maxCommandLineBytes {
 		return line
@@ -859,10 +724,6 @@ func truncateJobLine(line string) string {
 	return line[:headEnd] + marker + line[tailStart:]
 }
 
-// capCommandOutputText bounds fully rendered command output at the
-// snapshot/format layer (#1118), reusing truncateMiddle semantics so both
-// ends stay visible. Applied to job snapshots and formatting helpers that
-// aggregate many (already per-line-capped) lines.
 func capCommandOutputText(s, label string) string {
 	if len(s) > maxCommandSnapshotBytes {
 		return truncateMiddle(s, maxCommandSnapshotBytes, label)
@@ -873,15 +734,7 @@ func capCommandOutputText(s, label string) string {
 func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Job ID: %s\n", snapshot.ID))
-	// #2218 case B: the job's original command. The causal-attribution
-	// gate at the call site extracts "command" from the tool ARGS, but
-	// wait_command/read_command_output only carry job_id - without this
-	// header the gate's read-command probe saw "" and misattributed a
-	// succeeded grep's output as a build failure.
-	// #2244 case A layer 1: multi-line commands indent their continuation
-	// lines so the extractor (causalCmdForGate) can tell command body from
-	// the next snapshot header - a raw embedded newline would terminate
-	// the block at line 1 (the `# comment` convention line).
+
 	if snapshot.Command != "" {
 		cmdBlock := snapshot.Command
 		if strings.Contains(cmdBlock, "\n") {
@@ -914,8 +767,7 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 			}
 		}
 	}
-	// #1118: total byte ceiling over the rendered snapshot; per-line caps
-	// alone still allowed up to maxCommandLogLines x maxCommandLineBytes.
+
 	return strings.TrimRight(capCommandOutputText(sb.String(), "background job output"), "\n")
 }
 
@@ -971,9 +823,7 @@ func waitForCommandJob(ctx context.Context, job *CommandJob, wait time.Duration)
 		return nil
 	case <-timer.C:
 		return nil
-	// #513: honor caller cancellation — the discarded ctx made a cancelled
-	// caller wait out the full poll window (API trap for callers that DO pass
-	// a meaningful context).
+
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -990,9 +840,7 @@ func stopCommandJob(job *CommandJob) error {
 	cancel := job.cancel
 	status := job.Status
 	job.mu.Unlock()
-	// #4431 bug 2: the tool description promises "Stopping an already
-	// completed or unknown job returns an error", but a finished job fell
-	// through (cancel no-op + done already closed => silent success).
+
 	if status != CommandJobRunning {
 		return fmt.Errorf("command job %q already finished (status: %s)", job.ID, status)
 	}

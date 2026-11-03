@@ -7,35 +7,25 @@ import (
 	"strings"
 )
 
-// conventionalCommitPattern matches "type(scope): description" or "type: description".
-// The type is case-insensitive; scope and breaking-change "!" are optional.
 var conventionalCommitPattern = regexp.MustCompile(`^(\w+)(\([^)]+\))?!?: `)
 
-// conventionalCommitTypes are the standard Conventional Commits type prefixes.
 var conventionalCommitTypes = map[string]bool{
 	"feat": true, "fix": true, "docs": true, "style": true,
 	"refactor": true, "perf": true, "test": true, "build": true,
 	"ci": true, "chore": true, "revert": true,
 }
 
-// commitSizeThresholds control when commit size warnings fire.
 const (
-	maxFilesPerCommit = 15  // warn if more staged files
-	maxLinesPerCommit = 500 // warn if more total line changes
+	maxFilesPerCommit = 15
+	maxLinesPerCommit = 500
 )
 
-// AnalyzeCommitMessage checks whether the commit message follows the
-// Conventional Commits specification (type(scope): description) and returns a
-// non-blocking suggestion when it does not. Returns an empty string when the
-// message already follows the convention or is a merge/revert (which have
-// their own format).
 func AnalyzeCommitMessage(msg string) string {
 	firstLine := strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0]
 	if firstLine == "" {
 		return ""
 	}
 
-	// Already follows conventional commits: "type: ..." or "type(scope): ..."
 	if m := conventionalCommitPattern.FindStringSubmatch(firstLine); m != nil {
 		if conventionalCommitTypes[strings.ToLower(m[1])] {
 			return ""
@@ -44,13 +34,10 @@ func AnalyzeCommitMessage(msg string) string {
 
 	lower := strings.ToLower(firstLine)
 
-	// Merge and revert commits have their own established formats.
 	if strings.HasPrefix(lower, "merge ") || strings.HasPrefix(lower, "revert ") {
 		return ""
 	}
 
-	// Only suggest for messages long enough to be descriptive — don't pile on
-	// when the vague-message check already fires.
 	if len(strings.TrimSpace(firstLine)) < 10 {
 		return ""
 	}
@@ -66,7 +53,6 @@ func AnalyzeCommitMessage(msg string) string {
 	)
 }
 
-// inferCommitType guesses the Conventional Commits type from message content.
 func inferCommitType(msg string) string {
 	lower := strings.ToLower(msg)
 	switch {
@@ -87,17 +73,13 @@ func inferCommitType(msg string) string {
 	case msgContainsAny(lower, "pipeline", "deploy", "release", "ci pipeline"):
 		return "ci"
 	case msgWordBoundary(lower, "ci"):
-		// #823: the bare 'ci' substring matched common English words
-		// ('efficient', 'parsing'→no, but 'sourcing'/'special' style hits);
-		// require it as a standalone word.
+
 		return "ci"
 	default:
 		return "feat"
 	}
 }
 
-// msgContainsAny reports whether s contains any of the given substrings.
-// msgWordBoundary reports whether word appears as a standalone word (#823).
 func msgWordBoundary(s, word string) bool {
 	return regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(s)
 }
@@ -111,7 +93,6 @@ func msgContainsAny(s string, subs ...string) bool {
 	return false
 }
 
-// FileCategory represents the role a file plays in a project.
 type FileCategory int
 
 const (
@@ -122,7 +103,6 @@ const (
 	CatOther
 )
 
-// categoryLabel returns a human-readable label for a file category.
 func categoryLabel(cat FileCategory) string {
 	switch cat {
 	case CatSource:
@@ -138,34 +118,28 @@ func categoryLabel(cat FileCategory) string {
 	}
 }
 
-// categorizeFile classifies a file path by its likely role in the project.
 func categorizeFile(path string) FileCategory {
 	lower := strings.ToLower(path)
 
-	// Test files — check first since extensions overlap with source.
 	testSuffixes := []string{
 		"_test.go", ".test.js", ".test.ts", ".test.jsx", ".test.tsx",
 		".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx",
 		"test_", "_test.py", ".spec.rb", "_spec.rb", "_test.rs",
 	}
 	for _, sfx := range testSuffixes {
-		// #823: Contains misrouted 'pkg/latest_report.go' and
-		// 'src/attest_helper.py' to CatTest; every other category uses
-		// suffix semantics already.
+
 		if strings.HasSuffix(lower, sfx) ||
 			(strings.HasPrefix(sfx, "test_") && (strings.HasPrefix(lower, "test_") || strings.Contains(lower, "/test_"))) {
 			return CatTest
 		}
 	}
 
-	// Documentation.
 	for _, ext := range []string{".md", ".rst", ".txt", ".adoc", ".tex"} {
 		if strings.HasSuffix(lower, ext) {
 			return CatDocs
 		}
 	}
 
-	// Configuration.
 	configSuffixes := []string{".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".json"}
 	configNames := []string{"dockerfile", "makefile", "docker-compose", ".gitignore", ".editorconfig"}
 	for _, ext := range configSuffixes {
@@ -179,7 +153,6 @@ func categorizeFile(path string) FileCategory {
 		}
 	}
 
-	// Source code.
 	sourceExts := []string{
 		".go", ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts",
 		".java", ".kt", ".rs", ".c", ".cpp", ".h", ".hpp", ".cc",
@@ -195,36 +168,18 @@ func categorizeFile(path string) FileCategory {
 	return CatOther
 }
 
-// diffStats holds parsed statistics from a unified diff.
 type diffStats struct {
 	files     []string
 	additions int
 	deletions int
 }
 
-// diffBinaryHeader matches the "Binary files ... differ" marker in all
-// three git forms: modify (a/x and b/x), add (/dev/null and b/x), and
-// delete (a/x and /dev/null). #4047: the old a/...b/-only pattern missed
-// the add/delete forms entirely - newly added binaries (the most common
-// accidental-commit shape #1650 targeted) bypassed the maxFilesPerCommit
-// warnings 100% of the time. #4683-C: git quotes space-containing and
-// non-ASCII paths as `Binary files "a/my file.png" and ... differ` -
-// without a quoted alternative those binaries bypass the check 100% of
-// the time (same as #4047's miss, for a different path shape).
 var diffBinaryHeader = regexp.MustCompile(`^Binary files (?:a/(\S+)|"a/([^"]+)"|/dev/null) and (?:b/(\S+)|"b/([^"]+)"|/dev/null) differ$`)
 
-// diffModeChange matches the pure mode-change markers ("old mode"/
-// "new mode") - these hunks carry no +/- lines and previously no file
-// was registered at all.
 var diffModeChange = regexp.MustCompile(`^(old|new) mode `)
 
-// diffRenameTo matches the "rename to <path>" marker of a pure rename
-// (similarity 100%). A pure-rename hunk has NO +++/--- header, no mode
-// line, no binary line - the rename-to path is the file's new identity.
 var diffRenameTo = regexp.MustCompile(`^rename to (.+)`)
 
-// parseDiffStats extracts file paths and counts additions/deletions from
-// a unified diff output (e.g. from "git diff --cached").
 func parseDiffStats(diffOutput string) diffStats {
 	var stats diffStats
 	seen := make(map[string]bool)
@@ -237,20 +192,15 @@ func parseDiffStats(diffOutput string) diffStats {
 	}
 	lastOldFile := ""
 	lastGitPath := ""
-	// #3956 (#3164 parity): true when the previous line was consumed as a
-	// minus-side file header ("--- a/x" at the oldFileHeader branch, or the
-	// "--- /dev/null" literal at the counting branch). The very next line
-	// being "+++"-prefixed is then a residual header, not content.
+
 	prevWasOldHeader := false
 
 	lines := strings.Split(diffOutput, "\n")
 	for i, line := range lines {
-		// #3956 (#3164 parity): capture-and-clear the header-adjacency flag
-		// for THIS line before any branch consumes it.
+
 		afterOld := prevWasOldHeader
 		prevWasOldHeader = false
-		// Track the b/ path from "diff --git a/x b/x" headers - the only
-		// source for pure mode-change hunks.
+
 		if m := diffGitHeader.FindStringSubmatch(line); m != nil && (m[1] != "" || (len(m) > 2 && m[2] != "")) {
 			lastGitPath = normalizeGitDiffPath(m[1])
 			if m[1] == "" {
@@ -262,30 +212,22 @@ func parseDiffStats(diffOutput string) diffStats {
 			add(diffHeaderPath(m))
 			continue
 		}
-		// Deleted file: "--- a/path" followed by "+++ /dev/null" - the +++
-		// line has no b/ prefix so it never matches diffFileHeader. Same
-		// #1319 lineage as parseFileChanges, applied to the aggregate twin.
+
 		if diffDevNullHeader.MatchString(line) {
 			add(lastOldFile)
 			lastOldFile = ""
 			continue
 		}
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
-			// #4683-A: the --- header is only real when the NEXT line is
-			// its +++ counterpart (#4433 guard, mirrored from
-			// commit_partition.go) - a deleted CONTENT line that happens to
-			// start with "--- a/" otherwise poisons lastOldFile and drops
-			// the following additions.
+
 			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++") {
 			lastOldFile = diffHeaderPath(m)
 			prevWasOldHeader = true
 			continue
 		}
-		// Binary change: no hunks, no +/- lines - extract the b/ path.
+
 		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil {
-			// #4047: register the non-/dev/null side - added binaries only
-			// have a b-side name, deleted ones only an a-side name.
-			// #4683-C: quoted sides live in groups 3/4 alongside bare 1/2.
+
 			aSide := m[1]
 			if aSide == "" && len(m) > 2 {
 				aSide = m[2]
@@ -302,39 +244,25 @@ func parseDiffStats(diffOutput string) diffStats {
 			lastOldFile = ""
 			continue
 		}
-		// Pure mode change: no hunks. The preceding "diff --git a/x b/x"
-		// line is the only path source - register on the mode marker so
-		// mode-only changes stop vanishing.
+
 		if diffModeChange.MatchString(line) {
 			add(lastGitPath)
 			continue
 		}
-		// Pure rename (similarity 100%): only diff --git + similarity index
-		// 100% + rename from/to - no hunk headers at all (#2233). Register
-		// the NEW path so the file lands in the set (the old path is gone).
+
 		if m := diffRenameTo.FindStringSubmatch(line); m != nil && len(m) > 1 {
 			add(strings.TrimSpace(m[1]))
 			lastGitPath = ""
 			continue
 		}
-		// Count additions (#3956, #3164 parity with parseFileChanges):
-		// real "+++ b/x" and "+++ /dev/null" headers were already consumed
-		// by the regexes above. A "+++"-prefixed line here is header-shaped
-		// content (source line starts with "++": C++ increment, nested patch
-		// tails) UNLESS it immediately follows a consumed minus-side header -
-		// adjacency is the only remaining discriminator.
+
 		if len(line) > 0 && line[0] == '+' {
 			if strings.HasPrefix(line, "+++") && afterOld {
 				continue
 			}
 			stats.additions++
 		}
-		// Count deletions (#3956): the only real header reaching here is the
-		// new-file old side "--- /dev/null" (the a/-form was consumed above);
-		// flag it so the "+++ b/x" that follows is header-adjacent. Every other
-		// "---"-shaped line is diff CONTENT (markdown hr "----", "--"
-		// strikethrough markers, "---count;" C++ deletions) and must be
-		// counted, not skipped.
+
 		if len(line) > 0 && line[0] == '-' {
 			if strings.HasPrefix(line, "--- /dev/null") {
 				prevWasOldHeader = true
@@ -346,7 +274,6 @@ func parseDiffStats(diffOutput string) diffStats {
 	return stats
 }
 
-// combineScopeWarnings merges cohesion and size warnings into a single string.
 func combineScopeWarnings(cohesion, size string) string {
 	var parts []string
 	if cohesion != "" {
@@ -358,9 +285,6 @@ func combineScopeWarnings(cohesion, size string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// AnalyzeCommitScope evaluates the cohesion and size of staged changes and
-// returns advisory warnings. Both return values are empty when the changes
-// appear cohesive and reasonably sized.
 func AnalyzeCommitScope(diffOutput string) (cohesionWarning, sizeWarning string) {
 	if strings.TrimSpace(diffOutput) == "" {
 		return "", ""
@@ -372,8 +296,6 @@ func AnalyzeCommitScope(diffOutput string) (cohesionWarning, sizeWarning string)
 	}
 
 	totalLines := stats.additions + stats.deletions
-
-	// --- Size analysis ---
 
 	if len(stats.files) > maxFilesPerCommit {
 		sizeWarning = fmt.Sprintf(
@@ -390,18 +312,12 @@ func AnalyzeCommitScope(diffOutput string) (cohesionWarning, sizeWarning string)
 		)
 	}
 
-	// --- Cohesion analysis ---
-
-	// Group staged files by category.
 	categories := make(map[FileCategory][]string)
 	for _, f := range stats.files {
 		cat := categorizeFile(f)
 		categories[cat] = append(categories[cat], f)
 	}
 
-	// Count distinct non-test categories. It is normal to commit source + test
-	// together; mixing 3+ non-test categories (e.g. code + docs + config) in a
-	// single commit often means unrelated changes were batched together.
 	nonTestCats := 0
 	for cat := range categories {
 		if cat != CatTest {

@@ -1,10 +1,5 @@
 package agentruntime
 
-// sa-65 wiring anchor: the fault injector must wrap OUTSIDE the tape at
-// the ApplyProviderToAgent choke point (agent sees perturbed output,
-// tape stays pristine), gated on *FaultProvider identity for hot-switch
-// idempotency - mirroring the #3917 tape-anchor test.
-
 import (
 	"os"
 	"strings"

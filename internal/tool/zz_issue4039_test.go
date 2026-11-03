@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #4039: PreviewChanges must enforce the executor's prechecks, else it
-// returns a "successful" plan the executor will refuse (approval-gate
-// fidelity, #1547 contract).
 func TestIssue4039PreviewRejectsOutOfRangeGroupRefs(t *testing.T) {
 	dir := t.TempDir()
 	file := dir + "/x.go"
@@ -37,7 +34,6 @@ func TestIssue4039PreviewKeepsValidRefsAndLimits(t *testing.T) {
 	}
 	br := BatchReplace{WorkingDir: dir}
 
-	// Valid ref previews fine.
 	args, _ := json.Marshal(map[string]interface{}{
 		"pattern": "(\\w+)-(\\w+)", "replacement": "$2-$1", "is_regex": true, "files": []string{file},
 	})
@@ -46,7 +42,6 @@ func TestIssue4039PreviewKeepsValidRefsAndLimits(t *testing.T) {
 		t.Fatalf("valid-ref preview broken: plans=%v err=%v", plans, err)
 	}
 
-	// Limits mirror the executor.
 	big := strings.Repeat("a", maxBatchReplacePatternLen+1)
 	args, _ = json.Marshal(map[string]interface{}{
 		"pattern": big, "replacement": "r", "files": []string{file},

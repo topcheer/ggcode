@@ -9,11 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Conflict-aware partial parallelism (parallel_scheduling.go): file-scoped
-// mutators withhold only colliding reads from pre-execution; unrelated reads
-// keep their parallel latency win. Whole-tree / unknown-scope mutators keep
-// the #1475-A..#1829 batch-wide skip.
-
 type stubReadTool struct{ name string }
 
 func (s stubReadTool) Name() string        { return s.name }
@@ -60,7 +55,7 @@ func TestReadAffectedByMutation(t *testing.T) {
 	}{
 		{"same_file_read", "read_file", `{"path":"/x/a.go"}`, true},
 		{"unrelated_file_read", "read_file", `{"path":"/x/b.go"}`, false},
-		{"abs_vs_rel_mismatch", "read_file", `{"path":"a.go"}`, true}, // conservative
+		{"abs_vs_rel_mismatch", "read_file", `{"path":"a.go"}`, true},
 		{"lsp_same_file", "lsp_diagnostics", `{"path":"/x/a.go"}`, true},
 		{"lsp_other_file", "lsp_diagnostics", `{"path":"/y/z.go"}`, false},
 		{"grep_over_mutated_dir", "grep", `{"pattern":"p","path":"/x"}`, true},
@@ -132,9 +127,6 @@ func TestPartitionBatchForParallelism(t *testing.T) {
 	}
 }
 
-// The integration invariant: with a registered read tool, a batch of
-// [edit a.go, read a.go, read b.go] pre-executes ONLY the unrelated read;
-// the colliding read is withheld for the sequential loop.
 func TestPreExecuteReadOnly_PartialParallelMixedBatch(t *testing.T) {
 	a := &Agent{
 		tools:      tool.NewRegistry(),
@@ -145,8 +137,8 @@ func TestPreExecuteReadOnly_PartialParallelMixedBatch(t *testing.T) {
 	}
 	calls := []provider.ToolCallDelta{
 		{ID: "1", Name: "edit_file", Arguments: []byte(`{"file_path":"/x/a.go","old_text":"o","new_text":"n"}`)},
-		{ID: "2", Name: "read_file", Arguments: []byte(`{"path":"/x/a.go"}`)}, // collides -> withheld
-		{ID: "3", Name: "read_file", Arguments: []byte(`{"path":"/y/b.go"}`)}, // unrelated -> pre-executed
+		{ID: "2", Name: "read_file", Arguments: []byte(`{"path":"/x/a.go"}`)},
+		{ID: "3", Name: "read_file", Arguments: []byte(`{"path":"/y/b.go"}`)},
 	}
 	results := a.preExecuteReadOnlyTools(context.Background(), calls)
 	if len(results) != 1 {
@@ -157,8 +149,6 @@ func TestPreExecuteReadOnly_PartialParallelMixedBatch(t *testing.T) {
 	}
 }
 
-// Colliding-only batch degrades to the old all-skip behavior (nothing left to
-// parallelize) - pins that #1475-A's scenario is still fully guarded.
 func TestPreExecuteReadOnly_CollidingOnlyBatchNil(t *testing.T) {
 	a := &Agent{
 		tools:      tool.NewRegistry(),

@@ -11,7 +11,7 @@ func TestRecklessExec_DetectorBasics(t *testing.T) {
 		s := newRecklessExecState()
 		s.recordReadTool("read_file", `{"path":"/tmp/foo.go"}`)
 		if s.recordEditTool("edit_file", `{"file_path":"/tmp/bar.go"}`) {
-			// bar.go was not read, but only 1 unexplored
+
 			t.Fatal("should not warn for 1 unexplored")
 		}
 	})
@@ -19,9 +19,9 @@ func TestRecklessExec_DetectorBasics(t *testing.T) {
 	t.Run("warning when 2+ unexplored edits", func(t *testing.T) {
 		s := newRecklessExecState()
 		s.iteration = 1
-		// Edit file A without reading
+
 		s.recordEditTool("edit_file", `{"file_path":"/tmp/a.go"}`)
-		// Edit file B without reading
+
 		if !s.recordEditTool("edit_file", `{"file_path":"/tmp/b.go"}`) {
 			t.Fatal("should warn after 2 unexplored edits")
 		}
@@ -94,19 +94,16 @@ func TestRecklessExec_MaxWarnings(t *testing.T) {
 	s := newRecklessExecState()
 	s.iteration = 1
 
-	// First unexplored edit (no warning yet)
 	s.recordEditTool("edit_file", `{"file_path":"/tmp/a.go"}`)
-	// Second unexplored edit triggers warning 1
+
 	if !s.recordEditTool("edit_file", `{"file_path":"/tmp/b.go"}`) {
 		t.Fatal("expected first warning")
 	}
 
-	// Third unexplored edit triggers warning 2
 	if !s.recordEditTool("edit_file", `{"file_path":"/tmp/c.go"}`) {
 		t.Fatal("expected second warning")
 	}
 
-	// Fourth unexplored edit should be suppressed (max 2 warnings)
 	if s.recordEditTool("edit_file", `{"file_path":"/tmp/d.go"}`) {
 		t.Fatal("should not exceed max warnings")
 	}
@@ -148,9 +145,6 @@ func TestRecklessExec_Warning(t *testing.T) {
 	}
 }
 
-// Regression for #1486: newly created files cannot have been read before they
-// existed. recordEditTool must not count them as unexplored (the sibling
-// unread-edit guard has always exempted them).
 func TestRecordEditToolExemptsCreatedFiles(t *testing.T) {
 	s := newRecklessExecState()
 	for _, path := range []string{"/w/new_helper.go", "/w/fixture_data.json"} {

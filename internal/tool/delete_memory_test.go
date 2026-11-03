@@ -21,7 +21,6 @@ func TestDeleteMemoryTool_DefaultProjectScope(t *testing.T) {
 		t.Fatal("expected non-nil project memory")
 	}
 
-	// Save a memory first
 	am.SaveMemory("test-pattern", "some content")
 	pm.SaveMemory("project-key", "project content")
 
@@ -39,7 +38,6 @@ func TestDeleteMemoryTool_DefaultProjectScope(t *testing.T) {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
 
-	// Verify project file was deleted
 	if _, err := os.Stat(filepath.Join(pm.Dir(), "project-key.md")); !os.IsNotExist(err) {
 		t.Fatal("project file should be deleted")
 	}
@@ -154,7 +152,6 @@ func TestDeleteMemoryTool_NoProjectRoot(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	// HOME dir - NewProjectAutoMemory returns nil
 	pm := memory.NewProjectAutoMemory(os.Getenv("HOME"))
 
 	tol := NewDeleteMemoryTool(am, pm)

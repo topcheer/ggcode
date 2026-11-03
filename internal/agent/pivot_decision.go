@@ -6,45 +6,15 @@ import (
 	"sync"
 )
 
-// pivotDecisionTracker implements the Pivot/Refine meta-decision from
-// AutoResearchClaw (2026, one of the year's top agentic papers): a failed
-// experiment is information. Before retrying, the system must explicitly
-// decide between REPAIR (keep the current approach, fix the concrete cause)
-// and PIVOT (abandon the approach, name a different one) - instead of
-// silently continuing incremental retries on a dead path.
-//
-// Existing detectors cover the neighbors but not this decision point:
-//   - solution_fixation: failed EDIT clusters on one file (anchor refresh)
-//   - strategy_exhaustion: fires AFTER 4 different recovery strategies all
-//     failed - i.e. after over-pivoting, not before a retry
-//   - capability_boundary: detects too MANY pivots (flailing)
-//
-// None of them asks the model to make an explicit repair-vs-pivot call.
-// This tracker does, keyed on consecutive failures of the same shell
-// command family (run_command), e.g. "go test" failing 3 times in a row.
-//
-// Deterministic (zero LLM cost): counting and key extraction are pure.
 type pivotDecisionTracker struct {
-	mu sync.Mutex
-	// fails maps a command key ("go test") to its consecutive failure
-	// count. A success of the same key clears the entry; successes of
-	// other commands do NOT (a passing `ls` says nothing about `go test`).
-	fails map[string]int
-	// warned maps a key to how many decision prompts it has emitted this
-	// run (max 2: first REPAIR-or-PIVOT, then forced PIVOT).
+	mu     sync.Mutex
+	fails  map[string]int
 	warned map[string]int
 }
 
 const (
-	// pivotFirstThreshold: consecutive failures of one command family that
-	// trigger the first explicit REPAIR-vs-PIVOT decision prompt. Aligned
-	// with solution_fixation's 3-failure window.
-	pivotFirstThreshold = 3
-	// pivotForcedThreshold: at this many consecutive failures the model has
-	// implicitly chosen REPAIR (it kept the path) and been wrong again -
-	// the prompt escalates to forced PIVOT with an abandon rationale.
-	pivotForcedThreshold = 6
-	// pivotMaxWarningsPerKey caps emissions per command family per run.
+	pivotFirstThreshold    = 3
+	pivotForcedThreshold   = 6
 	pivotMaxWarningsPerKey = 2
 )
 
@@ -55,7 +25,6 @@ func newPivotDecisionTracker() *pivotDecisionTracker {
 	}
 }
 
-// reset clears all per-run state (new user turn).
 func (p *pivotDecisionTracker) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -63,17 +32,10 @@ func (p *pivotDecisionTracker) reset() {
 	p.warned = make(map[string]int)
 }
 
-// pivotCommandArgs mirrors the run_command argument schema.
 type pivotCommandArgs struct {
 	Command string `json:"command"`
 }
 
-// recordToolCall observes every tool result. Only run_command participates:
-// verify/build failures are the canonical "experiment failed" signal; other
-// tools (edits, reads) have their own detectors.
-// #3089 V2: environmental failures (timeout, OOM/signal kill) say nothing
-// about the strategy itself - they are neutral and do not touch the streak
-// in either direction.
 func (p *pivotDecisionTracker) recordToolCall(toolName, args string, isError bool, resultContent string) {
 	if p == nil {
 		return
@@ -83,24 +45,19 @@ func (p *pivotDecisionTracker) recordToolCall(toolName, args string, isError boo
 		return
 	}
 	if isError && pivotEnvironmentalFailure(resultContent) {
-		return // environment noise: neither counts as failure nor as success
+		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !isError {
-		delete(p.fails, key) // same-family success: path works again
-		// #3153: success also proves the family is viable again - a stale
-		// warned flag must not survive into the next failure streak, or the
-		// warning branch (== 0) and the forced branch (< threshold) both
-		// skip and recurrent failures go silent until forced threshold.
+		delete(p.fails, key)
+
 		delete(p.warned, key)
 		return
 	}
 	p.fails[key]++
 }
 
-// checkAndWarn returns a structured decision prompt when a command family
-// has failed enough consecutive times, or "" otherwise.
 func (p *pivotDecisionTracker) checkAndWarn() string {
 	if p == nil {
 		return ""
@@ -115,10 +72,9 @@ func (p *pivotDecisionTracker) checkAndWarn() string {
 			continue
 		}
 		if n >= pivotForcedThreshold && p.warned[key] >= 1 {
-			// Second emission: the model kept the path (implicit REPAIR)
-			// and failed again. Force the pivot.
+
 			p.warned[key]++
-			delete(p.fails, key) // reset streak; further failures restart counting
+			delete(p.fails, key)
 			return "[pivot-decision] The command family `" + key + "` has now failed " +
 				itoaPivot(n) + " consecutive times. Continuing to repair this exact path is no longer credible. " +
 				"PIVOT: state in one line why this approach is failing, then name and switch to a DIFFERENT approach " +
@@ -136,15 +92,6 @@ func (p *pivotDecisionTracker) checkAndWarn() string {
 	return ""
 }
 
-// pivotCommandKey extracts a stable "command family" key from a run_command
-// invocation: the first two whitespace-separated tokens of the main command
-// (e.g. "go test", "make verify", "npm run"). Argument churn (paths, flags)
-// does not fragment the family. Returns "" for other tools or empty commands.
-//
-// #3089 V1: shell plumbing must not become the family key. `set -e` lines,
-// leading `cd x &&` segments, `sudo`/`env` wrappers and `VAR=value`
-// assignments are stripped so `cd /x && go test` buckets with `go test`,
-// and `set -e` scripts no longer all collapse into one bogus family.
 func pivotCommandKey(toolName, args string) string {
 	if toolName != "run_command" {
 		return ""
@@ -165,9 +112,6 @@ func pivotCommandKey(toolName, args string) string {
 	return ""
 }
 
-// pivotMainSegment walks a command line (possibly `cd x && payload` or with
-// `sudo`/`env`/`VAR=` prefixes) and returns the two-token family key of the
-// first segment that is real payload rather than shell plumbing.
 func pivotMainSegment(line string) string {
 	for _, seg := range strings.Split(line, "&&") {
 		seg = strings.TrimSpace(seg)
@@ -178,7 +122,7 @@ func pivotMainSegment(line string) string {
 		if len(fields) == 0 {
 			continue
 		}
-		// Drop leading wrapper tokens: sudo / env / VAR=value assignments.
+
 		i := 0
 		for i < len(fields) && (fields[i] == "sudo" || fields[i] == "env" || pivotIsEnvAssign(fields[i])) {
 			i++
@@ -187,7 +131,7 @@ func pivotMainSegment(line string) string {
 		if len(fields) == 0 {
 			continue
 		}
-		// `cd x` and `set -e` are plumbing, not the payload: skip the segment.
+
 		if fields[0] == "cd" || fields[0] == "set" {
 			continue
 		}
@@ -199,8 +143,6 @@ func pivotMainSegment(line string) string {
 	return ""
 }
 
-// pivotIsEnvAssign reports whether tok is a `NAME=value` shell assignment
-// (flags like `--foo=bar` are not).
 func pivotIsEnvAssign(tok string) bool {
 	i := strings.Index(tok, "=")
 	if i <= 0 {
@@ -214,8 +156,6 @@ func pivotIsEnvAssign(tok string) bool {
 	return true
 }
 
-// pivotEnvironmentalFailure reports whether a failed run_command result was
-// caused by the environment rather than the command's own strategy (#3089 V2).
 func pivotEnvironmentalFailure(content string) bool {
 	if content == "" {
 		return false
@@ -239,7 +179,6 @@ func pivotEnvironmentalFailure(content string) bool {
 	return false
 }
 
-// itoaPivot avoids importing strconv for a single call site.
 func itoaPivot(n int) string {
 	if n == 0 {
 		return "0"

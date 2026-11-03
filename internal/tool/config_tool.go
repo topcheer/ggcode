@@ -7,24 +7,13 @@ import (
 	"strings"
 )
 
-// ConfigAccess provides unified read/write access to ALL ggcode configuration.
-// Implementations route dot-notation keys to the appropriate config file
 type ConfigAccess interface {
-	// Get reads a config key. Supports dot-notation paths.
-	// Returns the value as a string (complex values are JSON-encoded).
 	Get(key string) (string, error)
-	// Set writes a config key. Persists to the appropriate file.
-	// For provider-affecting keys, probes the target before committing.
 	Set(key, value string) error
-	// List returns all config settings, optionally filtered by section.
-	// Section can be: "", "core", "api_key", "vendors", "mcp", "im", "a2a", "knight", "oauth", "runtime".
 	List(section string) (string, error)
-	// Delete removes a config key.
-	// Only works for: mcp_servers.<name>, im.adapters.<name>.
 	Delete(key string) error
 }
 
-// ConfigTool reads, writes, lists, or deletes configuration settings.
 type ConfigTool struct {
 	Access ConfigAccess
 }
@@ -77,9 +66,8 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	// List mode
 	if args.List {
-		content, err := t.Access.List(args.Setting) // Setting used as section filter
+		content, err := t.Access.List(args.Setting)
 		if err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
@@ -90,7 +78,6 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "setting is required (or use list=true)"}, nil
 	}
 
-	// Delete mode
 	if args.Delete {
 		if err := t.Access.Delete(args.Setting); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
@@ -98,8 +85,6 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 		return Result{Content: fmt.Sprintf("Deleted %s\n", args.Setting)}, nil
 	}
 
-	// Read mode. Empty string values are treated as reads to avoid accidental clearing
-	// when clients include optional string fields with their zero value.
 	if args.Value == "" {
 		val, err := t.Access.Get(args.Setting)
 		if err != nil {
@@ -108,7 +93,6 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 		return Result{Content: fmt.Sprintf("%s = %s\n", args.Setting, val)}, nil
 	}
 
-	// Write mode
 	if err := t.Access.Set(args.Setting, args.Value); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -116,9 +100,7 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 }
 
 func configSetDisplayValue(setting, value string) string {
-	// #825: the old Contains("token") masked max_tokens/context_tokens —
-	// plain numeric settings echoed '(secret stored securely)'. Whitelist
-	// known secret-bearing key shapes instead of substring matching.
+
 	lower := strings.ToLower(setting)
 	secretKeys := []string{"api_key", "auth_token", "access_token", "refresh_token",
 		"client_secret", "secret_key", "private_key", "password", "passwd", "token"}
@@ -128,7 +110,7 @@ func configSetDisplayValue(setting, value string) string {
 			return "(secret stored securely)"
 		}
 	}
-	// Explicit compound forms like api_key_openai / github_api_key.
+
 	if strings.Contains(lower, "api_key") || strings.Contains(lower, "auth_token") {
 		return "(secret stored securely)"
 	}

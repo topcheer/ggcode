@@ -7,7 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// versionSkillLookup implements SkillLookup for testing buildDependencyHint.
 type versionSkillLookup struct {
 	skills map[string]*commands.Command
 }

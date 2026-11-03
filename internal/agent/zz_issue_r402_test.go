@@ -1,12 +1,5 @@
 package agent
 
-// r402 probes: detector-guidance observability foundation.
-// 1. guidanceTag clusters messages by stable first line (markdown stripped).
-// 2. injectGuidance records delivered/suppressed per tag without
-//    double-counting.
-// 3. flushGuidanceStats appends JSONL lines on any exit and is a silent
-//    no-op when nothing fired or the working dir is unknown.
-
 import (
 	"bufio"
 	"os"
@@ -71,8 +64,6 @@ func TestFlushGuidanceStatsAppendsJSONL(t *testing.T) {
 		}
 	}
 
-	// Second flush with a fresh stat must APPEND, not truncate (multi-run
-	// accumulation is the whole point).
 	a.guidanceStats = guidanceRunStats{}
 	a.guidanceStats.record("Detector B", true)
 	a.flushGuidanceStats()
@@ -85,11 +76,11 @@ func TestFlushGuidanceStatsAppendsJSONL(t *testing.T) {
 func TestFlushGuidanceStatsNoopWhenEmptyOrNoDir(t *testing.T) {
 	dir := t.TempDir()
 	a := &Agent{guidanceStats: guidanceRunStats{}}
-	a.flushGuidanceStats() // empty stats: no panic, no file
+	a.flushGuidanceStats()
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode")); !os.IsNotExist(err) {
 		t.Fatalf("empty stats must not create anything, err=%v", err)
 	}
 	a2 := &Agent{guidanceStats: guidanceRunStats{}}
 	a2.guidanceStats.record("x", true)
-	a2.flushGuidanceStats() // no working dir: silent skip, no panic
+	a2.flushGuidanceStats()
 }

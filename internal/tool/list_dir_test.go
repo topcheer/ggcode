@@ -43,7 +43,7 @@ func TestListDirEmpty(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Empty dir should return empty result
+
 	t.Logf("empty dir result: %s", result.Content)
 }
 
@@ -72,13 +72,13 @@ func TestListDirInvalidInput(t *testing.T) {
 
 func TestListDirDefaultPath(t *testing.T) {
 	ld := ListDir{}
-	// Empty path defaults to "."
+
 	input, _ := json.Marshal(map[string]string{"path": ""})
 	result, err := ld.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic
+
 	t.Logf("default path result length: %d", len(result.Content))
 }
 

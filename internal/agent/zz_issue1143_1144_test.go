@@ -1,28 +1,13 @@
 package agent
 
-// Regression tests for GitHub issues #1143 and #1144.
-//
-// #1143: perf_baseline regression gate must require >= 2 recent runs to
-// regress on the SAME metric (no cross-metric vote pooling), and warning
-// values must come from runs that actually hit the winning metric instead of
-// blindly using the latest run.
-//
-// #1144: extractCommandArg must decode JSON properly so escaped quotes
-// (\") inside command arguments no longer truncate extraction into a wrong
-// but non-empty string that bypassed recordToolCall's fallback.
-
 import (
 	"strings"
 	"testing"
 )
 
-// ---------- Issue #1143: same-metric consensus ----------
-
 func TestIssue1143_CrossMetricVotesDoNotPassConsensusGate(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 20, Errors: 0, DurationSec: 60}
-	// run1 regresses on iterations, run2 on duration, run3 is clean.
-	// Old code accumulated regressionHits>=2 across different metrics and
-	// passed the gate anyway (#1143).
+
 	recent3 := []perfBaselineEntry{
 		{Iterations: 20, ToolCalls: 22, DurationSec: 40},
 		{Iterations: 10, ToolCalls: 20, DurationSec: 120},
@@ -41,8 +26,7 @@ func TestIssue1143_CrossMetricVotesDoNotPassConsensusGate(t *testing.T) {
 
 func TestIssue1143_WorstMetricIsConsensusWinnerNotLastLoopValue(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 20, DurationSec: 60}
-	// Runs 1-2 regress on duration, run 3 regresses on iterations last, so the
-	// old loop would overwrite worstMetric to "iterations" (#1143).
+
 	recent3 := []perfBaselineEntry{
 		{Iterations: 10, ToolCalls: 20, DurationSec: 100},
 		{Iterations: 12, ToolCalls: 20, DurationSec: 120},
@@ -65,9 +49,7 @@ func TestIssue1143_WorstMetricIsConsensusWinnerNotLastLoopValue(t *testing.T) {
 
 func TestIssue1143_WarningValuesComeFromHitRunNotLatestRun(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 20, Errors: 0, DurationSec: 30}
-	// The latest run is healthy (iter=8), so old code produced contradictory
-	// copy like "baseline=10, recent=8 (0.8x baseline)" while claiming a
-	// regression (#1143).
+
 	recent3 := []perfBaselineEntry{
 		{Iterations: 20, ToolCalls: 22, DurationSec: 30},
 		{Iterations: 25, ToolCalls: 22, DurationSec: 30},
@@ -97,7 +79,7 @@ func TestIssue1143_WarningValuesComeFromHitRunNotLatestRun(t *testing.T) {
 }
 
 func TestIssue1143_PickConsensusDeterministicOnTies(t *testing.T) {
-	// Two metrics both reach 2 hits: priority order picks deterministically.
+
 	counts := map[string]int{"duration": 2, "iterations": 2}
 	for i := 0; i < 20; i++ {
 		if got := pickConsensusPerfMetric(counts); got != "iterations" {
@@ -123,11 +105,8 @@ func TestIssue1143_PerfMetricValueMapping(t *testing.T) {
 	}
 }
 
-// ---------- Issue #1144: JSON escaped quotes in extractCommandArg ----------
-
 func TestIssue1144_ExtractCommandArgHandlesEscapedQuotes(t *testing.T) {
-	// The exact reproduction case from issue #1144: the agent's argument
-	// JSON contains \" sequences that the naive scan truncated at.
+
 	input := `{"command":"echo \"Running tests\" && go test ./..."}`
 	want := `echo "Running tests" && go test ./...`
 	if got := extractCommandArg(input); got != want {
@@ -142,8 +121,7 @@ func TestIssue1144_RecordToolCallArmsTestCategoryWithQuotedCompound(t *testing.T
 	if !s.categoriesRun[phantomCatTest] {
 		t.Fatal("test category should be armed by a real go test command containing escaped quotes")
 	}
-	// End-to-end: the same assistant text must NOT be flagged as phantom
-	// verification once the category is armed correctly (#1144).
+
 	a := &Agent{phantomVerify: s}
 	if hint := a.maybeWarnPhantomVerify("All tests pass."); hint != "" {
 		t.Errorf("correctly armed verification must not trigger phantom warning, got: %s", hint)

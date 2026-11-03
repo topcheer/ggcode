@@ -8,23 +8,6 @@ import (
 	"strings"
 )
 
-// Iterm2Tool lets the agent manage iTerm2 terminal sessions, tabs, panes, and
-// windows when ggcode is running inside iTerm2.
-//
-// Platform support:
-//   - macOS: Uses iTerm2's rich AppleScript dictionary (via osascript) and
-//     System Events for keyboard events.
-//
-// iTerm2 is arguably the most automation-friendly terminal on macOS, with a
-// mature AppleScript scripting surface that supports:
-//   - Structured window/tab/session enumeration
-//   - Native `write text` to sessions (no System Events needed)
-//   - Split pane creation with `split vertically/horizontally`
-//   - Per-session targeting by session ID
-//   - Screen content capture
-//   - Profile switching, badges, marks, input broadcasting (unique features)
-//
-// See iterm2_darwin.go for the implementation.
 type Iterm2Tool struct {
 	WorkingDir string
 }
@@ -138,7 +121,6 @@ func (t *Iterm2Tool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: "action is required"}, nil
 	}
 
-	// Status doesn't require iTerm2 to be running — it reports detection.
 	if action == "status" {
 		return t.executeStatus(ctx), nil
 	}
@@ -191,13 +173,9 @@ func (t *Iterm2Tool) Execute(ctx context.Context, input json.RawMessage) (Result
 	}
 }
 
-// -- Detection (shared) --------------------------------------------------------
-
 func iterm2Available() bool {
 	return os.Getenv("TERM_PROGRAM") == "iTerm.app"
 }
-
-// -- Utility (shared) ----------------------------------------------------------
 
 func (t *Iterm2Tool) workingDir() string {
 	if t != nil && strings.TrimSpace(t.WorkingDir) != "" {
@@ -210,10 +188,6 @@ func (t *Iterm2Tool) workingDir() string {
 	return wd
 }
 
-// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
-// other than tab/newline/carriage-return are silently dropped (#1691).
-// Pure string logic shared by the darwin implementation and the
-// cross-platform 1691 test - lives here so every GOOS compiles it.
 func countDroppedControlRunes(s string) int {
 	n := 0
 	for _, r := range s {

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #505: variadic spread — the spread supplies the verbs at runtime; counting
-// it as one argument produced a deterministic false positive (go vet skips
-// spread calls for the same reason).
 func TestCheckPrintfFormat_VariadicSpreadNoVerbCountWarning(t *testing.T) {
 	src := `package main
 
@@ -27,7 +24,6 @@ func f(kv []any, parts []string) {
 	}
 }
 
-// #505: explicit index verbs (%[1]s) reuse arguments — naive counting is invalid.
 func TestCheckPrintfFormat_ExplicitIndexNoVerbCountWarning(t *testing.T) {
 	src := `package main
 
@@ -41,9 +37,6 @@ func f(a string) string { return fmt.Sprintf("%[1]s and %[1]s", a) }
 	}
 }
 
-// #505: forwarding wrappers are Go's most idiomatic helper shape; both the
-// bare-parameter and literal-prefix forms must be exempt from the
-// nonconstant-format injection warning.
 func TestCheckPrintfFormat_ForwardingWrapperNoWarning(t *testing.T) {
 	src := `package main
 
@@ -58,8 +51,6 @@ func warnf(format string, args ...any) { log.Printf("[WARN] "+format, args...) }
 	}
 }
 
-// #505: true positives must survive the exemptions — a LOCAL variable format
-// (not a parameter), and a plain verb-count mismatch without spread.
 func TestCheckPrintfFormat_TruePositivesSurviveExemptions(t *testing.T) {
 	src := `package main
 
@@ -117,7 +108,7 @@ func process(name string) {
 }
 
 func TestCheckPrintfFormat_ConstantFormatOK(t *testing.T) {
-	// All-caps identifiers are likely constants - should not flag.
+
 	src := `package main
 
 import "log"
@@ -201,7 +192,7 @@ func process(n int) {
 }
 
 func TestCheckPrintfFormat_DeltaAware(t *testing.T) {
-	// Old content already has the issue; new content adds a different one.
+
 	oldSrc := `package main
 
 import "log"
@@ -215,7 +206,7 @@ func b(other string) {
 	log.Printf(other)
 }
 `
-	// Delta: old had 1, new has 2, so should report 1 (the surplus).
+
 	warnings := checkPrintfFormat("test.go", oldSrc, newSrc)
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 delta warning, got %d: %v", len(warnings), warnings)
@@ -223,7 +214,7 @@ func b(other string) {
 }
 
 func TestCheckPrintfFormat_ErrorfErrDotErrorOK(t *testing.T) {
-	// fmt.Errorf(err.Error()) is a common (if not ideal) pattern; skip to avoid noise.
+
 	src := `package main
 
 import "fmt"
@@ -239,7 +230,7 @@ func wrap(err error) error {
 }
 
 func TestCheckPrintfFormat_FprintfVerbCount(t *testing.T) {
-	// Fprintf: first arg is writer, format is second.
+
 	src := `package main
 
 import "fmt"
@@ -272,7 +263,7 @@ func TestCheckPrintfFormat_EmptyContent(t *testing.T) {
 }
 
 func TestCheckPrintfFormat_SyntaxError(t *testing.T) {
-	// File with syntax errors should not crash.
+
 	src := `package main
 import "fmt"
 func broken( {
@@ -291,13 +282,13 @@ func TestCountFormatVerbs(t *testing.T) {
 		{"hello", 0},
 		{"%s", 1},
 		{"%s %d", 2},
-		{"%%", 0},  // literal percent
-		{"%%s", 0}, // literal percent followed by 's' (not a verb with %)
+		{"%%", 0},
+		{"%%s", 0},
 		{"100%% done: %s", 1},
-		{"%[1]s", 1},  // explicit arg index verb
-		{"%-5.2f", 1}, // flags, width, precision
+		{"%[1]s", 1},
+		{"%-5.2f", 1},
 		{"%v %T %x", 3},
-		{"%", 0}, // trailing percent, incomplete
+		{"%", 0},
 	}
 	for _, tt := range tests {
 		got := countFormatVerbs(tt.format)
@@ -308,7 +299,7 @@ func TestCountFormatVerbs(t *testing.T) {
 }
 
 func TestCheckPrintfFormat_LiteralPercentOK(t *testing.T) {
-	// "100%% done: %s" has 1 real verb and 1 arg -> should be OK.
+
 	src := `package main
 
 import "fmt"
@@ -323,15 +314,12 @@ func process(progress string) {
 	}
 }
 
-// TestPrintfFormat_ReplacementDetected pins fix #172: fixing one format bug
-// while introducing a different one (net 0) must still report the new one.
 func TestPrintfFormat_ReplacementDetected(t *testing.T) {
 	oldSrc := "package main\nfunc f(u string) { log.Printf(u) }\n"
 	newSrc := "package main\nfunc f(u string) { log.Printf(u); log.Println() }\n"
 	_ = oldSrc
 	_ = newSrc
-	// Real shape: old has nonconstant-format at line 2; new removes it and
-	// adds a different nonconstant-format at line 2 via a different call.
+
 	old2 := "package main\nimport \"log\"\nfunc f(u string) { log.Printf(u) }\n"
 	new2 := "package main\nimport \"log\"\nfunc f(u string) { log.Print(u) }\nfunc g(v string) { log.Printf(v) }\n"
 	w := checkPrintfFormat("a.go", old2, new2)

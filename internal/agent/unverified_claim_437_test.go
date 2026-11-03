@@ -2,8 +2,6 @@ package agent
 
 import "testing"
 
-// #437: make clean/tidy are NOT verification; test-runner names must match
-// on word boundaries.
 func TestIsBuildTestCommandTightened(t *testing.T) {
 	for _, c := range []string{"make clean", "make tidy", "cat jestfile.txt", "ls pytest_dir"} {
 		if isBuildTestCommand(c) {

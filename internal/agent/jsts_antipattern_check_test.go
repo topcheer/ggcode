@@ -6,7 +6,7 @@ import (
 )
 
 func TestCheckJSTSAntiPatterns_LooseEquality(t *testing.T) {
-	// == introduced
+
 	old := "const x = 1;\n"
 	new_ := "const x = 1;\nif (x == 2) {}\n"
 	result := checkJSTSAntiPatterns("test.js", old, new_)
@@ -19,13 +19,13 @@ func TestCheckJSTSAntiPatterns_LooseEquality(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_LooseInequality(t *testing.T) {
-	// != introduced (#2908: regex previously only matched ==)
+
 	new_ := "function f(a, b) {\nif (a != null) return a;\n}\n"
 	result := checkJSTSAntiPatterns("test.js", "", new_)
 	if !strings.Contains(result, "loose equality") {
 		t.Errorf("expected loose equality warning for !=, got: %s", result)
 	}
-	// !== must stay excluded
+
 	new2 := "function f(a, b) {\nif (a !== b) return a;\n}\n"
 	result2 := checkJSTSAntiPatterns("test.js", "", new2)
 	if strings.Contains(result2, "loose equality") {
@@ -34,7 +34,7 @@ func TestCheckJSTSAntiPatterns_LooseInequality(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_StrictEqualityNoWarn(t *testing.T) {
-	// === should not trigger
+
 	old := "const x = 1;\n"
 	new_ := "const x = 1;\nif (x === 2) {}\n"
 	result := checkJSTSAntiPatterns("test.js", old, new_)
@@ -56,11 +56,10 @@ func TestCheckJSTSAntiPatterns_VarDeclaration(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_AnyTypeTSOnly(t *testing.T) {
-	// any type should only warn in TS files
+
 	old := ""
 	new_ := "function f(x: any): void {}\n"
 
-	// TS file - should warn
 	tsResult := checkJSTSAntiPatterns("test.ts", old, new_)
 	if tsResult == "" {
 		t.Fatal("expected any-type warning for .ts")
@@ -69,7 +68,6 @@ func TestCheckJSTSAntiPatterns_AnyTypeTSOnly(t *testing.T) {
 		t.Errorf("expected 'explicit any' in result, got: %s", tsResult)
 	}
 
-	// JS file - should NOT warn
 	jsResult := checkJSTSAntiPatterns("test.js", old, new_)
 	if jsResult != "" {
 		t.Errorf("expected no any-type warning for .js, got: %s", jsResult)
@@ -77,7 +75,7 @@ func TestCheckJSTSAntiPatterns_AnyTypeTSOnly(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_PreExistingNoWarn(t *testing.T) {
-	// Pre-existing == should not trigger if count didn't increase
+
 	old := "if (x == 1) {}\n"
 	new_ := "if (x == 1) {}\nconsole.log(x);\n"
 	result := checkJSTSAntiPatterns("test.js", old, new_)
@@ -114,7 +112,7 @@ func TestCheckJSTSAntiPatterns_MultiplePatterns(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected warnings for multiple anti-patterns")
 	}
-	// Should contain at least 2 of the 3 patterns
+
 	count := 0
 	for _, s := range []string{"loose equality", "var declaration", "explicit any"} {
 		if strings.Contains(result, s) {
@@ -134,7 +132,7 @@ func TestCheckJSTSAntiPatterns_TSX(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_AsAnyTypeAssertion(t *testing.T) {
-	// as any should only warn in TS files
+
 	old := ""
 	new_ := "const x = data as any;\n"
 
@@ -146,7 +144,6 @@ func TestCheckJSTSAntiPatterns_AsAnyTypeAssertion(t *testing.T) {
 		t.Errorf("expected 'as any' in result, got: %s", tsResult)
 	}
 
-	// JS file should NOT warn (as any is not valid syntax in JS anyway)
 	jsResult := checkJSTSAntiPatterns("test.js", old, new_)
 	if strings.Contains(jsResult, "as any") {
 		t.Errorf("expected no as-any warning for .js, got: %s", jsResult)
@@ -189,7 +186,6 @@ func TestCheckJSTSAntiPatterns_TsIgnoreSuppression(t *testing.T) {
 		t.Errorf("expected '@ts-ignore' in result, got: %s", tsResult)
 	}
 
-	// JS file should NOT warn
 	jsResult := checkJSTSAntiPatterns("test.js", old, new_)
 	if strings.Contains(jsResult, "@ts-ignore") {
 		t.Errorf("expected no ts-ignore warning for .js, got: %s", jsResult)
@@ -217,7 +213,7 @@ func TestCheckJSTSAntiPatterns_TsExpectErrorSuppression(t *testing.T) {
 }
 
 func TestCheckJSTSAntiPatterns_AllNewPatternsNoFalsePositive(t *testing.T) {
-	// Pre-existing patterns should not trigger when count doesn't increase
+
 	old := "try { f(); } catch (e) {}\nconst x = data as any;\n// @ts-ignore\n"
 	new_ := old + "const y = 2;\n"
 	result := checkJSTSAntiPatterns("test.ts", old, new_)

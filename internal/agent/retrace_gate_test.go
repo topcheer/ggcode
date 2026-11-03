@@ -12,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// r440 probes: RETRACE bidirectional stop gate. Unit level - the two LLM
-// completions are exercised via the exported pure pieces (message builders,
-// verdict parser, trigger matrix, injection format); no provider is called.
-
 func TestRetraceShouldCheck(t *testing.T) {
 	base := postEditVerifyState{sourceEditsThisRun: 2, realBuildOrTestRunThisRun: true}
 	cases := []struct {
@@ -38,9 +34,6 @@ func TestRetraceShouldCheck(t *testing.T) {
 	}
 }
 
-// TestBackwardIsolation is THE anchoring-prevention probe: the backward
-// message list must not contain the task text - not as the prompt, not as
-// system preamble, not anywhere. RETRACE withholds I from B(p, tau_b).
 func TestBackwardIsolation(t *testing.T) {
 	task := "Fix the login timeout bug in session.go and add a regression test"
 	diff := "diff --git a/internal/session.go b/internal/session.go\n+timeout = 30"
@@ -59,7 +52,7 @@ func TestBackwardIsolation(t *testing.T) {
 			t.Fatalf("backward message %d missing the diff", i)
 		}
 	}
-	// Control: the reconcile stage DOES carry the task (that is its job).
+
 	rec := buildReconcileMessages(task, "reconstruction", diff)
 	found := false
 	for _, m := range rec {
@@ -108,7 +101,7 @@ func TestRetraceInjectMessage(t *testing.T) {
 			t.Errorf("%s: injection missing reviewer guidance", v)
 		}
 	}
-	// Truncation cap.
+
 	long := strings.Repeat("x", 5000)
 	msg := retraceInjectMessage("misaligned", long)
 	if len(msg) > retraceMsgCap+100 {
@@ -116,23 +109,14 @@ func TestRetraceInjectMessage(t *testing.T) {
 	}
 }
 
-// runRetraceVerification error paths need a provider; verified indirectly:
-// the failure doctrine is "return empty string" and every early return in
-// the function is "" - asserted by construction here (compile-level).
 func TestRetraceGateStateZeroValue(t *testing.T) {
 	var s retraceGateState
 	if s.firedThisRun {
 		t.Fatal("zero-value retraceGateState must not be fired")
 	}
-	_ = context.Background() // keep context import honest for future probes
+	_ = context.Background()
 }
 
-// The gate is best-effort: a provider panic inside ChatStream must be
-// recovered and pass through ("" injection) instead of killing the agent
-// run. Real-world basis: crash agent-20261016-101603 — the drain loop's
-// bare onEvent call (gate passed nil) nil-derefed on the first streamed
-// event. Must complete fast: the panic is synchronous in ChatStream, so a
-// stall-timeout-shaped duration (>10s) means the test took the wrong path.
 func TestRetraceVerificationSurvivesProviderPanic(t *testing.T) {
 	a := &Agent{provider: &panicStreamProvider{}}
 	done := make(chan string, 1)
@@ -149,21 +133,14 @@ func TestRetraceVerificationSurvivesProviderPanic(t *testing.T) {
 	}
 }
 
-// panicStreamProvider panics inside ChatStream (synchronously, before any
-// stream is produced), simulating a provider-side fatal bug. Embeds the
-// interface so only the method under test is implemented.
 type panicStreamProvider struct{ provider.Provider }
 
 func (p *panicStreamProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
 	var nilMap map[string]int
-	nilMap["boom"] = 1 // deliberate nil map WRITE — assignment to entry in nil map panics
+	nilMap["boom"] = 1
 	return nil, nil
 }
 
-// --- #4210: uncommittedDiff must include untracked (new) files ---
-
-// newGitRepo creates a temp git repo with one tracked, committed file and
-// returns its dir. Skips the test when git is unavailable.
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -187,8 +164,6 @@ func newGitRepo(t *testing.T) string {
 	return dir
 }
 
-// Scenario A: all-new-file delivery. git diff HEAD is 0 bytes; the gate must
-// still see the new file or it silently skips verification (#4210).
 func TestUncommittedDiffUntrackedOnly(t *testing.T) {
 	dir := newGitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "newmod.go"), []byte("package newmod\n"), 0o644); err != nil {
@@ -203,9 +178,6 @@ func TestUncommittedDiffUntrackedOnly(t *testing.T) {
 	}
 }
 
-// Scenario B: mixed tracked modification + untracked new file. The diff must
-// contain BOTH halves, or the reconstruction is biased toward the tracked
-// part and can misjudge a correct change (#4210).
 func TestUncommittedDiffMixed(t *testing.T) {
 	dir := newGitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("base\nedited\n"), 0o644); err != nil {
@@ -223,7 +195,6 @@ func TestUncommittedDiffMixed(t *testing.T) {
 	}
 }
 
-// Control: gitignored files must NOT leak into the gate's diff (noise).
 func TestUncommittedDiffIgnoresIgnored(t *testing.T) {
 	dir := newGitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {

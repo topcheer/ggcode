@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// --- Issue #1132: collectReboundVars only scanned the loop body's top level,
-// so "item := item" written inside nested blocks was missed and captures were
-// reported even though the variable had been correctly rebound. ---
-
-// TestIssue1132_NestedBlockRebindSafe guards that a v := v rebinding inside a
-// nested if block suppresses captures written after it.
 func TestIssue1132_NestedBlockRebindSafe(t *testing.T) {
 	src := `package main
 
@@ -31,8 +25,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1132_NestedForBlockRebindSafe covers rebinding nested inside a
-// plain for block and inside a switch block.
 func TestIssue1132_NestedForBlockRebindSafe(t *testing.T) {
 	src := `package main
 
@@ -59,9 +51,6 @@ func process(items []int, n int) {
 	}
 }
 
-// TestIssue1132_RebindAfterCaptureDoesNotSilence guards that recursion did
-// not over-suppress: a rebinding placed AFTER a go statement cannot protect
-// the goroutine launched before it.
 func TestIssue1132_RebindAfterCaptureDoesNotSilence(t *testing.T) {
 	src := `package main
 
@@ -80,9 +69,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1132_RebindOnlyProtectsLaterCaptures checks per-capture-point
-// filtering: the first goroutine (before any rebinding) keeps its warning,
-// the second one (after the rebinding) is silenced.
 func TestIssue1132_RebindOnlyProtectsLaterCaptures(t *testing.T) {
 	src := `package main
 
@@ -104,9 +90,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1132_InClosureRebindDoesNotSilenceSibling guards the inverse
-// hazard: an in-closure "item := item" scopes to that closure only and must
-// not suppress other closures that still share the loop variable.
 func TestIssue1132_InClosureRebindDoesNotSilenceSibling(t *testing.T) {
 	src := `package main
 
@@ -128,12 +111,6 @@ func process(items []int) {
 	}
 }
 
-// --- Issue #1133: identReferenced matched identifiers by name only, so a
-// same-name declaration inside the closure was treated as a capture of the
-// outer loop variable even when nothing was captured. ---
-
-// TestIssue1133_ClosureLocalSameNameAssignSafe guards the exact reported
-// pattern: the closure redeclares the name locally, nothing leaks out.
 func TestIssue1133_ClosureLocalSameNameAssignSafe(t *testing.T) {
 	src := `package main
 
@@ -154,9 +131,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1133_CaptureBeforeShadowDeclStillWarns keeps the false-negative
-// direction closed: referencing the loop variable BEFORE the local shadowing
-// declaration is a genuine capture.
 func TestIssue1133_CaptureBeforeShadowDeclStillWarns(t *testing.T) {
 	src := `package main
 
@@ -178,9 +152,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1133_ShadowByVarAndRangeDefine covers the other define forms:
-// "var x T" declarations and range clause variables declared inside the
-// closure must not be counted as loop-variable captures.
 func TestIssue1133_ShadowByVarAndRangeDefine(t *testing.T) {
 	fetchSrc := `package main
 
@@ -224,9 +195,6 @@ func process(items []string) {
 	}
 }
 
-// TestIssue1133_InnerClosureParamShadow covers parameters of a function
-// literal nested INSIDE the captured closure: references after such a
-// parameter resolve to the parameter, not the loop variable.
 func TestIssue1133_InnerClosureParamShadow(t *testing.T) {
 	src := `package main
 
@@ -248,8 +216,6 @@ func process(items []int) {
 	}
 }
 
-// TestIssue1133_GenuineCaptureStillWarned makes sure the shadow analysis did
-// not turn the detector off for real captures.
 func TestIssue1133_GenuineCaptureStillWarned(t *testing.T) {
 	src := `package main
 

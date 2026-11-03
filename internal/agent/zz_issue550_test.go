@@ -1,21 +1,11 @@
 package agent
 
-// Feature tests for issue #550 (ver-37 probe findings): D1/D2 change
-// reconciliation, B1 verify-coverage short-dir scopes, A2/A3 scope-narrow
-// outcome gating, C1 cross-file-impact sibling exclusion.
-//
-// NOTE: zz_ver37_probe_test.go belongs to a parallel review session and
-// asserts PRE-fix behavior for some of these; it is intentionally left
-// untouched here — its owner cleans it up.
-
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// --- D1: absolute-path double prefix in normalizeReconcilePath ---
 
 func TestIssue550_NormalizeReconcilePath_AbsoluteMatchesRelative(t *testing.T) {
 	wd := "/w/repo"
@@ -57,15 +47,13 @@ func TestIssue550_ReconcileAbsolutePathEditNotFlagged(t *testing.T) {
 	a := &Agent{changeReconcile: newChangeReconcileState(), workingDir: dir}
 	stats := &RunStats{
 		ToolCalls:   map[string]int{"edit_file": 1},
-		FilesEdited: []string{foo}, // absolute, as edit_file records it
+		FilesEdited: []string{foo},
 	}
 	msg := a.checkChangeReconcile(stats)
 	if msg != "" {
 		t.Fatalf("D1: absolute-path edit of the only changed file must reconcile, got: %s", msg)
 	}
 }
-
-// --- B1: short dir token inflating to ALL ---
 
 func TestIssue550_ShortDirTokenIsScopedNotAll(t *testing.T) {
 	cases := []struct {
@@ -107,8 +95,6 @@ func TestIssue550_ShortDirScopeDoesNotVerifyUnrelatedPackages(t *testing.T) {
 	}
 }
 
-// --- A2/A3: scope-narrow outcome text and exit-code gating ---
-
 func TestIssue550_ScopeNarrowMessageReportsRealOutcome(t *testing.T) {
 	s := newScopeNarrowState()
 	s.recordVerificationCommand("run_command", "go test ./...", "FAIL  pkg [build failed]", true)
@@ -133,8 +119,6 @@ func TestIssue550_PassedGatedByExitCodeNotTestNames(t *testing.T) {
 		t.Fatal("A3: exit-code-0 run of a test whose NAME contains 'Error' must be judged passed")
 	}
 
-	// Whole-trajectory guard: three passing runs with Error-ish names must
-	// not be misread as failures (previously silenced the detector).
 	s2 := newScopeNarrowState()
 	s2.recordVerificationCommand("run_command", "go test ./...", out, false)
 	s2.recordVerificationCommand("run_command", "go test ./internal/agent/", out, false)
@@ -142,8 +126,6 @@ func TestIssue550_PassedGatedByExitCodeNotTestNames(t *testing.T) {
 		t.Fatalf("A3: all-pass trajectory must not fire despite Error-named tests: %s", msg)
 	}
 }
-
-// --- C1: sibling scan must exclude co-edited files ---
 
 func TestIssue550_CrossImpactStillFiresForUneditedSibling(t *testing.T) {
 	dir := initGitRepo(t)
@@ -154,8 +136,6 @@ func TestIssue550_CrossImpactStillFiresForUneditedSibling(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent removes Shared from a.go; sibling b.go (NOT edited) still
-	// references it — this must still be flagged.
 	mustWriteCR(t, aGo, "package p\n\nfunc Other() {}\n")
 
 	ag := &Agent{crossFileImpact: newCrossFileImpactState(), workingDir: dir}
@@ -177,8 +157,6 @@ func TestIssue550_CrossImpactExcludesCoEditedSibling(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Symbol MOVE: definition leaves a.go and lands in b.go — both files
-	// edited this run, nothing unedited references the removed symbol.
 	mustWriteCR(t, aGo, "package p\n\nfunc Other() {}\n")
 	mustWriteCR(t, bGo, "package p\n\nfunc shared() {}\n\nfunc use() { shared() }\n")
 

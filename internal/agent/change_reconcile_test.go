@@ -18,7 +18,7 @@ func TestChangeReconcile_NoGitRepo(t *testing.T) {
 		ToolCalls:   map[string]int{"edit_file": 1},
 		FilesEdited: []string{filepath.Join(dir, "main.go")},
 	}
-	// Not a git repo -- should return empty.
+
 	msg := a.checkChangeReconcile(stats)
 	if msg != "" {
 		t.Fatalf("expected empty message in non-git dir, got: %s", msg)
@@ -44,13 +44,11 @@ func TestChangeReconcile_NoChanges(t *testing.T) {
 func TestChangeReconcile_AllExpected(t *testing.T) {
 	dir := initGitRepo(t)
 
-	// Create and commit initial file.
 	mainGo := filepath.Join(dir, "main.go")
 	mustWriteCR(t, mainGo, "package main\n")
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent edits main.go (expected).
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 
 	a := &Agent{
@@ -70,7 +68,6 @@ func TestChangeReconcile_AllExpected(t *testing.T) {
 func TestChangeReconcile_UnexpectedSourceFile(t *testing.T) {
 	dir := initGitRepo(t)
 
-	// Create and commit initial files.
 	mainGo := filepath.Join(dir, "main.go")
 	helperGo := filepath.Join(dir, "helper.go")
 	mustWriteCR(t, mainGo, "package main\n")
@@ -78,7 +75,6 @@ func TestChangeReconcile_UnexpectedSourceFile(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent edits main.go but a command also modifies helper.go.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	mustWriteCR(t, helperGo, "package main\n\n// unexpected change\n")
 
@@ -102,7 +98,6 @@ func TestChangeReconcile_UnexpectedSourceFile(t *testing.T) {
 func TestChangeReconcile_SideEffectFilesIgnored(t *testing.T) {
 	dir := initGitRepo(t)
 
-	// Create and commit initial files.
 	mainGo := filepath.Join(dir, "main.go")
 	goSum := filepath.Join(dir, "go.sum")
 	mustWriteCR(t, mainGo, "package main\n")
@@ -110,7 +105,6 @@ func TestChangeReconcile_SideEffectFilesIgnored(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent edits main.go; go mod tidy changes go.sum (expected side effect).
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	mustWriteCR(t, goSum, "modified by go mod tidy\n")
 
@@ -163,7 +157,6 @@ func TestChangeReconcile_NoCodeChanged(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent didn't edit any files.
 	mustWriteCR(t, mainGo, "package main\n\n// changed externally\n")
 
 	a := &Agent{
@@ -174,18 +167,15 @@ func TestChangeReconcile_NoCodeChanged(t *testing.T) {
 		ToolCalls: map[string]int{"run_command": 1},
 	}
 	msg := a.checkChangeReconcile(stats)
-	// Should still detect unexpected changes even if agent used no edit tools.
+
 	if msg == "" {
 		t.Fatal("expected warning when source file changed but agent didn't edit anything")
 	}
 }
 
-// --- helpers ---
-
 func TestChangeReconcile_PreRunDirtyExcluded(t *testing.T) {
 	dir := initGitRepo(t)
 
-	// Create and commit initial files.
 	mainGo := filepath.Join(dir, "main.go")
 	helperGo := filepath.Join(dir, "helper.go")
 	mustWriteCR(t, mainGo, "package main\n")
@@ -193,7 +183,6 @@ func TestChangeReconcile_PreRunDirtyExcluded(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// User has pre-existing uncommitted changes to helper.go BEFORE the run.
 	mustWriteCR(t, helperGo, "package main\n\n// user's own change\n")
 
 	a := &Agent{
@@ -201,20 +190,18 @@ func TestChangeReconcile_PreRunDirtyExcluded(t *testing.T) {
 		workingDir:      dir,
 	}
 
-	// Capture pre-run state -- should record helper.go as dirty.
 	a.changeReconcile.capturePreRunState(dir)
 	if a.changeReconcile.dirtyFileCount() != 1 {
 		t.Fatalf("expected 1 pre-run dirty file, got %d", a.changeReconcile.dirtyFileCount())
 	}
 
-	// Agent edits main.go during the run.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 
 	stats := &RunStats{
 		ToolCalls:   map[string]int{"edit_file": 1},
 		FilesEdited: []string{"main.go"},
 	}
-	// helper.go was dirty BEFORE the run, so it should NOT be flagged.
+
 	msg := a.checkChangeReconcile(stats)
 	if msg != "" {
 		t.Fatalf("expected no warning for pre-existing dirty file, got: %s", msg)
@@ -231,7 +218,6 @@ func TestChangeReconcile_PreRunDirtyButAgentAlsoEdited(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// User has pre-existing changes to helper.go.
 	mustWriteCR(t, helperGo, "package main\n\n// user change\n")
 
 	a := &Agent{
@@ -240,7 +226,6 @@ func TestChangeReconcile_PreRunDirtyButAgentAlsoEdited(t *testing.T) {
 	}
 	a.changeReconcile.capturePreRunState(dir)
 
-	// Agent also edits helper.go and main.go.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	mustWriteCR(t, helperGo, "package main\n\n// user change + agent change\n")
 
@@ -248,7 +233,7 @@ func TestChangeReconcile_PreRunDirtyButAgentAlsoEdited(t *testing.T) {
 		ToolCalls:   map[string]int{"edit_file": 2},
 		FilesEdited: []string{"main.go", "helper.go"},
 	}
-	// Both files were edited by agent -- no unexpected changes.
+
 	msg := a.checkChangeReconcile(stats)
 	if msg != "" {
 		t.Fatalf("expected no warning when agent edited all changed files, got: %s", msg)
@@ -292,7 +277,6 @@ func TestChangeReconcile_PreRunDirtyNewUnexpectedStillDetected(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// User has pre-existing changes to helper.go.
 	mustWriteCR(t, helperGo, "package main\n\n// user change\n")
 
 	a := &Agent{
@@ -301,7 +285,6 @@ func TestChangeReconcile_PreRunDirtyNewUnexpectedStillDetected(t *testing.T) {
 	}
 	a.changeReconcile.capturePreRunState(dir)
 
-	// Agent edits main.go; a side-effect command also modifies third.go.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	mustWriteCR(t, thirdGo, "package main\n\n// side effect\n")
 
@@ -310,7 +293,7 @@ func TestChangeReconcile_PreRunDirtyNewUnexpectedStillDetected(t *testing.T) {
 		FilesEdited: []string{"main.go"},
 	}
 	msg := a.checkChangeReconcile(stats)
-	// helper.go is excluded (pre-existing), but third.go should still be flagged.
+
 	if msg == "" {
 		t.Fatal("expected warning for unexpected third.go change")
 	}
@@ -322,10 +305,6 @@ func TestChangeReconcile_PreRunDirtyNewUnexpectedStillDetected(t *testing.T) {
 	}
 }
 
-// #2884: untracked files created by shell commands (generator output) must
-// be visible to reconciliation -- `git diff --name-only HEAD` alone never
-// lists them, so the gate's headline use case (code generation side effects)
-// was a systematic miss.
 func TestChangeReconcile_UntrackedSideEffectFileDetected(t *testing.T) {
 	dir := initGitRepo(t)
 
@@ -334,9 +313,6 @@ func TestChangeReconcile_UntrackedSideEffectFileDetected(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// Agent edits main.go; a shell command (protoc/swag/etc.) CREATES a new
-	// source file in a fresh subdirectory - untracked, never edited via
-	// edit_file/write_file.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	genDir := filepath.Join(dir, "gen")
 	if err := os.MkdirAll(genDir, 0o755); err != nil {
@@ -361,9 +337,6 @@ func TestChangeReconcile_UntrackedSideEffectFileDetected(t *testing.T) {
 	}
 }
 
-// #2884 negative: untracked files that existed BEFORE the run (the user's
-// own work-in-progress) must not be flagged -- capturePreRunState uses the
-// same merged file set, so pre-existing untracked entries land in preRunDirty.
 func TestChangeReconcile_PreExistingUntrackedExcluded(t *testing.T) {
 	dir := initGitRepo(t)
 
@@ -372,7 +345,6 @@ func TestChangeReconcile_PreExistingUntrackedExcluded(t *testing.T) {
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
-	// User's own untracked WIP file present before the run starts.
 	mustWriteCR(t, filepath.Join(dir, "wip.go"), "package main\n")
 
 	a := &Agent{
@@ -384,7 +356,6 @@ func TestChangeReconcile_PreExistingUntrackedExcluded(t *testing.T) {
 		t.Fatalf("expected pre-run snapshot to include untracked file, got %d dirty", a.changeReconcile.dirtyFileCount())
 	}
 
-	// Agent edits main.go during the run.
 	mustWriteCR(t, mainGo, "package main\n\nfunc main() {}\n")
 	stats := &RunStats{
 		ToolCalls:   map[string]int{"edit_file": 1},
@@ -396,9 +367,6 @@ func TestChangeReconcile_PreExistingUntrackedExcluded(t *testing.T) {
 	}
 }
 
-// #2884 negative: a new file the agent explicitly created via write_file is
-// in FilesEdited -- reconciliation must not flag the agent's own declared
-// output even though it is untracked.
 func TestChangeReconcile_UntrackedAgentDeclaredNotFlagged(t *testing.T) {
 	dir := initGitRepo(t)
 
@@ -423,8 +391,6 @@ func TestChangeReconcile_UntrackedAgentDeclaredNotFlagged(t *testing.T) {
 		t.Fatalf("expected no warning when agent declared the new file, got: %s", msg)
 	}
 }
-
-// initGitRepo is defined in test_impact_test.go.
 
 func runGitCR(t *testing.T, dir string, args ...string) {
 	t.Helper()

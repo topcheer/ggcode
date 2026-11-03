@@ -222,13 +222,11 @@ func (noopTaskProvider) GetTaskOutput(taskID string) (string, bool) {
 	return "", false
 }
 
-// #1346: the subject gate must count runes, not bytes - 150 CJK chars
-// (450 bytes) is within the documented 200-char limit.
 func TestTaskCreate_CJKSubjectRuneGate(t *testing.T) {
 	mgr := task.NewManager()
 	tool := TaskCreateTool{Manager: mgr}
 
-	subject := strings.Repeat("任", 150) // 450 bytes, 150 runes
+	subject := strings.Repeat("任", 150)
 	input, _ := json.Marshal(map[string]interface{}{"subject": subject})
 	res, err := tool.Execute(context.Background(), input)
 	if err != nil {
@@ -238,7 +236,6 @@ func TestTaskCreate_CJKSubjectRuneGate(t *testing.T) {
 		t.Fatalf("150-rune CJK subject must be accepted (max 200 chars), got: %s", res.Content)
 	}
 
-	// 250 runes exceeds the limit and must still be rejected.
 	tooLong := strings.Repeat("任", 250)
 	input, _ = json.Marshal(map[string]interface{}{"subject": tooLong})
 	res, err = tool.Execute(context.Background(), input)

@@ -10,18 +10,11 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// ListMemoryTool gives the agent visibility over stored auto memories.
-// save_memory writes and delete_memory removes, but without an inventory
-// view the agent could not curate: outdated entries persisted silently
-// because the agent never saw they existed (SelfMem "agent as memory
-// curator" gap). Updating is done by re-calling save_memory with the same
-// key (supersede semantics).
 type ListMemoryTool struct {
 	globalMem  *memory.AutoMemory
 	projectMem *memory.AutoMemory
 }
 
-// NewListMemoryTool creates a list_memory tool with global and project memory.
 func NewListMemoryTool(globalMem, projectMem *memory.AutoMemory) *ListMemoryTool {
 	return &ListMemoryTool{globalMem: globalMem, projectMem: projectMem}
 }
@@ -86,9 +79,6 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		return Result{IsError: true, Content: fmt.Sprintf("invalid scope %q: must be 'all', 'project', or 'global'", params.Scope)}, nil
 	}
 
-	// r488 (Mem++ arXiv:2610.02002) single-key temporal read: which version
-	// of this key held at as_of. Without as_of, a plain key view (current
-	// content + archived version count).
 	if params.Key != "" {
 		var asOf time.Time
 		if params.AsOf != "" {
@@ -104,24 +94,13 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 				continue
 			}
 			if params.AsOf != "" {
-				// #4710: the temporal read must not be gated by the CURRENT
-				// existence of the key - DeleteMemory archives + tombstones
-				// (the .history versions stay), so a deleted key still holds
-				// its archived past. LoadKey returning empty previously
-				// skipped the scope entirely and the archived version was
-				// misreported as a bare "key not found". Consult the temporal
-				// store directly; the current view (below) keeps the gate.
+
 				content, held, ok, rerr := s.mem.ReadMemoryAsOf(params.Key, asOf)
 				if rerr != nil {
 					return Result{IsError: true, Content: fmt.Sprintf("as_of read failed: %v", rerr)}, nil
 				}
 				if !ok {
-					// #4455: the CURRENT project-global shadowing must not
-					// cut a point-in-time lookup short - the project key
-					// may not have existed at as_of while a global
-					// version did. Fall through to the next scope; the
-					// did-not-exist verdict is only issued after every
-					// scope was checked.
+
 					asOfMissed = append(asOfMissed, s.label)
 					continue
 				}
@@ -139,8 +118,7 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 			return Result{Content: fmt.Sprintf("[%s] %s (%d archived version(s)):\n%s", s.label, params.Key, len(vers), cur)}, nil
 		}
 		if params.AsOf != "" && len(asOfMissed) > 0 {
-			// #4455: every scope checked at the requested point in time had
-			// no version of the key held then.
+
 			return Result{Content: fmt.Sprintf("%q did not exist at %s (checked scope(s): %s)", params.Key, params.AsOf, strings.Join(asOfMissed, ", "))}, nil
 		}
 		return Result{IsError: true, Content: fmt.Sprintf("key %q not found in scope %q", params.Key, params.Scope)}, nil

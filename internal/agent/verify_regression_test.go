@@ -29,9 +29,8 @@ func TestVerifyRegression_AllPersistent(t *testing.T) {
 		"foo.go:42: undefined: someFunc",
 		"bar.go:10: syntax error",
 	}
-	v.classifyErrors(errors) // establish baseline
+	v.classifyErrors(errors)
 
-	// Same errors again — should be persistent
 	result := v.classifyErrors(errors)
 	if result == "" {
 		t.Fatal("should return non-empty annotation for persistent errors")
@@ -53,7 +52,6 @@ func TestVerifyRegression_NewErrorDetected(t *testing.T) {
 		"foo.go:42: undefined: someFunc",
 	})
 
-	// Fix the first error but introduce a new one
 	result := v.classifyErrors([]string{
 		"bar.go:10: undefined: otherFunc",
 	})
@@ -77,7 +75,6 @@ func TestVerifyRegression_LineNumberStability(t *testing.T) {
 		"foo.go:42: undefined: someFunc",
 	})
 
-	// Same error but at a different line number — should NOT be NEW
 	result := v.classifyErrors([]string{
 		"foo.go:50: undefined: someFunc",
 	})
@@ -92,8 +89,6 @@ func TestVerifyRegression_PathStability(t *testing.T) {
 		"./internal/agent/foo.go:42: undefined: someFunc",
 	})
 
-	// Same error with ./-spelling variance — should NOT be NEW (#1486 case D:
-	// absolute-vs-relative no longer merges by design, sibling separation).
 	result := v.classifyErrors([]string{
 		"internal/agent/foo.go:42: undefined: someFunc",
 	})
@@ -108,13 +103,11 @@ func TestVerifyRegression_PassClearsBaseline(t *testing.T) {
 		"foo.go:42: undefined: someFunc",
 	})
 
-	// Verification passes — should clear baseline
 	result := v.classifyErrors(nil)
 	if result != "" {
 		t.Error("passing verification should return empty annotation")
 	}
 
-	// Next failure should be treated as first run (no REGRESSION annotation)
 	result = v.classifyErrors([]string{
 		"foo.go:42: undefined: someFunc",
 	})
@@ -131,11 +124,10 @@ func TestVerifyRegression_MixedErrors(t *testing.T) {
 		"baz.go:5: syntax error",
 	})
 
-	// Fix funcB, keep funcA and syntax error, add new error
 	result := v.classifyErrors([]string{
-		"foo.go:42: undefined: funcA", // persistent
-		"baz.go:5: syntax error",      // persistent
-		"new.go:1: undefined: funcC",  // NEW regression
+		"foo.go:42: undefined: funcA",
+		"baz.go:5: syntax error",
+		"new.go:1: undefined: funcC",
 	})
 	if !strings.Contains(result, "1 NEW") {
 		t.Errorf("should detect 1 NEW error, got: %s", result)
@@ -152,7 +144,6 @@ func TestVerifyRegression_NewErrorCount(t *testing.T) {
 	v := newVerifyRegressionState()
 	v.classifyErrors([]string{"a.go:1: error one"})
 
-	// Multiple new errors
 	result := v.classifyErrors([]string{
 		"b.go:1: error two",
 		"c.go:1: error three",
@@ -177,7 +168,7 @@ func TestVerifyRegression_Reset(t *testing.T) {
 }
 
 func TestBuildRegressionSummary_MaxErrorsCapped(t *testing.T) {
-	// Generate more errors than the cap
+
 	newErrors := make([]string, maxRegressionErrors+3)
 	for i := range newErrors {
 		newErrors[i] = "error"

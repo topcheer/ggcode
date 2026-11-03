@@ -65,15 +65,15 @@ func TestAcceptanceReminder(t *testing.T) {
 	if !strings.Contains(r, "self-report") {
 		t.Error("validator guidance missing")
 	}
-	// No criteria -> no reminder.
+
 	if r := acceptanceReminder("no criteria here", "result"); r != "" {
 		t.Errorf("want empty reminder, got %q", r)
 	}
-	// No result -> no reminder.
+
 	if r := acceptanceReminder(task, ""); r != "" {
 		t.Errorf("empty result should skip, got %q", r)
 	}
-	// Re-poll idempotency: marker already present.
+
 	if r := acceptanceReminder(task, "result "+acceptanceMarker); r != "" {
 		t.Errorf("re-poll should skip, got %q", r)
 	}

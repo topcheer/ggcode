@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Regression for #1487: ActivateCurrentSelection rewrote the active selection
-// via SetActiveSelection BEFORE validation ran, and a failed switch left cfg
-// poisoned at the broken choice - later provider rebuilds then failed against
-// it, taking down the previously working provider.
 func TestActivateCurrentSelectionRollsBackOnResolveFailure(t *testing.T) {
 	cfg := &config.Config{
 		Vendor:   "v1",
@@ -24,8 +20,7 @@ func TestActivateCurrentSelectionRollsBackOnResolveFailure(t *testing.T) {
 			"v1": {Endpoints: map[string]config.EndpointConfig{
 				"e1": {APIKey: "k1", BaseURL: "https://one.test", SelectedModel: "m1"},
 			}},
-			// v2/e2 resolves but has no API key -> Resolve fails AFTER
-			// SetActiveSelection already rewrote the selection.
+
 			"v2": {Endpoints: map[string]config.EndpointConfig{
 				"e2": {BaseURL: "https://two.test", SelectedModel: "m2"},
 			}},
@@ -43,8 +38,6 @@ func TestActivateCurrentSelectionRollsBackOnResolveFailure(t *testing.T) {
 	}
 }
 
-// fakeApplyProvider implements just enough of provider.Provider for
-// ApplyProviderToAgent (embedded nil interface keeps it inert).
 type fakeApplyProvider struct {
 	provider.Provider
 }
@@ -54,12 +47,6 @@ func (f *fakeApplyProvider) Chat(_ context.Context, _ []provider.Message, _ []pr
 	return &provider.ChatResponse{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("ok")}}}, nil
 }
 
-// TestApplyProviderToAgentGatesMemoryTool pins #2511: the agent-side memory
-// executor is enabled iff the resolved endpoint is anthropic-protocol AND
-// configured memory_tool: true - the same gate the provider registry uses to
-// declare the tool. Any other combination (non-anthropic protocol, or the
-// flag unset) must leave the executor disabled so hallucinated name="memory"
-// calls fall through to UnknownToolError.
 func TestApplyProviderToAgentGatesMemoryTool(t *testing.T) {
 	prov := &fakeApplyProvider{}
 	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
@@ -90,16 +77,12 @@ func TestApplyProviderToAgentGatesMemoryTool(t *testing.T) {
 	}
 }
 
-// TestResolveCurrentSelectionWrapsPureFallbacksArray pins #1674 case 2: a
-// config with ONLY the modern fallbacks array (no legacy single entry) must
-// still get a FallbackProvider wrapper - the old guard checked
-// Fallback.IsConfigured() alone and silently skipped the wrap.
 func TestResolveCurrentSelectionWrapsPureFallbacksArray(t *testing.T) {
 	cfg := &config.Config{
 		Vendor:   "v1",
 		Endpoint: "e1",
 		Model:    "m1",
-		// No legacy cfg.Fallback at all.
+
 		Fallbacks: []config.FallbackConfig{
 			{Enabled: true, Vendor: "v2", Endpoint: "e2", Model: "m2"},
 		},
@@ -121,9 +104,6 @@ func TestResolveCurrentSelectionWrapsPureFallbacksArray(t *testing.T) {
 	}
 }
 
-// sa-44: ApplyProviderToAgent is the GGCODE_LLM_TAPE choke point - when the
-// env is set to record mode, the agent must end up holding a TapeProvider
-// wrapper; when unset, the provider must pass through unwrapped.
 func TestApplyProviderToAgentWrapsLLMTapeFromEnv(t *testing.T) {
 	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
 
@@ -151,10 +131,6 @@ func TestApplyProviderToAgentWrapsLLMTapeFromEnv(t *testing.T) {
 	})
 }
 
-// sa-65: ApplyProviderToAgent is also the GGCODE_LLM_FAULT choke point -
-// the fault injector must wrap OUTSIDE the tape (agent receives the
-// perturbed stream, tape stays pristine) and must not double-wrap on hot
-// model switches (mirrors the #3917 tape idempotency contract).
 func TestApplyProviderToAgentWrapsLLMFaultFromEnv(t *testing.T) {
 	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
 
@@ -191,7 +167,7 @@ func TestApplyProviderToAgentWrapsLLMFaultFromEnv(t *testing.T) {
 		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
 		ApplyProviderToAgent(a, prov, &base)
 		wrapped := a.Provider()
-		// Re-apply with the already-wrapped provider (hot model switch path).
+
 		ApplyProviderToAgent(a, wrapped, &base)
 		fp, ok := a.Provider().(*provider.FaultProvider)
 		if !ok {

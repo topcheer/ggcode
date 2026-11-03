@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// #1522 case B pin: exit 127 from a compound command is a REAL failure.
 func Test1522Compound127IsFailure(t *testing.T) {
 	if isNonFailureExit("go test ./... || npm run build", 127) {
 		t.Fatal("compound-command 127 must not get the not-found amnesty (fallback leg 127 swallowed a real test failure)")
@@ -15,7 +14,6 @@ func Test1522Compound127IsFailure(t *testing.T) {
 	}
 }
 
-// #1522 case C pin: fenced oracle output must be unwrapped.
 func Test1522StripCodeFence(t *testing.T) {
 	for in, want := range map[string]string{
 		"```go\ngo test ./...\n```":         "go test ./...",
@@ -29,7 +27,6 @@ func Test1522StripCodeFence(t *testing.T) {
 	}
 }
 
-// #1522 case D pin: batch_replace's bare []string files must yield paths.
 func Test1522BatchReplaceFilesExtracted(t *testing.T) {
 	args := json.RawMessage(`{"pattern":"x","replacement":"y","files":["/a/foo.go","/b/bar.go"]}`)
 	if got := extractFilePathFromArgs("batch_replace", args); got != "/a/foo.go" {

@@ -149,7 +149,6 @@ func (r *Repo) Save() error { return nil }
 func (r *Repo) Load() error { return nil }
 `), 0644)
 
-	// Test uses alternate naming: TestRepoSave (no underscore)
 	testFile := filepath.Join(dir, "repo_test.go")
 	os.WriteFile(testFile, []byte(`package repo
 
@@ -174,7 +173,6 @@ func TestFuncLevelCoverageGaps(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Changed file with untested functions.
 	writeGoFile(t, dir, "pkg/api.go", "package pkg\n\nfunc Create() {}\nfunc Delete() {}\n")
 
 	gaps := funcLevelCoverageGaps(dir, 5, 10)
@@ -274,7 +272,7 @@ func TestBuildImportGraph_NotGoModule(t *testing.T) {
 }
 
 func TestTransitiveImporters_RealModule(t *testing.T) {
-	// Test against the real ggcode module — if go list works, verify the graph.
+
 	dir := "/Volumes/new/ggai/ggcode"
 	if !fileExists(filepath.Join(dir, "go.mod")) {
 		t.Skip("not running in ggcode module")
@@ -288,11 +286,10 @@ func TestTransitiveImporters_RealModule(t *testing.T) {
 		t.Fatal("expected non-empty module path")
 	}
 
-	// internal/debug is imported by many packages. Check transitive importers.
 	importers, _ := transitiveImporters(dir, []string{"internal/debug"})
-	// This may return nil if go list didn't resolve; just don't panic.
+
 	if importers != nil {
-		// Should contain at least internal/agent since agent imports debug.
+
 		found := false
 		for _, imp := range importers {
 			if imp == "internal/agent" {
@@ -301,7 +298,7 @@ func TestTransitiveImporters_RealModule(t *testing.T) {
 			}
 		}
 		if !found {
-			// Not a failure — go list output format may vary.
+
 			t.Logf("importers of internal/debug: %v", importers)
 		}
 	}
@@ -320,7 +317,6 @@ func TestImpactScopedTestCommandWithDeps_NoGoMod(t *testing.T) {
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 	writeGoFile(t, dir, "new.go", "package main\n")
 
-	// No go.mod — should return empty.
 	if cmd := impactScopedTestCommandWithDeps(dir); cmd != "" {
 		t.Errorf("expected empty for non-Go-module, got %s", cmd)
 	}
@@ -332,11 +328,8 @@ func TestImpactScopedTestCommandWithDeps_RealModule(t *testing.T) {
 		t.Skip("not running in ggcode module")
 	}
 
-	// Manually set up fake changes by checking if git is available.
-	// This test just verifies the function doesn't panic and returns
-	// a valid command or empty string.
 	cmd := impactScopedTestCommandWithDeps(dir)
-	// Don't assert specific value — depends on git state.
+
 	if cmd != "" {
 		if !strings.HasPrefix(cmd, "go test ") {
 			t.Errorf("expected go test prefix, got %s", cmd)
@@ -344,9 +337,8 @@ func TestImpactScopedTestCommandWithDeps_RealModule(t *testing.T) {
 	}
 }
 
-// TestImportGraphCacheInvalidation verifies the cache returns data within TTL.
 func TestImportGraphCacheTTL(t *testing.T) {
-	// Reset cache.
+
 	importGraphCache.Lock()
 	importGraphCache.dir = ""
 	importGraphCache.data = importGraphEntry{}
@@ -357,13 +349,11 @@ func TestImportGraphCacheTTL(t *testing.T) {
 		t.Skip("not in ggcode module")
 	}
 
-	// First call builds the graph.
 	g1, _ := buildImportGraph(dir)
 	if g1 == nil {
 		t.Skip("go list not available")
 	}
 
-	// Second call within TTL should return cached data (same pointer).
 	g2, _ := buildImportGraph(dir)
 	if len(g1) != len(g2) {
 		t.Logf("graph size differs (may be race): %d vs %d", len(g1), len(g2))

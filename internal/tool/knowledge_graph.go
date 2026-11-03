@@ -13,20 +13,6 @@ import (
 	"unicode/utf8"
 )
 
-// KnowledgeGraphTool provides a persistent, project-scoped knowledge graph
-// where the agent records structured facts about the codebase - architectural
-// decisions, design patterns, key entities, known issues - and the relationships
-// between them. Unlike flat key-value memory (save_memory), the graph supports
-// typed nodes, typed edges, status lifecycle (proposed -> accepted -> superseded),
-// and relationship traversal (trace).
-//
-// Storage: <workingDir>/.ggcode/knowledge-graph.json
-//
-// Competitor gap: No major AI coding agent (Claude Code, Cursor, Cline,
-// OpenHands, Aider, Windsurf) maintains a structured, queryable knowledge
-// graph. They rely on flat files (CLAUDE.md, .cursorrules) or ephemeral
-// per-session context.
-
 const (
 	kgMaxTitle      = 200
 	kgMaxContent    = 4000
@@ -59,11 +45,6 @@ type kgNode struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// kgEdge carries bi-temporal validity (Zep/Graphiti model, arXiv:2501.13956):
-// RecordedAt is system time (when the agent recorded the fact), while
-// ValidFrom/ValidUntil span the fact's real-world validity interval. Edges
-// are never hard-deleted on invalidation - they are soft-invalidated so
-// historical point-in-time views (trace as_of) remain queryable.
 type kgEdge struct {
 	From       string     `json:"from"`
 	To         string     `json:"to"`
@@ -79,21 +60,19 @@ type kgStore struct {
 }
 
 type kgParams struct {
-	Action  string   `json:"action"`
-	ID      string   `json:"id"`
-	Type    string   `json:"type"`
-	Title   string   `json:"title"`
-	Content string   `json:"content"`
-	Tags    []string `json:"tags"`
-	Status  string   `json:"status"`
-	To      string   `json:"to"`
-	Query   string   `json:"query"`
-	// Bi-temporal params (Zep/Graphiti model):
-	ValidFrom string `json:"valid_from"`
-	AsOf      string `json:"as_of"`
+	Action    string   `json:"action"`
+	ID        string   `json:"id"`
+	Type      string   `json:"type"`
+	Title     string   `json:"title"`
+	Content   string   `json:"content"`
+	Tags      []string `json:"tags"`
+	Status    string   `json:"status"`
+	To        string   `json:"to"`
+	Query     string   `json:"query"`
+	ValidFrom string   `json:"valid_from"`
+	AsOf      string   `json:"as_of"`
 }
 
-// KnowledgeGraphTool implements the knowledge_graph tool.
 type KnowledgeGraphTool struct {
 	WorkingDir string
 
@@ -196,19 +175,10 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 		idWasAuto = true
 	}
 	if len(id) > 80 {
-		// #4452: byte slicing can split a multi-byte UTF-8 rune, producing an
-		// invalid id that json.Marshal persists as U+FFFD - after a restart the
-		// stored key no longer matches the id we returned to the caller (and two
-		// distinct over-long ids can even collapse onto one key). Truncate on a
-		// rune boundary instead.
+
 		id = truncateIDBytes(id, 80)
 	}
-	// #1692 case 4: slugify is lowercase + strip-non-[a-z0-9-], so "C++ API"
-	// and "c api" both become "c-api" - the second add hit the partial-
-	// update branch and silently OVERWROTE the first node's Content while
-	// reporting plain "saved". When the id was auto-generated and the
-	// existing node has a different title, disambiguate with a numeric
-	// suffix instead. Same title → legitimate update path.
+
 	if idWasAuto {
 		for i := 2; ; i++ {
 			ex, exists := s.Nodes[id]
@@ -225,27 +195,18 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	}
 
 	now := time.Now()
-	// #4098: capture the pre-update title BEFORE the field assignment
-	// below - the disclosure at the end re-reads s.Nodes[id] (the same
-	// pointer, already carrying p.Title), so comparing against ex.Title
-	// there was always equal and the #1692 case-4 disclosure never fired
-	// (silent overwrite of a different-title node under an explicit id).
+
 	prevTitle := ""
 	if ex, ok := s.Nodes[id]; ok {
 		prevTitle = ex.Title
-		// #1327: Type had no non-empty guard (Title/Content/Tags/Status all
-		// do) - a partial update carrying id+title but no type silently
-		// reclassified decision/entity nodes as note, and the next save
-		// persisted the demotion.
+
 		if p.Type != "" {
 			ex.Type = nt
 		}
 		if p.Title != "" {
 			ex.Title = p.Title
 		}
-		// #844: Content was unconditionally assigned - an update carrying only
-		// status=superseded erased the node's accumulated text. Guard like
-		// Tags/Status so partial updates preserve prior content.
+
 		if p.Content != "" {
 			ex.Content = p.Content
 		}
@@ -263,9 +224,7 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
 	}
-	// #1692 case 4: distinct titles can collide on the slug ("C++ API" vs
-	// "c api" -> c-api) and the second save silently OVERWROTE the first
-	// node's fields while reporting a plain "saved".
+
 	note := ""
 	if prevTitle != "" && p.Title != "" && !strings.EqualFold(prevTitle, p.Title) {
 		note = fmt.Sprintf(" (note: slug '%s' already existed with title %q - fields were overwritten)", id, prevTitle)
@@ -295,13 +254,7 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 		}
 		vf = &tm
 	}
-	// Temporal dedup: a currently-valid duplicate is rejected, but a fact
-	// whose prior interval was invalidated may become true again (Zep-style
-	// re-assertion) - append a fresh validity interval instead of refusing.
-	// #4452: an existing edge that is not yet valid (ValidFrom in the future)
-	// is NOT an invalidated interval - relinking it appends a parallel edge
-	// and both become valid simultaneously once ValidFrom arrives. Reject on
-	// interval overlap instead of point-in-time validity.
+
 	relink := false
 	newFrom := defaultValidFrom(vf, now)
 	for _, e := range s.Edges {
@@ -310,11 +263,7 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists.", p.ID, p.Type, p.To)}, nil
 			}
 			if e.ValidUntil == nil {
-				// #4452: an open-ended prior interval - regardless of start
-				// order, two open intervals overlap from max(ValidFrom) on,
-				// so appending would create a duplicate-live edge once the
-				// future ValidFrom arrives. Only invalidated (closed) edges
-				// are eligible for re-assertion.
+
 				from := "the beginning"
 				if e.ValidFrom != nil {
 					from = e.ValidFrom.Format(time.RFC3339)
@@ -322,13 +271,7 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists (valid from %s).",
 					p.ID, p.Type, p.To, from)}, nil
 			}
-			// #4708 defect A: a closed interval is only re-assertable when the
-			// NEW interval starts after the old one closed. The comment above
-			// has always said "Reject on interval overlap", but closed edges
-			// fell straight through to relink - a link(T1, open) ->
-			// invalidate(T2) -> link(T1.5) sequence appended [T1.5, inf) on
-			// top of [T1, T2), and trace as_of inside the overlap showed two
-			// parallel same-type edges (bi-temporal consistency broken).
+
 			if e.ValidFrom != nil && newFrom.Before(*e.ValidUntil) {
 				return Result{Content: fmt.Sprintf(
 					"Edge %s --[%s]--> %s overlaps its prior interval [%s, %s); re-assert with valid_from >= %s.",
@@ -351,10 +294,6 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 	return Result{Content: fmt.Sprintf("Linked: %s --[%s]--> %s. %sTotal edges: %d.", p.ID, p.Type, p.To, prefix, len(s.Edges))}, nil
 }
 
-// doInvalidate soft-invalidates currently-valid edges matching (id, to,
-// optional type): the fact stops being true at now, but the historical
-// interval stays queryable via trace as_of (Zep-style - edges are never
-// deleted, history is preserved).
 func (t *KnowledgeGraphTool) doInvalidate(s *kgStore, p *kgParams) (Result, error) {
 	if p.ID == "" || p.To == "" {
 		return Result{IsError: true, Content: "both id (source) and to (target) required"}, nil
@@ -395,10 +334,7 @@ func (t *KnowledgeGraphTool) doQuery(s *kgStore, p *kgParams) (Result, error) {
 		if p.Type != "" && n.Type != p.Type {
 			continue
 		}
-		// #1692 case 3: the parameter doc promises "query filter" for tags -
-		// doQuery never read p.Tags, so a tags-filtered query returned the
-		// UNFILTERED set. Node tags are lowercase (slugify); match case-
-		// insensitively, node must carry EVERY requested tag (AND).
+
 		if len(p.Tags) > 0 {
 			nodeTags := make(map[string]bool, len(n.Tags))
 			for _, t := range n.Tags {
@@ -511,10 +447,7 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 	}
 	now := time.Now()
 	hidden := 0
-	// #4708 defect B: dedupe traversal by (node, edgeType), not node alone -
-	// a second relation to an already-visited node (A--depends-on-->B and
-	// A--relates-to-->B) is a distinct edge the old key silently dropped
-	// without even counting it hidden, truncating multi-relation traces.
+
 	visited := map[string]bool{p.ID + "\x00": true}
 	type fi struct {
 		id    string
@@ -541,11 +474,7 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 			at = asOf
 		}
 		for _, e := range s.Edges {
-			// #4904: include the SOURCE node in the dedupe key. The old
-			// (to, type) key silently dropped different-source same-type
-			// fan-in edges (A--relates-to-->C and B--relates-to-->C) - the
-			// exact residue of #4708 defect B: the B→C edge line vanished
-			// from the trace output without counting as hidden.
+
 			vkey := e.From + "\x00" + e.To + "\x00" + e.Type
 			if e.From != item.id || visited[vkey] {
 				continue
@@ -625,13 +554,6 @@ func (t *KnowledgeGraphTool) doStats(s *kgStore) (Result, error) {
 	return Result{Content: sb.String()}, nil
 }
 
-// --- Persistence ---
-
-// defaultValidFrom pins #2595: an omitted (or explicit "now") valid_from
-// means the edge starts at the link moment, NOT at negative infinity. The
-// parameter schema documents "defaults to now"; a nil ValidFrom made the
-// edge visible at ANY as_of point, even well before the fact was asserted
-// (trace as_of=2000-01-01 showed edges linked in 2026).
 func defaultValidFrom(vf *time.Time, now time.Time) *time.Time {
 	if vf != nil {
 		return vf
@@ -639,12 +561,6 @@ func defaultValidFrom(vf *time.Time, now time.Time) *time.Time {
 	return &now
 }
 
-// Clone implements the Cloner contract (tool.go): this tool holds mutable
-// state (WorkingDir) plus a resolution cache pinned to that directory, so
-// every agent/worktree must get its own instance. #2596: without this, the
-// first agent to touch the graph pinned filePath/cache/loaded forever; every
-// later syncToolWorkingDir override landed the data in the wrong workspace
-// with a silent fake success.
 func (t *KnowledgeGraphTool) Clone() Tool {
 	return &KnowledgeGraphTool{WorkingDir: t.WorkingDir}
 }
@@ -690,17 +606,7 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// #4479: the cache and loaded flag are per-INSTANCE, and Registry.Clone
-	// hands every teammate/sub-agent its own tool instance on the same store
-	// file. Two instances writing concurrently each held a stale snapshot,
-	// and this whole-file rename silently dropped the other seat's nodes and
-	// edges (lost update). Re-read the disk state fresh (bypassing this
-	// instance's cache) and merge: union of nodes by id and edges by
-	// (from,to,type), with OUR version winning on collisions - ours was built
-	// on the last state we saw, so the other seat's same-id write is the
-	// stale one. Known limit: a node another seat DELETED reappears here;
-	// that resurrection is visible (queryable) rather than the silent loss
-	// this fixes, and matches the union semantics the issue prescribes.
+
 	if disk := t.readDiskFresh(); disk != nil {
 		s = mergeKGStores(disk, s)
 		t.cache = s
@@ -717,10 +623,6 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	return os.Rename(tmp, t.kgPath())
 }
 
-// readDiskFresh loads the store from disk WITHOUT touching or consulting
-// this instance's cache (#4479 merge-on-save source). nil when the file is
-// absent or corrupt (merge simply no-ops; load's error path still owns
-// surfacing corruption on first use).
 func (t *KnowledgeGraphTool) readDiskFresh() *kgStore {
 	data, err := os.ReadFile(t.kgPath())
 	if err != nil {
@@ -739,9 +641,6 @@ func (t *KnowledgeGraphTool) readDiskFresh() *kgStore {
 	return &s
 }
 
-// mergeKGStores unions two store snapshots (#4479): disk nodes absent from
-// mem are added (another seat's write this instance never saw), mem edges
-// win on the (from,to,type) composite key, disk-only edges are appended.
 func mergeKGStores(disk, mem *kgStore) *kgStore {
 	for id, n := range disk.Nodes {
 		if _, ok := mem.Nodes[id]; !ok {
@@ -762,9 +661,6 @@ func mergeKGStores(disk, mem *kgStore) *kgStore {
 	return mem
 }
 
-// --- Helpers ---
-
-// kgParseTime parses an RFC3339 timestamp (or "now") for temporal params.
 func kgParseTime(s string) (time.Time, error) {
 	if strings.EqualFold(strings.TrimSpace(s), "now") {
 		return time.Now(), nil
@@ -776,13 +672,6 @@ func kgParseTime(s string) (time.Time, error) {
 	return tm, nil
 }
 
-// kgEdgeValidAt reports whether the edge's fact is true at instant at.
-// Legacy edges without temporal fields are treated as always-valid, so
-// pre-temporal graph files keep their existing trace/list behavior.
-// truncateIDBytes caps s at n BYTES without splitting a multi-byte rune
-// (#4452: id[:80] byte slicing produced invalid UTF-8 keys that json.Marshal
-// persisted as U+FFFD, breaking the restart roundtrip). Unlike the rune-cap
-// truncateRunes in clipboard.go, this preserves the historical 80-byte id cap.
 func truncateIDBytes(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -795,7 +684,7 @@ func truncateIDBytes(s string, n int) string {
 		cut--
 	}
 	if cut == 0 {
-		return s[:n] // degenerate: whole prefix is continuation bytes
+		return s[:n]
 	}
 	return s[:cut]
 }
@@ -835,7 +724,7 @@ func formatNodeShort(sb *strings.Builder, n *kgNode) {
 	sb.WriteString(fmt.Sprintf("[%s] %s (id=%s)\n", n.Type, n.Title, n.ID))
 	if n.Content != "" {
 		pv := n.Content
-		// #850: rune-safe preview - byte slicing split multibyte characters.
+
 		if utf8.RuneCountInString(pv) > 200 {
 			pv = string([]rune(pv)[:200]) + "..."
 		}

@@ -1,16 +1,9 @@
 package agent
 
-// #618: exemption branches in retry_quality_check.go used pure name-substring
-// matching, so unbounded retry loops were silently exempted by unrelated
-// identifiers (attemptLog, countryCode) and any `<-x.C` receive masqueraded
-// as a timer backoff.
-
 import (
 	"testing"
 )
 
-// Defect 1: a for-init counter name alone (no condition, no body comparison)
-// must NOT exempt an unbounded retry loop.
 func TestIssue618_InitCounterNameAloneNotExempt(t *testing.T) {
 	src := `package main
 import "net/http"
@@ -32,8 +25,6 @@ func fetch(url string) {
 	}
 }
 
-// Defect 1/2: identifiers that merely CONTAIN counter keywords (countryCode,
-// attemptLog, retriesEnabled) must not be treated as attempt caps.
 func TestIssue618_SubstringNamesNotExempt(t *testing.T) {
 	src := `package main
 import "net/http"
@@ -60,7 +51,6 @@ func fetch(url string) {
 	}
 }
 
-// countryCode contains "count" — must not match isAttemptCounterName.
 func TestIssue618_CountryCodeNotCounterName(t *testing.T) {
 	if isAttemptCounterName("countryCode") {
 		t.Fatal("countryCode must not be treated as an attempt counter name")
@@ -76,8 +66,6 @@ func TestIssue618_CountryCodeNotCounterName(t *testing.T) {
 	}
 }
 
-// Defect 3: `<-x.C` where x is NOT a time.NewTimer/NewTicker result (e.g. an
-// event-subscription channel) is a hot loop, not a backoff.
 func TestIssue618_DotCOnNonTimerNotBackoff(t *testing.T) {
 	src := `package main
 import "net/http"
@@ -99,8 +87,6 @@ func worker(sub *subscriber) {
 	}
 }
 
-// Defect 3 counterpart: a genuine time.NewTimer result received via .C in a
-// select IS a backoff (regression guard).
 func TestIssue618_DotCOnRealTimerStillBackoff(t *testing.T) {
 	src := `package main
 import ("net/http"; "time")
@@ -121,8 +107,6 @@ func fetch(url string) {
 	}
 }
 
-// Defect 2 positive: a real comparison against a max in the body still
-// exempts (regression guard, mirrors TestRetryQuality_UnboundedButHasCounterCheckInBody).
 func TestIssue618_RealCounterComparisonStillExempts(t *testing.T) {
 	src := `package main
 import ("net/http"; "time")

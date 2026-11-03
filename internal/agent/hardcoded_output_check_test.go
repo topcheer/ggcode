@@ -5,7 +5,7 @@ import (
 )
 
 func TestCheckHardcodedOutput_GoMapMemorization(t *testing.T) {
-	// A function that returns hardcoded outputs from a large map
+
 	src := `package main
 
 func Lookup(key string) string {
@@ -93,7 +93,7 @@ func DefaultConfig(key string) string {
 }
 `
 	warnings := checkHardcodedOutput("main.go", "", src)
-	// Config getters with known/default prefixes should not warn
+
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for config getter, got: %v", warnings)
 	}
@@ -205,7 +205,7 @@ func TestCheckHardcodedOutput_EmptyFile(t *testing.T) {
 }
 
 func TestCheckHardcodedOutput_RealComputationNoFalsePositive(t *testing.T) {
-	// A function with a switch that computes results, not just returns literals
+
 	src := `package main
 
 func calculate(input int) int {
@@ -226,14 +226,12 @@ func calculate(input int) int {
 }
 `
 	warnings := checkHardcodedOutput("calc.go", "", src)
-	// Cases return computed expressions, not literals - should not fire
+
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for computed switch, got: %v", warnings)
 	}
 }
 
-// TestHardcodedOutput_DeltaSuppress pins fix #174: a pre-existing large
-// lookup map must not re-report on unrelated edits.
 func TestHardcodedOutput_DeltaSuppress(t *testing.T) {
 	old := "package main\nfunc lookupCode(s string) string {\n\tm := map[string]string{\n\t\t\"a\": \"1\", \"b\": \"2\", \"c\": \"3\", \"d\": \"4\", \"e\": \"5\", \"f\": \"6\",\n\t}\n\treturn m[s]\n}\n"
 	newC := "package main\n// touched\nfunc lookupCode(s string) string {\n\tm := map[string]string{\n\t\t\"a\": \"1\", \"b\": \"2\", \"c\": \"3\", \"d\": \"4\", \"e\": \"5\", \"f\": \"6\",\n\t}\n\treturn m[s]\n}\n"
@@ -243,8 +241,6 @@ func TestHardcodedOutput_DeltaSuppress(t *testing.T) {
 	}
 }
 
-// TestHardcodedOutput_PythonEntryCount pins fix #174: a 3-pair dict must NOT
-// fire (threshold is 5) and counts must reflect real pairs, not quote chars.
 func TestHardcodedOutput_PythonEntryCount(t *testing.T) {
 	src := "LOOKUP = {\"a\": \"b\", \"c\": \"d\", \"e\": \"f\"}\n"
 	w := checkHardcodedOutput("a.py", "", src)

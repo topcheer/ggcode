@@ -11,33 +11,12 @@ import (
 	"strings"
 )
 
-// ── Linux DBus helpers ──────────────────────────────────────────────────────
-//
-// On Linux, Ghostty uses the GTK/GIO DBus Actions API for IPC.
-// The bus name defaults to "com.mitchellh.ghostty" and the object path to
-// "/com/mitchellh/ghostty". Actions are invoked via org.gtk.Actions.Activate.
-//
-// Reference (from Ghostty source, src/apprt/gtk/ipc/new_window.zig):
-//
-//	gdbus call --session \
-//	  --dest com.mitchellh.ghostty \
-//	  --object-path /com/mitchellh/ghostty \
-//	  --method org.gtk.Actions.Activate \
-//	  new-window [] {}
-//
-// Widget-level actions (split-tree.new-split, split-tree.equalize, etc.) are
-// registered on the SplitTree widget, not the GApplication. However, GTK
-// accelerators registered on the application reference these actions, so they
-// may be accessible via the action muxer. We try DBus first, fall back to
-// xdotool key simulation for actions that aren't directly available.
-
 const (
 	ghosttyDBusBusName = "com.mitchellh.ghostty"
 	ghosttyDBusObjPath = "/com/mitchellh/ghostty"
 	ghosttyDBusIFace   = "org.gtk.Actions"
 )
 
-// gdbusCall invokes a GIO DBus action on the Ghostty application.
 func gdbusCall(ctx context.Context, action string, params string) (string, error) {
 	args := []string{
 		"call", "--session",
@@ -53,7 +32,7 @@ func gdbusCall(ctx context.Context, action string, params string) (string, error
 	}
 
 	if err := ctx.Err(); err != nil {
-		return "", err // #1686 case 1
+		return "", err
 	}
 	cmd := exec.CommandContext(ctx, "gdbus", args...)
 	out, err := cmd.Output()
@@ -70,7 +49,6 @@ func gdbusCall(ctx context.Context, action string, params string) (string, error
 	return strings.TrimSpace(string(out)), nil
 }
 
-// gdbusList lists all exported DBus actions.
 func gdbusList(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -93,15 +71,12 @@ func gdbusList(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ghosttyBinaryPath returns the path to the ghostty CLI binary, or empty if not found.
 func ghosttyBinaryPath() string {
 	if p, err := exec.LookPath("ghostty"); err == nil {
 		return p
 	}
 	return ""
 }
-
-// ── Action implementations (Linux) ──────────────────────────────────────────
 
 func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 	if !ghosttyAvailable() {
@@ -117,11 +92,10 @@ func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 		b.WriteString(fmt.Sprintf("binary: %s\n", binPath))
 	}
 
-	// Check if gdbus is available.
 	if _, err := exec.LookPath("gdbus"); err != nil {
 		b.WriteString("ipc: gdbus not found (install gdbus for pane management)\n")
 	} else {
-		// Check if Ghostty is reachable on DBus.
+
 		if _, err := gdbusList(ctx); err != nil {
 			b.WriteString("ipc: Ghostty DBus not reachable\n")
 		} else {
@@ -129,7 +103,6 @@ func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 		}
 	}
 
-	// On Linux, we can get GHOSTTY_SURFACE_ID and GHOSTTY_RESOURCES_DIR from env.
 	if sid := os.Getenv("GHOSTTY_SURFACE_ID"); sid != "" {
 		b.WriteString(fmt.Sprintf("surface ID: %s", sid))
 	}
@@ -138,8 +111,7 @@ func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 }
 
 func (g *GhosttyTool) executeList(ctx context.Context) Result {
-	// Linux Ghostty doesn't expose terminal introspection via DBus.
-	// Try gdbus to list actions instead.
+
 	out, err := gdbusList(ctx)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty list failed: %v\nNote: on Linux, full terminal listing is not supported. Use 'status' to check DBus connectivity.", err)}
@@ -158,52 +130,34 @@ func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction st
 		return Result{IsError: true, Content: fmt.Sprintf("invalid direction %q (use right/left/down/up)", direction)}
 	}
 
-	// On Linux, terminalID is not supported for targeting — splits always
-	// happen relative to the active surface.
 	if terminalID != "" {
 		return Result{IsError: true, Content: "terminal_id targeting is not supported on Linux. Splits are always relative to the focused pane."}
 	}
 
-	// Try to invoke split-tree.new-split via DBus.
-	// GVariant format for string parameter: "[<'right'>]"
 	params := fmt.Sprintf("[<%q>]", dir)
 	_, err := gdbusCall(ctx, "split-tree.new-split", params)
 	if err != nil {
-		// Fallback: not all Ghostty versions expose split-tree actions via DBus.
+
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty split failed via DBus: %v\nNote: Linux split requires Ghostty to expose 'split-tree.new-split' via DBus. If this fails, use keyboard shortcuts or the 'action' with xdotool.", err)}
 	}
 
-	// Size resize is not available via DBus on Linux.
 	sizeNote := ""
-	if size > 0 && size <= 99 { // #1686 case 2: schema allows 99; macOS (#838) already unified to <= 99
+	if size > 0 && size <= 99 {
 		sizeNote = fmt.Sprintf(" (note: size=%d%% not supported on Linux, split is 50/50)", size)
 	}
 
-	// If a command was specified, try to send it via GHOSTTY_SURFACE_ID focus + input.
-	// This is a best-effort approach.
 	if strings.TrimSpace(command) != "" {
-		// Unfortunately, there's no DBus action to send text input on Linux.
-		// The command can't be auto-executed in the new pane via DBus.
+
 		return Result{Content: fmt.Sprintf("ghostty split created: direction=%s%s\nNote: command execution in new pane is not supported on Linux via DBus. Manually run: %s", dir, sizeNote, command)}
 	}
 
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s%s", dir, sizeNote)}
 }
 
-// escapeShellSingleQuoteLinux mirrors the darwin implementation (that
-// copy is behind a build tag): wrap in single quotes with embedded
-// quotes escaped via the '"'"' dance.
 func escapeShellSingleQuoteLinux(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// ghosttyLinuxCommandArgv builds the -e argv for the new-window-command
-// DBus action (#3140): ghostty's -e is execvp semantics (no shell), so a
-// bare %q of the command made "make test" a single argv element and
-// execvp looked for a FILE literally named "make test" (ENOENT). Route
-// through sh -c, prefixing the working_dir cd when set (matching the
-// macOS implementations' cd-and-run behavior; working_dir is an
-// independent schema parameter, not a command modifier).
 func ghosttyLinuxCommandArgv(command, wd string) []string {
 	shellCmd := command
 	if wd = strings.TrimSpace(wd); wd != "" {
@@ -212,8 +166,6 @@ func ghosttyLinuxCommandArgv(command, wd string) []string {
 	return []string{"sh", "-c", shellCmd}
 }
 
-// ghosttyLinuxNewWindowCommandParams builds the gdbus new-window-command
-// parameter string for an argv, applying #4636's cap-hint discipline.
 func ghosttyLinuxNewWindowCommandParams(argv []string) string {
 	q := make([]string, 0, len(argv))
 	q = append(q, "\"-e\"")
@@ -223,17 +175,10 @@ func ghosttyLinuxNewWindowCommandParams(argv []string) string {
 	return "[<[" + strings.Join(q, ", ") + "]>]"
 }
 
-// ghosttyLinuxCdOnlyArgv builds the -e argv for the #4703/#2589 cd-only
-// contract: no command, but the surface must still start in wd.
 func ghosttyLinuxCdOnlyArgv(wd string) []string {
 	return []string{"sh", "-c", fmt.Sprintf("cd %s", escapeShellSingleQuoteLinux(wd))}
 }
 
-// resolveWorkingDir returns the effective working directory for a
-// new_tab/new_window call (#4703): an explicitly provided working_dir, or
-// the schema-promised fallback to the tool process's cwd (g.workingDir())
-// when empty. Both darwin paths have honored this since #1324/#3140; Linux
-// never resolved the directory at all in the empty-command branch.
 func (g *GhosttyTool) resolveWorkingDir(workingDir string) string {
 	if wd := strings.TrimSpace(workingDir); wd != "" {
 		return wd
@@ -242,16 +187,11 @@ func (g *GhosttyTool) resolveWorkingDir(workingDir string) string {
 }
 
 func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir string) Result {
-	// #4703: resolve the working directory up front - the schema promises
-	// "defaults to cwd" for BOTH the command and empty-command paths, and
-	// darwin has honored that since #1324/#3140. Linux previously ignored
-	// working_dir entirely when command was empty.
+
 	wd := g.resolveWorkingDir(workingDir)
-	// new-window-command is the only tab/window action available via DBus.
-	// There's no explicit "new-tab" DBus action — we use new-window as fallback.
+
 	if strings.TrimSpace(command) != "" {
-		// #3140: sh -c so argumented commands survive execvp semantics.
-		// gdbus format for new-window-command: array of string args
+
 		argv := ghosttyLinuxCommandArgv(command, wd)
 		params := ghosttyLinuxNewWindowCommandParams(argv)
 		_, err := gdbusCall(ctx, "new-window-command", params)
@@ -261,11 +201,6 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 		return Result{Content: "ghostty tab created with command (via new-window DBus action)"}
 	}
 
-	// #4703/#2589 cd-only contract: command empty + working_dir set must
-	// still take effect. A bare new-window opens the surface in Ghostty's
-	// own default directory and silently drops the caller's working_dir
-	// (darwin fixed this three times: #2589/#1324/#3140). Open via a
-	// cd-only sh -c invocation so the new surface starts in wd.
 	_, err := gdbusCall(ctx, "new-window-command", ghosttyLinuxNewWindowCommandParams(ghosttyLinuxCdOnlyArgv(wd)))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_tab failed: %v", err)}
@@ -274,10 +209,10 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 }
 
 func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir string) Result {
-	// #4703: same resolution + cd-only contract as executeNewTab.
+
 	wd := g.resolveWorkingDir(workingDir)
 	if strings.TrimSpace(command) != "" {
-		// #3140: ditto (see executeNewTab).
+
 		argv := ghosttyLinuxCommandArgv(command, wd)
 		params := ghosttyLinuxNewWindowCommandParams(argv)
 		_, err := gdbusCall(ctx, "new-window-command", params)
@@ -287,7 +222,6 @@ func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir 
 		return Result{Content: "ghostty window created with command"}
 	}
 
-	// #4703/#2589 cd-only contract - see executeNewTab.
 	_, err := gdbusCall(ctx, "new-window-command", ghosttyLinuxNewWindowCommandParams(ghosttyLinuxCdOnlyArgv(wd)))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_window failed: %v", err)}
@@ -322,7 +256,6 @@ func (g *GhosttyTool) executeAction(ctx context.Context, terminalID, actionStr s
 		return Result{IsError: true, Content: "text (action string) is required for action command"}
 	}
 
-	// Map common Ghostty actions to DBus action names.
 	dbusAction := ""
 	switch actionStr {
 	case "toggle_split_zoom":
@@ -332,7 +265,7 @@ func (g *GhosttyTool) executeAction(ctx context.Context, terminalID, actionStr s
 	case "reload_config":
 		dbusAction = "app.reload-config"
 	default:
-		// Try passing the action string directly.
+
 		dbusAction = actionStr
 	}
 

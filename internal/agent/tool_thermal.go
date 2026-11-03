@@ -1,35 +1,5 @@
 package agent
 
-// Tool Thermal Profile - Cross-Tool Usage Balance Monitor
-//
-// Research: "ACE: Agentic Context Engineering" (Zhang et al., ICLR 2026)
-// and "Trajectory-Aware Agent Optimization" (TAAS, 2025) both identify that
-// an agent's tool-call composition is a leading indicator of task efficiency.
-//
-// Key insight: healthy agent trajectories show a balanced mix of exploration
-// (read, grep, search), modification (edit, write), and verification (build,
-// test, git). When one category dominates - especially exploration - it signals
-// the agent is "spinning" without making progress. This is distinct from:
-//
-//   - Budget guard: tracks per-step token COST escalation (intra-step)
-//   - Loop detector: catches exact duplicate calls (exact-match)
-//   - Confidence scorer: holistic quality score (success-rate based)
-//   - Overseer drift: counts iterations without productive action (binary)
-//
-// (The following commented-out comparison block was removed; see git history.)
-//
-// Thermal profile tracks the DISTRIBUTION of tool calls across categories:
-//
-// The profile fires a warning when:
-//   1. Enough total calls exist for a meaningful sample (>= 12)
-//   2. Exploration calls exceed explorationThreshold (55%) of total calls
-//   3. Modification calls are below modificationFloor (15%) of total calls
-//      (agent is reading but not producing changes)
-//
-// Warnings are rate-limited per category by an iteration-based cooldown.
-//
-// This is a zero-LLM-cost heuristic — pure counter-based, O(1) per call.
-
 import (
 	"fmt"
 	"strings"
@@ -38,24 +8,15 @@ import (
 )
 
 const (
-	// thermalMinSamples: need at least this many tool calls before evaluating.
 	thermalMinSamples = 12
 
-	// explorationThreshold: fraction of total calls that is "too much" reading.
-	// At 55%, the agent is spending more than half its turns gathering context
-	// without making changes — a common inefficiency pattern.
 	explorationThreshold = 0.55
 
-	// modificationFloor: below this fraction of modification calls alongside
-	// high exploration is a strong "all read, no write" signal.
 	modificationFloor = 0.15
 
-	// thermalWarnCooldown: minimum iterations between thermal warnings for
-	// different overload categories. Prevents repeated noise.
 	thermalWarnCooldown = 8
 )
 
-// thermalCategory classifies tools into behavioral groups.
 type thermalCategory int
 
 const (
@@ -66,7 +27,6 @@ const (
 	thermalOther
 )
 
-// thermalCategoryNames maps categories to display names.
 var thermalCategoryNames = map[thermalCategory]string{
 	thermalExplore: "exploration",
 	thermalModify:  "modification",
@@ -75,9 +35,8 @@ var thermalCategoryNames = map[thermalCategory]string{
 	thermalOther:   "other",
 }
 
-// toolCategoryMap maps tool names to thermal categories.
 var toolCategoryMap = map[string]thermalCategory{
-	// Exploration (information gathering)
+
 	"read_file":                  thermalExplore,
 	"multi_file_read":            thermalExplore,
 	"search_files":               thermalExplore,
@@ -99,15 +58,9 @@ var toolCategoryMap = map[string]thermalCategory{
 	"lsp_code_actions":           thermalExplore,
 	"web_search":                 thermalExplore,
 	"web_fetch":                  thermalExplore,
-	// #1859 case 2: screenshot is capture-only - without a category it
-	// fell into thermalOther and diluted the explore ratio, suppressing
-	// explore-heavy warnings during screenshot-heavy runs. browser and
-	// mobile_device (click/type/tap) intentionally stay uncategorized.
+
 	"screenshot": thermalExplore,
 
-	// Modification (code changes) -- canonical sourceMutatingTools members
-	// (#738): edit_file, write_file, multi_edit_file, multi_file_edit,
-	// multi_file_write, batch_replace, lsp_rename, file_ops, notebook_edit.
 	"edit_file":        thermalModify,
 	"write_file":       thermalModify,
 	"multi_edit_file":  thermalModify,
@@ -118,13 +71,11 @@ var toolCategoryMap = map[string]thermalCategory{
 	"file_ops":         thermalModify,
 	"notebook_edit":    thermalModify,
 
-	// Execution (side-effect operations)
 	"run_command":         thermalExecute,
 	"start_command":       thermalExecute,
 	"write_command_input": thermalExecute,
 	"stop_command":        thermalExecute,
 
-	// Verification (validation checks)
 	"git_diff":        thermalVerify,
 	"git_status":      thermalVerify,
 	"git_log":         thermalVerify,
@@ -135,24 +86,18 @@ var toolCategoryMap = map[string]thermalCategory{
 	"scan_todos":      thermalVerify,
 }
 
-// thermalState tracks per-run tool call distribution by category.
 type thermalState struct {
-	// Per-category call counts
-	categories [5]int // indexed by thermalCategory
+	categories [5]int
 
-	// Total calls recorded
 	total int
 
-	// Iteration of last warning, PER MODE (#1855 case 3: a single field
-	// let an explore-heavy warning cool down a verify-heavy trigger -
-	// opposite inefficiency modes sharing one clock).
 	lastExploreWarnIter int
 	lastVerifyWarnIter  int
 }
 
 func newThermalState() *thermalState {
 	return &thermalState{
-		// negative seeds allow the first warning immediately
+
 		lastExploreWarnIter: -thermalWarnCooldown,
 		lastVerifyWarnIter:  -thermalWarnCooldown,
 	}
@@ -167,7 +112,6 @@ func (t *thermalState) reset() {
 	t.lastVerifyWarnIter = -thermalWarnCooldown
 }
 
-// recordToolCall classifies and records a tool call.
 func (t *thermalState) recordToolCall(toolName string) {
 	cat, ok := toolCategoryMap[toolName]
 	if !ok {
@@ -177,7 +121,6 @@ func (t *thermalState) recordToolCall(toolName string) {
 	t.total++
 }
 
-// fraction returns the proportion of calls in the given category.
 func (t *thermalState) fraction(cat thermalCategory) float64 {
 	if t.total == 0 {
 		return 0
@@ -185,14 +128,6 @@ func (t *thermalState) fraction(cat thermalCategory) float64 {
 	return float64(t.categories[cat]) / float64(t.total)
 }
 
-// maybeWarn checks whether the tool distribution shows an unhealthy pattern
-// and returns guidance text if so. iteration is the current 0-based loop index.
-//
-// Two detection modes:
-//  1. Explore-heavy: exploration > 55% AND modification < 15% (all read, no write)
-//  2. Verify-heavy: verification > 30% (excessive checking, not enough doing)
-//
-// Fires at most once per category per cooldown window.
 func (t *thermalState) maybeWarn(iteration int) string {
 	if t.total < thermalMinSamples {
 		return ""
@@ -202,10 +137,8 @@ func (t *thermalState) maybeWarn(iteration int) string {
 	modifyFrac := t.fraction(thermalModify)
 	verifyFrac := t.fraction(thermalVerify)
 
-	// Mode 1: Explore-heavy (most common inefficiency)
 	if exploreFrac > explorationThreshold && modifyFrac < modificationFloor {
-		// Per-category cooldown: lastWarnIter is seeded at -cooldown, so the
-		// first warning per category always fires; subsequent ones are gated.
+
 		if iteration-t.lastExploreWarnIter < thermalWarnCooldown {
 			return ""
 		}
@@ -221,10 +154,8 @@ func (t *thermalState) maybeWarn(iteration int) string {
 		)
 	}
 
-	// Mode 2: Verify-heavy (excessive checking)
 	if verifyFrac > 0.30 && modifyFrac < modificationFloor {
-		// #1855 case 3: separate cooldown clock from the explore mode -
-		// an explore-heavy warning must not cool down a verify trigger.
+
 		if iteration-t.lastVerifyWarnIter < thermalWarnCooldown {
 			return ""
 		}
@@ -242,8 +173,6 @@ func (t *thermalState) maybeWarn(iteration int) string {
 	return ""
 }
 
-// categoryBreakdown returns a human-readable summary of the current distribution.
-// Used for debugging and potential future TUI display.
 func (t *thermalState) categoryBreakdown() string {
 	if t.total == 0 {
 		return "no tool calls recorded"

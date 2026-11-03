@@ -2,9 +2,6 @@ package agentruntime
 
 import "strings"
 
-// IMRoundState tracks assistant text and tool counters for a single LLM turn.
-// Filtering policy stays in the caller so different frontends can decide which
-// tool events should count toward the round.
 type IMRoundState struct {
 	text          strings.Builder
 	ToolCalls     int

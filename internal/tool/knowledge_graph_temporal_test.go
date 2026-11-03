@@ -10,11 +10,6 @@ import (
 	"time"
 )
 
-// Temporal-validity tests for the bi-temporal knowledge graph
-// (Zep/Graphiti model, arXiv:2501.13956): edges carry validity intervals,
-// invalidate soft-deletes while preserving history, trace supports as_of
-// point-in-time views.
-
 func kgExec(t *testing.T, tool *KnowledgeGraphTool, input string) Result {
 	t.Helper()
 	r, err := tool.Execute(context.Background(), json.RawMessage(input))
@@ -98,14 +93,13 @@ func TestKGDedupValidVsInvalidated(t *testing.T) {
 	tool := kgSetup(t)
 	link := `{"action":"link","id":"a","to":"b","type":"relates-to"}`
 
-	// First link OK.
 	kgMustOK(t, tool, link)
-	// Duplicate while currently valid -> "already exists", no new edge.
+
 	r := kgExec(t, tool, link)
 	if r.IsError || !strings.Contains(r.Content, "already exists") {
 		t.Fatalf("duplicate should report already exists: %s", r.Content)
 	}
-	// Invalidate, then re-link -> re-assertion succeeds with a fresh interval.
+
 	r = kgMustOK(t, tool, `{"action":"invalidate","id":"a","to":"b"}`)
 	if !strings.Contains(r.Content, "Invalidated 1 edge") {
 		t.Errorf("invalidate should report 1 edge: %s", r.Content)
@@ -121,7 +115,7 @@ func TestKGDedupValidVsInvalidated(t *testing.T) {
 	if len(store.Edges) != 2 {
 		t.Fatalf("want 2 intervals, got %d", len(store.Edges))
 	}
-	// Duplicate again -> back to "already exists".
+
 	r = kgExec(t, tool, link)
 	if !strings.Contains(r.Content, "already exists") {
 		t.Errorf("valid duplicate should be rejected: %s", r.Content)
@@ -137,12 +131,12 @@ func TestKGInvalidateNoMatch(t *testing.T) {
 	if !strings.Contains(r.Content, "No currently-valid edge") {
 		t.Errorf("want no-match message: %s", r.Content)
 	}
-	// Missing params.
+
 	r = kgExec(t, tool, `{"action":"invalidate","id":"a"}`)
 	if !r.IsError || !strings.Contains(r.Content, "both id") {
 		t.Errorf("want param error: %s", r.Content)
 	}
-	// Invalid edge type.
+
 	r = kgExec(t, tool, `{"action":"invalidate","id":"a","to":"b","type":"bogus"}`)
 	if !r.IsError || !strings.Contains(r.Content, "invalid edge type") {
 		t.Errorf("want edge type error: %s", r.Content)
@@ -152,23 +146,20 @@ func TestKGInvalidateNoMatch(t *testing.T) {
 func TestKGTraceFiltersInvalidatedAndAsOf(t *testing.T) {
 	tool := kgSetup(t)
 	kgMustOK(t, tool, `{"action":"link","id":"a","to":"b","type":"relates-to"}`)
-	// Backdate invalidation so as_of is deterministic.
+
 	store, err := tool.load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	past := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	store.Edges[0].ValidUntil = &past
-	// #2595: default ValidFrom is now (the link moment). For a deterministic
-	// historical-window test, model a fact that held in 2025: backdate its
-	// ValidFrom to 2024 so the [ValidFrom, ValidUntil] interval is real.
+
 	started := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	store.Edges[0].ValidFrom = &started
 	if err := tool.save(store); err != nil {
 		t.Fatal(err)
 	}
 
-	// Default (now): invalidated edge hidden.
 	r := kgMustOK(t, tool, `{"action":"trace","id":"a"}`)
 	if strings.Contains(r.Content, "--[relates-to]-->") {
 		t.Errorf("invalidated edge should be hidden by default: %s", r.Content)
@@ -177,18 +168,16 @@ func TestKGTraceFiltersInvalidatedAndAsOf(t *testing.T) {
 		t.Errorf("should hint at hidden history: %s", r.Content)
 	}
 
-	// as_of before invalidation: historical view includes it.
 	r = kgMustOK(t, tool, `{"action":"trace","id":"a","as_of":"2025-01-01T00:00:00Z"}`)
 	if !strings.Contains(r.Content, "--[relates-to]-->") {
 		t.Errorf("as_of historical view should include edge: %s", r.Content)
 	}
-	// as_of after invalidation (and before future start): excluded again.
+
 	r = kgMustOK(t, tool, `{"action":"trace","id":"a","as_of":"2027-01-01T00:00:00Z"}`)
 	if strings.Contains(r.Content, "--[relates-to]-->") {
 		t.Errorf("as_of after invalidation should exclude edge: %s", r.Content)
 	}
 
-	// Future valid_from: excluded from current view.
 	tool2 := kgSetup(t)
 	kgMustOK(t, tool2, `{"action":"link","id":"a","to":"b","type":"relates-to","valid_from":"2030-01-01T00:00:00Z"}`)
 	r = kgMustOK(t, tool2, `{"action":"trace","id":"a"}`)

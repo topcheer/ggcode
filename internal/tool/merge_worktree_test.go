@@ -1,8 +1,5 @@
 package tool
 
-// Companion tests for merge_worktree (sa-112 AI merge arbitration).
-// All tests build throwaway git repositories in t.TempDir(); no network.
-
 import (
 	"context"
 	"encoding/json"
@@ -13,7 +10,6 @@ import (
 	"testing"
 )
 
-// mwGit runs git with a fixed identity in dir.
 func mwGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -28,10 +24,6 @@ func mwGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// newMergeWorktreeFixture creates a repo with one committed file and a
-// ggcode-managed worktree on branch wt-task checked out under
-// <repo>/.ggcode/worktrees/task (matching isInsideWorktree's anchor rule).
-// Returns (repoRoot, worktreePath).
 func newMergeWorktreeFixture(t *testing.T) (string, string) {
 	t.Helper()
 	repo := t.TempDir()
@@ -47,14 +39,12 @@ func newMergeWorktreeFixture(t *testing.T) (string, string) {
 	return repo, wt
 }
 
-// mwCommit commits all changes in dir with the given subject.
 func mwCommit(t *testing.T, dir, subject string) {
 	t.Helper()
 	mwGit(t, dir, "add", "-A")
 	mwGit(t, dir, "commit", "-m", subject)
 }
 
-// mwGitOK is mwGit without the fatal: returns (ok, output).
 func mwGitOK(dir string, args ...string) (bool, string) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -63,7 +53,6 @@ func mwGitOK(dir string, args ...string) (bool, string) {
 	return err == nil, strings.TrimSpace(string(out))
 }
 
-// mwCall executes the MergeWorktree tool with a JSON argument body.
 func mwCall(t *testing.T, workingDir, worktree, action, verify string) Result {
 	t.Helper()
 	payload, err := json.Marshal(map[string]string{
@@ -80,13 +69,11 @@ func mwCall(t *testing.T, workingDir, worktree, action, verify string) Result {
 }
 
 func TestMergeWorktreeCleanAutoFinalize(t *testing.T) {
-	// Simulate the CI container: no global git identity anywhere. The tool
-	// must fall back to its own identity for the merge commit (CI failure
-	// "Committer identity unknown", run 38160992320).
+
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	repo, wt := newMergeWorktreeFixture(t)
-	// Worktree edits a NEW file; parent edits a different region of hello.txt.
+
 	os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("from worktree\n"), 0644)
 	mwCommit(t, wt, "task: add feature file")
 	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("line1\nline2-parent\nline3\n"), 0644)
@@ -99,7 +86,7 @@ func TestMergeWorktreeCleanAutoFinalize(t *testing.T) {
 	if !strings.Contains(res.Content, "Merged wt-task") {
 		t.Fatalf("unexpected content: %s", res.Content)
 	}
-	// The merge commit must exist and carry both parents' content.
+
 	log := mwGit(t, repo, "log", "--oneline", "-3")
 	if !strings.Contains(log, "Merge branch") {
 		t.Fatalf("no merge commit in log:\n%s", log)
@@ -115,7 +102,7 @@ func TestMergeWorktreeCleanAutoFinalize(t *testing.T) {
 
 func TestMergeWorktreeConflictReportAndAbort(t *testing.T) {
 	repo, wt := newMergeWorktreeFixture(t)
-	// Both sides change line2 differently.
+
 	os.WriteFile(filepath.Join(wt, "hello.txt"), []byte("line1\nline2-worktree\nline3\n"), 0644)
 	mwCommit(t, wt, "task: reword line2 for the feature")
 	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("line1\nline2-parent\nline3\n"), 0644)
@@ -130,12 +117,11 @@ func TestMergeWorktreeConflictReportAndAbort(t *testing.T) {
 			t.Fatalf("arbitration report missing %q:\n%s", want, res.Content)
 		}
 	}
-	// Merge state must be kept: MERGE_HEAD exists.
+
 	if ok, _ := mwGitOK(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD"); !ok {
 		t.Fatal("expected in-progress merge state (MERGE_HEAD) to be kept")
 	}
 
-	// Abort restores the parent tree; branch and worktree survive.
 	ab := mwCall(t, repo, wt, "abort", "")
 	if ab.IsError {
 		t.Fatalf("abort failed: %s", ab.Content)
@@ -163,16 +149,13 @@ func TestMergeWorktreeFinalizeAfterManualResolve(t *testing.T) {
 		t.Fatalf("merge start failed: %s", res.Content)
 	}
 
-	// Finalize must refuse while markers remain.
 	if res := mwCall(t, repo, wt, "finalize", ""); !res.IsError {
 		t.Fatalf("finalize should refuse unresolved markers, got: %s", res.Content)
 	}
 
-	// Agent-side semantic resolution: pick a synthesis.
 	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("line1\nline2-synthesis\nline3\n"), 0644)
 	mwGit(t, repo, "add", "hello.txt")
 
-	// Verify gate failure must abort the whole merge (fail-closed).
 	bad := mwCall(t, repo, wt, "finalize", "false")
 	if !bad.IsError || !strings.Contains(bad.Content, "verify_command failed") {
 		t.Fatalf("verify failure should abort fail-closed, got: %+v", bad)
@@ -184,7 +167,6 @@ func TestMergeWorktreeFinalizeAfterManualResolve(t *testing.T) {
 		t.Fatal("verify-gated abort should end the merge state")
 	}
 
-	// Redo the merge and finalize with a passing gate.
 	if res := mwCall(t, repo, wt, "merge", ""); res.IsError {
 		t.Fatalf("second merge failed: %s", res.Content)
 	}
@@ -203,7 +185,6 @@ func TestMergeWorktreeFinalizeAfterManualResolve(t *testing.T) {
 func TestMergeWorktreeSafetyGates(t *testing.T) {
 	repo, wt := newMergeWorktreeFixture(t)
 
-	// Dirty parent tree: refuse.
 	os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("line1\nline2-dirty\nline3\n"), 0644)
 	res := mwCall(t, repo, wt, "merge", "")
 	if !res.IsError || !strings.Contains(res.Content, "dirty") {
@@ -211,7 +192,6 @@ func TestMergeWorktreeSafetyGates(t *testing.T) {
 	}
 	mwGit(t, repo, "checkout", "--", "hello.txt")
 
-	// Non-anchored path (outside .ggcode/worktrees/): ownership refusal.
 	outside := t.TempDir()
 	mwGit(t, outside, "init", "-b", "main")
 	res = mwCall(t, repo, outside, "merge", "")
@@ -219,7 +199,6 @@ func TestMergeWorktreeSafetyGates(t *testing.T) {
 		t.Fatalf("foreign worktree must be refused, got: %+v", res)
 	}
 
-	// finalize without an in-progress merge: refused (no silent no-op).
 	res = mwCall(t, repo, wt, "finalize", "")
 	if !res.IsError || !strings.Contains(res.Content, "no merge in progress") {
 		t.Fatalf("finalize without merge state must be refused, got: %+v", res)

@@ -1,23 +1,10 @@
 package agent
 
-// Regression tests for issue #1193 (same-family fixes already applied to
-// param_count_check.go via #1149/#1187 but missed here):
-//
-//	A) The delta fingerprint keyed only on function name, so methods with the
-//	   same name on DIFFERENT receivers ((s *Server) handle vs (c *Client)
-//	   handle) collided and a newly added same-named method was silently
-//	   absorbed by the old entry.
-//	B) The Test/Benchmark exemption was not restricted to _test.go files, so
-//	   production functions named TestXxx (e.g. TestConnection) were never
-//	   checked.
-
 import (
 	"strings"
 	"testing"
 )
 
-// issue1193SixReturnsTail is a 6-return function body (6 returns meets the
-// returnCountThreshold) shared by the tests above.
 const issue1193SixReturnsTail = `	if x == 1 { return 1 }
 	if x == 2 { return 2 }
 	if x == 3 { return 3 }
@@ -26,8 +13,6 @@ const issue1193SixReturnsTail = `	if x == 1 { return 1 }
 	return 0
 `
 
-// A) A NEW method with the same NAME but a different RECEIVER must be
-// reported, not absorbed by the old entry's fingerprint.
 func TestIssue1193_SameNameDifferentReceiver_NewMethodReported(t *testing.T) {
 	old := `package main
 type Server struct{}
@@ -49,7 +34,6 @@ func (c *Client) handle(x int) int {
 	}
 }
 
-// A, control: the pre-existing same-receiver method is still delta-suppressed.
 func TestIssue1193_SameReceiverSameName_StillSuppressed(t *testing.T) {
 	src := `package main
 type Server struct{}
@@ -63,7 +47,6 @@ func (s *Server) handle(x int) int {
 	}
 }
 
-// B) Test-prefixed functions in PRODUCTION code must be checked.
 func TestIssue1193_ProductionTestPrefixedFunction_Checked(t *testing.T) {
 	src := `package conn
 
@@ -79,7 +62,6 @@ func TestConnection(x int) int {
 	}
 }
 
-// B) Test-prefixed functions in _test.go files remain exempt.
 func TestIssue1193_TestFileTestFunction_StillExempt(t *testing.T) {
 	src := `package conn
 
@@ -92,8 +74,6 @@ func TestConnectionFlow(t *testing.T) int {
 	}
 }
 
-// A) Fingerprint is receiver-type based: identical method name on two
-// receivers must yield distinct fingerprints.
 func TestIssue1193_RcFingerprint_DistinctPerReceiver(t *testing.T) {
 	a := returnCountInstance{funcName: "handle", recvType: "*Server"}
 	b := returnCountInstance{funcName: "handle", recvType: "*Client"}

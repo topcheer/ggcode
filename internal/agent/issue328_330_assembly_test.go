@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// Assembly-layer regression tests for #328/#330: these tests MUST go through
-// checkWriteIntegrity (the production pipeline entry), NOT the detector
-// functions directly. Tests that call detectors directly bypass the registry
-// and stay green even when a check is unregistered (the exact failure mode
-// fixed in #328/#330).
-
 func TestAssemblyDeprecatedAPI(t *testing.T) {
 	old := `package main
 
@@ -74,7 +68,7 @@ func report(n int) {
 }
 
 func TestAssemblyDependencyManifests(t *testing.T) {
-	// go.mod: known-vulnerable golang.org/x/crypto version
+
 	new := "module example.com/m\n\ngo 1.21\n\nrequire golang.org/x/crypto v0.16.0\n"
 	w := checkWriteIntegrity("go.mod", "", new)
 	if w == "" {
@@ -100,12 +94,9 @@ func TestRegistryContainsReRegisteredChecks(t *testing.T) {
 	}
 }
 
-// #330 gap: interface-compliance and dep-major-bump assembly coverage
-// (verified live via production path; codified here for regression).
-
 func TestAssemblyInterfaceCompliance(t *testing.T) {
 	dir := t.TempDir()
-	// Type in the same package partially implementing the interface.
+
 	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(
 		"package smoke\n\ntype Handler struct{}\n\nfunc (h *Handler) Foo() error { return nil }\n",
 	), 0o644); err != nil {

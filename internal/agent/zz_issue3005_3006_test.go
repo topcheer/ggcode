@@ -2,19 +2,6 @@ package agent
 
 import "testing"
 
-// zz_issue3005_3006_test.go - regression probes.
-//
-// #3005: isRealTestExecution must classify per compound-command segment
-// (like isVerifyCommand/isStrictVerifyCommand, #1462-C) and must not treat
-// no-op make targets as verification. The old whole-string prefix match
-// split the verify-counter reset from the lastBuildFailed update for
-// `cd pkg && go test ./`, and `make fmt` reset the counter faking
-// "verified" state.
-//
-// #3006: mutatesSourceTree must cover apply_patch and scaffold_project
-// (both persist edits to disk) so change tracking / cache invalidation /
-// reverify decisions fire for them.
-
 func TestIssue3005_CompoundTestCommandIsReal(t *testing.T) {
 	if !isRealTestExecution("cd internal/agent && go test ./") {
 		t.Fatal("#3005: `cd pkg && go test ./` must count as real test execution")
@@ -70,19 +57,18 @@ func TestIssue3006_MutatesSourceTreeCoversNewTools(t *testing.T) {
 	if !mutatesSourceTree("scaffold_project") {
 		t.Fatal("#3006: scaffold_project writes 20+ files and must mutate")
 	}
-	// Existing members unchanged.
+
 	if !mutatesSourceTree("edit_file") || !mutatesSourceTree("undo_edit") || !mutatesSourceTree("file_ops") {
 		t.Fatal("#3006 regression: existing mutating tools must stay covered")
 	}
-	// Read-only tools stay clean.
+
 	if mutatesSourceTree("read_file") || mutatesSourceTree("grep") || mutatesSourceTree("search_files") {
 		t.Fatal("#3006 regression: read-only tools must not mutate")
 	}
 }
 
 func TestIssue3006_CanonicalMapStillPinnedAtNine(t *testing.T) {
-	// #737/#1104 pin the canonical sourceMutatingTools at 9 members; the
-	// #3006 extension deliberately lives in mutatesSourceTree, not the map.
+
 	if len(sourceMutatingTools) != 9 {
 		t.Fatalf("#3006: sourceMutatingTools must stay at 9 (got %d); extensions belong in mutatesSourceTree", len(sourceMutatingTools))
 	}
@@ -91,9 +77,6 @@ func TestIssue3006_CanonicalMapStillPinnedAtNine(t *testing.T) {
 	}
 }
 
-// TestIssue3011_VerifyCommandSegmentExcludesNoopTargets: the counter-reset
-// side must share the makeRunnerNoopTargets exclusion (#3011 - #3005 fixed
-// only the lastBuildFailed side; `make clean` still reset the counter).
 func TestIssue3011_VerifyCommandSegmentExcludesNoopTargets(t *testing.T) {
 	for _, cmd := range []string{
 		"make clean", "make fmt", "make tidy", "make deploy",

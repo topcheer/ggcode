@@ -59,7 +59,7 @@ func TestAdversarialReviewGateDisabledByDefault(t *testing.T) {
 	if a.AdversarialReviewEnabled() {
 		t.Fatal("adversarial review must be default-off")
 	}
-	// Disabled gate is a silent no-op even when code changed.
+
 	rs := &RunStats{FilesEdited: []string{"x.go"}}
 	if msg := a.checkAdversarialReviewGate(context.Background(), rs, "task"); msg != "" {
 		t.Fatalf("disabled gate must not inject, got %q", msg)
@@ -72,9 +72,7 @@ func TestAdversarialReviewGateSkipsWithoutChanges(t *testing.T) {
 	if !a.AdversarialReviewEnabled() {
 		t.Fatal("SetAdversarialReview(true) did not enable")
 	}
-	// No changed files -> skip without any provider call (provider is nil here,
-	// so reaching runAdversarialEvaluator would not crash but the skip path is
-	// exercised before that).
+
 	if msg := a.checkAdversarialReviewGate(context.Background(), &RunStats{}, "task"); msg != "" {
 		t.Fatalf("no-change gate must not inject, got %q", msg)
 	}

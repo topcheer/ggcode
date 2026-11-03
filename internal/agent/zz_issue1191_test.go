@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #1191: ownership transfer (acquire-and-return) must not be reported
-// as a leak, otherwise the agent following the old imperative hint would
-// "fix" correct code into a use-after-close.
-
 func TestResourceLeakOwnershipTransferReturn(t *testing.T) {
 	src := `package main
 
@@ -46,7 +42,7 @@ func fetch(url string) (*http.Response, error) {
 }
 
 func TestResourceLeakOwnershipTransferWrappedReturn(t *testing.T) {
-	// Indirect return (struct field) still transfers ownership.
+
 	src := `package main
 
 import "os"
@@ -69,8 +65,7 @@ func openWrapped(path string) (*reader, error) {
 }
 
 func TestResourceLeakOwnershipTransferCallArgument(t *testing.T) {
-	// Handing the resource to another function (which closes it) also
-	// transfers ownership (#1191).
+
 	src := `package main
 
 import "os"
@@ -95,9 +90,7 @@ func process(path string) error {
 }
 
 func TestResourceLeakRealLeakStillReportedAndSoftenedWording(t *testing.T) {
-	// A resource that is genuinely retained (not returned, not handed off)
-	// must still be reported, but the message should ask the agent to verify
-	// ownership instead of unconditionally ordering `defer x.Close()`.
+
 	src := `package main
 
 import "os"

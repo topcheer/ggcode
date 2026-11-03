@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Off by default: state is non-nil (issue #341 pointer-field guard) but the
-// ledger inside is nil, so audit calls are inert no-ops.
 func TestAuditLedgerOffByDefault(t *testing.T) {
 	t.Setenv(auditLedgerEnv, "")
 	st := newAuditLedgerState()
@@ -21,13 +19,12 @@ func TestAuditLedgerOffByDefault(t *testing.T) {
 	if st.ledger != nil {
 		t.Error("ledger should be nil when the env var is unset/empty")
 	}
-	// Method calls on a disabled state must not panic and must not write.
+
 	a := &Agent{auditLedger: st}
 	a.auditToolResult("read_file", json.RawMessage(`{}`), audit.StatusOK, "", time.Millisecond)
 	a.auditAnchor()
 }
 
-// Setting the env var opens the ledger file.
 func TestAuditLedgerOpensFromEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	t.Setenv(auditLedgerEnv, path)
@@ -41,8 +38,6 @@ func TestAuditLedgerOpensFromEnv(t *testing.T) {
 	defer st.ledger.Close()
 }
 
-// auditToolExecution derives ok/error from the result and entries verify as
-// a hash chain, carrying the session ID and bounded error text.
 func TestAuditToolExecutionWritesChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	lg, err := audit.Open(path, "")
@@ -69,7 +64,6 @@ func TestAuditToolExecutionWritesChain(t *testing.T) {
 	}
 }
 
-// errPanicky is a non-nil error for the Go-error audit path.
 var errPanicky = &auditTestError{"panic recovered"}
 
 type auditTestError struct{ msg string }

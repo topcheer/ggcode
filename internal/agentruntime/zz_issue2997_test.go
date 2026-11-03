@@ -2,13 +2,6 @@ package agentruntime
 
 import "testing"
 
-// zz_issue2997_test.go - regression probes for #2997: the failure-switch case
-// matched bare substrings first, so "no error" (a progressSignal) was dead
-// code  -  any text containing it also contains "error" and hit the failure
-// case. Positive phrasings ("fixed the error... now passes") were likewise
-// misclassified as failures, flipping succeeded→partial and double-penalizing
-// the score in RecursiveTournament.
-
 func TestIssue2997NoErrorIsProgress(t *testing.T) {
 	s := SummarizeTrajectory([]TrajectoryEntry{
 		{Kind: "result", Text: "go build: no error, all packages compile"},
@@ -34,9 +27,7 @@ func TestIssue2997FixedErrorIsProgress(t *testing.T) {
 }
 
 func TestIssue2997KindErrorStillFailure(t *testing.T) {
-	// Structural signal wins regardless of wording: kind=error entries stay
-	// failures even if their text says "no error" (e.g. an error channel
-	// carrying a confusing payload).
+
 	s := SummarizeTrajectory([]TrajectoryEntry{
 		{Kind: "result", Text: "tests pass"},
 		{Kind: "error", Text: "stderr mentioned: no error but exit 2"},
@@ -50,9 +41,7 @@ func TestIssue2997KindErrorStillFailure(t *testing.T) {
 }
 
 func TestIssue2997FixFailedStaysFailure(t *testing.T) {
-	// The "fail" exclusion in positiveStatement: "fix failed" contains the
-	// resolution word "fixed"? No - it contains "fix" and "failed"; ensure
-	// failure wording still wins over any resolution hint.
+
 	s := SummarizeTrajectory([]TrajectoryEntry{
 		{Kind: "result", Text: "the previously applied patch: fix failed, tests error out"},
 	})

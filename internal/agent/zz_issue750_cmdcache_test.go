@@ -8,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Regression guard for #750: a successful shell source mutation (gofmt -w)
-// between two identical test commands must NOT serve the stale cached result.
-// Pre-fix, the second get() hit the entry (same key, same editGen, TTL fresh)
-// and returned the old FAIL/PASS as if sources were unchanged.
 func TestCommandCache_ShellMutationInvalidatesEntries(t *testing.T) {
 	cc := newCommandCache()
 
@@ -22,7 +18,6 @@ func TestCommandCache_ShellMutationInvalidatesEntries(t *testing.T) {
 		t.Fatalf("parseRunCommandArgs: cmd=%q wd=%q", cmd, wd)
 	}
 
-	// Step 1: cache a failing test result (editGen G).
 	entry := &commandCacheEntry{
 		result:   tool.Result{Content: "FAIL: TestX"},
 		editGen:  cc.editGen,
@@ -34,7 +29,6 @@ func TestCommandCache_ShellMutationInvalidatesEntries(t *testing.T) {
 	genBefore := cc.editGen
 	cc.mu.Unlock()
 
-	// Step 2: shell mutation must bump editGen and drop entries.
 	fmtCmd, _ := parseRunCommandArgs(fmtArgs)
 	if !shellMutatesSources(fmtCmd) {
 		t.Fatal("gofmt -w must be recognized as a source mutation")
@@ -51,8 +45,6 @@ func TestCommandCache_ShellMutationInvalidatesEntries(t *testing.T) {
 		t.Fatalf("entries must be dropped on invalidate, got %d", liveEntries)
 	}
 
-	// Step 3: the guard predicate wiring -- run_command with mutating args
-	// must be classified as cache-invalidating (mirrors agent.go #750 branch).
 	mutCmd, _ := parseRunCommandArgs(fmtArgs)
 	plainArgs, _ := json.Marshal(map[string]string{"command": "go test ./pkg/"})
 	plainCmd, _ := parseRunCommandArgs(plainArgs)

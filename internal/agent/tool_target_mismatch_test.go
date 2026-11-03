@@ -21,7 +21,7 @@ func TestExtractStatedTargets(t *testing.T) {
 		{
 			name: "search intent with quotes",
 			text: `Let me search for "authenticationHandler" in the codebase.`,
-			want: 2, // quoted term regex + intent regex both capture it
+			want: 2,
 		},
 		{
 			name: "multiple intents",
@@ -36,7 +36,7 @@ func TestExtractStatedTargets(t *testing.T) {
 		{
 			name: "grep intent",
 			text: "Let me grep for TODO patterns in the source.",
-			want: 1, // "TODO" is correctly extracted as search target
+			want: 1,
 		},
 		{
 			name: "edit intent with path",
@@ -119,7 +119,6 @@ func TestExtractActualToolTargets(t *testing.T) {
 func TestCheckMismatch(t *testing.T) {
 	s := &toolTargetState{}
 
-	// Match: stated target matches actual target
 	hint := s.checkMismatch(
 		[]statedTarget{{intentType: "file", value: "internal/agent/agent.go"}},
 		[]toolTarget{{toolName: "read_file", targets: []string{"/internal/agent/agent.go"}}},
@@ -128,8 +127,6 @@ func TestCheckMismatch(t *testing.T) {
 		t.Errorf("expected no mismatch for matching targets, got: %s", hint)
 	}
 
-	// Mismatch: stated target differs from actual — #468 raised the
-	// threshold to 2 signals, so a single mismatch no longer fires.
 	single := s.checkMismatch(
 		[]statedTarget{{intentType: "file", value: "internal/agent/agent.go"}},
 		[]toolTarget{{toolName: "read_file", targets: []string{"config.yaml"}}},
@@ -145,7 +142,6 @@ func TestCheckMismatch(t *testing.T) {
 		t.Error("expected mismatch for 2 different targets, got empty hint")
 	}
 
-	// Basename match: "agent.go" matches "internal/agent/agent.go"
 	hint = s.checkMismatch(
 		[]statedTarget{{intentType: "file", value: "agent.go"}},
 		[]toolTarget{{toolName: "read_file", targets: []string{"internal/agent/agent.go"}}},
@@ -154,13 +150,11 @@ func TestCheckMismatch(t *testing.T) {
 		t.Errorf("expected no mismatch for basename match, got: %s", hint)
 	}
 
-	// Empty inputs
 	hint = s.checkMismatch(nil, nil)
 	if hint != "" {
 		t.Errorf("expected empty hint for nil inputs, got: %s", hint)
 	}
 
-	// Empty actual targets
 	hint = s.checkMismatch(
 		[]statedTarget{{intentType: "file", value: "foo.go"}},
 		nil,
@@ -173,10 +167,6 @@ func TestCheckMismatch(t *testing.T) {
 func TestMaybeWarnToolTargetMismatch(t *testing.T) {
 	a := &Agent{toolTargetMismatch: &toolTargetState{}}
 
-	// Mismatch detected — #468 raised the threshold to 2 signals, so the
-	// warning needs two stated targets both absent from the actual calls.
-	// Note: each target must follow an intent verb ("I'll read X"), since
-	// toolTargetIntentRe only captures targets adjacent to intent phrases.
 	hint := a.maybeWarnToolTargetMismatch(
 		"I'll read internal/agent/agent.go first. Then I'll read internal/tool/cli.go to understand the structure.",
 		[]provider.ToolCallDelta{
@@ -187,7 +177,6 @@ func TestMaybeWarnToolTargetMismatch(t *testing.T) {
 		t.Error("expected mismatch warning, got empty")
 	}
 
-	// No mismatch
 	hint = a.maybeWarnToolTargetMismatch(
 		"I'll read internal/agent/agent.go to understand the structure.",
 		[]provider.ToolCallDelta{
@@ -198,14 +187,12 @@ func TestMaybeWarnToolTargetMismatch(t *testing.T) {
 		t.Errorf("expected no warning for matching targets, got: %s", hint)
 	}
 
-	// Nil state
 	a2 := &Agent{}
 	hint = a2.maybeWarnToolTargetMismatch("I'll read foo.go", nil)
 	if hint != "" {
 		t.Errorf("expected empty hint for nil state, got: %s", hint)
 	}
 
-	// Max warnings reached
 	a3 := &Agent{toolTargetMismatch: &toolTargetState{warnings: toolTargetMaxWarnings}}
 	hint = a3.maybeWarnToolTargetMismatch(
 		"I'll read foo.go",
@@ -229,7 +216,7 @@ func TestTargetsMatch(t *testing.T) {
 		{"config.yaml", "config.yaml", true},
 		{"agent.go", "config.yaml", false},
 		{"internal/foo", "internal/agent/agent.go", false},
-		{"agent", "internal/agent/agent.go", true}, // substring
+		{"agent", "internal/agent/agent.go", true},
 	}
 
 	for _, tt := range tests {

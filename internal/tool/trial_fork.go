@@ -20,22 +20,13 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// TrialForkTool implements trajectory-level branching search ("fork and
-// select"): instead of a single linear attempt at a task, it runs N parallel
-// implementation trials, each in its own git worktree with a distinct strategy
-// hint, verifies every result with a caller-supplied command, ranks the
-// outcomes, and reports the winning branch. The main checkout is never
-// modified; adopting the winner is an explicit follow-up step.
 type TrialForkTool struct {
 	Provider     provider.Provider
 	Tools        *Registry
 	AgentFactory subagent.AgentFactory
 	WorkingDir   string
 	OnUsage      func(provider.TokenUsage)
-	// OnMetric forwards sub-agent telemetry to the parent collector;
-	// the runner stamps events with SubAgentID (#3296). best_of_n's trial
-	// fan-out is the heaviest token path and was a full OTLP black box.
-	OnMetric func(metrics.MetricEvent)
+	OnMetric     func(metrics.MetricEvent)
 }
 
 const (
@@ -46,9 +37,6 @@ const (
 	trialForkSummaryMax    = 600
 )
 
-// trialForkBlockedTools are session-level tools a trial sub-agent must never
-// use. Trials run inside an isolated worktree: they must not spawn further
-// agents, touch worktrees, delegate externally, or mutate harness state.
 var trialForkBlockedTools = []string{
 	"spawn_agent", "wait_agent", "list_agents",
 	"enter_worktree", "exit_worktree", "list_worktree",
@@ -67,7 +55,7 @@ type trialResult struct {
 	Strategy   string
 	Branch     string
 	Worktree   string
-	Status     string // completed | failed | timeout
+	Status     string
 	ErrMsg     string
 	Summary    string
 	Commits    int
@@ -78,7 +66,7 @@ type trialResult struct {
 	VerifyPass bool
 	VerifyOut  string
 	Tokens     int
-	Kept       bool // worktree dir kept for inspection (usable winner only)
+	Kept       bool
 }
 
 func (t *TrialForkTool) Name() string { return "trial_fork" }
@@ -151,7 +139,6 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 	uniq := fmt.Sprintf("%d", time.Now().UnixMilli()%1000000)
 
-	// Create all worktrees first; on failure tear down the ones already made.
 	branches := make([]string, len(in.Strategies))
 	dirs := make([]string, len(in.Strategies))
 	for i, strategy := range in.Strategies {
@@ -238,10 +225,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	winner := pickWinner(results)
 	keep := -1
 	if winner >= 0 && (results[winner].Commits > 0 || results[winner].VerifyPass) {
-		// #2795: a verify-passed winner must never be force-deleted -
-		// verify validates the worktree tree state itself, which may be
-		// entirely uncommitted (dirty). "usable" here now matches the
-		// anyUsable semantics below instead of contradicting them.
+
 		keep = winner
 		results[winner].Kept = true
 	}
@@ -280,7 +264,6 @@ func (t *TrialForkTool) validate(in *TrialForkInput) error {
 	return nil
 }
 
-// gitOut runs a git command in dir and returns trimmed stdout.
 func (t *TrialForkTool) gitOut(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -291,7 +274,6 @@ func (t *TrialForkTool) gitOut(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// inspectTrial fills in the git-level facts about a finished trial.
 func (t *TrialForkTool) inspectTrial(root, base string, res *trialResult) {
 	if out, err := t.gitOut(res.Worktree, "status", "--porcelain"); err == nil {
 		res.Dirty = strings.TrimSpace(out) != ""
@@ -330,8 +312,6 @@ func runTrialVerify(ctx context.Context, dir, verifyCmd string, cap time.Duratio
 	return res
 }
 
-// cleanupWorktrees removes every worktree dir except the winner's. Branches
-// are always kept so no committed work is lost.
 func (t *TrialForkTool) cleanupWorktrees(root string, dirs []string, keep ...int) {
 	skip := map[int]bool{}
 	for _, i := range keep {
@@ -362,7 +342,6 @@ Rules:
 - End with one short paragraph summarizing what you did and any caveats.`, worktree, goal, strategy)
 }
 
-// trialSlug builds a filesystem/branch-safe unique name from a strategy hint.
 func trialSlug(strategy string, i int, uniq string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strategy) {
@@ -383,8 +362,6 @@ func trialSlug(strategy string, i int, uniq string) string {
 	return fmt.Sprintf("%s-t%d-%s", slug, i, uniq)
 }
 
-// scoreTrial ranks a trial: verified work beats unverified, committed work
-// beats dirty trees, more files indicate more complete attempts.
 func scoreTrial(r trialResult) int {
 	score := 0
 	if r.VerifyRun && r.VerifyPass {
@@ -406,7 +383,6 @@ func scoreTrial(r trialResult) int {
 	return score + files
 }
 
-// pickWinner returns the index of the best trial (ties keep the earlier one).
 func pickWinner(results []trialResult) int {
 	best := -1
 	bestScore := -1
@@ -418,7 +394,6 @@ func pickWinner(results []trialResult) int {
 	return best
 }
 
-// progress pushes an intermediate update to the TUI when one is attached.
 func (t *TrialForkTool) progress(ctx context.Context, msg string) {
 	if fn, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok && fn != nil {
 		fn("trial_fork", "trial_fork", msg)
@@ -479,12 +454,7 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 			fmt.Fprintf(&sb, "summary: %s\n", r.Summary)
 		}
 	}
-	// #3224: a pickWinner index exists even when EVERY trial failed to
-	// produce committed or verify-passed work (pure score ranking). The
-	// IsError flag alone does not stop an LLM caller from following the
-	// report body: a WINNER block plus pointers to already-deleted
-	// worktrees is active misinformation. Gate the winner block on the
-	// caller's anyUsable verdict instead.
+
 	if winner < 0 || !usable {
 		sb.WriteString("\nNo usable trial: every attempt failed to produce committed work.\n")
 	} else {
@@ -494,10 +464,7 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
 		}
 		if w.Commits == 0 && w.Kept {
-			// #3224: only when the winner actually passed verify (Kept is set
-			// exactly then) is "passed verify but committed nothing" true and
-			// the kept-worktree pointer real. Without the Kept guard this
-			// warning references an already-deleted worktree.
+
 			sb.WriteString("warning: winner passed verify but committed nothing; the work lives uncommitted in the kept worktree above - the branch diff and the git-apply hint below are EMPTY. Commit inside that worktree first, then adopt.\n")
 		}
 		fmt.Fprintf(&sb, "adopt (non-destructive, from your checkout): git diff %s..%s | git apply\n",

@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// CancelAgentTool implements the cancel_agent tool.
-// It cancels a specific running or pending sub-agent by its agent_id,
-// stopping its goroutine and releasing its concurrency slot.
 type CancelAgentTool struct {
 	Manager *subagent.Manager
 }
@@ -56,7 +53,6 @@ func (t CancelAgentTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		return Result{IsError: true, Content: "agent_id is required"}, nil
 	}
 
-	// Check if the agent exists and is in a cancellable state
 	snap, ok := t.Manager.Snapshot(args.AgentID)
 	if !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("agent not found: %s", args.AgentID)}, nil

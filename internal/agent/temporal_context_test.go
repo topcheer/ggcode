@@ -15,7 +15,6 @@ func TestWithTemporalContext(t *testing.T) {
 		t.Fatalf("base prompt lost, got: %q", first)
 	}
 
-	// Anchored: a second render must be byte-identical (KV-cache stability).
 	second := a.withTemporalContext("You are a coding assistant.")
 	if first != second {
 		t.Fatalf("temporal header not stable across calls:\nfirst:  %q\nsecond: %q", first, second)
@@ -55,7 +54,7 @@ func TestTemporalLineFormat(t *testing.T) {
 func TestMaybeInjectDynamicSystemPromptIncludesTemporal(t *testing.T) {
 	a := NewAgent(nil, nil, "You are a coding assistant.", 1)
 	a.maybeInjectDynamicSystemPrompt("")
-	// The injection path updates the context manager; verify via lastInjected cache.
+
 	if !strings.Contains(a.lastInjectedSystemPrompt, "Current date/time: ") {
 		t.Fatalf("temporal header missing from injected prompt: %q", a.lastInjectedSystemPrompt)
 	}

@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// #4058 companions: maximize_window must be idempotent on every platform.
-// The platform implementations shell out to xdotool/AppleScript/Win32, so
-// the contract is pinned at source level (precedent: zz_browser_edge_
-// fallback_test.go) plus a schema assertion; platform files are present on
-// disk regardless of the current build GOOS.
 func TestIssue4058MaximizeIdempotentOnAllPlatforms(t *testing.T) {
 	checks := []struct {
 		file  string
@@ -46,8 +41,6 @@ func TestIssue4058MaximizeIdempotentOnAllPlatforms(t *testing.T) {
 	}
 }
 
-// #4058: the shared description must disclose the idempotent semantics so
-// agents can rely on retrying maximize_window.
 func TestIssue4058SchemaDocumentsIdempotency(t *testing.T) {
 	desc := DesktopControlTool{}.Description()
 	if !strings.Contains(desc, "maximize_window is idempotent") {

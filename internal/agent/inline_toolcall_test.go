@@ -97,8 +97,7 @@ func TestHasInlineToolCall(t *testing.T) {
 }
 
 func TestHasInlineToolCall_Performance(t *testing.T) {
-	// Ensure the function doesn't cause performance issues on large text inputs
-	// that contain many JSON-like patterns but no actual tool calls.
+
 	large := ""
 	for i := 0; i < 1000; i++ {
 		large += `{"key":"value","number":` + itoa(i) + `},`

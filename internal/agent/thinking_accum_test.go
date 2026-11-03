@@ -6,13 +6,9 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestThinkingAccumulator_MultiBlockSignature verifies interleaved-thinking
-// streams preserve every (content, signature) pair as separate blocks
-// instead of collapsing to the last signature with merged text (#228).
 func TestThinkingAccumulator_MultiBlockSignature(t *testing.T) {
 	var a thinkingAccumulator
-	// Simulate: block A start (sig) → A text → tool_use (not reasoning) →
-	// block B start (sig) → B text.
+
 	a.onSignature("sig-A")
 	a.onText("thought A part 1")
 	a.onText("thought A part 2")
@@ -34,8 +30,6 @@ func TestThinkingAccumulator_MultiBlockSignature(t *testing.T) {
 	}
 }
 
-// TestThinkingAccumulator_UnsignedText verifies DeepSeek-style reasoning
-// (text with no signature events) accumulates into a single text block.
 func TestThinkingAccumulator_UnsignedText(t *testing.T) {
 	var a thinkingAccumulator
 	a.onText("step 1")
@@ -52,8 +46,6 @@ func TestThinkingAccumulator_UnsignedText(t *testing.T) {
 	}
 }
 
-// TestThinkingAccumulator_Empty verifies nothing is produced when no
-// reasoning events arrive.
 func TestThinkingAccumulator_Empty(t *testing.T) {
 	var a thinkingAccumulator
 	if a.hasContent() {
@@ -64,13 +56,10 @@ func TestThinkingAccumulator_Empty(t *testing.T) {
 	}
 }
 
-// TestThinkingAccumulator_SignatureOnlyTextBeforeNextSig verifies text
-// arriving after a signature belongs to the newly opened block even when
-// interleaved with more signatures.
 func TestThinkingAccumulator_SignatureOnlyTextBeforeNextSig(t *testing.T) {
 	var a thinkingAccumulator
 	a.onSignature("sig-1")
-	a.onSignature("sig-2") // block 1 gets no text — still valid to echo back
+	a.onSignature("sig-2")
 	a.onText("only for 2")
 	blocks := a.accumulated()
 	if len(blocks) != 2 {
@@ -84,6 +73,4 @@ func TestThinkingAccumulator_SignatureOnlyTextBeforeNextSig(t *testing.T) {
 	}
 }
 
-// compile-time check that accumulated blocks are directly usable as
-// provider message content.
 var _ = []provider.ContentBlock((&thinkingAccumulator{}).accumulated())

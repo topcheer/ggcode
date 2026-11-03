@@ -1,12 +1,5 @@
 package agent
 
-// Regression tests for issue #698: the commit hint gate attributed the whole
-// working tree's dirty-file count to the agent ("You made changes to N files")
-// instead of RunStats.FilesEdited — pre-existing user changes and other
-// agents' untracked files were counted, sending the agent hunting for edits
-// it never made. The gate must scope the hint to the agent's own edit list
-// intersected with the dirty tree, and disclose unrelated dirt separately.
-
 import (
 	"os"
 	"os/exec"
@@ -15,9 +8,6 @@ import (
 	"testing"
 )
 
-// newCommitHintAgent builds a minimal Agent whose commitHint state is armed
-// and whose working dir is a fresh git repo (real porcelain, no mocking of
-// git itself — same approach as commit_hint_gate_test.go).
 func newCommitHintAgent(t *testing.T) *Agent {
 	t.Helper()
 	dir := t.TempDir()
@@ -53,13 +43,10 @@ func TestIssue698_HintScopesToAgentEditsOnly(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
 
-	// Pre-existing USER change (tracked file modified before the agent ran)
-	// plus a pre-existing UNTRACKED user file.
 	writeFileT(t, filepath.Join(dir, "user_tracked.go"), "user change")
 	writeFileT(t, filepath.Join(dir, "user_untracked.go"), "user file")
 	runGit(t, dir, "add", "user_tracked.go")
 
-	// The agent edited exactly one file.
 	agentFile := filepath.Join(dir, "agent_edit.go")
 	writeFileT(t, agentFile, "agent edit")
 
@@ -72,14 +59,14 @@ func TestIssue698_HintScopesToAgentEditsOnly(t *testing.T) {
 	if msg == "" {
 		t.Fatal("hint must fire when the agent's own edit is uncommitted")
 	}
-	// The count must be the agent's dirty edits (1), never the tree's total (3).
+
 	if !strings.Contains(msg, "1 file") {
 		t.Fatalf("hint must scope to the agent's 1 edited file, got: %q", msg)
 	}
 	if strings.Contains(msg, "3 files") || strings.Contains(msg, "2 files") {
 		t.Fatalf("hint must not count user's pre-existing changes: %q", msg)
 	}
-	// Unrelated dirt is disclosed, not attributed.
+
 	if !strings.Contains(msg, "unrelated") {
 		t.Fatalf("hint must disclose unrelated pre-existing changes separately: %q", msg)
 	}
@@ -92,14 +79,11 @@ func TestIssue698_NoHintWhenAgentEditsAllCommitted(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
 
-	// Agent edited and committed its file via shell git (no git_commit TOOL,
-	// so the tool-exemption path must not kick in).
 	agentFile := filepath.Join(dir, "agent_edit.go")
 	writeFileT(t, agentFile, "agent edit")
 	runGit(t, dir, "add", "agent_edit.go")
 	runGit(t, dir, "commit", "-qm", "agent work")
 
-	// Tree is still dirty from the user's unrelated change.
 	writeFileT(t, filepath.Join(dir, "user_tracked_base.go"), "base")
 	runGit(t, dir, "add", "user_tracked_base.go")
 	runGit(t, dir, "commit", "-qm", "base")
@@ -116,8 +100,7 @@ func TestIssue698_NoHintWhenAgentEditsAllCommitted(t *testing.T) {
 
 func TestIssue698_NoHintWithoutFilesEdited(t *testing.T) {
 	a := newCommitHintAgent(t)
-	// Dirty tree exists (nothing committed), but the agent edited nothing —
-	// porcelain non-empty must NOT trigger attribution.
+
 	writeFileT(t, filepath.Join(a.workingDir, "user_untracked.go"), "x")
 
 	stats := &RunStats{
@@ -136,13 +119,11 @@ func TestIssue698_GitStashDoesNotSuppressHint(t *testing.T) {
 	agentFile := filepath.Join(dir, "agent_edit.go")
 	writeFileT(t, agentFile, "agent edit")
 
-	// The agent stashed (and popped) — the edits are back in the tree,
-	// uncommitted. A stash round trip is NOT "handled version control".
 	stats := &RunStats{
 		FilesEdited: []string{agentFile},
 		ToolCalls: map[string]int{
 			"edit_file": 1,
-			"git_stash": 2, // push + pop
+			"git_stash": 2,
 		},
 	}
 	msg := a.checkCommitHintGate(stats)
@@ -173,7 +154,6 @@ func TestIssue698_OnlyAgentFilesNamedInList(t *testing.T) {
 	a := newCommitHintAgent(t)
 	dir := a.workingDir
 
-	// Two agent files, one user file.
 	f1 := filepath.Join(dir, "a1.go")
 	f2 := filepath.Join(dir, "a2.go")
 	writeFileT(t, f1, "x")
@@ -195,8 +175,6 @@ func TestIssue698_OnlyAgentFilesNamedInList(t *testing.T) {
 		t.Fatalf("hint's file list must not include the user's untracked file: %q", msg)
 	}
 }
-
-// --- pure helpers (no git needed) -------------------------------------------
 
 func TestIssue698_PorcelainFilePathsRenames(t *testing.T) {
 	porcelain := " M modified.go\n" +
@@ -225,7 +203,7 @@ func TestIssue698_ShortenFileListCaps(t *testing.T) {
 		files[i] = string(rune('a'+i)) + ".go"
 	}
 	got := shortenFileList(files)
-	if len(got) != 11 { // 10 listed + "... and 5 more"
+	if len(got) != 11 {
 		t.Fatalf("shortenFileList len = %d, want 11", len(got))
 	}
 	if !strings.Contains(got[len(got)-1], "5 more") {

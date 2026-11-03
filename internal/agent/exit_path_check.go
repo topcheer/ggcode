@@ -1,49 +1,5 @@
 package agent
 
-// ═══ TOMBSTONE (#1042): DEAD CODE — zero production call sites ═══
-//
-// checkExitPath is never invoked: write_integrity.go and every registration
-// table in this package have no exit-path entry (verified by call-site audit).
-// Per the #328/#330/#499 dead-detector convention this file is kept with a
-// tombstone rather than deleted, and must NOT be wired into the write-integrity
-// registry as-is.
-//
-// If resurrected, fix this latent defect FIRST:
-//
-//  filterExitPathDelta uses message keys that embed line numbers (e.g.,
-//  "redundant-else@L42", "deep-nesting@L15"). When edits shift lines, the
-//  same issue appears at a new line number, bypassing delta filtering. The key
-//  must be line-number invariant — either count issues by kind, or encode
-//  kind+function+ordinal to survive line shifts before wiring this check.
-//
-// ═══ END TOMBSTONE ═══
-
-// Exit Path & Early Return Intelligence (Check #57)
-//
-// Problem: AI coding agents frequently produce Go code with control flow
-// anti-patterns that hurt readability and maintainability. The two most
-// common patterns are:
-//
-//  1. Redundant else after return/break/continue/panic (guard clause violation):
-//     When an if-block's body ends with a terminating statement (return, break,
-//     continue, goto, panic), the else clause is unnecessary. The else body
-//     can be de-indented to the outer scope.
-//
-//  2. Deep nesting and guard clause opportunity:
-//     When if-statements are nested 3+ levels deep, the function becomes hard
-//     to read. Go idiom prefers early returns (guard clauses) to flatten
-//     nesting.
-//
-// Competitor analysis:
-//   - staticcheck: does not check redundant else or deep nesting
-//   - gocritic: has `elseif` (suggests if-elseif chains) but NOT redundant-else-after-return
-//   - go vet: no check for either pattern
-//   - Claude Code/Cursor/Aider: no write-time detection
-//   - CodeRabbit: may suggest in review comments, but not at write time
-//
-// Approach: AST-based analysis, zero LLM cost. Delta-aware: only flags
-// patterns newly introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -53,12 +9,10 @@ import (
 )
 
 const (
-	exitPathMaxNesting  = 3 // flag if nesting depth >= this
+	exitPathMaxNesting  = 3
 	exitPathMaxWarnings = 4
 )
 
-// checkExitPath detects redundant-else-after-termination and deep nesting
-// guard-clause opportunities in Go code. Returns warning strings. Delta-aware.
 func checkExitPath(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -75,7 +29,6 @@ func checkExitPath(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: subtract issues present in old content.
 	newIssues = filterExitPathDelta(newIssues, oldContent, filePath)
 	if len(newIssues) == 0 {
 		return nil
@@ -83,7 +36,6 @@ func checkExitPath(filePath, oldContent, newContent string) []string {
 	return buildExitPathWarnings(newIssues)
 }
 
-// filterExitPathDelta removes issues that already existed in oldContent.
 func filterExitPathDelta(newIssues []exitPathIssue, oldContent, filePath string) []exitPathIssue {
 	if strings.TrimSpace(oldContent) == "" {
 		return newIssues
@@ -106,7 +58,6 @@ func filterExitPathDelta(newIssues []exitPathIssue, oldContent, filePath string)
 	return filtered
 }
 
-// buildExitPathWarnings converts issues into human-readable warning strings.
 func buildExitPathWarnings(issues []exitPathIssue) []string {
 	redundantCount := 0
 	deepNestCount := 0
@@ -139,14 +90,12 @@ func buildExitPathWarnings(issues []exitPathIssue) []string {
 	return warnings
 }
 
-// exitPathIssue records a single exit-path quality issue.
 type exitPathIssue struct {
-	kind    string // "redundant-else" or "deep-nesting"
+	kind    string
 	line    int
 	message string
 }
 
-// findExitPathIssues parses Go source and finds all exit-path quality issues.
 func findExitPathIssues(filename, src string) []exitPathIssue {
 	file, fset, err := parseGoSource(filename, src, 0)
 	if err != nil || file == nil {
@@ -160,7 +109,7 @@ func findExitPathIssues(filename, src string) []exitPathIssue {
 		if !ok || fd.Body == nil {
 			continue
 		}
-		// Skip main/init -- bootstrap functions have different conventions.
+
 		if fd.Name.Name == "main" || fd.Name.Name == "init" {
 			continue
 		}
@@ -176,19 +125,15 @@ func findExitPathIssues(filename, src string) []exitPathIssue {
 	return issues
 }
 
-// checkRedundantElse detects if-blocks that end with a terminating statement
-// but have an else clause.
 func checkRedundantElse(stmt *ast.IfStmt, fset *token.FileSet) []exitPathIssue {
 	if stmt.Else == nil {
 		return nil
 	}
-	// Only flag if the if-body's last statement is terminating.
+
 	if !blockEndsTerminating(stmt.Body) {
 		return nil
 	}
 
-	// Skip else-if chains: if the else is another IfStmt, it's a chain,
-	// not a standalone else block. These are acceptable for readability.
 	if _, ok := stmt.Else.(*ast.IfStmt); ok {
 		return nil
 	}
@@ -202,7 +147,6 @@ func checkRedundantElse(stmt *ast.IfStmt, fset *token.FileSet) []exitPathIssue {
 	}}
 }
 
-// checkDeepNesting detects if-statements nested at depth >= exitPathMaxNesting.
 func checkDeepNesting(stmt *ast.IfStmt, fset *token.FileSet) []exitPathIssue {
 	depth := 1 + ifNestingDepth(stmt.Body)
 	if depth < exitPathMaxNesting {
@@ -217,9 +161,6 @@ func checkDeepNesting(stmt *ast.IfStmt, fset *token.FileSet) []exitPathIssue {
 	}}
 }
 
-// blockEndsTerminating returns true if the block's last statement is a
-// terminating statement: return, break, continue, goto, panic, or
-// a block/if that itself ends terminating.
 func blockEndsTerminating(block *ast.BlockStmt) bool {
 	if block == nil || len(block.List) == 0 {
 		return false
@@ -227,25 +168,22 @@ func blockEndsTerminating(block *ast.BlockStmt) bool {
 	return stmtIsTerminating(block.List[len(block.List)-1])
 }
 
-// stmtIsTerminating checks whether a statement unconditionally transfers
-// control flow (making subsequent code and else clauses unreachable).
 func stmtIsTerminating(s ast.Stmt) bool {
 	switch v := s.(type) {
 	case *ast.ReturnStmt:
 		return true
-	case *ast.BranchStmt: // break, continue, goto
+	case *ast.BranchStmt:
 		return true
 	case *ast.BlockStmt:
 		return blockEndsTerminating(v)
 	case *ast.IfStmt:
-		// if-else where BOTH branches terminate is terminating.
+
 		if v.Else == nil {
 			return false
 		}
 		return ifBranchTerminates(v.Body) && elseBranchTerminates(v.Else)
 	case *ast.SelectStmt:
-		// Select with all cases having break/return is terminating.
-		// Conservative: only flag if all cases end terminating.
+
 		return selectTerminates(v)
 	case *ast.SwitchStmt:
 		return switchTerminates(v)
@@ -253,19 +191,16 @@ func stmtIsTerminating(s ast.Stmt) bool {
 	return false
 }
 
-// ifBranchTerminates checks if an if-body block ends with terminating stmt.
 func ifBranchTerminates(block *ast.BlockStmt) bool {
 	return blockEndsTerminating(block)
 }
 
-// elseBranchTerminates checks if the else branch (could be IfStmt or BlockStmt)
-// terminates.
 func elseBranchTerminates(elseStmt ast.Stmt) bool {
 	switch v := elseStmt.(type) {
 	case *ast.BlockStmt:
 		return blockEndsTerminating(v)
 	case *ast.IfStmt:
-		// else-if: recursively check
+
 		if v.Else == nil {
 			return false
 		}
@@ -274,7 +209,6 @@ func elseBranchTerminates(elseStmt ast.Stmt) bool {
 	return false
 }
 
-// selectTerminates returns true if all select cases end with terminating stmt.
 func selectTerminates(sel *ast.SelectStmt) bool {
 	if sel.Body == nil || len(sel.Body.List) == 0 {
 		return false
@@ -288,8 +222,6 @@ func selectTerminates(sel *ast.SelectStmt) bool {
 	return true
 }
 
-// switchTerminates returns true if all switch cases end with terminating stmt
-// AND a default case exists (without default, the switch may fall through).
 func switchTerminates(sw *ast.SwitchStmt) bool {
 	if sw.Body == nil || len(sw.Body.List) == 0 {
 		return false
@@ -307,7 +239,6 @@ func switchTerminates(sw *ast.SwitchStmt) bool {
 	return hasDefault
 }
 
-// commClauseTerminates checks if a select CommClause ends terminating.
 func commClauseTerminates(cc *ast.CommClause) bool {
 	if len(cc.Body) == 0 {
 		return false
@@ -315,7 +246,6 @@ func commClauseTerminates(cc *ast.CommClause) bool {
 	return stmtIsTerminating(cc.Body[len(cc.Body)-1])
 }
 
-// caseClauseTerminates checks if a switch CaseClause ends terminating.
 func caseClauseTerminates(cc *ast.CaseClause) bool {
 	if len(cc.Body) == 0 {
 		return false
@@ -323,8 +253,6 @@ func caseClauseTerminates(cc *ast.CaseClause) bool {
 	return stmtIsTerminating(cc.Body[len(cc.Body)-1])
 }
 
-// ifNestingDepth computes the maximum depth of nested if-statements within
-// the given block. Returns 1 for a single if with no nested ifs.
 func ifNestingDepth(block *ast.BlockStmt) int {
 	if block == nil {
 		return 0
@@ -339,7 +267,6 @@ func ifNestingDepth(block *ast.BlockStmt) int {
 	return maxDepth
 }
 
-// stmtIfDepth returns the nesting depth of if-statements within a statement.
 func stmtIfDepth(s ast.Stmt) int {
 	if s == nil {
 		return 0
@@ -357,7 +284,6 @@ func stmtIfDepth(s ast.Stmt) int {
 	return maxDepth
 }
 
-// countIfChainDepth recursively counts how deep if-statements are nested.
 func countIfChainDepth(stmt *ast.IfStmt) int {
 	depth := 1
 	if stmt.Body != nil {
@@ -366,7 +292,7 @@ func countIfChainDepth(stmt *ast.IfStmt) int {
 			depth = childDepth + 1
 		}
 	}
-	// Check else-if chain depth
+
 	if elseIf, ok := stmt.Else.(*ast.IfStmt); ok {
 		elseDepth := countIfChainDepth(elseIf)
 		if elseDepth > depth {

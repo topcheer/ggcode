@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #4915: when the daemon registers a shared-workspace probe, both prompt
-// builders must inject its text right after the base system prompt; with no
-// probe (single-agent default) prompts stay unchanged.
 func TestSharedWorkspaceProbeInjectedIntoPrompts(t *testing.T) {
 	SetSharedWorkspaceProbe(func() string {
 		return "## SHARED WORKSPACE — CONCURRENT AGENTS ACTIVE\npeer-x is here"

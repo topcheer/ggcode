@@ -1,52 +1,5 @@
 package agent
 
-// Bare Panic Safety Detection in Go Code
-//
-// Problem: AI coding agents frequently use the Go built-in panic() in library
-// (non-main) code as an error-handling shortcut. Unlike returning an error,
-// panic() has severe consequences:
-//
-//  1. In goroutines: an unrecovered panic in any goroutine crashes the ENTIRE
-//     process immediately, even if the panic occurred in an unrelated subsystem.
-//     Unlike errors, panics cannot be handled by the caller.
-//  2. Skips deferred cleanup: while deferred functions DO run during panic
-//     unwinding, the caller has no way to decide whether to continue or abort.
-//  3. Loses error type information: panic(fmt.Sprintf(...)) produces a string,
-//     losing the concrete error type so errors.Is()/errors.As() can't match.
-//  4. Untestable: a panic in a test kills the test process (unless wrapped in
-//     recover), making the function impossible to unit test properly.
-//
-// The existing exit_call_check.go catches log.Panic/log.Panicf/log.Panicln but
-// NOT the Go built-in panic(). This is because panic() is a language built-in
-// (not a package-qualified call), so qualifiedCallName() returns "" for it.
-// This check fills that gap.
-//
-// Common LLM failure modes this check catches:
-//  1. panic("should never happen") instead of returning an error
-//  2. panic(fmt.Sprintf("invalid input: %v", x)) in input validation
-//  3. panic(err) instead of propagating the error up the call chain
-//  4. panic in a goroutine without recover, causing process-wide crashes
-//
-// Competitor analysis:
-//   - Claude Code: no automatic panic detection
-//   - Cursor: go vet does NOT flag panic() in library code
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//   - GitHub Copilot: sometimes warns via lint, inconsistent
-//
-// Exceptions (panic IS idiomatic):
-//   - main() and init() functions: acceptable program termination
-//   - Test helpers: t.Fatal covers this, but panic in test helper is sometimes
-//     seen (less critical, so we skip test files)
-//   - Generated code: we still flag since agents should learn the pattern
-//   - Functions that return interfaces with MustXxx() naming convention
-//     (MustCompile, MustParse) -- these are idiomatic panic wrappers
-//
-// Approach: AST-based analysis. For each non-main/init function, find all
-// panic() calls. If the function does NOT have a recover() in the same scope
-// (i.e., the panic will propagate to the caller), flag it. Delta-aware: only
-// flags panic() calls INTRODUCED by this edit.
-
 import (
 	"go/ast"
 	"go/token"
@@ -54,25 +7,11 @@ import (
 	"strings"
 )
 
-// panicInstance represents a detected bare panic() call.
 type panicInstance struct {
-	posStr string // human-readable position string (display only)
-	// fingerprint identifies the panic call by CONTENT, not position:
-	// enclosing function name + normalized call text. Position-keyed
-	// delta breaks when unrelated lines are inserted above (the posStr
-	// shifts and a pre-existing, untouched panic re-warns on every
-	// edit) - the same class #1136 fixed for nplus1 and #1142 for
-	// param_count with pcFingerprint.
+	posStr      string
 	fingerprint string
 }
 
-// checkPanicSafety detects bare panic() calls in non-main Go functions without
-// recover(). Returns warning strings. Delta-aware: only flags NEW instances.
-//
-// Parameters:
-//   - filePath: path of the written file (used for language detection)
-//   - oldContent: the file content before the write ("" for new files)
-//   - newContent: the file content after the write
 func checkPanicSafety(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -81,13 +20,10 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Skip test files -- panic in test helpers, while not ideal, is lower risk
-	// since test failures already stop execution.
 	if isTestFile(filePath) {
 		return nil
 	}
 
-	// Skip cmd/ directories -- main packages where panic is acceptable.
 	if isCmdPackage(filePath) {
 		return nil
 	}
@@ -97,10 +33,6 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta check keyed by content fingerprint, not position (fix #142;
-	// re-keyed for #2721). A pre-existing panic whose lines merely
-	// shifted (unrelated insert/delete above) keeps its fingerprint and
-	// must NOT re-warn - only panics introduced by this edit fire.
 	var oldSeen map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findBarePanics(oldContent) {
@@ -130,8 +62,6 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// findBarePanics parses Go source and returns all bare panic() calls found in
-// non-main/init functions that lack recover() in the same function scope.
 func findBarePanics(src string) []panicInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -147,20 +77,18 @@ func findBarePanics(src string) []panicInstance {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			// Skip main() and init() -- panic is acceptable in entry points.
+
 			if d.Name != nil && (d.Name.Name == "main" || d.Name.Name == "init") {
 				continue
 			}
-			// Skip MustXxx helpers (regexp.MustCompile, template.Must idiom):
-			// their documented contract is panic-on-failure, so advising
-			// "return an error instead" would break caller API contracts (#2555).
+
 			if d.Name != nil && strings.HasPrefix(d.Name.Name, "Must") {
 				continue
 			}
 			instances = append(instances, findPanicsInBody(d.Body, fset, d.Name.Name)...)
 
 		case *ast.GenDecl:
-			// GenDecl may contain function literals in var initializers.
+
 			ast.Inspect(d, func(n ast.Node) bool {
 				if fl, ok := n.(*ast.FuncLit); ok {
 					instances = append(instances, findPanicsInBody(fl.Body, fset, "<funclit>")...)
@@ -173,26 +101,15 @@ func findBarePanics(src string) []panicInstance {
 	return instances
 }
 
-// findPanicsInBody walks a function body and returns all bare panic() calls
-// that are NOT guarded by a recover() in the same function scope.
-//
-// Frame semantics (fix #239): recover() only takes effect in the function
-// frame where it is deferred. Nested FuncLits (closures, goroutine bodies)
-// constitute separate frames and are analyzed recursively - a recover inside
-// a closure must not silence panics in this frame, and this frame's recover
-// must not silence panics inside closures/goroutines.
 func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string) []panicInstance {
 	if body == nil {
 		return nil
 	}
 
-	// Check if this function has a recover() call inside a defer.
-	// Only recover() directly inside a deferred function catches panics;
-	// a bare recover() outside defer is a no-op.
 	hasRecover := false
-	var nested []panicInstance // panics found in separate (closure) frames
+	var nested []panicInstance
 	ast.Inspect(body, func(n ast.Node) bool {
-		// Separate function frame: analyze independently, do not descend.
+
 		if fl, ok := n.(*ast.FuncLit); ok {
 			nested = append(nested, findPanicsInBody(fl.Body, fset, "<funclit>")...)
 			return false
@@ -201,7 +118,7 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string)
 		if !ok {
 			return true
 		}
-		// Check if the deferred function contains a recover() call.
+
 		ast.Inspect(deferStmt.Call, func(dn ast.Node) bool {
 			if call, ok := dn.(*ast.CallExpr); ok {
 				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "recover" {
@@ -215,15 +132,14 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string)
 	})
 
 	if hasRecover {
-		// This frame handles its own panics; closure frames were analyzed
-		// independently above and may still contain unguarded panics.
+
 		return nested
 	}
 
 	var instances []panicInstance
 
 	ast.Inspect(body, func(n ast.Node) bool {
-		// Separate frame - already analyzed during the recover pass above.
+
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -232,28 +148,18 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string)
 			return true
 		}
 
-		// Check for bare panic() -- Fun is an *ast.Ident with name "panic".
 		ident, ok := call.Fun.(*ast.Ident)
 		if !ok || ident.Name != "panic" {
 			return true
 		}
 
-		// Ensure this is the built-in panic, not a user-defined function.
-		// The built-in panic has no object attached (ident.Obj == nil) when
-		// parsed without type information. A user-defined panic function would
-		// have a declaration in the same file. We check ident.Obj == nil as a
-		// heuristic: if it's nil, it's the built-in.
 		if ident.Obj != nil {
-			return true // user-defined function named "panic", skip
+			return true
 		}
 
 		instances = append(instances, panicInstance{
 			posStr: fset.Position(call.Pos()).String(),
-			// Content fingerprint (#2721): function name + normalized call
-			// text. Line shifts from unrelated edits above do not change
-			// the fingerprint, so an untouched pre-existing panic stays
-			// suppressed; a genuinely new panic (new args or new site)
-			// always differs.
+
 			fingerprint: funcName + "|" + normalizePanicCallText(call, fset),
 		})
 
@@ -263,15 +169,10 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string)
 	return append(instances, nested...)
 }
 
-// normalizePanicCallText renders a panic() call to a canonical text form
-// for fingerprinting (#2721, same approach as the #1142 pcFingerprint):
-// argument source text with surrounding whitespace collapsed, so purely
-// cosmetic reformatting (gofmt) does not re-warn either.
 func normalizePanicCallText(call *ast.CallExpr, fset *token.FileSet) string {
 	parts := make([]string, 0, len(call.Args))
 	for _, arg := range call.Args {
-		// renderNode (unreachable_code_check.go) prints canonical source
-		// via format.Node: whitespace/formatting-insensitive.
+
 		parts = append(parts, strings.TrimSpace(renderNode(fset, arg)))
 	}
 	return "panic(" + strings.Join(parts, ", ") + ")"

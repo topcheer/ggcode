@@ -2,7 +2,6 @@ package agent
 
 import "testing"
 
-// #4257: pasted fences/quotes/logs must not be promoted to user constraints.
 func TestIssue4257_NonDirectiveTextNotExtracted(t *testing.T) {
 	pasted := "help me fix this:\n" +
 		"```\n2026-10-16 12:00:00 ERROR cannot connect\nnever run this on CI runners\")\n```\n" +
@@ -13,7 +12,7 @@ func TestIssue4257_NonDirectiveTextNotExtracted(t *testing.T) {
 			t.Fatalf("pasted non-directive text extracted as constraint: %q", c)
 		}
 	}
-	// A real directive outside any fence still extracts.
+
 	got = extractConstraints("do not modify the auth module please")
 	found := false
 	for _, c := range got {

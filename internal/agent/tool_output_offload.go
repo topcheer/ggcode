@@ -12,46 +12,14 @@ import (
 	"time"
 )
 
-// tool_output_offload.go implements Tool Output Offloading — a 2026 harness
-// engineering pattern (LangChain "Anatomy of an Agent Harness"; also used by
-// Claude Code and Manus): when a large tool result must be truncated before
-// entering context, the FULL output is written to a durable file and the
-// truncation notice carries the path, so the agent can re-read the omitted
-// middle section on demand instead of losing it forever.
-//
-// Before this change, guardToolOutput discarded the middle section
-// permanently: a 200KB build log truncated to 40KB at 50% context fill lost
-// ~160KB of content with no recovery path other than re-running the tool —
-// which is wasteful for deterministic tools and impossible for one-shot
-// side effects (flaky test runs, deploy logs, long CI output).
-//
-// Design constraints:
-//   - Spilling is best-effort: any I/O failure returns "" and the agent falls
-//     back to plain truncation. Never fail a tool result because of offloading.
-//   - Spill files live under os.TempDir()/ggcode-spill-<pid>/ so user
-//     repositories are never polluted and OS temp cleanup applies.
-//   - File count is capped (keep newest); oversized content is capped too.
-//   - The directory is created lazily on first spill; sessions that never
-//     truncate pay zero filesystem cost.
-
 const (
-	// minSpillBytes: below this size the head+tail preservation already
-	// captures most content and advisoryForTruncation is suppressed too —
-	// keep both thresholds aligned.
 	minSpillBytes = 8 * 1024
 
-	// maxSpillBytes caps a single spilled file as a safety valve against
-	// pathological outputs (e.g. a 2GB minified bundle). Beyond this the
-	// head and tail are written with a marker in between.
 	maxSpillBytes = 20 * 1024 * 1024
 
-	// maxSpillFiles caps how many spill files accumulate per session;
-	// oldest files are deleted when the cap is exceeded.
 	maxSpillFiles = 20
 )
 
-// outputOffloader persists truncated tool outputs to disk for later
-// re-reading by the agent. It is safe for concurrent use.
 type outputOffloader struct {
 	mu   sync.Mutex
 	dir  string
@@ -59,13 +27,10 @@ type outputOffloader struct {
 	once sync.Once
 }
 
-// newOutputOffloader creates an offloader; the spill directory is created
-// lazily on first use.
 func newOutputOffloader() *outputOffloader {
 	return &outputOffloader{}
 }
 
-// spillDir returns (creating if needed) the directory spill files live in.
 func (o *outputOffloader) spillDir() (string, error) {
 	if o.dir != "" {
 		if _, err := os.Stat(o.dir); err == nil {
@@ -73,12 +38,10 @@ func (o *outputOffloader) spillDir() (string, error) {
 		} else if !os.IsNotExist(err) {
 			return "", err
 		}
-		// Directory vanished (OS temp cleanup); recreate on next write.
+
 		o.dir = ""
 	}
-	// #3642: embed the PID so pruneStaleSpillDirs can attribute the
-	// directory to a live process instead of deleting an active long
-	// session's spills just because its ModTime crossed the threshold.
+
 	dir, err := os.MkdirTemp("", fmt.Sprintf("ggcode-spill-%d-*", os.Getpid()))
 	if err != nil {
 		return "", err
@@ -87,12 +50,8 @@ func (o *outputOffloader) spillDir() (string, error) {
 	return dir, nil
 }
 
-// spillToolNamePattern strips characters that are unsafe in file names.
 var spillToolNamePattern = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-// spill writes the full original content to a timestamped file and returns
-// its absolute path, or "" when spilling is skipped or fails.
-// toolName is used for the file name only.
 func (o *outputOffloader) spill(toolName, content string) string {
 	if len(content) < minSpillBytes {
 		return ""
@@ -102,8 +61,7 @@ func (o *outputOffloader) spill(toolName, content string) string {
 	defer o.mu.Unlock()
 
 	o.once.Do(func() {
-		// Best-effort: prune stale spill dirs from previous crashed
-		// sessions (older than 24h) once per session.
+
 		pruneStaleSpillDirs()
 	})
 
@@ -132,7 +90,6 @@ func (o *outputOffloader) spill(toolName, content string) string {
 	return path
 }
 
-// pruneLocked deletes the oldest spill files when the count cap is exceeded.
 func (o *outputOffloader) pruneLocked(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) <= maxSpillFiles {
@@ -160,14 +117,6 @@ func (o *outputOffloader) pruneLocked(dir string) {
 	}
 }
 
-// pruneStaleSpillDirs removes ggcode-spill-* directories under the system
-// temp dir left by crashed sessions. Errors are ignored.
-//
-// #3642: directories are named ggcode-spill-<pid>-<rand>; a directory whose
-// PID is still alive is NEVER removed, no matter how old - a long-running
-// session's promised "Full output saved to <path>" files must stay
-// recoverable while the session lives. Only PID-dead (or 7+ day old
-// legacy-unparseable) directories are removed.
 func pruneStaleSpillDirs() {
 	tmp := os.TempDir()
 	entries, err := os.ReadDir(tmp)
@@ -186,7 +135,7 @@ func pruneStaleSpillDirs() {
 			continue
 		}
 		if pid, ok := spillDirPID(name); ok {
-			// Skip live-owner directories unconditionally (#3642).
+
 			if processAlive(pid) {
 				continue
 			}
@@ -194,16 +143,13 @@ func pruneStaleSpillDirs() {
 				continue
 			}
 		} else if !info.ModTime().Before(legacyCutoff) {
-			// Pre-#3642 name format: owner unknowable, only reap after 7
-			// days so a same-day upgraded live session is not hit.
+
 			continue
 		}
 		_ = os.RemoveAll(filepath.Join(tmp, name))
 	}
 }
 
-// spillDirPID extracts the owning PID from a ggcode-spill-<pid>-<rand>
-// directory name (#3642). Legacy names (ggcode-spill-<rand>) report false.
 func spillDirPID(name string) (int, bool) {
 	rest := strings.TrimPrefix(name, "ggcode-spill-")
 	pidStr := rest
@@ -217,7 +163,6 @@ func spillDirPID(name string) (int, bool) {
 	return pid, true
 }
 
-// utilSnapRune snaps a byte offset to a UTF-8 rune boundary.
 func utilSnapRune(s string, n int) int {
 	if n >= len(s) {
 		return len(s)
@@ -228,9 +173,6 @@ func utilSnapRune(s string, n int) int {
 	return n
 }
 
-// spillNotice formats the agent-facing pointer to a spilled file. It is
-// appended to the truncated content so the model knows the full output is
-// recoverable from disk without re-running the tool.
 func spillNotice(path string, originalLen int) string {
 	return fmt.Sprintf(
 		"\n[Full original output (%s) saved to: %s — use read_file with offset/limit or grep on that path to inspect the omitted middle section. Do not re-run the tool to recover it.]",

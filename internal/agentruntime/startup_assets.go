@@ -17,10 +17,8 @@ import (
 )
 
 type StartupAssets struct {
-	AutoFiles      []string
-	CommandManager *commands.Manager
-	// ConsolidationFindings (sa-45): sleep-time memory-consolidation
-	// warnings swept in the idle window; surfaced as startup notices.
+	AutoFiles             []string
+	CommandManager        *commands.Manager
 	ConsolidationFindings []string
 }
 
@@ -29,10 +27,8 @@ func LoadInteractiveStartupAssets(
 	autoMem *memory.AutoMemory,
 ) StartupAssets {
 	var (
-		autoFiles  []string
-		commandMgr *commands.Manager
-		// consolidationFindings is appended inside the memory goroutine and
-		// read only after wg.Wait() (sa-45 startup-notices channel).
+		autoFiles             []string
+		commandMgr            *commands.Manager
 		consolidationFindings []string
 	)
 
@@ -43,10 +39,7 @@ func LoadInteractiveStartupAssets(
 		defer wg.Done()
 		start := time.Now()
 		autoMem.GarbageCollect()
-		// Sleep-time consolidation (arXiv:2504.13171): sweep the memory store
-		// in the idle window between sessions and persist staleness /
-		// contradiction / near-duplicate findings to a sidecar state file.
-		// Non-destructive; findings surface in debug logs (future: UI).
+
 		if report := autoMem.Consolidate(workingDir); report.HasFindings() {
 			debug.Log("memory", "startup consolidation: %s", report.String())
 			for _, w := range report.Warnings {
@@ -128,9 +121,7 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 			}
 			desc += when
 		}
-		// Rune-safe truncation (#1155): slicing by byte landed in the middle
-		// of multi-byte runes for CJK descriptions, emitting invalid UTF-8
-		// that strict providers reject with HTTP 400. Reuse truncateRunes.
+
 		if utf8.RuneCountInString(desc) > maxDescChars {
 			desc = truncateRunes(desc, maxDescChars, "...")
 		}

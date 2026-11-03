@@ -10,11 +10,6 @@ import (
 	"testing"
 )
 
-// #3837 A: the routed line embeds the live Count ("enforce: fp (N runs)"),
-// so whole-line dedup never matched a later line with a different Count
-// (memory save failure / eviction+recurrence / manual edit) and duplicate
-// enforce rules accumulated. Now dedup is by fingerprint and a newer
-// count REPLACES the stale line.
 func TestIssue3837_CountDriftReplacesNotAppends(t *testing.T) {
 	fp := "test-fail:pkg.TestX"
 	existing := "enforce: " + fp + " (2 runs) - old evidence; treat as a standing rule"
@@ -49,8 +44,6 @@ func TestIssue3837_RoutedFingerprintExtract(t *testing.T) {
 	}
 }
 
-// #3837 B: routeMatureSignals now holds a flock across the mutation - two
-// concurrent route passes must not corrupt the memory key or panic.
 func TestIssue3837_ConcurrentRouteNoCorruption(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {
@@ -61,9 +54,7 @@ func TestIssue3837_ConcurrentRouteNoCorruption(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Each goroutine gets its OWN store map: the flock protects
-			// the on-disk mutation window, not concurrent map access in
-			// one process (production calls this once per run end).
+
 			cp := weaknessSignalStore{
 				"fp.X": {Class: WeakForgetting, Count: 3, Evidence: "e"},
 			}

@@ -17,7 +17,6 @@ func TestEditFile_LineNumberPrefixStripped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// LLM pasted back read_file's `cat -n` output verbatim.
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
 		"old_text":  "     3\tfunc hello() {\n     4\t\tprintln(\"hi\")\n     5\t}",
@@ -45,7 +44,7 @@ func TestEditFile_CRLFFallback(t *testing.T) {
 
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
-		"old_text":  "alpha\nbeta", // LF instead of file's CRLF
+		"old_text":  "alpha\nbeta",
 		"new_text":  "ALPHA\nBETA",
 	})
 	res, err := EditFile{}.Execute(context.Background(), input)
@@ -64,14 +63,14 @@ func TestEditFile_CRLFFallback(t *testing.T) {
 func TestEditFile_TrailingWhitespaceTolerant(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "test.txt")
-	// File has a trailing space on the second line.
+
 	if err := os.WriteFile(fp, []byte("first\nsecond  \nthird\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
-		"old_text":  "first\nsecond\nthird", // no trailing spaces
+		"old_text":  "first\nsecond\nthird",
 		"new_text":  "ONE\nTWO\nTHREE",
 	})
 	res, err := EditFile{}.Execute(context.Background(), input)
@@ -124,7 +123,6 @@ func TestEditFile_DescriptionNotRequired(t *testing.T) {
 	fp := filepath.Join(dir, "test.txt")
 	os.WriteFile(fp, []byte("hello\n"), 0644)
 
-	// No "description" field — must succeed under the new schema.
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
 		"old_text":  "hello",
@@ -139,13 +137,12 @@ func TestEditFile_DescriptionNotRequired(t *testing.T) {
 func TestEditFile_LeadingIndentShift(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "test.go")
-	// File has the comment indented with two tabs.
+
 	content := "package main\n\nfunc x() {\n\tif true {\n\t\t// Device flow: foo\n\t\tdoThing()\n\t}\n}\n"
 	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// LLM provides old_text with NO leading whitespace.
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
 		"old_text":  "// Device flow: foo",
@@ -167,14 +164,13 @@ func TestEditFile_LeadingIndentShift(t *testing.T) {
 
 func TestEditFile_LeadingIndentShift_MultiLine(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.txt") // .txt: isolate indent-shift from Go auto-format
-	// Block has consistent 2-tab base indent + relative indent within.
+	fp := filepath.Join(dir, "test.txt")
+
 	content := "func x() {\n\t\tif a {\n\t\t\treturn 1\n\t\t}\n}\n"
 	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// LLM strips the 2-tab base but keeps relative indent.
 	input, _ := json.Marshal(map[string]any{
 		"file_path": fp,
 		"old_text":  "if a {\n\treturn 1\n}",

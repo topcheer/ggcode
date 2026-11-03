@@ -14,18 +14,12 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// MobileDeviceTool controls native mobile apps on iOS Simulator and Android
-// Emulator/Device. It provides screenshot, UI tree snapshot, tap, type, swipe,
-// launch, install, and log collection capabilities - all through system tools
-// (xcrun simctl / adb) with zero external dependencies.
 type MobileDeviceTool struct {
 	mu      sync.Mutex
 	android *androidBackend
 	ios     *iosBackend
 }
 
-// NewMobileDeviceTool creates a new mobile device control tool.
-// Returns nil if no mobile development tools are detected.
 func NewMobileDeviceTool() *MobileDeviceTool {
 	t := &MobileDeviceTool{}
 	haveBackend := false
@@ -138,8 +132,6 @@ type mobileDeviceParams struct {
 	Ref      string `json:"ref"`
 	X        int    `json:"x"`
 	Y        int    `json:"y"`
-	// #4576: pointers distinguish "absent" from an explicit 0 - a
-	// missing end must be an error, not a silent swipe to (0,0).
 	EndX     *int   `json:"end_x"`
 	EndY     *int   `json:"end_y"`
 	Text     string `json:"text"`
@@ -166,14 +158,10 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 		p.Quality = 85
 	}
 	if p.Lines < 1 {
-		// #4482: only Lines == 0 was normalized before - a negative value
-		// (LLM-generated or a JSON typo) passed through and made the
-		// tail-trim slice underflow panic in both backends.
+
 		p.Lines = 100
 	}
 
-	// When listing devices with platform=auto, show ALL available platforms
-	// (both iOS and Android) instead of just the first one that resolves.
 	if p.Action == "devices" && (p.Platform == "" || p.Platform == "auto") {
 		return t.listAllDevices(ctx)
 	}
@@ -188,12 +176,6 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 		device = backend.defaultDevice()
 	}
 
-	// #4901: defaultDevice() collapses three distinct failures (query error,
-	// parse error, no booted device) into an empty string, and an empty UDID
-	// has NO optional semantics on iOS (unlike adb's -s): every simctl action
-	// below would exec `simctl launch "" bundle.id` and fail with a misleading
-	// "Invalid device" that sends the agent retrying the wrong parameters.
-	// Guard uniformly at dispatch for every device-requiring action instead.
 	if device == "" && p.Action != "devices" {
 		return Result{IsError: true, Content: "no connected/booted device found: pass 'device' explicitly, or boot one first (iOS: use action=devices to list UDIDs, then action=boot; Android: start an emulator and check action=devices)"}, nil
 	}
@@ -241,8 +223,7 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 	case "snapshot":
 		return backend.snapshot(ctx, device)
 	case "screenshot":
-		// #851: honor the headless parameter - hardcoding false forced a
-		// visible emulator window for every screenshot request.
+
 		return backend.screenshot(ctx, device, p.Format, p.Quality, p.Headless)
 	case "tap":
 		return backend.tap(ctx, device, p.Ref, p.X, p.Y)
@@ -277,12 +258,10 @@ func (t *MobileDeviceTool) Close() error {
 	return nil
 }
 
-// listAllDevices lists devices from all available backends (iOS + Android).
-// Called when action=devices and platform=auto.
 func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
 	var sb strings.Builder
 	hasAny := false
-	var failures []string // #1694 case 6: "No devices" masked the real reason (adb/xcrun errors)
+	var failures []string
 
 	if t.ios != nil {
 		r, err := t.ios.devices(ctx)
@@ -316,8 +295,7 @@ func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
 
 	if !hasAny {
 		msg := "No mobile devices or simulators available."
-		// #1694 case 6: when BOTH backends errored, the blanket "No devices"
-		// hid adb-permission/xcrun-broken causes - surface the first line of each.
+
 		if len(failures) > 0 {
 			msg += " Backend issues: " + strings.Join(failures, "; ")
 		}
@@ -379,7 +357,6 @@ type mobileBackend interface {
 	defaultDevice() string
 }
 
-// uiElement represents a single node in the UI accessibility tree.
 type uiElement struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
@@ -411,12 +388,7 @@ func formatSnapshot(root *uiElement, deviceInfo string) string {
 	counter := 0
 	const maxSnapshotElements = 500
 	formatElement(&sb, root, 0, &counter, maxSnapshotElements)
-	// #1835 case 1: the element cap stopped SILENTLY - a small-element tree
-	// (30-60B/line x 500 ~= 15-30KB) stays under the byte cap, so the only
-	// annotation branch (below) never fired and the agent saw a clean
-	// listing whose 501st+ controls were simply gone: it concluded "this
-	// screen has no such control", gave up, or tapped degraded coordinates.
-	// Mirror the byte-path annotation when the cap actually hit.
+
 	if counter >= maxSnapshotElements {
 		sb.WriteString(fmt.Sprintf("\n... [snapshot truncated: reached the %d-element limit; deeper/later elements omitted]", maxSnapshotElements))
 	}

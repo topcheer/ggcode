@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestIssue3153_WarnedClearedOnSuccess pins the recurrent-failure warning path:
-// 3 fails -> warning -> 1 success -> 3 more fails must warn again (previously
-// the stale warned flag sent the second streak into a silent dead zone until
-// the forced threshold of 6).
 func TestIssue3153_WarnedClearedOnSuccess(t *testing.T) {
 	p := newPivotDecisionTracker()
 	args := `{"command":"go test ./pkg/"}`
@@ -17,7 +13,6 @@ func TestIssue3153_WarnedClearedOnSuccess(t *testing.T) {
 	fail := func() { p.recordToolCall(tool, args, true, "exit status 1") }
 	ok := func() { p.recordToolCall(tool, args, false, "ok") }
 
-	// First streak: threshold reached -> first warning.
 	for i := 0; i < pivotFirstThreshold; i++ {
 		fail()
 	}
@@ -29,10 +24,8 @@ func TestIssue3153_WarnedClearedOnSuccess(t *testing.T) {
 		t.Fatalf("first warning should be the REPAIR-vs-PIVOT prompt, got %q", first)
 	}
 
-	// Success clears both the streak and (post-#3153) the warned flag.
 	ok()
 
-	// Second streak: same length must warn again - not stay silent.
 	for i := 0; i < pivotFirstThreshold; i++ {
 		fail()
 	}
@@ -45,9 +38,6 @@ func TestIssue3153_WarnedClearedOnSuccess(t *testing.T) {
 	}
 }
 
-// TestIssue3153_ForcedPathStillWorks ensures the forced escalation (second
-// emission at the forced threshold) is unaffected by the fix: no success in
-// between, streak climbs 3 -> 6.
 func TestIssue3153_ForcedPathStillWorks(t *testing.T) {
 	p := newPivotDecisionTracker()
 	args := `{"command":"make verify"}`

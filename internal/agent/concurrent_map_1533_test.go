@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// #1533: three proof-gap regressions in the concurrent-map detector.
 func find1533(t *testing.T, src string) int {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -17,8 +16,6 @@ func find1533(t *testing.T, src string) int {
 	return len(findConcurrentMapAccess(fset, f))
 }
 
-// Case A: package-level var map + goroutine write - the headline
-// cross-goroutine registry scenario went silent after #1445.
 func Test1533A_PackageLevelVarMapSeeded(t *testing.T) {
 	n := find1533(t, `
 var counters map[string]int
@@ -31,7 +28,6 @@ func worker() {
 	}
 }
 
-// Case B: `var m = make(map...)` - inferred declaration shape.
 func Test1533B_VarMakeValueSpec(t *testing.T) {
 	n := find1533(t, `
 func worker() {
@@ -43,7 +39,6 @@ func worker() {
 	}
 }
 
-// Case C: compound assignment and increment shapes.
 func Test1533C_CompoundAndIncDec(t *testing.T) {
 	n := find1533(t, `
 func worker() {
@@ -63,7 +58,6 @@ func worker() {
 	}
 }
 
-// Slice fan-out (the #1445 core target) must stay quiet.
 func Test1533_SliceFanoutStaysQuiet(t *testing.T) {
 	n := find1533(t, `
 func fan(out []int) {
@@ -76,7 +70,6 @@ func fan(out []int) {
 	}
 }
 
-// hasSync still clears warnings on the new shapes.
 func Test1533_SyncStillSuppresses(t *testing.T) {
 	n := find1533(t, `
 var counters map[string]int

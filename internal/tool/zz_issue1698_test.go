@@ -1,15 +1,5 @@
 package tool
 
-// #1698 regressions:
-//   - 1: a >10MB image/document with offset/limit streamed raw binary as
-//     numbered text into context (the mime dispatch only ran <=10MB).
-//   - 4: the restart schema marks reason REQUIRED but an empty reason
-//     silently restarted the process.
-//   - 5: hasPrecommitMakeTarget TrimLeft'd tabs, so a recipe line
-//     `\tbuild:` read as a target definition.
-//   - 6: the streaming range reader scanned to EOF past the limit just
-//     to count total lines.
-
 import (
 	"context"
 	"encoding/json"
@@ -19,12 +9,9 @@ import (
 	"testing"
 )
 
-// Case 1: oversized image with a range request is refused, not streamed.
 func TestIssue1698Case1_OversizedImageRangeRefused(t *testing.T) {
 	dir := t.TempDir()
-	// A tiny valid PNG whose size we cannot exceed - instead verify via a
-	// .png path: the sniff must reject BEFORE range streaming regardless
-	// of size, so craft a >maxFileSize .png by writing a big header.
+
 	p := filepath.Join(dir, "big.png")
 	big := make([]byte, maxFileSize+1)
 	for i := range big {
@@ -46,7 +33,6 @@ func TestIssue1698Case1_OversizedImageRangeRefused(t *testing.T) {
 	}
 }
 
-// Case 4: empty reason is rejected before the requester fires.
 func TestIssue1698Case4_EmptyReasonRejected(t *testing.T) {
 	rt := &RestartTool{Requester: &fakeRestartRequester{}}
 	raw, _ := json.Marshal(map[string]any{"reason": "   ", "debug": false})
@@ -62,7 +48,6 @@ func TestIssue1698Case4_EmptyReasonRejected(t *testing.T) {
 	}
 }
 
-// Case 5: a TAB-indented recipe line is not a target definition.
 func TestIssue1698Case5_RecipeLineNotTarget(t *testing.T) {
 	mk := "install:\n\tbuild:\n\techo done\n"
 	if hasPrecommitMakeTarget(mk, "build") {

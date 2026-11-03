@@ -1,23 +1,9 @@
 package agent
 
-// Regression tests for GitHub issue #1109 - internal/agent/logging_intel_check.go
-//
-// Sub-items covered:
-//   A1: stripGoComments must track string/rune/raw-string literals so comment
-//       markers inside string values do not swallow real code (under-report).
-//   A2: findGoSensitiveLogArgs must strip comments first so log calls wrapped
-//       in block comments stop producing sensitive_log_arg false positives.
-//   B:  checkLoggingIntel delta must compare content-anchored instance keys
-//       instead of assuming old instances form an ordered prefix.
-//   C:  stripInitFuncs must use balanced brace scanning so nested blocks
-//       inside init() no longer truncate stripping at the first '}'.
-
 import (
 	"strings"
 	"testing"
 )
-
-// ---------- A1: string literals inside stripGoComments ----------
 
 func TestStripGoCommentsStringLiterals1109(t *testing.T) {
 	tests := []struct {
@@ -110,8 +96,6 @@ func ping(u string) {
 	}
 }
 
-// ---------- A2: block-commented sensitive log call ----------
-
 func TestIssue1109A2BlockCommentSensitiveNoFalsePositive(t *testing.T) {
 	newContent := `package auth
 
@@ -133,8 +117,6 @@ func verify(user string) {
 	}
 }
 
-// ---------- B: content-anchored delta ----------
-
 func TestIssue1109BDeleteOldAddTwoNewSensitiveNotPrefixAssumed(t *testing.T) {
 	oldContent := `package api
 
@@ -145,7 +127,7 @@ func handler(req string) {
 	log.Printf("req=%s token=%s", req, token)
 }
 `
-	// Delete the old instance (now at line 3 area shifted), add two new ones.
+
 	newContent := `package api
 
 import "log"
@@ -194,7 +176,7 @@ func a() {
 	log.Fatal("err")
 }
 `
-	// Remove old fatal, add two new fatals elsewhere.
+
 	newContent := `package lib
 
 import "log"
@@ -240,8 +222,6 @@ func b() {
 	}
 }
 
-// ---------- C: balanced-brace init stripping ----------
-
 func TestStripInitFuncsNestedBlocks1109(t *testing.T) {
 	input := "func init() {\n\tif cfg.Enabled {\n\t\tdo(cfg)\n\t}\n\tif cfg.Strict {\n\t\tpanic(\"strict\")\n\t}\n}\nfunc main() {}"
 	got := stripInitFuncs(input)
@@ -254,8 +234,7 @@ func TestStripInitFuncsNestedBlocks1109(t *testing.T) {
 func TestStripInitFuncsMultipleInits1109(t *testing.T) {
 	input := "a()\nfunc init() { f(1); g() }\nmiddle()\nfunc init(){\n\th()\n}\ntail()"
 	got := stripInitFuncs(input)
-	// Removal leaves the newline that separated each init body from its
-	// surroundings, matching the pre-fix ReplaceAllString behavior.
+
 	want := "a()\n\nmiddle()\n\ntail()"
 	if got != want {
 		t.Errorf("stripInitFuncs multi-init input = %q, want %q", got, want)

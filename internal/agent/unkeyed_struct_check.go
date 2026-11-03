@@ -1,42 +1,5 @@
 package agent
 
-// Unkeyed Struct Initialization Detection (Check #67)
-//
-// Problem: AI coding agents frequently generate Go composite literals that
-// initialize structs positionally (unkeyed) rather than by field name:
-//
-//	type Config struct {
-//	    Host string
-//	    Port int
-//	    TLS  bool
-//	}
-//
-//	// Bad -- unkeyed: fragile, error-prone
-//	c := Config{"localhost", 8080, false}
-//
-//	// Good -- keyed
-//	c := Config{Host: "localhost", Port: 8080, TLS: false}
-//
-// Unkeyed initialization is dangerous because:
-//  1. If struct fields are reordered, added, or removed, the code silently
-//     compiles but produces wrong values -- one of the hardest bugs to catch.
-//  2. It's unreadable: the reader cannot tell which value maps to which field.
-//  3. It violates Go idioms -- the Go style guide explicitly recommends keyed
-//     struct initialization.
-//
-// Competitor analysis:
-//   - go vet -composites: only checks whitelisted stdlib packages (e.g.,
-//     flag.FlagSet, time.Time). Does NOT check user-defined types.
-//   - staticcheck: does not check this (SA1xxx focuses on other patterns)
-//   - golangci-lint: delegates to go vet composites (same limitation)
-//   - gocritic: no unkeyed composite check
-//   - Claude Code/Cursor/Aider/OpenHands: no write-time detection
-//
-// Approach: AST-based analysis, zero LLM cost. Walks the parsed AST for
-// *ast.CompositeLit nodes, checks if the type resolves to a struct type,
-// and flags when elements are positional (no *ast.KeyValueExpr). Delta-aware:
-// only flags patterns newly introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -47,23 +10,16 @@ import (
 
 const (
 	unkeyedMaxWarnings  = 4
-	unkeyedMinFieldSkip = 1 // skip structs with fewer fields (e.g., wrapper{})
+	unkeyedMinFieldSkip = 1
 )
 
-// unkeyedIssue records a single unkeyed struct initialization.
 type unkeyedIssue struct {
 	line       int
 	typeName   string
 	fieldCount int
-	// heuristic marks a qualified cross-package type that could not be
-	// confirmed as a struct without full type checking (#1216). Such issues
-	// get hedged warning wording that never suggests a keyed literal form,
-	// because for array/slice/map kinds that suggestion is a compile error.
-	heuristic bool
+	heuristic  bool
 }
 
-// checkUnkeyedStruct detects unkeyed struct initialization in Go code.
-// Returns warning strings. Delta-aware: only flags NEW instances.
 func checkUnkeyedStruct(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -80,13 +36,6 @@ func checkUnkeyedStruct(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: subtract issues present in old content.
-	//
-	// Multiset (per-key count) comparison, not set membership: copy-pasting a
-	// same-type, same-element-count literal produces an identical key, so a
-	// set would swallow the newly added second instance (#1215; same family
-	// as the #1214 unchecked-assert fix). Counts are invariant under pure
-	// line shifts, preserving the no-reflag guarantee for unrelated edits.
 	if strings.TrimSpace(oldContent) != "" {
 		oldIssues := findUnkeyedStructs(filePath, oldContent)
 		if len(oldIssues) > 0 {
@@ -100,7 +49,7 @@ func checkUnkeyedStruct(filePath, oldContent, newContent string) []string {
 				key := unkeyedIssueKey(ni)
 				seen[key]++
 				if seen[key] <= oldCounts[key] {
-					continue // matched against a pre-existing instance
+					continue
 				}
 				filtered = append(filtered, ni)
 			}
@@ -114,20 +63,10 @@ func checkUnkeyedStruct(filePath, oldContent, newContent string) []string {
 	return buildUnkeyedWarnings(newIssues)
 }
 
-// unkeyedIssueKey creates a deduplication key for delta comparison.
-// Uses type name only (not line number) so line shifts from unrelated edits
-// don't break delta filtering.
 func unkeyedIssueKey(i unkeyedIssue) string {
 	return fmt.Sprintf("unkeyed:%s:%d", i.typeName, i.fieldCount)
 }
 
-// buildUnkeyedWarnings converts issues into human-readable warning strings.
-//
-// Confirmed structs get the actionable keyed-form suggestion. Heuristic hits
-// (qualified cross-package types that could not be resolved without full
-// type checking) get hedged wording WITHOUT a keyed-form example: for array,
-// slice, map, or basic-alias kinds, positional elements are valid (or the
-// only) form, and suggesting field names would be a compile error (#1216).
 func buildUnkeyedWarnings(issues []unkeyedIssue) []string {
 	var warnings []string
 	for i, issue := range issues {
@@ -154,15 +93,12 @@ func buildUnkeyedWarnings(issues []unkeyedIssue) []string {
 	return warnings
 }
 
-// findUnkeyedStructs parses Go source and finds all unkeyed struct
-// initialization patterns.
 func findUnkeyedStructs(filename, src string) []unkeyedIssue {
 	file, fset, err := parseGoSource(filename, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}
 
-	// Build a set of known struct type names declared in this file.
 	structTypes := collectStructTypes(file)
 
 	var issues []unkeyedIssue
@@ -181,7 +117,6 @@ func findUnkeyedStructs(filename, src string) []unkeyedIssue {
 	return issues
 }
 
-// collectStructTypes builds a map of struct type names to their field count.
 func collectStructTypes(file *ast.File) map[string]int {
 	result := make(map[string]int)
 	for _, decl := range file.Decls {
@@ -204,8 +139,6 @@ func collectStructTypes(file *ast.File) map[string]int {
 	return result
 }
 
-// structFieldCount counts the actual number of named fields in a struct,
-// handling the case where multiple fields share one type (e.g., `A, B, C int`).
 func structFieldCount(st *ast.StructType) int {
 	if st.Fields == nil {
 		return 0
@@ -213,7 +146,7 @@ func structFieldCount(st *ast.StructType) int {
 	count := 0
 	for _, field := range st.Fields.List {
 		if len(field.Names) == 0 {
-			// Embedded field (e.g., `http.Client`) counts as 1.
+
 			count++
 			continue
 		}
@@ -222,7 +155,6 @@ func structFieldCount(st *ast.StructType) int {
 	return count
 }
 
-// analyzeComposite checks a single composite literal for unkeyed struct init.
 func analyzeComposite(comp *ast.CompositeLit, fset *token.FileSet, structTypes map[string]int) (unkeyedIssue, bool) {
 	if len(comp.Elts) == 0 {
 		return unkeyedIssue{}, false
@@ -233,28 +165,20 @@ func analyzeComposite(comp *ast.CompositeLit, fset *token.FileSet, structTypes m
 		return unkeyedIssue{}, false
 	}
 
-	// Only flag types we know are structs (declared in this file).
 	_, isStruct := structTypes[typeName]
 	heuristic := false
 	if !isStruct {
-		// Could be a struct from another package (e.g., pkg.Type{...}), but
-		// it could equally be an array/slice/map/basic alias whose positional
-		// elements are valid Go. Without full type checking we cannot tell
-		// the kinds apart, so qualified names are still flagged but marked
-		// heuristic: the warning hedges and never suggests a keyed form,
-		// which would not compile for non-struct kinds (#1216).
+
 		if !isQualifiedTypeName(typeName) {
 			return unkeyedIssue{}, false
 		}
 		heuristic = true
 	}
 
-	// Check if all elements are positional (no KeyValueExpr).
 	if !allElementsUnkeyed(comp.Elts) {
 		return unkeyedIssue{}, false
 	}
 
-	// Skip very small structs (1 field) -- unkeyed is trivially correct.
 	if isStruct {
 		fieldCount := structTypes[typeName]
 		if fieldCount <= unkeyedMinFieldSkip {
@@ -271,8 +195,6 @@ func analyzeComposite(comp *ast.CompositeLit, fset *token.FileSet, structTypes m
 	}, true
 }
 
-// resolveCompositeTypeName extracts the type name from a composite literal's
-// Type field. Handles *ast.Ident and *ast.SelectorExpr.
 func resolveCompositeTypeName(comp *ast.CompositeLit) string {
 	switch t := comp.Type.(type) {
 	case *ast.Ident:
@@ -285,14 +207,10 @@ func resolveCompositeTypeName(comp *ast.CompositeLit) string {
 	return ""
 }
 
-// isQualifiedTypeName returns true if the type name contains a package
-// qualifier (e.g., "http.Client").
 func isQualifiedTypeName(name string) bool {
 	return strings.Contains(name, ".")
 }
 
-// allElementsUnkeyed returns true if ALL elements in the composite literal
-// are positional (not *ast.KeyValueExpr).
 func allElementsUnkeyed(elts []ast.Expr) bool {
 	for _, el := range elts {
 		if _, ok := el.(*ast.KeyValueExpr); ok {

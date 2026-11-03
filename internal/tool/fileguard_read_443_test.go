@@ -7,11 +7,10 @@ import (
 	"testing"
 )
 
-// #443: read tools must never be gated by FileGuard (write-only design).
 func TestReadToolsNotBlockedByFileGuard(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry()
-	// Default-protected patterns include .env / .git — the regression case.
+
 	if err := RegisterBuiltinTools(reg, nil, dir, []string{".env*", ".git/"}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +31,7 @@ func TestReadToolsNotBlockedByFileGuard(t *testing.T) {
 	if res2.IsError {
 		t.Errorf("read_file on .git/HEAD must NOT be blocked: %.80s", res2.Content)
 	}
-	// Write tools must STILL be blocked (regression guard for the guard).
+
 	wf, _ := reg.Get("write_file")
 	res3, _ := wf.Execute(context.Background(), jsonArgs(t, map[string]any{"path": envPath, "content": "x"}))
 	if !res3.IsError {
@@ -49,7 +48,6 @@ func jsonArgs(t *testing.T, m map[string]any) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-// #444: IsDestructive must include ask-level destructive commands.
 func TestIsDestructiveIncludesAskRules(t *testing.T) {
 	g := NewCommandGate()
 	if !g.IsDestructive("rm -rf ./build") {

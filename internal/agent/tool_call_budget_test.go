@@ -6,7 +6,7 @@ import (
 
 func TestToolCallBudget_NoBudget(t *testing.T) {
 	b := newToolCallBudget()
-	// No budget set, no default — should never trigger
+
 	for i := 0; i < 1000; i++ {
 		b.record()
 		msg, stop := b.check()
@@ -20,7 +20,6 @@ func TestToolCallBudget_ExplicitBudget(t *testing.T) {
 	b := newToolCallBudget()
 	b.SetBudget(100)
 
-	// 0-79: no warnings
 	for i := 0; i < 79; i++ {
 		b.record()
 		msg, stop := b.check()
@@ -29,48 +28,43 @@ func TestToolCallBudget_ExplicitBudget(t *testing.T) {
 		}
 	}
 
-	// 80: early warning
 	b.record()
 	msg, stop := b.check()
 	if msg == "" || stop {
 		t.Fatalf("expected warning at 80%%, got msg=%q stop=%v", msg, stop)
 	}
 
-	// Subsequent calls below 95% should not re-warn
 	b.record()
 	msg, stop = b.check()
 	if msg != "" || stop {
 		t.Fatalf("expected no re-warning at 81%%, got msg=%q stop=%v", msg, stop)
 	}
 
-	// Advance to just below 95
 	for i := 82; i < 95; i++ {
 		b.record()
 		msg, _ = b.check()
-		// 95% threshold should not fire before call 95
+
 		if b.warn95Given {
 			t.Fatalf("95%% warning fired too early at call %d", i+1)
 		}
 		_ = msg
 	}
-	b.record() // call 95 → 95%
+	b.record()
 	msg, stop = b.check()
 	if msg == "" || stop {
 		t.Fatalf("expected urgent warning at 95%%, got msg=%q stop=%v", msg, stop)
 	}
 
-	// Advance to 100
 	for i := 96; i < 100; i++ {
 		b.record()
 		b.check()
 	}
-	b.record() // call 100
+	b.record()
 	msg, stop = b.check()
 	if msg == "" || !stop {
 		t.Fatalf("expected hard stop at 100%%, got msg=%q stop=%v", msg, stop)
 	}
 
-	// After stop, further checks should not re-fire
 	b.record()
 	msg, stop = b.check()
 	if msg != "" {
@@ -82,13 +76,11 @@ func TestToolCallBudget_DefaultBudget(t *testing.T) {
 	b := newToolCallBudget()
 	b.SetDefaultBudget(50)
 
-	// Should use default budget when no explicit budget set
 	for i := 0; i < 39; i++ {
 		b.record()
 		b.check()
 	}
 
-	// 40/50 = 80% → warning
 	b.record()
 	msg, _ := b.check()
 	if msg == "" {
@@ -101,11 +93,10 @@ func TestToolCallBudget_ExplicitOverridesDefault(t *testing.T) {
 	b.SetDefaultBudget(10)
 	b.SetBudget(100)
 
-	// Should use explicit 100, not default 10
 	for i := 0; i < 9; i++ {
 		b.record()
 		msg, stop := b.check()
-		// 9/10 = 90% if default were used, would have warned already
+
 		if msg != "" {
 			t.Fatalf("explicit budget should override default: got unexpected msg at call %d: %q", i+1, msg)
 		}
@@ -117,7 +108,6 @@ func TestToolCallBudget_Reset(t *testing.T) {
 	b := newToolCallBudget()
 	b.SetBudget(10)
 
-	// Exhaust budget
 	for i := 0; i < 10; i++ {
 		b.record()
 		b.check()
@@ -126,13 +116,11 @@ func TestToolCallBudget_Reset(t *testing.T) {
 		t.Fatal("expected stop to have fired")
 	}
 
-	// Reset
 	b.reset()
 	if b.totalCalls != 0 || b.stopGiven || b.warn80Given || b.warn95Given {
 		t.Fatal("reset did not clear state")
 	}
 
-	// Can fire again after reset
 	for i := 0; i < 8; i++ {
 		b.record()
 	}
@@ -164,7 +152,6 @@ func TestDeriveDefaultBudget(t *testing.T) {
 func TestToolCallBudget_EffectiveBudget(t *testing.T) {
 	b := newToolCallBudget()
 
-	// Nothing set
 	if eb := b.effectiveBudget(); eb != 0 {
 		t.Errorf("expected 0, got %d", eb)
 	}

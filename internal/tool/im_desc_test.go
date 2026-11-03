@@ -5,25 +5,20 @@ import (
 	"testing"
 )
 
-// Description must reflect the actual workspace IM state instead of a
-// generic platform list: nil manager, no bindings, and bound adapters with
-// per-adapter media capability.
 func TestIMToolDescriptionDynamic(t *testing.T) {
-	// nil manager: minimal, honest description.
+
 	tool := IMTool{}
 	if d := tool.Description(); !strings.Contains(d, "No IM manager") {
 		t.Fatalf("nil-manager description should say no manager: %q", d)
 	}
 
-	// No bindings: guidance to bind first.
 	mgr := &mockIMManager{}
 	tool = IMTool{Manager: mgr}
 	if d := tool.Description(); !strings.Contains(d, "No IM adapter is bound") {
 		t.Fatalf("empty description should guide binding: %q", d)
 	}
 
-	// Bound adapters: names + platform + media capability, no foreign platforms.
-	mgr = newSendFileMock() // qq binding, platform qq
+	mgr = newSendFileMock()
 	tool = IMTool{Manager: mgr}
 	d := tool.Description()
 	for _, want := range []string{"qq (qq, media upload)", "send_file"} {
@@ -37,7 +32,6 @@ func TestIMToolDescriptionDynamic(t *testing.T) {
 		}
 	}
 
-	// Text-only platform: capability label differs.
 	mgr = &mockIMManager{snapshot: IMSnapshot{
 		CurrentBindings: []IMChannelBinding{{Adapter: "ding", ChannelID: "C9", Platform: "dingtalk"}},
 	}}

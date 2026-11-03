@@ -9,11 +9,8 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// The main-goroutine panic containment in RunStreamWithContent (registered
-// as the first defer, so it unwinds last) must convert a panicking run into
-// a returned error - not kill the process - and write a crash log.
 func TestRunStreamWithContent_PanicBecomesError(t *testing.T) {
-	// Redirect HOME so the crash journal never touches the real ~/.ggcode.
+
 	t.Setenv("HOME", t.TempDir())
 
 	mp := &mockProvider{
@@ -38,8 +35,7 @@ func TestRunStreamWithContent_PanicBecomesError(t *testing.T) {
 		err = a.RunStreamWithContent(context.Background(),
 			[]provider.ContentBlock{{Type: "text", Text: "hi"}},
 			func(event provider.StreamEvent) {
-				// Panic mid-stream: fires inside the run loop's main
-				// goroutine, the exact containment target.
+
 				panic("injected: stream handler blew up")
 			})
 	}()

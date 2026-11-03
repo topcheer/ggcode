@@ -49,9 +49,7 @@ func TestToolFallbackHint_GrepTimeout(t *testing.T) {
 }
 
 func TestToolFallbackHint_CodeSearchEmpty(t *testing.T) {
-	// #3670/#3673: payload is code_search.go's REAL zero-match rendering -
-	// judgments must align with actual tool output shapes, not invented
-	// phrases ("no matching files" was never produced by any tool).
+
 	hint := toolFallbackHint("code_search", "No files matched query \"foo\". Try different keywords or broader search terms.")
 	if hint == "" {
 		t.Fatal("expected hint for empty code_search")
@@ -92,7 +90,7 @@ func TestToolFallbackHint_WebFetchNetwork(t *testing.T) {
 }
 
 func TestToolFallbackHint_NoHintForSuccess(t *testing.T) {
-	// Should not produce hints for empty or irrelevant errors
+
 	hint := toolFallbackHint("read_file", "")
 	if hint != "" {
 		t.Errorf("expected empty hint for empty error, got: %s", hint)

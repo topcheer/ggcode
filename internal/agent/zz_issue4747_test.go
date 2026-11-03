@@ -6,13 +6,10 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4747-A: stale EXPECT declarations (naming a tool NOT called this turn)
-// must not swallow the whole round - the free-regex prediction in the same
-// text still records.
 func TestIssue4747_StaleExpectDoesNotSwallowFreeRegexPrediction(t *testing.T) {
 	s := newForesightCalibrateState()
 	text := "The previous EXPECT(read_file): contains config is done. Now the build might fail."
-	// Only run_command is called: the read_file declaration is stale.
+
 	calls := []provider.ToolCallDelta{{Name: "run_command"}}
 	s.recordPrediction(text, calls, 1)
 
@@ -24,24 +21,17 @@ func TestIssue4747_StaleExpectDoesNotSwallowFreeRegexPrediction(t *testing.T) {
 	}
 }
 
-// #4747-A control: an attributable declaration still takes priority and the
-// free-regex path stays suppressed for that turn.
 func TestIssue4747_AttributableExpectStillTakesPriority(t *testing.T) {
 	s := newForesightCalibrateState()
 	text := "EXPECT(run_command): exit code 0. This should pass."
 	calls := []provider.ToolCallDelta{{Name: "run_command"}}
 	s.recordPrediction(text, calls, 1)
 
-	// One attributable declaration recorded as pending expectation; the
-	// free-regex "should pass" in the same text must not add a second one.
 	if len(s.predictions) != 1 {
 		t.Fatalf("attributable EXPECT must take priority (exactly 1 pending), got %d", len(s.predictions))
 	}
 }
 
-// #4747-B: "should be empty or missing" hits both the empty and failure
-// polarity regexes; the coexistence must take the ambiguous skip instead of
-// hard-wiring the empty polarity.
 func TestIssue4747_EmptyPlusFailureIsAmbiguous(t *testing.T) {
 	s := newForesightCalibrateState()
 	text := "The output should be empty; otherwise the lookup might fail."
@@ -53,8 +43,6 @@ func TestIssue4747_EmptyPlusFailureIsAmbiguous(t *testing.T) {
 	}
 }
 
-// #4747-B control: a pure empty prediction still records with the empty
-// polarity intact.
 func TestIssue4747_PureEmptyStillRecords(t *testing.T) {
 	s := newForesightCalibrateState()
 	text := "The grep output should be empty because nothing matches."
@@ -69,8 +57,6 @@ func TestIssue4747_PureEmptyStillRecords(t *testing.T) {
 	}
 }
 
-// #4747-C: uncertainty-worded predictions (might/may) must pass the gate -
-// they are the most valuable calibration samples.
 func TestIssue4747_MightAndMayPredictionsRecord(t *testing.T) {
 	for _, text := range []string{
 		"The build might fail because of the missing import.",
@@ -88,7 +74,6 @@ func TestIssue4747_MightAndMayPredictionsRecord(t *testing.T) {
 	}
 }
 
-// #4747-C: bare-subject empty phrasing ("It should be empty") records too.
 func TestIssue4747_BareSubjectEmptyRecords(t *testing.T) {
 	s := newForesightCalibrateState()
 	text := "It should be empty after the cleanup step."

@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// GitDiff implements the git_diff tool.
 type GitDiff struct{ WorkingDir string }
 
 func (t GitDiff) Name() string { return "git_diff" }
@@ -57,7 +56,6 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Diff(ctx, dir, args.Cached, args.File)
 		if err != nil {
@@ -91,7 +89,6 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 		return Result{Content: "No differences found."}, nil
 	}
 
-	// Truncate if very large
 	if len(trimmed) > maxOutputSize {
 		trimmed = truncateUTF8Safe(trimmed, maxOutputSize) + "\n... [diff truncated]"
 	}
@@ -99,7 +96,6 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitDiff) Clone() Tool {
 	return &GitDiff{WorkingDir: t.WorkingDir}
 }

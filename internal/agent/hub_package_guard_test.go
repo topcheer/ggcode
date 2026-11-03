@@ -18,18 +18,13 @@ func writeHubGoFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-// TestHubPackageGuard_HubPackageFires verifies that editing a file in a widely
-// imported package triggers the awareness hint.
 func TestHubPackageGuard_HubPackageFires(t *testing.T) {
 	root := t.TempDir()
 
-	// go.mod
 	writeHubGoFile(t, root, "go.mod", "module example.com/test\n\ngo 1.26\n")
 
-	// hub package with exported function
 	writeHubGoFile(t, root, "internal/hub/hub.go", "package hub\n\nfunc DoSomething() {}\n")
 
-	// 6 packages that import the hub (fan-in = 6 >= threshold of 5)
 	for i := 0; i < 6; i++ {
 		dir := filepath.Join(root, "internal", "consumer"+string(rune('a'+i)))
 		writeHubGoFile(t, dir, "main.go",
@@ -50,15 +45,12 @@ func TestHubPackageGuard_HubPackageFires(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_LeafPackageNoFire verifies that editing a file in a
-// low fan-in package does NOT trigger the hint.
 func TestHubPackageGuard_LeafPackageNoFire(t *testing.T) {
 	root := t.TempDir()
 
 	writeHubGoFile(t, root, "go.mod", "module example.com/test\n\ngo 1.26\n")
 	writeHubGoFile(t, root, "internal/leaf/leaf.go", "package leaf\n\nfunc Leaf() {}\n")
 
-	// Only 2 importers (below threshold of 5)
 	for i := 0; i < 2; i++ {
 		dir := filepath.Join(root, "internal", "user"+string(rune('a'+i)))
 		writeHubGoFile(t, dir, "main.go",
@@ -76,8 +68,6 @@ func TestHubPackageGuard_LeafPackageNoFire(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_FiresOncePerFile verifies that repeated edits to the same
-// file only trigger the hint once per run.
 func TestHubPackageGuard_FiresOncePerFile(t *testing.T) {
 	root := t.TempDir()
 
@@ -106,12 +96,6 @@ func TestHubPackageGuard_FiresOncePerFile(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_ResetClearsChecked verifies that reset() clears the
-// checked set so hints fire again on a new run.
-// TestHubPackageGuard_LatchOnlyAfterKeyingSuccess verifies #1658 case 1: a
-// file whose keying fails (outside the module tree) must NOT be latched in
-// the checked set - the next edit retries keying instead of silently
-// short-circuiting, matching the #1574-C pattern.
 func TestHubPackageGuard_LatchOnlyAfterKeyingSuccess(t *testing.T) {
 	root := t.TempDir()
 
@@ -128,11 +112,9 @@ func TestHubPackageGuard_LatchOnlyAfterKeyingSuccess(t *testing.T) {
 		hubPackageGuard: newHubPackageState(),
 		workingDir:      root,
 	}
-	// Force fanIn initialization so we reach the keying stage.
+
 	a.hubPackageGuard.ensureFanIn(root)
 
-	// Transient failure: the nearest go.mod exists but is unreadable, so
-	// keying fails and must NOT latch - the next edit retries.
 	nested := filepath.Join(root, "internal", "nested")
 	if err := os.MkdirAll(nested, 0o0755); err != nil {
 		t.Fatal(err)
@@ -156,8 +138,6 @@ func TestHubPackageGuard_LatchOnlyAfterKeyingSuccess(t *testing.T) {
 		t.Fatalf("expected checked to stay empty after transient keying failure, has %d entries", n)
 	}
 
-	// Cause resolved: the retry on the next edit must key successfully
-	// (module resolved, package not in fanIn -> no hint, but latched).
 	if err := os.Chmod(nestedMod, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +149,6 @@ func TestHubPackageGuard_LatchOnlyAfterKeyingSuccess(t *testing.T) {
 	}
 }
 
-// TestHubNearestGoModStatIndeterminate verifies #1658 case 2: a go.mod that
-// exists but cannot be stat'd (EACCES on a directory without +x) must freeze
-// as indeterminate (ok=false), not keep walking to the root module.
 func TestHubNearestGoModStatIndeterminate(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: EACCES cannot be triggered via chmod")
@@ -184,12 +161,11 @@ func TestHubNearestGoModStatIndeterminate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nested, "go.mod"), []byte("module example.com/nested\n\ngo 1.26\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Strip execute permission from the directory: os.Stat on any entry
-	// inside returns EACCES even though the go.mod exists.
+
 	if err := os.Chmod(nested, 0o0600); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(nested, 0o0755) // restore for TempDir cleanup
+	defer os.Chmod(nested, 0o0755)
 
 	_, _, ok := hubNearestGoMod(filepath.Join(nested, "pkg"), root)
 	if ok {
@@ -219,7 +195,6 @@ func TestHubPackageGuard_ResetClearsChecked(t *testing.T) {
 		t.Fatal("expected hint on first edit")
 	}
 
-	// Reset for a new run — checked set cleared, but fan-in cache preserved
 	a.hubPackageGuard.reset()
 
 	hint2 := a.checkHubPackage(filepath.Join(root, "internal", "hub", "hub.go"))
@@ -228,8 +203,6 @@ func TestHubPackageGuard_ResetClearsChecked(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_TestFileSkipped verifies that test files don't trigger
-// the hint.
 func TestHubPackageGuard_TestFileSkipped(t *testing.T) {
 	root := t.TempDir()
 
@@ -253,7 +226,6 @@ func TestHubPackageGuard_TestFileSkipped(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_NonGoFileSkipped verifies that non-Go files don't trigger.
 func TestHubPackageGuard_NonGoFileSkipped(t *testing.T) {
 	root := t.TempDir()
 
@@ -271,11 +243,9 @@ func TestHubPackageGuard_NonGoFileSkipped(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_NonGoProjectSkipped verifies that non-Go projects produce
-// no hints.
 func TestHubPackageGuard_NonGoProjectSkipped(t *testing.T) {
 	root := t.TempDir()
-	// No go.mod
+
 	writeHubGoFile(t, root, "src/main.py", "print('hello')\n")
 
 	a := &Agent{
@@ -289,8 +259,6 @@ func TestHubPackageGuard_NonGoProjectSkipped(t *testing.T) {
 	}
 }
 
-// TestHubPackageGuard_LazyInitialization verifies that fan-in is only computed
-// once and cached for subsequent checks.
 func TestHubPackageGuard_LazyInitialization(t *testing.T) {
 	root := t.TempDir()
 
@@ -310,7 +278,6 @@ func TestHubPackageGuard_LazyInitialization(t *testing.T) {
 		workingDir:      root,
 	}
 
-	// First call triggers lazy computation
 	hint1 := a.checkHubPackage(filepath.Join(root, "internal", "hub", "hub.go"))
 	if hint1 == "" {
 		t.Fatal("expected hint for hub package")
@@ -319,14 +286,12 @@ func TestHubPackageGuard_LazyInitialization(t *testing.T) {
 		t.Error("expected fanIn to be initialized after first check")
 	}
 
-	// Second call to a DIFFERENT package in same session should use cached map
 	hint2 := a.checkHubPackage(filepath.Join(root, "internal", "hub2", "hub2.go"))
 	if hint2 == "" {
 		t.Fatal("expected hint for hub2 package using cached fanIn")
 	}
 }
 
-// TestHubReadModulePath verifies module path extraction from go.mod.
 func TestHubReadModulePath(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -352,7 +317,6 @@ func TestHubReadModulePath(t *testing.T) {
 	}
 }
 
-// TestHubFileToImportPath verifies conversion of file paths to import paths.
 func TestHubFileToImportPath(t *testing.T) {
 	tests := []struct {
 		filePath string
@@ -371,7 +335,6 @@ func TestHubFileToImportPath(t *testing.T) {
 	}
 }
 
-// TestHubComputeFanIn verifies that fan-in counting is accurate.
 func TestHubComputeFanIn(t *testing.T) {
 	root := t.TempDir()
 
@@ -389,18 +352,14 @@ func TestHubComputeFanIn(t *testing.T) {
 	}
 }
 
-// TestHubGuardEmptyModulePathRetries pins #1466-B: an empty module lookup
-// (go.work-only workspace, transient failure) must NOT latch initialized -
-// the guard retries on the next call instead of staying disabled for the
-// Agent's whole lifetime.
 func TestHubGuardEmptyModulePathRetries(t *testing.T) {
 	s := newHubPackageState()
-	empty := t.TempDir() // no go.mod
+	empty := t.TempDir()
 	s.ensureFanIn(empty)
 	if s.initialized {
 		t.Fatal("empty modulePath latched initialized - lifetime disable")
 	}
-	// Same state on a real module now initializes (retry path works).
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644); err != nil {
 		t.Fatal(err)

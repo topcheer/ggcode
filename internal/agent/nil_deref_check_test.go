@@ -192,7 +192,6 @@ func TestCheckNilDerefAfterError_NonGoFile(t *testing.T) {
 	}
 }
 
-// fix #238: `if err == nil` guard makes the dereference safe inside the body.
 func TestCheckNilDerefAfterError_ErrNilCheckSafe(t *testing.T) {
 	code := `package main
 
@@ -217,7 +216,6 @@ func use() {
 	}
 }
 
-// fix #238: deref inside `if err != nil` body is genuinely dangerous.
 func TestCheckNilDerefAfterError_DerefInsideErrNotNilBranch(t *testing.T) {
 	code := `package main
 
@@ -245,7 +243,6 @@ func use() {
 	}
 }
 
-// fix #238: test files are skipped (doc already claimed this).
 func TestCheckNilDerefAfterError_SkipsTestFiles(t *testing.T) {
 	code := `package main
 
@@ -339,7 +336,7 @@ func use() {
 	if result == "" {
 		t.Fatal("expected warning")
 	}
-	// Should only report once per variable.
+
 	count := strings.Count(result, "'v' is dereferenced")
 	if count != 1 {
 		t.Fatalf("expected 1 warning for v, got %d in: %s", count, result)
@@ -347,8 +344,7 @@ func use() {
 }
 
 func TestCheckNilDerefAfterError_MultiErrorVariables(t *testing.T) {
-	// Regression test for #97: when multiple error variables exist, checking
-	// one should NOT clear nil-risk for variables associated with the other.
+
 	code := `package main
 
 import "fmt"
@@ -378,15 +374,12 @@ func use() {
 	if !strings.Contains(result, "'b'") {
 		t.Fatalf("expected warning about variable 'b', got: %s", result)
 	}
-	// 'a' should NOT be flagged since err1 was checked.
+
 	if strings.Contains(result, "'a'") {
 		t.Fatalf("should not flag 'a' (err1 was checked), got: %s", result)
 	}
 }
 
-// TestCheckNilDerefAfterError_LogFatalGuardNoWarn verifies #273: a
-// `if err != nil { log.Fatal(err) }` guard is noreturn, so the dereference
-// after it must not be flagged.
 func TestCheckNilDerefAfterError_LogFatalGuardNoWarn(t *testing.T) {
 	code := `package main
 
@@ -413,8 +406,6 @@ func use() {
 	}
 }
 
-// TestCheckNilDerefAfterError_LogFatalfGuardNoWarn verifies #273 for
-// log.Fatalf and os.Exit variants.
 func TestCheckNilDerefAfterError_NoreturnSelectorVariants(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -436,9 +427,6 @@ func TestCheckNilDerefAfterError_NoreturnSelectorVariants(t *testing.T) {
 	}
 }
 
-// TestCheckNilDerefAfterError_OrdinaryCallGuardStillWarns verifies #273 does
-// not over-generalize: a plain fmt.Println guard falls through, so the
-// subsequent dereference is still flagged.
 func TestCheckNilDerefAfterError_OrdinaryCallGuardStillWarns(t *testing.T) {
 	code := `package main
 
@@ -465,9 +453,6 @@ func use() {
 	}
 }
 
-// TestCheckNilDerefAfterError_NEQReturnElseNoWarn verifies #281: when the
-// then branch of `if err != nil` terminates, the risk must stay permanently
-// cleared after the else block -- restoreSaved must be skipped.
 func TestCheckNilDerefAfterError_NEQReturnElseNoWarn(t *testing.T) {
 	code := `package main
 
@@ -493,9 +478,6 @@ func use() {
 	}
 }
 
-// TestCheckNilDerefAfterError_NEQNonTerminatingElseRestores verifies #281 keeps
-// the restore semantics when the then branch does NOT terminate: risk must be
-// restored after walking the else block.
 func TestCheckNilDerefAfterError_NEQNonTerminatingElseRestores(t *testing.T) {
 	code := `package main
 
@@ -524,9 +506,6 @@ func use() {
 	}
 }
 
-// #1067: Test that IfStmt.Init is walked for dereferences.
-// The pattern "if v, err := f(); v.Field > 0" should detect
-// the dereference of v in the Init before the condition is evaluated.
 func TestCheckNilDerefAfterError_IfStmtInit(t *testing.T) {
 	code := `package main
 
@@ -557,9 +536,6 @@ func use() {
 	}
 }
 
-// #1068: Test that non-nil-check IfStmt.Cond is walked.
-// The pattern "if v.Field > 0 && err == nil" should detect
-// the dereference of v in the Cond.
 func TestCheckNilDerefAfterError_IfStmtCond(t *testing.T) {
 	code := `package main
 
@@ -590,8 +566,6 @@ func use() {
 	}
 }
 
-// #1069: Test that delta key includes variable name.
-// Verify that two different variables on the same line are tracked separately.
 func TestCheckNilDerefAfterError_DeltaKeyVariableName(t *testing.T) {
 	oldCode := `package main
 
@@ -620,7 +594,7 @@ func use() {
 	_ = err
 }
 `
-	// Old code has no dereference, new code has dereference of r
+
 	result := checkNilDerefAfterError("test.go", oldCode, newCode)
 	if result == "" {
 		t.Fatal("expected warning for new dereference (#1069)")
@@ -629,7 +603,6 @@ func use() {
 		t.Fatalf("expected warning about variable 'r', got: %s", result)
 	}
 
-	// Now test that a different variable on the same line is tracked separately
 	code2 := `package main
 
 import "fmt"
@@ -653,8 +626,6 @@ func use() {
 	}
 }
 
-// #1070: Test that nilRisk map is block-scoped.
-// Brother blocks with same variable names should not leak risk state.
 func TestCheckNilDerefAfterError_BlockScopedNilRisk(t *testing.T) {
 	code := `package main
 
@@ -684,12 +655,11 @@ func use() {
 	if result == "" {
 		t.Fatal("expected warning in first block (#1070)")
 	}
-	// Should warn about v in first block but not second (they're separate)
-	// The delta key includes line number, so we get one warning
+
 	if !strings.Contains(result, "v") {
 		t.Fatalf("expected warning about variable 'v', got: %s", result)
 	}
-	// Count warnings - should only warn once for the first block
+
 	warnCount := strings.Count(result, "[nil-deref-after-error]")
 	if warnCount != 1 {
 		t.Fatalf("expected 1 warning, got %d: %s", warnCount, result)

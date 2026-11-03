@@ -65,13 +65,6 @@ type lspCallHierarchyTool struct {
 	exec         func(context.Context, string, string) (string, error)
 }
 
-// Clone implements the Cloner contract (#2603): these tools hold a
-// per-agent WorkingDir (and the name/description/exec wiring is set at
-// registration), so every agent/worktree must get its own instance.
-// Without Clone the registry shared one instance whose WorkingDir was
-// frozen at registration - syncToolWorkingDir could not even see the old
-// unexported field, so LSP queries silently ran against the wrong
-// workspace after enter_worktree / spawn_agent.
 func (t lspPathTool) Clone() Tool           { return t }
 func (t lspPositionTool) Clone() Tool       { return t }
 func (t lspRangeTool) Clone() Tool          { return t }
@@ -398,17 +391,13 @@ func (t lspRangeTool) resolvePath(path string) (string, error) {
 	return resolveLSPToolPath(path, t.WorkingDir, t.sandboxCheck)
 }
 
-// maxLSPOutputBytes caps LSP tool results to protect the context window.
-// lsp_references in large codebases can return thousands of entries.
 const maxLSPOutputBytes = 20 * 1024
 
-// capLSPOutput truncates LSP tool output to maxLSPOutputBytes.
 func capLSPOutput(s string) string {
 	if len(s) <= maxLSPOutputBytes {
 		return s
 	}
-	// #850: byte slicing split multibyte characters (CJK mojibake) -
-	// back off to a rune boundary instead.
+
 	cut := maxLSPOutputBytes
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
@@ -464,13 +453,7 @@ func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
 	if len(runes) == 0 {
 		return nil
 	}
-	// #4101: LSP Position.Character is UTF-16 code units (3.16+), and the
-	// send side (client.toLSPPosition) plus offsetForPosition below both
-	// honor that - only this fallback indexed the line by RUNES, so on
-	// lines containing astral characters (emoji) every emitted candidate
-	// sat left of the real symbol by the astral count before it. Track the
-	// UTF-16 prefix of each rune so candidate emission and boundary math
-	// share the protocol unit.
+
 	u16 := make([]int, len(runes)+1)
 	for i, r := range runes {
 		u16[i+1] = u16[i] + utf16.RuneLen(r)
@@ -483,14 +466,14 @@ func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
 	if charU16 > lineLen {
 		charU16 = lineLen
 	}
-	// Map the UTF-16 column to its rune index for span-distance math.
+
 	charIndex := 0
 	for i := 1; i <= len(runes) && u16[i] <= charU16; i++ {
 		charIndex = i
 	}
 	type span struct {
-		start    int // rune index (span scan)
-		startU16 int // UTF-16 units before the span start
+		start    int
+		startU16 int
 		end      int
 		dist     int
 	}
@@ -695,8 +678,7 @@ func NewLSPTools(WorkingDir string, readSandbox, writeSandbox AllowedPathChecker
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
 				diagnostics, err := lsp.Diagnostics(ctx, workspace, path)
 				if err != nil {
-					// #1654-4: distinguish not-ready from failure - the agent can
-					// retry after the server catches up.
+
 					if errors.Is(err, lsp.ErrDiagnosticsNotReady) {
 						return "Diagnostics not ready yet: the server has not published results within the wait window (analysis may still be running). Retry shortly.", nil
 					}
@@ -758,11 +740,7 @@ func NewLSPTools(WorkingDir string, readSandbox, writeSandbox AllowedPathChecker
 					return "", err
 				}
 				if len(edits) == 0 {
-					// #1769: distinguish "server returned nothing" from
-					// "server returned an unsupported change form" (e.g.
-					// TypeScript Move-to-file) - the latter used to hide
-					// behind the same bare message. #3037: the note now travels
-					// as a return value instead of a racy package-global.
+
 					if note != "" {
 						return fmt.Sprintf("No rename edits returned - the server replied with an unsupported change form (%s). Manual refactoring or a different rename strategy is needed.", note), nil
 					}
@@ -883,11 +861,6 @@ func NewLSPTools(WorkingDir string, readSandbox, writeSandbox AllowedPathChecker
 	}
 }
 
-// renameBlastRadiusThreshold is the number of distinct files at which a
-// rename is considered "high blast-radius". Renames touching exported symbols
-// in large codebases can silently modify dozens of files. When the threshold
-// is exceeded, the result includes a prominent warning so the agent and user
-// are aware of the widespread impact before committing to the change.
 const renameBlastRadiusThreshold = 3
 
 func applyLSPFileEdits(edits []lsp.FileEdit, sandboxCheck AllowedPathChecker) (string, error) {
@@ -919,10 +892,7 @@ func applyLSPFileEdits(edits []lsp.FileEdit, sandboxCheck AllowedPathChecker) (s
 	}
 	sort.Strings(summaries)
 	var sb strings.Builder
-	// Blast-radius warning: when a rename touches many files, prepend a
-	// prominent summary so the agent understands the scope of the change.
-	// This prevents the agent from blindly renaming exported symbols without
-	// realizing it just modified 15 files across the codebase.
+
 	if len(summaries) >= renameBlastRadiusThreshold {
 		sb.WriteString(fmt.Sprintf("WARNING: High blast-radius rename -- %d files changed (%d total edits).\n", len(summaries), totalEdits))
 		sb.WriteString("This rename touched many files. Verify all changes are correct before proceeding.\n\n")
@@ -937,7 +907,7 @@ func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
 		start   int
 		end     int
 		newText string
-		idx     int // original array order for same-offset tiebreak (#1328)
+		idx     int
 	}
 	repls := make([]replacement, 0, len(edits))
 	for i, edit := range edits {
@@ -954,13 +924,7 @@ func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
 		}
 		repls = append(repls, replacement{start: start, end: end, newText: edit.NewText, idx: i})
 	}
-	// Descending by start so each splice uses offsets still valid against
-	// the original content. #1328: ties must be deterministic and match the
-	// LSP rule that same-offset inserts apply in array order - splicing
-	// back-to-front means the LATER array element must be spliced FIRST
-	// (its text then ends up after the earlier one), hence idx descending
-	// as the final tiebreak. Longer ranges first when starts are equal so
-	// the nested edit's offsets stay valid.
+
 	sort.Slice(repls, func(i, j int) bool {
 		if repls[i].start != repls[j].start {
 			return repls[i].start > repls[j].start
@@ -970,8 +934,7 @@ func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
 		}
 		return repls[i].idx > repls[j].idx
 	})
-	// #1328: overlapping edits used to splice silently-corrupt the result
-	// (each offset is only valid against the ORIGINAL content). Reject.
+
 	for k := 1; k < len(repls); k++ {
 		if repls[k-1].start < repls[k].end {
 			return "", 0, fmt.Errorf("overlapping edits detected (edit #%d range [%d,%d) overlaps edit #%d end %d) - refusing to apply",
@@ -1030,8 +993,6 @@ func offsetForPosition(content string, pos lsp.Position) (int, error) {
 	return 0, fmt.Errorf("character %d out of range on line %d", pos.Character, pos.Line)
 }
 
-// lspSeverityLabel maps LSP severity numbers to names (#1694 case 8: the
-// raw digit forced the agent to guess whether [1] was a hint or an error).
 func lspSeverityLabel(sev int) string {
 	switch sev {
 	case 1:

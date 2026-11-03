@@ -13,43 +13,16 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Browser resource-leak guards.
-//
-// Incident: heavy browser-tool usage left 772 profile directories (104 GB)
-// under ~/.ggcode/browser-profiles and hundreds of Chrome processes on the
-// developer machine. Three leak surfaces, three guards:
-//
-//  1. Process accumulation: every distinct profile name spawns a Chrome
-//     instance that lives until the agent exits gracefully. Agents love
-//     inventing fresh profile names per task, so one session can hold a
-//     dozen idle Chromes. maxBrowserProfiles evicts least-recently-used
-//     profiles instead.
-//  2. Disk accumulation: named profile dirs are never deleted, even when
-//     their Chrome is long dead (SingletonLock points at a dead pid).
-//     gcStaleBrowserProfiles removes dirs whose owner process is gone and
-//     whose mtime exceeds the TTL.
-//  3. Garbage names: "$(date +%H%M%S)" passed literally as a profile name
-//     created directories with shell metacharacters. Profile names are now
-//     validated.
-
 const (
-	// maxBrowserProfiles caps concurrent Chrome instances per Browser tool.
-	// Each instance costs ~7-10 OS processes and 100-300 MB RSS.
 	maxBrowserProfiles = 4
 
-	// defaultBrowserProfileTTL is how long a dead profile directory may
-	// linger before GC removes it.
 	defaultBrowserProfileTTL = 7 * 24 * time.Hour
 
-	// browserProfileGCInterval spaces GC sweeps.
 	browserProfileGCInterval = 6 * time.Hour
 )
 
-// validBrowserProfileName matches safe, single-component profile names.
 var validBrowserProfileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// validateBrowserProfileName rejects empty, path-traversing, or shell-
-// metacharacter names ("system"/"default" are handled by the caller).
 func validateBrowserProfileName(name string) error {
 	if !validBrowserProfileName.MatchString(name) {
 		return fmt.Errorf("invalid profile name %q: use 1-64 chars of letters, digits, '.', '_' or '-' (no spaces, shell syntax like $(...), or path separators)", name)
@@ -57,8 +30,6 @@ func validateBrowserProfileName(name string) error {
 	return nil
 }
 
-// evictLRUBrowserProfiles closes least-recently-used profiles so at most
-// maxBrowserProfiles remain. Callers hold b.mu.
 func (b *Browser) evictLRUBrowserProfiles() {
 	if len(b.profiles) <= maxBrowserProfiles {
 		return
@@ -71,7 +42,7 @@ func (b *Browser) evictLRUBrowserProfiles() {
 	for name, p := range b.profiles {
 		all = append(all, cand{name, p})
 	}
-	// Selection sort by lastUsed ascending; evict until within cap.
+
 	for i := 0; i < len(all); i++ {
 		minIdx := i
 		for j := i + 1; j < len(all); j++ {
@@ -92,14 +63,10 @@ func (b *Browser) evictLRUBrowserProfiles() {
 	}
 }
 
-// browserProfilesRoot returns ~/.ggcode/browser-profiles.
 func browserProfilesRoot() string {
 	return filepath.Join(homeDir(), ".ggcode", "browser-profiles")
 }
 
-// singletonLockPID extracts the owning Chrome pid from a user-data-dir
-// SingletonLock symlink target. Format on macOS/Linux: "<hostname>-<pid>".
-// Returns 0 when absent or unparseable.
 func singletonLockPID(profileDir string) int {
 	target, err := os.Readlink(filepath.Join(profileDir, "SingletonLock"))
 	if err != nil {
@@ -117,19 +84,10 @@ func singletonLockPID(profileDir string) int {
 	return pid
 }
 
-// lockfilePath returns the Chromium 'lockfile' path inside a user-data-dir
-// (the Windows counterpart of the unix SingletonLock). Cross-platform pure
-// helper: only the Windows build acts on it (#3114).
 func lockfilePath(profileDir string) string {
 	return filepath.Join(profileDir, "lockfile")
 }
 
-// gcStaleBrowserProfiles removes profile directories whose Chrome owner is
-// dead and whose mtime exceeds the TTL. Live Chromes are detected via the
-// SingletonLock pid and never touched; dirs without a lock are treated as
-// dead. Live check also covers Chromes owned by other running ggcode
-// processes. Disable with GGCODE_BROWSER_PROFILE_GC=0; tune TTL with
-// GGCODE_BROWSER_PROFILE_TTL_DAYS.
 func (b *Browser) gcStaleBrowserProfiles() {
 	if os.Getenv("GGCODE_BROWSER_PROFILE_GC") == "0" {
 		return
@@ -146,7 +104,6 @@ func (b *Browser) gcStaleBrowserProfiles() {
 		return
 	}
 
-	// Snapshot of profiles this process owns — never GC those.
 	b.mu.Lock()
 	live := make(map[string]bool, len(b.profiles))
 	for name := range b.profiles {
@@ -165,43 +122,20 @@ func (b *Browser) gcStaleBrowserProfiles() {
 			continue
 		}
 		if e.Name() == "system" {
-			// #3114: 'system' is the cross-process persistent profile by
-			// design (browser.go: login state persisted across ggcode
-			// sessions, shared by every instance on the machine). The unix
-			// liveness guard below is SingletonLock-based and Windows Chrome
-			// creates no SingletonLock (it uses a lockfile), so on Windows the
-			// ONLY guard is the TTL - and an idle-but-live Chrome can hold a
-			// user-data-dir whose top-level mtime is older than that, letting
-			// GC RemoveAll a LIVE browser's profile (cookies/sessions/
-			// extensions destroyed). Exempt persistent-by-design profiles
-			// everywhere: worst case is disk accumulation (the pre-GC status
-			// quo), never data loss.
+
 			continue
 		}
 		if time.Since(info.ModTime()) < ttl {
 			continue
 		}
 		if pid := singletonLockPID(dir); pid != 0 && processAlive(pid) {
-			continue // another live Chrome owns it
+			continue
 		}
-		// #3114 defense-in-depth for the remaining named profiles on
-		// Windows: a live Chromium holds a 'lockfile' in the user-data-dir
-		// (its SingletonLock equivalent). Presence means a Chrome may own
-		// the dir - skip. False positives (crash residue) only leak disk,
-		// the same tradeoff the unix SingletonLock check already makes.
+
 		if windowsProfileLockHeld(dir) {
 			continue
 		}
-		// #2091 review: the pre-loop `live` snapshot released b.mu before
-		// iteration began, but getProfile adopts an existing on-disk dir by
-		// name (its mtime stays TTL-aged until Chrome writes) - a profile
-		// created mid-sweep would pass every check above while its Chrome
-		// may not have written the SingletonLock yet, and RemoveAll would
-		// delete the dir out from under the just-spawned Chrome. The sweep
-		// iterates for a long time on incident-scale roots (hundreds of
-		// dirs), making the window real. Re-validate under the lock right
-		// before deleting; the residual window is the microseconds between
-		// this check and RemoveAll.
+
 		b.mu.Lock()
 		_, adopted := b.profiles[e.Name()]
 		b.mu.Unlock()
@@ -218,7 +152,6 @@ func (b *Browser) gcStaleBrowserProfiles() {
 	}
 }
 
-// startBrowserProfileGC launches the background GC loop (once per Browser).
 func (b *Browser) startBrowserProfileGC() {
 	b.gcOnce.Do(func() {
 		safego.Go("browser.profileGC", func() {
@@ -230,9 +163,7 @@ func (b *Browser) startBrowserProfileGC() {
 				case <-ticker.C:
 					b.gcStaleBrowserProfiles()
 				case <-b.gcStopped():
-					// #2096 bug A: Close() stops the loop so the goroutine
-					// (and the Browser it references) does not outlive the
-					// agent that owned it.
+
 					return
 				}
 			}
@@ -240,12 +171,8 @@ func (b *Browser) startBrowserProfileGC() {
 	})
 }
 
-// gcStopped returns the GC termination signal; a nil channel (direct
-// &Browser{} construction) blocks forever, preserving the pre-#2096
-// behavior for tests that never Close.
 func (b *Browser) gcStopped() <-chan struct{} { return b.gcStop }
 
-// touch updates the profile's LRU timestamp. Callers hold b.mu.
 func (p *browserProfile) touch() {
 	p.lastUsed = time.Now()
 }

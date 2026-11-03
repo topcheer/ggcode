@@ -5,17 +5,6 @@ import (
 	"testing"
 )
 
-// #2255: three detector-layer business fixes, pinned against the exact shapes
-// the review probes demonstrated.
-//
-// H1 - git -C / --git-dir global-flag variants must reach BOTH detection
-// layers (six op classes were silent before).
-// M1 - flag scans are scoped to the git command's own segment; a second
-// command's `--`/`-f` after && cannot fire the reversibility gate, and the
-// phantom warnings no longer eat the warnCount budget ahead of real ones.
-// M2 - safety signals are owner-anchored: a commit MESSAGE token ("build:")
-// cannot forge buildRan.
-
 func TestIssue2255GlobalFlagVariantsReachRegexLayer(t *testing.T) {
 	cases := map[string]string{
 		"git -C /repo reset --hard":              "reset_hard",
@@ -71,11 +60,11 @@ func TestIssue2255CrossSegmentFlagNoFalsePositive(t *testing.T) {
 }
 
 func TestIssue2255ReviewResidualsF3F4(t *testing.T) {
-	// F3: a destructive flag on the SECOND git in an && chain must fire.
+
 	if !isDestructiveGit("git status && git reset --hard") {
 		t.Error("reset --hard as second && segment must fire (F3)")
 	}
-	// F4: a later git -C in the same line must have its flags stripped.
+
 	if !isDestructiveGit("git status && git -C /repo reset --hard") {
 		t.Error("git -C reset --hard as second && segment must fire (F4)")
 	}

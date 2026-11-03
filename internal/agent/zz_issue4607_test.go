@@ -8,15 +8,9 @@ import (
 	"testing"
 )
 
-// TestZZIssue4607_MarkerFreeFailureOutputCarriesTail pins #4607: a non-zero
-// exit whose output contains NONE of the extractErrorLines marker substrings
-// (the real-world "signal: killed" / segfault / OOM class) must not collapse
-// to the zero-information "command failed: exit status 1" fallback - the
-// injected Errors entry must carry the raw output tail so the auto-repair
-// loop and ratchet MatchErrors see the actual failure text.
 func TestZZIssue4607_MarkerFreeFailureOutputCarriesTail(t *testing.T) {
 	a := &Agent{workingDir: "."}
-	// "signal: killed" hits none of error/fail/undefined:/cannot find/panic:/fatal.
+
 	result := a.executeVerifyCommand(context.Background(),
 		`sh -c 'echo signal: killed; exit 1'`)
 	if result.Passed {
@@ -33,9 +27,6 @@ func TestZZIssue4607_MarkerFreeFailureOutputCarriesTail(t *testing.T) {
 	}
 }
 
-// TestZZIssue4607_MarkerOutputStillUsesExtractedLines pins the complement:
-// when the output DOES contain marker lines, extraction still wins and the
-// fallback tail must not be attached (no double-reporting).
 func TestZZIssue4607_MarkerOutputStillUsesExtractedLines(t *testing.T) {
 	a := &Agent{workingDir: "."}
 	result := a.executeVerifyCommand(context.Background(),
@@ -56,9 +47,6 @@ func TestZZIssue4607_MarkerOutputStillUsesExtractedLines(t *testing.T) {
 	}
 }
 
-// TestZZIssue4607_EmptyOutputKeepsBareFallback pins the empty-output corner:
-// a command that fails with NO output at all keeps the plain exit-status
-// fallback (no dangling "output tail:" header).
 func TestZZIssue4607_EmptyOutputKeepsBareFallback(t *testing.T) {
 	a := &Agent{workingDir: "."}
 	result := a.executeVerifyCommand(context.Background(), "sh -c 'exit 1'")

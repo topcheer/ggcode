@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- CoerceEnumValues tests ---
-
 func TestCoerceEnumValues_CaseInsensitiveMatch(t *testing.T) {
 	schema := json.RawMessage(`{
 		"type": "object",
@@ -60,7 +58,7 @@ func TestCoerceEnumValues_AlreadyValid(t *testing.T) {
 }
 
 func TestCoerceEnumValues_AmbiguousNoChange(t *testing.T) {
-	// "rad" is distance 2 from both "read" and "red" - ambiguous
+
 	schema := json.RawMessage(`{
 		"type": "object",
 		"properties": {
@@ -69,7 +67,6 @@ func TestCoerceEnumValues_AmbiguousNoChange(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"color": "rad"}`)
 	result := CoerceEnumValues(schema, args)
-	// Should NOT auto-correct because it's ambiguous
 	var m map[string]string
 	if err := json.Unmarshal(result, &m); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
@@ -88,7 +85,7 @@ func TestCoerceEnumValues_NoMatch(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"format": "binary"}`)
 	result := CoerceEnumValues(schema, args)
-	// "binary" is too far from both options - no correction
+
 	if string(result) != string(args) {
 		t.Errorf("no close match should leave value unchanged, got: %s", string(result))
 	}
@@ -148,13 +145,11 @@ func TestCoerceEnumValues_IntegerEnumNotChanged(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"priority": 5}`)
 	result := CoerceEnumValues(schema, args)
-	// Integer enums should not be corrected
+
 	if string(result) != string(args) {
 		t.Errorf("integer enum should not be corrected, got: %s", string(result))
 	}
 }
-
-// --- suggestClosestEnum tests ---
 
 func TestSuggestClosestEnum_TypoSuggestion(t *testing.T) {
 	enum := []json.RawMessage{json.RawMessage(`"read"`), json.RawMessage(`"write"`), json.RawMessage(`"delete"`)}
@@ -172,8 +167,6 @@ func TestSuggestClosestEnum_NoCloseMatch(t *testing.T) {
 	}
 }
 
-// --- Levenshtein tests ---
-
 func TestLevenshteinForEnum(t *testing.T) {
 	tests := []struct {
 		a, b string
@@ -186,7 +179,7 @@ func TestLevenshteinForEnum(t *testing.T) {
 		{"", "abc", 3},
 		{"kitten", "sitting", 3},
 		{"wite", "write", 1},
-		{"JSON", "json", 4}, // case-sensitive
+		{"JSON", "json", 4},
 		{"json", "json", 0},
 	}
 	for _, tc := range tests {
@@ -196,8 +189,6 @@ func TestLevenshteinForEnum(t *testing.T) {
 		}
 	}
 }
-
-// --- ValidateSchemaConstraints with suggestion tests ---
 
 func TestValidateSchemaConstraints_EnumSuggestion(t *testing.T) {
 	schema := json.RawMessage(`{
@@ -217,7 +208,7 @@ func TestValidateSchemaConstraints_EnumSuggestion(t *testing.T) {
 	if !containsStr(msg, "reed") {
 		t.Errorf("error should mention the invalid value, got: %s", msg)
 	}
-	// Should include did-you-mean hint since 'reed' is close to 'read'
+
 	if !containsStr(msg, "Did you mean") {
 		t.Errorf("error should include suggestion for close match, got: %s", msg)
 	}
@@ -235,7 +226,7 @@ func TestValidateSchemaConstraints_EnumNoSuggestion(t *testing.T) {
 	if msg == "" {
 		t.Fatal("invalid enum should fail")
 	}
-	// "explode" is too far from all options - no suggestion
+
 	if containsStr(msg, "Did you mean") {
 		t.Errorf("should not suggest for distant match, got: %s", msg)
 	}

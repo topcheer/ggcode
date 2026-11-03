@@ -1,8 +1,5 @@
 package agent
 
-// #3360 probes: pseudo-version pins must not be flagged (commit content is
-// not comparable by semver), prereleases sort below their release.
-
 import "testing"
 
 func TestIssue3360_PseudoVersionPinsNotFlagged(t *testing.T) {
@@ -21,12 +18,11 @@ func TestIssue3360_PseudoVersionPinsNotFlagged(t *testing.T) {
 
 func TestIssue3360_PrereleaseSortsBelowRelease(t *testing.T) {
 	vuln := vulnEntry{maxSafeV: "0.31.0"}
-	// v0.31.0-rc1 still contains the vulnerability (rc < release) - the old
-	// truncation read it as 0.31.0 and called it patched.
+
 	if !isVulnerableVersion("v0.31.0-rc1", vuln) {
 		t.Fatal("prerelease of the unpatched line must be vulnerable (rc1 < 0.31.0)")
 	}
-	// Sanity: the release itself is safe, anything below stays vulnerable.
+
 	if isVulnerableVersion("v0.31.0", vuln) {
 		t.Fatal("the patched release must be safe")
 	}

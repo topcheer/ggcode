@@ -44,18 +44,16 @@ func TestAbstractToolSequence(t *testing.T) {
 		"run_command": 1,
 	}
 	seq := abstractToolSequence(tools)
-	// Should contain read, edit, exec in that order
+
 	if seq != "read→edit→exec" {
 		t.Errorf("abstractToolSequence = %q, want %q", seq, "read→edit→exec")
 	}
 
-	// Single category
 	seq2 := abstractToolSequence(map[string]int{"read_file": 1})
 	if seq2 != "read" {
 		t.Errorf("single category: got %q, want %q", seq2, "read")
 	}
 
-	// Empty
 	seq3 := abstractToolSequence(map[string]int{})
 	if seq3 != "" {
 		t.Errorf("empty: got %q, want empty", seq3)
@@ -70,7 +68,7 @@ func TestExtractFileTypes(t *testing.T) {
 	}{
 		{"single go", []string{"main.go", "util.go"}, ".go"},
 		{"single ts", []string{"app.tsx"}, ".tsx"},
-		{"mixed", []string{"a.go", "b.ts"}, ".go+.ts"}, // order may vary
+		{"mixed", []string{"a.go", "b.ts"}, ".go+.ts"},
 		{"none", []string{"README"}, ""},
 		{"empty", []string{}, ""},
 	}
@@ -86,10 +84,8 @@ func TestExtractFileTypes(t *testing.T) {
 	}
 }
 
-// containsBoth checks that two "+" separated sets contain the same elements
-// regardless of order.
 func containsBoth(a, b string) bool {
-	return true // for mixed case we just check non-empty
+	return true
 }
 
 func TestPlaybookRecord(t *testing.T) {
@@ -134,7 +130,6 @@ func TestPlaybookRecordMergeSimilar(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)
 
-	// First run
 	stats1 := &RunStats{
 		ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
 		FilesEdited: []string{"main.go"},
@@ -145,7 +140,6 @@ func TestPlaybookRecordMergeSimilar(t *testing.T) {
 	}
 	pb.Record(stats1)
 
-	// Second run with same pattern
 	stats2 := &RunStats{
 		ToolCalls:   map[string]int{"read_file": 3, "edit_file": 2},
 		FilesEdited: []string{"auth.go"},
@@ -163,7 +157,7 @@ func TestPlaybookRecordMergeSimilar(t *testing.T) {
 	if e.Uses != 2 {
 		t.Errorf("expected uses=2 after merge, got %d", e.Uses)
 	}
-	// Average iterations should be (5+7)/2 = 6
+
 	if e.AvgIter != 6.0 {
 		t.Errorf("expected avg iter=6.0, got %f", e.AvgIter)
 	}
@@ -175,7 +169,7 @@ func TestPlaybookRecordSkipsUnsuccessful(t *testing.T) {
 
 	stats := &RunStats{
 		ToolCalls:  map[string]int{"read_file": 5},
-		Success:    false, // unsuccessful
+		Success:    false,
 		UserPrompt: "fix something",
 	}
 	pb.Record(stats)
@@ -190,7 +184,7 @@ func TestPlaybookRecordSkipsShortRuns(t *testing.T) {
 	pb := NewPlaybook(dir)
 
 	stats := &RunStats{
-		ToolCalls:  map[string]int{"read_file": 1}, // only 1 call
+		ToolCalls:  map[string]int{"read_file": 1},
 		Success:    true,
 		UserPrompt: "fix something",
 	}
@@ -215,12 +209,10 @@ func TestPlaybookPersistence(t *testing.T) {
 	}
 	pb1.Record(stats)
 
-	// Verify file exists
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", "playbook.json")); os.IsNotExist(err) {
 		t.Fatal("expected playbook.json to exist")
 	}
 
-	// Create new instance and verify it loads
 	pb2 := NewPlaybook(dir)
 	pb2.mu.Lock()
 	pb2.load()
@@ -238,13 +230,11 @@ func TestPlaybookHintsForPrompt(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)
 
-	// Empty playbook should return empty hints
 	hints := pb.HintsForPrompt("", 5)
 	if hints != "" {
 		t.Errorf("expected empty hints for empty playbook, got %q", hints)
 	}
 
-	// Add some entries
 	for i := 0; i < 3; i++ {
 		pb.Record(&RunStats{
 			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1, "run_command": 1},
@@ -263,7 +253,7 @@ func TestPlaybookHintsForPrompt(t *testing.T) {
 	if !contains(hints, "Strategy Playbook") {
 		t.Error("expected 'Strategy Playbook' header in hints")
 	}
-	// Should have 3 entries (3 distinct task types)
+
 	if !contains(hints, "bugfix") || !contains(hints, "feature") || !contains(hints, "refactor") {
 		t.Errorf("expected all 3 task types in hints, got: %s", hints)
 	}
@@ -273,7 +263,6 @@ func TestPlaybookHintsForPromptMaxEntries(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)
 
-	// Add 5 entries with different task types
 	prompts := []string{
 		"fix bug", "add feature", "refactor code", "review code", "write test",
 	}
@@ -288,9 +277,8 @@ func TestPlaybookHintsForPromptMaxEntries(t *testing.T) {
 		})
 	}
 
-	// Request only 2 hints
 	hints := pb.HintsForPrompt("", 2)
-	// Count lines starting with "- "
+
 	lines := 0
 	for _, line := range strings.Split(hints, "\n") {
 		if len(line) > 0 && line[0] == '-' {
@@ -305,7 +293,7 @@ func TestPlaybookHintsForPromptMaxEntries(t *testing.T) {
 func TestPlaybookEviction(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)
-	pb.maxEntries = 3 // small limit for testing
+	pb.maxEntries = 3
 
 	for i := 0; i < 5; i++ {
 		pb.Record(&RunStats{
@@ -314,12 +302,12 @@ func TestPlaybookEviction(t *testing.T) {
 			Success:     true,
 			Iterations:  3,
 			Duration:    time.Minute,
-			// Different task types to create distinct entries
+
 			UserPrompt: []string{
 				"fix bug a", "add feature b", "refactor c", "review d", "test e",
 			}[i],
 		})
-		// Small delay so LastSeen differs
+
 		time.Sleep(1 * time.Millisecond)
 	}
 
@@ -330,14 +318,12 @@ func TestPlaybookEviction(t *testing.T) {
 
 func TestPlaybookNilSafe(t *testing.T) {
 	var pb *Playbook
-	// All methods should be nil-safe
+
 	pb.Record(&RunStats{Success: true})
 	if hints := pb.HintsForPrompt("", 5); hints != "" {
 		t.Error("expected empty hints from nil playbook")
 	}
 }
-
-// contains, indexOf, splitLines are defined in agent_tool.go / reflection_test.go
 
 func TestPlaybookScore(t *testing.T) {
 	tests := []struct {
@@ -346,11 +332,11 @@ func TestPlaybookScore(t *testing.T) {
 		avgIter float64
 		want    float64
 	}{
-		{"frequent efficient", 5, 10, 5.0},  // 5 * (10/10)
-		{"frequent slow", 10, 50, 2.0},      // 10 * (10/50)
-		{"rare efficient", 3, 5, 6.0},       // 3 * (10/5) — ranks higher!
-		{"capped frequency", 20, 10, 10.0},  // min(20,10) * (10/10)
-		{"zero iter protected", 1, 0, 10.0}, // 1 * (10/1)
+		{"frequent efficient", 5, 10, 5.0},
+		{"frequent slow", 10, 50, 2.0},
+		{"rare efficient", 3, 5, 6.0},
+		{"capped frequency", 20, 10, 10.0},
+		{"zero iter protected", 1, 0, 10.0},
 	}
 	for _, tt := range tests {
 		e := PlaybookEntry{Uses: tt.uses, AvgIter: tt.avgIter}
@@ -366,7 +352,6 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)
 
-	// Entry A: frequent but slow (5 runs, 40 iterations each)
 	pb.entries = append(pb.entries, PlaybookEntry{
 		TaskType:     "bugfix",
 		ToolSequence: "read→edit→exec",
@@ -378,7 +363,6 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 		CreatedAt:    time.Now(),
 	})
 
-	// Entry B: rare but efficient (3 runs, 5 iterations each)
 	pb.entries = append(pb.entries, PlaybookEntry{
 		TaskType:     "feature",
 		ToolSequence: "read→edit",
@@ -390,7 +374,6 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 		CreatedAt:    time.Now(),
 	})
 
-	// Entry C: very frequent, moderate efficiency (10 runs, 15 iterations)
 	pb.entries = append(pb.entries, PlaybookEntry{
 		TaskType:     "refactor",
 		ToolSequence: "read→edit→exec→vcs",
@@ -402,16 +385,11 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 		CreatedAt:    time.Now(),
 	})
 
-	// Score B should be highest: 3 * (10/5) = 6.0
-	// Score C: 10 * (10/15) = 6.67
-	// Score A: 5 * (10/40) = 1.25
-	// So ranking should be: C (6.67) > B (6.0) > A (1.25)
 	hints := pb.HintsForPrompt("", 3)
 	if hints == "" {
 		t.Fatal("expected non-empty hints")
 	}
 	lines := strings.Split(hints, "\n")
-	// Find positions of each task type
 	var refactorPos, featurePos, bugfixPos int
 	for i, line := range lines {
 		if strings.Contains(line, "refactor") {
@@ -424,7 +402,7 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 			bugfixPos = i
 		}
 	}
-	// C (refactor) should rank before B (feature) should rank before A (bugfix)
+
 	if refactorPos >= featurePos {
 		t.Errorf("expected refactor (score=%.2f) before feature (score=%.2f)",
 			playbookScore(pb.entries[2]), playbookScore(pb.entries[1]))
@@ -448,13 +426,11 @@ func TestPlaybookAtomicSave(t *testing.T) {
 		UserPrompt:  "fix a bug",
 	})
 
-	// Verify no .tmp file left behind
 	tmpPath := filepath.Join(dir, ".ggcode", "playbook.json.tmp")
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Errorf("expected no .tmp file after save, but it exists")
 	}
 
-	// Verify main file is valid JSON
 	data, err := os.ReadFile(filepath.Join(dir, ".ggcode", "playbook.json"))
 	if err != nil {
 		t.Fatalf("failed to read playbook: %v", err)
@@ -464,9 +440,6 @@ func TestPlaybookAtomicSave(t *testing.T) {
 	}
 }
 
-// r387: intent-aware hint ranking (SimpleMem, ICML 2026). A hint matching
-// the current prompt's task type must outrank a globally higher-scored hint
-// of a different type; empty/unclassifiable prompts keep global ranking.
 func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
 	tmp := t.TempDir()
 	pb := NewPlaybook(tmp)
@@ -474,19 +447,16 @@ func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
 		t.Fatal("NewPlaybook returned nil")
 	}
 
-	// Bugfix entry: low global score (2 uses, high iterations).
 	pb.entries = []PlaybookEntry{{
 		ID: "b1", TaskType: "bugfix", ToolSequence: "read>edit>execute",
 		Uses: 2, SuccessRate: 1.0, AvgIter: 40, LastSeen: time.Now(), CreatedAt: time.Now(),
 	}}
-	// Build entry: high global score (10 uses, low iterations) - without
-	// intent boost this always ranks first.
+
 	pb.entries = append(pb.entries, PlaybookEntry{
 		ID: "c1", TaskType: "build", ToolSequence: "execute",
 		Uses: 10, SuccessRate: 1.0, AvgIter: 5, LastSeen: time.Now(), CreatedAt: time.Now(),
 	})
 
-	// Prompt classified as bugfix: matching entry must rank first.
 	hints := pb.HintsForPrompt("fix the panic crash in daemon startup", 2)
 	if !strings.Contains(hints, "bugfix") {
 		t.Fatalf("expected bugfix hint present, got: %s", hints)
@@ -496,7 +466,6 @@ func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
 		t.Errorf("intent-matching entry should rank first, first line: %q", first)
 	}
 
-	// Empty prompt: global ranking - build entry first.
 	hints = pb.HintsForPrompt("", 2)
 	first = strings.Split(strings.SplitN(hints, "\n", 3)[1], ":")[0]
 	if first != "- build" {
@@ -504,10 +473,6 @@ func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
 	}
 }
 
-// r389 (AutoRefine repository maintenance): failed runs degrade the success
-// rate of a matching fingerprint but never create entries; entries whose
-// success rate collapses after enough evidence are pruned; young entries
-// are protected from a single early failure.
 func TestPlaybookFailureAwareRecording(t *testing.T) {
 	tmp := t.TempDir()
 	pb := NewPlaybook(tmp)
@@ -519,13 +484,11 @@ func TestPlaybookFailureAwareRecording(t *testing.T) {
 		return s
 	}
 
-	// Success creates the entry.
 	pb.Record(stats(true, 5))
 	if len(pb.entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(pb.entries))
 	}
 
-	// Failure with a matching fingerprint degrades the rate.
 	pb.Record(stats(false, 8))
 	e := pb.entries[0]
 	if e.Uses != 2 {
@@ -535,9 +498,8 @@ func TestPlaybookFailureAwareRecording(t *testing.T) {
 		t.Errorf("SuccessRate = %v, want %v", e.SuccessRate, want)
 	}
 
-	// Failure with NO matching fingerprint creates nothing.
 	odd := stats(false, 3)
-	odd.ToolCalls = map[string]int{"browser": 4} // different fingerprint
+	odd.ToolCalls = map[string]int{"browser": 4}
 	pb.Record(odd)
 	if len(pb.entries) != 1 {
 		t.Errorf("failure must not create entries, got %d", len(pb.entries))
@@ -554,26 +516,19 @@ func TestPlaybookPruneDegraded(t *testing.T) {
 		return &RunStats{Success: success, Iterations: 6, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
 	}
 
-	pb.Record(stats(true))  // uses=1 rate=1.0
-	pb.Record(stats(false)) // uses=2 rate=0.5
-	pb.Record(stats(false)) // uses=3 rate=0.33
-	pb.Record(stats(false)) // uses=4 rate=0.25 - young, protected (uses<5)
+	pb.Record(stats(true))
+	pb.Record(stats(false))
+	pb.Record(stats(false))
+	pb.Record(stats(false))
 	if len(pb.entries) != 1 {
 		t.Fatalf("young degraded entry must be protected, got %d entries", len(pb.entries))
 	}
-	pb.Record(stats(false)) // uses=5 rate=0.2 - pruned
+	pb.Record(stats(false))
 	if len(pb.entries) != 0 {
 		t.Errorf("degraded entry (uses=5, rate=0.2) must be pruned, got %d entries", len(pb.entries))
 	}
 }
 
-// TestRecordPlaybookFailureDegrades pins the integration path (#3557): a
-// failed run must reach Playbook.Record via recordPlaybook so SuccessRate
-// degrades and prune stays reachable in production. The unit tests above call
-// pb.Record directly, which is why the old !stats.Success gate in
-// recordPlaybook (predating the r389 failure-degradation semantics) went
-// unnoticed: tests were green while the production path dropped every
-// failure sample.
 func TestRecordPlaybookFailureDegrades(t *testing.T) {
 	tmp := t.TempDir()
 	a := &Agent{workingDir: tmp}
@@ -582,7 +537,6 @@ func TestRecordPlaybookFailureDegrades(t *testing.T) {
 		return &RunStats{Success: success, Iterations: 6, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
 	}
 
-	// Success creates the entry (rate 1.0).
 	a.recordPlaybook(mkStats(true))
 	pb := NewPlaybook(tmp)
 	if pb == nil {
@@ -593,8 +547,6 @@ func TestRecordPlaybookFailureDegrades(t *testing.T) {
 		t.Fatalf("expected 1 entry after success, got %d", len(pb.entries))
 	}
 
-	// Failure through the integration path must degrade the rate to 0.5.
-	// With the old gate this call was a no-op and the rate stayed 1.0.
 	a.recordPlaybook(mkStats(false))
 	pb = NewPlaybook(tmp)
 	pb.load()
@@ -608,6 +560,5 @@ func TestRecordPlaybookFailureDegrades(t *testing.T) {
 		t.Errorf("Uses after failure via recordPlaybook = %d, want 2", got)
 	}
 
-	// nil stats stays a no-op.
 	a.recordPlaybook(nil)
 }

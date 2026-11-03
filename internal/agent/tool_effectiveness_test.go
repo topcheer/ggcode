@@ -8,7 +8,6 @@ import (
 func TestToolEffTracker_BasicTracking(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Three successful calls should not trigger guidance
 	for i := 0; i < 3; i++ {
 		g := tr.recordCall("grep", "some/path:42:match found", false)
 		if g != "" {
@@ -20,7 +19,6 @@ func TestToolEffTracker_BasicTracking(t *testing.T) {
 func TestToolEffTracker_AllErrorsFiresGuidance(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Three failed calls should trigger guidance
 	var guidance string
 	for i := 0; i < 3; i++ {
 		guidance = tr.recordCall("grep", "error: pattern invalid", true)
@@ -51,7 +49,6 @@ func TestToolEffTracker_EmptyResultsFireGuidance(t *testing.T) {
 func TestToolEffTracker_MixedResultsNoGuidance(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// 2 success, 1 failure = 66% success rate, above threshold
 	tr.recordCall("grep", "file.go:1:match", false)
 	tr.recordCall("grep", "file.go:2:match", false)
 	g := tr.recordCall("grep", "error: invalid pattern", true)
@@ -63,7 +60,6 @@ func TestToolEffTracker_MixedResultsNoGuidance(t *testing.T) {
 func TestToolEffTracker_MinSampleRequired(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Only 2 calls (below minSample of 3)
 	g := tr.recordCall("grep", "error", true)
 	if g != "" {
 		t.Fatal("should not fire before minSample")
@@ -77,11 +73,10 @@ func TestToolEffTracker_MinSampleRequired(t *testing.T) {
 func TestToolEffTracker_MaxFires(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Fire guidance twice (maxFires=2)
 	for i := 0; i < 6; i++ {
 		tr.recordCall("grep", "error", true)
 	}
-	// After 2 fires, should stop producing guidance
+
 	g := tr.recordCall("grep", "error", true)
 	if g != "" {
 		t.Fatalf("should stop firing after maxFires: %s", g)
@@ -110,7 +105,6 @@ func TestToolEffTracker_Reset(t *testing.T) {
 func TestToolEffTracker_SpecificToolAlternatives(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Trigger for edit_file
 	var guidance string
 	for i := 0; i < 3; i++ {
 		guidance = tr.recordCall("edit_file", "old_text not found in file", false)
@@ -126,7 +120,6 @@ func TestToolEffTracker_SpecificToolAlternatives(t *testing.T) {
 func TestToolEffTracker_GenericFallback(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Unknown tool should get generic guidance
 	var guidance string
 	for i := 0; i < 3; i++ {
 		guidance = tr.recordCall("custom_tool_xyz", "error: something failed", true)
@@ -142,18 +135,14 @@ func TestToolEffTracker_GenericFallback(t *testing.T) {
 func TestToolEffTracker_SlidingWindow(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// Fill with failures to trigger guidance
 	for i := 0; i < 4; i++ {
 		tr.recordCall("grep", "error", true)
 	}
 
-	// Now add successes - the sliding window should eventually push out old failures
-	// and stop firing guidance
 	for i := 0; i < toolEffWindow; i++ {
 		tr.recordCall("grep", "match found here", false)
 	}
 
-	// Window should now be all successes, guidance should not fire
 	window := tr.calls["grep"]
 	for _, ev := range window {
 		if !ev.successful {
@@ -165,16 +154,14 @@ func TestToolEffTracker_SlidingWindow(t *testing.T) {
 func TestToolEffTracker_Summary(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// No data
 	if s := tr.summary(); s != "" {
 		t.Fatalf("summary should be empty with no data, got: %s", s)
 	}
 
-	// Good tool
 	for i := 0; i < 5; i++ {
 		tr.recordCall("read_file", "file contents here", false)
 	}
-	// Bad tool
+
 	for i := 0; i < 4; i++ {
 		tr.recordCall("grep", "error", true)
 	}
@@ -188,15 +175,9 @@ func TestToolEffTracker_Summary(t *testing.T) {
 	}
 }
 
-// TestIssue1213_SummaryCountsPoorResults verifies summary()'s success rate
-// matches recordCall's semantics: successful = !isError && !isPoorResult.
-// A tool whose every call was a non-error failure (repeated empty searches)
-// must be reported as low effectiveness, not hidden behind a
-// (total-errors)/total computation that reported 100% (#1213).
 func TestIssue1213_SummaryCountsPoorResults(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// 8 empty-search results: isError=false but isPoorResult=true.
 	for i := 0; i < 8; i++ {
 		tr.recordCall("grep", "no matches found", false)
 	}
@@ -209,7 +190,6 @@ func TestIssue1213_SummaryCountsPoorResults(t *testing.T) {
 		t.Errorf("summary should show 0/8 successes, got: %s", s)
 	}
 
-	// Control: a genuinely successful tool stays out of the summary.
 	tr2 := newToolEffTracker()
 	for i := 0; i < 8; i++ {
 		tr2.recordCall("grep", "file.go:1:match", false)
@@ -242,13 +222,8 @@ func TestIsPoorResult(t *testing.T) {
 	}
 }
 
-// TestIssue1211_EditRejectionPhrasesScopedToEditTools verifies the
-// edit-rejection phrases ("old_text not found", "no changes applied", ...)
-// only classify results as poor for the edit tools that emit them. Reading
-// file/command CONTENT that contains the phrases (e.g. this repository's own
-// source) is payload, not a rejection (#1211).
 func TestIssue1211_EditRejectionPhrasesScopedToEditTools(t *testing.T) {
-	// Content containing the phrases - payload for non-edit tools.
+
 	benign := []string{
 		`strings.Contains(lower, "old_text not found") ||`,
 		`// CHANGELOG: fixed "no changes applied" bug (#999)`,
@@ -256,9 +231,7 @@ func TestIssue1211_EditRejectionPhrasesScopedToEditTools(t *testing.T) {
 		`error output says: file already exists; use edit (historical log)`,
 	}
 	for _, content := range benign {
-		// Non-search, non-edit tools: the phrases are pure payload (#1211
-		// scope). Search tools (grep/git_diff) have their own short-result
-		// empty heuristics and are intentionally not asserted here.
+
 		for _, tool := range []string{"read_file", "run_command", "multi_file_read"} {
 			if isPoorResult(tool, content) {
 				t.Errorf("isPoorResult(%q, %q) = true, want false (payload mention)", tool, content)
@@ -266,7 +239,6 @@ func TestIssue1211_EditRejectionPhrasesScopedToEditTools(t *testing.T) {
 		}
 	}
 
-	// Actual edit-tool rejections - still poor.
 	for _, content := range []string{
 		"old_text not found in /path/file.go",
 		"no changes applied: old_text matches existing content",
@@ -293,24 +265,16 @@ func TestToolEffTracker_TruncationAdvisory(t *testing.T) {
 	}
 }
 
-// TestIssue1208_TruncationMarkerAnchoring verifies that the MCP/plugin
-// truncation-marker variants are anchored to the bracketed forms the tool
-// layer actually emits. Successful read_file/run_command results whose
-// CONTENT merely mentions the phrases mid-line (e.g. reading this repo's own
-// source, which contains "mcp result truncated" in tool_effectiveness.go)
-// must NOT be classified as poor results (#1208, regression of #358).
 func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
-	// File/command content that mentions markers without the bracketed
-	// advisory form - all successful, none poor.
+
 	benign := []string{
-		// source code that contains the unanchored phrases (this repo!)
+
 		`strings.Contains(lower, "mcp result truncated") ||`,
 		`// mcp resource truncated handling`,
 		`# docs: output truncated at 1MB in the plugin layer`,
-		// command output mentioning truncation of something else
+
 		`archive.log: output truncated at request of sender`,
-		// output_compress's agent-side redundancy marker - guidance lines
-		// collapsed, output NOT degraded (must not be classified poor)
+
 		`[3 similar lines omitted]`,
 	}
 	for _, content := range benign {
@@ -322,7 +286,6 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 		}
 	}
 
-	// Actual tool-layer emitted forms - all poor.
 	emitted := []string{
 		"\n\n[... MCP result truncated: 9000 bytes total, showing first 4000 ...]",
 		"\n\n[... MCP resource truncated: 9000 bytes total, showing first 4000 ...]",
@@ -332,19 +295,11 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 		"[result too large]",
 		"[max results reached]",
 		"[... truncated: 200 lines]",
-		// run_command truncateMiddle head+tail markers (run_command.go),
-		// stdout and stderr variants - found in #1208 review.
+
 		"... [42 lines omitted — output truncated, showing tail] ...",
 		"STDERR:\n... [7 lines omitted — stderr truncated, showing tail] ...",
 	}
-	// Probe with tools that actually EMIT these markers (#2964 changed
-	// the probe away from read_file: read_file/multi_file_read results are
-	// raw file payload and are exempt from marker matching entirely - see
-	// filePayloadTools). run_command emits the showing-tail forms and
-	// mcp__*/lsp_* carry their adapter markers; for these non-payload,
-	// non-search tools the anchored full-text matching still applies
-	// unchanged. (git_show/git_blame are NOT probes: they sit in searchTools
-	// and take the isEmptyResult path before marker matching ever runs.)
+
 	probeTools := []string{"run_command", "mcp__probe__tool", "lsp_hover"}
 	for _, content := range emitted {
 		for _, tool := range probeTools {
@@ -352,8 +307,7 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 				t.Errorf("isPoorResult(%q, %q) = false, want true (emitted advisory)", tool, content)
 			}
 		}
-		// #2964 pin: the SAME emitted-advisory literals appearing inside a
-		// file-payload tool's result are payload, never status.
+
 		for _, tool := range []string{"read_file", "multi_file_read"} {
 			if isPoorResult(tool, content) {
 				t.Errorf("isPoorResult(%q, %q) = true, want false (#2964 file payload)", tool, content)
@@ -365,18 +319,15 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 func TestToolEffTracker_PerToolIsolation(t *testing.T) {
 	tr := newToolEffTracker()
 
-	// grep fails 3 times
 	for i := 0; i < 3; i++ {
 		tr.recordCall("grep", "error", true)
 	}
 
-	// read_file succeeds - should not be affected by grep's failures
 	g := tr.recordCall("read_file", "file contents", false)
 	if g != "" {
 		t.Fatalf("read_file should not get guidance from grep failures: %s", g)
 	}
 
-	// Verify per-tool tracking
 	if tr.totals["grep"] != 3 {
 		t.Errorf("grep total should be 3, got %d", tr.totals["grep"])
 	}
@@ -385,15 +336,12 @@ func TestToolEffTracker_PerToolIsolation(t *testing.T) {
 	}
 }
 
-// TestAgentHasToolEffTracker asserts the Agent struct carries a wired
-// toolEffTracker (issue #334: tracker was previously 100% dead code).
 func TestAgentHasToolEffTracker(t *testing.T) {
 	a := &Agent{toolEff: newToolEffTracker()}
 	if a.toolEff == nil {
 		t.Fatal("Agent.toolEff should be non-nil when initialized")
 	}
 
-	// 4 empty grep results + 1 error should fire guidance at least once
 	fired := false
 	for i := 0; i < 4; i++ {
 		if g := a.toolEff.recordCall("grep", "No matches found", false); g != "" {
@@ -407,7 +355,6 @@ func TestAgentHasToolEffTracker(t *testing.T) {
 		t.Fatal("expected tool effectiveness guidance after 4 empty + 1 error grep calls via Agent.toolEff")
 	}
 
-	// Per-user-turn reset must clear tracker state
 	a.toolEff.reset()
 	if len(a.toolEff.totals) != 0 || len(a.toolEff.calls) != 0 {
 		t.Fatal("toolEff.reset() should clear per-tool data")

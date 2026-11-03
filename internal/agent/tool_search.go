@@ -13,63 +13,23 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// MCP Tool Search: deferred disclosure of MCP tool schemas.
-//
-// Inspired by Anthropic's "Tool Search Tool" (Advanced Tool Use beta,
-// advanced-tool-use-2025-11-20; docs.en/agents-and-tools/tool-use/tool-search-tool):
-// instead of paying the context cost of every connected MCP server's tool
-// schemas on every request, MCP tools (mcp__server__tool naming) are hidden
-// behind a single meta-tool. The model searches on demand; matched schemas
-// are returned in the tool result AND activated, so the next request carries
-// core tools + the meta-tool + every activated schema. Activation is strictly
-// monotonic: schemas are only ever ADDED mid-run, never removed — the failure
-// mode that got dynamic tool pruning reverted (see the comment at the
-// activeToolDefs site in agent.go) cannot recur.
-//
-// Built-in tools are never deferred: file edit/read/search/run stay fully
-// available from the first turn, so the extra discovery round-trip only ever
-// applies to optional MCP integrations. OFF BY DEFAULT (user ruling,
-// 2026-09-21): the scheme saved a few tens of KB of schema tokens per turn
-// but each tool_search lookup is a FULL LLM round-trip (input = the whole
-// context re-billed), so 2-3 misses cost hundreds of KB - far more than
-// the schemas ever cost. Deferred disclosure now requires explicit opt-in
-// via GGCODE_TOOL_SEARCH=on, intended for registries so large the schemas
-// genuinely cannot fit.
-
 const (
-	// mcpToolPrefix is the registry naming convention for MCP-provided tools.
 	mcpToolPrefix = "mcp__"
 
-	// ToolSearchToolName is the synthetic meta-tool name. It is handled
-	// agent-side (not registry-backed) so it never appears in
-	// Registry.ToDefinitions and activation state stays per-agent.
 	ToolSearchToolName = "tool_search"
 
-	// toolSearchEnabledDefault controls whether deferred MCP schema
-	// disclosure ships by default. It does not - see the package ruling
-	// above. Keep false unless that ruling is revisited with round-trip
-	// cost data.
 	toolSearchEnabledDefault = false
 
-	// toolSearchThreshold is the minimum number of MCP tools before schemas
-	// may be deferred when the feature is explicitly enabled. Below this
-	// the full list is sent even opted in (fewer round-trips beats token
-	// savings on small registries).
 	toolSearchThreshold = 20
 
-	// toolSearchMaxResults caps schemas returned per search to bound the
-	// tool_result size.
 	toolSearchMaxResults = 10
 )
 
-// toolSearchState tracks deferred MCP tool schemas and their activation.
-// Safe for concurrent use: parallel tool execution may activate tools while
-// the main loop builds the next request's tool list.
 type toolSearchState struct {
 	mu        sync.Mutex
 	enabled   bool
-	deferred  map[string]provider.ToolDefinition // all MCP tool defs from the registry
-	activated map[string]bool                    // schemas included in requests (monotonic within a conversation)
+	deferred  map[string]provider.ToolDefinition
+	activated map[string]bool
 }
 
 func newToolSearchState() *toolSearchState {
@@ -79,10 +39,6 @@ func newToolSearchState() *toolSearchState {
 	}
 }
 
-// init refreshes the deferred set from the current registry snapshot.
-// Previously activated names survive re-init (a new run in the same
-// conversation keeps history consistent with the schemas it references);
-// names that disappeared from the registry are pruned.
 func (s *toolSearchState) init(defs []provider.ToolDefinition) {
 	deferred := make(map[string]provider.ToolDefinition)
 	for _, d := range defs {
@@ -98,26 +54,17 @@ func (s *toolSearchState) init(defs []provider.ToolDefinition) {
 			delete(s.activated, name)
 		}
 	}
-	// Off by default (ruling above); GGCODE_TOOL_SEARCH=on can still opt a
-	// very large registry in, and =off force-disables either way.
+
 	s.enabled = (toolSearchEnabledDefault || toolSearchEnvEnabled()) &&
 		len(deferred) >= toolSearchThreshold && !toolSearchEnvDisabled()
 }
 
-// disable turns off the client-side meta-tool. Used when the provider's
-// server-side Tool Search Tool (Anthropic advanced-tool-use beta) owns
-// schema discovery instead: the two mechanisms are mutually exclusive.
 func (s *toolSearchState) disable() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enabled = false
 }
 
-// markServerDeferred flags MCP tool definitions for the provider's
-// server-side Tool Search Tool (defer_loading): the API keeps their schemas
-// out of the model's context until server-side search expands them via
-// tool_reference. Built-in tools stay non-deferred, which satisfies the
-// API's requirement of at least one non-deferred tool.
 func markServerDeferred(defs []provider.ToolDefinition) {
 	for i := range defs {
 		if strings.HasPrefix(defs[i].Name, mcpToolPrefix) {
@@ -126,9 +73,6 @@ func markServerDeferred(defs []provider.ToolDefinition) {
 	}
 }
 
-// toolSearchEnvEnabled reports the explicit opt-in: deferred disclosure
-// only runs when the user sets GGCODE_TOOL_SEARCH=on (see the package
-// header for the ruling).
 func toolSearchEnvEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("GGCODE_TOOL_SEARCH"))) {
 	case "1", "on", "true", "yes":
@@ -145,10 +89,6 @@ func toolSearchEnvDisabled() bool {
 	return false
 }
 
-// activeDefs returns the tool definition list for the next request. With the
-// feature disabled (or nil receiver) it returns the input unchanged. When
-// enabled it returns core tools + the tool_search meta-tool + activated MCP
-// schemas, in deterministic order.
 func (s *toolSearchState) activeDefs(all []provider.ToolDefinition) []provider.ToolDefinition {
 	if s == nil || !s.enabled {
 		return all
@@ -173,9 +113,6 @@ func (s *toolSearchState) activeDefs(all []provider.ToolDefinition) []provider.T
 	return out
 }
 
-// maybeAutoActivate promotes a deferred MCP tool whose schema was never sent
-// but which the model is calling anyway (history carry-over or outside
-// knowledge). Returns true when an activation happened.
 func (s *toolSearchState) maybeAutoActivate(name string) bool {
 	if s == nil || !s.enabled || !strings.HasPrefix(name, mcpToolPrefix) {
 		return false
@@ -192,11 +129,6 @@ func (s *toolSearchState) maybeAutoActivate(name string) bool {
 	return true
 }
 
-// search finds deferred tools whose name+description contain every query
-// token (case-insensitive). Empty query returns the deferred catalog head so
-// the model can browse without guessing keywords. Matches are activated as a
-// side effect. Already-activated tools are omitted (their schemas are already
-// in the request).
 func (s *toolSearchState) search(query string, limit int) []provider.ToolDefinition {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,8 +168,6 @@ func (s *toolSearchState) search(query string, limit int) []provider.ToolDefinit
 	return out
 }
 
-// executeResult runs the tool_search meta-tool: parse arguments, search, and
-// format matched schemas for the model.
 func (s *toolSearchState) executeResult(args json.RawMessage) tool.Result {
 	if s == nil || !s.enabled {
 		return tool.Result{Content: "tool_search is not active.", IsError: true}
@@ -283,7 +213,6 @@ func (s *toolSearchState) executeResult(args json.RawMessage) tool.Result {
 	)}
 }
 
-// toolSearchDefinition builds the synthetic meta-tool definition.
 func toolSearchDefinition() provider.ToolDefinition {
 	params := `{
   "type": "object",

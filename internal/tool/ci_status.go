@@ -1,21 +1,5 @@
 package tool
 
-// CI/CD Pipeline Status Integration
-//
-// Research basis: All major AI coding agents (Claude Code, Cursor, Windsurf,
-// Cline/OpenHands) support a CI feedback loop — push code, check if CI passes,
-// read failure logs, and fix issues autonomously. Without this capability, the
-// agent pushes code and then has no way to know whether CI succeeded or failed,
-// forcing the user to manually check and relay results back.
-//
-// This tool uses the GitHub CLI (`gh`) to:
-//   1. Check the latest workflow run status for the current branch
-//   2. List recent workflow runs
-//   3. Retrieve failed job logs for diagnosis
-//
-// Requirements: `gh` CLI must be installed and authenticated. The tool is
-// read-only — it never triggers or cancels runs.
-
 import (
 	"bytes"
 	"context"
@@ -28,13 +12,10 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// ciStatusTimeout caps how long any gh subprocess can run.
 const ciStatusTimeout = 30 * time.Second
 
-// ciMaxLogLines caps the number of log lines returned for failed jobs.
 const ciMaxLogLines = 100
 
-// CIStatusTool implements the ci_status tool.
 type CIStatusTool struct{ WorkingDir string }
 
 func (t CIStatusTool) Name() string { return "ci_status" }
@@ -83,23 +64,16 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Verify gh CLI is available
 	if _, err := exec.LookPath("gh"); err != nil {
 		return Result{IsError: true, Content: "GitHub CLI (gh) is not installed or not in PATH. " +
 			"Install it from https://cli.github.com/ to use CI status checking."}, nil
 	}
 
-	// Verify we're in a GitHub repo
 	repoInfo, err := ghRepoInfo(ctx, dir)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("Not a GitHub repository or gh not authenticated: %v", err)}, nil
 	}
 
-	// #3118: resolve the branch ONLY for the actions that need it. The old
-	// unconditional resolution ran before the switch, so under a detached
-	// HEAD (CI checkouts, worktrees) even action=list failed with "could
-	// not determine current branch" - although listRuns never uses the
-	// branch at all.
 	resolveBranch := func() (string, error) {
 		if args.Branch != "" {
 			return args.Branch, nil
@@ -119,7 +93,7 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		}
 		return t.getStatus(ctx, dir, repoInfo, branch)
 	case "list":
-		return t.listRuns(ctx, dir, repoInfo) // #3118: no branch dependency
+		return t.listRuns(ctx, dir, repoInfo)
 	case "logs":
 		branch, err := resolveBranch()
 		if err != nil {
@@ -131,7 +105,6 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 }
 
-// ghRepoInfo returns owner/repo for the current directory.
 func ghRepoInfo(ctx context.Context, dir string) (string, error) {
 	out, err := ghRun(ctx, dir, "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
 	if err != nil {
@@ -145,7 +118,7 @@ func ghRepoInfo(ctx context.Context, dir string) (string, error) {
 }
 
 func (t CIStatusTool) getStatus(ctx context.Context, dir, repo, branch string) (Result, error) {
-	// Get the latest run for this branch
+
 	out, err := ghRun(ctx, dir,
 		"run", "list",
 		"--branch", branch,
@@ -234,7 +207,7 @@ func (t CIStatusTool) listRuns(ctx context.Context, dir, repo string) (Result, e
 }
 
 func (t CIStatusTool) getFailedLogs(ctx context.Context, dir, repo, branch string) (Result, error) {
-	// Find the most recent failed run for this branch
+
 	out, err := ghRun(ctx, dir,
 		"run", "list",
 		"--branch", branch,
@@ -256,7 +229,6 @@ func (t CIStatusTool) getFailedLogs(ctx context.Context, dir, repo, branch strin
 
 	runID := runs[0].DatabaseId
 
-	// Get failed jobs
 	jobsOut, err := ghRun(ctx, dir,
 		"run", "view", fmt.Sprintf("%d", runID),
 		"--json", "jobs",
@@ -302,7 +274,6 @@ func (t CIStatusTool) getFailedLogs(ctx context.Context, dir, repo, branch strin
 		b.WriteString("No failed jobs found in this run (may have been cancelled).\n")
 	}
 
-	// Try to get the actual log tail for the first failed job
 	logOut, err := ghRun(ctx, dir, "run", "view", fmt.Sprintf("%d", runID), "--log-failed")
 	if err == nil && strings.TrimSpace(logOut) != "" {
 		lines := strings.Split(strings.TrimSpace(logOut), "\n")
@@ -318,22 +289,16 @@ func (t CIStatusTool) getFailedLogs(ctx context.Context, dir, repo, branch strin
 	return Result{Content: b.String()}, nil
 }
 
-// Clone returns an independent copy of this tool.
 func (t CIStatusTool) Clone() Tool {
 	return &CIStatusTool{WorkingDir: t.WorkingDir}
 }
 
-// ghRun executes a gh command with timeout.
 func ghRun(ctx context.Context, dir string, args ...string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, ciStatusTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, "gh", args...)
 	cmd.Dir = dir
-	// #808: gh writes 'Notice:' lines (token refresh, upgrade hints) to
-	// stderr even on exit 0; CombinedOutput mixed them ahead of the JSON
-	// and every action failed to parse. Capture stdout for data, stderr
-	// only for error reporting.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -344,7 +309,6 @@ func ghRun(ctx context.Context, dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// currentBranch returns the current git branch name.
 func currentBranch(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
@@ -352,16 +316,13 @@ func currentBranch(ctx context.Context, dir string) (string, error) {
 		return "", err
 	}
 	branch := strings.TrimSpace(string(out))
-	// #1642-3: on a detached HEAD rev-parse SUCCEEDS and prints the
-	// literal "HEAD" - callers then pass --branch HEAD to gh, which fails
-	// with a confusing error instead of a clear "detached HEAD" message.
+
 	if branch == "HEAD" {
 		return "", fmt.Errorf("detached HEAD state: no branch is checked out (git switch <branch> first)")
 	}
 	return branch, nil
 }
 
-// shortSHA truncates a full SHA to a short form.
 func shortSHA(sha string) string {
 	if len(sha) > 7 {
 		return sha[:7]
@@ -369,7 +330,6 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// statusIcon returns a one-char indicator for a run status.
 func statusIcon(status, conclusion string) string {
 	switch {
 	case status == "in_progress":

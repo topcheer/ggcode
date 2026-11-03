@@ -1,50 +1,5 @@
 package agent
 
-// Last-Known-Good Checkpoint -- actionable revert targets for failed self-correction
-//
-// Research basis: "Agent self-correction has 3 distinct failure modes" (2026):
-//   1. False convergence (symptom suppression)
-//   2. Correction-induced regression (fix A breaks B → oscillation)
-//   3. Context collapse on long repair chains
-//
-// Existing ggcode systems that are CLOSE but don't cover this:
-//
-//   - self_correction_gate.go: detects net-negative self-correction (EIR > ECR)
-//     and tells the agent to "consider reverting your recent edits" -- but provides
-//     ZERO actionable detail about WHICH files to revert or HOW. The agent is left
-//     guessing, often reverting the wrong file or manually diffing.
-//   - verify_regression.go: classifies errors as NEW/PERSISTENT/RESOLVED but
-//     doesn't link regressions back to the specific edits that caused them.
-//   - convergence_lock.go: detects post-success unnecessary edits, not pre-success
-//     regression-causing edits.
-//   - checkpoint/ package: full-session undo checkpoints, but not lightweight
-//     per-verification-cycle snapshots tied to the last-known-good state.
-//
-// The gap: when the self-correction gate fires, the agent needs to know:
-//   - Which files were modified AFTER the last passing verification
-//   - Which of those files are the most likely regression sources
-//   - A concrete git command to revert to the last-known-good state
-//
-// Competitor analysis:
-//   - Claude Code: tracks file changes since last test pass; suggests `git checkout`
-//     on specific files when stuck in a repair loop
-//   - Cursor: maintains a checkpoint of the last working state and offers one-click
-//     revert to it via its checkpoint system
-//   - Aider: automatically commits after each LLM edit, making `git diff` and
-//     `git checkout` trivially reversible per-step
-//   - Devin: tracks a "last green" snapshot and can auto-revert when stuck
-//
-// Our approach: lightweight file-set snapshot. When verification PASSES, record
-// the set of files that existed at that point (the "last-known-good" state).
-// When verification FAILS and regressions are detected, diff the current modified
-// file set against the last-known-good set to identify:
-//   - Files modified since last green (primary revert candidates)
-//   - Files added since last green (safe to delete / review)
-//
-// This is pure in-memory state -- zero disk I/O, zero LLM cost. It complements
-// the self-correction gate by converting its generic "consider reverting" advice
-// into specific, actionable file-level guidance.
-
 import (
 	"fmt"
 	"path/filepath"
@@ -54,50 +9,24 @@ import (
 )
 
 const (
-	// checkpointMaxFiles limits the number of files listed in the revert guidance
-	// to avoid context flooding when a large refactor is in progress.
 	checkpointMaxFiles = 10
 
-	// checkpointMinVerifyCycles gates revert guidance on having at least one
-	// verification cycle. NOTE (#423): this gate is UNREACHABLE via the public
-	// flow — hasBaseline is only set after verifyCycles++ in
-	// recordVerifyPass/Fail, so reaching this point implies verifyCycles >= 1.
-	// Retained for defensive direct-use; not part of the normal path.
 	checkpointMinVerifyCycles = 1
 )
 
-// lastGoodCheckpoint tracks the set of files modified at the last passing
-// verification, enabling actionable revert guidance when self-correction fails.
 type lastGoodCheckpoint struct {
-	// lastGoodFiles is the set of files that were modified as of the last
-	// passing verification. Empty until the first verify pass.
 	lastGoodFiles map[string]bool
 
-	// hasBaseline is true after the first verification (pass or fail).
 	hasBaseline bool
 
-	// verifyCycles counts total verification cycles (pass + fail).
 	verifyCycles int
 
-	// lastVerifyFailed is true if the most recent verification failed.
-	// Used to gate revertGuidance -- only provide guidance after a failure.
 	lastVerifyFailed bool
 
-	// currentModifiedFiles tracks files modified in the current edit cycle
-	// (since the last verification, regardless of outcome).
 	currentModifiedFiles map[string]bool
 
-	// filesModifiedSinceLastGood tracks ALL files modified since the last
-	// passing verification. This is the key revert-candidate set.
 	filesModifiedSinceLastGood map[string]bool
 
-	// preExistingFiles records which of the files we touched were already
-	// present on disk BEFORE the first edit of this run (#423). Distinguishing
-	// "new file" from "first edit of a pre-existing file" cannot be done from
-	// lastGoodFiles (which only contains files edited during the previous
-	// green cycle) — a git-tracked existing file edited for the first time
-	// was misclassified as "(new)" and the guidance suggested REMOVING it
-	// instead of the correct `git checkout` rollback.
 	preExistingFiles map[string]bool
 }
 
@@ -123,22 +52,12 @@ func (c *lastGoodCheckpoint) reset() {
 	c.preExistingFiles = make(map[string]bool)
 }
 
-// recordFileEdit tracks a file modification during the current edit cycle.
-// Called from the agent's tool execution path for file-editing tools.
 func (c *lastGoodCheckpoint) recordFileEdit(filePath, workingDir string) {
 	if c == nil || filePath == "" {
 		return
 	}
 	fp := filepath.Clean(filePath)
-	// #423: remember whether the file already existed on disk before we
-	// touched it — the first edit of a PRE-EXISTING file is a modification
-	// (git checkout applies), not a new file (remove advice).
-	// #1469-A: os.Stat runs AFTER the tool executed (the call site is in
-	// the result-handling block), so a just-created file always exists and
-	// every new file was misclassified pre-existing - the git-checkout
-	// recovery advice then failed 100% of the time with 'pathspec did not
-	// match'. Track git-tracked status instead: only tracked files can be
-	// restored by git checkout.
+
 	if _, tracked := c.preExistingFiles[fp]; !tracked {
 		c.preExistingFiles[fp] = gitIsTracked(fp, workingDir)
 	}
@@ -146,8 +65,6 @@ func (c *lastGoodCheckpoint) recordFileEdit(filePath, workingDir string) {
 	c.filesModifiedSinceLastGood[fp] = true
 }
 
-// recordVerifyPass is called when verification passes. It snapshots the
-// current modified file set as the new "last-known-good" state.
 func (c *lastGoodCheckpoint) recordVerifyPass() {
 	if c == nil {
 		return
@@ -156,20 +73,16 @@ func (c *lastGoodCheckpoint) recordVerifyPass() {
 	c.hasBaseline = true
 	c.lastVerifyFailed = false
 
-	// Snapshot current state as the new last-known-good.
 	c.lastGoodFiles = make(map[string]bool, len(c.currentModifiedFiles))
 	for f := range c.currentModifiedFiles {
 		c.lastGoodFiles[f] = true
 	}
 
-	// Reset the since-last-good tracker -- everything is green now.
 	c.filesModifiedSinceLastGood = make(map[string]bool)
 
 	debug.Log("last-good-checkpoint", "verify PASSED: checkpoint updated with %d files", len(c.lastGoodFiles))
 }
 
-// recordVerifyFail is called when verification fails. It records the cycle
-// but does not update the last-known-good state.
 func (c *lastGoodCheckpoint) recordVerifyFail() {
 	if c == nil {
 		return
@@ -179,16 +92,11 @@ func (c *lastGoodCheckpoint) recordVerifyFail() {
 	c.lastVerifyFailed = true
 }
 
-// revertGuidance generates actionable file-level revert guidance when the
-// self-correction loop is detected as net-negative. Returns empty string if
-// no guidance is warranted (no baseline, no files modified since last good,
-// or the last verification passed).
 func (c *lastGoodCheckpoint) revertGuidance() string {
 	if c == nil || !c.hasBaseline || !c.lastVerifyFailed {
 		return ""
 	}
-	// (#423: this check is defensively unreachable — hasBaseline implies
-	// verifyCycles >= 1 — kept only for direct/test use.)
+
 	if c.verifyCycles < checkpointMinVerifyCycles {
 		return ""
 	}
@@ -196,12 +104,6 @@ func (c *lastGoodCheckpoint) revertGuidance() string {
 		return ""
 	}
 
-	// Categorize files (#423): "modified" = edited since last good AND the
-	// file existed before we first touched it (git checkout applies);
-	// "new" = created by this run (never existed on disk before our edit).
-	// The old check (lastGoodFiles membership) conflated "first edit of a
-	// pre-existing git-tracked file" with "newly created", advising the
-	// destructive removal of repository files.
 	var modifiedSinceGood, newFiles []string
 	for f := range c.filesModifiedSinceLastGood {
 		if c.preExistingFiles[f] || c.lastGoodFiles[f] {
@@ -218,8 +120,6 @@ func (c *lastGoodCheckpoint) revertGuidance() string {
 	return c.formatRevertGuidance(modifiedSinceGood, newFiles)
 }
 
-// formatRevertGuidance builds the revert message for files that were modified
-// or created since the last passing verification.
 func (c *lastGoodCheckpoint) formatRevertGuidance(modifiedFiles, newFiles []string) string {
 	total := len(modifiedFiles) + len(newFiles)
 	debug.Log("last-good-checkpoint", "generating revert guidance: %d modified, %d new since last good", len(modifiedFiles), len(newFiles))
@@ -260,9 +160,6 @@ func (c *lastGoodCheckpoint) formatRevertGuidance(modifiedFiles, newFiles []stri
 	return b.String()
 }
 
-// --- Agent integration methods ---
-
-// lastGoodCheckpointRecordEdit records a file modification for checkpoint tracking.
 func (a *Agent) lastGoodCheckpointRecordEdit(toolName string, fileHint string) {
 	if a.lastGoodCheckpoint == nil {
 		return
@@ -276,22 +173,18 @@ func (a *Agent) lastGoodCheckpointRecordEdit(toolName string, fileHint string) {
 	a.lastGoodCheckpoint.recordFileEdit(fileHint, dir)
 }
 
-// lastGoodCheckpointRecordPass records a passing verification.
 func (a *Agent) lastGoodCheckpointRecordPass() {
 	if a.lastGoodCheckpoint != nil {
 		a.lastGoodCheckpoint.recordVerifyPass()
 	}
 }
 
-// lastGoodCheckpointRecordFail records a failing verification.
 func (a *Agent) lastGoodCheckpointRecordFail() {
 	if a.lastGoodCheckpoint != nil {
 		a.lastGoodCheckpoint.recordVerifyFail()
 	}
 }
 
-// lastGoodCheckpointGuidance returns actionable revert guidance when the
-// self-correction loop is net-negative.
 func (a *Agent) lastGoodCheckpointGuidance() string {
 	if a.lastGoodCheckpoint == nil {
 		return ""
@@ -299,15 +192,12 @@ func (a *Agent) lastGoodCheckpointGuidance() string {
 	return a.lastGoodCheckpoint.revertGuidance()
 }
 
-// resetLastGoodCheckpoint clears checkpoint state for a new run.
 func (a *Agent) resetLastGoodCheckpoint() {
 	if a.lastGoodCheckpoint != nil {
 		a.lastGoodCheckpoint.reset()
 	}
 }
 
-// gitIsTracked reports whether the path is tracked by git in workingDir -
-// only tracked files can be restored by `git checkout --` (#1469-A).
 func gitIsTracked(path, workingDir string) bool {
 	if path == "" || workingDir == "" {
 		return false

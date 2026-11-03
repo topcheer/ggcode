@@ -47,13 +47,13 @@ func TestDetectBatchEditConflicts_SameFileEditTwice(t *testing.T) {
 	if len(warnings) != 2 {
 		t.Fatalf("expected 2 warnings (first + subsequent), got %d", len(warnings))
 	}
-	// Index 0 = first conflict warning
+
 	if w, ok := warnings[0]; !ok {
 		t.Fatal("expected warning for index 0")
 	} else if !strings.Contains(w, "batch conflict") {
 		t.Fatalf("warning[0] unexpected: %s", w)
 	}
-	// Index 1 = subsequent conflict warning
+
 	if w, ok := warnings[1]; !ok {
 		t.Fatal("expected warning for index 1")
 	} else if !strings.Contains(w, "already modified") {
@@ -80,7 +80,7 @@ func TestDetectBatchEditConflicts_MultiFileEdit(t *testing.T) {
 		{Name: "edit_file", Arguments: mustJSON(t, map[string]string{"file_path": "y.go"})},
 	}
 	warnings := detectBatchEditConflicts(calls)
-	// y.go appears in both calls → conflict.
+
 	if len(warnings) != 2 {
 		t.Fatalf("expected 2 warnings (multi_file_edit and edit_file both touch y.go), got %d", len(warnings))
 	}
@@ -104,15 +104,13 @@ func TestDetectBatchEditConflicts_CaseInsensitive(t *testing.T) {
 	}
 	warnings := detectBatchEditConflicts(calls)
 	if batchPathFoldActive() {
-		// Case-insensitive filesystem (macOS APFS, Windows): Foo.go and
-		// foo.go are the same file, so both calls get a conflict warning.
+
 		if len(warnings) != 2 {
 			t.Fatalf("expected conflict for case-insensitive paths, got %d", len(warnings))
 		}
 		return
 	}
-	// Case-sensitive filesystem (Linux ext4, #714): distinct files, no
-	// conflict. The unconditional 2-warning expectation broke Linux CI.
+
 	if len(warnings) != 0 {
 		t.Fatalf("case-sensitive platform: Foo.go vs foo.go are different files, got %d warnings", len(warnings))
 	}
@@ -128,7 +126,7 @@ func TestDetectBatchEditConflicts_ThreeCallsSameFile(t *testing.T) {
 	if len(warnings) != 3 {
 		t.Fatalf("expected 3 warnings for 3 conflicting calls, got %d", len(warnings))
 	}
-	// First call should mention 2 others.
+
 	if !strings.Contains(warnings[0], "2 other edit") {
 		t.Fatalf("first warning should mention 2 others: %s", warnings[0])
 	}
@@ -152,7 +150,7 @@ func TestDetectBatchEditConflicts_EmptyAndInvalidArgs(t *testing.T) {
 		{Name: "edit_file", Arguments: mustJSON(t, map[string]string{"file_path": "a.go"})},
 	}
 	warnings := detectBatchEditConflicts(calls)
-	// Only one valid call to a.go → no conflict.
+
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings with invalid args, got %d", len(warnings))
 	}
@@ -168,7 +166,7 @@ func TestExtractFilePathsForConflict_AllToolTypes(t *testing.T) {
 		{"write_file", map[string]any{"path": "b.go"}, 1},
 		{"multi_edit_file", map[string]any{"file_path": "c.go"}, 1},
 		{"notebook_edit", map[string]any{"notebook_path": "d.ipynb"}, 1},
-		{"read_file", map[string]any{"path": "e.go"}, 0}, // not an editing tool
+		{"read_file", map[string]any{"path": "e.go"}, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

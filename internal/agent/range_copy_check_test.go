@@ -54,7 +54,7 @@ func modifyItem(i *Item) {}
 }
 
 func TestCheckRangeCopyMod_NoValueVar(t *testing.T) {
-	// for i := range - no value variable, no issue
+
 	src := `package main
 
 func process(items []int) {
@@ -70,7 +70,7 @@ func process(items []int) {
 }
 
 func TestCheckRangeCopyMod_BlankValue(t *testing.T) {
-	// for _, _ := range - blank value
+
 	src := `package main
 
 func process(items []int) {
@@ -85,7 +85,7 @@ func process(items []int) {
 }
 
 func TestCheckRangeCopyMod_UnmodifiedValueVar(t *testing.T) {
-	// Value var is read but not modified
+
 	src := `package main
 
 func process(items []int) {
@@ -115,13 +115,12 @@ func modify(items []Item) {
 	}
 }
 `
-	// Same content - should produce no new warnings
+
 	warnings := checkRangeCopyMod("test.go", old, old)
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 delta warnings, got %d: %v", len(warnings), warnings)
 	}
 
-	// New pattern added
 	newSrc := old + `
 func modify2(more []Item) {
 	for _, it := range more {
@@ -197,7 +196,7 @@ func broken( {
 }
 
 func TestCheckRangeCopyMod_NestedRange(t *testing.T) {
-	// Range variable modified inside a nested block
+
 	src := `package main
 
 type Item struct {

@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// initGitRepo creates a temporary git repository for testing.
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,7 +26,6 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
-// writeGoFile writes a Go source file and creates parent directories.
 func writeGoFile(t *testing.T, dir, relPath, content string) {
 	t.Helper()
 	abs := filepath.Join(dir, relPath)
@@ -41,7 +39,7 @@ func writeGoFile(t *testing.T, dir, relPath, content string) {
 
 func TestChangedGoFilesFromGit_EmptyDir(t *testing.T) {
 	tmp := t.TempDir()
-	// Not a git repo — should return nil.
+
 	if files := changedGoFilesFromGit(tmp); files != nil {
 		t.Errorf("expected nil in non-git dir, got %v", files)
 	}
@@ -67,7 +65,6 @@ func TestChangedGoFilesFromGit_NewFile(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Create a new untracked Go file.
 	writeGoFile(t, dir, "internal/foo/bar.go", "package foo\n")
 
 	files := changedGoFilesFromGit(dir)
@@ -85,7 +82,6 @@ func TestChangedGoFilesFromGit_ExcludesTestFiles(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Create both a source file and a test file.
 	writeGoFile(t, dir, "foo.go", "package main\n")
 	writeGoFile(t, dir, "foo_test.go", "package main\n")
 
@@ -109,7 +105,6 @@ func TestChangedGoPackageDirs(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Create files in multiple packages.
 	writeGoFile(t, dir, "internal/agent/foo.go", "package agent\n")
 	writeGoFile(t, dir, "internal/util/bar.go", "package util\n")
 	writeGoFile(t, dir, "internal/agent/baz.go", "package agent\n")
@@ -118,7 +113,7 @@ func TestChangedGoPackageDirs(t *testing.T) {
 	if len(dirs) != 2 {
 		t.Fatalf("expected 2 package dirs, got %d: %v", len(dirs), dirs)
 	}
-	// Should be sorted.
+
 	if dirs[0] != "internal/agent" || dirs[1] != "internal/util" {
 		t.Errorf("unexpected dirs: %v", dirs)
 	}
@@ -166,14 +161,11 @@ func TestUntestedChangedFiles(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// File with test.
 	writeGoFile(t, dir, "tested.go", "package main\n")
 	writeGoFile(t, dir, "tested_test.go", "package main\n")
-	// File in the same package without its own sibling: #3620 package-level
-	// semantics - ANY *_test.go in the directory covers it (same rule as
-	// missing_test_check.go), so it is NOT untested.
+
 	writeGoFile(t, dir, "peer.go", "package main\n")
-	// True gap: a package with no test file at all.
+
 	writeGoFile(t, dir, "pkg/untested.go", "package pkg\n")
 
 	untested := untestedChangedFiles(dir)
@@ -206,7 +198,6 @@ func TestImpactScopedTestCommand(t *testing.T) {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Change files in two packages.
 	writeGoFile(t, dir, "internal/agent/foo.go", "package agent\n")
 	writeGoFile(t, dir, "internal/util/bar.go", "package util\n")
 
@@ -308,9 +299,7 @@ func TestTestCoverageNudge_WithTests(t *testing.T) {
 }
 
 func TestPostEditVerifyHintWithImpactAndCoverage(t *testing.T) {
-	// This test verifies that postEditVerifyHint integrates the impact-scoped
-	// command and coverage nudge when in a git repo. We create a real git repo
-	// with changed Go files and verify the hint includes both pieces.
+
 	dir := initGitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -323,7 +312,6 @@ func TestPostEditVerifyHintWithImpactAndCoverage(t *testing.T) {
 		t.Fatalf("git commit failed: %v: %s", err, out)
 	}
 
-	// Create an untested Go file in a subpackage.
 	sub := filepath.Join(dir, "internal", "agent")
 	if err := os.MkdirAll(sub, 0755); err != nil {
 		t.Fatal(err)
@@ -342,11 +330,11 @@ func TestPostEditVerifyHintWithImpactAndCoverage(t *testing.T) {
 	if hint == "" {
 		t.Fatal("expected hint after 3 edits")
 	}
-	// Should contain the full-suite fallback.
+
 	if !strings.Contains(hint, "go build ./...") {
 		t.Errorf("hint should contain full-suite command, got: %s", hint)
 	}
-	// Should contain the coverage nudge since foo.go has no test.
+
 	if !strings.Contains(hint, "Test coverage gap") {
 		t.Errorf("hint should contain coverage nudge, got: %s", hint)
 	}

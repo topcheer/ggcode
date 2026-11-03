@@ -10,17 +10,9 @@ import (
 	"time"
 )
 
-// TestIssue2770LockTrajFileBounded pins #2770: the Unix lockTrajFile must
-// honor the "Must never panic or block" post-run contract by bounding its
-// acquisition (5s deadline, matching the Windows counterpart). Before the
-// fix, LOCK_EX blocked indefinitely when another process held the flock -
-// hanging the synchronous post-run defer block and the whole run teardown.
 func TestIssue2770LockTrajFileBounded(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "traj.lock")
 
-	// Hold the flock from a REAL separate file description (a second open on
-	// the same path in this process is enough - flock is per open file
-	// description, so this holder competes exactly like another process).
 	holder, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatalf("open holder: %v", err)
@@ -31,9 +23,6 @@ func TestIssue2770LockTrajFileBounded(t *testing.T) {
 	}
 	defer syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
 
-	// The acquisition attempt must give up within the deadline instead of
-	// blocking forever. We assert it returns (with a deadline error) inside
-	// a generous window (>5s deadline, <20s guard).
 	done := make(chan error, 1)
 	go func() {
 		unlock, err := lockTrajFile(lockPath)
@@ -56,9 +45,6 @@ func TestIssue2770LockTrajFileBounded(t *testing.T) {
 	}
 }
 
-// TestIssue2770LockTrajFileUncontendedFast pins that the bounded path does
-// not regress the uncontended case: with no holder, acquisition succeeds
-// immediately and the returned unlock func releases the lock.
 func TestIssue2770LockTrajFileUncontendedFast(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "traj.lock")
 
@@ -71,7 +57,6 @@ func TestIssue2770LockTrajFileUncontendedFast(t *testing.T) {
 		t.Fatalf("uncontended acquisition took %v - retry loop misconfigured", elapsed)
 	}
 
-	// unlock must free the lock for a second acquisition.
 	unlock()
 	unlock2, err := lockTrajFile(lockPath)
 	if err != nil {

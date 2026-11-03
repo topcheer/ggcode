@@ -2,14 +2,9 @@ package agent
 
 import "testing"
 
-// #4197: "no need to X" is a neutral/benign instruction (same family as
-// "no problem" / "no worries") but was missing from the positive whitelist.
-// The bare rejection word "no" at the start of a short message then took the
-// isShort rejection path and injected misleading "do NOT repeat your
-// previous approach" guidance for a friendly instruction.
 func TestIssue4197_NoNeedNotNegative(t *testing.T) {
 	cases := []string{
-		"No need to rerun tests, thanks!", // exact trigger from the issue
+		"No need to rerun tests, thanks!",
 		"no need to rerun tests",
 		"No need to wait",
 		"no need to apologize",
@@ -21,7 +16,6 @@ func TestIssue4197_NoNeedNotNegative(t *testing.T) {
 	}
 }
 
-// Control: genuine rejections must still fire after the whitelist addition.
 func TestIssue4197_RealRejectionStillDetected(t *testing.T) {
 	cases := []string{
 		"No, this is wrong",

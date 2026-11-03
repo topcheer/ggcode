@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 )
 
-// SendMessageTool sends a message to one or all running sub-agents or swarm teammates.
 type SendMessageTool struct {
 	Manager  *subagent.Manager
 	SwarmMgr *swarm.Manager
@@ -75,13 +74,10 @@ func (t SendMessageTool) Execute(_ context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: "message is required"}, nil
 	}
 
-	// Route to swarm teammate if team_id is provided
 	if args.TeamID != "" && t.SwarmMgr != nil {
 		return t.sendToSwarm(args.To, args.Message, args.Summary, args.TeamID)
 	}
 
-	// Auto-route: if to looks like a teammate ID (tm-*) and SwarmMgr is available,
-	// search all teams to find the teammate even without explicit team_id.
 	if args.TeamID == "" && t.SwarmMgr != nil && strings.HasPrefix(args.To, "tm-") {
 		for _, team := range t.SwarmMgr.ListTeams() {
 			for _, tm := range team.Teammates {
@@ -101,12 +97,12 @@ func (t SendMessageTool) Execute(_ context.Context, input json.RawMessage) (Resu
 
 	if args.To == "*" {
 		var allSent []string
-		// Broadcast to sub-agents
+
 		if t.Manager != nil {
 			sent := t.Manager.Broadcast(msg)
 			allSent = append(allSent, sent...)
 		}
-		// Also broadcast to all swarm teammates
+
 		if t.SwarmMgr != nil {
 			for _, team := range t.SwarmMgr.ListTeams() {
 				swarmMsg := swarm.MailMessage{
@@ -151,8 +147,6 @@ func (t SendMessageTool) sendToSwarm(to, message, summary, teamID string) (Resul
 		return Result{Content: fmt.Sprintf("Best-effort broadcast sent to %d teammate(s): %s. This is not tracked on the task board; use teammate_results for latest outputs.\n", len(sent), strings.Join(sent, ", "))}, nil
 	}
 
-	// Fire-and-forget: send message asynchronously. Teammate executes in its own goroutine.
-	// Use teammate_results to collect the output later.
 	if err := t.SwarmMgr.SendToTeammate(teamID, to, msg); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

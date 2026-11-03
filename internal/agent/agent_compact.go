@@ -13,25 +13,10 @@ import (
 
 const maxReactiveCompactRetries = 3
 
-// fallbackCheckpointThreshold is the message count at which we force a
-// checkpoint even if compaction never succeeded. This prevents unbounded
-// context growth when the summarization LLM call keeps failing (e.g., model
-// doesn't support it, rate limits, network issues). The agent keeps running
-// in autopilot mode, accumulating messages without any checkpoint, which
-// leads to multi-million-token sessions that take minutes to restore.
 const fallbackCheckpointThreshold = 500
 
-// fallbackCheckpointInterval is the minimum message-count GROWTH since the
-// last checkpoint before maybeFallbackCheckpoint writes another one
-// (#2905). The old equality check (==) almost never re-matched because the
-// count is monotonically increasing - the fallback fired on every Run
-// once past the threshold, spamming JSONL checkpoints and repeatedly
-// making an empty-lastMsgID record the "latest" checkpoint.
 const fallbackCheckpointInterval = 50
 
-// maybeFallbackCheckpoint saves a checkpoint when the message count exceeds
-// fallbackCheckpointThreshold, even if no compaction occurred. This is a
-// safety net for sessions where compaction keeps failing.
 func (a *Agent) maybeFallbackCheckpoint() {
 	a.mu.RLock()
 	fn := a.onCheckpoint
@@ -43,13 +28,7 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	if len(msgs) < fallbackCheckpointThreshold {
 		return
 	}
-	// Only save if enough messages arrived since the last checkpoint (avoid
-	// spamming). #1437-B: lastCheckpointMessageCount is written under a.mu by
-	// maybeSaveCheckpoint from OTHER goroutines (precompact runs in
-	// parallel with this loop); the read-check-write here was unlocked.
-	// #2905: equality (==) only suppressed the exact same count, which
-	// monotonically increasing counts never re-hit - every Run past the
-	// threshold fired. Require real growth instead.
+
 	a.mu.Lock()
 	if len(msgs)-a.lastCheckpointMessageCount < fallbackCheckpointInterval {
 		a.mu.Unlock()
@@ -59,35 +38,14 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	a.mu.Unlock()
 	tokenCount := a.contextManager.TokenCount()
 	debug.Log("agent", "fallback checkpoint: %d messages, %d tokens (compaction may have failed)", len(msgs), tokenCount)
-	// Use the real summary message ID if one exists in context.
-	// Using msgs[0] (typically the system prompt) as summary_msg_id is
-	// wrong — it causes loadSession to treat the system prompt as the
-	// checkpoint summary, loading the wrong context window.
+
 	fallbackID := a.contextManager.SummaryMsgID()
 	if fallbackID == "" {
-		// #1437-A: the old skip made the safety net 100% DEAD CODE in its
-		// only target scenario - SummaryMsgID is non-empty ONLY after a
-		// successful summarization compaction, so 'summarization keeps
-		// failing' (this function's charter) always skipped.
-		// #1518 case A: the interim fix anchored at the LAST message ID,
-		// but loadSession treats checkpoint_summary_msg_id as a summary
-		// SUBSTITUTE - it REPLACES everything before the anchor with that
-		// single message (store.go: ContextMessages = [summaryMsg]). With a
-		// real summary that one message carries the whole history forward;
-		// with a tail anchor it is one arbitrary message (possibly a bare
-		// tool_result whose paired tool_use is now dropped) and the extras
-		// are empty - resume context collapsed to ~1 message, WORSE than
-		// the no-checkpoint path which restores the last 200. In the exact
-		// scenario this net protects (long session, compaction never
-		// succeeded, crash), skip: no checkpoint -> loadSession takes the
-		// no-checkpoint path and restores the full tail window.
+
 		debug.Log("checkpoint", "fallback checkpoint: no summary message; skipping (tail anchor would replace history with one message)")
 		return
 	}
-	// #2905: anchor at the LAST message ID (mirrors maybeSaveCheckpoint's
-	// lmid fallback) instead of "" - an empty lastMsgID checkpoint record
-	// becoming the latest degraded resume positioning for every subsequent
-	// real compaction checkpoint.
+
 	lmid := ""
 	if n := len(msgs); n > 0 {
 		lmid = msgs[n-1].ID
@@ -95,9 +53,6 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	fn(fallbackID, lmid, tokenCount)
 }
 
-// MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
-// Microcompact was removed — precompact at 97.5% + reactive compact on PTL
-// now handle all compaction needs without corrupting tool_result data.
 func (a *Agent) MicrocompactIfOverThreshold() (compacted bool, beforeTokens int, afterTokens int) {
 	tokens := a.contextManager.TokenCount()
 	return false, tokens, tokens
@@ -111,13 +66,10 @@ type oldestGroupTruncater interface {
 	TruncateOldestGroupForRetry() bool
 }
 
-// isPromptTooLongError detects context-length errors from any provider.
 func isPromptTooLongError(err error) bool {
 	return provider.IsContextOverflowError(err)
 }
 
-// tryReactiveCompact attempts compaction after a prompt-too-long error.
-// Returns true if compaction succeeded and the caller should retry.
 func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.StreamEvent), err error, retries *int) bool {
 	if !isPromptTooLongError(err) {
 		debug.Log("agent", "tryReactiveCompact: not a PTL error: %v", err)
@@ -130,7 +82,6 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	tokens := a.contextManager.TokenCount()
 	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d maxTokens=%d attempting compact", tokens, a.contextManager.ContextWindow())
 
-	// Infer actual context window from the overflow error.
 	a.mu.Lock()
 	pk := a.probeKey
 	a.mu.Unlock()
@@ -155,7 +106,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		}
 		return true
 	}
-	// Cancel any still-running precompact before modifying live messages.
+
 	a.CancelPreCompact()
 	if a.compactLocallyForSendBudget("reactive compact") {
 		if retries != nil {
@@ -166,20 +117,15 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	debug.Log("agent", "reactive compact: compacting conversation")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
-	// sa-159: pre_compact fires before the reactive summarization attempt so
-	// hooks can persist state while the full context still exists. Best-effort:
-	// PTL recovery must proceed regardless of hook outcome.
+
 	if res := hooks.RunPreCompactHooks(a.GetHookConfig(), hooks.HookEnv{
 		TokenBefore:    tokens,
 		CompactTrigger: "reactive",
 	}); res.Err != nil {
 		debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
 	}
-	// r491: same pre-compaction memory flush on the reactive path (PTL
-	// recovery). If an auto pre-compact flush already covered this slice the
-	// merge-dedupe makes this a no-op.
+
 	a.preflushFacts("reactive", a.contextManager.Messages())
-	// Capture last message ID BEFORE compaction for checkpoint.
 	var lastMsgID string
 	if msgs := a.contextManager.Messages(); len(msgs) > 0 {
 		lastMsgID = msgs[len(msgs)-1].ID
@@ -190,9 +136,6 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		debug.Log("agent", "reactive compact: summarization failed (%v), falling back to truncation", compactErr)
 	}
 
-	// Always try truncation as a fallback, even if summarization failed.
-	// This prevents the context from growing unbounded when the summarization
-	// LLM call keeps failing (e.g., model doesn't support it, rate limits).
 	if cm, ok := a.contextManager.(interface{ TruncateOldestGroupForRetry() bool }); ok {
 		if cm.TruncateOldestGroupForRetry() {
 			changed = true
@@ -206,16 +149,14 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	a.resetGuidanceCounters()
 	newTokens := a.contextManager.TokenCount()
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, newTokens)})
-	// Fire on_compaction hooks (fire-and-forget).
+
 	hookCfg := a.GetHookConfig()
 	hooks.RunCompactionHooks(hookCfg, hooks.HookEnv{
 		TokenBefore:    tokens,
 		TokenAfter:     newTokens,
 		CompactTrigger: "reactive",
 	})
-	// Always save checkpoint after reactive compact — the live context was
-	// modified and must be persisted so --resume can restore the compacted
-	// state instead of re-loading the full pre-compaction message history.
+
 	a.maybeSaveCheckpoint(lastMsgID)
 	if retries != nil {
 		*retries = *retries + 1
@@ -224,11 +165,6 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	return true
 }
 
-// maybeAutoCompact keeps the hot LLM path non-blocking. When token usage
-// exceeds the auto-compact threshold (contextWindow - fixedPromptOverhead), it
-// schedules a background precompact (LLM summarization). If precompact succeeds,
-// the next turn will consume the result and shrink the context. If precompact
-// fails or is too slow, reactive compact (PTL recovery) handles it synchronously.
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
 	tokens := a.contextManager.TokenCount()
 	threshold := a.contextManager.AutoCompactThreshold()
@@ -236,12 +172,10 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d maxTokens=%d",
 		tokens, threshold, a.contextManager.ContextWindow())
 
-	// Trigger precompact when message tokens reach the fixed-overhead threshold.
 	if tokens < threshold {
 		return nil
 	}
 
-	// If a precompact is already running, skip entirely
 	a.mu.Lock()
 	precompactRunning := a.precompact != nil
 	cooldownUntil := a.precompactCooldownUntil
@@ -251,14 +185,11 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
-	// Cooldown: after a precompact attempt (success or failure), wait before
-	// trying again.
 	if time.Now().Before(cooldownUntil) {
 		debug.Log("agent", "maybeAutoCompact: SKIP (cooldown active, %s remaining, tokens=%d)", time.Until(cooldownUntil).Round(time.Second), tokens)
 		return nil
 	}
 
-	// Schedule background precompact
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", tokens)})
 	const precompactCooldown = 2 * time.Minute
 	a.mu.Lock()
@@ -267,8 +198,6 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 
 	debug.Log("agent", "maybeAutoCompact: scheduling background precompact tokens=%d threshold=%d cooldown=%s", tokens, threshold, precompactCooldown)
 
-	// Log context budget breakdown to provide visibility into what's consuming
-	// tokens. This helps diagnose context pressure and informs optimization.
 	if msgs, _ := a.contextManager.MessagesAndTokenCount(); len(msgs) > 0 {
 		bd := ctxpkg.AnalyzeBudget(msgs)
 		debug.Log("agent", "context budget breakdown:\n%s", bd.FormatHumanReadable())
@@ -285,13 +214,11 @@ func (a *Agent) ensurePromptSendable() {
 	if a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
-	// Consume completed precompact first
+
 	if a.consumeReadyPreCompact(nil) && a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
 
-	// If precompact is still running, we can't safely modify live messages.
-	// The prompt will likely exceed budget and trigger reactive compact (PTL).
 	a.mu.RLock()
 	precompactRunning := a.precompact != nil
 	a.mu.RUnlock()
@@ -300,8 +227,6 @@ func (a *Agent) ensurePromptSendable() {
 		return
 	}
 
-	// Last-resort: truncate oldest message groups to fit the budget.
-	// This is destructive but better than failing to send.
 	a.compactLocallyForSendBudget("pre-send hard guard")
 }
 
@@ -322,8 +247,6 @@ func (a *Agent) compactLocallyForSendBudget(reason string) bool {
 		return false
 	}
 
-	// Only truncation remains — no microcompact (removed to preserve
-	// tool_result integrity for precompact summarization).
 	changed := false
 	tokens := before
 	dropped := 0
@@ -345,8 +268,6 @@ func (a *Agent) compactLocallyForSendBudget(reason string) bool {
 	return changed
 }
 
-// maybeSaveCheckpoint triggers the checkpoint callback if one is registered.
-// This persists the compacted message state so --resume can skip re-compacting.
 func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 	a.mu.RLock()
 	fn := a.onCheckpoint
@@ -362,14 +283,13 @@ func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 		debug.Log("checkpoint", "maybeSaveCheckpoint: no summary message found, skipping")
 		return
 	}
-	// lastMsgID from snapshot (pre-compact). For synchronous compaction
-	// (slash /compact), it's the last message ID before compaction.
+
 	lmid := ""
 	if len(lastMsgID) > 0 {
 		lmid = lastMsgID[0]
 	}
 	if lmid == "" {
-		// Fallback: use last message in context
+
 		msgs := a.contextManager.Messages()
 		if len(msgs) > 0 {
 			lmid = msgs[len(msgs)-1].ID
@@ -377,20 +297,11 @@ func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 	}
 	fn(summaryMsgID, lmid, tokens)
 
-	// Update lastCheckpointMessageCount so maybeFallbackCheckpoint doesn't
-	// immediately fire and overwrite this checkpoint with a bogus fallback.
-	// maybeFallbackCheckpoint uses msgs[0].ID as summary_msg_id, which is
-	// typically the system prompt — not a real summary. If it overwrites
-	// the real checkpoint, session reload loses the correct summary and
-	// the agent sees the wrong context window.
 	a.mu.Lock()
 	a.lastCheckpointMessageCount = len(a.contextManager.Messages())
 	a.mu.Unlock()
 }
 
-// SaveCheckpointWithLastMsgID persists a checkpoint with an explicit lastMsgID.
-// Use this when the caller knows the last message ID before compaction
-// (e.g. slash /compact captures it before calling Summarize).
 func (a *Agent) SaveCheckpointWithLastMsgID(lastMsgID string) {
 	a.maybeSaveCheckpoint(lastMsgID)
 }

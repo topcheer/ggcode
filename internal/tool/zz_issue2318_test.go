@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// #2318: the CheckStale→write sequence must be serialized per path. Two
-// concurrent write_file calls to the same file used to both pass their stale
-// check inside the unlocked window, and the later rename silently clobbered
-// the earlier write. This pins the per-path mutual exclusion directly.
 func TestIssue2318WritePathLockIsPerPathMutex(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.txt")
@@ -21,7 +17,7 @@ func TestIssue2318WritePathLockIsPerPathMutex(t *testing.T) {
 	acquired := make(chan struct{})
 	go func() {
 		close(locked)
-		unlock2 := LockWritePath(p) // must block until unlock1
+		unlock2 := LockWritePath(p)
 		close(acquired)
 		unlock2()
 	}()
@@ -39,7 +35,6 @@ func TestIssue2318WritePathLockIsPerPathMutex(t *testing.T) {
 	}
 }
 
-// Different paths must not serialize against each other.
 func TestIssue2318DifferentPathsIndependent(t *testing.T) {
 	unlockA := LockWritePath("/tmp/zz-2318-a.txt")
 	acquired := make(chan struct{})
@@ -56,12 +51,6 @@ func TestIssue2318DifferentPathsIndependent(t *testing.T) {
 	unlockA()
 }
 
-// End-to-end shape: two racing writes both pass CheckStale only because the
-// window is closed by the lock - the second write's stale check now sees the
-// first write's recorded mtime and refuses... unless it legitimately re-read.
-// Here we verify the critical section actually serializes writes to disk:
-// with the lock, the final content is always one of the two FULL payloads,
-// never an interleaved/lost hybrid of the temp-file dance.
 func TestIssue2318ConcurrentWritesNeverLoseWholeFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "shared.txt")
@@ -77,7 +66,7 @@ func TestIssue2318ConcurrentWritesNeverLoseWholeFile(t *testing.T) {
 			unlock := LockWritePath(p)
 			defer unlock()
 			if stale, _ := defaultFileTracker.CheckStale(p); stale {
-				return // legitimately refused by the guard
+				return
 			}
 			_ = atomicWriteFile(p, []byte(payload), 0644)
 			defaultFileTracker.RecordWrite(p)

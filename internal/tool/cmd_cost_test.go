@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// resetCommandCosts isolates each test from the package-level map.
 func resetCommandCosts(t *testing.T) {
 	t.Helper()
 	saved := make(map[string]any)
@@ -30,13 +29,11 @@ func resetCommandCosts(t *testing.T) {
 func TestCommandCostHintRequiresHistoryAndThreshold(t *testing.T) {
 	resetCommandCosts(t)
 
-	// Thin history (1 run) never advises.
 	recordCommandCost("go test ./...", 5*time.Minute)
 	if h := commandCostHint("go test ./..."); h != "" {
 		t.Fatalf("single run must not advise, got %q", h)
 	}
 
-	// Cheap commands never advise regardless of run count.
 	for i := 0; i < 5; i++ {
 		recordCommandCost("ls -la", 10*time.Millisecond)
 	}
@@ -44,7 +41,6 @@ func TestCommandCostHintRequiresHistoryAndThreshold(t *testing.T) {
 		t.Fatalf("cheap command must not advise, got %q", h)
 	}
 
-	// Slow command with enough history advises.
 	for i := 0; i < 3; i++ {
 		recordCommandCost("make verify-ci", 3*time.Minute+20*time.Second)
 	}
@@ -62,11 +58,11 @@ func TestCommandCostKeyNormalization(t *testing.T) {
 
 	recordCommandCost("  go build ./...  ", 3*time.Minute)
 	recordCommandCost("go build ./...", 3*time.Minute)
-	// Both spellings collapse to one bucket: 2 runs, avg above threshold.
+
 	if h := commandCostHint("go build ./..."); h == "" {
 		t.Fatal("normalized spellings must share one history bucket")
 	}
-	// A different command must not inherit it.
+
 	if h := commandCostHint("go build ./cmd/..."); h != "" {
 		t.Fatalf("distinct command must have empty history, got %q", h)
 	}
@@ -100,7 +96,7 @@ func TestCommandCostConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 	if n, avg := (&costStat{}).snapshot(); n != 0 {
-		_ = avg // placeholder branch, never taken
+		_ = avg
 	}
 	if h := commandCostHint("race-probe"); h == "" {
 		t.Fatal("concurrent recordings must all land in the bucket")
@@ -120,8 +116,6 @@ func TestFormatCommandCostIncludesObservedAndHint(t *testing.T) {
 		t.Errorf("must include history hint when warranted: %q", out)
 	}
 
-	// Fast command: no cost line at all (below costReportMinElapsed and no
-	// history) - fast commands stay noise-free.
 	resetCommandCosts(t)
 	if out := formatCommandCost("echo hi", 5*time.Millisecond); out != "" {
 		t.Errorf("fast command must produce no cost line: %q", out)

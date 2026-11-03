@@ -1,44 +1,5 @@
 package agent
 
-// Orphaned Background Command Detection
-//
-// Research basis: Claude Code, Cursor, and Aider all track background processes
-// (long-running dev servers, file watchers, test runners) and surface them to
-// the user. However, none detect a common agent failure mode: the agent starts
-// a background command (start_command) and then FORGETS to check its output in
-// subsequent iterations. This leads to:
-//   - Silent failures (dev server crashed, tests hung, build errored)
-//   - Wasted iterations working on assumptions without verifying background output
-//   - Orphaned processes consuming resources after the agent moves on
-//   - Missed signals from streaming output (warnings, deprecations, errors)
-//
-// Competitor analysis:
-//   - Claude Code: shows running processes in a side panel but doesn't nudge
-//     the agent to check them
-//   - Cursor: terminal output is visible but the AI agent has no background
-//     process tracking
-//   - OpenHands: tracks process lifecycle but doesn't detect "forgotten" ones
-//   - Devin: has explicit process management UI but relies on user oversight
-//   - Aider: single-process model, no background commands
-//
-// Gap: No deterministic system detects when the agent has started a background
-// command but hasn't read its output for several iterations. This is especially
-// critical in autopilot/long-running tasks where the agent starts a dev server
-// or test watcher and then makes code changes without checking if the server
-// is still running or tests are passing.
-//
-// Our approach: track start_command calls and their job IDs, then detect when
-// read_command_output/wait_command hasn't been called for several iterations
-// after the background command was started. Inject a targeted nudge reminding
-// the agent to check the output. Zero LLM cost.
-//
-// Interaction with existing systems:
-//   - run_command: synchronous, completes immediately -- NOT tracked here
-//   - start_command: asynchronous, returns a job_id -- tracked as a bg command
-//   - read_command_output/wait_command: checks background output -- clears the
-//     "unchecked" state for that job
-//   - stop_command: terminates a background job -- removes it from tracking
-
 import (
 	"encoding/json"
 	"fmt"
@@ -48,49 +9,34 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// bgOrphanState tracks background commands started via start_command that
-// haven't had their output checked in subsequent iterations.
 type bgOrphanState struct {
 	mu sync.Mutex
 
-	// activeJobs maps job_id → metadata about the background command
 	activeJobs map[string]*bgJobInfo
 
-	// currentIteration tracks the current iteration number for staleness calculation
 	currentIteration int
 
-	// warned tracks job IDs we've already warned about (avoid repeat warnings)
 	warned map[string]bool
 
-	// injectionCount tracks how many orphan warnings we've injected this run
 	injectionCount int
 }
 
-// bgJobInfo holds metadata about a background command started by the agent.
 type bgJobInfo struct {
-	JobID           string // the job_id returned by start_command
-	Description     string // the description from the command args
-	Command         string // the actual command (truncated for display)
-	StartIter       int    // iteration when the command was started
-	LastCheckedIter int    // last iteration where output was read
+	JobID           string
+	Description     string
+	Command         string
+	StartIter       int
+	LastCheckedIter int
 }
 
 const (
-	// bgOrphanThreshold: minimum iterations between start_command and
-	// read_command_output before we warn. Set to 2 so the agent has one
-	// iteration to naturally check output before we intervene.
 	bgOrphanThreshold = 2
 
-	// bgOrphanMaxInjections: cap on how many orphan warnings per run to
-	// avoid context flooding in autopilot sessions with many bg commands.
 	bgOrphanMaxInjections = 3
 
-	// bgOrphanMaxJobs: cap on tracked background jobs to prevent unbounded
-	// memory growth in long-running sessions.
 	bgOrphanMaxJobs = 20
 )
 
-// newBgOrphanState creates a fresh background orphan detector.
 func newBgOrphanState() *bgOrphanState {
 	return &bgOrphanState{
 		activeJobs: make(map[string]*bgJobInfo),
@@ -98,7 +44,6 @@ func newBgOrphanState() *bgOrphanState {
 	}
 }
 
-// reset clears all state for a new run.
 func (s *bgOrphanState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,8 +53,6 @@ func (s *bgOrphanState) reset() {
 	s.injectionCount = 0
 }
 
-// recordStartCommand is called when the agent uses start_command. It parses
-// the result to extract the job_id and registers the background command.
 func (s *bgOrphanState) recordStartCommand(args json.RawMessage, result string, iteration int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,7 +63,6 @@ func (s *bgOrphanState) recordStartCommand(args json.RawMessage, result string, 
 	}
 
 	if len(s.activeJobs) >= bgOrphanMaxJobs {
-		// Evict oldest entry if at capacity
 		var oldestID string
 		var oldestIter int
 		for id, info := range s.activeJobs {
@@ -143,15 +85,6 @@ func (s *bgOrphanState) recordStartCommand(args json.RawMessage, result string, 
 	debug.Log("bg-orphan", "tracking background command job=%s desc=%s at iteration %d", jobID, desc, iteration)
 }
 
-// recordOutputCheck is called when the agent reads output from a background
-// command (read_command_output, wait_command). It marks the job as checked.
-// #1440-A: the result snapshot is parsed for a terminal "Status:" line -
-// completed/failed/crashed jobs leave tracking, so a COMPLETED job no
-// longer cycles false 'may have errored, hung' warnings (each re-check
-// cleared + re-fired) until the 3-injection budget burns out, leaving
-// genuinely orphaned jobs silent.
-// Note: write_command_input is NOT an output check — it only writes stdin
-// (#200).
 func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, iteration int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,21 +93,7 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 	if jobID == "" {
 		return
 	}
-	// #1771 case 2: the job manager evicts finished jobs beyond its ring
-	// (maxFinishedJobs=20) - reading an evicted job returns "command job
-	// %q not found" with NO Status: line, so the loop below never deleted
-	// it: LastCheckedIter refreshed, warned cleared, re-warned 2 iters
-	// later... burning the shared 3-injection budget on a job that is
-	// GONE while real orphans went silent. Treat the not-found error as
-	// the removal signal it is.
-	// #1879 case 2: anchor the not-found detection to the ERROR CHANNEL,
-	// not semantic content. A running job's own output can legitimately
-	// contain the words "command job" and "not found" (self-referential
-	// test output quoting the very error format); the full-text substring
-	// match deleted such a still-running job from activeJobs and the
-	// detector went permanently silent exactly when it later orphaned.
-	// The job manager emits this as a single error line, so match a line
-	// that starts with "Error: command job" and contains "not found".
+
 	if isCommandJobNotFoundResult(result) {
 		delete(s.activeJobs, jobID)
 		delete(s.warned, jobID)
@@ -184,11 +103,7 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 	if !ok {
 		return
 	}
-	// #1712 case 5: only the job MANAGER's own status block counts. Job
-	// OUTPUT (build logs echoing "Status: completed" from the program
-	// under test) must not retire the tracker. The manager's result
-	// always carries a "Job ID:" header line before the "Status:" line,
-	// so require that anchor - a bare echoed Status line lacks it.
+
 	jobIDSeen := false
 	for _, rawLine := range strings.Split(result, "\n") {
 		line := strings.TrimSpace(rawLine)
@@ -200,16 +115,11 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 			continue
 		}
 		if !jobIDSeen {
-			// Echoed program output, not the manager's status block.
+
 			continue
 		}
 		status := strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
-		// #1524: the renderer emits the job manager's LOWERCASE value
-		// domain (running/completed/failed/cancelled/timed_out). #1440's
-		// fix compared UPPERCASE literals (SUCCESS/FAILED/CRASHED/REMOVED)
-		// that never occur - completed jobs stayed in activeJobs, fired
-		// false orphan warnings until the injection budget burned out, and
-		// real orphans went permanently silent after that.
+
 		switch strings.ToLower(status) {
 		case "completed", "failed", "cancelled", "timed_out":
 			delete(s.activeJobs, jobID)
@@ -218,11 +128,10 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 		}
 	}
 	info.LastCheckedIter = iteration
-	// Clear any prior warning so we can re-warn if it goes stale again
+
 	delete(s.warned, jobID)
 }
 
-// recordStopCommand removes a job from tracking when stop_command is called.
 func (s *bgOrphanState) recordStopCommand(args json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,8 +144,6 @@ func (s *bgOrphanState) recordStopCommand(args json.RawMessage) {
 	delete(s.warned, jobID)
 }
 
-// checkOrphanedCommands returns a guidance message if any background commands
-// have been unchecked for too long, or empty string if all clear.
 func (s *bgOrphanState) checkOrphanedCommands(iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -300,11 +207,6 @@ func (s *bgOrphanState) checkOrphanedCommands(iteration int) string {
 	return sb.String()
 }
 
-// indexFoldASCII finds the byte offset of an ASCII needle in s ignoring
-// letter case, WITHOUT building a lowered copy - offsets stay valid on
-// the original string even when ToLower would change byte lengths
-// (#2098: İ 2B->1B, ẞ 3B->2B shifted the slice cut). Returns -1 when
-// absent.
 func indexFoldASCII(s, needle string) int {
 	if needle == "" {
 		return 0
@@ -350,24 +252,16 @@ func equalFoldASCII(a, b string) bool {
 	return true
 }
 
-// extractJobID parses a start_command result to find the returned job_id.
-// The result text typically contains "job_id": "<id>" or "Job ID: <id>".
 func extractJobID(result string) string {
-	// Try JSON-style "job_id": "xxx"
+
 	if id := extractJSONBgField(result, "job_id"); id != "" {
 		return id
 	}
-	// Try "Job ID: xxx" format
-	// #2098: the old strings.Index(strings.ToLower(result), ...) computed
-	// the offset on the LOWERED copy but sliced the ORIGINAL - ToLower
-	// changes byte length for some runes (İ 2B->1B, ẞ 3B->2B), so any
-	// such char in a prepended Rules block shifted the cut onto garbage
-	// (extracted ":" as the job id: orphan detection went blind on the
-	// real job and nudged a fake one).
+
 	if idx := indexFoldASCII(result, "job id:"); idx >= 0 {
 		rest := result[idx+7:]
 		rest = strings.TrimSpace(rest)
-		// Take first token/quoted string
+
 		if strings.HasPrefix(rest, "\"") || strings.HasPrefix(rest, "'") {
 			q := rest[0]
 			end := strings.IndexByte(rest[1:], q)
@@ -375,7 +269,7 @@ func extractJobID(result string) string {
 				return rest[1 : 1+end]
 			}
 		}
-		// Unquoted: take up to whitespace or newline
+
 		for i, c := range rest {
 			if c == ' ' || c == '\n' || c == '\t' || c == ',' {
 				return rest[:i]
@@ -388,7 +282,6 @@ func extractJobID(result string) string {
 	return ""
 }
 
-// extractJobIDFromArgs parses tool arguments to find a job_id parameter.
 func extractJobIDFromArgs(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -403,16 +296,14 @@ func extractJobIDFromArgs(args json.RawMessage) string {
 	return ""
 }
 
-// extractJSONStringField extracts a string field from a JSON-like result text.
 func extractJSONBgField(text, field string) string {
-	// Try full JSON parse first
 	var m map[string]any
 	if err := json.Unmarshal([]byte(text), &m); err == nil {
 		if v, ok := m[field].(string); ok {
 			return v
 		}
 	}
-	// Fallback: regex-free string search for "field": "value"
+
 	key := fmt.Sprintf(`"%s"`, field)
 	idx := strings.Index(text, key)
 	if idx < 0 {
@@ -433,7 +324,6 @@ func extractJSONBgField(text, field string) string {
 	return ""
 }
 
-// parseStartCommandArgs extracts the description and command from start_command args.
 func parseStartCommandArgs(args json.RawMessage) (desc, cmd string) {
 	if len(args) == 0 {
 		return "", ""
@@ -451,10 +341,9 @@ func parseStartCommandArgs(args json.RawMessage) (desc, cmd string) {
 	return desc, cmd
 }
 
-// truncateCmd shortens a command string for display.
 func truncateBgCmd(s string, max int) string {
 	s = strings.TrimSpace(s)
-	// Strip leading comment line
+
 	if strings.HasPrefix(s, "# ") {
 		if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 			s = strings.TrimSpace(s[idx+1:])
@@ -466,10 +355,6 @@ func truncateBgCmd(s string, max int) string {
 	return s
 }
 
-// --- Agent integration methods ---
-
-// recordBgToolCall processes a tool call/result pair for background command tracking.
-// Called for every tool call in the agent loop.
 func (a *Agent) recordBgToolCall(toolName string, args json.RawMessage, result string, iteration int) {
 	if a.bgOrphan == nil {
 		return
@@ -478,18 +363,13 @@ func (a *Agent) recordBgToolCall(toolName string, args json.RawMessage, result s
 	case "start_command":
 		a.bgOrphan.recordStartCommand(args, result, iteration)
 	case "read_command_output", "wait_command":
-		// write_command_input removed (#200): it writes stdin, it does not
-		// check output — treating it as an output check let a REPL job that
-		// only ever receives input suppress orphan warnings forever.
-		// #1440-A: pass the result so terminal-status jobs exit tracking.
+
 		a.bgOrphan.recordOutputCheck(args, result, iteration)
 	case "stop_command":
 		a.bgOrphan.recordStopCommand(args)
 	}
 }
 
-// maybeWarnBgOrphan returns a guidance message if any background commands
-// need checking. Called once per iteration in the agent loop.
 func (a *Agent) maybeWarnBgOrphan(iteration int) string {
 	if a.bgOrphan == nil {
 		return ""
@@ -501,19 +381,12 @@ func (a *Agent) maybeWarnBgOrphan(iteration int) string {
 	return msg
 }
 
-// resetBgOrphan clears state for a new run.
 func (a *Agent) resetBgOrphan() {
 	if a.bgOrphan != nil {
 		a.bgOrphan.reset()
 	}
 }
 
-// isCommandJobNotFoundResult reports whether the tool result carries the
-// job manager's not-found ERROR (command_jobs.go: "command job %q not
-// found"). Line-anchored: the manager emits it as a standalone error line
-// (rendered "Error: command job ..." in results), while a running job can
-// legitimately QUOTE the phrase inside its own stdout - that must not read
-// as the error channel (#1879 case 2).
 func isCommandJobNotFoundResult(result string) bool {
 	for _, line := range strings.Split(result, "\n") {
 		line = strings.TrimSpace(line)

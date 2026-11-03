@@ -2,15 +2,8 @@ package agent
 
 import "testing"
 
-// #2171 gap 2: tier BARE-basename suffix matches by ambiguity. A bare
-// basename from the error output keeps full weight when it is unambiguous
-// (probe 2: same-directory bare reference stays score=60), but when the
-// basename hits two or more DISTINCT edit paths the hit is weak evidence
-// (same-dir weight, no fileMatch) and must not claim the authoritative
-// wording. Directory-carrying suffix matches are boundary-anchored ("/").
-
 func TestIssue2171Gap2UnambiguousBareNameStaysStrong(t *testing.T) {
-	// single edit matching the bare basename: no ambiguity -> full tier
+
 	edit := causalEditStep{filePath: "packages/b/api.ts"}
 	score, fileMatch, _ := computeCRSDetail(edit, []string{"api.ts"}, 1, nil)
 	if !fileMatch {
@@ -22,7 +15,7 @@ func TestIssue2171Gap2UnambiguousBareNameStaysStrong(t *testing.T) {
 }
 
 func TestIssue2171Gap2CrossDirAmbiguousBareWeakTier(t *testing.T) {
-	// two distinct edit paths share the bare basename -> weak tier for both
+
 	amb := bareAmbiguousNames([]causalEditStep{
 		{filePath: "packages/a/api.ts"}, {filePath: "packages/b/api.ts"},
 	}, []string{"api.ts"})
@@ -40,8 +33,7 @@ func TestIssue2171Gap2CrossDirAmbiguousBareWeakTier(t *testing.T) {
 }
 
 func TestIssue2171Gap2DirCarryingSuffixAnchored(t *testing.T) {
-	// directory structure on the short side: anchored strong match, and the
-	// "/" boundary means "b/api.ts" no longer matches "packages/ab/api.ts"
+
 	edit := causalEditStep{filePath: "/repo/packages/b/api.ts"}
 	score, fileMatch, _ := computeCRSDetail(edit, []string{"packages/b/api.ts"}, 0, nil)
 	if !fileMatch || score < causalWtErrorFileMatch {
@@ -55,10 +47,7 @@ func TestIssue2171Gap2DirCarryingSuffixAnchored(t *testing.T) {
 }
 
 func TestIssue2171Gap2AttributeFailurePrefersTrueMatch(t *testing.T) {
-	// end-to-end: with an ambiguous bare basename across two dirs, the
-	// attribution hint must not claim "error output references this file"
-	// for either candidate (weak tier), while an exact-match competitor
-	// still wins with authoritative evidence.
+
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "packages/a/api.ts", 1)
 	s.recordEdit("edit_file", "packages/b/api.ts", 2)

@@ -14,14 +14,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SkillReloader reloads the command manager after a skill is created.
 type SkillReloader interface {
 	Reload() bool
 	Get(name string) (*commands.Command, bool)
 }
 
-// CreateSkillTool lets the agent create reusable skill files that persist
-// across sessions and can be invoked via the skill tool.
 type CreateSkillTool struct {
 	CommandMgr SkillReloader
 	WorkingDir string
@@ -85,12 +82,6 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 	}`)
 }
 
-// #3128 V1 note: "description_label" used to be declared required in the
-// Parameters schema above, but the args struct never received it
-// (json.Unmarshal silently dropped it) and no consumer reads such a
-// frontmatter field. Removed to make the schema truthful; description
-// is the label.
-
 func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Name          string   `json:"name"`
@@ -102,11 +93,10 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		Dependencies  []string `json:"dependencies"`
 		Scope         string   `json:"scope"`
 		Context       string   `json:"context"`
-		// NLAH-style contracts + failure taxonomy (r466).
-		Precondition  string `json:"precondition"`
-		Postcondition string `json:"postcondition"`
-		StateContract string `json:"state_contract"`
-		FailureModes  string `json:"failure_modes"` // JSON array [{"name","detect","recover"}]
+		Precondition  string   `json:"precondition"`
+		Postcondition string   `json:"postcondition"`
+		StateContract string   `json:"state_contract"`
+		FailureModes  string   `json:"failure_modes"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -131,10 +121,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	skillFile := filepath.Join(skillsDir, name, "SKILL.md")
-	// #822: checkDuplicate only queries CommandMgr (nil-tolerant, blind to
-	// files skipped at load e.g. malformed frontmatter). A disk check is the
-	// real guard — without it a user-authored SKILL.md was silently
-	// destroyed on create.
+
 	if _, err := os.Stat(skillFile); err == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk. Use a different name or delete the existing skill first.", name)}, nil
 	}
@@ -155,21 +142,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
-	// #3128 V2: atomic tmp+rename write (same helper as #3100) - a direct
-	// os.WriteFile could leave a truncated SKILL.md on crash/full disk,
-	// which #822's malformed-frontmatter skip path then silently swallows
-	// (skill unusable AND blocked from re-creation by the disk check above).
-	//
-	// #3163: the Stat check above and this write are a classic check-then-act
-	// TOCTOU - two agents creating the same-named skill concurrently both
-	// pass Stat and the second AtomicWriteFile rename silently clobbers the
-	// first, defeating #822's guard (instances are registered per-process in
-	// cmd/ggcode and desktop, so an in-process mutex is not enough). An
-	// O_CREATE|O_EXCL placeholder is the atomic cross-process gate: the
-	// loser gets EEXIST (placeholder visible even at 0 bytes, mid-race) and
-	// is rejected; the winner's rename then atomically replaces its own
-	// placeholder. Go maps O_EXCL to CREATE_NEW on Windows, so this needs
-	// no platform split.
+
 	ph, err := os.OpenFile(skillFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if os.IsExist(err) {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk (or is concurrently being created). Use a different name or delete the existing skill first.", name)}, nil
@@ -179,9 +152,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 	ph.Close()
 	if err := util.AtomicWriteFile(skillFile, []byte(markdown), 0o644); err != nil {
-		// Best-effort cleanup: a leftover 0-byte placeholder would block
-		// re-creation until manually removed. Concurrent creators see the
-		// placeholder and are rejected (correct); we only remove our own.
+
 		os.Remove(skillFile)
 		return Result{IsError: true, Content: fmt.Sprintf("cannot write skill file: %v", err)}, nil
 	}
@@ -196,7 +167,6 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		name, scopeDirLabel(scope), name, name)}, nil
 }
 
-// validateCreateSkillArgs validates name/description/content/scope fields.
 func validateCreateSkillArgs(name, description, content, scope string) (string, error) {
 	name = strings.TrimSpace(name)
 	if err := validateSkillName(name); err != nil {
@@ -215,7 +185,6 @@ func validateCreateSkillArgs(name, description, content, scope string) (string, 
 	return name, nil
 }
 
-// normalizeScope defaults empty scope to "project".
 func normalizeScope(scope string) string {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -224,7 +193,6 @@ func normalizeScope(scope string) string {
 	return scope
 }
 
-// checkDuplicate returns an error if the skill name already exists.
 func (t CreateSkillTool) checkDuplicate(name string) error {
 	if t.CommandMgr == nil {
 		return nil
@@ -235,7 +203,6 @@ func (t CreateSkillTool) checkDuplicate(name string) error {
 	return nil
 }
 
-// resolveSkillsDir returns the target skills directory for the given scope.
 func resolveSkillsDir(scope, workingDir string) (string, error) {
 	if scope == "global" {
 		home, err := os.UserHomeDir()
@@ -255,7 +222,6 @@ func resolveSkillsDir(scope, workingDir string) (string, error) {
 	return filepath.Join(wd, ".ggcode", "skills"), nil
 }
 
-// scopeDirLabel returns a human-readable label for the scope.
 func scopeDirLabel(scope string) string {
 	if scope == "global" {
 		return "global (~/.ggcode/skills/)"
@@ -263,8 +229,6 @@ func scopeDirLabel(scope string) string {
 	return "project (.ggcode/skills/)"
 }
 
-// Clone returns an independent copy for use by a different agent.
-// CommandMgr and WorkingDir are agent-specific.
 func (t CreateSkillTool) Clone() Tool {
 	return CreateSkillTool{
 		CommandMgr: t.CommandMgr,
@@ -272,7 +236,6 @@ func (t CreateSkillTool) Clone() Tool {
 	}
 }
 
-// validateSkillName ensures the name is safe for filesystem use.
 func validateSkillName(name string) error {
 	if name == "" {
 		return fmt.Errorf("skill name is required")
@@ -286,16 +249,13 @@ func validateSkillName(name string) error {
 		}
 		return fmt.Errorf("skill name must be lowercase letters, digits, hyphens, or underscores (got %q)", string(r))
 	}
-	// Prevent path traversal
+
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("skill name must not contain '..'")
 	}
 	return nil
 }
 
-// buildSkillMarkdown creates the SKILL.md file content with YAML frontmatter.
-// skillContract carries a skill's NLAH-style declarations through
-// buildSkillMarkdown (r466).
 type skillContract struct {
 	Precondition  string
 	Postcondition string
@@ -353,7 +313,7 @@ func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requi
 
 	fmBytes, err := yaml.Marshal(fm)
 	if err != nil {
-		// Fallback: minimal frontmatter
+
 		return fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s", name, description, body)
 	}
 

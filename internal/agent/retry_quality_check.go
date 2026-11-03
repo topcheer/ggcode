@@ -1,40 +1,5 @@
 package agent
 
-// Retry Loop Quality Detection (Resilience Engineering)
-//
-// Problem: AI coding agents frequently generate retry/reconnect loops that
-// lack two critical resilience properties, both of which cause production
-// incidents:
-//
-//  1. Missing backoff: the loop re-attempts immediately on failure with no
-//     time.Sleep / delay between attempts. Under load this creates retry
-//     storms and thundering-herd effects that amplify downstream outages
-//     (a.k.a. "cascading failures").
-//
-//  2. Missing attempt cap: an unbounded `for {}` retry loop (no condition,
-//     no attempt counter) that never terminates when the target stays down,
-//     leaking goroutines and burning CPU forever.
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external linters)
-//   - Cursor / Windsurf: no automatic detection
-//   - Cline / OpenHands / Devin: reactive only -- caught by incidents
-//   - gosec (G107): SSRF only; no retry semantics
-//   - staticcheck (S1000-S1040): style/perf, no retry analysis
-//   - revive (unconditional-recursion): detects recursion, not retry loops
-//
-// None provide inline write-time detection of retry-loop resilience bugs.
-// This check delivers immediate, zero-dependency feedback in <1ms/file.
-//
-// Approach: AST-based analysis of Go source. A loop is classified as a
-// "retry loop" when its body contains BOTH:
-//   - a failing call (network/IO that returns an error), AND
-//   - error-driven continuation (if err != nil { continue } or loop-back).
-//
-// Once classified, it is checked for a delay (time.Sleep/time.After) and,
-// if unbounded (for {}), for an attempt counter. The check is delta-aware:
-// only patterns newly introduced by this edit are reported.
-
 import (
 	"fmt"
 	"go/ast"
@@ -44,21 +9,19 @@ import (
 	"strings"
 )
 
-// retryLoopIssue represents one detected retry-quality problem.
 type retryLoopIssue struct {
-	key     string // dedup key: kind:pos
-	kind    string // "missing-backoff" | "unbounded-retry"
+	key     string
+	kind    string
 	message string
 }
 
-// failingCallFuncs are common network/IO calls whose errors trigger retries.
 var failingCallFuncs = map[string]bool{
 	"Do": true, "Get": true, "Post": true, "Head": true,
 	"Query": true, "QueryRow": true, "Exec": true,
 	"Dial": true, "DialContext": true, "Ping": true,
 	"Read": true, "Write": true, "Send": true, "Receive": true,
 	"RoundTrip": true, "Call": true, "Request": true,
-	// Unexported methods (Go convention: lowercase names)
+
 	"do": true, "get": true, "post": true, "head": true,
 	"query": true, "queryrow": true, "exec": true,
 	"dial": true, "dialcontext": true, "ping": true,
@@ -66,7 +29,6 @@ var failingCallFuncs = map[string]bool{
 	"roundtrip": true, "call": true, "request": true,
 }
 
-// checkRetryQuality detects retry loops missing backoff delay or attempt cap.
 func checkRetryQuality(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -80,12 +42,6 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// #618/#632: pre-compute identifiers bound to timer/ticker objects so that
-	// `<-x.C` receives are only treated as backoff when x is provably a
-	// time.NewTimer/NewTicker result. #632: this map is per-call (local) —
-	// the #618 version used an unlocked package-global map, which is a fatal
-	// concurrent-map-write panic when parallel tool checks enter
-	// checkRetryQuality from two goroutines at once.
 	timers := collectTimerIdents(file)
 
 	issues := findRetryLoopIssues(file, fset, timers)
@@ -93,14 +49,12 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: subtract pre-existing issues from old content.
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
 		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
 		if oldErr == nil && oldFile != nil {
 			oldIssues := func() []retryLoopIssue {
-				// #632: analyze old content with its own local timer map so
-				// concurrent callers never share state.
+
 				return findRetryLoopIssues(oldFile, oldFset, collectTimerIdents(oldFile))
 			}()
 			oldSet := retryIssueSet(oldIssues)
@@ -124,8 +78,6 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// findRetryLoopIssues walks the AST and inspects every for-loop for retry
-// resilience problems.
 func findRetryLoopIssues(file *ast.File, fset *token.FileSet, timers map[string]bool) []retryLoopIssue {
 	var issues []retryLoopIssue
 	ast.Inspect(file, func(node ast.Node) bool {
@@ -159,8 +111,6 @@ func findRetryLoopIssues(file *ast.File, fset *token.FileSet, timers map[string]
 	return issues
 }
 
-// isRetryLoop classifies a loop body as a retry loop: it must contain a
-// failing call AND error-driven continuation (err != nil -> continue/loop).
 func isRetryLoop(body *ast.BlockStmt) bool {
 	if !loopBodyHasFailingCall(body) {
 		return false
@@ -168,17 +118,10 @@ func isRetryLoop(body *ast.BlockStmt) bool {
 	return loopBodyHasErrorRetry(body)
 }
 
-// loopBodyHasFailingCall returns true if the body contains a call to a
-// common failing network/IO function that returns an error.
-// #2250: nested loop barrier - the SAME ownership rule #2242 added to
-// loopBodyHasErrorRetry but never to these sibling scanners: a nested
-// for/range inside the loop body belongs to its OWN candidate visit,
-// never to this one (an inner skip-continue or inner failing call is
-// evidence about the INNER loop, not the outer).
 func rnpNestedLoopBarrier(node ast.Node) bool {
 	switch node.(type) {
 	case *ast.ForStmt, *ast.RangeStmt:
-		return false // do not descend
+		return false
 	}
 	return true
 }
@@ -204,7 +147,6 @@ func loopBodyHasFailingCall(body *ast.BlockStmt) bool {
 	return found
 }
 
-// retryCallFuncName extracts the function/method name from a CallExpr's Fun.
 func retryCallFuncName(call *ast.CallExpr) string {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -215,16 +157,6 @@ func retryCallFuncName(call *ast.CallExpr) string {
 	return ""
 }
 
-// loopBodyHasErrorRetry returns true if the body checks an error and
-// continues/loops back on failure (the hallmark of a retry loop).
-// #1490-C: error-continue evidence is only searched in THIS loop's own
-// body - ast.Inspect previously descended into nested loops, so an
-// inner for-range's skip-invalid pattern (`for _, it := range q { if
-// err := w.write(it); err != nil { continue } }`) was absorbed as retry
-// evidence for the OUTER loop (whose Pos() the issue then cited),
-// flagging legitimate loops as missing-backoff. Nested loops stop the
-// descent: their retry semantics belong to their own candidate visit
-// (ForStmt) or stay unjudged (RangeStmt), never to the parent.
 func loopBodyHasErrorRetry(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -233,8 +165,7 @@ func loopBodyHasErrorRetry(body *ast.BlockStmt) bool {
 		}
 		switch node.(type) {
 		case *ast.ForStmt, *ast.RangeStmt:
-			// Inspect starts AT body (a BlockStmt), so reaching a loop
-			// node here means it is nested - stop the descent (#1490-C).
+
 			return false
 		default:
 		}
@@ -250,8 +181,6 @@ func loopBodyHasErrorRetry(body *ast.BlockStmt) bool {
 	return found
 }
 
-// isErrorCheck returns true if a condition tests `err != nil` (any ident
-// named err/e that is compared to nil).
 func isErrorCheck(cond ast.Expr) bool {
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok {
@@ -263,7 +192,6 @@ func isErrorCheck(cond ast.Expr) bool {
 	return retryIsErrIdent(bin.X) && retryIsNilLit(bin.Y)
 }
 
-// retryIsErrIdent returns true for identifiers commonly used for errors.
 func retryIsErrIdent(e ast.Expr) bool {
 	id, ok := e.(*ast.Ident)
 	if !ok {
@@ -273,15 +201,11 @@ func retryIsErrIdent(e ast.Expr) bool {
 	return name == "err" || name == "e"
 }
 
-// retryIsNilLit returns true for the `nil` identifier.
 func retryIsNilLit(e ast.Expr) bool {
 	id, ok := e.(*ast.Ident)
 	return ok && id.Name == "nil"
 }
 
-// branchContinuesOnError returns true if an if-body continues or loops back
-// (continue statement, or a bare break/return that is absent -- meaning the
-// loop repeats). We specifically look for `continue` which signals retry.
 func branchContinuesOnError(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -299,21 +223,9 @@ func branchContinuesOnError(body *ast.BlockStmt) bool {
 	return found
 }
 
-// loopBodyHasBackoff returns true if the loop body contains a backoff delay.
-// Recognized forms (Go standard timer/ticker idioms included):
-//   - time.Sleep / time.After / <-time.Tick calls
-//   - time.NewTimer / time.NewTicker / time.AfterFunc calls in the body
-//   - a receive on a timer/ticker channel: <-x.C (UnaryExpr ARROW over a
-//     SelectorExpr selecting the .C field), whether the timer is created
-//     inside or outside the loop
-//   - a select statement containing a <-ctx.Done() case (context-aware
-//     cancellation provides termination and paced termination)
 func loopBodyHasBackoff(body *ast.BlockStmt, timers map[string]bool) bool {
 	found := false
-	// #618: collect identifiers bound to time.NewTimer/time.NewTicker results
-	// anywhere in the file scope so that a `<-x.C` receive can be verified as a
-	// genuine timer/ticker channel. timers is the per-call map returned by
-	// collectTimerIdents (#632: no shared global state).
+
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
 			return false
@@ -325,12 +237,7 @@ func loopBodyHasBackoff(body *ast.BlockStmt, timers map[string]bool) bool {
 				return false
 			}
 		case *ast.UnaryExpr:
-			// <-x.C receive on a timer/ticker channel. #618: receiving on ANY
-			// struct field named "C" is not a delay — an event/subscription
-			// channel `for { ev := <-sub.C; ... }` hot-loops. Verify the
-			// receiver identifier is a time.NewTimer/time.NewTicker result
-			// (created in this body or passed in and bound at the call site —
-			// see timerRecvOK).
+
 			if n.Op == token.ARROW {
 				if sel, ok := n.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "C" {
 					if id, ok := sel.X.(*ast.Ident); ok && timers[id.Name] {
@@ -350,10 +257,6 @@ func loopBodyHasBackoff(body *ast.BlockStmt, timers map[string]bool) bool {
 	return found
 }
 
-// collectTimerIdents records identifiers assigned from time.NewTimer or
-// time.NewTicker calls anywhere in the file and returns a fresh per-call map
-// (#632: the #618 package-global map was mutated without a lock — a fatal
-// concurrent-map-write panic under parallel checkRetryQuality calls).
 func collectTimerIdents(file *ast.File) map[string]bool {
 	timers := make(map[string]bool)
 	ast.Inspect(file, func(node ast.Node) bool {
@@ -388,7 +291,6 @@ func collectTimerIdents(file *ast.File) map[string]bool {
 	return timers
 }
 
-// isBackoffCall returns true for calls that introduce a delay/backoff.
 func isBackoffCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -408,8 +310,6 @@ func isBackoffCall(call *ast.CallExpr) bool {
 	return false
 }
 
-// selectHasCtxDone returns true if a select statement has a <-ctx.Done()
-// (or any .Done()) receive case.
 func selectHasCtxDone(sel *ast.SelectStmt) bool {
 	for _, clause := range sel.Body.List {
 		comm, ok := clause.(*ast.CommClause)
@@ -431,23 +331,15 @@ func selectHasCtxDone(sel *ast.SelectStmt) bool {
 	return false
 }
 
-// isUnboundedForLoop returns true for `for {}` (no condition, no init/post).
 func isUnboundedForLoop(loop *ast.ForStmt) bool {
 	return loop.Cond == nil
 }
 
-// loopHasAttemptCap returns true if the loop tracks an attempt counter
-// (either via for-init/post or a counter incremented+checked in the body).
 func loopHasAttemptCap(loop *ast.ForStmt) bool {
-	// For-condition form: for i := 0; i < max; i++ -- inherently bounded.
+
 	if loop.Cond != nil {
 		return true
-	} // For-init form with an attempt-like counter: for attempt := 0; ...; attempt++
-	// The init counter only provides a cap when it is actually bounded — either
-	// the loop condition compares it (handled by the Cond != nil branch above)
-	// or the body checks it against a max (#618: a counter that is incremented
-	// but never compared is NOT an attempt cap; a name like countryCode must
-	// not exempt an unbounded loop either).
+	}
 	var initCounterName string
 	if loop.Init != nil {
 		if as, ok := loop.Init.(*ast.AssignStmt); ok {
@@ -460,25 +352,20 @@ func loopHasAttemptCap(loop *ast.ForStmt) bool {
 		}
 	}
 	if initCounterName != "" {
-		// Counter exists — require semantic evidence that it is compared
-		// against a bound somewhere in the body (if attempt >= max { return }).
+
 		if bodyHasCounterCheck(loop.Body) {
 			return true
 		}
-		// Post statement incrementing the counter with no body check and no
-		// condition is still unbounded — fall through to the remaining checks.
+
 	}
-	// A select with a <-ctx.Done() case that exits (return/break) provides
-	// bounded termination for an otherwise unbounded loop.
+
 	if bodyHasCtxDoneExit(loop.Body) {
 		return true
 	}
-	// Check body for an attempt counter that is compared to a max.
+
 	return bodyHasCounterCheck(loop.Body)
 }
 
-// bodyHasCtxDoneExit returns true if the body contains a select whose
-// <-ctx.Done() case ends with a return or break (a bounded exit path).
 func bodyHasCtxDoneExit(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
@@ -523,8 +410,6 @@ func bodyHasCtxDoneExit(body *ast.BlockStmt) bool {
 	return found
 }
 
-// stmtListExitsLoop returns true if the statement list contains a return or
-// a loop-level break at its top level.
 func stmtListExitsLoop(stmts []ast.Stmt) bool {
 	for _, s := range stmts {
 		if bs, ok := s.(*ast.BranchStmt); ok && bs.Tok == token.BREAK && bs.Label == nil {
@@ -537,10 +422,6 @@ func stmtListExitsLoop(stmts []ast.Stmt) bool {
 	return false
 }
 
-// isAttemptCounterName returns true for common attempt/retry counter names.
-// #618: whole-word match only — substring matching exempted unrelated
-// identifiers (countryCode contains "count", attemptLog contains "attempt"),
-// silently suppressing unbounded-retry detection for those loops.
 func isAttemptCounterName(name string) bool {
 	low := strings.ToLower(name)
 	for _, w := range []string{"attempt", "attempts", "retry", "retries", "count", "counts", "tries"} {
@@ -548,20 +429,18 @@ func isAttemptCounterName(name string) bool {
 			return true
 		}
 	}
-	// Compound names: attemptCount, retryCount, attempt_count...
+
 	for _, p := range []string{"attempt", "retry", "tries"} {
 		if strings.HasPrefix(low, p+"_") || strings.HasSuffix(low, "_"+p) {
 			return true
 		}
 		if strings.HasPrefix(low, p+"c") {
-			return true // attemptCount, retryCount
+			return true
 		}
 	}
 	return false
 }
 
-// bodyHasCounterCheck returns true if the body compares a counter-like
-// variable against a max/threshold (i < maxRetries).
 func bodyHasCounterCheck(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
@@ -583,11 +462,6 @@ func bodyHasCounterCheck(body *ast.BlockStmt) bool {
 	return found
 }
 
-// hasAttemptComparison returns true if a condition COMPARES an attempt-like
-// counter variable against anything (a max/threshold: attempt >= maxRetries,
-// tries < 3). #618: merely mentioning a counter-named identifier is not a
-// bound — `if attemptLog != nil || retriesEnabled { continue }` must not
-// exempt an otherwise unbounded retry loop.
 func hasAttemptComparison(cond ast.Expr) bool {
 	found := false
 	ast.Inspect(cond, func(node ast.Node) bool {
@@ -616,7 +490,6 @@ func hasAttemptComparison(cond ast.Expr) bool {
 	return found
 }
 
-// retryIssueSet converts retry issues to a set keyed by issue.key.
 func retryIssueSet(issues []retryLoopIssue) map[string]bool {
 	set := make(map[string]bool, len(issues))
 	for _, iss := range issues {

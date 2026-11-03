@@ -1,12 +1,5 @@
 package agent
 
-// Regression probes for #3214: the r444 comment claimed "file_ops moves
-// are tracked too" but the implementation had three gaps - userWriteTools
-// lacked file_ops, extractUserEditPath could not parse file_ops's
-// operations[] envelope, and multi_file_edit only surfaced its FIRST
-// file. A user hand-editing a file the agent moved in was invisible to
-// the turn-gap observer, so the ratchet never learned from it.
-
 import (
 	"encoding/json"
 	"testing"
@@ -51,7 +44,7 @@ func TestIssue3214_SingleFileToolsUnchanged(t *testing.T) {
 	if got := extractUserEditPaths("write_file", args); len(got) != 1 || got[0] != "/tmp/solo.go" {
 		t.Fatalf("write_file single-path semantics changed: got %v", got)
 	}
-	// Malformed JSON stays a no-op.
+
 	if got := extractUserEditPaths("file_ops", []byte("{torn")); got != nil {
 		t.Fatalf("torn json must yield nil, got %v", got)
 	}

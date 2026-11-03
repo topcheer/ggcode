@@ -1,22 +1,5 @@
 package tool
 
-// Teammate batch review digest (r14, scaled oversight): one supervisor
-// reviewing N parallel teammate deliveries in a single surface.
-//
-// Gap context (verdict research-r14-team-review-digest-go): the machine
-// side already aggregates results (teammate_results) and waits in
-// parallel (wait_agent MAX=8), but there is no human-side batch verdict
-// surface - "review N teammate outputs and approve / request-changes /
-// reject each" did not exist (grep batch_approv/approve_all/
-// review_digest found only i18n copy). This is the core lever of the
-// scaled-oversight trend (Anthropic 2026 trends report #3;
-// arXiv:2508.11126): one supervisor, N agents.
-//
-// team_review_digest renders the pending-review digest; team_review_decide
-// applies one verdict per teammate: approve completes the teammate's
-// board task (sa90 attribution chain untouched), changes/reject bounces
-// the note back to the teammate and resets the task to pending.
-
 import (
 	"context"
 	"encoding/json"
@@ -28,21 +11,17 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// reviewConfidenceWords marks results whose tail claims verification.
 var reviewConfidenceWords = []string{"verified", "passed", "pass", "green", "all tests", "ok\t"}
 
-// teamReviewItem is one digest entry, decoupled from swarm types so the
-// rendering is unit-testable without a live manager.
 type teamReviewItem struct {
 	TeammateID   string
 	TeammateName string
 	TaskSubject  string
-	Summary      string // first lines of the latest result
+	Summary      string
 	HasResult    bool
-	Confident    bool // tail of result claims verification
+	Confident    bool
 }
 
-// renderTeamReviewDigest renders the batch-review digest. Pure function.
 func renderTeamReviewDigest(items []teamReviewItem) string {
 	if len(items) == 0 {
 		return "No teammate output pending review.\n"
@@ -73,7 +52,6 @@ func renderTeamReviewDigest(items []teamReviewItem) string {
 	return b.String()
 }
 
-// summarizeResult takes the first lines of a result for the digest.
 func summarizeResult(result string, maxLines, maxChars int) string {
 	if maxLines <= 0 {
 		maxLines = 3
@@ -89,7 +67,6 @@ func summarizeResult(result string, maxLines, maxChars int) string {
 	return s
 }
 
-// resultClaimsVerification checks the tail of a result for confidence words.
 func resultClaimsVerification(result string) bool {
 	tail := result
 	if len(tail) > 400 {
@@ -104,8 +81,6 @@ func resultClaimsVerification(result string) bool {
 	return false
 }
 
-// latestTeammateTask finds the most recently updated board task owned by
-// the teammate (any status) - the natural target of a review verdict.
 func latestTeammateTask(tm *task.Manager, teammateID string) (task.Task, bool) {
 	if tm == nil {
 		return task.Task{}, false
@@ -124,10 +99,6 @@ func latestTeammateTask(tm *task.Manager, teammateID string) (task.Task, bool) {
 	}
 	return best, found
 }
-
-// ————————————————————————————————————————
-// TeamReviewDigestTool
-// ————————————————————————————————————————
 
 type TeamReviewDigestTool struct {
 	Manager *swarm.Manager
@@ -184,10 +155,6 @@ func (t TeamReviewDigestTool) Execute(_ context.Context, input json.RawMessage) 
 	sort.Slice(items, func(i, j int) bool { return items[i].TeammateID < items[j].TeammateID })
 	return Result{Content: renderTeamReviewDigest(items)}, nil
 }
-
-// ————————————————————————————————————————
-// TeamReviewDecideTool
-// ————————————————————————————————————————
 
 type TeamReviewDecideTool struct {
 	Manager *swarm.Manager
@@ -259,7 +226,7 @@ func (t TeamReviewDecideTool) Execute(_ context.Context, input json.RawMessage) 
 			return Result{IsError: true, Content: fmt.Sprintf("complete task %s: %v", boardTask.ID, err)}, nil
 		}
 		return Result{Content: fmt.Sprintf("APPROVED %s: board task %q completed.\n", args.TeammateID, boardTask.Subject)}, nil
-	default: // changes | reject
+	default:
 		if args.Note == "" {
 			return Result{IsError: true, Content: fmt.Sprintf("%s needs a note so the teammate knows what to fix", args.Verdict)}, nil
 		}

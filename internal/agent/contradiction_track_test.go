@@ -76,7 +76,7 @@ func TestExtractClaimsCausing(t *testing.T) {
 	if len(claims) < 1 {
 		t.Fatalf("expected at least 1 claim, got %d", len(claims))
 	}
-	// Should find "retry loop" as causing the timeout
+
 	found := false
 	for _, c := range claims {
 		if c.entity == "retry loop" {
@@ -106,14 +106,12 @@ func TestExtractClaimsEmptyShort(t *testing.T) {
 func TestContradictionDetection(t *testing.T) {
 	s := newContradictionState()
 
-	// First claim
 	text1 := "The bug is in auth.go."
 	s.recordContradictionClaims(text1, 0)
 	if len(s.contradictions) != 0 {
 		t.Fatalf("expected 0 contradictions after first claim, got %d", len(s.contradictions))
 	}
 
-	// Contradicting claim
 	text2 := "The real issue is in router.go."
 	s.recordContradictionClaims(text2, 1)
 	if len(s.contradictions) != 1 {
@@ -134,7 +132,6 @@ func TestNoContradictionSameEntity(t *testing.T) {
 func TestNoContradictionSubstring(t *testing.T) {
 	s := newContradictionState()
 
-	// "auth" and "auth.go" should not be treated as contradictions
 	s.recordContradictionClaims("The bug is in auth.", 0)
 	s.recordContradictionClaims("The bug is in auth.go.", 1)
 	if len(s.contradictions) != 0 {
@@ -155,7 +152,7 @@ func TestMultipleContradictions(t *testing.T) {
 
 func TestClaimBoundedMemory(t *testing.T) {
 	s := newContradictionState()
-	// Record more than contradictionMaxClaims
+
 	for i := 0; i < contradictionMaxClaims+10; i++ {
 		text := "The bug is in file" + string(rune('a'+i%26)) + ".go."
 		s.recordContradictionClaims(text, i)
@@ -168,7 +165,6 @@ func TestClaimBoundedMemory(t *testing.T) {
 func TestMaybeWarnContradictionNoWarning(t *testing.T) {
 	a := &Agent{contradiction: newContradictionState()}
 
-	// Only 1 contradiction -- below threshold
 	a.maybeWarnContradiction("The bug is in auth.go.", 0)
 	result := a.maybeWarnContradiction("The issue is in router.go.", 1)
 	if result != "" {
@@ -193,7 +189,6 @@ func TestMaybeWarnContradictionWarning(t *testing.T) {
 func TestMaybeWarnContradictionMaxWarnings(t *testing.T) {
 	a := &Agent{contradiction: newContradictionState()}
 
-	// Trigger warnings
 	for i := 0; i < 5; i++ {
 		a.maybeWarnContradiction("The bug is in file.go.", i)
 		a.maybeWarnContradiction("The issue is in other.go.", i)
@@ -211,20 +206,16 @@ func TestMaybeWarnContradictionNil(t *testing.T) {
 	}
 }
 
-// TestContradictionAcknowledgedRevisionNotCounted pins #1447-A: an
-// explicitly acknowledged revision ("I was wrong - the root cause is B")
-// is not a contradiction - the detector's own charter says 'without
-// acknowledging'.
 func TestContradictionAcknowledgedRevisionNotCounted(t *testing.T) {
 	s := newContradictionState()
-	// First claim in pattern-extractable shape: "X is the root cause".
+
 	s.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
-	// Acknowledged revision: root cause is the retry loop.
+
 	s.recordContradictionClaims("Earlier I thought auth.go, but I was wrong - the real issue is in the retry loop.", 2)
 	if len(s.contradictions) != 0 {
 		t.Fatalf("acknowledged revision counted as contradiction: %d", len(s.contradictions))
 	}
-	// WITHOUT acknowledgment the same pair still counts (guard stays live).
+
 	s2 := newContradictionState()
 	s2.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
 	s2.recordContradictionClaims("the retry loop is the root cause of the crash.", 2)

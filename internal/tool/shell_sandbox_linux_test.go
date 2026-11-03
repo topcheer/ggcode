@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// sandboxWrap on Linux must rewrite cmd into the self-launcher protocol:
-// [<ggcode binary>] __ggcode_sandbox_launch <payload-json> <shell> <args...>.
-// The main() hook in cmd/ggcode parses exactly this argv shape.
 func TestSandboxWrapLinuxLauncherShape(t *testing.T) {
 	shell, err := exec.LookPath("sh")
 	if err != nil {
@@ -77,16 +74,12 @@ func TestSandboxWrapLinuxLauncherShape(t *testing.T) {
 	}
 }
 
-// The linux init must wire the launcher entry consumed by the cmd/ggcode
-// main hook; a nil entry there is treated as an internal error (exit 126).
 func TestSandboxLaunchEntryWiredOnLinux(t *testing.T) {
 	if SandboxLaunchEntry == nil {
 		t.Fatal("SandboxLaunchEntry must be wired by the linux init")
 	}
 }
 
-// The generated cBPF program must be well-formed: non-empty, terminated by a
-// RET-class instruction, and available for every arch ggcode ships.
 func TestSeccompNetworkDenyFilterWellFormed(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		prog, err := sbSeccompNetworkDenyFilter(arch)

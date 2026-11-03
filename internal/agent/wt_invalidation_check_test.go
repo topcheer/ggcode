@@ -8,7 +8,6 @@ import (
 func TestWTInvalidation_BasicDetection(t *testing.T) {
 	w := newWTInvalidationState()
 
-	// Read 3 files
 	w.recordRead("internal/agent/agent.go")
 	w.recordRead("internal/agent/expired_read_check.go")
 	w.recordRead("internal/agent/tool_target_mismatch.go")
@@ -31,7 +30,6 @@ func TestWTInvalidation_BasicDetection(t *testing.T) {
 func TestWTInvalidation_TooFewReads(t *testing.T) {
 	w := newWTInvalidationState()
 
-	// Only 1 read -- below threshold
 	w.recordRead("file.go")
 
 	msg := w.checkMutation("git_checkout", `{}`)
@@ -83,7 +81,6 @@ func TestWTInvalidation_MutatingTools(t *testing.T) {
 func TestWTInvalidation_MaxWarnings(t *testing.T) {
 	w := newWTInvalidationState()
 
-	// First batch of reads + mutation
 	w.recordRead("file1.go")
 	w.recordRead("file2.go")
 	msg1 := w.checkMutation("git_checkout", `{}`)
@@ -91,7 +88,6 @@ func TestWTInvalidation_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// More reads + second mutation
 	w.recordRead("file3.go")
 	w.recordRead("file4.go")
 	msg2 := w.checkMutation("git_reset", `{}`)
@@ -99,7 +95,6 @@ func TestWTInvalidation_MaxWarnings(t *testing.T) {
 		t.Fatal("expected second warning")
 	}
 
-	// Third mutation should be suppressed
 	w.recordRead("file5.go")
 	msg3 := w.checkMutation("git_stash", `{}`)
 	if msg3 != "" {
@@ -118,7 +113,6 @@ func TestWTInvalidation_NoRepeatWithoutNewReads(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Same mutation again without new reads -- should not repeat
 	msg2 := w.checkMutation("git_reset", `{}`)
 	if msg2 != "" {
 		t.Errorf("expected no repeat warning without new reads, got: %s", msg2)
@@ -163,7 +157,6 @@ func TestWTInvalidation_NormalizePath(t *testing.T) {
 func TestWTInvalidation_DeduplicateReads(t *testing.T) {
 	w := newWTInvalidationState()
 
-	// Same file read multiple times -- should only count once
 	w.recordRead("file.go")
 	w.recordRead("file.go")
 	w.recordRead("file.go")
@@ -176,7 +169,6 @@ func TestWTInvalidation_DeduplicateReads(t *testing.T) {
 func TestWTInvalidation_PathListTruncation(t *testing.T) {
 	w := newWTInvalidationState()
 
-	// Read 5 files
 	for i := 0; i < 5; i++ {
 		w.recordRead("file" + string(rune('0'+i)) + ".go")
 	}
@@ -196,23 +188,12 @@ func TestWTInvalidation_ErrorResult(t *testing.T) {
 	w.recordRead("file1.go")
 	w.recordRead("file2.go")
 
-	// The agent loop checks !result.IsError before calling checkMutation,
-	// but the function itself doesn't filter -- test the integration logic
-	// is correct by verifying the function works regardless.
 	msg := w.checkMutation("git_checkout", `{}`)
 	if msg == "" {
 		t.Fatal("expected warning even for error result (filtering is in agent.go)")
 	}
 }
 
-// TestWTInvalidation_ExtractReadPath / ExtractMultiReadPaths were removed
-// along with the dead helpers (#500): read tracking is batch-aware via
-// extractFilePathsFromArgs and is covered by the agent-loop wiring.
-
-// TestWTInvalidation_RereadCountsAsNewRead pins #1232: re-reading the SAME
-// paths after a warning is a compliant refresh and must re-arm the detector
-// for the next mutation. The previous set-size suppression stayed silent
-// (re-reads did not grow the set), leaving just-refreshed caches unprotected.
 func TestWTInvalidation_RereadCountsAsNewRead(t *testing.T) {
 	w := newWTInvalidationState()
 
@@ -222,25 +203,18 @@ func TestWTInvalidation_RereadCountsAsNewRead(t *testing.T) {
 		t.Fatal("expected first warning after initial reads")
 	}
 
-	// Agent obeys the warning and re-reads the same files.
 	w.recordRead("a.go")
 	w.recordRead("b.go")
 	if msg := w.checkMutation("git_stash", `{"message":"x"}`); msg == "" {
 		t.Fatal("expected second warning after compliant re-reads (re-reads are read events)")
 	}
 
-	// Max warnings reached: further mutations stay silent regardless.
 	w.recordRead("c.go")
 	if msg := w.checkMutation("git_checkout", `{}`); msg != "" {
 		t.Errorf("expected suppression after max warnings, got: %s", msg)
 	}
 }
 
-// TestWTInvalidation_TreePreservingCommandsAreExempt pins sa-31: git fetch/
-// push/tag/remote/rev-parse/... never alter working-tree tracked content,
-// so run_command invocations of them must not consume a warning slot or
-// fire the invalidation notice. First-hand FP: the mandated pre-task
-// `git fetch origin main` warned on every run that had already read files.
 func TestWTInvalidation_TreePreservingCommandsAreExempt(t *testing.T) {
 	readOnly := []string{
 		"git fetch origin main",
@@ -262,10 +236,6 @@ func TestWTInvalidation_TreePreservingCommandsAreExempt(t *testing.T) {
 	}
 }
 
-// TestWTInvalidation_CompoundCommandsScanEveryGit pins the sa-31 false
-// negative: the first-match-return classifier accepted a leading tree-
-// preserving git command and never inspected the destructive one that
-// followed on the same line.
 func TestWTInvalidation_CompoundCommandsScanEveryGit(t *testing.T) {
 	mutating := []string{
 		"git fetch && git reset --hard",
@@ -279,7 +249,6 @@ func TestWTInvalidation_CompoundCommandsScanEveryGit(t *testing.T) {
 		}
 	}
 
-	// All-git-invocations-read-only lines stay read-only.
 	readOnlyLines := []string{
 		"git status && git fetch origin main",
 		"git rev-parse HEAD; git diff --stat",
@@ -291,9 +260,6 @@ func TestWTInvalidation_CompoundCommandsScanEveryGit(t *testing.T) {
 	}
 }
 
-// TestWTInvalidation_ReadOnlyDoesNotConsumeWarningSlot verifies the
-// end-to-end path: a tree-preserving run_command after reads must stay
-// silent AND leave the detector armed for a later real mutation.
 func TestWTInvalidation_ReadOnlyDoesNotConsumeWarningSlot(t *testing.T) {
 	w := newWTInvalidationState()
 	w.recordRead("a.go")
@@ -303,7 +269,6 @@ func TestWTInvalidation_ReadOnlyDoesNotConsumeWarningSlot(t *testing.T) {
 		t.Fatalf("git fetch must not fire the invalidation warning, got: %s", msg)
 	}
 
-	// The warning budget is untouched: the next real mutation still warns.
 	if msg := w.checkMutation("run_command", `{"command":"git checkout main"}`); msg == "" {
 		t.Fatal("real mutation after read-only fetch must still warn")
 	}

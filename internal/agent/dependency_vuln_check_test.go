@@ -6,7 +6,7 @@ import (
 )
 
 func TestCheckDependencyVulns_GoMod(t *testing.T) {
-	// Adding a vulnerable go.mod dependency should trigger a warning.
+
 	oldGoMod := `module example.com/test
 
 go 1.21
@@ -41,9 +41,7 @@ require (
 }
 
 func TestCheckDependencyVulns_GoModSafeVersion(t *testing.T) {
-	// Adding a safe version should NOT trigger a CVE warning. Since the
-	// package matched the vuln DB and is already patched, the generic
-	// "consider scanning" reminder is suppressed too (#3046 B2).
+
 	oldGoMod := `module example.com/test
 
 go 1.21
@@ -55,7 +53,7 @@ go 1.21
 require golang.org/x/crypto v0.31.0
 `
 	warnings := checkDependencyVulns("go.mod", oldGoMod, newGoMod)
-	// Should NOT find CVE warning for crypto (it's patched)
+
 	for _, w := range warnings {
 		if strings.Contains(w, "CVE-2024-45337") {
 			t.Fatalf("should not flag patched version, got: %s", w)
@@ -97,7 +95,7 @@ func TestCheckDependencyVulns_NPM(t *testing.T) {
 }
 
 func TestCheckDependencyVulns_NPMCriticalEventStream(t *testing.T) {
-	// event-stream is a permanently compromised package
+
 	oldPkg := `{}`
 	newPkg := `{
   "dependencies": {
@@ -164,7 +162,7 @@ openssl = "0.10.30"
 }
 
 func TestCheckDependencyVulns_NoChange(t *testing.T) {
-	// If nothing changed, no warnings.
+
 	content := `module example.com/test
 
 require (
@@ -178,7 +176,7 @@ require (
 }
 
 func TestCheckDependencyVulns_NonManifestFile(t *testing.T) {
-	// Should not run on non-manifest files.
+
 	warnings := checkDependencyVulns("main.go", "", "package main\n")
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for non-manifest file, got: %v", warnings)
@@ -220,8 +218,7 @@ func TestStripVersionPrefix(t *testing.T) {
 	}{
 		{"v1.2.3", "1.2.3"},
 		{"1.2.3", "1.2.3"},
-		// #3360: pseudo-versions stay whole - isVulnerableVersion skips them
-		// upstream, and truncation was the false-Critical root cause.
+
 		{"v0.0.0-20200302210943-78000ba7a073", "0.0.0-20200302210943-78000ba7a073"},
 		{"4.17.21", "4.17.21"},
 	}
@@ -318,7 +315,7 @@ proptest = "1.0"
 }
 
 func TestCheckDependencyVulns_GoModUpgradeSafe(t *testing.T) {
-	// Upgrading from vulnerable to patched should not trigger warning.
+
 	oldGoMod := `module example.com/test
 
 require golang.org/x/crypto v0.0.0-20200302210943-78000ba7a073
@@ -336,7 +333,7 @@ require golang.org/x/crypto v0.31.0
 }
 
 func TestCheckDependencyVulns_GoJwtDeprecated(t *testing.T) {
-	// dgrijalva/jwt-go is permanently deprecated
+
 	oldGoMod := `module example.com/test`
 	newGoMod := `module example.com/test
 
@@ -355,9 +352,6 @@ require github.com/dgrijalva/jwt-go v3.2.0
 	}
 }
 
-// TestIsNonConcreteVersionSpec pins #1451-B: wildcard/latest/workspace/
-// file/npm/URL/git specs carry no pin-pointable version and must be
-// skipped - a bare '*' parsed as 0.0.0 and ALWAYS reported vulnerable.
 func TestIsNonConcreteVersionSpec(t *testing.T) {
 	for _, v := range []string{"", "*", "latest", "x", "X", "workspace:*", "file:../lib", "npm:foo@2", "https://x/y.tgz", "git+ssh://x/y", "github:user/repo"} {
 		if !isNonConcreteVersionSpec(v) {

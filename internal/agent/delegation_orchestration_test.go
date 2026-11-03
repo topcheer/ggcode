@@ -10,16 +10,13 @@ import (
 func TestDelegationState_OrphanDetection(t *testing.T) {
 	d := newDelegationState()
 
-	// Simulate a delegation at iteration 2
 	d.recordDelegationCall("agent-1", "spawn_agent", "Research code patterns", "", 2)
 	d.recordToolCallCount()
 
-	// Immediately after, no orphan
 	if msg := d.maybeWarnOrphanedDelegations(3); msg != "" {
 		t.Fatalf("expected no orphan warning at iteration 3, got: %s", msg)
 	}
 
-	// After threshold iterations without a result check, should warn
 	msg := d.maybeWarnOrphanedDelegations(2 + orphanDelegationThreshold + 1)
 	if msg == "" {
 		t.Fatal("expected orphan warning after threshold iterations")
@@ -31,7 +28,6 @@ func TestDelegationState_OrphanDetection(t *testing.T) {
 		t.Errorf("orphan warning should include task summary, got: %s", msg)
 	}
 
-	// Should not warn again for the same delegation
 	msg2 := d.maybeWarnOrphanedDelegations(2 + orphanDelegationThreshold + 5)
 	if msg2 != "" {
 		t.Errorf("should not re-warn for same delegation, got: %s", msg2)
@@ -41,25 +37,17 @@ func TestDelegationState_OrphanDetection(t *testing.T) {
 func TestDelegationState_ResultCheckClearsOrphan(t *testing.T) {
 	d := newDelegationState()
 
-	// tool-call ID and returned agent ID are DIFFERENT namespaces (#348):
-	// spawn result says "Sub-agent spawned with ID: sa-9" but the provider
-	// tool-call ID is toolu_01ABC. wait_agent addresses sa-9.
 	d.recordDelegationCall("toolu_01ABC", "spawn_agent", "Analyze tests",
 		"Sub-agent spawned with ID: sa-9\nUse wait_agent or list_agents to monitor progress and retrieve the result.", 1)
 	d.recordToolCallCount()
 
-	// Targeted result check addressing sa-9 at iteration 5 updates its lastChecked
 	d.recordResultCheck("wait_agent", json.RawMessage(`{"agent_id":"sa-9"}`), "", 5)
 
-	// Check at iteration 6: elapsed = 6-5 = 1, below threshold
 	msg := d.maybeWarnOrphanedDelegations(6)
 	if msg != "" {
 		t.Fatalf("expected no orphan after result check, got: %s", msg)
 	}
 
-	// Production regression (#348): with a fixed 1s-timer-style mismatch the
-	// wait could never clear the timer. Verify after threshold iterations the
-	// consumed delegation still does not warn.
 	if msg := d.maybeWarnOrphanedDelegations(5 + orphanDelegationThreshold - 1); msg != "" {
 		t.Fatalf("consumed delegation must stay cleared even near threshold, got: %s", msg)
 	}
@@ -68,17 +56,13 @@ func TestDelegationState_ResultCheckClearsOrphan(t *testing.T) {
 func TestDelegationState_ResultCheckOnlyMarksAddressedDelegation(t *testing.T) {
 	d := newDelegationState()
 
-	// Distinct namespaces per #348: tool-call IDs toolu_01/toolu_02, agent IDs sa-1/sa-2.
 	d.recordDelegationCall("toolu_01", "spawn_agent", "Task one",
 		"Sub-agent spawned with ID: sa-1", 1)
 	d.recordDelegationCall("toolu_02", "spawn_agent", "Task two",
 		"Sub-agent spawned with ID: sa-2", 1)
 
-	// Wait on sa-1 only — sa-2's orphan timer must NOT be reset.
 	d.recordResultCheck("task_output", json.RawMessage(`{"task_id":"sa-1"}`), "", 5)
 
-	// sa-2 spawned at 1, last checked 1; at iteration 1+orphanDelegationThreshold
-	// it is an orphan even though sa-1 was just consumed.
 	msg := d.maybeWarnOrphanedDelegations(1 + orphanDelegationThreshold)
 	if msg == "" {
 		t.Fatal("expected orphan warning for un-addressed delegation")
@@ -96,8 +80,6 @@ func TestDelegationState_UnresolvableResultCheckMarksNothing(t *testing.T) {
 
 	d.recordDelegationCall("agent-1", "spawn_agent", "Task", "", 1)
 
-	// wait_agent with no resolvable target and no id-bearing content —
-	// conservative: mark nothing.
 	d.recordResultCheck("wait_agent", nil, "", 5)
 
 	d.mu.Lock()
@@ -111,12 +93,10 @@ func TestDelegationState_UnresolvableResultCheckMarksNothing(t *testing.T) {
 func TestDelegationState_OrphanMaxWarnings(t *testing.T) {
 	d := newDelegationState()
 
-	// Create many orphaned delegations
 	for i := 0; i < orphanDelegationMaxWarnings+3; i++ {
 		d.recordDelegationCall("agent-"+itoaDel(i), "spawn_agent", "Task "+itoaDel(i), "", 1)
 	}
 
-	// Each call should only warn up to the max
 	warnCount := 0
 	for iter := 5; iter < 20; iter++ {
 		msg := d.maybeWarnOrphanedDelegations(iter)
@@ -135,8 +115,6 @@ func TestDelegationState_OrphanTimeFallbackRemoved(t *testing.T) {
 
 	d.recordDelegationCall("agent-1", "spawn_agent", "Old task", "", 1)
 
-	// Entry is tracked with a creation time (kept for diagnostics), but the
-	// orphan gate is purely iteration-based now: no wall-clock fallback.
 	d.mu.Lock()
 	entry := d.activeDelegations["agent-1"]
 	d.mu.Unlock()
@@ -148,7 +126,6 @@ func TestDelegationState_OrphanTimeFallbackRemoved(t *testing.T) {
 		t.Error("creation time should be very recent")
 	}
 
-	// Even though wall-clock time has passed, low iteration elapsed = no orphan.
 	if msg := d.maybeWarnOrphanedDelegations(4); msg != "" {
 		t.Errorf("iteration-based gate should not fire below threshold regardless of wall time, got: %s", msg)
 	}
@@ -157,8 +134,6 @@ func TestDelegationState_OrphanTimeFallbackRemoved(t *testing.T) {
 func TestDelegationState_OrphanNotTooTight(t *testing.T) {
 	d := newDelegationState()
 
-	// Spawn at iteration 2; the agent then does several iterations of its own
-	// work before checking — that is normal, not an orphan.
 	d.recordDelegationCall("agent-1", "spawn_agent", "Long task", "", 2)
 
 	for iter := 3; iter < 2+orphanDelegationThreshold; iter++ {
@@ -167,7 +142,6 @@ func TestDelegationState_OrphanNotTooTight(t *testing.T) {
 		}
 	}
 
-	// At spawn+threshold elapsed iterations without any check, warn.
 	if msg := d.maybeWarnOrphanedDelegations(2 + orphanDelegationThreshold); msg == "" {
 		t.Fatal("expected orphan warning at threshold elapsed iterations")
 	}
@@ -180,7 +154,7 @@ func TestDelegationState_FireAndForgetExemptFromOrphan(t *testing.T) {
 		if len(d.activeDelegations) != 0 {
 			t.Errorf("%s is fire-and-forget: must not be tracked as an orphan-able delegation", tool)
 		}
-		// Even many iterations later, no orphan warning.
+
 		if msg := d.maybeWarnOrphanedDelegations(1 + orphanDelegationThreshold + 5); msg != "" {
 			t.Errorf("%s should be exempt from orphan warnings, got: %s", tool, msg)
 		}
@@ -190,7 +164,6 @@ func TestDelegationState_FireAndForgetExemptFromOrphan(t *testing.T) {
 func TestDelegationState_SerialDelegationDetection(t *testing.T) {
 	d := newDelegationState()
 
-	// Two consecutive delegations - should not warn yet
 	d.recordDelegationCall("a1", "spawn_agent", "Task 1", "", 1)
 	msg := d.maybeWarnSerialDelegation()
 	if msg != "" {
@@ -203,7 +176,6 @@ func TestDelegationState_SerialDelegationDetection(t *testing.T) {
 		t.Fatalf("expected no serial warning for 2 delegations, got: %s", msg)
 	}
 
-	// Third consecutive delegation - should warn
 	d.recordDelegationCall("a3", "spawn_agent", "Task 3", "", 3)
 	msg = d.maybeWarnSerialDelegation()
 	if msg == "" {
@@ -213,16 +185,14 @@ func TestDelegationState_SerialDelegationDetection(t *testing.T) {
 		t.Errorf("serial warning should recommend batching/parallelization, got: %s", msg)
 	}
 
-	// Non-delegation tool breaks the chain
 	d.recordToolCallCount()
 	msg = d.maybeWarnSerialDelegation()
-	// After non-delegation call, the consecutive counter resets
+
 }
 
 func TestDelegationState_SerialDelegationMaxWarnings(t *testing.T) {
 	d := newDelegationState()
 
-	// Trigger serial warnings
 	for i := 0; i < serialDelegationThreshold; i++ {
 		d.recordDelegationCall("s"+itoaDel(i), "spawn_agent", "Serial "+itoaDel(i), "", i+1)
 	}
@@ -232,14 +202,11 @@ func TestDelegationState_SerialDelegationMaxWarnings(t *testing.T) {
 		t.Fatal("expected first serial warning")
 	}
 
-	// Add more and check again
 	for i := 0; i < serialDelegationThreshold; i++ {
 		d.recordDelegationCall("t"+itoaDel(i), "spawn_agent", "Serial2 "+itoaDel(i), "", i+10)
 	}
 	_ = d.maybeWarnSerialDelegation()
-	// Should still respect max warnings
 
-	// Third attempt should be suppressed
 	for i := 0; i < serialDelegationThreshold; i++ {
 		d.recordDelegationCall("u"+itoaDel(i), "spawn_agent", "Serial3 "+itoaDel(i), "", i+20)
 	}
@@ -252,7 +219,6 @@ func TestDelegationState_SerialDelegationMaxWarnings(t *testing.T) {
 func TestDelegationState_OverDelegationDetection(t *testing.T) {
 	d := newDelegationState()
 
-	// Fill with mostly delegation calls
 	for i := 0; i < overDelegationMinCalls+5; i++ {
 		d.recordDelegationCall("d"+itoaDel(i), "spawn_agent", "Delegate "+itoaDel(i), "", i)
 		d.recordToolCallCount()
@@ -266,7 +232,6 @@ func TestDelegationState_OverDelegationDetection(t *testing.T) {
 		t.Errorf("over-delegation warning should mention ratio, got: %s", msg)
 	}
 
-	// Should only warn once
 	msg2 := d.maybeWarnOverDelegation()
 	if msg2 != "" {
 		t.Error("over-delegation should only warn once per run")
@@ -276,7 +241,6 @@ func TestDelegationState_OverDelegationDetection(t *testing.T) {
 func TestDelegationState_NoOverDelegationForLowRatio(t *testing.T) {
 	d := newDelegationState()
 
-	// Mostly direct tool calls with few delegations
 	d.recordDelegationCall("d1", "spawn_agent", "One task", "", 1)
 	for i := 0; i < 19; i++ {
 		d.recordToolCallCount()
@@ -291,7 +255,6 @@ func TestDelegationState_NoOverDelegationForLowRatio(t *testing.T) {
 func TestDelegationState_NoOverDelegationBelowMinCalls(t *testing.T) {
 	d := newDelegationState()
 
-	// All delegation calls but below minimum threshold
 	for i := 0; i < 8; i++ {
 		d.recordDelegationCall("d"+itoaDel(i), "spawn_agent", "Task "+itoaDel(i), "", i)
 		d.recordToolCallCount()
@@ -345,7 +308,6 @@ func TestDelegationState_RemoveDelegation(t *testing.T) {
 func TestDelegationState_NonDelegationToolNotTracked(t *testing.T) {
 	d := newDelegationState()
 
-	// recordToolCallCount doesn't add to delegation tracking
 	d.recordToolCallCount()
 	d.recordToolCallCount()
 
@@ -372,8 +334,6 @@ func TestDelegationState_DifferentDelegationToolsTracked(t *testing.T) {
 		}
 	}
 
-	// Fire-and-forget tools count as delegations (ratio/serial) but are not
-	// tracked for orphan detection.
 	for _, tool := range []string{"swarm_task_create", "a2a_send_task"} {
 		d := newDelegationState()
 		d.recordDelegationCall("id-"+tool, tool, "Task with "+tool, "", 1)
@@ -387,7 +347,7 @@ func TestDelegationState_DifferentDelegationToolsTracked(t *testing.T) {
 }
 
 func TestDelegationState_ResultToolsClearOrphan(t *testing.T) {
-	// Survey tools report on ALL tracked delegations — no target needed.
+
 	surveyTools := []string{"list_agents", "swarm_task_list", "a2a_list_tasks"}
 	for _, tool := range surveyTools {
 		d := newDelegationState()
@@ -400,14 +360,13 @@ func TestDelegationState_ResultToolsClearOrphan(t *testing.T) {
 		}
 	}
 
-	// Targeted tools must address the specific delegation by its returned ID.
 	targetedTools := []string{"wait_agent", "task_output", "teammate_results", "a2a_get_task"}
 	for _, tool := range targetedTools {
 		d := newDelegationState()
 		d.recordDelegationCall("toolu_01", "spawn_agent", "Task",
 			"Sub-agent spawned with ID: agent-1", 1)
 		d.recordResultCheck(tool, json.RawMessage(`{"agent_id":"agent-1","task_id":"agent-1","teammate_id":"agent-1"}`), "", 5)
-		// Check at iteration 6: elapsed = 6-5 = 1, which is below threshold
+
 		msg := d.maybeWarnOrphanedDelegations(6)
 		if msg != "" {
 			t.Errorf("targeted result tool %s did not clear addressed orphan timer: %s", tool, msg)
@@ -415,8 +374,6 @@ func TestDelegationState_ResultToolsClearOrphan(t *testing.T) {
 	}
 }
 
-// TestParseDelegationResultID verifies agent ID extraction from delegation
-// tool results — the bridge between the tool-call ID and agent ID namespaces (#348).
 func TestParseDelegationResultID(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -435,16 +392,11 @@ func TestParseDelegationResultID(t *testing.T) {
 	}
 }
 
-// TestDelegationState_GenericFieldsNotTarget verifies that generic argument
-// fields ("name", "agent") no longer resolve as delegation targets —
-// read_command_output {"name":"build"} must not reset a foreign delegation's
-// orphan timer just because its summary mentions "build" (#348).
 func TestDelegationState_GenericFieldsNotTarget(t *testing.T) {
 	d := newDelegationState()
 	d.recordDelegationCall("toolu_01", "spawn_agent", "Task about build system",
 		"Sub-agent spawned with ID: sa-1", 1)
 
-	// read_command_output with a "name" arg that matches words in the summary
 	d.recordResultCheck("read_command_output", json.RawMessage(`{"name":"build"}`), "", 5)
 
 	d.mu.Lock()
@@ -455,15 +407,11 @@ func TestDelegationState_GenericFieldsNotTarget(t *testing.T) {
 	}
 }
 
-// TestDelegationState_ResultContentFallbackMatchesResultID verifies the
-// content fallback uses the parsed result ID (agent namespace), not just the
-// tool-call ID (#348).
 func TestDelegationState_ResultContentFallbackMatchesResultID(t *testing.T) {
 	d := newDelegationState()
 	d.recordDelegationCall("toolu_01", "spawn_agent", "Task",
 		"Sub-agent spawned with ID: sa-9", 1)
 
-	// list_agents-style result naming agent ID sa-9 (not toolu_01)
 	d.recordResultCheck("list_agents", json.RawMessage(`{}`), "sa-9: completed (idle)", 5)
 
 	d.mu.Lock()

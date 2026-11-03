@@ -1,8 +1,5 @@
 package tool
 
-// #4090: appendCriterion truncated criteria by raw bytes, cutting CJK text
-// mid-rune and feeding invalid UTF-8 ("...\xe4\xb8...") into the acceptance
-// reminder shown to the main LLM.
 import (
 	"strings"
 	"testing"
@@ -10,8 +7,7 @@ import (
 )
 
 func TestAppendCriterionUTF8Truncation(t *testing.T) {
-	// 100 CJK chars = 300 bytes > maxAcceptanceItemLen(200); the old byte
-	// slice c[:200] cut the 67th char mid-rune.
+
 	cjk := strings.Repeat("验", 100)
 	if len(cjk) <= maxAcceptanceItemLen {
 		t.Fatalf("fixture too short: %d bytes", len(cjk))

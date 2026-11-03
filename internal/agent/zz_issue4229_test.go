@@ -6,18 +6,15 @@ import (
 	"unicode/utf8"
 )
 
-// TestIssue4229HasPlanIntentWordBoundary guards the #4229 fix: plan-intent
-// phrases must match on word boundaries, not as raw substrings, so
-// "explanation", "plant" and "auto download" no longer announce plans.
 func TestIssue4229HasPlanIntentWordBoundary(t *testing.T) {
 	negative := []string{
-		"explanation of the failure", // contains "plan"
-		"the plant is in the corner", // contains "plan"
-		"auto download the artifact", // contains "to do"
-		"footsteps in the log",       // contains "steps"
-		"the roadmap-external noise", // "roadmap" IS a word; see positive list
+		"explanation of the failure",
+		"the plant is in the corner",
+		"auto download the artifact",
+		"footsteps in the log",
+		"the roadmap-external noise",
 	}
-	for _, text := range negative[:4] { // first four must NOT match
+	for _, text := range negative[:4] {
 		if hasPlanIntent(text) {
 			t.Errorf("hasPlanIntent(%q) = true, want false (substring false positive)", text)
 		}
@@ -37,19 +34,17 @@ func TestIssue4229HasPlanIntentWordBoundary(t *testing.T) {
 	}
 }
 
-// TestIssue4229TruncateRuneSafe guards the #4229 fix: truncation must never
-// split a multi-byte rune, so the guidance message stays valid UTF-8.
 func TestIssue4229TruncateRuneSafe(t *testing.T) {
 	cases := []struct {
 		in   string
 		max  int
 		want string
 	}{
-		{"short", 10, "short"},   // no truncation
-		{"abcdefg", 6, "abc..."}, // ASCII cut
-		{"你好世界", 8, "你..."},      // cut lands mid-rune, snaps back
-		{"你好世界", 6, "你..."},      // cut exactly after rune 1
-		{"ab你好", 5, "ab..."},     // mixed ASCII/CJK
+		{"short", 10, "short"},
+		{"abcdefg", 6, "abc..."},
+		{"你好世界", 8, "你..."},
+		{"你好世界", 6, "你..."},
+		{"ab你好", 5, "ab..."},
 	}
 	for _, c := range cases {
 		got := truncate(c.in, c.max)
@@ -63,7 +58,7 @@ func TestIssue4229TruncateRuneSafe(t *testing.T) {
 			t.Errorf("truncate(%q, %d) = %q: exceeds max", c.in, c.max, got)
 		}
 	}
-	// Long CJK text stays valid UTF-8 at every threshold.
+
 	long := strings.Repeat("界", 20)
 	for max := 1; max <= len(long); max++ {
 		if got := truncate(long, max); !utf8.ValidString(got) {

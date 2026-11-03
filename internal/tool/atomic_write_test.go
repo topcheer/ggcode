@@ -14,26 +14,21 @@ func TestAtomicWriteFileCreatesCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "test.txt")
 
-	// Write initial content
 	os.WriteFile(fp, []byte("original"), 0644)
 
-	// Set up checkpoint saver
 	mgr := checkpoint.NewManager(50)
 	SetPreWriteHook(CheckpointSaver(mgr))
 
-	// Atomic write should trigger checkpoint
 	err := atomicWriteFile(fp, []byte("modified"), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify file was written
 	data, _ := os.ReadFile(fp)
 	if string(data) != "modified" {
 		t.Errorf("file content = %q, want %q", string(data), "modified")
 	}
 
-	// Verify checkpoint was saved
 	cps := mgr.List()
 	if len(cps) != 1 {
 		t.Fatalf("expected 1 checkpoint, got %d", len(cps))
@@ -48,7 +43,6 @@ func TestAtomicWriteFileCreatesCheckpoint(t *testing.T) {
 		t.Errorf("file path = %q", cps[0].FilePath)
 	}
 
-	// Clean up
 	SetPreWriteHook(nil)
 }
 
@@ -64,7 +58,6 @@ func TestAtomicWriteFileNoCheckpointForNewFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// New file should not create a checkpoint (no old content)
 	cps := mgr.List()
 	if len(cps) != 0 {
 		t.Errorf("expected 0 checkpoints for new file, got %d", len(cps))
@@ -94,16 +87,13 @@ func TestCheckpointSaverUndo(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "code.go")
 
-	// Write initial content
 	os.WriteFile(fp, []byte("package main\n\nfunc main() {}\n"), 0644)
 
 	mgr := checkpoint.NewManager(50)
 	SetPreWriteHook(CheckpointSaver(mgr))
 
-	// Edit file
 	atomicWriteFile(fp, []byte("package main\n\nfunc main() { panic(\"oops\") }\n"), 0644)
 
-	// Undo
 	cp, err := mgr.Undo("user")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +102,6 @@ func TestCheckpointSaverUndo(t *testing.T) {
 		t.Errorf("restored content = %q", cp.OldContent)
 	}
 
-	// Verify file was restored
 	data, _ := os.ReadFile(fp)
 	if string(data) != "package main\n\nfunc main() {}\n" {
 		t.Errorf("file after undo = %q", string(data))
@@ -126,7 +115,6 @@ func TestPreWriteHookAbortsOnError(t *testing.T) {
 	fp := filepath.Join(dir, "abort.txt")
 	os.WriteFile(fp, []byte("original"), 0644)
 
-	// Set a hook that returns an error
 	SetPreWriteHook(func(_, _, _, _ string) error {
 		return fmt.Errorf("hook denied write")
 	})
@@ -140,7 +128,6 @@ func TestPreWriteHookAbortsOnError(t *testing.T) {
 		t.Errorf("error = %q, want hook denied write", err.Error())
 	}
 
-	// File should not have changed
 	data, _ := os.ReadFile(fp)
 	if string(data) != "original" {
 		t.Errorf("file should be unchanged, got %q", string(data))

@@ -2,9 +2,6 @@ package agent
 
 import "testing"
 
-// #3050: the repeated-sequence (SOP) fingerprint must compare target file
-// paths, not just tool names. A normal cross-file read -> edit -> verify
-// loop (three DIFFERENT files) must not fire the consolidation suggestion.
 func TestIssue3050_CrossFileLoopDoesNotFire(t *testing.T) {
 	v := newToolSequenceValidator()
 	files := []string{"/w/a.go", "/w/b.go", "/w/c.go"}
@@ -27,8 +24,6 @@ func TestIssue3050_CrossFileLoopDoesNotFire(t *testing.T) {
 	}
 }
 
-// #3050 control: the SAME tool sequence against the SAME targets three
-// times is a genuine hand-re-issued SOP and must still fire.
 func TestIssue3050_SameTargetLoopStillFires(t *testing.T) {
 	v := newToolSequenceValidator()
 	fired := false

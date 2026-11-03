@@ -2,11 +2,6 @@ package agent
 
 import "testing"
 
-// Regression tests for #185 (content fingerprint delta) and
-// #186 (multiset delta): line shifts and fix-one-add-one must be handled.
-// (The error-sentinel line-shift test was removed with its host detector in
-// #510; the two empty-error-body tests below are the live regression pair.)
-
 func TestEmptyError_FixOneAddOneIsDetected(t *testing.T) {
 	oldSrc := `package main
 func f() error {
@@ -21,9 +16,7 @@ func h() error {
 	}
 	return nil
 }`
-	// Fix the FIRST empty block, introduce a NEW one with a different
-	// condition variable: counts stay equal (2 vs 2) but the new one must
-	// be reported.
+
 	newSrc := `package main
 func f() error {
 	err := g()

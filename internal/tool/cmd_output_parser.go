@@ -1,56 +1,16 @@
 package tool
 
-// Build/Test Output Intelligence — Structured Command Result Extraction
-//
-// Research basis: Context engineering research (Anthropic 2025, Fundesk 2026)
-// identifies tool output as the "silent context killer" — a single `go test
-// ./...` run for a large project can produce 5,000+ lines of output (~50K
-// tokens). When tests fail, the agent must read through all of it to find the
-// 3 failing tests buried among hundreds of passing ones. This wastes context
-// budget and slows the fix-test cycle.
-//
-// Competitor analysis:
-//   - Claude Code: relies on raw output + LSP diagnostics (no structured test
-//     result extraction from command output)
-//   - Cursor: has inline test result UI, parses test output for display
-//   - Cline/OpenHands: parses test output to extract failures for display
-//   - Go ecosystem: `go test -json` + `test2json` for structured output,
-//     but agents rarely use -json flag and the output is verbose
-//   - Aider: shows pass/fail counts but no structured extraction
-//
-// Gap: No deterministic extraction of actionable information from build/test
-// command output. The agent gets raw text and must interpret it via LLM
-// reasoning — expensive and error-prone for large outputs.
-//
-// Design:
-//   - Runs after command execution, before result is returned to the agent
-//   - Detects command type from the command string (go test, go build, etc.)
-//   - Extracts: failed test names with locations, compile errors with file:line,
-//     pass/skip/fail counts, panic stack traces
-//   - Zero false-positive risk: only extracts patterns that are unambiguous
-//   - Produces a compact "[Result Summary]" section appended to raw output
-//   - No external dependencies — pure string parsing
-
 import (
 	"fmt"
 	"regexp"
 	"strings"
 )
 
-// maxResultSummaryLines caps the summary size to prevent flooding when a build
-// has many errors.
 const maxResultSummaryLines = 20
 
-// summarizeCommandOutput analyzes command output and returns a compact summary
-// of build/test results. Returns "" if no recognizable patterns are found.
-//
-// The summary is prepended with a "[Result Summary]" header and includes:
-//   - For go test: failed test names, counts (pass/fail/skip), panic locations
-//   - For go build/vet: compile errors with file:line locations
-//   - For generic: lines matching compiler error patterns (file:line: message)
 func summarizeCommandOutput(command, output string) string {
 	cmdLower := strings.ToLower(strings.TrimSpace(command))
-	// Extract the actual command from comment-prefixed strings
+
 	for _, line := range strings.Split(cmdLower, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {
@@ -65,40 +25,30 @@ func summarizeCommandOutput(command, output string) string {
 	case isGoBuildCommand(cmdLower):
 		return summarizeGoBuildOutput(output)
 	case isGenericTestCommand(cmdLower):
-		// For other test runners, try generic parsing
+
 		return summarizeGenericTestOutput(output)
 	default:
-		// For any command, extract compiler-style errors (file:line: message)
+
 		return summarizeCompilerErrors(output)
 	}
 }
 
-// isGoTestCommand returns true if the command runs Go tests.
-// Uses word-boundary check to avoid false positives like "cargo test"
-// which contains "go test" as a substring.
 func isGoTestCommand(cmd string) bool {
-	// Word boundary: "go test" must end the command or be followed by
-	// whitespace — "go testdata" must NOT hit this branch (#387).
+
 	if cmd == "go test" || strings.HasPrefix(cmd, "go test ") {
 		return true
 	}
 	return strings.Contains(cmd, " go test ") ||
 		strings.Contains(cmd, " go test\n") ||
 		strings.Contains(cmd, " go test\t") ||
-		// #806: the old bare Contains("gotest") routed 'gotestsum' and
-		// 'scripts/gotest.sh' into the go-test summarizer; the word-boundary
-		// regex keeps both out while still matching a standalone 'gotest'.
+
 		goTestWordRe.MatchString(cmd)
 }
 
-// goTestWordRe matches 'go test' or 'gotest' as a standalone word (#806).
 var goTestWordRe = regexp.MustCompile(`(?:^|[\s;&|])(?:go\s+test|gotest)(?:\s|$)`)
 
-// isGoBuildCommand returns true if the command compiles Go code.
-// Uses prefix check to avoid false positives (e.g. "cargo build" should not match).
 func isGoBuildCommand(cmd string) bool {
-	// Same word-boundary requirement as isGoTestCommand (#387): the sub
-	// command must end the string or be followed by whitespace.
+
 	for _, sub := range []string{"go build", "go vet", "go install", "go generate", "go check"} {
 		if cmd == sub || strings.HasPrefix(cmd, sub+" ") ||
 			strings.Contains(cmd, " "+sub+" ") ||
@@ -110,7 +60,6 @@ func isGoBuildCommand(cmd string) bool {
 	return false
 }
 
-// isGenericTestCommand returns true if the command is a known test runner.
 func isGenericTestCommand(cmd string) bool {
 	for _, pattern := range []string{
 		"pytest", "python -m pytest", "npm test", "npm run test",
@@ -125,27 +74,16 @@ func isGenericTestCommand(cmd string) bool {
 	return false
 }
 
-// --- Go Test Output Parsing ---
-
-// Patterns for Go test output.
 var (
-	// "--- FAIL: TestName (0.00s)" or "--- FAIL: TestName/Sub (0.00s)"
-	goTestFailRe = regexp.MustCompile(`^--- FAIL:\s+(.+?)\s+\(`)
-	// "--- SKIP: TestName (0.00s)"
-	goTestSkipRe = regexp.MustCompile(`^--- SKIP:\s+(.+?)\s+\(`)
-	// "--- PASS: TestName (0.00s)" — only matched for counting
-	goTestPassRe = regexp.MustCompile(`^--- PASS:\s+(.+?)\s+\(`)
-	// "FAIL\tpackage/path\t[build failed|0.00s]"
+	goTestFailRe    = regexp.MustCompile(`^--- FAIL:\s+(.+?)\s+\(`)
+	goTestSkipRe    = regexp.MustCompile(`^--- SKIP:\s+(.+?)\s+\(`)
+	goTestPassRe    = regexp.MustCompile(`^--- PASS:\s+(.+?)\s+\(`)
 	goTestFailPkgRe = regexp.MustCompile(`^FAIL\s+\S+\s+.*`)
-	// "ok  \tpackage/path\t0.00s"
-	goTestOkPkgRe = regexp.MustCompile(`^ok\s+\s?\S+\s+`)
-	// Panic location: "panic: ..." followed by file:line
-	panicRe = regexp.MustCompile(`^panic:.*`)
-	// File:line pattern for panic origins
-	panicLocRe = regexp.MustCompile(`/[^:\s]+\.\w+:\d+`)
+	goTestOkPkgRe   = regexp.MustCompile(`^ok\s+\s?\S+\s+`)
+	panicRe         = regexp.MustCompile(`^panic:.*`)
+	panicLocRe      = regexp.MustCompile(`/[^:\s]+\.\w+:\d+`)
 )
 
-// summarizeGoTestOutput parses Go test output and extracts a structured summary.
 func summarizeGoTestOutput(output string) string {
 	lines := strings.Split(output, "\n")
 
@@ -176,11 +114,6 @@ func summarizeGoTestOutput(output string) string {
 		}
 	}
 
-	// Count ok packages — #806: with default non-verbose all-pass output the
-	// ONLY lines are 'ok pkg' ones, so passCount/failCount/skipCount were all
-	// 0 and we returned "" — the most common large-output case produced no
-	// summary at all, opposite of this file's token-savings purpose. ok
-	// packages now count toward the summary.
 	okPkgCount := 0
 	for _, line := range lines {
 		if goTestOkPkgRe.MatchString(strings.TrimSpace(line)) {
@@ -188,7 +121,6 @@ func summarizeGoTestOutput(output string) string {
 		}
 	}
 
-	// Only produce a summary if we found something actionable
 	if failCount == 0 && skipCount == 0 && passCount == 0 && okPkgCount == 0 && len(panicMsgs) == 0 {
 		return ""
 	}
@@ -214,7 +146,7 @@ func summarizeGoTestOutput(output string) string {
 			sb.WriteString(fmt.Sprintf("  FAIL: %s\n", t))
 		}
 	} else if passCount > 0 {
-		// All passed — summarize for token savings on verbose runs
+
 		sb.WriteString(fmt.Sprintf("PASSED: %d test(s)", passCount))
 		if skipCount > 0 {
 			sb.WriteString(fmt.Sprintf(", skipped: %d", skipCount))
@@ -224,12 +156,7 @@ func summarizeGoTestOutput(output string) string {
 		}
 		sb.WriteString("\n")
 	} else if okPkgCount > 0 {
-		// Non-verbose all-pass run (#1315): only 'ok pkg' lines, no
-		// verbose --- PASS lines. Without this branch the summary was
-		// the bare "[Result Summary]" header — okPkgCount fed the
-		// emptiness gate (#806) but no branch consumed it, so the most
-		// common case (go test ./... without -v) produced an empty
-		// shell exactly where package-level overview was needed.
+
 		sb.WriteString(fmt.Sprintf("PASSED: %d package(s)", okPkgCount))
 		if skipCount > 0 {
 			sb.WriteString(fmt.Sprintf(", skipped: %d", skipCount))
@@ -254,37 +181,23 @@ func summarizeGoTestOutput(output string) string {
 	return sb.String()
 }
 
-// --- Go Build Output Parsing ---
-
-// Pattern for Go compile errors: "path/file.go:line:col: error message"
 var goCompileErrorRe = regexp.MustCompile(`([^\s:]+\.go):(\d+)(?::\d+)?:\s+(.*)`)
 
-// goCompileErrorKeywords are the line substrings that mark a
-// structurally-matching line as a real compile error. #3116: the old
-// inline whitelist silently dropped real Go compile errors whose wording
-// shares no keyword with the list - 'imported and not used' (≠ 'declared
-// and not used'), 'redeclared in this block', 'missing return',
-// 'duplicate declaration' all matched goCompileErrorRe and then vanished
-// from the summary.
 var goCompileErrorKeywords = []string{
 	"error",
 	"undefined",
 	"declared and not used",
-	"imported and not used",    // #3116
-	"redeclared in this block", // #3116
-	"missing return",           // #3116
-	"duplicate declaration",    // #3116
+	"imported and not used",
+	"redeclared in this block",
+	"missing return",
+	"duplicate declaration",
 	"cannot use",
 	"mismatched types",
-	// #806: go vet diagnostics match goCompileErrorRe structurally
-	// ('foo.go:12:3: printf: non-constant format string') but carry
-	// none of the compile keywords -- keep vet analyzer lines.
+
 	"printf:",
 	"vet:",
 }
 
-// isGoCompileErrorLine reports whether a lowercased, structurally-matching
-// line carries any compile-error keyword (#3116).
 func isGoCompileErrorLine(lower string) bool {
 	for _, kw := range goCompileErrorKeywords {
 		if strings.Contains(lower, kw) {
@@ -294,7 +207,6 @@ func isGoCompileErrorLine(lower string) bool {
 	return false
 }
 
-// summarizeGoBuildOutput parses Go build/vet output and extracts compile errors.
 func summarizeGoBuildOutput(output string) string {
 	lines := strings.Split(output, "\n")
 
@@ -310,7 +222,7 @@ func summarizeGoBuildOutput(output string) string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if m := goCompileErrorRe.FindStringSubmatch(trimmed); m != nil {
-			// Only capture actual errors, not info lines
+
 			lower := strings.ToLower(trimmed)
 			if !isGoCompileErrorLine(lower) {
 				continue
@@ -346,23 +258,14 @@ func summarizeGoBuildOutput(output string) string {
 	return sb.String()
 }
 
-// --- Generic Test Output Parsing ---
-
-// Patterns for common test runner outputs.
 var (
-	// pytest: "FAILED test_file.py::test_name - Error message"
-	pytestFailRe = regexp.MustCompile(`^FAILED\s+(.+?)\s+-`)
-	// pytest: "===== N failed, M passed in X.XXs ====="
+	pytestFailRe    = regexp.MustCompile(`^FAILED\s+(.+?)\s+-`)
 	pytestSummaryRe = regexp.MustCompile(`(\d+)\s+failed.*(\d+)\s+passed`)
-	// jest/vitest: "FAIL  path/to/test.test.js"
-	jestFailRe = regexp.MustCompile(`^FAIL\s+(.+)`)
-	// jest summary: "Tests: 2 failed, 3 passed, 5 total"
-	jestSummaryRe = regexp.MustCompile(`Tests:\s+(\d+)\s+failed.*(\d+)\s+passed.*(\d+)\s+total`)
-	// cargo test: "test result: FAILED. 1 passed; 1 failed; 0 ignored; ..."
-	cargoFailRe = regexp.MustCompile(`test result:\s*(FAILED|ok)\.\s*(\d+)\s+passed;\s*(\d+)\s+failed`)
+	jestFailRe      = regexp.MustCompile(`^FAIL\s+(.+)`)
+	jestSummaryRe   = regexp.MustCompile(`Tests:\s+(\d+)\s+failed.*(\d+)\s+passed.*(\d+)\s+total`)
+	cargoFailRe     = regexp.MustCompile(`test result:\s*(FAILED|ok)\.\s*(\d+)\s+passed;\s*(\d+)\s+failed`)
 )
 
-// summarizeGenericTestOutput parses output from pytest, jest, cargo test, etc.
 func summarizeGenericTestOutput(output string) string {
 	lines := strings.Split(output, "\n")
 
@@ -411,12 +314,8 @@ func summarizeGenericTestOutput(output string) string {
 	return sb.String()
 }
 
-// --- Compiler Error Extraction (generic) ---
-
-// Generic compiler error pattern: "file.ext:line:col: error: message" or "file.ext(line): error"
 var genericCompileErrorRe = regexp.MustCompile(`([^\s:]+\.(?:go|rs|py|ts|js|tsx|jsx|java|c|cpp|rb)):(\d+)(?::\d+)?:\s*(error|Error|ERROR)[:\s]+(.+)`)
 
-// summarizeCompilerErrors extracts compiler-style errors from any command output.
 func summarizeCompilerErrors(output string) string {
 	matches := genericCompileErrorRe.FindAllStringSubmatch(output, -1)
 	if len(matches) == 0 {

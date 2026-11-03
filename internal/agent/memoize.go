@@ -12,59 +12,27 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// memoizeCache stores results of read-only tool calls to avoid redundant
-// re-execution when the agent re-calls the same tool after context clearing.
-//
-// Inspired by ToolCaching (arXiv:2601.15335) which found 40%+ of LLM tool
-// calls are redundant. In ggcode, this happens when tool-result clearing
-// replaces old results with placeholders, and the agent re-calls the tool.
-//
-// Invalidation strategy:
-//   - File-based tools (read_file): check file mtime AND size (#1104) - if unchanged, result is fresh
-//   - Directory tools (list_directory): check directory mtime AND size, plus a
-//     short TTL backstop (#1125) - in-place child-file edits (gofmt -w,
-//     echo >> file) only update the child's mtime, and most filesystems do not
-//     refresh the parent directory's mtime or size, so the snapshot signals
-//     stay equal while listed child sizes are already stale
-//   - Search tools (grep, search_files): 30s TTL (results may change as files are edited)
-//   - LSP tools: 15s TTL (LSP server state changes as code is edited)
-//   - Git read tools: 10s TTL (working tree changes)
-//
-// This is complementary to speculative execution (predicts next call) and
-// parallel pre-execution (pre-runs all read-only tools in a batch).
-
-// #1104 gap 1: on coarse-granularity filesystems (ext3/HFS+/NFS/FAT32,
-// 1-2s ticks) an edit performed right after a cached read can produce the
-// SAME ModTime as the entry snapshot, so mtime equality alone stale-serves
-// pre-edit content. Entries therefore also record the file size at capture
-// time and are invalidated when either signal drifts.
-
 const (
-	memoizeMaxEntries = 50 // bounded LRU
+	memoizeMaxEntries = 50
 	memoizeSearchTTL  = 30 * time.Second
 	memoizeLSPTTL     = 15 * time.Second
 	memoizeGitTTL     = 10 * time.Second
-	// memoizeDirListTTL bounds directory-listing entries (#1125). Directory
-	// mtime/size alone cannot detect in-place edits of child files because
-	// mutating a child does not touch the parent directory's metadata on
-	// most filesystems, so the listing needs a short maximum age regardless
-	// of the fast-path signals.
 	memoizeDirListTTL = 5 * time.Second
 )
 
 type memoEntry struct {
 	result    tool.Result
 	createdAt time.Time
-	mtime     time.Time     // file modification time at time of execution (for file-based tools)
-	path      string        // file/dir path for mtime invalidation (empty = TTL-only)
-	size      int64         // file size at capture time (#1104): catches same-tick edits on coarse-mtime filesystems
-	maxAge    time.Duration // #1125: hard upper bound on entry freshness (0 = unbounded; used for dir listings whose mtime cannot observe child edits)
+	mtime     time.Time
+	path      string
+	size      int64
+	maxAge    time.Duration
 }
 
 type toolMemo struct {
 	mu      sync.Mutex
-	entries map[string]*memoEntry // key: SHA256(toolName + args)
-	order   []string              // LRU ordering (oldest first)
+	entries map[string]*memoEntry
+	order   []string
 	hits    int
 	misses  int
 }
@@ -80,8 +48,6 @@ func (m *toolMemo) key(toolName string, args []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// extractPathForInvalidation extracts the file/dir path from tool arguments
-// for mtime-based invalidation. Returns empty string for tools that use TTL-only.
 func extractPathForInvalidation(toolName string, args []byte) string {
 	switch toolName {
 	case "read_file":
@@ -89,22 +55,19 @@ func extractPathForInvalidation(toolName string, args []byte) string {
 	case "list_directory":
 		return extractJSONStringField(args, "path")
 	case "glob":
-		// Glob supports recursive patterns (**), so the top-level directory's
-		// mtime does not reflect changes in subdirectories. Use TTL instead.
+
 		return ""
 	case "multi_file_read":
-		return "" // multi-file: skip per-file mtime, use TTL
+		return ""
 	default:
 		return ""
 	}
 }
 
-// getTTL returns the TTL for a tool. Returns 0 for file-based tools that
-// use mtime invalidation instead.
 func (m *toolMemo) getTTL(toolName string) time.Duration {
 	switch toolName {
 	case "read_file", "list_directory":
-		return 0 // use mtime invalidation, no TTL
+		return 0
 	case "grep", "search_files", "glob", "code_search":
 		return memoizeSearchTTL
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
@@ -115,11 +78,10 @@ func (m *toolMemo) getTTL(toolName string) time.Duration {
 		"git_show", "git_blame":
 		return memoizeGitTTL
 	default:
-		return memoizeSearchTTL // conservative default
+		return memoizeSearchTTL
 	}
 }
 
-// get returns a cached result if valid, or (zero, false).
 func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 	k := m.key(toolName, args)
 	m.mu.Lock()
@@ -131,33 +93,29 @@ func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 		return tool.Result{}, false
 	}
 
-	// Check validity.
 	if entry.path != "" {
-		// File-based invalidation: check mtime.
+
 		info, err := os.Stat(entry.path)
 		if err != nil {
-			// File doesn't exist anymore - cache miss.
+
 			m.removeLocked(k)
 			m.misses++
 			return tool.Result{}, false
 		}
 		if !info.ModTime().Equal(entry.mtime) {
-			// File changed - cache miss.
+
 			m.removeLocked(k)
 			m.misses++
 			return tool.Result{}, false
 		}
-		// #1104: equal mtimes do not prove freshness on coarse-granularity
-		// filesystems - an edit inside the same tick leaves ModTime frozen.
-		// A size mismatch catches every content change that alters length;
-		// treat it as a miss too.
+
 		if info.Size() != entry.size {
 			m.removeLocked(k)
 			m.misses++
 			return tool.Result{}, false
 		}
 	} else {
-		// TTL-based invalidation.
+
 		ttl := m.getTTL(toolName)
 		if time.Since(entry.createdAt) > ttl {
 			m.removeLocked(k)
@@ -166,27 +124,20 @@ func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 		}
 	}
 
-	// #1125: maxAge is a hard backstop layered on top of whichever primary
-	// strategy applied above. For directory listings the primary signals
-	// (parent dir mtime/size) are blind to in-place child-file edits, so the
-	// listing must expire purely by age even when every stat comparison
-	// still matches.
 	if entry.maxAge > 0 && time.Since(entry.createdAt) > entry.maxAge {
 		m.removeLocked(k)
 		m.misses++
 		return tool.Result{}, false
 	}
 
-	// Move to end of LRU order.
 	m.touchLocked(k)
 	m.hits++
 	return entry.result, true
 }
 
-// put stores a tool result in the memo.
 func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 	if result.IsError {
-		return // don't cache errors
+		return
 	}
 	k := m.key(toolName, args)
 	path := extractPathForInvalidation(toolName, args)
@@ -194,13 +145,10 @@ func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If key already exists, remove it from LRU order first to prevent
-	// duplicate entries that cause premature eviction and unbounded order growth.
 	if _, exists := m.entries[k]; exists {
 		m.removeLocked(k)
 	}
 
-	// Evict if at capacity.
 	for len(m.entries) >= memoizeMaxEntries {
 		if len(m.order) == 0 {
 			break
@@ -218,14 +166,10 @@ func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 	if path != "" {
 		if info, err := os.Stat(path); err == nil {
 			entry.mtime = info.ModTime()
-			entry.size = info.Size() // #1104: record size alongside mtime
+			entry.size = info.Size()
 		}
 	}
 
-	// #1125: directory listings get a short TTL backstop on top of the dir
-	// mtime/size fast path - in-place edits of child files (gofmt -w, echo >>)
-	// leave the parent directory's metadata untouched on most filesystems, so
-	// without an age bound the stale listing would be served indefinitely.
 	if toolName == "list_directory" {
 		entry.maxAge = memoizeDirListTTL
 	}
@@ -254,7 +198,6 @@ func (m *toolMemo) touchLocked(k string) {
 	}
 }
 
-// reset clears all entries (called at start of each new run).
 func (m *toolMemo) reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -262,12 +205,6 @@ func (m *toolMemo) reset() {
 	m.order = nil
 }
 
-// invalidateAll clears all cache entries - both TTL-based and mtime-based.
-// Called when a git operation changes the entire working tree (checkout,
-// reset, revert), making all cached file reads, search results, and LSP
-// diagnostics potentially stale. Unlike invalidateTTLBased which preserves
-// mtime entries (since normal file edits only affect specific files), this
-// is nuclear: after a branch switch, every file's content may differ.
 func (m *toolMemo) invalidateAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -279,10 +216,6 @@ func (m *toolMemo) invalidateAll() {
 	}
 }
 
-// invalidateTTLBased removes TTL-based cache entries (grep, LSP, git tools)
-// while preserving mtime-based entries (read_file, list_directory) whose
-// validity is tied to a specific file path. Called after file edits to
-// prevent serving stale search/diagnostic/git results.
 func (m *toolMemo) invalidateTTLBased() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -295,11 +228,11 @@ func (m *toolMemo) invalidateTTLBased() {
 			continue
 		}
 		if entry.path != "" {
-			// mtime-based entry - keep (validity depends on file, not TTL)
+
 			newOrder = append(newOrder, k)
 			kept++
 		} else {
-			// TTL-based entry - clear (search/LSP/git results may be stale)
+
 			delete(m.entries, k)
 			cleared++
 		}
@@ -310,37 +243,34 @@ func (m *toolMemo) invalidateTTLBased() {
 	}
 }
 
-// extractJSONStringField extracts a string field from JSON args.
-// Returns empty string if the field is not found or on error.
 func extractJSONStringField(data []byte, field string) string {
 	if len(data) == 0 {
 		return ""
 	}
-	// Simple JSON extraction without full parsing to avoid import cycles.
-	// Look for "field" : "value" pattern (with optional whitespace).
+
 	prefix := `"` + field + `"`
 	idx := indexOfBytes(data, []byte(prefix))
 	if idx < 0 {
 		return ""
 	}
-	// Skip past the field name to find the colon and opening quote.
+
 	pos := idx + len(prefix)
-	// Skip whitespace
+
 	for pos < len(data) && (data[pos] == ' ' || data[pos] == '\t' || data[pos] == '\n') {
 		pos++
 	}
 	if pos >= len(data) || data[pos] != ':' {
 		return ""
 	}
-	pos++ // skip colon
-	// Skip whitespace
+	pos++
+
 	for pos < len(data) && (data[pos] == ' ' || data[pos] == '\t' || data[pos] == '\n') {
 		pos++
 	}
 	if pos >= len(data) || data[pos] != '"' {
 		return ""
 	}
-	start := pos + 1 // skip opening quote
+	start := pos + 1
 	end := start
 	for end < len(data) {
 		if data[end] == '"' {
@@ -356,7 +286,7 @@ func extractJSONStringField(data []byte, field string) string {
 		return ""
 	}
 	path := string(data[start:end])
-	// Clean the path for filesystem use.
+
 	return filepath.Clean(path)
 }
 

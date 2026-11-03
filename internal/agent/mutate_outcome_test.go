@@ -59,7 +59,7 @@ func TestMutatingLedgerRecordAndLookup(t *testing.T) {
 	if got := l.lookupAmbiguous("run_command", []byte(`{"command":"x"}`)); got != 2 {
 		t.Fatalf("expected 2 attempts, got %d", got)
 	}
-	// Different args = different key
+
 	if got := l.lookupAmbiguous("run_command", []byte(`{"command":"y"}`)); got != 0 {
 		t.Fatalf("expected 0 for other args, got %d", got)
 	}
@@ -110,7 +110,7 @@ func TestAnnotateMutatingOutcomePreExec(t *testing.T) {
 	if strings.Contains(out.Content, nonAtomicResultTag) {
 		t.Fatalf("pre-exec failure must not carry ambiguous tag:\n%s", out.Content)
 	}
-	// No ledger entry recorded for pre-exec
+
 	if got := a.mutateLedger.lookupAmbiguous("write_file", []byte("{}")); got != 0 {
 		t.Fatalf("pre-exec must not record ambiguous: %d", got)
 	}
@@ -153,16 +153,14 @@ func TestNonAtomicTagIsCritical(t *testing.T) {
 	}
 }
 
-// TestMutatingLedgerNilSafe: Agent literals in tests (&Agent{}) leave
-// mutateLedger nil; the executeToolCall wiring must not panic on it.
 func TestMutatingLedgerNilSafe(t *testing.T) {
 	var l *mutatingLedger
 	if got := l.lookupAmbiguous("git_commit", []byte("{}")); got != 0 {
 		t.Fatalf("nil lookup should be 0, got %d", got)
 	}
-	l.recordAmbiguous("git_commit", []byte("{}")) // must not panic
-	l.reset()                                     // must not panic
-	// Full nil-Agent path through annotateMutatingOutcome.
+	l.recordAmbiguous("git_commit", []byte("{}"))
+	l.reset()
+
 	a := &Agent{}
 	a.guidanceBudget.reset()
 	res := tool.Result{Content: "tool error: timed out", IsError: true}

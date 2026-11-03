@@ -10,38 +10,11 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// Modified-files awareness for the system prompt.
-//
-// Research basis: Claude Code, Cursor, and Windsurf all give the agent immediate
-// visibility into which files have uncommitted changes — not just a count. The
-// agent can then reason about the current working state (e.g., "the user has
-// been editing planner.go and verify.go") without spending a tool call on
-// git_status or git_diff. This saves one LLM round-trip per session that
-// touches uncommitted work.
-//
-// ggcode already injects a one-line git summary ("5 uncommitted file(s)") via
-// vcs.Summary, but the agent has no idea WHICH files changed. This module adds
-// a compact "Modified files" section right after the git one-liner, listing
-// up to N changed files with their status codes.
-
 const (
-	// modifiedFilesMax caps the number of files shown to keep the system prompt
-	// small. If there are more, a "(N more)" suffix is appended.
-	modifiedFilesMax = 20
-	// modifiedFilesTimeout bounds the git status command so prompt construction
-	// is never delayed by slow VCS operations.
+	modifiedFilesMax     = 20
 	modifiedFilesTimeout = 2 * time.Second
 )
 
-// modifiedFilesSection returns a compact list of files with uncommitted changes
-// for injection into the system prompt. Returns an empty string if the
-// directory is not a VCS repo, the working tree is clean, or an error occurs.
-//
-// This function does I/O (git subprocess). In the interactive REPL it is
-// called by the background SectionCollector, not by the prompt builder
-// directly. The prompt builder reads the pre-computed value from the
-// collector's snapshot. In pipe/test mode where no collector exists, it
-// falls back to direct computation.
 func modifiedFilesSection(workingDir string) string {
 	return computeModifiedFilesSection(workingDir)
 }

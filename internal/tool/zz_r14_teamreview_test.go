@@ -1,7 +1,5 @@
 package tool
 
-// zz_r14_teamreview_test.go -- companion tests for team_review_digest /
-// team_review_decide (r14: scaled oversight batch verdict surface).
 import (
 	"context"
 	"strings"
@@ -56,7 +54,7 @@ func TestR14ApprovePathCompletesBoardTask(t *testing.T) {
 	if !ok || got.ID != mine.ID {
 		t.Fatalf("latestTeammateTask = %+v ok=%v", got, ok)
 	}
-	// The exact update the approve branch performs:
+
 	completed := task.TaskStatus("completed")
 	if _, err := tm.Update(got.ID, task.UpdateOptions{Status: &completed}); err != nil {
 		t.Fatal(err)
@@ -74,7 +72,7 @@ func TestR14ApprovePathCompletesBoardTask(t *testing.T) {
 }
 
 func TestR14DecideValidation(t *testing.T) {
-	// nil manager: guarded before any team lookup
+
 	res, err := TeamReviewDecideTool{}.Execute(context.Background(), []byte(`{"team_id":"t","teammate_id":"tm-1","verdict":"approve"}`))
 	if err != nil {
 		t.Fatal(err)

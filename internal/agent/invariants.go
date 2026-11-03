@@ -11,67 +11,37 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// r454: Declarative behavior invariants (AgentSpec-style, arXiv 2505.04447).
-//
-// Frontier claim: users should be able to DECLARE behavior invariants
-// ("never delete files outside internal/", "only delete files this run
-// created") in a file, and the runtime enforces them with DETERMINISTIC
-// assertions at the tool-call choke point - distinct from prompt-level
-// constraints (probabilistic, e.g. constraint_amnesia.go) and from
-// hard-coded detectors (not user-declarable, e.g. permission/zz_* pins).
-//
-// Everything here is opt-in: with no invariants file (the default) the
-// engine is inert and behavior is byte-for-byte unchanged.
-
-// Invariant is one declared rule. A tool call VIOLATES the invariant when
-// the tool matches OnTools (empty = all) AND every set predicate matches
-// (Op, PathGlob, CreatedByRun). Predicates combine conjunctively so a
-// rule stays simple to reason about.
 type Invariant struct {
 	ID           string   `json:"id"`
-	OnTools      []string `json:"on_tools"`                 // tool names; supports trailing * globs; empty = all tools
-	Op           string   `json:"op,omitempty"`             // delete|write|mkdir|move|exec; empty = any
-	PathGlob     string   `json:"path_glob,omitempty"`      // target path must match (supports **); empty = any target
-	CreatedByRun *bool    `json:"created_by_run,omitempty"` // target must (true) / must not (false) be a product of this run
-	Mode         string   `json:"mode"`                     // warn | block (default warn)
+	OnTools      []string `json:"on_tools"`
+	Op           string   `json:"op,omitempty"`
+	PathGlob     string   `json:"path_glob,omitempty"`
+	CreatedByRun *bool    `json:"created_by_run,omitempty"`
+	Mode         string   `json:"mode"`
 	Message      string   `json:"message,omitempty"`
 }
 
-// Violation is one detected breach.
 type Violation struct {
 	Inv    Invariant
-	Target string // best-effort path the rule evaluated against
+	Target string
 	Op     string
 }
 
-// invariantEngine holds the merged rule set and the run-product registry.
-// Lazily built on first use (nil-safe via checkInvariants wrapper).
 type invariantEngine struct {
 	mu         sync.RWMutex
 	invariants []Invariant
 	loaded     bool
-	loadDir    string // dir whose .ggcode/invariants.json to read
+	loadDir    string
 
-	// runProducts: absolute paths created/written by tool calls in THIS
-	// agent run (feeds the created_by_run predicate).
 	runProducts sync.Map
 }
 
-// invariantFileName is looked up as <dir>/.ggcode/invariants.json.
 const invariantFileName = "invariants.json"
 
-// invariantFileDoc is the user-facing contract, returned by the loader's
-// error path when the file exists but does not parse.
 type invariantFile struct {
 	Invariants []Invariant `json:"invariants"`
 }
 
-// loadInvariants merges ~/.ggcode/invariants.json (user scope) with
-// <dir>/.ggcode/invariants.json (project scope); same-ID project rules
-// override user rules. Parse failure degrades to the OTHER scope with a
-// debug log - a broken user file must not brick the project rules and
-// vice versa. Unknown modes are normalized to warn (fail-open: the
-// framework is a guardrail, not a jail).
 func (e *invariantEngine) loadInvariants() {
 	if e.loaded {
 		return
@@ -92,7 +62,7 @@ func (e *invariantEngine) loadInvariants() {
 		}
 		data, err := os.ReadFile(filepath.Join(scope.dir, invariantFileName))
 		if err != nil {
-			continue // absent = no rules from this scope
+			continue
 		}
 		var f invariantFile
 		if err := json.Unmarshal(data, &f); err != nil {
@@ -110,7 +80,7 @@ func (e *invariantEngine) loadInvariants() {
 				inv.Mode = "warn"
 			}
 			inv.Op = strings.ToLower(strings.TrimSpace(inv.Op))
-			byID[inv.ID] = inv // project scope runs last: overrides user
+			byID[inv.ID] = inv
 		}
 	}
 	for _, inv := range byID {
@@ -118,7 +88,6 @@ func (e *invariantEngine) loadInvariants() {
 	}
 }
 
-// userGGCodeDir returns ~/.ggcode (best-effort; empty on failure).
 func userGGCodeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -127,12 +96,6 @@ func userGGCodeDir() string {
 	return filepath.Join(home, ".ggcode")
 }
 
-// check evaluates all invariants against one tool call. Batch tools
-// (file_ops) are evaluated at OPERATION granularity: every mutation in the
-// batch is checked, so a block rule cannot be bypassed by placing the
-// offending operation after a benign one (#3254). Returns the FIRST
-// violation (block-mode rules are checked first so the strongest action
-// wins) or nil.
 func (e *invariantEngine) check(toolName string, args json.RawMessage) *Violation {
 	e.loadInvariants()
 	e.mu.RLock()
@@ -155,11 +118,9 @@ func (e *invariantEngine) check(toolName string, args json.RawMessage) *Violatio
 			}
 			if inv.CreatedByRun != nil {
 				_, created := e.runProducts.Load(absInvariantPath(ot.Target))
-				// created_by_run is a REQUIREMENT predicate, not a conjunctive
-				// match: the invariant holds when the target's created-state
-				// equals the declared requirement. A mismatch IS the violation.
+
 				if *inv.CreatedByRun == created {
-					continue // requirement satisfied, no violation
+					continue
 				}
 			}
 			v := &Violation{Inv: inv, Target: ot.Target, Op: ot.Op}
@@ -174,8 +135,6 @@ func (e *invariantEngine) check(toolName string, args json.RawMessage) *Violatio
 	return warnHit
 }
 
-// recordProduct registers a path as a product of this run (called after a
-// successful write-class tool call).
 func (e *invariantEngine) recordProduct(path string) {
 	if path == "" {
 		return
@@ -183,7 +142,6 @@ func (e *invariantEngine) recordProduct(path string) {
 	e.runProducts.Store(absInvariantPath(path), struct{}{})
 }
 
-// absInvariantPath normalizes for registry lookups.
 func absInvariantPath(p string) string {
 	if p == "" {
 		return ""
@@ -195,8 +153,6 @@ func absInvariantPath(p string) string {
 	return abs
 }
 
-// invariantToolMatches: empty list = all tools; entries support a
-// leading or trailing "*" (e.g. "file_*", "*_file", "multi_*").
 func invariantToolMatches(on []string, name string) bool {
 	if len(on) == 0 {
 		return true
@@ -215,29 +171,13 @@ func invariantToolMatches(on []string, name string) bool {
 	return false
 }
 
-// invariantOpTarget is one (operation class, target path) evaluation unit.
-// A single tool call yields one unit for simple tools and one unit PER
-// mutation operation for batch tools (file_ops) - the tool's semantic unit
-// is the operation, not the call (#3254).
 type invariantOpTarget struct {
 	Op     string
 	Target string
 }
 
-// invariantOpTargets expands a tool call into the (op, target) pairs the
-// invariant engine evaluates. For non-batch tools this is the single
-// (invariantOpOf, invariantTargetPath) classification. For file_ops every
-// mutation operation contributes its own pair - mkdir's target is its
-// SOURCE field (matching the tool's os.MkdirAll(source) semantics; the old
-// Destination read never matched, #3254 defect 2) and a blocked op cannot
-// hide behind a benign first entry (#3254 defect 1). A file_ops payload
-// that fails to parse degrades to the legacy single empty pair, mirroring
-// the old classifier's output for the same input.
 func invariantOpTargets(name string, args json.RawMessage) []invariantOpTarget {
-	// #3547 (reopen): batch write tools expand PER FILE, mirroring the
-	// file_ops #3254 principle - a blocked target must not hide behind a
-	// benign first entry. invariantTargetPath keeps its first-path primary
-	// role for single-target consumers; the engine evaluates every file.
+
 	switch name {
 	case "multi_file_write":
 		var a struct {
@@ -285,14 +225,12 @@ func invariantOpTargets(name string, args json.RawMessage) []invariantOpTarget {
 		case "mkdir":
 			out = append(out, invariantOpTarget{Op: "mkdir", Target: op.Source})
 		case "move":
-			out = append(out, invariantOpTarget{Op: "move", Target: op.Destination}) // moving INTO a path is the mutation
+			out = append(out, invariantOpTarget{Op: "move", Target: op.Destination})
 		}
 	}
 	return out
 }
 
-// invariantOpOf classifies the operation class of a tool call:
-// delete | mkdir | move | write | exec | "" (non-mutating).
 func invariantOpOf(name string, args json.RawMessage) string {
 	switch name {
 	case "write_file", "edit_file", "multi_edit_file", "multi_file_write", "batch_replace", "notebook_edit":
@@ -323,8 +261,6 @@ func invariantOpOf(name string, args json.RawMessage) string {
 	}
 }
 
-// invariantTargetPath extracts the primary target path from well-known
-// write/delete tools (best-effort; empty when none).
 func invariantTargetPath(name string, args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -350,10 +286,6 @@ func invariantTargetPath(name string, args json.RawMessage) string {
 	case "notebook_edit":
 		return str("notebook_path")
 	case "multi_file_write":
-		// #3547: classified as write by invariantOpOf but had no target
-		// extraction case, so path-predicated invariants (PathGlob etc.)
-		// silently never fired for batch writes. Extract the first file's
-		// path (primary target; the check is best-effort like batch_replace).
 		var a struct {
 			Files []struct {
 				Path string `json:"path"`
@@ -389,7 +321,7 @@ func invariantTargetPath(name string, args json.RawMessage) string {
 			case "mkdir":
 				return op.Destination
 			case "move":
-				return op.Destination // moving INTO a path is the mutation
+				return op.Destination
 			}
 		}
 		return ""
@@ -398,18 +330,13 @@ func invariantTargetPath(name string, args json.RawMessage) string {
 	}
 }
 
-// invariantGlobMatch matches pattern against path with ** support:
-// "**" crosses directory boundaries (a trailing "**" also matches the
-// empty remainder), plain segments match one level, and a bare pattern
-// also matches the base name (so ".env" hits any ".env" in the tree,
-// matching user intent).
 func invariantGlobMatch(pattern, path string) bool {
 	if pattern == "" || path == "" {
 		return false
 	}
 	segs := strings.Split(filepath.ToSlash(pattern), "/")
 	var b strings.Builder
-	b.WriteString("^(?:.*/)?") // any pattern may be relative to any root
+	b.WriteString("^(?:.*/)?")
 	for i, seg := range segs {
 		last := i == len(segs)-1
 		if seg == "**" {

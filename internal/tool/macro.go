@@ -1,22 +1,5 @@
 package tool
 
-// Tool macros (sa-148, tool composition): record a reusable sequence of
-// read-only tool calls once, replay it by name forever.
-//
-// Gap context: the strategy playbook (internal/agent/playbook.go, ACE
-// arXiv:2510.04618) learns successful tool sequences but only injects them
-// as system-prompt hints - the model must re-derive every call each run.
-// Skills are hand-written markdown. Nothing bridges "learned pattern" to
-// "callable asset". A macro is that bridge: define_macro persists the
-// sequence, run_macro replays it in one call.
-//
-// Security model (mirrors code_execution): macros may only compose
-// read-only tools (readOnlyToolNames). Write operations (edit_file,
-// run_command, ...) are rejected at define time so a macro can never
-// bypass the normal per-call permission flow with UI diff preview. Macros
-// cannot call macros ("macro" itself is not read-only), so recursion is
-// structurally impossible.
-
 import (
 	"context"
 	"encoding/json"
@@ -33,29 +16,18 @@ import (
 const (
 	macroFileName = "macros.json"
 
-	// macroMaxSteps bounds one macro's length; a macro needing more than 8
-	// tool calls is a workflow (workflow_run), not a macro.
 	macroMaxSteps = 8
 
-	// macroMaxEntries caps the store so the file stays small and the list
-	// action stays readable.
 	macroMaxEntries = 50
 
-	// macroMaxArgs bounds run_macro positional arguments ({{1}}..{{9}}).
 	macroMaxArgs = 9
 
-	// macroStepOutMax / macroTotalOutMax bound replay output per step and
-	// overall, keeping a chatty macro from flooding the context window.
 	macroStepOutMax  = 2048
 	macroTotalOutMax = 16 * 1024
 )
 
-// macroNameRe constrains macro names to a stable, shell- and path-safe set.
 var macroNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{2,40}$`)
 
-// macroStep is one tool invocation inside a macro. Args is a JSON object
-// template whose string leaves may reference positional run-time
-// arguments via {{1}}..{{9}}.
 type macroStep struct {
 	Tool string          `json:"tool"`
 	Args json.RawMessage `json:"args"`
@@ -73,15 +45,9 @@ type macroStore struct {
 	Entries map[string]*macroDef `json:"entries"`
 }
 
-// MacroTool implements the "macro" builtin: define / run / list / get /
-// delete reusable read-only tool-call sequences. Storage follows the
-// cmd_snippet convention: <workingDir>/.ggcode/macros.json, mutex-guarded
-// cache, atomic-ish persist, read-only snapshots for callers.
 type MacroTool struct {
 	WorkingDir string
-	// Registry is used at run time to look up sub-tools by name (same
-	// late-binding contract as CodeExecution).
-	Registry *Registry
+	Registry   *Registry
 
 	mu       sync.Mutex
 	filePath string
@@ -181,10 +147,6 @@ func (t *MacroTool) doDefine(name, desc string, steps []macroStep) (Result, erro
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: tool %q is not in the read-only set - macros may only compose read-only tools so write operations keep their normal per-call approval flow", i+1, s.Tool)}, nil
 		}
 		if len(s.Args) > 0 {
-			// #4553-A: unmarshal into a map so only a JSON OBJECT passes - the
-			// old `var probe any` accepted arrays/strings/numbers (syntax-only
-			// check) while the error text claimed "must be a JSON object", so a
-			// bad macro defined fine and exploded at run time instead.
 			var probe map[string]any
 			if err := json.Unmarshal(s.Args, &probe); err != nil {
 				return Result{IsError: true, Content: fmt.Sprintf("step %d: args must be a JSON object: %v", i+1, err)}, nil
@@ -229,10 +191,6 @@ func (t *MacroTool) doRun(ctx context.Context, name string, runArgsRaw json.RawM
 	}
 	var runArgs []string
 	if len(runArgsRaw) > 0 {
-		// #4455: the schema allows string/number/boolean items but the old
-		// unmarshal targeted []string, so a schema-legal args:[3] always
-		// failed with the misleading "array of scalars" error. Normalize
-		// scalars via fmt.Sprint instead (arrays/objects stay rejected).
 		var raw []any
 		if err := json.Unmarshal(runArgsRaw, &raw); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("args must be an array of scalars: %v", err)}, nil
@@ -268,10 +226,7 @@ func (t *MacroTool) doRun(ctx context.Context, name string, runArgsRaw json.RawM
 	fmt.Fprintf(&out, "macro %q: %d step(s)\n", name, len(def.Steps))
 	total := 0
 	for i, s := range def.Steps {
-		// #4221: same execution-time whitelist re-check as define_tool -
-		// macros.json is workspace-shared plaintext; a definition that never
-		// passed doDefine must not gain unapproved nested write access just
-		// because the file says so.
+
 		if _, ok := readOnlyToolNames[s.Tool]; !ok {
 			return Result{IsError: true, Content: fmt.Sprintf("%swrite-capable tool %q is not allowed in macro steps (definition failed the execution-time read-only re-check, #4221)\n(stopped at step %d)", fmt.Sprintf("--- step %d/%d %s: ", i+1, len(def.Steps), s.Tool), s.Tool, i+1)}, nil
 		}
@@ -308,32 +263,24 @@ func (t *MacroTool) doRun(ctx context.Context, name string, runArgsRaw json.RawM
 	return Result{Content: clampRunes(out.String(), macroTotalOutMax)}, nil
 }
 
-// expandMacroArgs substitutes {{1}}..{{9}} placeholders in the serialized
-// args template. Placeholders may appear inside string values; each
-// substituted value is JSON-escaped so injection cannot break out of the
-// string literal.
 func expandMacroArgs(template json.RawMessage, runArgs []string) (json.RawMessage, error) {
 	if len(template) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-	// #4455: the old loop did sequential strings.ReplaceAll, so a value
-	// containing a literal {{2}} was itself substituted by a later round -
-	// non-one-shot expansion. Single pass: scan the ORIGINAL template and
-	// replace every {{N}} in place, never rescanning substituted text.
+
 	placeholderRe := regexp.MustCompile(`\{\{([1-9])\}\}`)
 	out := placeholderRe.ReplaceAllStringFunc(string(template), func(m string) string {
-		// m is exactly 5 bytes: {{, digit, }}
+
 		n := int(m[2] - '0')
 		if n <= len(runArgs) {
 			esc, err := json.Marshal(runArgs[n-1])
 			if err != nil {
-				// unreachable for strings; keep the raw value on error
+
 				return m
 			}
 			return strings.Trim(string(esc), `"`)
 		}
-		// Unsupplied arg: keep the literal placeholder (same as the old
-		// leftover-placeholder comment documents).
+
 		return m
 	})
 	return json.RawMessage(out), nil
@@ -402,8 +349,6 @@ func (t *MacroTool) doDelete(name string) (Result, error) {
 	return Result{Content: fmt.Sprintf("macro %q deleted", name)}, nil
 }
 
-// ---- Storage helpers (cmd_snippet convention) ----
-
 func (t *MacroTool) storePath() string {
 	if t.filePath == "" {
 		dir := t.WorkingDir
@@ -415,8 +360,6 @@ func (t *MacroTool) storePath() string {
 	return t.filePath
 }
 
-// loadLocked returns the cached store, loading from disk on first use.
-// Caller must hold t.mu; the returned map is shared, treat as read-only.
 func (t *MacroTool) loadLocked() (*macroStore, error) {
 	if t.cache != nil {
 		return t.cache, nil
@@ -431,9 +374,7 @@ func (t *MacroTool) loadLocked() (*macroStore, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, store); err != nil {
-		// Corrupt store: quarantine by renaming, start fresh (same
-		// fail-open contract as other .ggcode stores; never wedge the
-		// tool on a bad file).
+
 		_ = os.Rename(t.storePath(), t.storePath()+".corrupt")
 		t.cache = &macroStore{Entries: map[string]*macroDef{}}
 		return t.cache, nil
@@ -460,7 +401,6 @@ func (t *MacroTool) persistLocked(store *macroStore) error {
 	return nil
 }
 
-// clampRunes truncates s to at most max runes without cutting mid-rune.
 func clampRunes(s string, max int) string {
 	if len(s) <= max {
 		return s

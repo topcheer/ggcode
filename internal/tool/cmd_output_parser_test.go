@@ -98,10 +98,6 @@ func TestSummarizeCommandOutput_GoVetOutput(t *testing.T) {
 `
 	summary := summarizeCommandOutput("go vet ./...", output)
 
-	// "Printf format" contains "format" but we need "error" keyword
-	// The parser should catch "unreachable code" if it's classified
-	// go vet output doesn't always use "error" — so may or may not produce summary
-	// Just verify it doesn't crash
 	_ = summary
 }
 
@@ -172,7 +168,7 @@ func TestSummarizeCommandOutput_GenericCompilerErrors(t *testing.T) {
 	output := `src/main.ts:10:5: error TS2322: Type 'string' is not assignable to type 'number'.
 src/util.ts:25:3: error TS2304: Cannot find name 'foo'.
 `
-	// "tsc" is not a recognized test command, so it falls to compiler error path
+
 	summary := summarizeCommandOutput("tsc --noEmit", output)
 
 	if !strings.Contains(summary, "[Result Summary]") {
@@ -189,10 +185,9 @@ func TestSummarizeCommandOutput_GoTestBuildFailedPackage(t *testing.T) {
 FAIL	example.com/pkg/broken [build failed]
 FAIL
 `
-	// go test with build failure — should detect compile errors
+
 	summary := summarizeCommandOutput("go test ./...", output)
 
-	// Should have build failures in packages
 	if !strings.Contains(summary, "Build failures") {
 		t.Errorf("expected build failures section, got:\n%s", summary)
 	}
@@ -203,7 +198,7 @@ func TestSummarizeCommandOutput_CommandWithComment(t *testing.T) {
 FAIL	example.com/pkg	0.010s
 FAIL
 `
-	// Command prefixed with a comment line (common in agent-generated commands)
+
 	summary := summarizeCommandOutput("# run tests\ngo test ./...", output)
 
 	if !strings.Contains(summary, "FAILED: 1 test(s)") {
@@ -222,14 +217,12 @@ func TestSummarizeCommandOutput_ManyFailuresCapped(t *testing.T) {
 
 	summary := summarizeCommandOutput("go test ./...", sb.String())
 
-	// Should cap the number of listed failures
 	if !strings.Contains(summary, "... and") {
 		t.Errorf("expected failure cap message, got:\n%s", summary)
 	}
 }
 
 func TestSummarizeCommandOutput_LargeTestRunSavesTokens(t *testing.T) {
-	// Simulate a large test suite with mostly passing tests and 2 failures
 	var sb strings.Builder
 	for i := 0; i < 200; i++ {
 		sb.WriteString("--- PASS: TestBig_Pass_")
@@ -245,9 +238,8 @@ func TestSummarizeCommandOutput_LargeTestRunSavesTokens(t *testing.T) {
 
 	summary := summarizeCommandOutput("go test ./...", sb.String())
 
-	// The summary should be compact and highlight the 2 failures
 	lines := strings.Split(summary, "\n")
-	// Should be well under 10 lines for the summary portion
+
 	if len(lines) > 15 {
 		t.Errorf("summary too long: %d lines for 2 failures out of 200 tests", len(lines))
 	}
@@ -262,14 +254,10 @@ func TestSummarizeCommandOutput_LargeTestRunSavesTokens(t *testing.T) {
 	}
 }
 
-// TestIsGoTestCommandWordBoundary verifies #387: "go test" must end the
-// command or be followed by whitespace — "go testdata" is NOT a go test run.
 func TestIsGoTestCommandWordBoundary(t *testing.T) {
-	// #806: bare 'gotest' substring routed gotestsum/gotest.sh here too;
-	// a REAL standalone gotest invocation still matches via the
-	// word-boundary regex.
+
 	positive := []string{"go test ./...", "go test", "cd x && go test ./y", "gotest ./..."}
-	// #806: these must NOT match (the old Contains("gotest") bug class).
+
 	negative2 := []string{"gotestsum ./...", "bash scripts/gotest.sh"}
 	for _, cmd := range positive {
 		if !isGoTestCommand(strings.ToLower(cmd)) {
@@ -289,8 +277,6 @@ func TestIsGoTestCommandWordBoundary(t *testing.T) {
 	}
 }
 
-// TestIsGoBuildCommandWordBoundary mirrors the same fix for the build
-// subcommands (#387).
 func TestIsGoBuildCommandWordBoundary(t *testing.T) {
 	positive := []string{"go build ./...", "go vet", "go install ./cmd/x"}
 	for _, cmd := range positive {
@@ -306,9 +292,6 @@ func TestIsGoBuildCommandWordBoundary(t *testing.T) {
 	}
 }
 
-// #1315: non-verbose all-pass runs (plain `go test ./...` without -v)
-// emit only "ok pkg" lines — the summary must carry the package count,
-// not an empty "[Result Summary]" shell.
 func TestSummarizeCommandOutput_GoTestNonVerboseAllPass(t *testing.T) {
 	output := `ok  	example.com/foo	0.045s
 ok  	example.com/bar	0.120s

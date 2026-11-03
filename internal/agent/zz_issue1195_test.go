@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #1195: redactSecrets/checkRedactedInWrite were dead code (zero production
-// call sites) - the documented secret-leak protection never fired. These
-// tests pin the now-wired contract: masking without data loss, honest
-// truncation declaration, and write-guard behavior.
-
 func TestRedactSecretsMasksAKIAKey(t *testing.T) {
 	in := "config:\n  key = AKIAIOSFODNN7EXAMPLE\n  region = us-east-1\n"
 	out := redactSecrets("read_file", in)
@@ -19,7 +14,7 @@ func TestRedactSecretsMasksAKIAKey(t *testing.T) {
 	if strings.Contains(out, "AKIAIOSFODNN7EXAMPLE") {
 		t.Fatal("original secret value must not survive redaction")
 	}
-	// Context preserved: key name and region survive.
+
 	if !strings.Contains(out, "region = us-east-1") {
 		t.Fatal("surrounding context must be preserved")
 	}
@@ -42,10 +37,6 @@ func TestRedactSecretsNoSecretUnchanged(t *testing.T) {
 	}
 }
 
-// The #1195 latent truncation bug: with a secret in the first 256KB, the
-// old implementation silently dropped everything past 256KB from the
-// returned content. The fix must redact the scanned prefix, keep the tail
-// verbatim, and declare the unscanned region.
 func TestRedactSecretsLargeContentNoTailLoss(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("prefix AKIAIOSFODNN7EXAMPLE suffix\n")
@@ -66,15 +57,12 @@ func TestRedactSecretsLargeContentNoTailLoss(t *testing.T) {
 	if !strings.Contains(out, "included verbatim and unscanned") {
 		t.Fatal("unscanned tail must be declared in the notice")
 	}
-	// Length contract: output = notice + full original length (secret value
-	// replaced by marker; no multi-KB truncation).
+
 	if len(out) < len(in) {
 		t.Fatalf("output must not lose content: got %d bytes, input %d", len(out), len(in))
 	}
 }
 
-// With NO secret in the scanned window, large content returns byte-identical
-// (no notice, no truncation - previous behavior, now pinned).
 func TestRedactSecretsLargeCleanContentIdentical(t *testing.T) {
 	var sb strings.Builder
 	for sb.Len() <= maxRedactScanLen+4096 {
@@ -93,7 +81,7 @@ func TestCheckRedactedInWriteBlocksWriteTools(t *testing.T) {
 			t.Fatalf("%s with REDACTED marker must produce a warning", tool)
 		}
 	}
-	// Read tools and marker-free writes pass.
+
 	if w := checkRedactedInWrite("read_file", args); w != "" {
 		t.Fatalf("read_file must not be guarded, got: %q", w)
 	}

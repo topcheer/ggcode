@@ -9,16 +9,9 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// #4775 (S-03): create_namedagent's tools allowlist is validated against
-// the session registry at spawn (use_namedagent) time. A declared-but-
-// unavailable tool (lanchat declared where the registry never registered
-// it) previously spawned anyway and the sub-agent only discovered the
-// absence mid-run ("no lanchat in this session") - now it fails loudly
-// before Spawn, mirroring the #551-C model gate.
 func TestIssue4775_NamedAgentToolAllowlistValidated(t *testing.T) {
 	mgr, tool := newNamedAgentTestEnv(t, clonableFakeProvider{}, nil)
 
-	// Template declares a tool the registry does not have.
 	if err := tool.Store.Save(subagent.NamedAgentTemplate{
 		Name:  "sa-1",
 		Tools: []string{"lanchat"},
@@ -38,12 +31,11 @@ func TestIssue4775_NamedAgentToolAllowlistValidated(t *testing.T) {
 			t.Errorf("error message missing %q: %s", want, res.Content)
 		}
 	}
-	// Rejected before Spawn: no zombie sub-agent entry (same invariant as #551-C).
+
 	if agents := mgr.List(); len(agents) != 0 {
 		t.Fatalf("rejected allowlist left %d zombie sub-agent entries", len(agents))
 	}
 
-	// An empty allowlist (all tools) keeps passing the gate.
 	if err := tool.Store.Save(subagent.NamedAgentTemplate{
 		Name: "sa-open",
 	}); err != nil {

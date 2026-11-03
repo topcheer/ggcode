@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// GitShow implements the git_show tool.
 type GitShow struct{ WorkingDir string }
 
 func (t GitShow) Name() string { return "git_show" }
@@ -69,11 +68,7 @@ func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	} else {
 		gitArgs = append(gitArgs, "--format=fuller", "--patch")
 	}
-	// #1689 case 2: the revision rides BEFORE the "--" separator - an
-	// agent-passed "--output=/tmp/x" turns the read-only show into an
-	// arbitrary-path overwrite (git show supports --output=<file>). The
-	// file argument has the guard; the revision didn't (blame got
-	// validateRefName via #1687 - show joins the family).
+
 	if strings.HasPrefix(args.Revision, "-") {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid revision %q: leading dash (refusing option injection)", args.Revision)}, nil
 	}
@@ -102,7 +97,6 @@ func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitShow) Clone() Tool {
 	return &GitShow{WorkingDir: t.WorkingDir}
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// createTestProjectDir creates a temp dir with .git so NewProjectAutoMemory recognizes it.
 func createTestProjectDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -21,10 +20,6 @@ func createTestProjectDir(t *testing.T) string {
 	return dir
 }
 
-// TestSaveMemoryTool_ParametersDiscloseProceduralNaming guards the #r33
-// follow-up: the key param description must disclose the '-impl'/'build-'/
-// 'release-' naming convention so procedural knowledge actually rides the
-// persistent-memory channel instead of silently falling to index-only.
 func TestSaveMemoryTool_ParametersDiscloseProceduralNaming(t *testing.T) {
 	tol := NewSaveMemoryTool(nil, nil)
 	params := string(tol.Parameters())
@@ -61,7 +56,6 @@ func TestSaveMemoryTool_DefaultProjectScope(t *testing.T) {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
 
-	// Default scope is project — verify project file was created
 	data, err := os.ReadFile(filepath.Join(pm.Dir(), "test-pattern.md"))
 	if err != nil {
 		t.Fatalf("project file not found: %v", err)
@@ -167,7 +161,6 @@ func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	// HOME dir — NewProjectAutoMemory returns nil
 	pm := memory.NewProjectAutoMemory(os.Getenv("HOME"))
 	if pm != nil {
 		t.Fatal("expected nil project memory for HOME dir")
@@ -175,7 +168,6 @@ func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
 
 	tol := NewSaveMemoryTool(am, pm)
 
-	// Default scope is project — should fail gracefully
 	input, _ := json.Marshal(map[string]string{
 		"key":     "test",
 		"content": "should fail",
@@ -189,7 +181,6 @@ func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
 		t.Fatal("expected error when project memory is nil")
 	}
 
-	// Global scope should still work
 	input2, _ := json.Marshal(map[string]string{
 		"key":     "global-ok",
 		"content": "works fine",
@@ -210,7 +201,6 @@ func TestSaveMemoryTool_NoGitStillWorks(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	// No .git — should still get project memory (just a plain directory)
 	projectDir := t.TempDir()
 	pm := memory.NewProjectAutoMemory(projectDir)
 	if pm == nil {

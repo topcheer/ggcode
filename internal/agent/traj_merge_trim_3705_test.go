@@ -9,12 +9,6 @@ import (
 	"time"
 )
 
-// #3705: TrajMergeInto must evict the LOWEST EffectiveConfidence entries when
-// the merged store exceeds trajIntelMaxEntries, not the file-head rows. The
-// pre-fix tail-FIFO slice kept the newest 50 rows by first-seen position,
-// which dropped the most-reinforced insights (they sit at the head because
-// consolidateLearnings keeps first-seen row order) and preserved decayed
-// one-off noise.
 func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 	main := t.TempDir()
 	storeDir := filepath.Join(main, ".ggcode")
@@ -33,8 +27,6 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 		lines = append(append(lines, b...), '\n')
 	}
 
-	// Positions 1-10: oldest keys, heavily reinforced, high confidence,
-	// recently re-touched. These are the rows tail-FIFO used to discard.
 	for i := 0; i < 10; i++ {
 		writeLine(trajectoryLearning{
 			Category:       "cat-reinforced",
@@ -47,8 +39,7 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 			LastReinforced: base.Add(-1 * time.Hour),
 		})
 	}
-	// Positions 11-50: one-off noise from long ago. EffectiveConfidence is
-	// decayed toward the floor, so confidence-aware trim must evict these.
+
 	for i := 0; i < 40; i++ {
 		writeLine(trajectoryLearning{
 			Category:   "cat-noise",
@@ -62,7 +53,6 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Source with 5 fresh dedupe-key rows (55 total -> 5 must be evicted).
 	var srcLines []byte
 	for i := 0; i < 5; i++ {
 		b, err := json.Marshal(trajectoryLearning{
@@ -101,7 +91,7 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 	for _, l := range got {
 		survive[l.Insight] = true
 	}
-	// The regression signature: tail-FIFO dropped five of these.
+
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("reinforced-insight-%d", i)
 		if !survive[key] {
@@ -124,8 +114,6 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 		t.Errorf("dropped noise rows = %d, want exactly 5 (the lowest-confidence evictions)", droppedNoise)
 	}
 
-	// File order after trim must be chronological (same invariant as
-	// persistLocked), not first-seen merge order.
 	for i := 1; i < len(got); i++ {
 		if got[i].Timestamp.Before(got[i-1].Timestamp) {
 			t.Fatalf("store rows out of chronological order at %d: %v before %v", i, got[i].Timestamp, got[i-1].Timestamp)
@@ -133,19 +121,16 @@ func TestTrajMergeInto_TrimsLowestConfidenceNotTailFIFO(t *testing.T) {
 	}
 }
 
-// Direct unit test for the shared helper: oldest-reinforced high-confidence
-// rows survive; low-confidence fresh rows are evicted first among ties by
-// recency.
 func TestTrimLearnings_EvictsLowestConfidence(t *testing.T) {
 	base := time.Now()
 	var all []trajectoryLearning
-	for i := 0; i < 10; i++ { // high value, old
+	for i := 0; i < 10; i++ {
 		all = append(all, trajectoryLearning{
 			Category: "hi", Type: fmt.Sprintf("h%d", i), Insight: fmt.Sprintf("hi-%d", i),
 			Confidence: 0.95, Reinforced: 20, Timestamp: base.Add(-2 * time.Hour),
 		})
 	}
-	for i := 0; i < 50; i++ { // low value, older
+	for i := 0; i < 50; i++ {
 		all = append(all, trajectoryLearning{
 			Category: "lo", Type: fmt.Sprintf("l%d", i), Insight: fmt.Sprintf("lo-%d", i),
 			Confidence: 0.1, Timestamp: base.Add(-10 * 24 * time.Hour),

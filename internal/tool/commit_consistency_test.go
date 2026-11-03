@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// Probes for the message-diff consistency sentinel (commit_consistency.go).
-// Each case pins one rule of AnalyzeMessageDiffConsistency against a
-// representative staged-diff shape.
-
 const consistencyDiff = `diff --git a/internal/tool/git_commit.go b/internal/tool/git_commit.go
 index 1234567..89abcde 100644
 --- a/internal/tool/git_commit.go
@@ -44,23 +40,18 @@ func TestAnalyzeMessageDiffConsistency_PhantomFile(t *testing.T) {
 	}
 }
 
-// TestAnalyzeMessageDiffConsistency_AbbreviationNoFalsePositive (#3448):
-// the highest-frequency English abbreviations all match msgFileTokenRe and
-// used to produce constant phantom-file warnings (~1.2% of this repo's
-// recent commits contain "e.g."). They must be filtered as
-// abbreviation-shaped tokens, while real phantom detection stays live.
 func TestAnalyzeMessageDiffConsistency_AbbreviationNoFalsePositive(t *testing.T) {
 	for _, msg := range []string{
 		"fix(agent): retry on transient errors, e.g. 429/503",
 		"refactor config parsing, i.e. the yaml loader",
 		"symbols like U.S and a.m must not be files",
-		"see x.y for details", // also covers a.k.a shape
+		"see x.y for details",
 	} {
 		if got := AnalyzeMessageDiffConsistency(msg, consistencyDiff); got != "" {
 			t.Fatalf("abbreviation-only message must not warn, msg=%q got: %s", msg, got)
 		}
 	}
-	// Real phantom detection still fires alongside an abbreviation.
+
 	got := AnalyzeMessageDiffConsistency(
 		"fix(agent): retry on transient errors, e.g. 429/503 (see provider_panel.go)", consistencyDiff)
 	if !strings.Contains(got, "provider_panel.go") {
@@ -80,8 +71,7 @@ func TestAnalyzeMessageDiffConsistency_PhantomSymbols(t *testing.T) {
 }
 
 func TestAnalyzeMessageDiffConsistency_SingleSymbolNoWarn(t *testing.T) {
-	// One borderline identifier is frequently legitimate prose — precision
-	// guard: require two before warning.
+
 	msg := "chore(tool): minor cleanup around ParseJSONShape"
 	got := AnalyzeMessageDiffConsistency(msg, consistencyDiff)
 	if got != "" {

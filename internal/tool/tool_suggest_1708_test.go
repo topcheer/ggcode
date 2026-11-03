@@ -2,11 +2,6 @@ package tool
 
 import "testing"
 
-// #1708 case 2: equal-distance suggestions must not depend on tool
-// REGISTRATION order - ties resolve to the lexically smaller name.
-// "greb" is distance-1 from "grep" and (via prefix/lexical rules)
-// ambiguous inputs like "glob2" tie across glob/grep at distance 2;
-// assert stability across repeated calls and reverse registration.
 func TestToolSuggestTieDeterministic1708(t *testing.T) {
 	reg := setupTestRegistry()
 	got := SuggestToolName(reg, "greb")
@@ -18,8 +13,7 @@ func TestToolSuggestTieDeterministic1708(t *testing.T) {
 			t.Fatalf("nondeterministic suggestion: %q vs %q", got, again)
 		}
 	}
-	// Reverse registration order must not change a TIED result:
-	// "glob" vs "grep" both distance 2 from "grXb"-style inputs.
+
 	reg2 := NewRegistry()
 	_ = reg2.Register(Grep{})
 	_ = reg2.Register(Glob{})

@@ -1,15 +1,5 @@
 package agent
 
-// #3685 probes (unit-level pins of the enum unification):
-//  A) isCommandChannelTool recognizes the six command channels - the
-//     verifyDebt/editPropagation clear gates in agent.go key off it, so a
-//     `go test` through bash/powershell now clears debt like run_command.
-//  B) strategyFixationIsVerification mirrors the causal-gate channels MINUS
-//     start_command: its launch result only means "job started" and used to
-//     clear streaks before any test ran; the real event is the terminal
-//     outcome (wait_command/read_command_output), now wired via the #2992
-//     branch.
-
 import "testing"
 
 func TestIssue3685_CommandChannelSet(t *testing.T) {

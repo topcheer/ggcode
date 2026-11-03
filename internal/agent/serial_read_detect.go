@@ -7,51 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Sequential Read Serialization Detector -- Inter-Iteration Read Batching Awareness
-//
-// Research basis:
-//   - "Speculative Actions: A Lossless Framework for Faster AI Agents"
-//     (arXiv:2510.04371, 2025): introduces speculative execution where faster
-//     models predict likely future actions and execute them in parallel. The
-//     core insight: many agent actions are independent and could be parallelized,
-//     but agents default to sequential execution, wasting latency and iterations.
-//   - "A Self-Improving Coding Agent" (SICA, arXiv:2504.15228, NeurIPS 2025):
-//     trajectory waste is the primary bottleneck. Each unnecessary iteration
-//     costs tokens, time, and degrades output quality via context bloat.
-//   - Anthropic "Context Engineering for AI Agents" (2025): recommends batching
-//     independent read operations to reduce round-trips and context fragmentation.
-//   - OpenAI function calling best practices (2025): encourage parallel tool
-//     calls for independent operations.
-//
-// Problem: AI coding agents often serialize independent read-only exploration
-// across turns:
-//
-//	Turn 1: read_file("foo.go")        → 1 tool call, waits for response
-//	Turn 2: grep("pattern", "bar/")    → 1 tool call, waits for response
-//	Turn 3: git_log()                  → 1 tool call, waits for response
-//
-// Each of these turns could have been a single turn with 3 parallel tool calls.
-// The agent wastes 2 extra iterations (extra LLM round-trips, extra context
-// tokens, extra latency) for what should have been one batched turn.
-//
-// This is NOT about single-call efficiency (handled by tool_sequence.go for
-// ordering). This is about CROSS-TURN serialization: the model choosing to issue
-// one read per turn instead of batching multiple reads in a single turn.
-//
-// Distinct from existing detectors:
-//   - tool_sequence.go: detects suboptimal ORDERING within a single turn (e.g.
-//     list_directory before glob on same dir). Serial read detects CROSS-TURN
-//     single-read patterns (one read per turn, N turns in a row).
-//   - tool_call_storm: detects bursts of diverse tools without reasoning. Serial
-//     read detects the OPPOSITE: too FEW tools per turn (undersubscription).
-//   - futile_cycle.go / wasted_explore: detect reads that yield no action. Serial
-//     read detects reads that ARE useful but should have been batched.
-//   - tool_diversity: tracks unique tool variety. Serial read tracks READ COUNT
-//     PER TURN (exactly 1 when more was possible).
-
-// serialReadOnlyTools lists tools that are pure reads and safe to batch.
-// Mutating tools (edit_file, run_command, git_commit) are excluded because
-// batching those would change semantics.
 var serialReadOnlyTools = map[string]bool{
 	"read_file":               true,
 	"multi_file_read":         true,
@@ -86,34 +41,19 @@ var serialReadOnlyTools = map[string]bool{
 	"web_fetch":               true,
 }
 
-// serialReadState tracks per-turn tool call counts to detect cross-turn
-// serialization of read-only calls that could have been batched.
 type serialReadState struct {
 	mu sync.Mutex
 
-	// consecutiveSingleReads counts how many consecutive turns had exactly
-	// 1 read-only tool call and zero mutating calls.
 	consecutiveSingleReads int
 
-	// currentTurnReadOnly counts read-only calls in the current turn.
 	currentTurnReadOnly int
 
-	// currentTurnHasMutation tracks whether the current turn included any
-	// mutating tool call. If so, the turn is not a "single read" turn.
 	currentTurnHasMutation bool
 
-	// lspStreak counts consecutive single-read turns whose one call was
-	// an LSP tool (#1492-E): the system prompt MANDATES the serial chain
-	// lsp_symbols -> lsp_definition -> lsp_references - each step feeds
-	// the next - so three such turns are dependent by design, not
-	// "independent reads" the batch guidance could parallelize.
 	lspStreak int
 
-	// currentTurnTool is the tool name of the current turn's first
-	// read-only call (only meaningful when the turn ends as a single read).
 	currentTurnTool string
 
-	// fired tracks whether the detector has already fired this run.
 	fired bool
 }
 
@@ -132,11 +72,6 @@ func (s *serialReadState) reset() {
 	s.fired = false
 }
 
-// serialMutatingTools lists tools that MUTATE state — a call to any of
-// these legitimately breaks the read-batching streak. #465: the old
-// else-branch treated every non-whitelisted tool as a mutation, so
-// todo_write/ask_user/task_*/skill/cron_*/MCP reads reset the streak and
-// the batch-opportunity guidance never fired for explorer agents.
 var serialMutatingTools = map[string]bool{
 	"edit_file": true, "multi_edit_file": true, "multi_file_edit": true,
 	"write_file": true, "multi_file_write": true, "batch_replace": true,
@@ -150,9 +85,6 @@ var serialMutatingTools = map[string]bool{
 	"team_delete": true,
 }
 
-// recordToolCall is called once per tool call within the current turn.
-// Unknown tools (MCP, rarely used built-ins) are NEUTRAL per #465: they
-// neither advance the read streak nor reset it (fail-open).
 func (s *serialReadState) recordToolCall(toolName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,14 +98,10 @@ func (s *serialReadState) recordToolCall(toolName string) {
 	}
 }
 
-// endTurn is called when all tool calls in the current turn have been processed.
-// It updates the consecutive streak and returns a guidance hint if the
-// serialization threshold is met.
 func (s *serialReadState) endTurn(iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// A "single read" turn: exactly 1 read-only call, zero mutations.
 	if s.currentTurnReadOnly == 1 && !s.currentTurnHasMutation {
 		s.consecutiveSingleReads++
 		if strings.HasPrefix(s.currentTurnTool, "lsp_") {
@@ -186,14 +114,10 @@ func (s *serialReadState) endTurn(iteration int) string {
 		s.lspStreak = 0
 	}
 
-	// Reset per-turn counters for the next turn.
 	s.currentTurnReadOnly = 0
 	s.currentTurnHasMutation = false
 	s.currentTurnTool = ""
 
-	// Fire once per run when 3+ consecutive single-read turns are detected.
-	// #1492-E: skip when every streak turn was an LSP call - the mandated
-	// symbols->definition->references chain is dependent by construction.
 	if s.consecutiveSingleReads >= 3 && !s.fired {
 		if s.lspStreak >= s.consecutiveSingleReads {
 			debug.Log("agent", "Serial read: skipping fire - streak is the mandated LSP serial chain (iteration %d)", iteration)

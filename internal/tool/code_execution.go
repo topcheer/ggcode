@@ -15,23 +15,18 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// readOnlyToolNames is the set of tools that code_execution is allowed to
-// invoke from JavaScript. Only read-only tools are exposed — write operations
-// (edit_file, write_file, run_command) are intentionally excluded so that
-// file modifications still go through the normal per-call permission flow
-// with UI diff preview and approval.
 var readOnlyToolNames = map[string]bool{
-	// File reads
+
 	"read_file":       true,
 	"multi_file_read": true,
-	// Search
+
 	"search_files": true,
 	"grep":         true,
 	"glob":         true,
-	"code_search":  true, // BM25 semantic search (read-only)
-	// Directory listing
+	"code_search":  true,
+
 	"list_directory": true,
-	// Git read-only
+
 	"git_status":      true,
 	"git_diff":        true,
 	"git_log":         true,
@@ -40,7 +35,7 @@ var readOnlyToolNames = map[string]bool{
 	"git_branch_list": true,
 	"git_remote":      true,
 	"git_stash_list":  true,
-	// LSP read-only (rename excluded — it writes)
+
 	"lsp_hover":                  true,
 	"lsp_definition":             true,
 	"lsp_references":             true,
@@ -52,7 +47,7 @@ var readOnlyToolNames = map[string]bool{
 	"lsp_outgoing_calls":         true,
 	"lsp_prepare_call_hierarchy": true,
 	"lsp_code_actions":           true,
-	// Runtime / metadata
+
 	"runtime":               true,
 	"debug_log":             true,
 	"list_agents":           true,
@@ -60,24 +55,12 @@ var readOnlyToolNames = map[string]bool{
 	"read_mcp_resource":     true,
 	"task_list":             true,
 	"task_get":              true,
-	// Web
+
 	"web_search": true,
 	"web_fetch":  true,
 }
 
-// CodeExecution implements the code_execution tool — a sandboxed JavaScript
-// runtime that can batch-call other read-only tools, dramatically reducing
-// context window consumption for data-intensive multi-step operations.
-//
-// The model writes JavaScript code that calls tools via the `tools` object
-// (e.g., `await tools.read_file({path: "/foo"})`). Only console.log output
-// is returned to the model — intermediate tool results stay inside the
-// sandbox and never bloat the context window.
 type CodeExecution struct {
-	// Registry is used at execution time to look up tools by name.
-	// We store the registry reference rather than snapshots so that
-	// dynamically registered tools (e.g., MCP tools promoted to the
-	// read-only whitelist) are immediately callable.
 	Registry *Registry
 }
 
@@ -126,24 +109,14 @@ func (CodeExecution) Parameters() json.RawMessage {
 	}`)
 }
 
-// codeExecTimeout is the maximum wall-clock time for a single execution.
 const codeExecTimeout = 30 * time.Second
 
-// mcpToolNamePrefix marks dynamically registered MCP tools
-// (mcp__server__tool naming from the MCP adapter).
 const mcpToolNamePrefix = "mcp__"
 
-// maxMCPCallsPerRun caps how many MCP tool calls a single code_execution
-// run may make, so a runaway JS loop cannot hammer an MCP server for the
-// full 30s window. The per-call timeout still applies on top.
 const maxMCPCallsPerRun = 30
 
-// mcpListDescMaxRunes caps how many runes of an MCP tool description
-// mcpList() returns, keeping the discovery payload small.
 const mcpListDescMaxRunes = 120
 
-// truncateSandboxText shortens s to at most max runes, appending "..." when
-// truncated. Rune-safe so multi-byte descriptions are not cut mid-character.
 func truncateSandboxText(s string, max int) string {
 	runes := []rune(s)
 	if len(runes) <= max {
@@ -152,17 +125,9 @@ func truncateSandboxText(s string, max int) string {
 	return string(runes[:max]) + "..."
 }
 
-// maxStdoutLen caps the stdout capture to prevent unbounded memory if the
-// model writes a tight loop with console.log.
-const maxStdoutLen = 256 * 1024 // 256 KB
+const maxStdoutLen = 256 * 1024
 
-// maxStdoutHardLen is enforced DURING execution (#1316): once captured
-// output exceeds it, the VM is interrupted immediately. The old flow only
-// truncated at maxStdoutLen after Execute returned, so a
-// `while(true)console.log(...)` loop kept appending to the Builder for the
-// full 30s timeout window - GBs of host memory - in a process-embedded
-// (non-subprocess) VM with no isolation.
-const maxStdoutHardLen = 1 << 20 // 1 MB
+const maxStdoutHardLen = 1 << 20
 
 func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -184,11 +149,7 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 	result, err := c.runCode(execCtx, args.Code)
 	if err != nil {
 		debug.Log("ptc", "execution error: %v", err)
-		// #1645 case 2: the timeout/runtime-error paths used to discard
-		// ALL captured console output - exactly when "how far did it
-		// get" matters most (debugging infinite loops, locating the
-		// crash point). runCode now returns a result with partial stdout
-		// alongside the error; surface it.
+
 		msg := fmt.Sprintf("Execution error: %v", err)
 		if result != nil && result.stdout != "" {
 			msg += fmt.Sprintf("\n\nPartial output before failure:\n%s", result.stdout)
@@ -198,13 +159,7 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	output := result.stdout
 	if len(output) > maxStdoutLen {
-		// #1835 case 3: bare byte slice could cut a multi-byte CJK rune in
-		// half - the invalid UTF-8 fragment entered the LLM context and the
-		// tool-call log appended AFTER it, so console.log-heavy CJK output
-		// reliably produced garbage the agent misread as "encoding
-		// corruption" or string-match failures. Snap like web_fetch (#1353)
-		// and mobile_device already do; the marker reports the pre-snap byte
-		// cut so the count stays truthful.
+
 		output = output[:util.SnapToRuneStart(output, maxStdoutLen)] +
 			fmt.Sprintf("\n... (truncated at %d bytes)", maxStdoutLen)
 	}
@@ -212,7 +167,6 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 		output = "(code executed successfully, but produced no console.log output)"
 	}
 
-	// Append tool call log so the model knows what happened.
 	if len(result.toolCalls) > 0 {
 		var logEntry strings.Builder
 		logEntry.WriteString("\n\n[tool calls made by code: ")
@@ -229,21 +183,18 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: output}, nil
 }
 
-// execResult holds the output and metadata from a code execution.
 type execResult struct {
 	stdout    string
 	toolCalls []string
 }
 
-// runCode creates a goja VM, injects tools, and executes the code.
 func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, error) {
 	vm := goja.New()
 
 	var stdout strings.Builder
 	var toolCalls []string
-	var toolCallsMu sync.Mutex // guards toolCalls (VM runs on one goroutine, but be safe)
+	var toolCallsMu sync.Mutex
 
-	// Inject console object.
 	consoleObj := vm.NewObject()
 	consoleObj.Set("log", func(call goja.FunctionCall) goja.Value {
 		if writeConsoleOutput(&stdout, call.Arguments) {
@@ -271,17 +222,11 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	})
 	vm.Set("console", consoleObj)
 
-	// Inject tools object: each whitelisted tool becomes an async function.
 	toolsObj := vm.NewObject()
 
-	// injectSandboxTool wraps a registry tool as a promise-returning JS
-	// function on toolsObj. preCall, when non-nil, runs before execution
-	// and may reject the call (used for the MCP per-run budget).
 	injectSandboxTool := func(name string, t Tool, preCall func() error) {
 		toolRef := t
 
-		// goja supports async functions via goja.AssertFunction.
-		// We wrap each tool call as a promise-returning function.
 		toolsObj.Set(name, func(call goja.FunctionCall) (rv goja.Value) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -299,14 +244,13 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 					return rejectPromise(vm, err)
 				}
 			}
-			// Convert the JS argument (first positional arg) to JSON.
 			var inputJSON json.RawMessage
 			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) && !goja.IsNull(call.Arguments[0]) {
-				// Export the JS object to Go interface{}, then marshal to JSON.
+
 				exported := call.Arguments[0].Export()
 				jsonBytes, err := json.Marshal(exported)
 				if err != nil {
-					// Return a rejected promise.
+
 					return rejectPromise(vm, fmt.Errorf("invalid arguments for %s: %v", name, err))
 				}
 				inputJSON = jsonBytes
@@ -314,10 +258,6 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 				inputJSON = json.RawMessage(`{}`)
 			}
 
-			// Execute the tool on a separate goroutine and select on
-			// ctx.Done(). vm.Interrupt only fires at JS bytecode
-			// boundaries, so a synchronous Execute could block the VM
-			// thread past the deadline while inside a native tool call.
 			type toolOutcome struct {
 				result Result
 				err    error
@@ -354,9 +294,6 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 			}
 			toolCallsMu.Unlock()
 
-			// Resolve the promise with the tool result content string.
-			// If it's an error result, reject the promise so the model's
-			// try/catch can handle it.
 			if result.IsError {
 				return rejectPromise(vm, fmt.Errorf("%s", result.Content))
 			}
@@ -367,18 +304,11 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	for toolName := range readOnlyToolNames {
 		t, ok := c.Registry.Get(toolName)
 		if !ok {
-			continue // tool not registered (e.g., optional tools like tmux)
+			continue
 		}
 		injectSandboxTool(toolName, t, nil)
 	}
 
-	// sa-19 (MCP code-execution bridge): tools from read_only MCP servers
-	// are injected so multi-call MCP workflows run in one sandbox pass.
-	// Results stay in JS and only summaries reach the context window
-	// (Anthropic, "Code execution with MCP", Dec 2025). Write-capable
-	// servers are excluded: their Execute may have side effects and must
-	// keep going through the normal per-call permission flow with UI
-	// diff preview and approval.
 	mcpCalls := 0
 	for _, toolName := range c.Registry.ToolNames() {
 		if !strings.HasPrefix(toolName, mcpToolNamePrefix) {
@@ -392,7 +322,7 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 			continue
 		}
 		if ac, ok := t.(AvailabilityChecker); ok && !ac.Available() {
-			continue // registered but unavailable: not callable
+			continue
 		}
 		injectSandboxTool(toolName, t, func() error {
 			toolCallsMu.Lock()
@@ -405,10 +335,6 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		})
 	}
 
-	// mcpList() resolves with a JSON array [{name, description, sandbox}]
-	// describing every MCP tool in the registry. sandbox=true entries are
-	// callable from this sandbox; sandbox=false entries must go through
-	// direct tool calls (their results land in the context window).
 	toolsObj.Set("mcpList", func(call goja.FunctionCall) goja.Value {
 		type mcpEntry struct {
 			Name        string `json:"name"`
@@ -440,11 +366,6 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		return resolvePromise(vm, string(b))
 	})
 
-	// mcpDescribe(name) resolves with JSON {name, description, parameters}
-	// for one MCP tool. On-demand schema retrieval (progressive
-	// disclosure): a schema is fetched exactly when needed instead of
-	// loading every MCP tool definition into the request context.
-	// Describing is read-only, so it works for sandbox=false tools too.
 	toolsObj.Set("mcpDescribe", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) == 0 || goja.IsUndefined(call.Arguments[0]) || goja.IsNull(call.Arguments[0]) {
 			return rejectPromise(vm, fmt.Errorf("mcpDescribe requires an MCP tool name"))
@@ -470,16 +391,11 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 
 	vm.Set("tools", toolsObj)
 
-	// Set up context cancellation → vm.Interrupt.
 	safego.Go("code_execution.ctxCancel", func() {
 		<-ctx.Done()
 		vm.Interrupt(context.Cause(ctx))
 	})
 
-	// Execute the code. We wrap it in an async IIFE so that top-level
-	// await works (goja is ES5.1 — no top-level await). A try/catch inside
-	// captures runtime errors (including unhandled promise rejections from
-	// tool calls) and routes them to a Go variable.
 	var asyncErr string
 	vm.Set("__captureError", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) > 0 {
@@ -487,11 +403,7 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		}
 		return goja.Undefined()
 	})
-	// #3121: un-awaited rejected promises (e.g. a missing `await` before a
-	// tools.* call) never reach the try/catch above — goja routes them to
-	// HostPromiseRejectionTracker instead. Record rejections that still have
-	// no handler when the script ends so they surface as an error rather
-	// than the "executed successfully" illusion.
+
 	unhandledRejections := make(map[*goja.Promise]string)
 	vm.SetPromiseRejectionTracker(func(p *goja.Promise, op goja.PromiseRejectionOperation) {
 		switch op {
@@ -509,11 +421,9 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		"})()"
 	_, err := vm.RunString(wrapped)
 	if err != nil {
-		// Check if it was a timeout/interrupt.
+
 		if ctx.Err() != nil {
-			// #1645 case 2: carry the partial output up - the old
-			// `return nil, err` dropped everything captured before the
-			// timeout inside runCode itself.
+
 			return &execResult{
 				stdout:    stdout.String(),
 				toolCalls: toolCalls,
@@ -524,17 +434,14 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 			toolCalls: toolCalls,
 		}, fmt.Errorf("%s", err.Error())
 	}
-	// Check for captured async error (unhandled exception in code).
+
 	if asyncErr != "" {
 		return &execResult{
 			stdout:    stdout.String(),
 			toolCalls: toolCalls,
 		}, fmt.Errorf("%s", asyncErr)
 	}
-	// #3121: a promise rejected with no handler means the code dropped an
-	// error (typically a missing `await` or `.catch`). Report it instead of
-	// reporting success. A later handler registration (PromiseRejectionHandle)
-	// removes the record, so awaited/caught rejections do not land here.
+
 	if len(unhandledRejections) > 0 {
 		msgs := make([]string, 0, len(unhandledRejections))
 		for _, m := range unhandledRejections {
@@ -553,12 +460,8 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	}, nil
 }
 
-// writeConsoleOutput appends formatted arguments to the stdout builder.
-// It returns true when the captured output has reached the hard cap
-// (#1316): callers must then vm.Interrupt so a tight console.log loop
-// cannot accumulate host memory for the whole timeout window.
 func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) (overflow bool) {
-	// Already at/over the cap: append nothing further.
+
 	if stdout.Len() >= maxStdoutHardLen {
 		return true
 	}
@@ -570,14 +473,13 @@ func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) (overflow bo
 			stdout.WriteString("undefined")
 			continue
 		}
-		// Export converts JS values to Go equivalents. Strings stay strings,
-		// objects become map[string]interface{}, arrays become []interface{}.
+
 		exported := arg.Export()
 		switch v := exported.(type) {
 		case string:
 			stdout.WriteString(v)
 		default:
-			// For non-string values, JSON-encode them for readability.
+
 			jsonBytes, err := json.MarshalIndent(v, "", "  ")
 			if err != nil {
 				stdout.WriteString(fmt.Sprintf("%v", v))
@@ -590,9 +492,6 @@ func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) (overflow bo
 	return stdout.Len() >= maxStdoutHardLen
 }
 
-// rejectionReasonString renders a rejected promise's reason for the
-// unhandled-rejection report (#3121). goja assigns the reason before firing
-// the tracker, so Result() is already populated at Reject time.
 func rejectionReasonString(p *goja.Promise) string {
 	if p == nil || p.State() != goja.PromiseStateRejected {
 		return "unknown reason"
@@ -612,14 +511,12 @@ func rejectionReasonString(p *goja.Promise) string {
 	return s
 }
 
-// resolvePromise creates a resolved goja Promise with the given value.
 func resolvePromise(vm *goja.Runtime, value string) goja.Value {
 	promise, resolve, _ := vm.NewPromise()
 	resolve(value)
 	return vm.ToValue(promise)
 }
 
-// rejectPromise creates a rejected goja Promise with the given error.
 func rejectPromise(vm *goja.Runtime, err error) goja.Value {
 	promise, _, reject := vm.NewPromise()
 	reject(err.Error())

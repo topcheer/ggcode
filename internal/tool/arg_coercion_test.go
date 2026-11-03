@@ -13,7 +13,7 @@ func TestCoerceArguments_StringToInt(t *testing.T) {
 			"limit": {"type": "integer"}
 		}
 	}`)
-	// Model sends strings where integers are expected.
+
 	args := json.RawMessage(`{"offset": "50", "limit": "100"}`)
 	out := CoerceArguments(schema, args)
 
@@ -33,7 +33,7 @@ func TestCoerceArguments_AlreadyCorrect(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"x":{"type":"integer"}}}`)
 	args := json.RawMessage(`{"x": 42}`)
 	out := CoerceArguments(schema, args)
-	// Should be unchanged — already well-typed.
+
 	if string(out) != string(args) {
 		t.Errorf("expected no change, got: %s", string(out))
 	}
@@ -100,8 +100,7 @@ func TestCoerceArguments_NonCoercibleLeftAlone(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer"}}}`)
 	args := json.RawMessage(`{"n": "hello"}`)
 	out := CoerceArguments(schema, args)
-	// "hello" can't become an integer — leave it as-is so the tool's own
-	// unmarshal produces a clear error.
+
 	if string(out) != string(args) {
 		t.Errorf("expected no change for non-coercible value, got: %s", string(out))
 	}
@@ -153,22 +152,22 @@ func TestCoerceArguments_MixedTypes(t *testing.T) {
 }
 
 func TestCoerceArguments_EmptyOrInvalid(t *testing.T) {
-	// Empty schema → no-op
+
 	if out := CoerceArguments(nil, json.RawMessage(`{"a":1}`)); string(out) != `{"a":1}` {
 		t.Errorf("expected no-op with nil schema")
 	}
-	// Empty args → no-op
+
 	if out := CoerceArguments(json.RawMessage(`{}`), nil); string(out) != `` {
 		t.Errorf("expected no-op with nil args")
 	}
-	// Invalid JSON args → no-op (return original)
+
 	if out := CoerceArguments(json.RawMessage(`{"properties":{"a":{"type":"integer"}}}`), json.RawMessage(`invalid`)); string(out) != `invalid` {
 		t.Errorf("expected no-op with invalid args JSON")
 	}
 }
 
 func TestCoerceArguments_RealReadFileSchema(t *testing.T) {
-	// Use the actual ReadFile schema.
+
 	rf := ReadFile{}
 	args := json.RawMessage(`{"path": "/tmp/test.go", "offset": "5", "limit": "20"}`)
 	out := CoerceArguments(rf.Parameters(), args)

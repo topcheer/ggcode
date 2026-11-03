@@ -10,9 +10,6 @@ import (
 	"testing"
 )
 
-// #1644 case 3: load() must hand out snapshots, never the shared cache
-// pointer - concurrent doSave/doGet/doDelete must not race callers holding
-// a load() result.
 func TestIssue1644LoadReturnsSnapshotNotSharedCache(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir, filePath: filepath.Join(dir, "snippets.json")}
@@ -24,7 +21,7 @@ func TestIssue1644LoadReturnsSnapshotNotSharedCache(t *testing.T) {
 	if a == b || a.Entries == nil {
 		t.Fatal("load() must return independent snapshots")
 	}
-	// mutate snapshot A; snapshot B and the cache must be unaffected
+
 	a.Entries[0].Name = "mutated"
 	b2, _ := tool.load()
 	if b2.Entries[0].Name != "alpha" {
@@ -32,8 +29,6 @@ func TestIssue1644LoadReturnsSnapshotNotSharedCache(t *testing.T) {
 	}
 }
 
-// #1644 case 3: concurrent mixed actions must not lose updates (TOCTOU:
-// the whole read-modify-write now shares one lock window).
 func TestIssue1644ConcurrentMixedActionsNoLostUpdate(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir, filePath: filepath.Join(dir, "snippets.json")}
@@ -55,20 +50,18 @@ func TestIssue1644ConcurrentMixedActionsNoLostUpdate(t *testing.T) {
 	}
 }
 
-// #1644 case 5: a persist failure during doGet (use-count write) must be
-// surfaced, not silently discarded.
 func TestIssue1644DoGetPersistsErrorSurfaced(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir, filePath: filepath.Join(dir, "snippets.json")}
 	if _, err := tool.doSave("alpha", "echo hi", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	// break the store path so persist fails (parent is a file)
+
 	tool.filePath = filepath.Join(dir, "blocker", "snippets.json")
 	if err := os.WriteFile(filepath.Join(dir, "blocker"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// prime the cache with a good load first so the failure hits persist, not load
+
 	if _, err := tool.load(); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +77,6 @@ func TestIssue1644DoGetPersistsErrorSurfaced(t *testing.T) {
 	}
 }
 
-// #1644 case 6: tag truncation must tell the caller what was kept.
 func TestIssue1644TagTruncationNoted(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir, filePath: filepath.Join(dir, "snippets.json")}
@@ -101,7 +93,6 @@ func TestIssue1644TagTruncationNoted(t *testing.T) {
 	}
 }
 
-// Regression: normal save/get/delete round-trip still works via mutate.
 func TestIssue1644MutateRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	tool := &CmdSnippetTool{WorkingDir: dir, filePath: filepath.Join(dir, "snippets.json")}

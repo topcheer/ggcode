@@ -85,7 +85,7 @@ func TestMagicNumbers_NonGoSkipped(t *testing.T) {
 }
 
 func TestMagicNumbers_DeltaAware(t *testing.T) {
-	// Both old and new have x > 100 -- no new occurrences, should not flag.
+
 	src := "package main\n\nfunc check(x int) bool {\n\treturn x > 100\n}\n"
 	w := checkMagicNumbers("main.go", src, src)
 	if w != "" {
@@ -94,11 +94,11 @@ func TestMagicNumbers_DeltaAware(t *testing.T) {
 }
 
 func TestMagicNumbers_DeltaAwareSameValue(t *testing.T) {
-	// Old has one "100", new has one "100" (just moved) -- should not flag.
+
 	old := "package main\n\nfunc check(x int) bool {\n\treturn x > 100\n}\n"
 	new := "package main\n\nfunc validate(x int) bool {\n\treturn x > 100\n}\n"
 	w := checkMagicNumbers("main.go", old, new)
-	// Same count of 100 -- delta-aware should skip.
+
 	if w != "" && strings.Contains(w, "100") {
 		t.Errorf("same count of value 100 should not be flagged, got: %s", w)
 	}
@@ -108,7 +108,7 @@ func TestMagicNumbers_TypeConversionNotFlagged(t *testing.T) {
 	old := "package main\n\nfunc conv(x int) {\n}\n"
 	new := "package main\n\nfunc conv(x int) {\n\t_ = int64(x)\n}\n"
 	w := checkMagicNumbers("main.go", old, new)
-	// int64(x) is a type conversion, not a function call with magic number.
+
 	if w != "" {
 		t.Errorf("type conversion should not be flagged, got: %s", w)
 	}
@@ -121,7 +121,7 @@ func TestMagicNumbers_MultipleCapped(t *testing.T) {
 	if w == "" {
 		t.Fatal("expected magic number warnings")
 	}
-	// Should cap at maxMagicWarnings (5).
+
 	count := strings.Count(w, "assignment")
 	if count > maxMagicWarnings {
 		t.Errorf("should cap at %d warnings, got %d", maxMagicWarnings, count)

@@ -7,7 +7,6 @@ import (
 	"os"
 )
 
-// MultiEditFile applies multiple find-and-replace edits to a single file in one call.
 type MultiEditFile struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -92,9 +91,6 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// #2327: serialize the whole read→plan→write sequence per path,
-	// same as write_file - a parallel same-path writer could otherwise
-	// pass its own guard inside our window.
 	unlockMulti := LockWritePath(args.FilePath)
 	defer unlockMulti()
 	data, err := os.ReadFile(args.FilePath)
@@ -116,10 +112,6 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: msg}, nil
 	}
 
-	// No-op guard: if all edits produce identical content, skip the write.
-	// This prevents unnecessary mtime changes, checkpoint saves, cache
-	// invalidation, and file-integrity tracking noise from no-effect edits
-	// (e.g. the LLM retried edits that were already applied).
 	if content == original {
 		return Result{Content: fmt.Sprintf(
 			"No change: all %d edits produce identical content in %s. The file is already in the desired state.",
@@ -127,8 +119,6 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		)}, nil
 	}
 
-	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
-	// can diff and show only newly introduced issues.
 	CaptureDiagnosticBaseline(t.WorkingDir, args.FilePath)
 
 	writeData := []byte(content)
@@ -143,16 +133,12 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		result += " (auto-formatted)"
 	}
 	result += scanAndWarn(args.FilePath, string(writeData))
-	// #1652 case 2: same guard as edit_file/write_file - the final
-	// assembled content (old text kept by partial matches included) may
-	// carry conflict markers that none of the edits touched.
+
 	result += CheckContentForConflicts(string(writeData))
 	result += criticalFileWarning(args.FilePath)
 	result += syntaxCheck(args.FilePath, writeData)
 	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
 
-	// Record the file's new mtime so subsequent write_file calls don't see
-	// a false stale-read from this edit.
 	defaultFileTracker.RecordWrite(args.FilePath)
 
 	return Result{Content: result}, nil

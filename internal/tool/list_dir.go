@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-// ListDir implements the list_directory tool.
 type ListDir struct {
 	SandboxCheck AllowedPathChecker
 }
@@ -62,7 +61,6 @@ func (t ListDir) Execute(ctx context.Context, input json.RawMessage) (Result, er
 		return Result{IsError: true, Content: fmt.Sprintf("error listing directory: %v", err)}, nil
 	}
 
-	// Sort: directories first, then files
 	sort.Slice(entries, func(i, j int) bool {
 		fi, _ := entries[i].Info()
 		fj, _ := entries[j].Info()

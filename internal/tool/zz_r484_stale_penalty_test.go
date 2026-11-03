@@ -1,10 +1,5 @@
 package tool
 
-// #r484 probe (SkillForge pruning core / sa-23 round-23 research):
-// lexical retrieval scores must decay with last-used age so stale skills
-// sink in ranking, while never-used skills and strong lexical matches are
-// protected (demote, never erase).
-
 import (
 	"os"
 	"path/filepath"
@@ -76,8 +71,8 @@ func TestR484_RankingDemotesStaleOverFresh(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
 	writeSkillUsage(t, dir, map[string]time.Time{
-		"deploy-aws": now.Add(-120 * 24 * time.Hour), // deep stale
-		"deploy-gcp": now.Add(-1 * 24 * time.Hour),   // fresh
+		"deploy-aws": now.Add(-120 * 24 * time.Hour),
+		"deploy-gcp": now.Add(-1 * 24 * time.Hour),
 	})
 	skills := makeFakeSkills()
 	tool := SkillTool{
@@ -98,8 +93,7 @@ func TestR484_RankingDemotesStaleOverFresh(t *testing.T) {
 			gcpScore = m.score
 		}
 	}
-	// Both are substring name matches (10) + desc hits; the stale one must
-	// rank strictly below the fresh one.
+
 	if awsScore >= gcpScore {
 		t.Fatalf("stale deploy-aws (%d) must rank below fresh deploy-gcp (%d)", awsScore, gcpScore)
 	}

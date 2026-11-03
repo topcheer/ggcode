@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// stubDenyPolicy denies everything and reports a fixed mode.
 type stubDenyPolicy struct {
 	mode permission.PermissionMode
 }
@@ -30,11 +29,6 @@ func (p *stubDenyPolicy) BlocksAutoApprove(toolName string, input json.RawMessag
 	return false
 }
 
-// TestIssue1209_DenyMessageIncludesModeAttribution verifies that the
-// policy-deny result names the current permission mode and, in plan mode,
-// points at the self-rescue channels (switch_mode / exit_plan_mode). Without
-// the mode in the message, a model dropped into plan mode misattributes the
-// denials to its own parameters and enters a degenerate retry loop.
 func TestIssue1209_DenyMessageIncludesModeAttribution(t *testing.T) {
 	a := &Agent{policy: &stubDenyPolicy{mode: permission.PlanMode}}
 	tc := provider.ToolCallDelta{Name: "edit_file", Arguments: json.RawMessage(`{}`)}
@@ -45,7 +39,7 @@ func TestIssue1209_DenyMessageIncludesModeAttribution(t *testing.T) {
 	}
 	for _, want := range []string{
 		"current mode: plan",
-		// two-mode refactor: plan only denies explicit file-writing tools.
+
 		"Plan mode denies explicit file-writing tools",
 		"exit_plan_mode",
 	} {
@@ -54,8 +48,6 @@ func TestIssue1209_DenyMessageIncludesModeAttribution(t *testing.T) {
 		}
 	}
 
-	// Non-plan mode: mode still named, but no plan-specific self-rescue line.
-	// two-mode refactor: AutoMode.String() normalizes to "supervised".
 	a2 := &Agent{policy: &stubDenyPolicy{mode: permission.AutoMode}}
 	res2 := a2.executeToolWithPermission(context.Background(), tc)
 	if !strings.Contains(res2.Content, "current mode: supervised") {

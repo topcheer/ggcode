@@ -90,7 +90,7 @@ func f(v interface{}) {
 }
 `
 	warnings := checkTypeSwitchExhaustive("test.go", oldSrc, newSrc)
-	// The switch existed in old content too, so delta-aware should suppress it
+
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings (delta-aware suppression), got %d: %v", len(warnings), warnings)
 	}
@@ -124,10 +124,6 @@ func TestTypeSwitchExhaustive_NonGoFile(t *testing.T) {
 	}
 }
 
-// TestIssue1212_SecondSwitchInSameFuncReported verifies that adding a SECOND
-// default-less type switch to a function that already has one is reported.
-// The old funcName-only dedup key made both switches share a key, so the new
-// one silently deduped away (#1212 direction 1).
 func TestIssue1212_SecondSwitchInSameFuncReported(t *testing.T) {
 	oldSrc := `package x
 type A struct{}
@@ -161,9 +157,6 @@ func f(v interface{}) {
 	}
 }
 
-// TestIssue1212_RenameDoesNotReReport verifies that renaming a function
-// without touching its switch does not re-report the pre-existing switch
-// (#1212 direction 2). Relative-line keys are rename-stable.
 func TestIssue1212_RenameDoesNotReReport(t *testing.T) {
 	oldSrc := `package x
 type A struct{}
@@ -255,7 +248,7 @@ func f(v interface{}) int {
 }
 
 func TestTypeSwitchExhaustive_AssignSwitch(t *testing.T) {
-	// switch x := y.(type) pattern
+
 	src := `package x
 type A struct{}
 type B struct{}
@@ -312,9 +305,6 @@ func f4(v interface{}) {
 	}
 }
 
-// Regression for #1516: checkTypeSwitchExhaustive existed with passing
-// direct-call tests but was never registered in the write-integrity
-// registry - the detection never ran in production. Verify registration.
 func TestTypeSwitchCheckRegistered(t *testing.T) {
 	registerAllChecks()
 	found := false

@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// TestIssue588_Bug2_MakefileTampering tests that Makefile build/test target
-// tampering (replacing commands with no-ops) is detected.
 func TestIssue588_Bug2_MakefileTampering(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -102,9 +100,7 @@ test:
 			want: false,
 		},
 		{
-			// #3610: deletion needs a trace (.PHONY declaration survives
-			// the target) - a bare build-only Makefile is indistinguishable
-			// from a library project and must not fire.
+
 			name: "tampering - test target deleted entirely",
 			makefile: `
 .PHONY: build test
@@ -114,7 +110,7 @@ build:
 			want: true,
 		},
 		{
-			// #3610 form 3: pure-build Makefile, no test trace ever.
+
 			name: "legitimate - pure-build Makefile (no test target ever)",
 			makefile: `
 build:
@@ -138,7 +134,7 @@ test:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test the makefile tampering detection logic
+
 			got := hasMakefileTamperingContent(tt.makefile)
 			if got != tt.want {
 				t.Errorf("hasMakefileTamperingContent() = %v, want %v", got, tt.want)
@@ -147,14 +143,11 @@ test:
 	}
 }
 
-// TestIssue588_Bug1_SkipMarkerRemovalExemptions tests that legitimate
-// remediation commands (removing skip markers, historical investigation)
-// are not flagged as gaming.
 func TestIssue588_Bug1_SkipMarkerRemovalExemptions(t *testing.T) {
 	tests := []struct {
 		name     string
 		command  string
-		wantFlag bool // true = should be flagged as gaming
+		wantFlag bool
 	}{
 		{
 			name:     "grep investigation - exempt",
@@ -233,8 +226,6 @@ func TestIssue588_Bug1_SkipMarkerRemovalExemptions(t *testing.T) {
 	}
 }
 
-// TestIssue588_Bug3_TestWritingTaskVocabulary tests that expanded vocabulary
-// (spec, coverage, 单测) correctly identifies test-writing tasks.
 func TestIssue588_Bug3_TestWritingTaskVocabulary(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -299,7 +290,7 @@ func TestIssue588_Bug3_TestWritingTaskVocabulary(t *testing.T) {
 		{
 			name:       "edge: contains 'spec' but not spec-related",
 			userPrompt: "Inspect the specs of the server (hardware specs)",
-			want:       true, // "spec" keyword now matches
+			want:       true,
 		},
 	}
 
@@ -313,7 +304,6 @@ func TestIssue588_Bug3_TestWritingTaskVocabulary(t *testing.T) {
 	}
 }
 
-// TestIssue588_Bug4_StripTestSuffix tests the stripTestSuffix function.
 func TestIssue588_Bug4_StripTestSuffix(t *testing.T) {
 	tests := []struct {
 		input string
@@ -323,7 +313,7 @@ func TestIssue588_Bug4_StripTestSuffix(t *testing.T) {
 		{"utils.test.ts", "utils.ts"},
 		{"component.spec.tsx", "component.tsx"},
 		{"foo_test.py", "foo.py"},
-		{"Test.java", "Test.java"}, // No suffix to strip
+		{"Test.java", "Test.java"},
 		{"module_test.rs", "module.rs"},
 		{"lib_test.c", "lib.c"},
 		{"app_test.cpp", "app.cpp"},
@@ -340,8 +330,6 @@ func TestIssue588_Bug4_StripTestSuffix(t *testing.T) {
 	}
 }
 
-// TestIssue588_Bug5_ConfigSuffixes tests that .md/.txt are not treated as
-// config files and Dockerfile matching is case-insensitive base prefix.
 func TestIssue588_Bug5_ConfigSuffixes(t *testing.T) {
 	tests := []struct {
 		path         string
@@ -353,8 +341,7 @@ func TestIssue588_Bug5_ConfigSuffixes(t *testing.T) {
 		{"dockerfile", true},
 		{"Dockerfile.prod", false},
 		{"mydockerfile", false},
-		// #588: Makefile is the verification vehicle, not a config file —
-		// Pattern 1 must not exempt it; Pattern 3 content-analyzes instead.
+
 		{"Makefile", false},
 		{"Cargo.toml", true},
 		{"config.yaml", true},
@@ -371,8 +358,6 @@ func TestIssue588_Bug5_ConfigSuffixes(t *testing.T) {
 	}
 }
 
-// TestIssue588_Bug5_DockerfileCaseInsensitive tests Dockerfile detection
-// more thoroughly.
 func TestIssue588_Bug5_DockerfileCaseInsensitive(t *testing.T) {
 	tests := []struct {
 		name string
@@ -401,14 +386,12 @@ func TestIssue588_Bug5_DockerfileCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestIssue588_Bug2_MakefileCIConfigPath tests that Makefile is NOT treated
-// as a full CI config path (but partial detection applies).
 func TestIssue588_Bug2_MakefileCIConfigPath(t *testing.T) {
 	tests := []struct {
 		path string
 		want bool
 	}{
-		{"Makefile", false}, // Should return false (partial, not full CI config)
+		{"Makefile", false},
 		{"makefile", false},
 		{"./Makefile", false},
 		{".github/workflows/test.yml", true},

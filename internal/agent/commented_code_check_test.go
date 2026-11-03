@@ -6,7 +6,7 @@ import (
 )
 
 func TestCheckCommentedCodeBlocks_GoLines(t *testing.T) {
-	// No old content — all new
+
 	old := `package main
 
 func foo() int {
@@ -33,7 +33,7 @@ func foo() int {
 }
 
 func TestCheckCommentedCodeBlocks_NoNewBlock(t *testing.T) {
-	// Old already has the commented block — should not warn
+
 	old := `package main
 
 func foo() int {
@@ -43,7 +43,7 @@ func foo() int {
 	return 42
 }
 `
-	newContent := old // identical
+	newContent := old
 	warnings := checkCommentedCodeBlocks("main.go", old, newContent)
 	if len(warnings) > 0 {
 		t.Errorf("expected no warnings for pre-existing block, got: %v", warnings)
@@ -67,7 +67,7 @@ func TestCheckCommentedCodeBlocks_PythonHash(t *testing.T) {
 }
 
 func TestCheckCommentedCodeBlocks_DocumentationNotFlagged(t *testing.T) {
-	// Prose comments should not be flagged
+
 	old := `package main`
 	newContent := `package main
 
@@ -85,7 +85,7 @@ func foo() int {
 }
 
 func TestCheckCommentedCodeBlocks_TooShortNotFlagged(t *testing.T) {
-	// Only 1-2 lines of commented code should not trigger
+
 	old := `package main`
 	newContent := `package main
 
@@ -126,7 +126,7 @@ func TestCheckCommentedCodeBlocks_JavaScript(t *testing.T) {
 }
 
 func TestCheckCommentedCodeBlocks_EmptyLinesInBlock(t *testing.T) {
-	// Empty comment lines within a block should not break detection
+
 	old := `package main`
 	newContent := `package main
 
@@ -150,13 +150,13 @@ func TestLooksLikeCode(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{"x = 5", true},          // assignment
-		{"foo(bar)", true},       // function call
-		{"return x + y", true},   // return keyword
-		{"if x > 10 {", true},    // if statement
-		{"fmt.Println(x)", true}, // function call
-		{"statement;", true},     // semicolon termination
-		{"This is prose", false}, // no code indicators
+		{"x = 5", true},
+		{"foo(bar)", true},
+		{"return x + y", true},
+		{"if x > 10 {", true},
+		{"fmt.Println(x)", true},
+		{"statement;", true},
+		{"This is prose", false},
 		{"A documentation comment", false},
 		{"", false},
 	}
@@ -170,7 +170,7 @@ func TestLooksLikeCode(t *testing.T) {
 }
 
 func TestCheckCommentedCodeBlocks_LicenseHeaderNotFlagged(t *testing.T) {
-	// License headers should not be flagged even if multi-line
+
 	newContent := `// Copyright 2024 Acme Inc.
 // Licensed under the Apache License, Version 2.0.
 // You may not use this file except in compliance with the License.
@@ -183,7 +183,6 @@ package main
 	}
 }
 
-// #152: multi-line /* ... */ commented-out code must be detected.
 func TestCheckCommentedCodeBlocks_MultiLineBlockComment(t *testing.T) {
 	newContent := `package main
 
@@ -201,8 +200,6 @@ func main() {}
 	}
 }
 
-// #152: godoc example blocks (prose + bare // separator + indented code)
-// must NOT be flagged.
 func TestCheckCommentedCodeBlocks_GodocExampleNotFlagged(t *testing.T) {
 	newContent := `package main
 

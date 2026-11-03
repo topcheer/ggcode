@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// jt builds a Go struct tag literal for use in test source code.
-// jt(`json:"name"`) produces the string: `json:"name"`
 func jt(tag string) string {
 	return "`" + tag + "`"
 }
@@ -172,7 +170,6 @@ func TestStructTagConsistency_SnakeCaseOK(t *testing.T) {
 }
 
 func TestStructTagConsistency_WarningCap(t *testing.T) {
-	// Create a struct with many untagged exported fields to trigger the cap
 	var lines []string
 	lines = append(lines, "package main", "", "type Big struct {")
 	lines = append(lines, "\tA string "+jt(`json:"a"`))
@@ -193,7 +190,7 @@ func TestStructTagConsistency_WarningCap(t *testing.T) {
 }
 
 func TestStructTagConsistency_QuotedTagLiteral(t *testing.T) {
-	// Struct tags can be quote-delimited (rare but valid)
+
 	src := "package main\n\ntype User struct {\n\tName string \"json:\\\"Name\\\"\"\n}"
 	warnings := checkStructTagConsistency("main.go", "", src)
 	found := false

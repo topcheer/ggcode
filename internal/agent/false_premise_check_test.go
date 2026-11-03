@@ -62,23 +62,17 @@ func TestFalsePremise_BuildSuccessContradiction(t *testing.T) {
 }
 
 func TestFalsePremise_PanicKilledFatalPreservedThroughUnrelatedSuccess(t *testing.T) {
-	// Issue #1045: test failure records (panic, signal:killed, fatal error)
-	// must NOT be cleared by unrelated command successes. The P331 tool-level
-	// clearing would wrongly discard them - we now require command-level matching.
+
 	f := newFalsePremiseState()
 
-	// Record a test failure (panic)
 	f.recordToolResult("run_command", "panic: runtime error: invalid memory address", true)
 
-	// Record an unrelated successful command (e.g., file list)
 	f.recordToolResult("run_command", "file1.go\nfile2.go\nfile3.go", false)
 
-	// The panic should still be tracked - the successful command is unrelated
 	if len(f.recentErrors) == 0 {
 		t.Fatal("expected panic error to be preserved after unrelated success")
 	}
 
-	// Now a build success claim should still trigger the warning
 	msg := f.checkFalsePremise("The build passed and tests are green.")
 	if msg == "" {
 		t.Fatal("expected warning despite unrelated success - panic still recorded")
@@ -128,7 +122,6 @@ func TestFalsePremise_NoContradictionWhenAcknowledgingError(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("edit_file", "anchor not found", true)
 
-	// Agent acknowledges the error explicitly
 	msg := f.checkFalsePremise("The edit failed, so I need to re-read the file.")
 	if msg != "" {
 		t.Errorf("expected no warning when agent acknowledges error, got: %s", msg)
@@ -144,13 +137,10 @@ func TestFalsePremise_NoErrorNoWarning(t *testing.T) {
 }
 
 func TestFalsePremise_NoWarningForEmptyAssistantText(t *testing.T) {
-	// Issue #1044: empty assistant text (e.g., reasoning-only tool_use rounds)
-	// must NOT be treated as a success claim. The P6 empty-output logic applies
-	// to COMMAND OUTPUT, not to assistant declarative text.
+
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "exit status 1: build failed", true)
 
-	// Empty or whitespace-only assistant text should not trigger a warning
 	msg := f.checkFalsePremise("")
 	if msg != "" {
 		t.Errorf("expected no warning for empty assistant text, got: %s", msg)
@@ -166,7 +156,6 @@ func TestFalsePremise_FreshnessExpiry(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "build failed", true)
 
-	// Age beyond freshness window
 	f.ageErrors()
 	f.ageErrors()
 	f.ageErrors()
@@ -179,24 +168,21 @@ func TestFalsePremise_FreshnessExpiry(t *testing.T) {
 
 func TestFalsePremise_WarningCap(t *testing.T) {
 	f := newFalsePremiseState()
-	// Record two errors
+
 	f.recordToolResult("run_command", "build failed", true)
 	f.recordToolResult("edit_file", "anchor not found", true)
 
-	// First detection
 	msg1 := f.checkFalsePremise("The build passed.")
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second detection (different error, still fresh)
-	f.recentErrors[1].turnsAgo = 0 // keep fresh
+	f.recentErrors[1].turnsAgo = 0
 	msg2 := f.checkFalsePremise("The fix is complete.")
 	if msg2 == "" {
 		t.Fatal("expected second warning")
 	}
 
-	// Third should be capped
 	f.recordToolResult("run_command", "another error", true)
 	msg3 := f.checkFalsePremise("All done successfully.")
 	if msg3 != "" {
@@ -213,7 +199,6 @@ func TestFalsePremise_AlreadyMatchedSkips(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Same error, same claim - should not re-fire
 	msg2 := f.checkFalsePremise("Build passed again.")
 	if msg2 != "" {
 		t.Errorf("should not re-fire for already-matched error, got: %s", msg2)
@@ -297,12 +282,10 @@ func TestMatchesGenericSuccessClaim(t *testing.T) {
 	}
 }
 
-// #331: a successful re-run of the same tool must invalidate the earlier
-// error record — the fail→fix→re-run→report workflow is not confabulation.
 func TestFalsePremise_SuccessRerunClearsError(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "exit status 1: compilation failed", true)
-	// Same tool succeeds on re-run after the fix.
+
 	f.recordToolResult("run_command", "build passed, 42 tests ok", false)
 	if len(f.recentErrors) != 0 {
 		t.Fatalf("expected stale error cleared on successful re-run, got %d", len(f.recentErrors))
@@ -313,7 +296,6 @@ func TestFalsePremise_SuccessRerunClearsError(t *testing.T) {
 	}
 }
 
-// #331: branch 1 must honor acknowledgesError like branch 4.
 func TestFalsePremise_BuildBranchAcknowledgesError(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "exit status 1: compilation failed", true)
@@ -323,8 +305,6 @@ func TestFalsePremise_BuildBranchAcknowledgesError(t *testing.T) {
 	}
 }
 
-// #331: generic branch must not fire for search tools (they have a
-// dedicated branch gated on error-snippet indicators).
 func TestFalsePremise_GenericBranchExcludesSearchTools(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("grep", "regex error: missing closing paren", true)
@@ -334,20 +314,17 @@ func TestFalsePremise_GenericBranchExcludesSearchTools(t *testing.T) {
 	}
 }
 
-// #570 Bug C: real go test success output (ok, PASS, --- PASS:) must clear
-// stale failure records, preventing false "fabrication" warnings.
 func TestFalsePremise_GoTestSuccessClearsFailure(t *testing.T) {
-	// Simulate: go test fails with build error
+
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "exit status 2\nFAIL ./pkg [build failed]", true)
 
-	// Agent fixes and re-runs: real go test success output patterns
 	testCases := []string{
-		"ok  pkg  1.2s",                          // standard go test success
-		"ok  github.com/user/repo/pkg  0.500s\n", // full package path
-		"PASS",                                   // standalone PASS
-		"--- PASS: TestFoo (0.10s)\n",            // verbose test output
-		"--- PASS: TestBar (0.05s)\n--- PASS: TestBaz (0.08s)\n", // multiple tests
+		"ok  pkg  1.2s",
+		"ok  github.com/user/repo/pkg  0.500s\n",
+		"PASS",
+		"--- PASS: TestFoo (0.10s)\n",
+		"--- PASS: TestBar (0.05s)\n--- PASS: TestBaz (0.08s)\n",
 	}
 
 	for i, successOutput := range testCases {
@@ -360,7 +337,6 @@ func TestFalsePremise_GoTestSuccessClearsFailure(t *testing.T) {
 				t.Errorf("go test success should clear stale failure record, got %d errors remaining", len(f2.recentErrors))
 			}
 
-			// Agent claims success after the real go test passed
 			msg := f2.checkFalsePremise("Tests passed successfully")
 			if msg != "" {
 				t.Errorf("expected no warning after real go test success, got: %s", msg)
@@ -369,20 +345,16 @@ func TestFalsePremise_GoTestSuccessClearsFailure(t *testing.T) {
 	}
 }
 
-// #570 Bug C: ensure only real go test patterns clear failures, not
-// arbitrary strings containing "ok".
 func TestFalsePremise_OnlyRealGoTestPatternsSupersede(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("run_command", "exit status 2\nFAIL ./pkg [build failed]", true)
 
-	// Non-go-test output with "ok" - should NOT clear the failure
 	f.recordToolResult("run_command", "everything looks ok to me", false)
 
 	if len(f.recentErrors) == 0 {
 		t.Error("non-go-test 'ok' should not clear build failure")
 	}
 
-	// Agent claims success - should still warn because failure wasn't superseded
 	msg := f.checkFalsePremise("Tests passed")
 	if msg == "" {
 		t.Error("expected warning when non-go-test 'ok' appears in output")

@@ -99,8 +99,7 @@ func TestSkillToolExecute(t *testing.T) {
 	if callback.Name != "deploy" || callback.Ref != "deploy" || callback.Mode != SkillExecutionModeInline || callback.Result.IsError {
 		t.Fatalf("unexpected callback: %+v", callback)
 	}
-	// r482: the inline follow-up message must carry the <skill-source>
-	// trust boundary, not a bare body (contextual authorization).
+
 	if len(result.FollowUpMessages) != 1 {
 		t.Fatalf("expected exactly 1 follow-up message, got %d", len(result.FollowUpMessages))
 	}
@@ -250,7 +249,6 @@ func TestSkillToolDescriptionRejectsBuiltInCommands(t *testing.T) {
 	}
 }
 
-// stubNameLister implements SkillNameLister for testing fuzzy suggestions.
 type stubNameLister []string
 
 func (s stubNameLister) SkillNames() []string { return []string(s) }
@@ -407,7 +405,7 @@ func TestSkillToolExecuteExportNotFound(t *testing.T) {
 
 func TestSkillToolExecuteImportRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
-	// Create a skill dir and export it
+
 	skillDir := filepath.Join(tmp, "source-skill")
 	os.MkdirAll(skillDir, 0755)
 	skillMD := "---\nname: source-skill\ndescription: test\nversion: 2.0.0\n---\n# source-skill\nBody.\n"
@@ -430,7 +428,6 @@ func TestSkillToolExecuteImportRoundTrip(t *testing.T) {
 	})
 	exportTool.Execute(context.Background(), exportInput)
 
-	// Now import it to a different dir
 	importDir := filepath.Join(tmp, "imported-skills")
 	importTool := SkillTool{Skills: stubSkillLookup{}}
 	importInput, _ := json.Marshal(map[string]string{
@@ -444,7 +441,7 @@ func TestSkillToolExecuteImportRoundTrip(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected import error: %s", result.Content)
 	}
-	// Verify the skill was extracted
+
 	importedSkill := filepath.Join(importDir, "source-skill", "SKILL.md")
 	if _, err := os.Stat(importedSkill); os.IsNotExist(err) {
 		t.Errorf("expected imported SKILL.md at %s", importedSkill)

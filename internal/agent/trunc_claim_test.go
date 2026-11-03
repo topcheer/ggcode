@@ -8,11 +8,8 @@ import (
 func TestTruncClaimRecordAndDetect(t *testing.T) {
 	s := newTruncClaimState()
 
-	// Record a truncation event at iteration 2
 	s.recordTruncation("grep", 2)
 
-	// At iteration 2 (same iteration, after tool processing), agent makes
-	// a completeness claim based on truncated results
 	hint := s.maybeWarnTruncClaim("I found only 5 matches for the pattern", 2)
 	if hint == "" {
 		t.Fatal("expected warning when completeness claim follows truncation")
@@ -27,7 +24,7 @@ func TestTruncClaimRecordAndDetect(t *testing.T) {
 
 func TestTruncClaimNoTruncation(t *testing.T) {
 	s := newTruncClaimState()
-	// No truncation recorded -- should not warn even with completeness claims
+
 	hint := s.maybeWarnTruncClaim("These are all the files that match", 0)
 	if hint != "" {
 		t.Errorf("should not warn when no truncation occurred, got: %s", hint)
@@ -38,7 +35,6 @@ func TestTruncClaimAcknowledgedNoWarn(t *testing.T) {
 	s := newTruncClaimState()
 	s.recordTruncation("grep", 0)
 
-	// Agent acknowledges truncation -- should not warn
 	hint := s.maybeWarnTruncClaim(
 		"The search results may be incomplete due to truncation. Let me narrow the search.", 0)
 	if hint != "" {
@@ -50,7 +46,6 @@ func TestTruncClaimNoCompletenessClaim(t *testing.T) {
 	s := newTruncClaimState()
 	s.recordTruncation("grep", 0)
 
-	// Agent makes no completeness claim -- should not warn
 	hint := s.maybeWarnTruncClaim("Let me read the file to understand the pattern.", 0)
 	if hint != "" {
 		t.Errorf("should not warn when no completeness claim present, got: %s", hint)
@@ -60,7 +55,6 @@ func TestTruncClaimNoCompletenessClaim(t *testing.T) {
 func TestTruncClaimMaxWarnings(t *testing.T) {
 	s := newTruncClaimState()
 
-	// Fire warnings up to max
 	for iter := 0; iter < truncClaimMaxWarnings; iter++ {
 		s.recordTruncation("grep", iter)
 		hint := s.maybeWarnTruncClaim("There are no other references to this function", iter)
@@ -69,7 +63,6 @@ func TestTruncClaimMaxWarnings(t *testing.T) {
 		}
 	}
 
-	// Third warning should be suppressed
 	s.recordTruncation("grep", 10)
 	hint := s.maybeWarnTruncClaim("There are no other references", 10)
 	if hint != "" {
@@ -111,7 +104,6 @@ func TestTruncClaimNegativePatterns(t *testing.T) {
 	s := newTruncClaimState()
 	s.recordTruncation("grep", 0)
 
-	// Non-claim statements should not trigger
 	nonClaims := []string{
 		"Let me check the test results",
 		"The build passed successfully",
@@ -147,7 +139,6 @@ func TestTruncClaimReset(t *testing.T) {
 func TestTruncClaimRingBuffer(t *testing.T) {
 	s := newTruncClaimState()
 
-	// Overflow the ring buffer
 	for i := 0; i < truncClaimMaxEvents+3; i++ {
 		s.recordTruncation("grep", i)
 	}
@@ -161,13 +152,11 @@ func TestTruncClaimTemporalLocality(t *testing.T) {
 	s := newTruncClaimState()
 	s.recordTruncation("grep", 5)
 
-	// At iteration 7, the truncation at iteration 5 is outside the window
 	hint := s.maybeWarnTruncClaim("only 5 matches found", 7)
 	if hint != "" {
 		t.Errorf("should not warn when truncation is outside temporal window, got: %s", hint)
 	}
 
-	// At iteration 6, it's within the window (1 iteration behind)
 	hint2 := s.maybeWarnTruncClaim("only 5 matches found", 6)
 	if hint2 == "" {
 		t.Errorf("should warn when truncation is within temporal window (1 iter behind)")
@@ -178,13 +167,11 @@ func TestTruncClaimSameIterationDoubleWarn(t *testing.T) {
 	s := newTruncClaimState()
 	s.recordTruncation("grep", 0)
 
-	// First call should warn
 	hint1 := s.maybeWarnTruncClaim("only 5 matches found", 0)
 	if hint1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second call at same iteration should not warn again
 	hint2 := s.maybeWarnTruncClaim("no other references", 0)
 	if hint2 != "" {
 		t.Errorf("should not warn twice at same iteration, got: %s", hint2)

@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 )
 
-// initTestGitRepo creates a minimal committed git repo in a temp dir.
 func initTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -55,7 +54,6 @@ func TestShellCheckpointModifyTrackedFile(t *testing.T) {
 		t.Fatal("expected snapshot in git repo")
 	}
 
-	// Shell-style mutation: append content without going through editor tools.
 	if err := os.WriteFile(f, []byte("package main\n// mutated by sed -i\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +111,7 @@ func TestShellCheckpointDeleteAndUndoRestores(t *testing.T) {
 	commitAll(t, dir)
 
 	pre := takeShellSnapshotIn(dir)
-	if err := os.Remove(f); err != nil { // "rm keep.txt"
+	if err := os.Remove(f); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +138,7 @@ func TestShellCheckpointNoMutationNoCheckpoint(t *testing.T) {
 
 	pre := takeShellSnapshotIn(dir)
 	mgr := newTestCpMgr()
-	// Command rewrites the file with identical content (e.g. gofmt no-op).
+
 	if err := os.WriteFile(f, []byte("same\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -153,11 +151,11 @@ func TestShellCheckpointNoMutationNoCheckpoint(t *testing.T) {
 }
 
 func TestShellSnapshotNilOutsideGit(t *testing.T) {
-	dir := t.TempDir() // no git init
+	dir := t.TempDir()
 	if s := takeShellSnapshotIn(dir); s != nil {
 		t.Fatal("expected nil snapshot outside a git worktree")
 	}
-	// checkpointMutations with nil snapshots must be a safe no-op.
+
 	mgr := newTestCpMgr()
 	var nilSnap *shellSnapshot
 	if n := nilSnap.checkpointMutations(nil, "run_command", mgr); n != 0 {
@@ -166,7 +164,7 @@ func TestShellSnapshotNilOutsideGit(t *testing.T) {
 }
 
 func TestSplitPorcelainZ(t *testing.T) {
-	// "M  a.go\0?? new.txt\0R  renamed\0old\0" -- rename carries two fields.
+
 	out := []byte("M  a.go\x00?? new.txt\x00R  renamed\x00old\x00")
 	entries := splitPorcelainZ(out)
 	if len(entries) != 3 {
@@ -194,21 +192,14 @@ func TestShellCheckpointSkipUntrackedDeps(t *testing.T) {
 	}
 	pre := takeShellSnapshotIn(dir)
 	mgr := newTestCpMgr()
-	// Nothing changed except dependency noise -> no checkpoints.
+
 	if n := pre.checkpointMutations(pre, "run_command", mgr); n != 0 {
 		t.Fatalf("got %d checkpoints, want 0 for dep-dir noise", n)
 	}
 }
 
-// --- #2441 review fix: oversize files must never be checkpointed ---
-
-// oversizedContent exceeds shellCkptMaxFileBytes (1 MiB).
 var oversizedContent = strings.Repeat("x", (1<<20)+64)
 
-// TestShellCheckpointOversizePreModified: a >1MiB dirty file that a shell
-// command shrinks (e.g. sed) must NOT get a checkpoint. Old behavior:
-// readSnapshotFile returned ("", true), Pass 1 saved oldContent="" with
-// existed=true, and undo_edit ZEROED the file on disk (real data loss).
 func TestShellCheckpointOversizePreModified(t *testing.T) {
 	dir := initTestGitRepo(t)
 	f := filepath.Join(dir, "big.log")
@@ -224,7 +215,6 @@ func TestShellCheckpointOversizePreModified(t *testing.T) {
 		t.Fatalf("oversize pre-state misclassified: %+v ok=%v", st, ok)
 	}
 
-	// Command shrinks it below the cap with different content.
 	if err := os.WriteFile(f, []byte("small"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -233,16 +223,13 @@ func TestShellCheckpointOversizePreModified(t *testing.T) {
 	if n := pre.checkpointMutations(takeShellSnapshotIn(dir), "run_command", mgr); n != 0 {
 		t.Fatalf("got %d checkpoints for oversize pre-state, want 0 (undo would zero the file)", n)
 	}
-	// And undoing everything else must leave the shrunk file untouched.
+
 	got, _ := os.ReadFile(f)
 	if string(got) != "small" {
 		t.Fatalf("file altered: %q", got)
 	}
 }
 
-// TestShellCheckpointOversizePreDeleted: deleting an uncaptured dirty file
-// must not produce a checkpoint -- a deletion checkpoint with empty
-// oldContent would restore an EMPTY file on undo instead of the content.
 func TestShellCheckpointOversizePreDeleted(t *testing.T) {
 	dir := initTestGitRepo(t)
 	f := filepath.Join(dir, "big2.log")
@@ -261,8 +248,6 @@ func TestShellCheckpointOversizePreDeleted(t *testing.T) {
 	}
 }
 
-// TestShellCheckpointOversizePost: a file the command GREW past the cap must
-// not be checkpointed either -- empty newContent would zero it on redo.
 func TestShellCheckpointOversizePost(t *testing.T) {
 	dir := initTestGitRepo(t)
 	f := filepath.Join(dir, "grow.log")

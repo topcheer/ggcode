@@ -52,8 +52,6 @@ func TestCommitHint_WithUncommittedChanges(t *testing.T) {
 	a := &Agent{commitHint: newCommitHintState()}
 	a.SetWorkingDir(dir)
 
-	// #698: the hint scopes to the agent's own edit list (absolute paths)
-	// intersected with the dirty tree.
 	stats := &RunStats{
 		ToolCalls:   map[string]int{"edit_file": 1},
 		FilesEdited: []string{filepath.Join(dir, "main.go")},
@@ -111,10 +109,6 @@ func TestCountChangedFiles(t *testing.T) {
 	}
 }
 
-// TestCommitHint_StashDoesNotSuppressHint pins #698's contract change: a
-// git_stash round trip (push + pop) leaves the agent's edits uncommitted in
-// the tree — exactly what this gate exists to flag. Only git_add/git_commit
-// suppress the hint.
 func TestCommitHint_StashDoesNotSuppressHint(t *testing.T) {
 	dir := t.TempDir()
 	runGitCommitTest(t, dir, "init")
@@ -131,7 +125,7 @@ func TestCommitHint_StashDoesNotSuppressHint(t *testing.T) {
 	stats := &RunStats{
 		ToolCalls: map[string]int{
 			"edit_file": 1,
-			"git_stash": 2, // push + pop round trip
+			"git_stash": 2,
 		},
 		FilesEdited: []string{filepath.Join(dir, "main.go")},
 	}
@@ -140,11 +134,6 @@ func TestCommitHint_StashDoesNotSuppressHint(t *testing.T) {
 	}
 }
 
-// TestCommitHint_NewDirectoryUntrackedFile pins #2887: plain `git status
-// --porcelain` folds a fully-untracked directory into a single "?? dir/"
-// entry, so the agent's per-file edit list never intersects the dirty set and
-// new-directory work silently skipped the commit hint. With -uall every
-// untracked file is listed individually and the hint fires.
 func TestCommitHint_NewDirectoryUntrackedFile(t *testing.T) {
 	dir := t.TempDir()
 	runGitCommitTest(t, dir, "init")
@@ -154,7 +143,6 @@ func TestCommitHint_NewDirectoryUntrackedFile(t *testing.T) {
 	runGitCommitTest(t, dir, "add", "main.go")
 	runGitCommitTest(t, dir, "commit", "-m", "initial")
 
-	// Agent creates a file inside a brand-new directory (untracked dir).
 	if err := os.MkdirAll(filepath.Join(dir, "newpkg"), 0755); err != nil {
 		t.Fatalf("mkdir newpkg: %v", err)
 	}

@@ -102,7 +102,7 @@ func TestCircularReasoningEmptyAndShort(t *testing.T) {
 func TestCircularReasoningDedup(t *testing.T) {
 	text := "This is the correct approach because it's correct. Also that is the correct way because it's correct."
 	instances := scanCircularReasoning(text)
-	// Both match identity_because but with different excerpts, so should have 2
+
 	if len(instances) < 1 {
 		t.Fatal("expected at least 1 instance")
 	}
@@ -126,13 +126,11 @@ func TestCircularReasoningStateReset(t *testing.T) {
 func TestCircularReasoningWarningThreshold(t *testing.T) {
 	a := &Agent{circularReasoning: newCircularReasoningState()}
 
-	// First circular instance -- should not warn (threshold=2)
 	hint := a.maybeWarnCircularReasoning("This is the correct approach because it's correct.", 0)
 	if hint != "" {
 		t.Fatal("expected no warning with only 1 instance")
 	}
 
-	// Second instance -- should now warn
 	hint = a.maybeWarnCircularReasoning("It fails because it fails.", 1)
 	if hint == "" {
 		t.Fatal("expected warning with 2 instances")
@@ -148,22 +146,19 @@ func TestCircularReasoningWarningThreshold(t *testing.T) {
 func TestCircularReasoningMaxWarnings(t *testing.T) {
 	a := &Agent{circularReasoning: newCircularReasoningState()}
 
-	// Trigger warning twice
 	a.maybeWarnCircularReasoning("This is correct because it's correct.", 0)
 	a.maybeWarnCircularReasoning("It fails because it fails.", 1)
 	if a.circularReasoning.warnings != 1 {
 		t.Fatalf("expected 1 warning, got %d", a.circularReasoning.warnings)
 	}
 
-	// More instances but max warnings reached
 	a.maybeWarnCircularReasoning("We need caching because we need caching.", 2)
 	hint := a.maybeWarnCircularReasoning("The reason for refactoring is to refactoring code.", 3)
-	// Should have warned on iteration 2 (3rd call)
+
 	if a.circularReasoning.warnings != 2 {
 		t.Fatalf("expected 2 warnings, got %d", a.circularReasoning.warnings)
 	}
 
-	// Further calls should not warn
 	hint = a.maybeWarnCircularReasoning("More circular stuff because it's correct.", 4)
 	if hint != "" {
 		t.Error("expected no warning after max warnings reached")

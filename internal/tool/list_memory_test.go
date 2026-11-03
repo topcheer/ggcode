@@ -49,7 +49,7 @@ func TestListMemoryTool_HeadingStrippedFromPreview(t *testing.T) {
 	if strings.Contains(out.Content, "== global") {
 		t.Fatalf("project scope must not include global section:\n%s", out.Content)
 	}
-	// "# Build" heading must be stripped; first body line is the preview.
+
 	if !strings.Contains(out.Content, "build-process: Use make verify-ci") {
 		t.Fatalf("preview must skip markdown heading:\n%s", out.Content)
 	}
@@ -75,7 +75,7 @@ func TestListMemoryTool_InvalidScope(t *testing.T) {
 
 func TestListMemoryTool_NilScopeStoreSkipped(t *testing.T) {
 	_, project := mkMemStores(t)
-	// globalMem nil, scope all: project section still renders, no panic.
+
 	tol := NewListMemoryTool(nil, project)
 	out, _ := tol.Execute(context.Background(), json.RawMessage(`{}`))
 	if !strings.Contains(out.Content, "build-process") {
@@ -83,12 +83,10 @@ func TestListMemoryTool_NilScopeStoreSkipped(t *testing.T) {
 	}
 }
 
-// r488 (Mem++ arXiv:2610.02002) tool-level coverage: key view shows archive
-// depth, as_of reads the historical version, as_of without key is rejected.
 func TestListMemoryTool_KeyViewShowsArchiveDepth(t *testing.T) {
 	_, project := mkMemStores(t)
 	if err := project.SaveMemory("build-process", "# Build v2\nmake verify-ci twice\n"); err != nil {
-		t.Fatal(err) // second write archives v1 per r488
+		t.Fatal(err)
 	}
 	tol := NewListMemoryTool(nil, project)
 	out, _ := tol.Execute(context.Background(), json.RawMessage(`{"key":"build-process"}`))
@@ -112,14 +110,14 @@ func TestListMemoryTool_AsOfRequiresKey(t *testing.T) {
 }
 
 func TestListMemoryTool_AsOfReadsHistoricalVersion(t *testing.T) {
-	_, project := mkMemStores(t) // build-process v1 written here
-	// mid is strictly between the two writes: after v1, before v2.
+	_, project := mkMemStores(t)
+
 	mid := time.Now()
 	time.Sleep(5 * time.Millisecond)
 	if err := project.SaveMemory("build-process", "v2 content"); err != nil {
 		t.Fatal(err)
 	}
-	// mid was captured AFTER v1 but BEFORE v2's save.
+
 	tol := NewListMemoryTool(nil, project)
 	payload := `{"key":"build-process","as_of":"` + mid.Format(time.RFC3339Nano) + `"}`
 	out, _ := tol.Execute(context.Background(), json.RawMessage(payload))

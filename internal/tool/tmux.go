@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tmux"
 )
 
-// TmuxTool lets the agent manage tmux panes when ggcode is running inside tmux.
 type TmuxTool struct {
 	WorkingDir string
 	Manager    *tmux.Manager

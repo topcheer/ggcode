@@ -9,29 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Schema-driven pre-flight required-parameter validation.
-//
-// Root cause (verified): runtime enforcement lives in per-tool hand-written
-// checks (13 CheckRequired call sites, none checking `description`), and the
-// error messages are bare ("missing required parameter: file_path") with no
-// schema description. The provider does not validate tool-call arguments
-// (ToDefinitions sends raw schemas), so a missing functional parameter is
-// only reported AFTER dispatch, and the LLM has to guess what the parameter
-// means from the name alone — costing extra retry rounds.
-//
-// This validator reads the tool's OWN schema (the single source of truth the
-// LLM was shown), checks top-level required fields before Execute runs, and
-// embeds each missing parameter's schema description in the error so the
-// model can fix the call in ONE retry.
-//
-// Boundaries (intentional):
-//   - Top-level required only. Nested schemas (multi_edit_file's
-//     edits[].old_text/new_text) stay with the tool's own checks.
-//   - Malformed schema JSON skips validation (never blocks execution).
-//   - Presence check only (explicit null counts as missing); empty
-//     string/array/object are legal values (#742); type coercion stays
-//     downstream.
-
 type requiredSchemaCache struct {
 	mu     sync.RWMutex
 	byTool map[string]*requiredSchemaInfo
@@ -48,9 +25,6 @@ type requiredField struct {
 
 var globalRequiredSchemaCache = &requiredSchemaCache{byTool: map[string]*requiredSchemaInfo{}}
 
-// parseRequiredSchema extracts top-level required fields and their
-// descriptions from a JSON Schema. Returns nil when the schema is absent,
-// unparseable, or declares no required fields.
 func parseRequiredSchema(params json.RawMessage) *requiredSchemaInfo {
 	if len(params) == 0 {
 		return nil
@@ -93,16 +67,6 @@ func (c *requiredSchemaCache) get(t tool.Tool) *requiredSchemaInfo {
 	return info
 }
 
-// missingRequiredFields returns the schema-required top-level parameters
-// that are absent, or explicitly null, in the call arguments.
-//
-// #742: JSON Schema `required` means the KEY must be present, not non-empty.
-// Empty values are legal and load-bearing for several tools (edit_file
-// deletes via new_text:"", write_file creates empty files via content:"",
-// batch_replace deletes via replacement:"", todo_write clears the list via
-// todos:[]); rejecting them pre-dispatch blocks valid calls with an error
-// whose suggested fix ("resend with the parameter included") can never
-// succeed, trapping the model in a futile retry loop.
 func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []requiredField {
 	if info == nil || len(info.required) == 0 {
 		return nil
@@ -110,8 +74,7 @@ func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []req
 	var call map[string]json.RawMessage
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &call); err != nil {
-			// Arguments not an object (or invalid JSON): let the tool's own
-			// parse produce its usual error instead of a confusing list.
+
 			return nil
 		}
 	}
@@ -126,18 +89,11 @@ func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []req
 	return missing
 }
 
-// isNullJSONValue reports whether a raw JSON value counts as "not provided".
-// Only null (and a malformed empty raw value): per JSON Schema `required`
-// semantics the key's presence is what matters, and empty string/array/
-// object are distinct, legal values (#742).
 func isNullJSONValue(raw json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(raw))
 	return trimmed == "" || trimmed == "null"
 }
 
-// formatMissingRequired renders the structured pre-flight error, embedding
-// each missing parameter's schema description so the LLM can self-correct
-// in one retry.
 func formatMissingRequired(toolName string, missing []requiredField) string {
 	var sb strings.Builder
 	if len(missing) == 1 {
@@ -164,8 +120,6 @@ func formatMissingRequired(toolName string, missing []requiredField) string {
 	return sb.String()
 }
 
-// preflightRequiredCheck runs before Execute in safeExecute. Returns a
-// non-nil Result when the call must be rejected pre-dispatch.
 func preflightRequiredCheck(t tool.Tool, args json.RawMessage) *tool.Result {
 	info := globalRequiredSchemaCache.get(t)
 	missing := missingRequiredFields(info, args)

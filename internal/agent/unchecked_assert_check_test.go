@@ -72,8 +72,7 @@ func (h *Handler) Do(v interface{}) {
 }
 
 func TestCheckUncheckedTypeAssert_DeltaAware(t *testing.T) {
-	// Old content already has an unchecked assertion; new content keeps it
-	// but doesn't add any new ones. Should NOT warn.
+
 	old := `package main
 
 func process(v interface{}) {
@@ -136,7 +135,7 @@ func TestCheckUncheckedTypeAssert_EmptyContent(t *testing.T) {
 }
 
 func TestCheckUncheckedTypeAssert_AssignmentCommaOk(t *testing.T) {
-	// `s, ok = v.(string)` (regular assignment with comma-ok) is safe.
+
 	old := `package main
 
 func process(v interface{}) {
@@ -180,7 +179,7 @@ func process(v interface{}) {
 }
 
 func TestCheckUncheckedTypeAssert_TypeSwitchSafe(t *testing.T) {
-	// Type assertions in type switch cases are always safe.
+
 	old := `package main
 
 func process(v interface{}) {
@@ -196,8 +195,7 @@ func process(v interface{}) {
 }
 `
 	warnings := checkUncheckedTypeAssert("test.go", old, new)
-	// v.(type) produces a TypeAssertExpr with nil Type, which should not be
-	// flagged as it's a type switch, not a regular assertion.
+
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings for type switch, got %d: %v", len(warnings), warnings)
 	}
@@ -212,7 +210,7 @@ func work(v interface{}) {
 	_ = y
 }
 `
-	// Same assertions, 5 unrelated lines inserted above them (#157).
+
 	shifted := `package main
 
 // unrelated comment 1
@@ -233,9 +231,6 @@ func work(v interface{}) {
 	}
 }
 
-// TestCheckUncheckedTypeAssert_NewDifferentAssertion pins fix #169: with a
-// pre-existing assertion, adding a DIFFERENT one must be reported. (The
-// broken empty-string fingerprint made every assertion collide to 0 warnings.)
 func TestCheckUncheckedTypeAssert_NewDifferentAssertion(t *testing.T) {
 	oldSrc := "package main\nfunc f(a interface{}) { _ = a.([]byte) }\n"
 	newSrc := "package main\nfunc f(a interface{}) {\n\t_ = a.([]byte)\n\t_ = a.(string)\n}\n"
@@ -245,10 +240,6 @@ func TestCheckUncheckedTypeAssert_NewDifferentAssertion(t *testing.T) {
 	}
 }
 
-// TestCheckUncheckedTypeAssert_NewSameTextAssertion pins the multiset delta:
-// adding a SECOND unchecked assertion with identical expression text (e.g.
-// copy-pasted into another handler) must be reported. Set-membership delta
-// filtered it as "pre-existing" because the fingerprint matched.
 func TestCheckUncheckedTypeAssert_NewSameTextAssertion(t *testing.T) {
 	oldSrc := "package main\nfunc handleA(x interface{}) { e := x.(*MyError); _ = e }\n"
 	newSrc := "package main\nfunc handleA(x interface{}) { e := x.(*MyError); _ = e }\n" +
@@ -262,9 +253,6 @@ func TestCheckUncheckedTypeAssert_NewSameTextAssertion(t *testing.T) {
 	}
 }
 
-// TestCheckUncheckedTypeAssert_ComplexExprFingerprints pins fix #176:
-// getA().(int) and getB().(int) must produce distinct fingerprints so a
-// swap-in of a different complex-X assertion is still detected.
 func TestCheckUncheckedTypeAssert_ComplexExprFingerprints(t *testing.T) {
 	oldSrc := "package main\nfunc f(getA func() interface{}) { _ = getA().(int) }\n"
 	newSrc := "package main\nfunc f(getA func() interface{}, getB func() interface{}) {\n\t_ = getA().(int)\n\t_ = getB().(int)\n}\n"

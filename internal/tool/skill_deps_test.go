@@ -8,7 +8,7 @@ import (
 )
 
 func TestCheckRequiredTools_AllPresent(t *testing.T) {
-	// "go" and "git" are virtually always on PATH in a dev environment.
+
 	missing := checkRequiredTools([]string{"go", "git"})
 	if len(missing) != 0 {
 		t.Errorf("expected no missing tools, got %v", missing)
@@ -20,7 +20,7 @@ func TestCheckRequiredTools_SomeMissing(t *testing.T) {
 	if len(missing) != 2 {
 		t.Fatalf("expected 2 missing tools, got %d: %v", len(missing), missing)
 	}
-	// Should NOT include "go"
+
 	for _, m := range missing {
 		if m == "go" {
 			t.Errorf("go should not be in missing list")

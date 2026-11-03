@@ -5,15 +5,10 @@ import (
 	"testing"
 )
 
-// TestTruncateMiddleSpillHook (r382): the omitted middle of oversized
-// run_command output must flow through the OmittedOutputSpiller hook so the
-// agent-side offloader can persist it, and the hook's notice must be embedded
-// in the truncation marker. Without the hook the behavior is byte-identical
-// to the previous truncateMiddle.
 func TestTruncateMiddleSpillHook(t *testing.T) {
 	line := strings.Repeat("x", 200) + "\n"
 	var sb strings.Builder
-	for i := 0; i < 600; i++ { // ~120KB, well over the 100KB budget
+	for i := 0; i < 600; i++ {
 		sb.WriteString(line)
 	}
 	big := sb.String()
@@ -33,7 +28,7 @@ func TestTruncateMiddleSpillHook(t *testing.T) {
 		if gotSource != "output" {
 			t.Fatalf("source = %q, want output", gotSource)
 		}
-		// head 40% + tail 50% of the budget retained -> ~10KB+ omitted here
+
 		if len(gotOmitted) < 8*1024 {
 			t.Fatalf("omitted middle too small: %d bytes", len(gotOmitted))
 		}

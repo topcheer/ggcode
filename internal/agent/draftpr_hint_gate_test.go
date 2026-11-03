@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// sa-223 probes: the draft-PR hint must fire exactly when the agent
-// committed on an unpushed feature branch, and stay silent in every other
-// end state (no commit, default branch, everything pushed, already fired).
-
 func testRunStatsWithCommit(committed bool) *RunStats {
 	rs := &RunStats{ToolCalls: map[string]int{}}
 	if committed {
@@ -25,7 +21,6 @@ func newDraftPRTestAgent(t *testing.T, workingDir string) *Agent {
 	return a
 }
 
-// Real-git fixture: feature branch with no upstream -> ahead of main.
 func TestDraftPRHintFiresOnUnpushedFeatureBranch(t *testing.T) {
 	dir := t.TempDir()
 	if err := exec.Command("git", "-C", dir, "init", "-b", "main").Run(); err != nil {
@@ -47,7 +42,7 @@ func TestDraftPRHintFiresOnUnpushedFeatureBranch(t *testing.T) {
 	if !strings.Contains(msg, "feat/x") || !strings.Contains(msg, "draft PR") {
 		t.Fatalf("expected draft-PR hint for unpushed feature branch, got %q", msg)
 	}
-	// One shot per run.
+
 	if again := a.checkDraftPRHintGate(testRunStatsWithCommit(true)); again != "" {
 		t.Fatalf("gate must fire once per run, got %q", again)
 	}
@@ -84,7 +79,6 @@ func TestDraftPRHintSilentOnDefaultBranch(t *testing.T) {
 	}
 }
 
-// Upstream set and fully pushed -> ahead == 0 -> silent.
 func TestDraftPRHintSilentWhenPushed(t *testing.T) {
 	dir := t.TempDir()
 	clone := t.TempDir()

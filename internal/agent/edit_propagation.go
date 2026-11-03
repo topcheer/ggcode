@@ -1,44 +1,5 @@
 package agent
 
-// edit_propagation.go -- Cross-File Edit Propagation Risk Detector
-//
-// Research basis:
-//   - MAST taxonomy (Cemri et al., "Why Do Multi-Agent LLM Systems Fail?",
-//     2025): "Propagation failures" -- downstream trust of upstream errors
-//     is the root cause in the majority of terminal failures. Errors
-//     compound across multi-step workflows when unverified intermediate
-//     results are trusted downstream.
-//   - Sherlock framework (Microsoft Research, Nov 2025): "vulnerability-
-//     informed placement" -- nodes with high downstream influence need
-//     concentrated verification. Edits to widely-imported files have higher
-//     propagation risk than edits to leaf files.
-//   - Self-Verification in Multi-Step Agent Workflows (2026): "accuracy
-//     drops non-linearly with step count" because cross-file dependencies
-//     create error propagation paths.
-//
-// Problem: verifyDebt counts TOTAL edits since the last green build, but
-// it does not distinguish between:
-//   - 7 edits to the SAME file (low propagation risk -- you'll catch
-//     issues when you test that one file)
-//   - 7 edits to 7 DIFFERENT files (high propagation risk -- cross-file
-//     import/dependency chains mean a latent error in file A propagates
-//     to files B, C, D that depend on it)
-//
-// This detector adds the file-diversity dimension. When many DISTINCT files
-// are edited without verification, the probability that an error in one
-// file propagates through dependency chains to others increases sharply.
-// This is the "error propagation path density" signal from the MAST
-// taxonomy.
-//
-// Design:
-//   - Tracks the set of distinct source files edited since the last
-//     successful (green) build/test.
-//   - Fires at 4+ distinct files: moderate risk, remind to verify.
-//   - Escalates at 7+ distinct files: high risk, emphasize propagation.
-//   - Resets on green build (same as verifyDebt).
-//   - Zero LLM cost -- pure set membership tracking.
-//   - Non-blocking advisory, max 2 warnings per run.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -49,31 +10,20 @@ import (
 )
 
 const (
-	// propagationWarn1: distinct files threshold for first warning.
 	propagationWarn1 = 4
 
-	// propagationWarn2: distinct files threshold for escalation.
 	propagationWarn2 = 7
 
-	// propagationMaxWarnings: max warnings per run. #2709: two-tier
-	// semantics restored - the soft tier (4+) and the escalation tier (7+)
-	// each consume one of the two quotas, so the escalation message is
-	// reachable in progressive edit flows while total noise stays capped
-	// (one advisory per tier per run; compaction may re-arm the quota).
 	propagationMaxWarnings = 2
 
-	// propagationMaxTracked: max distinct file paths to track (memory bound).
 	propagationMaxTracked = 60
 )
 
-// editPropagationState tracks distinct source files edited since the last
-// green build. Complements verifyDebt (total edit count) with the
-// file-diversity dimension (cross-file propagation risk).
 type editPropagationState struct {
 	mu             sync.Mutex
-	distinctFiles  map[string]bool // distinct file paths edited since green build
-	totalDistinct  int             // running count (for metrics)
-	warningsIssued int             // warnings issued this run (cap at 2)
+	distinctFiles  map[string]bool
+	totalDistinct  int
+	warningsIssued int
 }
 
 func newEditPropagationState() *editPropagationState {
@@ -82,9 +32,6 @@ func newEditPropagationState() *editPropagationState {
 	}
 }
 
-// recordEdit tracks a source-code file edit. Returns true if a new
-// distinct file was added (i.e., this file wasn't seen before since the
-// last green build).
 func (s *editPropagationState) recordEdit(toolName, args string) bool {
 	if !fileEditingTools[toolName] {
 		return false
@@ -110,8 +57,6 @@ func (s *editPropagationState) recordEdit(toolName, args string) bool {
 	return added
 }
 
-// recordGreenBuild resets the distinct file set after a successful
-// verification command. Called alongside verifyDebt.recordVerifyCommand.
 func (s *editPropagationState) recordGreenBuild() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,8 +67,6 @@ func (s *editPropagationState) recordGreenBuild() {
 	s.distinctFiles = make(map[string]bool)
 }
 
-// maybeWarn returns a guidance string when cross-file propagation risk
-// crosses warning thresholds.
 func (s *editPropagationState) maybeWarn(iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,11 +81,7 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 	}
 
 	var msg string
-	// #2709: tier-scoped quotas instead of one global slot. The soft tier (4+)
-	// only ever spends the first quota; the escalation tier (7+) fires once
-	// on top of it, spending the second (a batch jump straight past 7, e.g.
-	// multi_file_write of 7+ files, skips the soft tier and spends both at
-	// once with the escalation message).
+
 	if count >= propagationWarn2 && s.warningsIssued <= propagationMaxWarnings-1 {
 		s.warningsIssued = propagationMaxWarnings
 		msg = fmt.Sprintf(
@@ -175,7 +114,6 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 	return msg
 }
 
-// reset clears state for a new user turn.
 func (s *editPropagationState) reset() {
 	s.mu.Lock()
 	s.distinctFiles = make(map[string]bool)
@@ -184,31 +122,18 @@ func (s *editPropagationState) reset() {
 	s.mu.Unlock()
 }
 
-// propagationExtractPaths extracts file paths from edit tool arguments.
-// Handles edit_file, multi_edit_file, write_file, multi_file_edit,
-// multi_file_write, and batch_replace argument formats.
 func propagationExtractPaths(args string) []string {
 	var paths []string
 
-	// edit_file / write_file: "file_path":"..."
 	paths = append(paths, propagationExtractField(args, "file_path")...)
 
-	// multi_edit_file: same file_path
-	// (already captured above)
-
-	// multi_file_edit / multi_file_write: "path":"..." in files array
 	paths = append(paths, propagationExtractField(args, "path")...)
 
-	// batch_replace (#153): top-level "files": ["path1","path2",...] is a
-	// string ARRAY, which propagationExtractField cannot extract (it only
-	// handles "key":"value" string pairs). Parse it structurally.
 	paths = append(paths, propagationExtractFilesArray(args)...)
 
 	return paths
 }
 
-// propagationExtractFilesArray extracts the top-level "files" string array
-// from tool arguments (batch_replace schema). Returns nil on parse failure.
 func propagationExtractFilesArray(args string) []string {
 	var parsed struct {
 		Files []string `json:"files"`
@@ -219,12 +144,9 @@ func propagationExtractFilesArray(args string) []string {
 	return parsed.Files
 }
 
-// propagationExtractField extracts values for a given JSON key from a
-// raw argument string. Handles both "key":"value" and "key": "value"
-// patterns. Returns all unique values found.
 func propagationExtractField(s, key string) []string {
 	var values []string
-	// Search for "key":"value" or "key": "value" patterns
+
 	search := "\"" + key + "\":"
 	idx := 0
 	for {
@@ -233,19 +155,19 @@ func propagationExtractField(s, key string) []string {
 			break
 		}
 		pos += idx
-		// Move past the key
+
 		valStart := pos + len(search)
-		// Skip optional whitespace
+
 		for valStart < len(s) && (s[valStart] == ' ' || s[valStart] == '\t' || s[valStart] == '\n') {
 			valStart++
 		}
-		// Expect opening quote
+
 		if valStart >= len(s) || s[valStart] != '"' {
 			idx = pos + len(search)
 			continue
 		}
-		valStart++ // skip opening quote
-		// Find closing quote (handle escaped quotes)
+		valStart++
+
 		valEnd := valStart
 		for valEnd < len(s) {
 			if s[valEnd] == '\\' && valEnd+1 < len(s) {

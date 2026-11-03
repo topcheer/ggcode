@@ -1,30 +1,13 @@
 package agent
 
-// Regression tests for GitHub issues #1138 and #1139.
-//
-// #1138: orphan_file integration judgment must not count an edit to the
-// newly created file itself as integration evidence. The write -> edit ->
-// edit polish loop permanently suppressed orphan detection even though
-// nothing ever referenced or imported the new file.
-//
-// #1139: outcome_misattrib listed read-class tools (read_file, grep, glob,
-// search_files, lsp_hover/definition/references) as verifiable tools, so
-// reading ordinary Go source containing bare words like "error" or "fail"
-// recorded a false failure signal, and a normal 'done' narrative in the
-// next iteration triggered a spurious misattribution warning.
-
 import (
 	"strings"
 	"testing"
 )
 
-// ---------- #1138: self-edit is not integration ----------
-
 func TestIssue1138SelfEditNeverIntegrates(t *testing.T) {
 	o := newOrphanFileState()
 
-	// Create a brand new module file (#1138 reproduction):
-	// write -> edit -> edit polish loop on the SAME file.
 	o.recordToolCall("write_file", `{"path":"/tmp/proj/newmod/util.go"}`, 1)
 
 	sawWarning := false
@@ -55,7 +38,6 @@ func TestIssue1138EditOtherExistingFileIntegrates(t *testing.T) {
 
 	o.recordToolCall("write_file", `{"path":"helper.go"}`, 1)
 
-	// Integration comes from OTHER files referencing/importing the new code.
 	warn := o.recordToolCall("edit_file", `{"file_path":"main.go"}`, 2)
 	if warn != "" {
 		t.Fatalf("edit to existing other file should integrate, got: %s", warn)
@@ -69,14 +51,12 @@ func TestIssue1138MultiEditMixedTargetsIntegrates(t *testing.T) {
 	o := newOrphanFileState()
 	o.recordToolCall("write_file", `{"path":"feature.go"}`, 1)
 
-	// One batch edit touches both the new file and an existing consumer:
-	// the existing-file hit means integration work happened.
 	args := `{"files":[{"file_path":"feature.go"},{"file_path":"main.go"}]}`
 	if warn := o.recordToolCall("multi_file_edit", args, 2); warn != "" {
 		t.Fatalf("mixed-target batch edit should integrate, got: %s", warn)
 	}
 	if o.integrated {
-		// State reset happens on next record; just ensure no tracking left.
+
 	}
 }
 
@@ -85,7 +65,6 @@ func TestIssue1138MultiEditAllNewFilesNotIntegrated(t *testing.T) {
 	o.recordToolCall("write_file", `{"path":"a.go"}`, 1)
 	o.recordToolCall("write_file", `{"path":"b.go"}`, 2)
 
-	// Batch edit polishing ONLY the two new files: not integration.
 	args := `{"files":[{"path":"a.go"},{"path":"b.go"}]}`
 	warn := o.recordToolCall("batch_replace", args, 3)
 	if warn != "" && o.callsSince < orphanCallThreshold {
@@ -100,8 +79,6 @@ func TestIssue1138RelativeAbsoluteSelfEdit(t *testing.T) {
 	o := newOrphanFileState()
 	o.recordToolCall("write_file", `{"path":"src/newpkg/engine.go"}`, 1)
 
-	// Same base name recorded from a different working directory prefix
-	// should still be recognized as a self-edit (#1138).
 	warn := o.recordToolCall("edit_file", `{"file_path":"/abs/root/src/newpkg/engine.go"}`, 2)
 	if warn != "" {
 		t.Fatalf("self-edit via alternate path form should stay un-integrated, got: %s", warn)
@@ -115,14 +92,11 @@ func TestIssue1138UnparseableArgsFallback(t *testing.T) {
 	o := newOrphanFileState()
 	o.recordToolCall("write_file", `{"path":"f.go"}`, 1)
 
-	// No parseable path in args: preserve prior behavior (integration).
 	warn := o.recordToolCall("edit_file", `{}`, 2)
 	if warn != "" {
 		t.Fatalf("unparseable args should keep legacy integration fallback, got: %s", warn)
 	}
 }
-
-// ---------- #1139: read-class tools are not verifiable ----------
 
 func TestIssue1139ReadClassToolsNotVerifiable(t *testing.T) {
 	removed := []string{
@@ -134,7 +108,7 @@ func TestIssue1139ReadClassToolsNotVerifiable(t *testing.T) {
 			t.Errorf("%s must not be in outcomeVerifiableTools (#1139)", tool)
 		}
 	}
-	// Kept set sanity: explicit pass/fail semantics tools remain.
+
 	kept := []string{"run_command", "start_command", "read_command_output", "lsp_diagnostics"}
 	for _, tool := range kept {
 		if !outcomeVerifiableTools[tool] {
@@ -198,8 +172,7 @@ func TestIssue1139VerifiableToolsStillDetected(t *testing.T) {
 }
 
 func TestIssue1139ExplicitErrorFromReadToolStillRecorded(t *testing.T) {
-	// isError=true results bypass the allowlist by design: a hard tool
-	// error has clear failure semantics regardless of tool class (#1139).
+
 	s := newOutcomeMisattribState()
 	s.recordResult("read_file", "permission denied", true, 5)
 	if s.pendingFailureIter != 5 {

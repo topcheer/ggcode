@@ -12,43 +12,13 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Parallel Wait Tool Execution.
-//
-// When the LLM spawns several sub-agents and then emits multiple wait_agent
-// calls in one batch, executing them sequentially means total latency is the
-// SUM of each agent's remaining runtime; the second call's live progress is
-// invisible in the TUI until the first returns. Executing the wait family
-// concurrently makes latency the MAX and streams every agent's progress
-// simultaneously.
-//
-// Safety profile (stricter than read-only pre-execution in parallel_tools.go):
-//   - Waiting has no side effects: WaitForSnapshotWithProgress polls sub-agent
-//     snapshots; a denied permission merely discards the snapshot.
-//   - NO 30s timeout here: waits legitimately run for minutes. Cancellation
-//     propagates via ctx (Esc interrupt cancels the whole batch).
-//   - Progress callbacks are bound per toolID (same pattern as
-//     agent_tool.go), so concurrent waits stream to distinct TUI blocks.
-//   - Results are collected into a map keyed by call index and consumed
-//     in-order by the sequential loop — the LLM still sees tool_results in
-//     call order, preserving the provider API contract.
-
-// parallelWaitTools is the family of blocking-wait tools that are safe to
-// execute concurrently within one batch.
 var parallelWaitTools = map[string]bool{
 	"wait_agent":       true,
 	"teammate_results": true,
 }
 
-// parallelWaitMaxConcurrent bounds concurrent waits. Waits are I/O-idle
-// (polling), so the width can exceed the compute-oriented
-// parallelMaxConcurrent=3 used for read-only tools.
 const parallelWaitMaxConcurrent = 8
 
-// preExecuteWaitTools identifies wait-family tool calls in the batch and
-// executes them concurrently, returning a map from tool-call index to result.
-// Returns nil when the batch contains fewer than two wait-family calls (a
-// single wait gains nothing from concurrency and should keep the plain
-// sequential path).
 func (a *Agent) preExecuteWaitTools(ctx context.Context, toolCalls []provider.ToolCallDelta) map[int]preExecutedResult {
 	type pending struct {
 		index int
@@ -87,9 +57,6 @@ func (a *Agent) preExecuteWaitTools(ctx context.Context, toolCalls []provider.To
 				return
 			}
 
-			// Bind the per-call progress callback (toolID-tagged) so
-			// concurrent waits stream to distinct progress slots —
-			// mirrors agent_tool.go:236-243.
 			execCtx := ctx
 			if a.onToolProgress != nil {
 				fn := a.onToolProgress

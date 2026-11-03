@@ -7,35 +7,17 @@ import (
 	"strings"
 )
 
-// ShareController is the frontend surface the share-control tools drive.
-// The frontend (TUI/desktop) injects an adapter that owns the real
-// agentruntime.TunnelHost; the tool package keeps zero reverse dependencies
-// (same pattern as MobileFileSender / SetIMManager).
-//
-// Security note: StartShare only opens a relay room; a human must still scan
-// the QR / type the URL on the phone to join, so giving the agent start/stop
-// control does not bypass any pairing step - it matches what /share already
-// does interactively.
 type ShareController interface {
-	// StartAgentShare starts a mobile tunnel share and returns the full
-	// connect URL the user must open (or scan) on the phone.
 	StartAgentShare() (ShareStartResult, error)
-	// StopAgentShare tears down the active share, if any. Stopping with no
-	// active share is a no-op success.
 	StopAgentShare() error
-	// ShareActive reports whether a share session is currently running.
 	ShareActive() bool
 }
 
-// ShareStartResult mirrors the connection details the frontend produced.
 type ShareStartResult struct {
 	ConnectURL string
 	RoomID     string
 }
 
-// StartShareTool lets the agent open a mobile share session on the user's
-// behalf. The full connect URL is returned in the result so the agent MUST
-// relay it to the user - the user still completes pairing on the phone.
 type StartShareTool struct {
 	Controller ShareController
 }
@@ -83,7 +65,6 @@ func (t StartShareTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	return Result{Content: sb.String()}, nil
 }
 
-// StopShareTool tears down the active mobile share session.
 type StopShareTool struct {
 	Controller ShareController
 }

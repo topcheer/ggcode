@@ -1,26 +1,5 @@
 package agent
 
-// Excessive Return Statements Check (SonarQube S114 / Clean Code "Single Responsibility")
-//
-// Research basis: SonarQube rule S114 (max-return-statements), CodeClimate
-// "Too Many Return Statements", and structured programming principles all flag
-// functions with too many return points. Functions with 6+ returns are harder
-// to reason about: resource cleanup may be missed, invariants may not hold at
-// every exit, and the control flow becomes difficult to trace mentally.
-//
-// This check fills a gap in ggcode's quality intelligence: while complexity_gate
-// catches high cyclomatic complexity, it does NOT directly flag return-count
-// bloat. A function can have moderate complexity but 8 return statements that
-// make it error-prone for maintenance. These are distinct code smells.
-//
-// Design:
-//   - Zero-LLM-cost: deterministic AST analysis (go/ast)
-//   - Delta-aware: only flags NEW instances introduced by this edit
-//   - Threshold: 6+ return statements (SonarQube default)
-//   - Skips test functions (Test/Benchmark/Fuzz) which legitimately use many returns
-//   - Skips anonymous closures (common for early-exit patterns)
-//   - Capped at 3 warnings per file
-
 import (
 	"fmt"
 	"go/ast"
@@ -29,31 +8,18 @@ import (
 )
 
 const (
-	// returnCountThreshold is the maximum number of return statements before flagging.
 	returnCountThreshold = 6
 
-	// maxReturnCountWarnings caps warnings per file.
 	maxReturnCountWarnings = 3
 )
 
 type returnCountInstance struct {
 	funcName string
-	recvType string // receiver type text ("*Server" etc); empty for plain funcs (#1193)
+	recvType string
 	pos      token.Position
 	count    int
 }
 
-// rcFingerprint keys an instance for delta suppression (fix #157, #1193).
-// The receiver TYPE is part of the key: (s *Server) handle and (c *Client)
-// handle are different functions whose identical bare names must not collide,
-// silently absorbing a NEW same-named method as pre-existing (#1193, same
-// family as the param_count_check #1149 fix).
-// #2562: the COUNT is part of the key too - a same-named function whose
-// return count grows while being edited (8 -> 12) is the detector's core
-// target, and the #508 tombstone explicitly condemns funcName-level deltas
-// that mask same-function growth. Sibling-consistent with pcFingerprint
-// (param count is a key part there as well). Line-move suppression (#157)
-// is unaffected: moving lines does not change the count.
 func (i returnCountInstance) rcFingerprint() string {
 	return fmt.Sprintf("%s|%s|%d", i.recvType, i.funcName, i.count)
 }
@@ -66,30 +32,20 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// #1193: the Test*/Benchmark*/Fuzz* name exemption applies only to _test.go
-	// files - go test only ever compiles such functions from _test.go, so a
-	// Test-prefixed business function in production code (TestConnection, ...)
-	// must still be checked. Mirrors the param_count_check #1187 fix.
 	isTestFile := strings.HasSuffix(filePath, "_test.go")
 
-	// Delta-aware: only flag newly introduced instances (fix #142).
 	newInstances := findExcessiveReturns(newContent, isTestFile)
 	if len(newInstances) == 0 {
 		return nil
 	}
 
-	// Count-based (multiset) delta suppression: two same-fingerprint old
-	// instances must each consume one match, otherwise a NEW (N+1)-th instance
-	// is silently absorbed (#1193, same family as param_count_check #1149).
 	var oldCounts map[string]int
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findExcessiveReturns(oldContent, isTestFile) {
 			if oldCounts == nil {
 				oldCounts = make(map[string]int)
 			}
-			// Fingerprint on receiver type + function name, not position: line
-			// shifts above a function must not re-flag pre-existing issues
-			// (fix #157, #1193).
+
 			oldCounts[iss.rcFingerprint()]++
 		}
 	}
@@ -142,9 +98,6 @@ func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 			return true
 		}
 
-		// #1193: skip test functions only in _test.go files - table-driven
-		// tests legitimately use many returns, but a Test-prefixed function
-		// in production code is regular business logic and stays checked.
 		if isTestFile && isTestOrBenchFunction(fn.Name.Name) {
 			return true
 		}
@@ -158,7 +111,7 @@ func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 			pos := fset.Position(fn.Pos())
 			instances = append(instances, returnCountInstance{
 				funcName: fn.Name.Name,
-				recvType: recvTypeText(fn.Recv), // #1193: receiver type, not variable name
+				recvType: recvTypeText(fn.Recv),
 				pos:      pos,
 				count:    count,
 			})
@@ -170,15 +123,13 @@ func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 	return instances
 }
 
-// countReturns counts all return statements within an AST node's subtree.
 func countReturns(node ast.Node) int {
 	count := 0
 	ast.Inspect(node, func(n ast.Node) bool {
 		if _, ok := n.(*ast.ReturnStmt); ok {
 			count++
 		}
-		// Don't descend into nested function literals - their returns
-		// belong to the inner function, not this one.
+
 		if _, ok := n.(*ast.FuncLit); ok && n != node {
 			return false
 		}

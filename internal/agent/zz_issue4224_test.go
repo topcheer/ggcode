@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// #4224: detectors wired through guidanceEmit used to burn their one-shot
-// quota before delivery; when the guidance budget suppressed the injection
-// the message was lost AND the quota was gone (silent permanent miss). The
-// #3380 explicit pattern + markUndelivered must roll the quota back.
 func TestIssue4224_MarkUndeliveredRollsBackQuota(t *testing.T) {
 	sg := newSubgoalState()
 	sg.fired = true
@@ -28,7 +24,7 @@ func TestIssue4224_MarkUndeliveredRollsBackQuota(t *testing.T) {
 	if ca.warnings != 0 {
 		t.Fatalf("constraintAmnesia: markUndelivered must decrement warnings, got %d", ca.warnings)
 	}
-	// Floor: never negative.
+
 	ca.warnings = 0
 	ca.markUndelivered()
 	if ca.warnings != 0 {

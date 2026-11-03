@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/cron"
 )
 
-// CronCreateTool creates a new scheduled job.
 type CronCreateTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -96,7 +95,6 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// CronDeleteTool deletes a scheduled job.
 type CronDeleteTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -147,7 +145,6 @@ func (t CronDeleteTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: fmt.Sprintf("Job %s deleted\n", args.JobID)}, nil
 }
 
-// CronListTool lists all scheduled jobs.
 type CronListTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -195,8 +192,7 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		if job.Paused {
 			state = "paused, "
 		}
-		// #4049: Pause() clears NextFire to the zero time (#311 invariant);
-		// render it as none instead of the 0001-01-01 fake timestamp.
+
 		next := job.NextFire.Format(time.RFC3339)
 		if job.NextFire.IsZero() {
 			next = "none (paused)"
@@ -208,8 +204,6 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 	return Result{Content: sb.String()}, nil
 }
 
-// CronUpdateTool updates an existing scheduled job's cron expression, prompt,
-// and/or queue_if_busy without changing its ID.
 type CronUpdateTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -303,7 +297,6 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: sb.String()}, nil
 }
 
-// CronPauseTool pauses a scheduled job without deleting it.
 type CronPauseTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -350,7 +343,6 @@ func (t CronPauseTool) Execute(_ context.Context, input json.RawMessage) (Result
 	return Result{Content: fmt.Sprintf("Job %s paused. Use cron_resume to reactivate.\n", args.JobID)}, nil
 }
 
-// CronResumeTool reactivates a paused scheduled job.
 type CronResumeTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -398,7 +390,6 @@ func (t CronResumeTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: fmt.Sprintf("Job %s resumed.\n", args.JobID)}, nil
 }
 
-// CronGetTool retrieves full details of a single scheduled job.
 type CronGetTool struct {
 	Scheduler *cron.Scheduler
 }
@@ -465,8 +456,7 @@ func (t CronGetTool) Execute(_ context.Context, input json.RawMessage) (Result, 
 	fmt.Fprintf(&sb, "Type:        %s\n", kind)
 	fmt.Fprintf(&sb, "Queue mode:  %s\n", queueMode)
 	fmt.Fprintf(&sb, "Cron expr:   %s\n", job.CronExpr)
-	// #4049: guard parity with CronUpdate L284 - a paused job carries a zero
-	// NextFire; render it as none instead of the 0001-01-01 fake timestamp.
+
 	nextFire := job.NextFire.Format(time.RFC3339)
 	if job.NextFire.IsZero() {
 		nextFire = "none (paused)"

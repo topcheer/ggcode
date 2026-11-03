@@ -76,9 +76,7 @@ func another(x, y, z int, w, v string, u bool) {}
 }
 
 func TestCheckExcessiveParams_SkipsTestFunctions(t *testing.T) {
-	// #1187: the Test/Benchmark name exemption applies only to _test.go
-	// files. go test never compiles such functions from production code, so
-	// a Test-prefixed func in a non-test file IS checked.
+
 	src := `package main
 func TestMyFunc(t, ctx, cfg, db, logger, client struct{}) {}
 `
@@ -106,7 +104,7 @@ func f4(a, b, c int, d, e string, f bool) {}
 func f5(a, b, c int, d, e string, f bool) {}
 `
 	warnings := checkExcessiveParams("test.go", "", src)
-	// maxParamCountWarnings = 3, plus possibly 1 "more" message
+
 	if len(warnings) > maxParamCountWarnings+1 {
 		t.Errorf("expected at most %d warnings, got %d", maxParamCountWarnings+1, len(warnings))
 	}

@@ -8,18 +8,6 @@ import (
 	"strings"
 )
 
-// PreviewChanges implementations for the fan-out write tools that were
-// routed through the bare safeExecute path (#1547 case A): a wrong batch
-// edit could punch through N files with no pre-write gate - the most
-// dangerous fan-out tools were exactly the unprotected ones.
-//
-// notebook_edit and lsp_rename stay exempt: the notebook preview value is
-// nil (JSON, not Go - the syntax gate is .go-scoped) and lsp_rename's
-// resulting content is produced by the language server, unknowable
-// pre-execution. file_ops move/delete cannot be dry-run (no content).
-
-// PreviewChanges plans multi_edit_file's in-memory result using the exact
-// planTextEdits matcher the executor uses.
 func (t MultiEditFile) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, error) {
 	var args struct {
 		FilePath string `json:"file_path"`
@@ -49,13 +37,12 @@ func (t MultiEditFile) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit,
 	original := string(data)
 	content, _, msg := planTextEdits(original, edits)
 	if msg != "" {
-		// Anchor mismatch: let the executor surface its error verbatim.
+
 		return nil, fmt.Errorf("%s", msg)
 	}
 	return []PlannedFileEdit{{Path: resolved, OldContent: original, NewContent: content, Existed: true}}, nil
 }
 
-// PreviewChanges plans multi_file_write (full content is given directly).
 func (t MultiFileWrite) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, error) {
 	var args struct {
 		Files []struct {
@@ -72,15 +59,13 @@ func (t MultiFileWrite) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit
 		if err != nil {
 			return nil, err
 		}
-		old, rerr := os.ReadFile(resolved)             // missing file = create, old ""
-		existed := rerr == nil || !os.IsNotExist(rerr) // #3512: create-vs-edit drives undo semantics
+		old, rerr := os.ReadFile(resolved)
+		existed := rerr == nil || !os.IsNotExist(rerr)
 		plans = append(plans, PlannedFileEdit{Path: resolved, OldContent: string(old), NewContent: f.Content, Existed: existed})
 	}
 	return plans, nil
 }
 
-// PreviewChanges plans batch_replace by simulating the executor's own
-// regex/literal replacement per file.
 func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, error) {
 	var args struct {
 		Pattern     string   `json:"pattern"`
@@ -94,10 +79,7 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 	if args.Pattern == "" || len(args.Files) == 0 {
 		return nil, fmt.Errorf("missing pattern or files")
 	}
-	// #4039: preview must enforce the SAME prechecks as the executor, or it
-	// returns a "successful" plan the executor will refuse to run (preview
-	// != execution breaks the approval gate: the approver signs off on a
-	// diff that can never land).
+
 	if len(args.Pattern) > maxBatchReplacePatternLen {
 		return nil, fmt.Errorf("pattern too long: %d bytes, max %d", len(args.Pattern), maxBatchReplacePatternLen)
 	}
@@ -111,15 +93,11 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 	if args.IsRegex {
 		compiled, err := regexp.Compile(args.Pattern)
 		if err != nil {
-			// Invalid regex: the executor errors out anyway - let it speak.
+
 			return nil, err
 		}
 		re = compiled
-		// #4039 core: the executor's #385 guard - an out-of-range $N in the
-		// replacement makes the executor refuse the run, but ReplaceAllString
-		// would silently expand it to "", producing a "successful" plan whose
-		// diff shows matched text deleted. Reject at preview time so the
-		// approval gate never sees a diff the executor will not run.
+
 		if bad := invalidGroupRefs(re, args.Replacement); bad != "" {
 			return nil, fmt.Errorf("replacement references capture group %s but the pattern has only %d group(s); use $$ for a literal $", bad, re.NumSubexp())
 		}
@@ -132,7 +110,7 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
-			continue // executor reports per-file errors; preview skips
+			continue
 		}
 		content := string(data)
 		var newContent string

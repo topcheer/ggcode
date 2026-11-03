@@ -1,15 +1,5 @@
 package agent
 
-// Regression test for issue #723: checkInsecurePatterns must NOT fire on pure
-// comment lines. Before #723, 8 of the 10 text checks fired on comment
-// mentions (only the Python verify=False check via #274 and the Go SQL check
-// via #278 were comment-aware). The fix lifts comment/string stripping into
-// the shared per-language line loops, so every check now operates on code
-// only. Assertions here are the POST-fix expectations (inverted from the
-// original characterization harness in commit 802afe7d).
-//
-// Repro: GOCACHE=/tmp/ggcode-fin2 go test -tags goolm -run 'TestR163Comment' -v ./internal/agent/
-
 import "testing"
 
 func TestR163CommentFPGo(t *testing.T) {
@@ -67,7 +57,6 @@ func TestR163CommentFPPython(t *testing.T) {
 	}
 }
 
-// Control: SQL comment line IS handled (fix #278) - should produce 0 warnings.
 func TestR163CommentControlSQL(t *testing.T) {
 	w := checkInsecurePatterns("main.go", "", "package main\n\n// q := \"SELECT * FROM t\" + x is injection\n")
 	t.Logf("SQL comment control -> %d warning(s): %v", len(w), w)
@@ -76,9 +65,6 @@ func TestR163CommentControlSQL(t *testing.T) {
 	}
 }
 
-// Regression guard (#723 acceptance): real, uncommented occurrences of each
-// pattern MUST still trigger a warning. Stripping comments must not blunt
-// detection of genuinely insecure code.
 func TestR163RealCodeStillWarns(t *testing.T) {
 	t.Run("Go InsecureSkipVerify", func(t *testing.T) {
 		w := checkInsecurePatterns("main.go", "", "package main\n\nfunc f() {\n\tInsecureSkipVerify: true\n}\n")

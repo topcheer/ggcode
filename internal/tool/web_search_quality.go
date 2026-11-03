@@ -1,40 +1,5 @@
 package tool
 
-// Web Search Result Quality Assessment - Deduplication, Relevance Scoring,
-// and Result Type Classification.
-//
-// Trend: AI coding agents increasingly rely on web search for research,
-// debugging, and API discovery. Raw search results from DuckDuckGo often
-// contain:
-//   - Duplicate domains (5 results from stackoverflow.com for one query)
-//   - SEO spam and content farms
-//   - Results ordered by DDG ranking, not by relevance to the agent's query
-//   - No indication of result type (docs vs. blog vs. package registry)
-//
-// Competitor analysis:
-//   - Perplexity/Phind: re-rank results by LLM relevance scoring
-//   - Claude Code: no result quality processing (raw DDG output)
-//   - Cursor: uses web results for code gen but no quality layer
-//   - Cline/OpenHands: no web search at all
-//   - Aider: no web search
-//
-// Gap: Results are returned raw. The agent must read all snippets and
-// decide which to fetch, wasting context tokens on duplicates and
-// low-quality results.
-//
-// Solution: Deterministic post-processing layer applied after parsing:
-//   1. Filter: remove known spam/low-quality domains
-//   2. Classify: tag each result with [docs], [package], [QA], [repo], etc.
-//   3. Score: rank by query-term overlap with title (3x) and snippet (1x)
-//   4. Deduplicate: cap results per domain (default 2) to ensure diversity
-//   5. Enrich: annotate each result with type for agent decision-making
-//
-// Design:
-//   - Zero external dependencies, pure Go string/token processing
-//   - Non-destructive: filtering/dedup reduce results, scoring reorders them
-//   - Type tags are short (4-8 chars) to minimize context overhead
-//   - Scores are normalized 0-100 for human/agent readability
-
 import (
 	"fmt"
 	"math"
@@ -42,12 +7,8 @@ import (
 	"strings"
 )
 
-// maxResultsPerDomain caps how many results can come from the same domain.
-// This prevents one dominant site (e.g., 5 stackoverflow.com results)
-// from crowding out diverse sources.
 const maxResultsPerDomain = 2
 
-// spamDomains are known low-quality / content-farm domains that add noise.
 var spamDomains = map[string]bool{
 	"w3schools.com":      true,
 	"tutorialspoint.com": true,
@@ -56,39 +17,20 @@ var spamDomains = map[string]bool{
 	"geeksforgeeks.org":  true,
 }
 
-// scoredResult wraps a searchResult with quality metadata.
 type scoredResult struct {
 	searchResult
-	score  int    // 0-100 relevance score
-	rtype  string // result type tag (docs, package, QA, repo, etc.)
+	score  int
+	rtype  string
 	domain string
 }
 
-// assessSearchResults applies quality processing to raw search results:
-// spam filtering, type classification, relevance scoring, domain
-// deduplication, stable sort by score. Returns results with type tags
-// prepended to titles.
-// assessSearchResults applies quality heuristics. #1357: domains in
-// allowedDomains are exempt from the per-domain diversity cap - the user
-// explicitly constrained results to those domains, so capping them back
-// down to maxResultsPerDomain would silently override an explicit user
-// constraint (single-domain site: filters queries to 2 results and wastes
-// the 3x prefetch the caller deliberately did to compensate for filtering).
 func assessSearchResults(query string, results []searchResult, allowedDomains []string) []searchResult {
 	out, _ := assessSearchResultsScored(query, results, allowedDomains)
 	return out
 }
 
-// assessSearchResultsScored additionally returns the best relevance score
-// (0 when no results survive) so the caller can surface a weak-result hint
-// (#r364 / r343 evaluator slice: the Agentic-RAG low-confidence loop).
 func assessSearchResultsScored(query string, results []searchResult, allowedDomains []string) ([]searchResult, int) {
-	// #1406-B: the exemption set used a weaker normalization than
-	// filterByDomain (no scheme/path/trailing-dot stripping), so an agent
-	// passing "https://example.com" or "example.com." passed the filter but
-	// missed the exemption key - #1357's single-domain guarantee silently
-	// regressed (5 results cut to 2, 3x prefetch wasted). One normalization
-	// for both sides.
+
 	allowed := make(map[string]bool, len(allowedDomains))
 	for _, d := range normalizeDomains(allowedDomains) {
 		allowed[d] = true
@@ -99,24 +41,11 @@ func assessSearchResultsScored(query string, results []searchResult, allowedDoma
 
 	queryTerms := tokenizeQuery(query)
 
-	// Phase 1: Filter spam domains
-	// #1709 case 3: the user's explicit allowed_domains must EXEMPT from
-	// the spam list too - filterByDomain kept w3schools.com, then this
-	// phase killed every result and the tool answered "No results found"
-	// for the domain the user explicitly asked for (dedup had the
-	// exemption; the phases were asymmetric).
 	var filtered []searchResult
 	for _, res := range results {
 		domain := domainFromURL(res.URL)
 		if isSpamDomain(domain) {
-			// #2146: mirror the dedup-side semantics (#1428-B). The
-			// allow-list keys are www-stripped (normalizeDomains) while
-			// domainFromURL KEEPS www, and filterByDomain admits subdomains
-			// - the exact-key lookup missed both, and since DDG returns
-			// www-prefixed URLs for most spam-list domains,
-			// allowed=["w3schools.com"] killed every result the filter had
-			// kept ("No results found" for the domain the user explicitly
-			// asked for; configuring was worse than not configuring).
+
 			normalized := strings.TrimPrefix(domain, "www.")
 			if !allowed[normalized] && !subdomainOfAny(normalized, allowed) {
 				continue
@@ -125,7 +54,6 @@ func assessSearchResultsScored(query string, results []searchResult, allowedDoma
 		filtered = append(filtered, res)
 	}
 
-	// Phase 2+3: Classify and score
 	scored := make([]scoredResult, 0, len(filtered))
 	for _, res := range filtered {
 		domain := domainFromURL(res.URL)
@@ -137,10 +65,6 @@ func assessSearchResultsScored(query string, results []searchResult, allowedDoma
 		})
 	}
 
-	// Phase 4/5 order swap (#884): dedup ran BEFORE the score sort, so it
-	// kept the first N per domain by DDG rank — a domain's highest-SCORING
-	// result could be dropped before scores were ever consulted. Sort first,
-	// then dedup (stable sort preserves rank order for ties).
 	sort.SliceStable(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
@@ -152,7 +76,6 @@ func assessSearchResultsScored(query string, results []searchResult, allowedDoma
 	}
 	scored = deduplicateByDomain(scored, allowed)
 
-	// Convert back to searchResult with type tag in title
 	out := make([]searchResult, len(scored))
 	for idx, sr := range scored {
 		if sr.rtype != "" {
@@ -168,8 +91,6 @@ func assessSearchResultsScored(query string, results []searchResult, allowedDoma
 	return out, best
 }
 
-// tokenizeQuery splits a search query into lowercase terms for scoring.
-// Removes common stop words and short terms.
 func tokenizeQuery(query string) []string {
 	query = strings.ToLower(query)
 	terms := strings.FieldsFunc(query, func(r rune) bool {
@@ -195,11 +116,6 @@ func tokenizeQuery(query string) []string {
 	return result
 }
 
-// scoreResult computes a 0-100 relevance score based on query term overlap
-// with the title (weight 3x) and snippet (weight 1x).
-// containsTermAtBoundary reports whether term appears in hay delimited by
-// non-alphanumerics on both sides (substring hits inside longer words do
-// not count).
 func containsTermAtBoundary(hay, term string) bool {
 	if term == "" {
 		return false
@@ -224,13 +140,8 @@ func isAlphaNumByte(b byte) bool {
 
 func scoreResult(queryTerms []string, res searchResult) int {
 	if len(queryTerms) == 0 {
-		// #1710 case 4: a CJK query (or any non-[a-z0-9+#.] script) yields
-		// ZERO tokens here - every result scores a flat 50 and the sort
-		// degenerates to the upstream (DDG) order. That is still a sane
-		// fallback (the upstream ranker saw the full query we cannot
-		// tokenize), so keep 50, but log it once per call site via the
-		// caller's debug path - silent degeneration hid the gap for months.
-		return 50 // neutral score when no query terms (incl. CJK queries)
+
+		return 50
 	}
 
 	titleLower := strings.ToLower(res.Title)
@@ -238,11 +149,7 @@ func scoreResult(queryTerms []string, res searchResult) int {
 
 	var titleHits, snippetHits int
 	for _, term := range queryTerms {
-		// #1710 case 3: bare Contains hit substrings - 'go' matched
-		// google/golang, 'api' matched rapid - systematically inflating
-		// pages that merely CONTAIN the query inside bigger words. The
-		// ambiguity side got word boundaries (#381/#1438); the scoring
-		// side never did.
+
 		if containsTermAtBoundary(titleLower, term) {
 			titleHits++
 		}
@@ -251,9 +158,8 @@ func scoreResult(queryTerms []string, res searchResult) int {
 		}
 	}
 
-	// Weighted: title matches count 3x, snippet matches 1x
 	rawScore := float64(titleHits)*3.0 + float64(snippetHits)*1.0
-	maxPossible := float64(len(queryTerms)) * 4.0 // 3+1
+	maxPossible := float64(len(queryTerms)) * 4.0
 
 	if maxPossible == 0 {
 		return 50
@@ -263,18 +169,15 @@ func scoreResult(queryTerms []string, res searchResult) int {
 	return int(math.Round(math.Max(0, math.Min(100, normalized))))
 }
 
-// classifyResultType determines the type tag for a URL based on domain/path.
 func classifyResultType(rawURL, domain string) string {
 	if domain == "" {
 		return ""
 	}
 
-	// GitHub: repo vs. docs vs. issues
 	if domain == "github.com" {
 		return "repo"
 	}
 
-	// Package registries
 	switch domain {
 	case "npmjs.com", "www.npmjs.com":
 		return "package"
@@ -294,19 +197,16 @@ func classifyResultType(rawURL, domain string) string {
 		return "image"
 	}
 
-	// Q&A sites
 	switch domain {
 	case "stackoverflow.com", "serverfault.com", "superuser.com",
 		"askubuntu.com", "mathoverflow.net":
 		return "QA"
 	}
 
-	// Documentation sites (docs.* subdomain pattern)
 	if strings.HasPrefix(domain, "docs.") || strings.HasPrefix(domain, "doc.") {
 		return "docs"
 	}
 
-	// Official language/framework docs
 	knownDocs := map[string]bool{
 		"developer.mozilla.org":     true,
 		"react.dev":                 true,
@@ -333,19 +233,16 @@ func classifyResultType(rawURL, domain string) string {
 		return "docs"
 	}
 
-	// Blog sites
 	switch domain {
 	case "medium.com", "dev.to", "hashnode.com", "freecodecamp.org",
 		"css-tricks.com", "smashingmagazine.com":
 		return "blog"
 	}
 
-	// Video
 	if domain == "youtube.com" || domain == "www.youtube.com" {
 		return "video"
 	}
 
-	// Academic
 	if strings.HasSuffix(domain, ".edu") || domain == "arxiv.org" || domain == "scholar.google.com" {
 		return "academic"
 	}
@@ -353,10 +250,6 @@ func classifyResultType(rawURL, domain string) string {
 	return ""
 }
 
-// isSpamDomain checks if a domain is a known low-quality/spam source.
-// subdomainOfAny reports whether host equals or is a subdomain of any
-// key in the exempt map - the exemption-side twin of domainMatchesAny's
-// documented exact+subdomain semantics (#1428-B).
 func subdomainOfAny(host string, exempt map[string]bool) bool {
 	for d := range exempt {
 		if strings.HasSuffix(host, "."+d) {
@@ -371,7 +264,7 @@ func isSpamDomain(domain string) bool {
 	if spamDomains[domain] {
 		return true
 	}
-	// Check parent domain for subdomains
+
 	parts := strings.Split(domain, ".")
 	if len(parts) > 2 {
 		parent := strings.Join(parts[len(parts)-2:], ".")
@@ -382,11 +275,6 @@ func isSpamDomain(domain string) bool {
 	return false
 }
 
-// deduplicateByDomain caps the number of results from the same domain.
-// Keeps the highest-scoring results per domain. #884: input must already
-// be score-sorted (the caller sorts before deduping) so "first N per domain"
-// equals "highest-scoring N per domain". #1357: domains in the exempt set
-// (the user's explicit allowed_domains) are not capped.
 func deduplicateByDomain(scored []scoredResult, exempt map[string]bool) []scoredResult {
 	if len(scored) <= maxResultsPerDomain {
 		return scored
@@ -401,15 +289,7 @@ func deduplicateByDomain(scored []scoredResult, exempt map[string]bool) []scored
 			continue
 		}
 		normalizedDomain := strings.TrimPrefix(sr.domain, "www.")
-		// #1428-A/B: the filter side (domainMatchesAny) admits SUBDOMAINS
-		// (documented: "Matches the exact host and its subdomains") and
-		// matches www-prefixed hosts; the exemption side was an EXACT map
-		// lookup after www-stripping - www.npmjs.com in the allow list
-		// (key kept its www, lookup stripped it) missed, and every
-		// learn.microsoft.com result missed against allowed=["microsoft.com"]
-		// while the filter passed them all: 5 kept, 2 out, prefetch wasted,
-		// #1357 guarantee silently void. Match semantics now mirror the
-		// filter: exact hit OR any exempt domain is a parent suffix.
+
 		if exempt[normalizedDomain] || subdomainOfAny(normalizedDomain, exempt) || domainCount[normalizedDomain] < maxResultsPerDomain {
 			domainCount[normalizedDomain]++
 			result = append(result, sr)

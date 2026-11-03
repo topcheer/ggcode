@@ -16,11 +16,11 @@ func TestGenerateTitle_SimpleMessage(t *testing.T) {
 func TestGenerateTitle_CodeBlock(t *testing.T) {
 	input := "Please fix this:\n```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```\nThe function should print world"
 	got := GenerateTitle(input)
-	// Should strip code block and keep meaningful text
+
 	if got == "" {
 		t.Error("expected non-empty title")
 	}
-	if len(got) > titleMaxRunes+3 { // +3 for ellipsis
+	if len(got) > titleMaxRunes+3 {
 		t.Errorf("title too long: %d chars: %q", len(got), got)
 	}
 }
@@ -44,7 +44,7 @@ func TestGenerateTitle_LongMessage(t *testing.T) {
 	if got == "" {
 		t.Error("expected non-empty title")
 	}
-	// Should be truncated
+
 	runes := []rune(got)
 	if len(runes) > titleMaxRunes+3 {
 		t.Errorf("title too long: %d runes: %q", len(runes), got)
@@ -52,9 +52,7 @@ func TestGenerateTitle_LongMessage(t *testing.T) {
 }
 
 func TestGenerateTitle_InlineCodePreserved(t *testing.T) {
-	// Regression for #1479: inlineCodeRe had no capture group, so the $1
-	// replacement expanded to the empty string and deleted the identifier
-	// the adjacent comment claimed to preserve.
+
 	got := GenerateTitle("check `agent.go` for the bug")
 	if !strings.Contains(got, "agent.go") {
 		t.Errorf("inline code identifier lost: got %q, want it to contain %q", got, "agent.go")
@@ -62,15 +60,13 @@ func TestGenerateTitle_InlineCodePreserved(t *testing.T) {
 }
 
 func TestIsGenericTitle_CJKShortTitles(t *testing.T) {
-	// Regression for #1479: CJK titles carry no ASCII spaces, so the
-	// no-space <6-rune branch flagged every short Chinese task title as
-	// generic and RefineTitleAfterRun overwrote it with the English template.
+
 	for _, title := range []string{"改个名字", "修个bug", "加个按钮", "部署上线", "帮我改名"} {
 		if isGenericTitle(title) {
 			t.Errorf("%q flagged generic; short CJK task titles must survive", title)
 		}
 	}
-	// Real filler words stay generic via the enumeration table.
+
 	for _, title := range []string{"你好", "测试", "hi!"} {
 		if !isGenericTitle(title) {
 			t.Errorf("%q should be generic", title)
@@ -81,7 +77,7 @@ func TestIsGenericTitle_CJKShortTitles(t *testing.T) {
 func TestGenerateTitle_FilePath(t *testing.T) {
 	input := "Fix the error in internal/agent/agent.go that causes a panic"
 	got := GenerateTitle(input)
-	// Should keep agent.go but not the full path
+
 	if got == "" {
 		t.Error("expected non-empty title")
 	}
@@ -106,7 +102,7 @@ func TestGenerateTitle_CommandPrefix(t *testing.T) {
 	if got == "" {
 		t.Error("expected non-empty title")
 	}
-	// Should strip the leading comment
+
 	if got[0] == '#' {
 		t.Errorf("title should not start with #: %q", got)
 	}
@@ -172,14 +168,14 @@ func TestIsGenericTitle(t *testing.T) {
 		{"hi", true},
 		{"help", true},
 		{"test", true},
-		{"hi!", false}, // has punctuation → "hi" but trimmed... actually isGenericTitle trims first
+		{"hi!", false},
 		{"Fix the login bug", false},
 		{"Implement feature", false},
 	}
 	for _, tt := range tests {
-		// Adjust: "hi!" → lower = "hi!" which is not in generics map and len >= 6 false, len < 6 true and no space → generic
+
 		if tt.title == "hi!" {
-			tt.want = true // single word under 6 chars
+			tt.want = true
 		}
 		if got := isGenericTitle(tt.title); got != tt.want {
 			t.Errorf("isGenericTitle(%q) = %v, want %v", tt.title, got, tt.want)
@@ -188,7 +184,7 @@ func TestIsGenericTitle(t *testing.T) {
 }
 
 func TestRefineTitleAfterRun_GenericMessage(t *testing.T) {
-	// User said "help" but agent did meaningful work
+
 	got := RefineTitleAfterRun("", "help", "Edited 3 files in internal/agent")
 	if got == "" {
 		t.Error("expected refined title for generic message")
@@ -206,7 +202,7 @@ func TestRefineTitleAfterRun_AlreadyGood(t *testing.T) {
 }
 
 func TestRefineTitleAfterRun_UserSetTitle(t *testing.T) {
-	// User manually set a good title — should not override
+
 	got := RefineTitleAfterRun("My Custom Title", "some message", "did stuff")
 	if got != "" {
 		t.Errorf("should not override user-set title, got %q", got)
@@ -214,17 +210,16 @@ func TestRefineTitleAfterRun_UserSetTitle(t *testing.T) {
 }
 
 func TestTruncateTitle(t *testing.T) {
-	// Short — no truncation
+
 	got := truncateTitle("short", 60)
 	if got != "short" {
 		t.Errorf("got %q, want %q", got, "short")
 	}
 
-	// Long — should truncate with ellipsis
 	long := "This is a very long title that definitely exceeds the maximum length and should be truncated"
 	got = truncateTitle(long, 30)
 	r := []rune(got)
-	if len(r) > 34 { // max + ellipsis
+	if len(r) > 34 {
 		t.Errorf("truncated title too long: %q (%d runes)", got, len(r))
 	}
 }

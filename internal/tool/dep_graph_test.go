@@ -52,7 +52,6 @@ func TestDepGraph_ReverseDeps(t *testing.T) {
 		t.Fatalf("tool returned error: %s", result.Content)
 	}
 
-	// alpha imports util, beta imports util
 	if !contains(result.Content, "alpha") {
 		t.Errorf("expected 'alpha' in reverse deps, got: %s", result.Content)
 	}
@@ -79,7 +78,6 @@ func TestDepGraph_Hotspots(t *testing.T) {
 		t.Fatalf("tool returned error: %s", result.Content)
 	}
 
-	// util should be the top hotspot (imported by alpha and beta)
 	if !contains(result.Content, "util") {
 		t.Errorf("expected 'util' in hotspots, got: %s", result.Content)
 	}
@@ -103,7 +101,6 @@ func TestDepGraph_Cycles(t *testing.T) {
 		t.Fatalf("tool returned error: %s", result.Content)
 	}
 
-	// cycA imports cycB, cycB imports cycA — should detect a cycle
 	if !contains(result.Content, "cycA") {
 		t.Errorf("expected 'cycA' in cycle detection, got: %s", result.Content)
 	}
@@ -180,19 +177,11 @@ func TestShortPkgName(t *testing.T) {
 	}
 }
 
-// setupTestModule creates a temporary Go module with a dependency structure:
-//
-//	alpha -> util
-//	beta  -> util
-//	cycA  -> cycB
-//	cycB  -> cycA  (cycle) - creates import cycle
-//	gamma -> alpha -> util  (transitive)
 func setupTestModule(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	modPath := "example.com/testmod"
 
-	// Create go.mod
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module "+modPath+"\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -220,5 +209,3 @@ func setupTestModule(t *testing.T) string {
 
 	return dir
 }
-
-// mustJSON and contains are defined in other test files in this package.

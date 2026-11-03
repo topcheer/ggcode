@@ -24,13 +24,11 @@ func setupGrepTestDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// Create test files
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc hello() string {\n\treturn \"hello world\"\n}\n\nfunc main() {\n\tprintln(hello())\n}\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "util.py"), []byte("def greet(name):\n    return f\"hello {name}\"\n\nclass Greeter:\n    def say_hello(self):\n        return \"hello\"\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "style.css"), []byte(".hello {\n    color: red;\n}\n\n.world {\n    color: blue;\n}\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Hello World\n\nThis is a test.\nHello again.\n"), 0644)
 
-	// Initialize git repo so gitTrackedFiles works
 	gitInit := gitCommand(context.Background(), "init")
 	gitInit.Dir = dir
 	gitInit.Run()
@@ -64,7 +62,7 @@ func TestGrep_ContentMode(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should find matches in multiple files
+
 	if !containsAll(result.Content, "hello.go", "util.py", "README.md") {
 		t.Errorf("expected matches in hello.go, util.py, README.md; got:\n%s", result.Content)
 	}
@@ -191,7 +189,7 @@ func TestGrep_HeadLimit(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should show limited results with pagination hint
+
 	if !containsAny(result.Content, "offset") {
 		t.Logf("no pagination hint (might be only 1 result), output:\n%s", result.Content)
 	}
@@ -250,7 +248,7 @@ func TestGrep_CaseSensitive(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should only match "Hello" (case-sensitive), not "hello"
+
 	if containsAny(result.Content, "hello world") {
 		t.Errorf("case-sensitive should not match lowercase; got:\n%s", result.Content)
 	}
@@ -330,20 +328,18 @@ func containsAny(s string, substrs ...string) bool {
 }
 
 func TestFormatCountReportsGlobalTotalsWithPagination(t *testing.T) {
-	// 10 files, 100 total matches: a=15,b=12,c=10,d=9,e=8,f=8,g=8,h=7,i=7,j=16
+
 	counts := map[string]int{
 		"a.go": 15, "b.go": 12, "c.go": 10, "d.go": 9, "e.go": 8,
 		"f.go": 8, "g.go": 8, "h.go": 7, "i.go": 7, "j.go": 16,
 	}
 
-	// Page 1: offset=0, head_limit=3 -> 3 lines listed, but global totals.
 	res := formatCount(counts, grepArgs{Offset: 0, HeadLimit: 3})
 	content := res.Content
 	if !containsAny(content, "10 file(s)") || !containsAny(content, "100 match(es)") {
 		t.Fatalf("expected global totals '10 file(s), 100 match(es) total', got:\n%s", content)
 	}
-	// Truncated output carries the withheld-count hint line (cap feature),
-	// so expected lines are: 3 file lines + hint + summary.
+
 	if lines := countNonEmptyLines(content); lines != 3+2 {
 		t.Fatalf("expected 3 listed files + hint + summary, got %d lines:\n%s", lines, content)
 	}
@@ -354,7 +350,6 @@ func TestFormatCountReportsGlobalTotalsWithPagination(t *testing.T) {
 		t.Fatalf("expected only first-page files a,b,c listed, got:\n%s", content)
 	}
 
-	// Page 2: same global totals.
 	res2 := formatCount(counts, grepArgs{Offset: 3, HeadLimit: 3})
 	if !containsAny(res2.Content, "10 file(s)") || !containsAny(res2.Content, "100 match(es)") {
 		t.Fatalf("page 2 should report same global totals, got:\n%s", res2.Content)
@@ -363,7 +358,6 @@ func TestFormatCountReportsGlobalTotalsWithPagination(t *testing.T) {
 		t.Fatalf("page 2 should list only d,e,f, got:\n%s", res2.Content)
 	}
 
-	// No pagination: behavior unchanged, all 10 files listed.
 	res3 := formatCount(counts, grepArgs{})
 	if !containsAny(res3.Content, "10 file(s), 100 match(es) total") {
 		t.Fatalf("unpaginated output should report all totals, got:\n%s", res3.Content)
@@ -383,11 +377,8 @@ func countNonEmptyLines(s string) int {
 	return n
 }
 
-// TestGrepFilesModeCappedWithHint pins the files_with_matches output cap: broad
-// patterns must not flood context, and the withheld count must be surfaced so
-// the agent can narrow or raise head_limit deliberately (truncation audit fix).
 func TestGrepFilesModeCappedWithHint(t *testing.T) {
-	// 600 files in a fake tree > maxFilesWithMatches (500)
+
 	dir := t.TempDir()
 	for i := 0; i < 600; i++ {
 		name := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
@@ -400,15 +391,14 @@ func TestGrepFilesModeCappedWithHint(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("execute failed: err=%v isErr=%v content=%s", err, res.IsError, res.Content)
 	}
-	// Hint wording differs slightly between the rg path ("first 500 of 600")
-	// and the Go fallback ("1-500 of 600", which supports offset); accept both.
+
 	if !strings.Contains(res.Content, "500 of 600 files") || !strings.Contains(res.Content, "head_limit") {
 		t.Errorf("expected cap hint mentioning '500 of 600 files' + head_limit, got tail: ...%s", tail(res.Content, 200))
 	}
 	if !strings.Contains(res.Content, "600 file(s) matched") {
 		t.Errorf("total count must still be reported, got: ...%s", tail(res.Content, 120))
 	}
-	// Count body lines: exactly 500 file lines, not 600.
+
 	got := strings.Count(res.Content, ".txt")
 	if got != 500 {
 		t.Errorf("expected 500 file lines in body, got %d", got)
@@ -422,17 +412,11 @@ func tail(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// TestGrep_LongLineNotSilentlySkipped pins #3190: lines beyond the old
-// 64KB bufio.Scanner default used to abort the whole scan unchecked
-// (ErrTooLong swallowed by Scan() returning false), blanking every
-// match in the rest of the file. The scanners now buffer up to
-// grepMaxLineLen, so a >64KB no-match line followed by matching lines
-// must yield those later matches.
 func TestGrep_LongLineNotSilentlySkipped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundle.js")
 	var sb strings.Builder
-	sb.WriteString(strings.Repeat("a", 100_000)) // >64KB, no needle
+	sb.WriteString(strings.Repeat("a", 100_000))
 	sb.WriteString("\nconst zqneedle = 42\n")
 	sb.WriteString("zqneedle again\n")
 	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {

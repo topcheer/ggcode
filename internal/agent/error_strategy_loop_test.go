@@ -47,7 +47,7 @@ func TestErrStrategy_DifferentCategoriesNoWarning(t *testing.T) {
 
 func TestErrStrategy_MaxWarnings(t *testing.T) {
 	s := newErrStrategyState()
-	// Fire for file-not-found
+
 	for i := 0; i < 5; i++ {
 		s.recordResult("Error: file not found: f"+errStrategyItoa(i)+".txt", true)
 	}
@@ -55,7 +55,7 @@ func TestErrStrategy_MaxWarnings(t *testing.T) {
 	if h1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Same category already fired - should not re-warn
+
 	h2 := s.checkAndWarn()
 	if h2 != "" {
 		t.Fatalf("expected no re-warn for same category, got: %s", h2)
@@ -64,11 +64,11 @@ func TestErrStrategy_MaxWarnings(t *testing.T) {
 
 func TestErrStrategy_SlidingWindowEviction(t *testing.T) {
 	s := newErrStrategyState()
-	// Fill window with errors
+
 	for i := 0; i < errStrategyWindow; i++ {
 		s.recordResult("Error: file not found: f"+errStrategyItoa(i)+".txt", true)
 	}
-	// Window should be full; add non-errors to push errors out
+
 	for i := 0; i < errStrategyWindow; i++ {
 		s.recordResult("ok", false)
 	}
@@ -148,8 +148,6 @@ func errStrContains(s, sub string) bool {
 	return false
 }
 
-// #1850 case 2: a sub-threshold dominant generic must not mask a
-// QUALIFIED timeout category.
 func TestErrStrategyGenericDoesNotMaskQualifiedTimeout1850(t *testing.T) {
 	s := newErrStrategyState()
 	s.catCounts = map[errCategory]int{errCatGeneric: 4, errCatTimeout: 3}

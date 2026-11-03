@@ -1,10 +1,5 @@
 package agentruntime
 
-// #3537 probe: the loop-top cancellation exit must honor the same Partial
-// contract as the select branch - LiveStepID maps every still-running worker
-// and synthesis must NOT run. The old bare break dropped the IDs and fell
-// through to synthesis.
-
 import (
 	"context"
 	"sync"
@@ -14,10 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// cancelStuckFake launches workers that NEVER complete and cancels the run
-// context during the second Launch, so the orchestrator observes ctx.Err()
-// at the loop top while workers are still in flight (exactly the path the
-// old bare `break` took).
 type cancelStuckFake struct {
 	mu     sync.Mutex
 	n      int
@@ -62,8 +53,7 @@ func TestIssue3537_LoopTopCancelKeepsLiveStepID(t *testing.T) {
 	if !rep.Partial {
 		t.Fatal("cancelled run must report Partial")
 	}
-	// Both workers were still running at the loop-top exit: both must be
-	// mapped in LiveStepID (the old break left this empty).
+
 	if got := len(rep.LiveStepID); got != 2 {
 		t.Fatalf("LiveStepID must carry both live steps, got %d: %v", got, rep.LiveStepID)
 	}
@@ -72,7 +62,7 @@ func TestIssue3537_LoopTopCancelKeepsLiveStepID(t *testing.T) {
 			t.Fatalf("step %s missing a live agent ID: %v", step, rep.LiveStepID)
 		}
 	}
-	// The exit must return WITHOUT synthesis (same as the select branch).
+
 	if got := f.launchCount(); got != 2 {
 		t.Fatalf("synthesis must not launch on the cancelled exit, launches=%d", got)
 	}

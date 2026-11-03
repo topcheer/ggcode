@@ -1,16 +1,5 @@
 package agent
 
-// Tests for issue #1167: savePerfBaseline claimed "atomically" in its
-// comment but used a bare os.WriteFile (O_TRUNC, no temp + rename).
-// Under concurrent sessions sharing a workingDir, a reader could observe
-// an empty or half-written perf-baseline.json (silently disabling
-// regression detection) and a failed write could truncate the baseline.
-// Fix: route through util.AtomicWriteFile (temp file + fsync + rename),
-// same pattern as ratchet.go save().
-//
-// The temp files created by util.AtomicWriteFile use the ".ggcode-tmp-*"
-// prefix in the target directory; the tests below assert they never leak.
-
 import (
 	"encoding/json"
 	"os"
@@ -20,8 +9,6 @@ import (
 	"testing"
 )
 
-// zz1167ReadRaw reads the raw baseline file, returning (data, true) only
-// when the file exists and is non-empty.
 func zz1167ReadRaw(t *testing.T, dir string) ([]byte, bool) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, ".ggcode", "perf-baseline.json"))
@@ -31,9 +18,6 @@ func zz1167ReadRaw(t *testing.T, dir string) ([]byte, bool) {
 	return data, true
 }
 
-// TestZZIssue1167_RoundTripNoTempLeft verifies rename semantics on the
-// happy path: the file lands at the final path with intact content and
-// no temp file is left behind.
 func TestZZIssue1167_RoundTripNoTempLeft(t *testing.T) {
 	dir := t.TempDir()
 	runs := []perfBaselineEntry{
@@ -60,10 +44,6 @@ func TestZZIssue1167_RoundTripNoTempLeft(t *testing.T) {
 	}
 }
 
-// TestZZIssue1167_ConcurrentSaveNoCorruptReads hammers savePerfBaseline
-// from multiple goroutines while a reader observes the file. Every read
-// of an existing file must yield fully valid JSON (never truncated or
-// empty), and the final file must be one complete writer snapshot.
 func TestZZIssue1167_ConcurrentSaveNoCorruptReads(t *testing.T) {
 	dir := t.TempDir()
 
@@ -81,8 +61,6 @@ func TestZZIssue1167_ConcurrentSaveNoCorruptReads(t *testing.T) {
 		}(i)
 	}
 
-	// Reader loop: while writes are in flight, any existing file must
-	// parse as a complete snapshot.
 	stop := make(chan struct{})
 	readerDone := make(chan struct{})
 	go func() {
@@ -113,7 +91,6 @@ func TestZZIssue1167_ConcurrentSaveNoCorruptReads(t *testing.T) {
 	close(stop)
 	<-readerDone
 
-	// Final state: file exists and is exactly one complete snapshot.
 	got := loadPerfBaseline(dir)
 	if len(got) != 1 {
 		t.Fatalf("final file has %d runs, want exactly 1 complete snapshot", len(got))
@@ -123,10 +100,6 @@ func TestZZIssue1167_ConcurrentSaveNoCorruptReads(t *testing.T) {
 	}
 }
 
-// TestZZIssue1167_ErrorPathLeavesNoPartial verifies that a failed save
-// leaves the previous baseline untouched and no temp file behind.
-// Skipped on Windows (permission model differs) and when running as root
-// (directory permissions are not enforced).
 func TestZZIssue1167_ErrorPathLeavesNoPartial(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("read-only dir permission test not meaningful on windows")
@@ -144,11 +117,9 @@ func TestZZIssue1167_ErrorPathLeavesNoPartial(t *testing.T) {
 		t.Fatalf("chmod dir read-only: %v", err)
 	}
 
-	// This save must fail (temp file creation fails) without touching
-	// the existing baseline.
 	savePerfBaseline(dir, []perfBaselineEntry{{RunID: "bad", Success: true}})
 
-	_ = os.Chmod(ggDir, 0755) // restore before reading
+	_ = os.Chmod(ggDir, 0755)
 
 	got := loadPerfBaseline(dir)
 	if len(got) != 1 || got[0].RunID != "keep" {

@@ -2,10 +2,6 @@ package tool
 
 import "testing"
 
-// #3956: parseDiffStats must count header-shaped content lines (+++/---
-// prefixed diff content: C++ increments, markdown hr, nested patch tails)
-// instead of unconditionally skipping them, matching the #3164
-// header-adjacency semantics already applied to parseFileChanges.
 func TestParseDiffStatsCountsHeaderShapedContent(t *testing.T) {
 	diff := "diff --git a/count.go b/count.go\n" +
 		"index 111..222 100644\n" +
@@ -13,10 +9,10 @@ func TestParseDiffStatsCountsHeaderShapedContent(t *testing.T) {
 		"+++ b/count.go\n" +
 		"@@ -1,3 +1,4 @@\n" +
 		" context\n" +
-		"+++count;\n" + // added line whose content is "++count;"
+		"+++count;\n" +
 		"+plain\n" +
-		"---count;\n" + // deleted line whose content is "--count;"
-		"-----\n" // deleted markdown hr "----"
+		"---count;\n" +
+		"-----\n"
 
 	stats := parseDiffStats(diff)
 	if stats.additions != 2 {
@@ -30,9 +26,6 @@ func TestParseDiffStatsCountsHeaderShapedContent(t *testing.T) {
 	}
 }
 
-// #3956 regression guard: real file headers (--- a/x, +++ b/x, new-file
-// --- /dev/null, deleted-file +++ /dev/null) must stay uncounted and the
-// file set must stay correct after the adjacency port.
 func TestParseDiffStatsStillSkipsRealHeaders(t *testing.T) {
 	diff := "diff --git a/new.go b/new.go\n" +
 		"new file mode 100644\n" +
@@ -73,9 +66,6 @@ func TestParseDiffStatsStillSkipsRealHeaders(t *testing.T) {
 	}
 }
 
-// #3956 adjacency path: a "+++"-shaped line NOT immediately following a
-// consumed minus-side header is content and must be counted, even when the
-// hunk contains a mix of normal and header-shaped lines.
 func TestParseDiffStatsNestedPatchTailContent(t *testing.T) {
 	diff := "diff --git a/patch.txt b/patch.txt\n" +
 		"index 111..222 100644\n" +
@@ -83,9 +73,9 @@ func TestParseDiffStatsNestedPatchTailContent(t *testing.T) {
 		"+++ b/patch.txt\n" +
 		"@@ -1,2 +1,3 @@\n" +
 		" outer context\n" +
-		"++@@ -1,1 +1,1 @@\n" + // added inner-patch hunk header (++ prefix, not +++)
-		"+++tail\n" + // added line whose content is "++tail" (three-plus shape)
-		"+-meta\n" // added line whose content is "-meta"
+		"++@@ -1,1 +1,1 @@\n" +
+		"+++tail\n" +
+		"+-meta\n"
 
 	stats := parseDiffStats(diff)
 	if stats.additions != 3 {

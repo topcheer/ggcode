@@ -17,7 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// SearchFiles implements the search_files tool (grep-like content search).
 type SearchFiles struct {
 	SandboxCheck AllowedPathChecker
 }
@@ -87,24 +86,20 @@ func (t SearchFiles) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: fmt.Sprintf("invalid regex: %v", err)}, nil
 	}
 
-	// Try git grep fast path when inside a git repo
 	if results, totalMatches, ok := t.gitGrepSearch(ctx, args, re); ok {
 		return formatResults(results, totalMatches), nil
 	}
 
-	// Fallback: parallel Go search with gitignore + binary detection
 	return t.parallelSearch(ctx, args, re)
 }
 
-// gitGrepSearch attempts to use git grep for fast searching.
-// Returns results, totalMatches, true on success; nil, 0, false if not in git repo.
 func (t SearchFiles) gitGrepSearch(ctx context.Context, args struct {
 	Pattern        string `json:"pattern"`
 	Directory      string `json:"directory"`
 	IncludePattern string `json:"include_pattern"`
 	MaxResults     int    `json:"max_results"`
 }, re *regexp.Regexp) ([]string, int, bool) {
-	// Check if we're in a git repo
+
 	if gitTrackedFiles(ctx, args.Directory) == nil {
 		return nil, 0, false
 	}
@@ -120,21 +115,14 @@ func (t SearchFiles) gitGrepSearch(ctx context.Context, args struct {
 	cmd.Dir = args.Directory
 	out, err := cmd.Output()
 	if err != nil {
-		// git grep returns exit code 1 when no matches found.
-		// #863: exit 128 with empty stdout means git rejected the PATTERN
-		// (e.g. Go-only (?i)/(?s) syntax vs -E ERE) — the repo was not
-		// searched. Returning ok=true here produced false 'no matches'.
-		// Fall through to the Go regexp search instead.
+
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return nil, 0, true // in git repo, just no results
+			return nil, 0, true
 		}
 		if len(out) == 0 {
-			return nil, 0, false // pattern rejected or git failure: use fallback
+			return nil, 0, false
 		}
-		// #1702 case 2: git died non-1 (signal/SIGPIPE 141) with partial
-		// stdout. The old code parsed the partial output as COMPLETE -
-		// totalMatches silently underestimated with no truncation marker.
-		// Keep the partial results but tag the output.
+
 		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 		results := make([]string, 0, args.MaxResults)
 		total := 0
@@ -168,17 +156,15 @@ func (t SearchFiles) gitGrepSearch(ctx context.Context, args struct {
 	return results, totalMatches, true
 }
 
-// parallelSearch performs parallel file search with gitignore filtering.
 func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 	Pattern        string `json:"pattern"`
 	Directory      string `json:"directory"`
 	IncludePattern string `json:"include_pattern"`
 	MaxResults     int    `json:"max_results"`
 }, re *regexp.Regexp) (Result, error) {
-	// Get git-tracked files if available
+
 	tracked := gitTrackedFiles(ctx, args.Directory)
 
-	// Phase 1: collect file paths
 	var files []string
 	filepath.WalkDir(args.Directory, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -194,34 +180,22 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 
 		relPath, _ := filepath.Rel(args.Directory, path)
 
-		// Filter by gitignore if available
 		if tracked != nil {
 			if _, ok := tracked[filepath.ToSlash(relPath)]; !ok {
 				return nil
 			}
 		}
 
-		// Apply include glob filter.
-		// #1702 case 1: the git fast path passes IncludePattern to git
-		// grep as a PATHSPEC (arbitrary-depth: "src/*.go" matches
-		// src/deep/nested/file.go via fnmatch semantics) while the old
-		// fallback matched the BASENAME only - the same argument silently
-		// returned zero results (with a misleading "check the pattern"
-		// hint) depending on git availability. Match basename OR the
-		// repo-relative slash path so the fallback accepts a superset of
-		// the pathspec forms (documented include_pattern semantics).
 		if args.IncludePattern != "" {
 			matched, err := filepath.Match(args.IncludePattern, d.Name())
 			if err != nil || !matched {
-				// Pathspec-style: like git, `*` also crosses path
-				// separators when matching the repo-relative path.
+
 				if !globMatchCrossSlash(args.IncludePattern, filepath.ToSlash(relPath)) {
 					return nil
 				}
 			}
 		}
 
-		// Skip binary files
 		if isBinaryFile(path) {
 			return nil
 		}
@@ -234,7 +208,6 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 		return Result{Content: searchFilesZeroMatchHint(args.Pattern, args.Directory, args.IncludePattern)}, nil
 	}
 
-	// Phase 2: parallel search
 	numWorkers := runtime.NumCPU()
 	if numWorkers > 8 {
 		numWorkers = 8
@@ -297,7 +270,6 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 	return formatResults(results, total), nil
 }
 
-// searchFilesZeroMatchHint returns a contextual suggestion string for zero-result searches.
 func searchFilesZeroMatchHint(pattern, directory, includePattern string) string {
 	var hints []string
 	hints = append(hints, fmt.Sprintf("No matches found for pattern %q", pattern))
@@ -320,10 +292,7 @@ func searchFile(path, baseDir string, re *regexp.Regexp) []string {
 
 	var matches []string
 	scanner := bufio.NewScanner(f)
-	// #3191: default 64KB token limit makes >64KB lines hit ErrTooLong,
-	// which Scan() surfaces as a silent stop - matches in the rest of the
-	// file are missed. Same fix form as grep.go (#3190): raise the cap to
-	// the package-wide grepMaxLineLen.
+
 	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	lineNum := 0
 	for scanner.Scan() {
@@ -351,10 +320,6 @@ func formatResults(results []string, totalMatches int) Result {
 	return Result{Content: sb.String()}
 }
 
-// globMatchCrossSlash matches a glob where `*` and `?` cross path
-// separators (git pathspec / fnmatch semantics), unlike filepath.Match.
-// Malformed patterns (e.g. unterminated character class) simply do not
-// match. #1702 case 1.
 func globMatchCrossSlash(pattern, name string) bool {
 	var sb strings.Builder
 	sb.WriteString("^")
@@ -377,7 +342,7 @@ func globMatchCrossSlash(pattern, name string) bool {
 				j++
 			}
 			if j >= len(pattern) {
-				return false // unterminated class
+				return false
 			}
 			seg := pattern[i : j+1]
 			seg = strings.Replace(seg, "[!", "[^", 1)

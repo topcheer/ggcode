@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// tuningSetup points the override store at a temp dir (path-injection
-// pattern, mirroring guidance_stale_test.go's explicit-path style) and
-// resets process state; restored on cleanup.
 func tuningSetup(t *testing.T) (statsPath, overridesPath string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +39,7 @@ func TestHarnessTuningAcceptsStaleTagAfterTwoConfirmations(t *testing.T) {
 	for i := 0; i < 34; i++ {
 		tag := "Target Scatter"
 		if i >= 30 {
-			tag = "Neutral Tag" // trailing followup runs, no error marks
+			tag = "Neutral Tag"
 		}
 		delivered := 1
 		if i >= 30 {
@@ -52,14 +49,13 @@ func TestHarnessTuningAcceptsStaleTagAfterTwoConfirmations(t *testing.T) {
 	}
 	writeStatLines(t, statsPath, lines...)
 
-	// First confirmation: proposal only, nothing persisted.
 	if err := MaybeTuneHarness([]string{"Target Scatter"}, statsPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(overridesPath); !os.IsNotExist(err) {
 		t.Fatal("override persisted after a single confirmation")
 	}
-	// Second confirmation: gate passes (no post-delivery error rise) -> persist.
+
 	if err := MaybeTuneHarness([]string{"Target Scatter"}, statsPath); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +142,6 @@ func TestHarnessTuningRollbackByFileDeletion(t *testing.T) {
 		t.Fatal("precondition: one override applied")
 	}
 
-	// Rollback: delete the store, drop the process cache (fresh process).
 	if err := os.Remove(overridesPath); err != nil {
 		t.Fatal(err)
 	}
@@ -161,10 +156,6 @@ func TestHarnessTuningRollbackByFileDeletion(t *testing.T) {
 	}
 }
 
-// injectGuidance must honor a persisted override even when the budget would
-// allow the message: the tuning store gets the final say after the budget
-// verdict (sa-109 Tier A consumer-side check - guards the write-only death
-// sa-84 flagged for guidancePromoter). Suppression flows back into stats.
 func TestHarnessTuningInjectGuidanceHonorsOverride(t *testing.T) {
 	_, overridesPath := tuningSetup(t)
 	suppressedMsg := "advisory-tune-test dead weight: consider slowing down"
@@ -178,7 +169,7 @@ func TestHarnessTuningInjectGuidanceHonorsOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	harnessMu.Lock()
-	harnessOverrides = nil // force reload from the seeded store
+	harnessOverrides = nil
 	harnessMu.Unlock()
 
 	a, _ := issue677Agent(t)
@@ -194,10 +185,6 @@ func TestHarnessTuningInjectGuidanceHonorsOverride(t *testing.T) {
 	}
 }
 
-// r16: manual override channel (/guidance suppress|reset). Manual entries
-// pin Model:"manual" so they never count against the per-model auto
-// budget, take effect immediately on the injectGuidance hot path, and a
-// reset reports false rather than pretending a no-op succeeded.
 func TestSetHarnessSuppressedManualEntry(t *testing.T) {
 	_, overridesPath := tuningSetup(t)
 
@@ -233,12 +220,12 @@ func TestClearHarnessOverrideRoundTrip(t *testing.T) {
 	if len(loadHarnessOverrides(overridesPath)) != 0 {
 		t.Error("store should be empty after the only override is cleared")
 	}
-	// Clearing something never overridden reports false, not an error.
+
 	cleared, err = ClearHarnessOverride("ACT NOW: verify")
 	if err != nil || cleared {
 		t.Errorf("no-op clear must return (false, nil), got (%v, %v)", cleared, err)
 	}
-	// Empty tag is rejected outright.
+
 	if err := SetHarnessSuppressed(""); err == nil {
 		t.Error("empty tag must error")
 	}

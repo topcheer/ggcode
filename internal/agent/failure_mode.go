@@ -1,58 +1,18 @@
 package agent
 
-// Failure Mode Classification - Meta-level strategy guidance for tool failures.
-//
-// Research basis: "Failure Mode Analysis in AI Agents" (arXiv:2506.10224) and
-// "Self-Refine" / "Reflexion" pattern studies show that agents waste 3-5 iterations
-// retrying the same failing approach before switching strategy. The key insight is
-// that failures have qualitatively different modes:
-//
-//   - TRANSIENT: network blip, rate limit, timeout. Retrying the same action will
-//     likely succeed. The agent should retry with backoff.
-//   - STRUCTURAL: wrong approach, incorrect parameters, missing file. Retrying
-//     the same action will fail again. The agent must change strategy.
-//   - SYSTEMIC: environment issue (missing binary, permission denied, disk full,
-//     auth failure). No amount of retrying or strategy change will help. The agent
-//     should stop and report to the user.
-//
-// Gap in existing ggcode systems:
-//   - error_classifier.go: classifies single error CONTENT (file_not_found, etc.)
-//     and gives targeted guidance. But doesn't classify the FAILURE MODE (retry vs
-//     change vs abort) or track whether the same mode keeps recurring.
-//   - transient_retry.go: silently retries HTTP transient errors. Only handles
-//     network-level transients, not tool-level.
-//   - compounding_failure.go: sliding-window failure rate analysis. Detects that
-//     failures are accumulating but doesn't classify WHY or advise WHAT to do.
-//   - error_streak: counts consecutive failures and gives escalating "step back"
-//     guidance. Generic — doesn't distinguish retryable from non-retryable.
-//   - tool_error_fallback.go: suggests alternative tools on first failure.
-//     Doesn't classify whether the failure is worth retrying at all.
-//
-// This component provides META-LEVEL strategy guidance by classifying the failure
-// mode of each tool error, tracking mode frequency, and injecting high-level
-// strategy directives when a dominant failure mode emerges.
-//
-// Design:
-//   - Zero LLM cost (deterministic pattern matching)
-//   - Fires when a failure mode appears 3+ times (dominant pattern)
-//   - Each mode fires its guidance at most once per run
-//   - Complements (not replaces) error_classifier, error_streak, compounding_failure
-//   - Mode classification is content-based (not tool-based) for accuracy
-
 import (
 	"fmt"
 	"strings"
 	"sync"
 )
 
-// FailureMode represents a classified failure mode category.
 type FailureMode int
 
 const (
-	FailureModeNone       FailureMode = iota
-	FailureModeTransient              // retryable: network, rate limit, timeout
-	FailureModeStructural             // wrong approach: incorrect params, missing file, type error
-	FailureModeSystemic               // environment: permission denied, binary not found, auth
+	FailureModeNone FailureMode = iota
+	FailureModeTransient
+	FailureModeStructural
+	FailureModeSystemic
 )
 
 func (m FailureMode) String() string {
@@ -68,27 +28,17 @@ func (m FailureMode) String() string {
 	}
 }
 
-// failureModeState tracks failure mode frequencies across a run and injects
-// strategy guidance when a dominant mode emerges.
 type failureModeState struct {
 	mu sync.Mutex
 
-	// counts per failure mode
 	transientCount  int
 	structuralCount int
 	systemicCount   int
 
-	// which modes have already fired guidance
 	fired map[FailureMode]bool
 
-	// total tool calls (for ratio calculation)
 	totalCalls int
 
-	// #1561 case A: totalCalls snapshot when the current structural streak
-	// began - the density denominator must measure the SAME window as the
-	// streak numerator, not the lifelong total (streak/lifelong made the
-	// mid-run death spiral mathematically unreachable: after 50 successful
-	// calls, firing needs 22 CONSECUTIVE failures - beyond most run caps).
 	structuralStreakStart int
 }
 
@@ -108,25 +58,21 @@ func (s *failureModeState) reset() {
 	s.totalCalls = 0
 }
 
-// classifyFailureMode examines tool error content and returns the failure mode.
-// This is a pure function (no state) for testability.
 func classifyFailureMode(toolName, errorContent string) FailureMode {
 	c := strings.ToLower(errorContent)
 
-	// SYSTEMIC: environment issues that no retry or strategy change can fix.
-	// These require user intervention.
 	systemicPatterns := []string{
 		"permission denied",
 		"access denied",
 		"operation not permitted",
 		"command not found",
-		"no such file or directory", // binary not found (not source file)
+		"no such file or directory",
 		"executable file not found",
 		"not enough space",
 		"disk full",
 		"no space left",
 		"too many open files",
-		"connection refused", // service not running
+		"connection refused",
 		"authentication failed",
 		"unauthorized",
 		"forbidden",
@@ -138,48 +84,24 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 	}
 	for _, p := range systemicPatterns {
 		if strings.Contains(c, p) {
-			// Special case: "no such file or directory" for source files being
-			// edited is structural (agent picked wrong path), not systemic.
-			// Only classify as systemic when it's about a binary/command.
+
 			if p == "no such file or directory" {
-				// #335: "no such file or directory" in run_command output is
-				// almost always a wrong argument PATH (self-healable structural:
-				// fix the path or mkdir the target), not a missing environment
-				// binary. Only whole-phrase binary/command-not-found matches are
-				// systemic; the toolName=="run_command" escape hatch is removed.
+
 				if strings.Contains(c, "executable file not found") || strings.Contains(c, "command not found") ||
-					strings.Contains(c, "exec:") { // Go exec: binary lookup failure
+					strings.Contains(c, "exec:") {
 					return FailureModeSystemic
 				}
-				// #4787 (S-16): "fork/exec /bin/sh: no such file or directory"
-				// is the Go runtime's exec-error form (note: "fork/exec <bin>"
-				// with a SPACE, not "exec:"). It means the SHELL CHANNEL itself
-				// could not spawn — an environment-level outage that self-heals in
-				// minutes, not a wrong-argument path. Misclassifying it as
-				// structural fed "the approach is fundamentally wrong / do NOT
-				// retry" guidance into agents that were correctly retrying during
-				// the outage window. classify systemic so recordResult's systemic
-				// guidance (verify environment, report if persistent) applies.
-				//
-				// Cross-review boundary guard (PR #4934): bare "fork/exec" would
-				// also match a DIRECT spawn of a wrong binary path (e.g. running
-				// "/missing/binary" reports "fork/exec /missing/binary: ...") —
-				// that is STRUCTURAL (agent-fixable wrong path). run_command
-				// always spawns through the resolved shell, so the S-16 outage
-				// signature is "fork/exec <SHELL>: ..."; anchor the systemic
-				// classification to the failing binary being a shell binary.
+
 				if isShellSpawnEnoentContent(c) {
 					return FailureModeSystemic
 				}
-				// For read_file/edit_file and run_command argument paths, this is
-				// structural (wrong path — agent can fix it).
+
 				continue
 			}
 			return FailureModeSystemic
 		}
 	}
 
-	// TRANSIENT: temporary failures that a retry can fix.
 	transientPatterns := []string{
 		"timeout",
 		"timed out",
@@ -202,10 +124,7 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 		"capacity",
 	}
 	for _, p := range transientPatterns {
-		// #1561 case E: digit-only patterns need token boundaries -
-		// `foo.go:429:5: syntax error` contains "429" and a DETERMINISTIC
-		// compile error was classified TRANSIENT ('retry with delays' for
-		// a syntax error). Word patterns stay substring-matched.
+
 		if isAllDigits1561(p) {
 			if containsToken1561(c, p) {
 				return FailureModeTransient
@@ -217,27 +136,14 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 		}
 	}
 
-	// STRUCTURAL: default. The approach is wrong — wrong params, wrong path,
-	// type mismatch, missing import, syntax error in input, etc.
 	return FailureModeStructural
 }
 
-// shellBinaryNames are the binaries the tool layer spawns commands through
-// (util.DetectShell resolves to exactly these families). Kept local to the
-// classifier so util needs no import here; util's specs are the source of
-// truth for the PATHS (sh / pwsh.exe / powershell.exe / git-bash), and this
-// set covers the name dimension of those specs.
 var shellBinaryNames = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
 	"pwsh": true, "powershell": true,
 }
 
-// isShellSpawnEnoentContent reports whether lowercased error content carries
-// the #4787 (S-16) shell-channel spawn failure: "fork/exec <SHELL>: no such
-// file or directory" where the failing binary is a SHELL binary. Anchoring
-// to the shell name keeps direct wrong-binary spawns ("fork/exec
-// /missing/binary: ...") STRUCTURAL — those are agent-fixable wrong paths,
-// not environment outages (cross-review boundary guard, PR #4934).
 func isShellSpawnEnoentContent(lowercased string) bool {
 	const prefix = "fork/exec "
 	idx := strings.Index(lowercased, prefix)
@@ -245,10 +151,7 @@ func isShellSpawnEnoentContent(lowercased string) bool {
 		return false
 	}
 	rest := lowercased[idx+len(prefix):]
-	// os.PathError renders as "fork/exec <path>: <errno text>"; the ": "
-	// boundary (not a bare space — Windows shell paths contain spaces,
-	// e.g. "C:/Program Files/PowerShell/7/pwsh.exe") separates the failing
-	// binary path from the errno text.
+
 	end := strings.Index(rest, ": ")
 	if end < 0 {
 		return false
@@ -261,28 +164,16 @@ func isShellSpawnEnoentContent(lowercased string) bool {
 	return shellBinaryNames[bin]
 }
 
-// recordResult tracks a tool call result for failure mode analysis.
-// Returns guidance string if a dominant failure mode pattern has emerged.
 func (s *failureModeState) recordResult(toolName string, isError bool, errorContent string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.totalCalls++
 	if !isError {
-		// #1460-B: successes decay the structural streak - a long run with
-		// isolated, FIXED failures must not accumulate into a strategy
-		// verdict ('approach is fundamentally wrong, Do NOT retry').
-		// #1561 case D: also un-latch the fired flag - a premature alert
-		// from same-batch parallel ordering ([edit xN, verify green] with
-		// the verify result landing after the edits) must not leave a
-		// stale fired latch for the rest of the run.
+
 		s.structuralCount = 0
 		delete(s.fired, FailureModeStructural)
-		// #1561 case C: transient gets the SAME streak treatment - a
-		// lifelong counter fired '[retry strategy isn't working]' after 3
-		// scattered, individually-recovered timeouts spaced 100 calls
-		// apart. Consecutive failures are the signal; recovered ones are
-		// noise.
+
 		s.transientCount = 0
 		delete(s.fired, FailureModeTransient)
 		return ""
@@ -294,7 +185,7 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 		s.transientCount++
 	case FailureModeStructural:
 		if s.structuralCount == 0 {
-			// Streak begins NOW: the density window opens with it (#1561 A).
+
 			s.structuralStreakStart = s.totalCalls
 		}
 		s.structuralCount++
@@ -307,12 +198,8 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 	return s.checkDominantMode()
 }
 
-// checkDominantMode returns guidance if a failure mode has become dominant.
-// Must be called with lock held.
 func (s *failureModeState) checkDominantMode() string {
-	// Systemic mode fires immediately (1 occurrence) — these are hard blockers.
-	// #335: wording no longer demands abandonment — verify the environment
-	// first; only escalate to the user if it genuinely persists.
+
 	if s.systemicCount >= 1 && !s.fired[FailureModeSystemic] {
 		s.fired[FailureModeSystemic] = true
 		return "[Failure Mode: SYSTEMIC] An environment-level error is blocking progress " +
@@ -322,7 +209,6 @@ func (s *failureModeState) checkDominantMode() string {
 			"to the user instead of iterating on workarounds."
 	}
 
-	// Transient mode fires after 3+ transient failures — retry strategy isn't working.
 	if s.transientCount >= 3 && !s.fired[FailureModeTransient] {
 		s.fired[FailureModeTransient] = true
 		return fmt.Sprintf("%s",
@@ -332,20 +218,6 @@ func (s *failureModeState) checkDominantMode() string {
 				"or switching to a lighter approach that makes fewer API calls.")
 	}
 
-	// Structural mode fires after 4+ structural failures AND a
-	// meaningful failure density (#1460-B): the old bare count never reset
-	// on success and never looked at volume - four unrelated, FIXED
-	// failures scattered across a 200-call run triggered 'approach is
-	// fundamentally wrong, Do NOT retry' on a smoothly progressing run.
-	// STRUCTURAL is also the fallback default class, so it inflates easily.
-	// totalCalls (previously a write-only field 'for ratio calculation'
-	// that never calculated) finally earns its keep.
-	// #1561 case A: windowed density - denominator is calls since the
-	// streak began, matching the numerator's window. The old
-	// streak/lifelong ratio made a genuine mid-run spiral unreachable
-	// (after S successful calls it needs S*3/7 CONSECUTIVE failures, e.g.
-	// 22 after 50); the scattered-fixed-failure false positive it guarded
-	// against was ALREADY eliminated by the streak reset above.
 	streakWindow := s.totalCalls - s.structuralStreakStart + 1
 	if s.structuralStreakStart == 0 {
 		streakWindow = s.totalCalls
@@ -366,8 +238,6 @@ func (s *failureModeState) checkDominantMode() string {
 	return ""
 }
 
-// isAllDigits1561 reports whether the pattern is a bare number (needs
-// token-boundary matching, #1561 case E).
 func isAllDigits1561(p string) bool {
 	if p == "" {
 		return false
@@ -380,12 +250,6 @@ func isAllDigits1561(p string) bool {
 	return true
 }
 
-// containsToken1561 reports whether s contains the digit run needle as a
-// status-code-shaped token: it must not be embedded in a larger digit run
-// AND must not sit in a file:line:col position slot (adjacent ':' or '/'
-// delimiters on either side mark compiler coordinate output like
-// "foo.go:429:5: syntax error", which is a DETERMINISTIC error - matching
-// it as HTTP 429 prescribed retry delays for a syntax error, #1561 E).
 func containsToken1561(s, needle string) bool {
 	for i := 0; i+len(needle) <= len(s); i++ {
 		if s[i:i+len(needle)] != needle {

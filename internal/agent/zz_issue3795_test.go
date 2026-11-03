@@ -1,10 +1,5 @@
 package agent
 
-// #3795 companion: three false-positive directions in the reproducer
-// lifecycle - comment-first snippets, test-runner discharge for
-// text-established reproducers, and script-shape establishment without
-// reproduce intent.
-
 import "testing"
 
 func rlState3795(s *reproducerLifecycleState) (established bool, snippet string, stamp int) {
@@ -36,7 +31,7 @@ func TestIssue3795_TestRunnerDischargesEmptySnippet(t *testing.T) {
 }
 
 func TestIssue3795_CommandPathRequiresIntent(t *testing.T) {
-	// Release-flow shape: no reproduce wording anywhere, just the script.
+
 	s := newReproducerLifecycleState()
 	s.observeText(1, "Bumping versions for the release now.", true, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"bash scripts/version_sync.sh 1.2.3"}`})
@@ -44,9 +39,6 @@ func TestIssue3795_CommandPathRequiresIntent(t *testing.T) {
 		t.Fatal("one-shot script without reproduce intent must NOT establish a reproducer")
 	}
 
-	// Genuine reproducer: same-iteration intent text + script run. hasRunTool
-	// is false so the TEXT path stays quiet and the command path establishes
-	// (with the snippet recorded from the command, not blank).
 	s2 := newReproducerLifecycleState()
 	s2.observeText(2, "Writing a minimal repro script to demonstrate the crash.", false, "")
 	s2.observeToolCalls(2, []string{"run_command"}, []string{"# run the repro\nbash repro.sh"})

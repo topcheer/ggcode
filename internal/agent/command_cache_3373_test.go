@@ -11,14 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #3373: the deterministic commandCache hit branch in the tool-execution
-// chain must be guarded by speculativeHitAllowed like the memo (#1831) and
-// speculator (#1496) replay branches - a replayed result must never leak
-// past a policy that would no longer Allow the command. The branch
-// condition under test is `checkCommandCache(...) hit &&
-// speculativeHitAllowed(ctx, tc)`.
-
-// stubDecisionPolicy returns a fixed decision from Check.
 type stubDecisionPolicy struct {
 	mode     permission.PermissionMode
 	decision permission.Decision
@@ -42,8 +34,6 @@ var tc3373 = provider.ToolCallDelta{
 	Arguments: json.RawMessage(`{"command":"make verify-ci","working_dir":"/tmp/repo"}`),
 }
 
-// Regression (issue checklist 3): policy still Allow - the cached result is
-// served through the guard, annotated as a cache hit.
 func TestCommandCacheHit_AllowPolicyStillServesCache(t *testing.T) {
 	a := &Agent{commandCache: newCommandCache(), policy: &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Allow}}
 	a.storeCommandResult(tc3373.Name, tc3373.Arguments, tool.Result{Content: "build ok"})
@@ -60,14 +50,10 @@ func TestCommandCacheHit_AllowPolicyStillServesCache(t *testing.T) {
 	}
 }
 
-// Issue checklist 1: policy tightened to Deny mid-session (e.g. plan mode
-// switch) - the hit must be abandoned so the chain falls back to gated
-// execution instead of replaying shell output without a decision.
 func TestCommandCacheHit_DenyPolicyAbandonsHit(t *testing.T) {
 	a := &Agent{commandCache: newCommandCache(), policy: &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Allow}}
 	a.storeCommandResult(tc3373.Name, tc3373.Arguments, tool.Result{Content: "build ok"})
 
-	// Mid-session tightening: same command now Denies.
 	a.policy = &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Deny}
 
 	_, hit := a.checkCommandCache(tc3373.Name, tc3373.Arguments)
@@ -79,13 +65,10 @@ func TestCommandCacheHit_DenyPolicyAbandonsHit(t *testing.T) {
 	}
 }
 
-// Issue checklist 2: plan-mode session - cached shell output must not be
-// served to the model.
 func TestCommandCacheHit_PlanModeLeaksNoShellOutput(t *testing.T) {
 	a := &Agent{commandCache: newCommandCache(), policy: &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Allow}}
 	a.storeCommandResult(tc3373.Name, tc3373.Arguments, tool.Result{Content: "secret build output"})
 
-	// User switches to plan mode: policy now denies shell execution.
 	a.policy = &stubDecisionPolicy{mode: permission.PlanMode, decision: permission.Deny}
 
 	if a.speculativeHitAllowed(context.Background(), tc3373) {
@@ -93,8 +76,6 @@ func TestCommandCacheHit_PlanModeLeaksNoShellOutput(t *testing.T) {
 	}
 }
 
-// The Ask decision is not Allow either: a tightening that turns the command
-// into an Ask must re-prompt rather than silently replay.
 func TestCommandCacheHit_AskPolicyRePrompts(t *testing.T) {
 	a := &Agent{commandCache: newCommandCache(), policy: &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Ask}}
 	a.storeCommandResult(tc3373.Name, tc3373.Arguments, tool.Result{Content: "build ok"})
@@ -104,8 +85,6 @@ func TestCommandCacheHit_AskPolicyRePrompts(t *testing.T) {
 	}
 }
 
-// A cancelled context makes the guard fail closed, matching the memo and
-// speculator branches.
 func TestCommandCacheHit_CancelledContextFailsClosed(t *testing.T) {
 	a := &Agent{commandCache: newCommandCache(), policy: &stubDecisionPolicy{mode: permission.AutoMode, decision: permission.Allow}}
 	a.storeCommandResult(tc3373.Name, tc3373.Arguments, tool.Result{Content: "build ok"})

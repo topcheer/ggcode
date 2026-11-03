@@ -41,7 +41,6 @@ func TestSpecGaming_SkipMarkersInCommands(t *testing.T) {
 		CommandsRun: []string{`echo "@pytest.mark.skip" >> auth_test.py`},
 	}
 
-	// Skip markers in commands should trigger even with source edits
 	msg := a.checkSpecGaming(stats, "fix auth bug")
 	if msg == "" {
 		t.Fatal("expected spec gaming warning for skip markers in commands")
@@ -70,7 +69,6 @@ func TestSpecGaming_CIConfigInCITask(t *testing.T) {
 		FilesEdited: []string{".github/workflows/ci.yml"},
 	}
 
-	// CI task should not trigger warning
 	msg := a.checkSpecGaming(stats, "update CI pipeline to use Go 1.26")
 	if msg != "" {
 		t.Fatalf("expected no spec gaming warning for CI-related task, got: %s", msg)
@@ -104,9 +102,8 @@ func TestSpecGaming_Reset(t *testing.T) {
 		FilesEdited: []string{"foo_test.go"},
 	}
 
-	// Fire once
 	_ = a.checkSpecGaming(stats, "fix bug")
-	// Reset should allow firing again
+
 	a.specGaming.reset()
 	msg := a.checkSpecGaming(stats, "fix bug")
 	if msg == "" {
@@ -214,14 +211,12 @@ func TestIsCIRelatedTask(t *testing.T) {
 		{"modify the Makefile build target", true},
 		{"add new feature to user handler", false},
 		{"configure jest.config.js", true},
-		// #501: everyday words CONTAINING the substring "ci" must NOT
-		// disable the CI-tampering pattern (old bare-substring match hit
-		// 12/12 ordinary prompts empirically).
+
 		{"fix the precision issue in the pricing calculator", false},
 		{"make the lookup more efficient", false},
 		{"this is a special case, decide carefully", false},
 		{"sufficient artificial precision, crucial decision", false},
-		{"run it in ci", true}, // whole-word (case-insensitive) still matches
+		{"run it in ci", true},
 	}
 	for _, tt := range tests {
 		got := isCIRelatedTask(tt.prompt)
@@ -235,7 +230,7 @@ func TestSpecGaming_MultipleWarnings(t *testing.T) {
 	a := &Agent{
 		specGaming: newSpecGamingState(),
 	}
-	// Only test files + skip markers + CI tampering = 3 warnings
+
 	stats := &RunStats{
 		FilesEdited: []string{"foo_test.go", ".github/workflows/ci.yml"},
 		CommandsRun: []string{"echo '@pytest.mark.skip'"},
@@ -245,34 +240,27 @@ func TestSpecGaming_MultipleWarnings(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected spec gaming warning")
 	}
-	// Should contain multiple warnings
+
 	if len(msg) < 100 {
 		t.Logf("warning message: %s", msg)
 	}
 }
 
-// Regression for #1496: the awk branch used to check skip markers against
-// the WHOLE command, so an injection (gsub(/assert/, "t.Skip(") - marker in
-// the REPLACEMENT) was exempted as "removal". The fix mirrors the sed
-// branch: pattern contains the marker, replacement does not.
 func TestIsAwkSkipRemovalInjectionNotExempt(t *testing.T) {
-	// Injection: marker lives in the replacement -> NOT removal.
+
 	if isAwkSkipRemoval(`awk '{gsub(/assert/, "t.Skip(")}' t.go`) {
 		t.Fatal("gsub injection (skip marker in replacement) must not be exempted as removal")
 	}
-	// Legit removal: marker in pattern, clean replacement -> exempt.
+
 	if !isAwkSkipRemoval(`awk '{gsub(/t\.skip\(/, "")}' t.go`) {
 		t.Fatal("gsub removing a skip marker (pattern only) must stay exempt")
 	}
-	// No marker at all.
+
 	if isAwkSkipRemoval(`awk '{gsub(/foo/, "bar")}' t.go`) {
 		t.Fatal("no skip marker anywhere must not match")
 	}
 }
 
-// TestIsSedSkipRemoval_MultiExpression pins #1685 case 1: a sed string with
-// a legit removal followed by an INJECTING second expression must not be
-// exempt - the old code judged only the first.
 func TestIsSedSkipRemoval_MultiExpression(t *testing.T) {
 	legit := "sed -i 's/pytest.skip(//g' f.go"
 	if !isSedSkipRemoval(legit) {

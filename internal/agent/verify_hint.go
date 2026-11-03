@@ -12,40 +12,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// postEditVerifyState tracks file edits to inject periodic verification hints.
-// This implements the "generate-verify-fix loop" pattern: after editing source
-// code, prompt the agent to verify (build/test) before making more changes.
-//
-// The hint fires once every postEditVerifyInterval source-code edits, not
-// after every single edit, to avoid noise. Non-source files (docs, JSON,
-// markdown) don't count toward the threshold.
-//
-// Smart detection: if the agent runs a build/test/verify command between edits,
-// the counter resets - the agent already verified, no need to nag.
 type postEditVerifyState struct {
-	sourceEditsSinceHint int    // consecutive source-code edits since last hint or build
-	buildCmd             string // cached build command (detected lazily, empty = not yet checked)
-	buildCmdChecked      bool   // whether we've attempted detection
-	lastBuildFailed      bool   // true if the agent's last build command failed
+	sourceEditsSinceHint int
+	buildCmd             string
+	buildCmdChecked      bool
+	lastBuildFailed      bool
 
-	// r357 final-turn evidence gate state (run lifetime; behavior-triggered,
-	// unlike the lexical claimsSupervision family, so on by default).
-	sourceEditsThisRun        int    // total source edits this run (never reset by hints)
-	lastSourceFileThisRun     string // most recent source file edited this run (for targeted verify)
-	buildOrTestRunThisRun     bool   // a verify-family command (incl. formatters) ran this run - hint-noise suppression
-	realBuildOrTestRunThisRun bool   // a REAL build/test execution (isRealTestExecution) ran this run - #3045 B1: final gate evidence; gofmt/prettier must NOT satisfy it
-	finalGateFiredThisRun     bool   // hard-block fired at most once per run
+	sourceEditsThisRun        int
+	lastSourceFileThisRun     string
+	buildOrTestRunThisRun     bool
+	realBuildOrTestRunThisRun bool
+	finalGateFiredThisRun     bool
 }
 
-// postEditVerifyInterval is how many source-code edits between hints.
 const postEditVerifyInterval = 3
 
-// sourceMutatingTools is the CANONICAL set of tools that write to disk and
-// change source files (#153/#154). All per-purpose gates (fileEditingTools,
-// reverifyEditTools, build idempotency) must be derived from or kept in sync
-// with this superset. Includes every registered tool that persists edits:
-// edit_file, write_file, multi_edit_file, multi_file_edit, multi_file_write,
-// batch_replace, lsp_rename (applies LSP workspace edits), file_ops, notebook_edit.
 var sourceMutatingTools = map[string]bool{
 	"edit_file":        true,
 	"write_file":       true,
@@ -58,29 +39,22 @@ var sourceMutatingTools = map[string]bool{
 	"notebook_edit":    true,
 }
 
-// fileEditingTools is the set of tool names that modify files on disk.
-// Derived from the canonical sourceMutatingTools superset (#154) so it can
-// never drift out of sync.
 var fileEditingTools = sourceMutatingTools
 
-// assertEditToolMapsInSync is referenced by TestSourceMutatingToolsSuperset
-// to guarantee the canonical map stays complete and every per-purpose gate
-// derived in #738 still covers the full canonical superset (aliases share the
-// same map object; wider-semantics gates are built with derivedEditTools).
 func assertEditToolMapsInSync() bool {
 	if !(len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] && reverifyEditTools["lsp_rename"] &&
 		strategyFixationIsMutation("file_ops") && strategyFixationIsMutation("multi_file_write")) {
 		return false
 	}
-	// Aliased gates (same canonical map, all 9 members by construction).
+
 	for _, m := range []map[string]bool{
-		editTools,               // adaptive_effort
-		causalEditTools,         // causal_attribution
-		psEditTools,             // premature_success
-		outcomeCorrectiveTools,  // outcome_misattrib
-		productiveEditTools,     // scope_drift
-		editToolSet,             // iter_pressure
-		reproducerEditToolNames, // reproducer_lifecycle
+		editTools,
+		causalEditTools,
+		psEditTools,
+		outcomeCorrectiveTools,
+		productiveEditTools,
+		editToolSet,
+		reproducerEditToolNames,
 	} {
 		if len(m) != len(sourceMutatingTools) {
 			return false
@@ -91,12 +65,12 @@ func assertEditToolMapsInSync() bool {
 			}
 		}
 	}
-	// Superset gates (canonical members + declared extras).
+
 	for _, m := range []map[string]bool{
-		privilegedSinkTools,      // taint_influence_check
-		mutatingToolNamesFrag,    // exploration_frag
-		qcActionTools,            // query_converge
-		integrationMutatingTools, // tool_integration_monitor
+		privilegedSinkTools,
+		mutatingToolNamesFrag,
+		qcActionTools,
+		integrationMutatingTools,
 	} {
 		for t := range sourceMutatingTools {
 			if !m[t] {
@@ -104,7 +78,7 @@ func assertEditToolMapsInSync() bool {
 			}
 		}
 	}
-	// Predicate gates (derived lookups).
+
 	for t := range sourceMutatingTools {
 		if !isEditTool(t) || !isEditingTool(t) || !coverageIsEditTool(t) ||
 			!bareStreakIsMutation(t) || !csIsEditTool(t) || !ecIsEditTool(t) ||
@@ -115,66 +89,23 @@ func assertEditToolMapsInSync() bool {
 	return true
 }
 
-// fileReadingTools is the set of tools that read file contents.
 var fileReadingTools = map[string]bool{
 	"read_file":       true,
 	"multi_file_read": true,
 }
 
-// extractToolFilePath was removed (#500): the read-tracking path now uses
-// extractFilePathsFromArgs directly (batch-aware, multi_file_read records ALL
-// files instead of files[0]).
-
-// gitFileModifyingTools are git operations that change file contents on
-// disk (checkout, stash pop/apply, etc.). These must invalidate tool caches
-// just like direct file edits, otherwise stale cached results (grep, LSP)
-// will be served after the working tree changes.
 var gitFileModifyingTools = map[string]bool{
-	"git_stash":      true, // pop/apply restores changed files
-	"enter_worktree": true, // switches working directory + files
-	"exit_worktree":  true, // switches back, files may differ
+	"git_stash":      true,
+	"enter_worktree": true,
+	"exit_worktree":  true,
 }
 
-// gitWholeTreeTools are git operations that can change the ENTIRE working tree
-// (branch switches, hard resets, reverts). Unlike single-file edits, these
-// operations may silently change dozens of files at once. When they run,
-// ALL caches must be fully invalidated - including mtime-based entries -
-// because the agent's read cache, command results, and LSP diagnostics are
-// all potentially stale relative to the new working tree state.
-//
-// Competitive analysis:
-//   - Claude Code: re-reads files after git operations
-//   - Cursor: IDE detects branch switches and refreshes file state
-//   - Aider: operates on a single commit, catches changes via git diff
-//   - OpenHands: full file refresh on git operations
-//
-// The gap: without this, the agent may edit files based on cached content
-// from the previous branch, or claim "build passes" from a cached result
-// that predates the branch switch. Especially dangerous in autonomous mode.
 var gitWholeTreeTools = map[string]bool{
-	"git_checkout": true, // branch switch changes potentially all files
-	"git_reset":    true, // hard mode discards all changes to tracked files
-	"git_revert":   true, // creates new commit undoing prior changes
+	"git_checkout": true,
+	"git_reset":    true,
+	"git_revert":   true,
 }
 
-// mutatesSourceTree reports whether executing toolName may rewrite
-// working-tree files and therefore must invalidate the speculative,
-// memoize, and command caches.
-//
-// #1104: undo_edit restores prior file content from checkpoints (a real
-// disk write) yet lived outside every existing mutation set, so stale
-// grep/LSP/git_diff/command entries survived an undo. It is extended here
-// rather than added to the canonical sourceMutatingTools superset, whose
-// exact 9-tool membership is pinned by the #737/#153 sync assertions;
-// cache gating only needs "may touch the tree", which this predicate owns.
-// Notebook edits flow through the canonical superset.
-// mutatesSourceTree reports whether the tool changes the source tree on
-// disk (#153/#154). Beyond the canonical sourceMutatingTools set (pinned at
-// 9 members by #737/#1104 - extending THAT map belongs here instead), this
-// also covers tools that persist edits outside it (#3006):
-//   - apply_patch (Responses API style patching, os.WriteFile on disk)
-//   - scaffold_project (generates a whole project skeleton, 20+ files)
-//   - undo_edit (reverts file edits, mutates state without being an edit tool)
 func mutatesSourceTree(toolName string) bool {
 	if fileEditingTools[toolName] || gitFileModifyingTools[toolName] || gitWholeTreeTools[toolName] {
 		return true
@@ -186,22 +117,11 @@ func mutatesSourceTree(toolName string) bool {
 	return false
 }
 
-// partialEditWroteDespiteError reports whether an ERRORED result still put
-// files on disk (#2991): multi_file_edit partial_success carries
-// IsError=true (mixed outcomes) while its written_paths files were
-// atomically written. The post-exec invalidation block must run for such
-// results - toolMemo TTL entries (grep/LSP/git) and commandCache (worst
-// case: a pre-edit PASS serving a fake green light) have no self-healing,
-// unlike speculator's mtime re-check. #1028 principle: side effects already
-// happened. multi_file_write's partial_success intentionally does NOT set
-// IsError (zz_issue2145_test), so this helper only ever fires for
-// multi_file_edit.
 func partialEditWroteDespiteError(toolName, resultContent string, isError bool) bool {
 	return isError && toolName == "multi_file_edit" &&
 		len(extractWrittenPaths(resultContent)) > 0
 }
 
-// sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
 var sourceCodeExtensions = map[string]bool{
 	".go":    true,
 	".rs":    true,
@@ -230,18 +150,11 @@ var sourceCodeExtensions = map[string]bool{
 	".zsh":   true,
 }
 
-// detectBuildSystem checks the working directory for build system markers
-// and returns the appropriate verify command, or "" if none found.
-// Priority: Makefile targets > verification scripts > language-specific defaults.
-// Makefile is preferred over go.mod because it includes build tags, env vars,
-// and other project-specific configuration that language defaults miss.
 func detectBuildSystem(workingDir string) string {
 	if workingDir == "" {
 		return ""
 	}
 
-	// 1. Makefile - the project's authoritative build configuration.
-	// Check for specific high-value targets in priority order.
 	makefiles := []string{
 		filepath.Join(workingDir, "Makefile"),
 		filepath.Join(workingDir, "makefile"),
@@ -250,20 +163,18 @@ func detectBuildSystem(workingDir string) string {
 	for _, mf := range makefiles {
 		if data, err := os.ReadFile(mf); err == nil {
 			content := string(data)
-			// Look for the most useful verification target.
+
 			for _, target := range []string{"verify-ci", "ci", "verify", "test", "build"} {
-				// Match "target:" or "target :" at start of a line (not in a comment or variable)
+
 				if hasMakeTarget(content, target) {
 					return "make " + target
 				}
 			}
-			// Makefile exists but no recognized target. Fall through to
-			// language detection - bare "make" might run the wrong thing.
+
 			break
 		}
 	}
 
-	// 2. Justfile - modern command runner (just).
 	justfiles := []string{
 		filepath.Join(workingDir, "Justfile"),
 		filepath.Join(workingDir, "justfile"),
@@ -271,25 +182,21 @@ func detectBuildSystem(workingDir string) string {
 	}
 	for _, jf := range justfiles {
 		if fileExists(jf) {
-			// Check for a verify/ci/test recipe
+
 			if data, err := os.ReadFile(jf); err == nil {
 				content := string(data)
 				for _, recipe := range []string{"verify-ci", "ci", "verify", "test", "build"} {
-					// Just recipes can be defined as "recipe:" or "recipe:"
+
 					if strings.Contains(content, "\n"+recipe+":") || strings.HasPrefix(content, recipe+":") {
 						return "just " + recipe
 					}
 				}
 			}
-			// #2123: no matching recipe - fall through to the next probe like
-			// the Makefile branch. The old bare `return "just"` ran the FIRST
-			// recipe (just semantics) or a usage listing, typically exit 0 -
-			// a guaranteed false green with unrelated output.
+
 			continue
 		}
 	}
 
-	// 3. Taskfile - modern task runner (task).
 	taskfiles := []string{
 		filepath.Join(workingDir, "Taskfile.yml"),
 		filepath.Join(workingDir, "Taskfile.yaml"),
@@ -297,13 +204,10 @@ func detectBuildSystem(workingDir string) string {
 	}
 	for _, tf := range taskfiles {
 		if fileExists(tf) {
-			// Check for a verify/ci/test task
+
 			if data, err := os.ReadFile(tf); err == nil {
 				content := string(data)
-				// #940: task names are YAML keys at line start (after indentation);
-				// anchor per-line like the Makefile/Justfile branches above so that
-				// "integration-test:" / "docker-build:" / "image: node:latest" no
-				// longer satisfy the bare-contains check for "test:" / "build:".
+
 				for _, task := range []string{"verify-ci", "ci", "verify", "test", "build"} {
 					taskKey := task + ":"
 					for _, line := range strings.Split(content, "\n") {
@@ -317,13 +221,11 @@ func detectBuildSystem(workingDir string) string {
 					}
 				}
 			}
-			// #2123: no matching task - fall through (same rationale as the
-			// just branch; bare `task` lists or runs the default task).
+
 			continue
 		}
 	}
 
-	// 4. Project-specific verification scripts.
 	scriptChecks := []string{
 		filepath.Join(workingDir, "scripts", "dev", "verify-ci.sh"),
 		filepath.Join(workingDir, "scripts", "verify.sh"),
@@ -335,8 +237,6 @@ func detectBuildSystem(workingDir string) string {
 		}
 	}
 
-	// 5. Language-specific defaults (lower confidence - may miss build tags).
-	// Only suggest commands for tools that are actually available on the host.
 	if fileExists(filepath.Join(workingDir, "go.mod")) && commandAvailable("go") {
 		return "go build ./..."
 	}
@@ -357,21 +257,11 @@ func detectBuildSystem(workingDir string) string {
 	return ""
 }
 
-// commandAvailable checks if the given binary is available in PATH.
-// Used by detectBuildSystem to avoid suggesting verification commands
-// for tools that are not installed on the host system.
 func commandAvailable(binary string) bool {
 	_, err := exec.LookPath(binary)
 	return err == nil
 }
 
-// detectNpmCommand returns the npm verification command for workingDir, or ""
-// when npm is unavailable or package.json defines neither a "build" nor a
-// "test" script. package.json without a "build" script (docs sites, library
-// packages) makes "npm run build" fail with "Missing script" (exit 1) - that
-// is NOT a code failure but was captured as one, triggering pointless
-// auto-repair loops. Only offer commands whose script actually exists;
-// otherwise fall through so the (now gated) LLM oracle can decide.
 func detectNpmCommand(workingDir string) string {
 	if !fileExists(filepath.Join(workingDir, "package.json")) || !commandAvailable("npm") {
 		return ""
@@ -385,9 +275,6 @@ func detectNpmCommand(workingDir string) string {
 	return ""
 }
 
-// packageJSONHasScript reports whether package.json in workingDir defines the
-// named script. npm exits 1 with "Missing script: <name>" when the script is
-// absent, which the verifier must not misread as a code failure.
 func packageJSONHasScript(workingDir, script string) bool {
 	data, err := os.ReadFile(filepath.Join(workingDir, "package.json"))
 	if err != nil {
@@ -403,7 +290,6 @@ func packageJSONHasScript(workingDir, script string) bool {
 	return ok
 }
 
-// codeFileExtensions lists file suffixes that indicate real source code.
 var codeFileExtensions = map[string]bool{
 	".go": true, ".rs": true, ".py": true, ".js": true, ".mjs": true, ".cjs": true,
 	".ts": true, ".tsx": true, ".jsx": true, ".java": true, ".rb": true, ".c": true,
@@ -412,8 +298,6 @@ var codeFileExtensions = map[string]bool{
 	".ex": true, ".exs": true, ".scala": true, ".m": true, ".mm": true,
 }
 
-// codeFileBasenames lists build-manifest filenames that count as "code" for
-// verification gating purposes.
 var codeFileBasenames = map[string]bool{
 	"Makefile": true, "makefile": true, "GNUmakefile": true,
 	"go.mod": true, "go.sum": true, "package.json": true,
@@ -422,8 +306,6 @@ var codeFileBasenames = map[string]bool{
 	"Justfile": true, "justfile": true, "mix.exs": true, "Gemfile": true,
 }
 
-// isCodeFilePath reports whether a path looks like source code or a build
-// manifest rather than prose/docs/notes.
 func isCodeFilePath(path string) bool {
 	if codeFileExtensions[strings.ToLower(filepath.Ext(path))] {
 		return true
@@ -431,12 +313,6 @@ func isCodeFilePath(path string) bool {
 	return codeFileBasenames[filepath.Base(path)]
 }
 
-// runTouchedCode reports whether the run edited any file that looks like
-// source code. It gates the LLM verify-command fallback: in workspaces with
-// no build system where only docs/notes were edited, the oracle has nothing
-// to anchor on and hallucinates commands whose failures trigger pointless
-// auto-repair loops. Unknown stats (nil or empty FilesEdited) default to
-// true so verification is never silently skipped.
 func runTouchedCode(runStats *RunStats) bool {
 	if runStats == nil || len(runStats.FilesEdited) == 0 {
 		return true
@@ -449,33 +325,16 @@ func runTouchedCode(runStats *RunStats) bool {
 	return false
 }
 
-// verifyCommandAvailable checks if the command's primary binary is available.
-// Handles compound commands like "make verify-ci" or "python -m pytest".
-// Returns true for shell builtins and commands that bypass PATH (e.g. "bash /path/script.sh").
 func verifyCommandAvailable(command string) bool {
-	// #2122: strip leading env-var assignments FIRST (#950's matcher-side
-	// helper, never reused here) - the oracle's prompt explicitly asks for
-	// the project's required flags, and this repo's canonical form is
-	// `GOFLAGS="-p=1" ... make verify-ci`: parts[0] was the ASSIGNMENT,
-	// LookPath failed, and every such verification was silently SKIPPED
-	// while reporting Passed=true (e2e probe: a literal `false` payload
-	// went green).
+
 	command = stripEnvAssignments(command)
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return false
 	}
-	// Compound forms like `cd /app && go test ./...`: cd is a shell
-	// builtin with no Linux binary - probe the first segment that does
-	// real work instead of failing the preflight on it.
+
 	for _, seg := range splitCompoundCommand(command) {
-		// #3751: env prefixes must be stripped per-segment, not only at the
-		// start of the whole command - `cd /app && GOFLAGS=-p=1 go test ./...`
-		// otherwise probes LookPath("GOFLAGS=-p=1"), fails, and the whole
-		// verification is silently skipped while reporting Passed=true.
-		// TrimSpace first: splitCompoundCommand leaves the separator's
-		// surrounding whitespace in the segment, and the ^-anchored regex
-		// will not match " GOFLAGS=...".
+
 		seg = stripEnvAssignments(strings.TrimSpace(seg))
 		segFields := strings.Fields(seg)
 		if len(segFields) == 0 || segFields[0] == "cd" {
@@ -486,23 +345,16 @@ func verifyCommandAvailable(command string) bool {
 	return verifyPrimaryAvailable(parts)
 }
 
-// verifyPrimaryAvailable checks the primary binary of an already-split
-// command segment (script paths, builtins, PATH).
 func verifyPrimaryAvailable(parts []string) bool {
 	primary := parts[0]
 
-	// #941: for scripts run via bash/sh, check the script path instead — must
-	// run BEFORE the unconditional-true switch below, which previously made
-	// this branch unreachable dead code. Shell flags (e.g. "sh -c 'cmd'")
-	// are not script paths, so only non-flag arguments get the fileExists check.
 	if primary == "bash" || primary == "sh" {
 		if len(parts) > 1 && !strings.HasPrefix(parts[1], "-") {
 			return fileExists(parts[1])
 		}
-		return true // bare shell or flag-only invocation, always available
+		return true
 	}
 
-	// Shell builtins and wrappers that are always available.
 	switch primary {
 	case "source":
 		return true
@@ -511,9 +363,6 @@ func verifyPrimaryAvailable(parts []string) bool {
 	return commandAvailable(primary)
 }
 
-// hasMakeTarget checks if a Makefile defines a target with the given name.
-// Matches "target:" at the beginning of a line (after optional whitespace),
-// but not in comments (lines starting with #) or variable assignments (=).
 func hasMakeTarget(makefileContent, target string) bool {
 	targetPrefix := target + ":"
 	for _, line := range strings.Split(makefileContent, "\n") {
@@ -522,10 +371,7 @@ func hasMakeTarget(makefileContent, target string) bool {
 			continue
 		}
 		if strings.HasPrefix(trimmed, targetPrefix) {
-			// #941: "test:=foo" / "test::=foo" are variable assignments, not
-			// rules — the comment above promised this exclusion but the check
-			// was missing, creating phantom targets → make exits 2 (not 127) →
-			// false verification failure.
+
 			rest := trimmed[len(targetPrefix):]
 			if strings.HasPrefix(rest, "=") || strings.HasPrefix(rest, ":=") {
 				continue
@@ -541,8 +387,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// extractFilePathFromArgs parses tool call arguments to extract the edited file path.
-// Different tools use different JSON field names for the path.
 func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -553,7 +397,6 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 		return ""
 	}
 
-	// Try common field names: "file_path" (edit_file), "path" (write_file).
 	for _, field := range []string{"file_path", "path"} {
 		if v, ok := raw[field]; ok {
 			var s string
@@ -563,7 +406,6 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 		}
 	}
 
-	// For multi-file tools, check "files" array for the first path.
 	if filesRaw, ok := raw["files"]; ok {
 		var files []map[string]json.RawMessage
 		if json.Unmarshal(filesRaw, &files) == nil {
@@ -578,12 +420,6 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 				}
 			}
 		} else {
-			// #1522 case D: batch_replace's files[] is a bare []string - the
-			// map-only unmarshal above failed silently, so the first path
-			// was never extracted and postEditVerify's sourceEditsSinceHint
-			// under-counted (plus searchInvalidation/stalledConvergence
-			// missed those files). The sibling extractors (#737/#738)
-			// already handle both shapes; this was the third copy, unfixed.
 			var list []string
 			if json.Unmarshal(filesRaw, &list) == nil {
 				for _, s := range list {
@@ -595,14 +431,6 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 		}
 	}
 
-	// #1733 case 1: notebook_edit uses "notebook_path" and file_ops moves
-	// carry "source" - both were fileEditingTools (the gate) but the
-	// extractor returned "" for them, so checkEditInvalidation silently
-	// skipped and stale grep/lsp results went unflagged - for ALL FOUR
-	// consumers of this extractor (searchInvalidation, undo_blind,
-	// repetition_tracker, postEditVerifyHint). The sibling extractor
-	// below (#737) had learned these shapes; this one never did (#1547
-	// fixed the THIRD extractor only).
 	if v, ok := raw["notebook_path"]; ok {
 		var s string
 		if json.Unmarshal(v, &s) == nil && s != "" {
@@ -615,7 +443,7 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 			return s
 		}
 	}
-	// file_ops nests its paths under operations[] (source/destination).
+
 	if opsRaw, ok := raw["operations"]; ok {
 		var ops []map[string]json.RawMessage
 		if json.Unmarshal(opsRaw, &ops) == nil {
@@ -633,13 +461,6 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 	return ""
 }
 
-// sfExtractMutationPaths returns EVERY file path referenced by a mutation
-// tool call for strategy-fixation tracking (#485): multi_file_edit's files[]
-// entries must all count as edits, and notebook_edit carries its path in
-// notebook_path (previously never extracted, so notebook edits were silently
-// untracked). Distinct from extractFilePathFromArgs (first path only) and
-// from wasted_explore's extractFilePathsFromArgs (read-tool oriented, would
-// admit url/directory noise).
 func sfExtractMutationPaths(args json.RawMessage) []string {
 	if len(args) == 0 {
 		return nil
@@ -661,8 +482,6 @@ func sfExtractMutationPaths(args json.RawMessage) []string {
 
 	sfAddStringFields(add, raw, "file_path", "path", "notebook_path")
 
-	// files[] has two shapes: []map (multi_file_edit/multi_file_write) and
-	// plain []string (batch_replace schema) -- both must yield every path (#737).
 	if filesRaw, ok := raw["files"]; ok {
 		sfAddMapListStringFields(add, filesRaw, "file_path", "path")
 		var plainFiles []string
@@ -673,9 +492,6 @@ func sfExtractMutationPaths(args json.RawMessage) []string {
 		}
 	}
 
-	// file_ops carries its targets in operations[].source/destination;
-	// previously never extracted, so file_ops mutations were untracked (#737).
-	// source is always a touched path; destination matters for move/rename.
 	if opsRaw, ok := raw["operations"]; ok {
 		sfAddMapListStringFields(add, opsRaw, "source", "destination")
 	}
@@ -683,8 +499,6 @@ func sfExtractMutationPaths(args json.RawMessage) []string {
 	return out
 }
 
-// sfAddStringFields unmarshals each named top-level field of raw as a string
-// and passes the values to add (empty strings are dropped by add).
 func sfAddStringFields(add func(string), raw map[string]json.RawMessage, fields ...string) {
 	for _, field := range fields {
 		if v, ok := raw[field]; ok {
@@ -696,9 +510,6 @@ func sfAddStringFields(add func(string), raw map[string]json.RawMessage, fields 
 	}
 }
 
-// sfAddMapListStringFields unmarshals rawJSON as a list of string-keyed maps
-// (e.g. files[] or operations[]) and passes each named field's string value
-// from every element to add.
 func sfAddMapListStringFields(add func(string), rawJSON json.RawMessage, fields ...string) {
 	var list []map[string]json.RawMessage
 	if json.Unmarshal(rawJSON, &list) != nil {
@@ -709,20 +520,11 @@ func sfAddMapListStringFields(add func(string), rawJSON json.RawMessage, fields 
 	}
 }
 
-// isSourceCodeFile returns true if the path has a source-code extension.
 func isSourceCodeFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return sourceCodeExtensions[ext]
 }
 
-// postEditVerifyHint checks if we should inject a verification hint after
-// a successful file edit. Returns the hint text, or "" if no hint needed.
-//
-// Context-aware: if the agent has already run a build since the last hint
-// fire, the counter was reset (via maybeResetVerifyOnCommand). If the last
-// build FAILED, the hint message includes urgency.
-//
-// Thread-safety: caller must NOT hold a.mu (this method acquires it).
 func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string {
 	if !fileEditingTools[toolName] {
 		return ""
@@ -744,7 +546,6 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 		return ""
 	}
 
-	// Detect build system lazily and cache.
 	if !a.postEditVerify.buildCmdChecked {
 		a.postEditVerify.buildCmd = detectBuildSystem(a.workingDir)
 		a.postEditVerify.buildCmdChecked = true
@@ -752,30 +553,18 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 
 	cmd := a.postEditVerify.buildCmd
 	if cmd == "" {
-		// No build system detected; reset counter so we don't keep checking.
+
 		a.postEditVerify.sourceEditsSinceHint = 0
 		return ""
 	}
 
 	a.postEditVerify.sourceEditsSinceHint = 0
 
-	// Affected-test detection: derive a fast, scope-limited verification
-	// command for the package just edited (e.g. `go test ./internal/agent/`).
-	// This is far cheaper than the full project suite for a mid-session check
-	// and gives the agent faster compile/test feedback on its latest change.
-	// The full-suite command (cmd) is still surfaced for final verification.
 	targeted := targetedVerifyCommand(a.workingDir, filePath)
 	fileName := filepath.Base(filePath)
 
-	// Test impact analysis with transitive dependencies: if multiple
-	// packages/directories changed (detected via git status), suggest an
-	// impact-scoped test command that covers all affected packages AND their
-	// downstream importers - not just the single file being edited.
-	// Multi-language: works for Go, TypeScript, Python, Rust, Java, etc.
 	impact := impactScopedTestCommandMulti(a.workingDir)
 
-	// Test coverage gap: surface changed files that lack test counterparts
-	// (any language), nudging the agent toward test generation.
 	coverageNudge := funcLevelCoverageNudgeMulti(a.workingDir)
 	if coverageNudge == "" {
 		coverageNudge = testCoverageNudgeMulti(a.workingDir)
@@ -783,14 +572,11 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 
 	debug.Log("agent", "post-edit verify hint: targeted=%q impact=%q full=%q after %d source-code edits", targeted, impact, cmd, postEditVerifyInterval)
 
-	// Prefer the impact-scoped command when it covers more than the targeted
-	// package alone; fall back to the single-package targeted command.
 	fastCmd := targeted
 	if impact != "" && impact != targeted {
 		fastCmd = impact
 	}
 
-	// Context-aware: if last build failed, make it urgent.
 	if a.postEditVerify.lastBuildFailed {
 		var hint string
 		if fastCmd != "" {
@@ -832,20 +618,11 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	return hint
 }
 
-// verifyCommands is a set of command substrings that indicate a build/test/verify
-// command. Used by maybeResetVerifyOnCommand to detect when the agent has
-// proactively run verification (so the hint counter can be reset).
 var verifyCommands = map[string]bool{
 	"go build": true,
 	"go test":  true,
 	"go vet":   true,
-	// #3011: bare "make"/"just"/"task" entries removed - they prefix-matched
-	// ANY target (make clean, make lint, make deploy) and early-returned
-	// before the runner branch in isVerifyCommandSegment could apply the
-	// makeRunnerNoopTargets exclusion. Runner invocations now fall through
-	// to that branch, which accepts bare `make` (len(words)<2) and real
-	// targets while rejecting no-op targets, matching isRealTestSegment
-	// (#3005) on both the counter-reset and lastBuildFailed sides.
+
 	"cargo build":   true,
 	"cargo test":    true,
 	"npm run build": true,
@@ -856,11 +633,7 @@ var verifyCommands = map[string]bool{
 	"cmake":         true,
 	"ctest":         true,
 	"rake test":     true,
-	// #1841 case 4: mainstream test runners were missing - a bazel/gradle/
-	// maven/dotnet/yarn/pnpm/vitest project that ran its FULL suite green
-	// still kept accumulating edits-until-hint, and the third edit got a
-	// "you've edited 3 source files since last build check" nudge premised
-	// on a false "never verified" - training the agent to ignore hints.
+
 	"bazel test":       true,
 	"bzl test":         true,
 	"gradle test":      true,
@@ -873,10 +646,9 @@ var verifyCommands = map[string]bool{
 	"jest":             true,
 	"dart test":        true,
 	"composer test":    true,
-	"go test-race":     false, // placeholder guard (never matched; see -race below)
+	"go test-race":     false,
 	"python -m pytest": true,
-	// Lint / format commands also count as verification - running them
-	// resets the post-edit verify hint counter.
+
 	"golangci-lint": true,
 	"gofmt":         true,
 	"goimports":     true,
@@ -892,10 +664,6 @@ var verifyCommands = map[string]bool{
 	"pylint":        true,
 }
 
-// isVerifyCommand checks whether a command string looks like a build/test/verify
-// command by matching against known verify command substrings.
-// #950: handles env-var assignment prefixes ("GOFLAGS=-p=1 make ...") and
-// compound commands ("cd /app && go test ./...") - any matching segment counts.
 func isVerifyCommand(cmd string) bool {
 	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 	if cmdLower == "" {
@@ -904,7 +672,7 @@ func isVerifyCommand(cmd string) bool {
 	if isVerifyCommandSegment(cmdLower) {
 		return true
 	}
-	// Compound command: check each &&-separated, then ; / |-separated segment.
+
 	for _, andSeg := range strings.Split(cmdLower, "&&") {
 		for _, seg := range splitCompoundCommand(andSeg) {
 			if isVerifyCommandSegment(seg) {
@@ -915,18 +683,8 @@ func isVerifyCommand(cmd string) bool {
 	return false
 }
 
-// maybeResetVerifyOnCommand checks whether a run_command tool call was a
-// build/test/verify command and, if so, resets the edit counter and records
-// the result. This prevents redundant verify hints when the agent has already
-// proactively verified.
-//
-// Thread-safety: caller must NOT hold a.mu (this method acquires it).
 func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage, resultErr bool) {
-	// #3796-A: background verification counts too. Long test suites are
-	// routinely started via start_command and read back with
-	// read_command_output; excluding them here left
-	// realBuildOrTestRunThisRun unset, so the final-turn gate accused the
-	// agent of never having verified - the opposite of the truth.
+
 	if toolName != "run_command" && toolName != "start_command" {
 		return
 	}
@@ -941,22 +699,11 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 
 	a.postEditVerify.sourceEditsSinceHint = 0
 	a.postEditVerify.buildOrTestRunThisRun = true
-	// #3045 B1: the final-turn evidence gate demands compile/test evidence;
-	// pure formatters (gofmt -l, prettier) exit 0 without proving anything.
-	// Deliberately kept for start_command launches too (#3796): spawn +
-	// read-back is a legitimate verification pattern, and excluding it made
-	// the final-turn gate accuse verified agents.
+
 	if isRealTestExecution(cmd) {
 		a.postEditVerify.realBuildOrTestRunThisRun = true
 	}
-	// #3840: for start_command the resultErr is the LAUNCH outcome, not the
-	// test outcome - a successful launch proves nothing about the background
-	// run (read back via read_command_output, excluded at the top of this
-	// function). Writing the launch error into lastBuildFailed recorded a
-	// failed background test as success ('(which FAILED)' could never
-	// appear). Registration is not a result - the same semantics the
-	// premature-success side already applies to background jobs - so the
-	// failure flag may only be written by a COMPLETED execution.
+
 	if isRealTestExecution(cmd) && toolName == "run_command" {
 		a.postEditVerify.lastBuildFailed = resultErr
 	}
@@ -964,11 +711,6 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", cmd, resultErr)
 }
 
-// extractCommandFromArgs extracts the "command" field from run_command args.
-// #471: the run_command tool schema mandates a leading '# ' comment line
-// (shown as the activity label). Strip it so prefix-anchored matchers
-// (isVerifyCommand / isConvergenceVerifyCommand / isStrictVerifyCommand)
-// see the actual command, not the comment.
 func extractCommandFromArgs(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -986,8 +728,6 @@ func extractCommandFromArgs(args json.RawMessage) string {
 	return ""
 }
 
-// stripLeadingShellComment removes leading '#' comment line(s) from a
-// shell command string (#471).
 func stripLeadingShellComment(s string) string {
 	for {
 		trimmed := strings.TrimLeft(s, " \t\n\r")
@@ -1002,16 +742,8 @@ func stripLeadingShellComment(s string) string {
 	}
 }
 
-// envAssignPrefix matches a leading environment-variable assignment such as
-// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950). #3751: quoted values with
-// spaces (GREETING="hello world") must be consumed whole - \S* alone cannot
-// cross the inner space, leaving the assignment unstripped so LookPath sees
-// `GREETING="hello` and fails.
 var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+`)
 
-// stripEnvAssignments removes leading env-var assignment prefixes from a
-// command string so prefix-anchored verify matchers see the actual command
-// (#950: "GOFLAGS=\"-p=1\" make verify-ci" must be recognized as make).
 func stripEnvAssignments(cmd string) string {
 	for {
 		next := envAssignPrefix.ReplaceAllString(cmd, "")
@@ -1022,22 +754,10 @@ func stripEnvAssignments(cmd string) string {
 	}
 }
 
-// splitCompoundCommand splits a shell command on && / ; / | separators
-// (quote context is not tracked - build/verify commands in practice don't
-// quote these operators; worst case a segment is checked and mismatches).
 func splitCompoundCommand(cmd string) []string {
-	// '&' separates both `&&` sequences and background `cmd &` forms -
-	// #2122: without it, `cd /app && go test` stayed ONE segment whose
-	// first word is cd (a shell builtin with no Linux binary), so the
-	// preflight never reached the real command after it.
-	// #3908: quote-aware. `git commit -m "fix && go test ./..."` had the
-	// quoted && split as a real separator, and the bogus segment then
-	// satisfied isVerifyCommandSegment / isRealTestSegment - a pure commit
-	// was credited as test evidence (final-turn gate weakened). Separators
-	// inside single/double-quoted literals no longer split.
 	var segs []string
 	var cur []rune
-	quote := rune(0) // 0 = unquoted, else the open quote rune
+	quote := rune(0)
 	for _, r := range cmd {
 		switch {
 		case quote != 0:
@@ -1063,9 +783,6 @@ func splitCompoundCommand(cmd string) []string {
 	return segs
 }
 
-// isVerifyCommandSegment reports whether a single shell segment (env
-// assignments stripped) is a verify command. Splitting on '&' is handled by
-// the caller via strings.Split on "&&".
 func isVerifyCommandSegment(seg string) bool {
 	seg = strings.ToLower(strings.TrimSpace(stripEnvAssignments(seg)))
 	if seg == "" {
@@ -1079,10 +796,7 @@ func isVerifyCommandSegment(seg string) bool {
 	words := strings.Fields(seg)
 	if len(words) > 0 {
 		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
-			// #3011: no-op targets must not count as verification on
-			// EITHER side - the counter reset (this gate) and the
-			// lastBuildFailed update (isRealTestSegment) share the
-			// single makeRunnerNoopTargets exclusion table.
+
 			if len(words) >= 2 && makeRunnerNoopTargets[words[1]] {
 				return false
 			}
@@ -1092,10 +806,6 @@ func isVerifyCommandSegment(seg string) bool {
 	return false
 }
 
-// realTestCommands are verify commands that actually EXECUTE the project's
-// tests or build (#1841 case 3). Inspection/format/listing commands in the
-// broader verifyCommands table (gofmt -l, make help, cmake --help) exit 0
-// without testing anything and must not clear a failure flag.
 var realTestCommands = map[string]bool{
 	"go test": true, "go build": true, "go vet": true,
 	"cargo test": true, "cargo build": true,
@@ -1110,12 +820,6 @@ var realTestCommands = map[string]bool{
 	"vitest": true, "jest": true, "composer test": true,
 }
 
-// isRealTestExecution reports whether the command runs a real test/build
-// target (not a listing/format/no-op invocation of a test-capable runner).
-// #3005: matches per segment of compound commands (cd pkg && go test ./),
-// keeping the classification in sync with isVerifyCommand and
-// isStrictVerifyCommand (#1462-C) - the whole-string prefix match used to
-// split the verify-counter reset from the lastBuildFailed update.
 func isRealTestExecution(cmd string) bool {
 	for _, seg := range splitCompoundCommand(stripEnvAssignments(cmd)) {
 		if isRealTestSegment(strings.ToLower(strings.TrimSpace(seg))) {
@@ -1125,26 +829,14 @@ func isRealTestExecution(cmd string) bool {
 	return false
 }
 
-// makeRunnerNoopTargets are runner targets that neither build nor test;
-// running them must not reset the post-edit verify counter or clear the
-// lastBuildFailed flag (#3005: `make clean` used to count as verification,
-// silencing the verify hint for subsequent source edits - #1841 case 3).
-// NOTE: build/test-adjacent targets (build, test, ci, check, lint) are
-// deliberately NOT here - a successful build IS compilation verification
-// (verify_hint_issue950_test.go pins `task build` = true) and a failed one
-// must set lastBuildFailed.
 var makeRunnerNoopTargets = map[string]bool{
 	"help": true, "list": true, "clean": true, "install": true,
 	"fmt": true, "format": true, "tidy": true,
 	"deploy": true, "info": true,
 }
 
-// isRealTestSegment classifies one shell segment (already lowercased,
-// trimmed, env-stripped).
 func isRealTestSegment(seg string) bool {
-	// #3862 C: `go test ./... -list .` (the official single-dash spelling)
-	// only LISTS test names and exits 0 - it must not count as a real test
-	// execution any more than the double-dash form.
+
 	if strings.Contains(seg, "--help") || strings.Contains(seg, " -list") || strings.Contains(seg, " --list") ||
 		strings.Contains(seg, "help") && strings.HasPrefix(seg, "make ") {
 		return false
@@ -1156,11 +848,7 @@ func isRealTestSegment(seg string) bool {
 	}
 	words := strings.Fields(seg)
 	if len(words) >= 2 && (words[0] == "make" || words[0] == "just" || words[0] == "task") {
-		// #3005: only verification-ish targets count. The old code accepted
-		// ANY target, so `make fmt`/`make deploy` reset the counter and
-		// faked "verified" state. Known no-op targets are excluded; unknown
-		// targets default to counting (a custom `make ci`/`make e2e` may run
-		// real tests, and under-counting verify hints is the worse failure).
+
 		t := words[1]
 		if strings.HasPrefix(t, "-") || makeRunnerNoopTargets[t] {
 			return false
@@ -1170,12 +858,6 @@ func isRealTestSegment(seg string) bool {
 	return false
 }
 
-// funcLevelCoverageNudge generates a function-level coverage hint showing
-// which specific exported functions in changed files lack tests. This is
-// richer than the file-level testCoverageNudge - it mirrors GitHub Copilot's
-// per-function test generation suggestions.
-//
-// Returns "" when no function-level gaps are found.
 func funcLevelCoverageNudge(workingDir string) string {
 	gaps := funcLevelCoverageGaps(workingDir, 3, 4)
 	if len(gaps) == 0 {
@@ -1195,9 +877,6 @@ func funcLevelCoverageNudge(workingDir string) string {
 	return b.String()
 }
 
-// funcLevelCoverageNudgeMulti is the multi-language version of
-// funcLevelCoverageNudge. It uses funcLevelCoverageGapsMulti to analyze
-// changed files across all supported languages (not just Go).
 func funcLevelCoverageNudgeMulti(workingDir string) string {
 	gaps := funcLevelCoverageGapsMulti(workingDir, 3, 4)
 	if len(gaps) == 0 {
@@ -1217,37 +896,20 @@ func funcLevelCoverageNudgeMulti(workingDir string) string {
 	return b.String()
 }
 
-// resetPostEditVerify clears edit tracking state. Called at the start of
-// each new RunStreamWithContent (new user turn).
 func (a *Agent) resetPostEditVerify() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.postEditVerify = postEditVerifyState{}
 }
 
-// targetedVerifyCommand returns a fast, scope-limited verification command for
-// the package containing filePath, when one can be derived. This implements
-// multi-language test-impact analysis: instead of nudging the agent to run the
-// entire project suite (e.g. `make verify-ci`) after every few edits, we scope
-// the suggestion to the package/module that actually changed - `go test
-// ./internal/agent/` for a Go edit, `npx vitest run src/foo` for TypeScript,
-// `python -m pytest src/foo` for Python, etc.
-//
-// Returns "" when no targeted command applies.
 func targetedVerifyCommand(workingDir, filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	// Use multi-language dispatcher; Go files are handled by
-	// goTargetedTestCommand via the Go language profile.
+
 	return targetedVerifyCommandMulti(workingDir, filePath)
 }
 
-// goTargetedTestCommand computes `go test ./<pkg-dir>/` for an edited Go file,
-// scoped to the Go module that contains it. It walks up from the file's
-// directory to locate go.mod, then expresses the package directory relative to
-// the module root. Returns "" if no module root is found or the file escapes
-// the module (e.g. an absolute path outside the workspace).
 func goTargetedTestCommand(workingDir, filePath string) string {
 	abs := filePath
 	if !filepath.IsAbs(abs) {
@@ -1255,7 +917,6 @@ func goTargetedTestCommand(workingDir, filePath string) string {
 	}
 	abs = filepath.Clean(abs)
 
-	// Walk up from the file's directory to find the module root (go.mod).
 	dir := filepath.Dir(abs)
 	modRoot := ""
 	for {
@@ -1265,7 +926,7 @@ func goTargetedTestCommand(workingDir, filePath string) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break // reached filesystem root
+			break
 		}
 		dir = parent
 	}
@@ -1278,7 +939,7 @@ func goTargetedTestCommand(workingDir, filePath string) string {
 		return ""
 	}
 	rel = filepath.ToSlash(rel)
-	// Guard against a relative path that escapes the module.
+
 	if strings.HasPrefix(rel, "..") {
 		return ""
 	}

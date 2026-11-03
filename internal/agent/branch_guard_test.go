@@ -29,8 +29,8 @@ func TestIsProtectedBranch(t *testing.T) {
 		{"refactor/api", false},
 		{"my-branch", false},
 		{"", false},
-		{"mainline", false},    // should not match "main" as substring
-		{"masterpiece", false}, // should not match "master" as substring
+		{"mainline", false},
+		{"masterpiece", false},
 	}
 
 	for _, tt := range tests {
@@ -58,10 +58,9 @@ func TestBranchGuardState_Reset(t *testing.T) {
 }
 
 func TestCheckBranchGuard_ProtectedBranch(t *testing.T) {
-	// Create a temporary git repo on main branch
+
 	dir := t.TempDir()
 
-	// Initialize git repo
 	for _, args := range [][]string{
 		{"init"},
 		{"config", "user.email", "test@test.com"},
@@ -75,7 +74,6 @@ func TestCheckBranchGuard_ProtectedBranch(t *testing.T) {
 		}
 	}
 
-	// Create an initial commit so the branch is established
 	initialFile := filepath.Join(dir, "README.md")
 	if err := os.WriteFile(initialFile, []byte("# test\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -88,7 +86,6 @@ func TestCheckBranchGuard_ProtectedBranch(t *testing.T) {
 		branchGuard: newBranchGuardState(),
 	}
 
-	// First call should return a warning
 	hint := a.checkBranchGuard()
 	if hint == "" {
 		t.Error("expected protected branch warning on first call")
@@ -100,7 +97,6 @@ func TestCheckBranchGuard_ProtectedBranch(t *testing.T) {
 		t.Errorf("expected warning to mention 'main', got: %s", hint)
 	}
 
-	// Second call should NOT return a warning (already fired)
 	hint2 := a.checkBranchGuard()
 	if hint2 != "" {
 		t.Error("expected no warning on second call (already fired)")
@@ -153,13 +149,8 @@ func TestCheckBranchGuard_NilGuard(t *testing.T) {
 	}
 }
 
-// TestCheckBranchGuard_TransientFailureDoesNotLatch pins the #698 (adjacent)
-// contract: when branch determination FAILS (non-git dir, git lock contention),
-// the fired latch must NOT be set. Latching on failure permanently silenced
-// the advisory for the rest of the run -- exactly what the #698 comment
-// promises cannot happen.
 func TestCheckBranchGuard_TransientFailureDoesNotLatch(t *testing.T) {
-	// t.TempDir() is not a git repo -- getCurrentBranch fails, returns "".
+
 	dir := t.TempDir()
 	a := &Agent{
 		workingDir:  dir,
@@ -174,8 +165,6 @@ func TestCheckBranchGuard_TransientFailureDoesNotLatch(t *testing.T) {
 		t.Fatal("fired latch set despite failed branch determination -- transient failure permanently silences the advisory for the rest of the run")
 	}
 
-	// Recovery: once the branch becomes determinable (e.g. transient git lock
-	// cleared), the next check must still be able to warn on a protected branch.
 	a.branchGuard.cachedBranch = "main"
 	hint2 := a.checkBranchGuard()
 	if hint2 == "" {

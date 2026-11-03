@@ -1,9 +1,5 @@
 package agent
 
-// r461 outcome-feedback-loop tests: injection counting (render-time key
-// recording), run-end write-back (InjectedRuns/AfterSuccess/AfterFail),
-// idempotence per run, and the effectiveness gate at render time.
-
 import (
 	"encoding/json"
 	"os"
@@ -13,22 +9,18 @@ import (
 	"time"
 )
 
-// trajOutcomeIsolationHome isolates HOME so tests never touch any
-// home-relative state (same discipline as the sibling traj_*_test.go files).
 func trajOutcomeIsolationHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // Windows parity, harmless elsewhere
+	t.Setenv("USERPROFILE", home)
 	return home
 }
 
-// trajOutcomeStorePath returns the learnings file path under dir.
 func trajOutcomeStorePath(dir string) string {
 	return filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl")
 }
 
-// writeTrajOutcomeFile seeds the store with the given entries (JSONL).
 func writeTrajOutcomeFile(t *testing.T, dir string, entries ...trajectoryLearning) {
 	t.Helper()
 	path := trajOutcomeStorePath(dir)
@@ -49,7 +41,6 @@ func writeTrajOutcomeFile(t *testing.T, dir string, entries ...trajectoryLearnin
 	}
 }
 
-// loadTrajOutcomeFile reads the store entries back for assertions.
 func loadTrajOutcomeFile(t *testing.T, dir string) []trajectoryLearning {
 	t.Helper()
 	s := newTrajIntelState()
@@ -61,7 +52,6 @@ func loadTrajOutcomeFile(t *testing.T, dir string) []trajectoryLearning {
 	return entries
 }
 
-// trajOutcomeFindByInsight returns the entry whose Insight matches.
 func trajOutcomeFindByInsight(t *testing.T, entries []trajectoryLearning, insight string) trajectoryLearning {
 	t.Helper()
 	for _, l := range entries {
@@ -73,9 +63,6 @@ func trajOutcomeFindByInsight(t *testing.T, entries []trajectoryLearning, insigh
 	return trajectoryLearning{}
 }
 
-// TestEffectivenessGatedThreshold pins the gate semantics directly:
-// >=3 measured injections AND success ratio <0.4 retires an entry;
-// fewer samples or a higher ratio never gate, whatever the raw counts.
 func TestEffectivenessGatedThreshold(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -104,10 +91,6 @@ func TestEffectivenessGatedThreshold(t *testing.T) {
 	}
 }
 
-// TestInjectionOutcomeCountingIdempotent verifies the full write-back loop:
-// render records the injected identities, run-close bumps each entry once,
-// a second close without an intervening render is a no-op, and a fresh
-// render + failed run bumps the fail counter.
 func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
@@ -121,7 +104,6 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 
 	s := newTrajIntelState()
 
-	// This run's system prompt injected both entries.
 	section := s.RenderPromptSection(dir)
 	if !strings.Contains(section, "insight a") || !strings.Contains(section, "insight b") {
 		t.Fatalf("both entries should render before outcome accounting, got: %q", section)
@@ -130,7 +112,6 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 		t.Fatalf("injectedThisRun should hold 2 keys, got %d", len(s.injectedThisRun))
 	}
 
-	// Run ends successfully.
 	s.recordInjectionOutcome(dir, true)
 
 	entries := loadTrajOutcomeFile(t, dir)
@@ -144,8 +125,6 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 		}
 	}
 
-	// Second close without a fresh render must not double-count (the
-	// injected-key set is consumed by the first close).
 	s.recordInjectionOutcome(dir, false)
 	entries = loadTrajOutcomeFile(t, dir)
 	for _, insight := range []string{"insight a", "insight b"} {
@@ -158,7 +137,6 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 		}
 	}
 
-	// A new run re-renders (fresh injection) and fails: counters move once.
 	s.RenderPromptSection(dir)
 	s.recordInjectionOutcome(dir, false)
 	entries = loadTrajOutcomeFile(t, dir)
@@ -173,9 +151,6 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 	}
 }
 
-// TestInjectionOutcomeRenderRepeatNoDoubleCount verifies that rendering the
-// same store multiple times within one run (system prompt is rebuilt per
-// iteration) counts each entry at most once at run close (set semantics).
 func TestInjectionOutcomeRenderRepeatNoDoubleCount(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
@@ -202,10 +177,6 @@ func TestInjectionOutcomeRenderRepeatNoDoubleCount(t *testing.T) {
 	}
 }
 
-// TestLowSuccessRateFiltering verifies entries with InjectedRuns>=3 and
-// success ratio <0.4 are skipped at render time while healthy and unmeasured
-// entries still consume slots. Categories differ so category dedupe does not
-// interfere with the gate under test.
 func TestLowSuccessRateFiltering(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
@@ -213,9 +184,9 @@ func TestLowSuccessRateFiltering(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
 	writeTrajOutcomeFile(t, dir,
-		trajectoryLearning{Timestamp: now, Type: "optimization", Category: "over-exploration", Insight: "bad insight", InjectedRuns: 5, AfterSuccess: 1, AfterFail: 4}, // 0.2 < 0.4 -> skip
-		trajectoryLearning{Timestamp: now, Type: "recovery", Category: "error-recovery", Insight: "good insight", InjectedRuns: 5, AfterSuccess: 4, AfterFail: 1},      // 0.8 -> keep
-		trajectoryLearning{Timestamp: now, Type: "strategy", Category: "efficient-completion", Insight: "fresh insight"},                                               // no data -> keep
+		trajectoryLearning{Timestamp: now, Type: "optimization", Category: "over-exploration", Insight: "bad insight", InjectedRuns: 5, AfterSuccess: 1, AfterFail: 4},
+		trajectoryLearning{Timestamp: now, Type: "recovery", Category: "error-recovery", Insight: "good insight", InjectedRuns: 5, AfterSuccess: 4, AfterFail: 1},
+		trajectoryLearning{Timestamp: now, Type: "strategy", Category: "efficient-completion", Insight: "fresh insight"},
 	)
 
 	s := newTrajIntelState()
@@ -229,14 +200,12 @@ func TestLowSuccessRateFiltering(t *testing.T) {
 	if !strings.Contains(section, "fresh insight") {
 		t.Error("entry with no outcome data (InjectedRuns < 3) must not be filtered")
 	}
-	// The gated entry must not even be counted as injected for this run.
+
 	if s.injectedThisRun[trajKey{cat: "over-exploration", typ: "optimization"}] {
 		t.Error("gated entry must not be recorded as injected for outcome accounting")
 	}
 }
 
-// TestRenderNoDataNoFiltering verifies that when no entry has outcome data,
-// nothing is filtered.
 func TestRenderNoDataNoFiltering(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
@@ -255,10 +224,6 @@ func TestRenderNoDataNoFiltering(t *testing.T) {
 	}
 }
 
-// TestRenderHighSuccessRetainedAfterWriteBack covers the full loop end to
-// end through the persist path: learnings with outcome counters survive a
-// persist (pending buffer -> consolidation -> JSONL with omitempty tags) and
-// reload, the healthy entry still renders, and the retired one does not.
 func TestRenderHighSuccessRetainedAfterWriteBack(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
@@ -282,7 +247,6 @@ func TestRenderHighSuccessRetainedAfterWriteBack(t *testing.T) {
 		t.Fatalf("expected learnings file: %v", err)
 	}
 
-	// A fresh state (new agent process) renders from the persisted store.
 	s2 := newTrajIntelState()
 	section := s2.RenderPromptSection(dir)
 	if !strings.Contains(section, "keep insight") {

@@ -8,58 +8,31 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// queryConvergeState tracks whether the agent is stuck in a query
-// convergence failure -- repeatedly issuing semantically similar search/grep
-// queries across iterations without progressing to code action. This is
-// inspired by the "Agentic Information Need" concept (Joe Barrow, 2026):
-// when the agent's underlying information need cannot be satisfied by the
-// available retrieval tools, it reformulates the same query endlessly.
-//
-// Unlike empty-search-spiral (checks empty results) or wasted-exploration
-// (checks if results were used), this detector identifies the pattern where
-// the agent keeps *rephrasing the same conceptual question* without ever
-// reaching a point where it can act. It uses lightweight token-overlap
-// similarity (Jaccard) -- zero LLM cost.
 type queryConvergeState struct {
 	mu sync.Mutex
 
-	// recent queries with their iteration number
 	queries []queryRecord
 
-	// iteration of last code-modifying tool call (edit, write, etc.)
 	lastActionIter int
 
-	// whether a warning has been issued this run (#3380 delivery
-	// observability; NOT a gate - the cap is enforced by warnCount alone,
-	// #3570)
 	warned bool
 
-	// total warnings issued (cap at 2 per run)
 	warnCount int
 }
 
 type queryRecord struct {
-	tokens    map[string]bool // tokenized query
+	tokens    map[string]bool
 	iteration int
 	toolName  string
 }
 
-// searchTools whose arguments contain user-facing query strings.
 var qcSearchTools = map[string]bool{
 	"grep":         true,
 	"search_files": true,
 	"code_search":  true,
 	"web_search":   true,
-	// #1483 case B: glob EXCLUDED - its pattern is path syntax
-	// (internal/agent/*.go), not a natural-language query; tokenizing it
-	// into a bag-of-words made three DIFFERENT packages' globs look like
-	// the same question rephrased (Jaccard 0.5 over shared path tokens)
-	// and injected "try a different strategy" into healthy exploration.
 }
 
-// qcActionTools that indicate the agent moved beyond exploration.
-// Derived from the canonical sourceMutatingTools superset plus command/git
-// tools (#738).
 var qcActionTools = derivedEditTools(map[string]bool{
 	"run_command": true,
 	"git_commit":  true,
@@ -80,7 +53,6 @@ func (q *queryConvergeState) reset() {
 	q.warnCount = 0
 }
 
-// recordToolCall logs search queries and code actions.
 func (q *queryConvergeState) recordToolCall(toolName, args string, iteration int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -94,7 +66,6 @@ func (q *queryConvergeState) recordToolCall(toolName, args string, iteration int
 		return
 	}
 
-	// Extract the query string from common argument patterns
 	queryStr := qcExtractQuery(args)
 	if queryStr == "" {
 		return
@@ -111,7 +82,6 @@ func (q *queryConvergeState) recordToolCall(toolName, args string, iteration int
 		toolName:  toolName,
 	})
 
-	// Keep a bounded window
 	if len(q.queries) > 12 {
 		q.queries = q.queries[len(q.queries)-12:]
 	}
@@ -126,9 +96,6 @@ func (q *queryConvergeState) markUndelivered() {
 	}
 }
 
-// maybeWarn checks if the agent is stuck in a convergence failure loop.
-// Fires when 3+ search queries in the recent window are highly similar to
-// each other (>40% avg pairwise Jaccard) and no code action has followed.
 func (q *queryConvergeState) maybeWarn(iteration int) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -141,14 +108,11 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 		return ""
 	}
 
-	// If the agent has taken a code action recently (within last 2 iterations
-	// of the most recent query), it's not stuck.
 	mostRecent := q.queries[len(q.queries)-1]
 	if q.lastActionIter >= 0 && q.lastActionIter >= mostRecent.iteration-2 {
 		return ""
 	}
 
-	// Compute average pairwise similarity across the recent window
 	window := q.queries
 	if len(window) > 6 {
 		window = window[len(window)-6:]
@@ -167,12 +131,10 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 	}
 	avgSim := totalSim / float64(pairCount)
 
-	// High similarity threshold: queries are conceptually the same question
 	if avgSim < 0.35 {
 		return ""
 	}
 
-	// All queries must span at least 2 different iterations (not all same turn)
 	iters := make(map[int]bool)
 	for _, qr := range window {
 		iters[qr.iteration] = true
@@ -186,8 +148,6 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 
 	debug.Log("query-converge", "convergence failure detected: avgSim=%.2f, queries=%d, iters=%d", avgSim, len(window), len(iters))
 
-	// #3570: the second (final) warning escalates - the first hint was
-	// seen and the loop continued anyway.
 	prefix := "[query-convergence] "
 	if q.warnCount == 2 {
 		prefix = "[query-convergence][escalated] still looping after prior hint; "
@@ -195,9 +155,8 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 	return prefix + qcIntToStr(len(window)) + " similar queries across " + qcIntToStr(len(iters)) + " iterations (avg similarity: " + qcFloatToStr(avgSim) + "). Try different search strategy or proceed with available context."
 }
 
-// qcExtractQuery pulls the query/pattern string from tool arguments JSON.
 func qcExtractQuery(args string) string {
-	// Try common field names
+
 	for _, field := range []string{"\"query\"", "\"pattern\"", "\"q\""} {
 		if val := extractJSONStringFieldQC(args, field); val != "" {
 			return val
@@ -206,14 +165,13 @@ func qcExtractQuery(args string) string {
 	return ""
 }
 
-// extractJSONStringFieldQC extracts a string value for a JSON key.
 func extractJSONStringFieldQC(json, field string) string {
 	idx := strings.Index(json, field)
 	if idx == -1 {
 		return ""
 	}
 	rest := json[idx+len(field):]
-	// Skip whitespace and colon
+
 	for len(rest) > 0 && (rest[0] == ' ' || rest[0] == ':' || rest[0] == '\t' || rest[0] == '\n') {
 		rest = rest[1:]
 	}
@@ -235,26 +193,10 @@ func extractJSONStringFieldQC(json, field string) string {
 	return b.String()
 }
 
-// qcIsCJK reports whether r belongs to one of the CJK writing systems that
-// are treated as connected text during tokenization (#1156). ASCII word
-// boundaries do not exist inside CJK runs, so CJK runes must participate in
-// tokens instead of acting as separators.
 func qcIsCJK(r rune) bool {
 	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
-// qcTokenize converts a query string into a set of lowercase tokens.
-//
-// ASCII alphanumeric runs become whole-word tokens as before. Consecutive
-// CJK text becomes overlapping rune bigrams (#1156):
-//   - character-wise tokens would be discarded by the short-token rule and
-//     would lose shared-prefix information between related queries;
-//   - whole-run tokens would collapse unrelated queries sharing any prefix
-//     into identical sets.
-//
-// A lone single-rune CJK run keeps its rune so minimal CJK queries stay
-// visible instead of producing an empty token set. Mixed CJK/ASCII queries
-// contribute tokens from both scripts.
 func qcTokenize(s string) map[string]bool {
 	tokens := make(map[string]bool)
 	var word strings.Builder
@@ -269,7 +211,7 @@ func qcTokenize(s string) map[string]bool {
 		if len(w) <= 1 {
 			return
 		}
-		// Skip very common stop words
+
 		switch w {
 		case "the", "and", "for", "with", "that", "this", "from", "into",
 			"are", "was", "not", "but", "all", "can", "has", "have",
@@ -282,8 +224,7 @@ func qcTokenize(s string) map[string]bool {
 		switch len(cjkRun) {
 		case 0:
 		case 1:
-			// Keep the single rune so one-character CJK queries still enter
-			// the query window instead of being dropped entirely.
+
 			tokens[string(cjkRun)] = true
 		default:
 			for i := 0; i+1 < len(cjkRun); i++ {
@@ -311,13 +252,12 @@ func qcTokenize(s string) map[string]bool {
 	return tokens
 }
 
-// qcJaccard computes Jaccard similarity between two token sets.
 func qcJaccard(a, b map[string]bool) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
 	var intersection, union int
-	// Iterate over the smaller set
+
 	if len(a) > len(b) {
 		a, b = b, a
 	}
@@ -356,7 +296,7 @@ func qcIntToStr(n int) string {
 }
 
 func qcFloatToStr(f float64) string {
-	// Simple 2 decimal place formatting
+
 	whole := int(f)
 	frac := int((f - float64(whole)) * 100)
 	if frac < 0 {

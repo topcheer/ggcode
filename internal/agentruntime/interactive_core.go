@@ -33,15 +33,12 @@ type InteractiveRuntimeCore struct {
 	SaveMemoryTool   *tool.SaveMemoryTool
 	DeleteMemoryTool *tool.DeleteMemoryTool
 	StartupAssets    StartupAssets
-	// StartupNotices (sa-45): user-actionable startup-time findings
-	// (MCP merge/gate warnings, memory consolidation findings). Flushed as
-	// system messages on the TUI first frame; empty in the common case.
-	StartupNotices []string
-	CommandManager *commands.Manager
-	Tunnel         *TunnelHost // unified tunnel event management
-	configAccess   *configAccess
-	configPath     string // ggcode.yaml the session loaded (hot-reload watch target)
-	workingDir     string
+	StartupNotices   []string
+	CommandManager   *commands.Manager
+	Tunnel           *TunnelHost
+	configAccess     *configAccess
+	configPath       string
+	workingDir       string
 
 	mcpCtx          context.Context
 	mcpCancel       context.CancelFunc
@@ -49,13 +46,11 @@ type InteractiveRuntimeCore struct {
 	configHotReload *ConfigHotReload
 	skillHotReload  *SkillHotReload
 
-	// samplingProvider is THIS runtime's sampling provider (#1592-B) -
-	// bound via closure, never a package global.
 	samplingProvider provider.Provider
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
-	// Apply LSP server overrides from config before registering tools.
+
 	lsp.SetServerOverrides(cfg.LSPServers)
 
 	registry := tool.NewRegistry()
@@ -64,24 +59,15 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	}
 
 	mergedServers, mergeWarnings := mcp.MergeStartupServersWithDeleted(workingDir, cfg.MCPServers, cfg.DeletedMCPServers)
-	// Containment: workspace .mcp.json servers launch only after the user
-	// approved them for THIS workspace (internal/mcp/project_gate.go).
-	// A cloned repo must not reach child-process execution unasked.
+
 	mergedServers, gateWarnings := applyProjectMCPGate(mergedServers, workingDir)
-	// Startup notices (sa-45): merge/gate warnings are user-actionable
-	// ("server X held out pending ggcode mcp approve"), so they ride the
-	// notice channel to the TUI first frame instead of living only in
-	// debug logs. debug.Log stays for log-file parity.
+
 	notices := append([]string{}, mergeWarnings...)
 	notices = append(notices, gateWarnings...)
 	for _, warning := range notices {
 		debug.Log("mcp", "%s", warning)
 	}
-	// Placeholder core so the closure below can reach the per-runtime
-	// provider field set later by SetConfigAgent (#1592-B).
-	// StartupNotices is NOT set here: the fresh literal at the tail of
-	// this function replaces the whole struct and would orphan it; it
-	// is carried explicitly there instead.
+
 	core := &InteractiveRuntimeCore{}
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry, workingDir)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
@@ -98,10 +84,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return nil, err
 	}
 
-	// Load gRPC plugins (type: grpc)
 	grpcMgr := grpcplugin.NewManager(workingDir)
 	grpcConfigs := buildGRPCPluginConfigs(cfg.Plugins)
-	_ = grpcMgr.LoadAll(grpcConfigs, registry) // errors are per-plugin, not fatal
+	_ = grpcMgr.LoadAll(grpcConfigs, registry)
 
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
@@ -111,25 +96,12 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	deleteMemoryTool := tool.NewDeleteMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(deleteMemoryTool)
 
-	// memory visibility (SelfMem curator gap): read-side inventory so the
-	// agent can see, update (save_memory same-key), and prune stored
-	// memories instead of operating blind.
 	_ = registry.Register(tool.NewListMemoryTool(autoMem, projectAutoMem))
 
-	// r381 (memory-as-tool): the write side has save/delete tools but the
-	// experience store's recall API was only reachable through the automatic
-	// gates (run start + first failure). This read-only tool lets the agent
-	// consult past cases at ANY decision moment (AgeMem arXiv 2601.01885,
-	// Hindsight arXiv 2512.12818).
 	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
 
-	// r449 (workflow memory): cross-session tool sequence mining as a
-	// read-only tool, same consumption shape as recall_experience above -
-	// the agent consults recurring workflows (prefix -> dominant next step)
-	// at planning moments instead of re-deriving tool order every run.
 	_ = registry.Register(tool.NewRecallToolFlowTool())
 
-	// Config tool — unified config management across all config files
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
 
@@ -139,14 +111,11 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return BuildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
 
-	// Build tunnel host with P2P enabled by default.
 	th := NewTunnelHost()
 	upgCfg := tunnel.DefaultUpgradeConfig()
 	upgCfg.Enabled = !cfg.P2P.Disabled
 	th.SetP2PEnabled(webrtc.HostPeerFactory(), upgCfg)
 
-	// #1592-B: reuse the placeholder core - the sampling closure above
-	// captures THIS instance; a fresh literal would orphan it.
 	*core = InteractiveRuntimeCore{
 		Registry:         registry,
 		MCPManager:       mcpMgr,
@@ -166,49 +135,35 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	return core, nil
 }
 
-// SetConfigAgent injects the agent into the config tool for provider hot-reload.
-// Must be called after the agent is created. Without this, config changes to
-// vendor/endpoint/model/api_key will persist to disk but won't take effect
-// until the next session restart.
 func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if c.configAccess != nil {
 		c.configAccess.SetAgent(ag)
 	}
 	if ag != nil {
-		// #1592-B: per-runtime binding only; the package-global setter
-		// stayed behind for compatibility but nothing else uses it.
+
 		c.samplingProvider = ag.Provider()
 	}
 }
 
-// SetConfigPath records which ggcode.yaml the session loaded, enabling
-// the config hot-reload watcher in StartBackgroundServices. Call before
-// StartBackgroundServices; without it no config hot-reload runs.
 func (c *InteractiveRuntimeCore) SetConfigPath(path string) {
 	c.configPath = path
 }
 
-// SetConfigUINotify sets an optional callback for UI refresh after provider changes.
 func (c *InteractiveRuntimeCore) SetConfigUINotify(fn func()) {
 	if c.configAccess != nil {
 		c.configAccess.SetUINotify(fn)
 	}
 }
 
-// StartBackgroundServices launches all background services: MCP connections, etc.
-// Must be called after UI callbacks are set (SetConfigUINotify, MCP OnUpdate, etc.)
-// so that status changes are forwarded to the UI layer.
 func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 	if c.MCPManager != nil {
 		c.mcpCtx, c.mcpCancel = context.WithCancel(context.Background())
 		c.MCPManager.StartBackground(c.mcpCtx)
 
-		// Start MCP config hot-reload watcher.
 		c.mcpHotReload = NewMCPHotReload(config.ConfigDir(), c.workingDir, c.MCPManager)
 		c.mcpHotReload.Start(c.mcpCtx)
 	}
 
-	// Start skill/command hot-reload watcher.
 	if c.CommandManager != nil {
 		dirs := c.CommandManager.WatchedDirs()
 		if len(dirs) > 0 {
@@ -217,14 +172,12 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 		}
 	}
 
-	// Start ggcode.yaml/vendors.yaml config hot-reload (#763).
 	if c.configAccess != nil && c.configPath != "" {
 		c.configHotReload = NewConfigHotReload(c.configPath, c.configAccess)
 		c.configHotReload.Start(c.mcpCtx)
 	}
 }
 
-// Close stops all background services. Call on shutdown.
 func (c *InteractiveRuntimeCore) Close() {
 	if c.mcpCancel != nil {
 		c.mcpCancel()
@@ -235,16 +188,11 @@ func (c *InteractiveRuntimeCore) Close() {
 	if c.Tunnel != nil {
 		c.Tunnel.Close()
 	}
-	// Shut down tools that hold resources (e.g. browser Chrome processes).
-	// This prevents resource leaks - without it, Chrome processes accumulate.
+
 	if c.Registry != nil {
 		c.Registry.CloseAll()
 	}
-	// LSP sessions live in the lsp package's global manager and are NOT
-	// reachable via the Registry (the lsp tools do not implement
-	// tool.Closer) - CloseAll above never touched them. Tear them down with
-	// the proper shutdown/exit handshake so language servers do not rely on
-	// noticing stdin EOF at process death (exit-path review #R192).
+
 	lsp.ShutdownAll()
 }
 
@@ -256,7 +204,7 @@ func NewSkillTool(
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
-	onMetric func(metrics.MetricEvent), // #3296: forwarded to skill sub-agents
+	onMetric func(metrics.MetricEvent),
 	systemPromptBuilder func(task, agentType string) string,
 ) tool.SkillTool {
 	return tool.SkillTool{
@@ -273,8 +221,6 @@ func NewSkillTool(
 	}
 }
 
-// buildGRPCPluginConfigs filters plugin config entries for type:"grpc"
-// and converts them to GRPCPluginConfig.
 func buildGRPCPluginConfigs(entries []config.PluginConfigEntry) []grpcplugin.GRPCPluginConfig {
 	var out []grpcplugin.GRPCPluginConfig
 	for _, e := range entries {

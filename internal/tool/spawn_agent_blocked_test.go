@@ -4,15 +4,13 @@ import (
 	"testing"
 )
 
-// TestSubAgentBlockedTools verifies the blocklist contains all expected entries.
 func TestSubAgentBlockedTools(t *testing.T) {
 	expected := map[string]bool{
 		"ask_user":    true,
 		"spawn_agent": true,
-		// r377: nested best-of-N fan-out from candidates is blocked too.
+
 		"best_of_n": true,
-		// compact_context (CAT) compacts the OWNING agent's conversation;
-		// a one-shot sub-agent must not compact its parent.
+
 		"compact_context":   true,
 		"wait_agent":        true,
 		"list_agents":       true,
@@ -21,9 +19,7 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"teammate_shutdown": true,
 		"team_create":       true,
 		"team_delete":       true,
-		// #864: swarm board + messaging tools are now blocked too - a
-		// sub-agent must not manipulate the shared task board, message
-		// teammates, or trigger other agents' approval loops.
+
 		"swarm_task_create":   true,
 		"swarm_task_claim":    true,
 		"swarm_task_complete": true,
@@ -32,8 +28,7 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"teammate_list":       true,
 		"send_message":        true,
 		"lanchat":             true,
-		// r436: nested workflows inside sub-agents would multiply spawn
-		// slots unboundedly; one nesting level only.
+
 		"workflow_run":  true,
 		"a2a_remote":    true,
 		"a2a_send_task": true,
@@ -48,27 +43,21 @@ func TestSubAgentBlockedTools(t *testing.T) {
 	}
 }
 
-// TestSubAgentBlockedTools_RemovedFromClone verifies that applying the blocklist
-// to a cloned registry actually removes all blocked tools, even when allowedTools
-// explicitly requests them.
 func TestSubAgentBlockedTools_RemovedFromClone(t *testing.T) {
 	reg := NewRegistry()
 	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
-	// Simulate the BuildToolSet logic: unconditional removal
 	cloned := reg.Clone()
 	for _, name := range subAgentBlockedTools {
 		cloned.Unregister(name)
 	}
 
-	// All blocked tools must be absent
 	for _, blocked := range subAgentBlockedTools {
 		if _, exists := cloned.tools[blocked]; exists {
 			t.Errorf("blocked tool %q should not be in cloned registry", blocked)
 		}
 	}
 
-	// Normal tools must still be present
 	if _, exists := cloned.tools["read_file"]; !exists {
 		t.Error("read_file should still be present after blocklist removal")
 	}
@@ -77,21 +66,15 @@ func TestSubAgentBlockedTools_RemovedFromClone(t *testing.T) {
 	}
 }
 
-// TestSubAgentBlockedTools_SurvivesAllowedFilter verifies that even when a
-// hypothetical allowedTools filter includes blocked tool names, the blocked
-// tools are already gone from the clone before the allowlist filter runs.
 func TestSubAgentBlockedTools_SurvivesAllowedFilter(t *testing.T) {
 	reg := NewRegistry()
 	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
-	// Step 1: unconditional block (runs first in BuildToolSet)
 	cloned := reg.Clone()
 	for _, name := range subAgentBlockedTools {
 		cloned.Unregister(name)
 	}
 
-	// Step 2: allowlist filter (simulated — would normally keep only allowed tools)
-	// Even if "ask_user" is in the allowed list, it's already gone
 	allowed := []string{"ask_user", "spawn_agent", "read_file"}
 	allowedSet := make(map[string]bool, len(allowed))
 	for _, a := range allowed {
@@ -104,21 +87,17 @@ func TestSubAgentBlockedTools_SurvivesAllowedFilter(t *testing.T) {
 		}
 	}
 
-	// Blocked tools must still be absent
 	for _, blocked := range subAgentBlockedTools {
 		if _, exists := cloned.tools[blocked]; exists {
 			t.Errorf("blocked tool %q survived allowlist filter — blocklist not applied first", blocked)
 		}
 	}
-	// read_file (allowed, non-blocked) must survive
+
 	if _, exists := cloned.tools["read_file"]; !exists {
 		t.Error("read_file should survive both blocklist and allowlist filter")
 	}
 }
 
-// TestSkillToolClonePreservesSystemPromptBuilder verifies that Clone() copies
-// the SystemPromptBuilder field so cloned tool registries (used by teammates)
-// keep the builder.
 func TestSkillToolClonePreservesSystemPromptBuilder(t *testing.T) {
 	builder := func(task, agentType string) string { return "test-prompt" }
 	st := SkillTool{
@@ -132,7 +111,7 @@ func TestSkillToolClonePreservesSystemPromptBuilder(t *testing.T) {
 	if clonedSkill.SystemPromptBuilder == nil {
 		t.Fatal("Clone() should preserve SystemPromptBuilder field")
 	}
-	// Verify it's the same function by calling it
+
 	result := clonedSkill.SystemPromptBuilder("task", "Explore")
 	if result != "test-prompt" {
 		t.Errorf("cloned SystemPromptBuilder returned %q, expected %q", result, "test-prompt")

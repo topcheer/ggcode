@@ -176,8 +176,7 @@ func TestAgentToolDescriptionsClarifyOneShotRuns(t *testing.T) {
 	}
 
 	waitDesc := WaitAgentTool{}.Description()
-	// Polling-only semantics: short re-poll guidance plus the invariant
-	// that waiting never injects instructions into the run.
+
 	if !strings.Contains(waitDesc, "re-poll") || !strings.Contains(waitDesc, "never sends instructions") {
 		t.Fatalf("wait_agent description should guide short re-polling and observe-only behavior, got %q", waitDesc)
 	}

@@ -178,7 +178,7 @@ func helperSetup() {
 	os.Setenv("MY_VAR", "value")
 }
 `
-	// os.Setenv in non-Test functions should not be flagged.
+
 	result := checkTestIsolation("foo_test.go", "", newContent)
 	if result != "" {
 		t.Errorf("expected empty result for os.Setenv in non-test function, got %q", result)
@@ -204,7 +204,7 @@ func TestBar(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected non-empty result for multiple violations")
 	}
-	// Should categorize the violations.
+
 	if !contains(result, "os.Setenv") {
 		t.Errorf("expected os.Setenv category, got %q", result)
 	}
@@ -243,5 +243,3 @@ func add(a, b int) int { return a + b }
 		t.Errorf("expected empty result for clean test, got %q", result)
 	}
 }
-
-// contains and indexOf are defined in reflection_test.go

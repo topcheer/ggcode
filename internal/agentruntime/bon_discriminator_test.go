@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// r439 probes: execution-based tie-breaking for best-of-N. Unit-level —
-// no LLM involved; the discriminator sub-agent is a fake whose final
-// message carries the DISCRIMINATION marker.
-
 func TestParseDiscrimination(t *testing.T) {
 	cases := []struct {
 		name string
@@ -39,17 +35,17 @@ func TestPickTiePair(t *testing.T) {
 		{Name: "c1", Verdict: "failed", Worktree: "/wt1", Result: "boom"},
 		{Name: "c2", Verdict: "succeeded", Worktree: "/wt2", Result: "ok"},
 		{Name: "c3", Verdict: "partial", Worktree: "/wt3", Result: "half"},
-		{Name: "c4", Verdict: "succeeded", Result: "no worktree"}, // skipped: isolation none
+		{Name: "c4", Verdict: "succeeded", Result: "no worktree"},
 	}
 	a, b, ok := pickTiePair(cands)
 	if !ok || a != 1 || b != 2 {
 		t.Fatalf("pickTiePair = (%d,%d,%v), want (1,2,true)", a, b, ok)
 	}
-	// Single discriminable candidate: no pair.
+
 	if _, _, ok := pickTiePair(cands[:2]); ok {
 		t.Fatal("pair found with only one worktree-backed candidate")
 	}
-	// Nothing at all.
+
 	if _, _, ok := pickTiePair(nil); ok {
 		t.Fatal("pair found in empty set")
 	}
@@ -122,7 +118,7 @@ func TestDiscriminateTieInconclusiveNoWinner(t *testing.T) {
 }
 
 func TestDiscriminateTieUnparseableAndFailedFallback(t *testing.T) {
-	// Unparseable final message.
+
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": discSnap("cand-1", "I ran out of patience."),
@@ -130,7 +126,7 @@ func TestDiscriminateTieUnparseableAndFailedFallback(t *testing.T) {
 	if _, _, ok := discriminateTie(context.Background(), sp, sn, tieCands(), BestOfNOptions{Task: "task", Poll: 10 * time.Millisecond}); ok {
 		t.Fatal("unparseable output must not produce a winner")
 	}
-	// Discriminator itself failed.
+
 	sn2 := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": {ID: "cand-1", Status: subagent.StatusFailed, Error: "boom"},
 	}}
@@ -151,6 +147,4 @@ func TestDiscriminateTieNoPairNoLaunch(t *testing.T) {
 	}
 }
 
-// Compilation guard: tool.LaunchOptions must keep the fields the
-// discriminator relies on.
 var _ = tool.LaunchOptions{Name: "", Task: "", DisplayTask: "", Tools: nil}

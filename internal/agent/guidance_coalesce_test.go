@@ -59,7 +59,7 @@ func TestCoalesceGuidance_DedupByTag(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("expected 2 hints after dedup, got %d: %v", len(result), result)
 	}
-	// First occurrence is kept.
+
 	if !strings.Contains(result[0], "4 consecutive calls") {
 		t.Errorf("expected first occurrence to be kept, got: %s", result[0])
 	}
@@ -75,11 +75,11 @@ func TestCoalesceGuidance_CapToMax(t *testing.T) {
 		"[hint-6] sixth advisory",
 	}
 	result := coalesceGuidance(hints)
-	// Should be capped to coalesceMaxHints (3) + 1 suppression summary.
+
 	if len(result) != coalesceMaxHints+1 {
 		t.Fatalf("expected %d results (capped + summary), got %d: %v", coalesceMaxHints+1, len(result), result)
 	}
-	// Last entry should be the suppression summary.
+
 	if !strings.Contains(result[len(result)-1], "[guidance-coalesced]") {
 		t.Errorf("expected last entry to be suppression summary, got: %s", result[len(result)-1])
 	}
@@ -97,7 +97,7 @@ func TestCoalesceGuidance_PrioritizeCritical(t *testing.T) {
 		"[hint-4] advisory four",
 	}
 	result := coalesceGuidance(hints)
-	// Critical should be retained even when cap is exceeded.
+
 	found := false
 	for _, h := range result {
 		if strings.Contains(h, "this must not be suppressed") {
@@ -119,7 +119,7 @@ func TestCoalesceGuidance_AllCritical(t *testing.T) {
 		"[BLOCKED] fifth blocked",
 	}
 	result := coalesceGuidance(hints)
-	// Even with all critical, should be capped at coalesceMaxHints.
+
 	if len(result) > coalesceMaxHints+1 {
 		t.Fatalf("expected at most %d results, got %d: %v", coalesceMaxHints+1, len(result), result)
 	}
@@ -167,7 +167,7 @@ func TestCoalesceGuidance_SuppressionSummaryFormat(t *testing.T) {
 	if !strings.Contains(summary, "suppressed") {
 		t.Errorf("summary missing 'suppressed': %s", summary)
 	}
-	// Should list the suppressed tag names.
+
 	if !strings.Contains(summary, "[hint-4]") {
 		t.Errorf("summary missing suppressed tag [hint-4]: %s", summary)
 	}
@@ -181,17 +181,16 @@ func TestCoalesceGuidance_UnTaggedHints(t *testing.T) {
 		"untagged fourth warning",
 		"untagged fifth warning",
 	}
-	// Without tags, dedup can't work, but cap should still apply.
+
 	result := coalesceGuidance(hints)
-	// No dedup possible on untagged hints, so all 5 enter, then cap kicks in.
+
 	if len(result) > coalesceMaxHints+1 {
 		t.Fatalf("expected at most %d, got %d", coalesceMaxHints+1, len(result))
 	}
 }
 
 func TestCoalesceGuidance_ExactAtCap(t *testing.T) {
-	// Exactly coalesceMaxHints should not trigger suppression.
-	// With cap=1, a single hint should pass through cleanly.
+
 	hints := []string{
 		"[hint-1] one",
 	}
@@ -238,8 +237,7 @@ func TestCoalesceGuidance_MixedCriticalAndAdvisory(t *testing.T) {
 		"[CRITICAL] must keep this",
 	}
 	result := coalesceGuidance(hints)
-	// Critical takes a slot, so 2 advisory + 1 critical + summary = 4
-	// But critical is retained, advisory fills remaining, rest suppressed.
+
 	criticalFound := false
 	for _, h := range result {
 		if strings.Contains(h, "must keep this") {
@@ -249,7 +247,7 @@ func TestCoalesceGuidance_MixedCriticalAndAdvisory(t *testing.T) {
 	if !criticalFound {
 		t.Errorf("critical hint missing from result: %v", result)
 	}
-	// Should have a suppression summary since some were dropped.
+
 	hasSummary := false
 	for _, h := range result {
 		if strings.Contains(h, "guidance-coalesced") {

@@ -1,20 +1,12 @@
 package agent
 
-// Regression tests for issue #1142:
-//   1. Delta comparison used fset.Position().String() ("line:column") as the
-//      old/new key - inserting a comment line above an existing function
-//      shifted it and re-reported it as newly introduced.
-//   2. checkExcessiveParams was never registered in the write integrity
-//      registry, so the detector was dead code.
-
 import (
 	"go/token"
 	"testing"
 )
 
 func TestParamCountDelta_CommentInsertionAboveShiftsLines(t *testing.T) {
-	// Issue #1142 repro: old file has a 6-param function; new content inserts
-	// one comment line above it. Fingerprint-based delta must yield 0 warnings.
+
 	oldContent := `package main
 
 // existing header
@@ -34,7 +26,7 @@ func complex(a, b, c int, d, e string, f bool) {}
 }
 
 func TestParamCountDelta_LineDeletionAboveShiftsLines(t *testing.T) {
-	// Symmetric case: removing lines above also shifts positions upward.
+
 	oldContent := `package main
 
 func helper() {}
@@ -56,8 +48,7 @@ func complex(a, b, c int, d, e string, f bool) {}
 }
 
 func TestParamCountDelta_ParamChangeStillWarns(t *testing.T) {
-	// The fingerprint is content-based: adding a parameter to the same
-	// function is a genuine change and must still warn.
+
 	oldContent := `package main
 func complex(a, b, c int, d, e string) {}
 `
@@ -84,10 +75,7 @@ func TestPcFingerprint_PositionIndependent(t *testing.T) {
 	if a.pcFingerprint() == c.pcFingerprint() {
 		t.Error("different param counts must produce different fingerprints")
 	}
-	// #1184 changed the fingerprint identity from parameter NAMES to
-	// parameter TYPES: a pure rename of an already-flagged function's
-	// params must keep the fingerprint stable (same smell, nothing new
-	// introduced), while a type change still differentiates.
+
 	d := paramCountInstance{funcName: "f", pos: a.pos, count: 6,
 		params: []string{"x", "b", "c", "d", "e", "f"}}
 	if a.pcFingerprint() != d.pcFingerprint() {

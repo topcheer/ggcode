@@ -1,72 +1,5 @@
 package agent
 
-// Spiral of Hallucination Detector (Cross-Turn Epistemic Error Propagation)
-//
-// Research basis:
-//   - Zhang et al., "Agentic Uncertainty Quantification" (arXiv:2601.15703,
-//     January 2026, Salesforce AI Research). Introduces the "Spiral of
-//     Hallucination" -- when an agent makes an epistemic error at step t
-//     (e.g., an unverified assumption, a hedged guess), and that error
-//     becomes part of the context for step t+1, it transforms from an
-//     internal cognitive deficiency into an external "ground truth"
-//     constraint. All subsequent planning is biased toward an irreversible
-//     failure state. The key insight is that epistemic and aleatoric
-//     uncertainty are NOT independent in long trajectories: committing an
-//     epistemic error to history converts it into a false premise for future
-//     steps.
-//
-//   - Duan et al., "UProp: Uncertainty Propagation in Multi-Step Agentic
-//     Decision-Making" (arXiv:2506.17419, 2025). Mathematically proves
-//     how local epistemic errors compound into global trajectory failures.
-//
-//   - Kalai et al., "Why Language Models Hallucinate" (arXiv:2509.04664,
-//     2025). Shows that hallucination in multi-turn settings is primarily
-//     driven by the inability to distinguish earlier speculative content
-//     from grounded fact.
-//
-// Problem: ggcode has many detectors for epistemic uncertainty WITHIN a
-// single assistant turn (assumption_track, action_hedging, compounded_
-// uncertainty). But the Spiral of Hallucination is a CROSS-TURN phenomenon:
-//
-//  Turn 1: "I assume the database is PostgreSQL"   → assumption expressed
-//  Turn 3: "Since we're using PostgreSQL, I'll..." → assumption now treated
-//           as confirmed fact, no verification occurred
-//  Turn 5: "The PostgreSQL connection pool needs"  → fully committed to an
-//           unverified foundation
-//
-// The spiral occurs when the agent's own expressed uncertainty at turn N
-// is subsequently treated as established fact at turn N+2, N+3, etc.,
-// WITHOUT any intervening verification step (test run, confirmation,
-// explicit check). Each turn deepens the commitment to the unverified
-// foundation.
-//
-// What this detector does that others DON'T:
-//   - compounded_uncertainty.go: counts the TOTAL number of epistemic
-//     events (cumulative). This detector tracks the TEMPORAL PATTERN of
-//     uncertainty-then-commitment -- specifically, whether the agent
-//     LATER treats a previously-expressed uncertainty as established fact.
-//   - assumption_track.go: detects assumptions within one turn. This
-//     detector detects the OPPOSITE direction -- when an assumption from
-//     a prior turn is acted upon as fact in a later turn.
-//   - false_premise.go: detects when an agent's initial premise is wrong
-//     relative to codebase evidence. This detector detects when an agent's
-//     OWN prior uncertainty (regardless of whether it was right or wrong)
-//     is later treated as confirmed without verification.
-//
-// Design:
-//   - Records turns where the agent expresses epistemic uncertainty
-//     (assumptions, hedging, speculative language) and extracts topic
-//     keywords from those turns
-//   - In subsequent turns, detects when the agent uses assertive/committed
-//     language about those same topics (signaling the prior uncertainty
-//     has been silently promoted to "fact")
-//   - Triggers when the spiral pattern is detected: prior-uncertainty →
-//     later-commitment on the same topic without intervening verification
-//   - Zero LLM cost -- pure deterministic text pattern matching + keyword
-//     overlap
-//   - Fires at most once per run (advisory, non-blocking)
-//   - Resets on new user turn
-
 import (
 	"fmt"
 	"regexp"
@@ -74,45 +7,23 @@ import (
 )
 
 const (
-	// spiralMaxWarnings: max warnings per run.
 	spiralMaxWarnings = 1
 
-	// spiralMinGap: minimum turns between uncertainty and commitment
-	// for it to count as a spiral. Same-turn would just be inconsistency.
 	spiralMinGap = 2
 
-	// spiralMinTopicLen: minimum keyword length to track (avoid noise).
 	spiralMinTopicLen = 4
 
-	// spiralMaxTopics: maximum topics to track from uncertainty turns.
 	spiralMaxTopics = 15
 
-	// spiralMinCommittedTurns: how many subsequent committed statements
-	// about an unverified topic before triggering.
 	spiralMinCommittedTurns = 2
 )
 
-// spiralUncertaintyPattern matches language where the agent expresses
-// epistemic uncertainty about a specific topic.
 var spiralUncertaintyRe = regexp.MustCompile(`(?i)(?:I assume|assuming|I'm assuming|presumably|I think|probably|likely|my guess|if I had to guess|it seems like|appears to be|I believe this|without knowing|best guess|might be|could be)\b`)
 
-// spiralCommittedRe matches language where the agent treats a topic as
-// established fact (no hedging, asserting certainty).
 var spiralCommittedRe = regexp.MustCompile(`(?i)(?:since we(?:'re| are)|because (?:the|this|we)|given that|now that|as (?:we|the)|so (?:the|this|we)|therefore|this means|which means|the \w+ (?:is|was|has|uses|requires|needs))\b`)
 
-// spiralVerificationRe detects that a verification step occurred. Kept
-// tightly scoped to explicit first-person assertion phrases ONLY as a
-// fallback - generic words like test/build/error/result appear in nearly
-// every assistant narrative and previously disabled the detector on any
-// match (#161). The primary signal is the real tool-call event recorded
-// by recordSpiralVerification from the tool execution loop.
 var spiralVerificationRe = regexp.MustCompile(`(?i)(?:i (?:have |'ve )?(?:verified|confirmed|validated)\b|i ran (?:the )?(?:test|build|lint|check)s?\b)`)
 
-// spiralExecutionTools are tools whose results can actually validate or
-// refute a hypothesis (fix #167: counting ANY successful tool - incl.
-// read_file/grep - as verification re-silenced the detector, because real
-// agent turns almost always contain successful read-only calls while an
-// agent in a hallucination spiral characteristically keeps running them).
 var spiralExecutionTools = map[string]bool{
 	"run_command":         true,
 	"start_command":       true,
@@ -124,30 +35,13 @@ var spiralExecutionTools = map[string]bool{
 	"mobile_device":       true,
 }
 
-// spiralEffectGatedTools (r34, computer-use postmortems): multi-action GUI
-// tools whose SUCCESS does not imply observable effect - a browser click
-// returns ok even when an overlay swallowed it. For these, only a result
-// carrying the "effect: confirmed" marker (emitted by post-action effect
-// verification in the tool layer) counts as verification; a bare ok must
-// NOT clear hallucination-spiral protection (the opposite direction would
-// let a stream of no-effect clicks silently disable the detector).
 var spiralEffectGatedTools = map[string]bool{
 	"browser":         true,
 	"desktop_control": true,
 }
 
-// effectConfirmedMarker is emitted by tool-layer post-action effect
-// verification (r34): browser click/upload state checks etc.
 const effectConfirmedMarker = "effect: confirmed"
 
-// recordSpiralVerification marks that an execution-type tool call with
-// observable side effects succeeded this turn (fix #161: prose keyword
-// matching silently disabled the detector; #167: read-only tools must NOT
-// count - only tools that can validate/refute an assumption break the
-// spiral chain; #493 B: protection is PER-TOPIC - all topics tracked so
-// far are marked verified, and unlike the old global flag this state is
-// never reset by unrelated hedging; r34: effect-gated GUI tools need the
-// "effect: confirmed" marker, bare success is not verification).
 func (a *Agent) recordSpiralVerification(toolName, resultContent string) {
 	if a == nil || a.spiralState == nil {
 		return
@@ -163,11 +57,8 @@ func (a *Agent) recordSpiralVerification(toolName, resultContent string) {
 	}
 }
 
-// spiralTopicWordRe extracts candidate topic keywords from text near
-// uncertainty markers. Looks for nouns/technical terms.
 var spiralTopicWordRe = regexp.MustCompile(`\b([a-z][a-z0-9_-]{3,30})\b`)
 
-// Common stop words to exclude from topic extraction.
 var spiralStopWords = map[string]bool{
 	"that": true, "this": true, "with": true, "from": true, "have": true,
 	"will": true, "been": true, "they": true, "them": true, "what": true,
@@ -190,29 +81,17 @@ var spiralStopWords = map[string]bool{
 	"since": true, "because": true, "given": true, "therefore": true,
 }
 
-// spiralTrackedTopic represents a topic from a turn where uncertainty
-// was expressed, tracked for later committed usage.
 type spiralTrackedTopic struct {
-	word string
-	// sourceTurn is the turn where the uncertainty was expressed; used to
-	// enforce spiralMinGap (#493 A): commitment must be ≥spiralMinGap turns
-	// later to count - same-turn/gap-1 commitment is ordinary inconsistency,
-	// not a spiral.
+	word       string
 	sourceTurn int
-	// verified is per-topic (#493 B): once an execution-type verification
-	// succeeds after this topic's uncertainty, the topic is protected - a
-	// later unrelated hedge must NOT strip that protection (the old global
-	// verified bool was reset by ANY new uncertainty, so one "I think" about
-	// anything re-armed warnings on already-verified foundations).
-	verified bool
+	verified   bool
 }
 
-// spiralHallucinationState tracks the cross-turn spiral pattern.
 type spiralHallucinationState struct {
 	turn            int
 	warnings        int
-	topics          []spiralTrackedTopic // topics from prior uncertainty turns
-	committedCounts map[string]int       // topic -> count of committed assertions
+	topics          []spiralTrackedTopic
+	committedCounts map[string]int
 }
 
 func newSpiralHallucinationState() *spiralHallucinationState {
@@ -221,9 +100,6 @@ func newSpiralHallucinationState() *spiralHallucinationState {
 	}
 }
 
-// topicsAreVerified reports whether all currently tracked topics are
-// verified (#493 B). Kept for callers/tests that need the old aggregate
-// "is everything verified" view over the per-topic state.
 func (s *spiralHallucinationState) topicsAreVerified() bool {
 	if len(s.topics) == 0 {
 		return false
@@ -243,17 +119,13 @@ func (s *spiralHallucinationState) reset() {
 	s.committedCounts = make(map[string]int)
 }
 
-// extractSpiralTopics pulls candidate topic keywords from text segments
-// near uncertainty markers. Returns deduplicated lowercase keywords.
 func extractSpiralTopics(text string) []string {
 	var topics []string
 	seen := make(map[string]bool)
 
-	// Find all uncertainty markers and extract nearby words
 	locs := spiralUncertaintyRe.FindAllStringIndex(text, -1)
 	for _, loc := range locs {
-		// Look at a window after the uncertainty marker (where the topic
-		// being hedged usually appears)
+
 		windowStart := loc[1]
 		windowEnd := windowStart + 200
 		if windowEnd > len(text) {
@@ -282,10 +154,6 @@ func extractSpiralTopics(text string) []string {
 	return topics
 }
 
-// detectCommittedTopics finds topics from prior uncertainty turns that
-// appear in committed/assertive language in the current text. Only topics
-// that (a) are still unverified and (b) were expressed at least
-// spiralMinGap turns ago are eligible (#493).
 func detectCommittedTopics(text string, tracked []spiralTrackedTopic, curTurn int) []string {
 	if len(tracked) == 0 {
 		return nil
@@ -295,29 +163,25 @@ func detectCommittedTopics(text string, tracked []spiralTrackedTopic, curTurn in
 	var matched []string
 	seen := make(map[string]bool)
 
-	// Check if any committed language appears in the text
 	hasCommitted := spiralCommittedRe.MatchString(lowerText)
 	if !hasCommitted {
 		return nil
 	}
 
-	// Find which tracked topics appear in the text
 	for _, t := range tracked {
 		if t.verified {
-			continue // verification broke the spiral for this topic (#493 B)
+			continue
 		}
 		if curTurn-t.sourceTurn < spiralMinGap {
-			continue // too close to the uncertainty - inconsistency, not spiral (#493 A)
+			continue
 		}
 		if seen[t.word] {
 			continue
 		}
 		if strings.Contains(lowerText, t.word) {
-			// Make sure this isn't itself an uncertainty turn (no hedging
-			// about this topic in the same text)
+
 			if spiralUncertaintyRe.MatchString(lowerText) {
-				// Check if the uncertainty is specifically about this topic
-				// by looking for the topic near an uncertainty marker
+
 				stillHedging := false
 				locs := spiralUncertaintyRe.FindAllStringIndex(lowerText, -1)
 				for _, loc := range locs {
@@ -342,8 +206,6 @@ func detectCommittedTopics(text string, tracked []spiralTrackedTopic, curTurn in
 	return matched
 }
 
-// recordSpiralTurn processes one assistant turn: records uncertainty topics,
-// checks for committed assertions about prior topics, and detects verification.
 func (a *Agent) recordSpiralTurn(text string) {
 	if a.spiralState == nil {
 		return
@@ -351,18 +213,12 @@ func (a *Agent) recordSpiralTurn(text string) {
 	s := a.spiralState
 	s.turn++
 
-	// Check if a verification step occurred - either a real tool call with
-	// observable results (recorded by recordSpiralVerification from the tool
-	// loop) or an explicit first-person verification assertion (#161:
-	// generic keyword matching on prose disabled the detector far too
-	// easily). Verification protects every topic tracked so far (#493 B).
 	if spiralVerificationRe.MatchString(text) {
 		for i := range s.topics {
 			s.topics[i].verified = true
 		}
 	}
 
-	// Extract topics from any uncertainty expressed in this turn
 	newTopics := extractSpiralTopics(text)
 	if len(newTopics) > 0 {
 		for _, t := range newTopics {
@@ -371,15 +227,9 @@ func (a *Agent) recordSpiralTurn(text string) {
 				sourceTurn: s.turn,
 			})
 		}
-		// #493 B: new uncertainty does NOT reset any per-topic verified
-		// state. Fresh topics start unverified; previously-verified topics
-		// keep their protection - the old global reset let any unrelated
-		// "I think" re-arm warnings on already-verified foundations.
+
 	}
 
-	// Check for committed assertions about previously uncertain topics.
-	// Verified topics and too-recent topics are filtered inside
-	// detectCommittedTopics (#493).
 	if len(s.topics) > 0 {
 		committed := detectCommittedTopics(text, s.topics, s.turn)
 		for _, topic := range committed {
@@ -388,16 +238,12 @@ func (a *Agent) recordSpiralTurn(text string) {
 	}
 }
 
-// maybeWarnSpiralHallucination checks if the spiral pattern has been
-// detected: the agent is committing to previously-uncertain foundations
-// without verification. Returns guidance if the spiral threshold is crossed.
 func (a *Agent) maybeWarnSpiralHallucination() string {
 	if a.spiralState == nil || a.spiralState.warnings >= spiralMaxWarnings {
 		return ""
 	}
 	s := a.spiralState
 
-	// Find topics that have accumulated enough committed assertions
 	var spiraled []string
 	for topic, count := range s.committedCounts {
 		if count >= spiralMinCommittedTurns {
@@ -409,14 +255,8 @@ func (a *Agent) maybeWarnSpiralHallucination() string {
 		return ""
 	}
 
-	// #493 B: verified topics are already filtered per-topic inside
-	// detectCommittedTopics - every topic reaching committedCounts here is
-	// genuinely unverified, so the old "3+ topics AND no verification"
-	// global mitigation (which any unrelated hedge could wipe) is obsolete.
-
 	s.warnings++
 
-	// Limit examples in the message
 	if len(spiraled) > 5 {
 		spiraled = spiraled[:5]
 	}

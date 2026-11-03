@@ -2,12 +2,6 @@ package agent
 
 import "testing"
 
-// TestIssue653RealFailureOutputFeedsStreak verifies that genuine build/test
-// failure output still increments the error streak even when it quotes
-// generic infrastructure text (timeouts, connection refused, HTTP status
-// lines). Before #653 the marker table matched those substrings anywhere, so
-// the exact scenario error_rush exists to catch — the agent blindly "fixing"
-// flaky/network-dependent test failures — never accumulated a streak.
 func TestIssue653RealFailureOutputFeedsStreak(t *testing.T) {
 	realFailures := []string{
 		"panic: test timed out after 10m0s\nrunning tests:\n\tTestServer (10m0s)",
@@ -25,9 +19,6 @@ func TestIssue653RealFailureOutputFeedsStreak(t *testing.T) {
 	}
 }
 
-// TestIssue653FrameworkErrorsStillExcluded keeps the legitimate #640 scope:
-// permission denials and tool/MCP/LSP framework availability failures must
-// NOT feed the streak.
 func TestIssue653FrameworkErrorsStillExcluded(t *testing.T) {
 	environmental := []string{
 		"Permission denied by user for tool run_command",
@@ -44,9 +35,6 @@ func TestIssue653FrameworkErrorsStillExcluded(t *testing.T) {
 	}
 }
 
-// TestIssue653StreakGrowsOnFlakyTestLoop proves the end-to-end detector
-// behavior: repeated failing test runs followed by blind edits now trigger
-// the rush warning, where pre-#653 the timeout text suppressed the streak.
 func TestIssue653StreakGrowsOnFlakyTestLoop(t *testing.T) {
 	s := newErrorRushState()
 	if s == nil {
@@ -59,7 +47,7 @@ func TestIssue653StreakGrowsOnFlakyTestLoop(t *testing.T) {
 	if got := s.consecutiveErrors; got != errorRushConsecutiveThreshold {
 		t.Fatalf("streak = %d, want %d (timeout text must not suppress code failures, #653)", got, errorRushConsecutiveThreshold)
 	}
-	// A blind edit right after the failures must count as a rush.
+
 	s.recordToolCall("edit_file", "ok", false)
 	if s.rushCount != 1 {
 		t.Fatalf("rushCount = %d, want 1 (blind fix after failing test loop undetected)", s.rushCount)

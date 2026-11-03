@@ -1,8 +1,5 @@
 package agent
 
-// r414 probes: RunStats carries the full untruncated user input alongside
-// the 200-char journal form, and the full form is never serialized.
-
 import (
 	"encoding/json"
 	"strings"
@@ -12,8 +9,7 @@ import (
 func TestR414_UserPromptFullUntruncated(t *testing.T) {
 	long := strings.Repeat("x", 500) + " from now on always use pnpm"
 	stats := newRunStats(long)
-	// Truncated form: bounded, prefix of the input, and lossy (the exact
-	// suffix shape is util.Truncate's business, not this contract's).
+
 	if n := len(stats.UserPrompt); n == 0 || n > 220 {
 		t.Fatalf("UserPrompt len=%d, want bounded ~200", n)
 	}
@@ -46,7 +42,6 @@ func TestR414_UserPromptFullNotSerialized(t *testing.T) {
 	}
 }
 
-// Empty-input resilience for both fields.
 func TestR414_NewRunStatsEmpty(t *testing.T) {
 	stats := newRunStats("")
 	if stats.UserPrompt != "" || stats.UserPromptFull != "" {

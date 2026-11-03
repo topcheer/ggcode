@@ -9,38 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Ambiguity Point Detector -- Pre-Run Intent Disambiguation
-//
-// Research basis: "Intent Formalization: A Grand Challenge for Reliable Coding
-// in the Age of AI Agents" (Lahiri, arXiv:2603.17150, Microsoft Research, 2026).
-//
-// The paper's core insight: AI-generated code is "plausible by construction"
-// but NOT "correct by construction." The INTENT GAP -- the semantic distance
-// between what a user means and what the agent produces -- is amplified when
-// the agent silently picks one interpretation among many valid ones.
-//
-// The "remove duplicates" example: one interpretation keeps first occurrences
-// [1,2,3,2,4]→[1,2,3,4], another removes ALL duplicates [1,2,3,2,4]→[1,3,4].
-// No LLM can know which the user intended -- yet it picks one silently.
-//
-// TiCoder (Lahiri et al., 2022; FSE 2024) demonstrates that identifying
-// "points of ambiguity" and disambiguating them BEFORE generating code
-// improves correctness from 40% to 84%. The key: target tests at inputs where
-// different candidate implementations would produce different outputs.
-//
-// We can't generate candidate implementations cheaply. Instead, we use
-// deterministic heuristics to detect COMMON ambiguity patterns in the user's
-// request and inject a gentle reminder to clarify before proceeding.
-//
-// The detector fires ONCE at the start of a run, before the agent has done
-// any work. It uses zero LLM tokens -- all detection is regex-based.
-//
-// Distinct from existing detectors:
-//   - assumption_tracker: detects assumptions in ASSISTANT text mid-run
-//   - fulfillment_gate: checks work matches request at completion
-//   - This detector: checks the REQUEST itself for inherent ambiguity
-
-// ambiguityPointState tracks whether the detector has already fired.
 type ambiguityPointState struct {
 	mu    sync.Mutex
 	fired bool
@@ -56,14 +24,12 @@ func (s *ambiguityPointState) reset() {
 	s.fired = false
 }
 
-// AmbiguitySignal represents one detected ambiguity pattern in a user request.
 type AmbiguitySignal struct {
-	Phrase     string // the ambiguous phrase matched
-	Category   string // semantic category
-	Suggestion string // what to clarify
+	Phrase     string
+	Category   string
+	Suggestion string
 }
 
-// AmbiguityCategory constants describe the type of ambiguity.
 const (
 	ambDupHandling    = "duplicate-handling"
 	ambSortOrder      = "sort-ordering"
@@ -75,26 +41,22 @@ const (
 	ambNamingVague    = "vague-naming"
 )
 
-// ambiguityPatterns maps regex-like patterns to their ambiguity signal.
-// These are phrases that have well-documented multiple interpretations.
 var ambiguityPatterns = []struct {
 	phrase     string
 	category   string
 	suggestion string
 }{
-	// Duplicate handling: "remove duplicates" can mean dedup OR remove-all
+
 	{"remove duplicate", ambDupHandling, "whether to keep one copy of each element or remove ALL elements that appear more than once"},
 	{"deduplicate", ambDupHandling, "whether to keep first or last occurrence"},
 	{"dedup", ambDupHandling, "whether to keep first or last occurrence"},
 	{"unique elements", ambDupHandling, "whether to keep one copy of each or only elements that appear exactly once"},
 
-	// Sort ordering: ascending vs descending, stable vs unstable
 	{"sort the", ambSortOrder, "the sort order (ascending/descending) and stability requirement"},
 	{"sort it", ambSortOrder, "the sort order (ascending/descending)"},
 	{"order by", ambSortOrder, "ascending or descending, and tie-breaking behavior"},
 	{"sorted list", ambSortOrder, "ascending or descending order"},
 
-	// Edge case behavior
 	{"empty input", ambEdgeCase, "expected behavior for empty input/collection"},
 	{"empty list", ambEdgeCase, "expected behavior for an empty list"},
 	{"empty array", ambEdgeCase, "expected behavior for an empty array"},
@@ -104,7 +66,6 @@ var ambiguityPatterns = []struct {
 	{"negative numbers", ambEdgeCase, "whether negative values are valid or should be rejected"},
 	{"negative values", ambEdgeCase, "whether negative values are valid or should be rejected"},
 
-	// Error handling mode
 	{"error handling", ambErrorMode, "whether to return error, panic, or use default values on failure"},
 	{"handle error", ambErrorMode, "whether to retry, return error, or fail fast"},
 	{"on failure", ambErrorMode, "whether to retry, rollback, or propagate the error"},
@@ -115,42 +76,25 @@ var ambiguityPatterns = []struct {
 	{"fallback to", ambErrorMode, "what the fallback value/behavior should be"},
 	{"add a fallback", ambErrorMode, "what the fallback value/behavior should be"},
 
-	// Vague scope
 	{"all occurrences", ambScopeVague, "whether this includes nested/overlapping matches"},
 	{"everything that", ambScopeVague, "the precise set of items to include"},
-	// "cleanup" narrowed to vague-quantifier usage; bare "cleanup"
-	// collided with identifiers like cleanupConn (#381). "refactor" kept as
-	// a word-boundary bare match — "Refactor the authentication module" is
-	// genuinely vague scope, and the boundary check no longer hits
-	// "refactored"/"refactoring" prose.
+
 	{"clean up some", ambScopeVague, "which specific files/patterns to clean"},
 	{"clean up the", ambScopeVague, "which specific files/patterns to clean"},
 	{"refactor", ambScopeVague, "the scope -- which files, how aggressive, preserving API or not"},
 	{"optimize for", ambScopeVague, "the target metric: speed, memory, readability, or binary size"},
 
-	// Vague quantity
 	{"some of the", ambQuantityVague, "how many items, and by what criteria"},
 	{"a few", ambQuantityVague, "the exact count or selection criteria"},
-	// #1521: bare 'recent'/'latest' finally dropped per the #1438-A comment
-	// below - they were left in place (half-done fix) while the new phrase
-	// shapes were unreachable behind them (bare word matched first, then
-	// category dedup ate the phrases).
-	// #1438-A: bare 'latest'/'better' are extremely common ordinary
-	// words - 'upgrade to the latest version' has NO quantity ambiguity
-	// yet hit the quantity suggestion (category mismatch). Narrowed to
-	// phrase-level shapes that actually imply an unresolved count/choice;
-	// the bare forms are dropped.
+
 	{"latest items", ambQuantityVague, "how many of the latest items"},
 	{"latest entries", ambQuantityVague, "how many entries and by what cutoff"},
 	{"latest results", ambQuantityVague, "how many results and by what cutoff"},
 
-	// Vague direction (for modifications)
 	{"improve the", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"improve its", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"enhance", ambDirectionVague, "enhance in what way specifically"},
-	// #1438-A: bare 'better' is an ordinary high-frequency word - a
-	// benchmark sentence whose metric is IN the sentence still hit it.
-	// Narrowed to unresolved-choice shapes.
+
 	{"make it better", ambDirectionVague, "better by what metric"},
 	{"make this better", ambDirectionVague, "better by what metric"},
 	{"improve it", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
@@ -158,27 +102,17 @@ var ambiguityPatterns = []struct {
 	{"simplify the", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
 	{"simplify it", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
 
-	// Vague naming
 	{"rename the", ambNamingVague, "the new name convention and whether to update all references"},
 	{"rename it", ambNamingVague, "the new name convention and whether to update all references"},
 	{"rename to something", ambNamingVague, "the specific target name"},
 
-	// #1438-B: the table had zero CJK patterns - the primary user language
-	// (Simplified Chinese UI, README_zh-CN) had 0% coverage. Chinese bytes
-	// pass the length gate; only the pattern side was missing. These mirror
-	// the highest-value English entries (the L21-23 comment's own examples).
 	{"优化一下", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"优化这个", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"去掉重复", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
 	{"去重一下", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
 	{"帮我去重", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
 	{"排个序", ambSortOrder, "ascending or descending, and by which key"},
-	// #1521 case B: the bare CJK forms were pure substrings - isWordByte is
-	// ASCII-only, so beforeOK/afterOK are ALWAYS true for CJK and
-	// "修复排序不稳定的 bug" (stability explicitly discussed) still hit
-	// bare 排序; "大概是上个月引入的" (time adverb) hit bare 大概 with a
-	// COUNT suggestion. Narrowed to imperative/count-question shapes, the
-	// same discipline #1438-A applied to the English table.
+
 	{"排序一下", ambSortOrder, "ascending or descending, and by which key"},
 	{"帮我排序", ambSortOrder, "ascending or descending, and by which key"},
 	{"重命名一下", ambNamingVague, "the new name convention and whether to update all references"},
@@ -190,19 +124,12 @@ var ambiguityPatterns = []struct {
 	{"随便选", ambScopeVague, "which specific item or criteria"},
 }
 
-// phrases that indicate this is a quick, unambiguous task -- skip detection
 var quickTaskPhrases = []string{
 	"what is", "what are", "how many", "how does", "how do",
 	"help me understand", "explain", "describe",
 	"is there", "are there", "where is", "where are",
 }
 
-// ambContainsPhrase matches phrase in text with word boundaries on both
-// sides. Bare strings.Contains matched "recent" inside "recently" and
-// "cleanup" inside identifier names, firing clarify guidance on ordinary
-// dev prompts (#381).
-// ambPhraseIndex returns the byte index of the first word-boundary match
-// of phrase in text, or -1 when absent.
 func ambPhraseIndex(text, phrase string) int {
 	for from := 0; ; {
 		idx := strings.Index(text[from:], phrase)
@@ -215,9 +142,7 @@ func ambPhraseIndex(text, phrase string) int {
 		afterOK := end >= len(text) || !isWordByte(text[end])
 		if !afterOK && end < len(text) && text[end] == 's' &&
 			(end+1 >= len(text) || !isWordByte(text[end+1])) {
-			// Tolerate a plural suffix: "remove duplicate" should match
-			// "remove duplicates". Only 's' — "recent" must still NOT match
-			// "recently" (#381).
+
 			afterOK = true
 		}
 		if beforeOK && afterOK {
@@ -231,43 +156,26 @@ func ambContainsPhrase(text, phrase string) bool {
 	return ambPhraseIndex(text, phrase) >= 0
 }
 
-// ambDirectionRe matches explicit sort-direction tokens. When the sentence
-// already states asc/desc, asking "ascending or descending?" is not
-// clarification but contradiction (#2879).
 var ambDirectionRe = regexp.MustCompile(`(?i)\b(asc|desc|ascending|descending)\b`)
 
-// ambiguitySuppressors lists, per pattern phrase, signals that mean the
-// containing sentence ALREADY disambiguates the very point the suggestion
-// would raise. #2879: prefix phrases like "sort the"/"order by"/"rename the"/
-// "improve the" fire on fully-specified instructions because the detector
-// sees only the prefix, not the sentence around it. These checks give it
-// sentence awareness for the confirmed false-positive shapes.
 var ambiguitySuppressors = map[string][]*regexp.Regexp{
-	// "sort the users by last_login descending" / "order by created_at desc"
+
 	"sort the": {ambDirectionRe},
 	"order by": {ambDirectionRe},
-	// "improve the latency of the hot path by adding a cache":
-	// <metric> of <subject> by <means> names both goal and lever.
+
 	"improve the": {regexp.MustCompile(`\bof\b.*\bby\b`)},
-	// "rename the file to config.yaml": a CONCRETE new name is stated. Bare
-	// lowercase prose after "to" ("to something more descriptive") stays
-	// vague, so only quoted / dotted-filename / identifier-cased names count.
+
 	"rename the": {
 		regexp.MustCompile(`\bto\s+["'\x60][^"'\x60]+["'\x60]`),
 		regexp.MustCompile(`\bto\s+[^\s.,;!?]*\.[A-Za-z0-9]+\b`),
 		regexp.MustCompile(`\bto\s+[A-Z][A-Za-z0-9_-]*\b`),
 	},
-	// CJK companions: explicit direction / new-name phrasing.
+
 	"帮我排序":  {regexp.MustCompile(`升序|降序|倒序|正序|从大到小|从小到大`)},
 	"重命名一下": {regexp.MustCompile(`改成|改为|重命名为`)},
 	"改个名":   {regexp.MustCompile(`改成|改为|重命名为`)},
 }
 
-// ambBreakAt reports whether text[i] terminates a sentence for
-// disambiguation scoping. A '.' followed by a word byte (config.yaml,
-// 3.14) is part of a token, not a boundary - otherwise "rename the file to
-// config.yaml" scopes to "...to config" and the very patterns meant to
-// suppress it become unseeable (#2879).
 func ambBreakAt(text string, i int) bool {
 	b := text[i]
 	if b == '.' && i+1 < len(text) && isWordByte(text[i+1]) {
@@ -276,7 +184,6 @@ func ambBreakAt(text string, i int) bool {
 	return b == '.' || b == '!' || b == '?' || b == '\n' || b == ';'
 }
 
-// ambSentenceAt expands [start,end) to its surrounding sentence.
 func ambSentenceAt(text string, start, end int) string {
 	left := start
 	for left > 0 && !ambBreakAt(text, left-1) {
@@ -289,8 +196,6 @@ func ambSentenceAt(text string, start, end int) string {
 	return text[left:right]
 }
 
-// ambDisambiguated reports whether the sentence containing the phrase already
-// answers the clarification the phrase's suggestion would ask for.
 func ambDisambiguated(phrase, sentence string) bool {
 	for _, re := range ambiguitySuppressors[phrase] {
 		if re.MatchString(sentence) {
@@ -300,12 +205,6 @@ func ambDisambiguated(phrase, sentence string) bool {
 	return false
 }
 
-// checkAmbiguityPoints scans the user's initial request for known ambiguity
-// patterns. Returns a guidance message if ambiguity is detected, or "".
-//
-// The message is injected as a user message before the agent starts its main
-// work loop, nudging it to clarify ambiguous points with the user rather than
-// silently guessing.
 func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 	a.ambiguityPoint.mu.Lock()
 	defer a.ambiguityPoint.mu.Unlock()
@@ -318,11 +217,6 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 		return ""
 	}
 
-	// Don't fire for very short prompts (single-word commands like "run", "test")
-	// #1438-C: the 15-char gate overshot - "make it better" (14) and
-	// "simplify it" (11), the textbook vague-direction prototypes, were
-	// all skipped. 6 chars still blocks bare one-word commands while
-	// letting two-word vague directions through.
 	if len(strings.TrimSpace(userPrompt)) < 6 {
 		return ""
 	}
@@ -330,18 +224,12 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 	lower := strings.ToLower(userPrompt)
 	trimmed := strings.TrimSpace(lower)
 
-	// Skip if this starts with an informational/query phrase
 	for _, q := range quickTaskPhrases {
 		if strings.HasPrefix(trimmed, q) {
 			return ""
 		}
 	}
 
-	// Detect ambiguity signals. Bare substring matching used to hit normal
-	// dev prose — "recent" matched "recently", "cleanup" matched function
-	// names like cleanupConn — firing spurious clarify guidance almost every
-	// run (#381). Word-boundary matching plus narrowed phrasing for the
-	// worst offenders.
 	var signals []AmbiguitySignal
 	seen := make(map[string]bool)
 	for _, pat := range ambiguityPatterns {
@@ -349,16 +237,13 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 		if i < 0 {
 			continue
 		}
-		// #2879: the prefix alone does not imply ambiguity - if the
-		// containing sentence already carries the disambiguating detail
-		// (explicit sort direction, stated new name, named metric+lever),
-		// the suggestion would contradict the request. Skip it.
+
 		if ambDisambiguated(pat.phrase, ambSentenceAt(lower, i, i+len(pat.phrase))) {
 			continue
 		}
 		key := pat.category
 		if seen[key] {
-			continue // one signal per category
+			continue
 		}
 		seen[key] = true
 		signals = append(signals, AmbiguitySignal{
@@ -368,12 +253,10 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 		})
 	}
 
-	// Need at least 1 signal to fire
 	if len(signals) == 0 {
 		return ""
 	}
 
-	// Cap at 3 distinct signals to avoid overwhelming
 	if len(signals) > 3 {
 		signals = signals[:3]
 	}

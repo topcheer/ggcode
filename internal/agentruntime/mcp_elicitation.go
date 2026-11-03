@@ -14,26 +14,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// Elicitation support wiring for MCP servers (protocol 2025-06-18+).
-//
-// When an MCP server sends an elicitation/create request, the handler routes
-// it through the session's ask_user tool - the same per-surface handler the
-// agent's ask_user tool uses (installed by TUI/daemon/desktop at startup).
-// This lets MCP servers collect structured input from the user without
-// needing custom UI plumbing for each surface.
-//
-// #1484: the original design routed through a package-global
-// InteractionBroker whose setter (SetElicitationBroker) had zero call sites -
-// every elicitation died at "no interaction broker available". Worse, a
-// one-line fix calling that setter with a fresh broker would have been a
-// fake repair: no surface ever resolves requests INTO that broker, so
-// AwaitAskUser would hang to timeout. The registry bridge below reaches the
-// real, already-wired ask_user surfaces.
-
-// newMCPElicitationHandler builds an mcp.ElicitationHandler that routes
-// elicitation/create requests through the session's registered ask_user
-// tool. The registry lookup is late-bound: surfaces install their ask_user
-// handler after the runtime core is built, and AskDirect reads it per call.
 func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler {
 	return func(ctx context.Context, params mcp.ElicitationParams) (*mcp.ElicitationResult, error) {
 		var askTool *toolpkg.AskUserTool
@@ -46,9 +26,6 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 			return nil, fmt.Errorf("ask_user tool unavailable; cannot route MCP elicitation")
 		}
 
-		// MCP 2025-11-25 URL mode: out-of-band interaction (auth, payment)
-		// that must not pass through the client. Route as an explicit
-		// consent prompt instead of the form questions below.
 		if params.EffectiveMode() == mcp.ElicitationModeURL {
 			return handleURLElicitation(ctx, askTool, params)
 		}
@@ -64,12 +41,7 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 		switch resp.Status {
 		case toolpkg.AskUserStatusSubmitted:
 			content := buildElicitationContent(params.Schema, resp)
-			// #1678 case 2: a required field left EMPTY was silently
-			// dropped from the accept content (buildElicitationContent
-			// skips empty values) - the MCP server received an accept
-			// missing required fields with NO error signal, failing only
-			// at its own validation a round-trip later. Decline instead:
-			// an incomplete answer is not an acceptable answer.
+
 			if missing := missingRequiredFields(params.Schema, content); len(missing) > 0 {
 				debug.Log("mcp-elicitation", "declining accept: required field(s) left empty: %v", missing)
 				return &mcp.ElicitationResult{
@@ -92,8 +64,6 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 	}
 }
 
-// buildElicitationAskUser converts an MCP elicitation request into an
-// AskUserRequest that can be routed through the existing interaction broker.
 func buildElicitationAskUser(id string, params mcp.ElicitationParams) toolpkg.AskUserRequest {
 	questions := make([]toolpkg.AskUserQuestion, 0, len(params.Schema.Properties))
 
@@ -112,8 +82,7 @@ func buildElicitationAskUser(id string, params mcp.ElicitationParams) toolpkg.As
 		if len(field.Enum) > 0 {
 			kind = toolpkg.AskUserKindSingle
 			for _, opt := range field.Enum {
-				// #3764: enum entries may be numbers/booleans; format for
-				// display instead of assuming strings.
+
 				label := mcp.FormatEnumValue(opt)
 				choices = append(choices, toolpkg.AskUserChoice{ID: label, Label: label})
 			}
@@ -148,10 +117,6 @@ func buildElicitationAskUser(id string, params mcp.ElicitationParams) toolpkg.As
 	}
 }
 
-// buildElicitationContent maps the AskUserResponse answers back into the
-// content map expected by the MCP elicitation result.
-// missingRequiredFields returns the required schema fields absent (or empty)
-// from the built accept content (#1678 case 2).
 func missingRequiredFields(schema mcp.ElicitationSchema, content map[string]any) []string {
 	var missing []string
 	for _, name := range schema.Required {
@@ -174,7 +139,6 @@ func buildElicitationContent(schema mcp.ElicitationSchema, resp toolpkg.AskUserR
 		if !ok {
 			continue
 		}
-		// Extract the answer value
 		var val string
 		if ans.FreeformText != "" {
 			val = ans.FreeformText
@@ -186,15 +150,10 @@ func buildElicitationContent(schema mcp.ElicitationSchema, resp toolpkg.AskUserR
 		if val == "" {
 			continue
 		}
-		// #3868 A: an enum field only accepts a MEMBER. The choice path is
-		// naturally in-enum, but AllowFreeform=false is enforced per surface
-		// (TUI/IM/desktop) - a violating surface fed arbitrary freeform text
-		// straight to the server. Reject non-members; a required field then
-		// surfaces via missingRequiredFields instead of shipping garbage.
+
 		if len(field.Enum) > 0 {
 			if entry, ok := enumEntryForLabel(field, val); ok {
-				// #3868 C: restore the native enum type (numeric enums must
-				// not be sent back as strings).
+
 				content[ans.ID] = entry
 			}
 			continue
@@ -252,15 +211,10 @@ func parseBool(s string) (bool, error) {
 }
 
 func parseFloat(s string) (float64, error) {
-	// #3868 B: Sscanf("%g") accepts trailing garbage ("12 months" parsed
-	// as 12 with n=1, err=nil) and silently truncated the user's answer on
-	// the way back to the server. Parse the WHOLE trimmed string.
+
 	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
 
-// parseIntAnswer validates an integer-typed answer: whole-string parse
-// plus integrality ("12.7" must not ride through an integer field,
-// #3868 B).
 func parseIntAnswer(s string) (float64, error) {
 	f, err := parseFloat(s)
 	if err != nil {
@@ -272,11 +226,6 @@ func parseIntAnswer(s string) (float64, error) {
 	return f, nil
 }
 
-// enumEntryForLabel finds the original enum entry whose formatted label
-// matches the selected value, so the ACCEPTED content carries the native
-// type (float64/bool) the server's schema expects instead of the display
-// string (#3868 C). Mixed enums with identical labels resolve to the
-// first entry - the schema itself is ambiguous there.
 func enumEntryForLabel(field mcp.ElicitationFieldSchema, label string) (any, bool) {
 	for _, opt := range field.Enum {
 		if mcp.FormatEnumValue(opt) == label {
@@ -288,23 +237,10 @@ func enumEntryForLabel(field mcp.ElicitationFieldSchema, label string) (any, boo
 
 var elicitationCounter int64
 
-// nextElicitCounter is called from up to 8 concurrent elicitation workers
-// (serverReqSem cap, safego.Go handlers) - the old non-atomic increment
-// let two workers read the same value, mint the same "elicit-N" ID, and
-// the second map write orphaned the first waiter's channel (its user
-// answer never arrived; only the 5-minute timeout fired) (#1589-A).
 func nextElicitCounter() int64 {
 	return atomic.AddInt64(&elicitationCounter, 1)
 }
 
-// handleURLElicitation routes a URL mode elicitation (MCP 2025-11-25)
-// through ask_user as an explicit consent prompt. Per spec the client MUST
-// clearly display the target domain/host and gather user consent before
-// navigation; the sensitive interaction itself happens out-of-band in the
-// user's browser — ggcode only displays the URL and never reads data back
-// (the accept response omits content). The URL is shown verbatim but NOT
-// auto-opened: consent is about navigation, and a headless/IM surface may
-// not have a browser to hand off to.
 func handleURLElicitation(ctx context.Context, askTool *toolpkg.AskUserTool, params mcp.ElicitationParams) (*mcp.ElicitationResult, error) {
 	host := displayHost(params.URL)
 	req := toolpkg.AskUserRequest{
@@ -335,8 +271,6 @@ func handleURLElicitation(ctx context.Context, askTool *toolpkg.AskUserTool, par
 	}
 }
 
-// urlConsented reports whether the user picked the accept choice on the
-// URL-mode consent question.
 func urlConsented(resp toolpkg.AskUserResponse) bool {
 	for _, ans := range resp.Answers {
 		if ans.ID != "consent" {
@@ -356,8 +290,6 @@ func urlConsented(resp toolpkg.AskUserResponse) bool {
 	return false
 }
 
-// displayHost extracts the host from a URL for the consent prompt; on parse
-// failure the raw string is shown so the user always sees what was sent.
 func displayHost(raw string) string {
 	if u, err := url.Parse(raw); err == nil {
 		return u.Host

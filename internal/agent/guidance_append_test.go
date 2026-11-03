@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Batch 3 of the guidance-noise cleanup: tool-result hint appends now go
-// through the unified per-turn guidance budget (appendGuidance), instead of
-// bypassing it with direct Content concatenation.
-
 func TestAppendGuidanceWithinBudget(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 	a.guidanceBudget.reset()
@@ -56,7 +52,6 @@ func TestAppendGuidanceCriticalBypass(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 	a.guidanceBudget.reset()
 
-	// Burn the whole budget with advisory hints.
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		a.appendGuidance(&tool.Result{Content: "x"}, "[burn-"+strings.Repeat("y", i+1)+"] advisory")
 	}

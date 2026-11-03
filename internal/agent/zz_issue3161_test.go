@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// TestIssue3161_StashPushWithoutSeparator pins #3161 gap 1: git allows
-// `git stash push <path>` without `--`; such a stash only reverts the named
-// path and must NOT count as a bare-stash intervention when the suspect is
-// a different file.
 func TestIssue3161_StashPushWithoutSeparator(t *testing.T) {
 	cases := []struct {
 		name, cmd, suspect string
@@ -26,9 +22,6 @@ func TestIssue3161_StashPushWithoutSeparator(t *testing.T) {
 	}
 }
 
-// TestIssue3161_PathBoundaryMatch pins #3161 gap 2: suspect
-// "util/files.go" must not match the unrelated longer path
-// "cmd/util/files.go" in restore commands (plain substring did).
 func TestIssue3161_PathBoundaryMatch(t *testing.T) {
 	if isRevertIntervention("run_command", "git restore cmd/util/files.go", "util/files.go") {
 		t.Error("restore of cmd/util/files.go must not hit suspect util/files.go (substring false positive, issue 3161)")
@@ -47,8 +40,6 @@ func TestIssue3161_PathBoundaryMatch(t *testing.T) {
 	}
 }
 
-// TestIssue3161_StashManagementUnchanged keeps the pre-existing semantics:
-// stash pop/apply/list/show/drop/clear are not interventions.
 func TestIssue3161_StashManagementUnchanged(t *testing.T) {
 	for _, drop := range []string{"pop", "apply", "list", "show", "drop", "clear"} {
 		cmd := "git stash " + drop

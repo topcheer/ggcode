@@ -10,8 +10,8 @@ func TestInterpretExitCode_CommonCodes(t *testing.T) {
 	tests := []struct {
 		name     string
 		code     int
-		wantSub  string // substring that must appear
-		wantHint bool   // whether a hint should be present
+		wantSub  string
+		wantHint bool
 	}{
 		{"success", 0, "", false},
 		{"generic error", 1, "", false},
@@ -45,13 +45,12 @@ func TestInterpretExitCode_CommonCodes(t *testing.T) {
 }
 
 func TestInterpretExitCode_GenericSignalCodes(t *testing.T) {
-	// Unknown signal codes 128+N should still produce a signal label
-	got := interpretExitCode(129) // SIGHUP
+
+	got := interpretExitCode(129)
 	if !strings.Contains(got, "signal 1") {
 		t.Errorf("interpretExitCode(129) = %q, want 'signal 1'", got)
 	}
 
-	// Code outside the known range and not a signal
 	got = interpretExitCode(42)
 	if got != "" {
 		t.Errorf("interpretExitCode(42) = %q, want empty", got)
@@ -59,16 +58,13 @@ func TestInterpretExitCode_GenericSignalCodes(t *testing.T) {
 }
 
 func TestInterpretExitCode_UnknownHighCode(t *testing.T) {
-	// 160 is above the signal range and not in the map
+
 	got := interpretExitCode(160)
 	if got != "" {
 		t.Errorf("interpretExitCode(160) = %q, want empty (outside signal range)", got)
 	}
 }
 
-// TestExitCodeIntelWindowsBand pins #1683 case 1: the 128+N signal band is
-// POSIX-only. On this (non-Windows) test host the band stays live and the
-// 126/127 command-not-found entries are platform-independent.
 func TestExitCodeIntelWindowsBand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("host is windows - band compiled out by design")
@@ -76,7 +72,7 @@ func TestExitCodeIntelWindowsBand(t *testing.T) {
 	if got := interpretExitCode(137); !strings.Contains(got, "SIGKILL") {
 		t.Fatalf("non-windows host must keep signal intel, got %q", got)
 	}
-	// 126/127 carry meaning on every platform.
+
 	if got := interpretExitCode(127); !strings.Contains(got, "not found") {
 		t.Fatalf("127 must stay universal, got %q", got)
 	}

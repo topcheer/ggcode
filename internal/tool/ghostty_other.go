@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-// ── Stub for unsupported platforms (windows, etc.) ──────────────────────────
-
 func ghosttyBinaryPath() string { return "" }
 
 func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
@@ -64,5 +62,4 @@ func unsupportedResult() Result {
 	return Result{IsError: true, Content: fmt.Sprintf("ghostty tool is not supported on %s/%s", runtime.GOOS, runtime.GOARCH)}
 }
 
-// Ensure strings is referenced (used in some conditional branches).
 var _ = strings.TrimSpace

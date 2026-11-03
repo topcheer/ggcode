@@ -7,27 +7,22 @@ import (
 	"testing"
 )
 
-// setupExportGuardRepo creates a temporary git repo with a Go file, commits it,
-// and returns the working dir path. The caller is responsible for cleanup.
 func setupExportGuardRepo(t *testing.T, initialContent string) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// git init
 	if err := exec.Command("git", "init", dir).Run(); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
-	// Configure user for commit
+
 	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
 	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
 
-	// Write initial Go file.
 	goFile := filepath.Join(dir, "service.go")
 	if err := os.WriteFile(goFile, []byte(initialContent), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
-	// Commit.
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "initial").Run()
 
@@ -52,7 +47,6 @@ type Config struct {
 		t.Fatal("expected non-nil symbols from git HEAD")
 	}
 
-	// No changes — current file is identical to HEAD.
 	current := parseExportedSymbols(filepath.Join(dir, "service.go"))
 	changes := diffExportSymbols(old, current)
 	if len(changes) != 0 {
@@ -77,7 +71,6 @@ type Config struct {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Rewrite without the Validate function and Config type.
 	edited := `package service
 
 func Process(input string) error {
@@ -118,7 +111,6 @@ func Process(input string) error {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change the signature — add a parameter and change return type.
 	edited := `package service
 
 func Process(input string, verbose bool) (string, error) {
@@ -154,7 +146,6 @@ func Process(input string) error {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Add a new export — not breaking.
 	edited := `package service
 
 func Process(input string) error {
@@ -192,7 +183,6 @@ func (h *Handler) Close() {}
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Remove the Close method.
 	edited := `package service
 
 type Handler struct{}
@@ -230,7 +220,6 @@ type Processor interface {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Remove the interface entirely.
 	edited := `package service
 
 type Processor struct{}
@@ -244,8 +233,6 @@ type Processor struct{}
 	current := parseExportedSymbols(goFile)
 	changes := diffExportSymbols(old, current)
 
-	// The Processor symbol changes from "interface" to "struct" kind.
-	// Since we key on name+kind, the interface is "removed" and struct is "added".
 	found := false
 	for _, c := range changes {
 		if c.Symbol == "Processor" && c.Kind == "removed" {
@@ -309,7 +296,6 @@ const NewMaxRetries = 10
 	current := parseExportedSymbols(goFile)
 	changes := diffExportSymbols(old, current)
 
-	// MaxRetries and DefaultConfig removed; NewMaxRetries added (not breaking).
 	symbols := make(map[string]string)
 	for _, c := range changes {
 		symbols[c.Symbol] = c.Kind
@@ -322,8 +308,6 @@ const NewMaxRetries = 10
 	}
 }
 
-// TestExportGuard_StructFieldDeletion tests Issue #1043(b): deleting a struct field
-// should trigger breaking change detection.
 func TestExportGuard_StructFieldDeletion(t *testing.T) {
 	initial := `package service
 
@@ -334,7 +318,6 @@ type Config struct {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Delete the MaxSize field.
 	edited := `package service
 
 type Config struct {
@@ -364,8 +347,6 @@ type Config struct {
 	}
 }
 
-// TestExportGuard_TypeParamChange tests Issue #1043(c): adding/removing type parameters
-// should trigger breaking change detection.
 func TestExportGuard_TypeParamChange(t *testing.T) {
 	initial := `package service
 
@@ -375,7 +356,6 @@ func Process[T any](input T) error {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Remove type parameter - now requires a concrete string type.
 	edited := `package service
 
 func Process(input string) error {
@@ -399,8 +379,6 @@ func Process(input string) error {
 	}
 }
 
-// TestExportGuard_ReceiverValueToPointer tests Issue #1043(c): changing receiver
-// from value to pointer should trigger breaking change detection.
 func TestExportGuard_ReceiverValueToPointer(t *testing.T) {
 	initial := `package service
 
@@ -412,7 +390,6 @@ func (h Handler) Serve(data string) error {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change receiver from value to pointer.
 	edited := `package service
 
 type Handler struct{}
@@ -444,8 +421,6 @@ func (h *Handler) Serve(data string) error {
 	}
 }
 
-// TestExportGuard_ReceiverPointerToValue tests Issue #1043(c): changing receiver
-// from pointer to value should trigger breaking change detection.
 func TestExportGuard_ReceiverPointerToValue(t *testing.T) {
 	initial := `package service
 
@@ -457,7 +432,6 @@ func (h *Handler) Serve(data string) error {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change receiver from pointer to value.
 	edited := `package service
 
 type Handler struct{}
@@ -489,8 +463,6 @@ func (h Handler) Serve(data string) error {
 	}
 }
 
-// TestExportGuard_Issue1101_ChannelDirection tests Issue #1101 #3: changing
-// channel direction (chan vs chan<- vs <-chan) should trigger breaking change.
 func TestExportGuard_Issue1101_ChannelDirection(t *testing.T) {
 	initial := `package service
 
@@ -500,7 +472,6 @@ type Worker struct {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change from bidirectional to send-only.
 	edited := `package service
 
 type Worker struct {
@@ -521,8 +492,6 @@ type Worker struct {
 	}
 }
 
-// TestExportGuard_Issue1101_ArrayLength tests Issue #1101 #C: changing array
-// length ([5]int vs [10]int) should trigger breaking change.
 func TestExportGuard_Issue1101_ArrayLength(t *testing.T) {
 	initial := `package service
 
@@ -532,7 +501,6 @@ type Buffer struct {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change array length.
 	edited := `package service
 
 type Buffer struct {
@@ -553,8 +521,6 @@ type Buffer struct {
 	}
 }
 
-// TestExportGuard_Issue1101_InterfaceEmbeddedType tests Issue #1101 #5: changing
-// an embedded interface type should trigger breaking change.
 func TestExportGuard_Issue1101_InterfaceEmbeddedType(t *testing.T) {
 	initial := `package service
 
@@ -566,7 +532,6 @@ type Handler interface {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Change embedded interface.
 	edited := `package service
 
 import "io"
@@ -589,8 +554,6 @@ type Handler interface {
 	}
 }
 
-// TestExportGuard_Issue1101_StructEmbeddedField tests Issue #1101 #B: changing
-// an embedded struct field should trigger breaking change.
 func TestExportGuard_Issue1101_StructEmbeddedField(t *testing.T) {
 	initial := `package service
 
@@ -602,7 +565,6 @@ type Server struct {
 `
 	dir := setupExportGuardRepo(t, initial)
 
-	// Remove embedded field.
 	edited := `package service
 
 type Server struct {
@@ -622,9 +584,6 @@ type Server struct {
 	}
 }
 
-// TestExportGuard_SubdirectoryFile covers gitFileContentAtHEAD rebasing a
-// subdirectory-relative path onto the repository root: running the guard with
-// cwd inside pkg/ must still resolve git path "pkg/service.go" at HEAD.
 func TestExportGuard_SubdirectoryFile(t *testing.T) {
 	initial := `package service
 
@@ -649,7 +608,6 @@ func Process(input string) error {
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "initial").Run()
 
-	// Break the API: drop the exported function.
 	edited := `package service
 
 type Server struct{}

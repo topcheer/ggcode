@@ -1,33 +1,5 @@
 package agent
 
-// Insecure Code Pattern Detection in File Writes
-//
-// Research basis: OWASP LLM Top 10 2025 (#5: Insecure Output Handling, and
-// broader insecure code generation concerns). AI coding agents frequently
-// generate code with security anti-patterns because they optimize for "working
-// example" rather than "secure by default". The most common patterns:
-//
-//  1. TLS verification bypass: `InsecureSkipVerify: true` - disables certificate
-//     validation, enabling MITM attacks. LLMs add this to "make HTTPS work"
-//     when encountering self-signed certs or expired certificates.
-//  2. Weak crypto for security operations: `math/rand` for tokens/passwords/keys
-//     (predictable, not cryptographically secure - must use crypto/rand).
-//     MD5/SHA1 for password hashing (broken, collision-vulnerable).
-//  3. SQL injection: string concatenation or fmt.Sprintf in SQL queries instead
-//     of parameterized queries. The #1 web vulnerability (OWASP A03:2021).
-//  4. Command injection: exec.Command/shell with concatenated user input instead
-//     of argument arrays.
-//
-// Competitor analysis:
-//   - Claude Code: no write-time security pattern detection
-//   - Cursor: relies on external linters (staticcheck, eslint-plugin-security)
-//   - Cline/OpenHands: no detection
-//   - GitHub Copilot: has some AI-based vulnerability filtering on suggestions
-//   - Aider: no detection
-//
-// ggcode's approach: lightweight AST + text pattern matching that runs in <1ms
-// at write time. Delta-aware: only flags patterns INTRODUCED by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -36,50 +8,20 @@ import (
 	"strings"
 )
 
-// insecureVerifyDisabledRe matches TLS verification being disabled in Python
-// code: verify=False / verify=0 (requests, httpx) and ssl=False / ssl_verify
-// variants (aiohttp TCPConnector, urllib3). Fix #245: the previous
-// three-condition substring AND missed httpx/aiohttp calls without a
-// "requests"/"ssl"/"session" context word, and `verify=0` without spaces.
-// The assignment itself is a strong enough signal for a security detector —
-// prefer a false positive over a missed TLS bypass.
 var insecureVerifyDisabledRe = regexp.MustCompile(`(?i)\b(?:ssl_verify|verify|ssl)\s*=\s*(?:false|0)\b`)
 
-// insecureRejectUnauthorizedRe matches the Node.js TLS bypass assignment
-// `rejectUnauthorized: false` (or `: 0`). Fix #245: a loose
-// `Contains(lower, "0")` matched any zero on the line (e.g. `timeout: 0`).
 var insecureRejectUnauthorizedRe = regexp.MustCompile(`(?i)rejectUnauthorized\s*:\s*(?:false|0)\b`)
 
-// insecureNodeTLSDisabledRe matches the global Node.js TLS kill switch being
-// ASSIGNED a disabling value. Comparisons (`=== '0'`, `!== '0'`) cannot match
-// here: after NODE_TLS_REJECT_UNAUTHORIZED the regex requires `=` immediately
-// (modulo whitespace) followed by 0/false, so `===` and `!==` fail to match.
-// Fix #245: the substring check flagged legitimate comparison guards.
-// Fix #1063: string values ('0'/"0") are elided by jsStripCommentsAndStrings,
-// so a bare end-of-line assignment (string value stripped) must still match;
-// hostile text INSIDE a string literal no longer reaches this regex at all
-// because the whole literal is dropped.
 var insecureNodeTLSDisabledRe = regexp.MustCompile(`(?i)NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*(?:(?:['"]?(?:0|false)['"]?)|;?\s*$)`)
 
-// insecureSkipVerifyTrueRe matches the Go TLS bypass only in ASSIGNMENT shape:
-// `InsecureSkipVerify: true` (composite literal) or `= true`/`:= true`.
-// Fix #1062: the old substring AND (InsecureSkipVerify + true on one line)
-// flagged boolean-field reads used as conditions/returns, e.g.
-// `if c.InsecureSkipVerify { return true }` and
-// `return c.InsecureSkipVerify == true`. With a single [:=] token after the
-// field name, `==` cannot match (the second '=' breaks the shape) and a
-// bare field reference (`if c.InsecureSkipVerify {`) never matches.
 var insecureSkipVerifyTrueRe = regexp.MustCompile(`InsecureSkipVerify\s*[:=]\s*true\b`)
 
-// insecurePatternInstance represents a detected insecure pattern.
 type insecurePatternInstance struct {
-	category string // "TLS bypass", "weak crypto", "SQL injection", "command injection"
-	detail   string // specific detail about what was found
-	line     int    // line number (0 if unknown)
+	category string
+	detail   string
+	line     int
 }
 
-// checkInsecurePatterns detects security anti-patterns introduced by this edit.
-// Returns warning strings. Delta-aware: only flags NEW instances.
 func checkInsecurePatterns(filePath, oldContent, newContent string) []string {
 	if strings.TrimSpace(newContent) == "" {
 		return nil
@@ -89,7 +31,7 @@ func checkInsecurePatterns(filePath, oldContent, newContent string) []string {
 	switch ext {
 	case ".go":
 		return checkInsecurePatternsGo(filePath, oldContent, newContent)
-	case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts", ".cjs", ".cts": // #1064-A8: match detectLanguage's mapping so these are not a silent no-op
+	case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts", ".cjs", ".cts":
 		return checkInsecurePatternsJS(filePath, oldContent, newContent)
 	case ".py", ".pyw":
 		return checkInsecurePatternsPython(filePath, oldContent, newContent)
@@ -98,13 +40,10 @@ func checkInsecurePatterns(filePath, oldContent, newContent string) []string {
 	}
 }
 
-// ---- Go detection (AST-based where possible, text fallback) ----
-
 func checkInsecurePatternsGo(filePath, oldContent, newContent string) []string {
 	oldIssues := findInsecurePatternsGo(oldContent)
 	newIssues := findInsecurePatternsGo(newContent)
 
-	// Only report issues that are genuinely new (by category+detail signature).
 	oldSet := make(map[string]bool, len(oldIssues))
 	for _, oi := range oldIssues {
 		oldSet[oi.category+"|"+oi.detail] = true
@@ -117,7 +56,7 @@ func checkInsecurePatternsGo(filePath, oldContent, newContent string) []string {
 		if oldSet[key] {
 			continue
 		}
-		oldSet[key] = true // dedup within new issues too
+		oldSet[key] = true
 		loc := ""
 		if ni.line > 0 {
 			loc = fmt.Sprintf(" (line %d)", ni.line)
@@ -136,43 +75,21 @@ func checkInsecurePatternsGo(filePath, oldContent, newContent string) []string {
 func findInsecurePatternsGo(content string) []insecurePatternInstance {
 	var issues []insecurePatternInstance
 
-	// Text-based checks (fast, always available).
 	lines := strings.Split(content, "\n")
-	inBlockComment := false // fix #728: /* */ block comment state across lines
-	inRawString := false    // fix #2902: `...` raw string state across lines
+	inBlockComment := false
+	inRawString := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Fix #723: strip comments once for ALL text checks below (previously
-		// only the SQL check did this, fix #278). Full-line comments are skipped
-		// entirely; trailing comments are stripped, so every check (TLS bypass,
-		// weak crypto, SQL, command injection) operates on code only and no
-		// longer fires on comment mentions like
-		// `// do not use InsecureSkipVerify: true`.
-		// Fix #728: block-comment BODY lines (` * InsecureSkipVerify: true ...`)
-		// start with neither `//` nor `/*` and previously slipped through; the
-		// block state machine below skips them until `*/`.
 		code, ok := cStyleBlockCommentLine(trimmed, &inBlockComment)
 		if !ok {
 			continue
 		}
-		// #2902: strip Go string-literal contents BEFORE the trailing-comment
-		// strip - string contents like "InsecureSkipVerify: true" (security
-		// fixtures, error messages, test assertions) otherwise reach the
-		// pattern regexes and fire false [Security] warnings. JS (#1063) and
-		// Python already strip strings; Go was the asymmetric gap. Stripping
-		// first also keeps URL-like "scheme://host" contents from confusing the
-		// // trailing-comment heuristic below.
-		// #2902: keyword/signal detection needs PRE-strip text (SQL keywords
-		// and shell names legitimately live INSIDE the query/command string:
-		// `q := "SELECT " + u` is a real injection); structural detection
-		// (concatenation operators) needs POST-strip text (a + inside a
-		// string literal is not concatenation). Keep both views per line.
+
 		signalLine := code
 		code = goStripStringLiterals(code, &inRawString)
 		trimmed = goStripTrailingComment(code)
 
-		// 1. InsecureSkipVerify: true (assignment shape only, fix #1062)
 		if insecureSkipVerifyTrueRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
@@ -181,7 +98,6 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 			})
 		}
 
-		// 2a. Weak hash for password: md5.New() or sha1.New() in context of password/token
 		lowerLine := strings.ToLower(trimmed)
 		if (strings.Contains(lowerLine, "md5.new()") || strings.Contains(lowerLine, "sha1.new()")) &&
 			(strings.Contains(lowerLine, "password") || strings.Contains(lowerLine, "token") ||
@@ -193,18 +109,9 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 			})
 		}
 
-		// 3. SQL injection via string concatenation: "SELECT" + variable or fmt.Sprintf with SELECT.
-		// Comments are already stripped above (fix #723 generalizes fix #278):
-		// `a := b + c // SELECT count FROM users` must not count the comment's
-		// keywords as the query.
-		// Fix #245: `i++` and `x += y` are not concatenation and must not count.
-		// #2902: keyword detection reads signalLine (pre-string-strip - the
-		// SELECT in a real concatenated query lives inside the literal);
-		// concatenation detection reads trimmed (post-strip - a + inside a
-		// string is not concatenation, so pure-doc strings stop firing).
 		upperLine := strings.ToUpper(goStripTrailingComment(signalLine))
 		if isSQLKeywordLine(upperLine) {
-			// Check for concatenation or Sprintf in the same line (post-strip)
+
 			if lineHasConcatPlus(trimmed) || strings.Contains(trimmed, "Sprintf") {
 				issues = append(issues, insecurePatternInstance{
 					category: "SQL injection",
@@ -214,10 +121,6 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 			}
 		}
 
-		// 4. Command injection: exec.Command with shell + concatenation
-		// #2902: shell-name literals ("sh", "bash") are in-string signals -
-		// read them from signalLine; the concat/"Sprintf" structural signal
-		// stays on the post-strip trimmed line.
 		cmdSignal := goStripTrailingComment(signalLine)
 		if strings.Contains(trimmed, "exec.Command") {
 			if strings.Contains(cmdSignal, "\"sh\"") || strings.Contains(cmdSignal, "\"bash\"") ||
@@ -233,18 +136,9 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		}
 	}
 
-	// AST-based check: math/rand used for security-sensitive identifiers.
 	tree, fset, err := parseGoSource("", content, 0)
 	if err == nil {
-		// Build import alias -> package path map (fix #243). The previous
-		// text matching (`strings.Contains(fnName, "rand.Read")` plus a
-		// `!strings.Contains(fnName, "crypto")` exclusion) misclassified
-		// aliased imports: `import crand "crypto/rand"` yields the selector
-		// "crand.Read", which contains "rand.Read" but not "crypto". We now
-		// resolve the selector's package identifier against the file's
-		// imports and match exact package paths. When the import cannot be
-		// resolved we skip — prefer a false negative over flagging secure
-		// code in a security review warning.
+
 		imports := make(map[string]string)
 		for _, imp := range tree.Imports {
 			path := strings.Trim(imp.Path.Value, `"`)
@@ -256,7 +150,7 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		}
 
 		ast.Inspect(tree, func(n ast.Node) bool {
-			// Detect math/rand calls assigned to token/key/secret/password variables.
+
 			assign, ok := n.(*ast.AssignStmt)
 			if !ok {
 				return true
@@ -270,7 +164,7 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 				if !ok {
 					continue
 				}
-				// math/rand functions of interest: Read, Intn, Int63, Int31, Float64.
+
 				switch sel.Sel.Name {
 				case "Read", "Intn", "Int63", "Int31", "Float64":
 				default:
@@ -282,11 +176,10 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 				}
 				pkgPath, known := imports[pkgIdent.Name]
 				if !known || pkgPath != "math/rand" {
-					// Unresolvable import, or crypto/rand (secure): skip.
+
 					continue
 				}
 
-				// Check if the LHS variable name suggests security sensitivity.
 				for _, lhs := range assign.Lhs {
 					ident, ok := lhs.(*ast.Ident)
 					if !ok {
@@ -308,8 +201,6 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 
 	return issues
 }
-
-// ---- JavaScript/TypeScript detection (text-based) ----
 
 func checkInsecurePatternsJS(filePath, oldContent, newContent string) []string {
 	oldIssues := findInsecurePatternsJS(oldContent)
@@ -346,30 +237,21 @@ func checkInsecurePatternsJS(filePath, oldContent, newContent string) []string {
 func findInsecurePatternsJS(content string) []insecurePatternInstance {
 	var issues []insecurePatternInstance
 	lines := strings.Split(content, "\n")
-	inBlockComment := false // fix #728: /* */ block comment state across lines
+	inBlockComment := false
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Fix #723: strip comments once for ALL checks below. JS shares Go's
-		// `//` and `/*` comment syntax, so the Go trailing-comment stripper is
-		// reused; full-line comments are skipped entirely. Comment mentions
-		// like `// eval(userInput) is dangerous` no longer trigger.
-		// Fix #728: block-comment BODY lines (` * eval(...)` etc.) previously
-		// survived the `//`/`/*` prefix check; the block state machine skips them.
 		code, ok := cStyleBlockCommentLine(trimmed, &inBlockComment)
 		if !ok {
 			continue
 		}
 		trimmed = goStripTrailingComment(code)
-		// Fix #1063: strip string-literal contents as well so mentions like
-		// `const desc = "avoid eval() here"` no longer fire.
+
 		trimmed = jsStripCommentsAndStrings(trimmed)
 
 		lower := strings.ToLower(trimmed)
 
-		// rejectUnauthorized: false / 0 (Node.js TLS bypass). Fix #245: match the
-		// actual assignment shape so `timeout: 0` on the same line no longer trips it.
 		if insecureRejectUnauthorizedRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
@@ -378,8 +260,6 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 			})
 		}
 
-		// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0' (assignment only;
-		// comparison guards like `=== '0'` must not warn — fix #245)
 		if insecureNodeTLSDisabledRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
@@ -388,7 +268,6 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 			})
 		}
 
-		// eval() usage - code injection risk
 		if strings.Contains(lower, "eval(") && !strings.Contains(lower, "evaluate") {
 			issues = append(issues, insecurePatternInstance{
 				category: "code injection",
@@ -397,7 +276,6 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 			})
 		}
 
-		// innerHTML assignment with concatenation - XSS risk
 		if strings.Contains(lower, "innerhtml") && (strings.Contains(trimmed, "+") ||
 			strings.Contains(lower, "template") || strings.Contains(lower, "${")) {
 			issues = append(issues, insecurePatternInstance{
@@ -407,9 +285,8 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 			})
 		}
 
-		// Math.random() for security-sensitive operations
 		if strings.Contains(lower, "math.random()") {
-			// Check if nearby variable name is security-sensitive
+
 			if isLineSecuritySensitive(lower) {
 				issues = append(issues, insecurePatternInstance{
 					category: "weak crypto",
@@ -422,8 +299,6 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 
 	return issues
 }
-
-// ---- Python detection (text-based) ----
 
 func checkInsecurePatternsPython(filePath, oldContent, newContent string) []string {
 	oldIssues := findInsecurePatternsPython(oldContent)
@@ -464,21 +339,9 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Fix #723: strip Python comments and string literals once for ALL
-		// checks below (previously only verify=False did this, fix #274).
-		// '#' is a comment marker only in Python — Go/JS lines are handled by
-		// their own helpers, never here. Comment mentions like
-		// `# hashlib.md5(password) is weak` no longer trigger.
 		code := pyStripCommentsAndStrings(trimmed)
 		lower := strings.ToLower(code)
 
-		// verify=False / verify=0 / ssl=False (requests, httpx, aiohttp,
-		// urllib3). Fix #245: previous three-condition substring AND missed
-		// httpx/aiohttp calls with no context word and `verify=0` without spaces;
-		// the assignment alone is now treated as a strong enough signal.
-		// Fix #274: match against comment/string-stripped text so mentions of
-		// verify=False inside Python comments (#), docstrings, string literals
-		// and URL query strings are not flagged.
 		if insecureVerifyDisabledRe.MatchString(code) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
@@ -487,13 +350,6 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 			})
 		}
 
-		// hashlib.md5/sha1 for password hashing
-		// #3541: the old gate had a fourth `strings.Contains(lower, "hash")`
-		// term - but "hashlib.md5"/"hashlib.sha1" themselves start with
-		// "hash", so that term was ALWAYS true whenever the first clause
-		// held: the security-context gate was dead and every MD5/SHA1 use
-		// (file checksums, cache keys, dedup digests) was flagged. Drop the
-		// subsumed term so only genuine security contexts gate the check.
 		if (strings.Contains(lower, "hashlib.md5") || strings.Contains(lower, "hashlib.sha1")) &&
 			(strings.Contains(lower, "password") || strings.Contains(lower, "token") ||
 				strings.Contains(lower, "secret")) {
@@ -504,14 +360,6 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 			})
 		}
 
-		// os.system or subprocess with shell=True and concatenation
-		// Fix #1060: f-string literals are preserved as an empty f"" token by
-		// pyStripCommentsAndStrings, so the f" check below now actually fires
-		// (previously the whole literal incl. quotes was dropped and the most
-		// typical injection shape `shell=True + f"...{x}..."` was missed).
-		// Fix #1064-A6: the "+" now checks the comment-stripped code line
-		// (lineHasConcatPlus also drops ++/+=), not the raw trimmed line where a
-		// trailing comment containing "+" triggered a false positive.
 		if strings.Contains(lower, "shell=true") &&
 			(lineHasConcatPlus(code) || strings.Contains(lower, "f\"\"") ||
 				strings.Contains(lower, "format(")) {
@@ -522,7 +370,6 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 			})
 		}
 
-		// random.random() for security
 		if (strings.Contains(lower, "random.random") || strings.Contains(lower, "random.randint")) &&
 			isLineSecuritySensitive(lower) {
 			issues = append(issues, insecurePatternInstance{
@@ -532,13 +379,6 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 			})
 		}
 
-		// eval()/exec() with dynamic input. Fix #723: the raw-line `#` guard is
-		// gone — comment stripping above already removes `# ...` text, and
-		// mentions inside string literals are now also skipped.
-		// Fix #1061: ast.literal_eval is the officially recommended SAFE
-		// alternative and .eval( is the standard PyTorch module call - both were
-		// flagged as code injection, crowding out real findings under
-		// maxIntegrityWarnings.
 		hasEvalCall := strings.Contains(lower, "eval(") &&
 			!strings.Contains(lower, "literal_eval") && !strings.Contains(lower, ".eval(")
 		if hasEvalCall || strings.Contains(lower, "exec(") {
@@ -553,13 +393,8 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 	return issues
 }
 
-// ---- Helpers ----
-
 func isSecuritySensitiveName(name string) bool {
-	// Fix #1064-A5: the bare "key" substring matched unrelated identifiers
-	// like turkey/keyboard/monkey. "key" now matches only at identifier
-	// boundaries: the tail of a CamelCase compound (apiKey/secretKey), a
-	// snake_case segment (encryption_key), or the standalone word.
+
 	hasKeyBoundary := strings.Contains(name, "Key") ||
 		strings.Contains(strings.ToLower(name), "_key") ||
 		strings.EqualFold(name, "key")
@@ -580,10 +415,6 @@ func isLineSecuritySensitive(line string) bool {
 	return isSecuritySensitiveName(line)
 }
 
-// isSQLKeywordLine checks if a line contains a SQL DML keyword (SELECT/
-// INSERT/UPDATE/DELETE) combined with a clause keyword (FROM/INTO/VALUES).
-// Fix #245: requiring FROM caused false negatives for INSERT ... VALUES and
-// DELETE ... INTO-shaped statements, which have no FROM clause.
 func isSQLKeywordLine(upperLine string) bool {
 	dml := strings.Contains(upperLine, "SELECT ") || strings.Contains(upperLine, "INSERT ") ||
 		strings.Contains(upperLine, "UPDATE ") || strings.Contains(upperLine, "DELETE ")
@@ -594,43 +425,27 @@ func isSQLKeywordLine(upperLine string) bool {
 		strings.Contains(upperLine, "VALUES ")
 }
 
-// lineHasConcatPlus reports whether the line contains a "+" usable for string
-// concatenation. Increments (`i++`) and compound assignments (`+=`) are
-// stripped first so they do not count (fix #245: `i++` inside a query loop
-// was misreported as SQL injection).
 func lineHasConcatPlus(line string) bool {
 	s := strings.ReplaceAll(line, "++", "")
 	s = strings.ReplaceAll(s, "+=", "")
 	return strings.Contains(s, "+")
 }
 
-// pyStripCommentsAndStrings removes Python comments and string-literal
-// contents from a single line (fix #274; shared by all Python checks since
-// fix #723), so mentions of insecure patterns inside comments (`# ...`),
-// docstrings, string literals or URL query strings do not trigger the
-// detectors. '#' starts a comment when found
-// outside a string; '...', "...", ”'...”' and """...""" contents are
-// dropped (the delimiting quotes are consumed too).
-//
-// Simplified (deliberate): strings are handled per line — an unterminated
-// string swallows the rest of its line (covers a multi-line docstring's
-// opening line) — and backslash-escaped quotes inside strings are not
-// interpreted. Acceptable for a line-level heuristic.
 func pyStripCommentsAndStrings(line string) string {
 	var b strings.Builder
 	r := []rune(line)
 	n := len(r)
 	i := 0
-	var prev rune // last code rune written (for f-string prefix detection, fix #1060)
+	var prev rune
 	for i < n {
 		c := r[i]
 		if c == '#' {
-			break // comment: rest of line ignored
+			break
 		}
 		if c == '\'' || c == '"' {
 			quote := c
 			if i+2 < n && r[i+1] == quote && r[i+2] == quote {
-				// Triple-quoted string (docstring): scan for closing triple.
+
 				j := i + 3
 				closed := false
 				for j+2 < n {
@@ -642,10 +457,10 @@ func pyStripCommentsAndStrings(line string) string {
 					j++
 				}
 				if !closed {
-					i = n // unterminated: rest of line is string content
+					i = n
 				}
 			} else {
-				// Single-quoted string: scan for the closing quote.
+
 				j := i + 1
 				for j < n && r[j] != quote {
 					j++
@@ -653,13 +468,10 @@ func pyStripCommentsAndStrings(line string) string {
 				if j < n {
 					i = j + 1
 				} else {
-					i = n // unterminated: swallow rest of line
+					i = n
 				}
 			}
-			// String literal with a format prefix immediately before the quote
-			// (f"...", F'...'): keep an empty f"" token so downstream f-string
-			// detection can fire (fix #1060). prev tracks the last code rune
-			// written to the builder; only a directly adjacent f/F qualifies.
+
 			if prev == 'f' || prev == 'F' {
 				b.WriteString(`""`)
 			}
@@ -672,24 +484,11 @@ func pyStripCommentsAndStrings(line string) string {
 	return b.String()
 }
 
-// cStyleBlockCommentLine applies /* */ block-comment state tracking to one
-// trimmed C-style (Go/JS) code line (fix #728). It returns the code portion
-// of the line and ok=false when the entire line is comment and must be
-// skipped. `inBlock` carries the cross-line block-comment state.
-//
-// Semantics:
-//   - While inside a block, a line without `*/` is entirely comment; a line
-//     containing `*/` yields the code after the closer.
-//   - A line starting with `//` is a full-line comment (fix #723 behavior).
-//   - A line starting with `/*` is skipped entirely (fix #723 behavior); if it
-//     does not close on the same line, the block state opens.
-//   - A line where `/*` opens mid-line and does not close keeps the code
-//     before the opener and opens the block state (mixed-line handling).
 func cStyleBlockCommentLine(trimmed string, inBlock *bool) (string, bool) {
 	if *inBlock {
 		end := strings.Index(trimmed, "*/")
 		if end < 0 {
-			return "", false // still inside block comment body
+			return "", false
 		}
 		*inBlock = false
 		trimmed = strings.TrimSpace(trimmed[end+2:])
@@ -708,9 +507,7 @@ func cStyleBlockCommentLine(trimmed string, inBlock *bool) (string, bool) {
 	}
 	if idx := strings.Index(trimmed, "/*"); idx >= 0 {
 		if end := strings.Index(trimmed[idx+2:], "*/"); end >= 0 {
-			// #1064-A7: same-line self-closing block comment (e.g.
-			// `{/* InsecureSkipVerify: true */}`): strip the comment segment
-			// so mentions inside inline block comments do not trigger.
+
 			trimmed = strings.TrimSpace(trimmed[:idx] + trimmed[idx+2+end+2:])
 			if trimmed == "" {
 				return "", false
@@ -726,15 +523,6 @@ func cStyleBlockCommentLine(trimmed string, inBlock *bool) (string, bool) {
 	return trimmed, true
 }
 
-// jsStripCommentsAndStrings removes JS comments and string-literal contents
-// from a single code line (fix #1063: the JS path only stripped trailing
-// comments, so mentions inside string literals like
-// `const desc = "avoid eval() here"` or
-// `'NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS'` fired the detectors).
-// Single/double-quoted string contents are dropped; template-literal text
-// is dropped too, but ${...} interpolation expressions are preserved
-// (they are code) so dynamic-content checks keep their signal. Line-level
-// heuristic, mirroring pyStripCommentsAndStrings.
 func jsStripCommentsAndStrings(line string) string {
 	var b strings.Builder
 	r := []rune(line)
@@ -743,22 +531,22 @@ func jsStripCommentsAndStrings(line string) string {
 	for i < n {
 		c := r[i]
 		if c == '/' && i+1 < n && r[i+1] == '/' {
-			break // line comment
+			break
 		}
 		if c == '\'' || c == '"' {
 			quote := c
 			j := i + 1
 			for j < n && r[j] != quote {
 				if r[j] == '\\' && j+1 < n {
-					j++ // skip escaped char
+					j++
 				}
 				j++
 			}
-			i = j + 1 // consume contents + closing quote (or rest of line)
+			i = j + 1
 			continue
 		}
 		if c == '`' {
-			// Template literal: drop literal text, keep ${...} code.
+
 			i++
 			for i < n && r[i] != '`' {
 				if r[i] == '$' && i+1 < n && r[i+1] == '{' {
@@ -782,7 +570,7 @@ func jsStripCommentsAndStrings(line string) string {
 				}
 				i++
 			}
-			i++ // consume closing backtick (or rest of line)
+			i++
 			continue
 		}
 		b.WriteRune(c)
@@ -791,27 +579,6 @@ func jsStripCommentsAndStrings(line string) string {
 	return b.String()
 }
 
-// goStripTrailingComment removes a trailing // or /* comment from a single
-// C-style code line (Go and JS; fix #278, shared by all checks since fix
-// #723), so insecure patterns inside trailing comments do not trigger the
-// text-based detectors.
-//
-// Simplified (deliberate): only the spaced forms " // " and " /* " are treated
-// as comment starts, which keeps URL literals like "http://example.com"
-// (no spaces around the slashes) intact without full string-aware scanning.
-// Unspaced trailing comments (`x := 1// c`) and /* inside string literals are
-// not handled — a conservative false-negative tradeoff for a line-level
-// heuristic.
-// goStripStringLiterals removes the CONTENTS of Go string literals from a
-// line so text-based insecure-pattern checks only see code (#2902).
-//   - Double-quoted strings honor backslash escapes; contents are dropped.
-//   - Backtick raw strings have no escapes; an unterminated one sets *inRaw
-//     so the caller keeps skipping until the closing backtick on a later
-//     line (mirrors the #728 block-comment state machine).
-//   - Rune literals ('x') are dropped too (single char, never a pattern).
-//
-// Quote characters themselves are kept so line structure (operators,
-// concatenations like "" + user) stays visible to the checks.
 func goStripStringLiterals(line string, inRaw *bool) string {
 	var b strings.Builder
 	r := []rune(line)
@@ -820,7 +587,7 @@ func goStripStringLiterals(line string, inRaw *bool) string {
 	for i < n {
 		c := r[i]
 		if *inRaw {
-			// Inside a multi-line raw string: skip until closing backtick.
+
 			for i < n && r[i] != '`' {
 				i++
 			}
@@ -837,7 +604,7 @@ func goStripStringLiterals(line string, inRaw *bool) string {
 			i++
 			for i < n && r[i] != '"' {
 				if r[i] == '\\' && i+1 < n {
-					i++ // skip escaped char
+					i++
 				}
 				i++
 			}
@@ -855,7 +622,7 @@ func goStripStringLiterals(line string, inRaw *bool) string {
 				b.WriteRune('`')
 				i++
 			} else {
-				*inRaw = true // continues on the next line
+				*inRaw = true
 			}
 		case c == '\'':
 			b.WriteRune('\'')

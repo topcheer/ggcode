@@ -7,13 +7,8 @@ import (
 	"testing"
 )
 
-// zz_issue2881_test.go - regression probe for #2881: a selector call like
-// check.record only counts as an assertion when "check" is the qualifier of
-// an imported assertion package. A local variable (or struct value) named
-// check/should/quick must not let a hollow test escape detection.
 func TestIssue2881LocalVarNamedCheckNotAssertion(t *testing.T) {
-	// No assertion-package imports; `check` is a local helper value. The
-	// test body has zero real assertions and must be flagged hollow.
+
 	src := `package foo
 
 import "testing"
@@ -38,7 +33,7 @@ func TestLocalCheck(t *testing.T) {
 }
 
 func TestIssue2881ImportedRequireStillCounts(t *testing.T) {
-	// Positive control: a real testify require import keeps counting.
+
 	src := `package foo
 
 import (
@@ -56,7 +51,7 @@ func TestRealRequire(t *testing.T) {
 }
 
 func TestIssue2881AliasedImportCounts(t *testing.T) {
-	// Explicit alias to an assertion-package name must keep counting.
+
 	src := `package foo
 
 import (
@@ -69,8 +64,7 @@ func TestAliasedCheck(t *testing.T) {
 	_ = testing.Verbose
 }
 `
-	// The aliased qualifier is registered even though this body has no
-	// assertion call; the point is that assertionPkgQualifiers resolved it.
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "foo_test.go", src, 0)
 	if err != nil {

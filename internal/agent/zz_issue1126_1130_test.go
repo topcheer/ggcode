@@ -5,15 +5,6 @@ import (
 	"testing"
 )
 
-// ===========================================================================
-// #1126: map_prealloc_check.go - nested conditional skips were invisible
-//
-// hasConditionalSkip only inspected the top level of the loop body while
-// scanForMapWrite recursed to any depth, so a guarded write inside a nested
-// block was treated as unconditional and preallocation hints fired for code
-// that legitimately conditionally populates a map.
-// ===========================================================================
-
 const issue1126NestedSkip = `package main
 
 func run(items []string) map[string]string {
@@ -54,15 +45,6 @@ func run(items []string) map[string]string {
 		t.Fatal("#1126: unconditional fill should still produce a hint")
 	}
 }
-
-// ===========================================================================
-// #1127: nil_deref_check.go - block clearing via defer inside the Inspect
-// callback was dead code: the deferred function ran when the callback
-// returned, so blockDepth never grew past 0 and nilRisk was never cleared
-// per nested block. The rewritten walker pairs explicit enter/exit around
-// each BlockStmt. The test below locks in the intended #1070 behavior:
-// risk state created inside a block must not leak into sibling blocks.
-// ===========================================================================
 
 func TestNilDerefBlockExitClearsRiskRealWalker_Issue1127(t *testing.T) {
 	code := `package main
@@ -130,14 +112,6 @@ func outer() {
 	}
 }
 
-// ===========================================================================
-// #1128: nil_deref_check.go - the delta key used file:line:varName, which is
-// line-anchored. Inserting lines above the function shifted every line
-// number, made new positions differ from old ones and re-reported the same,
-// unchanged finding as if it were brand new. Keys now anchor on
-// position-independent content (function name + normalized expression path).
-// ===========================================================================
-
 const issue1128Base = `package main
 
 import "fmt"
@@ -182,8 +156,6 @@ func TestNilDerefDeltaKeyIgnoresLineShiftAbove_Issue1128(t *testing.T) {
 		t.Fatal("#1128: baseline content must produce a warning first")
 	}
 
-	// Deleting lines ABOVE (old -> new shifted every line number up): the
-	// identical pre-existing finding must NOT be re-reported.
 	repeat := checkNilDerefAfterError("test.go", codeOld, codeNew)
 	if repeat != "" {
 		t.Fatalf("#1128: line shift above must not resurrect suppressed warning, got: %s", repeat)
@@ -204,14 +176,6 @@ func extra() {
 		t.Fatalf("#1128: a new dereference site must still be reported, got: %q", got)
 	}
 }
-
-// ===========================================================================
-// #1129: nil_map_write_check.go - collectNilRiskMaps deleted nil-risk from
-// ANY var-map declaration found order-independently, including the one after
-// an earlier write, silently dropping real write-before-make panics with zero
-// warnings. Collection and initialization effects are now processed strictly
-// in statement order.
-// ===========================================================================
 
 func TestNilMapWriteBeforeMakeReported_Issue1129(t *testing.T) {
 	code := `package main
@@ -249,13 +213,6 @@ func fine() {
 		t.Fatalf("#1129: make-before-write must stay silent, got: %s", result)
 	}
 }
-
-// ===========================================================================
-// #1130: nil_map_write_check.go - any plain assignment counted as
-// initialization, so `m = nil` (which returns the variable to its nil zero
-// value) permanently marked the map initialized and later writes went
-// unreported.
-// ===========================================================================
 
 func TestNilMapWriteAfterResetToNilReported_Issue1130(t *testing.T) {
 	code := `package main

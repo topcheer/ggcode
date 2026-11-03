@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// #1547 case A pins: the fan-out writers must expose faithful previews
-// (the dry-run gate runs on these).
 func Test1547PreviewMultiEditFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.go")
@@ -51,19 +49,19 @@ func Test1547PreviewBatchReplace(t *testing.T) {
 	p := filepath.Join(dir, "c.txt")
 	os.WriteFile(p, []byte("foo1 foo2"), 0o644)
 	tt := BatchReplace{WorkingDir: dir}
-	// literal
+
 	input, _ := json.Marshal(map[string]any{"pattern": "foo", "replacement": "bar", "files": []string{p}})
 	plans, err := tt.PreviewChanges(input)
 	if err != nil || len(plans) != 1 || plans[0].NewContent != "bar1 bar2" {
 		t.Fatalf("literal preview wrong: err=%v plans=%d new=%q", err, len(plans), plans[0].NewContent)
 	}
-	// regex
+
 	input2, _ := json.Marshal(map[string]any{"pattern": `foo(\d)`, "replacement": "n$1", "is_regex": true, "files": []string{p}})
 	plans2, err := tt.PreviewChanges(input2)
 	if err != nil || len(plans2) != 1 || plans2[0].NewContent != "n1 n2" {
 		t.Fatalf("regex preview wrong: err=%v new=%q", err, plans2[0].NewContent)
 	}
-	// no match -> no plan
+
 	input3, _ := json.Marshal(map[string]any{"pattern": "zzz", "replacement": "x", "files": []string{p}})
 	plans3, _ := tt.PreviewChanges(input3)
 	if len(plans3) != 0 {

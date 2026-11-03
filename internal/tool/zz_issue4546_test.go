@@ -2,15 +2,6 @@
 
 package tool
 
-// #4546 companion tests - desktop_control_linux exec lifecycle:
-//   A) runAppResult is fire-and-forget: the caller's ctx must NOT gate the
-//      child's lifetime (parallel tool calls run under a 30s WithTimeout, so
-//      exec.CommandContext SIGKILLed launched GUI apps 30s after the tool
-//      already returned OK).
-//   B) the hold_key best-effort recovery sequences (Wayland runArgvSeq and
-//      holdKeyX11's xdotool keyup) must be bounded - a half-dead daemon used
-//      to hang the synchronous Execute path forever.
-
 import (
 	"context"
 	"os"
@@ -19,9 +10,6 @@ import (
 	"time"
 )
 
-// A (runtime): launching with an ALREADY-CANCELLED context must succeed.
-// Under the old CommandContext this failed at Start ("context canceled") -
-// and with a 30s parallel-tool timeout the app was killed mid-run.
 func TestIssue4546_RunAppSurvivesCancelledContext(t *testing.T) {
 	if _, err := os.Stat("/bin/sleep"); err != nil {
 		t.Skip("/bin/sleep not present")
@@ -37,8 +25,6 @@ func TestIssue4546_RunAppSurvivesCancelledContext(t *testing.T) {
 	}
 }
 
-// A/B (source pins): the fire-and-forget launcher must not use
-// CommandContext, and both recovery sites must be bounded by a timeout.
 func TestIssue4546_SourcePins(t *testing.T) {
 	src, err := os.ReadFile("desktop_control_linux.go")
 	if err != nil {
@@ -59,8 +45,6 @@ func TestIssue4546_SourcePins(t *testing.T) {
 		t.Fatal("#4546: runAppResult must keep the background Wait (zombie reaping)")
 	}
 
-	// B: no unbounded context.Background() may be passed directly into a
-	// recovery exec/seq - both sites must go through a bounded rctx.
 	for _, unbounded := range []string{
 		"runArgvSeq(context.Background(),",
 		"exec.CommandContext(context.Background(),",
@@ -74,13 +58,10 @@ func TestIssue4546_SourcePins(t *testing.T) {
 	}
 }
 
-// B (semantics): the release recovery itself still works within its window
-// (proves the bound did not break the happy path).
 func TestIssue4546_BoundedRecoveryStillRuns(t *testing.T) {
 	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer rcancel()
-	// "true" exits 0 immediately: a successful release sequence under a
-	// bounded context must complete well inside the deadline.
+
 	done := make(chan error, 1)
 	go func() { done <- runArgvSeq(rctx, [][]string{{"true"}}) }()
 	select {

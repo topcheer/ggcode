@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #3045 B1: a pure formatter (gofmt) must satisfy the HINT-suppression
-// flag but NOT the final-gate evidence flag.
 func TestIssue3045_B1_FormatterDoesNotSatisfyGate(t *testing.T) {
 	if !isVerifyCommand("gofmt -l .") {
 		t.Fatal("sanity: gofmt is a verify-family command (hint suppression)")
@@ -20,13 +18,9 @@ func TestIssue3045_B1_FormatterDoesNotSatisfyGate(t *testing.T) {
 	if !isRealTestExecution("go test ./...") {
 		t.Fatal("sanity: go test is a real execution")
 	}
-	// The gate itself takes the flag, so the flag semantics above carry the
-	// acceptance: a run whose only verify was `gofmt -l` must still gate.
+
 }
 
-// #3045 B2: Go VCS-path dependencies (dotted-domain first segment) are
-// git-URL resolvable - no registry-squatting surface - so a fresh go.mod
-// full of github.com/... deps must not eat the slopsquatting warning.
 func TestIssue3045_B2_GoVCSPathsExempt(t *testing.T) {
 	w := checkNewDependencyVerify("go.mod",
 		"",
@@ -34,7 +28,7 @@ func TestIssue3045_B2_GoVCSPathsExempt(t *testing.T) {
 	if len(w) != 0 {
 		t.Fatalf("VCS-path Go deps must be exempt, got %v", w)
 	}
-	// Registry-style short name in npm still warns (the real attack surface).
+
 	w = checkNewDependencyVerify("package.json", `{}`,
 		`{ "dependencies": { "react-pro-memo-hooks": "^1.0.0" } }`)
 	if len(w) != 1 || !strings.Contains(w[0], "slopsquatting") {
@@ -49,8 +43,7 @@ func TestIsVCSModulePath(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"react-pro-memo-hooks", "cobra", "gocloud.dev"} {
-		// note: gocloud.dev IS dotted-domain - single-element module paths
-		// like it are VCS too, which is the correct semantics.
+
 		if p == "gocloud.dev" && !isVCSModulePath(p) {
 			t.Errorf("%s should be VCS path", p)
 		}

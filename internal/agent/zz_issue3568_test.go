@@ -2,20 +2,13 @@ package agent
 
 import "testing"
 
-// #3568: failed edits must not count as productive (they used to reset
-// itersSinceProductive, clear fileReadsSinceEdit, and zero driftLevel on
-// every failed edit_file, letting read→edit-fail loops escape the drift
-// and file-stuck detectors). partial_success (IsError=true but
-// written_paths present) DOES count as productive, matching #1762.
 func TestIssue3568FailedEditNotProductive(t *testing.T) {
 	o := newOverseerState()
 
-	// Prime state that a failed edit must NOT clear.
 	o.itersSinceProductive = 7
 	o.driftLevel = 2
 	o.fileReadsSinceEdit["a.go"] = 3
 
-	// Failed edit_file with no files reaching disk (old_text mismatch).
 	o.recordToolCall("edit_file", true, "a.go", "error: old_text not found in file", 999)
 
 	if o.itersSinceProductive != 8 {
@@ -28,7 +21,6 @@ func TestIssue3568FailedEditNotProductive(t *testing.T) {
 		t.Fatalf("failed edit_file must not clear fileReadsSinceEdit, got %d", o.fileReadsSinceEdit["a.go"])
 	}
 
-	// Failed run_command keeps the historical behavior: not productive.
 	o.itersSinceProductive = 0
 	o.recordToolCall("run_command", true, "", "exit status 1", 1000)
 	if o.itersSinceProductive != 1 {
@@ -39,8 +31,6 @@ func TestIssue3568FailedEditNotProductive(t *testing.T) {
 func TestIssue3568PartialSuccessIsProductive(t *testing.T) {
 	o := newOverseerState()
 
-	// A partial_success multi_file_edit: IsError=true overall, but two
-	// files actually reached disk (written_paths is real).
 	o.itersSinceProductive = 5
 	o.fileReadsSinceEdit["a.go"] = 2
 
@@ -70,28 +60,21 @@ func TestIssue3568SuccessfulEditStillProductive(t *testing.T) {
 	}
 }
 
-// End-to-end: a read→failed-edit loop must now trip the file-stuck
-// detector (previously the failed edit cleared the read counter every
-// cycle, so it never reached fileStuckThreshold).
 func TestIssue3568ReadEditFailLoopTripsFileStuck(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = false
 
-	// Each cycle adds 2 entries (read + failed edit). The analyze gate
-	// requires len(trajectory) >= overseerInterval (12), so the detector
-	// can only fire from cycle 6 onward.
 	for cycle := 0; cycle < 8; cycle++ {
 		o.recordToolCall("read_file", false, "loop.go", "file content", 999)
 		o.recordToolCall("edit_file", true, "loop.go", "error: old_text not found", 999)
 
-		// Analyze with enough trajectory to pass the interval gate.
 		iter := (cycle + 1) * overseerInterval
 		msg := o.analyze(iter)
 		if o.fired["file_stuck"] {
 			if msg == "" {
 				t.Fatalf("cycle %d: file_stuck fired but analyze returned empty guidance", cycle)
 			}
-			return // detector fired as intended
+			return
 		}
 	}
 	t.Fatalf("read→failed-edit loop never tripped file_stuck detector after 5 cycles (reads=%d)",
