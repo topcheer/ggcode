@@ -89,10 +89,15 @@ func (b *ChatBridge) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool
 		cronPtr = &cronExpr
 	}
 	promptPtr := &prompt
-	var qb *bool
-	if queueIfBusy {
-		qb = &queueIfBusy
-	}
+	// #4977: the desktop editor is a full-state save channel - the frontend
+	// (CronManagement.tsx:75) passes the checkbox's plain bool on every save.
+	// The old `if queueIfBusy { qb = &queueIfBusy }` folded an explicit false
+	// into nil ("keep original" in Scheduler.Update), so unchecking
+	// queue-if-busy silently failed while the UI showed success. Pass the
+	// pointer unconditionally; agents needing partial-update semantics use the
+	// cron_update tool, whose *bool JSON binding already distinguishes absent
+	// from explicit false.
+	qb := &queueIfBusy
 	job, err := b.cronScheduler.Update(id, cronPtr, promptPtr, qb)
 	if err != nil {
 		return CronJobInfo{}, err

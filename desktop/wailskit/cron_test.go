@@ -16,7 +16,12 @@ func newTestCronBridge(t *testing.T) *ChatBridge {
 	return b
 }
 
-func TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy(t *testing.T) {
+// #4977: the desktop editor is a full-state save channel (frontend always
+// sends the checkbox bool). An explicit queueIfBusy=false now DISABLES the
+// flag instead of being silently folded into "keep original" - the old
+// assertion preserved the #4977 bug. Prompt-only/cron-only updates still
+// preserve the untouched field via the scheduler's nil semantics.
+func TestUpdateCronJob_FullStateSaveAppliesExplicitFalse(t *testing.T) {
 	b := newTestCronBridge(t)
 
 	created, err := b.CreateCronJob("0 3 * * *", "original prompt", true, true)
@@ -32,8 +37,8 @@ func TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy(t *testing.T) {
 	if updated.CronExpr != "0 3 * * *" {
 		t.Errorf("cron expr overwritten: got %q, want %q", updated.CronExpr, "0 3 * * *")
 	}
-	if !updated.QueueIfBusy {
-		t.Errorf("queueIfBusy silently disabled by prompt-only update (#283-style partial-update bug)")
+	if updated.QueueIfBusy {
+		t.Errorf("explicit queueIfBusy=false must disable the flag (#4977): still true")
 	}
 	if updated.Prompt != "new prompt only" {
 		t.Errorf("prompt not updated: got %q", updated.Prompt)
