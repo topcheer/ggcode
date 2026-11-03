@@ -43,3 +43,32 @@ func TestSpawnEnoentDiagnosisEmptyDir(t *testing.T) {
 		t.Fatalf("empty dir: expected inherited-cwd note, got: %s", got)
 	}
 }
+
+// Ask 1 of the issue: when the diagnosis lands on the genuine-outage
+// branch, it must embed the zero-spawn saturation capture (fd usage, proc
+// count, vm pressure) so the next occurrence pins the saturated resource
+// from the failure report alone.
+func TestSpawnPressureCapture(t *testing.T) {
+	p := spawnPressure()
+	if p == "" {
+		t.Skip("no pressure metrics readable on this platform")
+	}
+	if !strings.HasPrefix(p, "[S-16 pressure] ") {
+		t.Fatalf("pressure capture must carry the marker prefix, got: %s", p)
+	}
+	for _, want := range []string{"fds=", "procs="} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("pressure capture must include %s, got: %s", want, p)
+		}
+	}
+}
+
+func TestSpawnEnoentDiagnosisLiveCwdCarriesPressure(t *testing.T) {
+	got := spawnEnoentDiagnosis(t.TempDir())
+	if !strings.Contains(got, "still exists") {
+		t.Fatalf("live cwd: expected still-exists diagnosis, got: %s", got)
+	}
+	if spawnPressure() != "" && !strings.Contains(got, "[S-16 pressure]") {
+		t.Fatal("genuine-outage branch must embed the pressure capture when metrics are readable")
+	}
+}
