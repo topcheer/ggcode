@@ -18,7 +18,7 @@ func (r *usageAwareTestRunner) SetUsageHandler(fn func(provider.TokenUsage)) {
 	r.onUsage = fn
 }
 
-func (r *usageAwareTestRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r *usageAwareTestRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if r.onUsage != nil {
 		r.onUsage(provider.TokenUsage{InputTokens: 17, OutputTokens: 6})
 	}
@@ -55,7 +55,7 @@ func TestRun_ForwardsUsageHandlerToSubAgent(t *testing.T) {
 
 type toolOrderTestRunner struct{}
 
-func (r *toolOrderTestRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r *toolOrderTestRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{
 		Type: provider.StreamEventToolCallDone,
 		Tool: provider.ToolCallDelta{
