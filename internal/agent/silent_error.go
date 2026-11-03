@@ -24,6 +24,8 @@ type silentErrorState struct {
 	lastErrorResource string
 }
 
+const silentErrorStaleIterations = 10
+
 type unresolvedError struct {
 	toolName     string
 	resourceKey  string
@@ -66,6 +68,25 @@ func (s *silentErrorState) recordToolError(toolName, resourceKey, errorContent s
 func (s *silentErrorState) recordToolAction(toolName, resourceKey string) string {
 	if s.fired || len(s.unresolvedErrors) == 0 {
 		return ""
+	}
+
+	// #4990 mode 3: age out stale entries. An error recorded many
+	// iterations ago that the run has since moved past (with no matching
+	// correction action) should not keep resurfacing in the nudge.
+	{
+		n := len(s.unresolvedErrors)
+		newest := s.unresolvedErrors[n-1].iteration
+		filtered := s.unresolvedErrors[:0]
+		for _, ue := range s.unresolvedErrors {
+			if newest-ue.iteration > silentErrorStaleIterations {
+				continue
+			}
+			filtered = append(filtered, ue)
+		}
+		s.unresolvedErrors = filtered
+		if len(s.unresolvedErrors) == 0 {
+			return ""
+		}
 	}
 
 	if resourceKey == "" {

@@ -70,14 +70,29 @@ type claimVerifyPattern struct {
 	pattern string
 	msg     string
 	hard    bool
+
+	// anchored restricts matching to the start of a line. Verdict-family
+	// patterns (exit status, panic, go-test FAIL lines) are anchored so
+	// that failure text merely QUOTED inside a successful result (issue
+	// bodies, diffs, review comments, grep output) no longer trips the
+	// banner (#4990 mode 1). Real verdict lines are emitted by the tool
+	// itself at column 0; quoted text almost always carries leading
+	// whitespace or surrounding prose.
+	anchored bool
 }
 
 var claimVerifyReCache = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp)
 	for _, cvp := range claimVerifyPatterns {
 		if strings.HasPrefix(cvp.pattern, "re:") {
-			if re, err := regexp.Compile(strings.TrimPrefix(cvp.pattern, "re:")); err == nil {
+			body := strings.TrimPrefix(cvp.pattern, "re:")
+			if re, err := regexp.Compile(body); err == nil {
 				m[cvp.pattern] = re
+			}
+			if cvp.anchored {
+				if re, err := regexp.Compile(`(?:^|\s)(?:` + body + `)`); err == nil {
+					m[cvp.pattern+"|anchored"] = re
+				}
 			}
 		}
 	}
@@ -96,31 +111,31 @@ func claimVerifyMatch(lower, pattern string) bool {
 
 var claimVerifyPatterns = []claimVerifyPattern{
 
-	{"exit code: 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
-	{"exit code 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
-	{"exit status 1", "Command exited with status 1 (failure). Do not claim this command succeeded.", true},
-	{"exit=1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
+	{"exit code: 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true, true},
+	{"exit code 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true, true},
+	{"exit status 1", "Command exited with status 1 (failure). Do not claim this command succeeded.", true, true},
+	{"exit=1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true, true},
 
-	{"panic:", "Output contains a Go panic. This indicates a crash - do not claim success.", true},
-	{"fatal error:", "Output contains a fatal error. Do not claim this operation succeeded.", true},
+	{"panic:", "Output contains a Go panic. This indicates a crash - do not claim success.", true, true},
+	{"fatal error:", "Output contains a fatal error. Do not claim this operation succeeded.", true, true},
 
-	{"build failed", "Build failed. Do not claim the build passed.", false},
-	{"compilation failed", "Compilation failed. Do not claim compilation succeeded.", false},
+	{"build failed", "Build failed. Do not claim the build passed.", false, false},
+	{"compilation failed", "Compilation failed. Do not claim compilation succeeded.", false, false},
 
-	{"--- fail:", "Test output contains FAIL. Do not claim all tests passed.", true},
-	{"re:fail:[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true},
-	{"re:fail\t[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true},
-	{"fail\t", "Test output contains FAIL. Do not claim all tests passed.", true},
+	{"--- fail:", "Test output contains FAIL. Do not claim all tests passed.", true, true},
+	{"re:fail:[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true, true},
+	{"re:fail\t[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true, true},
+	{"fail\t", "Test output contains FAIL. Do not claim all tests passed.", true, true},
 
-	{"[build failed]", "Test output contains FAIL. Do not claim all tests passed.", true},
+	{"[build failed]", "Test output contains FAIL. Do not claim all tests passed.", true, true},
 
-	{"no such file or directory", "File/path does not exist. Do not claim you accessed it.", false},
-	{"does not exist", "Path does not exist. Do not claim you found it.", false},
-	{"not found in", "Item not found. Do not claim it exists.", false},
+	{"no such file or directory", "File/path does not exist. Do not claim you accessed it.", false, false},
+	{"does not exist", "Path does not exist. Do not claim you found it.", false, false},
+	{"not found in", "Item not found. Do not claim it exists.", false, false},
 
-	{"0 matches", "Search returned 0 matches. Do not claim results were found.", false},
-	{"no matches found", "Search returned no matches. Do not claim results were found.", false},
-	{"no results", "Search returned no results. Do not claim something was found.", false},
+	{"0 matches", "Search returned 0 matches. Do not claim results were found.", false, false},
+	{"no matches found", "Search returned no matches. Do not claim results were found.", false, false},
+	{"no results", "Search returned no results. Do not claim something was found.", false, false},
 }
 
 var claimVerifyContentCmds = map[string]bool{
@@ -273,14 +288,44 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 		if mixed && !cvp.hard {
 			continue
 		}
-		if claimVerifyMatch(lower, cvp.pattern) {
-			c.injections++
-			debug.Log("claim_verify", "misinterpretation risk detected: tool=%s pattern=%q", toolName, cvp.pattern)
-			return fmt.Sprintf("[Verify] %s Re-read the tool output carefully before proceeding.", cvp.msg)
+		if cvp.anchored {
+			if !claimVerifyMatchAnchored(lower, cvp.pattern) {
+				continue
+			}
+		} else if !claimVerifyMatch(lower, cvp.pattern) {
+			continue
 		}
+		c.injections++
+		debug.Log("claim_verify", "misinterpretation risk detected: tool=%s pattern=%q", toolName, cvp.pattern)
+		return fmt.Sprintf("[Verify] %s Re-read the tool output carefully before proceeding.", cvp.msg)
 	}
 
 	return ""
+}
+
+// claimVerifyMatchAnchored reports whether any line of the (already
+// lowercased) content starts with the pattern. Verdict lines emitted by
+// tools sit at column 0; text merely quoting those verdicts is almost
+// always indented or wrapped in prose (#4990 mode 1).
+func claimVerifyMatchAnchored(lower, pattern string) bool {
+	if strings.HasPrefix(pattern, "re:") {
+		re := claimVerifyReCache[pattern+"|anchored"]
+		if re == nil {
+			return false
+		}
+		for _, line := range strings.Split(lower, "\n") {
+			if re.MatchString(strings.TrimRight(line, "\r")) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, line := range strings.Split(lower, "\n") {
+		if strings.HasPrefix(strings.TrimRight(line, "\r"), pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func trimNonPrint(s string) string {
