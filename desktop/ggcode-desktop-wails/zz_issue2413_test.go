@@ -43,7 +43,11 @@ func TestIssue2413OverwritePathStopsOldSession(t *testing.T) {
 	}
 	src := string(b)
 
-	i := strings.Index(src, "#1787 case 1")
+	// The overwrite path was refactored: the teardown logic moved into
+	// teardownShareRef (its Stop ordering is asserted below). Anchor on code
+	// symbols - the historical comment anchor was removed by the decomment
+	// campaign and the inline Stops disappeared with the refactor.
+	i := strings.Index(src, "if oldRef := h.activeShare; oldRef != nil {")
 	if i < 0 {
 		t.Fatal("overwrite block not found")
 	}
@@ -52,12 +56,18 @@ func TestIssue2413OverwritePathStopsOldSession(t *testing.T) {
 		t.Fatal("overwrite block terminator not found")
 	}
 	block := src[i : i+j]
-	if !strings.Contains(block, "oldRef.session.Stop()") {
-		t.Fatal("#2413: overwrite path must stop the old session - the relay websocket lives on the session, broker.Stop alone leaves it alive")
+	if !strings.Contains(block, "h.teardownShareRef(oldRef, oldMgr)") {
+		t.Fatal("#2413: overwrite path must tear down the old session - the relay websocket lives on the session, broker.Stop alone leaves it alive")
 	}
 
-	brokerAt := strings.Index(block, "oldRef.broker.Stop()")
-	sessAt := strings.Index(block, "oldRef.session.Stop()")
+	fn := strings.Index(src, "func (h *TunnelHost) teardownShareRef(")
+	if fn < 0 {
+		t.Fatal("teardownShareRef not found")
+	}
+	fnEnd := strings.Index(src[fn:], "\n}\n")
+	body := src[fn : fn+fnEnd]
+	brokerAt := strings.Index(body, "oldRef.broker.Stop()")
+	sessAt := strings.Index(body, "oldRef.session.Stop()")
 	if !(brokerAt >= 0 && brokerAt < sessAt) {
 		t.Fatal("#2413: teardown must stop broker before session, mirroring TunnelHost.StopShare")
 	}

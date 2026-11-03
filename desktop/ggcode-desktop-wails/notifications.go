@@ -482,6 +482,7 @@ func (nm *NotificationManager) runWinToast(title, body string) {
 	defer cancel()
 	script := windowsToastScript(title, body)
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", script)
+	hideConsoleWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		debug.Log("desktop", "Windows notification failed: %v", err)
 	}

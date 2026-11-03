@@ -154,6 +154,7 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 	var c *exec.Cmd
 	if runtime.GOOS == "windows" {
 		c = exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", cmd)
+		c.SysProcAttr = noWindowSysProcAttr()
 	} else {
 		c = exec.CommandContext(ctx, "sh", "-c", cmd)
 	}

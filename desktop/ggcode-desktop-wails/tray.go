@@ -118,6 +118,7 @@ func (a *App) spawnTrayHelper() {
 	}
 	for _, cand := range trayHelperCandidates() {
 		cmd := exec.Command(cand, path)
+		hideConsoleWindow(cmd)
 		if err := cmd.Start(); err != nil {
 			continue
 		}
