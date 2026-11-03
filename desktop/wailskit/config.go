@@ -263,6 +263,8 @@ func UpdateConfig(values map[string]interface{}) error {
 	_, hasBaseURL := values["baseURL"].(string)
 	_, hasVendor := values["vendor"].(string)
 	_, hasEndpoint := values["endpoint"].(string)
+	prevVendor, prevEndpoint := cfg.Vendor, cfg.Endpoint
+	selectionChanged := false
 	if hasBaseURL || hasVendor || hasEndpoint {
 
 		vendor, endpoint := cfg.Vendor, cfg.Endpoint
@@ -284,6 +286,9 @@ func UpdateConfig(values map[string]interface{}) error {
 
 			if strings.TrimSpace(ep.Protocol) == "" {
 				return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", endpoint, vendor)
+			}
+			if vendor != prevVendor || endpoint != prevEndpoint {
+				selectionChanged = true
 			}
 		}
 	}
@@ -313,6 +318,21 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	if v, ok := values["model"].(string); ok && v != "" {
 		cfg.Model = v
+	} else if selectionChanged && cfg.Vendor != "" && cfg.Endpoint != "" {
+		// Vendor/endpoint switched without an explicit model: reset cfg.Model to
+		// the new endpoint's selection when it declares one. Keeping the previous
+		// value here leaks the old vendor's model into the new selection by
+		// string coincidence (#4973 follow-up: kimi k3-256k survived a switch to
+		// zai). Endpoints without any model definition keep the old value.
+		if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
+			if ep, ok2 := vc.Endpoints[cfg.Endpoint]; ok2 {
+				if strings.TrimSpace(ep.SelectedModel) != "" {
+					cfg.Model = ep.SelectedModel
+				} else if strings.TrimSpace(ep.DefaultModel) != "" {
+					cfg.Model = ep.DefaultModel
+				}
+			}
+		}
 	}
 	if v, ok := values["language"].(string); ok {
 		cfg.Language = v
