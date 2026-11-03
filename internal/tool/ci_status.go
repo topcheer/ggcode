@@ -298,6 +298,7 @@ func ghRun(ctx context.Context, dir string, args ...string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, "gh", args...)
+	applyCreateNoWindow(cmd)
 	cmd.Dir = dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -311,6 +312,7 @@ func ghRun(ctx context.Context, dir string, args ...string) (string, error) {
 
 func currentBranch(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
+	applyCreateNoWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

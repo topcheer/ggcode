@@ -443,6 +443,7 @@ func getChromeVersion(chromePath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, chromePath, "--version")
+	applyCreateNoWindow(cmd)
 
 	cmd.Cancel = func() error {
 		return cmd.Process.Kill()

@@ -115,7 +115,12 @@ func (ClipboardTool) writeClipboard(ctx context.Context, text string) (Result, e
 	return Result{Content: fmt.Sprintf("Copied %d characters to clipboard: %s", len(text), preview)}, nil
 }
 
-func clipboardReadCmd(ctx context.Context) (*exec.Cmd, error) {
+func clipboardReadCmd(ctx context.Context) (cmd *exec.Cmd, err error) {
+	defer func() {
+		if cmd != nil {
+			applyCreateNoWindow(cmd)
+		}
+	}()
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbpaste"), nil
@@ -137,7 +142,12 @@ func clipboardReadCmd(ctx context.Context) (*exec.Cmd, error) {
 	}
 }
 
-func clipboardWriteCmd(ctx context.Context) (*exec.Cmd, error) {
+func clipboardWriteCmd(ctx context.Context) (cmd *exec.Cmd, err error) {
+	defer func() {
+		if cmd != nil {
+			applyCreateNoWindow(cmd)
+		}
+	}()
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbcopy"), nil
