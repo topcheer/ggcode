@@ -7,30 +7,6 @@ import (
 	"testing"
 )
 
-// #4150: run-end defer queue-pump asymmetry
-//
-// Problem (before fix):
-//   chat.go has three run-starter functions (sendMessageData, SendContent,
-//   SendHiddenText). The first two end with a defer that drains ONE pending
-//   queued message (pumping the FIFO chain), but SendHiddenText's defer only
-//   cleared b.cancel — no drain.
-//
-// Consequence:
-//   - Run busy: LAN hidden message queued, then desktop visible message queued
-//   - Run ends: defer pops the hidden message, hidden run starts
-//   - Hidden run ends: its defer does NOT drain -> the visible message stays
-//     stranded in the queue indefinitely (UI idle, queue non-empty) until the
-//     next user action (next send or PopLastVisible) happens to consume it.
-//
-// Fix:
-//   SendHiddenText's run-end defer now mirrors the other two: it calls
-//   b.drainPending() and routes the popped message (hidden -> SendHiddenText,
-//   visible -> sendMessageData with its FIFO-aligned source/exclude pair).
-//
-// Result after fix:
-//   - All three run-end defers pump the queue symmetrically
-//   - A hidden message at the head can no longer break the pump chain
-
 // TestRunEndDefersDrainSymmetry verifies that all three run-starter functions
 // drain the pending queue in their run-end defer. This is the core invariant
 // for #4150: any future run-starter that forgets the drain re-introduces the
@@ -102,8 +78,6 @@ func TestHiddenThenVisibleQueueInterleave(t *testing.T) {
 		t.Skipf("bridge init failed in test env: %v", err)
 	}
 
-	// Busy-run interleaved enqueue (issue timeline steps 2-3): LAN hidden
-	// message lands first, desktop visible message second.
 	b.mu.Lock()
 	b.pendingMsgs.Enqueue("lan hidden payload", true, nil)
 	b.pendingMsgs.Enqueue("stranded visible question", false, nil)
@@ -111,13 +85,11 @@ func TestHiddenThenVisibleQueueInterleave(t *testing.T) {
 	b.pendingExclude = append(b.pendingExclude, "")
 	b.mu.Unlock()
 
-	// First run-end drain pops the hidden head.
 	p1, ok := b.drainPending()
 	if !ok || !p1.Hidden || p1.Text != "lan hidden payload" {
 		t.Fatalf("first drain must pop the hidden head, got ok=%v hidden=%v text=%q", ok, p1.Hidden, p1.Text)
 	}
 
-	// Hidden runs consume no source/exclude pair (#477 invariant).
 	b.mu.Lock()
 	srcLen, exclLen := len(b.pendingSource), len(b.pendingExclude)
 	b.mu.Unlock()
@@ -125,8 +97,6 @@ func TestHiddenThenVisibleQueueInterleave(t *testing.T) {
 		t.Fatalf("hidden consume must not pop the parallel pair, got source=%d exclude=%d", srcLen, exclLen)
 	}
 
-	// The hidden run's OWN run-end defer (post-fix) must pop the visible
-	// entry — the exact pump step that was missing before #4150.
 	p2, ok := b.drainPending()
 	if !ok || p2.Hidden || p2.Text != "stranded visible question" {
 		t.Fatalf("second drain must pop the stranded visible message, got ok=%v hidden=%v text=%q", ok, p2.Hidden, p2.Text)
@@ -141,7 +111,6 @@ func TestHiddenThenVisibleQueueInterleave(t *testing.T) {
 		t.Fatalf("visible message must drain with its OWN pair, got source=%q exclude=%q", src, excl)
 	}
 
-	// Queue fully pumped — nothing stranded.
 	if _, ok := b.drainPending(); ok {
 		t.Fatalf("queue must be empty after two symmetric run-end drains")
 	}

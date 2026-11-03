@@ -16,10 +16,6 @@ func newTestCronBridge(t *testing.T) *ChatBridge {
 	return b
 }
 
-// TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy verifies #288:
-// a frontend edit that only changes the prompt (empty cron expr, queueIfBusy
-// false not represented) must NOT overwrite the stored cron expression or
-// queue_if_busy=true.
 func TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy(t *testing.T) {
 	b := newTestCronBridge(t)
 
@@ -44,10 +40,6 @@ func TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy(t *testing.T) {
 	}
 }
 
-// TestUpdateCronJob_TrueEnablesQueueIfBusy verifies that submitting
-// queueIfBusy=true does enable it (true-updates semantics). Since #617 the
-// prompt is required on every update (empty prompt = validation error), so
-// the queueIfBusy-only update resubmits the current prompt.
 func TestUpdateCronJob_TrueEnablesQueueIfBusy(t *testing.T) {
 	b := newTestCronBridge(t)
 
@@ -68,9 +60,6 @@ func TestUpdateCronJob_TrueEnablesQueueIfBusy(t *testing.T) {
 	}
 }
 
-// TestUpdateCronJob_CronOnlyPreservesPrompt verifies a cron-only update
-// (empty cronExpr would be the no-op; here we change cronExpr while
-// resubmitting the unchanged prompt, which #617 requires) keeps the prompt.
 func TestUpdateCronJob_CronOnlyPreservesPrompt(t *testing.T) {
 	b := newTestCronBridge(t)
 
@@ -91,10 +80,6 @@ func TestUpdateCronJob_CronOnlyPreservesPrompt(t *testing.T) {
 	}
 }
 
-// TestCreateCronJobRejectsEmptyPrompt pins #1433-C: Create never
-// validated empty prompts (while the comment claimed it did and
-// Update-side #617 rejects them) - a blank prompt created a
-// permanently-firing no-op job.
 func TestCreateCronJobRejectsEmptyPrompt(t *testing.T) {
 	b := newTestCronBridge(t)
 	for _, prompt := range []string{"", "   "} {

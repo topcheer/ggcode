@@ -36,7 +36,7 @@ func TestIssue629_MarkdownExportRedactsToolContent(t *testing.T) {
 	if !strings.Contains(md, "****") {
 		t.Error("expected masked tool Content output")
 	}
-	// #583 behavior (ToolDetail redaction) must remain intact.
+
 	if strings.Contains(md, "sk-ant-abcdefghijklmnopqrstuvwxyz") {
 		t.Error("ToolDetail redaction regressed (#583)")
 	}

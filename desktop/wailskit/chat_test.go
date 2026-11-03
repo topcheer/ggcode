@@ -21,10 +21,10 @@ func TestMergeTunnelUserMessages(t *testing.T) {
 		{Role: "assistant", Content: "hi"},
 	}
 	events := []session.TunnelEvent{
-		mkEvent("hello"),                                 // same message_id as persisted msg -> skipped
-		mkEvent("from mobile"),                           // new -> appended
-		{Type: "other", Data: nil},                       // non user_message -> skipped
-		{Type: "user_message", Data: []byte("not-json")}, // unparseable -> skipped
+		mkEvent("hello"),
+		mkEvent("from mobile"),
+		{Type: "other", Data: nil},
+		{Type: "user_message", Data: []byte("not-json")},
 	}
 
 	out := mergeTunnelUserMessages(msgs, events)
@@ -38,7 +38,6 @@ func TestMergeTunnelUserMessages(t *testing.T) {
 		t.Fatalf("expected message_id preserved, got %q", out[2].ID)
 	}
 
-	// Empty events must not alter input.
 	same := mergeTunnelUserMessages(msgs, nil)
 	if len(same) != len(msgs) {
 		t.Fatalf("expected %d messages with no tunnel events, got %d", len(msgs), len(same))
@@ -59,8 +58,8 @@ func TestMergeTunnelUserMessages_SameTextDistinctIDsKept(t *testing.T) {
 	}
 	events := []session.TunnelEvent{
 		mkEvent("yes", "tm-1"),
-		mkEvent("yes", "tm-2"), // same text, different message — must be kept
-		mkEvent("yes", "tm-1"), // exact replay of the first event — deduped
+		mkEvent("yes", "tm-2"),
+		mkEvent("yes", "tm-1"),
 	}
 
 	out := mergeTunnelUserMessages(msgs, events)
@@ -85,9 +84,9 @@ func TestMergeTunnelUserMessages_NoIDFallsBackToTextDedup(t *testing.T) {
 		{Role: "assistant", Content: "hi"},
 	}
 	events := []session.TunnelEvent{
-		mkNoIDEvent("hello"), // no ID, same text as persisted -> deduped
-		mkNoIDEvent("hello"), // second ID-less event with same text -> also deduped
-		mkNoIDEvent("fresh"), // no ID, new text -> kept
+		mkNoIDEvent("hello"),
+		mkNoIDEvent("hello"),
+		mkNoIDEvent("fresh"),
 	}
 
 	out := mergeTunnelUserMessages(msgs, events)

@@ -26,8 +26,7 @@ func newTestBridgeWithMCP(t *testing.T, workingDir string) *ChatBridge {
 }
 
 func TestAddMCPServerWorkspaceScopeReloadsManager(t *testing.T) {
-	// Isolated global config (HOME) + a workspace with its own ggcode.yaml
-	// so AddMCPServer writes the workspace mcp_servers.yaml (#248 scope).
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
@@ -45,7 +44,6 @@ func TestAddMCPServerWorkspaceScopeReloadsManager(t *testing.T) {
 	SetChatBridge(bridge)
 	defer SetChatBridge(nil)
 
-	// Precondition: manager knows no servers.
 	if snap := bridge.mcpManager.Snapshot(); len(snap) != 0 {
 		t.Fatalf("precondition: expected empty manager, got %d servers", len(snap))
 	}
@@ -72,7 +70,6 @@ func TestAddMCPServerWorkspaceScopeReloadsManager(t *testing.T) {
 		t.Fatal("#498 regression: workspace-scoped AddMCPServer did not reach the running MCP manager (would stay dead until restart)")
 	}
 
-	// And it must be persisted in the workspace scope, not the global file.
 	wsCfg, err := LoadConfigForWorkspace(ws)
 	if err != nil {
 		t.Fatal(err)
@@ -125,8 +122,6 @@ func TestAddMCPServerEditReplacesManagerPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Edit: change the command. The manager must swap the plugin for the new
-	// config — the old code left the plugin's stale cfg in place.
 	if err := AddMCPServer(map[string]string{
 		"name":    "srv",
 		"type":    "stdio",
@@ -139,7 +134,7 @@ func TestAddMCPServerEditReplacesManagerPlugin(t *testing.T) {
 	if len(snap) != 1 {
 		t.Fatalf("expected exactly 1 server snapshot after edit, got %d", len(snap))
 	}
-	// Verify the persisted (and thus reloaded) command took the new value.
+
 	wsCfg, err := LoadConfigForWorkspace(ws)
 	if err != nil {
 		t.Fatal(err)

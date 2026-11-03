@@ -2,12 +2,6 @@
 
 package wailskit
 
-// Issue #614 regression tests: ApplyImpersonation must (a) preserve
-// already-saved CustomHeaders when the frontend submits an empty map on a
-// plain preset switch (SettingsPage.tsx sends `{} as Record<string,string>`),
-// and (b) reject unknown presetIDs instead of silently disabling
-// impersonation while persisting the bogus ID (UI/runtime fork).
-
 import (
 	"testing"
 
@@ -23,7 +17,6 @@ func setupIssue614Config(t *testing.T, impersonation config.ImpersonationConfig)
 	_ = workspace
 }
 
-// D1: switching presets with an empty headers map must keep saved headers.
 func TestIssue614_EmptyHeadersPreserveExisting(t *testing.T) {
 	setupIssue614Config(t, config.ImpersonationConfig{
 		Preset:        "gemini-cli",
@@ -46,7 +39,6 @@ func TestIssue614_EmptyHeadersPreserveExisting(t *testing.T) {
 	}
 }
 
-// D1: explicit new headers still replace the old ones.
 func TestIssue614_ExplicitHeadersReplace(t *testing.T) {
 	setupIssue614Config(t, config.ImpersonationConfig{
 		Preset:        "gemini-cli",
@@ -66,7 +58,6 @@ func TestIssue614_ExplicitHeadersReplace(t *testing.T) {
 	}
 }
 
-// D2: unknown presetID must be a validation error, not silently accepted.
 func TestIssue614_UnknownPresetRejected(t *testing.T) {
 	setupIssue614Config(t, config.ImpersonationConfig{Preset: "none"})
 
@@ -80,7 +71,6 @@ func TestIssue614_UnknownPresetRejected(t *testing.T) {
 	}
 }
 
-// "none" and "" remain valid (disable impersonation).
 func TestIssue614_NoneAndEmptyStillValid(t *testing.T) {
 	setupIssue614Config(t, config.ImpersonationConfig{
 		Preset:        "claude-cli",

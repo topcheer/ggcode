@@ -58,7 +58,7 @@ func TestIssue671_UTF16TxtNotLabelledTextPlain(t *testing.T) {
 func TestIssue671_RenamedImageExtNotTrusted(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "fake.png")
-	// Arbitrary non-image binary payload.
+
 	if err := os.WriteFile(p, []byte{0x00, 0x01, 0x02, 0x03, 0xFE, 0xFF}, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestIssue671_ImageBranchUnchanged(t *testing.T) {
 	if err := png.Encode(&buf, img); err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(dir, "dot.txt") // image content, text extension
+	p := filepath.Join(dir, "dot.txt")
 	if err := os.WriteFile(p, buf.Bytes(), 0644); err != nil {
 		t.Fatal(err)
 	}

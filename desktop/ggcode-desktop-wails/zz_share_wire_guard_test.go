@@ -19,13 +19,10 @@ import (
 func TestSetTunnelStateWireRefusalSemantics(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
-	// Start begins: snapshot the current stop generation.
 	a.tunnelMu.Lock()
 	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()
 
-	// A stop crosses the in-flight start: the wire must refuse and leave
-	// the fields untouched.
 	a.clearTunnelState()
 	sess := &tunnel.Session{}
 	broker := tunnel.NewBroker(nil)
@@ -36,9 +33,6 @@ func TestSetTunnelStateWireRefusalSemantics(t *testing.T) {
 		t.Fatal("a refused wire must leave tunnel state untouched")
 	}
 
-	// A fresh start re-snapshots after the stop: the wire succeeds and
-	// records the session/broker (the "wired => tracked" half of the
-	// invariant StopShare relies on).
 	a.tunnelMu.Lock()
 	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()

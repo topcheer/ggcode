@@ -7,7 +7,7 @@ import (
 )
 
 func TestExportSessionToMarkdown_NoSession(t *testing.T) {
-	// With no active chat bridge and empty sessionID, should return error.
+
 	_, err := ExportSessionToMarkdown("")
 	if err == nil {
 		t.Fatal("expected error when no session is loaded, got nil")
@@ -22,7 +22,7 @@ func TestExportSessionToJSON_NoSession(t *testing.T) {
 }
 
 func TestExportSessionToMarkdown_Format(t *testing.T) {
-	// Test markdown formatting directly using messages.
+
 	msgs := []SessionMessage{
 		{Role: "user", Content: "Hello, how are you?"},
 		{Role: "assistant", Content: "I'm doing great!"},
@@ -76,7 +76,7 @@ func TestExportSessionToMarkdown_Format(t *testing.T) {
 // truncation lands on a UTF-8 rune boundary (#301): byte-slicing at 2000
 // would split multi-byte chars and corrupt the exported .md.
 func TestFormatMessagesAsMarkdown_RuneBoundaryTruncation(t *testing.T) {
-	// 700 CJK chars = 2100 bytes; byte cut at 2000 lands mid-rune.
+
 	content := strings.Repeat("好", 700)
 	out := formatMessagesAsMarkdown([]SessionMessage{
 		{Role: "tool", ToolDisplay: "Read File", Content: content},

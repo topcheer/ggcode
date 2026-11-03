@@ -22,16 +22,13 @@ func TestParseClipboardPathOutputSplitsOnlyByLines(t *testing.T) {
 }
 
 func TestParseClipboardPathOutputCRHandling(t *testing.T) {
-	// #579: the file:// URI branch was removed as dead code (upstream
-	// AppleScript reads |path|(), never URIs). This test now covers the
-	// surviving behavior: CR/LF normalization and literal passthrough.
+
 	output := "file:///tmp/a%20b.txt\r\n/tmp/c.txt"
 	paths := parseClipboardPathOutput(output)
 	if len(paths) != 2 {
 		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
 	}
-	// Dead branch removed: the first item passes through literally — it
-	// is a phantom path only if upstream ever produced URIs (it cannot).
+
 	if paths[0] != "file:///tmp/a%20b.txt" {
 		t.Fatalf("expected literal passthrough after dead-code removal, got %q", paths[0])
 	}
@@ -43,8 +40,7 @@ func TestParseClipboardPathOutputCRHandling(t *testing.T) {
 func TestReadFileAsBase64SizeLimit(t *testing.T) {
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.bin")
-	// 150MB would be too slow to write fully; create a sparse file instead
-	// by seeking past the limit and writing one byte.
+
 	f, err := os.OpenFile(big, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatal(err)

@@ -18,7 +18,7 @@ import (
 // back the rename on disk.
 func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp) // NewDefaultStore -> $HOME/.ggcode/sessions
+	t.Setenv("HOME", tmp)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
 	id := "sess628rename"
 	path := filepath.Join(dir, id+".jsonl")
@@ -34,7 +34,6 @@ func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Live bridge holding the session as current.
 	bridge, err := NewChatBridge()
 	if err != nil {
 		t.Fatalf("NewChatBridge: %v", err)
@@ -61,12 +60,10 @@ func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 		t.Fatalf("RenameSession: %v", err)
 	}
 
-	// The in-memory title must now match the rename.
 	if got := currentTitle(); got != "New title" {
 		t.Fatalf("currentSes.Title not synced: got %q, want %q", got, "New title")
 	}
 
-	// A subsequent meta write-back must not roll the rename back on disk.
 	bridge.mu.Lock()
 	ses := bridge.currentSes
 	store := bridge.sessionStore
@@ -81,7 +78,7 @@ func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The LAST meta record on disk must carry the new title.
+
 	lastMeta := ""
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.Contains(line, `"type":"meta"`) {
@@ -108,7 +105,7 @@ func TestIssue628_RenameOtherSessionLeavesCurrentAlone(t *testing.T) {
 	if ses == nil || ses.Title != "Original" {
 		t.Fatalf("non-matching rename leaked into current session title: %+v", ses)
 	}
-	// And a matching rename still works on the bare bridge.
+
 	bridge.syncRenamedTitle("current-id", "Updated")
 	bridge.mu.Lock()
 	title := bridge.currentSes.Title

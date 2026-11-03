@@ -97,7 +97,7 @@ func TestIssue740BatchVendorErrorLeavesConfigUntouched(t *testing.T) {
 	}
 
 	bad := map[string]interface{}{
-		"vendor":        "ghost", // does not exist
+		"vendor":        "ghost",
 		"endpoint":      "main",
 		"model":         "evil-model",
 		"language":      "zh",
@@ -113,7 +113,6 @@ func TestIssue740BatchVendorErrorLeavesConfigUntouched(t *testing.T) {
 
 	issue740AssertUntouched(t, cfg, "after vendor error")
 
-	// Nothing may have been persisted either: the update failed.
 	after, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -259,16 +258,13 @@ func TestIssue740ValidBatchStillAppliesAndSaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// baseURL lives in the vendors file, not ggcode.yaml; its in-memory
-	// application is asserted above.
+
 	for _, want := range []string{"m2", "zh"} {
 		if !strings.Contains(string(onDisk), want) {
 			t.Errorf("saved config missing %q; file:\n%s", want, onDisk)
 		}
 	}
 
-	// Failed update then corrected retry: the failed attempt must leave no
-	// trace that pollutes the retry's result.
 	fail := map[string]interface{}{"model": "leaky", "vendor": "ghost", "baseURL": "https://x.example.com"}
 	if err := UpdateConfig(fail); err == nil {
 		t.Fatal("ghost vendor must fail")

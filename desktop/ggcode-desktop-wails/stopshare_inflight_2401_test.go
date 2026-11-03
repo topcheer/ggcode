@@ -14,19 +14,16 @@ import (
 func TestStoppedStartCannotResurrectSession(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
-	// Simulate: start begins (snapshots stopSeq=0), stop fires
-	// mid-flight (bumps stopSeq), then the start’s result arrives.
 	a.tunnelMu.Lock()
-	a.tunnelStartStopEq = a.tunnelStopSeq // snapshot at start
+	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()
-	a.clearTunnelState() // the mid-flight stop
+	a.clearTunnelState()
 
 	a.setTunnelState(&tunnel.Session{}, nil)
 	if a.tunnelSession != nil {
 		t.Fatal("stale start resurrected a session after the user stopped")
 	}
 
-	// A FRESH start (snapshot taken after the stop) wires normally.
 	a.tunnelMu.Lock()
 	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()

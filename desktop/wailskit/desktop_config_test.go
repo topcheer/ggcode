@@ -32,11 +32,6 @@ func TestDesktopConfig_MissingFile(t *testing.T) {
 func TestDesktopConfig_SaveLoadRoundTrip(t *testing.T) {
 	withTestHome(t)
 
-	// #647: window bounds persist via the dirtyWindowState flag set by
-	// SetWindowState (the production path); raw struct-literal bounds are
-	// intentionally not merged by Save.
-	// #710: WorkDir likewise persists via the dirtyWorkDir flag set by
-	// SetWorkDir; raw struct-literal WorkDir is not merged either.
 	dc := &DesktopConfig{
 		Language: "zh-CN",
 	}
@@ -67,17 +62,10 @@ func TestDesktopConfig_SetWorkDir(t *testing.T) {
 	}
 }
 
-// TestDesktopConfig_SetLastSession removed (#583 Bug 4):
-// LastSession field and SetLastSession() method were removed as dead code.
-// The field had zero read references and zero setter calls in production code.
-// The comment "shared with the Fyne desktop" was misleading - Fyne has no
-// reference to wailskit's DesktopConfig.
-
 func TestDesktopConfig_SetWindowState(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
-	// #631: capture normal bounds first — a maximized save must NOT overwrite
-	// them with the OS-reported fullscreen bounds.
+
 	dc.SetWindowState(1440, 900, 250, 100, false)
 	dc.SetWindowState(1920, 1080, 0, 0, true)
 	if dc.WindowW != 1440 || dc.WindowH != 900 {
@@ -97,8 +85,7 @@ func TestDesktopConfig_SetWindowState(t *testing.T) {
 func TestDesktopConfig_WindowStateRoundTrip(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}
-	// #631: normal-mode capture (sets bounds AND position flag), then quit
-	// while maximized — the remembered normal bounds must survive the trip.
+
 	dc.SetWindowState(1600, 900, 300, 200, false)
 	dc.SetWindowState(3008, 1692, 0, 0, true)
 	if err := dc.Save(); err != nil {
@@ -122,7 +109,6 @@ func TestDesktopConfig_WindowStateRoundTrip(t *testing.T) {
 func TestDesktopConfig_CreatesDirectoryIfMissing(t *testing.T) {
 	withTestHome(t)
 
-	// Ensure ~/.ggcode doesn't exist
 	ggcodeDir := filepath.Join(os.Getenv("HOME"), ".ggcode")
 	if _, err := os.Stat(ggcodeDir); !os.IsNotExist(err) {
 		t.Fatal("expected .ggcode to not exist yet")
@@ -133,7 +119,6 @@ func TestDesktopConfig_CreatesDirectoryIfMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Directory should now exist
 	if _, err := os.Stat(ggcodeDir); err != nil {
 		t.Fatalf("expected .ggcode to exist after Save: %v", err)
 	}
@@ -142,7 +127,7 @@ func TestDesktopConfig_CreatesDirectoryIfMissing(t *testing.T) {
 func TestDesktopConfig_NotificationsDefault(t *testing.T) {
 	withTestHome(t)
 	dc := LoadDesktopConfig()
-	// Default should be enabled (even though JSON field is omitted/zero-value)
+
 	if !dc.IsNotificationsEnabled() {
 		t.Fatal("expected notifications enabled by default")
 	}
@@ -245,7 +230,7 @@ func TestDesktopConfig_FontZoomRoundTrip(t *testing.T) {
 func TestDesktopConfig_GlobalHotkeyDefault(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
-	// Default should be enabled (never explicitly configured)
+
 	if !dc.IsGlobalHotkeyEnabled() {
 		t.Fatal("expected global hotkey enabled by default")
 	}

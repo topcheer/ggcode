@@ -31,7 +31,6 @@ func TestSetFocused(t *testing.T) {
 		t.Error("expected focused=false after SetFocused(false)")
 	}
 
-	// Set unread, then focus should reset it
 	nm.unread = 5
 	nm.SetFocused(true)
 	if !nm.focused {
@@ -49,7 +48,6 @@ func TestSetEnabled(t *testing.T) {
 		t.Error("expected enabled=false after SetEnabled(false)")
 	}
 
-	// Disabling should clear unread
 	nm.unread = 3
 	nm.SetEnabled(false)
 	if nm.GetUnread() != 0 {
@@ -59,7 +57,7 @@ func TestSetEnabled(t *testing.T) {
 
 func TestNotifySuppressedWhenFocused(t *testing.T) {
 	nm := NewNotificationManager()
-	nm.SetFocused(true) // window is focused
+	nm.SetFocused(true)
 	nm.Notify("Test", "Should be suppressed")
 	if nm.GetUnread() != 0 {
 		t.Error("notification should be suppressed when focused")
@@ -68,8 +66,8 @@ func TestNotifySuppressedWhenFocused(t *testing.T) {
 
 func TestNotifySuppressedWhenDisabled(t *testing.T) {
 	nm := NewNotificationManager()
-	nm.SetFocused(false) // window not focused
-	nm.SetEnabled(false) // but notifications disabled
+	nm.SetFocused(false)
+	nm.SetEnabled(false)
 	nm.Notify("Test", "Should be suppressed")
 	if nm.GetUnread() != 0 {
 		t.Error("notification should be suppressed when disabled")
@@ -78,7 +76,7 @@ func TestNotifySuppressedWhenDisabled(t *testing.T) {
 
 func TestNotifyIncrementsUnreadWhenNotFocused(t *testing.T) {
 	nm := NewNotificationManager()
-	nm.SetFocused(false) // window not focused
+	nm.SetFocused(false)
 	nm.Notify("Test", "Should increment unread")
 	if nm.GetUnread() != 1 {
 		t.Errorf("expected unread=1, got %d", nm.GetUnread())
@@ -101,7 +99,7 @@ func TestNotifyApprovalNeededWhenNotFocused(t *testing.T) {
 func TestNotifyApprovalNeededWhenFocused(t *testing.T) {
 	nm := NewNotificationManager()
 	nm.SetFocused(true)
-	// Approval notifications fire even when focused, but don't bump badge
+
 	nm.NotifyApprovalNeeded("Approval", "Need your input")
 	if nm.GetUnread() != 0 {
 		t.Error("approval notification should not increment badge when focused")
@@ -191,8 +189,6 @@ func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
 		t.Fatalf("osacompile rejected escaped multiline script: %v\noutput: %s", err, output)
 	}
 
-	// Sanity: the same script with UNESCAPED newlines must fail to compile,
-	// proving the escaping is what makes it valid.
 	raw := "display notification \"line1\nline2\" with title \"T\""
 	bad := filepath.Join(t.TempDir(), "bad.scpt")
 	if output, err := exec.Command("osacompile", "-o", bad, "-e", raw).CombinedOutput(); err == nil {
@@ -209,20 +205,18 @@ func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
 // hand-off means drop-on-full, matching #399's Windows semantics).
 func TestNotifyUnixQueuedNotForked(t *testing.T) {
 	nm := NewNotificationManager()
-	// Drain manually; do NOT start delivery (worker IS started by the
-	// ctor on a real OS path, so stop consuming here by draining fast).
+
 	go func() {
 		for range nm.unixQueue {
 		}
 	}()
-	// Storm well past capacity: enqueue paths must all return.
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := 0; i < 64; i++ {
 			nm.notifyMacOS("t", "b")
-			// #1852: linux rides the same queue now - exercise the
-			// enqueue primitive directly (notifyLinux was removed).
+
 			nm.enqueueUnixToast("t", "b")
 		}
 	}()

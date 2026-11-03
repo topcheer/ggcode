@@ -11,14 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #2742: pendingDigests was a dead staging channel - its only append
-// (emitTurnDigest) staged digests "for the next saveSession()", a method
-// deleted long ago (#594). Persistence is per-message JSONL at Add() time and
-// never reads pendingDigests, so staged digests vanished on restart. The fix
-// removes the channel entirely; these probes pin the two surfaces that REMAIN
-// (liveHistory + frontend system event) and the dedup guard, so the removal
-// cannot regress digest visibility.
-
 func issue2742Bridge(events []metrics.MetricEvent) (*ChatBridge, *[]string) {
 	var emitted []string
 	b := &ChatBridge{
@@ -103,7 +95,7 @@ func TestIssue2742_DigestDoesNotTouchSessionMessages(t *testing.T) {
 // already-digested turn.
 func TestIssue2742_RestoredStateSuppressesReEmit(t *testing.T) {
 	b, emitted := issue2742Bridge([]metrics.MetricEvent{issue2742LLMEvent(1)})
-	b.lastMetricDigestTurn = 1 // restored from session state after restart
+	b.lastMetricDigestTurn = 1
 	b.emitTurnDigest()
 	if len(b.liveHistory) != 0 || len(*emitted) != 0 {
 		t.Fatalf("restored state should suppress re-emit: liveHistory=%d emitted=%d", len(b.liveHistory), len(*emitted))

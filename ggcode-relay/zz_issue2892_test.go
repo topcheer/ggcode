@@ -20,7 +20,7 @@ func TestPersistEventDurableRetriesThenCountsFailure(t *testing.T) {
 	}
 	h := newHub(s)
 	r := newRoom("tok-persist-fail")
-	p := newPeer(h, r, "server", nil) // nil conn: closeWithReason no-ops safely
+	p := newPeer(h, r, "server", nil)
 
 	h.persistEventDurable(p, "relay.persist-event", r.token,
 		relayMessage{SessionID: "s1", EventID: "e1", AuthorityEpoch: 1}, []byte("{}"))

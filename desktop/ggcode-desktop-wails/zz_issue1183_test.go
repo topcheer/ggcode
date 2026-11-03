@@ -38,7 +38,7 @@ func mustChatBridge(t *testing.T) *wailskit.ChatBridge {
 // run and shutdown paths both call it unconditionally).
 func TestTeardownChatBridgeNilSafe(t *testing.T) {
 	a := &App{}
-	a.teardownChatBridge() // must not panic
+	a.teardownChatBridge()
 	if a.chat != nil {
 		t.Fatal("a.chat set by teardown on an empty app")
 	}

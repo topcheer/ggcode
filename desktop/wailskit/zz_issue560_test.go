@@ -7,14 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// Feature tests for issue #560 A-1: AnthropicOAuthStatus previously checked
-// only info.AccessToken != "" and ignored ExpiresAt — with an expired (e.g.
-// revoked) token the probe observed statusShown=true while usable=false and
-// isExpired=true, so the desktop Settings page showed "connected" while API
-// calls failed with 401. The fix aligns the status with
-// auth.Store.HasUsableToken semantics (token present AND not past ExpiresAt;
-// zero ExpiresAt means no expiry is known and counts as usable).
-
 // isolateAuthStore560 points HOME at a fresh temp dir so the tests never
 // touch the real ~/.ggcode/provider_auth.json. util.HomeDir re-reads $HOME
 // on every call, and auth.DefaultStore()/DefaultPath() are computed per

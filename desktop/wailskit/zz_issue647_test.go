@@ -9,15 +9,9 @@ import (
 	"testing"
 )
 
-// Issue #647: mergeFromDirty kept X/Y behind the legacy `!= 0` guards while
-// WindowPosSet was persisted via the dirty flag. A window parked at the (0,0)
-// origin saved "WindowPosSet=true" but the zero coords were dropped in favor
-// of the stale on-disk position — next launch restored the OLD coordinates
-// from a contradictory persisted state.
 func TestIssue647_ZeroOriginSurvivesDirtyMerge(t *testing.T) {
 	withTestHome(t)
 
-	// Disk state from a previous session: window at (250,100).
 	if err := os.MkdirAll(filepath.Join(homeDir647(t), ".ggcode"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +21,6 @@ func TestIssue647_ZeroOriginSurvivesDirtyMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// This session dragged the window to the (0,0) origin and quit.
 	dc := LoadDesktopConfig()
 	dc.SetWindowState(1280, 860, 0, 0, false)
 	if err := dc.Save(); err != nil {
@@ -43,9 +36,6 @@ func TestIssue647_ZeroOriginSurvivesDirtyMerge(t *testing.T) {
 	}
 }
 
-// Partial zero (x=0 only, y nonzero) must likewise write BOTH new values —
-// the old guards kept the stale X while writing the new Y, corrupting the
-// restored position on one axis.
 func TestIssue647_PartialZeroAxis(t *testing.T) {
 	withTestHome(t)
 	if err := os.MkdirAll(filepath.Join(homeDir647(t), ".ggcode"), 0755); err != nil {
@@ -69,9 +59,6 @@ func TestIssue647_PartialZeroAxis(t *testing.T) {
 	}
 }
 
-// Untouched window state must still be preserved from disk (#635 semantics):
-// a stale instance that never ran SetWindowState must not write bounds at
-// all — including its zero values.
 func TestIssue647_UntouchedInstanceKeepsDiskBounds(t *testing.T) {
 	withTestHome(t)
 	if err := os.MkdirAll(filepath.Join(homeDir647(t), ".ggcode"), 0755); err != nil {
@@ -83,9 +70,6 @@ func TestIssue647_UntouchedInstanceKeepsDiskBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Stale in-memory snapshot (loaded pre-disk-change) with zeroed bounds,
-	// never dirtied by SetWindowState — e.g. an instance that only toggled
-	// notifications. Its zeroed window fields must NOT reach the disk.
 	dc := &DesktopConfig{WindowW: 0, WindowH: 0, WindowX: 0, WindowY: 0, WindowPosSet: false}
 	dc.SetNotificationsEnabled(false)
 	if err := dc.Save(); err != nil {
@@ -98,7 +82,6 @@ func TestIssue647_UntouchedInstanceKeepsDiskBounds(t *testing.T) {
 	}
 }
 
-// homeDir647 returns the HOME set by withTestHome via t.Setenv.
 func homeDir647(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()

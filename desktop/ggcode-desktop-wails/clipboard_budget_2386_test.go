@@ -60,9 +60,7 @@ func TestReadClipboardAttachmentsByteBudget(t *testing.T) {
 	if len(atts) != 4 {
 		t.Fatalf("got %d attachments, want 4", len(atts))
 	}
-	// 9+9+9 = 27MB passes; the fourth tips 27+9 > 30MB. Binary files carry
-	// a business notice in Error ("not pasted as text") - the budget
-	// assertion is about the budget marker only.
+
 	for i, att := range atts[:3] {
 		if strings.Contains(att.Error, "budget exceeded") {
 			t.Fatalf("file %d (cumulative %dMB) wrongly budget-rejected: %q", i, (i+1)*9, att.Error)

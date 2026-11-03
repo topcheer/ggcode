@@ -1,10 +1,5 @@
 package main
 
-// Issue #530 characteristic tests:
-//   - Bug A: DeleteSession nil chat (onboarding path) must not panic
-//   - Bug C: StartShare refresh failure must tear down stale tunnel session/broker
-//   - Bug D: RespondAskUser invalid payload must cancel the waiter + emit error
-
 import (
 	"context"
 	"testing"
@@ -20,9 +15,8 @@ import (
 // and the unconditional chat.MarkSessionDeleted(id) locked a nil receiver's
 // mutex and panicked the whole process.
 func TestDeleteSessionNilChatNoPanic(t *testing.T) {
-	app := &App{} // chat == nil, exactly the onboarding state
+	app := &App{}
 
-	// Must not panic; a store-level error for a nonexistent ID is fine.
 	if err := app.DeleteSession("zz-530-nonexistent-session"); err != nil {
 		t.Logf("DeleteSession returned error for nonexistent session (acceptable): %v", err)
 	}
@@ -34,15 +28,10 @@ func TestDeleteSessionNilChatNoPanic(t *testing.T) {
 // fresh share is created. Pre-fix, only tunnelSession was nil-ed — the old
 // session was never stopped and the dead broker stayed attached.
 func TestStartShareRefreshFailureClearsStaleTunnelState(t *testing.T) {
-	// #2033 real-home guard: StartShare resolves the config path, which
-	// must not touch the real user HOME from a test.
-	t.Setenv("HOME", t.TempDir())
-	app := &App{} // chat == nil so StartShare fails after the refresh path
 
-	// Stale session: a zero-value Session has no relay URL, so
-	// RefreshInvite fails — simulating a share whose room is no longer live.
-	// NewBroker(nil) yields a fully-initialized broker (test-safe teardown)
-	// with no attached session.
+	t.Setenv("HOME", t.TempDir())
+	app := &App{}
+
 	app.setTunnelState(&tunnel.Session{}, tunnel.NewBroker(nil))
 	if app.currentTunnelSession() == nil || app.currentTunnelBroker() == nil {
 		t.Fatal("setup: expected stale tunnel session and broker to be set")
@@ -90,7 +79,6 @@ func TestRespondAskUserInvalidPayloadCancelsWaiter(t *testing.T) {
 		done <- resp
 	}()
 
-	// Wait until the waiter is registered in the interaction broker.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, _, ok := chat.PendingAskUserRequest(); ok {
@@ -113,7 +101,6 @@ func TestRespondAskUserInvalidPayloadCancelsWaiter(t *testing.T) {
 		t.Fatal("ask_user waiter hung after invalid payload — agent run would be stranded")
 	}
 
-	// The failure must also be surfaced to the frontend as an error event.
 	select {
 	case ev := <-app.streamEvents:
 		if ev.name != "chat:stream" {

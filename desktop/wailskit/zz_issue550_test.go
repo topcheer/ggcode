@@ -1,9 +1,5 @@
 package wailskit
 
-// Feature tests for issue #550 E1 (ChatBridge): generation-bypass event
-// leaks from superseded runs — appendLiveError, finishRun's run_done, and
-// ClearCurrentSession's missing busy guard.
-
 import (
 	"encoding/json"
 	"testing"
@@ -18,7 +14,7 @@ func TestIssue550_ClearCurrentSessionRefusedWhileBusy(t *testing.T) {
 	}
 	cancelled := false
 	b.mu.Lock()
-	b.cancel = func() { cancelled = true } // simulate an active run
+	b.cancel = func() { cancelled = true }
 	b.finished = false
 	b.mu.Unlock()
 
@@ -30,8 +26,6 @@ func TestIssue550_ClearCurrentSessionRefusedWhileBusy(t *testing.T) {
 		t.Fatal("E1: refused clear must not bump the generation")
 	}
 
-	// After Cancel (b.cancel nilled in its critical section), clearing
-	// proceeds — the DeleteSession / StartNewSession shape.
 	b.Cancel()
 	if !cancelled {
 		t.Fatal("E1: Cancel must invoke the installed cancel func")
@@ -52,7 +46,7 @@ func TestIssue550_AppendLiveErrorGatedByGeneration(t *testing.T) {
 	b.appendLiveErrorIfCurrent(gen, "boom")
 	b.mu.Lock()
 	n1 := len(b.liveHistory)
-	b.runGeneration++ // supersede: session cleared / newer run started
+	b.runGeneration++
 	b.mu.Unlock()
 	b.appendLiveErrorIfCurrent(gen, "stale leak")
 	b.mu.Lock()
@@ -78,8 +72,6 @@ func TestIssue550_FinishRunRunDoneSuppressedWhenSuperseded(t *testing.T) {
 		events = append(events, eventType)
 	}
 
-	// Simulate a run start (generation N owned by activeRunGen), then
-	// supersede it WITHOUT finishing.
 	b.mu.Lock()
 	b.runGeneration++
 	b.activeRunGen = b.runGeneration
@@ -96,7 +88,6 @@ func TestIssue550_FinishRunRunDoneSuppressedWhenSuperseded(t *testing.T) {
 		}
 	}
 
-	// Control: a current (non-superseded) run still emits run_done.
 	b.mu.Lock()
 	b.runGeneration++
 	b.activeRunGen = b.runGeneration
@@ -127,8 +118,6 @@ func TestIssue550_StartNewSessionCancelsActiveRun(t *testing.T) {
 	b.finished = false
 	b.mu.Unlock()
 
-	// ensureSession may fail in a bare test bridge; the clear must still
-	// have happened (i.e., not been refused for business).
 	_, _ = b.StartNewSession()
 	if !cancelled {
 		t.Fatal("E1: StartNewSession must cancel an active run before clearing")

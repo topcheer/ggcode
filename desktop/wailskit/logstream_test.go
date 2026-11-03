@@ -96,13 +96,12 @@ func TestLogStream_HistoryZero(t *testing.T) {
 }
 
 func TestLogStream_RingBufferWraparound(t *testing.T) {
-	s := NewLogStream(3) // tiny capacity
+	s := NewLogStream(3)
 	s.Enable(true)
 	for i := 0; i < 5; i++ {
 		s.Write("cat", string(rune('a'+i)))
 	}
 
-	// Only last 3 should be in history
 	hist := s.History(3)
 	if len(hist) != 3 {
 		t.Fatalf("expected 3, got %d", len(hist))
@@ -130,7 +129,6 @@ func TestLogStream_DrainLogStreamJSON(t *testing.T) {
 		t.Fatalf("unexpected entries: %+v", entries)
 	}
 
-	// Second call should be empty
 	if s.DrainLogStreamJSON() != "[]" {
 		t.Fatal("expected empty array after drain")
 	}
@@ -154,7 +152,6 @@ func TestLogStream_DisablePreservesEntries(t *testing.T) {
 	s.Write("cat", "captured")
 	s.Enable(false)
 
-	// History should still have the entry
 	hist := s.History(1)
 	if len(hist) != 1 || hist[0].Message != "captured" {
 		t.Fatalf("expected entry preserved after disable: %+v", hist)
@@ -181,14 +178,10 @@ func TestLogStream_SequenceIncrements(t *testing.T) {
 	}
 }
 
-// Verify _ = strings is used (import guard for potential future use)
 var _ = strings.TrimSpace
 
-// TestLogStream_PendingCapped verifies the pending queue is capped at maxPend
-// entries: beyond the cap, the oldest entries are dropped and the overflow is
-// counted (#286).
 func TestLogStream_PendingCapped(t *testing.T) {
-	s := NewLogStream(10000) // ring cap larger than pending cap
+	s := NewLogStream(10000)
 	s.Enable(true)
 	for i := 0; i < s.maxPend+500; i++ {
 		s.Write("cat", fmt.Sprintf("msg-%d", i))
@@ -205,8 +198,6 @@ func TestLogStream_PendingCapped(t *testing.T) {
 	}
 }
 
-// TestLogStream_PendingDropsOldest verifies that overflow drops the OLDEST
-// pending entries, keeping the newest (#286).
 func TestLogStream_PendingDropsOldest(t *testing.T) {
 	s := NewLogStream(10000)
 	s.Enable(true)
@@ -214,14 +205,14 @@ func TestLogStream_PendingDropsOldest(t *testing.T) {
 		s.Write("cat", fmt.Sprintf("msg-%d", i))
 	}
 	entries := s.Drain()
-	// First entry is the overflow notice when overflow > 0.
+
 	if len(entries) != s.maxPend+1 {
 		t.Fatalf("expected %d entries (cap + overflow notice), got %d", s.maxPend+1, len(entries))
 	}
 	if entries[0].Category != "logstream" || !strings.Contains(entries[0].Message, "10 entries dropped") {
 		t.Fatalf("expected overflow notice first, got: %+v", entries[0])
 	}
-	// Oldest 10 messages must have been dropped; first data entry is msg-10.
+
 	if entries[1].Message != "msg-10" {
 		t.Fatalf("expected oldest dropped (first data entry msg-10), got %s", entries[1].Message)
 	}
@@ -230,17 +221,11 @@ func TestLogStream_PendingDropsOldest(t *testing.T) {
 	}
 }
 
-// TestLogStream_DrainOverflowNoticeOnly verifies the overflow notice is still
-// surfaced when nothing remains pending (#286).
 func TestLogStream_DrainOverflowNoticeOnly(t *testing.T) {
 	s := NewLogStream(10)
 	s.Enable(true)
 	s.Write("cat", "a")
-	// #428: overflow>0 with an empty pending list is unreachable in real
-	// operation (overflow only increments while pending is FULL, and Drain
-	// resets both together under the lock), so the old "overflow-only
-	// notice" branch was dead code and was removed. Manipulating the state
-	// directly to force it must now simply drain to nothing.
+
 	s.mu.Lock()
 	s.pending = s.pending[:0]
 	s.overflow = 42
@@ -251,8 +236,6 @@ func TestLogStream_DrainOverflowNoticeOnly(t *testing.T) {
 	}
 }
 
-// TestLogStream_DrainNoSpuriousNotice verifies no overflow notice when the
-// cap was never hit (#286).
 func TestLogStream_DrainNoSpuriousNotice(t *testing.T) {
 	s := NewLogStream(10)
 	s.Enable(true)

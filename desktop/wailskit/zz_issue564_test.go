@@ -15,13 +15,13 @@ import (
 // treatment: LoadWithOptions(id, true) for the full transcript.
 func TestIssue564_ExportLoadsFullHistoryNotWindow(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp) // NewDefaultStore -> $HOME/.ggcode/sessions
+	t.Setenv("HOME", tmp)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
 	id := "sess564export"
 	path := filepath.Join(dir, id+".jsonl")
 
 	now := time.Now()
-	oldTS := now.Add(-48 * time.Hour) // only user message: outside 24h window
+	oldTS := now.Add(-48 * time.Hour)
 	recentTS := now.Add(-1 * time.Hour)
 
 	var b strings.Builder

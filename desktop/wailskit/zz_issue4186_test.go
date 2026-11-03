@@ -25,13 +25,13 @@ func TestRunStartSetsElapsedOrigin(t *testing.T) {
 	}
 
 	probe := func(name string, fn func()) {
-		// Precondition: bridge idle (no concurrent writer to startTime).
+
 		idle := time.Now().Add(10 * time.Second)
 		for time.Now().Before(idle) && b.IsWorking() {
 			time.Sleep(10 * time.Millisecond)
 		}
 		b.mu.Lock()
-		b.startTime = time.Time{} // clear so a stale zero/old value cannot satisfy the probe
+		b.startTime = time.Time{}
 		b.mu.Unlock()
 		before := time.Now()
 
@@ -41,10 +41,6 @@ func TestRunStartSetsElapsedOrigin(t *testing.T) {
 			fn()
 		}()
 
-		// The startTime write happens in the first critical section of the
-		// run. Poll startTime itself (not IsWorking): the run may complete
-		// faster than an IsWorking poll catches it in the full suite, but a
-		// run-start write remains observable afterwards.
 		deadline := time.Now().Add(5 * time.Second)
 		observed := false
 		for time.Now().Before(deadline) {
@@ -66,8 +62,6 @@ func TestRunStartSetsElapsedOrigin(t *testing.T) {
 			t.Fatalf("%s: run-start never set startTime (stale zero value or old origin) within deadline", name)
 		}
 
-		// Unwind so the goroutine cannot block the suite on provider I/O,
-		// then wait for idle so the next probe starts from a clean state.
 		b.Cancel()
 		select {
 		case <-done:

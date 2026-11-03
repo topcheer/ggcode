@@ -1,9 +1,5 @@
 package wailskit
 
-// Feature tests for GitHub issue #556 (desktop/wailskit side).
-//   D: BindIMAdapter/RebindIMAdapter must reject adapters absent from config
-//      (ghost bindings persisted to disk but invisible in the UI).
-
 import (
 	"os"
 	"path/filepath"

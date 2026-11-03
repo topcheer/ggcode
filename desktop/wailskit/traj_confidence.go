@@ -1,14 +1,5 @@
 package wailskit
 
-// sa-233: trajectory-confidence signaling surface for the desktop
-// frontend. The backend has scored trajectory learnings since r459
-// (agent.TrajListLearnings, surfaced only via the TUI /traj command);
-// the desktop UI had no outlet for them - a "backend scores, frontend
-// never shows" gap flagged against 2026 agentic-UX confidence-signaling
-// patterns (fuselabcreative; AG-UI trust-calibration). This exposes a
-// compact, JSON-friendly aggregate the desktop can render as a badge
-// or panel without pulling in the full learning list.
-
 import (
 	"sort"
 

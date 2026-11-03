@@ -13,16 +13,14 @@ import (
 func TestTunnelStartStaleSemantics(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
-	// Simulate: start begins (snapshots stopSeq), stop fires mid-flight.
 	a.tunnelMu.Lock()
-	a.tunnelStartStopEq = a.tunnelStopSeq // snapshot at start
+	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()
-	a.clearTunnelState() // the mid-flight stop (bumps stopSeq)
+	a.clearTunnelState()
 	if !a.tunnelStartStale() {
 		t.Fatal("start crossed by a stop must report stale")
 	}
 
-	// A FRESH start re-snapshots after the stop and is not stale.
 	a.tunnelMu.Lock()
 	a.tunnelStartStopEq = a.tunnelStopSeq
 	a.tunnelMu.Unlock()

@@ -38,36 +38,6 @@ const (
 	replayTruncationHeadroom = 64
 )
 
-// ─── #1347 LOCKED INVARIANTS — DO NOT "OPTIMIZE" ───────────────────
-//
-// These three invariants work together to keep slow mobile clients
-// converging on an actively-producing session. Commit 61ec10e2 broke
-// invariant (1) by "optimizing" the buffer down to 512 and, in the
-// process, starved every mobile client for weeks (issue #1347: relay
-// killed the client mid-replay on every resume; per-round ACK progress
-// never caught up with 30s of new production). Regression tests
-// TestFinishResumeTruncatesReplayWhenBufferFull,
-// TestFinishResumeFullBacklogWhenBufferEmpty and
-// TestSendChCapacityFloor lock all three — if you change any of them,
-// re-derive the starvation math in #1347 first.
-//
-//  1. sendCh capacity >= 1024 (see newPeer): with every send
-//     non-blocking, a small buffer's ONLY effect is premature "slow
-//     client" 1013 kills during resume replays. Never shrink it below
-//     the floor without reintroducing a bounded blocking grace in
-//     sendRaw instead.
-//  2. sendRaw stays fully non-blocking: no sender may ever block on
-//     sendCh, or one slow peer stalls room-wide broadcast under
-//     room.sendMu.
-//  3. finishResume truncates the replay when the buffer is near full
-//     (drain-aware): the backlog stays in history and the client
-//     resumes from its ACKed cursor next round with monotonic progress.
-//     Never replace this with "dump everything and let the kill path
-//     clean up" — that IS the starvation loop.
-// ─── END LOCKED INVARIANTS ──────────────────────────────────────────
-
-// ─── Wire protocol ───
-
 type relayMessage struct {
 	Type           string          `json:"type"`
 	SessionID      string          `json:"session_id,omitempty"`
@@ -98,8 +68,6 @@ type roomEvent struct {
 	typ       string
 	raw       []byte
 }
-
-// ─── Room ───
 
 type room struct {
 	token           string
@@ -141,9 +109,9 @@ func newRoom(token string) *room {
 // don't need persistence.
 func (r *room) appendEvent(ev roomEvent) bool {
 	if ev.eventID == "" {
-		return true // forward to live clients, don't store in history
+		return true
 	}
-	// Deduplicate the tail (idempotent upsert for retries).
+
 	for i := len(r.history) - 1; i >= 0 && i >= len(r.history)-50; i-- {
 		if r.history[i].eventID == ev.eventID {
 			r.history[i] = ev
@@ -228,13 +196,11 @@ func (r *room) eventsAfter(cursor string) []roomEvent {
 			return out
 		}
 	}
-	// Cursor not found in history — send everything.
+
 	out := make([]roomEvent, len(r.history))
 	copy(out, r.history)
 	return out
 }
-
-// ─── Peer ───
 
 type peer struct {
 	hub                *hub
@@ -256,14 +222,7 @@ func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
 		room: room,
 		role: role,
 		conn: conn,
-		// #1347 LOCKED INVARIANT 1: buffer floor 2048. 61ec10e2 reduced this
-		// from 10000 to 512 ("goroutine starvation") but removed the blocking
-		// grace in the same commit — with every send non-blocking the small
-		// buffer only caused premature "slow client" 1013 kills during
-		// resume replays on slow links, starving mobile clients (#1347).
-		// 2048 * ~1-8KB ~= 2-16MB transient peak per slow peer, bounded.
-		// TestSendChCapacityFloor enforces the floor — see the LOCKED
-		// INVARIANTS block above the consts before touching this.
+
 		sendCh: make(chan []byte, 2048),
 		done:   make(chan struct{}),
 	}
@@ -312,11 +271,7 @@ func (p *peer) sendRaw(raw []byte) {
 		return
 	default:
 	}
-	// Buffer full (slow peer). Message is in history; will be replayed from
-	// cursor on reconnect. Close the connection so the client reconnects
-	// immediately and resumes from its last ACKed cursor — rather than
-	// continuing to receive live events with ordinal gaps that trigger
-	// unnecessary sync overlays.
+
 	log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s — closing slow client",
 		shortToken(p.room.token), p.clientID)
 	if p.hub != nil && p.hub.stats != nil {
@@ -355,9 +310,7 @@ func (p *peer) writeLoop() {
 				return
 			}
 		case <-pingTicker.C:
-			// WebSocket control frame ping — triggers the peer's pong handler,
-			// which resets the read deadline. If the peer is half-open,
-			// the write or read deadline will expire and close the connection.
+
 			_ = p.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := p.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				return
@@ -437,9 +390,7 @@ func (p *peer) readLoop(h *hub) {
 func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 	p.room.mu.Lock()
 	if p.role == "server" {
-		// Guard against a deposed server's deferred detach evicting a newer
-		// server that took over (old conn can linger TCP half-open for
-		// minutes). Mirrors the clientsByID[p.clientID]==p guard below.
+
 		if p.room.server != p {
 			p.room.mu.Unlock()
 			log.Printf("[relay] stale server detach ignored: room=%s client=%s",
@@ -471,8 +422,6 @@ func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 	log.Printf("[relay] %s disconnected: room=%s client=%s",
 		p.role, shortToken(p.room.token), p.clientID)
 }
-
-// ─── Message handlers ───
 
 // relayPersistMaxAttempts bounds persist retries before a failure is
 // escalated to a peer close (#2892).
@@ -537,7 +486,7 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 
 	p.room.mu.Lock()
 	srv := p.room.server
-	// Persist to history so desktop can recover on reconnect.
+
 	ev := roomEvent{
 		sessionID: msg.SessionID,
 		eventID:   msg.EventID,
@@ -549,9 +498,6 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	isNew := p.room.appendEvent(ev)
 	p.room.mu.Unlock()
 
-	// Always forward to server, even if deduped. The server needs every
-	// user message to feed into the agent loop. Skipping this breaks
-	// mobile→agent delivery after relay restarts or history hydration.
 	if srv != nil {
 		log.Printf("[relay] client_to_server: room=%s type=%s eventID=%s server_online=%t",
 			p.room.token, msg.Type, msg.EventID, srv != nil)
@@ -566,12 +512,10 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 
 	if !isNew {
 		p.hub.trace("client_broadcast_dedup", p.room.token, msg)
-		// Already persisted from a previous delivery; skip SQLite write.
+
 		return
 	}
 
-	// Persist async. #2892: bounded retries + visible failure via
-	// persistEventDurable (same policy as handleServerBroadcast).
 	if p.hub.store != nil && msg.SessionID != "" {
 		token := p.room.token
 		p.hub.persistEventDurable(p, "relay.persist-client-event", token, msg,
@@ -583,10 +527,6 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	// Only the current authoritative server may broadcast. A deposed
-	// server (kicked by a newer server but with a lingering open conn)
-	// must not rewrite history or the authority epoch — mirrors the
-	// p.room.server == p check in onServerReady.
 	p.room.mu.RLock()
 	authorized := p.room.server == p
 	p.room.mu.RUnlock()
@@ -623,18 +563,12 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	}
 	isNew := p.room.appendEvent(ev)
 	if !isNew {
-		// Duplicate event (e.g. desktop replay after reconnect).
-		// History was updated in-place; skip forwarding to avoid
-		// redundant replay at the network level.
+
 		p.room.mu.Unlock()
 		p.hub.trace("server_broadcast_dedup", p.room.token, msg)
 		return
 	}
 
-	// For transient events (no EventID, e.g. rtc_offer), forward to ALL
-	// connected clients regardless of ready state. These are control messages
-	// that must reach the client even during key exchange. The client's
-	// ConnectionService will buffer them until crypto is ready.
 	isTransient := msg.EventID == ""
 	var clients []*peer
 	if isTransient {
@@ -646,7 +580,6 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	}
 	p.room.mu.Unlock()
 
-	// Log P2P signal routing for debugging SDP offer/answer/candidate delivery
 	if msg.Type == "encrypted" {
 		log.Printf("[relay] server_broadcast: room=%s type=%s transient=%t clients=%d ready_clients=%d",
 			p.room.token, msg.Type, isTransient, len(clients), countReady(clients))
@@ -657,12 +590,6 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 
 	p.hub.trace("server_broadcast", p.room.token, msg)
 
-	// Persist async — only for events with an eventID (durable, replayable).
-	// Transient events (no eventID) are forwarded to live clients but not
-	// persisted, since they can't be dedup'd on replay.
-	// #2892: a live-delivered event that never lands in the store creates a
-	// permanent gap on resume — persistEventDurable retries and closes the
-	// peer on final failure so the stream fails visibly instead.
 	if p.hub.store != nil && msg.SessionID != "" && msg.EventID != "" {
 		token := p.room.token
 		p.hub.persistEventDurable(p, "relay.persist-event", token, msg,
@@ -678,11 +605,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	sessionID := msg.SessionID
 	var wsPath, provName, mdlName string
-	// #934: mobile sends workspace metadata in active_session Data even
-	// when SessionID is set - the parse must be UNCONDITIONAL (the old
-	// 'if sessionID == "" || true' debug leftover was always-true but
-	// coincidentally correct; removing the condition outright would have
-	// broken metadata sync).
+
 	{
 		var data struct {
 			SessionID     string `json:"session_id"`
@@ -707,9 +630,6 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	// Only the current authoritative server may (re)bind the room session.
-	// A deposed server's late active_session must not rewrite history or
-	// reset the authority epoch established by the new server.
 	p.room.mu.RLock()
 	authorized := p.room.server == p
 	p.room.mu.RUnlock()
@@ -720,14 +640,6 @@ func (p *peer) onActiveSession(msg relayMessage) {
 		return
 	}
 
-	// Update room workspace metadata
-	// #1453-A: hydrateLocked (below) writes these same three fields under
-	// room.mu and onResume reads them under mu - writing them here under
-	// only sendMu is a write-write race (restarted server's active_session
-	// retry vs the new server's join-time hydrate) and a read-write race
-	// (client resume vs the server's periodic active_session metadata
-	// resync). sessionID/authorityEpoch/history were already correctly
-	// mu-guarded elsewhere; these three metadata fields were the gap.
 	p.room.mu.Lock()
 	if wsPath != "" {
 		p.room.workspacePath = wsPath
@@ -787,8 +699,6 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		return
 	}
 
-	// Relay persists the last ACKed cursor, but resume_from lets the client
-	// request an earlier durable cursor for targeted replay recovery.
 	loadedCursor := ""
 	if p.cursor == "" && h.store != nil {
 		cursor, err := h.store.loadClientCursor(hashToken(p.room.token), msg.ClientID)
@@ -802,13 +712,7 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 	p.room.sendMu.Lock()
 	p.room.mu.Lock()
 	p.clientID = msg.ClientID
-	// #1354: when a newer connection resumes with the same client_id,
-	// detach the OLD peer - previously the map overwrite left it in
-	// room.clients receiving fanout (double delivery to one client until
-	// the read deadline noticed). Captured under the lock; closed after
-	// unlocking so the close-frame write (1s deadline) never blocks the
-	// room. detachFromRoom's existing clientsByID[p]==p guard keeps the
-	// teardown of the old peer from deleting the NEW mapping.
+
 	if old, ok := p.room.clientsByID[msg.ClientID]; ok && old != p {
 		superseded = old
 	}
@@ -824,15 +728,13 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		p.cursor = ""
 	}
 
-	// 1. Send active_session so mobile can load its cached snapshot.
 	activeSession := relayMessage{
 		Type:           "active_session",
 		SessionID:      sessionID,
 		ClientID:       msg.ClientID,
 		AuthorityEpoch: authorityEpoch,
 	}
-	// Attach workspace metadata so mobile can create workspace
-	// immediately without waiting for session_info replay.
+
 	if p.room.workspacePath != "" || p.room.providerName != "" || p.room.modelName != "" {
 		activeSession.Data, _ = json.Marshal(struct {
 			SessionID     string `json:"session_id"`
@@ -874,7 +776,6 @@ func (p *peer) prepareResumeLocked(clientID string) (relayMessage, []roomEvent, 
 	authorityEpoch := p.room.ensureAuthorityEpochLocked()
 	sessionID := p.room.sessionID
 
-	// 2. Send resume_ack.
 	ack := relayMessage{
 		Type:           "resume_ack",
 		SessionID:      sessionID,
@@ -900,15 +801,7 @@ func (p *peer) finishResume(clientID string, h *hub) {
 	p.room.mu.Unlock()
 
 	p.send(ack)
-	// #1347 LOCKED INVARIANT 3: drain-aware replay. Dumping the whole backlog into sendRaw
-	// (non-blocking) fills the buffer mid-replay and trips the "slow
-	// client" 1013 kill - on an actively-producing session the client's
-	// per-round progress never catches up with new production, so it
-	// starves forever. Instead, stop feeding the replay once the buffer
-	// is nearly full: the events stay in history and the client resumes
-	// from its ACKed cursor on the next round with monotonic progress
-	// (no kill, no lost frames). Live-forward continues via sendRaw's
-	// normal path once replay finishes below.
+
 	sent := 0
 	for _, ev := range replay {
 		if len(p.sendCh) >= cap(p.sendCh)-replayTruncationHeadroom {
@@ -949,16 +842,13 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 		return false
 	}
 	room := p.room
-	// #2890: only the CURRENT room server may stop sharing. A shadow
-	// server (superseded by a newer registration while it was connected)
-	// must not destroy the room out from under the legitimate server and
-	// its clients.
+
 	room.mu.RLock()
 	isCurrent := room.server == p
 	room.mu.RUnlock()
 	if !isCurrent {
 		h.trace("server_request_ignored_stale_server", room.token, msg)
-		return true // consumed, no-op
+		return true
 	}
 	h.trace("server_request", room.token, msg)
 	h.destroyRoom(room.token)
@@ -1016,26 +906,19 @@ func (p *peer) onAck(msg relayMessage, h *hub) {
 		return
 	}
 	p.room.mu.Lock()
-	// #1354: validate the acking connection still owns the client_id.
-	// A superseded peer lingering on a half-open TCP can deliver stale
-	// (earlier) event_acks; accepting them regressed p.cursor and the
-	// unconditional upsert below overwrote the persisted cursor, so the
-	// next resume replayed already-acked events.
+
 	if holder, ok := p.room.clientsByID[p.clientID]; !ok || holder != p {
 		p.room.mu.Unlock()
 		log.Printf("[relay] dropping stale ack from superseded connection: room=%s client=%s event=%s", shortToken(p.room.token), p.clientID, msg.EventID)
 		return
 	}
-	// Event IDs are zero-padded ordinals ("ev-%09d"), so lexicographic
-	// order is event order - the cursor must only move forward.
+
 	if p.cursor != "" && msg.EventID <= p.cursor {
 		p.room.mu.Unlock()
 		return
 	}
 	p.cursor = msg.EventID
-	// Read sessionID under the same lock: bindRoomSession writes it with
-	// room.mu held, and this cursor is persisted with the sessionID — an
-	// unsynchronized read here is a data race (-race-verified).
+
 	sid := p.room.sessionID
 	p.room.mu.Unlock()
 
@@ -1096,8 +979,6 @@ func (p *peer) forwardKeyAccept(msg relayMessage) {
 	}
 	p.room.sendMu.Unlock()
 }
-
-// ─── Hub ───
 
 type hub struct {
 	rooms  map[string]*room
@@ -1205,15 +1086,10 @@ func (h *hub) notifyRelayRestarting() {
 		state := roomRecoveryStateLocked(room)
 		clients := room.snapshotClientsLocked(nil)
 		server := room.server
-		// #2891: copy sessionID inside the RLock critical section - the write
-		// side (bindRoomSession) mutates it under room.mu; reading it after
-		// RUnlock is a data race (torn string header under -race).
+
 		sessionID := room.sessionID
 		room.mu.RUnlock()
 
-		// Send role-specific server_offline notices with staggered retry delays:
-		// server (host) gets 10s, clients (mobile) get 30s. This ensures host
-		// reconnects first and rebuilds the room before mobile tries.
 		serverNotice := relayServerOfflineMessageWithReason(
 			sessionID, state, serverRestartRetryAfter, relayRestartReason,
 		)
@@ -1277,7 +1153,7 @@ func (h *hub) expireRoom(token string) {
 	}
 	stopOfflineTimerLocked(r)
 	delete(h.rooms, token)
-	r.expired = true // #2898: tombstone - in-flight registrations must abort, not orphan
+	r.expired = true
 	r.mu.Unlock()
 	h.mu.Unlock()
 
@@ -1366,8 +1242,6 @@ func stopOfflineTimerLocked(r *room) {
 func (h *hub) trace(route, roomToken string, msg relayMessage) {
 	h.traceRelayMessage(route, roomToken, "", msg, "")
 }
-
-// ─── WebSocket handler ───
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
@@ -1469,21 +1343,18 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var room *room
 	if role == "client" {
-		// Clients may only join existing rooms; they must not create one.
+
 		h.mu.RLock()
 		var ok bool
 		room, ok = h.rooms[token]
 		h.mu.RUnlock()
 		if !ok {
-			// Send an error frame so the client recognises this as a
-			// permanent failure (room not found) rather than a transient
-			// disconnect that triggers reconnect.
+
 			_ = conn.WriteJSON(relayMessage{
 				Type:   "error",
 				Reason: "Room not found: stale or expired share token",
 			})
-			// Brief delay to ensure the client reads the error frame
-			// before the WebSocket close frame arrives.
+
 			time.Sleep(200 * time.Millisecond)
 			conn.Close()
 			log.Printf("[relay] client rejected: room=%s not found", shortToken(token))
@@ -1575,19 +1446,14 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if role == "server" {
 		if room.server != nil {
-			// Kick old server.
+
 			old := room.server
 			room.server = nil
 			room.serverReady = false
 			room.mu.Unlock()
 			old.send(relayMessage{Type: "sharing_stopped"})
 			room.mu.Lock()
-			// #2890: re-check after relock - a third server connection C may
-			// have registered during the unlock window (it saw room.server ==
-			// nil and claimed the slot). Overwriting unconditionally would
-			// leave C as an unnotified shadow server whose stop_sharing could
-			// later destroy the room (see onStopSharing guard). Kick the
-			// interloper the same way before taking the slot.
+
 			if shadow := room.server; shadow != nil && shadow != old {
 				room.server = nil
 				room.serverReady = false
@@ -1596,15 +1462,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 				room.mu.Lock()
 			}
 		}
-		// #2898: expireRoom's 5-minute timer may have fired during the
-		// fragmented registration above (kick window, connected-frame write
-		// with up to 30s deadline, hydrate I/O) and removed this room from
-		// the hub + destroyed its store. Committing the registration would
-		// silently orphan the peer: clients get "Room not found" forever
-		// while the server believes it is live. The tombstone is set under
-		// room.mu; checking it at this commit point (same mutex) closes the
-		// race without inverting the h.mu -> room.mu lock order. Do NOT
-		// re-put the room - the store was already destroyed.
+
 		if room.expired {
 			room.mu.Unlock()
 			p.send(relayMessage{Type: "sharing_stopped"})
@@ -1628,13 +1486,12 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		role, shortToken(token), sessionID, clients, buffered,
 		handshake.protocolVersion, handshake.shareMode, handshake.connectMode, clientID, handshake.clientKind, handshake.clientVersion)
 
-	// Notify server that a client connected.
 	if role == "client" {
 		p.notifyServerClientConnected(false)
 	}
 
 	safego.Go("relay.peer-writeLoop", func() { p.writeLoop() })
-	p.readLoop(h) // blocks until disconnect
+	p.readLoop(h)
 }
 
 func logRejectedHandshake(r *http.Request, status int, reason string) {
@@ -1707,8 +1564,6 @@ func hexEncodeSum(sum []byte) string {
 	}
 	return string(out)
 }
-
-// ─── Main ───
 
 const relayAdminTokenEnv = "GGCODE_RELAY_ADMIN_TOKEN"
 
@@ -1869,7 +1724,6 @@ func main() {
 	}
 	mux.HandleFunc("/nuke", newNukeHandler(store, h, adminToken))
 
-	// Background tasks.
 	safego.Go("relay.stats-ticker", func() {
 		for range time.Tick(10 * time.Second) {
 			h.logStats()

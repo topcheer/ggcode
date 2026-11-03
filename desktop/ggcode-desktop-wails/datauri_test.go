@@ -10,10 +10,10 @@ func TestDataURIMIME(t *testing.T) {
 		{"image/jpeg;base64", "image/jpeg"},
 		{"image/png", "image/png"},
 		{"text/plain", "text/plain"},
-		{";base64", ""},       // no MIME declared
-		{"base64", ""},        // legacy marker without MIME
-		{"", ""},              // empty meta
-		{"charset=utf-8", ""}, // parameter only, no type — not a MIME
+		{";base64", ""},
+		{"base64", ""},
+		{"", ""},
+		{"charset=utf-8", ""},
 	}
 	for _, tt := range cases {
 		if got := dataURIMIME(tt.meta); got != tt.want {

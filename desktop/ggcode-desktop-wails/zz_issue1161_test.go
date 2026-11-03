@@ -10,14 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// #1161: StartShare and tunnelSnapshot must obey the single-read snapshot
-// invariant established by #457/#699: read a.chat exactly once into a local
-// snapshot, then check and use the snapshot itself. Checking the field again
-// (a.chat == nil / a.chat != nil) after the snapshot creates a TOCTOU window:
-// a concurrent switchWorkspace can nil or replace a.chat between the snapshot
-// and the re-check, so commands get bound to an already-closed bridge and all
-// mobile traffic silently routes into the dead bridge.
-
 // appMethodBody extracts the source text of one (a *App) method from app.go,
 // spanning from its func line to the next top-level func declaration.
 func appMethodBody(t *testing.T, name string) string {
@@ -55,8 +47,7 @@ func stripLineComments(s string) string {
 // TestIssue1161StartShareChecksChatSnapshotNotField: nil chat must fail fast
 // through the entry snapshot (dynamic contract).
 func TestIssue1161StartShareChecksChatSnapshotNotField(t *testing.T) {
-	// #2033 real-home guard: StartShare resolves the config path before
-	// the chat check; isolate HOME so the guard does not panic the suite.
+
 	t.Setenv("HOME", t.TempDir())
 	a := NewApp()
 	info, err := a.StartShare()
@@ -72,8 +63,7 @@ func TestIssue1161StartShareChecksChatSnapshotNotField(t *testing.T) {
 // must return the idle status snapshot and never panic.
 func TestIssue1161TunnelSnapshotNilChatIdleStatus(t *testing.T) {
 	a := NewApp()
-	// Pre-existing code before the chat snapshot dereferences a.dc (#1161
-	// regression surface is below that line, so satisfy it first).
+
 	a.dc = wailskit.LoadDesktopConfig()
 	snapshot := a.tunnelSnapshot()
 	if snapshot.Status.Status != tunnel.StatusIdle {
@@ -94,7 +84,7 @@ func TestIssue1161NoAChatRereadsAfterSnapshot(t *testing.T) {
 			t.Fatalf("%s: missing snapshot assignment (chat := a.chat)", name)
 		}
 		rest := code[first+len("a.chat"):]
-		// Allow only the binding form; any other occurrence is a re-read.
+
 		if idx := strings.Index(rest, "a.chat"); idx >= 0 {
 			ctx := rest[maxInt(0, idx-80):]
 			ctx = ctx[:minInt(len(ctx), 120)]
@@ -116,9 +106,6 @@ func TestIssue1161BindShareCommandsUsesEntrySnapshot(t *testing.T) {
 		t.Fatal("StartShare: BindShareCommands guard still re-reads the field - dead-bridge routing bug is back")
 	}
 }
-
-// wailsTestDesktopConfig removed: StartShare's nil-chat path does not need
-// a desktop config - LoadConfigForWorkspace tolerates an uninitialized dc.
 
 func maxInt(a, b int) int {
 	if a > b {

@@ -24,7 +24,7 @@ func TestIssue680_JoinerRereadsLogoutGenAfterWake(t *testing.T) {
 	oauthMu.Lock()
 	call := &oauthCompleteCall{
 		done:      make(chan struct{}),
-		flowEpoch: oauthFlowEpoch, // same generation as the joiner below
+		flowEpoch: oauthFlowEpoch,
 		logoutGen: oauthLogoutGen,
 	}
 	oauthMu.Unlock()
@@ -34,21 +34,16 @@ func TestIssue680_JoinerRereadsLogoutGenAfterWake(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- CompleteAnthropicOAuth() }()
-	time.Sleep(100 * time.Millisecond) // let the joiner park on <-done
+	time.Sleep(100 * time.Millisecond)
 
-	// Winner "succeeds" and releases the slot...
 	oauthCompleteMu.Lock()
 	call.err = nil
 	oauthCompleteInFlight = nil
 	oauthCompleteMu.Unlock()
 
-	// ...but a logout bumps the generation WHILE the joiner is between
-	// done-close and its post-wakeup generation read. Holding oauthMu across
-	// close(done) and the bump pins the ordering: the joiner's fixed-code
-	// re-read (under oauthMu) must see the bumped value.
 	oauthMu.Lock()
 	close(call.done)
-	oauthLogoutGen++ // the logout's bump (LogoutAnthropicOAuth does this under oauthMu)
+	oauthLogoutGen++
 	oauthMu.Unlock()
 
 	select {
@@ -83,10 +78,8 @@ func TestIssue680_ReloginDuringInflightCompletionKeepsNewFlowUsable(t *testing.T
 
 	winnerErr := make(chan error, 1)
 	go func() { winnerErr <- CompleteAnthropicOAuth() }()
-	time.Sleep(100 * time.Millisecond) // let it acquire the slot and park on the auth-code wait
+	time.Sleep(100 * time.Millisecond)
 
-	// Re-login: installs flow B, bumps the generation, closes flow A. The
-	// parked winner unblocks with a flow-closed error and runs its teardown.
 	if _, err := StartAnthropicOAuth(); err != nil {
 		t.Skipf("cannot bind local callback listener: %v", err)
 	}
@@ -103,8 +96,6 @@ func TestIssue680_ReloginDuringInflightCompletionKeepsNewFlowUsable(t *testing.T
 		t.Fatal("winner never returned after its flow was closed")
 	}
 
-	// The new flow must survive the old winner's teardown: still installed,
-	// and still the CURRENT one (not cleared, not replaced by nil).
 	oauthMu.Lock()
 	cur := currentOAuthFlow
 	oauthMu.Unlock()
@@ -115,9 +106,6 @@ func TestIssue680_ReloginDuringInflightCompletionKeepsNewFlowUsable(t *testing.T
 		t.Fatal("#680: current flow must still be the re-login's flow B")
 	}
 
-	// The fresh login's own Complete must operate on flow B — its outcome is
-	// derived from the real flow wait (unblocked by logout), not the
-	// "no OAuth flow in progress" misleading failure.
 	freshErr := make(chan error, 1)
 	go func() { freshErr <- CompleteAnthropicOAuth() }()
 	time.Sleep(100 * time.Millisecond)

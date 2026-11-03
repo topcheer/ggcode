@@ -18,16 +18,14 @@ import (
 func TestSetMCPServerEnabledDisablePathPersistWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows
+	t.Setenv("USERPROFILE", home)
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	globalMu.Lock()
 	prev := activeChatBridge
-	// Manager with zero live plugins: Disconnect("ghost") deterministically
-	// returns false (the mcp_loader loop falls through) - exactly the
-	// conditional window the issue describes.
+
 	activeChatBridge = &ChatBridge{mcpManager: plugin.NewMCPManager(nil, nil, "")}
 	globalMu.Unlock()
 	t.Cleanup(func() {
@@ -39,7 +37,7 @@ func TestSetMCPServerEnabledDisablePathPersistWins(t *testing.T) {
 	if !SetMCPServerEnabled("ghost-server", false) {
 		t.Fatal("disable path returned false with a successful persist (UI shows failed for a change that took effect)")
 	}
-	// And the persist really happened.
+
 	if !plugin.MCPDisabledIn("", "ghost-server") {
 		t.Fatal("disable did not persist")
 	}

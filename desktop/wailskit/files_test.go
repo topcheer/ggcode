@@ -9,10 +9,6 @@ import (
 	"testing"
 )
 
-// chdir changes the working directory for the duration of the test and
-// restores it afterward. The ListDirectory containment check (#146) now
-// restricts access to the working directory, so tests that list temp
-// directories must run from inside them.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	old, err := os.Getwd()
@@ -66,8 +62,8 @@ func TestListDirectory_Recursive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 { // "sub" dir + "sub/deep/c.txt" (deep is a dir entry, c.txt is a file)
-		// Actually: sub (dir), sub/deep (dir), sub/deep/c.txt (file) = 3
+	if len(entries) != 2 {
+
 		if len(entries) != 3 {
 			t.Fatalf("expected 3 entries (sub, deep, c.txt), got %d: %+v", len(entries), entries)
 		}
@@ -118,7 +114,7 @@ func TestListDirectory_NotADirectory(t *testing.T) {
 }
 
 func TestListDirectory_OutsideWorkingDir(t *testing.T) {
-	// #146: listing a directory outside the working directory must be denied.
+
 	dir := t.TempDir()
 	chdir(t, dir)
 	_, err := ListDirectory(os.TempDir(), false)
@@ -127,8 +123,6 @@ func TestListDirectory_OutsideWorkingDir(t *testing.T) {
 	}
 }
 
-// #146: a symlink inside the working directory that points outside must be
-// rejected — filepath.Abs alone does not resolve symlinks.
 func TestReadFileContent_SymlinkBypass(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -150,7 +144,6 @@ func TestReadFileContent_SymlinkBypass(t *testing.T) {
 	}
 }
 
-// #146: ListDirectory must also resolve symlinks before containment check.
 func TestListDirectory_SymlinkBypass(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -173,7 +166,7 @@ func TestListDirectory_SymlinkBypass(t *testing.T) {
 }
 
 func TestReadFileContent_Normal(t *testing.T) {
-	// Create file within working directory so the security check passes
+
 	wd, _ := os.Getwd()
 	path := filepath.Join(wd, ".test_read_content.txt")
 	os.WriteFile(path, []byte("hello world"), 0644)
@@ -189,14 +182,13 @@ func TestReadFileContent_Normal(t *testing.T) {
 }
 
 func TestReadFileContent_PathTraversal(t *testing.T) {
-	// The security check rejects paths that resolve outside the working directory.
+
 	wd, _ := os.Getwd()
 	parent := filepath.Dir(wd)
 	target := filepath.Join(parent, ".test_secret.txt")
 	os.WriteFile(target, []byte("password"), 0644)
 	defer os.Remove(target)
 
-	// Construct a path that uses .. to reach the parent directory
 	path := filepath.Join(wd, "..", ".test_secret.txt")
 	_, err := ReadFileContent(path)
 	if err == nil {
@@ -205,7 +197,7 @@ func TestReadFileContent_PathTraversal(t *testing.T) {
 }
 
 func TestReadFileContent_Directory(t *testing.T) {
-	// Create a directory within working directory
+
 	wd, _ := os.Getwd()
 	subdir := filepath.Join(wd, ".test_subdir")
 	os.Mkdir(subdir, 0755)
@@ -224,9 +216,6 @@ func TestGetWorkingDir(t *testing.T) {
 	}
 }
 
-// #285: directories whose name merely starts with ".." (e.g. "..cfg") are
-// ordinary path elements, not parent references. The old
-// strings.HasPrefix(rel, "..") check wrongly denied them.
 func TestListDirectory_DotDotPrefixedDirAllowed(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "..cfg"), 0755); err != nil {
@@ -237,7 +226,6 @@ func TestListDirectory_DotDotPrefixedDirAllowed(t *testing.T) {
 	}
 	chdir(t, dir)
 
-	// Listing the ..-prefixed directory itself must succeed.
 	entries, err := ListDirectory("..cfg", false)
 	if err != nil {
 		t.Fatalf("expected ..cfg to be listable, got error: %v", err)
@@ -247,7 +235,6 @@ func TestListDirectory_DotDotPrefixedDirAllowed(t *testing.T) {
 	}
 }
 
-// #285: a genuine parent-directory escape must still be denied.
 func TestListDirectory_RealParentStillDenied(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "..")
@@ -277,14 +264,13 @@ func TestReadFileContent_DotDotPrefixedDirAllowed(t *testing.T) {
 	}
 }
 
-// #287: ReadFileContent must refuse oversized files before reading.
 func TestReadFileContent_TooLarge(t *testing.T) {
 	if maxReadFileTextBytes <= 4096 {
 		t.Skip("cannot test size cap without writing a huge file")
 	}
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.log")
-	// Sparse file: declare size beyond the cap without writing 20MB+1 bytes.
+
 	f, err := os.Create(big)
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +291,6 @@ func TestReadFileContent_TooLarge(t *testing.T) {
 	}
 }
 
-// #287: small files remain fully readable.
 func TestReadFileContent_SmallFileStillRead(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "small.txt"), []byte("ok"), 0644); err != nil {
@@ -322,11 +307,6 @@ func TestReadFileContent_SmallFileStillRead(t *testing.T) {
 	}
 }
 
-// #329: ResolveContainedPath is the shared containment helper backing both
-// wailskit's own APIs and the Wails App file APIs. It must anchor containment
-// at an explicit root (not os.Getwd) and still reject symlink escapes.
-// mustEval resolves symlinks in a test path so expectations match macOS
-// /var -> /private/var normalization done by ResolveContainedPath.
 func mustEval(t *testing.T, p string) string {
 	t.Helper()
 	r, err := filepath.EvalSymlinks(p)
@@ -355,7 +335,7 @@ func TestResolveContainedPath_RelativeToRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rel.txt"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Run from an unrelated cwd: containment root is explicit, not Getwd.
+
 	old, _ := os.Getwd()
 	os.Chdir(t.TempDir())
 	defer os.Chdir(old)
@@ -412,7 +392,6 @@ func TestResolveContainedPath_EmptyRootFallsBackToGetwd(t *testing.T) {
 	}
 }
 
-// #285 semantics preserved by the shared helper: dot-dot-prefixed names are fine.
 func TestResolveContainedPath_DotDotPrefixedName(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "..cfg"), 0755); err != nil {

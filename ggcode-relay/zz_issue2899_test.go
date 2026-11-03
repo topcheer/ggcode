@@ -13,12 +13,10 @@ func TestIssue2899CursorUpsertMonotonic(t *testing.T) {
 	token := "token-2899-monotonic"
 	hash := hashToken(token)
 
-	// Forward write lands.
 	if err := store.saveClientCursor(hash, "client-1", "sess-1", "ev-000000002"); err != nil {
 		t.Fatalf("initial save: %v", err)
 	}
 
-	// Stale (out-of-order) write must NOT roll the cursor back.
 	if err := store.saveClientCursor(hash, "client-1", "sess-1", "ev-000000001"); err != nil {
 		t.Fatalf("stale save: %v", err)
 	}
@@ -30,7 +28,6 @@ func TestIssue2899CursorUpsertMonotonic(t *testing.T) {
 		t.Fatalf("#2899: persisted cursor rolled back to %q, want ev-000000002", got)
 	}
 
-	// Forward write still advances.
 	if err := store.saveClientCursor(hash, "client-1", "sess-1", "ev-000000010"); err != nil {
 		t.Fatalf("forward save: %v", err)
 	}
@@ -42,7 +39,6 @@ func TestIssue2899CursorUpsertMonotonic(t *testing.T) {
 		t.Fatalf("forward save must advance, got %q", got)
 	}
 
-	// Equal write is a no-op too (idempotent retry of the same ack).
 	if err := store.saveClientCursor(hash, "client-1", "sess-1", "ev-000000010"); err != nil {
 		t.Fatalf("equal save: %v", err)
 	}

@@ -32,19 +32,16 @@ func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 	a.SetPermissionPolicy(policy)
 	bridge := &ChatBridge{interactions: broker, agent: a}
 
-	// Register a pending run_command approval for "git push origin main".
 	approved := make(chan permission.Decision, 1)
 	go func() {
 		approved <- broker.AwaitApproval(context.Background(), agentruntime.ApprovalRequest{
 			ID:       "req-1038",
 			ToolName: "run_command",
-			// Input is the tool-argument JSON (as in production) -
-			// ExtractCommandFromInput parses the "command" key from it.
+
 			Input: `{"command":"git push origin main"}`,
 		})
 	}()
 
-	// Wait for the waiter to be registered, then answer via the mobile path.
 	waitForApprovalPending(t, broker, "req-1038")
 	bridge.HandleMobileApprovalResponse(tunnel.ApprovalResponseData{ID: "req-1038", Decision: "always_allow"})
 
@@ -57,17 +54,11 @@ func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 		t.Fatal("approval waiter never resolved")
 	}
 
-	// The granted pattern must cover the approved command...
 	gitInput, _ := json.Marshal(map[string]string{"command": "git push origin main"})
 	if d, err := policy.Check("run_command", gitInput); err != nil || d != permission.Allow {
 		t.Fatalf("git push should be allowed by the granted pattern, got %v (err=%v)", d, err)
 	}
-	// ...but NOT blanket-allow the whole tool. two-mode refactor: supervised
-	// defaults to Allow, so the #1038 probe can no longer be "an unrelated
-	// command is not Allow" - use an extremely dangerous command instead:
-	// a correct pattern grant leaves the supervised safety floor intact
-	// (Ask), while a blanket SetOverride would have bypassed nothing anyway
-	// now, but this still pins that granting a pattern never disarms the floor.
+
 	edInput, _ := json.Marshal(map[string]string{"command": "rm -rf /"})
 	if d, err := policy.Check("run_command", edInput); err != nil {
 		t.Fatalf("check error: %v", err)
@@ -91,8 +82,7 @@ func TestMobileAlwaysAllowNonCommandToolFallsBackToOverride(t *testing.T) {
 		approved <- broker.AwaitApproval(context.Background(), agentruntime.ApprovalRequest{
 			ID:       "req-1038b",
 			ToolName: "write_file",
-			// No command/input key: ExtractCommandFromInput returns "" so the
-			// fallback SetOverride branch is exercised.
+
 			Input: `{"path":"notes.txt"}`,
 		})
 	}()
@@ -122,7 +112,7 @@ func TestRequestAskUserSurvivesParentCancel(t *testing.T) {
 	bridge := &ChatBridge{interactions: broker}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // parent already dead before the request
+	cancel()
 
 	req := tool.AskUserRequest{
 		Title: "pick one",
@@ -144,8 +134,6 @@ func TestRequestAskUserSurvivesParentCancel(t *testing.T) {
 		res <- result{resp, err}
 	}()
 
-	// Give the waiter a moment to register; if the parent cancel leaked
-	// through, the call would already have returned ctx.Err().
 	time.Sleep(100 * time.Millisecond)
 	select {
 	case r := <-res:

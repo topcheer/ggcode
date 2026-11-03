@@ -46,7 +46,6 @@ func ListSessions(workingDir string, bridge *ChatBridge) ([]SessionInfo, error) 
 	summaries := agentruntime.SummarizeWorkspaceSessions(sessions, workingDir)
 	storeDir, _ := session.DefaultDir()
 
-	// Determine the session the current process already holds — skip lock check for it.
 	activeID := ""
 	if bridge != nil {
 		activeID = bridge.CurrentSessionID()
@@ -85,29 +84,18 @@ func DeleteSession(id string) error {
 	if err != nil {
 		return fmt.Errorf("open session store: %w", err)
 	}
-	// #298: refuse to delete a session another process is running — its
-	// persist handler would O_CREATE-resurrect the JSONL and re-add the
-	// index entry, silently undoing the deletion with a partial history.
+
 	storeDir, _ := session.DefaultDir()
 	if bridge := GetChatBridge(); bridge != nil && bridge.CurrentSessionID() == id {
-		// Our own current session. The old code merely TRUSTED a
-		// "caller clears bridge state" contract that the frontend does not
-		// honor (Sidebar deletes without switching first): the persist
-		// handler kept its handle and O_CREATE-resurrected the deleted
-		// JSONL. Enforce the contract here (#397): cancel the active run
-		// and detach the bridge BEFORE the file removal, so no writer
-		// remains to revive it.
+
 		bridge.Cancel()
 		bridge.ClearCurrentSession()
 		return store.Delete(id)
 	} else {
-		// Try to acquire lock for other instances' sessions.
+
 		lock, lerr := session.TryAcquireSessionLock(storeDir, id)
 		if lerr != nil {
-			// Fail-open when lock acquisition fails (e.g., filesystem error):
-			// allow deletion but log the skipped check. This matches the
-			// original behavior where a lock error was silently ignored,
-			// but adds visibility (#581 S1).
+
 			debug.Log("wailskit", "DeleteSession: failed to acquire lock for %s, proceeding anyway: %v", id, lerr)
 			return store.Delete(id)
 		}
@@ -118,10 +106,7 @@ func DeleteSession(id string) error {
 			lock.Release()
 			return fmt.Errorf("session %s is locked by another instance", id)
 		}
-		// #581 (S1): Hold the lock across store.Delete to prevent TOCTOU:
-		// another instance's LoadSession could acquire the lock and start a
-		// persist handler between our Acquired() check and Delete(), causing
-		// O_CREATE resurrection (the exact scenario #298/#397 guard against).
+
 		defer lock.Release()
 		return store.Delete(id)
 	}
@@ -138,15 +123,7 @@ func RenameSession(id string, title string) error {
 		return fmt.Errorf("load session: %w", err)
 	}
 	ses.Title = title
-	// Windowed-load guard (fix #538): store.Load keeps only messages within
-	// the last 24h. On large sessions (>=500 message records) whose user
-	// messages are all older than that window, the in-memory
-	// ses.HasUserInteraction() is false and AppendMetaToDisk silently
-	// no-ops — RenameSession returned nil without ever writing the title.
-	// Decide from the file on disk instead (the same approach the Delete
-	// path took via HasUserInteractionOnDisk), and when the file does hold
-	// user interaction, reload the session unwindowed so the meta append
-	// actually persists the rename.
+
 	if !ses.HasUserInteraction() {
 		onDisk, derr := store.HasUserInteractionOnDisk(id)
 		if derr == nil && onDisk {
@@ -154,18 +131,13 @@ func RenameSession(id string, title string) error {
 				full.Title = title
 				ses = full
 			}
-			// On full-load failure fall through with the windowed session:
-			// AppendMetaToDisk keeps its old no-op semantics rather than
-			// erroring, matching pre-fix behavior for odd files.
+
 		}
 	}
 	if err := store.AppendMetaToDisk(ses); err != nil {
 		return err
 	}
-	// #628: mirror the rename into the live bridge. Later meta write-backs
-	// (usage/limits/permission-mode persists serialize b.currentSes) would
-	// otherwise resurrect the pre-rename title on disk, silently rolling
-	// back the rename the user just made.
+
 	if bridge := GetChatBridge(); bridge != nil {
 		bridge.syncRenamedTitle(id, title)
 	}
@@ -193,11 +165,6 @@ func GetChatBridge() *ChatBridge {
 	defer activeChatBridgeMu.RUnlock()
 	return activeChatBridge
 }
-
-// NewSession was removed (#489): it had zero callers repo-wide and its
-// ClearCurrentSession-only semantics skipped the Cancel → StartNewSession
-// flow the production App.NewSession entry implements; a half-version of
-// session switching was a trap for future callers.
 
 func LoadSession(id string) error {
 	bridge := GetChatBridge()
@@ -293,7 +260,6 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 				argsStr := string(block.Input)
 				toolName := block.ToolName
 
-				// Cache for tool_result lookup
 				if block.ToolID != "" {
 					toolCalls[block.ToolID] = resolvedToolCall{
 						toolName: toolName,
@@ -301,12 +267,10 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 					}
 				}
 
-				// Skip tools that have no visible item in real-time
 				if shouldSkipHistoryTool(toolName) {
 					continue
 				}
 
-				// exit_plan_mode → render plan as assistant text
 				if toolName == "exit_plan_mode" {
 					var args struct {
 						Plan string `json:"plan"`
@@ -334,7 +298,7 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 				})
 
 			case "tool_result":
-				// Resolve tool name and rawArgs from the tool_use that produced this result
+
 				toolName := block.ToolName
 				rawArgs := ""
 				if tc, ok := toolCalls[block.ToolID]; ok {
@@ -344,12 +308,10 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 					rawArgs = tc.rawArgs
 				}
 
-				// Skip tool results for tools that have no visible item
 				if shouldSkipHistoryTool(toolName) || toolName == "exit_plan_mode" {
 					continue
 				}
 
-				// Format result the same way as real-time streaming
 				content := suppressHistoryToolResult(toolName, rawArgs, block.Output, block.IsError)
 				if content == "" && block.IsError {
 					content = block.Output
@@ -358,7 +320,6 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 					}
 				}
 
-				// Update matching tool message with result
 				for i := len(result) - 1; i >= 0; i-- {
 					if result[i].ToolID == block.ToolID && result[i].Role == "tool" && result[i].Content == "" {
 						result[i].Content = content
@@ -439,23 +400,17 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 			b.WriteString(label)
 			b.WriteString("\n\n")
 			if msg.ToolDetail != "" {
-				// #583 (Bug 1): Redact secrets in ToolDetail (config set api_key,
-				// write_file .env content, etc.). ToolDetail comes from
-				// tool.DescribeTool which may include raw args with secrets.
+
 				detail := security.RedactForDisplay(msg.ToolDetail)
 				b.WriteString("```\n")
 				b.WriteString(detail)
 				b.WriteString("\n```\n\n")
 			}
 			if msg.Content != "" {
-				// #629: tool Content (raw tool results — read_file of .env,
-				// config dumps, etc.) is written verbatim into .md exports.
-				// #583 only redacted the JSON path and Markdown ToolDetail;
-				// apply the same RedactForDisplay pass to tool Content here.
+
 				content := security.RedactForDisplay(msg.Content)
 				if len(content) > 2000 {
-					// #301: truncate on a rune boundary — byte slicing can split a
-					// multi-byte UTF-8 char and corrupt the exported .md file.
+
 					cut := content[:util.SnapToRuneStart(content, 2000)]
 					b.WriteString(cut)
 					b.WriteString("\n... (truncated)\n")
@@ -487,29 +442,20 @@ func ExportSessionToJSON(sessionID string) (string, error) {
 // exported JSON files (users actively save/share these artifacts).
 // Extracted for testability.
 func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
-	// Apply truncation and redaction to each message before marshaling.
+
 	cleanMsgs := make([]SessionMessage, 0, len(msgs))
 	for _, msg := range msgs {
 		clean := msg
 
-		// #704: redact FIRST, then truncate — the opposite order let a secret
-		// straddling the 2000-byte cut lose its matchable tail (below the
-		// pattern's {36,} minimum) and leak plaintext token chars into the
-		// exported JSON. The Markdown path (:428-444) already redacts first;
-		// truncation may now at worst split a [REDACTED] marker — harmless.
 		clean.ToolArgs = security.RedactForDisplay(clean.ToolArgs)
 		if len(clean.ToolArgs) > 2000 {
 			clean.ToolArgs = clean.ToolArgs[:util.SnapToRuneStart(clean.ToolArgs, 2000)]
 		}
 
-		// Redact ToolDetail (comes from tool.DescribeTool, may show secrets).
 		if clean.ToolDetail != "" {
 			clean.ToolDetail = security.RedactForDisplay(clean.ToolDetail)
 		}
 
-		// #704: same order as ToolArgs — redact the full value first so a
-		// boundary-straddling secret is fully matched, then truncate to 2000
-		// bytes on a rune boundary (matches the Markdown export path).
 		clean.Content = security.RedactForDisplay(clean.Content)
 		if len(clean.Content) > 2000 {
 			clean.Content = clean.Content[:util.SnapToRuneStart(clean.Content, 2000)]
@@ -541,13 +487,10 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 		if chat == nil {
 			return nil, "", fmt.Errorf("no active session")
 		}
-		// #581 (S2): Export of "current session" must use FULL load, not the
-		// 24h windowed view. The in-memory b.currentSes was loaded via
-		// store.Load(id) (windowed), not store.LoadWithOptions(id, true) (full).
-		// Reload with the full-load path to match the by-ID export behavior (#564).
+
 		currentID := chat.CurrentSessionID()
 		if currentID == "" {
-			// Fallback to live history if no session ID (rare: ephemeral session)
+
 			msgs := chat.CurrentSessionHistory()
 			title := ""
 			if ses := chat.CurrentSession(); ses != nil {
@@ -558,7 +501,6 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 		sessionID = currentID
 	}
 
-	// Load a specific session by ID from the store.
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return nil, "", fmt.Errorf("open session store: %w", err)
@@ -567,13 +509,7 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("load session: %w", err)
 	}
-	// #564: by-ID export must load the FULL transcript, not the 24h windowed
-	// view. store.Load silently truncated long-running sessions (probe:
-	// 500 messages → 1) with no truncation marker in the exported file — the
-	// same windowed-load trap RenameSession fixed in #538 (sister-path miss,
-	// 4th instance of the pattern).
-	// #464: by-ID export must merge tunnel (mobile) user events exactly like
-	// the live-history path (#242, chat.go:652) — build first, then merge.
+
 	msgs := mergeTunnelUserMessages(
 		buildSessionHistoryFromMessages(ses.Messages),
 		ses.SnapshotTunnelEvents(),

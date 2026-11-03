@@ -50,9 +50,7 @@ type IMPlatformField struct {
 // GetIMPlatformRegistry returns the list of supported IM platforms.
 func GetIMPlatformRegistry() []IMPlatformMeta {
 	return []IMPlatformMeta{
-		// #637: Required flags preserve the pre-existing validation strength
-		// for real credentials; only runtime-optional fields (signal base_url,
-		// irc channels) stay unflagged.
+
 		{ID: "qq", DisplayName: "QQ", Fields: []IMPlatformField{{Key: "appid", Label: "App ID", Placeholder: "QQ app ID", Required: true}, {Key: "appsecret", Label: "App Secret", Placeholder: "QQ app secret", Secret: true, Required: true}}},
 		{ID: "telegram", DisplayName: "Telegram", Fields: []IMPlatformField{{Key: "bot_token", Label: "Bot Token", Placeholder: "123456:ABC-DEF...", Secret: true, Required: true}}},
 		{ID: "discord", DisplayName: "Discord", Fields: []IMPlatformField{{Key: "token", Label: "Bot Token", Placeholder: "Discord bot token", Secret: true, Required: true}}},
@@ -65,10 +63,7 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 		{ID: "mattermost", DisplayName: "Mattermost", Fields: []IMPlatformField{{Key: "url", Label: "Server URL", Placeholder: "https://mm.example.com", Required: true}, {Key: "token", Label: "Access Token", Placeholder: "mattermost token", Secret: true, Required: true}}},
 		{ID: "signal", DisplayName: "Signal", Fields: []IMPlatformField{{Key: "account", Label: "Phone Number", Placeholder: "+1234567890", Required: true}, {Key: "base_url", Label: "Signal CLI URL", Placeholder: "http://localhost:8080"}}},
 		{ID: "irc", DisplayName: "IRC", Fields: []IMPlatformField{{Key: "host", Label: "Server", Placeholder: "irc.libera.chat:6697", Required: true}, {Key: "nick", Label: "Nickname", Placeholder: "my-bot", Required: true}, {Key: "channels", Label: "Channels", Placeholder: "#channel1,#channel2"}}},
-		// #591: privateclaw is listed in the CLI help/platform docs (im_cmd.go
-		// accepts it verbatim), but was absent here — after #585's strong
-		// validation, doc-compliant adapters permanently failed Test
-		// Connection with "unknown platform".
+
 		{ID: "privateclaw", DisplayName: "Private Claw", Fields: []IMPlatformField{}},
 	}
 }
@@ -97,11 +92,7 @@ func firstBoundWorkspace(bindings []string, workingDir, normalizedWS string) (st
 	first := ""
 	for _, ws := range bindings {
 		if ws != "" && (ws == workingDir || ws == normalizedWS) {
-			// #591: the ws != "" guard from the pre-#587 code was dropped in the
-			// rewrite — with workingDir=="" (first start, uncached) and an
-			// empty-workspace legacy binding, both-empty compared equal and
-			// IsCurrent flipped true, nudging users to skip a needed bind.
-			// Empty workspace never matches; also guard the return value.
+
 			if workingDir != "" || normalizedWS != "" {
 				return ws, true
 			}
@@ -129,15 +120,7 @@ func ListIMAdapters(workingDir string, imMgr interface {
 
 	normalizedWS := session.NormalizeWorkspacePath(workingDir)
 
-	// Collect workspace bindings from imManager if available.
-	// #587: an adapter can carry MULTIPLE persisted bindings (legacy
-	// orphans from before #396's cascade cleanup + the current-workspace
-	// binding). Folding them into map[string]string silently kept only the
-	// slice's last entry (last-write-wins), so IsCurrent could read false
-	// even though the current workspace IS bound — misleading users into
-	// redundant re-binds. Keep all bound workspaces; IsCurrent matches on
-	// ANY binding.
-	boundWorkspaces := make(map[string][]string) // adapterName → bound workspaces
+	boundWorkspaces := make(map[string][]string)
 	if imMgr != nil {
 		for _, b := range imMgr.AllPersistedBindings() {
 			if b.Adapter != "" {
@@ -179,10 +162,7 @@ func ListIMAdapters(workingDir string, imMgr interface {
 //   - "command": command for stdio transport
 //   - other keys are stored in the adapter's Extra map
 func SaveIMAdapter(name string, values map[string]string) error {
-	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
-	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
-	// concurrent UpdateConfig save could interleave and silently drop this
-	// write (or vice versa).
+
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
@@ -194,26 +174,14 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	if platform == "" {
 		return fmt.Errorf("platform is required")
 	}
-	// #637: reject unknown platforms at SAVE time, not just Test time.
-	// AddIMAdapter only checks non-empty, so "telegarm" persisted happily
-	// and the user only discovered the typo when Test Connection failed
-	// with "unknown platform" — leaving unstartable bad data in ggcode.yaml.
+
 	meta := imPlatformByID(platform)
 	if meta == nil {
 		return fmt.Errorf("unknown platform %q (see GetIMPlatformRegistry for supported IDs)", platform)
 	}
-	// #648: validation is case-insensitive (#591 semantics) but the runtime
-	// adapter startup switch (internal/im startConfiguredAdapter) matches
-	// platform IDs EXACTLY with no default error branch — persisting the
-	// user's "Telegram" (the registry DisplayName) saved fine yet silently
-	// never started. Persist the registry's canonical ID so a config the
-	// save path endorses is one the runtime can actually launch.
+
 	platform = meta.ID
 
-	// Read enabled value from values map. If the caller did not send an
-	// explicit enabled value, preserve the existing adapter's Enabled state
-	// (fix #155: editing other fields must not silently re-enable a
-	// disabled adapter).
 	enabled := true
 	if existing, exists := cfg.IM.Adapters[name]; exists {
 		enabled = existing.Enabled
@@ -232,12 +200,11 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		Command:   values["command"],
 	}
 
-	// Collect remaining keys as Extra
 	extra := make(map[string]interface{})
 	for k, v := range values {
 		switch k {
 		case "platform", "transport", "command", "enabled":
-			// handled separately
+
 		default:
 			extra[k] = v
 		}
@@ -246,14 +213,11 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		adapterCfg.Extra = extra
 	}
 
-	// Check if updating an existing adapter
 	if existing, exists := cfg.IM.Adapters[name]; exists {
-		// Update the adapter in-place and save once (avoid delete→save→re-add data loss).
+
 		cfg.IM.Adapters[name] = mergeExistingIntoUpdate(adapterCfg, existing)
 	}
 
-	// If the adapter didn't exist above, AddIMAdapter creates it. If it did,
-	// we already updated it in-memory — just persist.
 	if _, exists := cfg.IM.Adapters[name]; exists {
 		return cfg.Save()
 	}
@@ -279,12 +243,7 @@ func SaveIMAdapter(name string, values map[string]string) error {
 func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMAdapterConfig {
 	update.OutputMode = existing.OutputMode
 	update.Targets = existing.Targets
-	// #2869: compare case-insensitively (after trimming). Existing configs may
-	// carry non-canonical platform values (hand-written YAML, or persisted by
-	// pre-#648 desktop / pre-#2417 CLI). A case-sensitive compare misjudged
-	// "Telegram" vs canonical "telegram" as a platform switch and silently
-	// dropped Args/Env/AllowFrom and old Extra keys when the user only edited
-	// another field. #591 semantics: identity is case-insensitive.
+
 	samePlatform := strings.EqualFold(strings.TrimSpace(existing.Platform), strings.TrimSpace(update.Platform))
 	if samePlatform {
 		update.Args = existing.Args
@@ -326,10 +285,7 @@ func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMA
 func RemoveIMAdapter(name string, imMgr interface {
 	UnbindAdapter(adapterName string) error
 }) error {
-	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
-	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
-	// concurrent UpdateConfig save could interleave and silently drop this
-	// write (or vice versa).
+
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
@@ -338,15 +294,12 @@ func RemoveIMAdapter(name string, imMgr interface {
 	}
 	if imMgr != nil {
 		if uerr := imMgr.UnbindAdapter(name); uerr != nil {
-			// #460: surface the cascade failure so the user can retry; the
-			// config delete below has NOT run yet, so a retry re-enters the
-			// full chain instead of dying at "adapter not found".
+
 			return fmt.Errorf("unbinding channels failed (adapter config left intact, safe to retry): %w", uerr)
 		}
 	}
 	if err := cfg.RemoveIMAdapter(name); err != nil {
-		// Bindings are already cleared by the idempotent unbind above, so a
-		// retry that re-runs this function cannot leak a ghost binding (#396).
+
 		return err
 	}
 	return nil
@@ -354,10 +307,7 @@ func RemoveIMAdapter(name string, imMgr interface {
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.
 func SetIMAdapterEnabled(name string, enabled bool) error {
-	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
-	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
-	// concurrent UpdateConfig save could interleave and silently drop this
-	// write (or vice versa).
+
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
@@ -387,13 +337,11 @@ func TestIMConnection(name string) error {
 		return fmt.Errorf("adapter %q has no platform configured", name)
 	}
 
-	// Validate required fields from platform registry
 	platformMeta := imPlatformByID(acfg.Platform)
 	if platformMeta == nil {
 		return fmt.Errorf("unknown platform %q for adapter %q", acfg.Platform, name)
 	}
 
-	// Check required fields (registry marks which are mandatory).
 	for _, field := range platformMeta.Fields {
 		if !field.Required {
 			continue
@@ -402,27 +350,17 @@ func TestIMConnection(name string) error {
 		if !ok {
 			return fmt.Errorf("missing required field %q (%s)", field.Key, field.Label)
 		}
-		// #1026: yaml `bot_token:` (no value) keeps the key but stores a nil
-		// interface - fmt.Sprintf("%v", nil) yields "<nil>", a non-empty
-		// string, so empty credentials passed the required check and Test
-		// Connection reported success until the adapter failed at startup.
+
 		if val == nil {
 			return fmt.Errorf("required field %q (%s) is empty", field.Key, field.Label)
 		}
-		// Normalize to string. #591: a hand-written ggcode.yaml like
-		// `appid: 123456789` parses as int (yaml.v3), and the previous
-		// val.(string) assertion misreported a populated field as "empty
-		// or invalid", sending users hunting for a problem that wasn't
-		// there. fmt %v keeps string values verbatim.
+
 		strVal := fmt.Sprintf("%v", val)
 		if strVal == "" || strVal == "<nil>" {
 			return fmt.Errorf("required field %q (%s) is empty or invalid", field.Key, field.Label)
 		}
 	}
 
-	// #637: a stdio adapter's essential Command lives on the adapter struct
-	// (adapterCfg.Command), not in Extra — the Extra-only loop above never
-	// checked it, so a Command-less stdio config passed field validation.
 	if acfg.Transport == "stdio" && strings.TrimSpace(acfg.Command) == "" {
 		return fmt.Errorf("missing required field %q (stdio command)", "command")
 	}
@@ -434,13 +372,10 @@ func TestIMConnection(name string) error {
 // imMgr may be nil (adapter will be bound but won't be active until manager is initialized).
 func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
 	if imMgr == nil {
-		// Adapter will be bound but not yet active; will take effect on next startup
+
 		return fmt.Errorf("IM manager not initialized")
 	}
 
-	// #556: validate the adapter exists in config BEFORE binding. Without this
-	// check the binding persisted to disk for an adapter that has no config
-	// entry — a "ghost" binding invisible in the UI, leaving state desynced.
 	if err := imAdapterExistsInConfig(name); err != nil {
 		return err
 	}
@@ -454,11 +389,10 @@ func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorksp
 // imMgr may be nil (adapter will be rebound but won't be active until manager is initialized).
 func RebindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
 	if imMgr == nil {
-		// Adapter will be rebound but not yet active; will take effect on next startup
+
 		return fmt.Errorf("IM manager not initialized")
 	}
 
-	// #556: same ghost-binding guard as BindIMAdapter.
 	if err := imAdapterExistsInConfig(name); err != nil {
 		return err
 	}
@@ -482,12 +416,7 @@ func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }
 func imAdapterExistsInConfig(name string) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
-		// #2392: fail-CLOSED, deliberately. An unreadable config cannot prove
-		// the adapter exists, and letting the bind proceed would persist a
-		// ghost binding the UI cannot render (the #556 failure this guard
-		// exists for). The old comment described a fail-open that the code
-		// never implemented; the code is the safer truth, the comment now
-		// matches it.
+
 		return fmt.Errorf("load config: %w", err)
 	}
 	if cfg.IM.Adapters == nil {

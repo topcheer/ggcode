@@ -121,10 +121,7 @@ func newModelCatalogManager(store *relayStore) (*modelCatalogManager, error) {
 func (m *modelCatalogManager) start(ctx context.Context) {
 	safego.Go("relay.model-catalog-refresh", func() {
 		m.refresh(ctx)
-		// #1453-B: a bare 24h ticker means one slow-network/rate-limit
-		// failure keeps the catalog stale for a full day with no retry.
-		// Short backoff after failures (3 attempts at 5-minute spacing)
-		// before settling back to the daily interval.
+
 		backoff := time.NewTimer(0)
 		defer backoff.Stop()
 		failures := 0
@@ -156,13 +153,7 @@ func (m *modelCatalogManager) start(ctx context.Context) {
 // retry is warranted (catalogRetryInterval) vs the normal daily cadence
 // (#1453-B).
 func (m *modelCatalogManager) refreshReturningInterval(parent context.Context) time.Duration {
-	// #1545: the OLD signal compared the error STRING before/after - a
-	// persistent fault (network down, 403 rate limit) produces the SAME
-	// error text on every attempt, so attempt 2 returned the daily
-	// interval with failures=0 and the catalog went stale for 24h after a
-	// single retry, the exact scenario the retry contract ("3 attempts at
-	// 5-minute spacing") exists for. Retry on failure STATE, not text
-	// mutation.
+
 	m.refresh(parent)
 	if m.loadStatus().LastError != "" {
 		return catalogRetryInterval
@@ -229,13 +220,7 @@ func (m *modelCatalogManager) recordFailure(attemptedAt time.Time, sourceSHA str
 	}
 	state := m.loadStatus()
 	state.SourceRef = modelCatalogSourceRef
-	// #934: NEVER advance SourceSHA on failure - the fetch failed after
-	// fetchBranchSHA, so the snapshot still holds the OLD SHA's data.
-	// Advancing it made the next refresh take the 'no change' early exit
-	// (and even clear LastError), serving stale metadata indefinitely with
-	// Ready=true. SourceSHA only moves on a fully successful refresh (or,
-	// when no snapshot exists at all, recording the attempted SHA is
-	// harmless and helps diagnostics).
+
 	if strings.TrimSpace(sourceSHA) != "" && m.snapshot.Load() == nil {
 		state.SourceSHA = strings.TrimSpace(sourceSHA)
 	}

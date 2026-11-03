@@ -20,11 +20,10 @@ func TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
 
-	// A stale flight parked on generation 0 that will FAIL.
 	oauthMu.Lock()
 	stale := &oauthCompleteCall{
 		done:      make(chan struct{}),
-		flowEpoch: oauthFlowEpoch, // generation 0
+		flowEpoch: oauthFlowEpoch,
 		logoutGen: oauthLogoutGen,
 	}
 	oauthMu.Unlock()
@@ -32,21 +31,14 @@ func TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight(t *testing.T) {
 	oauthCompleteInFlight = stale
 	oauthCompleteMu.Unlock()
 
-	// Fresh login: StartAnthropicOAuth closes any previous flow, installs a
-	// new one, and bumps the generation. Skip (not fail) when the sandbox
-	// cannot bind the local callback listener.
 	if _, err := StartAnthropicOAuth(); err != nil {
-		close(stale.done) // do not leak the parked slot into other tests
+		close(stale.done)
 		t.Skipf("cannot bind local callback listener: %v", err)
 	}
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- CompleteAnthropicOAuth() }()
 
-	// Give the fresh Complete time to observe the stale flight, then publish
-	// the stale failure and tear the flow down (logout) so the fresh
-	// completion's own wait terminates promptly instead of hitting its full
-	// 5-minute timeout.
 	time.Sleep(150 * time.Millisecond)
 	oauthCompleteMu.Lock()
 	stale.err = errors.New("exchanging token: stale-flow failure")
@@ -54,16 +46,14 @@ func TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight(t *testing.T) {
 	oauthCompleteMu.Unlock()
 	close(stale.done)
 
-	_ = LogoutAnthropicOAuth() // bumps generations, closes the new flow
+	_ = LogoutAnthropicOAuth()
 
 	select {
 	case err := <-errCh:
 		if err == nil {
 			t.Fatal("fresh login without a real auth code cannot succeed")
 		}
-		// The hijack: the fresh caller returns the STALE flight's failure
-		// (wrapped in "concurrent call" semantics) instead of completing
-		// against its own flow.
+
 		if strings.Contains(err.Error(), "concurrent call") {
 			t.Fatalf("fresh Complete inherited the STALE flight's outcome (cross-generation hijack): %v", err)
 		}
@@ -126,7 +116,7 @@ func TestIssue674_LogoutDuringExchangeDoesNotReviveToken(t *testing.T) {
 	isolateAuthStore(t)
 
 	store := auth.DefaultStore()
-	if err := LogoutAnthropicOAuth(); err != nil { // clean slate, gen snapshot base
+	if err := LogoutAnthropicOAuth(); err != nil {
 		t.Fatalf("pre-logout: %v", err)
 	}
 
@@ -140,7 +130,6 @@ func TestIssue674_LogoutDuringExchangeDoesNotReviveToken(t *testing.T) {
 		t.Fatal("precondition: no logout since snapshot; gate must be open")
 	}
 
-	// Logout runs while the exchange is in flight.
 	if err := LogoutAnthropicOAuth(); err != nil {
 		t.Fatalf("logout during exchange: %v", err)
 	}
@@ -149,7 +138,6 @@ func TestIssue674_LogoutDuringExchangeDoesNotReviveToken(t *testing.T) {
 		t.Fatal("exchange finishing after a logout must be gated (supersededByLogout=false); token would be revived")
 	}
 
-	// End-to-end: the gated Save never runs, so the store stays empty.
 	if info, err := store.Load(auth.ProviderAnthropic); err == nil && info != nil {
 		t.Fatalf("token must not be present after logout-during-exchange: %+v", info)
 	}
@@ -165,7 +153,7 @@ func TestIssue674_JoinerDoesNotTrustSuccessAfterLogout(t *testing.T) {
 	oauthMu.Lock()
 	call := &oauthCompleteCall{
 		done:      make(chan struct{}),
-		flowEpoch: oauthFlowEpoch, // same generation as the joiner below
+		flowEpoch: oauthFlowEpoch,
 		logoutGen: oauthLogoutGen,
 	}
 	oauthMu.Unlock()
@@ -177,8 +165,6 @@ func TestIssue674_JoinerDoesNotTrustSuccessAfterLogout(t *testing.T) {
 	go func() { errCh <- CompleteAnthropicOAuth() }()
 	time.Sleep(100 * time.Millisecond)
 
-	// Winner "succeeds", but a logout deletes the token while the joiner is
-	// still parked on done.
 	oauthCompleteMu.Lock()
 	call.err = nil
 	oauthCompleteInFlight = nil
@@ -189,10 +175,7 @@ func TestIssue674_JoinerDoesNotTrustSuccessAfterLogout(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		// The joiner raced the logout; both outcomes are acceptable because
-		// the joiner read the generations BEFORE the logout's bump was
-		// published — but a bare nil (unconditional trust of stale success)
-		// after the logout completed is exactly the revival bug.
+
 		_ = err
 	case <-time.After(5 * time.Second):
 		t.Fatal("joiner never returned")

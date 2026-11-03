@@ -16,12 +16,10 @@ func TestFormatMessagesAsMarkdown_Format(t *testing.T) {
 
 	md := formatMessagesAsMarkdown(msgs, "My Session")
 
-	// Title
 	if !strings.HasPrefix(md, "# My Session\n") {
 		t.Errorf("expected title header, got: %q", md[:50])
 	}
 
-	// User section
 	if !strings.Contains(md, "## User") {
 		t.Error("missing User section")
 	}
@@ -29,7 +27,6 @@ func TestFormatMessagesAsMarkdown_Format(t *testing.T) {
 		t.Error("missing user content")
 	}
 
-	// Assistant section
 	if !strings.Contains(md, "## Assistant") {
 		t.Error("missing Assistant section")
 	}
@@ -37,7 +34,6 @@ func TestFormatMessagesAsMarkdown_Format(t *testing.T) {
 		t.Error("missing assistant content")
 	}
 
-	// Tool section
 	if !strings.Contains(md, "### Read File") {
 		t.Error("missing tool header with display name")
 	}

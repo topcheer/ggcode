@@ -32,15 +32,7 @@ func SetConfig(cfg *config.Config) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalCfg = cfg
-	// #4497: re-baseline the sync watcher on the (possibly new) workspace's
-	// file. startConfigFileSync's sync.Once only ever stats the FIRST
-	// workspace's config; after a switch the poller compared the new path's
-	// mtime against the OLD file's baseline - an external edit with a
-	// not-newer mtime never triggered a reload, and the next desktop save
-	// clobbered it with the stale in-memory snapshot (#1847 across
-	// workspaces). noteConfigFileSaved re-stats under our lock; if the new
-	// file does not exist yet, drop the baseline flag so its first
-	// appearance establishes a fresh one.
+
 	if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
 		cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
 	} else {
@@ -115,13 +107,7 @@ func syncCfgFileLocked() {
 	if globalCfg == nil {
 		return
 	}
-	// #3769: keep the MERGED view. Startup initializes via LoadWithInstance;
-	// reloading with plain Load here replaced the merged config with the raw
-	// global file, silently dropping instance-scoped overrides (vendor /
-	// language / defaultMode), and the lost HasInstanceConfigAttached() also
-	// broke the instance-writeback on subsequent saves - self-reinforcing
-	// until restart. Reload through the same merge path when an instance
-	// workspace is attached.
+
 	fresh, lerr := loadCfgMergedWithInstance(path, globalCfg)
 	if lerr == nil && fresh != nil {
 		globalCfg = fresh
@@ -177,8 +163,6 @@ func NeedsOnboard() bool {
 	}
 	return cfg.NeedsOnboard()
 }
-
-// ─── Full Config Snapshot for Frontend ─────────────────────
 
 // FullConfig is a complete read-only snapshot for the frontend settings page.
 type FullConfig struct {
@@ -240,17 +224,7 @@ func GetFullConfig() (*FullConfig, error) {
 	if cfg == nil {
 		return &FullConfig{NeedsSetup: true}, nil
 	}
-	// #1847: display freshness comes from the file-sync poller (2s)
-	// rather than a display-time disk read - GetFullConfig must keep
-	// rendering the in-memory snapshot, which tests and the onboarding
-	// flow rely on as the source of truth for not-yet-saved state.
 
-	// Check if API key is set (without exposing it)
-	// Guard on vendor entry existing; key resolution itself goes through
-	// resolveAPIKey so ${VAR} env references are expanded (#584 C3).
-	// ExpandEnv intentionally KEEPS unresolved ${VAR} patterns (later stages
-	// surface onboarding errors), so an unresolved reference must not be
-	// reported as "key is set" here.
 	apiKeySet := false
 	if _, ok := cfg.Vendors[cfg.Vendor]; ok {
 		key := resolveAPIKey(cfg, cfg.Vendor, cfg.Endpoint)
@@ -304,8 +278,6 @@ func GetFullConfig() (*FullConfig, error) {
 	}, nil
 }
 
-// ─── Config Update Methods ────────────────────────────────
-
 // UpdateConfig applies a map of config values and saves.
 func UpdateConfig(values map[string]interface{}) error {
 	globalMu.Lock()
@@ -315,22 +287,13 @@ func UpdateConfig(values map[string]interface{}) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// #740: validate before mutate. Five checks inside the mutation chain
-	// below can fail and return mid-way (vendor/endpoint existence for
-	// baseURL, duration parsing for the two timeouts, preset lookup for
-	// impersonatePreset #3770), leaving fields that
-	// were already written resident in the shared in-memory cfg — reported by
-	// GetFullConfig, picked up by the next chat session without Save, and
-	// silently persisted by the next successful save through any of the four
-	// Save paths. All fallible validation now happens before a single field
-	// is touched, so a failed update leaves the config exactly as it was.
 	if v, ok := values["subAgentTimeout"].(string); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			// Silent success on a typo'd duration hid the failure (#206).
+
 			return fmt.Errorf("invalid subAgentTimeout %q (use e.g. \"45s\"): %w", v, err)
 		}
-		_ = d // applied below, after all validation passes
+		_ = d
 	}
 	if v, ok := values["swarmTimeout"].(string); ok {
 		d, err := time.ParseDuration(v)
@@ -339,20 +302,12 @@ func UpdateConfig(values map[string]interface{}) error {
 		}
 		_ = d
 	}
-	// #3855: vendor/endpoint existence is validated whenever this batch
-	// touches vendor, endpoint, or baseURL - previously the whole check was
-	// gated on a non-empty baseURL in the SAME map, so the onboarding path
-	// (CompleteOnboard commits {vendor,endpoint,model} without baseURL)
-	// skipped validation entirely and a typo'd vendor/endpoint was written
-	// into the resident cfg before Save() had a chance to reject it. Failed
-	// updates then poisoned every in-session ResolveActiveEndpoint call
-	// until restart, violating the #740 contract above.
+
 	_, hasBaseURL := values["baseURL"].(string)
 	_, hasVendor := values["vendor"].(string)
 	_, hasEndpoint := values["endpoint"].(string)
 	if hasBaseURL || hasVendor || hasEndpoint {
-		// Mirror the effective vendor/endpoint the mutation chain will use:
-		// vendor/endpoint values in the same map take precedence over cfg.
+
 		vendor, endpoint := cfg.Vendor, cfg.Endpoint
 		if nv, ok := values["vendor"].(string); ok && nv != "" {
 			vendor = nv
@@ -369,34 +324,19 @@ func UpdateConfig(values map[string]interface{}) error {
 			if !ok {
 				return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
 			}
-			// Mirror internal/config Validate(): an endpoint without a
-			// protocol would pass the existence check but make Save()
-			// fail AFTER the resident cfg was already mutated - the exact
-			// in-memory pollution #3855 closes.
+
 			if strings.TrimSpace(ep.Protocol) == "" {
 				return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", endpoint, vendor)
 			}
 		}
 	}
 
-	// #3770: impersonatePreset lookup is fallible (unknown preset id), so it
-	// belongs in this pre-validation block — validating it after the nine
-	// field writes above left a rejected request half-applied (e.g.
-	// {"model":"x","impersonatePreset":"bogus"} reported an error while
-	// cfg.Model had already been changed in place) and the next successful
-	// save silently persisted the mutation. Same #206/#740 failure shape.
 	if v, ok := values["impersonatePreset"].(string); ok {
 		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
 			return fmt.Errorf("unknown impersonation preset %q", v)
 		}
 	}
-	// #4385: defaultMode/a2aPort were written raw while the dedicated path
-	// (SaveDefaultModePreference) normalizes + whitelists. A typo'd value
-	// (" bypass") saved fine here, silently downgraded this process at
-	// ParsePermissionMode, then bricked the NEXT config.Load (hard error on
-	// unknown default_mode, config.go:1774; negative a2a.port ditto,
-	// config.go:1788) with no self-service recovery short of hand-editing
-	// the YAML. Validate before mutate (#740).
+
 	if v, ok := values["defaultMode"].(string); ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "supervised", "auto", "bypass", "autopilot":
@@ -424,14 +364,11 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.ExtraPrompt = v
 	}
 	if v, ok := values["defaultMode"].(string); ok {
-		// Whitelisted above (#4385); normalize the same way
-		// SaveDefaultModePreference does so the persisted value matches the
-		// dedicated path's write.
+
 		cfg.DefaultMode = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v, ok := values["baseURL"].(string); ok && v != "" {
-		// Update the current endpoint's base_url. Existence was pre-validated
-		// above (#740); only the write happens here.
+
 		if cfg.Vendor != "" && cfg.Endpoint != "" {
 			if cfg.Vendors == nil {
 				cfg.Vendors = make(map[string]config.VendorConfig)
@@ -460,11 +397,7 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	impersonationRequested := false
 	var pendingImpersonationPreset *provider.ImpersonationPreset
-	// #4499: CustomVersion is an independent field (the snapshot side and
-	// ApplyImpersonation both treat it as such) - its only consumer used to
-	// sit INSIDE the impersonatePreset branch, so a form submitting just the
-	// changed version (omitting the unchanged preset) silently dropped the
-	// update. Consume it unconditionally when present.
+
 	if cv, ok := values["impersonateCustomVersion"].(string); ok {
 		cfg.Impersonation.CustomVersion = cv
 	}
@@ -486,9 +419,7 @@ func UpdateConfig(values map[string]interface{}) error {
 				}
 			}
 		}
-		// #3852 B note: the CustomVersion write moved to the standalone block
-		// above (#4499); the version is on cfg before any runtime activation
-		// below, preserving the #3852 ordering contract.
+
 		impersonationRequested = true
 		pendingImpersonationPreset = preset
 		cfg.Impersonation.Preset = v
@@ -518,12 +449,12 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.A2A.Port = int(v)
 	}
 	if v, ok := values["subAgentTimeout"].(string); ok {
-		// Pre-parsed above (#740); ParseDuration cannot fail here.
+
 		d, _ := time.ParseDuration(v)
 		cfg.SubAgents.Timeout = d
 	}
 	if v, ok := values["swarmTimeout"].(string); ok {
-		// Pre-parsed above (#740); ParseDuration cannot fail here.
+
 		d, _ := time.ParseDuration(v)
 		cfg.Swarm.TeammateTimeout = d
 	}
@@ -543,17 +474,12 @@ func UpdateConfig(values map[string]interface{}) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	// #4387: activate the runtime only after persistence succeeded - see the
-	// impersonatePreset branch above. "none"/"" presets still route through
-	// here (preset=nil) so switching back to no-impersonation clears the
-	// active headers at the same post-Save point.
+
 	if impersonationRequested {
 		provider.SetActiveImpersonation(pendingImpersonationPreset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
 	}
 	noteConfigFileSaved()
-	// Save() strips instance-sourced keys from the global file write; persist
-	// any such field touched by this update to the instance file too, or the
-	// change would be silently lost on restart (#282).
+
 	return persistTouchedInstanceFields(cfg, values)
 }
 
@@ -630,23 +556,12 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	// #3769: our own write advances the mtime; without recording it the 2s
-	// poller treated the save as an external change and reloaded the
-	// UNMERGED global file over the runtime view.
+
 	noteConfigFileSaved()
 	if !cfg.HasInstanceConfigAttached() {
 		return nil
 	}
-	// #734: gate on runtime vendor provenance rather than the InstanceFields()
-	// "vendors" flag. The flag is only set when MergeInstance adopted at least
-	// one vendor key from the instance file, so an attached instance config
-	// WITHOUT a vendors section (the common instance.yaml carrying just
-	// language/mode) left the gate closed: the runtime-added vendor was
-	// dropped by Save()'s globalOnlyVendors filter and lost on restart. The
-	// provenance check asks exactly the question Save()'s filter answers -
-	// "is this vendor absent from the global snapshot?" - so it covers every
-	// shape of the #368 family. The flag itself keeps its serialization-only
-	// semantics inside Save().
+
 	if cfg.VendorNotInGlobalSnapshot(vendor) {
 		if err := cfg.SaveInstanceScoped(cfg.InstanceWorkspace()); err != nil {
 			return err
@@ -665,8 +580,6 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// Determine scope: if the vendor has multiple endpoints (gateway type),
-	// save to endpoint scope; otherwise vendor scope.
 	vendorScoped := true
 	if vc, ok := cfg.Vendors[vendor]; ok && len(vc.Endpoints) > 1 {
 		vendorScoped = false
@@ -698,8 +611,6 @@ func SaveA2AEnabled(enabled bool) error {
 	}
 	return cfg.SaveA2AEnabled(enabled)
 }
-
-// ─── Vendor/Endpoint/Model Helpers ────────────────────────
 
 // VendorPresets returns vendor preset info for onboarding.
 type VendorPresetInfo struct {
@@ -803,8 +714,6 @@ func ModelsForEndpoint(vendor, endpointKey string) []string {
 	return ep.Models
 }
 
-// ─── Impersonation ──────────────────────────────────────
-
 // ImpersonationPresetInfo describes an impersonation preset for the frontend.
 type ImpersonationPresetInfo struct {
 	ID             string            `json:"id"`
@@ -843,8 +752,7 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 	if err != nil {
 		return err
 	}
-	// #1815 case 1: push the new headers into the RUNNING provider (see
-	// comment inside applyImpersonationLocked tail / refreshRuntimeImpersonationHeaders).
+
 	if chatSnap != nil {
 		chatSnap.refreshRuntimeImpersonationHeaders()
 	}
@@ -871,9 +779,6 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 		}
 	}
 
-	// Merge, don't overwrite: only replace headers when this call actually
-	// carries any. Clearing all custom headers is not expressible through
-	// this API (an empty map is indistinguishable from "not submitted").
 	mergedHeaders := cfg.Impersonation.CustomHeaders
 	if len(customHeaders) > 0 {
 		mergedHeaders = customHeaders
@@ -887,19 +792,10 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	// #4387: activate the runtime only after persistence succeeded - the old
-	// order set the package-global headers first, so a failed Save (disk
-	// full/permissions) left the running bridges impersonated while disk
-	// kept the old value: a session-long runtime/disk fork violating the
-	// #740 failure-atomicity contract (self-documented at UpdateConfig).
+
 	provider.SetActiveImpersonation(preset, version, mergedHeaders)
 	noteConfigFileSaved()
-	// #3852 A / #282 family: cfg.Save() strips instance-sourced keys from
-	// the global file. When the instance carries an impersonation section,
-	// impersonation fields are registered instance fields - without the
-	// write-back below the change is silently reverted by the instance
-	// merge on the next restart (persistTouchedInstanceFields itself no-ops
-	// when impersonation is not instance-sourced on this workspace).
+
 	if err := persistTouchedInstanceFields(cfg, map[string]interface{}{
 		"impersonatePreset":        presetID,
 		"impersonateCustomVersion": version,
@@ -933,7 +829,7 @@ func (b *ChatBridge) refreshRuntimeImpersonationHeaders() {
 	if mutable, ok := p.(provider.HeaderMutable); ok {
 		mutable.UpdateRuntimeHeaders(headers)
 	}
-	// For the copilot provider, also set the UA directly (TUI parity).
+
 	if copilot, ok := p.(interface{ SetImpersonatedUA(string) }); ok {
 		if ua := headers.Get("User-Agent"); ua != "" {
 			copilot.SetImpersonatedUA(ua)
@@ -952,10 +848,7 @@ type HookConfigJSON = hooks.HookConfig
 
 // GetHooks returns the current hooks configuration.
 func (b *ChatBridge) GetHooks() hooks.HookConfig {
-	// globalMu, not b.mu: the same *config.Config is guarded by globalMu in
-	// UpdateConfig & co. — two unrelated locks on one pointer allowed
-	// concurrent map read/write (fatal, unrecoverable) between cfg.Save()
-	// marshaling and cfg.Vendors writes (#205).
+
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	if b.cfg == nil {
@@ -966,7 +859,7 @@ func (b *ChatBridge) GetHooks() hooks.HookConfig {
 
 // SaveHooks saves the hooks configuration.
 func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
-	// globalMu — see GetHooks (#205).
+
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	if b.cfg == nil {
@@ -980,13 +873,7 @@ func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 	if err != nil {
 		return err
 	}
-	// #4384: hooks is an instance-managed field (mergeHookConfig registers
-	// tracked["hooks"]; #4315/#4316) — Save() strips instance-sourced keys
-	// from the global file write, so without the write-back below the edit
-	// lived only in memory and the next restart's instance merge silently
-	// reverted it while SaveHooks had already returned nil. Mirror
-	// persistTouchedInstanceFields' InstanceFields gate: write the instance
-	// file only when hooks is actually instance-sourced on this workspace.
+
 	if b.cfg.HasInstanceConfigAttached() {
 		for _, yk := range b.cfg.InstanceFields() {
 			if yk == "hooks" {
@@ -1015,8 +902,6 @@ func (b *ChatBridge) TestHookMatch(mode, pattern, toolName, rawInput string) Tes
 	}
 	return TestHookMatchResult{Matched: matched}
 }
-
-// ─── Custom Endpoint ───────────────────────────────────
 
 // TestEndpointResult is the result of testing an endpoint connection.
 type TestEndpointResult struct {
@@ -1056,10 +941,7 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
 	}
-	// #3838 A: fail fast on an empty endpoint name BEFORE anything mutates.
-	// An empty name used to persist a degenerate Endpoints[""] key with no
-	// display name into vendors.yaml (and derive a PreferredEndpointAPIKey
-	// for the empty name when an apiKey was set).
+
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("endpoint name must not be empty")
 	}
@@ -1067,13 +949,9 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
 		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
-		// #3838 B: do NOT insert the vendor shell into cfg.Vendors yet - a
-		// later failure (keys.env write below) used to leave the empty shell
-		// in memory, and any subsequent successful Save persisted it.
-		// Insertion now happens only after every fallible step succeeded.
+
 	}
 
-	// Load existing config and patch only provided fields
 	ep := vc.Endpoints[name]
 	if protocol != "" {
 		ep.Protocol = protocol
@@ -1082,23 +960,12 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 		ep.BaseURL = baseURL
 	}
 	if apiKey != "" {
-		// Secrets never go to vendors.yaml in plaintext (#250): persist the
-		// key to keys.env (0600, managed) and store a ${VAR} reference in the
-		// endpoint config. Resolution: config.Load seeds keys.env vars into
-		// the process env (env.go loadRuntimeEnv) and ResolveActiveEndpoint
-		// expands ${VAR} via ExpandEnv, so the reference resolves at startup.
-		// Setenv here makes the key usable immediately in this process too.
+
 		envVar := config.PreferredEndpointAPIKeyEnvVar(vendor, name)
 		if err := config.WriteKeysEnv(map[string]string{envVar: apiKey}); err != nil {
 			return fmt.Errorf("saving API key: %w", err)
 		}
-		// #294: the load path (loadKeysEnvInto / loadRuntimeEnv) deliberately
-		// does NOT override existing process env — "shell env takes
-		// precedence". Unconditionally Setenv here would flip that precedence
-		// for this process only, so after a restart the endpoint silently
-		// resolves back to the shell-exported (stale) key. Instead, only
-		// seed the env when the variable is not already shell-exported; if it
-		// is, warn so the user knows the shell export shadows the saved key.
+
 		if existing, ok := os.LookupEnv(envVar); ok && existing != apiKey {
 			debug.Log("config", "env %s is shell-exported with a different value; the saved key will not take effect until the shell export is removed (#294)", envVar)
 		} else if !ok {
@@ -1106,22 +973,13 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 		}
 		ep.APIKey = "${" + envVar + "}"
 	}
-	// An empty apiKey leaves the stored value untouched: the frontend's add/
-	// edit form submits an empty key when the user did not (re)enter one, so
-	// clearing here would wipe keys on unrelated edits. Legacy plaintext keys
-	// already on disk are migrated to keys.env by Save() via
-	// MigrateVendorsFilePlaintextAPIKeys.
+
 	ep.DisplayName = name
-	// #3838 B (commit phase): all fallible side effects above succeeded -
-	// now (and only now) mutate the in-memory config and persist. If the
-	// final save fails, keys.env may retain an orphan key for this endpoint,
-	// but it is inert: no endpoint references it, so it resolves nowhere.
+
 	vc.Endpoints[name] = ep
 	cfg.Vendors[vendor] = vc
 	return saveWithInstanceWriteback(cfg, vendor)
 }
-
-// ─── Resolved Endpoint Info ─────────────────────────────
 
 // ResolvedEndpointInfo provides the current resolved LLM endpoint details for the frontend.
 type ResolvedEndpointInfo struct {
@@ -1184,10 +1042,7 @@ func maskAPIKey(key string) string {
 // If the target endpoint fails, tries other endpoints with the same BaseURL
 // within the same vendor. Only reports error if ALL same-domain endpoints fail.
 func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
-	// Snapshot everything needed under RLock, then release BEFORE any
-	// network I/O: holding globalMu.RLock across 30s DiscoverModels calls
-	// let one queued writer block every later reader — settings page
-	// freeze up to 30s (#204).
+
 	globalMu.RLock()
 	cfg := globalCfg
 
@@ -1212,7 +1067,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 		baseURL = ep.BaseURL
 	}
 
-	// Auto-resolve API key if not provided
 	if apiKey == "" {
 		apiKey = resolveAPIKey(cfg, vendor, endpoint)
 	}
@@ -1237,7 +1091,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Try the requested endpoint first
 	tmpResolved := &config.ResolvedEndpoint{
 		VendorID: vendor, EndpointID: endpoint,
 		Protocol: protocol, BaseURL: baseURL, APIKey: apiKey,
@@ -1283,7 +1136,7 @@ func resolveAPIKey(cfg *config.Config, vendor, endpoint string) string {
 	if !ok {
 		return ""
 	}
-	// endpoint key first, then vendor key
+
 	key := strings.TrimSpace(ep.APIKey)
 	if key == "" {
 		key = strings.TrimSpace(vc.APIKey)
@@ -1312,7 +1165,7 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	defer globalMu.RUnlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil // read op — empty value is the established convention
+		return nil
 	}
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
@@ -1323,7 +1176,6 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 		return nil
 	}
 
-	// Resolve API key: endpoint → vendor → env vars (same chain as runtime)
 	apiKey := resolveAPIKey(cfg, vendor, endpoint)
 
 	return &EndpointDetails{
@@ -1357,8 +1209,7 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 // directory no one parses — the edit was lost on restart (#532). Fall back to
 // the global Save(), the same no-instance path saveWithInstanceWriteback uses.
 func persistLimitChange(cfg *config.Config) error {
-	// #3769: record our own write so the poller does not fire a reload on
-	// it (same rationale as saveWithInstanceWriteback).
+
 	defer noteConfigFileSaved()
 	if cfg.HasInstanceConfigAttached() {
 		return cfg.SaveInstanceScoped(cfg.InstanceWorkspace())
@@ -1419,8 +1270,7 @@ func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int
 	}
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	// Non-sticky instance save with no-instance fallback — see
-	// persistLimitChange (#282, #532).
+
 	return persistLimitChange(globalCfg)
 }
 
@@ -1466,16 +1316,15 @@ func AnthropicOAuthStatus() bool {
 	store := auth.DefaultStore()
 	usable, err := store.HasUsableToken(auth.ProviderAnthropic)
 	if err == nil && usable {
-		return true // valid
+		return true
 	}
-	// Refreshable: a stored token with an access token AND a refresh token
-	// can self-recover — count it as connected.
+
 	if info, ierr := store.Load(auth.ProviderAnthropic); ierr == nil && info != nil {
 		if strings.TrimSpace(info.AccessToken) != "" && strings.TrimSpace(info.RefreshToken) != "" {
-			return true // refreshable
+			return true
 		}
 	}
-	return false // dead
+	return false
 }
 
 // StartAnthropicOAuth initiates the OAuth flow and returns the URL for the user to visit.
@@ -1486,19 +1335,13 @@ func StartAnthropicOAuth() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("starting OAuth flow: %w", err)
 	}
-	// Store flow for completion, closing any previous unfinished flow to
-	// avoid leaking its callback HTTP listener and receiver goroutine.
+
 	oauthMu.Lock()
 	if currentOAuthFlow != nil {
 		currentOAuthFlow.Close()
 	}
 	currentOAuthFlow = flow
-	// #674: every install starts a new flow generation. A completion parked
-	// on the previous flow must not speak for this one — the single-flight in
-	// CompleteAnthropicOAuth keys on this epoch, so a fresh login's Complete
-	// never inherits the old flow's failure (which previously left the new
-	// flow with no waiter at all: its callback listener leaked and the fresh
-	// login's auth code was dropped).
+
 	oauthFlowEpoch++
 	oauthMu.Unlock()
 	return flow.AutoURL, nil
@@ -1525,13 +1368,10 @@ func CompleteAnthropicOAuth() (err error) {
 	var call *oauthCompleteCall
 	var flow *auth.ClaudeOAuthFlow
 	for {
-		// #670 single-flight: acquire the completion slot. A second caller
-		// while one completion is running joins it — but only when both
-		// belong to the same flow generation (#674).
+
 		oauthCompleteMu.Lock()
 		if inflight := oauthCompleteInFlight; inflight != nil {
-			// Lock order oauthCompleteMu → oauthMu is fixed (no reverse
-			// nesting exists in this package), so this read is race-free.
+
 			oauthMu.Lock()
 			flowEpoch := oauthFlowEpoch
 			oauthMu.Unlock()
@@ -1539,18 +1379,7 @@ func CompleteAnthropicOAuth() (err error) {
 				oauthCompleteMu.Unlock()
 				<-inflight.done
 				if inflight.err == nil {
-					// The concurrent call completed successfully; this caller's
-					// goal (a saved token) is achieved — report success, not a fake
-					// "failed" that would send the user through re-auth.
-					// #674: unless a logout removed that token while we were
-					// parked — then the success is no longer backed by the
-					// store and must not be reported as connected.
-					// #680: compare against the CURRENT logout generation read
-					// AFTER waking, not the pre-park snapshot. The old code
-					// compared two pre-park snapshots (joiner's vs the
-					// flight's), so a logout that ran between done-close and
-					// this wakeup went unnoticed and the joiner returned nil
-					// ("connected") for a token that had just been deleted.
+
 					oauthMu.Lock()
 					curLogoutGen := oauthLogoutGen
 					oauthMu.Unlock()
@@ -1561,9 +1390,7 @@ func CompleteAnthropicOAuth() (err error) {
 				}
 				return fmt.Errorf("oauth completion by concurrent call failed: %w", inflight.err)
 			}
-			// Stale generation (#674): the flight belongs to a flow that was
-			// replaced or torn down. Do NOT inherit its outcome; wait for the
-			// slot to be released, then complete against the current flow.
+
 			oauthCompleteMu.Unlock()
 			<-inflight.done
 			continue
@@ -1574,23 +1401,15 @@ func CompleteAnthropicOAuth() (err error) {
 			flowEpoch: oauthFlowEpoch,
 			logoutGen: oauthLogoutGen,
 		}
-		// #680: snapshot the flow TOGETHER with the epoch in the same oauthMu
-		// critical section. The old code read currentOAuthFlow in a separate
-		// critical section after releasing the slot locks; a
-		// StartAnthropicOAuth squeezed in between installed a new flow and
-		// bumped the epoch (E1), leaving this winner holding an E0 marker
-		// while operating on flow B — its teardown then closed the NEW flow
-		// and the next same-flow Complete hit "no OAuth flow in progress"
-		// even though the token had been saved.
+
 		flow = currentOAuthFlow
 		oauthMu.Unlock()
 		oauthCompleteInFlight = call
 		oauthCompleteMu.Unlock()
-		break // slot acquired as this generation's winner
+		break
 	}
 	defer func() {
-		// Publish the outcome (err is the named return; every return path
-		// assigns it) and release the slot before waking joiners.
+
 		oauthCompleteMu.Lock()
 		call.err = err
 		oauthCompleteInFlight = nil
@@ -1604,9 +1423,7 @@ func CompleteAnthropicOAuth() (err error) {
 	defer func() {
 		oauthMu.Lock()
 		flow.Close()
-		// Only clear the current flow if it is still THIS flow (#295): a
-		// newer login may have replaced it while we were waiting, and
-		// clearing unconditionally would kill the new flow's login path.
+
 		if currentOAuthFlow == flow {
 			currentOAuthFlow = nil
 		}
@@ -1639,11 +1456,7 @@ func CompleteAnthropicOAuth() (err error) {
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
 	}
-	// #674: the 30s exchange above cannot be cancelled (the auth code is
-	// already consumed), so a LogoutAnthropicOAuth that ran while it was in
-	// flight must gate the Save — otherwise the exchange's completion
-	// "revived" the token the user had just deleted. call.logoutGen was
-	// snapshotted at slot acquisition; any logout since bumps the counter.
+
 	if call.supersededByLogout() {
 		debug.Log("wailskit", "oauth: token exchange finished after logout; discarding token instead of saving (#674)")
 		return fmt.Errorf("logout occurred during token exchange; token not saved")
@@ -1651,11 +1464,7 @@ func CompleteAnthropicOAuth() (err error) {
 	if err := auth.DefaultStore().Save(info); err != nil {
 		return err
 	}
-	// #616: the token is only read when the provider is (re)created via
-	// ResolveActiveEndpoint. Without this refresh the running provider keeps
-	// its old auth state and chats keep 401-ing until restart, while the UI
-	// (which reads the store via AnthropicOAuthStatus) shows "connected".
-	// Symmetric with App.UpdateConfig's post-save OnConfigProviderChanged.
+
 	refreshRunningProviderAfterAuth()
 	return nil
 }
@@ -1679,13 +1488,7 @@ func refreshRunningProviderAfterAuth() {
 // flow (callback listener + receiver goroutine) is also cancelled so it
 // does not linger until Complete's timeout.
 func LogoutAnthropicOAuth() error {
-	// #674: bump the logout generation and delete the stored token under
-	// oauthMu BEFORE anything else, so a completion whose (uncancellable)
-	// 30s token exchange is still in flight observes the bump via its
-	// call.logoutGen check in CompleteAnthropicOAuth and skips its Save
-	// instead of reviving the token the user just deleted. The flow epoch
-	// also bumps so parked same-generation joiners of any in-flight
-	// completion stop trusting its eventual success.
+
 	oauthMu.Lock()
 	oauthLogoutGen++
 	oauthFlowEpoch++
@@ -1695,9 +1498,7 @@ func LogoutAnthropicOAuth() error {
 	}
 	oauthMu.Unlock()
 	err := auth.DefaultStore().Delete(auth.ProviderAnthropic)
-	// Symmetric with CompleteAnthropicOAuth's post-save refresh (#616,
-	// #670): rebuild the running provider so the removed credential is
-	// dropped from memory together with the disk token.
+
 	refreshRunningProviderAfterAuth()
 	return err
 }

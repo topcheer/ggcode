@@ -77,14 +77,13 @@ func (s *LogStream) Write(category, message string) {
 		Message:  message,
 		Time:     now,
 	}
-	// Ring buffer
+
 	s.buf[s.head] = entry
 	s.head = (s.head + 1) % s.cap
 	if s.count < s.cap {
 		s.count++
 	}
-	// Pending queue for drain, capped at maxPend. When full, drop the oldest
-	// and count the overflow so Drain can report it (#286).
+
 	if len(s.pending) >= s.maxPend {
 		copy(s.pending, s.pending[1:])
 		s.pending[len(s.pending)-1] = entry
@@ -103,18 +102,13 @@ func (s *LogStream) Drain() []LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) == 0 {
-		// #428: overflow>0 with an empty pending list is unreachable — overflow
-		// only increments when pending is FULL, and both are reset together
-		// under this lock in the non-empty path below. The old dead branch
-		// (and its wrong "stream was toggled off" comment) is removed.
+
 		return nil
 	}
 	out := make([]LogEntry, 0, len(s.pending)+1)
 	if s.overflow > 0 {
 		out = append(out, LogEntry{
-			// #580: Position the overflow notice before the first retained entry
-			// (the oldest in pending), so sorted consumers see it in correct
-			// chronological order instead of at the end.
+
 			Seq:      s.pending[0].Seq - int64(s.overflow),
 			Category: "logstream",
 			Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
@@ -138,7 +132,7 @@ func (s *LogStream) History(n int) []LogEntry {
 		return nil
 	}
 	out := make([]LogEntry, n)
-	// Read from ring buffer, starting from the oldest entry
+
 	start := (s.head - n + s.cap) % s.cap
 	for i := 0; i < n; i++ {
 		out[i] = s.buf[(start+i)%s.cap]

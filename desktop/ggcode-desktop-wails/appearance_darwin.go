@@ -22,7 +22,6 @@ static int macDarkMode() {
 */
 import "C"
 
-// detectMacDarkMode returns true if macOS is in Dark Mode.
 func detectMacDarkMode() bool {
 	return C.macDarkMode() == 1
 }

@@ -19,7 +19,7 @@ func Test1504DeliverUnixBounded(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		// completed (or failed fast) - fine
+
 	case <-time.After(15 * time.Second):
 		t.Fatal("deliverUnix ran unbounded - worker can be wedged by a hung notifier")
 	}

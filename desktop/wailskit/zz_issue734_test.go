@@ -51,7 +51,7 @@ vendors:
 	if err := os.MkdirAll(instDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// #734 trigger shape: instance attached, NO vendors section.
+
 	instPath := filepath.Join(instDir, "ggcode.yaml")
 	if err := os.WriteFile(instPath, []byte("language: zh\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -63,13 +63,10 @@ vendors:
 	}
 	SetConfig(cfg)
 
-	// The user-visible action: add a brand-new vendor endpoint at runtime.
 	if err := AddCustomEndpoint("c", "main", "openai", "https://c734.example.com/v1", ""); err != nil {
 		t.Fatalf("AddCustomEndpoint: %v", err)
 	}
 
-	// C must be persisted to the instance file (the only durable layer that
-	// survives restart for an instance-bound workspace with this shape).
 	inst, err := os.ReadFile(instPath)
 	if err != nil {
 		t.Fatalf("reading instance config: %v", err)
@@ -80,7 +77,6 @@ vendors:
 		}
 	}
 
-	// Restart semantics: fresh load must still see C.
 	cfg2, err := config.LoadWithInstance(cfgPath, ws)
 	if err != nil {
 		t.Fatalf("reload LoadWithInstance: %v", err)

@@ -30,7 +30,7 @@ func TestShouldSkipHistoryTool(t *testing.T) {
 	keep := []string{
 		"read_file", "edit_file", "write_file", "run_command",
 		"git_status", "grep", "web_fetch", "start_command",
-		"exit_plan_mode", // handled specially, not skipped
+		"exit_plan_mode",
 	}
 	for _, name := range keep {
 		if shouldSkipHistoryTool(name) {
@@ -159,21 +159,15 @@ func TestBuildSessionHistory_SystemMessagesSkipped(t *testing.T) {
 	}
 }
 
-// TestRenameSession_LargeWindowedSession_PersistsToDisk reproduces fix #538
-// (Bug B): a session with >=500 message records whose only user message is
-// older than RecentMessageWindow (24h) gets a windowed store.Load that drops
-// that user message, so in-memory HasUserInteraction() is false and
-// AppendMetaToDisk silently no-ops — RenameSession returned nil without the
-// rename ever landing on disk.
 func TestRenameSession_LargeWindowedSession_PersistsToDisk(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp) // NewDefaultStore -> $HOME/.ggcode/sessions
+	t.Setenv("HOME", tmp)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
-	id := "sess538window" // valid session ID charset
+	id := "sess538window"
 	path := filepath.Join(dir, id+".jsonl")
 
 	now := time.Now()
-	oldTS := now.Add(-48 * time.Hour) // user message: outside the 24h window
+	oldTS := now.Add(-48 * time.Hour)
 	recentTS := now.Add(-1 * time.Hour)
 
 	var b strings.Builder
@@ -196,8 +190,7 @@ func TestRenameSession_LargeWindowedSession_PersistsToDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Precondition: the windowed load really drops the user message —
-	// otherwise this test would not exercise the bug path.
+
 	sesWindowed, err := store.Load(id)
 	if err != nil {
 		t.Fatalf("windowed load: %v", err)
@@ -210,7 +203,6 @@ func TestRenameSession_LargeWindowedSession_PersistsToDisk(t *testing.T) {
 		t.Fatalf("RenameSession: %v", err)
 	}
 
-	// The rename must actually be on disk (was a silent no-op before #538).
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -219,8 +211,6 @@ func TestRenameSession_LargeWindowedSession_PersistsToDisk(t *testing.T) {
 		t.Fatal("rename was not persisted to the session JSONL file")
 	}
 
-	// And it must be visible on reload — both windowed (title lives in the
-	// trailing meta record, past the window cutoff) and full.
 	sesW2, err := store.Load(id)
 	if err != nil {
 		t.Fatalf("reload windowed: %v", err)

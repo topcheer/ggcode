@@ -2,14 +2,6 @@
 
 package wailskit
 
-// #3852 companions: (A) ApplyImpersonation must write instance-sourced
-// impersonation fields back to the instance file - cfg.Save() strips them
-// from the global file, so without the write-back the next restart's
-// instance merge silently reverts the user's preset switch (#282 family).
-// (B) UpdateConfig must apply impersonateCustomVersion BEFORE activating
-// the runtime impersonation, or the running provider pins the stale
-// version while disk holds the new one.
-
 import (
 	"testing"
 
@@ -23,8 +15,6 @@ impersonation:
   custom_version: "0.5.0"
 `
 
-// A: preset switch via ApplyImpersonation on an instance-bound workspace
-// must survive a cold re-load from disk.
 func TestIssue3852_ApplyImpersonationInstanceWriteback(t *testing.T) {
 	globalPath, workspace := setupConfigTestEnv(t, issue3852Instance)
 
@@ -40,10 +30,6 @@ func TestIssue3852_ApplyImpersonationInstanceWriteback(t *testing.T) {
 		t.Fatalf("ApplyImpersonation: %v", err)
 	}
 
-	// Cold reload from disk: the instance merge must now yield the NEW
-	// preset. Before the fix, Save() stripped impersonation from the
-	// global file and the instance file still held gemini-cli, so the
-	// user's switch silently reverted on restart.
 	reloaded, err := config.LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
@@ -56,8 +42,6 @@ func TestIssue3852_ApplyImpersonationInstanceWriteback(t *testing.T) {
 	}
 }
 
-// B: submitting preset + customVersion in one UpdateConfig batch must
-// activate the runtime with the NEW version.
 func TestIssue3852_UpdateConfigVersionBeforeActivate(t *testing.T) {
 	_, _ = setupConfigTestEnv(t, "")
 	cfg := GetGlobalConfig()

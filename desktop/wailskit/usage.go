@@ -8,11 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// #2150 batch 3 (first slice): desktop-side consumption of the usage layer
-// landed in #2352. The ChatBridge exposes GetUsageInfo as a Wails binding -
-// the desktop UI polls it for the usage badge / panel. The IM /usage render
-// and the badge visuals are follow-up slices; this binding is the data door.
-
 // UsageWindowInfo is the JSON shape of one rolling window for the frontend.
 type UsageWindowInfo struct {
 	Label       string  `json:"label"`
@@ -56,18 +51,12 @@ func (b *ChatBridge) GetUsageInfo() UsageInfoResult {
 		return res
 	}
 
-	// #2399: probe selection is BY URL (owner ruling 2026-09-15) - resolve
-	// the probe id from the ACTIVE endpoint's base URL, never the config
-	// vendor name; unknown hosts mean no probe (ambient, stays silent).
 	probeID := usageService.Resolve(ep.baseURL)
 	if probeID == "" {
 		res.Error = "no usage probe for this endpoint"
 		return res
 	}
-	// #2400: the outer ctx must not clamp the probe's own 10s budget -
-	// 5s outer x 10s inner made 5-10s endpoints fail deterministically
-	// with DeadlineExceeded AND poisoned the negative cache. Aligned with
-	// the TUI baseline (15s outer).
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	info, err := usageService.Get(ctx, probeID, ep.baseURL, ep.apiKey)

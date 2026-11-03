@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// fakeIMBindingsMgr implements the narrow interface ListIMAdapters accepts,
-// with a canned binding list ordered by the test.
 type fakeIMBindingsMgr struct {
 	bindings []im.ChannelBinding
 }
@@ -23,8 +21,6 @@ func (f *fakeIMBindingsMgr) AllPersistedBindings() []im.ChannelBinding {
 
 func (f *fakeIMBindingsMgr) IsMuted(adapterName string) bool { return false }
 
-// setupIssue587Config writes a minimal config with one enabled adapter and
-// returns the working directory it should consider "current".
 func setupIssue587Config(t *testing.T, workingDir string) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -50,12 +46,6 @@ func setupIssue587Config(t *testing.T, workingDir string) {
 	}
 }
 
-// TestIssue587_MultiBindingIsCurrent_TrueInEitherOrder verifies that an
-// adapter carrying a legacy orphan binding PLUS the current-workspace
-// binding reports IsCurrent=true regardless of slice order. The old
-// map[string]string fold kept only the last entry (last-write-wins), so
-// when the orphan came last, the UI said the adapter was not bound to the
-// current workspace even though it was.
 func TestIssue587_MultiBindingIsCurrent_TrueInEitherOrder(t *testing.T) {
 	workingDir := "/Users/test/proj"
 	setupIssue587Config(t, workingDir)
@@ -91,9 +81,6 @@ func TestIssue587_MultiBindingIsCurrent_TrueInEitherOrder(t *testing.T) {
 	}
 }
 
-// TestIssue587_OrphanOnlyBinding_NotCurrent verifies single-binding
-// semantics are unchanged: an adapter bound only to some other workspace
-// is still IsCurrent=false.
 func TestIssue587_OrphanOnlyBinding_NotCurrent(t *testing.T) {
 	workingDir := "/Users/test/proj"
 	setupIssue587Config(t, workingDir)

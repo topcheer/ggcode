@@ -15,7 +15,6 @@ import (
 func TestIssue636_CapTruncatesInsteadOfFailing(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create more entries than the cap (flat layout keeps setup fast).
 	total := maxRecursiveEntries + 50
 	for i := 0; i < total; i++ {
 		p := filepath.Join(tmpDir, fmt.Sprintf("f%06d.txt", i))
@@ -32,7 +31,6 @@ func TestIssue636_CapTruncatesInsteadOfFailing(t *testing.T) {
 		t.Fatalf("expected truncated result of exactly %d entries, got %d", maxRecursiveEntries, len(entries))
 	}
 
-	// Below the cap: unchanged behavior — everything returned, no error.
 	small := t.TempDir()
 	for i := 0; i < 5; i++ {
 		if err := os.WriteFile(filepath.Join(small, fmt.Sprintf("s%d.txt", i)), nil, 0o600); err != nil {

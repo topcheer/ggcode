@@ -40,8 +40,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// initSystemTray installs the Dock-reopen handler and its poller. The tray
-// itself is cross-platform now (tray.go, energye/systray).
 func (a *App) initSystemTray() {
 	C.gcInstallDockReopenHandler()
 	safego.Go("dock-reopen-poller", func() {
@@ -62,7 +60,3 @@ func (a *App) initSystemTray() {
 		}
 	})
 }
-
-// handleTrayShow / handleTrayNewSession / handleTrayQuit moved to tray.go:
-// they are pure Wails runtime calls with no platform coupling, and the
-// socket dispatch in serveTrayConn compiles on every platform.

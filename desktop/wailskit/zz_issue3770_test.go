@@ -31,8 +31,7 @@ func TestIssue3770_BogusPresetLeavesConfigUntouched(t *testing.T) {
 	if !strings.Contains(err.Error(), "unknown impersonation preset") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The whole request must be atomic: the legal model write must NOT have
-	// landed either (pre-fix it did -- the reported half-applied bug).
+
 	if cfg.Model != before {
 		t.Fatalf("half-applied update: cfg.Model = %q, want %q", cfg.Model, before)
 	}

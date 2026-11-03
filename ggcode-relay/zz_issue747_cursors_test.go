@@ -17,12 +17,10 @@ func TestRelayStoreCleanupExpiredRemovesCursors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sanity: cursor is readable before cleanup.
 	if got, err := store.loadClientCursor(hashToken(token), "client-1"); err != nil || got != "ev-000000001" {
 		t.Fatalf("pre-cleanup cursor = %q, %v; want ev-000000001", got, err)
 	}
 
-	// Cleanup with a clock past retention must remove the cursor row.
 	if err := store.cleanupExpired(time.Now().Add(defaultCleanupAge + time.Hour)); err != nil {
 		t.Fatal(err)
 	}

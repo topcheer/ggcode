@@ -1,9 +1,5 @@
 package wailskit
 
-// sa-233: TrajConfidenceOverview must degrade to an explicit "no
-// signal" shape on an empty workspace and serialize the fields the
-// desktop frontend binds to.
-
 import (
 	"encoding/json"
 	"strings"
@@ -15,7 +11,7 @@ func TestTrajConfidenceOverviewEmptyWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.workingDir = t.TempDir() // same-package test: set directly
+	b.workingDir = t.TempDir()
 	ov := b.TrajConfidenceOverview()
 	if ov.Total != 0 || ov.HasLearnings || ov.Injecting != 0 || ov.AvgConfidence != 0 {
 		t.Fatalf("empty workspace should yield zero overview, got %+v", ov)

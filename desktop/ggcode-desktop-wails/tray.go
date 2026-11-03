@@ -1,10 +1,5 @@
 package main
 
-// Out-of-process system tray host: the app spawns the trayhelper binary
-// (see trayhelper/) and serves a unix socket it reports tray actions on.
-// All in-process tray approaches failed on this stack - see trayhelper's
-// package comment for the full post-mortem.
-
 import (
 	"bufio"
 	"errors"
@@ -40,23 +35,14 @@ var (
 
 func (a *App) runSystemTray() {
 	traySockOnce.Do(func() {
-		// #1420-A: every write below touches fields trayMu is documented
-		// to guard (traySockPath/trayListener), yet the whole setup ran
-		// UNLOCKED while removeSystemTray reads them under the lock - a
-		// deterministic -race report and a real window: quick Ctrl-C after
-		// launch could complete an EMPTY teardown mid-setup, after which
-		// this path overwrote the fields and left the tmpdir orphaned
-		// forever. The lock now covers setup too; after acquiring it we
-		// re-check trayShuttingDown so a teardown that already ran aborts
-		// the setup instead of resurrecting state.
+
 		trayMu.Lock()
 		if trayShuttingDown {
 			trayMu.Unlock()
 			debug.Log("desktop", "tray: shutdown raced setup - skipping tray init")
 			return
 		}
-		// NOTE: lock released before spawnTrayHelper - it takes trayMu
-		// itself (#1403-A), so holding it here would self-deadlock.
+
 		spawn := a.setupTrayListenerLocked()
 		trayMu.Unlock()
 		if spawn {
@@ -79,29 +65,20 @@ func (a *App) setupTrayListenerLocked() bool {
 	ln, err := net.Listen("unix", traySockPath)
 	if err != nil {
 		debug.Log("desktop", "tray: listen: %v", err)
-		// #1403-B4: the MkdirTemp dir above leaks on listen failure -
-		// nothing references it anymore.
+
 		os.RemoveAll(dir)
 		traySockPath = ""
 		return false
 	}
 	trayListener = ln
 
-	// Serve helper connections for the lifetime of the app.
 	safego.Go("tray-sock-server", func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				// #1433-B: shutdown closes the listener, which surfaces as
-				// net.ErrClosed - the ONLY legitimate exit. Any other error
-				// (EMFILE/ENOMEM under fd exhaustion in a long-running
-				// desktop app) used to return too: listener left open,
-				// sockpath kept, trayShuttingDown=false - the helper kept
-				// rendering a tray icon whose clicks nobody accepted, with
-				// no log and no self-healing until restart. Transient
-				// errors now log and retry with a short backoff.
+
 				if errors.Is(err, net.ErrClosed) {
-					return // listener closed during shutdown
+					return
 				}
 				debug.Log("tray", "accept error: %v (retrying)", err)
 				time.Sleep(500 * time.Millisecond)
@@ -157,17 +134,11 @@ var trayRespawnBackoff = []time.Duration{
 const minHealthyHelperUptime = 30 * time.Second
 
 func (a *App) spawnTrayHelper() {
-	// #1403-A: the spawn path (sockPath read, Start, cmd assignment) used
-	// to run fully OUTSIDE trayMu while removeSystemTray reads/writes the
-	// same fields under it - a deterministic data race, and a teardown that
-	// swept between the reaper's unlocked check and our assignment killed
-	// the OLD (already dead) cmd while the NEW helper ran on unsupervised
-	// (bounded to ~5s by the helper's dial-exit, but incorrect).
+
 	trayMu.Lock()
 	path := traySockPath
 	if path == "" || trayShuttingDown {
-		// Socket torn down (or teardown in flight) since the reaper's check:
-		// spawning now would create exactly the orphan #1351 fixed.
+
 		trayMu.Unlock()
 		return
 	}
@@ -180,9 +151,7 @@ func (a *App) spawnTrayHelper() {
 		trayMu.Unlock()
 		started := time.Now()
 		safego.Go("tray-helper-reaper", func() {
-			// Restart the helper if it dies unexpectedly - never during or
-			// after shutdown. #1351: guards read state under trayMu.
-			// #1403-B: with backoff - see trayRespawnBackoff.
+
 			err := cmd.Wait()
 			trayMu.Lock()
 			shutdown := trayShuttingDown
@@ -194,16 +163,13 @@ func (a *App) spawnTrayHelper() {
 			if err == nil {
 				return
 			}
-			// Backoff ladder: advance while runs stay short, reset after a
-			// healthy run. Runs beyond minHealthyHelperUptime are normal
-			// restarts, not crash loops.
+
 			if time.Since(started) >= minHealthyHelperUptime {
 				trayRespawnFailures = 0
 			} else {
 				trayRespawnFailures++
 			}
-			// #1420 follow-up: failures counter touched here without the lock
-			// (spawn chains are serial today, defensive fix while we are here).
+
 			_ = trayRespawnFailures
 			idx := trayRespawnFailures
 			if idx >= len(trayRespawnBackoff) {
@@ -247,7 +213,7 @@ func (a *App) serveTrayConn(conn net.Conn) {
 // release matrix caught what host-platform CI could not.
 func (a *App) handleTrayShow() {
 	debug.Log("desktop", "tray: show window")
-	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
+	a.lastCloseAttempt.Store(nil)
 	if a.ctx == nil {
 		return
 	}
@@ -257,7 +223,7 @@ func (a *App) handleTrayShow() {
 
 func (a *App) handleTrayNewSession() {
 	debug.Log("desktop", "tray: new session")
-	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
+	a.lastCloseAttempt.Store(nil)
 	if a.ctx == nil {
 		return
 	}
@@ -275,13 +241,7 @@ func (a *App) handleTrayQuit() {
 
 // removeSystemTray tears the tray down during shutdown (both platforms).
 func (a *App) removeSystemTray() {
-	// Closing the socket makes the helper exit (and remove its status
-	// item); also kill it outright in case it is mid-retry-dial.
-	//
-	// #1351: set the shutdown flag and clear the sock path BEFORE Kill so
-	// the reaper woken by the kill observes the torn-down state under the
-	// same mutex and does not respawn mid-teardown. The reaper's cmd.Wait
-	// reaps the killed process.
+
 	trayMu.Lock()
 	trayShuttingDown = true
 	cmd := trayHelperCmd
@@ -295,9 +255,7 @@ func (a *App) removeSystemTray() {
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Kill()
 	}
-	// #1403-B2: closing the listener unblocks the accept goroutine (the
-	// old comment claimed "listener closed during shutdown" but nothing
-	// ever closed it - the loop leaked until process exit).
+
 	if ln != nil {
 		_ = ln.Close()
 	}

@@ -17,15 +17,12 @@ func TestPendingSlicesInterruptDrainSync(t *testing.T) {
 		t.Skipf("bridge init failed in test env: %v", err)
 	}
 
-	// Step 1 (issue repro): IM message enqueued while agent busy.
 	b.mu.Lock()
 	b.pendingMsgs.Enqueue("from telegram", false, nil)
 	b.pendingSource = append(b.pendingSource, "im")
 	b.pendingExclude = append(b.pendingExclude, "telegram")
 	b.mu.Unlock()
 
-	// Step 2: iteration-boundary consume pops the queue — and MUST pop the
-	// parallel pair too.
 	if got := b.drainPendingInterrupt(); !strings.Contains(providerBlocksText(got), "from telegram") {
 		t.Fatalf("interrupt drain should return the queued text, got %+v", got)
 	}
@@ -36,7 +33,6 @@ func TestPendingSlicesInterruptDrainSync(t *testing.T) {
 		t.Fatalf("parallel slices must be empty after interrupt consume, got source=%d exclude=%d", srcLen, exclLen)
 	}
 
-	// Step 3: a later desktop message must NOT inherit the stale im pair.
 	b.mu.Lock()
 	b.pendingMsgs.Enqueue("from desktop", false, nil)
 	b.pendingSource = append(b.pendingSource, "desktop")
@@ -75,7 +71,7 @@ func TestQueueMessageAppendsPair(t *testing.T) {
 	if srcLen != 1 || exclLen != 1 {
 		t.Fatalf("QueueMessage must append one parallel pair, got source=%d exclude=%d", srcLen, exclLen)
 	}
-	// Consume via interrupt path — pair must be popped (no orphan).
+
 	b.drainPendingInterrupt()
 	b.mu.Lock()
 	srcLen, exclLen = len(b.pendingSource), len(b.pendingExclude)

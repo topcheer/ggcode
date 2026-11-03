@@ -37,8 +37,6 @@ func mustSession(t *testing.T, store session.Store) *session.Session {
 	return ses
 }
 
-// ─── #269: lock-guarded persist ───────────────────────────────────────
-
 // TestPersistHandlerRefusesWriteUnderForeignLock verifies that the persist
 // path refuses to append to a session whose ID differs from the held
 // session lock (#269 guard ②).
@@ -61,7 +59,6 @@ func TestPersistHandlerRefusesWriteUnderForeignLock(t *testing.T) {
 	b.sessionLock = lockB
 	b.mu.Unlock()
 
-	// Attempt to persist into A while holding B's lock — must be refused.
 	b.appendPersistMessage(jsonl, sesA, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "must not land"}}})
 
 	reloaded, err := b.sessionStore.Load(sesA.ID)
@@ -125,8 +122,6 @@ func TestSessionLockMismatchGuard(t *testing.T) {
 	b.mu.Unlock()
 }
 
-// ─── #269: LoadSession InitAgent-failure rollback ─────────────────────
-
 // TestRollbackSessionLoadRestoresPreviousSession verifies that after a failed
 // switch, the bridge rolls back to the previous (persisted, non-ephemeral)
 // session and re-acquires its lock (#269 guard ①).
@@ -140,8 +135,6 @@ func TestRollbackSessionLoadRestoresPreviousSession(t *testing.T) {
 	}
 	b.setSessionState(agentruntime.AdoptSession(oldSes))
 
-	// Snapshot BEFORE the switch attempt — mirrors LoadSession, which takes
-	// the snapshot before cleanup/switch, so it captures the old session.
 	prev := b.snapshotSessionState()
 	if prev.ses != oldSes {
 		t.Fatalf("snapshot captured %p, want old session", prev.ses)
@@ -151,10 +144,8 @@ func TestRollbackSessionLoadRestoresPreviousSession(t *testing.T) {
 	}
 
 	failedSes := mustSession(t, b.sessionStore)
-	b.setSessionState(agentruntime.AdoptSession(failedSes)) // the switch that will "fail"
+	b.setSessionState(agentruntime.AdoptSession(failedSes))
 
-	// Simulate the failure branch: lock already released by the branch above
-	// this call in LoadSession; rollback must restore oldSes.
 	b.ResetAgent()
 	b.rollbackSessionLoad(failedSes, prev)
 
@@ -178,12 +169,12 @@ func TestRollbackSessionLoadRestoresPreviousSession(t *testing.T) {
 func TestRollbackSessionLoadClearsWhenPreviousDeleted(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
-	ephemeral := mustSession(t, b.sessionStore) // no messages → deleted by cleanup
+	ephemeral := mustSession(t, b.sessionStore)
 	failedSes := mustSession(t, b.sessionStore)
 	b.setSessionState(agentruntime.AdoptSession(failedSes))
 
 	prev := prevSessionState{ses: ephemeral, ephemeral: true, deletedByCleanup: true}
-	_ = b.sessionStore.Delete(ephemeral.ID) // the cleanup that ran before the switch
+	_ = b.sessionStore.Delete(ephemeral.ID)
 
 	b.rollbackSessionLoad(failedSes, prev)
 
@@ -207,15 +198,13 @@ func TestRollbackSessionLoadNoopWhenCurrentChanged(t *testing.T) {
 	b.setSessionState(agentruntime.AdoptSession(otherSes))
 
 	prev := prevSessionState{ses: oldSes}
-	failedSes := &session.Session{ID: "failed"} // not current anymore
+	failedSes := &session.Session{ID: "failed"}
 	b.rollbackSessionLoad(failedSes, prev)
 
 	if b.CurrentSessionID() != otherSes.ID {
 		t.Fatalf("rollback clobbered concurrent switch: current=%q, want %q", b.CurrentSessionID(), otherSes.ID)
 	}
 }
-
-// ─── #270: run-start snapshot semantics ───────────────────────────────
 
 // TestPersistRunMessagesUsesRunSnapshot verifies persistRunMessages appends
 // to the run-start snapshot, not the write-time current session (#270).
@@ -230,13 +219,11 @@ func TestPersistRunMessagesUsesRunSnapshot(t *testing.T) {
 	ag.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a"}}})
 
 	b.mu.Lock()
-	b.runSes = runSes     // snapshot taken at run start
-	b.currentSes = curSes // session switched mid-run
+	b.runSes = runSes
+	b.currentSes = curSes
 	b.agent = ag
 	b.mu.Unlock()
 
-	// Expected delta: everything the agent added since run start (system
-	// message included), with a leading user message stripped.
 	expected := len(ag.AddedSinceRunStart())
 	if expected > 0 && ag.AddedSinceRunStart()[0].Role == "user" {
 		expected--
@@ -252,8 +239,6 @@ func TestPersistRunMessagesUsesRunSnapshot(t *testing.T) {
 		t.Fatalf("current session must not receive run messages, got %d extra (#270)", len(curSes.Messages)-curBefore)
 	}
 }
-
-// ─── #279: conditional ephemeral cleanup ──────────────────────────────
 
 // TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral verifies the #279
 // race: while lock.Release() was blocked outside b.mu, a concurrent
@@ -272,8 +257,6 @@ func TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral(t *testing.T) {
 	b.sessionLock = oldLock
 	b.mu.Unlock()
 
-	// Simulate the release happening (outside b.mu in production) and, in the
-	// window, EnsureSession installing a NEW ephemeral session + lock.
 	oldLock.Release()
 	newSes := mustSession(t, b.sessionStore)
 	newLock, err := session.TryAcquireSessionLock(sessionStoreDir(t), newSes.ID)
@@ -284,10 +267,9 @@ func TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral(t *testing.T) {
 	b.mu.Lock()
 	b.currentSes = newSes
 	b.sessionLock = newLock
-	b.sessionEphemeral = true // the concurrent creator's flag
+	b.sessionEphemeral = true
 	b.mu.Unlock()
 
-	// The cleanup's final critical section wakes up — must keep B's state.
 	b.cleanupEphemeralFinalize(oldSes, oldLock)
 
 	b.mu.Lock()
@@ -336,7 +318,6 @@ func TestCleanupEphemeralFinalizeClearsOwnState(t *testing.T) {
 func TestSnapshotSessionStatePredictsEphemeralDeletion(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
-	// Ephemeral + no messages → will be deleted by cleanup.
 	eph := mustSession(t, b.sessionStore)
 	b.mu.Lock()
 	b.currentSes = eph
@@ -346,13 +327,11 @@ func TestSnapshotSessionStatePredictsEphemeralDeletion(t *testing.T) {
 		t.Fatal("empty ephemeral session must snapshot as deletable")
 	}
 
-	// Ephemeral + messages → kept.
 	eph.Messages = append(eph.Messages, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "x"}}})
 	if s := b.snapshotSessionState(); s.deletedByCleanup {
 		t.Fatal("non-empty ephemeral session must snapshot as kept")
 	}
 
-	// Not ephemeral → kept.
 	b.mu.Lock()
 	b.sessionEphemeral = false
 	b.mu.Unlock()

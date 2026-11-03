@@ -30,7 +30,6 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 	noteConfigFileSaved()
 	globalMu.Unlock()
 
-	// External session (TUI/CLI) patches the file AFTER our last save.
 	time.Sleep(50 * time.Millisecond)
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -48,7 +47,6 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 		t.Fatalf("external write: %v", err)
 	}
 
-	// Poller window: force a sync cycle.
 	globalMu.Lock()
 	syncCfgFileLocked()
 	globalMu.Unlock()
@@ -56,7 +54,7 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 	if got := GetGlobalConfig().DefaultMode; got != "bypass" {
 		t.Fatalf("poller must refresh external change, default_mode=%q", got)
 	}
-	// A delta save from the desktop now preserves the external value.
+
 	if err := UpdateConfig(map[string]interface{}{"model": "m2"}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}

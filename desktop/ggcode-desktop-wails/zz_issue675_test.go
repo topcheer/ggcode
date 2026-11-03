@@ -59,9 +59,7 @@ func TestIssue675_XMLFamilyExtensionMimesPreserved(t *testing.T) {
 		{".csv", []byte("a,b\n1,2\n")},
 		{".txt", []byte("plain hello\n")},
 		{".yaml", []byte("a: 1\n")},
-		// Binary-ish application mime does NOT qualify; sniffed value wins.
-		// (.png with textual content: sniff=text/plain ≠ image/png, so a kept
-		// extension mime would be observable.)
+
 		{".png", []byte("this is really just plain text, not a png image\n")},
 	}
 	for _, tc := range cases {
