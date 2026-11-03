@@ -11,14 +11,49 @@ import (
 
 type companionGuardState struct {
 	fired bool
+
+	// selfAuthored tracks test files that this flow itself wrote or changed
+	// relative to the worktree base commit, refreshed from git provenance so
+	// tests authored in an earlier run of a worktree flow (already committed
+	// on the worktree branch) are not reported as "not updated" (#4790).
+	selfAuthored map[string]bool
+
+	base string
 }
 
 func newCompanionGuardState() *companionGuardState {
-	return &companionGuardState{}
+	return &companionGuardState{
+		selfAuthored: make(map[string]bool),
+	}
 }
 
 func (c *companionGuardState) reset() {
 	c.fired = false
+	c.selfAuthored = make(map[string]bool)
+	c.base = ""
+}
+
+// refreshProvenance recomputes the set of files changed relative to the
+// worktree base commit. It is invoked when the agent enters a worktree (a
+// tool result suggesting a new working dir) and before the companion
+// advisory is emitted, so the guard judges companions against what THIS
+// flow authored instead of stale tracking state (#4790).
+func (c *companionGuardState) refreshProvenance(workDir string) {
+	base := worktreeBaseCommit(workDir)
+	if base == "" {
+		return
+	}
+	if c.base == base {
+		return
+	}
+	c.base = base
+	c.selfAuthored = make(map[string]bool)
+	for _, f := range gitChangedSince(workDir, base) {
+		c.selfAuthored[normalizeCompanionPath(workDir, f)] = true
+	}
+	if len(c.selfAuthored) > 0 {
+		debug.Log("agent", "companion file guard: %d file(s) self-authored relative to base %s", len(c.selfAuthored), base)
+	}
 }
 
 func isTestFilePath(path string) bool {
@@ -177,6 +212,8 @@ func (a *companionGuardState) checkCompanionFiles(runStats *RunStats, workDir st
 		return ""
 	}
 
+	a.refreshProvenance(workDir)
+
 	edited := make(map[string]bool, len(runStats.FilesEdited))
 	for _, f := range runStats.FilesEdited {
 
@@ -206,6 +243,10 @@ func (a *companionGuardState) checkCompanionFiles(runStats *RunStats, workDir st
 			}
 
 			if edited[normalizeCompanionPath(workDir, candidate)] {
+				continue
+			}
+			if a.selfAuthored[normalizeCompanionPath(workDir, candidate)] {
+				debug.Log("agent", "companion file guard: skipping %s (self-authored earlier in this worktree flow)", candidate)
 				continue
 			}
 			missingCompanions = append(missingCompanions, missing{
