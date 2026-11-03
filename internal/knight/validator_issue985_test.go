@@ -1,13 +1,5 @@
 package knight
 
-// Tests for issue #985:
-//  1. hasSection/hasActionableSteps required the heading line to be exactly
-//     "## Steps" (case-insensitive), so common LLM-generated variants like
-//     "## Steps:" or "## Steps Overview" were rejected as missing the required
-//     section (an Error -> Valid=false -> promoteStagingEntry refuses).
-//  2. promoteStagingEntry swallowed the ActiveSkills error, making the
-//     duplicate guard a no-op when the index scan failed.
-
 import (
 	"context"
 	"os"
@@ -18,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// issue985WriteStaging writes a staging skill with a parametrized steps
-// heading and returns its indexed entry. All other content is kept valid
-// (mirrors the #767 fixture) so the only variable is the heading.
 func issue985WriteStaging(t *testing.T, k *Knight, name, heading string) *SkillEntry {
 	t.Helper()
 	content := "---\nname: " + name + "\ndescription: Enforce read-before-edit discipline across all code changes.\nscope: project\ncreated_by: user\n---\n# Safe Edit Discipline\n\n## When to Use\nUse before any code modification in this repository.\n\n## When Not to Use\nDo not use for documentation-only edits.\n\n" + heading + "\n1. Never edit a file without reading it first.\n2. Confirm the surrounding function context before patching.\n"
@@ -43,15 +32,12 @@ func newIssue985Knight(t *testing.T) (*Knight, string, string) {
 	return k, homeDir, projDir
 }
 
-// TestIssue985_StepsHeadingVariantsAccepted verifies that heading variants
-// starting with "## steps" (after trim + lowercase) pass validation, while
-// headings that do not start with the canonical prefix are still rejected.
 func TestIssue985_StepsHeadingVariantsAccepted(t *testing.T) {
 	accepted := []string{
-		"## Steps",          // canonical
-		"## steps",          // lowercase
-		"## Steps:",         // trailing colon
-		"## Steps Overview", // suffix words
+		"## Steps",
+		"## steps",
+		"## Steps:",
+		"## Steps Overview",
 	}
 	for _, heading := range accepted {
 		k, _, _ := newIssue985Knight(t)
@@ -63,9 +49,9 @@ func TestIssue985_StepsHeadingVariantsAccepted(t *testing.T) {
 	}
 
 	rejected := []string{
-		"##Steps",               // no space after ##: prefix "## steps" does not match (documented boundary)
-		"## Pipeline - 5 steps", // does not start with "## steps" (documented boundary)
-		"## Usage",              // no steps section at all
+		"##Steps",
+		"## Pipeline - 5 steps",
+		"## Usage",
 	}
 	for _, heading := range rejected {
 		k, _, _ := newIssue985Knight(t)
@@ -86,10 +72,6 @@ func TestIssue985_StepsHeadingVariantsAccepted(t *testing.T) {
 	}
 }
 
-// TestIssue985_ActionableStepsFollowsVariantHeadings verifies hasActionableSteps
-// stays consistent with hasSection: list items under a variant heading like
-// "## Steps Overview" must count as actionable steps (before the fix the
-// variant passed the presence check but then failed the actionable check).
 func TestIssue985_ActionableStepsFollowsVariantHeadings(t *testing.T) {
 	lines := []string{
 		"# Some Skill",
@@ -105,17 +87,10 @@ func TestIssue985_ActionableStepsFollowsVariantHeadings(t *testing.T) {
 	}
 }
 
-// TestIssue985_PromotePropagatesActiveSkillsError verifies promoteStagingEntry
-// returns an error when the skill index cannot be read, instead of silently
-// skipping the duplicate guard with active=nil.
 func TestIssue985_PromotePropagatesActiveSkillsError(t *testing.T) {
 	k, _, projDir := newIssue985Knight(t)
 	entry := issue985WriteStaging(t, k, "guard-error-repro", "## Steps")
 
-	// Break the ACTIVE project skills dir: replace it with a regular file so
-	// the next Scan (cache invalidated below) fails. The staging entry was
-	// already fetched, and ValidateSkill reads the staging file directly, so
-	// the first failure point is ActiveSkills inside promoteStagingEntry.
 	activeDir := filepath.Join(projDir, ".ggcode", "skills")
 	if err := os.RemoveAll(activeDir); err != nil {
 		t.Fatalf("remove active dir: %v", err)
@@ -134,13 +109,11 @@ func TestIssue985_PromotePropagatesActiveSkillsError(t *testing.T) {
 	}
 }
 
-// TestIssue985_PromoteStillWorksWhenIndexHealthy is the companion sanity
-// check: with a healthy index, the same promote path must succeed end to end.
 func TestIssue985_PromoteStillWorksWhenIndexHealthy(t *testing.T) {
 	k, _, _ := newIssue985Knight(t)
 	entry := issue985WriteStaging(t, k, "healthy-promote", "## Steps Overview")
 	if err := k.promoteStagingEntry(entry); err != nil {
 		t.Fatalf("healthy promote must succeed with variant heading, err: %v", err)
 	}
-	_ = context.Background() // keep context import if assertions change
+	_ = context.Background()
 }

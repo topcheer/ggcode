@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// HealthReport provides a diagnostic overview of the memory store.
-// It summarizes counts, category distribution, staleness signals, and
-// total context budget usage.
 type HealthReport struct {
 	Total   int
 	Active  int
@@ -16,39 +13,30 @@ type HealthReport struct {
 	Deduped int
 	Capped  int
 
-	// Category distribution
 	Transient  int
 	Evolving   int
 	Persistent int
 	Default    int
 
-	// Budget usage
 	InlineEntries        int
 	IndexEntries         int
 	InlineBytes          int
-	EffectiveBudgetBytes int // effective inline budget in bytes (LIMBO-scaled denominator, #3872)
-	BudgetPercent        int // percentage of EffectiveBudgetBytes used
+	EffectiveBudgetBytes int
+	BudgetPercent        int
 
-	// Staleness signals
 	StaleBrokenPaths int
 	StaleOversized   int
 	StaleAncient     int
 
-	// Newest and oldest entry ages
 	OldestDays int
 	NewestDays int
 
-	// Potential duplicates (entries with same dedup key)
 	DuplicateGroups int
 
-	// sa-85 usage feedback: how many active entries have actually been
-	// injected into a prompt at least once vs. never used since creation.
 	UsedAtLeastOnce int
 	NeverUsed       int
 }
 
-// HealthReport returns a diagnostic summary of the memory store's health.
-// workingDir is used for path staleness checks (pass "" to skip path checks).
 func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -66,35 +54,23 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 		Capped:  capped,
 	}
 
-	// Category distribution.
 	report.Transient, report.Evolving, report.Persistent, report.Default = countCategories(active)
 
-	// Budget usage (what LoadForPrompt would inject). Uses the
-	// non-tracking variant so a health check does not inflate the
-	// very usage counters it reports (sa-85).
 	inline, indexOnly, _ := am.loadForPrompt(false, "")
 	report.InlineEntries = len(inline)
 	report.IndexEntries = len(indexOnly)
 	for _, e := range inline {
 		report.InlineBytes += len(e.Content)
 	}
-	// #3872: the denominator must be the EFFECTIVE inline budget, not the
-	// ceiling constant. EffectiveInlineBudget scales down to 25% of the
-	// ceiling once consumption samples accumulate (sa-147 LIMBO), so a
-	// store can be 100% saturated against its actual budget while the
-	// ceiling-based percentage reads 25% - understating saturation 4x and
-	// masking the right curation moment.
+
 	budget := am.EffectiveInlineBudget()
 	if budget > 0 {
 		report.BudgetPercent = report.InlineBytes * 100 / budget
 	}
 	report.EffectiveBudgetBytes = budget
 
-	// Age range.
 	report.OldestDays, report.NewestDays = computeAgeRange(active, now)
 
-	// Usage feedback (sa-85): entries never injected since creation are
-	// the prime retention-curation candidates.
 	for _, m := range active {
 		if m.Uses > 0 {
 			report.UsedAtLeastOnce++
@@ -103,19 +79,16 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 		}
 	}
 
-	// Staleness scan.
 	stale := am.ScanStaleness(workingDir)
 	report.StaleBrokenPaths = stale.BrokenPaths
 	report.StaleOversized = stale.Oversized
 	report.StaleAncient = stale.Ancient
 
-	// Duplicate group detection (same dedup key among active entries).
 	report.DuplicateGroups = countDuplicateGroups(active)
 
 	return report
 }
 
-// FormatHealthReport returns a human-readable health summary string.
 func (r HealthReport) FormatHealthReport() string {
 	var sb strings.Builder
 
@@ -125,31 +98,21 @@ func (r HealthReport) FormatHealthReport() string {
 	}
 	sb.WriteString("\n")
 
-	// Categories
 	sb.WriteString(fmt.Sprintf("  Categories: %d persistent, %d evolving, %d transient, %d default\n",
 		r.Persistent, r.Evolving, r.Transient, r.Default))
 
-	// Budget (#3872: percentage is against the effective inline budget and
-	// both numerator and denominator are BYTES - the old label said "token
-	// budget" while dividing byte counts, and used the ceiling constant as
-	// the denominator).
 	sb.WriteString(fmt.Sprintf("  Context budget: %d/%d entries inline (%d%% of %d-byte effective inline budget)\n",
 		r.InlineEntries, r.InlineEntries+r.IndexEntries, r.BudgetPercent, r.EffectiveBudgetBytes))
 
-	// Age
 	if r.OldestDays > 0 {
-		// #3053-C1: the label says oldest-newest, so the FIRST value must be
-		// OldestDays - the old argument order printed the range reversed
-		// ("3-45" read as "the oldest entry is 3 days old").
+
 		sb.WriteString(fmt.Sprintf("  Age range: %d-%d days (oldest-newest)\n", r.OldestDays, r.NewestDays))
 	}
 
-	// Usage feedback (sa-85 provenance-aware memory)
 	if r.Active > 0 {
 		sb.WriteString(fmt.Sprintf("  Usage: %d/%d entries injected at least once\n", r.UsedAtLeastOnce, r.Active))
 	}
 
-	// Staleness signals
 	warnings := 0
 	if r.StaleBrokenPaths > 0 {
 		sb.WriteString(fmt.Sprintf("  [STALE] %d entries reference broken file paths\n", r.StaleBrokenPaths))
@@ -181,7 +144,6 @@ func (r HealthReport) FormatHealthReport() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// countCategories tallies entries by memory category.
 func countCategories(metas []MemoryMeta) (transient, evolving, persistent, defaultCount int) {
 	for _, m := range metas {
 		switch m.Category {
@@ -198,8 +160,6 @@ func countCategories(metas []MemoryMeta) (transient, evolving, persistent, defau
 	return
 }
 
-// computeAgeRange returns the oldest and newest entry ages in days.
-// Returns (0, 0) if the slice is empty.
 func computeAgeRange(metas []MemoryMeta, now time.Time) (oldestDays, newestDays int) {
 	if len(metas) == 0 {
 		return 0, 0
@@ -219,7 +179,6 @@ func computeAgeRange(metas []MemoryMeta, now time.Time) (oldestDays, newestDays 
 	return
 }
 
-// countDuplicateGroups counts how many dedup keys appear more than once.
 func countDuplicateGroups(metas []MemoryMeta) int {
 	dedupCount := make(map[string]int)
 	for _, m := range metas {

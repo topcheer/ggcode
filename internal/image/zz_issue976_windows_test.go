@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestWindowsScreenshotScriptSetsDpiAwarenessBeforeCapture guards #763/#976
-// on the capture side: DPI awareness must be declared before any geometry is
-// queried so window bounds and CopyFromScreen operate in physical pixels.
 func TestWindowsScreenshotScriptSetsDpiAwarenessBeforeCapture(t *testing.T) {
 	script := buildWindowsScreenshotScript(`C:\out.png`, ScreenshotOptions{})
 
@@ -26,11 +23,6 @@ func TestWindowsScreenshotScriptSetsDpiAwarenessBeforeCapture(t *testing.T) {
 	}
 }
 
-// TestWindowsScreenshotWindowScriptUsesExtendedFrameBounds guards the #976
-// cosmetic fix: window captures should prefer DWMWA_EXTENDED_FRAME_BOUNDS
-// (attribute 9) over GetWindowRect, which includes the invisible resize
-// borders (~7px per side on Win10/11), and must keep the GetWindowRect
-// fallback for environments without DWM.
 func TestWindowsScreenshotWindowScriptUsesExtendedFrameBounds(t *testing.T) {
 	script := buildWindowsScreenshotScript(`C:\out.png`, ScreenshotOptions{Window: "notepad"})
 

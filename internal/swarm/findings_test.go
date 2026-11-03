@@ -10,14 +10,12 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// quietAgent emits no text output (used to pin the empty-result path).
 type quietAgent struct{}
 
 func (quietAgent) RunStream(_ context.Context, _ string, _ func(provider.StreamEvent), origin ...string) error {
 	return nil
 }
 
-// longAgent emits a result of the given rune length.
 type longAgent struct{ runes int }
 
 func (a longAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
@@ -27,7 +25,6 @@ func (a longAgent) RunStream(_ context.Context, _ string, onEvent func(provider.
 	return nil
 }
 
-// newClaimHarness builds a manager + team + teammate like TestRollbackClaimedTask.
 func newClaimHarness(t *testing.T) (*Manager, *task.Manager, *Teammate) {
 	t.Helper()
 	mgr := newTestManager()
@@ -43,9 +40,6 @@ func newClaimHarness(t *testing.T) (*Manager, *task.Manager, *Teammate) {
 	return mgr, board, &Teammate{ID: "tm-1"}
 }
 
-// TestPersistTaskResult_OnCompletion pins the write side of the dep-chain
-// blackboard: when a teammate completes a board task, the final output is
-// persisted on the task's metadata so later dependent claims can read it.
 func TestPersistTaskResult_OnCompletion(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	created := board.Create("produce findings", "d", "", nil)
@@ -62,7 +56,6 @@ func TestPersistTaskResult_OnCompletion(t *testing.T) {
 	}
 }
 
-// TestPersistTaskResult_Truncated pins the board-side bound (2000 runes).
 func TestPersistTaskResult_Truncated(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	created := board.Create("long output", "d", "", nil)
@@ -76,7 +69,6 @@ func TestPersistTaskResult_Truncated(t *testing.T) {
 	}
 }
 
-// TestPersistTaskResult_EmptySkipped pins that empty output writes nothing.
 func TestPersistTaskResult_EmptySkipped(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	created := board.Create("silent", "d", "", nil)
@@ -92,9 +84,6 @@ func TestPersistTaskResult_EmptySkipped(t *testing.T) {
 	}
 }
 
-// TestDepFindingsInjectedIntoClaimPrompt pins the read side: a claimed task
-// whose dependency completed with a persisted result receives the finding
-// in its prompt.
 func TestDepFindingsInjectedIntoClaimPrompt(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	dep := board.Create("scan module", "d", "", nil)
@@ -129,16 +118,6 @@ func TestDepFindingsInjectedIntoClaimPrompt(t *testing.T) {
 	}
 }
 
-// TestDepFindingsSkipsFailedAndEmptyDeps pins exclusion semantics.
-//
-// #2786 interaction: a dep completed WITH a permanent_error metadata key
-// is PARKED, not delivered - allBlockersComplete keeps its dependents
-// blocked until a human intervenes, so a mixed-dep dependent is NOT
-// claimable at all (that is the #2786 rule, not a findings question).
-// What this test pins instead:
-//  1. a dependent whose deps all completed WITHOUT persisted results
-//     (empty deps) IS claimed, and no findings section is opened;
-//  2. a dependent with a parked dep stays unclaimed (0 prompts).
 func TestDepFindingsSkipsFailedAndEmptyDeps(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	failed := board.Create("poison task", "d", "", nil)
@@ -166,9 +145,7 @@ func TestDepFindingsSkipsFailedAndEmptyDeps(t *testing.T) {
 	tryClaimPendingTask(context.Background(), tm, teamOf(mgr, t), agent, mgr, nil, time.Second)
 
 	prompts := agent.getPrompts()
-	// Only the empty-dep dependent is claimable; the parked-dep one stays
-	// blocked (#2786). Exactly one claim happens, and it must be the
-	// empty-dep task with NO findings section (no persisted results).
+
 	if len(prompts) != 1 {
 		t.Fatalf("expected exactly 1 claim (empty-dep dependent only; parked-dep dependent must stay blocked), got %d prompts", len(prompts))
 	}
@@ -180,9 +157,6 @@ func TestDepFindingsSkipsFailedAndEmptyDeps(t *testing.T) {
 	}
 }
 
-// TestDepFindingsUnmetDepsStillBlocked pins that the injection does not
-// weaken the ordering gate: a dep still in progress (owned elsewhere)
-// prevents the dependent task from being claimed.
 func TestDepFindingsUnmetDepsStillBlocked(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	dep := board.Create("not done yet", "d", "", nil)
@@ -204,10 +178,6 @@ func TestDepFindingsUnmetDepsStillBlocked(t *testing.T) {
 	}
 }
 
-// TestDepFindingsBounds pins the injection bounds. With max-length
-// results the 4800-rune total binds first (5 entries of ~820 runes);
-// with short results the 6-entry cap binds. Per-entry truncation to
-// 800 runes is asserted in both.
 func TestDepFindingsBounds(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	completed := task.StatusCompleted
@@ -244,10 +214,10 @@ func TestDepFindingsBounds(t *testing.T) {
 		t.Fatalf("findings section missing")
 	}
 	section := p[idx:]
-	if got := len([]rune(section)); got > depFindingsMaxTotal+200 { // +200 slack for headers/subjects
+	if got := len([]rune(section)); got > depFindingsMaxTotal+200 {
 		t.Fatalf("findings section exceeds total bound: %d runes", got)
 	}
-	// With ~820-rune entries, the 4800 total bound allows 5 entries.
+
 	entries := 0
 	for _, id := range depIDs {
 		if strings.Contains(p, "["+id+"]") {
@@ -259,8 +229,6 @@ func TestDepFindingsBounds(t *testing.T) {
 	}
 }
 
-// TestDepFindingsEntryCap pins the 6-entry cap when results are short
-// enough that the total bound does not bind first.
 func TestDepFindingsEntryCap(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	completed := task.StatusCompleted
@@ -296,7 +264,6 @@ func TestDepFindingsEntryCap(t *testing.T) {
 	}
 }
 
-// teamOf extracts the live *Team pointer for direct idle-runner calls.
 func teamOf(mgr *Manager, t *testing.T) *Team {
 	t.Helper()
 	mgr.mu.Lock()

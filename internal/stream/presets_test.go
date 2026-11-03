@@ -56,7 +56,7 @@ func TestPresetNames(t *testing.T) {
 	if len(names) != len(Presets) {
 		t.Errorf("PresetNames() returned %d names, expected %d", len(names), len(Presets))
 	}
-	// Check that YouTube is in the list
+
 	found := false
 	for _, n := range names {
 		if n == "YouTube" {

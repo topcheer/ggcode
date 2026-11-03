@@ -1,13 +1,5 @@
 package tui
 
-// #1732: this module previously carried 73 keys, but the en/zh MAIN
-// catalogs switch on these same keys BEFORE falling back to module
-// lookup - 66 of them were unreachable for every language (the default
-// branch consults modules only after the main switch misses). Only the
-// seven claude/anthropic_oauth keys below exist solely here. Shadowed
-// duplicates were a stale-value trap: editing them here did nothing
-// while the handlers evolved in the main catalogs.
-
 func init() {
 	registerCatalog(enProviderModule(), zhProviderModule())
 }

@@ -1,10 +1,5 @@
 package plugin
 
-// Anti-rug-pull baseline tests (research sa-119, MCPShield TC2 TV5/TV6):
-// a server's tool definitions approved once must persist across restarts,
-// and post-approval drift must surface exactly once per change, gated by
-// the 24h onboarding window and the allow_tool_drift escape hatch.
-
 import (
 	"os"
 	"path/filepath"
@@ -15,11 +10,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Tool baselines (sa-119) persist under ConfigDir(), which the config
-	// package guards against resolving to the real user home inside tests.
-	// Connect-path baseline I/O now reaches ConfigDir(), so isolate HOME
-	// once for the whole package (t.Setenv cannot be used outside Run).
-	// Tests that need their own home still override via t.Setenv.
+
 	if os.Getenv("GGCODE_TEST_ALLOW_REAL_HOME") == "" {
 		dir, err := os.MkdirTemp("", "plugin-test-home-*")
 		if err == nil {
@@ -40,7 +31,7 @@ func TestToolBaselineStore_Roundtrip(t *testing.T) {
 	if err := s.SaveBaseline("srv", "hash1", []string{"b", "a"}); err != nil {
 		t.Fatal(err)
 	}
-	// Restart simulation: a fresh store instance over the same dir.
+
 	s2 := NewToolBaselineStore(dir)
 	b, err := s2.LoadBaseline("srv")
 	if err != nil || b == nil {
@@ -49,7 +40,7 @@ func TestToolBaselineStore_Roundtrip(t *testing.T) {
 	if b.ToolsHash != "hash1" {
 		t.Fatalf("hash: got %q, want hash1", b.ToolsHash)
 	}
-	// Names are stored sorted for stable diffing.
+
 	if len(b.ToolNames) != 2 || b.ToolNames[0] != "a" || b.ToolNames[1] != "b" {
 		t.Fatalf("names: got %v, want [a b]", b.ToolNames)
 	}
@@ -62,15 +53,12 @@ func TestToolBaselineStore_CompareAndReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Same hash short-circuits without diffing.
 	added, removed, drifted := s.CompareAndReport("srv", "hash1", []string{"keep", "gone"})
 	if drifted || added != nil || removed != nil {
 		t.Fatalf("same hash: got (%v, %v, %v), want no drift", added, removed, drifted)
 	}
 
-	// Changed hash reports name-level added/removed (description-only
-	// edits surface as empty diff but drifted=true).
-	s2 := NewToolBaselineStore(dir) // restart
+	s2 := NewToolBaselineStore(dir)
 	added, removed, drifted = s2.CompareAndReport("srv", "hash2", []string{"keep", "new"})
 	if !drifted {
 		t.Fatal("changed hash must drift")
@@ -93,7 +81,7 @@ func TestToolBaselineStore_SaveFailsGracefully(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
 	s := NewToolBaselineStore(filepath.Join(ro, "nested"))
-	// A failed write is an error, never a panic; reads still work.
+
 	if err := s.SaveBaseline("srv", "h", nil); err == nil {
 		t.Log("save unexpectedly succeeded (filesystem may allow the write)")
 	}
@@ -126,16 +114,12 @@ func TestRecordToolBaseline_FirstConnectionIsTheBaseline(t *testing.T) {
 
 func TestRecordToolBaseline_DriftAfterApproval(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
-	// #4062: with a wired sink, drift re-baselines (one alert per change).
-	// The nil-sink fail-visible variant is covered by TestIssue4062_*.
+
 	m.OnToolDrift = func(server string, added, removed []string) {}
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1", "t2"})
 	m.mu.Unlock()
 
-	// Simulate post-approval time passage beyond the onboarding window by
-	// rewriting the baseline's ApprovedAt AND the #3540 first-approval anchor
-	// under the store lock (the window is measured from FirstApprovedAt).
 	m.baselines.mu.Lock()
 	servers, err := m.baselines.load()
 	if err != nil {
@@ -160,8 +144,6 @@ func TestRecordToolBaseline_DriftAfterApproval(t *testing.T) {
 		t.Fatalf("diff: added=%v removed=%v", added, removed)
 	}
 
-	// The alert fires once per change: an immediate re-observation of the
-	// same (now current) hash must be silent.
 	m.mu.Lock()
 	_, _, fire = m.recordToolBaselineLocked("h2", []string{"t1", "t3"})
 	m.mu.Unlock()
@@ -174,8 +156,7 @@ func TestRecordToolBaseline_OnboardingWindowSuppressesAlert(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1"})
-	// ApprovedAt is now: a change inside the 24h window updates the
-	// baseline silently (first-day server iteration).
+
 	added, removed, fire := m.recordToolBaselineLocked("h2", []string{"t1"})
 	m.mu.Unlock()
 	if fire || added != nil || removed != nil {
@@ -190,8 +171,7 @@ func TestRecordToolBaseline_AllowToolDriftEscapeHatch(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv", AllowToolDrift: true})
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1"})
-	// Age past the window so only the escape hatch can suppress (#3540: age
-	// BOTH timestamps; the window is anchored to FirstApprovedAt).
+
 	servers, err := m.baselines.load()
 	if err != nil {
 		m.mu.Unlock()
@@ -223,7 +203,7 @@ func TestNotifyToolDrift_AsyncCallback(t *testing.T) {
 	m.OnToolDrift = func(server string, added, removed []string) {
 		got <- []string{server, added[0], removed[0]}
 	}
-	// Safe to call while holding the lock: dispatch is via safego.Go.
+
 	m.mu.Lock()
 	m.notifyToolDrift([]string{"new"}, []string{"old"})
 	m.mu.Unlock()
@@ -236,7 +216,6 @@ func TestNotifyToolDrift_AsyncCallback(t *testing.T) {
 		t.Fatal("drift callback never fired")
 	}
 
-	// nil callback must not panic.
 	m.OnToolDrift = nil
 	m.notifyToolDrift(nil, nil)
 }

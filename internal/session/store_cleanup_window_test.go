@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// writeOldUserMessageJSONL writes a session JSONL file reproducing the #254
-// scenario: recentMessageThreshold+ messages whose user messages all sit more
-// than RecentMessageWindow before the last message, so time-windowed loading
-// drops every user message from ses.Messages.
 func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 	t.Helper()
 	path := filepath.Join(dir, id+".jsonl")
@@ -26,7 +22,7 @@ func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 	enc := json.NewEncoder(f)
 
 	now := time.Now()
-	// 510 user messages clustered 49h..48h ago (well outside the 24h window).
+
 	for i := 0; i < recentMessageThreshold+10; i++ {
 		rec := jsonlRecord{
 			Type: "message",
@@ -41,11 +37,7 @@ func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 			t.Fatal(err)
 		}
 	}
-	// Boundary assistant message just outside the window. Cutoff semantics
-	// (#531): msgCutoff is the line-START offset of the first in-window
-	// message, so any message strictly before it is excluded even when its
-	// line-end offset equals msgCutoff. It exists here to prove the boundary
-	// is correct, not to be retained.
+
 	boundary := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -58,8 +50,7 @@ func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 	if err := enc.Encode(boundary); err != nil {
 		t.Fatal(err)
 	}
-	// Final message 1h ago (e.g. cron-appended) — sets the window boundary so
-	// all user messages above fall outside the 24h RecentMessageWindow.
+
 	final := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -74,11 +65,6 @@ func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 	}
 }
 
-// TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages is the regression test
-// for #254: time-windowed loading drops user messages older than
-// RecentMessageWindow from ses.Messages, which previously made
-// CleanupIfEmpty believe the session had no user interaction and silently
-// delete the entire JSONL file on exit.
 func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
@@ -87,9 +73,6 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	id := "windowed-old-user"
 	writeOldUserMessageJSONL(t, dir, id)
 
-	// Sanity check (bug precondition): windowed load drops all user messages,
-	// including the boundary record whose line-end offset equals the cutoff
-	// (#531: comparison now uses line-start offsets). Only final remains.
 	loaded, err := store.Load(id)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +84,6 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 		t.Fatal("in-memory windowed session should report no user interaction (bug precondition)")
 	}
 
-	// The fix: file-level checks must see the historical user interaction.
 	interacted, err := store.HasUserInteractionOnDisk(id)
 	if err != nil {
 		t.Fatalf("HasUserInteractionOnDisk: %v", err)
@@ -120,10 +102,6 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	}
 }
 
-// TestHasUserInteractionOnDisk_UnreadableFileNotDeleted is the regression test
-// for #291: when the session file cannot be opened (EACCES, or a write gap
-// from another ggcode instance), the check must report unknown (non-nil
-// error) and callers must keep the session instead of deleting it.
 func TestHasUserInteractionOnDisk_UnreadableFileNotDeleted(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -135,8 +113,6 @@ func TestHasUserInteractionOnDisk_UnreadableFileNotDeleted(t *testing.T) {
 	id := "unreadable-session"
 	writeOldUserMessageJSONL(t, dir, id)
 
-	// Make the file unreadable (chmod 0000). Running as root would defeat
-	// this; skip in that case.
 	if err := os.Chmod(filepath.Join(dir, id+".jsonl"), 0o000); err != nil {
 		t.Skipf("cannot chmod: %v", err)
 	}
@@ -144,24 +120,18 @@ func TestHasUserInteractionOnDisk_UnreadableFileNotDeleted(t *testing.T) {
 
 	interacted, herr := store.HasUserInteractionOnDisk(id)
 	if herr == nil {
-		// Root (or equivalent) can still read 0000 files — the error path is
-		// not reachable in this environment.
+
 		t.Skip("open unexpectedly succeeded (running as root?) — error path not reachable")
 	}
 	if interacted {
 		t.Error("on open failure the check must report false + error, not true")
 	}
 
-	// Unknown state must keep the session.
 	if store.WillCleanupIfEmpty(&Session{ID: id}) {
 		t.Error("WillCleanupIfEmpty must be false when on-disk state is unknown (#291)")
 	}
 }
 
-// TestHasUserInteractionOnDisk_OversizedLineConservativelyKept reproduces the
-// #291 scenario where a user pastes a huge blob (>10MB) into a single JSONL
-// message: bufio.Scanner hits ErrTooLong and previously Scan() returned false
-// early, collapsing to "no user interaction" and deleting the session.
 func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -180,7 +150,6 @@ func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) 
 	enc := json.NewEncoder(f)
 	now := time.Now()
 
-	// 1. Normal user message BEFORE the oversized line.
 	if err := enc.Encode(jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -196,7 +165,6 @@ func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// 2. A single message whose text exceeds the 10MB scanner buffer.
 	huge := make([]byte, 10*1024*1024+1024)
 	for i := range huge {
 		huge[i] = 'a'
@@ -219,7 +187,6 @@ func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// ErrTooLong must be treated conservatively: keep the session.
 	interacted, herr := store.HasUserInteractionOnDisk(id)
 	if herr != nil {
 		t.Fatalf("oversized line should be handled without surfacing an error: %v", herr)
@@ -228,7 +195,6 @@ func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) 
 		t.Error("oversized line must be conservatively reported as user interaction (#291)")
 	}
 
-	// And the session must not be marked for cleanup.
 	if store.WillCleanupIfEmpty(&Session{ID: id}) {
 		t.Error("WillCleanupIfEmpty must be false for a session with an oversized line (#291)")
 	}

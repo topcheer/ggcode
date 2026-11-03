@@ -52,11 +52,7 @@ func isLocalRelayHost(host string) bool {
 		return false
 	}
 	lower := strings.ToLower(host)
-	// #1400-B: the old heuristic treated EVERY dotless name and every
-	// *.local as local - but single-label names are registrable public
-	// TLDs (ws://ai/relay) and unicast .local exists, so plaintext-allowed
-	// credentials could go to a public host. Explicit local names only;
-	// everything else must prove it via the IP ranges below.
+
 	switch lower {
 	case "localhost", "host.docker.internal", "gateway.docker.internal", "kubernetes.default.svc":
 		return true

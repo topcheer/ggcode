@@ -1,8 +1,5 @@
 package tui
 
-// sa-86: alt+e keybinding coverage - the global key must toggle the
-// second-level disclosure state of the most recent tool item.
-
 import (
 	"strings"
 	"testing"
@@ -16,8 +13,6 @@ func TestAltE_TogglesToolDisclosure(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	// A tool whose result far exceeds ToolBodyMaxLines - the disclosure
-	// affordance ("... N more lines") is visible on its collapsed body.
 	var sb strings.Builder
 	for i := 0; i < chat.ToolBodyMaxLines*3; i++ {
 		sb.WriteString("output line\n")
@@ -46,13 +41,11 @@ func TestAltE_TogglesToolDisclosure(t *testing.T) {
 		t.Fatal("tool item must start collapsed")
 	}
 
-	// alt+e expands
 	m.Update(tea.KeyPressMsg{Text: "alt+e"})
 	if !tool.Expanded() {
 		t.Fatal("alt+e must expand the most recent tool item")
 	}
 
-	// alt+e again collapses
 	m.Update(tea.KeyPressMsg{Text: "alt+e"})
 	if tool.Expanded() {
 		t.Fatal("second alt+e must collapse it again")

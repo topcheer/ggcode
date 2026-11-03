@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// newRecoveryTestManager builds a manager with one plugin registered under
-// the given config, for guard-logic tests.
 func newRecoveryTestManager(t *testing.T, cfg config.MCPServerConfig) (*MCPManager, *MCPPlugin) {
 	t.Helper()
 	m := NewMCPManager(nil, nil, "")
@@ -20,7 +18,6 @@ func newRecoveryTestManager(t *testing.T, cfg config.MCPServerConfig) (*MCPManag
 	return m, p
 }
 
-// The recovery loop must not probe a plugin that is already connected.
 func TestInitialRecoveryStopsWhenConnected(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
@@ -31,8 +28,6 @@ func TestInitialRecoveryStopsWhenConnected(t *testing.T) {
 	}
 }
 
-// #1285 semantics: a plugin the user explicitly closed (Disconnect, Reload
-// removal, Install replacement) must not be resurrected by the recovery loop.
 func TestInitialRecoveryStopsWhenClosed(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
@@ -43,7 +38,6 @@ func TestInitialRecoveryStopsWhenClosed(t *testing.T) {
 	}
 }
 
-// OAuth-waiting plugins are owned by the TUI auth flow, not the loop.
 func TestInitialRecoveryStopsWhenAwaitingOAuth(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
@@ -54,8 +48,6 @@ func TestInitialRecoveryStopsWhenAwaitingOAuth(t *testing.T) {
 	}
 }
 
-// A plugin replaced in the manager (same name, new pointer) must not be
-// probed - that would resurrect an outdated server config.
 func TestInitialRecoveryStopsWhenReplaced(t *testing.T) {
 	m, old := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	fresh := NewMCPPlugin(config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
@@ -70,8 +62,6 @@ func TestInitialRecoveryStopsWhenReplaced(t *testing.T) {
 	}
 }
 
-// A plain failed plugin that is still current must keep being probed —
-// this is the user's "network came back minutes later" scenario.
 func TestInitialRecoveryProbesFailedPlugin(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
@@ -82,11 +72,9 @@ func TestInitialRecoveryProbesFailedPlugin(t *testing.T) {
 	}
 }
 
-// A disabled server must not be probed - the user explicitly turned it off.
 func TestInitialRecoveryStopsWhenDisabled(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv-recovery-disabled", Type: "stdio", Command: "true"})
-	// Inject the disabled flag via the package-level cache (same package),
-	// restoring the prior cache state afterwards so other tests are unaffected.
+
 	mcpDisabledMu.Lock()
 	prevG, prevW, prevOK := mcpDisabledGlobal, mcpDisabledWS, mcpDisabledCacheOK
 	mcpDisabledGlobal = map[string]bool{"srv-recovery-disabled": true}
@@ -103,14 +91,12 @@ func TestInitialRecoveryStopsWhenDisabled(t *testing.T) {
 	}
 }
 
-// maybeStartInitialRecovery must be a no-op for connected plugins (no
-// goroutine spawn) and for OAuth-waiting ones.
 func TestMaybeStartInitialRecoveryNoOp(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
 	p.connected = true
 	p.mu.Unlock()
-	// Should return without blocking or spawning.
+
 	done := make(chan struct{})
 	go func() { m.maybeStartInitialRecovery(context.Background(), p); close(done) }()
 	select {
@@ -132,18 +118,14 @@ func TestMaybeStartInitialRecoveryNoOp(t *testing.T) {
 	}
 }
 
-// The recovery loop must exit promptly when its context is cancelled --
-// otherwise shutdown would leak a goroutine probing forever.
 func TestInitialRecoveryLoopExitsOnCtxCancel(t *testing.T) {
 	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
-	// Pre-set Failed: a probe calls connectOne -> markPending, flipping the
-	// status to Pending. NewMCPPlugin starts at Pending, so without this the
-	// assertion below could not distinguish "probed" from "fresh".
+
 	p.mu.Lock()
 	p.status = MCPStatusFailed
 	p.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancelled before first tick: loop must never dial
+	cancel()
 	m.startInitialRecoveryLoop(ctx, p)
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {

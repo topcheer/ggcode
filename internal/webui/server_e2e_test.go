@@ -21,7 +21,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// authGet is like http.Get but adds Bearer auth token from the test server.
 func authGet(serverURL string, token string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", serverURL, nil)
 	if err != nil {
@@ -31,7 +30,6 @@ func authGet(serverURL string, token string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
-// authPost is like http.Post but adds Bearer auth token.
 func authPost(serverURL, token, contentType string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequest("POST", serverURL, body)
 	if err != nil {
@@ -44,7 +42,6 @@ func authPost(serverURL, token, contentType string, body io.Reader) (*http.Respo
 	return http.DefaultClient.Do(req)
 }
 
-// authPut is like http.NewRequest("PUT", ...) with Bearer auth token.
 func authPut(serverURL, token string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest("PUT", serverURL, body)
 	if err != nil {
@@ -55,7 +52,6 @@ func authPut(serverURL, token string, body io.Reader) (*http.Request, error) {
 	return req, nil
 }
 
-// authDelete is like http.NewRequest("DELETE", ...) with Bearer auth token.
 func authDelete(serverURL, token string) (*http.Request, error) {
 	req, err := http.NewRequest("DELETE", serverURL, nil)
 	if err != nil {
@@ -64,10 +60,6 @@ func authDelete(serverURL, token string) (*http.Request, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	return req, nil
 }
-
-// ============================================================
-// Section 1: REST API — Config
-// ============================================================
 
 func TestE2EConfigGetStructure(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -92,7 +84,6 @@ func TestE2EConfigGetStructure(t *testing.T) {
 	var result map[string]json.RawMessage
 	json.NewDecoder(resp.Body).Decode(&result)
 
-	// Verify all expected top-level keys exist
 	expectedKeys := []string{"vendor", "endpoint", "model", "language"}
 	for _, k := range expectedKeys {
 		if _, ok := result[k]; !ok {
@@ -110,7 +101,6 @@ func TestE2EActiveSelectionGetPut(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	// GET — should return initial values
 	resp, err := authGet(srv.URL+"/api/config/active", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -122,14 +112,12 @@ func TestE2EActiveSelectionGetPut(t *testing.T) {
 		t.Errorf("expected initial-vendor, got %s", initial["vendor"])
 	}
 
-	// PUT — update (will fail if config has no save path, but the in-memory
-	// update succeeds before Save errors — we test the round-trip)
 	body := `{"vendor":"new-vendor","endpoint":"new-ep","model":"new-model"}`
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/config/active", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, _ = http.DefaultClient.Do(req)
 	resp.Body.Close()
-	// May get 500 if config can't save to disk — that's OK, we test the API contract
+
 }
 
 func TestE2EVendorsList(t *testing.T) {
@@ -152,7 +140,7 @@ func TestE2EVendorsList(t *testing.T) {
 	if len(result) == 0 {
 		t.Error("expected at least one vendor")
 	}
-	// Each vendor should have id field
+
 	for _, v := range result {
 		if _, ok := v["id"]; !ok {
 			t.Errorf("vendor missing 'id': %v", v)
@@ -166,7 +154,6 @@ func TestE2EVendorDetail(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	// Get vendors first to find a valid name
 	resp, err := authGet(srv.URL+"/api/vendors", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +167,6 @@ func TestE2EVendorDetail(t *testing.T) {
 	}
 	vendorName := vendors[0]["id"].(string)
 
-	// GET detail
 	resp, err = authGet(srv.URL+"/api/vendors/"+vendorName, s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -190,10 +176,6 @@ func TestE2EVendorDetail(t *testing.T) {
 		t.Fatalf("expected 200 for vendor %s, got %d", vendorName, resp.StatusCode)
 	}
 }
-
-// ============================================================
-// Section 2: REST API — MCP, IM, A2A, General
-// ============================================================
 
 func TestE2EMCPConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -328,17 +310,12 @@ func TestE2EImpersonateGet(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 3: REST API — Method Not Allowed
-// ============================================================
-
 func TestE2EMethodNotAllowed(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	// These endpoints only support specific methods
 	cases := []struct {
 		method string
 		path   string
@@ -366,10 +343,6 @@ func TestE2EMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 4: Sessions — Full CRUD Lifecycle
-// ============================================================
-
 func TestE2ESessionsLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := session.NewJSONLStore(dir)
@@ -379,7 +352,6 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	// 1. Empty list
 	resp, err := authGet(srv.URL+"/api/sessions", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +363,6 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 		t.Errorf("expected 0 sessions, got %v", listResult["total"])
 	}
 
-	// 2. Create sessions directly in store
 	for i := 0; i < 5; i++ {
 		ses := &session.Session{
 			ID:        fmt.Sprintf("20260401-%06d", i),
@@ -413,7 +384,6 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 		}
 	}
 
-	// 3. List shows all 5
 	resp, err = authGet(srv.URL+"/api/sessions", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +394,6 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 		t.Errorf("expected 5 sessions, got %v", listResult["total"])
 	}
 
-	// 4. Detail of first session
 	resp, err = authGet(srv.URL+"/api/sessions/20260401-000000", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +412,6 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 		t.Errorf("expected 2 messages, got %d", len(msgs))
 	}
 
-	// 5. Non-existent session
 	resp, err = authGet(srv.URL+"/api/sessions/nonexistent", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +430,6 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	store, _ := session.NewJSONLStore(dir)
 
-	// Create sessions in 3 different workspaces
 	for i, ws := range []string{"/ws-a", "/ws-b", "/ws-c"} {
 		ses := &session.Session{
 			ID:        fmt.Sprintf("ws-test-%d", i),
@@ -484,7 +451,7 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetSessionStore(store, "/ws-a") // current workspace = ws-a
+	s.SetSessionStore(store, "/ws-a")
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
@@ -499,7 +466,7 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 	if result["current_workspace"] != "/ws-a" {
 		t.Errorf("expected /ws-a, got %v", result["current_workspace"])
 	}
-	// All 3 sessions should be listed but grouped by workspace
+
 	if result["total"] != float64(3) {
 		t.Errorf("expected total 3, got %v", result["total"])
 	}
@@ -507,7 +474,7 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 	if len(groups) != 3 {
 		t.Errorf("expected 3 groups, got %d", len(groups))
 	}
-	// Current workspace group should be marked
+
 	var currentFound bool
 	for _, g := range groups {
 		group := g.(map[string]interface{})
@@ -523,10 +490,6 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 5: Chat WS — Full Lifecycle
-// ============================================================
-
 func TestE2EChatWSFullLifecycle(t *testing.T) {
 	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
@@ -537,17 +500,14 @@ func TestE2EChatWSFullLifecycle(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
-	// 1. Connect
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Close()
 
-	// 2. Send user message
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "explain goroutines"})
 
-	// 3. Read user_ack
 	var ack map[string]interface{}
 	ws.ReadJSON(&ack)
 	if ack["type"] != "user_ack" {
@@ -557,14 +517,13 @@ func TestE2EChatWSFullLifecycle(t *testing.T) {
 		t.Errorf("expected echo of sent text, got %v", ack["text"])
 	}
 
-	// 4. Simulate full agent response
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		// Text streaming
+
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "Goroutines "})
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "are lightweight "})
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "threads."})
-		// Tool call
+
 		bridge.broadcastEvent(provider.StreamEvent{
 			Type: provider.StreamEventToolCallDone,
 			Tool: provider.ToolCallDelta{
@@ -572,22 +531,21 @@ func TestE2EChatWSFullLifecycle(t *testing.T) {
 				Arguments: json.RawMessage(`{"command":"go version"}`),
 			},
 		})
-		// Tool result
+
 		bridge.broadcastEvent(provider.StreamEvent{
 			Type:   provider.StreamEventToolResult,
 			Tool:   provider.ToolCallDelta{Name: "run_command"},
 			Result: "go version go1.22.0",
 		})
-		// More text
+
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "Go 1.22 is installed."})
-		// Done with usage
+
 		bridge.broadcastEvent(provider.StreamEvent{
 			Type:  provider.StreamEventDone,
 			Usage: &provider.TokenUsage{InputTokens: 150, OutputTokens: 200},
 		})
 	}()
 
-	// 5. Read and verify all events
 	var textParts []string
 	var gotToolCall, gotToolResult, gotDone bool
 
@@ -663,7 +621,7 @@ func TestE2EChatWSErrorEvent(t *testing.T) {
 
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "cause error"})
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack) // consume ack
+	ws.ReadJSON(&ack)
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
@@ -694,10 +652,6 @@ func TestE2EChatWSErrorEvent(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 6: Chat WS — Multi-Connection Broadcast
-// ============================================================
-
 func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
@@ -708,7 +662,6 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
-	// Connect 3 clients
 	conns := make([]*websocket.Conn, 3)
 	for i := range conns {
 		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -719,12 +672,10 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 		conns[i] = ws
 	}
 
-	// Client 0 sends message
 	conns[0].WriteJSON(map[string]string{"type": "user_message", "text": "broadcast test"})
 	var ack map[string]interface{}
-	conns[0].ReadJSON(&ack) // only sender gets ack
+	conns[0].ReadJSON(&ack)
 
-	// Broadcast 5 events — all 3 should receive each
 	events := []provider.StreamEvent{
 		{Type: provider.StreamEventText, Text: "chunk1 "},
 		{Type: provider.StreamEventText, Text: "chunk2 "},
@@ -758,10 +709,6 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 7: Chat WS — Sequential Messages
-// ============================================================
-
 func TestE2EChatWSSequentialMessages(t *testing.T) {
 	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
@@ -777,7 +724,6 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send 3 messages in sequence
 	msgs := []string{"first", "second", "third"}
 	for _, m := range msgs {
 		ws.WriteJSON(map[string]string{"type": "user_message", "text": m})
@@ -792,10 +738,6 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 		}
 	}
 
-	// Bridge should have received all 3.
-	// The WS handler writes the ack before calling SendUserMessage, so
-	// receiving the ack on the client side does NOT guarantee the bridge
-	// has been updated yet. Poll until the last message arrives.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(bridge.lastContent) == 1 && bridge.lastContent[0].Text == "third" {
@@ -807,10 +749,6 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 		t.Errorf("bridge should have last message, got %v", bridge.lastContent)
 	}
 }
-
-// ============================================================
-// Section 8: Chat WS — Attachment Edge Cases
-// ============================================================
 
 func TestE2EChatWSMultipleImages(t *testing.T) {
 	bridge := &mockChatBridge{}
@@ -842,7 +780,7 @@ func TestE2EChatWSMultipleImages(t *testing.T) {
 	if ack["image_count"] != float64(3) {
 		t.Errorf("expected image_count 3, got %v", ack["image_count"])
 	}
-	// Verify bridge got 1 text + 3 images = 4 content blocks
+
 	if len(bridge.lastContent) != 4 {
 		t.Fatalf("expected 4 content blocks, got %d", len(bridge.lastContent))
 	}
@@ -871,23 +809,22 @@ func TestE2EChatWSInvalidBase64File(t *testing.T) {
 		"files": []map[string]string{{"name": "bad.txt", "mime": "text/plain", "data": "!!invalid-base64!!"}},
 	})
 
-	// First we get an error for the invalid file, then the ack for the text
 	var firstMsg map[string]interface{}
 	ws.ReadJSON(&firstMsg)
-	// The error for bad base64 comes before the ack
+
 	if firstMsg["type"] == "error" {
-		// Expected — read the next message which should be the ack
+
 		var secondMsg map[string]interface{}
 		ws.ReadJSON(&secondMsg)
 		if secondMsg["type"] != "user_ack" {
 			t.Errorf("expected user_ack after error, got %v", secondMsg["type"])
 		}
 	} else if firstMsg["type"] == "user_ack" {
-		// Also acceptable — file was silently skipped
+
 	} else {
 		t.Errorf("unexpected message type: %v", firstMsg["type"])
 	}
-	// Bridge gets the text block (file was dropped)
+
 	if len(bridge.lastContent) < 1 || bridge.lastContent[0].Type != "text" {
 		t.Errorf("expected text content block, got %v", bridge.lastContent)
 	}
@@ -925,9 +862,7 @@ func TestE2EChatWSMixedAttachments(t *testing.T) {
 	if len(fnames) != 1 || fnames[0] != "data.txt" {
 		t.Errorf("expected file_names [data.txt], got %v", ack["file_names"])
 	}
-	// 1 text + 1 image + 1 file = 3
-	// Retry briefly: ack is sent via buffered channel so may arrive before
-	// SendUserMessage completes on the handler goroutine.
+
 	deadline := time.Now().Add(2 * time.Second)
 	for len(bridge.lastContent) != 3 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -936,10 +871,6 @@ func TestE2EChatWSMixedAttachments(t *testing.T) {
 		t.Errorf("expected 3 content blocks, got %d: %+v", len(bridge.lastContent), bridge.lastContent)
 	}
 }
-
-// ============================================================
-// Section 9: Chat WS — Disconnect Cleanup
-// ============================================================
 
 func TestE2EChatWSDisconnectCleanup(t *testing.T) {
 	bridge := &mockChatBridge{}
@@ -951,16 +882,13 @@ func TestE2EChatWSDisconnectCleanup(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
-	// Connect and immediately close
 	ws, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	ws.Close()
 
-	// Connect a second client
 	time.Sleep(100 * time.Millisecond)
 	ws2, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer ws2.Close()
 
-	// Verify broadcast still works (no panic from stale subscriber)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "still alive"})
@@ -975,10 +903,6 @@ func TestE2EChatWSDisconnectCleanup(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 10: Chat WS — Concurrent Senders
-// ============================================================
-
 func TestE2EChatWSConcurrentSends(t *testing.T) {
 	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
@@ -989,7 +913,6 @@ func TestE2EChatWSConcurrentSends(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
-	// 5 connections all send at once
 	var wg sync.WaitGroup
 	var ackCount int32
 	for i := 0; i < 5; i++ {
@@ -1021,10 +944,6 @@ func TestE2EChatWSConcurrentSends(t *testing.T) {
 		t.Errorf("expected 5 acks, got %d", ackCount)
 	}
 }
-
-// ============================================================
-// Section 11: Chat History — Content Types
-// ============================================================
 
 func TestE2EChatHistoryToolContent(t *testing.T) {
 	bridge := &mockChatBridge{
@@ -1061,12 +980,10 @@ func TestE2EChatHistoryToolContent(t *testing.T) {
 		t.Fatalf("expected 4 messages, got %d", len(result))
 	}
 
-	// Message 1: user text
 	if result[0]["role"] != "user" {
 		t.Error("msg 0 should be user")
 	}
 
-	// Message 2: assistant with tool_use
 	assistantBlocks := result[1]["content"].([]interface{})
 	if len(assistantBlocks) != 2 {
 		t.Fatalf("expected 2 blocks in assistant msg, got %d", len(assistantBlocks))
@@ -1079,7 +996,6 @@ func TestE2EChatHistoryToolContent(t *testing.T) {
 		t.Errorf("expected run_command, got %v", toolBlock["tool_name"])
 	}
 
-	// Message 3: tool_result
 	toolResultBlocks := result[2]["content"].([]interface{})
 	resultBlock := toolResultBlocks[0].(map[string]interface{})
 	if resultBlock["type"] != "tool_result" {
@@ -1111,10 +1027,6 @@ func TestE2EChatHistoryEmpty(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 12: Restart Endpoint
-// ============================================================
-
 func TestE2ERestartEndpoint(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
@@ -1137,7 +1049,6 @@ func TestE2ERestartEndpoint(t *testing.T) {
 		t.Errorf("expected status 'restarting', got %v", result["status"])
 	}
 
-	// GET should fail
 	resp, err = authGet(srv.URL+"/api/restart", s.Token())
 	if err != nil {
 		t.Fatal(err)
@@ -1148,17 +1059,12 @@ func TestE2ERestartEndpoint(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Section 13: SPA Fallback
-// ============================================================
-
 func TestE2ESPAFallback(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	// Non-API paths should serve the SPA (index.html)
 	paths := []string{"/", "/sessions", "/chat", "/config/general"}
 	for _, path := range paths {
 		resp, err := authGet(srv.URL+path, s.Token())
@@ -1167,17 +1073,12 @@ func TestE2ESPAFallback(t *testing.T) {
 			continue
 		}
 		resp.Body.Close()
-		// Should get 200 (index.html served) or 404 (no dist embedded)
-		// Never a redirect or API error
+
 		if resp.StatusCode == 500 {
 			t.Errorf("GET %s: unexpected 500", path)
 		}
 	}
 }
-
-// ============================================================
-// Section 14: MCP/IM Status Callbacks
-// ============================================================
 
 func TestE2EMCPStatusCallback(t *testing.T) {
 	cfg := config.DefaultConfig()

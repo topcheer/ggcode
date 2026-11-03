@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// Mercurial implements VCS for Mercurial (hg) repositories.
 type Mercurial struct{}
 
 func (Mercurial) Name() string        { return "hg" }
@@ -17,7 +16,7 @@ func (Mercurial) Status(ctx context.Context, dir string) (string, error) {
 }
 
 func (Mercurial) Diff(ctx context.Context, dir string, cached bool, file string) (string, error) {
-	// hg doesn't have a staging area like git's index; cached is ignored.
+
 	args := []string{"diff"}
 	if file != "" {
 		args = append(args, "--", file)
@@ -58,7 +57,6 @@ func (Mercurial) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
-// Checkout switches to an existing bookmark/branch or creates a new one.
 func (Mercurial) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
 	if create {
 		args := []string{"bookmark", branch}
@@ -68,8 +66,7 @@ func (Mercurial) Checkout(ctx context.Context, dir, branch string, create bool, 
 		if out, err := runVCSCmd(ctx, dir, "hg", args...); err != nil {
 			return out, err
 		}
-		// #928: creating the bookmark alone left the working copy on the old
-		// revision - the interface contract says Checkout switches TO it.
+
 		return runVCSCmd(ctx, dir, "hg", "update", branch)
 	}
 	return runVCSCmd(ctx, dir, "hg", "update", branch)

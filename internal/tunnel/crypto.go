@@ -12,40 +12,20 @@ import (
 	"strings"
 )
 
-// Crypto provides AES-GCM encryption/decryption using the token as key.
 type Crypto struct {
 	aead cipher.AEAD
 }
 
-// NewCrypto creates a Crypto instance from a token string (32+ chars = 16+ byte key).
-// #921 CONTRACT CORRECTION: the token string is used as RAW BYTES (NOT hex-
-// decoded as earlier docs claimed). A hex-looking token (e.g. randomHex(32) =
-// 64 chars) therefore yields a key over the 16-symbol hex alphabet; the first
-// 32 bytes are used directly as the AES-256 key. All ggcode endpoints share
-// this derivation, so interop is intact; third parties must implement THIS
-// scheme (or both sides must migrate to hex-decoding/KDF together).
-// Length policy: <16 bytes -> argon2id-derived 32-byte key; 16/24/32 -> used
-// directly; >32 -> truncated to 32 (intermediate lengths 17-31 also truncate).
 func NewCrypto(tokenHex string) (*Crypto, error) {
-	// #1795 case 4: an empty token shared a deterministic key anyone
-	// could recompute offline - the sibling relay_client.go rejects this
-	// explicitly; the public constructor must too.
+
 	if strings.TrimSpace(tokenHex) == "" {
 		return nil, errors.New("crypto: empty session token")
 	}
-	// Decode hex token to get key bytes
+
 	key := []byte(tokenHex)
-	// If key is too short for AES, derive via argon2id
-	// AES-128 needs 16 bytes, AES-256 needs 32 bytes
-	// We use the raw token bytes as key (token is 48 hex chars = 24 bytes → AES-192)
-	// But AES only supports 16, 24, or 32 byte keys.
-	// For simplicity: if len < 16, derive; if 16/24/32, use directly; else truncate to 32.
+
 	if len(key) < 16 {
-		// Derive 32-byte key via argon2id. #1795 case 3: the salt was a
-		// FIXED all-zero array - precomputable across every installation
-		// (rainbow-able for low-entropy tokens). Salt from the key material
-		// itself: deterministic per token (relays must derive the same key
-		// without a shared salt channel) but no longer globally constant.
+
 		salt := sha256.Sum256(append([]byte("ggcode-tunnel-salt-v1"), key...))
 		derived := argon2.IDKey(key, salt[:16], 1, 64*1024, 4, 32)
 		key = derived
@@ -66,7 +46,6 @@ func NewCrypto(tokenHex string) (*Crypto, error) {
 	return &Crypto{aead: aead}, nil
 }
 
-// Encrypt encrypts plaintext and returns (nonce_base64, ciphertext_base64).
 func (c *Crypto) Encrypt(plaintext []byte) (nonce string, ciphertext string, err error) {
 	nonceBytes := make([]byte, c.aead.NonceSize())
 	if _, err := rand.Read(nonceBytes); err != nil {
@@ -78,7 +57,6 @@ func (c *Crypto) Encrypt(plaintext []byte) (nonce string, ciphertext string, err
 		nil
 }
 
-// Decrypt decrypts base64-encoded nonce + ciphertext and returns plaintext.
 func (c *Crypto) Decrypt(nonceB64, ciphertextB64 string) ([]byte, error) {
 	nonceBytes, err := base64.StdEncoding.DecodeString(nonceB64)
 	if err != nil {

@@ -13,24 +13,12 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// OSV malware gate (#4858, pattern ported from the Hermes agent's
-// tools/osv_check.py - port the pattern, not the code).
-//
-// Every npx/uvx-style MCP server launch is preceded by an OSV
-// (api.osv.dev) query for MAL-* malware advisories. A hit blocks the
-// launch with the advisory IDs; a network or API error FAILS OPEN (the
-// server still starts - offline must not brick the MCP stack) with a
-// debug log; verdicts are cached for 24h so restarts do not re-query.
-// mcp_servers.<name>.skip_osv_check: true is the escape hatch for
-// air-gapped or enterprise-mirror users.
-
 const osvCacheTTL = 24 * time.Hour
 
-// osvQueryEndpoint is a var so tests can point it at an httptest server.
 var osvQueryEndpoint = "https://api.osv.dev/v1/query"
 
 type osvVerdict struct {
-	ids       []string // MAL-* advisory IDs (empty = clean or unknown)
+	ids       []string
 	queriedAt time.Time
 }
 
@@ -38,21 +26,9 @@ var (
 	osvCacheMu sync.Mutex
 	osvCache   = map[string]osvVerdict{}
 
-	// osvFailOpenWarnOnce makes the fail-open warning user-visible EXACTLY
-	// once per process (#4860 review: debug.Log is invisible to users; the
-	// issue requires a one-time visible warning so an offline OSV check is
-	// never a silent skip).
 	osvFailOpenWarnOnce sync.Once
 )
 
-// osvPackageFromCommand infers (ecosystem, package, version) from a
-// package-runner command line. Only runner executables are considered;
-// anything else returns empty strings and the gate is a no-op.
-// Subcommand-aware (#4860 review follow-up): "pnpm dlx <pkg>" and
-// "uv tool run <pkg>" resolve the package AFTER the subcommand words -
-// taking the first positional would query the subcommand itself ("dlx",
-// "run") and miss the real package. "uv run"/"pnpm install" operate on
-// the local project environment, not remote package installs - no gate.
 func osvPackageFromCommand(command string, args []string) (ecosystem, pkg, version string) {
 	var positional []string
 	for _, arg := range args {
@@ -93,17 +69,13 @@ func osvPackageFromCommand(command string, args []string) (ecosystem, pkg, versi
 
 func baseCommandName(command string) string {
 	base := strings.TrimSpace(command)
-	// Windows shims arrive as full paths; filepath.Base needs the separator
-	// normalized for both directions.
+
 	if idx := strings.LastIndexAny(base, `/\`); idx >= 0 {
 		base = base[idx+1:]
 	}
 	return strings.TrimSuffix(base, ".exe")
 }
 
-// splitPackageVersion splits "@scope/name@1.2.3" into ("@scope/name",
-// "1.2.3") and "name" into ("name", ""). A lone "@scope" (no slash) is not
-// a package reference we can query - return it as-is with no version.
 func splitPackageVersion(ref string) (pkg, version string) {
 	if !strings.Contains(ref[1:], "@") {
 		return ref, ""
@@ -112,8 +84,6 @@ func splitPackageVersion(ref string) (pkg, version string) {
 	return ref[:idx], ref[idx+1:]
 }
 
-// osvGate is the pre-exec launch gate. nil = allow; non-nil = block with a
-// user-actionable message. Never blocks on infrastructure errors.
 func osvGate(ctx context.Context, serverName, command string, args []string, skip bool) error {
 	if skip {
 		return nil
@@ -130,8 +100,6 @@ func osvGate(ctx context.Context, serverName, command string, args []string, ski
 		serverName, ecosystem, pkg, strings.Join(ids, ", "), serverName)
 }
 
-// osvQueryMAL returns the MAL-* advisory IDs for the package, or nil on
-// clean/unknown/query failure (fail-open: the caller treats nil as allow).
 func osvQueryMAL(ctx context.Context, ecosystem, pkg, version string) []string {
 	cacheKey := ecosystem + "|" + pkg + "@" + version
 	osvCacheMu.Lock()
@@ -143,9 +111,7 @@ func osvQueryMAL(ctx context.Context, ecosystem, pkg, version string) []string {
 
 	ids, err := osvFetchMAL(ctx, ecosystem, pkg, version)
 	if err != nil {
-		// Fail open: offline or a degraded OSV must never brick MCP startup.
-		// One process-wide VISIBLE warning (not just debug.Log) so the user
-		// knows launches are unscreened this session; then stay quiet.
+
 		osvFailOpenWarnOnce.Do(func() {
 			fmt.Fprintf(os.Stderr, "Warning: OSV malware check unavailable (%v); MCP package launches run WITHOUT malware screening until connectivity returns. Set mcp_servers.<name>.skip_osv_check: true to silence this permanently.\n", err)
 		})

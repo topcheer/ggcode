@@ -78,13 +78,8 @@ func TestSuppressToolResultFormatsCronListSummary(t *testing.T) {
 	}
 }
 
-// TestCollapseGuidanceHints pins the display-layer guidance fold: trailing
-// agent-guidance blocks (appended by Agent.appendGuidance as "\n\n[TAG] ...")
-// collapse into a one-line summary, while real tool output survives - both
-// mid-body [UPPERCASE] lines (logs legitimately contain those) and guidance
-// that appears before genuine output (never happens, but must not fold).
 func TestCollapseGuidanceHints(t *testing.T) {
-	// Real output + trailing guidance blocks (the flooded-bash-error case).
+
 	in := "exit status 1\nmake: *** [build] Error 1\n\n[ERROR-RUSH] Repeated identical failures detected.\n\n[RETRY-HINT] Consider a different strategy."
 	out := collapseGuidanceHints(in)
 	if !strings.Contains(out, "make: *** [build] Error 1") {
@@ -97,27 +92,21 @@ func TestCollapseGuidanceHints(t *testing.T) {
 		t.Errorf("summary must list tags: %q", out)
 	}
 
-	// Guidance-only single paragraph: cannot be distinguished from real
-	// output that starts with a tagged line, so it stays visible (folding
-	// only applies when a "\n\n" join proves injection onto a body).
 	out = collapseGuidanceHints("[TIP] try reading the file first")
 	if out != "[TIP] try reading the file first" {
 		t.Errorf("single paragraph must stay visible: %q", out)
 	}
 
-	// Mid-body [UPPERCASE] lines are NOT folded (only trailing blocks).
 	out = collapseGuidanceHints("[INFO] server started\nrequest completed\n200 OK")
 	if out != "[INFO] server started\nrequest completed\n200 OK" {
 		t.Errorf("mid-body tagged lines must not fold: %q", out)
 	}
 
-	// Plain output untouched.
 	out = collapseGuidanceHints("just a normal result")
 	if out != "just a normal result" {
 		t.Errorf("plain result must be untouched: %q", out)
 	}
 
-	// Duplicate tags dedup in the summary.
 	out = collapseGuidanceHints("out\n\n[WARN] a\n\n[WARN] b")
 	if !strings.Contains(out, "WARN") || strings.Contains(out, "WARN, WARN") {
 		t.Errorf("duplicate tags should dedup: %q", out)

@@ -15,12 +15,9 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// AgentFactory creates an agent with the given provider, tool set, system prompt, and max turns.
 type AgentFactory func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner
 
-// AgentRunner is the minimal interface a teammate agent must satisfy.
 type AgentRunner interface {
-	// #4537: variadic origin mirrors agent.Agent.RunStream (human-origin tag).
 	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error
 }
 
@@ -28,24 +25,16 @@ type usageHandlerSetter interface {
 	SetUsageHandler(func(provider.TokenUsage))
 }
 
-// ToolBuilder constructs a tool set for a teammate based on allowed tool names.
 type ToolBuilder func(allowedTools []string) interface{}
 
-// Manager manages swarm teams: creation, teammate spawning, lifecycle.
-// streamBatchInterval controls how often accumulated teammate text/reasoning
-// events are flushed to the TUI. Without batching, each LLM streaming token
-// (~50-100/s per teammate) triggers a separate callback → program.Send →
-// Bubble Tea Update(), compounding with sub-agent flooding.
 const swarmStreamBatchInterval = 500 * time.Millisecond
 
-// swarmCancelTimeout is the max time CancelAll waits for each teammate's
-// idle-runner goroutine to exit after cancelling its context.
 const swarmCancelTimeout = 5 * time.Second
 
 type Manager struct {
 	teams          map[string]*Team
-	provider       provider.Provider        // static fallback; prefer providerGetter if set
-	providerGetter func() provider.Provider // resolves the parent agent's live provider
+	provider       provider.Provider
+	providerGetter func() provider.Provider
 	cfg            config.SwarmConfig
 
 	agentFactory AgentFactory
@@ -53,26 +42,12 @@ type Manager struct {
 	onUpdate     func(Event)
 	onUsage      func(provider.TokenUsage)
 
-	// results stores the most recent task output per teammate (key=teammateID).
-	// Written on teammate_idle events. Entries deliberately SURVIVE teammate
-	// shutdown (#2787/#1814: the leader's most common order is "shut the
-	// worker down, THEN collect the output" - including teammates OTHER
-	// than the one just shut down, whose uncollected results must not be
-	// swept by an unrelated shutdown); they are reclaimed by the team
-	// lifecycle (DeleteTeam's sweep) and, for teams that never get deleted,
-	// by the FIFO bound enforced in storeResultLocked (#1633).
 	results map[string]string
-	// resultsOrder tracks first-store order of results keys for FIFO
-	// eviction in storeResultLocked. Guarded by m.mu.
+
 	resultsOrder []string
 
-	// workingDir is the project directory injected into teammate system prompts
-	// so teammates know where they are without having to discover it via pwd/ls.
 	workingDir string
 
-	// systemPromptBuilder, if set, builds a rich system prompt for teammates
-	// with full project context (tools, memory, git status, etc.).
-	// When nil, falls back to the minimal buildTeammateSystemPrompt().
 	systemPromptBuilder func(name, teamName, workingDir string) string
 
 	rootCtx    context.Context
@@ -80,23 +55,17 @@ type Manager struct {
 	mu         sync.Mutex
 	nextTeamID int
 
-	// streamBatch accumulates teammate_text/teammate_reasoning events per
-	// teammate and flushes them at swarmStreamBatchInterval to prevent
-	// TUI message flooding. Guarded by streamBatchMu.
 	streamBatchMu   sync.Mutex
-	streamTextBuf   map[string]*strings.Builder // teammateID → accumulated text
-	streamRsnBuf    map[string]*strings.Builder // teammateID → accumulated reasoning
-	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
+	streamTextBuf   map[string]*strings.Builder
+	streamRsnBuf    map[string]*strings.Builder
+	streamBatchDone chan struct{}
 	shutdownOnce    sync.Once
 }
 
-// NewManager creates a swarm Manager.
 func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
 	return newManager(cfg, prov, nil, factory, builder)
 }
 
-// NewManagerWithProviderGetter creates a swarm Manager that resolves the
-// provider dynamically from the parent agent at teammate spawn time.
 func NewManagerWithProviderGetter(cfg config.SwarmConfig, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
 	return newManager(cfg, prov, getter, factory, builder)
 }
@@ -105,7 +74,7 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 	if cfg.MaxTeammatesPerTeam <= 0 {
 		cfg.MaxTeammatesPerTeam = 16
 	}
-	// TeammateTimeout defaults to 0 (no timeout). Set in config to enforce a deadline.
+
 	if cfg.InboxSize <= 0 {
 		cfg.InboxSize = 32
 	}
@@ -135,7 +104,6 @@ func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
 	m.onUsage = fn
 }
 
-// RootContext returns the manager's lifecycle context.
 func (m *Manager) RootContext() context.Context {
 	if m.rootCtx == nil {
 		return context.Background()
@@ -143,8 +111,6 @@ func (m *Manager) RootContext() context.Context {
 	return m.rootCtx
 }
 
-// Shutdown cancels all running teammates and stops the manager.
-// Safe to call multiple times (idempotent).
 func (m *Manager) Shutdown() {
 	m.shutdownOnce.Do(func() {
 		close(m.streamBatchDone)
@@ -168,7 +134,6 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// CreateTeam creates a new team with the given name and returns its snapshot.
 func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 	m.mu.Lock()
 	m.nextTeamID++
@@ -180,7 +145,7 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 		Name:      name,
 		LeaderID:  leaderID,
 		Teammates: make(map[string]*Teammate),
-		Tasks:     nil, // lazily created when first task is added
+		Tasks:     nil,
 		CreatedAt: time.Now(),
 	}
 
@@ -192,7 +157,6 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 	return team.snapshot()
 }
 
-// DeleteTeam shuts down all teammates and removes the team.
 func (m *Manager) DeleteTeam(teamID string) error {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -201,8 +165,6 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		return fmt.Errorf("team %q not found", teamID)
 	}
 
-	// Shutdown all teammates before removing from map so goroutines
-	// that hold a reference to the team can drain gracefully.
 	var doneChs []<-chan struct{}
 	team.mu.Lock()
 	for _, tm := range team.Teammates {
@@ -210,33 +172,18 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		if tm.cancel != nil {
 			tm.cancel()
 		}
-		// Set status DIRECTLY: the caller already holds tm.mu, and
-		// setStatus re-locks it - a same-goroutine re-entrant lock on a
-		// Go mutex DEADLOCKS (the 931913ff CI hang: DeleteTeam -> setStatus
-		// -> t.mu.Lock under the already-held tm.mu).
+
 		tm.Status = TeammateShuttingDown
 		if tm.done != nil {
 			doneChs = append(doneChs, tm.done)
 		}
 		tm.mu.Unlock()
-		// Clean up stored results to prevent unbounded growth in m.results.
+
 		delete(m.results, tm.ID)
 	}
 	team.mu.Unlock()
 	m.mu.Unlock()
 
-	// #2120: wait for the idle-runner goroutines OUTSIDE m.mu. The runner
-	// exit path emits an event (emit takes m.mu) BEFORE close(done), so
-	// holding m.mu across this wait formed a cycle - DeleteTeam held the
-	// lock waiting for done while the runner needed the lock to reach
-	// close(done). Only the 5s timeout broke it, freezing EVERY manager
-	// API (GetTeam/SendToTeammate/Broadcast/...) for the duration, and
-	// the normal path (a teammate mid-task returning ctx.Err() and
-	// emitting team_board_updated) hit it deterministically - no panic
-	// needed. Same lock-scope discipline as CancelAll.
-	// #1633 case 3 still holds: the map delete below happens after the
-	// bounded wait, and a re-lock identity check keeps the delete safe
-	// against a concurrent re-create of the same ID.
 	if len(doneChs) > 0 {
 		timedOut := false
 		for _, ch := range doneChs {
@@ -259,10 +206,7 @@ func (m *Manager) DeleteTeam(teamID string) error {
 
 	m.mu.Lock()
 	if current, still := m.teams[teamID]; still && current == team {
-		// #2121: a spawn may have inserted a teammate AFTER the drain
-		// phase above (it verified m.teams under both locks, which this
-		// delete had not yet reached). Cancel anything new so no ghost
-		// survives the map delete.
+
 		team.mu.Lock()
 		for _, tm := range team.Teammates {
 			tm.mu.Lock()
@@ -282,7 +226,6 @@ func (m *Manager) DeleteTeam(teamID string) error {
 	return nil
 }
 
-// GetTeam returns a snapshot of the team if it exists.
 func (m *Manager) GetTeam(id string) (TeamSnapshot, bool) {
 	m.mu.Lock()
 	team, ok := m.teams[id]
@@ -293,9 +236,6 @@ func (m *Manager) GetTeam(id string) (TeamSnapshot, bool) {
 	return team.snapshot(), true
 }
 
-// TeamStatusInfo is a lightweight snapshot of a team with only teammate status
-// info (no events). Use this instead of ListTeams() when only the strip display
-// needs updating.
 type TeamStatusInfo struct {
 	ID        string
 	Name      string
@@ -304,10 +244,6 @@ type TeamStatusInfo struct {
 	TaskCount int
 }
 
-// ListTeamStatuses returns lightweight status info for all teams.
-// Unlike ListTeams(), this does NOT copy teammate events and is safe to call
-// at high frequency (e.g. on every streaming token event) without contending
-// the Teammate.mu lock that the runner uses for appendEvent.
 func (m *Manager) ListTeamStatuses() []TeamStatusInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -330,8 +266,6 @@ func (m *Manager) ListTeamStatuses() []TeamStatusInfo {
 	return out
 }
 
-// ListTeams returns full snapshots of all teams (including events).
-// Prefer ListTeamStatuses() for strip/status display to avoid copying events.
 func (m *Manager) ListTeams() []TeamSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -342,7 +276,6 @@ func (m *Manager) ListTeams() []TeamSnapshot {
 	return out
 }
 
-// TeamBoardSnapshot is a lightweight read-only snapshot for desktop/team board UIs.
 type TeamBoardSnapshot struct {
 	ID        string              `json:"id"`
 	Name      string              `json:"name"`
@@ -352,7 +285,6 @@ type TeamBoardSnapshot struct {
 	CreatedAt time.Time           `json:"createdAt"`
 }
 
-// TeamBoardTeammate summarizes a teammate for board display without copying event logs.
 type TeamBoardTeammate struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -362,7 +294,6 @@ type TeamBoardTeammate struct {
 	LastResult  string `json:"lastResult,omitempty"`
 }
 
-// TeamBoardTask summarizes a shared team-board task for desktop display.
 type TeamBoardTask struct {
 	ID          string            `json:"id"`
 	Subject     string            `json:"subject"`
@@ -378,7 +309,6 @@ type TeamBoardTask struct {
 	UpdatedAt   time.Time         `json:"updatedAt"`
 }
 
-// ListTeamBoards returns snapshots of all teams with teammate status and task board state.
 func (m *Manager) ListTeamBoards() []TeamBoardSnapshot {
 	m.mu.Lock()
 	teams := make([]*Team, 0, len(m.teams))
@@ -395,10 +325,6 @@ func (m *Manager) ListTeamBoards() []TeamBoardSnapshot {
 	return out
 }
 
-// EmitBoardUpdated notifies UI subscribers that a team's shared task board changed.
-// It is also the single funnel every board mutation flows through (create/claim/
-// complete in tool/swarm_task_tools.go), so it doubles as the durability hook:
-// the board is snapshotted to disk after the UI event fires.
 func (m *Manager) EmitBoardUpdated(teamID string) {
 	m.emit(Event{Type: "team_board_updated", TeamID: teamID, Timestamp: time.Now()})
 	if tm := m.GetTaskManager(teamID); tm != nil {
@@ -406,8 +332,6 @@ func (m *Manager) EmitBoardUpdated(teamID string) {
 	}
 }
 
-// currentProvider returns the live provider if providerGetter is set,
-// otherwise falls back to the static provider field.
 func (m *Manager) currentProvider() provider.Provider {
 	if m.providerGetter != nil {
 		return m.providerGetter()
@@ -415,7 +339,6 @@ func (m *Manager) currentProvider() provider.Provider {
 	return m.provider
 }
 
-// SpawnTeammate creates a new teammate in the given team and starts its idle loop.
 func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []string) (TeammateSnapshot, error) {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -423,18 +346,11 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		m.mu.Unlock()
 		return TeammateSnapshot{}, fmt.Errorf("team %q not found", teamID)
 	}
-	// Generate teammate ID while holding m.mu to avoid TOCTOU with concurrent spawns.
+
 	m.nextTeamID++
 	tmID := fmt.Sprintf("tm-%d", m.nextTeamID)
 	m.mu.Unlock()
 
-	// #2121: hold BOTH locks in the canonical order (m.mu -> team.mu,
-	// same as DeleteTeam) across the existence check and the insert.
-	// The old sequence - fetch pointer, drop m.mu, insert under
-	// team.mu only - let a concurrent DeleteTeam finish its map delete
-	// in between: the teammate landed on a detached team, invisible to
-	// ListTeams/SendToTeammate/Shutdown, its goroutine alive to
-	// rootCancel (a ghost teammate).
 	m.mu.Lock()
 	if _, ok := m.teams[teamID]; !ok {
 		m.mu.Unlock()
@@ -464,13 +380,11 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	team.Teammates[tmID] = tm
 	team.mu.Unlock()
 
-	// Build tool set for this teammate
 	var toolSet interface{}
 	if m.toolBuilder != nil {
 		toolSet = m.toolBuilder(allowedTools)
 	}
 
-	// Build system prompt: use rich builder if available, otherwise fall back to simple prompt
 	m.mu.Lock()
 	builder := m.systemPromptBuilder
 	wd := m.workingDir
@@ -490,9 +404,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 				usageAware.SetUsageHandler(onUsage)
 			}
 		}
-		// Isolate session-scoped state (todo_write) from the parent agent.
-		// Without this, teammates share the parent's todo file and clobber
-		// each other's task tracking.
+
 		if tmID != "" {
 			if sid, ok := agent.(interface{ SetSessionID(string) }); ok {
 				sid.SetSessionID(tmID)
@@ -500,7 +412,6 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		}
 	}
 
-	// Start idle loop in a goroutine
 	safego.Go("swarm.teammateLoop", func() {
 		runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
 	})
@@ -516,7 +427,6 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	return tm.snapshot(), nil
 }
 
-// ShutdownTeammate stops a specific teammate.
 func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -539,17 +449,6 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
-	// #2787: the stored result entry is deliberately KEPT here - #1814 made
-	// "shut the worker down, THEN collect the output" the supported order
-	// and the emit comment promises the last result survives shutdown, but
-	// the old #1633 delete here contradicted both (terminal data loss: the
-	// #2121 guard never writes a result back after removal). Reclamation is
-	// NOT done per-shutdown: pruning "ungoverned" entries here would also
-	// delete OTHER teammates' not-yet-collected results (A shut down
-	// uncollected, B shut down next -> A's output lost). It is unified at
-	// the team lifecycle instead: DeleteTeam sweeps a whole team's entries,
-	// and storeResultLocked's FIFO bound caps growth for teams that are
-	// never deleted (#1633 leak stays fixed).
 	team.removeTeammate(tmID)
 
 	m.emit(Event{
@@ -561,9 +460,6 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	return nil
 }
 
-// CancelAll cancels all live teammates across all teams.
-// Used when the main agent is interrupted (ctrl+c/esc) to avoid orphaned work
-// or queued work starting after the UI has already marked the team as cancelled.
 func (m *Manager) CancelAll() {
 	m.mu.Lock()
 	teams := make([]*Team, 0, len(m.teams))
@@ -592,14 +488,6 @@ func (m *Manager) CancelAll() {
 		team.mu.Unlock()
 	}
 
-	// Wait for all teammates' idle-runner goroutines to actually exit (with timeout).
-	// Per-teammate timeout budget (cron-2 review finding): a single shared
-	// timer let the first stuck teammate's timeout return immediately and
-	// abandon every later teammate in the list - including ones that had
-	// already exited and only needed their done signal consumed. Each channel
-	// now gets its own window; after the first expiry we stop blocking and
-	// only drain already-done channels non-blockingly, so the total worst
-	// case stays bounded at ~one timeout instead of N.
 	if len(doneChs) > 0 {
 		timedOut := false
 		for _, ch := range doneChs {
@@ -621,17 +509,8 @@ func (m *Manager) CancelAll() {
 	}
 }
 
-// SendToTeammate sends a message to a specific teammate's inbox.
 func (m *Manager) SendToTeammate(teamID, tmID string, msg MailMessage) error {
-	// #2788: hold both locks (m.mu -> team.mu, canonical order, same as
-	// DeleteTeam and the #2121 SpawnTeammate fix) across the existence
-	// check AND the delivery. The old sequence - fetch the team pointer,
-	// drop m.mu, then look up the teammate and push with no mutual
-	// exclusion - raced a concurrent DeleteTeam/ShutdownTeammate: a send
-	// descheduled in that window delivered into the inbox of an
-	// already-cancelled teammate (runner exited, nobody consumes it) and
-	// still returned nil: a fake delivery. The Inbox push is non-blocking
-	// (select/default), so holding the locks here cannot stall.
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	team, ok := m.teams[teamID]
@@ -644,10 +523,7 @@ func (m *Manager) SendToTeammate(teamID, tmID string, msg MailMessage) error {
 	if !ok {
 		return fmt.Errorf("teammate %q not found in team %q", tmID, teamID)
 	}
-	// Cancellation awareness: a teammate mid-shutdown (cancel already
-	// fired under tm.mu, removeTeammate still pending on team.mu) would
-	// otherwise pass the existence check above and swallow the message
-	// into a dead inbox. Reject instead of faking a delivery.
+
 	tm.mu.Lock()
 	shutdown := tm.Status == TeammateShuttingDown || (tm.ctx != nil && tm.ctx.Err() != nil)
 	tm.mu.Unlock()
@@ -662,7 +538,6 @@ func (m *Manager) SendToTeammate(teamID, tmID string, msg MailMessage) error {
 	}
 }
 
-// BroadcastToTeam sends a message to all idle teammates in the team.
 func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -675,16 +550,7 @@ func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 	var sent []string
 	var dropped []string
 	for _, tm := range team.listTeammates() {
-		// #3104: mirror the #2788 SendToTeammate shutdown guard. The old
-		// check (via the lock-free getStatus) plus an unlocked push raced a
-		// concurrent ShutdownTeammate: the teammate could be cancelled and
-		// removed after the status read, and the broadcast still counted a
-		// fake delivery into a dead inbox. ShutdownTeammate flips the
-		// status under tm.mu, so holding tm.mu across BOTH the check and
-		// the non-blocking push closes that window: either the flip
-		// already happened (we drop) or it cannot happen until we release
-		// (the message lands in a live inbox). A root-level cancel that is
-		// still propagating is caught by the ctx.Err() probe.
+
 		tm.mu.Lock()
 		if tm.Status == TeammateShuttingDown || (tm.ctx != nil && tm.ctx.Err() != nil) {
 			tm.mu.Unlock()
@@ -703,14 +569,12 @@ func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 		tm.mu.Unlock()
 	}
 	if len(dropped) > 0 {
-		// #3104: dropped now covers both inbox-full and shutting-down skips
-		// (each skip is individually logged with its reason above).
+
 		debug.Log("swarm", "broadcast dropped %d messages for teammates %v (inbox full or shutting down)", len(dropped), dropped)
 	}
 	return sent
 }
 
-// EnsureTaskManager returns the team's task manager, creating it if needed.
 func (m *Manager) EnsureTaskManager(teamID string) (*task.Manager, error) {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -723,15 +587,12 @@ func (m *Manager) EnsureTaskManager(teamID string) (*task.Manager, error) {
 	team.mu.Lock()
 	defer team.mu.Unlock()
 	if team.Tasks == nil {
-		// Durable boards: restore from disk if this team had a board in a
-		// previous process (in_progress claims are rolled back to pending).
+
 		team.Tasks = loadTeamBoard(teamID)
 	}
 	return team.Tasks, nil
 }
 
-// GetTaskManager returns the team's task manager without creating one.
-// Returns nil if the team has no task board yet.
 func (m *Manager) GetTaskManager(teamID string) *task.Manager {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -744,42 +605,28 @@ func (m *Manager) GetTaskManager(teamID string) *task.Manager {
 	return team.Tasks
 }
 
-// SetOnUpdate sets the callback for swarm state changes (used by TUI).
 func (m *Manager) SetOnUpdate(fn func(Event)) {
 	m.mu.Lock()
 	m.onUpdate = fn
 	m.mu.Unlock()
 }
 
-// SetWorkingDir sets the working directory injected into teammate system prompts.
 func (m *Manager) SetWorkingDir(dir string) {
 	m.mu.Lock()
 	m.workingDir = dir
 	m.mu.Unlock()
 }
 
-// SetSystemPromptBuilder sets a function that builds a rich system prompt for
-// teammates with full project context. When not set, a minimal prompt is used.
 func (m *Manager) SetSystemPromptBuilder(fn func(name, teamName, workingDir string) string) {
 	m.mu.Lock()
 	m.systemPromptBuilder = fn
 	m.mu.Unlock()
 }
 
-// GetTeammateResult returns the most recent task output for a teammate.
-// Returns (result, true) if a result exists, ("", false) otherwise.
 func (m *Manager) GetTeammateResult(teamID, tmID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// #1814: the stored-result fallback used to sit AFTER the teammate
-	// existence gate - a shutdown removes the teammate, so "shut the
-	// worker down, THEN collect the output" (the most common order)
-	// returned "No result available" while the data sat in m.results.
-	// The fallback's own comment ("survives if teammate was removed")
-	// documented a purpose the gate made unreachable. Stored result
-	// first-checked without the gate; live teammate result still
-	// preferred when present.
 	if tm, ok := m.teams[teamID]; ok {
 		if live, ok := tm.getTeammate(tmID); ok {
 			if r := live.getResults(); r != "" {
@@ -791,8 +638,6 @@ func (m *Manager) GetTeammateResult(teamID, tmID string) (string, bool) {
 	return r, ok && r != ""
 }
 
-// GetTeamResults returns a map of teammateID → last result for all teammates
-// in the team that have a result.
 func (m *Manager) GetTeamResults(teamID string) map[string]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -811,8 +656,6 @@ func (m *Manager) GetTeamResults(teamID string) map[string]string {
 	return out
 }
 
-// teammateGoverned reports whether tmID is still a member of any live
-// team (#2121 late-emit guard).
 func (m *Manager) teammateGoverned(tmID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -827,16 +670,8 @@ func (m *Manager) teammateGoverned(tmID string) bool {
 	return false
 }
 
-// maxStoredResults caps the size of the m.results store. Entries are
-// meant to stay retrievable after a teammate shuts down (#1814), so the
-// bound - not a per-shutdown delete - is what keeps long-lived managers
-// from growing m.results without limit (#1633).
 const maxStoredResults = 256
 
-// storeResultLocked records a teammate result under m.mu and enforces the
-// FIFO bound: once more than maxStoredResults entries exist, the oldest
-// stored entries are evicted first (IDs already reclaimed by DeleteTeam
-// are skipped). An existing key keeps its original FIFO position.
 func (m *Manager) storeResultLocked(tmID, result string) {
 	if _, exists := m.results[tmID]; !exists {
 		m.resultsOrder = append(m.resultsOrder, tmID)
@@ -853,25 +688,17 @@ func (m *Manager) storeResultLocked(tmID, result string) {
 }
 
 func (m *Manager) emit(ev Event) {
-	// Persist teammate results in the results store.
-	// Hold m.mu to protect concurrent access to m.results.
+
 	switch ev.Type {
 	case "teammate_idle":
 		if ev.Result != "" {
-			// #2121: only store results for a teammate that is still
-			// governed by some team. ShutdownTeammate removes the teammate
-			// BEFORE its runner exits; a late idle emit otherwise wrote the
-			// result back AFTER that removal, leaving an entry no later
-			// DeleteTeam sweep could reach (its loop iterates
-			// team.Teammates, which no longer has the ID) - only the FIFO
-			// bound would ever reclaim it.
+
 			if m.teammateGoverned(ev.TeammateID) {
 				debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
 				m.mu.Lock()
 				m.storeResultLocked(ev.TeammateID, ev.Result)
 				m.mu.Unlock()
-				// r457: distill the experience into the rolling ledger that
-				// traj_intel ingests - latest-only results otherwise lose it.
+
 				appendTeammateExperience(m.workingDirForExp(), ev.TeamID, ev.TeammateID, ev.TeammateName, ev.Result)
 			} else {
 				debug.Log("swarm", "emit: dropping late result for ungoverned %s", ev.TeammateID)
@@ -880,12 +707,9 @@ func (m *Manager) emit(ev Event) {
 			debug.Log("swarm", "emit: teammate_idle for %s but Result is empty", ev.TeammateID)
 		}
 	case "teammate_shutdown":
-		// Keep the last result available even after shutdown so the
-		// leader can still retrieve it via GetTeammateResult.
+
 	}
 
-	// Batch high-frequency text/reasoning events to prevent TUI flooding.
-	// These arrive at ~50-100/s per teammate from the LLM streaming callback.
 	switch ev.Type {
 	case "teammate_text":
 		m.streamBatchMu.Lock()
@@ -909,7 +733,6 @@ func (m *Manager) emit(ev Event) {
 		return
 	}
 
-	// Non-batched events go directly to the callback.
 	m.mu.Lock()
 	fn := m.onUpdate
 	m.mu.Unlock()
@@ -918,9 +741,6 @@ func (m *Manager) emit(ev Event) {
 	}
 }
 
-// StartStreamBatcher starts the background goroutine that periodically
-// flushes accumulated teammate text/reasoning events. Must be called
-// after SetOnUpdate.
 func (m *Manager) StartStreamBatcher() {
 	safego.Go("swarm.streamBatcher", func() {
 		ticker := time.NewTicker(swarmStreamBatchInterval)
@@ -939,8 +759,6 @@ func (m *Manager) StartStreamBatcher() {
 	})
 }
 
-// flushStreamBatch delivers accumulated text/reasoning as single batched
-// events per teammate, then clears the buffers.
 func (m *Manager) flushStreamBatch() {
 	m.streamBatchMu.Lock()
 	textBufs := m.streamTextBuf
@@ -982,14 +800,10 @@ func (m *Manager) flushStreamBatch() {
 	}
 }
 
-// FlushStreamBatch exports flushStreamBatch for use in tests.
 func (m *Manager) FlushStreamBatch() {
 	m.flushStreamBatch()
 }
 
-// NotifyIdleRunners sends a task-available hint to all idle teammates,
-// triggering them to poll the task board immediately instead of waiting
-// for the next poller tick.
 func (m *Manager) NotifyIdleRunners(teamID string) {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -1031,7 +845,6 @@ func buildTeammateSystemPrompt(name, teamName, workingDir string) string {
 	return prompt
 }
 
-// TeammateSnapshot returns a snapshot of a teammate by ID across all teams.
 func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1046,9 +859,6 @@ func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
 	return TeammateSnapshot{}, false
 }
 
-// TeammateEventsSince returns incremental events for a teammate starting from
-// fromIdx, along with the total event count. Unlike TeammateSnapshot, this
-// avoids copying the full event history and is safe to call at high frequency.
 func (m *Manager) TeammateEventsSince(tmID string, fromIdx int) ([]TeammateEvent, int, bool) {
 	m.mu.Lock()
 	for _, team := range m.teams {

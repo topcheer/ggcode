@@ -71,7 +71,7 @@ type daemonTunnelShareController struct {
 	reasoningTail string
 	textTail      string
 	status        tunnel.StatusData
-	userOverrides []tunnel.MessageData // queue, not single override — prevents message loss
+	userOverrides []tunnel.MessageData
 }
 
 func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.DaemonBridge, sessionInfo tunnel.SessionInfoData, tunnelHost *agentruntime.TunnelHost) *daemonTunnelShareController {
@@ -88,7 +88,6 @@ func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.Daemon
 	}
 }
 
-// daemonSnapshot builds a BrokerSnapshot from daemon bridge state for StartShare.
 func daemonSnapshot(bridge *im.DaemonBridge, workspace string, resolved *config.ResolvedEndpoint, mode string) tunnel.BrokerSnapshot {
 	snapshot := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{
@@ -174,7 +173,6 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 		return
 	}
 
-	// Daemon-specific: update run state for status push
 	switch ev.Type {
 	case provider.StreamEventText, provider.StreamEventReasoning,
 		provider.StreamEventToolCallDone, provider.StreamEventToolResult,
@@ -184,7 +182,6 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 		c.HandleRunState(false)
 	}
 
-	// Delegate stream push to unified TunnelHost
 	if c.tunnelHost != nil {
 		c.tunnelHost.PushStreamEvent(ev)
 	}

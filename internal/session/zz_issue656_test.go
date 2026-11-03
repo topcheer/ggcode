@@ -10,12 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestLoadSession_OverlongLineNotFatal (#656): a single >10MB JSONL line
-// (e.g. a base64 image blob) must not abort the whole session load. Records
-// before AND after the oversized line must come back; the poison line itself
-// is skipped. Previously bufio.Scanner's ErrTooLong made loadSession return
-// a hard error and the ENTIRE session became unrecoverable (the #478 fix
-// only covered the search path).
 func TestLoadSession_OverlongLineNotFatal(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -40,8 +34,6 @@ func TestLoadSession_OverlongLineNotFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Splice an >10MB poison line between the two message records, mirroring
-	// the issue's reproduction (base64 ImageData inline).
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -78,9 +70,6 @@ func TestLoadSession_OverlongLineNotFatal(t *testing.T) {
 	}
 }
 
-// TestLoadSession_OverlongTornTailLineNotFatal (#656 variant): the poison
-// line is ALSO the last line and lacks a trailing newline (torn oversized
-// write). The load must still succeed with everything before it.
 func TestLoadSession_OverlongTornTailLineNotFatal(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -109,7 +98,7 @@ func TestLoadSession_OverlongTornTailLineNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// >10MB line WITHOUT trailing newline: must be skipped, not fatal.
+
 	if _, err := f.WriteString(`{"type":"message","junk":"` + strings.Repeat("B", 11*1024*1024)); err != nil {
 		t.Fatal(err)
 	}
@@ -124,9 +113,6 @@ func TestLoadSession_OverlongTornTailLineNotFatal(t *testing.T) {
 	}
 }
 
-// TestReadLineLimitedCounted verifies the counted bounded-reader primitive:
-// normal lines pass through with their exact consumed size, oversized lines
-// are consumed-and-skipped reporting the discarded byte count.
 func TestReadLineLimitedCounted(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.txt")
@@ -153,7 +139,7 @@ func TestReadLineLimitedCounted(t *testing.T) {
 	if e3 != nil || strings.TrimSpace(string(l3)) != "three" || c3 != 6 {
 		t.Fatalf("line3 after skip: %q consumed=%d err=%v", l3, c3, e3)
 	}
-	// EOF after a clean terminator: empty read, io.EOF, no phantom loop.
+
 	l4, c4, _ := readLineLimitedCounted(br, 10)
 	if len(l4) != 0 || c4 != 0 {
 		t.Fatalf("post-EOF read must be empty, got %q consumed=%d", l4, c4)

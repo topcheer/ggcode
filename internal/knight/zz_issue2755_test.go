@@ -1,13 +1,5 @@
 package knight
 
-// Issue #2755 probe: in a monorepo subdirectory (--show-prefix non-empty),
-// gitStatusSnapshot stripped the show-prefix only from the start of the
-// porcelain line - the rename DST side (after " -> ") kept the prefix, so a
-// pure .ggcode rename read as "R  .ggcode/a.md -> mobile/.ggcode/b.md",
-// failed the BOTH-sides inGG() exemption check, and fired a false
-// READ-ONLY GUARDRAIL VIOLATED. Real-git-repo probe: init a repo, commit a
-// file under <sub>/.ggcode/, git mv it from inside <sub>, snapshot.
-
 import (
 	"os"
 	"os/exec"
@@ -44,7 +36,6 @@ func TestIssue2755RenameBothSidesStrippedInSubdir(t *testing.T) {
 	run("add", "-A")
 	run("commit", "-qm", "init")
 
-	// git mv from inside the subdir stages a rename (R line in porcelain).
 	mv := exec.Command("git", "mv", ".ggcode/a.md", ".ggcode/b.md")
 	mv.Dir = filepath.Join(repo, "mobile")
 	if out, err := mv.CombinedOutput(); err != nil {

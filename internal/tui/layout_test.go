@@ -29,8 +29,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// stripAnsi removes ANSI escape sequences (CSI and OSC) from a string so
-// that text comparisons work regardless of lipgloss v2 styling differences.
 var ansiRe = regexp.MustCompile(`\x1b\][^\x1b]*\x1b\\|\x1b\[[0-9;]*[A-Za-z]`)
 
 func stripAnsi(s string) string {
@@ -71,8 +69,6 @@ func TestAppendUserMessageTitleKeepsUTF8Valid(t *testing.T) {
 	}
 }
 
-// renderedOutput returns the conversation content from whichever path is active.
-// When chatList has items, it renders from chatList; otherwise falls back to m.output.
 func renderedOutput(m *Model) string {
 	if m.chatList != nil && m.chatList.Len() > 0 {
 		w := m.conversationInnerWidth()
@@ -87,7 +83,7 @@ func renderedOutput(m *Model) string {
 		rendered := m.chatList.Render()
 		return rendered
 	}
-	// Empty state — render the same guidance shown in conversation panel
+
 	var sb strings.Builder
 	sb.WriteString(m.styles.assistant.Render(m.t("empty.ask")))
 	sb.WriteString("\n")
@@ -96,14 +92,12 @@ func renderedOutput(m *Model) string {
 	return sb.String()
 }
 
-// --- Viewport / Resize tests ---
-
 func TestResizeUpdatesViewport(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	// Verify chatList got resized
+
 	if m.chatList != nil {
-		// chatList width/height are set during Render, just verify it exists
+
 	} else {
 		t.Error("expected chatList to be initialized")
 	}
@@ -116,7 +110,7 @@ func TestResizeUpdatesViewport(t *testing.T) {
 func TestResizeSmallWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(40, 5)
-	// Verify resize doesn't panic on small window
+
 	if m.chatList == nil {
 		t.Error("expected chatList to be initialized")
 	}
@@ -125,7 +119,7 @@ func TestResizeSmallWindow(t *testing.T) {
 func TestResizeTinyWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(10, 2)
-	// Verify resize doesn't panic on tiny window
+
 	if m.chatList == nil {
 		t.Error("expected chatList to be initialized")
 	}
@@ -290,8 +284,6 @@ func TestToolCompletionResumesLoadingSpinner(t *testing.T) {
 	}
 }
 
-// --- Viewport scroll / auto-follow tests ---
-
 func TestViewportAutoFollow(t *testing.T) {
 	vp := NewViewportModel(80, 20)
 	if !vp.AutoFollow() {
@@ -309,14 +301,14 @@ func TestViewportSetSize(t *testing.T) {
 
 func TestViewportScrollUp(t *testing.T) {
 	vp := NewViewportModel(80, 20)
-	// Set multi-line content
+
 	lines := make([]string, 50)
 	for i := range lines {
 		lines[i] = "line content here"
 	}
 	vp.SetContent(strings.Join(lines, "\n"))
 	vp.ScrollUp(5)
-	// After scrolling up, auto-follow should be disabled
+
 	if vp.AutoFollow() {
 		t.Error("expected autoFollow to be false after manual scroll up")
 	}
@@ -326,8 +318,7 @@ func TestViewportScrollDown(t *testing.T) {
 	vp := NewViewportModel(80, 20)
 	vp.ScrollUp(10)
 	vp.ScrollDown(5)
-	// ScrollDown with remaining offset may or may not re-enable auto-follow
-	// depending on whether it reached the bottom; just verify no panic
+
 }
 
 func TestViewportGotoBottom(t *testing.T) {
@@ -349,19 +340,17 @@ func TestViewportLongContentScroll(t *testing.T) {
 		lines[i] = "content line"
 	}
 	vp.SetContent(strings.Join(lines, "\n"))
-	// Should auto-follow to bottom
+
 	if !vp.AutoFollow() {
 		t.Error("expected autoFollow after SetContent with long content")
 	}
 }
 
-// --- Empty content layout ---
-
 func TestEmptyContentInputAtBottom(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(80, 24)
 	view := m.View().Content
-	// The input prompt "❯ " should appear in the view even with empty content
+
 	if !strings.Contains(view, "❯") {
 		t.Error("expected input prompt in view")
 	}
@@ -693,7 +682,6 @@ func TestWideLayoutSidebarDoesNotExceedScreenHeight(t *testing.T) {
 	sidebar := m.renderSidebar()
 	sidebarH := lipgloss.Height(sidebar)
 
-	// Sidebar uses content-based height and should not exceed total view height.
 	if sidebarH > m.viewHeight() {
 		t.Fatalf("sidebar height %d exceeds view height %d", sidebarH, m.viewHeight())
 	}
@@ -729,8 +717,6 @@ func TestComposerPanelMultilineDraftRendersPromptsPerLine(t *testing.T) {
 
 	rendered := m.renderComposerPanel()
 
-	// With DynamicHeight, the textarea renders a prompt per visible line.
-	// Three logical lines should produce at least 3 prompts.
 	if got := strings.Count(rendered, m.input.Prompt); got < 3 {
 		t.Fatalf("expected at least 3 composer prompts for 3 lines, got %d in %q", got, rendered)
 	}
@@ -965,7 +951,7 @@ func TestSidebarRendersWorkingDirectoryAndGitBranch(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(128, 28)
-	// Populate the branch cache (normally done by gitBranchTickMsg timer)
+
 	m.refreshCachedGitBranch()
 
 	if got := m.sidebarWorkingDirectory(); !strings.HasSuffix(got, filepath.Base(repoDir)) {
@@ -1101,13 +1087,12 @@ func TestCtrlRPersistsSidebarVisibilityToSession(t *testing.T) {
 	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
 	visible := true
 	cfg.UI.SidebarVisible = &visible
-	// Save the config with sidebar_visible=true so we can verify it stays unchanged
+
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save config: %v", err)
 	}
 	m.SetConfig(cfg)
 
-	// Set up a session so persistence goes to session, not global config
 	ses := &session.Session{ID: "test-sidebar-ses"}
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -1122,12 +1107,10 @@ func TestCtrlRPersistsSidebarVisibilityToSession(t *testing.T) {
 		t.Fatal("expected ctrl+r to hide sidebar")
 	}
 
-	// Session should have the sidebar preference saved
 	if ses.SidebarVisible == nil || *ses.SidebarVisible {
 		t.Fatal("expected session.SidebarVisible to be false after ctrl+r")
 	}
 
-	// Global config should NOT be modified — reload from disk
 	loaded, err := config.Load(cfg.FilePath)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -1173,8 +1156,7 @@ func TestProviderPanelRendersSelectedVendorEnvVar(t *testing.T) {
 
 func TestProviderPanelEndpointSectionKeepsTightHeight(t *testing.T) {
 	height := providerPanelEndpointHeight(2)
-	// #909: the old -2 clipped the bottom two rows (count=2 rendered 4
-	// body lines but the container capped at 2). bodyRows(2)=4, +1 header.
+
 	if height != 5 {
 		t.Fatalf("expected endpoint section height 5 (fits all 4 body lines), got %d", height)
 	}
@@ -1182,8 +1164,7 @@ func TestProviderPanelEndpointSectionKeepsTightHeight(t *testing.T) {
 
 func TestProviderPanelVendorSectionUsesWindowedHeight(t *testing.T) {
 	height := providerPanelVendorHeight(20)
-	// maxRows doubled from 12→24, so 20 vendors no longer truncate
-	// bodyRows=21, +1(header)+4(chrome) = 26
+
 	if height != 26 {
 		t.Fatalf("expected vendor section height 26, got %d", height)
 	}
@@ -1191,7 +1172,7 @@ func TestProviderPanelVendorSectionUsesWindowedHeight(t *testing.T) {
 
 func TestProviderPanelModelSectionUsesStableFiveRowWindow(t *testing.T) {
 	height := providerPanelModelHeight(false)
-	// providerPanelVisibleModelRows=10, so height = 10+1(border)=11
+
 	if height != 11 {
 		t.Fatalf("expected provider model section height 11, got %d", height)
 	}
@@ -1199,7 +1180,7 @@ func TestProviderPanelModelSectionUsesStableFiveRowWindow(t *testing.T) {
 
 func TestProviderPanelModelSectionAddsFilterRowWhenNeeded(t *testing.T) {
 	height := providerPanelModelHeight(true)
-	// filter adds 1 row: 10+1(filter)+1(border)=12
+
 	if height != 12 {
 		t.Fatalf("expected provider model section height 12 with filter row, got %d", height)
 	}
@@ -1242,8 +1223,6 @@ func TestMouseEventsDoNotReachInput(t *testing.T) {
 	}
 }
 
-// --- Status bar rendering ---
-
 func TestStatusBarWithCostInfo(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -1256,8 +1235,6 @@ func TestStatusBarWithCostInfo(t *testing.T) {
 		t.Error("expected token and cost info to be hidden from status bar")
 	}
 }
-
-// --- Status bar rendering ---
 
 func TestSessionCostHintEmptyWhenNoSession(t *testing.T) {
 	m := newTestModel()
@@ -1309,7 +1286,7 @@ func TestSessionCostHintShowsDollarForMetered(t *testing.T) {
 		},
 	}
 	hint := stripAnsi(m.sessionCostHint())
-	// Token count should be present
+
 	if !strings.Contains(hint, "tok") {
 		t.Errorf("expected 'tok' in hint, got %q", hint)
 	}
@@ -1476,7 +1453,6 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 		m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: false, Result: "line1\nline2"})
 	}
 
-	// Verify chatList has all 7 tool items with correct params
 	if m.chatList == nil || m.chatList.Len() != 7 {
 		t.Fatalf("expected 7 chatList items, got %d", m.chatList.Len())
 	}
@@ -1514,8 +1490,7 @@ func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
 	if !strings.Contains(output, "Reading docs/spec.md") {
 		t.Fatalf("expected friendly subagent activity summary, got %q", output)
 	}
-	// spawn_agent/wait_agent internal tool names must stay hidden,
-	// but the /agent prefix + ID is intentionally shown as a user-visible label.
+
 	if strings.Contains(output, "spawn_agent") || strings.Contains(output, "wait_agent") {
 		t.Fatalf("expected subagent lifecycle internals to stay hidden, got %q", output)
 	}
@@ -1692,7 +1667,6 @@ func TestAgentStreamMsgRendersMarkdownLive(t *testing.T) {
 	})
 	updated := next.(Model)
 
-	// Verify streaming text appears in rendered output (chatList or legacy)
 	got := renderedOutput(&updated)
 	if !strings.Contains(stripAnsi(got), "Streaming title") {
 		t.Fatalf("expected streaming title in output, got %q", stripAnsi(got))
@@ -1727,7 +1701,6 @@ func TestToolBoundaryFlushPreservesRenderedMarkdown(t *testing.T) {
 	}
 	m = next.(Model)
 
-	// Verify both the streaming text and tool status appear in rendered output
 	got := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(got, "Partial title") {
 		t.Fatalf("expected partial title preserved in output, got %q", got)
@@ -1738,7 +1711,7 @@ func TestStatusBarEmptyWhenNotLoading(t *testing.T) {
 	m := newTestModel()
 	m.loading = false
 	bar := m.renderStatusBar()
-	// Should return empty string when not loading
+
 	if strings.TrimSpace(bar) != "" {
 		t.Errorf("expected empty status bar when not loading, got: %q", bar)
 	}
@@ -1778,8 +1751,6 @@ func TestComposerPanelUsesModeColors(t *testing.T) {
 		t.Fatal("expected composer panel rendering to change with mode color")
 	}
 }
-
-// --- AutoComplete rendering ---
 
 func TestAutoCompleteSlashCommands(t *testing.T) {
 	m := newTestModel()
@@ -1827,18 +1798,15 @@ func TestAutoCompleteMentionHeader(t *testing.T) {
 
 func TestSlashAutocompleteEnterExecutesCommand(t *testing.T) {
 	m := newTestModel()
-	// Simulate slash autocomplete state for a command with no placeholder.
-	// applyAutoComplete() should execute it immediately when not loading.
+
 	m.autoCompleteActive = true
 	m.autoCompleteKind = "slash"
 	m.autoCompleteItems = []string{"/clear", "/exit"}
 	m.autoCompleteIndex = 0
 	m.input.SetValue("/cl")
 
-	// Call applyAutoComplete directly — this is what the Enter handler invokes.
 	_ = m.applyAutoComplete()
 
-	// /clear has no placeholder, so it should execute immediately.
 	if m.input.Value() != "" {
 		t.Errorf("expected input to be cleared after executing slash command, got %q", m.input.Value())
 	}
@@ -1848,7 +1816,7 @@ func TestSlashAutocompleteEnterExecutesCommand(t *testing.T) {
 	if len(m.history) != 1 || m.history[0] != "/clear" {
 		t.Errorf("expected selected slash command to be added to history, got %v", m.history)
 	}
-	// /clear may or may not return a cmd depending on implementation — don't assert on nil.
+
 }
 
 func TestMentionAutocompleteEnterOnlyCompletesInput(t *testing.T) {
@@ -1902,7 +1870,7 @@ func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
 
 func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	m := newTestModel()
-	// Mode is now persisted to session metadata, not config file.
+
 	ses := session.NewSession("", "", "")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
 	m.session = ses
@@ -1926,7 +1894,7 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 
 func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	m := newTestModel()
-	// Mode is now persisted to session metadata, not config file.
+
 	ses := session.NewSession("", "", "")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
 	m.session = ses
@@ -1935,7 +1903,7 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from /mode set")
 	}
-	// two-mode refactor: auto normalizes to supervised.
+
 	if m.mode != permission.SupervisedMode {
 		t.Fatalf("expected in-memory mode %v (auto normalizes), got %v", permission.SupervisedMode, m.mode)
 	}
@@ -1988,10 +1956,7 @@ func TestAgentToolStatusMsgCountsToolsInsideEventLoop(t *testing.T) {
 }
 
 func TestAutopilotApprovalAutoContinues(t *testing.T) {
-	// two-mode refactor: the legacy autopilot auto-approve fast path is
-	// removed - autopilot normalizes to bypass, whose retained floors must
-	// reach a human. Both the legacy enum value and BypassMode now record
-	// the pending approval instead of silently allowing it.
+
 	for _, mode := range []permission.PermissionMode{permission.AutopilotMode, permission.BypassMode} {
 		m := newTestModel()
 		m.mode = mode
@@ -2011,8 +1976,7 @@ func TestAutopilotApprovalAutoContinues(t *testing.T) {
 }
 
 func TestAutopilotDiffConfirmAutoContinues(t *testing.T) {
-	// two-mode refactor: same removal as the approval fast path - diff
-	// confirmations in the bypass surface must reach a human.
+
 	for _, mode := range []permission.PermissionMode{permission.AutopilotMode, permission.BypassMode} {
 		m := newTestModel()
 		m.mode = mode
@@ -2297,13 +2261,9 @@ func TestAgentErrMsgFormatsAnthropicSerializationFailure(t *testing.T) {
 }
 
 func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
-	// Blind-spot contract (updated): an unrecognized error now EMBEDS the
-	// raw error text and schedules an auto-retry instead of hiding the
-	// cause behind "Request failed. Please retry shortly". The old contract
-	// (strip "chat error:" prefix) is superseded - visibility is the point.
+
 	t.Cleanup(func() {
-		// maybeBlindSpotRetry force-enables file logging globally; undo so
-		// later tests in this package don't inherit live sinks.
+
 		debug.Close()
 		os.Unsetenv("GGCODE_DEBUG")
 	})
@@ -2320,29 +2280,25 @@ func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
 	m = next.(Model)
 
 	output := renderedOutput(&m)
-	// The chat panel soft-wraps at spaces and interleaves ANSI codes, so
-	// strip escapes and normalize whitespace before substring checks.
+
 	norm := regexp.MustCompile(`\s+`).ReplaceAllString(stripANSIForTest(output), " ")
-	// Generic failure message still present.
+
 	if !strings.Contains(norm, "Request failed") {
 		t.Fatalf("expected generic failure message, got %q", output)
 	}
-	// Raw cause is now visible (the whole point of the blind-spot rework).
+
 	if !strings.Contains(norm, "upstream timeout") {
 		t.Fatalf("expected raw error text to be visible, got %q", output)
 	}
-	// No doubled "Error:" prefix from formatUserFacingError wrapping.
+
 	if strings.Contains(norm, "Error: Error:") {
 		t.Fatalf("expected no double error prefix, got %q", output)
 	}
-	// Debug file logging was force-enabled with a visible path notice.
+
 	if !strings.Contains(norm, "Debug log") {
 		t.Fatalf("expected debug logging notice, got %q", output)
 	}
-	// Blind-spot errors must NEVER auto-resubmit: the value-receiver counter
-	// trap made the old auto-retry loop unbounded (every retry displayed
-	// 1/5), submitText duplicated the user turn, and attachments were
-	// dropped. The replacement is diagnosis-only with a manual /retry hint.
+
 	if cmd != nil {
 		t.Fatalf("no auto-retry cmd may be scheduled")
 	}
@@ -2353,8 +2309,6 @@ func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
 		t.Fatalf("expected manual /retry hint, got %q", output)
 	}
 }
-
-// --- Update message handling ---
 
 func TestUpdateWindowSizeMsg(t *testing.T) {
 	m := newTestModel()
@@ -2442,11 +2396,7 @@ func TestUpdateKeyMsgEnterEmpty(t *testing.T) {
 }
 
 func TestStartupInputGraceWindowDropsEarlyKeyboardRunes(t *testing.T) {
-	// Keyboard input is intentionally NOT suppressed during the startup gate
-	// window. Only mouse events are suppressed. Suppressing keys caused
-	// character swallowing reported by users, so early keypresses now pass
-	// through to the input field.
-	// Real keyboard input sends one character per KeyPressMsg.
+
 	m := newTestModel()
 	m.startedAt = time.Now()
 
@@ -2613,13 +2563,12 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	if m.input.Value() != "" {
 		t.Errorf("expected input to clear after queuing, got %q", m.input.Value())
 	}
-	// User input should be rendered in the conversation view like a normal submission.
-	// The prefix "❯ " is styled with ANSI codes, so we just check for the text content.
+
 	outputStr := renderedOutput(&m)
 	if !strings.Contains(outputStr, "hi") {
 		t.Error("expected user input 'hi' to appear in output, got:", outputStr)
 	}
-	// Should NOT show the old "[queued N pending]" hint.
+
 	if strings.Contains(outputStr, "[queued") {
 		t.Error("should not show [queued...] hint, got:", outputStr)
 	}
@@ -2866,7 +2815,7 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	if !cancelled {
 		t.Error("expected cancel func to run")
 	}
-	// With textarea, pending items are joined with newlines.
+
 	if got := m.input.Value(); !strings.Contains(got, "first question") || !strings.Contains(got, "second question") || !strings.Contains(got, "draft") {
 		t.Fatalf("unexpected restored input: %q", got)
 	}
@@ -2908,7 +2857,7 @@ func TestCtrlCCancelDoesNotRestoreHiddenPendingSubmission(t *testing.T) {
 func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.cancelFunc = func() {} // #1768: a CANCELLABLE run - visible-state clearing only applies then
+	m.cancelFunc = func() {}
 	m.statusActivity = "Thinking..."
 	m.statusToolName = "npm run type-check"
 	m.statusToolArg = "type-check"
@@ -2953,7 +2902,7 @@ func TestCancelledBusyRunKeepsSubAgentDoneQueued(t *testing.T) {
 	if !m.loading {
 		t.Fatal("expected run to remain in cancelling state until agentDone arrives")
 	}
-	// New behavior: sub-agent completion does NOT queue agentHint when busy.
+
 	if count := m.pendingSubmissionCount(); count != 0 {
 		t.Fatalf("expected 0 pending submissions (no inject when busy), got %d", count)
 	}
@@ -3107,8 +3056,6 @@ func TestResizeStillAllowsNormalRuneInput(t *testing.T) {
 	}
 }
 
-// --- renderOutput ---
-
 func TestRenderOutputEmpty(t *testing.T) {
 	m := newTestModel()
 	result := renderedOutput(&m)
@@ -3158,15 +3105,10 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 	}
 }
 
-// Regression for #1882: the project-memory gate (#1762) must cover every
-// message entry, not just local/remote. Tunnel, webchat, and cron messages
-// arriving during the startup loading window must queue instead of starting
-// an uninjected first run. The three handlers are gated on cancelFunc == nil
-// (or !loading); with projectMemoryLoading set they must NOT start a run.
 func TestProjectMemoryLoadingQueuesTunnelWebchatAndCron(t *testing.T) {
 	m := newTestModel()
 	m.projectMemoryLoading = true
-	m.cancelFunc = nil // agent idle
+	m.cancelFunc = nil
 
 	asModel := func(t *testing.T, v tea.Model) *Model {
 		t.Helper()
@@ -3188,33 +3130,25 @@ func TestProjectMemoryLoadingQueuesTunnelWebchatAndCron(t *testing.T) {
 		}
 	}
 
-	// Tunnel inbound: queues behind the loading window.
 	model, _ := m.Update(tunnelInboundMsg{text: "from phone"})
 	assertNoRunQueued(model, "tunnel message")
 
-	// Webchat inbound: same gate.
 	m3 := newTestModel()
 	m3.projectMemoryLoading = true
 	m3.cancelFunc = nil
 	model3, _ := m3.Update(webchatUserMsg{Text: "from web"})
 	assertNoRunQueued(model3, "webchat message")
 
-	// Cron firing: same gate (no run, no immediate submit).
 	m5 := newTestModel()
 	m5.projectMemoryLoading = true
 	m5.loading = false
-	// Cron firing: same gate. Cron's default busy semantics are SKIP, not
-	// queue - the gate's contract here is only that no uninjected run
-	// starts during the loading window (pending stays empty with the
-	// default queue_if_busy=false).
+
 	model5, _ := m5.Update(cronPromptMsg{Prompt: "tick"})
 	if mm := asModel(t, model5); mm.cancelFunc != nil {
 		t.Fatal("cron firing must not start a run during project-memory loading")
 	}
 }
 
-// #1712 case 3: once freeform typing has started on a MIXED question,
-// space must reach the text input (was: toggle choice forever).
 func TestAskUserMixedQuestionSpaceFlowsToInputAfterTyping1712(t *testing.T) {
 	m := newTestModel()
 	response := make(chan tool.AskUserResponse, 1)
@@ -3232,17 +3166,13 @@ func TestAskUserMixedQuestionSpaceFlowsToInputAfterTyping1712(t *testing.T) {
 	}, response, LangEnglish)
 	m.pendingQuestionnaire.input.Focus()
 
-	// Simulate freeform typing already in progress (the space-key routing
-	// under test is identical whether the text arrived keystroke-by-
-	// keystroke or programmatically).
 	qs := m.pendingQuestionnaire
 	qs.input.SetValue("two")
 	if !qs.input.Focused() {
 		t.Fatalf("input not focused")
 	}
 	before := qs.input.Value()
-	// Real terminal drivers populate Text for the space rune; a bare
-	// Code-only msg inserts nothing (bubbles default branch uses msg.Text).
+
 	m2, _ := m.handleQuestionnaireKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	if got := m2.pendingQuestionnaire.input.Value(); got != before+" " {
 		t.Fatalf("space must reach input once typing started, got %q (before=%q)", got, before)

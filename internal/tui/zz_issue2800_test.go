@@ -1,13 +1,5 @@
 package tui
 
-// #2800 source pins: aborting an in-progress edit with Esc must fully leave
-// custom-add mode, and the `e` key-edit entry must never run while a stale
-// customMode flag is set. The bug: Esc cleared only editingField, so
-// customMode lingered with residual name/url inputs; a later `e` edit on an
-// existing target was hijacked into the custom "key" branch of
-// handleStreamPanelEnter - appending a bogus target (or failing "All fields
-// required") instead of saving the edited key.
-
 import (
 	"os"
 	"strings"

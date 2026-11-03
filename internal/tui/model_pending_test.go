@@ -2,9 +2,6 @@ package tui
 
 import "testing"
 
-// TestConsumeVisiblePrefixReturnsImages pins #1411-A: Esc-cancel restore
-// used to drop the screenshots attached to queued messages - only the text
-// came back, the placeholder bubble was removed, no hint remained.
 func TestConsumeVisiblePrefixReturnsImages(t *testing.T) {
 	q := &pendingQueue{}
 	imgs := []imageAttachedMsg{{sourcePath: "shot.png"}}
@@ -23,10 +20,6 @@ func TestConsumeVisiblePrefixReturnsImages(t *testing.T) {
 	}
 }
 
-// TestResetConversationViewClearsTodos pins #1409: todos are session-scoped
-// (TodoFilePath(sessionID)); /clear and /sessions resume must not carry
-// session A's snapshot into session B (spurious "removed" diffs, suppressed
-// sidebar auto-open, stale sidebar until B's first todo_write).
 func TestResetConversationViewClearsTodos(t *testing.T) {
 	m := newTestModel()
 	m.todoSnapshot = map[string]todoStateItem{"a1": {ID: "a1", Status: "in_progress"}}

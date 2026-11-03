@@ -25,8 +25,8 @@ type nostrPanelState struct {
 	createMode    bool
 	createInput   string
 	editState     imAdapterEditState
-	qrCode        string // npub QR code rendered as text
-	generatedNpub string // npub to display alongside QR
+	qrCode        string
+	generatedNpub string
 }
 
 type nostrBindingEntry struct {
@@ -44,8 +44,8 @@ type nostrBindingEntry struct {
 type nostrBindResultMsg struct {
 	message string
 	err     error
-	qrCode  string // rendered QR code for npub
-	npub    string // npub public key
+	qrCode  string
+	npub    string
 }
 
 func (m *Model) openNostrPanel() {
@@ -299,9 +299,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 1 {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): the switch below consumes at most
-		// name+key+relays (3 fields); anything beyond that was silently
-		// dropped. Reject extras.
+
 		if len(fields) > 3 {
 			return nostrBindResultMsg{err: errors.New("extra fields after relays (values must not contain spaces): " + spec)}
 		}
@@ -311,7 +309,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		var relays string
 		switch len(fields) {
 		case 1:
-			// Auto-generate key, use default relays
+
 			privateKey = nostr.GeneratePrivateKey()
 			relays = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
 		case 2:
@@ -330,18 +328,14 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 				"relays":      relays,
 			},
 		}
-		// #1367 family batch 2: config write + disk save moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
-				// #1384 附案: validate the key BEFORE AddIMAdapter persists
-				// it - a bad key used to land in the yaml and then error on
-				// every later start (dirty config the user had to hand-edit).
+
 				if userKey := privateKey; userKey != "" {
-					// Only precheck user-supplied keys; generated ones are
-					// valid by construction.
+
 					if fields1 := strings.Fields(spec); len(fields1) >= 2 {
 						if err := im.ValidateNostrPrivateKey(userKey); err != nil {
 							return fmt.Errorf("panel.nostr: %w", err)
@@ -354,19 +348,13 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext private key - without
-						// compensation a wrong key stays on disk forever and
-						// blocks the name on retry ("already exists"); the panel
-						// has no delete key. The rollback REMOVE is itself a map
-						// write, so it must route through configMutationMsg too
-						// (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -382,20 +370,12 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 					}
 					if err := m.startNostrAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errNostrEnableNeeded) {
-							// #1745 case 1: enable on the Update loop, then
-							// retry the rest of this flow.
+
 							return m.enableNostrAdapterMutation(name, nil)
 						}
 						return rollback(err)
 					}
 
-					// Derive public key for QR code. #2626: privateKey may be
-					// nsec1... (bech32) - validation accepts it, but go-nostr's
-					// helpers are hex-only, so feeding the raw string made every
-					// encode error get swallowed by `_` and the panel showed an
-					// empty npub / invalid `nostr:` QR while claiming success.
-					// Normalize first (same helper the adapter runtime uses),
-					// and surface encode errors instead of discarding them.
 					privateKey = im.NormalizeNostrPrivateKey(privateKey)
 					pubKey, err := nostr.GetPublicKey(privateKey)
 					if err != nil {
@@ -410,7 +390,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 
 					var msg string
 					if len(fields) == 1 {
-						// Show nsec for auto-generated key so user can back it up
+
 						nsec, _ := nip19.EncodePrivateKey(privateKey)
 						msg = m.t("panel.nostr.message.added_bot_key", name, nsec)
 					} else {
@@ -432,11 +412,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 }
 
 func (m *Model) startNostrAdapterIfNeeded(name string) error {
-	// #1745 case 1: callers run on Cmd goroutines; the auto-enable used to
-	// call SetIMAdapterEnabled (config map write) right here - a
-	// concurrent map read/write fatal against render. Split into a check
-	// (safe anywhere) + an apply (must run on the Update loop); the bind and
-	// create-next paths route the apply through configMutationMsg.
+
 	needEnable, err := m.nostrAdapterNeedsEnable(name)
 	if err != nil {
 		return err
@@ -447,12 +423,8 @@ func (m *Model) startNostrAdapterIfNeeded(name string) error {
 	return m.startEnabledNostrAdapter(name)
 }
 
-// errNostrEnableNeeded signals the caller to route the enable through
-// configMutationMsg instead of writing config inline.
 var errNostrEnableNeeded = errors.New("nostr adapter needs enable-on-update-loop")
 
-// nostrAdapterNeedsEnable reports whether the adapter is absent from the
-// runtime snapshot and disabled in config (the auto-enable case).
 func (m *Model) nostrAdapterNeedsEnable(name string) (bool, error) {
 	if m.imManager == nil || m.config == nil {
 		return false, nil
@@ -477,14 +449,10 @@ func (m *Model) nostrAdapterNeedsEnable(name string) (bool, error) {
 	return !adapterCfg.Enabled, nil
 }
 
-// startEnabledNostrAdapter brings the (already-enabled) adapter up.
 func (m *Model) startEnabledNostrAdapter(name string) error {
 	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
-// enableNostrAdapterMutation returns the configMutationMsg that performs the
-// auto-enable on the Update loop and then starts the adapter, continuing
-// with the caller's follow-up Cmd.
 func (m *Model) enableNostrAdapterMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -528,8 +496,7 @@ func (m *Model) bindNostrEntry(entry nostrBindingEntry) tea.Cmd {
 		}
 		if err := m.startNostrAdapterIfNeeded(entry.Adapter); err != nil {
 			if errors.Is(err, errNostrEnableNeeded) {
-				// #1745 case 1: enable rides configMutationMsg (Update loop);
-				// the bind itself runs in its follow-up.
+
 				return m.enableNostrAdapterMutation(entry.Adapter, func(m *Model) tea.Msg {
 					cmd := m.bindNostrEntry(entry)
 					if cmd == nil {
@@ -557,10 +524,7 @@ func (m *Model) bindNostrEntry(entry nostrBindingEntry) tea.Cmd {
 func (m *Model) unbindNostrEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
-			// #4601: bindNostrEntry reports config_unavailable for a nil
-			// manager; returning an empty result here left err and message
-			// blank, so the panel rendered nothing and the keypress was
-			// silently swallowed.
+
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
 		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
@@ -573,13 +537,10 @@ func (m *Model) unbindNostrEntry(adapterName string) tea.Cmd {
 func (m *Model) clearNostrChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
-			// #4601: same as unbind - never swallow the operation silently.
+
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
-		// #898/#905: this was the UNBIND path mislabeled as "clear
-		// channel" (whole workspace binding lost) AND reported success
-		// even when no binding matched. Clear channel fields only;
-		// surface not-found instead of a false "cleared".
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return nostrBindResultMsg{err: err}
 		}

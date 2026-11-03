@@ -48,8 +48,6 @@ import (
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
-// persistSessionFlag gates --persist-session: plain sessions append every
-// message to the session store (write-only; no auto-resume on startup).
 var persistSessionFlag bool
 
 func NewRootCmd() *cobra.Command {
@@ -63,7 +61,7 @@ func NewRootCmd() *cobra.Command {
 	var plainFlag bool
 	var outputPath string
 	var outputSchemaPath string
-	// r415 per-run budget overrides (see the RunE mutation site).
+
 	var tokenBudgetFlag int64
 	var timeBudgetFlag time.Duration
 	var helperManifest string
@@ -75,8 +73,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:     true,
 		TraverseChildren: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Global --version/-v: print and exit immediately, before any
-			// config loading or TUI initialization.
+
 			if showVer, _ := cmd.Flags().GetBool("version"); showVer {
 				fmt.Fprintln(cmd.OutOrStdout(), version.Display())
 				return nil
@@ -110,17 +107,11 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// #4117: ad-hoc provider mode zeroes the config-file association so
-			// nothing downstream can read or write ggcode.yaml on this run: no
-			// hot-reload watch (empty SetConfigPath), no config-tool write target.
+
 			if adhocLLM.adhocActive() {
 				cfgFile = ""
 			}
-			// r415: per-run budget override. Flags beat the config file for
-			// this invocation only (nothing is persisted); 0/unset keeps the
-			// configured value. Applies to both pipe mode and the TUI below,
-			// since both consume this same cfg through the agentruntime
-			// Apply* propagation.
+
 			if tokenBudgetFlag > 0 {
 				cfg.SessionTokenBudget = tokenBudgetFlag
 			}
@@ -135,16 +126,12 @@ func NewRootCmd() *cobra.Command {
 				}
 			}
 
-			// --plain (sa-46 terminal accessibility): set NO_COLOR early so
-			// every downstream renderer (daemon follow escapes, lipgloss TUI
-			// styles, spinners) converges on the same plain-output path.
 			if plainFlag {
 				if err := os.Setenv("NO_COLOR", "1"); err != nil {
 					fmt.Fprintln(os.Stderr, "warning: failed to set NO_COLOR:", err)
 				}
 			}
 
-			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
 				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputSchemaPath)
 				if code != 0 {
@@ -154,7 +141,6 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
-			// Warn if launched from HOME directory.
 			if !bypassFlag {
 				wd, _ := os.Getwd()
 				if home, err := os.UserHomeDir(); err == nil && wd == home {
@@ -162,10 +148,7 @@ func NewRootCmd() *cobra.Command {
 					if cfg.Language != "" {
 						lang = tui.NormalizeLanguage(cfg.Language)
 					}
-					// #4604: pick the variant by mode FIRST - the linear
-					// frontend cannot host the full-screen Bubble Tea dialog
-					// (garbled on dumb terminals); it gets the line-oriented
-					// y/N twin with the same i18n copy instead.
+
 					var confirmed bool
 					if plainFlag || isDumbTerminal() {
 						confirmed = tui.ConfirmHomeDirPlain(lang)
@@ -179,7 +162,6 @@ func NewRootCmd() *cobra.Command {
 				}
 			}
 
-			// Onboard wizard for first-time users without a working LLM config.
 			if !bypassFlag && cfg.NeedsOnboard() {
 				if err := runOnboardAndRestart(cfg); err != nil {
 					fmt.Fprintf(os.Stderr, "Onboard failed: %v\n", err)
@@ -191,8 +173,7 @@ func NewRootCmd() *cobra.Command {
 			resumePicker, _ := cmd.Flags().GetBool("resume-picker")
 			newSession, _ := cmd.Flags().GetBool("new-session")
 			if resumePicker {
-				// Run picker BEFORE any heavy initialization so the user
-				// doesn't wait after selecting/cancelling.
+
 				sessionDir, _ := session.DefaultDir()
 				store, err := session.NewJSONLStore(sessionDir)
 				if err != nil {
@@ -203,7 +184,7 @@ func NewRootCmd() *cobra.Command {
 					return err
 				}
 				if selectedID == "" {
-					// User cancelled — start fresh (no auto-load)
+
 					return run(cfg, cfgFile, "__new__", bypassFlag, plainFlag)
 				}
 				return run(cfg, cfgFile, selectedID, bypassFlag, plainFlag)
@@ -217,8 +198,6 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
 
-	// Global --version/-v flag — many tools and agents probe this before
-	// trying a "version" subcommand. Must be handled before RunE starts the TUI.
 	cmd.Flags().Bool("version", false, "print version and exit")
 	cmd.Flags().BoolP("v", "v", false, "shorthand for --version")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
@@ -235,14 +214,10 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&persistSessionFlag, "persist-session", false, "persist each message of a --plain session to the session store (write-only; no auto-resume)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
-	// r415: per-run budget overrides (this invocation only, not persisted).
-	// The time ladder steers (80%/95%/100%) like the token budget.
+
 	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
 	cmd.Flags().DurationVar(&timeBudgetFlag, "time-budget", 0, "per-run wall-clock soft budget override (e.g. 10m, 1h; 0 = use config)")
-	// #4117: ad-hoc provider flags (pipe mode). When --llm-base-url and
-	// --llm-model (or their GGCODE_LLM_* env equivalents) are both present,
-	// the config file is neither loaded nor written; provider settings come
-	// purely from these flags + env. See cmd/ggcode/adhoc.go.
+
 	cmd.Flags().StringVar(&adhocLLM.BaseURL, "llm-base-url", "", "ad-hoc provider mode: base URL of the endpoint (env "+adhocEnvBaseURL+")")
 	cmd.Flags().StringVar(&adhocLLM.Model, "llm-model", "", "ad-hoc provider mode: model name (env "+adhocEnvModel+")")
 	cmd.Flags().StringVar(&adhocLLM.APIKey, "llm-api-key", "", "ad-hoc provider mode: API key (env "+adhocEnvAPIKey+")")
@@ -265,8 +240,6 @@ func NewRootCmd() *cobra.Command {
 	helperCmd.Flags().StringVar(&helperManifest, "manifest", "", "update manifest path")
 	cmd.AddCommand(helperCmd)
 
-	// version subcommand — outputs version string and exits immediately.
-	// Used by installers, package managers, and cross-install detection.
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the ggcode version",
@@ -276,11 +249,8 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(versionCmd)
 
-	// config subcommand - print the effective configuration (secrets
-	// masked). Composes with the root --config path flag.
 	cmd.AddCommand(newConfigCmd(&cfgFile))
 
-	// Shell completion commands
 	completionCmd := &cobra.Command{
 		Use:       "completion [shell]",
 		Short:     "Generate shell completion script",
@@ -504,20 +474,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 
 	workingDir, _ := os.Getwd()
 	trace.Mark("working directory")
-	// Crash-leftover sweep: AtomicWriteFile temps orphaned by SIGKILL/OOM
-	// accumulate in .ggcode/ forever without this (sa-242 runtime audit).
+
 	if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(workingDir, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
 		debug.Log("root", "swept %d stale atomic-write temp file(s)", n)
 	}
-	// #3343 (sa-246 audit): the config root is the busiest AtomicWriteFile
-	// target (vendors.yaml, api keys, agent-rules.json...) yet was NOT in
-	// sweep scope - 7 crash-orphaned .ggcode-tmp-* temps (all 6952B) sat in
-	// ~/.ggcode forever. Same 1h staleness gate as the working-dir sweep.
+
 	if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
 		debug.Log("root", "swept %d stale atomic-write temp file(s) in config dir", n)
 	}
-	// #3346 (sa-247 audit): session todo files accumulate at HOME level with
-	// no deletion path; 30d retention sweep, same best-effort startup pattern.
+
 	safego.Go("startup.todoSweep", func() {
 		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
 	})
@@ -526,11 +491,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")
 
-	var ag *agent.Agent // declared early so closures can capture it
+	var ag *agent.Agent
 
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
 	if err == nil {
-		core.SetConfigPath(cfgFile) // #763: enable config hot-reload watch
+		core.SetConfigPath(cfgFile)
 	}
 	if err != nil {
 		return err
@@ -542,14 +507,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	projectAutoMem := core.ProjectAutoMem
 	saveMemoryTool := core.SaveMemoryTool
 	startupAssets := core.StartupAssets
-	// Startup notices (sa-45): MCP gate/merge warnings render as system
-	// messages on the first frame. Sleep-time consolidation findings are
-	// deliberately NOT appended anymore: they are agent-facing advisory
-	// (already injected into the system prompt via RepairSuggestions,
-	// agentruntime/prompt.go) - showing them in the TUI only surfaced
-	// regex-level false positives (broken-path heuristics on tool names /
-	// cross-project paths) as user-visible noise. User stays in the loop
-	// when the agent acts on a suggestion (save_memory/delete_memory).
+
 	startupNotices := core.StartupNotices
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager
@@ -583,7 +541,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		if skillUsageHandler != nil {
 			skillUsageHandler(usage)
 		}
-	}, nil, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
+	}, nil, nil)
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)
@@ -606,7 +564,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 
 	var subMgr *subagent.Manager
 
-	// Discover and register ACP agent clients (delegate tool)
 	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, nil)
 	agentruntime.RegisterDelegateTool(registry, acpClientMgr, func() *subagent.Manager { return subMgr }, workingDir, func() string {
 		if ag != nil {
@@ -619,7 +576,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}
 	trace.Mark("register acp client delegate tool")
 
-	// Collect tool names
 	tools := registry.List()
 	toolNames := make([]string, len(tools))
 	for i, t := range tools {
@@ -627,13 +583,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}
 	trace.Mark("collect tool names")
 
-	// Declare early so buildCurrentSystemPrompt closure can reference them.
 	var a2aRegistry *a2a.Registry
 	var lanchatHub *lanchat.Hub
 
-	// buildRemoteAgentMeta returns enrichment data (team, role, languages)
-	// from lanchat presence exchange, keyed by instance ID. Returns nil if
-	// lanchat is not available or no peers are known yet.
 	buildRemoteAgentMeta := func() map[string]a2a.RemoteAgentMeta {
 		if lanchatHub == nil {
 			return nil
@@ -654,29 +606,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return meta
 	}
 
-	// Start the background section collector before building the first system
-	// prompt. It performs a synchronous first refresh so all I/O-heavy sections
-	// (git status, project overview, toolchain, package symbols) are ready
-	// immediately, then refreshes on a timer. rebuildSystemPrompt reads the
-	// cached values without any I/O on the UI thread.
 	agentruntime.InitGlobalSectionCollector(workingDir)
 	defer agentruntime.StopGlobalSectionCollector()
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-		// Remote agents info is injected dynamically via systemPromptInjector
-		// (lanchat peers), not baked into the static prompt.
-		// #4502: detect git status LAZILY at every prompt build - the old
-		// closure captured the startup-time snapshot, so refreshAgentSystemPrompt
-		// (save_memory, knight reload, skills ticker) kept injecting a stale
-		// branch/dirty-count after mid-session commits and checkouts, while the
-		// sub-agent builder below detects live. Same freshness on both paths.
+
 		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
 
-	// Set the sub-agent system prompt builder on the skill tool now that
-	// buildCurrentSystemPrompt is available.
 	skillTool.SystemPromptBuilder = func(task, agentType string) string {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
@@ -696,18 +635,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}, task, agentType)
 	}
 
-	// Register skill tool now that SystemPromptBuilder is set (must be before
-	// any registry.Clone() for sub-agent/teammate tool isolation).
 	_ = registry.Register(skillTool)
 	trace.Mark("register skill tool")
 
-	// Register create_skill tool so the agent can create reusable skills.
 	_ = registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: workingDir})
 	trace.Mark("register create_skill tool")
 
-	// Register trial_fork tool (experimental, off by default): forks N git
-	// worktrees so sub-agents explore strategies in parallel, then reports
-	// a non-destructive recommendation.
 	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
 		_ = registry.Register(&tool.TrialForkTool{
 			Provider:     prov,
@@ -725,12 +658,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return append([]string(nil), promptSkillRefs...)
 	}
 
-	// Setup sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
 	trace.Mark("setup sub-agent manager")
 
-	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	agentruntime.RegisterCompactContextTool(registry, ag)
@@ -738,12 +669,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		// #2102: systemPrompt is written from THREE goroutines (the
-		// save_memory tool goroutine via SetAfterSave, the 2s skills
-		// ticker via SetSkillsChangedHook, and the bubbletea Update
-		// goroutine via SetSystemPromptRebuilder) - the mutex next door
-		// covered only promptSkillRefs, leaving the string's ptr+len
-		// header to tear under concurrent writes (-race mandatory fail).
+
 		promptSkillRefsMu.Lock()
 		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
@@ -779,16 +705,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	ag.SetSupportsVision(resolved.SupportsVision)
 	trace.Mark("setup agent")
 
-	// Setup session store
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
 	}
 	trace.Mark("create session store")
 
-	// Fire-and-forget: repair session index in the background. Discovers
-	// orphaned JSONL files not in the index so the next startup is correct.
-	// Non-blocking — current startup uses whatever index state exists.
 	safego.Go("startup.repairIndex", func() {
 		changed, err := store.RepairIndex()
 		if err != nil {
@@ -798,24 +720,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 	})
 
-	// Clean up stale lock files from crashed/killed processes.
 	storeDir, _ := session.DefaultDir()
 	session.CleanupStaleLocks(storeDir)
-	// #1490-E: CleanupOldJournals existed but was never wired into any
-	// production caller (only tests) - each session's ~300B crash journal
-	// accumulated forever because MarkCompleted keeps its file and
-	// CheckCrashedRun only removes >24h journals on a lucky resume. The
-	// design doc (run-state-journaling.md) says "called at startup"; now
-	// it actually is, alongside the lock cleanup.
+
 	agent.CleanupOldJournals(24 * time.Hour)
 
-	// #3337 (sa-243 audit): CleanupOlderThan is the same never-wired
-	// defect as #1490-E, at GB scale - ~/.ggcode/sessions had 3.5GB / 120
-	// sessions (largest 593MB) because retention existed since the #1490
-	// era but no production caller ever ran it. Async + best-effort:
-	// deletion latency on a big backlog must not block startup. Pinned
-	// sessions are skipped by CleanupOlderThan itself; 90d keeps this
-	// conservative (conversation data, not logs).
 	safego.Go("startup.sessionRetention", func() {
 		if n, err := store.CleanupOlderThan(time.Now().AddDate(0, 0, -90)); err != nil {
 			debug.Log("session", "retention sweep failed: %v", err)
@@ -824,11 +733,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 	})
 
-	// #3341 (sa-245 audit): every workspace that ever used named agents
-	// leaves a sha256-named dir under ~/.ggcode/subagents forever (3445
-	// observed, most holding a single artifact; the hash is not reversible
-	// so users cannot even identify them). Same async best-effort pattern;
-	// 90d matches the session retention default.
 	safego.Go("startup.subagentSweep", func() {
 		wd, _ := os.Getwd()
 		subagent.SweepStaleWorkspaceDirs(wd, 90*24*time.Hour)
@@ -837,28 +741,23 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
-		// Picker is now resolved before run() is called — this should not happen.
+
 		resumeID = ""
 	} else if resumeID == "__new__" {
-		// Picker cancelled — create new session, skip auto-load.
+
 	} else if resumeID != "" {
-		// Explicit --resume <id> or picker selection — acquire lock.
+
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, resumeID)
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			replPendingSessionLock = lock
 		} else if lockErr != nil {
-			// #1487-D: an IO/permission failure acquiring the lock is NOT a
-			// competing instance - the old merged message told the user
-			// "locked by another instance", sending them hunting for a rival
-			// process that does not exist. Name the real cause; behavior
-			// stays the safe fallback (new session).
+
 			shortID := resumeID
 			if len(shortID) > 8 {
 				shortID = shortID[:8]
 			}
 			fmt.Fprintf(os.Stderr, "  Warning: session lock check for %s failed (%v). Starting a new session.\n", shortID, lockErr)
-			// #2245: mirror the conflict branch - without this reset the
-			// path silently resumed with no lock held (double-writer window).
+
 			resumeID = ""
 		} else {
 			shortID := resumeID
@@ -869,10 +768,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			resumeID = ""
 		}
 	} else if resumeID == "" {
-		// Auto-load: find the most recent unlocked workspace session.
-		// Walk sessions from newest to oldest; first one we can lock wins.
-		// If all are locked by other instances, create a new session.
-		// Skip if --new-session was passed (handled by caller, resumeID="__new__").
+
 		workspace := workingDir
 		sessions, err := store.ListForWorkspace(workspace)
 		if err != nil {
@@ -884,11 +780,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			for _, ses := range sessions {
 				lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
 				if lockErr != nil {
-					// #4396: an IO/permission failure is NOT a competing
-					// instance - the #1487-D twin branch (fixed for --resume in
-					// 9860c360b but missed here). Name the real cause per
-					// session; the summary line below must not blame phantom
-					// instances either when every check failed on I/O.
+
 					shortID := ses.ID
 					if len(shortID) > 8 {
 						shortID = shortID[:8]
@@ -940,16 +832,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}
 	trace.Mark("start knight")
 
-	// Build MCP info for TUI
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
 	trace.Mark("build tui mcp info")
 
-	// #4604 Track 1: --plain or TERM=dumb (blank) degrade to the linear
-	// frontend BEFORE any TUI-shaped service (A2A server, lanchat hub,
-	// Bubble Tea program) starts - raw-mode frame refresh is precisely what
-	// dumb terminals cannot carry. The linear REPL rides the same agent and
-	// registry built above, so config hot-swap, tools, and sessions all
-	// keep working; only the visual panels are absent.
 	if plain || isDumbTerminal() {
 		trace.Mark("linear frontend fork")
 		code := RunLinearREPL(ag, registry, cfg, cfgFile, startupNotices)
@@ -960,22 +845,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return nil
 	}
 
-	// Start A2A server if enabled.
 	var a2aServer *a2a.Server
-	// a2aRegistry already declared above for system prompt access
+
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
-		// A2A instance override already applied by LoadWithInstance.
+
 		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
-			// #3677: startA2AServer's internal fail-fast (#1174) checks
-			// oauth2/oidc/mTLS config and returns errors the TUI path used
-			// to swallow into a debug-only log - the session then ran with
-			// no A2A server at all (not on the registry, invisible to LAN
-			// peers, remote dispatch silently dead) with zero user-visible
-			// signal. Surface it on the TUI's native startup-notice channel
-			// (same list the first frame renders); the daemon path keeps its
-			// stderr warning.
+
 			debug.Log("root", "A2A server startup warning: %v", err)
 			startupNotices = append(startupNotices, fmt.Sprintf(
 				"A2A server failed to start - remote task dispatch and LAN visibility are DISABLED for this session. Fix the a2a config to re-enable: %v", err))
@@ -983,17 +860,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
 			a2aTaskHandler = a2aHandler
-			// Advertise this instance's real local skills alongside the generic
-			// baseline so A2A peers can discover them (previously every node
-			// broadcast the same hardcoded 6-skill card).
+
 			a2aSrv.SetSkills(append(a2a.DefaultSkills(), localA2ASkills(commandMgr)...))
-			// Start async background refresh so CachedInstances() returns
-			// useful data without ever blocking the UI thread.
+
 			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
-				// #4155: stop the refreshCache ticker goroutine too.
+
 				a2aStopRefresh()
 				if a2aRegistry != nil {
 					_ = a2aRegistry.Unregister()
@@ -1006,34 +880,29 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}
 	trace.Mark("start a2a")
 
-	// Start LAN chat if A2A server is running.
-	// lanchatHub is declared above (before buildCurrentSystemPrompt) so the
-	// prompt builder closure can read lanchat presence meta for enrichment.
 	if a2aServer != nil && !cfg.A2A.Disabled {
 		chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
 		chatMode := "cli"
-		// In daemon-follow mode, auto-approve agent messages
+
 		lanchatHub = lanchat.NewHub(
 			a2aRegistry.SelfID(),
 			chatMode,
 			a2aServer.Endpoint(),
-			cfg.LanChat.EffectiveAPIKey(), // #1015: lanchat key decoupled from a2a.auth.api_key
+			cfg.LanChat.EffectiveAPIKey(),
 			chatStore,
 			lanchat.DetectWorkspaceMeta(workingDir),
 		)
 		lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
-		// Sync peers from A2A registry
-		// #4155: cancellable so the 10s ticker goroutine exits when run()
-		// returns instead of relying solely on process exit.
+
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
 				if instances == nil {
-					return // cache not populated yet
+					return
 				}
 				peers := make([]lanchat.Participant, 0, len(instances))
 				for _, inst := range instances {
@@ -1044,10 +913,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				}
 				lanchatHub.UpdatePeers(peers)
 			}
-			// Initial sync after 3s (let mDNS browser warm up)
+
 			time.Sleep(3 * time.Second)
 			syncPeers()
-			// Then periodic every 10s
+
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -1061,7 +930,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		})
 	}
 
-	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy, startupNotices)
 	skillUsageHandler = repl.SessionUsageHandler()
 	if a2aTaskHandler != nil {
@@ -1081,7 +949,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 			Workspace:        workingDir,
 			EnabledAdapters:  adapters,
-			RegisterInstance: false, // Deferred to detectAndAutoMute where session ID is available
+			RegisterInstance: false,
 		})
 		if err != nil {
 			return fmt.Errorf("initializing IM runtime: %w", err)
@@ -1120,7 +988,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	repl.SetSkillsChangedHook(refreshAgentSystemPrompt)
 	repl.SetSystemPromptRebuilder(func() string {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		promptSkillRefsMu.Lock() // #2102: same three-goroutine guard
+		promptSkillRefsMu.Lock()
 		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
 		promptSkillRefsMu.Unlock()
@@ -1143,10 +1011,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			CommandMgr:     commandMgr,
 			GlobalAutoMem:  autoMem,
 			ProjectAutoMem: projectAutoMem,
-			// #4570: lazy per-build detection, identical to the skillTool
-			// sub-agent builder (#4502) - the old closure returned the startup
-			// snapshot, so repl-created sub-agents carried a stale branch name
-			// and dirty count after any mid-session commit/checkout/worktree.
+
 			GitStatus:        func() string { return detectGitStatus(workingDir) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
@@ -1156,7 +1021,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	repl.SetAskUserTool(registry)
 	repl.SetCommandPane(registry, workingDir)
 	repl.SetKnight(knightAgent)
-	// Show knight status hint at startup (conflict takes priority, then general status)
+
 	if knightConflictHint != "" {
 		repl.SetKnightStartupHint(knightConflictHint)
 	} else if cfg.Knight().Enabled {
@@ -1166,30 +1031,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}
 	trace.Mark("wire repl dependencies")
 
-	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
-	// Post-compaction task-board rehydration (r53): task tool_results are
-	// summarized away on compaction; re-inject the live board so pending
-	// tasks and their IDs survive (Claude Code plan re-injection analog).
+
 	ag.SetTaskBoardSnapshotter(func() string { return taskMgr.Digest(20, 1200) })
 
 	cronSessionID := resumeID
 	if cronSessionID == "__new__" {
 		cronSessionID = ""
 	}
-	cronScheduler := agentruntime.NewSessionCronScheduler(cronSessionID, workingDir, nil) // enqueue callback wired by SetCronScheduler
+	cronScheduler := agentruntime.NewSessionCronScheduler(cronSessionID, workingDir, nil)
 	repl.SetCronScheduler(cronScheduler, registry)
-	// Ambient file-watch triggers (r372): fire-on-change prompts sharing
-	// the cron scheduler's enqueue channel (no-op until the repl wires it).
+
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
-	// Sleep-time compute (r373): pre-compact during idle windows.
+
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
-	// sa-63: every idle fire also re-runs the memory consolidation sweep,
-	// so long-lived sessions surface stale/conflicting memory without
-	// waiting for the startup-only sweep.
+
 	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 	repl.SetPlanModeTools(registry)
@@ -1197,19 +1056,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	repl.SetTaskOutputTool(subMgr, registry)
 	trace.Mark("register repl tools")
 
-	// Register swarm tools
 	swarmAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
 		reg, _ := tools.(*tool.Registry)
 		if reg == nil {
-			reg = registry // fallback to the main registry
+			reg = registry
 		}
 		a := agent.NewAgent(prov, reg, systemPrompt, maxTurns)
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
 	swarmToolBuilder := func(_ []string) interface{} {
-		cloned := registry.Clone() // each teammate gets independent tool instances
-		// Unconditionally remove tools that teammates must never use.
+		cloned := registry.Clone()
+
 		for _, name := range []string{
 			"ask_user", "spawn_agent", "wait_agent", "list_agents",
 			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
@@ -1248,17 +1106,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	repl.SetACPClientManager(acpClientMgr)
 	trace.Mark("setup swarm")
 
-	// Start webui for TUI mode (session browser + webchat)
 	webuiSrv := webui.NewServer(cfg)
 	webuiSrv.SetSessionStore(store, workingDir)
 	trace.Mark("create webui")
 
-	// Wire MCP status for webui config page
 	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
 		return mcpSnapshotToWebUI(mcpMgr.Snapshot())
 	})
 
-	// Wire A2A discover for webui config page
 	webuiSrv.SetA2ADiscoverFn(func() []webui.A2ADiscoveredInstance {
 		if a2aRegistry == nil {
 			return nil
@@ -1270,14 +1125,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return a2aInstancesToWebUI(instances)
 	})
 
-	// Wire IM status for webui config page
 	if imMgr != nil {
 		webuiSrv.SetIMStatusFn(func() []webui.IMRuntimeStatus {
 			return imSnapshotToWebUI(imMgr.Snapshot(), cfg)
 		})
 	}
 
-	// Wire Knight status for webui config page
 	webuiSrv.SetKnightStatusFn(func() webui.KnightStatus {
 		if knightAgent == nil {
 			return webui.KnightStatus{Enabled: false, Status: "not initialized"}
@@ -1396,14 +1249,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return string(data), nil
 	})
 
-	// Create TUI chat bridge: webchat messages → TUI event loop
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
 
-	// Wire WebUI restart: send remoteRestartMsg into the Bubble Tea event
-	// loop so the TUI cleanly shuts down and execRestarts (same mechanism
-	// as IM /restart and TUI /restart slash command).
 	webuiSrv.SetRestartFn(func() {
 		repl.InjectRestart()
 	})
@@ -1412,27 +1261,23 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 
 	actualAddr, webuiErr := webuiSrv.Start("127.0.0.1:0")
 	if webuiErr != nil {
-		// Silently continue — webui is optional
+
 		debug.Log("root", "webui failed to start: %v", webuiErr)
 	} else {
 		defer webuiSrv.Close()
-		// Schedule the URL display for after TUI is ready (see repl startup goroutine)
+
 		repl.SetWebUIReadyAddr(actualAddr, webuiSrv.Token())
-		// Expose runtime status via /api/status
+
 		repl.SetWorkingDir(workingDir)
 		webuiSrv.SetStatusFn(repl.RuntimeStatus)
 
-		// Port file management (issue #1189):
-		// For new sessions, write port file after real session ID is created.
-		// For resumed sessions, write immediately with actual ID.
 		actualSessionID := resumeID
 		if actualSessionID == "__new__" || actualSessionID == "" {
 			actualSessionID = ""
 		}
-		// Store initial session ID for cleanup tracking
+
 		repl.SetInitialSessionID(actualSessionID, cfg.DefaultMode)
 
-		// Write port file if we have a real session ID (resumed sessions)
 		if actualSessionID != "" {
 			if err := runfile.Write(runfile.PortFile{
 				Addr:      actualAddr,
@@ -1446,18 +1291,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 		}
 
-		// Register callback to rewrite port file when first real session ID is created
-		// (for new sessions where actualSessionID was empty above)
 		repl.SetSessionCreatedCallback(repl.HandleSessionCreated)
 
-		// Defer removal using the tracked session ID (updates when real ID is set)
 		defer func() {
 			runfile.Remove(repl.CurrentSessionID())
 		}()
 
-		// Ensure cleanup on syscall.Exec restart (defers don't fire on exec)
 		repl.SetPreExecCleanup(func() {
-			// Use the session ID at time of exec (may have been updated)
+
 			runfile.Remove(repl.CurrentSessionID())
 			if lanchatHub != nil {
 				lanchatHub.Close()
@@ -1473,7 +1314,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		repl.SetSessionLock(replPendingSessionLock)
 	}
 
-	// Wire config tool UI notify — sync TUI state after provider changes
 	core.SetConfigUINotify(func() {
 		repl.OnConfigProviderChanged()
 	})
@@ -1503,8 +1343,6 @@ func (t *startupTrace) Mark(label string) {
 	t.last = now
 }
 
-// tuiWebchatSender implements webui.WebchatMessageSender by routing webchat
-// messages into the TUI bubbletea event loop.
 type tuiWebchatSender struct {
 	repl *tui.REPL
 }
@@ -1516,12 +1354,10 @@ func (s *tuiWebchatSender) SendWebchatMessage(text string, images []provider.Con
 	s.repl.InjectWebchatMessage(text, images)
 }
 
-// a2aAPIKey resolves the A2A API key from config.
 func a2aAPIKey(cfg *config.Config) string {
 	return cfg.A2A.EffectiveAPIKey()
 }
 
-// a2aExtensionsFromConfig maps configured A2A extensions onto the wire type.
 func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtension {
 	if len(exts) == 0 {
 		return nil
@@ -1529,7 +1365,7 @@ func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtens
 	out := make([]a2a.AgentExtension, 0, len(exts))
 	for _, ext := range exts {
 		if ext.URI == "" {
-			continue // URI is the identity of an extension; skip degenerate entries
+			continue
 		}
 		out = append(out, a2a.AgentExtension{
 			URI:         ext.URI,
@@ -1541,12 +1377,6 @@ func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtens
 	return out
 }
 
-// localA2ASkills converts this instance's locally installed skills (user +
-// project sources) into A2A card skills so peers on the mesh can discover the
-// instance's real capabilities. Bundled skills are skipped - the generic set
-// from a2a.DefaultSkills already represents them; the gap this closes is that
-// user-built skill assets were previously invisible to A2A peers (every node
-// broadcast the same hardcoded 6-skill card).
 func localA2ASkills(m *commands.Manager) []a2a.Skill {
 	if m == nil {
 		return nil
@@ -1571,10 +1401,6 @@ func localA2ASkills(m *commands.Manager) []a2a.Skill {
 	return out
 }
 
-// knightScoreFromParams validates the score param of the knight skill
-// action record_effectiveness. #4463: usage_tracker defines the scale as
-// 1-5; an unbounded score would be persisted into the rolling
-// Effectiveness array and silently poison avgScore-driven scheduling.
 func knightScoreFromParams(params map[string]any) (int, error) {
 	score := 3
 	if v, ok := params["score"]; ok {
@@ -1588,12 +1414,6 @@ func knightScoreFromParams(params map[string]any) (int, error) {
 	return score, nil
 }
 
-// startA2AServer starts the A2A HTTP server, registers this instance in the local
-// registry, discovers other running instances, and registers cross-instance MCP tools.
-// a2aTimeoutWarnf emits the invalid-a2a.task_timeout warning. It is a
-// package-level variable so tests can capture the warning without swapping
-// the global os.Stderr, which races with concurrent stderr writers under CI
-// parallelism (main flake on 10b3dabf0, reported by reviewer seat).
 var a2aTimeoutWarnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
@@ -1604,17 +1424,11 @@ func parseA2ATimeout(s string) time.Duration {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		// #4397: silent fallback is undiagnosable - a typo'd config value
-		// ("90sec", "5") quietly shifted every remote task to 5m with no
-		// trace of the user's intent. Same "silent fallbacks must be
-		// diagnosable" principle as #4393's adhocInt.
+
 		a2aTimeoutWarnf("warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
 		return 5 * time.Minute
 	}
-	// #4462: a successfully parsed non-positive duration (e.g. "-5m" from a
-	// typo) would flow straight into time.NewTimer and expire instantly,
-	// failing every A2A task with no diagnostic. Normalize like
-	// parseA2AMaxTasks does for the task cap (#1422-A).
+
 	if d <= 0 {
 		return 5 * time.Minute
 	}
@@ -1644,35 +1458,26 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		},
 	}, handler)
 
-	// Wire OAuth2/OIDC token validation if configured
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
-		// Issue #1174: propagate the resolve error - an unknown provider name
-		// must abort startup instead of silently disabling token validation.
+
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: %w", err)
 		}
-		// Issue #1174: refuse to silently run without token validation when an
-		// oauth2 auth block is present but resolves to nothing (fail-open
-		// downgrade to the public default API key would otherwise be invisible).
+
 		if clientID == "" {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
 		}
-		// Issue #1175: derive the issuer from the OIDC discovery URL, never
-		// from the token endpoint - TokenURL is not a valid issuer and makes
-		// every validation path fail with per-request 401s.
+
 		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
 		if issuerURL == "" {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
 		}
-		// #1503: preset placeholders (AUTH0_TENANT/AZURE_TENANT) pass the
-		// non-empty checks and the server starts fine - then every JWKS
-		// fetch hits a NXDOMAIN and every request 401s silently. Fail fast
-		// at startup instead, matching the #1174/#1175 spirit.
+
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
@@ -1691,13 +1496,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 	if cfg.A2A.Auth.OIDC != nil {
 		oc := cfg.A2A.Auth.OIDC
-		// Issue #1174: propagate the resolve error instead of discarding it.
+
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: %w", err)
 		}
-		// Issue #1174: fail fast when the oidc block resolves to nothing.
+
 		if clientID == "" {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
@@ -1707,10 +1512,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
 		}
-		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
-		// (#1503) - without it an auth0/azure preset without a filled
-		// tenant starts the server clean and every JWKS fetch hits an
-		// NXDOMAIN placeholder host: silent per-request 401s.
+
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
@@ -1745,7 +1547,6 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a start: %w", err)
 	}
 
-	// Register this instance in the shared local registry.
 	instance := a2a.InstanceInfo{
 		ID:           a2a.GenerateInstanceID(),
 		PID:          os.Getpid(),
@@ -1761,24 +1562,15 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a register: %w", err)
 	}
 
-	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
-	// that don't speak A2A natively. These 4 tools let any MCP client discover
-	// and interact with this ggcode instance.
 	bridgeClient := a2a.NewClient(srv.Endpoint(), a2aAPIKey(cfg),
 		a2a.WithActivateExtensions(cfg.A2A.ActivateExtensions))
 	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
 		_ = reg.Register(t)
 	}
 
-	// Register A2A remote tool for agent-to-agent communication.
-	// This lets this ggcode agent discover and call other running ggcode instances.
 	remoteTool := a2a.NewRemoteTool(a2aReg, a2aAPIKey(cfg))
 	_ = reg.Register(remoteTool)
 
-	// Periodically refresh the remote instance cache so new instances are discovered.
-	// #4155: cancellable like the sibling StartBackgroundRefresh context the
-	// callers own - the ticker goroutine used to have no exit path and
-	// outlived the server teardown (latent leak, exposed by library reuse).
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	safego.Go("root.a2a.refreshCache", func() {
 		ticker := time.NewTicker(15 * time.Second)
@@ -1799,11 +1591,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 
 func init() {
 	debug.Init()
-	// Inject debug.Log into util package (can't import debug due to circular dep)
+
 	util.SetDebugLogFn(debug.Log)
 }
 
-// detectGitStatus returns a short git status string or "".
 func detectGitStatus(workingDir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1836,12 +1627,6 @@ func writerIsTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(fder.Fd()))
 }
 
-// parseA2AMaxTasks guards the A2A task cap. #1422-A: on a first-run
-// --bypass install Validate's early return (FirstRun + empty vendor)
-// skips the MaxTasks=5 default fill, the zero then OVERRODE the
-// handler's own default and active>=maxTasks rejected the very first
-// task - A2A dead for the whole process. Timeout had a fallback
-// (parseA2ATimeout); MaxTasks now has its counterpart.
 func parseA2AMaxTasks(n int) int {
 	if n <= 0 {
 		return 5

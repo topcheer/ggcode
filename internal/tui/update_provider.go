@@ -6,10 +6,8 @@ import (
 	"strings"
 )
 
-// handleProviderModelsRefreshResultMsg handles the corresponding message case.
 func (m Model) handleProviderModelsRefreshResultMsg(msg providerModelsRefreshResultMsg) (Model, tea.Cmd) {
-	// #1387-A: the discovered models write the config HERE (Update loop),
-	// never on the Cmd goroutine - family site 13 (Vendors map).
+
 	if msg.pendingModels != nil && msg.endpointID != "" {
 		vendor, epID, models := msg.vendor, msg.endpointID, msg.pendingModels
 		mut := configMutationMsg{
@@ -23,8 +21,7 @@ func (m Model) handleProviderModelsRefreshResultMsg(msg providerModelsRefreshRes
 				return providerModelsRefreshResultMsg{vendor: vendor, saveErr: err, updated: 0, discovered: 0}
 			},
 		}
-		// Set the panel state first, then route the write; the fail message
-		// re-enters this handler with saveErr set for the error banner.
+
 		m.providerPanelRefreshFromResult(msg)
 		return m, func() tea.Msg { return mut }
 	}
@@ -34,8 +31,6 @@ func (m Model) handleProviderModelsRefreshResultMsg(msg providerModelsRefreshRes
 	return m, nil
 }
 
-// providerPanelRefreshFromResult updates the refresh banner from a
-// (possibly save-failed) refresh result.
 func (m *Model) providerPanelRefreshFromResult(msg providerModelsRefreshResultMsg) {
 	if m.providerPanel == nil || m.providerPanel.refreshVendor != msg.vendor {
 		return
@@ -59,7 +54,6 @@ func (m *Model) providerPanelRefreshFromResult(msg providerModelsRefreshResultMs
 	}
 }
 
-// handleProviderAuthStartMsg handles the corresponding message case.
 func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.Cmd) {
 	if m.providerPanel != nil && msg.vendor == auth.ProviderAnthropic {
 		if msg.err != nil {
@@ -109,7 +103,6 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 
 }
 
-// handleProviderAuthResultMsg handles the corresponding message case.
 func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, tea.Cmd) {
 	if m.providerPanel != nil && msg.vendor == auth.ProviderAnthropic {
 		m.providerPanel.authBusy = false
@@ -136,13 +129,8 @@ func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, te
 
 }
 
-// handleModelPanelRefreshResultMsg handles the corresponding message case.
 func (m Model) handleModelPanelRefreshResultMsg(msg modelPanelRefreshResultMsg) (Model, tea.Cmd) {
-	// #1383-B: the discovered models write the config HERE (Update loop),
-	// never on the Cmd goroutine - family site 11 (Vendors/Endpoints map).
-	// Applied even when the panel was closed mid-refresh (panel==nil):
-	// the old code persisted unconditionally too - same semantics,
-	// now race-free. A save failure re-enters with saveErr for the banner.
+
 	if msg.remote && msg.saveErr == nil && m.config != nil {
 		vendor, endpoint, models := m.config.Vendor, m.config.Endpoint, msg.models
 		mut := configMutationMsg{
@@ -163,8 +151,6 @@ func (m Model) handleModelPanelRefreshResultMsg(msg modelPanelRefreshResultMsg) 
 	return m, nil
 }
 
-// applyModelRefreshPanelState updates the model panel from a refresh
-// result (possibly a save-failed re-entry).
 func (m *Model) applyModelRefreshPanelState(msg modelPanelRefreshResultMsg) {
 	if m.modelPanel == nil {
 		return

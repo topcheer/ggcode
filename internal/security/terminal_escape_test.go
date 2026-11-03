@@ -5,16 +5,12 @@ import (
 	"testing"
 )
 
-// Table set mirrors ATR-2026-00259 "ANSI Escape Code Terminal Injection"
-// true positives / true negatives / evasion tests, plus C1 and literal-form
-// coverage. Raw-byte attacks must be REMOVED; dangerous literal forms must
-// become "[ansi-filtered]"; benign literal color codes must survive.
 func TestSanitizeTerminalForDisplay_ATR2026_00259(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		wantSub []string // must be absent after sanitization
-		keepSub []string // must still be present
+		wantSub []string
+		keepSub []string
 	}{
 		{
 			name:    "ATR-TP1: OSC title hijack",
@@ -145,9 +141,6 @@ func TestSanitizeTerminalForDisplay_FastPathByteIdentical(t *testing.T) {
 	}
 }
 
-// The sanitizer must compose with secret redaction without interfering:
-// an escape-wrapped secret is still masked, and redaction must not be
-// confused by stripped sequences.
 func TestSanitizeComposesWithRedactForDisplay(t *testing.T) {
 	key := "sk-" + strings.Repeat("a", 30)
 	in := "\x1b]0;pwned\x07key=" + key + "\x1b[0m"

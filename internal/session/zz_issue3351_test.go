@@ -1,14 +1,5 @@
 package session
 
-// #3351: dedupeUserMsgs silently dropped image-only user messages on
-// session resume - userKey only accumulated text blocks, so an
-// image-only turn (desktop paste / IM photo, see
-// desktop/ggcode-desktop-wails/app.go SendMessageWithImages and
-// internal/im/daemon_bridge.go #1584-A) keyed as "" and the main loop's
-// `key == ""` branch discarded it. These tests pin the fix: image
-// blocks join the key via a cheap identity signature, so image-only
-// turns survive while byte-identical retry re-fires still collapse.
-
 import (
 	"strings"
 	"testing"
@@ -24,8 +15,6 @@ func txtBlock(s string) provider.ContentBlock {
 	return provider.ContentBlock{Type: "text", Text: s}
 }
 
-// Image-only user messages must survive the dedupe pass (the reported
-// bug: first and every subsequent image turn vanished on resume).
 func TestIssue3351ImageOnlyUserMsgSurvivesDedupe(t *testing.T) {
 	in := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{imgBlock("image/png", "aGF4eQ==")}},
@@ -41,8 +30,6 @@ func TestIssue3351ImageOnlyUserMsgSurvivesDedupe(t *testing.T) {
 	}
 }
 
-// Byte-identical retry re-fires of an image-only turn still collapse -
-// the #2324 write-side-artifact collapse must keep working.
 func TestIssue3351IdenticalImageReFireStillCollapses(t *testing.T) {
 	img := imgBlock("image/jpeg", "cmVwZWF0LWRhdGE=")
 	turn := provider.Message{Role: "user", Content: []provider.ContentBlock{img}}
@@ -59,7 +46,6 @@ func TestIssue3351IdenticalImageReFireStillCollapses(t *testing.T) {
 	}
 }
 
-// Same text with different images must NOT collide into one turn.
 func TestIssue3351SameTextDifferentImageKeptSeparately(t *testing.T) {
 	a := provider.Message{Role: "user", Content: []provider.ContentBlock{txtBlock("check this"), imgBlock("image/png", "QUFB")}}
 	b := provider.Message{Role: "user", Content: []provider.ContentBlock{txtBlock("check this"), imgBlock("image/png", "QkJC")}}
@@ -76,9 +62,6 @@ func TestIssue3351SameTextDifferentImageKeptSeparately(t *testing.T) {
 	}
 }
 
-// Pre-existing semantics stay pinned: text-only duplicates collapse,
-// tool_result carriers never participate, genuinely empty user writes
-// are still dropped.
 func TestIssue3351TextDedupeSemanticsUnchanged(t *testing.T) {
 	dup := provider.Message{Role: "user", Content: []provider.ContentBlock{txtBlock("same prompt")}}
 	in := []provider.Message{dup, {Role: "assistant", Content: []provider.ContentBlock{txtBlock("r")}}, dup}
@@ -106,9 +89,6 @@ func TestIssue3351TextDedupeSemanticsUnchanged(t *testing.T) {
 	}
 }
 
-// The key signature must be cheap but distinguishing: identical MIME
-// and data length alone must not merge two different images with no
-// text (prefix disambiguates).
 func TestIssue3351SignaturePrefixDisambiguates(t *testing.T) {
 	a := provider.Message{Role: "user", Content: []provider.ContentBlock{imgBlock("image/png", strings.Repeat("A", 64))}}
 	b := provider.Message{Role: "user", Content: []provider.ContentBlock{imgBlock("image/png", strings.Repeat("B", 64))}}

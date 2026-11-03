@@ -29,7 +29,7 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 			"Multiple instances can run simultaneously — each IDE window starts its own process.\n" +
 			"Use --config to specify per-workspace configuration files.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Resolve config file path with auto-discovery
+
 			resolvedCfg := *cfgFile
 			if resolvedCfg == "" {
 				path, err := resolveConfigFilePath()
@@ -44,7 +44,6 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			// Apply per-instance overrides from flags
 			if acpVendor != "" {
 				cfg.Vendor = acpVendor
 			}
@@ -55,7 +54,6 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 				cfg.Model = acpModel
 			}
 
-			// Resolve provider
 			resolved, err := cfg.ResolveActiveEndpoint()
 			if err != nil {
 				return fmt.Errorf("resolving endpoint: %w", err)
@@ -69,32 +67,23 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("creating provider: %w", err)
 			}
 
-			// Setup tool registry. The per-session CWD comes from session/new's "cwd" parameter.
-			// BypassMode here allows tool registration; actual permission control is in AgentLoop's
-			// ApprovalHandler which uses auto mode by default.
 			workingDir, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("resolving working directory: %w", err)
 			}
 
-			// Setup tool registry. Bypass permissions at registration level;
-			// actual per-session permission control is in AgentLoop's ApprovalHandler.
 			registry := tool.NewRegistry()
 			policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permission.BypassMode)
 			if err := tool.RegisterBuiltinTools(registry, policy, workingDir, cfg.ProtectedPaths, tool.NewSandboxPolicy(cfg.Sandbox.Enabled, cfg.Sandbox.AllowNetwork, cfg.Sandbox.ExtraWritePaths)); err != nil {
 				return fmt.Errorf("registering tools: %w", err)
 			}
 
-			// Create ACP transport and handler
 			transport := acp.NewTransport(os.Stdin, os.Stdout)
 			handler := acp.NewHandler(cfg, registry, transport, prov)
 
-			// Setup context with signal handling
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			// r71: reap managed background jobs when the ACP server exits so
-			// start_command children (detach=true included) do not orphan.
 			runErr := handler.Run(ctx)
 			if jm := registry.JobManager(); jm != nil {
 				jm.ShutdownAll(2 * time.Second)
@@ -103,7 +92,6 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 		},
 	}
 
-	// Local flags for per-instance overrides
 	cmd.Flags().StringVar(&acpVendor, "vendor", "", "override vendor (e.g., openai, anthropic)")
 	cmd.Flags().StringVar(&acpEndpoint, "endpoint", "", "override endpoint name")
 	cmd.Flags().StringVar(&acpModel, "model", "", "override model name")

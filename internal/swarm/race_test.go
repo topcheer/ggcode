@@ -16,11 +16,9 @@ func TestTeammateSnapshot_ConcurrentWithSpawnTeammate(t *testing.T) {
 
 	m.SetWorkingDir("/tmp")
 
-	// Snapshot goroutines continuously read team.Teammates while we spawn new teammates.
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Start multiple snapshot readers.
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -30,14 +28,13 @@ func TestTeammateSnapshot_ConcurrentWithSpawnTeammate(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					// This reads team.Teammates — must be safe concurrent with writes.
+
 					m.TeammateSnapshot("tm-999")
 				}
 			}
 		}()
 	}
 
-	// Spawn teammates concurrently (writes to team.Teammates).
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -47,7 +44,6 @@ func TestTeammateSnapshot_ConcurrentWithSpawnTeammate(t *testing.T) {
 		}(i)
 	}
 
-	// Wait for spawns to finish, then stop readers.
 	time.Sleep(500 * time.Millisecond)
 	close(stop)
 	wg.Wait()
@@ -65,7 +61,6 @@ func TestTeam_TeammatesMapConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Readers: continuously iterate teammates via snapshot.
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -85,7 +80,6 @@ func TestTeam_TeammatesMapConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Writers: add and remove teammates.
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(idx int) {

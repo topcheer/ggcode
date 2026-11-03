@@ -1,11 +1,5 @@
 package main
 
-// #3457 probe: install runs with DisableFlagParsing, so the inherited
-// --config flag lands in the raw args and sanitizeMCPInstallArgs must HAND
-// IT BACK (not drop it) so RunE honors the user's target config path. The
-// old version silently discarded it and Save() wrote the default path while
-// exit 0 claimed success - fail-silent misdirect.
-
 import (
 	"reflect"
 	"testing"

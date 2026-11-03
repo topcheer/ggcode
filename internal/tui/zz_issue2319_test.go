@@ -1,9 +1,5 @@
 package tui
 
-// #2319: the IM /cost & /usage twins read m.session.TokenUsage without
-// the sessionMutex the local /cost twin takes (#1366-C). Source pin:
-// both Summary functions must Lock/Unlock around the read.
-
 import (
 	"os"
 	"strings"

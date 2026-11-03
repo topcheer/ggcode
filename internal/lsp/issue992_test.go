@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// TestScanWorkspaceExtensionsSkipsRootName verifies that a workspace whose own
-// base name matches the skip list (e.g. ".work", "vendor") is still scanned,
-// while skip-listed subdirectories inside the workspace remain skipped.
-// Regression test for issue #992 problem 1.
 func TestScanWorkspaceExtensionsWorkspaceRootNotSkipped(t *testing.T) {
 	for _, rootName := range []string{".work", "vendor", "build", "dist", "target"} {
 		t.Run(rootName, func(t *testing.T) {
@@ -22,7 +18,7 @@ func TestScanWorkspaceExtensionsWorkspaceRootNotSkipped(t *testing.T) {
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			// Extension evidence at root and in a normal subdirectory.
+
 			for _, rel := range []string{"main.go", "pkg/util.go"} {
 				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
 					t.Fatal(err)
@@ -31,7 +27,7 @@ func TestScanWorkspaceExtensionsWorkspaceRootNotSkipped(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Skip-listed subdirectories: their files must NOT be collected.
+
 			for _, rel := range []string{
 				".git/config.go",
 				"node_modules/dep/index.go",
@@ -53,8 +49,6 @@ func TestScanWorkspaceExtensionsWorkspaceRootNotSkipped(t *testing.T) {
 	}
 }
 
-// TestScanWorkspaceExtensionsSkipsHiddenSubdirs verifies that dot-directories
-// under the workspace root are still skipped (only the root itself is exempt).
 func TestScanWorkspaceExtensionsSkipsHiddenSubdirs(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.ts"), []byte("x"), 0o644); err != nil {
@@ -72,11 +66,6 @@ func TestScanWorkspaceExtensionsSkipsHiddenSubdirs(t *testing.T) {
 	}
 }
 
-// TestCallFailsFastWhenSessionFailed verifies that call() returns an immediate
-// error once the client is in the failed state, rather than blocking until the
-// context deadline. Regression test for issue #992 problem 2 (TOCTOU between
-// the failed check and pending registration - at minimum, an already-failed
-// client must fail fast on the re-check path).
 func TestCallFailsFastWhenSessionFailed(t *testing.T) {
 	c := &stdioClient{pending: make(map[string]chan rpcEnvelope)}
 	c.failMu.Lock()
@@ -99,10 +88,6 @@ func TestCallFailsFastWhenSessionFailed(t *testing.T) {
 	}
 }
 
-// TestParseWorkspaceEditDeduplicatesDualSources verifies that when a server
-// populates both WorkspaceEdit.changes and WorkspaceEdit.documentChanges with
-// the same edit, parseWorkspaceEdit yields a single entry per file.
-// Regression test for issue #992 problem 3.
 func TestParseWorkspaceEditDeduplicatesDualSources(t *testing.T) {
 	const editJSON = `{
 		"changes": {

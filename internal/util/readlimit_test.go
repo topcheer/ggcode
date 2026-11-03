@@ -83,7 +83,7 @@ func TestReadAll_LimitConstants(t *testing.T) {
 }
 
 func TestReadAll_OneByteOverLimit(t *testing.T) {
-	// 101 bytes into a 100-byte limit
+
 	input := strings.Repeat("x", 101)
 	_, err := ReadAll(strings.NewReader(input), 100)
 	if err == nil {
@@ -92,7 +92,7 @@ func TestReadAll_OneByteOverLimit(t *testing.T) {
 }
 
 func TestReadAll_OneByteUnderLimit(t *testing.T) {
-	// 99 bytes into a 100-byte limit
+
 	input := strings.Repeat("x", 99)
 	data, err := ReadAll(strings.NewReader(input), 100)
 	if err != nil {

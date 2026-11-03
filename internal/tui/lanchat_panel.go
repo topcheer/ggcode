@@ -15,8 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// ---- Messages ----
-
 type lanchatMsg struct{ msg lanchat.Message }
 type lanchatReceiptMsg struct{ receipt lanchat.Receipt }
 type lanchatPeerJoinMsg struct{ participant lanchat.Participant }
@@ -25,53 +23,37 @@ type lanchatApprovalReqMsg struct{ pending lanchat.PendingAgentMsg }
 type lanchatNickChangeMsg struct{ nodeID, oldNick, newNick string }
 type lanchatAutoApproveMsg struct{ msg lanchat.Message }
 
-// ---- Panel State ----
-
 type lanChatPanelState struct {
-	// message input
 	input string
 
-	// @mention autocomplete
 	mentionMode  bool
 	mentionQuery string
 	mentionIdx   int
 	mentionList  []mentionTarget
 
-	// approval popup
 	approvalPopup bool
 	approvalIdx   int
 
-	// notice text (for errors/info within panel)
 	notice string
 }
 
-// mentionTarget is a single selectable entry in the @mention list.
-// One Participant can produce two targets: human and agent.
 type mentionTarget struct {
 	NodeID string
-	Nick   string // the actual nick to @mention
-	Role   string // lanchat.RoleHuman or lanchat.RoleAgent
+	Nick   string
+	Role   string
 }
 
 func (m *Model) openLanChatPanel() {
 	m.lanChatPanel = &lanChatPanelState{}
-	m.lanChatUnread = 0 // clear unread when opening
+	m.lanChatUnread = 0
 }
 
-// SetLanChatHub wires the lanchat hub and its callbacks into the TUI model.
-// sendMsg is r.sendTUI — NOT m.program.Send — because tea.NewProgram()
-// copies the model, so m.program is nil in the pre-copy model that the
-// closures capture. Using a function indirection lets callbacks deliver
-// messages to the real running event loop.
 func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 	m.lanChatHub = hub
 	if hub == nil {
 		return
 	}
-	// Model health reporting: classify run failures into degraded status,
-	// probe recovery in the background, and keep peers informed of the
-	// current model. The agent instance persists across provider swaps
-	// (ApplyProviderToAgent), so one-time registration is safe.
+
 	hub.SetHealthProber(func(ctx context.Context) error {
 		if m.agent == nil {
 			return fmt.Errorf("agent not ready")
@@ -91,37 +73,37 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 		hub.SetModel(m.config.Model)
 	}
 	hub.SetCallbacks(
-		// On message
+
 		func(msg lanchat.Message) {
 			if sendMsg != nil {
 				sendMsg(lanchatMsg{msg: msg})
 			}
 		},
-		// On receipt
+
 		func(r lanchat.Receipt) {
 			if sendMsg != nil {
 				sendMsg(lanchatReceiptMsg{receipt: r})
 			}
 		},
-		// On participant add
+
 		func(p lanchat.Participant) {
 			if sendMsg != nil {
 				sendMsg(lanchatPeerJoinMsg{participant: p})
 			}
 		},
-		// On participant remove
+
 		func(nodeID, humanNick string) {
 			if sendMsg != nil {
 				sendMsg(lanchatPeerLeaveMsg{nodeID: nodeID, humanNick: humanNick})
 			}
 		},
-		// On approval request
+
 		func(pending lanchat.PendingAgentMsg) {
 			if sendMsg != nil {
 				sendMsg(lanchatApprovalReqMsg{pending: pending})
 			}
 		},
-		// On nick change
+
 		func(nodeID, oldNick, newNick string) {
 			if sendMsg != nil {
 				sendMsg(lanchatNickChangeMsg{nodeID: nodeID, oldNick: oldNick, newNick: newNick})
@@ -130,12 +112,6 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 	)
 }
 
-// sanitizeLanChatDisplay strips terminal control characters from
-// peer-supplied display text. TAB/CR/LF/ESC and other C0 controls either
-// render as zero-width in lipgloss (breaking padding math) or act on the
-// terminal itself (tab-stop jumps, line splits) - both shatter panel
-// borders (#1014). Non-printable runes are dropped; printable text incl.
-// CJK/emoji passes through untouched.
 func sanitizeLanChatDisplay(s string) string {
 	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return s
@@ -154,11 +130,9 @@ func (m *Model) closeLanChatPanel() {
 	m.lanChatPanel = nil
 }
 
-// renderLanChatNotice shows a notification bar in the main chat when the
-// lanchat panel is closed and there are unread messages.
 func (m Model) renderLanChatNotice() string {
 	if m.lanChatPanel != nil {
-		return "" // panel open, no bar needed
+		return ""
 	}
 	if m.lanChatUnread == 0 && m.lanChatNotice == "" {
 		return ""
@@ -177,38 +151,23 @@ func (m Model) renderLanChatNotice() string {
 	return style.Render(text)
 }
 
-// ---- Update handling ----
-
 func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleLanChatKey(msg)
 	case lanchatMsg:
-		// Message was already processed by the Hub's HTTP handler before
-		// firing the onMessage callback. Do NOT call HandleIncomingMessage
-		// here — that would re-store the message and re-fire the callback,
-		// creating an infinite loop (hundreds of messages per second).
-		//
-		// Agent-directed messages (@agent) are handled separately via
-		// the approval flow and injected into the agent loop — they will
-		// appear as user messages in the conversation. Skip the system
-		// notification to avoid duplicate rendering.
+
 		if msg.msg.IsDirectToAgent() && msg.msg.ToNodeID == m.lanChatHub.NodeID() {
 			return m, nil
 		}
-		// Regular message — show a notification in the main panel if
-		// the chat panel is not visible.
+
 		if m.lanChatPanel == nil {
 			fromNick := msg.msg.FromNick
 			if fromNick == "" {
 				fromNick = "(unknown)"
 			}
 			m.lanChatUnread++
-			// Track last sender for # chat mode pre-fill. #1381-A: this is
-			// the SENDER (FromRole) - storing ToRole made the # reply pick the
-			// wrong @nick suffix: an agent DM (From=agent/To=human) stored
-			// "human" and the reply mention missed, broadcasts stored "" and
-			// never got the suffix at all.
+
 			m.lanChatLastSenderNick = msg.msg.FromNick
 			m.lanChatLastSenderRole = msg.msg.FromRole
 			m.lanChatLastSenderNodeID = msg.msg.FromNodeID
@@ -216,27 +175,23 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lanchatApprovalReqMsg:
-		// Auto-open the lanchat panel with approval popup so the user
-		// can approve/reject immediately. Previously the approval popup
-		// was only shown if the panel was already open, which meant
-		// @agent messages were silently stuck when the panel was closed.
+
 		if m.lanChatPanel == nil {
 			m.openLanChatPanel()
 		}
 		m.lanChatPanel.approvalPopup = true
 		return m, nil
 	case lanchatReceiptMsg:
-		// Suppress receipts for agent-to-agent messages — only human-to-human
-		// message status should be visible to the user.
+
 		if msg.receipt.FromRole == lanchat.RoleAgent {
 			return m, nil
 		}
-		// Show receipt status as a system message in the chat panel.
+
 		msgID := msg.receipt.MessageID
 		if utf8.RuneCountInString(msgID) > 8 {
 			msgID = string([]rune(msgID)[:8])
 		}
-		// Include who sent the receipt (from nick) for clarity.
+
 		fromLabel := msg.receipt.FromNick
 		if fromLabel == "" {
 			fromLabel = msg.receipt.FromNodeID
@@ -268,19 +223,16 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lanchatPeerJoinMsg:
-		// System message in main chat — do NOT call UpdatePeers here.
-		// The Hub already processed the peer before firing the callback.
-		// Calling UpdatePeers([single_peer]) would mark all OTHER peers
-		// as "not seen" and trigger mass offline callbacks.
+
 		nick := sanitizeLanChatDisplay(msg.participant.HumanNick)
 		if nick == "" {
 			nick = "(unknown)"
 		}
 		ep := sanitizeLanChatDisplay(msg.participant.Endpoint)
-		// Trim http:// prefix for display
+
 		ep = strings.TrimPrefix(ep, "http://")
 		ep = strings.TrimPrefix(ep, "https://")
-		// Include workspace/project name if available
+
 		wsInfo := ""
 		if pn := sanitizeLanChatDisplay(msg.participant.ProjectName); pn != "" {
 			wsInfo = fmt.Sprintf(" · %s", pn)
@@ -304,14 +256,14 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)%s", nick, ep, wsInfo))
 		return m, nil
 	case lanchatPeerLeaveMsg:
-		nick := sanitizeLanChatDisplay(msg.humanNick) // #1738 case 4: same surface as join (#1014)
+		nick := sanitizeLanChatDisplay(msg.humanNick)
 		if nick == "" {
 			nick = "(unknown)"
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s went offline", nick))
 		return m, nil
 	case lanchatNickChangeMsg:
-		// #1738 case 4: both nicks ride the broadcast - sanitize like join.
+
 		old := sanitizeLanChatDisplay(msg.oldNick)
 		if old == "" {
 			old = "(unknown)"
@@ -323,8 +275,7 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is now known as %s", old, new))
 		return m, nil
 	case lanchatAutoApproveMsg:
-		// Auto-approved message (policy=always or daemon mode) — inject into agent.
-		// Track for completed receipt when agent finishes.
+
 		m.lanChatPendingComplete = msg.msg.ID
 		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.msg.FromNick, msg.msg.Content)
 		return m, m.submitLanChatAgentText(agentText)
@@ -335,12 +286,10 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	p := m.lanChatPanel
 
-	// If approval popup is open, handle its keys
 	if p.approvalPopup {
 		return m.handleApprovalKey(msg)
 	}
 
-	// In mention mode, Enter and Tab both complete the mention
 	if p.mentionMode && len(p.mentionList) > 0 {
 		switch msg.String() {
 		case "enter", "tab":
@@ -372,10 +321,10 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleLanChatSend()
 	case "backspace":
 		if len(p.input) > 0 {
-			// Remove last rune (handles multi-byte chars)
+
 			runes := []rune(p.input)
 			p.input = string(runes[:len(runes)-1])
-			// If we're in mention mode and deleted the @, exit
+
 			if p.mentionMode && !strings.Contains(p.input, "@") {
 				p.mentionMode = false
 				p.mentionQuery = ""
@@ -383,16 +332,13 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
-		// Tab outside mention mode = no-op
+
 		return m, nil
 	case "up", "down":
-		// Up/down outside mention mode = no-op
+
 		return m, nil
 	default:
-		// Use msg.Key().Text for printable text — handles space, multi-byte
-		// chars (Chinese, etc.), and IME input correctly.
-		// msg.String() returns named keys like "space" for spacebar,
-		// which is useless for text input.
+
 		text := ""
 		if msg.Key().Text != "" {
 			text = msg.Key().Text
@@ -403,7 +349,7 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		p.input += text
-		// Handle @mention activation
+
 		if text == "@" && !p.mentionMode {
 			p.mentionMode = true
 			p.mentionQuery = ""
@@ -411,7 +357,7 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.refreshMentionList()
 			return m, nil
 		}
-		// Update mention query while typing after @
+
 		if p.mentionMode {
 			atIdx := strings.LastIndex(p.input, "@")
 			if atIdx >= 0 {
@@ -426,11 +372,7 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	p := m.lanChatPanel
 	pending := m.lanChatHub.PendingApprovals()
-	// #1738 case 3: every reset below sits inside a len(pending) > 0 guard -
-	// when the peer times out or cancels (#899) while the popup is open,
-	// pending empties, the popup flag never clears, and ALL keys stay
-	// hijacked-and-swallowed with nothing rendered (only esc escaped).
-	// An empty pending list is itself the reset signal.
+
 	if len(pending) == 0 {
 		p.approvalPopup = false
 		return m, nil
@@ -442,13 +384,12 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "enter", "y", "Y":
 		if len(pending) > 0 {
-			// #899: pending may shrink while the popup is open (timeout,
-			// remote cancel) — clamp or the index panics.
+
 			p.approvalIdx %= len(pending)
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
 			if approved != nil {
-				// Track for completed receipt when agent finishes
+
 				m.lanChatPendingComplete = approved.ID
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
@@ -457,9 +398,9 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "a", "A":
-		// Always Approve — set policy then approve this message
+
 		if len(pending) > 0 {
-			p.approvalIdx %= len(pending) // #899
+			p.approvalIdx %= len(pending)
 			msg := pending[p.approvalIdx].Message
 			m.lanChatHub.SetApprovalPolicy(msg.FromNick, "always")
 			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
@@ -473,12 +414,9 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "t", "T":
-		// Trust Node — endorse the peer NODE (stable device identity,
-		// unlike the nick-keyed "Always") and approve this message. The
-		// endorsement persists in trusted-peers.json and exempts this
-		// node's agent DMs from the requireAgentApproval gate.
+
 		if len(pending) > 0 {
-			p.approvalIdx %= len(pending) // #899
+			p.approvalIdx %= len(pending)
 			msg := pending[p.approvalIdx].Message
 			m.lanChatHub.SetTrustedPeer(msg.FromNodeID, true)
 			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
@@ -493,7 +431,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "n", "N", "r", "R":
 		if len(pending) > 0 {
-			p.approvalIdx %= len(pending) // #899
+			p.approvalIdx %= len(pending)
 			m.lanChatHub.RejectMessage(pending[p.approvalIdx].Message.ID, "rejected by host")
 			p.approvalPopup = false
 		}
@@ -520,11 +458,9 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
-	// Fresh send: drop the previous attempt's notice (errors below set
-	// it anew when applicable).
+
 	p.notice = ""
 
-	// Handle /nick command
 	if strings.HasPrefix(text, "/nick ") {
 		input := strings.TrimSpace(strings.TrimPrefix(text, "/nick "))
 		if input != "" && m.lanChatHub != nil {
@@ -538,45 +474,38 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Parse @mention
 	if strings.HasPrefix(text, "@") {
-		// Find the first space after the @mention
+
 		spaceIdx := strings.Index(text, " ")
 		if spaceIdx > 0 {
 			mention := text[1:spaceIdx]
 			content := strings.TrimSpace(text[spaceIdx:])
 
 			if content == "" {
-				return m, nil // empty message
+				return m, nil
 			}
 
-			// Find target participant
 			for _, part := range m.lanChatHub.Participants() {
 				if part.HumanNick == mention || part.AgentNick == mention {
 					role := lanchat.RoleHuman
 					if mention == part.AgentNick {
 						role = lanchat.RoleAgent
 					}
-					// #1381-B: surface delivery failure in the panel - the input was
-					// already cleared at :485, a dropped error meant silent loss.
+
 					if err := m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil); err != nil {
 						p.notice = fmt.Sprintf("send to %s failed: %v", mention, err)
 					}
 					return m, nil
 				}
 			}
-			// Mention not found
+
 			p.notice = fmt.Sprintf("Unknown @mention: %s", mention)
 			return m, nil
 		}
-		// @ with no space and no content — just the @nick, ignore
+
 		return m, nil
 	}
 
-	// Team-scoped broadcast (default: your own team)
-	// #1381-B: lanChatBroadcastTeam returns the first delivery error since
-	// #1362 - a dropped return here silently lost team broadcasts from the
-	// panel path.
 	if err := m.lanChatBroadcastTeam(context.Background(), text); err != nil {
 		p.notice = fmt.Sprintf("broadcast failed: %v", err)
 	}
@@ -593,21 +522,21 @@ func (m *Model) refreshMentionList() {
 	all := m.lanChatHub.Participants()
 	var targets []mentionTarget
 	for _, part := range all {
-		// Exclude self from mention list
+
 		if part.NodeID == selfID {
 			continue
 		}
 		if !part.Online {
 			continue
 		}
-		// Human target (only if nick is known)
+
 		if part.HumanNick != "" {
 			t := mentionTarget{NodeID: part.NodeID, Nick: part.HumanNick, Role: lanchat.RoleHuman}
 			if p.mentionQuery == "" || strings.HasPrefix(strings.ToLower(t.Nick), strings.ToLower(p.mentionQuery)) {
 				targets = append(targets, t)
 			}
 		}
-		// Agent target (only if different from human nick)
+
 		if part.AgentNick != "" && part.AgentNick != part.HumanNick {
 			t := mentionTarget{NodeID: part.NodeID, Nick: part.AgentNick, Role: lanchat.RoleAgent}
 			if p.mentionQuery == "" || strings.HasPrefix(strings.ToLower(t.Nick), strings.ToLower(p.mentionQuery)) {
@@ -624,8 +553,6 @@ func (m *Model) refreshMentionList() {
 	}
 }
 
-// ---- View ----
-
 func (m *Model) renderLanChatPanel() string {
 	p := m.lanChatPanel
 	if p == nil {
@@ -635,7 +562,6 @@ func (m *Model) renderLanChatPanel() string {
 	hub := m.lanChatHub
 	var body []string
 
-	// Online participants header — show one entry per human, not per role
 	onlineStr := "No one online"
 	if hub != nil {
 		parts := hub.Participants()
@@ -661,12 +587,10 @@ func (m *Model) renderLanChatPanel() string {
 	body = append(body, headerStyle.Render("Online: "+onlineStr))
 	body = append(body, "")
 
-	// Messages — show as many as fit in the panel, minus chrome lines
-	// (header + blank + input + hint + input line = ~5 lines)
 	if hub != nil {
 		msgs := hub.Messages()
 		availH := m.panelAvailableHeight()
-		// Reserve lines for header, blank, input hint, input line, padding
+
 		availMsgLines := availH - 6
 		if availMsgLines < 5 {
 			availMsgLines = 5
@@ -675,15 +599,14 @@ func (m *Model) renderLanChatPanel() string {
 		if len(msgs) == 0 {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  (no messages yet)"))
 		} else {
-			// Render messages from newest backward, accumulating until we run
-			// out of available lines. Each message may wrap to multiple lines.
+
 			var rendered []string
 			usedLines := 0
 			for i := len(msgs) - 1; i >= 0; i-- {
 				line := m.renderLanChatMessage(msgs[i])
-				lineHeight := lipgloss.Height(line) // may be >1 if content is long
+				lineHeight := lipgloss.Height(line)
 				if usedLines+lineHeight > availMsgLines && len(rendered) > 0 {
-					// No more room — add truncation indicator
+
 					remaining := len(msgs) - len(rendered)
 					if remaining > 0 {
 						rendered = append([]string{
@@ -700,11 +623,10 @@ func (m *Model) renderLanChatPanel() string {
 		}
 	}
 
-	// Approval popup
 	if p.approvalPopup && hub != nil {
 		pending := hub.PendingApprovals()
 		if len(pending) > 0 {
-			if p.approvalIdx >= len(pending) { // #899: clamp on render too
+			if p.approvalIdx >= len(pending) {
 				p.approvalIdx %= len(pending)
 			}
 			body = append(body, "")
@@ -718,7 +640,6 @@ func (m *Model) renderLanChatPanel() string {
 		}
 	}
 
-	// Mention autocomplete — one line per target (human or agent)
 	if p.mentionMode && len(p.mentionList) > 0 {
 		body = append(body, "")
 		for i, t := range p.mentionList {
@@ -736,7 +657,6 @@ func (m *Model) renderLanChatPanel() string {
 		}
 	}
 
-	// Input line
 	body = append(body, "")
 	inputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
 	hint := "[@] Mention  [Esc] Close"
@@ -745,9 +665,7 @@ func (m *Model) renderLanChatPanel() string {
 	}
 	body = append(body, inputStyle.Render(hint))
 	body = append(body, fmt.Sprintf("> %s_", p.input))
-	// #1381-C: p.notice was write-only - "Unknown @mention" and every
-	// send error set it but the renderer never showed it, stacking with
-	// the mis-routed # replies into fully silent failures.
+
 	if p.notice != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(p.notice))
 	}
@@ -755,7 +673,6 @@ func (m *Model) renderLanChatPanel() string {
 	return m.renderContextBox("/chat - LAN Chat", strings.Join(body, "\n"), lipgloss.Color("11"))
 }
 
-// renderLanChatMessage renders a single chat message with offline indicator.
 func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 	ts := time.UnixMilli(msg.Timestamp).Format("15:04")
 	icon := "[H]"
@@ -766,10 +683,9 @@ func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 	senderStyle := lipgloss.NewStyle().Bold(true)
 	contentStyle := lipgloss.NewStyle()
 
-	// Dim messages from offline users
 	senderOnline := m.lanChatHub != nil && m.lanChatHub.IsOnline(msg.FromNodeID)
 	if !senderOnline {
-		senderStyle = senderStyle.Foreground(lipgloss.Color("8")) // grey
+		senderStyle = senderStyle.Foreground(lipgloss.Color("8"))
 		contentStyle = contentStyle.Foreground(lipgloss.Color("8"))
 	}
 
@@ -777,7 +693,6 @@ func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 		return fmt.Sprintf("  [%s] %s%s: %s", ts, icon, senderStyle.Render(msg.FromNick), contentStyle.Render(msg.Content))
 	}
 
-	// Direct message
 	dmTag := "->"
 	if msg.ToRole == lanchat.RoleAgent {
 		dmTag = "->agent"
@@ -785,14 +700,13 @@ func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 	return fmt.Sprintf("  [%s] %s%s %s: %s", ts, icon, senderStyle.Render(msg.FromNick), dmTag, contentStyle.Render(msg.Content))
 }
 
-// handleNickCommand processes /nick <name> from the main chat input.
 func (m Model) handleNickCommand(parts []string) {
 	if m.lanChatHub == nil {
 		m.chatWriteSystem(nextSystemID(), "LAN chat is not available (A2A not enabled)")
 		return
 	}
 	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-		// Show current nick, role, and team
+
 		current := m.lanChatHub.HumanNick()
 		role := m.lanChatHub.Role()
 		team := m.lanChatHub.Team()

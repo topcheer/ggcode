@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// TestEnsureIMRuntimeConcurrentWaiterGetsStarterResult pins #1417-A: a
-// concurrent caller arriving while the starter is mid-flight used to get
-// an unconditional nil - fake success - and then nil-derefed imManager on
-// its next line. Waiters now block on done and observe the starter's real
-// outcome, error included.
 func TestEnsureIMRuntimeConcurrentWaiterGetsStarterResult(t *testing.T) {
 	m := newTestModel()
 	g := &imEnsureGuard{}
@@ -23,11 +18,9 @@ func TestEnsureIMRuntimeConcurrentWaiterGetsStarterResult(t *testing.T) {
 	g.err = startErr
 	g.mu.Unlock()
 
-	// Waiter arrives mid-start: must NOT get nil.
 	got := make(chan error, 1)
 	go func() { got <- m.ensureStartedCurrentWorkspaceIMRuntime("unavail", "disabled", false) }()
 
-	// Slight delay so the waiter is parked on done.
 	time.Sleep(50 * time.Millisecond)
 	g.mu.Lock()
 	g.starting = false

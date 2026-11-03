@@ -47,11 +47,7 @@ import (
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
-// REPL connects the agent to the TUI model.
 type REPL struct {
-	// streamCoalescer bounds renders from all high-frequency stream
-	// sources (tool progress, subagent tunnel text/reasoning). Created
-	// once with the first stream producer registration.
 	streamCoalescer     *toolProgressCoalescer
 	model               Model
 	agent               *agent.Agent
@@ -67,40 +63,33 @@ type REPL struct {
 	skillsChangedHook   func()
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
-	systemPromptBuilder func(task, agentType string) string // builds rich prompt for sub-agents
-	webuiAddr           string                              // webui listen address
-	webuiToken          string                              // webui auth token, displayed in URL fragment
-	knightStartupHint   string                              // one-time hint shown at startup (e.g. lock conflict)
+	systemPromptBuilder func(task, agentType string) string
+	webuiAddr           string
+	webuiToken          string
+	knightStartupHint   string
 	metricCollector     *metrics.Collector
 	metricCancel        context.CancelFunc
 	workingDir          string
 	cfg                 *config.Config
 	agentBusy           atomic.Bool
-	preExecCleanup      func() // called before syscall.Exec restart/tmux-enter
+	preExecCleanup      func()
 	cronScheduler       *cron.Scheduler
 	currentSessionMu    sync.RWMutex
-	currentSession      *session.Session // thread-safe, updated by setCurrentSession
-	// Port file management (issue #1189)
-	initialSessionID string // session ID used for initial port file write (empty for new sessions)
-	portFileMode     string // startup permission mode from config
+	currentSession      *session.Session
+
+	initialSessionID string
+	portFileMode     string
 }
 
-// NewREPL creates a new REPL with optional permission policy.
 func NewREPL(a *agent.Agent, policy permission.PermissionPolicy, startupNotices []string) *REPL {
 	m := NewModel(a, policy)
 	r := &REPL{
 		model: m,
 		agent: a,
 	}
-	// Share the agentBusy atomic between REPL and Model so that
-	// /api/status can read the live busy state (Model.loading changes
-	// happen inside the tea.Program which REPL doesn't see).
+
 	r.model.agentBusy = &r.agentBusy
-	// Startup notices (sa-45): flush user-actionable startup findings as
-	// system messages before the first frame. NewModel has already built
-	// chatList (chat_bridge has a nil guard), and the tunnel broker is
-	// nil-safe, so the append lands in the conversation and is pushed to
-	// desktop/tunnel peers once connected.
+
 	for i, notice := range startupNotices {
 		r.model.chatWriteSystem(fmt.Sprintf("startup-notice-%d", i), notice)
 	}
@@ -116,17 +105,14 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy, startupNotices 
 		a.SetMetricHandler(r.metricCollector.Emit)
 		r.model.metricCollectorFlush = r.metricCollector.Flush
 	}
-	// Register callbacks so /clear and /sessions can release the old session
-	// lock, acquire a new one, and rebind the cron scheduler.
+
 	r.model.sessionLockSwitch = r.switchSessionLock
 	r.model.sessionCronSwitch = r.switchSessionCron
-	// Register session update callback so persistHandler/checkpointHandler
-	// always see the correct session (r.model is a value snapshot, not live).
+
 	r.model.sessionUpdateCallback = r.setCurrentSession
 	return r
 }
 
-// SetSessionStore sets the session persistence store.
 func (r *REPL) SetSessionStore(s session.Store) {
 	r.store = s
 }
@@ -135,30 +121,19 @@ func (r *REPL) SessionUsageHandler() func(provider.TokenUsage) {
 	return func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") }
 }
 
-// SetMCPServers passes MCP server info to the TUI model.
 func (r *REPL) SetMCPServers(servers []MCPInfo) {
 	r.model.SetMCPServers(servers)
 }
 
-// SetA2AHandler passes the A2A task handler so the sidebar can show remote tasks.
 func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 	r.model.SetA2AHandler(h)
 }
 
-// SetLanChatHub connects the LAN chat hub for /chat panel support and
-// registers the lanchat tool so the agent can send messages, list
-// participants, and manage approvals programmatically.
-// RegisterCallbacks wires the TUI message-delivery callbacks into the agent.
-// This must be called after both r.agent and r.program are set, regardless
-// of whether LAN chat is configured. Previously these callbacks were inside
-// SetLanChatHub, which meant they were never registered when lanchat was
-// disabled — causing wait_command streaming and verify progress to silently
-// not work.
 func (r *REPL) RegisterCallbacks() {
 	if r.agent == nil {
 		return
 	}
-	// Use sendProgramMsgs which handles nil program gracefully.
+
 	r.agent.SetVerifyCallbacks(
 		func(text string) {
 			r.sendProgramMsgs(verifyProgressMsg{text: text})
@@ -167,13 +142,7 @@ func (r *REPL) RegisterCallbacks() {
 			r.sendProgramMsgs(verifyResultMsg{result: result})
 		},
 	)
-	// Coalesce tool-progress sends: latest-wins per toolID, flushed on a
-	// 120ms ticker. Every direct program.Send of toolProgressMsg triggered
-	// a full Bubble Tea Update+View on the main thread; with per-writer
-	// 300ms throttling across stdout/stderr and N parallel tools, the
-	// message rate saturated the render loop during command execution -
-	// typing felt laggy and spinner animation stuttered. Bounding renders
-	// to ~8/sec keeps live output smooth while leaving headroom for input.
+
 	coalesce := &toolProgressCoalescer{
 		send:       r.sendProgramMsgs,
 		next:       make(map[string]toolProgressMsg),
@@ -187,19 +156,11 @@ func (r *REPL) RegisterCallbacks() {
 	safego.Go("tui.toolProgressCoalescer", coalesce.run)
 }
 
-// toolProgressCoalescer bounds main-thread renders from streaming tools.
-//
-// It supports two merge modes per key:
-//   - replace (toolProgressMsg): latest snapshot wins - correct for
-//     tail-style updates where the producer already holds the full body.
-//   - append (tunnel stream text/reasoning): chunks concatenate in arrival
-//     order - required because consumers append per message and producer
-//     deltas are irreducible.
 type toolProgressCoalescer struct {
 	mu   sync.Mutex
 	send func(msgs ...tea.Msg)
 	next map[string]toolProgressMsg
-	// appendNext accumulates tunnel chunks per agentID between flushes.
+
 	appendNext map[string]subAgentTunnelStreamTextMsg
 	appendReas map[string]subAgentTunnelReasoningMsg
 }
@@ -214,9 +175,6 @@ func (c *toolProgressCoalescer) stage(toolID, toolName, output string) {
 	c.mu.Unlock()
 }
 
-// stageTunnelText buffers a subagent tunnel text chunk for the next flush.
-// Chunks for the same agent concatenate; N parallel streaming subagents
-// collapse to at most N renders per flush tick instead of one per token.
 func (c *toolProgressCoalescer) stageTunnelText(agentID, text string) {
 	if agentID == "" || text == "" {
 		return
@@ -229,7 +187,6 @@ func (c *toolProgressCoalescer) stageTunnelText(agentID, text string) {
 	c.mu.Unlock()
 }
 
-// stageTunnelReasoning buffers a reasoning chunk, same append semantics.
 func (c *toolProgressCoalescer) stageTunnelReasoning(agentID, text string) {
 	if agentID == "" || text == "" {
 		return
@@ -242,9 +199,6 @@ func (c *toolProgressCoalescer) stageTunnelReasoning(agentID, text string) {
 	c.mu.Unlock()
 }
 
-// run drains staged updates to the TUI at a fixed 120ms cadence. Runs for
-// the REPL's lifetime; sends after the program quits are no-ops
-// (sendProgramMsgs guards a nil program).
 func (c *toolProgressCoalescer) run() {
 	ticker := time.NewTicker(120 * time.Millisecond)
 	defer ticker.Stop()
@@ -258,9 +212,7 @@ func (c *toolProgressCoalescer) run() {
 		for _, m := range c.next {
 			msgs = append(msgs, m)
 		}
-		// Reasoning before text, mirroring buildBatchedStreamMessages:
-		// the TUI expands the reasoning block first, then collapses it
-		// when the text chunk arrives.
+
 		for _, m := range c.appendReas {
 			msgs = append(msgs, m)
 		}
@@ -286,15 +238,7 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			}
 			tools.Register(tool.NewLanChatTool(hub, lc))
 		}
-		// Inject dynamic lanchat peers info into the system prompt before
-		// each run. Shows all online peers (busy + idle), with same-workspace
-		// peers specially marked.
-		// Inject dynamic lanchat info into the system prompt before each
-		// run: the shared-workspace iron-rules alert (collision with other
-		// online agents in THIS directory) first, then the full peers list
-		// (same-workspace peers specially marked). Alert comes first so the
-		// rules stay salient. Both are re-evaluated every run, so restarts,
-		// resumed sessions and late-converging presence all converge.
+
 		hubCopy := hub
 		wd := r.workingDir
 		lang := ""
@@ -314,11 +258,7 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			}
 		})
 	}
-	// Register auto-approve callback: inject the message into the TUI event
-	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
-	// handles it. This ensures "always approve" policy actually triggers the
-	// agent — without this, auto-approved messages are silently dropped
-	// because they skip the pendingApproval queue.
+
 	if hub != nil {
 		hub.SetOnAutoApprove(func(msg lanchat.Message) {
 			r.sendTUI(lanchatAutoApproveMsg{msg: msg})
@@ -329,32 +269,21 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
 	r.mcpMgr = mgr
 	r.model.SetMCPManager(mgr)
-	// Bridge the manager's background state changes (connect/reconnect/
-	// disconnect emitUpdate) into the TUI event loop. Without this the MCP
-	// panel's "reconnecting ..." message never resolves even when the
-	// server connected successfully - the snapshot in m.mcpServers was only
-	// written once at startup. program.Send is goroutine-safe, and the
-	// callbacks fire from safego goroutines.
+
 	mgr.SetOnUpdate(func(infos []plugin.MCPServerInfo) {
 		r.sendTUI(mcpServersUpdatedMsg{servers: toMCPInfos(infos)})
 	})
 }
 
-// SetCore stores the runtime core reference for unified background service management.
 func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	r.core = core
 	if r.model.tunnelHost != nil {
 		r.model.tunnelHost.Close()
 	}
 	r.model.tunnelHost = core.Tunnel
-	// Wire the start_share/stop_share tools to this session (same injection
-	// pattern as SetIMManager / injectMobileFileSender). The tools then live
-	// for the whole session; ShareActive gates per-call behavior.
+
 	r.injectShareController()
 
-	// Wire the code index manager from the tool registry to the agent so
-	// that @ fuzzy file search (CompleteMention) can use it.
-	// Index start happens in Run() after TUI is fully ready.
 	if r.agent != nil && core.Registry != nil {
 		if cim := core.Registry.CodeIndex(); cim != nil {
 			r.agent.SetCodeIndexManager(cim)
@@ -362,23 +291,16 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	}
 }
 
-// SetResumeID sets the session ID to resume.
 func (r *REPL) SetResumeID(id string) {
 	r.resumeID = id
 }
 
-// SetSessionLock passes a pre-acquired session lock to the REPL.
-// The REPL will release it on shutdown or restart.
 func (r *REPL) SetSessionLock(lock *session.SessionLock) {
 	r.sessionLock = lock
 }
 
-// switchSessionLock releases the current session lock and acquires a new one
-// for the given session ID. Called by Model.handleClearChat via callback.
 func (r *REPL) switchSessionLock(newSessionID string) {
-	// Acquire the new lock BEFORE releasing the old one. If acquisition fails
-	// (session locked by another instance), we keep the old lock rather than
-	// ending up with no lock at all.
+
 	var newLock *session.SessionLock
 	if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
 		if lock, lockErr := session.TryAcquireSessionLock(storeDir, newSessionID); lockErr == nil && lock != nil && lock.Acquired() {
@@ -396,17 +318,12 @@ func (r *REPL) switchSessionLock(newSessionID string) {
 	}
 }
 
-// setCurrentSession updates the thread-safe current session pointer. Called
-// by the Bubble Tea model whenever the session changes (via callback).
 func (r *REPL) setCurrentSession(ses *session.Session) {
 	r.currentSessionMu.Lock()
 	r.currentSession = ses
 	r.currentSessionMu.Unlock()
 }
 
-// getCurrentSession returns the thread-safe current session pointer.
-// Used by persistHandler and checkpointHandler to get the LIVE session
-// instead of the stale r.model snapshot.
 func (r *REPL) getCurrentSession() *session.Session {
 	r.currentSessionMu.RLock()
 	defer r.currentSessionMu.RUnlock()
@@ -417,10 +334,6 @@ func (r *REPL) switchSessionCron(newSessionID string) {
 	r.switchSessionCronWithWorkspace(newSessionID, r.workingDir)
 }
 
-// switchSessionCronWithWorkspace rebinds the cron scheduler to a new session,
-// using the provided workspaceDir for migration. This is used when switching
-// sessions, including cross-workspace switches where the workspace may differ
-// from r.workingDir.
 func (r *REPL) switchSessionCronWithWorkspace(newSessionID, workspaceDir string) {
 	if r.cronScheduler != nil {
 		sessionPath, legacyPath := agentruntime.CronStorePaths(newSessionID)
@@ -429,40 +342,31 @@ func (r *REPL) switchSessionCronWithWorkspace(newSessionID, workspaceDir string)
 	}
 }
 
-// SetPreExecCleanup registers a cleanup function called before syscall.Exec
-// (restart / tmux-enter). Since syscall.Exec replaces the process image,
-// deferred cleanups never fire — this hook ensures port files are removed.
 func (r *REPL) SetPreExecCleanup(fn func()) {
 	r.preExecCleanup = fn
 }
 
-// SetConfig passes the config to the model for /model and /provider commands.
 func (r *REPL) SetConfig(cfg *config.Config) {
 	r.cfg = cfg
 	r.model.SetConfig(cfg)
 }
 
-// SetWorkingDir stores the workspace path for RuntimeStatus reporting.
 func (r *REPL) SetWorkingDir(wd string) {
 	r.workingDir = wd
 }
 
-// OnConfigProviderChanged is called by the config tool after a provider change.
-// It sends a Bubble Tea message to update the TUI state and triggers background tasks.
 func (r *REPL) OnConfigProviderChanged() {
 	if r.model.config == nil {
 		return
 	}
-	// Probe real context window in background (safe to call from any goroutine)
+
 	r.model.startContextProbe()
-	// Trigger Bubble Tea re-render so status bar and terminal title update
+
 	r.sendTUI(providerChangedMsg{})
 }
 
-// providerChangedMsg triggers a UI refresh after config tool changes the provider.
 type providerChangedMsg struct{}
 
-// systemMsg is a tea.Msg that displays a system message in the chat list.
 type systemMsg struct {
 	msg string
 }
@@ -492,8 +396,6 @@ func (r *REPL) SetSkillsChangedHook(hook func()) {
 	r.skillsChangedHook = hook
 }
 
-// SetRuntimeStatusProvider injects the runtime status provider into the
-// runtime tool so the LLM can query session ID, IM adapters, mobile status, etc.
 func (r *REPL) SetRuntimeStatusProvider() {
 	if r.agent != nil {
 		if tools := r.agent.ToolRegistry(); tools != nil {
@@ -508,7 +410,6 @@ func (r *REPL) SetRuntimeStatusProvider() {
 	}
 }
 
-// tuiRuntimeProvider implements tool.RuntimeStatusProvider for the TUI.
 type tuiRuntimeProvider struct {
 	repl *REPL
 }
@@ -571,7 +472,7 @@ func (p *tuiRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
 		return nil
 	}
 	snap := p.repl.model.imManager.Snapshot()
-	// Build adapter name → channel map from bindings
+
 	channels := make(map[string]string)
 	for _, b := range snap.CurrentBindings {
 		channels[b.Adapter] = b.ChannelID
@@ -591,10 +492,7 @@ func (p *tuiRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
 
 func (p *tuiRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 	var info tool.RuntimeMobileInfo
-	// Query tunnelHost directly as the authoritative source (matches desktop
-	// implementation). The Model-level tunnelSession/tunnelBroker fields can
-	// become stale after relay reconnection or restart, causing false
-	// "not connected" reports even when the tunnel is alive.
+
 	if host := p.repl.model.tunnelHost; host != nil {
 		if broker := host.OnlineBroker(); broker != nil {
 			info.Connected = broker.SessionID() != ""
@@ -606,7 +504,7 @@ func (p *tuiRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 		}
 		return info
 	}
-	// Fallback: Model-level fields (used before tunnelHost is initialized).
+
 	if p.repl.model.tunnelSession != nil {
 		info.Connected = p.repl.model.tunnelBroker != nil && p.repl.model.tunnelBroker.SessionID() != ""
 		if ti := p.repl.model.tunnelSession.Info(); ti != nil {
@@ -625,7 +523,7 @@ func (r *REPL) SetIMManager(mgr *im.Manager) {
 	r.model.SetIMManager(mgr)
 	if mgr != nil {
 		mgr.SetBridge(newTUIIMBridge(func() *tea.Program { return r.program }))
-		// Inject IM manager into the tool so LLM can manage adapters
+
 		if r.agent != nil {
 			if tools := r.agent.ToolRegistry(); tools != nil {
 				if t, ok := tools.Get("im"); ok {
@@ -648,31 +546,23 @@ func (r *REPL) SetKnight(k *knight.Knight) {
 	r.model.SetKnight(k)
 }
 
-// SetKnightStartupHint sets a one-time hint to show in the chat area at startup.
 func (r *REPL) SetKnightStartupHint(hint string) {
 	r.knightStartupHint = hint
 }
 
-// SetWebUIBridge sets the webui event broadcaster for forwarding agent
-// events to webchat subscribers.
 func (r *REPL) SetWebUIBridge(b WebUIEventBroadcaster) {
 	r.model.webuiBridge = b
 }
 
-// InjectWebchatMessage sends a webchat user message into the TUI event loop.
-// The message is handled like a normal user input — if the agent is idle,
-// it starts a new run; if busy, it queues as a pending interruption.
 func (r *REPL) InjectWebchatMessage(text string, images []provider.ContentBlock) {
 	if r.program != nil {
 		r.program.Send(webchatUserMsg{Text: text, Images: images})
 	}
 }
 
-// InjectRestart triggers a clean restart via the Bubble Tea event loop.
-// This is the same mechanism used by IM /restart and the TUI /restart slash command.
 func (r *REPL) InjectRestart() {
 	if r.program != nil {
-		// Explicit user/desktop action (#374).
+
 		r.program.Send(remoteRestartMsg{explicit: true})
 	}
 }
@@ -685,8 +575,6 @@ func (r *REPL) recordSessionUsage(usage provider.TokenUsage, source string) {
 	r.model.recordSessionUsage(usage, source)
 }
 
-// recordMetric persists a metric event to the session JSONL.
-// Called by the metrics collector goroutine (async, non-blocking for agent).
 func (r *REPL) recordMetric(ev metrics.MetricEvent) {
 	if r.program != nil {
 		r.program.Send(sessionMetricMsg{Metric: ev})
@@ -695,17 +583,11 @@ func (r *REPL) recordMetric(ev metrics.MetricEvent) {
 	r.model.recordSessionMetric(ev)
 }
 
-// SetWebUIReadyAddr stores the webui address and auth token to be displayed
-// in the TUI after startup. The actual program.Send happens in the startup
-// goroutine alongside logoMsg to ensure the TUI is ready.
 func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 	r.webuiAddr = addr
 	r.webuiToken = token
 }
 
-// SetInitialSessionID sets the session ID used for the initial port file write
-// (issue #1189). For new sessions this is empty; for resumed sessions it's the
-// actual ID. Used to track which file to remove on exit.
 func (r *REPL) SetInitialSessionID(sessionID, mode string) {
 	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID
@@ -713,8 +595,6 @@ func (r *REPL) SetInitialSessionID(sessionID, mode string) {
 	r.currentSessionMu.Unlock()
 }
 
-// CurrentSessionID returns the session ID currently tracked for port file cleanup.
-// For new sessions, this updates from empty to the real ID when the session is created.
 func (r *REPL) CurrentSessionID() string {
 	r.currentSessionMu.RLock()
 	id := r.initialSessionID
@@ -722,46 +602,32 @@ func (r *REPL) CurrentSessionID() string {
 	return id
 }
 
-// SetSessionCreatedCallback registers a callback that fires when the first real session
-// ID is set (issue #1189). The callback is invoked with the new session ID.
 func (r *REPL) SetSessionCreatedCallback(cb func(sessionID string)) {
 	r.model.SetSessionCreatedCallback(cb)
 }
 
-// HandleSessionCreated is the callback implementation that rewrites the port file
-// when a real session ID is set (issue #1189).
 func (r *REPL) HandleSessionCreated(sessionID string) {
 	r.onSessionCreated(sessionID)
 }
 
-// onSessionCreated is called when the first real session ID is set (issue #1189).
-// It rewrites the port file with the actual session ID, replacing the placeholder
-// written at startup. It also updates the cleanup key to match.
 func (r *REPL) onSessionCreated(sessionID string) {
 	if r.webuiAddr == "" {
-		// No WebUI started, nothing to rewrite
+
 		return
 	}
-	// initialSessionID is written by SetInitialSessionID (startup goroutine)
-	// and read here from the session-callback goroutine: guard with the same
-	// mutex as the rest of the current-session state.
+
 	r.currentSessionMu.RLock()
 	initial := r.initialSessionID
 	r.currentSessionMu.RUnlock()
 	if initial != "" && initial != sessionID {
-		// #1487-E: the session switched mid-run (e.g. --resume A then
-		// /clear created B). The old once-only callback never fired here,
-		// so the port file kept pointing at the stale ID for the rest of
-		// the run and the exit defer deleted the wrong file. Fall through
-		// and rewrite: the write below re-points the port file at the new
-		// session and updates the cleanup key to match.
+
 		debug.Log("repl", "onSessionCreated: session switched %s -> %s, rewriting port file", initial, sessionID)
 	}
 	if initial == "" {
-		// Placeholder case: remove any stale __new__ file (legacy safety)
+
 		runfile.Remove("__new__")
 	}
-	// Write the real port file
+
 	pf := runfile.PortFile{
 		Addr:      r.webuiAddr,
 		Token:     r.webuiToken,
@@ -775,14 +641,12 @@ func (r *REPL) onSessionCreated(sessionID string) {
 	} else {
 		debug.Log("repl", "onSessionCreated: wrote port file for session %s (replacing placeholder)", sessionID)
 	}
-	// Update the cleanup key so defer removes the correct file
+
 	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID
 	r.currentSessionMu.Unlock()
 }
 
-// SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
-// when skills or other dynamic parts change.
 func (r *REPL) SetSystemPromptRebuilder(fn func() string) {
 	r.model.SetSystemPromptRebuilder(fn)
 }
@@ -800,7 +664,6 @@ func (r *REPL) SetAutoMemoryFiles(files []string) {
 	r.model.SetAutoMemoryFiles(files)
 }
 
-// SetCheckpointManager wires the checkpoint manager into the agent and REPL.
 func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
 	r.agent.SetCheckpointManager(m)
 	r.agent.SetDiffConfirm(func(ctx context.Context, filePath, diffText string) bool {
@@ -808,15 +671,10 @@ func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
 	})
 }
 
-// SetSystemPromptBuilder sets the function used to build rich system prompts for sub-agents.
-// Must be called before SetSubAgentManager.
 func (r *REPL) SetSystemPromptBuilder(fn func(task, agentType string) string) {
 	r.systemPromptBuilder = fn
 }
 
-// SetSubAgentManager wires the sub-agent manager and registers sub-agent tools.
-// SetJobManager wires the shared background-command manager to the TUI model
-// so exit-time shutdownAll can reap running start_command jobs (r71).
 func (r *REPL) SetJobManager(jm *tool.CommandJobManager) {
 	if jm == nil {
 		return
@@ -849,9 +707,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		}
 		return nil
 	}
-	// Let spawn_agent tool labels show the effective model even when the LLM
-	// omits the model param (the sub-agent inherits the parent's runtime
-	// model). Mirrors the displayModel fallback in SpawnAgentTool.Execute.
+
 	agentRef := r.model.agent
 	spawnAgentModelResolver = func() string {
 		if agentRef == nil {
@@ -877,9 +733,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	}
 	tools.Register(spawnTool)
-	// P1-1: completion push - convert manager terminal states into the
-	// agent-local feed type (internal/agent cannot import internal/subagent;
-	// subagent imports agent for its runner factory).
+
 	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
 		var out []agent.SubagentCompletion
 		for _, st := range mgr.Statuses() {
@@ -907,7 +761,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Manager: mgr,
 		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
 	})
-	// r436: dynamic workflow orchestration (externalized task graph).
+
 	tools.Register(tool.WorkflowRunTool{
 		Manager: mgr,
 		Run:     agentruntime.WorkflowRunnerFor(spawnTool, mgr),
@@ -925,10 +779,8 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	})
 	tools.Register(tool.CancelAgentTool{Manager: mgr})
 
-	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(r.model.agent.WorkingDir())
-	// Wire the named agent model resolver so tool call labels show the
-	// template's configured model (e.g. "cron-runner [glm-4.5-air]").
+
 	namedAgentModelResolver = func(name string) string {
 		tmpl, err := tmplStore.Load(name)
 		if err != nil {
@@ -959,7 +811,6 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 
-	// Notify TUI on live updates and completion.
 	mgr.SetOnUpdate(func(sa *subagent.SubAgent) {
 		r.sendProgramMsgs(subAgentUpdateMsg{AgentID: sa.ID})
 	})
@@ -974,12 +825,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 			},
 		)
 	})
-	// Subagent tunnel streams bypass the 80ms batch ticker that the main
-	// assistant stream gets in submit.go - each provider delta went
-	// straight to program.Send (one full Update+View per token). With N
-	// parallel streaming subagents this was an unbounded render rate and
-	// the second major source of TUI jank. Route through the coalescer:
-	// chunks append per agentID, flushed at the coalescer's 120ms cadence.
+
 	if r.streamCoalescer == nil {
 		r.streamCoalescer = &toolProgressCoalescer{
 			send:       r.sendProgramMsgs,
@@ -1017,23 +863,15 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		})
 	})
 
-	// Forward sub-agent system events (retry, compaction) to the main panel
-	// as system messages, matching how the main agent displays them.
 	mgr.SetOnSystem(func(agentID, text string) {
 		r.sendProgramMsgs(subAgentSystemMsg{AgentID: agentID, Text: text})
 	})
 
-	// Start the background ticker that flushes accumulated stream
-	// text/reasoning chunks at ~12.5 Hz instead of per-token (~50-100 Hz
-	// per agent). Without this, 2+ concurrent sub-agents flood Bubble Tea's
-	// event loop with 200-400 messages/second, causing severe TUI stutter.
 	mgr.StartStreamBatcher()
 }
 
-// SetTaskManager wires the task manager and registers task tools.
 func (r *REPL) SetTaskManager(mgr *task.Manager, tools *tool.Registry) {
-	// The Model keeps the manager reference so the board can be snapshotted
-	// into session metadata (persist) and restored on session switch/resume.
+
 	r.model.taskMgr = mgr
 	tools.Register(tool.TaskCreateTool{Manager: mgr})
 	tools.Register(tool.TaskGetTool{Manager: mgr})
@@ -1042,12 +880,10 @@ func (r *REPL) SetTaskManager(mgr *task.Manager, tools *tool.Registry) {
 	tools.Register(tool.TaskStopTool{Manager: mgr})
 }
 
-// SetTaskOutputTool registers the task_output tool for reading sub-agent results.
 func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.TaskOutputTool{Provider: mgr})
 }
 
-// SetCronScheduler wires the cron scheduler and registers cron tools.
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	r.cronScheduler = s
 	r.model.SetCronScheduler(s)
@@ -1065,8 +901,6 @@ func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	tools.Register(tool.CronGetTool{Scheduler: s})
 }
 
-// RuntimeStatus returns current runtime state for external monitoring
-// via the WebUI /api/status endpoint.
 func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 	m := webui.RuntimeStatus{
 		PID:            os.Getpid(),
@@ -1080,20 +914,18 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		m.Model = r.cfg.Model
 		m.Language = r.cfg.Language
 	}
-	// Use getCurrentSession for the live session, not the stale r.model snapshot.
+
 	ses := r.getCurrentSession()
 	if ses != nil {
 		m.Workspace = ses.Workspace
 		m.PermissionMode = ses.PermissionMode
 	}
-	// agent is a pointer field — even in the stale r.model copy, it points
-	// to the same agent object (agent is never replaced after init).
+
 	if r.model.agent != nil && r.model.agent.ContextManager() != nil {
 		m.ContextWindow = r.model.agent.ContextManager().ContextWindow()
 		m.MaxTokens = r.model.agent.ContextManager().OutputReserve()
 	}
 
-	// IM adapter status
 	if r.model.imManager != nil {
 		snap := r.model.imManager.Snapshot()
 		for _, a := range snap.Adapters {
@@ -1107,7 +939,6 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		}
 	}
 
-	// Mobile tunnel connection status — query tunnelHost directly (authoritative).
 	if host := r.model.tunnelHost; host != nil {
 		if broker := host.OnlineBroker(); broker != nil {
 			m.MobileConn.Connected = broker.SessionID() != ""
@@ -1131,33 +962,18 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 	return m
 }
 
-// SetPlanModeTools registers plan mode tools with a mode switcher that
-// updates both the Model's mode and the ConfigPolicy. The switcher
-// remembers the previous mode so exit_plan_mode can restore it.
-// updates both the Model's mode and the ConfigPolicy. The switcher
-// remembers the previous mode so exit_plan_mode can restore it.
 func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	switcher := &replModeSwitcher{model: &r.model}
 	r.planSwitcher = switcher
 	tools.Register(tool.EnterPlanModeTool{Switcher: switcher})
 	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
 
-	// Inject the same switcher into the already-registered switch_mode tool
-	// so that LLM-initiated mode changes also update the TUI badge.
 	if sm, ok := tools.Get("switch_mode"); ok {
 		if smt, ok := sm.(*tool.SwitchModeTool); ok {
 			smt.SetSwitcher(switcher)
 		}
 	}
 
-	// Inject the restart requester so the LLM restart tool reuses the
-	// /restart machinery (session-preserving exec restart). The requester
-	// ARMS a pending restart via program.Send (never mutates Model directly —
-	// Bubble Tea models are value-copied, a direct write from the tool
-	// goroutine lands on a stale copy). armRestartMsg handling in model_update
-	// defers the quit until the current agent turn finishes (sibling tool
-	// results and trailing assistant text are persisted first), with a timeout
-	// fallback (#347).
 	if rt, ok := tools.Get("restart"); ok {
 		if rtt, ok := rt.(*tool.RestartTool); ok {
 			rtt.Requester = &replRestartRequester{repl: r}
@@ -1165,17 +981,6 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	}
 }
 
-// replRestartRequester adapts the restart tool to the SAME proven path used
-// by IM /restart (QQ/Telegram/etc) and the TUI /restart slash command:
-// program.Send(...) → quit flags → tea.Quit → Run() returns → execRestart
-// (session-preserving execve).
-//
-// Turn-awareness (#347): instead of a fixed 1s timer that execs mid-turn and
-// loses sibling tool results / trailing assistant text, the requester sends
-// armRestartMsg immediately. The model then defers the actual quit until the
-// agent turn completes (handleAgentDoneMsg / handleDoneMsg fire the pending
-// restart after persistFullSessionMessages), with a 30s fallback timer that
-// force-restarts if the turn hangs.
 type replRestartRequester struct {
 	repl *REPL
 }
@@ -1185,21 +990,16 @@ func (rr *replRestartRequester) RequestRestart(reason string, debugMode bool) {
 	if debugMode {
 		os.Setenv("GGCODE_DEBUG", "1")
 	}
-	// #1698 case 3: the tool schema promises the reason is "Shown to the
-	// user before the process restarts" - it rides armRestartMsg and the
-	// model_update handler renders it as a system chat notice (the old
-	// path never showed it anywhere but the debug log).
+
 	go safego.Run("tui.restart.arm", func() {
 		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode, reason: reason})
 	})
 }
 
-// SetSendMessageTool registers the send_message tool for agent communication.
 func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.SendMessageTool{Manager: mgr})
 }
 
-// SetACPClientManager wires the ACP client manager for clean shutdown.
 func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 	r.model.acpClientMgr = mgr
 	if mgr == nil {
@@ -1219,13 +1019,12 @@ func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			// #3370: run cancelled while awaiting the user - not a denial.
+
 			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 }
 
-// SetSwarmManager wires the swarm manager and registers swarm tools.
 func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	r.model.swarmMgr = mgr
 
@@ -1242,15 +1041,9 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.TeamReviewDigestTool{Manager: mgr})
 	tools.Register(tool.TeamReviewDecideTool{Manager: mgr})
 
-	// Re-register send_message with SwarmMgr so it can route to swarm teammates.
 	tools.Unregister("send_message")
 	tools.Register(tool.SendMessageTool{Manager: r.model.subAgentMgr, SwarmMgr: mgr})
 
-	// Notify TUI on swarm state changes.
-	// teammate_text events are high-frequency (one per streaming token).
-	// We throttle them to ~2 Hz per teammate to avoid flooding Bubble Tea's
-	// event loop with messages that trigger expensive snapshot operations.
-	// Status-change events (tool_call, idle, etc.) are sent immediately.
 	swarmTextThrottle := newTextThrottleMap(500 * time.Millisecond)
 
 	mgr.SetOnUpdate(func(ev swarm.Event) {
@@ -1260,7 +1053,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 		msgs := []tea.Msg{swarmTunnelEventMsg{Event: ev}}
 		switch ev.Type {
 		case "teammate_text":
-			// Throttle: at most one subAgentUpdateMsg per teammate per 500ms.
+
 			if !swarmTextThrottle.Allow(ev.TeammateID) {
 				r.sendProgramMsgs(msgs...)
 				return
@@ -1280,15 +1073,12 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 			}
 		case "teammate_spawned", "teammate_working", "teammate_shutdown",
 			"teammate_tool_call", "teammate_tool_result", "teammate_error":
-			// Status-change events: send immediately so strip updates promptly.
+
 			msgs = append(msgs, subAgentUpdateMsg{AgentID: ev.TeammateID})
 		}
 		r.sendProgramMsgs(msgs...)
 	})
 
-	// Start the background ticker that flushes accumulated teammate
-	// text/reasoning at ~12.5 Hz instead of per-token (~50-100 Hz
-	// per teammate). Same pattern as sub-agent stream batching.
 	mgr.StartStreamBatcher()
 }
 
@@ -1308,7 +1098,6 @@ func (r *REPL) sendProgramMsgs(msgs ...tea.Msg) {
 	}
 }
 
-// replModeSwitcher implements tool.ModeSwitcher by delegating to the TUI Model.
 type replModeSwitcher struct {
 	model        *Model
 	program      *tea.Program
@@ -1323,22 +1112,19 @@ func (s *replModeSwitcher) Mode() permission.PermissionMode {
 }
 
 func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {
-	// ConfigPolicy.SetMode is thread-safe (has its own mutex)
+
 	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(mode)
 	}
-	// Update Model.mode via program.Send for thread safety
+
 	if s.program != nil {
 		s.program.Send(modeChangeMsg{Mode: mode})
 	}
 }
 
-// RememberMode saves the current mode as "previous" and returns what was saved.
-// This is called by enter_plan_mode to remember the mode before switching.
 func (s *replModeSwitcher) RememberMode(currentMode permission.PermissionMode) permission.PermissionMode {
-	// Read the actual current mode from ConfigPolicy (thread-safe, always up-to-date)
-	// rather than s.model.mode which may be stale (Bubble Tea copies the model).
-	actualCurrent := currentMode // fallback to the argument
+
+	actualCurrent := currentMode
 	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
 		actualCurrent = cp.CurrentMode()
 	}
@@ -1346,7 +1132,6 @@ func (s *replModeSwitcher) RememberMode(currentMode permission.PermissionMode) p
 	return actualCurrent
 }
 
-// RestoreMode returns the remembered mode, or the given fallback.
 func (s *replModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
 	if s.previousMode != permission.SupervisedMode && s.previousMode != permission.PlanMode {
 		return s.previousMode
@@ -1354,7 +1139,6 @@ func (s *replModeSwitcher) RestoreMode(fallback permission.PermissionMode) permi
 	return fallback
 }
 
-// modeChangeMsg is sent to update the Model's mode from a goroutine.
 type modeChangeMsg struct {
 	Mode permission.PermissionMode
 }
@@ -1373,11 +1157,9 @@ func (r *REPL) SetAskUserTool(tools *tool.Registry) {
 	})
 }
 
-// SetCommandPane wires the command pane manager into the run_command tool
-// for real-time output mirroring in tmux environments.
 func (r *REPL) SetCommandPane(tools *tool.Registry, workingDir string) {
 	if os.Getenv("TMUX") == "" {
-		return // only active in tmux
+		return
 	}
 	mgr := cmdpane.NewManager(workingDir)
 	r.model.cmdPaneMgr = mgr
@@ -1410,23 +1192,18 @@ func (r *REPL) SetCommandPane(tools *tool.Registry, workingDir string) {
 	rc.OnPreExec = preExecFn
 	rc.OnPostExec = mgr.WriteFooter
 
-	// Also wire start_command for long-running/streaming commands.
 	if tl2, ok := tools.Get("start_command"); ok {
 		if sc, ok := tl2.(*tool.StartCommandTool); ok {
 			sc.OutputTee = writer
 			sc.OnPreExec = preExecFn
-			// start_command is async — no OnPostExec here (job completion
-			// is checked separately via read_command_output/wait_command).
+
 		}
 	}
 }
 
-// requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
-// Honors ctx so the agent goroutine doesn't leak if the TUI shuts down or the
-// run is cancelled while a confirmation prompt is in flight.
 func (r *REPL) requestDiffConfirm(ctx context.Context, filePath, diffText string) bool {
 	if r.program == nil {
-		// Non-interactive (pipe) mode: auto-approve
+
 		return true
 	}
 	resp := make(chan bool, 1)
@@ -1460,23 +1237,18 @@ func (r *REPL) requestAskUser(ctx context.Context, req tool.AskUserRequest) (too
 	}
 }
 
-// Program returns the underlying tea.Program for external callers that need to send messages.
 func (r *REPL) Program() *tea.Program {
 	return r.program
 }
 
-// cronPromptMsg is sent when a cron job fires, injecting a prompt into the conversation.
 type cronPromptMsg struct {
 	Prompt      string
 	QueueIfBusy bool
 }
 
-// withDocSyncReminder appends a documentation sync reminder to cron prompts
-// that don't already mention docs. This ensures cron-triggered tasks keep
-// documentation up to date without requiring the prompt author to remember.
 func withDocSyncReminder(prompt string) string {
 	lower := strings.ToLower(prompt)
-	// Skip if prompt already mentions documentation.
+
 	for _, kw := range []string{"doc", "文档", "readme", "changelog", "release note"} {
 		if strings.Contains(lower, kw) {
 			return prompt
@@ -1485,7 +1257,6 @@ func withDocSyncReminder(prompt string) string {
 	return prompt + "\n\n[Reminder] If this task involves code changes, update related documentation (docs/guide/, README.md, docs/design/) to keep them in sync."
 }
 
-// Run starts the REPL event loop.
 func (r *REPL) Run() error {
 	traceStart := time.Now()
 	traceLast := traceStart
@@ -1499,15 +1270,14 @@ func (r *REPL) Run() error {
 	if r.core != nil {
 		defer r.core.Close()
 	}
-	// Initialize session
+
 	if r.store != nil {
 		if r.resumeID != "" && r.resumeID != "__new__" {
-			// Explicit --resume <id>
+
 			r.loadSession(r.resumeID)
 			traceMark("load session")
 		} else {
-			// Auto-load: try to resume the most recent workspace session.
-			// Skip auto-load when resumeID is "__new__" (picker cancelled).
+
 			if r.resumeID != "__new__" && r.tryAutoLoadSession() {
 				traceMark("auto-load session")
 			} else {
@@ -1516,50 +1286,29 @@ func (r *REPL) Run() error {
 			}
 		}
 	}
-	// Switch lanchat nick persistence to per-session path
-	// Note: lanChatHub.SetSessionID is now called from Model.SetSession,
-	// which covers all session creation/switch paths (startup, /clear,
-	// /sessions resume, /branch).
+
 	r.primeInitialWindowSize(term.GetSize)
 	traceMark("prime initial window size")
 
-	// TTY hygiene: drain any pending stdin bytes (e.g. terminal probe responses
-	// from the previous shell, paste residue) before bubbletea grabs the TTY.
-	// Also enable bubbletea v2's internal trace log so we can see readLoop /
-	// cancelReader activity in the next debug bundle.
 	enableBubbleteaTrace()
 	drainStdinResidual()
 	traceMark("tty hygiene")
 
-	// Pre-initialize the glamour markdown renderer so the first LLM response
-	// doesn't freeze the TUI while glamour initializes its parser/highlighter.
 	markdown.Warmup()
 	traceMark("markdown warmup")
 
-	// #4154: route all renderer writes through the guard writer - while the
-	// stdout health monitor flags stdout dead (display sleep / SSH drop),
-	// frames are dropped instead of blocking the renderer on a dead pty.
-	// Recovery sends displayWakeMsg which triggers a full repaint.
 	r.program = tea.NewProgram(r.model, tea.WithOutput(stdoutGuardWriter{File: os.Stdout}))
-	// #2844: give the Model a thread-safe message injector so background
-	// goroutines (context probe results) never touch shared state directly.
-	// Assignment happens before Run(), so the happens-before edge is the
-	// program startup itself.
+
 	r.model.tuiSend = func(msg tea.Msg) { r.sendTUI(msg) }
 	if r.planSwitcher != nil {
 		r.planSwitcher.program = r.program
 	}
-	// Register TUI callbacks (verify progress, tool streaming) now that
-	// r.program is set. Previously inside SetLanChatHub which was called
-	// before Run() — so r.program was always nil at registration time.
+
 	r.RegisterCallbacks()
 	traceMark("new bubbletea program")
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
 
-	// Watchdog that detects if bubbletea's raw mode is silently lost
-	// (readLoop dead → terminal echoes typed bytes → looks like a frozen UI).
-	// Detection only — we log loudly so the next bug report has a smoking gun.
 	watchdogCtx, watchdogCancel := context.WithCancel(context.Background())
 	stopWatchdog := startTTYWatchdog(watchdogCtx)
 	stopStdoutMonitor := startStdoutHealthMonitor(watchdogCtx, func(msg interface{}) {
@@ -1604,10 +1353,6 @@ func (r *REPL) Run() error {
 	}
 	traceMark("start command reload loop")
 
-	// Wire the agent's approval handler into the TUI via channel bridge.
-	// Honors ctx — if the TUI exits or the run is cancelled while waiting
-	// for the user's decision, the agent goroutine returns Deny instead of
-	// blocking forever on <-resp.
 	r.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		if r.program == nil {
 			return permission.Deny
@@ -1622,24 +1367,19 @@ func (r *REPL) Run() error {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			// #3370: TUI exit / run cancel while awaiting the user - not a denial.
+
 			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 	traceMark("wire approval handler")
 
-	// Wire checkpoint handler — persist compacted state after summarize.
-	// Acquires the model's sessionMutex while reading m.session and calling
-	// AppendCheckpoint (which mutates ses.UpdatedAt and rewrites the index)
-	// because the TUI thread also mutates the same session under that mutex
-	// (see appendUserMessage in submit.go).
 	r.agent.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 		if r.store == nil {
 			return
 		}
 		mu := r.model.sessionMutex()
 		mu.Lock()
-		// Use getCurrentSession — returns the LIVE session pointer.
+
 		ses := r.getCurrentSession()
 		if ses == nil {
 			ses = r.model.Session()
@@ -1648,12 +1388,11 @@ func (r *REPL) Run() error {
 			mu.Unlock()
 			return
 		}
-		// Mutate Session object under sessionMutex.
+
 		ses.UpdatedAt = time.Now()
 		store := r.store
 		mu.Unlock()
 
-		// Persist to disk outside sessionMutex.
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
 			if err := jsonlStore.AppendCheckpointToDisk(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 				debug.Log("repl", "checkpoint save failed: %v", err)
@@ -1672,15 +1411,11 @@ func (r *REPL) Run() error {
 	})
 	traceMark("wire checkpoint handler")
 
-	// Per-message persistence: every Add() triggers an async JSONL append.
-	// This replaces the batch persistFullSessionMessages at run end.
 	r.agent.SetPersistHandler(func(msg provider.Message) {
 		if r.store == nil {
 			return
 		}
-		// Use getCurrentSession — it returns the LIVE session pointer
-		// (updated atomically on /clear, /sessions switch), not the stale
-		// r.model snapshot which always points to the initial session.
+
 		ses := r.getCurrentSession()
 		if ses == nil {
 			return
@@ -1692,11 +1427,8 @@ func (r *REPL) Run() error {
 		}
 	})
 
-	// NewProgram copies the model, so SetProgram on r.model is useless.
-	// We can't Send before Run (deadlock). Instead, run in a goroutine and
-	// send the reference once the event loop is up.
 	debug.Log("repl", "scheduling setProgramMsg")
-	// Send the startup logo with vendor/endpoint/model info.
+
 	vendorName := ""
 	endpointName := ""
 	if r.model.config != nil {
@@ -1709,9 +1441,7 @@ func (r *REPL) Run() error {
 	}
 	safego.Go("tui.repl.startupMsg", func() {
 		start := time.Now()
-		// Wait for Bubble Tea to complete initialization (raw mode, alt screen,
-		// mouse mode, renderer start, readLoop start) before sending any messages.
-		// Too short and messages arrive before the event loop is ready.
+
 		time.Sleep(100 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
@@ -1722,16 +1452,13 @@ func (r *REPL) Run() error {
 		if r.knightStartupHint != "" {
 			r.program.Send(knightStartupHintMsg{Hint: r.knightStartupHint})
 		}
-		// Start code index after TUI is ready, not on a fixed timer.
-		// Loading large sessions can take far longer than 3s.
+
 		if r.agent != nil {
 			if cim := r.agent.CodeIndexManager(); cim != nil {
 				if !cim.IsReady() {
 					r.program.Send(systemNotifyMsg{ItemID: "codeindex-progress", Replace: true, Text: "Building code index for @ fuzzy search..."})
 				}
-				// Throttled progress on the same status line: a long walk
-				// over a large/slow tree stays visibly alive instead of
-				// reading as a hung UI (screenshot report 2026-09-18).
+
 				cim.SetOnProgress(func(done, total int) {
 					if r.program != nil {
 						r.program.Send(systemNotifyMsg{ItemID: "codeindex-progress", Replace: true,
@@ -1767,12 +1494,6 @@ func (r *REPL) Run() error {
 
 	traceMark("before bubbletea Run")
 
-	// SIGHUP handler: when the terminal closes (SSH disconnect, terminal tab
-	// close, display sleep on some macOS versions), the OS sends SIGHUP to the
-	// foreground process group. BubbleTea only handles SIGINT/SIGTERM, so
-	// without this handler SIGHUP kills the process immediately — no session
-	// save, no cleanup, no graceful shutdown. We catch SIGHUP and send a
-	// QuitMsg to BubbleTea so the normal shutdown path runs.
 	sighupCh := make(chan os.Signal, 1)
 	signal.Notify(sighupCh, syscall.SIGHUP)
 	sighupDone := make(chan struct{})
@@ -1795,7 +1516,7 @@ func (r *REPL) Run() error {
 	if errors.Is(err, tea.ErrInterrupted) {
 		err = nil
 	}
-	// Drain remaining metrics before session save.
+
 	if r.metricCollector != nil {
 		if r.metricCancel != nil {
 			r.metricCancel()
@@ -1805,21 +1526,18 @@ func (r *REPL) Run() error {
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
 	}
-	// Broadcast leave to LAN peers so they detect offline immediately.
+
 	if r.model.lanChatHub != nil {
 		r.model.lanChatHub.Close()
 	}
-	// Sync final model state from Bubble Tea so exit cleanup uses the
-	// correct session (r.model is a stale snapshot from before Run()).
+
 	if m, ok := finalModel.(Model); ok {
 		r.model = m
 	}
 
-	// Use getCurrentSession for the live session pointer (works even if
-	// r.model sync above failed due to type assertion).
 	exitSes := r.getCurrentSession()
 	if exitSes == nil {
-		exitSes = r.model.session // fallback to finalModel sync
+		exitSes = r.model.session
 	}
 
 	if r.model.acpClientMgr != nil {
@@ -1829,23 +1547,20 @@ func (r *REPL) Run() error {
 		r.model.instanceDetect.Unregister()
 	}
 	if err == nil && r.store != nil && exitSes != nil {
-		// Persist new messages on clean exit (incremental, no full rewrite).
+
 		r.model.persistFullSessionMessages()
-		// Clean up empty session files — sessions without any user interaction
-		// are deleted to avoid cluttering the sessions directory.
+
 		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
 			wasDeleted := jsonlStore.WillCleanupIfEmpty(exitSes)
 			if err := jsonlStore.CleanupIfEmpty(exitSes); err != nil {
 				debug.Log("repl", "exit cleanup: failed to delete empty session: %v", err)
 			} else if wasDeleted && r.imManager != nil {
-				// Session was deleted — clear any IM adapter bindings that
-				// reference this session to prevent orphaned bindings.
+
 				r.imManager.ClearSessionBindings(exitSes.ID)
 			}
 		}
 	}
 
-	// Release the session lock so another instance can resume this session.
 	if r.sessionLock != nil {
 		r.sessionLock.Release()
 		r.sessionLock = nil
@@ -1870,9 +1585,6 @@ func (r *REPL) Run() error {
 		return r.execTmuxEnter()
 	}
 
-	// Check if the final model requested a self-restart.
-	// program.Run() returns the final model state, but r.model is a
-	// snapshot from before Run() — we must read from finalModel.
 	if m, ok := finalModel.(Model); ok && m.restartRequested {
 		sid := ""
 		if m.session != nil {
@@ -1895,15 +1607,11 @@ func (r *REPL) primeInitialWindowSize(getSize func(fd uintptr) (int, int, error)
 	r.model.handleResize(width, height)
 }
 
-// createSession creates a fresh session and wires it into the model.
-// tryAutoLoadSession attempts to load the most recent workspace session.
-// Returns true if a session was loaded, false if it should create a new one.
-// If the latest session is locked by another process, shows the session picker.
 func (r *REPL) tryAutoLoadSession() bool {
 	if r.store == nil {
 		return false
 	}
-	// If root.go already acquired a lock (from the picker path), skip.
+
 	if r.sessionLock != nil && r.sessionLock.Acquired() {
 		return false
 	}
@@ -1922,7 +1630,6 @@ func (r *REPL) tryAutoLoadSession() bool {
 		return false
 	}
 
-	// Try to acquire a lock on the session.
 	storeDir, err := session.DefaultDir()
 	if err != nil {
 		debug.Log("repl", "tryAutoLoadSession: DefaultDir error: %v", err)
@@ -1934,15 +1641,13 @@ func (r *REPL) tryAutoLoadSession() bool {
 		return false
 	}
 	if lock != nil && lock.Acquired() {
-		// We got the lock — auto-resume this session.
+
 		r.sessionLock = lock
 		r.loadSession(latest.ID)
 		debug.Log("repl", "tryAutoLoadSession: auto-loaded session %s", latest.ID)
 		return true
 	}
 
-	// Session is locked by another instance — create new session.
-	// (The picker flow is handled in root.go before the TUI starts.)
 	debug.Log("repl", "tryAutoLoadSession: session %s is locked (PID %d), creating new session",
 		latest.ID, lock.HolderPID())
 	return false
@@ -1966,9 +1671,6 @@ func (r *REPL) createSession() {
 		r.model.SetSession(ses, r.store)
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.new", ses.ID))
 
-		// Acquire a session lock so concurrent instances in the same workspace
-		// cannot auto-load this session. This mirrors the desktop Wails path
-		// (chat.go EnsureSession).
 		if r.sessionLock != nil {
 			r.sessionLock.Release()
 			r.sessionLock = nil
@@ -1980,10 +1682,6 @@ func (r *REPL) createSession() {
 			}
 		}
 
-		// Bind cron scheduler to this session for persistence.
-		// Use SwitchSession (not SetSession) because createSession may be
-		// called as a fallback after loadSession fails, where the scheduler
-		// may already be bound to a previous session.
 		if r.cronScheduler != nil {
 			sessionPath, legacyPath := agentruntime.CronStorePaths(ses.ID)
 			r.cronScheduler.SwitchSession(sessionPath, legacyPath, r.workingDir)
@@ -1995,7 +1693,6 @@ func (r *REPL) createSession() {
 	}
 }
 
-// loadSession loads a previous session and restores messages into the agent.
 func (r *REPL) loadSession(id string) {
 	start := time.Now()
 	ses, err := r.store.Load(id)
@@ -2006,15 +1703,7 @@ func (r *REPL) loadSession(id string) {
 		r.createSession()
 		return
 	}
-	// Acquire session lock — mirrors createSession and tryAutoLoadSession.
-	// This is critical for the /restart path: execRestart releases the lock
-	// before syscall.Exec, and the new process enters via loadSession with
-	// --resume <id>. Without re-acquiring here, the session is left unlocked.
-	// #1389-B: acquire the NEW lock BEFORE releasing the old one (the
-	// switchSessionLock pattern at :338). The old order released first,
-	// then on TryAcquire failure merely logged and continued UNLOCKED -
-	// the /restart window let a concurrent --resume instance grab the lock
-	// mid-gap, and two processes then appended to the same JSONL.
+
 	var newLock *session.SessionLock
 	if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
 		if lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID); lockErr == nil && lock != nil && lock.Acquired() {
@@ -2031,9 +1720,7 @@ func (r *REPL) loadSession(id string) {
 		}
 		r.sessionLock = newLock
 	} else if r.sessionLock != nil {
-		// Keep the old lock rather than none: it at least serializes THIS
-		// process's exit path, and releasing it would widen the gap the
-		// old code left fully open.
+
 		debug.Log("repl", "loadSession: keeping previous lock (new session lock unavailable)")
 	}
 
@@ -2044,7 +1731,6 @@ func (r *REPL) loadSession(id string) {
 		r.model.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restored session was oversized (%d tokens), truncated to %d tokens to fit context window", beforeTokens, afterTokens))
 	}
 
-	// Switch CWD if the session belongs to a different workspace.
 	if ses.Workspace != "" && ses.Workspace != r.workingDir {
 		oldDir := r.workingDir
 		r.workingDir = ses.Workspace
@@ -2054,10 +1740,8 @@ func (r *REPL) loadSession(id string) {
 		debug.Log("repl", "loadSession: switched workingDir from %q to %q (session workspace)", oldDir, ses.Workspace)
 	}
 
-	// Bind cron scheduler to this session (stop old timers, load new jobs).
 	r.switchSessionCronWithWorkspace(ses.ID, r.workingDir)
 
-	// This overrides the global default_mode for this session only.
 	if ses.PermissionMode != "" {
 		sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
 		if cp, ok := r.model.policy.(*permission.ConfigPolicy); ok {
@@ -2067,8 +1751,6 @@ func (r *REPL) loadSession(id string) {
 		debug.Log("repl", "loadSession: restored permission mode %s from session", sessionMode)
 	}
 
-	// Restore session-scoped sidebar visibility (if set).
-	// This overrides the global sidebar_visible for this session only.
 	if ses.SidebarVisible != nil {
 		r.model.sidebarVisible = *ses.SidebarVisible
 		debug.Log("repl", "loadSession: restored sidebar_visible=%v from session", *ses.SidebarVisible)
@@ -2077,11 +1759,8 @@ func (r *REPL) loadSession(id string) {
 	r.model.rebuildConversationFromMessages(ses.Messages)
 	r.model.restoreHistoryFromMessages(ses.Messages)
 
-	// Refresh cached git branch — sessions from other workspaces may have
-	// different active branches.
 	r.model.refreshCachedGitBranch()
 
-	// Notify mobile client of session switch.
 	r.model.publishTunnelSnapshotForCurrentSession(true)
 
 	title := ses.Title
@@ -2099,30 +1778,17 @@ func messageCount(ses *session.Session) int {
 	return len(ses.Messages)
 }
 
-// execRestart replaces the current process in-place using syscall.Exec.
-// No child process or helper is spawned — the same PID continues with a
-// fresh binary image, keeping the same terminal and file descriptors.
-//
-// For /update, ApplyBinary writes the new binary to all target paths first.
-// On Unix, install.WriteExecutable uses temp-file + rename (atomic), which
-// works even on the currently running binary because the kernel preserves
-// the old inode. syscall.Exec then loads the new file at the same path.
-//
-// Must be called after program.Run() returns (terminal already restored).
 func (r *REPL) execRestart() error {
-	// Release session lock — the new process will re-acquire it.
+
 	if r.sessionLock != nil {
 		r.sessionLock.Release()
 		r.sessionLock = nil
 	}
 
-	// Clean up port file before exec — syscall.Exec skips defers.
 	if r.preExecCleanup != nil {
 		r.preExecCleanup()
 	}
 
-	// For /update: write new binary to all target paths BEFORE exec.
-	// This must happen while the process is still alive (before syscall.Exec).
 	if r.model.updatePrepared != nil && r.model.updateSvc != nil {
 		debug.Log("restart", "applying binary update")
 		if err := r.model.updateSvc.ApplyBinary(*r.model.updatePrepared); err != nil {

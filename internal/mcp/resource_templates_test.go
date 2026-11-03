@@ -1,10 +1,5 @@
 package mcp
 
-// Resource template client tests: pagination (#562 pattern), resources
-// capability gating, -32601 surfacing for old servers, SEP-2549 cache
-// invalidation via notifications/resources/list_changed, and RFC 6570
-// expansion. Mirrors zz_issue562_test.go's httptest harness.
-
 import (
 	"context"
 	"encoding/json"
@@ -67,7 +62,6 @@ func TestListResourceTemplatesPagination(t *testing.T) {
 		t.Fatalf("unexpected templates: %+v", templates)
 	}
 
-	// Cached second call must return the same aggregate.
 	again, err := client.ListResourceTemplates(ctx)
 	if err != nil || len(again) != 2 {
 		t.Fatalf("cached call mismatch: %d templates, err=%v", len(again), err)
@@ -111,7 +105,7 @@ func TestListResourceTemplatesLegacyServerMethodNotFound(t *testing.T) {
 
 func TestListResourceTemplatesGatedOnResourcesCapability(t *testing.T) {
 	client := &Client{name: "nores"}
-	// Zero serverCaps → Resources capability nil → no request at all.
+
 	templates, err := client.ListResourceTemplates(context.Background())
 	if err != nil {
 		t.Fatalf("resources-less server must yield empty list, not error: %v", err)

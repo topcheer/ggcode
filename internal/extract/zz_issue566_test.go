@@ -1,9 +1,5 @@
 package extract
 
-// #566 feature tests: zip memory amplification (E), RTF destination
-// skipping + \bin skipping (A), surrogate pairs + \uc fallback (B),
-// EPUB/iWork empty-success distinction (G), ODT page count (F).
-
 import (
 	"archive/zip"
 	"bytes"
@@ -11,11 +7,8 @@ import (
 	"testing"
 )
 
-// --- E: zip streaming read budget ---
-
 func TestIssue566_ZipEntryReadBudget(t *testing.T) {
-	// Build a zip with one large plain-text entry (500KB). The preview
-	// budget must cap the buffered bytes far below the entry size.
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, err := zw.Create("big.txt")
@@ -23,7 +16,7 @@ func TestIssue566_ZipEntryReadBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	chunk := []byte(strings.Repeat("a", 4096))
-	for i := 0; i < 128; i++ { // 512KB total
+	for i := 0; i < 128; i++ {
 		if _, err := w.Write(chunk); err != nil {
 			t.Fatal(err)
 		}
@@ -45,8 +38,7 @@ func TestIssue566_ZipEntryReadBudget(t *testing.T) {
 }
 
 func TestIssue566_ZipStructuredEntryFullRead(t *testing.T) {
-	// A nested .zip entry must still be read whole (capped at
-	// maxArchiveEntrySize) so the nested extractor can parse it.
+
 	var inner bytes.Buffer
 	izw := zip.NewWriter(&inner)
 	iw, _ := izw.Create("note.txt")
@@ -79,7 +71,6 @@ func TestIssue566_ZipStructuredEntryFullRead(t *testing.T) {
 		t.Errorf("nested entry buffered %d bytes, want full %d", len(nested.data), inner.Len())
 	}
 
-	// End-to-end: the nested content must still be extractable.
 	result, err := Extract("test.zip", outer.Bytes())
 	if err != nil {
 		t.Fatalf("Extract zip: %v", err)
@@ -93,11 +84,10 @@ func TestIssue566_ZipCumulativeBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a larger zip")
 	}
-	// Many structured entries: the cumulative cap must stop total buffering
-	// at maxZipTotalRead, keeping memory bounded.
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	big := bytes.Repeat([]byte("z"), 512*1024) // 512KB per entry, 200 entries = 100MB
+	big := bytes.Repeat([]byte("z"), 512*1024)
 	for i := 0; i < 200; i++ {
 		name := "doc" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".epub"
 		w, _ := zw.Create(name)
@@ -117,14 +107,12 @@ func TestIssue566_ZipCumulativeBudget(t *testing.T) {
 	for _, f := range files {
 		total += int64(len(f.data))
 	}
-	// Cap plus per-entry slack for the entries already in flight.
+
 	if total > maxZipTotalRead+maxArchiveEntrySize {
 		t.Errorf("cumulative buffered %d bytes exceeds budget %d", total, maxZipTotalRead)
 	}
 	_ = r
 }
-
-// --- A: RTF destination skipping and \bin ---
 
 func rtfExtract(t *testing.T, src string) TextResult {
 	t.Helper()
@@ -158,7 +146,7 @@ func TestIssue566_RTF_SkipsColorTableAndInfo(t *testing.T) {
 }
 
 func TestIssue566_RTF_BinarySkipped(t *testing.T) {
-	// \bin4 followed by 4 raw binary bytes; those bytes must not appear.
+
 	res := rtfExtract(t, `{\rtf1 before \bin4`+"\x00\x01\xFF\x10"+` after}`)
 	if strings.Contains(res.Text, "\x00") || strings.Contains(res.Text, "\xFF\x10") {
 		t.Errorf("binary leaked into text: %q", res.Text)
@@ -168,10 +156,8 @@ func TestIssue566_RTF_BinarySkipped(t *testing.T) {
 	}
 }
 
-// --- B: surrogate pairs and \uc fallback ---
-
 func TestIssue566_RTF_SurrogatePair(t *testing.T) {
-	// U+1F600 emoji = \uD83D\uDE00 in UTF-16 surrogate halves.
+
 	res := rtfExtract(t, `{\rtf1 grin \u55357\u56832!}`)
 	if !strings.Contains(res.Text, "\U0001F600") {
 		t.Errorf("surrogate pair not combined: %q", res.Text)
@@ -182,8 +168,7 @@ func TestIssue566_RTF_SurrogatePair(t *testing.T) {
 }
 
 func TestIssue566_RTF_UCFallbackSubstituteDropped(t *testing.T) {
-	// \uc1\u233 ? — the '?' is the ANSI substitute and must not double
-	// the character.
+
 	res := rtfExtract(t, `{\rtf1 \uc1\u233 ?est}`)
 	if !strings.Contains(res.Text, "\u00E9est") {
 		t.Errorf("expected 'éest', got %q", res.Text)
@@ -194,7 +179,7 @@ func TestIssue566_RTF_UCFallbackSubstituteDropped(t *testing.T) {
 }
 
 func TestIssue566_RTF_UCFallbackHexDropped(t *testing.T) {
-	// \uc2\u233 \'e9\'e9 — two hex substitutes must both be dropped.
+
 	res := rtfExtract(t, "{\\rtf1 \\uc2\\u233 \\'e9\\'e9end}")
 	if !strings.Contains(res.Text, "\u00E9end") {
 		t.Errorf("expected 'éend', got %q", res.Text)
@@ -205,8 +190,7 @@ func TestIssue566_RTF_UCFallbackHexDropped(t *testing.T) {
 }
 
 func TestIssue566_RTF_UnpairedSurrogateFlushed(t *testing.T) {
-	// A high surrogate never followed by its low half degrades to a single
-	// U+FFFD, not two and not silence.
+
 	res := rtfExtract(t, `{\rtf1 \u55357 end}`)
 	if strings.Count(res.Text, "\uFFFD") != 1 {
 		t.Errorf("unpaired surrogate should yield exactly one U+FFFD, got %q", res.Text)
@@ -215,8 +199,6 @@ func TestIssue566_RTF_UnpairedSurrogateFlushed(t *testing.T) {
 		t.Errorf("text after unpaired surrogate lost: %q", res.Text)
 	}
 }
-
-// --- G: EPUB / iWork empty-success distinction ---
 
 func buildEPUB(t *testing.T, spineHrefMode string, entryName string) []byte {
 	t.Helper()
@@ -235,7 +217,7 @@ func buildEPUB(t *testing.T, spineHrefMode string, entryName string) []byte {
 	mustAdd("META-INF/container.xml", `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>`)
 	href := "chapter1.xhtml"
 	if spineHrefMode == "backslash" {
-		href = `text\chapter1.xhtml` // Windows-tool style: never matches a ZIP entry
+		href = `text\chapter1.xhtml`
 	}
 	mustAdd("OEBPS/content.opf", `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="c1" href="`+href+`" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`)
 	mustAdd(entryName, `<html><body><p>chapter text here</p></body></html>`)
@@ -246,8 +228,7 @@ func buildEPUB(t *testing.T, spineHrefMode string, entryName string) []byte {
 }
 
 func TestIssue566_EPUBBackslashSpineIsError(t *testing.T) {
-	// A broken spine (backslash hrefs) previously returned Text:"" err:nil,
-	// indistinguishable from an empty book. Now it must be an explicit error.
+
 	data := buildEPUB(t, "backslash", "OEBPS/text/chapter1.xhtml")
 	_, err := Extract("book.epub", data)
 	if err == nil {
@@ -290,8 +271,7 @@ func TestIssue566_EPUBEmptySpineIsError(t *testing.T) {
 }
 
 func TestIssue566_IWorkIWAOnlyIsError(t *testing.T) {
-	// iWork 2013+ archives contain only binary .iwa parts. Previously this
-	// returned Text:"" err:nil, hiding the unsupported format.
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, _ := zw.Create("Index.zip.iwa")
@@ -309,8 +289,6 @@ func TestIssue566_IWorkIWAOnlyIsError(t *testing.T) {
 	}
 }
 
-// --- F: ODT page count ---
-
 func TestIssue566_ODTPageCountFromBreaks(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -318,7 +296,7 @@ func TestIssue566_ODTPageCountFromBreaks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3 paragraphs separated by explicit page breaks: 3 pages.
+
 	content := `<?xml version="1.0"?><office:document-content><office:body><office:text>` +
 		`<text:p>page one</text:p><text:p><style:style/></text:p>` +
 		`<text:p><text:page-break/>page two</text:p>` +

@@ -13,9 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// newLoginCmd builds `ggcode login <vendor>` for interactive vendor OAuth
-// flows. Currently supports: opencode (device flow against the OpenCode
-// console, impersonating the official opencode CLI).
 func newLoginCmd(cfgFile *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login <vendor>",
@@ -34,10 +31,6 @@ func newLoginCmd(cfgFile *string) *cobra.Command {
 	return cmd
 }
 
-// runOpenCodeLogin drives the OpenCode console device flow: print the
-// verification URL + user code, poll until authorized, then persist the
-// access token as the opencode vendor API key (it is a valid Zen bearer
-// credential, mirroring how the CLI's OPENCODE_CONSOLE_TOKEN is used).
 func runOpenCodeLogin(ctx context.Context) error {
 	w := os.Stdout
 	consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
@@ -61,8 +54,6 @@ func runOpenCodeLogin(ctx context.Context) error {
 	return storeOpenCodeToken(token)
 }
 
-// pollOpenCodeToken polls the device token endpoint at the server-specified
-// interval until the user authorizes, denies, or the code expires.
 func pollOpenCodeToken(ctx context.Context, consoleURL string, dev *auth.OpenCodeDeviceAuth) (*auth.OpenCodeToken, error) {
 	interval := time.Duration(dev.Interval) * time.Second
 	if interval <= 0 {
@@ -81,11 +72,7 @@ func pollOpenCodeToken(ctx context.Context, consoleURL string, dev *auth.OpenCod
 			return token, nil
 		}
 		if errors.Is(err, auth.ErrOpenCodeSlowDown) {
-			// RFC 8628 section 3.5 (MUST): "The client MUST increase the
-			// polling interval by 5 seconds" on slow_down. Without this a
-			// strict RFC server kept getting polled at the original rate,
-			// amplifying requests until ExpiresIn ran out with a misleading
-			// "device code expired" error. (#2602 defect 2)
+
 			interval += 5 * time.Second
 			continue
 		}
@@ -96,9 +83,6 @@ func pollOpenCodeToken(ctx context.Context, consoleURL string, dev *auth.OpenCod
 	return nil, fmt.Errorf("opencode login: device code expired before authorization")
 }
 
-// storeOpenCodeToken persists the token pair via the same provider auth
-// store copilot/anthropic OAuth use (provider_auth.json), so refresh and
-// panel flows treat opencode like any OAuth vendor.
 func storeOpenCodeToken(token *auth.OpenCodeToken) error {
 	info := &auth.Info{
 		ProviderID:   "opencode",

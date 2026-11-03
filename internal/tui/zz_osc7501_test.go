@@ -9,9 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// OSC 7501 Program Status Protocol emission (mitchellh.com/writing/program-status-osc7501).
-// Sequence shape: ESC ] 7501 ; state=<s>[:kind=<k>]:app=ggcode[:msg=<base64>] ESC \
-
 func oscTestHarness(t *testing.T, enabled bool, tty bool) (*Model, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer

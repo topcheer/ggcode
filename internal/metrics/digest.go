@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// FormatDuration formats a duration for human-readable display.
 func FormatDuration(d time.Duration) string {
 	if d <= 0 {
 		return "-"
@@ -24,7 +23,6 @@ func FormatDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-// FormatTPS formats a tokens-per-second value for human-readable display.
 func FormatTPS(tps float64) string {
 	if tps <= 0 {
 		return "-"
@@ -35,7 +33,6 @@ func FormatTPS(tps float64) string {
 	return fmt.Sprintf("%.0f tok/s", tps)
 }
 
-// FormatTokenUsage produces a compact token usage string like "12.0K↑ 3.0K↓".
 func FormatTokenUsage(input, output, cacheRead int) string {
 	parts := make([]string, 0, 3)
 	if input > 0 {
@@ -60,8 +57,6 @@ func formatTokenCount(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// FormatTurnDigest produces a single-line summary of a turn's metrics.
-// lang is a BCP-47 language code (e.g. "en", "zh-CN").
 func FormatTurnDigest(lang string, turn TurnSummary) string {
 	parts := []string{
 		digestText(lang, "turn", turn.TurnIndex),

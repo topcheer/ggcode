@@ -2,9 +2,6 @@ package main
 
 import "testing"
 
-// Regression guard for #745: maskSecret must guard on rune count, not byte
-// length. A byte guard diverges from rune slicing for multibyte values:
-// 3 CJK runes panic (negative Repeat), 4 CJK runes leak the secret verbatim.
 func TestMaskSecretMultibyte(t *testing.T) {
 	cases := []struct {
 		name  string

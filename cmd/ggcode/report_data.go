@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// reportData is the JSON structure injected into the HTML template.
 type reportData struct {
 	GeneratedAt   string          `json:"generatedAt"`
 	Sessions      []sessionJSON   `json:"sessions"`
@@ -109,14 +108,12 @@ func buildReport(results []*scanResult) reportData {
 			MsgCount:  sr.msgCount,
 		}
 
-		// Aggregate turns
 		var turnIndices []int
 		for idx := range sr.turns {
 			turnIndices = append(turnIndices, idx)
 		}
 		sort.Ints(turnIndices)
 
-		// Group TTFT by model for comparison chart
 		modelTTFT := make(map[string]*modelPerf)
 
 		for _, idx := range turnIndices {
@@ -124,8 +121,7 @@ func buildReport(results []*scanResult) reportData {
 			sj.TotalInput += t.Input
 			sj.TotalOutput += t.Output
 			sj.TotalCache += t.Cache
-			// #1448-B: count actual streaming calls, not deduped turns - an
-			// agentic turn makes N LLM calls under one TurnIndex.
+
 			llmCallsBefore := sj.LLMCalls
 			if t.LLMCalls > 0 {
 				sj.LLMCalls += t.LLMCalls
@@ -145,7 +141,7 @@ func buildReport(results []*scanResult) reportData {
 				ThinkMs:  t.ThinkMs,
 				SID:      sj.ID,
 			}
-			// Use turn's actual timestamp for daily aggregation
+
 			if !t.Timestamp.IsZero() {
 				day := t.Timestamp.Format("2006-01-02")
 				tj.Day = day
@@ -161,7 +157,6 @@ func buildReport(results []*scanResult) reportData {
 			}
 			sj.Turns = append(sj.Turns, tj)
 
-			// Collect model performance data
 			m := t.Model
 			if m == "" {
 				m = "(unknown)"
@@ -172,17 +167,13 @@ func buildReport(results []*scanResult) reportData {
 				modelTTFT[m] = mp
 			}
 			mp.TurnIdx = append(mp.TurnIdx, idx)
-			// #1537-D: zero TTFT (no metric recorded) must not enter the
-			// average - the frontend already excludes zeros (report_html
-			// L586/L841); the Go side counting them dragged ModelPerf
-			// ranking down and the two numbers disagreed on one screen.
+
 			if t.TTFTMs > 0 {
 				mp.TTFTMs = append(mp.TTFTMs, t.TTFTMs)
 			}
 			mp.DurMs = append(mp.DurMs, t.DurMs)
 		}
 
-		// Finalize model perf
 		for _, mp := range modelTTFT {
 			var sum int64
 			for _, v := range mp.TTFTMs {
@@ -197,7 +188,6 @@ func buildReport(results []*scanResult) reportData {
 			return sj.ModelPerf[i].AvgTTFT < sj.ModelPerf[j].AvgTTFT
 		})
 
-		// Aggregate tools
 		var toolNames []string
 		for name := range sr.tools {
 			toolNames = append(toolNames, name)
@@ -217,7 +207,6 @@ func buildReport(results []*scanResult) reportData {
 			})
 			sj.ToolCalls += ta.Calls
 
-			// Global tool summary
 			ts := toolMap[name]
 			if ts == nil {
 				ts = &toolStatJSON{Name: name}
@@ -230,7 +219,6 @@ func buildReport(results []*scanResult) reportData {
 
 		rd.Sessions = append(rd.Sessions, sj)
 
-		// Workspace aggregation
 		ws := sr.meta.Workspace
 		if ws == "" {
 			ws = "(unknown)"
@@ -245,7 +233,6 @@ func buildReport(results []*scanResult) reportData {
 		wr.Output += sj.TotalOutput
 	}
 
-	// Sort daily tokens by date
 	var days []string
 	for d := range dailyMap {
 		days = append(days, d)
@@ -255,7 +242,6 @@ func buildReport(results []*scanResult) reportData {
 		rd.DailyTokens = append(rd.DailyTokens, *dailyMap[d])
 	}
 
-	// Sort workspaces by total tokens desc
 	var wsList []*workspaceRow
 	for _, wr := range wsMap {
 		wsList = append(wsList, wr)
@@ -267,7 +253,6 @@ func buildReport(results []*scanResult) reportData {
 		rd.Workspaces = append(rd.Workspaces, *wr)
 	}
 
-	// Sort tool summary by calls desc
 	var toolList []*toolStatJSON
 	for _, ts := range toolMap {
 		toolList = append(toolList, ts)

@@ -20,11 +20,6 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-// sidebarShortID truncates an ID to 8 chars without panicking on short IDs
-// (#1019). The sidebar renders A2A task IDs whose generator currently
-// guarantees >= 21 bytes, but this View()-path slice must stay defensive —
-// a shorter ID scheme or future remote-task ingestion would crash the whole
-// TUI otherwise. Same guard idiom as knight_panel.go / root.go.
 func sidebarShortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
@@ -82,7 +77,7 @@ func (m Model) renderSidebarSessionUsageSection() string {
 		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
 		renderUsageRow(m.t("label.cache_hit"), fmt.Sprintf("%d%%", usage.CacheHitPercent())),
 	}
-	// Estimated cost row — only show if we have usage and pricing data.
+
 	if usage.Total() > 0 && m.session != nil {
 		if costStr := m.sidebarEstimatedCost(usage); costStr != "" {
 			rows = append(rows, renderUsageRow(m.t("label.cost"), costStr))
@@ -91,9 +86,6 @@ func (m Model) renderSidebarSessionUsageSection() string {
 	return strings.Join(rows, "\n")
 }
 
-// sidebarEstimatedCost computes the estimated USD cost for the session's
-// token usage using the built-in pricing table. Returns empty string when
-// the model is unmetered (subscription/bundled/free) or has no pricing data.
 func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 	if m.session == nil {
 		return ""
@@ -108,10 +100,7 @@ func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 		}
 		return string(rate.Type)
 	}
-	// #3434: DisplayInputTokens strips CacheRead from the superset
-	// InputTokens (openai-compat/gemini) so cached tokens are billed once
-	// at the cache-read rate - aligns the sidebar with the #2315 status
-	// bar fix. Disjoint vendors (anthropic) are a no-op.
+
 	totalCost := float64(usage.DisplayInputTokens())*rate.InputPerM/1e6 +
 		float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
 		float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
@@ -125,7 +114,7 @@ func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 func (m Model) renderSidebarMCPSection() string {
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.mcp"))}
-	// Filter out disabled MCP servers
+
 	activeServers := make([]MCPInfo, 0, len(m.mcpServers))
 	for _, srv := range m.mcpServers {
 		if !srv.Disabled {
@@ -205,7 +194,6 @@ func (m Model) renderSidebarA2ASection() string {
 		}
 	}
 
-	// Show last few events
 	events := m.a2aEventBuf
 	if len(events) > 3 {
 		events = events[len(events)-3:]
@@ -407,7 +395,7 @@ func (m Model) renderSidebarTaskRow(task todoStateItem, width int) []string {
 		if i == 0 {
 			rows = append(rows, bullet+" "+line)
 		} else {
-			// Continuation lines aligned with the title text (bullet + space = 2 chars)
+
 			rows = append(rows, "  "+line)
 		}
 	}
@@ -424,7 +412,7 @@ func sidebarTaskStatusDecor(lang Language, status string) (string, string) {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●"), sidebarTaskStatusText(lang, status)
 	case "in_progress":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("●"), sidebarTaskStatusText(lang, status)
-	default: // pending and unknown
+	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("○"), sidebarTaskStatusText(lang, status)
 	}
 }
@@ -567,9 +555,6 @@ func (m Model) sidebarWorkingDirectory() string {
 	return shortenSidebarPath(cwd)
 }
 
-// fullWorkingDirectory returns the absolute working directory without
-// shortening. Used for tunnel/mobile data where the full path is needed
-// as a stable workspace key.
 func (m Model) fullWorkingDirectory() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -578,8 +563,6 @@ func (m Model) fullWorkingDirectory() string {
 	return filepath.ToSlash(filepath.Clean(cwd))
 }
 
-// sidebarContextWindowLabel returns a human-readable label for the current
-// model's context window size, e.g. "128K" or "204.8K".
 func (m Model) sidebarContextWindowLabel() string {
 	if m.agent == nil {
 		return "-"
@@ -602,8 +585,6 @@ func (m Model) sidebarGitBranch() string {
 	return v
 }
 
-// refreshCachedGitBranch reads the current git branch and caches the result.
-// Called periodically from the Update loop via gitBranchTickMsg timer.
 func (m *Model) refreshCachedGitBranch() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -652,8 +633,6 @@ func shortenSidebarPath(value string) string {
 	return value
 }
 
-// gitBranchCache caches the resolved git branch string to avoid os.ReadFile
-// on every View() render. Updated by gitBranchTickMsg timer every 2 seconds.
 var (
 	gitDirCacheDir   string
 	gitDirCacheValue string

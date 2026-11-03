@@ -10,12 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #2202: the #1737 case 2 fix regressed the apply path twice -
-// (A) same-preset Enter clobbered the user's typed version and
-// re-persisted the old value; (B) switching presets never loaded the
-// target preset's default version (stale custom version leaked into the
-// new preset).
-
 func new2202Panel(cursor int, currentPreset, versionValue string) *impersonatePanelState {
 	p := &impersonatePanelState{
 		section:       impSectionPresets,
@@ -51,7 +45,7 @@ func TestIssue2202SamePresetEnterKeepsTypedVersion(t *testing.T) {
 func TestIssue2202PresetSwitchLoadsTargetDefault(t *testing.T) {
 	m := newTestModel()
 	m.SetConfig(config.DefaultConfig())
-	// persisted chrome custom version still in the input; cursor on firefox
+
 	m.impersonatePanel = new2202Panel(1, "chrome", "v120-custom")
 
 	m2, _ := m.handleImpersonatePanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})

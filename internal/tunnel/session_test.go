@@ -63,7 +63,7 @@ func TestSessionOnConnected(t *testing.T) {
 
 func TestSessionStopNilClient(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
-	// Should not panic when client is nil
+
 	sess.Stop()
 }
 
@@ -113,7 +113,7 @@ func TestSessionDestroyGracefullyWithClient(t *testing.T) {
 
 func TestSessionInfoRWMutex(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
-	// Set info directly
+
 	sess.mu.Lock()
 	sess.info = &SessionInfo{Token: "test"}
 	sess.mu.Unlock()

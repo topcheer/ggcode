@@ -1,12 +1,5 @@
 package update
 
-// #1832 case 1 regression: ApplyBinary (Unix self-update path) must back up
-// each target before replacing it and roll back earlier targets when a later
-// one fails - mirroring RunHelper's #1402/#1423 contract. Previously it
-// wrote every target bare, so a failure on the second of two targets
-// (npm/python wrapper installs) left the first already overwritten: a
-// half-updated install with no repair entry point.
-
 import (
 	"encoding/json"
 	"os"
@@ -30,9 +23,6 @@ func writeManifest1832(t *testing.T, dir, sourceName string, targets []string) P
 	return PreparedUpdate{ManifestPath: mp}
 }
 
-// TestApplyBinaryRollsBackEarlierTargetsOnFailure: target 2's parent is a
-// regular file, so its MkdirAll fails AFTER target 1 was already replaced -
-// target 1's original bytes must be restored.
 func TestApplyBinaryRollsBackEarlierTargetsOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	target1 := filepath.Join(dir, "bin", "ggcode")
@@ -42,8 +32,7 @@ func TestApplyBinaryRollsBackEarlierTargetsOnFailure(t *testing.T) {
 	if err := os.WriteFile(target1, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A regular FILE where target 2's parent directory should be - MkdirAll
-	// fails deterministically.
+
 	blocker := filepath.Join(dir, "blocked")
 	if err := os.WriteFile(blocker, []byte("i am a file"), 0o644); err != nil {
 		t.Fatal(err)
@@ -69,11 +58,9 @@ func TestApplyBinaryRollsBackEarlierTargetsOnFailure(t *testing.T) {
 	}
 }
 
-// TestApplyBinaryRollsBackFreshTarget: a target that did not exist before
-// the run must be REMOVED on rollback, not left as a half-new file.
 func TestApplyBinaryRollsBackFreshTarget(t *testing.T) {
 	dir := t.TempDir()
-	target1 := filepath.Join(dir, "ggcode-new") // did not exist before
+	target1 := filepath.Join(dir, "ggcode-new")
 	blocker := filepath.Join(dir, "blocked")
 	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
 		t.Fatal(err)
@@ -91,7 +78,6 @@ func TestApplyBinaryRollsBackFreshTarget(t *testing.T) {
 	}
 }
 
-// TestApplyBinaryAllTargetsSucceed: happy path - two targets, both replaced.
 func TestApplyBinaryAllTargetsSucceed(t *testing.T) {
 	dir := t.TempDir()
 	target1 := filepath.Join(dir, "a", "ggcode")

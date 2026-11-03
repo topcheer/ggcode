@@ -2,23 +2,11 @@
 
 package runfile
 
-// Regression probes for #3079 (process_windows.go):
-//   V2a: exit code 259 is STILL_ACTIVE, but a process whose REAL exit code
-//        was exactly 259 was judged alive forever (GetExitCodeProcess==259
-//        ambiguity); the wait-state check is unambiguous.
-//   V2b: procStartTime returned "" on Windows, fully disabling the #1624
-//        PID-recycle fallback (runfile.go's gate is skipped when either
-//        side has no token).
-//
-// Runs only on Windows CI; GOOS=windows compile/vet gates the rest.
-
 import (
 	"os"
 	"testing"
 )
 
-// TestIssue3079_ExitCode259IsDead is THE V2a regression probe: a process
-// that genuinely exited with code 259 must be reported dead.
 func TestIssue3079_ExitCode259IsDead(t *testing.T) {
 	p, err := os.StartProcess(`C:\Windows\System32\cmd.exe`, []string{`/c`, `exit 259`}, &os.ProcAttr{})
 	if err != nil {
@@ -36,8 +24,6 @@ func TestIssue3079_ExitCode259IsDead(t *testing.T) {
 	}
 }
 
-// TestIssue3079_ProcStartTimeToken covers V2b: non-empty for a live pid,
-// stable across calls, empty for a dead pid.
 func TestIssue3079_ProcStartTimeToken(t *testing.T) {
 	self := os.Getpid()
 	tok1 := procStartTime(self)
@@ -63,8 +49,6 @@ func TestIssue3079_ProcStartTimeToken(t *testing.T) {
 	}
 }
 
-// TestIssue3079_SelfAlive pins the basics after the rewrite (companion of
-// the #1290 suite).
 func TestIssue3079_SelfAlive(t *testing.T) {
 	if !processExists(os.Getpid()) {
 		t.Fatal("current process must be reported alive via wait-state check")

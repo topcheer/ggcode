@@ -40,13 +40,12 @@ type ResolvedServer struct {
 	InstallHint string
 }
 
-// InstallScope indicates the installation scope.
 type InstallScope string
 
 const (
-	ScopeUser    InstallScope = "user"    // Installed to user's home directory
-	ScopeGlobal  InstallScope = "global"  // System-wide installation
-	ScopeProject InstallScope = "project" // Installed inside the project directory
+	ScopeUser    InstallScope = "user"
+	ScopeGlobal  InstallScope = "global"
+	ScopeProject InstallScope = "project"
 )
 
 type InstallOption struct {
@@ -87,19 +86,11 @@ var builtinServerSpecs = []serverSpec{
 	{id: "csharp", displayName: "C#", binaries: []string{"csharp-ls"}, rootMarkers: []string{"Directory.Build.props", "global.json"}, extensions: []string{".cs", ".csproj", ".sln"}},
 }
 
-// serverOverrides holds optional user-configured overrides keyed by language ID.
-// Set via SetServerOverrides at startup from config.LSPServers.
-// #1273: written whenever a runtime core is built (daemon per-task dispatch,
-// desktop multi-session re-init) while discovery reads it on hot paths
-// (post-edit diagnostics goroutines, session starts). Unsynchronized Go map
-// access is a fatal, unrecoverable crash - guard with a mutex.
 var (
 	serverOverridesMu sync.RWMutex
 	serverOverrides   map[string]config.LSPServerConfig
 )
 
-// lookupServerOverride returns the configured override for langID (#1273
-// read side; empty ok means none).
 func lookupServerOverride(langID string) (config.LSPServerConfig, bool) {
 	serverOverridesMu.RLock()
 	defer serverOverridesMu.RUnlock()
@@ -107,14 +98,12 @@ func lookupServerOverride(langID string) (config.LSPServerConfig, bool) {
 	return ov, ok
 }
 
-// SetServerOverrides configures custom LSP server binary paths and arguments.
 func SetServerOverrides(overrides map[string]config.LSPServerConfig) {
 	serverOverridesMu.Lock()
 	defer serverOverridesMu.Unlock()
 	serverOverrides = overrides
 }
 
-// ServerOverrides returns the currently configured server overrides.
 func ServerOverrides() map[string]config.LSPServerConfig {
 	serverOverridesMu.RLock()
 	defer serverOverridesMu.RUnlock()
@@ -192,7 +181,7 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 		if !matched {
 			continue
 		}
-		// Check user-configured override first.
+
 		if ov, ok := lookupServerOverride(spec.id); ok && ov.Binary != "" {
 			return ResolvedServer{
 				LanguageID:  languageIDForFile(spec.id, path),
@@ -220,10 +209,7 @@ func ResolveServerForWorkspace(workspace string) (ResolvedServer, bool) {
 		if !lang.Available {
 			continue
 		}
-		// Check user-configured override first (#1284: this was the one bare
-		// serverOverrides[lang.ID] read left behind by the #1273 mutex fix;
-		// ResolveServerForFile got the accessor, this symmetric function
-		// didn't, racing SetServerOverrides on -race and beyond).
+
 		if ov, ok := lookupServerOverride(lang.ID); ok && ov.Binary != "" {
 			return ResolvedServer{
 				LanguageID:  lang.ID,
@@ -277,8 +263,7 @@ func scanWorkspaceExtensions(workspace string) map[string]struct{} {
 			return nil
 		}
 		if path == filepath.Clean(workspace) {
-			// Never skip the workspace root itself, even if its base name
-			// (e.g. ".work", "vendor", "build") matches the skip list.
+
 			return nil
 		}
 		if d.IsDir() {
@@ -388,9 +373,6 @@ func resolveServerBinary(spec serverSpec, workspace string) (string, bool) {
 	return "", false
 }
 
-// probeExternalToolchain runs the toolchain-spawning fallback probes for a
-// spec. Callers must go through cachedExternalProbe, which memoizes results
-// (including negatives) to avoid re-spawning npm/rustup/dotnet per edit.
 func probeExternalToolchain(spec serverSpec, workspace string) (display string, command string, ok bool) {
 	switch spec.id {
 	case "rust":
@@ -437,25 +419,13 @@ func resolveWorkspaceToolFallback(candidates []string, workspace string) (displa
 	return "", "", false
 }
 
-// externalProbeTimeout bounds the synchronous rustup/npm probing subprocesses
-// (#3035): they run on the editing tools' sync path (probeExternalToolchain <-
-// resolveManagedBinary <- Diagnostics), so a pathological npm (file lock,
-// npmrc-triggered network probe, slow Windows cmd chain) could block a single
-// edit indefinitely.
 const externalProbeTimeout = 8 * time.Second
 
-// runExternalProbe executes a probing subprocess with a bounded timeout
-// (#3035). A timeout is reported as a normal probe failure - discovery
-// moves on to the next candidate instead of hanging the editor path.
 func runExternalProbe(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), externalProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
-	// #3035: CommandContext kills the direct child at the deadline, but a
-	// GRANDCHILD (sh -c "sleep 30") inherits the stdout pipe fd and keeps
-	// Output's internal Wait blocked until it exits on its own. WaitDelay
-	// force-closes the pipes shortly after cancellation so the probe returns
-	// near the deadline regardless of orphaned descendants.
+
 	cmd.WaitDelay = 2 * time.Second
 	detachConsole(cmd)
 	out, err := cmd.Output()
@@ -597,12 +567,7 @@ func executableExists(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
-	// #3035: on Unix a fallback candidate without ANY execute bit is not a
-	// usable server - reporting it as found only deferred the failure to a
-	// cryptic "permission denied" at startClient. PATH candidates already
-	// get exec-bit semantics via exec.LookPath; keep the two consistent.
-	// Windows os.Stat perms are always 0666 (no exec bit exists), so the
-	// check is Unix-only.
+
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0111 == 0 {
 		return false
 	}
@@ -714,8 +679,6 @@ func installHint(languageID, workspace string) string {
 	}
 }
 
-// GetInstallOptions returns the available install options for a language ID.
-// Returns nil if the language is not recognized or has no install path.
 func GetInstallOptions(languageID, workspace string) []InstallOption {
 	for _, spec := range builtinServerSpecs {
 		if spec.id == languageID {
@@ -867,7 +830,7 @@ func installOptions(spec serverSpec, workspace string) []InstallOption {
 		if strings.TrimSpace(command) == "" && strings.TrimSpace(binary) == "" {
 			return nil
 		}
-		scope := ScopeUser // brew/go/rustup are all user-level by default
+		scope := ScopeUser
 		return []InstallOption{{
 			ID:          spec.id,
 			Label:       firstNonEmpty(binary, spec.displayName),
@@ -967,8 +930,6 @@ func nodeWorkspaceInstallCommand(packages ...string) string {
 		"&& npm install --save-dev " + joined
 }
 
-// npmGlobalInstallCommand installs npm packages globally (user-level by default
-// in modern npm, or falls back to system global).
 func npmGlobalInstallCommand(packages ...string) string {
 	joined := strings.Join(packages, " ")
 	if runtime.GOOS == "windows" {
@@ -982,7 +943,6 @@ func npmGlobalInstallCommand(packages ...string) string {
 		"&& npm install -g " + joined
 }
 
-// pythonUserInstallCommand installs a Python package to the user's home directory.
 func pythonUserInstallCommand(packageName string) string {
 	packageName = strings.TrimSpace(packageName)
 	if packageName == "" {
@@ -1002,7 +962,6 @@ func pythonUserInstallCommand(packageName string) string {
 		"else echo 'Python is required to install Python LSP servers. Install Python first.' >&2; exit 1; fi"
 }
 
-// csharpUserInstallCommand installs csharp-ls as a dotnet global tool (user-level).
 func csharpUserInstallCommand() string {
 	if runtime.GOOS == "windows" {
 		return strings.Join([]string{

@@ -18,13 +18,7 @@ func ReadClipboard() (Image, error) {
 	defer os.RemoveAll(tmpDir)
 
 	pngPath := filepath.Join(tmpDir, "clipboard.png")
-	// #1807 case 2: an osascript failure (TCC denial - the user clicked
-	// "Don't Allow" on the permission prompt) used to fold into
-	// ErrClipboardImageUnavailable, i.e. "no image" - every subsequent
-	// paste silently no-op'd and the user was nudged into pointless
-	// re-copying. #425 fixed this exact distinction for the file-list
-	// path; the image path lagged. Mirror it: only a TRULY empty
-	// clipboard maps to Unavailable.
+
 	pngErr := writeClipboardImage("«class PNGf»", pngPath)
 	if pngErr == nil {
 		return ReadFile(pngPath)
@@ -84,11 +78,6 @@ func convertClipboardTIFFToPNG(srcPath, dstPath string) error {
 	return nil
 }
 
-// isNoClipboardImageError reports whether the osascript error means the
-// clipboard simply has no image (the AppleScript "missing value" /
-// clipboard-set-to-text family) - as opposed to a TCC permission denial
-// or an execution failure, which must surface (#1807 case 2, mirroring
-// the #425 file-list distinction).
 func isNoClipboardImageError(err error) bool {
 	if err == nil {
 		return false

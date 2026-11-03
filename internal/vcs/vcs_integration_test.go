@@ -131,29 +131,25 @@ func TestHgStatus_NotARepo(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// Subversion Integration Tests
-// =====================================================================
-
 func setupSvnRepo(t *testing.T) string {
 	t.Helper()
 	if !hasBinary("svn") || !hasBinary("svnadmin") {
 		t.Skip("svn or svnadmin not installed")
 	}
-	// Create a local SVN repository and check out a working copy.
+
 	repoDir := t.TempDir()
 	wcDir := t.TempDir()
-	// svnadmin create
+
 	cmd := exec.Command("svnadmin", "create", repoDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("svnadmin create: %v\n%s", err, out)
 	}
-	// svn checkout
+
 	cmd = exec.Command("svn", "checkout", "file://"+repoDir, wcDir, "--non-interactive")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("svn checkout: %v\n%s", err, out)
 	}
-	// Write a file and commit.
+
 	writeFile(t, wcDir, "README.md", "# svn repo\n")
 	cmd = exec.Command("svn", "add", "README.md")
 	cmd.Dir = wcDir
@@ -255,12 +251,12 @@ func TestSvnCommit(t *testing.T) {
 func TestSvnCurrentBranch(t *testing.T) {
 	dir := setupSvnRepo(t)
 	v := Subversion{}
-	// For svn, "branch" is the last path component of the repo URL.
+
 	branch, err := v.CurrentBranch(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("CurrentBranch: %v", err)
 	}
-	// Should return something non-empty.
+
 	if branch == "" {
 		t.Error("expected non-empty branch/repo name")
 	}
@@ -295,22 +291,17 @@ func TestDetectThenStatus_RealSvnRepo(t *testing.T) {
 
 func TestSvnStatus_NotARepo(t *testing.T) {
 	v := Subversion{}
-	// svn status works on any directory (returns empty). This is expected
-	// svn behavior — unlike git, svn doesn't error on non-repo dirs.
+
 	out, err := v.Status(context.Background(), t.TempDir())
 	if err != nil {
-		// If it does error on some platforms, that's fine too.
+
 		return
 	}
-	// On a non-repo dir, output should be empty.
+
 	if strings.TrimSpace(out) != "" {
 		t.Logf("svn status on non-repo returned: %q (expected empty)", out)
 	}
 }
-
-// =====================================================================
-// Jujutsu Integration Tests
-// =====================================================================
 
 func setupJjRepo(t *testing.T) string {
 	t.Helper()
@@ -318,22 +309,21 @@ func setupJjRepo(t *testing.T) string {
 		t.Skip("jj not installed")
 	}
 	dir := t.TempDir()
-	// jj git init --colocate creates a repo with .jj and .git dirs.
-	// Use `jj init` (or `jj git init`) — detect will find .jj.
+
 	cmd := exec.Command("jj", "git", "init", "--colocate")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("jj git init: %v\n%s", err, out)
 	}
-	// Write a file. jj tracks it automatically.
+
 	writeFile(t, dir, "README.md", "# jj repo\n")
-	// Describe the current change (commit message).
+
 	cmd = exec.Command("jj", "describe", "-m", "initial commit")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("jj describe: %v\n%s", err, out)
 	}
-	// Create a new change on top so the initial one is finalized.
+
 	cmd = exec.Command("jj", "new")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -345,15 +335,12 @@ func setupJjRepo(t *testing.T) string {
 func TestJjStatus_CleanRepo(t *testing.T) {
 	dir := setupJjRepo(t)
 	v := Jujutsu{}
-	// After setup, we're on a new empty change — should be "clean".
+
 	out, err := v.Status(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	// #1407-A changed Status to 'jj diff -r @ --summary': a clean change
-	// yields EMPTY output (the old prose "no changes" line no longer flows
-	// through this path; the assertion had drifted and only survived
-	// because integration_local runs outside CI).
+
 	if strings.TrimSpace(out) != "" {
 		t.Errorf("expected empty summary for clean repo, got %q", out)
 	}
@@ -400,13 +387,13 @@ func TestJjLog(t *testing.T) {
 func TestJjCommit(t *testing.T) {
 	dir := setupJjRepo(t)
 	v := Jujutsu{}
-	// Write a file, then commit.
+
 	writeFile(t, dir, "committed.txt", "data\n")
 	_, err := v.Commit(context.Background(), dir, "my test commit")
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	// After Commit (describe + new), working copy should be clean.
+
 	clean, err := v.IsClean(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("IsClean: %v", err)
@@ -415,7 +402,7 @@ func TestJjCommit(t *testing.T) {
 		out, _ := v.Status(context.Background(), dir)
 		t.Errorf("expected clean after commit, status: %q", out)
 	}
-	// Verify the commit appears in log.
+
 	out, _ := v.Log(context.Background(), dir, 5)
 	if !strings.Contains(out, "my test commit") {
 		t.Errorf("log should contain 'my test commit': %q", out)
@@ -444,9 +431,7 @@ func TestJjIsClean(t *testing.T) {
 	if !clean {
 		t.Error("expected clean for empty working copy")
 	}
-	// #1853: IsClean uses 'jj diff -r @ --summary' (empty = clean) - the
-	// version-drifting prose line ("is clean" before jj 0.26, "has no
-	// changes" after) judged a clean repo permanently dirty on old jj.
+
 	writeFile(t, dir, "notes.txt", "dirty now\n")
 	clean, err = v.IsClean(context.Background(), dir)
 	if err != nil {
@@ -460,12 +445,11 @@ func TestJjIsClean(t *testing.T) {
 func TestDetectThenStatus_RealJjRepo(t *testing.T) {
 	dir := setupJjRepo(t)
 	v := Detect(dir)
-	// jj git init --colocate creates both .jj and .git — Detect prefers git.
-	// This is expected behavior. Verify we detect *something*.
+
 	if v == nil {
 		t.Fatal("expected VCS detection, got nil")
 	}
-	// When colocated, git takes priority.
+
 	if v.Name() != "git" && v.Name() != "jj" {
 		t.Errorf("expected git or jj, got %s", v.Name())
 	}

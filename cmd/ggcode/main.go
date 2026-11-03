@@ -15,9 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// logWriter redirects standard library log output to debug.Log so that
-// third-party libraries (pion/turn, pion/webrtc) writing via the standard
-// log package don't corrupt the TUI by writing directly to stderr.
 type logWriter struct{}
 
 func (logWriter) Write(p []byte) (int, error) {
@@ -25,21 +22,8 @@ func (logWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// redirectStderr replaces os.Stderr with a pipe that captures all writes
-// and routes them to debug.Log. This is the bulletproof approach:
-// even if a library creates its own log.New(os.Stderr, ...) or writes
-// via fmt.Fprint(os.Stderr, ...), the output is captured instead of
-// corrupting the TUI.
-//
-// The original stderr is saved as origStderr for use during shutdown
-// (e.g. fatal error messages that must reach the user).
 var origStderr *os.File
 
-// restoreStderrFD, when non-nil, puts the original terminal file descriptor
-// back onto fd 2. It is set by redirectStderr when the fd-level tee was
-// installed (see teeStderrFD) and MUST be called before writing anything to
-// stderr on shutdown paths - os.Stderr/origStderr still refer to fd 2, which
-// the tee repointed at the capture pipe.
 var restoreStderrFD func()
 
 func redirectStderr() {
@@ -47,8 +31,7 @@ func redirectStderr() {
 
 	r, w, err := os.Pipe()
 	if err != nil {
-		// If pipe creation fails, fall back to /dev/null — better than
-		// corrupting the TUI.
+
 		if devNull, err2 := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err2 == nil {
 			os.Stderr = devNull
 		}
@@ -57,25 +40,17 @@ func redirectStderr() {
 
 	os.Stderr = w
 
-	// FD-level tee: runtime fatal dumps (concurrent map access, OOM, ...)
-	// write directly to fd 2, bypassing the os.Stderr variable swap above.
-	// Dup the pipe onto fd 2 so the reader below sees those bytes too, and
-	// keep a restore hook for the shutdown paths. Best effort: without it
-	// (Windows, dup failure) behavior is unchanged.
 	if restore, ok := teeStderrFD(w); ok {
 		restoreStderrFD = restore
 	}
 
 	var mu sync.Mutex
 	buf := make([]byte, 0, 4096)
-	// ring keeps the trailing stderr bytes so a crash dump's beginning
-	// (written before the reader noticed) is still persisted.
+
 	const ringCap = 256 << 10
 	ring := make([]byte, 0, ringCap+4096)
 	var dumpFile *os.File
 
-	// startFatalCapture opens the crash capture file on first sight of a
-	// runtime-level crash banner, writing everything seen so far.
 	startFatalCapture := func() {
 		if dumpFile != nil {
 			return
@@ -100,14 +75,13 @@ func redirectStderr() {
 			if n > 0 {
 				mu.Lock()
 				chunk := tmp[:n]
-				// Ring first (raw), so fatal capture includes pre-banner bytes.
+
 				ring = append(ring, chunk...)
 				if len(ring) > ringCap {
 					ring = ring[len(ring)-ringCap:]
 				}
 				if dumpFile != nil {
-					// Mid-dump: stream raw bytes to the crash file; skip line
-					// processing - dumps can be megabytes.
+
 					_, _ = dumpFile.Write(chunk)
 					mu.Unlock()
 					if err != nil {
@@ -134,17 +108,7 @@ func redirectStderr() {
 					buf = buf[idx+1:]
 					if line != "" {
 						if looksFatal(line) {
-							// Banner sighted: persist ring + remainder, then
-							// keep streaming raw.
-							// #1620: BREAK, not continue - the line was just
-							// prepended back to buf, so `continue` re-reads
-							// the SAME line, looksFatal is deterministic, and
-							// the inner loop spins forever between the two
-							// states: mu never unlocks, stderr never drains
-							// (the process hangs instead of crashing), and
-							// the dump grows with repeated banner lines
-							// forever. Breaking exits to the outer read
-							// loop, whose raw branch takes over.
+
 							buf = append([]byte(line+"\n"), buf...)
 							startFatalCapture()
 							if dumpFile != nil {
@@ -174,11 +138,6 @@ func redirectStderr() {
 	}()
 }
 
-// looksFatal reports whether an stderr line is a runtime-level crash banner:
-// the moment such a line is seen, the capture reader starts persisting the
-// whole stream to ~/.ggcode/crash/fatal-*.log. The goroutine heuristics
-// ([running]) catch dump bodies even when the banner line itself was split
-// across pipe reads.
 func looksFatal(line string) bool {
 	return strings.HasPrefix(line, "fatal error:") ||
 		strings.HasPrefix(line, "panic:") ||
@@ -187,23 +146,13 @@ func looksFatal(line string) bool {
 		strings.HasPrefix(line, "goroutine ") && strings.HasSuffix(line, " [running]:")
 }
 
-// shouldRedirectStderr reports whether os.Stderr should be captured into the
-// debug log for this invocation. The redirect exists solely to protect the
-// TUI from stderr writes corrupting the drawing surface. Pipe mode
-// (`ggcode -p`) and non-TUI subcommands (`version`, `daemon`, `im`, ...) never
-// render the TUI, so redirecting buys nothing and actively swallows every
-// error message: RunPipe's fmt.Fprintf(os.Stderr, ...) paths and its os.Exit
-// calls happen deep inside cobra's RunE, where the restore-before-exit logic
-// below is structurally unreachable (#536). Skipping the redirect up front
-// keeps CI/scripts seeing real error output on stderr.
 func shouldRedirectStderr(args []string) bool {
 	for _, a := range args {
 		if a == "-p" || a == "--prompt" || strings.HasPrefix(a, "--prompt=") {
-			return false // pipe mode: errors must reach the caller's stderr
+			return false
 		}
 	}
-	// A bare first argument that is not a flag is a subcommand
-	// (version, completion, daemon, im, mcp, llm-probe, acp, ...) — no TUI.
+
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		return false
 	}
@@ -211,39 +160,22 @@ func shouldRedirectStderr(args []string) bool {
 }
 
 func main() {
-	// Linux sandbox launcher re-entry (Landlock + seccomp, see
-	// internal/tool/shell_sandbox_linux.go): run_command rewrites sandboxed
-	// commands to launch ggcode itself with this marker; the launcher applies
-	// the kernel sandbox to the process and execve(2)s the real command.
-	// MUST be intercepted before any cobra/TUI wiring. Never returns on
-	// success; failure exits non-zero (fail closed), never runs unsandboxed.
+
 	if len(os.Args) > 2 && os.Args[1] == tool.SandboxLaunchMarker {
 		if tool.SandboxLaunchEntry == nil {
 			fmt.Fprintln(os.Stderr, "ggcode sandbox launcher: missing on this platform")
 			os.Exit(126)
 		}
 		tool.SandboxLaunchEntry(os.Args[2], os.Args[3:])
-		os.Exit(126) // unreachable: entry never returns
+		os.Exit(126)
 	}
 
-	// Top-level panic containment (1a of the v1.3.224 crash follow-up):
-	// every launched goroutine is safego-protected, but this main goroutine
-	// (cobra execution, TUI event loop via tea.Run) was bare - a panic here
-	// died with nothing on disk. Registered BEFORE defer debug.Close() so it
-	// unwinds first (LIFO): write the crash log, restore stderr, exit
-	// nonzero. os.Exit skips remaining defers by design on a crash path.
 	defer func() {
 		if r := recover(); r != nil {
 			path := agent.WriteCrashLog("cli", r)
-			// Flush the debug ring BEFORE exiting: os.Exit skips the
-			// defer debug.Close() below (LIFO: this defer runs first), and the
-			// ring holds the last pre-panic log lines - the most valuable
-			// diagnostics. close() is idempotent, so the deferred one after is
-			// harmless.
+
 			debug.Close()
-			// Restore fd 2 FIRST: with the fd-level tee active, origStderr (fd 2)
-			// points at the capture pipe - the crash banner would vanish into
-			// the ring instead of reaching the user's terminal.
+
 			if restoreStderrFD != nil {
 				restoreStderrFD()
 			}
@@ -256,22 +188,16 @@ func main() {
 	}()
 	defer debug.Close()
 
-	// Redirect os.Stderr at the file descriptor level. This catches ALL
-	// writes to stderr regardless of how the library obtained the fd:
-	// log.New(os.Stderr, ...), fmt.Fprint(os.Stderr, ...), etc.
-	// #536: skipped entirely for pipe mode and non-TUI subcommands so their
-	// error output reaches the real stderr instead of the debug ring buffer.
 	if shouldRedirectStderr(os.Args[1:]) {
 		redirectStderr()
 
-		// Also redirect the standard log package's default output.
 		log.SetOutput(logWriter{})
 		log.SetFlags(0)
 	}
 
 	cmd := NewRootCmd()
 	if err := cmd.Execute(); err != nil {
-		// Restore stderr for the final error message so the user can see it.
+
 		if restoreStderrFD != nil {
 			restoreStderrFD()
 		}

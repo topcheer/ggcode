@@ -1,9 +1,5 @@
 package extpane
 
-// #1722 case 2: every write path in this package used to be unbounded -
-// cmdpane has capped+truncated at 5MB since forever. Pins the three
-// capped write sites and the truncation behavior itself.
-
 import (
 	"os"
 	"path/filepath"
@@ -25,7 +21,7 @@ func TestIssue1722WriteCappedTruncates(t *testing.T) {
 	if fi, _ := os.Stat(p); fi.Size() == 0 {
 		t.Fatal("first under-cap write must persist")
 	}
-	// This write exceeds the cap: file truncated, then the new text lands.
+
 	writeExtCapped(ep, "after-cap")
 	b, _ := os.ReadFile(p)
 	if string(b) != "after-cap" {
@@ -39,13 +35,12 @@ func TestIssue1722ThreeSitesCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(src)
-	// The capped helper exists and is used at the buffer flush, the
-	// immediate write, and the done flush - three formerly-uncapped sites.
+
 	n := strings.Count(s, "writeExtCapped(ep")
-	if n < 4 { // 3 call sites + 1 definition
+	if n < 4 {
 		t.Fatalf("expected 3 call sites + definition, found %d - a write path lost its cap", n-1)
 	}
-	if strings.Count(s, "ep.LogFile.WriteString(") != 1 { // only inside the helper
+	if strings.Count(s, "ep.LogFile.WriteString(") != 1 {
 		t.Fatal("raw WriteString must exist only inside writeExtCapped")
 	}
 }

@@ -8,7 +8,6 @@ import (
 //go:embed all:dist
 var spaFS embed.FS
 
-// spafs is the embedded filesystem stripped of the "dist/" prefix.
 var spafs fs.FS
 
 func init() {

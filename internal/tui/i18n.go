@@ -12,8 +12,6 @@ var (
 	zhModuleCatalogs = make(map[string]string)
 )
 
-// registerCatalog merges a module's key-value pairs into the global extension catalogs.
-// Called from init() in i18n module files.
 func registerCatalog(en, zh map[string]string) {
 	moduleCatalogsMu.Lock()
 	defer moduleCatalogsMu.Unlock()
@@ -25,14 +23,6 @@ func registerCatalog(en, zh map[string]string) {
 	}
 }
 
-// lookupModuleCatalog resolves a key in the module catalogs. Only English and
-// Chinese have module dictionaries; every other language's main switch
-// delegates straight to enCatalog on a miss (#1372/#1376), so the old
-// ja/ko/es/fr/de/ru/pt/vi maps and their lookup cases were dead architecture
-// from an earlier per-lang design: the maps were never written, and the only
-// callers are the en and zh switch defaults. Behavior is unchanged - any
-// non-zh language still resolves through the en module fallback (zh-TW
-// reuses the zh-CN catalogs, as before).
 func lookupModuleCatalog(lang Language, key string) (string, bool) {
 	moduleCatalogsMu.RLock()
 	defer moduleCatalogsMu.RUnlock()
@@ -61,9 +51,7 @@ const (
 )
 
 func normalizeLanguage(s string) Language {
-	// #894: POSIX-style locales (zh_TW.UTF-8, fr_FR.ISO-8859-1) carry a
-	// codeset suffix that no case below matched — strip it first, and
-	// normalize '_' to '-' so zh_tw maps like zh-tw already does.
+
 	norm := strings.ToLower(strings.TrimSpace(s))
 	if i := strings.IndexByte(norm, '.'); i >= 0 {
 		norm = norm[:i]
@@ -236,7 +224,7 @@ func languageOptionsFor(lang Language) []languageOption {
 		{label: "Tiếng Việt", shortcut: "9", lang: LangVi},
 		{label: "繁體中文", shortcut: "t", lang: LangZhTW},
 	}
-	// Move current language to top
+
 	result := make([]languageOption, 0, len(all))
 	for _, opt := range all {
 		if opt.lang == lang {
@@ -440,7 +428,7 @@ func tr(lang Language, key string, args ...any) string {
 	case LangVi:
 		msg = viCatalog(key)
 	case LangZhTW:
-		msg = zhCatalog(key) // reuse zh-CN translations
+		msg = zhCatalog(key)
 	default:
 		msg = enCatalog(key)
 	}

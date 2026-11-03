@@ -10,7 +10,7 @@ import (
 func TestBuildRewindMemory_ListsDedupedFiles(t *testing.T) {
 	reverted := []checkpoint.Checkpoint{
 		{FilePath: "/w/src/a.go", ToolCall: "edit_file"},
-		{FilePath: "/w/src/a.go", ToolCall: "edit_file"}, // same file, deduped
+		{FilePath: "/w/src/a.go", ToolCall: "edit_file"},
 		{FilePath: "/w/src/b.go", ToolCall: "write_file"},
 	}
 	got := buildRewindMemory(reverted, 2)
@@ -39,7 +39,7 @@ func TestBuildRewindMemory_CapsFileList(t *testing.T) {
 			ToolCall: "edit_file",
 		})
 	}
-	// 15 distinct files: cap is 10 listed + "+5 more".
+
 	got := buildRewindMemory(reverted, 1)
 	if !strings.Contains(got, "+5 more") {
 		t.Errorf("expected '+5 more' cap marker, got:\n%s", got)
@@ -51,7 +51,7 @@ func TestRewindFileList_SortedAndDeduped(t *testing.T) {
 		{FilePath: "/w/z.go"},
 		{FilePath: "/w/a.go"},
 		{FilePath: "/w/z.go"},
-		{FilePath: ""}, // skipped
+		{FilePath: ""},
 	})
 	want := "a.go, z.go"
 	if strings.Join(files, ", ") != want {

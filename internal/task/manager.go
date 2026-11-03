@@ -30,7 +30,6 @@ func IsValidStatus(s string) bool {
 	return false
 }
 
-// Task represents a single tracked task in the session.
 type Task struct {
 	ID          string
 	Subject     string
@@ -45,7 +44,6 @@ type Task struct {
 	UpdatedAt   time.Time
 }
 
-// Snapshot returns a copy of the task safe for external use.
 func (t *Task) Snapshot() Task {
 	cp := *t
 	cp.Blocks = append([]string(nil), t.Blocks...)
@@ -59,34 +57,30 @@ func (t *Task) Snapshot() Task {
 	return cp
 }
 
-// UpdateOptions specifies which fields to change on a task.
 type UpdateOptions struct {
 	Status         *TaskStatus
-	ExpectedStatus *TaskStatus // if set, the update fails if current status doesn't match
+	ExpectedStatus *TaskStatus
 	Subject        *string
 	Description    *string
 	ActiveForm     *string
 	Owner          *string
 	AddBlocks      []string
 	AddBlockedBy   []string
-	Metadata       map[string]string // merged; nil values are ignored
+	Metadata       map[string]string
 }
 
-// Manager tracks tasks within a single session (in-memory, no persistence).
 type Manager struct {
 	mu     sync.Mutex
 	tasks  map[string]*Task
 	nextID int
 }
 
-// NewManager creates an empty task manager.
 func NewManager() *Manager {
 	return &Manager{
 		tasks: make(map[string]*Task),
 	}
 }
 
-// Create adds a new task and returns a snapshot.
 func (m *Manager) Create(subject, description, activeForm string, metadata map[string]string) Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -113,7 +107,6 @@ func (m *Manager) Create(subject, description, activeForm string, metadata map[s
 	return t.Snapshot()
 }
 
-// Get retrieves a task by ID. Returns the snapshot and whether it was found.
 func (m *Manager) Get(taskID string) (Task, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,10 +118,6 @@ func (m *Manager) Get(taskID string) (Task, bool) {
 	return t.Snapshot(), true
 }
 
-// List returns snapshots of all tasks in a deterministic order (#2764):
-// in-progress first, then by creation time, with task ID as the tiebreaker.
-// Map iteration order is randomized in Go, so without this sort every caller
-// (including Digest) would observe a different subset/order per call.
 func (m *Manager) List() []Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -138,8 +127,7 @@ func (m *Manager) List() []Task {
 		out = append(out, t.Snapshot())
 	}
 	sort.Slice(out, func(i, j int) bool {
-		// In-progress tasks lead the list: they are the tasks the model is
-		// actively working on and the most expensive to lose from context.
+
 		ipi, ipj := out[i].Status == StatusInProgress, out[j].Status == StatusInProgress
 		if ipi != ipj {
 			return ipi
@@ -152,19 +140,11 @@ func (m *Manager) List() []Task {
 	return out
 }
 
-// Defaults for Digest when the caller passes non-positive caps.
 const (
 	defaultDigestMaxTasks = 20
 	defaultDigestMaxChars = 1200
 )
 
-// Digest renders a compact summary of the non-completed tasks for
-// re-injection into model context after compaction (task-board
-// rehydration). Completed tasks are counted but not listed: the
-// compaction summary's "Done" section already carries them narratively,
-// and listing them wastes attention budget. Returns "" when nothing is
-// pending or in progress. maxTasks caps the number of listed tasks;
-// maxChars caps the total output (rune-safe).
 func (m *Manager) Digest(maxTasks, maxChars int) string {
 	if maxTasks <= 0 {
 		maxTasks = defaultDigestMaxTasks
@@ -186,9 +166,7 @@ func (m *Manager) Digest(maxTasks, maxChars int) string {
 	if n := utf8.RuneCountInString(out); n > maxChars {
 		runes := []rune(out)
 		cut := string(runes[:maxChars])
-		// Truncate at the last full-line boundary (#2764): a mid-line cut
-		// leaves a broken task ID or subject in the re-injected digest and
-		// shifts between compactions as the preceding lines change.
+
 		if i := strings.LastIndex(cut, "\n"); i > 0 {
 			cut = cut[:i]
 		}
@@ -197,12 +175,6 @@ func (m *Manager) Digest(maxTasks, maxChars int) string {
 	return out
 }
 
-// digestStats counts tasks by status and renders the capped open-task
-// list (trailing newline trimmed). Split from Digest to keep each unit
-// simple. The listed subset is deterministic (#2764): List is ordered
-// (in-progress first, then oldest-first), so the first maxTasks entries are
-// the most important ones and consecutive digests of an unchanged board are
-// byte-identical.
 func (m *Manager) digestStats(maxTasks int) (digestStats, string) {
 	var st digestStats
 	var sb strings.Builder
@@ -230,8 +202,6 @@ type digestStats struct {
 	lines      int
 }
 
-// truncateDigestSubject caps a task subject for digest rendering (rune-safe
-// so CJK subjects are not cut mid-rune).
 func truncateDigestSubject(s string) string {
 	const maxDigestSubject = 80
 	if n := utf8.RuneCountInString(s); n > maxDigestSubject {
@@ -240,7 +210,6 @@ func truncateDigestSubject(s string) string {
 	return s
 }
 
-// Update modifies a task according to opts. Returns the updated snapshot.
 func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -250,34 +219,20 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		return Task{}, fmt.Errorf("task %q not found", taskID)
 	}
 
-	// Validate expected status (for conditional updates)
 	if opts.ExpectedStatus != nil && t.Status != *opts.ExpectedStatus {
 		return Task{}, fmt.Errorf("task %q status is %s, expected %s", taskID, t.Status, *opts.ExpectedStatus)
 	}
 
-	// Validate status transition FIRST (#803): collect dependency edges and
-	// verify them before ANY mutation, so 'error = not modified' holds even
-	// when a later edge fails — Update(id, {Status: completed, AddBlockedBy:
-	// [nonexistent]}) must not leave Status half-applied.
 	if opts.Status != nil && !IsValidStatus(string(*opts.Status)) {
 		return Task{}, fmt.Errorf("invalid status %q", *opts.Status)
 	}
-	// #2581: virtual-graph edges this call will introduce. The
-	// pre-validation loops below used to judge each edge against the
-	// ORIGINAL graph; edges from the OTHER array of the same call were
-	// only re-checked mid-apply (after Status and earlier edges had been
-	// written), so a transitive cross-array cycle left a half-applied,
-	// sticky-poisoned board (no remove-edge op exists; retry hit the
-	// pre-validation wall). Simulate the full edge set up front so every
-	// cycle check sees the post-apply graph.
-	// #4636: cap is a hint only - len+1 arithmetic trips CodeQL's
-	// allocation-overflow advisory; plain len is behavior-identical.
+
 	virtualBlockedBy := make(map[string][]string, len(opts.AddBlocks))
 	if len(opts.AddBlockedBy) > 0 {
-		virtualBlockedBy[taskID] = opts.AddBlockedBy // apply writes taskID.BlockedBy += depID
+		virtualBlockedBy[taskID] = opts.AddBlockedBy
 	}
 	for _, blockID := range opts.AddBlocks {
-		virtualBlockedBy[blockID] = append(virtualBlockedBy[blockID], taskID) // apply writes blockID.BlockedBy += taskID
+		virtualBlockedBy[blockID] = append(virtualBlockedBy[blockID], taskID)
 	}
 
 	for _, blockID := range opts.AddBlocks {
@@ -287,10 +242,7 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if !m.hasTask(blockID) {
 			return Task{}, fmt.Errorf("blocked task %q not found", blockID)
 		}
-		// #1297: args were swapped. wouldCreateCycle(start, target) checks
-		// whether target is reachable from start's BlockedBy chain; adding
-		// "taskID blocks blockID" creates a cycle iff taskID is already
-		// transitively blocked by blockID, i.e. wouldCreateCycle(taskID, blockID).
+
 		if m.wouldCreateCycleVirtual(virtualBlockedBy, taskID, blockID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
 		}
@@ -302,20 +254,16 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if !m.hasTask(depID) {
 			return Task{}, fmt.Errorf("blocking task %q not found", depID)
 		}
-		// #1297: adding "depID blocks taskID" - cycle iff depID is already
-		// transitively blocked by taskID.
+
 		if m.wouldCreateCycleVirtual(virtualBlockedBy, depID, taskID) {
 			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q (including edges from this call's addBlocks)", depID)
 		}
-		// #1345: direct cross-array cycle kept as a fast path with its
-		// clearer message - the virtual-graph check above already covers
-		// the transitive generalization (#2581).
+
 		if contains(opts.AddBlocks, depID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q cannot both block and be blocked by task %q", taskID, depID)
 		}
 	}
 
-	// All validation passed — apply mutations.
 	if opts.Status != nil {
 		t.Status = *opts.Status
 	}
@@ -332,18 +280,15 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		t.Owner = *opts.Owner
 	}
 
-	// Add block relationships (validated above; now safe to apply)
 	for _, blockID := range opts.AddBlocks {
-		// #1297: re-check against evolving state - earlier iterations of
-		// this loop add reverse links that earlier edges' validations did
-		// not see (the pre-validation loop judged each edge in isolation).
+
 		if m.wouldCreateCycle(taskID, blockID) {
 			return Task{}, fmt.Errorf("circular dependency detected: adding block %q → %q would close a cycle", taskID, blockID)
 		}
 		if !contains(t.Blocks, blockID) {
 			t.Blocks = append(t.Blocks, blockID)
 		}
-		// Add reverse link
+
 		blocked := m.tasks[blockID]
 		if !contains(blocked.BlockedBy, taskID) {
 			blocked.BlockedBy = append(blocked.BlockedBy, taskID)
@@ -356,24 +301,20 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if !m.hasTask(blockerID) {
 			return Task{}, fmt.Errorf("blocker task %q not found", blockerID)
 		}
-		// Cycle detection: if taskID is already (transitively) blocking
-		// blockerID... #1297: args were swapped here too. Adding
-		// "blockerID blocks taskID" closes a cycle iff blockerID is
-		// already transitively blocked by taskID.
+
 		if m.wouldCreateCycle(blockerID, taskID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q already (transitively) blocks task %q — cannot add blockedBy %q → %q", blockerID, taskID, taskID, blockerID)
 		}
 		if !contains(t.BlockedBy, blockerID) {
 			t.BlockedBy = append(t.BlockedBy, blockerID)
 		}
-		// Add reverse link
+
 		blocker := m.tasks[blockerID]
 		if !contains(blocker.Blocks, taskID) {
 			blocker.Blocks = append(blocker.Blocks, taskID)
 		}
 	}
 
-	// Merge metadata
 	if opts.Metadata != nil {
 		if t.Metadata == nil {
 			t.Metadata = make(map[string]string)
@@ -387,8 +328,6 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	return t.Snapshot(), nil
 }
 
-// Delete removes a task by ID and cleans up dangling block references
-// in other tasks.
 func (m *Manager) Delete(taskID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -396,7 +335,7 @@ func (m *Manager) Delete(taskID string) bool {
 	if _, ok := m.tasks[taskID]; !ok {
 		return false
 	}
-	// Clean up block references in remaining tasks.
+
 	for id, other := range m.tasks {
 		if id == taskID {
 			continue
@@ -422,22 +361,10 @@ func (m *Manager) hasTask(id string) bool {
 	return ok
 }
 
-// wouldCreateCycle checks if adding "from blocks to" would create a
-// circular dependency. It traverses the BlockedBy chain starting from
-// 'start' to see if 'target' is reachable. If so, adding the edge
-// target→start would close a cycle.
-//
-// Example: A blocks B, B blocks C. If we try to add C blocks A:
-// wouldCreateCycle(C, A) traverses C.BlockedBy → [B], B.BlockedBy → [A]
-// finds A → returns true (cycle detected).
 func (m *Manager) wouldCreateCycle(start, target string) bool {
 	return m.wouldCreateCycleVirtual(nil, start, target)
 }
 
-// wouldCreateCycleVirtual is wouldCreateCycle over the task graph plus a
-// set of prospective BlockedBy edges (keyed by task ID) - #2581: lets
-// pre-validation see the graph AS IT WILL BE after this call's addBlocks /
-// addBlockedBy both apply, so every cycle is rejected before any mutation.
 func (m *Manager) wouldCreateCycleVirtual(extraBlockedBy map[string][]string, start, target string) bool {
 	visited := make(map[string]bool)
 	var check func(taskID string) bool

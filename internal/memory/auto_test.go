@@ -17,12 +17,10 @@ func TestAutoMemory_SaveAndLoad(t *testing.T) {
 		t.Fatalf("SaveMemory: %v", err)
 	}
 
-	// Verify file exists
 	if _, err := os.Stat(filepath.Join(tmpDir, "test-key.md")); err != nil {
 		t.Fatal("file not created")
 	}
 
-	// Load
 	content, files, err := am.LoadAll()
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
@@ -98,15 +96,12 @@ func TestSanitizeKey(t *testing.T) {
 	}
 }
 
-// TestDisambiguateKey guards #775: distinct keys must never map to the same
-// memory file. sanitizeKey alone collapses "a/b"/"a.b"/"a b" to "a-b" and pure
-// CJK keys to "" (-> untitled), silently overwriting memories.
 func TestDisambiguateKey(t *testing.T) {
-	// Clean ASCII keys keep the readable form.
+
 	if got := disambiguateKey("build-process", sanitizeKey("build-process")); got != "build-process" {
 		t.Errorf("clean key should stay readable, got %q", got)
 	}
-	// Colliding sanitizations must diverge via the hash suffix.
+
 	seen := map[string]string{}
 	for _, key := range []string{"a/b", "a.b", "a b", "a-b"} {
 		got := disambiguateKey(key, sanitizeKey(key))
@@ -115,7 +110,7 @@ func TestDisambiguateKey(t *testing.T) {
 		}
 		seen[got] = key
 	}
-	// Pure-CJK keys must not share untitled.md either.
+
 	cn1 := disambiguateKey("构建流程", sanitizeKey("构建流程"))
 	cn2 := disambiguateKey("发版流程", sanitizeKey("发版流程"))
 	if cn1 == cn2 {
@@ -126,9 +121,6 @@ func TestDisambiguateKey(t *testing.T) {
 	}
 }
 
-// TestSaveAndDeleteRoundTripNonInjective guards the #775 Save/Delete path
-// alignment: a memory saved under a non-injective key must be deletable by
-// the same key (DeleteMemory previously resolved the filename differently).
 func TestSaveAndDeleteRoundTripNonInjective(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
@@ -146,10 +138,6 @@ func TestSaveAndDeleteRoundTripNonInjective(t *testing.T) {
 	}
 }
 
-// TestLoadKeySingleKeyIsolation pins #1388: LoadKey must return ONLY the
-// requested key's content - the reflection loop previously used LoadAll
-// (every active key merged) and re-saved the merge into its own key,
-// cross-polluting unrelated memories into every prompt injection.
 func TestLoadKeySingleKeyIsolation(t *testing.T) {
 	am := NewAutoMemory()
 	dir := t.TempDir()
@@ -170,7 +158,6 @@ func TestLoadKeySingleKeyIsolation(t *testing.T) {
 		t.Fatalf("LoadKey leaked other keys or wrong content: %q", got)
 	}
 
-	// Missing key: empty, not an error (first-write case).
 	got, err = am.LoadKey("never-saved")
 	if err != nil || got != "" {
 		t.Fatalf("missing key should be (\"\", nil), got (%q, %v)", got, err)

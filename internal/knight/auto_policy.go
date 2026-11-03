@@ -10,17 +10,11 @@ type AutoPolicy struct {
 	Mode        string
 	Description string
 	Guardrail   string
-	// Effective is true if this policy is currently active given the running
-	// trust level and capability set. Disabled policies still appear so users
-	// can audit what Knight could do under a different config.
+
 	Effective bool
 	Reason    string
 }
 
-// trustCanWrite reports whether the trust level grants write access
-// (#1604-E): 'trust != "readonly"' was fail-open - any unrecognized value
-// (typo, future level) granted write policies; the promotion branch
-// already used an exact 'trust == "auto"'. Whitelist instead.
 func trustCanWrite(trust string) bool {
 	return trust == "staged" || trust == "auto"
 }

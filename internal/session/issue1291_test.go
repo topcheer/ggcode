@@ -1,16 +1,5 @@
 package session
 
-// Regression test for GitHub issue #1291: backfill rewrites must be
-// SKIPPED when the session lock cannot be acquired - running the
-// read->tmp->rename rewrite anyway bypassed the #558 D cross-process
-// lost-update guard.
-//
-// Note: lockIndexFile uses a BLOCKING flock, so live contention simply
-// waits (safe). The dangerous path is the lock *failing* (e.g. the .flock
-// sidecar cannot be created). We inject that failure by pre-creating the
-// .flock path as a directory - os.OpenFile(O_CREATE) then fails with
-// EISDIR deterministically.
-
 import (
 	"os"
 	"path/filepath"
@@ -26,8 +15,6 @@ func TestIssue1291_BackfillSkipsWhenLockFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Records in the real JSONL schema: Type "message" with no "ts" field
-	// (zero timestamp) - the backfillTimestamps trigger condition.
 	const body = `{"type":"message","role":"user","content":"hi","id":""}
 {"type":"message","role":"assistant","content":"yo","id":""}
 `
@@ -37,14 +24,10 @@ func TestIssue1291_BackfillSkipsWhenLockFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Force lockSessionFile to FAIL: the .flock sidecar must be a file,
-	// pre-create it as a directory.
 	if err := os.Mkdir(path+".flock", 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Both backfills must no-op instead of rewriting (old code logged the
-	// lock failure and rewrote anyway - lost update).
 	store.backfillTimestamps(sessionID)
 	store.backfillIDs(sessionID, map[string]provider.Message{
 		"": {Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}},
@@ -57,13 +40,12 @@ func TestIssue1291_BackfillSkipsWhenLockFails(t *testing.T) {
 	if string(after) != body {
 		t.Fatalf("#1291: file rewritten despite lock failure (lost-update window open):\n%s", after)
 	}
-	// No stray tmp files either (the rewrite must never have started).
+
 	matches, _ := filepath.Glob(path + "*.tmp*")
 	if len(matches) > 0 {
 		t.Fatalf("rewrite left temp files despite lock failure: %v", matches)
 	}
 
-	// Sanity: with a working lock the backfill does run (file changes).
 	if err := os.Remove(path + ".flock"); err != nil {
 		t.Fatal(err)
 	}

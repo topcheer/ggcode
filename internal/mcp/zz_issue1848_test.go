@@ -1,12 +1,5 @@
 package mcp
 
-// #1848 case 1 regression: the #1659 fix claimed to normalize sse -> http
-// but only existed in a comment - Start's case matched "sse" (built the
-// httpClient, returned nil) while c.transport stayed "sse", so oauth wiring,
-// the GET notification stream, and sendRequestUnlocked's switch all missed
-// it: every Initialize fell to the stdio default and failed with
-// "stdin closed". The normalization must happen at construction.
-
 import (
 	"testing"
 
@@ -23,8 +16,7 @@ func TestNewClientFromConfigNormalizesSSEToHTTP(t *testing.T) {
 		t.Fatalf("transport = %q, want \"http\" (sse normalized at construction; the send path fell to stdio/\"stdin closed\" before)", c.transport)
 	}
 	if c.httpClient == nil && c.oauthHandler == nil {
-		// transport==http means Start wires the httpClient and oauth is
-		// constructible; both were skipped when transport stayed "sse".
+
 		t.Fatal("normalized transport must reach the http wiring paths")
 	}
 	if c.oauthHandler == nil {
@@ -38,7 +30,7 @@ func TestNewClientFromConfigKeepsOtherTransports(t *testing.T) {
 		{"http", "http"},
 		{"ws", "ws"},
 		{"", "stdio"},
-		{"SSE", "http"}, // case-insensitive resolution then normalized
+		{"SSE", "http"},
 	}
 	for _, c := range cases {
 		cl := NewClientFromConfig(config.MCPServerConfig{Name: "x", Type: c.typ, Command: "bin"})

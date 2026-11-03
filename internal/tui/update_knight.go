@@ -1,8 +1,5 @@
 package tui
 
-// #2422 knife D (knight task family): extracted verbatim from
-// Model.Update's inline case bodies - zero behavior change.
-
 import (
 	"fmt"
 
@@ -18,14 +15,9 @@ func (m Model) handleKnightStartupHintMsg(msg knightStartupHintMsg) (tea.Model, 
 }
 
 func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (tea.Model, tea.Cmd) {
-	// #902: empty case left the spinner forever and agentBusy stuck —
-	// every later submission queued behind a dead /knight run.
+
 	m.setLoading(false)
-	// #2815: setLoading does not touch the spinner (#902 fixed loading only,
-	// #1758 fixed the Start-side tick loss). Without Stop() the tick chain
-	// driven by model_update.go's spinner.IsActive() keeps re-rendering every
-	// frame forever, and stale statusActivity can bleed into a later task via
-	// ensureLoadingSpinner. Align with update_done.go completion paths.
+
 	m.spinner.Stop()
 	m.statusActivity = ""
 	m.statusToolName = ""
@@ -40,9 +32,9 @@ func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (tea.Model, te
 }
 
 func (m Model) handleKnightProjectProposalResultMsg(msg knightProjectProposalResultMsg) (tea.Model, tea.Cmd) {
-	// #902: same deadlock class as knightTaskResultMsg.
+
 	m.setLoading(false)
-	// #2815: symmetric Stop + status reset (see handleKnightTaskResultMsg).
+
 	m.spinner.Stop()
 	m.statusActivity = ""
 	m.statusToolName = ""
@@ -57,11 +49,7 @@ func (m Model) handleKnightProjectProposalResultMsg(msg knightProjectProposalRes
 }
 
 func (m Model) handleKnightTaskEventMsg(msg knightTaskEventMsg) (tea.Model, tea.Cmd) {
-	// #902: per model_messages.go these should surface as a system chat
-	// message (task started/completed progress).
-	// #1890: the START event used to setLoading(false) - a scheduled task
-	// never set loading, so this actively CLEARED a loading state owned
-	// by something else. Only completion touches loading now.
+
 	if msg.Report != "" {
 		if m.knightRunning > 0 {
 			m.knightRunning--

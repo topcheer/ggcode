@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// r10 instruction-driven forgetting (sa-160): ForgetKey hides from prompt
-// injection, RestoreKey reverses it, GarbageCollect is the only physical
-// deleter (#779 doctrine).
-
 func newForgetTestMemory(t *testing.T) *AutoMemory {
 	t.Helper()
 	return &AutoMemory{dir: t.TempDir()}
@@ -45,7 +41,7 @@ func TestForgetKey_RemovesFromPromptInjection(t *testing.T) {
 	}
 	for _, k := range index {
 		if k == "other-note" || strings.HasPrefix(k, "other-note") {
-			// sanity: survivor stays visible
+
 		}
 		if strings.HasPrefix(k, "build-process") {
 			t.Fatalf("forgotten key still in index list: %q", k)
@@ -111,7 +107,7 @@ func TestListForgotten_OldestFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Mark a-key first so age ordering is deterministic.
+
 	if err := am.ForgetKey("a-key"); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +141,7 @@ func TestGarbageCollect_DigestsForgotten(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(am.dir, "keeper.md")); err != nil {
 		t.Fatalf("keeper must survive GC: %v", err)
 	}
-	// After digestion, restoring must report not-forgotten (mark is gone).
+
 	if err := am.RestoreKey("doomed"); err == nil {
 		t.Fatal("RestoreKey after GC digestion must error (nothing to restore)")
 	}

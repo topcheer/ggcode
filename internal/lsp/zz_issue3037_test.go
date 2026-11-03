@@ -1,15 +1,5 @@
 package lsp
 
-// Regression probes for #3037:
-//   - O1: the unsupported-kinds note must travel as a return value - two
-//     concurrent parses cannot swallow each other's notes (the old
-//     package-global atomic + TakeUnsupportedNote raced between workspaces,
-//     regressing #1588-B's misleading bare "no edits returned").
-//   - S1: concurrent acquire() calls for different workspaces must not be
-//     serialized behind one workspace's startClient (spawn+handshake).
-//   - S2: awaitProjectReady must give up after a bounded wait when the
-//     project-ready signal never arrives (localized csharp-ls output).
-
 import (
 	"context"
 	"os"
@@ -52,9 +42,7 @@ func TestIssue3037_O1_ConcurrentParsersKeepTheirOwnNotes(t *testing.T) {
 }
 
 func TestIssue3037_O1_RenameEditsNoteIsPerCall(t *testing.T) {
-	// The note is THIS call's own value: a parse producing an unsupported
-	// note followed by a clean parse leaves nothing behind for a third
-	// consumer (compile-shape is pinned by RenameEdits' signature).
+
 	_, noted := parseWorkspaceEdit([]byte(`{"documentChanges":[{"kind":"rename","oldUri":"file:///a/old.go","newUri":"file:///a/new.go"}]}`))
 	if noted == "" {
 		t.Fatal("unsupported parse must yield a note")
@@ -70,7 +58,7 @@ func TestIssue3037_S2_AwaitProjectReadyTimesOut(t *testing.T) {
 	awaitProjectReadyTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { awaitProjectReadyTimeout = prev })
 
-	s := &sessionClient{readySignal: make(chan struct{})} // never signalled
+	s := &sessionClient{readySignal: make(chan struct{})}
 	s.resolved = ResolvedServer{Binary: "csharp-ls"}
 	start := time.Now()
 	if err := s.awaitProjectReady(context.Background()); err != nil {
@@ -88,7 +76,7 @@ func TestIssue3037_S2_AwaitProjectReadyReadySignalStillWins(t *testing.T) {
 	if err := s.awaitProjectReady(context.Background()); err != nil {
 		t.Fatalf("ready signal path must return nil, got %v", err)
 	}
-	// Non-retry servers skip the wait entirely.
+
 	plain := &sessionClient{readySignal: make(chan struct{})}
 	plain.resolved = ResolvedServer{Binary: "gopls"}
 	if err := plain.awaitProjectReady(context.Background()); err != nil {
@@ -97,10 +85,7 @@ func TestIssue3037_S2_AwaitProjectReadyReadySignalStillWins(t *testing.T) {
 }
 
 func TestIssue3037_S1_AcquireDoesNotHoldManagerLockAcrossStartClient(t *testing.T) {
-	// Two different workspaces acquiring concurrently must overlap in their
-	// slow-start phases; the old defer-unlock serialized them behind one
-	// workspace's spawn+handshake. A stub "server" that sleeps ~1s makes
-	// serialization measurable (>= 2x) vs overlap (~1x).
+
 	dir := t.TempDir()
 	stub := dir + "/slow-server"
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\nsleep 1\n"), 0o755); err != nil {

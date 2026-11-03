@@ -1,17 +1,5 @@
 package swarm
 
-// #2787 regression: ShutdownTeammate unconditionally deleted
-// m.results[tmID], contradicting #1814 ("shut the worker down, THEN
-// collect the output" is the most common leader order) and the emit
-// comment "Keep the last result available even after shutdown". The
-// delete was terminal data loss: no path writes the result back after
-// removal (#2121 late-emit guard drops ungoverned writes).
-//
-// Reclamation is NOT per-shutdown (pruning ungoverned entries there would
-// also delete OTHER teammates' not-yet-collected results): entries are
-// reclaimed by DeleteTeam's sweep plus the FIFO bound in
-// storeResultLocked (#1633 leak stays fixed).
-
 import (
 	"fmt"
 	"testing"
@@ -20,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// Guard probe: the stored result must survive the REAL shutdown path.
 func TestIssue2787_ResultSurvivesShutdownTeammate(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	team := m.CreateTeam("team-2787", "leader-1")
@@ -28,10 +15,8 @@ func TestIssue2787_ResultSurvivesShutdownTeammate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond) // let the idle loop start
+	time.Sleep(50 * time.Millisecond)
 
-	// Stored final result, exactly what the emit path writes on
-	// teammate_idle.
 	m.mu.Lock()
 	m.results[tm.ID] = "final output"
 	m.mu.Unlock()
@@ -46,10 +31,6 @@ func TestIssue2787_ResultSurvivesShutdownTeammate(t *testing.T) {
 	}
 }
 
-// Guard probe: an UNRELATED later shutdown must not sweep a peer's
-// stored-but-not-yet-collected result. (The first cut of this fix pruned
-// all ungoverned entries on every shutdown - A shut down uncollected, B
-// shut down next, A's output was lost.)
 func TestIssue2787_UncollectedPeerSurvivesUnrelatedShutdown(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	team := m.CreateTeam("team-2787-peer", "leader-1")
@@ -65,8 +46,6 @@ func TestIssue2787_UncollectedPeerSurvivesUnrelatedShutdown(t *testing.T) {
 		t.Fatalf("shutdown A: %v", err)
 	}
 
-	// Unrelated second teammate completes and is shut down BEFORE the
-	// leader ever collected A's result.
 	tmB, err := m.SpawnTeammate(team.ID, "worker-b", "", nil)
 	if err != nil {
 		t.Fatalf("spawn B: %v", err)
@@ -85,9 +64,6 @@ func TestIssue2787_UncollectedPeerSurvivesUnrelatedShutdown(t *testing.T) {
 	}
 }
 
-// Guard probe: bounded retention - the #1633 leak must not return. The
-// FIFO bound in storeResultLocked evicts the oldest entries once
-// maxStoredResults is exceeded.
 func TestIssue2787_ResultsFIFOBound(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	m.mu.Lock()
@@ -111,7 +87,6 @@ func TestIssue2787_ResultsFIFOBound(t *testing.T) {
 	}
 }
 
-// Re-writing an existing key must not duplicate its FIFO position.
 func TestIssue2787_ResultsUpdateKeepsFIFOPosition(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	m.mu.Lock()
@@ -131,9 +106,6 @@ func TestIssue2787_ResultsUpdateKeepsFIFOPosition(t *testing.T) {
 	}
 }
 
-// Guard probe: the team lifecycle sweep still reclaims entries
-// (DeleteTeam) - the primary reclamation path for teams that do get
-// deleted.
 func TestIssue2787_DeleteTeamStillReclaims(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	team := m.CreateTeam("team-2787-del", "leader-1")

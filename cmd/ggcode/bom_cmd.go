@@ -10,16 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/bom"
 )
 
-// newBOMCmd creates the "ggcode bom" subcommand: a read-only bill of materials
-// for everything the agent has learned - skills, staged skills, memories, and
-// trajectory insights - with content hash, source, and the promotion gate each
-// artifact passed. Answers the audit question "what is the agent made of right
-// now, and through which gate did each piece enter?" (sa-78).
-//
-// Usage:
-//
-//	ggcode bom            - aggregate the current workspace + user home
-//	ggcode bom --json     - same, machine-readable (default output is JSON)
 func newBOMCmd() *cobra.Command {
 	var workspace, home string
 	cmd := &cobra.Command{

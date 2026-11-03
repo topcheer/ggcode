@@ -1,12 +1,5 @@
 package knight
 
-// #3657 probes: (1) Start writes k.lock only under k.mu - concurrent
-// Start/Stop must be race-clean under -race (the detector is the
-// assertion). The old Start assigned k.lock and released it on error
-// paths entirely outside k.mu while Stop and Status read it under k.mu.
-// (2) Stop releases the cross-process instance lock only AFTER runLoop
-// fully exits - a Start immediately following Stop must reacquire it.
-
 import (
 	"context"
 	"sync"
@@ -25,7 +18,7 @@ func TestIssue3657_StartStopConcurrentRaceClean(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = k.Start(context.Background()) // ErrLockConflict ok mid-race
+			_ = k.Start(context.Background())
 		}()
 		go func() {
 			defer wg.Done()
@@ -33,7 +26,7 @@ func TestIssue3657_StartStopConcurrentRaceClean(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	k.Stop() // drain: lock must end up free
+	k.Stop()
 
 	k2 := New(config.DefaultKnightConfig(), home, proj, nil)
 	if err := k2.Start(context.Background()); err != nil {
@@ -51,8 +44,7 @@ func TestIssue3657_StopReleasesLockForRestart(t *testing.T) {
 		t.Fatalf("first Start: %v", err)
 	}
 	k.Stop()
-	// Lock must be free after Stop returns: a fresh Knight on the same
-	// projDir must reacquire it (a leaked/double-held lock fails here).
+
 	k2 := New(config.DefaultKnightConfig(), home, proj, nil)
 	if err := k2.Start(context.Background()); err != nil {
 		t.Fatalf("Start after Stop must reacquire the instance lock: %v", err)

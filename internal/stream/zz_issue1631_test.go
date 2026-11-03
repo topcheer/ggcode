@@ -1,10 +1,5 @@
 package stream
 
-// #1631 case 4: target URLs without a supported scheme (rtmp:// or
-// srt://) used to pass Validate (it only checked non-empty) and reached
-// ffmpeg, failing at runtime with "Unable to find a suitable output
-// format" - far from the cause. Validate now rejects at config time.
-
 import (
 	"strings"
 	"testing"

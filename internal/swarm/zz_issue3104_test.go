@@ -1,10 +1,5 @@
 package swarm
 
-// #3104 probe: BroadcastToTeam lacked the #2788 SendToTeammate shutdown
-// guard - a teammate mid-shutdown (Status flipped OR ctx already cancelled)
-// still counted as delivered while its dead inbox silently swallowed the
-// message. Construction mirrors zz_issue2788_test.go.
-
 import (
 	"context"
 	"testing"
@@ -12,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// injectTeammate inserts a hand-built teammate (no runner goroutine) into
-// the live team so the broadcast path can be probed in isolation.
 func injectTeammate(m *Manager, teamID string, tm *Teammate) {
 	m.mu.Lock()
 	team := m.teams[teamID]
@@ -48,8 +41,7 @@ func TestIssue3104BroadcastSkipsShuttingDownTeammate(t *testing.T) {
 }
 
 func TestIssue3104BroadcastSkipsCancelledCtxTeammate(t *testing.T) {
-	// Root-cancel propagation window: ctx is dead but Status has not been
-	// flipped yet - the ctx.Err() probe must still refuse the delivery.
+
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	team := m.CreateTeam("t3104b", "leader-1")
 	ctx, cancel := context.WithCancel(context.Background())

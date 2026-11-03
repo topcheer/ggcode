@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// FFmpegCheck holds the result of an ffmpeg availability check.
 type FFmpegCheck struct {
 	Available bool
 	Path      string
@@ -18,7 +17,6 @@ type FFmpegCheck struct {
 	Error     string
 }
 
-// CheckFFmpeg verifies that ffmpeg is installed and meets the minimum version requirement.
 func CheckFFmpeg() FFmpegCheck {
 	path, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -35,7 +33,6 @@ func CheckFFmpeg() FFmpegCheck {
 		}
 	}
 
-	// Parse version from output like "ffmpeg version 6.1.2" or "ffmpeg version 8.1"
 	line := strings.Split(string(out), "\n")[0]
 	re := regexp.MustCompile(`ffmpeg version (\d+)\.(\d+)`)
 	matches := re.FindStringSubmatch(line)
@@ -70,7 +67,6 @@ func CheckFFmpeg() FFmpegCheck {
 	}
 }
 
-// ffmpegInstallHint returns platform-specific installation instructions.
 func ffmpegInstallHint() string {
 	return strings.Join([]string{
 		"Install ffmpeg:",

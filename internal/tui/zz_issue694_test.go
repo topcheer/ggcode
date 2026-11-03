@@ -1,12 +1,5 @@
 package tui
 
-// Issue #694 (follow-up to #688): clearPendingApprovals dropped
-// pendingQuestionnaire without sending anything on its response channel.
-// The agent-side waiter (repl.go) blocks on a run-level ctx with no timeout,
-// so an unreleased waiter would hang the agent run goroutine and leave
-// m.loading stuck. The channel must be released with a non-blocking
-// cancelled response, mirroring the approval/diff-confirm patterns.
-
 import (
 	"testing"
 	"time"
@@ -24,8 +17,6 @@ func newQuestionnaire694(ch chan toolpkg.AskUserResponse) *questionnaireState {
 	return newQuestionnaireState(req, ch, LangEnglish)
 }
 
-// Core: clearPendingApprovals must release the questionnaire's response
-// channel with a Cancelled response, not just nil the state.
 func TestIssue694_ClearPendingApprovalsReleasesQuestionnaireChannel(t *testing.T) {
 	m := newTestModel()
 	ch := make(chan toolpkg.AskUserResponse, 1)
@@ -50,7 +41,6 @@ func TestIssue694_ClearPendingApprovalsReleasesQuestionnaireChannel(t *testing.T
 	}
 }
 
-// Session switch path (the #688 call site) releases the questionnaire too.
 func TestIssue694_SwitchSessionReleasesQuestionnaireChannel(t *testing.T) {
 	m := newTestModel()
 	ch := make(chan toolpkg.AskUserResponse, 1)
@@ -71,11 +61,10 @@ func TestIssue694_SwitchSessionReleasesQuestionnaireChannel(t *testing.T) {
 	}
 }
 
-// Nil / channel-less questionnaire must be a safe no-op (no panic).
 func TestIssue694_ClearPendingApprovalsNilQuestionnaireNoop(t *testing.T) {
 	m := newTestModel()
 	m.pendingQuestionnaire = nil
-	m.clearPendingApprovals() // must not panic
+	m.clearPendingApprovals()
 	if m.pendingQuestionnaire != nil {
 		t.Error("pendingQuestionnaire should stay nil")
 	}

@@ -5,30 +5,24 @@ import (
 	"strings"
 )
 
-// SecretPattern defines a detectable secret type.
 type SecretPattern struct {
 	ID                string
 	Name              string
-	Severity          string // "high", "medium", "low"
+	Severity          string
 	Pattern           *regexp.Regexp
-	CheckPlaceholders bool // if true, skip values that look like placeholders
+	CheckPlaceholders bool
 }
 
-// Finding represents a single detected secret occurrence.
 type Finding struct {
 	PatternID string
 	Name      string
 	Severity  string
-	Line      int    // 1-based line number
-	Match     string // the matched text (may be partially masked in output)
+	Line      int
+	Match     string
 }
 
-// secretPatterns is the curated list of high-signal secret patterns.
-// Patterns are ordered by specificity: provider-specific keys first, then
-// generic high-entropy patterns. False-positive-prone patterns use
-// look-arounds or minimum-length thresholds to reduce noise.
 var secretPatterns = []SecretPattern{
-	// ---- Cloud provider keys ----
+
 	{
 		ID:       "aws_access_key",
 		Name:     "AWS Access Key ID",
@@ -60,7 +54,6 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`AccountKey=[A-Za-z0-9+/=]{50,}`),
 	},
 
-	// ---- Source control / CI tokens ----
 	{
 		ID:       "github_pat",
 		Name:     "GitHub Personal Access Token",
@@ -71,8 +64,7 @@ var secretPatterns = []SecretPattern{
 		ID:       "github_fine_grained_token",
 		Name:     "GitHub Fine-Grained Token",
 		Severity: "high",
-		// #793: github_pat_ is the FINE-GRAINED form; classic tokens are
-		// ghp_/gho_ and are covered by the gh[pousr]_ pattern above.
+
 		Pattern: regexp.MustCompile(`github_pat_[0-9A-Za-z_]{82}`),
 	},
 	{
@@ -88,7 +80,6 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`xox[baprs]-[0-9A-Za-z\-]{10,48}`),
 	},
 
-	// ---- Package manager / registry tokens ----
 	{
 		ID:       "npm_token",
 		Name:     "NPM Auth Token",
@@ -99,10 +90,7 @@ var secretPatterns = []SecretPattern{
 		ID:       "pypi_token",
 		Name:     "PyPI Upload Token",
 		Severity: "high",
-		// #801: real tokens start 'pypi-AgEIcHlwaW5p' (base64 of the
-		// version-2 header + 'pypi'); the old hardcoded segment diverged at
-		// char 10 (a middle slice of one sample token) and missed ~100% of
-		// real keys. Length is variable (~70-100+).
+
 		Pattern: regexp.MustCompile("pypi-AgEIcHlwaW5p[A-Za-z0-9\\-_]{50,}"),
 	},
 	{
@@ -112,14 +100,11 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`dckr_pat_[0-9A-Za-z\-_]{27}`),
 	},
 
-	// ---- Private keys ----
 	{
 		ID:       "private_key_block",
 		Name:     "Private Key (PEM)",
 		Severity: "high",
-		// #3084: ENCRYPTED (openssl pkcs8 -topk8 passphrase form) added to
-		// the prefix alternation so the detection layer stops trailing the
-		// display layer's [A-Z ]* prefix class for this variant.
+
 		Pattern: regexp.MustCompile(`-----BEGIN (?:ENCRYPTED |RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
 	},
 	{
@@ -135,7 +120,6 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`),
 	},
 
-	// ---- Database connection strings ----
 	{
 		ID:       "db_conn_password",
 		Name:     "Database Connection String with Password",
@@ -143,9 +127,6 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`(?i)(?:postgres|postgresql|mongodb|mysql|redis|amqp)://[^:/\s@"']+:[^@\s"']{6,}@`),
 	},
 
-	// ---- Generic API key assignments ----
-	// Catches common patterns like: api_key = "sk-...", secret = "...", password = "..."
-	// Requires a minimum length and is scoped to assignment context to reduce false positives.
 	{
 		ID:                "generic_api_key_assignment",
 		Name:              "Hardcoded API Key / Secret Assignment",
@@ -157,9 +138,7 @@ var secretPatterns = []SecretPattern{
 		ID:       "openai_api_key",
 		Name:     "OpenAI API Key",
 		Severity: "high",
-		// Covers classic sk-... and modern sk-proj-.../sk-svcacct-... formats.
-		// #793: the char class also absorbs sk-ant- (Anthropic) keys; RE2
-		// has no lookahead, so the exclusion is applied in code (scan loop).
+
 		Pattern: regexp.MustCompile(`sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}`),
 	},
 	{
@@ -182,19 +161,14 @@ var secretPatterns = []SecretPattern{
 	},
 }
 
-// fileAllowlist lists file extensions and path patterns where secret-like
-// strings are expected (e.g., test fixtures, .env.example). We don't scan
-// these to avoid noise.
 var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_test\.go$`),
-	// #3081: the bare `\.test\.` infix allowlisted REAL configs
-	// (api.test.env, prod.test.conf) out of scanning entirely. Narrowed to
-	// known test-resource filename shapes; `api.test.env` scans again.
+
 	regexp.MustCompile(`\.test\.go$`),
 	regexp.MustCompile(`\.test\.py$`),
 	regexp.MustCompile(`\.test\.(js|ts|mjs|jsx|tsx)$`),
 	regexp.MustCompile(`\.test\.(json|ya?ml|golden|txt|input|output)$`),
-	regexp.MustCompile(`testdata[/\\]`), // both Unix and Windows path separators
+	regexp.MustCompile(`testdata[/\\]`),
 	regexp.MustCompile(`_fixture`),
 	regexp.MustCompile(`(?i)\.example$`),
 	regexp.MustCompile(`(?i)\.sample$`),
@@ -202,8 +176,6 @@ var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`secretdetect_test\.go$`),
 }
 
-// ScanForSecrets scans content for known secret patterns and returns findings.
-// filePath is used to skip allowlisted files (test fixtures, examples, etc.).
 func ScanForSecrets(filePath, content string) []Finding {
 	if isAllowlisted(filePath) {
 		return nil
@@ -214,9 +186,7 @@ func ScanForSecrets(filePath, content string) []Finding {
 
 	for _, sp := range secretPatterns {
 		matches := sp.Pattern.FindAllStringIndex(content, -1)
-		// #793: sk-ant- (Anthropic) keys also match the openai pattern's
-		// char class; RE2 lacks lookahead so drop them here.
-		// anthropic_api_key covers them -- no duplicate/misattribution.
+
 		if sp.ID == "openai_api_key" {
 			filtered := matches[:0]
 			for _, loc := range matches {
@@ -229,16 +199,13 @@ func ScanForSecrets(filePath, content string) []Finding {
 		}
 		for _, loc := range matches {
 			matchText := content[loc[0]:loc[1]]
-			// Extract the actual secret portion if the pattern has capture groups
+
 			submatch := sp.Pattern.FindStringSubmatch(matchText)
 			secretValue := matchText
 			if len(submatch) > 1 {
 				secretValue = submatch[1]
 			}
 
-			// Skip obvious placeholders for generic patterns only.
-			// Provider-specific patterns (AWS, GitHub, etc.) are specific
-			// enough that placeholder filtering would cause false negatives.
 			if sp.CheckPlaceholders && isPlaceholder(secretValue) {
 				continue
 			}
@@ -257,20 +224,17 @@ func ScanForSecrets(filePath, content string) []Finding {
 	return findings
 }
 
-// lineForOffset returns the 1-based line number for a byte offset.
 func lineForOffset(lines []string, offset int) int {
 	pos := 0
 	for i, line := range lines {
 		if pos+len(line) >= offset {
 			return i + 1
 		}
-		pos += len(line) + 1 // +1 for newline
+		pos += len(line) + 1
 	}
 	return 1
 }
 
-// isPlaceholder returns true for common placeholder/dummy values that are
-// not real secrets.
 func isPlaceholder(value string) bool {
 	lower := strings.ToLower(value)
 	placeholders := []string{
@@ -284,7 +248,7 @@ func isPlaceholder(value string) bool {
 			return true
 		}
 	}
-	// All same character (e.g., "aaaa...")
+
 	if len(value) >= 4 {
 		first := value[0]
 		allSame := true
@@ -301,8 +265,6 @@ func isPlaceholder(value string) bool {
 	return false
 }
 
-// maskSecret masks the middle portion of a secret for safe display.
-// Shows first 4 and last 4 characters, replacing the rest with asterisks.
 func maskSecret(value string) string {
 	if len(value) <= 12 {
 		return strings.Repeat("*", len(value))
@@ -310,7 +272,6 @@ func maskSecret(value string) string {
 	return value[:4] + strings.Repeat("*", len(value)-8) + value[len(value)-4:]
 }
 
-// isAllowlisted checks whether a file path matches any allowlist pattern.
 func isAllowlisted(filePath string) bool {
 	for _, re := range fileAllowlistPatterns {
 		if re.MatchString(filePath) {
@@ -320,8 +281,6 @@ func isAllowlisted(filePath string) bool {
 	return false
 }
 
-// FormatWarnings formats findings into a human-readable warning string
-// suitable for appending to a tool result.
 func FormatWarnings(findings []Finding) string {
 	if len(findings) == 0 {
 		return ""
@@ -337,14 +296,11 @@ func FormatWarnings(findings []Finding) string {
 	return sb.String()
 }
 
-// Sprintf returns a formatted single-line description of a finding.
 func (f Finding) Sprintf() string {
 	sev := strings.ToUpper(f.Severity)
 	return "WARNING [" + sev + "] " + f.Name + " at line " + itoa(f.Line) + ": " + f.Match + "\n"
 }
 
-// itoa is a minimal int-to-string without importing strconv (keeps the
-// formatting code self-contained for testability).
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

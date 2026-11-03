@@ -33,9 +33,6 @@ type pcResultMsg struct {
 	showQR    bool
 }
 
-// shortSessionID truncates a remote-supplied session ID for display.
-// #908: IDs come from the a2a peer with no protocol length guarantee —
-// naive [:12] panicked the render loop on short IDs.
 func shortSessionID(id string) string {
 	if len(id) > 12 {
 		return id[:12]
@@ -57,7 +54,6 @@ func (m Model) renderPCPanel() string {
 		return ""
 	}
 
-	// Header
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render("PrivateClaw Sessions"),
 		"",
@@ -93,7 +89,6 @@ func (m Model) renderPCPanel() string {
 		}
 		body = append(body, labels...)
 
-		// Details of selected session
 		s := sessions[selected]
 		body = append(body, "",
 			lipgloss.NewStyle().Bold(true).Render("Details"),
@@ -113,7 +108,6 @@ func (m Model) renderPCPanel() string {
 		}
 	}
 
-	// Create mode
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render("Actions"))
 	if panel.createMode {
 		groupLabel := "1:1"
@@ -131,7 +125,6 @@ func (m Model) renderPCPanel() string {
 		))
 	}
 
-	// Edit config section
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -142,9 +135,6 @@ func (m Model) renderPCPanel() string {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("  "+panel.message))
 	}
 
-	// #1386-A: the QR was stored but NEVER rendered - showQR/qrCode had
-	// zero render-side consumers, so pairing QRs were invisible even
-	// before the missing Update case dropped the message entirely.
 	if panel.showQR && panel.qrCode != "" {
 		body = append(body, "", panel.qrCode)
 		if panel.inviteURI != "" {
@@ -161,7 +151,6 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// QR view mode - any key exits
 	if panel.showQR {
 		panel.showQR = false
 		panel.qrCode = ""
@@ -169,7 +158,6 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Create mode
 	if panel.createMode {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -188,9 +176,7 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			return *m, nil
 		case "g", "G":
-			// #1386-C: in create-input mode 'g' must TYPE, not toggle - a
-			// session label could never contain the letter g. Functional
-			// keys only when the input is idle.
+
 			if strings.TrimSpace(panel.createInput) != "" {
 				panel.createInput += msg.Text
 				return *m, nil
@@ -207,7 +193,6 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Edit mode
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -271,10 +256,8 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// Commands
-
 func (m *Model) ensurePCReady() error {
-	// Ensure IM Manager is initialized
+
 	if m.imManager == nil {
 		if err := m.ensureCurrentWorkspaceIMManager("config not available", "", true); err != nil {
 			return fmt.Errorf("enable IM: %w", err)
@@ -282,7 +265,6 @@ func (m *Model) ensurePCReady() error {
 		m.imManager.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))
 	}
 
-	// Ensure PC adapter is started
 	if m.pcAdapter() != nil {
 		return nil
 	}
@@ -290,7 +272,7 @@ func (m *Model) ensurePCReady() error {
 	if err != nil {
 		return fmt.Errorf("starting PrivateClaw adapter: %w", err)
 	}
-	// Wait briefly for adapter to register
+
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if m.pcAdapter() != nil {
@@ -378,27 +360,19 @@ func (m *Model) pcCloseSessionCmd(sessionID string) tea.Cmd {
 }
 
 func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
-	// #1889 case 2: pcAdapterName ranges the shared m.config.IM.Adapters
-	// map, and the IM/matrix/wechat panels WRITE that map from their Update
-	// paths - reading it inside the Cmd goroutine is a concurrent map read
-	// (fatal). Prefetch the name HERE, on the Update loop, before the
-	// closure escapes. ensurePCReady stays in the goroutine: it busy-waits
-	// up to 3s for the manager and must not block Update.
+
 	adapterName := m.pcAdapterName()
 	return func() tea.Msg {
 		if m.imManager == nil {
 			return pcResultMsg{err: errors.New("IM manager not available")}
 		}
-		// #1750 case 3: create/Renew/Close all ensure the runtime adapter
-		// first; bind alone skipped it - an empty adapter name wrote a
-		// binding pointing at a nonexistent adapter into the store.
+
 		if err := m.ensurePCReady(); err != nil {
 			return pcResultMsg{err: fmt.Errorf("prepare private-claw runtime: %w", err)}
 		}
 		name := adapterName
 		if name == "" {
-			// ensurePCReady may have lazily registered the adapter just now;
-			// re-read via the manager (no config map access).
+
 			name = "_pc_builtin"
 		}
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
@@ -414,8 +388,6 @@ func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
 	}
 }
 
-// Helpers
-
 func (m *Model) pcAdapter() im.PCAdapterAPI {
 	if m.imManager == nil {
 		return nil
@@ -424,7 +396,7 @@ func (m *Model) pcAdapter() im.PCAdapterAPI {
 }
 
 func (m *Model) pcAdapterName() string {
-	// Prefer explicit config adapter name
+
 	if m.config != nil {
 		for name, adapter := range m.config.IMSnapshot().Adapters {
 			if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformPrivateClaw)) {
@@ -432,7 +404,7 @@ func (m *Model) pcAdapterName() string {
 			}
 		}
 	}
-	// Built-in adapter is always available
+
 	if m.pcAdapter() != nil {
 		return "_pc_builtin"
 	}
@@ -444,7 +416,7 @@ func (m Model) pcConnectionStatus() string {
 	if adapter == nil {
 		return m.t("panel.pc.status.starting")
 	}
-	// Check adapter state from IM manager snapshot
+
 	if m.imManager != nil {
 		for _, a := range m.imManager.Snapshot().Adapters {
 			if a.Platform == im.PlatformPrivateClaw {
@@ -456,22 +428,18 @@ func (m Model) pcConnectionStatus() string {
 					}
 					return m.t("panel.pc.status.connected_sessions", len(sessions))
 				case "error":
-					// #2224: hardcoded "error: %s" - the error state is
-					// routinely reachable (relay connect/request failures)
-					// and is the key diagnostic surface.
+
 					return m.t("panel.pc.status.error", a.LastError)
 				case "stopped":
 					return m.t("panel.pc.status.stopped")
 				default:
-					// #2224: idle/connecting/reconnecting arrived as raw
-					// English adapter statuses; pass them through the
-					// status-key convention with the raw value preserved.
+
 					return m.t("panel.pc.status.raw", a.Status)
 				}
 			}
 		}
 	}
-	// #2224: tail fallback bypassed the existing starting key.
+
 	return m.t("panel.pc.status.starting")
 }
 

@@ -2,9 +2,6 @@ package tui
 
 import "github.com/topcheer/ggcode/internal/provider"
 
-// formatUserFacingError converts an agent/provider error into a concise
-// human-readable message. Delegates to provider.UserFacingError for the
-// heavy lifting.
 func formatUserFacingError(lang Language, err error) string {
 	if err == nil {
 		if lang == LangZhCN {

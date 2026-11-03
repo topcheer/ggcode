@@ -2,8 +2,6 @@ package main
 
 import "testing"
 
-// pipeOutputIsValidJSON probes: raw JSON, markdown-fenced JSON (fallback
-// path tolerance), prose rejection.
 func TestPipeOutputIsValidJSON(t *testing.T) {
 	cases := []struct {
 		name string

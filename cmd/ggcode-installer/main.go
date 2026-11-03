@@ -34,10 +34,7 @@ func main() {
 
 	fmt.Printf("Installed %s to %s\n", filepath.Base(result.Path), result.Path)
 	if !isOnPath(filepath.Dir(result.Path)) {
-		// #1573-A: the python installer appends the install dir to the
-		// user's PATH (marker block / user Path variable); the Go port
-		// only printed a Note. Do the same now - "works after install"
-		// is the installer's core acceptance.
+
 		if changed, err := install.EnsureOnPath(filepath.Dir(result.Path)); err != nil {
 			fmt.Printf("Note: %s is not on your PATH yet and updating it failed: %v\n", filepath.Dir(result.Path), err)
 		} else if changed {
@@ -55,10 +52,7 @@ func isOnPath(dir string) bool {
 			return true
 		}
 	}
-	// #933: the fallback used to return true if ANY ggcode existed on PATH -
-	// installing to a custom -dir while an old /usr/local/bin/ggcode exists
-	// suppressed the not-on-PATH warning and the user silently ran the stale
-	// binary. Only count it when LookPath resolves INTO the install dir.
+
 	if found, err := exec.LookPath("ggcode"); err == nil {
 		if abs, err := filepath.Abs(found); err == nil {
 			return filepath.Clean(abs) == dir

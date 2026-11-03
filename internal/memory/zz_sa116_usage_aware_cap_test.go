@@ -1,10 +1,5 @@
 package memory
 
-// Usage-aware count-cap eviction (research sa-116, interference-based
-// forgetting per Microsoft Human-Inspired Memory 2026 / arXiv:2603.07670
-// 9.4): capByCountSplit must evict never-injected (Uses==0) default
-// entries before any entry with a retrieval history, regardless of age.
-
 import (
 	"testing"
 	"time"
@@ -22,9 +17,9 @@ func metaFor(key string, created time.Time, uses int) MemoryMeta {
 func TestUsageAwareCap_NeverUsedEvictedBeforeUsed(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	active := []MemoryMeta{
-		metaFor("old-used", base, 7),                   // oldest but frequently injected
-		metaFor("mid-never", base.AddDate(0, 1, 0), 0), // never injected
-		metaFor("new-never", base.AddDate(0, 2, 0), 0), // never injected
+		metaFor("old-used", base, 7),
+		metaFor("mid-never", base.AddDate(0, 1, 0), 0),
+		metaFor("new-never", base.AddDate(0, 2, 0), 0),
 	}
 	kept, evicted := capByCountSplit(active, 2)
 	if len(kept) != 2 || len(evicted) != 1 {
@@ -62,7 +57,7 @@ func TestUsageAwareCap_UsedEvictedOnlyWhenNoNeverUsedLeft(t *testing.T) {
 		metaFor("used-old", base, 3),
 		metaFor("used-new", base.AddDate(0, 1, 0), 1),
 	}
-	// No never-used entries: pure CreatedAt order decides among used ones.
+
 	_, evicted := capByCountSplit(active, 1)
 	if len(evicted) != 1 || evicted[0].Key != "used-old" {
 		t.Fatalf("both used: oldest used must go, got %v", keysOf(evicted))

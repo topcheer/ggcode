@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestConfirmHomeDirPlain verifies the line-oriented HOME-directory confirm
-// used by the linear frontend (#4604): y/yes continue, anything else exits,
-// and EOF defaults to continue (mirroring the TUI dialog's failure fallback).
 func TestConfirmHomeDirPlain(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -34,9 +31,6 @@ func TestConfirmHomeDirPlain(t *testing.T) {
 	}
 }
 
-// withStdinString replaces os.Stdin with a pipe carrying s and returns a
-// restore function. Output (the prompt) is discarded via os.DevNull-style
-// redirection into a discarded writer.
 func withStdinString(t *testing.T, s string) (restore func()) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -50,7 +44,7 @@ func withStdinString(t *testing.T, s string) (restore func()) {
 	oldStdin := os.Stdin
 	oldStdout := os.Stdout
 	os.Stdin = r
-	// Swallow the printed title/message/prompt so test output stays clean.
+
 	devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	os.Stdout = devNull
 	return func() {

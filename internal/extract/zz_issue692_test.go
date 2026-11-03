@@ -1,11 +1,5 @@
 package extract
 
-// Regression tests for issue #692 (regression of #687's attribution split):
-// a healthy tar.gz whose decompressed size exceeds the 200MB cap was labeled
-// "[Corrupt archive]" — misattributing a size limit to corruption. The
-// 200MB decompress-limit hit must surface the truncation marker, corruption
-// keeps the corrupt marker, and a header-boundary cut must not be silent.
-
 import (
 	"archive/tar"
 	"bytes"
@@ -14,11 +8,6 @@ import (
 	"testing"
 )
 
-// buildOversizedTarGz builds a healthy gzip-compressed tar whose decompressed
-// size exceeds maxTarDecompressSize. Entries are large zero blocks (gzip
-// compresses them to almost nothing). Using a FEW HUGE entries keeps the
-// test's memory flat: the per-entry read cap (1MB+1) means only ~3MB is ever
-// buffered while the decompressed stream still crosses the 200MB cap.
 func buildOversizedTarGz(t *testing.T, totalBytes int64) []byte {
 	t.Helper()
 	var compressed bytes.Buffer
@@ -52,8 +41,7 @@ func buildOversizedTarGz(t *testing.T, totalBytes int64) []byte {
 }
 
 func TestIssue692_SizeLimitHit_NotLabeledCorrupt(t *testing.T) {
-	// A healthy tar.gz decompressing to ~205MB: the LimitReader cut must
-	// surface a truncation marker, never the corrupt marker.
+
 	if testing.Short() {
 		t.Skip("streams 205MB through gzip")
 	}
@@ -73,10 +61,9 @@ func TestIssue692_SizeLimitHit_NotLabeledCorrupt(t *testing.T) {
 }
 
 func TestIssue692_CorruptGz_StillLabeledCorrupt(t *testing.T) {
-	// Guard the other direction: a genuinely damaged gz stream (byte count
-	// far below the cap) keeps the corrupt marker.
+
 	data := buildOversizedTarGz(t, 64*1024)
-	// Smash the middle of the compressed stream.
+
 	mid := len(data) / 2
 	for i := mid; i < mid+64 && i < len(data); i++ {
 		data[i] ^= 0xff
@@ -92,10 +79,7 @@ func TestIssue692_CorruptGz_StillLabeledCorrupt(t *testing.T) {
 }
 
 func TestIssue692_ListTarFromReader_LimitHitAttributesTruncated(t *testing.T) {
-	// Unit level: the counting reader drives the attribution. A stream that
-	// stops exactly at the cap (even via clean EOF) must report truncated,
-	// not corrupt — the old code marked corrupt on any non-EOF error and
-	// stayed silent on a boundary-aligned clean EOF.
+
 	if testing.Short() {
 		t.Skip("streams 200MB through the reader")
 	}
@@ -114,8 +98,7 @@ func TestIssue692_ListTarFromReader_LimitHitAttributesTruncated(t *testing.T) {
 }
 
 func TestIssue692_PlainTar_NoCapStillWorks(t *testing.T) {
-	// Plain .tar has no decompress cap (limited=nil): small clean archives
-	// must stay untruncated and uncorrupted.
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for i := 0; i < 3; i++ {
@@ -137,5 +120,3 @@ func TestIssue692_PlainTar_NoCapStillWorks(t *testing.T) {
 		t.Fatalf("expected 3 files / total 3, got %d/%d", len(files), total)
 	}
 }
-
-// firstLine helper is provided by zz_issue682_test.go.

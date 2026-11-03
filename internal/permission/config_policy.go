@@ -11,10 +11,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// DefaultMode is the default permission mode if not specified.
 var DefaultMode = SupervisedMode
 
-// ConfigPolicy implements PermissionPolicy based on configuration rules.
 type ConfigPolicy struct {
 	rules           map[string]Decision
 	sandbox         *PathSandbox
@@ -22,23 +20,18 @@ type ConfigPolicy struct {
 	detector        *DangerousDetector
 	mode            PermissionMode
 	cmdRules        *CommandRuleSet
-	networkDetector bool // if true, network egress commands trigger Ask in auto/bypass
+	networkDetector bool
 	mu              sync.RWMutex
 }
 
-// NewConfigPolicy creates a policy from tool rules and allowed directories.
-// Default decision is Ask for any tool not explicitly listed.
 func NewConfigPolicy(rules map[string]Decision, allowedDirs []string) *ConfigPolicy {
 	return NewConfigPolicyWithMode(rules, allowedDirs, DefaultMode)
 }
 
-// NewConfigPolicyWithMode creates a policy with an explicit permission mode.
 func NewConfigPolicyWithMode(rules map[string]Decision, allowedDirs []string, mode PermissionMode) *ConfigPolicy {
 	return NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, nil, mode)
 }
 
-// NewConfigPolicyWithModeAndReadOnlyDirs creates a policy with optional
-// read-only file access outside the main writable sandbox.
 func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDirs, readOnlyDirs []string, mode PermissionMode) *ConfigPolicy {
 	if rules == nil {
 		rules = make(map[string]Decision)
@@ -54,21 +47,18 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 	}
 }
 
-// SetCommandRuleSet replaces the command-level permission rules.
 func (p *ConfigPolicy) SetCommandRuleSet(rs *CommandRuleSet) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.cmdRules = rs
 }
 
-// CommandRuleSet returns the current command-level rule set.
 func (p *ConfigPolicy) CommandRuleSet() *CommandRuleSet {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cmdRules
 }
 
-// AllowCommandPattern adds a runtime allow pattern for commands.
 func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
 	p.mu.RLock()
 	rs := p.cmdRules
@@ -78,24 +68,8 @@ func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
 	}
 }
 
-// Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
-	// Don't dump tool input JSON - can be huge and contains file content
 
-	// #1595-C: an explicit user Deny is the STRONGEST signal (the #741 /
-	// #573-B comment itself says so) - it must precede the fast paths.
-	// IsAlwaysAllowedTool includes lanchat/im, and the benign-action
-	// branch returned Allow BEFORE the Deny lookup: a user who denied
-	// lanchat/im was silently ignored, and the ignored channel was
-	// exactly the outbound one Deny is most meant to gate.
-	//
-	// #1776 case 1: this fast path read p.rules UNLOCKED (the function's
-	// RLock only comes later) - a concurrent SetOverride/ClearOverride
-	// (TUI rule save) hit the same map and went fatal: concurrent map
-	// read and map write. The very race class #1596-D claimed to fix,
-	// reintroduced on the new fast path. Snapshot the deny state (and
-	// the command rule set, also read unlocked below) under one short
-	// RLock.
 	p.mu.RLock()
 	denyRule, hasDenyRule := p.rules[toolName]
 	askRule, hasAskRule := p.rules[toolName]
@@ -104,51 +78,24 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	if hasDenyRule && denyRule == Deny {
 		return Deny, nil
 	}
-	// #4533: explicit ask rules must outrank every fast- Allow path -
-	// the mirror of the Deny pre-check above. IsAlwaysAllowedTool, im
-	// benign actions and save_memory used to return Allow BEFORE the ask
-	// scan, so a user pinning any of them to ask got the promised Ask in
-	// GetDecision but a silent Allow in Check (deny was honored, ask was
-	// not - L180-188's own comment promises both survive the refactor).
+
 	if hasAskRule && askRule == Ask {
 		return Ask, nil
 	}
 
-	// Interactive/communication tools are always auto-approved regardless of mode.
-	// ask_user: the tool itself IS the user interaction - requiring approval would be circular.
-	// save_memory: writing project memory is always safe and expected.
-	// lanchat: P2P messaging between ggcode instances - no local filesystem or system impact.
 	if IsAlwaysAllowedTool(toolName) {
-		// #1705 case 1: switch_mode stays reachable in EVERY mode (the
-		// #1210 self-rescue invariant - an agent trapped in plan mode
-		// must always be able to switch OUT), but ESCALATING to
-		// bypass/autopilot now needs consent: one zero-confirmation
-		// call used to grant near-total permissions (self-escalation),
-		// and switching to auto/bypass from plan escaped #551-D's
-		// exit_plan_mode Ask gate through the WIDER unguarded channel.
-		// Downgrade/same-level switches (and escaping plan BACK to the
-		// session's supervised mode) stay auto-allowed.
+
 		if toolName == "switch_mode" && switchModeEscalates(input) {
 			return Ask, nil
 		}
 		return Allow, nil
 	}
-	// #1283: im is no longer blanket-approved - only its side-effect-free
-	// actions stay on the fast path. send/send_file must flow through the
-	// normal pipeline (deny rules first, then mode policy: plan denies,
-	// supervised asks) because send_file uploads arbitrary local files to
-	// external IM channels.
+
 	if toolName == "im" && imActionIsBenign(input) {
 		return Allow, nil
 	}
 	switch toolName {
-	// The Anthropic Memory Tool executes against its own confined store
-	// (internal/agent/memory_tool.go: every path is pinned under
-	// <workingDir>/.ggcode/memories, with traversal and symlink escape
-	// checks), making it the memory-tool analogue of save_memory: agent-owned
-	// state, never project source. Fast-path approval also keeps the
-	// protocol usable in plan mode, where the model may legitimately record
-	// research findings.
+
 	case "ask_user", "save_memory", "delete_memory", "memory", "recall_experience":
 		return Allow, nil
 	}
@@ -156,18 +103,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	// #573-B: deny rules are mode-independent. They were previously consulted
-	// only in the Supervised branch, so Bypass/Autopilot/Auto returned Allow for
-	// commands the user explicitly denied (e.g. deny "npm run boom"). Deny is
-	// the strongest user intent (cmd_rules.go: deny patterns always take
-	// precedence) and must win in every mode.
 	if isCommandTool(toolName) {
-		// #713: deny rules must cover every command channel. The terminal
-		// tools' `text` field (iterm2/warp "write text") is typed into the
-		// user's interactive shell and executes; leaving it unaudited let a
-		// deny rule be bypassed via that second channel in every mode.
+
 		for _, cmd := range extractCommandsForTool(toolName, input) {
-			if rs := cmdRuleSnapshot; rs != nil { // #1776: locked snapshot, not the live field
+			if rs := cmdRuleSnapshot; rs != nil {
 				if d, matched := rs.Check(cmd); matched && d == Deny {
 					debug.Log("permission", "command denied by deny rule (mode-independent)")
 					return Deny, nil
@@ -176,28 +115,16 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 	}
 
-	// #741 / #573-B extension: an explicit user Deny rule is mode-independent
-	// for EVERY tool, not just command tools. AutoMode previously never
-	// consulted p.rules, so a user-configured `tools.browser: deny` was
-	// silently ignored while the browser tool could navigate to file:// URLs
-	// that read_file would have sandboxed. Deny is the strongest user intent
-	// and must win in every mode, before any mode-specific logic runs.
-	if hasDenyRule && denyRule == Deny { // #1776: locked snapshot from the fast path
+	if hasDenyRule && denyRule == Deny {
 		debug.Log("permission", "tool denied by explicit deny rule (mode-independent): %s", toolName)
 		return Deny, nil
 	}
 
-	// Review (techwriter222, medium): an explicit user "ask" rule must stay
-	// meaningful after the two-mode refactor made the default Allow — a user
-	// who pinned a tool to ask (rules editor / always-ask memory) would
-	// otherwise be silently auto-approved in every mode. Floors below can
-	// still add their own Ask on top; this never downgrades a floor to Allow.
 	if hasDenyRule && denyRule == Ask {
 		debug.Log("permission", "tool pinned to ask by explicit user rule (mode-independent): %s", toolName)
 		return Ask, nil
 	}
-	// Command-pattern ask rules: same respect, per command. Checked after the
-	// deny loop above so deny patterns (stronger) win first.
+
 	if isCommandTool(toolName) && cmdRuleSnapshot != nil {
 		for _, cmd := range extractCommandsForTool(toolName, input) {
 			if d, matched := cmdRuleSnapshot.Check(cmd); matched && d == Ask {
@@ -207,39 +134,21 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 	}
 
-	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:
-		// Bypass mode: nothing is gated except system-level destructive
-		// commands AND persistence-backdoor writes (shell redirects to
-		// sensitive files, file-tool writes outside the sandbox) - the
-		// #573-C / locks.md S5 floors. These trigger on paths like
-		// ~/.ssh/authorized_keys, ~/.bashrc, /etc/** - rare by construction
-		// and never a daily-interruption source. The network-exfiltration
-		// and sensitive-read gates were removed in the two-mode refactor
-		// (they were the false-positive sources); mode-independent Deny
-		// rules at the top of Check still win. Cruise control (goal +
-		// strategist) rides on this mode.
+
 		if isCommandTool(toolName) {
-			// #713: audit every channel (command + terminal `text`).
+
 			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// Watchdog review (MED): the general exfil gate was removed from
-				// bypass as an FP source, but credential-theft uploads must not
-				// become zero-friction. Narrow floor: an upload-direction
-				// transfer whose command text carries a literal credential-path
-				// payload asks. Ordinary uploads (scp secret.txt host:) stay free.
+
 				if p.networkDetector && credentialPayloadExfil(cmd) {
 					debug.Log("permission", "credential-payload exfil gated in bypass mode (watchdog narrow floor)")
 					return Ask, nil
 				}
-				// #573-C: redirection targets are file writes - a shell
-				// redirect is the classic prompt-injection persistence path
-				// (`> ~/.ssh/authorized_keys`). Only sensitive targets gate
-				// (#4279: ordinary out-of-sandbox redirects are normal workflow,
-				// not backdoors - user-facing friction ruling).
+
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
 					if isSensitivePath(resolved) {
@@ -249,19 +158,11 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 			}
 		}
-		// File-tool write gate (#4279): only sensitive-path writes gate in
-		// bypass - ~/.aws/credentials, /etc/** etc., the persistence-backdoor
-		// class. Ordinary writes outside the writable sandbox are normal
-		// workflow and no longer ask (user friction ruling; ED commands and
-		// credential-exfil floors above still apply).
+
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" {
-					// #4532: expand ~ BEFORE the sensitive check - the
-					// redirect gates above (L234/305/351) all expand, but
-					// these write gates passed the raw path, so
-					// "~/.backdoorrc" missed the home-root dotfile rules and
-					// silently Allowed while the absolute path asked.
+
 					if isSensitivePath(expandTilde(path)) {
 						return Ask, nil
 					}
@@ -270,37 +171,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		return Allow, nil
 	case PlanMode:
-		// Plan mode is tool-entered (enter_plan_mode/exit_plan_mode); users
-		// cannot switch into it directly. Inside plan mode everything is
-		// allowed EXCEPT explicit file-writing tools - run_command and other
-		// shell access is permitted (planning may need builds, probes,
-		// read-only git inspection), gated only by the extremely-dangerous
-		// and exfiltration floors below so a plan detour cannot become a
-		// soft bypass around those.
+
 		if toolName == "enter_plan_mode" {
 			return Allow, nil
 		}
 		if toolName == "exit_plan_mode" {
-			// Exiting plan mode restores the mode the USER had chosen
-			// before entering plan mode (c47a99ec): not an escalation.
+
 			return Allow, nil
 		}
 		if isWriteFileTool(toolName) {
 			return Deny, nil
 		}
-		// #4261: restore the #712 plan read-only floors - the two-mode
-		// rewrite (8a8ca1e05) dropped this call site while keeping the
-		// function, so sensitive out-of-sandbox reads (~/.ssh into model
-		// context) and web calls carrying secret material became silent
-		// Allows in plan mode. Deny, not Ask: plan mode has no human loop.
+
 		if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {
 			return d, nil
 		}
-		// #4261/#596-P2: MCP write tools are not name-classifiable as file
-		// tools, but drop_table/apply_patch/send_message are write
-		// operations - plan mode's own contract (only explicit file-writing
-		// denied) must extend to them. IsReadOnlyTool encodes the verified
-		// read-only MCP whitelist; everything else mcp__ denies.
+
 		if strings.HasPrefix(toolName, "mcp__") && !IsReadOnlyTool(toolName) {
 			debug.Log("permission", "non-read-only MCP tool denied in plan mode (#596-P2/#4261)")
 			return Deny, nil
@@ -313,11 +199,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.networkDetector && IsNetworkExfiltrate(cmd) {
 					return Ask, nil
 				}
-				// Review (plan indirect-write channel): a shell redirect IS a
-				// file write - held to an Ask floor (deliberately softer than
-				// the write-tool Deny above: one extra confirm beats killing
-				// a legitimate planning probe) so `echo x > file` cannot
-				// silently bypass isWriteFileTool.
+
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
 					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
@@ -329,41 +211,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		return Allow, nil
 	case AutoMode:
-		// Deprecated alias: the two-mode refactor folded auto INTO
-		// supervised (supervised now flows most calls without prompting).
-		// Kept as a distinct case only so legacy ConfigPolicy instances
-		// take the same code path as SupervisedMode below.
+
 		fallthrough
 	case SupervisedMode:
-		// Supervised (two-mode refactor, #4279 trust-model convergence):
-		// most calls flow WITHOUT prompting. The gates that remain defend
-		// against prompt-injection-driven destruction, not against the model
-		// following a normal user prompt:
-		//   - system-level destruction (IsExtremelyDangerous)
-		//   - credential-payload exfiltration (narrow floor, same as bypass)
-		//   - sensitive-path writes/redirects (persistence backdoors)
-		// Ordinary out-of-sandbox writes and network use are Allow (the old
-		// sandbox-half and broad exfil gates were the #1 interruption sources).
+
 		if isCommandTool(toolName) {
-			// #713: audit every channel (command + terminal `text`); the
-			// mode-independent deny short-circuit at the top of Check has
-			// already returned on any Deny match, so an allow-match here is safe.
+
 			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// Data egress (#194): converged to the credential-payload narrow
-				// floor per the #4279 trust-model ruling - ordinary network use
-				// by a normal user prompt is legitimate workflow; only an
-				// upload-direction transfer carrying a literal credential path
-				// asks (same floor as bypass).
+
 				if p.networkDetector && credentialPayloadExfil(cmd) {
 					debug.Log("permission", "credential-payload exfil gated in supervised mode")
 					return Ask, nil
 				}
-				// #711/#4279: redirect targets held to the sensitive-path-only
-				// floor (trust-model ruling: ordinary out-of-sandbox redirects
-				// are normal workflow, same convergence as bypass).
+
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
 					if isSensitivePath(resolved) {
@@ -376,43 +239,29 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" {
-					// #4532: same expand-before-check as the bypass write gate.
+
 					if isSensitivePath(expandTilde(path)) {
 						return Ask, nil
 					}
 				}
 			}
 		}
-		// Explicit user rules still win when present.
+
 		if d, ok := p.rules[toolName]; ok {
 			return d, nil
 		}
 		return Allow, nil
 	}
 
-	// Default (unreachable: every enum value has a case above, but Go
-	// requires the function to end in a statement).
 	return Allow, nil
 }
 
-// imActionIsBenign reports whether an im tool call performs only local,
-// side-effect-free adapter management (#1283). Anything that can move data
-// out of the machine (send, send_file) or an unknown/missing action is NOT
-// benign - fail closed toward the normal approval pipeline.
-// switchModeEscalates reports whether a switch_mode call targets a MORE
-// privileged mode (#1705 case 1): bypass/autopilot ask for consent; every
-// other target (including plan escapes) flows Allow.
 func switchModeEscalates(input json.RawMessage) bool {
 	var a struct {
 		Mode string `json:"mode"`
 	}
 	_ = json.Unmarshal(input, &a)
-	// #4260: the tool side parses the mode case-INSENSITIVELY
-	// (switch_mode.go lowercases before ParsePermissionMode), and the
-	// permission Check sees the raw JSON args BEFORE CoerceEnumValues
-	// normalizes them. A case-sensitive compare here let {"mode":"Bypass"}
-	// skip the escalation Ask entirely while still switching into bypass -
-	// normalize the same way the parser does.
+
 	m := strings.ToLower(strings.TrimSpace(a.Mode))
 	return m == "bypass" || m == "autopilot"
 }
@@ -431,16 +280,10 @@ func imActionIsBenign(input json.RawMessage) bool {
 	return false
 }
 
-// IsDangerous returns true if the command is inherently dangerous.
 func (p *ConfigPolicy) IsDangerous(command string) bool {
 	return p.detector.IsDangerous(command)
 }
 
-// BlocksAutoApprove reports whether a tool call must NOT be auto-approved
-// from learned approval memory even when the pattern matches (#1281):
-// dangerous commands (danger-level detectors) and network exfiltration
-// always need a human in the loop. Consulted at the memory-hit site before
-// treating a learned approval as an Allow.
 func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
 	if isCommandTool(toolName) {
 		for _, cmd := range extractCommandsForTool(toolName, input) {
@@ -452,7 +295,6 @@ func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage)
 	return false
 }
 
-// AllowedPath returns true if the path is within the sandbox.
 func (p *ConfigPolicy) AllowedPath(path string) bool {
 	if p.sandbox.Allowed(path) {
 		return true
@@ -460,67 +302,54 @@ func (p *ConfigPolicy) AllowedPath(path string) bool {
 	return p.readOnlySandbox != nil && p.readOnlySandbox.Allowed(path)
 }
 
-// AllowedPathForTool returns true if the path is allowed for the specific tool.
-// In non-plan modes, if execution reaches here the permission layer has already
-// approved the tool call (either Allow directly or user approved an Ask), so
-// sandbox restrictions are lifted. In PlanMode, strict sandbox enforcement
-// applies since plan mode never writes outside the workspace.
 func (p *ConfigPolicy) AllowedPathForTool(toolName, path string) bool {
 	if p.sandbox.Allowed(path) {
 		return true
 	}
-	// Non-plan modes: permission layer already approved, allow execution
+
 	p.mu.RLock()
 	isPlan := p.mode == PlanMode
 	p.mu.RUnlock()
 	if !isPlan {
 		return true
 	}
-	// Plan mode: read-only tools bypass sandbox (no risk since they can't write)
+
 	if isReadOnlyFileTool(toolName) {
 		return true
 	}
 	return false
 }
 
-// SetOverride allows runtime modification of per-tool policy.
 func (p *ConfigPolicy) SetOverride(toolName string, decision Decision) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rules[toolName] = decision
 }
 
-// ClearOverride removes a previously set override for the given tool.
-// Used by worker agents to exempt themselves from the strict
-// write guard applied to the main agent.
 func (p *ConfigPolicy) ClearOverride(toolName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.rules, toolName)
 }
 
-// Mode returns the current permission mode.
 func (p *ConfigPolicy) Mode() PermissionMode {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.mode
 }
 
-// SetMode changes the permission mode at runtime.
 func (p *ConfigPolicy) SetMode(mode PermissionMode) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.mode = mode
 }
 
-// CurrentMode returns the current permission mode (thread-safe).
 func (p *ConfigPolicy) CurrentMode() PermissionMode {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.mode
 }
 
-// GetDecision returns the current decision for a tool (for TUI display).
 func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -530,28 +359,19 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 	return Ask
 }
 
-// isSensitivePath returns true for paths that are system-critical or user-config.
-// Comparison is case-insensitive on platforms with case-insensitive filesystems
-// (macOS APFS, Windows) so `/Users/zhanjU/.backdoorrc` cannot dodge the check
-// by flipping case (#573-G); Linux keeps byte-exact comparison.
 func isSensitivePath(path string) bool {
-	// Normalize separators before comparing: the suffix table and home
-	// prefix below use "/", but Windows paths carry "\" (filepath.Clean
-	// keeps them). Without ToSlash the suffix match (".ssh/id_rsa" vs
-	// "C:\Users\u\.ssh\id_rsa") and the home-prefix match ("C:\Users\u/"
-	// vs "C:\Users\u\...") never fired on Windows, silently disabling the
-	// sensitive-path gates. ToSlash is a no-op on Unix.
+
 	path = filepath.ToSlash(filepath.Clean(path))
 	home := filepath.ToSlash(config.HomeDir())
 	sensitiveFiles := []string{
 		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
 		".ssh/config", ".ssh/authorized_keys", ".ssh/id_rsa", ".ssh/id_ed25519",
 		".gitconfig", ".gnupg",
-		// Credential and secret files
+
 		".aws/credentials", ".aws/config",
 		".docker/config.json",
 		".npmrc", ".pypirc", ".netrc",
-		// Keys and token files (used by various CLI tools)
+
 		"keys.env", ".env",
 	}
 	for _, f := range sensitiveFiles {
@@ -559,40 +379,37 @@ func isSensitivePath(path string) bool {
 			return true
 		}
 	}
-	// .env files anywhere in the project (contain secrets)
+
 	base := filepath.Base(path)
 	if pathEqualFold(base, ".env") || pathHasPrefixFold(base, ".env.") {
 		return true
 	}
-	// Files containing credentials/secrets/tokens in their name
+
 	lowerBase := strings.ToLower(base)
 	if strings.Contains(lowerBase, "credential") || strings.Contains(lowerBase, "id_rsa") || strings.Contains(lowerBase, "id_ed25519") {
 		return true
 	}
-	// Writing directly to $HOME root (e.g., ~/.somefile where somefile is not a known app)
+
 	if home != "" && pathHasPrefixFold(path, home+"/") {
 		rest := path[len(home)+1:]
 		if !strings.Contains(rest, "/") {
-			// Single file directly in home dir - could be sensitive
+
 			if strings.HasPrefix(rest, ".") && len(rest) > 1 {
 				return true
 			}
 		}
 	}
-	// #4279: system persistence/backdoor paths. The bypass write gates now
-	// key on sensitivity alone (the out-of-sandbox half was dropped as daily
-	// friction), so this class must be explicit: system config trees and
-	// persistence-drop locations are backdoor-class regardless of sandbox.
+
 	sensitivePrefixes := []string{
-		"/etc/",                                            // hosts, sudoers, ssh/, cron.d/, systemd/ - system config & persistence
-		"/var/spool/cron/", "/var/cron/tabs/", "/etc/cron", // crontab drops
+		"/etc/",
+		"/var/spool/cron/", "/var/cron/tabs/", "/etc/cron",
 		"/Library/LaunchAgents/", "/Library/LaunchDaemons/",
-		"/System/Library/LaunchAgents/", "/System/Library/LaunchDaemons/", // macOS persistence
-		"/usr/lib/systemd/system/", "/etc/systemd/", // Linux units
-		"/windows/system32/tasks/", "/windows/tasks/", // Windows scheduled tasks
+		"/System/Library/LaunchAgents/", "/System/Library/LaunchDaemons/",
+		"/usr/lib/systemd/system/", "/etc/systemd/",
+		"/windows/system32/tasks/", "/windows/tasks/",
 	}
 	if !pathFoldActive() {
-		// Case-sensitive filesystems (Linux): prefix match directly.
+
 		for _, p := range sensitivePrefixes {
 			if strings.HasPrefix(path, p) {
 				return true
@@ -605,15 +422,13 @@ func isSensitivePath(path string) bool {
 			}
 		}
 	}
-	// User-level launch agents (macOS per-user persistence).
+
 	if home != "" && (pathHasPrefixFold(path, home+"/Library/LaunchAgents/") || pathHasPrefixFold(path, home+"/Library/LaunchDaemons/")) {
 		return true
 	}
 	return false
 }
 
-// pathFoldActive reports whether the current platform's filesystem compares
-// paths case-insensitively by default (macOS APFS/HFS+, Windows NTFS).
 func pathFoldActive() bool {
 	switch runtime.GOOS {
 	case "darwin", "windows":
@@ -622,9 +437,6 @@ func pathFoldActive() bool {
 	return false
 }
 
-// asciiEqualFold compares two strings using ASCII case folding only. Unicode
-// case folding (strings.EqualFold) is avoided because it can fold runes of
-// different byte lengths, which is wrong for path components.
 func asciiEqualFold(a, b string) bool {
 	if len(a) != len(b) {
 		return false
@@ -671,8 +483,6 @@ func isReadOnlyFileTool(name string) bool {
 	return IsReadOnlyTool(name)
 }
 
-// isWriteFileTool returns true for file tools that mutate disk (used for
-// extra sandbox enforcement in bypass/autopilot modes).
 func isWriteFileTool(name string) bool {
 	switch name {
 	case "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit", "file_ops", "batch_replace":
@@ -682,18 +492,7 @@ func isWriteFileTool(name string) bool {
 }
 
 func isCommandTool(name string) bool {
-	// #4290: match case-insensitively. The Windows shell tool reaches this
-	// policy layer as "Bash"/"PowerShell" (display-name-sourced, no
-	// lowercase normalization on that path), while the agent layer uses
-	// lowercase "bash"/"powershell". A case-sensitive exact list left every
-	// ConfigPolicy command floor (extremely-dangerous, credential-payload
-	// exfil, sensitive redirect) inert on Windows shells.
-	//
-	// write_command_input removed (#197): its `input` field is arbitrary data
-	// written to a job's stdin (script bodies, docs, logs), not a shell
-	// command - pattern-matching it caused false Deny on normal content.
-	// wait_command/read_command_output stay out: they only read existing job
-	// output and never carry new command text to execute.
+
 	switch {
 	case strings.EqualFold(name, "run_command"),
 		strings.EqualFold(name, "start_command"),
@@ -764,13 +563,6 @@ func extractFilePaths(input json.RawMessage) []string {
 	return paths
 }
 
-// isTerminalTool reports whether the tool drives an external terminal
-// multiplexer/emulator (tmux/ghostty/warp/kitty/iterm2). Their `text`
-// parameter is typed into the user's interactive shell and EXECUTES
-// (iterm2 write-text drives AppleScript "write text"), making it a real
-// second command channel alongside `command` (#713). Scoping the `text`
-// audit to exactly these tools avoids the #197 over-matching that removing
-// the generic `input` key from command matching fixed.
 func isTerminalTool(name string) bool {
 	switch name {
 	case "tmux", "ghostty", "warp", "kitty", "iterm2":
@@ -779,12 +571,6 @@ func isTerminalTool(name string) bool {
 	return false
 }
 
-// extractCommandsForTool returns every shell-command channel in a command
-// tool's input: the `command` key, the `input` key, and - for the terminal
-// tools only - the `text` key. Empty strings are filtered. Callers must
-// classify each channel separately because command patterns are
-// start-anchored; concatenating channels would leave all but the first
-// unaudited (#713).
 func extractCommandsForTool(toolName string, input json.RawMessage) []string {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(input, &m); err != nil {
@@ -828,13 +614,6 @@ func extractCommand(input json.RawMessage) (string, bool) {
 	return "", false
 }
 
-// credentialPayloadExfil reports whether cmd is an upload-direction
-// network transfer that carries a literal credential-path payload. It is
-// the narrow credential-theft floor kept in bypass mode after the general
-// exfiltration gate was removed (watchdog review): only transfers whose
-// own text references credential locations (~/.ssh, ~/.aws, ~/.gnupg,
-// /etc/shadow, .env files) gate, so the everyday-upload false positives
-// that motivated the removal stay free.
 func credentialPayloadExfil(cmd string) bool {
 	if !IsNetworkExfiltrate(cmd) {
 		return false
@@ -851,13 +630,6 @@ func credentialPayloadExfil(cmd string) bool {
 	return matchesEnvPath(cmd)
 }
 
-// matchesEnvPath reports whether cmd references a dotenv credential file
-// (.env, .env.local, ~/.env, ./env paths). A bare strings.Contains(cmd,
-// ".env") false-positives on Kubernetes jsonpath field access like
-// `.spec.containers[0].env[?(@.name==...)]` (#4279 screenshot case), so the
-// match requires a path-like boundary: the preceding byte must start a path
-// segment (not `]` or an identifier character) and the trailing byte must
-// continue a filename (not the `[` that opens a jsonpath filter).
 func matchesEnvPath(cmd string) bool {
 	for i := 0; ; {
 		idx := strings.Index(cmd[i:], ".env")
@@ -867,46 +639,34 @@ func matchesEnvPath(cmd string) bool {
 		pos := i + idx
 		i = pos + 1
 		if pos+len(".env") >= len(cmd) {
-			return true // ".env" at end of command: filename reference
+			return true
 		}
 		after := cmd[pos+len(".env")]
 		if after == '[' {
-			continue // jsonpath filter: ].env[?(@.name==...)]
+			continue
 		}
 		if after == '.' && strings.HasPrefix(cmd[pos:], ".env.example") {
-			continue // dotenv template, carries no secrets
+			continue
 		}
 		var before byte = ' '
 		if pos > 0 {
 			before = cmd[pos-1]
 		}
 		if before == ']' || before == '_' || isAlnumByte(before) {
-			continue // identifier boundary: foo.env, 0.env, ].env inside an expression
+			continue
 		}
 		return true
 	}
 }
 
-// isAlnumByte reports whether b is an ASCII letter or digit.
 func isAlnumByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
-// isAbsolutePathish reports whether tok is absolute or home-anchored - the
-// conservative capture predicate for redirections inside quoted bodies.
 func isAbsolutePathish(tok string) bool {
 	return strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "~")
 }
 
-// extractRedirectTargets returns file paths a shell command writes to via
-// output redirection (> and >>), including fd-prefixed forms (2>, &>). Used
-// to give command tools the same sensitive-path / out-of-sandbox gating that
-// file tools get (#573-C). Quoted sections are skipped so string literals
-// containing '>' don't fool the scanner; fd duplication (2>&1), process
-// substitution (>(cmd)) and sink devices (/dev/null) are excluded.
-// trimQuoteRunes strips leading/trailing single/double quote runes from a
-// scanned token (#4279): quoted-body redirect targets swallow the closing
-// quote because scanRedirectToken stops at whitespace/end, not quotes.
 func trimQuoteRunes(tok string) string {
 	for len(tok) > 0 && (tok[0] == '\'' || tok[0] == '"') {
 		tok = tok[1:]
@@ -928,13 +688,7 @@ func extractRedirectTargets(cmd string) []string {
 				quote = 0
 				continue
 			}
-			// Review PoC (sh -c 'echo x > <target>'): a redirection inside
-			// a quoted body still executes when the quote wraps an
-			// interpreter -c argument. A full parse cannot distinguish that
-			// from data quotes (echo "a > b"), so capture the conservative
-			// subset only: single-quoted bodies (no variable expansion =>
-			// literal path) with absolute/home-anchored targets - exactly
-			// the paths the out-of-sandbox/sensitive gates key on.
+
 			if c == '>' && quote == '\'' {
 				j := i
 				for j < len(runes) && runes[j] == '>' {
@@ -942,10 +696,7 @@ func extractRedirectTargets(cmd string) []string {
 				}
 				if j-i <= 2 {
 					if tok := scanRedirectToken(runes, j); isAbsolutePathish(tok) {
-						// #4279: a quoted-body target runs to the closing
-						// quote (not whitespace) - strip the trailing quote
-						// rune so suffix/path matchers see the literal path
-						// ("authorized_keys'" would miss every gate).
+
 						targets = append(targets, trimQuoteRunes(tok))
 					}
 				}
@@ -1089,7 +840,7 @@ func hasDataEgressSignature(input json.RawMessage) bool {
 			continue
 		}
 		// URL query strings encode spaces as '+', so "-----BEGIN+RSA+PRIVATE
-		// KEY-----" must be normalized before matching space-containing markers.
+
 		lower := strings.ReplaceAll(strings.ToLower(s), "+", " ")
 		for _, marker := range exfilPayloadMarkers {
 			if strings.Contains(lower, marker) {
@@ -1100,27 +851,12 @@ func hasDataEgressSignature(input json.RawMessage) bool {
 	return false
 }
 
-// checkPlanReadOnlyExceptions applies the #712 exceptions to plan mode's
-// read-only Allow: the unconditional Allow had two holes that made plan mode
-// WEAKER than supervised for sensitive reads - (a) a sensitive-path read
-// (~/.ssh/id_rsa, credentials) silently put secrets into model context, and
-// (b) web_fetch/web_search - also whitelisted - could carry them out, closing
-// a read→exfiltrate loop with zero prompts. Sensitive out-of-sandbox reads
-// and web calls carrying secret material are denied outright (plan mode has
-// no human loop to route an Ask through). Returns Deny when an exception
-// trips, Allow when the call is benign.
 func (p *ConfigPolicy) checkPlanReadOnlyExceptions(toolName string, input json.RawMessage) Decision {
 	if isFileTool(toolName) {
 		for _, path := range extractFilePaths(input) {
 			if path != "" {
 				resolved := expandTilde(path)
-				// #4534: explicit read-only grants must survive plan mode.
-				// AllowedPath honors readOnlySandbox ("grant read-only access
-				// to X") the same way the normal read path does; without
-				// this the same policy object Allow-ed the read outside plan
-				// and Deny-ed it inside - the user's explicit grant was
-				// silently overridden. The sensitive check stays for paths
-				// with NO explicit grant (the #712 secret-exfil floor).
+
 				if p.AllowedPath(resolved) {
 					continue
 				}

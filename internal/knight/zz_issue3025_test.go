@@ -1,11 +1,5 @@
 package knight
 
-// Regression probes for #3025: LastFor's scope gate skipped the comparison
-// when a stored entry had an EMPTY scope (double-sided wildcard), so one
-// empty-scope rejection matched lookups in every scope - the same skill name
-// cooled in both "project" and "global". Write side now normalizes empty
-// scopes to "project"; lookups match exactly.
-
 import (
 	"path/filepath"
 	"testing"
@@ -15,7 +9,7 @@ import (
 func TestIssue3025_EmptyScopeEntryDoesNotMatchOtherScopes(t *testing.T) {
 	dir := t.TempDir()
 	s := newRejectFeedbackStore(filepath.Join(dir, "rej.jsonl"))
-	// Legacy entry written before write-side normalization (e.Scope == "").
+
 	if err := s.Append(rejectFeedbackEntry{Name: "my-skill", Scope: "", Time: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +52,7 @@ func TestIssue3025_ExactScopeMatchingStillWorks(t *testing.T) {
 	if _, ok := s.LastFor("project", "skill"); ok {
 		t.Fatal("non-matching scope must not be found")
 	}
-	// Empty query scope keeps its intentional any-scope semantics.
+
 	if _, ok := s.LastFor("", "skill"); !ok {
 		t.Fatal("empty query scope intentionally matches any entry scope")
 	}

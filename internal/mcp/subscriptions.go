@@ -14,64 +14,18 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Modern subscription streams — "subscriptions/listen" (MCP protocol
-// revision 2026-07-28, notifications/subscriptions/acknowledged).
-//
-// The initialize-era push model (standalone GET SSE stream on streamable
-// HTTP; plain stdio writes) carries no correlation metadata: a client cannot
-// prove a notification is addressed to it, and the server cannot scope what
-// it pushes. The 2026-07-28 revision replaces this with an explicit
-// request/response stream:
-//
-//	→ {"method": "subscriptions/listen",
-//	   "params": {"notifications": {"toolsListChanged": true, ...}}, "id": 1}
-//	← notifications/subscriptions/acknowledged {params._meta[subId], params.notifications}
-//	← ... correlated notifications, each params._meta carrying the
-//	    subscriptionId ...
-//	← {"result": {...}, "id": 1}          ← graceful stream closure
-//
-// Server-side MUSTs we implement:
-//   - the server MUST NOT deliver notifications before acknowledging, so any
-//     notification whose subscriptionId is unknown or not yet acknowledged is
-//     a protocol violation → dropped with a debug log;
-//   - every listen-stream notification carries params._meta[".../subscriptionId"]
-//     → used for correlation here, then stripped from the user's view (the
-//     legacy handler keeps receiving the plain method/params it always did);
-//   - notifications/subscriptions/acknowledged is a control message and is
-//     consumed here, never forwarded.
-//
-// Client-side MUST we implement: when closing a subscription before the
-// server does, send notifications/cancelled (reuses the existing
-// Client.notifyCancelled plumbing).
-//
-// Transport notes: stdio delivers the eventual response through the shared
-// read loop's waiter registry; streamable HTTP delivers it as the final SSE
-// event of the long-lived POST (interleaved notifications ride the same
-// stream into processNotification). WebSocket is intentionally unsupported
-// for listen (legacy ws bridge, no ggcode-managed server uses it).
-
 const (
-	// MethodSubscriptionsListen requests a correlated notification stream.
 	MethodSubscriptionsListen = "subscriptions/listen"
-	// NotificationSubscriptionsAcknowledged confirms the negotiated filter.
+
 	NotificationSubscriptionsAcknowledged = "notifications/subscriptions/acknowledged"
-	// MetaKeySubscriptionID is the params._meta key carrying the JSON-RPC id
-	// of the subscriptions/listen request a notification belongs to.
+
 	MetaKeySubscriptionID = "io.modelcontextprotocol/subscriptionId"
 
-	// mcpSubscriptionAckTimeout bounds the wait for the acknowledged
-	// notification. A compliant server acks before delivering anything, so a
-	// healthy roundtrip is milliseconds; anything slower is treated as a
-	// failed subscription and cancelled.
 	mcpSubscriptionAckTimeout = 15 * time.Second
 )
 
-// errCodeMethodNotFound is the JSON-RPC error a legacy server returns for an
-// unknown method; used to downgrade to the legacy push path permanently.
 const errCodeMethodNotFound = -32601
 
-// SubscriptionFilter describes which notification types a client requests on
-// a subscriptions/listen stream (params.notifications).
 type SubscriptionFilter struct {
 	ToolsListChanged      bool     `json:"toolsListChanged,omitempty"`
 	PromptsListChanged    bool     `json:"promptsListChanged,omitempty"`
@@ -84,8 +38,6 @@ func (f SubscriptionFilter) empty() bool {
 		len(f.ResourceSubscriptions) == 0
 }
 
-// missingFrom returns the human-readable entries requested by f that agreed
-// does not grant, for logging the ack diff.
 func (f SubscriptionFilter) missingFrom(agreed SubscriptionFilter) []string {
 	var missing []string
 	add := func(cond, granted bool, name string) {
@@ -108,8 +60,6 @@ func (f SubscriptionFilter) missingFrom(agreed SubscriptionFilter) []string {
 	return missing
 }
 
-// Subscription is one open subscriptions/listen stream. The zero value is
-// not usable; instances come from Client.ListenSubscriptions.
 type Subscription struct {
 	client    *Client
 	id        *ID
@@ -119,44 +69,35 @@ type Subscription struct {
 	cancelFunc context.CancelFunc
 
 	acked atomic.Bool
-	ackCh chan struct{} // closed exactly once on ack
+	ackCh chan struct{}
 
-	mu     sync.Mutex // guards agreed + endErr
+	mu     sync.Mutex
 	agreed SubscriptionFilter
 	endErr error
 
 	cancelled atomic.Bool
 	endOnce   sync.Once
-	done      chan struct{} // closed exactly once on stream end
+	done      chan struct{}
 }
 
-// ID returns the normalized JSON form of the listen request id (the
-// subscriptionId servers echo back in _meta).
 func (s *Subscription) ID() string { return subscriptionIDKey(s.id) }
 
-// Done is closed when the stream ends, for any reason.
 func (s *Subscription) Done() <-chan struct{} { return s.done }
 
-// Err returns the terminal error, or nil for a graceful server closure.
 func (s *Subscription) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.endErr
 }
 
-// Agreed returns the filter subset the server acknowledged.
 func (s *Subscription) Agreed() SubscriptionFilter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.agreed
 }
 
-// Requested returns the filter that was originally requested.
 func (s *Subscription) Requested() SubscriptionFilter { return s.requested }
 
-// Cancel tears the subscription down: it sends notifications/cancelled on a
-// detached goroutine (mirroring the request-path cancellation contract),
-// unblocks the transport watch goroutine, and ends the stream. Idempotent.
 func (s *Subscription) Cancel(cause error) {
 	if !s.cancelled.CompareAndSwap(false, true) {
 		return
@@ -169,9 +110,6 @@ func (s *Subscription) Cancel(cause error) {
 	s.end(nil)
 }
 
-// end terminates the stream bookkeeping. Called exactly once via endOnce;
-// also cancels the subscription-lifetime context so the transport watch
-// goroutine (blocked in the HTTP roundtrip or on the waiter channel) exits.
 func (s *Subscription) end(err error) {
 	s.endOnce.Do(func() {
 		if err != nil {
@@ -185,9 +123,6 @@ func (s *Subscription) end(err error) {
 	})
 }
 
-// markAcked records the acknowledged filter and releases the ack waiter.
-// Returns false if the subscription is already acked (duplicate acks are
-// idempotent per protocol tolerance of late duplicates).
 func (s *Subscription) markAcked(agreed SubscriptionFilter) {
 	if !s.acked.CompareAndSwap(false, true) {
 		return
@@ -202,9 +137,6 @@ func (s *Subscription) markAcked(agreed SubscriptionFilter) {
 	close(s.ackCh)
 }
 
-// subscriptionIDKey normalizes a JSON-RPC id to its compact JSON form so a
-// numeric id like 7 in a request matches "7" echoed back in _meta
-// (json.Number/float ambiguity is removed by Compact).
 func subscriptionIDKey(id *ID) string {
 	if id == nil {
 		return ""
@@ -231,28 +163,14 @@ func normalizeIDJSON(raw json.RawMessage) (string, bool) {
 	return key, true
 }
 
-// subState values for Client.subListenState.
 const (
 	subStateUnknown = iota
 	subStateSupported
 	subStateUnsupported
 )
 
-// subscriptionsAckTimeout bounds the subscriptions/listen ack wait on the
-// synchronous connect path. A compliant server acks immediately; a legacy
-// one answers -32601. The bound exists for the third kind - servers that
-// ignore unknown methods entirely - which would otherwise stall the connect
-// goroutine for the full deadline (10s before this constant existed; live
-// freeze capture 2026-09-18). 2s is generous for an ack roundtrip on either
-// transport while keeping worst-case connect-path cost at 2s per server.
 const SubscriptionsAckTimeout = 2 * time.Second
 
-// EnableModernSubscriptions attempts to open the default list-change
-// subscription stream and records whether the server speaks the protocol at
-// all. A -32601 (method not found) response downgrades permanently for this
-// client instance — legacy servers must never see the call again, matching
-// the GET-stream 405 downgrade behavior for HTTP. Safe to call on every
-// (re)connect: an existing live subscription short-circuits.
 func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 	if c.subListenState.Load() == subStateUnsupported {
 		return false
@@ -264,7 +182,7 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 		select {
 		case <-existing.done:
 		default:
-			return true // already listening
+			return true
 		}
 	}
 
@@ -281,12 +199,7 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 			debug.Log("mcp-subs", "server=%s subscriptions/listen unsupported, using legacy push", c.name)
 			return false
 		}
-		// Deadline-exceeded also downgrades permanently for this client:
-		// servers that silently IGNORE unknown methods (Pen.app stdio,
-		// 2026-09-18 live capture) never answer -32601, so the deadline is
-		// the only signal. Without this the downgrade never sticks and
-		// every reconnect re-pays the full ack wait on the synchronous
-		// connect path (startup freeze, two Pen servers = 2x10s).
+
 		if errors.Is(err, context.DeadlineExceeded) {
 			c.subListenState.Store(subStateUnsupported)
 			debug.Log("mcp-subs", "server=%s subscriptions/listen ack deadline exceeded (silent server), downgrading to legacy push", c.name)
@@ -296,17 +209,11 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 		return false
 	}
 	c.subMu.Lock()
-	// #3869 A: check-then-act race. The early read above released subMu
-	// before the slow ListenSubscriptions call (ack wait up to 15s), so two
-	// concurrent callers both saw existing==nil, both subscribed, and the
-	// unconditional overwrite here orphaned the first subscription (still
-	// registered in c.subs, watch goroutine running, server-side stream
-	// leaked - nothing cancels it until close). Re-read under the lock and
-	// cancel the LOSER (the new one) instead.
+
 	if cur := c.modernSub; cur != nil {
 		select {
 		case <-cur.done:
-			// previous stream finished - replace it below
+
 		default:
 			c.subMu.Unlock()
 			sub.Cancel(fmt.Errorf("subscriptions/listen lost the concurrent-enable race (#3869)"))
@@ -321,13 +228,6 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 	return true
 }
 
-// ListenSubscriptions opens one correlated notification stream with the
-// given filter and blocks until the server acknowledges it (or the wait
-// fails). The returned Subscription stays open after this call; its Done
-// channel reports the eventual graceful closure or terminal error. The
-// request deliberately bypasses mcpRequestTimeout: a compliant stream is
-// long-lived by design and its lifetime is governed by the subscription,
-// not the caller's ack-wait context.
 func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFilter) (*Subscription, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -365,21 +265,8 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 	}
 	sub.cancelCtx, sub.cancelFunc = context.WithCancel(context.Background())
 
-	// Register the subscription BEFORE the write (#3817): the stdio
-	// server is an independent process and can flush its
-	// `notifications/subscriptions/acknowledged` ack the instant the write
-	// returns; the read loop correlates acks via c.subs[key], so with
-	// addSubscription AFTER the write the ack hit "unknown subscription
-	// dropped" (unreplayable) and ackCh hung until the 15s timeout, or the
-	// caller's own deadline (2s in mcp_loader) fired first. Same
-	// register-before-write ordering guarantee as the waiter above (#994);
-	// a failed write rolls the registration back.
 	c.addSubscription(subscriptionIDKey(reqID), sub)
 
-	// stdio: register the waiter BEFORE the write (same ordering guarantee
-	// as #994) so the shared read loop can never drop the eventual response
-	// as unknown-ID traffic. HTTP: the watch goroutine owns the roundtrip
-	// directly — the response arrives as the terminal event of the POST.
 	var waiter chan *Response
 	if transport == "" || transport == "stdio" {
 		waiter = make(chan *Response, 1)
@@ -406,19 +293,17 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 				if resp.IsError() {
 					sub.end(resp.Error)
 				}
-				// Graceful closure ("resultType": "complete" or empty result).
+
 			case <-sub.cancelCtx.Done():
-			case <-c.notificationDone: // nil-safe: nil chan blocks forever; Close/Abort always cancels cancelCtx via closeAllSubscriptions
+			case <-c.notificationDone:
 			}
 			return
 		}
-		// HTTP: the long-lived POST returns when the server closes the
-		// stream gracefully, drops the connection, or the subscription is
-		// cancelled (cancelCtx aborts the in-flight roundtrip).
+
 		resp, err := c.sendHTTP(sub.cancelCtx, req)
 		select {
 		case <-sub.cancelCtx.Done():
-			return // cancelled by us; Cancel already handled the protocol side
+			return
 		default:
 		}
 		if err != nil {
@@ -448,7 +333,6 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 	}
 }
 
-// addSubscription registers sub in the correlation registry.
 func (c *Client) addSubscription(key string, sub *Subscription) {
 	c.subMu.Lock()
 	if c.subs == nil {
@@ -458,7 +342,6 @@ func (c *Client) addSubscription(key string, sub *Subscription) {
 	c.subMu.Unlock()
 }
 
-// removeSubscription drops sub from the registry if it is still the entry.
 func (c *Client) removeSubscription(key string, sub *Subscription) {
 	c.subMu.Lock()
 	if c.subs != nil && c.subs[key] == sub {
@@ -467,9 +350,6 @@ func (c *Client) removeSubscription(key string, sub *Subscription) {
 	c.subMu.Unlock()
 }
 
-// closeAllSubscriptions ends every open subscription with cause. Called from
-// Abort (once) when the transport is torn down; no notifications/cancelled
-// is sent on this path — the connection is gone.
 func (c *Client) closeAllSubscriptions(cause error) {
 	c.subMu.Lock()
 	subs := make([]*Subscription, 0, len(c.subs))
@@ -483,18 +363,6 @@ func (c *Client) closeAllSubscriptions(cause error) {
 	}
 }
 
-// routeSubscriptionNotification consumes subscription control traffic and
-// gates listen-stream notifications. Returns true when the notification has
-// been fully handled here and must NOT reach the legacy dispatch
-// (cacheInvalidateForNotification / user handler):
-//   - notifications/subscriptions/acknowledged: control message, always consumed;
-//   - any notification carrying _meta subscriptionId for an unknown or
-//     unacknowledged subscription: protocol violation, dropped + logged;
-//   - any notification carrying a subscriptionId for a live, acked
-//     subscription: correlation complete — but the notification itself is
-//     forwarded normally (cache invalidation + user handler must still fire).
-//
-// Notifications without the _meta key are legacy traffic and fall through.
 func (c *Client) routeSubscriptionNotification(notif *Notification) bool {
 	if notif.Method == NotificationSubscriptionsAcknowledged {
 		key, agreed, ok := parseSubscriptionAckParams(notif.Params)
@@ -530,12 +398,6 @@ func (c *Client) routeSubscriptionNotification(notif *Notification) bool {
 	return false
 }
 
-// parseSubscriptionAckParams decodes the acknowledged notification envelope:
-// {"_meta": {"io.modelcontextprotocol/subscriptionId": <id>},
-//
-//	"notifications": <filter>}. A missing notifications field yields an empty
-//
-// agreed filter (be liberal: full agreement).
 func parseSubscriptionAckParams(params json.RawMessage) (string, SubscriptionFilter, bool) {
 	if len(params) == 0 {
 		return "", SubscriptionFilter{}, false
@@ -558,8 +420,6 @@ func parseSubscriptionAckParams(params json.RawMessage) (string, SubscriptionFil
 	return key, envelope.Notifications, true
 }
 
-// extractSubscriptionID reports whether params carries the listen-stream
-// correlation key, returning its normalized form.
 func extractSubscriptionID(params json.RawMessage) (string, bool) {
 	if len(params) == 0 {
 		return "", false

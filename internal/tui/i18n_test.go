@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #1725: machine-translation leftovers put Chinese strings in the German
-// catalog ("厂商未找到" shown to de users). Guard the whole family: every
-// non-zh catalog file must carry no CJK runes inside its return literals.
 func TestNonZhCatalogsContainNoCJK1725(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -24,7 +21,7 @@ func TestNonZhCatalogsContainNoCJK1725(t *testing.T) {
 			continue
 		}
 		if strings.Contains(name, "zh") || strings.Contains(name, "_ja") || strings.Contains(name, "_ko") {
-			// zh-CN/zh-TW/Japanese/Korean are CJK languages by design.
+
 			continue
 		}
 		data, err := os.ReadFile(name)
@@ -43,10 +40,6 @@ func TestNonZhCatalogsContainNoCJK1725(t *testing.T) {
 	}
 }
 
-// TestLocalizeSlashDescriptionSessionPinTags guards the session pin/tag
-// commands added for long-lived session management: every supported language
-// must have a real translation (localizeSlashDescription falls back to the
-// raw command when a case or catalog entry is missing).
 func TestLocalizeSlashDescriptionSessionPinTags(t *testing.T) {
 	cmds := []string{"/pin-session", "/unpin-session", "/tag", "/untag", "/tags"}
 	langs := []Language{"en", "zh", "de"}

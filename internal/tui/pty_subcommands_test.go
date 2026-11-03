@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// --- Harness: Task lifecycle subcommands ---
-// These all require existing tasks but should handle empty state gracefully.
-
 func TestPTY_SlashHarnessRun(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping")
@@ -166,8 +163,6 @@ func TestPTY_SlashHarnessTasks(t *testing.T) {
 	h.snapshot()
 }
 
-// --- Slash: review subcommands ---
-
 func TestPTY_SlashHarnessReviewApprove(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping")
@@ -206,8 +201,6 @@ func TestPTY_SlashHarnessRunQueued(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	h.snapshot()
 }
-
-// --- Slash subcommands from commands_slash.go ---
 
 func TestPTY_SlashMemoryAudit(t *testing.T) {
 	if testing.Short() {

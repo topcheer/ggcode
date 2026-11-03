@@ -1,12 +1,5 @@
 package image
 
-// Regression probes for #3013: the gnome-screenshot unsupported-opts gate
-// must stay in sync with the Region-translation gate in
-// prepareLinuxCaptureOpts (Display >= 1, #3003). The old `> 1` gate let an
-// explicit Display=1 request through; buildGnomeScreenshotCommand ignores
-// the translated Region and gnome-screenshot returned a composite of ALL
-// outputs with exit 0, blocking the fallback to region-capable tools.
-
 import (
 	"strings"
 	"testing"
@@ -25,9 +18,7 @@ func TestIssue3013_GnomeGateRejectsExplicitDisplayIndexes(t *testing.T) {
 }
 
 func TestIssue3013_GnomeGateAllowsImplicitDefault(t *testing.T) {
-	// Display==0 is the implicit primary default of a plain capture: no
-	// display intent, gnome full-screen behavior stays available
-	// (single-head setups get the correct shot).
+
 	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 0}); err != nil {
 		t.Fatalf("implicit Display=0 must stay allowed, got: %v", err)
 	}

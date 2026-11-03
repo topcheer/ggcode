@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// Coding-plan base (.../api/coding/paas/v4) must normalize to the site
-// root before appending the monitor path - the old suffix list missed it
-// and produced .../api/coding/paas/v4/api/monitor/... (404), which the
-// panel rendered as "unsupported" for zhipu coding-plan users.
 func TestZaiProbeCodingPlanBaseNormalization(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +17,6 @@ func TestZaiProbeCodingPlanBaseNormalization(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Derive a coding-plan-shaped base from the test server host.
 	base := strings.TrimPrefix(srv.URL, "http://") + "/api/coding/paas/v4"
 	info, err := ZaiProbe{}.Fetch(context.Background(), "http://"+base, "test-key")
 	if err != nil {

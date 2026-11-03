@@ -1,15 +1,5 @@
 package lsp
 
-// Offline coverage boost for the client query surface: the public query
-// helpers (Hover/Definition/References/Implementation/DocumentHighlights/
-// DocumentSymbols/PrepareCallHierarchy/IncomingCalls/OutgoingCalls/
-// Diagnostics) plus the parse/retry helpers were near 0% because the
-// integration tests require a real gopls. Here testdata/fakelsp - a tiny Go
-// LSP server compiled into a PATH-injected "gopls" (same discovery pattern
-// as discovery_test.go / issue993_test.go) - answers every JSON-RPC request
-// by method name, so the full stack - resolution, handshake, didOpen,
-// request, parse - runs offline.
-
 import (
 	"context"
 	"encoding/json"
@@ -21,12 +11,6 @@ import (
 	"time"
 )
 
-// ── fake gopls server ────────────────────────────────────────────────────
-
-// buildFakeGopls compiles testdata/fakelsp into binDir/gopls so that
-// PATH-based discovery resolves it as the Go language server. The fake
-// answers each JSON-RPC request by method name (see fakelsp/main.go) and
-// learns the real document URI from the didOpen notification.
 func buildFakeGopls(t *testing.T, binDir string) {
 	t.Helper()
 	src := filepath.Join("testdata", "fakelsp", "main.go")
@@ -122,8 +106,6 @@ func sysHaveName(syms []Symbol, name string) []Symbol {
 	return out
 }
 
-// ── parse helper unit tests ──────────────────────────────────────────────
-
 func TestParseHoverVariants(t *testing.T) {
 	if got := parseHover(json.RawMessage(`{"contents":{"kind":"markdown","value":"x\ny"}}`)); got != "x\ny" {
 		t.Errorf("markdown hover = %q", got)
@@ -157,12 +139,12 @@ func TestParseLocationsVariants(t *testing.T) {
 }
 
 func TestParseSymbolsShapes(t *testing.T) {
-	// DocumentSymbol tree (children flattened by parseSymbols).
+
 	tree := parseSymbols(json.RawMessage(`[{"name":"Outer","kind":12,"range":{"start":{"line":0,"character":0},"end":{"line":9,"character":0}},"children":[{"name":"inner","kind":8,"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}}}]}]`))
 	if len(tree) != 2 || tree[0].Name != "Outer" || tree[1].Name != "inner" {
 		t.Fatalf("documentSymbol tree = %+v", tree)
 	}
-	// SymbolInformation flat shape.
+
 	flat := parseSymbols(json.RawMessage(`[{"name":"Sym","kind":6,"location":{"uri":"file:///x.go","range":{"start":{"line":2,"character":0},"end":{"line":2,"character":3}}}}]`))
 	if len(flat) != 1 || flat[0].Name != "Sym" || flat[0].Range.Start.Line != 3 {
 		t.Fatalf("symbolInformation = %+v", flat)
@@ -223,10 +205,8 @@ func TestParseDocumentDiagnosticsVariants(t *testing.T) {
 	}
 }
 
-// ── retry helper unit tests ──────────────────────────────────────────────
-
 func TestRetryEmptyStringResultSemantics(t *testing.T) {
-	// Non-csharp server: no retry even on empty result.
+
 	plain := &sessionClient{resolved: ResolvedServer{Binary: "gopls"}}
 	calls := 0
 	got, err := retryEmptyStringResult(context.Background(), plain, func() (string, error) {
@@ -237,7 +217,6 @@ func TestRetryEmptyStringResultSemantics(t *testing.T) {
 		t.Fatalf("no-retry path: got=%q calls=%d err=%v", got, calls, err)
 	}
 
-	// csharp-ls: empty first attempt retries until non-empty.
 	csharp := &sessionClient{resolved: ResolvedServer{Binary: "/tools/csharp-ls"}}
 	calls = 0
 	got, err = retryEmptyStringResult(context.Background(), csharp, func() (string, error) {
@@ -251,7 +230,6 @@ func TestRetryEmptyStringResultSemantics(t *testing.T) {
 		t.Fatalf("csharp retry path: got=%q calls=%d err=%v", got, calls, err)
 	}
 
-	// Cancelled context surfaces the ctx error (#1586-D).
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	calls = 0
@@ -321,8 +299,6 @@ func TestSleepWithContext(t *testing.T) {
 		t.Fatal("cancelled ctx must abort the sleep")
 	}
 }
-
-// ── lockedBuffer tail-cap ────────────────────────────────────────────────
 
 func TestLockedBufferKeepsTail(t *testing.T) {
 	var lb lockedBuffer

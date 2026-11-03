@@ -85,11 +85,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("shell.empty"))
 		return nil
 	}
-	// #1391-B: no re-entry while a shell command is already running. A
-	// second submission used to overwrite shellCancelFunc (the first
-	// process became uncancellable - watch/tail -f leaked for real) and
-	// bump activeShellRunID so the first run's stream/done messages were
-	// RunID-filtered away (output silently lost).
+
 	if m.shellRunning {
 		m.chatWriteSystem(nextSystemID(), m.t("shell.already_running"))
 		return nil
@@ -108,15 +104,12 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	})
 	m.appendUserMessage("$ " + command)
 	m.shellRunning = true
-	// #1391-A: same ownership rule as update_shell - only clear the agent's
-	// cancel/fail state when this shell run actually owns the run (agent
-	// idle). When the agent is busy, its flags are not ours to touch.
+
 	if !m.loading {
 		m.runCanceled = false
 		m.runFailed = false
 	}
-	// Only manage loading/status if agent is not already running.
-	// When agent is busy, shell runs independently without touching shared state.
+
 	if !m.loading {
 		m.shellOwnedLoading = true
 		m.setLoading(true)
@@ -141,9 +134,7 @@ func (m *Model) appendShellChunk(chunk string) {
 		m.shellBuffer = &bytes.Buffer{}
 	}
 	m.shellBuffer.WriteString(chunk)
-	// First chunk → create the system message.
-	// Subsequent chunks → append to the same message so the output
-	// grows incrementally like a terminal, not as separate bubbles.
+
 	if m.shellOutputID == "" {
 		m.shellOutputID = nextSystemID()
 		if m.shellOutputIDs == nil {
@@ -154,7 +145,7 @@ func (m *Model) appendShellChunk(chunk string) {
 		m.suppressNextTunnelSystem = firstChunk
 		m.chatWriteSystem(m.shellOutputID, firstChunk)
 	} else {
-		// Append only the new incremental chunk text.
+
 		m.chatAppendSystemText(m.shellOutputID, "\n"+strings.TrimRight(chunk, "\n"))
 	}
 	if broker := m.tunnelEventBroker(); broker != nil && m.shellOutputID != "" {
@@ -169,9 +160,7 @@ func (m *Model) appendShellChunk(chunk string) {
 
 func (m *Model) startShellCommand(command string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
-	// #910: never touch m.cancelFunc here - it holds the AGENT run's
-	// cancel; overwriting it made Esc cancel the shell while the agent
-	// became permanently uncancellable. Shell gets its own field.
+
 	m.shellCancelFunc = cancel
 	m.activeShellRunID++
 	runID := m.activeShellRunID
@@ -180,10 +169,7 @@ func (m *Model) startShellCommand(command string) tea.Cmd {
 		safego.Go("tui.shell.runCommand", func() {
 			defer cancel()
 			workDir, _ := os.Getwd()
-			// #4791 (S-21): when the TUI's own cwd was a worktree that has
-			// since been removed, os.Getwd fails (stale cwd) - clamp to the
-			// nearest live ancestor so `!command` sessions recover instead
-			// of failing every spawn with ENOENT-class errors.
+
 			manager := toolpkg.NewCommandJobManager(toolpkg.NearestLiveDir(workDir))
 			snapshot, err := manager.Start(ctx, command, false, 0)
 			if err != nil {

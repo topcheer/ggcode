@@ -1,12 +1,5 @@
 package swarm
 
-// sa-90 tests: step-level failure attribution for parked swarm tasks
-// (AgenTracer, arXiv 2509.03312 / ICLR 2026 - attribute failures to the
-// specific agent AND step). Covers: attribution extraction from a teammate
-// event trail, target extraction from JSON tool args, JSON roundtrip into
-// task metadata, graceful degradation when no tool events exist, and the
-// human-readable FormatAttribution rendering.
-
 import (
 	"encoding/json"
 	"errors"
@@ -62,7 +55,7 @@ func TestBuildFailureAttribution_NoToolEventsReturnsNil(t *testing.T) {
 	if fa := buildFailureAttribution(tm, "task-1", errors.New("boom")); fa != nil {
 		t.Fatalf("expected nil for tool-less trail, got %+v", fa)
 	}
-	// nil teammate / nil error also degrade to nil.
+
 	if fa := buildFailureAttribution(nil, "task-1", errors.New("boom")); fa != nil {
 		t.Fatalf("expected nil for nil teammate, got %+v", fa)
 	}
@@ -76,15 +69,15 @@ func TestAttributionTarget_PreferentialKeys(t *testing.T) {
 		args string
 		want string
 	}{
-		{`{"file_path":"/x.go","command":"ls"}`, "/x.go"}, // file_path wins
-		{`{"path":"/tmp"}`, "/tmp"},                       // path fallback
-		{`{"command":"go test ./..."}`, "go test ./..."},  // command fallback
-		{`{"pattern":"TODO.*"}`, "TODO.*"},                // pattern fallback
-		{`{"query":"auth logic"}`, "auth logic"},          // query fallback
-		{`{"other":"v"}`, ""},                             // unrecognized -> empty
-		{`not json`, ""},                                  // unparseable -> empty
-		{``, ""},                                          // empty -> empty
-		{`{"file_path":"  "}`, ""},                        // blank value -> empty
+		{`{"file_path":"/x.go","command":"ls"}`, "/x.go"},
+		{`{"path":"/tmp"}`, "/tmp"},
+		{`{"command":"go test ./..."}`, "go test ./..."},
+		{`{"pattern":"TODO.*"}`, "TODO.*"},
+		{`{"query":"auth logic"}`, "auth logic"},
+		{`{"other":"v"}`, ""},
+		{`not json`, ""},
+		{``, ""},
+		{`{"file_path":"  "}`, ""},
 	}
 	for _, c := range cases {
 		if got := attributionTarget(c.args); got != c.want {
@@ -111,11 +104,10 @@ func TestAttachAttribution_MetadataRoundtrip(t *testing.T) {
 		t.Fatalf("roundtrip lost fields: %+v", back)
 	}
 
-	// nil attribution must not create a key, and must not panic on nil map.
 	if m := attachAttribution(nil, nil); m != nil {
 		t.Fatalf("nil attribution should return nil map, got %v", m)
 	}
-	// existing keys preserved.
+
 	meta2 := map[string]string{"permanent_error": "quota"}
 	meta2 = attachAttribution(meta2, fa)
 	if meta2["permanent_error"] != "quota" || meta2[AttributionMetaKey] == "" {
@@ -160,5 +152,5 @@ func TestBuildFailureAttribution_LongValuesTruncated(t *testing.T) {
 	if len(fa.ErrorDigest) > 200 {
 		t.Errorf("errorDigest not truncated: %d chars", len(fa.ErrorDigest))
 	}
-	_ = time.Now() // keep time import if fields change
+	_ = time.Now()
 }

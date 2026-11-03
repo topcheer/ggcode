@@ -211,14 +211,7 @@ func (m *Model) enterTmuxSession(sessionName, setupLayout string) tea.Cmd {
 	if m.sessionStore != nil && m.session != nil {
 		ses := m.session
 		store := m.sessionStore
-		// With per-message persistence (SetPersistHandler), all messages are
-		// already on disk. Only flush meta for JSONLStore; full Save would
-		// race with concurrent onPersist appends.
-		// #1775 case 2: this runs on the QUIT path - the old fire-and-forget
-		// safego.Go meant tea.Quit could fire before the save completed, and
-		// a slow disk lost the meta (or the whole Save) while tmux re-exec
-		// immediately read the stale file for resume. Synchronous here: the
-		// cost is one blocking write at exit.
+
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
 			if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
 				debug.Log("tui", "tmux metaSave: %v", err)
@@ -243,9 +236,7 @@ func parseTmuxEnterArgs(args []string) (sessionName, setupLayout string) {
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
 		switch {
-		// #1764 case 3: bare "setup" is treated as --setup ONLY when it
-		// is the sole argument - "/tmux enter setup" used to be unable to
-		// create a session literally named "setup".
+
 		case arg == "--setup" || (arg == "setup" && len(args) == 1):
 			setupLayout = "default"
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
@@ -600,9 +591,6 @@ func (m *Model) openTmuxMenu() {
 	m.statusActivity = "tmux menu"
 }
 
-// tmuxMenuUnavailableMsg closes the menu with the guided message the
-// /tmux command path already shows (#1764 case 1: menu keys used to
-// bypass the tmuxAvailable gate and surface a raw "no server running").
 func (m Model) tmuxMenuUnavailableMsg() tea.Cmd {
 	m.tmuxMenuOpen = false
 	m.statusActivity = ""

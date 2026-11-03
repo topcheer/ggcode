@@ -1,9 +1,5 @@
 package mcp
 
-// #3916 probes: a non-runner first token that is an executable on PATH
-// (docker/podman) is the COMMAND, not the server name; a genuine name
-// (never on PATH) still parses as name+command; runner forms unchanged.
-
 import (
 	"os/exec"
 	"testing"
@@ -26,13 +22,11 @@ func TestIssue3916_ExecutableFirstTokenIsCommand(t *testing.T) {
 	if len(srv.Args) != 4 || srv.Args[0] != "run" || srv.Args[3] != "mcp/weather" {
 		t.Fatalf("full arg list must be the command line, got %v", srv.Args)
 	}
-	// The name is now INFERRED from the real command (inferCommandServerName)
-	// rather than swallowing the first token while Command=run; deriving
-	// "docker" from Command=docker is the correct shape.
+
 }
 
 func TestIssue3916_GenuineNameStillParses(t *testing.T) {
-	// A real server name never resolves on PATH: name+command form intact.
+
 	srv, err := parseOptionTransportInstallArgs(
 		[]string{"my-weather-server", "/opt/weather/start.sh", "--port", "8080"}, "stdio")
 	if err != nil {
@@ -55,7 +49,7 @@ func TestIssue3916_RunnerFormsUnchanged(t *testing.T) {
 	if srv.Command != "npx" {
 		t.Fatalf("runner form regressed: command=%q", srv.Command)
 	}
-	// Bare command (single token) untouched.
+
 	srv, err = parseOptionTransportInstallArgs([]string{"uvx"}, "stdio")
 	if err != nil {
 		t.Fatal(err)

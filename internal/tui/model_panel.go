@@ -26,8 +26,7 @@ type modelPanelState struct {
 	protocol   string
 	filter     textinput.Model
 
-	// Inline editing for context_window (w) and max_tokens (o)
-	editingField string // "context_window" or "max_tokens"
+	editingField string
 	editInput    textinput.Model
 }
 
@@ -45,15 +44,14 @@ func (m *Model) openModelPanel() tea.Cmd {
 	m.providerPanel = nil
 	m.mcpPanel = nil
 	m.skillsPanel = nil
-	m.input.Blur() // release main input focus while panel is open
+	m.input.Blur()
 
 	resolved, err := m.config.ResolveActiveEndpoint()
 	if err != nil {
 		return nil
 	}
 	models := uniqueStrings(append([]string(nil), resolved.Models...))
-	// Always include the currently active model, even if it's not in the
-	// configured models list (e.g. a user-defined custom model).
+
 	if resolved.Model != "" && indexOf(models, resolved.Model) < 0 {
 		models = append([]string{resolved.Model}, models...)
 	}
@@ -74,7 +72,7 @@ func (m *Model) openModelPanel() tea.Cmd {
 
 func (m *Model) closeModelPanel() {
 	m.modelPanel = nil
-	m.input.Focus() // restore main input focus
+	m.input.Focus()
 }
 
 func (m Model) renderModelPanel() string {
@@ -82,13 +80,9 @@ func (m Model) renderModelPanel() string {
 	if panel == nil || m.config == nil {
 		return ""
 	}
-	// Dynamically set model list visible rows based on available panel height.
-	// Reserve ~8 lines for panel chrome (title, vendor/endpoint info, hints).
+
 	availRows := m.panelAvailableHeight() - 8
-	// #1742 case 2: the old grow-only form kept a stale large max when the
-	// terminal SHRANK (avail=12 vs max=32 matched neither branch) - the
-	// list rendered past the panel with no scroll hint. Track the current
-	// height with a floor instead.
+
 	if availRows < 6 {
 		availRows = 6
 	}
@@ -100,8 +94,6 @@ func (m Model) renderModelPanel() string {
 		source = m.t("panel.model.source.builtin")
 	}
 
-	// Resolve current context_window and max_tokens for display.
-	// Priority: session-level override → endpoint-level → auto
 	cw, mt := "auto", "auto"
 	if m.session != nil && m.session.ContextWindow > 0 {
 		cw = fmt.Sprintf("%d", m.session.ContextWindow)
@@ -157,7 +149,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Handle inline editing mode
+
 	if panel.editingField != "" {
 		return m.handleModelPanelEditKey(msg)
 	}
@@ -227,9 +219,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.filter.Blur()
 			return *m, nil
 		}
-		// #1383-A: a filter with no matches sets selected=-1; the first
-		// Enter only Blurs (selected STAYS -1), the second fell through to
-		// models[-1] - a deterministic two-keystroke panic. Guard both.
+
 		if len(panel.models) == 0 || panel.selected < 0 {
 			return *m, nil
 		}
@@ -244,7 +234,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.syncSessionSelection()
 		m.closeModelPanel()
-		// Provide visual feedback that the model switch succeeded.
+
 		m.chatWriteSystem(nextSystemID(), m.t("panel.model.switched", model))
 		return *m, nil
 	}
@@ -281,9 +271,6 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 			}
 		}
 
-		// Merge: remote models + any configured models that aren't in the
-		// remote list. This preserves user-defined custom models (e.g.
-		// "glm-5.2-highspeed") that the discovery API doesn't return.
 		merged := uniqueStrings(append([]string(nil), models...))
 		for _, bm := range builtIn {
 			if indexOf(merged, bm) < 0 {
@@ -295,15 +282,11 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 			models: merged,
 			remote: true,
 		}
-		// #1383-B (family site 11, Vendors/Endpoints map): SetEndpointModels
-		// + saveConfig ran HERE on the Cmd goroutine while the UI reads the
-		// maps. The write + persist now ride the result message and execute
-		// on the Update loop (see the handler).
+
 		return result
 	}
 }
 
-// startEditing begins inline editing of a numeric field.
 func (p *modelPanelState) startEditing(field, initialValue string) {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
@@ -314,21 +297,20 @@ func (p *modelPanelState) startEditing(field, initialValue string) {
 	p.editInput = ti
 }
 
-// handleModelPanelEditKey processes keys while in inline edit mode.
 func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.modelPanel
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		panel.editingField = ""
 		panel.editInput = textinput.Model{}
-		m.input.Focus() // restore main input
+		m.input.Focus()
 		return *m, nil
 	case "enter":
 		val := strings.TrimSpace(panel.editInput.Value())
-		field := panel.editingField // capture before clearing
+		field := panel.editingField
 		panel.editingField = ""
 		panel.editInput = textinput.Model{}
-		m.input.Focus() // restore main input
+		m.input.Focus()
 
 		vendor := m.config.Vendor
 		endpoint := m.config.Endpoint
@@ -353,8 +335,6 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
-		// Persist to session-level (not endpoint config) so different
-		// sessions can have different context_window/max_tokens.
 		if m.session == nil {
 			panel.message = m.t("panel.model.no_session")
 			return *m, nil
@@ -373,10 +353,6 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
-		// Also persist to endpoint config so new sessions inherit these values.
-		// Only update the field actually being edited; preserve the other
-		// endpoint value so that e.g. setting max_tokens does not overwrite
-		// an existing endpoint context_window.
 		cw, mt := ep.ContextWindow, ep.MaxTokens
 		if field == "context_window" {
 			cw = n
@@ -384,11 +360,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			mt = n
 		}
 		if n == 0 {
-			// #1743 case 1: clearing the field is a SESSION-level intent -
-			// persisting the zero wipes the endpoint default every future
-			// session inherits (and the running agent keeps the old value
-			// while the UI already reads the wiped config). Skip the
-			// endpoint write entirely on a clear.
+
 			return *m, nil
 		}
 		if err := m.config.SetEndpointModelLimits(vendor, endpoint, cw, mt); err != nil {
@@ -396,14 +368,13 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 
-		// Apply to running agent immediately
 		if m.agent != nil && m.agent.ContextManager() != nil {
 			switch field {
 			case "context_window":
 				if n > 0 {
 					m.agent.ContextManager().SetContextWindow(n)
 				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
-					// Only reset context window, don't clobber max_tokens
+
 					if resolved.ContextWindow > 0 {
 						m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
 					}
@@ -412,7 +383,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				if n > 0 {
 					m.agent.ContextManager().SetOutputReserve(n)
 				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
-					// Only reset max_tokens, don't clobber context window
+
 					if resolved.MaxTokens > 0 {
 						m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
 					}
@@ -420,7 +391,6 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
-		// Display the effective values: session-level if set, otherwise endpoint-level
 		displayCW := n
 		displayMT := n
 		if field == "context_window" {
@@ -448,8 +418,6 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
-// parseIntPositive parses a non-negative integer string with optional K/M/G suffix.
-// Examples: "256k" → 262144, "1M" → 1048576, "2G" → 2147483648, "128000" → 128000.
 func parseIntPositive(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -469,9 +437,7 @@ func parseIntPositive(s string) (int, error) {
 		s = s[:len(s)-1]
 	}
 	var val int
-	// #903: Sscanf stops at the first non-digit WITHOUT error — '0x10'
-	// parsed as 0 and silently wiped the context window with a success
-	// message. Validate the whole string via a round-trip comparison.
+
 	if _, err := fmt.Sscanf(s, "%d", &val); err != nil {
 		return 0, fmt.Errorf("invalid number: %q", s)
 	}
@@ -481,12 +447,7 @@ func parseIntPositive(s string) (int, error) {
 	if val < 0 {
 		return 0, fmt.Errorf("must be >= 0")
 	}
-	// #2615: the round-trip check above only covers the digits BEFORE the
-	// suffix multiplier; val*mult itself could overflow into a wrong
-	// positive or even negative number that then sailed through the
-	// checks above and silently persisted (e.g. 999999999999G -> 3.8e18
-	// crippled auto-compaction permanently). Verify the multiplication
-	// survives a round-trip before returning.
+
 	result := val * mult
 	if result/mult != val {
 		return 0, fmt.Errorf("value %d%s overflows the integer range", val, map[int]string{1024 * 1024 * 1024: "G", 1024 * 1024: "M", 1024: "K"}[mult])

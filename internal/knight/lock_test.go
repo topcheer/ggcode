@@ -41,7 +41,6 @@ func TestTryAcquireLock_ReleaseAndReacquire(t *testing.T) {
 	}
 	lock1.release()
 
-	// After release, a new instance should be able to acquire
 	lock2 := tryAcquireLock(dir)
 	if lock2 == nil {
 		t.Fatal("should acquire lock after release")
@@ -67,7 +66,6 @@ func TestTryAcquireLock_WritesPID(t *testing.T) {
 func TestLockHeldBy(t *testing.T) {
 	dir := t.TempDir()
 
-	// No lock held
 	pid, err := LockHeldBy(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -76,7 +74,6 @@ func TestLockHeldBy(t *testing.T) {
 		t.Errorf("expected 0 (no lock), got %d", pid)
 	}
 
-	// Acquire lock
 	lock := tryAcquireLock(dir)
 	if lock == nil {
 		t.Fatal("should acquire lock")
@@ -99,7 +96,6 @@ func TestTryAcquireLock_CreatesDir(t *testing.T) {
 		t.Fatal("should acquire lock and create directories")
 	}
 
-	// Lock file is at <dir>/.ggcode/knight.lock
 	lockPath := filepath.Join(dir, ".ggcode", "knight.lock")
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Errorf("lock file should exist at %s: %v", lockPath, err)

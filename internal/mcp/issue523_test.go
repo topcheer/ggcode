@@ -1,15 +1,5 @@
 package mcp
 
-// Regression tests for issue #523:
-//   Bug A — WS transport dropped responses whose reqID belonged to a
-//           concurrent caller, guaranteeing that caller a 120s false
-//           timeout. The fix routes foreign responses to the owner's
-//           registered waiter (same mechanism as the stdio fix #156).
-//   Bug B — the HTTP send path held c.mu across the full roundtrip
-//           (including interactive OAuth 401 retries), so Close() blocked
-//           behind any in-flight request. The fix narrows c.mu to short
-//           state snapshot/write-back sections.
-
 import (
 	"context"
 	"encoding/json"
@@ -28,11 +18,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestWebSocketConcurrentRequestsRoutedByWaiter (Bug A): two concurrent
-// requests over one WS connection; the server answers them in REVERSED
-// arrival order. The read loop that consumes the foreign response must
-// deliver it to the other caller's waiter instead of dropping it — both
-// callers must succeed well before the 120s request timeout.
 func TestWebSocketConcurrentRequestsRoutedByWaiter(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	type pending struct {
@@ -69,13 +54,10 @@ func TestWebSocketConcurrentRequestsRoutedByWaiter(t *testing.T) {
 			calls := append([]pending(nil), pendingCalls...)
 			mu.Unlock()
 			if n < 2 {
-				// Keep both callers parked in their read loops until the second
-				// request arrives; then fall through and answer both at once.
+
 				continue
 			}
-			// Answer in REVERSED arrival order: whichever client read loop
-			// grabs the connection first reads a response belonging to the
-			// OTHER caller. Before the fix that message was dropped.
+
 			mu.Lock()
 			if answered {
 				mu.Unlock()
@@ -106,9 +88,6 @@ func TestWebSocketConcurrentRequestsRoutedByWaiter(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Generous margin vs. the 120s mcpRequestTimeout: a waiter-routing
-	// regression manifests as a full false timeout, so anything beyond 30s
-	// indicates the bug; local runs complete in milliseconds.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -158,14 +137,10 @@ func errUnexpectedShape(n int) error {
 	return fmt.Errorf("unexpected content length %d", n)
 }
 
-// TestHTTPCloseNotBlockedByInflightRequest (Bug B): a request hung on a
-// non-responding HTTP server must NOT delay Close(). Before the fix,
-// sendRequestUnlocked held c.mu across httpClient.Do, and Close()'s first
-// action is c.mu.Lock() — so Close blocked until the request timed out.
 func TestHTTPCloseNotBlockedByInflightRequest(t *testing.T) {
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-release // hang until the test tears down
+		<-release
 	}))
 	defer server.Close()
 	defer close(release)
@@ -179,8 +154,6 @@ func TestHTTPCloseNotBlockedByInflightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bound the hung request itself so the test goroutine can't leak for
-	// the full 120s mcpRequestTimeout.
 	reqCtx, reqCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer reqCancel()
 	reqDone := make(chan error, 1)
@@ -189,19 +162,17 @@ func TestHTTPCloseNotBlockedByInflightRequest(t *testing.T) {
 		reqDone <- err
 	}()
 
-	// Give the request time to enter httpClient.Do.
 	time.Sleep(200 * time.Millisecond)
 
 	closed := make(chan error, 1)
 	go func() { closed <- client.Close() }()
 	select {
 	case <-closed:
-		// Close returned promptly — contract restored.
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close() blocked behind an in-flight HTTP request (#523 Bug B)")
 	}
 
-	// The hung request must still unwind on its own context.
 	select {
 	case <-reqDone:
 	case <-time.After(5 * time.Second):
@@ -209,9 +180,6 @@ func TestHTTPCloseNotBlockedByInflightRequest(t *testing.T) {
 	}
 }
 
-// TestHTTPConcurrentRequestsRunInParallel (Bug B): with c.mu no longer held
-// across the roundtrip, two concurrent requests must be in flight
-// simultaneously (peak in-flight == 2). The old serialization would show 1.
 func TestHTTPConcurrentRequestsRunInParallel(t *testing.T) {
 	var inFlight, peak int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -225,9 +193,7 @@ func TestHTTPConcurrentRequestsRunInParallel(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		atomic.AddInt32(&inFlight, -1)
 		w.Header().Set("Content-Type", "application/json")
-		// Echo the request id (#597 M1): a real JSON-RPC server answers with
-		// the caller's id; a fixed id=1 only worked because the HTTP parser
-		// used to accept ANY response (cross-injection bug #597 fixed that).
+
 		body, _ := io.ReadAll(r.Body)
 		var env struct {
 			ID json.RawMessage `json:"id"`

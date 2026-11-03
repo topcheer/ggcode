@@ -21,7 +21,7 @@ func TestIsTaskEnvelope(t *testing.T) {
 	no := []string{
 		`{"content":[{"type":"text","text":"ok"}]}`,
 		`{"resultType":"complete","content":[]}`,
-		`{"taskId":"t1","status":"working"}`, // no discriminator
+		`{"taskId":"t1","status":"working"}`,
 		`{}`,
 		`not json`,
 	}
@@ -131,7 +131,7 @@ func TestClientCapsDeclareTasks(t *testing.T) {
 	if caps.Tasks == nil {
 		t.Fatal("client capability envelope must advertise tasks (SEP-1686)")
 	}
-	// The same declaration must survive the modern _meta envelope round-trip.
+
 	meta := c.modernRequestMeta(ProtocolVersion20260728)
 	raw, err := json.Marshal(meta[MetaKeyClientCapabilities])
 	if err != nil {
@@ -142,10 +142,6 @@ func TestClientCapsDeclareTasks(t *testing.T) {
 	}
 }
 
-// TestMRTRTaskEnvelopePassthrough guards the mrtr.go contract that
-// CallToolAsTask depends on: a resultType "task" envelope must flow through
-// the MRTR loop to the caller instead of being rejected as an unrecognized
-// result, and it must not trigger an input_required retry.
 func TestMRTRTaskEnvelopePassthrough(t *testing.T) {
 	params := &CallToolParams{Name: "t"}
 	var sent []string

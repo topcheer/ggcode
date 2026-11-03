@@ -58,7 +58,6 @@ func TestSamplingHandlerAdvertising(t *testing.T) {
 		t.Fatal("expected nil sampling handler by default")
 	}
 
-	// With handler, capability should be set
 	c.SetSamplingHandler(func(ctx context.Context, p SamplingParams) (*SamplingResult, error) {
 		return &SamplingResult{
 			Model: "test-model",
@@ -76,14 +75,12 @@ func TestSamplingHandlerAdvertising(t *testing.T) {
 }
 
 func TestSamplingHandlerRejectsWhenNil(t *testing.T) {
-	// When no handler is set, handleSampling should write an error response.
-	// We can't test the full path without a started transport, but we verify
-	// the handler check logic: nil handler means rejection.
+
 	c := NewClient("test", "echo", nil)
 	if c.samplingHandler != nil {
 		t.Fatal("expected nil sampling handler by default")
 	}
-	// Verify SetSamplingHandler works
+
 	c.SetSamplingHandler(func(ctx context.Context, p SamplingParams) (*SamplingResult, error) {
 		return nil, nil
 	})

@@ -6,9 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 )
 
-// #2815: knight task/proposal result handlers must stop the spinner and
-// clear the four status fields, aligning with update_done.go completion
-// paths. Without Stop() the spinner tick chain keeps re-rendering forever.
 func TestKnightResultStopsSpinner2815(t *testing.T) {
 	m := newTestModel()
 	m.setLoading(true)

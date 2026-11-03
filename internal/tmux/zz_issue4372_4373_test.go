@@ -1,18 +1,5 @@
 package tmux
 
-// #4372 + #4373 pinning tests.
-//
-// #4372: ListPaneIDs must pass -a (server-wide pane enumeration). Without it
-// list-panes only covers the current window, and Refresh marked managed panes
-// in other windows as stale (CaptureAll skipped them, Restore re-created
-// duplicates). A fake tmux binary records its argv so the test asserts the
-// exact flags without needing a real server.
-//
-// #4373: saveWorkspaceState must create the store directory BEFORE opening
-// the flock sidecar. The old order (lock -> ... -> MkdirAll) made the very
-// first Save fail with ENOENT forever on a custom store path or fresh
-// environment, because FileLock's O_CREATE cannot create parent dirs.
-
 import (
 	"context"
 	"os"
@@ -56,15 +43,14 @@ func TestIssue4372ListPaneIDsPassesAllServerFlag(t *testing.T) {
 }
 
 func TestIssue4373SaveCreatesStoreDirBeforeLock(t *testing.T) {
-	// Parent directory deliberately does NOT exist: the flock sidecar open
-	// must not be the first thing to touch the path.
+
 	root := t.TempDir()
 	path := filepath.Join(root, "deep", "nested", "tmux-panes.json")
 	panes := []Pane{{ID: "%0", Workspace: "ws"}}
 	if err := saveWorkspaceState(path, "ws", panes, nil); err != nil {
 		t.Fatalf("first save into fresh directory failed (#4373): %v", err)
 	}
-	// Round-trip: the save must actually be loadable, not just error-free.
+
 	if _, _, err := loadWorkspaceState(path, "ws"); err != nil {
 		t.Fatalf("load after fresh save: %v", err)
 	}

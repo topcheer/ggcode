@@ -15,18 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/runfile"
 )
 
-// newStatusCmd creates the "ggcode status" subcommand for discovering and
-// querying running ggcode instances from external processes.
-//
-// Usage:
-//
-//	ggcode status              — list all running instances (default: list)
-//	ggcode status list         — same as above
-//	ggcode status get [workspace] — detailed status for a specific instance
-//	ggcode status list --agent — show only agent busy/idle state
-//	ggcode status list --im    — show only IM adapter status
-//	ggcode status list --mobile — show only mobile connection status
-//	ggcode status list --json  — machine-readable JSON output
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -61,7 +49,6 @@ Examples:
 	cmd.AddCommand(newStatusListCmd(&flagAgent, &flagIM, &flagMobile, &flagJSON))
 	cmd.AddCommand(newStatusGetCmd(&flagJSON))
 
-	// Default action when no subcommand: run list
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		return runStatusList(cmd.OutOrStdout(), flagAgent, flagIM, flagMobile, flagJSON)
 	}
@@ -100,18 +87,16 @@ func newStatusGetCmd(flagJSON *bool) *cobra.Command {
 	}
 }
 
-// instanceStatus holds a port file plus its live status (or error).
 type instanceStatus struct {
 	Port   runfile.PortFile   `json:"port_file"`
 	Status *runtimeStatusJSON `json:"status,omitempty"`
 	Error  string             `json:"error,omitempty"`
 }
 
-// runStatusList discovers all running instances and prints their status.
 func runStatusList(out io.Writer, filterAgent, filterIM, filterMobile, jsonOut bool) error {
 	instances, err := runfile.ReadAll()
 	if err != nil {
-		// No run directory or no instances — not an error
+
 		if jsonOut {
 			fmt.Fprintln(out, "[]")
 		} else {
@@ -120,7 +105,6 @@ func runStatusList(out io.Writer, filterAgent, filterIM, filterMobile, jsonOut b
 		return nil
 	}
 
-	// Query each instance's /api/status for live state
 	var results []instanceStatus
 	for _, pf := range instances {
 		is := instanceStatus{Port: pf}
@@ -147,7 +131,6 @@ func runStatusList(out io.Writer, filterAgent, filterIM, filterMobile, jsonOut b
 		return nil
 	}
 
-	// Determine output mode
 	if filterAgent {
 		printAgentStatus(out, results)
 	} else if filterIM {
@@ -160,8 +143,6 @@ func runStatusList(out io.Writer, filterAgent, filterIM, filterMobile, jsonOut b
 	return nil
 }
 
-// runStatusGet fetches and prints detailed status for one workspace.
-// If the workspace has multiple running sessions, all are listed.
 func runStatusGet(out io.Writer, workspace string, jsonOut bool) error {
 	instances, err := runfile.ReadForWorkspace(workspace)
 	if err != nil || len(instances) == 0 {
@@ -209,7 +190,6 @@ func runStatusGet(out io.Writer, workspace string, jsonOut bool) error {
 	return nil
 }
 
-// runtimeStatusJSON mirrors webui.RuntimeStatus for JSON unmarshaling.
 type runtimeStatusJSON struct {
 	PID            int             `json:"pid"`
 	Workspace      string          `json:"workspace"`
@@ -238,7 +218,6 @@ type mobileConnJSON struct {
 	ConnectCode string `json:"connect_code,omitempty"`
 }
 
-// fetchStatus queries the /api/status endpoint of a running instance.
 func fetchStatus(addr, token string) (*runtimeStatusJSON, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	url := "http://" + addr + "/api/status"
@@ -264,8 +243,6 @@ func fetchStatus(addr, token string) (*runtimeStatusJSON, error) {
 	}
 	return &st, nil
 }
-
-// --- Printers ---
 
 func printFullStatus(out io.Writer, results []instanceStatus) {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
@@ -408,8 +385,6 @@ func printDetailedStatus(out io.Writer, pf *runfile.PortFile, st *runtimeStatusJ
 		fmt.Fprintf(out, "  Connected:     no\n")
 	}
 }
-
-// --- Helpers ---
 
 func busyIcon(busy bool) string {
 	if busy {

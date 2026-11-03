@@ -52,7 +52,7 @@ func TestPCPanelRenderLocalizesToChinese(t *testing.T) {
 	m.SetConfig(&config.Config{Language: "zh-CN"})
 	m.openPCPanel()
 	rendered := m.renderPCPanel()
-	// Chinese localization should contain PC or related terms
+
 	if !strings.Contains(rendered, "PC") && !strings.Contains(rendered, "PrivateClaw") {
 		t.Fatalf("expected PC/PrivateClaw in pc panel, got:\n%s", rendered)
 	}
@@ -109,9 +109,6 @@ func TestPCPanelNoSessionShowsMessage(t *testing.T) {
 	}
 }
 
-// TestPCResultMsgRoutesToPanel pins #1386-A: pcResultMsg now HAS an
-// Update case - success fills message/showQR/qrCode/inviteURI, error
-// fills the message and clears the QR.
 func TestPCResultMsgRoutesToPanel(t *testing.T) {
 	m := newTestModel()
 	m.pcPanel = &pcPanelState{}
@@ -129,8 +126,6 @@ func TestPCResultMsgRoutesToPanel(t *testing.T) {
 	}
 }
 
-// TestPCCreateModeGTypes pins #1386-C: 'g' while typing a label must
-// type, not toggle group mode ('group chat' -> 'roup chat' before).
 func TestPCCreateModeGTypes(t *testing.T) {
 	m := newTestModel()
 	m.pcPanel = &pcPanelState{createMode: true, createInput: "group"}
@@ -141,7 +136,6 @@ func TestPCCreateModeGTypes(t *testing.T) {
 		t.Fatalf("g not typed: %q (group flag flipped: %v)", p.createInput, p.createGroup)
 	}
 
-	// Empty input still toggles.
 	m3 := newTestModel()
 	m3.pcPanel = &pcPanelState{createMode: true}
 	m4, _ := m3.handlePCPanelKey(tea.KeyPressMsg{Text: "g"})

@@ -35,9 +35,6 @@ type mcpUninstallResultMsg struct {
 	err  error
 }
 
-// mcpRefreshResultMsg carries the outcome of the async f-key tool refresh.
-// The tools/list RPC must run OFF the UI goroutine: a wedged MCP server
-// used to freeze the whole TUI because Refresh was called inline in Update.
 type mcpRefreshResultMsg struct {
 	name    string
 	found   bool
@@ -46,9 +43,7 @@ type mcpRefreshResultMsg struct {
 }
 
 func (m *Model) openMCPPanel() {
-	// Pull a fresh snapshot so the panel reflects any background state
-	// changes that happened while it was closed (the update message may
-	// have arrived before the panel was open).
+
 	if m.mcpManager != nil {
 		if servers := toMCPInfos(m.mcpManager.Snapshot()); len(servers) > 0 {
 			m.mcpServers = servers
@@ -71,7 +66,7 @@ func (m *Model) closeMCPPanel() {
 func (m *Model) addDeviceCode(serverName, userCode, verifyURL string) {
 	for _, dc := range m.pendingDeviceCodes {
 		if dc.serverName == serverName {
-			return // already showing
+			return
 		}
 	}
 	m.pendingDeviceCodes = append(m.pendingDeviceCodes, deviceCodeInfo{
@@ -97,9 +92,7 @@ func (m Model) renderDeviceCodeBanner() string {
 	var lines []string
 	for _, dc := range m.pendingDeviceCodes {
 		if dc.userCode == "" {
-			// #1790: browser-flow OAuth carries no device code - the banner
-			// shows the authorize URL only (time-sensitive; must be visible
-			// even when another panel shadows the MCP panel).
+
 			lines = append(lines,
 				fmt.Sprintf(" MCP server %s requires authentication", dc.serverName),
 				fmt.Sprintf(" Visit %s", dc.verifyURL),
@@ -119,13 +112,7 @@ func (m Model) renderDeviceCodeBanner() string {
 			codeStyle,
 		)
 	}
-	// renderContextBoxAuto, NOT renderContextBox: the banner is a compact
-	// strip sized to its content. renderContextBox forces Height(availH)
-	// (full main-content area, a panel-only behavior); View() subtracts the
-	// banner's height from the panel budget assuming natural height, so the
-	// full-height variant overflowed the viewport and pushed the composer
-	// off-screen, leaving a giant empty box below the URL (user report
-	// 2026-09-14: "下半部分呢").
+
 	return m.renderContextBoxAuto("MCP Device Authorization", strings.Join(lines, "\n"), lipgloss.Color("11"))
 }
 
@@ -255,7 +242,6 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// handleMCPInstallInput routes keys while the install spec prompt is open.
 func (m *Model) handleMCPInstallInput(panel *mcpPanelState, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
@@ -287,8 +273,6 @@ func (m *Model) handleMCPInstallInput(panel *mcpPanelState, msg tea.KeyPressMsg)
 	return *m, nil
 }
 
-// mcpPanelNavigate moves the selection by delta (wraps around). No-op on an
-// empty server list.
 func mcpPanelNavigate(panel *mcpPanelState, delta, n int) {
 	if n == 0 {
 		return
@@ -296,7 +280,6 @@ func mcpPanelNavigate(panel *mcpPanelState, delta, n int) {
 	panel.selected = (panel.selected + delta + n) % n
 }
 
-// mcpPanelReconnect handles enter/r/R: retry the selected server.
 func (m *Model) mcpPanelReconnect(panel *mcpPanelState) {
 	if len(m.mcpServers) == 0 {
 		return
@@ -314,10 +297,6 @@ func (m *Model) mcpPanelReconnect(panel *mcpPanelState) {
 	}
 }
 
-// mcpPanelRefresh handles f/F: refresh tool metadata for the selected server.
-// It returns a tea.Cmd so the blocking tools/list RPC runs on a background
-// goroutine - calling MCPManager.Refresh inline in Update froze the entire
-// TUI whenever the server hung (mcp-panel f-key hang).
 func (m *Model) mcpPanelRefresh(panel *mcpPanelState) tea.Cmd {
 	if len(m.mcpServers) == 0 {
 		return nil
@@ -335,8 +314,6 @@ func (m *Model) mcpPanelRefresh(panel *mcpPanelState) tea.Cmd {
 	}
 }
 
-// mcpPanelToggle handles space: enable/disable the selected server.
-// Returns true when the caller must return immediately (persist failure).
 func (m *Model) mcpPanelToggle(panel *mcpPanelState) bool {
 	if len(m.mcpServers) == 0 {
 		return false
@@ -344,9 +321,7 @@ func (m *Model) mcpPanelToggle(panel *mcpPanelState) bool {
 	srv := m.mcpServers[panel.selected]
 	willDisable := !srv.Disabled
 	if err := plugin.SetMCPDisabledIn(workingDirFromModel(m), srv.Name, willDisable); err != nil {
-		// #1740 case 2: surface the persist failure instead of the
-		// unconditional "disabled and disconnected" claim - the server
-		// silently revives on restart when the write failed.
+
 		panel.message = fmt.Sprintf("persist failed (will revert on restart): %v", err)
 		return true
 	}
@@ -366,7 +341,6 @@ func (m *Model) mcpPanelToggle(panel *mcpPanelState) bool {
 	return false
 }
 
-// mcpPanelResetAuth handles a/A: clear stored OAuth credentials and retry.
 func (m *Model) mcpPanelResetAuth(panel *mcpPanelState) {
 	if len(m.mcpServers) == 0 {
 		return
@@ -393,18 +367,11 @@ func (m *Model) installMCPServer(spec string) tea.Cmd {
 		if err != nil {
 			return mcpInstallResultMsg{err: err}
 		}
-		// #1382-B (family site 16, MCPServers slice): UpsertMCPServer + save
-		// ran HERE on the Cmd goroutine while the UI reads the slice -
-		// same family, slice flavor (torn header reads). The write +
-		// persist ride configMutationMsg onto the Update loop; the network
-		// connect (slow IO) stays on the follow-up Cmd.
-		// #1382-B: apply runs before next() (handleConfigMutationMsg is
-		// sequential), so a closure-local var threads the replaced flag
-		// without any package-level shared state.
+
 		replaced := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
-				// slice write + persist on the Update loop.
+
 				replaced = m.config.UpsertMCPServer(server)
 				return m.saveConfig()
 			},
@@ -436,18 +403,11 @@ func (m *Model) uninstallMCPServer(name string) tea.Cmd {
 		if m.config == nil {
 			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("MCP uninstall unavailable without config")}
 		}
-		// #1382-C: the OAuth token delete ran LAST and was skipped by every
-		// early return (and a retry hit 'not configured' first) - one failed
-		// uninstall left mcp:<name> credentials on disk FOREVER. Token
-		// cleanup now runs FIRST via defer-style ordering and its error is
-		// surfaced, never dropped.
-		// #1382-B: the config write + persist ride configMutationMsg (family
-		// site 16, MCPServers slice).
+
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				if !m.config.RemoveMCPServer(name) {
-					// Still attempt token cleanup - the config entry may already
-					// be gone from a previous partial uninstall.
+
 					_ = auth.DefaultStore().Delete("mcp:" + name)
 					return fmt.Errorf("MCP server %s is not configured", name)
 				}
@@ -461,7 +421,7 @@ func (m *Model) uninstallMCPServer(name string) tea.Cmd {
 					if m.mcpManager != nil && !m.mcpManager.Uninstall(name) {
 						return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saved config, but runtime uninstall failed for %s", name)}
 					}
-					// Token cleanup after a successful uninstall; error surfaced.
+
 					if derr := auth.DefaultStore().Delete("mcp:" + name); derr != nil {
 						return mcpUninstallResultMsg{name: name, err: fmt.Errorf("uninstalled, but deleting stored credentials failed: %w", derr)}
 					}
@@ -493,7 +453,6 @@ func mcpServerLabels(servers []MCPInfo) []string {
 	return out
 }
 
-// renderTruncatedList renders up to max items with "•" prefix, and a summary for the rest.
 func renderTruncatedList(items []string, max int) []string {
 	out := make([]string, 0, min(len(items), max+1))
 	end := len(items)
@@ -518,18 +477,16 @@ func (m *Model) startMCPOAuth(oauthErr *plugin.MCPOAuthRequiredError) tea.Cmd {
 		if handler.SupportsDCR() {
 			if err := handler.RegisterClient(ctx); err != nil {
 				debug.Log("mcp-oauth", "dcr_failed server=%s error=%v, continuing with existing client_id", oauthErr.ServerName, err)
-				// DCR failed, but we may still have a client_id from config or built-in mapping
+
 			}
 		}
 
-		// Try device flow first (no client_secret needed, no callback server needed)
 		if handler.SupportsDeviceFlow() {
-			// Full server-declared scopes (#735): least-privilege is guaranteed by
-			// the server's scopes_supported, client-side truncation only broke it.
+
 			scopes := handler.GetScopes()
 			devResp, err := handler.StartDeviceFlow(ctx, scopes)
 			if err == nil {
-				// Open verification URI in browser
+
 				var openErr error
 				if m.urlOpener != nil {
 					openErr = m.urlOpener(devResp.VerificationURI)
@@ -542,7 +499,7 @@ func (m *Model) startMCPOAuth(oauthErr *plugin.MCPOAuthRequiredError) tea.Cmd {
 					deviceUserCode: devResp.UserCode,
 				}
 			}
-			// Device flow failed, fall through to browser flow
+
 		}
 
 		authorizeURL, err := handler.StartAuthFlow(ctx)

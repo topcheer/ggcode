@@ -15,10 +15,8 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// MCPStatusFunc returns runtime MCP server statuses. Keys are server names.
 type MCPStatusFunc func() map[string]MCPRuntimeStatus
 
-// MCPRuntimeStatus describes a running MCP server's state.
 type MCPRuntimeStatus struct {
 	Connected bool     `json:"connected"`
 	Pending   bool     `json:"pending"`
@@ -27,10 +25,8 @@ type MCPRuntimeStatus struct {
 	Tools     []string `json:"tools,omitempty"`
 }
 
-// IMStatusFunc returns runtime IM adapter states. Keys are adapter names.
 type IMStatusFunc func() []IMRuntimeStatus
 
-// IMRuntimeStatus describes a running IM adapter's state.
 type IMRuntimeStatus struct {
 	Adapter   string   `json:"adapter"`
 	Platform  string   `json:"platform"`
@@ -42,28 +38,21 @@ type IMRuntimeStatus struct {
 	TargetID  string   `json:"target_id,omitempty"`
 	Muted     bool     `json:"muted"`
 	Disabled  bool     `json:"disabled"`
-	AllDirs   []string `json:"all_dirs,omitempty"` // all persisted bound directories
+	AllDirs   []string `json:"all_dirs,omitempty"`
 }
 
-// IMActionFunc performs an IM action (enable/disable/mute/unmute/unbind).
 type IMActionFunc func(adapter string, action string) error
 
-// A2ADiscoverFunc returns discovered A2A instances (other running ggcode processes).
 type A2ADiscoverFunc func() []A2ADiscoveredInstance
 
-// KnightStatusFunc returns current Knight agent status and skill data.
 type KnightStatusFunc func() KnightStatus
 
-// KnightActionFunc performs an action on a Knight skill. Returns an error message or empty string on success.
 type KnightActionFunc func(action, skillName string, params map[string]interface{}) error
 
-// KnightSkillContentFunc reads the raw content of a skill file by name and staging flag.
 type KnightSkillContentFunc func(name string, staging bool) (string, error)
 
-// RuntimeStatusFunc returns live runtime state for the /api/status endpoint.
 type RuntimeStatusFunc func() RuntimeStatus
 
-// RuntimeStatus is the JSON response for /api/status — external process visibility.
 type RuntimeStatus struct {
 	PID            int             `json:"pid"`
 	Workspace      string          `json:"workspace"`
@@ -79,7 +68,6 @@ type RuntimeStatus struct {
 	MobileConn     MobileConnInfo  `json:"mobile"`
 }
 
-// IMAdapterInfo describes one IM adapter's status.
 type IMAdapterInfo struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
@@ -88,7 +76,6 @@ type IMAdapterInfo struct {
 	Channel string `json:"channel,omitempty"`
 }
 
-// MobileConnInfo describes the mobile tunnel connection status.
 type MobileConnInfo struct {
 	Connected   bool   `json:"connected"`
 	RelayURL    string `json:"relay_url,omitempty"`
@@ -96,11 +83,10 @@ type MobileConnInfo struct {
 	ConnectCode string `json:"connect_code,omitempty"`
 }
 
-// KnightStatus holds all Knight state exposed via the WebUI API.
 type KnightStatus struct {
 	Enabled bool              `json:"enabled"`
 	Running bool              `json:"running"`
-	Status  string            `json:"status"` // human-readable status string
+	Status  string            `json:"status"`
 	Budget  KnightBudget      `json:"budget"`
 	Active  []KnightSkill     `json:"active"`
 	Staging []KnightSkill     `json:"staging"`
@@ -137,7 +123,6 @@ type KnightCandidate struct {
 	SourceSessions []string `json:"source_sessions,omitempty"`
 }
 
-// A2ADiscoveredInstance describes a remote ggcode instance discovered via A2A.
 type A2ADiscoveredInstance struct {
 	ID        string `json:"id"`
 	Workspace string `json:"workspace"`
@@ -146,48 +131,38 @@ type A2ADiscoveredInstance struct {
 	StartedAt string `json:"started_at"`
 }
 
-// ChatBridge is the interface between webui and the agent.
-// Implemented by im.DaemonBridge -- webchat sends messages through the
-// bridge (which routes them as interruptions to the running agent loop)
-// and subscribes to agent events via the EventSubscriber.
 type ChatBridge interface {
-	// Messages returns the current agent conversation history.
 	Messages() []provider.Message
-	// SendUserMessage injects a user message into the agent.
-	// If the agent is idle, it starts a new run. If running, the message
-	// is queued as an interruption (same as TUI/IM mid-run input).
+
 	SendUserMessage(content []provider.ContentBlock)
-	// Subscribe registers a callback for agent streaming events.
-	// Returns an unsubscribe function.
+
 	Subscribe(fn func(provider.StreamEvent)) func()
 }
 
-// AgentRunner is kept for backward compatibility -- ChatBridge replaces it.
 type AgentRunner interface {
 	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
-	// #4537: variadic origin mirrors agent.Agent.RunStreamWithContent.
+
 	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent), origin ...string) error
 	Messages() []provider.Message
 }
 
-// Server provides a built-in WebUI for configuration and chat.
 type Server struct {
 	cfg             *config.Config
-	authToken       string // random token generated at startup
+	authToken       string
 	mcpStatusFn     MCPStatusFunc
 	imStatusFn      IMStatusFunc
 	imActionFn      IMActionFunc
-	restartFn       func()                 // called when user triggers restart from WebUI
-	a2aDiscoverFn   A2ADiscoverFunc        // returns discovered A2A instances
-	knightStatusFn  KnightStatusFunc       // returns Knight agent status
-	knightActionFn  KnightActionFunc       // performs actions on Knight skills
-	knightContentFn KnightSkillContentFunc // reads skill file content
-	statusFn        RuntimeStatusFunc      // returns live runtime state for /api/status
+	restartFn       func()
+	a2aDiscoverFn   A2ADiscoverFunc
+	knightStatusFn  KnightStatusFunc
+	knightActionFn  KnightActionFunc
+	knightContentFn KnightSkillContentFunc
+	statusFn        RuntimeStatusFunc
 	sessionStore    session.Store
-	workspace       string // current ggcode working directory
-	saveScope       string // "global" or "instance" -- where config saves go
+	workspace       string
+	saveScope       string
 	chatBridge      ChatBridge
-	agent           AgentRunner // legacy, for non-bridge setups
+	agent           AgentRunner
 	agentMu         sync.Mutex
 	agentBusy       atomic.Bool
 	mu              sync.RWMutex
@@ -196,70 +171,55 @@ type Server struct {
 	mux             *http.ServeMux
 }
 
-// SetMCPStatusFn sets the runtime MCP status provider.
 func (s *Server) SetMCPStatusFn(fn MCPStatusFunc) {
 	s.mcpStatusFn = fn
 }
 
-// SetIMStatusFn sets the runtime IM status provider.
 func (s *Server) SetIMStatusFn(fn IMStatusFunc) {
 	s.imStatusFn = fn
 }
 
-// SetIMActionFn sets the IM action handler.
 func (s *Server) SetIMActionFn(fn IMActionFunc) {
 	s.imActionFn = fn
 }
 
-// SetRestartFn sets the restart callback (triggers process self-restart).
 func (s *Server) SetRestartFn(fn func()) {
 	s.restartFn = fn
 }
 
-// SetA2ADiscoverFn sets the A2A instance discovery provider.
 func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
 	s.a2aDiscoverFn = fn
 }
 
-// SetKnightStatusFn sets the callback for Knight agent status.
 func (s *Server) SetKnightStatusFn(fn KnightStatusFunc) {
 	s.knightStatusFn = fn
 }
 
-// SetKnightActionFn sets the callback for Knight skill actions.
 func (s *Server) SetKnightActionFn(fn KnightActionFunc) {
 	s.knightActionFn = fn
 }
 
-// SetKnightSkillContentFn sets the callback for reading skill file content.
 func (s *Server) SetKnightSkillContentFn(fn KnightSkillContentFunc) {
 	s.knightContentFn = fn
 }
 
-// SetStatusFn sets the runtime status provider for /api/status.
 func (s *Server) SetStatusFn(fn RuntimeStatusFunc) {
 	s.statusFn = fn
 }
 
-// SetSessionStore sets the session store for browsing history.
 func (s *Server) SetSessionStore(store session.Store, workspace string) {
 	s.sessionStore = store
 	s.workspace = workspace
 }
 
-// SetAgent sets the agent runner for chat functionality (legacy mode).
 func (s *Server) SetAgent(a AgentRunner) {
 	s.agent = a
 }
 
-// SetChatBridge sets the chat bridge for WebChat (preferred mode).
-// When set, WebChat uses bridge's interruption/subscription model instead
-// of directly running the agent.
 func (s *Server) SetChatBridge(b ChatBridge) {
 	s.chatBridge = b
 }
 
-// NewServer creates a WebUI server bound to the given config.
 func NewServer(cfg *config.Config) *Server {
 	s := &Server{
 		cfg:       cfg,
@@ -271,26 +231,18 @@ func NewServer(cfg *config.Config) *Server {
 	return s
 }
 
-// Token returns the server's auth token for display in the TUI/daemon.
 func (s *Server) Token() string { return s.authToken }
 
-// saveConfig persists config using the current save scope.
 func (s *Server) saveConfig() error {
 	return s.cfg.SaveScoped(s.saveScope)
 }
 
-// Start starts the HTTP server on the given address (e.g. "127.0.0.1:0" for auto).
-// Returns the actual listening address.
 func (s *Server) Start(addr string) (string, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", fmt.Errorf("webui listen: %w", err)
 	}
-	// #1857 case 1: lock discipline + double-Start guard. The fields
-	// used to be written bare while Addr() read them under RLock (a
-	// -race report waiting to happen), and a second Start silently
-	// orphaned the first listener - Close only ever closed the last
-	// one, leaving a zombie port behind.
+
 	s.mu.Lock()
 	if s.listener != nil {
 		s.mu.Unlock()
@@ -302,9 +254,7 @@ func (s *Server) Start(addr string) (string, error) {
 	s.mu.Unlock()
 
 	safego.Go("webui.httpServe", func() {
-		// Wrap mux with a body size limit middleware (1MB) to prevent
-		// memory exhaustion from oversized POST bodies. The WebUI is
-		// localhost-only but may be accessible on the LAN if bound to 0.0.0.0.
+
 		handler := http.MaxBytesHandler(s.mux, 1<<20)
 		_ = http.Serve(ln, handler)
 	})
@@ -312,14 +262,12 @@ func (s *Server) Start(addr string) (string, error) {
 	return s.addr, nil
 }
 
-// Addr returns the listening address (empty if not started).
 func (s *Server) Addr() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.addr
 }
 
-// Close shuts down the server.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	ln := s.listener
@@ -332,20 +280,15 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) routes() {
-	// #1856 case 1: unmatched /api/ paths must NOT fall into the SPA
-	// catch-all - a typo'd endpoint returned 200 text/html, the frontend's
-	// res.ok was true, and the real API error was silently swallowed.
+
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, "{\"error\":\"unknown api endpoint: %s\"}", r.URL.Path)
 	})
 
-	// Static SPA (no auth required -- serves static HTML/JS)
-	// ("/api/" above is longer, so it wins for API paths.)
 	s.mux.HandleFunc("/", s.serveSPA)
 
-	// All API endpoints require auth token via Bearer header or ?token= query param.
 	a := s.requireAuth
 	s.mux.HandleFunc("/api/config", a(s.handleConfig))
 	s.mux.HandleFunc("/api/config/scope", a(s.handleConfigScope))
@@ -379,7 +322,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/status", a(s.handleStatus))
 }
 
-// handleStatus returns live runtime state for external monitoring.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -389,14 +331,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.statusFn())
 		return
 	}
-	// Fallback: return what we know from the server itself
+
 	writeJSON(w, RuntimeStatus{
 		PID:       0,
 		Workspace: s.workspace,
 	})
 }
-
-// --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -416,10 +356,8 @@ func readJSON(r *http.Request, v interface{}) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// sanitizeConfigForAPI returns a JSON-safe copy with sensitive fields masked.
-// API keys, OAuth secrets, MCP env/headers are replaced with has_* booleans.
 func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
-	// Marshal and unmarshal through JSON to get generic maps for mutation.
+
 	raw, _ := json.Marshal(map[string]interface{}{
 		"vendor":         cfg.Vendor,
 		"endpoint":       cfg.Endpoint,
@@ -446,7 +384,6 @@ func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
 	return result
 }
 
-// sanitizeMap recursively removes sensitive fields from a config map.
 func sanitizeMap(m map[string]interface{}) {
 	for key, val := range m {
 		switch key {
@@ -462,10 +399,7 @@ func sanitizeMap(m map[string]interface{}) {
 			}
 			delete(m, key)
 		default:
-			// #1021: credential-bearing keys inside adapter Extra maps
-			// (bot_token, signing_secret, token, ...) leaked plaintext even on
-			// this nominally sanitized route. Shared predicate with the IM
-			// route masking (sensitiveExtraKey).
+
 			if sensitiveExtraKey(key) {
 				if str, ok := val.(string); ok && str != "" {
 					m[key] = "***"

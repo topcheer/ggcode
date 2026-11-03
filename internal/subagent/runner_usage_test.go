@@ -143,8 +143,6 @@ func TestWaitForSnapshotWithProgress_CallsProgressFn(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 2 * time.Second})
 	id := mgr.Spawn("worker", "task", "display task", nil, context.Background())
 
-	// Spawn starts in StatusRunning. WaitForSnapshotWithProgress will poll
-	// and call progressFn before timing out.
 	var callCount int
 	var lastSummary string
 	progressFn := func(summary string) {
@@ -152,7 +150,6 @@ func TestWaitForSnapshotWithProgress_CallsProgressFn(t *testing.T) {
 		lastSummary = summary
 	}
 
-	// Use a short wait so the test completes quickly.
 	_, err := WaitForSnapshotWithProgress(context.Background(), mgr, id, 300*time.Millisecond, progressFn)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -169,7 +166,6 @@ func TestWaitForSnapshotWithProgress_NilFn(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 2 * time.Second})
 	id := mgr.Spawn("worker", "task", "task", nil, context.Background())
 
-	// Should not panic with nil progressFn.
 	_, err := WaitForSnapshotWithProgress(context.Background(), mgr, id, 200*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

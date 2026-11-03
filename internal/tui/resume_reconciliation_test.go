@@ -1,8 +1,5 @@
 package tui
 
-// Tests for resume reconciliation: environment fingerprint parsing, drift
-// diffing, note composition, and the model-facing note store.
-
 import (
 	"os"
 	"os/exec"
@@ -57,12 +54,10 @@ func TestDiffEnvFingerprints(t *testing.T) {
 		DirtyTotal: 3,
 	}
 
-	// nil cases: nothing to compare, no findings.
 	if f := diffEnvFingerprints(nil, base); len(f) != 0 {
 		t.Errorf("nil prev should yield no findings, got %v", f)
 	}
 
-	// Identical: no drift.
 	if f := diffEnvFingerprints(base, base); len(f) != 0 {
 		t.Errorf("identical fingerprints should yield no findings, got %v", f)
 	}
@@ -81,7 +76,7 @@ func TestDiffEnvFingerprints(t *testing.T) {
 			t.Errorf("findings missing %q; got:\n%s", want, joined)
 		}
 	}
-	// b.go stayed dirty on both sides - must not appear in either drift list.
+
 	if strings.Contains(joined, "b.go") {
 		t.Errorf("b.go is dirty in both snapshots and should not be reported")
 	}
@@ -111,7 +106,7 @@ func TestBuildResumeReconciliationNote(t *testing.T) {
 }
 
 func TestResumeNoteStoreNilSafety(t *testing.T) {
-	m := &Model{} // resumeNote lazily initialized
+	m := &Model{}
 	if got := m.resumeNoteValue(); got != "" {
 		t.Errorf("fresh model should have empty note, got %q", got)
 	}
@@ -119,11 +114,9 @@ func TestResumeNoteStoreNilSafety(t *testing.T) {
 	if got := m.resumeNoteValue(); got != "drift note" {
 		t.Errorf("roundtrip failed, got %q", got)
 	}
-	(*Model)(nil).setResumeNote("ignored") // must not panic
+	(*Model)(nil).setResumeNote("ignored")
 }
 
-// captureEnvFingerprintInRepo is a helper that creates a real git repo with
-// one commit and returns its fingerprint; skipped when git is unavailable.
 func captureEnvFingerprintInRepo(t *testing.T) (*envFingerprint, string) {
 	t.Helper()
 	git := exec.Command("git", "--version")
@@ -166,10 +159,9 @@ func TestCaptureEnvFingerprint(t *testing.T) {
 }
 
 func TestCaptureEnvFingerprintNonGit(t *testing.T) {
-	// A dir outside any repo (parent of temp dir has no .git) should yield nil.
+
 	if fp := captureEnvFingerprint(t.TempDir()); fp != nil {
-		// Only acceptable if the environment has a git repo above TMPDIR
-		// (some CI sandboxes do); in that case branch must still be real.
+
 		if fp.Branch == "" && fp.Head == "" && fp.DirtyTotal == 0 {
 			t.Errorf("empty fingerprint should have been nil: %+v", fp)
 		}

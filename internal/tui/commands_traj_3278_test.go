@@ -1,11 +1,5 @@
 package tui
 
-// #3278 final-review rejection probe: the first version checked
-// parts[1] == "global" inside case "clear" - unreachable, because parts
-// is the FULL command split (parts[0] = "/traj", parts[1] = "clear").
-// The parsing now lives in trajClearArgIsGlobal with its own probe so a
-// dead-branch wiring regression cannot land silently again.
-
 import "testing"
 
 func TestTrajClearArgIsGlobal(t *testing.T) {

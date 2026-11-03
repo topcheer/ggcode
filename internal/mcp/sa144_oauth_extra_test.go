@@ -1,8 +1,5 @@
 package mcp
 
-// sa-144: OAuth handler coverage for the refresh / exchange / device-flow /
-// discovery chains over httptest (real HTTP, no network beyond localhost).
-
 import (
 	"context"
 	"encoding/json"
@@ -59,10 +56,8 @@ func sa144TokenServer(t *testing.T, handler func(form url.Values) (int, any)) *h
 	return srv
 }
 
-// urlValues aliases url.Values so test handler closures stay terse.
 type urlValues = url.Values
 
-// parseQuery extracts the query parameters of an authorization URL.
 func parseQuery(t *testing.T, raw string) url.Values {
 	t.Helper()
 	u, err := url.Parse(raw)
@@ -104,7 +99,7 @@ func TestSa144GetAccessTokenRefreshHappyPath(t *testing.T) {
 	if err != nil || tok != "at-new" {
 		t.Fatalf("expected refreshed token, got %q err=%v", tok, err)
 	}
-	// The new token must be persisted; the old refresh token preserved.
+
 	info, _, err := h.loadStoredInfo()
 	if err != nil || info == nil {
 		t.Fatalf("stored info missing after refresh: %v", err)
@@ -170,7 +165,7 @@ func TestSa144RefreshTokenLazyDiscovery(t *testing.T) {
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	// Point the issuer at the httptest host so lazy discovery stays local.
+
 	h.state = &oauthState{authorizationServerMeta: &AuthorizationServerMetadata{Issuer: srv.URL}}
 
 	info, err := h.refreshToken(context.Background(), "rt")
@@ -241,7 +236,7 @@ func TestSa144DeleteServerToken(t *testing.T) {
 	if info, _, err := h.loadStoredInfo(); err != nil || info != nil {
 		t.Fatalf("server token must be gone, got %+v err=%v", info, err)
 	}
-	// skipCanonical must be set: a canonical (shared) credential is skipped too.
+
 	h.mu.Lock()
 	h.state = &oauthState{
 		authorizationServerMeta: &AuthorizationServerMetadata{Issuer: "https://issuer.example.com"},
@@ -284,10 +279,7 @@ func TestSa144Handle401FullChain(t *testing.T) {
 	h, _ := sa144OAuthHandler(t)
 	resp := &http.Response{Header: http.Header{}}
 	resp.Header.Set("WWW-Authenticate", `Bearer resource_metadata="`+srv.URL+`/meta"`)
-	// The chain resolves whatever URLs the metadata advertises; both point at
-	// https://*.example.com which is not reachable here, so pin them to the
-	// httptest host by seeding after discovery is impossible. Instead assert
-	// the failure mode first (real chain requires the advertised hosts).
+
 	ok, err := h.Handle401(resp)
 	if ok {
 		t.Fatal("discovery of unreachable example.com hosts must fail")
@@ -318,8 +310,6 @@ func TestSa144Handle401LocalChain(t *testing.T) {
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	// Handler whose serverURL points at the httptest host: the well-known
-	// fallback path then resolves every hop locally.
 	h := NewOAuthHandler("sa144-local", srv.URL, nil)
 	h.state = &oauthState{}
 	ok, err := h.Handle401(&http.Response{Header: http.Header{}})
@@ -403,7 +393,6 @@ func TestSa144RegisterClient(t *testing.T) {
 		t.Fatalf("state redirect %q != registered %q", redirect, registeredRedirect)
 	}
 
-	// Idempotent: a second call reuses the running callback server.
 	if err := h.RegisterClient(context.Background()); err != nil {
 		t.Fatalf("idempotent RegisterClient: %v", err)
 	}
@@ -447,7 +436,7 @@ func TestSa144StartAuthFlow(t *testing.T) {
 	if !strings.HasPrefix(authURL, srv.URL+"/authorize?") {
 		t.Fatalf("unexpected auth URL %q", authURL)
 	}
-	// Query assertions via net/url parsing.
+
 	q := parseQuery(t, authURL)
 	for key, want := range map[string]string{
 		"response_type":         "code",
@@ -475,7 +464,7 @@ func TestSa144StartAuthFlowErrors(t *testing.T) {
 	}
 	h2, _ := sa144OAuthHandler(t)
 	h2.state = &oauthState{clientRegistration: &ClientRegistration{ClientID: "cid"}}
-	// sa-144 regression: nil authorizationServerMeta must not panic the deref.
+
 	if _, err := h2.StartAuthFlow(context.Background()); err == nil || !strings.Contains(err.Error(), "not initialized") {
 		t.Fatalf("expected not-initialized error, got %v", err)
 	}
@@ -525,7 +514,6 @@ func TestSa144ExchangeCode(t *testing.T) {
 		t.Fatalf("unexpected exchange form: %v", sent)
 	}
 
-	// Error body with 200 status (GitHub-style).
 	srv2 := sa144TokenServer(t, func(f urlValues) (int, any) {
 		return 200, map[string]string{"error": "incorrect_client_credentials", "error_description": "bad"}
 	})
@@ -534,14 +522,12 @@ func TestSa144ExchangeCode(t *testing.T) {
 		t.Fatalf("expected body error, got %v", err)
 	}
 
-	// HTTP failure.
 	srv3 := sa144TokenServer(t, func(f urlValues) (int, any) { return 400, map[string]string{} })
 	h.state.authorizationServerMeta.TokenEndpoint = srv3.URL + "/token"
 	if _, err := h.ExchangeCode(context.Background(), "c"); err == nil || !strings.Contains(err.Error(), "token exchange failed") {
 		t.Fatalf("expected http error, got %v", err)
 	}
 
-	// Empty access token.
 	srv4 := sa144TokenServer(t, func(f urlValues) (int, any) { return 200, map[string]string{"token_type": "Bearer"} })
 	h.state.authorizationServerMeta.TokenEndpoint = srv4.URL + "/token"
 	if _, err := h.ExchangeCode(context.Background(), "c"); err == nil || !strings.Contains(err.Error(), "empty access_token") {
@@ -694,7 +680,7 @@ func TestSa144OAuthSmallAccessors(t *testing.T) {
 	if !h.SupportsDCR() {
 		t.Fatal("registration endpoint means DCR support")
 	}
-	// GetScopes must return a copy: mutating it must not affect state.
+
 	scopes := h.GetScopes()
 	scopes[0] = "mutated"
 	if h.GetScopes()[0] != "s1" {

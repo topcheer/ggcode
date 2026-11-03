@@ -9,10 +9,9 @@ func TestHealthReportBasic(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Create entries of different categories.
-	am.SaveMemory("build-process", "short persistent note") // persistent
-	am.SaveMemory("competitor-analysis", "research entry")  // evolving
-	am.SaveMemory("impl-task-test", "transient note")       // transient
+	am.SaveMemory("build-process", "short persistent note")
+	am.SaveMemory("competitor-analysis", "research entry")
+	am.SaveMemory("impl-task-test", "transient note")
 
 	report := am.HealthReport("")
 
@@ -72,7 +71,7 @@ func TestHealthReportStaleness(t *testing.T) {
 	workingDir := t.TempDir()
 
 	am := &AutoMemory{dir: dir}
-	// Create an entry with a broken path reference.
+
 	am.SaveMemory("build-process-impl", "See internal/nonexistent/missing.go for details")
 
 	report := am.HealthReport(workingDir)

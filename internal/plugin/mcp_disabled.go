@@ -11,23 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// MCP disabled-state storage (#2390).
-//
-// The store is scoped, not a global bare-name list: a server disabled inside
-// workspace A (e.g. a broken stdio "github") must not silently disable a
-// same-name server in workspace B or in the global scope. Reads consult the
-// global bucket plus the caller's workspace bucket; writes land in the
-// caller's bucket (enabling also clears the global entry so the panel's
-// toggle is decisive regardless of which bucket disabled the server).
-//
-// File format (new):
-//
-//	{"global": ["name"], "workspaces": {"/abs/ws/path": ["name"]}}
-//
-// Legacy format (pre-#2390) was a bare ["name"] array. On read every legacy
-// entry is folded into the global bucket - preserving the old "disables
-// everywhere" semantics for state written before this change - and the file
-// upgrades to the new shape on the next write.
 type disabledStore struct {
 	Global     []string            `json:"global,omitempty"`
 	Workspaces map[string][]string `json:"workspaces,omitempty"`
@@ -35,9 +18,7 @@ type disabledStore struct {
 
 var (
 	mcpDisabledMu sync.RWMutex
-	// mcpDisabledGlobal is the global-bucket view; mcpDisabledWS maps a
-	// workspace path to its bucket. Both are only authoritative when
-	// mcpDisabledCacheOK is set (#781: failures are never cached as truth).
+
 	mcpDisabledGlobal  map[string]bool
 	mcpDisabledWS      map[string]map[string]bool
 	mcpDisabledCacheOK bool
@@ -48,10 +29,6 @@ func mcpDisabledPath() (string, error) {
 	return filepath.Join(home, ".ggcode", "disabled_mcp.json"), nil
 }
 
-// decodeDisabledStore parses the on-disk file into bucket views. It returns
-// the buckets plus whether the parse is cacheable-as-truth (a missing file
-// is legitimately empty; read/decode failures are NOT - #781, corrupt JSON
-// must not become truth).
 func decodeDisabledStore(path string) (global map[string]bool, ws map[string]map[string]bool, cacheable bool) {
 	global = map[string]bool{}
 	ws = map[string]map[string]bool{}
@@ -64,8 +41,7 @@ func decodeDisabledStore(path string) (global map[string]bool, ws map[string]map
 	}
 	trimmed := leadingJSONWhitespace(data)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
-		// Legacy bare-name array: every entry keeps its old global
-		// (disables-everywhere) semantics.
+
 		var names []string
 		if err := json.Unmarshal(data, &names); err != nil {
 			return global, ws, false
@@ -104,8 +80,6 @@ func leadingJSONWhitespace(data []byte) []byte {
 	return nil
 }
 
-// loadMCPDisabledBuckets returns the bucket views, hydrating the cache on
-// first use. Never caches non-not-exist failures (#781).
 func loadMCPDisabledBuckets() (map[string]bool, map[string]map[string]bool) {
 	mcpDisabledMu.RLock()
 	if mcpDisabledCacheOK {
@@ -123,10 +97,7 @@ func loadMCPDisabledBuckets() (map[string]bool, map[string]map[string]bool) {
 
 	path, err := mcpDisabledPath()
 	if err != nil {
-		// #781: never cache non-not-exist failures -- a transient error
-		// during AtomicWriteFile's rename window poisoned the cache and a
-		// later SetMCPDisabledIn wrote it back as the full truth, silently
-		// re-enabling previously disabled servers.
+
 		return map[string]bool{}, map[string]map[string]bool{}
 	}
 	global, ws, cacheable := decodeDisabledStore(path)
@@ -139,10 +110,6 @@ func loadMCPDisabledBuckets() (map[string]bool, map[string]map[string]bool) {
 	return mcpDisabledGlobal, mcpDisabledWS
 }
 
-// MCPDisabledIn reports whether the named MCP server is disabled for the
-// given scope: an empty scope consults only the global bucket (the
-// pre-#2390 semantics); a non-empty scope additionally consults that
-// workspace's own bucket.
 func MCPDisabledIn(scope, name string) bool {
 	global, ws := loadMCPDisabledBuckets()
 	if global[name] {
@@ -157,28 +124,15 @@ func MCPDisabledIn(scope, name string) bool {
 	return false
 }
 
-// SetMCPDisabledIn persists the enabled/disabled state for an MCP server in
-// the given scope (empty scope = the global bucket).
 func SetMCPDisabledIn(scope, name string, disabled bool) error {
-	// #1601-C: hold the WRITE lock across the whole read-modify-write (see
-	// MCPDisabledIn readers + concurrent panel toggles).
+
 	mcpDisabledMu.Lock()
 	defer mcpDisabledMu.Unlock()
 
 	global := mcpDisabledGlobal
 	ws := mcpDisabledWS
 	if !mcpDisabledCacheOK {
-		// Cold cache: hydrate from disk under THIS lock (mirror the load
-		// path's decode without re-locking). #1782 case 1 / #2564: only a
-		// missing file or a successfully decoded store hydrates as truth;
-		// read/decode failures (corrupt-but-readable JSON) leave the cache
-		// cold so the next reader retries instead of caching an empty
-		// truth. #2564: cacheOK must bind to `cacheable`, NOT to the
-		// readability of a second bare os.ReadFile - the #2390 rewrite
-		// bound it to readability, cached the empty map as authoritative
-		// for corrupt files, and one toggle then persisted that empty
-		// truth over the on-disk store (and clobbered later external
-		// repairs from the warm branch) - a regression of #1782.
+
 		global = map[string]bool{}
 		ws = map[string]map[string]bool{}
 		if path, err := mcpDisabledPath(); err == nil {
@@ -191,9 +145,7 @@ func SetMCPDisabledIn(scope, name string, disabled bool) error {
 		mcpDisabledGlobal = global
 		mcpDisabledWS = ws
 	} else {
-		// Warm cache: copy before mutating - readers index the cached maps
-		// outside their RLock (MCPDisabledIn), so in-place mutation under
-		// the write lock would still race them.
+
 		g := make(map[string]bool, len(global)+1)
 		for k, v := range global {
 			g[k] = v
@@ -221,10 +173,7 @@ func SetMCPDisabledIn(scope, name string, disabled bool) error {
 			bucket[name] = true
 		}
 	} else {
-		// Enabling must clear EVERY bucket the panel toggle could have been
-		// answering: a workspace-scope enable of a globally-disabled server
-		// removes both entries, otherwise the server stays disabled after
-		// the UI already reported success (the #408 lie in storage form).
+
 		delete(global, name)
 		if scope != "" {
 			if bucket, ok := ws[scope]; ok {
@@ -262,9 +211,7 @@ func SetMCPDisabledIn(scope, name string, disabled bool) error {
 	data, _ := json.MarshalIndent(store, "", "  ")
 	_ = os.MkdirAll(filepath.Dir(path), 0o700)
 	if werr := util.AtomicWriteFile(path, data, 0o600); werr != nil {
-		// #1740 case 2: keep the in-memory verdict (it governs this
-		// process) but REPORT the persist failure so the caller can
-		// surface it.
+
 		mcpDisabledGlobal = global
 		mcpDisabledWS = ws
 		return fmt.Errorf("persist MCP disabled set: %w", werr)

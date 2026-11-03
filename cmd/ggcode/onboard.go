@@ -12,32 +12,28 @@ import (
 	"github.com/topcheer/ggcode/internal/tui"
 )
 
-// runOnboardAndRestart launches the onboard wizard and restarts ggcode on success.
 func runOnboardAndRestart(cfg *config.Config) error {
 	result, err := tui.RunOnboard(cfg)
 	if err != nil {
 		return err
 	}
 
-	// Apply language.
 	cfg.Language = result.Language
 
-	// Handle custom provider — create vendor + endpoint dynamically.
 	if result.CustomProvider != nil {
 		cp := result.CustomProvider
-		// Sanitize vendor ID from display name.
+
 		vendorID := sanitizeVendorID(cp.Name)
 		endpointID := "default"
 
-		// Create vendor if not exists.
 		if err := cfg.AddVendor(vendorID, cp.Name, cp.APIKey); err != nil {
-			// Vendor may already exist from a previous onboard; that's fine.
+
 		}
-		// Create endpoint.
+
 		if err := cfg.AddEndpoint(vendorID, endpointID, cp.Protocol, cp.BaseURL, cp.APIKey); err != nil {
 			return fmt.Errorf("creating custom endpoint: %w", err)
 		}
-		// Set default model on the endpoint.
+
 		if vc, ok := cfg.Vendors[vendorID]; ok {
 			if ep, ok := vc.Endpoints[endpointID]; ok {
 				ep.DefaultModel = cp.Model
@@ -51,12 +47,10 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		cfg.Endpoint = endpointID
 		cfg.Model = cp.Model
 	} else {
-		// Apply vendor and endpoint selection.
+
 		cfg.Vendor = result.VendorID
 		cfg.Endpoint = result.EndpointID
 
-		// Sync preset vendor from DefaultConfig() if not already present.
-		// This handles fresh/minimal configs that don't have built-in presets.
 		if _, ok := cfg.Vendors[result.VendorID]; !ok {
 			dc := config.DefaultConfig()
 			if vc, ok := dc.Vendors[result.VendorID]; ok {
@@ -64,7 +58,6 @@ func runOnboardAndRestart(cfg *config.Config) error {
 			}
 		}
 
-		// Apply API key: set at vendor level.
 		if result.APIKey != "" {
 			vc, ok := cfg.Vendors[result.VendorID]
 			if ok {
@@ -73,7 +66,6 @@ func runOnboardAndRestart(cfg *config.Config) error {
 			}
 		}
 
-		// Apply model.
 		cfg.Model = result.Model
 		vc, ok := cfg.Vendors[result.VendorID]
 		if ok {
@@ -85,21 +77,15 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		}
 	}
 
-	// Apply optional settings — only set when user explicitly opted in.
 	cfg.DefaultMode = result.Mode
 	if result.Knight {
 		cfg.KnightConfig = config.KnightConfig{Enabled: true}
 	}
 	if result.A2A {
-		// #1515-B: single-field enable. The old whole-struct replace
-		// (`cfg.A2A = config.A2AConfig{Disabled: false}`) zeroed every
-		// existing A2A setting (Host/Port/MaxTasks/TaskTimeout/Auth) on
-		// re-run onboard - the retry-after-failed-first-run shape wiped a
-		// configured server and persisted the wipe. Only the flag flips.
+
 		cfg.A2A.Disabled = false
 	}
 
-	// Apply IM adapters from onboard.
 	if len(result.IMAdapters) > 0 {
 		if cfg.IM.Adapters == nil {
 			cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
@@ -110,7 +96,6 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		cfg.IM.Enabled = true
 	}
 
-	// Ensure config file path is set.
 	if cfg.FilePath == "" {
 		dir, _ := os.UserHomeDir()
 		cfg.FilePath = filepath.Join(dir, ".ggcode", "ggcode.yaml")
@@ -121,17 +106,12 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	// Restart ggcode.
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("finding executable: %w", err)
 	}
 	args := os.Args[1:]
-	// #1435-B: syscall.Exec is a stub returning EWINDOWS on Windows -
-	// a successful onboarding saved its config and then exited with
-	// 'Onboard failed: not supported by windows' and no hint. The env is
-	// already persisted (#1435-A), so a plain re-run works: tell the
-	// user instead of failing.
+
 	if err := syscall.Exec(executable, append([]string{executable}, args...), os.Environ()); err != nil {
 		if strings.Contains(err.Error(), "not supported") || runtime.GOOS == "windows" {
 			fmt.Fprintln(os.Stderr, "Onboarding complete. Restart ggcode to continue (automatic restart is unavailable on this platform).")
@@ -142,12 +122,11 @@ func runOnboardAndRestart(cfg *config.Config) error {
 	return nil
 }
 
-// sanitizeVendorID creates a YAML-safe vendor ID from a display name.
 func sanitizeVendorID(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = strings.ReplaceAll(s, " ", "-")
 	s = strings.ReplaceAll(s, "_", "-")
-	// Remove any char that's not lowercase letter, digit, or hyphen.
+
 	var b strings.Builder
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {

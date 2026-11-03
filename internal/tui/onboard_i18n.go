@@ -2,7 +2,6 @@ package tui
 
 import "fmt"
 
-// lang returns the current language code based on the user's selection.
 func (m *onboardModel) lang() string {
 	if m.langCursor < len(m.langs) {
 		return m.langs[m.langCursor].code
@@ -116,7 +115,6 @@ var onboardTexts = map[string]map[string]string{
 	},
 }
 
-// tr returns the translated text for the given key in the current language.
 func (m *onboardModel) tr(key string) string {
 	lang := m.lang()
 	if texts, ok := onboardTexts[lang]; ok {
@@ -124,7 +122,7 @@ func (m *onboardModel) tr(key string) string {
 			return v
 		}
 	}
-	// zh-TW falls back to zh-CN
+
 	if lang == "zh-TW" {
 		if texts, ok := onboardTexts["zh-CN"]; ok {
 			if v, ok := texts[key]; ok {
@@ -140,7 +138,6 @@ func (m *onboardModel) tr(key string) string {
 	return key
 }
 
-// trf returns a formatted translated text.
 func (m *onboardModel) trf(key string, args ...interface{}) string {
 	return fmt.Sprintf(m.tr(key), args...)
 }

@@ -10,12 +10,9 @@ import (
 	"testing"
 )
 
-// TestNoHardcodedAbsolutePaths verifies no source file contains hardcoded
-// absolute paths that would break test HOME isolation.
 func TestNoHardcodedAbsolutePaths(t *testing.T) {
 	root := findProjectRoot(t)
 
-	// Collect all .go files (excluding vendor, test, generated)
 	files, err := filepath.Glob(filepath.Join(root, "internal", "**", "*.go"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -25,7 +22,7 @@ func TestNoHardcodedAbsolutePaths(t *testing.T) {
 
 	problems := []string{}
 	for _, f := range files {
-		// Skip test files, vendor, and generated
+
 		base := filepath.Base(f)
 		if strings.HasSuffix(base, "_test.go") {
 			continue
@@ -42,27 +39,24 @@ func TestNoHardcodedAbsolutePaths(t *testing.T) {
 		content := string(data)
 		relPath, _ := filepath.Rel(root, f)
 
-		// Check for hardcoded macOS/Linux home paths
 		for _, line := range strings.Split(content, "\n") {
-			// Skip comments
+
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
 				continue
 			}
 
-			// Detect hardcoded paths in string literals
-			// Exclusions: system resource paths (fonts, brew install dirs) are NOT $HOME-dependent
 			if strings.Contains(line, `"/Users/`) && !strings.Contains(line, "example") && !strings.Contains(line, "filepath.Join") {
 				problems = append(problems, relPath+": "+trimmed)
 			}
 			if strings.Contains(line, `"/home/`) && !strings.Contains(line, "example") && !strings.Contains(line, "filepath.Join") && !strings.Contains(line, "/home/user") {
-				// Allow well-known system install paths like /home/linuxbrew
+
 				if !strings.Contains(line, "/home/linuxbrew/") {
 					problems = append(problems, relPath+": "+trimmed)
 				}
 			}
 			if strings.Contains(line, `"C:\\`) {
-				// Allow Windows system font paths (not $HOME-dependent)
+
 				if !strings.Contains(line, "Fonts") {
 					problems = append(problems, relPath+": "+trimmed)
 				}
@@ -76,58 +70,51 @@ func TestNoHardcodedAbsolutePaths(t *testing.T) {
 	}
 }
 
-// TestAllUserHomeDirBypassesConfigHomeDir verifies that all calls to
-// os.UserHomeDir() are either in test files or are justified.
-// In production code, config.HomeDir() should be used instead because
-// it respects the HOME env variable override for test isolation.
 func TestAllUserHomeDirBypassesConfigHomeDir(t *testing.T) {
 	root := findProjectRoot(t)
 
-	// Find all os.UserHomeDir() calls in non-test source files
 	problems := []string{}
 	justified := map[string]bool{
-		// These files directly build paths via os.UserHomeDir() — they work
-		// because os.UserHomeDir() reads $HOME on Unix, so test HOME override
-		// works. We track them here so any NEW calls get flagged for review.
-		"internal/config/env.go":                 true, // defines HomeDir()
-		"internal/config/instance.go":            true, // instance dir path
-		"internal/config/anthropic_bootstrap.go": true, // bootstrap
-		"internal/install/install.go":            true, // install paths
-		"internal/memory/auto.go":                true, // memory dir
-		"internal/memory/project.go":             true, // project memory
-		"internal/auth/store.go":                 true, // auth storage
-		"internal/auth/a2a_token_cache.go":       true, // token cache
-		"internal/plugin/loader.go":              true, // plugin paths
-		"internal/plugin/mcp_disabled.go":        true, // plugin paths
-		"internal/lsp/discovery.go":              true, // LSP discovery
-		"internal/mcp/migration.go":              true, // MCP migration
-		"internal/im/pc_session_store.go":        true, // IM session store
-		"internal/im/bindings.go":                true, // IM bindings
-		"internal/im/pairing.go":                 true, // IM pairing
-		"internal/commands/loader.go":            true, // commands
-		"internal/commands/disabled_state.go":    true, // commands state
-		"internal/commands/usage.go":             true, // usage tracking
-		"internal/permission/config_policy.go":   true, // policy
-		"internal/acp/handler.go":                true, // ACP handler
-		"internal/tool/todo_write.go":            true, // todos
-		"internal/session/store.go":              true, // session store
-		"internal/tui/view.go":                   true, // view rendering
-		"internal/tui/view_sidebar.go":           true, // sidebar view
-		"internal/tui/pty_harness.go":            true, // test harness — reads real config to derive test config
-		"internal/runfile/runfile.go":            true, // has own homeDir() helper
-		"internal/a2a/registry.go":               true, // has own homeDir() helper
-		"internal/tool/browser.go":               true, // browser profile paths
-		"internal/tmux/store.go":                 true, // checks $HOME first, then os.UserHomeDir
-		"internal/update/detect.go":              true, // update detection paths
-		"internal/util/homedir.go":               true, // canonical implementation
-		"internal/debug/debug.go":                true, // now uses util.HomeDir()
-		"cmd/ggcode/daemon.go":                   true, // daemon
-		"cmd/ggcode/im_cmd.go":                   true, // IM command
-		"cmd/ggcode/root.go":                     true, // root command
-		"cmd/ggcode/onboard.go":                  true, // onboarding paths
-		"cmd/ggcode/status.go":                   true, // status command paths
-		"desktop/ggcode-desktop-wails/app.go":    true, // desktop app paths
-		"desktop/wailskit/desktop_config.go":     true, // desktop config paths
+
+		"internal/config/env.go":                 true,
+		"internal/config/instance.go":            true,
+		"internal/config/anthropic_bootstrap.go": true,
+		"internal/install/install.go":            true,
+		"internal/memory/auto.go":                true,
+		"internal/memory/project.go":             true,
+		"internal/auth/store.go":                 true,
+		"internal/auth/a2a_token_cache.go":       true,
+		"internal/plugin/loader.go":              true,
+		"internal/plugin/mcp_disabled.go":        true,
+		"internal/lsp/discovery.go":              true,
+		"internal/mcp/migration.go":              true,
+		"internal/im/pc_session_store.go":        true,
+		"internal/im/bindings.go":                true,
+		"internal/im/pairing.go":                 true,
+		"internal/commands/loader.go":            true,
+		"internal/commands/disabled_state.go":    true,
+		"internal/commands/usage.go":             true,
+		"internal/permission/config_policy.go":   true,
+		"internal/acp/handler.go":                true,
+		"internal/tool/todo_write.go":            true,
+		"internal/session/store.go":              true,
+		"internal/tui/view.go":                   true,
+		"internal/tui/view_sidebar.go":           true,
+		"internal/tui/pty_harness.go":            true,
+		"internal/runfile/runfile.go":            true,
+		"internal/a2a/registry.go":               true,
+		"internal/tool/browser.go":               true,
+		"internal/tmux/store.go":                 true,
+		"internal/update/detect.go":              true,
+		"internal/util/homedir.go":               true,
+		"internal/debug/debug.go":                true,
+		"cmd/ggcode/daemon.go":                   true,
+		"cmd/ggcode/im_cmd.go":                   true,
+		"cmd/ggcode/root.go":                     true,
+		"cmd/ggcode/onboard.go":                  true,
+		"cmd/ggcode/status.go":                   true,
+		"desktop/ggcode-desktop-wails/app.go":    true,
+		"desktop/wailskit/desktop_config.go":     true,
 	}
 
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -161,19 +148,14 @@ func TestAllUserHomeDirBypassesConfigHomeDir(t *testing.T) {
 	}
 }
 
-// TestTestHOMEOverrideWorks verifies that setting HOME env var actually
-// redirects os.UserHomeDir() — critical assumption for test isolation.
 func TestTestHOMEOverrideWorks(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Save original
 	origHome := os.Getenv("HOME")
 	defer os.Setenv("HOME", origHome)
 
-	// Override
 	os.Setenv("HOME", tmpDir)
 
-	// Verify os.UserHomeDir() respects it
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("UserHomeDir: %v", err)
@@ -182,13 +164,11 @@ func TestTestHOMEOverrideWorks(t *testing.T) {
 		t.Errorf("os.UserHomeDir() = %q, want %q — HOME override doesn't work!", home, tmpDir)
 	}
 
-	// Verify config.HomeDir() also respects it
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	os.MkdirAll(ggcodeDir, 0755)
 	configFile := filepath.Join(ggcodeDir, "ggcode.yaml")
 	os.WriteFile(configFile, []byte("vendor: test"), 0600)
 
-	// Read back
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
@@ -200,7 +180,6 @@ func TestTestHOMEOverrideWorks(t *testing.T) {
 	t.Logf("✓ HOME=%s correctly redirects os.UserHomeDir()", tmpDir)
 }
 
-// findProjectRoot locates the project root (where go.mod is).
 func findProjectRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -219,5 +198,4 @@ func findProjectRoot(t *testing.T) string {
 	}
 }
 
-// Ensure exec import is used
 var _ = exec.Command

@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-// Issue #984 problem 1: skill names may contain dots, so a snapshot glob of
-// name+".*.md" for skill "a" also matched snapshots of sibling skill "a.b".
-// Because ASCII digits sort before letters, the "a.b.*" snapshots always
-// sorted after every "a.*" snapshot, so Rollback("a") restored content
-// belonging to "a.b" - cross-skill content pollution.
 func TestRollbackDottedSkillNameNoCrosstalk(t *testing.T) {
 	home := t.TempDir()
 	proj := t.TempDir()
@@ -31,13 +26,11 @@ func TestRollbackDottedSkillNameNoCrosstalk(t *testing.T) {
 		}
 	}
 
-	// Skill "a" has two snapshots; the newest one holds content-A2.
 	writeSnap("a", "20260101-000001", "content-A1")
 	writeSnap("a", "20260101-235959", "content-A2")
-	// Sibling skill "a.b" has a snapshot that sorts after all "a.*" names.
+
 	writeSnap("a.b", "20250101-000000", "content-B")
 
-	// listSnapshots must return exactly a's own two snapshots.
 	snaps, err := p.listSnapshots("a")
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +44,6 @@ func TestRollbackDottedSkillNameNoCrosstalk(t *testing.T) {
 		}
 	}
 
-	// Active skill for "a" exists so Rollback proceeds.
 	skillDir := filepath.Join(proj, ".ggcode", "skills", "a")
 	activePath := filepath.Join(skillDir, "SKILL.md")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
@@ -78,10 +70,6 @@ func TestRollbackDottedSkillNameNoCrosstalk(t *testing.T) {
 	}
 }
 
-// Issue #984 problem 2: appendSkillScenario previously did read-modify-write
-// of the whole JSONL file, so two writers finishing near-simultaneously (e.g.
-// TUI + daemon on the same project) could overwrite each other's entry. The
-// append path must not lose entries.
 func TestAppendSkillScenarioNoLossOnRepeatedAppend(t *testing.T) {
 	proj := t.TempDir()
 	k := &Knight{projDir: proj}
@@ -115,8 +103,6 @@ func TestAppendSkillScenarioNoLossOnRepeatedAppend(t *testing.T) {
 		t.Fatalf("lost entry after sequential appends: sawOne=%v sawTwo=%v entries=%+v", sawOne, sawTwo, entries)
 	}
 
-	// RecentSkillScenarios keeps newest-first order and still tolerates a
-	// missing log file.
 	recent, err := k.RecentSkillScenarios(10)
 	if err != nil {
 		t.Fatal(err)
@@ -126,10 +112,6 @@ func TestAppendSkillScenarioNoLossOnRepeatedAppend(t *testing.T) {
 	}
 }
 
-// Issue #984 problem 3: a failed staging removal after a successful promote
-// used to be swallowed, leaving both an active and a staging copy (Scan then
-// reports duplicates). Removal must now surface real errors while treating an
-// already-missing file as success (idempotent).
 func TestPromoteStagingRemoveIdempotent(t *testing.T) {
 	home := t.TempDir()
 	proj := t.TempDir()
@@ -157,7 +139,6 @@ func TestPromoteStagingRemoveIdempotent(t *testing.T) {
 		t.Fatalf("staging skill still present after promote: %v", err)
 	}
 
-	// Removing a staging file that no longer exists must be treated as success.
 	if err := removeStagingSkill(stagingPath); err != nil {
 		t.Fatalf("removeStagingSkill on missing file should be idempotent, got: %v", err)
 	}

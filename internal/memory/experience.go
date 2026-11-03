@@ -16,64 +16,36 @@ import (
 	"unicode"
 )
 
-// ExperienceStore implements case-based reasoning memory (Memento, arXiv:2508.16153;
-// "From Storage to Experience", ACL 2026 Findings): each completed run is
-// distilled into an Experience case (task, approach, outcome, files touched)
-// instead of being merged into a single rolling insights blob. At the start of
-// a new run the k most relevant past cases are retrieved (lexical IDF scoring,
-// no embeddings) and injected as few-shot procedural guidance, so hard-won
-// knowledge about HOW tasks of this shape were completed compounds across
-// sessions.
-//
-// Cases live in <memoryDir>/experience/ as one markdown file per case. The
-// parent AutoMemory reader walks only top-level *.md files (directories are
-// skipped), so the subdirectory never leaks into the regular memory index.
 type ExperienceStore struct {
 	dir string
 	mu  sync.Mutex
 }
 
-// MaxExperienceCases bounds the store; recording beyond the cap evicts the
-// oldest cases. Experiences decay: the freshest procedural knowledge is what
-// a codebase's current reality validates.
 const MaxExperienceCases = 50
 
-// spreadDecay is the one-hop spreading-activation attenuation (Collins &
-// Loftus 1975): a case linked to a direct hit inherits at most 45% of the
-// linker's activation. spreadMaxAdmits caps lateral inhibition - spread
-// admits never crowd out direct hits; spreadMinScore mirrors the direct
-// admission bar. Research-loop Spread Activation card.
 const (
 	spreadDecay     = 0.45
 	spreadMaxAdmits = 2
 	spreadMinScore  = 0.5
 )
 
-// Experience is a single distilled case.
 type Experience struct {
 	ID       string
 	Task     string
-	Outcome  string // "success", "partial", or "failed"
+	Outcome  string
 	Files    []string
 	Approach string
 	Created  time.Time
 	Updated  time.Time
 }
 
-// ScoredExperience pairs a case with its relevance score for a query.
 type ScoredExperience struct {
 	Experience
 	Score float64
-	// Via records how the case was retrieved: "" (empty) for direct
-	// lexical hits, "spread:<linkerID>" for one-hop spreading-activation
-	// admits (research-loop Spread Activation card).
+
 	Via string
 }
 
-// outcomeRankWeight (sa-139, MemGuard) scales retrieval scores by the
-// verification outcome recorded on the case. Unknown ("") sits below
-// verified success but above failure - no signal is weaker than a positive
-// one, yet not suspect like a negative one.
 func outcomeRankWeight(outcome string) float64 {
 	switch outcome {
 	case "success":
@@ -87,9 +59,6 @@ func outcomeRankWeight(outcome string) float64 {
 	}
 }
 
-// NewExperienceStore builds a store rooted at dir (the "experience"
-// subdirectory itself, created on demand). A nil-safe empty root is allowed
-// for tests.
 func NewExperienceStore(dir string) *ExperienceStore {
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0755)
@@ -97,10 +66,6 @@ func NewExperienceStore(dir string) *ExperienceStore {
 	return &ExperienceStore{dir: dir}
 }
 
-// NewProjectExperienceStore builds the experience store for a working
-// directory's project memory (<workingDir>/.ggcode/memory/experience/).
-// Returns nil when workingDir is the user's HOME (mirrors NewProjectAutoMemory:
-// never treat HOME as a project root).
 func NewProjectExperienceStore(workingDir string) *ExperienceStore {
 	home := config.HomeDir()
 	if workingDir == "" || strings.EqualFold(workingDir, home) {
@@ -109,14 +74,8 @@ func NewProjectExperienceStore(workingDir string) *ExperienceStore {
 	return NewExperienceStore(filepath.Join(workingDir, ".ggcode", "memory", "experience"))
 }
 
-// Dir returns the backing directory ("" when disabled).
 func (es *ExperienceStore) Dir() string { return es.dir }
 
-// Record distills a completed run into a case. Re-recording a task whose
-// normalized form matches an existing case UPDATES that case (fresh outcome
-// and approach, original Created preserved) instead of duplicating it —
-// reconsolidation upon retrieval (Microsoft HMA): repeated evidence that the
-// same approach works strengthens rather than forks the memory.
 func (es *ExperienceStore) Record(task, approach, outcome string, files []string) (id string, updated bool, err error) {
 	if es == nil || es.dir == "" {
 		return "", false, fmt.Errorf("experience store disabled")
@@ -159,16 +118,10 @@ func (es *ExperienceStore) Record(task, approach, outcome string, files []string
 	return id, updated, nil
 }
 
-// Retrieve scores stored cases against query (lexical IDF overlap) and
-// returns up to max matches above the relevance floor, best first.
 func (es *ExperienceStore) Retrieve(query string, max int) ([]ScoredExperience, error) {
 	return es.RetrieveExcluding(query, max, nil)
 }
 
-// RetrieveExcluding is Retrieve with an ID exclusion set: cases whose ID is
-// in excludeIDs are dropped BEFORE ranking and the max cut, so an excluded
-// top hit cannot shadow a fresh relevant one (#3072 decision-time recall
-// dedup vs the run-start injection).
 func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs map[string]bool) ([]ScoredExperience, error) {
 	if es == nil || es.dir == "" || max <= 0 {
 		return nil, nil
@@ -182,7 +135,6 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 		return nil, nil
 	}
 
-	// Document frequency over the case set, for IDF weighting.
 	qSet := tokenSet(qTokens)
 	df := make(map[string]int)
 	caseTokens := make([]map[string]int, 0, len(cases))
@@ -221,26 +173,19 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 			score += idf * (float64(tf) / (float64(tf) + 1.2)) * float64(minInt(qCount, 3))
 		}
 		if distinct >= minDistinct && score >= 0.5 {
-			// sa-139 (MemGuard): outcome is a retrieval-time ranker, not an
-			// admission blocker - failed cases keep negative-example value but
-			// rank below verified successes at equal lexical relevance.
+
 			score *= outcomeRankWeight(c.Outcome)
 			scored = append(scored, ScoredExperience{Experience: c, Score: score})
 		}
 	}
-	// One-hop spreading activation (Collins & Loftus 1975; research-loop
-	// Spread card): cases with no direct lexical hit but a strong
-	// associative tie to an admitted hit (shared file-path tokens, shared
-	// rare tokens) inherit a decayed share of its activation. Never fires
-	// without at least one direct hit (no source, no spread); admission is
-	// capped and bar-checked so spread cases rank below direct hits.
+
 	if len(scored) > 0 {
 		admitted := make(map[string]bool, len(scored))
 		for _, se := range scored {
 			admitted[se.ID] = true
 		}
-		best := map[string]float64{} // candID -> best spread score
-		via := map[string]string{}   // candID -> linkerID
+		best := map[string]float64{}
+		via := map[string]string{}
 		for i, c := range cases {
 			if excludeIDs[c.ID] || admitted[c.ID] {
 				continue
@@ -286,10 +231,6 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 	return scored, nil
 }
 
-// expLinkStrength scores the associative tie between two cases: shared
-// file-path tokens (strong structural signal, 2x) plus shared rare tokens
-// (IDF-weighted), clamped to [0,1] so a spread admit always scores below
-// its linker. Research-loop Spread Activation card.
 func expLinkStrength(cand, linker map[string]int, df map[string]int, n float64) float64 {
 	var s float64
 	for t := range cand {
@@ -306,7 +247,6 @@ func expLinkStrength(cand, linker map[string]int, df map[string]int, n float64) 
 	return math.Min(s, 1.0)
 }
 
-// List returns all cases, oldest first.
 func (es *ExperienceStore) List() ([]Experience, error) {
 	if es == nil || es.dir == "" {
 		return nil, nil
@@ -331,16 +271,11 @@ func (es *ExperienceStore) List() ([]Experience, error) {
 	return out, nil
 }
 
-// FormatIndex renders the retrieval prompt section: top matched cases as
-// compact procedural guidance. Returns "" when nothing is relevant, so
-// callers can skip injection entirely (no prompt noise for cold stores).
 func (es *ExperienceStore) FormatIndex(query string, max int) string {
 	idx, _ := es.FormatIndexTracked(query, max)
 	return idx
 }
 
-// FormatIndexTracked is FormatIndex that also reports the IDs of the cases
-// it rendered, so callers can dedup later injections against them (#3072).
 func (es *ExperienceStore) FormatIndexTracked(query string, max int) (string, []string) {
 	scored, err := es.Retrieve(query, max)
 	if err != nil || len(scored) == 0 {
@@ -348,13 +283,7 @@ func (es *ExperienceStore) FormatIndexTracked(query string, max int) (string, []
 	}
 	ids := make([]string, 0, len(scored))
 	for _, s := range scored {
-		// #3072 contract (CI-caught on the Spread PR): the tracked set that
-		// decision-time recall EXCLUDES must hold only DIRECT hits. A spread
-		// admit at run-start (zero lexical overlap, associative tie only) is
-		// background insight - letting it consume the case's novelty slot
-		// emptied the decision-time recall exactly when the error text would
-		// have matched the case directly. The spread-injected content still
-		// renders above; only its exclusion claim is waived.
+
 		if s.Via != "" {
 			continue
 		}
@@ -363,8 +292,6 @@ func (es *ExperienceStore) FormatIndexTracked(query string, max int) (string, []
 	return formatScoredExperiences(scored), ids
 }
 
-// FormatIndexExcluding renders like FormatIndex but drops the given case
-// IDs before ranking and the max cut (#3072 decision-time dedup).
 func (es *ExperienceStore) FormatIndexExcluding(query string, max int, excludeIDs map[string]bool) string {
 	scored, err := es.RetrieveExcluding(query, max, excludeIDs)
 	if err != nil || len(scored) == 0 {
@@ -373,8 +300,6 @@ func (es *ExperienceStore) FormatIndexExcluding(query string, max int, excludeID
 	return formatScoredExperiences(scored)
 }
 
-// formatScoredExperiences renders scored cases as the retrieval prompt
-// section shared by every FormatIndex* variant.
 func formatScoredExperiences(scored []ScoredExperience) string {
 	var b strings.Builder
 	b.WriteString("Past experience with similar tasks in this project (case-based memory):\n")
@@ -391,19 +316,12 @@ func formatScoredExperiences(scored []ScoredExperience) string {
 	return b.String()
 }
 
-// evictLocked trims the store to MaxExperienceCases, oldest Updated first.
-// Eviction must key on Updated, not Created: Record's reconsolidation
-// preserves the original Created and only refreshes Updated, so an early
-// case that is still being strengthened by repeated evidence has the oldest
-// Created but the freshest knowledge — evicting by Created would discard
-// exactly the cases the reconsolidation semantics exist to protect (#3873).
-// Caller must hold es.mu.
 func (es *ExperienceStore) evictLocked() {
 	cases, err := es.List()
 	if err != nil || len(cases) <= MaxExperienceCases {
 		return
 	}
-	// List returns Created-ascending; re-sort for eviction by Updated.
+
 	byUpdated := make([]Experience, len(cases))
 	copy(byUpdated, cases)
 	sort.Slice(byUpdated, func(i, j int) bool { return byUpdated[i].Updated.Before(byUpdated[j].Updated) })
@@ -413,8 +331,6 @@ func (es *ExperienceStore) evictLocked() {
 	}
 }
 
-// readExperience parses one case file. Lenient: unknown/missing header keys
-// keep zero values; only a missing Task invalidates the case.
 func readExperience(path string) (Experience, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -436,7 +352,7 @@ func readExperience(path string) (Experience, error) {
 		}
 		key, value, ok := strings.Cut(trimmed, ":")
 		if !ok {
-			// Header ended without a blank line separator.
+
 			inBody = true
 			body = append(body, line)
 			continue
@@ -460,7 +376,7 @@ func readExperience(path string) (Experience, error) {
 		case "id":
 			exp.ID = strings.TrimSpace(value)
 		default:
-			// Future-proof: unknown header keys are ignored, not body.
+
 		}
 	}
 	if exp.ID == "" {
@@ -477,8 +393,6 @@ func readExperience(path string) (Experience, error) {
 	return exp, nil
 }
 
-// writeExperience serializes a case atomically (temp + rename, same pattern
-// as AutoMemory.SaveMemory) so concurrent readers never see a torn file.
 func writeExperience(path string, exp Experience) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id: %s\n", exp.ID)
@@ -514,8 +428,6 @@ func writeExperience(path string, exp Experience) error {
 	return os.Rename(tmpName, path)
 }
 
-// normalizeTask collapses whitespace/case so the same logical task maps to
-// one case id regardless of formatting.
 func normalizeTask(task string) string {
 	fields := strings.FieldsFunc(strings.ToLower(task), func(r rune) bool {
 		return unicode.IsSpace(r)
@@ -523,10 +435,6 @@ func normalizeTask(task string) string {
 	return strings.Join(fields, " ")
 }
 
-// expTokenize lowercases and splits on non-alphanumeric runes; tokens shorter
-// than 2 runes are dropped (CJK runes are kept individually — each is a word).
-// Named with the exp- prefix: package memory already has a tokenize helper
-// (duplicate_check.go) with different semantics.
 func expTokenize(s string) []string {
 	var toks []string
 	var cur []rune
@@ -539,7 +447,7 @@ func expTokenize(s string) []string {
 	for _, r := range strings.ToLower(s) {
 		switch {
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			// CJK: each rune is a word unit; Latin/digits accumulate.
+
 			if r >= 0x2E80 {
 				flush()
 				toks = append(toks, string(r))
@@ -554,7 +462,6 @@ func expTokenize(s string) []string {
 	return toks
 }
 
-// tokenSet counts token frequencies.
 func tokenSet(toks []string) map[string]int {
 	set := make(map[string]int, len(toks))
 	for _, t := range toks {
@@ -563,8 +470,6 @@ func tokenSet(toks []string) map[string]int {
 	return set
 }
 
-// minInt keeps an explicit helper so package memory never shadows the
-// Go 1.21+ builtin min for its other files.
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -572,7 +477,6 @@ func minInt(a, b int) int {
 	return b
 }
 
-// parseTime is a lenient RFC3339 reader.
 func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
 	if err != nil {
@@ -581,7 +485,6 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-// dedupeStrings preserves order while dropping duplicates/empties.
 func dedupeStrings(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	var out []string
@@ -596,7 +499,6 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-// oneLine collapses newlines and hard-truncates on a rune boundary.
 func oneLine(s string, maxRunes int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	runes := []rune(s)
@@ -606,8 +508,6 @@ func oneLine(s string, maxRunes int) string {
 	return s
 }
 
-// debugLogExperience records store activity for the memory debug category;
-// no-op on nil store keeps call sites terse.
 func debugLogExperience(format string, args ...interface{}) {
 	debug.Log("memory", "experience: "+format, args...)
 }

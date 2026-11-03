@@ -1,8 +1,5 @@
 package usage
 
-// #2150 batch 1 (rest): the five remaining P1 probes pinned against
-// mock servers, including the openrouter credits->key-limit degrade.
-
 import (
 	"context"
 	"net/http"
@@ -12,7 +9,7 @@ import (
 
 func TestKimiProbeWindows(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Constant endpoint path regardless of the configured base shape.
+
 		if r.URL.Path != "/coding/v1/usages" {
 			t.Errorf("path %s", r.URL.Path)
 		}

@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// The ! shell passthrough (shell-mode input on the linear REPL): input is
-// only read while the agent is idle, and !cmd executes directly in the
-// user's shell without an agent round-trip.
-
 func TestRunPlainBang_EchoStreamsOutput(t *testing.T) {
 	var buf bytes.Buffer
 	runPlainBang(&buf, "echo bang-hello")
@@ -36,8 +32,7 @@ func TestRunPlainBang_EmptyShowsUsage(t *testing.T) {
 }
 
 func TestHandlePlainCommand_BangRoutesAndContinues(t *testing.T) {
-	// A ! line is a command-family line: it must not exit the REPL and must
-	// not fall through to the agent path.
+
 	if exit := handlePlainCommand("!echo routed-ok", nil, nil); exit {
 		t.Fatal("bang passthrough must never exit the REPL")
 	}

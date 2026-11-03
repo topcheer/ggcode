@@ -1,9 +1,5 @@
 package hooks
 
-// #679 regression tests: tail-* path anchoring in the matcher, argv-side
-// truncation for $RAW_INPUT/$PAYLOAD expansion, and event-aware block
-// semantics for exit 2 / HTTP 403 (post_tool_use never blocks).
-
 import (
 	"fmt"
 	"net/http"
@@ -13,8 +9,6 @@ import (
 	"testing"
 )
 
-// --- Defect 1: trailing `*` must anchor on the extracted path ---
-
 func TestIssue679_TailStarAnchorsOnPath(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -23,9 +17,7 @@ func TestIssue679_TailStarAnchorsOnPath(t *testing.T) {
 		want          bool
 	}{
 		{
-			// Old code matched the ENTIRE argument JSON: the content field
-			// mentioning "internal/" made edit_file(internal/*) fire and an
-			// exit-2 audit hook mis-blocked the call.
+
 			name:    "content substring must not match",
 			pattern: "edit_file(internal/*)",
 			tool:    "edit_file",
@@ -47,8 +39,7 @@ func TestIssue679_TailStarAnchorsOnPath(t *testing.T) {
 			want:    false,
 		},
 		{
-			// No structured path → legacy fallback over raw JSON (pinned by
-			// runner_test.go: run_command(git commit *)).
+
 			name:    "no extractable path falls back to contains",
 			pattern: "run_command(git commit *)",
 			tool:    "run_command",
@@ -98,10 +89,6 @@ func TestIssue679_TailStarStillBlocksRealPath(t *testing.T) {
 	}
 }
 
-// --- Defect 2: $RAW_INPUT/$PAYLOAD argv expansion capped like envp ---
-
-// runArgvSizeProbe expands $VAR via the hook template and measures the
-// byte count the shell actually receives for that argument.
 func runArgvSizeProbe(t *testing.T, tmpl, varName string, env HookEnv) int {
 	t.Helper()
 	h := Hook{Match: "*", Command: `printf '%s' $` + varName + ` | wc -c | tr -d ' '`}
@@ -121,7 +108,7 @@ func TestIssue679_RawInputArgvTruncated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a shell process")
 	}
-	big := strings.Repeat("x", 512*1024) // 512KB — over MAX_ARG_STRLEN verbatim
+	big := strings.Repeat("x", 512*1024)
 	env := HookEnv{ToolName: "write_file", RawInput: big, FilePath: "/tmp/big.txt"}
 	n := runArgvSizeProbe(t, "", "RAW_INPUT", env)
 	if n == 0 || n > maxHookEnvValue {
@@ -148,7 +135,7 @@ func TestIssue679_NormalSizeArgvUntouched(t *testing.T) {
 		t.Skip("spawns a shell process")
 	}
 	raw := `{"file_path":"/tmp/f.txt","content":"hello world"}`
-	// Bare $RAW_INPUT: shellQuote (inside template expansion) supplies the quoting.
+
 	h := Hook{Command: `test $RAW_INPUT = ` + shellQuote(raw) + " && echo verbatim"}
 	env := HookEnv{Event: EventPreToolUse, ToolName: "write_file", RawInput: raw}
 	res := executeCommandHook(h, env, BuildPayload(env))
@@ -159,8 +146,6 @@ func TestIssue679_NormalSizeArgvUntouched(t *testing.T) {
 		t.Errorf("output = %q, want verbatim", got)
 	}
 }
-
-// --- Defect 3: post_tool_use exit 2 / HTTP 403 must not short-circuit ---
 
 func TestIssue679_PostToolUseExit2KeepsInjection(t *testing.T) {
 	if testing.Short() {
@@ -199,9 +184,7 @@ func TestIssue679_PostToolUseHTTP403NonBlocking(t *testing.T) {
 	if !res.Allowed {
 		t.Fatalf("HTTP 403 on post_tool_use must not block: %+v", res)
 	}
-	// #684 supersedes the old "non-blocking Err" channel: post-tool consumers
-	// read only Output, so the reason now travels via PolicyNotice (folded
-	// into Output by runSync) instead of a dropped Err.
+
 	if res.PolicyNotice == "" || !strings.Contains(res.PolicyNotice, "policy violation") {
 		t.Errorf("403 reason must surface via PolicyNotice, got %q", res.PolicyNotice)
 	}

@@ -123,12 +123,11 @@ func TestSummarizeTokenAggregation(t *testing.T) {
 		t.Errorf("turn 2 CumOutputTokens = %d, want 120", summary.Turns[1].CumOutputTokens)
 	}
 
-	// Verify decode TPS is computed correctly when duration data is present.
 	tpsEvents := []MetricEvent{
 		{TurnIndex: 1, Type: "llm", TTFT: 500 * time.Millisecond, Duration: 5500 * time.Millisecond, OutputTokens: 500},
 	}
 	tpsSummary := Summarize(tpsEvents)
-	// Decode duration = 5500ms - 500ms = 5000ms = 5s; 500 tokens / 5s = 100 tok/s
+
 	expectedTPS := 100.0
 	if tpsSummary.Turns[0].OutputTPS < expectedTPS-1 || tpsSummary.Turns[0].OutputTPS > expectedTPS+1 {
 		t.Errorf("OutputTPS = %.1f, want ~%.0f", tpsSummary.Turns[0].OutputTPS, expectedTPS)
@@ -137,17 +136,14 @@ func TestSummarizeTokenAggregation(t *testing.T) {
 		t.Errorf("AvgOutputTPS = %.1f, want ~%.0f", tpsSummary.AvgOutputTPS, expectedTPS)
 	}
 
-	// Verify per-LLM-call TPS with multiple calls in one turn.
-	// Each call independently computes TPS, then the turn-level TPS is the
-	// simple average across calls (not weighted by token count or duration).
 	multiEvents := []MetricEvent{
-		// Call 1: TTFT=1s, Duration=6s → decode=5s → 200/5 = 40 tok/s
+
 		{TurnIndex: 1, Type: "llm", TTFT: 1 * time.Second, Duration: 6 * time.Second, OutputTokens: 200},
-		// Call 2: TTFT=0.5s, Duration=3s → decode=2.5s → 300/2.5 = 120 tok/s
+
 		{TurnIndex: 1, Type: "llm", TTFT: 500 * time.Millisecond, Duration: 3 * time.Second, OutputTokens: 300},
 	}
 	multiSummary := Summarize(multiEvents)
-	// Simple average: (40 + 120) / 2 = 80 tok/s
+
 	expectedMultiTPS := (40.0 + 120.0) / 2
 	if multiSummary.Turns[0].OutputTPS < expectedMultiTPS-0.5 || multiSummary.Turns[0].OutputTPS > expectedMultiTPS+0.5 {
 		t.Errorf("multi-call OutputTPS = %.1f, want ~%.1f", multiSummary.Turns[0].OutputTPS, expectedMultiTPS)

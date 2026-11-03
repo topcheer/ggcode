@@ -4,35 +4,21 @@ import (
 	"strings"
 )
 
-// Command rehearsal (r451, production-agent three-step pattern for
-// high-risk actions: simulate -> preview -> confirm). The dangerous.go
-// detector CLASSIFIES a command against patterns; this package-side
-// companion enumerates the command's WRITE EFFECTS - which files/dirs a
-// compound command (pipes, &&/|| chains) would create, overwrite or
-// delete - purely by lexical analysis. Zero execution, zero shell.
-
-// SubcommandPreview is the rehearsal result for one segment of a
-// compound command (split on &&, ||, ;, | - quote-aware).
 type SubcommandPreview struct {
-	Raw          string   // the segment as written
-	Verb         string   // first token (argv[0]-ish)
-	Args         []string // remaining tokens, flags included
-	WriteTargets []string // paths this segment would create/overwrite/delete
-	Destructive  bool     // rm -rf / git reset --hard / git clean class
-	Notes        []string // caveats the caller should surface
+	Raw          string
+	Verb         string
+	Args         []string
+	WriteTargets []string
+	Destructive  bool
+	Notes        []string
 }
 
-// PreviewReport is the full rehearsal for one command line.
 type PreviewReport struct {
 	Subcommands  []SubcommandPreview
-	WriteTargets []string // union, in first-seen order
-	Destructive  bool     // any segment destructive
+	WriteTargets []string
+	Destructive  bool
 }
 
-// verbs that (may) write/create/delete; targets enumerated lexically.
-// NOTE: git and sed are deliberately absent - they have dedicated
-// subcommand-level handling in previewSegment and must not be swallowed
-// by the generic verb dispatch.
 var previewWriteVerbs = map[string]bool{
 	"rm": true, "mv": true, "cp": true, "mkdir": true, "rmdir": true,
 	"touch": true, "dd": true, "tee": true, "truncate": true,
@@ -40,25 +26,17 @@ var previewWriteVerbs = map[string]bool{
 	"shred": true, "rsync": true, "tar": true, "unzip": true, "find": true,
 }
 
-// verbs that are destructive by class (before flag analysis).
 var previewDestructiveVerbs = map[string]bool{
 	"rm": true, "shred": true,
 }
 
-// destructive git subcommands.
 var previewDestructiveGitSubs = map[string]bool{
 	"clean": true, "reset": true, "checkout": true, "restore": true,
 	"push": true, "rebase": true, "cherry-pick": true, "filter-branch": true,
 }
 
-// sed in-place flag.
 const sedInPlace = "-i"
 
-// PreviewCommand lexically rehearses a compound shell command and reports
-// its write effects without running anything. It deliberately
-// under-approximates exotic quoting; every such gap is recorded as a Note
-// so the caller knows the preview is not exhaustive rather than trusting
-// an empty target list blindly.
 func PreviewCommand(cmd string) PreviewReport {
 	var rep PreviewReport
 	seen := map[string]bool{}
@@ -76,7 +54,6 @@ func PreviewCommand(cmd string) PreviewReport {
 	return rep
 }
 
-// splitCompound splits on ;, &&, ||, | outside quotes.
 func splitCompound(cmd string) []string {
 	var segs []string
 	var cur strings.Builder
@@ -199,9 +176,9 @@ func tokenizeSegment(seg string) []string {
 		case c == ' ' || c == '\t':
 			flush()
 		case c == '>' || c == '<':
-			// redirection operator: flush current field, emit as own field
+
 			flush()
-			// >> is one operator
+
 			if i+1 < len(seg) && seg[i+1] == '>' {
 				cur.WriteString(">>")
 				i++
@@ -217,7 +194,6 @@ func tokenizeSegment(seg string) []string {
 	return fields
 }
 
-// redirectTargets returns files opened for writing by > / >> operators.
 func redirectTargets(fields []string) []string {
 	var out []string
 	for i := 0; i+1 < len(fields); i++ {
@@ -231,7 +207,6 @@ func redirectTargets(fields []string) []string {
 	return out
 }
 
-// nonFlagArgs returns args that are not -flags.
 func nonFlagArgs(args []string) []string {
 	var out []string
 	for _, a := range args {
@@ -242,7 +217,6 @@ func nonFlagArgs(args []string) []string {
 	return out
 }
 
-// writeTargetsFor enumerates write targets for known file-writing verbs.
 func writeTargetsFor(verb string, args []string) []string {
 	positional := nonFlagArgs(args)
 	var targets []string
@@ -250,7 +224,7 @@ func writeTargetsFor(verb string, args []string) []string {
 	case "rm":
 		targets = positional
 	case "mv", "cp", "rsync", "ln", "install":
-		// last positional is the destination
+
 		if len(positional) >= 2 {
 			targets = []string{positional[len(positional)-1]}
 		}
@@ -259,7 +233,7 @@ func writeTargetsFor(verb string, args []string) []string {
 			targets = positional
 		}
 	case "dd":
-		// dd of=/path writes `of=` operand
+
 		for _, a := range args {
 			if strings.HasPrefix(a, "of=") {
 				targets = []string{strings.TrimPrefix(a, "of=")}
@@ -269,7 +243,7 @@ func writeTargetsFor(verb string, args []string) []string {
 	case "mkdir", "rmdir":
 		targets = positional
 	case "find":
-		// find ... -delete is hard to bound; flag as note-level target.
+
 		for _, a := range args {
 			if strings.HasPrefix(a, "-delete") {
 				targets = []string{"(find -delete: unbounded paths)"}
@@ -277,7 +251,7 @@ func writeTargetsFor(verb string, args []string) []string {
 			}
 		}
 	case "tar", "unzip":
-		// archive extraction writes into -C dir / cwd
+
 		for i := 0; i < len(args); i++ {
 			if args[i] == "-C" && i+1 < len(args) {
 				targets = []string{args[i+1]}
@@ -288,11 +262,10 @@ func writeTargetsFor(verb string, args []string) []string {
 			targets = []string{"(cwd)"}
 		}
 	}
-	// sed is handled by the caller (needs script-vs-file disambiguation).
+
 	return targets
 }
 
-// basename strips a leading path from a verb (/bin/rm -> rm).
 func basename(v string) string {
 	if i := strings.LastIndexByte(v, '/'); i >= 0 {
 		return v[i+1:]

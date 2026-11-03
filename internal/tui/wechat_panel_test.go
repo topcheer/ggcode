@@ -39,8 +39,7 @@ func TestWechatPanelQOpensQROverlay(t *testing.T) {
 
 	updated, _ := m.handleWechatPanelKey(tea.KeyPressMsg{Text: "q"})
 	m = updated
-	// Without a running adapter with ContactURI, q should not open overlay
-	// but should not close the panel either
+
 	if m.wechatPanel == nil {
 		t.Fatal("expected q to NOT close the wechat panel (it now opens QR overlay)")
 	}
@@ -110,7 +109,7 @@ func TestWechatPanelPollingStatePanelOnly(t *testing.T) {
 	m.wechatPanel.authPhase = "polling"
 
 	view := m.View().Content
-	// QR code should NOT be in panel view (it's in overlay when showing_qr)
+
 	if strings.Contains(view, "████") {
 		t.Fatalf("QR code should not appear in panel view, got:\n%s", view)
 	}
@@ -124,7 +123,6 @@ func TestWechatPanelConfirmedClosesOverlay(t *testing.T) {
 	m.wechatPanel.authPhase = "showing_qr"
 	m.openQROverlayDirect("test", "test", "QR", "")
 
-	// Simulate confirmed poll
 	updated, _ := m.handleWechatQRPollMsg(wechatQRPollMsg{status: "confirmed", botToken: "test-token"})
 	m = updated
 
@@ -196,7 +194,7 @@ func TestWechatQRPollMsg_ConfirmedSavesToken(t *testing.T) {
 	if m.wechatPanel.authPhase != "confirmed" {
 		t.Errorf("expected authPhase 'confirmed', got %q", m.wechatPanel.authPhase)
 	}
-	_ = cmd // may be nil if no config (expected in test)
+	_ = cmd
 }
 
 func TestWechatQRPollMsg_WaitContinuesPolling(t *testing.T) {
@@ -248,7 +246,7 @@ func TestWechatPanelRenderLocalizesToChinese(t *testing.T) {
 	m.openWechatPanel()
 
 	view := m.View().Content
-	// Should contain Chinese strings
+
 	if !strings.Contains(view, "微信") {
 		t.Fatalf("expected Chinese localization in wechat panel, got:\n%s", view)
 	}
@@ -282,13 +280,12 @@ func TestWechatPanel_NavigateEmpty(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openWechatPanel()
 
-	// Up/down on empty list should not crash
 	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyDown})
 }
 
 func TestWechatBindingEntries_BoundCountIncludesCurrentWorkspace(t *testing.T) {
-	// Setup: config with one wechat adapter, manager with a binding to current workspace
+
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
@@ -297,7 +294,6 @@ func TestWechatBindingEntries_BoundCountIncludesCurrentWorkspace(t *testing.T) {
 	_ = mgr.SetBindingStore(im.NewMemoryBindingStore())
 	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/test/workspace"})
 
-	// Bind wechat adapter to the current workspace
 	_, _ = mgr.BindChannel(im.ChannelBinding{
 		Platform:  im.PlatformWechat,
 		Adapter:   "wechat",
@@ -323,12 +319,11 @@ func TestWechatBindingEntries_BoundCountIncludesCurrentWorkspace(t *testing.T) {
 	if !entries[0].Bound {
 		t.Fatal("expected entry.Bound=true for adapter bound to current workspace, got false")
 	}
-	// macOS may resolve /tmp to /private/tmp — just check OccupiedBy is same workspace
+
 	if entries[0].OccupiedBy != "" && entries[0].OccupiedBy != "/private/test/workspace" {
 		t.Fatalf("expected OccupiedBy empty or resolved path, got %q", entries[0].OccupiedBy)
 	}
 
-	// Verify boundCount in rendered view
 	m.openWechatPanel()
 	view := m.View().Content
 	if !strings.Contains(view, "Bound: 1") {
@@ -345,7 +340,6 @@ func TestWechatBindingEntries_BoundToOtherWorkspace(t *testing.T) {
 	_ = mgr.SetBindingStore(im.NewMemoryBindingStore())
 	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/test/workspace"})
 
-	// Bind wechat adapter to a DIFFERENT workspace
 	_, _ = mgr.BindChannel(im.ChannelBinding{
 		Platform:  im.PlatformWechat,
 		Adapter:   "wechat",
@@ -409,9 +403,6 @@ func TestWechatBindingEntries_NotBound(t *testing.T) {
 	}
 }
 
-// TestWechatILinkRequestNon2xx pins #1398-A: 4xx/5xx responses must
-// surface as errors (with the status code), not be handed to the caller
-// as a parseable body.
 func TestWechatILinkRequestNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -428,8 +419,6 @@ func TestWechatILinkRequestNon2xx(t *testing.T) {
 	}
 }
 
-// TestWechatRemoveResultRouting pins #1398-C: a successful remove
-// (field "remove") must show the removed message, not auth_success.
 func TestWechatRemoveResultRouting(t *testing.T) {
 	m := newTestModel()
 	m.wechatPanel = &wechatPanelState{}
@@ -441,11 +430,6 @@ func TestWechatRemoveResultRouting(t *testing.T) {
 	}
 }
 
-// TestWechatTokenSaveMutationFlow pins the #1367 batch-3 migration:
-// saveWechatBotToken routes through configMutationMsg - the name-dedup
-// loop (which READS the adapters map, so it must not run on a Cmd
-// goroutine) executes inside apply, the chosen name bridges to next()
-// via lastWechatAdapterName, and the final result still carries it.
 func TestWechatTokenSaveMutationFlow(t *testing.T) {
 	m := newTestModel()
 	m.config = config.DefaultConfig()
@@ -464,7 +448,7 @@ func TestWechatTokenSaveMutationFlow(t *testing.T) {
 	if _, has := m.config.IM.Adapters["wechat"]; !has {
 		t.Fatal("adapter not added after mutation routing")
 	}
-	// Second save must dedup to wechat-2 - the loop ran inside apply.
+
 	msg2 := m.saveWechatBotToken("tok-2")()
 	mut2, _ := msg2.(configMutationMsg)
 	m3, _ := m.handleConfigMutationMsg(mut2)

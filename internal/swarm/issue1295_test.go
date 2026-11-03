@@ -1,12 +1,5 @@
 package swarm
 
-// Regression test for GitHub issue #1295: transiently-failing tasks bounced
-// back to pending with NO attempt cap - a poison task (deterministically
-// hitting the same 5xx/EOF/timeout) was re-claimed every tick forever,
-// burning a full LLM retry+fallback chain per attempt. The runner now
-// counts retry_attempts in task metadata and parks the task as completed
-// (permanent_error=max_retries_exceeded) after the cap.
-
 import (
 	"context"
 	"errors"
@@ -27,8 +20,7 @@ func (a *failingAgent) RunStream(_ context.Context, _ string, _ func(provider.St
 	a.mu.Lock()
 	a.calls++
 	a.mu.Unlock()
-	// A network-flavored transient error: classified FailureTransient, the
-	// poison-task path (NOT quota/auth which were already permanent).
+
 	return errors.New("Post \"https://relay/v1\": EOF")
 }
 
@@ -61,8 +53,7 @@ func TestIssue1295_PoisonTaskParkedAfterRetryCap(t *testing.T) {
 	tm.ctx = ctx
 
 	mgr := newTestManager()
-	// Register the team so GetTaskManager(team.ID) resolves for board claims
-	// (idle runners claim board tasks, not inbox messages).
+
 	mgr.mu.Lock()
 	mgr.teams[team.ID] = team
 	mgr.mu.Unlock()

@@ -7,10 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// ============================================================
-// MouseWheelMsg → main conversation viewport
-// ============================================================
-
 func TestMouseWheelUpScrollsMainViewport(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
@@ -83,9 +79,6 @@ func TestMouseWheelOnEmptyOutputDoesNotPanic(t *testing.T) {
 	_ = model.(Model)
 }
 
-// MouseWheelMsg must be dispatched before MouseMsg in the type switch,
-// because MouseWheelMsg implements the MouseMsg interface. This test
-// verifies that MouseWheelMsg reaches the scroll handler, not the click handler.
 func TestMouseWheelMsgNotCaughtByMouseMsgCase(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
@@ -104,10 +97,6 @@ func TestMouseWheelMsgNotCaughtByMouseMsgCase(t *testing.T) {
 	}
 }
 
-// ============================================================
-// MouseMsg: Alt modifier pass-through / startup gate
-// ============================================================
-
 func TestMouseMsgWithAltIsIgnored(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
@@ -115,7 +104,7 @@ func TestMouseMsgWithAltIsIgnored(t *testing.T) {
 	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 10, Y: 10, Mod: tea.ModAlt}
 	model, _ := m.Update(click)
 	m2 := model.(Model)
-	_ = m2.View() // should not panic
+	_ = m2.View()
 }
 
 func TestViewSetsMouseModeCellMotion(t *testing.T) {
@@ -136,10 +125,6 @@ func TestViewSetsAltScreen(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Edge cases
-// ============================================================
-
 func TestMouseMsgWithNoPanelsDoesNotPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -153,10 +138,6 @@ func TestMouseMsgWithNoPanelsDoesNotPanic(t *testing.T) {
 	model, _ := m.Update(click)
 	_ = model.(Model)
 }
-
-// ============================================================
-// helpers
-// ============================================================
 
 func createTestFile(t *testing.T, dir, name, content string) string {
 	t.Helper()

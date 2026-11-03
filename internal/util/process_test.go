@@ -13,7 +13,7 @@ func TestIsProcessAlive_CurrentProcess(t *testing.T) {
 }
 
 func TestIsProcessAlive_NonExistent(t *testing.T) {
-	// Use a very high PID that's unlikely to exist
+
 	if IsProcessAlive(999999999) {
 		t.Error("IsProcessAlive(999999999) = true, want false")
 	}

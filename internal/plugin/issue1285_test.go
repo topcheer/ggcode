@@ -1,11 +1,5 @@
 package plugin
 
-// Regression tests for GitHub issue #1285: Close() touched the watcher
-// cancel fields without m.mu (data race vs Connect's locked writes; the
-// cancel could land on a stale value leaving an unstoppable watcher), and
-// reconnect cycles could resurrect a closed plugin (ghost tools + reconnect
-// storms against unloaded servers).
-
 import (
 	"context"
 	"encoding/json"
@@ -47,10 +41,6 @@ func issue1285MockServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-// TestIssue1285_CloseBlocksResurrection: after Close(), attemptReconnect
-// must refuse to reconnect even though the server is perfectly healthy -
-// the entry guard checks the closed flag. Without the fix this returns true
-// and re-registers tools for an unloaded plugin.
 func TestIssue1285_CloseBlocksResurrection(t *testing.T) {
 	server := issue1285MockServer(t)
 	p := NewMCPPlugin(config.MCPServerConfig{Name: "closed-http", Type: "http", URL: server.URL})
@@ -71,8 +61,6 @@ func TestIssue1285_CloseBlocksResurrection(t *testing.T) {
 	}
 }
 
-// TestIssue1285_ConnectAfterCloseFails: a Connect that races Close() must
-// not install its client - the tail guard drops it.
 func TestIssue1285_ConnectAfterCloseFails(t *testing.T) {
 	server := issue1285MockServer(t)
 	p := NewMCPPlugin(config.MCPServerConfig{Name: "closed-http-2", Type: "http", URL: server.URL})
@@ -84,11 +72,6 @@ func TestIssue1285_ConnectAfterCloseFails(t *testing.T) {
 	}
 }
 
-// TestIssue1285_DisconnectThenReconnect: the manager-level Disconnect ->
-// Reconnect cycle must keep working. The first #1285 fix left `closed` set
-// forever, so the UI's Reconnect was permanently rejected ("closed during
-// connect"); connectOne now clears the flag as the manager's explicit
-// revive signal.
 func TestIssue1285_DisconnectThenReconnect(t *testing.T) {
 	server := issue1285MockServer(t)
 	manager := NewMCPManager([]config.MCPServerConfig{{
@@ -101,8 +84,7 @@ func TestIssue1285_DisconnectThenReconnect(t *testing.T) {
 	if !manager.Disconnect("cycle-http") {
 		t.Fatal("Disconnect must find the server")
 	}
-	// Disconnect is async; wait for the teardown to land (status leaves
-	// connected) so we test the steady post-Close state, not a race.
+
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if infos := manager.Snapshot(); len(infos) == 1 && infos[0].Status != MCPStatusConnected {
@@ -113,14 +95,14 @@ func TestIssue1285_DisconnectThenReconnect(t *testing.T) {
 	if infos := manager.Snapshot(); len(infos) != 1 || infos[0].Status == MCPStatusConnected {
 		t.Fatalf("expected disconnected status, got %+v", infos)
 	}
-	// The user changes their mind and reconnects from the UI.
+
 	if !manager.Reconnect("cycle-http") {
 		t.Fatal("Reconnect must find the server")
 	}
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if infos := manager.Snapshot(); len(infos) == 1 && infos[0].Status == MCPStatusConnected {
-			return // success
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

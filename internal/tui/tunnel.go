@@ -29,7 +29,6 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-// base64DecodeTunnelImage decodes a base64 string to raw bytes.
 func base64DecodeTunnelImage(b64 string) []byte {
 	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
@@ -39,7 +38,6 @@ func base64DecodeTunnelImage(b64 string) []byte {
 	return data
 }
 
-// tunnelStartMsg is sent when the tunnel is ready.
 type tunnelStartMsg struct {
 	generation uint64
 	info       *tunnel.SessionInfo
@@ -47,8 +45,6 @@ type tunnelStartMsg struct {
 	broker     *tunnel.Broker
 	err        error
 
-	// reply, when non-nil, carries the outcome back to the agent-initiated
-	// start_share tool call (synchronous bridge from the tool goroutine).
 	reply chan<- agentShareReply
 }
 
@@ -63,12 +59,8 @@ type tunnelShareBootstrapMsg struct {
 	generation uint64
 }
 
-// tunnelStopMsg is sent when the tunnel has stopped.
 type tunnelStopMsg struct{}
 
-// tunnelInboundMsg carries a user message from the mobile client into the
-// Bubble Tea event loop. It is produced by the broker OnCommand callback
-// (which runs on a goroutine) and consumed by Update.
 type tunnelInboundMsg struct {
 	generation uint64
 	text       string
@@ -76,20 +68,17 @@ type tunnelInboundMsg struct {
 	images     []tunnel.ImageData
 }
 
-// tunnelModeChangeMsg carries a mode change request from mobile.
 type tunnelModeChangeMsg struct {
 	generation uint64
 	mode       string
 }
 
-// tunnelApprovalResponseMsg carries an approval decision from mobile.
 type tunnelApprovalResponseMsg struct {
 	generation uint64
 	id         string
-	decision   string // "allow", "deny", "always"
+	decision   string
 }
 
-// tunnelAskUserResponseMsg carries an ask_user answer from mobile.
 type tunnelAskUserResponseMsg struct {
 	generation uint64
 	id         string
@@ -97,13 +86,11 @@ type tunnelAskUserResponseMsg struct {
 	answers    []tunnel.AskUserAnswer
 }
 
-// tunnelLanguageChangeMsg carries a language change from mobile.
 type tunnelLanguageChangeMsg struct {
 	generation uint64
 	language   string
 }
 
-// tunnelThemeChangeMsg carries a theme change from mobile.
 type tunnelThemeChangeMsg struct {
 	generation uint64
 	theme      string
@@ -113,10 +100,8 @@ type tunnelClientConnectedMsg struct {
 	generation uint64
 }
 
-// ─── Slash command handler ───
-
 func (m *Model) handleTunnelCommand(text string) tea.Cmd {
-	// Accept both /tunnel and /share as prefix
+
 	switch {
 	case strings.HasPrefix(text, "/share"):
 		text = strings.TrimPrefix(text, "/share")
@@ -196,7 +181,6 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.tunnelBroker = nil
 	m.clearMobileFileSender()
 
-	// Detach online broker from unified TunnelHost
 	if m.tunnelHost != nil {
 		m.tunnelHost.DetachOnlineBroker()
 	}
@@ -255,21 +239,13 @@ func (m *Model) closeTunnelGracefullyAsync(timeout time.Duration) {
 	})
 }
 
-// ─── Agent-initiated share control (start_share / stop_share tools) ───
-
-// agentShareReply carries the synchronous outcome of an agent-initiated
-// share start/stop back to the tool goroutine that requested it.
 type agentShareReply struct {
 	connectURL string
 	err        error
 }
 
-// agentShareRequestMsg is sent by the tool-side controller adapter so the
-// share lifecycle transition runs INSIDE the Bubble Tea Update loop (no data
-// races on tunnelSession/tunnelStarting/generation). The tool goroutine
-// blocks on reply until Update completes the transition.
 type agentShareRequestMsg struct {
-	stop  bool // false = start, true = stop
+	stop  bool
 	reply chan agentShareReply
 }
 
@@ -280,7 +256,7 @@ func (m *Model) handleAgentShareRequest(msg agentShareRequestMsg) (tea.Model, te
 		}
 	}
 	if !msg.stop {
-		// start: mirror the /share start branch, but reply with the result.
+
 		if m.tunnelSession != nil {
 			reply(agentShareReply{err: fmt.Errorf("share already active")})
 			return m, nil
@@ -298,7 +274,7 @@ func (m *Model) handleAgentShareRequest(msg agentShareRequestMsg) (tea.Model, te
 		m.chatWriteSystem(nextSystemID(), "Agent is starting a mobile share session...")
 		return m, m.startTunnelWithReply(generation, msg.reply)
 	}
-	// stop: mirror the /share stop branch.
+
 	if m.tunnelSession != nil || m.tunnelStarting {
 		m.closeTunnelGracefullyAsync(2 * time.Second)
 		m.chatWriteSystem(nextSystemID(), "Agent stopped the mobile share session.")
@@ -309,8 +285,6 @@ func (m *Model) handleAgentShareRequest(msg agentShareRequestMsg) (tea.Model, te
 	return m, nil
 }
 
-// ─── Tunnel lifecycle ───
-
 func (m *Model) startTunnel(generation uint64) tea.Cmd {
 	return m.startTunnelWithReply(generation, nil)
 }
@@ -318,8 +292,7 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 func (m *Model) startTunnelWithReply(generation uint64, reply chan<- agentShareReply) tea.Cmd {
 	return func() tea.Msg {
 		if m.tunnelHost == nil {
-			// agent share request: pass the reply channel through so the
-			// completion handler can answer the blocked tool goroutine.
+
 			return tunnelStartMsg{
 				generation: generation,
 				err:        fmt.Errorf("tunnel host not initialized"),
@@ -327,17 +300,8 @@ func (m *Model) startTunnelWithReply(generation uint64, reply chan<- agentShareR
 			}
 		}
 
-		// Bind projection session BEFORE StartShare so PrepareOnlineShare
-		// can read replay events from the projection store.
 		m.bindTunnelProjectionSession()
 
-		// Forward-declare broker so OnCommand closure can reference it.
-		// result.Broker is set after StartShare returns, but OnCommand
-		// is invoked later (when mobile sends commands), so it's safe.
-		// #1395-B: OnCommand runs on the broker relay/RTC goroutine while
-		// this goroutine writes shareResult AFTER StartShare returns - but the
-		// broker registers OnCommand INSIDE StartShare (before the write), so
-		// the window is real (P2P upgrade etc). Atomic instead of raw pointer.
 		var shareResult atomic.Pointer[agentruntime.ShareResult]
 		result, err := m.tunnelHost.StartShare(agentruntime.ShareConfig{
 			Workspace: m.fullWorkingDirectory(),
@@ -412,23 +376,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// StartShare already did: session creation, broker setup, AttachOnlineBroker,
-	// SetSessionInfo, PrepareOnlineShare (replay, announce active_session).
-	// We just store refs and show the QR.
 	m.tunnelSession = msg.session
-	// The broker ref must land before the replay branch below: it drives
-	// language/theme sends, snapshot publishing, announce-on-session-switch,
-	// and closeTunnelGracefully's teardown. #2092's early return skipped it,
-	// leaving the broker nil for the whole share whenever the replay raced.
+
 	m.tunnelBroker = msg.broker
 	m.tunnelSpawned = make(map[string]bool)
-	// Wire the mobile file-transfer tool to this broker (same injection
-	// pattern as SetIMManager): look the tool up, inject the adapter,
-	// re-register. Mobile file transfer V1 (docs/design/mobile-file-transfer.md).
+
 	m.injectMobileFileSender(msg.broker)
-	// #1825 case 1: replay a connected event that raced StartShare. Only the
-	// QR flow is skipped - the client is already connected, so a QR would be
-	// noise (the replayed handler also closes any open overlay).
+
 	if m.pendingTunnelConnected {
 		m.pendingTunnelConnected = false
 		return m, func() tea.Msg {
@@ -446,7 +400,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.QRCode,
 		msg.info.ConnectURL,
 	)
-	// Copy share URL to clipboard so the user can paste it elsewhere
+
 	if msg.info.ConnectURL != "" {
 		_ = clipboard.WriteAll(msg.info.ConnectURL)
 	}
@@ -479,7 +433,7 @@ func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd
 		msg.info.QRCode,
 		msg.info.ConnectURL,
 	)
-	// Copy refreshed share URL to clipboard
+
 	if msg.info.ConnectURL != "" {
 		_ = clipboard.WriteAll(msg.info.ConnectURL)
 	}
@@ -491,11 +445,7 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 		return m, nil
 	}
 	if m.tunnelSession == nil {
-		// #1825 case 1: a paired client can reconnect (or land via the P2P
-		// fast path) while StartShare is still executing - the connected
-		// message then arrives BEFORE tunnelStartMsg assigns the session,
-		// and OnConnected fires exactly once per connection. Cache it and
-		// replay once the session lands (the relay-replay pattern).
+
 		m.pendingTunnelConnected = true
 		return m, nil
 	}
@@ -513,8 +463,6 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 	return m, nil
 }
 
-// ─── Outbound: Agent stream events → mobile ───
-
 func tunnelReasoningMsgIDFor(msgID string) string {
 	return agentruntime.TunnelReasoningMsgID(msgID)
 }
@@ -527,7 +475,7 @@ func (m *Model) ensureTunnelMainStreamState() *tunnelMainStreamState {
 }
 
 func (m *Model) syncTunnelMainStreamCache(msgID string, needsFinalize bool) {
-	// TunnelHost manages stream state; this is a no-op kept for compatibility.
+
 }
 
 func (m *Model) currentTunnelMsgID() string {
@@ -610,16 +558,13 @@ func (m *Model) tunnelHostProjectionStore() *tunnel.ProjectionStore {
 	return nil
 }
 
-// pushTunnelEvent pushes a provider stream event to the mobile client.
-// Called from the agent stream callback in submit.go. Nil-safe.
 func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
-	// Use unified TunnelHost if available
+
 	if m.tunnelHost != nil {
 		m.tunnelHost.PushStreamEvent(ev)
 		return
 	}
 
-	// Legacy fallback
 	broker := m.tunnelEventBroker()
 	if broker == nil {
 		return
@@ -677,7 +622,6 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 	}
 }
 
-// pushTunnelUserMessage echoes a locally-typed user message to the mobile client.
 func (m *Model) pushTunnelUserMessage(text string) {
 	if m.tunnelHost != nil {
 		if m.tunnelUserMessageOverride != nil {
@@ -693,7 +637,6 @@ func (m *Model) pushTunnelUserMessage(text string) {
 		return
 	}
 
-	// Legacy fallback
 	if broker := m.tunnelEventBroker(); broker != nil {
 		if m.tunnelUserMessageOverride != nil {
 			override := *m.tunnelUserMessageOverride
@@ -731,7 +674,6 @@ func (m *Model) pushTunnelToolResult(toolID, toolName, result string, isError bo
 	}
 }
 
-// pushTunnelStatus sends a main-agent status update to the mobile client.
 func (m *Model) pushTunnelStatus(status, message string) {
 	if m.tunnelHost != nil {
 		m.tunnelHost.PushStatus(status, message)
@@ -761,7 +703,6 @@ func (m *Model) pushTunnelCurrentActivity() {
 	m.pushTunnelActivity(m.currentTunnelActivity())
 }
 
-// pushTunnelCancel notifies mobile that the current run was cancelled.
 func (m *Model) pushTunnelCancel() {
 	if broker := m.tunnelEventBroker(); broker != nil {
 		m.rolloverTunnelMainStream(true)
@@ -770,9 +711,6 @@ func (m *Model) pushTunnelCancel() {
 	}
 }
 
-// ─── Outbound: Sub-agent events → mobile ───
-
-// pushSubAgentTunnelEvent pushes sub-agent lifecycle events to the mobile client.
 func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 	broker := m.tunnelEventBroker()
 	if broker == nil {
@@ -812,7 +750,6 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 	}
 }
 
-// pushSubAgentTunnelStreamText pushes streaming text from a sub-agent.
 func (m *Model) pushSubAgentTunnelStreamText(agentID, text string) {
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
@@ -831,7 +768,6 @@ func (m *Model) pushSubAgentTunnelReasoning(agentID, text string) {
 	}
 }
 
-// pushSubAgentTunnelToolCall pushes a tool call from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayName, args, detail string) {
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
@@ -839,7 +775,6 @@ func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayNam
 	}
 }
 
-// pushSubAgentTunnelToolResult pushes a tool result from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
@@ -847,9 +782,6 @@ func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, displayN
 	}
 }
 
-// ─── Outbound: Swarm events → mobile ───
-
-// pushSwarmTunnelEvent pushes swarm/teammate events to the mobile client.
 func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 	broker := m.tunnelEventBroker()
 	if broker == nil {
@@ -917,10 +849,6 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 	}
 }
 
-// ─── Inbound: Mobile → agent ───
-
-// handleTunnelClientCommand is called from the broker's OnCommand callback
-// (runs on a goroutine). It routes mobile commands into the Bubble Tea event loop.
 func (m *Model) handleTunnelClientCommand(generation uint64, broker *tunnel.Broker, cmd tunnel.GatewayMessage) {
 	agentruntime.RouteTunnelCommand(cmd, agentruntime.TunnelCommandHooks{
 		OnUserMessage: func(data tunnel.MessageData) {
@@ -971,9 +899,6 @@ func (m *Model) handleTunnelClientCommand(generation uint64, broker *tunnel.Brok
 	})
 }
 
-// handleTunnelInboundMsg processes a user message from the mobile client.
-// It routes through the same idle→startAgent / busy→queuePendingSubmission
-// path as webchat messages.
 func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
@@ -983,7 +908,6 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 
-	// Handle interrupt specially.
 	if text == "/interrupt" {
 		m.cancelActiveRun()
 		return m, nil
@@ -995,12 +919,10 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		})
 	}
 
-	// Notify Knight idle timer.
 	if m.knight != nil {
 		m.knight.NotifyActivity()
 	}
 
-	// Convert tunnel images to imageAttachedMsg for the agent pipeline.
 	if len(msg.images) > 0 {
 		for _, img := range msg.images {
 			decoded, err := imagepkg.Decode(base64DecodeTunnelImage(img.Data))
@@ -1008,20 +930,19 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 				debug.Log("tunnel", "failed to decode tunnel image %s: %v", img.Name, err)
 				continue
 			}
-			// Persist to temp dir so the agent can read_file it when needed.
-			// This mirrors the clipboard paste path (persistAttachedImage).
+
 			filename := img.Name
 			if filename == "" {
 				filename = "tunnel-image.png"
 			}
-			// Sanitize filename to avoid directory traversal.
+
 			filename = filepath.Base(filename)
-			// Prepend tunnel- prefix to avoid collisions with clipboard images.
+
 			filename = "tunnel-" + filename
 			sourcePath, persistErr := persistAttachedImage(filename, decoded)
 			if persistErr != nil {
 				debug.Log("tunnel", "failed to persist tunnel image %s: %v", img.Name, persistErr)
-				sourcePath = "" // fall back to bare filename
+				sourcePath = ""
 			}
 			m.pendingImages = append(m.pendingImages, imageAttachedMsg{
 				img:         decoded,
@@ -1032,13 +953,9 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		}
 	}
 
-	// #1882: the projectMemoryLoading predicate #1762 added to the local
-	// and remote gates - a tunnel message arriving during the startup
-	// project-memory loading window must queue, not start the agent
-	// without the injection the queued paths guarantee.
-	if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading && // #1744 case 1: knight runs never set cancelFunc
-		m.knightRunning == 0 { // #1890: scheduled knight tasks run on their own agent - twin gate
-		// Agent idle — render user bubble and persist, then start agent.
+	if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading &&
+		m.knightRunning == 0 {
+
 		m.chatWriteUser(nextChatID(), text)
 		m.chatListScrollToBottom()
 		m.appendUserMessage(text)
@@ -1051,36 +968,24 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
-		// #3466: tunnel is a remote channel - arm the refusal-ledger
-		// inhibit right before the run starts (direct idle path).
-		// #4736: test-constructed models carry a nil agent (NewModel(nil,
-		// ...)); the #4726 move to an Agent-instance method made this call
-		// panic on them, wedging main's CI. No agent = no run = nothing to
-		// inhibit.
+
 		if m.agent != nil {
 			m.agent.InhibitNextRefusalLedgerWrite()
 		}
 		cmd := m.startAgent(text)
 		return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
-	// Agent busy — queue for submission. The message will be persisted
-	// by startNormalTextRun when the pending submission is drained,
-	// so we must NOT call appendUserMessage here (would duplicate).
-	// queuePendingSubmission renders the user bubble immediately.
-	// #3466: remote-origin entry so the drain arms the inhibit.
+
 	m.queuePendingSubmissionRemote(text)
 	return m, nil
 }
 
-// handleTunnelModeChangeMsg switches the permission mode from a mobile request.
 func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
 	}
 	newMode := permission.ParsePermissionMode(msg.mode)
-	// #743: use IsValidPermissionMode instead of inferring validity from the
-	// parse fallback — the old guard rejected "SUPERVISED" (case-sensitive
-	// raw compare) and exempted the empty string.
+
 	if !permission.IsValidPermissionMode(msg.mode) {
 		return m, nil
 	}
@@ -1094,7 +999,6 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 	return m, nil
 }
 
-// handleTunnelLanguageChangeMsg switches the UI language from a mobile request.
 func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
@@ -1104,7 +1008,7 @@ func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.
 		return m, nil
 	}
 	m.setLanguage(msg.language)
-	// Notify mobile that language changed (echo back)
+
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.SendLanguageChange(msg.language)
 	}
@@ -1113,8 +1017,6 @@ func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.
 	return m, nil
 }
 
-// handleTunnelThemeChangeMsg handles a theme change from mobile.
-// TUI does not switch its own theme, but echoes the event to other clients.
 func (m *Model) handleTunnelThemeChangeMsg(msg tunnelThemeChangeMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
@@ -1125,9 +1027,6 @@ func (m *Model) handleTunnelThemeChangeMsg(msg tunnelThemeChangeMsg) (tea.Model,
 	return m, nil
 }
 
-// ─── Helpers ───
-
-// currentSessionMessages returns messages from the current agent session, if any.
 func (m *Model) currentSessionMessages() []provider.Message {
 	if m.agent != nil {
 		if msgs := m.agent.Messages(); len(msgs) > 0 {
@@ -1252,7 +1151,6 @@ func contentBlockReasoningText(block provider.ContentBlock) string {
 	return ""
 }
 
-// tunnelMessagesToHistory converts provider messages to tunnel history entries.
 func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
 	for _, msg := range msgs {
@@ -1468,13 +1366,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 	for _, ev := range events {
 		switch ev.Type {
 		case subagent.AgentEventReasoning:
-			// #1808: guard the EMPTY string only and normalize for the
-			// sentinel - do NOT trim. Pure-whitespace separator chunks
-			// (" ") are deliberately preserved by the runner (its comment
-			// warns trimming glues words together); routing them through
-			// NormalizeReasoningChunk returned "" here, so snapshot replay
-			// rebuilt the text with words glued - the runner's defense
-			// silently regressed on the replay path.
+
 			if ev.Text != "" {
 				if trimmed := strings.TrimSpace(ev.Text); trimmed == tunnel.RedactedReasoningSentinel {
 					reasoningBuf.WriteString(tunnel.RedactedReasoningPlaceholder)
@@ -1606,7 +1498,7 @@ func (m *Model) announceTunnelActiveSession() {
 	if m.tunnelBroker == nil || m.tunnelHost == nil || m.session == nil || m.session.ID == "" {
 		return
 	}
-	// Re-run the full canonical share flow to re-announce with latest session info.
+
 	m.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
 		Workspace: m.fullWorkingDirectory(),
 		Model:     m.activeModel,
@@ -1630,11 +1522,8 @@ func (m *Model) handleTunnelShareBootstrapMsg(msg tunnelShareBootstrapMsg) (tea.
 		return m, nil
 	}
 
-	// Flush any events captured during the bootstrap goroutine into the
-	// projection store before PrepareOnlineShare replays them.
 	m.finishTunnelShareBootstrapCapture(msg.generation)
 
-	// Cache session info for tunnel (workspace, model, provider, mode, version).
 	if m.tunnelHost != nil {
 		m.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
 			Workspace: m.fullWorkingDirectory(),
@@ -1643,9 +1532,7 @@ func (m *Model) handleTunnelShareBootstrapMsg(msg tunnelShareBootstrapMsg) (tea.
 			Mode:      m.mode.String(),
 			Version:   version.Version,
 		})
-		// PrepareOnlineShare is the canonical share bootstrap: it handles
-		// SendSessionInfo, BindSession, SetReplayProvider, SetAuthorityEpoch,
-		// Replay/Snapshot, and AnnounceActiveSession — in the correct order.
+
 		m.tunnelHost.PrepareOnlineShare(m.tunnelBroker)
 	}
 	return m, nil
@@ -1928,8 +1815,7 @@ func (m *Model) currentIncompleteTunnelHistoryTail() []tunnel.HistoryEntry {
 	}
 	ses := m.session
 	m.sessionMutex().Unlock()
-	// #2917: recordEvent appends from publisher goroutines without holding
-	// the TUI sessionMutex — snapshot under the session leaf lock instead.
+
 	events := ses.SnapshotTunnelEvents()
 	if len(events) == 0 {
 		return nil
@@ -1966,19 +1852,11 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 		m.sessionMutex().Unlock()
 		return
 	}
-	// Clear in-memory tunnel events — the projection store is the sole
-	// persistent copy. CutAuthority resets the projection ledger.
-	// #1422-B: the clear ran BEFORE CutAuthority with no rollback - a
-	// failed cut (disk full/permission) left TUI emptied, the mobile
-	// Replay reading the full old ledger, and new events dropped by the
-	// #666 epoch rule, with zero user signal. The old events are now
-	// captured and RESTORED on failure.
+
 	ses := m.session
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
-	// #2917: clear under the session-scoped leaf lock — recordEvent may
-	// append from publisher goroutines concurrently with this reset.
 	ses.TunnelEventsMu.Lock()
 	prevEvents := ses.TunnelEvents
 	prevComplete := ses.TunnelEventsComplete
@@ -1986,25 +1864,17 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	ses.TunnelEventsComplete = false
 	ses.TunnelEventsMu.Unlock()
 
-	// Tunnel events are no longer persisted to session JSONL.
-	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
 		epoch, cutErr := projectionStore.CutAuthority(ses.ID)
-		// #1400-A: the old `if err == nil` swallowed failures silently -
-		// the brokers kept stamping the OLD epoch while the store's cache
-		// had the cut (memory/disk split). Log loudly so the split is
-		// diagnosable; brokers only update on success (a failed cut means
-		// the on-disk authority is still the old one).
+
 		if cutErr != nil {
 			debug.Log("tui", "cut authority failed for session %s: %v (brokers keep previous epoch)", ses.ID, cutErr)
-			// #1422-B: restore the cleared events so the TUI view matches
-			// the still-old on-disk ledger (no three-way split).
+
 			m.sessionMutex().Lock()
 			cur := m.session
 			m.sessionMutex().Unlock()
 			if cur != nil && cur.ID == ses.ID {
-				// #2917: restore under the session leaf lock (same protocol
-				// as the clear above).
+
 				cur.TunnelEventsMu.Lock()
 				cur.TunnelEvents = prevEvents
 				cur.TunnelEventsComplete = prevComplete
@@ -2032,7 +1902,6 @@ func (m *Model) currentTunnelActivity() string {
 	return strings.TrimSpace(m.statusActivity)
 }
 
-// truncateRunes truncates a string to maxRunes runes, appending suffix if truncated.
 func truncateRunes(s string, maxRunes int, suffix string) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
@@ -2049,12 +1918,8 @@ func toolCallDisplayName(toolName, rawArgs string) string {
 	return prettifyToolName(toolName)
 }
 
-// parseModeFromString parses a permission mode string, returning (mode, true) if valid.
 func parseModeFromString(s string) (permission.PermissionMode, bool) {
-	// two-mode refactor: normalize at the parse boundary (same as
-	// ParsePermissionMode) so no legacy enum value ever enters the TUI
-	// state from the tunnel path - legacy aliases map to the canonical
-	// mode and downstream comparisons stay consistent with switch_mode.
+
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "supervised", "auto":
 		return permission.SupervisedMode, true
@@ -2067,9 +1932,6 @@ func parseModeFromString(s string) (permission.PermissionMode, bool) {
 	}
 }
 
-// ─── Inbound: Approval & Ask User response handlers ───
-
-// handleTunnelApprovalResponse processes an approval decision from mobile.
 func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
@@ -2077,10 +1939,7 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 	if m.pendingApproval == nil {
 		return m, nil
 	}
-	// #1825 case 2: the old match required BOTH ids non-empty - an
-	// empty-id reply (stale/malformed) bypassed the match entirely and
-	// the decision below then applied to whatever approval happened to be
-	// pending. An empty id carries no identity: drop it.
+
 	if msg.id == "" {
 		debug.Log("tui", "tunnel approval response with empty id dropped (stale/malformed) - pending approval untouched")
 		return m, nil
@@ -2102,11 +1961,7 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 		decision = permission.Deny
 		cmd = m.handleApproval(decision)
 	default:
-		// #1825 case 2: an UNKNOWN decision value (typo / protocol
-		// evolution) used to fall into Deny - and with the empty-id pass
-		// above, a stale/malformed reply with no id then KILLED the
-		// current pending approval with zero diagnostics. Fail-closed is
-		// for explicit deny; unknown values are dropped loudly.
+
 		debug.Log("tui", "tunnel approval response with unknown decision %q (id=%q) dropped - pending approval untouched", msg.decision, msg.id)
 		return m, nil
 	}
@@ -2114,7 +1969,6 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 	return m, cmd
 }
 
-// handleTunnelAskUserResponse processes ask_user answers from mobile.
 func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
@@ -2123,11 +1977,7 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 	if qs == nil {
 		return m, nil
 	}
-	// #1825 case 2 (ask_user counterpart of #2092): the old match required
-	// BOTH ids non-empty - an empty-id reply (stale/malformed) bypassed the
-	// match entirely, and its empty status (normalized to "submitted" with
-	// zero answers) then killed whatever questionnaire happened to be
-	// pending, with zero diagnostics. An empty id carries no identity: drop it.
+
 	if msg.id == "" {
 		debug.Log("tui", "tunnel ask_user response with empty id dropped (stale/malformed) - pending questionnaire untouched")
 		return m, nil
@@ -2148,7 +1998,6 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 		}
 	}
 
-	// Send status update to mobile
 	m.pushTunnelCurrentStatus()
 
 	return m, nil

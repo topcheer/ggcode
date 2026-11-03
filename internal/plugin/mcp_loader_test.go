@@ -18,8 +18,7 @@ func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -34,7 +33,7 @@ func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 			return
 		}
 		if req.Method == mcp.MethodSubscriptionsListen {
-			// MCP 2026-07-28 probe: legacy mock — spec downgrade error.
+
 			w.Header().Set("Content-Type", "application/json")
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
@@ -108,14 +107,12 @@ func TestMCPManagerConnectAllTimesOutHungStdioServer(t *testing.T) {
 }
 
 func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
-	// Tool baselines (sa-119) persist under ConfigDir(); isolate HOME so
-	// Connect's baseline I/O never touches the real user home in tests.
+
 	t.Setenv("HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -136,8 +133,7 @@ func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
 		case "resources/list":
 			writeEcho(w, req.ID, `{"resources":[{"name":"docs"},{"uri":"file:///tmp/readme.md"}]}`)
 		case mcp.MethodSubscriptionsListen:
-			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
-			// client with the spec method-not-found error.
+
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
@@ -172,8 +168,7 @@ func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -196,8 +191,7 @@ func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
 		case "resources/list":
 			writeEcho(w, req.ID, `{"resources":[]}`)
 		case mcp.MethodSubscriptionsListen:
-			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
-			// client with the spec method-not-found error.
+
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
@@ -247,8 +241,7 @@ func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -273,8 +266,7 @@ func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 		case "resources/read":
 			writeEcho(w, req.ID, `{"contents":[{"uri":"docs","mimeType":"text/plain","text":"hello resource"}]}`)
 		case mcp.MethodSubscriptionsListen:
-			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
-			// client with the spec method-not-found error.
+
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
@@ -314,8 +306,7 @@ func TestMCPManagerInstallAddsServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -336,8 +327,7 @@ func TestMCPManagerInstallAddsServer(t *testing.T) {
 		case "resources/list":
 			writeEcho(w, req.ID, `{"resources":[]}`)
 		case mcp.MethodSubscriptionsListen:
-			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
-			// client with the spec method-not-found error.
+
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
@@ -369,8 +359,7 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
-			// Standalone notification-stream probe (client.go
-			// startHTTPNotificationStream); this mock does not offer it.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -391,8 +380,7 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 		case "resources/list":
 			writeEcho(w, req.ID, `{"resources":[]}`)
 		case mcp.MethodSubscriptionsListen:
-			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
-			// client with the spec method-not-found error.
+
 			echo, _ := json.Marshal(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
@@ -429,10 +417,6 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 	}
 }
 
-// writeEcho frames a JSON-RPC success payload echoing the request id. The
-// client assigns request ids dynamically (and since the subscriptions/listen
-// probe occupies one slot, hardcoded ids in mocks no longer line up), so
-// every mock response must echo the actual request id instead.
 func writeEcho(w http.ResponseWriter, id *mcp.ID, result string) {
 	resp, err := json.Marshal(struct {
 		JSONRPC string          `json:"jsonrpc"`

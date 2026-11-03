@@ -279,9 +279,7 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 4 {
 			return twitchBindResultMsg{err: errors.New(m.t("panel.twitch.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
-		// token WITH spaces was silently truncated to its first token,
-		// then persisted as a guaranteed-to-fail credential. Reject extras.
+
 		if len(fields) > 4 {
 			return twitchBindResultMsg{err: errors.New("extra fields after channels (values must not contain spaces): " + spec)}
 		}
@@ -298,13 +296,8 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 				"channels": channels,
 			},
 		}
-		// #1367 family batch 3 final sweep: config write moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		// #1767 case 1: the create path was fixed but the BIND path still
-		// enabled the adapter inside the Cmd goroutine (SetIMAdapterEnabled
-		// map write + save while the render loop ranges the same map).
-		// The enable decision now lives here, in apply, on the Update loop.
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -320,19 +313,13 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext token - without
-						// compensation a wrong token stays on disk forever and
-						// blocks the name on retry ("already exists"); the panel
-						// has no delete key. The rollback REMOVE is itself a map
-						// write, so it must route through configMutationMsg too
-						// (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -378,7 +365,7 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.twitch.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
+
 		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
 			return fmt.Errorf("enable %s: %w", name, err)
 		}
@@ -393,12 +380,7 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 }
 
 func (m *Model) ensureTwitchRuntime() error {
-	// #1767 case 2: route through the guarded brother - the imEnsure
-	// single-flight in ensureStartedCurrentWorkspaceIMRuntime collapses
-	// concurrent Cmd goroutines into one InitRuntime (duplicate instance
-	// registrations otherwise) and blocks waiters on the starter's REAL
-	// outcome (#1379-D/#1417-A). The unguarded ensureCurrentWorkspaceIMManager
-	// raced the config map and the imManager field against the Update loop.
+
 	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.twitch.error.config_unavailable"), "", true)
 }
 
@@ -445,8 +427,7 @@ func (m *Model) clearTwitchChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return twitchBindResultMsg{}
 		}
-		// #915: was UnbindAdapter with swallowed error + false 'cleared' -
-		// the #898/#905 family fix missed Twitch. Clear channel fields only.
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return twitchBindResultMsg{err: err}
 		}

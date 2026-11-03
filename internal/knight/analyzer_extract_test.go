@@ -9,7 +9,7 @@ func TestExtractSkillDocument(t *testing.T) {
 		name     string
 		input    string
 		wantOK   bool
-		wantHead string // first line of expected output
+		wantHead string
 	}{
 		{
 			name: "clean skill document",
@@ -78,7 +78,7 @@ autopilot mode was active.`,
 		{
 			name:   "only dashes not frontmatter",
 			input:  "---\njust some dashes\n---\nno skill here",
-			wantOK: true, // has --- so passes basic check
+			wantOK: true,
 		},
 	}
 

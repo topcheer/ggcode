@@ -1,24 +1,5 @@
 package mcp
 
-// Characterization tests for issue #562 (internal/mcp/client.go):
-//
-//	Bug B (HIGH, reproduced panic): sendWSNotification wrote to the gorilla
-//	         connection without holding c.mu — a concurrent request write
-//	         panics with "concurrent write to websocket connection".
-//	Bug C (HIGH): sampling/elicitation handlers ran inside the stdio read
-//	         loop while readMu was held; a slow user response stalled every
-//	         concurrent request until timeout/Abort.
-//	Bug A (MEDIUM): List*/ methods ignored nextCursor — paginated servers
-//	         only ever yielded page 1.
-//	Bug E (MEDIUM): ListTools returned an error when the server advertised
-//	         no tools capability, failing whole-server discovery.
-//	Bug F (TSan): Initialize's serverCaps/negotiatedVersion writes raced
-//	         the capability readers.
-//	Bug D: id:null JSON-RPC error responses were misattributed to whichever
-//	         waiter held the read loop, or silently dropped.
-//	Bug G: a failed initialized notification was reported as an initialize
-//	         failure even though the handshake had already succeeded.
-
 import (
 	"bufio"
 	"bytes"
@@ -37,13 +18,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- Bug B: WS notification concurrent write ---
-
-// TestIssue562B_WSNotificationConcurrentWriteNoPanic drives concurrent
-// sendNotification + sendRequest traffic over one WS connection while the
-// server echoes. Before the fix, gorilla's single-writer assertion panicked
-// the test process. The server delays responses so the notification write
-// overlaps an in-flight request write window.
 func TestIssue562B_WSNotificationConcurrentWriteNoPanic(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,8 +37,7 @@ func TestIssue562B_WSNotificationConcurrentWriteNoPanic(t *testing.T) {
 			}
 			switch req.Method {
 			case "tools/list":
-				// Delay the response so the caller's read loop stays parked
-				// while notifications stream in — maximizes write overlap.
+
 				time.Sleep(30 * time.Millisecond)
 				resp := map[string]any{
 					"jsonrpc": "2.0",
@@ -76,7 +49,7 @@ func TestIssue562B_WSNotificationConcurrentWriteNoPanic(t *testing.T) {
 					return
 				}
 			default:
-				// Notifications: no reply needed.
+
 			}
 		}
 	}))
@@ -96,8 +69,7 @@ func TestIssue562B_WSNotificationConcurrentWriteNoPanic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				// Interleave notifications (sendWSNotification) with requests
-				// (sendWSUnlocked) — the exact pair that raced before #562 B.
+
 				notif := Notification{JSONRPC: "2.0", Method: "notifications/initialized"}
 				if err := client.sendNotification(context.Background(), notif); err != nil {
 					errCh <- fmt.Errorf("notification: %w", err)
@@ -117,14 +89,6 @@ func TestIssue562B_WSNotificationConcurrentWriteNoPanic(t *testing.T) {
 	}
 }
 
-// --- Bug C: elicitation must not block the read loop ---
-
-// TestIssue562C_ElicitationDoesNotBlockReadLoop feeds a stdio stream where
-// an elicitation/create request (handler blocks on a gate we control) is
-// followed by a normal response for a concurrent request. Before the fix,
-// readResponse parked inside the elicitation handler while holding readMu,
-// so the trailing response could never be consumed until the 5-minute
-// handler timeout elapsed. With the fix, the read loop keeps consuming.
 func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 	elicitID := NewIntID(100)
 	respFor1 := Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: json.RawMessage(`{"ok":true}`)}
@@ -138,7 +102,6 @@ func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 		respFor1,
 	)
 
-	// Blocking handler: released only after the main test signals.
 	gate := make(chan struct{})
 	var handlerDone sync.WaitGroup
 	handlerDone.Add(1)
@@ -157,7 +120,6 @@ func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 		}
 	})
 
-	// Consume the stream via the read loop as a request waiter would.
 	waiter := make(chan *Response, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -169,8 +131,6 @@ func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 
-	// Release the elicitation handler and wait for it to finish on its
-	// worker goroutine.
 	close(gate)
 	handlerDoneDone := make(chan struct{})
 	go func() { handlerDone.Wait(); close(handlerDoneDone) }()
@@ -181,15 +141,10 @@ func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 	}
 }
 
-// --- Bug A: pagination ---
-
-// TestIssue562A_ListToolsFollowsNextCursor uses an HTTP MCP server that
-// returns two pages of tools via nextCursor. The client must return all 3
-// tools; before the fix only page 1's single tool came back.
 func TestIssue562A_ListToolsFollowsNextCursor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+
 		if r.URL.Path == "/.well-known/oauth-protected-resource" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -222,7 +177,7 @@ func TestIssue562A_ListToolsFollowsNextCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	// Advertise tools capability so the Bug E gate passes.
+
 	client.setNegotiatedState(latestMCPProtocolVersion, ServerCaps{Tools: &ToolsCapability{}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -236,12 +191,10 @@ func TestIssue562A_ListToolsFollowsNextCursor(t *testing.T) {
 	}
 }
 
-// TestIssue562A_ListPromptsAndResourcesPagination verifies the same
-// cursor-following for prompts/list and resources/list.
 func TestIssue562A_ListPromptsAndResourcesPagination(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+
 		if r.URL.Path == "/.well-known/oauth-protected-resource" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -300,14 +253,9 @@ func TestIssue562A_ListPromptsAndResourcesPagination(t *testing.T) {
 	}
 }
 
-// --- Bug E: tools capability gating ---
-
-// TestIssue562E_ListToolsEmptyWhenCapabilityMissing: a resources-only server
-// must get an empty list (not an error) from ListTools so that production
-// discoverCapabilities doesn't fail the whole server.
 func TestIssue562E_ListToolsEmptyWhenCapabilityMissing(t *testing.T) {
 	client := &Client{name: "resOnly"}
-	// serverCaps zero value → Tools == nil.
+
 	tools, err := client.ListTools(context.Background())
 	if err != nil {
 		t.Fatalf("ListTools must not error on tools-less servers: %v", err)
@@ -317,11 +265,6 @@ func TestIssue562E_ListToolsEmptyWhenCapabilityMissing(t *testing.T) {
 	}
 }
 
-// --- Bug F: caps state synchronization ---
-
-// TestIssue562F_CapsStateConcurrentAccess hammers capability readers while
-// a goroutine re-runs the negotiated-state update (reconnect re-entry).
-// Under -race, the pre-fix unsynchronized field writes are reported.
 func TestIssue562F_CapsStateConcurrentAccess(t *testing.T) {
 	client := &Client{name: "race562"}
 	stop := make(chan struct{})
@@ -357,7 +300,7 @@ func TestIssue562F_CapsStateConcurrentAccess(t *testing.T) {
 			}
 		}
 	}()
-	// Third goroutine exercises the same read path from sendRequest gating.
+
 	go func() {
 		defer wg.Done()
 		for {
@@ -374,11 +317,6 @@ func TestIssue562F_CapsStateConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// --- Bug D: id:null responses ---
-
-// TestIssue562D_NullIDErrorResponseNotMisattributed: an id:null error
-// response in the stream must be skipped (logged) and not returned as the
-// answer to the pending request, and must not deadlock the read loop.
 func TestIssue562D_NullIDErrorResponseNotMisattributed(t *testing.T) {
 	nullResp := Response{
 		JSONRPC: "2.0",
@@ -400,13 +338,11 @@ func TestIssue562D_NullIDErrorResponseNotMisattributed(t *testing.T) {
 	}
 }
 
-// TestIssue562D_NullIDResponseSkippedInWSLoop: same rule on the WS read
-// loop via deliverResponse's isNullID path.
 func TestIssue562D_NullIDResponseSkippedInWSLoop(t *testing.T) {
 	resp := &Response{ID: json.RawMessage(`null`), Error: &Error{Code: -32700, Message: "x"}}
-	// Must not panic and must not deliver anywhere.
+
 	c := &Client{name: "ws562d"}
-	c.deliverResponse(resp) // exercised for log-path coverage
+	c.deliverResponse(resp)
 
 	nullResp := Response{JSONRPC: "2.0", ID: json.RawMessage(` null `), Error: &Error{Code: -32700, Message: "Parse error"}}
 	if !isNullID(nullResp.ID) {
@@ -422,16 +358,10 @@ func TestIssue562D_NullIDResponseSkippedInWSLoop(t *testing.T) {
 	}
 }
 
-// --- Bug G: initialized notification failure downgraded ---
-
-// TestIssue562G_InitializeSurvivesInitializedNotifyFailure: the HTTP server
-// accepts initialize but returns 500 for notifications/initialized. The
-// handshake result must still be returned (failure downgraded to a debug
-// log), not surfaced as an initialize error.
 func TestIssue562G_InitializeSurvivesInitializedNotifyFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+
 		if r.URL.Path == "/.well-known/oauth-protected-resource" {
 			w.WriteHeader(http.StatusNotFound)
 			return

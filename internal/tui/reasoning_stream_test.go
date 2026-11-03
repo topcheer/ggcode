@@ -31,8 +31,7 @@ func TestBuildBatchedStreamMessagesOrdersReasoningThenTextThenTools(t *testing.T
 	if len(msgs) != 3 {
 		t.Fatalf("message count = %d, want 3", len(msgs))
 	}
-	// Reasoning must come first so the TUI expands the thinking block before
-	// the text chunk arrives and collapses it.
+
 	if _, ok := msgs[0].(agentReasoningMsg); !ok {
 		t.Fatalf("first message type = %T, want agentReasoningMsg", msgs[0])
 	}
@@ -67,17 +66,11 @@ func TestHandleAgentReasoningMsgUsesAccumulatedReasoningText(t *testing.T) {
 	}
 }
 
-// TestAgentTurnDoneMsgResetsStreamPrefix ensures that agentTurnDoneMsg
-// (fired at StreamEventDone = LLM turn boundary) resets streamPrefixWritten
-// so the next LLM turn creates a fresh assistant item. Each LLM turn gets
-// its own assistant bubble, while text within a single turn stays unified
-// even across tool calls.
 func TestAgentTurnDoneMsgResetsStreamPrefix(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 5
 
-	// Turn 1: reasoning arrives
 	next, _ := m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 5, Text: "turn 1 thinking"}, nil)
 	m = next
 	if !m.streamPrefixWritten {
@@ -85,7 +78,6 @@ func TestAgentTurnDoneMsgResetsStreamPrefix(t *testing.T) {
 	}
 	turn1ID := m.currentAssistantID()
 
-	// End of turn 1 (StreamEventDone)
 	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
@@ -93,7 +85,6 @@ func TestAgentTurnDoneMsgResetsStreamPrefix(t *testing.T) {
 		t.Fatal("streamPrefixWritten should be false after agentTurnDoneMsg (turn boundary)")
 	}
 
-	// Turn 2: new reasoning arrives — should create a NEW assistant item
 	next, _ = m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 5, Text: "turn 2 thinking"}, nil)
 	m = next
 	turn2ID := m.currentAssistantID()

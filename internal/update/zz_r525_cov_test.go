@@ -1,11 +1,5 @@
 package update
 
-// zz_r525_cov_test.go — r525/r519 update-track coverage lift.
-// Targets: readCachedCheck/writeCachedCheck (update.go:413/436),
-// checkWritable (:560), Prepare error paths (:115), tryGetVersion
-// (detect.go:225), scanNpmDir/scanNpmDirWindows (detect.go:193/208),
-// DetectDualScopeWindows non-windows branch (detect.go:31).
-
 import (
 	"context"
 	"encoding/json"
@@ -37,7 +31,7 @@ func TestReadCachedCheck(t *testing.T) {
 	})
 	t.Run("invalid json", func(t *testing.T) {
 		svc := newIsolatedService(t, "v1.0.0")
-		// writeCachedCheck creates the .ggcode dir; overwrite with garbage after.
+
 		if err := svc.writeCachedCheck(cachedCheck{CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0", CheckedAt: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
@@ -114,9 +108,7 @@ func TestWriteCachedCheckUnwritable(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("chmod 0o444 does not block same-user/root writes here")
 	}
-	// Directory-level chmod is unreliable under macOS /var/folders ACLs;
-	// make the cache FILE itself read-only instead — WriteFile's truncate
-	// open then fails deterministically for the same non-root user.
+
 	svc := newIsolatedService(t, "v1.0.0")
 	if err := svc.writeCachedCheck(cachedCheck{CurrentVersion: "v1.0.0"}); err != nil {
 		t.Fatal(err)
@@ -133,7 +125,7 @@ func TestWriteCachedCheckUnwritable(t *testing.T) {
 func TestCheckWritableHappy(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// checkWritable probes Dir(ExecPath); the directory must exist first.
+
 	if err := os.MkdirAll(filepath.Join(tmp, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +217,11 @@ func TestScanNpmDirFindsVersionedBinaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// empty version dir: check callback still invoked (existence decided by caller)
+
 	if err := os.MkdirAll(filepath.Join(npmDir, "v2.0.0"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// non-dir entry must be skipped
+
 	if err := os.WriteFile(filepath.Join(npmDir, "stray-file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +233,7 @@ func TestScanNpmDirFindsVersionedBinaries(t *testing.T) {
 			t.Errorf("scanNpmDir callback source=%q priv=%v, want npm/false", source, priv)
 		}
 	})
-	if len(paths) != 3 { // v1.0.0, v1.1.0, v2.0.0 (no binary); stray-file skipped
+	if len(paths) != 3 {
 		t.Fatalf("scanNpmDir reported %d paths (%v), want 3", len(paths), paths)
 	}
 }
@@ -284,9 +276,6 @@ func TestDetectDualScopeWindowsNonWindowsNil(t *testing.T) {
 	}
 }
 
-// latestRedirectServer serves the ResolveReleaseVersion redirect pattern
-// (update_test.go:60-71); asset GETs return 404 — sufficient for the
-// Prepare error paths tested below.
 func latestRedirectServer(latest string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/topcheer/ggcode/releases/latest" {
@@ -294,7 +283,7 @@ func latestRedirectServer(latest string) *httptest.Server {
 			return
 		}
 		if r.URL.Path == "/topcheer/ggcode/releases/tag/"+latest {
-			_, _ = w.Write([]byte("ok")) // final hop (update_test.go:69-71 pattern)
+			_, _ = w.Write([]byte("ok"))
 			return
 		}
 		http.NotFound(w, r)
@@ -302,7 +291,7 @@ func latestRedirectServer(latest string) *httptest.Server {
 }
 
 func TestPrepareAlreadyUpToDate(t *testing.T) {
-	server := latestRedirectServer("v1.0.0") // same as current
+	server := latestRedirectServer("v1.0.0")
 	defer server.Close()
 	svc := newIsolatedService(t, "v1.0.0")
 	svc.HTTPClient = rewriteClient(server.URL, server.Client())

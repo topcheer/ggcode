@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4769 defect 3 (source-pin, per the #4524 precedent): removeFromIndex's
-// final saveIndex failure path must mark the index dirty like updateIndex,
-// or the self-healing reconciliation never fires and the deleted session
-// lingers in the on-disk index forever.
 func TestIssue4769_RemoveFromIndexFailureMarksDirty(t *testing.T) {
 	b, err := os.ReadFile("store.go")
 	if err != nil {

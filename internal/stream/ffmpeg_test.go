@@ -8,9 +8,8 @@ import (
 func TestCheckFFmpeg(t *testing.T) {
 	check := CheckFFmpeg()
 
-	// On this machine, ffmpeg should be available (installed via brew)
 	if !check.Available {
-		// Check that error message contains install hints
+
 		if !strings.Contains(check.Error, "brew install") {
 			t.Errorf("error should contain install hints, got: %s", check.Error)
 		}

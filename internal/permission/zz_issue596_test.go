@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// TestIssue596_P1_EnvPrefixSecurity verifies that only valid env references
-// ($VAR or ${VAR}) are stripped, not $0, $@, $(), ${IFS}, etc.
 func TestIssue596_P1_EnvPrefixSecurity(t *testing.T) {
 	rs := NewCommandRuleSetFromLists([]string{"make*"}, nil)
 
@@ -14,7 +12,7 @@ func TestIssue596_P1_EnvPrefixSecurity(t *testing.T) {
 		command  string
 		expected Decision
 	}{
-		// Valid env prefixes should be stripped and match allow rule
+
 		{"valid_simple_env", "$FOO make build", Allow},
 		{"valid_braced_env", "${BAR} make build", Allow},
 		{"valid_env_underscore", "$FOO_BAR make build", Allow},
@@ -22,7 +20,6 @@ func TestIssue596_P1_EnvPrefixSecurity(t *testing.T) {
 		{"valid_braced_env_number", "${BAR2} make build", Allow},
 		{"env_assignment_and_var", "FOO=bar $BAZ make build", Allow},
 
-		// Invalid $ prefixes should NOT be stripped and NOT match
 		{"dollar_zero", "$0 make build", Ask},
 		{"dollar_at", "$@ make build", Ask},
 		{"dollar_hash", "$# make build", Ask},
@@ -39,7 +36,6 @@ func TestIssue596_P1_EnvPrefixSecurity(t *testing.T) {
 		{"arith_expansion", "$((1+1)) make build", Ask},
 		{"single_dollar", "$ make build", Ask},
 
-		// Direct command without env prefix should match
 		{"no_env_prefix", "make build", Allow},
 	}
 
@@ -57,8 +53,6 @@ func TestIssue596_P1_EnvPrefixSecurity(t *testing.T) {
 	}
 }
 
-// TestIssue596_P3_WildcardWordBoundary verifies that wildcard patterns
-// require word boundaries after the literal prefix.
 func TestIssue596_P3_WildcardWordBoundary(t *testing.T) {
 	rs := NewCommandRuleSetFromLists([]string{"make*", "go build*"}, nil)
 
@@ -67,7 +61,7 @@ func TestIssue596_P3_WildcardWordBoundary(t *testing.T) {
 		command  string
 		expected Decision
 	}{
-		// Valid matches with word boundary
+
 		{"make_exact", "make", Allow},
 		{"make_with_space", "make build", Allow},
 		{"make_with_tab", "make\tbuild", Allow},
@@ -93,12 +87,11 @@ func TestIssue596_P3_WildcardWordBoundary(t *testing.T) {
 	}
 }
 
-// TestIssue596_P1_EnvStrippingEdgeCases tests edge cases in env var stripping.
 func TestIssue596_P1_EnvStrippingEdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected string // Expected stripped command
+		expected string
 	}{
 		{"empty", "", ""},
 		{"only_space", "   ", ""},
@@ -125,27 +118,22 @@ func TestIssue596_P1_EnvStrippingEdgeCases(t *testing.T) {
 	}
 }
 
-// TestIssue596_P2_MCPReadOnlyInPlanMode verifies that MCP tools are NOT
-// automatically read-only in plan mode. Write operations require Ask.
 func TestIssue596_P2_MCPReadOnlyInPlanMode(t *testing.T) {
 	tests := []struct {
 		name     string
 		toolName string
-		isRO     bool // expected IsReadOnlyTool result in plan mode
+		isRO     bool
 	}{
-		// Write operations should NOT be read-only (require Ask)
+
 		{"drop_table", "mcp__db__drop_table", false},
 		{"apply_patch", "mcp__patch__apply_patch", false},
 		{"send_message", "mcp__telegram__send_message", false},
 		{"delete", "mcp__file__delete", false},
 		{"create", "mcp__file__create", false},
 
-		// Whitelisted read-only tools ARE read-only (auto-allow in plan mode)
 		{"web_reader", "mcp__web_reader__webReader", true},
 		{"web_search_prime", "mcp__web-search-prime__web_search_prime", true},
 
-		// Non-whitelisted read-sounding tools should NOT be auto-allowed
-		// (conservative: Ask unless explicitly whitelisted)
 		{"get_data", "mcp__db__get_data", false},
 		{"read_file", "mcp__file__read_file", false},
 	}

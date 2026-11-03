@@ -70,7 +70,6 @@ Examples:
 				return nil
 			}
 
-			// Parse flags manually (since DisableFlagParsing is true)
 			positionals, envVars, pluginType, err := parsePluginInstallArgs(args)
 			if err != nil {
 				return err
@@ -86,7 +85,6 @@ Examples:
 			name := positionals[0]
 			command := positionals[1:]
 
-			// Validate command exists for gRPC plugins
 			if pluginType == "grpc" {
 				if _, err := exec.LookPath(command[0]); err != nil {
 					if _, statErr := os.Stat(command[0]); statErr != nil {
@@ -95,7 +93,6 @@ Examples:
 				}
 			}
 
-			// Build env map
 			envMap := make(map[string]string)
 			for _, e := range envVars {
 				parts := strings.SplitN(e, "=", 2)
@@ -114,7 +111,6 @@ Examples:
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			// Check if replacing
 			existing := cfg.FindPlugin(name)
 			action := "Installed"
 			if existing != nil {
@@ -122,7 +118,7 @@ Examples:
 			}
 
 			if pluginType == "command" {
-				cfg.AddCommandPlugin(name, nil) // command plugins need sub-commands defined in yaml
+				cfg.AddCommandPlugin(name, nil)
 			} else {
 				cfg.AddGRPCPlugin(name, command, envMap)
 			}
@@ -253,7 +249,6 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Connecting to plugin %q...\n", name)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  command: %s\n", strings.Join(p.Command, " "))
 
-			// Check command exists
 			binary := p.Command[0]
 			if _, err := exec.LookPath(binary); err != nil {
 				if _, statErr := os.Stat(binary); statErr != nil {
@@ -261,8 +256,6 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 				}
 			}
 
-			// Start the plugin process with a pipe on stdout to read the handshake line.
-			// The plugin blocks forever (it's a server), so we read the first line then kill it.
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
 
@@ -282,7 +275,6 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("starting plugin: %w", err)
 			}
 
-			// Read the first line from stdout — this is the go-plugin handshake line.
 			reader := bufio.NewReader(stdout)
 			handshakeLine, err := reader.ReadString('\n')
 			if err != nil {
@@ -291,11 +283,9 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 			}
 			handshakeLine = strings.TrimSpace(handshakeLine)
 
-			// Kill the plugin process — we only needed the handshake
 			_ = testCmd.Process.Kill()
 			_, _ = testCmd.Process.Wait()
 
-			// Validate handshake line format: core_version|app_version|network|address|protocol|cert
 			parts := strings.Split(handshakeLine, "|")
 			if len(parts) < 5 {
 				return fmt.Errorf("invalid handshake line (expected 5+ fields): %s", handshakeLine)
@@ -321,16 +311,6 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 	}
 }
 
-// validatePluginInstallShape normalizes and validates the --type flag and
-// the positional shape for that type (#2873). It returns the normalized
-// plugin type ("grpc" or "command") or an error:
-//   - --type accepts ONLY grpc|command (case-insensitive); any other value
-//     used to silently fall through to the grpc branch and misconfigure the
-//     plugin entry as type: grpc.
-//   - --type command takes only <name>: a positional command (the old help
-//     example "-- ./deploy.sh") was silently DROPPED by AddCommandPlugin
-//     (which stores nil commands) while the success output still printed
-//     "command: ./deploy.sh" as if it had been installed.
 func validatePluginInstallShape(pluginType string, positionals []string) (string, error) {
 	t := strings.ToLower(strings.TrimSpace(pluginType))
 	if t == "" {
@@ -347,8 +327,6 @@ func validatePluginInstallShape(pluginType string, positionals []string) (string
 	return t, nil
 }
 
-// parsePluginInstallArgs separates positional args from flags.
-// Returns: positionals, envVars, pluginType, error
 func parsePluginInstallArgs(args []string) ([]string, []string, string, error) {
 	var positionals []string
 	var envVars []string

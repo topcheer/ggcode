@@ -1,12 +1,5 @@
 package tui
 
-// #2796: every IM binding panel must take its adapter key list from the
-// IMSnapshot deep copy, never len(m.config.IM.Adapters). The live map read
-// bypasses imAdaptersMu; overlapping with any locked writer (enable/disable
-// toggle, AddIMAdapter) is an unrecoverable "concurrent map read and map
-// write" fatal. #2337 fixed wecom_panel.go only; this generalizes the guard
-// to all IM panel files so the family cannot regress one file at a time.
-
 import (
 	"os"
 	"strings"
@@ -28,7 +21,7 @@ var issue2796IMPanelFiles = []string{
 	"twitch_panel.go",
 	"wechat_panel.go",
 	"whatsapp_panel.go",
-	"wecom_panel.go", // fixed in #2337; must stay fixed
+	"wecom_panel.go",
 }
 
 func TestIssue2796AllIMPanelsUseSnapshotLen(t *testing.T) {

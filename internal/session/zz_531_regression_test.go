@@ -11,14 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// --- Bug A (#531): LoadWithOptions must release s.mu ---
-
-// TestLoadWithOptions_ReleasesStoreLock verifies LoadWithOptions does not
-// leave s.mu locked forever. Before the fix it took s.mu.Lock() but never
-// unlocked (the deferred func only restored fullLoad), so any later call
-// taking the same lock — Load, SetFullLoad, Save — blocked forever once the
-// API was wired up. The test detects a stuck lock by timing out a follow-up
-// SetFullLoad call that acquires the same mutex.
 func TestLoadWithOptions_ReleasesStoreLock(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -30,7 +22,6 @@ func TestLoadWithOptions_ReleasesStoreLock(t *testing.T) {
 	id := "lock-release-session"
 	path := filepath.Join(dir, id+".jsonl")
 
-	// Minimal session file: meta + one user message.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -52,41 +43,28 @@ func TestLoadWithOptions_ReleasesStoreLock(t *testing.T) {
 	}
 	f.Close()
 
-	// The call under test. Before the fix this returns normally while holding
-	// s.mu forever.
 	if _, err := store.LoadWithOptions(id, true); err != nil {
 		t.Fatalf("LoadWithOptions: %v", err)
 	}
 
-	// A subsequent lock-taking call must complete. Deadlock => timeout.
 	done := make(chan struct{})
 	go func() {
-		store.SetFullLoad(false) // takes and releases s.mu
+		store.SetFullLoad(false)
 		store.SetFullLoad(true)
 		close(done)
 	}()
 	select {
 	case <-done:
-		// Lock was released — good.
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("LoadWithOptions left the store mutex locked (#531 Bug A)")
 	}
 
-	// And Load must still work on the same store afterwards.
 	if _, err := store.Load(id); err != nil {
 		t.Fatalf("Load after LoadWithOptions: %v", err)
 	}
 }
 
-// --- Bug C (#531): EnsureMeta must not truncate a concurrently created file ---
-
-// TestEnsureMeta_DoesNotTruncateExistingFile simulates the cross-process race
-// at the file level: another ggcode process (CLI or desktop sharing the
-// sessions directory) has already created the session file and appended a
-// message by the time this process's EnsureMeta reaches its open() call
-// (the old Stat raced past before the file existed). EnsureMeta must leave
-// the file untouched — the old os.Create (O_TRUNC) wiped it to a single meta
-// line; the fixed O_CREATE|O_EXCL open loses the race and returns cleanly.
 func TestEnsureMeta_DoesNotTruncateExistingFile(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -94,12 +72,10 @@ func TestEnsureMeta_DoesNotTruncateExistingFile(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	storeA, _ := NewJSONLStore(dir) // process A: EnsureMeta
+	storeA, _ := NewJSONLStore(dir)
 	id := "toctou-session"
 	path := filepath.Join(dir, id+".jsonl")
 
-	// Simulate process B winning the race: it created the file (its own meta
-	// line) and appended a user message before A's open().
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +106,6 @@ func TestEnsureMeta_DoesNotTruncateExistingFile(t *testing.T) {
 		Content: []provider.ContentBlock{{Type: "text", Text: "user text"}},
 	}}
 
-	// Process A: file already exists => must be a no-op, never a truncation.
 	if err := storeA.EnsureMeta(ses); err != nil {
 		t.Fatalf("EnsureMeta on existing file: %v", err)
 	}
@@ -157,11 +132,6 @@ func TestEnsureMeta_DoesNotTruncateExistingFile(t *testing.T) {
 	}
 }
 
-// TestEnsureMeta_ConcurrentStoresNoTruncation stresses the same race with two
-// store instances over one shared directory (stand-ins for two processes,
-// since s.mu only serializes within one process). One side repeatedly runs
-// EnsureMeta; the other appends messages. No append may ever be lost to a
-// truncate.
 func TestEnsureMeta_ConcurrentStoresNoTruncation(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -169,8 +139,8 @@ func TestEnsureMeta_ConcurrentStoresNoTruncation(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	storeA, _ := NewJSONLStore(dir) // process A: EnsureMeta
-	storeB, _ := NewJSONLStore(dir) // process B: appends (own s.mu — simulates another process)
+	storeA, _ := NewJSONLStore(dir)
+	storeB, _ := NewJSONLStore(dir)
 	id := "concurrent-toctou"
 
 	ses := NewSession("test", "test", "test")
@@ -181,7 +151,6 @@ func TestEnsureMeta_ConcurrentStoresNoTruncation(t *testing.T) {
 		Content: []provider.ContentBlock{{Type: "text", Text: "user text"}},
 	}}
 
-	// Bootstrap the file so store B has something to append to.
 	if err := storeA.EnsureMeta(ses); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +174,7 @@ func TestEnsureMeta_ConcurrentStoresNoTruncation(t *testing.T) {
 		if err := storeB.AppendMessageToDisk(bSes, *msg); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
-		// Interleave EnsureMeta from "process A" — must never truncate.
+
 		if err := storeA.EnsureMeta(ses); err != nil {
 			t.Fatalf("EnsureMeta %d: %v", i, err)
 		}
@@ -223,13 +192,6 @@ func TestEnsureMeta_ConcurrentStoresNoTruncation(t *testing.T) {
 	}
 }
 
-// --- Bug D (#531): 24h window boundary off-by-one ---
-
-// writeWindowBoundaryJSONL writes a session where the message immediately
-// preceding the first in-window message ends exactly at the cutoff byte
-// offset (its line-end offset equals msgCutoff, the line-start offset of the
-// first retained message), and includes a message at exactly the 24h
-// boundary timestamp that must be retained.
 func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID string) {
 	t.Helper()
 	path := filepath.Join(dir, id+".jsonl")
@@ -241,10 +203,9 @@ func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID str
 	enc := json.NewEncoder(f)
 
 	now := time.Now()
-	last := now.Add(-1 * time.Hour)          // newest message
-	cutoff := last.Add(-RecentMessageWindow) // exactly 24h before newest
+	last := now.Add(-1 * time.Hour)
+	cutoff := last.Add(-RecentMessageWindow)
 
-	// Old messages outside the window (bulk to cross recentMessageThreshold).
 	for i := 0; i < recentMessageThreshold-2; i++ {
 		rec := jsonlRecord{
 			Type: "message",
@@ -259,10 +220,7 @@ func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID str
 			t.Fatal(err)
 		}
 	}
-	// The boundary victim: strictly outside the window, directly adjacent to
-	// the first in-window message, so its line-END offset equals msgCutoff.
-	// Before the fix (byteOffset = line-end < msgCutoff == false) it leaked
-	// into the rendering list.
+
 	victim := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -275,7 +233,7 @@ func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID str
 	if err := enc.Encode(victim); err != nil {
 		t.Fatal(err)
 	}
-	// Message at EXACTLY the 24h boundary: cutoff semantics keep it.
+
 	exact := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -288,7 +246,7 @@ func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID str
 	if err := enc.Encode(exact); err != nil {
 		t.Fatal(err)
 	}
-	// Newest message defining the window.
+
 	final := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -304,11 +262,6 @@ func writeWindowBoundaryJSONL(t *testing.T, dir, id string) (exactBoundaryID str
 	return "exact-24h"
 }
 
-// TestWindowedLoad_BoundaryOffsets is the regression test for #531 Bug D:
-// msgCutoff is the line-start offset of the first in-window message, so the
-// comparison must use line-start offsets. Comparing line-end offsets kept
-// one expired message (the one whose end offset equals msgCutoff) in the
-// rendering list. A message exactly 24h before the last must still load.
 func TestWindowedLoad_BoundaryOffsets(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ggcode_test_*")
 	if err != nil {
@@ -325,8 +278,6 @@ func TestWindowedLoad_BoundaryOffsets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Expected: exactly-24h message + final message. The victim whose
-	// line-end offset equals msgCutoff must be excluded.
 	if len(loaded.Messages) != 2 {
 		ids := make([]string, 0, len(loaded.Messages))
 		for _, m := range loaded.Messages {
@@ -343,7 +294,6 @@ func TestWindowedLoad_BoundaryOffsets(t *testing.T) {
 		}
 	}
 
-	// --full must still load everything.
 	full, err := store.LoadWithOptions(id, true)
 	if err != nil {
 		t.Fatal(err)

@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Review round 1 (techwriter222, medium): explicit per-tool ask rules must
-// stay honored after the two-mode refactor made the default Allow.
 func TestExplicitAskRuleStillAsksInEveryMode(t *testing.T) {
 	for _, mode := range []PermissionMode{SupervisedMode, BypassMode, PlanMode} {
 		rules := map[string]Decision{"run_command": Ask}

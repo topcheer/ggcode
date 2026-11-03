@@ -21,7 +21,6 @@ func TestCollector_DeliversEvents(t *testing.T) {
 	c.Emit(MetricEvent{Type: "llm", TTFT: 100 * time.Millisecond})
 	c.Emit(MetricEvent{Type: "tool", ToolName: "read_file", ToolSuccess: true})
 
-	// Give the goroutine time to drain
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -40,23 +39,21 @@ func TestCollector_DeliversEvents(t *testing.T) {
 func TestCollector_DropsWhenFull(t *testing.T) {
 	block := make(chan struct{})
 	c := NewCollector(context.Background(), 2, func(m MetricEvent) {
-		<-block // block to fill the channel
+		<-block
 	})
 
-	// Fill the buffer
 	c.Emit(MetricEvent{Type: "llm"})
 	c.Emit(MetricEvent{Type: "llm"})
 
-	// This should not block
 	done := make(chan struct{})
 	go func() {
-		c.Emit(MetricEvent{Type: "tool"}) // should be dropped
+		c.Emit(MetricEvent{Type: "tool"})
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		// good — Emit didn't block
+
 	case <-time.After(time.Second):
 		t.Fatal("Emit blocked when channel was full")
 	}

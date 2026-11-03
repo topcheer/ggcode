@@ -45,26 +45,23 @@ func TestSnippetName(t *testing.T) {
 	}
 }
 
-// End-to-end distiller check against a real snippet store in a temp dir:
-// save/cap/blacklist/idempotency.
 func TestDistillCommands(t *testing.T) {
 	dir := t.TempDir()
 	st := &tool.CmdSnippetTool{WorkingDir: dir}
 
 	cmds := []string{
 		"go test -run TestFoo ./internal/bar/",
-		"git push --force origin main",           // destructive: skipped
-		"curl -s https://x.io -H 'token=secret'", // secret: skipped
-		"ls",                                     // fragment: skipped
+		"git push --force origin main",
+		"curl -s https://x.io -H 'token=secret'",
+		"ls",
 		"make verify-ci GOFLAGS=-p=1",
 		"go build -tags goolm ./...",
-		"gofmt -w internal/baz/", // beyond the 3-save cap
+		"gofmt -w internal/baz/",
 	}
 	if got := distillCommands(st, cmds); got != 3 {
 		t.Fatalf("distillCommands saved = %d, want 3 (cap)", got)
 	}
 
-	// Verify store contents via the tool's list action.
 	res, err := st.Execute(t.Context(), mustJSON(t, map[string]any{"action": "list"}))
 	if err != nil || res.IsError {
 		t.Fatalf("list failed: err=%v isErr=%v", err, res.IsError)
@@ -78,8 +75,6 @@ func TestDistillCommands(t *testing.T) {
 		t.Errorf("store missing verified command:\n%s", res.Content)
 	}
 
-	// Re-running the same commands must not duplicate (SaveAutoSnippet
-	// idempotency on command text).
 	if got := distillCommands(st, cmds); got != 3 {
 		t.Fatalf("second distill saved = %d, want 3 (refresh)", got)
 	}

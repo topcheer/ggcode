@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// countingAgent tracks how many times RunStream is called and what prompts it receives.
 type countingAgent struct {
 	mu      sync.Mutex
 	calls   int
@@ -45,13 +44,12 @@ func (a *countingAgent) getPrompts() []string {
 	return out
 }
 
-// newTestManager creates a minimal Manager suitable for idle runner unit tests.
 func newTestManager() *Manager {
 	return NewManager(config.SwarmConfig{
 		MaxTeammatesPerTeam: 10,
 		InboxSize:           16,
 		TeammateTimeout:     5 * time.Second,
-		PollInterval:        50 * time.Millisecond, // fast polling for tests
+		PollInterval:        50 * time.Millisecond,
 	}, nil, nil, nil)
 }
 
@@ -86,21 +84,18 @@ func TestIdleRunner_ReceivesTask(t *testing.T) {
 	mgr := newTestManager()
 	go runTeammateLoop(ctx, tm, team, agent, mgr, onEvent, 30*time.Minute)
 
-	// Send a task
 	tm.Inbox <- MailMessage{
 		From:    "leader",
 		Content: "Research the API",
 		Type:    "task",
 	}
 
-	// Wait for agent to be called
 	time.Sleep(200 * time.Millisecond)
 
 	if agent.getCalls() != 1 {
 		t.Errorf("expected 1 agent call, got %d", agent.getCalls())
 	}
 
-	// Verify events
 	mu.Lock()
 	defer mu.Unlock()
 	hasWorking := false
@@ -143,7 +138,6 @@ func TestIdleRunner_MultipleTasks(t *testing.T) {
 	mgr := newTestManager()
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Send 3 tasks sequentially
 	for i := 0; i < 3; i++ {
 		tm.Inbox <- MailMessage{
 			Content: "task-" + string(rune('A'+i)),
@@ -186,7 +180,7 @@ func TestIdleRunner_ContextCancel(t *testing.T) {
 
 	select {
 	case <-done:
-		// expected: loop exited
+
 	case <-time.After(1 * time.Second):
 		t.Error("idle loop should exit on context cancel")
 	}
@@ -221,7 +215,7 @@ func TestIdleRunner_ShutdownMessage(t *testing.T) {
 
 	select {
 	case <-done:
-		// expected
+
 	case <-time.After(1 * time.Second):
 		t.Error("idle loop should exit on shutdown message")
 	}
@@ -263,20 +257,17 @@ func TestIdleRunner_NilAgent(t *testing.T) {
 		close(done)
 	}()
 
-	// Task message with nil agent should emit error event but keep loop alive
 	tm.Inbox <- MailMessage{Content: "do something", Type: "task"}
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Loop should still be running (not exited)
 	select {
 	case <-done:
 		t.Error("idle loop should NOT exit when agent is nil - it should continue")
 	default:
-		// expected
+
 	}
 
-	// Should have emitted an error event
 	evMu.Lock()
 	evCount := len(events)
 	firstType := ""
@@ -288,12 +279,11 @@ func TestIdleRunner_NilAgent(t *testing.T) {
 		t.Fatalf("expected teammate_error event, got %v", events)
 	}
 
-	// Now shut it down properly
 	tm.Inbox <- MailMessage{Type: "shutdown"}
 
 	select {
 	case <-done:
-		// expected
+
 	case <-time.After(1 * time.Second):
 		t.Error("idle loop should exit on shutdown message")
 	}
@@ -327,7 +317,7 @@ func TestIdleRunner_InboxClose(t *testing.T) {
 
 	select {
 	case <-done:
-		// expected
+
 	case <-time.After(1 * time.Second):
 		t.Error("idle loop should exit when inbox is closed")
 	}
@@ -355,8 +345,6 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-// --- Task board polling tests ---
-
 func TestIdleRunner_PollsTaskBoardAndClaims(t *testing.T) {
 	agent := &countingAgent{}
 	tm := &Teammate{
@@ -380,17 +368,15 @@ func TestIdleRunner_PollsTaskBoardAndClaims(t *testing.T) {
 	tm.ctx = ctx
 
 	mgr := newTestManager()
-	// Register the team in the manager so GetTaskManager works.
+
 	mgr.mu.Lock()
 	mgr.teams["team-1"] = team
 	mgr.mu.Unlock()
 
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Create a pending task on the board (not sending any inbox message).
 	taskMgr.Create("Write tests", "Add unit tests for the module", "", nil)
 
-	// Wait for the poller to pick it up.
 	time.Sleep(300 * time.Millisecond)
 
 	calls := agent.getCalls()
@@ -398,7 +384,6 @@ func TestIdleRunner_PollsTaskBoardAndClaims(t *testing.T) {
 		t.Errorf("expected agent to be called 1 time via task board polling, got %d", calls)
 	}
 
-	// Verify the task was claimed and completed.
 	tasks := taskMgr.List()
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
@@ -410,7 +395,6 @@ func TestIdleRunner_PollsTaskBoardAndClaims(t *testing.T) {
 		t.Errorf("task owner = %q, want tm-1", tasks[0].Owner)
 	}
 
-	// Verify the prompt contains the task subject.
 	prompts := agent.getPrompts()
 	if len(prompts) == 0 {
 		t.Fatal("expected at least one prompt")
@@ -449,12 +433,10 @@ func TestIdleRunner_MultiplePendingTasks(t *testing.T) {
 
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Create 3 tasks.
 	taskMgr.Create("Task A", "First", "", nil)
 	taskMgr.Create("Task B", "Second", "", nil)
 	taskMgr.Create("Task C", "Third", "", nil)
 
-	// Wait for all tasks to be processed (one per poll cycle).
 	time.Sleep(500 * time.Millisecond)
 
 	calls := agent.getCalls()
@@ -462,7 +444,6 @@ func TestIdleRunner_MultiplePendingTasks(t *testing.T) {
 		t.Errorf("expected 3 agent calls, got %d", calls)
 	}
 
-	// All tasks should be completed.
 	for _, tk := range taskMgr.List() {
 		if tk.Status != task.StatusCompleted {
 			t.Errorf("task %q status = %s, want completed", tk.Subject, tk.Status)
@@ -471,7 +452,7 @@ func TestIdleRunner_MultiplePendingTasks(t *testing.T) {
 }
 
 func TestIdleRunner_NoPollWhenWorking(t *testing.T) {
-	// Create a slow agent that blocks during execution.
+
 	slowAgent := &blockingAgent{unblock: make(chan struct{})}
 	tm := &Teammate{
 		ID:     "tm-1",
@@ -500,7 +481,6 @@ func TestIdleRunner_NoPollWhenWorking(t *testing.T) {
 
 	go runTeammateLoop(ctx, tm, team, slowAgent, mgr, nil, 30*time.Minute)
 
-	// Send an inbox task to make the teammate working.
 	tm.Inbox <- MailMessage{Content: "inbox task", Type: "task"}
 	time.Sleep(50 * time.Millisecond)
 
@@ -508,24 +488,20 @@ func TestIdleRunner_NoPollWhenWorking(t *testing.T) {
 		t.Fatal("expected teammate to be working")
 	}
 
-	// Create pending tasks while working — they should NOT be claimed yet.
 	taskMgr.Create("Pending A", "", "", nil)
 	taskMgr.Create("Pending B", "", "", nil)
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Still working, tasks still pending.
 	for _, tk := range taskMgr.List() {
 		if tk.Status != task.StatusPending {
 			t.Errorf("task %q should still be pending while teammate is working, got %s", tk.Subject, tk.Status)
 		}
 	}
 
-	// Now unblock the agent.
 	close(slowAgent.unblock)
 	time.Sleep(300 * time.Millisecond)
 
-	// After returning to idle, the poller should pick up the pending tasks.
 	picked := false
 	for _, tk := range taskMgr.List() {
 		if tk.Status == task.StatusCompleted {
@@ -537,7 +513,6 @@ func TestIdleRunner_NoPollWhenWorking(t *testing.T) {
 	}
 }
 
-// blockingAgent blocks RunStream until unblock channel is closed.
 type blockingAgent struct {
 	unblock chan struct{}
 }
@@ -621,18 +596,14 @@ func TestIdleRunner_SkipsAssignedToOtherTeammate(t *testing.T) {
 
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Create a task assigned to a DIFFERENT teammate.
 	taskMgr.Create("Assigned task", "For someone else", "", map[string]string{"assignee": "tm-2"})
 
-	// Wait for a few poll cycles.
 	time.Sleep(300 * time.Millisecond)
 
-	// The agent should NOT have been called — task is assigned to tm-2.
 	if agent.getCalls() != 0 {
 		t.Errorf("expected 0 agent calls (task assigned to other teammate), got %d", agent.getCalls())
 	}
 
-	// Task should still be pending.
 	tasks := taskMgr.List()
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
@@ -671,12 +642,10 @@ func TestIdleRunner_ClaimsUnassignedTask(t *testing.T) {
 
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Create a task with NO assignee (up for grabs).
 	taskMgr.Create("Open task", "Anyone can do this", "", nil)
 
 	time.Sleep(300 * time.Millisecond)
 
-	// Should have been claimed and completed by tm-1.
 	if agent.getCalls() != 1 {
 		t.Errorf("expected 1 agent call, got %d", agent.getCalls())
 	}
@@ -687,7 +656,7 @@ func TestIdleRunner_ClaimsUnassignedTask(t *testing.T) {
 }
 
 func TestIdleRunner_SkipsTaskWithUnmetDependency(t *testing.T) {
-	// Use a blocking agent so we can observe task ordering.
+
 	agent := &blockingAgent{}
 	agent.unblock = make(chan struct{})
 	defer close(agent.unblock)
@@ -719,14 +688,12 @@ func TestIdleRunner_SkipsTaskWithUnmetDependency(t *testing.T) {
 
 	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
 
-	// Create two tasks: A (no dependency) and B (blocked by A).
 	taskA := taskMgr.Create("Task A", "Do first", "", nil)
 	taskB := taskMgr.Create("Task B", "Do after A", "", nil)
 	taskMgr.Update(taskB.ID, task.UpdateOptions{AddBlockedBy: []string{taskA.ID}})
 
 	time.Sleep(300 * time.Millisecond)
 
-	// Task A should be claimed (agent is blocked on it); Task B should be pending.
 	taskAGot, _ := taskMgr.Get(taskA.ID)
 	if taskAGot.Status != task.StatusInProgress {
 		t.Errorf("task A should be in_progress, got %s", taskAGot.Status)
@@ -738,9 +705,6 @@ func TestIdleRunner_SkipsTaskWithUnmetDependency(t *testing.T) {
 	}
 }
 
-// panicAgent satisfies AgentRunner and panics inside the stream callback -
-// the exact executeTask flow that trips the runTeammateLoop recover (#1688
-// case 1).
 type panicAgent struct{}
 
 func (a *panicAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
@@ -748,11 +712,6 @@ func (a *panicAgent) RunStream(_ context.Context, _ string, onEvent func(provide
 	panic("agent exploded mid-stream")
 }
 
-// TestRollbackClaimedTask pins #1688 case 1 at the unit level: the panic
-// path's rollback reverts the teammate's claimed task to pending through
-// the board's task manager. (The end-to-end panic timing is covered by the
-// two-phase claim/rollback assertion below; this pins the extracted
-// rollback itself.)
 func TestRollbackClaimedTask(t *testing.T) {
 	mgr := newTestManager()
 	snap := mgr.CreateTeam("rollback-unit", "leader")
@@ -783,20 +742,6 @@ func TestRollbackClaimedTask(t *testing.T) {
 	if !ok || got.Status != pending {
 		t.Fatalf("task must be back to pending, got %+v", got)
 	}
-	// Empty ID: no-op, no panic.
+
 	rollbackClaimedTask(mgr, team, &Teammate{ID: "x"})
 }
-
-// KNOWN LIMIT (#1688 case 1 companion): an end-to-end panic test (drive
-// runTeammateLoop with a panicking agent + real board, assert claim-then-
-// rollback) was attempted twice - via SpawnTeammate's agent factory AND by
-// direct same-package invocation - but the loop never claimed the pending
-// task under either harness (its internal state machine/ticker dependencies
-// need investigation beyond this companion). The rollback itself is pinned
-// unit-level above; wiring an honest e2e is left as follow-up.
-//
-// FOLLOW-UP LANDED (#4367): zz_issue4367_test.go now drives the real claim
-// path e2e - a pending board task claimed, an onEvent callback panicking on
-// the first post-claim event, and the post-rollback re-panic observed through
-// an outer recovery wrapper. The earlier failures are avoided by panicking
-// in onEvent (before prompt/agent work) rather than inside the agent stream.

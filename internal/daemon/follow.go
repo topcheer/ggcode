@@ -14,27 +14,24 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// FollowSink receives agent events for terminal follow-mode display.
 type FollowSink interface {
-	// OnUserMessage displays a user message.
 	OnUserMessage(text string)
-	// OnToolResult displays the result of a tool call.
+
 	OnToolResult(toolName, rawArgs, result string, isError bool)
-	// OnStreamText accumulates streaming text (not displayed until OnRoundDone).
+
 	OnStreamText(text string)
-	// OnRoundDone displays the accumulated assistant text and a separator.
+
 	OnRoundDone()
-	// OnError displays an error message.
+
 	OnError(err error)
-	// OnPairingChallenge displays an IM pairing code when a channel requests binding.
+
 	OnPairingChallenge(platform, channelID, code string, kind string)
-	// OnPairingResolved clears a previously displayed pairing challenge.
+
 	OnPairingResolved()
-	// Close cleans up the display.
+
 	Close()
 }
 
-// Lang represents the display language for follow output.
 type Lang string
 
 const (
@@ -42,7 +39,6 @@ const (
 	LangEn   Lang = "en"
 )
 
-// ResolveLang returns a Lang from a raw config language string.
 func ResolveLang(s string) Lang {
 	if s == "zh-CN" || s == "zh" {
 		return LangZhCN
@@ -50,7 +46,6 @@ func ResolveLang(s string) Lang {
 	return LangEn
 }
 
-// PlatformDisplayName returns a human-readable name for an IM platform string.
 func PlatformDisplayName(platform string) string {
 	switch platform {
 	case "qq":
@@ -70,15 +65,10 @@ func PlatformDisplayName(platform string) string {
 	}
 }
 
-// ToolPresenter returns a display presentation for a tool call.
-// Used by daemon follow to get the same labels as TUI.
 type ToolPresenter interface {
 	Present(toolName, rawArgs string) (displayName, detail, activity string)
 }
 
-// ANSI escapes for consistent rendering. Declared as vars (not consts)
-// so a11y.go's init can blank them under NO_COLOR / non-TTY output
-// (sa-46 terminal accessibility) without touching call sites.
 var (
 	ansiDim       = "\033[2m"
 	ansiReset     = "\033[0m"
@@ -91,12 +81,8 @@ var (
 )
 
 const (
-	// In raw terminal mode, \n only moves cursor down without returning to
-	// column 0. We must use \r\n for proper line breaks.
 	nl = "\r\n"
 )
-
-// --- i18n catalog for daemon/follow output ---
 
 var catalogEn = map[string]string{
 	"daemon.started_bg":    "ggcode daemon started in background (PID: %d)",
@@ -168,7 +154,6 @@ var catalogZhCN = map[string]string{
 	"follow.pairing.rejected": "❌ 绑定已拒绝",
 }
 
-// Tr looks up a localized string by key. Falls back to English if key missing.
 func Tr(lang Lang, key string, args ...any) string {
 	var msg string
 	if lang == LangZhCN {
@@ -183,19 +168,17 @@ func Tr(lang Lang, key string, args ...any) string {
 	return fmt.Sprintf(msg, args...)
 }
 
-// TerminalFollowDisplay renders agent activity to the terminal using ANSI codes.
 type TerminalFollowDisplay struct {
 	out       *os.File
 	presenter ToolPresenter
 	lang      Lang
-	workDir   string // project working directory, for path relativization
+	workDir   string
 	styles    chat.Styles
 	termWidth int
 	mu        sync.Mutex
 	roundBuf  strings.Builder
 }
 
-// NewTerminalFollowDisplay creates a new follow display writing to the given file.
 func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, presenter ToolPresenter) *TerminalFollowDisplay {
 	return &TerminalFollowDisplay{
 		out:       out,
@@ -207,7 +190,6 @@ func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, presenter
 	}
 }
 
-// OnUserMessage displays a user message.
 func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -215,12 +197,10 @@ func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	fmt.Fprintf(d.out, "%s%s%s"+nl, d.styles.UserPrefix, text, ansiReset)
 }
 
-// OnToolResult displays the tool call result using the same label system as TUI.
 func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, isError bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Relativize paths in args and result
 	rawArgs = d.relativizePaths(rawArgs)
 	result = d.relativizePaths(result)
 
@@ -229,7 +209,6 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		status = chat.StatusError
 	}
 
-	// Get display name from tool label system (same as TUI)
 	var displayName, detail string
 	if d.presenter != nil {
 		displayName, detail, _ = d.presenter.Present(toolName, rawArgs)
@@ -238,7 +217,6 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		displayName = prettifyToolName(toolName)
 	}
 
-	// Completely hide certain tools (no header/body)
 	hiddenTools := map[string]bool{
 		"read_command_output": true,
 		"wait_command":        true,
@@ -273,12 +251,11 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	if hiddenTools[toolName] {
 		return
 	}
-	// LSP tools → skip
+
 	if strings.HasPrefix(toolName, "lsp_") {
 		return
 	}
 
-	// Render header (exit_plan_mode skips header, renders plan as markdown)
 	if toolName == "exit_plan_mode" {
 		var args struct {
 			Plan string `json:"plan"`
@@ -292,11 +269,10 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	header := d.styles.ToolHeader(status, displayName, d.termWidth, detail)
 	fmt.Fprint(d.out, header+nl)
 
-	// Render body based on behavior
 	behavior := chat.GetToolBodyBehavior(toolName)
 	switch behavior {
 	case chat.BodySuppress:
-		// No body at all
+
 	case chat.BodyFormatJSON:
 		var formatted string
 		if toolName == "cron_create" {
@@ -315,12 +291,12 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 			fmt.Fprint(d.out, rendered+nl)
 		}
 	default:
-		// Special formatting for certain tools
+
 		if special := d.formatSpecialBody(toolName, rawArgs, result, isError); special != "" {
 			fmt.Fprint(d.out, special)
 			return
 		}
-		// Default: body preview
+
 		if result != "" {
 			resultPreview := summarizeToolResult(result, 120)
 			if resultPreview != "" {
@@ -330,14 +306,12 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	}
 }
 
-// OnStreamText accumulates text for the current round.
 func (d *TerminalFollowDisplay) OnStreamText(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.roundBuf.WriteString(text)
 }
 
-// OnRoundDone displays the accumulated assistant text rendered as markdown.
 func (d *TerminalFollowDisplay) OnRoundDone() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -347,25 +321,20 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 
 	if text != "" {
 		displayText := renderMarkdown(d.relativizePaths(text))
-		// Strip glamour's leading/trailing newlines so prefix and text
-		// start on the same line
+
 		displayText = strings.TrimRight(strings.TrimLeft(displayText, " \t\n"+string(rune(13))), " \t\n"+string(rune(13)))
 		fmt.Fprintf(d.out, "%s%s%s", d.styles.AssistantPrefix, displayText, nl)
 	}
 }
 
-// OnError displays an error message.
 func (d *TerminalFollowDisplay) OnError(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// #1535: drop the half-streamed round text - the writer side got this
-	// same fix (#552-D); keeping the buffer stitched the failed round's
-	// partial text onto the next round's answer as one message.
+
 	d.roundBuf.Reset()
 	fmt.Fprintf(d.out, "❌ %v"+nl, err)
 }
 
-// OnPairingChallenge displays an IM pairing code when a channel requests binding.
 func (d *TerminalFollowDisplay) OnPairingChallenge(platform, channelID, code string, kind string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -377,33 +346,25 @@ func (d *TerminalFollowDisplay) OnPairingChallenge(platform, channelID, code str
 	fmt.Fprint(d.out, Tr(d.lang, key, platform, channelID)+nl)
 	fmt.Fprint(d.out, Tr(d.lang, "follow.pairing.code", platform)+nl)
 
-	// Render the 4-digit code with prominent styling
 	codeDigits := strings.Join(strings.Split(code, ""), "   ")
 	codeBlock := ansiBold + ansiFgYellow + ansiBgBlue + "  " + codeDigits + "  " + ansiReset
 	fmt.Fprint(d.out, codeBlock+nl)
 }
 
-// OnPairingResolved clears a previously displayed pairing challenge.
 func (d *TerminalFollowDisplay) OnPairingResolved() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	fmt.Fprint(d.out, Tr(d.lang, "follow.pairing.resolved")+nl)
 }
 
-// Close cleans up.
 func (d *TerminalFollowDisplay) Close() {
-	// no-op for now
+
 }
 
-// relativizePaths replaces absolute paths under workDir with relative paths.
 func (d *TerminalFollowDisplay) relativizePaths(text string) string {
 	return util.RelativizePaths(text, d.workDir)
 }
 
-// --- Special tool result formatting ---
-
-// formatSpecialBody returns specially formatted body output for certain tool types.
-// Returns empty string if no special formatting applies.
 func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result string, isError bool) string {
 	if isError {
 		return ""
@@ -444,7 +405,6 @@ func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result stri
 	}
 }
 
-// formatTodoResult renders todo_write using chat.TodoTask styling.
 func formatTodoResult(lang Lang, rawArgs string) string {
 	var args struct {
 		Todos []struct {
@@ -465,13 +425,11 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 		}
 	}
 
-	// Header: ⏳ To-Do  done/total
 	header := styles.ToolHeader(chat.StatusRunning, "To-Do", 80, fmt.Sprintf("%d/%d", done, total))
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString(nl)
 
-	// Task list using chat-style icons
 	for _, t := range args.Todos {
 		var icon string
 		switch t.Status {
@@ -488,7 +446,6 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 	return sb.String()
 }
 
-// formatFileBody shows only the line count (green) for file read/write/edit.
 func formatFileBody(lang Lang, result string, isError bool) string {
 	if isError || result == "" {
 		return ""
@@ -509,7 +466,6 @@ func formatFileBody(lang Lang, result string, isError bool) string {
 	return ansiFgGreen + "    " + text + ansiReset + nl
 }
 
-// formatEditBody shows +added/-removed in green/red for edit operations.
 func formatEditBody(lang Lang, rawArgs string, isError bool) string {
 	if isError {
 		return ""
@@ -554,7 +510,7 @@ func formatSearchCount(lang Lang, result string, isError bool) string {
 			n = m[3]
 		}
 	}
-	// Fallback: count non-empty lines
+
 	if n == "" && result != "" {
 		lines := 0
 		for _, l := range strings.Split(result, "\n") {
@@ -576,7 +532,6 @@ func formatSearchCount(lang Lang, result string, isError bool) string {
 	return "    " + ansiFgGreen + text + ansiReset + nl
 }
 
-// formatMCPToolBody renders MCP tool body (without header).
 func formatMCPToolBody(lang Lang, toolName, rawArgs, result string, isError bool) string {
 	_ = lang
 	_ = toolName
@@ -588,12 +543,6 @@ func formatMCPToolBody(lang Lang, toolName, rawArgs, result string, isError bool
 	return fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 80), ansiReset)
 }
 
-// --- Helper functions ---
-
-// truncateRunesSafe cuts s to at most maxBytes bytes without splitting a
-// multi-byte rune (#3462): the cut backs off to the last rune boundary.
-// A byte-cut in the middle of a 3-byte CJK rune produced invalid UTF-8
-// tails that terminals render as mojibake.
 func truncateRunesSafe(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
@@ -605,19 +554,18 @@ func truncateRunesSafe(s string, maxBytes int) string {
 	return s[:cut]
 }
 
-// summarizeToolResult extracts a brief summary from a tool result string.
 func summarizeToolResult(result string, maxLen int) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
 		return ""
 	}
-	// For very long results, take first meaningful line
+
 	lines := strings.Split(result, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			if len(line) > maxLen {
-				// #3462: cut at a rune boundary, not mid-rune.
+
 				return truncateRunesSafe(line, maxLen-3) + "..."
 			}
 			return line
@@ -626,7 +574,6 @@ func summarizeToolResult(result string, maxLen int) string {
 	return ""
 }
 
-// prettifyToolName converts a tool name to a readable form.
 func prettifyToolName(name string) string {
 	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.ReplaceAll(name, "_", " ")
@@ -640,27 +587,24 @@ func prettifyToolName(name string) string {
 	return strings.Join(parts, " ")
 }
 
-// renderMarkdown renders markdown text to ANSI-colored terminal output.
 func renderMarkdown(text string) string {
 	rendered, err := charm.Render(text, "dark")
 	if err != nil {
-		// Fallback: just fix line endings for raw mode
+
 		return strings.ReplaceAll(text, "\n", "\r\n")
 	}
-	// glamour output already has \n; convert to \r\n for raw mode
+
 	return strings.ReplaceAll(rendered, "\n", "\r\n")
 }
 
-// truncateForTerminal prepares text for display in raw terminal mode.
-// It converts \n to \r\n for proper line breaks and truncates if too long.
 func truncateForTerminal(text string, maxLen int) string {
-	// In raw mode, \n only moves down — need \r\n for proper line breaks.
+
 	text = strings.ReplaceAll(text, "\n", "\r\n")
 	text = strings.TrimSpace(text)
 	if len(text) <= maxLen {
 		return text
 	}
-	// #3462: cut at a rune boundary so zh-CN text never ends mid-rune.
+
 	return truncateRunesSafe(text, maxLen-3) + "..."
 }
 

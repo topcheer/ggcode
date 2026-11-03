@@ -79,9 +79,7 @@ func TestMakeKey_CommandTool(t *testing.T) {
 }
 
 func TestMakeKey_NoPath(t *testing.T) {
-	// #3059: query-only tools (code_search etc.) must NOT degrade to the
-	// bare tool name - three approvals then auto-approved ANY query. The
-	// key now pins the hash of the query text.
+
 	input := mustJSON(t, map[string]interface{}{"query": "something"})
 	key, ok := MakeKey("code_search", input)
 	if !ok {
@@ -96,23 +94,18 @@ func TestApprovalMemory_AutoApproveAfterThreshold(t *testing.T) {
 	am := NewApprovalMemory()
 	input := mustJSON(t, map[string]interface{}{"file_path": "/project/src/handler.go"})
 
-	// Initially not auto-approved.
 	if am.ShouldAutoApprove("edit_file", input) {
 		t.Fatal("should not auto-approve initially")
 	}
 
-	// Approve 3 times.
 	for i := 0; i < 3; i++ {
 		am.RecordApproval("edit_file", input)
 	}
 
-	// Now should be auto-approved.
 	if !am.ShouldAutoApprove("edit_file", input) {
 		t.Fatal("should auto-approve after 3 approvals")
 	}
 
-	// A different file in the same directory should also be auto-approved
-	// (same path signature).
 	input2 := mustJSON(t, map[string]interface{}{"file_path": "/project/src/other.go"})
 	if !am.ShouldAutoApprove("edit_file", input2) {
 		t.Fatal("should auto-approve same path-signature")
@@ -123,19 +116,15 @@ func TestApprovalMemory_DenyResetsCount(t *testing.T) {
 	am := NewApprovalMemory()
 	input := mustJSON(t, map[string]interface{}{"file_path": "/project/src/main.go"})
 
-	// Approve twice.
 	am.RecordApproval("edit_file", input)
 	am.RecordApproval("edit_file", input)
 
-	// Deny - resets count.
 	am.RecordDeny("edit_file", input)
 
-	// Should not be auto-approved.
 	if am.ShouldAutoApprove("edit_file", input) {
 		t.Fatal("should not auto-approve after deny reset")
 	}
 
-	// Approve 3 more times to re-activate.
 	for i := 0; i < 3; i++ {
 		am.RecordApproval("edit_file", input)
 	}
@@ -148,12 +137,10 @@ func TestApprovalMemory_DifferentToolsSeparate(t *testing.T) {
 	am := NewApprovalMemory()
 	input := mustJSON(t, map[string]interface{}{"file_path": "/project/src/main.go"})
 
-	// Approve edit_file 3 times.
 	for i := 0; i < 3; i++ {
 		am.RecordApproval("edit_file", input)
 	}
 
-	// write_file should NOT be auto-approved (different tool).
 	if am.ShouldAutoApprove("write_file", input) {
 		t.Fatal("different tool should not be auto-approved")
 	}
@@ -181,7 +168,6 @@ func TestApprovalMemory_NilSafe(t *testing.T) {
 	var am *ApprovalMemory
 	input := mustJSON(t, map[string]interface{}{"file_path": "/x.go"})
 
-	// Should not panic on nil receiver.
 	if am.ShouldAutoApprove("edit_file", input) {
 		t.Fatal("nil receiver should not auto-approve")
 	}

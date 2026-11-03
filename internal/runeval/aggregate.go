@@ -1,52 +1,38 @@
 package runeval
 
-// Aggregate implements cross-session trajectory aggregation: the Langfuse
-// "experiment comparison" layer on top of the per-session scorecard that
-// Evaluate produces. Where /runreport answers "how clean was THIS run",
-// Aggregate answers "how are my sessions trending overall, which runs were
-// the most wasteful, and which tool+input keys keep being re-fetched across
-// session boundaries" - questions a single-session report cannot answer.
-//
-// Pure functions, zero new dependencies, no LLM calls.
-
 import (
 	"fmt"
 	"sort"
 	"strings"
 )
 
-// SessionReport pairs one session's identity with its evaluated Report.
 type SessionReport struct {
 	ID     string
 	Title  string
 	Report Report
 }
 
-// SessionWorst is one entry of the worst-sessions leaderboard.
 type SessionWorst struct {
 	ID    string
 	Title string
 	Score int
 }
 
-// RepeatedToolAgg aggregates one tool's cross-session duplicate pressure.
 type RepeatedToolAgg struct {
 	Tool     string
-	Repeats  int // sum of DuplicateGroups.Repeats across sessions
-	Sessions int // sessions that had at least one duplicate group for it
+	Repeats  int
+	Sessions int
 }
 
-// AggregateReport is the cross-session rollup.
 type AggregateReport struct {
 	SessionCount     int
-	SkippedEmpty     int // sessions with zero tool calls (excluded from means)
+	SkippedEmpty     int
 	MeanScore        int
 	MinScore         int
 	MaxScore         int
 	WorstSessions    []SessionWorst
 	TopRepeatedTools []RepeatedToolAgg
 
-	// Global totals across evaluated sessions.
 	ToolCalls           int
 	ToolErrors          int
 	WastedRepeatCalls   int
@@ -57,9 +43,6 @@ type AggregateReport struct {
 	Findings []string
 }
 
-// Aggregate rolls up per-session reports. Sessions whose Report has zero
-// tool calls are counted in SkippedEmpty and excluded from score statistics
-// (an empty session has no trajectory to grade and would drag the mean).
 func Aggregate(sessions []SessionReport) AggregateReport {
 	var a AggregateReport
 	a.MinScore, a.MaxScore = -1, -1
@@ -88,11 +71,6 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 		a.OverheadTokens += r.OverheadTokens
 		a.TotalTokens += r.TotalTokens
 
-		// #3962: a session's duplicate groups are keyed by callKey{tool,
-		// canonical input}, so one session commonly contributes several
-		// groups for the same tool. Sessions must count DISTINCT sessions
-		// ("sessions that had at least one duplicate group for it", struct
-		// doc) - increment only on the session's first group for the tool.
 		countedTools := make(map[string]bool)
 		for _, g := range r.DuplicateGroups {
 			agg, ok := toolRepeats[g.Tool]
@@ -115,7 +93,6 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 		a.MeanScore = scoreSum / scored
 	}
 
-	// Worst sessions leaderboard: score ascending, top 5.
 	sort.Slice(a.WorstSessions, func(i, j int) bool {
 		if a.WorstSessions[i].Score != a.WorstSessions[j].Score {
 			return a.WorstSessions[i].Score < a.WorstSessions[j].Score
@@ -126,7 +103,6 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 		a.WorstSessions = a.WorstSessions[:5]
 	}
 
-	// Most cross-session repeated tools: repeats desc, top 5.
 	for _, agg := range toolRepeats {
 		a.TopRepeatedTools = append(a.TopRepeatedTools, *agg)
 	}
@@ -144,7 +120,6 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 	return a
 }
 
-// aggregateFindings builds the cross-session improvement hints, worst-first.
 func aggregateFindings(a AggregateReport) []string {
 	var f []string
 	if a.SessionCount == 0 {
@@ -193,8 +168,6 @@ func aggregateFindings(a AggregateReport) []string {
 	return f
 }
 
-// RenderAggregate formats the rollup in the same compact scorecard style as
-// Render, for /runreport all chat display.
 func RenderAggregate(a AggregateReport) string {
 	var b strings.Builder
 	if a.SessionCount == 0 {
@@ -240,7 +213,6 @@ func RenderAggregate(a AggregateReport) string {
 	return b.String()
 }
 
-// ellipsize truncates s to max runes with an ellipsis marker.
 func ellipsize(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {

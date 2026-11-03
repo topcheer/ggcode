@@ -49,7 +49,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 		Short: "Run ggcode in daemon mode, controlled via IM",
 		Long:  "Run ggcode as a headless daemon. Messages from paired IM channels are forwarded to the agent, and responses are sent back via IM. Requires at least one IM channel bound to the current workspace.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Handle --resume-picker: set resumeID to trigger interactive picker
+
 			if picker, _ := cmd.Flags().GetBool("resume-picker"); picker {
 				resumeID = "picker"
 			}
@@ -77,19 +77,16 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 				}
 			}
 
-			// If --__daemonized, skip fork logic - we ARE the daemonized child
 			newSession, _ := cmd.Flags().GetBool("new-session")
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
 				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession, fullLoadFlag)
 			}
 
-			// If --background, fork and exit parent
 			if backgroundFlag {
 				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID, newSession, fullLoadFlag)
 			}
 
-			// Normal foreground start
 			noIM, _ := cmd.Flags().GetBool("__no-im")
 			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession, fullLoadFlag)
 		},
@@ -113,13 +110,10 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	return cmd
 }
 
-// startBackgroundDaemon forks the process into background and exits the parent.
 func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string, newSession bool, fullLoad bool) error {
 	workingDir, _ := os.Getwd()
 	lang := daemon.ResolveLang(cfg.Language)
 
-	// #552-A: refuse to fork when a daemon already owns this working dir —
-	// the guard existed (CheckExistingDaemon) but was never wired here.
 	if err := daemon.EnsureDaemonSlot(workingDir); err != nil {
 		return err
 	}
@@ -143,17 +137,6 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
-// unbindBelongsToWorkspace reports whether a persisted binding's workspace
-// is owned by the daemon running in daemonWorkspace for unbind purposes
-// (#2728). Exact match, or a legacy binding with an empty workspace
-// (pre-v1.3.84 entries predate workspace scoping and can only be managed by
-// whichever daemon encounters them).
-//
-// #2763: both sides are normalized (EvalSymlinks + Clean) before comparing.
-// Persisted bindings were normalized on save, but daemonWorkspace came raw
-// from os.Getwd(); under a symlinked PWD (or a non-Clean path) the raw ==
-// comparison never matched, so WebUI unbind always reported "no persisted
-// binding" while bind/list (which normalize internally) kept working.
 func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
 	if bindingWorkspace == "" {
 		return true
@@ -161,11 +144,6 @@ func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
 	return session.NormalizeWorkspacePath(bindingWorkspace) == session.NormalizeWorkspacePath(daemonWorkspace)
 }
 
-// runtimeBypassActive reports whether the LIVE permission policy is in
-// bypass mode. The CLI `bypass` flag only captures process-start state; a
-// runtime switch_mode transition lives in the ConfigPolicy (the local `mode`
-// copy is only refreshed on session restore), so detach/restart argv
-// reconstruction must ask the policy itself (#4148-B1).
 func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.PermissionMode) bool {
 	if cp, ok := policy.(*permission.ConfigPolicy); ok {
 		return cp.CurrentMode() == permission.BypassMode
@@ -174,17 +152,12 @@ func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.Per
 }
 
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
-	// --- Steps 1-8: same as run() in root.go ---
 
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		return err
 	}
-	// #2868: `resolved` is reassigned by the provider-switch hook (IM
-	// goroutine) and read by the keyboard 't' tunnel path and the snapshot
-	// goroutine — guard the pointer with a mutex. ActivateCurrentSelection
-	// returns a FRESH pointer on every activation and never mutates an old
-	// one, so a lock-copied pointer is safe to read without holding the lock.
+
 	resolvedMu := &sync.Mutex{}
 	currentResolved := func() *config.ResolvedEndpoint {
 		resolvedMu.Lock()
@@ -200,11 +173,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 
-	// Tools
 	var ag *agent.Agent
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
 	if err == nil {
-		core.SetConfigPath(cfgFile) // #763: enable config hot-reload watch
+		core.SetConfigPath(cfgFile)
 	}
 	if err != nil {
 		return err
@@ -221,11 +193,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	// Knight agent (created later but referenced via closure)
+
 	var knightAgent *knight.Knight
 
-	// Knight uses a different factory signature - it doesn't need provider/tools
-	// passed each time because it creates its own agent for analysis tasks.
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
 		if ag != nil {
@@ -265,7 +235,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 	}
-	// NOTE: skillTool registration deferred until after buildCurrentSystemPrompt is defined
+
 	var subMgr *subagent.Manager
 	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
 		return permission.Allow
@@ -280,24 +250,22 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		defer acpClientMgr.CloseAll()
 	}
 
-	// System prompt
 	gitStatus := detectGitStatus(workingDir)
 	tools := registry.List()
 	toolNames := make([]string, len(tools))
 	for i, t := range tools {
 		toolNames[i] = t.Name()
 	}
-	// Start the background section collector (same pattern as root.go).
+
 	agentruntime.InitGlobalSectionCollector(workingDir)
 	defer agentruntime.StopGlobalSectionCollector()
 
-	// Declare early so buildCurrentSystemPrompt closure can reference it.
 	var a2aReg *a2a.Registry
 
 	buildCurrentSystemPrompt := func() (string, []string) {
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
-			if instances := a2aReg.CachedInstances(); len(instances) > 0 { // #882: single-peer case included (>1 skipped it)
+			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
 				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
 			}
 		}
@@ -305,7 +273,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 
-	// Wire sub-agent system prompt builder into skillTool (same pattern as root.go)
 	skillTool.SystemPromptBuilder = func(task, agentType string) string {
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
@@ -333,21 +300,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return append([]string(nil), promptSkillRefs...)
 	}
 
-	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
-	// #4132: the runtime tool's Provider is (re)wired below (daemon.go:617)
-	// with a daemonRuntimeProvider that carries `agent` directly; the old
-	// type assertion here could never match (builtin.go registers RuntimeTool
-	// by value with a nil Provider interface, and internal/tool cannot hold
-	// this package-private type) - removed as dead code.
+
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		// #4133: same data race root.go fixed in #2102 - daemon is a
-		// long-lived process with two concurrent callers (save_memory tool
-		// goroutine via SetAfterSave, and the 2s command ticker goroutine
-		// via commandMgr.Reload), so the systemPrompt string write must live
-		// inside the mutex; writing the ptr+len header outside it can tear.
+
 		promptSkillRefsMu.Lock()
 		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
@@ -383,39 +341,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 
-	// Approval handler: always auto-approve in daemon mode.
-	// Daemon has no TUI for interactive prompts. BypassMode and AutoMode
-	// auto-approve by design. SupervisedMode is intentionally mapped to
-	// Allow here because the IM approval flow (ask_user tool) handles
-	// user confirmation at a higher level - the agent decides when to
-	// ask via ask_user, not via the permission system's Ask callback.
-	// See docs/design/daemon-permission-model.md for rationale.
 	ag.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
 		return permission.Allow
 	})
 
-	// --- Steps 9+: IM & Daemon setup ---
-
-	// Session store
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
 	}
 
-	// Apply --full flag: load all messages from session files for rendering.
-	// Without --full, only messages from the last 24h are loaded (for large sessions).
 	if fullLoad {
 		store.SetFullLoad(true)
 	}
 
-	// Clean up stale lock files from crashed/killed processes.
 	storeDir, _ := session.DefaultDir()
 	session.CleanupStaleLocks(storeDir)
 
 	var daemonRestartRequested bool
 	restartCh := make(chan struct{}, 1)
 
-	// IM Manager
 	adapters := make(map[string]bool)
 	if cfg != nil {
 		for name, acfg := range cfg.IM.Adapters {
@@ -425,7 +369,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 		Workspace:        workingDir,
 		EnabledAdapters:  adapters,
-		RegisterInstance: false, // Deferred to line 606 where session ID is available
+		RegisterInstance: false,
 	})
 	if err != nil {
 		return fmt.Errorf("initializing IM runtime: %w", err)
@@ -433,7 +377,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	imMgr := runtimeInit.Manager
 	bindingStore := runtimeInit.BindingStore
 
-	// Check for existing bindings for this workspace
 	bindings, err := bindingStore.ListByWorkspace(workingDir)
 	if err != nil {
 		return fmt.Errorf("checking IM bindings: %w", err)
@@ -453,14 +396,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Determine language
 	lang := daemon.ResolveLang(cfg.Language)
 
-	// Create or resume session
 	var ses *session.Session
 	var sessionLock *session.SessionLock
 	if resumeID == "-" || resumeID == "picker" {
-		// Interactive session selection
+
 		resumeID = pickSessionInteractive(store, lang)
 	}
 	if resumeID != "" {
@@ -469,12 +410,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("loading session %s: %w", resumeID, err)
 		}
 		ses = existing
-		// Restore messages to agent (includes reconcile + microcompact).
+
 		compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(ag, ses)
 		if compacted {
 			fmt.Fprintf(os.Stderr, "Restored session was oversized (%d tokens), truncated to %d tokens to fit context window\n", beforeTokens, afterTokens)
 		}
-		// Restore session-scoped permission mode (if set).
+
 		if ses.PermissionMode != "" {
 			sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
 			if cp, ok := policy.(*permission.ConfigPolicy); ok {
@@ -484,8 +425,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			debug.Log("daemon", "restored permission mode %s from session", sessionMode)
 		}
 	} else {
-		// Auto-load: find the most recent unlocked workspace session.
-		// Skip if --new-session flag was passed.
+
 		if !newSession {
 			workspace := workingDir
 			sessions, err := store.ListForWorkspace(workspace)
@@ -521,21 +461,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	ag.SetSessionID(ses.ID)
 
-	// Acquire session lock to prevent concurrent instances on the same session.
-	// If auto-load or --resume already acquired a lock for this session,
-	// it is stored in autoLock and we skip the second TryAcquireSessionLock.
 	if sessionLock == nil && ses.ID != "" {
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
-		// #2631: detach-fork race — the forked child (--resume=<sid>) can
-		// reach this acquire before the parent's exit-tail sessionLock
-		// Release(). The exec-restart path hands the lock over explicitly
-		// (release before exec below); the fork-detach path has no such
-		// handoff, so the child used to exit "locked by another instance
-		// (PID <parent>)" while the parent was also exiting — leaving no
-		// daemon running. Retry the contention case (acquired=false)
-		// briefly; the parent's cleanup (bridge.Close + meta flush) is
-		// typically well under a second. Fail-closed lockErr is NOT
-		// retried (#1429-A).
+
 		for attempts := 0; lockErr == nil && lock != nil && !lock.Acquired() && attempts < 25; attempts++ {
 			time.Sleep(200 * time.Millisecond)
 			lock, lockErr = session.TryAcquireSessionLock(storeDir, ses.ID)
@@ -543,14 +471,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			sessionLock = lock
 		} else if lockErr != nil {
-			// #1429-A: the fail-closed path (#430/#709) - open/stat failure
-			// or the unlink-race retry exhaustion whose comment says 'FAIL
-			// CLOSED ... we must not acquire' - returned (nil, err); both
-			// existing branches missed it (lock==nil), the daemon kept
-			// running LOCKLESS with the persist handler attached, and two
-			// daemons could interleave writes into the same JSONL. The TUI
-			// side (root.go) covers all non-success states; the daemon -
-			// long-running and writing directly - now does too.
+
 			short := ses.ID
 			if len(short) > 8 {
 				short = short[:8]
@@ -558,8 +479,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("acquiring session lock for %s (fail-closed; refusing to run lockless): %w", short, lockErr)
 		} else if lock != nil && !lock.Acquired() {
 			pid := lock.HolderPID()
-			// #882: guard short session IDs - root.go guards the same slice;
-			// a corrupted short ID must not panic the daemon here.
+
 			short := ses.ID
 			if len(short) > 8 {
 				short = short[:8]
@@ -567,16 +487,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("session %s is locked by another instance (PID %d)", short, pid)
 		}
 	}
-	// Ensure session lock is released on ANY exit path (e.g., IM adapter
-	// start failure at line ~696). Explicit releases below set sessionLock
-	// to nil, so this defer is a no-op on normal/restart exit paths.
+
 	defer func() {
 		if sessionLock != nil {
 			sessionLock.Release()
 		}
 	}()
 
-	// Create emitter and daemon bridge
 	emitter := im.NewIMEmitter(imMgr, string(lang), workingDir)
 	if cfg.IM.OutputMode != "" {
 		emitter.SetOutputMode(cfg.IM.OutputMode)
@@ -584,10 +501,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 	defer bridge.Close()
 
-	// Bind tunnel host to session for projection recording
 	core.Tunnel.BindSession(ses, store)
 
-	// Wire checkpoint handler - persist compacted state after summarize
 	ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 		if err := store.AppendCheckpoint(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 			debug.Log("daemon", "checkpoint save failed: %v", err)
@@ -596,21 +511,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 
-	// Per-message persistence: every Add() triggers async JSONL append.
 	ag.SetPersistHandler(func(msg provider.Message) {
 		if err := store.AppendMessageToDisk(ses, msg); err != nil {
 			debug.Log("daemon", "persist handler: AppendMessageToDisk failed: %v", err)
 		}
 	})
 
-	// Wire ask_user handler
 	if tl, ok := registry.Get("ask_user"); ok {
 		if askTool, ok := tl.(*tool.AskUserTool); ok {
 			askTool.SetHandler(bridge.HandleAskUser)
 		}
 	}
 
-	// Wire switch_mode tool to persist mode changes to session metadata
 	if sm, ok := registry.Get("switch_mode"); ok {
 		if smt, ok := sm.(*tool.SwitchModeTool); ok {
 			if cp, ok := policy.(*permission.ConfigPolicy); ok {
@@ -619,7 +531,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Wire IM tool to the runtime manager
 	if imt, ok := registry.Get("im"); ok {
 		if imTool, ok := imt.(tool.IMTool); ok {
 			imTool.Manager = im.NewToolManagerAdapter(imMgr)
@@ -628,12 +539,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Wire runtime tool to daemon's runtime status
 	if rt, ok := registry.Get("runtime"); ok {
 		if rTool, ok := rt.(tool.RuntimeTool); ok {
-			// #4132: `agent: ag` is required - without it the provider's
-			// RuntimeContextWindow/RuntimeMaxTokens gate on a nil agent and
-			// return 0, silently zeroing context-budget hints in daemon mode.
+
 			rTool.Provider = &daemonRuntimeProvider{
 				ses:    ses,
 				cfg:    cfg,
@@ -646,9 +554,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Cron tools - enqueue fires the prompt as a user message via the
-	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
-	// skip the firing instead of interrupting.
 	cronScheduler := agentruntime.NewSessionCronScheduler(ses.ID, workingDir, func(prompt string, queueIfBusy bool) {
 		if !queueIfBusy && bridge.HasActiveRun() {
 			debug.Log("daemon", "[cron] skipping prompt (agent busy, queue_if_busy=false): %s", prompt)
@@ -661,29 +566,22 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	agentruntime.RegisterCronTools(registry, cronScheduler)
 
-	// Ambient file-watch triggers (r372) share the cron enqueue bridge.
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
-	// Sleep-time compute (r373): pre-compact during idle windows.
+
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
-	// sa-63: every idle fire also re-runs the memory consolidation sweep,
-	// so long-lived daemon sessions surface stale/conflicting memory without
-	// waiting for the startup-only sweep.
+
 	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 
-	// Sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
 
-	// Wire cascade-cancel so daemon interrupts cascade to sub-agents/delegates
-	// (mirrors TUI cancelActiveRun and desktop ChatBridge.Cancel).
 	bridge.SetCascadeCancel(func() {
 		subMgr.CancelAll()
 	})
 
-	// Create follow display (always, so the pairing watcher can use it)
 	toolLang := im.ToolLangEn
 	if lang == daemon.LangZhCN {
 		toolLang = im.ToolLangZhCN
@@ -691,21 +589,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	toolPresenter := &daemonToolPresenter{lang: toolLang}
 	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolPresenter)
 
-	// Set bridge on manager
 	imMgr.SetBridge(bridge)
 
-	// Track agent busy state for /api/status
 	var agentBusy atomic.Bool
 	bridge.SetRunStateHook(func(busy bool) { agentBusy.Store(busy) })
 
-	// Mobile connection status callback (set when tunnel connects)
 	statusMu := &sync.Mutex{}
 	var mobileConnectedFn func() (bool, string)
 
-	// Start mobile tunnel if requested
 	var tunnelSession *tunnel.Session
 	if startTunnel {
-		// #2868: read via currentResolved() so switches land here too.
+
 		rs := currentResolved()
 		sessionInfo := tunnel.SessionInfoData{
 			Workspace: workingDir,
@@ -745,7 +639,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		} else {
 			tunnelSession = result.Session
 
-			// Wire hooks for status/activity push
 			ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
 			bridge.SetRunStateHook(func(busy bool) {
 				agentBusy.Store(busy)
@@ -756,7 +649,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			defer unsubscribeTunnel()
 			defer bridge.SetRunStateHook(nil)
 			defer bridge.SetUserMessageHook(nil)
-			// Wire mobile connection status for /api/status
+
 			statusMu.Lock()
 			mobileConnectedFn = func() (bool, string) {
 				sid := result.Broker.SessionID()
@@ -771,9 +664,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Track previous pairing state so we can notify follow display.
-	// When follow mode is off, pairing code is printed to stderr directly
-	// so the user can still see it even without follow mode.
 	var prevPairingChallenge *im.PairingChallenge
 	imMgr.SetOnUpdate(func(snap im.StatusSnapshot) {
 		current := snap.PendingPairing
@@ -781,12 +671,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		isPending := current != nil
 
 		if isPending && !wasPending {
-			// New pairing challenge appeared - always show it
+
 			platformName := daemon.PlatformDisplayName(string(current.Platform))
 			kind := string(current.Kind)
 			followDisplay.OnPairingChallenge(platformName, current.ChannelID, current.Code, kind)
 		} else if !isPending && wasPending {
-			// Pairing resolved (accepted or rejected)
+
 			if followActive {
 				followDisplay.OnPairingResolved()
 			}
@@ -800,18 +690,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 
-	// Bind session to IM manager so that session-scoped binding ownership
-	// works correctly. InitRuntime binds with an empty SessionID; we need
-	// to rebind with the real session ID before RegisterInstance.
 	imMgr.BindSession(im.SessionBinding{
 		SessionID: ses.ID,
 		Workspace: workingDir,
 	})
 
-	// Register this instance for multi-instance detection BEFORE starting adapters.
-	// This ensures session-scoped binding ownership (claimUnclaimedBindings +
-	// muteNonOwnedBindings) runs before StartCurrentBindingAdapter so only
-	// bindings owned by this session are started.
 	_, others, err := imMgr.RegisterInstance(workingDir, ses.ID)
 	if err != nil {
 		debug.Log("daemon", "instance detect register failed: %v", err)
@@ -822,7 +705,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	defer imMgr.UnregisterInstance()
 
-	// Start adapters (only non-muted bindings will start)
 	if cfg.IM.Enabled {
 		controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, imMgr)
 		if err != nil {
@@ -831,9 +713,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		defer controller.Stop()
 	}
 
-	// Start background services (MCP connections, etc.)
 	if mcpMgr := core.MCPManager; mcpMgr != nil {
-		// Daemon follow mode: show MCP OAuth URLs in terminal
+
 		mcpMgr.SetURLOpener(func(url string) error {
 			fmt.Fprintf(os.Stderr, "\x1b[34m\u2b21 MCP OAuth:\x1b[0m opening browser %s\r\n", url)
 			return nil
@@ -842,7 +723,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	core.StartBackgroundServices()
 	defer core.Close()
 
-	// MCP OAuth watcher for daemon follow mode
 	mcpMgr.SetURLOpener(func(url string) error {
 		fmt.Fprintf(os.Stderr, "\x1b[34m\u2b21 MCP OAuth:\x1b[0m opening browser %s\r\n", url)
 		return nil
@@ -865,9 +745,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				if handler.SupportsDCR() {
 					_ = handler.RegisterClient(ctx)
 				}
-				// Try device flow first
+
 				if handler.SupportsDeviceFlow() {
-					// Full server-declared scopes, no truncation (#735).
+
 					scopes := handler.GetScopes()
 					devResp, err := handler.StartDeviceFlow(ctx, scopes)
 					if err == nil {
@@ -891,7 +771,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 						return
 					}
 				}
-				// Browser flow fallback
+
 				authorizeURL, err := handler.StartAuthFlow(ctx)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth failed for %s: %v\x1b[0m\r\n", serverName, err)
@@ -926,17 +806,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 
-	// Load project memory synchronously (daemon mode has no TUI event loop)
 	_, _ = agentruntime.ApplyProjectMemoryToAgent(ag, workingDir)
 
-	// Start Knight background agent (if enabled)
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
-	// lanchatHub is assigned later (A2A-enabled branch, after NewHub);
-	// declared here so the provider-switch hook closure below can capture
-	// the variable and keep LAN presence in sync after a switch (#2876).
+
 	var lanchatHub *lanchat.Hub
 	bridge.SetRestartHook(func() {
 		daemonRestartRequested = true
@@ -946,11 +822,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 	bridge.SetProviderSwitchHook(func(vendor, endpoint, model string) (string, error) {
-		// #2868: do NOT shadow the outer `resolved` with `:=` here — the
-		// shadow left the outer pointer stuck at daemon-startup values, so
-		// every tunnel SessionInfo/BrokerSnapshot reported the stale model
-		// and vendor after any in-session switch. Capture fresh, then
-		// reassign the outer pointer under resolvedMu.
+
 		r, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
 		if err != nil {
 			return "", err
@@ -959,30 +831,22 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		resolved = r
 		resolvedMu.Unlock()
 		agentruntime.ApplyProviderToAgent(ag, prov, r)
-		// #2876: keep LAN presence in sync after a switch - mirrors the TUI
-		// (model.go) and Desktop (chat.go) switch paths. SetModel also clears
-		// stale degraded status (new model = new quota pool / credential).
+
 		if lanchatHub != nil {
 			lanchatHub.SetModel(r.Model)
 		}
-		// #3994: every read below uses the LOCAL r (the fresh pointer
-		// ActivateCurrentSelection just returned), never the outer resolved -
-		// multiple IM adapters can enter this hook concurrently, and the outer
-		// pointer is reassigned under resolvedMu by the other goroutine between
-		// L937's unlock and any later read (data race; #2868's own discipline:
-		// reads go through currentResolved() or a held-lock copy - r is even
-		// stronger, it is this call's immutable snapshot).
+
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, r, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
 			ses.Endpoint = cfg.Endpoint
 			ses.Model = r.Model
-			// Persist model selection to session JSONL (session-scoped).
+
 			if err := store.AppendMetaToDisk(ses); err != nil {
 				debug.Log("daemon", "model switch: meta persist failed: %v", err)
 			}
 		}
-		// Sync vendor/endpoint definitions to global config.
+
 		agentruntime.SyncVendorEndpointToGlobal(cfg, cfg.Vendor, cfg.Endpoint)
 		if vendor == "" && endpoint == "" && model == "" {
 			vendors := make([]string, 0)
@@ -1010,18 +874,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", r.VendorName, r.EndpointName, r.Model), nil
 	})
-	// Turn-scoped vision fallback: image-bearing turns on non-vision models
-	// switch to a comparable vision model for that turn only. switchFn keeps
-	// the switch in memory - no session persistence, no AppendMetaToDisk.
+
 	bridge.SetVisionTurnHook(
 		func() string { return agentruntime.VisionTurnModel(cfg) },
 		func(model string) error {
 			prev := cfg.Model
 			resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, "", "", model)
 			if err != nil {
-				// Half-switched: SetActiveSelection inside may already have
-				// applied model to cfg.Model - restore the previous in-memory
-				// selection so a failed switch cannot leak the vision model.
+
 				if prev != "" && prev != model {
 					if r, p, rerr := agentruntime.ActivateCurrentSelection(cfg, "", "", prev); rerr == nil {
 						agentruntime.ApplyProviderToAgent(ag, p, r)
@@ -1038,9 +898,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		cfg.Knight().Enabled, cfg.Knight().TrustLevel, cfg.Knight().DailyTokenBudget,
 		cfg.Knight().IdleDelaySec, cfg.Knight().Capabilities)
 	if cfg.Knight().Enabled {
-		// Create Knight emitter (reuse IM emitter)
+
 		knightAgent.SetEmitter(emitter)
-		// Wire Knight task events to stderr for follow display
+
 		knightAgent.SetEventSink(&knight.FuncSink{
 			OnStart: func(taskName string) {
 				fmt.Fprintf(os.Stderr, "🌙 Knight: starting %s\r\n", taskName)
@@ -1050,7 +910,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				if duration > 0 {
 					suffix = fmt.Sprintf(" (%.0fs)", duration.Seconds())
 				}
-				// report may contain \n - convert to \r\n for raw terminal mode
+
 				safeReport := strings.ReplaceAll(report, "\n", "\r\n")
 				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s - %s\r\n", taskName, suffix, safeReport)
 			},
@@ -1075,13 +935,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		fmt.Fprintf(os.Stderr, "Knight is disabled. Use /knight on to enable.\n")
 	}
 
-	// Start A2A server if enabled.
 	var a2aSrv *a2a.Server
-	// a2aReg already declared above for system prompt access
+
 	var a2aHandler *a2a.TaskHandler
-	var a2aStopRefresh func() // #4155: stops the refreshCache ticker goroutine
+	var a2aStopRefresh func()
 	if !cfg.A2A.Disabled {
-		// A2A instance override already applied by LoadWithInstance.
+
 		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
@@ -1091,7 +950,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
-				// #4155: stop the refreshCache ticker goroutine too.
+
 				a2aStopRefresh()
 				_ = a2aReg.Unregister()
 				if lanchatHub != nil {
@@ -1101,26 +960,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			}()
 			fmt.Fprintf(os.Stderr, "🔗 A2A server: %s\n", a2aSrv.Endpoint())
 
-			// Create lanchat Hub for LAN peer discovery and messaging.
 			chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
 			lanchatHub = lanchat.NewHub(
 				a2aReg.SelfID(),
 				"daemon",
 				a2aSrv.Endpoint(),
-				cfg.LanChat.EffectiveAPIKey(), // #1015: lanchat key decoupled from a2a.auth.api_key
+				cfg.LanChat.EffectiveAPIKey(),
 				chatStore,
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)
 			lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
-			// Shared-workspace collision alert: whenever another online
-			// lanchat agent works in the SAME directory, every system
-			// prompt built for this instance carries the iron rules
-			// (worktree+PR on VCS trees; coordinate-first elsewhere).
-			// agentruntime.SetSharedWorkspaceProbe stays (sub-agent prompts are
-			// built once with it); the MAIN agent consumes the same closure via
-			// SetSystemPromptInjector, re-evaluated every run-loop iteration so
-			// resumed sessions and late-converging lanchat presence get the
-			// shared-workspace alert as soon as peers actually appear.
+
 			ag.SetSystemPromptInjector(func() string {
 				return lanchat.SharedWorkspaceAlert(
 					lanchatHub,
@@ -1142,10 +992,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 			lanchat.MountHandlers(a2aSrv.Mux(), lanchatHub, a2aSrv.Port())
 
-			// Model health reporting: advertise current model, classify run
-			// failures into degraded status, and probe recovery in the
-			// background (daemon has no user watching errors, so the probe
-			// loop is the primary recovery signal here).
 			lanchatHub.SetModel(cfg.Model)
 			lanchatHub.SetHealthProber(ag.HealthCheck)
 			ag.SetRunHealthHandler(func(runErr error) {
@@ -1159,7 +1005,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				}
 			})
 
-			// Sync peers from A2A registry
 			safego.Go("daemon.lanchat.syncPeers", func() {
 				syncPeers := func() {
 					instances := a2aReg.CachedInstances()
@@ -1193,7 +1038,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				}
 			})
 
-			// Wire A2A task events to follow display + IM
 			if a2aHandler != nil {
 				a2aHandler.SetOnTaskEvent(func(msg a2a.TaskEventMessage) {
 					fmt.Fprintf(os.Stderr, "  %s\r\n", msg.Message)
@@ -1205,7 +1049,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Start command watcher
 	if commandMgr != nil {
 		stop := make(chan struct{})
 		defer close(stop)
@@ -1225,15 +1068,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		})
 	}
 
-	// --- Follow mode setup ---
 	if followActive {
 		bridge.SetFollowSink(followDisplay)
 	}
 
-	// Check if stdin is a terminal (for keyboard handling)
 	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
 
-	// Startup message (before raw mode - normal \n is fine)
 	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.started", ses.ID))
 	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.workdir", workingDir))
 	if isTerminal {
@@ -1242,7 +1082,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.keys_minimal"))
 	}
 
-	// WebUI server
 	webuiSrv := webui.NewServer(cfg)
 	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
 		snapshot := mcpMgr.Snapshot()
@@ -1267,7 +1106,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for _, b := range snap.DisabledBindings {
 			disabledSet[b.Adapter] = true
 		}
-		// Config is the source of truth for disabled state.
+
 		configDisabledSet := map[string]bool{}
 		if cfg != nil {
 			for name, acfg := range cfg.IM.Adapters {
@@ -1284,7 +1123,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for _, st := range snap.Adapters {
 			stateMap[st.Name] = st
 		}
-		// Persisted bindings: adapter -> all bound workspaces
+
 		type persistedInfo struct{ workspace, channel, targetID string }
 		persistedMap := map[string][]persistedInfo{}
 		for _, pb := range imMgr.AllPersistedBindings() {
@@ -1313,7 +1152,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			out = append(out, s)
 			seen[b.Adapter] = true
 		}
-		// Adapters with persisted bindings but no current runtime binding
+
 		for adapter, bs := range persistedMap {
 			if seen[adapter] {
 				continue
@@ -1354,22 +1193,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		case "enable":
 			return imMgr.EnableBinding(adapter)
 		case "unbind":
-			// #2728: delete only THIS daemon's bindings. Iterating all
-			// persisted bindings and deleting the first adapter-name match
-			// could remove a DIFFERENT workspace's binding (legacy
-			// multi-binding states are real - see desktop/wailskit/im.go
-			// #587 note), with map order deciding the victim. Match
-			// semantics align with the TUI: exact (adapter, workspace) hit;
-			// legacy entries with an empty workspace are treated as ours
-			// (pre-v1.3.84 bindings predate workspace scoping); multiple
-			// matches are all deleted deterministically.
+
 			deleted := false
 			for _, pb := range imMgr.AllPersistedBindings() {
 				if pb.Adapter != adapter {
 					continue
 				}
 				if !unbindBelongsToWorkspace(pb.Workspace, workingDir) {
-					// Belongs to another workspace's daemon - leave it alone.
+
 					continue
 				}
 				if err := imMgr.DeleteBinding(adapter, pb.Workspace); err != nil {
@@ -1378,8 +1209,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				deleted = true
 			}
 			if !deleted {
-				// Report the normalized workspace so the error matches what
-				// is actually persisted (bindings are stored normalized).
+
 				return fmt.Errorf("no persisted binding for adapter %q in workspace %q", adapter, session.NormalizeWorkspacePath(workingDir))
 			}
 			return nil
@@ -1532,7 +1362,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	webuiSrv.SetSessionStore(store, workingDir)
 	webuiSrv.SetChatBridge(bridge)
-	webuiAddr := "127.0.0.1:0" // auto port
+	webuiAddr := "127.0.0.1:0"
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {
 		url := "http://" + actualAddr
@@ -1540,7 +1370,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			url += "#token=" + tk
 		}
 		fmt.Fprintf(os.Stderr, "\x1b[34m\u2B21 WebUI:\x1b[0m \x1b[32m%s\x1b[0m\r\n", url)
-		// Write port file for external process discovery
+
 		runfile.Write(runfile.PortFile{
 			Addr:      actualAddr,
 			Token:     webuiSrv.Token(),
@@ -1555,7 +1385,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	defer webuiSrv.Close()
 
-	// Expose runtime status via /api/status
 	webuiSrv.SetStatusFn(func() webui.RuntimeStatus {
 		st := webui.RuntimeStatus{
 			PID:            os.Getpid(),
@@ -1573,7 +1402,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			st.ContextWindow = ag.ContextManager().ContextWindow()
 			st.MaxTokens = ag.ContextManager().OutputReserve()
 		}
-		// IM adapters
+
 		if imMgr != nil {
 			snap := imMgr.Snapshot()
 			for _, a := range snap.Adapters {
@@ -1585,7 +1414,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				})
 			}
 		}
-		// Mobile tunnel (set when tunnel connects)
+
 		statusMu.Lock()
 		if mobileConnectedFn != nil {
 			connected, sid := mobileConnectedFn()
@@ -1596,19 +1425,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return st
 	})
 
-	// Signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Keyboard goroutine (only if stdin is a terminal)
 	kbCh := make(chan byte, 8)
 	var restoreTerminal func()
 	if isTerminal {
 		restoreTerminal = readKeyboard(kbCh)
 	}
 
-	// Register PID file for cleanup (skip if detaching to background —
-	// the forked child owns the PID file after detach).
 	detachedToBackground := false
 	defer func() {
 		if !detachedToBackground {
@@ -1616,12 +1441,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}()
 
-	// #4148-B3: retain the tunnel stream-event subscription's unsubscribe so
-	// a second 't' StartShare can release the previous forwarder goroutine
-	// (bridge.Subscribe has no removal path otherwise).
 	var unsubscribeTunnelPrev func()
 
-	// Main loop
 loop:
 	for {
 		select {
@@ -1635,14 +1456,10 @@ loop:
 				break loop
 			}
 			switch b {
-			case 'x': // exit
+			case 'x':
 				break loop
-			case 'd': // detach to background
-				// #4148-B1: mirror the restart argv construction (#873 family) -
-				// runtime permission mode and a live tunnel are invisible in
-				// os.Args when enabled at runtime (switch_mode tool / 't' key),
-				// so the forked child would silently fall back to supervised
-				// mode and drop the phone connection.
+			case 'd':
+
 				var detachExtra []string
 				if runtimeBypassActive(policy, mode) {
 					detachExtra = append(detachExtra, "--bypass")
@@ -1653,13 +1470,12 @@ loop:
 				if fullLoad {
 					detachExtra = append(detachExtra, "--full")
 				}
-				// #2633: on fork failure stay in the foreground - the session
-				// must keep running in this process, not die with a break.
+
 				if detachToBackground(lang, cfgFile, workingDir, ses.ID, detachExtra) {
 					detachedToBackground = true
 					break loop
 				}
-			case 'f': // toggle follow mode
+			case 'f':
 				followActive = !followActive
 				if followActive {
 					bridge.SetFollowSink(followDisplay)
@@ -1668,45 +1484,44 @@ loop:
 					bridge.SetFollowSink(nil)
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_off"))
 				}
-			case 'v': // IM output mode: verbose
+			case 'v':
 				if emitter != nil {
 					emitter.SetOutputMode("verbose")
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "verbose"))
 				}
-			case 'q': // IM output mode: quiet
+			case 'q':
 				if emitter != nil {
 					emitter.SetOutputMode("quiet")
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "quiet"))
 				}
-			case 's': // IM output mode: summary
+			case 's':
 				if emitter != nil {
 					emitter.SetOutputMode("summary")
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "summary"))
 				}
-			case 'M': // mute all IM channels
+			case 'M':
 				if imMgr != nil {
 					count, err := imMgr.MuteAll()
 					if err == nil && count > 0 {
 						fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.mute_all", count))
 					}
 				}
-			case 'U': // unmute all IM channels
+			case 'U':
 				if imMgr != nil {
 					count, err := imMgr.UnmuteAll()
 					if err == nil && count > 0 {
 						fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.unmute_all", count))
 					}
 				}
-			case 't': // toggle mobile tunnel share
+			case 't':
 				if core.Tunnel.GetShareInfo() != nil {
-					// Already active: re-print QR code
+
 					info := core.Tunnel.GetShareInfo()
 					fmt.Fprintf(os.Stderr, "\r\n  Mobile Tunnel Active\r\n")
 					fmt.Fprintf(os.Stderr, "  URL: %s\r\n\r\n", info.ConnectURL)
 					fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(info.QRCode, "\n", "\r\n"))
 				} else {
-					// Create share controller once (before StartShare so OnCommand can use it)
-					// #2868: read via currentResolved() so switches land here too.
+
 					rs := currentResolved()
 					sessionInfo := tunnel.SessionInfoData{
 						Workspace: workingDir,
@@ -1715,9 +1530,9 @@ loop:
 						Mode:      mode.String(),
 						Version:   version.Version,
 					}
-					// Forward-declare broker ref so OnCommand closure can use it
+
 					var shareResult *agentruntime.ShareResult
-					// Start tunnel via unified StartShare
+
 					result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
 						Workspace: workingDir,
 						Model:     rs.Model,
@@ -1729,7 +1544,7 @@ loop:
 							return daemonSnapshot(bridge, workingDir, currentResolved(), mode.String())
 						},
 						OnCommand: func(cmd tunnel.GatewayMessage) {
-							// Route inbound commands through a controller wired to the share broker
+
 							var broker *tunnel.Broker
 							if shareResult != nil {
 								broker = shareResult.Broker
@@ -1748,18 +1563,14 @@ loop:
 						debug.Log("daemon", "tunnel share failed: %v", err)
 						fmt.Fprintf(os.Stderr, "\r\n  Tunnel failed: %v\r\n", err)
 					} else {
-						// Wire hooks for status/activity push
+
 						ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
 						bridge.SetRunStateHook(func(busy bool) {
 							agentBusy.Store(busy)
 							ctrl.HandleRunState(busy)
 						})
 						bridge.SetUserMessageHook(ctrl.HandleUserMessage)
-						// #4148-B3: release the previous subscription before
-						// replacing it - DaemonBridge.eventSubs has no removal
-						// path, so without this each re-'t' after a teardown
-						// leaks one forwarder goroutine whose stale ctrl keeps
-						// firing against the dead broker.
+
 						if unsubscribeTunnelPrev != nil {
 							unsubscribeTunnelPrev()
 						}
@@ -1770,7 +1581,7 @@ loop:
 						fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(result.QRCode, "\n", "\r\n"))
 					}
 				}
-			case 'r': // restart
+			case 'r':
 				daemonRestartRequested = true
 				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] restarting...")
 				break loop
@@ -1778,13 +1589,12 @@ loop:
 		}
 	}
 
-	// Restore terminal before printing further output
 	if restoreTerminal != nil {
 		restoreTerminal()
 	}
 
 	if daemonRestartRequested {
-		// Self-restart via in-place syscall.Exec - no child process needed.
+
 		binary, err := restart.ResolveBinary()
 		if err != nil {
 			return fmt.Errorf("restart: resolve binary: %w", err)
@@ -1793,34 +1603,18 @@ loop:
 		if lanchatHub != nil {
 			lanchatHub.Close()
 		}
-		// ⚠️ Do NOT do ses.Messages = ag.Messages() + store.Save(ses).
-		// That would rewrite the JSONL with compacted messages and destroy
-		// pre-compaction history. appendAssistantMessages already appended
-		// new messages incrementally during the session. Just update meta.
+
 		_ = store.AppendMetaToDisk(ses)
 
-		// Release the session lock before exec - the new process will acquire it fresh.
-		// syscall.Exec preserves FDs with flocks, so without releasing here the
-		// new process would fail to acquire its own lock on the same session.
 		if sessionLock != nil {
 			sessionLock.Release()
 			sessionLock = nil
 		}
 
-		// Clean up port file before exec - syscall.Exec skips defers.
 		runfile.Remove(ses.ID)
 
 		var args []string
-		// #2739: exec-restart must carry the daemon identity marker, or
-		// daemonIdentityMatches (which keys on "--__daemonized" /
-		// "ggcode[") sees the restarted PID as an unrelated process that
-		// happens to reuse the PID, deletes the PID file, and admits a
-		// second daemon. ForkIntoBackground writes the same marker
-		// (internal/daemon/background.go:282). argv[0] display-name
-		// rewriting is deliberately NOT replicated: ExecSelf treats args
-		// as the flag list after argv[0], so an injected display name
-		// would become a stray positional argument and break cobra
-		// parsing. Contains-based identity matching needs the flag alone.
+
 		if cfgFile != "" {
 			args = append(args, "--config", cfgFile)
 		}
@@ -1832,11 +1626,7 @@ loop:
 		if bypass {
 			args = append(args, "--bypass")
 		}
-		// #873: propagate --tunnel/--full through the restart argv - a tunnel
-		// daemon otherwise loses its mobile tunnel silently (phone connections
-		// drop, no error anywhere) and --full sessions fall back to 24h window.
-		// #4148-B2: also honor a tunnel opened at runtime via the 't' key -
-		// startTunnel only reflects the CLI flag.
+
 		if startTunnel || core.Tunnel.GetShareInfo() != nil {
 			args = append(args, "--tunnel")
 		}
@@ -1844,7 +1634,6 @@ loop:
 			args = append(args, "--full")
 		}
 
-		// If /restart debug was requested, inject GGCODE_DEBUG=1
 		env := os.Environ()
 		if bridge.ConsumeRestartDebug() {
 			debug.Log("daemon", "restart with GGCODE_DEBUG=1")
@@ -1853,11 +1642,7 @@ loop:
 
 		debug.Log("daemon", "exec restart: %s %v", binary, args)
 		if err := restart.ExecRestart(binary, args, env); err != nil {
-			// #2817: resources (bridge/lanchatHub/sessionLock/runfile) are already
-			// irreversibly released above. Returning nil here exits with code 0,
-			// which supervisors (systemd Restart=on-failure, supervisord exitcodes)
-			// treat as a clean stop and never re-launch. Mirror the ResolveBinary
-			// failure branch above: surface the error so the process exits non-zero.
+
 			debug.Log("daemon", "exec restart failed: %v", err)
 			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
 			return fmt.Errorf("restart: exec: %w", err)
@@ -1867,22 +1652,16 @@ loop:
 
 	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\r\n")
 
-	// Save session on exit
 	bridge.Close()
-	// ⚠️ Do NOT do ses.Messages = ag.Messages() + store.Save(ses).
-	// That would rewrite the JSONL with compacted messages and destroy
-	// pre-compaction history. appendAssistantMessages already appended
-	// new messages incrementally during the session. Just update meta.
+
 	if err := store.AppendMetaToDisk(ses); err != nil {
 		debug.Log("daemon", "exit: meta persist failed: %v", err)
 	}
 
-	// Clean up empty session files on exit.
 	if err := store.CleanupIfEmpty(ses); err != nil {
 		debug.Log("daemon", "exit cleanup: failed to delete empty session: %v", err)
 	}
 
-	// Release session lock on exit
 	if sessionLock != nil {
 		sessionLock.Release()
 		sessionLock = nil

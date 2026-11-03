@@ -10,7 +10,6 @@ import (
 	"github.com/young2j/oxmltotext/xlsxtotext"
 )
 
-// docxExtractor extracts text from DOCX files.
 type docxExtractor struct{}
 
 func (docxExtractor) Format() string { return "docx" }
@@ -33,7 +32,6 @@ func (docxExtractor) Extract(data []byte) (TextResult, error) {
 	}, nil
 }
 
-// xlsxExtractor extracts text from XLSX files.
 type xlsxExtractor struct{}
 
 func (xlsxExtractor) Format() string { return "xlsx" }
@@ -56,7 +54,6 @@ func (xlsxExtractor) Extract(data []byte) (TextResult, error) {
 	}, nil
 }
 
-// pptxExtractor extracts text from PPTX files.
 type pptxExtractor struct{}
 
 func (pptxExtractor) Format() string { return "pptx" }

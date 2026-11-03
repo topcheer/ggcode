@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #1732: the provider module's shadowed keys are a stale-value trap -
-// editing a key that the en/zh main catalogs switch on FIRST does
-// nothing. Pin that no module key is shadowed by a main-catalog case,
-// so any re-introduction of duplicates fails here.
 func TestProviderModuleNotShadowedByMainCatalogs1732(t *testing.T) {
 	modKeys := make(map[string]bool)
 	for _, m := range []map[string]string{enProviderModule(), zhProviderModule()} {

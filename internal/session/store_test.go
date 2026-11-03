@@ -15,9 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// saveFullForTest writes a complete session to disk for test setup.
-// It mimics the old Save() full-rewrite behavior. Production code should
-// use incremental Append* methods instead.
 func saveFullForTest(t *testing.T, store *JSONLStore, ses *Session) {
 	t.Helper()
 	_ = store.Save(ses)
@@ -95,7 +92,7 @@ func TestList(t *testing.T) {
 	ses1.Workspace = "/tmp/workspace-a"
 	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
 	saveFullForTest(t, store, ses1)
-	// Ensure different second to get unique ID
+
 	time.Sleep(1100 * time.Millisecond)
 	ses2 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses2.Title = "Second"
@@ -183,8 +180,7 @@ func TestSaveLoadTunnelEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Tunnel events are no longer persisted to session JSONL — they live in the
-	// projection store. Save() should not write them, Load() should not read them.
+
 	if len(loaded.TunnelEvents) != 0 {
 		t.Fatalf("expected 0 tunnel events (not persisted to JSONL), got %d", len(loaded.TunnelEvents))
 	}
@@ -253,19 +249,17 @@ func TestAppendCheckpoint(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "test-checkpoint"
 
-	// Save initial session with some messages
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
 	}
 	saveFullForTest(t, store, ses)
 
-	// Append a checkpoint with compacted messages
 	compacted := []provider.Message{
 		{ID: "msg_summary_1", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nUser asked about X"}}},
 		{ID: "msg_followup_1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "follow-up"}}},
 	}
-	// Write summary to JSONL first so restore can find it by ID
+
 	store.AppendMessageToDisk(ses, compacted[0])
 	store.AppendMessageToDisk(ses, compacted[1])
 	err := store.AppendCheckpoint(ses, compacted[0].ID, "", 50)
@@ -273,32 +267,26 @@ func TestAppendCheckpoint(t *testing.T) {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
 
-	// Append messages after checkpoint
 	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "response after checkpoint"}}})
 	store.AppendMessage(ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "new question"}}})
 
-	// Load and verify
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Should have 6 message records total in Messages: 2 original (from Save)
-	// + 2 summary (AppendMessageToDisk) + 2 post-checkpoint.
 	if len(loaded.Messages) != 6 {
 		t.Fatalf("expected 6 Messages (all records), got %d", len(loaded.Messages))
 	}
 
-	// ContextMessages: 2 checkpoint (summary + follow-up) + 2 post-checkpoint = 4.
 	if len(loaded.ContextMessages) != 4 {
 		t.Fatalf("expected 4 ContextMessages (2 checkpoint + 2 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
 
-	// First ContextMessage should be from checkpoint
 	if loaded.ContextMessages[0].Role != "system" {
 		t.Fatalf("expected first ContextMessages role 'system', got '%s'", loaded.ContextMessages[0].Role)
 	}
-	// Last should be the post-checkpoint user message
+
 	lastCtx := loaded.ContextMessages[len(loaded.ContextMessages)-1]
 	if lastCtx.Role != "user" {
 		t.Fatalf("expected last ContextMessages role 'user', got '%s'", lastCtx.Role)
@@ -321,7 +309,6 @@ func TestLoadWithoutCheckpoint(t *testing.T) {
 	}
 	saveFullForTest(t, store, ses)
 
-	// Load without any checkpoint — should return all 3 messages
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
@@ -339,32 +326,25 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "multi-checkpoint"
 
-	// Initial save
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "original msg"}}},
 	}
 	saveFullForTest(t, store, ses)
 
-	// First checkpoint: write summary to JSONL, then checkpoint with ID
 	cp1Summary := provider.Message{ID: "msg_cp1_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}}
 	store.AppendMessageToDisk(ses, cp1Summary)
 	store.AppendCheckpoint(ses, cp1Summary.ID, "", 100)
 
-	// Messages after first checkpoint
 	store.AppendMessage(ses, provider.Message{ID: "msg_after_cp1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg after cp1"}}})
 
-	// Second checkpoint (should supersede first)
 	cp2Summary := provider.Message{ID: "msg_cp2_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v2"}}}
 	cp2Retained := provider.Message{ID: "msg_cp2_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained context"}}}
 	store.AppendMessageToDisk(ses, cp2Summary)
 	store.AppendMessageToDisk(ses, cp2Retained)
 	store.AppendCheckpoint(ses, cp2Summary.ID, "", 80)
 
-	// Messages after second checkpoint
 	store.AppendMessage(ses, provider.Message{ID: "msg_final", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "final response"}}})
 
-	// Load — should use second checkpoint: scan from cp2Summary forward.
-	// ContextMessages = cp2Summary + cp2Retained + msg_final = 3 total
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
@@ -374,11 +354,10 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 		t.Fatalf("expected 3 ContextMessages (cp2Summary + cp2Retained + final), got %d", len(loaded.ContextMessages))
 	}
 
-	// First should be "summary v2"
 	if loaded.ContextMessages[0].Content[0].Text != "summary v2" {
 		t.Fatalf("expected first ContextMessages 'summary v2', got '%s'", loaded.ContextMessages[0].Content[0].Text)
 	}
-	// Last should be "final response"
+
 	if loaded.ContextMessages[2].Content[0].Text != "final response" {
 		t.Fatalf("expected last ContextMessages 'final response', got '%s'", loaded.ContextMessages[2].Content[0].Text)
 	}
@@ -398,14 +377,11 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 	}
 	saveFullForTest(t, store, ses)
 
-	// Append checkpoint with empty summary_msg_id — simulates a checkpoint
-	// with no summary (e.g. truncation-only). Should be treated as no checkpoint.
 	err := store.AppendCheckpoint(ses, "", "", 0)
 	if err != nil {
 		t.Fatalf("AppendCheckpoint with empty summary_msg_id failed: %v", err)
 	}
 
-	// Append a post-checkpoint message
 	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "after empty cp"}}})
 
 	loaded, err := store.Load(ses.ID)
@@ -413,13 +389,10 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// With empty summary_msg_id, checkpoint is ignored. ContextMessages
-	// falls back to all messages (hello + after empty cp = 2).
 	if len(loaded.ContextMessages) != 2 {
 		t.Fatalf("expected 2 ContextMessages (no checkpoint fallback), got %d", len(loaded.ContextMessages))
 	}
 
-	// Metadata must survive past the checkpoint
 	if loaded.Title != "empty-checkpoint" {
 		t.Fatalf("title lost after empty checkpoint: got '%s'", loaded.Title)
 	}
@@ -451,9 +424,6 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	}
 	saveFullForTest(t, store, ses)
 
-	// Append checkpoint — no messages after it, simulating a crash
-	// immediately after compaction. Summary messages are written to JSONL
-	// first, then checkpoint records their IDs.
 	summaryMsg := provider.Message{ID: "msg_cp_summary_only", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary only"}}}
 	retainedMsg := provider.Message{ID: "msg_cp_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained user context"}}}
 	store.AppendMessageToDisk(ses, summaryMsg)
@@ -465,7 +435,6 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// ContextMessages = from summary_msg_id forward = summary + retained = 2
 	if len(loaded.ContextMessages) != 2 {
 		t.Fatalf("expected 2 ContextMessages from checkpoint, got %d", len(loaded.ContextMessages))
 	}
@@ -481,12 +450,11 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	if loaded.ContextMessages[1].Content[0].Text != "retained user context" {
 		t.Fatalf("expected second text 'retained user context', got '%s'", loaded.ContextMessages[1].Content[0].Text)
 	}
-	// ses.Messages should contain ALL message records: 1 original + 2 checkpoint messages.
+
 	if len(loaded.Messages) != 3 {
 		t.Fatalf("expected 3 message records (1 original + 2 checkpoint), got %d", len(loaded.Messages))
 	}
 
-	// Metadata preserved through checkpoint
 	if loaded.Title != "cp-only" {
 		t.Fatalf("title lost: got '%s'", loaded.Title)
 	}
@@ -508,7 +476,7 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 	saveFullForTest(t, store, ses)
 
 	originalUpdatedAt := ses.UpdatedAt
-	time.Sleep(10 * time.Millisecond) // ensure time difference
+	time.Sleep(10 * time.Millisecond)
 
 	compacted := []provider.Message{
 		{ID: "msg_sum_5", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summarized"}}},
@@ -520,7 +488,6 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
 
-	// Verify index was updated (UpdatedAt should be newer)
 	list, err := store.List()
 	if err != nil {
 		t.Fatal(err)
@@ -538,12 +505,11 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 	if !found.UpdatedAt.After(originalUpdatedAt) {
 		t.Fatalf("index UpdatedAt not updated after checkpoint: original=%v current=%v", originalUpdatedAt, found.UpdatedAt)
 	}
-	// Title must survive through index round-trip
+
 	if found.Title != "index-test" {
 		t.Fatalf("title lost in index: got '%s'", found.Title)
 	}
 
-	// Verify ContextMessages reflects checkpoint content on reload
 	loaded, err := store.Load(found.ID)
 	if err != nil {
 		t.Fatalf("Load after index update failed: %v", err)
@@ -561,8 +527,6 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "no-file"
 
-	// Do NOT call Save — the JSONL file does not exist yet.
-	// AppendCheckpoint should create it (O_CREATE flag).
 	compacted := []provider.Message{
 		{ID: "msg_sum_6", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "from scratch"}}},
 	}
@@ -589,8 +553,7 @@ func TestSaveCreatesEmptySessionFile(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "default", "model")
-	// Save is now a safe no-op that ensures file exists + updates index.
-	// Empty session cleanup happens on Delete or exit, not on Save.
+
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +561,7 @@ func TestSaveCreatesEmptySessionFile(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("session file should exist after Save: %v", err)
 	}
-	// Delete should clean up empty sessions.
+
 	if err := store.Delete(ses.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -612,7 +575,7 @@ func TestDeleteCleansUpEmptySession(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	// Save a session with messages first.
+
 	ses := NewSession("zai", "default", "model")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}}}
 	saveFullForTest(t, store, ses)
@@ -620,7 +583,7 @@ func TestDeleteCleansUpEmptySession(t *testing.T) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Fatal("file should exist after save with messages")
 	}
-	// Delete should remove the session file.
+
 	if err := store.Delete(ses.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -634,22 +597,22 @@ func TestHasUserInteraction(t *testing.T) {
 	if ses.HasUserInteraction() {
 		t.Error("new session should have no user interaction")
 	}
-	// Assistant-only message doesn't count
+
 	ses.Messages = []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
 	if ses.HasUserInteraction() {
 		t.Error("assistant-only session should have no user interaction")
 	}
-	// User message with text counts
+
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
 	if !ses.HasUserInteraction() {
 		t.Error("session with user text should have user interaction")
 	}
-	// User message with empty text doesn't count
+
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "  "}}}}
 	if ses.HasUserInteraction() {
 		t.Error("session with whitespace-only user text should have no user interaction")
 	}
-	// User message with tool_use doesn't count as text interaction
+
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolName: "test"}}}}
 	if ses.HasUserInteraction() {
 		t.Error("session with only tool results should have no user interaction")
@@ -662,7 +625,7 @@ func TestEnsureMetaSkipsEmptySession(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "default", "model")
-	// No messages — EnsureMeta should not create file.
+
 	if err := store.EnsureMeta(ses); err != nil {
 		t.Fatal(err)
 	}
@@ -716,25 +679,22 @@ func TestListCleansUpEmptySessions(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	// Create a session with messages.
+
 	ses1 := NewSession("zai", "default", "model")
 	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "keep me"}}}}
 	saveFullForTest(t, store, ses1)
 
-	// Manually create an empty session file (simulating crash before cleanup).
 	ses2 := NewSession("zai", "default", "model")
-	// Write just a meta record (no messages).
+
 	metaPath := filepath.Join(dir, ses2.ID+".jsonl")
 	f, _ := os.Create(metaPath)
 	json.NewEncoder(f).Encode(jsonlRecord{Type: "meta", SessionID: ses2.ID, Title: "empty"})
 	f.Close()
 
-	// Manually add to index.
 	idx, _ := store.loadIndex()
 	idx = append(idx, indexEntry{ID: ses2.ID, Title: "empty"})
 	store.saveIndex(idx)
 
-	// List should return quickly from the index, then clean up the empty session in the background.
 	list, err := store.List()
 	if err != nil {
 		t.Fatal(err)
@@ -829,7 +789,6 @@ func TestAppendUsageEntry_PersistsAndLoads(t *testing.T) {
 		t.Fatalf("expected 3 usage entries, got %d", len(loaded.UsageHistory))
 	}
 
-	// Verify first entry
 	if loaded.UsageHistory[0].TurnIndex != 1 {
 		t.Errorf("entry 0 turn index: got %d, want 1", loaded.UsageHistory[0].TurnIndex)
 	}
@@ -840,7 +799,6 @@ func TestAppendUsageEntry_PersistsAndLoads(t *testing.T) {
 		t.Errorf("entry 0 cache read: got %d, want 200", loaded.UsageHistory[0].Usage.CacheRead)
 	}
 
-	// Verify third entry (different turn)
 	if loaded.UsageHistory[2].TurnIndex != 2 {
 		t.Errorf("entry 2 turn index: got %d, want 2", loaded.UsageHistory[2].TurnIndex)
 	}
@@ -848,7 +806,6 @@ func TestAppendUsageEntry_PersistsAndLoads(t *testing.T) {
 		t.Errorf("entry 2 input tokens: got %d, want 600", loaded.UsageHistory[2].Usage.InputTokens)
 	}
 
-	// Verify metadata on entries
 	if loaded.UsageHistory[0].Model != "glm-5-turbo" {
 		t.Errorf("entry 0 model: got %q, want glm-5-turbo", loaded.UsageHistory[0].Model)
 	}
@@ -870,7 +827,6 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 	}
 	saveFullForTest(t, store, ses)
 
-	// Add usage entry before checkpoint
 	entry1 := UsageEntry{
 		Timestamp: time.Now(),
 		TurnIndex: 1,
@@ -880,7 +836,6 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add checkpoint
 	checkpointMsgs := []provider.Message{
 		{ID: "msg_cp_hello", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 		{ID: "msg_cp_hi", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi!"}}},
@@ -891,7 +846,6 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add usage entry after checkpoint
 	entry2 := UsageEntry{
 		Timestamp: time.Now(),
 		TurnIndex: 2,
@@ -906,9 +860,6 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Usage entries are cumulative token history — ALL should survive across
-	// checkpoint, not just the ones after it. This ensures /cost shows
-	// accurate per-model breakdowns even after compaction.
 	if len(loaded.UsageHistory) != 2 {
 		t.Fatalf("expected 2 usage entries (all preserved across checkpoint), got %d", len(loaded.UsageHistory))
 	}
@@ -1015,7 +966,6 @@ func TestAppendMetric_PersistsAndLoads(t *testing.T) {
 		t.Fatalf("expected 3 metric events, got %d", len(loaded.Metrics))
 	}
 
-	// LLM metric
 	if loaded.Metrics[0].Type != "llm" {
 		t.Errorf("metric 0 type: got %q, want llm", loaded.Metrics[0].Type)
 	}
@@ -1029,7 +979,6 @@ func TestAppendMetric_PersistsAndLoads(t *testing.T) {
 		t.Errorf("metric 0 duration: got %v, want 2s", loaded.Metrics[0].Duration)
 	}
 
-	// Tool success metric
 	if loaded.Metrics[1].Type != "tool" {
 		t.Errorf("metric 1 type: got %q, want tool", loaded.Metrics[1].Type)
 	}
@@ -1040,7 +989,6 @@ func TestAppendMetric_PersistsAndLoads(t *testing.T) {
 		t.Error("metric 1 should be success")
 	}
 
-	// Tool failure metric
 	if loaded.Metrics[2].ToolSuccess {
 		t.Error("metric 2 should be failure")
 	}
@@ -1110,7 +1058,6 @@ func TestAppendMessagesBatchToDisk(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	saveFullForTest(t, store, ses)
 
-	// Append 5 messages in a batch.
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg1"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "reply1"}}},
@@ -1122,7 +1069,6 @@ func TestAppendMessagesBatchToDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reload and verify all 5 messages persisted in order.
 	reloaded, _ := store.Load(ses.ID)
 	if len(reloaded.Messages) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(reloaded.Messages))
@@ -1143,7 +1089,6 @@ func TestAppendMessagesBatchToDiskEmpty(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	saveFullForTest(t, store, ses)
 
-	// Empty batch should be a no-op.
 	if err := store.AppendMessagesBatchToDisk(ses, nil); err != nil {
 		t.Fatalf("expected nil error for empty batch, got %v", err)
 	}
@@ -1162,18 +1107,15 @@ func TestAppendMessagesBatchToDiskMixedWithSingle(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	saveFullForTest(t, store, ses)
 
-	// Single append first.
 	store.AppendMessageToDisk(ses, provider.Message{
 		Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "single"}},
 	})
 
-	// Then batch append.
 	store.AppendMessagesBatchToDisk(ses, []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "batch1"}}},
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "batch2"}}},
 	})
 
-	// Then single again.
 	store.AppendMessageToDisk(ses, provider.Message{
 		Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "single2"}},
 	})
@@ -1190,8 +1132,6 @@ func TestAppendMessagesBatchToDiskMixedWithSingle(t *testing.T) {
 	}
 }
 
-// TestMigrateMessageIDs tests that loading a JSONL file with missing message
-// IDs backfills them correctly, and that subsequent loads skip migration.
 func TestMigrateMessageIDs(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_migrate_*")
 	defer os.RemoveAll(dir)
@@ -1205,7 +1145,6 @@ func TestMigrateMessageIDs(t *testing.T) {
 	ses.Title = "Migration Test"
 	ses.Workspace = "/test"
 
-	// Write messages WITHOUT IDs directly to JSONL (simulating pre-migration file).
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	f, err := os.Create(path)
 	if err != nil {
@@ -1214,31 +1153,25 @@ func TestMigrateMessageIDs(t *testing.T) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	// Meta record
 	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
-	// Messages without IDs
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}})
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}}})
 	f.Close()
 
-	// Messages without IDs and no checkpoint — migration is a no-op.
-	// ContextMessages for sessions without checkpoint is built from the
-	// last MaxContextMessages of ses.Messages, which doesn't require IDs.
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Messages should be loaded correctly (for rendering)
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(loaded.Messages))
 	}
-	// ContextMessages should equal Messages (no checkpoint to compact)
+
 	if len(loaded.ContextMessages) != 2 {
 		t.Fatalf("expected 2 context messages, got %d", len(loaded.ContextMessages))
 	}
 
-	// Load again — should NOT trigger migration (no .migrate.tmp file)
 	loaded2, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1246,21 +1179,18 @@ func TestMigrateMessageIDs(t *testing.T) {
 	if len(loaded2.Messages) != len(loaded.Messages) {
 		t.Fatalf("second load: message count mismatch %d vs %d", len(loaded2.Messages), len(loaded.Messages))
 	}
-	// IDs should be stable across loads
+
 	for i := range loaded.Messages {
 		if loaded.Messages[i].ID != loaded2.Messages[i].ID {
 			t.Fatalf("message %d ID changed across loads: %s vs %s", i, loaded.Messages[i].ID, loaded2.Messages[i].ID)
 		}
 	}
 
-	// Verify no temp file left behind
 	if _, err := os.Stat(path + ".migrate.tmp"); !os.IsNotExist(err) {
 		t.Fatal("migration temp file left behind")
 	}
 }
 
-// TestMigrateOldCheckpoint tests that old checkpoint format (checkpoint_messages)
-// is converted to new format (checkpoint_summary_msg_id) during migration.
 func TestMigrateOldCheckpoint(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_cp_migrate_*")
 	defer os.RemoveAll(dir)
@@ -1279,12 +1209,11 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	// Meta
 	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
-	// Some messages without IDs
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old msg 1"}}}})
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old msg 2"}}}})
-	// Old-format checkpoint WITH summary message
+
 	summaryMsg := provider.Message{
 		Role: "system",
 		Content: []provider.ContentBlock{{
@@ -1297,31 +1226,26 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 		CheckpointMessages: []provider.Message{summaryMsg},
 		CheckpointTokens:   5000,
 	})
-	// Post-checkpoint message without ID
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post checkpoint"}}}})
 	f.Close()
 
-	// Load — triggers migration
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Post-checkpoint messages should have IDs (needed for restore).
-	// Pre-checkpoint messages may NOT have IDs (not needed for restore).
-	postCpMsgs := loaded.Messages[3:] // messages after checkpoint
+	postCpMsgs := loaded.Messages[3:]
 	for i, msg := range postCpMsgs {
 		if msg.ID == "" {
 			t.Fatalf("post-checkpoint message %d has empty ID after migration", i)
 		}
 	}
 
-	// ContextMessages should contain the summary + post-checkpoint message
 	if len(loaded.ContextMessages) < 2 {
 		t.Fatalf("expected at least 2 context messages, got %d", len(loaded.ContextMessages))
 	}
 
-	// First context message should be the summary
 	firstMsg := loaded.ContextMessages[0]
 	if firstMsg.Role != "system" {
 		t.Fatalf("expected first context message to be system role, got %s", firstMsg.Role)
@@ -1330,7 +1254,6 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 		t.Fatalf("expected first context message to be summary")
 	}
 
-	// Verify the file on disk has new checkpoint format
 	diskF, _ := os.Open(path)
 	sc := bufio.NewScanner(diskF)
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -1360,9 +1283,6 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 	}
 }
 
-// TestMigrateSkipWhenLastCheckpointIsNewFormat tests that migration is skipped
-// entirely when the last checkpoint in the file is already in new format,
-// even if there are old-format checkpoints earlier in the file.
 func TestMigrateSkipWhenLastCheckpointIsNewFormat(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_skip_migrate_*")
 	defer os.RemoveAll(dir)
@@ -1381,11 +1301,10 @@ func TestMigrateSkipWhenLastCheckpointIsNewFormat(t *testing.T) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	// Meta
 	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
-	// Old message without ID (before old checkpoint)
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old msg"}}}})
-	// Old-format checkpoint
+
 	summaryMsg := provider.Message{
 		Role: "system",
 		Content: []provider.ContentBlock{{
@@ -1398,28 +1317,26 @@ func TestMigrateSkipWhenLastCheckpointIsNewFormat(t *testing.T) {
 		CheckpointMessages: []provider.Message{summaryMsg},
 		CheckpointTokens:   1000,
 	})
-	// Post-old-checkpoint message
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_after_old_cp", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "after old cp"}}}})
-	// Summary message record that the new checkpoint will reference
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_new_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nNew summary."}}}})
-	// New-format checkpoint (this is the LAST checkpoint — restore will use this)
+
 	enc.Encode(jsonlRecord{
 		Type:                   "checkpoint",
 		CheckpointSummaryMsgID: "msg_new_summary",
 		CheckpointLastMsgID:    "msg_after_old_cp",
 		CheckpointTokens:       5000,
 	})
-	// Post-new-checkpoint message with ID
+
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_post_new", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "after new cp"}}}})
 	f.Close()
 
-	// Load — should skip migration since last checkpoint is new format
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify old checkpoint is still in old format on disk (not migrated)
 	diskF, _ := os.Open(path)
 	sc := bufio.NewScanner(diskF)
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -1443,29 +1360,25 @@ func TestMigrateSkipWhenLastCheckpointIsNewFormat(t *testing.T) {
 	}
 	diskF.Close()
 
-	// Old checkpoint should still be in old format (not converted to new format)
 	if oldCpCount != 1 {
 		t.Fatalf("expected 1 old-format checkpoint on disk, got %d", oldCpCount)
 	}
 	if !oldCpHasMessages {
 		t.Fatal("old checkpoint should still have checkpoint_messages (migration should have been skipped)")
 	}
-	// New checkpoint should still be there
+
 	if newCpCount != 1 {
 		t.Fatalf("expected 1 new-format checkpoint on disk, got %d", newCpCount)
 	}
 
-	// ContextMessages should be built from the new checkpoint: [summary] + [messages after last_msg_id]
-	// summary = msg_new_summary, last_msg_id = msg_after_old_cp
-	// So ContextMessages = [new summary] + [msg_post_new]
 	if len(loaded.ContextMessages) != 2 {
 		t.Fatalf("expected 2 context messages (summary + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
-	// First context message should be the new summary
+
 	if loaded.ContextMessages[0].ID != "msg_new_summary" {
 		t.Fatalf("expected first context message to be msg_new_summary, got %s", loaded.ContextMessages[0].ID)
 	}
-	// Second should be the post-new-checkpoint message
+
 	if loaded.ContextMessages[1].ID != "msg_post_new" {
 		t.Fatalf("expected second context message to be msg_post_new, got %s", loaded.ContextMessages[1].ID)
 	}
@@ -1478,14 +1391,6 @@ func min(a, b int) int {
 	return b
 }
 
-// TestLoadCheckpointWithMissingLastMsgID verifies that when a checkpoint's
-// last_msg_id points to a message not present in the JSONL (due to dedup
-// removing a duplicate, or older versions not persisting IDs), the loader
-// falls back to loading all messages after the summary message instead of
-// silently dropping every post-checkpoint message.
-//
-// Before the fix, this scenario resulted in ContextMessages containing only
-// the summary message — the agent would lose all context after reload.
 func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
@@ -1495,14 +1400,12 @@ func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
 	ses.Title = "missing-lastmsgid"
 	ses.Workspace = "/tmp/test-ws"
 
-	// Initial messages (pre-compaction history).
 	ses.Messages = []provider.Message{
 		{ID: "msg_1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old question"}}},
 		{ID: "msg_2", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old answer"}}},
 	}
 	saveFullForTest(t, store, ses)
 
-	// Summary message + post-checkpoint messages.
 	summaryMsg := provider.Message{
 		ID:   "msg_summary",
 		Role: "system",
@@ -1518,8 +1421,6 @@ func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
 	store.AppendMessageToDisk(ses, postMsg1)
 	store.AppendMessageToDisk(ses, postMsg2)
 
-	// Checkpoint with last_msg_id pointing to a NON-EXISTENT message ID.
-	// This simulates dedup removing the target message or an ID not persisted.
 	store.AppendCheckpoint(ses, summaryMsg.ID, "msg_NONEXISTENT", 42)
 
 	loaded, err := store.Load(ses.ID)
@@ -1527,28 +1428,23 @@ func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// ContextMessages should be: [summary, post_1, post_2] = 3 messages.
-	// Before the fix, this would be just [summary] = 1 message (bug).
 	if len(loaded.ContextMessages) != 3 {
 		t.Fatalf("expected 3 ContextMessages (summary + 2 post-checkpoint via fallback), got %d", len(loaded.ContextMessages))
 	}
 
-	// First should be the summary.
 	if loaded.ContextMessages[0].ID != "msg_summary" {
 		t.Fatalf("expected first ContextMessage 'msg_summary', got '%s'", loaded.ContextMessages[0].ID)
 	}
-	// Second should be post-checkpoint user message.
+
 	if loaded.ContextMessages[1].ID != "msg_post_1" {
 		t.Fatalf("expected second ContextMessage 'msg_post_1', got '%s'", loaded.ContextMessages[1].ID)
 	}
-	// Third should be post-checkpoint assistant message.
+
 	if loaded.ContextMessages[2].ID != "msg_post_2" {
 		t.Fatalf("expected third ContextMessage 'msg_post_2', got '%s'", loaded.ContextMessages[2].ID)
 	}
 }
 
-// TestSessionPathSanitization verifies #401: session IDs containing path
-// traversal sequences must not escape the store directory.
 func TestSessionPathSanitization(t *testing.T) {
 	s, err := NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -1564,17 +1460,13 @@ func TestSessionPathSanitization(t *testing.T) {
 			t.Errorf("id %q leaked into path: %q", id, p)
 		}
 	}
-	// Valid IDs still resolve normally.
+
 	good := filepath.Join(s.dir, "abc123-_X.jsonl")
 	if got := s.sessionPath("abc123-_X"); got != good {
 		t.Errorf("valid id resolved to %q, want %q", got, good)
 	}
 }
 
-// #1340: migrateMessageIDs must NOT proceed with an unlocked read->tmp->rename
-// when the cross-process session lock is held elsewhere - the rename would
-// silently drop concurrent appends. With the lock held by a "foreign" holder,
-// migration retries briefly then skips (no error, file untouched).
 func TestMigrateMessageIDsSkipsWhenLockHeld(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_migrate_lock_*")
 	defer os.RemoveAll(dir)
@@ -1592,10 +1484,6 @@ func TestMigrateMessageIDsSkipsWhenLockHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate an unacquirable lock: the .flock sidecar path is occupied by
-	// a directory, so open fails instantly (lockIndexFile uses a BLOCKING
-	// flock - holding a real lock here would hang migrate forever instead
-	// of exercising the error path).
 	if err := os.Mkdir(path+".flock", 0o755); err != nil {
 		t.Fatal(err)
 	}

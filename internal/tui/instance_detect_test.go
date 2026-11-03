@@ -22,12 +22,10 @@ func TestDetectAndAutoMute_SingleInstance(t *testing.T) {
 		},
 	})
 
-	// Simulate startup: SetIMManager first, then SetSession
 	m := newTestModel()
 	m.SetIMManager(mgr)
 	m.SetSession(&session.Session{ID: "test-session", Workspace: dir}, nil)
 
-	// Should have 1 active binding, NOT muted (we're the only instance)
 	if len(mgr.CurrentBindings()) != 1 {
 		t.Fatalf("expected 1 active binding, got %d", len(mgr.CurrentBindings()))
 	}
@@ -35,7 +33,6 @@ func TestDetectAndAutoMute_SingleInstance(t *testing.T) {
 		t.Fatalf("expected 0 muted bindings, got %d", len(mgr.MutedBindings()))
 	}
 
-	// InstanceDetect should be registered
 	if m.instanceDetect == nil {
 		t.Fatal("instanceDetect should be set")
 	}
@@ -49,7 +46,6 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	instancesDir := filepath.Join(dir, ".ggcode", "instances")
 	os.MkdirAll(instancesDir, 0o755)
 
-	// Fork a long-lived child process to simulate another instance
 	sleepCmd := exec.Command("sleep", "30")
 	if err := sleepCmd.Start(); err != nil {
 		t.Skip("cannot fork sleep process")
@@ -57,7 +53,6 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	defer sleepCmd.Process.Kill()
 	fakePID := sleepCmd.Process.Pid
 
-	// Write PID file for the "older" instance
 	olderInfo := im.InstanceInfo{
 		PID:       fakePID,
 		UUID:      "older-uuid-abcd",
@@ -67,9 +62,7 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	os.WriteFile(filepath.Join(instancesDir, fmt.Sprintf("%d-older-uu.json", fakePID)), olderData, 0o644)
 
 	mgr := im.NewManager()
-	// Use a binding store so bindings survive BindSession reload
-	// These bindings have LastSessionID set to a DIFFERENT session,
-	// simulating bindings owned by another instance.
+
 	mgr.SetBindingStore(&stubBindingStore{
 		bindings: []im.ChannelBinding{
 			{Workspace: dir, Platform: im.PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1", LastSessionID: "other-session"},
@@ -77,13 +70,10 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 		},
 	})
 
-	// Simulate startup: SetIMManager first (detectAndAutoMute skipped — no session),
-	// then SetSession (triggers detectAndAutoMute with session workspace)
 	m := newTestModel()
 	m.SetIMManager(mgr)
 	m.SetSession(&session.Session{ID: "test-session", Workspace: dir}, nil)
 
-	// Bindings owned by another session should be loaded but muted.
 	all := mgr.CurrentBindings()
 	if len(all) != 2 {
 		t.Fatalf("expected 2 bindings loaded, got %d", len(all))
@@ -98,25 +88,23 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 		t.Fatalf("expected 2 muted, got %d", len(muted))
 	}
 
-	// Should NOT be primary
 	if m.instanceDetect.IsPrimary() {
 		t.Fatal("second instance should NOT be primary")
 	}
 
-	// Clean up
 	m.instanceDetect.Unregister()
 }
 
 func TestDetectAndAutoMute_NoManager(t *testing.T) {
 	m := Model{}
-	// Should not panic
+
 	m.detectAndAutoMute()
 }
 
 func TestDetectAndAutoMute_NoSession(t *testing.T) {
 	mgr := im.NewManager()
 	m := Model{imManager: mgr}
-	// No session — should not panic
+
 	m.detectAndAutoMute()
 }
 
@@ -133,7 +121,6 @@ func TestIMPanelInstancesSection(t *testing.T) {
 	m.openIMPanel()
 	rendered := m.renderIMPanel()
 
-	// Should contain "Instances" section (even with just 1)
 	if len(rendered) == 0 {
 		t.Fatal("panel should render")
 	}
@@ -151,11 +138,10 @@ func TestIMPanelNoInstancesWhenNoDetect(t *testing.T) {
 	m.openIMPanel()
 	rendered := m.renderIMPanel()
 
-	// Without instanceDetect, should not show instances section
 	if len(rendered) == 0 {
 		t.Fatal("panel should render")
 	}
-	// Just verify it doesn't crash — instances section is conditional
+
 }
 
 func testModelWithIMManager(mgr *im.Manager, workspace string) *Model {
@@ -165,7 +151,6 @@ func testModelWithIMManager(mgr *im.Manager, workspace string) *Model {
 	return &m
 }
 
-// stubBindingStore is a minimal in-memory BindingStore for testing.
 type stubBindingStore struct {
 	bindings []im.ChannelBinding
 }

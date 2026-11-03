@@ -21,7 +21,7 @@ func TestDetectShellUsesShOnUnixLikePlatforms(t *testing.T) {
 }
 
 func TestDetectShellPrefersPowerShellOnWindows(t *testing.T) {
-	// PowerShell should be the first choice on Windows.
+
 	spec, err := detectShell("windows", func(name string) (string, error) {
 		switch name {
 		case "powershell.exe":
@@ -42,7 +42,7 @@ func TestDetectShellPrefersPowerShellOnWindows(t *testing.T) {
 }
 
 func TestDetectShellPrefersPwshOverPowerShell(t *testing.T) {
-	// pwsh (PowerShell Core) should be preferred over powershell.exe.
+
 	spec, err := detectShell("windows", func(name string) (string, error) {
 		switch name {
 		case "pwsh.exe", "powershell.exe":
@@ -60,7 +60,7 @@ func TestDetectShellPrefersPwshOverPowerShell(t *testing.T) {
 }
 
 func TestDetectShellFallsBackToGitBashOnWindows(t *testing.T) {
-	// When no PowerShell is available, fall back to Git Bash.
+
 	root := t.TempDir()
 	bashPath := filepath.Join(root, "Git", "bin", "bash.exe")
 	if err := os.MkdirAll(filepath.Dir(bashPath), 0o755); err != nil {

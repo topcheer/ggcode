@@ -1,10 +1,5 @@
 package tui
 
-// #2167 regression: the masking pattern lacked "key" - api_key/
-// private_key/encrypt_key (the nostr identity key is a REQUIRED adapter
-// credential) all rendered in cleartext in the IM edit panel despite
-// the #2158 fix's claim.
-
 import (
 	"strings"
 	"testing"
@@ -22,7 +17,7 @@ func TestLooksLikeSecretFieldKeySuffixes(t *testing.T) {
 			t.Errorf("looksLikeSecretField(%q) = false, want true", k)
 		}
 	}
-	// Config-side copy must stay in lockstep (three consumer surfaces).
+
 	for _, k := range cases {
 		if !config.LooksLikeSecretField(k) {
 			t.Errorf("config.LooksLikeSecretField(%q) = false, want true", k)

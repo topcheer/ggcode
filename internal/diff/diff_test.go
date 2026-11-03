@@ -15,11 +15,10 @@ func TestUnifiedDiff(t *testing.T) {
 		t.Fatal("expected non-empty diff")
 	}
 
-	// Should contain deletion
 	if !contains(result, "- line2") {
 		t.Errorf("expected deletion line, got:\n%s", result)
 	}
-	// Should contain addition
+
 	if !contains(result, "+ modified") {
 		t.Errorf("expected addition line, got:\n%s", result)
 	}
@@ -27,7 +26,7 @@ func TestUnifiedDiff(t *testing.T) {
 
 func TestUnifiedDiffEmpty(t *testing.T) {
 	result := UnifiedDiff("", "", 3)
-	// Empty strings produce no changes
+
 	if result == "" {
 		t.Log("empty diff for empty strings - OK")
 	}
@@ -36,7 +35,7 @@ func TestUnifiedDiffEmpty(t *testing.T) {
 func TestUnifiedDiffNoChanges(t *testing.T) {
 	same := "hello\nworld\n"
 	result := UnifiedDiff(same, same, 3)
-	// No changes → no diff hunk headers
+
 	if contains(result, "@@") {
 		t.Errorf("expected no hunk headers for identical content, got:\n%s", result)
 	}
@@ -61,13 +60,13 @@ func contains(s, substr string) bool {
 }
 
 func TestUnifiedDiffLargeFileFallback(t *testing.T) {
-	// Generate two files large enough to trigger the fallback (>5000 combined lines)
+
 	var oldLines, newLines []string
 	for i := 0; i < 3000; i++ {
 		oldLines = append(oldLines, "line "+itoa(i))
 	}
 	newLines = append([]string(nil), oldLines...)
-	// Modify lines 10-12 and last 3 lines
+
 	newLines[10] = "changed line 10"
 	newLines[11] = "changed line 11"
 	newLines[len(newLines)-1] = "changed last"
@@ -77,41 +76,36 @@ func TestUnifiedDiffLargeFileFallback(t *testing.T) {
 
 	result := UnifiedDiff(oldText, newText, 3)
 
-	// Must not be empty
 	if result == "" {
 		t.Fatal("expected non-empty diff for large file")
 	}
-	// Must contain truncation indicator
+
 	if !strings.Contains(result, "diff truncated") {
 		t.Fatal("expected truncation indicator for large file diff")
 	}
-	// Must contain the changed lines
+
 	if !strings.Contains(result, "changed line 10") {
 		t.Error("expected changed content in diff")
 	}
 }
 
 func TestStats(t *testing.T) {
-	// No changes
+
 	s := Stats("hello\nworld", "hello\nworld")
 	if !strings.Contains(s, "+0") || !strings.Contains(s, "-0") {
 		t.Fatalf("expected 0 changes, got: %s", s)
 	}
 
-	// Additions only (inputs carry trailing newlines so the #555 EOF-newline
-	// folding does not turn the shared last line into a change)
 	s = Stats("hello\nworld\n", "hello\nworld\nfoo\n")
 	if !strings.Contains(s, "+1") || !strings.Contains(s, "-0") {
 		t.Fatalf("expected +1 -0, got: %s", s)
 	}
 
-	// Deletions only
 	s = Stats("hello\nworld\nfoo\n", "hello\nworld\n")
 	if !strings.Contains(s, "+0") || !strings.Contains(s, "-1") {
 		t.Fatalf("expected +0 -1, got: %s", s)
 	}
 
-	// Mixed changes
 	s = Stats("a\nb\nc", "a\nx\nc")
 	if !strings.Contains(s, "+1") || !strings.Contains(s, "-1") {
 		t.Fatalf("expected +1 -1, got: %s", s)

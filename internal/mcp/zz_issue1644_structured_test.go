@@ -5,14 +5,11 @@ import (
 	"testing"
 )
 
-// #1644 case 6: a spec-legal 2025-06-18 server returning ONLY
-// structuredContent (no content blocks) must surface the structured
-// payload instead of an empty success.
 type structuredOnlyCaller struct{}
 
 func (structuredOnlyCaller) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
 	return &CallToolResult{
-		Content:           nil, // zero content blocks
+		Content:           nil,
 		StructuredContent: []byte(`{"rows":3,"total":42}`),
 	}, nil
 }
@@ -34,7 +31,6 @@ func TestIssue1644StructuredOnlyServerSurfacesPayload(t *testing.T) {
 	}
 }
 
-// Regression: text blocks still win when present alongside structured data.
 type mixedCaller struct{}
 
 func (mixedCaller) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
@@ -58,8 +54,6 @@ func TestIssue1644TextBlocksPreferredOverStructured(t *testing.T) {
 	}
 }
 
-// Regression: truly empty results (no blocks, no structured) stay empty -
-// the placeholder logic must not fabricate content.
 func TestIssue1644TrulyEmptyStillEmpty(t *testing.T) {
 	tool := &mcpTool{name: "noop", caller: emptyCaller{}, toolName: "noop", srvName: "srv"}
 	res, err := tool.Execute(context.Background(), []byte(`{}`))

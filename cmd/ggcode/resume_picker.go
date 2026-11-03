@@ -49,9 +49,6 @@ func pickResumeSession(store session.Store, currentWorkspace string) (string, er
 		return "", fmt.Errorf("listing sessions: %w", err)
 	}
 
-	// Filter out sessions that are locked by other ggcode instances.
-	// Locked sessions must not appear in the picker because they are in active
-	// use by another process and cannot be resumed.
 	storeDir, _ := session.DefaultDir()
 	sessions = filterLockedSessions(sessions, storeDir)
 
@@ -78,11 +75,9 @@ func groupResumePickerSessions(sessions []*session.Session, currentWorkspace str
 	return agentruntime.GroupWorkspaceSessions(sessions, currentWorkspace)
 }
 
-// filterLockedSessions removes sessions that are locked by another ggcode process.
-// storeDir is the session store directory used for lock files.
 func filterLockedSessions(sessions []*session.Session, storeDir string) []*session.Session {
 	if storeDir == "" {
-		return sessions // can't check locks without store dir, return as-is
+		return sessions
 	}
 	filtered := make([]*session.Session, 0, len(sessions))
 	for _, ses := range sessions {
@@ -343,7 +338,7 @@ func formatResumePickerSession(ses *session.Session, currentLabel string) string
 		meta = append(meta, workspace)
 	}
 	line := title + "\n    " + strings.Join(meta, " • ")
-	// Add preview line if available — helps users identify sessions quickly.
+
 	if preview := strings.TrimSpace(ses.Preview); preview != "" && preview != title {
 		line += "\n    " + preview
 	}

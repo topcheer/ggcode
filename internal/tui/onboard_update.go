@@ -36,7 +36,7 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyPressMsg:
 			switch kp.String() {
 			case "up", "down":
-				total := len(m.vendorFiltered) + 1 // +1 for "Custom Provider" entry
+				total := len(m.vendorFiltered) + 1
 				if kp.String() == "up" {
 					m.vendorCursor = (m.vendorCursor - 1 + total) % total
 				}
@@ -64,8 +64,7 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.vendorFilter, cmd = m.vendorFilter.Update(msg)
 		m.applyVendorFilter()
-		// Use > (not >=) so the cursor at len(vendorFiltered) — the
-		// "Custom Provider" entry — is preserved across keystrokes and blinks.
+
 		if m.vendorCursor > len(m.vendorFiltered) {
 			m.vendorCursor = len(m.vendorFiltered)
 		}
@@ -78,7 +77,7 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp.String() {
 	case "up", "k":
-		total := len(m.vendorFiltered) + 1 // +1 for "Custom Provider" entry
+		total := len(m.vendorFiltered) + 1
 		m.vendorCursor = (m.vendorCursor - 1 + total) % total
 	case "down", "j":
 		total := len(m.vendorFiltered) + 1
@@ -190,11 +189,9 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 	m.step = onboardStepModel
 	m.modelCursor = 0
 	m.modelLoading = true
-	// #1385-B: new generation - late results from an earlier discovery
-	// (older endpoint selection) carry a stale gen and get dropped.
+
 	m.discoverGen++
 
-	// For custom providers, build resolved from custom fields
 	if m.selectedVendor.ID == "" {
 		m.customResolved = m.buildCustomResolved()
 		if m.customResolved != nil {
@@ -205,11 +202,7 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 			} else {
 				m.allModels = []string{"default"}
 				m.models = []string{"default"}
-				// #1892 case b: same placeholder as the standard path below -
-				// custom provider, manual model left empty, discovery yet to
-				// run. Without the flag a failed discovery let the wizard save
-				// Model="default" and syscall.Exec a broken first boot (the
-				// exact #1745 bug, alive on this path).
+
 				m.modelsAreSentinel = true
 			}
 			m.applyModelFilter()
@@ -228,7 +221,6 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 		return nil
 	}
 
-	// Standard vendor path
 	ep := m.selectedVendor.Endpoints[m.endpointCursor]
 	if len(ep.Models) > 0 {
 		m.allModels = ep.Models
@@ -239,16 +231,10 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 	} else {
 		m.allModels = []string{"default"}
 		m.models = []string{"default"}
-		// #1745 case 2: the "default" sentinel is a PLACEHOLDER, not a real
-		// model - discover failed and no DefaultModel exists. Mark it so the
-		// enter key can refuse to complete onboarding with this non-value
-		// (it would be saved + auto-exec'd into a broken first-boot loop).
+
 		m.modelsAreSentinel = true
 	}
 
-	// #907: keep the FULL list as the filter/selection source — the old
-	// [:20] cap on m.models made models 21+ unselectable. applyModelFilter
-	// caps the visible window instead.
 	m.applyModelFilter()
 
 	for i, idx := range m.modelFiltered {
@@ -257,7 +243,6 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 			break
 		}
 	}
-	// Keep modelLoading=true until async discovery completes
 
 	resolved := m.buildResolved()
 	if resolved != nil {
@@ -292,10 +277,7 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if len(m.modelFiltered) > 0 && !m.modelsAreSentinel {
-					// #1745 case 2: sentinel lists (discover failed, no
-					// DefaultModel) must not complete the wizard - the caller
-					// saves cfg.Model verbatim and syscall.Exec's a broken boot.
-					// Update custom provider model field if user came via custom path
+
 					if m.selectedVendor.ID == "" && m.customResolved != nil {
 						m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])
 					}
@@ -334,10 +316,7 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if len(m.modelFiltered) > 0 && !m.modelsAreSentinel {
-			// #1892 case a: this unfocused-enter branch skipped the sentinel
-			// check the focused branch has - the guard must hold on EVERY
-			// exit, or the placeholder completes the wizard anyway.
-			// Update custom provider model field if user came via custom path
+
 			if m.selectedVendor.ID == "" && m.customResolved != nil {
 				m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])
 			}
@@ -407,26 +386,26 @@ func (m *onboardModel) toggleOpt(forward bool) {
 }
 
 func (m *onboardModel) updateIM(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// If an input is focused, handle typing
+
 	if m.imFocused >= 0 && m.imFocused < len(m.imInputs) {
 		switch kp := msg.(type) {
 		case tea.KeyPressMsg:
 			switch kp.String() {
 			case "tab":
 				m.imInputs[m.imFocused].Blur()
-				// Special QQ handling: after app_id (idx 2), tab to app_secret (idx 3)
+
 				if m.imFocused == 2 {
 					m.imFocused = 3
 					m.imInputs[3].Focus()
 					return m, textinput.Blink
 				}
-				// After app_secret (idx 3), move to next channel (discord done → QQ → wechat skip)
+
 				if m.imFocused == 3 {
 					m.imFocused = -1
-					m.imCursor = 3 // WeChat
+					m.imCursor = 3
 					return m, nil
 				}
-				// Telegram(0)→Discord(1), Discord(1)→QQ appid(2)
+
 				m.imFocused++
 				if m.imFocused >= len(m.imInputs) {
 					m.imFocused = -1
@@ -455,7 +434,6 @@ func (m *onboardModel) updateIM(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// No input focused — arrow keys select channel, enter focuses
 	kp, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -466,25 +444,25 @@ func (m *onboardModel) updateIM(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imCursor--
 		}
 	case "down", "j":
-		if m.imCursor < 3 { // 4 channels: telegram=0, discord=1, qq=2, wechat=3
+		if m.imCursor < 3 {
 			m.imCursor++
 		}
 	case "enter":
 		switch m.imCursor {
-		case 0: // Telegram
+		case 0:
 			m.imFocused = 0
 			m.imInputs[0].Focus()
 			return m, textinput.Blink
-		case 1: // Discord
+		case 1:
 			m.imFocused = 1
 			m.imInputs[1].Focus()
 			return m, textinput.Blink
-		case 2: // QQ → focus app_id
+		case 2:
 			m.imFocused = 2
 			m.imInputs[2].Focus()
 			return m, textinput.Blink
-		case 3: // WeChat → skip (no input, just info)
-			// Do nothing — user needs to use TUI for QR scan
+		case 3:
+
 		}
 	case "s":
 		m.step = onboardStepDone
@@ -494,7 +472,7 @@ func (m *onboardModel) updateIM(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *onboardModel) updateCustom(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Text input fields (cursor 1-4)
+
 	if m.customCursor >= 1 && m.customCursor <= 4 {
 		fieldIdx := m.customCursor - 1
 		switch kp := msg.(type) {
@@ -549,7 +527,6 @@ func (m *onboardModel) updateCustom(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Protocol selector (cursor 0)
 	if m.customCursor == 0 {
 		switch kp := msg.(type) {
 		case tea.KeyPressMsg:
@@ -571,7 +548,6 @@ func (m *onboardModel) updateCustom(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Submit button (cursor 5)
 	if m.customCursor == 5 {
 		switch kp := msg.(type) {
 		case tea.KeyPressMsg:
@@ -607,7 +583,6 @@ func (m *onboardModel) submitCustom() tea.Cmd {
 		m.customFields[1].Focus()
 		return textinput.Blink
 	}
-	// Model is now optional — we'll try to discover models from the endpoint
-	// If discovery fails and no model was entered, show error
+
 	return m.startModelSelection()
 }

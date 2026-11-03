@@ -7,24 +7,16 @@ import (
 	"text/template"
 )
 
-// Request contains all info needed to re-launch after exit.
 type Request struct {
-	// Binary is the path to the ggcode binary to launch.
 	Binary string
-	// Args are the CLI arguments for the new process (e.g. --resume, --config).
+
 	Args []string
-	// WorkDir is the working directory for the new process.
+
 	WorkDir string
-	// PID is the current process PID (the script waits for it to exit).
+
 	PID int
 }
 
-// Launch writes a self-deleting helper script to /tmp and starts it.
-// The caller should then initiate its own graceful shutdown
-// (e.g. set quitting=true and return tea.Quit).
-//
-// The helper script waits for the current process (PID) to fully exit before
-// launching the new one.
 func Launch(req Request) error {
 	if req.PID <= 0 {
 		req.PID = os.Getpid()
@@ -41,8 +33,6 @@ func Launch(req Request) error {
 
 	return launchPlatformScript(scriptPath, req)
 }
-
-// --- Unix-only types and helpers (used by restart_unix.go) ---
 
 type templateData struct {
 	PID      int
@@ -110,13 +100,8 @@ else
 fi
 `
 
-// bashEscape wraps a string in single quotes, escaping embedded single quotes.
 func bashEscape(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-// Platform-specific functions — implemented in restart_unix.go and restart_windows.go.
-// writePlatformScript generates the helper script for the current OS.
-// launchPlatformScript starts the script and returns immediately.
-// These are defined in the build-tagged files.
 var _ = template.Must(template.New("restart").Parse(scriptTemplate))

@@ -10,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// EnsureOnPath appends dir to the USER Path environment variable
-// (powershell setx semantics, idempotent) - the Go port of the python
-// installer's ensure_windows_user_path (#1573-A).
 func EnsureOnPath(dir string) (bool, error) {
 	escaped := strings.ReplaceAll(dir, "'", "''")
 	script := "$dir = '" + escaped + "'; " +

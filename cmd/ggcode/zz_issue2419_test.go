@@ -1,14 +1,5 @@
 package main
 
-// #2419: the llm-probe --model flag was declared, threaded through
-// runLLMProbe's signature, and documented ("Override model for all
-// endpoints (skips ListModels)") - but never consumed. Every probe ran
-// the endpoint's configured model while the user believed they were
-// validating a different one. These pins hold the fix: the override is
-// applied after resolution and before the NO_MODEL bail-out, and the
-// leftover dead shells from the never-finished original implementation
-// (empty if-block, orphan fetchFirstModel comment) stay gone.
-
 import (
 	"os"
 	"strings"
@@ -25,8 +16,7 @@ func TestIssue2419ModelOverrideIsApplied(t *testing.T) {
 	if i < 0 {
 		t.Fatal("resolve call not found in probe loop")
 	}
-	// The override must sit between resolution and the NO_MODEL branch,
-	// so it also rescues endpoints with no configured model.
+
 	j := strings.Index(src[i:], "no model configured and no default for protocol")
 	if j < 0 {
 		t.Fatal("NO_MODEL branch not found")

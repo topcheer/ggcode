@@ -1,17 +1,5 @@
 package mcp
 
-// MCP 2025-06-18 resource templates (RFC 6570 URI Templates).
-//
-// A server exposes parameterized resources via resources/templates/list:
-// `db://tables/{name}` style URI templates that a client expands into
-// concrete URIs for resources/read. Template-based resources never appear
-// in resources/list, so a client that ignores templates misses entire
-// resource families (common with database / REST-bridge servers).
-//
-// The listing mirrors ListResources: cursor pagination (#562), SEP-2549
-// freshness caching and graceful degradation — the method is older-server
-// optional, so callers treat -32601 (method not found) as "no templates".
-
 import (
 	"context"
 	"fmt"
@@ -21,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// ResourceTemplate is one resources/templates/list entry.
 type ResourceTemplate struct {
 	URITemplate string `json:"uriTemplate"`
 	Name        string `json:"name,omitempty"`
@@ -29,25 +16,21 @@ type ResourceTemplate struct {
 	MIMEType    string `json:"mimeType,omitempty"`
 }
 
-// ListResourceTemplatesResult is a resources/templates/list page.
 type ListResourceTemplatesResult struct {
 	Templates  []ResourceTemplate `json:"resourceTemplates"`
 	NextCursor string             `json:"nextCursor,omitempty"`
 	CacheableResult
 }
 
-// ListResourceTemplates fetches the server's resource templates with cursor
-// pagination and SEP-2549 freshness caching. Gated on the resources
-// capability so a resource-less server receives no unsupported call.
 func (c *Client) ListResourceTemplates(ctx context.Context) ([]ResourceTemplate, error) {
 	if c.serverCaps.Resources == nil {
 		return nil, nil
 	}
-	// SEP-2549 freshness cache (see ListResources).
+
 	if v, ok := c.listingCache.get(cacheResourceTemplates, ""); ok {
 		return cloneCachedSlice(v.([]ResourceTemplate)), nil
 	}
-	fetchEpoch := c.listingCache.epoch(cacheResourceTemplates) // #4882 CAS store guard
+	fetchEpoch := c.listingCache.epoch(cacheResourceTemplates)
 	var all []ResourceTemplate
 	var pages []CacheableResult
 	cursor := ""
@@ -75,16 +58,6 @@ func (c *Client) ListResourceTemplates(ctx context.Context) ([]ResourceTemplate,
 	return all, nil
 }
 
-// ExpandURITemplate expands an RFC 6570 URI Template against vars.
-// Supported: simple {var} and reserved {+var} scalar expansion (level
-// 1-2, the form MCP servers use in practice). Values are treated as
-// SCALARS per RFC 6570 section 3.2.1: a literal comma inside a value is
-// part of the value - simple expansion pct-encodes it (%2C), reserved
-// expansion emits it raw (comma is in the reserved set) (#3809). This
-// string-typed API has no list-valued expression; callers needing
-// multi-value joins must pre-join and use reserved expansion. Unknown or
-// empty variables are an error so a stale template expansion fails loudly
-// instead of producing a half-substituted URI.
 func ExpandURITemplate(tmpl string, vars map[string]string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(tmpl); {
@@ -118,16 +91,10 @@ func ExpandURITemplate(tmpl string, vars map[string]string) (string, error) {
 			return "", fmt.Errorf("uri template %q: missing value for variable %q", tmpl, expr)
 		}
 		if reserved {
-			// Reserved expansion: value emitted as-is (comma is in the
-			// RFC 6570 reserved set, allowed literally).
+
 			b.WriteString(val)
 		} else {
-			// Simple expansion: pct-encode reserved characters INCLUDING the
-			// literal comma - splitting on ',' would make a scalar containing
-			// a comma (file name "a,b.txt") indistinguishable from a
-			// multi-value join and break server-side parsing (#3809).
-			// QueryEscape turns spaces into '+' which is form-encoding, not
-			// URI - fix that up.
+
 			b.WriteString(strings.ReplaceAll(url.QueryEscape(val), "+", "%20"))
 		}
 	}

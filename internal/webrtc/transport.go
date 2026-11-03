@@ -4,19 +4,12 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// Compile-time assertion: DataChannelTransport implements tunnel.Transport.
 var _ tunnel.Transport = (*DataChannelTransport)(nil)
 
-// DataChannelTransport adapts a WebRTC DataChannel (via Peer) to the
-// tunnel.Transport interface. It allows the Broker to send/receive
-// GatewayMessages over a P2P connection instead of a relay WebSocket.
 type DataChannelTransport struct {
 	peer *Peer
 }
 
-// NewDataChannelTransport wraps an existing Peer as a tunnel.Transport.
-// The Peer must have its OnMessage/OnDisconnect handlers wired before
-// the DataChannel opens (i.e., before ICE completes).
 func NewDataChannelTransport(peer *Peer) *DataChannelTransport {
 	return &DataChannelTransport{peer: peer}
 }

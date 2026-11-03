@@ -19,44 +19,27 @@ import (
 )
 
 const (
-	// restartFallbackTimeout bounds how long an armed agent-requested restart
-	// waits for the current turn to finish before force-restarting (#347).
 	restartFallbackTimeout = 30 * time.Second
 )
 
-// armRestartMsg arms a session-preserving restart requested by the LLM
-// restart tool (#347). Unlike remoteRestartMsg (IM /restart), it defers the
-// quit until the agent turn completes so sibling tool results and trailing
-// assistant text are persisted.
 type armRestartMsg struct {
 	debug bool
-	// reason is ANNOUNCED to the user before the restart fires (#1698
-	// case 3 - the tool schema promises "Shown to the user before the
-	// process restarts").
+
 	reason string
 }
 
-// restartFallbackMsg fires after restartFallbackTimeout when an armed
-// restart is still waiting for the turn to finish.
 type restartFallbackMsg struct{}
 
-// noteTurnActivity records that the agent turn is making progress (stream
-// chunks, reasoning, tool results). The armed-restart fallback uses this to
-// distinguish a stalled turn (force restart) from a legitimately long-running
-// tool batch (keep waiting, re-arm) (#362).
 func (m *Model) noteTurnActivity() {
 	m.lastTurnActivityAt = time.Now()
 }
 
-// firePendingRestartCmd executes the armed restart via the same proven
-// remoteRestartMsg path (quit flags → shutdownAll → tea.Quit → execRestart).
 func firePendingRestartCmd() tea.Cmd {
 	return func() tea.Msg {
 		return remoteRestartMsg{}
 	}
 }
 
-// armRestartFallbackCmd schedules the 30s force-restart fallback.
 func armRestartFallbackCmd() tea.Cmd {
 	return tea.Tick(restartFallbackTimeout, func(time.Time) tea.Msg {
 		return restartFallbackMsg{}
@@ -107,8 +90,7 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 				resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
 				return resp, true
 			default:
-				// Shared registry dispatch (path B): the same table the daemon
-				// bridge serves from, with the live model as deps.
+
 				return im.ExecuteRegistrySlashCommand(tuiSlashDeps{m}, strings.Join(parts, " "))
 			}
 		},
@@ -120,8 +102,6 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 	}
 	return "", false
 }
-
-// ---- Provider / Model ----
 
 func (m *Model) executeRemoteProviderCommand(parts []string) string {
 	if m.config == nil {
@@ -202,8 +182,6 @@ func (m *Model) remoteSwitchChoices() string {
 	return fmt.Sprintf("%s%s", m.providerCommandSummary(), m.modelCommandSummary())
 }
 
-// ---- Restart ----
-
 func (m *Model) executeRemoteRestartCommand(parts []string) string {
 	isDebug := len(parts) > 1 && strings.ToLower(parts[1]) == "debug"
 	if isDebug {
@@ -213,30 +191,17 @@ func (m *Model) executeRemoteRestartCommand(parts []string) string {
 	return "RESTART"
 }
 
-// scheduleRemoteRestart returns a tea.Cmd that waits briefly (so the IM
-// confirmation message is delivered) and then triggers the restart.
 func (m *Model) scheduleRemoteRestart() tea.Cmd {
 	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
-		// Explicit: the user directly requested /restart (IM/desktop/webui).
-		// Explicit requests are exempt from the armed-restart loading guard —
-		// instead of being silently swallowed mid-turn they queue until the
-		// turn ends (#374).
+
 		return remoteRestartMsg{explicit: true}
 	})
 }
 
-// remoteRestartMsg triggers a clean restart (quit + execve).
 type remoteRestartMsg struct {
-	// explicit marks a direct user request (IM /restart, desktop/webui
-	// InjectRestart) as opposed to the agent-armed restart tool's deferred
-	// fire (#374).
 	explicit bool
 }
 
-// ---- IM management (aligned with daemon_bridge.go) ----
-
-// scheduleMuteSelf returns a tea.Cmd that waits briefly (so the warning
-// message is delivered) and then mutes the adapter.
 func (m *Model) scheduleMuteSelf(adapter string) tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		if m.imManager != nil {
@@ -253,17 +218,8 @@ func (m *Model) executeRemoteConfig() string {
 	return m.remoteSwitchChoices()
 }
 
-// tuiSlashDeps implements im.SlashDeps from the live TUI model state -
-// the path-B counterpart of the daemon bridge's implementation. Where the
-// bridge reads disk stores, the TUI prefers its in-memory session (richer
-// and current-turn fresh), falling back to the shared disk renderers.
 type tuiSlashDeps struct{ m *Model }
 
-// SetLanIdentity implements the optional capability consumed by the IM
-// slash registry's /nick entry: empty args show the current identity,
-// otherwise set nick/role/team on the LAN hub. Mirrors the TUI-local
-// handleNickCommand (lanchat_panel.go) so IM-bound users get the same
-// behavior remote as at the terminal.
 func (d tuiSlashDeps) SetLanIdentity(nick, role, team string) (string, error) {
 	if d.m.lanChatHub == nil {
 		return "", fmt.Errorf("LAN chat is not available (A2A not enabled)")
@@ -281,10 +237,12 @@ func (d tuiSlashDeps) SetLanIdentity(nick, role, team string) (string, error) {
 
 func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 	if d.m.session != nil {
+
 		// #2319: the local /cost twin takes sessionMutex for this exact
 		// read (#1366-C - "a data race that trips -race when /cost is
 		// pressed during streaming"); the IM path was the un-synced twin,
 		// racing model.go's guarded TokenUsage.Add writes.
+		// #2319: same lock as the local twin (see SessionCostSummary above).
 		mu := d.m.sessionMutex()
 		mu.Lock()
 		usage := d.m.session.TokenUsage
@@ -309,9 +267,10 @@ func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 }
 
 func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
+	// #2319: same lock as the local twin (see SessionCostSummary above).
 	var sb strings.Builder
 	if d.m.session != nil {
-		// #2319: same lock as the local twin (see SessionCostSummary above).
+
 		mu := d.m.sessionMutex()
 		mu.Lock()
 		u := d.m.session.TokenUsage
@@ -328,26 +287,12 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 			}
 		}
 	}
-	// #2358 follow-up (cross-entry parity): the daemon-attached IM path
-	// renders live vendor balance/windows (#2358); this TUI-attached path
-	// used to render ONLY token counts - the same /usage command meant two
-	// different things depending on which surface received it. Append the
-	// active vendor's probe result so both paths carry the same vendor
-	// payload (tokens stay - TUI sessions have them; daemon sessions do
-	// not). Vendor-probe failures stay silent: usage is ambient.
-	//
-	// #2373: the probe runs OFF the Update goroutine. This handler is
-	// reached from remoteInboundMsg (bubbletea Update), and svc.Get is a
-	// synchronous HTTP call - on a cache miss it froze the whole TUI for
-	// up to 5s. Snapshot everything the goroutine touches on the Update
-	// side (vendor, baseURL, apiKey, svc - resolveVendorEndpoint reads
-	// m.config), return the token block immediately, and emit the vendor
-	// payload via emitIMText when the probe lands (#2371's "probes never
-	// occupy Update" rule).
+
 	if vendor := util.FirstNonEmpty(d.m.activeVendor, d.m.startupVendor); vendor != "" {
 		if svc := d.m.ensureUsageService(); svc != nil && svc.Has(vendor) {
 			baseURL, apiKey := d.m.resolveVendorEndpoint(vendor)
 			if apiKey != "" {
+
 				// #2377: snapshot the EMITTER VALUE on the Update side. The
 				// first async cut captured the whole *Model (`emitter := d.m`)
 				// so emitIMText re-read m.imEmitter from the probe goroutine
@@ -357,8 +302,7 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 				// calling EmitText directly on the snapshot closes it.
 				emitter := d.m.imEmitter
 				if emitter != nil {
-					// safego per the repo goroutine gate: a panic inside
-					// EmitText must never take the process down.
+
 					safego.Go("tui.usageProbe.emit", func() {
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 						info, err := svc.Get(ctx, vendor, baseURL, apiKey)
@@ -382,14 +326,7 @@ func (d tuiSlashDeps) CurrentMode() string {
 }
 
 func (d tuiSlashDeps) SwitchMode(name string) error {
-	// Mirror handleModeCommand semantics: parse, apply to model + policy,
-	// drop stale approvals, persist the preference to session metadata.
-	//
-	// #2185: this path is IM-remote-only (the local TUI goes through
-	// handleModeCommand instead). Escalation to bypass/autopilot is a
-	// privilege escalation from a remote peer - require the explicit
-	// im.remote_dangerous_commands opt-in. Downgrade/level switches and
-	// plan/auto stay ungated (they reduce or hold the trust level).
+
 	if !permission.IsValidPermissionMode(name) {
 		return fmt.Errorf("unknown permission mode %q (valid: supervised, bypass; legacy aliases auto/autopilot normalize)", name)
 	}
@@ -458,17 +395,13 @@ func (d tuiSlashDeps) ModifiedFiles() (string, error) {
 }
 
 func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
-	// #1752 case 1: remote /diff args are attacker-reachable IM text -
-	// git options like --output must not pass through (shared allowlist
-	// lives in internal/im/slash_agent.go, used by both paths).
+
 	gitArgs := append([]string{"diff"}, im.SanitizeGitDiffArgs(args)...)
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = workingDirFromModel(d.m)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// #909: with stderr captured, git's usage text used to be returned
-		// to the IM user as the diff body. Fail loudly unless it is a real
-		// diff despite non-zero exit (e.g. --exit-code usage).
+
 		trimmed := strings.TrimRight(string(out), "\n")
 		if strings.HasPrefix(trimmed, "diff ") {
 			return trimmed, nil
@@ -477,8 +410,7 @@ func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
 	}
 	trimmed := strings.TrimRight(string(out), "\n")
 	if trimmed == "" {
-		// Clean tree: git diff exits 0 with empty output. One-shot command
-		// contracts (parity test + IM bridge) require a non-empty response.
+
 		return "No changes.", nil
 	}
 	return trimmed, nil

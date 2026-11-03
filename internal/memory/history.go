@@ -11,32 +11,16 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// r488 non-destructive memory (Mem++, arXiv:2610.02002): a revised decision
-// arrives as a new document rather than an edit, so overwriting a memory key
-// must not destroy the outgoing version. Before SaveMemoryWithSourceActor's
-// atomic rename clobbers the current file, archiveVersion moves it into
-// .history/<safe>.<ts>.md. The timestamp format is UTC, colon-free (Windows
-// filenames cannot contain ':') and lexicographically sortable. Version
-// ordering uses file mtimes (preserved by os.Rename across POSIX and NTFS),
-// not the filename stamp - the stamp is for human browsing only.
-
 const (
 	historyDirName = ".history"
-	// historyTSFormat: colon-free, fixed-width, UTC => lexicographic ==
-	// chronological. Trailing zeros must be preserved for sortability, so
-	// parse and format both use the same layout.
+
 	historyTSFormat = "20060102T150405.000000000"
 )
 
-// archiveVersion moves the current file for `safe` into .history/ so the
-// upcoming overwrite cannot destroy it. Idempotent on a missing file (first
-// write). Errors are reported, never fatal: callers fail open (#3120
-// precedent - memory writes must not block on archive faults) but log via
-// debug so the loss is observable.
 func (am *AutoMemory) archiveVersion(safe, path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return "", nil // first write, nothing to archive
+			return "", nil
 		}
 		return "", err
 	}
@@ -46,32 +30,24 @@ func (am *AutoMemory) archiveVersion(safe, path string) (string, error) {
 	}
 	stamp := time.Now().UTC().Format(historyTSFormat)
 	dst := filepath.Join(hdir, safe+"."+stamp+".md")
-	// Sub-microsecond collisions are impossible in practice (the caller holds
-	// the per-path mutex and the cross-process file lock); if the target does
-	// exist anyway, append a uniqueness suffix rather than clobber it.
+
 	if _, err := os.Stat(dst); err == nil {
 		dst = filepath.Join(hdir, fmt.Sprintf("%s.%s.%d.md", safe, stamp, os.Getpid()))
 	}
 	if err := os.Rename(path, dst); err != nil {
 		return "", err
 	}
-	return dst, nil // #3818: caller rolls back from dst if the swap-in fails
+	return dst, nil
 }
 
-// MemoryVersion is one archived (or current) snapshot of a memory key.
 type MemoryVersion struct {
-	// ModTime is when this version STARTED holding (rename preserves it, so
-	// an archived file keeps its original write time).
 	ModTime time.Time
-	// Path is the archived file (.history/<safe>.<stamp>.md).
+
 	Path string
-	// Size of the version in bytes.
+
 	Size int64
 }
 
-// historyVersions returns archived versions of `safe` sorted by ModTime
-// ascending. Missing .history dir or foreign files are skipped silently -
-// history is best-effort metadata, a corrupt archive must not break reads.
 func (am *AutoMemory) historyVersions(safe string) []MemoryVersion {
 	entries, err := os.ReadDir(filepath.Join(am.dir, historyDirName))
 	if err != nil {
@@ -99,21 +75,10 @@ func (am *AutoMemory) historyVersions(safe string) []MemoryVersion {
 	return out
 }
 
-// HistoryVersions is the exported view over historyVersions for tooling
-// (list_memory renders archive depth per key). Sorted oldest-first.
 func (am *AutoMemory) HistoryVersions(key string) []MemoryVersion {
 	return am.historyVersions(disambiguateKey(key, sanitizeKey(key)))
 }
 
-// ReadMemoryAsOf returns the content of `key` that held at instant `asOf`
-// (read-time temporal selection, Mem++'s core read primitive). The live file
-// participates as the newest version; archived versions fill earlier
-// intervals [version.ModTime, nextVersion.ModTime). Returns found=false when
-// the key did not exist at asOf yet.
-// tombstoneTimes returns every recorded deletion instant for safe: the
-// #4334 timestamp-suffixed tombstones plus the legacy single tombstone
-// (kept so pre-#4334 deletion instants remain visible). sanitized keys are
-// restricted to [a-zA-Z0-9_-], so the glob pattern itself is safe.
 func (am *AutoMemory) tombstoneTimes(safe string) []time.Time {
 	var times []time.Time
 	if matches, gErr := filepath.Glob(filepath.Join(am.dir, historyDirName, safe+".tombstone.*")); gErr == nil {
@@ -144,23 +109,13 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if info, statErr := os.Stat(path); statErr == nil {
 		versions = append(versions, snap{modTime: info.ModTime(), path: path})
 	}
-	// #3880/#3924/#4334: tombstones (written by DeleteMemory) mark deletion
-	// instants and CUT the interval of the last pre-delete version: an as_of
-	// at/after ANY deletion newer than the chosen version resolves nothing
-	// UNLESS a newer version (a recreate) was written after it - then that
-	// version's own interval starts and selection picks it naturally. This
-	// keeps the three-segment truth: old version / deleted gap / recreated
-	// version, and #4334 extends it to delete->recreate->delete (every
-	// deletion keeps its own tombstone; the legacy single tombstone is
-	// still honored). (Tombstones have no .md suffix, so historyVersions
-	// never lists them as content versions.)
+
 	tombTimes := am.tombstoneTimes(safe)
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
 	}
 	sort.Slice(versions, func(i, j int) bool { return versions[i].modTime.Before(versions[j].modTime) })
 
-	// Pick the latest version whose interval start is <= asOf.
 	chosen := -1
 	for i, v := range versions {
 		if !v.modTime.After(asOf) {
@@ -175,11 +130,7 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if readErr != nil {
 		return "", time.Time{}, false, readErr
 	}
-	// #3924/#4334: the chosen version predates a tombstone and the as_of is
-	// at or after that deletion - this is a DELETED GAP (no recreate landed
-	// before as_of), not the old version's interval. Every recorded
-	// deletion instant is checked independently so a double delete keeps
-	// BOTH gaps.
+
 	for _, t := range tombTimes {
 		if versions[chosen].modTime.Before(t) && !asOf.Before(t) {
 			debug.Log("memory", "as_of %s falls in the deleted gap of %q", asOf.Format(time.RFC3339), key)

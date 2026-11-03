@@ -12,11 +12,10 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// mockAgent is a minimal AgentRunner that records calls.
 type mockAgent struct {
 	mu      sync.Mutex
 	calls   []string
-	results map[string]string // prompt -> response
+	results map[string]string
 }
 
 func newMockAgent() *mockAgent {
@@ -67,7 +66,7 @@ func testManager(t *testing.T) (*Manager, *mockAgent) {
 	ma := newMockAgent()
 	m := NewManager(
 		config.SwarmConfig{},
-		nil, // provider not needed when we inject agentFactory
+		nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return ma
 		},
@@ -148,7 +147,6 @@ func TestManager_SpawnTeammate(t *testing.T) {
 		t.Errorf("expected idle, got %s", tmSnap.Status)
 	}
 
-	// Verify team snapshot updated
 	updated, _ := m.GetTeam(team.ID)
 	if len(updated.Teammates) != 1 {
 		t.Errorf("expected 1 teammate, got %d", len(updated.Teammates))
@@ -183,7 +181,6 @@ func TestManager_ShutdownTeammate(t *testing.T) {
 	team := m.CreateTeam("test-team", "leader-1")
 	tmSnap, _ := m.SpawnTeammate(team.ID, "coder", "33", nil)
 
-	// Give idle loop time to start
 	time.Sleep(50 * time.Millisecond)
 
 	err := m.ShutdownTeammate(team.ID, tmSnap.ID)
@@ -191,9 +188,6 @@ func TestManager_ShutdownTeammate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// #1633-2: shutdown now REMOVES the teammate (the entry used to linger
-	// and the 16-slot quota counted corpses until DeleteTeam). Verify it is
-	// gone and the slot is freed.
 	updated, _ := m.GetTeam(team.ID)
 	for _, tm := range updated.Teammates {
 		if tm.ID == tmSnap.ID {
@@ -254,7 +248,7 @@ func TestManager_BroadcastToTeam(t *testing.T) {
 	m.SpawnTeammate(team.ID, "tm-1", "", nil)
 	m.SpawnTeammate(team.ID, "tm-2", "", nil)
 
-	time.Sleep(50 * time.Millisecond) // let idle loops start
+	time.Sleep(50 * time.Millisecond)
 
 	msg := MailMessage{
 		From:    "leader-1",
@@ -280,7 +274,6 @@ func TestManager_EnsureTaskManager(t *testing.T) {
 	m, _ := testManager(t)
 	team := m.CreateTeam("test", "leader")
 
-	// First call creates
 	tm1, err := m.EnsureTaskManager(team.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -289,7 +282,6 @@ func TestManager_EnsureTaskManager(t *testing.T) {
 		t.Fatal("expected task manager")
 	}
 
-	// Second call returns same
 	tm2, _ := m.EnsureTaskManager(team.ID)
 	if tm1 != tm2 {
 		t.Error("expected same task manager instance")
@@ -315,10 +307,9 @@ func TestManager_Shutdown(t *testing.T) {
 
 	m.Shutdown()
 
-	// Root context should be done
 	select {
 	case <-m.RootContext().Done():
-		// expected
+
 	default:
 		t.Error("root context should be cancelled after shutdown")
 	}
@@ -328,7 +319,7 @@ func TestManager_Shutdown_DoubleCall(t *testing.T) {
 	m, _ := testManager(t)
 
 	m.Shutdown()
-	// Second call must not panic (close of closed channel)
+
 	m.Shutdown()
 }
 
@@ -459,7 +450,7 @@ func TestManager_SpawnTeammate_NilFactory(t *testing.T) {
 	if len(snap.Teammates) != 1 {
 		t.Fatalf("expected 1 teammate, got %d", len(snap.Teammates))
 	}
-	// The teammate should be created but with nil agent — idle loop should still run
+
 	if snap.Teammates[0].Status != TeammateIdle {
 		t.Fatalf("expected idle status, got %s", snap.Teammates[0].Status)
 	}
@@ -467,15 +458,15 @@ func TestManager_SpawnTeammate_NilFactory(t *testing.T) {
 
 func TestManager_SpawnTeammate_NilProvider(t *testing.T) {
 	cfg := config.SwarmConfig{MaxTeammatesPerTeam: 3}
-	// Nil provider + factory that creates agent with nil provider
+
 	factory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner {
-		return nil // no agent without provider
+		return nil
 	}
 	m := NewManager(cfg, nil, factory, nil)
 	defer m.Shutdown()
 
 	team := m.CreateTeam("test", "leader")
-	// Should not panic even with nil provider
+
 	snap, err := m.SpawnTeammate(team.ID, "worker", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -512,7 +503,7 @@ func TestManager_NextTeamIDRaceFree(t *testing.T) {
 	}
 
 	snap, _ := m.GetTeam(team.ID)
-	// All 20 teammates should have unique IDs
+
 	ids := map[string]bool{}
 	for _, tm := range snap.Teammates {
 		if ids[tm.ID] {
@@ -522,7 +513,6 @@ func TestManager_NextTeamIDRaceFree(t *testing.T) {
 	}
 }
 
-// mockAgentRunner is a simple AgentRunner for testing SpawnTeammate with a real factory.
 type mockAgentRunner struct {
 	runStreamFn func(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
 }
@@ -553,7 +543,6 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Send a task to the teammate
 	var mu sync.Mutex
 	var resultEvent Event
 	m.SetOnUpdate(func(ev Event) {
@@ -573,7 +562,6 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 		t.Fatalf("SendToTeammate error: %v", err)
 	}
 
-	// Wait for result
 	deadline := time.After(3 * time.Second)
 	for {
 		mu.Lock()
@@ -658,7 +646,7 @@ func containsSubstr(s, sub string) bool {
 }
 
 func TestManager_CancelAll(t *testing.T) {
-	// Create a manager where we can directly access internal teams
+
 	ma := newMockAgent()
 	m := NewManager(
 		config.SwarmConfig{},
@@ -674,7 +662,6 @@ func TestManager_CancelAll(t *testing.T) {
 	m.SpawnTeammate(teamSnap.ID, "w2", "", nil)
 	m.SpawnTeammate(teamSnap.ID, "w3", "", nil)
 
-	// Directly set w1 and w2 to Working status via internal team access
 	m.mu.Lock()
 	team := m.teams[teamSnap.ID]
 	m.mu.Unlock()
@@ -684,8 +671,6 @@ func TestManager_CancelAll(t *testing.T) {
 		}
 	}
 
-	// CancelAll should stop every live teammate, including idle ones that could
-	// otherwise pick up queued work after the UI already shows cancellation.
 	m.CancelAll()
 
 	snap := m.ListTeams()
@@ -698,7 +683,7 @@ func TestManager_CancelAll(t *testing.T) {
 
 func TestManager_CancelAll_Empty(t *testing.T) {
 	m, _ := testManager(t)
-	// No teams — should be no-op
+
 	m.CancelAll()
 }
 
@@ -746,7 +731,6 @@ func TestManager_SystemPromptBuilder(t *testing.T) {
 		return "custom-prompt"
 	})
 
-	// Spawn a teammate — it should use the builder, not the fallback
 	m.CreateTeam("my-team", "")
 	_, err := m.SpawnTeammate("team-1", "tester", "", nil)
 	if err != nil {
@@ -762,14 +746,13 @@ func TestManager_SystemPromptBuilder(t *testing.T) {
 func TestManager_SystemPromptBuilder_FallbackToMinimal(t *testing.T) {
 	m, _ := testManager(t)
 	m.SetWorkingDir("/test/dir")
-	// Do NOT set systemPromptBuilder — should fall back to buildTeammateSystemPrompt
 
 	m.CreateTeam("fallback-team", "")
 	_, err := m.SpawnTeammate("team-1", "fallback-teammate", "", nil)
 	if err != nil {
 		t.Fatalf("SpawnTeammate failed: %v", err)
 	}
-	// If no panic and teammate spawned, fallback works
+
 	m.CancelAll()
 }
 
@@ -800,7 +783,6 @@ func TestManager_ListTeamStatuses_WithTeammates(t *testing.T) {
 	m, tools := testManager(t)
 	team := m.CreateTeam("status-team", "leader-id")
 
-	// Spawn teammates
 	_, err := m.SpawnTeammate(team.ID, "coder", "32", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -811,7 +793,6 @@ func TestManager_ListTeamStatuses_WithTeammates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ListTeamStatuses should return lightweight info without copying events
 	statuses := m.ListTeamStatuses()
 	if len(statuses) != 1 {
 		t.Fatalf("expected 1 team, got %d", len(statuses))
@@ -831,27 +812,21 @@ func TestManager_ListTeamStatuses_WithTeammates(t *testing.T) {
 		t.Fatalf("expected 2 teammates, got %d", len(ts.Teammates))
 	}
 
-	// Teammates should be sorted by ID
 	if ts.Teammates[0].ID == "" || ts.Teammates[1].ID == "" {
 		t.Fatal("teammate IDs should not be empty")
 	}
 
-	// Verify the lightweight info has no events field (compile-time check via type)
-	// The TeammateStatusInfo type has only ID, Name, Status — no Events.
-	// This test ensures the API returns correct values.
 	for _, tm := range ts.Teammates {
 		if tm.Status != TeammateIdle {
 			t.Errorf("expected teammate %s to be idle, got %s", tm.ID, tm.Status)
 		}
 	}
 
-	// Suppress unused tools warning
 	_ = tools
 }
 
 func TestManager_ListTeamStatuses_DoesNotCopyEvents(t *testing.T) {
-	// Verify that ListTeamStatuses returns data even after appending many events.
-	// The key guarantee: it does NOT copy events, so it's safe to call at high frequency.
+
 	m, _ := testManager(t)
 	team := m.CreateTeam("events-team", "leader")
 
@@ -860,8 +835,6 @@ func TestManager_ListTeamStatuses_DoesNotCopyEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Append events directly to the teammate (bypass the runner)
-	// Access the teammate via the manager's internal team
 	tmID := tm.ID
 	m.mu.Lock()
 	for _, t := range m.teams {
@@ -873,7 +846,6 @@ func TestManager_ListTeamStatuses_DoesNotCopyEvents(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// ListTeamStatuses should still work and be lightweight
 	statuses := m.ListTeamStatuses()
 	if len(statuses) != 1 {
 		t.Fatalf("expected 1 team, got %d", len(statuses))
@@ -882,7 +854,6 @@ func TestManager_ListTeamStatuses_DoesNotCopyEvents(t *testing.T) {
 		t.Fatalf("expected 1 teammate, got %d", len(statuses[0].Teammates))
 	}
 
-	// The status info should not expose events (type has no Events field)
 	if statuses[0].Teammates[0].Status != TeammateIdle {
 		t.Errorf("expected idle, got %s", statuses[0].Teammates[0].Status)
 	}
@@ -897,7 +868,6 @@ func TestManager_TeammateEventsSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add events
 	tmID := tm.ID
 	m.mu.Lock()
 	for _, t := range m.teams {
@@ -909,7 +879,6 @@ func TestManager_TeammateEventsSince(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// Get all events
 	events, total, ok := m.TeammateEventsSince(tmID, 0)
 	if !ok {
 		t.Fatal("expected teammate to be found")
@@ -921,7 +890,6 @@ func TestManager_TeammateEventsSince(t *testing.T) {
 		t.Fatalf("expected 10 events, got %d", len(events))
 	}
 
-	// Get incremental events from index 7
 	events, total, ok = m.TeammateEventsSince(tmID, 7)
 	if !ok {
 		t.Fatal("expected teammate to be found")
@@ -933,7 +901,6 @@ func TestManager_TeammateEventsSince(t *testing.T) {
 		t.Fatalf("expected 3 incremental events, got %d", len(events))
 	}
 
-	// Non-existent teammate
 	_, _, ok = m.TeammateEventsSince("nonexistent", 0)
 	if ok {
 		t.Error("expected false for nonexistent teammate")
@@ -961,16 +928,13 @@ func TestManager_TeammateEventsSince_NoEvents(t *testing.T) {
 	}
 }
 
-// Regression for #1636-B: after ring eviction, an old ABSOLUTE cursor must
-// not silently skip events - the dropped offset absorbs the eviction.
 func TestEventsSinceSurvivesEviction(t *testing.T) {
 	tm := &Teammate{ID: "tm-1", Name: "tester"}
 	total := maxTeammateEvents + 5
 	for i := 0; i < total; i++ {
 		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: fmt.Sprintf("e%d", i)})
 	}
-	// Absolute cursor taken mid-stream (when the ring was full, before the
-	// 5 evictions): after eviction a relative-index caller skipped 5 events.
+
 	cursor := maxTeammateEvents
 	events, gotTotal := tm.EventsSince(cursor)
 	if gotTotal != total {
@@ -980,16 +944,13 @@ func TestEventsSinceSurvivesEviction(t *testing.T) {
 		t.Fatalf("expected the 5 newest events from absolute cursor %d, got %d events starting %q",
 			cursor, len(events), events[0].Text)
 	}
-	// Cursor predating evicted events replays the oldest survivors.
+
 	events2, _ := tm.EventsSince(0)
 	if len(events2) != maxTeammateEvents || events2[0].Text != fmt.Sprintf("e%d", 5) {
 		t.Fatalf("stale cursor must replay oldest survivors, got %d events starting %q", len(events2), events2[0].Text)
 	}
 }
 
-// #1633 case 2: shutdown must also free the stored result entry, not
-// just the quota slot (the field comment says "cleared on teammate
-// shutdown" - it used to only clear in DeleteTeam).
 func TestManager_ShutdownTeammateFreesResult(t *testing.T) {
 	m, _ := testManager(t)
 	team := m.CreateTeam("test-team", "leader-1")
@@ -1006,11 +967,6 @@ func TestManager_ShutdownTeammateFreesResult(t *testing.T) {
 	}
 }
 
-// TestGetTeammateResultAfterShutdown pins #1814: the stored result must
-// stay retrievable after the teammate was shut down and REMOVED - the
-// fallback used to sit behind the existence gate, so "shut the worker,
-// then collect the output" (the most common order) hit a result
-// blackhole while the data sat in m.results.
 func TestGetTeammateResultAfterShutdown(t *testing.T) {
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	team := m.CreateTeam("result-team", "leader-1")
@@ -1018,11 +974,10 @@ func TestGetTeammateResultAfterShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	// Simulate a stored final result, then remove the teammate (what
-	// ShutdownTeammate's removal does once the goroutine exits).
+
 	m.mu.Lock()
 	m.results[tm.ID] = "final output"
-	// Drop the teammate from its team to model the post-shutdown state.
+
 	if t0, ok := m.teams[team.ID]; ok {
 		t0.mu.Lock()
 		delete(t0.Teammates, tm.ID)

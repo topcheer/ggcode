@@ -1,8 +1,3 @@
-// Command fakelsp is a minimal offline LSP server used by
-// zz_covboost_test.go. It speaks Content-Length framed JSON-RPC over
-// stdio and answers each request by method name with a canned result.
-// The document URI used in location results is learned from the first
-// textDocument/didOpen notification.
 package main
 
 import (
@@ -28,7 +23,7 @@ func writeFrame(w io.Writer, body string) {
 
 func main() {
 	var mu sync.Mutex
-	uri := "file:///ws/main.go" // replaced by the first didOpen URI
+	uri := "file:///ws/main.go"
 	rng := `{"start":{"line":1,"character":2},"end":{"line":3,"character":4}}`
 	rng2 := `{"start":{"line":5,"character":0},"end":{"line":5,"character":9}}`
 
@@ -47,7 +42,7 @@ func main() {
 		if err != nil || n <= 0 || n > 1<<20 {
 			return
 		}
-		// consume the blank separator line
+
 		if _, err := in.ReadString('\n'); err != nil {
 			return
 		}
@@ -60,8 +55,7 @@ func main() {
 			continue
 		}
 		if env.ID == nil {
-			// notification: no response expected, but didOpen tells us
-			// the real document URI to use in location results.
+
 			if env.Method == "textDocument/didOpen" {
 				var p struct {
 					TextDocument struct {

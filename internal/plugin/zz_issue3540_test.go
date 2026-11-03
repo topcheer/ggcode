@@ -1,11 +1,5 @@
 package plugin
 
-// #3540: the 24h onboarding window must be anchored to the FIRST approval,
-// not to the last change. Before this fix every SaveBaseline reset
-// ApprovedAt=now and driftInOnboardingWindow read that rolling timestamp, so
-// a server refreshing its tools more often than once a day kept the window
-// open forever and any later rug pull was silently adopted.
-
 import (
 	"testing"
 	"time"
@@ -13,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// setBaselineTimes rewrites the persisted baseline's timestamps under the
-// store lock (mirrors the pre-existing test pattern for simulating time
-// passage; recordToolBaselineLocked reads wall-clock now).
 func setBaselineTimes(t *testing.T, m *MCPPlugin, approvedAt, firstApprovedAt time.Time) {
 	t.Helper()
 	m.baselines.mu.Lock()
@@ -35,17 +26,12 @@ func setBaselineTimes(t *testing.T, m *MCPPlugin, approvedAt, firstApprovedAt ti
 	}
 }
 
-// TestIssue3540_RollingWindowBypassClosed pins the core exploit: last change
-// 23h ago (a rolling window would renew), FIRST approval 48h ago (the window
-// anchored to the initial approval has expired). The change must fire.
 func TestIssue3540_RollingWindowBypassClosed(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1"})
 	m.mu.Unlock()
 
-	// Server made a small change yesterday (ApprovedAt moved forward 23h
-	// ago); the original approval is 48h old.
 	setBaselineTimes(t, m, time.Now().Add(-23*time.Hour), time.Now().Add(-48*time.Hour))
 
 	m.mu.Lock()
@@ -59,9 +45,6 @@ func TestIssue3540_RollingWindowBypassClosed(t *testing.T) {
 	}
 }
 
-// TestIssue3540_SaveBaselinePreservesFirstApproval: subsequent baseline
-// updates (including silent ones inside the window) must never move the
-// FirstApprovedAt anchor.
 func TestIssue3540_SaveBaselinePreservesFirstApproval(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
 	m.mu.Lock()
@@ -71,7 +54,6 @@ func TestIssue3540_SaveBaselinePreservesFirstApproval(t *testing.T) {
 	first := time.Now().Add(-10 * time.Hour)
 	setBaselineTimes(t, m, time.Now(), first)
 
-	// Another observed change -> SaveBaseline under the hood.
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h2", []string{"t1"})
 	m.mu.Unlock()
@@ -89,16 +71,12 @@ func TestIssue3540_SaveBaselinePreservesFirstApproval(t *testing.T) {
 	}
 }
 
-// TestIssue3540_LegacyRecordFallsBackToApprovedAt: records persisted before
-// the anchor field existed (zero FirstApprovedAt) keep the old semantics:
-// window measured from ApprovedAt.
 func TestIssue3540_LegacyRecordFallsBackToApprovedAt(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1"})
 	m.mu.Unlock()
 
-	// Legacy shape: no FirstApprovedAt, approved 1h ago -> inside window.
 	setBaselineTimes(t, m, time.Now().Add(-time.Hour), time.Time{})
 	m.mu.Lock()
 	_, _, fire := m.recordToolBaselineLocked("h2", []string{"t1"})
@@ -107,8 +85,6 @@ func TestIssue3540_LegacyRecordFallsBackToApprovedAt(t *testing.T) {
 		t.Fatal("legacy record inside window must stay silent")
 	}
 
-	// And the save after that change must backfill the anchor so the window
-	// becomes anchored going forward.
 	b, _ := m.baselines.LoadBaseline("srv")
 	if b.FirstApprovedAt.IsZero() {
 		t.Fatal("anchor must be backfilled on first save after the fix")

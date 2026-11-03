@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// TeammateStatus represents the lifecycle state of a teammate within a team.
 type TeammateStatus string
 
 const (
@@ -18,58 +17,50 @@ const (
 	TeammateShuttingDown TeammateStatus = "shutting_down"
 )
 
-// MailMessage is a message delivered to a teammate's inbox.
 type MailMessage struct {
-	From    string // sender ID (leader or another teammate)
-	Content string // task or message content
-	Summary string // optional short summary
-	Type    string // "task", "message", "shutdown"
+	From    string
+	Content string
+	Summary string
+	Type    string
 
-	// ReplyTo is an optional channel for sending the task result back to the caller.
-	// If non-nil, the idle runner will send the execution result here after the task completes.
-	// The caller (e.g., send_message tool) blocks on this channel to await the result.
 	ReplyTo chan<- TaskResult
 }
 
-// TaskResult holds the outcome of a teammate executing a task.
 type TaskResult struct {
 	Output string
 	Error  error
 }
 
-// TeammateEventType identifies the kind of teammate event.
 type TeammateEventType int
 
 const (
-	TeammateEventText       TeammateEventType = iota // LLM text output
-	TeammateEventReasoning                           // LLM thinking/reasoning output
-	TeammateEventToolCall                            // tool invocation started
-	TeammateEventToolResult                          // tool execution result
-	TeammateEventError                               // error encountered
+	TeammateEventText TeammateEventType = iota
+	TeammateEventReasoning
+	TeammateEventToolCall
+	TeammateEventToolResult
+	TeammateEventError
 )
 
-// TeammateEvent is a single recorded event from a teammate's execution.
 type TeammateEvent struct {
 	Type     TeammateEventType
-	Text     string // TeammateEventText / TeammateEventReasoning / TeammateEventError
-	ToolName string // TeammateEventToolCall / TeammateEventToolResult
-	ToolID   string // TeammateEventToolCall / TeammateEventToolResult — unique ID for precise matching
-	ToolArgs string // TeammateEventToolCall
-	Result   string // TeammateEventToolResult
-	IsError  bool   // TeammateEventToolResult / TeammateEventError
+	Text     string
+	ToolName string
+	ToolID   string
+	ToolArgs string
+	Result   string
+	IsError  bool
 }
 
 const maxTeammateEvents = 200
 
-// Teammate represents a worker agent within a team.
 type Teammate struct {
 	ID            string
-	Name          string // e.g., "researcher", "coder"
-	Color         string // TUI display color (ANSI code or empty)
+	Name          string
+	Color         string
 	Status        TeammateStatus
 	CurrentTask   string
-	CurrentTaskID string // #1688: claimed board task ID (CurrentTask holds the SUBJECT for display)
-	LastResult    string // most recent task output (truncated)
+	CurrentTaskID string
+	LastResult    string
 	Inbox         chan MailMessage
 	CreatedAt     time.Time
 	StartedAt     time.Time
@@ -80,7 +71,7 @@ type Teammate struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	done   chan struct{} // closed when the idle-runner goroutine exits
+	done   chan struct{}
 	mu     sync.Mutex
 }
 
@@ -118,16 +109,6 @@ func (t *Teammate) appendEvent(ev TeammateEvent) {
 	t.events = append(t.events, ev)
 }
 
-// EventsSince returns only events with index >= fromIdx, along with the total
-// event count. This avoids copying the full event history when only incremental
-// events are needed (e.g. GUI agent panel updates).
-// EventsSince returns events newer than the caller's cursor. The cursor and
-// the returned total are ABSOLUTE positions (len(events) + eventsDropped):
-// the ring-buffer eviction (events = events[1:]) shifts relative indices,
-// so a caller that stored a relative total and reused it after N evictions
-// silently skipped N events. Callers keep passing back whatever total they
-// received - now both sides of the comparison live in the same monotonic
-// domain and eviction is absorbed by the dropped offset.
 func (t *Teammate) EventsSince(fromIdx int) ([]TeammateEvent, int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -135,11 +116,10 @@ func (t *Teammate) EventsSince(fromIdx int) ([]TeammateEvent, int) {
 	if fromIdx >= total {
 		return nil, total
 	}
-	// #1636-B: translate the absolute cursor into the live slice's frame.
+
 	rel := fromIdx - t.eventsDropped
 	if rel < 0 {
-		// The cursor predates evicted events the caller never saw - replay
-		// from the oldest surviving event rather than skipping.
+
 		rel = 0
 	}
 	out := make([]TeammateEvent, len(t.events)-rel)
@@ -153,11 +133,6 @@ func (t *Teammate) getResults() string {
 	return t.LastResult
 }
 
-// TeammateStatusInfo is a lightweight read-only copy of a Teammate's identity
-// and status. Unlike TeammateSnapshot, it does NOT copy events, making it
-// safe to call at high frequency (e.g. every streaming token) without
-// incurring O(maxTeammateEvents) copy overhead or contending the Teammate.mu
-// lock that the runner uses for appendEvent.
 type TeammateStatusInfo struct {
 	ID          string
 	Name        string
@@ -167,8 +142,6 @@ type TeammateStatusInfo struct {
 	LastResult  string
 }
 
-// statusInfo returns a lightweight copy with only identity + status.
-// It acquires Teammate.mu briefly to read the Status field.
 func (t *Teammate) statusInfo() TeammateStatusInfo {
 	t.mu.Lock()
 	info := TeammateStatusInfo{
@@ -183,14 +156,13 @@ func (t *Teammate) statusInfo() TeammateStatusInfo {
 	return info
 }
 
-// TeammateSnapshot is a read-only copy of a Teammate for external consumption.
 type TeammateSnapshot struct {
 	ID            string
 	Name          string
 	Color         string
 	Status        TeammateStatus
 	CurrentTask   string
-	LastResult    string // most recent task output (truncated)
+	LastResult    string
 	CreatedAt     time.Time
 	StartedAt     time.Time
 	EndedAt       time.Time
@@ -218,19 +190,17 @@ func (t *Teammate) snapshot() TeammateSnapshot {
 	}
 }
 
-// Team represents a collaboration group with a leader and multiple teammates.
 type Team struct {
 	ID        string
 	Name      string
 	LeaderID  string
 	Teammates map[string]*Teammate
-	Tasks     *task.Manager // shared task board
+	Tasks     *task.Manager
 	CreatedAt time.Time
 
 	mu sync.RWMutex
 }
 
-// TeamSnapshot is a read-only copy of a Team for external consumption.
 type TeamSnapshot struct {
 	ID        string
 	Name      string
@@ -240,10 +210,6 @@ type TeamSnapshot struct {
 	CreatedAt time.Time
 }
 
-// teammateStatuses returns lightweight status info for all teammates.
-// Unlike snapshot(), this does NOT copy events and is safe to call at high
-// frequency. It only acquires Team.mu.RLock briefly to iterate teammates,
-// and each Teammate.mu briefly to read Status.
 func (t *Team) teammateStatuses() []TeammateStatusInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -343,11 +309,6 @@ func (t *Team) getTeammate(id string) (*Teammate, bool) {
 	return m, ok
 }
 
-// removeTeammate drops a teammate from the map. #1633-2: shutdown never
-// deleted the entry, so the 16-slot quota counted corpses - repeated
-// spawn/shutdown cycles exhausted the quota and new teammates were
-// permanently rejected until DeleteTeam. Snapshot/event consumers read
-// by ID; a shutting-down entry lingering would keep the slot reserved.
 func (t *Team) removeTeammate(id string) {
 	t.mu.Lock()
 	delete(t.Teammates, id)
@@ -364,17 +325,16 @@ func (t *Team) listTeammates() []*Teammate {
 	return out
 }
 
-// Event represents a state change in the swarm system, sent to TUI via callback.
 type Event struct {
-	Type         string // "teammate_spawned", "teammate_working", "teammate_text", "teammate_tool_call", "teammate_idle", "teammate_shutdown", "team_created", "team_deleted"
+	Type         string
 	TeamID       string
 	TeammateID   string
 	TeammateName string
 	Result       string
 	Error        error
-	CurrentTool  string // tool name (for teammate_tool_call)
-	ToolID       string // tool call ID (for teammate_tool_call/result)
-	ToolArgs     string // tool args (for teammate_tool_call)
-	IsError      bool   // tool result error (for teammate_tool_result)
+	CurrentTool  string
+	ToolID       string
+	ToolArgs     string
+	IsError      bool
 	Timestamp    time.Time
 }

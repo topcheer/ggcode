@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tui"
 )
 
-// TestPlainCatalogKeyParity ensures every key translated in one catalog
-// exists in the other - a missing entry would silently fall back to English
-// (or worse, print the raw key) mid-session.
 func TestPlainCatalogKeyParity(t *testing.T) {
 	en := plainCatalogs[tui.LangEnglish]
 	zh := plainCatalogs[tui.LangZhCN]
@@ -34,8 +31,6 @@ func TestPlainCatalogKeyParity(t *testing.T) {
 	}
 }
 
-// TestPlainTrFallback verifies lookup order: active language, then English,
-// then the raw key (never blank output).
 func TestPlainTrFallback(t *testing.T) {
 	if got := plainTr(tui.LangEnglish, "banner"); got == "" || got == "banner" {
 		t.Errorf("en lookup failed: %q", got)
@@ -43,18 +38,16 @@ func TestPlainTrFallback(t *testing.T) {
 	if got := plainTr(tui.LangZhCN, "banner"); got == "" || got == "banner" {
 		t.Errorf("zh lookup failed: %q", got)
 	}
-	// Unsupported language falls back to English.
+
 	if got := plainTr(tui.Language("fr"), "banner"); got != plainTr(tui.LangEnglish, "banner") {
 		t.Errorf("unsupported language must fall back to en, got %q", got)
 	}
-	// Unknown key falls back to the key itself.
+
 	if got := plainTr(tui.LangEnglish, "no.such.key"); got != "no.such.key" {
 		t.Errorf("unknown key must echo the key, got %q", got)
 	}
 }
 
-// TestPlainLangFromConfig verifies the startup derivation: empty stays
-// English, configured values normalize (POSIX locale suffixes included).
 func TestPlainLangFromConfig(t *testing.T) {
 	if got := plainLangFromConfig(""); got != tui.LangEnglish {
 		t.Errorf("empty config language = %q, want en", got)
@@ -67,7 +60,6 @@ func TestPlainLangFromConfig(t *testing.T) {
 	}
 }
 
-// TestCfgLangNilSafe verifies the nil-config accessor used at startup.
 func TestCfgLangNilSafe(t *testing.T) {
 	if got := cfgLang(nil); got != "" {
 		t.Errorf("cfgLang(nil) = %q, want empty", got)

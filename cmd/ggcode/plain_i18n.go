@@ -1,11 +1,5 @@
 package main
 
-// Linear-frontend i18n (#4604): every user-visible string of the plain REPL
-// goes through plainTr. Two catalogs are maintained (en, zh-CN) keyed by
-// tui.Language; other configured languages fall back to English. The catalog
-// lives here (not in internal/tui's 1300-line table) so the linear frontend
-// stays self-contained and its strings can be audited separately.
-
 import (
 	"strings"
 
@@ -155,14 +149,8 @@ var plainCatalogs = map[tui.Language]map[string]string{
 	},
 }
 
-// plainLang is the linear frontend's active language: initialized from
-// cfg.Language at startup, hot-switched by /lang (which also persists to
-// cfg.Language so TUI/pipe sessions inherit the choice).
 var plainLang = tui.LangEnglish
 
-// plainTr looks up key in the active language catalog, falling back to
-// English, then to the key itself (missing translation should never blank
-// the output).
 func plainTr(lang tui.Language, key string) string {
 	if c, ok := plainCatalogs[lang]; ok {
 		if v, ok := c[key]; ok {
@@ -175,8 +163,6 @@ func plainTr(lang tui.Language, key string) string {
 	return key
 }
 
-// plainLangFromConfig derives the frontend language from cfg.Language,
-// defaulting to English (same convention as the TUI's startup path).
 func plainLangFromConfig(cfgLanguage string) tui.Language {
 	if strings.TrimSpace(cfgLanguage) == "" {
 		return tui.LangEnglish
@@ -184,7 +170,6 @@ func plainLangFromConfig(cfgLanguage string) tui.Language {
 	return tui.NormalizeLanguage(cfgLanguage)
 }
 
-// cfgLang extracts cfg.Language nil-safely.
 func cfgLang(cfg *config.Config) string {
 	if cfg == nil {
 		return ""

@@ -111,7 +111,7 @@ func (m Model) renderWeComPanel() string {
 		if entry.Disabled {
 			status = m.t("panel.wecom.entry.disabled")
 		} else if entry.Muted {
-			// #2211 family: details ignored Muted (same #887 gap as feishu).
+
 			status = m.t("panel.wecom.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.wecom.entry.bound")
@@ -164,10 +164,7 @@ func (m *Model) wecomAdapterStatus(state *im.AdapterState) string {
 	if state == nil {
 		return m.t("panel.wecom.status.not_started")
 	}
-	// #922: check Status first - the adapter publishes (false,'connecting','')
-	// during a normal reconnect, which showed as generic 'unknown'; and a
-	// stale LastError used to hide an active reconnect (whatsapp checks
-	// Status first).
+
 	if status := strings.TrimSpace(state.Status); status != "" && status != "connected" {
 		return status
 	}
@@ -306,10 +303,8 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				"secret": secret,
 			},
 		}
-		// #1367 family batch 3: config write + explicit persist (#1399)
-		// moved onto the Update loop via configMutationMsg (see
-		// config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -317,13 +312,7 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				// #1399: AddIMAdapter's patch writes ONLY the adapters subtree -
-				// not im.enabled. The in-memory Enabled=true above also defeats
-				// the ensureWeComRuntime auto-enable saveConfig fallback (it sees
-				// the flag already set and skips persisting), and every startup
-				// gates on cfg.IM.Enabled: after restart the adapter with its
-				// persisted secrets never started - silently. Persist explicitly
-				// like the whatsapp panel does.
+
 				if err := m.saveConfig(); err != nil {
 					return fmt.Errorf("persist config: %w", err)
 				}
@@ -332,18 +321,15 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					if err := m.ensureWeComRuntime(); err != nil {
-						// #2232: roll back the just-persisted adapter - the dirty
-						// Enabled:true credentials retried forever (#2215 tg pattern).
+
 						return m.rollbackWecomCreate(name, err, imEnabledBefore)
 					}
 					if err := m.startWeComAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errWecomEnableNeeded) {
-							// #1792 case 3: enable on the Update loop, then restart.
-							// #2232: a failure inside the enable mutation also rolls
-							// back (its single caller is this create flow).
+
 							return m.wecomEnableMutation(name, imEnabledBefore, m.wecomEnableRollback(name, imEnabledBefore))
 						}
-						// #2232: generic start failure rolls back too.
+
 						return m.rollbackWecomCreate(name, err, imEnabledBefore)
 					}
 					return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
@@ -356,25 +342,19 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 	}
 }
 
-// wecomEnableRollback adapts the #2232 create-flow rollback into the
-// next-continuation shape wecomEnableMutation expects.
 func (m *Model) wecomEnableRollback(name string, imEnabledBefore bool) func(m *Model) tea.Msg {
 	return func(m *Model) tea.Msg {
 		return m.rollbackWecomCreate(name, fmt.Errorf("wecom enable-restart failed for %s", name), imEnabledBefore)
 	}
 }
 
-// rollbackWecomCreate removes a just-persisted wecom adapter whose
-// runtime start failed (#2232) - mirrors rollbackTGCreate (#2215):
-// map REMOVE rides configMutationMsg (#1370 pattern), the original
-// error still surfaces, and a failed rollback is appended to it.
 func (m *Model) rollbackWecomCreate(name string, origErr error, imEnabledBefore bool) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
 			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 				return rerr
 			}
-			m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+			m.config.IM.Enabled = imEnabledBefore
 			return m.saveConfig()
 		},
 		next: func(m *Model) tea.Cmd {
@@ -386,12 +366,8 @@ func (m *Model) rollbackWecomCreate(name string, origErr error, imEnabledBefore 
 	}
 }
 
-// errWecomEnableNeeded signals the auto-enable must run on the Update
-// loop via configMutationMsg (#1792 case 3).
 var errWecomEnableNeeded = errors.New("wecom adapter needs enable-on-update-loop")
 
-// wecomEnableMutation performs the auto-enable on the Update loop, then
-// restarts the adapter and continues with next.
 func (m *Model) wecomEnableMutation(name string, imEnabledBefore bool, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -406,8 +382,7 @@ func (m *Model) wecomEnableMutation(name string, imEnabledBefore bool, next func
 		next: func(m *Model) tea.Cmd {
 			return func() tea.Msg {
 				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
-					// #2232: create-flow enable-restart failure rolls back the
-					// just-added adapter instead of a bare error over dirty config.
+
 					return m.rollbackWecomCreate(name, err, imEnabledBefore)
 				}
 				if next == nil {
@@ -441,11 +416,7 @@ func (m *Model) startWeComAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.wecom.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// #1792 case 3: this ran SetIMAdapterEnabled on the Cmd goroutine -
-		// config map write + disk save racing the View thread's per-frame
-		// iteration of the same map (concurrent map read/write fatal). The
-		// #1367 family comment above claims the migration; this call missed
-		// it. Signal the caller to route through configMutationMsg.
+
 		return errWecomEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWeCom)) {
@@ -471,20 +442,10 @@ func (m *Model) bindWeComEntry(entry wecomBindingEntry) tea.Cmd {
 	}
 }
 
-// wecomBindTail is the bind flow after the guards: start the adapter
-// (auto-enabling on the #1792 sentinel - the CREATE flow intercepted
-// errWecomEnableNeeded and ran wecomEnableMutation, but the BIND flow
-// passed it through raw, so the user saw the bare internal sentinel
-// string and the bind never ran; #2333), then bind the channel.
 func (m *Model) wecomBindTail(entry wecomBindingEntry, ws string) tea.Msg {
 	if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {
 		if errors.Is(err, errWecomEnableNeeded) {
-			// #2337: wecomEnableMutation's enable-restart failure calls
-			// rollbackWecomCreate, which DELETES the adapter - correct for the
-			// create flow (dirty just-persisted config), catastrophic for bind:
-			// a pre-existing adapter would vanish because its restart hiccuped.
-			// Inline the same enable mutation, but bind-only: a restart failure
-			// surfaces as a plain bind error and the adapter is left as-is.
+
 			return configMutationMsg{
 				apply: func(m *Model) error {
 					if err := m.config.SetIMAdapterEnabled(entry.Adapter, true); err != nil {
@@ -540,9 +501,7 @@ func (m *Model) clearWeComChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return wecomBindResultMsg{}
 		}
-		// #918: was UnbindAdapter (deletes the binding for ALL workspaces)
-		// with swallowed error + false 'cleared' - the #898/#905 family fix
-		// missed wecom. Clear channel fields only, keep the binding.
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return wecomBindResultMsg{err: err}
 		}
@@ -572,8 +531,7 @@ func (m Model) wecomBindingEntries() []wecomBindingEntry {
 			}
 		}
 	}
-	// #2337: take the snapshot once - the live-map len below raced the
-	// Update loop's locked writes (capacity hint only, but -race trips).
+
 	snapAdapters := m.config.IMSnapshot().Adapters
 	keys := make([]string, 0, len(snapAdapters))
 	for name, adapter := range snapAdapters {

@@ -20,22 +20,19 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-const wechatPollMaxFailures = 8 // #1398-A: consecutive poll errors before giving up
+const wechatPollMaxFailures = 8
 
 const wechatILinkBaseURL = "https://ilinkai.weixin.qq.com"
 
-// wechatPanelState tracks the WeChat iLink panel UI state.
 type wechatPanelState struct {
 	selected    int
 	message     string
-	authPhase   string // "", "requesting", "showing_qr", "polling", "confirmed"
+	authPhase   string
 	qrcodeToken string
-	qrcodeImage string // terminal-rendered QR (Unicode block chars)
+	qrcodeImage string
 	botToken    string
 	editState   imAdapterEditState
-	// #1398-A: consecutive failed polls; >= wechatPollMaxFailures stops
-	// the retry loop (previously every error branch re-polled forever -
-	// a fast-failing network turned the open panel into a request storm).
+
 	pollFailures int
 }
 
@@ -113,8 +110,7 @@ func (m Model) renderWechatPanel() string {
 				case "waiting_for_auth":
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" ○")
 				case "connecting":
-					// #922: a normal initial connection showed as a red failure
-					// dot - the adapter publishes 'connecting' with empty LastError.
+
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" ◐")
 				default:
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" ○")
@@ -135,14 +131,12 @@ func (m Model) renderWechatPanel() string {
 		}
 	}
 
-	// Edit mode
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
 		body = append(body, "", m.renderIMEditInput(&panel.editState))
 	}
 
-	// Help
 	help := m.t("panel.wechat.help")
 	body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(help))
 
@@ -159,7 +153,6 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Edit mode intercepts all keys
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -203,12 +196,12 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		panel.message = ""
 	case "a":
-		// Start QR auth flow — no pre-existing adapter needed
+
 		panel.authPhase = "requesting"
 		panel.message = ""
 		return *m, m.requestWechatQRCode()
 	case "enter", "b":
-		// Bind selected bot to current workspace
+
 		if len(entries) > 0 && panel.selected < len(entries) {
 			entry := entries[panel.selected]
 			return *m, m.bindWechatEntry(entry)
@@ -223,7 +216,7 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 	case "r":
-		// Remove: unbind + stop adapter + delete config
+
 		if len(entries) > 0 && panel.selected < len(entries) {
 			entry := entries[panel.selected]
 			return *m, m.removeWechatEntry(entry)
@@ -231,8 +224,6 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	return *m, nil
 }
-
-// ---- iLink HTTP helpers (no adapter dependency) ----
 
 func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
@@ -247,9 +238,7 @@ func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// #1398-A: a 4xx/5xx body used to be handed to json.Unmarshal as if it
-	// were the expected payload - poll errors surfaced as parse failures,
-	// and every branch below re-polled unconditionally anyway.
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := util.ReadAll(resp.Body, 4096)
 		return nil, fmt.Errorf("ilink: HTTP %d: %s", resp.StatusCode, string(body))
@@ -257,7 +246,6 @@ func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error)
 	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
 }
 
-// requestWechatQRCode requests a QR code directly from iLink (no adapter needed).
 func (m *Model) requestWechatQRCode() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -280,8 +268,6 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 			return wechatQRCodeMsg{err: fmt.Errorf("empty QR code token in response")}
 		}
 
-		// qrcode_img_content is the text content (URL) for generating QR,
-		// NOT a base64-encoded image. Use go-qrcode to render it.
 		qrImage, err := renderQRFromString(resp.QRCodeImgContent)
 		if err != nil {
 			debug.Log("wechat", "QR render failed: %v", err)
@@ -291,16 +277,9 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 	}
 }
 
-// pollWechatQRStatus polls the QR code scan status directly (no adapter needed).
-// wechatPollTick delays a re-poll re-arm (#1792 case 2): #1398-A capped
-// the FAILURE streak, but the healthy wait-loop re-polled at network RTT
-// (~10 req/s) for as long as the QR sat unscanned.
 func wechatPollTick(qrcodeToken string) tea.Cmd {
 	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
-		// The tick fires as a bare Msg; wrap so the handler sees a poll
-		// request. Reuse the poll command lazily by returning a marker the
-		// existing command path handles: simplest is to schedule the real
-		// poll command here.
+
 		return wechatPollDueMsg{token: qrcodeToken}
 	})
 }
@@ -309,8 +288,7 @@ type wechatPollDueMsg struct{ token string }
 
 func (m *Model) pollWechatQRStatus(qrcodeToken string) tea.Cmd {
 	return func() tea.Msg {
-		// #1398-A: an empty token produced a guaranteed-failing request on
-		// every poll tick - nothing useful can come of it.
+
 		if qrcodeToken == "" {
 			return wechatQRPollMsg{err: errors.New("no QR token")}
 		}
@@ -334,8 +312,6 @@ func (m *Model) pollWechatQRStatus(qrcodeToken string) tea.Cmd {
 	}
 }
 
-// ---- QR message handlers ----
-
 func (m *Model) handleWechatQRCodeMsg(msg wechatQRCodeMsg) (Model, tea.Cmd) {
 	panel := m.wechatPanel
 	if panel == nil {
@@ -350,7 +326,7 @@ func (m *Model) handleWechatQRCodeMsg(msg wechatQRCodeMsg) (Model, tea.Cmd) {
 	panel.qrcodeImage = msg.qrcodeImage
 	panel.authPhase = "showing_qr"
 	panel.message = ""
-	// Open QR overlay for user to scan
+
 	m.openQROverlayDirect(
 		"WeChat — "+m.t("panel.wechat.scan_qr"),
 		m.t("panel.wechat.scan_qr"),
@@ -366,13 +342,10 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// #922: check msg.err BEFORE the switch - error paths carried
-	// status '' which routed to 'case "wait", ""', making the default's
-	// err branch unreachable dead code (silent infinite re-poll on 5xx).
 	if msg.err != nil {
 		panel.pollFailures++
 		if panel.pollFailures >= wechatPollMaxFailures {
-			// #1398-A: give up instead of hammering iLink forever.
+
 			panel.message = fmt.Sprintf("Poll failed %d times, stopped: %v", panel.pollFailures, msg.err)
 			panel.authPhase = ""
 			return *m, nil
@@ -384,25 +357,19 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	case "confirmed":
 		panel.authPhase = "confirmed"
 		panel.botToken = msg.botToken
-		m.closeQROverlay() // close QR overlay, back to panel
-		// Auto-create adapter config and start it
+		m.closeQROverlay()
+
 		return *m, m.saveWechatBotToken(msg.botToken)
 	case "scanned":
 		panel.authPhase = "polling"
 		panel.message = m.t("panel.wechat.scanned")
-		return *m, wechatPollTick(panel.qrcodeToken) // #1792 case 2: paced
+		return *m, wechatPollTick(panel.qrcodeToken)
 	case "wait", "":
 		panel.authPhase = "polling"
-		panel.pollFailures = 0                       // #1398-A: healthy poll resets the streak
-		return *m, wechatPollTick(panel.qrcodeToken) // #1792 case 2: paced
+		panel.pollFailures = 0
+		return *m, wechatPollTick(panel.qrcodeToken)
 	default:
-		// #1792 case 1: the err check below was dead code (the error
-		// path already returned at the top) - expired/canceled/timeout
-		// statuses fell here and silently stopped polling: the QR
-		// overlay kept showing the EXPIRED code, authPhase froze in
-		// polling, and the user had no signal to press 'a' and restart.
-		// Terminal states now surface: message + overlay closed + a
-		// failed phase the 'a' restart path already handles.
+
 		panel.authPhase = "failed"
 		panel.message = fmt.Sprintf(m.t("panel.wechat.auth_failed"), msg.status)
 		if m.qrOverlay != nil {
@@ -412,7 +379,6 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	}
 }
 
-// saveWechatBotToken creates the wechat adapter config and starts the adapter.
 func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 	return func() tea.Msg {
 		if m.config == nil {
@@ -420,10 +386,6 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 			return imEditResultMsg{err: fmt.Errorf("config unavailable")}
 		}
 
-		// Auto-generate name: wechat → wechat-2 → wechat-3 ...
-		// #1367 family batch 3: the existence-check loop READS the adapters
-		// map and AddIMAdapter writes it - both moved onto the Update loop
-		// via configMutationMsg; the name is computed inside apply.
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				adapterName := "wechat"
@@ -451,13 +413,11 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					adapterName := m.lastWechatAdapterName
-					// Start the adapter (binding happens when the first inbound message triggers pairing)
+
 					if m.imManager != nil {
 						if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), adapterName, m.imManager); err != nil {
 							debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
-							// #1398-C: adapter saved but NOT running - surfacing this as
-							// success made users believe the config was live. The token IS
-							// persisted, so this is a start failure, not an auth failure.
+
 							return imEditResultMsg{adapterName: adapterName, field: "bot_token", err: fmt.Errorf("saved, but adapter failed to start: %w", err)}
 						} else {
 							debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
@@ -476,8 +436,6 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 	}
 }
 
-// bindWechatEntry binds the selected bot to the current workspace.
-// bindWechatEntry binds the wechat adapter to the current workspace.
 func (m *Model) startWechatAdapterIfNeeded(name string) error {
 	if m.imManager == nil || m.config == nil {
 		return nil
@@ -502,8 +460,6 @@ func (m *Model) startWechatAdapterIfNeeded(name string) error {
 	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
-// This only registers the workspace association — the ChannelID/TargetID
-// are set later when the first inbound message triggers the pairing flow.
 func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
@@ -529,13 +485,9 @@ func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	}
 }
 
-// removeWechatEntry fully removes a bot: unbind, stop adapter, delete config.
 func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// #1367 family batch 3 补遗: RemoveIMAdapter is a map DELETE -
-		// same fatal concurrent-map-write class as AddIMAdapter. It now
-		// runs on the Update loop via configMutationMsg; the imManager
-		// stop/unbind (no config access) stays on the Cmd goroutine.
+
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				if m.config == nil {
@@ -545,7 +497,7 @@ func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
-					// 1. Unbind + stop (ignore error if no binding exists)
+
 					if m.imManager != nil {
 						m.imManager.StopAdapter(entry.Adapter)
 						_ = m.imManager.UnbindAdapter(entry.Adapter)
@@ -560,10 +512,6 @@ func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	}
 }
 
-// ---- QR rendering ----
-
-// renderQRFromString generates a terminal-rendered QR code from a text string (URL).
-// Uses go-qrcode to generate the bitmap, then renders as Unicode half-block chars.
 func renderQRFromString(content string) (string, error) {
 	rendered, err := renderCompactTerminalQRCode(content)
 	if err != nil {
@@ -572,15 +520,12 @@ func renderQRFromString(content string) (string, error) {
 	return rendered, nil
 }
 
-// ---- Binding entries ----
-
 func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	var entries []wechatBindingEntry
 	if m.config == nil {
 		return entries
 	}
 
-	// Collect runtime adapter states
 	adapterStates := make(map[string]im.AdapterState)
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
@@ -592,10 +537,8 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 		}
 	}
 
-	// Check which workspaces have bindings (for showing "occupied by other workspace")
-	// Track bound adapters (any workspace, including current)
 	bound := make(map[string]bool)
-	// Track adapters bound to a DIFFERENT workspace (for "occupied by" label)
+
 	occupied := make(map[string]string)
 	wsPath := m.currentWorkspacePath()
 	if m.imManager != nil {
@@ -611,7 +554,6 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 		}
 	}
 
-	// List all wechat adapters from config (not just bound ones)
 	snapAdapters := m.config.IMSnapshot().Adapters
 	keys := make([]string, 0, len(snapAdapters))
 	for name, adapter := range snapAdapters {

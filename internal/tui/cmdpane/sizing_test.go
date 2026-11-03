@@ -9,9 +9,9 @@ func TestDeterminePlacement(t *testing.T) {
 		pixW, pixH  int
 		wantDir     string
 		wantSizeGt0 bool
-		wantSizeLe  int // size must be <= this (30% cap)
+		wantSizeLe  int
 	}{
-		// Landscape (no pixels) — cols-based right pane
+
 		{"both large landscape", 200, 100, 0, 0, "right", true, 60},
 		{"width only landscape", 120, 30, 0, 0, "right", true, 36},
 		{"neither", 40, 20, 0, 0, "", false, 0},
@@ -20,22 +20,14 @@ func TestDeterminePlacement(t *testing.T) {
 		{"boundary rows=51", 60, 51, 0, 0, "bottom", true, 15},
 		{"boundary rows=50", 60, 50, 0, 0, "", false, 0},
 
-		// Portrait detected via cells (no pixels): rows > cols
 		{"cell portrait wide enough", 100, 120, 0, 0, "bottom", true, 36},
 		{"cell portrait narrow", 60, 100, 0, 0, "bottom", true, 30},
 
-		// Portrait detected via pixels even though cols > rows.
-		// This is the key fix: a physically tall window has cols > rows
-		// because character cells are taller than wide (~1:2 ratio).
 		{"pixel portrait cols>rows", 100, 70, 800, 1200, "bottom", true, 21},
 		{"pixel portrait cols>>rows", 200, 80, 600, 1400, "bottom", true, 24},
 
-		// Landscape confirmed by pixels even though rows > cols.
-		// A wide window can have rows > cols if font is very wide.
-		// cols must be > 80 to qualify for right pane.
 		{"pixel landscape rows>cols", 100, 120, 1200, 800, "right", true, 30},
 
-		// Square pixels → not portrait → cols-based
 		{"square pixels cols>80", 100, 100, 800, 800, "right", true, 30},
 		{"square pixels cols<80 rows>50", 60, 80, 600, 600, "bottom", true, 24},
 	}
@@ -61,9 +53,9 @@ func TestDeterminePlacement(t *testing.T) {
 }
 
 func TestDeterminePlacement30PercentCap(t *testing.T) {
-	// Verify the 30% cap for right pane (landscape, no pixels)
+
 	for _, w := range []int{100, 120, 200, 300, 500} {
-		p := DeterminePlacement(w, 40, 0, 0) // rows small → not portrait
+		p := DeterminePlacement(w, 40, 0, 0)
 		if p.Direction != "right" {
 			t.Errorf("cols=%d: expected right, got %s", w, p.Direction)
 			continue
@@ -73,7 +65,7 @@ func TestDeterminePlacement30PercentCap(t *testing.T) {
 			t.Errorf("cols=%d: Size=%d exceeds 30%% cap (%d)", w, p.Size, maxAllowed)
 		}
 	}
-	// Verify for heights (narrow terminal, no pixels)
+
 	for _, h := range []int{51, 60, 80, 100, 200} {
 		p := DeterminePlacement(40, h, 0, 0)
 		if p.Direction != "bottom" {

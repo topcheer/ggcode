@@ -39,29 +39,25 @@ func TestCompileCommandPattern(t *testing.T) {
 		command string
 		want    bool
 	}{
-		// Basic prefix matching with wildcard
+
 		{"git diff*", "git diff --stat", true},
 		{"git diff*", "git diff", true},
 		{"git diff*", "git diff HEAD~1", true},
 		{"git diff*", "git push", false},
 		{"git diff*", "git log", false},
 
-		// Exact (with trailing *)
 		{"npm test*", "npm test", true},
 		{"npm test*", "npm test --watch", true},
 		{"npm test*", "npm run build", false},
 
-		// Full wildcard
 		{"make*", "make", true},
 		{"make*", "make build", true},
 		{"make*", "make test CI=true", true},
 
-		// Regex special chars should be escaped
 		{"go build*", "go build ./...", true},
 		{"go build*", "go build -tags goolm", true},
 		{"go build*", "go test", false},
 
-		// Case insensitive
 		{"git diff*", "GIT DIFF", true},
 		{"git diff*", "Git Diff --stat", true},
 	}
@@ -114,22 +110,18 @@ func TestCommandRuleSet_Check(t *testing.T) {
 func TestCommandRuleSet_AddAllowPattern(t *testing.T) {
 	rs := NewCommandRuleSet()
 
-	// Before adding: no match
 	d, matched := rs.Check("git diff")
 	if matched {
 		t.Errorf("expected no match before adding pattern, got %v", d)
 	}
 
-	// Add pattern
 	rs.AddAllowPattern("git diff*")
 
-	// After adding: should match
 	d, matched = rs.Check("git diff --stat")
 	if !matched || d != Allow {
 		t.Errorf("expected (Allow, true) after adding pattern, got (%v, %v)", d, matched)
 	}
 
-	// Unrelated command should still not match
 	d, matched = rs.Check("git push")
 	if matched {
 		t.Errorf("expected no match for unrelated command, got %v", d)
@@ -141,13 +133,11 @@ func TestCommandRuleSet_DenyPrecedence(t *testing.T) {
 	rs.AddAllowPattern("git*")
 	rs.AddDenyPattern("git push*")
 
-	// Allow pattern should match general git commands
 	d, matched := rs.Check("git diff")
 	if !matched || d != Allow {
 		t.Errorf("expected Allow for 'git diff', got (%v, %v)", d, matched)
 	}
 
-	// Deny should override allow for git push
 	d, matched = rs.Check("git push origin main")
 	if !matched || d != Deny {
 		t.Errorf("expected Deny for 'git push' (deny overrides allow), got (%v, %v)", d, matched)
@@ -157,7 +147,7 @@ func TestCommandRuleSet_DenyPrecedence(t *testing.T) {
 func TestCommandRuleSet_NoDuplicatePatterns(t *testing.T) {
 	rs := NewCommandRuleSet()
 	rs.AddAllowPattern("git diff*")
-	rs.AddAllowPattern("git diff*") // duplicate
+	rs.AddAllowPattern("git diff*")
 
 	if len(rs.AllowPatterns()) != 1 {
 		t.Errorf("expected 1 pattern after duplicate add, got %d", len(rs.AllowPatterns()))
@@ -167,10 +157,8 @@ func TestCommandRuleSet_NoDuplicatePatterns(t *testing.T) {
 func TestConfigPolicy_CommandRulesIntegrated(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, SupervisedMode)
 
-	// Add a command allow pattern
 	policy.AllowCommandPattern("git diff*")
 
-	// "git diff" should now be auto-allowed in supervised mode
 	input := json.RawMessage(`{"command":"git diff --stat"}`)
 	d, err := policy.Check("run_command", input)
 	if err != nil {
@@ -180,9 +168,6 @@ func TestConfigPolicy_CommandRulesIntegrated(t *testing.T) {
 		t.Errorf("expected Allow for matched command pattern, got %v", d)
 	}
 
-	// two-mode refactor: supervised defaults to Allow, so an unmatched
-	// command is no longer Ask — only extremely dangerous / exfil commands
-	// gate. The Ask-for-unmatched contract is gone by design.
 	input2 := json.RawMessage(`{"command":"git push"}`)
 	d2, _ := policy.Check("run_command", input2)
 	if d2 != Allow {
@@ -193,8 +178,6 @@ func TestConfigPolicy_CommandRulesIntegrated(t *testing.T) {
 func TestConfigPolicy_CommandRulesStillCheckDangerous(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, SupervisedMode)
 
-	// two-mode refactor: ordinary dangerous commands (rm -rf under /tmp)
-	// flow with Allow — only IsExtremelyDangerous gates.
 	policy.AllowCommandPattern("rm*")
 
 	input := json.RawMessage(`{"command":"rm -rf /tmp/test"}`)
@@ -214,8 +197,6 @@ func TestConfigPolicy_CommandRulesOnlyForCommandTools(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, SupervisedMode)
 	policy.AllowCommandPattern("anything*")
 
-	// Non-command tools should not be affected. two-mode refactor:
-	// supervised default is Allow, so edit_file flows Allow here.
 	input := json.RawMessage(`{"command":"anything here"}`)
 	d, _ := policy.Check("edit_file", input)
 	if d != Allow {
@@ -223,10 +204,6 @@ func TestConfigPolicy_CommandRulesOnlyForCommandTools(t *testing.T) {
 	}
 }
 
-// TestCommandRuleSetSaveAtomicRoundtrip pins #3060-C2: Save must persist a
-// complete JSON file via temp+rename - no leftover .tmp sibling, and the
-// file parses back with both allow and deny intact (a truncated write would
-// previously leave deny rules silently lost on the next load).
 func TestCommandRuleSetSaveAtomicRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/cmd_rules.json"

@@ -1,7 +1,5 @@
 package mcp
 
-// Tests for SEP-2243 (HTTP header standardization) client behavior.
-
 import (
 	"context"
 	"encoding/base64"
@@ -32,13 +30,10 @@ func TestEncodeMCPHeaderValue(t *testing.T) {
 		{float64(42), "42", true},
 		{float64(0), "0", true},
 		{float64(-3), "-3", true},
-		// Boundary values: MinInt64 and the largest integral float64 below
-		// 2^63 are representable and must encode exactly.
+
 		{float64(-(1 << 63)), "-9223372036854775808", true},
 		{float64(1<<63) - 1024, "9223372036854774784", true},
-		// Integral float64 values beyond int64 range must be dropped (not
-		// silently converted to an implementation-dependent garbage value;
-		// amd64 gives MinInt64, arm64 saturates to MaxInt64).
+
 		{float64(1 << 63), "", false},
 		{1e300, "", false},
 		{-1e300, "", false},
@@ -46,16 +41,15 @@ func TestEncodeMCPHeaderValue(t *testing.T) {
 		{json.Number("7"), "7", true},
 		{7, "7", true},
 		{int64(9), "9", true},
-		// Fractional, NaN/Inf and non-integer numbers are not representable.
+
 		{float64(7.5), "", false},
 		{json.Number("7.5"), "", false},
 		{json.Number("abc"), "", false},
-		// Non-primitive values are dropped.
+
 		{map[string]interface{}{"a": 1}, "", false},
 		{[]interface{}{1}, "", false},
 		{nil, "", false},
-		// Encoding rules: whitespace padding, non-ASCII, control chars, and
-		// values that would be ambiguous with the Base64 sentinel.
+
 		{" padded", b64hdr(" padded"), true},
 		{"padded ", b64hdr("padded "), true},
 		{"tab\tpad", b64hdr("tab\tpad"), true},
@@ -147,8 +141,7 @@ func TestBuildMCPParamHeaders(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("got %d headers (%v), want %d", len(got), got, len(want))
 	}
-	// Annotation order is nondeterministic (Go map iteration), so compare
-	// as multisets.
+
 	wantSet := map[[2]string]int{}
 	gotSet := map[[2]string]int{}
 	for _, kv := range want {
@@ -163,8 +156,6 @@ func TestBuildMCPParamHeaders(t *testing.T) {
 		}
 	}
 
-	// Null and absent parameters omit the header; non-encodable values are
-	// dropped (the server's -32001 path handles the mismatch).
 	sparse := buildMCPParamHeaders(schema, map[string]interface{}{
 		"q":       nil,
 		"options": map[string]interface{}{"region": map[string]interface{}{"nested": true}},
@@ -177,16 +168,11 @@ func TestBuildMCPParamHeaders(t *testing.T) {
 	}
 }
 
-// TestSEP2243HTTPHeaders is the end-to-end test: tools/list filters
-// annotation-violating tools, tools/call mirrors routing fields and
-// annotated parameters into headers, resources/read uses Mcp-Name for the
-// URI, notifications carry Mcp-Method, and a -32001 HeaderMismatch
-// response triggers a schema refresh + single retry.
 func TestSEP2243HTTPHeaders(t *testing.T) {
 	var mu sync.Mutex
 	callNum := 0
 	toolCallNum := 0
-	captured := make(map[string]http.Header) // "<callNum>:<method>" -> headers
+	captured := make(map[string]http.Header)
 
 	toolList := func() []interface{} {
 		return []interface{}{
@@ -205,7 +191,7 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 					},
 				},
 			},
-			// Violates SEP-2243 (empty header value): MUST be excluded.
+
 			map[string]interface{}{
 				"name":        "badhdr",
 				"description": "Violating tool",
@@ -262,7 +248,7 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 			tcn := toolCallNum
 			mu.Unlock()
 			if tcn == 1 {
-				// First tools/call: simulate -32001 HeaderMismatch.
+
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"error":{"code":-32001,"message":"HeaderMismatch"}}`))
@@ -288,7 +274,6 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// tools/list excludes the violating tool and caches the valid schema.
 	tools, err := client.ListTools(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -297,8 +282,6 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 		t.Fatalf("expected only 'annotated' tool, got %+v", tools)
 	}
 
-	// First tools/call gets -32001; the client must refresh (tools/list
-	// again) and retry exactly once, succeeding on the second attempt.
 	result, err := client.CallTool(context.Background(), "annotated", map[string]interface{}{
 		"options": map[string]interface{}{"region": "eu-west-1"},
 	})
@@ -309,8 +292,6 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	// The -32001 path consumed exactly one refresh + retry:
-	// init, initialized, list, call-400, list(refresh), call-ok.
 	if callNum != 6 {
 		t.Errorf("expected 6 calls after the successful retry, got %d", callNum)
 	}
@@ -331,20 +312,19 @@ func TestSEP2243HTTPHeaders(t *testing.T) {
 			t.Errorf("%s: %s = %q, want %q", key, header, got, want)
 		}
 	}
-	// The retried tools/call (call #6) carries SEP-2243 headers.
+
 	assertHeader("6:tools/call", "Mcp-Method", "tools/call")
 	assertHeader("6:tools/call", "Mcp-Name", "annotated")
 	assertHeader("6:tools/call", "Mcp-Param-Region", "eu-west-1")
-	// resources/read (call #7) mirrors the URI into Mcp-Name.
+
 	assertHeader("7:resources/read", "Mcp-Method", "resources/read")
 	assertHeader("7:resources/read", "Mcp-Name", "file:///tmp/example")
-	// The notification (call #8) carries Mcp-Method only.
+
 	assertHeader("8:notifications/callToolResult", "Mcp-Method", "notifications/callToolResult")
 	if h := captured["8:notifications/callToolResult"]; h.Get("Mcp-Name") != "" {
 		t.Errorf("notification unexpectedly carried Mcp-Name: %q", h.Get("Mcp-Name"))
 	}
-	// Exactly one retry happened: init, initialized, list, call-400,
-	// list(refresh), call-ok, read, notif.
+
 	if callNum != 8 {
 		t.Errorf("expected 8 total calls, got %d", callNum)
 	}

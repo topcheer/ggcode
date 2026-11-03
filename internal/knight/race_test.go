@@ -13,9 +13,7 @@ import (
 )
 
 func TestAnalyzeRecent_ConcurrentAccess(t *testing.T) {
-	// Use manual temp dir instead of t.TempDir() to avoid
-	// "TempDir RemoveAll cleanup: unlinkat: directory not empty" caused by
-	// JSONL store file handles still held during concurrent access.
+
 	dir, err := os.MkdirTemp("", "knight-race-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +30,6 @@ func TestAnalyzeRecent_ConcurrentAccess(t *testing.T) {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
 
-	// Create sessions with enough messages to pass the minimum threshold.
 	for i := 0; i < 5; i++ {
 		ses := session.NewSession("zai", "test", "test-model")
 		store.AppendMessage(ses, provider.Message{
@@ -64,8 +61,6 @@ func TestAnalyzeRecent_ConcurrentAccess(t *testing.T) {
 
 	k := New(config.DefaultKnightConfig(), homeDir, projDir, store)
 
-	// Run AnalyzeRecent concurrently from multiple goroutines to exercise
-	// the analyzedSessions map under concurrent read/write.
 	var wg sync.WaitGroup
 	const concurrency = 6
 	errCh := make(chan error, concurrency)

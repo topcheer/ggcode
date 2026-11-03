@@ -2,11 +2,6 @@
 
 package image
 
-// Regression probes for #3003 follow-up: Display is 1-based with 0=primary
-// (screenshot_common.go). The >=1 gate fix (07abd1b64) left Display==0 - the
-// documented default, "primary" - falling through to grim's all-outputs
-// composite. These probes pin the primary resolution.
-
 import (
 	"errors"
 	"testing"
@@ -19,8 +14,6 @@ func withDisplayResolver(t *testing.T, fn func(display int) (ScreenshotRegion, e
 	t.Cleanup(func() { linuxDisplayRegionForFn = prev })
 }
 
-// TestIssue3003_Display0ResolvesPrimary: 0=primary must resolve an explicit
-// region, never the all-outputs composite.
 func TestIssue3003_Display0ResolvesPrimary(t *testing.T) {
 	withDisplayResolver(t, func(display int) (ScreenshotRegion, error) {
 		if display != 0 {
@@ -37,17 +30,12 @@ func TestIssue3003_Display0ResolvesPrimary(t *testing.T) {
 	}
 }
 
-// TestIssue3003_Display1StillResolved: the merged >=1 gate (07abd1b64) stays
-// intact - Display=1 keeps linuxDisplayBounds and never reaches the primary
-// resolver.
 func TestIssue3003_Display1StillResolved(t *testing.T) {
 	withDisplayResolver(t, func(display int) (ScreenshotRegion, error) {
 		t.Fatal("primary resolver must not be called for Display >= 1")
 		return ScreenshotRegion{}, nil
 	})
-	// Display=1 reaches linuxDisplayBounds directly; without xrandr/wlr-randr
-	// on the test host it silently falls back (no region, no error) - the
-	// #555 contract. The key assertion is that the seam above is untouched.
+
 	opts, err := prepareLinuxCaptureOpts("grim", ScreenshotOptions{Display: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -55,8 +43,6 @@ func TestIssue3003_Display1StillResolved(t *testing.T) {
 	_ = opts
 }
 
-// TestIssue3003_ResolverFailureKeepsFallback: when primary resolution fails
-// (no xrandr/wlr-randr), the tool falls back to its default output silently.
 func TestIssue3003_ResolverFailureKeepsFallback(t *testing.T) {
 	withDisplayResolver(t, func(display int) (ScreenshotRegion, error) {
 		return ScreenshotRegion{}, errors.New("no display info tool found")
@@ -70,8 +56,6 @@ func TestIssue3003_ResolverFailureKeepsFallback(t *testing.T) {
 	}
 }
 
-// TestIssue3003_ExplicitRegionAndWindowPrecedence: a user-supplied Region or
-// Window target must bypass primary resolution entirely.
 func TestIssue3003_ExplicitRegionAndWindowPrecedence(t *testing.T) {
 	withDisplayResolver(t, func(display int) (ScreenshotRegion, error) {
 		t.Fatal("resolver must not be called when Region is already set")
@@ -91,8 +75,6 @@ func TestIssue3003_ExplicitRegionAndWindowPrecedence(t *testing.T) {
 	}
 }
 
-// TestIssue3003_PrimaryDisplayIndex pins the pure helper: flagged primary
-// wins; nothing flagged falls back to the first display.
 func TestIssue3003_PrimaryDisplayIndex(t *testing.T) {
 	if got := primaryDisplayIndex([]DisplayInfo{{Name: "DP-1"}, {Name: "HDMI-A-1", IsPrimary: true}}); got != 2 {
 		t.Fatalf("flagged primary at slot 2 must resolve index 2, got %d", got)

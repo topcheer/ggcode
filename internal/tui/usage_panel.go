@@ -14,38 +14,20 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// #2150 batch 2: TUI surface for the usage/balance probe layer (#2352).
-// One shared Service instance backs both the /usage panel (full table for
-// every probe-able vendor) and the sidebar section (current vendor only).
-// The Service's own 3-minute cache makes refresh cheap; the UI never
-// renders a vendor it has no data for.
-
 type usagePanelState struct {
 	infos    map[string]*usage.UsageInfo
 	errs     map[string]string
 	fetching bool
-	// expected is the completion denominator pinned by fetchAllUsageCmd
-	// to its snapshot size (#2371): numerator (infos+errs) and denominator
-	// share one source, so config changes mid-fetch cannot wedge the
-	// spinner (added vendor never msgs) or double-count it away.
+
 	expected int
 }
 
 type usageInfoUpdatedMsg struct {
-	vendor string // probe id (panel table key)
+	vendor string
 	info   *usage.UsageInfo
 	err    error
 }
 
-// probeableVendors lists vendors that have both a registered probe and a
-// configured API key. Sorted for deterministic panel rows.
-// probeableVendors returns the single vendor whose balance the usage
-// panel probes. Owner ruling (2026-09-15, second cut): adapter selection
-// is BY THE CURRENT ENDPOINT'S URL - never by config vendor name - and
-// only the endpoint the session is actually using is ever probed (other
-// endpoints' usage is meaningless for this session). A custom vendor
-// pointed at open.bigmodel.cn gets the zai probe; a zhipu-NAMED vendor
-// pointed anywhere else gets nothing.
 func (m *Model) probeableVendors() []string {
 	baseURL, apiKey, ok := m.currentEndpointForUsage()
 	if !ok {
@@ -58,15 +40,6 @@ func (m *Model) probeableVendors() []string {
 	return []string{vendor}
 }
 
-// currentEndpointForUsage resolves the endpoint THIS session is using:
-// runtime activeVendor+activeEndpoint first, config Vendor+Endpoint as
-// fallback (daemon/IM attached sessions resolve through config). It
-// deliberately never scans sibling endpoints.
-// currentEndpointForUsage resolves THE endpoint this session is chatting
-// through, via the SAME runtime resolver the chat provider uses
-// (ResolveEndpointSelection: vendor-key fallback + ${VAR} expansion
-// applied). No parallel hand-rolled config walking - the probe must see
-// exactly what the chat sees.
 func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if m.config == nil {
 		return "", "", false
@@ -82,13 +55,7 @@ func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if vendor == "" || epID == "" {
 		return "", "", false
 	}
-	// 2026-09-19 switch bug: the session's CURRENT model lives in
-	// activeModel (setActiveRuntimeSelection keeps it fresh on every
-	// /provider switch) - pass it instead of "". Hardcoding "" made the
-	// resolver fall to SelectedModel/DefaultModel and endpoints WITHOUT a
-	// configured default (user picks the model per-session) failed with
-	// "has no active model", killing the usage probe after a vendor
-	// switch even though chat worked fine.
+
 	ep, err := m.config.ResolveEndpointSelection(vendor, epID, m.activeModel)
 	if err != nil || ep == nil {
 		return "", "", false
@@ -96,19 +63,12 @@ func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	return ep.BaseURL, ep.APIKey, true
 }
 
-// resolveVendorEndpoint returns the baseURL+apiKey the probe should use:
-// the active endpoint when it belongs to the vendor, else the first
-// endpoint carrying a key.
-// resolveVendorEndpoint returns the baseURL+apiKey of the endpoint THIS
-// session uses for the given (URL-resolved) vendor. Owner ruling: never
-// fall through to sibling endpoints - if the current endpoint is not
-// usable there is nothing to probe.
 func (m *Model) resolveVendorEndpoint(vendor string) (baseURL, apiKey string) {
 	b, k, ok := m.currentEndpointForUsage()
 	if !ok {
 		return "", ""
 	}
-	_ = vendor // URL-resolved id; the endpoint is the single source
+	_ = vendor
 	return b, k
 }
 
@@ -125,20 +85,10 @@ func (m *Model) refreshUsagePanel() tea.Cmd {
 	if m.usagePanel == nil {
 		return nil
 	}
-	// #2365-①: clear both maps before refetching. The old code kept them,
-	// so (a) a vendor whose round-2 result flipped to an error kept showing
-	// its round-1 balance forever (render prefers infos, the fresh error
-	// was permanently masked - stale balance presented as current), and
-	// (b) a vendor present in BOTH maps inflated the fetch-completion
-	// count, flipping fetching=false before the tail vendors answered.
+
 	m.usagePanel.infos = map[string]*usage.UsageInfo{}
 	m.usagePanel.errs = map[string]string{}
-	// #2366-①: refresh via RefreshInvalidate, NOT dropping the Service
-	// instance. The old `m.usageService = nil` rebuilt an empty Service, so
-	// singleflight AND every negative entry - including Retry-After-sized
-	// 429 back-offs - were discarded: pressing r repeatedly hammered ALL
-	// probeable vendors with no back-off. RefreshInvalidate keeps negative
-	// pacing state and only re-probes vendors with a cached success.
+
 	m.ensureUsageService().RefreshInvalidate()
 	m.usagePanel.fetching = true
 	return m.fetchAllUsageCmd()
@@ -150,13 +100,7 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 		return func() tea.Msg { return nil }
 	}
 	svc := m.ensureUsageService()
-	// #2371: snapshot {vendor, baseURL, apiKey} triples HERE, on the
-	// Update goroutine, before the closure - bubbletea runs Cmds on their
-	// own goroutine, and the old closure called m.resolveVendorEndpoint
-	// (unlocked reads of m.config maps) racing SetConfig's bare writes
-	// from /model, /provider hot-switches. The closure below touches
-	// nothing on m. Vendors without a key drop out of the snapshot, so
-	// the expected count matches exactly what will produce messages.
+
 	type vendorTarget struct {
 		vendor  string
 		baseURL string
@@ -170,13 +114,7 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 		}
 		targets = append(targets, vendorTarget{vendor: v, baseURL: baseURL, apiKey: apiKey})
 	}
-	// #2371-②: pin the completion denominator to the snapshot size.
-	// handleUsageInfoUpdated used to recompute probeableVendors() as the
-	// denominator - a vendor added mid-flight never sends a msg, so the
-	// count could never reach it and the spinner stuck on "refreshing"
-	// until a manual r/Esc. Numerator and denominator now share one
-	// source (the snapshot); config changes during a fetch neither wedge
-	// nor double-count.
+
 	if m.usagePanel != nil {
 		m.usagePanel.expected = len(targets)
 	}
@@ -184,9 +122,7 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 		return func() tea.Msg { return nil }
 	}
 	return func() tea.Msg {
-		// Sequential per vendor is fine: 2-3 vendors max, each bounded by
-		// the service's 10s HTTP timeout, and the panel renders
-		// incrementally as messages arrive.
+
 		var msgs []usageInfoUpdatedMsg = make([]usageInfoUpdatedMsg, 0, len(targets))
 		for _, t := range targets {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -197,12 +133,7 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 			}
 			msgs = append(msgs, usageInfoUpdatedMsg{vendor: t.vendor, info: info, err: err})
 		}
-		// A Cmd must RETURN a Msg - returning tea.Batch(cmds...) here
-		// returned a Cmd VALUE (a function) as the Msg, which Update's
-		// dispatch silently dropped: probes ran, results vanished, and the
-		// panel/sidebar stuck on "获取中…/probing" forever (2026-09-18
-		// user report). Deliver the first result as this Cmd's Msg; extra
-		// results (multi-vendor future) go through program.Send.
+
 		if len(msgs) == 0 {
 			return nil
 		}
@@ -229,8 +160,6 @@ func (m *Model) handleUsagePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// usagePercentColor applies the acceptance anchors: >=95 red, >=80 yellow,
-// else green.
 func usagePercentColorCode(p float64) string {
 	switch {
 	case p >= 95:
@@ -298,7 +227,6 @@ func (m Model) renderUsagePanel() string {
 	return m.renderContextBox(m.t("panel.usage"), strings.Join(body, "\n"), lipgloss.Color("14"))
 }
 
-// renderUsageBar draws a fixed-width ASCII progress bar.
 func renderUsageBar(pct float64, width int) string {
 	if width < 4 {
 		width = 4
@@ -310,12 +238,6 @@ func renderUsageBar(pct float64, width int) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
-// renderSidebarVendorUsageSection renders the current vendor's balance /
-// quota window in the sidebar. With no probe result yet (or ever), the
-// section shows WHY in one line: the resolved endpoint URL and the exact
-// reason no usage is displayed - the "silent empty sidebar" of 2026-09-18
-// was undiagnosable from the UI because every failure mode rendered the
-// same nothing.
 func (m Model) renderSidebarVendorUsageSection() string {
 	if m.sidebarUsage != nil {
 		info := m.sidebarUsage

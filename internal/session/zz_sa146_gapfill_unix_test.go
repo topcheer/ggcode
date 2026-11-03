@@ -2,11 +2,6 @@
 
 package session
 
-// sa-146: Unix-only flock lifecycle coverage (TryAcquireSessionLock,
-// SessionLock.Release, IsSessionLocked, CleanupStaleLocks, readLockPIDFromFile).
-// Gated behind the `unix` build tag to mirror lock_unix.go's platform split;
-// Windows has its own lock_windows.go implementation.
-
 import (
 	"os"
 	"path/filepath"
@@ -20,7 +15,6 @@ func TestSA146SessionLockLifecycle(t *testing.T) {
 	id := "sa146-lock"
 	lockPath := LockFilePath(dir, id)
 
-	// Acquire -> Acquired() true, release clears everything.
 	l1, err := TryAcquireSessionLock(dir, id)
 	if err != nil {
 		t.Fatalf("TryAcquireSessionLock: %v", err)
@@ -29,12 +23,11 @@ func TestSA146SessionLockLifecycle(t *testing.T) {
 		t.Fatal("first acquisition should succeed on a fresh lock file")
 	}
 	l1.Release()
-	l1.Release() // idempotent: second release must not panic
+	l1.Release()
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Error("lock file should be removed after Release")
 	}
 
-	// Foreign holder: take the flock manually (same process, separate fd).
 	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatalf("open foreign lock: %v", err)
@@ -61,7 +54,6 @@ func TestSA146SessionLockLifecycle(t *testing.T) {
 		t.Error("IsSessionLocked should report true while the foreign flock is held")
 	}
 
-	// After the foreign holder exits, the lock becomes free again.
 	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatalf("foreign unlock: %v", err)
 	}
@@ -81,8 +73,7 @@ func TestSA146SessionLockLifecycle(t *testing.T) {
 
 func TestSA146CleanupStaleLocks(t *testing.T) {
 	dir := t.TempDir()
-	// A stale lock file (no process holds a flock on it) plus a real session
-	// file that must not be touched by the *.lock glob sweep.
+
 	stale := filepath.Join(dir, "sa146-stale.lock")
 	if err := os.WriteFile(stale, []byte("999999"), 0o600); err != nil {
 		t.Fatalf("create stale lock: %v", err)
@@ -92,7 +83,7 @@ func TestSA146CleanupStaleLocks(t *testing.T) {
 		t.Fatalf("create session file: %v", err)
 	}
 
-	CleanupStaleLocks(dir) // must not panic on empty or missing dirs either
+	CleanupStaleLocks(dir)
 	CleanupStaleLocks(filepath.Join(dir, "does-not-exist"))
 
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {

@@ -1,13 +1,5 @@
 package knight
 
-// Regression probe for #3029: Append was read-modify-write under a
-// process-internal mutex only. Two processes on the same workspace
-// (daemon/TUI/A2A) reading N entries and each writing N+1 dropped the first
-// writer's entry - atomic rename prevents tearing, not loss. The fix guards
-// the whole read-modify-write with util.FileLock. Two store instances on
-// the same path (distinct in-process mutexes, shared flock file) simulate
-// the cross-process case.
-
 import (
 	"path/filepath"
 	"sync"
@@ -18,8 +10,6 @@ func TestIssue3029_ConcurrentAppendsAcrossStoreInstancesLoseNothing(t *testing.T
 	dir := t.TempDir()
 	path := filepath.Join(dir, "knight-memory.jsonl")
 
-	// Two instances = two semanticMemoryPathMu entries: only the file lock
-	// can serialize their read-modify-write cycles.
 	a := &semanticMemoryStore{path: path}
 	b := &semanticMemoryStore{path: path}
 
@@ -39,10 +29,6 @@ func TestIssue3029_ConcurrentAppendsAcrossStoreInstancesLoseNothing(t *testing.T
 	}
 	wg.Wait()
 
-	// #r25: identical recurrences merge into ONE entry (semantic dedup), so
-	// the lost-update probe is now exact: every successful Append must land
-	// exactly one Hits increment on the merged entry. A dropped
-	// read-modify-write cycle leaves Hits < 2*perWriter.
 	entries, err := a.Recent(1000)
 	if err != nil {
 		t.Fatal(err)

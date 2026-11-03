@@ -1,10 +1,5 @@
 package runfile
 
-// Issue #549 bug F: liveness was checked only via signal 0, so a port file
-// whose PID was recycled by an unrelated live process never expired. The
-// mtime fallback removes port files older than staleAfter (24h) even when
-// the PID appears alive.
-
 import (
 	"encoding/json"
 	"os"
@@ -14,8 +9,6 @@ import (
 	"time"
 )
 
-// deadChildPID spawns a child process that exits immediately and returns its
-// now-dead PID, or 0 if that could not be determined.
 func deadChildPID(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("true")
@@ -54,13 +47,7 @@ func writeTestPortFile(t *testing.T, dir string, pid int, age time.Duration) str
 
 func TestIssue549BugF_PIDReuseStaleFileExpires(t *testing.T) {
 	dir := t.TempDir()
-	// PID is the *test process itself* — alive by signal-0 semantics. The
-	// file's mtime is 25h old. #791 flipped the original 549-F verdict:
-	// port files are written only at process start (no heartbeat), so a
-	// stale mtime with a live PID is the NORMAL state of any daemon past
-	// 24h, and deleting it wiped live daemons from discovery. The file must
-	// now be KEPT (deletion belongs exclusively to the dead-pid branch);
-	// PID-recycling false-positives are the accepted, far rarer cost.
+
 	p := writeTestPortFile(t, dir, os.Getpid(), 25*time.Hour)
 
 	if _, err := readAtPath(p); err != nil {
@@ -86,8 +73,7 @@ func TestIssue549BugF_FreshFileWithLivePIDStillValid(t *testing.T) {
 
 func TestIssue549BugF_DeadPIDStillRemoved(t *testing.T) {
 	dir := t.TempDir()
-	// PID 1 is init on unix: never a ggcode instance. Use a PID that is
-	// essentially guaranteed dead — a just-reaped child.
+
 	dead := deadChildPID(t)
 	if dead == 0 {
 		t.Skip("could not obtain a dead PID on this platform")

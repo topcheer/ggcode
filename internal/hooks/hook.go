@@ -7,29 +7,26 @@ import (
 	"time"
 )
 
-// HookType determines how a hook is executed.
 type HookType string
 
 const (
-	HookTypeCommand HookType = "command" // execute a local shell command
-	HookTypeHTTP    HookType = "http"    // send an HTTP POST webhook
+	HookTypeCommand HookType = "command"
+	HookTypeHTTP    HookType = "http"
 )
 
-// Hook represents a single hook bound to one event.
 type Hook struct {
-	Match        string            `yaml:"match" json:"match"`                 // glob/pipe/func-call match pattern. "*" matches all.
-	MatchMode    string            `yaml:"match_mode" json:"match_mode"`       // "glob" (default) or "regex"
-	Type         HookType          `yaml:"type" json:"type"`                   // "command" (default) or "http"
-	Command      string            `yaml:"command" json:"command"`             // shell command (type=command)
-	URL          string            `yaml:"url" json:"url"`                     // webhook URL (type=http)
-	Method       string            `yaml:"method" json:"method"`               // HTTP method (type=http), default POST
-	Headers      map[string]string `yaml:"headers" json:"headers"`             // custom HTTP headers (type=http)
-	Timeout      string            `yaml:"timeout" json:"timeout"`             // timeout duration, e.g. "10s" (type=http). Default 10s.
-	Secret       string            `yaml:"secret" json:"secret"`               // HMAC-SHA256 signing key (type=http)
-	InjectOutput bool              `yaml:"inject_output" json:"inject_output"` // (post_tool_use only) inject stdout/response body into tool result
+	Match        string            `yaml:"match" json:"match"`
+	MatchMode    string            `yaml:"match_mode" json:"match_mode"`
+	Type         HookType          `yaml:"type" json:"type"`
+	Command      string            `yaml:"command" json:"command"`
+	URL          string            `yaml:"url" json:"url"`
+	Method       string            `yaml:"method" json:"method"`
+	Headers      map[string]string `yaml:"headers" json:"headers"`
+	Timeout      string            `yaml:"timeout" json:"timeout"`
+	Secret       string            `yaml:"secret" json:"secret"`
+	InjectOutput bool              `yaml:"inject_output" json:"inject_output"`
 }
 
-// HasType returns the effective type, defaulting to command for backward compatibility.
 func (h Hook) HasType() HookType {
 	if h.Type == HookTypeHTTP {
 		return HookTypeHTTP
@@ -37,7 +34,6 @@ func (h Hook) HasType() HookType {
 	return HookTypeCommand
 }
 
-// Event names.
 const (
 	EventOnUserMessage = "on_user_message"
 	EventPreToolUse    = "pre_tool_use"
@@ -45,22 +41,13 @@ const (
 	EventOnAgentStop   = "on_agent_stop"
 	EventOnStreamStop  = "on_stream_stop"
 	EventOnCompaction  = "on_compaction"
-	// EventPreCompact fires synchronously BEFORE a context compaction begins,
-	// giving hooks a last chance to persist critical state (todo lists, working
-	// notes, audit trails) before older turns are summarized away. Mirrors the
-	// Claude Code PreCompact lifecycle event; non-blocking by design - a hook
-	// can never veto compaction, because refusing to compact ends the session
-	// in a context-overflow error.
+
 	EventPreCompact = "pre_compact"
 
-	// Session lifecycle events (Claude Code hooks parity, 2025/2026 frontier:
-	// external code observes session boundaries — preload context at start,
-	// flush state at end — https://code.claude.com/docs/en/hooks).
 	EventOnSessionStart = "on_session_start"
 	EventOnSessionEnd   = "on_session_end"
 )
 
-// HookConfig holds all hooks from configuration, keyed by event.
 type HookConfig struct {
 	OnUserMessage  []Hook `yaml:"on_user_message" json:"on_user_message"`
 	PreToolUse     []Hook `yaml:"pre_tool_use" json:"pre_tool_use"`
@@ -73,66 +60,46 @@ type HookConfig struct {
 	OnSessionEnd   []Hook `yaml:"on_session_end" json:"on_session_end"`
 }
 
-// HookResult is the result of running one or more hooks.
 type HookResult struct {
-	Allowed bool   // false means block the operation (pre hooks only)
-	Output  string // captured stdout or HTTP response body (for inject_output)
+	Allowed bool
+	Output  string
 	Err     error
-	// PolicyNotice carries a policy verdict (exit 2 / HTTP 403) from a
-	// NON-blocking event. #684: post_tool_use cannot honor the block, but the
-	// hook author's stderr reason still matters — and every consumer of post
-	// hook results reads only Output. runSync folds this into the returned
-	// Output so the reason reaches the model instead of vanishing.
+
 	PolicyNotice string
 }
 
-// HookEnv holds all context data passed to hook commands and webhooks.
-// It is the Go-native representation of the standardized payload.
 type HookEnv struct {
-	// Universal
-	Event      string // event name (EventPreToolUse, etc.)
+	Event      string
 	SessionID  string
 	Workspace  string
 	WorkingDir string
 
-	// Tool context (pre_tool_use, post_tool_use)
 	ToolName string
-	FilePath string // extracted from tool arguments when applicable
-	RawInput string // raw JSON tool arguments
+	FilePath string
+	RawInput string
 	ToolID   string
 
-	// Tool result (post_tool_use only)
 	ToolSuccess  bool
 	ToolError    string
-	ToolResult   string // truncated tool output (first 4KB)
-	ToolDuration string // human-readable duration
+	ToolResult   string
+	ToolDuration string
 
-	// User message (on_user_message only)
 	UserMessage string
 
-	// Stop context (on_agent_stop, on_stream_stop only)
-	StopReason string // "completed", "cancelled", "error"
+	StopReason string
 	StopError  string
 
-	// Session lifecycle (on_session_start / on_session_end only)
-	SessionSource    string // on_session_start: "startup" or "resume"
-	SessionEndReason string // on_session_end: "exit"
+	SessionSource    string
+	SessionEndReason string
 
-	// Compaction context (on_compaction, pre_compact only)
-	TokenBefore int // token count before compaction
-	TokenAfter  int // token count after compaction (0 for pre_compact)
-	// CompactTrigger explains what initiated the compaction: "auto"
-	// (threshold-scheduled background precompact or its consumption),
-	// "reactive" (prompt-too-long recovery), or "manual" (/compact).
+	TokenBefore int
+	TokenAfter  int
+
 	CompactTrigger string
 
-	// Ctx allows callers to propagate cancellation (e.g., session cancellation)
-	// to hook execution. If nil, context.Background() is used.
 	Ctx context.Context
 }
 
-// ValidateHooks checks a HookConfig for common misconfigurations.
-// Returns a list of error strings (empty if all valid).
 func ValidateHooks(cfg HookConfig) []string {
 	var errs []string
 
@@ -140,36 +107,30 @@ func ValidateHooks(cfg HookConfig) []string {
 		for i, h := range hooks {
 			prefix := fmt.Sprintf("%s[%d]", event, i)
 
-			// HTTP type must have URL
 			if h.HasType() == HookTypeHTTP && h.URL == "" {
 				errs = append(errs, fmt.Sprintf("%s: type=http requires url", prefix))
 			}
 
-			// Command type must have command
 			if h.HasType() == HookTypeCommand && h.Command == "" {
 				errs = append(errs, fmt.Sprintf("%s: type=command requires command", prefix))
 			}
 
-			// Match is required
 			if h.Match == "" {
 				errs = append(errs, fmt.Sprintf("%s: match is required", prefix))
 			}
 
-			// Validate regex mode
 			if h.MatchMode == "regex" {
 				if _, err := regexp.Compile(h.Match); err != nil {
 					errs = append(errs, fmt.Sprintf("%s: invalid regex: %v", prefix, err))
 				}
 			}
 
-			// Timeout format check
 			if h.Timeout != "" {
 				if _, err := time.ParseDuration(h.Timeout); err != nil {
 					errs = append(errs, fmt.Sprintf("%s: invalid timeout %q: %v", prefix, h.Timeout, err))
 				}
 			}
 
-			// inject_output only valid for post_tool_use
 			if h.InjectOutput && event != "post_tool_use" {
 				errs = append(errs, fmt.Sprintf("%s: inject_output only valid for post_tool_use", prefix))
 			}
@@ -189,9 +150,6 @@ func ValidateHooks(cfg HookConfig) []string {
 	return errs
 }
 
-// TestMatch tests a match pattern against a tool name and raw input.
-// Returns whether the pattern matches and any regex compilation error.
-// Used by the desktop UI regex tester.
 func TestMatch(mode, pattern, toolName, rawInput string) (bool, error) {
 	if mode == "regex" {
 		re, err := regexp.Compile(pattern)
@@ -204,6 +162,6 @@ func TestMatch(mode, pattern, toolName, rawInput string) (bool, error) {
 		}
 		return re.MatchString(combined), nil
 	}
-	// For glob mode, reuse the internal matcher
+
 	return matchAny(mode, pattern, toolName, rawInput), nil
 }

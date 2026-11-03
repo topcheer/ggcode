@@ -18,15 +18,6 @@ type ShellSpec struct {
 	Name string
 }
 
-// shellCache caches the detected shell to avoid repeated filesystem probes
-// (exec.LookPath / os.Stat) on every command execution. On Windows with a
-// long PATH (WSL + Git Bash + tools), each LookPath call can take 100-500ms.
-//
-// #4787 review follow-up: the cache trio (spec/err/detected-flag) is guarded
-// by a single mutex instead of a sync.Once because ResetShellCache needs to
-// clear it mid-session (shell-health recovery). A naked Once-reset wrote the
-// three fields non-atomically while a concurrent DetectShell could be inside
-// once.Do reading them — a data race by construction.
 var (
 	shellMu       sync.Mutex
 	shellCache    ShellSpec
@@ -43,30 +34,7 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 	if err != nil {
 		return nil, ShellSpec{}, err
 	}
-	// On Windows, PowerShell may treat stderr output from native commands
-	// (git, npm, python, etc.) as errors. In pwsh 7.4+ the native-command
-	// stderr-to-error switch is $PSNativeCommandUseErrorActionPreference
-	// (default true); $ErrorActionPreference alone does not cover it.
-	// Disable both so native stderr doesn't make successful commands look
-	// like failures.
-	//
-	// UTF-8 is pinned for every layer that can otherwise corrupt text or
-	// FILES (#574 family of Windows encoding breakage):
-	//   - [Console]::Output/InputEncoding: how the console decodes native
-	//     command output / input. Windows PowerShell 5.1 defaults to the OEM
-	//     codepage (GBK etc. on non-English systems) - Chinese/space-padded
-	//     output would arrive as mojibake, and piped UTF-8 stdin would be
-	//     misread. try/catch: setting these can fail in exotic hosts.
-	//   - $OutputEncoding: the encoding PowerShell uses when piping data TO
-	//     native programs (defaults to ASCII in 5.1 - non-ASCII args/pipes
-	//     get corrupted to '?').
-	//   - $PSDefaultParameterValues['*:Encoding']='utf8': makes
-	//     Set-Content/Out-File/redirection default to UTF-8. This is the
-	//     file-corruption fix: 5.1 defaults Set-Content to ANSI and Out-File
-	//     to UTF-16LE, so agent-driven file edits through PowerShell silently
-	//     rewrote UTF-8 files into GBK/UTF-16 (mass corruption).
-	// pwsh 7+ already defaults to UTF-8 everywhere; the assignments are
-	// harmless no-ops there and corrective for powershell.exe.
+
 	if spec.Name == "powershell" {
 		command = "try{[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::InputEncoding=[Text.Encoding]::UTF8}catch{};" +
 			"$OutputEncoding=[Text.Encoding]::UTF8;" +
@@ -76,12 +44,8 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 	return exec.CommandContext(ctx, spec.Path, append(spec.Args, command)...), spec, nil
 }
 
-// debugLogFn is set by SetDebugLogFn to allow this package to route diagnostic
-// logs through the debug system without creating a circular import.
 var debugLogFn func(category, format string, args ...interface{})
 
-// SetDebugLogFn injects a debug.Log-compatible function. Called once at startup
-// from a package that can import both util and debug.
 func SetDebugLogFn(fn func(category, format string, args ...interface{})) {
 	debugLogFn = fn
 }
@@ -103,11 +67,6 @@ func DetectShell() (ShellSpec, error) {
 	return shellCache, shellCacheErr
 }
 
-// ResetShellCache drops the memoized shell spec so the next DetectShell
-// re-probes the environment (#4787 / S-16: a once-cached detection meant a
-// shell that became unavailable mid-session stayed "resolved" forever).
-// Mutex-guarded: safe to call concurrently with DetectShell (e.g. a
-// supervisor resetting the cache after an outage window).
 func ResetShellCache() {
 	shellMu.Lock()
 	defer shellMu.Unlock()
@@ -116,19 +75,8 @@ func ResetShellCache() {
 	shellCacheErr = nil
 }
 
-// ShellHealthProbeCommand is the marker command the run_command degraded
-// gate tells the agent to use for shell-channel health checks (#4787 /
-// S-16). The strategy-stagnation detector exempts retries of this exact
-// command from stagnation gating: probing IS the recovery strategy during
-// a self-healing shell outage.
 const ShellHealthProbeCommand = "echo ggcode-shell-health-probe-ok"
 
-// ShellAvailable reports whether the shell channel can currently be
-// spawned, by actually exec'ing a no-op through the resolved shell
-// (#4787 / S-16: during resource-saturation windows fork/exec of /bin/sh
-// fails with ENOENT wholesale for 1-8 minutes and then self-heals - a
-// stat-based check passes while the channel is unspawnable, so only a
-// real spawn answers the question). Bounded by a 5s timeout.
 func ShellAvailable() bool {
 	if _, err := DetectShell(); err != nil {
 		return false
@@ -151,8 +99,6 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 		return ShellSpec{Path: "sh", Args: []string{"-c"}, Name: "sh"}, nil
 	}
 
-	// PowerShell is the primary shell on Windows. Prefer pwsh (PowerShell
-	// Core / cross-platform) over powershell.exe (Windows PowerShell).
 	for _, name := range []string{"pwsh.exe", "pwsh", "powershell.exe", "powershell"} {
 		if path, err := lookPath(name); err == nil {
 			return ShellSpec{
@@ -163,7 +109,6 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 		}
 	}
 
-	// Fall back to Git Bash if PowerShell is not available.
 	for _, candidate := range windowsGitBashCandidates(getenv) {
 		if _, err := stat(candidate); err == nil {
 			return ShellSpec{Path: candidate, Args: []string{"-c"}, Name: "git-bash"}, nil
@@ -172,14 +117,7 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 
 	for _, name := range []string{"bash.exe", "bash"} {
 		if path, err := lookPath(name); err == nil {
-			// #1842: LookPath("bash.exe") can hit C:\\Windows\\System32\\bash.exe
-			// - the WSL entry point, present on PATH whenever WSL is installed.
-			// It accepts -c but executes the command inside the LINUX
-			// subsystem, where Windows paths (C:\\...), cwd, git, and npm all
-			// break or misbehave - and the spec was mislabeled "git-bash". Skip
-			// System32 (case-insensitive) and keep searching; bare "bash" (a
-			// Git-Bash-on-PATH install) is unaffected because System32 never ships
-			// an extensionless bash.
+
 			if isWSLBashPath(path) {
 				continue
 			}
@@ -190,8 +128,6 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 	return ShellSpec{}, fmt.Errorf("no supported shell found on Windows (expected PowerShell or Git Bash; note WSL bash is not a Windows shell)")
 }
 
-// isWSLBashPath reports whether a resolved bash path is the WSL entry
-// point under Windows System32 (case-insensitive).
 func isWSLBashPath(path string) bool {
 	p := strings.ReplaceAll(strings.ToLower(path), "\\", "/")
 	return strings.Contains(p, "/windows/system32/") || strings.HasSuffix(p, "/windows/system32/bash.exe")

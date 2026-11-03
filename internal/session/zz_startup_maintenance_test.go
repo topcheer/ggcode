@@ -6,14 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// The lock-hold regression itself is guarded deterministically by
-// TestRunMaintenanceDoesNotHoldStoreLock in zz_maintenance_fifo_test.go
-// (FIFO block point; an earlier Load-vs-maintenance race test here missed
-// the bug on small fixtures because maintenance finished before the probe).
-
-// pruneInvalidIndexEntries must keep its three-state semantics after the
-// switch from loadSessionFull to HasUserInteractionOnDisk (#291/#709):
-// sessions with user text are kept, sessions without are pruned.
 func TestPruneInvalidIndexEntriesStreamingSemantics(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewJSONLStore(dir)

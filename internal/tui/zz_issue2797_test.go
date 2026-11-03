@@ -6,16 +6,11 @@ import (
 	"testing"
 )
 
-// zz_issue2797_test.go guards against a #1370-B/C recurrence in the seven IM
-// panels that were fixed in #2797. Source-level invariant probe (per the
-// #2793/#2794/#2795 convention): runtime reproduction of the truncation is
-// trivial but the rollback path races with TUI update-loop wiring, so we pin
-// the invariants directly in the source instead.
 func TestIssue2797PanelCreateGuards(t *testing.T) {
 	cases := []struct {
 		file string
-		max  string // expected upper-bound check, e.g. "> 3"
-		msg  string // substring of the expected rejection error
+		max  string
+		msg  string
 	}{
 		{"dingtalk_panel.go", "> 3", "extra fields after app_secret"},
 		{"discord_panel.go", "> 2", "extra fields after token"},
@@ -32,7 +27,6 @@ func TestIssue2797PanelCreateGuards(t *testing.T) {
 		}
 		s := string(src)
 
-		// #1370-C guard: upper-bound rejection right after the lower-bound check.
 		if !strings.Contains(s, "if len(fields) "+tc.max+" {") {
 			t.Errorf("%s: missing `len(fields) %s` upper-bound rejection (#1370-C recurrence)", tc.file, tc.max)
 		}
@@ -45,8 +39,6 @@ func TestIssue2797PanelCreateGuards(t *testing.T) {
 			t.Errorf("%s: upper-bound check must follow the lower-bound check", tc.file)
 		}
 
-		// #1370-B guard: rollback closure in the create-path next() that
-		// removes the just-persisted adapter and re-saves the config.
 		if !strings.Contains(s, "rollback := func(origErr error) tea.Msg") {
 			t.Errorf("%s: missing rollback closure (#1370-B recurrence)", tc.file)
 		}

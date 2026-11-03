@@ -12,7 +12,6 @@ import (
 	"testing"
 )
 
-// writeTestPNG generates a valid w×h PNG at path.
 func writeTestPNG(t *testing.T, path string, w, h int) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -31,7 +30,6 @@ func writeTestPNG(t *testing.T, path string, w, h int) {
 	}
 }
 
-// finalizeImage passthrough: small PNG, no opts -> dims preserved, valid PNG out.
 func TestFinalizeImage_PNGPassthrough(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "raw.png")
@@ -51,7 +49,6 @@ func TestFinalizeImage_PNGPassthrough(t *testing.T) {
 	}
 }
 
-// MaxWidth downscale: aspect preserved and bytes re-encoded as PNG.
 func TestFinalizeImage_ResizeAndReencodePNG(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "raw.png")
@@ -72,7 +69,6 @@ func TestFinalizeImage_ResizeAndReencodePNG(t *testing.T) {
 	}
 }
 
-// Format conversion to JPEG with explicit quality.
 func TestFinalizeImage_JPEGConversion(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "raw.png")
@@ -89,7 +85,6 @@ func TestFinalizeImage_JPEGConversion(t *testing.T) {
 	}
 }
 
-// RawOutputPath gets the untouched bytes; OutputPath gets the finalized bytes.
 func TestFinalizeImage_RawAndFinalOutputPaths(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "raw.png")
@@ -119,8 +114,6 @@ func TestFinalizeImage_ReadError(t *testing.T) {
 	}
 }
 
-// #2998: detectable PNG magic but undecodable body must fail explicitly,
-// never silently return zero-dim Image.
 func TestFinalizeImage_UndecodableBytes(t *testing.T) {
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "trunc.png")
@@ -133,7 +126,6 @@ func TestFinalizeImage_UndecodableBytes(t *testing.T) {
 	}
 }
 
-// Zero/negative delay must be a no-op (no sleep on hot path).
 func TestApplyDelay_ZeroOrNegativeNoOp(t *testing.T) {
 	applyDelay(0)
 	applyDelay(-5)
@@ -144,33 +136,32 @@ func TestWmctrlTitleOffset(t *testing.T) {
 	if got := wmctrlTitleOffset(line); got != strings.Index(line, "My Window") {
 		t.Errorf("offset = %d, want %d", got, strings.Index(line, "My Window"))
 	}
-	// Multi-space column padding is skipped as a unit.
+
 	padded := "0x01a00001   0   host   Term.term   Title"
 	if got := wmctrlTitleOffset(padded); got != strings.Index(padded, "Title") {
 		t.Errorf("padded offset = %d, want %d", got, strings.Index(padded, "Title"))
 	}
-	// Degenerate short line: offset clamps to end of line.
+
 	if got := wmctrlTitleOffset("0x01a"); got != len("0x01a") {
 		t.Errorf("short offset = %d, want %d", got, len("0x01a"))
 	}
 }
 
-// current beats preferred beats first-listed; a current pick is sticky.
 func TestWlrModePick_OfferPrecedence(t *testing.T) {
 	var p wlrModePick
-	p.offer(640, 480, false, false) // first listed
+	p.offer(640, 480, false, false)
 	if !p.seen || p.width != 640 || p.height != 480 {
 		t.Fatalf("first offer not recorded: %+v", p)
 	}
-	p.offer(800, 600, false, true) // preferred beats first
+	p.offer(800, 600, false, true)
 	if p.width != 800 || !p.preferred || p.current {
 		t.Fatalf("preferred should replace first: %+v", p)
 	}
-	p.offer(1024, 768, true, false) // current beats preferred
+	p.offer(1024, 768, true, false)
 	if p.width != 1024 || !p.current {
 		t.Fatalf("current should replace preferred: %+v", p)
 	}
-	p.offer(500, 400, true, false) // current is sticky
+	p.offer(500, 400, true, false)
 	if p.width != 1024 || p.height != 768 {
 		t.Fatalf("current pick must be sticky: %+v", p)
 	}

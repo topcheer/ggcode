@@ -56,9 +56,6 @@ func (m *Model) chatFinalizeRunningTools(status chat.ToolStatus, result string, 
 	return finalized
 }
 
-// chatFinishAllRunningTools marks all running tool items in chatList as success.
-// Called when a round ends (doneMsg) to finalize any tool items that weren't
-// explicitly finished via chatFinishTool.
 func (m *Model) chatFinishAllRunningTools() {
 	m.chatFinalizeRunningTools(chat.StatusSuccess, "", false)
 }
@@ -123,30 +120,24 @@ type todoStateItem struct {
 func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	todos, ok := parseTodoSnapshot(ts.RawArgs)
 	if !ok {
-		// Not a valid todo_write — return a generic summary.
+
 		present := describeTool(m.currentLanguage(), ts.ToolName, ts.RawArgs)
 		return formatToolInline(present.DisplayName, present.Detail)
 	}
 
-	// #1427-B: dedupe duplicate todo IDs AT THE ENTRY (last-write-wins).
-	// The #1409 follow-up only guarded the change-entry map; todoOrder
-	// rebuilt from the RAW todos and the chat card passed the raw slice -
-	// both render paths bypassed the protection, so [t1,t2,t1] still
-	// appended the same card twice (exactly what f7f8a7b3 claimed fixed).
-	// Deduping here fixes all three downstream consumers at once.
 	if len(todos) > 1 {
 		last := make(map[string]todoStateItem, len(todos))
 		for _, td := range todos {
-			last[td.ID] = td // later occurrence wins the STATE
+			last[td.ID] = td
 		}
 		uniq := make([]todoStateItem, 0, len(last))
 		seenPos := make(map[string]struct{}, len(last))
 		for _, td := range todos {
 			if _, dup := seenPos[td.ID]; dup {
-				continue // keep FIRST position, skip later dups
+				continue
 			}
 			seenPos[td.ID] = struct{}{}
-			uniq = append(uniq, last[td.ID]) // ...but the LAST state
+			uniq = append(uniq, last[td.ID])
 		}
 		todos = uniq
 	}
@@ -178,10 +169,7 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 				td.StartedAt = now
 			}
 		}
-		// #1409 follow-up: an LLM emitting duplicate todo IDs used to emit
-		// BOTH change entries (added then updated) for the same ID and grow
-		// the sidebar with duplicate cards. Later occurrence still updates
-		// the state (last-write-wins) but emits no extra change entry.
+
 		if _, dup := current[td.ID]; dup {
 			current[td.ID] = td
 			continue
@@ -203,9 +191,7 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 			changes = append(changes, localizeTodoChange(m.currentLanguage(), "updated", td))
 		}
 	}
-	// #1409 follow-up: previous-map iteration gave the 'removed' entries a
-	// RANDOM order between renders of the same snapshot pair - sort for
-	// stable summaries.
+
 	removed := make([]string, 0, len(previous))
 	for id := range previous {
 		if _, exists := current[id]; !exists {
@@ -223,14 +209,12 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		m.todoOrder = append(m.todoOrder, td.ID)
 	}
 	m.activeTodo = nil
-	// Auto-show sidebar when task mode starts (first todo_write with active items).
-	// Auto-hide when all todos reach terminal state (done/failed/blocked) or are cleared.
+
 	if len(previous) == 0 && len(current) > 0 {
-		// Task mode just started — ensure sidebar is visible.
+
 		m.sidebarVisible = true
 	} else if len(current) == 0 && len(previous) > 0 {
-		// #885: all todos cleared — hide the sidebar (previously unreachable
-		// because parseTodoSnapshot rejected the empty snapshot).
+
 		m.sidebarVisible = false
 	} else if len(current) > 0 {
 		allDone := true
@@ -253,12 +237,7 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	}
 
 	if len(changes) == 0 {
-		// #1360: an identical re-write after /clear must still (re)create the
-		// chat card. chatReset empties chatList but keeps todoSnapshot, so the
-		// diff is empty and this branch used to skip chatUpdateTodoItem -
-		// which is exactly the path that rebuilds a missing card (FindByID
-		// miss -> Append). Without it the sidebar (snapshot-driven) showed
-		// tasks while the chat area had no card, until some future change.
+
 		if len(todos) > 0 && m.chatList != nil && m.chatList.FindByID(todoToolItemID) == nil {
 			m.chatUpdateTodoItem(todos)
 		}
@@ -270,7 +249,7 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		}
 		return "Synced todo state"
 	}
-	// Update TodoToolItem in chatList
+
 	m.chatUpdateTodoItem(todos)
 
 	return summarizeTodoChanges(m.currentLanguage(), changes)
@@ -286,16 +265,11 @@ func parseTodoSnapshot(rawArgs string) ([]todoStateItem, bool) {
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, false
 	}
-	// #1711 case 2: a MISSING todos key ({} or a typo'd field) is not a
-	// clear-all - Unmarshal succeeds with nil Todos and the whole sidebar
-	// was wiped. Distinguish from an explicit empty array, which #885
-	// keeps as a legitimate clear.
+
 	if args.Todos == nil && !strings.Contains(rawArgs, "\"todos\"") {
 		return nil, false
 	}
-	// #885: an explicitly EMPTY todos array is a valid "clear all" snapshot
-	// — returning false here short-circuited applyTodoWrite before the
-	// sidebar auto-hide, so clearing todos left an empty sidebar visible.
+
 	return args.Todos, true
 }
 

@@ -10,12 +10,8 @@ import (
 	"strings"
 )
 
-// CaptureScreen captures a screenshot on Windows using PowerShell.
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
-	// #3009 (W4): a zero/negative region reaches PowerShell as
-	// New-Object Bitmap(0,0), which throws and - with the exit-code gate -
-	// degraded into a stale-file success or a misleading "no such file"
-	// error. Reject it here with a root-cause message.
+
 	if opts.Region != nil && (opts.Region.Width <= 0 || opts.Region.Height <= 0) {
 		return ScreenshotResult{}, fmt.Errorf("screenshot region must have positive width and height (got %dx%d)",
 			opts.Region.Width, opts.Region.Height)
@@ -51,22 +47,12 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 func buildWindowsScreenshotScript(outPath string, opts ScreenshotOptions) string {
 	var sb strings.Builder
-	// #3009 (W1): powershell -Command returns exit 0 for non-terminating
-	// failures (Add-Type unavailable, CopyFromScreen throwing on a locked
-	// session / secure desktop, Save failing), so the Go-side exit-code gate
-	// treated the failure as success and finalizeImage happily served the
-	// PREVIOUS capture sitting at the same OutputPath. Every statement
-	// failure is now terminating, and the catch reports + exits 1.
+
 	sb.WriteString("$ErrorActionPreference = 'Stop'\n")
 	sb.WriteString("try {\n")
 	sb.WriteString("Add-Type -AssemblyName System.Windows.Forms\n")
 	sb.WriteString("Add-Type -AssemblyName System.Drawing\n")
-	// #763: powershell.exe is DPI-unaware by default, so GetWindowRect /
-	// Screen.Bounds / CopyFromScreen all operate in virtualized 96-DPI
-	// logical coordinates -- blurry window/full-screen captures and
-	// mispositioned regions on scaled displays. Declare DPI awareness so the
-	// whole chain works in physical pixels. The snippet is shared with
-	// ListDisplays (#976) so both coordinate spaces stay physical pixels.
+
 	sb.WriteString(windowsDpiAwarenessSnippet)
 
 	if opts.Window != "" {
@@ -110,10 +96,7 @@ $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 		sb.WriteString(fmt.Sprintf("$ox = %d\n$oy = %d\n", r.X, r.Y))
 		writeWindowsCursorDraw(&sb, opts)
 	} else {
-		// Full-display capture. opts.Display is 1-based over AllScreens order,
-		// matching ListDisplays on Windows (#555). Display<=1 keeps
-		// PrimaryScreen (0 means "primary"); Display>1 selects the Nth screen,
-		// falling back to primary when the index is out of range.
+
 		if idx, ok := displayScreenIndex(opts.Display); ok {
 			sb.WriteString(fmt.Sprintf(
 				"$screen = [System.Windows.Forms.Screen]::AllScreens[%d]\n", idx))
@@ -139,10 +122,8 @@ $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 	return sb.String()
 }
 
-// ListDisplays returns display information on Windows.
 func ListDisplays() ([]DisplayInfo, error) {
-	// #976: the script must declare DPI awareness before querying AllScreens;
-	// see buildWindowsListDisplaysScript.
+
 	script := buildWindowsListDisplaysScript()
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	out, err := cmd.Output()
@@ -158,11 +139,6 @@ func ListDisplays() ([]DisplayInfo, error) {
 	return displays, nil
 }
 
-// parseDisplayInfos decodes PowerShell ConvertTo-Json output for the
-// displays query (#3009 W2): empty output is a legitimate empty list (zero
-// displays), but non-empty output that fails BOTH decodings is a real parse
-// failure (polluted stdout) and must surface as an error instead of being
-// silently reported as "0 displays".
 func parseDisplayInfos(out []byte) ([]DisplayInfo, error) {
 	trimmed := bytes.TrimSpace(out)
 	if len(trimmed) == 0 {
@@ -179,7 +155,6 @@ func parseDisplayInfos(out []byte) ([]DisplayInfo, error) {
 	return displays, nil
 }
 
-// ListWindows returns capturable windows on Windows.
 func ListWindows() ([]WindowInfo, error) {
 	script := `
 Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
@@ -204,9 +179,6 @@ Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
 	return windows, nil
 }
 
-// parseWindowInfos mirrors parseDisplayInfos for the windows query
-// (#3009 W2): empty pipeline output means zero capturable windows (legal),
-// non-empty non-JSON output is a parse failure that must be reported.
 func parseWindowInfos(out []byte) ([]WindowInfo, error) {
 	trimmed := bytes.TrimSpace(out)
 	if len(trimmed) == 0 {
@@ -227,10 +199,6 @@ func escapePowerShell(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-// writeWindowsCursorDraw appends mouse-cursor overlay drawing for non-window
-// captures, aligning the Windows path with the macOS screencapture -C
-// behavior (#555). $ox/$oy hold the capture origin in screen coordinates so
-// the cursor lands at its on-screen position inside the bitmap.
 func writeWindowsCursorDraw(sb *strings.Builder, opts ScreenshotOptions) {
 	if !opts.Cursor {
 		return

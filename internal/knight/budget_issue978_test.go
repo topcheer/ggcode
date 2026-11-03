@@ -10,13 +10,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// TestBucketBudgetIsolationUnderDefaultConfig locks in issue #978 fix: under
-// the default config (daily budget unset), NewBudget falls back to 5M and the
-// bucket-level guardrail must derive its caps from that same normalized total
-// instead of the raw 0 (which made every bucket unlimited and let eval starve
-// analysis with no signal).
 func TestBucketBudgetIsolationUnderDefaultConfig(t *testing.T) {
-	cfg := config.KnightConfig{Enabled: true} // DailyTokenBudget unset (0, not explicit)
+	cfg := config.KnightConfig{Enabled: true}
 	b := NewBudget(t.TempDir(), cfg)
 	if got := b.DailyLimit(); got != defaultKnightDailyTokenBudget {
 		t.Fatalf("NewBudget default config: DailyLimit() = %d, want %d", got, defaultKnightDailyTokenBudget)
@@ -36,20 +31,17 @@ func TestBucketBudgetIsolationUnderDefaultConfig(t *testing.T) {
 	}
 
 	now := time.Now()
-	// Exhaust the eval bucket.
+
 	bb.record(BudgetBucketEval, evalCap, now)
 	if bb.canSpend(BudgetBucketEval, now) {
 		t.Fatalf("eval bucket must be blocked after spending its cap (%d)", evalCap)
 	}
-	// Analysis bucket must stay isolated (this was silently broken before).
+
 	if !bb.canSpend(BudgetBucketAnalysis, now) {
 		t.Fatalf("analysis bucket must remain spendable after eval exhaustion")
 	}
 }
 
-// TestKnightConstructionBudgetParity verifies Knight.New feeds the bucket
-// guardrail and the total Budget from the same normalization path, so their
-// daily totals agree for unset, negative, and explicit positive configs.
 func TestKnightConstructionBudgetParity(t *testing.T) {
 	cases := []struct {
 		name string
@@ -78,10 +70,6 @@ func TestKnightConstructionBudgetParity(t *testing.T) {
 	}
 }
 
-// TestCandidateQueueRemoveSanitizesNameAndSignalsMiss covers issue #978 part
-// two: Remove must sanitize the candidate name the same way Upsert does, and
-// a no-match removal must leave a debug log trail instead of being fully
-// silent.
 func TestCandidateQueueRemoveSanitizesNameAndSignalsMiss(t *testing.T) {
 	debug.EnableForTest(t, "knight")
 	queue := NewCandidateQueue(filepath.Join(t.TempDir(), "queue.json"))
@@ -89,13 +77,11 @@ func TestCandidateQueueRemoveSanitizesNameAndSignalsMiss(t *testing.T) {
 		t.Fatalf("EnsureDir() error = %v", err)
 	}
 
-	// Upsert sanitizes "Build_Flow" -> "build-flow" before storing.
 	stored := SkillCandidate{Name: "Build_Flow", Scope: "project", Score: 4.2, EvidenceCount: 3}
 	if err := queue.Upsert(stored); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 
-	// Remove with a raw unsanitized name must still target the stored key.
 	raw := SkillCandidate{Name: "Build_Flow", Scope: "project"}
 	if err := queue.Remove(raw); err != nil {
 		t.Fatalf("Remove(raw name) error = %v", err)
@@ -108,7 +94,6 @@ func TestCandidateQueueRemoveSanitizesNameAndSignalsMiss(t *testing.T) {
 		t.Fatalf("expected sanitized Remove to delete the stored candidate, got %+v", items)
 	}
 
-	// Removing a nonexistent candidate must not error, but must log the miss.
 	missing := SkillCandidate{Name: "never-queued-candidate", Scope: "project"}
 	if err := queue.Remove(missing); err != nil {
 		t.Fatalf("Remove(missing) error = %v", err)

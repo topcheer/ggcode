@@ -26,16 +26,10 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-// sessionLister is the minimal interface resolveSessionID needs.
-// session.Store satisfies this, but tests can pass a simpler mock.
 type sessionLister interface {
 	List() ([]*session.Session, error)
 }
 
-// resolveSessionID resolves a user-supplied session reference to a full
-// session ID. The query may be an exact ID, a unique ID prefix, a unique ID
-// substring, or a unique case-insensitive title substring (in that order).
-// Ambiguous queries return an error listing the candidate sessions.
 func resolveSessionID(store sessionLister, query string) (string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -90,10 +84,7 @@ func resolveSessionID(store sessionLister, query string) (string, error) {
 }
 
 func (m *Model) resumeSession(id string) tea.Cmd {
-	// #1755: record the LATEST request - two rapid /resume commands (or a
-	// picker double-click) produce two Loads whose COMPLETION order is
-	// arbitrary; without this gate a slow older Load could overwrite the
-	// newer one and the session ends up on the wrong resume.
+
 	m.pendingResumeID = id
 	return func() tea.Msg {
 		if m.sessionStore == nil {
@@ -117,21 +108,15 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 		return
 	}
 
-	// Guard: don't switch sessions while agent is running. Clearing the agent
-	// context mid-run would cause undefined behavior.
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("session.switch_blocked_running"))
 		return
 	}
 
-	// Flush final metadata for the session we are leaving (if different from
-	// target). Messages are already on disk via AppendMessageToDisk — calling
-	// Save() would overwrite them because ses.Messages lacks agent replies.
 	if m.session != nil && m.session.ID != ses.ID && m.sessionStore != nil {
 		oldSes := m.session
 		oldStore := m.sessionStore
-		// Snapshot the board into the session we are leaving, before the
-		// async meta flush: the live board belongs to the outgoing session.
+
 		m.snapshotTasksInto(oldSes)
 		safego.Go("tui.applyResumedSession.metaFlush", func() {
 			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
@@ -142,7 +127,6 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 		})
 	}
 
-	// Delegate to the shared session-switching helper (isNew=false for resumed sessions).
 	m.switchToSession(ses, false)
 }
 
@@ -185,12 +169,7 @@ func (m *Model) snapshotDisplayNameResolver() func(vendor, endpoint string) (str
 }
 
 func (m *Model) exportSession(id string) tea.Cmd {
-	// #2347: snapshot everything the flying goroutine reads. The tea.Cmd
-	// closure runs off the Update loop; reading m.config.Vendors (nested
-	// maps, fatal on concurrent write via ResolveDisplayName) races a
-	// provider switch serialized in Update. Copy the display-name data
-	// HERE - under the Update loop's serialization - and resolve against
-	// the copy inside the closure.
+
 	displayResolve := m.snapshotDisplayNameResolver()
 	store := m.sessionStore
 	tr := m.t
@@ -198,15 +177,12 @@ func (m *Model) exportSession(id string) tea.Cmd {
 		if store == nil {
 			return streamMsg(tr("session.store_missing"))
 		}
-		// Load session first, then render with display names from config.
+
 		resolved, err := resolveSessionID(store, id)
 		if err != nil {
 			return streamMsg(tr("session.export_failed", err))
 		}
-		// #4893: exports must bypass the recent-message window (silent
-		// truncation for sessions over 24h/500 records) - same fix desktop
-		// took in #564; the window is a list-performance tool misapplied to
-		// a data-fidelity path.
+
 		ses, err := store.LoadWithOptions(resolved, true)
 		if err != nil {
 			return streamMsg(tr("session.export_failed", err))
@@ -221,22 +197,8 @@ func (m *Model) exportSession(id string) tea.Cmd {
 	}
 }
 
-// exportTraceSession exports the execution metrics (LLM call timings, tool
-// latencies, token usage, cache stats) for a session as a structured JSON file.
-// If id is empty, exports the current session's metrics.
-//
-// The output file (trace-<session-id>.json) is written to the current working
-// directory and is suitable for offline analysis, sharing, or piping into
-// observability platforms. With otelFormat, the trace is rendered as an
-// OTLP/HTTP (protobuf-JSON) document using OpenTelemetry GenAI semantic
-// conventions (trace-<session-id>.otel.json), ingestible by Jaeger, Grafana,
-// Langfuse or any OTLP endpoint without conversion.
 func (m *Model) exportTraceSession(id string, otelFormat bool) tea.Cmd {
-	// #2347: snapshot the LIVE session's fields and the Metrics slice
-	// header here, under the Update loop - the metrics recorder appends
-	// from Update-serialized handlers, so copying now is race-free, while
-	// reading m.session.* from the closure raced those appends (torn slice
-	// header -> ExportTrace iterates out of bounds).
+
 	var events []metrics.MetricEvent
 	var sessionID, vendor, endpoint, model string
 	var createdAt time.Time
@@ -248,21 +210,19 @@ func (m *Model) exportTraceSession(id string, otelFormat bool) tea.Cmd {
 		endpoint = m.session.Endpoint
 		model = m.session.Model
 		createdAt = m.session.CreatedAt
-		// #3086: copy under the append lock - the bare slice reference
-		// captured here crossed into the command goroutine while agent
-		// callbacks appended it.
+
 		events = m.session.MetricsSnapshot()
 	}
 	store := m.sessionStore
 	tr := m.t
 	return func() tea.Msg {
 		if id == "" {
-			// Export current session metrics.
+
 			if !hasCurrent {
 				return streamMsg(tr("trace.no_session"))
 			}
 		} else {
-			// Export by session ID.
+
 			if store == nil {
 				return streamMsg(tr("session.store_missing"))
 			}
@@ -331,7 +291,7 @@ func (m *Model) handleToolsCommand() tea.Cmd {
 			return streamMsg("No tools registered.")
 		}
 	}
-	// Sort tools alphabetically for consistent display
+
 	sort.Slice(tools, func(i, j int) bool {
 		return tools[i].Name() < tools[j].Name()
 	})
@@ -340,7 +300,7 @@ func (m *Model) handleToolsCommand() tea.Cmd {
 	for _, t := range tools {
 		name := t.Name()
 		desc := t.Description()
-		// Truncate long descriptions for readability
+
 		if len(desc) > 120 {
 			desc = desc[:117] + "..."
 		}
@@ -412,8 +372,7 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("memory.cleared"))
 	case "forget", "restore":
-		// r10 instruction-driven per-entry forgetting (sa-160): soft
-		// delete that hides from prompt injection; GC digests the file.
+
 		if m.autoMem == nil {
 			m.chatWriteSystem(nextSystemID(), m.t("memory.auto_unavailable"))
 			return nil
@@ -459,9 +418,7 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 }
 
 func (m *Model) handleBugCommand() tea.Cmd {
-	// #2347: snapshot the scalars the closure reports - reading
-	// m.config.Vendor/Model, m.session.ID/Messages and m.mcpServers from
-	// the flying goroutine raced Update-serialized writers.
+
 	cfgVendor, cfgModel := "", ""
 	hasCfg := m.config != nil
 	if hasCfg {
@@ -473,34 +430,29 @@ func (m *Model) handleBugCommand() tea.Cmd {
 		sesID, sesMsgs = m.session.ID, len(m.session.Messages)
 	}
 	nServers := len(m.mcpServers)
-	chatList := m.chatList // chat.List guards itself with an internal RWMutex
+	chatList := m.chatList
 	trFn := m.t
 	return func() tea.Msg {
 		var b strings.Builder
 		b.WriteString(trFn("bug.title"))
 
-		// Version info
 		b.WriteString(trFn("bug.version", version.Display()))
 		b.WriteString(trFn("bug.os", runtime.GOOS, runtime.GOARCH))
 		b.WriteString(trFn("bug.go", runtime.Version()))
 
-		// Config info
 		if hasCfg {
 			b.WriteString(trFn("bug.provider", cfgVendor))
 			b.WriteString(trFn("bug.model", cfgModel))
 		}
 
-		// Session info
 		if hasSes {
 			b.WriteString(trFn("bug.session", sesID, sesMsgs))
 		}
 
-		// MCP info
 		if nServers > 0 {
 			b.WriteString(trFn("bug.mcp", nServers))
 		}
 
-		// Recent errors from chatList items
 		if chatList != nil {
 			for i := chatList.Len() - 1; i >= 0; i-- {
 				item := chatList.ItemAt(i)
@@ -531,10 +483,8 @@ func (m *Model) handlePluginsCommand() tea.Cmd {
 	return nil
 }
 
-// handleInspectorCommand opens the inspector panel for the requested sub-panel.
-// With no argument, defaults to status.
 func (m *Model) handleInspectorCommand(parts []string) tea.Cmd {
-	kind := inspectorPanelStatus // default
+	kind := inspectorPanelStatus
 	if len(parts) > 1 {
 		switch strings.ToLower(parts[1]) {
 		case "sessions", "session", "s":
@@ -566,19 +516,13 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 	return nil
 }
 
-// handleDiffCommand runs `git diff` and displays the output in the chat.
-// Supports: /diff, /diff --cached, /diff <file>, /diff --stat
 func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 	args := []string{"diff"}
 	if len(parts) > 1 {
 		args = append(args, parts[1:]...)
 	}
 	workDir := workingDirFromModel(m)
-	// #1366-A: run git in the returned tea.Cmd, not in the Update loop. The
-	// old synchronous CombinedOutput froze the whole TUI for seconds on a
-	// large monorepo diff (pattern: handleTitleCommand's "TUI event loop
-	// must not block"). A timeout bounds pathological repos; results come
-	// back as a streamMsg like the other async handlers.
+
 	return func() tea.Msg {
 		ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 15*time.Second)
 		defer cancel()
@@ -594,17 +538,12 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 			return streamMsg("No changes detected (working tree clean).")
 		}
 
-		// Truncate very large diffs. When truncating, prepend a --stat summary
-		// so the user can see which files changed even if the full diff is cut off.
 		maxLines := 200
 		lines := strings.Split(result, "\n")
 		if len(lines) > maxLines {
-			// Get the stat summary for context
+
 			statArgs := []string{"diff", "--stat"}
-			// Preserve the user's flags (--cached, ...) AND positional file
-			// arguments: #1366-B dropped the file path, so "/diff big.go"
-			// showed big.go's truncated diff followed by a WHOLE-REPO stat
-			// summary that misleads about the repo's state.
+
 			for _, p := range parts[1:] {
 				if p != "diff" && p != "--stat" {
 					statArgs = append(statArgs, p)
@@ -628,16 +567,11 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 	}
 }
 
-// handleHooksCommand opens the hooks configuration panel.
 func (m *Model) handleHooksCommand() tea.Cmd {
 	m.openHooksPanel()
 	return nil
 }
 
-// handleTitleCommand sets or displays the current session title.
-// Usage: /title <new title>  — set title
-//
-//	/title              — show current title
 func (m *Model) handleTitleCommand(title string) tea.Cmd {
 	if m.session == nil {
 		return func() tea.Msg { return streamMsg("No active session.") }
@@ -650,7 +584,7 @@ func (m *Model) handleTitleCommand(title string) tea.Cmd {
 		msg := fmt.Sprintf("Current title: %s\n\nUsage: /title <new title> to rename this session.\n", current)
 		return func() tea.Msg { return streamMsg(msg) }
 	}
-	// Truncate to reasonable length
+
 	if len([]rune(title)) > 120 {
 		title = string([]rune(title)[:117]) + "..."
 	}
@@ -658,7 +592,6 @@ func (m *Model) handleTitleCommand(title string) tea.Cmd {
 	m.session.Title = title
 	m.session.UpdatedAt = time.Now()
 
-	// Persist the title change to disk
 	store := m.sessionStore
 	if store != nil {
 		successMsg := fmt.Sprintf("Session renamed: %s → %s\n", oldTitle, title)
@@ -674,7 +607,6 @@ func (m *Model) handleTitleCommand(title string) tea.Cmd {
 	return func() tea.Msg { return streamMsg(msg) }
 }
 
-// sessionLabel returns a short display label for a session in messages.
 func sessionLabel(ses *session.Session) string {
 	if t := strings.TrimSpace(ses.Title); t != "" {
 		return t
@@ -682,14 +614,10 @@ func sessionLabel(ses *session.Session) string {
 	return ses.ID
 }
 
-// handleSessionPinCommand pins the current session. Pinned sessions are protected
-// from age-based cleanup (CleanupOlderThan) and listed first in /sessions.
-// Named distinctly from /pin (context pinning) to avoid collision.
 func (m *Model) handleSessionPinCommand() tea.Cmd {
 	return m.handleSessionPinStateCommand(true)
 }
 
-// handleSessionUnpinCommand unpins the current session.
 func (m *Model) handleSessionUnpinCommand() tea.Cmd {
 	return m.handleSessionPinStateCommand(false)
 }
@@ -719,8 +647,6 @@ func (m *Model) handleSessionPinStateCommand(pinned bool) tea.Cmd {
 	}
 }
 
-// handleTagCommand adds tags to the current session (e.g. /tag rust perf).
-// With no arguments it shows the current tags.
 func (m *Model) handleTagCommand(args []string) tea.Cmd {
 	if m.session == nil {
 		return func() tea.Msg { return streamMsg("No active session.") }
@@ -747,8 +673,6 @@ func (m *Model) handleTagCommand(args []string) tea.Cmd {
 	}
 }
 
-// handleUntagCommand removes tags from the current session (e.g. /untag rust).
-// Matching is case-insensitive; removing the last tag clears the list.
 func (m *Model) handleUntagCommand(args []string) tea.Cmd {
 	if m.session == nil {
 		return func() tea.Msg { return streamMsg("No active session.") }
@@ -782,7 +706,6 @@ func (m *Model) handleUntagCommand(args []string) tea.Cmd {
 	}
 }
 
-// handleTagsCommand shows the current session's tags.
 func (m *Model) handleTagsCommand() tea.Cmd {
 	if m.session == nil {
 		return func() tea.Msg { return streamMsg("No active session.") }
@@ -795,15 +718,8 @@ func (m *Model) handleTagsCommand() tea.Cmd {
 	}
 }
 
-// handleCostCommand displays the session token usage and estimated cost,
-// grouped by model. A session may use multiple models if the user switches
-// mid-session; each model's contribution is shown separately.
-// handleRunReportCommand evaluates the current session trajectory offline
-// (no LLM calls) and prints the efficiency scorecard produced by the runeval
-// package.
 func (m *Model) handleRunReportCommand(args []string) tea.Cmd {
-	// /runreport all — cross-session trajectory aggregation (Langfuse-style
-	// experiment comparison, on top of the per-session scorecard).
+
 	if len(args) > 0 && (args[0] == "all" || args[0] == "-a" || args[0] == "--all") {
 		return m.handleRunReportAllCommand()
 	}
@@ -828,10 +744,6 @@ func (m *Model) handleRunReportCommand(args []string) tea.Cmd {
 	return nil
 }
 
-// handleRunReportAllCommand evaluates every stored session offline and
-// prints the cross-session aggregate scorecard (mean/min/max efficiency,
-// worst sessions, most cross-session repeated tools). Read-only: no LLM
-// calls, no session mutations.
 func (m *Model) handleRunReportAllCommand() tea.Cmd {
 	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
 	if !ok {
@@ -845,18 +757,13 @@ func (m *Model) handleRunReportAllCommand() tea.Cmd {
 		m.chatListScrollToBottom()
 		return nil
 	}
-	// Cap the scan so a huge history stays interactive: most recent 50
-	// sessions (List already sorts pinned-first then UpdatedAt desc).
+
 	if len(list) > 50 {
 		list = list[:50]
 	}
 	sessionReports := make([]runeval.SessionReport, 0, len(list))
 	for _, meta := range list {
-		// #3982: List() builds sessions from index entries only — Messages,
-		// UsageHistory and ContextMessages are always nil there. Evaluating
-		// the metadata skeleton directly made every session look empty and
-		// the whole report silently degrade to "no tool calls". Load the full
-		// session per ID first (same pattern as /export and /branch).
+
 		full, err := jsonlStore.Load(meta.ID)
 		if err != nil || full == nil || len(full.Messages) == 0 {
 			sessionReports = append(sessionReports, runeval.SessionReport{ID: meta.ID, Title: meta.Title})
@@ -877,7 +784,7 @@ func (m *Model) handleRunReportAllCommand() tea.Cmd {
 }
 
 func (m *Model) handleCostCommand(args []string) tea.Cmd {
-	// /cost all — cross-session cost summary
+
 	if len(args) > 0 && (args[0] == "all" || args[0] == "-a" || args[0] == "--all") {
 		return m.handleCostAllCommand()
 	}
@@ -887,10 +794,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		return nil
 	}
 
-	// #1366-C: snapshot usage fields under the session mutex. The write
-	// side (recordSessionUsage, streaming callbacks on a background
-	// goroutine) holds this lock; reading without it is a data race that
-	// trips -race when /cost is pressed during streaming.
 	mu := m.sessionMutex()
 	mu.Lock()
 	usage := m.session.TokenUsage
@@ -905,7 +808,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		return nil
 	}
 
-	// Group UsageHistory by vendor+model for per-model breakdown.
 	type modelGroup struct {
 		model    string
 		vendor   string
@@ -930,7 +832,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		g.usage = g.usage.Add(entry.Usage)
 	}
 
-	// Fallback: if no UsageHistory entries, use the session-level aggregate.
 	if len(groups) == 0 {
 		groups[""] = &modelGroup{
 			model:  m.session.Model,
@@ -953,7 +854,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 			continue
 		}
 
-		// Model header
 		sb.WriteString(fmt.Sprintf("  %s (%s)\n", g.model, g.vendor))
 		sb.WriteString(fmt.Sprintf("    Input tokens:       %s\n", humanizeTokenCount(gu.InputTokens)))
 		sb.WriteString(fmt.Sprintf("    Output tokens:      %s\n", humanizeTokenCount(gu.OutputTokens)))
@@ -964,7 +864,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 			sb.WriteString(fmt.Sprintf("    Cache write:        %s\n", humanizeTokenCount(gu.CacheWrite)))
 		}
 
-		// Cost estimate for this model
 		rate := resolveRate(g.vendor, g.endpoint, g.model)
 		if rate.IsKnown() {
 			if !rate.IsMetered() {
@@ -975,10 +874,7 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 				sb.WriteString(fmt.Sprintf("    Cost:               included in %s\n\n", planLabel))
 			} else {
 				hasMeteredRate = true
-				// #2315: DisplayInputTokens - cached tokens were billed
-				// at full input price AND cache-read price on
-				// subset-semantics vendors (InputTokens already contains
-				// CacheRead). Matches the sidebar and the #2310 boundary.
+
 				modelCost := float64(gu.DisplayInputTokens())*rate.InputPerM/1e6 +
 					float64(gu.OutputTokens)*rate.OutputPerM/1e6 +
 					float64(gu.CacheRead)*rate.CacheReadPerM/1e6 +
@@ -992,7 +888,6 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		}
 	}
 
-	// Grand totals
 	sb.WriteString("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n")
 	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n", humanizeTokenCount(usage.Total())))
 	if hasMeteredRate && grandCost > 0 {
@@ -1003,30 +898,18 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 	return nil
 }
 
-// handleCostAllCommand is retired (#2312 ruling B): the .cost.json store
-// it read has had no live writer since the session-domain usage pipeline
-// took over - the cross-session summary and its cache-efficiency section
-// rendered empty or stale legacy data. The first-class usage/balance
-// surface (#2150, in flight) will serve this need from live data.
 func (m *Model) handleCostAllCommand() tea.Cmd {
 	m.chatWriteSystem(nextSystemID(), "Cross-session cost totals are being rebuilt on the live usage pipeline (#2150). /cost shows the current session.")
 	return nil
 }
 
-// resolveRate determines the billing type for a session by checking:
-// 1. Explicit pricing table entry (vendor + model)
-// 2. Coding plan endpoint pattern (e.g., "cn-coding-openai")
-// 3. Subscription vendor (all endpoints are subscription)
-// 4. Falls back to PricingUnknown
 func resolveRate(vendor, endpoint, model string) cost.ModelRate {
 	pt := cost.DefaultPricingTable()
 
-	// 1. Check explicit pricing table first (covers github-copilot, glm-4.5-air free)
 	if rate, ok := pt.Get(vendor, model); ok {
 		return rate
 	}
 
-	// 2. Coding plan endpoint → subscription
 	if cost.IsCodingPlanEndpoint(endpoint) {
 		return cost.ModelRate{
 			Type: cost.PricingSubscription,
@@ -1034,7 +917,6 @@ func resolveRate(vendor, endpoint, model string) cost.ModelRate {
 		}
 	}
 
-	// 3. Entirely subscription vendor (kimi, ark, aliyun, minimax, xiaomi-mimo)
 	if plan := cost.IsSubscriptionVendor(vendor); plan != "" {
 		return cost.ModelRate{
 			Type: cost.PricingSubscription,
@@ -1042,24 +924,15 @@ func resolveRate(vendor, endpoint, model string) cost.ModelRate {
 		}
 	}
 
-	// 4. Unknown — no hardcoded per-token prices
 	return cost.ModelRate{}
 }
 
-// handleForecastCommand predicts the token/cost band for the task in the
-// composer BEFORE running it (r434). Based on the K most similar past
-// runs in this workspace (first-prompt similarity), pure statistics - no
-// LLM call. Stanford Digital Economy study shows task token consumption
-// is predictable from task shape; ggcode already records every run's
-// usage, so the forecast is free.
 func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	if m.sessionStore == nil {
 		m.chatWriteSystem(nextSystemID(), "No session store available for forecasting.")
 		return nil
 	}
 
-	// The forecast target: the drafted task if present, else the current
-	// session's first prompt ("how much do runs like this one cost").
 	prompt := strings.TrimSpace(m.input.Value())
 	if prompt == "" && m.session != nil {
 		for _, msg := range m.session.Messages {
@@ -1093,10 +966,6 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 		return nil
 	}
 
-	// Build (first-prompt, total-tokens) samples from past runs. The
-	// current session is excluded: its tokens are not yet spent. Sessions
-	// from ListForWorkspace are disk-loaded snapshots; only the active
-	// session receives concurrent UsageHistory appends, and it is skipped.
 	var samples []cost.RunSample
 	for _, ses := range sessions {
 		if m.session != nil && ses.ID == m.session.ID {
@@ -1136,9 +1005,7 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	}
 
 	var sb strings.Builder
-	// #4114: rune-safe truncation - the old byte slice [:60] cut CJK
-	// sequences mid-rune and the %q escape then printed the invalid bytes
-	// as \xe6 litter. Preview with %s in quotes so CJK stays readable.
+
 	shown := util.Truncate(prompt, 60)
 	if len([]rune(prompt)) > 60 {
 		shown += "..."
@@ -1153,9 +1020,6 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	sb.WriteString(fmt.Sprintf("  Likely range: %s - %s tokens (median %s)\n",
 		humanizeTokenCount(fc.Low), humanizeTokenCount(fc.High), humanizeTokenCount(fc.Median)))
 
-	// Cost band via the active model's rate, blended input/output. Coding
-	// plans and subscriptions have no per-token price - say so instead of
-	// inventing one.
 	vendor, endpoint, model := "", "", ""
 	if m.session != nil {
 		m.sessionMutex().Lock()
@@ -1181,9 +1045,6 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	return nil
 }
 
-// handleReviewCommand runs a code review on the current working tree changes.
-// It gathers the git diff and sends it to the agent with a structured review prompt.
-// Supports: /review, /review --cached, /review --staged
 func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 	diffArgs := []string{"diff"}
 	if len(parts) > 1 {
@@ -1196,7 +1057,7 @@ func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		// Get diff
+
 		cmd := exec.Command("git", diffArgs...)
 		cmd.Dir = workingDirFromModel(m)
 		output, err := cmd.CombinedOutput()
@@ -1209,7 +1070,6 @@ func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 			return streamMsg("No changes to review (working tree clean).")
 		}
 
-		// Truncate very large diffs for the prompt
 		maxLines := 500
 		lines := strings.Split(diff, "\n")
 		truncated := false
@@ -1218,7 +1078,6 @@ func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 			truncated = true
 		}
 
-		// Build review prompt
 		var prompt strings.Builder
 		prompt.WriteString("Review the following git diff. Focus on:\n")
 		prompt.WriteString("1. **Bugs**: Logic errors, edge cases, nil dereferences, off-by-one\n")
@@ -1240,28 +1099,20 @@ func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 	}
 }
 
-// reviewReadyMsg carries the expanded review text to be sent to the agent.
 type reviewReadyMsg struct {
 	text string
 }
 
-// handleCommitCommand gathers the current staged/unstaged diff and sends it
-// to the agent with a structured commit-message generation prompt.
-// Supports: /commit, /commit <message>, /commit --amend
 func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 	return func() tea.Msg {
 		dir := workingDirFromModel(m)
 
-		// Distinguish "not a git repo" from "clean tree" — git diff/status
-		// both return empty output outside a repository, which would
-		// misleadingly report "working tree clean".
 		revCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 		revCmd.Dir = dir
 		if out, err := revCmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "true" {
 			return streamMsg("Not a git repository — nothing to commit.")
 		}
 
-		// Check if a custom message was provided: /commit my message here
 		customMsg := ""
 		amendFlag := false
 		for _, p := range parts[1:] {
@@ -1273,13 +1124,11 @@ func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 		}
 		customMsg = strings.TrimSpace(customMsg)
 
-		// Gather staged diff
 		stagedCmd := exec.Command("git", "diff", "--cached", "--stat")
 		stagedCmd.Dir = dir
 		stagedStat, _ := stagedCmd.CombinedOutput()
 		stagedStatStr := strings.TrimSpace(string(stagedStat))
 
-		// Gather unstaged diff summary
 		unstagedCmd := exec.Command("git", "status", "--porcelain")
 		unstagedCmd.Dir = dir
 		statusOut, _ := unstagedCmd.CombinedOutput()
@@ -1289,13 +1138,11 @@ func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 			return streamMsg("Nothing to commit — working tree clean.")
 		}
 
-		// Get the full staged diff (for the prompt)
 		fullDiffCmd := exec.Command("git", "diff", "--cached")
 		fullDiffCmd.Dir = dir
 		fullDiffOut, _ := fullDiffCmd.CombinedOutput()
 		fullDiff := strings.TrimSpace(string(fullDiffOut))
 
-		// Build commit prompt
 		var prompt strings.Builder
 		prompt.WriteString("Create a git commit for the current changes. Follow these steps:\n\n")
 		prompt.WriteString("1. Review the staged and unstaged changes below\n")
@@ -1331,7 +1178,7 @@ func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 		}
 
 		if fullDiff != "" {
-			// Truncate very large diffs for the prompt
+
 			maxLines := 500
 			lines := strings.Split(fullDiff, "\n")
 			truncated := false
@@ -1351,13 +1198,10 @@ func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 	}
 }
 
-// commitReadyMsg carries the expanded commit prompt to be sent to the agent.
 type commitReadyMsg struct {
 	text string
 }
 
-// handleCopyCommand copies the last assistant response to the system clipboard.
-// Usage: /copy  — copies the most recent agent reply (markdown source, not rendered).
 func (m *Model) handleCopyCommand() tea.Cmd {
 	return func() tea.Msg {
 		if m.chatList == nil {
@@ -1375,9 +1219,6 @@ func (m *Model) handleCopyCommand() tea.Cmd {
 	}
 }
 
-// handleContextCommand shows a detailed breakdown of the context window usage,
-// including system prompt size, conversation messages, token distribution,
-// and proximity to auto-compaction threshold.
 func (m *Model) handleContextCommand() tea.Cmd {
 	if m.agent == nil {
 		m.chatWriteSystem(nextSystemID(), "Agent not initialized.")
@@ -1401,11 +1242,9 @@ func (m *Model) handleContextCommand() tea.Cmd {
 	usageRatio := cm.UsageRatio()
 	compactThreshold := cm.AutoCompactThreshold()
 
-	// System prompt token estimate
 	sysPrompt := m.agent.SystemPrompt()
 	sysTokens := context.EstimateTokens(sysPrompt)
 
-	// Count messages by role
 	var userMsgs, asstMsgs, toolMsgs int
 	var userTokens, asstTokens, toolTokens int
 	provExtMsgs, provExtTokens, provFlagged := contextProvenance(messages)
@@ -1430,7 +1269,6 @@ func (m *Model) handleContextCommand() tea.Cmd {
 		remaining = 0
 	}
 
-	// Progress bar
 	pct := usageRatio * 100
 	barWidth := 20
 	filled := int(usageRatio * float64(barWidth))
@@ -1460,10 +1298,6 @@ func (m *Model) handleContextCommand() tea.Cmd {
 	}
 	sb.WriteString(fmt.Sprintf("  Conversation:    %s tokens\n\n", humanizeTokenCount(conversationTokens)))
 
-	// Provenance / trust breakdown: external-source content in context.
-	// The injection guard marks such results inline; this surfaces the
-	// aggregate so users can answer "how much of my context came from
-	// web/peer sources, and how much is injection-flagged" at a glance.
 	if toolMsgs > 0 {
 		sb.WriteString("Provenance:\n")
 		extPct := float64(provExtTokens) / float64(toolTokens) * 100
@@ -1486,9 +1320,6 @@ func (m *Model) handleContextCommand() tea.Cmd {
 	return nil
 }
 
-// estimateMessageTokens sums token estimates across all content blocks.
-// Uses context.EstimateTokens for text (ASCII fast path + CJK aware),
-// and adds overhead for images and tool calls.
 func estimateMessageTokens(msg provider.Message) int {
 	var total int
 	for _, block := range msg.Content {
@@ -1496,21 +1327,16 @@ func estimateMessageTokens(msg provider.Message) int {
 		case "text":
 			total += context.EstimateTokens(block.Text)
 		case "image":
-			// Vision tokens are larger; approximate as 1000 per image
+
 			total += 1000
 		default:
-			// Tool calls/results have JSON structure overhead
+
 			total += context.EstimateTokens(block.Output+block.ToolName+string(block.Input)) + 6
 		}
 	}
 	return total
 }
 
-// handleRegenerateCommand discards the agent's most recent response and
-// re-runs the agent with the last user message. This is equivalent to
-// ChatGPT's "Regenerate" button. It removes the last assistant message
-// (and trailing tool messages) from the context manager, updates the chat
-// display, and starts a new agent run without adding a new user message.
 func (m *Model) handleRegenerateCommand() tea.Cmd {
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("regenerate.busy"))
@@ -1526,23 +1352,19 @@ func (m *Model) handleRegenerateCommand() tea.Cmd {
 		return nil
 	}
 
-	// Remove the last assistant group from the context manager.
 	lastUserText := cm.RemoveLastAssistantGroup()
 	if lastUserText == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("regenerate.no_response"))
 		return nil
 	}
 
-	// Remove the agent's response from the chat display.
 	if m.chatList != nil {
 		m.chatList.TruncateAfterLastUser()
 	}
 
-	// Also remove the last assistant message from the session's message list
-	// so that persistFullSessionMessages doesn't write stale data.
 	m.sessionMutex().Lock()
 	if m.session != nil && len(m.session.Messages) > 0 {
-		// Find last user message index in session.
+
 		lastUserIdx := -1
 		for i := len(m.session.Messages) - 1; i >= 0; i-- {
 			if m.session.Messages[i].Role == "user" {
@@ -1556,9 +1378,6 @@ func (m *Model) handleRegenerateCommand() tea.Cmd {
 	}
 	m.sessionMutex().Unlock()
 
-	// Start a new agent run with the existing user message text.
-	// We do NOT call appendUserMessage because the user message is
-	// already in the context manager from the original submission.
 	m.streamBuffer = nil
 	m.shellBuffer = nil
 	m.streamPrefixWritten = false
@@ -1569,8 +1388,6 @@ func (m *Model) handleRegenerateCommand() tea.Cmd {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 
-	// Reset run tracking so persistFullSessionMessages only writes
-	// new messages from this run, not the existing context.
 	if m.agent != nil {
 		m.agent.StartRunTracking()
 	}
@@ -1578,13 +1395,6 @@ func (m *Model) handleRegenerateCommand() tea.Cmd {
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(lastUserText))
 }
 
-// handleGoalCommand manages the autopilot goal.
-//   - /goal          → show current goal
-//   - /goal <text>   → set a new goal (enters autopilot mode if not already)
-//   - /goal clear    → clear the current goal
-//
-// The goal persists in the system prompt across context compaction,
-// ensuring the agent never loses sight of its objective mid-session.
 func (m *Model) handleGoalCommand(parts []string) tea.Cmd {
 	if m.agent == nil {
 		m.chatWriteSystem(nextSystemID(), "Agent not initialized.")
@@ -1614,8 +1424,6 @@ func (m *Model) handleGoalCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// handleInterventionsCommand backs /interventions (r395): show the user's
-// takeover history summary, or wipe it with "/interventions clear".
 func (m *Model) handleInterventionsCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		if m.agent != nil {
@@ -1632,8 +1440,6 @@ func (m *Model) handleInterventionsCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// handleRefusalsCommand backs /refusals (r23): show persisted user
-// refusals, or wipe them with "/refusals clear".
 func (m *Model) handleRefusalsCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		if m.agent != nil {

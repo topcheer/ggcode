@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestPlainArgsAreFlags verifies the subcommand-vs-positional switch routing:
-// leading "--" selects the flag mode, everything else is the switch form.
 func TestPlainArgsAreFlags(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -30,8 +28,6 @@ func TestPlainArgsAreFlags(t *testing.T) {
 	}
 }
 
-// newPlainListFixture builds an in-memory config with three endpoints covering
-// the filter classes: keyed+modelled, keyed+no-models, no-key+modelled.
 func newPlainListFixture() *config.Config {
 	cfg := &config.Config{
 		Vendor:   "vkeyed",
@@ -55,7 +51,6 @@ func newPlainListFixture() *config.Config {
 	return cfg
 }
 
-// captureStdout runs fn with os.Stdout piped and returns what it printed.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -72,9 +67,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(b)
 }
 
-// TestPlainListEndpointsDefaultFilter verifies the default view lists only
-// endpoints with BOTH a usable api key and a configured model list, caps the
-// model listing at 10 with a +N more hint, and marks the active endpoint.
 func TestPlainListEndpointsDefaultFilter(t *testing.T) {
 	cfg := newPlainListFixture()
 	out := captureStdout(t, func() { plainListEndpoints(cfg, false) })
@@ -99,8 +91,6 @@ func TestPlainListEndpointsDefaultFilter(t *testing.T) {
 	}
 }
 
-// TestPlainListEndpointsAll verifies --all surfaces the filtered-out classes
-// with their annotations.
 func TestPlainListEndpointsAll(t *testing.T) {
 	cfg := newPlainListFixture()
 	out := captureStdout(t, func() { plainListEndpoints(cfg, true) })
@@ -112,8 +102,6 @@ func TestPlainListEndpointsAll(t *testing.T) {
 	}
 }
 
-// TestPlainAddEndpointValidation verifies the guard rails that run BEFORE any
-// config mutation: required fields, protocol whitelist, duplicate id.
 func TestPlainAddEndpointValidation(t *testing.T) {
 	cfg := newPlainListFixture()
 
@@ -137,8 +125,6 @@ func TestPlainAddEndpointValidation(t *testing.T) {
 	}
 }
 
-// TestPlainAddModelValidation verifies the add-model guards: model required,
-// active endpoint must exist, duplicate model refused.
 func TestPlainAddModelValidation(t *testing.T) {
 	cfg := newPlainListFixture()
 
@@ -152,7 +138,6 @@ func TestPlainAddModelValidation(t *testing.T) {
 		t.Errorf("duplicate model must be rejected, got: %s", out)
 	}
 
-	// No active endpoint: refuse instead of creating one.
 	cfg2 := newPlainListFixture()
 	cfg2.Vendor = ""
 	out = captureStdout(t, func() { plainAddModel(cfg2, "newmodel", "") })

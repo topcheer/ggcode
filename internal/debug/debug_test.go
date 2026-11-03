@@ -57,7 +57,7 @@ func TestEnabledWithEnvVar(t *testing.T) {
 }
 
 func TestPerCategoryEnvOverridesGlobal(t *testing.T) {
-	// Set per-category env, no global
+
 	os.Setenv("GGCODE_DEBUG_AGENT", "1")
 	os.Setenv("GGCODE_DEBUG_OPENAI", "1")
 	defer os.Unsetenv("GGCODE_DEBUG_AGENT")
@@ -88,19 +88,16 @@ func TestPerCategoryEnvOverridesGlobal(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Agent file should exist
 	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
 	if _, err := os.Stat(agentPath); err != nil {
 		t.Errorf("expected agent log: %v", err)
 	}
 
-	// OpenAI file should exist
 	openaiPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-openai-%d.log", pid))
 	if _, err := os.Stat(openaiPath); err != nil {
 		t.Errorf("expected openai log: %v", err)
 	}
 
-	// Knight file should NOT exist (not in per-category env)
 	knightPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-knight-%d.log", pid))
 	if _, err := os.Stat(knightPath); !os.IsNotExist(err) {
 		t.Error("expected knight log to NOT exist when not in per-category env")
@@ -108,9 +105,9 @@ func TestPerCategoryEnvOverridesGlobal(t *testing.T) {
 }
 
 func TestPerCategoryEnvIgnoredWhenGlobalSet(t *testing.T) {
-	// Both global and per-category set: per-category takes precedence
+
 	os.Setenv("GGCODE_DEBUG_AGENT", "1")
-	os.Setenv(envKey, "knight") // global says knight only
+	os.Setenv(envKey, "knight")
 	defer os.Unsetenv("GGCODE_DEBUG_AGENT")
 	defer os.Unsetenv(envKey)
 
@@ -134,7 +131,6 @@ func TestPerCategoryEnvIgnoredWhenGlobalSet(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Per-category overrides global: agent should exist, knight should NOT
 	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
 	if _, err := os.Stat(agentPath); err != nil {
 		t.Errorf("expected agent log (per-category override): %v", err)
@@ -163,14 +159,13 @@ func TestMessageTruncation(t *testing.T) {
 	}
 
 	content := string(data)
-	// Each line should be at most maxMessageLen + tag prefix + newline
+
 	for _, line := range strings.Split(content, "\n") {
 		if line == "" {
 			continue
 		}
-		// The formatted message includes "[agent] " prefix + truncated content
-		// Total should be around maxMessageLen
-		if len(line) > maxMessageLen+5 { // small margin for timestamp
+
+		if len(line) > maxMessageLen+5 {
 			t.Errorf("log line too long (%d chars): %q", len(line), line)
 		}
 	}
@@ -237,25 +232,21 @@ func TestCategoryLogFiles(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Agent category file should exist
 	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
 	if _, err := os.Stat(agentPath); err != nil {
 		t.Errorf("expected agent log file: %v", err)
 	}
 
-	// OpenAI category file should exist (separate from provider now)
 	openaiPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-openai-%d.log", pid))
 	if _, err := os.Stat(openaiPath); err != nil {
 		t.Errorf("expected openai log file: %v", err)
 	}
 
-	// Knight category file should exist
 	knightPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-knight-%d.log", pid))
 	if _, err := os.Stat(knightPath); err != nil {
 		t.Errorf("expected knight log file: %v", err)
 	}
 
-	// Main file should contain all messages
 	mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
 	data, err := os.ReadFile(mainPath)
 	if err != nil {
@@ -314,7 +305,7 @@ func TestResolveLogPathsUsesPerProcessFileForDefaultPath(t *testing.T) {
 	if compatPath != "/tmp/ggcode-debug.log" {
 		t.Fatalf("expected compat path %q, got %q", "/tmp/ggcode-debug.log", compatPath)
 	}
-	// Default path is now under ~/.ggcode/debug/ (user-private)
+
 	expectedDir := resolveDebugDir()
 	expected := filepath.Join(expectedDir, "ggcode-debug-4321.log")
 	if basePath != expected {
@@ -347,7 +338,7 @@ func TestCleanupCompatPathDoesNotRemoveAnotherInstanceAlias(t *testing.T) {
 func TestParseTagFilter(t *testing.T) {
 	tests := []struct {
 		input string
-		want  map[string]bool // nil = all
+		want  map[string]bool
 	}{
 		{"", nil},
 		{"1", nil},
@@ -394,11 +385,10 @@ func TestResolveDebugDirReturnsUserPrivateDir(t *testing.T) {
 		t.Fatal("resolveDebugDir should not return empty")
 	}
 
-	// Should be under ~/.ggcode/debug/ on most systems
 	home, _ := os.UserHomeDir()
 	expectedDefault := filepath.Join(home, ".ggcode", "debug")
 	if dir == expectedDefault {
-		// Verify the directory was created with restrictive permissions
+
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Fatalf("stat debug dir: %v", err)
@@ -408,7 +398,7 @@ func TestResolveDebugDirReturnsUserPrivateDir(t *testing.T) {
 			t.Errorf("debug dir permissions = %04o, want 0700", perm)
 		}
 	}
-	// If fallback to /tmp, should contain UID
+
 	if strings.HasPrefix(dir, os.TempDir()) {
 		uid := "0"
 		if u, err := user.Current(); err == nil {
@@ -425,7 +415,7 @@ func TestDebugLogFilePermissions(t *testing.T) {
 	defer Close()
 
 	dir := resolveDebugDir()
-	// Find the log file
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Skipf("no debug dir: %v", err)

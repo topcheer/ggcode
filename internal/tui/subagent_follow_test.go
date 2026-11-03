@@ -13,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 )
 
-// TestMarkStripDirty verifies that markStripDirty sets stripDirty to true.
 func TestMarkStripDirty(t *testing.T) {
 	f := subAgentFollowState{}
 
@@ -27,7 +26,6 @@ func TestMarkStripDirty(t *testing.T) {
 	}
 }
 
-// TestRefreshStripIfNeeded_NotDirty verifies that refresh is skipped when stripDirty is false.
 func TestRefreshStripIfNeeded_NotDirty(t *testing.T) {
 	f := subAgentFollowState{}
 
@@ -37,21 +35,17 @@ func TestRefreshStripIfNeeded_NotDirty(t *testing.T) {
 	}
 }
 
-// TestRefreshStripIfNeeded_Throttle verifies that refresh is throttled within stripRefreshInterval.
 func TestRefreshStripIfNeeded_Throttle(t *testing.T) {
 	f := subAgentFollowState{}
 	f.markStripDirty()
 
-	// First refresh should succeed (no lastStripRefresh set)
 	refreshed := f.refreshStripIfNeeded(nil, nil)
 	if !refreshed {
 		t.Fatal("first refresh should succeed")
 	}
 
-	// Mark dirty again immediately
 	f.markStripDirty()
 
-	// Second refresh within stripRefreshInterval should be throttled
 	refreshed = f.refreshStripIfNeeded(nil, nil)
 	if refreshed {
 		t.Error("second refresh within throttle window should be skipped")
@@ -61,22 +55,18 @@ func TestRefreshStripIfNeeded_Throttle(t *testing.T) {
 	}
 }
 
-// TestRefreshStripIfNeeded_AfterInterval verifies that refresh works again after stripRefreshInterval.
 func TestRefreshStripIfNeeded_AfterInterval(t *testing.T) {
 	f := subAgentFollowState{}
 	f.markStripDirty()
 
-	// First refresh
 	refreshed := f.refreshStripIfNeeded(nil, nil)
 	if !refreshed {
 		t.Fatal("first refresh should succeed")
 	}
 
-	// Simulate time passing by setting lastStripRefresh to the past
 	f.lastStripRefresh = time.Now().Add(-stripRefreshInterval - time.Millisecond)
 	f.markStripDirty()
 
-	// Should succeed now
 	refreshed = f.refreshStripIfNeeded(nil, nil)
 	if !refreshed {
 		t.Error("refresh should succeed after interval elapsed")
@@ -86,7 +76,6 @@ func TestRefreshStripIfNeeded_AfterInterval(t *testing.T) {
 	}
 }
 
-// TestRefreshSlots_NilManager verifies that refreshSlots handles nil manager.
 func TestRefreshSlots_NilManager(t *testing.T) {
 	f := subAgentFollowState{}
 	f.refreshSlots(nil)
@@ -96,7 +85,6 @@ func TestRefreshSlots_NilManager(t *testing.T) {
 	}
 }
 
-// TestRefreshSwarmSlots_NilManager verifies that refreshSwarmSlots handles nil.
 func TestRefreshSwarmSlots_NilManager(t *testing.T) {
 	f := subAgentFollowState{}
 	f.refreshSwarmSlots(nil)
@@ -106,20 +94,14 @@ func TestRefreshSwarmSlots_NilManager(t *testing.T) {
 	}
 }
 
-// TestRefreshSwarmSlots_WithTeamStatuses verifies that refreshSwarmSlots
-// correctly populates slots from the lightweight TeamStatusInfo data.
-// We bypass the swarm Manager (requires complex setup) and instead verify
-// the slot population logic by checking that refreshSwarmSlots uses
-// ListTeamStatuses (tested separately in swarm package).
 func TestRefreshSwarmSlots_SlotFields(t *testing.T) {
-	// Pre-populate with a sub-agent slot to verify it's preserved
+
 	f := subAgentFollowState{
 		slots: []followSlot{
 			{ID: "sa-1", Name: "subbie", Kind: followSlotSubAgent, Phase: "running"},
 		},
 	}
 
-	// refreshSwarmSlots(nil) should keep existing sub-agent slots
 	f.refreshSwarmSlots(nil)
 	if len(f.slots) != 1 {
 		t.Fatalf("expected 1 slot (sub-agent preserved), got %d", len(f.slots))
@@ -129,10 +111,8 @@ func TestRefreshSwarmSlots_SlotFields(t *testing.T) {
 	}
 }
 
-// TestRefreshSwarmSlots_TerminalStatus verifies the Terminal field logic
-// for teammate statuses. We verify the constants used in the comparison.
 func TestRefreshSwarmSlots_TerminalStatus(t *testing.T) {
-	// Verify that the status comparison logic is correct
+
 	idle := swarm.TeammateIdle
 	shutdown := swarm.TeammateShuttingDown
 	working := swarm.TeammateWorking
@@ -148,7 +128,6 @@ func TestRefreshSwarmSlots_TerminalStatus(t *testing.T) {
 	}
 }
 
-// TestRefreshSlots_WithRunningAgent verifies that a running sub-agent appears in slots.
 func TestRefreshSlots_WithRunningAgent(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
@@ -176,15 +155,11 @@ func TestRefreshSlots_WithRunningAgent(t *testing.T) {
 	m.CancelAll()
 }
 
-// TestRefreshSlots_CompletedAgentInGracePeriod verifies that a recently completed
-// sub-agent remains in slots during grace period.
 func TestRefreshSlots_CompletedAgentInGracePeriod(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
 	id := m.Spawn("worker", "worker", "done task", nil, ctx)
 
-	// Complete the agent by setting exported fields directly.
-	// Safe in tests since no goroutines are accessing the manager.
 	agents := m.List()
 	for _, sa := range agents {
 		if sa.ID == id {
@@ -207,19 +182,16 @@ func TestRefreshSlots_CompletedAgentInGracePeriod(t *testing.T) {
 	}
 }
 
-// TestRefreshSlots_CompletedAgentExpired verifies that an old completed agent
-// is excluded from slots.
 func TestRefreshSlots_CompletedAgentExpired(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
 	id := m.Spawn("old-worker", "old-worker", "old task", nil, ctx)
 
-	// Complete the agent with EndedAt beyond grace period
 	agents := m.List()
 	for _, sa := range agents {
 		if sa.ID == id {
 			sa.Status = subagent.StatusCompleted
-			sa.EndedAt = time.Now().Add(-2 * time.Minute) // beyond 1-minute grace
+			sa.EndedAt = time.Now().Add(-2 * time.Minute)
 		}
 	}
 
@@ -256,8 +228,6 @@ func TestBuildFollowListUnknownToolUsesCommandDetail(t *testing.T) {
 	}
 }
 
-// TestRefreshStrip_ClearedAfterRefresh verifies that stripDirty is cleared
-// and slots are populated after a successful refresh.
 func TestRefreshStrip_ClearedAfterRefresh(t *testing.T) {
 	saMgr := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
@@ -280,8 +250,6 @@ func TestRefreshStrip_ClearedAfterRefresh(t *testing.T) {
 	saMgr.CancelAll()
 }
 
-// TestRefreshSlots_FailedAgentInGracePeriod verifies failed agents are also
-// kept during grace period.
 func TestRefreshSlots_FailedAgentInGracePeriod(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
@@ -309,8 +277,6 @@ func TestRefreshSlots_FailedAgentInGracePeriod(t *testing.T) {
 	}
 }
 
-// TestRefreshSlots_CancelledAgentInGracePeriod verifies cancelled agents
-// are also kept during grace period.
 func TestRefreshSlots_CancelledAgentInGracePeriod(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
@@ -332,15 +298,12 @@ func TestRefreshSlots_CancelledAgentInGracePeriod(t *testing.T) {
 	}
 }
 
-// TestRefreshSlots_MultipleAgents verifies correct handling of mixed agent states.
 func TestRefreshSlots_MultipleAgents(t *testing.T) {
 	m := subagent.NewManager(config.SubAgentConfig{})
 	ctx := context.Background()
 
-	// Running agent
 	m.Spawn("runner", "runner", "active work", nil, ctx)
 
-	// Completed agent (in grace)
 	id2 := m.Spawn("completer", "completer", "done work", nil, ctx)
 	for _, sa := range m.List() {
 		if sa.ID == id2 {
@@ -349,7 +312,6 @@ func TestRefreshSlots_MultipleAgents(t *testing.T) {
 		}
 	}
 
-	// Expired agent
 	id3 := m.Spawn("expired", "expired", "old work", nil, ctx)
 	for _, sa := range m.List() {
 		if sa.ID == id3 {
@@ -361,12 +323,10 @@ func TestRefreshSlots_MultipleAgents(t *testing.T) {
 	f := subAgentFollowState{}
 	f.refreshSlots(m)
 
-	// Should have 2 slots: running + in-grace completed
 	if len(f.slots) != 2 {
 		t.Fatalf("expected 2 slots, got %d", len(f.slots))
 	}
 
-	// Count by kind
 	terminal := 0
 	nonTerminal := 0
 	for _, s := range f.slots {
@@ -383,10 +343,6 @@ func TestRefreshSlots_MultipleAgents(t *testing.T) {
 		t.Errorf("expected 1 terminal (completed in grace), got %d", terminal)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// textThrottleMap tests — verifies the per-ID throttle used by repl.go
-// ---------------------------------------------------------------------------
 
 func TestTextThrottleMap_FirstAllow(t *testing.T) {
 	tm := newTextThrottleMap(500 * time.Millisecond)
@@ -415,11 +371,11 @@ func TestTextThrottleMap_AfterDelay(t *testing.T) {
 func TestTextThrottleMap_PerID(t *testing.T) {
 	tm := newTextThrottleMap(500 * time.Millisecond)
 	tm.Allow("tm-1")
-	// Different ID should not be throttled
+
 	if !tm.Allow("tm-2") {
 		t.Error("different ID should not be throttled by tm-1's rate")
 	}
-	// Original ID is still throttled
+
 	if tm.Allow("tm-1") {
 		t.Error("tm-1 should still be throttled")
 	}
@@ -429,7 +385,7 @@ func TestTextThrottleMap_Clear(t *testing.T) {
 	tm := newTextThrottleMap(500 * time.Millisecond)
 	tm.Allow("tm-1")
 	tm.Clear("tm-1")
-	// After clear, should be allowed again
+
 	if !tm.Allow("tm-1") {
 		t.Error("Allow after Clear should return true")
 	}
@@ -463,9 +419,6 @@ func TestTextThrottleMap_Concurrent(t *testing.T) {
 		count++
 	}
 
-	// With 5 IDs × 200 attempts each at 100µs apart = ~20ms total per ID.
-	// With 1ms throttle, each ID should be allowed ~20 times.
-	// Total should be roughly 100 (5 × 20). Be lenient with timing.
 	if count < 30 {
 		t.Errorf("expected at least 30 allowed calls, got %d", count)
 	}
@@ -475,14 +428,13 @@ func TestTextThrottleMap_Concurrent(t *testing.T) {
 }
 
 func TestTextThrottleMap_HighFrequencySimulation(t *testing.T) {
-	// Simulates the actual use case: 5 teammates streaming text at ~50 tokens/s
+
 	tm := newTextThrottleMap(500 * time.Millisecond)
 	ids := []string{"tm-1", "tm-2", "tm-3", "tm-4", "tm-5"}
 
 	allowed := 0
 	blocked := 0
 
-	// Simulate 100ms of tokens at ~50 tokens/s per teammate = 5 tokens each
 	for _, id := range ids {
 		for i := 0; i < 5; i++ {
 			if tm.Allow(id) {
@@ -493,8 +445,6 @@ func TestTextThrottleMap_HighFrequencySimulation(t *testing.T) {
 		}
 	}
 
-	// 5 IDs × 1st call allowed = 5 allowed
-	// 5 IDs × 4 subsequent calls blocked = 20 blocked
 	if allowed != 5 {
 		t.Errorf("expected 5 allowed (one per ID), got %d", allowed)
 	}

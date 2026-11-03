@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// waitForMaintenance quiesces the store's background maintenance goroutine
-// (scheduled by List via scheduleMaintenanceLocked) so t.TempDir cleanup does
-// not race with late index writes ("directory not empty" unlinkat failures).
 func waitForMaintenance(t *testing.T, stores ...*JSONLStore) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -27,20 +24,13 @@ func waitForMaintenance(t *testing.T, stores ...*JSONLStore) {
 			}
 		}
 		if !busy {
-			// One final grace tick: goroutine exit path may write after the
-			// flags clear.
+
 			time.Sleep(50 * time.Millisecond)
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
-
-// branch_lineage_test.go - branch lineage (ParentSessionID/ForkPoint)
-// persistence and ListChildren, which back the /branches and /branch-switch
-// TUI commands. Before this fix lineage was a write-only in-memory field:
-// it never reached the JSONL meta record or the index, so a fork's parent
-// was lost on reload and branch trees were undiscoverable.
 
 func TestBranchLineagePersistedAndListed(t *testing.T) {
 	dir := t.TempDir()
@@ -63,14 +53,11 @@ func TestBranchLineagePersistedAndListed(t *testing.T) {
 	child.ForkPoint = 2
 	saveFullForTest(t, store, child)
 
-	// An unrelated session must not show up as a child.
 	other := NewSession("vendor", "endpoint", "model")
 	other.Workspace = "/tmp/ws-branch"
 	other.Messages = []provider.Message{userMsg}
 	saveFullForTest(t, store, other)
 
-	// Simulate a process restart: a fresh store instance must see the
-	// lineage recorded on disk.
 	store2, err := NewJSONLStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +73,6 @@ func TestBranchLineagePersistedAndListed(t *testing.T) {
 		t.Fatalf("after reload: ForkPoint = %d, want 2", loaded.ForkPoint)
 	}
 
-	// ListChildren works off the index and returns only real children,
-	// with lineage fields populated.
 	kids, err := store2.ListChildren(parent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +117,6 @@ func TestBranchLineageSurvivesLaterMetaAppends(t *testing.T) {
 	child.ForkPoint = 1
 	saveFullForTest(t, store, child)
 
-	// Later meta appends (title changes, pin toggles, board snapshots...)
-	// must not clobber the immutable lineage.
 	child.Title = "Branch: renamed"
 	if err := store.AppendMetaToDisk(child); err != nil {
 		t.Fatal(err)

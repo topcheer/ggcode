@@ -12,8 +12,7 @@ import (
 
 func newTestManager() *Manager {
 	m := NewManager(config.SubAgentConfig{})
-	// Use a short timeout in tests so CancelAll doesn't block 5s on
-	// agents that have no goroutine (test-only SetCancel without Run).
+
 	m.cancelAllTimeout = 50 * time.Millisecond
 	return m
 }
@@ -73,7 +72,6 @@ func TestManager_GetTaskText(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	// Completed run with result: task text is exposed for delegation validation.
 	id := m.Spawn("test", "## Objective\nfix X\n## Acceptance Criteria\n- tests pass", "fix X", nil, ctx)
 	m.Complete(id, "done", nil)
 	task, ok := m.GetTaskText(id)
@@ -81,18 +79,15 @@ func TestManager_GetTaskText(t *testing.T) {
 		t.Fatalf("completed run must expose task text: ok=%v task=%q", ok, task)
 	}
 
-	// Unknown agent: nothing to validate against, not an error.
 	if _, ok := m.GetTaskText("no-such-agent"); ok {
 		t.Fatal("unknown agent must return ok=false")
 	}
 
-	// Running agent (result still changing): no task text yet.
 	rid := m.Spawn("test", "test", "task with criteria", nil, ctx)
 	if _, ok := m.GetTaskText(rid); ok {
 		t.Fatal("running agent must return ok=false")
 	}
 
-	// Failed run: no validation target.
 	fid := m.Spawn("test", "test", "task with criteria", nil, ctx)
 	m.Complete(fid, "", context.Canceled)
 	if _, ok := m.GetTaskText(fid); ok {
@@ -135,7 +130,7 @@ func TestManager_Complete_WithCallback(t *testing.T) {
 
 func TestManager_Complete_NotFound(t *testing.T) {
 	m := newTestManager()
-	m.Complete("nonexistent", "", nil) // should not panic
+	m.Complete("nonexistent", "", nil)
 }
 
 func TestManager_UpdateProgress(t *testing.T) {
@@ -153,7 +148,7 @@ func TestManager_UpdateProgress(t *testing.T) {
 
 func TestManager_UpdateProgress_NotFound(t *testing.T) {
 	m := newTestManager()
-	m.UpdateProgress("nonexistent", "summary") // should not panic
+	m.UpdateProgress("nonexistent", "summary")
 }
 
 func TestManager_UpdateActivity(t *testing.T) {
@@ -197,7 +192,7 @@ func TestManager_ReleaseSemaphore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.ReleaseSemaphore() // should not block or panic
+	m.ReleaseSemaphore()
 }
 
 func TestManager_Timeout(t *testing.T) {
@@ -253,10 +248,8 @@ func TestManager_CancelAll(t *testing.T) {
 	id2 := m.Spawn("a2", "a2", "task2", nil, ctx2)
 	id3 := m.Spawn("a3", "a3", "task3", nil, ctx3)
 
-	// Set two as running
 	m.SetCancel(id1, cancel1)
 	m.SetCancel(id2, cancel2)
-	// id3 stays pending
 
 	cancelled := m.CancelAll()
 	if cancelled != 3 {
@@ -286,12 +279,8 @@ func TestManager_CancelAll_Empty(t *testing.T) {
 	}
 }
 
-// TestManager_CancelAll_WaitsForGoroutine verifies that CancelAll actually
-// waits for a Running sub-agent's goroutine to terminate, not just for the
-// status to be set. This is a regression test for the bug where Cancel()
-// prematurely closed the done channel, making CancelAll's wait a no-op.
 func TestManager_CancelAll_WaitsForGoroutine(t *testing.T) {
-	// Use a dedicated manager with a longer timeout for this test.
+
 	m := NewManager(config.SubAgentConfig{})
 	m.cancelAllTimeout = 5 * time.Second
 
@@ -301,7 +290,6 @@ func TestManager_CancelAll_WaitsForGoroutine(t *testing.T) {
 	id := m.Spawn("slow-agent", "test", "do something", nil, ctx)
 	m.SetCancel(id, cancel)
 
-	// Simulate what Run() does: mark that a real goroutine is running.
 	sa, _ := m.Get(id)
 	if sa == nil {
 		t.Fatal("sub-agent not found after Spawn")
@@ -310,7 +298,6 @@ func TestManager_CancelAll_WaitsForGoroutine(t *testing.T) {
 	sa.goroutineStarted = true
 	sa.mu.Unlock()
 
-	// Simulate a goroutine that takes 200ms to terminate after context cancel.
 	terminated := make(chan struct{})
 	go func() {
 		<-ctx.Done()
@@ -327,17 +314,13 @@ func TestManager_CancelAll_WaitsForGoroutine(t *testing.T) {
 		t.Fatalf("expected 1 cancelled, got %d", cancelled)
 	}
 
-	// CancelAll should have waited for the goroutine to call Complete(),
-	// which takes ~200ms. If it returned immediately (< 100ms), the fix
-	// is not working — done was closed prematurely by Cancel().
 	if elapsed < 150*time.Millisecond {
 		t.Errorf("CancelAll returned too quickly (%v) — expected to wait for goroutine termination", elapsed)
 	}
 
-	// Verify the goroutine actually terminated.
 	select {
 	case <-terminated:
-		// Good — goroutine finished.
+
 	case <-time.After(2 * time.Second):
 		t.Error("goroutine did not terminate within 2s")
 	}
@@ -349,7 +332,7 @@ func TestSubAgent_statusInfo(t *testing.T) {
 		Name:         "researcher",
 		Status:       StatusRunning,
 		CurrentPhase: "reading files",
-		EndedAt:      time.Time{}, // zero
+		EndedAt:      time.Time{},
 		Mailbox:      make(chan AgentMessage, 16),
 	}
 
@@ -374,13 +357,11 @@ func TestSubAgent_statusInfo(t *testing.T) {
 func TestManager_Statuses(t *testing.T) {
 	m := newTestManager()
 
-	// Empty manager
 	statuses := m.Statuses()
 	if len(statuses) != 0 {
 		t.Fatalf("expected 0 statuses, got %d", len(statuses))
 	}
 
-	// Spawn agents
 	ctx1 := context.Background()
 	ctx2 := context.Background()
 	m.Spawn("alpha", "alpha", "task-a", nil, ctx1)
@@ -391,7 +372,6 @@ func TestManager_Statuses(t *testing.T) {
 		t.Fatalf("expected 2 statuses, got %d", len(statuses))
 	}
 
-	// Verify names are present (order not guaranteed)
 	names := map[string]bool{}
 	for _, s := range statuses {
 		names[s.Name] = true
@@ -406,19 +386,15 @@ func TestManager_Statuses(t *testing.T) {
 		t.Error("expected beta agent in statuses")
 	}
 
-	// Cleanup
 	m.CancelAll()
 }
 
 func TestManager_Statuses_DoesNotCopyEvents(t *testing.T) {
-	// Verify Statuses() is lightweight — it should not reflect event counts.
-	// We add events to an agent, call Statuses(), and verify it returns without
-	// copying or exposing the events array.
+
 	m := newTestManager()
 	ctx := context.Background()
 	id := m.Spawn("event-agent", "event-agent", "eventful task", nil, ctx)
 
-	// Add events to the agent
 	agents := m.List()
 	for _, sa := range agents {
 		if sa.ID == id {
@@ -428,13 +404,11 @@ func TestManager_Statuses_DoesNotCopyEvents(t *testing.T) {
 		}
 	}
 
-	// Statuses should still work and be lightweight
 	statuses := m.Statuses()
 	if len(statuses) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(statuses))
 	}
 
-	// StatusInfo has no Events field — just ID, Name, Status, CurrentPhase, EndedAt
 	if statuses[0].Name != "event-agent" {
 		t.Errorf("expected event-agent, got %s", statuses[0].Name)
 	}
@@ -450,7 +424,6 @@ func TestSubAgent_EventsSince(t *testing.T) {
 		Mailbox: make(chan AgentMessage, 16),
 	}
 
-	// No events yet
 	events, total := sa.EventsSince(0)
 	if total != 0 {
 		t.Fatalf("expected 0 total, got %d", total)
@@ -459,12 +432,10 @@ func TestSubAgent_EventsSince(t *testing.T) {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 
-	// Add events — use tool_call events to avoid text coalescing
 	for i := 0; i < 5; i++ {
 		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("t%d", i)})
 	}
 
-	// Get all
 	events, total = sa.EventsSince(0)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)
@@ -473,7 +444,6 @@ func TestSubAgent_EventsSince(t *testing.T) {
 		t.Fatalf("expected 5 events, got %d", len(events))
 	}
 
-	// Get incremental
 	events, total = sa.EventsSince(3)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)
@@ -482,7 +452,6 @@ func TestSubAgent_EventsSince(t *testing.T) {
 		t.Fatalf("expected 2 incremental events, got %d", len(events))
 	}
 
-	// fromIdx >= total returns empty
 	events, total = sa.EventsSince(10)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)
@@ -497,7 +466,6 @@ func TestManager_EventsSince_Integration(t *testing.T) {
 	ctx := context.Background()
 	id := m.Spawn("worker", "worker", "task", nil, ctx)
 
-	// Add events via the agent
 	agents := m.List()
 	for _, sa := range agents {
 		if sa.ID == id {
@@ -507,7 +475,6 @@ func TestManager_EventsSince_Integration(t *testing.T) {
 		}
 	}
 
-	// Get incremental from 15
 	agents = m.List()
 	for _, sa := range agents {
 		if sa.ID == id {
@@ -527,29 +494,26 @@ func TestManager_EventsSince_Integration(t *testing.T) {
 func TestWatchdog_CancelsInactiveAgent(t *testing.T) {
 	m := NewManager(config.SubAgentConfig{})
 	defer m.Shutdown()
-	// Use a very short inactivity timeout for testing
+
 	m.inactivityTimeout = 100 * time.Millisecond
 
 	ctx := context.Background()
 	id := m.Spawn("test", "test", "do something", nil, ctx)
 
-	// Simulate the agent starting and then going stale
 	sa, ok := m.Get(id)
 	if !ok {
 		t.Fatal("expected sub-agent to exist")
 	}
-	// Mark as running with goroutine started
+
 	sa.mu.Lock()
 	sa.Status = StatusRunning
 	sa.goroutineStarted = true
-	// Set lastActivity to the past — older than the inactivity timeout
+
 	sa.lastActivity = time.Now().Add(-200 * time.Millisecond)
 	sa.mu.Unlock()
 
-	// Run reapInactiveAgents manually (don't wait for 30s ticker)
 	m.reapInactiveAgents()
 
-	// Verify the agent was cancelled
 	sa.mu.Lock()
 	status := sa.Status
 	sa.mu.Unlock()
@@ -570,11 +534,11 @@ func TestWatchdog_DoesNotCancelActiveAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("expected sub-agent to exist")
 	}
-	// Mark as running with recent activity
+
 	sa.mu.Lock()
 	sa.Status = StatusRunning
 	sa.goroutineStarted = true
-	sa.lastActivity = time.Now() // active right now
+	sa.lastActivity = time.Now()
 	sa.mu.Unlock()
 
 	m.reapInactiveAgents()
@@ -592,7 +556,6 @@ func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
 	defer m.Shutdown()
 	m.inactivityTimeout = 100 * time.Millisecond
 
-	// Create 25 completed agents — exceeds maxTerminalAgents (20)
 	for i := 0; i < 25; i++ {
 		id := m.Spawn("test", "task", "display", nil, context.Background())
 		sa, ok := m.Get(id)
@@ -601,15 +564,13 @@ func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
 		}
 		sa.mu.Lock()
 		sa.Status = StatusCompleted
-		sa.EndedAt = time.Now().Add(-time.Duration(25-i) * time.Minute) // older = lower i
+		sa.EndedAt = time.Now().Add(-time.Duration(25-i) * time.Minute)
 		close(sa.done)
 		sa.mu.Unlock()
 	}
 
-	// Run purge
 	m.purgeTerminalAgents()
 
-	// Should have maxTerminalAgents (20) remaining
 	m.mu.Lock()
 	count := len(m.agents)
 	m.mu.Unlock()
@@ -619,14 +580,14 @@ func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
 }
 
 func TestSubAgentResultSizeCap(t *testing.T) {
-	// Verify that maxSubAgentResultBytes is a reasonable cap
+
 	if maxSubAgentResultBytes <= 0 {
 		t.Fatal("maxSubAgentResultBytes must be positive")
 	}
 	if maxSubAgentResultBytes > 1024*1024 {
 		t.Fatal("maxSubAgentResultBytes should be at most 1MB to protect context window")
 	}
-	// Simulate truncation logic
+
 	large := strings.Repeat("x", maxSubAgentResultBytes+5000)
 	capped := large
 	if len(capped) > maxSubAgentResultBytes {
@@ -637,9 +598,6 @@ func TestSubAgentResultSizeCap(t *testing.T) {
 	}
 }
 
-// TestDefaultMaxConcurrentIs16 pins the sub-agent concurrency default. The
-// spawn_agent tool description promises "at most 16 sub-agents may run
-// concurrently" - if this default changes, the tool text must change too.
 func TestDefaultMaxConcurrentIs16(t *testing.T) {
 	m := NewManager(config.SubAgentConfig{})
 	if m.maxConcurrent != 16 {
@@ -665,10 +623,8 @@ func TestManagerSetWorktree(t *testing.T) {
 		t.Errorf("snapshot worktree = %q, want isolated path", snap.Worktree)
 	}
 
-	// Unknown ID must be a safe no-op.
 	m.SetWorktree("sa-does-not-exist", "/tmp/x")
 
-	// Default remains empty for non-isolated spawns.
 	id2 := m.Spawn("wt-none", "task", "task", nil, context.Background())
 	snap2, ok := m.SnapshotByID(id2)
 	if !ok {

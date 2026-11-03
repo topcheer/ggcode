@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// knightSubcommands maps /knight subcommand names to their handlers.
-// Handlers that ignore extra arguments simply discard parts.
 var knightSubcommands = map[string]func(m *Model, parts []string) tea.Cmd{
 	"status": func(m *Model, _ []string) tea.Cmd {
 		m.openKnightPanel()
@@ -74,21 +72,12 @@ var knightSubcommands = map[string]func(m *Model, parts []string) tea.Cmd{
 
 const knightUsageHelp = "Knight commands: status, budget, queue, review [name], run <task>, propose <goal>, proposals [id|approve <id>|reject <id>], policies, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills, scenarios [clear], rejects [clear], memory, audit, reflect"
 
-// handleKnightCommand dispatches /knight subcommands.
-//
-// sa-162: the former 450-line monolith (cyclomatic complexity ~110) is
-// decomposed into per-subcommand helpers below. Behavior is unchanged -
-// user-visible strings, evaluation ordering, and error paths are preserved.
-//
-// sa-133: the dispatcher switch is collapsed into the knightSubcommands
-// handler map above; on/off stay inline since they run in all modes.
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	subcmd := ""
 	if len(parts) > 1 {
 		subcmd = parts[1]
 	}
 
-	// /knight on and /knight off work in all modes (they persist config + toggle runtime).
 	if subcmd == "on" {
 		return m.knightSetEnabled(true)
 	}
@@ -96,7 +85,6 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		return m.knightSetEnabled(false)
 	}
 
-	// All other subcommands require Knight to be running.
 	if m.knight == nil {
 		m.chatWriteSystem(nextSystemID(), "Knight is not available (only in daemon mode). Use /knight on to enable.")
 		return nil
@@ -110,9 +98,6 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	return handler(m, parts)
 }
 
-// knightSetEnabled persists the knight enabled flag and toggles the runtime
-// instance when available. It works in every mode (unlike the other
-// subcommands, which require a running knight daemon).
 func (m *Model) knightSetEnabled(enable bool) tea.Cmd {
 	action := "enable"
 	if !enable {
@@ -147,7 +132,6 @@ func (m *Model) knightSetEnabled(enable bool) tea.Cmd {
 	return nil
 }
 
-// knightBudgetCmd prints the current token budget status.
 func (m *Model) knightBudgetCmd() tea.Cmd {
 	used, remaining, limit := m.knight.BudgetStatus()
 	if limit == 0 {
@@ -158,7 +142,6 @@ func (m *Model) knightBudgetCmd() tea.Cmd {
 	return nil
 }
 
-// knightQueueCmd lists deferred knight candidates.
 func (m *Model) knightQueueCmd() tea.Cmd {
 	items, err := m.knight.Queue().List()
 	if err != nil {
@@ -181,8 +164,6 @@ func (m *Model) knightQueueCmd() tea.Cmd {
 	return nil
 }
 
-// knightReviewCmd shows a staging-skills summary, or a detailed review of
-// one named skill including validation results and recent auto-promote evals.
 func (m *Model) knightReviewCmd(parts []string) tea.Cmd {
 	staging, _ := m.knight.Index().StagingSkills()
 	if len(staging) == 0 {
@@ -237,7 +218,6 @@ func (m *Model) knightReviewCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightRunCmd starts an adhoc knight task on a cancellable context.
 func (m *Model) knightRunCmd(parts []string) tea.Cmd {
 	if len(parts) < 3 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight run <task>")
@@ -250,16 +230,14 @@ func (m *Model) knightRunCmd(parts []string) tea.Cmd {
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight running: %s", goal))
 	m.setLoading(true)
-	// #1758 case 2: spinner.Start returns the FIRST tick Cmd - dropping
-	// it left the animation frozen on frame one until Stop (the elapsed
-	// timer kept running). Batch it with the task Cmd.
+
 	tick := m.spinner.Start("Knight task")
 	m.statusActivity = "Knight task"
 	m.statusToolName = "knight"
 	m.statusToolArg = util.Truncate(goal, 80)
 	m.statusToolCount = 1
 	return tea.Batch(tick, func() tea.Msg {
-		// #1364: cancellable at shutdown instead of context.Background.
+
 		taskCtx, handle := m.registerKnightTask()
 		defer m.releaseKnightTask(handle)
 		result, err := m.knight.RunAdhocTask(taskCtx, goal)
@@ -271,7 +249,6 @@ func (m *Model) knightRunCmd(parts []string) tea.Cmd {
 	})
 }
 
-// knightProposeCmd drafts a project improvement proposal on a cancellable context.
 func (m *Model) knightProposeCmd(parts []string) tea.Cmd {
 	if len(parts) < 3 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight propose <project-improvement-goal>")
@@ -284,13 +261,13 @@ func (m *Model) knightProposeCmd(parts []string) tea.Cmd {
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("📝 Knight drafting project proposal: %s", goal))
 	m.setLoading(true)
-	tick := m.spinner.Start("Knight proposal") // #1758 case 2: keep the tick
+	tick := m.spinner.Start("Knight proposal")
 	m.statusActivity = "Knight proposal"
 	m.statusToolName = "knight"
 	m.statusToolArg = util.Truncate(goal, 80)
 	m.statusToolCount = 1
 	return tea.Batch(tick, func() tea.Msg {
-		// #1364: cancellable at shutdown instead of context.Background.
+
 		taskCtx, handle := m.registerKnightTask()
 		defer m.releaseKnightTask(handle)
 		proposal, result, err := m.knight.GenerateProjectImprovementProposal(taskCtx, goal)
@@ -303,8 +280,6 @@ func (m *Model) knightProposeCmd(parts []string) tea.Cmd {
 	})
 }
 
-// knightProposalsCmd lists project improvement proposals, shows one by id,
-// or applies an approve/reject action to one by id.
 func (m *Model) knightProposalsCmd(parts []string) tea.Cmd {
 	if len(parts) >= 4 {
 		action := strings.ToLower(parts[2])
@@ -315,10 +290,7 @@ func (m *Model) knightProposalsCmd(parts []string) tea.Cmd {
 		}
 		switch action {
 		case "approve":
-			// #1363 note: this path only transitions proposal STATUS - it
-			// never calls PromoteStaging (verified in project_proposal.go),
-			// so the global-skill --confirm-global gate above (direct
-			// /knight approve) does not apply here.
+
 			p, err := m.knight.ApproveProposal(id, note)
 			if err != nil {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
@@ -362,7 +334,6 @@ func (m *Model) knightProposalsCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightPoliciesCmd lists the automation policies and their guardrails.
 func (m *Model) knightPoliciesCmd() tea.Cmd {
 	policies := m.knight.AutoPolicies()
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight auto policies (%d):", len(policies)))
@@ -379,18 +350,13 @@ func (m *Model) knightPoliciesCmd() tea.Cmd {
 	return nil
 }
 
-// knightApproveSkillCmd promotes a staging skill. Global-scope promotion
-// requires an explicit --confirm-global second step (#1363).
 func (m *Model) knightApproveSkillCmd(parts []string) tea.Cmd {
 	if len(parts) < 3 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight approve <skill-name>")
 		return nil
 	}
 	name := parts[2]
-	// #1363: global-scope promotion needs an explicit second step - a
-	// warning that is followed by immediate effect in the same keypress
-	// is not a confirmation gate. Global skills inject into the system
-	// prompt of EVERY project on this machine.
+
 	if entry, err := m.knight.FindStagingSkill(name); err == nil && entry != nil && entry.Scope == "global" {
 		confirmed := false
 		for _, p := range parts[3:] {
@@ -412,7 +378,6 @@ func (m *Model) knightApproveSkillCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightRejectSkillCmd rejects a staging skill.
 func (m *Model) knightRejectSkillCmd(parts []string) tea.Cmd {
 	if len(parts) < 3 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight reject <skill-name>")
@@ -427,7 +392,6 @@ func (m *Model) knightRejectSkillCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightSetSkillFrozenCmd freezes or unfreezes a skill by name.
 func (m *Model) knightSetSkillFrozenCmd(parts []string, frozen bool) tea.Cmd {
 	action := "freeze"
 	if !frozen {
@@ -448,7 +412,6 @@ func (m *Model) knightSetSkillFrozenCmd(parts []string, frozen bool) tea.Cmd {
 	return nil
 }
 
-// knightRollbackSkillCmd rolls a skill back to its previous version.
 func (m *Model) knightRollbackSkillCmd(parts []string) tea.Cmd {
 	if len(parts) < 3 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight rollback <skill-name>")
@@ -463,7 +426,6 @@ func (m *Model) knightRollbackSkillCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightSkillsCmd lists active skills with usage and feedback statistics.
 func (m *Model) knightSkillsCmd() tea.Cmd {
 	active, _ := m.knight.Index().ActiveSkills()
 	if len(active) == 0 {
@@ -490,7 +452,6 @@ func (m *Model) knightSkillsCmd() tea.Cmd {
 	return nil
 }
 
-// knightScenariosCmd lists saved replay scenarios or clears them.
 func (m *Model) knightScenariosCmd(parts []string) tea.Cmd {
 	if len(parts) >= 3 && strings.EqualFold(parts[2], "clear") {
 		if err := m.knight.ClearSkillScenarios(); err != nil {
@@ -516,7 +477,6 @@ func (m *Model) knightScenariosCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightRejectsCmd lists recent reject/rollback events or clears the log.
 func (m *Model) knightRejectsCmd(parts []string) tea.Cmd {
 	if len(parts) >= 3 && strings.EqualFold(parts[2], "clear") {
 		if err := m.knight.ClearRejectFeedback(); err != nil {
@@ -538,7 +498,6 @@ func (m *Model) knightRejectsCmd(parts []string) tea.Cmd {
 	return nil
 }
 
-// knightMemoryCmd lists recent semantic memory entries.
 func (m *Model) knightMemoryCmd() tea.Cmd {
 	entries, err := m.knight.RecentSemanticMemory(20)
 	if err != nil {
@@ -560,7 +519,6 @@ func (m *Model) knightMemoryCmd() tea.Cmd {
 	return nil
 }
 
-// knightAuditCmd runs the governance audit over the trailing 30 days.
 func (m *Model) knightAuditCmd() tea.Cmd {
 	report, err := m.knight.RunGovernanceAudit(30 * 24 * time.Hour)
 	if err != nil {
@@ -571,7 +529,6 @@ func (m *Model) knightAuditCmd() tea.Cmd {
 	return nil
 }
 
-// knightReflectCmd runs self-reflection over the trailing 7 days.
 func (m *Model) knightReflectCmd() tea.Cmd {
 	report, err := m.knight.RunSelfReflection(context.Background(), 7*24*time.Hour)
 	if err != nil {
@@ -582,7 +539,6 @@ func (m *Model) knightReflectCmd() tea.Cmd {
 	return nil
 }
 
-// knightRateCmd records a 1-5 effectiveness rating for an active skill.
 func (m *Model) knightRateCmd(parts []string) tea.Cmd {
 	if len(parts) < 4 {
 		m.chatWriteSystem(nextSystemID(), "Usage: /knight rate <skill-name> <1-5>")

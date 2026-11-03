@@ -13,54 +13,34 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// handleApprovalMsg handles the corresponding message case.
 func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
-	// #1395-A: a second approval (main agent + ACP external agents run
-	// concurrently, repl.go wires both) used to overwrite pendingApproval
-	// unconditionally - the first request's Response channel was lost (its
-	// agent goroutine blocked until ctx timeout -> Deny) and the tunnel
-	// approval ID was reassigned (mobile users' answer to the OLD id was
-	// silently filtered). Mirror handleAskUserMsg: deny the pending one,
-	// register the newcomer.
+
 	if m.pendingApproval != nil && m.pendingApproval.Response != nil {
 		stale := *m.pendingApproval
-		// #1423-B: the displacement branch denied the stale approval but
-		// left m.tunnelPendingApprovalID pointing at it - the autopilot
-		// branch below then allowed the NEW request while the push path
-		// (commands_slash) read the RESIDUAL old ID: mobile saw the old
-		// request 'allowed' (it was denied) and the new result mispaired.
-		// Push an explicit deny for the stale ID, then clear it.
+
 		if oldID := m.tunnelPendingApprovalID; oldID != "" {
 			m.pushTunnelApprovalResult(oldID, "deny")
 			m.tunnelPendingApprovalID = ""
 		}
 		safego.Go("tui.model.displaceApproval", func() {
-			// #3370: displaced by a newer approval request - the user never
-			// decided on this one, so report a cancellation, not a denial.
+
 			stale.Response <- permission.Cancelled
 		})
 	}
-	// two-mode refactor: the legacy autopilot auto-approve fast path is
-	// REMOVED - autopilot normalizes to bypass, and bypass's retained Ask
-	// floors (system-level destruction, persistence backdoors) must reach
-	// a real human, otherwise the gates are decorative.
-	// Agent is requesting approval
+
 	m.pendingApproval = &msg
-	// #1741: defaultApprovalOptions() hardcodes LangEnglish wrappers -
-	// every arrival overwrote the language set at startup, so a zh user
-	// saw English approval labels on EVERY approval until they re-switched
-	// languages. Derive from the model's current language instead.
+
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.approvalCursor = 0
 	m.inputBellFired = false
-	m.oscBlocked(oscKindPermission, "Approval needed: "+msg.ToolName) // OSC 7501
-	// Push to IM if available so user can approve remotely
+	m.oscBlocked(oscKindPermission, "Approval needed: "+msg.ToolName)
+
 	m.approvalNotifiedIM = false
 	if m.imEmitter != nil {
 		m.emitIMApproval(msg.ToolName, msg.Input)
 		m.approvalNotifiedIM = true
 	}
-	// Push to mobile tunnel client
+
 	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingApprovalID = m.nextTunnelRequestID()
 		agentruntime.PushTunnelApprovalRequest(broker, m.tunnelPendingApprovalID, msg.ToolName, msg.Input, agentruntime.TunnelStateUpdate{
@@ -68,27 +48,24 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
-	// Schedule delayed input bell so users who switched windows get notified
+
 	return m, m.scheduleInputBell("Approval needed: " + msg.ToolName)
 
 }
 
-// handleDiffConfirmMsg handles the corresponding message case.
 func (m Model) handleDiffConfirmMsg(msg DiffConfirmMsg) (Model, tea.Cmd) {
-	// two-mode refactor: same removal as the approval fast path above -
-	// diff confirmations in the bypass surface must reach a human.
+
 	m.pendingDiffConfirm = &msg
-	// #1741: same LangEnglish hardcoding as the approval options above.
+
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	m.diffCursor = 0
 	m.inputBellFired = false
-	m.oscBlocked(oscKindPermission, "Confirm edit") // OSC 7501
-	// Schedule delayed input bell
+	m.oscBlocked(oscKindPermission, "Confirm edit")
+
 	return m, m.scheduleInputBell("Diff confirmation needed")
 
 }
 
-// handleAskUserMsg handles the corresponding message case.
 func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	if m.pendingQuestionnaire != nil {
 		if msg.Response != nil {
@@ -105,8 +82,8 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
 	m.syncQuestionnaireInputWidth()
 	m.inputBellFired = false
-	m.oscBlocked(oscKindQuestion, "Question: "+msg.Request.Title) // OSC 7501
-	// Push the first question to IM so remote users can answer.
+	m.oscBlocked(oscKindQuestion, "Question: "+msg.Request.Title)
+
 	if len(msg.Request.Questions) > 0 {
 		q := msg.Request.Questions[0]
 		fallback := m.formatIMAskUserQuestion(msg.Request.Title, q)
@@ -116,7 +93,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 			m.emitIMAskUser(fallback)
 		}
 	}
-	// Push to mobile tunnel client
+
 	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingAskUserID = m.nextTunnelRequestID()
 		agentruntime.PushTunnelAskUserRequest(broker, m.tunnelPendingAskUserID, msg.Request, agentruntime.TunnelStateUpdate{
@@ -124,14 +101,11 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
-	// Schedule delayed input bell
+
 	return m, m.scheduleInputBell("Question: " + msg.Request.Title)
 
 }
 
-// scheduleInputBell returns a tea.Cmd that fires an inputBellMsg after the
-// configured delay. If the delay is zero or the feature is disabled, it
-// returns nil (no notification will fire).
 func (m Model) scheduleInputBell(summary string) tea.Cmd {
 	var delaySec int
 	if m.config != nil {
@@ -148,11 +122,8 @@ func (m Model) scheduleInputBell(summary string) tea.Cmd {
 	})
 }
 
-// handleInputBellMsg fires the delayed notification if the user hasn't
-// responded yet. It's idempotent - if the input was already handled, the
-// pending fields will be nil and nothing fires.
 func (m Model) handleInputBellMsg(msg inputBellMsg) (Model, tea.Cmd) {
-	// Only fire if something is still pending and we haven't already fired
+
 	if m.inputBellFired {
 		return m, nil
 	}

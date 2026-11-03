@@ -150,7 +150,7 @@ func TestAgentDoneDoesNotEmitBufferedIMMessageWithoutRoundEvent(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -197,7 +197,7 @@ func TestAgentRoundSummaryEmitsRawAccumulatedText(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -250,8 +250,8 @@ func TestEscapeRejectsPendingIMPairing(t *testing.T) {
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink)      // re-register after detectAndAutoMute
-	_ = imMgr.UnmuteBinding("qq") // unmute in case detectAndAutoMute muted it
+	imMgr.RegisterSink(sink)
+	_ = imMgr.UnmuteBinding("qq")
 	if _, err := imMgr.HandlePairingInbound(im.InboundMessage{
 		Envelope: im.Envelope{
 			Adapter:    "qq",
@@ -306,7 +306,7 @@ func TestLocalInputEnterEmitsUserMirrorToIM(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.input.SetValue("hello")
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -347,7 +347,7 @@ func TestAskUserRoundEmitsExplicitQuestionMessage(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -444,7 +444,7 @@ func TestRemoteInboundAnswerAdvancesQuestionnaireAndEmitsNextQuestion(t *testing
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 
 	respCh := make(chan tool.AskUserResponse, 1)
 	req := tool.AskUserRequest{
@@ -606,7 +606,7 @@ func TestSubAgentUpdateDoesNotEmitIMStatus(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 	id := m.subAgentMgr.Spawn("review", "review-1", "Review core architecture", nil, context.Background())
@@ -647,7 +647,7 @@ func TestIMEmitterPreservesStatusThenTextOrder(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 
 	m.emitIMStatus("正在检查 git status...")
 	m.emitIMText("检查完成")
@@ -676,10 +676,8 @@ func TestSetConfigAfterSetIMManagerRegistersOnRestart(t *testing.T) {
 	mgr := im.NewManager()
 	m := NewModel(nil, nil)
 
-	// Simulate real init order: SetIMManager first, SetConfig second
 	m.SetIMManager(mgr)
 
-	// Now bind and mute a channel
 	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/tmp"})
 	mgr.SetBindingStore(&stubBSForInitOrder{})
 	_, _ = mgr.BindChannel(im.ChannelBinding{Workspace: "/tmp", Platform: im.PlatformQQ, Adapter: "test-qq", ChannelID: "ch-1"})
@@ -687,12 +685,10 @@ func TestSetConfigAfterSetIMManagerRegistersOnRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Before SetConfig, unmute should succeed but not restart (onRestart is nil)
 	if err := mgr.UnmuteBinding("test-qq"); err != nil {
 		t.Fatal(err)
 	}
 
-	// After SetConfig, onRestart should be registered
 	m.SetConfig(&config.Config{
 		IM: config.IMConfig{
 			Adapters: map[string]config.IMAdapterConfig{
@@ -701,12 +697,10 @@ func TestSetConfigAfterSetIMManagerRegistersOnRestart(t *testing.T) {
 		},
 	})
 
-	// Mute again, then unmute — onRestart should now be called
 	if err := mgr.MuteBinding("test-qq"); err != nil {
 		t.Fatal(err)
 	}
-	// UnmuteBinding will call onRestart which calls StartNamedAdapter.
-	// StartNamedAdapter needs adapters config — it should not return "not configured".
+
 	err := mgr.UnmuteBinding("test-qq")
 	if err != nil {
 		t.Fatalf("expected unmute with onRestart to succeed, got: %v", err)

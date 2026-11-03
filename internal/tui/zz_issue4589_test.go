@@ -1,13 +1,5 @@
 package tui
 
-// #4589: the impersonate panel's Version text input had NO commit path of
-// its own - enter/esc only blurred, and closing the panel never applied, so
-// a freshly typed version was silently dropped. Enter in the version input
-// now runs the same applyImpersonateSettings the preset/header paths use
-// (SetActiveImpersonation runs before the config save, so the commit is
-// observable via provider.GetActiveImpersonation even when the config save
-// fails in a test environment with no config file).
-
 import (
 	"os"
 	"path/filepath"
@@ -22,10 +14,7 @@ import (
 
 func issue4589Model(t *testing.T, version string) (*Model, *impersonatePanelState) {
 	t.Helper()
-	// The commit path persists via SaveImpersonation; #4590 rolls the runtime
-	// back when that save fails, so a FilePath-less config makes Enter look
-	// like it drops the value. Give the config a writable file so the happy
-	// path (save succeeds, identity applied) is what gets pinned here.
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	if err := os.WriteFile(path, []byte("vendor: va\n"), 0o644); err != nil {
@@ -38,10 +27,10 @@ func issue4589Model(t *testing.T, version string) (*Model, *impersonatePanelStat
 		section:       impSectionVersion,
 		versionInput:  vi,
 		currentPreset: "none",
-		editingHeader: -1, // 0 would route keys to the header-edit branch
+		editingHeader: -1,
 	}
 	m := &Model{config: &config.Config{FilePath: path}, impersonatePanel: panel}
-	provider.SetActiveImpersonation(nil, "", nil) // isolate globals
+	provider.SetActiveImpersonation(nil, "", nil)
 	return m, panel
 }
 

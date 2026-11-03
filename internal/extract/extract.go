@@ -1,6 +1,3 @@
-// Package extract provides text extraction from binary document formats.
-// Supported formats: PDF, Office (docx/xlsx/pptx), OpenDocument (odt/ods/odp),
-// EPUB, RTF, archives (zip/tar/tar.gz/tar.bz2/tar.xz), iWork (pages/numbers/key), SVG.
 package extract
 
 import (
@@ -10,41 +7,33 @@ import (
 	"sync"
 )
 
-// TextResult holds extracted text and metadata about the source document.
 type TextResult struct {
-	Text   string // extracted plain text
-	Pages  int    // page/slide count (0 if not applicable)
-	Format string // format name: "pdf", "docx", "zip", etc.
+	Text   string
+	Pages  int
+	Format string
 }
 
-// Extractor extracts text from a binary document format.
 type Extractor interface {
 	Extract(data []byte) (TextResult, error)
 	Format() string
 }
 
-// defaultRegistry is the global extractor registry.
 var defaultRegistry = &Registry{
 	extractors: make(map[string]Extractor),
 }
 
 func init() {
-	// PDF
+
 	defaultRegistry.Register(".pdf", &pdfExtractor{})
-	// Office
+
 	defaultRegistry.Register(".docx", &docxExtractor{})
 	defaultRegistry.Register(".xlsx", &xlsxExtractor{})
 	defaultRegistry.Register(".pptx", &pptxExtractor{})
-	// #1540: macro-enabled variants are the same OOXML zip the library
-	// parses directly - without registration IsDocumentFile was false and
-	// the binary zip bytes went into context as a garbage string.
+
 	defaultRegistry.Register(".docm", &docxExtractor{})
 	defaultRegistry.Register(".xlsm", &xlsxExtractor{})
 	defaultRegistry.Register(".pptm", &pptxExtractor{})
-	// #1727 case 1: the OOXML TEMPLATE family - same zip the library
-	// parses directly (.dotx/.dotm word, .xltx/.xltm/.xlam excel,
-	// .potx/.potm powerpoint). #1540 fixed only the three macro-enabled
-	// documents; templates still went in as raw binary.
+
 	defaultRegistry.Register(".dotx", &docxExtractor{})
 	defaultRegistry.Register(".dotm", &docxExtractor{})
 	defaultRegistry.Register(".xltx", &xlsxExtractor{})
@@ -52,54 +41,45 @@ func init() {
 	defaultRegistry.Register(".xlam", &xlsxExtractor{})
 	defaultRegistry.Register(".potx", &pptxExtractor{})
 	defaultRegistry.Register(".potm", &pptxExtractor{})
-	// OpenDocument
+
 	defaultRegistry.Register(".odt", &odfExtractor{subFormat: "odt"})
 	defaultRegistry.Register(".ods", &odfExtractor{subFormat: "ods"})
 	defaultRegistry.Register(".odp", &odfExtractor{subFormat: "odp"})
-	// EPUB
+
 	defaultRegistry.Register(".epub", &epubExtractor{})
-	// RTF
+
 	defaultRegistry.Register(".rtf", &rtfExtractor{})
-	// Archives
+
 	defaultRegistry.Register(".zip", &archiveExtractor{subFormat: "zip"})
 	defaultRegistry.Register(".tar", &archiveExtractor{subFormat: "tar"})
 	defaultRegistry.Register(".tar.gz", &archiveExtractor{subFormat: "tar.gz"})
 	defaultRegistry.Register(".tgz", &archiveExtractor{subFormat: "tar.gz"})
 	defaultRegistry.Register(".tar.bz2", &archiveExtractor{subFormat: "tar.bz2"})
-	// .tar.xz is intentionally NOT registered (#547): listTarXz has no xz
-	// decompressor, so registering it made IsDocumentFile()=true while
-	// Extract() always failed — a contract contradiction that silently
-	// dropped nested-archive entries. Unregistered means "unsupported
-	// format" is reported honestly up front.
-	// iWork
+
 	defaultRegistry.Register(".pages", &iworkExtractor{subFormat: "pages"})
 	defaultRegistry.Register(".numbers", &iworkExtractor{subFormat: "numbers"})
 	defaultRegistry.Register(".key", &iworkExtractor{subFormat: "key"})
-	// SVG
+
 	defaultRegistry.Register(".svg", &svgExtractor{})
 }
 
-// Registry maps file extensions to Extractor instances.
 type Registry struct {
 	mu         sync.RWMutex
 	extractors map[string]Extractor
 }
 
-// Register adds an extractor for the given extension (e.g. ".pdf").
 func (r *Registry) Register(ext string, e Extractor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.extractors[strings.ToLower(ext)] = e
 }
 
-// Get returns the extractor for the given extension, or nil.
 func (r *Registry) Get(ext string) Extractor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.extractors[strings.ToLower(ext)]
 }
 
-// extOf returns the file extension, supporting double extensions like .tar.gz.
 func extOf(path string) string {
 	name := strings.ToLower(filepath.Base(path))
 	for _, double := range []string{".tar.gz", ".tar.bz2", ".tar.xz"} {
@@ -110,8 +90,6 @@ func extOf(path string) string {
 	return strings.ToLower(filepath.Ext(path))
 }
 
-// Extract extracts text from data based on file extension.
-// Returns an error if the format is not supported or extraction fails.
 func Extract(path string, data []byte) (TextResult, error) {
 	ext := extOf(path)
 	e := defaultRegistry.Get(ext)
@@ -125,7 +103,6 @@ func Extract(path string, data []byte) (TextResult, error) {
 	return result, nil
 }
 
-// IsDocumentFile checks if a file path looks like a supported document format.
 func IsDocumentFile(path string) bool {
 	ext := extOf(path)
 	return defaultRegistry.Get(ext) != nil

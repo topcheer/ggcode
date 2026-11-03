@@ -1,9 +1,5 @@
 package memory
 
-// sa-139 (MemGuard arXiv:2608.21867): verification-outcome lifecycle metadata.
-// Four faces: sidecar round-trip, trust-score branch, retrieval rank weight,
-// and cross-outcome arbitration ordering.
-
 import (
 	"path/filepath"
 	"testing"
@@ -23,13 +19,13 @@ func TestRecordOutcomeSidecarRoundTrip(t *testing.T) {
 	if metas[0].Outcome != "failed" {
 		t.Fatalf("expected outcome=failed in MemoryMeta, got %q", metas[0].Outcome)
 	}
-	// Overwrite semantics: a re-written key carries the new run's outcome.
+
 	am.RecordOutcome("run-insights", "success")
 	metas, _ = am.collectMetas()
 	if metas[0].Outcome != "success" {
 		t.Fatalf("expected outcome overwrite to success, got %q", metas[0].Outcome)
 	}
-	// Invalid outcome labels are not recorded.
+
 	am.RecordOutcome("run-insights", "bogus")
 	metas, _ = am.collectMetas()
 	if metas[0].Outcome != "success" {
@@ -60,7 +56,7 @@ func TestMemoryTrustScoreOutcomeBranch(t *testing.T) {
 
 	sS := memoryTrustScore(success, now)
 	sF := memoryTrustScore(failed, now)
-	sB := memoryTrustScore(base, now) // unknown outcome: no bonus, no penalty
+	sB := memoryTrustScore(base, now)
 	if !(sS > sB && sB > sF) {
 		t.Fatalf("expected success(%v) > unknown(%v) > failed(%v)", sS, sB, sF)
 	}
@@ -76,8 +72,7 @@ func TestOutcomeRankWeightOrdering(t *testing.T) {
 }
 
 func TestArbitrateInline_OutcomeBeatsRecency(t *testing.T) {
-	// sa-139 end-to-end: at equal category, the entry written by a SUCCESSFUL
-	// run must win a conflicting claim over a fresh-but-failed one.
+
 	now := time.Now()
 	failedFresh := MemoryEntry{
 		Key:     "deploy-failed-run",
@@ -94,8 +89,7 @@ func TestArbitrateInline_OutcomeBeatsRecency(t *testing.T) {
 		t.Fatalf("expected exactly 1 conflict, got %+v", arb.Conflicts)
 	}
 	c := arb.Conflicts[0]
-	// failed(1h: fresh +0.1, outcome -0.4) vs success(40d: outcome +0.2) -
-	// the outcome branch must override the recency gap.
+
 	if c.WinnerKey != verifiedOlder.Key || c.LoserKey != failedFresh.Key {
 		t.Fatalf("winner=%s loser=%s; want verified success to beat fresh failure", c.WinnerKey, c.LoserKey)
 	}
@@ -104,9 +98,7 @@ func TestArbitrateInline_OutcomeBeatsRecency(t *testing.T) {
 func TestRetrieveRanksSuccessAboveFailedAtEqualRelevance(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "experience")
 	es := NewExperienceStore(dir)
-	// Two DISTINCT tasks (Record updates a same-shape case instead of adding a
-	// new one) sharing the "login flake auth" vocabulary so both clear the
-	// relevance gate; query targets the shared vocabulary.
+
 	if _, _, err := es.Record("fix login flake in auth handler", "retry with backoff worked", "success", nil); err != nil {
 		t.Fatalf("record success: %v", err)
 	}
@@ -120,7 +112,7 @@ func TestRetrieveRanksSuccessAboveFailedAtEqualRelevance(t *testing.T) {
 	if scored[0].Outcome != "success" {
 		t.Fatalf("expected success case ranked first, got %q", scored[0].Outcome)
 	}
-	// Failed case must still be retrievable (negative-example value), just lower.
+
 	if scored[1].Outcome != "failed" {
 		t.Fatalf("expected failed case second, got %q", scored[1].Outcome)
 	}

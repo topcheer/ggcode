@@ -5,7 +5,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// prewarmMarkdownRenderers warms up the markdown renderer cache in the background.
 func prewarmMarkdownRenderers(widths ...int) {
 	warmWidths := make([]int, 0, len(widths))
 	seen := make(map[int]struct{}, len(widths))

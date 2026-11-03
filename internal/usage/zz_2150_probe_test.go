@@ -1,10 +1,5 @@
 package usage
 
-// #2150 batch 1: probe layer. Three vendor shapes pinned against a mock
-// server (zai quota window, deepseek multi-currency balance picking USD,
-// moonshot nested balance), plus the service cache contract (TTL reuse,
-// negative cache, singleflight merge).
-
 import (
 	"context"
 	"net/http"
@@ -70,7 +65,7 @@ func TestServiceCacheAndSingleflight(t *testing.T) {
 	s := NewService()
 	s.Register(moonshotAt(srv.URL))
 	ctx := context.Background()
-	// singleflight: 5 concurrent gets -> exactly 1 hit
+
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
@@ -80,14 +75,14 @@ func TestServiceCacheAndSingleflight(t *testing.T) {
 	if atomic.LoadInt32(&hits) != 1 {
 		t.Fatalf("singleflight violated: %d hits", hits)
 	}
-	// TTL cache: sequential get -> still 1
+
 	if _, err := s.Get(ctx, "moonshot", "", "k"); err != nil {
 		t.Fatal(err)
 	}
 	if atomic.LoadInt32(&hits) != 1 {
 		t.Fatalf("TTL cache violated: %d hits", hits)
 	}
-	// invalidate -> fresh
+
 	s.Invalidate("moonshot")
 	_, _ = s.Get(ctx, "moonshot", "", "k")
 	if atomic.LoadInt32(&hits) != 2 {
@@ -102,8 +97,6 @@ func TestServiceUnsupportedVendor(t *testing.T) {
 	}
 }
 
-// moonshotAt rewrites the probe target: the service passes the ACTIVE
-// vendor base URL through, so point it at the mock server.
 type moonshotAtP struct{ url string }
 
 func (p moonshotAtP) Vendor() string { return "moonshot" }

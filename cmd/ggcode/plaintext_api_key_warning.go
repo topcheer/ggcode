@@ -9,26 +9,15 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// confirmPlaintextAPIKeysBeforeTUI is kept as a no-op hook. Plaintext API
-// keys are now auto-migrated during config.Load() — they are persisted to
-// ~/.ggcode/keys.env and the YAML is rewritten to use ${VAR} references.
-// This function remains for call-site compatibility.
 func confirmPlaintextAPIKeysBeforeTUI(cfgFile string, in io.Reader, out io.Writer, interactive bool) (bool, error) {
 	findings, err := config.DetectPlaintextAPIKeys(cfgFile)
 	if err != nil {
-		return true, nil // already migrated by Load(), ignore errors
+		return true, nil
 	}
 	if len(findings) == 0 {
 		return true, nil
 	}
-	// #1444-A: this runs BEFORE Load(), so the migration has NOT happened
-	// yet - and with GGCODE_SKIP_AUTOCONFIG=1 it NEVER will (Load skips
-	// plaintext migration). The old unconditional "Migrated %d key(s)"
-	// was a false safety claim in exactly the scenarios where the user
-	// must act manually: migration skipped, or keys.env/YAML write
-	// failing (that error only reaches debug.Log in Load). The notice
-	// now states what was FOUND and where migration WILL put them, and
-	// explicitly tells skip-mode users their keys stay plaintext.
+
 	if os.Getenv("GGCODE_SKIP_AUTOCONFIG") != "" {
 		fmt.Fprintf(out, "NOTICE: %d plaintext API key(s) found; auto-migration is DISABLED (GGCODE_SKIP_AUTOCONFIG) - keys remain in plaintext at %s\n", len(findings), cfgFile)
 	} else {

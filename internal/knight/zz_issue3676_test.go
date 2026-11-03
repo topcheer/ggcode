@@ -1,19 +1,11 @@
 package knight
 
-// #3676 probes: the CJK duplicate gate must be (a) truly DOMINANT - at
-// least half the fingerprint's tokens wide-script - so one full-width
-// comma or two trailing Han characters in an English description cannot
-// raise the gate, and (b) pair-wise consistent - mixed-script pairs use
-// the empirical 0.6, while both-CJK-dominant pairs keep the #3637 0.75
-// guard. The old contains-any + candidate-side-only shape leaked real
-// duplicates in the [0.6,0.75) band.
-
 import (
 	"testing"
 )
 
 func TestIssue3676_DominantRatioNotContainsAny(t *testing.T) {
-	// 9 English tokens + 2 trailing Han chars (= 1 bigram token): NOT dominant.
+
 	mixed := skillSimilarityFingerprint("deploy-vercel-prod",
 		"deploy the vercel project build preview alias dns edge cache prod 部署", "")
 	if cjkDominantFingerprint(mixed) {
@@ -33,8 +25,7 @@ func TestIssue3676_DominantRatioNotContainsAny(t *testing.T) {
 }
 
 func TestIssue3676_FullWidthPunctuationDoesNotRaiseGate(t *testing.T) {
-	// One full-width comma (U+FF0C) in an otherwise-English description -
-	// the issue's amplifier scenario (Chinese LLM writing English).
+
 	fp := skillSimilarityFingerprint("deploy-vercel",
 		"build, preview, alias dns edge cache and prod，done", "")
 	if cjkDominantFingerprint(fp) {
@@ -57,9 +48,7 @@ func TestIssue3676_PairThresholdDirectionConsistent(t *testing.T) {
 }
 
 func TestIssue3676_LeakBandDuplicateNowCaught(t *testing.T) {
-	// Issue headline: English existing skill, candidate = same words +
-	// trailing Han chars. Old code: candidate fp contains-any -> 0.75 ->
-	// jaccard 0.727 leaked. New: not dominant -> pair gate 0.6 -> caught.
+
 	cand := skillSimilarityFingerprint("deploy-vercel-prod",
 		"deploy the vercel project build preview alias dns edge cache prod 部署", "")
 	exist := skillSimilarityFingerprint("deploy-vercel",
@@ -74,10 +63,7 @@ func TestIssue3676_LeakBandDuplicateNowCaught(t *testing.T) {
 }
 
 func TestIssue3676_LeakBandCaughtViaActiveLoop(t *testing.T) {
-	// Review 6088096655: the active loop kept the candidate-side-only gate
-	// after the staging loop was fixed - this end-to-end probe walks
-	// isKnownCandidate with an English ACTIVE skill and the issue's
-	// trailing-Han candidate (band jaccard ~0.727) and pins the catch.
+
 	k := &Knight{}
 	c := SkillCandidate{
 		Name:        "deploy-vercel-prod",
@@ -96,8 +82,7 @@ func TestIssue3676_LeakBandCaughtViaActiveLoop(t *testing.T) {
 }
 
 func TestIssue3676_SameFamilyCJKStillGuarded(t *testing.T) {
-	// #3637 regression guard: same-prefix Chinese families score ~0.55-0.60
-	// and must NOT be flagged as duplicates under the pair gate.
+
 	a := skillSimilarityFingerprint("自动化数据库备份", "自动化数据库备份任务", "")
 	b := skillSimilarityFingerprint("自动化数据库恢复", "自动化数据库恢复任务", "")
 	j := jaccardSimilarity(a, b)

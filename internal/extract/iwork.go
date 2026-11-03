@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// iworkExtractor extracts text from Apple iWork files (.pages, .numbers, .key).
 type iworkExtractor struct {
-	subFormat string // "pages", "numbers", "key"
+	subFormat string
 }
 
 func (e *iworkExtractor) Format() string { return e.subFormat }
@@ -27,10 +26,7 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		// iWork stores content in .iwa (protobuf) and sometimes .xml files.
-		// The most accessible text is in .xml files.
-		// For newer formats, content is in .iwa which is protoc-encoded.
-		// We extract what we can from XML files.
+
 		if !strings.HasSuffix(f.Name, ".xml") {
 			continue
 		}
@@ -57,10 +53,6 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 		buf.WriteString(text)
 	}
 
-	// #566(G): iWork 2013+ stores body content in protobuf .iwa parts, which
-	// we cannot parse. Reporting Text:"" with err:nil made such files look
-	// like successfully-extracted empty documents. Say so explicitly
-	// instead; .iwa-only archives are the common case for modern files.
 	if buf.Len() == 0 {
 		if xmlEntries == 0 {
 			return TextResult{}, fmt.Errorf("%s archive contains no .xml parts (iWork 2013+ stores content in binary .iwa protobuf, which is unsupported)", e.subFormat)

@@ -13,21 +13,16 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// chatWrite appends an item to chatList.
 func (m *Model) chatWrite(item chat.Item) {
 	if m.chatList != nil {
 		m.chatList.Append(item)
 	}
 }
 
-// chatWriteUser appends a user message to chatList.
 func (m *Model) chatWriteUser(id, text string) {
 	m.chatWrite(chat.NewUserItem(id, text, m.chatStyles))
 }
 
-// chatUpdateToolOutput updates the result text of a running tool item
-// identified by toolID. Used for streaming tools like wait_command to show
-// live scrolling output during the wait period.
 func (m *Model) chatUpdateToolOutput(toolID, output string) {
 	if m.chatList == nil || toolID == "" {
 		return
@@ -42,13 +37,10 @@ func (m *Model) chatUpdateToolOutput(toolID, output string) {
 	})
 }
 
-// chatWriteUserMarkdown appends a user message that renders its content as
-// markdown. Used for LAN Chat agent-to-agent messages that contain structured text.
 func (m *Model) chatWriteUserMarkdown(id, text string) {
 	m.chatWrite(chat.NewMarkdownUserItem(id, text, m.chatStyles))
 }
 
-// chatWriteSystem appends a system/status message to chatList.
 func (m *Model) chatWriteSystem(id, text string) {
 	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
 	if m.suppressNextTunnelSystem == text {
@@ -60,7 +52,6 @@ func (m *Model) chatWriteSystem(id, text string) {
 	}
 }
 
-// chatAppendSystemText appends text to an existing system message.
 func (m *Model) chatAppendSystemText(id, text string) {
 	if m.chatList == nil {
 		return
@@ -72,7 +63,6 @@ func (m *Model) chatAppendSystemText(id, text string) {
 	}
 }
 
-// chatUpdateAssistantText updates the streaming assistant text.
 func (m *Model) chatUpdateAssistantText(id, text string) {
 	if m.chatList == nil {
 		return
@@ -84,7 +74,6 @@ func (m *Model) chatUpdateAssistantText(id, text string) {
 	}
 }
 
-// chatFinishAssistant marks the assistant as done streaming.
 func (m *Model) chatFinishAssistant(id string) {
 	if m.chatList == nil {
 		return
@@ -96,26 +85,18 @@ func (m *Model) chatFinishAssistant(id string) {
 	}
 }
 
-// chatReset clears the chatList.
 func (m *Model) chatReset() {
 	if m.chatList != nil {
 		m.chatList.SetItems(nil)
 	}
 }
 
-// chatListScrollToBottom scrolls conversation to bottom and re-enables
-// output following. Use this for user-initiated actions (sending a message,
-// running a command) where jumping to the latest content is expected.
 func (m *Model) chatListScrollToBottom() {
 	if m.chatList != nil {
 		m.chatList.ScrollToEnd()
 	}
 }
 
-// chatListFollowOutput keeps the conversation pinned to the bottom only
-// while the user is already following the output. If the user scrolled up
-// to read earlier content, this is a no-op — streaming output must not
-// yank their viewport away. Use this for streaming/agent-driven updates.
 func (m *Model) chatListFollowOutput() {
 	if m.chatList != nil {
 		m.chatList.FollowOutput()
@@ -127,7 +108,6 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// spawn_agent → create AgentToolItem
 	if ts.ToolName == "spawn_agent" {
 		id := ts.ToolID
 		if id == "" {
@@ -145,18 +125,16 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// todo_write → skip creating a tool item; handled in chatFinishTool
 	if ts.ToolName == "todo_write" {
 		return
 	}
 
-	// Background cmd tools → skip (no header/body needed)
 	switch ts.ToolName {
 	case "read_command_output", "stop_command",
 		"write_command_input", "list_commands":
 		return
 	}
-	// enter_plan_mode → skip tool item, emit IM text only
+
 	if ts.ToolName == "enter_plan_mode" {
 		label := "Planning..."
 		var args struct {
@@ -168,11 +146,11 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		m.emitIMText(label)
 		return
 	}
-	// exit_plan_mode → skip tool item (plan rendered as assistant message in chatFinishTool)
+
 	if ts.ToolName == "exit_plan_mode" {
 		return
 	}
-	// LSP tools → skip (no header/body needed)
+
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
 	}
@@ -183,11 +161,11 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	}
 	existing := m.chatList.FindByID(id)
 	if existing != nil {
-		// Already tracked — just update status
+
 		m.chatUpdateToolStatus(id, chat.StatusRunning)
 		return
 	}
-	// Resolve display name and detail from describeTool when not provided.
+
 	displayName := ts.DisplayName
 	detail := ts.Detail
 	if displayName == "" || detail == "" {
@@ -199,7 +177,7 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 			detail = present.Detail
 		}
 	}
-	// Create a new tool item based on the tool name
+
 	ctx := chat.ToolContext{
 		ToolName:    ts.ToolName,
 		DisplayName: displayName,
@@ -211,19 +189,16 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	m.chatList.Append(item)
 }
 
-// chatFinishTool marks a tool item as finished with result.
 func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	if m.chatList == nil {
 		return
 	}
 
-	// todo_write finish → apply todo state
 	if ts.ToolName == "todo_write" {
 		m.applyTodoWrite(ts)
 		return
 	}
 
-	// spawn_agent finish → mark AgentToolItem as done
 	if ts.ToolName == "spawn_agent" {
 		id := ts.ToolID
 		if id == "" {
@@ -245,19 +220,16 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// Background cmd tools → skip (no header/body needed)
 	switch ts.ToolName {
 	case "read_command_output", "stop_command",
 		"write_command_input", "list_commands":
 		return
 	}
-	// LSP tools → skip. #885: chatStartTool skips lsp_* (no card created),
-	// but finish had no matching skip — the not-tracked path created a
-	// finished card that never existed as a running one.
+
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
 	}
-	// exit_plan_mode → render plan as assistant message (not a tool card)
+
 	if ts.ToolName == "exit_plan_mode" {
 		var args struct {
 			Plan string `json:"plan"`
@@ -283,8 +255,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 
 	existing := m.chatList.FindByID(id)
 	if existing == nil {
-		// Not tracked yet — create a finished item
-		// Resolve display name and detail from describeTool when not provided.
+
 		displayName := ts.DisplayName
 		detail := ts.Detail
 		if displayName == "" || detail == "" {
@@ -310,7 +281,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// Update existing item
 	m.chatUpdateToolStatus(id, status)
 	if ts.Elapsed > 0 {
 		m.setToolElapsed(existing, ts.Elapsed)
@@ -319,7 +289,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	m.setToolResult(existing, result, ts.IsError)
 }
 
-// chatUpdateToolStatus updates the status of a tool item.
 func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
 	if m.chatList == nil {
 		return
@@ -333,22 +302,18 @@ func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
 	}
 }
 
-// setToolResult sets the result on the appropriate tool item type.
 func (m *Model) setToolResult(item chat.Item, result string, isError bool) {
 	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
 		setter.SetResult(result, isError)
 	}
 }
 
-// setToolElapsed sets the final elapsed duration on a tool item.
 func (m *Model) setToolElapsed(item chat.Item, elapsed time.Duration) {
 	if setter, ok := item.(interface{ SetElapsed(time.Duration) }); ok {
 		setter.SetElapsed(elapsed)
 	}
 }
 
-// suppressToolResult returns empty string for tools whose result body should
-// not be rendered inline in the TUI chat list.
 func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 	switch toolName {
 	case "web_fetch", "web_search":
@@ -358,7 +323,7 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 	case "stop_command", "todo_write", "list_agents":
 		return ""
 	case "read_command_output":
-		// Only keep the actual output content, strip structured metadata
+
 		return extractRecentOutput(result)
 	case "ask_user":
 		return formatAskUserResult(result)
@@ -386,26 +351,11 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 	return collapseGuidanceHints(result)
 }
 
-// guidanceTagLine matches the head line of an injected agent-guidance block
-// ("[ERROR-RUSH] ...", "[TIP] ..."). Tags are 2+ uppercase/hyphen chars.
 var guidanceTagLine = regexp.MustCompile(`^\[[A-Z][A-Z0-9-]{1,}\]\s`)
 
-// collapseGuidanceHints folds TRAILING agent-guidance blocks - appended to
-// tool results by Agent.appendGuidance as "\n\n[TAG] ..." - into a one-line
-// summary for the TUI chat list. The model still receives the full text in
-// its own context; this is a display-layer collapse only, so error-recovery
-// capability is unaffected. Only trailing blocks are folded: real tool
-// output (logs, compiler text) can legitimately contain [UPPERCASE] lines
-// mid-body, but injected guidance is always appended at the end, so folding
-// from the tail backwards cannot clip legitimate content. When everything
-// folds away (guidance-only result), the summary line is kept so the user
-// still sees that the tool produced output.
 func collapseGuidanceHints(result string) string {
 	paras := strings.Split(result, "\n\n")
-	// A single paragraph cannot be trailing-injected guidance with a
-	// preceding body: appendGuidance joins with "\n\n", so guidance always
-	// yields 2+ paragraphs. Skipping single paragraphs also protects real
-	// output that merely starts with a tagged line ("[INFO] server started").
+
 	if len(paras) < 2 {
 		return result
 	}
@@ -465,7 +415,6 @@ func formatTeammateSpawnResult(result string) string {
 	return fmt.Sprintf("Teammate %s Created", name)
 }
 
-// formatMultiEditResult formats multi_file_edit JSON into a human-readable summary.
 func formatMultiEditResult(result string) string {
 	var raw struct {
 		Summary string `json:"summary"`
@@ -506,8 +455,6 @@ func pluralS(n int) string {
 	return "s"
 }
 
-// extractRecentOutput parses the structured read_command_output result
-// and returns only the "Recent output" content.
 func extractRecentOutput(result string) string {
 	marker := "Recent output:\n"
 	idx := strings.Index(result, marker)
@@ -518,8 +465,6 @@ func extractRecentOutput(result string) string {
 	return strings.TrimSpace(output)
 }
 
-// formatAskUserResult converts the JSON ask_user response into a human-readable
-// format showing each question title and the user's answer.
 func formatAskUserResult(result string) string {
 	var resp struct {
 		Title   string `json:"title"`
@@ -539,7 +484,7 @@ func formatAskUserResult(result string) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		// Question
+
 		q := ans.Title
 		if q == "" {
 			q = fmt.Sprintf("Question %d", i+1)
@@ -547,7 +492,7 @@ func formatAskUserResult(result string) string {
 		b.WriteString("Q: ")
 		b.WriteString(q)
 		b.WriteString("\n")
-		// Answer: selected choices first, then freeform text
+
 		var parts []string
 		for _, c := range ans.SelectedChoices {
 			parts = append(parts, c)
@@ -561,10 +506,8 @@ func formatAskUserResult(result string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// todoToolItemID is the fixed ID for the persistent todo list in chatList.
 const todoToolItemID = "todo-list"
 
-// chatUpdateTodoItem updates or creates the TodoToolItem in chatList.
 func (m *Model) chatUpdateTodoItem(todos []todoStateItem) {
 	if m.chatList == nil || len(todos) == 0 {
 		return
@@ -585,12 +528,11 @@ func (m *Model) chatUpdateTodoItem(todos []todoStateItem) {
 			return
 		}
 	}
-	// Create new
+
 	item := chat.NewTodoToolItem(todoToolItemID, tasks, m.chatStyles, string(m.currentLanguage()))
 	m.chatList.Append(item)
 }
 
-// nextChatID generates a unique ID for chat items.
 var chatIDCounter int64
 
 func nextChatID() string {
@@ -598,7 +540,6 @@ func nextChatID() string {
 	return fmt.Sprintf("chat-%d", n)
 }
 
-// nextSystemID generates a unique ID for system messages.
 var sysIDCounter int64
 
 func nextSystemID() string {
@@ -606,12 +547,8 @@ func nextSystemID() string {
 	return fmt.Sprintf("sys-%d", n)
 }
 
-// assistantCounter generates unique IDs for each assistant turn.
 var assistantCounter int64
 
-// currentAssistantID returns the ID of the current streaming assistant item,
-// creating a new one if needed. Each call to nextAssistantID advances to a
-// fresh ID for a new turn.
 func (m *Model) currentAssistantID() string {
 	return fmt.Sprintf("assistant-%d", atomic.LoadInt64(&assistantCounter))
 }
@@ -621,8 +558,6 @@ func (m *Model) nextAssistantID() string {
 	return fmt.Sprintf("assistant-%d", n)
 }
 
-// chatEnsureAssistant creates a new streaming assistant item if one doesn't
-// exist for the current turn, or starts a fresh one.
 func (m *Model) chatEnsureAssistant() {
 	id := m.currentAssistantID()
 	if m.chatList == nil {
@@ -634,7 +569,6 @@ func (m *Model) chatEnsureAssistant() {
 	m.chatList.Append(chat.NewAssistantItem(id, m.chatStyles))
 }
 
-// stripAnsiForChat removes ANSI escape codes from text.
 func stripAnsiForChat(s string) string {
 	var result strings.Builder
 	inEscape := false
@@ -651,11 +585,11 @@ func stripAnsiForChat(s string) string {
 					sawBracket = true
 					continue
 				}
-				// Non-CSI escape (e.g. \x1bO): consume one more char then end
+
 				inEscape = false
 				continue
 			}
-			// Inside CSI sequence: skip until a terminator byte 0x40–0x7E
+
 			if c >= 0x40 && c <= 0x7e {
 				inEscape = false
 			}
@@ -666,7 +600,6 @@ func stripAnsiForChat(s string) string {
 	return result.String()
 }
 
-// extractAgentID parses the agent_id from wait_agent/list_agents raw args.
 func extractAgentID(rawArgs string) string {
 	var args struct {
 		AgentID string `json:"agent_id"`
@@ -677,8 +610,6 @@ func extractAgentID(rawArgs string) string {
 	return args.AgentID
 }
 
-// formatSubAgentDoneNotice returns a human-readable notice for TUI display
-// when a sub-agent or teammate completes its task.
 func (m *Model) formatSubAgentDoneNotice(msg subAgentDoneMsg) string {
 	name := msg.AgentName
 	if name == "" {

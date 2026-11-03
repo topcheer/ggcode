@@ -9,9 +9,6 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// decodeCodePageByte maps a single byte from the given ANSI code page to a
-// rune. cp 0 or an unknown code page falls back to Windows-1252 (the RTF
-// default per the spec). Bytes that have no mapping decode to U+FFFD.
 func decodeCodePageByte(cp int, b byte) rune {
 	var decoder *charmap.Charmap
 	switch cp {
@@ -19,7 +16,7 @@ func decodeCodePageByte(cp int, b byte) rune {
 		decoder = charmap.Windows1250
 	case 1251:
 		decoder = charmap.Windows1251
-	case 1252, 0: // RTF default per spec
+	case 1252, 0:
 		decoder = charmap.Windows1252
 	case 1253:
 		decoder = charmap.Windows1253
@@ -34,9 +31,7 @@ func decodeCodePageByte(cp int, b byte) rune {
 	case 1258:
 		decoder = charmap.Windows1258
 	case 932, 936, 949, 950:
-		// Multi-byte CJK code pages (Shift-JIS, GBK, UHC, Big5) are not
-		// single-byte decodable here; fall back to the raw byte (preserves
-		// prior behavior for these rare files).
+
 		return rune(b)
 	default:
 		decoder = charmap.Windows1252
@@ -44,11 +39,6 @@ func decodeCodePageByte(cp int, b byte) rune {
 	return decoder.DecodeByte(b)
 }
 
-// isSkipDestination reports whether an RTF control word introduces a
-// destination group whose contents never belong to the document body
-// (#566-A): font tables, color tables, stylesheets, embedded pictures,
-// headers/footers and metadata. Their contents previously leaked into the
-// extracted text (e.g. "Arial;Symbol;;;Riched20...").
 func isSkipDestination(kw string) bool {
 	switch kw {
 	case "fonttbl", "colortbl", "stylesheet", "info", "pict", "object",
@@ -62,25 +52,22 @@ func isSkipDestination(kw string) bool {
 	return false
 }
 
-// rtfParser holds the state of a single RTF-to-text extraction pass.
 type rtfParser struct {
 	raw string
-	i   int // current byte offset
-	n   int // len(raw)
+	i   int
+	n   int
 
 	buf strings.Builder
 
-	depth     int  // current brace nesting depth
-	skipDepth int  // depth at which destination skipping started; -1 = off
-	binSkip   int  // raw \binN bytes remaining to skip verbatim
-	pendingHi rune // buffered high surrogate awaiting its low half; -1 = none
-	ucSkip    int  // \ucN: substitutes to drop after each \uN
-	subSkip   int  // substitutes still to drop right now
-	ansiCP    int  // \ansicpg value; 0 -> 1252 semantics
+	depth     int
+	skipDepth int
+	binSkip   int
+	pendingHi rune
+	ucSkip    int
+	subSkip   int
+	ansiCP    int
 }
 
-// flushPending emits U+FFFD for a high surrogate that never received its
-// low half, instead of silently dropping it (#566-B).
 func (p *rtfParser) flushPending() {
 	if p.pendingHi != -1 {
 		p.buf.WriteRune(0xFFFD)
@@ -88,26 +75,23 @@ func (p *rtfParser) flushPending() {
 	}
 }
 
-// writeRune decodes surrogate pairs (#566-B): a lone high surrogate is
-// buffered until the next \uN; a following low surrogate joins it via
-// utf16.DecodeRune (previously each half became its own U+FFFD).
 func (p *rtfParser) writeRune(r rune) {
 	if p.skipDepth >= 0 {
 		return
 	}
 	switch {
 	case utf16.IsSurrogate(r):
-		if (r & 0xFC00) == 0xD800 { // high surrogate
+		if (r & 0xFC00) == 0xD800 {
 			if p.pendingHi != -1 {
 				p.buf.WriteRune(0xFFFD)
 			}
 			p.pendingHi = r
-		} else { // low surrogate
+		} else {
 			if p.pendingHi != -1 {
 				p.buf.WriteRune(utf16.DecodeRune(p.pendingHi, r))
 				p.pendingHi = -1
 			} else {
-				p.buf.WriteRune(0xFFFD) // unpaired low
+				p.buf.WriteRune(0xFFFD)
 			}
 		}
 	default:
@@ -116,38 +100,33 @@ func (p *rtfParser) writeRune(r rune) {
 	}
 }
 
-// emitText writes a plain character/escape result unless a destination
-// group is being skipped.
 func (p *rtfParser) emitText(b byte) {
 	if p.skipDepth < 0 {
 		p.buf.WriteByte(b)
 	}
 }
 
-// handleEscape processes the backslash-escape at p.i (which points at the
-// byte after '\\'). Returns true if fully handled.
 func (p *rtfParser) handleEscape() bool {
 	switch c := p.raw[p.i]; c {
 	case '\n', '\r':
 		if p.skipDepth < 0 {
-			p.buf.WriteByte('\n') // \<newline> is a paragraph break
+			p.buf.WriteByte('\n')
 		}
 	case '~':
-		p.emitText(' ') // non-breaking space
+		p.emitText(' ')
 	case '-':
-		p.emitText('-') // optional hyphen
+		p.emitText('-')
 	case '_':
-		p.emitText('-') // non-breaking hyphen
+		p.emitText('-')
 	case '*':
-		// skip destination marker — nothing to emit
+
 	case '\'':
-		// \'XX — hex-encoded character in the current \ansicpg code page.
+
 		if p.i+2 < p.n {
 			hex := p.raw[p.i+1 : p.i+3]
 			if val, err := strconv.ParseUint(hex, 16, 8); err == nil {
 				if p.subSkip > 0 {
-					// #566(B): this byte is the \ucN substitute for the
-					// preceding \uN — drop it instead of duplicating.
+
 					p.subSkip--
 				} else {
 					p.writeRune(decodeCodePageByte(p.ansiCP, byte(val)))
@@ -155,11 +134,7 @@ func (p *rtfParser) handleEscape() bool {
 				p.i += 3
 				return true
 			}
-			// #1542-C: invalid hex (e.g. \':x — the quoted char is not a
-			// hex digit) - the old code still skipped 3 bytes, swallowing the
-			// two bytes after the quote along with the \' itself. Only the
-			// escape prefix was consumed; fall through so the next byte is
-			// emitted verbatim.
+
 			p.i += 2
 			return true
 		}
@@ -167,7 +142,7 @@ func (p *rtfParser) handleEscape() bool {
 		if p.handleUnicodeEscape() {
 			return true
 		}
-		// Not a \uN escape — treat as keyword (\uc, \ul, ...) from 'u'.
+
 		return false
 	default:
 		return false
@@ -176,8 +151,6 @@ func (p *rtfParser) handleEscape() bool {
 	return true
 }
 
-// handleUnicodeEscape processes \uN (p.i points at 'u'). Returns false if
-// the 'u' is not followed by a number (then it is a plain keyword).
 func (p *rtfParser) handleUnicodeEscape() bool {
 	if p.i+1 >= p.n {
 		return false
@@ -194,21 +167,13 @@ func (p *rtfParser) handleUnicodeEscape() bool {
 		k++
 	}
 	numStr := p.raw[p.i+1 : k]
-	// #566(B): parse as a full uint16 range (0..65535). ParseInt(bits=16)
-	// rejected high surrogates (55357 etc.), silently dropping emoji halves.
+
 	if val, err := strconv.ParseInt(numStr, 10, 32); err == nil {
 		p.writeRune(rune(uint16(val & 0xFFFF)))
-		// #1542-D: substitutes only follow a SUCCESSFUL \uN. The old code
-		// set subSkip unconditionally - an out-of-range value (ParseInt err,
-		// e.g. \u99999999999) emitted nothing yet armed ucSkip substitute
-		// drops, silently swallowing the next N text bytes.
+
 		p.subSkip = p.ucSkip
 	}
-	// #566(B): the next ucSkip characters (usually a literal '?' or \'XX
-	// bytes) are ANSI substitutes for this \uN and must not also appear.
-	// (moved inside the success branch - see #1542-D above)
-	// A control word's single trailing delimiter space is consumed syntax,
-	// not text (RTF spec): `\u233 ?` means "é" + substitute, not "é" + " ?".
+
 	if k < p.n && p.raw[k] == ' ' {
 		k++
 	}
@@ -216,7 +181,6 @@ func (p *rtfParser) handleUnicodeEscape() bool {
 	return true
 }
 
-// applyKeyword performs the side effects of a control word.
 func (p *rtfParser) applyKeyword(keyword, param string) {
 	switch keyword {
 	case "par", "line", "row":
@@ -232,30 +196,27 @@ func (p *rtfParser) applyKeyword(keyword, param string) {
 			p.buf.WriteString("\n\n")
 		}
 	case "ansicpg":
-		// \ansicpgNNNN sets the code page for \'XX escapes (#547).
+
 		if v, err := strconv.Atoi(param); err == nil {
 			p.ansiCP = v
 		}
 	case "uc":
-		// #566(B): \ucN sets how many substitutes follow each \uN.
+
 		if v, err := strconv.Atoi(param); err == nil && v >= 0 && v <= 10 {
 			p.ucSkip = v
 		}
 	case "bin":
-		// #566(A): \binN embeds N raw binary bytes — skip verbatim.
+
 		if v, err := strconv.Atoi(param); err == nil && v > 0 {
 			p.binSkip = v
 		}
 	}
-	// #566(A): entering a destination whose contents are not body text —
-	// drop everything until its group closes.
+
 	if p.skipDepth < 0 && isSkipDestination(keyword) {
 		p.skipDepth = p.depth
 	}
 }
 
-// handleControlWord reads keyword + numeric parameter starting at p.i and
-// applies it.
 func (p *rtfParser) handleControlWord() {
 	j := p.i
 	for j < p.n && p.raw[j] >= 'a' && p.raw[j] <= 'z' {
@@ -274,15 +235,14 @@ func (p *rtfParser) handleControlWord() {
 	param := p.raw[paramStart:p.i]
 
 	p.applyKeyword(keyword, param)
-	// Any control word terminates a pending substitute sequence.
+
 	p.subSkip = 0
-	// Skip one optional space after keyword.
+
 	if p.i < p.n && p.raw[p.i] == ' ' {
 		p.i++
 	}
 }
 
-// skipBinary consumes pending \binN bytes without copying them.
 func (p *rtfParser) skipBinary() {
 	chunk := p.binSkip
 	if chunk > p.n-p.i {
@@ -292,7 +252,6 @@ func (p *rtfParser) skipBinary() {
 	p.binSkip -= chunk
 }
 
-// parse runs the state machine over the whole input.
 func (p *rtfParser) parse() string {
 	for p.i < p.n {
 		if p.binSkip > 0 {
@@ -314,21 +273,15 @@ func (p *rtfParser) parse() string {
 			p.subSkip = 0
 			p.i++
 		case ch == '\\' && p.i+1 < p.n:
-			p.i++ // skip backslash
+			p.i++
 			if !p.handleEscape() {
 				p.handleControlWord()
 			}
 		case ch == '\n' || ch == '\r':
-			// Bare newlines are ignored in RTF text content.
+
 			p.i++
 		default:
-			// A literal '?' right after \uN is the ANSI substitute (#566-B)
-			// — consume it without emitting. Deliberately NARROW: widening to
-			// any literal byte (to catch Word's non-'?' substitutes, #1542-D)
-			// was tried and eats real text after \uN when NO substitute was
-			// emitted (e.g. `\u55357 end` - the 'e' becomes collateral). A
-			// duplicated substitute char is cheaper than lost text; the
-			// lingering-subSkip-eats-a-later-'?' residual is a known trade-off.
+
 			if p.subSkip > 0 && ch == '?' {
 				p.subSkip--
 				p.i++
@@ -345,7 +298,6 @@ func (p *rtfParser) parse() string {
 	return strings.TrimSpace(p.buf.String())
 }
 
-// rtfExtractor extracts plain text from Rich Text Format files.
 type rtfExtractor struct{}
 
 func (rtfExtractor) Format() string { return "rtf" }
@@ -360,7 +312,7 @@ func (rtfExtractor) Extract(data []byte) (TextResult, error) {
 		n:         len(raw),
 		skipDepth: -1,
 		pendingHi: -1,
-		ucSkip:    1, // RTF spec default: one substitute after each \uN
+		ucSkip:    1,
 	}
 	return TextResult{
 		Text:   p.parse(),

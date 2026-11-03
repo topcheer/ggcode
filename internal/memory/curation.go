@@ -7,72 +7,42 @@ import (
 	"time"
 )
 
-// MemoryCategory classifies how a memory entry should be curated.
 type MemoryCategory string
 
 const (
-	// CategoryTransient: one-time task records, bug fixes, implementation logs.
-	// Expires after 30 days. Examples: impl-task-*, *-fix, *-bug.
 	CategoryTransient MemoryCategory = "transient"
 
-	// CategoryEvolving: research and analysis that gets superseded by newer
-	// versions. Same-prefix dedup keeps only the latest.
-	// Examples: competitor-*, research-*, perf-*, ux-research-*.
 	CategoryEvolving MemoryCategory = "evolving"
 
-	// CategoryPersistent: architecture decisions, design docs, build processes.
-	// Never expires. Examples: *-impl, *-design, *-architecture, build-*.
 	CategoryPersistent MemoryCategory = "persistent"
 
-	// CategoryDefault: general memories with no special curation rules.
 	CategoryDefault MemoryCategory = "default"
 )
 
-// MemoryMeta holds curation metadata for a memory file.
 type MemoryMeta struct {
-	Key       string         // sanitized filename without extension
-	Category  MemoryCategory // auto-classified category
-	CreatedAt time.Time      // file ModTime
-	DedupKey  string         // prefix used for dedup (date/version stripped)
+	Key       string
+	Category  MemoryCategory
+	CreatedAt time.Time
+	DedupKey  string
 
-	// sa-85 provenance/usage (populated from the .usage.json sidecar).
-	Uses       int       // prompt-injection count (debounced)
-	LastUsedAt time.Time // last injection time
-	Source     string    // origin label: save_memory:<scope>, run-reflection, ...
+	Uses       int
+	LastUsedAt time.Time
+	Source     string
 
-	// Outcome (sa-139, MemGuard arXiv:2608.21867): verification signal of the
-	// run that last wrote this entry - "success"/"partial"/"failed". Empty
-	// means unknown (legacy or agent-curated without run telemetry). Feeds
-	// recall arbitration trust scoring; NOT an admission blocker - failed-run
-	// observations keep negative-example value, they just rank lower.
 	Outcome string
 
-	// Conflicts (sa-146, REALM arXiv:2609.33226): count of high-confidence
-	// recall arbitration losses (retrieval-time signal, unlike the
-	// write-time Outcome above). Consumed by cap eviction order and trust
-	// scoring; never a deletion trigger (non-destructive contract, r488).
 	Conflicts int
 }
 
-// transientExpiry is how long transient memories stay active.
 const transientExpiry = 30 * 24 * time.Hour
 
-// maxActiveMemories caps the total number of active memory entries loaded
-// into the system prompt. After expiry and dedup, if the count still exceeds
-// this limit, the oldest default-category memories are evicted (they have no
-// special curation rules and are lowest priority). Persistent and evolving
-// memories are always retained.
-//
-// 60 entries is a generous cap: at ~50 bytes/title, the full index fits in
-// ~3KB (~800 tokens), keeping system-prompt overhead bounded.
 const maxActiveMemories = 60
 
-// Patterns for classification (ordered: first match wins).
 var transientPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^impl-task-`),
 	regexp.MustCompile(`-fix$`),
 	regexp.MustCompile(`-bug$`),
-	regexp.MustCompile(`-fix-`), // e.g. session-fix-bug
+	regexp.MustCompile(`-fix-`),
 }
 
 var evolvingPatterns = []*regexp.Regexp{
@@ -92,46 +62,27 @@ var persistentPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^release-`),
 }
 
-// yearPattern matches a standalone 4-digit year.
 var yearPattern = regexp.MustCompile(`^\d{4}$`)
 
-// twoDigitPattern matches 2-digit month/day segments.
 var twoDigitPattern = regexp.MustCompile(`^\d{2}$`)
 
-// versionPattern matches r1, r2, r3, cycle1, cycle2, r4 etc.
-// #3826: `summary` is no longer stripped UNCONDITIONALLY. Mid-key it
-// carries real semantics (research-summary-methods collapsed onto the
-// unrelated research-methods key and GC deleted the loser); as a TRAILING
-// segment it is still a version-suffix (impl-task-...-cycle1-summary) and
-// dedupKeyFor strips it positionally.
 var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+)$`)
 
-// monthDayPattern matches jul6, jul10, aug1 etc. #1278: restricted to REAL
-// month abbreviations - the old `^[a-z]{3}\d+$` swallowed semantic
-// segments like gen2, web2, app1, ver2, and the collision made
-// perf-gen2-analysis / perf-gen3-analysis share one dedup key, so GC
-// physically deleted the loser. A 4-letter "sept5" no longer strips
-// either (safe direction: no grouping, no deletion).
 var monthDayPattern = regexp.MustCompile(`^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[1-9]\d?$`)
 
-// dedupKeyFor returns the dedup key for a memory key by stripping
-// embedded date and version suffixes. This groups related entries
-// (e.g. "competitor-analysis-2026-07-13-r3" → "competitor-analysis").
 func dedupKeyFor(key string) string {
 	parts := strings.Split(key, "-")
 	var kept []string
-	skippingDate := false // consuming YYYY-MM-DD or YYYY-MM
-	afterDate := false    // past the date, skip version/monthday segments
+	skippingDate := false
+	afterDate := false
 
 	for i, part := range parts {
-		// Version segments (r1, cycle2) always stripped; a TRAILING
-		// `summary` is a version-suffix too (#3826) - but a mid-key summary
-		// is semantic content and must survive.
+
 		if versionPattern.MatchString(part) || (part == "summary" && i == len(parts)-1) {
 			continue
 		}
 		if skippingDate {
-			// Consume MM or DD segments (2-digit)
+
 			if twoDigitPattern.MatchString(part) {
 				continue
 			}
@@ -142,18 +93,14 @@ func dedupKeyFor(key string) string {
 			if versionPattern.MatchString(part) || monthDayPattern.MatchString(part) {
 				continue
 			}
-			afterDate = false // non-version segment = real content
+			afterDate = false
 		}
-		// Check if this part starts a date (4-digit year). #1278: a bare
-		// 4-digit segment is frequently a port/size (8080, 2048) - only treat
-		// it as a year when a plausible MM/DD segment actually follows,
-		// otherwise port-8080-config / port-9090-config collapsed to
-		// port-config and GC deleted the loser.
+
 		if yearPattern.MatchString(part) && i+1 < len(parts) && twoDigitPattern.MatchString(parts[i+1]) {
 			skippingDate = true
 			continue
 		}
-		// Check standalone jul6-style month+day tags (no preceding date)
+
 		if monthDayPattern.MatchString(part) && !afterDate {
 			continue
 		}
@@ -166,12 +113,8 @@ func dedupKeyFor(key string) string {
 	return strings.Trim(result, "-")
 }
 
-// classifyMemory determines the curation category from the memory key.
 func classifyMemory(key string) MemoryCategory {
-	// #3826: strong intent (persistent/evolving PREFIX patterns) wins over
-	// weak transient INFIXES. The old transient-first order let `-fix-`
-	// hijack `^release-`: release-fix-runbook was classified transient and
-	// expired after 30 days although its persistent prefix meant forever.
+
 	for _, p := range persistentPatterns {
 		if p.MatchString(key) {
 			return CategoryPersistent
@@ -190,7 +133,6 @@ func classifyMemory(key string) MemoryCategory {
 	return CategoryDefault
 }
 
-// shouldExpire returns true if a transient memory has exceeded its lifetime.
 func shouldExpire(meta MemoryMeta, now time.Time) bool {
 	if meta.Category != CategoryTransient {
 		return false
@@ -198,15 +140,8 @@ func shouldExpire(meta MemoryMeta, now time.Time) bool {
 	return now.Sub(meta.CreatedAt) > transientExpiry
 }
 
-// curateEntries filters and deduplicates memory entries.
-// Rules:
-//   - Transient entries older than 30 days are excluded.
-//   - Evolving entries with the same dedup key: only the newest is kept.
-//   - All other entries are kept as-is.
-//
-// Returns the curated list and counts for diagnostics.
 func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expiredCount, dedupedCount, cappedCount int) {
-	// Phase 1: filter expired transient entries.
+
 	var survived []MemoryMeta
 	for _, m := range metas {
 		if shouldExpire(m, now) {
@@ -216,7 +151,6 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 		survived = append(survived, m)
 	}
 
-	// Phase 2: dedup evolving entries by DedupKey (keep newest).
 	latestByDedup := make(map[string]MemoryMeta)
 	for _, m := range survived {
 		if m.Category != CategoryEvolving {
@@ -233,7 +167,6 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 		}
 	}
 
-	// Phase 3: build final list — non-evolving + winning evolving entries.
 	evolvingWinners := make(map[string]bool)
 	for _, m := range latestByDedup {
 		evolvingWinners[m.Key] = true
@@ -248,35 +181,22 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 		active = append(active, m)
 	}
 
-	// Phase 4: total-count cap. If the number of active memories still exceeds
-	// maxActiveMemories after expiry + dedup, evict the oldest default-category
-	// entries (lowest priority). Persistent and evolving memories are always kept.
-	// #779: count-capped entries are NOT dead -- the cap is a prompt-layer
-	// throttle and the files must stay on disk; GC deletes only expired
-	// transient and dedup losers, never capped evictions.
 	active, capped := capByCountSplit(active, maxActiveMemories)
 	cappedCount = len(capped)
 
 	return active, expiredCount, dedupedCount, cappedCount
 }
 
-// capByCount enforces a total-count limit on active memory entries. When the
-// count exceeds max, it evicts the oldest default-category entries until the
-// limit is reached. If all defaults are exhausted and the count still exceeds
-// max, the remaining entries are kept (persistent/evolving are never dropped).
 func capByCount(active []MemoryMeta, max int) ([]MemoryMeta, int) {
 	kept, evicted := capByCountSplit(active, max)
 	return kept, len(evicted)
 }
 
-// capByCountSplit partitions active entries into (kept, evicted-by-cap).
-// #779: GC needs the evicted KEYS to know which on-disk files must survive.
 func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) {
 	if len(active) <= max {
 		return active, nil
 	}
 
-	// Separate default-category entries (evictable) from protected entries.
 	var defaults []MemoryMeta
 	for _, m := range active {
 		if m.Category == CategoryDefault {
@@ -292,25 +212,14 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 		return active, nil
 	}
 
-	// Eviction order is interference-aware (Microsoft Human-Inspired Memory
-	// 2026, interference-based forgetting; arXiv:2603.07670 9.4 learning to
-	// forget): a never-injected entry is pure interference - it costs prompt
-	// budget but has never earned it - so Uses==0 entries are evicted before
-	// used ones (oldest-first within each group). The old CreatedAt-only
-	// order could evict a frequently-injected old default entry while keeping
-	// a never-used one that had simply been saved later.
-	// sa-146 (REALM 2609.33226): repeatedly-arbitrated losers (Conflicts>=2)
-	// rank below even never-used entries - a contradictory signal re-injected
-	// every recall is worse than absent signal, so it is the first to go when
-	// the cap bites.
 	usageTier := func(m MemoryMeta) int {
 		if m.Conflicts >= 2 {
-			return 0 // evict first: repeated high-confidence arbitration loser
+			return 0
 		}
 		if m.Uses == 0 {
-			return 1 // evict next: never contributed
+			return 1
 		}
-		return 2 // evict last: has retrieval history
+		return 2
 	}
 	sort.Slice(defaults, func(i, j int) bool {
 		ti, tj := usageTier(defaults[i]), usageTier(defaults[j])
@@ -320,7 +229,7 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 		if !defaults[i].CreatedAt.Equal(defaults[j].CreatedAt) {
 			return defaults[i].CreatedAt.Before(defaults[j].CreatedAt)
 		}
-		return defaults[i].Key < defaults[j].Key // deterministic tiebreak
+		return defaults[i].Key < defaults[j].Key
 	})
 	evict := make(map[string]bool, overflow)
 	for i := 0; i < overflow; i++ {
@@ -338,7 +247,6 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 	return keptList, evictedList
 }
 
-// buildMemoryMeta creates metadata for a memory file from its key and modtime.
 func buildMemoryMeta(key string, modTime time.Time) MemoryMeta {
 	return MemoryMeta{
 		Key:       key,
@@ -348,14 +256,13 @@ func buildMemoryMeta(key string, modTime time.Time) MemoryMeta {
 	}
 }
 
-// formatMemorySummary returns a one-line diagnostic summary of curation results.
 func formatMemorySummary(total, active, expired, deduped, capped int) string {
 	var sb strings.Builder
 	sb.WriteString("memory: ")
 	sb.WriteString(activeStr(active, total))
 	if expired > 0 {
 		sb.WriteString(", expired=")
-		// convert int to string without fmt for test simplicity
+
 		sb.WriteString(itoa(expired))
 	}
 	if deduped > 0 {

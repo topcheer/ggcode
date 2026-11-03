@@ -5,18 +5,10 @@ import (
 	"testing"
 )
 
-// TestIssue1012ToolResultCarriesResultField pins the fix: teammate_tool_result
-// events must carry the tool output in Result (ToolArgs is documented for
-// teammate_tool_call arguments). Desktop reads ev.Result; the two tunnels
-// previously read ev.ToolArgs, cancelling out the producer's mistake.
 func TestIssue1012ToolResultCarriesResultField(t *testing.T) {
 	var got []Event
 	collect := func(ev Event) { got = append(got, ev) }
 
-	// Drive the same construction logic the idle_runner callback performs.
-	// We emulate a StreamEventToolResult via the exported surface used by
-	// the runner: build the Event the way the (fixed) producer does and
-	// assert the field placement the consumers rely on.
 	ev := Event{
 		Type:        "teammate_tool_result",
 		TeammateID:  "tm-1",

@@ -17,18 +17,16 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// StringOrArray represents a JSON value that can be either a string or array of strings.
-// Per RFC 9728, the "resource" field in protected resource metadata can be either format.
 type StringOrArray []string
 
 func (s *StringOrArray) UnmarshalJSON(data []byte) error {
-	// Try string first
+
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {
 		*s = []string{single}
 		return nil
 	}
-	// Fall back to array
+
 	var arr []string
 	if err := json.Unmarshal(data, &arr); err != nil {
 		return err
@@ -44,7 +42,6 @@ func (s StringOrArray) First() string {
 	return ""
 }
 
-// ProtectedResourceMetadata represents RFC 9728 protected resource metadata.
 type ProtectedResourceMetadata struct {
 	Resource               StringOrArray `json:"resource"`
 	AuthorizationServers   []string      `json:"authorization_servers"`
@@ -52,7 +49,6 @@ type ProtectedResourceMetadata struct {
 	BearerMethodsSupported []string      `json:"bearer_methods_supported,omitempty"`
 }
 
-// AuthorizationServerMetadata represents RFC 8414 authorization server metadata.
 type AuthorizationServerMetadata struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
@@ -64,31 +60,26 @@ type AuthorizationServerMetadata struct {
 	ResponseTypesSupported            []string `json:"response_types_supported,omitempty"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 	RevocationEndpoint                string   `json:"revocation_endpoint,omitempty"`
-	// DeviceAuthorizationEndpoint is RFC 8628 §4's advertisement of the
-	// device authorization endpoint; presence means device flow is
-	// supported (#3791 B).
+
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
 }
 
-// ClientRegistration represents RFC 7591 dynamic client registration response.
 type ClientRegistration struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret,omitempty"`
 }
 
-// TokenResponse represents an OAuth 2.1 token endpoint response.
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Scope        string `json:"scope,omitempty"`
-	// Error fields (some providers return 200 with error body)
+
 	Error            string `json:"error,omitempty"`
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
-// oauthState holds discovered OAuth configuration for an MCP server.
 type oauthState struct {
 	protectedResourceMeta   *ProtectedResourceMetadata
 	authorizationServerMeta *AuthorizationServerMetadata
@@ -97,10 +88,9 @@ type oauthState struct {
 	state                   string
 	callbackPort            int
 	redirectURI             string
-	// authResource is the resource parameter sent in the authorization request
-	// (RFC 8707). It MUST be echoed in the token exchange. Set by StartAuthFlow.
+
 	authResource string
-	// Device flow state
+
 	deviceCode     string
 	deviceInterval int
 }
@@ -110,7 +100,6 @@ type oauthCallbackResult struct {
 	err  error
 }
 
-// OAuthHandler manages OAuth 2.1 authentication for a single MCP server.
 type OAuthHandler struct {
 	serverName string
 	serverURL  string
@@ -118,22 +107,15 @@ type OAuthHandler struct {
 	store      *auth.Store
 
 	mu sync.Mutex
-	// refreshMu serializes token refreshes for this handler (#1277): the
-	// HTTP refresh + state save ran unlocked, so concurrent requests that
-	// both saw a near-expiry token raced two refreshes against a
-	// rotation-with-grace server - the interleaved store saves could persist
-	// an already-revoked refresh token, silently and permanently killing the
-	// login. Note: must NOT be h.mu, which refreshToken takes internally for
-	// state snapshots (deadlock).
+
 	refreshMu         sync.Mutex
 	state             *oauthState
 	callbackCh        chan oauthCallbackResult
 	callbackSrv       *http.Server
-	skipCanonical     bool   // set by ForceReauth to skip shared credential fallback
-	healthCheckStatus string // human-readable status for MCP panel display
+	skipCanonical     bool
+	healthCheckStatus string
 }
 
-// NewOAuthHandler creates a new OAuth handler for an MCP server.
 func NewOAuthHandler(serverName, serverURL string, store *auth.Store) *OAuthHandler {
 	return &OAuthHandler{
 		serverName: serverName,
@@ -183,16 +165,9 @@ func (h *OAuthHandler) canonicalResource() string {
 	return normalizeOAuthIdentity(h.serverURL)
 }
 
-// providerIDCandidates returns the ordered list of provider IDs to try when
-// loading a stored token. The priority is:
-//
-//  1. Server-name key (mcp:<serverName>) — allows per-server isolation
-//     so that two MCP servers with the same URL can hold different credentials.
-//  2. Canonical key (mcp-shared:<issuer>|<resource>) — shared fallback for
-//     servers that haven't been individually authenticated.
 func (h *OAuthHandler) providerIDCandidates() []string {
 	out := make([]string, 0, 2)
-	out = append(out, h.legacyProviderID()) // server-name first
+	out = append(out, h.legacyProviderID())
 	if canonical := h.canonicalProviderID(); canonical != "" {
 		out = append(out, canonical)
 	}
@@ -265,14 +240,6 @@ func (h *OAuthHandler) hydrateStateFromInfo(info *auth.Info) {
 	}
 }
 
-// GetAccessToken returns a valid access token, refreshing if needed.
-// Returns empty string if no token exists.
-// If the token is expired but there is a refresh token, it attempts to refresh.
-// If the token is expired and there is no refresh token, it still returns the
-// access token optimistically — the server will return 401 if truly expired,
-// which triggers the OAuth flow. This avoids premature re-authentication when
-// the token has a few minutes left (the 5-minute IsExpired() buffer caused
-// tokens to be discarded too early, requiring re-auth every time).
 func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 	info, _, err := h.loadStoredInfo()
 	if err != nil || info == nil {
@@ -282,15 +249,9 @@ func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 	if !info.IsExpired() {
 		return info.AccessToken, nil
 	}
-	// Token is near-expiry or expired. Try refresh if we have a refresh
-	// token.
+
 	if info.RefreshToken != "" {
-		// #1277: one refresher at a time. After acquiring, RE-DERIVE the
-		// stored info - a concurrent caller may have completed a refresh
-		// while we waited, in which case its fresh access token (and rotated
-		// refresh token, already persisted by the winner) is ours to reuse.
-		// Re-refreshing with the pre-wait refresh token would replay a
-		// possibly-revoked credential against a rotation server.
+
 		h.refreshMu.Lock()
 		defer h.refreshMu.Unlock()
 		if latest, _, err := h.loadStoredInfo(); err == nil && latest != nil {
@@ -303,11 +264,10 @@ func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 		if err == nil && newInfo != nil {
 			return newInfo.AccessToken, nil
 		}
-		// Refresh failed — fall through to return existing token optimistically.
+
 		debug.Log("mcp-oauth", "refresh_failed server=%s error=%v, using existing token", h.serverName, err)
 	}
-	// Return the existing access token optimistically. If it's truly expired,
-	// the server will return 401 and trigger re-auth.
+
 	if info.AccessToken != "" {
 		return info.AccessToken, nil
 	}
@@ -323,10 +283,7 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 	}
 	tokenEndpoint := st.authorizationServerMeta.TokenEndpoint
 	if tokenEndpoint == "" {
-		// TokenEndpoint is not populated when the handler was restored from
-		// stored credentials (hydrateStateFromInfo only sets Issuer). Perform
-		// lazy discovery to fetch the full authorization server metadata,
-		// including the token endpoint needed for refresh.
+
 		issuer := st.authorizationServerMeta.Issuer
 		if issuer == "" {
 			return nil, fmt.Errorf("no token endpoint and no issuer for discovery")
@@ -387,26 +344,21 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 
 	info := h.buildAuthInfo(&tokenResp)
 	if info.RefreshToken == "" {
-		// Preserve existing refresh token if server didn't return a new one
+
 		old, _, _ := h.loadStoredInfo()
 		if old != nil && old.RefreshToken != "" {
 			info.RefreshToken = old.RefreshToken
 		}
 	}
-	// Save refreshed token under server-name key.
+
 	info.ProviderID = h.legacyProviderID()
 	if err := h.store.Save(info); err != nil {
 		return nil, err
 	}
-	// Do NOT update canonical key on refresh — it might hold a different
-	// credential. Only SaveToken (initial auth) seeds the canonical key.
+
 	return info, nil
 }
 
-// DeleteServerToken removes only the server-name-specific credential and marks
-// the handler to skip the canonical (shared) fallback on the next load. This
-// forces a fresh OAuth flow even when a valid shared credential exists. The
-// flag is cleared once a new token is saved via SaveToken.
 func (h *OAuthHandler) DeleteServerToken() error {
 	h.mu.Lock()
 	h.skipCanonical = true
@@ -414,14 +366,11 @@ func (h *OAuthHandler) DeleteServerToken() error {
 	return h.store.Delete(h.legacyProviderID())
 }
 
-// Handle401 processes a 401 or 403 response. Returns true if OAuth is needed.
-// Called on both 401 (no auth) and 403 (insufficient permissions) to trigger
-// OAuth DCR discovery as a fallback authentication method.
 func (h *OAuthHandler) Handle401(resp *http.Response) (bool, error) {
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
 	metadataURL, ok := parseWWWAuthenticate(wwwAuth)
 	if !ok {
-		// Fallback: try well-known URL
+
 		metadataURL = buildProtectedResourceWellKnown(h.serverURL)
 	}
 	debug.Log("mcp-oauth", "handle401 server=%s www_auth=%s metadata_url=%s", h.serverName, wwwAuth, metadataURL)
@@ -454,13 +403,6 @@ func (h *OAuthHandler) Handle401(resp *http.Response) (bool, error) {
 	return true, nil
 }
 
-// ProbeWellKnown proactively discovers OAuth metadata from the server's
-// well-known endpoint BEFORE any request is sent. Per project guidance: when
-// the client has NO auth headers configured and the server exposes
-// /.well-known/oauth-protected-resource, start the OAuth DCR flow immediately
-// instead of waiting for the initialize 401 roundtrip. Returns true when the
-// discovery chain succeeded (protected-resource + authorization-server
-// metadata filled) and the caller should surface OAuthRequiredError.
 func (h *OAuthHandler) ProbeWellKnown(ctx context.Context) bool {
 	metadataURL := buildProtectedResourceWellKnown(h.serverURL)
 	debug.Log("mcp-oauth", "probe well-known server=%s url=%s", h.serverName, metadataURL)
@@ -482,29 +424,25 @@ func (h *OAuthHandler) ProbeWellKnown(ctx context.Context) bool {
 	return true
 }
 
-// parseWWWAuthenticate extracts resource_metadata URL from WWW-Authenticate header.
-// Format: Bearer resource_metadata="<url>"
 func parseWWWAuthenticate(header string) (string, bool) {
 	if header == "" {
 		return "", false
 	}
-	// Look for Bearer scheme
+
 	lower := strings.ToLower(header)
 	idx := strings.Index(lower, "bearer")
 	if idx == -1 {
 		return "", false
 	}
-	rest := header[idx+6:] // skip "bearer"
+	rest := header[idx+6:]
 
-	// Look for resource_metadata=
 	rmIdx := strings.Index(strings.ToLower(rest), "resource_metadata=")
 	if rmIdx == -1 {
 		return "", false
 	}
-	val := rest[rmIdx+18:] // skip "resource_metadata="
+	val := rest[rmIdx+18:]
 	val = strings.TrimSpace(val)
 
-	// Extract quoted or unquoted value
 	if strings.HasPrefix(val, `"`) {
 		val = val[1:]
 		end := strings.Index(val, `"`)
@@ -513,7 +451,7 @@ func parseWWWAuthenticate(header string) (string, bool) {
 		}
 		val = val[:end]
 	} else {
-		// Unquoted: take until space or comma
+
 		if end := strings.IndexAny(val, " ,"); end != -1 {
 			val = val[:end]
 		}
@@ -567,7 +505,7 @@ func (h *OAuthHandler) discoverProtectedResource(ctx context.Context, metadataUR
 }
 
 func (h *OAuthHandler) discoverAuthorizationServer(ctx context.Context, authServerURL string) error {
-	// Try RFC 8414 well-known first, then direct URL
+
 	wellKnown := strings.TrimRight(authServerURL, "/") + "/.well-known/oauth-authorization-server"
 	if u, err := url.Parse(authServerURL); err == nil {
 		wellKnown = fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server%s", u.Scheme, u.Host, u.Path)
@@ -575,7 +513,7 @@ func (h *OAuthHandler) discoverAuthorizationServer(ctx context.Context, authServ
 
 	meta, err := h.fetchAuthorizationServerMeta(ctx, wellKnown)
 	if err != nil {
-		// Fallback: try direct URL
+
 		meta, err = h.fetchAuthorizationServerMeta(ctx, authServerURL)
 		if err != nil {
 			return err
@@ -584,8 +522,7 @@ func (h *OAuthHandler) discoverAuthorizationServer(ctx context.Context, authServ
 
 	h.mu.Lock()
 	h.state.authorizationServerMeta = meta
-	// Auto-fill built-in client_id for servers with known OAuth apps, even if they advertise
-	// a registration endpoint (DCR may fail with 403 for third-party clients).
+
 	if h.state.clientRegistration == nil {
 		if clientID, ok := wellKnownClientIDs[meta.Issuer]; ok {
 			h.state.clientRegistration = &ClientRegistration{ClientID: clientID, ClientSecret: wellKnownClientSecrets[meta.Issuer]}
@@ -626,7 +563,6 @@ func (h *OAuthHandler) fetchAuthorizationServerMeta(ctx context.Context, url str
 	return &meta, nil
 }
 
-// SupportsDCR returns true if the authorization server supports dynamic client registration.
 func (h *OAuthHandler) SupportsDCR() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -634,9 +570,6 @@ func (h *OAuthHandler) SupportsDCR() bool {
 		h.state.authorizationServerMeta.RegistrationEndpoint != ""
 }
 
-// prepareCallbackServer generates state and starts the local callback listener
-// so we have the real port before DCR registration. Idempotent: if a server is
-// already running it's reused.
 func (h *OAuthHandler) prepareCallbackServer() error {
 	h.mu.Lock()
 	alreadyRunning := h.callbackSrv != nil
@@ -657,9 +590,7 @@ func (h *OAuthHandler) prepareCallbackServer() error {
 
 	h.mu.Lock()
 	if h.state == nil {
-		// Defensive lazy-init (same pattern as every other h.state
-		// writer): callers normally run discovery first, but a direct
-		// prepare on a fresh handler must not nil-deref here (#3791).
+
 		h.state = &oauthState{}
 	}
 	h.state.state = state
@@ -671,9 +602,8 @@ func (h *OAuthHandler) prepareCallbackServer() error {
 	return nil
 }
 
-// RegisterClient performs RFC 7591 dynamic client registration.
 func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
-	// Start callback server FIRST so we have the correct redirect_uri port.
+
 	if err := h.prepareCallbackServer(); err != nil {
 		return err
 	}
@@ -691,7 +621,7 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 		"redirect_uris":              []string{redirectURI},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
-		"token_endpoint_auth_method": "none", // public client
+		"token_endpoint_auth_method": "none",
 	}
 	data, err := json.Marshal(regBody)
 	if err != nil {
@@ -727,12 +657,6 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 	authEndpoint := h.state.authorizationServerMeta.AuthorizationEndpoint
 	h.mu.Unlock()
 
-	// Health check: some authorization servers (e.g. Railway) have eventual
-	// consistency — the DCR returns a client_id immediately, but the
-	// authorization endpoint doesn't know about it for a few seconds. If we
-	// hand the user an authorize URL before the server has synced, the browser
-	// shows "invalid_client". Probe the authorize endpoint with a throwaway
-	// request to confirm the client_id is live before returning.
 	if reg.ClientID != "" && authEndpoint != "" {
 		if err := h.waitForClientID(ctx, authEndpoint, reg.ClientID, redirectURI); err != nil {
 			debug.Log("mcp-oauth", "client_id health check failed server=%s client_id=%s: %v (continuing anyway)", h.serverName, reg.ClientID, err)
@@ -741,27 +665,14 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 	return nil
 }
 
-// waitForClientID probes the authorization endpoint to confirm that the
-// newly-registered client_id is visible to the AS. Some providers (Railway)
-// have eventual consistency between the DCR endpoint and the AS, causing
-// "invalid_client" errors if the user opens the authorize URL too soon.
-//
-// Retries with backoff up to a bounded attempt budget (the sync window is
-// seconds, not minutes), then gives up - the caller logs and continues
-// anyway. Updates healthCheckStatus for MCP panel display.
 func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, clientID, redirectURI string) error {
-	// Generate a dummy PKCE pair for the probe. Many AS (Railway, etc.)
-	// require PKCE on ALL authorize requests, so the probe must include
-	// code_challenge + code_challenge_method=S256 to avoid being rejected
-	// with "invalid_request: requires PKCE" before the client_id is even
-	// validated.
+
 	probeVerifier, err := auth.GenerateCodeVerifier()
 	if err != nil {
 		return nil
 	}
 	probeChallenge := auth.GenerateCodeChallenge(probeVerifier)
 
-	// Build a minimal authorize URL for the probe.
 	probeURL, err := url.Parse(authEndpoint)
 	if err != nil {
 		return nil
@@ -775,10 +686,7 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 	probeURL.RawQuery = q.Encode()
 
 	const maxDelay = 10 * time.Second
-	// Bounded budget: probe-first + waits of 2+3+4.5+6.75+10 ~= 26s worst
-	// case. The Railway-style sync window is "a few seconds"; unbounded retry
-	// parked the MCP panel on "Verifying OAuth client" for the FULL 5-minute
-	// caller ctx on any server whose authorize endpoint kept 4xx-ing the probe.
+
 	const maxAttempts = 6
 	delay := 2 * time.Second
 	attempt := 0
@@ -790,11 +698,7 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			debug.Log("mcp-oauth", "client_id health check gave up after %d attempts, continuing anyway", maxAttempts)
 			return nil
 		}
-		// Probe FIRST; wait only BETWEEN retries (owner report: the pre-probe
-		// sleep made every OAuth start pay 2s even on fully consistent servers
-		// where the first probe succeeds instantly - "DCR 无延迟" must mean
-		// zero added delay for the common case; only eventual-consistency
-		// servers should ever see the backoff waits).
+
 		if attempt > 1 {
 			select {
 			case <-ctx.Done():
@@ -805,22 +709,12 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			delay = minDuration(delay*3/2, maxDelay)
 		}
 
-		// GET with redirect-following disabled. A valid client_id gets 302
-		// (redirect to login) or 200 (login page). Invalid gets 400/401
-		// with "invalid_client" in the body.
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Accept", "text/html,application/json")
 
-		// The comment above has claimed "redirect-following disabled" since
-		// this probe was written, but nothing enforced it: a 302 was followed
-		// to the real IdP login page, adding a full extra roundtrip to a
-		// possibly-distant host before returning (owner-visible OAuth start
-		// delay), and in offline/proxied environments the failed follow
-		// burned the whole retry budget. The 302 itself is the evidence that
-		// the client_id is live - stop there (v1.3.234 follow-up).
 		probeClient := *h.httpClient
 		probeClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -849,8 +743,7 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			debug.Log("mcp-oauth", "client_id health check invalid_client attempt=%d", attempt)
 			continue
 		case resp.StatusCode >= 400 && resp.StatusCode < 500:
-			// Other 4xx errors — could be transient server-side issues during
-			// DCR propagation. Log the body for debugging and retry.
+
 			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
 			debug.Log("mcp-oauth", "client_id health check 4xx status=%d body=%s attempt=%d", resp.StatusCode, truncateForLog(bodyStr, 200), attempt)
 			continue
@@ -882,8 +775,6 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + "..."
 }
 
-// StartAuthFlow initiates the authorization code + PKCE flow.
-// Returns the authorize URL for the user's browser and starts a local callback listener.
 func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	verifier, err := auth.GenerateCodeVerifier()
 	if err != nil {
@@ -891,7 +782,6 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	}
 	challenge := auth.GenerateCodeChallenge(verifier)
 
-	// Reuse existing callback server (from RegisterClient) or start a new one.
 	if err := h.prepareCallbackServer(); err != nil {
 		return "", err
 	}
@@ -900,10 +790,7 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	h.state.codeVerifier = verifier
 	state := h.state.state
 	if h.state.authorizationServerMeta == nil {
-		// Hydrated state without AS metadata (e.g. credentials restored from
-		// the store, or a caller racing ahead of discovery): the deref below
-		// would panic. Mirror the NeedsDiscovery contract and fail with a
-		// self-correctable error instead.
+
 		h.mu.Unlock()
 		return "", fmt.Errorf("oauth state not initialized (discovery incomplete)")
 	}
@@ -913,11 +800,7 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 		clientID = h.state.clientRegistration.ClientID
 	}
 	redirectURI := h.state.redirectURI
-	// #772: protectedResourceMeta is nil for legacy credentials (empty
-	// oauth_resource) and for lazy refresh discovery paths -- hydrateState
-	// fills it only when OAuthResource is set, while NeedsDiscovery only
-	// checks authorizationServerMeta. GetScopes already guards this exact
-	// nil case; this deref made every 401 panic and permanently break OAuth.
+
 	var scopes []string
 	if h.state.protectedResourceMeta != nil {
 		scopes = h.state.protectedResourceMeta.ScopesSupported
@@ -931,9 +814,6 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no OAuth client_id: server does not support dynamic client registration and no client_id was configured; set oauth_client_id in your MCP server config")
 	}
 
-	// Request offline_access scope so the server returns a refresh token.
-	// Without this, tokens expire and the user must re-authenticate every time.
-	// OAuth 2.1 requires the client to explicitly request offline_access.
 	scopes = ensureOfflineAccess(scopes)
 
 	params := url.Values{}
@@ -946,28 +826,20 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	if len(scopes) > 0 {
 		params.Set("scope", strings.Join(scopes, " "))
 	}
-	// Some providers (e.g. Railway) require prompt=consent to honor
-	// offline_access and return a refresh_token. This is harmless for
-	// providers that don't require it.
+
 	params.Set("prompt", "consent")
-	// The authorization_endpoint may already contain query params (e.g. Railway
-	// embeds ?resource=backboard.railway.com). Parse it and merge so we don't
-	// produce duplicate keys or double-? malformed URLs.
+
 	parsed, err := url.Parse(authEndpoint)
 	if err != nil {
 		return "", fmt.Errorf("parsing authorization endpoint: %w", err)
 	}
 	baseQuery := parsed.Query()
 
-	// Only set our serverURL as resource if the endpoint doesn't already
-	// specify one (RFC 8707). The authorization server knows what resource
-	// indicator it expects.
 	endpointHasResource := baseQuery.Get("resource") != ""
 	if h.serverURL != "" && !endpointHasResource && !params.Has("resource") {
 		params.Set("resource", h.serverURL)
 	}
 
-	// Merge any remaining endpoint params that we haven't already set.
 	for key, values := range baseQuery {
 		if !params.Has(key) {
 			for _, v := range values {
@@ -1000,10 +872,7 @@ func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oaut
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "OAuth error: %s %s", errParam, desc)
-			// #2771: non-blocking send - duplicate/prefetch/late callbacks arrive
-			// with the buffer full (WaitForCallback consumed once, server reused
-			// across OAuth retries); a bare send wedges this handler goroutine
-			// forever (Shutdown does not interrupt in-flight handlers).
+
 			select {
 			case ch <- oauthCallbackResult{err: fmt.Errorf("OAuth error: %s %s", errParam, desc)}:
 			default:
@@ -1040,7 +909,6 @@ func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oaut
 	return port, ch, srv, nil
 }
 
-// WaitForCallback waits for the OAuth callback on the local server.
 func (h *OAuthHandler) WaitForCallback(ctx context.Context) (string, error) {
 	h.mu.Lock()
 	ch := h.callbackCh
@@ -1057,7 +925,6 @@ func (h *OAuthHandler) WaitForCallback(ctx context.Context) (string, error) {
 	}
 }
 
-// ExchangeCode exchanges an authorization code for tokens.
 func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenResponse, error) {
 	h.mu.Lock()
 	if h.state == nil || h.state.authorizationServerMeta == nil {
@@ -1112,7 +979,7 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("parsing token response: %w", err)
 	}
-	// Some providers return 200 with error body (e.g., GitHub returns incorrect_client_credentials as 200)
+
 	if tokenResp.Error != "" {
 		return nil, fmt.Errorf("token exchange error: %s %s", tokenResp.Error, tokenResp.ErrorDescription)
 	}
@@ -1123,28 +990,19 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 	return &tokenResp, nil
 }
 
-// SaveToken persists the token response to the auth store.
-// It always saves under the server-name key (mcp:<serverName>), enabling
-// per-server credential isolation. If the canonical (shared) key does not
-// yet exist, the token is also saved there so that other servers with the
-// same OAuth issuer can reuse it without a separate auth flow. If the
-// canonical key already exists, it is left untouched.
 func (h *OAuthHandler) SaveToken(tokenResp *TokenResponse) error {
 	info := h.buildAuthInfo(tokenResp)
 
-	// Always save under server-name key.
 	serverKey := h.legacyProviderID()
 	info.ProviderID = serverKey
 	if err := h.store.Save(info); err != nil {
 		return err
 	}
 
-	// Clear the skipCanonical flag — we now have a server-name credential.
 	h.mu.Lock()
 	h.skipCanonical = false
 	h.mu.Unlock()
 
-	// If canonical key doesn't exist yet, also save there (seed the global).
 	if canonical := h.canonicalProviderID(); canonical != "" && canonical != serverKey {
 		existing, _ := h.store.Load(canonical)
 		if existing == nil {
@@ -1182,7 +1040,6 @@ func (h *OAuthHandler) buildAuthInfo(tokenResp *TokenResponse) *auth.Info {
 	}
 }
 
-// OAuthRequiredError signals that OAuth authentication is needed.
 type OAuthRequiredError struct {
 	Handler *OAuthHandler
 }
@@ -1191,35 +1048,23 @@ func (e *OAuthRequiredError) Error() string {
 	return "oauth authentication required"
 }
 
-// ServerName returns the name of the MCP server this handler is for.
 func (h *OAuthHandler) ServerName() string {
 	return h.serverName
 }
 
-// HealthCheckStatus returns a human-readable status string for display in
-// the MCP panel during OAuth client_id health checks.
 func (h *OAuthHandler) HealthCheckStatus() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.healthCheckStatus
 }
 
-// Close cleans up the callback server and clears the stale callback
-// wiring so a SECOND OAuth attempt on the same handler rebuilds it.
-// #3791 A: previously Close only Shutdown the http.Server, leaving
-// h.callbackSrv non-nil - prepareCallbackServer's "already running"
-// check then short-circuited, the CSRF state was reused, and the port no
-// longer listened; the browser callback had no receiver and `<-h.callbackCh`
-// blocked forever (producer goroutine died with the server). Retry-login
-// after auth failure/timeout deadlocked on every attempt.
 func (h *OAuthHandler) Close() {
 	h.mu.Lock()
 	srv := h.callbackSrv
 	h.callbackSrv = nil
-	h.callbackCh = nil // recreated by prepareCallbackServer -> startCallbackServer
+	h.callbackCh = nil
 	if h.state != nil {
-		// Drop the spent CSRF state; metadata/token fields stay cached -
-		// only the per-flow nonce must never be reused across flows.
+
 		h.state.state = ""
 	}
 	h.mu.Unlock()
@@ -1230,20 +1075,16 @@ func (h *OAuthHandler) Close() {
 	}
 }
 
-// ShutdownCallbackServer stops the local OAuth callback server if it is running.
 func (h *OAuthHandler) ShutdownCallbackServer() {
 	h.Close()
 }
 
-// HasPendingDeviceFlow reports whether a device authorization flow is waiting for polling.
 func (h *OAuthHandler) HasPendingDeviceFlow() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.state != nil && h.state.deviceCode != ""
 }
 
-// SupportsDeviceFlow returns true if we can attempt device flow for this server.
-// Checks for a known device code endpoint or a device_authorization_endpoint in metadata.
 func (h *OAuthHandler) SupportsDeviceFlow() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1254,16 +1095,10 @@ func (h *OAuthHandler) SupportsDeviceFlow() bool {
 	if _, ok := wellKnownDeviceEndpoints[issuer]; ok {
 		return true
 	}
-	// RFC 8628 §4: a server advertising device_authorization_endpoint in
-	// its RFC 8414 metadata supports the device flow. The comment claimed
-	// this check but the metadata struct had no such field, so every
-	// non-GitHub server was judged unsupported (#3791 B) and headless/
-	// remote users lost the device-flow fallback.
+
 	return h.state.authorizationServerMeta.DeviceAuthorizationEndpoint != ""
 }
 
-// StartDeviceFlow initiates a device authorization flow (RFC 8628).
-// Returns the device flow response containing user_code and verification URI.
 func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*DeviceFlowResponse, error) {
 	h.mu.Lock()
 	clientID := ""
@@ -1280,10 +1115,6 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 		return nil, fmt.Errorf("no client_id for device flow")
 	}
 
-	// Find device code endpoint: hardcoded well-known map first, then the
-	// server's own RFC 8414 metadata advertisement (#3791 B - without this
-	// fallback, SupportsDeviceFlow could answer true while StartDeviceFlow
-	// still failed with "no device code endpoint" for metadata-only servers).
 	deviceEndpoint, ok := wellKnownDeviceEndpoints[issuer]
 	if !ok && h.state != nil && h.state.authorizationServerMeta != nil {
 		deviceEndpoint = h.state.authorizationServerMeta.DeviceAuthorizationEndpoint
@@ -1343,8 +1174,6 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 	return &devResp, nil
 }
 
-// PollDeviceToken polls the token endpoint until the user authorizes the device code.
-// Should be called after StartDeviceFlow and the user visits the verification URI.
 func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, error) {
 	h.mu.Lock()
 	if h.state == nil || h.state.authorizationServerMeta == nil {
@@ -1406,16 +1235,16 @@ func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, err
 
 			switch tokenResp.Error {
 			case "":
-				// Success
+
 				if tokenResp.AccessToken == "" {
 					return nil, fmt.Errorf("device token returned empty access_token")
 				}
 				return &tokenResp, nil
 			case "authorization_pending":
-				// User hasn't authorized yet, keep polling
+
 				continue
 			case "slow_down":
-				// Increase interval by 5 seconds
+
 				ticker.Reset(time.Duration(interval+5) * time.Second)
 				interval += 5
 				continue
@@ -1428,7 +1257,6 @@ func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, err
 	}
 }
 
-// DeviceFlowResponse holds the response from the device code endpoint.
 type DeviceFlowResponse struct {
 	DeviceCode      string `json:"device_code"`
 	UserCode        string `json:"user_code"`
@@ -1437,19 +1265,12 @@ type DeviceFlowResponse struct {
 	Interval        int    `json:"interval"`
 }
 
-// wellKnownClientIDs maps authorization server issuers to their built-in OAuth client IDs.
-// Used when the server does not support dynamic client registration (DCR) and the user
-// has not configured oauth_client_id in their MCP server config.
 var wellKnownClientIDs = map[string]string{
 	"https://github.com/login/oauth": "Iv23liJhRuCX7QU1DfgT",
 }
 
-// wellKnownClientSecrets maps authorization server issuers to their client secrets.
-// Only needed for servers that require client_secret_basic or client_secret_post auth.
 var wellKnownClientSecrets = map[string]string{}
 
-// wellKnownDeviceEndpoints maps authorization server issuers to device code endpoints.
-// Used when the server metadata doesn't include a device_authorization_endpoint.
 var wellKnownDeviceEndpoints = map[string]string{
 	"https://github.com/login/oauth": "https://github.com/login/device/code",
 }
@@ -1458,9 +1279,6 @@ func tokenExpiry(expiresIn int) time.Time {
 	return time.Now().Add(time.Duration(expiresIn) * time.Second)
 }
 
-// ensureOfflineAccess adds the "offline_access" scope if not already present.
-// This signals the authorization server to issue a refresh token, enabling
-// silent token renewal instead of forcing interactive re-authentication.
 func ensureOfflineAccess(scopes []string) []string {
 	for _, s := range scopes {
 		if s == "offline_access" {
@@ -1470,7 +1288,6 @@ func ensureOfflineAccess(scopes []string) []string {
 	return append(scopes, "offline_access")
 }
 
-// SetClientCredentials sets pre-configured client credentials for servers without DCR.
 func (h *OAuthHandler) SetClientCredentials(clientID, clientSecret string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1483,14 +1300,12 @@ func (h *OAuthHandler) SetClientCredentials(clientID, clientSecret string) {
 	}
 }
 
-// NeedsDiscovery returns true if OAuth metadata hasn't been discovered yet.
 func (h *OAuthHandler) NeedsDiscovery() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.state == nil || h.state.authorizationServerMeta == nil
 }
 
-// GetScopes returns the scopes supported by the protected resource.
 func (h *OAuthHandler) GetScopes() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()

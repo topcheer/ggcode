@@ -1,8 +1,5 @@
 package hooks
 
-// #566 feature tests: hook env truncation (C) and shell-safe template
-// expansion (D).
-
 import (
 	"os"
 	"strings"
@@ -13,12 +10,12 @@ func TestIssue566_ShellQuote(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"", "''"},
 		{"plain", "'plain'"},
-		{"/tmp/my file.txt", "'/tmp/my file.txt'"}, // spaces stay one word
-		{`it's`, `'it'\''s'`},                      // embedded quote
-		{"a; rm -rf /", `'a; rm -rf /'`},           // injection neutralized
-		{"$(touch pwned)", `'$(touch pwned)'`},     // no expansion
-		{"`id`", "'`id`'"},                         // no backtick exec
-		{"a\"b", `'a"b'`},                          // double quotes literal
+		{"/tmp/my file.txt", "'/tmp/my file.txt'"},
+		{`it's`, `'it'\''s'`},
+		{"a; rm -rf /", `'a; rm -rf /'`},
+		{"$(touch pwned)", `'$(touch pwned)'`},
+		{"`id`", "'`id`'"},
+		{"a\"b", `'a"b'`},
 	}
 	for _, tc := range cases {
 		if got := shellQuote(tc.in); got != tc.want {
@@ -28,14 +25,13 @@ func TestIssue566_ShellQuote(t *testing.T) {
 }
 
 func TestIssue566_TruncateHookEnv(t *testing.T) {
-	// Under limit: untouched, not truncated.
+
 	small := strings.Repeat("a", 1000)
 	got, trunc := truncateHookEnv(small)
 	if trunc || got != small {
 		t.Errorf("small value: trunc=%v changed=%v", trunc, got != small)
 	}
 
-	// Over limit: truncated to cap, flag set.
 	big := strings.Repeat("a", maxHookEnvValue+1000)
 	got, trunc = truncateHookEnv(big)
 	if !trunc {
@@ -45,8 +41,7 @@ func TestIssue566_TruncateHookEnv(t *testing.T) {
 		t.Errorf("truncated length %d exceeds cap %d", len(got), maxHookEnvValue)
 	}
 
-	// Multi-byte runes are never split at the cut point.
-	cjk := strings.Repeat("界", maxHookEnvValue/3+50) // 3 bytes per rune
+	cjk := strings.Repeat("界", maxHookEnvValue/3+50)
 	got, trunc = truncateHookEnv(cjk)
 	if !trunc {
 		t.Fatal("oversized CJK value not flagged as truncated")
@@ -59,9 +54,6 @@ func TestIssue566_TruncateHookEnv(t *testing.T) {
 	}
 }
 
-// TestIssue566_EnvNotTruncatedForNormalSize verifies the happy path: a
-// normal-sized RawInput reaches the hook process verbatim via
-// GGCODE_RAW_INPUT (guarding against accidental always-truncate).
 func TestIssue566_EnvNotTruncatedForNormalSize(t *testing.T) {
 	rawInput := `{"file_path":"/tmp/some file.txt","content":"hello"}`
 	h := Hook{Command: `test "$GGCODE_RAW_INPUT" != "" && test "$GGCODE_RAW_INPUT_TRUNCATED" = ""`}
@@ -76,16 +68,11 @@ func TestIssue566_EnvNotTruncatedForNormalSize(t *testing.T) {
 	}
 }
 
-// TestIssue566_LargeRawInputDoesNotBreakHookExec is the core probe for bug C:
-// a 1MB RawInput previously made fork/exec fail with E2BIG, so the hook
-// process never started — yet Allowed=true was reported and pre_tool_use
-// audit hooks were silently bypassed. With truncation the hook must actually
-// run, succeed, and see the truncation marker.
 func TestIssue566_LargeRawInputDoesNotBreakHookExec(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a shell process")
 	}
-	big := strings.Repeat("x", 1024*1024) // 1MB — previously E2BIG
+	big := strings.Repeat("x", 1024*1024)
 	h := Hook{Command: `test "$GGCODE_RAW_INPUT_TRUNCATED" = "1" && test ${#GGCODE_RAW_INPUT} -le 65536 && echo ok`}
 	env := HookEnv{
 		Event:    EventPreToolUse,
@@ -102,21 +89,16 @@ func TestIssue566_LargeRawInputDoesNotBreakHookExec(t *testing.T) {
 	}
 }
 
-// TestIssue566_SpecialCharPathNotMisblocked is the probe for bug D: a path
-// containing a quote used to make the hook exit 2 (Allowed=false),
-// mis-blocking a legitimate call; a path with spaces used to exit 1.
-// Quoted expansion must keep it a single word and exit 0.
 func TestIssue566_SpecialCharPathNotMisblocked(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a shell process")
 	}
 	dir := t.TempDir()
-	path := dir + "/it's a file.txt" // both a quote AND spaces
+	path := dir + "/it's a file.txt"
 	if err := os.WriteFile(path, []byte("hi"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	// Template uses the BARE $FILE_PATH: shellQuote supplies the quoting.
-	// (Wrapping it in "$FILE_PATH" would keep the single quotes literal.)
+
 	h := Hook{Command: `cat $FILE_PATH > /dev/null && echo seen`}
 	env := HookEnv{
 		Event:    EventPreToolUse,
@@ -132,8 +114,6 @@ func TestIssue566_SpecialCharPathNotMisblocked(t *testing.T) {
 	}
 }
 
-// TestIssue566_RawInputInjectionNeutralized: RAW_INPUT content must never
-// execute as shell syntax. The sentinel file proves no injection happened.
 func TestIssue566_RawInputInjectionNeutralized(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a shell process")

@@ -81,7 +81,6 @@ func TestHandleStatusWithCallback(t *testing.T) {
 func TestHandleStatusWithoutCallback(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	// Don't set statusFn — should fall back to basic info
 
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
@@ -96,7 +95,7 @@ func TestHandleStatusWithoutCallback(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Should have zero values, not an error
+
 	if st.AgentBusy {
 		t.Error("AgentBusy should be false without callback")
 	}
@@ -139,7 +138,7 @@ func TestSetStatusFn(t *testing.T) {
 }
 
 func TestRuntimeStatusJSONTags(t *testing.T) {
-	// Verify all fields have proper json tags for external consumption
+
 	st := RuntimeStatus{
 		PID:            1,
 		Workspace:      "/ws",

@@ -9,21 +9,6 @@ import (
 	"time"
 )
 
-// handleKeyPress handles the tea.KeyPressMsg case.
-// anyPanelOpen reports whether any overlay panel currently owns the UI
-// (#1772): global keys that switch sessions must yield to the panel
-// dispatch when one is open, or the panel leaks onto the new session.
-//
-// #1880 case 1: delegate to hasActivePanel (model.go) as the single
-// source of truth for panel state. The hand-enumerated list here covered
-// only 9 states while the dispatch chain below handles ~22 more
-// (model/qr/tg/discord/feishu/slack/dingtalk/wechat/wecom/mattermost/
-// matrix/signal/irc/nostr/twitch/whatsapp/im/knight/skills/stats/usage/
-// hooks/inspector/lanChat/initPrompt) - for every diff-set panel the cycle
-// keys still switched sessions and leaked the panel, the exact bug this
-// guard exists to prevent. hasActivePanel stays in sync with
-// closeActivePanel's switch (audited #904); the four states it does not
-// model are appended here.
 func anyPanelOpen(m Model) bool {
 	return m.hasActivePanel() ||
 		m.tmuxMenuOpen ||
@@ -33,11 +18,9 @@ func anyPanelOpen(m Model) bool {
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
-	// During startup input drain, suppress all keyboard input.
-	// This prevents terminal responses (OSC 11, CPR, Kitty mode report)
-	// from appearing as garbage in the text input field.
+
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
-		// Don't log dropped keypresses during input drain
+
 		return m, nil
 	}
 	if msg.String() != "ctrl+c" {
@@ -49,20 +32,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	if (msg.String() == "ctrl+c" || msg.String() == "esc") && m.hasActivePanel() {
 		m.resetCancelConfirm()
 	}
-	// Don't log every keypress — extremely noisy
+
 	if m.tmuxMenuOpen {
 		return m.handleTmuxMenuKey(msg.String())
 	}
-	// Alt+R reverse input history search (Claude Code v2.0-style; Ctrl+R is
-	// the sidebar toggle here). While the search mode is active it owns the
-	// composer: printable keys refine the query, Enter falls through to the
-	// normal submission path, Esc cancels.
+
 	if m.historySearch.active {
 		handled, m2, cmd := m.handleHistorySearchKey(msg)
 		if handled {
 			return m2, cmd
 		}
-		m = m2 // search mode exited keeping the match; key flows through below
+		m = m2
 	} else if msg.String() == "alt+r" {
 		m.beginHistorySearch()
 		return m, nil
@@ -90,10 +70,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// sa-86: alt+e toggles second-level disclosure on the most recent
-	// tool item (expand truncated bodies - "… N more lines"). alt+e is
-	// chosen over ctrl+e because the textarea reserves ctrl+e for
-	// end-of-line cursor movement.
 	if msg.String() == "alt+e" {
 		if m.chatList.ToggleLastExpandable() {
 			m.chatListFollowOutput()
@@ -101,7 +77,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Ctrl+O cycles output style (concise/detailed/socratic/default)
 	if msg.String() == "ctrl+o" {
 		style, ok := m.cycleOutputStyle()
 		if ok {
@@ -112,7 +87,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Iteration 1: Ctrl+\ toggles compact mode (hide/show sidebar)
 	if msg.String() == "ctrl+\\" {
 		m.compactMode = !m.compactMode
 		m.sidebarVisible = !m.compactMode
@@ -120,33 +94,25 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.relayoutAfterSidebarChange()
 		return m, nil
 	}
-	// Iteration 2: Alt+Up/Down to cycle sessions quickly
-	// #1772: these globals sit BEFORE the panel dispatch - a session
-	// switch under an open settings/todo/mcp/cron panel left the panel
-	// alive on the NEW session, showing and editing the OLD one's data.
-	// Guard the cycle keys the same way the panel dispatch below takes
-	// precedence over everything else.
+
 	if anyPanelOpen(m) {
-		// fall through to the panel handlers below
+
 	} else if msg.String() == "alt+up" || msg.String() == "alt+k" {
 		return m, m.cycleSession(-1)
 	} else if msg.String() == "alt+down" || msg.String() == "alt+j" {
 		return m, m.cycleSession(1)
 	}
-	// Iteration 3: Ctrl+Shift+C copies last assistant response to clipboard
+
 	if msg.String() == "ctrl+shift+c" {
 		m.copyLastAssistantResponse()
 		return m, nil
 	}
-	// Ctrl+L clears the screen (starts a new session), matching universal
-	// terminal convention. Equivalent to /clear.
+
 	if msg.String() == "ctrl+l" {
 		m.handleClearChat()
 		return m, nil
 	}
-	// Ctrl+C: if sub-agent follow panel is open, close it (same as Esc).
-	// This prevents Ctrl+C from穿透ing to the exit-confirm path when the
-	// user just wants to exit the follow panel.
+
 	if msg.String() == "ctrl+c" && m.subAgentFollow.isActive() {
 		m.subAgentFollow.deactivate()
 		return m, nil
@@ -156,13 +122,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Toggle config save scope (global ↔ instance) in any panel.
 	if msg.String() == "ctrl+t" {
 		_ = m.toggleConfigSaveScope()
 		return m, nil
 	}
 
-	// Handle approval mode (selection list)
 	if m.modelPanel != nil {
 		return m.handleModelPanelKey(msg)
 	}
@@ -171,7 +135,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handleProviderPanelKey(msg)
 	}
 
-	// QR overlay takes priority over all IM panels — Esc/q returns to the panel behind it.
 	if m.qrOverlay != nil {
 		return m.handleQROverlayKey(msg)
 	}
@@ -357,7 +320,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Handle approval mode (selection list)
 	if m.pendingApproval != nil {
 		switch msg.String() {
 		case "up", "k":
@@ -390,7 +352,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Handle diff confirmation mode (selection list)
 	if m.pendingDiffConfirm != nil {
 		switch msg.String() {
 		case "up", "k":
@@ -418,8 +379,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Esc priority: exit shell/chat mode before canceling agent.
-	// When in shell or chat mode, Esc should exit the mode, not interrupt the agent.
 	if msg.String() == "esc" && (m.shellMode || m.chatMode) {
 		if m.autoCompleteActive {
 			m.autoCompleteActive = false
@@ -450,7 +409,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	switch msg.String() {
 	case "ctrl+n":
-		// Follow mode: toggle panel on/off
+
 		if len(m.subAgentFollow.slots) > 0 {
 			if m.subAgentFollow.isActive() {
 				m.subAgentFollow.deactivate()
@@ -461,7 +420,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "ctrl+p":
-		// Removed: use arrow keys to navigate in follow mode
+
 	case "$", "!":
 		if !m.shellMode && !m.chatMode && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 			m.setShellMode(true)
@@ -487,18 +446,14 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.promptExitConfirm()
 		return m, nil
 	case "ctrl+v", "ctrl+shift+v":
-		// Clipboard image paste.
-		// Ctrl+V works on macOS/Linux but is intercepted by most Windows terminals.
-		// Ctrl+Shift+V works on Windows terminals that intercept Ctrl+V.
+
 		return m, m.handleClipboardPaste()
 	case "ctrl+backspace", "ctrl+h":
-		// Remove the last attached image (if any).
-		// Ctrl+Backspace on many terminals (especially Windows Terminal)
-		// sends \x08 which Bubble Tea interprets as ctrl+h, so handle both.
+
 		if _, ok := m.popPendingImage(); ok {
 			return m, nil
 		}
-		// No images: fall through to normal backspace behavior
+
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, combineCmds(spinnerCmd, cmd)
@@ -524,7 +479,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 
 	case "up":
-		// Follow mode: navigate to previous slot
+
 		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
 			currentIdx := m.subAgentFollow.currentSlotIndex()
 			if currentIdx > 0 {
@@ -543,7 +498,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		return m.handleHistoryUp()
 	case "down":
-		// Follow mode: navigate to next slot
+
 		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
 			currentIdx := m.subAgentFollow.currentSlotIndex()
 			if currentIdx < len(m.subAgentFollow.slots)-1 {
@@ -562,7 +517,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		return m.handleHistoryDown()
 	case "left":
-		// Follow mode: navigate to previous slot (same as up)
+
 		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
 			currentIdx := m.subAgentFollow.currentSlotIndex()
 			if currentIdx > 0 {
@@ -574,7 +529,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "right":
-		// Follow mode: navigate to next slot (same as down)
+
 		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
 			currentIdx := m.subAgentFollow.currentSlotIndex()
 			if currentIdx < len(m.subAgentFollow.slots)-1 {
@@ -594,32 +549,31 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "esc":
-		// Esc+Esc rewind: if two Esc presses within 500ms and no pending prompts,
-		// trigger /undo (checkpoint rollback). This matches Claude Code's signature shortcut.
+
 		now := time.Now()
 		if !m.exitConfirmPending && !m.cancelConfirmPending &&
 			!m.autoCompleteActive &&
 			!m.subAgentFollow.isActive() && !m.loading && !m.shellMode && !m.chatMode {
 			if !m.lastEscPress.IsZero() && now.Sub(m.lastEscPress) < 500*time.Millisecond {
-				m.lastEscPress = time.Time{} // reset
+				m.lastEscPress = time.Time{}
 				m.chatWriteSystem(nextSystemID(), m.t("rewind.activated"))
 				m.chatListScrollToBottom()
 				return m, m.handleUndoCommand()
 			}
 			m.lastEscPress = now
-			// Clear input on first Esc (like vim normal mode entry)
+
 			if strings.TrimSpace(m.input.Value()) != "" {
 				m.input.Reset()
 				return m, nil
 			}
 			return m, nil
 		}
-		// Dismiss exit confirmation prompt first (highest priority).
+
 		if m.exitConfirmPending {
 			m.resetExitConfirm()
 			return m, nil
 		}
-		// Dismiss cancel confirmation prompt.
+
 		if m.cancelConfirmPending {
 			m.resetCancelConfirm()
 			return m, nil
@@ -629,7 +583,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			m.autoCompleteItems = nil
 			return m, nil
 		}
-		// Sub-agent follow mode: Esc exits follow
+
 		if m.subAgentFollow.isActive() {
 			m.subAgentFollow.deactivate()
 			return m, nil
@@ -641,9 +595,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.resetExitConfirm()
 		text := strings.TrimSpace(m.input.Value())
 		m.input.Reset()
-		// Clear all autocomplete/hint state so they don't linger after submit.
-		// This fixes the bug where subcommand hints (e.g. "<subcommand>") stay
-		// visible below the input after submitting a command.
+
 		m.autoCompleteActive = false
 		m.autoCompleteItems = nil
 		m.autoCompleteIndex = 0
@@ -657,7 +609,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, m.submitShellCommand(text, true)
 		}
 		if m.chatMode {
-			// Chat mode: send message but STAY in mode (unlike shell mode)
+
 			m.submitChatMessage(text)
 			return m, nil
 		}
@@ -673,59 +625,43 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		return m, m.submitText(text, true)
 	case "shift+enter", "ctrl+j", "alt+enter":
-		// Insert newline into textarea.
-		// Shift+Enter works in terminals with Kitty keyboard protocol support
-		// (iTerm2, Kitty, WezTerm, Ghostty outside tmux).
-		// Ctrl+J and Alt+Enter are fallbacks that work inside tmux, which
-		// strips the shift modifier and sends \r for both Enter and Shift+Enter.
-		// Use InsertRune('\n') instead of manual string splicing + SetValue
-		// so that the textarea's internal cursor/row/col state stays correct.
-		// SetValue resets the cursor to the end, causing visual glitches.
+
 		m.input.InsertRune('\n')
 		m.updateAutoComplete()
 		return m, nil
 
-	// Readline-style editing shortcuts.
-	// These match standard terminal/shell conventions (bash, zsh, emacs).
 	case "ctrl+a":
-		// Move cursor to start of line
+
 		m.input.CursorStart()
-		// #2149: the readline shortcuts mutate the line/cursor but used to
-		// return WITHOUT recalculating the completion state - a mention
-		// completion stayed "active" with a cursor no longer on any '@'
-		// token, and the next Enter applied it into value[:-1] (TUI panic).
+
 		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+e":
-		// Move cursor to end of line
+
 		m.input.CursorEnd()
-		// #2182: the #2149 enumeration missed this twin of ctrl+a -
-		// pure cursor movement still leaves a stale completion state
-		// that the next Enter applies (panic-guarded since 47741904,
-		// but a stale list still fires).
+
 		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+k":
-		// Delete from cursor to end of line
+
 		deleteFromCursorToEnd(&m.input)
 		m.inputHint = ""
-		m.updateAutoComplete() // #2149: no stale completion state
+		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+u":
-		// Delete from start of line to cursor
+
 		deleteFromLineStartToCursor(&m.input)
 		m.inputHint = ""
-		m.updateAutoComplete() // #2149: no stale completion state
+		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+w":
-		// Delete the word before cursor
+
 		deleteWordBeforeCursor(&m.input)
 		m.inputHint = ""
-		m.updateAutoComplete() // #2149: no stale completion state
+		m.updateAutoComplete()
 		return m, nil
 	}
 
-	// Forward unmatched keys to text input (was the catchall in original Update)
 	oldValue := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -738,12 +674,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 }
 
-// ---------------------------------------------------------------------------
-// Readline-style textarea helpers
-// ---------------------------------------------------------------------------
-
-// deleteFromCursorToEnd deletes from the cursor position to the end of the
-// current line (Ctrl+K behavior).
 func deleteFromCursorToEnd(ta *textarea.Model) {
 	line := ta.Line()
 	col := ta.Column()
@@ -759,8 +689,6 @@ func deleteFromCursorToEnd(ta *textarea.Model) {
 	setValueAtCursor(ta, strings.Join(lines, "\n"), line, col)
 }
 
-// deleteFromLineStartToCursor deletes from the start of the current line to
-// the cursor position (Ctrl+U behavior).
 func deleteFromLineStartToCursor(ta *textarea.Model) {
 	line := ta.Line()
 	col := ta.Column()
@@ -779,9 +707,6 @@ func deleteFromLineStartToCursor(ta *textarea.Model) {
 	setValueAtCursor(ta, strings.Join(lines, "\n"), line, 0)
 }
 
-// deleteWordBeforeCursor deletes the word before the cursor (Ctrl+W behavior).
-// Matches bash/zsh backward-kill-word: deletes trailing whitespace, the word,
-// and any preceding whitespace between the word and the previous word.
 func deleteWordBeforeCursor(ta *textarea.Model) {
 	val := ta.Value()
 	lines := strings.Split(val, "\n")
@@ -798,15 +723,15 @@ func deleteWordBeforeCursor(ta *textarea.Model) {
 		return
 	}
 	pos := col
-	// Skip trailing whitespace before cursor
+
 	for pos > 0 && (currentLine[pos-1] == ' ' || currentLine[pos-1] == '\t') {
 		pos--
 	}
-	// Skip word characters
+
 	for pos > 0 && currentLine[pos-1] != ' ' && currentLine[pos-1] != '\t' {
 		pos--
 	}
-	// Skip preceding whitespace between this word and the previous word
+
 	for pos > 0 && (currentLine[pos-1] == ' ' || currentLine[pos-1] == '\t') {
 		pos--
 	}
@@ -814,13 +739,9 @@ func deleteWordBeforeCursor(ta *textarea.Model) {
 	setValueAtCursor(ta, strings.Join(lines, "\n"), line, pos)
 }
 
-// setValueAtCursor sets the textarea value and restores the cursor to the
-// given (row, col). textarea.SetValue resets the cursor to the end of the
-// text, so we navigate back to the desired position after setting the value.
 func setValueAtCursor(ta *textarea.Model, value string, row, col int) {
 	ta.SetValue(value)
-	// After SetValue, cursor is at the end of the last line.
-	// Navigate up to the target row, then set the column.
+
 	numLines := strings.Count(value, "\n")
 	for i := numLines; i > row; i-- {
 		ta.CursorUp()
@@ -828,7 +749,6 @@ func setValueAtCursor(ta *textarea.Model, value string, row, col int) {
 	ta.SetCursorColumn(col)
 }
 
-// handleInitPromptKey handles keyboard input for the startup "Create AGENTS.md?" prompt.
 func (m Model) handleInitPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":

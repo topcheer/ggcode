@@ -54,7 +54,7 @@ func TestExperienceRecordAndRetrieve(t *testing.T) {
 	if scored[0].Task != "fix flaky login test in auth package" {
 		t.Fatalf("top match = %q, want the auth case", scored[0].Task)
 	}
-	// The unrelated payments case must not outrank the auth case.
+
 	if len(scored) > 1 && scored[1].Score >= scored[0].Score {
 		t.Fatalf("scoring not discriminative: %v", scored)
 	}
@@ -113,15 +113,9 @@ func TestExperienceCapEvictsOldest(t *testing.T) {
 	}
 }
 
-// TestExperienceCapEvictsByUpdatedNotCreated (#3873): Record's
-// reconsolidation preserves Created and refreshes Updated. An early case
-// that is still being strengthened therefore has the oldest Created but the
-// freshest knowledge — eviction must key on Updated or the store discards
-// exactly the cases it exists to keep.
 func TestExperienceCapEvictsByUpdatedNotCreated(t *testing.T) {
 	es := newTestExperienceStore(t)
-	// Fill the store to the cap with distinct tasks; remember task0's ID
-	// (oldest Created) and task1's ID (second-oldest, never refreshed).
+
 	task0 := "cap-evict-probe task zero anchor"
 	task1 := "cap-evict-probe task one stale"
 	id0, updated, err := es.Record(task0, "approach", "success", nil)
@@ -132,8 +126,7 @@ func TestExperienceCapEvictsByUpdatedNotCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Record task1: %v", err)
 	}
-	// Timestamps persist at RFC3339 (second) granularity; space the phases
-	// so Updated strictly distinguishes stale filler from refreshed anchor.
+
 	time.Sleep(1100 * time.Millisecond)
 	for i := 2; i < MaxExperienceCases; i++ {
 		if _, _, err := es.Record(fmt.Sprintf("cap-evict-probe task filler %02d", i), "approach", "success", nil); err != nil {
@@ -141,14 +134,11 @@ func TestExperienceCapEvictsByUpdatedNotCreated(t *testing.T) {
 		}
 	}
 	time.Sleep(1100 * time.Millisecond)
-	// Strengthen task0: re-record refreshes Updated while Created stays
-	// the oldest in the store (reconsolidation, HMA semantics).
+
 	if _, updated, err := es.Record(task0, "approach refreshed", "success", nil); err != nil || !updated {
 		t.Fatalf("re-Record task0: err=%v updated=%v", err, updated)
 	}
-	// One more case pushes past the cap: exactly one eviction, and it must
-	// be the stale-Updated case (task1), not the old-Created-but-fresh
-	// task0.
+
 	if _, _, err := es.Record("cap-evict-probe task overflow new", "approach", "success", nil); err != nil {
 		t.Fatalf("Record overflow: %v", err)
 	}
@@ -199,7 +189,6 @@ func TestExperienceRoundTripPersistsFields(t *testing.T) {
 		t.Fatalf("Record failed: %v", err)
 	}
 
-	// Fresh store instance over the same dir (simulates a new session).
 	es2 := NewExperienceStore(es.Dir())
 	cases, err := es2.List()
 	if err != nil {
@@ -236,11 +225,10 @@ func TestExperienceRecordValidation(t *testing.T) {
 		t.Fatalf("outcome coercion failed: %+v", cases)
 	}
 
-	// Disabled store (empty dir) rejects Record.
 	if _, _, err := (&ExperienceStore{}).Record("t", "a", "success", nil); err == nil {
 		t.Fatalf("disabled store should reject Record")
 	}
-	// And Retrieve/List/FormatIndex are safe no-ops.
+
 	if got := (&ExperienceStore{}).FormatIndex("q", 3); got != "" {
 		t.Fatalf("disabled store should format nothing")
 	}

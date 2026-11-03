@@ -13,7 +13,7 @@ import (
 
 type skillsPanelState struct {
 	page   int
-	cursor int // index within current page
+	cursor int
 }
 
 const skillsPerPage = 10
@@ -27,28 +27,26 @@ func (m *Model) closeSkillsPanel() {
 	m.skillsPanel = nil
 }
 
-// summarizeDescription returns a concise one-line summary of a skill description.
-// If the description is too long or unparseable into a short summary, returns empty string.
 func summarizeDescription(desc string) string {
 	desc = strings.TrimSpace(desc)
 	if desc == "" {
 		return ""
 	}
-	// Take only the first line
+
 	if idx := strings.IndexByte(desc, '\n'); idx >= 0 {
 		desc = desc[:idx]
 	}
-	// Take only the first sentence
+
 	if idx := strings.IndexByte(desc, '.'); idx >= 0 && idx < len(desc)-1 {
 		desc = desc[:idx+1]
 	}
 	desc = strings.TrimSpace(desc)
-	// If still too long (>80 chars), don't show it
+
 	if runes := []rune(desc); len(runes) > 80 {
-		// Try to truncate at last space before 80 runes
+
 		truncStr := string(runes[:80])
 		if byteIdx := strings.LastIndexByte(truncStr, ' '); byteIdx > 40 {
-			// byteIdx is a byte offset in truncStr; convert to rune count
+
 			runeIdx := utf8.RuneCountInString(truncStr[:byteIdx])
 			desc = string(runes[:runeIdx]) + "..."
 		} else {
@@ -106,7 +104,7 @@ func (m Model) renderSkillsPanel() string {
 
 	cursorIdx := m.skillsPanel.cursor
 	var body []string
-	flatIdx := 0 // track index within page for cursor
+	flatIdx := 0
 	for _, title := range []string{"Bundled skills", "Project skills", "User skills", "Plugin skills", "MCP skills", "Legacy commands"} {
 		group := groups[title]
 		if len(group) == 0 {
@@ -123,15 +121,15 @@ func (m Model) renderSkillsPanel() string {
 			name := skill.Name
 			var line string
 			if skill.IsBuiltin() {
-				// Builtin: always on, not toggleable
+
 				line = fmt.Sprintf("%s● %s", prefix, name)
 			} else {
-				// Toggleable skill
+
 				status := "✓"
-				statusColor := lipgloss.Color("2") // green
+				statusColor := lipgloss.Color("2")
 				if !skill.Enabled {
 					status = "✗"
-					statusColor = lipgloss.Color("1") // red
+					statusColor = lipgloss.Color("1")
 				}
 				statusLabel := lipgloss.NewStyle().Foreground(statusColor).Render(status)
 				if !skill.Enabled {
@@ -141,7 +139,6 @@ func (m Model) renderSkillsPanel() string {
 			}
 			body = append(body, line)
 
-			// Concise description (only if available and skill is enabled)
 			if desc := summarizeDescription(skill.Description); desc != "" && skill.Enabled {
 				body = append(body, fmt.Sprintf("    %s", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(desc)))
 			}
@@ -151,7 +148,6 @@ func (m Model) renderSkillsPanel() string {
 		body = append(body, "")
 	}
 
-	// Footer with navigation hints
 	hints := []string{"←/→ page", "↑/↓ select", "Space toggle", "d toggle all", "Esc close"}
 	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
 		fmt.Sprintf(" %s  ·  %d/%d", strings.Join(hints, " · "), page+1, pageCount),
@@ -192,12 +188,12 @@ func (m *Model) handleSkillsPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 	case " ", "space":
-		// Toggle enabled/disabled for selected skill
+
 		if m.skillsPanel != nil {
 			m.toggleSelectedSkill()
 		}
 	case "d":
-		// Toggle all non-builtin skills
+
 		if m.skillsPanel != nil {
 			m.toggleAllNonBuiltinSkills()
 		}
@@ -207,9 +203,6 @@ func (m *Model) handleSkillsPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// groupedSkillsFlat returns the page skills flattened in RENDER order
-// (Bundled, Project, User, Plugin, MCP, Legacy), the single source shared
-// by the panel highlight loop and toggleSelectedSkill (#911).
 func groupedSkillsFlat(pageSkills []*commands.Command) []*commands.Command {
 	groups := map[string][]*commands.Command{
 		"Bundled skills": {}, "Project skills": {}, "User skills": {},
@@ -238,15 +231,11 @@ func groupedSkillsFlat(pageSkills []*commands.Command) []*commands.Command {
 	return flat
 }
 
-// toggleSelectedSkill toggles the Enabled state of the currently selected skill.
-// Builtin skills cannot be disabled.
 func (m *Model) toggleSelectedSkill() {
 	if m.skillsPanel == nil || m.commandMgr == nil {
 		return
 	}
-	// #911: the cursor indexes the RENDER order (grouped), but this used
-	// to index m.listSkills() directly (usage-score order) - the toggle
-	// flipped the WRONG skill. Build the same grouped flat list.
+
 	skills := m.listSkills()
 	pageCount := skillsPageCount(len(skills))
 	page := clampSkillsPage(m.skillsPanel.page, pageCount)
@@ -261,15 +250,13 @@ func (m *Model) toggleSelectedSkill() {
 	}
 	skill := flat[m.skillsPanel.cursor]
 	if skill.IsBuiltin() {
-		return // cannot disable builtin skills
+		return
 	}
 	skill.Enabled = !skill.Enabled
 	m.commandMgr.SetEnabled(skill.Name, skill.Enabled)
 	m.rebuildSystemPrompt()
 }
 
-// toggleAllNonBuiltinSkills toggles all non-builtin skills.
-// If any non-builtin is enabled, disables all. If all are disabled, enables all.
 func (m *Model) toggleAllNonBuiltinSkills() {
 	if m.commandMgr == nil {
 		return
@@ -289,11 +276,7 @@ func (m *Model) toggleAllNonBuiltinSkills() {
 		s.Enabled = !anyEnabled
 		m.commandMgr.SetEnabled(s.Name, s.Enabled)
 	}
-	// #1392-A: the system prompt is a snapshot cached in the context
-	// (agent.UpdateSystemPrompt swaps the first system message) - the
-	// single-toggle path calls rebuildSystemPrompt but this bulk path
-	// never did, so 'D' left every disabled skill's description in the
-	// prompt until a single toggle or a session restart.
+
 	m.rebuildSystemPrompt()
 }
 

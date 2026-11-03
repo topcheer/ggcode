@@ -10,7 +10,6 @@ func TestTemplateStore_CRUD(t *testing.T) {
 	dir := t.TempDir()
 	s := &TemplateStore{dir: dir}
 
-	// Save
 	tmpl := NamedAgentTemplate{
 		Name:         "code-reviewer",
 		Description:  "Reviews code for bugs",
@@ -22,7 +21,6 @@ func TestTemplateStore_CRUD(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Load
 	loaded, err := s.Load("code-reviewer")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -37,7 +35,6 @@ func TestTemplateStore_CRUD(t *testing.T) {
 		t.Error("CreatedAt should be set")
 	}
 
-	// List
 	list, err := s.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -46,7 +43,6 @@ func TestTemplateStore_CRUD(t *testing.T) {
 		t.Fatalf("len = %d", len(list))
 	}
 
-	// Update (save again with same name)
 	tmpl.SystemPrompt = "Updated prompt"
 	if err := s.Save(tmpl); err != nil {
 		t.Fatalf("Save update: %v", err)
@@ -59,16 +55,13 @@ func TestTemplateStore_CRUD(t *testing.T) {
 		t.Error("UpdatedAt should be >= CreatedAt")
 	}
 
-	// List still 1 (updated in place)
 	list, _ = s.List()
 	if len(list) != 1 {
 		t.Errorf("after update len = %d", len(list))
 	}
 
-	// Add second
 	s.Save(NamedAgentTemplate{Name: "test-writer", Description: "d", SystemPrompt: "p"})
 
-	// List sorted
 	list, _ = s.List()
 	if len(list) != 2 {
 		t.Fatalf("len = %d", len(list))
@@ -77,7 +70,6 @@ func TestTemplateStore_CRUD(t *testing.T) {
 		t.Errorf("first = %q", list[0].Name)
 	}
 
-	// Delete
 	if err := s.Delete("code-reviewer"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -102,12 +94,12 @@ func TestSanitizeName(t *testing.T) {
 }
 
 func TestNewTemplateStore_Path(t *testing.T) {
-	// Just verify it doesn't panic and produces a path with "subagents"
+
 	s := NewTemplateStore("/tmp/some-workspace")
 	if s.dir == "" {
 		t.Error("dir should not be empty")
 	}
-	// Verify hash is deterministic
+
 	s2 := NewTemplateStore("/tmp/some-workspace")
 	if s.dir != s2.dir {
 		t.Error("same workspace should produce same dir")
@@ -123,9 +115,6 @@ func TestSha256Hash(t *testing.T) {
 	}
 }
 
-// TestTemplateStore_NameCollision verifies that saving a template whose
-// name sanitizes to an existing different template's filename is refused
-// instead of silently overwriting it (#230).
 func TestTemplateStore_NameCollision(t *testing.T) {
 	dir := t.TempDir()
 	store := NewTemplateStore(dir)
@@ -135,13 +124,11 @@ func TestTemplateStore_NameCollision(t *testing.T) {
 		t.Fatalf("save first: %v", err)
 	}
 
-	// "code_reviewer" sanitizes to the same file as "Code Reviewer".
 	b := NamedAgentTemplate{Name: "code_reviewer", Description: "second", SystemPrompt: "p2"}
 	if err := store.Save(b); err == nil {
 		t.Fatal("expected collision error, got nil (silent overwrite)")
 	}
 
-	// Original must be intact.
 	got, err := store.Load("Code Reviewer")
 	if err != nil {
 		t.Fatalf("load original: %v", err)
@@ -150,12 +137,10 @@ func TestTemplateStore_NameCollision(t *testing.T) {
 		t.Errorf("original overwritten: prompt=%q", got.SystemPrompt)
 	}
 
-	// Load of the colliding name must not return the other template.
 	if _, err := store.Load("code_reviewer"); err == nil {
 		t.Error("loading colliding name should error, not return the wrong template")
 	}
 
-	// Same-name update still works and preserves CreatedAt.
 	a.SystemPrompt = "p1-updated"
 	if err := store.Save(a); err != nil {
 		t.Fatalf("legit update: %v", err)
@@ -166,8 +151,6 @@ func TestTemplateStore_NameCollision(t *testing.T) {
 	}
 }
 
-// TestSaveCaseRenameNotCollision verifies that renaming a template with only
-// case/whitespace differences is treated as an update, not a collision (#280).
 func TestSaveCaseRenameNotCollision(t *testing.T) {
 	dir := t.TempDir()
 	ts := &TemplateStore{dir: dir}
@@ -175,21 +158,18 @@ func TestSaveCaseRenameNotCollision(t *testing.T) {
 	if err := ts.Save(*orig); err != nil {
 		t.Fatal(err)
 	}
-	// Same template, case-renamed: must succeed (previously a collision error).
+
 	renamed := &NamedAgentTemplate{Name: "  Code Reviewer  ", Description: "d2"}
 	if err := ts.Save(*renamed); err != nil {
 		t.Fatalf("case-only rename should update, got: %v", err)
 	}
-	// A genuinely different name mapping to the same file must still collide.
+
 	other := &NamedAgentTemplate{Name: "code/reviewer", Description: "x"}
 	if err := ts.Save(*other); err == nil {
 		t.Fatal("different name with same sanitized filename must collide")
 	}
 }
 
-// #1633 case 4: Delete must use the same normalized comparison as
-// Save/Load - deleting with different casing/whitespace than the stored
-// name used to be refused ("belongs to" error) while Load accepted it.
 func TestTemplateStore_DeleteNormalized(t *testing.T) {
 	dir := t.TempDir()
 	s := &TemplateStore{dir: dir}

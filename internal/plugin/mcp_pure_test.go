@@ -38,22 +38,22 @@ func TestDecorateContextError(t *testing.T) {
 }
 
 func TestExtractPromptText(t *testing.T) {
-	// Single text
+
 	got := extractPromptText(json.RawMessage(`{"type":"text","text":"hello"}`))
 	if got != "hello" {
 		t.Errorf("expected 'hello', got %q", got)
 	}
-	// List
+
 	got = extractPromptText(json.RawMessage(`[{"type":"text","text":"line1"},{"type":"text","text":"line2"}]`))
 	if got != "line1\nline2" {
 		t.Errorf("expected 'line1\\nline2', got %q", got)
 	}
-	// Invalid
+
 	got = extractPromptText(json.RawMessage(`invalid`))
 	if got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
-	// Empty
+
 	got = extractPromptText(nil)
 	if got != "" {
 		t.Errorf("expected empty, got %q", got)

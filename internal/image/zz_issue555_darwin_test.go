@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// Bug B (#555): ListDisplays previously reused the GPU-unit index, so a
-// single GPU driving two monitors reported both as Index:1 IsPrimary:true,
-// and X/Y were never populated.
-
 const issue555SPDisplaysSample = `{
   "SPDisplaysDataType" : [
     {
@@ -49,11 +45,11 @@ func TestIssue555ParseSPDisplaysRenumbersAcrossGPUs(t *testing.T) {
 	if len(displays) != 2 {
 		t.Fatalf("got %d displays, want 2", len(displays))
 	}
-	// Output units must be renumbered 1..N, not GPU-indexed.
+
 	if displays[0].Index != 1 || displays[1].Index != 2 {
 		t.Errorf("Indexes = %d,%d; want 1,2", displays[0].Index, displays[1].Index)
 	}
-	// Exactly one primary, and it is the spdisplays_main entry.
+
 	primaries := 0
 	for _, d := range displays {
 		if d.IsPrimary {
@@ -69,15 +65,14 @@ func TestIssue555ParseSPDisplaysRenumbersAcrossGPUs(t *testing.T) {
 	if displays[0].Width != 2560 || displays[0].Height != 1440 {
 		t.Errorf("primary dims = %dx%d; want 2560x1440", displays[0].Width, displays[0].Height)
 	}
-	// X/Y from _spdisplays_display-vsa, including negative origins.
+
 	if displays[1].X != 2560 || displays[1].Y != -1440 {
 		t.Errorf("secondary origin = %d,%d; want 2560,-1440", displays[1].X, displays[1].Y)
 	}
 }
 
 func TestIssue555ParseSPDisplaysSingleGPUDualMonitors(t *testing.T) {
-	// The exact configuration from the issue: one GPU entry, two displays.
-	// Old code: both Index:1, both IsPrimary:true.
+
 	sample := `{"SPDisplaysDataType":[{"_name":"GPU","spdisplays_ndrvs":[
 		{"_name":"A","_spdisplays_resolution":"1920 x 1080 @ 60.00Hz"},
 		{"_name":"B","_spdisplays_resolution":"1920 x 1080 @ 60.00Hz"}
@@ -92,8 +87,7 @@ func TestIssue555ParseSPDisplaysSingleGPUDualMonitors(t *testing.T) {
 	if displays[0].Index != 1 || displays[1].Index != 2 {
 		t.Errorf("Indexes = %d,%d; want distinct 1,2", displays[0].Index, displays[1].Index)
 	}
-	// No spdisplays_main field: first display is the fallback primary, and
-	// only that one.
+
 	if displays[0].IsPrimary == displays[1].IsPrimary {
 		t.Errorf("IsPrimary = %v,%v; want exactly the first true", displays[0].IsPrimary, displays[1].IsPrimary)
 	}

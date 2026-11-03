@@ -7,13 +7,10 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// r456: priority-aware claiming + starvation detection probes.
-
 func mkTask(id, priority string, created time.Time) task.Task {
 	return task.Task{ID: id, Subject: id, Metadata: map[string]string{"priority": priority}, CreatedAt: created}
 }
 
-// Priority metadata ranks: high > medium/unknown > low.
 func TestEffectivePriority_Ranking(t *testing.T) {
 	now := time.Now()
 	high := effectivePriority(mkTask("h", "high", now), now)
@@ -28,7 +25,6 @@ func TestEffectivePriority_Ranking(t *testing.T) {
 	}
 }
 
-// Aging lets an old low task outrank a fresh medium task (~bounded).
 func TestEffectivePriority_Aging(t *testing.T) {
 	now := time.Now()
 	oldLow := effectivePriority(mkTask("ol", "low", now.Add(-60*time.Minute)), now)
@@ -36,19 +32,18 @@ func TestEffectivePriority_Aging(t *testing.T) {
 	if oldLow <= freshMed {
 		t.Fatalf("60min-old low (%d) must outrank fresh medium (%d)", oldLow, freshMed)
 	}
-	// But a fresh high still beats a 10min-old medium.
+
 	freshHigh := effectivePriority(mkTask("fh", "high", now), now)
 	slightlyAgedMed := effectivePriority(mkTask("sm", "medium", now.Add(-10*time.Minute)), now)
 	if freshHigh <= slightlyAgedMed {
 		t.Fatalf("fresh high (%d) must beat 10min medium (%d)", freshHigh, slightlyAgedMed)
 	}
-	// Zero/negative clocks (defensive) yield no bonus.
+
 	if b := agingBonus(time.Time{}, now); b != 0 {
 		t.Fatalf("zero CreatedAt must yield 0 bonus, got %d", b)
 	}
 }
 
-// sortClaimable: high-first; ties stable (list order preserved).
 func TestSortClaimable_OrderAndStability(t *testing.T) {
 	now := time.Now()
 	ts := []task.Task{
@@ -69,7 +64,6 @@ func TestSortClaimable_OrderAndStability(t *testing.T) {
 	}
 }
 
-// No priority metadata anywhere: order unchanged (FIFO behavior preserved).
 func TestSortClaimable_NoMetadataIsFIFO(t *testing.T) {
 	now := time.Now()
 	ts := []task.Task{
@@ -85,23 +79,17 @@ func TestSortClaimable_NoMetadataIsFIFO(t *testing.T) {
 	}
 }
 
-// markStarved: fires once for an old claimable task, writes marker, and
-// the marker suppresses the second alert.
 func TestMarkStarved_OneShot(t *testing.T) {
 	old := starvationThreshold
-	starvationThreshold = time.Nanosecond // any task instantly "old"
+	starvationThreshold = time.Nanosecond
 	defer func() { starvationThreshold = old }()
 
-	tmMgr := task.NewManager() // in-memory board
+	tmMgr := task.NewManager()
 	tk := tmMgr.Create("old task", "waiting", "active", map[string]string{"priority": "low"})
-	// Age it: CreatedAt is set at creation; shrink the threshold above
-	// makes a fresh task old enough after we backdate via Update.
+
 	past := time.Now().Add(-2 * time.Minute).Format(time.RFC3339)
 	_ = past
 
-	// Backdate directly through the manager (task.Manager keeps CreatedAt
-	// at creation; simplest honest probe: threshold so small that even a
-	// fresh task is "old").
 	fresh := tmMgr.List()
 	if len(fresh) != 1 {
 		t.Fatalf("board must hold 1 task, got %d", len(fresh))
@@ -111,7 +99,7 @@ func TestMarkStarved_OneShot(t *testing.T) {
 	if !ok || got.Metadata[starvedSinceKey] == "" {
 		t.Fatal("first markStarved must write the marker")
 	}
-	// Second call must not rewrite (one-shot).
+
 	first := got.Metadata[starvedSinceKey]
 	time.Sleep(10 * time.Millisecond)
 	markStarved(tmMgr, got, time.Now())
@@ -121,7 +109,6 @@ func TestMarkStarved_OneShot(t *testing.T) {
 	}
 }
 
-// markStarved: young tasks are not marked.
 func TestMarkStarved_YoungTaskUntouched(t *testing.T) {
 	tmMgr := task.NewManager()
 	tk := tmMgr.Create("young", "fresh", "active", nil)

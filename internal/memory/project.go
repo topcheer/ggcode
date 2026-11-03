@@ -9,48 +9,30 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ProjectMemoryFilenames lists the supported project bootstrap documents in
-// priority order. Primary files (ggcode-native + cross-tool open standard) are
-// loaded first, followed by compatibility files from other AI coding tools.
 var ProjectMemoryFilenames = []string{
-	// Primary
+
 	"GGCODE.md",
 	"AGENTS.md",
 	"CLAUDE.md",
 	"COPILOT.md",
-	// Cross-tool compatibility — loaded after primary so ggcode-native
-	// conventions take precedence.
+
 	".cursorrules",
 	".windsurfrules",
 	".clinerules",
 }
 
-// CompatibilitySubdirRules lists rules files stored in subdirectories (not the
-// project root). Each entry is a path relative to the project root.
 var CompatibilitySubdirRules = []string{
 	".github/copilot-instructions.md",
 }
 
 const DefaultProjectMemoryFilename = "AGENTS.md"
 
-// MaxInlineProjectMemoryChars caps how many RUNES of a single project memory
-// file may be inlined verbatim. Oversized files (r462: full flat injection
-// had no index tier) degrade to a path+preview index line; the model reads
-// the full file via read_file when relevant.
 const MaxInlineProjectMemoryChars = 2000
 
-// projectMemoryIndexPreviewLines is how many leading non-empty lines an
-// oversized file contributes to its index preview.
 const projectMemoryIndexPreviewLines = 5
 
-// projectMemoryIndexPreviewChars caps the preview text length in runes.
 const projectMemoryIndexPreviewChars = 300
 
-// LoadProjectMemory reads supported project bootstrap documents from the
-// global config dir (~/.ggcode/) and the current working directory only.
-// No parent directory traversal is performed — this prevents loading memory
-// from unrelated ancestor workspaces (e.g. modelmeta loading ggcode's memory
-// just because they share a parent directory).
 func LoadProjectMemory(workingDir string) (content string, files []string, err error) {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
@@ -61,10 +43,7 @@ func LoadProjectMemory(workingDir string) (content string, files []string, err e
 	if err != nil {
 		return content, files, err
 	}
-	// r354: deterministic convention-drift check — make targets and script
-	// paths claimed in fenced blocks are verified against the working dir;
-	// failures ride the same content channel so the agent (and user) sees
-	// that a claim has rotted instead of following it into a failure.
+
 	if drift := ScanConventionDrift(content, absDir); len(drift) > 0 {
 		content += "\n\n[convention-drift] WARNING: some build/test claims in the project memory files are stale:\n"
 		for _, d := range drift {
@@ -75,14 +54,10 @@ func LoadProjectMemory(workingDir string) (content string, files []string, err e
 	return content, files, nil
 }
 
-// currentDirProjectMemoryFiles returns project memory files that exist in the
-// given directory itself (no parent walk).
 func currentDirProjectMemoryFiles(dir string) []string {
 	return listProjectMemoryFiles(dir)
 }
 
-// ProjectMemoryFilesForPath returns the supported project memory files that
-// exist in the directory containing the given path (no parent walk).
 func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
@@ -99,21 +74,8 @@ func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	return append(globalProjectMemoryFiles(), listProjectMemoryFiles(dir)...), nil
 }
 
-// maxNestedDiscoveryDepth bounds the ancestor walk as a defensive guard
-// against pathological directory nesting.
 const maxNestedDiscoveryDepth = 64
 
-// NestedProjectMemoryFilesForPath implements AGENTS.md-style nested memory
-// discovery (https://agents.md): project memory files are collected from the
-// directory containing targetPath up to (and including) the nearest enclosing
-// repository root (a directory containing a .git entry). Files closer to the
-// target are returned LAST so that, when the list is read in order, the most
-// specific (deepest) conventions are applied after — and therefore take
-// precedence over — the repository-level ones. Global (~/.ggcode) files are
-// always prepended. When no repository boundary is found, this falls back to
-// the single-directory behavior of ProjectMemoryFilesForPath, preserving the
-// project-wide rule that memory is never loaded from unrelated ancestor
-// workspaces.
 func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
@@ -124,10 +86,6 @@ func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 		dir = filepath.Dir(absPath)
 	}
 
-	// #3880: collect layers, then reverse the LAYER order only (shallower
-	// = higher priority). The old flat reversal also inverted the order
-	// WITHIN each layer, contradicting the ProjectMemoryFilenames priority
-	// declaration (GGCODE before AGENTS before CLAUDE...) for every level.
 	var layers [][]string
 	inRepo := false
 	current := filepath.Clean(dir)
@@ -153,15 +111,11 @@ func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	return append(globalProjectMemoryFiles(), paths...), nil
 }
 
-// isRepositoryRoot reports whether dir is a repository root (contains a .git
-// entry — a directory for normal clones, a file for worktrees/submodules).
 func isRepositoryRoot(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil
 }
 
-// ReadProjectMemoryFiles reads project memory files in order and returns their
-// merged content plus the subset that had non-empty readable contents.
 func ReadProjectMemoryFiles(paths []string) (content string, files []string, err error) {
 	seen := make(map[string]bool)
 	for _, p := range paths {
@@ -182,10 +136,6 @@ func ReadProjectMemoryFiles(paths []string) (content string, files []string, err
 	return strings.TrimSpace(content), files, nil
 }
 
-// projectMemoryIndexLine renders the index-tier entry for an oversized
-// project memory file: path + rune-safe preview of the first non-empty
-// lines + explicit read_file instruction, mirroring the wording of
-// agentruntime's renderIndexMemories index tier.
 func projectMemoryIndexLine(path, data string) string {
 	var lines []string
 	for _, ln := range strings.Split(data, "\n") {
@@ -204,9 +154,6 @@ func projectMemoryIndexLine(path, data string) string {
 		path, len([]rune(data)), preview)
 }
 
-// truncateProjectMemoryRunes truncates s to at most n runes without ever
-// slicing a multi-byte UTF-8 sequence (#1155 CJK mojibake lesson; agent's
-// truncateRunes is unexported and memory must not import agent).
 func truncateProjectMemoryRunes(s string, n int) string {
 	runes := []rune(s)
 	if len(runes) <= n {
@@ -226,8 +173,6 @@ func readFileSafe(p string) (string, error) {
 	return string(data), nil
 }
 
-// ResolveProjectMemoryInitTarget returns the preferred file path for creating
-// a new project memory file in the current working directory.
 func ResolveProjectMemoryInitTarget(workingDir string) (targetPath string, existingFiles []string, err error) {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
@@ -256,7 +201,7 @@ func listProjectMemoryFiles(dir string) []string {
 			files = append(files, path)
 		}
 	}
-	// Check subdirectory compatibility rules (e.g. .github/copilot-instructions.md)
+
 	for _, rel := range CompatibilitySubdirRules {
 		path := filepath.Join(dir, rel)
 		if _, err := os.Stat(path); err == nil {
@@ -266,10 +211,6 @@ func listProjectMemoryFiles(dir string) []string {
 	return files
 }
 
-// BuildProjectMemoryHint constructs an index-based system prompt section from
-// project memory file paths. For files in the working directory, only the base
-// name is shown. For files outside the working directory (e.g. ~/.ggcode/),
-// the full absolute path is shown so the agent can locate them via read_file.
 func BuildProjectMemoryHint(files []string, workingDir string) string {
 	if len(files) == 0 {
 		return ""
@@ -279,12 +220,9 @@ func BuildProjectMemoryHint(files []string, workingDir string) string {
 	for _, f := range files {
 		var label string
 		if isOutsideWorkingDir(f, workingDir) {
-			label = f // full path for global files
+			label = f
 		} else {
-			// Inside the working dir: show the path relative to the working
-			// directory so nested (monorepo) memory files stay distinguishable
-			// from root-level ones (e.g. "packages/api/AGENTS.md") instead of
-			// collapsing into a single "AGENTS.md" label.
+
 			wd := workingDir
 			if wd == "" {
 				wd, _ = os.Getwd()
@@ -316,13 +254,6 @@ func BuildProjectMemoryHint(files []string, workingDir string) string {
 	return b.String()
 }
 
-// isOutsideWorkingDir returns true if the file path is not under the given
-// working directory. This is used to decide whether to show the full path
-// (for global files like ~/.ggcode/GGCODE.md) or just the base name.
-// #1593-C: the check used the PROCESS cwd - under ACP/desktop the process
-// cwd differs from the project dir, so the global memory file's rel path
-// did not start with ".." and was labeled by bare basename, leaving the
-// agent unable to locate it.
 func isOutsideWorkingDir(absPath, workingDir string) bool {
 	wd := workingDir
 	if wd == "" {
@@ -337,8 +268,6 @@ func isOutsideWorkingDir(absPath, workingDir string) bool {
 	if err != nil {
 		return true
 	}
-	// #3053-C2: only a true parent escape is outside - a legal same-level
-	// basename like "..foo.md" also HasPrefix("..") and used to lose its
-	// relative-path hint label.
+
 	return rel == ".." || strings.HasPrefix(rel, "../")
 }

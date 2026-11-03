@@ -8,14 +8,6 @@ import (
 	"testing"
 )
 
-// #3120 probe: two AutoMemory instances on the SAME dir (a parent agent
-// and a subagent in another runtime, or two ggcode processes on one
-// checkout) interleave RecordUse and SaveMemory+RecordProvenance. Before
-// the fix, RecordUse held only the in-process am.mu, so its
-// load-modify-save of .usage.json raced the locked save path's
-// RecordProvenance last-write-wins: use counts or provenance entries
-// silently vanished. The per-path file lock must serialize both.
-
 func newSidecarTestMemory(t *testing.T, dir string) *AutoMemory {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -27,7 +19,7 @@ func newSidecarTestMemory(t *testing.T, dir string) *AutoMemory {
 func TestIssue3120_RecordUseCrossInstanceNoLoss(t *testing.T) {
 	dir := t.TempDir()
 	a := newSidecarTestMemory(t, dir)
-	b := newSidecarTestMemory(t, dir) // same dir, independent am.mu
+	b := newSidecarTestMemory(t, dir)
 
 	var wg sync.WaitGroup
 	for w := 0; w < 4; w++ {
@@ -47,11 +39,6 @@ func TestIssue3120_RecordUseCrossInstanceNoLoss(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Both keys must survive. RecordUse's useOnce debounce is
-	// per-INSTANCE, so each instance contributes exactly 1 use for its
-	// key; the probe's power is EXISTENCE: last-write-wins interleaving
-	// (the #3120 bug) drops one instance's whole entry because each
-	// load-modify-save carried only its own writer's view.
 	idx := a.loadUsage()
 	if idx.Entries["alpha"] == nil {
 		t.Fatal("alpha entry lost to cross-instance last-write-wins (#3120 bug)")
@@ -77,8 +64,7 @@ func TestIssue3120_RecordUseVsProvenanceNoLoss(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 20; i++ {
-			// The real locked save path (SaveMemoryWithSource acquires the
-			// dir FileLock, then calls RecordProvenance inside it).
+
 			if err := sub.SaveMemoryWithSource("note-"+string(rune('a'+i)), "body", "test"); err != nil {
 				t.Errorf("save: %v", err)
 			}
@@ -99,8 +85,6 @@ func TestIssue3120_RecordUseVsProvenanceNoLoss(t *testing.T) {
 	}
 }
 
-// TestIssue3120_SidecarIsAtomicJSON pins the sidecar file is always valid
-// JSON even mid-race (atomic rename underneath the lock).
 func TestIssue3120_SidecarIsAtomicJSON(t *testing.T) {
 	dir := t.TempDir()
 	a := newSidecarTestMemory(t, dir)

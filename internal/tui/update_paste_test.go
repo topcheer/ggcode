@@ -8,11 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestPasteDroppedWhileSingleChoiceQuestionnaireActive pins #1775 case 1:
-// key presses are intercepted whenever a questionnaire is active, but
-// PasteMsg fell through to the (fully covered) main input - pasted text
-// haunted the NEXT message. A single-choice (non-freeform) questionnaire
-// must drop pastes the same way it swallows keys.
 func TestPasteDroppedWhileSingleChoiceQuestionnaireActive(t *testing.T) {
 	m := newTestModel()
 	respCh := make(chan tool.AskUserResponse, 1)
@@ -35,8 +30,6 @@ func TestPasteDroppedWhileSingleChoiceQuestionnaireActive(t *testing.T) {
 	}
 }
 
-// TestPasteDroppedWhileTmuxMenuOpen pins #1775 case 1's tmux sibling: the
-// menu intercepts keys; pastes must be dropped too, not forwarded beneath.
 func TestPasteDroppedWhileTmuxMenuOpen(t *testing.T) {
 	m := newTestModel()
 	m.tmuxMenuOpen = true

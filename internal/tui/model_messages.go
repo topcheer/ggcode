@@ -15,45 +15,35 @@ import (
 	"github.com/topcheer/ggcode/internal/update"
 )
 
-// verifyProgressMsg is sent during async verification (status updates).
 type verifyProgressMsg struct {
 	text string
 }
 
-// verifyResultMsg is sent when async verification completes.
 type verifyResultMsg struct {
 	result agent.VerifyResult
 }
 
-// toolProgressMsg is sent by streaming tools (e.g. wait_command) to update
-// the running tool's output in-place, creating a live scrolling effect.
 type toolProgressMsg struct {
 	toolID   string
 	toolName string
 	output   string
 }
 
-// streamMsg wraps a string from the agent goroutine.
 type streamMsg string
 
-// doneMsg signals generation is complete.
 type doneMsg struct{}
 
-// knightTaskEventMsg is sent by the Knight background agent to display
-// task start/complete notifications in the chat area as system messages.
 type knightTaskEventMsg struct {
 	TaskName string
-	Report   string // non-empty = completed, empty = started
+	Report   string
 	Duration time.Duration
 }
 
-// errMsg signals an error.
 type errMsg struct{ err error }
 
-// compactResultMsg is sent by /compact when summarization completes.
 type compactResultMsg struct {
-	text string // success message
-	err  string // error message (mutually exclusive with text)
+	text string
+	err  string
 }
 
 type sessionResumeLoadedMsg struct {
@@ -75,10 +65,9 @@ type sessionMetricMsg struct {
 	Metric metrics.MetricEvent
 }
 
-// initPromptCheckMsg carries the result of the startup AGENTS.md existence check.
 type initPromptCheckMsg struct {
 	needsInit bool
-	target    string // path to AGENTS.md that would be created
+	target    string
 }
 
 type projectMemoryLoadedMsg struct {
@@ -88,11 +77,9 @@ type projectMemoryLoadedMsg struct {
 }
 
 type subAgentUpdateMsg struct {
-	AgentID string // empty for general update
+	AgentID string
 }
 
-// subAgentSystemMsg carries a system event (retry, compaction) from a
-// sub-agent to the main panel for display as a system message.
 type subAgentSystemMsg struct {
 	AgentID string
 	Text    string
@@ -131,42 +118,30 @@ type swarmTunnelEventMsg struct {
 	Event swarm.Event
 }
 
-// subAgentDoneMsg is sent when a sub-agent or swarm teammate completes its task.
-// It triggers a system message in the chat and optionally wakes the main agent.
 type subAgentDoneMsg struct {
 	AgentID   string
 	AgentName string
 	IsError   bool
-	Kind      string // "subagent" or "teammate"
+	Kind      string
 }
 
 type subAgentFollowRefreshMsg struct{}
 type followGraceTickMsg struct{}
 
-// subAgentsCancelDoneMsg is sent when the async CancelAll() for sub-agents
-// and swarm teammates has completed. Until this arrives, handleSubAgentDoneMsg
-// suppresses starting a new agent run to avoid a race where a sub-agent
-// completes between the parent agent being cancelled and CancelAll() reaching it.
 type subAgentsCancelDoneMsg struct{}
 
-// systemNotifyMsg displays a provider system notification (e.g. retry status)
-// as a system message in the chat area.
-// When ItemID is non-empty and a system item with that ID already exists,
-// the text is appended to that item instead of creating a new one.
 type systemNotifyMsg struct {
 	Text    string
 	ItemID  string
-	Replace bool // if true, replace existing item text instead of appending (used by retry status)
+	Replace bool
 }
 
 type skillsChangedMsg struct{}
 
-// toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
 
-// statusMsg updates the status bar display.
 type statusMsg struct {
-	Activity  string // current activity description
+	Activity  string
 	ToolName  string
 	ToolArg   string
 	ToolCount int
@@ -182,9 +157,6 @@ type agentReasoningMsg struct {
 	Text  string
 }
 
-// agentTurnDoneMsg is sent at provider.StreamEventDone — the end of one
-// LLM turn (reasoning + text + tool calls all complete). NOT the end of
-// reasoning; reasoning ends when the first text/tool event arrives.
 type agentTurnDoneMsg struct{}
 
 type agentDoneMsg struct {
@@ -196,9 +168,6 @@ type agentErrMsg struct {
 	Err   error
 }
 
-// restorePendingImagesMsg returns attachments captured by a submit that
-// aborted before the agent started (#1393-A: ExpandMentions failure) -
-// without it the placeholder bubbles stayed while the images were gone.
 type restorePendingImagesMsg struct {
 	RunID  int
 	Images []imageAttachedMsg
@@ -209,8 +178,6 @@ type agentToolStatusMsg struct {
 	ToolStatusMsg
 }
 
-// agentToolBatchMsg delivers a batch of tool status + status bar updates
-// in a single message, reducing event-loop saturation from burst tool events.
 type agentToolBatchMsg struct {
 	RunID      int
 	StatusMsgs []agentStatusMsg
@@ -258,13 +225,10 @@ type knightProjectProposalResultMsg struct {
 	Err      error
 }
 
-// setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
-// event loop gets the real *tea.Program reference (NewProgram copies the model).
 type setProgramMsg struct {
 	Program *tea.Program
 }
 
-// inputDrainEndMsg signals the end of the startup input drain window.
 type inputDrainEndMsg struct{}
 
 type mcpServersMsg struct {
@@ -283,7 +247,7 @@ type mcpOAuthStartMsg struct {
 	handler        *mcp.OAuthHandler
 	openErr        error
 	err            error
-	deviceUserCode string // set when using device flow
+	deviceUserCode string
 }
 
 type mcpOAuthResultMsg struct {
@@ -303,34 +267,21 @@ type updatePrepareResultMsg struct {
 
 type updateCheckTickMsg struct{}
 
-// gitBranchTickMsg is sent every 2 seconds to refresh the cached git branch
-// shown in the sidebar, avoiding disk I/O on every View() render.
 type gitBranchTickMsg struct{}
 
-// imPanelRefreshMsg is sent every 2 seconds when an IM panel is open
-// and the selected adapter is in a non-terminal state (pairing, connecting, etc.)
-// This ensures dynamic content like WhatsApp QR codes appears without manual refresh.
 type imPanelRefreshMsg struct{}
 
-// webchatUserMsg is sent by the webui TUIChatBridge to inject a webchat
-// message into the TUI event loop. The TUI handles it like a normal
-// user input submission.
 type webchatUserMsg struct {
 	Text string
-	// #1860 case 1: image blocks from the webui - pure-image messages
-	// used to be dropped by the bridge's text-only extraction.
+
 	Images []provider.ContentBlock
 }
 
-// webuiReadyMsg is sent when the webui HTTP server is ready. The TUI
-// displays the URL (with token fragment) as a system message in the chat area.
 type webuiReadyMsg struct {
 	Addr  string
 	Token string
 }
 
-// knightStartupHintMsg is sent once at startup to show a Knight-related hint
-// (e.g. another instance holds the lock) in the chat area.
 type knightStartupHintMsg struct {
 	Hint string
 }

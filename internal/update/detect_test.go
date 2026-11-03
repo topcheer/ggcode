@@ -17,9 +17,9 @@ func TestPackageManagerHint(t *testing.T) {
 		{"/home/user/scoop/shims/ggcode.exe", "scoop"},
 		{"C:\\Program Files\\ggcode\\ggcode.exe", "winget"},
 		{"C:/Program Files/ggcode/ggcode.exe", "winget"},
-		{"/home/user/AppData/Local/ggcode/ggcode.exe", "winget"},  // perUser winget (default)
-		{"/usr/local/bin/ggcode", ""},                             // direct install — no hint
-		{"/home/user/.local/share/ggcode/npm/v1.3.71/ggcode", ""}, // npm — no hint
+		{"/home/user/AppData/Local/ggcode/ggcode.exe", "winget"},
+		{"/usr/local/bin/ggcode", ""},
+		{"/home/user/.local/share/ggcode/npm/v1.3.71/ggcode", ""},
 	}
 	for _, tt := range tests {
 		got := PackageManagerHint(tt.path)
@@ -30,19 +30,16 @@ func TestPackageManagerHint(t *testing.T) {
 }
 
 func TestFindOtherInstallsDoesNotPanic(t *testing.T) {
-	// This test calls FindOtherInstalls which may discover real ggcode
-	// binaries on the system and try to probe their version. Skip in CI
-	// to avoid hanging on `ggcode version` (which may start the TUI).
+
 	t.Skip("requires controlled environment without real ggcode installs")
 }
 
 func TestFormatOtherInstalls(t *testing.T) {
-	// Empty
+
 	if got := FormatOtherInstalls(nil); got != "" {
 		t.Errorf("FormatOtherInstalls(nil) = %q, want empty", got)
 	}
 
-	// With items
 	installs := []OtherInstall{
 		{Path: "/opt/homebrew/bin/ggcode", Version: "v1.3.70", Source: "brew", Privileged: false},
 		{Path: "/usr/bin/ggcode", Version: "", Source: "system", Privileged: true},
@@ -51,7 +48,7 @@ func TestFormatOtherInstalls(t *testing.T) {
 	if got == "" {
 		t.Fatal("expected non-empty output")
 	}
-	// Should contain both paths and the privileged marker
+
 	want := "(admin)"
 	if !contains(got, want) {
 		t.Errorf("expected output to contain %q, got: %s", want, got)
@@ -68,7 +65,7 @@ func contains(s, substr string) bool {
 }
 
 func TestFindOtherInstallsSkipsSelf(t *testing.T) {
-	// Find the current binary and ensure it's not in the results.
+
 	currentPath := "/usr/local/bin/ggcode"
 	if runtime.GOOS == "windows" {
 		currentPath = `C:\Program Files\ggcode\ggcode.exe`

@@ -1,12 +1,5 @@
 package swarm
 
-// #2118 regression: the panic-recovery rollback (rollbackClaimedTask) only
-// flipped Status back to pending and never touched retry_attempts, so a
-// deterministically panicking task bypassed the #1295 retry cap - each
-// surviving teammate claimed it, panicked, and rolled it back until the
-// team was dismantled. The rollback now increments retry_attempts and
-// parks the task as completed(max_retries) at the cap.
-
 import (
 	"context"
 	"testing"
@@ -29,9 +22,7 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 	mgr.mu.Unlock()
 
 	tk := team.Tasks.Create("poison-panic", "panics", "", nil)
-	// #2579: the rollback now guards on ExpectedStatus=in_progress, so the
-	// fixture must reflect the real timeline (claim flips pending ->
-	// in_progress before the teammate panics).
+
 	inProgress := task.StatusInProgress
 	if _, err := team.Tasks.Update(tk.ID, task.UpdateOptions{Status: &inProgress}); err != nil {
 		t.Fatal(err)
@@ -41,7 +32,6 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 	tm.CurrentTaskID = tk.ID
 	tm.mu.Unlock()
 
-	// First panic rollback: pending + retry_attempts=1.
 	rollbackClaimedTask(mgr, team, tm)
 	got, ok := team.Tasks.Get(tk.ID)
 	if !ok {
@@ -54,10 +44,6 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 		t.Fatalf("retry_attempts = %q, want 1 (panic path must count)", got.Metadata["retry_attempts"])
 	}
 
-	// Seed attempts to the cap and roll back again: must PARK, not requeue.
-	// #2579: re-claim first (pending -> in_progress) - the rollback guard
-	// requires the task to be in_progress, matching the real timeline of a
-	// surviving teammate claiming, panicking and rolling back again.
 	pending := task.StatusPending
 	if _, err := team.Tasks.Update(tk.ID, task.UpdateOptions{
 		ExpectedStatus: &pending,
@@ -79,8 +65,6 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 	}
 }
 
-// A claimed task whose ID no longer exists on the board must not panic the
-// rollback itself.
 func TestIssue2118_RollbackVanishedTaskSafe(t *testing.T) {
 	team := &Team{ID: "team-v", Tasks: task.NewManager()}
 	mgr := newTestManager()

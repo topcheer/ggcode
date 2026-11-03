@@ -1,19 +1,15 @@
 package markdown
 
-// #1644-7: a tab-delimited ATX closing sequence ('## heading\t#') must
-// strip just like a space-delimited one; '## C#' (word char before #)
-// keeps its '#'; all-# heading text stays as-is.
-
 import "testing"
 
 func Test1644Case7_TabClosingSequenceStrips(t *testing.T) {
 	cases := map[string]string{
-		"## heading\t#":   "## heading", // tab closer - the #1644-7 gap (#2299: prefix kept)
-		"## heading #":    "## heading", // space closer - #1588-C behavior kept
-		"## heading\t###": "## heading", // multi-# tab closer
-		"## C#":           "## C#",      // word char before # - keep
-		"### ###":         "### ###",    // all-# heading text - keep as-is
-		"## plain":        "## plain",   // no closer - unchanged (#2299: prefix kept)
+		"## heading\t#":   "## heading",
+		"## heading #":    "## heading",
+		"## heading\t###": "## heading",
+		"## C#":           "## C#",
+		"### ###":         "### ###",
+		"## plain":        "## plain",
 	}
 	for in, want := range cases {
 		got, ok := normalizeHeading(in)

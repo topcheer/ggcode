@@ -9,12 +9,9 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// #4587: every path out of waitForResponse must return - no goroutine may
-// block forever when the TUI program is gone and the caller holds a
-// non-cancellable context.
 func TestIssue4587_WaitForResponseDetachReturns(t *testing.T) {
 	b := newTUIIMBridge(nil)
-	resp := make(chan error, 1) // never written - simulates dead program
+	resp := make(chan error, 1)
 
 	b.detach()
 
@@ -45,7 +42,7 @@ func TestIssue4587_WaitForResponseTimeoutReturns(t *testing.T) {
 	t.Cleanup(func() { tuiBridgeSubmitTimeout = old })
 
 	b := newTUIIMBridge(nil)
-	resp := make(chan error, 1) // never written
+	resp := make(chan error, 1)
 
 	start := time.Now()
 	err := b.waitForResponse(context.Background(), resp)
@@ -71,7 +68,6 @@ func TestIssue4587_WaitForResponseCtxCancelReturns(t *testing.T) {
 	}
 }
 
-// A detached bridge must reject new submits before touching the program.
 func TestIssue4587_DetachedBridgeRejectsSubmit(t *testing.T) {
 	b := newTUIIMBridge(nil)
 	b.detach()
@@ -80,11 +76,10 @@ func TestIssue4587_DetachedBridgeRejectsSubmit(t *testing.T) {
 	}
 }
 
-// Detach is idempotent: the second call must not panic (double close).
 func TestIssue4587_DetachIdempotent(t *testing.T) {
 	b := newTUIIMBridge(nil)
 	b.detach()
-	b.detach() // must not panic (double close)
+	b.detach()
 	if !b.isDetached() {
 		t.Fatal("bridge should report detached after detach()")
 	}

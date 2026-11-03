@@ -2,19 +2,11 @@
 
 package image
 
-// Regression probes for #3009: the Windows capture chain must not treat a
-// PowerShell exit 0 as proof of success while a stale OutputPath file is
-// served as this round's capture, and parse failures must not masquerade as
-// empty results.
-
 import (
 	"strings"
 	"testing"
 )
 
-// TestIssue3009_ScriptIsFailFast pins W1: the generated script must set
-// $ErrorActionPreference='Stop' and wrap everything in try/catch with exit 1,
-// for all three capture modes (window / region / full display).
 func TestIssue3009_ScriptIsFailFast(t *testing.T) {
 	cases := map[string]ScreenshotOptions{
 		"window": {Window: "Notepad"},
@@ -42,9 +34,6 @@ func TestIssue3009_ScriptIsFailFast(t *testing.T) {
 	}
 }
 
-// TestIssue3009_RegionMustBePositive pins W4: non-positive width/height is
-// rejected up front with a root-cause error instead of failing inside
-// PowerShell's Bitmap constructor.
 func TestIssue3009_RegionMustBePositive(t *testing.T) {
 	for _, region := range []*ScreenshotRegion{
 		{X: 0, Y: 0, Width: 0, Height: 100},
@@ -61,8 +50,6 @@ func TestIssue3009_RegionMustBePositive(t *testing.T) {
 	}
 }
 
-// TestIssue3009_ParseDisplayInfos pins W2: empty output is a legal empty
-// list; valid JSON (array or single object) decodes; polluted stdout errors.
 func TestIssue3009_ParseDisplayInfos(t *testing.T) {
 	if d, err := parseDisplayInfos([]byte("  \r\n")); err != nil || d != nil {
 		t.Fatalf("empty output must be (nil, nil), got (%v, %v)", d, err)
@@ -80,7 +67,6 @@ func TestIssue3009_ParseDisplayInfos(t *testing.T) {
 	}
 }
 
-// TestIssue3009_ParseWindowInfos mirrors the displays probe for windows.
 func TestIssue3009_ParseWindowInfos(t *testing.T) {
 	if w, err := parseWindowInfos([]byte("")); err != nil || w != nil {
 		t.Fatalf("empty output must be (nil, nil), got (%v, %v)", w, err)

@@ -12,15 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// MCP Streamable HTTP "Resumability and Redelivery": servers MAY tag SSE
-// events with ids; after a dropped stream the client reconnects and MUST be
-// able to present its redelivery cursor via the Last-Event-ID header so the
-// server can redeliver events missed while the connection was down.
-
-// The standalone GET stream must record event ids from the first connection
-// and present them as Last-Event-ID on the reconnect dial.
 func TestHTTPNotifStreamResumabilityLastEventID(t *testing.T) {
-	var lastSeenHeader atomic.Value // string
+	var lastSeenHeader atomic.Value
 	var getCalls atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -29,14 +22,14 @@ func TestHTTPNotifStreamResumabilityLastEventID(t *testing.T) {
 			return
 		}
 		if getCalls.Add(1) == 1 {
-			// First dial: tag an event with an id, then drop the stream.
+
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("id: 7\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n"))
-			return // close: client sees EOF -> httpNotifDrop -> reconnect
+			return
 		}
-		// Reconnect dial: the client must carry its redelivery cursor.
+
 		lastSeenHeader.Store(r.Header.Get("Last-Event-ID"))
-		w.WriteHeader(http.StatusMethodNotAllowed) // stop the retry loop cleanly
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -61,8 +54,6 @@ func TestHTTPNotifStreamResumabilityLastEventID(t *testing.T) {
 	}
 }
 
-// Event ids must also be captured from POST response SSE streams - the
-// cursor is per-server, not per-connection-kind.
 func TestStreamHTTPSSEResponseRecordsEventID(t *testing.T) {
 	c := &Client{name: "post-cursor", headers: map[string]string{}}
 	body := "id: 42\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
@@ -78,13 +69,11 @@ func TestStreamHTTPSSEResponseRecordsEventID(t *testing.T) {
 	}
 }
 
-// A new server session invalidates the old redelivery cursor: event ids are
-// scoped to the session that issued them.
 func TestNewSessionResetsLastEventID(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			// The notification stream dials on Initialize; not under test here.
+
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -125,8 +114,6 @@ func TestNewSessionResetsLastEventID(t *testing.T) {
 	}
 }
 
-// An id-less event stream must never manufacture a cursor: the client keeps
-// not sending Last-Event-ID on reconnect (backwards compatibility).
 func TestIDlessStreamKeepsEmptyCursor(t *testing.T) {
 	c := &Client{name: "idless", headers: map[string]string{}}
 	c.noteSSEEventID("")

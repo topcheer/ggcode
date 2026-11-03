@@ -1,13 +1,5 @@
 package tui
 
-// The sessions panel must default to the CURRENT workspace's sessions only:
-// the store is global (every workspace's sessions in one directory), and the
-// old unfiltered list mixed unrelated workspaces' sessions into the panel -
-// each shown "locked" by whichever live instance was working in that
-// workspace. A toggles to all-workspaces (user expectation: with 2 live
-// instances, at most 2 sessions should appear locked in one's own workspace
-// view).
-
 import (
 	"os"
 	"path/filepath"

@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2806_test.go guards against the self-reporting "other install"
-// recurrence (#2806): FindOtherInstalls compared bare Abs paths, so on Linux
-// (where /proc/self/exe returns the RESOLVED real path) a linuxbrew-style
-// bin/ggcode symlink to the running binary reported ITSELF as another
-// install with a misleading warning.
-
-// TestIssue2806ResolvePathFollowsSymlink: a symlink and its target must
-// resolve to the same canonical path - the equality the skip-ourselves check
-// depends on.
 func TestIssue2806ResolvePathFollowsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real", "ggcode")
@@ -38,10 +29,6 @@ func TestIssue2806ResolvePathFollowsSymlink(t *testing.T) {
 	}
 }
 
-// TestIssue2806ResolvePathPlainFile: a fully-resolved result must be
-// idempotent (resolving again changes nothing) and absolute. Note /var is
-// itself a symlink to /private/var on macOS, so the canonical form may
-// legitimately differ from the naive Abs spelling.
 func TestIssue2806ResolvePathPlainFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "ggcode")
@@ -57,9 +44,6 @@ func TestIssue2806ResolvePathPlainFile(t *testing.T) {
 	}
 }
 
-// TestIssue2806NoBareAbsComparison pins the source-level invariant: the
-// skip-ourselves and dedup comparisons must go through resolvePath
-// (EvalSymlinks-aware), not bare filepath.Abs.
 func TestIssue2806NoBareAbsComparison(t *testing.T) {
 	src, err := os.ReadFile("detect.go")
 	if err != nil {

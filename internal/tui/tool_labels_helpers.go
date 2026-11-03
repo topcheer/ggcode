@@ -177,11 +177,11 @@ func localizedToolLabel(lang Language, action string) string {
 		case "commit":
 			return "提交"
 		case "spawn_agent":
-			return "启动子代理" // #917: was untranslated English
+			return "启动子代理"
 		case "list_agents":
 			return "获取子代理列表"
 		case "wait_agent":
-			return "检查子代理进度" // #917: was untranslated English
+			return "检查子代理进度"
 		case "a2a_remote":
 			return "远程调用"
 		case "a2a_discover":
@@ -379,8 +379,7 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "更新待办"
 			case "task":
 				return "执行任务"
-			// #1766 case 2: git sub-command actions with no target used to
-			// fall to generic and render "Running " with a trailing space.
+
 			case "diff":
 				return "查看差异"
 			case "log":
@@ -790,7 +789,6 @@ func argString(args map[string]any, key string) string {
 	}
 }
 
-// parseStringSlice extracts a string array from parsed args.
 func parseStringSlice(args map[string]any, key string) []string {
 	if args == nil {
 		return nil
@@ -846,9 +844,8 @@ func shortenJobID(id string) string {
 	return id
 }
 
-// lspToolPresentation creates a presentation for LSP tools showing file:line.
 func lspToolPresentation(lang Language, toolName string, args map[string]any, fileTarget string) toolPresentation {
-	// Map LSP tool names to short action labels
+
 	var action string
 	switch toolName {
 	case "lsp_hover":
@@ -879,7 +876,6 @@ func lspToolPresentation(lang Language, toolName string, args map[string]any, fi
 		action = strings.TrimPrefix(toolName, "lsp_")
 	}
 
-	// Build detail: "file:line" or just "file"
 	detail := fileTarget
 	if detail == "" {
 		detail = displayToolFileTarget(argString(args, "path"))
@@ -889,7 +885,6 @@ func lspToolPresentation(lang Language, toolName string, args map[string]any, fi
 		detail = detail + ":" + line
 	}
 
-	// For rename, include the new name
 	if toolName == "lsp_rename" {
 		newName := argString(args, "new_name")
 		if newName != "" {
@@ -939,7 +934,7 @@ func displayToolFileTarget(value string) string {
 		return ""
 	}
 	value = strings.TrimPrefix(value, "./")
-	// Try to make absolute paths relative to cwd
+
 	if filepath.IsAbs(value) {
 		cwd, _ := os.Getwd()
 		normCWD := normalizeDisplayPath(cwd)
@@ -965,7 +960,6 @@ func normalizeDisplayPath(value string) string {
 	return value
 }
 
-// firstLine returns the first line of a multi-line string.
 func firstLine(s string) string {
 	if idx := strings.Index(s, "\n"); idx >= 0 {
 		return s[:idx]
@@ -973,8 +967,6 @@ func firstLine(s string) string {
 	return s
 }
 
-// friendlyToolName returns a short, user-friendly name for a tool,
-// with special mappings for common tools and prettifyToolName as fallback.
 func friendlyToolName(name string) string {
 	switch name {
 	case "run_command":
@@ -1001,7 +993,6 @@ func prettifyToolName(name string) string {
 	return strings.Join(parts, " ")
 }
 
-// relativizeResult replaces absolute paths in tool result text with relative paths.
 func relativizeResult(text string) string {
 	cwd, err := os.Getwd()
 	if err != nil {

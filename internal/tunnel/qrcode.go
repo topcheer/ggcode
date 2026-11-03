@@ -75,8 +75,6 @@ func renderTerminalQRBitmap(bitmap [][]bool) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
-// QRCodeForURL generates a QR code string for the given URL using terminal-friendly block characters.
-// Returns a string that can be printed directly to a terminal.
 func QRCodeForURL(url string) (string, error) {
 	qr, err := newTerminalQRCode(url)
 	if err != nil {
@@ -86,7 +84,6 @@ func QRCodeForURL(url string) (string, error) {
 	return renderTerminalQRBitmap(padTerminalQRBitmap(qr.Bitmap(), terminalQRQuietZoneModules)), nil
 }
 
-// QRCodeLines returns the QR code as a slice of strings (one per line).
 func QRCodeLines(url string) ([]string, error) {
 	s, err := QRCodeForURL(url)
 	if err != nil {
@@ -95,8 +92,6 @@ func QRCodeLines(url string) ([]string, error) {
 	return strings.Split(s, "\n"), nil
 }
 
-// QRCodePNG generates a PNG image of the QR code for the given URL.
-// Returns raw PNG bytes suitable for displaying in an image widget.
 func QRCodePNG(url string) ([]byte, error) {
 	png, err := qrcode.Encode(url, qrcode.Low, 256)
 	if err != nil {

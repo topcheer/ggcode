@@ -7,10 +7,8 @@ import (
 	"testing"
 )
 
-// Regression for #1539: >64KB plain-text zip entries were silently
-// truncated to content that looked complete (no marker).
 func TestZipTextEntryTruncationMarked(t *testing.T) {
-	big := strings.Repeat("x", 100*1024) // 100KB text, over the 64KB probe limit
+	big := strings.Repeat("x", 100*1024)
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 	f, _ := w.Create("big.txt")
@@ -33,9 +31,6 @@ func tailOf(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// Regression for #1540: macro-enabled OOXML variants (.docm/.xlsm/.pptm)
-// are the same zip format and must be routed to the extractors, not fall
-// through to raw binary content.
 func TestMacroOfficeExtensionsRegistered(t *testing.T) {
 	for _, ext := range []string{".docm", ".xlsm", ".pptm"} {
 		if defaultRegistry.Get(ext) == nil {

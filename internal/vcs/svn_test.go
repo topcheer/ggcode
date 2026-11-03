@@ -9,22 +9,17 @@ import (
 	"testing"
 )
 
-// TestSubversionIsCleanIgnoresExternals pins #1407-B: 'X' (svn:externals
-// definition) lines are NOT local modifications - without filtering, a
-// working copy with externals reports dirty forever despite zero local
-// changes. Builds a real svn checkout with an externals property via the
-// svn binary (skips when unavailable).
 func TestSubversionIsCleanIgnoresExternals(t *testing.T) {
 	if _, err := exec.LookPath("svn"); err != nil {
 		t.Skip("svn binary not installed")
 	}
 	base := t.TempDir()
 	wc := filepath.Join(base, "wc")
-	// Create a repo + checkout with one committed externals definition.
+
 	if out, err := runTestCmd("svnadmin", "create", filepath.Join(base, "repo")); err != nil {
 		t.Skipf("svnadmin create failed: %v (%s)", err, out)
 	}
-	repoURL := "file://" + filepath.Join(base, "repo") // TempDir is absolute; file://+abs = file:///abs
+	repoURL := "file://" + filepath.Join(base, "repo")
 	if _, err := runTestCmd("svn", "checkout", repoURL, wc); err != nil {
 		t.Skipf("svn checkout failed: %v", err)
 	}
@@ -37,7 +32,7 @@ func TestSubversionIsCleanIgnoresExternals(t *testing.T) {
 	if _, err := runTestCmd("svn", "update", wc); err != nil {
 		t.Skipf("update failed: %v", err)
 	}
-	_ = os.RemoveAll(filepath.Join(wc, "ext")) // do not even materialize it
+	_ = os.RemoveAll(filepath.Join(wc, "ext"))
 
 	clean, err := Subversion{}.IsClean(context.Background(), wc)
 	if err != nil {
@@ -55,9 +50,6 @@ func runTestCmd(name string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// Regression for #1493: raw svn log output is multi-line (---- separators,
-// r42|author headers, message bodies), violating the one-entry-per-line
-// contract; recent_commits hard-sliced the noise into the system prompt.
 func TestNormalizeSvnLogSingleLineEntries(t *testing.T) {
 	raw := `------------------------------------------------------------------------
 r42 | alice | 2026-09-01 10:00:00 +0800 (Mon, 01 Sep 2026) | 1 line

@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-// --- Bug F (#555): Decode must validate the image body, not just the header.
-
 func makeValidPNG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -32,8 +30,7 @@ func makeValidPNG(t *testing.T, w, h int) []byte {
 
 func TestIssue555DecodeRejectsTruncatedPNG(t *testing.T) {
 	valid := makeValidPNG(t, 64, 32)
-	// Keep a valid header (PNG sig + IHDR, 33 bytes) plus a corrupt fragment
-	// of the body: header parses via DecodeConfig, body must fail full decode.
+
 	truncated := valid[:53]
 	img, err := Decode(truncated)
 	if err == nil {
@@ -58,7 +55,7 @@ func TestIssue555DecodeRejectsCorruptPNGBody(t *testing.T) {
 	valid := makeValidPNG(t, 16, 16)
 	corrupt := make([]byte, len(valid))
 	copy(corrupt, valid)
-	// Flip bytes in the middle (IDAT payload) so the header stays valid.
+
 	for i := len(corrupt) / 2; i < len(corrupt)/2+16 && i < len(corrupt); i++ {
 		corrupt[i] ^= 0xFF
 	}
@@ -67,8 +64,6 @@ func TestIssue555DecodeRejectsCorruptPNGBody(t *testing.T) {
 	}
 }
 
-// --- Bug E (#555): FIFOs must not bypass the MaxSize precheck.
-
 func TestIssue555ReadFileFIFORejectsOversized(t *testing.T) {
 	dir := t.TempDir()
 	fifoPath := filepath.Join(dir, "huge.png")
@@ -76,8 +71,6 @@ func TestIssue555ReadFileFIFORejectsOversized(t *testing.T) {
 		t.Skipf("cannot create FIFO on this platform: %v", err)
 	}
 
-	// Writer pushes far more than MaxSize through the FIFO. The reader must
-	// stop after MaxSize+1 bytes and reject, not consume it all.
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
@@ -90,7 +83,7 @@ func TestIssue555ReadFileFIFORejectsOversized(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		for written := 0; written < MaxSize+2*512*1024; {
 			if time.Now().After(deadline) {
-				return // reader stopped consuming; that's the pass condition
+				return
 			}
 			n, err := f.Write(chunk)
 			written += n
@@ -109,15 +102,14 @@ func TestIssue555ReadFileFIFORejectsOversized(t *testing.T) {
 	if !strings.Contains(err.Error(), "too large") {
 		t.Errorf("expected too-large error, got: %v", err)
 	}
-	// The core OOM regression: the read must stop promptly, not slurp
-	// everything the writer produces.
+
 	if elapsed > 8*time.Second {
 		t.Errorf("ReadFile took %v to reject oversized FIFO; bounded read regressed", elapsed)
 	}
 	select {
 	case <-writerDone:
 	case <-time.After(2 * time.Second):
-		// Writer still blocked writing is fine; do not wait for it.
+
 	}
 }
 
@@ -154,10 +146,8 @@ func TestIssue555ReadFileFIFOAcceptsSmall(t *testing.T) {
 	}
 }
 
-// --- Bug B/C/D (#555) abstract logic shared across platforms.
-
 func TestIssue555DisplayScreenIndex(t *testing.T) {
-	// Windows full-screen path: Display<=1 means primary, N means AllScreens[N-1].
+
 	if idx, ok := displayScreenIndex(0); ok || idx != 0 {
 		t.Errorf("displayScreenIndex(0) = %d,%v; want 0,false", idx, ok)
 	}
@@ -178,8 +168,7 @@ func TestIssue555MatchWindowQueryExactFirst(t *testing.T) {
 		{ID: 20, Title: "Terminal — Drafts", App: "code"},
 		{ID: 30, Title: "Report", App: "Terminal"},
 	}
-	// Exact title match must win over an earlier-listed window that merely
-	// contains the query as a substring (#555 fuzzy-title bug D).
+
 	id, err := matchWindowQuery(windows, "terminal")
 	if err != nil {
 		t.Fatal(err)
@@ -187,15 +176,15 @@ func TestIssue555MatchWindowQueryExactFirst(t *testing.T) {
 	if id != 10 {
 		t.Errorf("matchWindowQuery exact-title = %d, want 10", id)
 	}
-	// Substring still works when no exact match exists.
+
 	if id, _ := matchWindowQuery(windows, "drafts"); id != 20 {
 		t.Errorf("matchWindowQuery substring = %d, want 20", id)
 	}
-	// Exact app match.
+
 	if id, _ := matchWindowQuery(windows, "report"); id != 30 {
 		t.Errorf("matchWindowQuery exact-title 'report' = %d, want 30", id)
 	}
-	// No match errors.
+
 	if _, err := matchWindowQuery(windows, "nope"); err == nil {
 		t.Error("expected error for unmatched query")
 	}

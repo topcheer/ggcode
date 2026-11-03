@@ -117,7 +117,7 @@ func (m Model) renderDiscordPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.discord.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -134,7 +134,7 @@ func (m *Model) handleDiscordPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -234,11 +234,7 @@ func (m *Model) handleDiscordPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
-		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
-		// config map from this Cmd goroutine while the render loop ranged
-		// it. Follow the qq pattern: mutate via configMutationMsg, continue
-		// the bind in next().
+
 		if m.config != nil {
 			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
@@ -263,8 +259,6 @@ func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 	}
 }
 
-// bindDiscordRest is the bind chain body after the (optional) enable
-// mutation lands on the Update loop.
 func bindDiscordRest(m *Model, entry discordBindingEntry) tea.Msg {
 	if err := m.ensureDiscordBotBinding(entry.Adapter); err != nil {
 		return discordBindResultMsg{err: err}
@@ -273,7 +267,7 @@ func bindDiscordRest(m *Model, entry discordBindingEntry) tea.Msg {
 		if err := m.waitForDiscordAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 			return discordBindResultMsg{err: err}
 		}
-		// Sync session history to the newly bound channel only.
+
 		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 				return discordBindResultMsg{err: err}
@@ -316,9 +310,7 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 2 {
 			return discordBindResultMsg{err: errors.New(m.t("panel.discord.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
-		// token WITH spaces was silently truncated to its first token,
-		// then persisted as a guaranteed-to-fail credential. Reject extras.
+
 		if len(fields) > 2 {
 			return discordBindResultMsg{err: errors.New("extra fields after token (values must not contain spaces): " + spec)}
 		}
@@ -331,10 +323,8 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 				"token": token,
 			},
 		}
-		// #1367 family: config write + disk save moved off the Cmd
-		// goroutine onto the Update loop via configMutationMsg - see
-		// dingtalk_panel.go for the template comment.
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -342,9 +332,7 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				// #1794 case 2: auto-enable on the Update loop - the next()
-				// closure's startXXXAdapterIfNeeded used to write the map
-				// from the Cmd goroutine (#1367 family).
+
 				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
@@ -353,19 +341,13 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext token - without
-						// compensation a wrong token stays on disk forever and
-						// blocks the name on retry ("already exists"); the panel
-						// has no delete key. The rollback REMOVE is itself a map
-						// write, so it must route through configMutationMsg too
-						// (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -381,14 +363,7 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 					}
 					if err := m.startDiscordAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errDiscordEnableNeeded) {
-							// #4483 (#1794/#1719 completion): enable on the Update loop,
-							// then retry - same shape as dingtalk_panel's sentinel
-							// branch. The old path rolled back on the enable-needed
-							// error instead of routing it.
-							// #4580: pass a success callback - next=nil made the
-							// auto-enable path return no message, so the panel
-							// never showed the added_bot confirmation and users
-							// re-submitted a working binding.
+
 							return m.discordEnableMutation(name, func(m *Model) tea.Msg {
 								return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
 							})
@@ -424,11 +399,7 @@ func (m *Model) startDiscordAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.discord.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #4483: the auto-enable used to write the config map RIGHT HERE on
-		// the Cmd goroutine (bypassing configMutationMsg's fail/persist
-		// choreography) - the #1794 case-2 fix only covered the apply side.
-		// Signal the caller to route the enable through configMutationMsg
-		// (Update loop) instead, same sentinel pattern as dingtalk #1719.
+
 		return errDiscordEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDiscord)) {
@@ -437,14 +408,8 @@ func (m *Model) startDiscordAdapterIfNeeded(name string) error {
 	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
-// errDiscordEnableNeeded signals the auto-enable must run on the Update
-// loop via configMutationMsg (#4483, completing #1794/#1719 - same shape
-// as dingtalk_panel's errDingtalkEnableNeeded).
 var errDiscordEnableNeeded = errors.New("discord adapter needs enable-on-update-loop")
 
-// discordEnableMutation routes the auto-enable through configMutationMsg
-// (Update loop) and retries the adapter start afterwards - the #1719
-// dingtalk_enableMutation shape.
 func (m *Model) discordEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -620,8 +585,7 @@ func (m Model) discordAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.discord.status.unknown")
 	}
-	// #887: both branches previously returned the same value — offline
-	// adapters showed "running". Mirror wecom's online/LastError pattern.
+
 	if state.Healthy {
 		return status
 	}

@@ -14,23 +14,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// /skill — human-in-the-loop accept surface for recorded skill suggestions
-// (r362; r353 residual 2. HITL approval pattern, 2026 production standard:
-// agent output routed through an explicit review surface before persistence).
-//
-// Suggestion lifecycle: skill_suggest.go RECORDS recurring workflows into the
-// "skill-suggestions" memory key; until now consuming them meant waiting for
-// a future session's agent to notice the auto-injected note and hand-write a
-// create_skill call. /skill makes the human the reviewer:
-//
-//	/skill suggest              → indexed list of recorded suggestions
-//	/skill accept <idx>         → PREVIEW the SKILL.md that would be written
-//	/skill accept <idx> confirm → write .ggcode/skills/<name>/SKILL.md
-//
-// Two-step confirm keeps the write behind an explicit human decision; the
-// generated body is a scaffold (task + observed tools), the distillation
-// itself stays the user's/agent's judgment (r319 conservative-gate decision).
-
 func (m *Model) handleSkillCommand(parts []string) tea.Cmd {
 	switch {
 	case len(parts) == 1 || parts[1] == "suggest" || parts[1] == "suggestions":
@@ -46,8 +29,6 @@ func (m *Model) handleSkillCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// loadSkillSuggestions returns the non-empty suggestion lines from the
-// project memory key, in recorded order.
 func loadSkillSuggestions(workingDir string) []string {
 	autoMem := memory.NewProjectAutoMemory(workingDir)
 	if autoMem == nil {
@@ -103,7 +84,6 @@ func (m *Model) acceptSkillSuggestion(idxArg string, confirmed bool, nameArgs []
 		return
 	}
 
-	// Task description: strip date prefix and trailing hint tail.
 	task := strings.TrimSpace(line)
 	if i := strings.Index(task, "] "); i >= 0 {
 		task = task[i+2:]
@@ -150,7 +130,6 @@ func (m *Model) acceptSkillSuggestion(idxArg string, confirmed bool, nameArgs []
 		return
 	}
 
-	// Consume the accepted line so the list stays actionable.
 	remaining := make([]string, 0, len(lines)-1)
 	for i, l := range lines {
 		if i != idx-1 {
@@ -165,12 +144,6 @@ func (m *Model) acceptSkillSuggestion(idxArg string, confirmed bool, nameArgs []
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Skill %q written to %s. It loads on next session (or /skills panel).", name, skillPath))
 }
 
-// draftSkillSuggestion (r363 / r353 residual 3) hands distillation to the
-// CURRENT session's agent: it injects a /init-style prompt carrying the
-// recorded evidence line, the agent drafts the SKILL.md (it has full session
-// context), writes it, and consumes the suggestion. The user watches the
-// draft stream in the TUI - a stronger HITL surface than the static confirm
-// scaffold, which remains as the offline fallback.
 func (m *Model) draftSkillSuggestion(idxArg string, nameArgs []string) tea.Cmd {
 	idx, err := strconv.Atoi(idxArg)
 	if err != nil || idx < 1 {
@@ -194,9 +167,6 @@ func (m *Model) draftSkillSuggestion(idxArg string, nameArgs []string) tea.Cmd {
 	return m.submitHiddenText(skillDraftPrompt(lines[idx-1], idx, name))
 }
 
-// skillDraftPrompt is a pure function so tests can pin the contract: the
-// agent must see the evidence, the pitfall instruction for recovered runs,
-// the exact skill path, and the consume step.
 func skillDraftPrompt(line string, idx int, name string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Distill the following recurring workflow into a reusable skill draft.\n\n")
@@ -213,7 +183,6 @@ func skillDraftPrompt(line string, idx int, name string) string {
 	return b.String()
 }
 
-// skillNameFromArgs returns an explicit name passed after `confirm`.
 func skillNameFromArgs(nameArgs []string) string {
 	if len(nameArgs) == 0 {
 		return ""
@@ -230,7 +199,6 @@ func skillNameSuffix(nameArgs []string) string {
 
 var skillSlugRe = regexp.MustCompile(`[^a-z0-9-]+`)
 
-// slugifySkillName derives a filesystem-safe skill name from free text.
 func slugifySkillName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.ReplaceAll(s, " ", "-")

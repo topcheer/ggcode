@@ -1,10 +1,8 @@
 package tui
 
-// ruCatalog returns the Russian translation for the given key.
-// Keys not yet translated fall through to enCatalog.
 func ruCatalog(key string) string {
 	switch key {
-	// --- Workspace & header ---
+
 	case "workspace.tagline":
 		return "Рабочая среда Geek-AI"
 	case "header.terminal_native":
@@ -12,13 +10,11 @@ func ruCatalog(key string) string {
 	case "session.ephemeral":
 		return "эфемерный"
 
-	// --- Agents ---
 	case "agents.idle":
 		return "ожидание"
 	case "cron.firing":
 		return "⏰ Сработала задача cron"
 
-	// --- Panel ---
 	case "panel.commands":
 		return "Команды:"
 	case "panel.files":
@@ -74,7 +70,6 @@ func ruCatalog(key string) string {
 	case "panel.review_file_change":
 		return "Проверка изменения файла"
 
-	// --- Labels ---
 	case "label.vendor":
 		return "Поставщик"
 	case "label.endpoint":
@@ -114,7 +109,6 @@ func ruCatalog(key string) string {
 	case "label.directory":
 		return "Каталог"
 
-	// --- Context & metrics ---
 	case "im.none":
 		return "Адаптеры не настроены"
 	case "im.summary":
@@ -130,7 +124,6 @@ func ruCatalog(key string) string {
 	case "im.status.not_started":
 		return "не запущено"
 
-	// --- Empty ---
 	case "empty.ask":
 		return "Запросите рефакторинг, исправление бага, объяснение или тесты."
 	case "empty.tips":
@@ -143,9 +136,6 @@ func ruCatalog(key string) string {
 	case "hint.mode":
 		return "Режим"
 
-	// --- Mode approval ---
-
-	// --- Hints ---
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R боковая панель"
 	case "hint.help":
@@ -163,13 +153,11 @@ func ruCatalog(key string) string {
 	case "hint.unfollow_panel":
 		return "Ctrl+N перестать следовать"
 
-	// --- Queued ---
 	case "queued.count":
 		return "%d в очереди"
 	case "interrupt.delivered":
 		return "[доставлено в активный запуск; план пересматривается]\n"
 
-	// --- Status ---
 	case "status.thinking":
 		return "Размышление..."
 	case "status.writing":
@@ -189,7 +177,6 @@ func ruCatalog(key string) string {
 	case "reasoning.effort.unsupported":
 		return "Усилие размышления не поддерживается текущим поставщиком"
 
-	// --- Follow ---
 	case "follow.loading":
 		return "  Загрузка представления следования..."
 	case "follow.active_agent":
@@ -205,11 +192,9 @@ func ruCatalog(key string) string {
 	case "follow.hint":
 		return "  ↑↓←→ переключать  Esc закрыть"
 
-	// --- Tools ---
 	case "status.tools_used":
 		return "%d инструментов использовано"
 
-	// --- Approval ---
 	case "approval.rejected":
 		return "  Отклонено.\n"
 	case "approval.allow":
@@ -223,7 +208,6 @@ func ruCatalog(key string) string {
 	case "approval.reject":
 		return "Отклонить"
 
-	// --- Exit ---
 	case "exit.confirm":
 		return "Нажмите Ctrl-C ещё раз для выхода.\n\n"
 	case "cancel.confirm":
@@ -231,7 +215,6 @@ func ruCatalog(key string) string {
 	case "interrupted":
 		return "[прервано]\n\n"
 
-	// --- Language ---
 	case "lang.current":
 		return "Текущий язык: %s\nИспользуйте /lang для интерактивного выбора или /lang <en|zh-CN> для прямого переключения.\n%s\n\n"
 	case "lang.invalid":
@@ -249,17 +232,14 @@ func ruCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k перемещение • Enter подтвердить • e/z быстрый выбор"
 
-	// --- Mode ---
 	case "mode.current":
 		return "Текущий режим: %s\nИспользование: /mode <supervised|bypass>\n  supervised  По умолчанию; большинство вызовов проходит без запросов - спрашивают только защитные барьеры (уничтожение системы, эксфильтрация ключей, записи бэкдоров)\n  bypass      Режим круиза; всё разрешено, кроме уничтожения системы и записей бэкдоров\n  (auto/autopilot - унаследованные псевдонимы)\n"
 	case "mode.persist_failed":
 		return "Не удалось сохранить настройку режима: %v"
 
-	// --- Input ---
 	case "input.placeholder":
 		return "Введите сообщение... ($ оболочка, # чат)"
 
-	// --- Model panel ---
 	case "panel.model_filter.prompt":
 		return "Фильтр> "
 	case "panel.model_filter.placeholder":
@@ -275,7 +255,6 @@ func ruCatalog(key string) string {
 	case "panel.model_list.hidden_more":
 		return "%d ещё"
 
-	// --- Provider panel ---
 	case "panel.provider.vendors":
 		return "Поставщики"
 	case "panel.provider.endpoints":
@@ -365,7 +344,6 @@ func ruCatalog(key string) string {
 	case "panel.provider.no_vendor_selected":
 		return "vendor не выбран - сначала добавьте"
 
-	// --- Model panel details ---
 	case "panel.model.models":
 		return "Модели"
 	case "panel.model.vendor":
@@ -409,7 +387,6 @@ func ruCatalog(key string) string {
 	case "panel.model.refresh.builtin_loaded":
 		return "Встроенные модели загружены."
 
-	// --- Commands ---
 	case "command.unknown":
 		return "Неизвестная команда: %s\n"
 	case "command.retry_empty":
@@ -433,7 +410,6 @@ func ruCatalog(key string) string {
 	case "command.usage.allow":
 		return "Использование: /allow <имя_инструмента>\n\n"
 
-	// --- Init ---
 	case "init.resolve_failed":
 		return "Не удалось разрешить цель init: %v\n\n"
 	case "init.generate_failed":
@@ -451,7 +427,6 @@ func ruCatalog(key string) string {
 	case "init.prompt.hint":
 		return " y = создать AGENTS.md • n/Esc = пропустить"
 
-	// --- Model commands ---
 	case "command.model_switched":
 		return "Модель переключена на: %s (поставщик: %s)\n\n"
 	case "command.model_failed":
@@ -471,7 +446,6 @@ func ruCatalog(key string) string {
 	case "command.custom":
 		return "Пользовательская команда /%s:\n"
 
-	// --- Sessions ---
 	case "session.untitled":
 		return "без названия"
 	case "session.store_missing":
@@ -491,7 +465,6 @@ func ruCatalog(key string) string {
 	case "session.exported":
 		return "Сессия %s экспортирована в %s\n\n"
 
-	// --- Checkpoints ---
 	case "checkpoint.disabled":
 		return "Контрольные точки не включены.\n\n"
 	case "checkpoint.undo_failed":
@@ -499,7 +472,6 @@ func ruCatalog(key string) string {
 	case "checkpoint.undid":
 		return "Отменено: %s на %s (контрольная точка %s)\n"
 
-	// --- Files ---
 	case "files.disabled":
 		return "Контрольные точки не включены.\n\n"
 	case "files.none":
@@ -511,7 +483,6 @@ func ruCatalog(key string) string {
 	case "files.hint":
 		return "\nИспользуйте /undo для отмены последней правки, /checkpoints для деталей.\n\n"
 
-	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Авто-память не инициализирована.\n\n"
 	case "memory.clear_failed":
@@ -533,7 +504,6 @@ func ruCatalog(key string) string {
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
 
-	// --- Compact ---
 	case "compact.unavailable":
 		return "Менеджер контекста недоступен.\n\n"
 	case "compact.failed":
@@ -541,13 +511,11 @@ func ruCatalog(key string) string {
 	case "compact.done_with_stats":
 		return "История беседы скомпактирована (%d → %d токенов).\n\n"
 
-	// --- Todo ---
 	case "todo.cleared":
 		return "Список задач очищен.\n\n"
 	case "todo.clear_failed":
 		return "Ошибка очистки задач: %v\n\n"
 
-	// --- Bug report ---
 	case "bug.title":
 		return "=== Диагностика баг-репорта ===\n\n"
 	case "bug.version":
@@ -569,7 +537,6 @@ func ruCatalog(key string) string {
 	case "bug.hint":
 		return "\nПожалуйста, предоставьте эту информацию при сообщении об ошибке.\n\n"
 
-	// --- Config ---
 	case "config.usage":
 		return "Использование: /config set <ключ> <значение>\n\nКлючи: model, vendor, endpoint, language, apikey [--vendor]\n\nЭндпоинты: /config add-endpoint <имя> <base_url> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <имя>\n\n"
 	case "config.not_loaded":
@@ -581,7 +548,6 @@ func ruCatalog(key string) string {
 	case "config.unknown_key":
 		return "Неизвестный ключ конфигурации: %s\nПоддерживаются: model, provider, language\n\n"
 
-	// --- Update ---
 	case "panel.update":
 		return "Обновление"
 	case "label.version":
@@ -619,9 +585,6 @@ func ruCatalog(key string) string {
 	case "update.dual_scope":
 		return "Предупреждение: Найдены как пользовательская, так и системная установки ggcode:\n  Пользовательская: %s\n  Системная: %s\nЭто может привести к конфликтам PATH. Рассмотрите удаление одной через Настройки > Приложения.\n\n"
 
-	// --- Plugins ---
-
-	// --- MCP ---
 	case "mcp.none":
 		return "MCP-серверы не настроены.\n\n"
 	case "mcp.active_tools":
@@ -629,7 +592,6 @@ func ruCatalog(key string) string {
 	case "mcp.more":
 		return "… %d ещё • /mcp"
 
-	// --- Image ---
 	case "image.usage":
 		return "Использование: /image <путь/к/файлу.png> или /image paste\n"
 	case "image.formats":
@@ -639,9 +601,6 @@ func ruCatalog(key string) string {
 	case "image.clipboard_no_image_windows":
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 
-	// --- Agents ---
-
-	// --- Slash command descriptions ---
 	case "slash.help":
 		return "Показать справку"
 	case "slash.sessions":
@@ -743,7 +702,6 @@ func ruCatalog(key string) string {
 	case "slash.im":
 		return "Открыть единую панель IM-каналов"
 
-	// --- QQ panel ---
 	case "panel.qq.directory":
 		return "Каталог"
 	case "panel.qq.bots":
@@ -839,7 +797,6 @@ func ruCatalog(key string) string {
 	case "panel.qq.status.unknown":
 		return "неизвестно"
 
-	// --- More slash commands ---
 	case "slash.status":
 		return "Показать текущий статус"
 	case "slash.update":
@@ -879,7 +836,6 @@ func ruCatalog(key string) string {
 	case "slash.unshare":
 		return "Остановить совместный доступ к сессии через туннель"
 
-	// --- Regenerate ---
 	case "regenerate.busy":
 		return "Невозможно перегенерировать во время работы агента. Сначала нажмите Ctrl+C для отмены."
 	case "regenerate.no_agent":
@@ -889,7 +845,6 @@ func ruCatalog(key string) string {
 	case "regenerate.no_response":
 		return "Нет ответа ассистента для перегенерации."
 
-	// --- Branch ---
 	case "rewind.bad_arg":
 		return "Использование: /rewind [N], где N >= 1 - число перематываемых пользовательских ходов."
 	case "rewind.revert_failed":
@@ -909,7 +864,6 @@ func ruCatalog(key string) string {
 	case "branch.success":
 		return "Создано ответвление в новую сессию %s (из: %s). Исходная сессия сохранена."
 
-	// --- Help text ---
 	case "help.text":
 		return `Доступные команды:
 
@@ -993,7 +947,6 @@ func ruCatalog(key string) string {
 	case "tunnel.mobile_connected":
 		return "Мобильный клиент подключен."
 
-	// --- Config save scope ---
 	case "config.save_scope_global":
 		return "Цель сохранения → Глобально"
 	case "config.save_scope_instance":
@@ -1011,17 +964,14 @@ func ruCatalog(key string) string {
 	case "config.save_target_line":
 		return " Цель сохранения: %s%s  [Ctrl+T переключить]"
 
-	// --- Shell ---
 	case "shell.empty":
 		return "Команда оболочки пуста."
 	case "shell.already_running":
 		return "Команда shell уже выполняется - дождитесь или Esc для отмены."
 
-	// --- LAN Chat ---
 	case "lanchat.unavailable":
 		return "LAN-чат недоступен."
 
-	// --- Reflect ---
 	case "reflect.no_agent":
 		return "Агент не инициализирован."
 	case "reflect.no_workdir":
@@ -1037,11 +987,9 @@ func ruCatalog(key string) string {
 	case "reflect.memory_location":
 		return "Расположение памяти: %s\n"
 
-	// --- Knight ---
 	case "knight.unavailable":
 		return "Knight недоступен"
 
-	// --- Pairing ---
 	case "pairing.rejected":
 		return "Текущий запрос на сопряжение был отклонён. Инициируйте заново для продолжения."
 	case "pairing.blacklisted":

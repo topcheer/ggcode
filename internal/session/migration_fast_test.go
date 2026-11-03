@@ -53,8 +53,7 @@ func TestHasNewFormatCheckpoint_OldFormat(t *testing.T) {
 func TestHasNewFormatCheckpoint_MixedFormatEarlyExit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.jsonl")
-	// New-format checkpoint appears early; old-format appears later.
-	// hasNewFormatCheckpoint should find the new-format one first and return true.
+
 	content := `{"type":"message","session_id":"test","message":{"role":"user","content":[{"type":"text","text":"msg1"}]}}
 {"type":"checkpoint","session_id":"test","checkpoint_summary_msg_id":"msg-100","checkpoint_last_msg_id":"msg-101","checkpoint_tokens":3000}
 {"type":"message","session_id":"test","message":{"role":"user","content":[{"type":"text","text":"msg2"}]}}
@@ -70,9 +69,7 @@ func TestHasNewFormatCheckpoint_MixedFormatEarlyExit(t *testing.T) {
 func TestHasNewFormatCheckpoint_LargeFileEarlyExit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "large.jsonl")
-	// Simulate a large file: 5000 message lines, then a new-format checkpoint,
-	// then 5000 more message lines. hasNewFormatCheckpoint should exit after
-	// reading ~5001 lines, not 10001.
+
 	var content []byte
 	for i := 0; i < 5000; i++ {
 		content = append(content, []byte(`{"type":"message","session_id":"test","message":{"role":"user","content":[{"type":"text","text":"filler"}]}}

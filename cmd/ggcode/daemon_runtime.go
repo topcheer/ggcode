@@ -13,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// daemonToolPresenter adapts the IM DescribeTool function to daemon.ToolPresenter.
 type daemonToolPresenter struct {
 	lang im.ToolLanguage
 }
@@ -23,7 +22,6 @@ func (p *daemonToolPresenter) Present(toolName, rawArgs string) (displayName, de
 	return pres.DisplayName, pres.Detail, pres.Activity
 }
 
-// writeClipboard copies text to the system clipboard (best-effort).
 func writeClipboard(text string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -47,8 +45,6 @@ func writeClipboard(text string) {
 	_ = cmd.Run()
 }
 
-// daemonModeSwitcher implements tool.ModeSwitcher to persist permission mode
-// changes to session metadata in daemon mode.
 type daemonModeSwitcher struct {
 	policy *permission.ConfigPolicy
 	ses    *session.Session
@@ -66,7 +62,7 @@ func (s *daemonModeSwitcher) SetMode(mode permission.PermissionMode) {
 	if s.policy != nil {
 		s.policy.SetMode(mode)
 	}
-	// Persist to session, not to global config.
+
 	if s.ses != nil && s.store != nil {
 		s.ses.PermissionMode = mode.String()
 		_ = s.store.AppendMetaToDisk(s.ses)
@@ -81,7 +77,6 @@ func (s *daemonModeSwitcher) RestoreMode(fallback permission.PermissionMode) per
 	return fallback
 }
 
-// daemonRuntimeProvider implements tool.RuntimeStatusProvider for daemon mode.
 type daemonRuntimeProvider struct {
 	ses    *session.Session
 	cfg    *config.Config
@@ -172,6 +167,6 @@ func (p *daemonRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 	if p.bridge == nil {
 		return tool.RuntimeMobileInfo{}
 	}
-	// Daemon doesn't have a mobile tunnel — return empty.
+
 	return tool.RuntimeMobileInfo{}
 }

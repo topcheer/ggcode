@@ -37,7 +37,6 @@ func TestMCPSerialization(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// Check mcp_servers is present
 	raw, ok := result["mcp_servers"]
 	if !ok {
 		t.Fatal("mcp_servers key missing from response")
@@ -89,7 +88,6 @@ func TestIMSerialization(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// Check im is present
 	raw, ok := result["im"]
 	if !ok {
 		t.Fatal("im key missing from response")
@@ -127,7 +125,7 @@ func TestA2ASerialization(t *testing.T) {
 	}
 
 	s := NewServer(cfg)
-	// Test GET
+
 	req := httptest.NewRequest(http.MethodGet, "/api/a2a", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
@@ -174,9 +172,7 @@ func TestSessionsListNoStore(t *testing.T) {
 }
 
 func TestSessionsListWithSessions(t *testing.T) {
-	// Use manual temp dirs instead of t.TempDir() to avoid
-	// "TempDir RemoveAll cleanup: unlinkat: directory not empty" caused by
-	// JSONL store file handles still held during cleanup.
+
 	homeDir, err := os.MkdirTemp("", "webui-test-home-")
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +190,6 @@ func TestSessionsListWithSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create test sessions
 	ses1 := &session.Session{
 		ID:        "20260401-120000",
 		Title:     "Test Session 1",
@@ -279,7 +274,6 @@ func TestSessionsListWithSessions(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
 
-	// First group should be current workspace
 	g0 := groups[0].(map[string]interface{})
 	if !g0["current"].(bool) {
 		t.Error("first group should be current")
@@ -291,7 +285,7 @@ func TestSessionsListWithSessions(t *testing.T) {
 	g0sessions := g0["sessions"].([]interface{})
 	s0 := g0sessions[0].(map[string]interface{})
 	if s0["title"] != "Test Session 2" {
-		// Sessions are sorted by UpdatedAt desc within the group
+
 		t.Logf("first session title: %v (may not be ordered within group)", s0["title"])
 	}
 	if s0["model"] != "gpt-4" || s0["model"] == "" {
@@ -364,7 +358,6 @@ func TestSessionDetail(t *testing.T) {
 		t.Fatalf("expected 4 messages (system filtered), got %d", len(msgs))
 	}
 
-	// Check tool_use block is preserved (msgs[1] is the assistant message)
 	assistantMsg := msgs[1].(map[string]interface{})
 	blocks := assistantMsg["content"].([]interface{})
 	toolBlock := blocks[1].(map[string]interface{})
@@ -375,7 +368,6 @@ func TestSessionDetail(t *testing.T) {
 		t.Error("tool input should be present")
 	}
 
-	// Check tool_result block (msgs[2] is the user message with tool_result)
 	toolResultMsg := msgs[2].(map[string]interface{})
 	resultBlocks := toolResultMsg["content"].([]interface{})
 	resultBlock := resultBlocks[0].(map[string]interface{})
@@ -423,7 +415,6 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 
-	// POST to /api/sessions
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
@@ -432,7 +423,6 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 for POST /api/sessions, got %d", w.Code)
 	}
 
-	// POST to /api/sessions/123
 	req = httptest.NewRequest(http.MethodPost, "/api/sessions/123", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w = httptest.NewRecorder()
@@ -442,7 +432,6 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// mockAgent is a test double for AgentRunner.
 type mockAgent struct {
 	lastMsg     string
 	lastContent []provider.ContentBlock
@@ -471,7 +460,7 @@ func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider
 			onEvent(e)
 		}
 	}
-	// Simulate assistant response in history
+
 	var textContent string
 	for _, e := range m.events {
 		if e.Type == provider.StreamEventText {
@@ -491,7 +480,6 @@ func (m *mockAgent) Messages() []provider.Message {
 	return m.messages
 }
 
-// mockChatBridge is a test double for ChatBridge.
 type mockChatBridge struct {
 	mu          sync.Mutex
 	messages    []provider.Message
@@ -564,10 +552,8 @@ func TestChatWSBridgeSimple(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send message
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
 
-	// Read user_ack
 	var ack map[string]interface{}
 	ws.ReadJSON(&ack)
 	if ack["type"] != "user_ack" {
@@ -577,7 +563,6 @@ func TestChatWSBridgeSimple(t *testing.T) {
 		t.Fatalf("expected text 'hi', got %v", ack["text"])
 	}
 
-	// Simulate agent events via bridge broadcast
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "Hello "})
@@ -585,7 +570,6 @@ func TestChatWSBridgeSimple(t *testing.T) {
 		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}})
 	}()
 
-	// Read text deltas
 	var msg1 map[string]interface{}
 	ws.ReadJSON(&msg1)
 	if msg1["type"] != "text_delta" || msg1["text"] != "Hello " {
@@ -604,14 +588,13 @@ func TestChatWSBridgeSimple(t *testing.T) {
 		t.Errorf("expected done, got %v", done)
 	}
 
-	// Verify bridge received the message
 	if len(bridge.lastContent) != 1 || bridge.lastContent[0].Text != "hi" {
 		t.Errorf("bridge should have received 'hi', got %v", bridge.lastContent)
 	}
 }
 
 func TestChatWSBridgeBroadcast(t *testing.T) {
-	// Test that two WS connections both receive agent events via broadcast
+
 	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
@@ -634,7 +617,6 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 	}
 	defer ws2.Close()
 
-	// WS1 sends message — only WS1 gets user_ack
 	ws1.WriteJSON(map[string]string{"type": "user_message", "text": "hello"})
 	var ack1 map[string]interface{}
 	ws1.ReadJSON(&ack1)
@@ -642,9 +624,6 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 		t.Fatalf("ws1 should get user_ack, got %v", ack1["type"])
 	}
 
-	// Broadcast event — both should receive via subscription.
-	// Wait for both WS connections to complete Subscribe() before broadcasting,
-	// otherwise the broadcast may fire before ws2's subscription is registered.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		bridge.subMu.RLock()
@@ -750,7 +729,7 @@ func TestChatWSBridgeWithImage(t *testing.T) {
 	if ack["image_count"] != float64(1) {
 		t.Errorf("expected image_count 1, got %v", ack["image_count"])
 	}
-	// Bridge should have received content with image
+
 	if len(bridge.lastContent) != 2 {
 		t.Fatalf("expected 2 content blocks, got %d", len(bridge.lastContent))
 	}
@@ -842,8 +821,6 @@ func TestChatHistoryNoBridge(t *testing.T) {
 	}
 }
 
-// --- Config Save Scope Tests ---
-
 func TestHandleConfigScope_GET(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
@@ -885,7 +862,7 @@ func TestHandleConfigScope_PUT_Global(t *testing.T) {
 
 func TestHandleConfigScope_PUT_InstanceWithoutInstance(t *testing.T) {
 	cfg := config.DefaultConfig()
-	// No instance config attached — should reject instance scope
+
 	s := NewServer(cfg)
 
 	body := `{"scope":"instance"}`
@@ -959,7 +936,7 @@ func TestHandleConfigScope_PutInstanceWithInstance(t *testing.T) {
 	cfg.Save()
 
 	workspace := tmpDir + "/project"
-	// Manually create instance config dir and file
+
 	instDir := config.InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(instDir+"/ggcode.yaml", []byte("language: en\n"), 0644)
@@ -982,7 +959,6 @@ func TestHandleConfigScope_PutInstanceWithInstance(t *testing.T) {
 		t.Errorf("scope = %v, want instance", resp["scope"])
 	}
 
-	// Verify server's saveScope changed
 	s.mu.RLock()
 	sc := s.saveScope
 	s.mu.RUnlock()
@@ -1182,8 +1158,6 @@ func TestKnightSkillContentAPI(t *testing.T) {
 	})
 }
 
-// --- Knight edge cases ---
-
 func TestKnightSkillsNoFn(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
@@ -1299,7 +1273,7 @@ func TestKnightContentEdgeCases(t *testing.T) {
 }
 
 func TestKnightTypes(t *testing.T) {
-	// Verify KnightStatus JSON serialization
+
 	s := KnightStatus{
 		Enabled: true,
 		Running: true,
@@ -1334,15 +1308,13 @@ func TestKnightTypes(t *testing.T) {
 	}
 }
 
-// #1856 case 1: an unmatched /api/ path must 404 with JSON, not fall
-// into the SPA catch-all (200 text/html silently swallowed API errors).
 func TestUnknownAPIPathReturns404NotSPA(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	ts := httptest.NewServer(s.mux)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/configss") // typo'd endpoint
+	resp, err := http.Get(ts.URL + "/api/configss")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1356,8 +1328,6 @@ func TestUnknownAPIPathReturns404NotSPA(t *testing.T) {
 	}
 }
 
-// #1857 case 1: a second Start must be refused, not orphan the first
-// listener as a zombie port.
 func TestDoubleStartRefused(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)

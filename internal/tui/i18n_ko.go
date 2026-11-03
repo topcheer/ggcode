@@ -1,10 +1,5 @@
 package tui
 
-// Korean translations for TUI i18n.
-// ~523 keys translated here; keys missing from this catalog fall back to
-// enCatalog via the default branch below (that fallback is why partial
-// coverage is safe). #1373: the old header claimed "All 722 keys
-// translated", which was false on both counts.
 func koCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":

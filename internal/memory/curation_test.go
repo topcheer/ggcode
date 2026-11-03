@@ -10,26 +10,23 @@ func TestClassifyMemory(t *testing.T) {
 		key      string
 		category MemoryCategory
 	}{
-		// Transient
+
 		{"impl-task-2026-07-11-cycle1-summary", CategoryTransient},
 		{"session-fix-bug", CategoryTransient},
 		{"dedup-fix", CategoryTransient},
 		{"connection-pool-bug", CategoryTransient},
 
-		// Evolving
 		{"competitor-analysis-2026-07-13-r3", CategoryEvolving},
 		{"perf-research-2026-07-10", CategoryEvolving},
 		{"ux-research-2026-07-12-r4", CategoryEvolving},
 		{"frontier-papers-2026-07-14-r3", CategoryEvolving},
 
-		// Persistent
 		{"budget-guard-impl", CategoryPersistent},
 		{"cache-keepalive-impl", CategoryPersistent},
 		{"cron-persistence-design", CategoryPersistent},
 		{"build-tags-goolm", CategoryPersistent},
 		{"release-process", CategoryPersistent},
 
-		// Default
 		{"browser-tool-cdp", CategoryDefault},
 		{"check-untracked-before-commit", CategoryDefault},
 	}
@@ -56,7 +53,7 @@ func TestDedupKey(t *testing.T) {
 		{"impl-task-2026-07-12-mcp-readonly", "impl-task-mcp-readonly"},
 		{"desktop-ux-improvements-jul6", "desktop-ux-improvements"},
 		{"desktop-ux-improvements-jul7-cycle2", "desktop-ux-improvements"},
-		{"budget-guard-impl", "budget-guard-impl"}, // no date suffix
+		{"budget-guard-impl", "budget-guard-impl"},
 	}
 	for _, tc := range tests {
 		got := dedupKeyFor(tc.key)
@@ -69,7 +66,6 @@ func TestDedupKey(t *testing.T) {
 func TestShouldExpire(t *testing.T) {
 	now := time.Now()
 
-	// Transient: 31 days old → expired
 	oldTransient := MemoryMeta{
 		Key:       "impl-task-2026-06-01-foo",
 		Category:  CategoryTransient,
@@ -79,7 +75,6 @@ func TestShouldExpire(t *testing.T) {
 		t.Error("expected transient memory 31 days old to expire")
 	}
 
-	// Transient: 29 days old → not expired
 	freshTransient := MemoryMeta{
 		Key:       "impl-task-2026-07-01-foo",
 		Category:  CategoryTransient,
@@ -89,7 +84,6 @@ func TestShouldExpire(t *testing.T) {
 		t.Error("expected transient memory 29 days old to NOT expire")
 	}
 
-	// Persistent: never expires
 	persistent := MemoryMeta{
 		Key:       "old-design",
 		Category:  CategoryPersistent,
@@ -105,26 +99,22 @@ func TestCurateEntries(t *testing.T) {
 	day := 24 * time.Hour
 
 	metas := []MemoryMeta{
-		// Evolving: 3 versions of competitor-analysis, keep newest
+
 		{Key: "competitor-analysis-2025-07", Category: CategoryEvolving, CreatedAt: now.Add(-400 * day), DedupKey: "competitor-analysis"},
 		{Key: "competitor-analysis-2026-07-10-r2", Category: CategoryEvolving, CreatedAt: now.Add(-16 * day), DedupKey: "competitor-analysis"},
 		{Key: "competitor-analysis-2026-07-13-r3", Category: CategoryEvolving, CreatedAt: now.Add(-13 * day), DedupKey: "competitor-analysis"},
 
-		// Transient: old one expires, recent one survives
 		{Key: "impl-task-2026-06-01-foo", Category: CategoryTransient, CreatedAt: now.Add(-55 * day)},
 		{Key: "impl-task-2026-07-20-bar", Category: CategoryTransient, CreatedAt: now.Add(-6 * day)},
 
-		// Persistent: never expires
 		{Key: "budget-guard-impl", Category: CategoryPersistent, CreatedAt: now.Add(-100 * day)},
 		{Key: "build-tags-goolm", Category: CategoryPersistent, CreatedAt: now.Add(-200 * day)},
 
-		// Default
 		{Key: "check-untracked-before-commit", Category: CategoryDefault, CreatedAt: now.Add(-50 * day)},
 	}
 
 	active, expired, deduped, capped := curateEntries(metas, now)
 
-	// Expected: 1 newest competitor + 1 fresh impl-task + 2 persistent + 1 default = 5
 	if len(active) != 5 {
 		t.Fatalf("expected 5 active memories, got %d: %+v", len(active), active)
 	}
@@ -141,7 +131,6 @@ func TestCurateEntries(t *testing.T) {
 		t.Errorf("expected 0 capped, got %d", capped)
 	}
 
-	// Verify newest competitor-analysis is kept
 	foundNewest := false
 	for _, m := range active {
 		if m.Key == "competitor-analysis-2026-07-13-r3" {
@@ -163,8 +152,8 @@ func TestCapByCount(t *testing.T) {
 		max      int
 		wantLen  int
 		wantCap  int
-		evictedK []string // keys that must NOT be in result
-		keptK    []string // keys that must be in result
+		evictedK []string
+		keptK    []string
 	}{
 		{
 			name:    "under limit — no eviction",
@@ -194,7 +183,7 @@ func TestCapByCount(t *testing.T) {
 			max:      3,
 			wantLen:  3,
 			wantCap:  1,
-			evictedK: []string{"old1"}, // oldest default evicted
+			evictedK: []string{"old1"},
 			keptK:    []string{"old2", "new1", "persist1"},
 		},
 		{
@@ -207,8 +196,8 @@ func TestCapByCount(t *testing.T) {
 				{Key: "p3", Category: CategoryPersistent},
 			},
 			max:      2,
-			wantLen:  3, // can't go below 3 persistent
-			wantCap:  2, // evicted both defaults
+			wantLen:  3,
+			wantCap:  2,
 			keptK:    []string{"p1", "p2", "p3"},
 			evictedK: []string{"d1", "d2"},
 		},
@@ -245,9 +234,6 @@ func TestCapByCount(t *testing.T) {
 func TestCurateEntries_CapEvictsOldestDefault(t *testing.T) {
 	now := time.Now()
 
-	// Build 55 default memories (oldest to newest) + 10 persistent = 65 total.
-	// maxActiveMemories=60 → should evict 5 oldest defaults, keep 50 defaults
-	// and all 10 persistent = 60.
 	var metas []MemoryMeta
 	for i := 0; i < 55; i++ {
 		metas = append(metas, MemoryMeta{
@@ -276,19 +262,19 @@ func TestCurateEntries_CapEvictsOldestDefault(t *testing.T) {
 	for _, m := range active {
 		activeKeys[m.Key] = true
 	}
-	// Oldest 5 defaults (default-0 through default-4) should be evicted.
+
 	for i := 0; i < 5; i++ {
 		if activeKeys["default-"+itoa(i)] {
 			t.Errorf("default-%d should have been evicted (too old)", i)
 		}
 	}
-	// Newest 50 defaults should survive.
+
 	for i := 5; i < 55; i++ {
 		if !activeKeys["default-"+itoa(i)] {
 			t.Errorf("default-%d should have been kept (recent)", i)
 		}
 	}
-	// All persistent memories must survive.
+
 	for i := 0; i < 10; i++ {
 		if !activeKeys["persist-"+itoa(i)+"-impl"] {
 			t.Errorf("persist-%d-impl should never be evicted", i)

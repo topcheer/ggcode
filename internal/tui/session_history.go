@@ -25,14 +25,6 @@ func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 	m.chatListScrollToBottom()
 }
 
-// restoreHistoryFromMessages extracts user text messages from a session
-// and populates the input history so the user can recall previous prompts
-// with ↑/↓ arrows after resuming a session.
-//
-// Only genuine user-typed messages are included. Auto-injected user-role
-// messages (from post-completion gates, detector warnings, cron prompts,
-// etc.) are filtered out via isAutoInjectedUserMessage() to avoid polluting
-// the input history navigation.
 func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
 	m.history = m.history[:0]
 	for _, msg := range messages {
@@ -54,28 +46,14 @@ func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
 	m.historyIdx = len(m.history)
 }
 
-// isAutoInjectedUserMessage returns true if the text appears to be an
-// auto-injected message rather than genuine user input. These are messages
-// injected by the agent loop as user-role messages:
-//   - Post-completion gate advisories (Code quality advisory, etc.)
-//   - Detector warnings ([Context Anchor], [Task Anchor], etc.)
-//   - Prompt engineering hints ([prompt-ops], [MCP Ecosystem], etc.)
-//   - Cron-triggered prompts, IM relay messages
-//
-// Strategy: Any message starting with "[" and containing a "]" within the
-// first 50 characters is treated as auto-injected. Genuine user input
-// almost never starts with a bracket prefix. This is intentionally
-// generic so new detector names are automatically covered.
 func isAutoInjectedUserMessage(text string) bool {
-	// Short texts (under ~20 chars) are almost certainly user input.
+
 	if len(text) < 20 {
 		return false
 	}
 
-	// Generic bracket-prefix filter: messages like "[Context Anchor] ...",
-	// "[prompt-ops] ...", "[Rules — ...]" are always auto-injected.
 	if text[0] == '[' {
-		// Check if there's a closing bracket within the first 50 chars.
+
 		head := text
 		if len(head) > 50 {
 			head = head[:50]
@@ -85,7 +63,6 @@ func isAutoInjectedUserMessage(text string) bool {
 		}
 	}
 
-	// Known opening phrases of injected advisories without bracket prefix.
 	knownPhrases := []string{
 		"Code quality advisory:",
 		"Before finishing:",
@@ -113,9 +90,6 @@ func (m *Model) renderConversationMessage(msg provider.Message, toolCalls map[st
 	}
 }
 
-// shouldSkipHistoryToolItem mirrors the skip logic in chatStartTool/chatFinishTool.
-// Tools listed here are not rendered as visible chat items in real-time streaming,
-// so they should also be skipped when loading historical messages.
 func shouldSkipHistoryToolItem(toolName string) bool {
 	switch toolName {
 	case "read_command_output", "wait_command", "stop_command",
@@ -145,8 +119,7 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 				m.chatWriteUserMarkdown(nextChatID(), text)
 				textParts = nil
 			}
-			// Resolve tool name and rawArgs from the tool_use that produced this result,
-			// since tool_result blocks may not carry ToolName/RawArgs.
+
 			toolName := block.ToolName
 			rawArgs := ""
 			if tc, ok := toolCalls[block.ToolID]; ok {
@@ -156,12 +129,10 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 				rawArgs = tc.RawArgs
 			}
 
-			// Skip tool results for tools that have no visible chat item in real-time.
 			if shouldSkipHistoryToolItem(toolName) || toolName == "todo_write" || toolName == "exit_plan_mode" {
 				continue
 			}
 
-			// Update the corresponding chatList tool item with the result
 			if block.ToolID != "" && m.chatList != nil {
 				if item := m.chatList.FindByID(block.ToolID); item != nil {
 					status := chat.StatusSuccess
@@ -202,7 +173,6 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 			rawArgs := string(block.Input)
 			toolName := block.ToolName
 
-			// Record for later tool_result lookup
 			if block.ToolID != "" {
 				present := describeTool(m.currentLanguage(), toolName, rawArgs)
 				toolCalls[block.ToolID] = resumedToolCall{
@@ -212,9 +182,6 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				}
 			}
 
-			// --- Match real-time chatStartTool/chatFinishTool behavior ---
-
-			// 1. todo_write → restore TodoToolItem (same as real-time applyTodoWrite)
 			if toolName == "todo_write" {
 				if todos, ok := parseTodoSnapshot(rawArgs); ok {
 					m.chatUpdateTodoItem(todos)
@@ -222,7 +189,6 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				continue
 			}
 
-			// 2. spawn_agent → AgentToolItem (same as real-time chatStartTool)
 			if toolName == "spawn_agent" {
 				present := describeTool(m.currentLanguage(), toolName, rawArgs)
 				taskDisplay := present.DisplayName
@@ -237,7 +203,6 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				continue
 			}
 
-			// 3. exit_plan_mode → render plan as assistant message (same as real-time chatFinishTool)
 			if toolName == "exit_plan_mode" {
 				var args struct {
 					Plan string `json:"plan"`
@@ -251,12 +216,10 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				continue
 			}
 
-			// 4. Skip tools that have no visible chat item in real-time
 			if shouldSkipHistoryToolItem(toolName) {
 				continue
 			}
 
-			// 5. Standard tool item (same as real-time chatStartTool)
 			present := describeTool(m.currentLanguage(), toolName, rawArgs)
 			item := chat.NewToolItem(toolID, chat.ToolContext{
 				ToolName:    toolName,

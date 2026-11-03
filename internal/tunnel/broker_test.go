@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// newBrokerForTest creates a Broker with a mock-like session that captures
-// all sent messages. The senderLoop goroutine is NOT started so we can
-// inspect the outbound queue directly.
 func newBrokerForTest() (*Broker, *drainHelper) {
 	sess := NewSession("wss://test.local")
 	rc := mustTestRelayClient("wss://test.local")
@@ -39,10 +36,6 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
 
-	// Do NOT start senderLoop - we'll drain manually
-	// Do NOT start textFlushLoop - we'll flush manually or wait for ticker
-
-	// Start only the text flush loop (so batched text tests work)
 	go b.textFlushLoop()
 
 	d.b = b
@@ -63,7 +56,6 @@ func mustMarshalJSON(v any) json.RawMessage {
 	return data
 }
 
-// drain reads all pending outbound messages.
 func (d *drainHelper) drain() []GatewayMessage {
 	d.b.outMu.Lock()
 	msgs := d.b.outbound
@@ -82,8 +74,6 @@ func (d *drainHelper) getAll() []GatewayMessage {
 	copy(out, d.msgs)
 	return out
 }
-
-// --- Broker Tests ---
 
 func TestBrokerNextMessageID(t *testing.T) {
 	b, _ := newBrokerForTest()
@@ -266,7 +256,6 @@ func TestBrokerPushTextAndFlush(t *testing.T) {
 	b.PushText("msg-1", "hello ")
 	b.PushText("msg-1", "world")
 
-	// Wait for text flush ticker (300ms)
 	time.Sleep(500 * time.Millisecond)
 	msgs := d.drain()
 
@@ -346,17 +335,12 @@ func TestBrokerPushTextDoneEmptyBuffer(t *testing.T) {
 	}
 }
 
-// TestBrokerFlushAllTextsSkipsEmptyEntries pins the ticker-path guard that
-// mirrors flushText's: an entry created by PushText(id, "") must NOT be
-// flushed as an EventText with an empty Chunk. Mobile replays such frames
-// as blank chat bubbles after a session switch (user-visible bug). The
-// guard must stay surgical: real content on the same id still flushes.
 func TestBrokerFlushAllTextsSkipsEmptyEntries(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	b.PushText("msg-blank", "") // creates an empty buffered entry
-	// Wait past the text flush ticker (300ms) so flushAllTexts runs.
+	b.PushText("msg-blank", "")
+
 	time.Sleep(500 * time.Millisecond)
 	for _, m := range d.drain() {
 		if m.Type != EventText {
@@ -371,7 +355,6 @@ func TestBrokerFlushAllTextsSkipsEmptyEntries(t *testing.T) {
 		}
 	}
 
-	// Surgical: real content on the same id still reaches the wire.
 	b.PushText("msg-blank", "real")
 	time.Sleep(500 * time.Millisecond)
 	found := false
@@ -833,7 +816,7 @@ func TestBrokerPushSubagentTextDone(t *testing.T) {
 	defer b.Stop()
 
 	b.PushSubagentText("agent-1", "msg-s2", "final chunk", false)
-	b.PushSubagentText("agent-1", "msg-s2", "", true) // done=true triggers flush
+	b.PushSubagentText("agent-1", "msg-s2", "", true)
 
 	time.Sleep(200 * time.Millisecond)
 	msgs := d.drain()
@@ -997,14 +980,12 @@ func TestBrokerResetSession(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	// First push something to the log
 	b.PushStatus("running", "go")
 	time.Sleep(50 * time.Millisecond)
 	if len(d.drain()) == 0 {
 		t.Fatal("expected outbound event before reset")
 	}
 
-	// Clear should reset the log and enqueue snapshot_reset with a new session id.
 	oldSessionID := b.SessionID()
 	b.ResetSession()
 	time.Sleep(50 * time.Millisecond)
@@ -1534,9 +1515,6 @@ func TestBrokerClientReconnectSendsReplaceHistoryWhenRelayCountExceedsLocal(t *t
 		}
 	})
 
-	// Simulate the snowball condition: relay has accumulated MORE events (10)
-	// than local (3), which happens when previous replays were appended
-	// instead of replacing the relay's history.
 	b.handleRelayConnected(RelayConnectedState{
 		Role:           "client",
 		SessionID:      "sess-local",
@@ -1546,8 +1524,6 @@ func TestBrokerClientReconnectSendsReplaceHistoryWhenRelayCountExceedsLocal(t *t
 	})
 	time.Sleep(100 * time.Millisecond)
 
-	// The active_session sent to the relay MUST use replace_history mode
-	// so the relay clears its stale (over-counted) history before replay.
 	foundReplaceHistory := false
 Loop:
 	for {
@@ -1573,7 +1549,6 @@ Loop:
 		t.Fatal("expected active_session with replace_history mode when relayCount > localCount, preventing relay event snowball")
 	}
 
-	// Verify replayed events are present in the outbound queue
 	msgs := d.drain()
 	hasSnapshotReset := false
 	for _, msg := range msgs {
@@ -2089,7 +2064,7 @@ func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(
 	if msgs[len(msgs)-1].Type != EventReplayDone {
 		t.Fatalf("expected replay_done as last message, got %q", msgs[len(msgs)-1].Type)
 	}
-	// Status should be second-to-last (before replay_done).
+
 	if msgs[len(msgs)-2].Type != EventStatus {
 		t.Fatalf("expected status before replay_done, got %q", msgs[len(msgs)-2].Type)
 	}
@@ -2162,7 +2137,7 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	if last.Type != EventReplayDone {
 		t.Fatalf("expected replay_done as last message, got %q", last.Type)
 	}
-	// Second-to-last should be in-flight text.
+
 	textMsg := msgs[len(msgs)-2]
 	if textMsg.Type != EventText {
 		t.Fatalf("expected in-flight text before replay_done, got %q", textMsg.Type)
@@ -2468,7 +2443,6 @@ func TestBrokerFlushTextNoEntry(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	// flushText on non-existent entry should be no-op
 	b.flushText("nonexistent")
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -2497,7 +2471,6 @@ func TestBrokerFlushAllTextEmpty(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	// flushAllText with no entries should be no-op
 	b.flushAllText()
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -2584,7 +2557,7 @@ func TestBrokerReplayResetDoesNotConsumeEventOrdinal(t *testing.T) {
 	}, true)
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
-	// snapshot_reset + 2 replayed messages + replay_done
+
 	if len(msgs) != 4 {
 		t.Fatalf("expected snapshot reset + 2 replayed messages + replay_done, got %d", len(msgs))
 	}
@@ -2678,7 +2651,6 @@ func TestPushServerAck(t *testing.T) {
 		t.Errorf("expected message_id=msg-123, got %q", ackData.MessageID)
 	}
 
-	// Empty message_id should not produce any message.
 	b.PushServerAck("")
 	b.outMu.Lock()
 	extra := b.outbound
@@ -2689,8 +2661,7 @@ func TestPushServerAck(t *testing.T) {
 }
 
 func TestConcurrentEnqueueStrictlyOrdered(t *testing.T) {
-	// Verify that event IDs in the outbound queue are strictly increasing
-	// even when multiple goroutines enqueue concurrently.
+
 	b, _ := newBrokerForTest()
 	defer b.Stop()
 
@@ -2703,7 +2674,7 @@ func TestConcurrentEnqueueStrictlyOrdered(t *testing.T) {
 		go func(gid int) {
 			defer wg.Done()
 			for i := 0; i < eventsPerGoroutine; i++ {
-				// Mix different event types to exercise all enqueue paths.
+
 				switch i % 3 {
 				case 0:
 					b.PushText(fmt.Sprintf("msg-%d-%d", gid, i), "chunk")
@@ -2722,19 +2693,14 @@ func TestConcurrentEnqueueStrictlyOrdered(t *testing.T) {
 		}(g)
 	}
 
-	// Also drive the textFlushLoop so text chunks get flushed concurrently.
-	// The ticker is already running (300ms). Wait for all goroutines to finish
-	// then give the flush loop time to drain.
 	wg.Wait()
 	time.Sleep(500 * time.Millisecond)
 
-	// Collect all outbound messages.
 	b.outMu.Lock()
 	msgs := make([]GatewayMessage, len(b.outbound))
 	copy(msgs, b.outbound)
 	b.outMu.Unlock()
 
-	// Filter to events that have an EventID (skip snapshot_reset etc.)
 	var ordered []GatewayMessage
 	for _, m := range msgs {
 		if m.EventID != "" {
@@ -2746,7 +2712,6 @@ func TestConcurrentEnqueueStrictlyOrdered(t *testing.T) {
 			goroutines*eventsPerGoroutine/3, len(ordered))
 	}
 
-	// Verify strictly increasing event IDs.
 	for i := 1; i < len(ordered); i++ {
 		prev := ordered[i-1].EventID
 		cur := ordered[i].EventID

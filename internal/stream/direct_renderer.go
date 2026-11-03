@@ -13,17 +13,9 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
-	// For TTC (TrueType Collection) fallback parsing
 	"golang.org/x/image/font/sfnt"
 )
 
-// DirectRenderer converts ANSI terminal strings directly to *image.RGBA
-// without intermediate PNG encoding/decoding.
-//
-// Font strategy:
-//   - Primary: embedded DejaVu Mono (true monospace, covers ASCII + box-drawing)
-//   - Symbols fallback: system monospace font (covers ▶●✓❯█ etc.)
-//   - CJK fallback: system CJK font (covers Chinese/Japanese/Korean)
 type DirectRenderer struct {
 	width      int
 	height     int
@@ -37,15 +29,14 @@ type DirectRenderer struct {
 
 	fontOnce   sync.Once
 	fontErr    error
-	face       font.Face // DejaVu Mono (primary)
+	face       font.Face
 	faceBold   font.Face
-	symbolFace font.Face // system monospace font (symbols fallback)
-	cjkFace    font.Face // CJK font (wide char fallback)
-	emojiFace  font.Face // emoji font (color/monochrome fallback)
+	symbolFace font.Face
+	cjkFace    font.Face
+	emojiFace  font.Face
 	fontLoaded bool
 }
 
-// NewDirectRenderer creates a renderer that produces *image.RGBA directly.
 func NewDirectRenderer(width, height, fontSize int, fontPath string, termCols, termRows int) *DirectRenderer {
 	r := &DirectRenderer{
 		width:    width,
@@ -54,11 +45,9 @@ func NewDirectRenderer(width, height, fontSize int, fontPath string, termCols, t
 		fontPath: fontPath,
 	}
 
-	// Initial estimates — will be refined after font loads
 	r.charWidth = max(1, int(float64(fontSize)*0.6))
 	r.charHeight = max(1, int(float64(fontSize)*1.2))
 
-	// Use actual terminal grid size if provided
 	if termCols > 0 && termRows > 0 {
 		r.cols = termCols
 		r.rows = termRows
@@ -70,9 +59,8 @@ func NewDirectRenderer(width, height, fontSize int, fontPath string, termCols, t
 	return r
 }
 
-// loadFonts initializes font faces using opentype.
 func (r *DirectRenderer) loadFonts() {
-	// 1. DejaVu Mono as primary (true monospace, embedded)
+
 	dvData := DejaVuMonoRegular()
 	dvParsed, err := opentype.Parse(dvData)
 	if err != nil {
@@ -90,7 +78,6 @@ func (r *DirectRenderer) loadFonts() {
 	}
 	r.fontName = "DejaVuMono"
 
-	// Measure from DejaVu Mono (true monospace)
 	if adv, ok := r.face.GlyphAdvance('M'); ok && adv.Ceil() > 0 {
 		r.charWidth = adv.Ceil()
 	}
@@ -99,8 +86,6 @@ func (r *DirectRenderer) loadFonts() {
 		r.charHeight = h
 	}
 
-	// 2. Symbols fallback — system monospace font for Unicode symbols (▶●✓❯ etc.)
-	// Try opentype.Parse first; if the font is TTC, truetype.Parse handles it.
 	sysFontPath := findSymbolFallbackFont()
 	if sysFontPath != "" {
 		if data, err := ReadFontFile(sysFontPath); err == nil {
@@ -110,7 +95,7 @@ func (r *DirectRenderer) loadFonts() {
 					DPI:     72,
 					Hinting: font.HintingFull,
 				}); err == nil {
-					// Verify it's monospace (or close enough)
+
 					if adv, ok := face.GlyphAdvance('M'); ok && adv.Ceil() == r.charWidth {
 						r.symbolFace = face
 					}
@@ -119,7 +104,6 @@ func (r *DirectRenderer) loadFonts() {
 		}
 	}
 
-	// 3. CJK fallback
 	cjkPath := FindCJKFont()
 	if cjkPath != "" {
 		if data, err := ReadFontFile(cjkPath); err == nil {
@@ -135,13 +119,11 @@ func (r *DirectRenderer) loadFonts() {
 		}
 	}
 
-	// 4. Emoji fallback — system emoji font (Apple Color Emoji, Noto Color Emoji, etc.)
 	emojiPath := FindEmojiFont()
 	if emojiPath != "" {
 		r.emojiFace = r.loadFontFace(emojiPath)
 	}
 
-	// 5. Bold face from DejaVu Mono Bold
 	boldData := DejaVuMonoBold()
 	if boldParsed, err := opentype.Parse(boldData); err == nil {
 		r.faceBold, _ = opentype.NewFace(boldParsed, &opentype.FaceOptions{
@@ -151,21 +133,18 @@ func (r *DirectRenderer) loadFonts() {
 		})
 	}
 
-	// Grid already set from constructor (using terminal cols/rows)
 	r.fontLoaded = true
 }
 
-// findSymbolFallbackFont finds a system monospace font that can render Unicode symbols.
-// Must have the same charWidth as DejaVu Mono at the same point size.
 func findSymbolFallbackFont() string {
 	candidates := []string{
-		// macOS
+
 		"/System/Library/Fonts/SFNSMono.ttf",
 		"/System/Library/Fonts/Monaco.ttf",
-		// Linux
+
 		"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 		"/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-		// Windows
+
 		"C:\\Windows\\Fonts\\consola.ttf",
 	}
 	for _, p := range candidates {
@@ -176,8 +155,6 @@ func findSymbolFallbackFont() string {
 	return ""
 }
 
-// loadFontFace loads a font file (.ttf, .otf, or .ttc) and returns a font.Face.
-// For .ttc files, tries the first font in the collection.
 func (r *DirectRenderer) loadFontFace(path string) font.Face {
 	data, err := ReadFontFile(path)
 	if err != nil {
@@ -190,15 +167,12 @@ func (r *DirectRenderer) loadFontFace(path string) font.Face {
 		Hinting: font.HintingFull,
 	}
 
-	// Try opentype.Parse first (handles .ttf and .otf)
 	if parsed, err := opentype.Parse(data); err == nil {
 		if face, err := opentype.NewFace(parsed, opts); err == nil {
 			return face
 		}
 	}
 
-	// Fallback: try sfnt.Parse for .ttc collections
-	// TTC files contain multiple fonts; we try to parse each offset.
 	if sfntFont, err := sfnt.Parse(data); err == nil {
 		if face, err := opentype.NewFace(sfntFont, opts); err == nil {
 			return face
@@ -208,13 +182,10 @@ func (r *DirectRenderer) loadFontFace(path string) font.Face {
 	return nil
 }
 
-// Cols returns terminal column count.
 func (r *DirectRenderer) Cols() int { return r.cols }
 
-// Rows returns terminal row count.
 func (r *DirectRenderer) Rows() int { return r.rows }
 
-// FontInfo returns a human-readable description of the loaded font.
 func (r *DirectRenderer) FontInfo() string {
 	r.fontOnce.Do(r.loadFonts)
 	if r.fontErr != nil {
@@ -234,11 +205,8 @@ func (r *DirectRenderer) FontInfo() string {
 	return "no font"
 }
 
-// Render converts ANSI text directly to an *image.RGBA.
 func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
-	// Replace emoji with safe equivalents before rendering.
-	// Go's font renderer cannot draw bitmap/color emoji, so we substitute
-	// visually similar outline characters that DejaVu Mono supports.
+
 	ansiText = replaceEmojiForRender(ansiText)
 
 	r.fontOnce.Do(r.loadFonts)
@@ -249,13 +217,10 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 		return nil, fmt.Errorf("no font face")
 	}
 
-	// Strip OSC 8 hyperlink sequences — go-ansi-parser doesn't handle them.
 	ansiText = stripOSCHyperlinks(ansiText)
 
-	// Create output image
 	img := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
 
-	// Fill background
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.NRGBA{R: 30, G: 30, B: 30, A: 255}}, image.Point{}, draw.Src)
 
 	face := r.face
@@ -263,7 +228,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 	lineHeight := r.charHeight
 	ascent := metrics.Ascent.Ceil()
 
-	// Parse ANSI
 	styledTexts, err := ansi.Parse(
 		ansiText,
 		ansi.WithDefaultForegroundColor("37"),
@@ -274,7 +238,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 		styledTexts = nil
 	}
 
-	// Font drawer
 	d := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
@@ -283,7 +246,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 
 	cursorX, cursorY := 0, 0
 
-	// selectFace picks the right font face for a rune.
 	selectFace := func(rne rune, bold bool) font.Face {
 		if IsEmoji(rne) && r.emojiFace != nil {
 			return r.emojiFace
@@ -291,7 +253,7 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 		if IsWide(rne) && r.cjkFace != nil {
 			return r.cjkFace
 		}
-		// Check if primary font has this glyph
+
 		if _, ok := face.GlyphAdvance(rne); !ok && r.symbolFace != nil {
 			return r.symbolFace
 		}
@@ -305,7 +267,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 		for _, st := range styledTexts {
 			bold := st.Bold()
 
-			// Foreground color
 			if st.FgCol != nil {
 				d.Src = image.NewUniform(color.NRGBA{
 					R: uint8(st.FgCol.Rgb.R),
@@ -317,7 +278,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 				d.Src = image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 			}
 
-			// Background
 			if st.BgCol != nil {
 				bgC := color.NRGBA{
 					R: uint8(st.BgCol.Rgb.R),
@@ -344,7 +304,6 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 				}
 			}
 
-			// Draw characters
 			for _, rne := range []rune(st.Label) {
 				if rne == '\n' {
 					cursorX = 0
@@ -372,7 +331,7 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 			}
 		}
 	} else {
-		// Plain text fallback
+
 		lines := strings.Split(ansiText, "\n")
 		for row, line := range lines {
 			if row >= r.rows {

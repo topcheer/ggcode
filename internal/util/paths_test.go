@@ -3,7 +3,7 @@ package util
 import "testing"
 
 func TestRelativizePaths(t *testing.T) {
-	// RelativizePaths is now a pass-through — text is returned as-is.
+
 	tests := []struct {
 		name    string
 		text    string

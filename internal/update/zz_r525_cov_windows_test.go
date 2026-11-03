@@ -52,7 +52,7 @@ func TestDetectDualScopeWindowsLocalAppDataFallback(t *testing.T) {
 	base := t.TempDir()
 	fallback := touchWindowsExe(t, filepath.Join(base, "AppData", "Local"))
 	touchWindowsExe(t, filepath.Join(base, "pf"))
-	t.Setenv("LOCALAPPDATA", "") // exercises detect.go:37-38 fallback
+	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("ProgramFiles", filepath.Join(base, "pf"))
 	t.Setenv("HOME", base)
 

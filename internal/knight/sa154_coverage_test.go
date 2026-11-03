@@ -12,12 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// sa-154: coverage supplements for previously untested pure helpers and
-// lightly-covered state paths (79.2% -> target >= 85%). No production code
-// is modified by this file.
-
-// --- candidate_queue.go ---
-
 func TestSa154CandidateOrderLess(t *testing.T) {
 	now := time.Now()
 	earlier := now.Add(-time.Hour)
@@ -59,8 +53,6 @@ func TestSa154UniqueSortedStrings(t *testing.T) {
 	}
 }
 
-// --- governance.go ---
-
 func TestSa154RecommendationFormatHuman(t *testing.T) {
 	full := SkillActionRecommendation{
 		Ref: "a|b", Action: "merge-review", Priority: "high",
@@ -101,20 +93,17 @@ func TestSa154AuditFormatHuman(t *testing.T) {
 func TestSa154AddSkillRecommendation(t *testing.T) {
 	dst := map[string]SkillActionRecommendation{}
 
-	// Empty ref/action entries are dropped.
 	addSkillRecommendation(dst, SkillActionRecommendation{Action: "prune"})
 	addSkillRecommendation(dst, SkillActionRecommendation{Ref: "x"})
 	if len(dst) != 0 {
 		t.Fatalf("invalid recommendations should be dropped, got %v", dst)
 	}
 
-	// Default priority is medium.
 	addSkillRecommendation(dst, SkillActionRecommendation{Ref: "a", Action: "prune"})
 	if dst["prune|a"].Priority != "medium" {
 		t.Errorf("default priority = %q, want medium", dst["prune|a"].Priority)
 	}
 
-	// Upgrade priority and append a disjoint reason.
 	addSkillRecommendation(dst, SkillActionRecommendation{Ref: "a", Action: "prune", Priority: "high", Reason: "also stale", Command: "do-it"})
 	merged := dst["prune|a"]
 	if merged.Priority != "high" || merged.Command != "do-it" {
@@ -124,7 +113,6 @@ func TestSa154AddSkillRecommendation(t *testing.T) {
 		t.Errorf("reason not merged: %q", merged.Reason)
 	}
 
-	// Downgrade is ignored; duplicate reason is not appended twice.
 	addSkillRecommendation(dst, SkillActionRecommendation{Ref: "a", Action: "prune", Priority: "low", Reason: "also stale"})
 	merged = dst["prune|a"]
 	if merged.Priority != "high" {
@@ -160,7 +148,6 @@ func TestSa154StalenessHelpers(t *testing.T) {
 		t.Errorf("staleReason = %q, want 'no confirmed use since'", got)
 	}
 
-	// Old skill, never used, heavily exposed -> stale with "never explicitly used".
 	old := &SkillEntry{Meta: SkillMeta{CreatedAt: cutoff.Add(-time.Hour).Format(time.RFC3339)}}
 	exposed := skillUsage{PromptExposureCount: 1 << 20}
 	if !skillLooksStale(old, exposed, cutoff) {
@@ -170,12 +157,10 @@ func TestSa154StalenessHelpers(t *testing.T) {
 		t.Errorf("staleReason = %q, want 'never explicitly used'", got)
 	}
 
-	// Low exposure: not stale via the created path.
 	if skillLooksStale(old, skillUsage{}, cutoff) {
 		t.Error("old skill with no exposures should not be stale (created path needs exposure)")
 	}
 
-	// Otherwise: fallback reason.
 	if got := staleReason(entry, skillUsage{}, 0, cutoff); got != "skill looks stale" {
 		t.Errorf("staleReason fallback = %q", got)
 	}
@@ -197,8 +182,6 @@ func TestSa154SkillCreatedAt(t *testing.T) {
 		t.Errorf("skillCreatedAt = %v, want %v", got, want)
 	}
 }
-
-// --- usage_tracker.go ---
 
 func TestSa154UsageTrackerAllUsageFlushAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "usage.json")
@@ -226,8 +209,6 @@ func TestSa154UsageTrackerAllUsageFlushAndReload(t *testing.T) {
 		t.Errorf("reload after Flush = %+v, want persisted alpha entry", after)
 	}
 }
-
-// --- skill_index.go ---
 
 func TestSa154FindActiveByName(t *testing.T) {
 	home := t.TempDir()
@@ -261,8 +242,6 @@ func TestSa154FindActiveByName(t *testing.T) {
 		t.Errorf("project lookup failed: %+v", e)
 	}
 }
-
-// --- analyzer.go ---
 
 func TestSa154DetectFailureFixes(t *testing.T) {
 	sa := &SessionAnalyzer{}
@@ -298,7 +277,6 @@ func TestSa154DetectFailureFixes(t *testing.T) {
 func TestSa154DetectFailureFixesSkips(t *testing.T) {
 	sa := &SessionAnalyzer{}
 
-	// Unknown tool IDs are skipped; no assistant in between means no fix.
 	ses := &session.Session{ID: "s2", Messages: []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{
 			{Type: "tool_result", ToolID: "ghost", IsError: true, Output: "err"},
@@ -312,7 +290,6 @@ func TestSa154DetectFailureFixesSkips(t *testing.T) {
 		t.Errorf("expected no candidates (no assistant between), got %d", len(got))
 	}
 
-	// Same tool failing twice only yields one candidate.
 	ses2 := &session.Session{ID: "s3", Messages: []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
 			{Type: "tool_use", ToolID: "a", ToolName: "Edit", Input: json.RawMessage(`{"p":1}`)},
@@ -338,12 +315,12 @@ func TestSa154IsValidCandidateName(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"short", false},              // < 8 chars
-		{"correction-123", false},     // pure fallback pattern
-		{"correction-abc", true},      // correction with semantic tail
-		{"------------", false},       // all dashes, no alnum
-		{"good-candidate-name", true}, // healthy name
-		{"a-b-c-d-e-f", true},         // exactly half alnum
+		{"short", false},
+		{"correction-123", false},
+		{"correction-abc", true},
+		{"------------", false},
+		{"good-candidate-name", true},
+		{"a-b-c-d-e-f", true},
 	}
 	for _, tc := range cases {
 		if got := isValidCandidateName(tc.in); got != tc.want {
@@ -356,8 +333,6 @@ func TestSa154AnalyzerRecordUsageNoop(t *testing.T) {
 	(&SessionAnalyzer{}).RecordUsage(provider.TokenUsage{})
 }
 
-// --- skill_validator.go ---
-
 func TestSa154CheckDependencies(t *testing.T) {
 	r := &ValidationResult{}
 	entry := &SkillEntry{Meta: SkillMeta{Requires: []string{"sa154-no-such-binary-xyz", "go"}}}
@@ -369,8 +344,6 @@ func TestSa154CheckDependencies(t *testing.T) {
 		t.Errorf("unexpected warning: %q", r.Warnings[0])
 	}
 }
-
-// --- reject_feedback.go ---
 
 func TestSa154RejectFeedbackLoad(t *testing.T) {
 	dir := t.TempDir()
@@ -400,9 +373,6 @@ func TestSa154RejectFeedbackLoad(t *testing.T) {
 		}
 	}
 
-	// Corrupt line: skipped, trailing entries still load and the end-of-load
-	// trim still runs (sa-161 fix; previously the early return dropped the
-	// trailing entry and kept the stale one).
 	corruptPath := filepath.Join(dir, "corrupt.jsonl")
 	writeLines(corruptPath, stale, "this is not json", fresh)
 	s := newRejectFeedbackStore(corruptPath)
@@ -411,12 +381,11 @@ func TestSa154RejectFeedbackLoad(t *testing.T) {
 		t.Fatalf("corrupt-file load = %+v, want corrupt line skipped + stale trimmed, only [fresh-skill]", s.entries)
 	}
 	before := len(s.entries)
-	s.load() // idempotent
+	s.load()
 	if len(s.entries) != before {
 		t.Errorf("second load re-read entries: %d -> %d", before, len(s.entries))
 	}
 
-	// Clean file: load trims entries beyond the cool-down window.
 	cleanPath := filepath.Join(dir, "clean.jsonl")
 	writeLines(cleanPath, stale, fresh)
 	c := newRejectFeedbackStore(cleanPath)
@@ -425,7 +394,6 @@ func TestSa154RejectFeedbackLoad(t *testing.T) {
 		t.Fatalf("clean-file load = %+v, want stale entry trimmed, only [fresh-skill]", c.entries)
 	}
 
-	// Missing file: no panic, no entries.
 	empty := newRejectFeedbackStore(filepath.Join(dir, "missing.jsonl"))
 	empty.load()
 	if len(empty.entries) != 0 {

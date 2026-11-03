@@ -10,20 +10,8 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// DefaultRelayURL is the default ggcode-relay server URL.
 const DefaultRelayURL = "wss://gateway.ggcode.dev"
 
-// Session manages a relay session: connects to ggcode-relay, generates QR code.
-//
-// Usage:
-//
-//	sess := tunnel.NewSession("wss://relay.ggcode.app")
-//	info, err := sess.Start(ctx)
-//	fmt.Println(info.ConnectURL)
-//	fmt.Println(info.QRCode)
-//	sess.Send(msg)
-//	sess.OnMessage(func(m) { ... })
-//	sess.Stop()
 type Session struct {
 	relayURL string
 	client   *RelayClient
@@ -34,19 +22,14 @@ type Session struct {
 	mu       sync.RWMutex
 	info     *SessionInfo
 
-	// cachedConnState holds the connected state received from the relay
-	// before OnConnected was wired up (e.g. during sess.Start() before
-	// NewBroker is created). When OnConnected is eventually called, we
-	// replay this cached state so handleRelayConnected always runs.
 	cachedConnState *RelayConnectedState
 }
 
-// SessionInfo contains the connection details after a session starts.
 type SessionInfo struct {
-	ConnectURL          string // ws/wss tunnel URL for the mobile client
+	ConnectURL          string
 	Token               string
-	QRCode              string // terminal-friendly QR code (text)
-	QRCodePNG           []byte // PNG image bytes for GUI display
+	QRCode              string
+	QRCodePNG           []byte
 	QRLines             []string
 	ProtocolVersion     int
 	ShareMode           string
@@ -64,7 +47,6 @@ func WithClientMetadata(kind, version string) SessionOption {
 	}
 }
 
-// NewSession creates a new relay session.
 func NewSession(relayURL string, opts ...SessionOption) *Session {
 	sess := &Session{
 		relayURL: strings.TrimSuffix(relayURL, "/"),
@@ -78,7 +60,6 @@ func NewSession(relayURL string, opts ...SessionOption) *Session {
 	return sess
 }
 
-// Start connects to the relay server and returns connection info.
 func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	if err := validateRelayURLSecurity(s.relayURL); err != nil {
 		return nil, err
@@ -96,8 +77,6 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	}
 	s.client = client
 
-	// Wire handlers before connect so the initial relay callbacks cannot race
-	// with handler registration.
 	client.OnMessage(func(msg GatewayMessage) {
 		s.mu.RLock()
 		fn := s.onMsg
@@ -110,8 +89,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		s.mu.Lock()
 		fn := s.onConn
 		if fn == nil {
-			// Broker hasn't been created yet — cache the state so
-			// OnConnected can replay it later.
+
 			s.cachedConnState = &info
 		}
 		s.mu.Unlock()
@@ -120,15 +98,12 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		}
 	})
 
-	// Connect to relay
 	if err := client.Connect(); err != nil {
 		return nil, err
 	}
 
-	// Build connect URL
 	connectURL := publicDesc.PublicConnectURL(s.relayURL)
 
-	// Generate QR code
 	qrStr, _ := QRCodeForURL(connectURL)
 	qrLines, _ := QRCodeLines(connectURL)
 	qrPNG, _ := QRCodePNG(connectURL)
@@ -167,8 +142,7 @@ func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
 	cached = s.cachedConnState
 	s.cachedConnState = nil
 	s.mu.Unlock()
-	// Replay the cached connected state that arrived before this handler
-	// was registered (e.g. relay responded before NewBroker was called).
+
 	if cached != nil && fn != nil {
 		next := *cached
 		safego.Go("tunnel.session.replayCachedConn", func() { fn(next) })

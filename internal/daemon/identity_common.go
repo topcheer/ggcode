@@ -1,8 +1,5 @@
 package daemon
 
-// itoaDaemon converts a pid to its decimal string form without pulling in
-// strconv for this tiny hot path (kept platform-neutral so every
-// processCmdline variant can share it).
 func itoaDaemon(pid int) string {
 	if pid == 0 {
 		return "0"

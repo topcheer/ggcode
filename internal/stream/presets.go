@@ -1,26 +1,23 @@
 package stream
 
-// PlatformPreset defines a built-in streaming platform configuration template.
 type PlatformPreset struct {
-	// Name is the display name (e.g., "YouTube", "Bilibili").
 	Name string
-	// ID is the unique identifier used in config (e.g., "youtube", "bilibili").
+
 	ID string
-	// URL is the default RTMP/RTMPS push endpoint (without stream key).
+
 	URL string
-	// Region is "international" or "china".
+
 	Region string
-	// HelpURL is a link to docs on finding the stream key.
+
 	HelpURL string
-	// KeyHint is a hint about where to find the stream key.
+
 	KeyHint string
-	// Protocol is "rtmp" or "rtmps".
+
 	Protocol string
 }
 
-// Presets is the list of all built-in platform presets, ordered by region then name.
 var Presets = []PlatformPreset{
-	// International platforms
+
 	{
 		Name:     "YouTube",
 		ID:       "youtube",
@@ -58,7 +55,6 @@ var Presets = []PlatformPreset{
 		Protocol: "rtmp",
 	},
 
-	// China domestic platforms
 	{
 		Name:     "Bilibili (哔哩哔哩)",
 		ID:       "bilibili",
@@ -115,7 +111,6 @@ var Presets = []PlatformPreset{
 	},
 }
 
-// PresetByID returns a preset by its ID, or nil if not found.
 func PresetByID(id string) *PlatformPreset {
 	for i := range Presets {
 		if Presets[i].ID == id {
@@ -125,7 +120,6 @@ func PresetByID(id string) *PlatformPreset {
 	return nil
 }
 
-// PresetNames returns a list of all preset display names.
 func PresetNames() []string {
 	names := make([]string, len(Presets))
 	for i, p := range Presets {
@@ -134,7 +128,6 @@ func PresetNames() []string {
 	return names
 }
 
-// PresetsByRegion returns presets grouped by region.
 func PresetsByRegion() map[string][]PlatformPreset {
 	m := make(map[string][]PlatformPreset)
 	for _, p := range Presets {

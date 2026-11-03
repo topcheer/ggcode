@@ -29,8 +29,7 @@ func (m *Model) handleRulesCommand() tea.Cmd {
 
 	rules := rs.Rules()
 	if len(rules) == 0 {
-		// #913: was a truncated fragment ('after each run. They help...');
-		// restore the full sentence.
+
 		m.chatWriteSystem(nextSystemID(),
 			"No rules saved yet. Rules capture lessons from previous runs and are applied after each run. They help the agent avoid repeating mistakes.")
 		return nil
@@ -60,9 +59,6 @@ func (m *Model) handleRulesCommand() tea.Cmd {
 		}
 	}
 
-	// #1008: legacy stores may still hold non-canonical categories (rules
-	// saved before AddRule started normalizing). Render them under "other"
-	// instead of counting them in Total but silently hiding them.
 	for _, cat := range []string{"build", "test", "git", "convention", "security"} {
 		delete(categories, cat)
 	}

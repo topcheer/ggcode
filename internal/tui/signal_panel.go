@@ -28,11 +28,11 @@ type signalPanelState struct {
 	createMode  bool
 	createInput string
 	editState   imAdapterEditState
-	daemonOK    *bool  // nil=checking, true=ok, false=unreachable
-	installing  bool   // true while Docker install is running
-	qrCode      string // ASCII art QR code, empty if not fetched
-	qrFetching  bool   // true while fetching QR code
-	qrError     string // error if QR fetch failed
+	daemonOK    *bool
+	installing  bool
+	qrCode      string
+	qrFetching  bool
+	qrError     string
 }
 
 type signalBindingEntry struct {
@@ -58,13 +58,10 @@ type signalDaemonCheckMsg struct {
 }
 
 type signalQRCodeMsg struct {
-	qr  string // ASCII art
+	qr  string
 	err error
 }
 
-// maskSignalCreateEcho masks the create-input echo (#2178 same-shape):
-// the spec is `name base_url account` - the 3rd field is the phone
-// number (PII). First two fields stay readable; later ones are masked.
 func maskSignalCreateEcho(input string) string {
 	return maskPositionalCreateEcho(input, 2)
 }
@@ -107,26 +104,24 @@ func (m *Model) installSignalDaemon() tea.Cmd {
 		if err != nil {
 			return signalBindResultMsg{err: fmt.Errorf("install failed: %s: %s", err, strings.TrimSpace(string(output)))}
 		}
-		// Re-check daemon after install
+
 		time.Sleep(3 * time.Second)
 		checkErr := im.CheckSignalDaemon("")
 		if checkErr != nil {
-			// #1375-D: through m.t() like the rest of the file.
+
 			return signalBindResultMsg{message: m.t("panel.signal.message.installed_pending")}
 		}
 		return signalBindResultMsg{message: m.t("panel.signal.message.installed_running")}
 	}
 }
 
-// renderQRCodeASCII converts a PNG QR code image to Unicode block-character ASCII art.
 func renderQRCodeASCII(pngData []byte) string {
-	// Step 1: Decode PNG image
+
 	img, err := png.Decode(bytes.NewReader(pngData))
 	if err != nil {
 		return "(QR code PNG decode failed)"
 	}
 
-	// Step 2: Decode QR code content from the image using gozxing
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
 		return "(QR code bitmap failed)"
@@ -138,7 +133,6 @@ func renderQRCodeASCII(pngData []byte) string {
 	}
 	content := result.String()
 
-	// Step 3: Re-generate QR code as ASCII using go-qrcode
 	qr, err := renderCompactTerminalQRCode(content)
 	if err != nil {
 		return "(QR code regenerate failed)"
@@ -236,7 +230,6 @@ func (m Model) renderSignalPanel() string {
 		}
 	}
 
-	// Daemon status
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.daemon")))
 	if panel.installing {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+m.t("panel.signal.daemon_installing")))
@@ -271,8 +264,7 @@ func (m Model) renderSignalPanel() string {
 	}
 
 	if panel.qrFetching {
-		// #1416-B: qr_fetching had zero consumers - the network round-trip
-		// showed nothing at all (#1375's "silent paths speak" leftover).
+
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_fetching")))
 	}
 	if panel.message != "" {
@@ -301,10 +293,7 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 	if panel.installing {
-		// #1757 case 1: the install runs up to ~2 minutes (Docker pull).
-		// Swallowing EVERY key left esc dead the whole time; ctrl+c had a
-		// pre-panel escape channel users didn't know about. Let both
-		// escape keys through so the panel is closable mid-install.
+
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			m.closeSignalPanel()
@@ -382,12 +371,7 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.daemonOK = nil
 		return *m, checkSignalDaemonCmd()
 	case "q", "Q":
-		// #1375-A: silent no-op when the daemon is down made q feel
-		// broken - the qr_no_daemon key existed in both languages with
-		// zero callers. Surface it via the panel message line.
-		// #1416-B: distinguish daemonOK==nil (check still in flight) from
-		// false (not running) - a fresh panel + immediate q used to report
-		// "Daemon not running" and steer the user into a needless reinstall.
+
 		if panel.daemonOK == nil {
 			panel.message = m.t("panel.signal.daemon_checking")
 			return *m, nil
@@ -437,9 +421,7 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return signalBindResultMsg{err: errors.New(m.t("panel.signal.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace - an
-		// account WITH spaces was silently truncated to its first token,
-		// then persisted as a guaranteed-to-fail credential. Reject extras.
+
 		if len(fields) > 3 {
 			return signalBindResultMsg{err: errors.New("extra fields after account (values must not contain spaces): " + spec)}
 		}
@@ -454,9 +436,8 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 				"account":  account,
 			},
 		}
-		// #1367 family batch 2: config write + disk save moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -466,19 +447,13 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext account - without
-						// compensation a wrong credential stays on disk forever
-						// and blocks the name on retry ("already exists"); the
-						// panel has no delete key. The rollback REMOVE is itself
-						// a map write, so it must route through configMutationMsg
-						// too (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -524,7 +499,7 @@ func (m *Model) startSigAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
+
 		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
 			return fmt.Errorf("enable %s: %w", name, err)
 		}
@@ -561,7 +536,7 @@ func (m *Model) startSignalAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
+
 		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
 			return fmt.Errorf("enable %s: %w", name, err)
 		}
@@ -584,10 +559,7 @@ func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return signalBindResultMsg{err: errors.New(m.t("panel.signal.error.config_unavailable"))}
 		}
-		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
-		// Update loop (#1367 family) - startSignalAdapterIfNeeded wrote the
-		// config map from this Cmd goroutine while the render loop ranged
-		// it. qq pattern: mutate via configMutationMsg, continue in next().
+
 		if m.config != nil {
 			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
@@ -612,8 +584,6 @@ func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 	}
 }
 
-// bindSigRest is the bind chain body after the (optional) enable mutation
-// lands on the Update loop.
 func bindSigRest(m *Model, entry signalBindingEntry, ws string) tea.Msg {
 	if err := m.startSignalAdapterIfNeeded(entry.Adapter); err != nil {
 		return signalBindResultMsg{err: err}
@@ -648,12 +618,7 @@ func (m *Model) clearSigChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return signalBindResultMsg{}
 		}
-		// #1009: this was the UNBIND path mislabeled as "clear channel" (the
-		// whole workspace binding was deleted, including bindings of other
-		// workspaces sharing the adapter) and reported success even when no
-		// binding matched (#898/#905 pattern, missed during that sweep).
-		// Clear channel fields only; surface not-found instead of a false
-		// "cleared".
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return signalBindResultMsg{err: err}
 		}

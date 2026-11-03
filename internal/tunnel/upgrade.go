@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// UpgradeState tracks the P2P upgrade lifecycle.
 type UpgradeState int
 
 const (
@@ -37,38 +36,25 @@ func (s UpgradeState) String() string {
 	}
 }
 
-// UpgradeConfig controls the P2P upgrade behavior.
 type UpgradeConfig struct {
-	// Enabled gates the entire P2P upgrade. When false, the manager stays idle.
 	Enabled bool
-	// ICETimeout is the maximum time to wait for ICE to complete.
+
 	ICETimeout time.Duration
-	// KeepAliveInterval is how often to send application-level pings over DC.
+
 	KeepAliveInterval time.Duration
-	// RetryDelay is the cooldown before re-attempting after a failure.
+
 	RetryDelay time.Duration
 }
 
-// DefaultUpgradeConfig returns production-ready defaults.
-// P2P is enabled by default; users can opt out via config.
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
 		Enabled:           true,
-		ICETimeout:        25 * time.Second, // includes 1s settle delay + offer retries
+		ICETimeout:        25 * time.Second,
 		KeepAliveInterval: 20 * time.Second,
 		RetryDelay:        30 * time.Second,
 	}
 }
 
-// PeerFactory creates a new WebRTC PeerConnection and returns it as a Transport.
-// This is injected by the webrtc package to avoid a circular dependency.
-// Returns:
-//   - transport: the DataChannel transport (implements tunnel.Transport)
-//   - readyCh: closed when the DataChannel becomes ready for use
-//   - startNegotiation: begins SDP/ICE exchange. sendSignal delivers outbound
-//     signals (offer, local ICE candidates) to the peer via the relay.
-//     recv delivers inbound signals (answer, remote ICE candidates) from the peer.
-//   - cleanup: function to call when the P2P connection is torn down
 type PeerFactory func() (
 	transport Transport,
 	readyCh <-chan struct{},
@@ -77,15 +63,12 @@ type PeerFactory func() (
 	err error,
 )
 
-// SignalMessage carries a WebRTC signaling message over the relay channel.
 type SignalMessage struct {
-	Type      string `json:"type"` // rtc_offer, rtc_answer, rtc_candidate
+	Type      string `json:"type"`
 	SDP       string `json:"sdp,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 }
 
-// UpgradeManager coordinates the automatic upgrade from relay WebSocket
-// to a P2P WebRTC DataChannel.
 type UpgradeManager struct {
 	cfg     UpgradeConfig
 	broker  *Broker
@@ -93,30 +76,18 @@ type UpgradeManager struct {
 
 	mu         sync.Mutex
 	state      UpgradeState
-	cancelNeg  context.CancelFunc // cancels ongoing negotiation
-	generation uint64             // incremented on each Restart to invalidate stale callbacks
+	cancelNeg  context.CancelFunc
+	generation uint64
 
-	// signalCh carries signaling messages from the relay to the active
-	// negotiation. It is replaced on each Restart so stale goroutines
-	// cannot consume signals meant for the new peer.
 	signalCh chan SignalMessage
 
-	// restartAt is the earliest time a Restart can actually execute.
-	// Used for debouncing rapid reconnect events.
 	restartAt time.Time
 
-	// stopped latches when Stop() tears the manager down: retries and
-	// relay-reconnect Restarts must not revive a stopped share (#1830
-	// review: a wasActive retry sleeping past a user Stop would otherwise
-	// pass Start's Idle gate and run a zombie negotiation, and a remote
-	// disconnect after Stop would flip the Idle state back to Failed).
 	stopped atomic.Bool
 
-	// onStateChange is an optional callback for UI status updates.
 	onStateChange func(UpgradeState)
 }
 
-// NewUpgradeManager creates a manager for the given broker.
 func NewUpgradeManager(broker *Broker, factory PeerFactory, cfg UpgradeConfig) *UpgradeManager {
 	return &UpgradeManager{
 		cfg:      cfg,
@@ -126,22 +97,18 @@ func NewUpgradeManager(broker *Broker, factory PeerFactory, cfg UpgradeConfig) *
 	}
 }
 
-// OnStateChange registers a callback for upgrade state transitions.
 func (m *UpgradeManager) OnStateChange(fn func(UpgradeState)) {
 	m.mu.Lock()
 	m.onStateChange = fn
 	m.mu.Unlock()
 }
 
-// State returns the current upgrade state.
 func (m *UpgradeManager) State() UpgradeState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state
 }
 
-// Start begins the P2P upgrade process. This should be called after the
-// relay connection is established and authenticated.
 func (m *UpgradeManager) Start() {
 	if !m.cfg.Enabled {
 		return
@@ -166,15 +133,6 @@ func (m *UpgradeManager) Start() {
 	})
 }
 
-// Restart cancels any ongoing P2P negotiation and starts a fresh one.
-// Called when the mobile client reconnects to ensure the SDP offer reaches
-// the newly established relay connection. If P2P is already active
-// (DataChannel open), it is left untouched.
-//
-// Debounce: if called within 5s of a previous Restart, the call is
-// coalesced into the pending restart to avoid tearing down peers when
-// the relay fires multiple connect events in rapid succession (#923:
-// comment said 2s while the code uses 5s).
 func (m *UpgradeManager) Restart() {
 	if !m.cfg.Enabled {
 		return
@@ -186,24 +144,23 @@ func (m *UpgradeManager) Restart() {
 	m.mu.Lock()
 	if m.state == UpgradeActive {
 		m.mu.Unlock()
-		return // P2P is working, don't disrupt it
+		return
 	}
 
 	now := time.Now()
 	if now.Before(m.restartAt) {
-		// A restart is already pending; coalesce.
+
 		m.mu.Unlock()
 		debug.Log("tunnel", "upgrade: restart debounced (pending)")
 		return
 	}
-	// Schedule the next restart window.
+
 	m.restartAt = now.Add(5 * time.Second)
 
-	// Cancel any stale negotiation so its callbacks are ignored.
 	if m.cancelNeg != nil {
 		m.cancelNeg()
 	}
-	// Replace signalCh so stale signal processors stop receiving.
+
 	m.signalCh = make(chan SignalMessage, 64)
 	m.generation++
 	m.state = UpgradeNegotiating
@@ -219,8 +176,6 @@ func (m *UpgradeManager) Restart() {
 	})
 }
 
-// HandleSignalMessage routes a signaling message from the relay to the
-// P2P negotiation. This is called when the broker receives rtc_* messages.
 func (m *UpgradeManager) HandleSignalMessage(msg SignalMessage) {
 	m.mu.Lock()
 	ch := m.signalCh
@@ -235,16 +190,7 @@ func (m *UpgradeManager) HandleSignalMessage(msg SignalMessage) {
 func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	debug.Log("tunnel", "upgrade: starting P2P negotiation")
 	m.broker.p2pNegotiating.Store(true)
-	// Note: p2pNegotiating stays true through the P2P session; it is
-	// cleared on disconnect in the OnDisconnect handler (#1830 case 2),
-	// on ICE-timeout revert below, and by Stop (#1830 case 3).
 
-	// #923: every early-exit path MUST clear p2pNegotiating + trigger
-	// recovery replay, or a transient factory/startNeg failure permanently
-	// suppresses replay (events missed during negotiation never sync).
-	// #926: capture the generation ONCE here (before ctx setup) so the
-	// staleness check compares against the run's start generation - the
-	// parameterless version compared the field with itself (always false).
 	m.mu.Lock()
 	negGen := m.generation
 	m.mu.Unlock()
@@ -265,10 +211,6 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	gen := m.generation
 	m.mu.Unlock()
 
-	// Wait for the mobile client to complete key exchange and become "ready"
-	// in the relay. The relay gateway only forwards server broadcasts to
-	// "ready" clients. If the offer is sent before the mobile is ready, it
-	// is silently dropped. 3s accounts for key exchange + relay round trips.
 	select {
 	case <-time.After(3 * time.Second):
 		debug.Log("tunnel", "upgrade: mobile-ready delay elapsed")
@@ -277,7 +219,6 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		return
 	}
 
-	// Check if we've been superseded by a newer restart.
 	m.mu.Lock()
 	if m.generation != gen {
 		m.mu.Unlock()
@@ -286,7 +227,6 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	}
 	m.mu.Unlock()
 
-	// Create the peer via factory.
 	p2pTransport, readyCh, startNeg, cleanup, err := m.factory()
 	if err != nil {
 		debug.Log("tunnel", "upgrade: factory error: %v", err)
@@ -296,52 +236,33 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 
 	defer cleanup()
 
-	// staleGen returns true if a newer negotiation has started.
 	staleGen := func() bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		return m.generation != gen
 	}
 
-	p2pDone := make(chan struct{}) // closed when P2P disconnects or is cancelled
+	p2pDone := make(chan struct{})
 	var p2pDoneOnce sync.Once
 
-	// Wire disconnect handler.
 	p2pTransport.OnDisconnect(func() {
 		if staleGen() {
-			return // stale peer from a previous negotiation
+			return
 		}
 		debug.Log("tunnel", "upgrade: P2P disconnected, reverting to relay")
 		wasActive := m.stateLocked() == UpgradeActive
 		m.broker.SetP2PTransport(nil)
-		// #1830 case 2: clear the negotiating flag and trigger recovery
-		// replay HERE, before close(p2pDone), so cleanup completes before
-		// any new Start() can set the flag again - the old run clearing it
-		// after <-p2pDone raced a fresh run's Store(true) if scheduling
-		// stalled the old goroutine past the retry delay. Doing it in the
-		// handler also covers negotiation-era disconnects, where the main
-		// select's p2pDone branch previously returned without clearing
-		// anything despite its comment claiming this handler had.
+
 		m.broker.p2pNegotiating.Store(false)
 		m.broker.TriggerReplayNow()
-		// Guard the state write like failAndRevert does (stale gen /
-		// stopped manager): a remote disconnect arriving after Stop must
-		// not flip the Idle state back to Failed and fire notifyState
-		// (#1830 review). The flag clear + replay above stay
-		// unconditional - suppression must always lift.
+
 		if !staleGen() && !m.stopped.Load() {
 			m.setState(UpgradeFailed)
 		}
 		p2pDoneOnce.Do(func() { close(p2pDone) })
-		// Schedule retry
+
 		safego.Go("tunnel.upgrade.retry", func() {
-			// #1830 case 1: the negotiation ctx only covers the negotiation
-			// period. Once P2P was ACTIVE, this disconnect is a session drop,
-			// not a negotiation failure: ctx may already be closed (ICE
-			// timeout expired while active), and a select between a ready
-			// ctx.Done and the ready retry timer picks randomly - ~50% of
-			// retries silently aborted with no self-healing (relay alive =
-			// nothing re-triggers Start, the session strands on relay).
+
 			if wasActive {
 				time.Sleep(m.cfg.RetryDelay)
 			} else {
@@ -359,32 +280,21 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		})
 	})
 
-	// Wire incoming DataChannel messages: route to broker's command handler,
-	// same as relay session messages. RTC signals from mobile (rtc_answer,
-	// rtc_candidate) are intercepted by the broker's OnCommand wrapper.
 	p2pTransport.OnMessage(func(data []byte) {
 		m.broker.HandleP2PMessage(data)
 	})
 
-	// Wait for DataChannel ready in a background goroutine.
 	safego.Go("tunnel.upgrade.waitReady", func() {
 		select {
 		case <-readyCh:
 			if staleGen() || m.stopped.Load() {
-				// Stale generation, or Stop() landed between the check and
-				// the transport swap below (#1830 review follow-up): without
-				// the stopped guard, the µs-window race wired the transport
-				// back into a stopped broker and fired a bogus
-				// UpgradeActive notify after teardown.
+
 				debug.Log("tunnel", "upgrade: DataChannel ready but stale/stopped, discarding")
 				return
 			}
 			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport")
 			m.broker.SetP2PTransport(p2pTransport)
-			// Now that P2P is active, sync any messages that mobile missed
-			// during P2P negotiation. This sends only the incremental events
-			// that relay doesn't have yet (relay history lags behind because
-			// we skipped recovery replay during P2P negotiation).
+
 			m.broker.SyncP2PReplay()
 			m.setState(UpgradeActive)
 		case <-ctx.Done():
@@ -392,9 +302,6 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		}
 	})
 
-	// Start the negotiation (creates SDP offer/answer, begins ICE gathering).
-	// Outbound signals are routed through the broker to the relay.
-	// Inbound signals arrive on m.signalCh from HandleSignalMessage.
 	sendSignal := func(signal SignalMessage) {
 		if err := m.broker.SendSignal(signal); err != nil {
 			debug.Log("tunnel", "upgrade: send signal error: %v", err)
@@ -407,18 +314,14 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		return
 	}
 
-	// Wait for P2P disconnect. Once active, ignore ICE timeout -
-	// the DataChannel should persist until network disconnect or Stop().
 	select {
 	case <-p2pDone:
-		// P2P disconnected, OnDisconnect already handled cleanup.
+
 	case <-ctx.Done():
-		// #923: read state under the lock (setState writes under m.mu).
+
 		state := m.stateLocked()
 		if state == UpgradeActive {
-			// P2P is active - wait for disconnect instead of timing out.
-			// (#1830 case 2: negotiating-flag cleanup + replay trigger
-			// happen in the OnDisconnect handler before close(p2pDone).
+
 			debug.Log("tunnel", "upgrade: ctx done but P2P active, waiting for disconnect")
 			<-p2pDone
 		} else if ctx.Err() == context.DeadlineExceeded {
@@ -437,18 +340,12 @@ func (m *UpgradeManager) setState(s UpgradeState) {
 	m.notifyState()
 }
 
-// stateLocked returns the current upgrade state safely (#923: runUpgrade
-// read m.state without the lock while setState writes under it).
 func (m *UpgradeManager) stateLocked() UpgradeState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state
 }
 
-// staleGen reports whether the manager generation has moved on since the
-// caller captured it at runUpgrade start (#926: the previous parameterless
-// version captured and compared the same field - always false AND an
-// unlocked second read racing Restart's increment).
 func (m *UpgradeManager) staleGen(gen uint64) bool {
 	m.mu.Lock()
 	cur := m.generation
@@ -466,7 +363,6 @@ func (m *UpgradeManager) notifyState() {
 	}
 }
 
-// Stop cancels any ongoing upgrade negotiation and tears down P2P.
 func (m *UpgradeManager) Stop() {
 	m.stopped.Store(true)
 	m.mu.Lock()
@@ -478,16 +374,10 @@ func (m *UpgradeManager) Stop() {
 		cancel()
 	}
 	m.broker.SetP2PTransport(nil)
-	// #1830 case 3: neither clearing condition in runUpgrade's exit select
-	// matches an Idle-plus-Cancelled exit (Stop resets the state to Idle and
-	// cancels the ctx), so p2pNegotiating stayed true after Stop -
-	// permanently suppressing the broker's recovery replay whenever the
-	// manager and broker do not share a lifecycle. Clear it explicitly.
+
 	m.broker.p2pNegotiating.Store(false)
 }
 
-// EncodeSignalMessage creates a GatewayMessage wrapping signaling data
-// for transmission over the relay WebSocket.
 func EncodeSignalMessage(signal SignalMessage) (GatewayMessage, error) {
 	var eventType string
 	switch signal.Type {
@@ -507,7 +397,6 @@ func EncodeSignalMessage(signal SignalMessage) (GatewayMessage, error) {
 	return GatewayMessage{Type: eventType, Data: data}, nil
 }
 
-// DecodeSignalMessage extracts signaling data from a GatewayMessage.
 func DecodeSignalMessage(msg GatewayMessage) (SignalMessage, bool) {
 	switch msg.Type {
 	case EventRTCOffer, EventRTCAnswer, EventRTCCandidate, EventRTCConnected, EventRTCFailed:
@@ -528,7 +417,6 @@ func DecodeSignalMessage(msg GatewayMessage) (SignalMessage, bool) {
 	return signal, true
 }
 
-// IsRTCSignalMessage returns true if a GatewayMessage is a WebRTC signaling message.
 func IsRTCSignalMessage(msg GatewayMessage) bool {
 	switch msg.Type {
 	case EventRTCOffer, EventRTCAnswer, EventRTCCandidate, EventRTCConnected, EventRTCFailed:

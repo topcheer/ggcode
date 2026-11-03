@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-// CaptureScreen captures a screenshot on macOS using screencapture.
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	applyDelay(opts.DelayMs)
 
@@ -20,12 +19,11 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	}
 	defer cleanup()
 
-	args := []string{"-x"} // silent
+	args := []string{"-x"}
 	if opts.Cursor {
-		args = append(args, "-C") // include cursor
+		args = append(args, "-C")
 	}
 
-	// Window capture takes precedence.
 	if opts.Window != "" {
 		windowID, err := findMacWindowID(opts.Window)
 		if err != nil {
@@ -37,11 +35,7 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 		args = append(args, "-R",
 			fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
 	} else if opts.Display > 0 {
-		// #1570-D: screencapture -D expects a CGDirectDisplayID, but
-		// opts.Display is OUR 1-based DisplayInfo.Index (the main display's
-		// CGDirectDisplayID happens to be 1, so single-screen setups worked
-		// by coincidence; a second screen's ID is a large 32-bit number and
-		// -D 2 fails). Capture by the display's on-screen rectangle instead.
+
 		if r, err := macDisplayRegion(opts.Display); err == nil {
 			args = append(args, "-R",
 				fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
@@ -70,14 +64,8 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	return result, nil
 }
 
-// ListDisplays returns information about available displays on macOS.
 func ListDisplays() ([]DisplayInfo, error) {
-	// #2999: prefer NSScreen bounds in logical points, which is the unit
-	// screencapture -R expects. The Y origin is converted in the Swift
-	// snippet (AppKit bottom-left -> CG top-left) so the output is directly
-	// feedable to -R. The system_profiler path mixes VSA logical origins with
-	// _spdisplays_resolution pixel sizes (2x on Retina) and is kept only as a
-	// fallback for environments where the Swift runtime is unavailable.
+
 	if displays, err := listDisplaysNSScreen(); err == nil && len(displays) > 0 {
 		return displays, nil
 	}
@@ -88,9 +76,6 @@ func ListDisplays() ([]DisplayInfo, error) {
 	return parseSPDisplaysJSON(out)
 }
 
-// listDisplaysNSScreen enumerates displays via NSScreen (Core Graphics
-// logical coordinates) using a Swift snippet, mirroring the ListWindows
-// helper. Each line: index\tmain\tX\tY\tW\tH\tname.
 func listDisplaysNSScreen() ([]DisplayInfo, error) {
 	swiftCode := `
 import Cocoa
@@ -119,8 +104,6 @@ for (i, s) in NSScreen.screens.enumerated() {
 	return displays, nil
 }
 
-// parseNSScreenOutput parses the tab-separated NSScreen enumeration lines
-// into DisplayInfo entries. All coordinates are logical points.
 func parseNSScreenOutput(out string) []DisplayInfo {
 	var displays []DisplayInfo
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -154,23 +137,14 @@ func parseNSScreenOutput(out string) []DisplayInfo {
 	return displays
 }
 
-// macDisplayEntry is one flattened display unit from SPDisplaysDataType JSON.
 type macDisplayEntry struct {
 	Name   string
 	Width  int
 	Height int
-	Main   bool // spdisplays_main == spdisplays_yes
+	Main   bool
 	X, Y   int
 }
 
-// parseSPDisplaysJSON turns system_profiler SPDisplaysDataType JSON into
-// DisplayInfo entries. Displays are flattened across GPU entries and
-// renumbered 1..N over OUTPUT units (#555): the old code used the GPU-entry
-// index, so a single GPU driving two monitors reported both as Index:1
-// IsPrimary:true. IsPrimary prefers the entry with spdisplays_main=yes (real
-// primary) and falls back to the first display. X/Y come from
-// _spdisplays_display-vsa when present (multi-monitor negative origins);
-// older macOS versions without that field leave them at 0.
 func parseSPDisplaysJSON(out []byte) ([]DisplayInfo, error) {
 	var data struct {
 		SPDisplaysDataType []struct {
@@ -204,7 +178,6 @@ func parseSPDisplaysJSON(out []byte) ([]DisplayInfo, error) {
 		}
 	}
 
-	// Pick the primary: the spdisplays_main entry when present, else the first.
 	primary := 0
 	for i, d := range flat {
 		if d.Main {
@@ -216,7 +189,7 @@ func parseSPDisplaysJSON(out []byte) ([]DisplayInfo, error) {
 	var displays []DisplayInfo
 	for i, d := range flat {
 		displays = append(displays, DisplayInfo{
-			Index:     i + 1, // renumber over output units, not GPU units
+			Index:     i + 1,
 			IsPrimary: i == primary,
 			Width:     d.Width,
 			Height:    d.Height,
@@ -231,13 +204,8 @@ func parseSPDisplaysJSON(out []byte) ([]DisplayInfo, error) {
 	return displays, nil
 }
 
-// ListWindows returns capturable windows on macOS.
-// Uses CGWindowListCopyWindowInfo via Swift to get CGWindowIDs, which are
-// the IDs that screencapture -l expects. AppleScript's "id of window" returns
-// Accessibility API IDs which are in a completely different number space.
 func ListWindows() ([]WindowInfo, error) {
-	// Swift snippet that uses Core Graphics to list on-screen windows.
-	// Each line: CGWindowID\tOwnerName\tWindowName\tX\tY\tW\tH
+
 	swiftCode := `
 import Cocoa
 let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
@@ -291,9 +259,6 @@ for w in windows {
 	return windows, nil
 }
 
-// findMacWindowID finds the window ID matching the given query string.
-// Exact (case-insensitive) title/app matches are preferred over substring
-// matches so short queries do not land on unrelated windows (#555).
 func findMacWindowID(query string) (string, error) {
 	windows, err := ListWindows()
 	if err != nil {
@@ -322,9 +287,6 @@ func parseMacResolution(res string) (int, int) {
 	return 0, 0
 }
 
-// macDisplayRegion resolves OUR 1-based display index to its on-screen
-// rectangle (#1570-D) - used to route display capture through -R because
-// screencapture -D expects CGDirectDisplayIDs, not indexes.
 func macDisplayRegion(index int) (ScreenshotRegion, error) {
 	displays, err := ListDisplays()
 	if err != nil {

@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/mcp"
 )
 
-// Hash must be order-independent and sensitive to name, description, and
-// schema changes - each of those edits must produce a different hash.
 func TestComputeToolsHash(t *testing.T) {
 	base := []mcp.ToolDefinition{
 		{Name: "a", Description: "A tool", InputSchema: []byte(`{"type":"object"}`)},
@@ -34,8 +32,6 @@ func TestComputeToolsHash(t *testing.T) {
 	}
 }
 
-// refreshToolsNow must throttle: a second call within the min interval is
-// rejected without touching the server.
 func TestRefreshToolsNowThrottled(t *testing.T) {
 	p := NewMCPPlugin(config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()
@@ -52,7 +48,6 @@ func TestRefreshToolsNowThrottled(t *testing.T) {
 	}
 }
 
-// refreshToolsNow must refuse disconnected or closed plugins.
 func TestRefreshToolsNowNotConnected(t *testing.T) {
 	p := NewMCPPlugin(config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	if outcome, _ := p.refreshToolsNow(); outcome != RefreshNotConnected {
@@ -67,8 +62,6 @@ func TestRefreshToolsNowNotConnected(t *testing.T) {
 	}
 }
 
-// A connected plugin with no client (impossible in practice, but the guard
-// must hold): still NotConnected, never a nil-client dial.
 func TestRefreshToolsNowNilClient(t *testing.T) {
 	p := NewMCPPlugin(config.MCPServerConfig{Name: "srv", Type: "stdio", Command: "true"})
 	p.mu.Lock()

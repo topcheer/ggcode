@@ -121,7 +121,7 @@ func (m Model) renderWhatsAppPanel() string {
 		if entry.Disabled {
 			status = m.t("panel.whatsapp.status.disabled")
 		} else if entry.Muted {
-			// #2211 family: details ignored Muted (same #887 gap as feishu).
+
 			status = m.t("panel.whatsapp.status.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.whatsapp.status.bound")
@@ -138,7 +138,6 @@ func (m Model) renderWhatsAppPanel() string {
 			" "+m.t("panel.whatsapp.channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.whatsapp.waiting_for_pair"))),
 		)
 
-		// Show QR / contact status
 		if entry.AdapterState != nil {
 			if entry.AdapterState.QRCode != "" {
 				body = append(body, "",
@@ -157,7 +156,6 @@ func (m Model) renderWhatsAppPanel() string {
 		}
 	}
 
-	// Actions hint
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.actions")))
 	if panel.createMode {
 		body = append(body,
@@ -172,7 +170,6 @@ func (m Model) renderWhatsAppPanel() string {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.whatsapp.actions_hint")))
 	}
 
-	// Edit config section
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -208,7 +205,6 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Edit mode takes priority
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -217,7 +213,6 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	entries := m.waBindingEntries()
 
-	// Create mode takes priority
 	if panel.createMode {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -301,7 +296,7 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.whatsapp.adapter_not_start")
 			return *m, nil
 		}
-		// If pairing, show the dynamically generated QR code
+
 		if entry.AdapterState.QRCode != "" {
 			m.openQROverlayDirect(
 				fmt.Sprintf("%s — %s", m.t("panel.qr.title"), "WhatsApp"),
@@ -311,7 +306,7 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			)
 			return *m, nil
 		}
-		// If connected, show contact URI QR (wa.me link)
+
 		states := []*im.AdapterState{entry.AdapterState}
 		if !m.openQROverlayFromStates("WhatsApp", states) {
 			panel.message = m.t("panel.whatsapp.no_qr")
@@ -337,7 +332,7 @@ func (m *Model) bindWAEntry(entry whatsappBindingEntry) tea.Cmd {
 		}
 		if err := m.startWAAdapterIfNeeded(entry.Adapter); err != nil {
 			if errors.Is(err, errWAEnableNeeded) {
-				// #1793 case 1: enable on the Update loop, then restart+bind.
+
 				return m.waEnableMutation(entry.Adapter, nil)
 			}
 			return whatsappBindResultMsg{err: err}
@@ -394,8 +389,7 @@ func (m *Model) createWAAdapterCmd(name string) tea.Cmd {
 			Platform: string(im.PlatformWhatsApp),
 			Extra:    map[string]interface{}{},
 		}
-		// #1367 family batch 3 final sweep: config write moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
+
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				m.config.IM.Enabled = true
@@ -426,12 +420,8 @@ func (m *Model) ensureWARuntime() error {
 	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.whatsapp.error.config_unavailable"), "", true)
 }
 
-// errWAEnableNeeded signals the auto-enable must run on the Update loop
-// via configMutationMsg (#1793 case 1).
 var errWAEnableNeeded = errors.New("whatsapp adapter needs enable-on-update-loop")
 
-// waEnableMutation performs the auto-enable on the Update loop, then
-// restarts the adapter and continues with next.
 func (m *Model) waEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -479,11 +469,7 @@ func (m *Model) startWAAdapterIfNeeded(name string) error {
 		return fmt.Errorf("adapter %q not configured", name)
 	}
 	if !adapterCfg.Enabled {
-		// #1793 case 1: ran SetIMAdapterEnabled on the Cmd goroutine -
-		// config map write + disk save racing the panel's 2s tick range of
-		// the same map (concurrent map read/write fatal). The file's own
-		// #1367 comment claims the migration; createWAAdapterCmd got it,
-		// this bind path didn't. Sentinel + mutation, the nostr pattern.
+
 		return errWAEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWhatsApp)) {

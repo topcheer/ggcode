@@ -31,7 +31,7 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 				_ = cmd.Help()
 				return nil
 			}
-			// No args → interactive wizard
+
 			if len(args) == 0 {
 				wizardArgs, err := mcpInstallWizard(cmd.OutOrStdout())
 				if err != nil {
@@ -44,8 +44,7 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 			}
 			path := *cfgFile
 			if cfgOverride != "" {
-				// #3457: honor the --config value the user passed -
-				// DisableFlagParsing means cobra never assigned cfgFile itself.
+
 				path = cfgOverride
 			}
 			if path == "" {
@@ -309,12 +308,6 @@ func isMalformedMCPServer(server config.MCPServerConfig) bool {
 	return strings.HasPrefix(command, "-")
 }
 
-// sanitizeMCPInstallArgs strips the global --config flag (and its value)
-// out of the raw install args and HANDS IT BACK so the caller can honor it
-// (#3457). install runs with DisableFlagParsing, so cobra never parses the
-// inherited persistent flag - the old version silently dropped it and
-// Save() then wrote the DEFAULT config path while exit 0 claimed success
-// in the flag-specified one (fail-silent misdirect).
 func sanitizeMCPInstallArgs(args []string) ([]string, string) {
 	if len(args) == 0 {
 		return args, ""
@@ -339,8 +332,6 @@ func sanitizeMCPInstallArgs(args []string) ([]string, string) {
 	return out, configVal
 }
 
-// mcpInstallWizard provides an interactive prompt to configure an MCP server.
-// Returns the args in the same format as the CLI: [name, transport, command.../url].
 func mcpInstallWizard(out io.Writer) ([]string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
@@ -360,13 +351,11 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 
 	fmt.Fprint(out, "\n=== MCP Server Setup Wizard ===\n\n")
 
-	// Step 1: Name
 	name := prompt("Server name (e.g. github, web-reader)", "")
 	if name == "" {
 		return nil, fmt.Errorf("server name is required")
 	}
 
-	// Step 2: Transport type
 	fmt.Fprintln(out, "\nTransport types:")
 	fmt.Fprintln(out, "  1) stdio  — local command (default)")
 	fmt.Fprintln(out, "  2) http   — remote HTTP endpoint")
@@ -380,7 +369,6 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 		transport = "ws"
 	}
 
-	// Step 3: Target (command or URL)
 	var target string
 	if transport == "stdio" {
 		target = prompt("Command (e.g. npx -y @modelcontextprotocol/server-github)", "")
@@ -391,7 +379,6 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 		return nil, fmt.Errorf("command or URL is required")
 	}
 
-	// Step 4: Environment variables (stdio only)
 	var envPairs []string
 	if transport == "stdio" {
 		fmt.Fprint(out, "\nEnvironment variables (KEY=VALUE). Press Enter on empty line to skip.\n")
@@ -406,7 +393,6 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 		}
 	}
 
-	// Step 5: Headers (http/ws only)
 	var headerPairs []string
 	if transport != "stdio" {
 		fmt.Fprint(out, "\nHeaders (KEY:VALUE). Press Enter on empty line to skip.\n")
@@ -421,14 +407,12 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 		}
 	}
 
-	// Assemble args — ParseInstallArgs expects:
-	//   [name] -t <transport> [--env KEY=VAL ...] [--header KEY:VAL ...] -- <cmd.../url>
 	args := []string{name}
 	args = append(args, "-t", transport)
 	args = append(args, envPairs...)
 	args = append(args, headerPairs...)
 	args = append(args, "--")
-	// For stdio, split the command into parts; for http/ws, it's a URL
+
 	if transport == "stdio" {
 		args = append(args, splitCommand(target)...)
 	} else {
@@ -444,11 +428,8 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 	return args, nil
 }
 
-// splitCommand splits a command string into arguments, respecting double quotes.
-// e.g. `npx -y "my server" --port 3000` → ["npx", "-y", "my server", "--port", "3000"]
 func splitCommand(s string) []string {
-	// Use shell-style word splitting with quote support.
-	// This is intentionally simple — not a full shell parser.
+
 	var parts []string
 	var current strings.Builder
 	inQuote := false

@@ -14,7 +14,7 @@ func TestAnalyzeWaterfall_Empty(t *testing.T) {
 
 func TestAnalyzeWaterfall_SequentialTools(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	// Two sequential tools: tool1 [0s-2s], tool2 [2s-4s]
+
 	events := []MetricEvent{
 		{TurnIndex: 1, Type: "tool", ToolName: "tool1", Timestamp: base.Add(2 * time.Second),
 			ToolDuration: 2 * time.Second, ToolSuccess: true},
@@ -36,15 +36,15 @@ func TestAnalyzeWaterfall_SequentialTools(t *testing.T) {
 	if w.TotalToolTime != 4*time.Second {
 		t.Errorf("expected total tool time 4s, got %v", w.TotalToolTime)
 	}
-	// Fully sequential: overlap ratio should be 0.
+
 	if w.OverlapRatio != 0 {
 		t.Errorf("expected overlap ratio 0 for sequential tools, got %v", w.OverlapRatio)
 	}
-	// No parallel groups since tools don't overlap.
+
 	if len(w.ParallelToolGroups) != 0 {
 		t.Errorf("expected 0 parallel groups, got %d", len(w.ParallelToolGroups))
 	}
-	// Critical path should be 4s (both tools sequential).
+
 	if w.CriticalPathDuration != 4*time.Second {
 		t.Errorf("expected critical path 4s, got %v", w.CriticalPathDuration)
 	}
@@ -52,7 +52,7 @@ func TestAnalyzeWaterfall_SequentialTools(t *testing.T) {
 
 func TestAnalyzeWaterfall_ParallelTools(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	// Two parallel tools: tool1 [0s-3s], tool2 [1s-2s] (overlapping)
+
 	events := []MetricEvent{
 		{TurnIndex: 1, Type: "tool", ToolName: "tool1", Timestamp: base.Add(3 * time.Second),
 			ToolDuration: 3 * time.Second, ToolSuccess: true},
@@ -62,22 +62,22 @@ func TestAnalyzeWaterfall_ParallelTools(t *testing.T) {
 
 	result := AnalyzeWaterfall(events)
 	w := result[0]
-	// Wall clock = 3s (earliest start to latest end).
+
 	if w.WallClock != 3*time.Second {
 		t.Errorf("expected wall clock 3s, got %v", w.WallClock)
 	}
-	// Total tool time = 3s + 1s = 4s.
+
 	if w.TotalToolTime != 4*time.Second {
 		t.Errorf("expected total tool time 4s, got %v", w.TotalToolTime)
 	}
-	// Should detect 1 parallel group with 2 tools.
+
 	if len(w.ParallelToolGroups) != 1 {
 		t.Fatalf("expected 1 parallel group, got %d", len(w.ParallelToolGroups))
 	}
 	if len(w.ParallelToolGroups[0]) != 2 {
 		t.Errorf("expected 2 tools in parallel group, got %d", len(w.ParallelToolGroups[0]))
 	}
-	// Overlap ratio > 0.
+
 	if w.OverlapRatio <= 0 {
 		t.Errorf("expected positive overlap ratio, got %v", w.OverlapRatio)
 	}
@@ -140,18 +140,18 @@ func TestAnalyzeWaterfall_MultipleTurns(t *testing.T) {
 
 func TestAnalyzeWaterfall_CriticalPathLongChain(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	// Chain of 3 sequential tools, plus a parallel short tool
+
 	events := []MetricEvent{
 		{TurnIndex: 1, Type: "tool", ToolName: "a", Timestamp: base.Add(2 * time.Second),
-			ToolDuration: 2 * time.Second, ToolSuccess: true}, // [0s-2s]
+			ToolDuration: 2 * time.Second, ToolSuccess: true},
 		{TurnIndex: 1, Type: "tool", ToolName: "b", Timestamp: base.Add(4 * time.Second),
-			ToolDuration: 2 * time.Second, ToolSuccess: true}, // [2s-4s]
+			ToolDuration: 2 * time.Second, ToolSuccess: true},
 		{TurnIndex: 1, Type: "tool", ToolName: "c", Timestamp: base.Add(7 * time.Second),
-			ToolDuration: 3 * time.Second, ToolSuccess: true}, // [4s-7s]
+			ToolDuration: 3 * time.Second, ToolSuccess: true},
 	}
 	result := AnalyzeWaterfall(events)
 	w := result[0]
-	// Critical path should be a+b+c = 7s
+
 	if w.CriticalPathDuration != 7*time.Second {
 		t.Errorf("expected critical path 7s, got %v", w.CriticalPathDuration)
 	}

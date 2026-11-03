@@ -1,11 +1,5 @@
 package knight
 
-// Regression probe for #3030: nightly self-reflection entries are written
-// unconditionally (MetaLesson never empty) and the eval memory window did
-// not filter by kind - after ~8 nights the window became 100% statistics
-// lines and real promotion/reject lessons were pushed out of the evaluator
-// prompt. Self-reflection is now rate-limited to the most recent 1.
-
 import (
 	"path/filepath"
 	"strings"
@@ -18,14 +12,13 @@ func TestIssue3030_EvalWindowRateLimitsSelfReflection(t *testing.T) {
 	projDir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), projDir, nil)
 
-	// 7 nights of self-reflection, newest first ordering comes from Recent().
 	for i := 0; i < 7; i++ {
 		if err := k.RecordSemanticMemory("self-reflection",
 			"active=3 staging=1 proposals=2 (night "+strings.Repeat("a", i)+")", nil, "nightly"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// One real lesson buried under the statistics pile.
+
 	if err := k.RecordSemanticMemory("lesson", "reject-promote: cross-module edits need verify-ci not go build", nil, "eval"); err != nil {
 		t.Fatal(err)
 	}
@@ -49,9 +42,7 @@ func TestIssue3030_EvalWindowRateLimitsSelfReflection(t *testing.T) {
 func TestIssue3030_PureLessonWindowUnchanged(t *testing.T) {
 	projDir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), projDir, nil)
-	// #r25: semantic dedup merges near-identical recurrences into one entry,
-	// so genuinely DISTINCT lessons are required here to keep the original
-	// contract meaningful (five different lessons all render).
+
 	lessons := []string{
 		"reject-promote: cross-module edits need verify-ci not go build",
 		"promote: flutter changes need widget tests before approval",
@@ -73,13 +64,10 @@ func TestIssue3030_PureLessonWindowUnchanged(t *testing.T) {
 	}
 }
 
-// TestIssue3030_WideWindowReachesOldRealLessons: even when 20+ self-
-// reflection nights bury older lessons, the wider fetch window (limit*4)
-// still surfaces them.
 func TestIssue3030_WideWindowReachesOldRealLessons(t *testing.T) {
 	projDir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), projDir, nil)
-	// Real lessons first (oldest), then a deep pile of nightly statistics.
+
 	if err := k.RecordSemanticMemory("lesson", "promote: flutter changes need widget tests", nil, "eval"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,4 +82,4 @@ func TestIssue3030_WideWindowReachesOldRealLessons(t *testing.T) {
 	}
 }
 
-var _ = filepath.Join // silence unused-import churn if the probe evolves
+var _ = filepath.Join

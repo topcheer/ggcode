@@ -12,8 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/runfile"
 )
 
-// startMockStatusServer starts a test HTTP server that serves /api/status
-// with the given JSON response.
 func startMockStatusServer(t *testing.T, statusJSON string) (addr, token string) {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -153,14 +151,13 @@ func TestRunStatusListMultipleSameWorkspace(t *testing.T) {
 	runStatusList(&buf, false, false, false, false)
 	out := buf.String()
 
-	// Both models should appear
 	if !strings.Contains(out, "m1") {
 		t.Errorf("expected model m1 in output: %s", out)
 	}
 	if !strings.Contains(out, "m2") {
 		t.Errorf("expected model m2 in output: %s", out)
 	}
-	// Both session IDs should appear
+
 	if !strings.Contains(out, "sess-mul") {
 		t.Errorf("expected session IDs in output: %s", out)
 	}
@@ -266,7 +263,7 @@ func TestRunStatusGetMultipleSessions(t *testing.T) {
 		t.Fatalf("runStatusGet: %v", err)
 	}
 	out := buf.String()
-	// Should have both sessions
+
 	if !strings.Contains(out, "gpt-4o") {
 		t.Errorf("expected gpt-4o in output:\n%s", out)
 	}
@@ -317,8 +314,6 @@ func TestRunStatusGetJSON(t *testing.T) {
 		t.Errorf("SessionID = %q", results[0].PortFile.SessionID)
 	}
 }
-
-// --- Helper function tests ---
 
 func TestBusyIcon(t *testing.T) {
 	if busyIcon(true) != "busy" {

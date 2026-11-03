@@ -13,16 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestLiveSessionContextAudit audits REAL session JSONL files for context
-// reconstruction shrinkage (the "old session loads with only a few K left" bug).
-//
-// Safety: it only ever reads the originals and works on COPIES in t.TempDir()
-// (Load may rewrite files via migrateMessageIDs / backfillTimestamps).
-//
-// Opt-in: GGCODE_LIVE_SESSION_AUDIT=1
-// Optional: GGCODE_SESSION_DIR (default ~/.ggcode/sessions)
-//
-//	GGCODE_AUDIT_DAYS   (default 7)
 func TestLiveSessionContextAudit(t *testing.T) {
 	if os.Getenv("GGCODE_LIVE_SESSION_AUDIT") != "1" {
 		t.Skip("set GGCODE_LIVE_SESSION_AUDIT=1 to audit real session files")
@@ -46,7 +36,6 @@ func TestLiveSessionContextAudit(t *testing.T) {
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
 
-	// Pass 1: scan originals read-only for raw stats.
 	audited := 0
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
@@ -71,7 +60,6 @@ func auditSessionFile(t *testing.T, src string) {
 	name := filepath.Base(src)
 	id := strings.TrimSuffix(name, ".jsonl")
 
-	// ── Raw scan (read-only) ──
 	f, err := os.Open(src)
 	if err != nil {
 		t.Logf("%s: OPEN ERR %v", name, err)
@@ -94,7 +82,7 @@ func auditSessionFile(t *testing.T, src string) {
 		}
 		return &rec
 	}
-	// simple line loop
+
 	buf, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
@@ -131,7 +119,6 @@ func auditSessionFile(t *testing.T, src string) {
 		lineIdx++
 	}
 
-	// ── Load a COPY through the production path ──
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, name)
 	if err := copyFileForAudit(src, dst); err != nil {
@@ -162,17 +149,13 @@ func auditSessionFile(t *testing.T, src string) {
 		}
 	}
 
-	// ── Classify reconstruction path ──
 	path := "no-checkpoint"
 	var cpInfo string
 	if n := len(checkpoints); n > 0 {
 		cp := checkpoints[n-1]
 		cpInfo = fmt.Sprintf("cp#%d summary_msg_id=%q last_msg_id=%q tokens=%d",
 			n, cp.CheckpointSummaryMsgID, cp.CheckpointLastMsgID, cp.CheckpointTokens)
-		// The LAST checkpoint drives restore; if it is still legacy-format,
-		// the restore path is the months-old migration branch — a bug for
-		// current sessions. Historical legacy records deeper in the file are
-		// fine (they predate migration and are no longer referenced).
+
 		if cp.CheckpointSummaryMsgID == "" && len(cp.CheckpointMessages) > 0 {
 			t.Errorf("%s: BUG last checkpoint is legacy-format — restore would use migration-era path", name)
 		}
@@ -189,10 +172,7 @@ func auditSessionFile(t *testing.T, src string) {
 			case sumIdx < lastIdx:
 				path = fmt.Sprintf("normal(summary@%d < last@%d, msgs after)", sumIdx, lastIdx)
 			default:
-				// summary appears AFTER last_msg_id in the file (async precompact
-				// writes the summary at the tail). The loader must search the
-				// FULL entry list for last_msg_id; a summary-anchored search
-				// misses it and drops the messages between last and summary.
+
 				path = fmt.Sprintf("SUMMARY-AFTER-LAST(summary@%d > last@%d)→full-list search required", sumIdx, lastIdx)
 			}
 		} else if len(cp.CheckpointMessages) > 0 {

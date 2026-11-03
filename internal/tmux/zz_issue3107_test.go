@@ -1,14 +1,5 @@
 package tmux
 
-// Regression probes for #3107 (client.go):
-//   output() used cmd.CombinedOutput, so a benign stderr warning (server
-//   first-start probe, config diagnostics) polluted every caller's parse
-//   input -- worst on pane creation, where the whole mixed output became
-//   Pane.ID and left the pane uncontrollable (Capture/Kill/PaneExists all
-//   targeted a garbage string). The fix separates the streams (stdout is
-//   the only parse input; stderr is logged) and validates the %N shape on
-//   the creation path.
-
 import (
 	"context"
 	"os"
@@ -18,7 +9,6 @@ import (
 	"testing"
 )
 
-// testContext is a cancelled-at-cleanup context for the fake-binary probes.
 func testContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -26,7 +16,6 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// extractPaneID is the pure gate: only a %N-shaped line becomes the id.
 func TestIssue3107_ExtractPaneID(t *testing.T) {
 	cases := []struct {
 		name string
@@ -59,7 +48,6 @@ func TestIssue3107_ExtractPaneID(t *testing.T) {
 	}
 }
 
-// Anchored lines with trailing content after the digits must NOT match.
 func TestIssue3107_ExtractPaneIDRejectsSuffixNoise(t *testing.T) {
 	for _, in := range []string{"%3 extra\n", "id=%3\n", "%3%4\n"} {
 		if m, err := extractPaneID(in); err == nil {
@@ -68,9 +56,6 @@ func TestIssue3107_ExtractPaneIDRejectsSuffixNoise(t *testing.T) {
 	}
 }
 
-// output() separation: with a fake tmux binary that writes a warning to
-// stderr and the payload to stdout, output() must return ONLY the stdout
-// payload.
 func TestIssue3107_OutputSeparatesStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary")
@@ -93,8 +78,6 @@ func TestIssue3107_OutputSeparatesStderr(t *testing.T) {
 	}
 }
 
-// Full creation-path probe: the mixed-stream scenario from the issue must
-// yield the clean %N id, not the warning line.
 func TestIssue3107_SplitWindowIDStaysClean(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary")
@@ -117,8 +100,6 @@ func TestIssue3107_SplitWindowIDStaysClean(t *testing.T) {
 	}
 }
 
-// Failure path parity: the error must still carry diagnostic content from
-// BOTH streams (the old CombinedOutput error folded everything in).
 func TestIssue3107_FailureKeepsDiagnostics(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary")

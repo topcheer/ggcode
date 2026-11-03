@@ -11,7 +11,7 @@ func TestDangerousDetector_GitHigh(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// High danger git commands
+
 		{"git push --force", true},
 		{"git push --force origin main", true},
 		{"git push -f", true},
@@ -33,7 +33,6 @@ func TestDangerousDetector_GitHigh(t *testing.T) {
 		{"git restore --staged --worktree .", true},
 		{"git restore --worktree .", true},
 
-		// Safe git commands
 		{"git status", false},
 		{"git diff", false},
 		{"git log --oneline", false},
@@ -41,11 +40,11 @@ func TestDangerousDetector_GitHigh(t *testing.T) {
 		{"git commit -m 'test'", false},
 		{"git push origin main", false},
 		{"git push", false},
-		{"git reset HEAD~1", false},        // soft reset, no --hard
-		{"git checkout -b feature", false}, // create branch, not destructive
-		{"git stash", false},               // stash push, not clear/drop
-		{"git restore file.go", false},     // single file restore, not .
-		{"git branch feature", false},      // create branch, not delete
+		{"git reset HEAD~1", false},
+		{"git checkout -b feature", false},
+		{"git stash", false},
+		{"git restore file.go", false},
+		{"git branch feature", false},
 	}
 
 	for _, tt := range tests {
@@ -64,7 +63,7 @@ func TestDangerousDetector_GitMedium(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// Medium danger git commands
+
 		{"git branch -D feature", true},
 		{"git branch -D main", true},
 		{"git stash clear", true},
@@ -76,8 +75,7 @@ func TestDangerousDetector_GitMedium(t *testing.T) {
 		{"git merge --abort", true},
 		{"git restore --staged .", true},
 
-		// Safe alternatives
-		{"git branch -d merged-feature", false}, // -d (lowercase) only deletes merged branches
+		{"git branch -d merged-feature", false},
 		{"git stash list", false},
 		{"git stash pop", false},
 		{"git stash apply", false},
@@ -122,13 +120,11 @@ func TestDangerousDetector_GitCheckLevels(t *testing.T) {
 func TestDangerousDetector_GitWorstMatch(t *testing.T) {
 	d := NewDangerousDetector()
 
-	// git push --force --mirror should match both, worst is High
 	check := d.Check("git push --force --mirror origin")
 	if check.Level < DangerHigh {
 		t.Errorf("git push --force --mirror should be at least DangerHigh, got %v", check.Level)
 	}
 
-	// sudo git reset --hard should match sudo (medium) + git reset --hard (high) = high
 	check = d.Check("sudo git reset --hard")
 	if check.Level < DangerHigh {
 		t.Errorf("sudo git reset --hard should be at least DangerHigh, got %v", check.Level)

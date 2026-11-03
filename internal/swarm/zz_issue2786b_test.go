@@ -6,10 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// #2786 supplementary probe: when a dependent has MULTIPLE blockers and any
-// one of them is parked (completed + permanent_error), the dependent must
-// stay blocked. A single-status check over the blocker list that short-
-// circuits on the first genuinely-completed blocker would miss this.
 func TestIssue2786_MixedBlockersOneParkedStaysLocked(t *testing.T) {
 	tmMgr := task.NewManager()
 

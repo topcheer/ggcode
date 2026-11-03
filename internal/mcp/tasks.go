@@ -9,29 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// MCP Tasks (SEP-1686, protocol revision 2025-11-25 / ext-tasks draft):
-// asynchronous task execution. A compliant server may answer a task-augmented
-// tools/call (params.task request option) not with the tool result but with a
-// task descriptor: a flat result carrying resultType "task" plus the Task
-// fields (taskId, status, ...). The client then polls tasks/get until the
-// task reaches a terminal state and fetches the actual tool result with
-// tasks/result.
-//
-// Task state machine (5 states):
-//
-//	working -> completed | failed | cancelled
-//	working -> input_required -> (client resolves) -> working
-//	terminal states are final.
-//
-// Notes:
-//   - The task descriptor envelope is flat: CreateTaskResult = Result & Task &
-//     {resultType: "task"} — no nested "task" object.
-//   - statusMessage is opaque server data; log lengths, not contents.
-//   - All polling requests inherit the per-request mcpRequestTimeout budget;
-//     the overall wait is additionally bounded by taskPollBudget so a hostile
-//     or stuck server cannot keep a call alive forever.
-
-// Task lifecycle states (SEP-1686).
 const (
 	TaskStatusWorking       = "working"
 	TaskStatusInputRequired = "input_required"
@@ -40,46 +17,30 @@ const (
 	TaskStatusCancelled     = "cancelled"
 )
 
-// ResultTypeTask is the resultType discriminator marking a result that is a
-// task descriptor instead of the request's logical result.
 const ResultTypeTask = "task"
 
-// taskPollBudget bounds the TOTAL wall-clock time spent polling one task,
-// regardless of server-provided pollInterval hints. Generous for legitimate
-// long-running tools; still finite against abuse.
 const taskPollBudget = 10 * time.Minute
 
-// Default bounds for the poll sleep interval. The server may hint a
-// pollInterval (milliseconds); we clamp it into [200ms, 10s] so a hostile
-// server can neither hot-loop us nor stall us past the budget granularity.
 const (
 	taskPollMin = 200 * time.Millisecond
 	taskPollMax = 10 * time.Second
-	// used when the server provides no pollInterval hint
+
 	taskPollDefault = 1 * time.Second
 )
 
-// Task is the SEP-1686 task descriptor object.
 type Task struct {
 	TaskID        string `json:"taskId"`
 	Status        string `json:"status"`
 	StatusMessage string `json:"statusMessage,omitempty"`
-	// PollInterval is the server's hint, in milliseconds, for how long the
-	// client should wait between tasks/get polls (0 = no hint).
+
 	PollInterval int64 `json:"pollInterval,omitempty"`
-	// TTL is the server-side retention window for the task's result, in
-	// milliseconds from completion, after which tasks/result may 404.
+
 	TTL int64 `json:"ttl,omitempty"`
-	// CreatedAt / LastUpdatedAt are RFC3339 timestamps.
+
 	CreatedAt     string `json:"createdAt,omitempty"`
 	LastUpdatedAt string `json:"lastUpdatedAt,omitempty"`
 }
 
-// UnmarshalJSON accepts both the 2025-11-25 experimental field names
-// (ttl, pollInterval) and the stable io.modelcontextprotocol/tasks
-// extension names (ttlMs, pollIntervalMs; 2026-07-28 snapshot, SEP-2663)
-// so new-style servers keep their poll/TTL hints instead of silently
-// degrading to the 1s default poll. Old names win when both are present.
 func (t *Task) UnmarshalJSON(data []byte) error {
 	type taskAlias Task
 	var a taskAlias
@@ -90,7 +51,7 @@ func (t *Task) UnmarshalJSON(data []byte) error {
 		TTLMs          int64 `json:"ttlMs,omitempty"`
 		PollIntervalMs int64 `json:"pollIntervalMs,omitempty"`
 	}
-	_ = json.Unmarshal(data, &ms) // absent fields stay zero; shape already validated above
+	_ = json.Unmarshal(data, &ms)
 	if a.TTL == 0 {
 		a.TTL = ms.TTLMs
 	}
@@ -101,37 +62,23 @@ func (t *Task) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// CreateTaskResult is the flat result returned by a task-augmented
-// tools/call: the standard Result members (none required here) merged with
-// the Task fields and the resultType discriminator.
 type CreateTaskResult struct {
 	Task
 	ResultType string `json:"resultType"`
 }
 
-// ListTasksResult is the tasks/list result.
 type ListTasksResult struct {
 	Tasks      []Task `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
 }
 
-// TasksCapability is the server's initialize capability object for tasks
-// (SEP-1686). Presence of the key is what gates client features; the inner
-// shape (list/cancel/requests) is tolerated but not interpreted.
 type TasksCapability struct {
 	List   *struct{} `json:"list,omitempty"`
 	Cancel *struct{} `json:"cancel,omitempty"`
 }
 
-// TaskRequestOptions is the params.task request option on tools/call
-// (SEP-1686): `true` or an object carrying per-task options such as ttl.
-// Encoded as json.RawMessage so both shapes pass through untouched.
 type TaskRequestOptions = json.RawMessage
 
-// isTaskEnvelope reports whether a raw result carries the task discriminator.
-// The discriminator is required by the flat envelope shape; a bare Task
-// without resultType is NOT treated as a task (defense against servers that
-// echo taskId on regular results).
 func isTaskEnvelope(raw json.RawMessage) bool {
 	var probe struct {
 		ResultType string `json:"resultType"`
@@ -142,7 +89,6 @@ func isTaskEnvelope(raw json.RawMessage) bool {
 	return probe.ResultType == ResultTypeTask
 }
 
-// pollInterval returns the sleep duration derived from a Task's hint.
 func (t Task) pollInterval() time.Duration {
 	d := taskPollDefault
 	if t.PollInterval > 0 {
@@ -157,11 +103,6 @@ func (t Task) pollInterval() time.Duration {
 	return d
 }
 
-// CallToolAsTask runs a tool call with the SEP-1686 task request option:
-// sends tools/call with params.task set, and when the server answers with a
-// task descriptor, polls tasks/get until a terminal state, then fetches the
-// final tool result via tasks/result. task is the terminal descriptor (may
-// be nil when the server answered synchronously with a plain result).
 func (c *Client) CallToolAsTask(ctx context.Context, name string, args map[string]interface{}, opts TaskRequestOptions) (*CallToolResult, *Task, error) {
 	if c.closed.Load() {
 		return nil, nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -176,8 +117,7 @@ func (c *Client) CallToolAsTask(ctx context.Context, name string, args map[strin
 		return nil, nil, err
 	}
 	if !isTaskEnvelope(raw) {
-		// Server executed synchronously despite the task option — a plain
-		// CallToolResult is a legal answer. Treat it as the final result.
+
 		var out CallToolResult
 		if err := json.Unmarshal(raw, &out); err != nil {
 			return nil, nil, fmt.Errorf("mcp[%s]: tools/call returned malformed result: %w", c.name, err)
@@ -211,10 +151,6 @@ func (c *Client) CallToolAsTask(ctx context.Context, name string, args map[strin
 	}
 }
 
-// awaitTaskLoop is the terminal-state poll state machine with an injected
-// task fetcher (mrtrLoop-style send func) so tests can drive status
-// transitions without a transport. seed supplies the initial status and poll
-// hint; taskID identifies the polled task.
 func (c *Client) awaitTaskLoop(ctx context.Context, seed Task, taskID string, getTask func(context.Context, string) (Task, error)) (Task, error) {
 	deadline := time.Now().Add(taskPollBudget)
 	task := seed
@@ -224,12 +160,10 @@ func (c *Client) awaitTaskLoop(ctx context.Context, seed Task, taskID string, ge
 		case TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled:
 			return task, nil
 		case TaskStatusInputRequired:
-			// SEP-1686 lets tasks pause for client input. Resolving task-level
-			// input requests requires an interactive flow the caller must
-			// drive; auto-polling through it would spin forever.
+
 			return task, fmt.Errorf("mcp[%s]: task %s is input_required: %s", c.name, task.TaskID, task.StatusMessage)
 		case TaskStatusWorking, "":
-			// continue polling
+
 		default:
 			return task, fmt.Errorf("mcp[%s]: task %s has unknown status %q (treated as invalid protocol response)", c.name, task.TaskID, task.Status)
 		}
@@ -253,8 +187,6 @@ func (c *Client) awaitTaskLoop(ctx context.Context, seed Task, taskID string, ge
 	}
 }
 
-// taskPollDelay picks the sleep interval, honoring the server hint clamped
-// into sane bounds, or the test override when set.
 func (c *Client) taskPollDelay(task Task) time.Duration {
 	if c.taskPollOverride > 0 {
 		return c.taskPollOverride
@@ -262,11 +194,6 @@ func (c *Client) taskPollDelay(task Task) time.Duration {
 	return task.pollInterval()
 }
 
-// taskLookupError translates a failed tasks/get or tasks/result round
-// trip. The stable tasks extension (SEP-2663, 2026-07-28 snapshot) makes
-// servers answer expired, TTL-deleted, or unknown tasks with JSON-RPC
-// -32602; without this mapping the caller sees "Invalid params" and
-// reads a server-side expiry as a client bug.
 func taskLookupError(server, taskID, method string, err error) error {
 	if je, ok := jsonRPCErrorOf(err); ok && je.Code == ErrCodeInvalidParams {
 		return fmt.Errorf("mcp[%s]: %s: task %s expired or deleted (server TTL; re-issue the tool call if needed)", server, method, taskID)
@@ -274,7 +201,6 @@ func taskLookupError(server, taskID, method string, err error) error {
 	return fmt.Errorf("mcp[%s]: %s: %w", server, method, err)
 }
 
-// GetTask fetches the current task descriptor via tasks/get.
 func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	var result Task
 	params := map[string]string{"taskId": taskID}
@@ -287,8 +213,6 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	return result, nil
 }
 
-// TaskResult fetches the final result of a completed task via tasks/result.
-// The result of a task-augmented tools/call is a CallToolResult.
 func (c *Client) TaskResult(ctx context.Context, taskID string) (*CallToolResult, error) {
 	var result CallToolResult
 	params := map[string]string{"taskId": taskID}
@@ -298,9 +222,6 @@ func (c *Client) TaskResult(ctx context.Context, taskID string) (*CallToolResult
 	return &result, nil
 }
 
-// CancelTask requests cancellation via tasks/cancel and returns the updated
-// descriptor. Cancellation is best-effort per spec: the returned status may
-// still be working briefly.
 func (c *Client) CancelTask(ctx context.Context, taskID string) (Task, error) {
 	var result Task
 	params := map[string]string{"taskId": taskID}
@@ -313,9 +234,6 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) (Task, error) {
 	return result, nil
 }
 
-// ListTasks returns the server's known tasks via tasks/list, following
-// nextCursor pagination under the same maxPaginationPages guard as the
-// other List* methods (#562 Bug A semantics).
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -344,9 +262,6 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	}
 }
 
-// HasTasks reports whether the server advertised the tasks capability
-// (SEP-1686), i.e. whether task-augmented tool calls and task management
-// methods are available.
 func (c *Client) HasTasks() bool {
 	_, caps := c.negotiatedState()
 	return caps.Tasks != nil

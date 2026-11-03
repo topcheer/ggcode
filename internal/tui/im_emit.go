@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// IM emission methods delegate to the shared im.IMEmitter.
-
 func (m *Model) emitIMEvent(event im.OutboundEvent) {
 	if m.imEmitter == nil {
 		return
@@ -33,7 +31,6 @@ func (m *Model) emitIMLocalUserText(text string) {
 	m.imEmitter.EmitUserText(text)
 }
 
-// emitIMLocalUserTextExcept sends user echo to all channels except the originating adapter.
 func (m *Model) emitIMLocalUserTextExcept(text, excludeAdapter string) {
 	if m.imEmitter == nil {
 		return
@@ -73,8 +70,6 @@ func (m *Model) emitIMAskUser(text string) {
 	m.imEmitter.EmitAskUser(text)
 }
 
-// emitIMAskUserInteractive sends ask_user to IM via the shared emitter,
-// which handles interactive buttons + fallback logic in one place.
 func (m *Model) emitIMAskUserInteractive(title string, question toolpkg.AskUserQuestion, fallbackText string) {
 	if m.imEmitter == nil {
 		if fallbackText != "" {
@@ -104,11 +99,6 @@ func (m *Model) formatIMAskUserQuestion(title string, question toolpkg.AskUserQu
 	return m.formatIMAskUserPrompt(string(data))
 }
 
-// emitIMQuestionnaireSummary sends a summary of all questions and their answers to IM
-// after the TUI user submits the questionnaire. This gives IM users visibility into
-// what was answered.
-// emitIMApproval pushes a tool permission approval request to IM channels.
-// The user can reply with y/a/n to approve or deny.
 func (m *Model) emitIMApproval(toolName, input string) {
 	if m.imEmitter == nil {
 		return
@@ -162,8 +152,7 @@ func (m *Model) emitIMQuestionnaireSummary(req toolpkg.AskUserRequest, resp tool
 		if answer != "" {
 			sb.WriteString(fmt.Sprintf("  → %s\n", answer))
 		} else {
-			// #1010: language-aware label (this summary goes to IM channels;
-			// the hardcoded Chinese leaked into English-locale messages).
+
 			unanswered := "_Unanswered_"
 			if m.imToolLanguage() == im.ToolLangZhCN {
 				unanswered = "_未回答_"

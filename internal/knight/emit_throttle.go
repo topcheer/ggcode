@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// EmitSeverity tags an outbound Knight report so downstream consumers (IM,
-// EventSink, future filters) can decide what to do with it.
 type EmitSeverity int
 
 const (
@@ -34,8 +32,6 @@ const (
 	defaultEmitThrottleWindow = 6 * time.Hour
 )
 
-// emitThrottle remembers the last time a given (key, severity) message was
-// emitted so we don't spam IM/TUI with repeated staging/stale notifications.
 type emitThrottle struct {
 	mu     sync.Mutex
 	last   map[string]time.Time
@@ -52,8 +48,6 @@ func newEmitThrottle(window time.Duration) *emitThrottle {
 	}
 }
 
-// allow returns true if it's been longer than `window` since the same
-// (key, severity) was last allowed. An empty key always allows.
 func (t *emitThrottle) allow(key string, severity EmitSeverity, now time.Time) bool {
 	if t == nil {
 		return true
@@ -74,9 +68,6 @@ func (t *emitThrottle) allow(key string, severity EmitSeverity, now time.Time) b
 	return true
 }
 
-// reset clears the throttle for a key (any severity). Used on successful
-// promote/reject so the next staging cycle for the same skill is allowed
-// to notify again.
 func (t *emitThrottle) reset(key string) {
 	if t == nil {
 		return

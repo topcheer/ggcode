@@ -19,28 +19,10 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// imSupportedPlatforms is the CLI-side platform registry used to validate
-// and canonicalize the platform field before it is persisted (#2417).
-// Desktop already guards this at save time (#637 unknown-platform reject +
-// #648 canonical-ID normalize, desktop/wailskit/im.go); the CLI's add/set/
-// wizard accepted any string, a typo like "telegarm" or "Telegram" saved
-// fine and the runtime startConfiguredAdapter switch then skipped it in
-// its default branch with only a debug-level log - the adapter silently
-// never started. Kept as a name-only set (validated + normalized via
-// im.AdapterPlatformCanonical) rather than a duplicated wailskit-style
-// field registry: the CLI wizard keeps its own extras prompts.
 var imSupportedPlatforms = []string{
 	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
 }
 
-// imValidatePlatform returns the canonical platform ID for the given
-// (possibly cased) input, or an error naming the supported set (#2417,
-// mirroring the desktop #637/#648 guard for the CLI entry points).
-// Canonicalization is case-insensitive over the platform constants the
-// runtime startConfiguredAdapter switch actually matches (internal/im
-// types.go) - the desktop wailskit registry (IMPlatformMeta) carries UI
-// field metadata the CLI wizard does not need, so this stays a local
-// type-switch instead of importing wailskit from the CLI.
 func imValidatePlatform(platform string) (string, error) {
 	switch strings.ToLower(platform) {
 	case string(im.PlatformQQ):
@@ -92,7 +74,6 @@ Subcommands:
 	cmd.AddCommand(newIMShareCmd(cfgFile))
 	cmd.AddCommand(newIMConfigCmd(cfgFile))
 
-	// Default run: "ggcode im" → status
 	cmd.RunE = newIMStatusCmd(cfgFile).RunE
 
 	return cmd
@@ -105,8 +86,6 @@ type imCommandContext struct {
 	workingDir  string
 }
 
-// loadIMConfig loads the active config using the same path resolution and
-// instance overlay semantics as the TUI and daemon.
 func loadIMConfig(cfgFilePath string) (*imCommandContext, error) {
 	path := cfgFilePath
 	if path == "" {
@@ -210,17 +189,11 @@ func prepareIMConfigWrite(ctx *imCommandContext, requestedScope, adapterName str
 	return scope, nil
 }
 
-// resolveBindingsPath returns the default IM bindings file path.
-// Overridden in tests.
 var resolveBindingsPath = defaultBindingsPath
 
 func defaultBindingsPath() (string, error) {
 	return im.DefaultBindingsPath()
 }
-
-// ============================================================
-// im status
-// ============================================================
 
 func newIMStatusCmd(cfgFile *string) *cobra.Command {
 	return &cobra.Command{
@@ -237,11 +210,9 @@ func newIMStatusCmd(cfgFile *string) *cobra.Command {
 			fmt.Fprintln(out, "IM Status")
 			fmt.Fprintln(out, strings.Repeat("─", 40))
 
-			// Workspace
 			wd := ctx.workingDir
 			fmt.Fprintf(out, "  Workspace: %s\n", wd)
 
-			// Adapters
 			adapters := sortedAdapters(cfg)
 			if len(adapters) == 0 {
 				fmt.Fprintln(out, "\n  No adapters configured.")
@@ -256,7 +227,6 @@ func newIMStatusCmd(cfgFile *string) *cobra.Command {
 				}
 			}
 
-			// Bindings
 			fmt.Fprintln(out)
 			if err := printBindings(out, wd, false); err != nil {
 				fmt.Fprintf(out, "  Bindings: (none or unreadable: %v)\n", err)
@@ -266,10 +236,6 @@ func newIMStatusCmd(cfgFile *string) *cobra.Command {
 		},
 	}
 }
-
-// ============================================================
-// im list
-// ============================================================
 
 func newIMListCmd(cfgFile *string) *cobra.Command {
 	var jsonOutput bool
@@ -317,10 +283,6 @@ func newIMListCmd(cfgFile *string) *cobra.Command {
 	return cmd
 }
 
-// ============================================================
-// im bindings
-// ============================================================
-
 func newIMBindingsCmd(cfgFile *string) *cobra.Command {
 	var jsonOutput bool
 	var workspace string
@@ -339,10 +301,6 @@ func newIMBindingsCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().StringVar(&workspace, "workspace", "", "filter by workspace path (default: current directory)")
 	return cmd
 }
-
-// ============================================================
-// im bind
-// ============================================================
 
 func newIMBindCmd(cfgFile *string) *cobra.Command {
 	var channel, thread, target, workspace string
@@ -363,7 +321,6 @@ func newIMBindCmd(cfgFile *string) *cobra.Command {
 			}
 			cfg := ctx.cfg
 
-			// Validate adapter exists
 			if cfg.IM.Adapters == nil {
 				return fmt.Errorf("no IM adapters configured")
 			}
@@ -392,7 +349,6 @@ func newIMBindCmd(cfgFile *string) *cobra.Command {
 				BoundAt:   time.Now(),
 			}
 
-			// Write binding directly
 			bindingsPath, err := resolveBindingsPath()
 			if err != nil {
 				return fmt.Errorf("resolve bindings path: %w", err)
@@ -416,10 +372,6 @@ func newIMBindCmd(cfgFile *string) *cobra.Command {
 	_ = cmd.MarkFlagRequired("channel")
 	return cmd
 }
-
-// ============================================================
-// im unbind
-// ============================================================
 
 func newIMUnbindCmd(cfgFile *string) *cobra.Command {
 	var workspace string
@@ -471,7 +423,6 @@ func newIMUnbindCmd(cfgFile *string) *cobra.Command {
 				return nil
 			}
 
-			// Unbind by adapter name
 			if len(args) == 0 {
 				return fmt.Errorf("specify an adapter name, or use --workspace or --all")
 			}
@@ -498,10 +449,6 @@ func newIMUnbindCmd(cfgFile *string) *cobra.Command {
 	return cmd
 }
 
-// ============================================================
-// im pair
-// ============================================================
-
 func newIMPairCmd(cfgFile *string) *cobra.Command {
 	var timeout time.Duration
 
@@ -515,10 +462,7 @@ IM channel, displays a 4-digit pairing code, and waits for the user
 to enter it on the IM side to complete the binding.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// pair requires running the full adapter stack, which depends on
-			// Manager + Bridge + Agent loop. In the CLI-only context this is a
-			// complex operation that needs the daemon mode (planned).
-			// For now, provide guidance.
+
 			fmt.Fprintln(cmd.OutOrStdout(), "Interactive pairing requires the full TUI or daemon runtime.")
 			fmt.Fprintln(cmd.OutOrStdout(), "Use the TUI: open ggcode, then type /qq, /feishu, /tg, etc.")
 			fmt.Fprintln(cmd.OutOrStdout(), "Or use 'ggcode im bind' to bind directly without pairing code.")
@@ -529,10 +473,6 @@ to enter it on the IM side to complete the binding.`,
 	return cmd
 }
 
-// ============================================================
-// im share
-// ============================================================
-
 func newIMShareCmd(cfgFile *string) *cobra.Command {
 	var adapter string
 
@@ -540,8 +480,7 @@ func newIMShareCmd(cfgFile *string) *cobra.Command {
 		Use:   "share",
 		Short: "Generate a PrivateClaw share link",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// share requires a running Manager with PC adapter connected.
-			// Defer to daemon mode.
+
 			fmt.Fprintln(cmd.OutOrStdout(), "Share link generation requires a running PrivateClaw adapter.")
 			fmt.Fprintln(cmd.OutOrStdout(), "This will be available once the daemon mode is implemented.")
 			return nil
@@ -550,10 +489,6 @@ func newIMShareCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().StringVar(&adapter, "adapter", "_pc_builtin", "adapter name")
 	return cmd
 }
-
-// ============================================================
-// im config
-// ============================================================
 
 func newIMConfigCmd(cfgFile *string) *cobra.Command {
 	cmd := &cobra.Command{
@@ -592,7 +527,7 @@ Examples:
   ggcode im config add my-slack --platform slack --extra bot_token=xoxb-xxx --extra app_token=xapp-xxx`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Wizard mode: no name and no platform → interactive
+
 			if len(args) == 0 && platform == "" {
 				wizName, wizPlatform, wizExtras, err := imConfigAddWizard(cmd.OutOrStdout())
 				if err != nil {
@@ -607,10 +542,7 @@ Examples:
 			if platform == "" {
 				return fmt.Errorf("--platform is required (qq, telegram, feishu, dingtalk, discord, slack, privateclaw)")
 			}
-			// #2417: reject unknown platforms and normalize to the canonical
-			// registry ID before persisting (same guard as desktop #637/#648) -
-			// a typo like "telegarm" used to save fine and the adapter then
-			// silently never started.
+
 			canonical, err := imValidatePlatform(platform)
 			if err != nil {
 				return err
@@ -658,8 +590,7 @@ Examples:
 	cmd.Flags().StringArrayVar(&extras, "extra", nil, "platform-specific key=value parameter (repeatable)")
 	cmd.Flags().StringArrayVar(&allowFrom, "allow-from", nil, "allowed source IDs (repeatable)")
 	addIMConfigScopeFlag(cmd, &scope)
-	// Note: platform is not marked required because the wizard mode
-	// provides it interactively. The RunE handler validates it instead.
+
 	return cmd
 }
 
@@ -715,7 +646,7 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 			}
 
 			if jsonOutput {
-				// #1432-A: mask secret-bearing Extra keys on the JSON path too.
+
 				masked := adapter
 				masked.Extra = maskedAdapterExtra(adapter.Extra)
 				return printJSON(cmd.OutOrStdout(), masked)
@@ -728,9 +659,7 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 			fmt.Fprintf(out, "  Transport: %s\n", valueOr(emptyStr(adapter.Transport), "-"))
 			if len(adapter.Extra) > 0 {
 				fmt.Fprintln(out, "  Extra:")
-				// #2191: mask FIRST (recursively), then print - the old
-				// inline check only handled top-level strings and %v on a
-				// nested map printed every key/value in cleartext.
+
 				masked := maskedAdapterExtra(adapter.Extra)
 				keys := sortedKeys(adapter.Extra)
 				for _, k := range keys {
@@ -802,10 +731,7 @@ Examples:
 
 			switch key {
 			case "enabled":
-				// #1510: silent interpretation of arbitrary values ("TRUE" ->
-				// disabled, echoed back as success) contradicts the strict
-				// unknown-key error two cases below. Validate like strconv
-				// but keep the accepted surface explicit.
+
 				switch strings.ToLower(strings.TrimSpace(value)) {
 				case "true", "1", "yes", "on":
 					value = "true"
@@ -819,9 +745,7 @@ Examples:
 					return err
 				}
 			case "platform":
-				// #2417: same unknown-platform guard as `config add` - a
-				// typo'd or cased platform used to persist directly and the
-				// adapter silently never started. Normalize to canonical ID.
+
 				canonical, err := imValidatePlatform(value)
 				if err != nil {
 					return err
@@ -843,7 +767,7 @@ Examples:
 					return fmt.Errorf("saving config: %w", err)
 				}
 			default:
-				// Check for extra.<key> prefix
+
 				if strings.HasPrefix(key, "extra.") {
 					extraKey := strings.TrimPrefix(key, "extra.")
 					if err := cfg.SetIMAdapterExtra(name, extraKey, value); err != nil {
@@ -861,10 +785,6 @@ Examples:
 	addIMConfigScopeFlag(cmd, &scope)
 	return cmd
 }
-
-// ============================================================
-// helpers
-// ============================================================
 
 type adapterEntry struct {
 	name    string
@@ -896,7 +816,7 @@ func adaptersToSlice(cfg *config.Config) []map[string]interface{} {
 			"transport": e.adapter.Transport,
 		}
 		if len(e.adapter.Extra) > 0 {
-			// #1432-A: JSON is the machine path - mask like the text path.
+
 			m["extra"] = maskedAdapterExtra(e.adapter.Extra)
 		}
 		if len(e.adapter.AllowFrom) > 0 {
@@ -962,15 +882,6 @@ func printJSON(out io.Writer, v interface{}) error {
 	return enc.Encode(v)
 }
 
-// maskedAdapterExtra returns a deep copy of an adapter's Extra with
-// secret-bearing keys masked (#1432-A): the TEXT paths (show/list) mask
-// via isSecretKey+maskSecret (#745), but the --json paths serialized
-// Extra verbatim - and --json is the MACHINE path, piped into logs,
-// jq, CI - so plaintext credentials spread farther than any human-read
-// text ever would. Both JSON paths now mask with the same rules.
-// #2191: NESTED maps recurse - the five adapters' stt overrides carry
-// apiKey/api_key at Extra["stt"]["api_key"] and the top-level-only
-// mask passed the whole map through on all three read paths.
 func maskedAdapterExtra(extra map[string]interface{}) map[string]interface{} {
 	if extra == nil {
 		return nil
@@ -982,8 +893,6 @@ func maskedAdapterExtra(extra map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-// maskedExtraValue masks one CLI Extra value at any depth (#2191),
-// mirroring the webui's maskExtraValue.
 func maskedExtraValue(key string, v interface{}) interface{} {
 	if m, ok := v.(map[string]interface{}); ok {
 		out := make(map[string]interface{}, len(m))
@@ -1012,15 +921,12 @@ func valueOr(v, fallback string) string {
 func emptyStr(s string) string { return s }
 
 func isSecretKey(key string) bool {
-	// #2188: delegate to the single source (#2180) - the local four-word
-	// list lacked "credential" and would drift again on the next copy.
+
 	return secretfield.LooksLikeSecretField(key)
 }
 
 func maskSecret(s string) string {
-	// Guard on rune count, not byte length: a byte guard diverges from the
-	// rune slicing below for multibyte values, panicking on negative Repeat
-	// (3 CJK chars) or printing the secret unmasked (4 CJK chars). #745
+
 	r := []rune(s)
 	if len(r) <= 8 {
 		return "****"
@@ -1037,8 +943,6 @@ func sortedKeys(m map[string]interface{}) []string {
 	return keys
 }
 
-// imConfigAddWizard provides an interactive prompt to add an IM adapter.
-// Returns (name, platform, extras).
 func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
@@ -1058,13 +962,11 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 
 	fmt.Fprint(out, "\n=== IM Adapter Setup Wizard ===\n\n")
 
-	// Step 1: Name
 	name := prompt("Adapter name (e.g. my-qq, my-bot)", "")
 	if name == "" {
 		return "", "", nil, fmt.Errorf("adapter name is required")
 	}
 
-	// Step 2: Platform
 	fmt.Fprintln(out, "\nSupported platforms:")
 	fmt.Fprintln(out, "  1) qq         — QQ (Tencent)")
 	fmt.Fprintln(out, "  2) telegram   — Telegram Bot")
@@ -1081,11 +983,7 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 	}
 	plt := platformMap[platformChoice]
 	if plt == "" {
-		// #2417: raw input is still allowed, but it must name a real
-		// platform - unknown strings (typos) used to fall through the
-		// extras switch with requiredExtras=nil and "succeed" into
-		// ggcode.yaml, then silently never start. Normalize to the
-		// canonical ID ("Telegram" → "telegram").
+
 		canonical, err := imValidatePlatform(platformChoice)
 		if err != nil {
 			return "", "", nil, err
@@ -1093,7 +991,6 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 		plt = canonical
 	}
 
-	// Step 3: Platform-specific extras
 	fmt.Fprintf(out, "\nConfiguring %s adapter.\n", plt)
 
 	var requiredExtras []string
@@ -1123,7 +1020,6 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 		extras = append(extras, key+"="+val)
 	}
 
-	// Step 4: Optional extras
 	fmt.Fprintln(out, "\nOptional extras (KEY=VALUE). Press Enter on empty line to skip.")
 	for {
 		extra := prompt(fmt.Sprintf("Extra #%d", len(extras)+1), "")
@@ -1133,7 +1029,6 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 		extras = append(extras, extra)
 	}
 
-	// Review
 	fmt.Fprintf(out, "\nReview:\n  name: %s\n  platform: %s\n  extras: %d items\n", name, plt, len(extras))
 	confirm := prompt("\nConfirm add? [Y/n]", "Y")
 	if confirm == "n" || confirm == "N" {

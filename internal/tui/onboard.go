@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// CustomProviderConfig holds user-entered custom provider details.
 type CustomProviderConfig struct {
 	Name     string
 	Protocol string
@@ -21,7 +20,6 @@ type CustomProviderConfig struct {
 	Model    string
 }
 
-// OnboardResult holds the user's selections from the onboard wizard.
 type OnboardResult struct {
 	Language       string
 	VendorID       string
@@ -57,20 +55,16 @@ const (
 
 type discoverResultMsg struct {
 	models []string
-	// #1385-B: generation token - which discovery request this result is
-	// from. Onboard is re-entrant (Esc back to Endpoint, re-enter, second
-	// DiscoverModels): without a token a late OLD result (network jitter)
-	// overwrote the list from the NEW endpoint and the picked model was
-	// invalid for the BaseURL actually configured.
+
 	gen uint64
 }
 
 var modeLabels = []string{"supervised", "auto", "bypass", "autopilot"}
 var modeColors = []color.Color{
-	lipgloss.Color("11"), // yellow - supervised
-	lipgloss.Color("10"), // green  - auto
-	lipgloss.Color("9"),  // red    - bypass
-	lipgloss.Color("13"), // magenta - autopilot
+	lipgloss.Color("11"),
+	lipgloss.Color("10"),
+	lipgloss.Color("9"),
+	lipgloss.Color("13"),
 }
 
 var customProtocols = []string{"openai", "anthropic", "ollama"}
@@ -99,16 +93,13 @@ type onboardModel struct {
 	epFocus        endpointFocus
 
 	modelCursor int
-	// #1385-B: discovery generation token - bumped on every
-	// startModelSelection; results carrying an older gen are stale.
+
 	discoverGen   uint64
 	models        []string
 	allModels     []string
 	modelFilter   textinput.Model
 	modelFiltered []int
-	// modelsAreSentinel marks the model list as the "default" placeholder
-	// (discover failed, no DefaultModel) - completing onboarding on it would
-	// persist a non-model and auto-exec a broken first boot (#1745 case 2).
+
 	modelsAreSentinel bool
 	modelLoading      bool
 
@@ -118,14 +109,13 @@ type onboardModel struct {
 	optA2A    bool
 
 	imCursor  int
-	imInputs  [5]textinput.Model // 0=telegram, 1=discord, 2=qq_appid, 3=qq_secret, 4=(unused, wechat=scan)
+	imInputs  [5]textinput.Model
 	imFocused int
 
-	// Custom provider
 	customProtocolIdx int
-	customFields      [4]textinput.Model       // 0=name, 1=url, 2=apikey, 3=model
-	customCursor      int                      // 0=protocol, 1-4=fields, 5=submit
-	customResolved    *config.ResolvedEndpoint // built when custom provider submits, used for model discovery
+	customFields      [4]textinput.Model
+	customCursor      int
+	customResolved    *config.ResolvedEndpoint
 }
 
 func (m *onboardModel) currentLanguage() Language {
@@ -150,14 +140,13 @@ func (m *onboardModel) refreshInputPlaceholders() {
 	for i := range m.imInputs {
 		m.imInputs[i].Placeholder = placeholderWithPasteShortcutHint(imLabels[i], lang)
 	}
-	// Custom provider field placeholders
+
 	m.customFields[0].Placeholder = "My Provider..."
 	m.customFields[1].Placeholder = "https://api.example.com/v1"
 	m.customFields[2].Placeholder = "sk-..."
 	m.customFields[3].Placeholder = "gpt-4o"
 }
 
-// RunOnboard starts the onboard wizard as an independent Bubble Tea program.
 func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 	presets := config.VendorPresets()
 	langs := []struct {
@@ -193,7 +182,6 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		filtered[i] = i
 	}
 
-	// IM inputs: 0=telegram, 1=discord, 2=qq_appid, 3=qq_secret, 4=unused(wechat=scan)
 	var imInputs [5]textinput.Model
 	for i := range imInputs {
 		imInputs[i] = textinput.New()
@@ -202,7 +190,6 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		imInputs[i].EchoCharacter = '•'
 	}
 
-	// Custom provider inputs: 0=name, 1=url, 2=apikey, 3=model
 	var customFields [4]textinput.Model
 	for i := range customFields {
 		customFields[i] = textinput.New()
@@ -223,7 +210,7 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		imFocused:      -1,
 		customFields:   customFields,
 		customCursor:   0,
-		optMode:        2, // bypass
+		optMode:        2,
 		optA2A:         true,
 	}
 	m.refreshInputPlaceholders()
@@ -257,9 +244,8 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 			A2A:        om.optA2A,
 		}
 
-		// Collect IM adapters
 		r.IMAdapters = map[string]config.IMAdapterConfig{}
-		// Telegram
+
 		if token := strings.TrimSpace(om.imInputs[0].Value()); token != "" {
 			r.IMAdapters["telegram"] = config.IMAdapterConfig{
 				Enabled:  true,
@@ -267,7 +253,7 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 				Extra:    map[string]interface{}{"bot_token": token},
 			}
 		}
-		// Discord
+
 		if token := strings.TrimSpace(om.imInputs[1].Value()); token != "" {
 			r.IMAdapters["discord"] = config.IMAdapterConfig{
 				Enabled:  true,
@@ -275,7 +261,7 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 				Extra:    map[string]interface{}{"bot_token": token},
 			}
 		}
-		// QQ (needs both app_id and app_secret)
+
 		appID := strings.TrimSpace(om.imInputs[2].Value())
 		appSecret := strings.TrimSpace(om.imInputs[3].Value())
 		if appID != "" && appSecret != "" {
@@ -287,13 +273,6 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 			}
 		}
 
-		// Collect custom provider if user entered one. #4600: require BOTH
-		// name and url - the guard used to check name only, so a half-filled
-		// Custom step (name entered, Esc'd back, preset picked instead)
-		// leaked a residual CustomProvider with an empty BaseURL that
-		// overrode the user's preset choice. buildCustomResolved already
-		// treats url=="" as "no custom endpoint"; this aligns the collection
-		// guard with it.
 		if strings.TrimSpace(om.customFields[0].Value()) != "" && strings.TrimSpace(om.customFields[1].Value()) != "" {
 			r.CustomProvider = &CustomProviderConfig{
 				Name:     strings.TrimSpace(om.customFields[0].Value()),
@@ -321,8 +300,7 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case discoverResultMsg:
-		// #1385-B: stale responses are dropped whole (list AND loading flag
-		// both belong to the newer generation).
+
 		if msg.gen != m.discoverGen {
 			return m, nil
 		}
@@ -330,24 +308,12 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelLoading = false
 			if len(msg.models) > 0 {
 				m.allModels = msg.models
-				// #1892 case a: real models arrived - the placeholder sentinel
-				// is stale. Clear it, or a focused-enter stays refused forever
-				// even though discovery succeeded.
+
 				m.modelsAreSentinel = false
-				// #907: do NOT truncate the selection source here — the old
-				// [:20] cap meant models 21+ could never be filtered to or
-				// selected (and the later success path replaced the list whole,
-				// making the selectable set inconsistent between runs).
+
 				m.models = msg.models
 				m.applyModelFilter()
-				// #1385 side-fix: a deeper cursor from the pre-discovery list
-				// could point past the new list - clamp so the first render has
-				// a valid highlight.
-				// #1748: clamp against the FILTERED list - consumers index
-				// m.modelFiltered[m.modelCursor], and a narrowing filter
-				// typed during discovery left the full-list clamp pointing
-				// past the filtered tail: Enter without moving the cursor
-				// panicked out of range (custom-provider path).
+
 				if n := len(m.modelFiltered); n > 0 {
 					if m.modelCursor >= n {
 						m.modelCursor = n - 1
@@ -359,19 +325,11 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.modelCursor = 0
 				}
 			} else if isPlaceholderModelList(m.allModels) && strings.TrimSpace(m.customFields[3].Value()) == "" {
-				// #1385-A: the old guard (len(m.allModels)==0) was unreachable -
-				// every path guarantees >=1 element, and the "default" placeholder
-				// made it PERMANENTLY true that the list was non-empty. Detect the
-				// placeholder instead: discovery failed, no manual model, the list
-				// is just the sentinel - that is the real error case.
+
 				m.err = m.tr("custom_err_model")
 			}
 		} else {
-			// #1385-C: the result arrived while the user already moved on
-			// (fast enter into Optional). The old code dropped the whole message
-			// INCLUDING the loading reset - returning to the Model step showed
-			// an eternal spinner with no retry path. Clear the flag; the list
-			// update stays skipped (stale UI).
+
 			m.modelLoading = false
 		}
 		return m, nil
@@ -416,25 +374,19 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// prevStep returns the correct previous step, accounting for the non-linear
-// step structure where Custom(2) is a branch off Vendor that jumps to Optional(5).
-// A naive m.step-- from Endpoint(3) would land on Custom(2) instead of Vendor(1),
-// and from Optional(5) would land on Model(4) even if the user came via Custom.
 func (m *onboardModel) prevStep() onboardStep {
 	switch m.step {
 	case onboardStepEndpoint:
-		// Endpoint is always reached from Vendor, never from Custom.
+
 		return onboardStepVendor
 	case onboardStepModel:
-		// If the user came via Custom path (selectedVendor not set),
-		// go back to Custom, not Endpoint.
+
 		if m.selectedVendor.ID == "" {
 			return onboardStepCustom
 		}
 		return onboardStepEndpoint
 	case onboardStepOptional:
-		// If the user came via Custom path (selectedVendor not set),
-		// go back to Custom, not Model.
+
 		if m.selectedVendor.ID == "" {
 			return onboardStepCustom
 		}
@@ -469,7 +421,7 @@ func (m *onboardModel) restoreFocus() {
 }
 
 func (m *onboardModel) buildResolved() *config.ResolvedEndpoint {
-	// Custom provider path: use the resolved endpoint built from custom fields
+
 	if m.selectedVendor.ID == "" && m.customResolved != nil {
 		return m.customResolved
 	}
@@ -491,7 +443,6 @@ func (m *onboardModel) buildResolved() *config.ResolvedEndpoint {
 	}
 }
 
-// buildCustomResolved creates a ResolvedEndpoint from custom provider form fields.
 func (m *onboardModel) buildCustomResolved() *config.ResolvedEndpoint {
 	protocol := customProtocols[m.customProtocolIdx]
 	name := strings.TrimSpace(m.customFields[0].Value())
@@ -514,10 +465,6 @@ func (m *onboardModel) buildCustomResolved() *config.ResolvedEndpoint {
 	}
 }
 
-// isPlaceholderModelList reports whether the model list is only the
-// "default" sentinel that startModelSelection installs when discovery has
-// not (yet) produced a real list (#1385-A). Used to detect the real error
-// case: discovery failed AND the user typed no manual model.
 func isPlaceholderModelList(models []string) bool {
 	return len(models) == 1 && models[0] == "default"
 }

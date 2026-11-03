@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Alt+R opens reverse input history search, matching Claude Code v2.0
-// behavior (Ctrl+R is taken by the sidebar toggle in ggcode).
 func TestHistorySearch_EnterAndMatch(t *testing.T) {
 	m := newTestModel()
 	m.history = []string{"run go tests", "fix the go bug", "RUN LINT"}
@@ -30,17 +28,12 @@ func TestHistorySearch_EnterAndMatch(t *testing.T) {
 		t.Errorf("hint = %q, want it to echo the query", m.inputHint)
 	}
 
-	// alt+r again cycles to an older match containing the same query.
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "alt+r"})
 	m = updated.(Model)
 	if got := m.input.Value(); got != "run go tests" {
 		t.Errorf("after cycle input = %q, want older match", got)
 	}
 
-	// Enter accepts the match and falls through to normal submission: the
-	// search-mode flag clears and the composer is emptied because the query
-	// went through the regular submit path (m.session is nil in the test
-	// model, so submitText clears the input as part of the send attempt).
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "enter"})
 	m = updated.(Model)
 	if m.historySearch.active {
@@ -88,7 +81,7 @@ func TestHistorySearch_NoMatchAndBackspaceRefine(t *testing.T) {
 	if got := m.input.Value(); got != "z" {
 		t.Errorf("input = %q, want raw query kept when no match", got)
 	}
-	// Backspace removes the last query char and the match reappears.
+
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "backspace"})
 	m = updated.(Model)
 	if m.input.Value() != "deploy staging" {
@@ -97,7 +90,7 @@ func TestHistorySearch_NoMatchAndBackspaceRefine(t *testing.T) {
 	if !m.historySearch.active {
 		t.Error("expected search to stay active while refining")
 	}
-	// Backspace again on empty query cancels and restores original input.
+
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "backspace"})
 	m = updated.(Model)
 	if m.historySearch.active {
@@ -110,7 +103,7 @@ func TestHistorySearch_NoMatchAndBackspaceRefine(t *testing.T) {
 
 func TestHistorySearch_CaseInsensitiveAndAutoInjectedFiltered(t *testing.T) {
 	m := newTestModel()
-	// restoreHistoryFromMessages filters auto-injected user messages.
+
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Fix the PARSER bug"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "ok"}}},

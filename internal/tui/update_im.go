@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// handleQqBindResultMsg handles the corresponding message case.
 func (m Model) handleQqBindResultMsg(msg qqBindResultMsg) (Model, tea.Cmd) {
 	if m.qqPanel != nil {
 		if msg.err != nil {
@@ -19,7 +18,7 @@ func (m Model) handleQqBindResultMsg(msg qqBindResultMsg) (Model, tea.Cmd) {
 			m.qqPanel.shareLink = msg.shareLink
 			m.qqPanel.shareQRCode = msg.shareQRCode
 			m.qqPanel.message = msg.message
-			// Open QR overlay with share link
+
 			if msg.shareQRCode != "" || msg.shareLink != "" {
 				m.openQROverlayDirect(
 					"QQ — Share Link",
@@ -34,7 +33,6 @@ func (m Model) handleQqBindResultMsg(msg qqBindResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleImPanelResultMsg handles the corresponding message case.
 func (m Model) handleImPanelResultMsg(msg imPanelResultMsg) (Model, tea.Cmd) {
 	msgText := msg.message
 	if msg.err != nil {
@@ -43,8 +41,7 @@ func (m Model) handleImPanelResultMsg(msg imPanelResultMsg) (Model, tea.Cmd) {
 	if m.imPanel != nil {
 		m.imPanel.message = msgText
 	}
-	// Forward to the currently active channel panel so the user sees
-	// feedback when toggling disable/enable from within a panel.
+
 	if p := m.activeIMPanel(); p != nil {
 		*p = msgText
 	}
@@ -52,7 +49,6 @@ func (m Model) handleImPanelResultMsg(msg imPanelResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleFeishuBindResultMsg handles the corresponding message case.
 func (m Model) handleFeishuBindResultMsg(msg feishuBindResultMsg) (Model, tea.Cmd) {
 	if m.feishuPanel != nil {
 		if msg.err != nil {
@@ -65,7 +61,6 @@ func (m Model) handleFeishuBindResultMsg(msg feishuBindResultMsg) (Model, tea.Cm
 
 }
 
-// handleSlackBindResultMsg handles the corresponding message case.
 func (m Model) handleSlackBindResultMsg(msg slackBindResultMsg) (Model, tea.Cmd) {
 	if m.slackPanel != nil {
 		if msg.err != nil {
@@ -78,7 +73,6 @@ func (m Model) handleSlackBindResultMsg(msg slackBindResultMsg) (Model, tea.Cmd)
 
 }
 
-// handleDiscordBindResultMsg handles the corresponding message case.
 func (m Model) handleDiscordBindResultMsg(msg discordBindResultMsg) (Model, tea.Cmd) {
 	if m.discordPanel != nil {
 		if msg.err != nil {
@@ -91,7 +85,6 @@ func (m Model) handleDiscordBindResultMsg(msg discordBindResultMsg) (Model, tea.
 
 }
 
-// handleWhatsappBindResultMsg handles the corresponding message case.
 func (m Model) handleWhatsappBindResultMsg(msg whatsappBindResultMsg) (Model, tea.Cmd) {
 	if m.whatsappPanel != nil {
 		if msg.err != nil {
@@ -104,7 +97,6 @@ func (m Model) handleWhatsappBindResultMsg(msg whatsappBindResultMsg) (Model, te
 
 }
 
-// handleDingtalkBindResultMsg handles the corresponding message case.
 func (m Model) handleDingtalkBindResultMsg(msg dingtalkBindResultMsg) (Model, tea.Cmd) {
 	if m.dingtalkPanel != nil {
 		if msg.err != nil {
@@ -117,7 +109,6 @@ func (m Model) handleDingtalkBindResultMsg(msg dingtalkBindResultMsg) (Model, te
 
 }
 
-// handleWecomBindResultMsg handles the corresponding message case.
 func (m Model) handleWecomBindResultMsg(msg wecomBindResultMsg) (Model, tea.Cmd) {
 	if m.wecomPanel != nil {
 		if msg.err != nil {
@@ -130,7 +121,6 @@ func (m Model) handleWecomBindResultMsg(msg wecomBindResultMsg) (Model, tea.Cmd)
 
 }
 
-// handleMattermostBindResultMsg handles the corresponding message case.
 func (m Model) handleMattermostBindResultMsg(msg mattermostBindResultMsg) (Model, tea.Cmd) {
 	if m.mattermostPanel != nil {
 		if msg.err != nil {
@@ -143,7 +133,6 @@ func (m Model) handleMattermostBindResultMsg(msg mattermostBindResultMsg) (Model
 
 }
 
-// handleMatrixBindResultMsg handles the corresponding message case.
 func (m Model) handleMatrixBindResultMsg(msg matrixBindResultMsg) (Model, tea.Cmd) {
 	if m.matrixPanel != nil {
 		if msg.err != nil {
@@ -156,7 +145,6 @@ func (m Model) handleMatrixBindResultMsg(msg matrixBindResultMsg) (Model, tea.Cm
 
 }
 
-// handleSignalBindResultMsg handles the corresponding message case.
 func (m Model) handleSignalBindResultMsg(msg signalBindResultMsg) (Model, tea.Cmd) {
 	if m.signalPanel != nil {
 		m.signalPanel.installing = false
@@ -165,7 +153,7 @@ func (m Model) handleSignalBindResultMsg(msg signalBindResultMsg) (Model, tea.Cm
 		} else {
 			m.signalPanel.message = msg.message
 		}
-		// Re-check daemon status after install
+
 		if m.signalPanel.daemonOK != nil && !*m.signalPanel.daemonOK {
 			return m, checkSignalDaemonCmd()
 		}
@@ -174,7 +162,6 @@ func (m Model) handleSignalBindResultMsg(msg signalBindResultMsg) (Model, tea.Cm
 
 }
 
-// handleSignalDaemonCheckMsg handles the corresponding message case.
 func (m Model) handleSignalDaemonCheckMsg(msg signalDaemonCheckMsg) (Model, tea.Cmd) {
 	if m.signalPanel != nil {
 		m.signalPanel.daemonOK = &msg.ok
@@ -183,20 +170,16 @@ func (m Model) handleSignalDaemonCheckMsg(msg signalDaemonCheckMsg) (Model, tea.
 
 }
 
-// handleSignalQRCodeMsg handles the corresponding message case.
 func (m Model) handleSignalQRCodeMsg(msg signalQRCodeMsg) (Model, tea.Cmd) {
 	if m.signalPanel != nil {
 		m.signalPanel.qrFetching = false
 		if msg.err != nil {
-			// #1375-B: qrError was write-only - the field was never read
-			// anywhere, so a failed QR fetch left the panel unchanged with
-			// no overlay and no message. Mirror it into the rendered
-			// message line (and keep the field for future retry logic).
+
 			m.signalPanel.qrError = msg.err.Error()
 			m.signalPanel.message = m.t("panel.signal.qr_fetch_failed") + ": " + msg.err.Error()
 		} else {
 			m.signalPanel.qrCode = msg.qr
-			// Open QR overlay for user to scan device pairing code
+
 			m.openQROverlayDirect(
 				"Signal — "+m.t("panel.signal.qr_title"),
 				m.t("panel.signal.qr_scan_hint"),
@@ -209,7 +192,6 @@ func (m Model) handleSignalQRCodeMsg(msg signalQRCodeMsg) (Model, tea.Cmd) {
 
 }
 
-// handleIrcBindResultMsg handles the corresponding message case.
 func (m Model) handleIrcBindResultMsg(msg ircBindResultMsg) (Model, tea.Cmd) {
 	if m.ircPanel != nil {
 		if msg.err != nil {
@@ -222,7 +204,6 @@ func (m Model) handleIrcBindResultMsg(msg ircBindResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleNostrBindResultMsg handles the corresponding message case.
 func (m Model) handleNostrBindResultMsg(msg nostrBindResultMsg) (Model, tea.Cmd) {
 	if m.nostrPanel != nil {
 		if msg.err != nil {
@@ -231,7 +212,7 @@ func (m Model) handleNostrBindResultMsg(msg nostrBindResultMsg) (Model, tea.Cmd)
 			m.nostrPanel.message = msg.message
 			m.nostrPanel.qrCode = msg.qrCode
 			m.nostrPanel.generatedNpub = msg.npub
-			// Open QR overlay with npub
+
 			if msg.qrCode != "" || msg.npub != "" {
 				m.openQROverlayDirect(
 					"Nostr — Public Key",
@@ -246,7 +227,6 @@ func (m Model) handleNostrBindResultMsg(msg nostrBindResultMsg) (Model, tea.Cmd)
 
 }
 
-// handleTwitchBindResultMsg handles the corresponding message case.
 func (m Model) handleTwitchBindResultMsg(msg twitchBindResultMsg) (Model, tea.Cmd) {
 	if m.twitchPanel != nil {
 		if msg.err != nil {
@@ -259,7 +239,6 @@ func (m Model) handleTwitchBindResultMsg(msg twitchBindResultMsg) (Model, tea.Cm
 
 }
 
-// handleTgBindResultMsg handles the corresponding message case.
 func (m Model) handleTgBindResultMsg(msg tgBindResultMsg) (Model, tea.Cmd) {
 	if m.tgPanel != nil {
 		if msg.err != nil {
@@ -272,9 +251,8 @@ func (m Model) handleTgBindResultMsg(msg tgBindResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleImEditResultMsg handles the corresponding message case.
 func (m Model) handleImEditResultMsg(msg imEditResultMsg) (Model, tea.Cmd) {
-	// Dispatch to whichever panel is active
+
 	if m.qqPanel != nil && m.qqPanel.editState.mode != imEditNone {
 		m.applyIMEditResult(&m.qqPanel.editState, msg)
 	} else if m.tgPanel != nil && m.tgPanel.editState.mode != imEditNone {
@@ -295,10 +273,7 @@ func (m Model) handleImEditResultMsg(msg imEditResultMsg) (Model, tea.Cmd) {
 		} else if msg.err != nil {
 			m.wechatPanel.message = fmt.Sprintf("Error: %v", msg.err)
 		} else if msg.adapterName != "" {
-			// #1398-C: any success used to show auth_success - removing a
-			// bot (field "remove") greeted the user with "authenticated",
-			// and a bind result was mislabeled too. Route by field like
-			// the edit-mode path does.
+
 			switch msg.field {
 			case "remove":
 				m.wechatPanel.message = m.t("panel.wechat.removed", msg.adapterName)
@@ -329,9 +304,8 @@ func (m Model) handleImEditResultMsg(msg imEditResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleImPanelRefreshMsg handles the corresponding message case.
 func (m Model) handleImPanelRefreshMsg(msg imPanelRefreshMsg) (Model, tea.Cmd) {
-	// Continue ticking as long as any IM panel that needs live state is open
+
 	if m.whatsappPanel != nil {
 		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			return imPanelRefreshMsg{}

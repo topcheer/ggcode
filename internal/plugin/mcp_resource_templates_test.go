@@ -1,9 +1,5 @@
 package plugin
 
-// Companion tests for the sa-148 resource templates wire-through:
-// listResourceTemplateNames degrades on any error (legacy servers answer
-// -32601) and formats named/unnamed templates deterministically.
-
 import (
 	"fmt"
 	"reflect"

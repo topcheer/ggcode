@@ -1,7 +1,5 @@
 package mcp
 
-// sa-21: per-server MCP circuit breaker tests.
-
 import (
 	"context"
 	"encoding/json"
@@ -31,7 +29,7 @@ func TestIsInfraErrorClassification(t *testing.T) {
 	semantic := []string{
 		"mcp[srv]: tools/call query: Tool not found: query",
 		"mcp[srv]: tools/call x: invalid arguments: missing param p",
-		"mcp[srv]: context cancelled: context canceled", // user pressed Esc
+		"mcp[srv]: context cancelled: context canceled",
 		"mcp[srv]: tools/call x: permission denied for path /etc",
 	}
 	for _, m := range semantic {
@@ -71,11 +69,11 @@ func TestBreakerHalfOpenProbeThenClose(t *testing.T) {
 	if blocked, _ := b.gate(); !blocked {
 		t.Fatal("expected OPEN")
 	}
-	time.Sleep(15 * time.Millisecond) // cooldown elapses
+	time.Sleep(15 * time.Millisecond)
 	if blocked, _ := b.gate(); blocked {
 		t.Fatal("after cooldown the call must become the half-open probe")
 	}
-	// Concurrent callers while the probe is in flight are fast-failed.
+
 	if blocked, msg := b.gate(); !blocked || !strings.Contains(msg, "probe") {
 		t.Errorf("expected probe-in-flight fast-fail, got blocked=%v msg=%q", blocked, msg)
 	}
@@ -103,8 +101,7 @@ func TestBreakerProbeFailureReopens(t *testing.T) {
 	if !blocked {
 		t.Fatal("failed probe must reopen the circuit")
 	}
-	// Fresh cooldown: the reopened circuit only unlocks after a FRESH
-	// cooldown, not the original one (10ms elapsed here < 50ms fresh).
+
 	b.cooldown = 50 * time.Millisecond
 	time.Sleep(10 * time.Millisecond)
 	blocked, msg := b.gate()
@@ -126,8 +123,7 @@ func TestBreakerSuccessResetsCounter(t *testing.T) {
 }
 
 func TestMCPTripWireAcrossSiblingTools(t *testing.T) {
-	// Two tools of the SAME server share one breaker: trips on tool A must
-	// fast-fail tool B without any transport attempt.
+
 	var calls atomic.Int32
 	failing := &countingCaller{calls: &calls, err: errors.New("connection refused")}
 	ok := &countingCaller{calls: &calls}
@@ -225,7 +221,7 @@ func TestBreakerCloneSharesBreaker(t *testing.T) {
 	if c.breaker != br {
 		t.Fatal("Clone must share the per-server breaker pointer")
 	}
-	// nil-caller is infra and feeds the shared breaker.
+
 	for i := 0; i < br.threshold; i++ {
 		c.Execute(context.Background(), json.RawMessage(`{}`))
 	}
@@ -238,7 +234,6 @@ func TestBreakerCloneSharesBreaker(t *testing.T) {
 	}
 }
 
-// countingCaller is a toolCaller that counts transport attempts.
 type countingCaller struct {
 	calls  *atomic.Int32
 	err    error

@@ -2,9 +2,6 @@
 
 package util
 
-// #1837 case 1: the MSYS HOME must be skipped in favor of USERPROFILE so
-// the helper agrees with os.UserHomeDir callers in the same process.
-
 import (
 	"testing"
 )

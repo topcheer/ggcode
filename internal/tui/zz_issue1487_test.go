@@ -1,13 +1,5 @@
 package tui
 
-// #1487 case E regression: the session-created callback used to fire
-// ONCE and then be nilled, so after --resume A a mid-run /clear to B
-// never rewrote the port file - it kept pointing at stale A for the
-// rest of the run (WebUI/mobile attach landed on the wrong session)
-// while the exit defer deleted A's file. The callback now fires on
-// every session switch; onSessionCreated rewrites the port file and
-// re-points the cleanup key.
-
 import (
 	"os"
 	"testing"
@@ -31,9 +23,6 @@ func new1487REPL(t *testing.T) *REPL {
 	}
 }
 
-// The core switch case: initial=A, session created B -> port file must
-// re-point to B and the cleanup key must follow (old code returned
-// early here, freezing the port file at A forever).
 func TestIssue1487E_SwitchRewritesPortFile(t *testing.T) {
 	r := new1487REPL(t)
 	r.SetInitialSessionID("sess-AAAA", "supervised")
@@ -51,7 +40,6 @@ func TestIssue1487E_SwitchRewritesPortFile(t *testing.T) {
 	}
 }
 
-// Same-ID re-fire stays idempotent (cleanup key unchanged).
 func TestIssue1487E_SameIDIdempotent(t *testing.T) {
 	r := new1487REPL(t)
 	r.SetInitialSessionID("sess-AAAA", "supervised")
@@ -61,8 +49,6 @@ func TestIssue1487E_SameIDIdempotent(t *testing.T) {
 	}
 }
 
-// The model-side half: the callback must NOT be nilled after firing
-// (old code froze the port file at the first session).
 func TestIssue1487E_CallbackNotNilledAfterFire(t *testing.T) {
 	m := &Model{}
 	fired := 0

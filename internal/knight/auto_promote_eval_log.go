@@ -43,22 +43,12 @@ type AutoPromoteEvalLogEntry struct {
 	FailureMode            string    `json:"failure_mode,omitempty"`
 }
 
-// evalLogMaxRawOutput caps the raw LLM output persisted per eval entry so a
-// single runaway response cannot bloat the JSONL log (issue #977).
 const evalLogMaxRawOutput = 64 * 1024
 
-// evalLogMaxLineLen caps a single JSONL line when reading the eval log. Lines
-// longer than this are skipped individually instead of failing the whole
-// read, mirroring how corrupted JSON lines are handled (issue #977).
 const evalLogMaxLineLen = 1024 * 1024
 
-// evalLogRotateBytes is the size threshold at which the eval log rotates to
-// "<path>.1" (one previous generation kept). It is a var so tests can trigger
-// rotation cheaply.
 var evalLogRotateBytes int64 = 10 * 1024 * 1024
 
-// truncateEvalRawOutput caps a raw LLM output string for eval-log
-// persistence, avoiding a mid-rune cut boundary.
 func truncateEvalRawOutput(s string) string {
 	if len(s) <= evalLogMaxRawOutput {
 		return s
@@ -67,9 +57,6 @@ func truncateEvalRawOutput(s string) string {
 	return cut + fmt.Sprintf("\n...[truncated %d bytes]", len(s)-len(cut))
 }
 
-// rotateAutoPromoteEvalLog rotates path to path+".1" once it exceeds the
-// configured size threshold, keeping a single previous generation.
-// Best-effort; rotation failures are logged and ignored.
 func (k *Knight) rotateAutoPromoteEvalLog(path string) {
 	if evalLogRotateBytes <= 0 {
 		return
@@ -132,17 +119,13 @@ func (k *Knight) appendAutoPromoteEval(entry *SkillEntry, decision autoPromoteEv
 	_, _ = f.Write(append(line, '\n'))
 }
 
-// readEvalLogLine reads one newline-terminated line from r, accumulating
-// across buffer boundaries, with a size cap. ok=false means the line exceeded
-// maxLen and was consumed and skipped; err is io.EOF when the stream ended.
 func readEvalLogLine(r *bufio.Reader, maxLen int) (line []byte, ok bool, err error) {
 	var acc []byte
 	for {
 		frag, ferr := r.ReadSlice('\n')
 		if ferr == bufio.ErrBufferFull {
 			if len(acc)+len(frag) > maxLen {
-				// Oversized line: drain the remainder, then skip it so
-				// subsequent entries are still readable.
+
 				for ferr == bufio.ErrBufferFull {
 					frag, ferr = r.ReadSlice('\n')
 				}

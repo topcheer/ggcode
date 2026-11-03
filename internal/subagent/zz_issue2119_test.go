@@ -1,12 +1,5 @@
 package subagent
 
-// #2119 regression: never-Run Pending entries had no reclamation path -
-// they held a concurrency slot (Spawn counts Pending) forever and Wait
-// blocked indefinitely; Spawn after Shutdown registered entries that
-// could never execute. Probes A/B/C verified all three holes. The
-// watchdog now fails stale Pending entries, and Spawn rejects calls made
-// after rootCtx cancellation.
-
 import (
 	"context"
 	"testing"
@@ -30,8 +23,7 @@ func TestIssue2119_SpawnAfterShutdownRejected(t *testing.T) {
 	if sa.Error == nil {
 		t.Fatal("post-shutdown Spawn must carry an error")
 	}
-	// Wait semantics must NOT block indefinitely on the rejected entry -
-	// the done channel is closed so any waiter unblocks.
+
 	sa.mu.Lock()
 	doneCh := sa.done
 	sa.mu.Unlock()
@@ -45,7 +37,7 @@ func TestIssue2119_SpawnAfterShutdownRejected(t *testing.T) {
 func TestIssue2119_StalePendingReclaimed(t *testing.T) {
 	m := NewManager(config.SubAgentConfig{})
 	defer m.Shutdown()
-	// Shrink the watchdog window so the test does not wait 5 minutes.
+
 	m.inactivityTimeout = 10 * time.Millisecond
 
 	id := m.Spawn("ghost", "never run", "", nil, context.Background())
@@ -65,7 +57,7 @@ func TestIssue2119_StalePendingReclaimed(t *testing.T) {
 	if sa.Error == nil || sa.Error.Error() == "" {
 		t.Fatal("reclaimed entry must carry a diagnostic error")
 	}
-	// The slot must be free again: spawn up to maxConcurrent must succeed.
+
 	for i := 0; i < m.maxConcurrent; i++ {
 		nid := m.Spawn("filler", "x", "", nil, context.Background())
 		if s, ok := m.Get(nid); !ok || s.Status == StatusFailed {

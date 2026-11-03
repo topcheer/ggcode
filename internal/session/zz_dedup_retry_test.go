@@ -1,12 +1,5 @@
 package session
 
-// User-reported (confirmed against a real 566MB victim file): a session
-// killed after an endless autopilot/retry loop loads back with the same
-// user prompt up to 859 times. The dominant shape is NON-consecutive -
-// the strategist budget notice and the autopilot cron prompt re-fire
-// every cycle, separated by assistant runs - so only GLOBAL byte-exact
-// identity dedup fixes the display AND the LLM context rebuild.
-
 import (
 	"testing"
 
@@ -43,9 +36,6 @@ func userTurnTexts(msgs []provider.Message) []string {
 	return out
 }
 
-// The real shape: the SAME prompt re-fired N times, each separated by
-// assistant runs (autopilot cron / strategist loop). All copies must
-// collapse to ONE in both render and context.
 func TestLoadDedupesNonConsecutiveIdenticalUserTurns(t *testing.T) {
 	store, ses := newStoreSession2324(t, "autopilot-victim")
 	for round := 0; round < 4; round++ {
@@ -70,13 +60,12 @@ func TestLoadDedupesNonConsecutiveIdenticalUserTurns(t *testing.T) {
 	}
 }
 
-// Distinct texts never collapse (one byte apart is a different turn).
 func TestLoadKeepsDistinctUsers(t *testing.T) {
 	store, ses := newStoreSession2324(t, "distinct")
 	append2324(t, store, ses, mkUser2324("question A"))
-	append2324(t, store, ses, mkUser2324("question A?")) // 1 byte off: keep
+	append2324(t, store, ses, mkUser2324("question A?"))
 	append2324(t, store, ses, mkAssistant2324("answers"))
-	append2324(t, store, ses, mkUser2324("question A")) // identical to FIRST: drop
+	append2324(t, store, ses, mkUser2324("question A"))
 	loaded, err := store.LoadWithOptions("distinct", true)
 	if err != nil {
 		t.Fatal(err)

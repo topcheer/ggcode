@@ -13,7 +13,7 @@ func ptrID(n int64) *ID {
 }
 
 func TestClientInitializeProtocol(t *testing.T) {
-	// Verify the round-trip of initialize request/response types
+
 	initReq := Request{
 		JSONRPC: "2.0",
 		Method:  "initialize",
@@ -102,7 +102,7 @@ func TestWriteMessageFormat(t *testing.T) {
 		ID:      ptrID(1),
 	}
 	data, _ := json.Marshal(req)
-	// Verify the Content-Length header format
+
 	header := len(data)
 	if header <= 0 {
 		t.Error("expected positive content length")

@@ -13,7 +13,7 @@ func TestRedactForDisplay_OpenAIKey(t *testing.T) {
 		t.Errorf("OpenAI key should be masked, got: %s", result)
 	}
 	if !strings.Contains(result, "****") && !strings.Contains(result, "sk-a") {
-		// Should show partial masking with asterisks
+
 		t.Errorf("Expected partial masking, got: %s", result)
 	}
 }
@@ -53,12 +53,8 @@ func TestHasSecretPattern(t *testing.T) {
 	}
 }
 
-// #1289: bare fine-grained PAT text must be masked. The detection layer
-// (secretdetect.go #793) got the github_pat_ pattern but this display list
-// had drifted - gh[pousr]_ does not match github_pat_, so the token was
-// pushed verbatim to IM / TUI / desktop session exports.
 func TestRedactForDisplay_GitHubFineGrainedPAT(t *testing.T) {
-	token := "github_pat_" + strings.Repeat("A1b2C3d4E5f6G7h8I9j0", 4) + "Zz" // 82 chars after prefix
+	token := "github_pat_" + strings.Repeat("A1b2C3d4E5f6G7h8I9j0", 4) + "Zz"
 	if len(token) != len("github_pat_")+82 {
 		t.Fatalf("test fixture malformed: %d chars", len(token))
 	}
@@ -66,13 +62,13 @@ func TestRedactForDisplay_GitHubFineGrainedPAT(t *testing.T) {
 	if strings.Contains(out, token) {
 		t.Fatalf("fine-grained PAT leaked: %q", out)
 	}
-	// Classic forms still masked (no regression).
+
 	classic := "ghp_" + strings.Repeat("x", 40)
 	out = RedactForDisplay("key " + classic)
 	if strings.Contains(out, classic) {
 		t.Fatalf("classic PAT leaked: %q", out)
 	}
-	// Too-short github_pat_ fragments are NOT masked (precision).
+
 	short := "github_pat_" + strings.Repeat("a", 40)
 	out = RedactForDisplay("x " + short)
 	if !strings.Contains(out, short) {
@@ -80,25 +76,18 @@ func TestRedactForDisplay_GitHubFineGrainedPAT(t *testing.T) {
 	}
 }
 
-// #1306: seven formats lived only in the detection layer (secretdetect.go)
-// - display redaction drifted for the third time (#1289 pattern). Each must
-// now be masked in RedactForDisplay output.
-//
-// Tokens are constructed at runtime: the shapes must be realistic enough to
-// exercise the regexes, but literal secrets in source trip GitHub push
-// protection (this very test was blocked once).
 func TestRedactForDisplayCoversDetectionLayerFormats(t *testing.T) {
 	rep := func(s string, n int) string { return strings.Repeat(s, n) }
 	cases := []struct {
 		name  string
 		input string
 	}{
-		{"npm", "token npm_" + rep("aB1", 12) + " end"}, // 36 chars
-		{"pypi", "pypi-AgEIcHlwaW5p" + rep("aB1", 18)},  // >=50 chars
-		{"docker", "dckr_pat_" + rep("aB1", 9)},         // 27 chars
-		{"twilio", "auth SK" + rep("a1", 16)},           // 32 hex
+		{"npm", "token npm_" + rep("aB1", 12) + " end"},
+		{"pypi", "pypi-AgEIcHlwaW5p" + rep("aB1", 18)},
+		{"docker", "dckr_pat_" + rep("aB1", 9)},
+		{"twilio", "auth SK" + rep("a1", 16)},
 		{"postgres", "postgres://admin:" + rep("x9", 4) + "@db.example.com:5432/prod"},
-		{"aws_secret", "aws_secret_access_key = " + rep("aB1", 13) + "a"}, // 40 chars
+		{"aws_secret", "aws_secret_access_key = " + rep("aB1", 13) + "a"},
 		{"azure", "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=" + rep("aB1", 17) + "==;EndpointSuffix=core.windows.net"},
 	}
 	for _, tc := range cases {
@@ -114,9 +103,6 @@ func TestRedactForDisplayCoversDetectionLayerFormats(t *testing.T) {
 	}
 }
 
-// Regression for #1626-A: for exactly-2-group patterns the old suffix
-// re-append copied the FULL PLAINTEXT after the mask - the redactor itself
-// echoed the secret to screen/IM/desktop. Assert the plaintext is GONE.
 func TestRedactTwoGroupNoPlaintextEcho(t *testing.T) {
 	const awsSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 	out := RedactForDisplay("AWS_SECRET_ACCESS_KEY=" + awsSecret)
@@ -130,8 +116,6 @@ func TestRedactTwoGroupNoPlaintextEcho(t *testing.T) {
 	}
 }
 
-// Regression for #1626-B: bare PKCS#8 "BEGIN PRIVATE KEY" (no RSA/EC/...
-// prefix) must be masked - the detection layer matched it, display didn't.
 func TestRedactBarePKCS8PrivateKey(t *testing.T) {
 	pem := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7\n-----END PRIVATE KEY-----"
 	out := RedactForDisplay(pem)

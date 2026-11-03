@@ -61,7 +61,6 @@ func TestBuildArgsSoftware(t *testing.T) {
 	}
 	t.Logf("Software args:%s", argsStr)
 
-	// Verify key args
 	if !containsArg(args, "-c:v") || !containsArgValue(args, "-c:v", "libx264") {
 		t.Error("missing -c:v libx264")
 	}
@@ -86,7 +85,6 @@ func TestBuildArgsHardware(t *testing.T) {
 	}
 	t.Logf("Hardware args:%s", argsStr)
 
-	// Hardware encoder should NOT have preset/tune/crf
 	if containsArg(args, "-preset") {
 		t.Error("hardware encoder should not have -preset")
 	}
@@ -96,7 +94,7 @@ func TestBuildArgsHardware(t *testing.T) {
 	if containsArg(args, "-crf") {
 		t.Error("hardware encoder should not have -crf")
 	}
-	// But should have bitrate
+
 	if !containsArg(args, "-b:v") {
 		t.Error("missing -b:v for hardware encoder")
 	}

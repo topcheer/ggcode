@@ -45,10 +45,7 @@ func TestDedupMessageRecords_PassesThroughNonMessages(t *testing.T) {
 		{Type: "meta"},
 	}
 	got := dedupMessageRecords(records)
-	// #1628 case A: ID-less fingerprints dedupe ADJACENT repeats only -
-	// this "duplicate" is separated by usage/meta records, i.e. a distant
-	// repeat that global fingerprinting used to swallow. 5 survive now
-	// (checkpoint, hi, usage, hi, meta).
+
 	if len(got) != 5 {
 		t.Fatalf("expected 5 records (distant repeat survives), got %d", len(got))
 	}
@@ -75,8 +72,8 @@ func TestDedupMessageRecords_ToolUseFingerprint(t *testing.T) {
 	}
 	records := []jsonlRecord{
 		{Type: "message", Message: msg1},
-		{Type: "message", Message: msg2}, // duplicate of msg1
-		{Type: "message", Message: msg3}, // distinct (different ToolID + Input)
+		{Type: "message", Message: msg2},
+		{Type: "message", Message: msg3},
 	}
 	got := dedupMessageRecords(records)
 	if len(got) != 2 {
@@ -112,15 +109,12 @@ func TestDedupLightweightEntries_MixedTypes(t *testing.T) {
 	entries := []localLightweightEntry{
 		{recType: "message", record: jsonlRecord{Type: "message", Message: msg}},
 		{recType: "cost", record: jsonlRecord{Type: "cost"}},
-		{recType: "message", record: jsonlRecord{Type: "message", Message: msg}}, // dup
-		{recType: "cost", record: jsonlRecord{Type: "cost"}},                     // cost, not deduped
+		{recType: "message", record: jsonlRecord{Type: "message", Message: msg}},
+		{recType: "cost", record: jsonlRecord{Type: "cost"}},
 		{recType: "message", record: jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "unique"}}}}},
 	}
 	got := dedupLightweightEntries(entries)
-	// #1628 case A: the second message(dup) is separated by cost records -
-	// a distant repeat under adjacent-only fingerprint dedup, so it stays.
-	// All 5 survive (adjacent ID-less dups still collapse - see
-	// TestIssue1628AdjacentDuplicateCollapses).
+
 	if len(got) != 5 {
 		t.Fatalf("expected 5 entries (distant repeat survives), got %d", len(got))
 	}
@@ -136,9 +130,6 @@ func TestDedupMessageRecords_SingleOrEmpty(t *testing.T) {
 	}
 }
 
-// TestLoadSession_DeduplicatesCorruptedJSONL verifies that loadSession
-// correctly deduplicates message records in a JSONL file corrupted by the
-// runAdded duplication bug.
 func TestLoadSession_DeduplicatesCorruptedJSONL(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -146,7 +137,6 @@ func TestLoadSession_DeduplicatesCorruptedJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Build a session with duplicate messages
 	ses := &Session{
 		ID:        "dedup-test",
 		Title:     "Dedup Test",
@@ -159,25 +149,21 @@ func TestLoadSession_DeduplicatesCorruptedJSONL(t *testing.T) {
 	ses.Messages = []provider.Message{msg}
 	ses.ContextMessages = ses.Messages
 
-	// Save once
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
 
-	// Append the same message multiple times to simulate corruption
 	for i := 0; i < 5; i++ {
 		if err := store.AppendMessageToDisk(ses, msg); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Load — should deduplicate
 	loaded, err := store.Load("dedup-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Should have exactly 1 unique message (the original + 5 duplicates → 1)
 	userMsgs := 0
 	for _, m := range loaded.Messages {
 		if m.Role == "user" {
@@ -193,11 +179,6 @@ func TestLoadSession_DeduplicatesCorruptedJSONL(t *testing.T) {
 	}
 }
 
-// TestDedupMessageRecords_KeepsSameContentDifferentID verifies that two
-// messages with identical content but different IDs are NOT deduped.
-// This is the key fix: content-based fingerprinting incorrectly merged
-// distinct messages (e.g. user sending "continue" twice, or two identical
-// build outputs). ID-based dedup correctly preserves both.
 func TestDedupMessageRecords_KeepsSameContentDifferentID(t *testing.T) {
 	records := []jsonlRecord{
 		{Type: "message", Message: &provider.Message{
@@ -217,9 +198,6 @@ func TestDedupMessageRecords_KeepsSameContentDifferentID(t *testing.T) {
 	}
 }
 
-// TestDedupMessageRecords_DedupSameID verifies that two messages with
-// the same ID are correctly deduped (the original purpose of dedup:
-// cleaning up files corrupted by the StartRunTracking bug).
 func TestDedupMessageRecords_DedupSameID(t *testing.T) {
 	msg := &provider.Message{
 		ID:      "msg_dup_001",
@@ -228,7 +206,7 @@ func TestDedupMessageRecords_DedupSameID(t *testing.T) {
 	}
 	records := []jsonlRecord{
 		{Type: "message", Message: msg},
-		{Type: "message", Message: msg}, // same pointer = same ID
+		{Type: "message", Message: msg},
 	}
 	got := dedupMessageRecords(records)
 	if len(got) != 1 {
@@ -236,8 +214,6 @@ func TestDedupMessageRecords_DedupSameID(t *testing.T) {
 	}
 }
 
-// TestDedupMessageRecords_NoIDFallsBackToFingerprint verifies that
-// messages without IDs (very old sessions) still use content fingerprint.
 func TestDedupMessageRecords_NoIDFallsBackToFingerprint(t *testing.T) {
 	records := []jsonlRecord{
 		{Type: "message", Message: &provider.Message{

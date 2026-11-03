@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// TestWindowsListDisplaysScriptSetsDpiAwarenessBeforeQuery guards #976:
-// the display-listing script must declare DPI awareness before it queries
-// AllScreens, otherwise the reported bounds are virtualized 96-DPI logical
-// coordinates on scaled displays and downstream Region captures (computed
-// from DisplayInfo) are mispositioned relative to the DPI-aware capture
-// scripts.
 func TestWindowsListDisplaysScriptSetsDpiAwarenessBeforeQuery(t *testing.T) {
 	script := buildWindowsListDisplaysScript()
 
@@ -27,7 +21,6 @@ func TestWindowsListDisplaysScriptSetsDpiAwarenessBeforeQuery(t *testing.T) {
 			"querying first returns virtualized 96-DPI coordinates that cannot be corrected afterwards", dpiIdx, screensIdx)
 	}
 
-	// The JSON contract consumed by ListDisplays must be preserved.
 	if !strings.Contains(script, "ConvertTo-Json") {
 		t.Fatal("ListDisplays script lost its ConvertTo-Json output")
 	}
@@ -38,10 +31,6 @@ func TestWindowsListDisplaysScriptSetsDpiAwarenessBeforeQuery(t *testing.T) {
 	}
 }
 
-// TestWindowsDpiAwarenessSnippetIsShared guards the single source of truth:
-// both the capture scripts and the display-listing script must use
-// windowsDpiAwarenessSnippet so their coordinate spaces cannot drift apart
-// (#976).
 func TestWindowsDpiAwarenessSnippetIsShared(t *testing.T) {
 	snippet := windowsDpiAwarenessSnippet
 	if !strings.Contains(snippet, "SetProcessDPIAware()") {
@@ -55,10 +44,6 @@ func TestWindowsDpiAwarenessSnippetIsShared(t *testing.T) {
 	}
 }
 
-// TestWindowsDpiSnippetHandlesFalseReturn pins #1754 case 2: the context
-// API returns FALSE (without throwing) when the context is already set or
-// the session is restricted - the snippet must check the return and fall
-// back to the legacy API, not pipe it to Out-Null.
 func TestWindowsDpiSnippetHandlesFalseReturn(t *testing.T) {
 	snippet := windowsDpiAwarenessSnippet
 	if !strings.Contains(snippet, "if (-not") {

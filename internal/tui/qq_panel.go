@@ -118,18 +118,12 @@ func (m Model) renderQQPanel() string {
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.create")))
 	if panel.createMode {
-		// #4873: numbered where-to-get-credentials guide rendered IN the
-		// panel at create time (Hermes-style setup instructions). Verified
-		// entry point: q.qq.com is the QQ Open Platform console (official
-		// wiki names it as the registration site; bots.qq.com is API-only).
+
 		for _, line := range strings.Split(m.t("panel.qq.create_guide"), "\n") {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+line))
 		}
 		body = append(body,
-			// #2178 family: spec is `name appid appsecret` (parser
-			// createQQAdapter: fields[2]=appsecret -> Extra["appsecret"]).
-			// appid stays readable like wecom's bot_id; the secret field is
-			// masked frame-by-frame so it never enters scrollback.
+
 			" "+m.t("panel.qq.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.qq.create_format"),
 			" "+m.t("panel.qq.create_example"),
@@ -139,7 +133,7 @@ func (m Model) renderQQPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.qq.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -156,7 +150,7 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -269,7 +263,7 @@ func (m *Model) bindQQEntry(entry qqBindingEntry) tea.Cmd {
 				if err := m.waitForAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 					return qqBindResultMsg{err: err}
 				}
-				// Sync session history to the newly bound channel only.
+
 				if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 					if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 						return qqBindResultMsg{err: err}
@@ -278,8 +272,7 @@ func (m *Model) bindQQEntry(entry qqBindingEntry) tea.Cmd {
 			}
 			return qqBindResultMsg{message: m.t("panel.qq.message.bound_success")}
 		}
-		// #1387-B: a disabled adapter's auto-enable runs on the Update loop
-		// via configMutationMsg; the bind chain continues in next().
+
 		if cfg, ok := m.config.GetIMAdapter(entry.Adapter); m.config != nil && ok && !cfg.Enabled {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -308,10 +301,7 @@ func (m *Model) generateQQShareLink(entry qqBindingEntry) tea.Cmd {
 			return qqBindResultMsg{err: err}
 		}
 		callbackData := qqShareCallbackData(m.currentWorkspacePath())
-		// #2172: an over-long (Chinese workspace names hit 33 bytes at 11
-		// chars) target ID used to yield an EMPTY callback silently - the
-		// QR rendered fine and claimed success, but scanning it could never
-		// pair (no workspace identifier in the callback). Fail loudly.
+
 		if callbackData == "" {
 			return qqBindResultMsg{err: fmt.Errorf("workspace directory name too long for QQ pairing callback (>32 bytes): %s", defaultQQTargetID(m.currentWorkspacePath()))}
 		}
@@ -365,9 +355,7 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return qqBindResultMsg{err: errors.New(m.t("panel.qq.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
-		// secret WITH spaces was silently truncated to its first token,
-		// then persisted as a guaranteed-to-fail credential. Reject extras.
+
 		if len(fields) > 3 {
 			return qqBindResultMsg{err: errors.New("extra fields after appsecret (values must not contain spaces): " + spec)}
 		}
@@ -382,9 +370,8 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 				"appsecret": appSecret,
 			},
 		}
-		// #1367 family batch 2: config write + disk save moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -394,19 +381,13 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext secret - without
-						// compensation a wrong secret stays on disk forever and
-						// blocks the name on retry ("already exists"); the panel
-						// has no delete key. The rollback REMOVE is itself a map
-						// write, so it must route through configMutationMsg too
-						// (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -452,9 +433,7 @@ func (m *Model) startQQAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.qq.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #1387-B (family site 14): auto-enable must not write the config
-		// map on this Cmd-goroutine helper - bindQQEntry routes it through
-		// configMutationMsg; disabled adapters are refused here.
+
 		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformQQ)) {
@@ -652,7 +631,7 @@ func (m Model) qqAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.qq.status.unknown")
 	}
-	// #909: same #887-family bug — both branches returned the same value.
+
 	if state.Healthy {
 		return status
 	}

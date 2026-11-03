@@ -10,16 +10,12 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestAppendRecordLines_TerminatesTornTail (#657): a crash mid-write leaves
-// a final line without '\n'. The next append must first terminate that
-// residue so the new record lands on its own line instead of fusing into a
-// malformed line that load silently drops (losing BOTH records).
 func TestAppendRecordLines_TerminatesTornTail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
 
 	good := `{"type":"message","message":{"role":"user","content":[{"type":"text","text":"ok"}]}}`
-	torn := `{"type":"mess` // crash residue: no trailing newline
+	torn := `{"type":"mess`
 	if err := os.WriteFile(path, []byte(good+"\n"+torn), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +51,6 @@ func TestAppendRecordLines_TerminatesTornTail(t *testing.T) {
 	}
 }
 
-// TestAppendThenLoad_TornTailDoesNotEatNextRecord (#657 end-to-end):
-// simulate a crash-torn append, then append a real record through the store.
-// The load must surface both the pre-crash and the post-crash record — only
-// the torn half-line is lost (and now logged), never the record after it.
 func TestAppendThenLoad_TornTailDoesNotEatNextRecord(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -82,7 +74,6 @@ func TestAppendThenLoad_TornTailDoesNotEatNextRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate crash mid-append: raw torn record bytes, no newline.
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -93,7 +84,6 @@ func TestAppendThenLoad_TornTailDoesNotEatNextRecord(t *testing.T) {
 	}
 	f.Close()
 
-	// Next launch appends a full record through the normal path.
 	ses.Messages = []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "after crash"}}},
 	}
@@ -121,12 +111,9 @@ func TestAppendThenLoad_TornTailDoesNotEatNextRecord(t *testing.T) {
 	}
 }
 
-// TestTerminateTornTail covers the primitive: clean tails and empty files
-// stay untouched; torn tails gain exactly one newline.
 func TestTerminateTornTail(t *testing.T) {
 	dir := t.TempDir()
 
-	// Clean tail: unchanged.
 	p1 := filepath.Join(dir, "clean.jsonl")
 	if err := os.WriteFile(p1, []byte("a\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -144,7 +131,6 @@ func TestTerminateTornTail(t *testing.T) {
 		t.Fatalf("clean tail must be untouched, got %q", d1)
 	}
 
-	// Torn tail: exactly one newline appended.
 	p2 := filepath.Join(dir, "torn.jsonl")
 	if err := os.WriteFile(p2, []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
@@ -162,7 +148,6 @@ func TestTerminateTornTail(t *testing.T) {
 		t.Fatalf("torn tail must gain one newline, got %q", d2)
 	}
 
-	// Empty (or missing) file: stays empty.
 	p3 := filepath.Join(dir, "empty.jsonl")
 	f3, err := os.OpenFile(p3, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {

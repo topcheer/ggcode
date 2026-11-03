@@ -157,7 +157,6 @@ func TestElicitationHandlerSetter(t *testing.T) {
 		t.Fatal("expected non-nil elicitation handler after SetElicitationHandler")
 	}
 
-	// Clear by setting nil
 	c.SetElicitationHandler(nil)
 	if c.elicitationHandler != nil {
 		t.Fatal("expected nil elicitation handler after setting nil")
@@ -165,13 +164,12 @@ func TestElicitationHandlerSetter(t *testing.T) {
 }
 
 func TestElicitationHandlerRejectsWhenNil(t *testing.T) {
-	// When no handler is set, the client should not advertise elicitation
-	// capability during initialize. We verify the guard logic directly.
+
 	c := NewClient("test", "echo", nil)
 	if c.elicitationHandler != nil {
 		t.Fatal("expected nil elicitation handler by default")
 	}
-	// Verify that the capability is NOT set when handler is nil
+
 	caps := ClientCaps{
 		Roots: struct {
 			ListChanged bool `json:"listChanged,omitempty"`
@@ -184,7 +182,6 @@ func TestElicitationHandlerRejectsWhenNil(t *testing.T) {
 		t.Fatal("elicitation capability should not be advertised when handler is nil")
 	}
 
-	// Now set a handler and verify capability would be advertised
 	c.SetElicitationHandler(func(ctx context.Context, p ElicitationParams) (*ElicitationResult, error) {
 		return &ElicitationResult{Action: ElicitationActionAccept}, nil
 	})

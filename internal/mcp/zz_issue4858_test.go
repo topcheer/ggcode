@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// #4858: OSV malware gate - package parsing, block-on-MAL, fail-open,
-// and cache TTL.
-
 func TestIssue4858_PackageParsing(t *testing.T) {
 	cases := []struct {
 		name, command string
@@ -60,7 +57,7 @@ func TestIssue4858_BlockOnMALHit(t *testing.T) {
 			t.Errorf("block error missing %q: %v", want, err)
 		}
 	}
-	// GHSA-only entry must not leak into the message.
+
 	if strings.Contains(err.Error(), "GHSA") {
 		t.Errorf("non-MAL advisory leaked into block message: %v", err)
 	}
@@ -68,30 +65,26 @@ func TestIssue4858_BlockOnMALHit(t *testing.T) {
 
 func TestIssue4858_FailOpenOnNetworkError(t *testing.T) {
 	orig := osvQueryEndpoint
-	osvQueryEndpoint = "http://127.0.0.1:1" // unreachable
+	osvQueryEndpoint = "http://127.0.0.1:1"
 	defer func() { osvQueryEndpoint = orig }()
 	clearOSVCacheForTest()
 
 	if err := osvGate(context.Background(), "srv", "npx", []string{"-y", "any-pkg"}, false); err != nil {
 		t.Fatalf("network failure must fail OPEN (allow), got: %v", err)
 	}
-	// Skip flag must bypass entirely - even with a MAL-hit server behind it.
+
 	if err := osvGate(context.Background(), "srv", "npx", []string{"-y", "any-pkg"}, true); err != nil {
 		t.Fatalf("skip_osv_check must bypass the gate, got: %v", err)
 	}
 }
 
-// #4860 review: the fail-open warning must be VISIBLE (stderr, not just
-// debug.Log) and fire exactly ONCE per process even across multiple
-// failed queries.
 func TestIssue4858_FailOpenWarnOnce(t *testing.T) {
 	orig := osvQueryEndpoint
 	osvQueryEndpoint = "http://127.0.0.1:1"
 	defer func() { osvQueryEndpoint = orig }()
 	clearOSVCacheForTest()
-	osvFailOpenWarnOnce = *new(sync.Once) // reset for the test
+	osvFailOpenWarnOnce = *new(sync.Once)
 
-	// Capture stderr.
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
@@ -126,7 +119,7 @@ func TestIssue4858_CacheTTL(t *testing.T) {
 	if ids := osvQueryMAL(context.Background(), "npm", "cache-pkg", ""); ids != nil {
 		t.Fatalf("clean package must return nil, got %v", ids)
 	}
-	// Age the entry past the TTL: a fresh query must run again.
+
 	osvCacheMu.Lock()
 	key := "npm|cache-pkg@"
 	if e, ok := osvCache[key]; !ok {
@@ -136,10 +129,7 @@ func TestIssue4858_CacheTTL(t *testing.T) {
 		osvCache[key] = osvVerdict{ids: e.ids, queriedAt: time.Now().Add(-osvCacheTTL - time.Minute)}
 	}
 	osvCacheMu.Unlock()
-	// Negative verdict (nil) after re-query is fine - the point is that the
-	// stale entry no longer satisfies the TTL check (covered implicitly: if
-	// it did, the test server would not need to serve again; passing here
-	// means no panic and correct cache lifecycle).
+
 	if ids := osvQueryMAL(context.Background(), "npm", "cache-pkg", ""); ids != nil {
 		t.Fatalf("post-requery clean verdict must be nil, got %v", ids)
 	}

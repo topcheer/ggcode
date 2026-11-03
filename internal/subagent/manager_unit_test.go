@@ -13,10 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ---------------------------------------------------------------------------
-// Manager: Spawn increments IDs
-// ---------------------------------------------------------------------------
-
 func TestManagerSpawnIncrementingIDs(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id1 := mgr.Spawn("a", "task1", "display1", nil, context.Background())
@@ -31,10 +27,6 @@ func TestManagerSpawnIncrementingIDs(t *testing.T) {
 		t.Errorf("expected sa-2, got %q", id2)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Spawn populates SubAgent fields
-// ---------------------------------------------------------------------------
 
 func TestManagerSpawnFields(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -71,10 +63,6 @@ func TestManagerSpawnFields(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Get nonexistent
-// ---------------------------------------------------------------------------
-
 func TestManagerGetNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	_, ok := mgr.Get("nonexistent")
@@ -82,10 +70,6 @@ func TestManagerGetNonexistent(t *testing.T) {
 		t.Error("expected false for nonexistent agent")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Snapshot
-// ---------------------------------------------------------------------------
 
 func TestManagerSnapshotNotFound(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
@@ -113,10 +97,6 @@ func TestManagerSnapshotFields(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: List
-// ---------------------------------------------------------------------------
-
 func TestManagerListEmpty(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	list := mgr.List()
@@ -134,10 +114,6 @@ func TestManagerListMultiple(t *testing.T) {
 		t.Errorf("expected 2 agents, got %d", len(list))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: RunningCount
-// ---------------------------------------------------------------------------
 
 func TestManagerRunningCountZero(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
@@ -159,20 +135,12 @@ func TestManagerRunningCountAfterSetCancel(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Cancel nonexistent
-// ---------------------------------------------------------------------------
-
 func TestManagerCancelNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	if mgr.Cancel("nonexistent") {
 		t.Error("expected false for canceling nonexistent agent")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Cancel non-running agent
-// ---------------------------------------------------------------------------
 
 func TestManagerCancelPendingAgent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -185,10 +153,6 @@ func TestManagerCancelPendingAgent(t *testing.T) {
 		t.Errorf("expected cancelled, got %q", sa.Status)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Cancel running agent with cancel func
-// ---------------------------------------------------------------------------
 
 func TestManagerCancelRunningAgent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -211,10 +175,6 @@ func TestManagerCancelRunningAgent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: CancelAll with no agents
-// ---------------------------------------------------------------------------
-
 func TestManagerCancelAllEmpty(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	if n := mgr.CancelAll(); n != 0 {
@@ -222,14 +182,9 @@ func TestManagerCancelAllEmpty(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: CancelAll with mixed states
-// ---------------------------------------------------------------------------
-
 func TestManagerCancelAllMixed(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 
-	// Create two agents, set one as running
 	id1 := mgr.Spawn("runner", "task", "", nil, context.Background())
 	id2 := mgr.Spawn("pending", "task", "", nil, context.Background())
 
@@ -273,10 +228,6 @@ func TestManagerSetCancelDoesNotResurrectCancelledAgent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Complete success
-// ---------------------------------------------------------------------------
-
 func TestManagerCompleteSuccess(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("comp", "task", "", nil, context.Background())
@@ -301,10 +252,6 @@ func TestManagerCompleteSuccess(t *testing.T) {
 		t.Error("EndedAt should be set")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Complete with error
-// ---------------------------------------------------------------------------
 
 func TestManagerCompleteError(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -331,10 +278,6 @@ func TestManagerCompleteError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Complete on already completed (idempotent)
-// ---------------------------------------------------------------------------
-
 func TestManagerCompleteIdempotent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("idem", "task", "", nil, context.Background())
@@ -344,17 +287,13 @@ func TestManagerCompleteIdempotent(t *testing.T) {
 	mgr.SetCancel(id, cancel)
 
 	mgr.Complete(id, "first result", nil)
-	mgr.Complete(id, "second result", nil) // should be ignored
+	mgr.Complete(id, "second result", nil)
 
 	sa, _ := mgr.Get(id)
 	if sa.Result != "first result" {
 		t.Errorf("expected first result preserved, got %q", sa.Result)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Complete on cancelled (no-op)
-// ---------------------------------------------------------------------------
 
 func TestManagerCompleteAfterCancel(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -364,9 +303,7 @@ func TestManagerCompleteAfterCancel(t *testing.T) {
 	mgr.SetCancel(id, cancel)
 
 	mgr.Cancel(id)
-	// The late Complete still backfills its result (#621): a successful
-	// Complete racing a user cancel must not silently drop completed work.
-	// The terminal status and error stay cancelled.
+
 	mgr.Complete(id, "too late", nil)
 
 	sa, _ := mgr.Get(id)
@@ -379,21 +316,13 @@ func TestManagerCompleteAfterCancel(t *testing.T) {
 	if sa.Error != context.Canceled {
 		t.Errorf("expected error to stay context.Canceled, got %v", sa.Error)
 	}
-	cancel() // cleanup
+	cancel()
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Complete nonexistent (no-op)
-// ---------------------------------------------------------------------------
 
 func TestManagerCompleteNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	mgr.Complete("nonexistent", "result", nil) // should not panic
+	mgr.Complete("nonexistent", "result", nil)
 }
-
-// ---------------------------------------------------------------------------
-// Manager: GetTaskOutput variations
-// ---------------------------------------------------------------------------
 
 func TestManagerGetTaskOutputNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
@@ -464,17 +393,12 @@ func TestManagerGetTaskOutputPendingNoProgress(t *testing.T) {
 	if !ok {
 		t.Error("expected true")
 	}
-	// #351: pending agents without progress now return an explicit status
-	// marker instead of an empty string (indistinguishable from failure).
+
 	if output != "[pending, not started yet]" {
 		t.Errorf("expected pending marker, got %q", output)
 	}
 }
 
-// TestManagerGetTaskOutputFailed (#351): a failed sub-agent must surface its
-// error — previously it returned ("", true), an empty success result that the
-// calling LLM could not distinguish from "no output yet" (and spawn-limit
-// rejections were invisible, inducing retry loops).
 func TestManagerGetTaskOutputFailed(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	sa := &SubAgent{ID: "sa-1", Task: "t"}
@@ -482,7 +406,6 @@ func TestManagerGetTaskOutputFailed(t *testing.T) {
 	mgr.agents["sa-1"] = sa
 	mgr.mu.Unlock()
 
-	// Failure path: Complete with an error and no result.
 	sa.mu.Lock()
 	sa.Status = StatusFailed
 	sa.Error = errors.New("context deadline exceeded")
@@ -496,7 +419,6 @@ func TestManagerGetTaskOutputFailed(t *testing.T) {
 		t.Fatalf("expected failed marker with error, got %q", output)
 	}
 
-	// Cancel path.
 	sa.mu.Lock()
 	sa.Status = StatusCancelled
 	sa.Error = errors.New("context canceled")
@@ -505,10 +427,6 @@ func TestManagerGetTaskOutputFailed(t *testing.T) {
 		t.Fatalf("expected cancelled error surfaced, got %q", output)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Semaphore acquire/release
-// ---------------------------------------------------------------------------
 
 func TestManagerSemaphoreAcquireRelease(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 2})
@@ -520,7 +438,6 @@ func TestManagerSemaphoreAcquireRelease(t *testing.T) {
 		t.Fatalf("second acquire: %v", err)
 	}
 
-	// Third acquire should block (test with context timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	err := mgr.AcquireSemaphore(ctx)
@@ -528,7 +445,6 @@ func TestManagerSemaphoreAcquireRelease(t *testing.T) {
 		t.Error("expected timeout on third acquire")
 	}
 
-	// Release one, then acquire should work
 	mgr.ReleaseSemaphore()
 	if err := mgr.AcquireSemaphore(context.Background()); err != nil {
 		t.Fatalf("acquire after release: %v", err)
@@ -537,16 +453,12 @@ func TestManagerSemaphoreAcquireRelease(t *testing.T) {
 	mgr.ReleaseSemaphore()
 }
 
-// ---------------------------------------------------------------------------
-// Manager: AcquireSemaphore cancelled context
-// ---------------------------------------------------------------------------
-
 func TestManagerSemaphoreCancelledCtx(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1})
-	mgr.AcquireSemaphore(context.Background()) // fill the slot
+	mgr.AcquireSemaphore(context.Background())
 
 	ctx2, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	err := mgr.AcquireSemaphore(ctx2)
 	if err == nil {
@@ -554,10 +466,6 @@ func TestManagerSemaphoreCancelledCtx(t *testing.T) {
 	}
 	mgr.ReleaseSemaphore()
 }
-
-// ---------------------------------------------------------------------------
-// Manager: Timeout and ShowOutput
-// ---------------------------------------------------------------------------
 
 func TestManagerDefaults(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
@@ -583,10 +491,6 @@ func TestManagerShowOutput(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: RootContext / Shutdown
-// ---------------------------------------------------------------------------
-
 func TestManagerRootContextAndShutdown(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	ctx := mgr.RootContext()
@@ -606,13 +510,9 @@ func TestManagerRootContextAndShutdown(t *testing.T) {
 func TestManagerShutdown_DoubleCall(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	mgr.Shutdown()
-	// Second call must not panic (close of closed channel)
+
 	mgr.Shutdown()
 }
-
-// ---------------------------------------------------------------------------
-// Manager: SetOnComplete callback
-// ---------------------------------------------------------------------------
 
 func TestManagerSetOnComplete(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -638,10 +538,6 @@ func TestManagerSetOnComplete(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: SetOnUpdate callback (with throttle)
-// ---------------------------------------------------------------------------
-
 func TestManagerSetOnUpdate(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 
@@ -654,7 +550,7 @@ func TestManagerSetOnUpdate(t *testing.T) {
 	})
 
 	id := mgr.Spawn("upd", "task", "", nil, context.Background())
-	mgr.Notify(id) // should trigger onUpdate (first call, no throttle)
+	mgr.Notify(id)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -662,10 +558,6 @@ func TestManagerSetOnUpdate(t *testing.T) {
 		t.Errorf("expected 1 update call, got %d", callCount)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Manager: UpdateProgress
-// ---------------------------------------------------------------------------
 
 func TestManagerUpdateProgress(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -681,12 +573,8 @@ func TestManagerUpdateProgress(t *testing.T) {
 
 func TestManagerUpdateProgressNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	mgr.UpdateProgress("nonexistent", "progress") // should not panic
+	mgr.UpdateProgress("nonexistent", "progress")
 }
-
-// ---------------------------------------------------------------------------
-// Manager: UpdateActivity
-// ---------------------------------------------------------------------------
 
 func TestManagerUpdateActivity(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -708,12 +596,8 @@ func TestManagerUpdateActivity(t *testing.T) {
 
 func TestManagerUpdateActivityNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	mgr.UpdateActivity("nonexistent", "x", "y", "z") // should not panic
+	mgr.UpdateActivity("nonexistent", "x", "y", "z")
 }
-
-// ---------------------------------------------------------------------------
-// Manager: SendToAgent
-// ---------------------------------------------------------------------------
 
 func TestManagerSendToAgent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -747,7 +631,6 @@ func TestManagerSendToAgentFullMailbox(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("full", "task", "", nil, context.Background())
 
-	// Fill the mailbox (capacity 16)
 	sa, _ := mgr.Get(id)
 	for i := 0; i < 16; i++ {
 		sa.Mailbox <- AgentMessage{Message: "fill"}
@@ -759,17 +642,12 @@ func TestManagerSendToAgentFullMailbox(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Broadcast
-// ---------------------------------------------------------------------------
-
 func TestManagerBroadcast(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id1 := mgr.Spawn("r1", "task", "", nil, context.Background())
 	id2 := mgr.Spawn("r2", "task", "", nil, context.Background())
-	mgr.Spawn("p1", "task", "", nil, context.Background()) // pending, not running
+	mgr.Spawn("p1", "task", "", nil, context.Background())
 
-	// Set first two as running
 	_, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
 	mgr.SetCancel(id1, cancel1)
@@ -791,10 +669,6 @@ func TestManagerBroadcastEmpty(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: NotifyStreamText callback
-// ---------------------------------------------------------------------------
-
 func TestManagerNotifyStreamText(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 
@@ -808,7 +682,7 @@ func TestManagerNotifyStreamText(t *testing.T) {
 	})
 
 	mgr.NotifyStreamText("sa-1", "hello chunk")
-	// Flush the batch buffer to deliver accumulated text synchronously.
+
 	mgr.FlushStreamBatch()
 
 	mu.Lock()
@@ -823,12 +697,8 @@ func TestManagerNotifyStreamText(t *testing.T) {
 
 func TestManagerNotifyStreamTextNoCallback(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	mgr.NotifyStreamText("sa-1", "text") // should not panic
+	mgr.NotifyStreamText("sa-1", "text")
 }
-
-// ---------------------------------------------------------------------------
-// Manager: NotifyToolCall / NotifyToolResult callbacks
-// ---------------------------------------------------------------------------
 
 func TestManagerNotifyToolCall(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -873,43 +743,32 @@ func TestManagerNotifyToolResult(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: Event tracking with overflow
-// ---------------------------------------------------------------------------
-
 func TestSubAgentEventOverflow(t *testing.T) {
 	sa := &SubAgent{
 		ID:     "overflow",
 		Status: StatusRunning,
 	}
 
-	// Fill beyond maxAgentEvents using tool events (not text — text would
-	// coalesce). Each turn: tool_call + tool_result = 2 events.
-	// With 250 turns = 500 events, eviction triggers at 400 and drops whole turns.
 	for turn := 0; turn < 250; turn++ {
 		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
 		sa.appendEvent(AgentEvent{Type: AgentEventToolResult, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
 	}
 
 	events := sa.Events()
-	// Should have evicted at least one full turn (6 events) to stay under 200.
+
 	if len(events) > maxAgentEvents {
 		t.Errorf("expected at most %d events after overflow, got %d", maxAgentEvents, len(events))
 	}
-	// Must have dropped at least 1 turn (6 events).
+
 	snap := sa.snapshot()
 	if snap.EventsDropped < 6 {
 		t.Errorf("expected at least 6 dropped (1 turn), got %d", snap.EventsDropped)
 	}
-	// First event should NOT be a text fragment — it should start at a turn boundary.
+
 	if len(events) > 0 && events[0].Type == AgentEventText {
 		t.Errorf("first event should be at a turn boundary, not a text fragment")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: IncrementToolCalls
-// ---------------------------------------------------------------------------
 
 func TestSubAgentIncrementToolCalls(t *testing.T) {
 	sa := &SubAgent{ID: "tc", Status: StatusRunning}
@@ -923,10 +782,6 @@ func TestSubAgentIncrementToolCalls(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: snapshot error string
-// ---------------------------------------------------------------------------
-
 func TestSubAgentSnapshotError(t *testing.T) {
 	sa := &SubAgent{
 		ID:     "err",
@@ -939,10 +794,6 @@ func TestSubAgentSnapshotError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: snapshot nil error
-// ---------------------------------------------------------------------------
-
 func TestSubAgentSnapshotNilError(t *testing.T) {
 	sa := &SubAgent{ID: "ok", Status: StatusCompleted}
 	snap := sa.snapshot()
@@ -950,10 +801,6 @@ func TestSubAgentSnapshotNilError(t *testing.T) {
 		t.Errorf("expected empty error, got %q", snap.Error)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// pure functions: compactProgressSummary
-// ---------------------------------------------------------------------------
 
 func TestCompactProgressSummary(t *testing.T) {
 	tests := []struct {
@@ -997,28 +844,19 @@ func TestCompactProgressSummary(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// pure functions: subagentToolProgressSummary
-// ---------------------------------------------------------------------------
-
 func TestSubagentToolProgressSummary(t *testing.T) {
-	// Command tools should produce a summary
+
 	result := "Job ID: abc\nStatus: running"
 	summary := subagentToolProgressSummary("start_command", result)
 	if summary == "" {
 		t.Error("expected non-empty summary for start_command")
 	}
 
-	// Non-command tools should return empty
 	summary = subagentToolProgressSummary("read_file", "file contents")
 	if summary != "" {
 		t.Errorf("expected empty summary for read_file, got %q", summary)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Wait: agent not found
-// ---------------------------------------------------------------------------
 
 func TestWaitNotFound(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
@@ -1027,10 +865,6 @@ func TestWaitNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent agent")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Wait: completed agent
-// ---------------------------------------------------------------------------
 
 func TestWaitCompleted(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -1050,10 +884,6 @@ func TestWaitCompleted(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Wait: failed agent
-// ---------------------------------------------------------------------------
-
 func TestWaitFailed(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("fail", "task", "", nil, context.Background())
@@ -1072,10 +902,6 @@ func TestWaitFailed(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WaitForSnapshot: agent not found
-// ---------------------------------------------------------------------------
-
 func TestWaitForSnapshotNotFound(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	_, err := WaitForSnapshot(context.Background(), mgr, "nonexistent", 0)
@@ -1083,10 +909,6 @@ func TestWaitForSnapshotNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent agent")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WaitForSnapshot: immediate (wait=0)
-// ---------------------------------------------------------------------------
 
 func TestWaitForSnapshotImmediate(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -1100,10 +922,6 @@ func TestWaitForSnapshotImmediate(t *testing.T) {
 		t.Errorf("snap.ID = %q, want %q", snap.ID, id)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WaitForSnapshot: completed before timeout
-// ---------------------------------------------------------------------------
 
 func TestWaitForSnapshotCompletedBeforeTimeout(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -1127,10 +945,6 @@ func TestWaitForSnapshotCompletedBeforeTimeout(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WaitForSnapshot: timeout fires
-// ---------------------------------------------------------------------------
-
 func TestWaitForSnapshotTimeout(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("slow", "task", "", nil, context.Background())
@@ -1139,7 +953,6 @@ func TestWaitForSnapshotTimeout(t *testing.T) {
 	defer cancel()
 	mgr.SetCancel(id, cancel)
 
-	// Agent is running but never completes
 	snap, err := WaitForSnapshot(context.Background(), mgr, id, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("WaitForSnapshot error: %v", err)
@@ -1148,10 +961,6 @@ func TestWaitForSnapshotTimeout(t *testing.T) {
 		t.Errorf("status = %q, want running (timeout returns current snapshot)", snap.Status)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WaitForSnapshot: context cancelled
-// ---------------------------------------------------------------------------
 
 func TestWaitForSnapshotCtxCancelled(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
@@ -1171,10 +980,6 @@ func TestWaitForSnapshotCtxCancelled(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AgentEventType constants
-// ---------------------------------------------------------------------------
-
 func TestAgentEventTypeValues(t *testing.T) {
 	if AgentEventText != 0 {
 		t.Errorf("AgentEventText = %d, want 0", AgentEventText)
@@ -1193,10 +998,6 @@ func TestAgentEventTypeValues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: setStatus / getStatus
-// ---------------------------------------------------------------------------
-
 func TestSubAgentSetGetStatus(t *testing.T) {
 	sa := &SubAgent{ID: "sgs", Status: StatusPending}
 	sa.setStatus(StatusRunning)
@@ -1204,10 +1005,6 @@ func TestSubAgentSetGetStatus(t *testing.T) {
 		t.Errorf("getStatus = %q, want running", sa.getStatus())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: setActivity
-// ---------------------------------------------------------------------------
 
 func TestSubAgentSetActivity(t *testing.T) {
 	sa := &SubAgent{ID: "act"}
@@ -1217,10 +1014,6 @@ func TestSubAgentSetActivity(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: setProgressSummary
-// ---------------------------------------------------------------------------
-
 func TestSubAgentSetProgressSummary(t *testing.T) {
 	sa := &SubAgent{ID: "ps"}
 	sa.setProgressSummary("half done")
@@ -1228,10 +1021,6 @@ func TestSubAgentSetProgressSummary(t *testing.T) {
 		t.Errorf("ProgressSummary = %q", sa.ProgressSummary)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: setStartedAt
-// ---------------------------------------------------------------------------
 
 func TestSubAgentSetStartedAt(t *testing.T) {
 	sa := &SubAgent{ID: "sa"}
@@ -1241,10 +1030,6 @@ func TestSubAgentSetStartedAt(t *testing.T) {
 		t.Errorf("StartedAt = %v, want %v", sa.StartedAt, now)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: RecordEvent / AppendEvent aliases
-// ---------------------------------------------------------------------------
 
 func TestSubAgentRecordAndAppendEvent(t *testing.T) {
 	sa := &SubAgent{ID: "re"}
@@ -1262,24 +1047,16 @@ func TestSubAgentRecordAndAppendEvent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SubAgent: Events returns a copy (not shared reference)
-// ---------------------------------------------------------------------------
-
 func TestSubAgentEventsCopy(t *testing.T) {
 	sa := &SubAgent{ID: "copy"}
 	sa.AppendEvent(AgentEvent{Type: AgentEventText, Text: "original"})
 	events := sa.Events()
-	events[0].Text = "modified" // modify the copy
+	events[0].Text = "modified"
 	original := sa.Events()
 	if original[0].Text != "original" {
 		t.Error("Events() should return a copy, not shared reference")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: snapshot Tools copy
-// ---------------------------------------------------------------------------
 
 func TestSubAgentSnapshotToolsCopy(t *testing.T) {
 	sa := &SubAgent{
@@ -1293,10 +1070,6 @@ func TestSubAgentSnapshotToolsCopy(t *testing.T) {
 		t.Error("snapshot should copy Tools slice")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SubAgent: snapshot Events copy
-// ---------------------------------------------------------------------------
 
 func TestSubAgentSnapshotEventsCopy(t *testing.T) {
 	sa := &SubAgent{
@@ -1312,23 +1085,11 @@ func TestSubAgentSnapshotEventsCopy(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager: Notify nonexistent (no-op)
-// ---------------------------------------------------------------------------
-
 func TestManagerNotifyNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	mgr.Notify("nonexistent") // should not panic
+	mgr.Notify("nonexistent")
 }
 
-// ---------------------------------------------------------------------------
-// Manager: notifyUpdate throttle delivers during continuous streaming (#136)
-// ---------------------------------------------------------------------------
-
-// TestNotifyUpdateThrottleDeliversDuringStreaming verifies that during
-// continuous streaming (events every <100ms for >100ms total), the onUpdate
-// callback fires more than once. Before fix #136, lastNotify was advanced on
-// every call (including throttled ones), permanently suppressing updates.
 func TestNotifyUpdateThrottleDeliversDuringStreaming(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 
@@ -1342,9 +1103,6 @@ func TestNotifyUpdateThrottleDeliversDuringStreaming(t *testing.T) {
 
 	id := mgr.Spawn("test", "task", "display", nil, context.Background())
 
-	// Fire notifications every 15ms for ~300ms — simulates streaming at ~66/s.
-	// With the fix: deliveries at ~0ms, ~105ms, ~210ms → 3+
-	// With the bug: lastNotify advances on every call → only 1 delivery
 	for i := 0; i < 20; i++ {
 		mgr.Notify(id)
 		time.Sleep(15 * time.Millisecond)

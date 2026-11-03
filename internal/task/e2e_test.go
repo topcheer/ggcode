@@ -10,14 +10,9 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// E2E: task full lifecycle — create → update → stop → complete
-// ---------------------------------------------------------------------------
-
 func TestE2E_TaskFullLifecycle(t *testing.T) {
 	m := NewManager()
 
-	// Create.
 	tk := m.Create("Design API", "Create API specification", "Designing API", map[string]string{"type": "design"})
 	if tk.ID == "" {
 		t.Fatal("expected non-empty ID")
@@ -26,7 +21,6 @@ func TestE2E_TaskFullLifecycle(t *testing.T) {
 		t.Fatalf("expected pending, got %s", tk.Status)
 	}
 
-	// Update to in_progress.
 	inProg := StatusInProgress
 	tk, err := m.Update(tk.ID, UpdateOptions{Status: &inProg, Owner: ptrStr("alice")})
 	if err != nil {
@@ -36,7 +30,6 @@ func TestE2E_TaskFullLifecycle(t *testing.T) {
 		t.Fatalf("expected in_progress/alice, got %s/%s", tk.Status, tk.Owner)
 	}
 
-	// Stop (reset back to pending).
 	pending := StatusPending
 	tk, err = m.Update(tk.ID, UpdateOptions{Status: &pending})
 	if err != nil {
@@ -46,7 +39,6 @@ func TestE2E_TaskFullLifecycle(t *testing.T) {
 		t.Fatalf("expected pending after stop, got %s", tk.Status)
 	}
 
-	// Re-claim and complete.
 	tk, err = m.Update(tk.ID, UpdateOptions{Status: &inProg, Owner: ptrStr("bob")})
 	if err != nil {
 		t.Fatalf("re-claim: %v", err)
@@ -60,7 +52,6 @@ func TestE2E_TaskFullLifecycle(t *testing.T) {
 		t.Fatalf("expected completed, got %s", tk.Status)
 	}
 
-	// Verify description and subject survive the lifecycle.
 	got, ok := m.Get(tk.ID)
 	if !ok {
 		t.Fatal("task should still exist")
@@ -70,31 +61,23 @@ func TestE2E_TaskFullLifecycle(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: task dependency (blockedBy) chain resolution
-// ---------------------------------------------------------------------------
-
 func TestE2E_DependencyChain(t *testing.T) {
 	m := NewManager()
 
-	// Create A → B → C dependency chain.
 	taskA := m.Create("Task A", "First task", "", nil)
 	taskB := m.Create("Task B", "Second task", "", nil)
 	taskC := m.Create("Task C", "Third task", "", nil)
 
-	// A blocks B.
 	_, err := m.Update(taskB.ID, UpdateOptions{AddBlockedBy: []string{taskA.ID}})
 	if err != nil {
 		t.Fatalf("B blocked by A: %v", err)
 	}
 
-	// B blocks C.
 	_, err = m.Update(taskC.ID, UpdateOptions{AddBlockedBy: []string{taskB.ID}})
 	if err != nil {
 		t.Fatalf("C blocked by B: %v", err)
 	}
 
-	// Verify forward links too.
 	gotA, _ := m.Get(taskA.ID)
 	if len(gotA.Blocks) != 1 || gotA.Blocks[0] != taskB.ID {
 		t.Errorf("expected A to block B, got %v", gotA.Blocks)
@@ -104,23 +87,17 @@ func TestE2E_DependencyChain(t *testing.T) {
 		t.Errorf("expected B to block C, got %v", gotB.Blocks)
 	}
 
-	// Resolve: complete A.
 	completed := StatusCompleted
 	_, err = m.Update(taskA.ID, UpdateOptions{Status: &completed})
 	if err != nil {
 		t.Fatalf("complete A: %v", err)
 	}
-	// B is still blockedBy A (the link stays), but A is completed — app logic
-	// would check if all blockers are completed. Verify the link still exists.
+
 	gotB, _ = m.Get(taskB.ID)
 	if len(gotB.BlockedBy) != 1 || gotB.BlockedBy[0] != taskA.ID {
 		t.Error("blockedBy link should persist after completion")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: diamond dependency (A blocks B and C; B and C block D)
-// ---------------------------------------------------------------------------
 
 func TestE2E_DiamondDependency(t *testing.T) {
 	m := NewManager()
@@ -130,7 +107,6 @@ func TestE2E_DiamondDependency(t *testing.T) {
 	C := m.Create("C", "", "", nil)
 	D := m.Create("D", "", "", nil)
 
-	// A blocks B and C.
 	_, err := m.Update(B.ID, UpdateOptions{AddBlockedBy: []string{A.ID}})
 	if err != nil {
 		t.Fatal(err)
@@ -140,28 +116,21 @@ func TestE2E_DiamondDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// B and C block D.
 	_, err = m.Update(D.ID, UpdateOptions{AddBlockedBy: []string{B.ID, C.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify D has two blockers.
 	gotD, _ := m.Get(D.ID)
 	if len(gotD.BlockedBy) != 2 {
 		t.Errorf("expected 2 blockers for D, got %d", len(gotD.BlockedBy))
 	}
 
-	// Verify A blocks B and C.
 	gotA, _ := m.Get(A.ID)
 	if len(gotA.Blocks) != 2 {
 		t.Errorf("expected A to block 2 tasks, got %d", len(gotA.Blocks))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: concurrent task operations
-// ---------------------------------------------------------------------------
 
 func TestE2E_ConcurrentTaskOperations(t *testing.T) {
 	m := NewManager()
@@ -170,7 +139,6 @@ func TestE2E_ConcurrentTaskOperations(t *testing.T) {
 	var wg sync.WaitGroup
 	ids := make(chan string, numTasks)
 
-	// Concurrent creates.
 	for i := 0; i < numTasks; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -194,7 +162,6 @@ func TestE2E_ConcurrentTaskOperations(t *testing.T) {
 		t.Errorf("expected %d unique tasks, got %d", numTasks, len(taskIDs))
 	}
 
-	// Concurrent updates — each task gets claimed.
 	inProg := StatusInProgress
 	var updateWg sync.WaitGroup
 	for id := range taskIDs {
@@ -212,7 +179,6 @@ func TestE2E_ConcurrentTaskOperations(t *testing.T) {
 	}
 	updateWg.Wait()
 
-	// All tasks should be in_progress.
 	list := m.List()
 	for _, tk := range list {
 		if tk.Status != StatusInProgress {
@@ -220,10 +186,6 @@ func TestE2E_ConcurrentTaskOperations(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: concurrent claim race on a single task
-// ---------------------------------------------------------------------------
 
 func TestE2E_ConcurrentClaimRace(t *testing.T) {
 	m := NewManager()
@@ -271,10 +233,6 @@ func TestE2E_ConcurrentClaimRace(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: task metadata operations
-// ---------------------------------------------------------------------------
-
 func TestE2E_MetadataOperations(t *testing.T) {
 	m := NewManager()
 
@@ -283,10 +241,9 @@ func TestE2E_MetadataOperations(t *testing.T) {
 		"team":     "backend",
 	})
 
-	// Merge additional metadata.
 	_, err := m.Update(tk.ID, UpdateOptions{Metadata: map[string]string{
 		"assignee": "alice",
-		"priority": "critical", // overwrite
+		"priority": "critical",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +260,6 @@ func TestE2E_MetadataOperations(t *testing.T) {
 		t.Errorf("expected assignee=alice, got %s", got.Metadata["assignee"])
 	}
 
-	// Nil metadata on update should not clear existing.
 	_, err = m.Update(tk.ID, UpdateOptions{Metadata: nil})
 	if err != nil {
 		t.Fatal(err)
@@ -314,10 +270,6 @@ func TestE2E_MetadataOperations(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: task delete with dependency cleanup
-// ---------------------------------------------------------------------------
-
 func TestE2E_DeleteCleansDependencies(t *testing.T) {
 	m := NewManager()
 
@@ -325,11 +277,9 @@ func TestE2E_DeleteCleansDependencies(t *testing.T) {
 	B := m.Create("B", "", "", nil)
 	C := m.Create("C", "", "", nil)
 
-	// A blocks B, B blocks C.
 	m.Update(B.ID, UpdateOptions{AddBlockedBy: []string{A.ID}})
 	m.Update(C.ID, UpdateOptions{AddBlockedBy: []string{B.ID}})
 
-	// Delete B — should remove B from A.Blocks and C.BlockedBy.
 	if !m.Delete(B.ID) {
 		t.Fatal("delete B failed")
 	}
@@ -343,16 +293,11 @@ func TestE2E_DeleteCleansDependencies(t *testing.T) {
 		t.Errorf("expected C.BlockedBy empty after B deleted, got %v", gotC.BlockedBy)
 	}
 
-	// B should be gone.
 	_, ok := m.Get(B.ID)
 	if ok {
 		t.Error("B should be deleted")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: ActiveForm field
-// ---------------------------------------------------------------------------
 
 func TestE2E_ActiveForm(t *testing.T) {
 	m := NewManager()
@@ -372,10 +317,6 @@ func TestE2E_ActiveForm(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: ExpectedStatus conditional update
-// ---------------------------------------------------------------------------
-
 func TestE2E_ConditionalUpdate(t *testing.T) {
 	m := NewManager()
 	tk := m.Create("Conditional", "", "", nil)
@@ -383,22 +324,16 @@ func TestE2E_ConditionalUpdate(t *testing.T) {
 	pending := StatusPending
 	inProg := StatusInProgress
 
-	// Success: current is pending, expected is pending.
 	_, err := m.Update(tk.ID, UpdateOptions{ExpectedStatus: &pending, Status: &inProg})
 	if err != nil {
 		t.Fatalf("first conditional update should succeed: %v", err)
 	}
 
-	// Failure: current is in_progress, expected is pending.
 	_, err = m.Update(tk.ID, UpdateOptions{ExpectedStatus: &pending, Status: &inProg})
 	if err == nil {
 		t.Error("expected error when status doesn't match ExpectedStatus")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: task timestamps
-// ---------------------------------------------------------------------------
 
 func TestE2E_Timestamps(t *testing.T) {
 	m := NewManager()
@@ -426,10 +361,6 @@ func TestE2E_Timestamps(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: snapshot isolation — mutations to returned snapshot don't affect manager
-// ---------------------------------------------------------------------------
-
 func TestE2E_SnapshotIsolation(t *testing.T) {
 	m := NewManager()
 	tk := m.Create("Isolated", "", "", map[string]string{"key": "val"})
@@ -446,9 +377,5 @@ func TestE2E_SnapshotIsolation(t *testing.T) {
 		t.Error("metadata mutation leaked into manager")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// helper
-// ---------------------------------------------------------------------------
 
 func ptrStr(s string) *string { return &s }

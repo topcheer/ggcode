@@ -7,34 +7,31 @@ import (
 )
 
 func TestLaunch_WritesScriptAndStarts(t *testing.T) {
-	// Create a temp binary that just exits
+
 	dir := t.TempDir()
 	fakeBin := filepath.Join(dir, "ggcode")
 	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Use a non-existent PID so the script doesn't wait long
 	err := Launch(Request{
 		Binary:  fakeBin,
 		Args:    []string{"--version"},
 		WorkDir: dir,
-		PID:     999999, // non-existent PID
+		PID:     999999,
 	})
-	// Launch may error if the script can't be started, that's fine
-	// The important thing is it doesn't panic
+
 	_ = err
 }
 
 func TestLaunch_DefaultsPID(t *testing.T) {
-	// Just test it doesn't panic with PID=0
+
 	dir := t.TempDir()
 	fakeBin := filepath.Join(dir, "ggcode")
 	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// PID=0 should be replaced with os.Getpid()
 	_ = Launch(Request{
 		Binary:  fakeBin,
 		WorkDir: dir,
@@ -49,7 +46,6 @@ func TestLaunch_DefaultsWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// WorkDir="" should be replaced with os.Getwd()
 	_ = Launch(Request{
 		Binary: fakeBin,
 		PID:    999999,
@@ -90,7 +86,6 @@ func TestWritePlatformScript(t *testing.T) {
 		t.Fatal("expected non-empty script path")
 	}
 
-	// Verify the script file exists and has content
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile error: %v", err)
@@ -99,13 +94,12 @@ func TestWritePlatformScript(t *testing.T) {
 		t.Error("expected non-empty script")
 	}
 
-	// Cleanup
 	os.Remove(path)
 }
 
 func TestLaunchPlatformScript(t *testing.T) {
 	dir := t.TempDir()
-	// Create a simple script that exits immediately
+
 	script := filepath.Join(dir, "test.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho ok\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -118,6 +112,6 @@ func TestLaunchPlatformScript(t *testing.T) {
 	}
 
 	err := launchPlatformScript(script, req)
-	// May error if script already deleted, that's fine
+
 	_ = err
 }

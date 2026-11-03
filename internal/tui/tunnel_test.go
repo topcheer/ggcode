@@ -22,8 +22,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// ─── Pure helper tests ───
-
 func TestTruncateRunes_Short(t *testing.T) {
 	result := truncateRunes("hello", 10, "...")
 	if result != "hello" {
@@ -53,8 +51,6 @@ func TestTruncateRunes_Exact(t *testing.T) {
 	}
 }
 
-// ─── parseModeFromString tests ───
-
 func TestParseModeFromString(t *testing.T) {
 	tests := []struct {
 		input string
@@ -77,8 +73,6 @@ func TestParseModeFromString(t *testing.T) {
 		}
 	}
 }
-
-// ─── tunnelMessagesToHistory tests ───
 
 func TestTunnelMessagesToHistory_UserMessage(t *testing.T) {
 	msgs := []provider.Message{
@@ -196,7 +190,7 @@ func TestTunnelMessagesToHistoryStoresToolDetail(t *testing.T) {
 	if len(history) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(history))
 	}
-	// describeTool returns localized label for run_command (no comment line in command)
+
 	if history[0].ToolDetail == "" {
 		t.Fatal("expected tool_detail to be populated for tool history")
 	}
@@ -215,7 +209,7 @@ func TestTunnelMessagesToHistoryStoresToolDisplayNameFromDescription(t *testing.
 	if len(history) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(history))
 	}
-	// describeTool uses description field: desc + " (" + friendlyToolName + ")"
+
 	if history[0].ToolDisplayName != "run tests (Bash)" {
 		t.Fatalf("expected tool display name from description, got %q", history[0].ToolDisplayName)
 	}
@@ -260,10 +254,10 @@ func TestTunnelMessagesToHistory_Empty(t *testing.T) {
 func TestTunnelMessagesToHistory_SkipsEmpty(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{
-			{Type: "text", Text: "   "}, // whitespace-only
+			{Type: "text", Text: "   "},
 		}},
 		{Role: "user", Content: []provider.ContentBlock{
-			{Type: "text", Text: ""}, // empty
+			{Type: "text", Text: ""},
 		}},
 	}
 	history := tunnelMessagesToHistory(msgs)
@@ -271,8 +265,6 @@ func TestTunnelMessagesToHistory_SkipsEmpty(t *testing.T) {
 		t.Errorf("expected 0 entries for whitespace-only messages, got %d", len(history))
 	}
 }
-
-// ─── Full conversation history test ───
 
 func TestTunnelMessagesToHistory_FullConversation(t *testing.T) {
 	msgs := []provider.Message{
@@ -312,7 +304,7 @@ func TestTunnelMessagesToHistory_FullConversation(t *testing.T) {
 			t.Errorf("entry %d: expected role %q, got %q", i, exp.role, history[i].Role)
 		}
 		if exp.content != "" && history[i].Content != exp.content && history[i].Result != exp.content {
-			// Content or Result depending on role
+
 		}
 		if exp.toolName != "" && history[i].ToolName != exp.toolName {
 			t.Errorf("entry %d: expected toolName %q, got %q", i, exp.toolName, history[i].ToolName)
@@ -511,9 +503,6 @@ func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedger(t *testi
 		t.Fatal("expected downgraded session to fall back to snapshot replay")
 	}
 
-	// Note: TunnelEventsComplete is no longer persisted by prepareCurrentSessionTunnelLedger
-	// (tunnel events live in projection store, not session JSONL). The flag is
-	// only updated in memory; projection store authority is cut instead.
 }
 
 func TestApplyResumedSessionClearsAgentContext(t *testing.T) {
@@ -545,12 +534,6 @@ func TestApplyResumedSessionClearsAgentContext(t *testing.T) {
 	}
 }
 
-// Removed 25 skipped tunnel tests that used the pre-TunnelHost recording pattern.
-// Core TunnelHost functionality is tested in internal/agentruntime/:
-//   tunnel_interactions_test.go, tunnel_commands_test.go, projection_test.go,
-//   tunnel_main_stream_test.go (17 tests covering projection, streaming, replay).
-// TUI-level integration is covered by the 69 remaining active tests in this file.
-
 func TestPrepareCurrentSessionTunnelLedgerMarksFreshSessionComplete(t *testing.T) {
 	store := newTestSessionStore(t)
 	m := newTestModel()
@@ -567,9 +550,6 @@ func TestPrepareCurrentSessionTunnelLedgerMarksFreshSessionComplete(t *testing.T
 
 	m.prepareCurrentSessionTunnelLedger()
 
-	// Tunnel events are no longer persisted to session JSONL.
-	// prepareCurrentSessionTunnelLedger now clears in-memory events and cuts
-	// projection store authority. TunnelEventsComplete is always cleared.
 	if m.session.TunnelEventsComplete {
 		t.Fatal("expected TunnelEventsComplete to be cleared (projection store is sole source)")
 	}
@@ -699,12 +679,10 @@ func TestCurrentTunnelHistoryIncludesEmptySpawnAgentResultWhenComplete(t *testin
 	}
 }
 
-// ─── Nil broker safety tests ───
-
 func TestPushTunnelEvent_NilBroker(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
-	// Should not panic on any event type
+
 	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "hello"})
 	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "t1", Name: "tool"}})
 	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "t1"}, Result: "ok"})
@@ -716,7 +694,7 @@ func TestPushTunnelEvent_NilBroker(t *testing.T) {
 func TestAllPushMethods_NilBroker(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
-	// None of these should panic
+
 	m.pushTunnelUserMessage("test")
 	m.pushTunnelStatus(tunnel.StatusThinking, "processing")
 	m.pushTunnelActivity("processing")
@@ -855,7 +833,7 @@ func TestHandleTunnelClientCommand_InvalidJSON(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdMessage, Data: []byte("not json")}
-	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd)
 }
 
 func TestHandleTunnelClientCommand_EmptyText(t *testing.T) {
@@ -863,14 +841,14 @@ func TestHandleTunnelClientCommand_EmptyText(t *testing.T) {
 	m.tunnelBroker = nil
 	data, _ := json.Marshal(tunnel.MessageData{Text: ""})
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdMessage, Data: data}
-	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd)
 }
 
 func TestHandleTunnelClientCommand_Interrupt(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdInterrupt}
-	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd)
 }
 
 func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
@@ -878,7 +856,7 @@ func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
 	m.tunnelBroker = nil
 	data, _ := json.Marshal(tunnel.ModeChangeData{Mode: "auto"})
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdModeChange, Data: data}
-	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd)
 }
 
 func TestHandleTunnelClientConnectedMsg_ClosesQROverlayAndWritesSystemMessage(t *testing.T) {
@@ -982,8 +960,6 @@ func eventOrdinalForTest(t *testing.T, eventID string) int {
 	return n
 }
 
-// ─── handleTunnelModeChangeMsg tests ───
-
 func TestHandleTunnelModeChangeMsg_ValidMode(t *testing.T) {
 	m := newTestModel()
 	m.mode = permission.SupervisedMode
@@ -1004,17 +980,13 @@ func TestHandleTunnelModeChangeMsg_InvalidMode(t *testing.T) {
 
 	_, _ = m.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: "invalid_mode"})
 
-	// Should not change — ParsePermissionMode returns supervised for unknown,
-	// and our guard rejects supervised when input wasn't "supervised"
 	if m.mode != permission.SupervisedMode {
 		t.Errorf("mode should not change for invalid input, got %v", m.mode)
 	}
 }
 
-// #743: the two low-severity flaws the old indirect guard carried, now fixed
-// by the IsValidPermissionMode rewrite.
 func TestHandleTunnelModeChangeMsg_GuardEdgeCases(t *testing.T) {
-	// Case-insensitive valid name must be ACCEPTED (old guard rejected "SUPERVISED").
+
 	m := newTestModel()
 	m.mode = permission.AutoMode
 	_, _ = m.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: "SUPERVISED"})
@@ -1022,8 +994,6 @@ func TestHandleTunnelModeChangeMsg_GuardEdgeCases(t *testing.T) {
 		t.Errorf("SUPERVISED should be accepted case-insensitively, got %v", m.mode)
 	}
 
-	// Empty string must be REJECTED (old guard exempted it, changing nothing
-	// but leaking the parse default into later state).
 	m2 := newTestModel()
 	m2.mode = permission.AutoMode
 	_, _ = m2.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: ""})
@@ -1032,9 +1002,6 @@ func TestHandleTunnelModeChangeMsg_GuardEdgeCases(t *testing.T) {
 	}
 }
 
-// #743: TUI local /mode with an invalid name must report an error and leave
-// the mode unchanged (previously it silently applied and persisted the
-// supervised fallback with no output at all).
 func TestHandleModeCommand_InvalidNameRejected(t *testing.T) {
 	m := newTestModel()
 	m.mode = permission.BypassMode
@@ -1044,14 +1011,12 @@ func TestHandleModeCommand_InvalidNameRejected(t *testing.T) {
 	if m.mode != permission.BypassMode {
 		t.Errorf("mode must not change for invalid name, got %v", m.mode)
 	}
-	// Valid names still work.
+
 	_ = m.handleModeCommand([]string{"mode", "autopilot"})
 	if m.mode != permission.BypassMode {
 		t.Errorf("valid name should switch mode (autopilot normalizes to bypass), got %v", m.mode)
 	}
 }
-
-// ─── Tunnel command handler nil-safety ───
 
 func TestHandleTunnelCommand_StatusInactive(t *testing.T) {
 	m := newTestModel()
@@ -1227,18 +1192,12 @@ func TestHandleTunnelAskUserResponseDeliversPendingAnswer(t *testing.T) {
 	}
 }
 
-// TestHandleTunnelStartMsg_ReplayKeepsBrokerAndSkipsQR pins the #1825
-// case-1 replay path: the broker/spawned bookkeeping must still land when a
-// connected event raced StartShare (an earlier revision early-returned
-// before the assignments, leaving tunnelBroker nil for the whole share -
-// language/theme sends, snapshot publishing and the graceful stop all
-// degraded to no-ops).
 func TestHandleTunnelStartMsg_ReplayKeepsBrokerAndSkipsQR(t *testing.T) {
 	m := newTestModel()
 	m.pendingTunnelConnected = true
 	sess := tunnel.NewSession(tunnel.DefaultRelayURL)
 	broker := tunnel.NewBroker(sess)
-	broker.Stop() // no background loops in tests
+	broker.Stop()
 
 	got, cmd := m.handleTunnelStartMsg(tunnelStartMsg{
 		info:    &tunnel.SessionInfo{ConnectURL: "wss://test.local/ws", QRCode: "qr"},
@@ -1278,14 +1237,12 @@ func TestHandleTunnelApprovalResponse_DropsEmptyIDAndUnknownDecision(t *testing.
 	m.pendingApproval = &ApprovalMsg{ToolName: "run_command"}
 	m.tunnelPendingApprovalID = "req-1"
 
-	// Empty id carries no identity: must not touch the pending approval.
 	got, _ := m.handleTunnelApprovalResponse(tunnelApprovalResponseMsg{id: "", decision: "allow"})
 	updated := got.(*Model)
 	if updated.pendingApproval == nil || updated.tunnelPendingApprovalID != "req-1" {
 		t.Fatal("expected empty-id approval response to leave the pending approval untouched")
 	}
 
-	// Unknown decision values must be dropped loudly, not fall into Deny.
 	got, _ = updated.handleTunnelApprovalResponse(tunnelApprovalResponseMsg{id: "req-1", decision: "alow"})
 	updated = got.(*Model)
 	if updated.pendingApproval == nil || updated.tunnelPendingApprovalID != "req-1" {
@@ -1303,9 +1260,6 @@ func TestHandleTunnelAskUserResponse_DropsEmptyID(t *testing.T) {
 	m.pendingQuestionnaire = newQuestionnaireState(req, respCh, m.currentLanguage())
 	m.tunnelPendingAskUserID = "ask-1"
 
-	// A stale/malformed reply with no id must not kill the pending
-	// questionnaire (the old match let it through and normalized the empty
-	// status to "submitted" with zero answers).
 	got, _ := m.handleTunnelAskUserResponse(tunnelAskUserResponseMsg{id: "", status: toolpkg.AskUserStatusSubmitted})
 	updated := got.(*Model)
 	if updated.pendingQuestionnaire == nil {
@@ -1350,23 +1304,20 @@ func TestHandleTunnelAskUserResponse_IgnoresMismatchedID(t *testing.T) {
 	}
 }
 
-// tinyValidPNG is a 1x1 pixel PNG encoded as base64.
 const tinyValidPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 func TestBase64DecodeTunnelImage(t *testing.T) {
-	// Valid base64 should decode successfully.
+
 	raw := base64DecodeTunnelImage(tinyValidPNG)
 	if len(raw) == 0 {
 		t.Fatal("expected non-empty decoded bytes for valid base64")
 	}
 
-	// Invalid base64 should return nil.
 	raw = base64DecodeTunnelImage("!!!not-base64!!!")
 	if raw != nil {
 		t.Fatalf("expected nil for invalid base64, got %d bytes", len(raw))
 	}
 
-	// Empty string should return empty bytes (valid base64).
 	raw = base64DecodeTunnelImage("")
 	if len(raw) != 0 {
 		t.Fatalf("expected empty for empty input, got %d bytes", len(raw))
@@ -1386,14 +1337,10 @@ func TestHandleTunnelInboundMsg_WithImages(t *testing.T) {
 	})
 	updated := got.(*Model)
 
-	// Agent should have been started (loading = true).
 	if !updated.loading {
 		t.Fatal("expected loading=true after image+text message")
 	}
 
-	// Images should have been consumed from pendingImages by startAgent.
-	// (startAgent calls runAgentSubmission which reads pendingImages).
-	// After agent start, pendingImages should be empty.
 	if len(updated.pendingImages) != 0 {
 		t.Fatalf("expected pendingImages to be consumed, got %d", len(updated.pendingImages))
 	}
@@ -1403,7 +1350,6 @@ func TestHandleTunnelInboundMsg_WithImagesOnly(t *testing.T) {
 	m := newTestModel()
 	m.tunnelGeneration = 1
 
-	// Message with images but no text should still trigger agent.
 	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
 		generation: 1,
 		text:       "",
@@ -1422,7 +1368,6 @@ func TestHandleTunnelInboundMsg_WithInvalidImage(t *testing.T) {
 	m := newTestModel()
 	m.tunnelGeneration = 1
 
-	// Invalid image data should be silently skipped, but text still processed.
 	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
 		generation: 1,
 		text:       "describe this",
@@ -1455,8 +1400,6 @@ func TestHandleTunnelInboundMsg_EmptyTextAndNoImages(t *testing.T) {
 	}
 }
 
-// Ensure Go-side MessageData with images survives JSON round-trip through
-// the encrypted tunnel layer.
 func TestMessageDataImagesRoundTrip(t *testing.T) {
 	original := tunnel.MessageData{
 		Text: "check this screenshot",
@@ -1466,7 +1409,6 @@ func TestMessageDataImagesRoundTrip(t *testing.T) {
 		MessageID: "rt-001",
 	}
 
-	// Simulate tunnel serialization (JSON → encrypt → decrypt → JSON).
 	b, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -1485,15 +1427,10 @@ func TestMessageDataImagesRoundTrip(t *testing.T) {
 	}
 }
 
-// ─── Session switching tests ───
-
-// TestSwitchToSessionResetsView verifies that switchToSession clears stale
-// streaming state, preventing leakage between sessions.
 func TestSwitchToSessionResetsView(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
 
-	// Simulate active streaming state.
 	m.streamBuffer = bytes.NewBufferString("stale streaming text")
 	m.streamPrefixWritten = true
 	m.autoCompleteActive = true
@@ -1530,13 +1467,11 @@ func TestSwitchToSessionResetsView(t *testing.T) {
 	}
 }
 
-// TestSwitchToSessionNewInheritsGlobalMode verifies that a new session
-// (isNew=true) uses the global default permission mode.
 func TestSwitchToSessionNewInheritsGlobalMode(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
 	m.config = &config.Config{DefaultMode: "auto"}
-	m.mode = permission.PlanMode // current mode is different from default
+	m.mode = permission.PlanMode
 
 	ses := session.NewSession("test", "test", "test")
 
@@ -1547,8 +1482,6 @@ func TestSwitchToSessionNewInheritsGlobalMode(t *testing.T) {
 	}
 }
 
-// TestSwitchToSessionResumedRestoresSessionMode verifies that resuming a
-// session restores its saved permission mode.
 func TestSwitchToSessionResumedRestoresSessionMode(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
@@ -1570,8 +1503,6 @@ func TestSwitchToSessionResumedRestoresSessionMode(t *testing.T) {
 	}
 }
 
-// TestSwitchToSessionLockCallback verifies that the lock switch callback
-// is invoked with the new session ID.
 func TestSwitchToSessionLockCallback(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
@@ -1595,8 +1526,6 @@ func TestSwitchToSessionLockCallback(t *testing.T) {
 	}
 }
 
-// TestSwitchToSessionCronCallback verifies that the cron switch callback
-// is invoked with the new session ID.
 func TestSwitchToSessionCronCallback(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
@@ -1620,8 +1549,6 @@ func TestSwitchToSessionCronCallback(t *testing.T) {
 	}
 }
 
-// TestApplyResumedSessionSavesOldSession verifies that switching sessions
-// saves the current session first (so unsaved messages are not lost).
 func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 	storeDir := t.TempDir()
 	store, err := session.NewJSONLStore(storeDir)
@@ -1633,7 +1560,6 @@ func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
 	m.sessionStore = store
 
-	// Set up current session with messages.
 	oldSes := &session.Session{
 		ID:        "sess-old",
 		Title:     "Old session",
@@ -1649,7 +1575,6 @@ func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 	m.session = oldSes
 	m.persistedMsgCount = len(oldSes.Messages)
 
-	// Switch to a new session.
 	newSes := &session.Session{
 		ID: "sess-new",
 		Messages: []provider.Message{
@@ -1659,10 +1584,8 @@ func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 
 	m.applyResumedSession(newSes)
 
-	// Give the async save a moment to complete.
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify old session is still on disk.
 	loaded, err := store.Load("sess-old")
 	if err != nil {
 		t.Fatalf("load old session: %v", err)
@@ -1672,10 +1595,6 @@ func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 	}
 }
 
-// TestApplyResumedSessionSnapshotsTaskBoard verifies the board wiring end
-// to end: the outgoing session captures the live board before the async
-// meta flush (and it lands on disk), and the resumed session's persisted
-// board replaces the live one.
 func TestApplyResumedSessionSnapshotsTaskBoard(t *testing.T) {
 	storeDir := t.TempDir()
 	store, err := session.NewJSONLStore(storeDir)
@@ -1702,11 +1621,8 @@ func TestApplyResumedSessionSnapshotsTaskBoard(t *testing.T) {
 	m.session = oldSes
 	m.persistedMsgCount = len(oldSes.Messages)
 
-	// The live board belongs to the outgoing session.
 	m.taskMgr.Create("wire task", "", "", nil)
 
-	// The resumed session carries its own, different persisted board
-	// (built with a scratch manager for snapshot-format fidelity).
 	scratch := task.NewManager()
 	resumed := scratch.Create("resumed task", "", "", nil)
 	snap, err := scratch.SnapshotJSON()
@@ -1723,17 +1639,15 @@ func TestApplyResumedSessionSnapshotsTaskBoard(t *testing.T) {
 
 	m.applyResumedSession(newSes)
 
-	// Live manager now holds the resumed board, not the outgoing one.
 	got := m.taskMgr.List()
 	if len(got) != 1 || got[0].ID != resumed.ID || got[0].Subject != "resumed task" {
 		t.Errorf("live board not swapped to resumed session's board: %+v", got)
 	}
-	// Outgoing session captured the live board before the switch.
+
 	if !strings.Contains(string(oldSes.TasksJSON), "wire task") {
 		t.Errorf("outgoing session missing board snapshot: %s", oldSes.TasksJSON)
 	}
 
-	// Give the async meta flush a moment, then verify disk persistence.
 	time.Sleep(100 * time.Millisecond)
 	loaded, err := store.Load("sess-old-board")
 	if err != nil {
@@ -1744,8 +1658,6 @@ func TestApplyResumedSessionSnapshotsTaskBoard(t *testing.T) {
 	}
 }
 
-// TestHandleClearChatSwitchesLock verifies that /clear invokes the lock
-// switch callback for the new session.
 func TestHandleClearChatSwitchesLock(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
@@ -1769,7 +1681,6 @@ func TestHandleClearChatSwitchesLock(t *testing.T) {
 
 	m.handleClearChat()
 
-	// New session should have a different ID from the old one.
 	if m.session == nil || m.session.ID == "sess-pre-clear" {
 		t.Error("expected new session after /clear")
 	}
@@ -1782,7 +1693,6 @@ func TestHandleClearChatSwitchesLock(t *testing.T) {
 	}
 }
 
-// TestHandleClearChatResetsView verifies that /clear resets streaming/view state.
 func TestHandleClearChatResetsView(t *testing.T) {
 	m := newTestModel()
 	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
@@ -1800,7 +1710,6 @@ func TestHandleClearChatResetsView(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Simulate active streaming state.
 	m.streamBuffer = bytes.NewBufferString("stale streaming")
 	m.statusToolName = "stale_tool"
 	m.statusToolCount = 99

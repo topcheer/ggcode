@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// TestRateLimitedErrorFrom429 verifies #2150 batch 2b: a 429 response is
-// surfaced as *RateLimitedError carrying the server's Retry-After (both
-// RFC 7231 forms), and the Service sizes its negative cache to that window
-// instead of the default negativeTTL.
 func TestRateLimitedErrorFrom429(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "30")
@@ -31,8 +27,6 @@ func TestRateLimitedErrorFrom429(t *testing.T) {
 	}
 }
 
-// TestParseRetryAfterBothForms covers delta-seconds, HTTP-date, absent,
-// negative, and unparseable inputs.
 func TestParseRetryAfterBothForms(t *testing.T) {
 	if d := parseRetryAfter("120"); d != 2*time.Minute {
 		t.Errorf("seconds form: %v", d)
@@ -52,28 +46,23 @@ func TestParseRetryAfterBothForms(t *testing.T) {
 	}
 }
 
-// TestServiceNegativeCacheHonorsRetryAfter verifies the blind-spot
-// linkage: after a 429 with Retry-After=60s, the vendor stays
-// negative-cached for ~60s - NOT re-probed at the default negativeTTL
-// (1min < 60s would eventually differ, so assert no re-probe well inside
-// the window via call counting on a scripted probe).
 func TestServiceNegativeCacheHonorsRetryAfter(t *testing.T) {
 	p := &fakeProbe{vendor: "rl-vendor"}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.calls.Add(1)
-		w.Header().Set("Retry-After", "600") // 10min window
+		w.Header().Set("Retry-After", "600")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 
 	svc := NewService()
-	// Route the fake probe through the real 429 server by wrapping.
+
 	svc.Register(&wrapperProbe{p: p, url: srv.URL})
 
 	if _, err := svc.Get(context.Background(), "rl-vendor", "", "k"); err == nil {
 		t.Fatal("expected 429 error")
 	}
-	// Second Get within the window: served from cache, probe NOT re-hit.
+
 	if _, err := svc.Get(context.Background(), "rl-vendor", "", "k"); err == nil {
 		t.Fatal("expected cached 429")
 	}
@@ -82,7 +71,6 @@ func TestServiceNegativeCacheHonorsRetryAfter(t *testing.T) {
 	}
 }
 
-// wrapperProbe adapts fakeProbe's call counting onto a real HTTP 429 server.
 type wrapperProbe struct {
 	p   *fakeProbe
 	url string
@@ -94,11 +82,6 @@ func (w *wrapperProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*Usag
 	return nil, getJSON(ctx, w.url, apiKey, &struct{}{})
 }
 
-// TestAnthropicOAuth429SurfacesRateLimited verifies #2366-2: the beta-header
-// probe bypasses getJSON, so its self-built status check must produce the
-// same *RateLimitedError - otherwise the Retry-After-sized negative cache
-// (#2360) never engages for anthropic-oauth and every-minute re-probing
-// survives.
 func TestAnthropicOAuth429SurfacesRateLimited(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("anthropic-beta"); got != "oauth-2025-04-20" {
@@ -119,9 +102,6 @@ func TestAnthropicOAuth429SurfacesRateLimited(t *testing.T) {
 	}
 }
 
-// TestDefaultServiceRegistersAllP1 anchors the central registration site:
-// every P1 vendor must be present exactly once, so consumers switching to
-// DefaultService cannot silently lose a probe again.
 func TestDefaultServiceRegistersAllP1(t *testing.T) {
 	svc := DefaultService()
 	for _, v := range []string{

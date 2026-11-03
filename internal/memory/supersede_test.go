@@ -21,8 +21,6 @@ func mustSaveMemory(t *testing.T, am *AutoMemory, key, content string) {
 	}
 }
 
-// DetectSupersession requires explicit replacement semantics: a plain
-// conflicting save must NOT retire anything (warn-only path unchanged).
 func TestDetectSupersession_PlainConflictNoMarker(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -33,7 +31,6 @@ func TestDetectSupersession_PlainConflictNoMarker(t *testing.T) {
 	}
 }
 
-// Explicit marker + claim conflict retires the old entry.
 func TestDetectSupersession_MarkerAndConflict(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -44,7 +41,6 @@ func TestDetectSupersession_MarkerAndConflict(t *testing.T) {
 	}
 }
 
-// Marker without a claim conflict does not retire unrelated entries.
 func TestDetectSupersession_MarkerNoConflict(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -55,8 +51,6 @@ func TestDetectSupersession_MarkerNoConflict(t *testing.T) {
 	}
 }
 
-// Passive voice ("superseded by") is not a marker: the new entry describes
-// being replaced, it must not retire the entry it conflicts with.
 func TestDetectSupersession_PassiveVoiceNotMarker(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -67,7 +61,6 @@ func TestDetectSupersession_PassiveVoiceNotMarker(t *testing.T) {
 	}
 }
 
-// CJK replacement markers count.
 func TestDetectSupersession_CJKMarker(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -78,7 +71,6 @@ func TestDetectSupersession_CJKMarker(t *testing.T) {
 	}
 }
 
-// Self-update (same key) never retires itself.
 func TestDetectSupersession_SelfKeySkipped(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -89,7 +81,6 @@ func TestDetectSupersession_SelfKeySkipped(t *testing.T) {
 	}
 }
 
-// Detection caps at maxSupersedeTargets even with many conflicting entries.
 func TestDetectSupersession_Cap(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	for i := 0; i < 5; i++ {
@@ -102,8 +93,6 @@ func TestDetectSupersession_Cap(t *testing.T) {
 	}
 }
 
-// Apply + loadForPrompt: superseded entries drop out of prompt injection but
-// stay on disk (read_file still works).
 func TestApplySupersession_RetiresFromPromptKeepsFile(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "build-process", "build command: go build ./...")
@@ -125,7 +114,6 @@ func TestApplySupersession_RetiresFromPromptKeepsFile(t *testing.T) {
 		t.Fatalf("winner must stay active")
 	}
 
-	// File remains on disk for history.
 	if _, err := os.Stat(filepath.Join(am.dir, "build-process.md")); err != nil {
 		t.Fatalf("history file must survive: %v", err)
 	}
@@ -160,7 +148,6 @@ func TestApplySupersession_RetiresFromPromptKeepsFile(t *testing.T) {
 	}
 }
 
-// Revival: re-saving a retired key with replacement intent restores it.
 func TestApplySupersession_Revival(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "old-way", "test runner: jest")
@@ -169,7 +156,6 @@ func TestApplySupersession_Revival(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Later, the agent re-asserts old-way explicitly.
 	if err := am.ApplySupersession("old-way", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -182,8 +168,6 @@ func TestApplySupersession_Revival(t *testing.T) {
 	}
 }
 
-// Chain update: superseding the same old key again points to the latest
-// winner instead of accumulating stale edges.
 func TestApplySupersession_ChainUpdate(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	mustSaveMemory(t, am, "legacy", "build command: make")
@@ -202,7 +186,6 @@ func TestApplySupersession_ChainUpdate(t *testing.T) {
 	}
 }
 
-// Sidecar persists across AutoMemory instances over the same directory.
 func TestSupersedeSidecar_Persistence(t *testing.T) {
 	dir := t.TempDir()
 	am1 := NewAutoMemory()
@@ -219,7 +202,6 @@ func TestSupersedeSidecar_Persistence(t *testing.T) {
 	}
 }
 
-// A corrupt sidecar degrades to "no supersessions" instead of failing.
 func TestSupersedeSidecar_CorruptFileDegrades(t *testing.T) {
 	am := newSupersedeTestAM(t)
 	if err := os.WriteFile(filepath.Join(am.dir, supersedeSidecarFile), []byte("{not json"), 0644); err != nil {

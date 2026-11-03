@@ -8,7 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// ViewportModel wraps a viewport with auto-follow behavior.
 type ViewportModel struct {
 	vp         viewport.Model
 	autoFollow bool
@@ -16,7 +15,6 @@ type ViewportModel struct {
 	height     int
 }
 
-// NewViewportModel creates a new viewport model.
 func NewViewportModel(width, height int) ViewportModel {
 	vp := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
 	vp.SetContent("")
@@ -28,7 +26,6 @@ func NewViewportModel(width, height int) ViewportModel {
 	}
 }
 
-// SetContent sets the viewport content and auto-scrolls to bottom if following.
 func (v *ViewportModel) SetContent(content string) {
 	v.vp.SetContent(content)
 	if v.autoFollow {
@@ -36,86 +33,69 @@ func (v *ViewportModel) SetContent(content string) {
 	}
 }
 
-// Content returns the current viewport content.
 func (v *ViewportModel) Content() string {
 	return v.vp.View()
 }
 
-// GotoBottom scrolls to the bottom and enables auto-follow.
 func (v *ViewportModel) GotoBottom() {
 	v.autoFollow = true
 	v.vp.GotoBottom()
 }
 
-// SetSize updates the viewport dimensions.
 func (v *ViewportModel) SetSize(width, height int) {
 	v.width = width
 	v.height = height
 	v.vp.SetWidth(width)
 	v.vp.SetHeight(height)
-	// #1398-B: SetContent already honors autoFollow, SetSize did not -
-	// after a resize that grows the height the view stuck at its old
-	// YOffset and, with streaming already finished (no further
-	// SetContent), never returned to the bottom. Same one-liner as
-	// SetContent.
+
 	if v.autoFollow {
 		v.vp.GotoBottom()
 	}
 }
 
-// AutoFollow returns whether auto-follow is enabled.
 func (v *ViewportModel) AutoFollow() bool {
 	return v.autoFollow
 }
 
-// ScrollUp scrolls up by n lines.
 func (v *ViewportModel) ScrollUp(n int) {
 	v.autoFollow = false
 	v.vp.ScrollUp(n)
 }
 
-// ScrollDown scrolls down by n lines.
 func (v *ViewportModel) ScrollDown(n int) {
 	v.vp.ScrollDown(n)
-	// Check if we've reached the bottom
+
 	if v.vp.AtBottom() {
 		v.autoFollow = true
 	}
 }
 
-// AtBottom returns true if the viewport is at the bottom.
 func (v *ViewportModel) AtBottom() bool {
 	return v.vp.AtBottom()
 }
 
-// TotalLineCount returns the total number of content lines.
 func (v *ViewportModel) TotalLineCount() int {
 	return v.vp.TotalLineCount()
 }
 
-// VisibleLineCount returns the number of visible lines.
 func (v *ViewportModel) VisibleLineCount() int {
 	return v.vp.Height()
 }
 
-// YOffset returns the current vertical scroll offset.
 func (v *ViewportModel) YOffset() int {
 	return v.vp.YOffset()
 }
 
-// Update handles messages for the viewport.
 func (v ViewportModel) Update(msg tea.Msg) (ViewportModel, tea.Cmd) {
 	var cmd tea.Cmd
 	v.vp, cmd = v.vp.Update(msg)
 	return v, cmd
 }
 
-// View renders the viewport.
 func (v ViewportModel) View() tea.View {
 	return tea.NewView(v.vp.View())
 }
 
-// ScrollIndicatorStyle returns a styled scroll indicator.
 func (v ViewportModel) ScrollIndicatorStyle() string {
 	if v.vp.AtBottom() && v.autoFollow {
 		return ""
@@ -134,7 +114,6 @@ func (v ViewportModel) ScrollIndicatorStyle() string {
 	return indicator("▼ " + strings.TrimSpace(scrollBar(offset, visible, total, 20)))
 }
 
-// scrollBar creates a simple text scroll bar.
 func scrollBar(offset, visible, total, width int) string {
 	if total <= visible {
 		return strings.Repeat("█", width)

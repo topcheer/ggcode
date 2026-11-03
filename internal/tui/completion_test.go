@@ -59,7 +59,7 @@ func TestExpandMentions(t *testing.T) {
 	if !contains(result, "root.go") {
 		t.Error("expanded message should list directory contents")
 	}
-	// @mentions are stripped from the message body but appear as headers in the references section
+
 	if contains(result, "review  and") {
 		t.Error("cleaned message should remove @mention tokens")
 	}
@@ -76,12 +76,11 @@ func TestCompleteMention(t *testing.T) {
 		t.Errorf("expected 2 completions for 'm', got %d: %v", len(completions), completions)
 	}
 
-	completions = CompleteMention("internal/", dir, nil) // Directory is empty so 0 completions is valid
+	completions = CompleteMention("internal/", dir, nil)
 }
 
 func TestWhySlashCompletionRegistered(t *testing.T) {
-	// r103 companion: /why must stay in the completion list and carry a
-	// description (registration was split across commands.go/completion.go).
+
 	found := false
 	for _, c := range SlashCommands {
 		if c == "/why" {
@@ -98,7 +97,7 @@ func TestWhySlashCompletionRegistered(t *testing.T) {
 }
 
 func TestCompleteMentionEmptyPrefix(t *testing.T) {
-	// When prefix is empty, should list contents of workDir, not parent directory
+
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte(""), 0644)
 	os.MkdirAll(filepath.Join(dir, "internal"), 0755)
@@ -108,7 +107,7 @@ func TestCompleteMentionEmptyPrefix(t *testing.T) {
 	if len(completions) < 3 {
 		t.Errorf("expected at least 3 completions for empty prefix, got %d: %v", len(completions), completions)
 	}
-	// Should contain our files/dirs
+
 	names := map[string]bool{}
 	for _, c := range completions {
 		names[c] = true
@@ -122,13 +121,12 @@ func TestCompleteMentionEmptyPrefix(t *testing.T) {
 }
 
 func TestCompleteMentionTrailingSlash(t *testing.T) {
-	// When prefix ends with "/", should list contents of that directory
+
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "internal", "agent"), 0755)
 	os.WriteFile(filepath.Join(dir, "internal", "agent", "agent.go"), []byte(""), 0644)
 	os.WriteFile(filepath.Join(dir, "internal", "main.go"), []byte(""), 0644)
 
-	// "internal/" should list internal/ contents, not re-match "internal" in parent
 	completions := CompleteMention("internal/", dir, nil)
 	names := map[string]bool{}
 	for _, c := range completions {
@@ -140,7 +138,7 @@ func TestCompleteMentionTrailingSlash(t *testing.T) {
 	if !names["internal/main.go"] {
 		t.Errorf("expected 'internal/main.go' in completions for 'internal/', got: %v", completions)
 	}
-	// Should NOT contain just "internal/" (that was the old bug)
+
 	if names["internal/"] {
 		t.Errorf("should not contain 'internal/' when browsing into it, got: %v", completions)
 	}
@@ -274,10 +272,10 @@ func TestDetectSlashCommandBoundaries(t *testing.T) {
 		{"cursor_at_len", "/help", 5, true, "help"},
 		{"cursor_at_slash", "/", 1, true, ""},
 		{"middle_of_command", "/he", 3, true, "he"},
-		{"after_space", "/help me", 8, false, ""},            // cursor is on "me" not command
-		{"multi_byte_with_space", "你好 /he", 10, true, "he"},  // byte len=10, cursor at end
-		{"multi_byte_cursor_on_char", "你好/he", 2, false, ""}, // cursor on Chinese char
-		{"cursor_equals_len", "x", 1, false, ""},             // no slash
+		{"after_space", "/help me", 8, false, ""},
+		{"multi_byte_with_space", "你好 /he", 10, true, "he"},
+		{"multi_byte_cursor_on_char", "你好/he", 2, false, ""},
+		{"cursor_equals_len", "x", 1, false, ""},
 		{"slash_only_cursor_1", "/", 1, true, ""},
 		{"slash_with_space", " /he", 4, true, "he"},
 		{"no_slash", "hello", 5, false, ""},
@@ -294,29 +292,22 @@ func TestDetectSlashCommandBoundaries(t *testing.T) {
 	}
 }
 
-// TestDetectSlashCommandNoPanic ensures no cursor value causes a panic.
 func TestDetectSlashCommandNoPanic(t *testing.T) {
 	value := "你好世界/test"
 	for cursor := -10; cursor <= len(value)+10; cursor++ {
-		// Should never panic
+
 		DetectSlashCommand(value, cursor)
 	}
 
-	// Empty string
 	for cursor := -5; cursor <= 5; cursor++ {
 		DetectSlashCommand("", cursor)
 	}
 
-	// Only multi-byte chars
 	for cursor := -5; cursor <= 20; cursor++ {
 		DetectSlashCommand("你好世界", cursor)
 	}
 }
 
-// TestParseMentions_FailedRefStaysInMessage pins #1365: in a mixed message
-// the failing reference must remain verbatim in the cleaned text (the old
-// order deleted the token before validating, silently erasing it), while
-// the good reference resolves and is stripped as before.
 func TestParseMentions_FailedRefStaysInMessage(t *testing.T) {
 	tmp := t.TempDir()
 	good := filepath.Join(tmp, "good.go")
@@ -337,13 +328,9 @@ func TestParseMentions_FailedRefStaysInMessage(t *testing.T) {
 	}
 }
 
-// TestCompleteMentionRejectsTraversal pins #1411-B: '@../' used to walk
-// ABOVE workDir and list parent directories (filename/structure leak),
-// and the '@../foo' candidates were then rejected by ParseMentions (#889)
-// - completion offered what parsing ate back. Both sides refuse now.
 func TestCompleteMentionRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
-	// Parent contains entries that would leak if listed.
+
 	os.WriteFile(filepath.Join(filepath.Dir(dir), "leaked-secret.txt"), []byte(""), 0o644)
 
 	for _, prefix := range []string{"../", "../../", "../"} {
@@ -353,13 +340,9 @@ func TestCompleteMentionRejectsTraversal(t *testing.T) {
 	}
 }
 
-// TestParseMentions_SymlinkEscapeBlocked pins #1425-A: a symlink inside
-// the workspace pointing OUTSIDE (workDir/keys -> tempdir) used to pass
-// the purely lexical containment check - the completion LISTED the
-// target's filenames and @mention read its contents into the chat.
 func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
 	if os.Geteuid() == 0 {
-		// root reads regardless; the lexical guard still applies though
+
 	}
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.txt")
@@ -371,12 +354,10 @@ func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	// Completion: listing through the symlink must return nothing.
 	if got := CompleteMention("keys/", ws, nil); len(got) != 0 {
 		t.Fatalf("symlink escape listed outside files: %v", got)
 	}
 
-	// Parse: @keys/secret.txt must be blocked, not read.
 	_, mentions, err := ParseMentions("read @keys/secret.txt", ws)
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +366,6 @@ func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
 		t.Fatalf("symlink escape mention accepted: %+v", mentions)
 	}
 
-	// Sanity: a LEGITIMATE in-workspace file still mentions fine.
 	good := filepath.Join(ws, "good.txt")
 	os.WriteFile(good, []byte("ok"), 0o644)
 	_, mentions2, err2 := ParseMentions("read @good.txt", ws)
@@ -394,10 +374,6 @@ func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
 	}
 }
 
-// TestCompleteSlashCommandIncludesBranches pins the built-in completion
-// entries for the branch-lineage navigation commands (#3558): /branches and
-// /branch-switch must complete from the "/bran" prefix, with descriptions and
-// the session-id placeholder for /branch-switch.
 func TestCompleteSlashCommandIncludesBranches(t *testing.T) {
 	matches := CompleteSlashCommand("/bran", nil)
 	if len(matches) != 3 || matches[0] != "/branch" || matches[1] != "/branch-switch" || matches[2] != "/branches" {

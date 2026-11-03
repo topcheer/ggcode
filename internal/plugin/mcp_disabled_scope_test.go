@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// resetDisabledCache clears the package-level disabled-state cache so each
-// test starts from disk truth.
 func resetDisabledCache() {
 	mcpDisabledMu.Lock()
 	mcpDisabledGlobal = nil
@@ -21,7 +19,7 @@ func disabledTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows
+	t.Setenv("USERPROFILE", home)
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +41,10 @@ func writeDisabledFile(t *testing.T, home string, v any) {
 	resetDisabledCache()
 }
 
-// TestMCPDisabledLegacyFormatFoldsIntoGlobal verifies the #2390 migration
-// contract: a pre-#2390 bare-array file keeps its old disables-everywhere
-// semantics - every legacy entry is read as a global-bucket entry.
 func TestMCPDisabledLegacyFormatFoldsIntoGlobal(t *testing.T) {
 	home := disabledTestHome(t)
 	writeDisabledFile(t, home, []string{"legacy-server"})
 
-	// Global semantics preserved: visible from every scope.
 	if !MCPDisabledIn("", "legacy-server") {
 		t.Fatal("legacy entry not visible in global scope")
 	}
@@ -59,9 +53,6 @@ func TestMCPDisabledLegacyFormatFoldsIntoGlobal(t *testing.T) {
 	}
 }
 
-// TestMCPDisabledWorkspaceScopeIsolation is the #2390 repro probe: disabling
-// a same-name server in workspace A must not disable it in workspace B or
-// in the global scope.
 func TestMCPDisabledWorkspaceScopeIsolation(t *testing.T) {
 	home := disabledTestHome(t)
 
@@ -78,7 +69,6 @@ func TestMCPDisabledWorkspaceScopeIsolation(t *testing.T) {
 		t.Fatal("#2390 regression: ws-A disable leaked into the global scope")
 	}
 
-	// The on-disk shape is the scoped format.
 	data, err := os.ReadFile(filepath.Join(home, ".ggcode", "disabled_mcp.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -92,9 +82,6 @@ func TestMCPDisabledWorkspaceScopeIsolation(t *testing.T) {
 	}
 }
 
-// TestMCPDisabledManagerScope verifies the manager carries its scope: the
-// connection-side gate (m.isDisabled) consults the manager's workspace
-// bucket, not a bare global name match.
 func TestMCPDisabledManagerScope(t *testing.T) {
 	_ = disabledTestHome(t)
 
@@ -114,9 +101,6 @@ func TestMCPDisabledManagerScope(t *testing.T) {
 	}
 }
 
-// TestMCPDisabledEnableClearsBothBuckets verifies the toggle is decisive: a
-// workspace-scope enable also removes a global-bucket disable, so the server
-// the panel just reported as enabled cannot stay disabled after restart.
 func TestMCPDisabledEnableClearsBothBuckets(t *testing.T) {
 	_ = disabledTestHome(t)
 
@@ -137,9 +121,6 @@ func TestMCPDisabledEnableClearsBothBuckets(t *testing.T) {
 	}
 }
 
-// TestMCPDisabledLegacyUpgradeOnWrite verifies lazy migration: after any
-// write, a legacy bare-array file is upgraded to the scoped object format
-// with the legacy entries preserved in the global bucket.
 func TestMCPDisabledLegacyUpgradeOnWrite(t *testing.T) {
 	home := disabledTestHome(t)
 	writeDisabledFile(t, home, []string{"legacy-server"})

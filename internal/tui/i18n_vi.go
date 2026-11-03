@@ -1,7 +1,5 @@
 package tui
 
-// viCatalog returns the Vietnamese translation for the given key.
-// Keys not yet translated fall through to enCatalog.
 func viCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":

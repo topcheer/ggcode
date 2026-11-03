@@ -7,7 +7,6 @@ import (
 	"image/png"
 )
 
-// encodeJPEGBytes encodes an image as JPEG with the given quality.
 func encodeJPEGBytes(img image.Image, quality int) ([]byte, error) {
 	if quality <= 0 {
 		quality = 85
@@ -22,7 +21,6 @@ func encodeJPEGBytes(img image.Image, quality int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// encodePNGBytes encodes an image as PNG.
 func encodePNGBytes(img image.Image) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {

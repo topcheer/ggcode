@@ -7,12 +7,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// #1653 case 1: the TUI LSP-install paths must drop the probe cache when the
-// install shell command COMPLETES (handleShellCommandDoneMsg), not at
-// submission - matching the desktop side (wailskit lsp.go). The observable
-// state machine here is lspInstallInFlight: set at submission, consumed and
-// reset (with the cache drop) on completion.
-
 func TestLSPInstallInFlight_SetAtSubmission(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.inspectorPanel = &inspectorPanelState{
@@ -43,16 +37,12 @@ func TestLSPInstallCache_StaleRunIDDoesNotConsumeFlag(t *testing.T) {
 	m.activeShellRunID = 7
 	m.lspInstallInFlight = true
 
-	// A done message from an older run must not consume the flag; the drop
-	// belongs to the in-flight install run itself.
 	newM, _ := m.handleShellCommandDoneMsg(shellCommandDoneMsg{RunID: 3, Status: toolpkg.CommandJobFailed})
 	if !newM.lspInstallInFlight {
 		t.Fatal("stale RunID done message must not reset lspInstallInFlight")
 	}
 }
 
-// TestLSPInstallCache_FailedInstallStillDrops mirrors the desktop semantics:
-// success or failure, one extra probe is cheap.
 func TestLSPInstallCache_FailedInstallStillDrops(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.activeShellRunID = 2

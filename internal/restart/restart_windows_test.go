@@ -7,16 +7,13 @@ import (
 	"testing"
 )
 
-// #1310: the old escape used `\"` - cmd.exe treats backslash as a literal
-// character, so the escaped quote CLOSED the quoted region and shifted the
-// whole command line whenever an arg contained a double quote.
 func TestWinEscape(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{`C:\path\binary.exe`, `"C:\path\binary.exe"`}, // backslashes untouched
-		{`say "hi"`, `"say ""hi"""`},                   // quotes doubled, state balanced
-		{`100%`, `"100%%"`},                            // % doubled for batch parse
+		{`C:\path\binary.exe`, `"C:\path\binary.exe"`},
+		{`say "hi"`, `"say ""hi"""`},
+		{`100%`, `"100%%"`},
 		{``, `""`},
 	}
 	for _, tc := range cases {
@@ -25,8 +22,6 @@ func TestWinEscape(t *testing.T) {
 		}
 	}
 
-	// The quoting state of a generated arg line must stay balanced: every
-	// embedded quote contributes two, plus the wrapping pair.
 	for _, arg := range []string{`--prompt "say \"hi\""`, `a"b`, `"`} {
 		esc := winEscape(arg)
 		if n := strings.Count(esc, `"`); n%2 != 0 {

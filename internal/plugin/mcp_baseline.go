@@ -15,36 +15,15 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Anti-rug-pull tool baselines (research sa-119, MCPShield TC2 TV5/TV6):
-// an MCP server's tool definitions are approved once by the user, and the
-// content hash of that approval is persisted across restarts. Without
-// persistence the in-memory toolsHash forgets everything on restart, so a
-// server that swaps a tool description (or rolls a version back) after the
-// initial approval was completely invisible.
-
-// baselineFileVersion reserves room for format evolution.
 const baselineFileVersion = 1
 
-// driftOnboardingWindow is the post-approval window during which tool
-// definition churn is treated as expected (first-day iteration, hot
-// development servers) rather than a rug pull. Changes inside the window
-// still update the baseline; they just do not raise a drift alert.
 const driftOnboardingWindow = 24 * time.Hour
 
-// ToolBaseline is the persisted, user-approved tool definition snapshot
-// for one MCP server.
 type ToolBaseline struct {
 	ToolsHash string `json:"tools_hash"`
-	// ApprovedAt stamps the LAST observed change: the baseline moves forward
-	// with every change so an alert fires once per change instead of
-	// replaying forever.
+
 	ApprovedAt time.Time `json:"approved_at"`
-	// FirstApprovedAt anchors the user's INITIAL approval (#3540): the 24h
-	// onboarding window is measured from here, not ApprovedAt. Without a
-	// separate anchor, every change resets the window, so a server making
-	// small changes more often than once a day keeps the window open forever
-	// and a later rug pull lands silently. Zero for legacy records; readers
-	// fall back to ApprovedAt.
+
 	FirstApprovedAt time.Time `json:"first_approved_at,omitempty"`
 	ToolNames       []string  `json:"tool_names,omitempty"`
 }
@@ -54,19 +33,11 @@ type baselineFile struct {
 	Servers map[string]*ToolBaseline `json:"servers"`
 }
 
-// ToolBaselineStore persists per-server tool baselines to
-// <configDir>/mcp_baselines.json. All read-modify-write cycles are
-// serialized by mu; writes are atomic (tmp file + os.Rename) and never
-// panic - a failed write is returned as an error so callers can degrade
-// to the debug log.
 type ToolBaselineStore struct {
 	mu  sync.Mutex
-	dir string // empty resolves to config.ConfigDir() lazily
+	dir string
 }
 
-// NewToolBaselineStore creates a store rooted at dir. An empty dir uses
-// the default user config directory (~/.ggcode), resolved at I/O time so
-// construction stays side-effect free (tests can also point it anywhere).
 func NewToolBaselineStore(dir string) *ToolBaselineStore {
 	return &ToolBaselineStore{dir: dir}
 }
@@ -79,8 +50,6 @@ func (s *ToolBaselineStore) path() string {
 	return filepath.Join(dir, "mcp_baselines.json")
 }
 
-// load reads the whole baseline file under the store lock. A missing file
-// is an empty map, not an error.
 func (s *ToolBaselineStore) load() (map[string]*ToolBaseline, error) {
 	data, err := os.ReadFile(s.path())
 	if err != nil {
@@ -99,7 +68,6 @@ func (s *ToolBaselineStore) load() (map[string]*ToolBaseline, error) {
 	return file.Servers, nil
 }
 
-// saveLocked persists the servers map atomically. Caller holds s.mu.
 func (s *ToolBaselineStore) saveLocked(servers map[string]*ToolBaseline) error {
 	file := baselineFile{Version: baselineFileVersion, Servers: servers}
 	data, err := json.MarshalIndent(file, "", "  ")
@@ -135,8 +103,6 @@ func (s *ToolBaselineStore) saveLocked(servers map[string]*ToolBaseline) error {
 	return nil
 }
 
-// LoadBaseline returns the persisted baseline for name, or (nil, nil) when
-// the server has no baseline yet (first connection).
 func (s *ToolBaselineStore) LoadBaseline(name string) (*ToolBaseline, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,12 +118,6 @@ func (s *ToolBaselineStore) LoadBaseline(name string) (*ToolBaseline, error) {
 	return &copy_, nil
 }
 
-// SaveBaseline records the approved tool snapshot for name. ApprovedAt is
-// stamped now: the baseline moves forward with every observed change, so a
-// drift alert fires once per change instead of replaying forever.
-// FirstApprovedAt is stamped only on the first-ever approval and preserved
-// across subsequent baseline updates (#3540) so the onboarding window stays
-// anchored to the initial approval.
 func (s *ToolBaselineStore) SaveBaseline(name, hash string, names []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -179,10 +139,6 @@ func (s *ToolBaselineStore) SaveBaseline(name, hash string, names []string) erro
 	return s.saveLocked(servers)
 }
 
-// CompareAndReport diffs the persisted baseline for name against the
-// freshly observed tool set. A matching hash short-circuits to
-// drifted=false; a mismatch reports the name-level added/removed sets
-// (definition-only edits surface as an empty diff but drifted=true).
 func (s *ToolBaselineStore) CompareAndReport(name, newHash string, newNames []string) (added, removed []string, drifted bool) {
 	base, err := s.LoadBaseline(name)
 	if err != nil || base == nil {
@@ -195,7 +151,6 @@ func (s *ToolBaselineStore) CompareAndReport(name, newHash string, newNames []st
 	return
 }
 
-// diffToolNames returns the sorted names present in a but not in b.
 func diffToolNames(a, b []string) []string {
 	set := make(map[string]struct{}, len(b))
 	for _, name := range b {
@@ -211,7 +166,6 @@ func diffToolNames(a, b []string) []string {
 	return out
 }
 
-// toolNamesOf extracts the tool names for baseline diffing.
 func toolNamesOf(tools []mcp.ToolDefinition) []string {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
@@ -226,14 +180,6 @@ func sortedCopy(names []string) []string {
 	return out
 }
 
-// driftInOnboardingWindow reports whether a change observed at now falls
-// inside the 24h post-approval onboarding window for a baseline whose
-// INITIAL approval was at approvedAt (#3540: pass base.FirstApprovedAt,
-// falling back to ApprovedAt for legacy records that predate the anchor
-// field; never the rolling last-change ApprovedAt, or a server refreshing
-// its own tools more often than daily keeps the window open forever).
-// A zero timestamp (corrupt legacy record) is treated as outside the window
-// so drift still surfaces.
 func driftInOnboardingWindow(approvedAt, now time.Time) bool {
 	if approvedAt.IsZero() {
 		return false
@@ -241,24 +187,6 @@ func driftInOnboardingWindow(approvedAt, now time.Time) bool {
 	return now.Sub(approvedAt) < driftOnboardingWindow
 }
 
-// recordToolBaselineLocked applies the anti-rug-pull policy for one
-// observed tool set. It must be called with m.mu held (same lock domain
-// as the m.toolsHash update that precedes it). It returns the drift diff
-// and whether the OnToolDrift callback should fire:
-//
-//   - no store attached: no-op (unit fixtures without persistence);
-//   - no baseline yet: first connection IS the approval - save silently;
-//   - hash match: nothing changed, short-circuit;
-//   - hash mismatch: move the baseline forward (one alert per change,
-//     never a replay) when an alert sink is wired, but only alert when
-//     the change escapes the false-positive guards (AllowToolDrift
-//     escape hatch, 24h onboarding window);
-//   - #4062: mismatch with NO sink wired must NOT re-baseline - keep the
-//     approved baseline so the tampered tool set re-detects on every
-//     reconnect instead of being silently whitewashed.
-//
-// I/O failures degrade to a debug log - persistence is a guardrail, not a
-// hard dependency of connecting.
 func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) (added, removed []string, fire bool) {
 	store := m.baselines
 	if store == nil {
@@ -270,8 +198,7 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		return nil, nil, false
 	}
 	if base == nil {
-		// First observed connection: this tool set is what the user is
-		// approving by enabling the server. Persist it as the baseline.
+
 		if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
 			debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
 		}
@@ -288,9 +215,7 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		debug.Log("mcp-drift", "server=%s tool definitions changed but allow_tool_drift is set: %+v / -%+v", m.cfg.Name, added, removed)
 		return nil, nil, false
 	}
-	// #3540: anchor the onboarding window to the FIRST approval, falling back
-	// to ApprovedAt only for legacy records without the anchor field. Using
-	// base.ApprovedAt (last change) here made the window rolling.
+
 	anchor := base.FirstApprovedAt
 	if anchor.IsZero() {
 		anchor = base.ApprovedAt
@@ -303,27 +228,18 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		return nil, nil, false
 	}
 	if m.OnToolDrift != nil {
-		// One alert per change: move the baseline forward so the SAME
-		// change never replays (#4062: only when an alert sink is wired).
+
 		if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
 			debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
 		}
 	} else {
-		// #4062 fail-visible: no alert channel wired. Do NOT whitelist the
-		// tampered tool set - keep the approved baseline so the drift
-		// re-detects on every reconnect instead of being silently
-		// re-baselined (the old behavior erased the tamper trace in one
-		// step while the user saw nothing).
+
 		debug.Log("mcp-drift", "server=%s TOOL DRIFT with no OnToolDrift sink wired: approved baseline kept (not re-baselined)", m.cfg.Name)
 	}
 	debug.Log("mcp-drift", "server=%s TOOL DRIFT after approval: added=%v removed=%v", m.cfg.Name, added, removed)
 	return added, removed, true
 }
 
-// notifyToolDrift fires the drift callback off the plugin lock. Connect
-// runs under a deferred m.mu.Unlock, so the callback is dispatched via
-// safego.Go to avoid holding the plugin lock across user code (the
-// callback may snapshot MCP state, which takes the same lock's read side).
 func (m *MCPPlugin) notifyToolDrift(added, removed []string) {
 	cb := m.OnToolDrift
 	if cb == nil {

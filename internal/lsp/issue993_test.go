@@ -11,17 +11,6 @@ import (
 	"time"
 )
 
-// This file covers issue #993:
-//  1. A cached session whose server process died must be evicted and
-//     rebuilt by acquire() instead of being handed back forever (the
-//     touch() on each failed retry kept reapIdle from ever evicting it).
-//  2. Notifications emitted by a server during the initialize handshake
-//     (before startClient returns) must reach the notification handler;
-//     previously readLoop silently dropped ID-less messages while the
-//     handler was still nil.
-//
-// Fake servers are /bin/sh scripts spawned as real processes.
-
 const (
 	fake993InitResult = `{"jsonrpc":"2.0","id":1,"result":{"capabilities":{},"serverInfo":{"name":"fake993"}}}`
 	fake993PingResult = `{"jsonrpc":"2.0","id":2,"result":{}}`
@@ -32,9 +21,6 @@ func fake993Frame(body string) string {
 	return fmt.Sprintf("printf 'Content-Length: %d\\r\\n\\r\\n%s'\n", len(body), body)
 }
 
-// fake993KillScript answers initialize, consumes the three handshake
-// notifications, then exits non-zero as soon as one more stdin line
-// arrives — simulating a server crash after a successful handshake.
 func fake993KillScript(t *testing.T, dir string) string {
 	t.Helper()
 	script := filepath.Join(dir, "fake993-kill.sh")
@@ -49,8 +35,6 @@ func fake993KillScript(t *testing.T, dir string) string {
 	return script
 }
 
-// fake993EarlyNotifyScript emits the csharp-ls ready logMessage BEFORE
-// answering initialize, then answers one ping (id 2) per line.
 func fake993EarlyNotifyScript(t *testing.T, dir, name string) string {
 	t.Helper()
 	script := filepath.Join(dir, name)
@@ -76,8 +60,6 @@ func fake993Resolved(binary string, languageID string) ResolvedServer {
 	}
 }
 
-// withIsolatedManager swaps globalSessions for a throwaway manager for
-// the duration of fn.
 func withIsolatedManager(t *testing.T, fn func()) {
 	t.Helper()
 	prev := globalSessions
@@ -116,10 +98,6 @@ func TestIssue993IsFailedSemantics(t *testing.T) {
 	}
 }
 
-// TestIssue993AcquireRebuildsAfterServerCrash covers problem 1: after the
-// server process dies, a subsequent acquire must NOT return the dead
-// cached session (which touch() would keep alive forever) — it must evict
-// the entry and start a new server process.
 func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 	dir := t.TempDir()
 	script := fake993KillScript(t, dir)
@@ -136,10 +114,8 @@ func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 		}
 		firstPID := first.client.cmd.Process.Pid
 
-		// Crash the server: the script exits after this stdin line.
 		_ = first.client.notify(ctx, "x/crash", map[string]any{})
 
-		// readLoop must observe EOF and flag failure.
 		deadline := time.Now().Add(10 * time.Second)
 		for !first.client.isFailed() {
 			if time.Now().After(deadline) {
@@ -148,7 +124,6 @@ func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 
-		// Regression: without the fix, acquire returns the dead session.
 		second, err := globalSessions.acquire(ctx, workspace, resolved)
 		if err != nil {
 			t.Fatalf("second acquire after crash: %v", err)
@@ -169,9 +144,6 @@ func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 	})
 }
 
-// TestIssue993HandlerInstalledBeforeHandshake covers problem 2 at the
-// client level: the handler passed to startClient must observe a
-// notification the server flushed before answering initialize.
 func TestIssue993HandlerInstalledBeforeHandshake(t *testing.T) {
 	dir := t.TempDir()
 	script := fake993EarlyNotifyScript(t, dir, "fake993-early.sh")
@@ -194,8 +166,6 @@ func TestIssue993HandlerInstalledBeforeHandshake(t *testing.T) {
 	}
 	defer client.close()
 
-	// Synchronize on a call the server only answers after it has already
-	// flushed the early notification.
 	var raw json.RawMessage
 	if err := client.call(ctx, "x/ping", map[string]any{}, &raw); err != nil {
 		t.Fatalf("ping: %v", err)
@@ -211,15 +181,9 @@ func TestIssue993HandlerInstalledBeforeHandshake(t *testing.T) {
 	}
 }
 
-// TestIssue993SessionReadySignalSurvivesFastServer covers problem 2 at
-// the session level: a csharp-ls-shaped server that emits "Finished
-// loading solution" during the handshake must close readySignal, so
-// awaitProjectReady returns immediately instead of blocking to the
-// context deadline for the whole session lifetime.
 func TestIssue993SessionReadySignalSurvivesFastServer(t *testing.T) {
 	dir := t.TempDir()
-	// Name the script csharp-ls so shouldRetryEmptyResults() is true and
-	// the ready signal actually gates awaitProjectReady.
+
 	script := fake993EarlyNotifyScript(t, dir, "csharp-ls")
 	resolved := fake993Resolved(script, "csharp")
 	if base := binaryBaseName(resolved.Binary); base != "csharp-ls" {

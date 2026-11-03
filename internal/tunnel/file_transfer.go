@@ -19,71 +19,46 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Mobile file transfer V1 (docs/design/mobile-file-transfer.md).
-//
-// Transport: chunked inline over the existing E2E-encrypted WS channel - no
-// gateway changes. Base64-in-JSON costs ~33%; a 512 KiB raw chunk keeps the
-// encrypted envelope well under the 1 MiB WS read limit
-// (relay_client.go SetReadLimit(1 << 20)).
 const (
-	// MobileFileChunkSize is the raw chunk size. Last chunk may be short.
 	MobileFileChunkSize = 512 * 1024
-	// MobileFileMaxSize is the single-file cap; larger files are rejected
-	// locally with an explanatory message before any bytes are sent.
+
 	MobileFileMaxSize = 50 * 1024 * 1024
-	// MobileFileChunkDelay is the queue-yield rule: enqueue at most 1 chunk
-	// per 50 ms so streaming interactive frames (text deltas) are not
-	// starved behind a multi-chunk file burst.
+
 	MobileFileChunkDelay = 50 * time.Millisecond
 )
 
-// FileOfferData announces a file before its chunks. Filename is display
-// metadata only - the client MUST NOT resolve paths from it.
 type FileOfferData struct {
 	FileID   string `json:"file_id"`
 	Filename string `json:"filename"`
 	Mime     string `json:"mime"`
 	Size     int64  `json:"size"`
-	SHA256   string `json:"sha256"` // hex, over the whole raw file
-	Chunks   int    `json:"chunks"` // ceil(size / 512KiB)
+	SHA256   string `json:"sha256"`
+	Chunks   int    `json:"chunks"`
 	Caption  string `json:"caption,omitempty"`
 }
 
-// FileChunkData carries one base64-encoded raw chunk.
 type FileChunkData struct {
 	FileID string `json:"file_id"`
 	Index  int    `json:"index"`
-	Data   string `json:"data"` // base64(raw chunk)
+	Data   string `json:"data"`
 }
 
-// FileDoneData is the optional terminator; success is inferred from chunks
-// received + sha256 on the client, so a lost done event is not fatal.
 type FileDoneData struct {
 	FileID string `json:"file_id"`
 }
 
-// SendFileOffer enqueues a file_offer event. Idempotent per file_id: the
-// client replaces any partial state for the same id (re-offer semantics).
-// File events are UNRECORDED by design (#watchdog handoff intel): a 50 MiB
-// multi-chunk transfer must not bump the projection/snapshot event feed -
-// reconnect replay would otherwise re-stream every chunk of every file.
 func (b *Broker) SendFileOffer(data FileOfferData) {
 	b.enqueueUnrecorded(EventFileOffer, data)
 }
 
-// SendFileChunk enqueues one file_chunk event (unrecorded, see SendFileOffer).
 func (b *Broker) SendFileChunk(data FileChunkData) {
 	b.enqueueUnrecorded(EventFileChunk, data)
 }
 
-// SendFileDone enqueues the optional file_done terminator (unrecorded, see
-// SendFileOffer).
 func (b *Broker) SendFileDone(data FileDoneData) {
 	b.enqueueUnrecorded(EventFileDone, data)
 }
 
-// enqueueUnrecorded marshals data and enqueues it WITHOUT recording into
-// the projection/event feed (file-transfer bulk frames only).
 func (b *Broker) enqueueUnrecorded(eventType string, data interface{}) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -93,7 +68,6 @@ func (b *Broker) enqueueUnrecorded(eventType string, data interface{}) {
 	b.enqueueWithBytes(eventType, "", dataBytes, false, false)
 }
 
-// MobileFileResult reports what a completed transfer sent.
 type MobileFileResult struct {
 	FileID   string
 	Filename string
@@ -103,10 +77,6 @@ type MobileFileResult struct {
 	SHA256   string
 }
 
-// SendFileToMobile reads the file at path, hashes it, sanitizes the
-// filename, sniffs the MIME type, and drives offer → chunks → done on the
-// broker with the 50 ms chunk-yield rule. ctx cancellation aborts between
-// chunks (the enqueue path is non-blocking).
 func (b *Broker) SendFileToMobile(ctx context.Context, filePath, caption string) (MobileFileResult, error) {
 	offer, err := prepareFileOffer(filePath, caption)
 	if err != nil {
@@ -126,9 +96,6 @@ func (b *Broker) SendFileToMobile(ctx context.Context, filePath, caption string)
 	}, nil
 }
 
-// prepareFileOffer validates the file, computes the whole-file sha256 in a
-// streaming pass, and builds the offer event. Validation failures reject
-// locally before any bytes are sent (design contract).
 func prepareFileOffer(filePath, caption string) (FileOfferData, error) {
 	fi, err := os.Stat(filePath)
 	if err != nil {
@@ -165,9 +132,6 @@ func prepareFileOffer(filePath, caption string) (FileOfferData, error) {
 	}, nil
 }
 
-// streamFileChunks sends the offer, then streams each chunk with the yield
-// rule. A second sequential read pass keeps memory flat (no full-file
-// buffer on the host side); files are ≤50 MiB so this is cheap.
 func (b *Broker) streamFileChunks(ctx context.Context, filePath string, offer FileOfferData) error {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -184,7 +148,7 @@ func (b *Broker) streamFileChunks(ctx context.Context, filePath string, offer Fi
 		n, rerr := io.ReadFull(f, buf)
 		if n <= 0 {
 			if rerr == nil || rerr == io.EOF {
-				break // short file vs. computed chunk count: trust the read
+				break
 			}
 			return fmt.Errorf("read %s chunk %d: %w", filePath, i, rerr)
 		}
@@ -194,7 +158,7 @@ func (b *Broker) streamFileChunks(ctx context.Context, filePath string, offer Fi
 			Data:   base64.StdEncoding.EncodeToString(buf[:n]),
 		})
 		if i < offer.Chunks-1 {
-			// Yield rule: at most 1 chunk per 50 ms.
+
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("mobile file transfer cancelled: %w", ctx.Err())
@@ -205,9 +169,6 @@ func (b *Broker) streamFileChunks(ctx context.Context, filePath string, offer Fi
 	return nil
 }
 
-// SanitizeMobileFilename strips path separators and NUL, then clamps to 255
-// UTF-8 bytes on a rune boundary. The result is display metadata only; the
-// client never resolves paths from it.
 func SanitizeMobileFilename(name string) string {
 	name = strings.Map(func(r rune) rune {
 		switch r {
@@ -231,9 +192,6 @@ func SanitizeMobileFilename(name string) string {
 	return name
 }
 
-// mobileMimeByExt is the extension fallback used when content sniffing
-// returns the generic octet-stream default. No allowlist - "any format" is
-// the requirement; unknown types stay octet-stream.
 var mobileMimeByExt = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 	".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf",
@@ -242,9 +200,6 @@ var mobileMimeByExt = map[string]string{
 	".mp4": "video/mp4", ".mp3": "audio/mpeg",
 }
 
-// sniffMobileMIME sniffs via http.DetectContentType on the first 512 bytes
-// (it may read from f; callers pass an open file) with an extension
-// fallback; application/octet-stream default.
 func sniffMobileMIME(f *os.File, filename string) string {
 	head := make([]byte, 512)
 	n, err := f.ReadAt(head, 0)
@@ -262,7 +217,6 @@ func sniffMobileMIME(f *os.File, filename string) string {
 	return "application/octet-stream"
 }
 
-// hashFile computes the hex sha256 of f in a streaming pass.
 func hashFile(f *os.File) (string, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("seek: %w", err)
@@ -274,13 +228,10 @@ func hashFile(f *os.File) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// newMobileFileID returns a host-generated opaque hex id scoped to the
-// session (16 random bytes).
 func newMobileFileID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure is effectively fatal; time-based fallback so
-		// a transfer can still proceed with a unique-enough id.
+
 		return fmt.Sprintf("f%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])

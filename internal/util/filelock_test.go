@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// #1834 case 2 probes: FileLock must be BOUNDED - a busy holder leads to
-// a timeout error, never an indefinite hang.
-
 func TestFileLockAcquireReleaseCycle(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "x.lock")
 	unlock, err := FileLock(lockPath)
@@ -17,7 +14,7 @@ func TestFileLockAcquireReleaseCycle(t *testing.T) {
 		t.Fatalf("first acquire: %v", err)
 	}
 	unlock()
-	// Immediately re-acquirable after release.
+
 	unlock2, err := FileLock(lockPath)
 	if err != nil {
 		t.Fatalf("re-acquire after release: %v", err)
@@ -26,7 +23,7 @@ func TestFileLockAcquireReleaseCycle(t *testing.T) {
 }
 
 func TestFileLockBusyHolderTimesOut(t *testing.T) {
-	// Shrink the bound so the probe finishes fast (restored on exit).
+
 	prev := fileLockTimeout
 	fileLockTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { fileLockTimeout = prev })
@@ -38,10 +35,6 @@ func TestFileLockBusyHolderTimesOut(t *testing.T) {
 	}
 	defer unlock()
 
-	// A second acquisition attempt on a held lock (separate fd) must fail
-	// with the timeout error within a bounded window - not hang. Shrink
-	// the effective wait by asserting the error arrives well before the
-	// 10s cap; on CI allow generous headroom.
 	start := time.Now()
 	_, err = FileLock(lockPath)
 	elapsed := time.Since(start)

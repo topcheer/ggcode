@@ -11,16 +11,11 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 )
 
-// handleMcpServersMsg handles the corresponding message case.
 func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 	t0 := time.Now()
 	m.mcpServers = toMCPInfos(msg.Servers)
 	t1 := time.Now()
-	// #1396-A: the replace above used to land with NO clamp - uninstall
-	// the last (cursor-on-it) server and every subsequent key handler
-	// indexing m.mcpServers[panel.selected] panicked (stable repro:
-	// 2 servers, cursor on the 2nd, x, then enter). The clamp further
-	// down at :104 compares against the OLD list, i.e. never fires.
+
 	if m.mcpPanel != nil && m.mcpPanel.selected >= len(m.mcpServers) {
 		m.mcpPanel.selected = len(m.mcpServers) - 1
 		if m.mcpPanel.selected < 0 {
@@ -49,7 +44,6 @@ func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleMcpInstallResultMsg handles the corresponding message case.
 func (m Model) handleMcpInstallResultMsg(msg mcpInstallResultMsg) (Model, tea.Cmd) {
 	if m.mcpPanel != nil {
 		if msg.err != nil {
@@ -64,7 +58,6 @@ func (m Model) handleMcpInstallResultMsg(msg mcpInstallResultMsg) (Model, tea.Cm
 
 }
 
-// handleMcpOAuthStartMsg handles the corresponding message case.
 func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		if m.mcpPanel != nil {
@@ -73,7 +66,7 @@ func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.deviceUserCode != "" {
-		// Device flow: copy code to clipboard, store code info for banner display, poll in background
+
 		m.addDeviceCode(msg.serverName, msg.deviceUserCode, msg.authorizeURL)
 		if m.clipboardWriter != nil {
 			_ = m.clipboardWriter(msg.deviceUserCode)
@@ -83,14 +76,7 @@ func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 		}
 		return m, m.waitForMCPOAuthDevice(msg.handler)
 	}
-	// Browser flow.
-	// #1790: auto-opening the panel did not clear modelPanel/providerPanel,
-	// and view_panels renders those FIRST - the time-sensitive auth URL was
-	// invisible and keys routed to the shadowing panel. The device flow
-	// already uses the global banner (renderDeviceCodeBanner); the browser
-	// flow now reuses it for the URL, so visibility no longer depends on
-	// which panel happens to be on top. Still open the panel when nothing
-	// else is, so the flow has context.
+
 	m.addDeviceCode(msg.serverName, "", msg.authorizeURL)
 	notes := []string{fmt.Sprintf("Opening browser for MCP server %s authentication...", msg.serverName)}
 	if msg.openErr != nil {
@@ -104,7 +90,6 @@ func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 
 }
 
-// handleMcpOAuthResultMsg handles the corresponding message case.
 func (m Model) handleMcpOAuthResultMsg(msg mcpOAuthResultMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		m.removeDeviceCode(msg.serverName)
@@ -124,7 +109,6 @@ func (m Model) handleMcpOAuthResultMsg(msg mcpOAuthResultMsg) (Model, tea.Cmd) {
 
 }
 
-// handleMcpUninstallResultMsg handles the corresponding message case.
 func (m Model) handleMcpUninstallResultMsg(msg mcpUninstallResultMsg) (Model, tea.Cmd) {
 	if m.mcpPanel != nil {
 		if msg.err != nil {
@@ -140,8 +124,6 @@ func (m Model) handleMcpUninstallResultMsg(msg mcpUninstallResultMsg) (Model, te
 
 }
 
-// handleMcpRefreshResultMsg surfaces the async f-key refresh outcome in the
-// MCP panel. The outcome mapping matches the pre-async behavior.
 func (m Model) handleMcpRefreshResultMsg(msg mcpRefreshResultMsg) (Model, tea.Cmd) {
 	if m.mcpPanel == nil {
 		return m, nil
@@ -164,15 +146,11 @@ func (m Model) handleMcpRefreshResultMsg(msg mcpRefreshResultMsg) (Model, tea.Cm
 	return m, nil
 }
 
-// mcpHealthCheckTickMsg refreshes the MCP panel message with the current
-// health check status from the OAuth handler.
 type mcpHealthCheckTickMsg struct {
 	serverName string
 	handler    *mcp.OAuthHandler
 }
 
-// pollMCPHealthCheck emits periodic ticks to update the MCP panel with the
-// latest health check status. Stops when the handler's status clears.
 func (m Model) pollMCPHealthCheck(handler *mcp.OAuthHandler, serverName string) tea.Cmd {
 	if handler == nil {
 		return nil
@@ -185,12 +163,12 @@ func (m Model) pollMCPHealthCheck(handler *mcp.OAuthHandler, serverName string) 
 func (m Model) handleMcpHealthCheckTick(msg mcpHealthCheckTickMsg) (Model, tea.Cmd) {
 	status := msg.handler.HealthCheckStatus()
 	if status == "" {
-		// Health check passed (or not running). Stop polling.
+
 		return m, nil
 	}
 	if m.mcpPanel != nil {
 		m.mcpPanel.message = fmt.Sprintf("%s: %s", msg.serverName, status)
 	}
-	// Continue polling
+
 	return m, m.pollMCPHealthCheck(msg.handler, msg.serverName)
 }

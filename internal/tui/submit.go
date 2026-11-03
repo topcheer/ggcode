@@ -33,34 +33,26 @@ func (m *Model) appendUserMessage(text string) {
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: strings.TrimSpace(text)}},
 	}
-	// Mutate Session object under sessionMutex to prevent data races
-	// with checkpoint handler and other readers.
+
 	m.session.Messages = append(m.session.Messages, msg)
-	// Increment persistedMsgCount: this message is immediately persisted
-	// via AppendMessageToDisk below, so mark it as already on disk.
-	// ⚠️ If you remove or skip this increment, persistFullSessionMessages()
-	// will re-append this message to the JSONL file (duplicate record).
+
 	m.persistedMsgCount++
 	m.session.UpdatedAt = time.Now()
-	// Auto-generate smart title from first user message
+
 	if m.session.Title == "" || m.session.Title == "New session" || m.session.Title == "新会话" {
 		if smart := agentruntime.GenerateTitle(text); smart != "" {
 			m.session.Title = smart
 		}
 	}
-	// Update preview snippet from latest user message
+
 	m.session.Preview = util.Truncate(strings.TrimSpace(text), 120)
 	store := m.sessionStore
 	m.sessionMutex().Unlock()
 
-	// Echo to mobile tunnel client.
 	m.pushTunnelUserMessage(text)
 
-	// Persist to disk is handled by onPersist (SetPersistHandler) when
-	// the agent run adds the user message to contextManager via Add().
-	// No need to write here - it would be a duplicate.
 	if _, ok := store.(*session.JSONLStore); !ok {
-		// Non-JSONLStore: fallback to Save
+
 		m.sessionMutex().Lock()
 		_ = store.Save(m.session)
 		m.sessionMutex().Unlock()
@@ -70,17 +62,14 @@ func (m *Model) appendUserMessage(text string) {
 func (m *Model) startAgent(text string) tea.Cmd {
 	debug.Log("tui", "startAgent called: text=%s", util.Truncate(text, 200))
 	m.usageTurnIndex++
-	// Notify LAN Chat peers that our agent is now busy
+
 	if m.lanChatHub != nil {
 		m.lanChatHub.SetAgentBusy(true)
 	}
-	// Ensure the agent's provider is in sync with the current config.
-	// This handles the case where the user set an API key in the provider
-	// panel but hasn't explicitly activated - the key should still take effect.
+
 	m.ensureProviderSync()
 	m.rebuildSystemPrompt()
 
-	// Capture and clear pending images
 	imgs := m.pendingImages
 	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,17 +107,15 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	}
 }
 
-// startAgentWithExpand expands @mentions asynchronously then starts the agent.
-// This avoids blocking the TUI update loop with filesystem I/O.
 func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	m.usageTurnIndex++
-	// Notify LAN Chat peers that our agent is now busy
+
 	if m.lanChatHub != nil {
 		m.lanChatHub.SetAgentBusy(true)
 	}
 	m.rebuildSystemPrompt()
-	m.refreshStatusline() // external statusline refresh at run start (sa-160)
-	m.oscWorking("")      // OSC 7501: run in flight
+	m.refreshStatusline()
+	m.oscWorking("")
 	imgs := m.pendingImages
 	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,29 +145,19 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 
 			m.pushInitialTunnelRunState()
 
-			// Clear run tracking early so that if ExpandMentions fails and
-			// the agent never starts, AddedSinceRunStart returns empty
-			// instead of stale data from the previous run.
 			if m.agent != nil {
 				m.agent.StartRunTracking()
 			}
 
-			// Expand @mentions asynchronously
 			workDir, _ := os.Getwd()
 			expandedMsg, expandErr := ExpandMentions(text, workDir)
 			if expandErr != nil && m.program != nil {
-				// #1393-A: imgs were captured and cleared from pendingImages
-				// above - the placeholder bubbles are rendered, the agent never
-				// starts, and without this restore the attachments were
-				// silently lost forever. Route through Update (never write m
-				// fields from the Cmd goroutine) alongside the error notice.
+
 				m.program.Send(restorePendingImagesMsg{RunID: runID, Images: imgs})
 				m.program.Send(agentErrMsg{RunID: runID, Err: expandErr})
 				return
 			}
 
-			// Auto-fetch URLs in the user message (saves a web_fetch tool-call round-trip).
-			// Runs after @mention expansion so URLs in expanded file content are also fetched.
 			expandedMsg = ExpandURLs(ctx, expandedMsg)
 
 			if err := m.runAgentSubmission(ctx, runID, expandedMsg, imgs); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
@@ -203,35 +180,22 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 	if len(imgs) == 0 {
 		streamErrSent, err := m.runAgentWithContent(ctx, runID, content)
 		if streamErrSent && err != nil && !errors.Is(err, context.Canceled) {
-			// Error was already sent as agentErrMsg via stream callback.
-			// Return nil to prevent the goroutine from sending a duplicate.
+
 			return nil
 		}
 		return err
 	}
 
 	if !m.activeEndpointSupportsVision() {
-		// Vision fallback: when the user's model cannot accept images but the
-		// current endpoint offers a vision-capable model with a comparable
-		// context window, switch to it for THIS TURN ONLY, then restore the
-		// user's model. The switch is never persisted (syncSessionSelection
-		// is intentionally not called); restoration is idempotent and also
-		// runs on cancel/error paths via defer.
+
 		if vm := m.temporaryVisionModelForTurn(); vm != "" {
 			userModel := m.config.Model
 			debug.Log("tui", "vision fallback: turn-scoped switch to %s (user model: %s)", vm, userModel)
 			if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, vm); err == nil {
-				// Restore is registered IMMEDIATELY after the in-memory switch
-				// succeeds: tryActivateCurrentSelection can still fail below,
-				// and without this defer the vision model would leak into
-				// config.Model permanently (possibly persisted by a later
-				// config save), violating the turn-scoped guarantee.
+
 				defer m.restoreUserModelAfterVisionTurn(userModel)
 				if err := m.tryActivateCurrentSelection(); err != nil {
-					// Activation failed: restore synchronously so the
-					// text-only fallthrough below runs on the user's model,
-					// not on a half-switched selection. The deferred restore
-					// is idempotent and becomes a no-op.
+
 					m.restoreUserModelAfterVisionTurn(userModel)
 					debug.Log("tui", "vision fallback: activation failed, restored user model: %v", err)
 				} else {
@@ -240,12 +204,9 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 						return err
 					}
 					if streamErrSent {
-						return nil // already sent via stream callback
+						return nil
 					}
-					// The vision model rejected the request. Restore the user's
-					// model immediately and fall back to the text-only path —
-					// the image content is dropped and the path hint tells the
-					// model to inspect the local files with tools instead.
+
 					m.restoreUserModelAfterVisionTurn(userModel)
 					if !provider.IsImageBlockFallbackCandidate(err) {
 						return err
@@ -273,7 +234,7 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 	}
 	if streamErrSent || !provider.IsImageBlockFallbackCandidate(err) {
 		if streamErrSent {
-			return nil // already sent via stream callback
+			return nil
 		}
 		return err
 	}
@@ -289,20 +250,14 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 	return err
 }
 
-// streamBatchInterval controls how often accumulated stream text is flushed
-// to the TUI event loop.  80ms balances responsiveness vs. event-loop load.
 const streamBatchInterval = 80 * time.Millisecond
 
 func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []provider.ContentBlock) (bool, error) {
 	streamErrSent := false
 	writingStatusSent := false
-	retryItemID := "" // reused across multiple StreamEventSystem within one LLM turn
+	retryItemID := ""
 	round := agentIMRoundState{}
 
-	// Stream batching: accumulate text chunks AND tool events, then flush
-	// periodically instead of sending one program.Send per event.
-	// This prevents event-loop saturation that stalls the spinner tick chain
-	// and makes the TUI appear frozen - especially during burst tool calls.
 	var batchMu sync.Mutex
 	var batchBuf strings.Builder
 	var batchReasoningBuf strings.Builder
@@ -310,19 +265,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 	var toolBatchStatus []agentStatusMsg
 	var toolBatchTools []agentToolStatusMsg
 	batchDone := make(chan struct{})
-	// closeBatchDone guarantees the batchDone channel is closed exactly once.
-	// Without this, the StreamEventDone handler and the post-stream cleanup
-	// can race (e.g. if a provider emits Done twice on retry, or if the
-	// stream returns an error immediately after Done) and the second
-	// close(chan) panics, killing the entire TUI process.
+
 	var batchDoneOnce sync.Once
 	closeBatchDone := func() {
 		batchDoneOnce.Do(func() { close(batchDone) })
 	}
 
-	// flushBatch sends whatever has accumulated (text + tool events).
-	// It is panic-protected because it calls into bubbletea's program.Send,
-	// which can block / panic if the program is in a degraded state.
 	flushBatch := func() {
 		defer safego.Recover("tui.streamBatch.flush")
 		batchMu.Lock()
@@ -348,10 +296,6 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		}
 	}
 
-	// Background ticker that periodically flushes accumulated events.
-	// Wrapped in safego so that any panic inside flushBatch (or in any of
-	// the tea messages it constructs) is contained to this goroutine and
-	// does not crash the TUI process.
 	safego.Go("tui.streamBatch.ticker", func() {
 		ticker := time.NewTicker(streamBatchInterval)
 		defer ticker.Stop()
@@ -360,7 +304,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			case <-ticker.C:
 				flushBatch()
 			case <-batchDone:
-				// Final flush before exit.
+
 				flushBatch()
 				return
 			case <-ctx.Done():
@@ -372,25 +316,25 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 
 	err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		defer safego.Recover("tui.streamCallback")
-		// Broadcast to webchat subscribers
+
 		if m.webuiBridge != nil {
 			m.webuiBridge.BroadcastEvent(event)
 		}
-		// Push to mobile tunnel client
+
 		m.pushTunnelEvent(event)
 		if m.program == nil {
 			return
 		}
 		switch event.Type {
 		case provider.StreamEventText:
-			// Always append to round state immediately (not throttled).
+
 			round.AppendText(event.Text)
-			// Track streaming speed for tok/s indicator.
+
 			if m.streamTextStart.IsZero() {
 				m.streamTextStart = time.Now()
 			}
 			m.streamChars += len(event.Text)
-			// Accumulate for batched TUI delivery.
+
 			batchMu.Lock()
 			batchBuf.WriteString(event.Text)
 			batchMu.Unlock()
@@ -409,8 +353,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			}
 
 		case provider.StreamEventSystem:
-			// System notification (retry status, etc.). All retry messages
-			// within one LLM turn accumulate into a single system item.
+
 			flushBatch()
 			if retryItemID == "" {
 				retryItemID = nextSystemID()
@@ -419,7 +362,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID, Replace: true})
 			}
 		case provider.StreamEventToolCallDone:
-			// Flush any pending text before tool events to keep output ordering correct.
+
 			flushBatch()
 			writingStatusSent = false
 			retryItemID = ""
@@ -427,12 +370,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			if event.Tool.Name == "ask_user" {
 				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))
 			}
-			// Emit tool start notification to IM for long-running tools
+
 			if m.imEmitter != nil {
 				m.imEmitter.EmitToolStatus(event.Tool.Name, string(event.Tool.Arguments))
 			}
 			if isSubAgentLifecycleTool(event.Tool.Name) {
-				// Sub-agent lifecycle tools are low-frequency; send directly.
+
 				present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 					ToolID:      event.Tool.ID,
@@ -446,7 +389,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				return
 			}
 			round.NoteToolCall()
-			// Accumulate tool events for batched delivery.
+
 			batchMu.Lock()
 			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: present.Activity,
@@ -465,12 +408,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			}})
 			batchMu.Unlock()
 		case provider.StreamEventToolResult:
-			// Flush any pending text before tool results.
+
 			flushBatch()
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
-				// Sub-agent lifecycle tools are low-frequency; send directly.
+
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 					ToolID:      event.Tool.ID,
 					ToolName:    event.Tool.Name,
@@ -486,7 +429,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				return
 			}
 			round.NoteToolResult(event.IsError)
-			// Emit tool result to IM based on output mode.
+
 			toolInfo := im.ToolResultInfo{
 				ToolName:     event.Tool.Name,
 				Args:         string(event.Tool.Arguments),
@@ -511,7 +454,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			default:
 				m.emitIMEvent(im.OutboundEvent{Kind: im.OutboundEventToolResult, ToolRes: &toolInfo})
 			}
-			// Accumulate tool result events for batched delivery.
+
 			batchMu.Lock()
 			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: m.t("status.thinking"),
@@ -537,26 +480,16 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				m.program.Send(agentErrMsg{RunID: runID, Err: sanitizeAPIError(event.Error)})
 			}
 		case provider.StreamEventDone:
-			// Flush any remaining text/tool events synchronously before
-			// processing the Done event. This is critical for multi-round
-			// agent loops: each round ends with a Done event, and subsequent
-			// rounds may contain pure text with no tool calls. Without this
-			// flush, the text would remain stuck in batchBuf because the
-			// ticker goroutine exits after the first closeBatchDone().
+
 			flushBatch()
-			retryItemID = "" // reset for next LLM stream within the same agent turn
+			retryItemID = ""
 			m.program.Send(agentTurnDoneMsg{})
 			writingStatusSent = false
-			// Reset reasoning buffer so the next LLM turn starts fresh.
-			// Without this, fullReasoningBuf accumulates across turns and
-			// causes duplicate reasoning display (turn N's reasoning gets
-			// prepended to turn N+1's, producing the "identical thinking
-			// content" effect where the second block is a superset of the
-			// first).
+
 			batchMu.Lock()
 			fullReasoningBuf.Reset()
 			batchMu.Unlock()
-			// Reset streaming speed tracker for next turn.
+
 			m.streamChars = 0
 			m.streamTextStart = time.Time{}
 			switch {
@@ -575,9 +508,6 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		}
 	}, "human")
 
-	// Ensure batch goroutine is stopped if RunStreamWithContent returns
-	// without sending StreamEventDone (e.g. on error). Idempotent thanks to
-	// closeBatchDone's sync.Once guard.
 	closeBatchDone()
 
 	if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent {
@@ -588,10 +518,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 
 func buildBatchedStreamMessages(runID int, text, reasoning string, status []agentStatusMsg, tools []agentToolStatusMsg) []tea.Msg {
 	msgs := make([]tea.Msg, 0, 3)
-	// Reasoning must be delivered BEFORE text so the TUI can expand the
-	// reasoning block first, then collapse it when the text chunk arrives.
-	// If text came first, appendStreamChunk would run before reasoning is
-	// active, missing the collapse trigger.
+
 	if reasoning != "" {
 		msgs = append(msgs, agentReasoningMsg{RunID: runID, Text: reasoning})
 	}
@@ -616,7 +543,6 @@ func buildAgentSubmissionContent(text string, imgs []imageAttachedMsg, includeIm
 		return []provider.ContentBlock{provider.TextBlock(prompt)}
 	}
 
-	// Build path hints for all attached images
 	var pathHints []string
 	for _, img := range imgs {
 		imagePath := strings.TrimSpace(img.sourcePath)
@@ -657,9 +583,6 @@ func (m *Model) activeEndpointSupportsVision() bool {
 	return resolved.SupportsVision
 }
 
-// temporaryVisionModelForTurn selects a vision-capable model from the active
-// endpoint's model list for a turn-scoped switch. Returns "" when the active
-// model already supports vision or no comparable vision model exists.
 func (m *Model) temporaryVisionModelForTurn() string {
 	if m.config == nil {
 		return ""
@@ -667,10 +590,6 @@ func (m *Model) temporaryVisionModelForTurn() string {
 	return agentruntime.VisionTurnModel(m.config)
 }
 
-// restoreUserModelAfterVisionTurn restores the user's model after a
-// turn-scoped vision switch. Idempotent: safe to call from both the error
-// path and the deferred cleanup. Does not persist the selection - the user's
-// session keeps pointing at their chosen model.
 func (m *Model) restoreUserModelAfterVisionTurn(userModel string) {
 	if m.config == nil || userModel == "" || m.config.Model == userModel {
 		return
@@ -684,8 +603,6 @@ func (m *Model) restoreUserModelAfterVisionTurn(userModel string) {
 	}
 }
 
-// sanitizeAPIError removes API keys from error messages to prevent
-// accidental leakage through TUI display, session JSONL, or debug logs.
 var apiKeyPatterns = regexp.MustCompile(`(?i)(sk-|Bearer\s+)[\w\-.]{20,}`)
 
 func sanitizeAPIError(err error) error {

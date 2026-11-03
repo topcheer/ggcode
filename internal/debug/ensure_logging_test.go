@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// resetForTest restores the pre-Init package state (mirrors EnableForTest).
 func resetForTest() {
 	mu.Lock()
 	once = sync.Once{}
@@ -27,7 +26,6 @@ func TestEnsureFileLoggingEnablesAndIsIdempotent(t *testing.T) {
 		os.Unsetenv("GGCODE_DEBUG")
 	})
 
-	// Start from a disabled state.
 	Close()
 	resetForTest()
 	os.Unsetenv("GGCODE_DEBUG")
@@ -49,15 +47,12 @@ func TestEnsureFileLoggingEnablesAndIsIdempotent(t *testing.T) {
 		t.Errorf("EnsureFileLogging path %q != MainLogPath %q", path, MainLogPath())
 	}
 
-	// Idempotent: second call is a no-op reporting the enabled state.
 	wasEnabled2, path2 := EnsureFileLogging()
 	if !wasEnabled2 || path2 != path {
 		t.Errorf("second call should be a no-op, got wasEnabled=%v path=%q", wasEnabled2, path2)
 	}
 }
 
-// waitForLine polls the log file until substr shows up or the deadline
-// passes — the async sink flushes on its own schedule.
 func waitForLine(path, substr string) bool {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -69,11 +64,6 @@ func waitForLine(path, substr string) bool {
 	return false
 }
 
-// TestEnsureFileLoggingConcurrentSerializeEnable pins #1539 case B: the
-// check-reset-init sequence is serialized, so exactly one concurrent caller
-// performs the enable, and the winner's early log lines survive the losers.
-// Pre-fix, a loser's Close() cleanup glob deleted every log file the winner
-// had already written, and multiple callers could both report enabling.
 func TestEnsureFileLoggingConcurrentSerializeEnable(t *testing.T) {
 	t.Cleanup(func() {
 		Close()
@@ -116,7 +106,6 @@ func TestEnsureFileLoggingConcurrentSerializeEnable(t *testing.T) {
 		t.Errorf("exactly one caller should perform the enable, got %d", enabledCount)
 	}
 
-	// The winner's segment must survive subsequent (and concurrent) callers.
 	path := MainLogPath()
 	Log("agent", "survivor line after concurrent ensure")
 	if !waitForLine(path, "survivor line after concurrent ensure") {

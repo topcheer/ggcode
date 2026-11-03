@@ -68,7 +68,6 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	// Truncate activity to 30 rendered characters for status bar
 	if lipgloss.Width(activity) > 30 {
 		runes := []rune(activity)
 		for i := len(runes); i > 0; i-- {
@@ -107,7 +106,7 @@ func (m Model) renderStatusBar() string {
 			if m.statusToolArg != "" {
 				toolLabel = fmt.Sprintf("%s: %s", toolLabel, m.statusToolArg)
 			}
-			// Truncate tool label to 30 rendered characters
+
 			if lipgloss.Width(toolLabel) > 30 {
 				runes := []rune(toolLabel)
 				for i := len(runes); i > 0; i-- {
@@ -127,7 +126,6 @@ func (m Model) renderStatusBar() string {
 		sb.WriteString(tmuxLabel)
 	}
 
-	// Show background compression indicator if active
 	if m.agent != nil {
 		if pc := m.agent.PreCompactStatus(); pc.Running {
 			if sb.Len() > 0 {
@@ -140,11 +138,6 @@ func (m Model) renderStatusBar() string {
 	return m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6"))
 }
 
-// staticHintsSuppressed reports whether the onboarding-style composer hints
-// (help / word count / Ctrl+R sidebar / Shift+Tab mode / Ctrl+C) should stay
-// hidden: they auto-hide 5 minutes after the TUI starts and never come back.
-// Hide priority is the highest -- once suppressed, the Ctrl+R sidebar
-// toggle's show/hide logic no longer re-shows its hint entry.
 func (m Model) staticHintsSuppressed() bool {
 	return !m.hintsShownAt.IsZero() && time.Since(m.hintsShownAt) > 5*time.Minute
 }
@@ -154,22 +147,18 @@ func (m Model) renderComposerPanel() string {
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
 	}
-	// Context window usage indicator -- show when agent exists.
+
 	if ctxLabel := m.contextUsageHint(); ctxLabel != "" {
 		hints = append(hints, ctxLabel)
 	}
-	// Session cost only (short format). Token breakdown is in sidebar.
+
 	if costLabel := m.sessionCostHint(); costLabel != "" {
 		hints = append(hints, costLabel)
 	}
-	// Onboarding-style hints (help / word count / Ctrl+R sidebar /
-	// Shift+Tab mode / Ctrl+C) auto-hide 5 minutes after startup and never
-	// come back. The hide has the highest priority: in particular the Ctrl+R
-	// sidebar toggle's own show/hide logic must NOT re-show the hint once
-	// the grace window has passed (user request, 2026-10).
+
 	if !m.staticHintsSuppressed() {
 		hints = append(hints, m.t("hint.help"))
-		// Iteration 6: Word count for current input
+
 		if text := strings.TrimSpace(m.input.Value()); text != "" {
 			if wc := len(strings.Fields(text)); wc > 0 {
 				hints = append(hints, fmt.Sprintf("%d words", wc))
@@ -193,7 +182,7 @@ func (m Model) renderComposerPanel() string {
 	if n := m.pendingImageCount(); n > 0 {
 		hints = append(hints, fmt.Sprintf(m.t("hint.image_attached_count"), n))
 	}
-	// Stream status: show platform-resolution@fps when streaming
+
 	if m.streamManager != nil && m.streamManager.IsRunning() {
 		statuses := m.streamManager.Status()
 		if len(statuses) > 0 {
@@ -215,7 +204,6 @@ func (m Model) renderComposerPanel() string {
 		}
 	}
 
-	// Show loop timer as last hint when agent is running
 	if m.loading {
 		elapsed := time.Since(m.loopStart).Truncate(time.Second)
 		var timerLabel string
@@ -226,11 +214,10 @@ func (m Model) renderComposerPanel() string {
 		}
 		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
 
-		// Show generation speed (tok/s) when actively streaming text
 		if m.streamChars > 0 && !m.streamTextStart.IsZero() {
 			streamElapsed := time.Since(m.streamTextStart)
 			if streamElapsed >= 500*time.Millisecond {
-				// Estimate tokens: ~4 chars per token for mixed CJK/ASCII
+
 				estTokens := m.streamChars / 4
 				tps := float64(estTokens) / streamElapsed.Seconds()
 				if tps > 0 {
@@ -241,7 +228,6 @@ func (m Model) renderComposerPanel() string {
 		}
 	}
 
-	// Ctrl+N follow/unfollow hint when subagent/teammate slots exist
 	if len(m.subAgentFollow.slots) > 0 {
 		key := "hint.follow_panel"
 		if m.subAgentFollow.isActive() {
@@ -258,7 +244,6 @@ func (m Model) renderComposerPanel() string {
 
 	hintLine := strings.Join(hints, " • ")
 
-	// Sub-agent follow strip and disabled input
 	var followStrip string
 	if m.subAgentFollow.slots != nil && len(m.subAgentFollow.slots) > 0 {
 		followStrip = m.renderSubAgentFollowStrip() + "\n"
@@ -302,8 +287,6 @@ func (m Model) renderComposerInput() string {
 	return top + v
 }
 
-// renderAttachmentBar renders a compact one-line summary of attached images.
-// Format: `[img] screenshot.png · diagram.png  (Ctrl+Backspace to remove last)`
 func (m Model) renderAttachmentBar() string {
 	var names []string
 	for _, img := range m.pendingImages {
@@ -326,10 +309,6 @@ func (m Model) renderAttachmentBar() string {
 	return fmt.Sprintf("%s %s  %s", label, body, hint)
 }
 
-// contextUsageHint returns a colored context window usage string for the composer hints.
-// Shows a mini progress bar like "[███░░░░░░] ctx 12.3K/128K (10%)" with color coding:
-// green <50%, yellow <80%, red >=80%. When approaching auto-compact threshold,
-// a warning marker is appended.
 func (m Model) contextUsageHint() string {
 	if m.agent == nil {
 		return ""
@@ -345,18 +324,16 @@ func (m Model) contextUsageHint() string {
 	tokens := cm.TokenCount()
 	ratio := float64(tokens) / float64(cw)
 
-	// Color based on usage level.
 	var color string
 	switch {
 	case ratio >= 0.80:
-		color = "196" // red
+		color = "196"
 	case ratio >= 0.50:
-		color = "214" // orange/yellow
+		color = "214"
 	default:
-		color = "46" // green
+		color = "46"
 	}
 
-	// Build a 8-segment mini progress bar.
 	const barWidth = 8
 	filled := int(ratio * float64(barWidth))
 	if filled > barWidth {
@@ -378,7 +355,6 @@ func (m Model) contextUsageHint() string {
 		ratio*100,
 	)
 
-	// Append compaction warning when approaching threshold.
 	threshold := cm.AutoCompactThreshold()
 	if threshold > 0 && tokens >= threshold {
 		label += " ⚡ compact"
@@ -392,22 +368,14 @@ func (m Model) contextUsageHint() string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
 }
 
-// sessionCostCache memoizes the per-View aggregation over UsageHistory.
-// Model is copied by value through Update/View, so the cache lives behind a
-// shared pointer (same pattern as streamViewState). UsageHistory is
-// append-only (model.go appendUsageRecord + store.Load); the entry count is
-// a sufficient invalidation key.
 type sessionCostCache struct {
 	mu    sync.Mutex
-	sid   string              // session ID when computed
-	n     int                 // len(UsageHistory) when computed
-	cost  float64             // aggregated USD cost
-	usage provider.TokenUsage // fallback aggregation when TokenUsage is zero
+	sid   string
+	n     int
+	cost  float64
+	usage provider.TokenUsage
 }
 
-// sessionCostSnapshot returns the cached (cost, fallbackUsage) for the
-// current session and history length, recomputing only when the session
-// changes or the history grew.
 func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 	if m.session == nil {
 		return 0, provider.TokenUsage{}
@@ -418,9 +386,7 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 	c := m.costCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// #3086: read UsageHistory through the lock-guarded snapshot - the
-	// usage callbacks append it from agent-stream goroutines while this
-	// runs on the View thread every frame.
+
 	history := m.session.UsageHistorySnapshot()
 	if c.sid == m.session.ID && c.n == len(history) {
 		return c.cost, c.usage
@@ -437,11 +403,7 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 			continue
 		}
 		u := entry.Usage
-		// #2315: DisplayInputTokens - OpenAI-compat vendors fill
-		// InputTokens as a SUPERSET that already contains CacheRead, so
-		// the raw value billed cached tokens twice (full input price +
-		// cache-read price). Same normalization the sidebar and the
-		// #2310 write boundary use; disjoint-addend vendors are a no-op.
+
 		total += float64(u.DisplayInputTokens())*rate.InputPerM/1e6 +
 			float64(u.OutputTokens)*rate.OutputPerM/1e6 +
 			float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
@@ -454,9 +416,6 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 	return total, agg
 }
 
-// sessionCostHint returns a compact session cost + token summary for the
-// composer hints bar. Shows "$0.04 · 45K tok" so users always know their
-// spending without typing /cost. Color codes by cost tier for quick scanning.
 func (m Model) sessionCostHint() string {
 	if m.session == nil {
 		return ""
@@ -465,8 +424,7 @@ func (m Model) sessionCostHint() string {
 	if usage.Total() == 0 {
 		usage = m.sidebarSessionUsage()
 	}
-	// Fallback: aggregate from UsageHistory if session-level total is still 0
-	// (aggregation is cached — see sessionCostSnapshot).
+
 	if usage.Total() == 0 && len(m.session.UsageHistorySnapshot()) > 0 {
 		_, usage = m.sessionCostSnapshot()
 	}
@@ -475,11 +433,8 @@ func (m Model) sessionCostHint() string {
 		return ""
 	}
 
-	// Compute estimated cost from per-model usage history (same logic as /cost).
 	totalCost := m.estimateSessionCost()
 
-	// Short format: cost only when available, otherwise token count.
-	// e.g. "$0.04" or "45K tok" -- token detail is in the sidebar.
 	var label string
 	if totalCost > 0 {
 		label = cost.FormatCost(totalCost)
@@ -487,35 +442,29 @@ func (m Model) sessionCostHint() string {
 		label = humanizeTokenCount(totalTokens) + " tok"
 	}
 
-	// Color by cost tier: green < $0.50, yellow < $2.00, red >= $2.00
 	var color string
 	switch {
 	case totalCost >= 2.0:
-		color = "196" // red
+		color = "196"
 	case totalCost >= 0.50:
-		color = "214" // orange/yellow
+		color = "214"
 	default:
-		color = "245" // muted gray — unobtrusive at low cost
+		color = "245"
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
 }
 
-// estimateSessionCost computes the total estimated USD cost for the current
-// session by applying pricing rates to per-model usage history entries.
-// Returns 0 if no pricing data is available (subscription plans, unknown models).
 func (m Model) estimateSessionCost() float64 {
 	if m.session == nil {
 		return 0
 	}
 	total, _ := m.sessionCostSnapshot()
 
-	// Fallback: if no UsageHistory entries, use session-level aggregate.
 	if total == 0 && m.session.TokenUsage.Total() > 0 {
 		rate := resolveRate(m.session.Vendor, m.session.Endpoint, m.session.Model)
 		if rate.IsKnown() && rate.IsMetered() {
 			u := m.session.TokenUsage
-			// #3434: fallback path (no UsageHistory - restored/imported
-			// sessions) must normalize the same way as the #2315 main path.
+
 			total = float64(u.DisplayInputTokens())*rate.InputPerM/1e6 +
 				float64(u.OutputTokens)*rate.OutputPerM/1e6 +
 				float64(u.CacheRead)*rate.CacheReadPerM/1e6 +

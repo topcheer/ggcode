@@ -13,15 +13,10 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// ============================================================
-// im config add / remove / show / set
-// ============================================================
-
 func TestIMConfigAdd(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
 
-	// Create minimal config
 	writeTestConfig(t, cfgPath, nil)
 
 	buf := &bytes.Buffer{}
@@ -35,7 +30,6 @@ func TestIMConfigAdd(t *testing.T) {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 
-	// Verify it was saved
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -152,7 +146,7 @@ func TestIMConfigShow(t *testing.T) {
 	if !strings.Contains(output, "cli_abc") {
 		t.Errorf("missing app_id in output: %s", output)
 	}
-	// Secret should be masked
+
 	if strings.Contains(output, "secret123") {
 		t.Errorf("secret should be masked in output: %s", output)
 	}
@@ -177,7 +171,7 @@ func TestIMConfigShowJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	// JSON tags produce lowercase keys
+
 	if fmt.Sprintf("%v", result["platform"]) != "qq" {
 		t.Errorf("platform = %v, want qq (full result: %v)", result["platform"], result)
 	}
@@ -318,10 +312,6 @@ func TestIMConfigSetAutoUsesInstanceScope(t *testing.T) {
 	}
 }
 
-// ============================================================
-// im list
-// ============================================================
-
 func TestIMListEmpty(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -382,10 +372,6 @@ func TestIMListJSON(t *testing.T) {
 	}
 }
 
-// ============================================================
-// im bind / unbind
-// ============================================================
-
 func TestIMBindAndUnbind(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -393,7 +379,6 @@ func TestIMBindAndUnbind(t *testing.T) {
 		"my-qq": {Enabled: true, Platform: "qq"},
 	})
 
-	// Override bindings path to temp dir
 	bindingsDir := t.TempDir()
 	origPath := resolveBindingsPath
 	t.Cleanup(func() { resolveBindingsPath = origPath })
@@ -401,7 +386,6 @@ func TestIMBindAndUnbind(t *testing.T) {
 
 	workspace := t.TempDir()
 
-	// Bind
 	buf := &bytes.Buffer{}
 	cmd := newIMBindCmd(ptr(cfgPath))
 	cmd.SetOut(buf)
@@ -413,7 +397,6 @@ func TestIMBindAndUnbind(t *testing.T) {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 
-	// Verify binding was written
 	store, err := im.NewJSONFileBindingStore(filepath.Join(bindingsDir, "bindings.json"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -429,7 +412,6 @@ func TestIMBindAndUnbind(t *testing.T) {
 		t.Errorf("channel = %q", bindings[0].ChannelID)
 	}
 
-	// Unbind by adapter
 	buf.Reset()
 	cmd2 := newIMUnbindCmd(ptr(cfgPath))
 	cmd2.SetOut(buf)
@@ -441,7 +423,6 @@ func TestIMBindAndUnbind(t *testing.T) {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 
-	// Verify removed
 	bindings, _ = store.ListByAdapter("my-qq")
 	if len(bindings) != 0 {
 		t.Errorf("expected 0 bindings after unbind, got %d", len(bindings))
@@ -552,10 +533,6 @@ func TestIMUnbindAll(t *testing.T) {
 	}
 }
 
-// ============================================================
-// im bindings
-// ============================================================
-
 func TestIMBindingsEmpty(t *testing.T) {
 	bindingsDir := t.TempDir()
 	origPath := resolveBindingsPath
@@ -576,15 +553,11 @@ func TestIMBindingsEmpty(t *testing.T) {
 	}
 }
 
-// ============================================================
-// helpers
-// ============================================================
-
 func ptr(s string) *string { return &s }
 
 func writeTestConfig(t *testing.T, path string, adapters map[string]config.IMAdapterConfig) {
 	t.Helper()
-	// Write a valid config using YAML (must pass Validate: vendor must exist)
+
 	var yamlParts []string
 	yamlParts = append(yamlParts, "vendor: zai")
 	yamlParts = append(yamlParts, "endpoint: test")
@@ -604,7 +577,7 @@ func writeTestConfig(t *testing.T, path string, adapters map[string]config.IMAda
 			}
 		}
 	}
-	// Add a minimal vendor so Validate passes
+
 	yamlParts = append(yamlParts, "vendors:")
 	yamlParts = append(yamlParts, "  zai:")
 	yamlParts = append(yamlParts, "    endpoints:")
@@ -631,9 +604,6 @@ func writeInstanceConfig(t *testing.T, workspace string, content string) {
 	}
 }
 
-// TestMaskedAdapterExtra pins #1432-A: the --json paths must mask the
-// same secret-bearing keys as the text paths - Extra went out plaintext
-// on the machine-consumption path (logs/jq/CI).
 func TestMaskedAdapterExtra(t *testing.T) {
 	in := map[string]interface{}{
 		"bot_token":  "xoxb-verylongsecrettoken",
@@ -650,7 +620,7 @@ func TestMaskedAdapterExtra(t *testing.T) {
 	if out["relays"] != "wss://relay.example" {
 		t.Fatalf("non-secret value altered: %v", out["relays"])
 	}
-	// Original map untouched (deep copy).
+
 	if in["bot_token"] != "xoxb-verylongsecrettoken" {
 		t.Fatal("input map mutated")
 	}

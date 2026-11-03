@@ -46,7 +46,7 @@ func TestQRCodePNG(t *testing.T) {
 	if len(png) == 0 {
 		t.Error("PNG bytes should not be empty")
 	}
-	// PNG magic bytes
+
 	if len(png) < 8 || string(png[:4]) != "\x89PNG" {
 		t.Error("output should be valid PNG data")
 	}
@@ -64,7 +64,7 @@ func TestQRCodeForURLLong(t *testing.T) {
 }
 
 func TestQRCodeForURLMinimalData(t *testing.T) {
-	// Test with a minimal but valid URL
+
 	s, err := QRCodeForURL("a")
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestQRCodeForURLUsesCompactTerminalRendering(t *testing.T) {
 }
 
 func TestQRCodePNGConsistency(t *testing.T) {
-	// Two calls with same URL should produce same PNG
+
 	url := "https://example.com/test"
 	p1, err := QRCodePNG(url)
 	if err != nil {

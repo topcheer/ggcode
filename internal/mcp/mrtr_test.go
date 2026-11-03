@@ -84,7 +84,7 @@ func TestMRTRRequestStateOnlyImmediateRetry(t *testing.T) {
 }
 
 func TestMRTRLoopGuard(t *testing.T) {
-	// Serve the same input_required forever; the guard must stop the loop.
+
 	infinite := func() (json.RawMessage, error) {
 		return json.RawMessage(`{"resultType":"input_required","requestState":"s"}`), nil
 	}

@@ -5,63 +5,55 @@ import (
 	"time"
 )
 
-// HookPayload is the standardized JSON payload sent to all hooks.
-// For command hooks: serialized to GGCODE_HOOK_PAYLOAD env var + stdin.
-// For http hooks: sent as the POST request body.
 type HookPayload struct {
-	Event     string `json:"event"`     // event name
-	Timestamp string `json:"timestamp"` // RFC3339
+	Event     string `json:"event"`
+	Timestamp string `json:"timestamp"`
 	SessionID string `json:"session_id,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 
-	Tool       *PayloadTool       `json:"tool,omitempty"`       // pre/post_tool_use
-	Result     *PayloadResult     `json:"result,omitempty"`     // post_tool_use only
-	Msg        *PayloadMsg        `json:"message,omitempty"`    // on_user_message only
-	Stop       *PayloadStop       `json:"stop,omitempty"`       // on_agent_stop / on_stream_stop
-	Compaction *PayloadCompaction `json:"compaction,omitempty"` // on_compaction only
-	Session    *PayloadSession    `json:"session,omitempty"`    // on_session_start / on_session_end
+	Tool       *PayloadTool       `json:"tool,omitempty"`
+	Result     *PayloadResult     `json:"result,omitempty"`
+	Msg        *PayloadMsg        `json:"message,omitempty"`
+	Stop       *PayloadStop       `json:"stop,omitempty"`
+	Compaction *PayloadCompaction `json:"compaction,omitempty"`
+	Session    *PayloadSession    `json:"session,omitempty"`
 }
 
 type PayloadTool struct {
 	Name     string          `json:"name"`
-	Input    json.RawMessage `json:"input,omitempty"`     // raw JSON tool arguments
-	FilePath string          `json:"file_path,omitempty"` // convenience: extracted path
+	Input    json.RawMessage `json:"input,omitempty"`
+	FilePath string          `json:"file_path,omitempty"`
 }
 
 type PayloadResult struct {
 	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
-	Output     string `json:"output,omitempty"` // truncated to 4KB
+	Output     string `json:"output,omitempty"`
 	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
 type PayloadMsg struct {
-	Role    string `json:"role"`    // always "user"
-	Content string `json:"content"` // text content
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type PayloadStop struct {
-	Reason string `json:"reason"` // "completed", "cancelled", "error"
+	Reason string `json:"reason"`
 	Error  string `json:"error,omitempty"`
 }
 
-// PayloadCompaction carries compaction metrics for on_compaction hooks and
-// the pre-compaction notice for pre_compact hooks.
 type PayloadCompaction struct {
-	TokenBefore int    `json:"token_before"`      // token count before compaction
-	TokenAfter  int    `json:"token_after"`       // token count after compaction
-	Reclaimed   int    `json:"reclaimed"`         // tokens reclaimed (before - after); 0 for pre_compact
-	Trigger     string `json:"trigger,omitempty"` // "auto", "reactive", or "manual"
+	TokenBefore int    `json:"token_before"`
+	TokenAfter  int    `json:"token_after"`
+	Reclaimed   int    `json:"reclaimed"`
+	Trigger     string `json:"trigger,omitempty"`
 }
 
-// PayloadSession carries session lifecycle context for on_session_start and
-// on_session_end hooks. Exactly one field is set per event.
 type PayloadSession struct {
-	Source string `json:"source,omitempty"` // on_session_start: "startup" or "resume"
-	Reason string `json:"reason,omitempty"` // on_session_end: "exit"
+	Source string `json:"source,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
-// BuildPayload constructs the standardized payload from HookEnv.
 func BuildPayload(env HookEnv) HookPayload {
 	p := HookPayload{
 		Event:     env.Event,
@@ -109,8 +101,7 @@ func BuildPayload(env HookEnv) HookPayload {
 		}
 
 	case EventPreCompact:
-		// The outcome is unknown at fire time — only the trigger and the
-		// pre-compaction pressure are meaningful. Reclaimed stays 0.
+
 		p.Compaction = &PayloadCompaction{
 			TokenBefore: env.TokenBefore,
 			Trigger:     env.CompactTrigger,
@@ -126,20 +117,15 @@ func BuildPayload(env HookEnv) HookPayload {
 	return p
 }
 
-// JSON serializes the payload to JSON bytes.
 func (p HookPayload) JSON() []byte {
 	b, err := json.Marshal(p)
 	if err == nil {
 		return b
 	}
-	// #1542: the swallowed error returned nil, and ALL THREE hook channels
-	// (stdin, GGCODE_HOOK_PAYLOAD env, HTTP body) went empty while HMAC
-	// signed the empty string - silently. The usual culprit is Tool.Input
-	// holding non-strict JSON. Degrade by dropping Tool.Input and
-	// re-marshaling so hooks at least receive the well-formed remainder.
+
 	sans := p
 	if sans.Tool != nil {
-		t := *sans.Tool // clone: Tool is a shared pointer
+		t := *sans.Tool
 		t.Input = nil
 		sans.Tool = &t
 	}

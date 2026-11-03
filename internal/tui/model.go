@@ -50,28 +50,22 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// logoMsg is sent on startup to display the ASCII art logo.
 type logoMsg struct {
 	Vendor   string
 	Endpoint string
 	Model    string
 }
 
-// ApprovalMsg is sent to TUI when agent requests permission.
 type ApprovalMsg struct {
 	ToolName string
 	Input    string
 	Response chan permission.Decision
 }
 
-// approvalResponseMsg is the user's response to an approval request.
 type approvalResponseMsg struct {
 	decision permission.Decision
 }
 
-// inputBellMsg is dispatched after a delay when an approval or input request
-// is pending. It fires a terminal bell / desktop notification so users who
-// have switched windows know the agent is blocked.
 type inputBellMsg struct {
 	summary string
 }
@@ -80,41 +74,36 @@ type policyModeGetter interface {
 	Mode() permission.PermissionMode
 }
 
-// startupInputGateWindow suppresses terminal noise (CSI/OSC responses) that
-// arrive shortly after program start. During this window, only single
-// printable characters with no modifiers are passed to textinput; everything
-// else (multi-char text, modified keys) is dropped as likely terminal garbage.
 const startupInputGateWindow = 500 * time.Millisecond
 
-// Model is the main Bubble Tea model for the REPL.
 type Model struct {
 	input                   textarea.Model
-	chatList                *chat.List // virtual-scrolling conversation list
+	chatList                *chat.List
 	chatStyles              chat.Styles
 	cronScheduler           *cron.Scheduler
-	taskMgr                 *task.Manager    // session task board; snapshotted into session meta, restored on resume
-	resumeNote              *resumeNoteStore // reconciliation note for resumed sessions; read from the agent goroutine via the prompt layer
-	lastQueuedChatID        string           // chat item ID of last visible queued msg (for de-queue removal)
-	queuedChatIDs           []string         // chat item IDs of all queued-msg bubbles (for restorePendingInput cleanup)
-	statusline              *statuslineState // external statusline script cache (sa-160); pointer: Model copied by value
+	taskMgr                 *task.Manager
+	resumeNote              *resumeNoteStore
+	lastQueuedChatID        string
+	queuedChatIDs           []string
+	statusline              *statuslineState
 	shellMode               bool
-	shellRunning            bool // true while a $ shell command is executing (independent of agent loading)
-	shellOwnedLoading       bool // true when shell set m.loading (agent wasn't running)
-	chatMode                bool // LAN Chat quick-send mode (# prefix)
+	shellRunning            bool
+	shellOwnedLoading       bool
+	chatMode                bool
 	lanChatLastSenderNick   string
 	lanChatLastSenderRole   string
 	lanChatLastSenderNodeID string
 	loading                 bool
-	agentBusy               *atomic.Bool // shared with REPL for /api/status
-	loopStart               time.Time    // when current agent loop started (user sent message)
-	streamChars             int          // characters streamed in current LLM turn
-	streamTextStart         time.Time    // when first text chunk arrived in current turn
+	agentBusy               *atomic.Bool
+	loopStart               time.Time
+	streamChars             int
+	streamTextStart         time.Time
 	quitting                bool
 	restartRequested        bool
 	restartDebug            bool
-	pendingRestart          bool                   // armed agent-requested restart, fires at turn end (#347)
-	lastTurnActivityAt      time.Time              // last observed turn activity for restart stall detection (#362)
-	updatePrepared          *update.PreparedUpdate // set by /update before restart
+	pendingRestart          bool
+	lastTurnActivityAt      time.Time
+	updatePrepared          *update.PreparedUpdate
 	tmuxExecRequested       bool
 	tmuxExecSession         string
 	tmuxExecSetupLayout     string
@@ -125,40 +114,38 @@ type Model struct {
 	agent                   *agent.Agent
 	program                 *tea.Program
 	cancelFunc              func()
-	shellCancelFunc         func() // #910: shell-run cancel, kept separate from the agent's cancelFunc
-	pendingResumeID         string // #1755/#1887: latest /resume request; kept (never cleared) so stale completions drop under both completion orders
-	knightRunning           int    // #1890: scheduled knight tasks in flight (own agent, never touch loading/cancelFunc); counts via knightTaskEventMsg start/report
-	lspInstallInFlight      bool   // #1653: LSP install shell command submitted; drop probe cache when it completes
+	shellCancelFunc         func()
+	pendingResumeID         string
+	knightRunning           int
+	lspInstallInFlight      bool
 	policy                  permission.PermissionPolicy
 	spinner                 *ToolSpinner
 	history                 []string
 	historyIdx              int
 	pendingApproval         *ApprovalMsg
-	approvalNotifiedIM      bool // true when approval was pushed to IM
-	inputBellFired          bool // true when delayed input bell already fired
+	approvalNotifiedIM      bool
+	inputBellFired          bool
 	session                 *session.Session
 	sessionStore            session.Store
-	// tuiSend injects a tea.Msg into the Update loop from any goroutine
-	// (#2844). Wired by the REPL once the program is created; nil before
-	// program start (pre-loop phase is single-threaded by construction).
+
 	tuiSend              func(tea.Msg)
-	costCache            *sessionCostCache // shared pointer — survives Model copies
+	costCache            *sessionCostCache
 	imManager            *im.Manager
 	streamManager        *stream.Manager
 	streamPanel          *streamPanelState
 	knightPanel          *knightPanelState
-	streamViewState      *streamViewStateData // shared pointer — survives Model copies
+	streamViewState      *streamViewStateData
 	imRuntimeState       *imRuntimeState
 	imEmitter            *im.IMEmitter
 	instanceDetect       *im.InstanceDetect
 	mcpServers           []MCPInfo
 	a2aHandler           *a2a.TaskHandler
-	a2aEventBuf          []a2a.TaskEventMessage // cached recent events for display
-	a2aEventState        *a2aEventBufferState   // built at NewModel; ensureA2AEventState nil-check is a legacy fallback only
+	a2aEventBuf          []a2a.TaskEventMessage
+	a2aEventState        *a2aEventBufferState
 	config               *config.Config
 	language             Language
 	startupVendor        string
-	cachedPanelHeight    int // set in View() for renderContextBox
+	cachedPanelHeight    int
 	startupEndpoint      string
 	startupModel         string
 	activeVendor         string
@@ -173,24 +160,19 @@ type Model struct {
 	autoMemFiles         []string
 	pluginMgr            *plugin.Manager
 	subAgentMgr          *subagent.Manager
-	jobManager           *toolpkg.CommandJobManager // r71: reaped by shutdownAll
+	jobManager           *toolpkg.CommandJobManager
 	subAgentFollow       subAgentFollowState
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 	metricCollectorFlush func()
 	knight               *knight.Knight
-	// #1379: IM-runtime ensure guard. Pointer-held: Model is passed by
-	// value all over the TUI (go vet copylocks forbids a bare mutex).
+
 	imEnsure *imEnsureGuard
-	// #1364: knight adhoc tasks (run/propose) previously launched on
-	// context.Background - uncancellable and invisible to shutdownAll, so
-	// they kept burning LLM calls after the user exited. Pointer-held set:
-	// Model is passed by value all over the TUI, so it must not gain a
-	// sync.Mutex field (go vet copylocks fires on every one of them).
+
 	knightTasks          *knightCancelSet
 	mcpManager           mcpManager
 	mode                 permission.PermissionMode
-	configSaveScope      string // "global" or "instance" — where config panel saves go
+	configSaveScope      string
 	pendingDiffConfirm   *DiffConfirmMsg
 	pendingQuestionnaire *questionnaireState
 	modelPanel           *modelPanelState
@@ -203,9 +185,7 @@ type Model struct {
 	slackPanel           *slackPanelState
 	dingtalkPanel        *dingtalkPanelState
 	wechatPanel          *wechatPanelState
-	// lastWechatAdapterName bridges the adapter name computed in
-	// configMutationMsg.apply (name dedup must READ the adapters map, so
-	// it runs on the Update loop) to next()'s start chain (#1367).
+
 	lastWechatAdapterName string
 	wecomPanel            *wecomPanelState
 	mattermostPanel       *mattermostPanelState
@@ -220,11 +200,11 @@ type Model struct {
 	pendingDeviceCodes    []deviceCodeInfo
 	skillsPanel           *skillsPanelState
 	statsPanel            *statsPanelState
-	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
-	usageService          *usage.Service   // lazy; shared by panel + sidebar
-	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
-	usageProbeDirty       bool             // setActiveRuntimeSelection set this; Update consumes it (Send is unsafe before p.Run, #FREEZE 2026-09-19)
-	usageSidebarStatus    string           // human-readable WHY the sidebar has no usage (rendered when sidebarUsage==nil)
+	usagePanel            *usagePanelState
+	usageService          *usage.Service
+	sidebarUsage          *usage.UsageInfo
+	usageProbeDirty       bool
+	usageSidebarStatus    string
 	hooksPanel            *hooksPanelState
 	inspectorPanel        *inspectorPanelState
 	swarmMgr              *swarm.Manager
@@ -235,16 +215,14 @@ type Model struct {
 	lanChatHub             *lanchat.Hub
 	lanChatNotice          string
 	lanChatUnread          int
-	lanChatPendingComplete string // message ID to send "completed" receipt when agent finishes
+	lanChatPendingComplete string
 	qrOverlay              *qrOverlayState
 	tunnelStarting         bool
 	tunnelGeneration       uint64
 
-	// Approval selection list
 	approvalOptions []approvalOption
 	approvalCursor  int
 
-	// Diff confirm selection list
 	diffOptions            []approvalOption
 	diffCursor             int
 	pendingImages          []imageAttachedMsg
@@ -252,93 +230,74 @@ type Model struct {
 	langCursor             int
 	languagePromptRequired bool
 
-	// Viewport for scrollable output
 	viewport ViewportModel
 
 	streamBuffer        *bytes.Buffer
 	shellBuffer         *bytes.Buffer
-	shellOutputID       string // ID of the system message for shell command output
+	shellOutputID       string
 	shellOutputIDs      map[string]struct{}
-	saSysItemIDs        map[string]string // sub-agent system message item ID per agent (for retry grouping)
+	saSysItemIDs        map[string]string
 	streamPrefixWritten bool
-	reasoningActive     bool // true while reasoning block is expanded in current LLM turn
+	reasoningActive     bool
 
-	// router detects a code-change task, the pending result is saved here.
-
-	// Status bar state
-	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
-	statusToolName  string // current executing tool name
-	statusToolArg   string // current tool argument summary (truncated)
-	statusToolCount int    // tool calls executed this iteration
+	statusActivity  string
+	statusToolName  string
+	statusToolArg   string
+	statusToolCount int
 	tmuxClient      *tmux.Client
 	tmuxManager     *tmux.Manager
 	tmuxEnv         *tmux.Environment
 	tmuxMenuOpen    bool
 	todoSnapshot    map[string]todoStateItem
-	todoOrder       []string // preserves original insertion order from todo_write
+	todoOrder       []string
 	activeTodo      *todoStateItem
 	activeMCPTools  map[string]ToolStatusMsg
 
-	// Slash command autocomplete
 	autoCompleteItems   []string
 	autoCompleteIndex   int
 	autoCompleteActive  bool
-	autoCompleteKind    string    // "slash" or "mention"
-	autoCompleteWorkDir string    // working directory for mention completion
-	inputHint           string    // placeholder hint shown after cursor (e.g. "<subcommand>")
-	hintsShownAt        time.Time // TUI creation time; static composer hints auto-hide 5min after this
+	autoCompleteKind    string
+	autoCompleteWorkDir string
+	inputHint           string
+	hintsShownAt        time.Time
 	startedAt           time.Time
-	inputDrainUntil     time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
-	inputReady          bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
-	initPromptActive    bool      // show "create GGCODE.md?" panel at startup
+	inputDrainUntil     time.Time
+	inputReady          bool
+	initPromptActive    bool
 	lastResizeAt        time.Time
 	sidebarVisible      bool
 
 	exitConfirmPending   bool
 	cancelConfirmPending bool
-	lastEscPress         time.Time          // for Esc+Esc double-press rewind detection
-	historySearch        historySearchState // Alt+R reverse input history search (Claude Code v2.0-style)
-	compactMode          bool               // Iteration 1: compact mode toggle
+	lastEscPress         time.Time
+	historySearch        historySearchState
+	compactMode          bool
 	pending              *pendingQueue
 	sessionMu            *sync.Mutex
-	// persistedMsgCount tracks how many messages from ses.Messages have been
-	// written to the JSONL file via AppendMessageToDisk(). Used by
-	// persistFullSessionMessages() to only append NEW messages.
-	// ⚠️ Must be updated whenever messages are appended to disk outside of
-	// persistFullSessionMessages() (e.g. submitMessage).
+
 	persistedMsgCount    int
 	projectMemoryLoading bool
 	runCanceled          bool
 	runFailed            bool
-	runStartTime         time.Time // when the current agent run started (for bell timing)
-	subAgentsCanceling   bool      // true while async CancelAll() is in progress after user cancel
-	lastUserSubmission   string    // last non-slash user prompt, for /retry
-	crashResumeTask      string    // task prompt captured from a crashed run, for /continue-task (sa-117)
-	// Blind-spot (unrecognized error) auto-retry: counters survive Model
-	// copies because handler methods run on the value receiver's parent.
-	blindSpotRetries int // attempts used for the current submission
+	runStartTime         time.Time
+	subAgentsCanceling   bool
+	lastUserSubmission   string
+	crashResumeTask      string
+
+	blindSpotRetries int
 
 	activeAgentRunID      int
 	activeShellRunID      int
 	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd
-	// sessionLockSwitch is called when /clear or /sessions switches sessions.
-	// The REPL registers this callback to release the old session lock and
-	// acquire a new one, preventing lock leakage and enabling concurrent
-	// instance auto-load to work correctly.
+
 	sessionLockSwitch func(newSessionID string)
-	// sessionCronSwitch is called when /clear or /sessions switches sessions.
-	// The REPL registers this callback to rebind the cron scheduler to the
-	// new session's store path, so cron jobs persist to the correct session.
+
 	sessionCronSwitch func(newSessionID string)
-	// sessionUpdateCallback is called whenever SetSession changes the active
-	// session. The REPL registers this to update its thread-safe currentSession
-	// pointer so persistHandler/checkpointHandler write to the correct JSONL file.
+
 	sessionUpdateCallback func(ses *session.Session)
-	// sessionCreatedCallback is called once when the first real session ID is set
-	// (i.e., not empty). Used to rewrite port file with the actual session ID
-	// after startup when it was initially written with a placeholder.
+
 	sessionCreatedCallback func(sessionID string)
-	remoteInboundAdapter   string // adapter name that sent the current remote inbound message (for per-channel echo suppression)
+	remoteInboundAdapter   string
 	clipboardLoader        func() (imageAttachedMsg, error)
 	clipboardWriter        func(string) error
 	urlOpener              func(string) error
@@ -346,10 +305,9 @@ type Model struct {
 	updateSvc              *update.Service
 	updateInfo             update.CheckResult
 	updateError            string
-	systemPromptRebuilder  func() string // rebuilds and returns the full system prompt
+	systemPromptRebuilder  func() string
 
-	// Mobile tunnel
-	tunnelHost                *agentruntime.TunnelHost // unified tunnel management
+	tunnelHost                *agentruntime.TunnelHost
 	tunnelSession             *tunnel.Session
 	tunnelBroker              *tunnel.Broker
 	tunnelMainStream          *tunnelMainStreamState
@@ -359,38 +317,25 @@ type Model struct {
 	tunnelUserMessageOverride *tunnel.MessageData
 	suppressNextTunnelSystem  string
 	tunnelClientNoticeShown   bool
-	// pendingTunnelConnected (#1825 case 1): a client connected while
-	// StartShare was still running - replay the connected handling once
-	// tunnelStartMsg lands.
-	pendingTunnelConnected bool
-	tunnelSpawned          map[string]bool // tracks which subagents have been announced to mobile
 
-	// External pane manager for sub-agent/teammate output
+	pendingTunnelConnected bool
+	tunnelSpawned          map[string]bool
+
 	extPaneMgr *extpane.Manager
 
-	// Command pane manager for real-time command output mirroring (tmux only)
 	cmdPaneMgr *cmdpane.Manager
 
-	// Terminal pet (animated ASCII art at the bottom of the composer)
 	petEnabled  bool
 	pet         *petState
-	recoveryMsg string // crash recovery message from previous interrupted run
+	recoveryMsg string
 }
 
-// pendingQueue holds the queue of user messages submitted while the agent
-// loop is running.  Stored behind a pointer so that Bubble Tea's value-copy
-// semantics for Model don't split the queue into independent copies — the
-// agent goroutine's closure and the TUI goroutine's Update both reach the
-// same underlying slice through the pointer.
 type pendingSubmission struct {
 	Text                  string
 	Hidden                bool
 	TunnelMessageOverride *tunnel.MessageData
 	Images                []imageAttachedMsg
-	// RemoteOrigin (#3466): text injected by a remote channel (lanchat DM,
-	// IM inbound, tunnel, webchat). Drain arms the refusal-ledger inhibit
-	// for the run this entry feeds, so remote text queued while the agent
-	// is busy cannot bypass the gate the direct paths honor.
+
 	RemoteOrigin bool
 }
 
@@ -414,9 +359,6 @@ type a2aEventBufferState struct {
 	events []a2a.TaskEventMessage
 }
 
-// tunnelMainStreamState keeps the logical mobile/share assistant stream identity
-// behind a pointer so Bubble Tea model copies and background stream callbacks
-// stay synchronized on the same msg id lifecycle.
 type tunnelMainStreamState struct {
 	mu            sync.Mutex
 	msgID         string
@@ -430,8 +372,6 @@ type tunnelShareBootstrapState struct {
 	pending    []tunnel.GatewayMessage
 }
 
-// MCPInfo holds display info about a connected MCP server.
-// WebUIEventBroadcaster broadcasts agent events to webui subscribers.
 type WebUIEventBroadcaster interface {
 	BroadcastEvent(event provider.StreamEvent)
 }
@@ -477,7 +417,6 @@ type styles struct {
 	markdown       lipgloss.Style
 }
 
-// DiffConfirmMsg is sent to TUI when agent wants user to confirm a file edit diff.
 type DiffConfirmMsg struct {
 	FilePath string
 	DiffText string
@@ -489,7 +428,6 @@ type AskUserMsg struct {
 	Response chan toolpkg.AskUserResponse
 }
 
-// approvalOption represents a selectable option in the approval list.
 type approvalOption struct {
 	label    string
 	shortcut string
@@ -502,8 +440,6 @@ type languageOption struct {
 	lang     Language
 }
 
-// defaultApprovalOptions returns the standard approval options.
-// streamMsg wraps a string from the agent goroutine.
 func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ta := textarea.New()
 	ta.Prompt = "❯ "
@@ -512,15 +448,13 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ta.SetWidth(74)
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
-	// DynamicHeight lets the textarea auto-grow/shrink based on content,
-	// accounting for soft word-wrapping. MinHeight/MaxHeight bound the range.
+
 	ta.DynamicHeight = true
 	ta.MinHeight = 1
 	ta.MaxHeight = 10
-	// Single-line mode: Enter submits, Shift+Enter/Ctrl+J/Alt+Enter inserts newline.
-	// Show min 1 line, expand up to 10 lines for multiline input.
+
 	taStyles := textarea.DefaultStyles(true)
-	// Clear all background colors — composer sits inside its own styled box.
+
 	taStyles.Focused.Base = lipgloss.NewStyle()
 	taStyles.Focused.CursorLine = lipgloss.NewStyle()
 	taStyles.Focused.EndOfBuffer = lipgloss.NewStyle()
@@ -575,8 +509,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	}
 
 	m := Model{
-		imEnsure:               &imEnsureGuard{},   // #1737 case 1: pre-built - lazy init raced across concurrent Cmd goroutines (duplicate starters, the exact registrations #1379-D killed)
-		knightTasks:            &knightCancelSet{}, // #2616: pre-built - the lazy init in registerKnightTask wrote the Update-local Model copy (value receiver), so the authoritative model's field stayed nil and shutdownAll never cancelled any knight task
+		imEnsure:               &imEnsureGuard{},
+		knightTasks:            &knightCancelSet{},
 		input:                  ta,
 		chatList:               chat.NewList(80, 20),
 		chatStyles:             chat.DefaultStyles(),
@@ -588,8 +522,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		history:                make([]string, 0, 100),
 		viewport:               NewViewportModel(80, 20),
 		mode:                   policyMode(policy),
-		startedAt:              time.Time{}, // set on first WindowSizeMsg
-		hintsShownAt:           time.Now(),  // composer onboarding hints auto-hide 5min after startup
+		startedAt:              time.Time{},
+		hintsShownAt:           time.Now(),
 		sidebarVisible:         false,
 		activeMCPTools:         make(map[string]ToolStatusMsg),
 		clipboardLoader:        loadClipboardImage,
@@ -620,8 +554,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	return m
 }
 
-// setLoading updates both the model's loading field and the shared atomic
-// used by /api/status for external process visibility.
 func (m *Model) setLoading(val bool) {
 	m.loading = val
 	if val {
@@ -681,9 +613,7 @@ func (m *Model) storeIMInstanceDetect(detect *im.InstanceDetect) {
 }
 
 func (m *Model) ensureA2AEventState() *a2aEventBufferState {
-	// #2277: lazy nil-check-and-assign from a callback goroutine is racy
-	// (two first-entry callbacks built forked states). Real Models get
-	// their state at NewModel; this fallback only serves legacy paths.
+
 	if m.a2aEventState == nil {
 		events := append([]a2a.TaskEventMessage(nil), m.a2aEventBuf...)
 		m.a2aEventState = &a2aEventBufferState{events: events}
@@ -709,12 +639,7 @@ func (m *Model) appendA2AEvent(msg a2a.TaskEventMessage) {
 		state.events = state.events[len(state.events)-20:]
 	}
 	state.mu.Unlock()
-	// #2277: a mirror write `m.a2aEventBuf = events` used to live here -
-	// a racy dead store. The a2a event callback (one goroutine per task
-	// event) wrote the captured startup-snapshot Model's bare field
-	// outside the lock; concurrent callbacks raced on it (production
-	// -race guaranteed). View reads the live model's field, rebuilt
-	// under lock by syncA2AEventCache from the authoritative state.events.
+
 }
 
 func (m *Model) syncAsyncStateCaches() {
@@ -730,24 +655,18 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 }
 
 func (m Model) Init() tea.Cmd {
-	// Clean up stale temp images from previous sessions (best-effort).
+
 	go safego.Run("tui.cleanupTempImages", cleanupOldTempImages)
-	m.oscIdle() // OSC 7501: at rest, waiting for the first instruction
+	m.oscIdle()
 
 	cmds := []tea.Cmd{
 		func() tea.Msg { return textarea.Blink() },
 		func() tea.Msg { return tea.RequestWindowSize() },
 		func() tea.Msg { return gitBranchTickMsg{} },
-		// Usage sidebar first probe (runs inside p.Run - the ONLY safe
-		// place for the chain to start; explain-side checks gate it).
+
 		func() tea.Msg { return usageSidebarRefreshMsg{} },
 	}
-	// Check whether the project has an AGENTS.md (or GGCODE.md, CLAUDE.md,
-	// COPILOT.md). If none exist AND the directory has real project files
-	// (non-hidden), prompt the user to initialize. The HOME directory is
-	// skipped: users often run ggcode there for ad-hoc chores, not to
-	// treat their home as a "project", and its non-hidden entries
-	// (Desktop, Documents, ...) would otherwise always trigger the prompt.
+
 	cmds = append(cmds, func() tea.Msg {
 		workDir, _ := os.Getwd()
 		if isHomeDir(workDir) {
@@ -773,8 +692,6 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// dirHasProjectFiles returns true if dir contains at least one non-hidden
-// file or directory (i.e. a real project, not just .git/.DS_Store/etc).
 func dirHasProjectFiles(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -788,9 +705,6 @@ func dirHasProjectFiles(dir string) bool {
 	return false
 }
 
-// isHomeDir reports whether dir is the user's home directory. Comparison is
-// done on cleaned absolute paths; symlinked homes (e.g. /var -> /private/var
-// on macOS) are handled via EvalSymlinks when it succeeds.
 func isHomeDir(dir string) bool {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -801,7 +715,7 @@ func isHomeDir(dir string) bool {
 	if dir == home {
 		return true
 	}
-	// Resolve symlinks on both sides before comparing (best-effort).
+
 	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolvedDir
 	}
@@ -817,13 +731,6 @@ func (m *Model) SetProgram(p *tea.Program) {
 	m.refreshCachedGitBranch()
 }
 
-// startContextProbe silently probes the context window for the current
-// provider+model and applies the result to the agent's ContextManager.
-// Completely invisible to the user — no UI feedback at all.
-// Safe to call at any time; no-ops if agent/provider/config are not ready.
-// currentProbeKey rebuilds the probe key for the CURRENT provider
-// combination (#1789 case 2): a stale probe completing after a provider
-// switch must not write the old window onto the new session.
 func (m *Model) currentProbeKey() (string, bool) {
 	res, err := m.config.ResolveActiveEndpoint()
 	if err != nil || res.VendorID == "" || res.Model == "" {
@@ -858,10 +765,7 @@ func (m *Model) startContextProbe() {
 		debug.Log("probe", "startContextProbe skipped: no model selected")
 		return
 	}
-	// Skip probe if any explicit context_window override exists:
-	// 1. Session-level (restored from JSONL)
-	// 2. Per-model override (ModelLimits)
-	// 3. Endpoint-level
+
 	if m.session != nil && m.session.ContextWindow > 0 {
 		debug.Log("probe", "startContextProbe skipped: session-level context_window=%d", m.session.ContextWindow)
 		return
@@ -880,16 +784,6 @@ func (m *Model) startContextProbe() {
 	debug.Log("probe", "startContextProbe: vendor=%s model=%s baseURL=%s",
 		resolved.VendorID, resolved.Model, resolved.BaseURL)
 
-	// #2844: ProbeContextWindow invokes onResult from a background goroutine
-	// (its contract at context_probe.go demands caller-side thread safety).
-	// The old callback read m.config/m.session and wrote
-	// m.session.ContextWindow + AppendMetaToDisk lock-free against the
-	// Update loop (SetSession, vendor/model switches) - a -race hit and a
-	// TOCTOU: the key check could pass and the result then land on a NEW
-	// session. The goroutine now only forwards the result as a message via
-	// tuiSend (wired by the REPL before program start); application happens
-	// in applyProbeResult on the UI goroutine, serialized with all other
-	// state changes.
 	provider.ProbeContextWindow(context.Background(), prov,
 		resolved.VendorID, resolved.BaseURL, resolved.Model,
 		func(r provider.ProbeResult) {
@@ -897,26 +791,17 @@ func (m *Model) startContextProbe() {
 				m.tuiSend(contextProbeResultMsg{result: r})
 				return
 			}
-			// Pre-program phase (init/SetSession before program start): no
-			// concurrent Update loop exists yet, so applying inline is safe.
+
 			m.applyProbeResult(r)
 		})
 }
 
-// contextProbeResultMsg delivers a completed context-window probe from the
-// probe goroutine to the Update loop (#2844).
 type contextProbeResultMsg struct {
 	result provider.ProbeResult
 }
 
-// applyProbeResult applies a probe result to the agent and persists it to
-// the session. Must run on the UI goroutine (or before program start).
 func (m *Model) applyProbeResult(r provider.ProbeResult) {
-	// #1789 case 2: a probe started for model A completes after the
-	// user switched to model B - applying it wrote A's window onto
-	// the B session (persisted; the L809 guard then blocked a
-	// correct re-probe). Drop results whose key no longer matches
-	// the CURRENT combination.
+
 	if cur, ok := m.currentProbeKey(); ok && cur != r.Key {
 		debug.Log("probe", "dropping stale probe result key=%s (now %s)", r.Key, cur)
 		return
@@ -925,8 +810,7 @@ func (m *Model) applyProbeResult(r provider.ProbeResult) {
 		debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
 			r.ContextWindow, r.FromCache)
 		m.agent.ContextManager().SetContextWindow(r.ContextWindow)
-		// Persist probed context_window to session so it survives
-		// restarts without re-probing.
+
 		if m.session != nil && m.session.ContextWindow == 0 {
 			m.session.ContextWindow = r.ContextWindow
 			if m.sessionStore != nil {
@@ -944,9 +828,6 @@ func (m *Model) SetCronScheduler(s *cron.Scheduler) {
 	m.cronScheduler = s
 }
 
-// SetSessionCreatedCallback registers a callback that fires once when the first
-// real session ID is set (issue #1189). Used to rewrite port file with the
-// actual session ID after startup.
 func (m *Model) SetSessionCreatedCallback(cb func(sessionID string)) {
 	m.sessionCreatedCallback = cb
 }
@@ -954,39 +835,24 @@ func (m *Model) SetSessionCreatedCallback(cb func(sessionID string)) {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
-	// Notify REPL so its thread-safe currentSession pointer stays in sync.
-	// This ensures persistHandler/checkpointHandler write to the correct
-	// JSONL file even after /clear switches to a new session.
+
 	if m.sessionUpdateCallback != nil {
 		m.sessionUpdateCallback(ses)
 	}
-	// Notify port file writer (issue #1189): fire once when first real session ID
-	// is set, so we can rewrite the port file with the actual session ID instead
-	// of the placeholder used at startup.
+
 	if m.sessionCreatedCallback != nil && ses.ID != "" {
 		m.sessionCreatedCallback(ses.ID)
-		// #1487-E: do NOT nil the callback after the first fire. The old
-		// once-only semantics froze the port file at the FIRST session:
-		// --resume A then /clear to B kept the port file pointing at A for
-		// the rest of the run (WebUI/mobile attach landed on the wrong
-		// session) while the exit defer deleted A's file. The callback now
-		// fires on every session switch; onSessionCreated is idempotent
-		// for same-ID re-fires and rewrites+re-points cleanup on changes.
+
 	}
-	// Propagate session ID to agent so todos are scoped to this session.
+
 	if m.agent != nil {
 		m.agent.SetSessionID(ses.ID)
 	}
-	// All messages in ses.Messages were loaded from the JSONL file — they
-	// are already on disk. Mark them as persisted so persistFullSessionMessages
-	// only appends truly new messages going forward.
+
 	m.persistedMsgCount = len(ses.Messages)
 	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.lastMetricDigestTurn = m.usageTurnIndex
-	// Restore session's model/vendor/endpoint to in-memory config.
-	// The session is the source of truth for model selection — the config
-	// file is only used for initial onboarding when creating new sessions.
-	// Usage records and /cost now use the session's model directly.
+
 	if ses.Vendor != "" && m.config != nil {
 		m.config.Vendor = ses.Vendor
 	}
@@ -996,18 +862,17 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	if ses.Model != "" && m.config != nil {
 		m.config.Model = ses.Model
 	}
-	// Mark the runtime selection so usage/cost tracking uses the correct model.
+
 	if m.config != nil {
 		m.setActiveRuntimeSelection(m.config.Vendor, m.config.Endpoint, m.config.Model)
 	}
-	// Activate the provider using the restored model selection.
+
 	if m.config != nil {
 		if err := m.tryActivateCurrentSelection(); err != nil {
 			debug.Log("repl", "SetSession: activate provider failed: %v", err)
 		}
 	}
-	// Apply session-level ContextWindow/MaxTokens if set. These override
-	// the endpoint/per-model config, matching the PermissionMode pattern.
+
 	if m.agent != nil {
 		if ses.ContextWindow > 0 {
 			m.agent.ContextManager().SetContextWindow(ses.ContextWindow)
@@ -1016,23 +881,17 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 			m.agent.ContextManager().SetOutputReserve(ses.MaxTokens)
 		}
 	}
-	// Rebuild endpoint-level stats from UsageHistory to populate
-	// EndpointUsage (not directly stored in JSONL). This ensures
-	// sidebarSessionUsage returns correct values after session load.
+
 	if ses.EndpointUsage == nil || len(ses.EndpointUsage) == 0 {
 		ses.RebuildEndpointStats()
 	}
-	// Persist session meta to JSONL so TokenUsage, vendor, model etc.
-	// match the current in-memory state.
+
 	if m.sessionStore != nil {
 		if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
 			debug.Log("tui", "session restore meta persist: %v", err)
 		}
 	}
-	// Probe context window for the restored model/endpoint. Different sessions
-	// may use different models with different context window sizes.
-	// Skip probing when the session already has an explicit ContextWindow
-	// (restored from session-level persistence above).
+
 	if ses.ContextWindow <= 0 {
 		m.startContextProbe()
 	}
@@ -1040,20 +899,14 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
-	// Rebind LAN Chat to the new session so messages/history persist to the
-	// correct session-scoped store. Without this, /clear and /sessions switches
-	// leave lanChatHub bound to the old session ID.
+
 	if m.lanChatHub != nil && ses.ID != "" {
 		m.lanChatHub.SetSessionID(
 			filepath.Join(config.ConfigDir(), "lanchat"),
 			ses.ID,
 		)
 	}
-	// If detectAndAutoMute was skipped during SetIMManager (because session
-	// was nil at that point), call it now that we have a session. This happens
-	// in the normal startup sequence: InitRuntime → SetIMManager (session nil)
-	// → SetSession. For session switches (/clear, /branch), the instance is
-	// already registered so detectAndAutoMute returns early.
+
 	if m.instanceDetect == nil {
 		m.detectAndAutoMute()
 	}
@@ -1075,24 +928,13 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 	}
 	ses := m.session
 	store := m.sessionStore
-	// #4717: these session-field writes must hold the STORE lock too:
-	// /tag //untag //pin's appendMetaLocked serializes TokenUsage/UpdatedAt
-	// under s.mu, and two different locks (sessionMutex here vs s.mu there)
-	// provide no exclusion - the -race-detected tear. WithSessionLocked
-	// nests s.mu inside sessionMutex (the store never takes TUI locks, no
-	// cycle).
+
 	store.WithSessionLocked(m.session, func() {
 		m.session.TokenUsage = m.session.TokenUsage.Add(usage)
 		m.session.AddUsageForEndpoint(m.session.Vendor, m.session.Endpoint, usage)
 		m.session.UpdatedAt = time.Now()
 	})
-	// Use the ACTUAL model the agent is running with (activeModel),
-	// not the session-stored model which may be stale after a model
-	// switch. activeModel is set by setActiveRuntimeSelection() every
-	// time the provider is activated, so it always reflects reality.
-	// For vendor/endpoint, use the session's config keys (not display
-	// names from ResolvedEndpoint) so that RebuildEndpointStats produces
-	// keys that match AddUsageForEndpoint and UsageForEndpoint.
+
 	model := m.activeModel
 	if model == "" {
 		model = ses.Model
@@ -1106,18 +948,10 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 		Source:    source,
 		Usage:     usage,
 	}
-	// Keep in-memory UsageHistory in sync with disk. AppendUsageEntry
-	// only writes to the JSONL file; without this append, /cost reads
-	// stale data that only reflects what was loaded at startup.
-	// #3086: append via the lock-guarded method - a bare slice append
-	// here raced the endpoint-stats rebuild readers ranging the same
-	// slice from the UI render path.
+
 	ses.AddUsageHistoryEntry(entry)
 	mu.Unlock()
 
-	// Disk I/O is async — the TUI event loop must not block on fsync.
-	// The JSONLStore mutex serializes concurrent appends from multiple
-	// goroutines, so ordering is safe.
 	safego.Go("session.usage", func() {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
 			if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
@@ -1143,12 +977,9 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		return
 	}
 	ev.TurnIndex = m.usageTurnIndex
-	// #3295: fill-if-empty. Events already carrying a Model (stamped at emit
-	// time by the agent that produced them - e.g. sub-agents running a model
-	// override) keep their own attribution; overwriting them with the parent
-	// session's model corrupts per-model cost/performance reporting.
+
 	if ev.Model == "" {
-		// Use activeModel (actual running model) instead of potentially stale ses.Model
+
 		ev.Model = m.activeModel
 		ev.Vendor = m.activeVendor
 		ev.Endpoint = m.activeEndpoint
@@ -1158,14 +989,13 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		ev.Vendor = m.session.Vendor
 		ev.Endpoint = m.session.Endpoint
 	}
-	m.session.AppendMetricEvent(ev) // #3086: lock-guarded append (was a bare slice append)
+	m.session.AppendMetricEvent(ev)
 	m.session.AppendMetricForEndpoint(m.session.Vendor, m.session.Endpoint, ev)
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore
 	mu.Unlock()
 
-	// Disk I/O is async — see recordSessionUsage for rationale.
 	safego.Go("session.metric", func() {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
 			if err := jsonlStore.AppendMetric(ses, ev); err != nil {
@@ -1187,8 +1017,7 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 		}
 		workDir, _ := os.Getwd()
 		emitter = im.NewIMEmitter(mgr, lang, workDir)
-		// If any bound adapter is WeChat, default to summary mode
-		// (WeChat iLink has a 5s context_token expiry + 5 msg limit per inbound).
+
 		if im.HasWechatAdapter(mgr) {
 			emitter.SetOutputMode(im.WechatDefaultOutputMode)
 		}
@@ -1199,16 +1028,11 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 	m.detectAndAutoMute()
 }
 
-// detectAndAutoMute registers this instance and auto-mutes IM channels
-// if another instance was already running in the same directory.
 func (m *Model) detectAndAutoMute() {
 	if m.imManager == nil {
 		return
 	}
-	// Already registered via Manager? Skip.
-	// reloadBindingLocked preserves muted state across BindSession calls,
-	// so there's no need to re-apply MuteAll here. Re-muting unconditionally
-	// would override user-initiated unmute on non-primary instances.
+
 	if d := m.imManager.InstanceDetect(); d != nil && d.IsRegistered() {
 		return
 	}
@@ -1231,26 +1055,20 @@ func (m *Model) detectAndAutoMute() {
 	m.storeIMInstanceDetect(detect)
 
 	if len(others) == 0 {
-		// No other instances — start any owned bindings that weren't started
-		// during StartCurrentBindingAdapter (because sessionID was empty then).
+
 		m.startOwnedAdapters()
 		return
 	}
 
-	// RegisterInstance already auto-muted active channels; just surface the result.
 	if autoMuteCount > 0 {
-		primary := others[0] // oldest
+		primary := others[0]
 		msg := m.t("panel.im.message.auto_mute", autoMuteCount, primary.PID, primary.StartedAt.Format("15:04"))
 		m.chatWriteSystem(nextSystemID(), msg)
 	}
-	// Start owned bindings even when other instances exist — our session may
-	// own adapters that need to be active.
+
 	m.startOwnedAdapters()
 }
 
-// startOwnedAdapters starts adapters for non-muted bindings that don't have
-// an active connection yet. This is called after session-scoped binding
-// ownership is resolved in detectAndAutoMute.
 func (m *Model) startOwnedAdapters() {
 	if m.imManager == nil {
 		return
@@ -1267,10 +1085,7 @@ func (m *Model) refreshIMRuntimeHooks() {
 			m.program.Send(imRuntimeUpdatedMsg{})
 		}
 	})
-	// Set up restart callback so UnmuteBinding/EnableBinding can reconnect adapters.
-	// #2152: snapshot the IM config at registration time — the callback outlives
-	// this frame and must not read the live Adapters map concurrently with
-	// Update-loop writers.
+
 	if m.config != nil {
 		snap := m.config.IMSnapshot()
 		mgr := m.imManager
@@ -1284,11 +1099,7 @@ func (m *Model) bindIMSession() {
 	if m.imManager == nil {
 		return
 	}
-	// When session is nil (e.g. SetIMManager called before SetSession),
-	// do NOT call UnbindSession — that would destroy currentBindings
-	// including auto-mute state from RegisterInstance. The manager retains
-	// whatever binding InitRuntime set up (CWD-based). When SetSession is
-	// later called, it will BindSession with the correct session workspace.
+
 	if m.session == nil {
 		return
 	}
@@ -1335,24 +1146,12 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 	}
 }
 
-// panelEntry couples a panel's open-predicate with its close action so
-// hasActivePanel and closeActivePanel share ONE source of truth. The two
-// hand-maintained lists drifted twice before (#904 hooksPanel, #2363
-// usagePanel: a panel counted as active but had no close case, so Ctrl+C
-// fell through to exit-confirmation) - a registry entry that forgets the
-// close side is now structurally impossible.
 type panelEntry struct {
-	// name is the Model field (or "langOptions") this entry guards; the
-	// mirror-consistency test in zz_issue2422_test.go diffs this set against
-	// Model's *Panel pointer fields so a new panel cannot be forgotten.
 	name  string
 	open  func() bool
 	close func()
 }
 
-// panelRegistry lists every active-panel slot in closeActivePanel's priority
-// order (the order the original switch resolved when multiple panels were
-// somehow open at once - preserved for behavioral parity, not style).
 func (m *Model) panelRegistry() []panelEntry {
 	return []panelEntry{
 		{"modelPanel", func() bool { return m.modelPanel != nil }, m.closeModelPanel},
@@ -1378,7 +1177,7 @@ func (m *Model) panelRegistry() []panelEntry {
 		{"mcpPanel", func() bool { return m.mcpPanel != nil }, m.closeMCPPanel},
 		{"skillsPanel", func() bool { return m.skillsPanel != nil }, m.closeSkillsPanel},
 		{"statsPanel", func() bool { return m.statsPanel != nil }, m.closeStatsPanel},
-		{"usagePanel", func() bool { return m.usagePanel != nil }, func() { m.usagePanel = nil }}, // #2363: no dedicated closer
+		{"usagePanel", func() bool { return m.usagePanel != nil }, func() { m.usagePanel = nil }},
 		{"inspectorPanel", func() bool { return m.inspectorPanel != nil }, m.closeInspectorPanel},
 		{"streamPanel", func() bool { return m.streamPanel != nil }, m.closeStreamPanel},
 		{"knightPanel", func() bool { return m.knightPanel != nil }, m.closeKnightPanel},
@@ -1411,11 +1210,9 @@ func (m *Model) closeActivePanel() bool {
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
 	m.mcpServers = servers
-	m.convergeMCPSelection() // #2348: external setter can shrink under an open panel
+	m.convergeMCPSelection()
 }
 
-// SetA2AHandler connects the A2A task handler so the sidebar can show
-// active remote tasks and the event callback updates the TUI.
 func (m *Model) SetA2AHandler(h *a2a.TaskHandler) {
 	m.a2aHandler = h
 	if h != nil {
@@ -1475,8 +1272,7 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	if cfg != nil {
 		m.setLanguage(cfg.Language)
 		m.sidebarVisible = cfg.SidebarVisible()
-		// Config is now available — re-register onRestart callback if IM manager
-		// was set before config (SetIMManager is called before SetConfig).
+
 		m.refreshIMRuntimeHooks()
 		if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && m.activeVendor == "" && m.activeEndpoint == "" && m.activeModel == "" {
 			m.setActiveRuntimeSelection(resolved.VendorID, resolved.EndpointID, resolved.Model)
@@ -1485,16 +1281,14 @@ func (m *Model) SetConfig(cfg *config.Config) {
 			m.openLanguageSelector(true)
 		}
 	}
-	// Silently probe context window in background
+
 	m.startContextProbe()
 }
 
-// SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt.
 func (m *Model) SetSystemPromptRebuilder(fn func() string) {
 	m.systemPromptRebuilder = fn
 }
 
-// rebuildSystemPrompt rebuilds the system prompt and updates the agent context.
 func (m *Model) rebuildSystemPrompt() {
 	if m.systemPromptRebuilder == nil || m.agent == nil {
 		return
@@ -1506,11 +1300,7 @@ func (m *Model) rebuildSystemPrompt() {
 func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	vendor = strings.TrimSpace(vendor)
 	endpoint = strings.TrimSpace(endpoint)
-	// Defense-in-depth (2026-09-19 display-name bug): every caller is
-	// supposed to pass VendorID/EndpointID (config map keys), but a
-	// display name ("智谱 Z.AI") turning up here silently broke every
-	// downstream resolver call. Map an exact unique Name-label match back
-	// to its ID instead of caching the unresolvable label.
+
 	if m.config != nil && vendor != "" {
 		if _, ok := m.config.Vendors[vendor]; !ok && m.config.Vendors != nil {
 			matches := []string{}
@@ -1524,8 +1314,7 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 			}
 		}
 	}
-	// Same defense for the endpoint label: resolve it WITHIN the (remapped)
-	// vendor's endpoint map so activeEndpoint is always a config key.
+
 	if m.config != nil && endpoint != "" {
 		if vc, ok := m.config.Vendors[vendor]; ok {
 			if _, ok := vc.Endpoints[endpoint]; !ok && vc.Endpoints != nil {
@@ -1544,26 +1333,9 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	m.activeVendor = vendor
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)
-	// #2365-②: the sidebar usage snapshot belongs to the PREVIOUS vendor -
-	// the section renders no vendor name, so a stale balance/quota bar
-	// would present as the new vendor's numbers indefinitely (the only two
-	// writers fire on probe replies). Drop it; the sidebar returns to the
-	// no-data state until the new vendor's probe lands.
+
 	m.sidebarUsage = nil
-	// 2026-09-19 switch bug: also drop the status line and re-probe
-	// IMMEDIATELY. The old vendor's status ("probe failed ..." / a stale
-	// reason) must not linger as the new vendor's, and waiting for the
-	// 60s tick left the sidebar dark for up to a minute after every
-	// switch. usagePanel rows are keyed by probe vendor id - reset so
-	// the open panel refetches against the new endpoint too.
-	//
-	// FREEZE FIX (same day): do NOT program.Send here. SetConfig runs
-	// BEFORE p.Run (root.go), so at startup the program's ctx is nil and
-	// v2's Send select-blocks on ctx.Done() forever -> first-frame
-	// deadlock when an old session restores a non-empty activeVendor.
-	// Instead set a dirty flag; the Update loop consumes it on its next
-	// message (WindowSizeMsg always arrives at startup) and fires the
-	// probe through the normal Cmd pipeline.
+
 	if m.activeVendor != "" && m.activeEndpoint != "" {
 		m.usageSidebarStatus = ""
 		if m.usagePanel != nil {
@@ -1574,8 +1346,7 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 		}
 		m.usageProbeDirty = true
 	}
-	// Keep LAN peers informed of the current model. Switching models also
-	// clears any degraded health status (different quota pool / credential).
+
 	if m.lanChatHub != nil {
 		m.lanChatHub.SetModel(m.activeModel)
 	}
@@ -1678,16 +1449,13 @@ func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 	m.subAgentMgr = mgr
 }
 
-// SetJobManager wires the shared background-command manager so shutdownAll
-// can reap running start_command jobs (r71: they were the only background
-// work class not cancelled at exit, orphaning detach=true children).
 func (m *Model) SetJobManager(jm *toolpkg.CommandJobManager) {
 	m.jobManager = jm
 }
 
 func (m *Model) SetKnight(k *knight.Knight) {
 	m.knight = k
-	// Wire Knight task events into the TUI chat area via program.Send.
+
 	if k != nil {
 		k.SetEventSink(&knight.FuncSink{
 			OnStart: func(taskName string) {
@@ -1704,8 +1472,6 @@ func (m *Model) SetKnight(k *knight.Knight) {
 	}
 }
 
-// saveConfig saves config changes to either global or instance config
-// based on the current configSaveScope setting.
 func (m *Model) saveConfig() error {
 	if m.config == nil {
 		return fmt.Errorf("config is nil")
@@ -1713,14 +1479,12 @@ func (m *Model) saveConfig() error {
 	return m.config.SaveScoped(m.configSaveScope)
 }
 
-// toggleConfigSaveScope switches between "global" and "instance" save targets.
-// Returns a short status message for display.
 func (m *Model) toggleConfigSaveScope() string {
 	if m.configSaveScope == "instance" {
 		m.configSaveScope = "global"
 		return m.t("config.save_scope_global")
 	}
-	// Only allow instance scope if instance workspace is attached
+
 	if m.config != nil && m.config.HasInstanceConfigAttached() {
 		m.configSaveScope = "instance"
 		hasFile := false
@@ -1735,7 +1499,6 @@ func (m *Model) toggleConfigSaveScope() string {
 	return m.t("config.instance_unavailable")
 }
 
-// configSaveScopeLabel returns a display label for the current save scope.
 func (m *Model) configSaveScopeLabel() string {
 	if m.configSaveScope == "instance" {
 		return m.t("config.scope_instance")
@@ -1750,7 +1513,6 @@ func (m *Model) vendorNames() string {
 	return strings.Join(m.config.VendorNames(), ", ")
 }
 
-// imageAttachedMsg is sent when an image is successfully loaded.
 type imageAttachedMsg struct {
 	placeholder string
 	img         image.Image
@@ -1758,8 +1520,6 @@ type imageAttachedMsg struct {
 	sourcePath  string
 }
 
-// activeIMPanel returns a pointer to the message field of the currently active
-// IM channel panel (if any). Used to forward imPanelResultMsg feedback.
 func (m Model) activeIMPanel() *string {
 	switch {
 	case m.qqPanel != nil:

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- #975 issue 1: wmctrl -lx padded-column parsing ---
-
 const wmctrlLxOutput = "0x03c00007  0 hostname Navigator.firefox   Mozilla Firefox\n" +
 	"0x04a0000b -1 hostname kitty                   kitty - main.go\n" +
 	"0x05200003  0 hostname gnome-calculator.Gnome-calculator Calculator\n" +
@@ -21,8 +19,6 @@ func TestParseWmctrlOutputPaddedColumns(t *testing.T) {
 		t.Fatalf("got %d windows, want 3 (malformed lines dropped): %+v", len(windows), windows)
 	}
 
-	// Right-aligned desktop column " 0" (double space after the ID) used to
-	// shift every field: App empty, Title misaligned.
 	firefox := windows[0]
 	if firefox.ID != 0x03c00007 {
 		t.Errorf("firefox ID = %#x, want 0x03c00007", firefox.ID)
@@ -34,7 +30,6 @@ func TestParseWmctrlOutputPaddedColumns(t *testing.T) {
 		t.Errorf("firefox Title = %q, want \"Mozilla Firefox\"", firefox.Title)
 	}
 
-	// Sticky window on desktop -1.
 	kitty := windows[1]
 	if kitty.ID != 0x04a0000b {
 		t.Errorf("kitty ID = %#x, want 0x04a0000b", kitty.ID)
@@ -46,8 +41,6 @@ func TestParseWmctrlOutputPaddedColumns(t *testing.T) {
 		t.Errorf("kitty Title = %q, want \"kitty - main.go\" (class padding must not leak in)", kitty.Title)
 	}
 
-	// Class with multiple dots keeps the last segment; long class padding
-	// still yields a clean title.
 	calc := windows[2]
 	if calc.App != "Gnome-calculator" {
 		t.Errorf("calc App = %q, want \"Gnome-calculator\"", calc.App)
@@ -58,8 +51,7 @@ func TestParseWmctrlOutputPaddedColumns(t *testing.T) {
 }
 
 func TestParseWmctrlLineSingleSpaceLine(t *testing.T) {
-	// Single-space-separated lines (hand-crafted / other wmctrl versions)
-	// must still parse: Fields handles any run of spaces.
+
 	w, ok := parseWmctrlLine("0x01a00001 0 host Term.term Title with  double  spaces")
 	if !ok {
 		t.Fatal("single-space line not parsed")
@@ -68,8 +60,6 @@ func TestParseWmctrlLineSingleSpaceLine(t *testing.T) {
 		t.Errorf("App = %q, Title = %q; want term / preserved spacing", w.App, w.Title)
 	}
 }
-
-// --- #975 issue 2: wlr-randr Modes: block parsing ---
 
 const wlrrandrOutput = "eDP-1\n" +
 	"  Position: 0,0\n" +
@@ -105,7 +95,7 @@ func TestParseWlrrandrOutputModesBlock(t *testing.T) {
 	}
 
 	dp := displays[1]
-	// 2560x1440 is (current); (preferred) 3840x2160 must NOT override it.
+
 	if dp.Width != 2560 || dp.Height != 1440 {
 		t.Errorf("DP-1 = %dx%d, want 2560x1440 ((current) beats (preferred))", dp.Width, dp.Height)
 	}
@@ -114,7 +104,7 @@ func TestParseWlrrandrOutputModesBlock(t *testing.T) {
 	}
 
 	hdmi := displays[2]
-	// No (current) anywhere: fall back to (preferred).
+
 	if hdmi.Width != 1280 || hdmi.Height != 720 {
 		t.Errorf("HDMI-A-1 = %dx%d, want 1280x720 (preferred fallback)", hdmi.Width, hdmi.Height)
 	}
@@ -126,7 +116,7 @@ func TestParseWlrrandrModeLineRejectsNonModes(t *testing.T) {
 		"  Physical size: 340x190 mm",
 		"Position: 1920,0",
 		"Transform: normal",
-		"1920x1080 px", // ok actually - covered below
+		"1920x1080 px",
 	} {
 		if line == "1920x1080 px" {
 			continue
@@ -140,16 +130,11 @@ func TestParseWlrrandrModeLineRejectsNonModes(t *testing.T) {
 	}
 }
 
-// --- #975 issue 3: gnome-screenshot unsupported options ---
-
 func TestGnomeScreenshotUnsupportedOpts(t *testing.T) {
 	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{}); err != nil {
 		t.Errorf("plain full-screen capture must be allowed, got %v", err)
 	}
-	// #3013: Display is 1-based (0=primary default); an EXPLICIT Display=1
-	// is a first-screen request gnome cannot honor - it must fail explicitly
-	// so the candidate loop falls back to region-capable tools instead of
-	// silently returning the all-outputs composite.
+
 	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 1}); err == nil {
 		t.Error("explicit Display=1 must fail explicitly (cannot select output by index)")
 	} else if !strings.Contains(err.Error(), "gnome-screenshot") {
@@ -169,12 +154,8 @@ func TestGnomeScreenshotUnsupportedOpts(t *testing.T) {
 	}
 }
 
-// --- #975附带: MkdirTemp error propagation ---
-
 func TestCreateTempScreenshotPathMkdirTempError(t *testing.T) {
-	// Point TMPDIR at a path that cannot host temp dirs. On darwin/linux,
-	// os.MkdirTemp("/dev/null/sandbox", ...) fails because /dev/null is not
-	// a directory. On windows use an invalid drive path instead.
+
 	badDir := "/dev/null/ggcode-test"
 	if filepath.Separator == '\\' {
 		badDir = `Z:\definitely\not\a\dir`
@@ -189,12 +170,11 @@ func TestCreateTempScreenshotPathMkdirTempError(t *testing.T) {
 	if rawPath != "" {
 		t.Errorf("rawPath = %q on error, want \"\" (old code returned a path under an empty dir)", rawPath)
 	}
-	cleanup() // must be safe to call (no-op)
+	cleanup()
 }
 
 func TestCreateTempScreenshotPathOutputPathShortCircuit(t *testing.T) {
-	// OutputPath must bypass MkdirTemp entirely: even with a broken TMPDIR
-	// the provided path is used and cleanup is a no-op.
+
 	badDir := "/dev/null/ggcode-test"
 	if filepath.Separator == '\\' {
 		badDir = `Z:\definitely\not\a\dir`
@@ -221,7 +201,7 @@ func TestCreateTempScreenshotPathSuccess(t *testing.T) {
 		t.Errorf("jpeg path = %q, want .jpg suffix", rawPath)
 	}
 	if _, statErr := os.Stat(rawPath); statErr != nil {
-		// Only the dir must exist; the screenshot tool creates the file.
+
 		if _, dirErr := os.Stat(filepath.Dir(rawPath)); dirErr != nil {
 			t.Errorf("temp dir missing: %v", dirErr)
 		}
@@ -232,10 +212,6 @@ func TestCreateTempScreenshotPathSuccess(t *testing.T) {
 	}
 }
 
-// TestParseWlrrandrOutputScaleToLogical pins #1258: wlr-randr Position is
-// logical while Modes "WxH px" is physical; the physical size must be divided
-// by the parsed Scale so grim -g receives a logical box. Two 3840x2160
-// scale=2 outputs: each screen is 1920x1080 logical, second at 1920,0.
 func TestParseWlrrandrOutputScaleToLogical(t *testing.T) {
 	out := "" +
 		"HEADLESS-1 (focused)\n" +
@@ -264,8 +240,6 @@ func TestParseWlrrandrOutputScaleToLogical(t *testing.T) {
 	}
 }
 
-// TestParseWlrrandrOutputNoScaleUnchanged: scale=1 output keeps physical ==
-// logical sizes byte-for-byte (no accidental division).
 func TestParseWlrrandrOutputNoScaleUnchanged(t *testing.T) {
 	out := "" +
 		"HEADLESS-1\n" +
@@ -278,8 +252,6 @@ func TestParseWlrrandrOutputNoScaleUnchanged(t *testing.T) {
 	}
 }
 
-// TestParseWlrrandrOutputFractionalScale: 2560x1600 at scale 1.25 → 2048x1280
-// logical (rounding to nearest).
 func TestParseWlrrandrOutputFractionalScale(t *testing.T) {
 	out := "" +
 		"HEADLESS-1\n" +

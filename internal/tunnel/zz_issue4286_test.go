@@ -6,12 +6,8 @@ import (
 	"testing"
 )
 
-// TestIssue4286TextPayloadFallback: tools without a dedicated presentation
-// rule (read_file / grep / run_command / MCP tools) must still carry a text
-// payload in the tunnel event, otherwise mobile clients have no expandable
-// full text (#4286).
 func TestIssue4286TextPayloadFallback(t *testing.T) {
-	long := strings.Repeat("abcdefgh", 40) // 320 chars
+	long := strings.Repeat("abcdefgh", 40)
 	var summary, payload, mode string
 	applyTextPayloadFallback(&summary, &payload, &mode, long)
 
@@ -21,7 +17,7 @@ func TestIssue4286TextPayloadFallback(t *testing.T) {
 	if mode != "text" {
 		t.Errorf("payloadMode must be text, got %q", mode)
 	}
-	if len([]rune(summary)) > 124 { // 120 + "..."
+	if len([]rune(summary)) > 124 {
 		t.Errorf("summary must be compacted to ~120 chars, got %d", len([]rune(summary)))
 	}
 	if !strings.HasSuffix(summary, "...") {
@@ -29,9 +25,6 @@ func TestIssue4286TextPayloadFallback(t *testing.T) {
 	}
 }
 
-// TestIssue4286PushToolResultFallbackFields: PushToolResult on a tool outside
-// the presentation rules must fill Summary/Payload/PayloadMode (previously all
-// empty when DescribeToolResult returned ok=false).
 func TestIssue4286PushToolResultFallbackFields(t *testing.T) {
 	b, d := newBrokerForTest()
 	long := strings.Repeat("x", 200)
@@ -67,7 +60,6 @@ func TestIssue4286PushToolResultFallbackFields(t *testing.T) {
 	}
 }
 
-// TestIssue4286ShortResultNoEllipsis: short results keep a verbatim summary.
 func TestIssue4286ShortResultNoEllipsis(t *testing.T) {
 	got := tunnelCompactSingleLine("short\n  result")
 	if got != "short result" {

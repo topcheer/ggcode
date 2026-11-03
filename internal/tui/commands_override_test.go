@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// r16: the manual override channel resolves a user query to exactly one
-// recorded tag. Suppression is a state change, so unlike the drill-down
-// (which tolerates picking the last of multiple substring hits) an
-// ambiguous match must refuse and report candidates.
 func TestResolveUniqueGuidanceTag(t *testing.T) {
 	m := newTestModel()
 	dir := t.TempDir()
@@ -26,31 +22,27 @@ func TestResolveUniqueGuidanceTag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Exact (case-insensitive) match.
 	if tag, ok := m.resolveUniqueGuidanceTag(dir, "attention fragmentation"); !ok || tag != "Attention Fragmentation" {
 		t.Errorf("exact match failed: %q %v", tag, ok)
 	}
-	// Unique substring match resolves.
+
 	if tag, ok := m.resolveUniqueGuidanceTag(dir, "verify"); !ok || tag != "ACT NOW: verify" {
 		t.Errorf("unique substring failed: %q %v", tag, ok)
 	}
-	// "##" prefix is stripped like the drill-down does.
+
 	if tag, ok := m.resolveUniqueGuidanceTag(dir, "## ACT NOW: verify"); !ok || tag != "ACT NOW: verify" {
 		t.Errorf("prefix strip failed: %q %v", tag, ok)
 	}
-	// Ambiguous substring: ("", true) means refusal - candidates were
-	// already emitted via chatWriteSystem.
+
 	if tag, ok := m.resolveUniqueGuidanceTag(dir, "Attention"); !ok || tag != "" {
 		t.Errorf("ambiguity must refuse with (\"\", true), got (%q, %v)", tag, ok)
 	}
-	// No match: ("", false).
+
 	if tag, ok := m.resolveUniqueGuidanceTag(dir, "nonexistent"); ok || tag != "" {
 		t.Errorf("no-match must be (\"\", false), got %q ok=%v", tag, ok)
 	}
 }
 
-// isAllDigits must classify "suppress"/"reset" as non-numeric so the verb
-// words route to the override branch, never the aggregate count branch.
 func TestOverrideVerbsAreNonNumeric(t *testing.T) {
 	for _, v := range []string{"suppress", "reset", "Suppress"} {
 		if isAllDigits(v) {
@@ -62,8 +54,6 @@ func TestOverrideVerbsAreNonNumeric(t *testing.T) {
 	}
 }
 
-// The hints file doubles as the tag registry; the miss message must list
-// what is actually recorded.
 func TestKnownGuidanceTags(t *testing.T) {
 	m := newTestModel()
 	dir := t.TempDir()

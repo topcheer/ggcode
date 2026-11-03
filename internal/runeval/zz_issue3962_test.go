@@ -2,14 +2,8 @@ package runeval
 
 import "testing"
 
-// #3962: DuplicateGroups are keyed by callKey{tool, canonical input}, so a
-// single session commonly contributes MULTIPLE groups for the same tool
-// (grep 'foo'x3, grep 'bar'x2 -> two groups). The old counter incremented
-// Sessions once per GROUP, so one session rendered as "across 3 sessions" -
-// the exact diagnostic distortion the struct doc forbids ("sessions that had
-// at least one duplicate group for it").
 func TestIssue3962_SessionsCountDistinctSessionsNotGroups(t *testing.T) {
-	// One session, three grep duplicate groups (different inputs).
+
 	a := Aggregate([]SessionReport{
 		{ID: "s1", Report: Report{ToolCalls: 7, EfficiencyScore: 80, DuplicateGroups: []DuplicateGroup{
 			{Tool: "grep", Count: 3, Repeats: 2},
@@ -32,7 +26,7 @@ func TestIssue3962_SessionsCountDistinctSessionsNotGroups(t *testing.T) {
 	if top.Repeats != 4 {
 		t.Fatalf("repeats must still sum across groups: want 4, got %d", top.Repeats)
 	}
-	// The rendered finding must not claim cross-session spread.
+
 	for _, f := range a.Findings {
 		if contains(f, "grep") && contains(f, "across 3 sessions") {
 			t.Fatalf("finding still claims phantom cross-session spread: %s", f)
@@ -40,9 +34,6 @@ func TestIssue3962_SessionsCountDistinctSessionsNotGroups(t *testing.T) {
 	}
 }
 
-// Distinct-session semantics preserved: two sessions, one group each for the
-// same tool, still count Sessions=2 (the pre-existing test's blind spot is
-// that its fixtures cannot distinguish the two counting disciplines).
 func TestIssue3962_DistinctSessionsStillCounted(t *testing.T) {
 	a := Aggregate([]SessionReport{
 		{ID: "s1", Report: Report{ToolCalls: 2, EfficiencyScore: 80, DuplicateGroups: []DuplicateGroup{
@@ -50,7 +41,7 @@ func TestIssue3962_DistinctSessionsStillCounted(t *testing.T) {
 		}}},
 		{ID: "s2", Report: Report{ToolCalls: 2, EfficiencyScore: 80, DuplicateGroups: []DuplicateGroup{
 			{Tool: "read_file", Count: 2, Repeats: 1},
-			{Tool: "read_file", Count: 2, Repeats: 1}, // same session, second group: must NOT bump to 3
+			{Tool: "read_file", Count: 2, Repeats: 1},
 		}}},
 	})
 	var top *RepeatedToolAgg

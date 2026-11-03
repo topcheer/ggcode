@@ -13,37 +13,12 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Instruction-driven per-entry forgetting (r10, sa-160).
-//
-// 2026 memory architecture surveys list "how agents forget" alongside
-// remembering as a first-class engineering challenge, but every existing
-// forgetting channel here is passive: TTL expiry, date-horizon, dedup,
-// supersession. The only user-facing controls were /memory list (see) and
-// /memory clear (nuke everything) — the user who says "forget the pnpm
-// note, it's wrong now" had no per-entry lever.
-//
-// Design follows the #779 only-GC-deletes doctrine (and the r100
-// date-horizon precedent): ForgetKey does NOT remove the file. It marks
-// the key in a sidecar (user-forgotten.json), the prompt loader filters
-// marked keys out (same pattern as the SupersededSet filter in
-// loadForPrompt), and GarbageCollect is the only thing that physically
-// removes the file. RestoreKey clears the mark — soft delete is
-// reversible, which is the selling point over /memory clear.
-
-// forgottenFileName is the sidecar storing user-forgotten keys, keyed by
-// the sanitized+disambiguated filename stem (same convention as the usage
-// sidecar, so it matches MemoryMeta.Key directly).
 const forgottenFileName = "user-forgotten.json"
 
-// userForgotten is the persisted sidecar payload.
 type userForgotten struct {
-	// Entries maps the filename stem -> time the user forgot it.
 	Entries map[string]time.Time `json:"entries"`
 }
 
-// loadForgotten reads the sidecar (best-effort; missing file = nothing
-// forgotten, corrupt file = treated as missing with a debug log, matching
-// loadConsolidationState's fail-open posture).
 func (am *AutoMemory) loadForgotten() userForgotten {
 	out := userForgotten{Entries: map[string]time.Time{}}
 	data, err := os.ReadFile(filepath.Join(am.dir, forgottenFileName))
@@ -57,8 +32,6 @@ func (am *AutoMemory) loadForgotten() userForgotten {
 	return out
 }
 
-// saveForgotten persists the sidecar atomically (temp+rename, same as
-// saveConsolidationState).
 func (am *AutoMemory) saveForgotten(f userForgotten) error {
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -71,9 +44,6 @@ func (am *AutoMemory) saveForgotten(f userForgotten) error {
 	return os.Rename(tmp, filepath.Join(am.dir, forgottenFileName))
 }
 
-// ForgottenSet returns the set of forgotten filename stems for O(1)
-// filtering. Empty map when nothing is forgotten (the common case —
-// callers gate on len > 0 like the SupersededSet filter).
 func (am *AutoMemory) ForgottenSet() map[string]bool {
 	f := am.loadForgotten()
 	out := make(map[string]bool, len(f.Entries))
@@ -83,17 +53,6 @@ func (am *AutoMemory) ForgottenSet() map[string]bool {
 	return out
 }
 
-// lockForgottenWrite serializes forget-sidecar read-modify-write cycles.
-// #4413: ForgetKey/RestoreKey (and the GC digest prune in gc.go) were the
-// package's only unlocked RMWs over this file — the startup GC goroutine
-// replaying its stale sidecar snapshot could overwrite a just-written
-// forget mark, resurrecting the entry into prompt injection. Mirror the
-// memory save paths: writeMu serializes writers within one process
-// (#1752 discipline, same as the usage sidecars) and util.FileLock
-// serializes across processes (r401 GAP-B). Fail-open with a debug log
-// on lock-infrastructure faults (auto.go precedent) — a lost race beats
-// blocking forget/restore on lock faults. Callers must NOT hold the
-// memory dir FileLock when calling this (same-flock self-deadlock).
 func (am *AutoMemory) lockForgottenWrite() func() {
 	path := filepath.Join(am.dir, forgottenFileName)
 	muAny, _ := writeMu.LoadOrStore(path, &sync.Mutex{})
@@ -110,24 +69,11 @@ func (am *AutoMemory) lockForgottenWrite() func() {
 	}
 }
 
-// ForgetKey marks a single memory entry as user-forgotten: it stops being
-// injected into prompts immediately, stays on disk (restorable) until the
-// next GarbageCollect physically digests it. The key existence check and
-// error wording mirror DeleteMemory so both surfaces feel the same.
 func (am *AutoMemory) ForgetKey(key string) error {
-	// Same resolution as DeleteMemory (#775): a non-injective key must
-	// resolve to the hash-suffixed file it was saved under.
+
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
-	// #4413: the load→mark→save cycle runs under the sidecar write lock so
-	// a concurrent GC digest prune cannot replay a stale snapshot over it.
-	// #4658 defect B: the existence check must ALSO run under that lock.
-	// With the stat outside, a file digested by a concurrent GC between the
-	// stat and the mark write left a mark pointing at nothing - and since
-	// the file is gone it never appears in a later GC's digest snapshot, so
-	// the ghost mark survives forever (ListForgotten shows it, RestoreKey
-	// "succeeds" against nothing). Under the lock the stat sees the post-
-	// digest truth: file gone → "not found", no mark written.
+
 	unlock := am.lockForgottenWrite()
 	defer unlock()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -135,7 +81,7 @@ func (am *AutoMemory) ForgetKey(key string) error {
 	}
 	f := am.loadForgotten()
 	if _, dup := f.Entries[safe]; dup {
-		return nil // idempotent: already forgotten
+		return nil
 	}
 	f.Entries[safe] = time.Now()
 	if err := am.saveForgotten(f); err != nil {
@@ -145,13 +91,9 @@ func (am *AutoMemory) ForgetKey(key string) error {
 	return nil
 }
 
-// RestoreKey clears the forget mark, returning the entry to prompt
-// injection. Errors when the key carries no mark (nothing to restore) —
-// a key that was never forgotten or has already been digested by GC.
 func (am *AutoMemory) RestoreKey(key string) error {
 	safe := disambiguateKey(key, sanitizeKey(key))
-	// #4413: same unlocked-RMW fix as ForgetKey — the mark delete must not
-	// race the GC digest prune or a concurrent forget.
+
 	unlock := am.lockForgottenWrite()
 	defer unlock()
 	f := am.loadForgotten()
@@ -162,8 +104,6 @@ func (am *AutoMemory) RestoreKey(key string) error {
 	return am.saveForgotten(f)
 }
 
-// ListForgotten returns the forgotten keys, oldest first, formatted as
-// "key (forgotten <duration> ago)" lines for direct display.
 func (am *AutoMemory) ListForgotten() []string {
 	f := am.loadForgotten()
 	type kv struct {

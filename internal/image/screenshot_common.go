@@ -16,7 +16,6 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-// ScreenshotAction specifies what the screenshot tool should do.
 type ScreenshotAction string
 
 const (
@@ -25,26 +24,23 @@ const (
 	ActionListWindows  ScreenshotAction = "list_windows"
 )
 
-// ScreenshotOptions controls screenshot capture behavior.
 type ScreenshotOptions struct {
-	Display       int               // 1-based monitor index, 0=primary
-	Window        string            // match by title/app name
-	Region        *ScreenshotRegion // rectangular area
-	Cursor        bool              // include mouse cursor
-	DelayMs       int               // delay before capture
-	Format        string            // "png" or "jpeg"
-	Quality       int               // JPEG quality 1-100
-	OutputPath    string            // save finalized image to file
-	RawOutputPath string            // save raw (unprocessed) image to file
-	MaxWidth      int               // auto-resize max width
+	Display       int
+	Window        string
+	Region        *ScreenshotRegion
+	Cursor        bool
+	DelayMs       int
+	Format        string
+	Quality       int
+	OutputPath    string
+	RawOutputPath string
+	MaxWidth      int
 }
 
-// ScreenshotRegion defines a rectangular area to capture.
 type ScreenshotRegion struct {
 	X, Y, Width, Height int
 }
 
-// DisplayInfo describes a monitor.
 type DisplayInfo struct {
 	Index     int    `json:"index"`
 	IsPrimary bool   `json:"is_primary"`
@@ -55,7 +51,6 @@ type DisplayInfo struct {
 	Name      string `json:"name,omitempty"`
 }
 
-// WindowInfo describes a capturable window.
 type WindowInfo struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`
@@ -66,28 +61,23 @@ type WindowInfo struct {
 	Height int    `json:"height"`
 }
 
-// ScreenshotResult is the output of CaptureScreen.
 type ScreenshotResult struct {
 	Image     Image
 	SavedPath string
 }
 
-// applyDelay waits for opts.DelayMs if non-zero.
 func applyDelay(delayMs int) {
 	if delayMs > 0 {
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 }
 
-// finalizeImage reads the raw screenshot file, applies format conversion
-// and resize, then returns the final Image.
 func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 	data, err := os.ReadFile(rawPath)
 	if err != nil {
 		return Image{}, fmt.Errorf("reading screenshot file: %w", err)
 	}
 
-	// Save the raw (unprocessed) screenshot if requested.
 	if opts.RawOutputPath != "" {
 		if werr := os.WriteFile(opts.RawOutputPath, data, 0644); werr != nil {
 			return Image{}, fmt.Errorf("writing raw screenshot to %s: %w", opts.RawOutputPath, werr)
@@ -103,10 +93,7 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 
 	decoded, err := decodeImageData(data)
 	if err != nil {
-		// #2998: screencapture produced bytes we cannot decode  -  the user's
-		// Format/MaxWidth/Quality options would silently no-op and the
-		// returned Image would have zero dimensions. Fail explicitly instead
-		// of silently degrading (same principle as #975).
+
 		return Image{}, fmt.Errorf("decoding screenshot bytes: %w", err)
 	}
 	img.Width = decoded.Bounds().Dx()
@@ -124,7 +111,6 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 		img.Height = target.Bounds().Dy()
 	}
 
-	// Re-encode if format conversion or resize is needed.
 	format := strings.ToLower(opts.Format)
 	if format == "" {
 		format = "png"
@@ -137,27 +123,22 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 		}
 		buf, jerr := encodeJPEGBytes(target, q)
 		if jerr != nil {
-			// #2998: on encode failure Data still holds the pre-resize
-			// bytes while Width/Height describe the resized image  -  a
-			// metadata/data mismatch. Fail instead of returning the pair.
+
 			return Image{}, fmt.Errorf("encoding jpeg screenshot: %w", jerr)
 		}
 		img.Data = buf
 		img.MIME = MIMEJPEG
 	} else if img.Width > maxW || target != decoded {
-		// Re-encode PNG after resize.
+
 		buf, perr := encodePNGBytes(target)
 		if perr != nil {
-			// #2998: same mismatch risk as the jpeg path above.
+
 			return Image{}, fmt.Errorf("encoding png screenshot: %w", perr)
 		}
 		img.Data = buf
 		img.MIME = MIMEPNG
 	}
 
-	// When output_path is set, the raw screenshot was written directly to
-	// that path. Overwrite it with the finalized (resized/converted) image
-	// so the saved file matches what is returned to the caller.
 	if opts.OutputPath != "" {
 		if werr := os.WriteFile(opts.OutputPath, img.Data, 0644); werr != nil {
 			return Image{}, fmt.Errorf("writing finalized screenshot to %s: %w", opts.OutputPath, werr)
@@ -172,9 +153,6 @@ func decodeImageData(data []byte) (image.Image, error) {
 	return img, err
 }
 
-// resizeImage resizes src so its width does not exceed maxW,
-// maintaining aspect ratio using CatmullRom interpolation for high quality.
-// This produces significantly sharper text and UI elements than nearest-neighbor.
 func resizeImage(src image.Image, maxW int) image.Image {
 	bounds := src.Bounds()
 	oldW := bounds.Dx()
@@ -187,12 +165,7 @@ func resizeImage(src image.Image, maxW int) image.Image {
 	}
 	newW := maxW
 	newH := oldH * newW / oldW
-	// #2995: extreme aspect ratios (e.g. 5000x1 down to maxW) truncate
-	// newH to 0 via integer division - an empty dst Rect makes png.Encode
-	// fail ("invalid image size"), which the screenshot path then swallows,
-	// leaving Data/Height=0 metadata inconsistent. Clamp to 1px: the
-	// caller-side newH clamp in downscale.go was dead code (only newW is
-	// passed here).
+
 	if newH < 1 {
 		newH = 1
 	}
@@ -201,10 +174,6 @@ func resizeImage(src image.Image, maxW int) image.Image {
 	return dst
 }
 
-// createTempScreenshotPath creates a temp or output file path. The error is
-// returned to the caller: a broken TMPDIR used to be swallowed, making the
-// screenshot tool write "screenshot.png" into the process CWD while cleanup
-// removed a non-existent dir and left the stray file behind (#975).
 func createTempScreenshotPath(opts ScreenshotOptions) (string, func(), error) {
 	if opts.OutputPath != "" {
 		return opts.OutputPath, func() {}, nil
@@ -220,15 +189,6 @@ func createTempScreenshotPath(opts ScreenshotOptions) (string, func(), error) {
 	return filepath.Join(tmpDir, "screenshot."+ext), func() { os.RemoveAll(tmpDir) }, nil
 }
 
-// parseWmctrlOutput parses `wmctrl -lx` output, whose five columns (window
-// ID, desktop, hostname, WM_CLASS, title) are padded with spaces: the desktop
-// column is right-aligned (" 0" vs "-1"), and the class column is padded to
-// a fixed width, so titles are preceded by runs of spaces. A single-space
-// SplitN(line, " ", 5) therefore produced an empty App (double space between
-// ID and desktop), mixed class padding into the Title, or dropped lines with
-// fewer than 5 chunks entirely. Fields-based column access fixes the columns
-// and the title is sliced from the original line so interior spacing survives
-// (#975).
 func parseWmctrlOutput(out string) []WindowInfo {
 	var windows []WindowInfo
 	for _, line := range strings.Split(out, "\n") {
@@ -249,21 +209,16 @@ func parseWmctrlLine(line string) (WindowInfo, bool) {
 	if err != nil {
 		return WindowInfo{}, false
 	}
-	// WM_CLASS column is "instance.class"; keep the class part (same
-	// semantics as before, now reading the correct column).
+
 	clsParts := strings.SplitN(fields[3], ".", 2)
 	app := clsParts[len(clsParts)-1]
-	// Titles may contain any spacing, so take them from the original line at
-	// the offset of the 5th column instead of from the field split; strip the
-	// class column's trailing padding.
+
 	title := strings.TrimRight(line[wmctrlTitleOffset(line):], " \t")
 	return WindowInfo{ID: int(id), App: app, Title: title}, true
 }
 
-// wmctrlTitleOffset returns the byte offset of the 5th column (the title) in
-// a wmctrl -lx line, skipping the run of padding spaces before it.
 func wmctrlTitleOffset(line string) int {
-	const titleColumn = 4 // 0-based index of the title column
+	const titleColumn = 4
 	idx := 0
 	for i := 0; i < titleColumn; i++ {
 		for idx < len(line) && (line[idx] == ' ' || line[idx] == '\t') {
@@ -279,18 +234,6 @@ func wmctrlTitleOffset(line string) int {
 	return idx
 }
 
-// parseWlrrandrOutput parses `wlr-randr` output. Structure: an output name
-// header line, then indented property lines, and under an indented "Modes:"
-// header a block of deeper-indented mode lines such as
-//
-//	1920x1080 px, 60.000000 Hz (preferred, current)
-//
-// The old parser looked for lines starting with "Mode:", which never matches
-// ("Modes:" has an "s"), leaving Width/Height at 0  -  so linuxDisplayBounds
-// always failed with "geometry unknown" and multi-display selection on
-// Wayland silently fell back to a full-screen capture (#975). Mode lines are
-// now recognized by their shape; the (current) mode wins, falling back to
-// (preferred), then the first listed mode.
 func parseWlrrandrOutput(out string) []DisplayInfo {
 	var displays []DisplayInfo
 	idx := 0
@@ -303,15 +246,7 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 		}
 		idx++
 		current.Index = idx
-		// #1258: wlr-randr's "Position" is the global-layout LOGICAL
-		// coordinate, but the Modes "WxH px" is PHYSICAL pixels  -  the scale
-		// factor only shows up as the ratio between them (wlr-randr does not
-		// convert). The physical W/H used to go straight into DisplayInfo
-		// next to the logical X/Y, and that mixed box was handed to `grim -g`,
-		// which expects logical coordinates: with two 3840x2160 scale=2
-		// outputs the second screen produced "1920,0,3840x2160"  -  double the
-		// logical extent, capturing the wrong area with no error. Convert
-		// physical mode size to logical by dividing by the parsed Scale.
+
 		if scale > 0 && scale != 1 {
 			current.Width = int(math.Round(float64(mode.width) / scale))
 			current.Height = int(math.Round(float64(mode.height) / scale))
@@ -323,8 +258,7 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 		displays = append(displays, current)
 	}
 	for _, rawLine := range strings.Split(out, "\n") {
-		// #764: keep the raw line -- indentation IS the structure (indented
-		// lines are sub-fields of the display above).
+
 		if strings.TrimSpace(rawLine) == "" {
 			continue
 		}
@@ -337,7 +271,7 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 		}
 		line := strings.TrimSpace(rawLine)
 		if strings.HasPrefix(line, "Position:") {
-			// #764 secondary: parse X/Y offset so multi-monitor regions are right.
+
 			for _, f := range strings.Fields(line) {
 				if strings.Contains(f, ",") {
 					parts := strings.Split(strings.TrimSuffix(f, ","), ",")
@@ -349,8 +283,7 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 			}
 			continue
 		}
-		// #1258: "  Scale: 2.000000"  -  physical-to-logical divisor for this
-		// output; applied to the picked mode in flush().
+
 		if strings.HasPrefix(line, "Scale:") {
 			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "Scale:")), 64); err == nil && v > 0 {
 				scale = v
@@ -365,10 +298,6 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 	return displays
 }
 
-// parseWlrrandrModeLine recognizes a mode entry like
-// "1920x1080 px, 60.000000 Hz (preferred, current)". Requiring a leading
-// WxH token followed by a px token keeps "Modes:" headers and lines like
-// "Physical size: 340x190 mm" out.
 func parseWlrrandrModeLine(line string) (w, h int, isCurrent, isPreferred bool, ok bool) {
 	fields := strings.Fields(line)
 	if len(fields) < 2 || !strings.HasPrefix(fields[1], "px") {
@@ -389,8 +318,6 @@ func parseWlrrandrModeLine(line string) (w, h int, isCurrent, isPreferred bool, 
 	return w, h, isCurrent, isPreferred, true
 }
 
-// wlrModePick tracks the best mode seen for one output: (current) wins over
-// (preferred), which wins over the first listed mode.
 type wlrModePick struct {
 	width, height      int
 	current, preferred bool
@@ -403,26 +330,15 @@ func (p *wlrModePick) offer(w, h int, isCurrent, isPreferred bool) {
 		return
 	}
 	if p.current {
-		return // the active mode always wins
+		return
 	}
 	if isCurrent || (isPreferred && !p.preferred) {
 		*p = wlrModePick{width: w, height: h, current: isCurrent, preferred: isPreferred, seen: true}
 	}
 }
 
-// gnomeScreenshotUnsupportedOpts reports an error when opts needs a
-// capability gnome-screenshot does not expose on the command line: it cannot
-// capture a region non-interactively, and --display expects a GDK/X11
-// connection name (host:D.S like ":0"), not an xrandr/wlr-randr output name,
-// so per-output selection is impossible too. Failing explicitly mirrors the
-// existing window-capture treatment instead of silently capturing the full
-// screen (#975).
 func gnomeScreenshotUnsupportedOpts(opts ScreenshotOptions) error {
-	// #3013: Display is 1-based (0=primary). The gate must match the region
-	// translation gate in prepareLinuxCaptureOpts (`>= 1`, #3003) - the old
-	// `> 1` let Display==1 through, gnome-screenshot composited every
-	// output into a panorama, and its exit-0 blocked the fallback loop that
-	// would have reached a region-capable tool (scrot/import).
+
 	if opts.Display >= 1 {
 		return fmt.Errorf("gnome-screenshot cannot select a display by index; use grim (Wayland) or scrot/import (X11) for per-display capture")
 	}

@@ -2,18 +2,6 @@ package mcp
 
 import "strings"
 
-// writeKeywords are lowercase markers that indicate a tool performs
-// write/create/delete/modify operations. When an MCP server is configured
-// with read_only: true, tools whose names match any of these markers will
-// be blocked from execution (#996).
-//
-// Matching is by underscore-delimited segment (see isWriteToolName):
-// short roots like "set"/"put"/"run" must match a WHOLE segment, never a
-// substring - "get_dataset", "asset_search", "offset_query", "output_stream",
-// "truncate_rows" contain those roots inside unrelated words and are
-// read-only queries that the old substring match wrongly blocked.
-// Multi-word keywords without underscores (e.g. "upsert", "execute") match
-// inside a segment, since real tool names rarely break them apart.
 var writeKeywords = []string{
 	"write",
 	"edit",
@@ -38,16 +26,6 @@ var writeKeywords = []string{
 	"deploy",
 }
 
-// camelToSnake inserts underscores at uppercase boundaries so camelCase
-// write names ("setValue") segment-match the same roots as their snake_case
-// twins ("set_value") - #997. Lowercases as it goes. Read names split
-// harmlessly ("getDataset" -> "get_dataset", "PostgresQuery" ->
-// "postgres_query" - no short-root segment), so this does not reintroduce
-// the #996 false-positive class. ALL-CAPS names fragment per letter
-// ("DELETE_FILE" -> "d_e_l_e_t_e_..."), which is why isWriteToolName
-// additionally substring-checks long keywords against the plain-lowercased
-// name (#998) - the fragmenting alone would let "DELETE_FILE" through
-// while "delete_file" stays blocked.
 func camelToSnake(s string) string {
 	var b strings.Builder
 	for i, r := range s {
@@ -63,38 +41,10 @@ func camelToSnake(s string) string {
 	return b.String()
 }
 
-// isWriteToolName checks whether the given MCP tool name indicates a
-// write-type operation (create, update, delete, execute, etc.).
-// Returns true if the tool should be blocked in read-only mode.
-//
-// The name is camel-normalized then split on underscores; short-root
-// keywords (<= 4 chars) match only a complete segment in EITHER the
-// camel-normalized segments or the plain-lowercased segments: camel
-// catches "setValue", plain catches underscored ALL-CAPS twins like
-// "SET_VALUE" (-> "set_value" -> [set value]) that camelToSnake would
-// fragment per letter, while "GET_DATASET" ([get dataset]) stays allowed
-// - the #996 root-collision class is immune because the match is still
-// whole-segment, never substring. Long keywords match inside segments
-// AND against the plain-lowercased name, catching ALL-CAPS REST-style
-// tools ("DELETE_FILE", "EXECUTE_QUERY") that fragment under
-// camelToSnake (#998).
-// Long keywords ALSO match whole segments only (#1591-B): the old
-// substring match blocked read-only query tools - 'deploy' substring-hit
-// list_deployments/get_deployment_status (the most common K8s MCP read
-// queries), 'create' hit get_created_at, 'update' hit last_updated_at,
-// 'remove' hit get_removed_nodes. The #996 root-collision class applied
-// to long keywords verbatim. ALL-CAPS REST twins are still caught - the
-// plainSegments side covers "DELETE_FILE"/"EXECUTE_QUERY" whole-segment.
 func isWriteToolName(name string) bool {
 	plain := strings.ToLower(name)
 	segments := strings.Split(camelToSnake(name), "_")
-	// #1611-A: MCP tool names allow '-', '.', '_' (spec pattern
-	// ^[a-zA-Z0-9_-]{1,128}$; dots are namespace separators). Splitting on
-	// '_' alone let "delete-pod"/"write-file"/"fs.write_file" through on
-	// read-only servers - the pre-#1591 substring path caught these; the
-	// whole-segment rewrite kept the #996 fix but dropped the hyphen/dot
-	// families, a SAFETY regression (the mirror of #1591-B's
-	// false-positive fix).
+
 	plainSegments := strings.FieldsFunc(plain, func(r rune) bool {
 		return r == '_' || r == '-' || r == '.'
 	})
@@ -113,8 +63,6 @@ func isWriteToolName(name string) bool {
 	return false
 }
 
-// readVerbRoots prefixes that mark the FOLLOWING noun segment as the
-// object of a read (#3807).
 var readVerbRoots = map[string]bool{
 	"get": true, "read": true, "list": true, "query": true, "fetch": true,
 	"find": true, "describe": true, "show": true, "view": true,
@@ -122,18 +70,9 @@ var readVerbRoots = map[string]bool{
 	"lookup": true, "head": true, "count": true, "inspect": true,
 }
 
-// nounUseAllowed reports whether the keyword hit at segs[idx] is a NOUN
-// usage that must NOT block in read-only mode (#3807). The short roots
-// "post" and "run" are both write verbs ("post_data", "run_command") AND
-// extremely common read-only nouns: GitHub Actions MCPs ship
-// get_run_status ([get run status]) and WordPress MCPs ship get_post - both
-// were blocked while their plural twins list_runs/list_posts sailed
-// through. Rule: post/run block only when they LEAD the name or follow
-// another write verb; after a read verb they are the queried object.
-// Fail-closed: any other predecessor (start_post, trigger_run) still blocks.
 func nounUseAllowed(kw string, idx int, segs []string) bool {
 	if (kw != "post" && kw != "run") || idx == 0 {
-		return false // verb-initial or unambiguous root: post_data / run_command
+		return false
 	}
 	return readVerbRoots[segs[idx-1]]
 }

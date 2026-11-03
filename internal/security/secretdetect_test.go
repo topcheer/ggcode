@@ -107,7 +107,7 @@ func TestScanForSecrets_SkipsPlaceholders(t *testing.T) {
 secret = "changeme"
 token = "xxxx"`
 	findings := ScanForSecrets("config.go", content)
-	// These should all be filtered as placeholders
+
 	for _, f := range findings {
 		if f.PatternID == "generic_api_key_assignment" {
 			t.Errorf("placeholder value should not be flagged: %s", f.Match)
@@ -198,8 +198,7 @@ normal_var: hello`
 }
 
 func TestScanForSecrets_SlackToken(t *testing.T) {
-	// Token assembled from parts so the fixture does not trip GitHub push
-	// protection (it pattern-matches real Slack tokens in committed blobs).
+
 	content := `slack_bot_token: ` + "xoxb-" + "1234567890-1234567890-abcdefabcdefabcdefabcdefabcdef"
 	findings := ScanForSecrets("slack.go", content)
 	found := false
@@ -232,10 +231,10 @@ func TestMaskSecret(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"short", "*****"},                                                 // len 5 → all masked
-		{"1234567890ab", "************"},                                   // len 12 → all masked
-		{"1234567890abc", "1234*****0abc"},                                 // len 13 → first4 + mask5 + last4
-		{"sk-1234567890abcdefghijklmnop", "sk-1*********************mnop"}, // len 29
+		{"short", "*****"},
+		{"1234567890ab", "************"},
+		{"1234567890abc", "1234*****0abc"},
+		{"sk-1234567890abcdefghijklmnop", "sk-1*********************mnop"},
 	}
 	for _, tt := range tests {
 		got := maskSecret(tt.input)

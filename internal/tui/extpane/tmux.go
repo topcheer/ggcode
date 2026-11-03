@@ -9,10 +9,8 @@ import (
 	"time"
 )
 
-// tmuxBackend implements Backend using tmux new-window/kill-window.
-// Each agent gets its own full-screen tab, never disturbing the main TUI layout.
 type tmuxBackend struct {
-	selfWindowID string // window ID of the session where ggcode runs — never close
+	selfWindowID string
 }
 
 func newTmuxBackend() *tmuxBackend {
@@ -20,9 +18,7 @@ func newTmuxBackend() *tmuxBackend {
 		return nil
 	}
 	b := &tmuxBackend{}
-	// Capture our own window ID so we never kill it.
-	// #894: 3s timeout like sibling calls — context.Background() with no
-	// deadline let a hung tmux server block TUI model construction forever.
+
 	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err := runTmux(probeCtx, "display-message", "-p", "#{window_id}")
@@ -34,57 +30,38 @@ func newTmuxBackend() *tmuxBackend {
 
 func (t *tmuxBackend) Name() string { return "tmux" }
 
-// CreateTab creates a new tmux window (full-screen tab) running `tail -f`.
 func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
-	// Temporarily suppress after-new-window hook to avoid user tmux configs
-	// that trigger interactive rename prompts (command-prompt).
-	// Save the current hook value so we can restore it.
+
 	savedHook, showErr := runTmux(ctx, "show-hooks", "-g", "after-new-window")
 	savedHook = strings.TrimSpace(savedHook)
-	// #4485: only suppress when we hold a verified backup. The old flow
-	// unconditionally ran set-hook -u below even when show-hooks failed
-	// (old tmux without named show-hooks, busy server, ctx near deadline) -
-	// one transient read failure permanently deleted the user's GLOBAL
-	// after-new-window hook, because restore early-returns on the empty
-	// saved value. Skip suppression entirely: a rename-prompt config glitch
-	// for one tab is nothing against destroying unbackupable user config.
+
 	if !isHookBackupUsable(showErr) {
 		debug.Log("extpane", "show-hooks failed, skipping hook suppression to preserve user hook: %v", showErr)
 	} else {
-		// Unset the hook globally.
+
 		_, _ = runTmux(ctx, "set-hook", "-g", "-u", "after-new-window")
 	}
 
-	// #890: restore via defer — an early return (new-window failure) used
-	// to skip the restore entirely, permanently losing the user's GLOBAL
-	// hook on the error path.
 	restore := func() {
 		if savedHook == "" {
-			// Nothing was recorded: un-setting was safe only if the hook never
-			// existed; leave unset (best effort) — re-query cannot succeed if
-			// the initial read failed.
+
 			return
 		}
 		hookCmd := strings.SplitN(savedHook, " -> ", 2)
-		// #1722 case 1: the unset above uses a 5s ctx; these restores used
-		// context.Background() - a hung tmux server blocked the deferred
-		// restore FOREVER, straight through to the bubbletea Update
-		// goroutine (full UI freeze). Same #894 lesson, restore path.
+
 		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer rcancel()
 		if len(hookCmd) == 2 {
 			_, _ = runTmux(rctx, "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
 		} else {
-			// Unexpected format — restore the raw value so nothing is lost.
+
 			_, _ = runTmux(rctx, "set-hook", "-g", "after-new-window", savedHook)
 		}
 	}
 	defer restore()
 
 	args := []string{
-		// #4578: -d creates the window in the BACKGROUND - without it tmux
-		// selects the new window immediately, yanking the user's view off
-		// the ggcode TUI on every agent spawn. -P still prints window_id.
+
 		"new-window", "-d", "-P", "-F", "#{window_id}",
 		"-n", title,
 		"tail", "-f", logfile,
@@ -101,7 +78,6 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	return tabID, nil
 }
 
-// CloseTab kills the tmux window. Refuses to kill our own window.
 func (t *tmuxBackend) CloseTab(tabID string) error {
 	if tabID == "" || tabID == t.selfWindowID {
 		return nil
@@ -112,7 +88,6 @@ func (t *tmuxBackend) CloseTab(tabID string) error {
 	return err
 }
 
-// SetTitle renames the window.
 func (t *tmuxBackend) SetTitle(tabID, title string) error {
 	if tabID == "" || tabID == t.selfWindowID {
 		return nil

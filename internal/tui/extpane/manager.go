@@ -1,12 +1,3 @@
-// Package extpane manages external terminal tabs for sub-agent and teammate
-// streaming output.
-//
-// Design: Each agent gets its own terminal tab running `tail -f <logfile>`.
-// The TUI writes streaming output to a temp file via atomic appends. The tab
-// displays the file with native scrolling. The main TUI layout is never
-// affected — tabs are separate full-screen surfaces.
-//
-// Detection priority: tmux > iTerm2 > Kitty. Never two at once.
 package extpane
 
 import (
@@ -24,18 +15,14 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Backend abstracts a terminal's tab creation/destruction.
 type Backend interface {
-	// CreateTab creates a new tab/window running `tail -f <logfile>`.
-	// Returns a backend-specific tab identifier.
 	CreateTab(ctx context.Context, title, logfile string) (string, error)
-	// CloseTab closes the tab.
+
 	CloseTab(tabID string) error
-	// Name returns the backend identifier.
+
 	Name() string
 }
 
-// ExtPane tracks one agent's external tab + log file.
 type ExtPane struct {
 	AgentID   string
 	Name      string
@@ -47,44 +34,33 @@ type ExtPane struct {
 	Done      bool
 	DoneAt    time.Time
 
-	// buffer accumulates streaming text between flushes.
 	buffer strings.Builder
 	dirty  bool
 }
 
-// maxConcurrentOps limits concurrent backend subprocess calls.
 const maxConcurrentOps = 4
 
-// Manager owns the external tab lifecycle for all agents.
 type Manager struct {
 	backend  Backend
 	panes    map[string]*ExtPane
-	creating map[string]bool // prevents duplicate EnsurePane for same agent
-	failed   map[string]bool // permanently failed — never retry CreateTab
-	retries  map[string]int  // #1369: transient-failure retry budget per agent
+	creating map[string]bool
+	failed   map[string]bool
+	retries  map[string]int
 	mu       sync.Mutex
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 	sem      chan struct{}
 
-	// tmpDir is where agent log files live.
 	tmpDir string
 
-	// gracePeriod is how long a tab stays open after the agent completes.
 	gracePeriod time.Duration
 }
 
-// maxPanes is the hard cap on concurrent tabs. Prevents runaway creation.
 const maxPanes = 10
 
-// maxCreateRetries bounds transient-failure retries before the agent's
-// panes go permanently dark (#1369: one timeout used to do that instantly).
 const maxCreateRetries = 3
 
-// NewManager creates a Manager, auto-detecting the best available backend.
-// Priority: tmux > iTerm2 > Kitty. Returns a Manager with a nil backend
-// if no terminal is suitable (all operations become no-ops).
 func NewManager() *Manager {
 	backend := detectBackend()
 	tmpDir, err := os.MkdirTemp("", "ggcode-extpane-*")
@@ -109,17 +85,12 @@ func NewManager() *Manager {
 	return m
 }
 
-// Available reports whether external tab output is active.
 func (m *Manager) Available() bool {
 	return m != nil && m.backend != nil
 }
 
-// goBackend runs a backend operation in a goroutine with bounded concurrency
-// and WaitGroup tracking.
 func (m *Manager) goBackend(fn func()) {
-	// #891: wg.Add racing CloseAll's wg.Wait is the classic Add-after-Wait
-	// panic window (or Wait returning before this cleanup runs). Gate the
-	// Add on stopCh: after shutdown began, skip instead of track.
+
 	select {
 	case <-m.stopCh:
 		return
@@ -138,34 +109,14 @@ func (m *Manager) goBackend(fn func()) {
 	})
 }
 
-// isTransientCreateTabErr reports whether a CreateTab failure is a known
-// transient that is safe to retry. #4485: the #1369 retryBudget was
-// effectively dead code for CreateTab - every error, including the 5s
-// context deadline (subprocess killed before the tab was built, e.g. a
-// briefly busy tmux server), went straight to failPermanent and silently
-// disabled the agent's panels for the whole TUI session. Context
-// cancellation is transient for the same reason: the caller gave up, the
-// tab was not created. Anything else keeps the conservative permanent
-// path - runaway protection, the tab may exist despite the error.
 func isTransientCreateTabErr(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
-// isHookBackupUsable reports whether the after-new-window hook backup
-// read succeeded and the hook may therefore be suppressed. #4485: the
-// old flow unconditionally ran set-hook -u even when show-hooks had
-// failed - one transient read failure permanently destroyed the user's
-// GLOBAL hook, because restore early-returns on the empty saved value.
-// Better to skip suppression entirely than to delete unbackupable config.
 func isHookBackupUsable(showErr error) bool {
 	return showErr == nil
 }
 
-// EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
-// Uses a `creating` set to prevent duplicate tab creation during the
-// backend call. #1722 case 3: the call is SYNCHRONOUS on the Update
-// goroutine, but bounded by a 5s CreateTab timeout (not the unbounded
-// "async" the old comment claimed).
 func (m *Manager) EnsurePane(agentID, name, kind string) {
 	if !m.Available() {
 		return
@@ -175,22 +126,17 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		m.mu.Unlock()
 		return
 	}
-	// Prevent duplicate creation: if EnsurePane is already in progress for this agent,
-	// bail out. This is the critical guard against spawning hundreds of tabs.
+
 	if m.creating[agentID] {
 		m.mu.Unlock()
 		return
 	}
-	// If CreateTab previously failed for this agent, never retry.
-	// This prevents runaway tab creation when the backend creates a tab
-	// but returns an error (e.g., iTerm2 returns numeric session ID).
+
 	if m.failed[agentID] {
 		m.mu.Unlock()
 		return
 	}
-	// Hard cap: never exceed maxPanes concurrent tabs.
-	// #894: count in-flight creations too — concurrent EnsurePane calls all
-	// passed the old len(panes) check and breached the cap.
+
 	if len(m.panes)+len(m.creating) >= maxPanes {
 		m.mu.Unlock()
 		return
@@ -198,19 +144,13 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	m.creating[agentID] = true
 	m.mu.Unlock()
 
-	// Failure helpers. #1369: the old single fail() marked EVERY failure
-	// permanently ("never retry") - a one-off CreateTab timeout or transient
-	// log-file error disabled the agent's panels for the whole TUI session,
-	// silently dropping all WriteText/WriteToolCall. Permanent is now
-	// reserved for runaway-protection (tab may exist despite the error);
-	// transient failures get a bounded retry via retryBudget.
 	fail := func(format string, args ...any) {
 		debug.Logf(format, args...)
 		m.mu.Lock()
 		delete(m.creating, agentID)
 		m.retries[agentID]++
 		if m.retries[agentID] >= maxCreateRetries {
-			m.failed[agentID] = true // exhausted - permanent
+			m.failed[agentID] = true
 		}
 		m.mu.Unlock()
 	}
@@ -218,11 +158,10 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		debug.Logf(format, args...)
 		m.mu.Lock()
 		delete(m.creating, agentID)
-		m.failed[agentID] = true // runaway protection - never retry
+		m.failed[agentID] = true
 		m.mu.Unlock()
 	}
 
-	// Create log file
 	safeName := sanitizeFilename(name)
 	logPath := filepath.Join(m.tmpDir, fmt.Sprintf("%s-%s.log", safeName, shortID(agentID)))
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -231,7 +170,6 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		return
 	}
 
-	// Write header to log
 	header := formatHeader(name, kind)
 	if _, err := f.WriteString(header); err != nil {
 		fail("extpane: write header failed: %v", err)
@@ -240,22 +178,16 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		return
 	}
 
-	// Create tab
 	title := formatTitle(name, kind, "starting")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tabID, err := m.backend.CreateTab(ctx, title, logPath)
 	if err != nil {
-		// #4485: classify the failure per #1369's design. A timeout (or
-		// caller-side cancel) is a known transient - the subprocess was
-		// killed before the tab was built, so retrying is safe and consumes
-		// the bounded retryBudget instead of silently disabling the agent's
-		// panels for the whole TUI session. Permanent stays reserved for
-		// runaway-protection errors where the tab may exist despite the err.
+
 		if isTransientCreateTabErr(err) {
 			fail("extpane: create tab transiently failed for %s: %v", agentID, err)
 		} else {
-			// #1369: tab MAY exist despite the error (runaway) - permanent.
+
 			failPermanent("extpane: create tab failed for %s: %v", agentID, err)
 		}
 		f.Close()
@@ -277,8 +209,6 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	m.mu.Unlock()
 }
 
-// WriteText queues streaming text for an agent's log file.
-// Text is buffered and flushed periodically.
 func (m *Manager) WriteText(agentID, text string) {
 	if !m.Available() || text == "" {
 		return
@@ -289,12 +219,7 @@ func (m *Manager) WriteText(agentID, text string) {
 		m.mu.Unlock()
 		return
 	}
-	// #4579: flushAll/flushAgent skip Done panes, so a late teammate_text
-	// event that lands after HandleDone would sit in the buffer forever
-	// (dropped at the 30s grace close). The immediate paths
-	// (WriteTextImmediate/WriteToolCall/WriteToolResult) have no Done
-	// check and keep writing - mirror that: write through now. Safe under
-	// the mutex, same as HandleDone's own final flush.
+
 	if ep.Done {
 		writeExtCapped(ep, text)
 		m.mu.Unlock()
@@ -305,14 +230,8 @@ func (m *Manager) WriteText(agentID, text string) {
 	m.mu.Unlock()
 }
 
-// maxExtPaneLogSize caps a single agent's extpane log file (#1722 case 2):
-// hour-long teammates write with no bound anywhere in this package while
-// cmdpane has had 5MB truncation all along. Same in-place truncation
-// pattern - the pane's tail -f detects truncation and resets on its own.
-const maxExtPaneLogSize = 5 << 20 // 5 MB
+const maxExtPaneLogSize = 5 << 20
 
-// writeExtCapped writes text to the pane log, truncating first when the
-// write would exceed maxExtPaneLogSize (#1722 case 2).
 func writeExtCapped(ep *ExtPane, text string) {
 	if ep.LogFile == nil {
 		return
@@ -326,7 +245,6 @@ func writeExtCapped(ep *ExtPane, text string) {
 	}
 }
 
-// WriteTextImmediate writes text to the log file without buffering.
 func (m *Manager) WriteTextImmediate(agentID, text string) {
 	if !m.Available() || text == "" {
 		return
@@ -338,21 +256,18 @@ func (m *Manager) WriteTextImmediate(agentID, text string) {
 	if !ok || ep.LogFile == nil {
 		return
 	}
-	// #1722 case 2: capped write (immediate path).
+
 	writeExtCapped(ep, text)
 }
 
-// WriteToolCall writes a formatted tool call line.
 func (m *Manager) WriteToolCall(agentID, toolName, detail string) {
 	m.WriteTextImmediate(agentID, formatToolCall(toolName, detail))
 }
 
-// WriteToolResult writes a formatted tool result line.
 func (m *Manager) WriteToolResult(agentID, toolName, result string, isError bool) {
 	m.WriteTextImmediate(agentID, formatToolResult(toolName, result, isError))
 }
 
-// UpdateStatus updates the tab title.
 func (m *Manager) UpdateStatus(agentID, name, kind, status string) {
 	if !m.Available() {
 		return
@@ -366,12 +281,11 @@ func (m *Manager) UpdateStatus(agentID, name, kind, status string) {
 	title := formatTitle(name, kind, status)
 	tabID := ep.TabID
 	m.goBackend(func() {
-		// Backends that don't support SetTitle (none currently) can ignore this.
+
 		_ = setTitleSafe(m.backend, tabID, title)
 	})
 }
 
-// HandleDone marks the agent as complete and schedules tab cleanup.
 func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	if !m.Available() {
 		return
@@ -385,13 +299,12 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	ep.Done = true
 	ep.DoneAt = time.Now()
 	kind := ep.Kind
-	// Flush remaining buffer BEFORE setting Done.
-	// flushAgent skips Done panes, so we extract and write the buffer here.
+
 	text := ep.buffer.String()
 	ep.buffer.Reset()
 	ep.dirty = false
 	if text != "" {
-		// #1722 case 2: capped write (done flush).
+
 		writeExtCapped(ep, text)
 	}
 	m.mu.Unlock()
@@ -402,9 +315,6 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	m.WriteTextImmediate(agentID, formatDone(isError))
 	m.UpdateStatus(agentID, name, kind, status)
 
-	// Schedule cleanup after grace period
-	// #891: gate Add on stopCh (see goBackend) — shutdown racing this
-	// event-driven path could Add concurrently with CloseAll's Wait.
 	select {
 	case <-m.stopCh:
 		return
@@ -421,14 +331,13 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	})
 }
 
-// CloseAll immediately closes all external tabs. Called on TUI shutdown.
 func (m *Manager) CloseAll() {
 	if m == nil {
 		return
 	}
 	m.stopOnce.Do(func() { close(m.stopCh) })
 	if !m.Available() {
-		// Still clean up tmpDir even if backend was nil.
+
 		if m.tmpDir != "" {
 			os.RemoveAll(m.tmpDir)
 		}
@@ -444,13 +353,12 @@ func (m *Manager) CloseAll() {
 		m.closePane(id)
 	}
 	m.wg.Wait()
-	// Clean up tmp dir
+
 	if m.tmpDir != "" {
 		os.RemoveAll(m.tmpDir)
 	}
 }
 
-// closePane closes and removes a single agent's tab + log file.
 func (m *Manager) closePane(agentID string) {
 	m.mu.Lock()
 	ep, ok := m.panes[agentID]
@@ -459,24 +367,21 @@ func (m *Manager) closePane(agentID string) {
 		return
 	}
 	delete(m.panes, agentID)
-	// Close file under the mutex to prevent writes to a closed fd.
+
 	if ep.LogFile != nil {
 		ep.LogFile.Close()
 	}
 	m.mu.Unlock()
 
-	// Close tab (sync — only called from CloseAll or grace goroutine)
 	if err := m.backend.CloseTab(ep.TabID); err != nil {
 		debug.Logf("extpane: close tab failed for %s: %v", ep.TabID, err)
 	}
-	// Remove log file
+
 	os.Remove(ep.LogPath)
 }
 
-// startFlusher runs a background goroutine that flushes buffered text
-// at ~10 Hz to each agent's log file.
 func (m *Manager) startFlusher() {
-	// #891: same stopCh gate as goBackend (Add-after-Wait panic window).
+
 	select {
 	case <-m.stopCh:
 		return
@@ -522,16 +427,13 @@ func (m *Manager) flushAgent(agentID string) {
 	text := ep.buffer.String()
 	ep.buffer.Reset()
 	ep.dirty = false
-	// Write under the mutex to avoid racing with closePane.
-	// #1722 case 2: capped write - the buffer path used to grow unbounded.
+
 	if text != "" {
 		writeExtCapped(ep, text)
 	}
 	m.mu.Unlock()
 }
 
-// detectBackend returns the best available terminal backend.
-// Priority: tmux > iTerm2 > Kitty.
 func detectBackend() Backend {
 	if hasTmux() {
 		b := newTmuxBackend()
@@ -566,8 +468,6 @@ func hasKitty() bool {
 	return os.Getenv("TERM_PROGRAM") == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
 
-// ── Helpers ──
-
 func formatTitle(name, kind, status string) string {
 	icon := "◆"
 	if kind == "teammate" {
@@ -594,8 +494,6 @@ func shortID(id string) string {
 	return id
 }
 
-// setTitleSafe calls SetTitle if the backend supports it.
-// Backends embed the optional setTitleer interface.
 type setTitleer interface {
 	SetTitle(tabID, title string) error
 }

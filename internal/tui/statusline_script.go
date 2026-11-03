@@ -18,29 +18,14 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// External status line (sa-160), mirroring the 2026 Claude Code `statusLine`
-// convention: a user-configured shell command receives a JSON session
-// snapshot on stdin; its first stdout line is rendered as a persistent bar
-// above the composer. Refreshes fire at run boundaries (never per frame) and
-// are serialized: while one invocation is in flight, further requests mark
-// the state dirty and a single follow-up runs after completion. A failed or
-// timed-out invocation keeps the last good output.
-
 const statuslineDefaultTimeout = 2 * time.Second
 
-// statuslineMsg carries a finished external refresh back into the TUI.
-// ok=false marks a failed/timed-out invocation: the cached last good output
-// must be kept (#2748).
 type statuslineMsg struct {
 	seq  int
 	text string
 	ok   bool
 }
 
-// statuslineState caches the rendered external status line and serializes
-// refreshes. Lives behind a pointer on Model: Model is copied by value
-// across update/render boundaries, so the mutex must not be a direct Model
-// field (go vet copylocks).
 type statuslineState struct {
 	mu      sync.Mutex
 	text    string
@@ -69,10 +54,6 @@ type statuslineCostInfo struct {
 	SessionUSD float64 `json:"session_usd"`
 }
 
-// statuslinePayload is the stdin schema. Core fields (hook_event_name,
-// session_id, model, workspace, version) follow the Claude Code statusline
-// JSON so existing community scripts keep working; context/cost are ggcode
-// extensions.
 type statuslinePayload struct {
 	HookEventName string                `json:"hook_event_name"`
 	SessionID     string                `json:"session_id"`
@@ -114,9 +95,6 @@ func (m *Model) buildStatuslinePayload() statuslinePayload {
 	return p
 }
 
-// runStatuslineCommand executes one external refresh synchronously and
-// returns the first stdout line. On timeout or non-zero exit it returns
-// ("", false) so the caller keeps the cached last good output (#2748).
 func runStatuslineCommand(command string, payload statuslinePayload, timeout time.Duration) (string, bool) {
 	input, err := json.Marshal(payload)
 	if err != nil {
@@ -131,12 +109,7 @@ func runStatuslineCommand(command string, payload statuslinePayload, timeout tim
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
-	// The shell may fork the real script as a grandchild that inherits the
-	// stdout pipe; killing only the direct child leaves the grandchild alive
-	// holding the pipe, so cmd.Output() blocks until it exits naturally (CI
-	// showed a 5s `sleep 5` surviving an 80ms timeout). Kill the whole
-	// process group on timeout, and keep WaitDelay as the cross-platform
-	// backstop that force-closes the pipes if any survivor still holds them.
+
 	cmd.SysProcAttr = statuslineProcAttr()
 	cmd.Cancel = func() error { return statuslineCancelKill(cmd) }
 	cmd.WaitDelay = time.Second
@@ -157,9 +130,6 @@ func runStatuslineCommand(command string, payload statuslinePayload, timeout tim
 	return strings.TrimSpace(strings.TrimRight(string(first), "\r")), true
 }
 
-// refreshStatusline fires an async external refresh unless one is already in
-// flight (then it marks the state dirty; the in-flight completion requeues
-// exactly one follow-up).
 func (m *Model) refreshStatusline() {
 	if m.config == nil || !m.config.StatusLine.Enabled() {
 		return
@@ -194,8 +164,6 @@ func (m *Model) refreshStatusline() {
 	})
 }
 
-// handleStatuslineMsg stores a finished refresh result and requeues one
-// follow-up if refreshes were requested while this one ran.
 func (m Model) handleStatuslineMsg(msg statuslineMsg) (Model, tea.Cmd) {
 	if m.statusline == nil {
 		return m, nil
@@ -204,8 +172,7 @@ func (m Model) handleStatuslineMsg(msg statuslineMsg) (Model, tea.Cmd) {
 	requeue := false
 	sl.mu.Lock()
 	if msg.seq >= sl.seq {
-		// A failed or timed-out invocation keeps the last good output -
-		// only a successful refresh may replace the cached text (#2748).
+
 		if msg.ok {
 			sl.text = msg.text
 		}
@@ -217,15 +184,12 @@ func (m Model) handleStatuslineMsg(msg statuslineMsg) (Model, tea.Cmd) {
 	}
 	sl.mu.Unlock()
 	if requeue {
-		// m is addressable here; refreshStatusline only needs the pointer to
-		// lazily init m.statusline, which is already non-nil.
+
 		(&m).refreshStatusline()
 	}
 	return m, nil
 }
 
-// statuslineBar renders the cached external status line, if any. Read-only
-// and nil-safe so the render path never blocks or mutates.
 func (m Model) statuslineBar() string {
 	if m.config == nil || !m.config.StatusLine.Enabled() || m.statusline == nil {
 		return ""
@@ -247,7 +211,6 @@ func (m Model) statuslineBar() string {
 	return lipgloss.NewStyle().Foreground(mutedTextColor).Render(" " + text)
 }
 
-// statuslineTruncate cuts s to max rendered columns, appending an ellipsis.
 func statuslineTruncate(s string, max int) string {
 	runes := []rune(s)
 	for i := len(runes); i > 0; i-- {

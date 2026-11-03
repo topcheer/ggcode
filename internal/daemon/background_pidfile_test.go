@@ -6,14 +6,11 @@ import (
 	"testing"
 )
 
-// #520: a transient/permission read error (EACCES, NFS EIO) must NOT delete
-// the PID file — the daemon may be running, and deleting the file lets the
-// caller fork a second daemon. The error is propagated instead.
 func TestCheckExistingDaemon_TransientReadErrorKeepsPIDFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	workDir := t.TempDir() // single workDir: PID path must be identical for write & check
+	workDir := t.TempDir()
 	pidPath, err := PIDFilePath(workDir)
 	if err != nil {
 		t.Fatalf("PIDFilePath: %v", err)
@@ -21,7 +18,7 @@ func TestCheckExistingDaemon_TransientReadErrorKeepsPIDFile(t *testing.T) {
 	if err := WritePIDFile(pidPath, 4242, "sess", workDir); err != nil {
 		t.Fatalf("WritePIDFile: %v", err)
 	}
-	// Simulate an unreadable PID file (EACCES on unix; dir-swap on windows).
+
 	makePIDFileUnreadable(t, pidPath)
 
 	pid, err := CheckExistingDaemon(workDir)
@@ -34,7 +31,6 @@ func TestCheckExistingDaemon_TransientReadErrorKeepsPIDFile(t *testing.T) {
 	}
 }
 
-// #431 semantics preserved: a corrupt (invalid JSON) PID file is removed.
 func TestCheckExistingDaemon_CorruptPIDFileRemoved(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -60,7 +56,6 @@ func TestCheckExistingDaemon_CorruptPIDFileRemoved(t *testing.T) {
 	}
 }
 
-// Missing PID file = no daemon, no error (ENOENT path).
 func TestCheckExistingDaemon_MissingPIDFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workDir := t.TempDir()
@@ -73,4 +68,4 @@ func TestCheckExistingDaemon_MissingPIDFile(t *testing.T) {
 	}
 }
 
-var _ = filepath.Join // keep import if assertions above change
+var _ = filepath.Join

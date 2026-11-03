@@ -13,20 +13,17 @@ func toolMsg(name, output string) provider.Message {
 	}}
 }
 
-// contextProvenance classifies tool-result messages by SOURCE: external
-// channels (web/peer) count, local reads do not; injection-marked messages
-// are counted independently of the channel they arrived on.
 func TestContextProvenanceClassification(t *testing.T) {
 	msgs := []provider.Message{
-		toolMsg("web_fetch", "<html>page content</html>"),                   // external
-		toolMsg("read_file", "local file body"),                             // local: not external
-		toolMsg("grep", "match at main.go:3"),                               // local: not external
-		toolMsg("lanchat", "--- BEGIN UNTRUSTED CONTENT ---\npeer says hi"), // external + flagged
-		toolMsg("run_command", "ok"),                                        // local exec: not external
-		toolMsg("delegate", "sub-agent report"),                             // external (#4720: peer-authored content)
-		toolMsg("wait_agent", "result snapshot"),                            // external (#4720)
-		toolMsg("a2a_send_task", "remote reply"),                            // external (#4720: r406 original set)
-		toolMsg("task_output", "bg job output"),                             // NOT external (source axis narrower than guard)
+		toolMsg("web_fetch", "<html>page content</html>"),
+		toolMsg("read_file", "local file body"),
+		toolMsg("grep", "match at main.go:3"),
+		toolMsg("lanchat", "--- BEGIN UNTRUSTED CONTENT ---\npeer says hi"),
+		toolMsg("run_command", "ok"),
+		toolMsg("delegate", "sub-agent report"),
+		toolMsg("wait_agent", "result snapshot"),
+		toolMsg("a2a_send_task", "remote reply"),
+		toolMsg("task_output", "bg job output"),
 	}
 	extMsgs, _, flagged := contextProvenance(msgs)
 	if extMsgs != 5 {
@@ -42,7 +39,7 @@ func TestContextProvenanceEmptyAndNonTool(t *testing.T) {
 	if extMsgs != 0 || extTokens != 0 || flagged != 0 {
 		t.Fatalf("empty input must be all-zero, got %d/%d/%d", extMsgs, extTokens, flagged)
 	}
-	// Non-tool roles are ignored entirely.
+
 	user := provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("x", 500))}}
 	extMsgs, _, flagged = contextProvenance([]provider.Message{user})
 	if extMsgs != 0 || flagged != 0 {
@@ -51,8 +48,7 @@ func TestContextProvenanceEmptyAndNonTool(t *testing.T) {
 }
 
 func TestContextProvenanceLocalFileWithMarkerIsFlagged(t *testing.T) {
-	// A LOCAL read carrying injected text is flagged (risk dimension) but
-	// NOT external (source dimension) - the two axes are independent.
+
 	msgs := []provider.Message{toolMsg("read_file", "--- BEGIN UNTRUSTED CONTENT ---\ninjected")}
 	extMsgs, _, flagged := contextProvenance(msgs)
 	if extMsgs != 0 {

@@ -18,19 +18,13 @@ import (
 
 const subagentRedactedReasoningPlaceholder = "Reasoning hidden by model."
 
-// ToolInfo is the minimal interface needed from a tool for sub-agent registration.
 type ToolInfo interface {
 	Name() string
 }
 
-// AgentFactory creates an agent with the given provider, tool registry, system prompt, and max turns.
-// The tools parameter is an opaque value passed through from the caller.
 type AgentFactory func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner
 
-// AgentRunner is the minimal interface needed from an agent.
 type AgentRunner interface {
-	// #4537: variadic origin mirrors agent.Agent.RunStream - implementations
-	// that accept the human-origin tag satisfy call sites that omit it.
 	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error
 }
 
@@ -38,7 +32,6 @@ type usageHandlerSetter interface {
 	SetUsageHandler(func(provider.TokenUsage))
 }
 
-// RunnerConfig holds everything needed to run a sub-agent.
 type RunnerConfig struct {
 	Provider            provider.Provider
 	AllTools            []ToolInfo
@@ -47,27 +40,24 @@ type RunnerConfig struct {
 	Manager             *Manager
 	SubAgentID          string
 	AgentFactory        AgentFactory
-	BuildToolSet        func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
-	Model               string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
-	AgentType           string                                                       // optional agent type hint (e.g., "Explore", "Plan")
-	WorkingDir          string                                                       // working directory for the sub-agent
-	OnStreamText        func(agentID, text string)                                   // called on each text chunk for tunnel relay
-	OnUsage             func(provider.TokenUsage)                                    // optional exact-usage callback for session accounting
-	OnMetric            func(metrics.MetricEvent)                                    // optional telemetry callback; events are stamped with SubAgentID before delivery (sa-218)
-	SystemPromptBuilder func(task, agentType string) string                          // optional: builds rich system prompt; falls back to simple prompt if nil
+	BuildToolSet        func(allowedTools []string, allTools []ToolInfo) interface{}
+	Model               string
+	AgentType           string
+	WorkingDir          string
+	OnStreamText        func(agentID, text string)
+	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent)
+	SystemPromptBuilder func(task, agentType string) string
 }
 
-// Run starts the sub-agent in a goroutine, running a complete agentic loop.
-// The sub-agent gets its own context manager, tool subset, and provider instance.
 func Run(ctx context.Context, cfg RunnerConfig) {
-	// Acquire concurrency slot
+
 	if err := cfg.Manager.acquireSlot(ctx, cfg.SubAgentID); err != nil {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("failed to acquire slot: %w", err))
 		return
 	}
 	defer cfg.Manager.releaseSlot(cfg.SubAgentID)
 
-	// Panic recovery: ensures Complete() is always called so Wait() never blocks forever.
 	defer func() {
 		if r := recover(); r != nil {
 			debug.Log("subagent", "panic recovered subagent=%s error=%v stack=%s", cfg.SubAgentID, r, string(runtimedebug.Stack()))
@@ -75,20 +65,13 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		}
 	}()
 
-	// Create sub-context with timeout
 	timeout := cfg.Manager.Timeout()
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
-	// r29 actor-aware memory provenance: the sub-agent's identity rides
-	// the ctx so memory writes (and future per-actor tool semantics) are
-	// attributable. Empty id keeps the ctx untouched.
+
 	subCtx = util.WithActor(subCtx, cfg.SubAgentID)
 	defer cancel()
 	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
-		// SetCancel returned false: the sub-agent was cancelled while it
-		// was Pending (before this goroutine reached SetCancel). That path
-		// leaves done unclosed — Complete's terminal branch closes done
-		// without overwriting the Cancelled status, which unblocks
-		// purgeTerminalAgents so the map entry can be reclaimed (#227).
+
 		cfg.Manager.Complete(cfg.SubAgentID, "", context.Canceled)
 		return
 	}
@@ -98,27 +81,22 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		sa.setStatus(StatusRunning)
 		sa.setActivity("thinking", "", "")
 		sa.setStartedAt(time.Now())
-		// Set model for display in follow strip and tool call labels.
-		// #4161: route through SetModel - snapshot()/statusInfo() read this
-		// field under sa.mu, so every writer must take the same lock.
+
 		if cfg.Model != "" {
 			sa.SetModel(cfg.Model)
 		}
-		// Mark that a real goroutine is running this agent.
-		// CancelAll() uses this to decide whether to wait on done.
+
 		sa.mu.Lock()
 		sa.goroutineStarted = true
 		sa.mu.Unlock()
 		debug.Log("cancel", "Run: goroutine started id=%s", cfg.SubAgentID)
 	}
 
-	// Build tool subset for this sub-agent
 	var toolSet interface{}
 	if cfg.BuildToolSet != nil {
 		toolSet = cfg.BuildToolSet(cfg.AllowedTools, cfg.AllTools)
 	}
 
-	// Build system prompt: use rich builder if available, otherwise fall back to simple prompt
 	var systemPrompt string
 	if cfg.SystemPromptBuilder != nil {
 		systemPrompt = cfg.SystemPromptBuilder(cfg.Task, cfg.AgentType)
@@ -140,9 +118,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))
 		return
 	}
-	// Apply model override: clone the provider with a different model if specified.
-	// This allows the parent agent to choose a different model for the sub-agent
-	// (e.g., a faster model for simple tasks, a stronger model for complex reasoning).
+
 	runProv := cfg.Provider
 	if cfg.Model != "" {
 		runProv = provider.CloneProviderWithModel(cfg.Provider, cfg.Model)
@@ -150,17 +126,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, 0)
 
-	// Propagate working directory so sub-agent tools operate in the right directory
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
 			wd.SetWorkingDir(cfg.WorkingDir)
 		}
 	}
-	// Propagate the sub-agent ID as the session ID so todo_write and other
-	// session-scoped state is isolated from the parent agent. Without this,
-	// the sub-agent's TodoWrite tool (cloned from the parent's registry)
-	// retains the parent's session ID, causing both agents to read/write the
-	// same todo file and clobber each other's state.
+
 	if cfg.SubAgentID != "" {
 		if sid, ok := subAgent.(interface{ SetSessionID(string) }); ok {
 			sid.SetSessionID(cfg.SubAgentID)
@@ -171,10 +142,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			usageAware.SetUsageHandler(cfg.OnUsage)
 		}
 	}
-	// sa-218: sub-agent telemetry. Without this hook the sub-agent's LLM
-	// calls (TTFT, tokens, errors) and tool executions never reach the
-	// metrics collector - a spawned fan-out appears in OTLP traces as
-	// opaque long-running spawn_agent spans with a black box inside.
+
 	if cfg.OnMetric != nil {
 		if metricAware, ok := subAgent.(interface {
 			SetMetricHandler(func(metrics.MetricEvent))
@@ -188,7 +156,6 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		}
 	}
 
-	// Run the agentic loop, capturing output
 	var output strings.Builder
 	type pendingToolMeta struct {
 		Name        string
@@ -197,12 +164,9 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		Detail      string
 	}
 	pendingTools := make(map[string]pendingToolMeta)
-	// #622: FIFO queue for tool calls with no ID. A single slot was
-	// overwritten by a second unnamed call in the same turn, causing both
-	// ToolResults to mismatch (first got the second call's meta, second got a
-	// zero-value meta). FIFO preserves arrival order for pairing.
+
 	var unnamedTools []pendingToolMeta
-	var textBuf strings.Builder // accumulate text chunks into turn-level events
+	var textBuf strings.Builder
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -222,26 +186,23 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.setActivity("writing", "", "")
 			}
 			cfg.Manager.NotifyStreamText(cfg.SubAgentID, event.Text)
-			// Flush and notify every ~200 tokens to keep follow panel responsive
-			// during long pure-text output (e.g. summary rounds).
+
 			if textBuf.Len() >= 800 {
 				flushText()
 				cfg.Manager.Notify(cfg.SubAgentID)
 			}
 		case provider.StreamEventToolCallDone:
-			// Flush accumulated text before recording tool call
+
 			flushText()
 			rawArgs := string(event.Tool.Arguments)
 			meta := pendingToolMeta{
 				Name:    event.Tool.Name,
 				RawArgs: rawArgs,
 			}
-			// Increment tool call count for this subagent
+
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
-				// Provenance tracking (trust-cascade defense): count calls
-				// to external-source tools so wait_agent can surface the
-				// result's provenance at the delegation boundary.
+
 				if isExternalSourceTool(meta.Name) {
 					sa.RecordExternalSource(meta.Name)
 				}
@@ -288,17 +249,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			}
 			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, meta.Name, "", "", event.Result, event.IsError)
 		case provider.StreamEventToolCallChunk:
-			// #620: streaming chunks of a large tool-argument payload are
-			// activity too. Without refreshing lastActivity here, a slow
-			// provider streaming >50KB of tool args (no text/reasoning events,
-			// ToolCallDone not yet arrived) was judged stale by the watchdog
-			// and killed mid-generation.
+
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.refreshActivity()
 			}
 		case provider.StreamEventSystem:
-			// so users see them alongside the main conversation, not just
-			// in the follow panel. Prefix with the agent name for clarity.
+
 			agentName := cfg.SubAgentID
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); sa != nil && ok {
 				if sa.Name != "" {
@@ -319,9 +275,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventReasoning:
-			// Do NOT TrimSpace the text — reasoning chunks often have
-			// leading/trailing spaces that are the only separator between
-			// words. Trimming them causes "every10sevenwhentheappisidle".
+
 			text := event.Text
 			if text == "" {
 				break
@@ -339,15 +293,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			cfg.Manager.NotifyReasoning(cfg.SubAgentID, text)
 		}
 	})
-	// Flush any remaining text at the end of the stream
+
 	flushText()
 
 	result := output.String()
 
-	// Cap result size to prevent context window exhaustion when the parent
-	// agent consumes the result. Use head+tail with rune-safe boundaries:
-	// head preserves task context and initial findings, tail preserves the
-	// conclusion.
 	if len(result) > maxSubAgentResultBytes {
 		marker := fmt.Sprintf("\n\n[... truncated: %d bytes total, showing head + tail ...]\n\n", len(result))
 		budget := maxSubAgentResultBytes - len(marker)
@@ -357,19 +307,17 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if headEnd < tailStart {
 				result = result[:headEnd] + marker + result[tailStart:]
 			} else {
-				// Rune snapping caused overlap; keep tail only.
+
 				result = result[util.SnapToRuneStart(result, len(result)-budget):]
 			}
 		} else {
-			// Budget too small for head+tail; keep tail only.
+
 			result = result[util.SnapToRuneStart(result, len(result)-maxSubAgentResultBytes):]
 		}
 		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d",
 			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
 	}
 
-	// Clean up sub-agent's todo file. Sub-agent todos are transient -- they
-	// exist only for the sub-agent's lifetime and should not persist after.
 	todoPath := filepath.Join(config.HomeDir(), ".ggcode", "todos", cfg.SubAgentID+".json")
 	os.Remove(todoPath)
 
@@ -389,19 +337,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 }
 
-// Wait blocks until the sub-agent with the given ID finishes, returning its result.
 func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 	sa, ok := mgr.Get(id)
 	if !ok {
 		return "", fmt.Errorf("sub-agent %s not found", id)
 	}
 
-	// #713: select the done channel instead of polling status only. A
-	// Cancel-then-Complete race previously returned an empty snapshot once
-	// (Cancel had already set the terminal status with an empty Result; the
-	// runner's Complete backfill arrived a moment later). Waiting on done —
-	// closed by every terminal transition — plus a short post-signal grace
-	// closes that window; the result is also persisted either way.
 	done := sa.doneChan()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -418,12 +359,7 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		case StatusCompleted:
 			return result, nil
 		case StatusFailed, StatusCancelled:
-			// #4358: the entry timer previously created before the loop had
-			// long since fired for any real run (>500ms), so the old
-			// done/timer race returned immediately and the #713 post-signal
-			// grace was effectively zero. Block on done first (terminal
-			// transitions close it), THEN run a fresh short grace timer for
-			// the runner's Complete backfill, then re-read Result and Error.
+
 			if done != nil {
 				select {
 				case <-done:
@@ -438,8 +374,7 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 					return "", ctx.Err()
 				}
 			}
-			// Re-read after the grace window — Result for the backfill (#713),
-			// Error for consistency with the Complete path (#4358).
+
 			sa.mu.Lock()
 			result = sa.Result
 			err = sa.Error
@@ -456,18 +391,12 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 	}
 }
 
-// SnapshotProgressFunc is called with each progress snapshot during WaitForSnapshotWithProgress.
-// It receives a human-readable progress summary suitable for live TUI display.
 type SnapshotProgressFunc func(summary string)
 
-// WaitForSnapshot waits for a sub-agent to complete or timeout, returning a snapshot.
 func WaitForSnapshot(ctx context.Context, mgr *Manager, id string, wait time.Duration) (Snapshot, error) {
 	return WaitForSnapshotWithProgress(ctx, mgr, id, wait, nil)
 }
 
-// WaitForSnapshotWithProgress is like WaitForSnapshot but also calls progressFn with
-// a human-readable summary on each poll tick (throttled to ~1s). This enables
-// live streaming of sub-agent progress to the TUI while waiting.
 func WaitForSnapshotWithProgress(ctx context.Context, mgr *Manager, id string, wait time.Duration, progressFn SnapshotProgressFunc) (Snapshot, error) {
 	sa, ok := mgr.Get(id)
 	if !ok {
@@ -493,7 +422,6 @@ func WaitForSnapshotWithProgress(ctx context.Context, mgr *Manager, id string, w
 			return snap, nil
 		}
 
-		// Push progress to TUI (throttled to ~1s or on summary change).
 		if progressFn != nil {
 			summary := formatProgressSummary(snap)
 			now := time.Now()
@@ -515,7 +443,6 @@ func WaitForSnapshotWithProgress(ctx context.Context, mgr *Manager, id string, w
 	}
 }
 
-// formatProgressSummary produces a concise one-line progress summary for TUI streaming.
 func formatProgressSummary(snap Snapshot) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[%s] ", snap.Status))
@@ -529,10 +456,7 @@ func formatProgressSummary(snap Snapshot) string {
 		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentPhase))
 	}
 	if summary := strings.TrimSpace(snap.ProgressSummary); summary != "" {
-		// #520 class: truncate on a rune boundary - the old byte cut at 77
-		// split a multi-byte CJK rune mid-sequence and the TUI progress line
-		// rendered U+FFFD. util.Truncate is rune-safe (and #1849 negative-
-		// budget safe); for ASCII it is byte-identical to the old cut.
+
 		sb.WriteString(fmt.Sprintf("\n  %s", util.Truncate(summary, 80)))
 	}
 	return sb.String()

@@ -4,13 +4,9 @@ import (
 	"testing"
 )
 
-// #1781: the shell-done handler cleared shellOwnedLoading at the top and
-// then tested it twenty lines later for the #915 runCanceled/runFailed
-// reset - dead code. A shell-owned cancel leaked runCanceled into the
-// next normal agent completion (persist + pendingSubmission skipped).
 func TestShellDoneClearsCancelStateWhenShellOwnedRun(t *testing.T) {
 	m := newTestModel()
-	// Shell owns the loading state; user pressed Esc during it.
+
 	m.shellOwnedLoading = true
 	m.setLoading(true)
 	m.runCanceled = true

@@ -5,7 +5,7 @@ import (
 )
 
 func TestSiblingDiagnostics_NoServer(t *testing.T) {
-	// With no LSP server available, should return nil, nil (not error).
+
 	diags, err := SiblingDiagnostics(t.Context(), "/nonexistent/workspace", "/nonexistent/workspace/foo.go")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -16,7 +16,7 @@ func TestSiblingDiagnostics_NoServer(t *testing.T) {
 }
 
 func TestSiblingDiagnostics_NonGoFile(t *testing.T) {
-	// Non-Go files should be skipped immediately.
+
 	diags, err := SiblingDiagnostics(t.Context(), "/tmp", "/tmp/foo.ts")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -60,7 +60,6 @@ func TestCachedDiagnostics_WithData(t *testing.T) {
 		t.Fatalf("unexpected message: %s", diags[0].Message)
 	}
 
-	// Verify it's a copy (modifying the returned slice should not affect internal state)
 	diags[0].Message = "modified"
 	diags2, _ := s.cachedDiagnostics(uri)
 	if diags2[0].Message != "undefined: foo" {

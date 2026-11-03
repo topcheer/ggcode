@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// RingEntry is a single debug log entry stored in the ring buffer.
 type RingEntry struct {
 	Seq      int64  `json:"seq"`
 	Category string `json:"category"`
@@ -34,7 +33,6 @@ func init() {
 	ringBuf = make([]RingEntry, ringCap)
 }
 
-// ringAppend appends an entry to the ring buffer. Called from Log().
 func ringAppend(category, msg string) {
 	seq := atomic.AddInt64(&ringSeq, 1)
 	entry := RingEntry{
@@ -52,9 +50,6 @@ func ringAppend(category, msg string) {
 	ringMu.Unlock()
 }
 
-// RingHistory returns the last n entries from the ring buffer, optionally
-// filtered by category substring. If n <= 0 or n > maxRingReturn, it is
-// clamped to maxRingReturn. For larger queries (e.g. export), use RingHistoryMax.
 func RingHistory(n int, categoryFilter string) []RingEntry {
 	if n <= 0 || n > maxRingReturn {
 		n = maxRingReturn
@@ -62,9 +57,6 @@ func RingHistory(n int, categoryFilter string) []RingEntry {
 	return ringHistoryImpl(n, categoryFilter)
 }
 
-// RingHistoryMax returns up to n entries (max 2000) from the ring buffer,
-// optionally filtered by category substring. Use this for export use cases
-// where more than 200 entries are needed.
 func RingHistoryMax(n int, categoryFilter string) []RingEntry {
 	if n <= 0 {
 		n = maxRingReturn
@@ -75,14 +67,8 @@ func RingHistoryMax(n int, categoryFilter string) []RingEntry {
 	return ringHistoryImpl(n, categoryFilter)
 }
 
-// ringHistoryImpl filters by exact category match. The entry's Category
-// field was already routed through tagToCategory on the write side
-// (ringAppend), so the read side must compare that field directly — the
-// old message-body substring fallback ("[agent]" appearing in prose like
-// "discussing [agent] loop") produced false positives (#537).
 func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
-	// Reuse the write-side routing so a tag filter (e.g. "ctx") maps to its
-	// canonical category ("context") exactly as ringAppend stored it.
+
 	if cat, ok := tagToCategory[categoryFilter]; ok {
 		categoryFilter = cat
 	}
@@ -91,7 +77,7 @@ func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
 	if ringCount == 0 {
 		return nil
 	}
-	// Read from ring buffer, starting from the oldest entry
+
 	avail := ringCount
 	if n > avail {
 		n = avail
@@ -108,7 +94,6 @@ func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
 	return out
 }
 
-// RingStats returns basic stats about the ring buffer.
 func RingStats() (count, capacity int) {
 	ringMu.Lock()
 	defer ringMu.Unlock()

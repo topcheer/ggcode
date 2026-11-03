@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestResourceSubscribeCapabilityGate verifies that SubscribeResource and
-// UnsubscribeResource refuse to send anything when the negotiated server
-// capabilities do not advertise resources.subscribe (MCP 2025-06-18).
 func TestResourceSubscribeCapabilityGate(t *testing.T) {
 	c := NewClient("cap-test", "true", nil)
 

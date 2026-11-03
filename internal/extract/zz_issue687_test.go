@@ -1,10 +1,5 @@
 package extract
 
-// Regression test for issue #687 (regression of #683): a corrupt tar stream
-// was mislabeled "Truncated: archive exceeds extraction limits" — corruption
-// and size-limit truncation are different failure modes and must be
-// distinguished so the agent does not chase the wrong recovery path.
-
 import (
 	"archive/tar"
 	"bytes"
@@ -13,7 +8,7 @@ import (
 )
 
 func TestIssue687_CorruptTar_MarkedCorruptNotTruncated(t *testing.T) {
-	// Build a valid tar, then corrupt the checksum/header mid-stream.
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for i := 0; i < 5; i++ {
@@ -26,8 +21,7 @@ func TestIssue687_CorruptTar_MarkedCorruptNotTruncated(t *testing.T) {
 	tw.Close()
 
 	data := buf.Bytes()
-	// Corrupt a header deep in the stream (offset into the 2nd entry's
-	// header block: 512 (entry1 hdr) + 512 (entry1 data) + 16).
+
 	if len(data) > 1040 {
 		for i := 1040; i < 1056 && i < len(data); i++ {
 			if data[i] != 0 {
@@ -49,7 +43,7 @@ func TestIssue687_CorruptTar_MarkedCorruptNotTruncated(t *testing.T) {
 }
 
 func TestIssue687_TruncatedTar_StillShowsEntryCapMarker(t *testing.T) {
-	// Entry-cap truncation (>500 entries) keeps the original marker.
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for i := 0; i < 520; i++ {

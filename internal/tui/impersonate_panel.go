@@ -21,8 +21,6 @@ const (
 	impSectionHeaders
 )
 
-// impMaxVisible is the impersonate panel render window height (#900:
-// single source shared by render and scroll math).
 const impMaxVisible = 16
 
 type headerEntry struct {
@@ -36,12 +34,12 @@ type impersonatePanelState struct {
 	currentPreset    string
 	versionInput     textinput.Model
 	customHeaders    []headerEntry
-	editingHeader    int // -1 = none, >=0 = editing index
+	editingHeader    int
 	headerKeyInput   textinput.Model
 	headerValueInput textinput.Model
 	section          impSection
 	message          string
-	persistFailed    bool // #1379-C: last SaveImpersonation failed
+	persistFailed    bool
 	scrollOffset     int
 }
 
@@ -129,12 +127,11 @@ func (m Model) renderImpersonatePanel() string {
 
 	var body []string
 
-	// --- Presets section ---
 	sectionStyle := lipgloss.NewStyle().Bold(true)
 	body = append(body, sectionStyle.Render(" Identity Presets"))
 	body = append(body, "")
 
-	maxVisible := impMaxVisible // #900/#914: single source - was a local hardcoded 16 while scroll math used 8
+	maxVisible := impMaxVisible
 	start, end := panel.scrollOffset, panel.scrollOffset+maxVisible
 	if end > len(panel.presets) {
 		end = len(panel.presets)
@@ -160,7 +157,6 @@ func (m Model) renderImpersonatePanel() string {
 			fmt.Sprintf("  (%d/%d, scroll with j/k)", panel.cursor+1, len(panel.presets))))
 	}
 
-	// --- Version section ---
 	body = append(body, "")
 	versionLabel := " Version"
 	if panel.section == impSectionVersion {
@@ -177,7 +173,6 @@ func (m Model) renderImpersonatePanel() string {
 		body = append(body, fmt.Sprintf("  %s", v))
 	}
 
-	// --- Custom Headers section ---
 	body = append(body, "")
 	headersLabel := " Custom Headers"
 	if panel.section == impSectionHeaders {
@@ -199,7 +194,6 @@ func (m Model) renderImpersonatePanel() string {
 		body = append(body, fmt.Sprintf("  value: %s", panel.headerValueInput.View()))
 	}
 
-	// --- Hint ---
 	body = append(body, "")
 	hint := "j/k navigate  enter select  tab sections  a add header  d delete  esc close"
 	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+hint))
@@ -217,22 +211,14 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 		return *m, nil
 	}
 
-	// If editing a header, route to header input
 	if panel.editingHeader >= 0 {
 		return m.handleImpersonateHeaderEdit(msg)
 	}
 
-	// If version section is focused and input is focused
 	if panel.section == impSectionVersion && panel.versionInput.Focused() {
 		switch msg.String() {
 		case "enter":
-			// #4589: the version input had NO commit path of its own - enter
-			// merely blurred, and closing the panel (esc below / panel-close
-			// key) never applied either, so a freshly typed version was
-			// silently dropped. Enter now commits via the same
-			// applyImpersonateSettings the preset/header paths use; it reads
-			// the full panel state, so the current preset and custom
-			// headers are preserved alongside the new version.
+
 			panel.versionInput.Blur()
 			return *m, m.applyImpersonateSettings()
 		case "esc":
@@ -252,24 +238,18 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 			if panel.cursor < panel.scrollOffset {
 				panel.scrollOffset = panel.cursor
 			}
-			// #1737 case 2: NO versionInput sync on cursor moves - the
-			// input used to flip to the target preset's default here while
-			// currentPreset only updated at presets-area Enter, so a header
-			// edit + Enter in ANOTHER section persisted preset A with
-			// preset B's default version (mismatched pair).
+
 		}
 		return *m, nil
 
 	case "down", "j":
 		if panel.section == impSectionPresets && panel.cursor < len(panel.presets)-1 {
 			panel.cursor++
-			// #900/#914: scroll math MUST match the render window (impMaxVisible)
-			// - the old +8/-7 pair scrolled at row 9 leaving half the window
-			// permanently blank.
+
 			if panel.cursor >= panel.scrollOffset+impMaxVisible {
 				panel.scrollOffset = panel.cursor - impMaxVisible + 1
 			}
-			// #1737 case 2: no versionInput sync here either (see "up").
+
 		}
 		return *m, nil
 
@@ -304,19 +284,14 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 
 	case "d":
 		if panel.section == impSectionHeaders && len(panel.customHeaders) > 0 {
-			// #900/#914: blind [1:] always deleted the FIRST (alphabetical)
-			// header and persisted the damage via SaveImpersonation. Delete
-			// the entry being edited when editing, else the first.
+
 			idx := 0
 			if panel.editingHeader >= 0 && panel.editingHeader < len(panel.customHeaders) {
 				idx = panel.editingHeader
 				panel.editingHeader = -1
 			}
 			panel.customHeaders = append(panel.customHeaders[:idx], panel.customHeaders[idx+1:]...)
-			// #1379-B: the local delete never reached applyImpersonateSettings
-			// (the 'a' path at :387 does) - panel showed the header gone while
-			// provider global state, runtime-injected headers and config all
-			// kept it; reopening the panel resurrected the deletion.
+
 			return *m, m.applyImpersonateSettings()
 		}
 		return *m, nil
@@ -398,33 +373,20 @@ func (m *Model) applyImpersonatePreset() (Model, tea.Cmd) {
 	}
 
 	preset := panel.presets[panel.cursor]
-	// #2202 (regression from the #1737 case 2 fix): syncing via
-	// syncImpersonateVersionToCursor here is wrong - the :157 guard
-	// (currentPreset == preset.ID) is always true at this point because
-	// currentPreset was just assigned, so (A) re-Enter on the same preset
-	// clobbered whatever the user had typed in the version field and
-	// re-persisted the OLD value, and (B) switching presets never loaded
-	// the target preset's default version (the isUserCustom branch ate the
-	// fallback). Only a REAL preset switch resets the version field - to
-	// the target preset's default (a persisted custom version belongs to
-	// the previous preset and must not leak into the new one).
+
 	switched := panel.currentPreset != preset.ID
 	panel.currentPreset = preset.ID
 	if switched {
 		panel.versionInput.SetValue(preset.DefaultVersion)
 	}
 
-	// Apply and persist
 	applyCmd := m.applyImpersonateSettings()
 
 	presetPtr := &preset
 	if preset.ID == "none" {
 		presetPtr = nil
 	}
-	// #1379-C: only announce success when persistence succeeded -
-	// applyImpersonateSettings writes the failure into panel.message, and
-	// the old unconditional overwrite replaced it with a fake success line
-	// while SetActiveImpersonation had already switched the runtime.
+
 	if !panel.persistFailed {
 		if presetPtr == nil {
 			panel.message = "cleared impersonation"
@@ -451,31 +413,19 @@ func (m *Model) applyImpersonateSettings() tea.Cmd {
 	version := strings.TrimSpace(panel.versionInput.Value())
 	customHeaders := headerEntriesToMap(panel.customHeaders)
 
-	// Snapshot the outgoing impersonation state so a failed persist can
-	// roll the runtime back (#4590): without this, SetActiveImpersonation
-	// + header injection take effect for the rest of the process while
-	// SaveImpersonation keeps the OLD identity on disk - runtime/disk fork,
-	// silently reverted on the next restart.
 	prevPreset, prevVersion, prevHeaders := provider.GetActiveImpersonation()
 
-	// Set global impersonation state
 	provider.SetActiveImpersonation(presetPtr, version, customHeaders)
 
-	// Apply headers to current provider
 	m.applyImpersonationToProvider()
 
-	// Persist to config
 	impCfg := config.ImpersonationConfig{
 		Preset:        presetID,
 		CustomVersion: version,
 		CustomHeaders: customHeaders,
 	}
 	if err := m.config.SaveImpersonation(impCfg); err != nil {
-		// #4590: roll the runtime back to what the disk still holds.
-		// applyImpersonationToProvider rebuilds headers from the global
-		// state, so restoring that state first re-injects the old
-		// identity on every provider kind (HeaderMutable, copilot UA,
-		// anthropic reload).
+
 		provider.SetActiveImpersonation(prevPreset, prevVersion, prevHeaders)
 		m.applyImpersonationToProvider()
 		panel.message = fmt.Sprintf("config write failed: %v (identity not applied)", err)
@@ -501,7 +451,6 @@ func (m *Model) applyImpersonationToProvider() {
 		mutable.UpdateRuntimeHeaders(headers)
 	}
 
-	// For copilot provider, also set the UA directly
 	if copilot, ok := p.(interface{ SetImpersonatedUA(string) }); ok {
 		ua := headers.Get("User-Agent")
 		if ua != "" {
@@ -509,7 +458,6 @@ func (m *Model) applyImpersonationToProvider() {
 		}
 	}
 
-	// For Anthropic provider, headers are immutable - need to reload
 	if p.Name() == "anthropic" {
 		_ = m.reloadActiveProvider()
 	}

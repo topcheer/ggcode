@@ -10,9 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// TestMCPListOutputUsesLF covers #660: `mcp list` must not emit CRLF line
-// endings — Unix pipelines get a stray CR on every line otherwise. Both the
-// empty listing and the populated listing paths are checked.
 func TestMCPListOutputUsesLF(t *testing.T) {
 	cases := []struct {
 		name string

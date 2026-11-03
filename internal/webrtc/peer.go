@@ -12,11 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// DataChannelLabel is the WebRTC DataChannel label used for the tunnel.
 const DataChannelLabel = "ggcode-tunnel"
 
-// Peer wraps a WebRTC PeerConnection with a DataChannel for tunnel transport.
-// It implements the offerer (host) and answerer (mobile) roles.
 type Peer struct {
 	pc *webrtc.PeerConnection
 	dc *webrtc.DataChannel
@@ -25,28 +22,20 @@ type Peer struct {
 	dcReady     bool
 	closed      bool
 	closeOnce   sync.Once
-	dcReadyOnce sync.Once // guards dcReadyCh: closed exactly once by OnOpen or Close
-	disconnOnce sync.Once // guards the disconnect callback: fires exactly once per Peer lifecycle (#1827 case 2)
+	dcReadyOnce sync.Once
+	disconnOnce sync.Once
 
-	// Callbacks (set by caller before ICE completes)
 	onMessage      func(data []byte)
 	onDisconnect   func()
 	onICECandidate func(candidate string)
 	onDCOpen       func()
 
-	// Completion signaling
 	dcReadyCh chan struct{}
 
-	// Trickle ICE buffering (issue #549 bug C): candidates that arrive
-	// before the remote description is set would make pion return
-	// InvalidStateError and be lost. Buffer them and replay after
-	// SetRemoteDescription succeeds.
 	remoteDescSet     bool
 	pendingCandidates []webrtc.ICECandidateInit
 }
 
-// pionLogger adapts pion/logging to our debug.Log system,
-// preventing pion from writing directly to stderr (which breaks the TUI).
 type pionLogger struct {
 	scope string
 }
@@ -76,12 +65,10 @@ func (f *pionLoggerFactory) NewLogger(scope string) pionlogging.LeveledLogger {
 	return &pionLogger{scope: scope}
 }
 
-// NewPeer creates a new WebRTC Peer with default ICE configuration.
 func NewPeer() (*Peer, error) {
 	settings := webrtc.SettingEngine{}
 	settings.LoggerFactory = &pionLoggerFactory{}
-	// Give TURN/STUN servers more time to respond (default is ~5s which is
-	// too short for networks behind GFW/CGNAT with UDP packet loss).
+
 	settings.SetICETimeouts(15*time.Second, 30*time.Second, 700*time.Millisecond)
 
 	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(PeerConfig())
@@ -94,7 +81,6 @@ func NewPeer() (*Peer, error) {
 		dcReadyCh: make(chan struct{}),
 	}
 
-	// Forward local ICE candidates to the caller for trickle ICE.
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
 			debug.Log("webrtc", "ICE gathering complete")
@@ -114,28 +100,17 @@ func NewPeer() (*Peer, error) {
 		}
 	})
 
-	// Handle ICE connection state changes
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		debug.Log("webrtc", "ICE connection state: %s", state.String())
 	})
 
-	// Handle peer connection state changes
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		debug.Log("webrtc", "peer connection state: %s", state.String())
 		switch state {
 		case webrtc.PeerConnectionStateConnected:
-			// P2P connected (DataChannel may open shortly)
+
 		case webrtc.PeerConnectionStateDisconnected:
-			// #1854: Disconnected is a TRANSIENT state - pion keeps
-			// consent-checking and often self-heals by regathering, and a
-			// recovered connection returns to Connected. Treating it like
-			// Failed tore down the DataChannel on every wifi hiccup and
-			// fell back to relay + a full re-negotiation (a new
-			// PeerConnection costs the mobile side ~50MB per host_factory
-			// comments) - abandoning the protocol layer's own recovery.
-			// The teardown still happens when pion escalates to Failed
-			// (persistent consent failure) or the DataChannel itself
-			// closes/errors (peer went away).
+
 			debug.Log("webrtc", "peer connection disconnected (transient; waiting for recovery or Failed)")
 		case webrtc.PeerConnectionStateFailed:
 			debug.Log("webrtc", "peer connection failed")
@@ -149,18 +124,10 @@ func NewPeer() (*Peer, error) {
 	return p, nil
 }
 
-// stateTriggersTeardown reports whether a PeerConnection state warrants a
-// transport teardown. Only Failed (terminal) does: Disconnected is
-// transient self-heal territory (#1854) and Closed is the orderly shutdown
-// path handled by Close().
 func stateTriggersTeardown(state webrtc.PeerConnectionState) bool {
 	return state == webrtc.PeerConnectionStateFailed
 }
 
-// ─── Host role (offerer) ───
-
-// CreateOffer creates a DataChannel and generates an SDP offer.
-// The host calls this to initiate the P2P upgrade.
 func (p *Peer) CreateOffer() (string, error) {
 	dc, err := p.pc.CreateDataChannel(DataChannelLabel, DataChannelConfig())
 	if err != nil {
@@ -178,7 +145,6 @@ func (p *Peer) CreateOffer() (string, error) {
 	return encodeSDP(offer), nil
 }
 
-// SetRemoteAnswer sets the remote SDP answer from the mobile client.
 func (p *Peer) SetRemoteAnswer(sdp string) error {
 	desc, err := decodeSDP(sdp)
 	if err != nil {
@@ -191,9 +157,6 @@ func (p *Peer) SetRemoteAnswer(sdp string) error {
 	return nil
 }
 
-// ─── Mobile role (answerer) ───
-
-// SetRemoteOffer sets the remote SDP offer from the host.
 func (p *Peer) SetRemoteOffer(sdp string) error {
 	desc, err := decodeSDP(sdp)
 	if err != nil {
@@ -204,7 +167,6 @@ func (p *Peer) SetRemoteOffer(sdp string) error {
 	}
 	p.markRemoteDescSet()
 
-	// Set up handler for the incoming DataChannel created by the host.
 	p.pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		if dc.Label() != DataChannelLabel {
 			debug.Log("webrtc", "ignoring unexpected data channel: %s", dc.Label())
@@ -215,7 +177,6 @@ func (p *Peer) SetRemoteOffer(sdp string) error {
 	return nil
 }
 
-// CreateAnswer generates an SDP answer after SetRemoteOffer.
 func (p *Peer) CreateAnswer() (string, error) {
 	answer, err := p.pc.CreateAnswer(nil)
 	if err != nil {
@@ -227,14 +188,6 @@ func (p *Peer) CreateAnswer() (string, error) {
 	return encodeSDP(answer), nil
 }
 
-// ─── ICE candidate exchange ───
-
-// AddICECandidate adds a remote trickle ICE candidate received from the peer.
-// If the remote description has not been applied yet, the candidate is
-// buffered instead of dropped: pion returns InvalidStateError in that state
-// and trickle ICE candidates frequently arrive before the SDP answer
-// (issue #549 bug C). Buffered candidates are replayed by
-// markRemoteDescSet once the remote description is applied.
 func (p *Peer) AddICECandidate(candidateStr string) error {
 	init, err := decodeCandidate(candidateStr)
 	if err != nil {
@@ -251,8 +204,6 @@ func (p *Peer) AddICECandidate(candidateStr string) error {
 	return p.pc.AddICECandidate(init)
 }
 
-// markRemoteDescSet flags the remote description as applied and replays any
-// candidates buffered before it was available.
 func (p *Peer) markRemoteDescSet() {
 	p.mu.Lock()
 	p.remoteDescSet = true
@@ -268,15 +219,11 @@ func (p *Peer) markRemoteDescSet() {
 	}
 }
 
-// OnICECandidate registers a callback for local ICE candidates.
-// Call this before CreateOffer or SetRemoteOffer.
 func (p *Peer) OnICECandidate(fn func(candidate string)) {
 	p.mu.Lock()
 	p.onICECandidate = fn
 	p.mu.Unlock()
 }
-
-// ─── DataChannel ───
 
 func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 	p.mu.Lock()
@@ -289,9 +236,7 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 		fn := p.onDCOpen
 		p.mu.Unlock()
 		debug.Log("webrtc", "data channel opened")
-		// Signal readiness. dcReadyOnce guarantees exactly-once closing even
-		// if multiple DataChannels with the same label attach and open
-		// (remote can renegotiate), or if Close() runs concurrently.
+
 		p.signalDCReady()
 		if fn != nil {
 			fn()
@@ -309,12 +254,7 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 
 	dc.OnClose(func() {
 		debug.Log("webrtc", "data channel closed")
-		// #928: dcReady must reset on close or IsReady() lies and Send()
-		// writes to a closed channel.
-		// #2194: only when THIS channel is still the current one - after
-		// a renegotiation the OLD channel's close arrives late and used
-		// to knock the NEW (already-ready) channel back to not-ready and
-		// burn disconnOnce on a phantom disconnect.
+
 		p.mu.Lock()
 		stale := p.dc != dc
 		if !stale {
@@ -342,28 +282,24 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 	})
 }
 
-// OnMessage sets the handler for incoming DataChannel messages.
 func (p *Peer) OnMessage(fn func(data []byte)) {
 	p.mu.Lock()
 	p.onMessage = fn
 	p.mu.Unlock()
 }
 
-// OnDisconnect sets the handler for P2P connection loss.
 func (p *Peer) OnDisconnect(fn func()) {
 	p.mu.Lock()
 	p.onDisconnect = fn
 	p.mu.Unlock()
 }
 
-// OnDCOpen sets the handler called when the DataChannel becomes ready.
 func (p *Peer) OnDCOpen(fn func()) {
 	p.mu.Lock()
 	p.onDCOpen = fn
 	p.mu.Unlock()
 }
 
-// Send writes data to the DataChannel.
 func (p *Peer) Send(data []byte) error {
 	p.mu.Lock()
 	dc := p.dc
@@ -375,19 +311,15 @@ func (p *Peer) Send(data []byte) error {
 	return dc.Send(data)
 }
 
-// IsReady returns whether the DataChannel is open and ready for data.
 func (p *Peer) IsReady() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.dcReady
 }
 
-// Close terminates the PeerConnection and DataChannel.
 func (p *Peer) Close() error {
 	p.closeOnce.Do(func() {
-		// Read p.dc under the lock: attachDataChannel writes it under the
-		// same lock from the pion OnDataChannel callback, which may fire at
-		// any time (issue #549 bug A, -race verified).
+
 		p.mu.Lock()
 		p.closed = true
 		dc := p.dc
@@ -399,26 +331,18 @@ func (p *Peer) Close() error {
 		if p.pc != nil {
 			_ = p.pc.Close()
 		}
-		// dcReadyOnce makes this safe even if OnOpen closed the channel first.
+
 		p.signalDCReady()
 	})
 	return nil
 }
 
-// signalDCReady closes dcReadyCh exactly once. Safe to call from OnOpen
-// (possibly multiple times across renegotiated DataChannels) and from Close.
 func (p *Peer) signalDCReady() {
 	p.dcReadyOnce.Do(func() {
 		close(p.dcReadyCh)
 	})
 }
 
-// handleDisconnect fires the registered disconnect callback exactly once
-// per Peer lifecycle (#1827 case 2): four distinct trigger points
-// (PeerConnectionState Disconnected, Failed, DataChannel OnClose, OnError)
-// can all observe the same link failure within milliseconds of each other,
-// and every invocation spawned its own safego goroutine - the upgrade layer
-// then ran duplicate retry/Start cycles for a single connection loss.
 func (p *Peer) handleDisconnect() {
 	p.disconnOnce.Do(func() {
 		p.mu.Lock()

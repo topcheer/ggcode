@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// TestParseElicitationParamsURLMode pins the MCP 2025-11-25 wire format:
-// mode "url" carries url + elicitationId; mode-less requests normalize to
-// form mode (spec: clients MUST treat missing mode as form).
 func TestParseElicitationParamsURLMode(t *testing.T) {
 	raw := json.RawMessage(`{
 		"mode": "url",
@@ -53,9 +50,9 @@ func TestValidateElicitationURL(t *testing.T) {
 		{"https://mcp.example.com/ui/set_api_key", true},
 		{"http://localhost:3000/connect", true},
 		{"http://127.0.0.1:8080/x", true},
-		{"http://mcp.example.com/ui", false}, // non-local plain http
-		{"ftp://mcp.example.com/x", false},   // unsupported scheme
-		{"/relative/path", false},            // no host
+		{"http://mcp.example.com/ui", false},
+		{"ftp://mcp.example.com/x", false},
+		{"/relative/path", false},
 		{"", false},
 	}
 	for _, tc := range cases {
@@ -79,14 +76,12 @@ func TestValidateElicitationParamsURLMode(t *testing.T) {
 	if err := validateElicitationParams(ElicitationParams{Mode: ElicitationModeURL, ElicitationID: "x", URL: "https://mcp.example.com/ui"}); err != nil {
 		t.Fatalf("valid url mode rejected: %v", err)
 	}
-	// Form mode still validates the schema.
+
 	if err := validateElicitationParams(ElicitationParams{}); err == nil {
 		t.Fatal("form mode without schema must fail")
 	}
 }
 
-// TestElicitationCapabilityAdvertisesBothModes pins the 2025-11-25
-// capability shape: {"elicitation":{"form":{},"url":{}}}.
 func TestElicitationCapabilityAdvertisesBothModes(t *testing.T) {
 	caps := ClientCaps{}
 	caps.Roots.ListChanged = true
@@ -109,8 +104,6 @@ func TestElicitationCapabilityAdvertisesBothModes(t *testing.T) {
 	}
 }
 
-// TestElicitationCompleteNotificationBookkeeping covers the pending-ID set:
-// known IDs are retired, unknown/complete entries are ignored (spec MUST).
 func TestElicitationCompleteNotificationBookkeeping(t *testing.T) {
 	c := NewClient("test", "echo", nil)
 	c.trackURLElicitation("id-1")
@@ -121,19 +114,15 @@ func TestElicitationCompleteNotificationBookkeeping(t *testing.T) {
 	if _, known := c.pendingURLElicitations["id-1"]; known {
 		t.Fatal("id-1 should be retired after completion")
 	}
-	// Unknown IDs and malformed params are ignored without panicking.
+
 	c.handleElicitationComplete(json.RawMessage(`{"elicitationId":"nope"}`))
 	c.handleElicitationComplete(json.RawMessage(`{}`))
 	c.handleElicitationComplete(nil)
 }
 
-// TestProcessNotificationInterceptsElicitationComplete ensures the internal
-// completion notification is consumed by the client (not forwarded to the
-// generic notification handler) and retires the tracked ID.
 func TestProcessNotificationInterceptsElicitationComplete(t *testing.T) {
 	c := NewClient("test", "echo", nil)
-	// processNotification dispatches handlers asynchronously (fix #255), so
-	// delivery is observed via a channel with a deadline instead of a flag.
+
 	generic := make(chan string, 8)
 	c.SetNotificationHandler(func(method string, params json.RawMessage) {
 		generic <- method
@@ -151,7 +140,7 @@ func TestProcessNotificationInterceptsElicitationComplete(t *testing.T) {
 	if _, known := c.pendingURLElicitations["id-2"]; known {
 		t.Fatal("id-2 should be retired via processNotification")
 	}
-	// Non-elicitation notifications still flow through (asynchronously).
+
 	c.processNotification(&Notification{Method: "notifications/tools/list_changed"})
 	select {
 	case method := <-generic:

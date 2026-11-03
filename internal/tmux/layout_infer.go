@@ -7,15 +7,12 @@ import (
 	"strings"
 )
 
-// InferDefaultLayout returns a reasonable first-run layout for a workspace.
-// It is intentionally conservative and only uses local project files.
 func InferDefaultLayout(workspace string) []LayoutPane {
 	workspace = normalizeWorkspace(workspace)
 	if fileExists(filepath.Join(workspace, "go.mod")) {
 		layout := []LayoutPane{
 			{Purpose: "shell", Command: "", Horizontal: true, Size: "35%"},
-			// #811: this is a GENERIC first-run layout; hardcoding this repo's
-			// '-tags goolm' filtered out every test in third-party projects.
+
 			{Purpose: "test", Command: "go test ./...", Horizontal: false, Size: "30%"},
 		}
 		if makefileHasTarget(workspace, "verify-ci") {

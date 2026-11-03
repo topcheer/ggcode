@@ -7,7 +7,6 @@ import (
 
 func targets(rep PreviewReport) []string { return rep.WriteTargets }
 
-// Compound chains split on && / ; / | - each segment rehearsed.
 func TestPreviewCommand_CompoundChain(t *testing.T) {
 	rep := PreviewCommand("mkdir -p a/b && rm -rf build && cat x | sort > out.txt")
 	if len(rep.Subcommands) != 4 {
@@ -23,7 +22,6 @@ func TestPreviewCommand_CompoundChain(t *testing.T) {
 	}
 }
 
-// Pipe characters inside quotes must NOT split segments.
 func TestPreviewCommand_QuotedPipeNoSplit(t *testing.T) {
 	rep := PreviewCommand(`grep "a|b" file.txt`)
 	if len(rep.Subcommands) != 1 {
@@ -34,7 +32,6 @@ func TestPreviewCommand_QuotedPipeNoSplit(t *testing.T) {
 	}
 }
 
-// rm enumerates every non-flag positional; -rf is a flag.
 func TestPreviewCommand_RmEnumeratesTargets(t *testing.T) {
 	rep := PreviewCommand("rm -rf /tmp/a /tmp/b c.txt")
 	want := []string{"/tmp/a", "/tmp/b", "c.txt"}
@@ -46,7 +43,6 @@ func TestPreviewCommand_RmEnumeratesTargets(t *testing.T) {
 	}
 }
 
-// git clean without paths targets the entire worktree.
 func TestPreviewCommand_GitCleanWholeTree(t *testing.T) {
 	rep := PreviewCommand("git clean -fdx")
 	found := false
@@ -65,7 +61,6 @@ func TestPreviewCommand_GitCleanWholeTree(t *testing.T) {
 	}
 }
 
-// git reset --hard is destructive but has no enumerable file targets.
 func TestPreviewCommand_GitResetHard(t *testing.T) {
 	rep := PreviewCommand("git reset --hard HEAD~1")
 	if !rep.Destructive {
@@ -76,7 +71,6 @@ func TestPreviewCommand_GitResetHard(t *testing.T) {
 	}
 }
 
-// sed -i targets the file operands, not the script.
 func TestPreviewCommand_SedInPlace(t *testing.T) {
 	rep := PreviewCommand(`sed -i 's/a/b/' main.go`)
 	got := targets(rep)
@@ -86,7 +80,6 @@ func TestPreviewCommand_SedInPlace(t *testing.T) {
 	}
 }
 
-// Redirection attaches write targets even to read-only verbs.
 func TestPreviewCommand_RedirectOnReadonlyVerb(t *testing.T) {
 	rep := PreviewCommand("sort input.txt > sorted.txt")
 	got := targets(rep)
@@ -95,7 +88,6 @@ func TestPreviewCommand_RedirectOnReadonlyVerb(t *testing.T) {
 	}
 }
 
-// sudo/env wrappers are rehearsed through to the wrapped verb.
 func TestPreviewCommand_SudoWrapped(t *testing.T) {
 	rep := PreviewCommand("sudo rm -rf /etc/thing")
 	if !rep.Destructive {
@@ -107,7 +99,6 @@ func TestPreviewCommand_SudoWrapped(t *testing.T) {
 	}
 }
 
-// Pure read commands produce no targets and no destructive flag.
 func TestPreviewCommand_ReadOnly(t *testing.T) {
 	for _, cmd := range []string{"ls -la", "cat main.go", "go version", ""} {
 		rep := PreviewCommand(cmd)
@@ -117,7 +108,6 @@ func TestPreviewCommand_ReadOnly(t *testing.T) {
 	}
 }
 
-// Verbs with a leading path (/bin/rm) are normalized.
 func TestPreviewCommand_VerbPathPrefix(t *testing.T) {
 	rep := PreviewCommand("/bin/rm -rf build")
 	if !rep.Destructive {

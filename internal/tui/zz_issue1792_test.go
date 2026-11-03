@@ -1,10 +1,5 @@
 package tui
 
-// #1792 case 1 regression: expired/canceled/timeout QR statuses used to
-// fall into a default branch whose error check was dead code (the error
-// path returns earlier) - polling silently stopped with the expired QR
-// still on screen and no hint to press 'a'.
-
 import (
 	"strings"
 	"testing"
@@ -18,7 +13,6 @@ func TestWechatPollTerminalStatusSurfaces(t *testing.T) {
 	}
 	m.wechatPanel = p
 
-	// Simulate the status-msg handler directly with an expired status.
 	msg := wechatQRPollMsg{status: "expired"}
 	updated, _ := m.handleWechatQRPollMsg(msg)
 	pp := updated.wechatPanel

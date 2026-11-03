@@ -15,11 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ---------------------------------------------------------------------------
-// Follow state (unified for sub-agents and swarm teammates)
-// ---------------------------------------------------------------------------
-
-// followSlotKind distinguishes sub-agent slots from swarm teammate slots.
 type followSlotKind int
 
 const (
@@ -27,60 +22,40 @@ const (
 	followSlotTeammate
 )
 
-// followSlot is a unified slot for both sub-agents and swarm teammates.
 type followSlot struct {
 	ID       string
 	Name     string
 	Model    string
 	Kind     followSlotKind
 	Phase    string
-	Terminal bool // completed/failed/cancelled/idle
+	Terminal bool
 }
 
 type followViewEntry struct {
 	list            *chat.List
 	dropped         int
-	eventsProcessed int    // number of events rendered in last build; skip rebuild if unchanged
-	status          string // last rendered status; rebuild if changed
-	task            string // last rendered current task (#1761 case 1: header staleness)
+	eventsProcessed int
+	status          string
+	task            string
 }
 
-// stripRefreshInterval is the minimum time between follow-strip refreshes.
-// This prevents high-frequency teammate_text events from triggering expensive
-// refreshSlots/refreshSwarmSlots calls on every streaming token.
-// LLM responses typically take seconds, so 2s is sufficient for status updates.
 const stripRefreshInterval = 2 * time.Second
 
-// subAgentFollowState tracks the TUI follow-mode for sub-agents AND swarm teammates.
-// Ctrl+N cycles through all slots regardless of kind.
 type subAgentFollowState struct {
-	activeID         string                      // agent/teammate ID being followed ("" = main view)
-	slots            []followSlot                // ordered list of all followable agents
-	views            map[string]*followViewEntry // cached chat lists per agent
-	dirty            map[string]bool             // which views need rebuild
-	lastRebuild      map[string]time.Time        // throttle: last rebuild time per view
-	lastStripRefresh time.Time                   // throttle: last time strip slots were refreshed
-	stripDirty       bool                        // true when strip needs refresh on next tick
+	activeID         string
+	slots            []followSlot
+	views            map[string]*followViewEntry
+	dirty            map[string]bool
+	lastRebuild      map[string]time.Time
+	lastStripRefresh time.Time
+	stripDirty       bool
 }
 
-// ---------------------------------------------------------------------------
-// Slot management
-// ---------------------------------------------------------------------------
-
-// refreshSlots rebuilds the slot list from the sub-agent manager.
-// Completed/failed/cancelled sub-agents are excluded — they accumulate
-// over time and would clutter the strip. Teammates are handled separately
-// in refreshSwarmSlots (they have lifecycle management via team deletion).
-// Slots are sorted by ID for stable ordering across refreshes.
-// subAgentGracePeriod is how long a completed/failed/cancelled sub-agent
-// remains visible in the follow strip before being removed.
 const subAgentGracePeriod = 1 * time.Minute
 
 func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 	var newSlots []followSlot
 
-	// Sub-agent slots: keep running agents and recently-completed ones (grace period)
-	// Uses the lightweight Statuses() API to avoid copying events.
 	if saMgr != nil {
 		statuses := saMgr.Statuses()
 		slices.SortFunc(statuses, func(a, b subagent.StatusInfo) int {
@@ -90,7 +65,7 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 		for _, s := range statuses {
 			isTerminal := s.Status == subagent.StatusCompleted || s.Status == subagent.StatusFailed || s.Status == subagent.StatusCancelled
 			if isTerminal {
-				// Keep in strip during grace period so user can see the result
+
 				if !s.EndedAt.IsZero() && now.Sub(s.EndedAt) < subAgentGracePeriod {
 					newSlots = append(newSlots, followSlot{
 						ID:       s.ID,
@@ -117,13 +92,11 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 	f.slots = newSlots
 }
 
-// refreshSwarmSlots appends swarm teammate slots.
-// Uses the lightweight ListTeamStatuses() API to avoid copying teammate events.
 func (f *subAgentFollowState) refreshSwarmSlots(swMgr *swarm.Manager) {
 	if swMgr == nil {
 		return
 	}
-	// Remove existing teammate slots, keep sub-agent ones
+
 	var subOnly []followSlot
 	for _, s := range f.slots {
 		if s.Kind == followSlotSubAgent {
@@ -143,13 +116,12 @@ func (f *subAgentFollowState) refreshSwarmSlots(swMgr *swarm.Manager) {
 			})
 		}
 	}
-	// Sort all slots by ID for stable ordering
+
 	slices.SortFunc(f.slots, func(a, b followSlot) int {
 		return cmp.Compare(a.ID, b.ID)
 	})
 }
 
-// markDirty marks a view as needing rebuild.
 func (f *subAgentFollowState) markDirty(agentID string) {
 	if f.dirty == nil {
 		f.dirty = make(map[string]bool)
@@ -157,24 +129,17 @@ func (f *subAgentFollowState) markDirty(agentID string) {
 	f.dirty[agentID] = true
 }
 
-// markStripDirty marks the follow strip as needing a slot refresh.
-// The actual refresh is deferred to the next periodic tick (stripRefreshInterval)
-// to avoid calling refreshSlots/refreshSwarmSlots on every streaming token.
 func (f *subAgentFollowState) markStripDirty() {
 	f.stripDirty = true
 }
 
-// refreshStripIfNeeded performs the strip refresh only if enough time has
-// elapsed since the last refresh (stripRefreshInterval). This is called
-// from handleSubAgentUpdateMsg and handleSubAgentFollowRefreshMsg.
-// Returns true if a refresh happened.
 func (f *subAgentFollowState) refreshStripIfNeeded(saMgr *subagent.Manager, swMgr *swarm.Manager) bool {
 	if !f.stripDirty {
 		return false
 	}
 	now := time.Now()
 	if !f.lastStripRefresh.IsZero() && now.Sub(f.lastStripRefresh) < stripRefreshInterval {
-		return false // still throttled
+		return false
 	}
 	f.refreshSlots(saMgr)
 	f.refreshSwarmSlots(swMgr)
@@ -183,12 +148,10 @@ func (f *subAgentFollowState) refreshStripIfNeeded(saMgr *subagent.Manager, swMg
 	return true
 }
 
-// isActive returns true if we're following a specific agent.
 func (f *subAgentFollowState) isActive() bool {
 	return f.activeID != ""
 }
 
-// activate enters follow mode for the given slot index.
 func (f *subAgentFollowState) activate(index int) {
 	if index < 0 || index >= len(f.slots) {
 		return
@@ -196,14 +159,12 @@ func (f *subAgentFollowState) activate(index int) {
 	f.activeID = f.slots[index].ID
 }
 
-// deactivate exits follow mode and returns the previously active ID.
 func (f *subAgentFollowState) deactivate() string {
 	prev := f.activeID
 	f.activeID = ""
 	return prev
 }
 
-// currentSlotIndex returns the index of the currently active slot, or -1 if not active.
 func (f *subAgentFollowState) currentSlotIndex() int {
 	if !f.isActive() {
 		return -1
@@ -230,24 +191,18 @@ func (f *subAgentFollowState) getOrCreateView(agentID string, width, height int)
 	return entry
 }
 
-// ---------------------------------------------------------------------------
-// Follow list building (unified for sub-agents and teammates)
-// ---------------------------------------------------------------------------
-
-// followEventData is the common data needed to build a follow list.
 type followEventData struct {
 	ID            string
 	Name          string
 	Model         string
 	Task          string
-	Status        string // "running", "completed", "failed", "idle", "working"
+	Status        string
 	Events        []followEvent
 	EventsDropped int
 }
 
-// followEvent is a unified event type for both sub-agent and teammate events.
 type followEvent struct {
-	Type            int // 0=text, 1=toolCall, 2=toolResult, 3=error
+	Type            int
 	Text            string
 	ToolID          string
 	ToolName        string
@@ -265,12 +220,9 @@ const (
 	followEventError      = 3
 )
 
-// buildFollowList builds a chat list from followEventData.
-// This is the unified renderer for both sub-agents and teammates.
 func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) {
 	list.SetItems(nil)
 
-	// Header: name + status
 	name := data.Name
 	if name == "" {
 		name = shortID(data.ID)
@@ -296,7 +248,6 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 		))
 	}
 
-	// Text flush helper
 	flushText := func(buf *strings.Builder) {
 		text := buf.String()
 		buf.Reset()
@@ -305,9 +256,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 		}
 		ai := chat.NewAssistantItem("", styles)
 		ai.SetText(text)
-		// Follow panel shows snapshots (complete text, not streaming).
-		// Mark as finished so Render() uses markdown.Render() instead of
-		// renderStreamingMarkdown(), which can mangle whitespace.
+
 		ai.SetFinished()
 		list.Append(ai)
 	}
@@ -315,11 +264,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 	toolCalls := make(map[string]int)
 	toolCallCount := make(map[string]int)
 	toolResultCount := make(map[string]int)
-	// #1761 case 2: per-name FIFO of pending (unfinished) call keys for the
-	// empty-ToolID fallback. The old independent counters mismatched when a
-	// result was missing: call1(no result) + call2 + result2 matched call1,
-	// leaving call2 pending forever. With the queue, a result always binds
-	// to the OLDEST unfinished same-name call.
+
 	pendingByName := make(map[string][]string)
 	var textBuf strings.Builder
 
@@ -368,8 +313,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 			}
 			key := ev.ToolID
 			if key == "" {
-				// #1761 case 2: bind to the oldest unfinished same-name call
-				// (FIFO) instead of an independent result counter.
+
 				if q := pendingByName[ev.ToolName]; len(q) > 0 {
 					key = q[0]
 					pendingByName[ev.ToolName] = q[1:]
@@ -399,7 +343,6 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 	flushText(&textBuf)
 }
 
-// subagentSnapshotToFollowData converts a subagent.Snapshot to followEventData.
 func subagentSnapshotToFollowData(snap subagent.Snapshot) followEventData {
 	events := make([]followEvent, len(snap.Events))
 	for i, ev := range snap.Events {
@@ -438,7 +381,6 @@ func subagentSnapshotToFollowData(snap subagent.Snapshot) followEventData {
 	}
 }
 
-// teammateSnapshotToFollowData converts a swarm.TeammateSnapshot to followEventData.
 func teammateSnapshotToFollowData(snap swarm.TeammateSnapshot) followEventData {
 	events := make([]followEvent, len(snap.Events))
 	for i, ev := range snap.Events {
@@ -477,28 +419,16 @@ func teammateSnapshotToFollowData(snap swarm.TeammateSnapshot) followEventData {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// rebuildActiveView: called from Update(), NOT from View()
-// ---------------------------------------------------------------------------
-
-// rebuildActiveView rebuilds the follow list for the currently active slot.
-// Must be called from Update(), NOT from View().
 func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *swarm.Manager, styles chat.Styles) {
 	if !f.isActive() {
 		return
 	}
-	entry := f.getOrCreateView(f.activeID, 0, 0) // width/height set later in View()
+	entry := f.getOrCreateView(f.activeID, 0, 0)
 
-	// Try sub-agent first
 	if saMgr != nil {
 		if snap, ok := saMgr.Snapshot(f.activeID); ok {
 			data := subagentSnapshotToFollowData(snap)
-			// Skip full rebuild if nothing changed (same event count + status).
-			// This avoids re-processing hundreds of events on every 1s tick
-			// when the sub-agent is idle or between tool calls.
-			// #1761 case 1: Task joins the skip predicate - a reassigned teammate whose
-			// Idle window beat the 1s throttle kept a stale header until the next
-			// run's first event.
+
 			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped && entry.task == data.Task {
 				f.markRebuilt(f.activeID)
 				return
@@ -512,13 +442,11 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 			return
 		}
 	}
-	// Try swarm teammate
+
 	if swMgr != nil {
 		if snap, ok := swMgr.TeammateSnapshot(f.activeID); ok {
 			data := teammateSnapshotToFollowData(snap)
-			// #1761 case 1: Task joins the skip predicate - a reassigned teammate whose
-			// Idle window beat the 1s throttle kept a stale header until the next
-			// run's first event.
+
 			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped && entry.task == data.Task {
 				f.markRebuilt(f.activeID)
 				return
@@ -533,11 +461,6 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Throttle & cleanup
-// ---------------------------------------------------------------------------
-
-// shouldRebuild checks throttle and dirty state.
 func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
 	if f.dirty == nil || !f.dirty[agentID] {
 		return false
@@ -552,7 +475,6 @@ func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
 	return time.Since(last) >= time.Second
 }
 
-// markRebuilt clears the dirty flag and records the rebuild time.
 func (f *subAgentFollowState) markRebuilt(agentID string) {
 	if f.dirty != nil {
 		delete(f.dirty, agentID)
@@ -563,7 +485,6 @@ func (f *subAgentFollowState) markRebuilt(agentID string) {
 	f.lastRebuild[agentID] = time.Now()
 }
 
-// cleanup removes cached views for agents/teammates that no longer exist.
 func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager, swMgr *swarm.Manager) {
 	if f.views == nil || len(f.views) == 0 {
 		return
@@ -594,10 +515,6 @@ func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager, swMgr *swarm.Mana
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Strip rendering
-// ---------------------------------------------------------------------------
-
 func (m *Model) renderSubAgentFollowStrip() string {
 	if m.subAgentFollow.slots == nil || len(m.subAgentFollow.slots) == 0 {
 		return ""
@@ -611,11 +528,6 @@ func (m *Model) renderSubAgentFollowStrip() string {
 		maxShow = len(m.subAgentFollow.slots)
 	}
 
-	// #1761 case 3: anchor the strip window on the ACTIVE slot. Navigation
-	// wraps to any index, but the strip only rendered the first maxShow
-	// chips - activating the 6th+ agent showed only "+N more" with no
-	// indicator of who was being followed. Slide the window so the active
-	// chip is always visible (active last when beyond the head).
 	start := 0
 	activeIdx := -1
 	for i, s := range m.subAgentFollow.slots {
@@ -651,7 +563,6 @@ func (m *Model) renderSubAgentFollowStrip() string {
 			}
 		}
 
-		// Kind prefix
 		prefix := ""
 		if slot.Kind == followSlotTeammate {
 			prefix = "👤 "
@@ -667,10 +578,6 @@ func (m *Model) renderSubAgentFollowStrip() string {
 			b.WriteString(chip)
 		}
 
-		// #3431: i is a GLOBAL slot index, but the last rendered position
-		// is the last slot inside the sliding window (start+maxShow-1), not
-		// maxShow-1 - with start>0 the old absolute test dropped separators
-		// from the window's tail and chips ran together.
 		if i < start+maxShow-1 && i < len(m.subAgentFollow.slots)-1 {
 			b.WriteString("  │  ")
 		}
@@ -684,12 +591,6 @@ func (m *Model) renderSubAgentFollowStrip() string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(b.String())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// hasTerminalSlots returns true if any slot is in a terminal state (completed/failed/cancelled/idle).
-// Used to decide whether the grace-period cleanup timer should be running.
 func (f *subAgentFollowState) hasTerminalSlots() bool {
 	for _, s := range f.slots {
 		if s.Terminal {
@@ -706,26 +607,16 @@ func shortID(id string) string {
 	return id
 }
 
-// ---------------------------------------------------------------------------
-// Per-ID text throttle map (used by repl.go for swarm teammate_text events)
-// ---------------------------------------------------------------------------
-
-// textThrottleMap provides per-ID time-based throttling. It is used to
-// prevent high-frequency streaming text events (one per LLM token) from
-// flooding Bubble Tea's event loop.
 type textThrottleMap struct {
 	mu    sync.Mutex
 	last  map[string]time.Time
 	delay time.Duration
 }
 
-// newTextThrottleMap creates a throttle map with the given minimum interval.
 func newTextThrottleMap(delay time.Duration) *textThrottleMap {
 	return &textThrottleMap{last: make(map[string]time.Time), delay: delay}
 }
 
-// Allow returns true if enough time has elapsed since the last Allow for this
-// id. It updates the timestamp atomically.
 func (t *textThrottleMap) Allow(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -738,7 +629,6 @@ func (t *textThrottleMap) Allow(id string) bool {
 	return true
 }
 
-// Clear removes the throttle state for a given id (e.g., on completion).
 func (t *textThrottleMap) Clear(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

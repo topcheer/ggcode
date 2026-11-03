@@ -31,22 +31,13 @@ var knightSections = []knightPanelSection{
 }
 
 type knightPanelState struct {
-	focus         int // 0=left nav, 1=right detail
+	focus         int
 	selectedIndex int
-	detailIndex   int // selected item in right column
+	detailIndex   int
 	scrollOffset  int
 	message       string
 	messageTime   time.Time
-	// pendingGlobalApprovePath (#3391, #3408): staging skill PATH awaiting
-	// the SECOND confirming keypress for a global-scope promote. "" = none.
-	// A single [a] on a global staging skill must not take immediate effect -
-	// the command path enforces --confirm-global for the same reason
-	// (knight_commands.go: "a warning that is followed by immediate effect
-	// in the same keypress is not a confirmation gate").
-	// #3408: keyed by skill Path, NOT index - the staging list is re-read on
-	// every keypress, so a stored index can silently point at a different
-	// skill after reject/promote by another surface; a Path match only
-	// confirms the exact skill the user saw when arming.
+
 	pendingGlobalApprovePath string
 }
 
@@ -54,14 +45,12 @@ func newKnightPanel() *knightPanelState {
 	return &knightPanelState{}
 }
 
-// ---- open / close ----
-
 func (m *Model) openKnightPanel() {
 	if m.knight == nil {
 		m.chatWriteSystem(nextSystemID(), m.t("knight.unavailable"))
 		return
 	}
-	// Close other panels first
+
 	m.streamPanel = nil
 	m.modelPanel = nil
 	m.mcpPanel = nil
@@ -74,14 +63,12 @@ func (m *Model) closeKnightPanel() {
 	m.knightPanel = nil
 }
 
-// ---- update ----
-
 func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	kp := m.knightPanel
 
 	switch msg.String() {
 	case "q", "esc":
-		// #3408: leaving the confirm context cancels the armed state.
+
 		kp.pendingGlobalApprovePath = ""
 		if kp.focus == 1 {
 			kp.focus = 0
@@ -90,7 +77,7 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.closeKnightPanel()
 		return m, nil
 	case "tab":
-		// #3408: focus switch interrupts the confirm context.
+
 		kp.pendingGlobalApprovePath = ""
 		if kp.focus == 0 {
 			kp.focus = 1
@@ -109,8 +96,7 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateKnightPanelLeft(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	kp := m.knightPanel
-	// #3408: any left-panel interaction (navigation or section switch) is a
-	// context change - the armed global confirm must not survive it.
+
 	kp.pendingGlobalApprovePath = ""
 	total := len(knightSections)
 
@@ -137,42 +123,37 @@ func (m *Model) updateKnightPanelRight(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 
 	switch msg.String() {
 	case "up", "k":
-		kp.pendingGlobalApprovePath = "" // #3391: navigation cancels the armed confirm
+		kp.pendingGlobalApprovePath = ""
 		if kp.detailIndex > 0 {
 			kp.detailIndex--
 		}
 	case "down", "j":
-		kp.pendingGlobalApprovePath = "" // #3391: navigation cancels the armed confirm
+		kp.pendingGlobalApprovePath = ""
 		if kp.detailIndex < maxItems-1 {
 			kp.detailIndex++
 		}
 	case "enter":
-		kp.pendingGlobalApprovePath = "" // #3391: section switch cancels the armed confirm
+		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "default")
 	case "a":
 		return m.knightPanelAction(section, kp.detailIndex, "approve")
 	case "r":
-		// #3408: reject mutates the staging list - the armed confirm must not
-		// survive into the re-indexed list.
+
 		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "reject")
 	case "f":
-		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
+		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "freeze")
 	case "u":
-		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
+		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "unfreeze")
 	case "d":
-		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
+		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "delete")
 	}
 	return m, nil
 }
 
-// knightPanelListLimit (#3389): the single source for both the navigation
-// domain (knightPanelItemCount) and the render fetches - the pre-fix count
-// fetched 50 while the renderers fetched 20, so the down key walked the
-// cursor into items the panel never showed.
 const knightPanelListLimit = 20
 
 func (m *Model) knightPanelItemCount(section string) int {
@@ -215,11 +196,7 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 		ref := knight.FormatSkillRefForDisplay(s.Scope, s.Name)
 		switch action {
 		case "approve":
-			// #3391: global-scope promote needs a second confirming keypress,
-			// mirroring the command path's --confirm-global gate. Project
-			// scope (and any non-global value) stays single-key.
-			// #3408: match by skill Path - the index into the re-read list
-			// is not stable across keypresses.
+
 			if s.Scope == "global" && kp.pendingGlobalApprovePath != s.Path {
 				kp.pendingGlobalApprovePath = s.Path
 				kp.message = "⚠ global scope: press [a] again to confirm promote (injects into EVERY project's system prompt)"
@@ -233,9 +210,7 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 				kp.message = fmt.Sprintf("✅ Approved staging skill: %s", ref)
 			}
 		case "reject":
-			// #3408: rejecting a (possibly different) skill invalidates the
-			// armed confirm - it was armed against a list state that no
-			// longer holds.
+
 			kp.pendingGlobalApprovePath = ""
 			if err := m.knight.RejectStagingByPath(s.Path); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
@@ -303,8 +278,6 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 	return m, nil
 }
 
-// ---- render ----
-
 func (m *Model) renderKnightPanel() string {
 	kp := m.knightPanel
 	if kp == nil {
@@ -342,7 +315,6 @@ func (m *Model) renderKnightPanelLeft() string {
 		sb.WriteString("\n")
 	}
 
-	// Message
 	if kp.message != "" && time.Since(kp.messageTime) < 3*time.Second {
 		sb.WriteString("\n")
 		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Padding(0, 1).Width(w)
@@ -368,7 +340,7 @@ func (m *Model) renderKnightPanelRight() string {
 		return ""
 	}
 	section := knightSections[kp.selectedIndex].ID
-	w := m.viewWidth() - knightPanelLeftWidth - 6 // borders + padding
+	w := m.viewWidth() - knightPanelLeftWidth - 6
 	if w < 30 {
 		w = 30
 	}
@@ -408,8 +380,6 @@ func (m *Model) renderKnightPanelRight() string {
 		Render(content)
 }
 
-// ---- Section renderers ----
-
 func (m *Model) renderKnightStatus() string {
 	if m.knight == nil {
 		return "Knight not available"
@@ -424,11 +394,7 @@ func (m *Model) renderKnightStatus() string {
 		pct := float64(used) / float64(limit) * 100
 		barW := 20
 		filled := int(pct / 100 * float64(barW))
-		// #1378-B: overspend makes pct>100 -> filled>barW -> Repeat with a
-		// NEGATIVE count panics - and overspend is exactly when the user
-		// needs to see this bar (mid-run LLM spend crosses the limit:\t			// CanSpend checks only at task start; or the daily budget was
-		// lowered after today's usage accumulated). Clamp to [0, barW]
-		// and let pct display >100%% as the honest signal.
+
 		if filled < 0 {
 			filled = 0
 		}
@@ -570,13 +536,6 @@ func (m *Model) renderKnightStaging(w int) string {
 	return sb.String()
 }
 
-// shortProposalID returns the display form of a proposal ID: the first
-// 8 bytes when longer, otherwise the ID unchanged. #2799: the panel's
-// approve/reject success path used to slice id[:8] unguarded while the
-// render path guarded - a short ID from a corrupted/hand-edited
-// project-proposals jsonl panicked the Update loop and killed the TUI
-// after the status write had already succeeded. Both paths share this
-// helper now.
 func shortProposalID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
@@ -607,10 +566,7 @@ func (m *Model) renderKnightProposals(w int) string {
 		if m.knightPanel.detailIndex == i {
 			sb.WriteString(fmt.Sprintf("    Path: %s\n", p.Path))
 			sb.WriteString(fmt.Sprintf("    Created: %s\n", p.Time.Format("2006-01-02")))
-			// #1738 case 1: proposals are CREATED with status "proposed"
-			// (project_proposal.go) - a "pending" literal never matched any
-			// real write, so the approve/reject hint NEVER rendered and the
-			// proposal workflow's core UI entry was dead.
+
 			if p.Status == "proposed" {
 				sb.WriteString("    [a] approve  [r] reject\n")
 			}
@@ -675,9 +631,6 @@ func (m *Model) renderKnightPolicies(w int) string {
 			}
 		}
 	}
-	// #3389: like the other seven sections, return the bare string - the
-	// outer renderKnightPanelRight wraps everything in one renderContextBox;
-	// the pre-fix double wrap (inner mainColumnWidth vs outer viewWidth-30)
-	// drew mismatched borders.
+
 	return sb.String()
 }

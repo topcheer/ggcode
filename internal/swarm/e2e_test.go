@@ -14,11 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// ---------------------------------------------------------------------------
-// helpers reused across e2e tests
-// ---------------------------------------------------------------------------
-
-// newE2EManager builds a Manager wired with a mock agent factory.
 func newE2EManager() *Manager {
 	return NewManager(
 		config.SwarmConfig{MaxTeammatesPerTeam: 10, InboxSize: 64, TeammateTimeout: 5 * time.Second},
@@ -37,15 +32,12 @@ func newE2EManager() *Manager {
 	)
 }
 
-// collectEvents waits for at least minCount events of the given type within
-// the deadline and returns them.
 func collectEvents(t *testing.T, m *Manager, eventType string, minCount int, timeout time.Duration) []Event {
 	t.Helper()
 	deadline := time.After(timeout)
 	var collected []Event
 	var mu sync.Mutex
 
-	// We intercept events by wrapping the existing callback (if any).
 	origFn := m.onUpdate
 	var wrapped func(Event)
 	wrapped = func(ev Event) {
@@ -79,21 +71,15 @@ func collectEvents(t *testing.T, m *Manager, eventType string, minCount int, tim
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: full lifecycle – create team → spawn → task → claim → complete
-// ---------------------------------------------------------------------------
-
 func TestE2E_FullTeamLifecycle(t *testing.T) {
 	m := newE2EManager()
 	defer m.Shutdown()
 
-	// 1. Create team.
 	teamSnap := m.CreateTeam("lifecycle-team", "leader-1")
 	if teamSnap.ID == "" {
 		t.Fatal("expected non-empty team ID")
 	}
 
-	// 2. Spawn multiple teammates.
 	tm1, err := m.SpawnTeammate(teamSnap.ID, "researcher", "32", nil)
 	if err != nil {
 		t.Fatalf("spawn researcher: %v", err)
@@ -102,9 +88,8 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn coder: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond) // let idle loops start
+	time.Sleep(50 * time.Millisecond)
 
-	// 3. Get task manager and create tasks on the board.
 	tmMgr, err := m.EnsureTaskManager(teamSnap.ID)
 	if err != nil {
 		t.Fatalf("ensure task manager: %v", err)
@@ -117,7 +102,6 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 		t.Fatalf("expected both tasks pending, got %s and %s", task1.Status, task2.Status)
 	}
 
-	// 4. Claim (start) tasks via status update.
 	inProg := task.StatusInProgress
 	task1, err = tmMgr.Update(task1.ID, task.UpdateOptions{Status: &inProg, Owner: &tm1.ID})
 	if err != nil {
@@ -128,7 +112,6 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 		t.Fatalf("claim task2: %v", err)
 	}
 
-	// 5. Complete tasks.
 	completed := task.StatusCompleted
 	task1, err = tmMgr.Update(task1.ID, task.UpdateOptions{Status: &completed})
 	if err != nil {
@@ -139,7 +122,6 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 		t.Fatalf("complete task2: %v", err)
 	}
 
-	// 6. Verify final state.
 	got1, ok := tmMgr.Get(task1.ID)
 	if !ok || got1.Status != task.StatusCompleted {
 		t.Errorf("task1 not completed: %s", got1.Status)
@@ -149,7 +131,6 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 		t.Errorf("task2 not completed: %s", got2.Status)
 	}
 
-	// 7. Verify team snapshot includes the tasks.
 	snap, _ := m.GetTeam(teamSnap.ID)
 	if snap.TaskCount != 2 {
 		t.Errorf("expected 2 tasks in team snapshot, got %d", snap.TaskCount)
@@ -158,10 +139,6 @@ func TestE2E_FullTeamLifecycle(t *testing.T) {
 		t.Errorf("expected 2 teammates, got %d", len(snap.Teammates))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: teammate idle → working status transition via real task message
-// ---------------------------------------------------------------------------
 
 func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 	m := newE2EManager()
@@ -175,7 +152,6 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// Teammate should start idle.
 	snap, _ := m.GetTeam(team.ID)
 	found := false
 	for _, tm := range snap.Teammates {
@@ -187,7 +163,6 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 		t.Fatal("teammate should be idle initially")
 	}
 
-	// Capture events for working transition.
 	var workingEvent atomic.Value
 	m.SetOnUpdate(func(ev Event) {
 		if ev.Type == "teammate_working" && ev.TeammateID == tmSnap.ID {
@@ -195,7 +170,6 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 		}
 	})
 
-	// Send a real task message — the idle loop should pick it up and go working.
 	err = m.SendToTeammate(team.ID, tmSnap.ID, MailMessage{
 		From:    "leader-1",
 		Content: "Do important work",
@@ -205,7 +179,6 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Wait for working event.
 	deadline := time.After(3 * time.Second)
 	for workingEvent.Load() == nil {
 		select {
@@ -216,13 +189,12 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 		}
 	}
 
-	// Wait for teammate to return to idle after completing the task.
 	deadline = time.After(3 * time.Second)
 	for {
 		snap, _ = m.GetTeam(team.ID)
 		for _, tm := range snap.Teammates {
 			if tm.ID == tmSnap.ID && tm.Status == TeammateIdle {
-				return // success
+				return
 			}
 		}
 		select {
@@ -233,10 +205,6 @@ func TestE2E_TeammateIdleToWorkingTransition(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: broadcast message to all teammates
-// ---------------------------------------------------------------------------
 
 func TestE2E_BroadcastToAllTeammates(t *testing.T) {
 	m := newE2EManager()
@@ -254,9 +222,8 @@ func TestE2E_BroadcastToAllTeammates(t *testing.T) {
 	}
 	time.Sleep(80 * time.Millisecond)
 
-	// Track how many teammates receive the broadcast.
 	var receivedCount atomic.Int32
-	// Wire event listener — each teammate will emit "teammate_working" then "teammate_idle".
+
 	m.SetOnUpdate(func(ev Event) {
 		if ev.Type == "teammate_idle" && ev.Result != "" {
 			receivedCount.Add(1)
@@ -273,7 +240,6 @@ func TestE2E_BroadcastToAllTeammates(t *testing.T) {
 		t.Fatalf("expected 4 deliveries, got %d", len(sent))
 	}
 
-	// Wait for all teammates to process the message.
 	deadline := time.After(5 * time.Second)
 	for receivedCount.Load() < 4 {
 		select {
@@ -285,10 +251,6 @@ func TestE2E_BroadcastToAllTeammates(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: teammate shutdown and cleanup
-// ---------------------------------------------------------------------------
-
 func TestE2E_TeammateShutdownAndCleanup(t *testing.T) {
 	m := newE2EManager()
 	defer m.Shutdown()
@@ -299,13 +261,11 @@ func TestE2E_TeammateShutdownAndCleanup(t *testing.T) {
 	tm2, _ := m.SpawnTeammate(team.ID, "worker-2", "", nil)
 	time.Sleep(50 * time.Millisecond)
 
-	// Shut down one teammate.
 	err := m.ShutdownTeammate(team.ID, tm1.ID)
 	if err != nil {
 		t.Fatalf("shutdown tm1: %v", err)
 	}
 
-	// Verify tm1 is shutting_down.
 	snap, _ := m.GetTeam(team.ID)
 	for _, tm := range snap.Teammates {
 		if tm.ID == tm1.ID && tm.Status != TeammateShuttingDown {
@@ -313,14 +273,12 @@ func TestE2E_TeammateShutdownAndCleanup(t *testing.T) {
 		}
 	}
 
-	// tm2 should still be idle.
 	for _, tm := range snap.Teammates {
 		if tm.ID == tm2.ID && tm.Status != TeammateIdle {
 			t.Errorf("expected tm2 idle, got %s", tm.Status)
 		}
 	}
 
-	// tm2 should still accept messages.
 	err = m.SendToTeammate(team.ID, tm2.ID, MailMessage{
 		From:    "leader",
 		Content: "Still alive?",
@@ -330,10 +288,6 @@ func TestE2E_TeammateShutdownAndCleanup(t *testing.T) {
 		t.Fatalf("tm2 should still accept messages: %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: concurrent task claim – two teammates race for same task
-// ---------------------------------------------------------------------------
 
 func TestE2E_ConcurrentTaskClaim(t *testing.T) {
 	m := newE2EManager()
@@ -350,10 +304,8 @@ func TestE2E_ConcurrentTaskClaim(t *testing.T) {
 		t.Fatalf("task manager: %v", err)
 	}
 
-	// Create a single task for two claimants to race over.
 	tk := tmMgr.Create("Race task", "Only one should claim this", "", nil)
 
-	// Use ExpectedStatus to implement first-writer-wins semantics.
 	var (
 		wg         sync.WaitGroup
 		winner     atomic.Value
@@ -390,7 +342,6 @@ func TestE2E_ConcurrentTaskClaim(t *testing.T) {
 		t.Errorf("expected exactly 1 loser, got %d", loserCount.Load())
 	}
 
-	// Verify only one owner is set.
 	got, _ := tmMgr.Get(tk.ID)
 	if got.Status != task.StatusInProgress {
 		t.Errorf("expected in_progress, got %s", got.Status)
@@ -399,10 +350,6 @@ func TestE2E_ConcurrentTaskClaim(t *testing.T) {
 		t.Error("expected non-empty owner")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: team delete cleans up all teammates
-// ---------------------------------------------------------------------------
 
 func TestE2E_TeamDeleteCleansUp(t *testing.T) {
 	m := newE2EManager()
@@ -418,13 +365,11 @@ func TestE2E_TeamDeleteCleansUp(t *testing.T) {
 		t.Fatalf("delete team: %v", err)
 	}
 
-	// Team should no longer exist.
 	_, ok := m.GetTeam(team.ID)
 	if ok {
 		t.Error("team should be gone after deletion")
 	}
 
-	// Root context should still be alive (only the team is deleted, not the manager).
 	select {
 	case <-m.RootContext().Done():
 		t.Error("root context should NOT be cancelled by team deletion")
@@ -433,10 +378,6 @@ func TestE2E_TeamDeleteCleansUp(t *testing.T) {
 
 	m.Shutdown()
 }
-
-// ---------------------------------------------------------------------------
-// E2E: event emission tracking through full lifecycle
-// ---------------------------------------------------------------------------
 
 func TestE2E_EventTracking(t *testing.T) {
 	m := newE2EManager()
@@ -454,17 +395,13 @@ func TestE2E_EventTracking(t *testing.T) {
 	tmSnap, _ := m.SpawnTeammate(team.ID, "worker", "", nil)
 	time.Sleep(50 * time.Millisecond)
 
-	// Send a task.
 	m.SendToTeammate(team.ID, tmSnap.ID, MailMessage{Content: "work", Type: "task"})
 	time.Sleep(300 * time.Millisecond)
 
-	// Shutdown teammate.
 	m.ShutdownTeammate(team.ID, tmSnap.ID)
 
-	// Delete team.
 	m.DeleteTeam(team.ID)
 
-	// Allow events to propagate.
 	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
@@ -491,10 +428,6 @@ func TestE2E_EventTracking(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E: message reply channel (request-response pattern)
-// ---------------------------------------------------------------------------
 
 func TestE2E_MessageReplyChannel(t *testing.T) {
 	m := newE2EManager()
@@ -528,10 +461,6 @@ func TestE2E_MessageReplyChannel(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: multiple teams operate independently
-// ---------------------------------------------------------------------------
-
 func TestE2E_MultipleTeamsIndependent(t *testing.T) {
 	m := newE2EManager()
 	defer m.Shutdown()
@@ -543,13 +472,11 @@ func TestE2E_MultipleTeamsIndependent(t *testing.T) {
 	tmB, _ := m.SpawnTeammate(team2.ID, "beta-worker", "", nil)
 	time.Sleep(50 * time.Millisecond)
 
-	// Cross-team message should fail.
 	err := m.SendToTeammate(team2.ID, tmA.ID, MailMessage{Content: "hello", Type: "task"})
 	if err == nil {
 		t.Error("expected error when sending to teammate in different team")
 	}
 
-	// Valid intra-team messages should work.
 	err = m.SendToTeammate(team1.ID, tmA.ID, MailMessage{Content: "work", Type: "task"})
 	if err != nil {
 		t.Fatalf("send to alpha worker: %v", err)
@@ -559,7 +486,6 @@ func TestE2E_MultipleTeamsIndependent(t *testing.T) {
 		t.Fatalf("send to beta worker: %v", err)
 	}
 
-	// Deleting team1 should not affect team2.
 	m.DeleteTeam(team1.ID)
 	_, ok := m.GetTeam(team2.ID)
 	if !ok {
@@ -567,22 +493,18 @@ func TestE2E_MultipleTeamsIndependent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E: inbox full behaviour
-// ---------------------------------------------------------------------------
-
 func TestE2E_InboxFull(t *testing.T) {
 	cfg := config.SwarmConfig{
 		MaxTeammatesPerTeam: 2,
-		InboxSize:           2, // tiny inbox
+		InboxSize:           2,
 		TeammateTimeout:     5 * time.Second,
 	}
-	// Use a blocking agent so the teammate stays busy and can't drain inbox.
+
 	m := NewManager(cfg, nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 				runStreamFn: func(ctx context.Context, _ string, onEvent func(provider.StreamEvent)) error {
-					// Block until context cancelled.
+
 					<-ctx.Done()
 					return nil
 				},
@@ -596,14 +518,12 @@ func TestE2E_InboxFull(t *testing.T) {
 	tmSnap, _ := m.SpawnTeammate(team.ID, "slow-worker", "", nil)
 	time.Sleep(50 * time.Millisecond)
 
-	// First message starts processing (teammate goes working).
 	err := m.SendToTeammate(team.ID, tmSnap.ID, MailMessage{Content: "task-1", Type: "task"})
 	if err != nil {
 		t.Fatalf("first send: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond) // let it pick up
+	time.Sleep(50 * time.Millisecond)
 
-	// Fill the remaining inbox.
 	err = m.SendToTeammate(team.ID, tmSnap.ID, MailMessage{Content: "task-2", Type: "task"})
 	if err != nil {
 		t.Fatalf("second send: %v", err)
@@ -613,7 +533,6 @@ func TestE2E_InboxFull(t *testing.T) {
 		t.Fatalf("third send: %v", err)
 	}
 
-	// The fourth should overflow.
 	err = m.SendToTeammate(team.ID, tmSnap.ID, MailMessage{Content: "task-4", Type: "task"})
 	if err == nil {
 		t.Error("expected inbox full error")

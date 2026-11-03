@@ -22,7 +22,6 @@ func TestMCPWithRuntime(t *testing.T) {
 		}
 	})
 
-	// Test merged MCP endpoint
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
@@ -40,7 +39,6 @@ func TestMCPWithRuntime(t *testing.T) {
 	srv := result[0]
 	t.Logf("Server: %v", srv)
 
-	// Check runtime is present
 	rt, ok := srv["runtime"]
 	if !ok {
 		t.Fatal("runtime key missing")
@@ -53,7 +51,6 @@ func TestMCPWithRuntime(t *testing.T) {
 		t.Errorf("expected connected=true, got %v", rtMap["connected"])
 	}
 
-	// Test status-only endpoint
 	req2 := httptest.NewRequest(http.MethodGet, "/api/mcp/status", nil)
 	w2 := httptest.NewRecorder()
 	s.mux.ServeHTTP(w2, req2)
@@ -67,7 +64,6 @@ func TestMCPWithoutRuntime(t *testing.T) {
 	}
 
 	s := NewServer(cfg)
-	// No MCPStatusFn set — simulates no runtime
 
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
@@ -84,7 +80,6 @@ func TestMCPWithoutRuntime(t *testing.T) {
 	srv := result[0]
 	t.Logf("Server: %v", srv)
 
-	// runtime should be nil/missing
 	if rt, ok := srv["runtime"]; ok && rt != nil {
 		t.Errorf("expected no runtime, got %v", rt)
 	}

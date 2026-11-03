@@ -134,7 +134,7 @@ func TestOAuthHandler_fetchAuthorizationServerMeta(t *testing.T) {
 }
 
 func TestOAuthHandler_FullDiscovery(t *testing.T) {
-	// End-to-end: protected resource → auth server discovery
+
 	authMeta := AuthorizationServerMetadata{
 		Issuer:                "https://auth.example.com",
 		AuthorizationEndpoint: "https://auth.example.com/authorize",
@@ -161,7 +161,6 @@ func TestOAuthHandler_FullDiscovery(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	// Update protected meta to point to our test server
 	protectedMeta.AuthorizationServers = []string{server.URL}
 	protectedBody, _ = json.Marshal(protectedMeta)
 
@@ -172,7 +171,7 @@ func TestOAuthHandler_FullDiscovery(t *testing.T) {
 	}
 
 	if !h.NeedsDiscovery() {
-		// After protected resource discovery, still need auth server discovery
+
 		t.Log("discovery state changed after protected resource meta fetch")
 	}
 }
@@ -246,7 +245,7 @@ func TestOAuthHandler_GetAccessToken_ValidToken(t *testing.T) {
 	dir := t.TempDir()
 	store := auth.NewStore(dir + "/auth.json")
 	h := NewOAuthHandler("test", "https://example.com", store)
-	// Save token through the handler so provider ID is set correctly
+
 	h.SaveToken(&TokenResponse{
 		AccessToken: "valid-token",
 		TokenType:   "Bearer",
@@ -313,7 +312,7 @@ func TestAdapter_NewAdapter(t *testing.T) {
 
 func TestExchangeCode_NilStateGuard(t *testing.T) {
 	h := NewOAuthHandler("test-server", "https://example.com", nil)
-	// h.state is nil — should return error, not panic.
+
 	_, err := h.ExchangeCode(context.Background(), "some-code")
 	if err == nil {
 		t.Fatal("ExchangeCode should fail with nil state")
@@ -322,7 +321,7 @@ func TestExchangeCode_NilStateGuard(t *testing.T) {
 
 func TestPollDeviceToken_NilStateGuard(t *testing.T) {
 	h := NewOAuthHandler("test-server", "https://example.com", nil)
-	// h.state is nil — should return error, not panic.
+
 	_, err := h.PollDeviceToken(context.Background())
 	if err == nil {
 		t.Fatal("PollDeviceToken should fail with nil state")
@@ -331,7 +330,7 @@ func TestPollDeviceToken_NilStateGuard(t *testing.T) {
 
 func TestExchangeCode_EmptyMetadataGuard(t *testing.T) {
 	h := NewOAuthHandler("test-server", "https://example.com", nil)
-	// State exists but discovery never completed — no token endpoint.
+
 	h.state = &oauthState{}
 	_, err := h.ExchangeCode(context.Background(), "some-code")
 	if err == nil {
@@ -339,15 +338,11 @@ func TestExchangeCode_EmptyMetadataGuard(t *testing.T) {
 	}
 }
 
-// Regression for the user-guidance flow: an unauthenticated server that
-// declares OAuth via well-known must be detected by the pre-flight probe,
-// and an anonymous server must miss (404) without side effects.
 func TestProbeWellKnownHitAndMiss(t *testing.T) {
-	// HIT: well-known returns one authorization server, and that server's
-	// metadata is fetchable.
+
 	var asServed bool
 	mux := http.NewServeMux()
-	asURL := "" // filled after srv starts; discovery needs ABSOLUTE issuer URLs
+	asURL := ""
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -359,8 +354,7 @@ func TestProbeWellKnownHitAndMiss(t *testing.T) {
 	asURL = srv.URL + "/as-meta"
 
 	h := NewOAuthHandler("probe-test", srv.URL, auth.DefaultStore())
-	// Point the AS metadata fetch at the same test server so the chain
-	// completes without an external issuer.
+
 	mux.HandleFunc("/as-meta", func(w http.ResponseWriter, r *http.Request) {
 		asServed = true
 		w.Header().Set("Content-Type", "application/json")
@@ -377,7 +371,6 @@ func TestProbeWellKnownHitAndMiss(t *testing.T) {
 		t.Fatal("authorization-server metadata must have been fetched")
 	}
 
-	// MISS: anonymous server (404 on well-known).
 	anon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -388,8 +381,6 @@ func TestProbeWellKnownHitAndMiss(t *testing.T) {
 	}
 }
 
-// waitForClientID must respect an already-cancelled context immediately (the
-// unbounded-retry regression once parked the panel for the full caller ctx).
 func TestWaitForClientIDRespectsContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -408,17 +399,12 @@ func TestWaitForClientIDRespectsContextCancel(t *testing.T) {
 	}
 }
 
-// v1.3.234 owner report: "DCR 无延迟" must mean ZERO added delay on a
-// consistent server. The old loop slept 2s BEFORE the first probe, so every
-// OAuth start paid the Railway-style eventual-consistency tax even when the
-// client_id was already live. Pin probe-first: first probe immediate, waits
-// only between retries.
 func TestWaitForClientIDProbesImmediately(t *testing.T) {
 	var probes int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&probes, 1)
 		w.Header().Set("Location", "https://example.com/login")
-		w.WriteHeader(http.StatusFound) // 302 = client_id live
+		w.WriteHeader(http.StatusFound)
 	}))
 	defer srv.Close()
 

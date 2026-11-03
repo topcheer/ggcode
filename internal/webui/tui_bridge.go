@@ -9,32 +9,19 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// TUIAgent is the subset of agent.Agent needed by TUIChatBridge.
 type TUIAgent interface {
 	Messages() []provider.Message
 }
 
-// WebchatMessageSender injects a webchat user message into the TUI event loop.
-// Implemented by a closure that calls program.Send(webchatUserMsg{...}).
 type WebchatMessageSender interface {
-	// SendWebchatMessage routes a user message into the TUI event loop.
-	// #1860 case 1: images must ride along - the WS side accepts pure-image
-	// messages (server_websocket.go builds ImageBlocks and acks image_count),
-	// and the TUI bridge used to extract text only, silently dropping them.
 	SendWebchatMessage(text string, images []provider.ContentBlock)
 }
 
-// tuiBridgeSubscriber wraps a callback with an async channel.
 type tuiBridgeSubscriber struct {
 	ch   chan provider.StreamEvent
 	done chan struct{}
 }
 
-// TUIChatBridge implements ChatBridge for TUI mode.
-// In TUI mode, the agent is driven by the bubbletea program.
-// Webchat messages are injected into the TUI event loop (not directly
-// into the agent), so they go through the normal submit flow.
-// Agent events are broadcast via Subscribe (wired in TUI's stream callback).
 type TUIChatBridge struct {
 	agent  TUIAgent
 	sender WebchatMessageSender
@@ -42,26 +29,17 @@ type TUIChatBridge struct {
 	subs   []*tuiBridgeSubscriber
 }
 
-// NewTUIChatBridge creates a ChatBridge for TUI mode.
 func NewTUIChatBridge(agent TUIAgent, sender WebchatMessageSender) *TUIChatBridge {
 	return &TUIChatBridge{agent: agent, sender: sender}
 }
 
-// Messages returns the current agent conversation history.
 func (b *TUIChatBridge) Messages() []provider.Message {
 	return b.agent.Messages()
 }
 
-// SendUserMessage routes a webchat message through the TUI event loop.
-// The message appears to the agent as if the user typed it in the terminal.
-// This avoids any concurrency issues with the agent — the TUI handles
-// queuing, interruption, and submission just like a keyboard input.
 func (b *TUIChatBridge) SendUserMessage(content []provider.ContentBlock) {
 	text := extractText(content)
-	// #1860 case 1: keep the image blocks - a pure-image webchat message
-	// used to return here with an ack already sent by the WS layer
-	// ("delivered, N images") and then vanish: no injection, no error,
-	// no receipt. Mixed text+image routed text only.
+
 	var images []provider.ContentBlock
 	for _, blk := range content {
 		if blk.Type == "image" {
@@ -75,9 +53,6 @@ func (b *TUIChatBridge) SendUserMessage(content []provider.ContentBlock) {
 	b.sender.SendWebchatMessage(text, images)
 }
 
-// Subscribe registers a callback for agent streaming events.
-// In TUI mode, events are broadcast from the TUI's stream callback
-// via BroadcastEvent (called in internal/tui/submit.go).
 func (b *TUIChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	sub := &tuiBridgeSubscriber{
 		ch:   make(chan provider.StreamEvent, 256),
@@ -98,12 +73,7 @@ func (b *TUIChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	b.subs = append(b.subs, sub)
 	idx := len(b.subs) - 1
 	return func() {
-		// #1860 case 3: the drain (<-done) used to run INSIDE the write
-		// lock - one slow subscriber's up-to-256 queued callbacks blocked
-		// BroadcastEvent's RLock for the whole drain, stalling the agent
-		// event fan-out. Unlink under the lock, then wait for the drain
-		// outside it, bounded (a stuck callback must not hang the
-		// unsubscriber either).
+
 		var done chan struct{}
 		b.subMu.Lock()
 		if b.subs[idx] != nil {
@@ -122,8 +92,6 @@ func (b *TUIChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	}
 }
 
-// BroadcastEvent sends an event to all subscribers.
-// Called from the TUI's agent stream callback to forward events to webchat.
 func (b *TUIChatBridge) BroadcastEvent(event provider.StreamEvent) {
 	b.subMu.RLock()
 	defer b.subMu.RUnlock()

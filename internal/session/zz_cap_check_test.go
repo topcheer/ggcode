@@ -1,10 +1,5 @@
 package session
 
-// #2325: the checkpoint context path was uncapped - a session with a
-// valid last checkpoint followed by 7.5k messages loaded a 2.82M-token
-// context. capContextTail windows any converged context to
-// MaxContextMessages (orphan-pair guard, shift-not-collapse user anchor).
-
 import (
 	"strings"
 	"testing"

@@ -438,9 +438,7 @@ func zhCatalog(key string) string {
 	case "panel.model.refresh.builtin_loaded":
 		return "已加载内置模型。"
 	case "panel.model.vendor_not_found":
-		// #1376: defined only in enCatalog before - zh-CN/zh-TW error paths
-		// showed the raw key, and Sprintf(key, err) silently dropped the
-		// error detail (raw keys carry no format verbs).
+
 		return "未找到该厂商"
 	case "panel.model.endpoint_not_found":
 		return "未找到该接入点"
@@ -1194,12 +1192,7 @@ func zhCatalog(key string) string {
 	case "knight.unavailable":
 		return "Knight 不可用"
 	default:
-		// #1376: zh module dicts hold CHINESE panel text and must stay
-		// first (delegating straight to enCatalog would show English for
-		// every module key). Only after the zh miss do we harden with
-		// enCatalog - its default covers the main switch AND the en module
-		// fallback, so future key additions can never leak raw keys on zh
-		// UIs (the ja #1372 fix, adjusted for zh's module layer).
+
 		if v, ok := lookupModuleCatalog(LangZhCN, key); ok {
 			return v
 		}

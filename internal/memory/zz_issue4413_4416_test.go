@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// #4413: concurrent ForgetKey calls on distinct keys must all persist — the
-// sidecar RMW used to be the package's only unlocked one, so the startup GC
-// goroutine's digest prune (or a sibling forget) could replay a stale
-// snapshot and silently drop marks (the entry resurrects into injection).
 func TestIssue4413ConcurrentForgetsAllPersisted(t *testing.T) {
 	am := newTestAutoMemory(t)
 	const n = 12
@@ -30,9 +26,7 @@ func TestIssue4413ConcurrentForgetsAllPersisted(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// The key existence Stat in ForgetKey races nothing here (file present
-	// throughout), so every call must have succeeded and the single mark
-	// must survive the 12-way RMW hammer.
+
 	f := am.loadForgotten()
 	safe := disambiguateKey("issue4413-concurrent", sanitizeKey("issue4413-concurrent"))
 	if _, ok := f.Entries[safe]; !ok {
@@ -40,9 +34,6 @@ func TestIssue4413ConcurrentForgetsAllPersisted(t *testing.T) {
 	}
 }
 
-// #4413: concurrent ForgetKey/RestoreKey on the same key must leave the
-// sidecar loadable (never corrupt / never a half-written JSON) — the lock
-// serializes the load→mutate→save cycles end to end.
 func TestIssue4413ForgetRestoreConcurrentConsistency(t *testing.T) {
 	am := newTestAutoMemory(t)
 	if err := am.SaveMemory("issue4413-fr", "payload"); err != nil {
@@ -61,8 +52,7 @@ func TestIssue4413ForgetRestoreConcurrentConsistency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// Sidecar must still be valid, parseable JSON (loadForgotten fail-open
-	// would silently mask corruption, so assert the raw file too).
+
 	raw, err := os.ReadFile(filepath.Join(am.dir, forgottenFileName))
 	if err != nil {
 		t.Fatalf("sidecar missing after hammer: %v", err)
@@ -70,7 +60,7 @@ func TestIssue4413ForgetRestoreConcurrentConsistency(t *testing.T) {
 	if !jsonValid(raw) {
 		t.Fatalf("sidecar corrupt after concurrent forget/restore hammer: %q", raw)
 	}
-	_ = am.loadForgotten() // must not log-corrupt (implicitly parseable above)
+	_ = am.loadForgotten()
 }
 
 func jsonValid(b []byte) bool {
@@ -78,14 +68,9 @@ func jsonValid(b []byte) bool {
 	return json.Unmarshal(b, &v) == nil
 }
 
-// #4416: keys successfully saved while a GC pass runs must all survive —
-// GC's Stat→Remove window now runs under the same cross-process file lock
-// as SaveMemory's rename, so a fresh rename can no longer be reaped by a
-// stale-snapshot verdict. (Also exercises the lock ordering: GC releases
-// before its sidecar prune re-acquires.)
 func TestIssue4416ConcurrentSaveDuringGCSurvives(t *testing.T) {
 	am := newTestAutoMemory(t)
-	// Seed one genuinely expired transient entry so GC has work to do.
+
 	old := filepath.Join(am.dir, sanitizeKey("issue4416-expired")+".md")
 	if err := os.WriteFile(old, []byte("stale"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)

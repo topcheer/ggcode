@@ -32,7 +32,7 @@ func TestDistillUserPreferences_None(t *testing.T) {
 		"",
 		"just fix the bug in parser.go",
 		"the test always passes now",
-		"remember me?", // interrogative split, empty remainder
+		"remember me?",
 	} {
 		if got := DistillUserPreferences(in); len(got) != 0 {
 			t.Errorf("DistillUserPreferences(%q) = %v, want none", in, got)
@@ -64,7 +64,7 @@ func TestDistillUserPreferences_LengthCap(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1, got %d", len(got))
 	}
-	if utf8.RuneCountInString(got[0]) > maxPreferenceLineLen+8 { // head-trimmed + marker
+	if utf8.RuneCountInString(got[0]) > maxPreferenceLineLen+8 {
 		t.Errorf("over-long sentence not truncated: %d runes", utf8.RuneCountInString(got[0]))
 	}
 }
@@ -72,7 +72,7 @@ func TestDistillUserPreferences_LengthCap(t *testing.T) {
 func TestMergePreferenceMemory_AppendAndDedupe(t *testing.T) {
 	existing := "- Always run tests with -p=1\n- Never force-push main\n"
 	merged, added := MergePreferenceMemory(existing, []string{
-		"always run tests with -p=1", // duplicate (case differs)
+		"always run tests with -p=1",
 		"Going forward, prefer worktrees",
 	})
 	if added != 1 {

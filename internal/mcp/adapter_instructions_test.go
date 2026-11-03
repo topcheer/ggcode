@@ -9,10 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// sa-44: the MCP initialize result's optional `instructions` field must be
-// parsed (spec: 2025-03-26+) and surfaced by the adapter on tool
-// descriptions.
-
 func TestInitializeResultParsesInstructions(t *testing.T) {
 	raw := `{
 		"protocolVersion": "2025-06-18",

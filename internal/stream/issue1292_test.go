@@ -1,15 +1,5 @@
 package stream
 
-// Regression tests for GitHub issue #1292: Stop() closed stdin (EOF) but
-// immediately closed stdout and Killed ffmpeg before it could flush tail
-// frames + FLV trailer (truncated every recording), and a crashed ffmpeg
-// was never Wait()ed - zombie process + IsRunning() forever true while the
-// manager kept rendering frames into a dead pipe.
-//
-// Uses a fake "ffmpeg" shell script on PATH: `cat > /dev/null` consumes
-// stdin until EOF then exits 0 (graceful finish); `exit 1` simulates a
-// crash before reading anything.
-
 import (
 	"os"
 	"path/filepath"
@@ -32,9 +22,6 @@ func fakeFFmpegDir(t *testing.T, body string) string {
 	return dir
 }
 
-// Stop must let ffmpeg finish gracefully: after Stop returns, the monitor
-// has reaped the process (exitCh cleared under the lock) and IsRunning is
-// false - no Kill-before-flush, no zombie.
 func TestIssue1292_StopWaitsForGracefulExit(t *testing.T) {
 	fakeFFmpegDir(t, "cat > /dev/null\nexit 0\n")
 	enc := NewEncoder(4, 4, 26, 1, "")
@@ -54,22 +41,19 @@ func TestIssue1292_StopWaitsForGracefulExit(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > ffmpegGracefulExitTimeout {
 		t.Fatalf("Stop took %v - exceeded graceful timeout, fell back to Kill", elapsed)
 	}
-	// Monitor must have reaped and cleared state before Stop returned.
+
 	enc.mu.Lock()
 	reaped := enc.exitCh == nil && !enc.running && enc.stdout == nil
 	enc.mu.Unlock()
 	if !reaped {
 		t.Fatal("#1292: Stop returned before the monitor reaped ffmpeg (tail flush not guaranteed)")
 	}
-	// Double Stop is a no-op.
+
 	if err := enc.Stop(); err != nil {
 		t.Fatalf("double Stop: %v", err)
 	}
 }
 
-// A crashed ffmpeg must be detected: monitor reaps it and clears running,
-// so IsRunning stops reporting a zombie as alive and WriteFrame errors
-// instead of writing into a dead pipe forever.
 func TestIssue1292_CrashClearsRunning(t *testing.T) {
 	fakeFFmpegDir(t, "exit 1\n")
 	enc := NewEncoder(4, 4, 26, 1, "")
@@ -89,7 +73,7 @@ func TestIssue1292_CrashClearsRunning(t *testing.T) {
 	if err := enc.WriteFrame(make([]byte, 4*4*4)); err == nil {
 		t.Fatal("WriteFrame on a crashed encoder must error, not write to a dead pipe")
 	}
-	// Stop after a crash must not hang or panic.
+
 	if err := enc.Stop(); err != nil {
 		t.Fatalf("Stop after crash: %v", err)
 	}

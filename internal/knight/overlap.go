@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-// overlapDecision is the result of a deterministic, rule-based comparison
-// between a staged candidate and the current set of active skills. It runs
-// alongside the LLM-driven BASELINE_REPLAY check so a single self-judging
-// model failure cannot silently auto-promote an overlapping skill.
 type overlapDecision struct {
 	HasOverlap          bool    `json:"has_overlap"`
 	WorstSimilarity     float64 `json:"worst_similarity"`
@@ -18,16 +14,8 @@ type overlapDecision struct {
 	ComparedActiveCount int     `json:"compared_active_count"`
 }
 
-// overlapSimilarityThreshold is the Jaccard similarity above which two skills
-// are considered to cover the same trigger/workflow. Empirically, fingerprints
-// in the 0.5–1.0 range describe the same intent in this repo's existing
-// skills; below 0.4 they tend to describe distinct rules.
 const overlapSimilarityThreshold = 0.45
 
-// computeRuleBasedOverlap fingerprints the candidate plus every active skill
-// and returns the worst (highest) Jaccard similarity along with a deterministic
-// has-overlap flag. The check is intentionally cheap and does not call any
-// LLM — it acts as a hard floor on top of the LLM gate.
 func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active []*SkillEntry, readBody func(*SkillEntry) string) overlapDecision {
 	decision := overlapDecision{Threshold: overlapSimilarityThreshold}
 	if candidate == nil {
@@ -38,7 +26,7 @@ func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active
 		if entry == nil || entry.Staging {
 			continue
 		}
-		// Skip self-comparison when revising an existing active skill.
+
 		if entry.Scope == candidate.Scope && strings.EqualFold(entry.Name, candidate.Name) {
 			continue
 		}
@@ -51,16 +39,12 @@ func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active
 		sim := jaccardSimilarity(candFP, fp)
 		nameMatch := nameSimilar(candidate.Name, entry.Name)
 		if nameMatch {
-			// A direct or near name collision is itself a strong overlap signal,
-			// even when descriptions diverge.
+
 			if sim < 0.6 {
 				sim = 0.6
 			}
 		}
-		// #1576-D: NameCollision is cumulative OR - piggybacking it on the
-		// WorstSimilarity update dropped the collision flag whenever a
-		// LATER entry scored higher without a name match, erasing the
-		// same-name evidence from the rationale.
+
 		if nameMatch {
 			decision.NameCollision = true
 		}
@@ -75,18 +59,8 @@ func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active
 	return decision
 }
 
-// minNameAffixLen is the shortest shared prefix/suffix (slug chars) that
-// still counts as a name similarity (#1264): "go" vs "golang" share only 2
-// and "test" vs "latest" share only 4 - both used to flip nameMatch and
-// hard-floor Jaccard at 0.6, unconditionally blocking auto-promotion of
-// unrelated skills. Genuine revisions share near-complete names
-// ("golang-ci" vs "golang" share 6, "go-verify" vs "verify" share 6).
 const minNameAffixLen = 5
 
-// nameSimilar returns true if two skill names match exactly (case-insensitive)
-// or share a substantial slug-level prefix/suffix (#1264: at least
-// minNameAffixLen chars - short affixes like go/golang or test/latest are
-// coincidental, not similarity).
 func nameSimilar(a, b string) bool {
 	a = strings.ToLower(strings.TrimSpace(a))
 	b = strings.ToLower(strings.TrimSpace(b))
@@ -111,8 +85,6 @@ func nameSimilar(a, b string) bool {
 	return false
 }
 
-// formatOverlapRationale renders an overlapDecision as a short human-readable
-// string for inclusion in eval logs and user-facing notifications.
 func formatOverlapRationale(decision overlapDecision) string {
 	if !decision.HasOverlap {
 		return ""

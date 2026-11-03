@@ -1,7 +1,5 @@
 package tui
 
-// frCatalog returns the French translation for the given key.
-// Keys not yet translated fall through to enCatalog.
 func frCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":

@@ -1,10 +1,5 @@
 package tui
 
-// #2215: the tg create-bot path persisted garbage tokens (Enabled:true)
-// and never rolled back a failed start - the dual guard slack got in
-// #1392-B(1). Pins: the token form gate, and the rollback wiring at both
-// failure points.
-
 import (
 	"os"
 	"strings"
@@ -33,12 +28,10 @@ func TestIssue2215TGRollbackWired(t *testing.T) {
 	}
 	src := string(b)
 	for _, frag := range []string{
-		// #4486 extended the rollback signature with the pre-create
-		// IM.Enabled value so a failed create also restores the global
-		// switch; the wiring at both failure points is unchanged.
-		"rollbackTGCreate(name, err, imEnabledBefore)",   // ensure failure
-		"m.rollbackTGCreate(name, err, imEnabledBefore)", // start failure (method recv)
-		"RemoveIMAdapter(name)",                          // rollback removes
+
+		"rollbackTGCreate(name, err, imEnabledBefore)",
+		"m.rollbackTGCreate(name, err, imEnabledBefore)",
+		"RemoveIMAdapter(name)",
 	} {
 		if !strings.Contains(src, frag) {
 			t.Errorf("tg create path must wire %s (#2215 rollback)", frag)

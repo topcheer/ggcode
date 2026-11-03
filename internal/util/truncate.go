@@ -2,13 +2,8 @@ package util
 
 import "unicode/utf8"
 
-// Truncate truncates a string to maxRunes runes, appending "..." if truncated.
-// Uses []rune to avoid UTF-8 multi-byte truncation.
 func Truncate(s string, maxRunes int) string {
-	// #1849 case 2: width-arithmetic callers (terminal width minus
-	// padding, e.g. w-6 on a <10-wide terminal) leak negative values -
-	// returning the string untruncated broke fixed-width panel rendering.
-	// A negative budget means NO room: empty string.
+
 	if maxRunes <= 0 {
 		return ""
 	}
@@ -22,10 +17,6 @@ func Truncate(s string, maxRunes int) string {
 	return string(runes[:maxRunes-3]) + "..."
 }
 
-// SnapToRuneStart backs up byte index i to the nearest valid UTF-8 rune
-// start boundary at or before i. This prevents producing invalid UTF-8
-// when slicing a string at an arbitrary byte position. If i is already at
-// a rune boundary, it is returned unchanged.
 func SnapToRuneStart(s string, i int) int {
 	if i <= 0 {
 		return 0

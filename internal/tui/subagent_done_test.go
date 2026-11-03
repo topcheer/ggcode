@@ -11,7 +11,7 @@ import (
 )
 
 func TestSubAgentDoneMsg_IdleAgent(t *testing.T) {
-	// When the main agent is idle, subAgentDoneMsg should trigger a new agent loop.
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 
@@ -28,16 +28,14 @@ func TestSubAgentDoneMsg_IdleAgent(t *testing.T) {
 		t.Fatal("expected a tea.Cmd to be returned when agent is idle, got nil")
 	}
 
-	// Verify system message was written
 	assertSystemMessage(t, &m, "completed", "code reviewer")
 }
 
 func TestSubAgentDoneMsg_BusyAgent(t *testing.T) {
-	// When the main agent is busy, subAgentDoneMsg should NOT inject into the
-	// main agent's conversation (no pending submission queued).
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	m.loading = true // simulate busy agent
+	m.loading = true
 
 	msg := subAgentDoneMsg{
 		AgentID:   "sa-2",
@@ -49,13 +47,11 @@ func TestSubAgentDoneMsg_BusyAgent(t *testing.T) {
 	next, _ := m.Update(msg)
 	m = next.(Model)
 
-	// Verify NO pending submission was queued
 	count := m.pendingSubmissionCount()
 	if count != 0 {
 		t.Fatalf("expected 0 pending submissions when busy, got %d", count)
 	}
 
-	// Verify system message was still written
 	assertSystemMessage(t, &m, "completed", "researcher")
 }
 
@@ -88,7 +84,7 @@ func TestSubAgentDoneMsg_BusyAgentSchedulesGraceCleanup(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_Error(t *testing.T) {
-	// When a sub-agent fails, the notice should say "failed".
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 
@@ -106,7 +102,7 @@ func TestSubAgentDoneMsg_Error(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_EmptyName(t *testing.T) {
-	// When AgentName is empty, should fall back to AgentID.
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 
@@ -124,7 +120,7 @@ func TestSubAgentDoneMsg_EmptyName(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_MultipleDone(t *testing.T) {
-	// Multiple sub-agents completing while busy should NOT inject any pending submissions.
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 	m.loading = true
@@ -183,7 +179,7 @@ func TestFormatSubAgentDoneNotice(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_IdleStartsNewRun(t *testing.T) {
-	// Verify that when idle, the cmd returned triggers startAgent behavior.
+
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 
@@ -196,19 +192,14 @@ func TestSubAgentDoneMsg_IdleStartsNewRun(t *testing.T) {
 
 	_, cmd := m.Update(msg)
 
-	// The cmd should produce a message (it wraps submitText which calls startAgent).
-	// We can't easily execute the cmd in a test without a full tea.Program,
-	// but we can verify it's not nil and produces a batch.
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd when agent is idle after subAgentDoneMsg")
 	}
 
-	// Execute the cmd to verify it doesn't panic
 	msg2 := cmd()
 	_ = msg2
 }
 
-// assertSystemMessage checks that a system message containing all expected substrings exists.
 func assertSystemMessage(t *testing.T, m *Model, expected ...string) {
 	t.Helper()
 	for i := 0; i < m.chatList.Len(); i++ {

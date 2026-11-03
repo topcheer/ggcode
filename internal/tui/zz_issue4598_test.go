@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #4598 pin: drainPendingInterrupt runs on the AGENT goroutine and must
-// MERGE the drained images back into pendingImages, not replace the slice -
-// the old `m.pendingImages = imgs` silently dropped images pasted mid-run
-// by the Update goroutine.
 func TestIssue4598_DrainMergesNotReplaces(t *testing.T) {
 	b, err := os.ReadFile("model_pending.go")
 	if err != nil {

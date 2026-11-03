@@ -78,7 +78,7 @@ func TestAppendEventCapsAtMax(t *testing.T) {
 	if len(events) > maxAgentEvents {
 		t.Fatalf("expected at most %d events (capped), got %d", maxAgentEvents, len(events))
 	}
-	// First events should be dropped (FIFO)
+
 	if len(events) > 0 && events[0].ToolID == "t0" {
 		t.Fatalf("first event should have been dropped")
 	}
@@ -89,7 +89,7 @@ func TestEventsReturnsCopy(t *testing.T) {
 	sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "original"})
 	events := sa.Events()
 	events[0].Text = "modified"
-	// Original should be unchanged
+
 	original := sa.Events()
 	if original[0].Text != "original" {
 		t.Fatal("Events() should return a copy, but modification affected internal state")
@@ -139,15 +139,11 @@ func TestTruncateStr(t *testing.T) {
 	}
 }
 
-// TestEventsSinceSurvivesEviction pins #1816 case 2: the cursor is ABSOLUTE
-// (len+dropped) - after ring eviction the total never falls back, and a
-// caller holding the pre-eviction cursor still gets the surviving events.
 func TestEventsSinceSurvivesEviction(t *testing.T) {
-	const total = maxAgentEvents + 2 // force at least 2 evictions
+	const total = maxAgentEvents + 2
 	s := &SubAgent{}
 	for i := 0; i < total; i++ {
-		// Alternate Text/ToolCall: consecutive same-type events coalesce
-		// (textMergeInterval) - alternation keeps every append a real event.
+
 		if i%2 == 0 {
 			s.appendEvent(AgentEvent{Type: AgentEventText, Text: fmt.Sprintf("e%d", i)})
 		} else {
@@ -161,10 +157,9 @@ func TestEventsSinceSurvivesEviction(t *testing.T) {
 	if len(events) != maxAgentEvents {
 		t.Fatalf("cursor predating the window replays the survivors, got %d", len(events))
 	}
-	// Incremental consumption across eviction: hold an earlier cursor, then
-	// ask again after more evictions - must never silently return nothing.
-	mid := total - 1                                                      // one event exists beyond this cursor already
-	s.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "more"}) // evicts again
+
+	mid := total - 1
+	s.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "more"})
 	next, t2 := s.EventsSince(mid)
 	if t2 != total+1 {
 		t.Fatalf("cursor must advance monotonically, got %d", t2)

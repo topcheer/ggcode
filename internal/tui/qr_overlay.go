@@ -13,15 +13,13 @@ import (
 
 const qrOverlayDiscordURL = "https://discord.gg/F2v4mJmfG"
 
-// qrOverlayState holds the state for the QR code overlay panel.
 type qrOverlayState struct {
-	title       string // e.g. "Telegram — Scan to Add Bot"
-	description string // scan hint text
-	qrText      string // rendered QR code ASCII art
-	footer      string // URI or additional info line
+	title       string
+	description string
+	qrText      string
+	footer      string
 }
 
-// openQROverlayFromStates creates a QR overlay from adapter states (contact URI).
 func (m *Model) openQROverlayFromStates(platformName string, states []*im.AdapterState) bool {
 	var contactURI string
 	for _, s := range states {
@@ -44,7 +42,6 @@ func (m *Model) openQROverlayFromStates(platformName string, states []*im.Adapte
 	return true
 }
 
-// openQROverlayDirect opens a QR overlay with explicit content.
 func (m *Model) openQROverlayDirect(title, description, qrText, footer string) {
 	m.qrOverlay = &qrOverlayState{
 		title:       title,
@@ -54,12 +51,10 @@ func (m *Model) openQROverlayDirect(title, description, qrText, footer string) {
 	}
 }
 
-// closeQROverlay closes the QR overlay panel.
 func (m *Model) closeQROverlay() {
 	m.qrOverlay = nil
 }
 
-// renderQROverlay renders the full QR overlay panel.
 func (m Model) renderQROverlay() string {
 	if m.qrOverlay == nil {
 		return ""
@@ -68,13 +63,11 @@ func (m Model) renderQROverlay() string {
 
 	var body []string
 
-	// Title
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render(
 		fmt.Sprintf(" %s", o.title),
 	)
 	body = append(body, title, "")
 
-	// Description
 	if o.description != "" {
 		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
 			fmt.Sprintf(" %s", o.description),
@@ -82,20 +75,17 @@ func (m Model) renderQROverlay() string {
 		body = append(body, hint, "")
 	}
 
-	// QR code (indented for visual padding)
 	if o.qrText != "" {
 		indentedQR := indentLines(o.qrText, 2)
 		body = append(body, indentedQR, "")
 	}
 
-	// Footer (URI or extra info)
 	if o.footer != "" {
 		footer := wrapOverlayFooter(o.footer, max(24, m.boxInnerWidth(m.mainColumnWidth())-6))
 		footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 		body = append(body, footerStyle.Render(fmt.Sprintf(" %s", footer)), "")
 	}
 
-	// Mobile app download links
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	body = append(body,
 		dimStyle.Render(" Get GGCode Mobile:"),
@@ -105,7 +95,6 @@ func (m Model) renderQROverlay() string {
 		"",
 	)
 
-	// Esc hint
 	escHint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
 		" " + m.t("panel.qr.esc_hint"),
 	)
@@ -114,7 +103,6 @@ func (m Model) renderQROverlay() string {
 	return m.renderContextBox("/qr", strings.Join(body, "\n"), lipgloss.Color("12"))
 }
 
-// handleQROverlayKey handles key presses in the QR overlay.
 func (m *Model) handleQROverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q", "ctrl+c":
@@ -123,7 +111,6 @@ func (m *Model) handleQROverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// indentLines prefixes each line with n spaces for visual padding.
 func indentLines(s string, n int) string {
 	pad := strings.Repeat(" ", n)
 	var b strings.Builder

@@ -1,15 +1,10 @@
 package memory
 
-// sa-113 acceptance tests: task-relevance gate for persistent-memory
-// inline injection (Self-RAG [IsRel] deterministic equivalent).
-
 import (
 	"strings"
 	"testing"
 )
 
-// Acceptance 1: a persistent memory lexically related to the task stays
-// inline under LoadForPromptForTask.
 func TestRelevanceGate_RelatedStaysInline(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
@@ -24,8 +19,6 @@ func TestRelevanceGate_RelatedStaysInline(t *testing.T) {
 	}
 }
 
-// Acceptance 2: an unrelated persistent memory degrades to index-only
-// (key still listed - read_file retrieval loop stays closed).
 func TestRelevanceGate_UnrelatedDegradesToIndex(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
@@ -49,8 +42,6 @@ func TestRelevanceGate_UnrelatedDegradesToIndex(t *testing.T) {
 	}
 }
 
-// Acceptance 3: empty task bypasses the gate - LoadForPrompt behavior is
-// byte-identical to before the gate existed (regression protection).
 func TestRelevanceGate_EmptyTaskBypasses(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
@@ -65,15 +56,12 @@ func TestRelevanceGate_EmptyTaskBypasses(t *testing.T) {
 	}
 }
 
-// Acceptance 4: mixed set - only the related entry inlines; task with too
-// few tokens disables the gate (minDistinct guard).
 func TestRelevanceGate_MixedAndShortTask(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 	writeMem(t, dir, "build-process-impl", "make build with Go toolchain")
 	writeMem(t, dir, "docker-deploy-impl", "docker push registry.example/team/app")
 
-	// Mixed: only build-related inlines.
 	inline, indexOnly, err := am.LoadForPromptForTask("update the make build target")
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -85,8 +73,6 @@ func TestRelevanceGate_MixedAndShortTask(t *testing.T) {
 		t.Fatalf("expected docker entry index-only, got %v", indexOnly)
 	}
 
-	// Short task (single token): minDistinct drops to 1 - an entry sharing
-	// that one token still inlines, the other still degrades.
 	dir2 := t.TempDir()
 	am2 := &AutoMemory{dir: dir2}
 	writeMem(t, dir2, "build-process-impl", "make build with Go toolchain")

@@ -1,12 +1,5 @@
 package tui
 
-// #2259: parseCatalogCases dropped any case block whose body carried a
-// comment or blank line between case and return - the house convention
-// for translation-decision notes - so exactly the sensitive keys (the
-// #1372/#1373/#1416 verb-round fixes) silently left the VerbConsistency
-// line. The real dormant mismatch this hid: ja lang.current (1 %s) vs
-// en (2 %s).
-
 import (
 	"os"
 	"path/filepath"

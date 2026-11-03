@@ -8,14 +8,12 @@ import (
 	"google.golang.org/grpc"
 )
 
-// GRPCPlugin implements plugin.GRPCPlugin for the host side.
-// It tells go-plugin how to create the gRPC client for ToolService.
 type GRPCPlugin struct {
 	plugin.NetRPCUnsupportedPlugin
 }
 
 func (p *GRPCPlugin) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
-	// Host side never serves — only the plugin process implements the server.
+
 	return nil
 }
 

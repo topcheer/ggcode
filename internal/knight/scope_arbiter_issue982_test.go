@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// TestIssue982MakeProseNotFlagged verifies that natural-language uses of
-// "make ..." in running prose do not trigger a global->project scope
-// downgrade. Corpus lines are taken from real skill bodies in this repo
-// (agent/skills/hyperframes/SKILL.md, agent/skills/media-use/SKILL.md).
 func TestIssue982MakeProseNotFlagged(t *testing.T) {
 	projDir := filepath.Join("/tmp", "ggcode")
 
@@ -50,8 +46,6 @@ func TestIssue982MakeProseNotFlagged(t *testing.T) {
 	}
 }
 
-// TestIssue982MakeCommandFlagged verifies that line-initial make commands
-// (including inside fenced code blocks) still trigger the downgrade.
 func TestIssue982MakeCommandFlagged(t *testing.T) {
 	projDir := filepath.Join("/tmp", "ggcode")
 
@@ -90,16 +84,9 @@ func TestIssue982MakeCommandFlagged(t *testing.T) {
 	}
 }
 
-// TestIssue982FrontmatterValueWithDashes verifies the frontmatter terminator
-// is a standalone "---" line. A value containing "---" as a prefix must not
-// truncate the frontmatter early and leak frontmatter content into the body
-// analysis (or vice versa).
 func TestIssue982FrontmatterValueWithDashes(t *testing.T) {
 	projDir := filepath.Join("/tmp", "ggcode")
 
-	// Case 1: frontmatter value contains "---text"; body is clean prose.
-	// The real terminator is the standalone line; body must not be analyzed
-	// as if it started at the inline dashes.
 	content := `---
 name: dash-value
 description: rule about ---markers in text
@@ -113,9 +100,6 @@ Always prefer composition over inheritance.`
 		t.Fatalf("clean body with dash-prefixed frontmatter value should not downgrade, got %q", reason)
 	}
 
-	// Case 2: same frontmatter shape, but the BODY references the project
-	// basename - the strip must not stop at "---markers" and must still
-	// reach the body so the real signal is detected.
 	content2 := `---
 name: dash-value-2
 description: rule about ---markers in text
@@ -134,14 +118,9 @@ Edit the ggcode scheduler to apply this.`
 	}
 }
 
-// TestIssue982RelRootAllOccurrences verifies the rel-root scan checks every
-// occurrence of cmd/ (etc.), not just the first: a first hit with no path
-// character following must not shadow a later real path reference.
 func TestIssue982RelRootAllOccurrences(t *testing.T) {
-	projDir := filepath.Join("/tmp", "zzz") // basename too short to fire (<3)
+	projDir := filepath.Join("/tmp", "zzz")
 
-	// First occurrence "cmd/" is followed by a space (prose); the later
-	// "cmd/foo" is a real path and must be flagged.
 	body := "Place files under cmd/ for binaries; the launcher lives in cmd/foo/main.go."
 	reason := scopeDowngradeReason(projDir, body)
 	if reason == "" {
@@ -151,17 +130,11 @@ func TestIssue982RelRootAllOccurrences(t *testing.T) {
 		t.Fatalf("reason %q missing substring %q", reason, "cmd/")
 	}
 
-	// Control: prose-only mention with no path segment stays global.
 	if reason := scopeDowngradeReason(projDir, "Mention cmd/ only in prose here."); reason != "" {
 		t.Fatalf("prose-only cmd/ mention should not downgrade, got %q", reason)
 	}
 }
 
-// TestIssue982SemanticMemoryLockOrder exercises concurrent Append/Recent on
-// two store instances sharing one path. Before #982 the inverted lock order
-// (Append: s.mu->pathMu vs Recent: pathMu->s.mu) could deadlock; the fix
-// removed the per-instance mutex so pathMu is the only lock. This test fails
-// (times out) if any AB-BA ordering is reintroduced.
 func TestIssue982SemanticMemoryLockOrder(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "knight-memory.jsonl")

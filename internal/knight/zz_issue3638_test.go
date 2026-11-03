@@ -1,12 +1,5 @@
 package knight
 
-// #3638 probes: RunSelfReflection must propagate skill-index read failures
-// instead of swallowing them. Before the fix, a failed scan surfaced as
-// "active=0 staging=0", the false conclusion was written to semantic memory
-// as a meta-lesson (source=nightly-reflection), and every caller's error
-// branch (scheduler.go nightly loop, TUI) was dead code - violating the
-// #1262 discipline already enforced in governance.go.
-
 import (
 	"context"
 	"os"
@@ -21,9 +14,6 @@ func TestIssue3638_SelfReflectionPropagatesIndexError(t *testing.T) {
 	skillsDir := filepath.Join(dir, ".ggcode", "skills")
 	k := &Knight{projDir: dir, index: NewSkillIndex(filepath.Join(dir, "missing-home"), skillsDir)}
 
-	// Hard-fail the scan: occupy the skills dir with a regular file
-	// (same injection as validator_issue985_test.go). A merely missing
-	// directory scans as empty-success, which must NOT be conflated.
 	if err := os.RemoveAll(skillsDir); err != nil {
 		t.Fatalf("remove skills dir: %v", err)
 	}
@@ -42,10 +32,9 @@ func TestIssue3638_SelfReflectionPropagatesIndexError(t *testing.T) {
 		t.Errorf("error should name the active-skills read failure, got: %v", err)
 	}
 
-	// No false meta-lesson may reach semantic memory.
 	mem, mErr := k.RecentSemanticMemory(5)
 	if mErr != nil {
-		return // memory store unavailable in this bare Knight: nothing recorded
+		return
 	}
 	for _, m := range mem {
 		if strings.Contains(m.Summary, "active=0") {
@@ -56,8 +45,7 @@ func TestIssue3638_SelfReflectionPropagatesIndexError(t *testing.T) {
 
 func TestIssue3638_HealthyIndexStillSucceeds(t *testing.T) {
 	dir := t.TempDir()
-	// Empty-but-existing layout scans fine; reflection must keep succeeding
-	// and recording its (genuinely true) zeroed lesson.
+
 	k := &Knight{projDir: dir, index: NewSkillIndex(filepath.Join(dir, "missing-home"), filepath.Join(dir, ".ggcode", "skills"))}
 	report, err := k.RunSelfReflection(context.Background(), time.Hour)
 	if err != nil {

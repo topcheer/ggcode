@@ -130,9 +130,6 @@ func TestPersistUserClaudeServers_SkipsProjectMCPFile(t *testing.T) {
 	}
 }
 
-// Tombstone semantics at the merge layer: tombstoned names are filtered from
-// migration sources (the external-app resurrect path) but an explicit yaml
-// entry with a tombstoned name is an intentional re-add and must survive.
 func TestMergeStartupServersWithDeleted_TombstoneSemantics(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
@@ -172,7 +169,6 @@ func TestMergeStartupServersWithDeleted_TombstoneSemantics(t *testing.T) {
 	}
 }
 
-// Without tombstones the same source entry merges (control for the test above).
 func TestMergeStartupServers_NoDeleted_MigratesNormally(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")

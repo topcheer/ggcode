@@ -11,19 +11,19 @@ import (
 )
 
 type hooksPanelState struct {
-	selectedEvent int // 0-4
-	selectedHook  int // index within event
+	selectedEvent int
+	selectedHook  int
 	editMode      bool
 	editingNew    bool
 	editFields    hookEditFields
-	fieldIdx      int // which field is being edited
+	fieldIdx      int
 	message       string
 }
 
 type hookEditFields struct {
 	match        string
-	matchMode    string // "glob" or "regex"
-	hookType     string // "command" or "http"
+	matchMode    string
+	hookType     string
 	command      string
 	url          string
 	secret       string
@@ -98,22 +98,14 @@ func (m *Model) getEventHooks(eventIdx int) []hooks.Hook {
 }
 
 func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
-	// #4491: persist FIRST, apply to the live agent second. The old order
-	// (SetHookConfig -> Save) left the agent running the new hooks after a
-	// Save failure (disk full/permissions, #1371) with no disk record -
-	// an in-memory/disk split that vanished on restart. Save-first keeps
-	// the failure path side-effect free.
+
 	if m.config != nil {
-		// #4581: capture the prior value - Save() failing must not leave
-		// the unconfirmed hooks in m.config: other panels (im_panel,
-		// commands_slash) reuse this config and a later successful Save()
-		// would write the hooks the user believes were rejected.
+
 		oldHooks := m.config.Hooks
 		m.config.Hooks = cfg
 		if err := m.config.Save(); err != nil {
 			m.config.Hooks = oldHooks
-			// #1371: silent debug.Log failures left users believing their
-			// hooks were saved - surface it in the panel status line.
+
 			m.hooksPanel.message = "save failed: " + fmt.Sprintf("%v", err)
 			debug.Log("tui", "saveHooksConfig: config save failed: %v", err)
 			return
@@ -159,16 +151,13 @@ func (m Model) renderHooksPanel() string {
 
 	var sb strings.Builder
 
-	// Title
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")).Render(" Hooks Configuration ")
 	sb.WriteString(title)
 	sb.WriteString("\n\n")
 
-	// Left column: events
 	leftWidth := 22
 	rightWidth := width - leftWidth - 3
 
-	// Event list
 	for i, label := range m.hookEventLabels() {
 		hooksList := m.getEventHooks(i)
 		count := len(hooksList)
@@ -186,7 +175,6 @@ func (m Model) renderHooksPanel() string {
 
 	sb.WriteString("\n")
 
-	// Right column: hooks for selected event
 	hooksList := m.getEventHooks(p.selectedEvent)
 	if len(hooksList) == 0 {
 		sb.WriteString("  " + tr(m.language, "hooks.noHooks") + "\n")
@@ -221,7 +209,6 @@ func (m Model) renderHooksPanel() string {
 		}
 	}
 
-	// Footer
 	sb.WriteString("\n")
 	footer := fmt.Sprintf(" [a]dd  [d]elete  [e]dit  [Enter]toggle  ↑↓ select event  ←→ select hook  [Esc] close")
 	sb.WriteString(footer)
@@ -231,7 +218,7 @@ func (m Model) renderHooksPanel() string {
 		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(p.message))
 	}
 
-	_ = rightWidth // reserved for future use
+	_ = rightWidth
 	return m.renderContextBox("/hooks", sb.String(), lipgloss.Color("13"))
 }
 
@@ -268,16 +255,12 @@ func (m Model) renderHooksEditForm() string {
 	}
 
 	sb.WriteString(tr(m.language, "hooks.editHelp"))
-	// #894: outer box title computed editTitle for the inner heading but
-	// the renderContextBox used addTitle unconditionally.
+
 	boxTitle := tr(m.language, "hooks.addTitle")
 	if !p.editingNew {
 		boxTitle = tr(m.language, "hooks.editTitle")
 	}
-	// #4581: the edit form is the ONLY surface while editMode is on, but
-	// the status message (validation errors, save failures) rendered only
-	// in the list view - ValidateHooks failures looked like Enter did
-	// nothing. Append it here too.
+
 	content := sb.String()
 	if p.message != "" {
 		content += "\n" + p.message
@@ -359,7 +342,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		p.message = tr(m.language, "hooks.msg.deleted")
 
 	case "enter":
-		// toggle inject_output on selected hook
+
 		hooksList := m.getEventHooks(p.selectedEvent)
 		if p.selectedHook < len(hooksList) {
 			hooksList[p.selectedHook].InjectOutput = !hooksList[p.selectedHook].InjectOutput
@@ -387,7 +370,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "enter":
-		// Save hook
+
 		h := hooks.Hook{
 			Match:        f.match,
 			MatchMode:    f.matchMode,
@@ -397,11 +380,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			Secret:       f.secret,
 			InjectOutput: f.injectOutput,
 		}
-		// #1724 case 1: the package's own ValidateHooks was never called on
-		// this path - an empty match SAVED fine and then matched EVERYTHING
-		// (pattern=="" -> return true), an invalid matchMode silently fell
-		// back to glob, an invalid regex died quietly. Surface the errors in
-		// the panel's status line instead of persisting broken config.
+
 		if verrs := hooks.ValidateHooks(hooks.HookConfig{OnUserMessage: []hooks.Hook{h}}); len(verrs) > 0 {
 			p.message = strings.Join(verrs, "; ")
 			return *m, nil
@@ -412,10 +391,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			hooksList = append(hooksList, h)
 			p.selectedHook = len(hooksList) - 1
 		} else {
-			// #4581: an out-of-range index (config hot-reload shrank the
-			// list while the editor was open) silently dropped the edit yet
-			// still reported "updated" - report and stay in the editor,
-			// matching the "e" entry-point guard.
+
 			if p.selectedHook >= len(hooksList) {
 				p.message = tr(m.language, "hooks.msg.updated") + ": stale selection - hook list changed, reselect and retry"
 				m.hooksPanel = p
@@ -423,10 +399,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			hooksList[p.selectedHook] = h
 		}
-		// #4491: set the confirmation message AFTER setEventHooks - its
-		// saveHooksConfig success path clears m.hooksPanel.message, which
-		// used to wipe the added/updated feedback the user never saw (the
-		// d/enter paths already follow this order).
+
 		m.setEventHooks(p.selectedEvent, hooksList)
 		if p.editingNew {
 			p.message = tr(m.language, "hooks.msg.added")
@@ -439,11 +412,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.deleteHookEditChar()
 
 	default:
-		// Regular character input
-		// #1371: rune-based check - the old len()==1 is a BYTE length,
-		// always false for CJK (3 bytes) so Chinese hook names/match
-		// patterns could not be typed; msg.String()[0] compared a multi-
-		// byte FIRST byte against 32, doubly wrong.
+
 		if runes := []rune(msg.String()); len(runes) == 1 && runes[0] >= 32 {
 			m.appendHookEditChar(msg.String())
 		}
@@ -469,17 +438,13 @@ func (m *Model) appendHookEditChar(ch string) {
 	case 5:
 		f.secret += ch
 	case 6:
-		// toggle true/false on any key
+
 		f.injectOutput = !f.injectOutput
 	}
 }
 
 func (m *Model) deleteHookEditChar() {
-	// #1371: rune-aware deletion. Byte-slicing [:len-1] cut a multi-byte
-	// rune in half when editing PRE-FILLED CJK values (typed input was
-	// ASCII-only because of the filter, but editFields loads arbitrary
-	// config-file content), leaving invalid UTF-8 that could be saved
-	// back into the config.
+
 	trimLastRune := func(s string) string {
 		if s == "" {
 			return s

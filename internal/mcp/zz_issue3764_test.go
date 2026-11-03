@@ -1,9 +1,5 @@
 package mcp
 
-// #3764 probes: a JSON-Schema-legal numeric/boolean enum must not crash
-// ParseElicitationParams at unmarshal time; formatted display for
-// non-string entries.
-
 import (
 	"encoding/json"
 	"testing"
@@ -52,7 +48,7 @@ func TestIssue3764_StringEnumStillParses(t *testing.T) {
 }
 
 func TestIssue3764_UppercaseLocalhostHostAccepted(t *testing.T) {
-	// #3764-B: host is case-insensitive (RFC 3986 6.2.2.1).
+
 	if err := ValidateElicitationURL("http://LOCALHOST:3000/x"); err != nil {
 		t.Fatalf("uppercase localhost host must be accepted as local, got: %v", err)
 	}

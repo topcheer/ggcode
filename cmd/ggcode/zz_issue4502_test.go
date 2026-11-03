@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #4502 pin: the main system-prompt builder must detect git status at
-// BUILD time, not reuse the startup snapshot - the old closure captured
-// the one-shot gitStatus variable and every refresh (save_memory, knight
-// reload, skills ticker) re-injected stale branch/dirty state.
 func TestIssue4502_MainPromptDetectsGitStatusLazily(t *testing.T) {
 	b, err := os.ReadFile("root.go")
 	if err != nil {

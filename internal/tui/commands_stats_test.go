@@ -7,8 +7,7 @@ import (
 )
 
 func TestGuidanceSlashCompletionRegistered(t *testing.T) {
-	// r14 companion: /guidance must stay in the completion list and carry a
-	// description (registration is split across commands.go/completion.go).
+
 	found := false
 	for _, c := range SlashCommands {
 		if c == "/guidance" {
@@ -22,8 +21,7 @@ func TestGuidanceSlashCompletionRegistered(t *testing.T) {
 	if !strings.Contains(SlashCommandDescriptions["/guidance"], "detector") {
 		t.Fatal("/guidance missing a description")
 	}
-	// r16: the description must advertise the manual override verbs so the
-	// completion menu surfaces the control channel, not just observability.
+
 	if !strings.Contains(SlashCommandDescriptions["/guidance"], "suppress") {
 		t.Fatal("/guidance description missing suppress verb")
 	}
@@ -45,7 +43,7 @@ func TestSummarizeGuidanceStats(t *testing.T) {
 	if !strings.Contains(out, "claimsSupervision: off") {
 		t.Errorf("expected gated-detector header, got: %s", out)
 	}
-	// Aggregation: fragmentation 5 fire + 1 supp = 6 (rank 1), verify 1+4=5 (rank 2).
+
 	if !strings.Contains(out, "2 tag(s)") {
 		t.Errorf("expected 2 tags, got: %s", out)
 	}
@@ -58,14 +56,13 @@ func TestSummarizeGuidanceStats(t *testing.T) {
 	if !strings.Contains(out, "window") {
 		t.Errorf("expected time window in header, got: %s", out)
 	}
-	// Sorted by total descending: fragmentation (6) before verify (5).
+
 	fi := strings.Index(out, "Attention")
 	vi := strings.Index(out, "ACT NOW")
 	if fi < 0 || vi < 0 || fi > vi {
 		t.Errorf("expected descending sort by total, got: %s", out)
 	}
-	// r15: stale_heuristic report lines surface as a trailing list and are
-	// excluded from the aggregate rows.
+
 	if !strings.Contains(out, "stale (harness-flagged") || !strings.Contains(out, "Old Detector") {
 		t.Errorf("expected stale tag list, got: %s", out)
 	}
@@ -99,7 +96,7 @@ func TestReadTailLinesCapsAndSkipsBlanks(t *testing.T) {
 	path := dir + "/in.jsonl"
 	var b strings.Builder
 	for i := 0; i < 5; i++ {
-		b.WriteString("row\n\n") // blank lines interleaved
+		b.WriteString("row\n\n")
 	}
 	if err := writeFileForTest(path, b.String()); err != nil {
 		t.Fatal(err)

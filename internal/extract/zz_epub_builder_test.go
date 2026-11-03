@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// buildMinimalEPUB assembles an EPUB with the default container/OPF unless
-// overridden by files (nil values mean "omit this entry").
 func buildMinimalEPUB(t *testing.T, overrides map[string]string) []byte {
 	t.Helper()
 	defaultFiles := map[string]string{
@@ -28,7 +26,7 @@ func buildMinimalEPUB(t *testing.T, overrides map[string]string) []byte {
 	for name, body := range defaultFiles {
 		if override, ok := overrides[name]; ok {
 			if override == "" {
-				continue // omit
+				continue
 			}
 			body = override
 		}

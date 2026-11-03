@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildModelListWindowCapsVisibleRows(t *testing.T) {
-	// Reset dynamic maxVisibleModelRows to a known value for this test.
+
 	origMax := maxVisibleModelRows
 	maxVisibleModelRows = 10
 	defer func() { maxVisibleModelRows = origMax }()
@@ -50,8 +50,7 @@ func TestBuildModelListWindowFiltersModels(t *testing.T) {
 }
 
 func TestProviderPanelIgnoresPlaceholderAPIKeyForRefresh(t *testing.T) {
-	// Use a placeholder that is extremely unlikely to exist in any environment.
-	// Using ${OPENAI_API_KEY} is flaky because CI runners may have it set.
+
 	cfg := config.DefaultConfig()
 	cfg.Vendors = map[string]config.VendorConfig{
 		"openai": {
@@ -174,8 +173,6 @@ func TestCurrentSelectionUsesActiveRuntimeSelection(t *testing.T) {
 	m.SetConfig(cfg)
 	m.setActiveRuntimeSelection("Google Gemini", "Gemini API", "gemini-3-flash")
 
-	// 2026-09-19: labels are remapped to config IDs (defense-in-depth in
-	// setActiveRuntimeSelection) - currentSelection must expose IDs.
 	vendor, endpoint, model := m.currentSelection()
 	if vendor != "google" || endpoint != "api" || model != "gemini-3-flash" {
 		t.Fatalf("expected active runtime selection remapped to IDs, got %q / %q / %q", vendor, endpoint, model)

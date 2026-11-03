@@ -1,9 +1,5 @@
 package extract
 
-// Issue #2713 probe: parseOPFSpine decoded OPF hrefs with QueryUnescape,
-// which turns a literal '+' into a space. OPF hrefs are RFC 3986 URI path
-// references where '+' has no encoding meaning; only %XX escapes decode.
-
 import (
 	"archive/zip"
 	"bytes"
@@ -43,8 +39,6 @@ func buildPlusEPUB(t *testing.T, href, zipEntry string) []byte {
 	return buf.Bytes()
 }
 
-// Literal '+' in the filename and in the href: legal in both ZIP entries and
-// OPF (Sigil/calibre do not force percent-encoding). The chapter must extract.
 func TestIssue2713LiteralPlusHrefExtracts(t *testing.T) {
 	data := buildPlusEPUB(t, "C++_basics.xhtml", "OEBPS/C++_basics.xhtml")
 	result, err := Extract("book.epub", data)
@@ -59,9 +53,6 @@ func TestIssue2713LiteralPlusHrefExtracts(t *testing.T) {
 	}
 }
 
-// Percent-escapes in hrefs must still decode: "C%2B%2B.xhtml" resolves to the
-// literal "C++" entry, and "%20" still decodes to a space (guards against
-// over-correcting into raw path matching).
 func TestIssue2713PercentEscapeStillDecodes(t *testing.T) {
 	data := buildPlusEPUB(t, "C%2B%2B_basics.xhtml", "OEBPS/C++_basics.xhtml")
 	result, err := Extract("book.epub", data)

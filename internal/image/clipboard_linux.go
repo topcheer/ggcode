@@ -129,18 +129,13 @@ func clipboardOutputArgs(command string) []string {
 }
 
 func runClipboardCommand(name string, args ...string) ([]byte, error) {
-	// #1568-C: xclip/wl-paste can hang forever on a wedged Wayland/X
-	// connection (no parent context, no deadline). Bound the command.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	// #1807 case 1: Output() buffers the WHOLE stdout before any size
-	// check - a 2GB bitmap paste filled ~2GB of RAM on a shared machine
-	// before the 20MB check ever ran. The file-path side got a Stat
-	// pre-check in #438; the clipboard side lagged. Stream through a
-	// capped reader instead: too-large never materializes in full.
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, commandOutputError("reading clipboard image", err, stderr.Bytes())
@@ -148,7 +143,7 @@ func runClipboardCommand(name string, args ...string) ([]byte, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, commandOutputError("reading clipboard image", err, stderr.Bytes())
 	}
-	const clipHardCap = 64 << 20 // 3x the 20MB logical limit: decode slack
+	const clipHardCap = 64 << 20
 	capped := io.LimitReader(stdout, clipHardCap+1)
 	data, rerr := io.ReadAll(capped)
 	werr := cmd.Wait()

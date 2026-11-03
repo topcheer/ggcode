@@ -9,7 +9,6 @@ import (
 func TestSafeSymlink(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Test 1: Symlink a file
 	srcFile := filepath.Join(tmpDir, "source.txt")
 	if err := os.WriteFile(srcFile, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
@@ -20,7 +19,6 @@ func TestSafeSymlink(t *testing.T) {
 		t.Fatalf("SafeSymlink file: %v", err)
 	}
 
-	// Read through the link
 	data, err := os.ReadFile(linkFile)
 	if err != nil {
 		t.Fatalf("read through link: %v", err)
@@ -29,7 +27,6 @@ func TestSafeSymlink(t *testing.T) {
 		t.Fatalf("expected 'hello', got %q", data)
 	}
 
-	// Test 2: Symlink a directory
 	srcDir := filepath.Join(tmpDir, "sourcedir")
 	if err := os.MkdirAll(filepath.Join(srcDir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
@@ -51,20 +48,19 @@ func TestSafeSymlink(t *testing.T) {
 		t.Fatalf("expected 'dir', got %q", data)
 	}
 
-	// Test 3: Target already exists
 	if err := SafeSymlink(srcFile, linkFile); err == nil {
-		// Should either overwrite or succeed — both are acceptable
+
 	}
 }
 
 func TestSafeSymlink_DanglingLink(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Symlink to nonexistent source is allowed (dangling symlink)
+
 	err := SafeSymlink("/nonexistent/file.txt", filepath.Join(tmpDir, "link.txt"))
 	if err != nil {
 		t.Fatalf("dangling symlink should succeed on Unix, got: %v", err)
 	}
-	// Verify it's a dangling symlink
+
 	target, err := os.Readlink(filepath.Join(tmpDir, "link.txt"))
 	if err != nil {
 		t.Fatal(err)

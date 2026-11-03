@@ -14,7 +14,6 @@ func defaultApprovalOptionsFor(lang Language) []approvalOption {
 	}
 }
 
-// diffConfirmOptions returns the options for diff confirmation.
 func diffConfirmOptions() []approvalOption {
 	return diffConfirmOptionsFor(LangEnglish)
 }

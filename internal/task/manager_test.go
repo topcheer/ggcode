@@ -90,13 +90,11 @@ func TestBlockDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify A blocks B
 	gotA, _ := m.Get(a.ID)
 	if len(gotA.Blocks) != 1 || gotA.Blocks[0] != b.ID {
 		t.Errorf("expected A to block B, got blocks=%v", gotA.Blocks)
 	}
 
-	// Verify B is blocked by A (reverse link)
 	gotB, _ := m.Get(b.ID)
 	if len(gotB.BlockedBy) != 1 || gotB.BlockedBy[0] != a.ID {
 		t.Errorf("expected B blocked by A, got blockedBy=%v", gotB.BlockedBy)
@@ -149,12 +147,8 @@ func TestBlockNonexistent(t *testing.T) {
 	}
 }
 
-// #1297: all three wouldCreateCycle call sites had swapped args, so a
-// real 3-node cycle passed validation and persisted - idle_runner's
-// single-level check then deadlocked every task in the cycle forever.
 func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
-	// Repro 1 (AddBlockedBy path): A blocks B, B blocks C, then
-	// A blocked-by C closes the cycle A→B→C→A - must be rejected.
+
 	m := NewManager()
 	a := m.Create("A", "", "", nil).ID
 	b := m.Create("B", "", "", nil).ID
@@ -169,7 +163,6 @@ func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
 		t.Fatal("cycle A→B→C→A via AddBlockedBy must be rejected (swapped-args bug)")
 	}
 
-	// Repro 2 (AddBlocks path): same cycle built with AddBlocks.
 	m2 := NewManager()
 	a2 := m2.Create("A", "", "", nil).ID
 	b2 := m2.Create("B", "", "", nil).ID
@@ -184,7 +177,6 @@ func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
 		t.Fatal("cycle via AddBlocks must be rejected (swapped-args bug)")
 	}
 
-	// Sanity: legitimate edges still accepted.
 	m3 := NewManager()
 	x := m3.Create("X", "", "", nil).ID
 	y := m3.Create("Y", "", "", nil).ID
@@ -193,14 +185,10 @@ func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
 	}
 }
 
-// #1345: an Update whose addBlocks+addBlockedBy combination forms a
-// cross-array cycle must fail BEFORE any mutation - the old code wrote
-// the AddBlocks edges (and Status) first and only detected the cycle in
-// the AddBlockedBy apply loop, leaving partial state behind.
 func TestUpdateCrossArrayCycleNotModified(t *testing.T) {
 	m := NewManager()
-	m.Create("X", "", "", nil) // task-1
-	m.Create("B", "", "", nil) // task-2
+	m.Create("X", "", "", nil)
+	m.Create("B", "", "", nil)
 
 	inProgress := TaskStatus(StatusInProgress)
 	_, err := m.Update("task-1", UpdateOptions{
@@ -225,19 +213,12 @@ func TestUpdateCrossArrayCycleNotModified(t *testing.T) {
 	}
 }
 
-// TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically pins #2581:
-// Update(T, {Status: completed, AddBlocks: [B], AddBlockedBy: [C]}) with
-// C already blocked-by B closes a TRANSITIVE cross-array cycle
-// (C -> B -> [new T edge]). The old pre-validation judged each edge on
-// the original graph and only caught this mid-apply - after Status and
-// the Blocks edges had been written, violating "error = not modified"
-// and sticky-poisoning the board (retry then failed pre-validation).
 func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
 	m := NewManager()
 	b := m.Create("B", "", "", nil)
 	c := m.Create("C", "", "", nil)
 	tt := m.Create("T", "", "", nil)
-	// C blocked-by B
+
 	if _, err := m.Update(c.ID, UpdateOptions{AddBlockedBy: []string{b.ID}}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -252,7 +233,6 @@ func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
 		t.Fatal("transitive cross-array cycle must be rejected")
 	}
 
-	// Contract: error = NOT modified. Nothing may have been written.
 	got, _ := m.Get(tt.ID)
 	if got.Status != StatusPending {
 		t.Fatalf("#2581: status half-applied: %q", got.Status)
@@ -261,8 +241,7 @@ func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
 		t.Fatalf("#2581: blocks half-applied: %v", got.Blocks)
 	}
 	gotB, _ := m.Get(b.ID)
-	// Setup gave B the reverse link Blocks=[C]; the rejected call must
-	// not have added the T edges (Blocks grows [C,T], BlockedBy=[T]).
+
 	if len(gotB.BlockedBy) != 0 || len(gotB.Blocks) != 1 || gotB.Blocks[0] != c.ID {
 		t.Fatalf("#2581: B edges half-applied: blocks=%v blockedBy=%v", gotB.Blocks, gotB.BlockedBy)
 	}
@@ -270,7 +249,7 @@ func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
 	if len(gotC.BlockedBy) != 1 || gotC.BlockedBy[0] != b.ID {
 		t.Fatalf("#2581: C edges mutated: %v", gotC.BlockedBy)
 	}
-	// Retry must fail the SAME way (pre-validation), not differently.
+
 	if _, err2 := m.Update(tt.ID, UpdateOptions{Status: &done, AddBlocks: []string{b.ID}, AddBlockedBy: []string{c.ID}}); err2 == nil {
 		t.Fatal("retry after rejection must also fail")
 	}

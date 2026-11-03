@@ -82,7 +82,7 @@ func (m Model) renderDingtalkPanel() string {
 		if entry.Disabled {
 			status = m.t("panel.dingtalk.entry.disabled")
 		} else if entry.Muted {
-			// #887: details ignored Muted (list shows it, details said "available")
+
 			status = m.t("panel.dingtalk.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.dingtalk.entry.bound")
@@ -106,10 +106,7 @@ func (m Model) renderDingtalkPanel() string {
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.create")))
 	if panel.createMode {
-		// #4873: numbered where-to-get-credentials guide rendered IN the
-		// panel at create time. Verified entry: dev.dingtalk.com is the
-		// developer console the adapter itself links to (it builds
-		// dev.dingtalk.com/app/detail URLs for app details).
+
 		for _, line := range strings.Split(m.t("panel.dingtalk.create_guide"), "\n") {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+line))
 		}
@@ -123,7 +120,7 @@ func (m Model) renderDingtalkPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.dingtalk.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -140,7 +137,7 @@ func (m *Model) handleDingtalkPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -240,11 +237,7 @@ func (m *Model) handleDingtalkPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindDingtalkEntry(entry dingtalkBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
-		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
-		// config map from this Cmd goroutine while the render loop ranged
-		// it. Follow the qq pattern: mutate via configMutationMsg, continue
-		// the bind in next().
+
 		if m.config != nil {
 			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
@@ -269,8 +262,6 @@ func (m *Model) bindDingtalkEntry(entry dingtalkBindingEntry) tea.Cmd {
 	}
 }
 
-// bindDingtalkRest is the bind chain body after the (optional) enable
-// mutation lands on the Update loop.
 func bindDingtalkRest(m *Model, entry dingtalkBindingEntry) tea.Msg {
 	if err := m.ensureDingtalkBotBinding(entry.Adapter); err != nil {
 		return dingtalkBindResultMsg{err: err}
@@ -279,7 +270,7 @@ func bindDingtalkRest(m *Model, entry dingtalkBindingEntry) tea.Msg {
 		if err := m.waitForDingtalkAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 			return dingtalkBindResultMsg{err: err}
 		}
-		// Sync session history to the newly bound channel only.
+
 		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 				return dingtalkBindResultMsg{err: err}
@@ -322,9 +313,7 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return dingtalkBindResultMsg{err: errors.New(m.t("panel.dingtalk.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
-		// secret WITH spaces was silently truncated to its first token,
-		// then persisted as a guaranteed-to-fail credential. Reject extras.
+
 		if len(fields) > 3 {
 			return dingtalkBindResultMsg{err: errors.New("extra fields after app_secret (values must not contain spaces): " + spec)}
 		}
@@ -339,12 +328,8 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 				"app_secret": appSecret,
 			},
 		}
-		// #1367 family: the config write + disk save used to run HERE on
-		// the Cmd goroutine while the render loop ranged over the same
-		// map (concurrent map read/write = fatal). Only side-effect-free
-		// prep stays on this goroutine; the mutation goes through
-		// configMutationMsg and lands on the Update loop.
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -352,9 +337,7 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				// #1794 case 2: auto-enable on the Update loop - the next()
-				// closure's startXXXAdapterIfNeeded used to write the map
-				// from the Cmd goroutine (#1367 family).
+
 				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
@@ -363,19 +346,13 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext secret - without
-						// compensation a wrong secret stays on disk forever and
-						// blocks the name on retry ("already exists"); the panel
-						// has no delete key. The rollback REMOVE is itself a map
-						// write, so it must route through configMutationMsg too
-						// (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -391,8 +368,7 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 					}
 					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errDingtalkEnableNeeded) {
-							// #1719 case 1: enable on the Update loop, then retry.
-							// #4580: success callback (discord-side fix, mirrored).
+
 							return m.dingtalkEnableMutation(name, func(m *Model) tea.Msg {
 								return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
 							})
@@ -428,10 +404,7 @@ func (m *Model) startDingtalkAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.dingtalk.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #1719 case 1: the auto-enable used to write the config map RIGHT
-		// HERE on the Cmd goroutine - a concurrent map read/write fatal
-		// against the render loop. Signal the caller to route the enable
-		// through configMutationMsg (Update loop) instead.
+
 		return errDingtalkEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDingTalk)) {
@@ -547,12 +520,8 @@ func defaultDingtalkTargetID(workspace string) string {
 	return base
 }
 
-// errDingtalkEnableNeeded signals the auto-enable must run on the Update
-// loop via configMutationMsg (#1719 case 1).
 var errDingtalkEnableNeeded = errors.New("dingtalk adapter needs enable-on-update-loop")
 
-// dingtalkEnableMutation returns the configMutationMsg that performs the
-// auto-enable on the Update loop and then continues with next.
 func (m *Model) dingtalkEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -621,10 +590,7 @@ func (m Model) dingtalkAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.dingtalk.status.unknown")
 	}
-	// #887: both branches previously returned the same value — a
-	// disconnected adapter (Healthy=false, Status="running") showed
-	// "running". Mirror wecom: healthy = raw status, else LastError/
-	// offline indicator.
+
 	if state.Healthy {
 		return status
 	}

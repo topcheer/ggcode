@@ -8,30 +8,23 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// PathSandbox restricts file operations to allowed directories.
 type PathSandbox struct {
 	allowedDirs []string
-	// getwdFailed records that the cwd fallback could not be established at
-	// construction time (os.Getwd error, e.g. deleted cwd on Linux). The
-	// sandbox then fails closed instead of silently allowing everything
-	// (#573-F).
+
 	getwdFailed bool
 }
 
-// NewPathSandbox creates a sandbox with the given allowed directories.
-// If empty, defaults to the current working directory.
 func NewPathSandbox(allowedDirs []string) *PathSandbox {
 	if len(allowedDirs) == 0 {
 		if wd, err := os.Getwd(); err == nil {
 			allowedDirs = []string{wd}
 		} else {
-			// #573-F: an empty dir list makes Allowed() fail open with no
-			// trace. Record the failure and fail closed instead.
+
 			debug.Log("permission", "PathSandbox: os.Getwd failed (%v); sandbox will fail closed", err)
 			return &PathSandbox{getwdFailed: true}
 		}
 	}
-	// Normalize paths (resolve symlinks like /tmp -> /private/tmp on macOS)
+
 	normalized := make([]string, 0, len(allowedDirs))
 	for _, d := range allowedDirs {
 		resolved := resolvePath(d)
@@ -40,11 +33,7 @@ func NewPathSandbox(allowedDirs []string) *PathSandbox {
 		}
 		normalized = append(normalized, resolved)
 	}
-	// #1311 S4: a NON-EMPTY allowedDirs whose every entry failed to
-	// resolve produced an empty normalized list, and Allowed() then took
-	// the "no restrictions" branch - fail-open, contradicting #573-F's
-	// fail-closed treatment of the empty-with-getwd-failure case above.
-	// Deny everything instead: the operator asked for restrictions.
+
 	if len(normalized) == 0 {
 		debug.Log("permission", "PathSandbox: all %d allowedDirs failed to resolve; sandbox will fail closed", len(allowedDirs))
 		return &PathSandbox{getwdFailed: true}
@@ -52,9 +41,6 @@ func NewPathSandbox(allowedDirs []string) *PathSandbox {
 	return &PathSandbox{allowedDirs: normalized}
 }
 
-// resolvePath tries to resolve symlinks as far as possible.
-// For existing paths, returns the fully resolved path.
-// For non-existing paths, resolves the longest existing prefix.
 func resolvePath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -67,7 +53,6 @@ func resolvePath(path string) string {
 		return filepath.Clean(resolved)
 	}
 
-	// File doesn't exist; walk up to find longest existing prefix
 	dir := abs
 	remaining := ""
 	for {
@@ -79,7 +64,7 @@ func resolvePath(path string) string {
 			}
 			return resolved
 		}
-		// Go up one level
+
 		base := filepath.Base(dir)
 		if remaining == "" {
 			remaining = base
@@ -88,57 +73,25 @@ func resolvePath(path string) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break // reached root
+			break
 		}
 		dir = parent
 	}
-	return abs // fallback to original
+	return abs
 }
 
-// Allowed returns true if the path is within an allowed directory.
-// It resolves symlinks to prevent sandbox escapes.
 func (s *PathSandbox) Allowed(path string) bool {
 	if len(s.allowedDirs) == 0 {
 		if s.getwdFailed {
-			// #573-F: fail closed — the sandbox could not be established, so
-			// silently allowing all paths would be an invisible security hole.
+
 			debug.Log("permission", "PathSandbox: denying %q — sandbox unavailable (os.Getwd failed)", path)
 			return false
 		}
-		return true // no restrictions
+		return true
 	}
 
-	// #4138: expand a leading ~ BEFORE anchoring. "~/x" is neither absolute
-	// nor "/"-rooted, so it used to fall into the relative-path anchoring
-	// below and got joined under the sandbox root ("<sandbox>/~/x") - the
-	// prefix compare then passed and every tilde path was misjudged as
-	// sandbox-inside. In bypass/auto that disabled the out-of-sandbox write
-	// Deny (write_file ~/.zshrc escaped); in supervised it short-circuited
-	// the sensitive-read Ask (read_file ~/.ssh/id_rsa silently allowed).
-	// The tool layer expands ~ independently (resolveToolPath, #568), so the
-	// policy layer must judge the same real target. Config_policy's plan and
-	// redirect callers (#573-C) already pre-expand; re-expanding an expanded
-	// absolute path is a no-op.
 	path = expandTilde(path)
 
-	// Relative paths are anchored at the first allowed directory, not the
-	// process CWD (#551-F). Since #542, file tools resolve relative paths
-	// against their WorkingDir (the workspace root), so the sandbox must
-	// judge the same path the tool will actually touch; anchoring at the
-	// process CWD judged a different file, producing false Deny/Allow
-	// verdicts whenever WorkingDir != process CWD (worktrees, sub-agents).
-	// Per-agent policies are constructed with the agent's working directory
-	// as allowedDirs[0], so this reproduces the tool-side resolution.
-	// Absolute paths (the other caller, AllowedPathForTool) are unaffected.
-	// A POSIX-rooted path ("/etc/passwd") is not absolute on Windows
-	// (filepath.IsAbs requires a drive or UNC prefix), so it used to fall
-	// into the relative-path anchoring below and got joined under the
-	// sandbox root ("C:\...\sandbox\etc\passwd") — every POSIX-style path
-	// then passed the containment check and the mode-level Deny/Ask gates
-	// never fired. Treat a leading "/" as rooted: resolvePath's
-	// filepath.Abs maps it to the current drive root ("C:\etc\passwd"),
-	// which correctly fails the allowed-dir prefix compare. On Unix this
-	// clause is unreachable for such paths (IsAbs already true).
 	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "/") {
 		path = filepath.Join(s.allowedDirs[0], path)
 	}
@@ -149,13 +102,7 @@ func (s *PathSandbox) Allowed(path string) bool {
 	}
 
 	for _, dir := range s.allowedDirs {
-		// #713: case-insensitive platforms (macOS APFS, Windows NTFS) compare
-		// paths case-insensitively, but filepath.EvalSymlinks does NOT rewrite
-		// to the real-case spelling. A wrong-case variant of the workspace dir
-		// then failed the byte-exact prefix compare in BOTH the existing and
-		// non-existing path cases — a false Deny in auto mode, false Ask
-		// elsewhere. Segment-wise ASCII fold (pathFoldActive-aware) instead;
-		// case-sensitive platforms keep byte equality.
+
 		if pathHasPrefixFold(resolved, dir+string(os.PathSeparator)) || pathEqualFold(resolved, dir) {
 			return true
 		}
@@ -163,7 +110,6 @@ func (s *PathSandbox) Allowed(path string) bool {
 	return false
 }
 
-// AllowedDirs returns the list of allowed directories.
 func (s *PathSandbox) AllowedDirs() []string {
 	return s.allowedDirs
 }

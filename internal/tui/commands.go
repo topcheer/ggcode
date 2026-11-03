@@ -16,22 +16,18 @@ import (
 )
 
 func (m *Model) updateAutoComplete() {
-	// In chat mode, @ triggers LAN Chat user list (not file mentions).
-	// IMPORTANT: The user list only shows while the user is actively typing
-	// the @nick portion (before any space). Once "@nick " is complete and
-	// the user types a message, autocomplete must stay off so Enter submits.
+
 	if m.chatMode {
 		val := m.input.Value()
 		if strings.HasPrefix(val, "@") {
 			query := val[1:]
-			// Only show user list while typing the nick (no space yet).
-			// After "@nick " is complete, autocomplete is off.
+
 			if !strings.Contains(query, " ") {
 				m.refreshLanChatTargets()
-				// Filter by query prefix
+
 				if query != "" {
 					var filtered []string
-					// "All" / "所有人" always stays
+
 					if len(m.autoCompleteItems) > 0 {
 						first := m.autoCompleteItems[0]
 						if strings.EqualFold(first, "All") || strings.EqualFold(first, "所有人") {
@@ -52,13 +48,12 @@ func (m *Model) updateAutoComplete() {
 				return
 			}
 		}
-		// In chat mode without @, or after @nick is complete, no autocomplete
+
 		m.autoCompleteActive = false
 		m.autoCompleteItems = nil
 		return
 	}
 
-	// Check for slash command
 	if active, prefix := DetectSlashCommand(m.input.Value(), inputCursor(&m.input)); active {
 		m.refreshCommands()
 		matches := CompleteSlashCommand("/"+prefix, m.customCmds)
@@ -66,7 +61,7 @@ func (m *Model) updateAutoComplete() {
 			m.autoCompleteActive = true
 			m.autoCompleteKind = "slash"
 			m.autoCompleteItems = matches
-			// Reset index if the filtered list changed
+
 			if m.autoCompleteIndex >= len(matches) {
 				m.autoCompleteIndex = 0
 			}
@@ -74,7 +69,6 @@ func (m *Model) updateAutoComplete() {
 		}
 	}
 
-	// Check for @mention
 	if active, prefix := DetectMention(m.input.Value(), inputCursor(&m.input)); active {
 		workDir, _ := os.Getwd()
 		var fuzzyFallback FuzzyFileSearcher
@@ -96,7 +90,6 @@ func (m *Model) updateAutoComplete() {
 		}
 	}
 
-	// No autocomplete active
 	m.autoCompleteActive = false
 	m.autoCompleteItems = nil
 }
@@ -130,8 +123,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 			m.inputHint = ""
 			return nil
 		}
-		// Fillable commands: put command in input with placeholder hint.
-		// User can press Enter (no args) or type arguments.
+
 		if placeholder, ok := SlashCommandPlaceholders[selected]; ok && placeholder != "" {
 			m.input.SetValue(selected + " ")
 			m.input.CursorEnd()
@@ -141,7 +133,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 			m.autoCompleteIndex = 0
 			return nil
 		}
-		// Non-fillable commands: execute immediately
+
 		m.input.SetValue("")
 		m.autoCompleteActive = false
 		m.autoCompleteItems = nil
@@ -153,21 +145,17 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	}
 
 	if m.autoCompleteKind == "mention" {
-		// Replace from the "@" to cursor with the selected path
+
 		atPos := cursor - 1
 		for atPos >= 0 && value[atPos] != '@' {
 			atPos--
 		}
-		// #2149: no '@' to the left of the cursor - a stale completion
-		// state (the readline shortcuts ctrl+a/k/u/w return without
-		// recalculating, so the flag outlives the token) could reach here
-		// with atPos == -1 and value[:atPos] panicked the whole TUI
-		// (slice bounds out of range [:-1]). Safe no-op instead.
+
 		if atPos < 0 {
 			return nil
 		}
 		if strings.HasSuffix(selected, "/") {
-			// Directory: no trailing space so user can keep navigating
+
 			replacement = "@" + selected
 		} else {
 			replacement = "@" + selected + " "
@@ -176,10 +164,10 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	}
 
 	if m.autoCompleteKind == "lanchat" {
-		// Selected a LAN Chat target
+
 		isAll := strings.EqualFold(selected, "All") || strings.EqualFold(selected, "所有人")
 		if isAll {
-			// Broadcast: clear the @, leave input empty for broadcast message
+
 			m.input.SetValue("")
 		} else {
 			m.input.SetValue("@" + selected + " ")
@@ -194,7 +182,6 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	m.input.SetValue(value)
 	m.input.CursorEnd()
 
-	// For directory mentions, re-trigger autocomplete to show contents
 	if m.autoCompleteKind == "mention" && strings.HasSuffix(selected, "/") {
 		m.updateAutoComplete()
 		return nil
@@ -215,7 +202,7 @@ func (m *Model) submitHiddenText(text string) tea.Cmd {
 }
 
 func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInChat bool) tea.Cmd {
-	// Notify Knight that user is active (resets idle timer)
+
 	if m.knight != nil && (strings.TrimSpace(text) != "" || len(m.pendingImages) > 0) {
 		m.knight.NotifyActivity()
 	}
@@ -230,11 +217,6 @@ func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInC
 	return m.handleCommandWithDisplay(text, displayInChat)
 }
 
-// shouldExecuteWhileBusy returns true for commands that should run immediately
-// even when the agent is loading (instead of being queued as pending submissions).
-// Built-in slash commands that only open panels or change settings are safe;
-// custom commands (which may start a new agent run) and subcommands
-// (which may start runs) are excluded.
 func shouldExecuteWhileBusy(text string) bool {
 	t := strings.TrimSpace(text)
 	if !strings.HasPrefix(t, "/") {
@@ -246,7 +228,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	}
 	cmd := parts[0]
 	switch cmd {
-	// Panel / UI commands — always safe
+
 	case "/export-trace",
 		"/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
@@ -274,7 +256,6 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		return m.submitShellCommand(shellCommand, true)
 	}
 
-	// Slash commands
 	if strings.HasPrefix(text, "/") {
 		m.refreshCommands()
 		parts := strings.Fields(text)
@@ -450,7 +431,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			m.openInspectorPanel(inspectorPanelSessions)
 			return nil
 		case "/export-trace":
-			// sa-153: optional --otel / --otlp flag selects OTLP/GenAI export.
+
 			otelFormat := false
 			args := parts[1:]
 			if len(args) > 0 && (args[0] == "--otel" || args[0] == "--otlp") {
@@ -527,11 +508,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/restart":
 			return m.handleRestartCommand(text)
 		case "/stream":
-			// #885: TrimPrefix must not use the raw text (case-mismatch dropped
-			// args) — but #893 showed lowercasing the WHOLE input breaks
-			// case-sensitive target names. Lowercase only the command token:
-			// the dispatch already matched case-insensitively, so the first 7
-			// chars are the command and the rest are args verbatim.
+
 			args := strings.TrimSpace(text[len("/stream"):])
 			resp, _ := m.handleStreamSlash(args)
 			m.chatWriteSystem(nextSystemID(), resp)
@@ -589,7 +566,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/goal":
 			return m.handleGoalCommand(parts)
 		default:
-			// Check custom commands
+
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
 				if custom, ok := m.customCmds[cmdName]; ok {
 					if !custom.UserInvocable {
@@ -609,7 +586,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 					m.appendUserMessage(expanded)
 					m.setLoading(true)
 					m.loopStart = time.Now()
-					// Reset status bar state
+
 					m.statusActivity = m.t("status.thinking")
 					m.statusToolName = ""
 					m.statusToolArg = ""
@@ -618,7 +595,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 				}
 			}
 			m.chatWriteSystem(nextSystemID(), m.t("command.unknown", text))
-			// Suggest similar commands for typos (e.g., /stas → /stats)
+
 			if suggestion := suggestCommand(text); suggestion != "" {
 				m.chatWriteSystem(nextSystemID(), suggestion)
 			}
@@ -627,7 +604,6 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		}
 	}
 
-	// Regular message → check auto-run routing before starting agent
 	displayText := text
 	for _, img := range m.pendingImages {
 		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
@@ -642,52 +618,30 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 		m.chatListScrollToBottom()
 	}
 
-	// Always persist the user message to session, even for hidden runs
-	// (cron prompts, autopilot synthetic messages). Without this,
-	// persistFullSessionMessages would skip runAdded[0] (it assumes the
-	// user submission was already persisted by appendUserMessage) and the
-	// message would be silently lost from the session JSONL.
 	m.appendUserMessage(text)
 
-	// Store for /retry and /edit. This producer was accidentally dropped by
-	// the e29ea0f3 refactor while both consumers survived, leaving /retry
-	// and /edit permanently on their "empty" branches. Restored per issue
-	// #541 (original position: startAutoRunCheck in 2fb70704).
 	m.lastUserSubmission = text
-	// #1713 case 1: the retry budget is per-SUBMISSION (the field comment
-	// says "current submission") but nothing reset it here - submission B
-	// inherited A's burnt budget or landed straight in the exhausted
-	// branch with a stale count.
+
 	m.resetBlindSpotRetry()
 
 	return m.continueDisplayedNormalTextRun(text)
 }
 
-// submitLanChatAgentText injects a LAN Chat agent message into the agent loop.
-// The message is rendered as a user markdown message in the main chat panel
-// so the user sees what the agent received and can follow the conversation.
-// The agent's response (text + tool calls) renders naturally below.
 func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
-	// If the agent is already running, queue the message instead of
-	// starting a competing run. This mirrors the behavior of local
-	// user input (update_keys.go) and IM remote inbound (update_remote.go).
-	// #1762 case 2: projectMemoryLoading included, same as the local gate.
+
 	if m.loading || m.projectMemoryLoading {
-		// #3466: remote-origin queue entry so the drain path arms the
-		// refusal-ledger inhibit for this text.
+
 		m.queuePendingSubmissionRemote(text)
 		return nil
 	}
-	// Render as a user markdown message (not a gray system note)
+
 	m.chatWriteUserMarkdown(nextSystemID(), text)
 	m.chatListScrollToBottom()
-	// Persist as a normal user message — lanchat messages ARE user messages,
-	// they just originate from an external agent instead of the keyboard.
+
 	m.appendUserMessage(text)
-	// #3460: remote-origin text must not mutate the refusal ledger (a
-	// forged FromRole=agent DM could poison/lift 30-day write blocks).
+
 	m.agent.InhibitNextRefusalLedgerWrite()
-	// Inject into the agent loop so the agent can process and respond
+
 	return m.continueDisplayedNormalTextRun(text)
 }
 
@@ -697,12 +651,12 @@ func (m *Model) continueDisplayedNormalTextRun(text string) tea.Cmd {
 	m.streamPrefixWritten = false
 	m.setLoading(true)
 	m.loopStart = time.Now()
-	// Reset status bar state
+
 	m.statusActivity = m.t("status.thinking")
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	// ExpandMentions runs asynchronously inside startAgentWithExpand to avoid blocking UI
+
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(text))
 }
 
@@ -722,10 +676,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("init.generate_failed", err))
 		return nil
 	}
-	// Exploration-first init prompt (#AGENTS.md standard): the agent must
-	// understand the repository BEFORE writing the memory file, instead of
-	// dumping the heuristic snapshot verbatim. The detected facts below are
-	// hints to verify, not the final content.
+
 	verb := "Create"
 	if existed {
 		verb = "Update"
@@ -775,15 +726,10 @@ func (m *Model) handleRetryCommand() tea.Cmd {
 		return nil
 	}
 	text := m.lastUserSubmission
-	m.lastUserSubmission = "" // clear to avoid retry loop
+	m.lastUserSubmission = ""
 	return m.submitText(text, true)
 }
 
-// handleContinueTaskCommand resumes the task that was interrupted by the
-// previous crash in this session (sa-117). The original prompt was captured
-// by the crash-recovery check at session load; typing /continue-task is the
-// explicit user confirmation to re-run it. One-shot: the captured task is
-// consumed on dispatch so the user cannot double-fire it.
 func (m *Model) handleContinueTaskCommand() tea.Cmd {
 	if m.crashResumeTask == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("command.continue_task_empty"))
@@ -796,14 +742,12 @@ func (m *Model) handleContinueTaskCommand() tea.Cmd {
 		return nil
 	}
 	task := m.crashResumeTask
-	m.crashResumeTask = "" // one-shot: consumed on dispatch
+	m.crashResumeTask = ""
 	m.chatWriteSystem(nextSystemID(), m.t("command.continue_task_sent"))
 	m.chatListScrollToBottom()
 	return m.submitText(task, true)
 }
 
-// handleEditCommand loads the last user prompt into the input box for editing.
-// The user can then modify the text and press Enter to submit.
 func (m *Model) handleEditCommand() tea.Cmd {
 	if m.lastUserSubmission == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("command.edit_empty"))
@@ -822,8 +766,6 @@ func (m *Model) handleEditCommand() tea.Cmd {
 	return nil
 }
 
-// suggestCommand finds the closest matching slash command by edit distance.
-// Returns a "Did you mean?" suggestion string, or empty if no close match.
 func suggestCommand(input string) string {
 	input = strings.ToLower(strings.TrimSpace(input))
 	if len(input) < 2 {
@@ -831,15 +773,15 @@ func suggestCommand(input string) string {
 	}
 
 	bestMatch := ""
-	bestDist := 1 << 30 // large number
-	// Use a slightly relaxed threshold for short commands
+	bestDist := 1 << 30
+
 	maxDist := 3
 	if len(input) <= 4 {
 		maxDist = 2
 	}
 
 	for _, cmd := range SlashCommands {
-		// Skip aliases (they're already short forms)
+
 		if len(cmd) <= 3 {
 			continue
 		}
@@ -856,7 +798,6 @@ func suggestCommand(input string) string {
 	return fmt.Sprintf("Did you mean %s?", bestMatch)
 }
 
-// levenshteinDistance computes the edit distance between two strings.
 func levenshteinDistance(a, b string) int {
 	la, lb := len(a), len(b)
 	if la == 0 {
@@ -866,7 +807,6 @@ func levenshteinDistance(a, b string) int {
 		return la
 	}
 
-	// Use a single row for DP
 	prev := make([]int, lb+1)
 	curr := make([]int, lb+1)
 	for j := 0; j <= lb; j++ {

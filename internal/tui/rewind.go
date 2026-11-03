@@ -16,16 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// handleRewindCommand implements coordinated rewind (Claude Code checkpoint
-// semantics, AgentRewind arXiv:2608.14380): drop the last N user turns from
-// the conversation AND revert the file edits those runs made, in lockstep,
-// then continue in a fresh forked session that keeps the original intact.
-//
-// Unlike /branch (conversation-only fork, disk untouched) and /undo-run
-// (files-only, conversation untouched), /rewind is the coordinated restore:
-// conversation and disk move back together, and a rewind-memory breadcrumb is
-// injected so the next run knows what was tried and rolled back instead of
-// blindly repeating it.
 func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
@@ -38,7 +28,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Default: rewind the last turn.
 	dropRounds := 1
 	if len(parts) > 1 {
 		n, err := strconv.Atoi(strings.TrimSpace(parts[1]))
@@ -56,10 +45,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Coordinated file rollback FIRST: if it refuses (evicted baselines,
-	// split runs), abort before creating anything - a half-rewound session
-	// would silently violate the coordinated-restore promise. The user can
-	// still /branch to rewind the conversation alone.
 	var reverted []checkpoint.Checkpoint
 	var revertErr error
 	if m.agent != nil {
@@ -73,16 +58,9 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		}
 	}
 
-	// Flush final metadata for the current session before forking.
 	oldSes := m.session
 	oldStore := m.sessionStore
-	// #3721: snapshot the task board BEFORE spawning the metaFlush
-	// goroutine. AppendMetaToDisk json.Marshals oldSes.TasksJSON/
-	// TasksEnvJSON on the goroutine; snapshotTasksInto WRITES both on the
-	// main thread - the old order raced a slice-header write against the
-	// marshal read. Snapshot-then-flush is also the order the persistence
-	// helper's own contract documents ("call it before a session's metadata
-	// is flushed"), and it makes the goroutine read-only.
+
 	m.snapshotTasksInto(oldSes)
 	safego.Go("tui.rewind.metaFlush", func() {
 		if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
@@ -92,19 +70,13 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		}
 	})
 
-	// Fork the conversation at the pre-rewind point (same proven session
-	// continuation path as /branch; cannot copy Session by value because it
-	// contains a sync.RWMutex).
 	rewound := session.NewSession(oldSes.Vendor, oldSes.Endpoint, oldSes.Model)
 	rewound.Workspace = oldSes.Workspace
 	rewound.TokenUsage = oldSes.TokenUsage
 	rewound.CostJSON = append([]byte(nil), oldSes.CostJSON...)
 	rewound.PermissionMode = oldSes.PermissionMode
 	rewound.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
-	// #3792: the workspace fingerprint is snapshot alongside the board
-	// (snapshotTasksInto writes BOTH). Without it the fork session resumes
-	// with an EMPTY fingerprint, decodeEnvFingerprint fail-opens, and the
-	// resume reconciliation note silently never fires on workspace drift.
+
 	rewound.TasksEnvJSON = append([]byte(nil), oldSes.TasksEnvJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
@@ -133,9 +105,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		rewound.EndpointMetrics[k] = cp
 	}
 
-	// Rewind memory: one bounded user-role breadcrumb so the continued
-	// session knows what was tried and rolled back (AgentRewind's "continue
-	// with information from previous attempts") instead of repeating it.
 	rewound.Messages = append(rewound.Messages, provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{
@@ -174,7 +143,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 		}
 	}
 
-	// Switch to the rewound session.
 	m.applyResumedSession(rewound)
 
 	files := rewindFileList(reverted)
@@ -187,9 +155,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// buildRewindMemory renders the injected breadcrumb message. Bounded: at
-// most rewindMemoryMaxFiles files listed, so a large multi-file rewind
-// cannot blow the breadcrumb into a second screen of context.
 func buildRewindMemory(reverted []checkpoint.Checkpoint, turns int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[rewind memory] The last %d turn(s) of this conversation were rewound and their file edits were reverted. Treat everything below as tried-and-rolled-back, not as current state - do not repeat the same approaches blindly.\n", turns)
@@ -205,10 +170,6 @@ func buildRewindMemory(reverted []checkpoint.Checkpoint, turns int) string {
 
 const rewindMemoryMaxFiles = 10
 
-// rewindFileList dedupes reverted checkpoints by file path (a file edited
-// several times in the rewound runs yields one entry) and returns a stable
-// base-name-qualified list, capped at rewindMemoryMaxFiles entries with a
-// "+k more" tail.
 func rewindFileList(reverted []checkpoint.Checkpoint) []string {
 	seen := make(map[string]struct{}, len(reverted))
 	var files []string

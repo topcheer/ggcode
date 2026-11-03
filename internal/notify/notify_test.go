@@ -13,9 +13,7 @@ func TestOnCompletionMode(t *testing.T) {
 		cfg      config.NotificationConfig
 		duration time.Duration
 		failed   bool
-		// We verify behavior by checking that fireBell is called via the
-		// ShouldBell path. Since fireBell just prints \x07, we test the
-		// decision logic through EffectiveMode.
+
 		wantMode string
 	}{
 		{
@@ -60,14 +58,14 @@ func TestOnCompletionMode(t *testing.T) {
 			if got := tt.cfg.EffectiveMode(); got != tt.wantMode {
 				t.Errorf("EffectiveMode() = %q, want %q", got, tt.wantMode)
 			}
-			// OnCompletion should not panic for any combination.
+
 			OnCompletion(tt.cfg, tt.duration, tt.failed, "test summary")
 		})
 	}
 }
 
 func TestOnCompletionDoesNotPanic(t *testing.T) {
-	// Various edge-case configs should not cause panics.
+
 	configs := []config.NotificationConfig{
 		{},
 		{Mode: "off"},
@@ -87,10 +85,10 @@ func TestEffectiveMinDuration(t *testing.T) {
 		cfg  config.NotificationConfig
 		want int
 	}{
-		{config.NotificationConfig{}, 3},               // default
-		{config.NotificationConfig{MinDuration: 0}, 3}, // zero = default
+		{config.NotificationConfig{}, 3},
+		{config.NotificationConfig{MinDuration: 0}, 3},
 		{config.NotificationConfig{MinDuration: 10}, 10},
-		{config.NotificationConfig{MinDuration: -1}, 3}, // negative = default
+		{config.NotificationConfig{MinDuration: -1}, 3},
 	}
 	for _, tt := range tests {
 		if got := tt.cfg.EffectiveMinDuration(); got != tt.want {
@@ -104,10 +102,10 @@ func TestEffectiveInputBellDelay(t *testing.T) {
 		cfg  config.NotificationConfig
 		want int
 	}{
-		{config.NotificationConfig{}, 5},                    // default
-		{config.NotificationConfig{InputBellDelay: 0}, 5},   // zero = default
-		{config.NotificationConfig{InputBellDelay: 10}, 10}, // explicit
-		{config.NotificationConfig{InputBellDelay: -1}, 0},  // negative = disabled
+		{config.NotificationConfig{}, 5},
+		{config.NotificationConfig{InputBellDelay: 0}, 5},
+		{config.NotificationConfig{InputBellDelay: 10}, 10},
+		{config.NotificationConfig{InputBellDelay: -1}, 0},
 	}
 	for _, tt := range tests {
 		if got := tt.cfg.EffectiveInputBellDelay(); got != tt.want {
@@ -121,12 +119,12 @@ func TestShouldBell(t *testing.T) {
 		cfg  config.NotificationConfig
 		want bool
 	}{
-		{config.NotificationConfig{}, true},                      // nil = backward compat default on
-		{config.NotificationConfig{Bell: bellPtr(true)}, true},   // explicit on
-		{config.NotificationConfig{Bell: bellPtr(false)}, false}, // explicit off (#959)
-		{config.NotificationConfig{Desktop: true}, true},         // bell unset → default on
+		{config.NotificationConfig{}, true},
+		{config.NotificationConfig{Bell: bellPtr(true)}, true},
+		{config.NotificationConfig{Bell: bellPtr(false)}, false},
+		{config.NotificationConfig{Desktop: true}, true},
 		{config.NotificationConfig{Bell: bellPtr(true), Desktop: true}, true},
-		{config.NotificationConfig{Bell: bellPtr(false), Desktop: true}, false}, // explicit off wins over desktop
+		{config.NotificationConfig{Bell: bellPtr(false), Desktop: true}, false},
 	}
 	for _, tt := range tests {
 		if got := tt.cfg.ShouldBell(); got != tt.want {
