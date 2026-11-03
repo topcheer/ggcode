@@ -132,3 +132,111 @@ func TestIssue4973BridgeStaleSnapshotRevertsSession(t *testing.T) {
 		t.Fatalf("session reverted to stale selection (#4973): got %s/%s/%s, want gamma/alt/modelD", gotVendor, gotEndpoint, gotModel)
 	}
 }
+
+// TestIssue4973ModelKeptOnProviderSwitch covers the follow-up report: after
+// switching vendor kimi->zai with model glm-5.3 selected in the dropdown, the
+// resolved model must be glm-5.3 even when the zai endpoint carries a stale
+// SelectedModel (k3-256k from an earlier session).
+func TestIssue4973ModelKeptOnProviderSwitch(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "ggcode.yaml")
+	yaml := `vendor: kimi
+endpoint: main
+model: k3-256k
+vendors:
+  kimi:
+    endpoints:
+      main:
+        protocol: anthropic
+        base_url: https://kimi.example.com
+        defaultModel: k3-256k
+  zai:
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://api.z.ai/api/coding/paas/v4
+        defaultModel: k3-256k
+        selectedModel: k3-256k
+`
+	if err := os.WriteFile(mainPath, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(mainPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	SetConfig(cfg)
+
+	if err := UpdateConfig(map[string]interface{}{
+		"vendor":   "zai",
+		"endpoint": "cn",
+		"model":    "glm-5.3",
+	}); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	res, err := GetResolvedEndpoint()
+	if err != nil {
+		t.Fatalf("GetResolvedEndpoint: %v", err)
+	}
+	t.Logf("resolved after switch: vendor=%s endpoint=%s model=%s", res.VendorID, res.EndpointID, res.Model)
+	if res.VendorID != "zai" {
+		t.Fatalf("vendor should be zai, got %s", res.VendorID)
+	}
+	if res.Model != "glm-5.3" {
+		t.Fatalf("model should be glm-5.3 (explicit selection beats endpoint SelectedModel), got %s", res.Model)
+	}
+}
+
+// TestIssue4973EmptyModelResetsToEndpointDefault covers the reported follow-up:
+// the frontend can save a vendor/endpoint switch with model:"" (dropdown left
+// on the placeholder). cfg.Model must reset to the new endpoint's selection
+// instead of keeping the previous vendor's model string.
+func TestIssue4973EmptyModelResetsToEndpointDefault(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "ggcode.yaml")
+	yaml := `vendor: kimi
+endpoint: main
+model: k3-256k
+vendors:
+  kimi:
+    endpoints:
+      main:
+        protocol: anthropic
+        base_url: https://kimi.example.com
+        defaultModel: k3-256k
+  zai:
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://api.z.ai/api/coding/paas/v4
+        default_model: glm-5.3
+        selected_model: glm-5.3
+`
+	if err := os.WriteFile(mainPath, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(mainPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	SetConfig(cfg)
+
+	// Frontend saved with model:"" (placeholder still selected).
+	if err := UpdateConfig(map[string]interface{}{
+		"vendor":   "zai",
+		"endpoint": "cn",
+		"model":    "",
+	}); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	res, err := GetResolvedEndpoint()
+	if err != nil {
+		t.Fatalf("GetResolvedEndpoint: %v", err)
+	}
+	t.Logf("resolved: vendor=%s endpoint=%s model=%s", res.VendorID, res.EndpointID, res.Model)
+	if res.Model != "glm-5.3" {
+		t.Fatalf("empty model on vendor switch must reset to endpoint selection glm-5.3, got %s (stale k3-256k leak = #4973)", res.Model)
+	}
+}

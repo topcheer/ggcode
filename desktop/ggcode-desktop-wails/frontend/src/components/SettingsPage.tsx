@@ -184,6 +184,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         if (details.models && details.models.length > 0) {
           setModels(details.models)
         }
+        // Preselect the endpoint's default model so the dropdown is never left
+        // empty; an empty model on save keeps the stale global model (#4973).
+        setCurrentModel(details.defaultModel || '')
       }
     } catch (e: any) {
       showToast?.('error', t('toast.endpointDetailsLoadFailed', { error: e?.message || String(e) }))
