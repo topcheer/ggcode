@@ -50,8 +50,6 @@ export function GetAvailableModels():Promise<Array<string>>;
 
 export function GetConfig():Promise<wailskit.FullConfig>;
 
-export function GetUsageInfo():Promise<wailskit.UsageInfoResult>;
-
 export function GetCronJob(arg1:string):Promise<wailskit.CronJobInfo>;
 
 export function GetCurrentSessionID():Promise<string>;
@@ -87,6 +85,8 @@ export function GetSessionLimits():Promise<wailskit.SessionLimitInfo>;
 export function GetTeamBoard():Promise<Array<swarm.TeamBoardSnapshot>>;
 
 export function GetUnreadNotifications():Promise<number>;
+
+export function GetUsageInfo():Promise<wailskit.UsageInfoResult>;
 
 export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
 
@@ -235,6 +235,8 @@ export function TestIMConnection(arg1:string):Promise<void>;
 export function ToggleAlwaysOnTop():Promise<boolean>;
 
 export function ToggleLogStream(arg1:boolean):Promise<void>;
+
+export function TrajConfidenceOverview():Promise<wailskit.TrajConfidenceOverview>;
 
 export function UnbindIMAdapter(arg1:string):Promise<void>;
 

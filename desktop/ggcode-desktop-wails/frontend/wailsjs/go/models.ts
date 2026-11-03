@@ -37,6 +37,9 @@ export namespace hooks {
 	    on_agent_stop: Hook[];
 	    on_stream_stop: Hook[];
 	    on_compaction: Hook[];
+	    pre_compact: Hook[];
+	    on_session_start: Hook[];
+	    on_session_end: Hook[];
 	
 	    static createFrom(source: any = {}) {
 	        return new HookConfig(source);
@@ -50,6 +53,9 @@ export namespace hooks {
 	        this.on_agent_stop = this.convertValues(source["on_agent_stop"], Hook);
 	        this.on_stream_stop = this.convertValues(source["on_stream_stop"], Hook);
 	        this.on_compaction = this.convertValues(source["on_compaction"], Hook);
+	        this.pre_compact = this.convertValues(source["pre_compact"], Hook);
+	        this.on_session_start = this.convertValues(source["on_session_start"], Hook);
+	        this.on_session_end = this.convertValues(source["on_session_end"], Hook);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -105,6 +111,8 @@ export namespace lanchat {
 	    content: string;
 	    attachments?: Attachment[];
 	    timestamp: number;
+	    pub_key?: string;
+	    sig?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -121,6 +129,8 @@ export namespace lanchat {
 	        this.content = source["content"];
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	        this.timestamp = source["timestamp"];
+	        this.pub_key = source["pub_key"];
+	        this.sig = source["sig"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -426,61 +436,6 @@ export namespace swarm {
 }
 
 export namespace wailskit {
-	
-	export class UsageWindowInfo {
-	    label: string;
-	    usedPercent: number;
-	    resetsAt: string;
-
-	    static createFrom(source: any = {}) {
-	        return new UsageWindowInfo(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.label = source["label"];
-	        this.usedPercent = source["usedPercent"];
-	        this.resetsAt = source["resetsAt"];
-	    }
-	}
-	export class UsageInfoResult {
-	    vendor: string;
-	    source: string;
-	    balance: number | null;
-	    windows: UsageWindowInfo[];
-	    error: string;
-
-	    static createFrom(source: any = {}) {
-	        return new UsageInfoResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.vendor = source["vendor"];
-	        this.source = source["source"];
-	        this.balance = source["balance"];
-	        this.windows = this.convertValues(source["windows"], UsageWindowInfo);
-	        this.error = source["error"];
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            const obj: any = {};
-		            const keys = Object.keys(a);
-		            keys.forEach(k => obj[k] = new classs(a[k]));
-		            return obj;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	
 	export class CronJobInfo {
 	    id: string;
@@ -1062,6 +1017,123 @@ export namespace wailskit {
 	        this.error = source["error"];
 	    }
 	}
+	export class TrajConfidenceEntry {
+	    type: string;
+	    insight: string;
+	    confidence: number;
+	    reinforced: number;
+	    injects: boolean;
+	    general: boolean;
+	    holdout: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrajConfidenceEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.insight = source["insight"];
+	        this.confidence = source["confidence"];
+	        this.reinforced = source["reinforced"];
+	        this.injects = source["injects"];
+	        this.general = source["general"];
+	        this.holdout = source["holdout"];
+	    }
+	}
+	export class TrajConfidenceOverview {
+	    total: number;
+	    injecting: number;
+	    avgConfidence: number;
+	    top: TrajConfidenceEntry[];
+	    hasLearnings: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrajConfidenceOverview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.injecting = source["injecting"];
+	        this.avgConfidence = source["avgConfidence"];
+	        this.top = this.convertValues(source["top"], TrajConfidenceEntry);
+	        this.hasLearnings = source["hasLearnings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UsageWindowInfo {
+	    label: string;
+	    usedPercent: number;
+	    resetsAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageWindowInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.usedPercent = source["usedPercent"];
+	        this.resetsAt = source["resetsAt"];
+	    }
+	}
+	export class UsageInfoResult {
+	    vendor: string;
+	    source: string;
+	    balance?: number;
+	    windows: UsageWindowInfo[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageInfoResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendor = source["vendor"];
+	        this.source = source["source"];
+	        this.balance = source["balance"];
+	        this.windows = this.convertValues(source["windows"], UsageWindowInfo);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class VendorPresetInfo {
 	    id: string;
 	    displayName: string;
