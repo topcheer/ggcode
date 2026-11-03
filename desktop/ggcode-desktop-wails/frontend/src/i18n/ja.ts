@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': 'チャット',
   'nav.files': 'ファイル',
   'nav.im': 'IMアダプター',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': 'はい',
   'cron.no': 'いいえ',
 
-  // Sidebar
   'sidebar.sessions': 'セッション',
   'sidebar.search': 'セッションを検索...',
   'sidebar.newSession': '新規セッション',
@@ -70,12 +68,10 @@ const en = {
   'sidebar.time.hoursAgo': '{n}時間前',
   'sidebar.time.yesterday': '昨日',
 
-  // StatusBar
   'status.ready': '準備完了',
   'status.thinking': '考え中...',
   'status.offline': 'オフライン',
 
-  // ChatView
   'chat.placeholder': 'ggcodeにメッセージを送信...',
   'chat.agentWorking': 'エージェントが実行中...',
   'chat.welcome.title': '今日は何をお手伝いしましょうか?',
@@ -86,7 +82,6 @@ const en = {
   'chat.welcome.prompt.debug': '問題のデバッグを手伝って',
   'chat.inputHint': 'Enterで送信 • Shift+Enterで改行',
 
-  // CommandPalette
   'cmd.recent': '最近',
   'cmd.placeholder': 'コマンドを入力...',
   'cmd.noResults': '一致するコマンドがありません',
@@ -120,7 +115,6 @@ const en = {
   'cmd.hintClose': 'Esc 閉じる',
   'cmd.results': '{count}件',
 
-  // KeyboardShortcuts
   'kb.title': 'キーボードショートカット',
   'kb.footer': 'ヒント: ⌘Kを押すといつでもコマンドパレットを開けます',
   'kb.global': 'グローバル',
@@ -157,7 +151,6 @@ const en = {
   'kb.goDebug': 'デバッグコンソールへ移動',
   'kb.goLanChat': 'LANチャットへ移動',
 
-  // ContextPanel
   'context.title': 'コンテキスト',
   'context.usage': 'コンテキスト使用量',
   'context.input': '入力',
@@ -172,7 +165,6 @@ const en = {
   'context.costDisclaimer': 'トークン使用量とモデル価格に基づく概算です。実際のコストは異なる場合があります。',
   'context.planIncluded': "{plan} に含まれる",
 
-  // SettingsPage
   'settings.title': '設定',
   'settings.vendor': 'ベンダー',
   'settings.endpoint': 'エンドポイント',
@@ -191,7 +183,6 @@ const en = {
   'settings.impersonateVersion': 'バージョン',
   'settings.impersonateApply': '適用',
 
-  // Onboarding
   'onboarding.next': '次へ',
   'onboarding.back': '戻る',
   'onboarding.getStarted': '始める',
@@ -214,32 +205,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o（手動入力または取得）',
   'onboarding.configureLLM': 'LLMを設定',
 
-  // ApprovalDialog
   'approval.title': 'ツール承認が必要',
   'approval.allow': '許可',
   'approval.deny': '拒否',
   'approval.alwaysAllow': '常に許可',
 
-  // AskUserDialog
   'askUser.title': '質問',
   'askUser.submit': '送信',
 
-  // Dialogs (About)
   'about.title': 'GGCodeについて',
   'about.description': 'ターミナル向けAIコーディングエージェント',
 
-  // PairingCodeDialog
   'pairing.title': 'デバイスをペアリング',
   'pairing.close': '閉じる',
 
-  // ShareDialog
   'share.title': 'セッションを共有',
   'share.copy': 'コピー',
   'share.copied': 'コピーしました!',
   'share.stopSharing': '共有を停止',
   'share.generating': '生成中...',
 
-  // IMManagement
   'im.title': 'IMアダプター',
   'im.addAdapter': 'アダプターを追加',
   'im.noAdapters': 'IMアダプターが設定されていません。「アダプターを追加」をクリックして始めましょう。',
@@ -256,17 +241,14 @@ const en = {
   'im.cancel': 'キャンセル',
   'im.selectPlatform': 'プラットフォームを選択...',
 
-  // MCPServers
   'mcp.title': 'MCPサーバー',
   'mcp.add': '追加',
   'mcp.name': '名前',
   'mcp.cancel': 'キャンセル',
 
-  // FileBrowser
   'files.fileTooLarge': 'ファイルが大きすぎてプレビューできません（>2MB）',
   'files.binaryFile': 'バイナリファイル',
 
-  // DebugConsole
   'debug.title': 'デバッグコンソール',
   'debug.start': '開始',
   'debug.stop': '停止',
@@ -277,7 +259,6 @@ const en = {
   'debug.filterPlaceholder': 'フィルター...',
   'debug.empty': '「開始」をクリックしてデバッグログの取得を開始',
 
-  // TeamBoard
   'team.teams': 'チーム',
   'team.teammates': 'チームメイト',
   'team.tasks': 'タスク',
@@ -290,9 +271,6 @@ const en = {
   'team.noInProgress': 'ブロックされている人はいません',
   'team.noDone': '完了したものはまだありません',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'エージェント & セーフティ',
   'settings.appearance': '外観',
   'settings.integrations': '統合',
@@ -334,7 +312,6 @@ const en = {
   'settings.versionPlaceholder': 'バージョン文字列...',
   'settings.endpointNamePlaceholder': 'マイエンドポイント',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'ファイルブラウザ',
   'settings.contextUsage': 'コンテキスト使用量',
   'settings.mcpServers': 'MCPサーバー',
@@ -378,23 +355,17 @@ const en = {
   'settings.adding': '追加中...',
   'settings.lspServersShort': '言語サーバー',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'セッションを検索',
   'sidebar.clearAria': 'クリア',
   'sidebar.deleteSessionAria': 'セッションを削除',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'クリックしてニックネーム、役割、チームを編集',
   'chat.regenerate': '回答を再生成',
   'chat.copyResult': '結果をコピー',
   'chat.copyError': 'エラーをコピー',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'モデルを選択...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'ファイルを読み込み中...',
   'chat.activity.editing': 'コードを編集中...',
   'chat.activity.writing': 'ファイルを書き込み中...',
@@ -409,7 +380,6 @@ const en = {
   'chat.activity.saving': 'メモリを保存中...',
   'chat.activity.planMode': 'プランモードに移行中...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': '会話内を検索...',
   'chat.sending': '送信中...',
   'chat.failedToSend': '送信に失敗しました',
@@ -419,7 +389,6 @@ const en = {
   'chat.cancel': 'キャンセル',
   'chat.save': '保存',
 
-  // ChatView button titles
   'chat.title.newSession': '新規セッション',
   'chat.title.shareSession': 'セッションを共有（Cmd+Shift+S）',
   'chat.title.search': '会話内を検索（Cmd+F）',
@@ -436,7 +405,6 @@ const en = {
   'chat.title.copyMessage': 'メッセージをコピー',
   'chat.title.teamBoard': 'チームボードを開く',
 
-  // MCPServers
   'mcp.transport': 'トランスポート',
   'mcp.transportStdio': 'stdin/stdout経由のローカルプロセス',
   'mcp.transportWs': 'WebSocket経由のリモートサーバー',
@@ -449,7 +417,6 @@ const en = {
   'mcp.resetOAuth': 'OAuthをリセット（アカウントを切り替え）',
   'mcp.remove': '削除',
 
-  // Onboarding
   'onboarding.chooseVendor': 'ベンダーを選択...',
   'onboarding.providerName': 'プロバイダー名',
   'onboarding.protocol': 'プロトコル',
@@ -457,7 +424,6 @@ const en = {
   'onboarding.chooseModel': 'モデルを選択...',
   'onboarding.chooseEndpoint': 'エンドポイントを選択...',
 
-  // LanChatView
   'lanchat.groupChat': 'グループチャット',
   'lanchat.chat': 'チャット',
   'lanchat.agentSuffix': '（エージェント）',
@@ -466,37 +432,24 @@ const en = {
   'lanchat.broadcastPlaceholder': '全員にブロードキャスト...',
   'lanchat.dmPlaceholder': '{name}にメッセージ...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': '回答を入力してください...',
 
-  // IMManagement
   'im.editAdapter': '編集: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'ファイルを検索...',
   'files.officeDocument': 'Officeドキュメント',
   'files.openExternal': '外部アプリケーションで開いて表示',
   'files.htmlPreview': 'HTMLプレビュー',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'コンテキストパネルの切り替え',
 
-  // TeamBoard
   'team.boardTitle': 'チームボード',
 
-  // Common shared
   'common.dismiss': '通知を閉じる',
   'common.cancel': 'キャンセル',
   'common.save': 'Save',
   'common.copyToClipboard': 'クリップボードにコピー',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': '既存のデスクトップファイルブラウザを使用して、現在のワークスペースのファイルを参照します。',
   'settings.openFiles': 'ファイルを開く',
   'settings.contextUsageDesc': '長時間のタスクを実行する前に、アクティブなコンテキスト使用量とトークン/キャッシュ合計を確認します。',
@@ -513,7 +466,6 @@ const en = {
   'settings.integrationsDesc': '既存のデスクトップ機能を一箇所から管理します。これらのショートカットは、バックエンドの設定セマンティクスを変更せずに、現在の専用画面を開きます。',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'ツール承認',
   'common.closeDialog': 'ダイアログを閉じる',
   'common.cancelBtn': 'キャンセル',
@@ -537,7 +489,6 @@ const en = {
   'common.pinWindow': 'ウィンドウを最前面に固定',
   'common.unpinWindow': '最前面固定を解除',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'ベンダーを選択...',
   'settings.chooseEndpoint': 'エンドポイントを選択...',
   'settings.modeSupervised': 'スーパーバイズ（各ツールを確認）',
@@ -545,37 +496,24 @@ const en = {
   'settings.modeBypassAll': 'バイパス（ほぼ全ツールを自動承認）',
   'settings.saveModeHint': '保存してこのデフォルトモードを維持します。実行時のモード変更は引き続きアプリの通常のモード処理に従います。',
 
-  // Dialogs
   'dialogs.newVersion': '新しいバージョンが利用可能です: v',
   'dialogs.download': 'ダウンロード',
   'dialogs.upToDate': '最新です（v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': '図をレンダリング中...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': '常に',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'OAuthログインが必要です',
   'mcp.oauthHint': 'ブラウザでサインインしてこのMCPサーバーを認証してください。',
 
-  // Onboarding
   'onboarding.customProvider': '+ カスタムプロバイダー',
   'onboarding.a2a': 'A2A サービス',
   'onboarding.a2aDesc': 'エージェント間通信を有効化（推奨）',
   'onboarding.languageTitle': '言語を選択',
   'onboarding.languageHint': '後で設定で変更できます',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'デスクトップエージェントが現在持っている自律性の度合いを確認します。これは高度なツールポリシーを変更せずに、既存の動作をまとめたものです。',
   'settings.workspaceAccessHint': 'ファイルツールは現在のワークスペースと設定された許可ディレクトリ内で動作します。高度な許可ディレクトリの編集は、安全性の境界を誤って変更しないよう、ここでは意図的に公開していません。',
   'settings.appearanceHint': 'ビジュアルテーマをカスタマイズします。アプリはデフォルトでシステム設定に従います。',

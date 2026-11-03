@@ -30,33 +30,22 @@ import { ToastContainer, ToastMessage, ToastType } from './Toast'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
-// Inner layout that uses useTranslation (must be inside I18nProvider)
 function LayoutInner() {
-  // --- Theme: use shared hook with real-time OS theme following ---
   const { toggle: toggleTheme } = useTheme()
 
-  // --- Zoom controls (Cmd+/Cmd-/Cmd+0) ---
   const { zoom, zoomIn, zoomOut, resetZoom } = useZoom()
 
-  // Persist zoom to Go backend config on change; surface persistence
-  // failures instead of silently losing the preference (#159).
   useEffect(() => {
     App.SetFontZoom(zoom).catch((err) => {
       console.error('failed to persist font zoom:', err)
     })
   }, [zoom])
 
-  // --- Window focus tracking for desktop notifications ---
-  // When the window loses focus, the backend will send OS-level
-  // notifications on task completion, errors, and approval requests.
   useEffect(() => {
     const updateFocus = () => {
       const focused = !document.hidden && document.hasFocus()
       App.SetWindowFocused(focused).catch(() => {})
     }
-    // Set initial state from actual window state (#600 N3): a background-
-    // started window never fires blur (it never had focus), so hardcoding
-    // focused=true here permanently suppressed OS notifications for it.
     updateFocus()
     document.addEventListener('visibilitychange', updateFocus)
     window.addEventListener('blur', updateFocus)
@@ -76,11 +65,10 @@ function LayoutInner() {
   })
   const sidebarDragRef = useRef(false)
 
-  // Sidebar drag-to-resize
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!sidebarDragRef.current) return
-      const navRailWidth = 48 // NavRail fixed width
+      const navRailWidth = 48
       const newWidth = Math.max(200, Math.min(500, e.clientX - navRailWidth))
       setSidebarWidth(newWidth)
     }
@@ -110,7 +98,6 @@ function LayoutInner() {
   const [askUserRequest, setAskUserRequest] = useState<AskUserRequest | null>(null)
   const [pairingRequest, setPairingRequest] = useState<PairingRequest | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
-  // Ref mirror for access inside keyboard handler closures (which have stale deps)
   const activeSessionIdRef = useRef<string | undefined>(undefined)
   activeSessionIdRef.current = activeSessionId
   const [needsOnboard, setNeedsOnboard] = useState(false)
@@ -130,7 +117,6 @@ function LayoutInner() {
     setToasts([])
   }, [view])
 
-  // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
     vendor: '...',
     model: '...',
@@ -151,25 +137,21 @@ function LayoutInner() {
 
   const { setLocale } = useTranslation()
 
-  // Load initial config for shared state
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
         const cfg = await App.GetConfig()
         if (cancelled) return
-        // Set needsOnboard immediately — subsequent calls may fail when
-        // workspace isn't initialized, and we must not lose this flag.
         setNeedsOnboard(cfg.needsSetup || false)
         if (cfg.language) {
-          // Map config language code to supported Locale
           const langCode = cfg.language.toLowerCase().split('-')[0] as Locale
           const supportedLocales: Locale[] = ['en', 'zh', 'ja', 'ko', 'es', 'fr', 'de', 'ru', 'pt', 'vi']
           if (supportedLocales.includes(langCode)) {
             setLocale(langCode)
           }
         }
-        if (cfg.needsSetup) return // skip further init during onboarding
+        if (cfg.needsSetup) return
         const [dir, info] = await Promise.all([App.GetWorkDir(), App.GetModelInfo()])
         if (cancelled) return
         setCurrentWorkspace(dir || cfg.workDir || '')
@@ -193,17 +175,12 @@ function LayoutInner() {
           }))
         }
       } catch {
-        // Config not available yet
       }
     }
     load()
     return () => { cancelled = true }
   }, [setLocale])
 
-  // Sync active session ID on mount — the backend may have auto-loaded
-  // a session in EnsureSession before this React component mounted, so
-  // the session:changed event was missed. Retry briefly in case the
-  // backend hasn't finished initializing.
   useEffect(() => {
     let cancelled = false
     let attempts = 0
@@ -224,7 +201,6 @@ function LayoutInner() {
     return () => { cancelled = true }
   }, [])
 
-  // Refresh status bar when config changes (e.g. after settings save)
   useEffect(() => {
     const refreshConfig = () => {
       Promise.all([App.GetConfig(), App.GetWorkDir()]).then(([cfg, dir]) => {
@@ -260,7 +236,6 @@ function LayoutInner() {
     return () => { if (typeof off === 'function') off() }
   }, [])
 
-  // Listen for chat:stream events to update shared status
   useEffect(() => {
     let cancelled = false
     const refresh = async () => {
@@ -292,7 +267,6 @@ function LayoutInner() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
-  // Dynamic window title — shows workspace + model + activity status
   useEffect(() => {
     const wsName = currentWorkspace ? currentWorkspace.split('/').pop() || 'GGCode' : 'GGCode'
     const model = statusBarData.model && statusBarData.model !== '...' ? statusBarData.model : ''
@@ -303,7 +277,6 @@ function LayoutInner() {
     document.title = title
   }, [currentWorkspace, statusBarData.model, statusBarData.status])
 
-  // Listen for approval and ask_user events from Go backend
   useEffect(() => {
     const offApprovalRequest = EventsOn('approval:request', (data: any) => {
       setApprovalRequest(data as ApprovalRequest)
@@ -317,7 +290,6 @@ function LayoutInner() {
     const offPairingDone = EventsOn('im:pairing_done', () => {
       setPairingRequest(null)
     })
-    // Cancel events close any open dialogs
     const offApprovalCancel = EventsOn('approval:cancel', () => {
       setApprovalRequest(null)
     })
@@ -327,20 +299,9 @@ function LayoutInner() {
     const offTunnelSessionChanged = EventsOn('tunnel:session_changed', (data: any) => {
       showToast('info', data?.message || 'Mobile sharing stopped. Scan again to reconnect.')
     })
-    // Backend loaded a session on startup (or via EnsureSession) — sync frontend state
     const offSessionChanged = EventsOn('session:changed', (data: any) => {
       const sid = data?.sessionId
       if (sid === '') {
-        // #630/#646: the backend cleared the current session (e.g. the active
-        // session was deleted). Reset to blank so the UI stops showing the
-        // deleted transcript and the next message starts a fresh session
-        // visibly instead of silently.
-        // #646: this handler is registered in a useEffect with an empty dep
-        // array, so reading the `activeSessionId` state here was a stale
-        // closure — it always saw the first-render `undefined`, the guard
-        // below was permanently falsy, and the reset branch was dead code.
-        // Read the ref mirror (kept current at every render, the same
-        // pattern switchSession uses) instead.
         if (activeSessionIdRef.current) {
           setActiveSessionId('')
           activeSessionIdRef.current = ''
@@ -359,7 +320,6 @@ function LayoutInner() {
     }
   }, [])
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -374,29 +334,24 @@ function LayoutInner() {
         e.preventDefault()
         setSidebarOpen(prev => !prev)
       }
-      // ⌘N: New session
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'n') {
         e.preventDefault()
         App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {})
       }
-      // ⌘⇧S: Share session
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
         e.preventDefault()
         setShareDialogOpen(true)
       }
-      // ⌘⇧T: Toggle theme (persisted to localStorage)
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault()
         const isDark = document.documentElement.classList.toggle('dark')
         localStorage.setItem('ggcode-theme', isDark ? 'dark' : 'light')
       }
-      // ⌘⇧F: Focus session search (open sidebar + switch to chat)
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         setView('chat')
         setSidebarOpen(true)
       }
-      // ⌘⇧[ / ⌘⇧]: Switch to previous / next session
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '[' || e.key === ']')) {
         e.preventDefault()
         switchSession(e.key === '[' ? -1 : 1)
@@ -408,7 +363,6 @@ function LayoutInner() {
         setKbShortcutsOpen(false)
         setContextPanelOpen(false)
       }
-      // ⌘1-7: Quick view switching
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         const num = parseInt(e.key)
         if (num >= 1 && num <= 7) {
@@ -418,7 +372,6 @@ function LayoutInner() {
           if (target) setView(target)
         }
       }
-      // ? shows keyboard shortcuts (skip if typing in an input)
       if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
         const target = e.target as HTMLElement
         if (target && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && !target.isContentEditable) {
@@ -433,7 +386,6 @@ function LayoutInner() {
 
   const backToChat = () => setView('chat')
 
-  // Session switching: direction = -1 (prev) or +1 (next)
   const switchSession = useCallback((direction: number) => {
     App.ListSessions().then(async (sessions: any[]) => {
       if (!sessions || sessions.length === 0) return
@@ -464,7 +416,6 @@ function LayoutInner() {
     setShareDialogOpen(false)
   }, [])
 
-  // Command palette actions — memoized at top level to avoid Rules of Hooks violation
   const cmdPaletteActions = useMemo<CommandAction[]>(() => [
     { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session', icon: Plus, action: () => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) } },
     { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', icon: Search, action: () => { setView('chat'); setSidebarOpen(true) } },
@@ -503,7 +454,6 @@ function LayoutInner() {
     { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', icon: PanelLeft, action: () => setSidebarOpen(prev => !prev) },
-    // View navigation
     { nameKey: 'cmd.goChat', categoryKey: 'cmd.cat.view', icon: MessageSquare, action: () => setView('chat') },
     { nameKey: 'cmd.goFiles', categoryKey: 'cmd.cat.view', icon: FolderOpen, action: () => setView('files') },
     { nameKey: 'cmd.goIM', categoryKey: 'cmd.cat.view', icon: Radio, action: () => setView('im') },
@@ -515,7 +465,7 @@ function LayoutInner() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
-      {/* Onboarding flow */}
+      {}
       {needsOnboard ? (
         <Onboarding onComplete={() => {
           setNeedsOnboard(false)
@@ -529,17 +479,17 @@ function LayoutInner() {
         }} />
       ) : (
         <>
-          {/* Global titlebar drag — spans entire width */}
+          {}
           <TopDragBar subtitle={currentWorkspace ? currentWorkspace.split('/').filter(Boolean).slice(-2).join(' / ') : undefined} />
 
-          {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
+          {}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} lanChatUnread={view === 'lanchat' ? 0 : lanChatUnread} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
             {sidebarOpen && view === 'chat' && (
               <>
                 <Sidebar key={currentWorkspace || 'default-workspace'} width={sidebarWidth} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
-                {/* Drag handle for resize */}
+                {}
                 <div
                   onMouseDown={() => {
                     sidebarDragRef.current = true
@@ -560,7 +510,7 @@ function LayoutInner() {
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-              {/* ChatView always mounted — hidden via display:none to preserve state */}
+              {}
               <div style={{ display: view === 'chat' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minWidth: 0, overflow: 'hidden', height: 0 }}>
                 <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} showToast={showToast} onNewSession={() => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) }} />
               </div>
@@ -581,7 +531,7 @@ function LayoutInner() {
             )}
           </div>
 
-          {/* Status bar at bottom */}
+          {}
           <StatusBar
             onContextToggle={() => setContextPanelOpen(prev => !prev)}
             data={statusBarData}
@@ -593,7 +543,7 @@ function LayoutInner() {
         </>
       )}
 
-      {/* Overlay dialogs */}
+      {}
       {cmdPaletteOpen && (
         <CommandPalette
           onClose={() => setCmdPaletteOpen(false)}
@@ -613,16 +563,13 @@ function LayoutInner() {
   )
 }
 
-// Top-level Layout wraps everything in I18nProvider
 export function Layout() {
-  // Detect OS language for initial display — config load may override later
   const initialFromOS = useMemo(() => detectSystemLocale(), [])
 
   const handleLocaleChange = useCallback(async (locale: Locale) => {
     try {
       await App.UpdateConfig({ language: locale })
     } catch {
-      // ignore save errors during locale switch
     }
   }, [])
 

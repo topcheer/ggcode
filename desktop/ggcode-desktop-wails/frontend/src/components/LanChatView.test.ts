@@ -8,8 +8,6 @@ import {
 } from './LanChatView'
 import type { LanChatParticipant, LanChatMessage } from '../types'
 
-// --- renderMarkdown ---
-
 describe('renderMarkdown', () => {
   it('returns empty string for empty input', () => {
     expect(renderMarkdown('')).toBe('')
@@ -37,8 +35,6 @@ describe('renderMarkdown', () => {
   })
 })
 
-// --- roomKeyForDM ---
-
 describe('roomKeyForDM', () => {
   it('generates correct key format', () => {
     expect(roomKeyForDM('node-123', 'human')).toBe('dm:node-123:human')
@@ -52,8 +48,6 @@ describe('roomKeyForDM', () => {
     expect(roomKeyForDM('fe80::1', 'human')).toBe('dm:fe80::1:human')
   })
 })
-
-// --- parseRoomKey ---
 
 describe('parseRoomKey', () => {
   it('parses standard DM key', () => {
@@ -73,12 +67,9 @@ describe('parseRoomKey', () => {
   })
 
   it('parses non-dm key with 3 segments (does not check dm prefix)', () => {
-    // parseRoomKey splits by ':' and doesn't validate the "dm" prefix
     expect(parseRoomKey('group:test:greeting')).toEqual({ nodeID: 'test', role: 'greeting' })
   })
 })
-
-// --- roomKeyForMessage ---
 
 function makeMsg(overrides: Partial<LanChatMessage> = {}): LanChatMessage {
   return {
@@ -115,8 +106,6 @@ describe('roomKeyForMessage', () => {
     expect(roomKeyForMessage(msg, 'me')).toBe('broadcast')
   })
 })
-
-// --- buildContacts ---
 
 function makeParticipant(overrides: Partial<LanChatParticipant> = {}): LanChatParticipant {
   return {
@@ -192,7 +181,7 @@ describe('buildContacts', () => {
     ]
     const contacts = buildContacts(participants, 'me')
     expect(contacts).toHaveLength(1)
-    expect(contacts[0].label).toBe('very-long-no') // first 12 chars of 'very-long-node-id-1234567890'
+    expect(contacts[0].label).toBe('very-long-no')
     expect(contacts[0].to_role).toBe('human')
   })
 

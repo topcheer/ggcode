@@ -37,7 +37,6 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
   const { t } = useTranslation()
   const [responding, setResponding] = useState(false)
 
-  // Initialize answer state for each question
   const [answers, setAnswers] = useState<Record<string, AnswerState>>(() => {
     const initial: Record<string, AnswerState> = {}
     for (const q of request.questions) {
@@ -106,7 +105,6 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
     onClose()
   }
 
-  // Styles
   const labelStyle: React.CSSProperties = {
     fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6,
   }
@@ -153,7 +151,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
       }}>
-        {/* Header */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '16px 20px',
@@ -171,7 +169,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           }}><X size={18} /></button>
         </div>
 
-        {/* Questions */}
+        {}
         <div style={{
           flex: 1, minHeight: 0, overflowY: 'auto',
           padding: '16px 20px',
@@ -186,7 +184,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
               <div style={labelStyle}>{q.title}</div>
               {q.prompt && <div style={promptStyle}>{q.prompt}</div>}
 
-              {/* Single choice - radio buttons */}
+              {}
               {q.kind === 'single' && q.choices.map(choice => {
                 const isSelected = answers[q.id]?.selectedChoiceIds.includes(choice.id)
                 return (
@@ -214,7 +212,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
                 )
               })}
 
-              {/* Multi choice - checkboxes */}
+              {}
               {q.kind === 'multi' && q.choices.map(choice => {
                 const isSelected = answers[q.id]?.selectedChoiceIds.includes(choice.id)
                 return (
@@ -244,7 +242,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
                 )
               })}
 
-              {/* Freeform text input */}
+              {}
               {(q.kind === 'text' || q.allow_freeform) && (
                 <textarea
                   value={answers[q.id]?.freeformText || ''}
@@ -262,7 +260,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           ))}
         </div>
 
-        {/* Buttons */}
+        {}
         <div style={{
           display: 'flex', gap: 10, justifyContent: 'flex-end',
           padding: '12px 20px 16px',

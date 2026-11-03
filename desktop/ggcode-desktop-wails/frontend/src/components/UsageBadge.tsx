@@ -3,11 +3,6 @@ import { Gauge } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import type { wailskit } from '../../wailsjs/go/models'
 
-// #2150 batch 3: status-bar usage badge for the ACTIVE vendor.
-// Contract (mirror of the IM surface): ambient information, never an error -
-// no data / probe failure / bridge-down all render NOTHING, not a warning.
-// Thresholds match the TUI sidebar (80% amber, 95% red). Poll cadence 3min
-// (the backend cache TTL - polling faster would only hit the cache).
 const WARN_THRESHOLD = 80
 const CRIT_THRESHOLD = 95
 const POLL_INTERVAL_MS = 3 * 60 * 1000
@@ -24,7 +19,6 @@ export function UsageBadge() {
         if (!mounted.current) return
         setInfo(res ?? null)
       } catch {
-        // Ambient surface: probe/bridge failure = render nothing.
         if (mounted.current) setInfo(null)
       }
     }
@@ -33,7 +27,6 @@ export function UsageBadge() {
     return () => { mounted.current = false; window.clearInterval(id) }
   }, [])
 
-  // No data or soft error: no badge at all.
   if (!info || info.error) return null
 
   const main = info.windows?.[0]

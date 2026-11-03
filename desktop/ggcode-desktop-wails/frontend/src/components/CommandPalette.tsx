@@ -13,7 +13,6 @@ export interface CommandAction {
 const RECENT_KEY = 'ggcode-cmd-recent'
 const MAX_RECENT = 5
 
-/** Load recently used command nameKeys from localStorage */
 function loadRecent(): string[] {
   try {
     const raw = localStorage.getItem(RECENT_KEY)
@@ -21,13 +20,12 @@ function loadRecent(): string[] {
   } catch { return [] }
 }
 
-/** Save a command as recently used (moves to front, dedupes, caps at MAX_RECENT) */
 function saveRecent(nameKey: string) {
   try {
     const recent = loadRecent().filter(k => k !== nameKey)
     recent.unshift(nameKey)
     localStorage.setItem(RECENT_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)))
-  } catch { /* ignore */ }
+  } catch {  }
 }
 
 interface Props {
@@ -35,7 +33,6 @@ interface Props {
   actions: CommandAction[]
 }
 
-/** Simple fuzzy match: checks if all chars of query appear in order in target */
 function fuzzyMatch(query: string, target: string): boolean {
   if (!query) return true
   const q = query.toLowerCase()
@@ -60,7 +57,6 @@ export function CommandPalette({ onClose, actions }: Props) {
     ),
   [actions, query, t])
 
-  // Reset selection when filter changes
   useEffect(() => { setSelectedIndex(0) }, [query])
 
   const executeSelected = useCallback(() => {
@@ -93,19 +89,15 @@ export function CommandPalette({ onClose, actions }: Props) {
   }, [filtered.length, executeSelected, onClose])
 
   useEffect(() => {
-    // Capture keyboard events at the document level with capture phase
-    // so we intercept before any other handlers
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [handleKeyDown])
 
-  // Auto-scroll selected item into view
   useEffect(() => {
     const el = itemRefs.current[selectedIndex]
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex])
 
-  // Split into recent and rest
   const recentKeys = useMemo(() => loadRecent(), [])
   const recentKeySet = useMemo(() => new Set(recentKeys), [recentKeys])
   const recentCmds = useMemo(() =>
@@ -121,7 +113,7 @@ export function CommandPalette({ onClose, actions }: Props) {
 
   return (
     <>
-      {/* Backdrop — click outside to close */}
+      {}
       <div
         onClick={onClose}
         style={{
@@ -138,7 +130,7 @@ export function CommandPalette({ onClose, actions }: Props) {
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden', zIndex: 100,
       }}>
-        {/* Search */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center',
           padding: '0 var(--spacing-lg)', height: 48,
@@ -162,17 +154,17 @@ export function CommandPalette({ onClose, actions }: Props) {
             background: 'var(--color-surface)', border: 'none', borderRadius: 'var(--radius-sm)',
             padding: '2px 6px', color: 'var(--text-tertiary)', fontSize: 11, cursor: 'pointer',
           }}>ESC</button>
-          {/* ESC is a keyboard key name, not translated */}
+          {}
         </div>
 
-        {/* Commands */}
+        {}
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-sm) 0', background: 'var(--color-bg)' }}>
           {filtered.length === 0 && (
             <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
               {t('cmd.noResults')}
             </div>
           )}
-          {/* Recently used section */}
+          {}
           {recentCmds.length > 0 && (
             <div>
               <div style={{
@@ -269,7 +261,7 @@ export function CommandPalette({ onClose, actions }: Props) {
           ))}
         </div>
 
-        {/* Footer hint */}
+        {}
         <div style={{
           padding: '6px var(--spacing-lg)',
           borderTop: '1px solid var(--color-border)',

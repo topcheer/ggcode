@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': 'Chat',
   'nav.files': 'Archivos',
   'nav.im': 'Adaptadores IM',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': 'Sí',
   'cron.no': 'No',
 
-  // Sidebar
   'sidebar.sessions': 'Sesiones',
   'sidebar.search': 'Buscar sesiones...',
   'sidebar.newSession': 'Nueva sesión',
@@ -70,12 +68,10 @@ const en = {
   'sidebar.time.hoursAgo': 'hace {n}h',
   'sidebar.time.yesterday': 'ayer',
 
-  // StatusBar
   'status.ready': 'Listo',
   'status.thinking': 'Pensando...',
   'status.offline': 'Sin conexion',
 
-  // ChatView
   'chat.placeholder': 'Escribe a ggcode...',
   'chat.agentWorking': 'El agente está trabajando...',
   'chat.welcome.title': '¿Cómo puedo ayudarte hoy?',
@@ -86,7 +82,6 @@ const en = {
   'chat.welcome.prompt.debug': 'Ayúdame a depurar un problema',
   'chat.inputHint': 'Enter para enviar • Shift+Enter para nueva línea',
 
-  // CommandPalette
   'cmd.recent': 'Recientes',
   'cmd.placeholder': 'Escribe un comando...',
   'cmd.noResults': 'Sin coincidencias',
@@ -120,7 +115,6 @@ const en = {
   'cmd.hintClose': 'esc cerrar',
   'cmd.results': '{count} resultados',
 
-  // KeyboardShortcuts
   'kb.title': 'Atajos de teclado',
   'kb.footer': 'Consejo: Presiona ⌘K en cualquier momento para abrir la paleta de comandos',
   'kb.global': 'Global',
@@ -157,7 +151,6 @@ const en = {
   'kb.goDebug': 'Ir a Consola de depuración',
   'kb.goLanChat': 'Ir a Chat LAN',
 
-  // ContextPanel
   'context.title': 'Contexto',
   'context.usage': 'Uso de contexto',
   'context.input': 'Entrada',
@@ -172,7 +165,6 @@ const en = {
   'context.costDisclaimer': 'Estimado según el uso de tokens y los precios del modelo. El costo real puede variar.',
   'context.planIncluded': "Incluido en {plan}",
 
-  // SettingsPage
   'settings.title': 'Configuración',
   'settings.vendor': 'Proveedor',
   'settings.endpoint': 'Endpoint',
@@ -191,7 +183,6 @@ const en = {
   'settings.impersonateVersion': 'Versión',
   'settings.impersonateApply': 'Aplicar',
 
-  // Onboarding
   'onboarding.next': 'Siguiente',
   'onboarding.back': 'Atrás',
   'onboarding.getStarted': 'Comenzar',
@@ -214,32 +205,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o (ingresar manualmente o obtener)',
   'onboarding.configureLLM': 'Configurar LLM',
 
-  // ApprovalDialog
   'approval.title': 'Aprobación de herramienta requerida',
   'approval.allow': 'Permitir',
   'approval.deny': 'Denegar',
   'approval.alwaysAllow': 'Permitir siempre',
 
-  // AskUserDialog
   'askUser.title': 'Pregunta',
   'askUser.submit': 'Enviar',
 
-  // Dialogs (About)
   'about.title': 'Acerca de GGCode',
   'about.description': 'Agente de programación con IA para la terminal',
 
-  // PairingCodeDialog
   'pairing.title': 'Vincular dispositivo',
   'pairing.close': 'Cerrar',
 
-  // ShareDialog
   'share.title': 'Compartir sesión',
   'share.copy': 'Copiar',
   'share.copied': '¡Copiado!',
   'share.stopSharing': 'Dejar de compartir',
   'share.generating': 'Generando...',
 
-  // IMManagement
   'im.title': 'Adaptadores IM',
   'im.addAdapter': 'Agregar adaptador',
   'im.noAdapters': 'No hay adaptadores IM configurados. Haz clic en "Agregar adaptador" para comenzar.',
@@ -256,17 +241,14 @@ const en = {
   'im.cancel': 'Cancelar',
   'im.selectPlatform': 'Seleccionar plataforma...',
 
-  // MCPServers
   'mcp.title': 'Servidores MCP',
   'mcp.add': 'Agregar',
   'mcp.name': 'Nombre',
   'mcp.cancel': 'Cancelar',
 
-  // FileBrowser
   'files.fileTooLarge': 'Archivo demasiado grande para previsualizar (>2MB)',
   'files.binaryFile': 'Archivo binario',
 
-  // DebugConsole
   'debug.title': 'Consola de depuración',
   'debug.start': 'Iniciar',
   'debug.stop': 'Detener',
@@ -277,7 +259,6 @@ const en = {
   'debug.filterPlaceholder': 'Filtrar...',
   'debug.empty': 'Haz clic en "Iniciar" para comenzar a capturar registros de depuración',
 
-  // TeamBoard
   'team.teams': 'equipos',
   'team.teammates': 'compañeros',
   'team.tasks': 'tareas',
@@ -290,9 +271,6 @@ const en = {
   'team.noInProgress': 'Nadie está bloqueado aquí',
   'team.noDone': 'Nada completado aún',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Agente y seguridad',
   'settings.appearance': 'Apariencia',
   'settings.integrations': 'Integraciones',
@@ -334,7 +312,6 @@ const en = {
   'settings.versionPlaceholder': 'Cadena de versión...',
   'settings.endpointNamePlaceholder': 'Mi endpoint',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'Explorador de archivos',
   'settings.contextUsage': 'Uso de contexto',
   'settings.mcpServers': 'Servidores MCP',
@@ -378,23 +355,17 @@ const en = {
   'settings.adding': 'Agregando...',
   'settings.lspServersShort': 'Servidores de lenguaje',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'Buscar sesiones',
   'sidebar.clearAria': 'Limpiar',
   'sidebar.deleteSessionAria': 'Eliminar sesión',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'Haz clic para editar tu apodo, rol y equipo',
   'chat.regenerate': 'Regenerar respuesta',
   'chat.copyResult': 'Copiar resultado',
   'chat.copyError': 'Copiar error',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'Elegir modelo...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'Leyendo archivos...',
   'chat.activity.editing': 'Editando código...',
   'chat.activity.writing': 'Escribiendo archivos...',
@@ -409,7 +380,6 @@ const en = {
   'chat.activity.saving': 'Guardando memoria...',
   'chat.activity.planMode': 'Entrando en modo plan...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': 'Buscar en la conversación...',
   'chat.sending': 'Enviando...',
   'chat.failedToSend': 'Error al enviar',
@@ -419,7 +389,6 @@ const en = {
   'chat.cancel': 'Cancelar',
   'chat.save': 'Guardar',
 
-  // ChatView button titles
   'chat.title.newSession': 'Nueva sesión',
   'chat.title.shareSession': 'Compartir sesión (Cmd+Shift+S)',
   'chat.title.search': 'Buscar en la conversación (Cmd+F)',
@@ -436,7 +405,6 @@ const en = {
   'chat.title.copyMessage': 'Copiar mensaje',
   'chat.title.teamBoard': 'Abrir tablero del equipo',
 
-  // MCPServers
   'mcp.transport': 'Transporte',
   'mcp.transportStdio': 'Proceso local vía stdin/stdout',
   'mcp.transportWs': 'Servidor remoto vía WebSocket',
@@ -449,7 +417,6 @@ const en = {
   'mcp.resetOAuth': 'Restablecer OAuth (cambiar cuenta)',
   'mcp.remove': 'Eliminar',
 
-  // Onboarding
   'onboarding.chooseVendor': 'Elegir proveedor...',
   'onboarding.providerName': 'Nombre del proveedor',
   'onboarding.protocol': 'Protocolo',
@@ -457,7 +424,6 @@ const en = {
   'onboarding.chooseModel': 'Elegir modelo...',
   'onboarding.chooseEndpoint': 'Elegir endpoint...',
 
-  // LanChatView
   'lanchat.groupChat': 'Chat grupal',
   'lanchat.chat': 'Chat',
   'lanchat.agentSuffix': ' (agente)',
@@ -466,37 +432,24 @@ const en = {
   'lanchat.broadcastPlaceholder': 'Transmitir a todos...',
   'lanchat.dmPlaceholder': 'Mensaje a {name}...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': 'Escribe tu respuesta...',
 
-  // IMManagement
   'im.editAdapter': 'Editar: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'Buscar archivos...',
   'files.officeDocument': 'Documento de Office',
   'files.openExternal': 'Abrir con aplicación externa para ver',
   'files.htmlPreview': 'Vista previa HTML',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'Alternar panel de contexto',
 
-  // TeamBoard
   'team.boardTitle': 'Tablero del equipo',
 
-  // Common shared
   'common.dismiss': 'Descartar notificación',
   'common.cancel': 'Cancelar',
   'common.save': 'Save',
   'common.copyToClipboard': 'Copiar al portapapeles',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': 'Examinar archivos en el espacio de trabajo actual usando el explorador de archivos del escritorio.',
   'settings.openFiles': 'Abrir archivos',
   'settings.contextUsageDesc': 'Inspeccionar el uso activo de contexto y los totales de tokens/caché antes de ejecutar tareas largas.',
@@ -513,7 +466,6 @@ const en = {
   'settings.integrationsDesc': 'Gestionar funciones existentes del escritorio desde un solo lugar. Estos accesos directos abren las pantallas dedicadas actuales sin cambiar la semántica de configuración del backend.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'Aprobación de herramienta',
   'common.closeDialog': 'Cerrar diálogo',
   'common.cancelBtn': 'Cancelar',
@@ -537,7 +489,6 @@ const en = {
   'common.pinWindow': 'Fijar ventana encima',
   'common.unpinWindow': 'Desfijar ventana',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'Elegir proveedor...',
   'settings.chooseEndpoint': 'Elegir endpoint...',
   'settings.modeSupervised': 'Supervisado (confirmar cada herramienta)',
@@ -545,37 +496,24 @@ const en = {
   'settings.modeBypassAll': 'Sin restricciones (auto-aprobar la mayoría)',
   'settings.saveModeHint': 'Guarda para persistir este modo predeterminado. Los cambios de modo en tiempo de ejecución siguen el manejo normal de modos de la aplicación.',
 
-  // Dialogs
   'dialogs.newVersion': 'Nueva versión disponible: v',
   'dialogs.download': 'Descargar',
   'dialogs.upToDate': 'Estás actualizado (v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': 'Renderizando diagrama...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': 'Siempre',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'Inicio de sesión OAuth requerido',
   'mcp.oauthHint': 'Inicia sesión con tu navegador para autorizar este servidor MCP.',
 
-  // Onboarding
   'onboarding.customProvider': '+ Proveedor personalizado',
   'onboarding.a2a': 'Servicio A2A',
   'onboarding.a2aDesc': 'Habilitar comunicación entre agentes (recomendado)',
   'onboarding.languageTitle': 'Elija su idioma',
   'onboarding.languageHint': 'Puede cambiarlo más tarde en Configuración',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'Revisa cuánta autonomía tiene actualmente el agente de escritorio. Esto resume el comportamiento existente sin cambiar las políticas avanzadas de herramientas.',
   'settings.workspaceAccessHint': 'Las herramientas de archivos operan dentro del espacio de trabajo actual y los directorios permitidos configurados. La edición avanzada de directorios permitidos no se expone aquí intencionalmente para evitar cambiar los límites de seguridad accidentalmente.',
   'settings.appearanceHint': 'Personaliza el tema visual. La aplicación sigue tu preferencia del sistema por defecto.',

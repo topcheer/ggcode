@@ -37,7 +37,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [currentEndpoint, setCurrentEndpoint] = useState('')
   const [currentModel, setCurrentModel] = useState('')
 
-  // Resolved endpoint info
   const [resolvedBaseURL, setResolvedBaseURL] = useState('')
   const [resolvedProtocol, setResolvedProtocol] = useState('')
   const [apiKeySet, setApiKeySet] = useState(false)
@@ -45,10 +44,8 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
 
-  // Global hotkey toggle
   const [globalHotkey, setGlobalHotkey] = useState(false)
 
-  // Model refresh
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsSource, setModelsSource] = useState<'static' | 'dynamic' | 'error'>('static')
   const [modelsError, setModelsError] = useState('')
@@ -58,30 +55,24 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  // Endpoint limits
   const [contextWindow, setContextWindow] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
 
-  // Anthropic OAuth
   const [oauthConnected, setOauthConnected] = useState(false)
   const [oauthBusy, setOauthBusy] = useState(false)
 
-  // Impersonation state
   const [presets, setPresets] = useState<ImpersonationPreset[]>([])
   const [selectedPreset, setSelectedPreset] = useState('none')
   const [impVersion, setImpVersion] = useState('')
 
-  // Load initial data
   const [lspStatus, setLspStatus] = useState<{ id: string; display_name: string; available: boolean; binary: string; install_hint: string; override: boolean; can_install: boolean; install_options: { id: string; label: string; binary: string; recommended: boolean; scope: string }[] }[]>([])
   const [installing, setInstalling] = useState<string | null>(null)
   const [installResult, setInstallResult] = useState<{ lang: string; success: boolean; output: string } | null>(null)
 
-  // Load initial data
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        // Load resolved endpoint info (includes masked API key, base URL, model)
         const resolved = await App.GetResolvedEndpoint() as any
         if (cancelled) return
         if (resolved) {
@@ -92,16 +83,13 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           setResolvedProtocol(resolved.protocol || '')
           setApiKeySet(resolved.apiKeySet || false)
           setApiKeyMasked(resolved.apiKeyMasked || '')
-          // Use models from resolved if available
           if (resolved.models && resolved.models.length > 0) {
             setModels(resolved.models)
           }
         }
 
-        // Load general config for language, mode, impersonation
         const cfg = await App.GetConfig() as any
         if (cancelled) return
-        // Map config language to supported locale, default to 'en'
         const cfgLang = cfg.language || 'en'
         const supported = ['en','zh','ja','ko','es','fr','de','ru','pt','vi']
         const mapped = supported.includes(cfgLang)
@@ -112,31 +100,26 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setSelectedPreset(cfg.impersonatePreset || 'none')
         setImpVersion(cfg.impersonateCustomVersion || '')
 
-        // Load global hotkey state
         App.IsGlobalHotkeyEnabled().then((enabled: boolean) => {
           if (!cancelled) setGlobalHotkey(enabled)
         }).catch(() => {})
 
-        // Vendor list
         const v = await App.GetVendors()
         if (cancelled) return
         setVendors(v as string[])
 
-        // Endpoints for current vendor
         if (resolved?.vendorId) {
           const eps = await App.GetEndpoints(resolved.vendorId)
           if (cancelled) return
           setEndpoints((eps as any[]) || [])
         }
 
-        // If no models from resolved, load static list
         if ((!resolved?.models || resolved.models.length === 0) && resolved?.vendorId && resolved?.endpointId) {
           const ms = await App.GetModels(resolved.vendorId, resolved.endpointId)
           if (cancelled) return
           setModels((ms as string[]) || [])
         }
 
-        // Auto-refresh models from API (online discovery)
         if (resolved?.vendorId && resolved?.endpointId) {
           try {
             const onlineModels = await App.FetchModels(resolved.vendorId, resolved.endpointId, '', '') as string[]
@@ -145,7 +128,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               setModelsSource('dynamic')
             }
           } catch {
-            // Online discovery failed — keep static/resolved list as fallback
           }
         }
 
@@ -183,7 +165,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     setModelsSource('static')
     setModelsError('')
 
-    // Get endpoint details (base URL, masked API key, models)
     try {
       const details = await App.GetEndpointDetails(currentVendor, endpoint) as any
       if (details) {
@@ -191,17 +172,15 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setResolvedProtocol(details.protocol || '')
         setApiKeySet(details.apiKeySet || false)
         setApiKeyMasked(details.apiKeyMasked || '')
-        // Load endpoint-level defaults for display
         setContextWindow(details.contextWindow ? formatTokenValue(details.contextWindow) : '')
         setMaxTokens(details.maxTokens ? formatTokenValue(details.maxTokens) : '')
-        // If session has overrides, show those instead (they take priority at runtime)
         try {
           const sl = await App.GetSessionLimits() as any
           if (sl) {
             if (sl.contextWindow) setContextWindow(formatTokenValue(sl.contextWindow))
             if (sl.maxTokens) setMaxTokens(formatTokenValue(sl.maxTokens))
           }
-        } catch { /* session limits not available */ }
+        } catch {  }
         if (details.models && details.models.length > 0) {
           setModels(details.models)
         }
@@ -210,7 +189,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       showToast?.('error', t('toast.endpointDetailsLoadFailed', { error: e?.message || String(e) }))
     }
 
-    // Load OAuth status if this is an Anthropic OAuth endpoint
     if (currentVendor === 'anthropic' && endpoint === 'oauth') {
       try {
         const connected = await App.GetAnthropicOAuthStatus() as any
@@ -220,7 +198,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       setOauthConnected(false)
     }
 
-    // Also load static models as fallback
     try {
       const ms = await App.GetModels(currentVendor, endpoint) as string[]
       if (ms && ms.length > 0) {
@@ -230,8 +207,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       showToast?.('error', t('toast.staticModelsLoadFailed', { error: e?.message || String(e) }))
     }
 
-    // Auto-refresh models from API (online discovery)
-    // Only fetch if API key is available; fall back to static list on failure
     try {
       const ms = await App.FetchModels(currentVendor, endpoint, '', '') as string[]
       if (ms && ms.length > 0) {
@@ -239,17 +214,14 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setModelsSource('dynamic')
       }
     } catch {
-      // Online discovery failed — keep static list as fallback
     }
   }, [currentVendor, showToast])
 
-  // Refresh models dynamically from API
   const handleRefreshModels = useCallback(async () => {
     if (!currentVendor || !currentEndpoint) return
     setModelsLoading(true)
     setModelsError('')
     try {
-      // Pass user-entered API key if available, otherwise backend auto-resolves from config
       const ms = await App.FetchModels(currentVendor, currentEndpoint, apiKey, '') as string[]
       if (ms && ms.length > 0) {
         setModels(ms)
@@ -296,7 +268,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     }
   }, [currentVendor, currentEndpoint, apiKey, language, defaultMode, resolvedBaseURL, contextWindow, maxTokens, setLocale, showToast])
 
-  // Save endpoint limits
   const saveEndpointLimits = useCallback(async () => {
     if (!currentVendor || !currentEndpoint) return
     if (!isValidTokenValue(contextWindow) || !isValidTokenValue(maxTokens)) {
@@ -311,7 +282,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     }
     try {
       await App.SetEndpointLimits(currentVendor, currentEndpoint, cw, mt)
-      // Also persist to session level so it takes effect immediately
       await App.SetSessionLimits(cw, mt)
       showToast?.('success', t('toast.endpointLimitsSaved'))
       EventsEmit('config:updated')
@@ -320,12 +290,10 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     }
   }, [currentVendor, currentEndpoint, contextWindow, maxTokens, showToast])
 
-  // Anthropic OAuth login
   const handleOAuthLogin = useCallback(async () => {
     setOauthBusy(true)
     try {
       await App.StartAnthropicOAuth()
-      // Now wait for the callback in background
       await App.CompleteAnthropicOAuth()
       setOauthConnected(true)
       showToast?.('success', t('toast.oauthLoginSuccess'))
@@ -337,7 +305,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     }
   }, [showToast])
 
-  // Anthropic OAuth logout
   const handleOAuthLogout = useCallback(async () => {
     try {
       await App.LogoutAnthropicOAuth()
@@ -382,7 +349,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
-      {/* Settings nav */}
+      {}
       <div style={{
         width: 180, background: 'var(--color-nav)',
         borderRight: '1px solid var(--color-border)',
@@ -406,9 +373,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         </div>
       </div>
 
-      {/* Content */}
+      {}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', maxWidth: 600 }}>
-        {/* Provider Tab */}
+        {}
         {tab === 'provider' && (
           <>
             <h3 style={sectionTitle}>{t('settings.llmProvider')}</h3>
@@ -427,7 +394,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               </select>
             </FieldRow>
 
-            {/* Resolved info: Base URL + Protocol */}
+            {}
             <FieldRow label={t('settings.baseUrl')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
@@ -450,7 +417,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               </div>
             </FieldRow>
 
-            {/* API Key: show masked + edit */}
+            {}
             <FieldRow label={t('settings.apiKey')}>
               <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
                 {apiKeySet && !apiKey && (
@@ -477,7 +444,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               </div>
             </FieldRow>
 
-            {/* Anthropic OAuth: login/logout when vendor=anthropic and endpoint=oauth */}
+            {}
             {currentVendor === 'anthropic' && currentEndpoint === 'oauth' && (
               <FieldRow label={t('settings.anthropicOAuth')}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -508,7 +475,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               </FieldRow>
             )}
 
-            {/* Context Window & Max Tokens */}
+            {}
             <FieldRow label={t('settings.contextWindowMaxTokens')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
@@ -538,7 +505,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               </span>
             </FieldRow>
 
-            {/* Model selection with refresh */}
+            {}
             <FieldRow label={t('settings.model')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select value={currentModel} onChange={e => setCurrentModel(e.target.value)}
@@ -572,7 +539,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               <select value={language} onChange={e => {
                 const newLang = e.target.value as Locale
                 setLanguage(newLang)
-                setLocale(newLang) // Immediate UI switch
+                setLocale(newLang)
               }} style={selectStyle}>
                 {Object.entries(LOCALE_LABELS).map(([code, label]) => (
                   <option key={code} value={code}>{label}</option>
@@ -587,7 +554,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* Agent & Safety Tab */}
+        {}
         {tab === 'agent' && (
           <>
             <h3 style={sectionTitle}>{t('settings.agentSafety')}</h3>
@@ -646,7 +613,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* Appearance Tab */}
+        {}
         {tab === 'appearance' && (
           <>
             <h3 style={sectionTitle}>{t('settings.appearance')}</h3>
@@ -778,7 +745,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* LSP Tab */}
+        {}
         {tab === 'lsp' && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -826,7 +793,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                       <Check size={16} style={{ color: 'var(--color-success)' }} />
                     )}
                   </div>
-                  {/* Install buttons for unavailable servers */}
+                  {}
                   {!lang.available && lang.can_install && lang.install_options && lang.install_options.length > 0 && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                       <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{t('settings.lspInstall')}</span>
@@ -848,7 +815,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                                 setInstalling(null)
                                 setInstallResult({ lang: lang.id, success: res.success, output: res.output })
                                 if (res.success) {
-                                  // Refresh status
                                   App.GetLSPStatus().then((r: any) => setLspStatus(r.languages || []))
                                 }
                               })
@@ -886,7 +852,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                       {lang.install_hint}
                     </div>
                   )}
-                  {/* Install result */}
+                  {}
                   {installResult && installResult.lang === lang.id && (
                     <div style={{
                       marginTop: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm)',
@@ -912,7 +878,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* Diagnostics Tab */}
+        {}
         {tab === 'diagnostics' && (
           <>
             <h3 style={sectionTitle}>{t('settings.diagnostics')}</h3>
@@ -938,7 +904,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* Impersonation Tab */}
+        {}
         {tab === 'impersonation' && (
           <>
             <h3 style={sectionTitle}>{t('settings.impersonate')}</h3>
@@ -980,12 +946,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           </>
         )}
 
-        {/* Hooks Tab */}
+        {}
         {tab === 'hooks' && (
           <HooksSettings />
         )}
 
-        {/* Add Endpoint Tab */}
+        {}
         {tab === 'addEndpoint' && (
           <AddEndpointForm vendors={vendors} currentVendor={currentVendor} showToast={showToast} onDone={() => {
             handleVendorChange(currentVendor)
@@ -994,7 +960,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         )}
       </div>
 
-      {/* CSS for spinning refresh icon */}
+      {}
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
         .spin { animation: spin 1s linear infinite; }
@@ -1003,7 +969,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   )
 }
 
-// Add Endpoint Form
 function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
   vendors: string[], currentVendor: string, onDone: () => void, showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }) {
@@ -1086,7 +1051,6 @@ function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
   )
 }
 
-// Shared Components
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', marginBottom: 16 }}>

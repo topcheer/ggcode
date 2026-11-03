@@ -43,7 +43,7 @@ export function DiffRender({ fileName, diffText }: Props) {
       border: '1px solid var(--color-border)',
       overflow: 'hidden', marginTop: 'var(--spacing-sm)',
     }}>
-      {/* Header */}
+      {}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: 'var(--spacing-sm) var(--spacing-md)',
@@ -61,7 +61,7 @@ export function DiffRender({ fileName, diffText }: Props) {
         <span style={{ fontSize: 11, color: 'var(--color-error)' }}>-{removeCount}</span>
       </div>
 
-      {/* Diff body */}
+      {}
       {expanded && (
         <div style={{
           maxHeight: 300, overflowY: 'auto',

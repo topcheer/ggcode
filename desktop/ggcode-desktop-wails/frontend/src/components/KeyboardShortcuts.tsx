@@ -106,7 +106,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden', zIndex: 200,
       }}>
-        {/* Header */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: 'var(--spacing-md) var(--spacing-lg)',
@@ -123,7 +123,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Content */}
+        {}
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-sm) 0' }}>
           {SHORTCUT_GROUPS.map(group => (
             <div key={group.titleKey as string}>
@@ -154,7 +154,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        {/* Footer */}
+        {}
         <div style={{
           padding: 'var(--spacing-sm) var(--spacing-lg)',
           borderTop: '1px solid var(--color-border)',

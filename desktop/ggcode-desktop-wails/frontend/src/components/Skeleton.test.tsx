@@ -36,7 +36,6 @@ describe('SkeletonRow', () => {
   it('renders a row with avatar placeholder and two text lines', () => {
     const { container } = render(<SkeletonRow />)
     const shimmerBlocks = container.querySelectorAll('.skeleton-shimmer')
-    // avatar + line1 + line2 = 3 blocks
     expect(shimmerBlocks.length).toBe(3)
   })
 })
@@ -45,7 +44,6 @@ describe('SkeletonSessionItem', () => {
   it('renders a session item with avatar and three text lines', () => {
     const { container } = render(<SkeletonSessionItem />)
     const shimmerBlocks = container.querySelectorAll('.skeleton-shimmer')
-    // avatar + line1 + line2 + line3 = 4 blocks
     expect(shimmerBlocks.length).toBe(4)
   })
 })
@@ -69,7 +67,6 @@ describe('SkeletonMessage', () => {
 describe('SkeletonMessages', () => {
   it('renders the specified number of messages', () => {
     const { container } = render(<SkeletonMessages count={3} />)
-    // Each message is wrapped in a flex div
     const wrappers = container.children
     expect(wrappers.length).toBe(3)
   })
@@ -88,15 +85,13 @@ describe('SkeletonMessages', () => {
 describe('SkeletonList', () => {
   it('renders rows by default', () => {
     const { container } = render(<SkeletonList count={3} />)
-    // Each row has 3 shimmer blocks (avatar + 2 lines)
     const shimmerBlocks = container.querySelectorAll('.skeleton-shimmer')
-    expect(shimmerBlocks.length).toBe(3 * 3) // 3 rows * 3 blocks each
+    expect(shimmerBlocks.length).toBe(3 * 3)
   })
 
   it('renders session variant', () => {
     const { container } = render(<SkeletonList count={2} variant="session" />)
-    // Each session item has 4 shimmer blocks (avatar + 3 lines)
     const shimmerBlocks = container.querySelectorAll('.skeleton-shimmer')
-    expect(shimmerBlocks.length).toBe(2 * 4) // 2 sessions * 4 blocks each
+    expect(shimmerBlocks.length).toBe(2 * 4)
   })
 })

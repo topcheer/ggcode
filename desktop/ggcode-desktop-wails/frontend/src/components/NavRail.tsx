@@ -44,7 +44,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       gap: 4,
       flexShrink: 0,
     }}>
-      {/* Logo */}
+      {}
       <button onClick={onAbout} style={{
         width: 32, height: 32,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -57,7 +57,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
         />
       </button>
 
-      {/* Sidebar toggle */}
+      {}
       <button onClick={onToggleSidebar} title={sidebarOpen ? `Hide sessions (⌘B)` : `Show sessions (⌘B)`} style={{
         width: 36, height: 36, borderRadius: 6,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -70,7 +70,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
         <PanelLeft size={18} />
       </button>
 
-      {/* Nav items */}
+      {}
       {navItems.map(item => {
         const isActive = view === item.id
         return (
@@ -105,7 +105,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
         )
       })}
 
-      {/* LAN Chat */}
+      {}
       <button
         onClick={() => onViewChange('lanchat')}
         title={`LAN Chat (⌘7)`}
@@ -148,7 +148,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
         )}
       </button>
 
-      {/* Spacer */}
+      {}
       <div style={{ flex: 1 }} />
     </div>
   )

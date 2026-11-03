@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': 'Чат',
   'nav.files': 'Файлы',
   'nav.im': 'IM-адаптеры',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': 'Да',
   'cron.no': 'Нет',
 
-  // Sidebar
   'sidebar.sessions': 'Сессии',
   'sidebar.search': 'Поиск сессий...',
   'sidebar.newSession': 'Новая сессия',
@@ -70,12 +68,10 @@ const en = {
   'sidebar.time.hoursAgo': '{n} ч назад',
   'sidebar.time.yesterday': 'вчера',
 
-  // StatusBar
   'status.ready': 'Готово',
   'status.thinking': 'Размышление...',
   'status.offline': 'Не в сети',
 
-  // ChatView
   'chat.placeholder': 'Сообщение ggcode...',
   'chat.agentWorking': 'Агент работает...',
   'chat.welcome.title': 'Чем я могу помочь сегодня?',
@@ -86,7 +82,6 @@ const en = {
   'chat.welcome.prompt.debug': 'Помочь отладить проблему',
   'chat.inputHint': 'Enter для отправки • Shift+Enter для новой строки',
 
-  // CommandPalette
   'cmd.recent': 'Недавние',
   'cmd.placeholder': 'Введите команду...',
   'cmd.noResults': 'Совпадающих команд нет',
@@ -120,7 +115,6 @@ const en = {
   'cmd.hintClose': 'esc закрыть',
   'cmd.results': '{count} результатов',
 
-  // KeyboardShortcuts
   'kb.title': 'Горячие клавиши',
   'kb.footer': 'Совет: нажмите ⌘K в любой момент, чтобы открыть палитру команд',
   'kb.global': 'Общие',
@@ -157,7 +151,6 @@ const en = {
   'kb.goDebug': 'Перейти к консоли отладки',
   'kb.goLanChat': 'Перейти к локальному чату',
 
-  // ContextPanel
   'context.title': 'Контекст',
   'context.usage': 'Использование контекста',
   'context.input': 'Ввод',
@@ -172,7 +165,6 @@ const en = {
   'context.costDisclaimer': 'Оценка основана на использовании токенов и ценах модели. Фактическая стоимость может отличаться.',
   'context.planIncluded': "Входит в {plan}",
 
-  // SettingsPage
   'settings.title': 'Настройки',
   'settings.vendor': 'Поставщик',
   'settings.endpoint': 'Конечная точка',
@@ -191,7 +183,6 @@ const en = {
   'settings.impersonateVersion': 'Версия',
   'settings.impersonateApply': 'Применить',
 
-  // Onboarding
   'onboarding.next': 'Далее',
   'onboarding.back': 'Назад',
   'onboarding.getStarted': 'Начать',
@@ -214,32 +205,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o (введите вручную или получите)',
   'onboarding.configureLLM': 'Настроить LLM',
 
-  // ApprovalDialog
   'approval.title': 'Требуется подтверждение инструмента',
   'approval.allow': 'Разрешить',
   'approval.deny': 'Отклонить',
   'approval.alwaysAllow': 'Всегда разрешать',
 
-  // AskUserDialog
   'askUser.title': 'Вопрос',
   'askUser.submit': 'Отправить',
 
-  // Dialogs (About)
   'about.title': 'О программе GGCode',
   'about.description': 'AI-агент для программирования в терминале',
 
-  // PairingCodeDialog
   'pairing.title': 'Сопряжение устройства',
   'pairing.close': 'Закрыть',
 
-  // ShareDialog
   'share.title': 'Поделиться сессией',
   'share.copy': 'Копировать',
   'share.copied': 'Скопировано!',
   'share.stopSharing': 'Остановить передачу',
   'share.generating': 'Генерация...',
 
-  // IMManagement
   'im.title': 'IM-адаптеры',
   'im.addAdapter': 'Добавить адаптер',
   'im.noAdapters': 'IM-адаптеры не настроены. Нажмите "Добавить адаптер", чтобы начать.',
@@ -256,17 +241,14 @@ const en = {
   'im.cancel': 'Отмена',
   'im.selectPlatform': 'Выберите платформу...',
 
-  // MCPServers
   'mcp.title': 'MCP-серверы',
   'mcp.add': 'Добавить',
   'mcp.name': 'Имя',
   'mcp.cancel': 'Отмена',
 
-  // FileBrowser
   'files.fileTooLarge': 'Файл слишком большой для предпросмотра (>2МБ)',
   'files.binaryFile': 'Бинарный файл',
 
-  // DebugConsole
   'debug.title': 'Консоль отладки',
   'debug.start': 'Запустить',
   'debug.stop': 'Остановить',
@@ -277,7 +259,6 @@ const en = {
   'debug.filterPlaceholder': 'Фильтр...',
   'debug.empty': 'Нажмите "Запустить", чтобы начать сбор журналов отладки',
 
-  // TeamBoard
   'team.teams': 'команды',
   'team.teammates': 'участники',
   'team.tasks': 'задачи',
@@ -290,9 +271,6 @@ const en = {
   'team.noInProgress': 'Никто не заблокирован',
   'team.noDone': 'Ещё ничего не завершено',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Агент и безопасность',
   'settings.appearance': 'Внешний вид',
   'settings.integrations': 'Интеграции',
@@ -334,7 +312,6 @@ const en = {
   'settings.versionPlaceholder': 'Строка версии...',
   'settings.endpointNamePlaceholder': 'Моя конечная точка',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'Браузер файлов',
   'settings.contextUsage': 'Использование контекста',
   'settings.mcpServers': 'MCP-серверы',
@@ -378,23 +355,17 @@ const en = {
   'settings.adding': 'Добавление...',
   'settings.lspServersShort': 'Языковые серверы',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'Поиск сессий',
   'sidebar.clearAria': 'Очистить',
   'sidebar.deleteSessionAria': 'Удалить сессию',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'Нажмите, чтобы изменить никнейм, роль и команду',
   'chat.regenerate': 'Перегенерировать ответ',
   'chat.copyResult': 'Копировать результат',
   'chat.copyError': 'Копировать ошибку',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'Выберите модель...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'Чтение файлов...',
   'chat.activity.editing': 'Редактирование кода...',
   'chat.activity.writing': 'Запись файлов...',
@@ -409,7 +380,6 @@ const en = {
   'chat.activity.saving': 'Сохранение в память...',
   'chat.activity.planMode': 'Вход в режим планирования...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': 'Поиск в разговоре...',
   'chat.sending': 'Отправка...',
   'chat.failedToSend': 'Не удалось отправить',
@@ -419,7 +389,6 @@ const en = {
   'chat.cancel': 'Отмена',
   'chat.save': 'Сохранить',
 
-  // ChatView button titles
   'chat.title.newSession': 'Новая сессия',
   'chat.title.shareSession': 'Поделиться сессией (Cmd+Shift+S)',
   'chat.title.search': 'Поиск в разговоре (Cmd+F)',
@@ -436,7 +405,6 @@ const en = {
   'chat.title.copyMessage': 'Копировать сообщение',
   'chat.title.teamBoard': 'Открыть доску команды',
 
-  // MCPServers
   'mcp.transport': 'Транспорт',
   'mcp.transportStdio': 'Локальный процесс через stdin/stdout',
   'mcp.transportWs': 'Удалённый сервер через WebSocket',
@@ -449,7 +417,6 @@ const en = {
   'mcp.resetOAuth': 'Сбросить OAuth (сменить аккаунт)',
   'mcp.remove': 'Удалить',
 
-  // Onboarding
   'onboarding.chooseVendor': 'Выберите поставщика...',
   'onboarding.providerName': 'Имя провайдера',
   'onboarding.protocol': 'Протокол',
@@ -457,7 +424,6 @@ const en = {
   'onboarding.chooseModel': 'Выберите модель...',
   'onboarding.chooseEndpoint': 'Выберите конечную точку...',
 
-  // LanChatView
   'lanchat.groupChat': 'Групповой чат',
   'lanchat.chat': 'Чат',
   'lanchat.agentSuffix': ' (агент)',
@@ -466,37 +432,24 @@ const en = {
   'lanchat.broadcastPlaceholder': 'Отправить всем...',
   'lanchat.dmPlaceholder': 'Сообщение для {name}...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': 'Введите ответ...',
 
-  // IMManagement
   'im.editAdapter': 'Изменить: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'Поиск файлов...',
   'files.officeDocument': 'Документ Office',
   'files.openExternal': 'Открыть во внешнем приложении для просмотра',
   'files.htmlPreview': 'HTML-предпросмотр',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'Переключить панель контекста',
 
-  // TeamBoard
   'team.boardTitle': 'Доска команды',
 
-  // Common shared
   'common.dismiss': 'Скрыть уведомление',
   'common.cancel': 'Отмена',
   'common.save': 'Save',
   'common.copyToClipboard': 'Копировать в буфер обмена',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': 'Просматривайте файлы в текущей рабочей области через встроенный браузер файлов.',
   'settings.openFiles': 'Открыть файлы',
   'settings.contextUsageDesc': 'Проверьте использование контекста, а также количество токенов и кэша перед выполнением длительных задач.',
@@ -513,7 +466,6 @@ const en = {
   'settings.integrationsDesc': 'Управляйте существующими функциями десктопа из одного места. Эти ярлыки открывают текущие специализированные экраны без изменения семантики конфигурации бэкенда.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'Подтверждение инструмента',
   'common.closeDialog': 'Закрыть диалог',
   'common.cancelBtn': 'Отмена',
@@ -537,7 +489,6 @@ const en = {
   'common.pinWindow': 'Закрепить окно поверх',
   'common.unpinWindow': 'Открепить окно',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'Выберите поставщика...',
   'settings.chooseEndpoint': 'Выберите конечную точку...',
   'settings.modeSupervised': 'Под контролем (подтверждать каждый инструмент)',
@@ -545,37 +496,24 @@ const en = {
   'settings.modeBypassAll': 'Обход (автоодобрение большинства инструментов)',
   'settings.saveModeHint': 'Сохраните, чтобы сохранить этот режим по умолчанию. Изменения режима во время выполнения следуют обычной логике обработки режимов приложения.',
 
-  // Dialogs
   'dialogs.newVersion': 'Доступна новая версия: v',
   'dialogs.download': 'Скачать',
   'dialogs.upToDate': 'У вас последняя версия (v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': 'Рендеринг диаграммы...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': 'Всегда',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'Требуется вход через OAuth',
   'mcp.oauthHint': 'Войдите через браузер, чтобы авторизовать этот MCP-сервер.',
 
-  // Onboarding
   'onboarding.customProvider': '+ Пользовательский провайдер',
   'onboarding.a2a': 'Сервис A2A',
   'onboarding.a2aDesc': 'Включить обмен данными между агентами (рекомендуется)',
   'onboarding.languageTitle': 'Выберите язык',
   'onboarding.languageHint': 'Вы можете изменить это позже в Настройках',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'Проверьте, насколько автономен десктоп-агент в данный момент. Это обобщает существующее поведение без изменения расширенных политик инструментов.',
   'settings.workspaceAccessHint': 'Файловые инструменты работают в пределах текущей рабочей области и настроенных разрешённых директорий. Расширенное редактирование разрешённых директорий намеренно не доступно здесь, чтобы избежать случайного изменения границ безопасности.',
   'settings.appearanceHint': 'Настройте визуальную тему. По умолчанию приложение следует системным настройкам.',

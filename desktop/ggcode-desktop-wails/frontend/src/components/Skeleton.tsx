@@ -7,7 +7,6 @@ interface SkeletonBaseProps {
   style?: React.CSSProperties
 }
 
-/** Single shimmer block */
 export function Skeleton({ width = '100%', height = 14, borderRadius = 4, style }: SkeletonBaseProps) {
   return (
     <div
@@ -22,7 +21,6 @@ export function Skeleton({ width = '100%', height = 14, borderRadius = 4, style 
   )
 }
 
-/** Skeleton row for list items (avatar + 2 lines of text) */
 export function SkeletonRow() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px var(--spacing-lg)' }}>
@@ -35,7 +33,6 @@ export function SkeletonRow() {
   )
 }
 
-/** Skeleton for a session list sidebar item */
 export function SkeletonSessionItem() {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px var(--spacing-lg)' }}>
@@ -49,7 +46,6 @@ export function SkeletonSessionItem() {
   )
 }
 
-/** Skeleton for a single chat message bubble (alternating user/assistant widths) */
 export function SkeletonMessage({ align = 'left' }: { align?: 'left' | 'right' }) {
   const isRight = align === 'right'
   return (
@@ -73,7 +69,6 @@ export function SkeletonMessage({ align = 'left' }: { align?: 'left' | 'right' }
   )
 }
 
-/** Render N skeleton chat messages (alternating user/assistant alignment) */
 export function SkeletonMessages({ count = 4 }: { count?: number }) {
   return (
     <>
@@ -84,7 +79,6 @@ export function SkeletonMessages({ count = 4 }: { count?: number }) {
   )
 }
 
-/** Render N skeleton rows */
 export function SkeletonList({ count = 5, variant = 'row' }: { count?: number; variant?: 'row' | 'session' }) {
   const Component = variant === 'session' ? SkeletonSessionItem : SkeletonRow
   return (

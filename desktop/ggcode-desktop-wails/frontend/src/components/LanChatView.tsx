@@ -20,8 +20,6 @@ interface Props {
   onUnreadChange?: (count: number) => void
 }
 
-// --- Room types ---
-// Room key: "broadcast" | "dm:<nodeID>:<role>"
 interface ChatRoom {
   messages: LanChatMessage[]
   unread: number
@@ -29,12 +27,12 @@ interface ChatRoom {
 
 export interface ContactEntry {
   node_id: string
-  label: string        // human_nick or agent_nick
-  nick: string         // for @mention
-  to_role: string      // "human" | "agent"
-  team: string         // team name for grouping
-  workspace?: string   // e.g. "/Volumes/new/ggai/mdns"
-  project_name?: string // e.g. "mdns"
+  label: string
+  nick: string
+  to_role: string
+  team: string
+  workspace?: string
+  project_name?: string
   languages?: string[]
 }
 
@@ -42,37 +40,28 @@ export function roomKeyForDM(nodeID: string, role: string): string {
   return `dm:${nodeID}:${role}`
 }
 
-/** Parse a room key into { nodeID, role } or null for broadcast. */
 export function parseRoomKey(key: string): { nodeID: string; role: string } | null {
   if (key === 'broadcast') return null
-  const parts = key.split(':') // ["dm", nodeID, role] but nodeID may contain ':'
+  const parts = key.split(':')
   if (parts.length < 3) return null
-  // nodeID is everything between first and last ':'
   const role = parts[parts.length - 1]
   const nodeID = parts.slice(1, -1).join(':')
   return { nodeID, role }
 }
 
-/** Determine which room a message belongs to. */
 export function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
-  // DM to me
   if (msg.to_node_id === selfNodeID && msg.to_node_id !== '') {
     return roomKeyForDM(msg.from_node_id, msg.from_role)
   }
-  // DM from me to someone
   if (msg.from_node_id === selfNodeID && msg.to_node_id !== '') {
-    // Need the recipient's role — but from_role is "human" (me)
-    // The to_role tells us which role of the recipient
     return roomKeyForDM(msg.to_node_id, msg.to_role)
   }
-  // Broadcast
   return 'broadcast'
 }
 
-/** Build contact entries from participants. */
 export function buildContacts(participants: LanChatParticipant[], selfNodeID: string): ContactEntry[] {
   const contacts: ContactEntry[] = []
-  const seen = new Set<string>() // dedup by `${nick}:${role}`
+  const seen = new Set<string>()
   for (const p of participants) {
     if (p.node_id === selfNodeID) continue
     const team = p.team || 'dev-team'
@@ -94,7 +83,6 @@ export function buildContacts(participants: LanChatParticipant[], selfNodeID: st
       contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human', team, workspace: p.workspace, project_name: p.project_name })
     }
   }
-  // Sort alphabetically by label
   contacts.sort((a, b) => a.label.localeCompare(b.label))
   return contacts
 }
@@ -107,7 +95,6 @@ export function LanChatView({ onUnreadChange }: Props) {
   const [selfTeam, setSelfTeam] = useState('')
   const [toggledTeams, setToggledTeams] = useState<Set<string>>(new Set())
 
-  // Room state: all messages stored per-room
   const [rooms, setRooms] = useState<Map<string, ChatRoom>>(new Map([['broadcast', { messages: [], unread: 0 }]]))
   const [activeRoom, setActiveRoom] = useState('broadcast')
 
@@ -115,7 +102,6 @@ export function LanChatView({ onUnreadChange }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Refs to avoid stale closures in event handlers
   const selfNodeIDRef = useRef('')
   const activeRoomRef = useRef('broadcast')
   selfNodeIDRef.current = selfNodeID
@@ -123,12 +109,10 @@ export function LanChatView({ onUnreadChange }: Props) {
 
   const contacts = buildContacts(participants, selfNodeID)
 
-  // --- Helpers to manipulate rooms ---
   const addMessageToRoom = useCallback((roomKey: string, msg: LanChatMessage, isActive: boolean) => {
     setRooms(prev => {
       const next = new Map(prev)
       const room = next.get(roomKey) || { messages: [], unread: 0 }
-      // Dedup: skip if message already present (race between initial load and event)
       if (room.messages.some(m => m.id === msg.id)) {
         return prev
       }
@@ -147,7 +131,6 @@ export function LanChatView({ onUnreadChange }: Props) {
     onUnreadChange?.(totalUnread)
   }, [onUnreadChange, totalUnread])
 
-  // --- Initial load + event listeners ---
   useEffect(() => {
     let mounted = true
 
@@ -166,7 +149,6 @@ export function LanChatView({ onUnreadChange }: Props) {
           setNick(s?.human_nick || s?.agent_nick || '')
           setSelfTeam(s?.team || 'dev-team')
 
-          // Distribute initial messages into rooms
           const msgArr = (msgs as any) || []
           const roomMap = new Map<string, ChatRoom>([['broadcast', { messages: [], unread: 0 }]])
           for (const msg of msgArr) {
@@ -194,7 +176,6 @@ export function LanChatView({ onUnreadChange }: Props) {
     const offMessage = EventsOn('lanchat:message', (msg: any) => {
       const myID = selfNodeIDRef.current
       const currentRoom = activeRoomRef.current
-      // Determine target room using refs (not stale state)
       let roomKey = 'broadcast'
       if (msg.to_node_id && msg.to_node_id === myID) {
         roomKey = roomKeyForDM(msg.from_node_id, msg.from_role)
@@ -218,8 +199,6 @@ export function LanChatView({ onUnreadChange }: Props) {
         'rejected': `rejected${r.reason ? ': ' + r.reason : ''}`,
       }
       const label = labels[r.status] || r.status
-      // Use the receipt's from_nick and from_role so the UI shows who
-      // acknowledged the message instead of "unknown".
       const fromNick = r.from_nick || 'peer'
       const fromRole = r.from_role || 'human'
       const sysMsg: LanChatMessage = {
@@ -232,14 +211,9 @@ export function LanChatView({ onUnreadChange }: Props) {
         content: `[${label}]`,
         timestamp: Date.now(),
       }
-      // Route receipt to the correct DM room based on FromNodeID (the remote peer
-      // that reported the receipt). If the original message was a broadcast, route
-      // to the broadcast room.
       const myID = selfNodeIDRef.current
       let roomKey = 'broadcast'
       if (r.from_node_id && r.from_node_id !== myID) {
-        // Receipt from a remote peer — this is a DM acknowledgement.
-        // Use to_role if available (newer receipts), otherwise default to 'human'.
         const role = r.to_role || 'human'
         roomKey = roomKeyForDM(r.from_node_id, role)
       }
@@ -266,7 +240,6 @@ export function LanChatView({ onUnreadChange }: Props) {
       refreshParticipants()
     })
 
-    // Refresh self identity when session changes (nick/role/team may differ per session)
     const offIdentityUpdate = EventsOn('lanchat:identity_updated', async () => {
       try {
         const [s, parts] = await Promise.all([
@@ -284,7 +257,6 @@ export function LanChatView({ onUnreadChange }: Props) {
       } catch {}
     })
 
-    // Retry participants load
     const retry1 = setTimeout(refreshParticipants, 5000)
     const retry2 = setTimeout(refreshParticipants, 10000)
 
@@ -301,12 +273,10 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
   }, [])
 
-  // Track totalUnread for NavRail badge
   useEffect(() => {
     onUnreadChange?.(totalUnread)
   }, [totalUnread, onUnreadChange])
 
-  // Clear unread when switching to a room
   const switchRoom = useCallback((key: string) => {
     setActiveRoom(key)
     setRooms(prev => {
@@ -322,7 +292,6 @@ export function LanChatView({ onUnreadChange }: Props) {
     }, 50)
   }, [])
 
-  // --- Actions ---
   const handleSend = useCallback(async () => {
     if (!inputText.trim()) return
     const text = inputText
@@ -354,7 +323,6 @@ export function LanChatView({ onUnreadChange }: Props) {
       }
     }
 
-    // Local echo FIRST — always show immediately, don't wait for network
     const echoMsg: LanChatMessage = {
       id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       from_node_id: selfNodeID,
@@ -372,7 +340,6 @@ export function LanChatView({ onUnreadChange }: Props) {
 
     setInputText('')
 
-    // Then send to backend
     try {
       await App.LanChatSend(sendContent, toNodeID, toRole, false)
     } catch (e) {
@@ -403,7 +370,7 @@ export function LanChatView({ onUnreadChange }: Props) {
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
-      {/* --- Left sidebar: contact list --- */}
+      {}
       <div style={{
         width: '200px',
         minWidth: '200px',
@@ -412,7 +379,7 @@ export function LanChatView({ onUnreadChange }: Props) {
         flexDirection: 'column',
         overflow: 'hidden',
       }}>
-        {/* Header */}
+        {}
         <div style={{
           padding: '8px 12px',
           borderBottom: '1px solid var(--border-color)',
@@ -439,9 +406,9 @@ export function LanChatView({ onUnreadChange }: Props) {
           </button>
         </div>
 
-        {/* Contact list */}
+        {}
         <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-          {/* Group chat */}
+          {}
           <ContactRow
             label="# Group Chat"
             active={activeRoom === 'broadcast'}
@@ -449,20 +416,18 @@ export function LanChatView({ onUnreadChange }: Props) {
             onClick={() => switchRoom('broadcast')}
           />
 
-          {/* Direct Messages — grouped by team */}
+          {}
           {contacts.length === 0 ? (
             <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-tertiary)' }}>
               No contacts online
             </div>
           ) : (() => {
-            // Group contacts by team
             const teamMap = new Map<string, ContactEntry[]>()
             for (const c of contacts) {
               const arr = teamMap.get(c.team) || []
               arr.push(c)
               teamMap.set(c.team, arr)
             }
-            // Sort teams: self team first, then alphabetical
             const teams = Array.from(teamMap.keys()).sort((a, b) => {
               if (a === selfTeam) return -1
               if (b === selfTeam) return 1
@@ -521,9 +486,9 @@ export function LanChatView({ onUnreadChange }: Props) {
         </div>
       </div>
 
-      {/* --- Right: chat area --- */}
+      {}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {/* Chat header */}
+        {}
         <div style={{
           padding: '8px 16px',
           borderBottom: '1px solid var(--border-color)',
@@ -536,7 +501,7 @@ export function LanChatView({ onUnreadChange }: Props) {
           </span>
         </div>
 
-        {/* Messages */}
+        {}
         <div role="log" aria-live="polite" aria-label={t('common.lanChatMessages')} style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
           {activeMessages.length === 0 ? (
             <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
@@ -583,7 +548,7 @@ export function LanChatView({ onUnreadChange }: Props) {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
+        {}
         <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0, display: 'flex', gap: '8px' }}>
           <input
             ref={inputRef}
@@ -628,7 +593,6 @@ export function LanChatView({ onUnreadChange }: Props) {
   )
 }
 
-// --- Contact row sub-component ---
 function ContactRow({
   label,
   badge,

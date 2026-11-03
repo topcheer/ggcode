@@ -10,9 +10,7 @@ import hljs from 'highlight.js'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
-// mermaid imported dynamically to enable code-splitting (see MermaidBlock)
 
-// highlight.js themes — light is default, dark via .dark class override below
 import 'highlight.js/styles/github.css'
 import '../hljs-dark-override.css'
 
@@ -24,8 +22,6 @@ interface FileNode {
   expanded?: boolean
   children?: FileNode[]
 }
-
-// ─── File type detection ─────────────────────────────────
 
 function getFileIcon(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() || ''
@@ -94,7 +90,6 @@ function isTooLarge(size: number): boolean {
   return size > 2 * 1024 * 1024
 }
 
-// Map file extension to highlight.js language name
 function extToHljsLang(name: string): string | undefined {
   const ext = name.split('.').pop()?.toLowerCase() || ''
   const map: Record<string, string> = {
@@ -112,7 +107,6 @@ function extToHljsLang(name: string): string | undefined {
     proto: 'protobuf', tf: 'hcl',
   }
   if (map[ext]) return map[ext]
-  // Special filenames
   const base = name.toLowerCase()
   if (base === 'makefile') return 'makefile'
   if (base === 'dockerfile') return 'dockerfile'
@@ -131,8 +125,6 @@ function buildTreeFromBackend(entries: Array<Record<string, any>>, parentPath: s
     children: e.isDir ? [] : undefined,
   }))
 }
-
-// ─── File Tree Item ───────────────────────────────────────
 
 function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
   node: FileNode, depth: number, activeFile: string,
@@ -194,8 +186,6 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
   )
 }
 
-// ─── Mermaid Renderer ─────────────────────────────────────
-
 let mermaidCounter = 0
 let mermaidInitDone = false
 
@@ -233,13 +223,10 @@ function MermaidBlock({ chart }: { chart: string }) {
   )
 }
 
-// ─── Source Code Preview (highlight.js) ───────────────────
-
 function CodePreview({ code, fileName }: { code: string; fileName: string }) {
   const lang = extToHljsLang(fileName)
   const lines = code.split('\n')
 
-  // Try to highlight whole block at once for accuracy
   let highlighted = ''
   if (lang) {
     try {
@@ -287,8 +274,6 @@ function CodePreview({ code, fileName }: { code: string; fileName: string }) {
   )
 }
 
-// ─── Markdown Preview ─────────────────────────────────────
-
 function MarkdownPreview({ content, workDir }: { content: string; workDir: string }) {
   return (
     <div style={{
@@ -302,14 +287,12 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw]}
         components={{
-          // Mermaid code blocks
           code({ className, children, ...props }) {
             const match = /language-mermaid/.exec(className || '')
             const text = String(children).replace(/\n$/, '')
             if (match) {
               return <MermaidBlock chart={text} />
             }
-            // Inline code
             if (!className) {
               return <code style={{
                 background: 'var(--color-card)', padding: '2px 6px',
@@ -317,7 +300,6 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
                 color: 'var(--color-info)',
               }} {...props}>{children}</code>
             }
-            // Fenced code blocks with syntax highlighting
             const langMatch = /language-(\w+)/.exec(className || '')
             const lang = langMatch ? langMatch[1] : undefined
             let html = text
@@ -334,14 +316,12 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
               </pre>
             )
           },
-          // SVG images rendered inline
           img({ src, alt, ...props }) {
             if (src?.endsWith('.svg') || src?.startsWith('data:image/svg')) {
               return <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 4 }} {...props} />
             }
             return <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 4 }} {...props} />
           },
-          // Style tables
           table({ children }) {
             return <table style={{
               borderCollapse: 'collapse', width: '100%', margin: '12px 0',
@@ -359,18 +339,13 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
               border: '1px solid var(--color-border)', padding: '6px 12px', fontSize: 13,
             }}>{children}</td>
           },
-          // Headings
           h1({ children }) { return <h1 style={{ fontSize: 24, fontWeight: 700, borderBottom: '1px solid var(--color-border)', paddingBottom: 8, marginTop: 24 }}>{children}</h1> },
           h2({ children }) { return <h2 style={{ fontSize: 20, fontWeight: 600, borderBottom: '1px solid var(--color-border)', paddingBottom: 6, marginTop: 20 }}>{children}</h2> },
           h3({ children }) { return <h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 16 }}>{children}</h3> },
-          // Links
           a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-info)', textDecoration: 'none' }}>{children}</a> },
-          // Blockquote
           blockquote({ children }) { return <blockquote style={{ borderLeft: '3px solid var(--color-primary)', paddingLeft: 12, color: 'var(--text-secondary)', margin: '8px 0' }}>{children}</blockquote> },
-          // Lists
           ul({ children }) { return <ul style={{ paddingLeft: 20 }}>{children}</ul> },
           ol({ children }) { return <ol style={{ paddingLeft: 20 }}>{children}</ol> },
-          // Horizontal rule
           hr() { return <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '16px 0' }} /> },
         }}
       >
@@ -379,8 +354,6 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
     </div>
   )
 }
-
-// ─── HTML Preview ─────────────────────────────────────────
 
 function HTMLPreview({ content }: { content: string }) {
   const { t } = useTranslation()
@@ -397,8 +370,6 @@ function HTMLPreview({ content }: { content: string }) {
   )
 }
 
-// ─── Main Component ───────────────────────────────────────
-
 export function FileBrowser({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation()
   const [activeFile, setActiveFile] = useState('')
@@ -413,7 +384,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [mediaSrc, setMediaSrc] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
 
-  // Flatten tree to file-only list for search results
   const flattenTree = useCallback((nodes: FileNode[]): FileNode[] => {
     const result: FileNode[] = []
     const walk = (items: FileNode[]) => {
@@ -433,7 +403,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       )
     : []
 
-  // Load workdir and initial file listing
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -459,7 +428,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     return () => { cancelled = true }
   }, [])
 
-  // Lazy-load directory contents when expanded
   const handleLoadDir = useCallback(async (dirPath: string, _node: FileNode) => {
     try {
       const entries = await App.ListFiles(dirPath)
@@ -471,7 +439,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     } catch {}
   }, [])
 
-  // Load file content when selected
   const loadFileContent = useCallback(async (filePath: string) => {
     const name = filePath.split('/').pop() || ''
 
@@ -517,7 +484,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       return
     }
 
-    // Text-based files (code, markdown, html, etc.)
     try {
       const content = await App.ReadFileContent(filePath) as string
       if (content !== undefined && content !== null) {
@@ -554,7 +520,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
 
   return (
     <div style={{ display: 'flex', height: '100%', textAlign: 'left' }}>
-      {/* File tree */}
+      {}
       <div style={{
         width: 240, background: 'var(--color-nav)',
         display: 'flex', flexDirection: 'column',
@@ -571,7 +537,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
           <Folder size={14} style={{ color: 'var(--color-primary)' }} />
           {workDirName}/
         </div>
-        {/* File search/filter */}
+        {}
         <div style={{
           padding: '6px 8px',
           borderBottom: '1px solid var(--color-border)',
@@ -608,7 +574,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               Empty directory
             </div>
           )}
-          {/* Search results (flat list) */}
+          {}
           {searchQuery.trim() && (
             filteredFiles.length === 0 ? (
               <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>
@@ -646,7 +612,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               })
             )
           )}
-          {/* Normal tree view */}
+          {}
           {!searchQuery.trim() && tree.map(node => (
             <FileTreeItem key={node.path} node={node} depth={0}
               activeFile={activeFile} onSelect={handleSelectFile} onLoadDir={handleLoadDir} />
@@ -654,9 +620,9 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      {/* Preview area */}
+      {}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* Tab bar */}
+        {}
         <div style={{
           height: 36, background: 'var(--color-nav)',
           display: 'flex', alignItems: 'center',
@@ -700,9 +666,9 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
           })}
         </div>
 
-        {/* Content area */}
+        {}
         <div style={{ flex: 1, overflow: 'auto', background: 'var(--color-bg)' }}>
-          {/* Empty state */}
+          {}
           {!activeFile && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -712,7 +678,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {/* Image preview */}
+          {}
           {activeFile && fileType === 'image' && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -725,7 +691,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {/* PDF preview */}
+          {}
           {activeFile && fileType === 'pdf' && imageSrc && (
             <iframe src={imageSrc}
               style={{ width: '100%', height: '100%', border: 'none' }}
@@ -733,7 +699,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             />
           )}
 
-          {/* Media preview */}
+          {}
           {activeFile && fileType === 'media' && mediaSrc && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -747,22 +713,22 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {/* Markdown preview */}
+          {}
           {activeFile && fileType === 'markdown' && code && (
             <MarkdownPreview content={code} workDir={workDir} />
           )}
 
-          {/* HTML preview */}
+          {}
           {activeFile && fileType === 'html' && code && (
             <HTMLPreview content={code} />
           )}
 
-          {/* Source code preview (highlight.js) */}
+          {}
           {activeFile && fileType === 'text' && code && (
             <CodePreview code={code} fileName={activeFile.split('/').pop() || ''} />
           )}
 
-          {/* Office document notice */}
+          {}
           {activeFile && fileType === 'office' && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -775,7 +741,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {/* Binary file notice */}
+          {}
           {activeFile && fileType === 'binary' && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -787,7 +753,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {/* Too large notice */}
+          {}
           {activeFile && fileType === 'too-large' && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -804,7 +770,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   )
 }
 
-// Helper: recursively update children of a directory in the tree
 function updateChildren(nodes: FileNode[], dirPath: string, newChildren: FileNode[]): FileNode[] {
   return nodes.map(n => {
     if (n.path === dirPath && n.isDir) {

@@ -103,7 +103,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
       >
         <X size={13} />
       </button>
-      {/* Auto-dismiss progress bar */}
+      {}
       <div
         style={{
           position: 'absolute',
@@ -157,7 +157,6 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   )
 }
 
-/** Backward-compatible single-toast wrapper (deprecated, use ToastContainer) */
 export function Toast({ toast, onClose }: { toast: ToastMessage | null; onClose: () => void }) {
   useEffect(() => {
     if (!toast) return

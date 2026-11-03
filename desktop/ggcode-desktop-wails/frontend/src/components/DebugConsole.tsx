@@ -12,11 +12,9 @@ interface LogEntry {
 const MAX_LINES = 5000
 const POLL_INTERVAL = 300
 
-// Module-level state — survives component unmount when navigating away
 let persistentLines: LogEntry[] = []
 let persistentEnabled = false
 
-// Category colors
 const catColors: Record<string, string> = {
   agent: '#22c55e',
   tool: '#3b82f6',
@@ -60,7 +58,6 @@ export default function DebugConsole() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const enabledRef = useRef(persistentEnabled)
 
-  // Sync lines to persistent store
   const updateLines = useCallback((updater: (prev: LogEntry[]) => LogEntry[]) => {
     setLines(prev => {
       const next = updater(prev)
@@ -69,7 +66,6 @@ export default function DebugConsole() {
     })
   }, [])
 
-  // Toggle log capture
   const toggle = useCallback(async () => {
     const next = !enabledRef.current
     enabledRef.current = next
@@ -78,16 +74,13 @@ export default function DebugConsole() {
     try {
       // @ts-ignore — Wails binding
       await window.go?.main?.App?.ToggleLogStream?.(next)
-    } catch { /* ignore */ }
+    } catch {  }
   }, [])
 
-  // Clear local buffer
   const clear = useCallback(() => updateLines(() => []), [])
 
-  // On mount: check backend state and restore
   useEffect(() => {
     if (!persistentEnabled) return
-    // Drain any logs that accumulated while we were away
     const drain = async () => {
       try {
         // @ts-ignore — Wails binding
@@ -101,12 +94,11 @@ export default function DebugConsole() {
             })
           }
         }
-      } catch { /* ignore */ }
+      } catch {  }
     }
     drain()
   }, [updateLines])
 
-  // Poll for new log entries
   useEffect(() => {
     const poll = async () => {
       if (!enabledRef.current) return
@@ -120,27 +112,24 @@ export default function DebugConsole() {
           const next = [...prev, ...entries]
           return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next
         })
-      } catch { /* ignore */ }
+      } catch {  }
     }
     const id = setInterval(poll, POLL_INTERVAL)
     return () => clearInterval(id)
   }, [updateLines])
 
-  // Auto-scroll
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'smooth' })
     }
   }, [lines, autoScroll])
 
-  // Detect manual scroll
   const handleScroll = () => {
     if (!containerRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current
     setAutoScroll(scrollHeight - scrollTop - clientHeight < 50)
   }
 
-  // Filter
   const filtered = lines.filter(l => {
     if (catFilter && l.category !== catFilter) return false
     if (filter) {
@@ -150,12 +139,11 @@ export default function DebugConsole() {
     return true
   })
 
-  // Unique categories
   const categories = [...new Set(lines.map(l => l.category))].sort()
 
   return (
     <div className="dbg-console" style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-      {/* Toolbar */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--color-border)', flexShrink: 0 }}>
         <Terminal size={16} style={{ color: '#58a6ff' }} />
         <span style={{ fontWeight: 600, color: '#58a6ff', fontSize: 13 }}>{t('debug.title')}</span>
@@ -183,7 +171,7 @@ export default function DebugConsole() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Category filter */}
+        {}
         <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label={t('common.filterByCategory')} title={t('common.filterByCategory')} style={{
           padding: '3px 6px', borderRadius: 4, border: '1px solid var(--color-border)',
           background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 11,
@@ -192,7 +180,7 @@ export default function DebugConsole() {
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
 
-        {/* Search */}
+        {}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <Search size={12} style={{ position: 'absolute', left: 6, color: 'var(--text-tertiary)' }} />
           <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('debug.filterPlaceholder')} aria-label="Filter debug logs" title="Filter debug logs" style={{
@@ -203,7 +191,7 @@ export default function DebugConsole() {
         </div>
       </div>
 
-      {/* Log lines */}
+      {}
       <div ref={containerRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
         {filtered.map(l => (
           <div key={l.seq} style={{ padding: '1px 12px', display: 'flex', gap: 8, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>

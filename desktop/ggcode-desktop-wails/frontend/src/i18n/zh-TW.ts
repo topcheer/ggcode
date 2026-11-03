@@ -1,7 +1,6 @@
 import type { TranslationKey } from './en'
 
 const zh: Record<TranslationKey, string> = {
-  // NavRail
   'nav.chat': '聊天',
   'nav.files': '文件',
   'nav.im': 'IM 适配器',
@@ -56,7 +55,6 @@ const zh: Record<TranslationKey, string> = {
   'cron.yes': '是',
   'cron.no': '否',
 
-  // Sidebar
   'sidebar.sessions': '會話',
   'sidebar.search': '搜索會話...',
   'sidebar.newSession': '新建會話',
@@ -72,7 +70,6 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.time.hoursAgo': '{n}小時前',
   'sidebar.time.yesterday': '昨天',
 
-  // StatusBar
   'status.ready': '就绪',
   'status.thinking': '思考中...',
   'status.offline': '離線',
@@ -80,7 +77,6 @@ const zh: Record<TranslationKey, string> = {
   'status.zoomOut': '縮小 (Cmd-)',
   'status.zoomReset': '重置縮放 (Cmd+0)',
 
-  // ChatView
   'chat.placeholder': '给 ggcode 發消息...',
   'chat.agentWorking': 'Agent 工作中...',
   'chat.welcome.title': '今天我能幫你做什麼？',
@@ -91,7 +87,6 @@ const zh: Record<TranslationKey, string> = {
   'chat.welcome.prompt.debug': '幫我調試一個問題',
   'chat.inputHint': 'Enter 發送 • Shift+Enter 換行',
 
-  // CommandPalette
   'cmd.recent': '最近使用',
   'cmd.placeholder': '輸入命令...',
   'cmd.noResults': '没有匹配的命令',
@@ -128,7 +123,6 @@ const zh: Record<TranslationKey, string> = {
   'cmd.hintClose': 'esc 關閉',
   'cmd.results': '{count} 個結果',
 
-  // KeyboardShortcuts
   'kb.title': '快捷鍵',
   'kb.footer': '提示：随時按 ⌘K 打開命令面板',
   'kb.global': '全局',
@@ -168,7 +162,6 @@ const zh: Record<TranslationKey, string> = {
   'kb.zoomOut': '縮小',
   'kb.zoomReset': '重置縮放',
 
-  // ContextPanel
   'context.title': '上下文',
   'context.usage': '上下文使用量',
   'context.input': '輸入',
@@ -183,7 +176,6 @@ const zh: Record<TranslationKey, string> = {
   'context.costDisclaimer': '基於 Token 使用量和模型定價的估算，實际费用可能不同。',
   'context.planIncluded': "已包含在 {plan} 方案",
 
-  // SettingsPage
   'settings.title': '設置',
   'settings.vendor': '服務商',
   'settings.endpoint': '端點',
@@ -202,7 +194,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.impersonateVersion': '版本',
   'settings.impersonateApply': '應用',
 
-  // Onboarding
   'onboarding.next': '下一步',
   'onboarding.back': '上一步',
   'onboarding.getStarted': '開始使用',
@@ -225,32 +216,26 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.modelPlaceholder': 'gpt-4o (手動輸入或獲取)',
   'onboarding.configureLLM': '配置 LLM',
 
-  // ApprovalDialog
   'approval.title': '需要工具審批',
   'approval.allow': '允許',
   'approval.deny': '拒絕',
   'approval.alwaysAllow': '始終允許',
 
-  // AskUserDialog
   'askUser.title': '問題',
   'askUser.submit': '提交',
 
-  // Dialogs (About)
   'about.title': '關於 GGCode',
   'about.description': '終端 AI 編程助手',
 
-  // PairingCodeDialog
   'pairing.title': '配對設備',
   'pairing.close': '關閉',
 
-  // ShareDialog
   'share.title': '分享會話',
   'share.copy': '復制',
   'share.copied': '已復制!',
   'share.stopSharing': '停止分享',
   'share.generating': '生成中...',
 
-  // IMManagement
   'im.title': 'IM 适配器',
   'im.addAdapter': '添加适配器',
   'im.noAdapters': '未配置 IM 适配器。點擊"添加适配器"開始。',
@@ -267,17 +252,14 @@ const zh: Record<TranslationKey, string> = {
   'im.cancel': '取消',
   'im.selectPlatform': '選擇平台...',
 
-  // MCPServers
   'mcp.title': 'MCP 服務器',
   'mcp.add': '添加',
   'mcp.name': '名稱',
   'mcp.cancel': '取消',
 
-  // FileBrowser
   'files.fileTooLarge': '文件過大无法預覽 (>2MB)',
   'files.binaryFile': '二進制文件',
 
-  // DebugConsole
   'debug.title': '調試控制台',
   'debug.start': '開始',
   'debug.stop': '停止',
@@ -288,7 +270,6 @@ const zh: Record<TranslationKey, string> = {
   'debug.filterPlaceholder': '過濾...',
   'debug.empty': '點擊“開始”捕獲調試日志',
 
-  // TeamBoard
   'team.teams': '個團隊',
   'team.teammates': '個隊友',
   'team.tasks': '個任務',
@@ -301,9 +282,6 @@ const zh: Record<TranslationKey, string> = {
   'team.noInProgress': '没有被阻塞的任務',
   'team.noDone': '暂无已完成任務',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Agent 與安全',
   'settings.appearance': '外觀',
   'settings.integrations': '集成',
@@ -345,7 +323,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.versionPlaceholder': '版本號...',
   'settings.endpointNamePlaceholder': '我的端點',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': '文件瀏覽器',
   'settings.contextUsage': '上下文使用量',
   'settings.mcpServers': 'MCP 服務器',
@@ -389,23 +366,17 @@ const zh: Record<TranslationKey, string> = {
   'settings.adding': '添加中...',
   'settings.lspServersShort': '語言服務器',
 
-  // Sidebar aria labels
   'sidebar.searchAria': '搜索會話',
   'sidebar.clearAria': '清除',
   'sidebar.deleteSessionAria': '刪除會話',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': '點擊編輯暱稱、角色和團隊',
   'chat.regenerate': '重新生成回復',
   'chat.copyResult': '復制結果',
   'chat.copyError': '復制錯誤',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': '選擇模型...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': '讀取文件中...',
   'chat.activity.editing': '編輯代碼中...',
   'chat.activity.writing': '寫入文件中...',
@@ -420,7 +391,6 @@ const zh: Record<TranslationKey, string> = {
   'chat.activity.saving': '保存記憶中...',
   'chat.activity.planMode': '進入計劃模式...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': '在對話中查找...',
   'chat.sending': '發送中...',
   'chat.failedToSend': '發送失敗',
@@ -430,7 +400,6 @@ const zh: Record<TranslationKey, string> = {
   'chat.cancel': '取消',
   'chat.save': '保存',
 
-  // ChatView button titles
   'chat.title.newSession': '新建會話',
   'chat.title.shareSession': '分享會話 (Cmd+Shift+S)',
   'chat.title.search': '在對話中搜索 (Cmd+F)',
@@ -447,7 +416,6 @@ const zh: Record<TranslationKey, string> = {
   'chat.title.copyMessage': '復制消息',
   'chat.title.teamBoard': '打開任務面板',
 
-  // MCPServers
   'mcp.transport': '傳輸方式',
   'mcp.transportStdio': '通過 stdin/stdout 的本地進程',
   'mcp.transportWs': '通過 WebSocket 的遠程服務器',
@@ -460,7 +428,6 @@ const zh: Record<TranslationKey, string> = {
   'mcp.resetOAuth': '重置 OAuth (切換賬號)',
   'mcp.remove': '移除',
 
-  // Onboarding
   'onboarding.chooseVendor': '選擇服務商...',
   'onboarding.providerName': '服務商名稱',
   'onboarding.protocol': '協議',
@@ -468,7 +435,6 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.chooseModel': '選擇模型...',
   'onboarding.chooseEndpoint': '選擇端點...',
 
-  // LanChatView
   'lanchat.groupChat': '群聊',
   'lanchat.chat': '聊天',
   'lanchat.agentSuffix': ' (agent)',
@@ -477,37 +443,24 @@ const zh: Record<TranslationKey, string> = {
   'lanchat.broadcastPlaceholder': '廣播给所有人...',
   'lanchat.dmPlaceholder': '给 {name} 發消息...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': '輸入你的回答...',
 
-  // IMManagement
   'im.editAdapter': '編輯: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': '搜索文件...',
   'files.officeDocument': 'Office 文檔',
   'files.openExternal': '使用外部應用打開查看',
   'files.htmlPreview': 'HTML 預覽',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': '切換上下文面板',
 
-  // TeamBoard
   'team.boardTitle': '任務面板',
 
-  // Common shared
   'common.dismiss': '關閉通知',
   'common.cancel': '取消',
   'common.save': '保存',
   'common.copyToClipboard': '復制到剪貼板',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': '在当前工作區中瀏覽文件。',
   'settings.openFiles': '打開文件',
   'settings.contextUsageDesc': '在運行長任務前檢查上下文使用情況和 Token/緩存總量。',
@@ -524,7 +477,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.integrationsDesc': '從一個地方管理現有桌面功能。這些快捷方式會打開当前專用界面，不會更改任何后端配置。',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': '工具審批',
   'common.closeDialog': '關閉對話框',
   'common.cancelBtn': '取消',
@@ -548,7 +500,6 @@ const zh: Record<TranslationKey, string> = {
   'common.pinWindow': '視窗置頂',
   'common.unpinWindow': '取消置頂',
 
-  // SettingsPage option labels
   'settings.chooseVendor': '選擇供應商...',
   'settings.chooseEndpoint': '選擇端點...',
   'settings.modeSupervised': '受控模式（逐個確認工具）',
@@ -556,37 +507,24 @@ const zh: Record<TranslationKey, string> = {
   'settings.modeBypassAll': '繞過模式（自動批準大部分工具）',
   'settings.saveModeHint': '保存以持久化此默認模式。運行時模式更改仍遵循應用程序的正常模式處理。',
 
-  // Dialogs
   'dialogs.newVersion': '發現新版本：v',
   'dialogs.download': '下載',
   'dialogs.upToDate': '已是最新版本 (v',
   'dialogs.productName': 'GGCode 桌面版',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': '正在渲染圖錶...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': '始終',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': '需要 OAuth 登錄',
   'mcp.oauthHint': '使用瀏覽器登錄以授權此 MCP 服務器。',
 
-  // Onboarding
   'onboarding.customProvider': '+ 自定義供應商',
   'onboarding.a2a': 'A2A 服務',
   'onboarding.a2aDesc': '啟用代理間通訊（推薦）',
   'onboarding.languageTitle': '選擇您的語言',
   'onboarding.languageHint': '稍後可以在設定中更改',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': '查看桌面端 agent 当前的自主權限。此處僅匯總現有行為，不更改高級工具策略。',
   'settings.workspaceAccessHint': '文件工具在当前工作區和配置的允許目錄內操作。高級目錄編輯目前不在此處開放，以避免意外更改安全邊界。',
   'settings.appearanceHint': '自定義視觉主題。應用默認跟随系統偏好設置。',
@@ -608,7 +546,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.modeDescFullAutopilot': 'Agent 拥有高自主性，可自動執行多個步骤。在重要代碼上使用前请先查看工作區狀態。',
   'settings.modeDescFullSupervised': 'Agent 在執行未指定的工具操作前會先詢問。這是桌面端正常使用的平衡默認值。',
 
-  // Toast messages
   'toast.settingsSaved': '設置已保存',
   'toast.settingsLoadFailed': '加載設置失敗：{error}',
   'toast.endpointsLoadFailed': '加載端點失敗：{error}',
@@ -644,43 +581,21 @@ const zh: Record<TranslationKey, string> = {
   'toast.sessionOpenFailed': '打開會話失敗：{error}',
   'toast.copiedMessages': '已復制 {count} 條消息到剪貼板',
 
-  // FileBrowser
-
-  // ApprovalDialog risk levels
   'approval.riskHigh': '高風險',
   'approval.riskMedium': '中風險',
   'approval.riskLow': '低風險',
 
-  // DebugConsole
-
-  // Sidebar context menu
-
-  // ChatView context menu & run stats
-
-  // Dialogs links
-
-  // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
   'mcp.descStdio': '通過 stdin/stdout 的本地進程',
   'mcp.descHttp': '通過 HTTP 的遠程服務器（Streamable HTTP / SSE）',
   'mcp.descWs': '通過 WebSocket 的遠程服務器',
 
-  // IMManagement
-
-  // PairingCodeDialog
-
-  // LanChatView
-
-  // ContextPanel
-
-  // SettingsPage
   'settings.oauthConnected': '已連接',
   'settings.oauthNotConnected': '未連接',
   'settings.oauthLoggingIn': '正在登錄...',
   'settings.login': '登錄',
   'settings.failedFetchModels': '獲取模型失敗',
 
-  // Sidebar context menu
   'sidebar.menuOpen': '打開',
   'sidebar.menuRename': '重命名',
   'sidebar.menuPin': '置頂',
@@ -695,19 +610,16 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.renamedToast': '會話已重命名',
   'sidebar.copyFailedToast': '復制失敗',
 
-  // ChatView context menu
   'chat.menuCopy': '復制',
   'chat.menuEdit': '編輯',
   'chat.menuRegenerate': '重新生成',
 
-  // ChatView run stats
   'chat.runStatDuration': '耗時',
   'chat.runStatTools': '工具',
   'chat.runStatFiles': '文件',
   'chat.runStatErrors': '錯誤',
   'chat.runStatTokens': '令牌',
 
-  // Dialogs links
   'dialogs.github': 'GitHub',
   'dialogs.releases': '發布',
   'dialogs.issues': '問題',
@@ -715,12 +627,10 @@ const zh: Record<TranslationKey, string> = {
   'dialogs.checkUpdate': '檢查更新',
   'dialogs.checking': '檢查中...',
 
-  // MCPServers oauth
   'mcp.oauthOpening': '正在打開瀏覽器進行 MCP 登錄...',
   'mcp.oauthCompleteBrowser': '在瀏覽器中完成登錄后返回此處。',
   'mcp.oauthReconnecting': '登錄完成。正在重新連接 MCP 服務器...',
 
-  // AskUser
   'askUser.notesPlaceholder': '附加備注（可選）',
 }
 

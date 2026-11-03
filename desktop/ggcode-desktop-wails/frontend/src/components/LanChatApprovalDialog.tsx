@@ -5,7 +5,6 @@ import type { LanChatPendingApproval } from '../types'
 import { useTranslation } from '../i18n'
 
 function safeMarkdown(text: string): string {
-  // Minimal markdown safety — reuses the same marked() pipeline as ChatView
   try {
     // @ts-ignore - marked is loaded globally
     return window.marked ? window.marked.parse(text) : text
@@ -32,7 +31,6 @@ export function LanChatApprovalDialog() {
     return () => { mounted = false; off(); offCancel() }
   }, [])
 
-  // Nothing pending — render nothing
   if (approvals.length === 0) return null
 
   const removeOne = (id: string) => {

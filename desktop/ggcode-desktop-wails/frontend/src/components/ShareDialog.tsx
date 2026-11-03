@@ -18,14 +18,12 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    // Auto-start sharing on mount
     startSharing()
   }, [])
 
   useEffect(() => {
     EventsOn('tunnel:connected', () => {
       setConnected(true)
-      // Auto-close the dialog once a mobile client has connected.
       setTimeout(() => onClose(), 600)
     })
     EventsOn('tunnel:disconnected', () => {
@@ -85,7 +83,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
         display: 'flex', flexDirection: 'column', gap: 16,
       }} onClick={e => e.stopPropagation()}>
 
-        {/* Header */}
+        {}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Smartphone size={20} style={{ color: 'var(--color-primary)' }} />
@@ -99,7 +97,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           }}><X size={18} /></button>
         </div>
 
-        {/* QR Code */}
+        {}
         {loading && (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-tertiary)' }}>
             {t('share.generating')}
@@ -124,7 +122,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {/* Connection URL */}
+        {}
         {shareInfo?.connectURL && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -145,7 +143,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {/* Connection status */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 12px', borderRadius: 'var(--radius-md)',
@@ -162,7 +160,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           </span>
         </div>
 
-        {/* Download links */}
+        {}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
           <a href="https://apps.apple.com/us/app/ggcode-mobile/id6770855612" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 4,
@@ -181,7 +179,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           }}><ExternalLink size={12} /> Discord</a>
         </div>
 
-        {/* Stop sharing */}
+        {}
         {shareInfo && (
           <button onClick={stopSharing} style={{
             padding: '8px 16px', borderRadius: 'var(--radius-md)',

@@ -10,16 +10,12 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
 import { appendAssistantChunk, appendReasoningChunk, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
 
-// Configure marked — no special mermaid handling, we split manually.
 marked.setOptions({ gfm: true, breaks: true })
 
-// Split content into segments: plain markdown, mermaid blocks, and svg blocks.
-// During streaming, an unclosed block is held back until completed.
 function splitContent(content: string): { type: 'markdown' | 'mermaid' | 'svg'; text: string }[] {
   const segments: { type: 'markdown' | 'mermaid' | 'svg'; text: string }[] = []
   let i = 0
   while (i < content.length) {
-    // Look for the next code fence
     const fenceMatch = content.slice(i).match(/```(mermaid|svg)\n?/)
     if (!fenceMatch) {
       const rest = content.slice(i)
@@ -29,26 +25,21 @@ function splitContent(content: string): { type: 'markdown' | 'mermaid' | 'svg'; 
     const lang = fenceMatch[1] as 'mermaid' | 'svg'
     const absStart = i + fenceMatch.index!
 
-    // Plain markdown before this fence
     const before = content.slice(i, absStart)
     if (before) segments.push({ type: 'markdown', text: before })
 
-    // Find the opening newline after ```mermaid/svg
     const afterOpen = absStart + fenceMatch[0].length
-    // Look for closing ```
     const closeFence = content.indexOf('\n```', afterOpen)
     if (closeFence === -1) {
-      // Unclosed block — hold back, don't show
       break
     }
     const blockSrc = content.slice(afterOpen, closeFence)
     segments.push({ type: lang, text: blockSrc })
-    i = closeFence + 4 // skip past \n```
+    i = closeFence + 4
   }
   return segments
 }
 
-// Safe markdown render with error protection
 function safeMarkdown(text: string): string {
   if (!text) return ''
   try {
@@ -58,45 +49,39 @@ function safeMarkdown(text: string): string {
   }
 }
 
-// Post-process rendered HTML: add copy button + language label to <pre> blocks
 function enhanceCodeBlocks(container: HTMLElement) {
   const preBlocks = container.querySelectorAll('pre')
   preBlocks.forEach((pre) => {
-    if (pre.querySelector('.code-block-header')) return // already enhanced
+    if (pre.querySelector('.code-block-header')) return
 
     const code = pre.querySelector('code')
     if (!code) return
 
-    // Extract language from class name (e.g., "language-go" → "go")
     const langClass = Array.from(code.classList).find((c: string) => c.startsWith('language-'))
     const lang = langClass ? langClass.replace('language-', '') : ''
 
-    // Apply syntax highlighting (CSS theme already imported via FileBrowser)
     try {
       if (!code.hasAttribute('data-highlighted')) {
         if (lang && hljs.getLanguage(lang)) {
           hljs.highlightElement(code)
         } else {
-          hljs.highlightElement(code) // auto-detect
+          hljs.highlightElement(code)
         }
         code.setAttribute('data-highlighted', 'true')
       }
-    } catch { /* ignore highlighting errors */ }
+    } catch {  }
 
-    // Create wrapper: make <pre> position relative, add header bar
     pre.style.position = 'relative'
 
     const header = document.createElement('div')
     header.className = 'code-block-header'
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px;font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono,SF Mono,monospace);'
 
-    // Language label
     const langSpan = document.createElement('span')
     langSpan.textContent = lang || 'text'
     langSpan.style.cssText = 'opacity:0.7;text-transform:lowercase;'
     header.appendChild(langSpan)
 
-    // Copy button
     const copyBtn = document.createElement('button')
     copyBtn.textContent = 'Copy'
     copyBtn.style.cssText = 'padding:1px 8px;border-radius:3px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--text-tertiary);cursor:pointer;font-size:11px;opacity:0;transition:opacity 0.15s;'
@@ -125,13 +110,10 @@ function enhanceCodeBlocks(container: HTMLElement) {
     })
     header.appendChild(copyBtn)
 
-    // Insert header at top of <pre>, before <code>
     pre.insertBefore(header, code)
 
-    // Adjust <pre> padding top since header is now inside
     pre.style.paddingTop = '4px'
 
-    // Collapse long code blocks (>30 lines) with expand toggle
     const lineCount = (code.textContent || '').split('\n').length
     if (lineCount > 30) {
       const collapsedMaxHeight = '420px'
@@ -163,10 +145,9 @@ function enhanceCodeBlocks(container: HTMLElement) {
       })
       pre.appendChild(expandBtn)
     }
-    // Intercept external links: open in system browser instead of navigating webview
     const anchors = container.querySelectorAll<HTMLAnchorElement>('a[href]')
     anchors.forEach((a) => {
-      if (a.getAttribute('data-external')) return // already intercepted
+      if (a.getAttribute('data-external')) return
       const href = a.getAttribute('href') || ''
       if (href.startsWith('http://') || href.startsWith('https://')) {
         a.setAttribute('data-external', 'true')
@@ -180,7 +161,6 @@ function enhanceCodeBlocks(container: HTMLElement) {
   })
 }
 
-// Highlight diff code blocks: green for added lines, red for removed lines
 function enhanceDiffBlocks(container: HTMLElement) {
   const diffBlocks = container.querySelectorAll<HTMLPreElement>('pre code.language-diff')
   diffBlocks.forEach((code) => {
@@ -203,7 +183,6 @@ function enhanceDiffBlocks(container: HTMLElement) {
   })
 }
 
-// Render message content: split into markdown + mermaid segments
 const MessageContent = React.memo(function MessageContent({ content }: { content: string }) {
   const segments = useMemo(() => splitContent(content), [content])
   const htmlCache = useMemo(() => segments.map(seg => {
@@ -229,7 +208,6 @@ const MessageContent = React.memo(function MessageContent({ content }: { content
         if (seg.type === 'svg') {
           return <div key={i} className="svg-rendered" dangerouslySetInnerHTML={{ __html: seg.html }} />
         }
-        // Mermaid block — will be rendered by useEffect
         return (
           <pre key={i} className="mermaid-src">
             <code className="language-mermaid">{seg.text}</code>
@@ -239,8 +217,6 @@ const MessageContent = React.memo(function MessageContent({ content }: { content
     </div>
   )
 })
-
-// ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
 type ChatRole = 'user' | 'assistant' | 'system' | 'tool' | 'reasoning' | 'error'
 
@@ -267,13 +243,13 @@ interface ChatMessage {
   isError?: boolean
   streaming?: boolean
   timestamp: number
-  toolDurationSec?: number // seconds the tool took to complete
-  source?: string // 'im' | 'mobile' | 'lanchat' — non-UI message origin
-  lanchatFrom?: string // parsed nick from [LAN Chat from xxx]:
+  toolDurationSec?: number
+  source?: string
+  lanchatFrom?: string
   deliveryStatus?: 'pending' | 'sent' | 'failed'
-  reasoningDuration?: number // seconds, set when reasoning completes
-  responseDuration?: number // seconds, set when assistant response completes
-  runSummary?: RunSummaryData // present on system messages that summarize a completed run
+  reasoningDuration?: number
+  responseDuration?: number
+  runSummary?: RunSummaryData
 }
 
 interface RunSummaryData {
@@ -285,11 +261,6 @@ interface RunSummaryData {
   filesEdited?: number
 }
 
-/** Parse LAN Chat injection format:
- *  "New user guidance arrived...\n\n[LAN Chat from nick]: content"
- *  or "[LAN Chat from nick]: content"
- *  Returns the extracted nick and cleaned content (without the prefix).
- */
 function parseLanChatContent(raw: string): { from: string; content: string } | null {
   const match = raw.match(/\[LAN Chat from (.+?)\]:\s*/m)
   if (!match) return null
@@ -298,7 +269,6 @@ function parseLanChatContent(raw: string): { from: string; content: string } | n
   return { from, content }
 }
 
-// Agent panel: a sub-agent or teammate has its own tab with its own message stream
 interface AgentPanel {
   id: string
   name: string
@@ -308,8 +278,6 @@ interface AgentPanel {
   messages: ChatMessage[]
   reasoningBuf: string
 }
-
-// ── Event types (mirrors wailskit/chat.go emit()) ────────────────────────────
 
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done' | 'system'
@@ -325,8 +293,6 @@ interface DonePayload { inputTokens?: number; outputTokens?: number }
 interface ErrorPayload { message: string }
 interface ReasoningPayload { content: string }
 
-// ── Status bar state ─────────────────────────────────────────────────────────
-
 interface StatusBarState {
   vendor: string
   model: string
@@ -341,15 +307,10 @@ interface StatusBarState {
   cacheRead: number
   cacheWrite: number
   cacheHit: number
-  // #4727: billing type from the Go side (mirror of TUI resolveRate) -
-  // 'subscription' sessions render "included in {plan}" instead of a
-  // per-token estimated cost.
   pricingType: string
   planLabel: string
   status: string
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 let idCounter = 0
 function nextID(): string {
@@ -393,7 +354,6 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
       streaming: !!h.streaming,
       timestamp: previous[index]?.timestamp || Date.now(),
     }
-    // Parse LAN Chat source from content for user messages loaded from history
     if (candidate.role === 'user' && typeof candidate.content === 'string') {
       const parsed = parseLanChatContent(candidate.content)
       if (parsed) {
@@ -414,14 +374,8 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
   return next
 }
 
-// Max messages kept in the DOM. When exceeded, oldest are trimmed.
-// Prevents UI degradation in long sessions (10+ hours of continuous use).
-// 500 balances performance and context visibility — an autopilot agent
-// running hundreds of turns with ~5 messages per turn (text + tool calls
-// + results + reasoning) still shows the last ~100 LLM turns.
 const MAX_RENDERED_MESSAGES = 500
 
-// Helper: append message(s) and trim from top if over limit
 function appendAndTrim(prev: ChatMessage[], ...newMsgs: ChatMessage[]): ChatMessage[] {
   const combined = [...prev, ...newMsgs]
   if (combined.length <= MAX_RENDERED_MESSAGES) return combined
@@ -455,14 +409,10 @@ function formatTextAttachment(att: any): string {
   return `\n\n--- ${name}${path} ---\n${att.content || ''}\n--- end ${name} ---`
 }
 
-// ── Code paste detection ────────────────────────────────────────────────────
-
-/** Detects programming language from text content using heuristics. */
 function detectCodeLanguage(text: string): string | null {
   const t = text.trim()
   const first50 = t.slice(0, 50)
 
-  // Shebang line
   if (/^#!\/(usr\/)?bin\//.test(t)) {
     if (/bash|sh|zsh/.test(first50)) return 'bash'
     if (/python/.test(first50)) return 'python'
@@ -471,83 +421,63 @@ function detectCodeLanguage(text: string): string | null {
     return 'bash'
   }
 
-  // Dockerfile directives
   if (/^(FROM|RUN|COPY|ADD|CMD|ENTRYPOINT|ENV|ARG|WORKDIR|EXPOSE|VOLUME|LABEL|HEALTHCHECK)\s/m.test(t)) return 'dockerfile'
 
-  // Go: package + func + :=
   if (/^package\s+\w+/m.test(t) || /\bfunc\s+(\(\s*\w+\s+\*?\w+\s*\)\s+)?\w+\s*\(/.test(t)) return 'go'
 
-  // Rust
   if (/^(pub\s+)?(fn|impl|trait|use|mod|struct|enum|match)\s/m.test(t)) return 'rust'
 
-  // Python: def/class/import + colon-indent
   if (/^(def |class |import |from )/m.test(t) || /^\s+(if |elif |else:|for |while |try:|except|finally:)/m.test(t)) return 'python'
 
-  // TypeScript/JavaScript: import/export/const/=>/interface
   if (/\b(import|export)\s+/.test(t) || /\binterface\s+\w+/.test(t)) return 'typescript'
   if (/=>/.test(t) || /\bconst\s+\w+\s*=/.test(t) || /\blet\s+\w+\s*=/.test(t)) return 'javascript'
 
-  // Java/C#: class with access modifiers
   if (/\b(public|private|protected)\s+(static\s+)?(class|void|int|String|boolean)\b/.test(t)) return 'java'
 
-  // C/C++: #include + main
   if (/^#include\s+[<\"]/.test(t) || /\bint\s+main\s*\(/.test(t)) return 'cpp'
 
-  // SQL
   if (/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\s+/i.test(t) && /\b(FROM|INTO|TABLE|SET|WHERE)\b/i.test(t)) return 'sql'
 
-  // HTML/XML
   if (/^<\?xml/.test(t) || /^<!DOCTYPE\s+html/i.test(t) || /^<html/i.test(t)) return 'html'
 
-  // CSS/SCSS: selector { ... }
   if (/^[\w\-.#:\[\]>,\s]+\s*\{[^}]*[:;]/m.test(t)) return 'css'
 
-  // YAML: key: value on multiple lines
   if (/^[\w\-.]+\s*:\s/m.test(t) && /\n[\w\-.]+\s*:\s/m.test(t)) return 'yaml'
 
-  // JSON (starts with { or [)
   if (/^[{[]/.test(t) && /[}\]]\s*$/.test(t)) return 'json'
 
-  // Shell commands
   if (/^(echo |cd |ls |mkdir |rm |cp |mv |sudo |apt |brew |git |npm |yarn |pip |cargo |go |docker |kubectl )/m.test(t)) return 'bash'
 
   return null
 }
 
-/** Heuristic: is this pasted text likely to be source code? */
 function isLikelyCode(text: string): { isCode: boolean; language: string | null } {
   const trimmed = text.trim()
   if (trimmed.length < 10) return { isCode: false, language: null }
 
-  // Reject URLs (commonly pasted, can match patterns)
   if (/^https?:\/\//.test(trimmed)) return { isCode: false, language: null }
 
   const lines = trimmed.split('\n')
 
-  // Strong signal: tab indentation
   if (/\t/.test(text) && lines.length > 1) {
     return { isCode: true, language: detectCodeLanguage(text) }
   }
 
-  // Strong signal: 4+ space indentation on multiple lines
   const indentedLines = lines.filter(l => /^ {4,}\S/.test(l))
   if (indentedLines.length >= 2) {
     return { isCode: true, language: detectCodeLanguage(text) }
   }
 
-  // Language-specific patterns
   const language = detectCodeLanguage(text)
   if (language) {
     return { isCode: true, language }
   }
 
-  // Multiple lines ending with semicolons (C-like)
   const semicolonLines = lines.filter(l => /;\s*$/.test(l))
   if (semicolonLines.length >= 3 && lines.length > 2) {
     return { isCode: true, language: null }
   }
 
-  // Multiple brace lines
   if (/\{/.test(text) && /\}/.test(text)) {
     const braceLines = lines.filter(l => /[{}]/.test(l))
     if (braceLines.length >= 3) {
@@ -557,8 +487,6 @@ function isLikelyCode(text: string): { isCode: boolean; language: string | null 
 
   return { isCode: false, language: null }
 }
-
-// ── Slash command definitions ────────────────────────────────────────────────
 
 interface SlashCommand {
   cmd: string
@@ -592,9 +520,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/bug', desc: 'Report a bug', category: 'system' },
 ]
 
-// ── Activity label helper ────────────────────────────────────────────────────
-
-/** Maps tool names to human-readable activity labels for the typing indicator. */
 function getActivityLabel(toolName: string, t: (key: string) => string): string {
   switch (toolName) {
     case 'read_file':
@@ -666,20 +591,17 @@ function getActivityLabel(toolName: string, t: (key: string) => string): string 
     case 'sleep':
       return t('chat.activity.waiting')
     default:
-      // Unknown tools → generic
       if (toolName.startsWith('mcp_'))
         return t('chat.activity.running')
       return t('status.thinking')
   }
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast, onNewSession }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void; onNewSession?: () => void }) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
-  const [activeTab, setActiveTab] = useState<string>('main') // 'main' or agentID
+  const [activeTab, setActiveTab] = useState<string>('main')
   const [input, setInput] = useState('')
   const [inputHistory, setInputHistory] = useState<string[]>([])
   const historyIdxRef = useRef(-1)
@@ -687,7 +609,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [thinking, setThinking] = useState(false)
   const [currentActivity, setCurrentActivity] = useState<string | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
-  const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
+  const [agentElapsed, setAgentElapsed] = useState(0)
   const [statusBar, setStatusBar] = useState<StatusBarState>({
     vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, compactRemainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, pricingType: '', planLabel: '', status: 'ready',
   })
@@ -699,20 +621,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const windowFocusedRef = useRef(true)
   const titleFlashRef = useRef<{ interval: ReturnType<typeof setInterval> | null; origTitle: string }>({ interval: null, origTitle: '' })
 
-  // --- Task completion notification: flash document title when window not focused ---
   useEffect(() => {
     const origTitle = document.title
     titleFlashRef.current.origTitle = origTitle
 
     const handleFocus = () => {
       windowFocusedRef.current = true
-      // Stop flashing and restore title
       if (titleFlashRef.current.interval) {
         clearInterval(titleFlashRef.current.interval)
         titleFlashRef.current.interval = null
         document.title = titleFlashRef.current.origTitle
       }
-      // #2410: focus also clears the unread-count prefix.
       if (/^\(\d+\) /.test(document.title)) {
         document.title = titleFlashRef.current.origTitle
       }
@@ -733,8 +652,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [])
 
   const notifyTaskDone = useCallback(() => {
-    if (windowFocusedRef.current) return // Window is focused, no need to notify
-    if (titleFlashRef.current.interval) return // Already flashing
+    if (windowFocusedRef.current) return
+    if (titleFlashRef.current.interval) return
     const orig = titleFlashRef.current.origTitle || 'ggcode'
     let toggle = false
     titleFlashRef.current.interval = setInterval(() => {
@@ -743,7 +662,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }, 1000)
   }, [])
 
-  // --- Agent working timer ---
   useEffect(() => {
     if (!thinking && !isStreaming) {
       setAgentElapsed(0)
@@ -756,27 +674,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => clearInterval(interval)
   }, [thinking, isStreaming])
 
-  // --- In-conversation search ---
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIdx, setSearchMatchIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // --- Slash command autocomplete ---
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashIdx, setSlashIdx] = useState(0)
   const slashListRef = useRef<HTMLDivElement>(null)
 
-  // Filter commands based on current input
   const slashFiltered = useMemo(() => {
     const trimmed = input.trimStart()
     if (!trimmed.startsWith('/')) return []
-    // Only trigger when the slash is at the beginning of the line
     const beforeCursor = input.slice(0, inputRef.current?.selectionStart ?? input.length)
     const lineStart = beforeCursor.lastIndexOf('\n') + 1
     const linePrefix = beforeCursor.slice(lineStart)
     if (!linePrefix.startsWith('/')) return []
-    // Don't trigger if there's a space (command name complete)
     if (linePrefix.includes(' ')) return []
     const query = linePrefix.toLowerCase()
     return SLASH_COMMANDS.filter(c => c.cmd.startsWith(query))
@@ -791,7 +704,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [slashFiltered, slashOpen])
 
-  // --- Identity (nick/role/team) ---
   const [selfNick, setSelfNick] = useState('')
   const [selfRole, setSelfRole] = useState('')
   const [selfTeam, setSelfTeam] = useState('')
@@ -800,7 +712,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [editRole, setEditRole] = useState('')
   const [editTeam, setEditTeam] = useState('')
 
-  // Load identity on mount, and refresh when session changes
   useEffect(() => {
     let mounted = true
     const refresh = async () => {
@@ -829,7 +740,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         setTeamBoardOpen(true)
       }
     } catch {
-      // Team board is an auxiliary view; keep chat usable if the snapshot fails.
     }
   }, [])
 
@@ -850,7 +760,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [agentPanels])
 
-  // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
     setAgentPanels(prev => {
       const next = new Map(prev)
@@ -862,7 +771,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
   }, [])
 
-  // Helper: ensure agent panel exists, create if not
   const ensureAgentPanel = useCallback((agentID: string, name: string, kind: 'subagent' | 'teammate') => {
     setAgentPanels(prev => {
       if (prev.has(agentID)) return prev
@@ -872,7 +780,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
   }, [])
 
-  // Helper: remove a completed/failed agent panel (close tab)
   const removeAgentPanel = useCallback((agentID: string) => {
     setAgentPanels(prev => {
       const next = new Map(prev)
@@ -884,21 +791,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   const messagesRef = useRef<ChatMessage[]>([])
 
-  // Load session history when sessionId changes.
-  // Do not let an async history response overwrite an active live stream.
-  // Track the last sessionId we loaded history for — prevents duplicate loads
   const loadedSessionRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    // If no sessionId from parent, try to fetch it directly from backend.
     if (!sessionId) {
-      // #630/#646: an explicit EMPTY id means the backend cleared the
-      // current session (e.g. the active session was deleted and the
-      // session:changed '' handler in Layout reset its state). Drop the
-      // stale transcript so the deleted session stops rendering; the next
-      // message then visibly starts a fresh session. Distinguish '' from
-      // the initial undefined — on first mount nothing has loaded yet and
-      // the backend may still hand us the auto-loaded session id below.
       if (sessionId === '' && loadedSessionRef.current !== undefined && !runActiveRef.current) {
         loadedSessionRef.current = undefined
         setMessages([])
@@ -907,20 +803,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       }
       App.GetCurrentSessionID().then((id: any) => {
         if (typeof id === 'string' && id) {
-          // session:changed event in Layout will provide the sessionId
         }
       }).catch(() => {})
       return
     }
 
-    // Skip if we already loaded this session — prevents clearing on re-renders
     if (sessionId === loadedSessionRef.current) return
     loadedSessionRef.current = sessionId
 
-    // If agent is actively running, don't clear
     if (runActiveRef.current) return
 
-    // Session changed — load history
     setMessages([])
     messagesRef.current = []
     setThinking(false)
@@ -940,13 +832,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       messagesRef.current = loaded
       setMessages(loaded)
       setHistoryLoading(false)
-      // For session load: always scroll to bottom, don't restore old position.
       try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
     }).catch(() => { setHistoryLoading(false) })
     return () => { cancelled = true }
   }, [sessionId])
 
-  // Draft persistence: save/restore unsent input text per session
   useEffect(() => {
     if (!sessionId || !input) return
     try { sessionStorage.setItem(`draft:${sessionId}`, input) } catch {}
@@ -959,7 +849,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     } catch { setInput('') }
   }, [sessionId])
 
-  // Restore scroll position after history loads (session switch)
   useEffect(() => {
     const sid = scrollRestorePendingRef.current
     if (!sid) return
@@ -980,7 +869,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     } catch {}
   }, [messages])
 
-  // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
   const isStreamingRef = useRef(false)
   const runActiveRef = useRef(false)
@@ -1000,7 +888,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [contextBannerDismissed, setContextBannerDismissed] = useState(false)
-  // Track unread messages when scrolled up
   useEffect(() => {
     const delta = messages.length - prevMsgCountRef.current
     if (delta > 0 && showScrollBtn) {
@@ -1009,17 +896,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     prevMsgCountRef.current = messages.length
   }, [messages, showScrollBtn])
 
-  // Reset unread when scrolled back to bottom
   useEffect(() => { if (!showScrollBtn) setUnreadCount(0) }, [showScrollBtn])
-  // Re-enable context banner when usage drops back below 80%
   useEffect(() => { if (statusBar.usagePercent < 80) setContextBannerDismissed(false) }, [statusBar.usagePercent])
   const [isDragOver, setIsDragOver] = useState(false)
   const dragCounterRef = useRef(0)
 
-  // === NATIVE FILE DROP (OS file manager drag-and-drop via Wails) ===
-  // Wails emits 'file:drop' with absolute file paths when the user drags
-  // files from Finder/Explorer into the window. We insert the paths as
-  // text references into the input box.
   useEffect(() => {
     const offFileDrop = EventsOn('file:drop', (data: { paths: string[] }) => {
       if (!data?.paths || data.paths.length === 0) return
@@ -1028,15 +909,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         const sep = prev && !prev.endsWith('\n') ? '\n' : ''
         return `${prev}${sep}${pathRefs}\n`
       })
-      // Focus input after file drop
       requestAnimationFrame(() => inputRef.current?.focus())
     })
     return () => { offFileDrop() }
   }, [])
 
-  // === SYSTEM TRAY EVENTS ===
-  // tray:show -> bring window to front (handled by OS already)
-  // tray:new-session -> start a new chat session
   useEffect(() => {
     const offTrayNew = EventsOn('tray:new-session', () => {
       if (onNewSession) onNewSession()
@@ -1048,7 +925,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
 
-  // === SCROLL LOGIC — minimal, no timers, no suppress flags ===
   const scrollRafRef = useRef<number | null>(null)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const programmaticScrollRef = useRef(false)
@@ -1060,16 +936,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       scrollRafRef.current = null
       const c = scrollContainerRef.current
       if (c) {
-        // Set flag so onScroll handler ignores this programmatic scroll
         programmaticScrollRef.current = true
         c.scrollTop = c.scrollHeight
       }
     })
   }, [])
 
-  // Scroll to bottom on any messages change (new message OR content update
-  // during streaming). The rAF debounce in doScrollToBottom ensures we only
-  // scroll once per animation frame even if messages updates fire many times.
   const lastMsgSigRef = useRef('')
   const lastScrollTimeRef = useRef(0)
   useEffect(() => {
@@ -1079,7 +951,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     lastMsgSigRef.current = sig
 
     if (changed && getTabAutoScroll(autoScrollByTabRef.current, activeTab)) {
-      // Throttle: at most once per 80ms during streaming to prevent jitter
       const now = Date.now()
       if (now - lastScrollTimeRef.current >= 80) {
         lastScrollTimeRef.current = now
@@ -1088,7 +959,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [messages, activeTab, doScrollToBottom])
 
-  // Cleanup pending rAF on unmount
   useEffect(() => {
     return () => {
       if (scrollRafRef.current !== null) {
@@ -1115,10 +985,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => window.clearInterval(id)
   }, [currentTabStreaming, activeTab, doScrollToBottom])
 
-  // Render mermaid diagrams — eagerly try on every message update.
-  // Success: replace with SVG, mark data-done (no retry).
-  // Failure (incomplete syntax): mark data-fail, will retry on next chunk.
-  // Failure (permanent): mark data-done, leave as code block.
   useEffect(() => {
     const blocks = document.querySelectorAll('.mermaid-src:not([data-done])')
     if (blocks.length === 0) return
@@ -1134,7 +1000,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         try {
           const id = `mermaid-svg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
           const { svg } = await mermaid.render(id, src)
-          // Success — replace with SVG, never retry
           block.setAttribute('data-done', '1')
           const wrapper = document.createElement('div')
           wrapper.className = 'mermaid-rendered'
@@ -1142,11 +1007,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           block.replaceWith(wrapper)
         } catch (e: any) {
           const msg = String(e?.message || e || '')
-          // If it looks like a syntax error from incomplete input, allow retry
           if (msg.includes('Parse error') || msg.includes('Lexical error') || msg.includes('unexpected')) {
             block.setAttribute('data-fail', '1')
           } else {
-            // Permanent error — stop retrying
             block.setAttribute('data-done', '1')
           }
         }
@@ -1154,8 +1017,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })()
     return () => { cancelled = true }
   }, [sessionId])
-
-  // ── Event stream handler (follows Fyne chat_view.go handleEvent) ────────
 
   const handleStreamEvent = useCallback((evt: StreamEvent) => {
       const raw = evt.data
@@ -1192,7 +1053,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const toolID = p?.toolID || p?.tool_id || p?.id
           if (!p?.name || !toolID) break
 
-          // exit_plan_mode: render plan as markdown, skip tool call UI
           if (p.name === 'exit_plan_mode') {
             const planArgs = parseJSON<{ plan: string }>(p.arguments || '{}')
             if (planArgs?.plan) {
@@ -1205,7 +1065,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             break
           }
 
-          // enter_plan_mode: just show brief indicator, skip tool call UI
           if (p.name === 'enter_plan_mode') {
             setMessages(prev => appendAndTrim(prev, {
               id: nextID(), role: 'assistant' as const,
@@ -1215,9 +1074,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             break
           }
 
-          // Track for run summary
           runMetricsRef.current.toolCalls++
-          // Update context-aware activity label
           setCurrentActivity(getActivityLabel(p.name, t as (key: string) => string))
           if (p.name === 'edit_file' || p.name === 'write_file' || p.name === 'multi_edit_file' || p.name === 'multi_file_write' || p.name === 'multi_file_edit') {
             runMetricsRef.current.fileEdits++
@@ -1226,7 +1083,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setMessages(prev => {
             const exists = prev.some(m => m.role === 'tool' && m.toolID === toolID)
             if (exists) return prev
-            // Close streaming for text/reasoning only, not other tool calls
             const doneAt = Date.now()
             const msgs = prev.map(m =>
               m.streaming && m.role !== 'tool'
@@ -1261,10 +1117,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setThinking(false)
           setCurrentActivity(null)
           streamingMsgID.current = null
-          // Close streaming for text/reasoning messages only. The overall run
-          // remains busy until run_done because done only marks one model
-          // iteration, and tools or follow-up model iterations may still run.
-          // Tool messages stay streaming until their tool_result arrives.
           setMessages(prev => finishAssistantMessage(prev, p?.message_id))
           break
         }
@@ -1280,7 +1132,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const p = parseJSON<{ text: string; source: string }>(raw)
           if (p?.text) {
             streamingMsgID.current = null
-            // Parse LAN Chat injection format
             let displayContent = p.text
             let lanchatFrom: string | undefined
             const parsed = parseLanChatContent(p.text)
@@ -1294,8 +1145,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               timestamp: Date.now(),
               ...(lanchatFrom ? { source: 'lanchat', lanchatFrom } : p.source ? { source: p.source } : {}),
             }))
-            // For non-desktop sources (cron, im, mobile), the backend has
-            // already started the agent run. Activate streaming UI state.
             if (p.source && p.source !== 'desktop') {
               runActiveRef.current = true
               runMetricsRef.current = { startTime: Date.now(), toolCalls: 0, errors: 0, fileEdits: 0, inputTokens: 0, outputTokens: 0 }
@@ -1326,7 +1175,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setStatusBar(s => ({ ...s, status: 'idle' }))
           notifyTaskDone()
           setMessages(prev => finishAssistantRun(prev))
-          // Inject run summary card (skip trivial runs: <3s with no tools and no errors)
           const rm = runMetricsRef.current
           const dur = rm.startTime ? Math.max(1, Math.round((Date.now() - rm.startTime) / 1000)) : 0
           if (dur >= 3 || rm.toolCalls > 0 || rm.errors > 0) {
@@ -1337,7 +1185,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             }))
             void totalTokens
           }
-          // Clear completed agent panels
           setAgentPanels(prev => {
             const next = new Map<string, AgentPanel>()
             for (const [id, panel] of prev) {
@@ -1374,8 +1221,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
 
-        // ── Sub-agent events ──
-        // ── Sub-agent events → route to agent panel ──
         case 'subagent_text': {
           const p = parseJSON<{ agentID: string; title?: string; content: string }>(raw)
           if (!p) break
@@ -1413,7 +1258,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (!p) break
           ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => {
-            // Only close text/reasoning streaming, not other tool calls
             const closeAt = Date.now()
             const msgs = panel.messages.map(m =>
               m.streaming && m.role !== 'tool'
@@ -1442,7 +1286,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
 
-        // ── Swarm/teammate events → route to agent panel ──
         case 'swarm_text': {
           const p = parseJSON<{ teammateID: string; teammateName: string; content: string }>(raw)
           if (!p) break
@@ -1464,7 +1307,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (!p) break
           ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
           updateAgentPanel(p.teammateID, panel => {
-            // Only close text/reasoning streaming, not other tool calls
             const closeAt = Date.now()
             const msgs = panel.messages.map(m =>
               m.streaming && m.role !== 'tool'
@@ -1496,7 +1338,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const p = parseJSON<{ teammateID: string; teammateName: string; teamID: string }>(raw)
           if (!p) break
           ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
-          // Also show a system message in main chat
           setMessages(prev => appendAndTrim(prev, {
             id: nextID(), role: 'system' as ChatRole,
             content: `Teammate "${p.teammateName}" spawned`,
@@ -1543,12 +1384,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     void refreshTeamBoard()
   }, [])
 
-  // ── Load model info on mount ──────────────────────────────────────────────
-
   useEffect(() => {
     async function load() {
       try {
-        // GetModelInfo is exposed on the Go App struct but may not be in generated bindings
         const info = await App.GetModelInfo() as Record<string, any> | null
         if (info) {
           setStatusBar(s => ({
@@ -1564,13 +1402,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }))
         }
       } catch {
-        // Silently ignore if GetModelInfo not available
       }
     }
     load()
   }, [sessionId])
-
-  // ── Send message ──────────────────────────────────────────────────────────
 
   const [pastedImages, setPastedImages] = useState<PastedImageAttachment[]>([])
 
@@ -1635,8 +1470,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [isStreaming, markMessageDelivery, showToast])
 
-  // ── Export / Download conversation ───────────────────────────────────────
-
   const [exported, setExported] = useState(false)
   const handleExportConversation = useCallback(() => {
     const lines = messages.filter(m => !m.toolName && m.content).map(m => {
@@ -1685,7 +1518,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const text = input.trim()
     if (!text && pastedImages.length === 0) return
 
-    // Save to input history (dedup consecutive, max 50)
     if (text) {
       setInputHistory(prev => {
         if (prev.length > 0 && prev[prev.length - 1] === text) return prev
@@ -1694,7 +1526,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
     historyIdxRef.current = -1
 
-    // Intercept frontend-only slash commands
     if (text === '/copy' || text === '/export') {
       setInput('')
       if (sessionId) { try { sessionStorage.removeItem(`draft:${sessionId}`) } catch {} }
@@ -1708,14 +1539,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     setInput('')
     if (sessionId) { try { sessionStorage.removeItem(`draft:${sessionId}`) } catch {} }
     setPastedImages([])
-    // Reset textarea height after clearing
     if (inputRef.current) {
       inputRef.current.style.height = 'auto'
     }
     await sendUserText(text || 'Please analyze this image.', undefined, images)
   }, [input, pastedImages, sendUserText, handleExportConversation, handleDownloadConversation, sessionId])
-
-  // ── Drag-and-drop image support ────────────────────────────────────────────
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer?.types?.includes('Files')) return
@@ -1744,7 +1572,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const handleFilePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     const imageFiles = files.filter(f => f.type.startsWith('image/'))
-    // Reset input so the same file can be selected again
     e.target.value = ''
     if (imageFiles.length === 0) return
     void Promise.all(imageFiles.map(file => new Promise<PastedImageAttachment>((resolve, reject) => {
@@ -1829,12 +1656,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       return
     }
 
-    // ── Code paste detection ──
     const text = e.clipboardData?.getData('text/plain') || ''
-    if (text.trim().length < 10) return // too short to be code
+    if (text.trim().length < 10) return
 
     const detection = isLikelyCode(text)
-    if (!detection.isCode) return // normal text paste
+    if (!detection.isCode) return
 
     e.preventDefault()
     const lang = detection.language || ''
@@ -1867,7 +1693,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         return
       }
     } catch {
-      // Most WebViews/browsers block programmatic paste. Fall back to Wails clipboard APIs below.
     }
 
     try {
@@ -1923,28 +1748,23 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     void sendUserText(text, id, images || [])
   }, [sendUserText])
 
-  // Edit & resend: populate input with original message text for user to modify
   const handleEditMessage = useCallback((text: string) => {
     setInput(text)
-    // Focus and move cursor to end
     requestAnimationFrame(() => {
       const el = inputRef.current
       if (el) {
         el.focus()
         el.setSelectionRange(text.length, text.length)
-        // Trigger auto-resize
         el.style.height = 'auto'
         el.style.height = Math.min(el.scrollHeight, 200) + 'px'
       }
     })
   }, [])
 
-  // ── Cancel ────────────────────────────────────────────────────────────────
-
   const handleCancel = useCallback(() => {
     try {
       App.CancelMessage()
-    } catch { /* ignore */ }
+    } catch {  }
   }, [])
 
   const cycleReasoningEffort = useCallback(async () => {
@@ -1960,10 +1780,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [showToast])
 
-  // ── Key handler ───────────────────────────────────────────────────────────
-
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Slash autocomplete navigation
     if (slashOpen && slashFiltered.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -1995,7 +1812,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       void cycleReasoningEffort()
       return
     }
-    // Input history navigation (up/down arrows when not in slash menu)
     if (!slashOpen && inputHistory.length > 0) {
       const el = e.currentTarget as HTMLTextAreaElement
       const atStart = el.selectionStart === 0 && el.selectionEnd === 0
@@ -2045,11 +1861,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [cycleReasoningEffort, handleSend, slashOpen, slashFiltered, slashIdx, inputHistory, input])
 
-  // ── In-conversation search ────────────────────────────────────────────────
-
-  // Compute matches from current messages
   const searchMatches = useMemo(() => {
-    if (!searchQuery.trim()) return [] as number[] // indices into messages array
+    if (!searchQuery.trim()) return [] as number[]
     const q = searchQuery.toLowerCase()
     return messages
       .map((msg, i) => ({ idx: i, content: msg.content }))
@@ -2057,7 +1870,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       .map(m => m.idx)
   }, [messages, searchQuery])
 
-  // Compute sets for persistent highlighting (message IDs)
   const searchMatchIds = useMemo(() => {
     if (!searchQuery.trim()) return new Set<string>()
     return new Set(searchMatches.map(idx => messages[idx]?.id).filter(Boolean) as string[])
@@ -2069,10 +1881,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return messages[idx]?.id ?? null
   }, [searchMatches, searchMatchIdx, messages])
 
-  // Reset match index when query changes
   useEffect(() => { setSearchMatchIdx(0) }, [searchQuery])
 
-  // Focus search input when opened
   useEffect(() => {
     if (searchOpen) {
       searchInputRef.current?.focus()
@@ -2080,19 +1890,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [searchOpen])
 
-  // Global Cmd+F / Ctrl+F to open search, Esc to close
-  // Cmd+Shift+Down/Up to scroll to bottom/top of conversation
-  // Cmd+= / Cmd+- for font size adjustment (Iteration 9)
   const [fontSize, setFontSize] = useState(() => {
     const saved = localStorage.getItem('ggcode-font-size')
     return saved ? parseInt(saved) : 15
   })
 
-  // #2410: the backend "notification" events had ZERO subscribers - six
-  // emit sites fired into the void while comments kept calling them "the
-  // integration point". Consume the count and surface it in the title,
-  // which is exactly the document.title listener contract (#201) the
-  // unread machine was built against.
   useEffect(() => {
     const off = EventsOn('notification', (n: { title: string; body: string; count?: string }) => {
       const c = parseInt(n?.count || '0', 10)
@@ -2103,11 +1905,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
     return () => { off() }
   }, [])
-  // #2410 sixth emit site: "notification:delivery-failed" (#1809 case 4)
-  // previously had zero frontend subscribers - the delivery-failure
-  // warning the fix chain was built around did not exist on the consumer
-  // side. Surface it as a transient in-app toast; the payload carries the
-  // platform, the error and the permission hint from warnDeliveryOnce.
   const [deliveryWarn, setDeliveryWarn] = useState<string | null>(null)
   useEffect(() => {
     const off = EventsOn('notification:delivery-failed', (d: { platform?: string; error?: string; hint?: string }) => {
@@ -2129,7 +1926,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         setSearchOpen(prev => !prev)
         return
       }
-      // Iteration 9: Cmd+= / Cmd+- font size
       if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
         setFontSize(prev => Math.min(24, prev + 1))
@@ -2157,7 +1953,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         setSearchOpen(false)
         return
       }
-      // Esc to cancel generation (when agent is running and no other UI is open)
       if (e.key === 'Escape' && runActiveRef.current && !slashOpen) {
         e.preventDefault()
         handleCancel()
@@ -2167,7 +1962,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => document.removeEventListener('keydown', handler, true)
   }, [searchOpen, slashOpen, handleCancel])
 
-  // Scroll current match into view
   useEffect(() => {
     if (!searchOpen || searchMatches.length === 0) return
     const idx = searchMatches[Math.min(searchMatchIdx, searchMatches.length - 1)]
@@ -2190,8 +1984,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     setSearchMatchIdx(prev => (prev - 1 + searchMatches.length) % searchMatches.length)
   }, [searchMatches.length])
 
-  // ── Status bar label ──────────────────────────────────────────────────────
-
   const statusLabel = statusBar.status === 'working' ? (thinking ? 'Thinking...' : 'Working...')
     : statusBar.status === 'error' ? 'Error'
     : isStreaming ? 'Working...'
@@ -2213,7 +2005,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       setStatusBar(s => ({ ...s, model }))
     } catch {}
   }
-  // Close model picker on outside click
   useEffect(() => {
     if (!modelPickerOpen) return
     const handler = (e: MouseEvent) => { setModelPickerOpen(false) }
@@ -2222,8 +2013,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [modelPickerOpen])
   const shortModel = statusBar.model.split('/').pop() || statusBar.model
   const workspaceLabel = workspace || 'Workspace'
-  // two-mode refactor: users cycle supervised <-> bypass (plan is tool-internal;
-  // auto/autopilot are legacy aliases that the backend normalizes).
   const modeOptions = ['supervised', 'bypass'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
@@ -2251,11 +2040,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         ? { background: 'rgba(59, 130, 246, 0.11)', border: 'rgba(59, 130, 246, 0.26)', color: 'rgb(96, 165, 250)' }
         : { background: 'var(--color-card)', border: 'var(--color-border)', color: 'var(--text-secondary)' }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
-      {/* #2410: transient OS-delivery-failure toast (notification:delivery-failed) */}
+      {}
       {deliveryWarn && (
         <div style={{ position: 'fixed', bottom: '1rem', right: '1rem', zIndex: 50, background: 'rgba(220,38,38,0.92)', color: '#fff', padding: '0.5rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.875rem' }}>
           {deliveryWarn}
@@ -2267,7 +2054,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1, position: 'relative' }}>
-      {/* Drop zone overlay */}
+      {}
       {isDragOver && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 999,
@@ -2289,7 +2076,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </div>
         </div>
       )}
-      {/* Top bar */}
+      {}
       <div style={{
         height: 'var(--topbar-height)',
         display: 'flex', alignItems: 'center',
@@ -2297,7 +2084,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         borderBottom: '1px solid var(--color-border)',
         flexShrink: 0,
       }}>
-        {/* Mode switcher — click to cycle supervised → plan → auto → bypass → autopilot */}
+        {}
         <button
           onClick={selectWorkspace}
           title={workspace || 'Select workspace'}
@@ -2364,7 +2151,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </button>
         <div style={{ flex: 1 }} />
 
-        {/* Identity pill — click to edit nickname/role/team */}
+        {}
         <button
           onClick={() => { setEditNick(selfNick); setEditRole(selfRole); setEditTeam(selfTeam); setIdentityOpen(true) }}
           title={t('chat.editNickRoleTeam')}
@@ -2382,7 +2169,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </span>
         </button>
 
-        {/* Identity edit modal */}
+        {}
         {identityOpen && (
           <div
             onClick={() => setIdentityOpen(false)}
@@ -2464,7 +2251,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </div>
         )}
 
-        {/* Model picker */}
+        {}
         <div style={{ position: 'relative' }}>
           <button
             onClick={(e) => { e.stopPropagation(); openModelPicker() }}
@@ -2515,7 +2302,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </button>
         )}
 
-        {/* Context usage is shown in the bottom StatusBar — removed redundant header pill */}
+        {}
 
         {messages.length > 0 && (
           (() => {
@@ -2599,7 +2386,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         )}
       </div>
 
-      {/* Tab bar — main chat + agent panels */}
+      {}
       {agentPanels.size > 0 && (
         <div style={{
           display: 'flex', borderBottom: '1px solid var(--color-border)',
@@ -2620,7 +2407,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
       )}
 
-      {/* Context window warning banner */}
+      {}
       {statusBar.usagePercent > 80 && !contextBannerDismissed && (
         <div style={{
           padding: '6px var(--spacing-lg)',
@@ -2644,7 +2431,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
       )}
 
-      {/* In-conversation search bar */}
+      {}
       {searchOpen && (
         <div style={{
           position: 'absolute', top: 8, right: 12, zIndex: 200,
@@ -2708,14 +2495,13 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
       )}
 
-      {/* Messages — render active tab's content */}
+      {}
       <div
         ref={scrollContainerRef}
         role="log"
         aria-live="polite"
         aria-atomic="false"
         onScroll={() => {
-          // Skip if this scroll was triggered by our own doScrollToBottom
           if (programmaticScrollRef.current) {
             programmaticScrollRef.current = false
             return
@@ -2728,7 +2514,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             lastManualScrollAtByTabRef.current[activeTab] = Date.now()
           }
           setShowScrollBtn(!nearBottom && messages.length > 3)
-          // Throttle sessionStorage write to once per 500ms
           if (!scrollSaveTimerRef.current) {
             scrollSaveTimerRef.current = setTimeout(() => {
               scrollSaveTimerRef.current = null
@@ -2745,7 +2530,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)',
       }}>
         {activeTab === 'main' ? (
-          // Main chat messages
           <>
             {historyLoading && <SkeletonMessages count={5} />}
             {messages.length === 0 && !thinking && !historyLoading && (
@@ -2772,14 +2556,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 >
                   {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
                   {(() => {
-                    // Consecutive message grouping: same role + within 2 min of previous message
                     const prevMsg = i > 0 ? messages[i - 1] : null
                     const isContinuation = prevMsg &&
                       prevMsg.role === msg.role &&
                       (msg.agentID || '') === (prevMsg.agentID || '') &&
                       msg.timestamp && prevMsg.timestamp &&
                       (msg.timestamp - prevMsg.timestamp) < 120000
-                    // Only show hover timestamp on first message in group
                     const showTimestamp = msg.timestamp && !isContinuation
                     return <>
                       {showTimestamp && (
@@ -2797,12 +2579,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             })}
           </>
         ) : (
-          // Agent panel messages
           (() => {
             const panel = agentPanels.get(activeTab)
             if (!panel) return null
             return <>
-              {/* Agent header */}
+              {}
               <div style={{
                 padding: '8px 12px', borderRadius: 'var(--radius-md)',
                 background: 'var(--color-card)', border: '1px solid var(--color-border)',
@@ -2822,7 +2603,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           })()
         )}
 
-        {/* Scroll-to-bottom floating button */}
+        {}
         {showScrollBtn && (
           <button
             onClick={() => {
@@ -2873,7 +2654,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </button>
         )}
 
-        {/* Typing indicator — appears while agent is thinking/working before first token */}
+        {}
         {(thinking || (isStreaming && !streamingMsgID.current)) && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
@@ -2891,7 +2672,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               }} />
               Agent
             </div>
-            {/* Animated typing dots */}
+            {}
             <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
               {[0, 1, 2].map(i => (
                 <span key={i} style={{
@@ -2921,7 +2702,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         <div ref={messagesEndRef} style={{ scrollMarginBottom: '16px', height: 0 }} />
       </div>
 
-      {/* Input area */}
+      {}
       {pastedImages.length > 0 && (
         <div style={{
           padding: '8px var(--spacing-lg) 0',
@@ -2950,7 +2731,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-end',
         flexShrink: 0,
       }}>
-        {/* Slash command autocomplete dropdown */}
+        {}
         {slashOpen && slashFiltered.length > 0 && (
           <div ref={slashListRef} style={{
             position: 'absolute', bottom: '100%', left: 'var(--spacing-lg)',
@@ -2978,7 +2759,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             ))}
           </div>
         )}
-        {/* Hidden file input for image attachment */}
+        {}
         <input
           ref={fileInputRef}
           type="file"
@@ -3013,7 +2794,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           rows={1}
           onChange={e => {
             setInput(e.target.value)
-            // Auto-resize: reset to scrollHeight, capped at 200px
             const el = e.target
             el.style.height = 'auto'
             el.style.height = Math.min(el.scrollHeight, 200) + 'px'
@@ -3066,7 +2846,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         )}
       </div>
 
-      {/* Pulse animation keyframe */}
+      {}
       <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; }
@@ -3090,8 +2870,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     </div>
   )
 }
-
-// ── Date separator ───────────────────────────────────────────────────────────
 
 function dateLabel(ts: number): string {
   const d = new Date(ts)
@@ -3120,8 +2898,6 @@ function DateSeparator({ label }: { label: string }) {
   )
 }
 
-// ── Welcome screen (empty state) ─────────────────────────────────────────────
-
 function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; workspace?: string }) {
   const { t } = useTranslation()
   const prompts = [
@@ -3140,7 +2916,7 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
       animation: 'fadeIn 0.3s ease forwards',
     }}>
       <style>{`@keyframes fadeIn { to { opacity: 1; } }`}</style>
-      {/* Logo/icon */}
+      {}
       <div style={{
         width: 64, height: 64, borderRadius: '50%',
         background: 'var(--color-primary)',
@@ -3165,7 +2941,7 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
           {workspace ? `${workspace} • ` : ''}{t('chat.welcome.subtitle')}
         </p>
       </div>
-      {/* Quick-start prompts */}
+      {}
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
@@ -3206,9 +2982,6 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
   )
 }
 
-// ── MessageCard ──────────────────────────────────────────────────────────────
-
-// ── Tab button component ──
 function TabButton({ label, active, onClick, color, status, title, onClose }: {
   label: string; active: boolean; onClick: () => void; color?: string;
   status?: 'running' | 'completed' | 'failed' | 'idle';
@@ -3283,8 +3056,6 @@ const MessageCard = React.memo(function MessageCard({ msg, onRetry, onEdit }: {
   }
 })
 
-// ── Reasoning block (collapsible, shown before the message it belongs to) ──
-
 function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', streaming = false, durationSec }: {
   text: string; defaultOpen?: boolean; label?: string; streaming?: boolean; durationSec?: number
 }) {
@@ -3293,7 +3064,6 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', stream
   const [copied, setCopied] = useState(false)
   const wasStreamingRef = useRef(false)
 
-  // Auto-collapse when streaming transitions from true → false
   useEffect(() => {
     if (wasStreamingRef.current && !streaming) {
       setOpen(false)
@@ -3378,9 +3148,6 @@ function UserMessage({ msg, onRetry, onEdit }: {
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
   const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
-  // All user messages render as markdown — users may paste markdown docs,
-  // and non-desktop sources (cron, IM, mobile) frequently contain markdown.
-  // The isLanChat flag is still needed for the "via" label styling.
   const isMarkdown = true
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -3559,7 +3326,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
             writing...
           </span>
         )}
-        {/* Action buttons — appear on hover */}
+        {}
         {!msg.streaming && msg.content && (
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, opacity: hovered || copied ? 1 : 0, transition: 'opacity 0.15s ease' }}>
             <button
@@ -3630,7 +3397,6 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
   const [copied, setCopied] = useState(false)
   const [elapsedSec, setElapsedSec] = useState(0)
 
-  // Live elapsed timer for streaming tools
   useEffect(() => {
     if (!msg.streaming || !msg.timestamp) return
     const update = () => setElapsedSec(Math.max(0, Math.round((Date.now() - msg.timestamp) / 1000)))
@@ -3660,20 +3426,16 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
     }).catch(() => {})
   }, [msg.content])
 
-  // Title: displayName from Go's DescribeTool (now uses description/first-line comment for commands)
-  // Append prettified tool name in parens
   const prettifiedName = msg.toolName?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Tool'
   const displayName = msg.toolDisplayName || ''
   const detail = msg.toolDetail || ''
 
-  // For command tools: title = displayName, content = detail (the full command)
-  // For other tools: title = displayName || prettifiedName, detail shown inline
   const title = isCommandTool
     ? (displayName ? `${displayName}` : prettifiedName)
     : (displayName || prettifiedName)
 
   const showCommandBlock = isCommandTool && detail && expanded
-  const commandContent = detail // Go's DescribeTool now returns command as Detail
+  const commandContent = detail
 
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '80%', marginTop: 4, marginBottom: 4, width: '100%' }}>
@@ -3687,7 +3449,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
         cursor: (msg.content || commandContent) ? 'pointer' : 'default',
         userSelect: 'none',
       }} onClick={() => (msg.content || commandContent) && setExpanded(!expanded)}>
-        {/* Status icon */}
+        {}
         {msg.streaming ? (
           <span style={{
             display: 'inline-block',
@@ -3704,7 +3466,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           <span style={{ color: 'var(--color-success)', fontSize: 12 }}>✓</span>
         )}
 
-        {/* Title */}
+        {}
         <span style={{
           fontWeight: 600,
           color: msg.isError ? '#f87171' : 'var(--color-info)',
@@ -3712,14 +3474,14 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           {title}
         </span>
 
-        {/* Prettified tool name in parens for command tools */}
+        {}
         {isCommandTool && displayName && (
           <span style={{ color: 'var(--text-tertiary)', fontSize: 10, fontStyle: 'italic' }}>
             ({prettifiedName})
           </span>
         )}
 
-        {/* Inline detail for non-command tools */}
+        {}
         {!isCommandTool && detail && (
           <span style={{
             color: 'var(--text-tertiary)',
@@ -3732,7 +3494,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           </span>
         )}
 
-        {/* Command preview for non-expanded command tools */}
+        {}
         {isCommandTool && !expanded && commandContent && (
           <span style={{
             color: 'var(--text-tertiary)',
@@ -3751,14 +3513,14 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           </span>
         )}
 
-        {/* Duration badge for completed tools */}
+        {}
         {!msg.streaming && msg.toolDurationSec && msg.toolDurationSec >= 2 && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
             {formatDuration(msg.toolDurationSec)}
           </span>
         )}
 
-        {/* Line count indicator for non-streaming results */}
+        {}
         {msg.content && !msg.streaming && !expanded && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
             {resultLines.length > 1 ? `${resultLines.length} lines` : `${msg.content.length} chars`}
@@ -3772,10 +3534,10 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
         )}
       </div>
 
-      {/* Expanded content */}
+      {}
       {expanded && (
         <>
-          {/* Command code block (for command tools) */}
+          {}
           {showCommandBlock && (
             <div className="tool-cmd-block" style={{
               marginTop: 4,
@@ -3799,7 +3561,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
             </div>
           )}
 
-          {/* Result (terminal style) */}
+          {}
           {msg.content && (
             <div style={{ marginTop: 4, position: 'relative' }}>
               <div className={`tool-result-block ${msg.isError ? 'tool-result-error' : ''}`} style={{
@@ -3812,7 +3574,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
               }}>
                 {truncatedResult || msg.content}
               </div>
-              {/* Copy button for result */}
+              {}
               <button
                 onClick={(e) => { e.stopPropagation(); handleCopyResult() }}
                 title={t('chat.copyResult')}

@@ -3,7 +3,6 @@ import { parseDiff, type DiffLine } from './DiffRender'
 
 describe('parseDiff', () => {
   it('returns single empty context for empty string', () => {
-    // ''.split('\n') = [''], which doesn't match any prefix → context
     expect(parseDiff('')).toEqual<DiffLine[]>([
       { type: 'context', content: '' },
     ])

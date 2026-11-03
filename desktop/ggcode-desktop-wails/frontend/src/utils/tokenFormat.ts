@@ -1,14 +1,4 @@
-/**
- * Parse a human-readable token value into an integer.
- *
- * Supports formats:
- *   "256k" / "256K" → 262144
- *   "1m"   / "1M"   → 1048576
- *   "320000"        → 320000
- *   "" / "auto"     → 0 (auto)
- *
- * Returns 0 for invalid/unparseable input.
- */
+
 export function parseTokenValue(str: string): number {
   const s = str.trim().toLowerCase()
   if (s === '' || s === 'auto' || s === '0') return 0
@@ -25,14 +15,6 @@ export function parseTokenValue(str: string): number {
   return Math.round(num)
 }
 
-/**
- * Format a token count for display in input fields.
- *
- *   262144 → "262k"  (rounds to nearest k for large numbers)
- *   1048576 → "1m"
- *   8192 → "8192"    (small numbers stay raw)
- *   0 → ""
- */
 export function formatTokenValue(n: number): string {
   if (!n || n === 0) return ''
   if (n >= 1000000 && n % 1000000 === 0) return `${n / 1000000}m`
@@ -41,9 +23,6 @@ export function formatTokenValue(n: number): string {
   return String(n)
 }
 
-/**
- * Validate whether a string is a valid token value expression.
- */
 export function isValidTokenValue(str: string): boolean {
   const s = str.trim().toLowerCase()
   if (s === '' || s === 'auto') return true

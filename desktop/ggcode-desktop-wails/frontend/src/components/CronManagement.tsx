@@ -98,7 +98,7 @@ export function CronManagement({ onBack }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Header */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--color-border, #30363d)', flexShrink: 0 }}>
         <button onClick={onBack} className="nav-rail-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', padding: 4, borderRadius: 6 }}>
           <ChevronLeft size={20} />
@@ -114,14 +114,14 @@ export function CronManagement({ onBack }: Props) {
         </button>
       </div>
 
-      {/* Message */}
+      {}
       {message && (
         <div style={{ padding: '8px 16px', fontSize: 13, color: 'var(--text-secondary)', background: 'var(--color-nav-hover, rgba(255,255,255,0.04))' }}>
           {message}
         </div>
       )}
 
-      {/* Job list */}
+      {}
       <div style={{ flex: 1, overflow: 'auto', padding: '8px 16px' }}>
         {loading ? (
           <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: 40 }}>{t('cron.loading')}</div>
@@ -164,7 +164,7 @@ function JobCard({ job, expanded, onToggleExpand, onEdit, onDelete, onPauseResum
 
   return (
     <div style={{ border: '1px solid var(--color-border, #30363d)', borderRadius: 8, overflow: 'hidden' }}>
-      {/* Summary row */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', cursor: 'pointer' }} onClick={onToggleExpand}>
         {expanded ? <ChevronDown size={16} style={{ color: 'var(--text-secondary)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-secondary)' }} />}
         <code style={{ fontSize: 13, color: '#58A6FF', fontWeight: 600, minWidth: 100 }}>{job.cronExpr}</code>
@@ -181,7 +181,7 @@ function JobCard({ job, expanded, onToggleExpand, onEdit, onDelete, onPauseResum
         )}
       </div>
 
-      {/* Expanded detail */}
+      {}
       {expanded && (
         <div style={{ padding: '0 12px 12px 44px', borderTop: '1px solid var(--color-border, #30363d)' }}>
           <div style={{ marginTop: 8 }}>
@@ -196,7 +196,7 @@ function JobCard({ job, expanded, onToggleExpand, onEdit, onDelete, onPauseResum
             {job.nextFire && <span>{t('cron.nextFire')}: {new Date(job.nextFire).toLocaleString()}</span>}
             <span>{t('cron.queueLabel')}: {job.queueIfBusy ? t('cron.yes') : t('cron.no')}</span>
           </div>
-          {/* Actions */}
+          {}
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={(e) => { e.stopPropagation(); onEdit() }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 12 }}>
               <Pencil size={14} /> {t('cron.edit')}
@@ -268,7 +268,7 @@ function CronJobEditor({ job, onBack, onSave }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Header */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--color-border, #30363d)', flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', padding: 4, borderRadius: 6 }}>
           <ChevronLeft size={20} />
@@ -276,9 +276,9 @@ function CronJobEditor({ job, onBack, onSave }: {
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{job ? t('cron.editTask') : t('cron.newTaskTitle')}</h2>
       </div>
 
-      {/* Form */}
+      {}
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* Cron expression */}
+        {}
         <div>
           <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('cron.cronExpr')}</label>
           <input
@@ -293,7 +293,7 @@ function CronJobEditor({ job, onBack, onSave }: {
           </p>
         </div>
 
-        {/* Prompt */}
+        {}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <label style={{ fontSize: 13, fontWeight: 600 }}>{t('cron.prompt')}</label>
@@ -305,7 +305,7 @@ function CronJobEditor({ job, onBack, onSave }: {
             </button>
           </div>
 
-          {/* AI input */}
+          {}
           {showAiInput && (
             <div style={{ marginBottom: 8, padding: 12, border: '1px solid var(--color-border, #30363d)', borderRadius: 8, background: 'var(--color-nav-hover, rgba(255,255,255,0.04))' }}>
               <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 0, marginBottom: 8 }}>
@@ -343,7 +343,7 @@ function CronJobEditor({ job, onBack, onSave }: {
           />
         </div>
 
-        {/* Options */}
+        {}
         <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
           {!job && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
@@ -362,7 +362,7 @@ function CronJobEditor({ job, onBack, onSave }: {
           </label>
         </div>
 
-        {/* Error */}
+        {}
         {error && (
           <div style={{ padding: '8px 12px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 13 }}>
             {error}
@@ -370,7 +370,7 @@ function CronJobEditor({ job, onBack, onSave }: {
         )}
       </div>
 
-      {/* Footer */}
+      {}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 24px', borderTop: '1px solid var(--color-border, #30363d)' }}>
         <button onClick={onBack} style={{ padding: '8px 16px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}>
           {t('cron.cancel')}

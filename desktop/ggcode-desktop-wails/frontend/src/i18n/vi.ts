@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': 'Trò chuyện',
   'nav.files': 'Tệp',
   'nav.im': 'Bộ chuyển đổi IM',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': 'Có',
   'cron.no': 'Không',
 
-  // Sidebar
   'sidebar.sessions': 'Phiên',
   'sidebar.search': 'Tìm phiên...',
   'sidebar.newSession': 'Phiên mới',
@@ -70,12 +68,10 @@ const en = {
   'sidebar.time.hoursAgo': '{n} giờ trước',
   'sidebar.time.yesterday': 'hôm qua',
 
-  // StatusBar
   'status.ready': 'Sẵn sàng',
   'status.thinking': 'Đang suy nghĩ...',
   'status.offline': 'Ngoại tuyến',
 
-  // ChatView
   'chat.placeholder': 'Nhắn tin cho ggcode...',
   'chat.agentWorking': 'Agent đang làm việc...',
   'chat.welcome.title': 'Tôi có thể giúp gì cho bạn hôm nay?',
@@ -86,7 +82,6 @@ const en = {
   'chat.welcome.prompt.debug': 'Giúp tôi gỡ lỗi',
   'chat.inputHint': 'Enter để gửi • Shift+Enter để xuống dòng',
 
-  // CommandPalette
   'cmd.recent': 'Gần đây',
   'cmd.placeholder': 'Nhập lệnh...',
   'cmd.noResults': 'Không có lệnh phù hợp',
@@ -120,7 +115,6 @@ const en = {
   'cmd.hintClose': 'esc đóng',
   'cmd.results': '{count} kết quả',
 
-  // KeyboardShortcuts
   'kb.title': 'Phím tắt',
   'kb.footer': 'Mẹo: Nhấn ⌘K bất cứ lúc nào để mở bảng lệnh',
   'kb.global': 'Toàn cục',
@@ -157,7 +151,6 @@ const en = {
   'kb.goDebug': 'Đi đến Bảng gỡ lỗi',
   'kb.goLanChat': 'Đi đến Trò chuyện LAN',
 
-  // ContextPanel
   'context.title': 'Ngữ cảnh',
   'context.usage': 'Mức sử dụng ngữ cảnh',
   'context.input': 'Đầu vào',
@@ -172,7 +165,6 @@ const en = {
   'context.costDisclaimer': 'Ước tính dựa trên mức sử dụng token và giá mô hình. Chi phí thực tế có thể khác.',
   'context.planIncluded': "Đã bao gồm trong {plan}",
 
-  // SettingsPage
   'settings.title': 'Cài đặt',
   'settings.vendor': 'Nhà cung cấp',
   'settings.endpoint': 'Điểm cuối',
@@ -191,7 +183,6 @@ const en = {
   'settings.impersonateVersion': 'Phiên bản',
   'settings.impersonateApply': 'Áp dụng',
 
-  // Onboarding
   'onboarding.next': 'Tiếp theo',
   'onboarding.back': 'Quay lại',
   'onboarding.getStarted': 'Bắt đầu',
@@ -214,32 +205,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o (nhập thủ công hoặc tải)',
   'onboarding.configureLLM': 'Cấu hình LLM',
 
-  // ApprovalDialog
   'approval.title': 'Yêu cầu phê duyệt công cụ',
   'approval.allow': 'Cho phép',
   'approval.deny': 'Từ chối',
   'approval.alwaysAllow': 'Luôn cho phép',
 
-  // AskUserDialog
   'askUser.title': 'Câu hỏi',
   'askUser.submit': 'Gửi',
 
-  // Dialogs (About)
   'about.title': 'Giới thiệu GGCode',
   'about.description': 'Agent lập trình AI cho terminal',
 
-  // PairingCodeDialog
   'pairing.title': 'Ghép nối thiết bị',
   'pairing.close': 'Đóng',
 
-  // ShareDialog
   'share.title': 'Chia sẻ phiên',
   'share.copy': 'Sao chép',
   'share.copied': 'Đã sao chép!',
   'share.stopSharing': 'Dừng chia sẻ',
   'share.generating': 'Đang tạo...',
 
-  // IMManagement
   'im.title': 'Bộ chuyển đổi IM',
   'im.addAdapter': 'Thêm bộ chuyển đổi',
   'im.noAdapters': 'Chưa cấu hình bộ chuyển đổi IM nào. Nhấp "Thêm bộ chuyển đổi" để bắt đầu.',
@@ -256,17 +241,14 @@ const en = {
   'im.cancel': 'Hủy',
   'im.selectPlatform': 'Chọn nền tảng...',
 
-  // MCPServers
   'mcp.title': 'Máy chủ MCP',
   'mcp.add': 'Thêm',
   'mcp.name': 'Tên',
   'mcp.cancel': 'Hủy',
 
-  // FileBrowser
   'files.fileTooLarge': 'Tệp quá lớn để xem trước (>2MB)',
   'files.binaryFile': 'Tệp nhị phân',
 
-  // DebugConsole
   'debug.title': 'Bảng gỡ lỗi',
   'debug.start': 'Bắt đầu',
   'debug.stop': 'Dừng',
@@ -277,7 +259,6 @@ const en = {
   'debug.filterPlaceholder': 'Lọc...',
   'debug.empty': 'Nhấp "Bắt đầu" để ghi nhật ký gỡ lỗi',
 
-  // TeamBoard
   'team.teams': 'nhóm',
   'team.teammates': 'thành viên',
   'team.tasks': 'nhiệm vụ',
@@ -290,9 +271,6 @@ const en = {
   'team.noInProgress': 'Không ai bị chặn ở đây',
   'team.noDone': 'Chưa có gì hoàn thành',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Agent & An toàn',
   'settings.appearance': 'Giao diện',
   'settings.integrations': 'Tích hợp',
@@ -334,7 +312,6 @@ const en = {
   'settings.versionPlaceholder': 'Chuỗi phiên bản...',
   'settings.endpointNamePlaceholder': 'Điểm cuối của tôi',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'Duyệt tệp',
   'settings.contextUsage': 'Mức sử dụng ngữ cảnh',
   'settings.mcpServers': 'Máy chủ MCP',
@@ -378,23 +355,17 @@ const en = {
   'settings.adding': 'Đang thêm...',
   'settings.lspServersShort': 'Máy chủ ngôn ngữ',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'Tìm phiên',
   'sidebar.clearAria': 'Xóa',
   'sidebar.deleteSessionAria': 'Xóa phiên',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'Nhấp để chỉnh sửa biệt danh, vai trò và nhóm của bạn',
   'chat.regenerate': 'Tạo lại phản hồi',
   'chat.copyResult': 'Sao chép kết quả',
   'chat.copyError': 'Sao chép lỗi',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'Chọn mô hình...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'Đang đọc tệp...',
   'chat.activity.editing': 'Đang chỉnh sửa mã...',
   'chat.activity.writing': 'Đang ghi tệp...',
@@ -409,7 +380,6 @@ const en = {
   'chat.activity.saving': 'Đang lưu bộ nhớ...',
   'chat.activity.planMode': 'Đang vào chế độ kế hoạch...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': 'Tìm trong hội thoại...',
   'chat.sending': 'Đang gửi...',
   'chat.failedToSend': 'Gửi thất bại',
@@ -419,7 +389,6 @@ const en = {
   'chat.cancel': 'Hủy',
   'chat.save': 'Lưu',
 
-  // ChatView button titles
   'chat.title.newSession': 'Phiên mới',
   'chat.title.shareSession': 'Chia sẻ phiên (Cmd+Shift+S)',
   'chat.title.search': 'Tìm trong hội thoại (Cmd+F)',
@@ -436,7 +405,6 @@ const en = {
   'chat.title.copyMessage': 'Sao chép tin nhắn',
   'chat.title.teamBoard': 'Mở bảng nhóm',
 
-  // MCPServers
   'mcp.transport': 'Phương thức truyền',
   'mcp.transportStdio': 'Tiến trình cục bộ qua stdin/stdout',
   'mcp.transportWs': 'Máy chủ từ xa qua WebSocket',
@@ -449,7 +417,6 @@ const en = {
   'mcp.resetOAuth': 'Đặt lại OAuth (chuyển tài khoản)',
   'mcp.remove': 'Xóa',
 
-  // Onboarding
   'onboarding.chooseVendor': 'Chọn nhà cung cấp...',
   'onboarding.providerName': 'Tên nhà cung cấp',
   'onboarding.protocol': 'Giao thức',
@@ -457,7 +424,6 @@ const en = {
   'onboarding.chooseModel': 'Chọn mô hình...',
   'onboarding.chooseEndpoint': 'Chọn điểm cuối...',
 
-  // LanChatView
   'lanchat.groupChat': 'Trò chuyện nhóm',
   'lanchat.chat': 'Trò chuyện',
   'lanchat.agentSuffix': ' (agent)',
@@ -466,37 +432,24 @@ const en = {
   'lanchat.broadcastPlaceholder': 'Gửi đến tất cả...',
   'lanchat.dmPlaceholder': 'Nhắn tin cho {name}...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': 'Nhập câu trả lời của bạn...',
 
-  // IMManagement
   'im.editAdapter': 'Chỉnh sửa: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'Tìm tệp...',
   'files.officeDocument': 'Tài liệu Office',
   'files.openExternal': 'Mở bằng ứng dụng bên ngoài để xem',
   'files.htmlPreview': 'Xem trước HTML',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'Bật/tắt bảng ngữ cảnh',
 
-  // TeamBoard
   'team.boardTitle': 'Bảng nhóm',
 
-  // Common shared
   'common.dismiss': 'Bỏ thông báo',
   'common.cancel': 'Hủy',
   'common.save': 'Save',
   'common.copyToClipboard': 'Sao chép vào clipboard',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': 'Duyệt tệp trong không gian làm việc hiện tại bằng trình duyệt tệp desktop.',
   'settings.openFiles': 'Mở tệp',
   'settings.contextUsageDesc': 'Kiểm tra mức sử dụng ngữ cảnh và tổng token/bộ nhớ đệm trước khi chạy các tác vụ dài.',
@@ -513,7 +466,6 @@ const en = {
   'settings.integrationsDesc': 'Quản lý các tính năng desktop hiện có từ một nơi. Các lối tắt này mở các màn hình chuyên biệt hiện tại mà không thay đổi cấu hình backend.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'Phê duyệt công cụ',
   'common.closeDialog': 'Đóng hộp thoại',
   'common.cancelBtn': 'Hủy',
@@ -537,7 +489,6 @@ const en = {
   'common.pinWindow': 'Ghim cửa sổ lên trên',
   'common.unpinWindow': 'Bỏ ghim cửa sổ',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'Chọn nhà cung cấp...',
   'settings.chooseEndpoint': 'Chọn điểm cuối...',
   'settings.modeSupervised': 'Có giám sát (xác nhận từng công cụ)',
@@ -545,37 +496,24 @@ const en = {
   'settings.modeBypassAll': 'Bỏ qua (tự động phê duyệt hầu hết công cụ)',
   'settings.saveModeHint': 'Lưu để duy trì chế độ mặc định này. Thay đổi chế độ thời gian chạy vẫn tuân theo xử lý chế độ thông thường của ứng dụng.',
 
-  // Dialogs
   'dialogs.newVersion': 'Đã có phiên bản mới: v',
   'dialogs.download': 'Tải xuống',
   'dialogs.upToDate': 'Bạn đang sử dụng phiên bản mới nhất (v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': 'Đang kết xuất sơ đồ...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': 'Luôn luôn',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'Cần đăng nhập OAuth',
   'mcp.oauthHint': 'Đăng nhập bằng trình duyệt để cấp quyền cho máy chủ MCP này.',
 
-  // Onboarding
   'onboarding.customProvider': '+ Nhà cung cấp tùy chỉnh',
   'onboarding.a2a': 'Dịch vụ A2A',
   'onboarding.a2aDesc': 'Bật giao tiếp giữa các agent (khuyên dùng)',
   'onboarding.languageTitle': 'Chọn ngôn ngữ',
   'onboarding.languageHint': 'Bạn có thể thay đổi sau trong Cài đặt',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'Xem xét mức độ tự chủ hiện tại của agent desktop. Tóm tắt hành vi hiện tại mà không thay đổi chính sách công cụ nâng cao.',
   'settings.workspaceAccessHint': 'Công cụ tệp hoạt động trong không gian làm việc hiện tại và các thư mục được phép đã cấu hình. Chỉnh sửa thư mục được phép nâng cao chưa được hiển thị ở đây để tránh vô tình thay đổi ranh giới an toàn.',
   'settings.appearanceHint': 'Tùy chỉnh giao diện hiển thị. Ứng dụng mặc định theo tùy chọn hệ thống của bạn.',

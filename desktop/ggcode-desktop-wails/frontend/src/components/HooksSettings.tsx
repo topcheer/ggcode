@@ -31,7 +31,6 @@ export function HooksSettings() {
   const [testResult, setTestResult] = useState<{ matched: boolean; error: string } | null>(null)
   const testTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Auto-evaluate regex tester with debounce
   useEffect(() => {
     if (testTimer.current) clearTimeout(testTimer.current)
     const mode = editForm.match_mode || 'glob'
