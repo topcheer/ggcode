@@ -33,8 +33,7 @@ func TestCheckSuppressionDirectives_PythonTypeIgnore(t *testing.T) {
 
 func TestCheckSuppressionDirectives_PythonNoQA(t *testing.T) {
 	old := "import os\n"
-	// Bare # noqa (no rule code) — scoped forms like "# noqa: F401" are
-	// legitimate targeted suppressions and must NOT warn (#572 contract).
+
 	new_ := "import os  # noqa\n"
 
 	warnings := checkSuppressionDirectives("main.py", old, new_)
@@ -120,7 +119,7 @@ func TestCheckSuppressionDirectives_GoLintIgnore(t *testing.T) {
 }
 
 func TestCheckSuppressionDirectives_PreExistingNotFlagged(t *testing.T) {
-	// The suppression was already there -- should NOT warn
+
 	content := "package main\n\n//nolint\nfunc foo() {}\n"
 
 	warnings := checkSuppressionDirectives("main.go", content, content)
@@ -211,10 +210,6 @@ func TestLangInList(t *testing.T) {
 	}
 }
 
-// Regression for #1500: bare '# type: ignore' followed by explanatory text
-// is mypy's documented recommended form and must be classified bare
-// (reportable); only bracket error codes (# type: ignore[return-value])
-// make it scoped.
 func TestIsBareSuppressionTypeIgnoreWithExplanation(t *testing.T) {
 	if !isBareSuppression("x = f()  # type: ignore old API returns Any", "# type: ignore", true) {
 		t.Fatal("type: ignore with explanation text must be bare (reportable)")
@@ -227,10 +222,6 @@ func TestIsBareSuppressionTypeIgnoreWithExplanation(t *testing.T) {
 	}
 }
 
-// TestCheckSuppressionDirectives_StringLiteralNotCounted pins #1778 case 3:
-// a directive keyword inside a string literal ("eslint-disable" as a banner
-// value) must not count - the old counter produced a warning with no line
-// to point at.
 func TestCheckSuppressionDirectives_StringLiteralNotCounted(t *testing.T) {
 	old := "const banner = 'x';\n"
 	new_ := "const banner = 'eslint-disable';\n"
@@ -240,9 +231,6 @@ func TestCheckSuppressionDirectives_StringLiteralNotCounted(t *testing.T) {
 	}
 }
 
-// TestCheckSuppressionDirectives_VueSfcCovered pins #1778 case 4: .vue
-// single-file components carry eslint-disable inside <script> - previously
-// excluded entirely (LangMarkup).
 func TestCheckSuppressionDirectives_VueSfcCovered(t *testing.T) {
 	old := "<script>\nexport default {}\n</script>\n"
 	new_ := "<script>\n// eslint-disable\nexport default {}\n</script>\n"

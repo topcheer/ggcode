@@ -1,14 +1,5 @@
 package agent
 
-// #2100/#2103 regression:
-//   - #2103: exploration fragmentation cleared the window BEFORE reading
-//     len(s.entries) for the debug log and the message's call count -
-//     every firing said "0 exploration tool calls across 6+ distinct
-//     targets" (mathematically self-contradictory).
-//   - #2100: go/parser never sets Obj on SelectorExpr.Sel or composite
-//     literal keys, so cross-file-impact fired on any same-named method
-//     of ANY type, package-qualified calls, and field keys.
-
 import (
 	"strings"
 	"testing"
@@ -16,7 +7,6 @@ import (
 
 func TestExplorationFragMessageCountsNotZero(t *testing.T) {
 	s := newExploreFragState()
-	// recordToolCall returns the analysis message when it fires.
 	var msg string
 	for i := 0; i < 6; i++ {
 		msg = s.recordToolCall("read_file", []byte(`{"path":"/repo/file`+string(rune('a'+i))+`"}`), 2+i%2)

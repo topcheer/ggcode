@@ -45,8 +45,7 @@ func TestExtractCascadeRoot_FilePath(t *testing.T) {
 }
 
 func TestExtractCascadeRoot_Symbol(t *testing.T) {
-	// Symbol extraction content must NOT contain file paths, otherwise the
-	// file-path regex takes priority.
+
 	tests := []struct {
 		name    string
 		content string
@@ -98,7 +97,7 @@ func TestExtractCascadeRoot_None(t *testing.T) {
 }
 
 func TestExtractCascadeRoot_GoKeyword(t *testing.T) {
-	// "undefined: func" should not match because "func" is a keyword.
+
 	key, _ := extractCascadeRoot("run_command", "undefined: func")
 	if key != "" {
 		t.Errorf("expected empty key for Go keyword, got %q", key)
@@ -125,9 +124,8 @@ func TestNormalizeFilePath(t *testing.T) {
 
 func TestErrorCascade_SoftThreshold(t *testing.T) {
 	s := newErrorCascadeState()
-	root := "agent/agent.go" // normalized form
+	root := "agent/agent.go"
 
-	// First two errors: no guidance.
 	for i := 0; i < 2; i++ {
 		g := s.recordError("edit_file", `failed in "internal/agent/agent.go"`)
 		if g != "" {
@@ -135,7 +133,6 @@ func TestErrorCascade_SoftThreshold(t *testing.T) {
 		}
 	}
 
-	// Third error: soft guidance.
 	g := s.recordError("run_command", `compile error in /code/internal/agent/agent.go:42`)
 	if g == "" {
 		t.Fatal("expected soft cascade guidance at 3rd error")
@@ -147,19 +144,16 @@ func TestErrorCascade_SoftThreshold(t *testing.T) {
 		t.Errorf("guidance missing root key %q: %q", root, g)
 	}
 
-	// Fourth error (#1082): crossing into the HARD tier must escalate to
-	// ROOT CAUSE guidance instead of staying silent (the old boolean fired
-	// gate made tiers 4/5 dead code).
 	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
 	if g == "" || !strings.Contains(g, "ROOT CAUSE") {
 		t.Errorf("expected ROOT CAUSE escalation at 4th error, got %q", g)
 	}
-	// Same tier again (5th error crosses abort): 5 >= cascadeAbortThreshold.
+
 	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
 	if g == "" || !strings.Contains(g, "ABORT") {
 		t.Errorf("expected ABORT escalation at 5th error, got %q", g)
 	}
-	// Sixth error: same (highest) tier, no re-fire.
+
 	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
 	if g != "" {
 		t.Errorf("expected no re-fire after abort tier, got %q", g)
@@ -169,7 +163,6 @@ func TestErrorCascade_SoftThreshold(t *testing.T) {
 func TestErrorCascade_HardThreshold(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Record 4 errors with different tools but same root.
 	tools := []string{"edit_file", "run_command", "grep", "read_file"}
 	var lastGuidance string
 	for i, tool := range tools {
@@ -186,13 +179,11 @@ func TestErrorCascade_HardThreshold(t *testing.T) {
 	}
 	_ = lastGuidance
 
-	// #1082: the loop above recorded 4 errors (soft tier fired on the 3rd).
-	// The next error is the 5th and must escalate straight to ABORT.
 	g := s.recordError("run_command", `error in "internal/util/util.go"`)
 	if g == "" || !strings.Contains(g, "ABORT") {
 		t.Errorf("expected ABORT escalation at 5th error, got %q", g)
 	}
-	// 6th error: same (highest) tier, no re-fire.
+
 	g = s.recordError("run_command", `error in "internal/util/util.go"`)
 	if g != "" {
 		t.Errorf("expected no re-fire after abort tier, got %q", g)
@@ -202,7 +193,6 @@ func TestErrorCascade_HardThreshold(t *testing.T) {
 func TestErrorCascade_DifferentRootsNoCascade(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Errors on different files should NOT trigger cascade.
 	s.recordError("edit_file", `error in "dir/file_a.go"`)
 	s.recordError("run_command", `error in "dir/file_b.go"`)
 	g := s.recordError("grep", `error in "dir/file_c.go"`)
@@ -214,7 +204,6 @@ func TestErrorCascade_DifferentRootsNoCascade(t *testing.T) {
 func TestErrorCascade_Reset(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Trigger cascade.
 	for i := 0; i < 3; i++ {
 		s.recordError("edit_file", `error in "foo/bar.go"`)
 	}
@@ -230,7 +219,6 @@ func TestErrorCascade_Reset(t *testing.T) {
 		t.Errorf("expected 3 total errors, got %d", totalErrors)
 	}
 
-	// Reset.
 	s.reset()
 	totalRoots, maxCluster, totalErrors = s.cascadeStats()
 	if totalRoots != 0 || maxCluster != 0 || totalErrors != 0 {
@@ -238,7 +226,6 @@ func TestErrorCascade_Reset(t *testing.T) {
 			totalRoots, maxCluster, totalErrors)
 	}
 
-	// After reset, can trigger again.
 	g := ""
 	for i := 0; i < 3; i++ {
 		g = s.recordError("edit_file", `error in "foo/bar.go"`)
@@ -251,8 +238,6 @@ func TestErrorCascade_Reset(t *testing.T) {
 func TestErrorCascade_SymbolCascade(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Three errors all referencing the same undefined symbol.
-	// Content must not contain file paths (otherwise file regex takes priority).
 	contents := []string{
 		"build error: undefined: MyFunction",
 		"link failed: undefined: MyFunction",
@@ -276,7 +261,6 @@ func TestErrorCascade_SymbolCascade(t *testing.T) {
 func TestErrorCascade_MemoryBound(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Record errors for more roots than cascadeMaxRoots.
 	for i := 0; i < cascadeMaxRoots+10; i++ {
 		content := `error in "dir/file_` + string(rune('a'+(i%26))) + `.go"`
 		s.recordError("edit_file", content)
@@ -290,15 +274,14 @@ func TestErrorCascade_MemoryBound(t *testing.T) {
 }
 
 func TestErrorCascade_MaxRootsAllowSingleCluster(t *testing.T) {
-	// When the max root is the same as the current root (high-count cluster),
-	// it should not be evicted even under memory pressure.
+
 	s := newErrorCascadeState()
 	for i := 0; i < cascadeMaxRoots; i++ {
 		s.recordError("edit_file", `error in "dir/file_`+string(rune('a'+(i%26)))+`.go"`)
 	}
-	// Add one more to trigger eviction.
+
 	s.recordError("edit_file", `error in "dir/file_z.go"`)
-	// No panic, bounded.
+
 	_, _, totalErrors := s.cascadeStats()
 	if totalErrors != cascadeMaxRoots+1 {
 		t.Errorf("expected %d total errors, got %d", cascadeMaxRoots+1, totalErrors)
@@ -308,12 +291,6 @@ func TestErrorCascade_MaxRootsAllowSingleCluster(t *testing.T) {
 func TestErrorCascade_GenericNounStopList(t *testing.T) {
 	s := newErrorCascadeState()
 
-	// Issue #1040: Generic nouns like "file", "command", "flag" should NOT
-	// trigger cascade detection. Multiple errors with different directories
-	// but the same generic noun should be treated as different roots.
-
-	// Three ENOENT errors in different directories - "no such file or directory"
-	// would match "file" in the stop list, so they should NOT cascade.
 	s.recordError("read_file", "open /tmp/dir1/config.txt: no such file or directory")
 	s.recordError("read_file", "open /tmp/dir2/data.log: no such file or directory")
 	g := s.recordError("grep", "open /tmp/dir3/cache.db: no such file or directory")
@@ -321,7 +298,6 @@ func TestErrorCascade_GenericNounStopList(t *testing.T) {
 		t.Errorf("expected no cascade for generic noun 'file' across different directories, got %q", g)
 	}
 
-	// Test "unknown command" - should not cascade.
 	s.reset()
 	s.recordError("run_command", "unknown command: buildx")
 	s.recordError("run_command", "unknown command: compose")
@@ -330,7 +306,6 @@ func TestErrorCascade_GenericNounStopList(t *testing.T) {
 		t.Errorf("expected no cascade for generic noun 'command', got %q", g)
 	}
 
-	// Test "unknown flag" - should not cascade.
 	s.reset()
 	s.recordError("run_command", "unknown flag: --verbose")
 	s.recordError("run_command", "unknown flag: --debug")

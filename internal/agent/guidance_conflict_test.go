@@ -112,8 +112,7 @@ func TestDetectGuidanceConflict_CommitVsDontCommit(t *testing.T) {
 }
 
 func TestDetectGuidanceConflict_SameHintNotConflict(t *testing.T) {
-	// A single hint containing both keywords should NOT trigger - it needs
-	// two DIFFERENT hints (aIdx != bIdx).
+
 	hints := []string{
 		"[mixed] ACT NOW but also explore more before acting.",
 	}
@@ -125,8 +124,7 @@ func TestDetectGuidanceConflict_SameHintNotConflict(t *testing.T) {
 }
 
 func TestDetectGuidanceConflict_CaseInsensitive(t *testing.T) {
-	// #462: case-insensitive matching must still work across word-start
-	// anchored keywords.
+
 	hints := []string{
 		"[test] make your best-guess edit now.",
 		"[test2] Please Explore More Before Acting.",
@@ -139,9 +137,7 @@ func TestDetectGuidanceConflict_CaseInsensitive(t *testing.T) {
 }
 
 func TestDetectGuidanceConflict_SameDirectionNoConflict(t *testing.T) {
-	// #462 regression: two hints saying the same thing (stop exploring)
-	// must NOT be judged contradictory (mutual-exclusion + word-start
-	// anchoring).
+
 	hints := []string{
 		"[test] ACT NOW, stop exploring.",
 		"[test2] stop exploring further and edit now.",
@@ -152,7 +148,7 @@ func TestDetectGuidanceConflict_SameDirectionNoConflict(t *testing.T) {
 }
 
 func TestDetectGuidanceConflict_MaxOneConflict(t *testing.T) {
-	// Even with multiple conflicting pairs, only one conflict hint is returned.
+
 	hints := []string{
 		"[a] ACT NOW and commit.",
 		"[b] Please explore more first.",
@@ -164,7 +160,7 @@ func TestDetectGuidanceConflict_MaxOneConflict(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected conflict detection, got empty")
 	}
-	// Count occurrences of [guidance-conflict] tag - should be exactly 1.
+
 	count := strings.Count(result, "[guidance-conflict]")
 	if count != 1 {
 		t.Fatalf("expected exactly 1 conflict tag, got %d", count)
@@ -174,8 +170,6 @@ func TestDetectGuidanceConflict_MaxOneConflict(t *testing.T) {
 func TestContainsAnyKeyword(t *testing.T) {
 	subs := []string{"ACT NOW", "STOP EXPLOR"}
 
-	// containsAnyKeyword receives already-uppercased input (production code
-	// uppercases hints before calling).
 	if !containsAnyKeyword("PLEASE ACT NOW", subs) {
 		t.Error("expected match for 'ACT NOW'")
 	}

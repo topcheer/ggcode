@@ -1,11 +1,5 @@
 package agent
 
-// #2171 regression: the error-file class lacked '\' and ':' so Windows-
-// native output matched NOTHING (C:\src\api.rs:12:5, src\main.rs:3:9,
-// go's own .\pkg\file.go on Windows), and the tsc paren form
-// path(12,3) was unmatched - a platform-wide dead zone predating the
-// #2099 suffix widening.
-
 import "testing"
 
 func TestCausalErrorFilesWindowsPaths(t *testing.T) {

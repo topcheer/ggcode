@@ -1,35 +1,5 @@
 package agent
 
-// consensus.go -- Cross-Detector Consensus (Systemic Failure Detection)
-//
-// Research basis:
-//   - Zilos AI "MetaCognition Patterns for AI Agent Self-Monitoring and Adaptive
-//     Control" (2026-03-14): Section 5.1 "Cross-stream anomalies (most diagnostic)":
-//     "anomalies that appear in both streams simultaneously are high-confidence
-//     systemic failures; anomalies in only one stream narrow the locus of the problem."
-//   - Nelson & Narens (1990) metacognitive framework: the meta-level must synthesize
-//     signals from multiple object-level monitors.
-//   - MAPE-K Loop (Kephart & Chess, 2003): the Analyze phase must correlate symptoms
-//     across monitored resources before issuing control recommendations.
-//
-// The gap this addresses: ggcode has 30+ independent behavioral detectors (error_rush,
-// correction_spiral, strategy_fixation, bare_edit_streak, etc.), each firing its own
-// guidance independently. When multiple detectors fire within a narrow temporal window,
-// that simultaneous activation is the STRONGEST signal of systemic failure -- far more
-// diagnostic than any single detector. But no existing component synthesizes this
-// cross-detector signal.
-//
-// The pattern: if N detectors fire within W tool-call steps, the agent is not experiencing
-// isolated incidents — it is in a systemic breakdown. The consensus detector injects a
-// high-priority "step back" message that is stronger and more actionable than individual
-// detector warnings.
-//
-// Distinct from:
-//   - error_compound: tracks error probability across steps (single signal type)
-//   - trajectory_health: synthesizes post-hoc quality metrics (not real-time consensus)
-//   - failure_mode: classifies a single failure's category (no cross-detector correlation)
-//   - THIS detector: correlates TEMPORAL CO-OCCURRENCE of multiple independent detectors
-
 import (
 	"fmt"
 	"strings"
@@ -37,31 +7,19 @@ import (
 )
 
 const (
-	// consensusWindowSteps is how many recent tool-call steps to consider for
-	// cross-detector consensus (short-term temporal correlation).
-	consensusWindowSteps = 5
-	// consensusFireThreshold is how many distinct detectors must fire within the
-	// window to trigger a systemic alert.
+	consensusWindowSteps   = 5
 	consensusFireThreshold = 3
-	// consensusMaxAlerts caps total consensus alerts per run to avoid nagging.
-	consensusMaxAlerts = 2
-	// consensusCooldownSteps prevents re-firing within this many steps of an alert.
+	consensusMaxAlerts     = 2
 	consensusCooldownSteps = 8
 )
 
-// consensusState tracks temporal co-occurrence of detector firings.
 type consensusState struct {
-	// firings is a ring buffer of recent detector firing events.
-	firings []consensusFiring
-	// alertsIssued counts total consensus alerts in this run.
-	alertsIssued int
-	// lastAlertStep is the tool-call step index when we last alerted (for cooldown).
+	firings       []consensusFiring
+	alertsIssued  int
 	lastAlertStep int
-	// currentStep tracks the latest tool-call/iteration index supplied by callers (#1446-C).
-	currentStep int
+	currentStep   int
 }
 
-// consensusFiring records a single detector firing event.
 type consensusFiring struct {
 	detector string
 	step     int
@@ -71,7 +29,7 @@ type consensusFiring struct {
 func newConsensusState() *consensusState {
 	return &consensusState{
 		firings:       make([]consensusFiring, 0, 32),
-		lastAlertStep: -consensusCooldownSteps, // allow first alert
+		lastAlertStep: -consensusCooldownSteps,
 	}
 }
 
@@ -82,13 +40,6 @@ func (s *consensusState) reset() {
 	s.currentStep = 0
 }
 
-// recordFiring logs that a named detector produced guidance.
-// This should be called whenever ANY detector's check() returns non-empty.
-// #1446-C: step is the CURRENT tool-call/iteration index supplied by the
-// caller - the old self-increment made the window axis FIRE-COUNT, so any
-// 3 reporters firing once each at arbitrary moments across an entire run
-// counted as "within the last 5 tool calls" and triggered the strong
-// 'STOP incremental patching' intervention with factually wrong wording.
 func (s *consensusState) recordFiring(detectorName string, step int) {
 	if s == nil || detectorName == "" {
 		return
@@ -101,7 +52,7 @@ func (s *consensusState) recordFiring(detectorName string, step int) {
 		step:     step,
 		time:     time.Now(),
 	})
-	// Trim old entries beyond 2x window to keep memory bounded
+
 	if len(s.firings) > consensusWindowSteps*6 {
 		cutoff := s.currentStep - consensusWindowSteps
 		kept := s.firings[:0]
@@ -114,8 +65,6 @@ func (s *consensusState) recordFiring(detectorName string, step int) {
 	}
 }
 
-// check returns a consensus alert if multiple distinct detectors fired within
-// the recent window, indicating systemic failure. Returns empty string otherwise.
 func (s *consensusState) check() string {
 	if s == nil {
 		return ""
@@ -124,12 +73,10 @@ func (s *consensusState) check() string {
 		return ""
 	}
 
-	// Cooldown: don't fire too soon after last alert
 	if s.currentStep-s.lastAlertStep < consensusCooldownSteps {
 		return ""
 	}
 
-	// Count distinct detectors within the window
 	windowStart := s.currentStep - consensusWindowSteps
 	seen := make(map[string]bool)
 	var recentDetectors []string
@@ -177,17 +124,6 @@ func (s *consensusState) check() string {
 	return guidance
 }
 
-// checkOnly runs the consensus check WITHOUT scanning content (#952). Used by
-// the agent loop, where firings are recorded explicitly via recordFiring at
-// each detector call site: the content scan was both fragile
-// (its baseline-offset window missed every detector whose guidance is appended
-// before the window starts — failureMode, errorCascade, ...) and a
-// false-positive vector (#147: raw tool output containing tag literals).
-//
-// Removed dead scan entries: "[Tool Fallback" (guidance is emitted as
-// "[fallback ...", never matching), "[Fix Cascade" (emits "[HYPOTHESIS
-// LOCK-IN WARNING]"), and "[Failure Mode" / "[Error Cascade" (now recorded
-// explicitly before the old scan window started, so they could never match).
 func (s *consensusState) checkOnly() string {
 	if s == nil {
 		return ""

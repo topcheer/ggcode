@@ -9,67 +9,52 @@ import (
 	"github.com/topcheer/ggcode/internal/security"
 )
 
-// DiffIssue represents a quality issue found in a staged diff.
 type DiffIssue struct {
 	File     string `json:"file"`
-	Line     int    `json:"line"`     // line number in the new file
-	Severity string `json:"severity"` // "warning" or "info"
-	Category string `json:"category"` // "debug-stmt", "todo", "merge-conflict", "secret", "debugger"
+	Line     int    `json:"line"`
+	Severity string `json:"severity"`
+	Category string `json:"category"`
 	Message  string `json:"message"`
 }
 
-// maxDiffScanIssues caps the number of issues reported to avoid overwhelming
-// the agent context when a large diff triggers many matches.
 const maxDiffScanIssues = 15
 
-// debugStmtPatterns matches common debug/print statements across languages.
-// Only checked against ADDED lines. Test files are excluded separately.
 var debugStmtPatterns = []*regexp.Regexp{
-	// Go
+
 	regexp.MustCompile(`\bfmt\.Println\(`),
 	regexp.MustCompile(`\bfmt\.Printf\(`),
 	regexp.MustCompile(`\bprintln\(`),
-	// JavaScript/TypeScript
+
 	regexp.MustCompile(`\bconsole\.log\(`),
 	regexp.MustCompile(`\bconsole\.debug\(`),
-	// Python
-	// #826: language-gated below — \bprint\( fired on 'logger.print(x)'
-	// in .go files and every non-Python text.
+
 	regexp.MustCompile(`\bprint\(`),
 	regexp.MustCompile(`\bpprint\.pprint\(`),
 	regexp.MustCompile(`\bpprint\.pformat\(`),
-	// Ruby
-	// #826: binding.pry removed from this list — it also lives in
-	// debuggerPatterns and produced two findings for one line.
+
 	regexp.MustCompile(`\bbinding\.irb\b`),
-	// Java/Kotlin/Scala
+
 	regexp.MustCompile(`\bSystem\.out\.println\(`),
 	regexp.MustCompile(`\bSystem\.err\.println\(`),
-	// Rust
+
 	regexp.MustCompile(`\beprintln!\(`),
 	regexp.MustCompile(`\bdbg!\(`),
-	// PHP
+
 	regexp.MustCompile(`\bvar_dump\(`),
 	regexp.MustCompile(`\bprint_r\(`),
 	regexp.MustCompile(`\bdd\(`),
-	// C/C++
+
 	regexp.MustCompile(`\bfprintf\s*\(\s*stderr\b`),
 }
 
-// pythonOnlyPattern marks the Python-only debug patterns that must not
-// fire on non-Python files (#826). Matched by pattern string — regexp
-// pointers are not stable across compilations.
 var pythonOnlyPattern = map[string]bool{
 	`\bprint\(`:           true,
 	`\bpprint\.pprint\(`:  true,
 	`\bpprint\.pformat\(`: true,
-	// #3168: dd( is also Python-only — a custom `.dd(x)` method in
-	// Go/Rust/etc hit \bdd\( and fired an info-level false positive
-	// (same family as the #826 print( fix).
+
 	`\bdd\(`: true,
 }
 
-// debuggerPatterns matches debugger/breakpoint statements.
 var debuggerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bpdb\.set_trace\(\)`),
 	regexp.MustCompile(`\bbreakpoint\(\)`),
@@ -78,17 +63,10 @@ var debuggerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bbinding\.pry\b`),
 }
 
-// pythonFileRe gates Python-only debug patterns by file path (#826).
-// #1676 case 2: the old third alternative was a bare `python`, so any path
-// CONTAINING the substring ("mypythonlib.js", "python_utils.ts") matched -
-// a partial revival of #826. The anchored form keeps the original intent
-// (a path segment named python) without substring hits.
 var pythonFileRe = regexp.MustCompile(`\.py$|(^|/)python(/|$)`)
 
-// todoPattern matches TODO/FIXME/HACK/XXX in added lines.
 var todoPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND)\b`)
 
-// mergeConflictMarkers matches unresolved merge conflict markers.
 var mergeConflictMarkers = []*regexp.Regexp{
 	regexp.MustCompile(`^<{7}`),
 	regexp.MustCompile(`^={7}`),
@@ -96,26 +74,12 @@ var mergeConflictMarkers = []*regexp.Regexp{
 	regexp.MustCompile(`^\|{7}`),
 }
 
-// testFilePattern matches common test file naming conventions so we can
-// exclude them from debug-statement checks (print statements are expected
-// in test files).
 var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|test_.*\.py|.*_test\.py|\.test\.ts|\.test\.js|__tests__/.*|Test\.cs|_spec\.rb|\.spec\.rb|_test\.rs)$`)
 
-// diffFileHeader matches the "+++ b/file" lines in unified diff output to
-// track the current file. #4686: git quotes paths containing spaces
-// (always) and non-ASCII bytes (core.quotePath) as `+++ b/"my file.go"` -
-// the quote sits BEFORE b/, so the bare b/ prefix never matches and the
-// whole header is skipped (the file silently vanishes from downstream
-// plans). Bare -> group 1; quoted -> group 2 (the #4433 paired-capture
-// form; optional-quote suffixes let a lazy group absorb the quote).
 var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+(?:b/"([^"]+)"|b/([^"\s]\S*))`)
 
-// diffOldFileHeader matches the "--- a/file" side; same quoted alternative.
 var diffOldFileHeader = regexp.MustCompile(`^---\s+(?:a/"([^"]+)"|a/([^"\s]\S*))`)
 
-// diffHeaderPath extracts the path from a diffFileHeader/diffOldFileHeader
-// match, handling the #4686 paired capture (quoted -> group 1, bare ->
-// group 2) and stripping git quoting via normalizeGitDiffPath.
 func diffHeaderPath(m []string) string {
 	if len(m) >= 3 && m[2] != "" {
 		return normalizeGitDiffPath(m[2])
@@ -126,108 +90,61 @@ func diffHeaderPath(m []string) string {
 	return ""
 }
 
-// #3133: accept BOTH plain hunks (@@ -a,b +c,d @@) and combined-diff
-// hunks (@@@ -a,b -c,d +e,f @@@ - emitted for unmerged paths during
-// cherry-pick/rebase conflicts). The capture is the start line of the
-// LAST + section (the new-file line numbers the scan must report);
-// without this, combined headers missed the match and newLineNum kept
-// the previous hunk's residue, misplacing every reported issue line.
 var diffHunkHeader = regexp.MustCompile(`^@{2,3}\s+(?:-\d+(?:,\d+)?\s+)+\+(\d+)(?:,\d+)?\s+@{2,3}`)
 
-// ScanStagedDiffForIssues analyzes a unified diff (e.g. from "git diff --cached")
-// and returns quality issues found in ADDED lines only. This provides a
-// deterministic pre-commit quality check that catches common mistakes before
-// they enter version control.
-//
-// Checked categories:
-//   - Debug statements (fmt.Println, console.log, print(), etc.)
-//   - Debugger/breakpoint statements (pdb.set_trace, debugger;, binding.pry)
-//   - TODO/FIXME/HACK/XXX markers in added lines
-//   - Unresolved merge conflict markers
-//   - Potential secrets (API keys, tokens, passwords)
-//
-// Test files are excluded from debug-statement checks since print/debug
-// output is expected in tests. Secrets and merge conflicts are always checked.
 func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	if strings.TrimSpace(diffOutput) == "" {
 		return nil
 	}
 
 	var issues []DiffIssue
-	lowSeverityIssues := 0 // #1676 case 1: cap applies only to the low-severity tail
+	lowSeverityIssues := 0
 	currentFile := ""
 	newLineNum := 0
 	isTestFile := false
-	// #3167: combined-diff hunks (@@@, unmerged paths during
-	// cherry-pick/rebase) prefix added lines with "++" and removed lines
-	// with "--"/"- ": strip two markers in that mode, or every ^-anchored
-	// pattern (conflict markers, ^import pdb) silently misses.
+
 	inCombinedHunk := false
 
 	lines := strings.Split(diffOutput, "\n")
 
 	for _, line := range lines {
-		// Track current file from "+++ b/file" headers.
+
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			// #4436: git quotes space-containing paths as `+++ b/"my file.go"`;
-			// strip the quotes and octal escapes or issues get attributed to a
-			// path with literal quote debris.
+
 			currentFile = diffHeaderPath(m)
 			isTestFile = testFilePattern.MatchString(currentFile)
 			continue
 		}
-		// Also track old file header for deletion-only changes.
+
 		if diffOldFileHeader.MatchString(line) {
 			continue
 		}
 
-		// Track line numbers from hunk headers: @@ -old,count +new,count @@
 		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
 			fmt.Sscanf(m[1], "%d", &newLineNum)
-			// #3167: @@@ opens a combined hunk (double prefixes), @@ a plain
-			// one (single prefixes).
+
 			inCombinedHunk = strings.HasPrefix(line, "@@@")
 			continue
 		}
 
-		// Only check ADDED lines (lines starting with '+', not "+++").
 		if len(line) == 0 || line[0] != '+' {
-			// Context lines advance the new line counter, removed lines do
-			// not. In a combined hunk, context lines carry two spaces but the
-			// first byte is still ' ', so the counter holds either way.
+
 			if len(line) > 0 && line[0] == ' ' {
 				newLineNum++
 			}
 			continue
 		}
 
-		// #3167: strip one marker in plain hunks, two in combined hunks.
 		var addedContent string
-		// #4801: a well-formed combined hunk carries a TWO-character prefix
-		// - one column per parent ("++", "+ ", "+-") - so strip both when the
-		// second byte is a valid prefix column. The old 'only when
-		// line[1] == +' branch left the single-plus form "+ content" with a
-		// leading space, defeating the ^-anchored merge-conflict markers on
-		// cherry-pick/remerge diffs. Malformed/loose lines whose second byte
-		// is not a prefix column (e.g. the #3133 regression fixtures) keep
-		// the single-char strip.
+
 		if inCombinedHunk && len(line) > 2 && (line[1] == '+' || line[1] == '-' || line[1] == ' ') {
 			addedContent = line[2:]
 		} else {
 			addedContent = line[1:]
 		}
-		issueLine := newLineNum // this added line's number in the new file
-		newLineNum++            // advance for the next line
+		issueLine := newLineNum
+		newLineNum++
 
-		// #1676 case 1: the cap used to break HERE, before any category
-		// check - 15 leading TODO lines silently starved the secret scan on
-		// every later line. Critical categories (merge-conflict, secrets)
-		// are now ALWAYS scanned; the cap only gates the low-severity tail
-		// (debugger / debug-stmt / todo) below.
-
-		// --- Always-checked categories ---
-
-		// 1. Merge conflict markers (critical — should never be committed).
 		for _, pat := range mergeConflictMarkers {
 			if pat.MatchString(addedContent) {
 				issues = append(issues, DiffIssue{
@@ -241,7 +158,6 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		// 2. Secrets (always check, even in test files).
 		if secretScanEnabled {
 			findings := security.ScanForSecrets(currentFile, addedContent+"\n")
 			for _, f := range findings {
@@ -255,19 +171,14 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		// --- Source-file-only categories (skip test files) ---
-
 		if isTestFile {
 			continue
 		}
 
-		// Low-severity tail: capped, and never allowed to grow past the
-		// critical findings' budget (#1676 case 1).
 		if lowSeverityIssues >= maxDiffScanIssues {
 			continue
 		}
 
-		// 3. Debugger/breakpoint statements.
 		for _, pat := range debuggerPatterns {
 			if pat.MatchString(addedContent) {
 				issues = append(issues, DiffIssue{
@@ -282,10 +193,8 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		// 4. Debug print statements.
 		for _, pat := range debugStmtPatterns {
-			// #826: Python-only patterns must not fire on non-Python files
-			// ('logger.print(x)' in Go is not a debug print).
+
 			if pythonOnlyPattern[pat.String()] && !pythonFileRe.MatchString(currentFile) {
 				continue
 			}
@@ -302,7 +211,6 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		// 5. TODO/FIXME/HACK/XXX markers in added lines.
 		if todoPattern.MatchString(addedContent) {
 			issues = append(issues, DiffIssue{
 				File:     currentFile,
@@ -318,8 +226,6 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	return issues
 }
 
-// severityFromSecurity maps the security package's severity levels to
-// diff scan severity levels.
 func severityFromSecurity(sec string) string {
 	if sec == "high" {
 		return "warning"
@@ -327,8 +233,6 @@ func severityFromSecurity(sec string) string {
 	return "info"
 }
 
-// FormatDiffIssues formats a list of DiffIssues into a human-readable warning
-// string suitable for appending to a git_commit result.
 func FormatDiffIssues(issues []DiffIssue) string {
 	if len(issues) == 0 {
 		return ""
@@ -345,7 +249,6 @@ func FormatDiffIssues(issues []DiffIssue) string {
 		}
 	}
 
-	// Header line summarizing the scan results.
 	b.WriteString("[Pre-commit scan] ")
 	parts := []string{}
 	if warnings > 0 {
@@ -379,8 +282,6 @@ func FormatDiffIssues(issues []DiffIssue) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// getStagedDiff runs "git diff --cached" in the given directory and returns
-// the output. Returns empty string if git fails or there are no staged changes.
 func getStagedDiff(ctx context.Context, dir string) string {
 	cmd := gitCommand(ctx, "diff", "--cached")
 	cmd.Dir = dir
@@ -391,11 +292,6 @@ func getStagedDiff(ctx context.Context, dir string) string {
 	return string(out)
 }
 
-// getWorkingTreeDiff runs "git diff HEAD" in the given directory and returns
-// the output. This captures ALL tracked changes (both staged and unstaged)
-// relative to HEAD — exactly the set of changes that "git commit -a" would
-// commit. Returns empty string if git fails (e.g., no HEAD yet) or there are
-// no changes.
 func getWorkingTreeDiff(ctx context.Context, dir string) string {
 	cmd := gitCommand(ctx, "diff", "HEAD")
 	cmd.Dir = dir

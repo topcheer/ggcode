@@ -2,11 +2,6 @@
 
 package tool
 
-// #4448 regression: file_ops move's pre-rename RemoveTracking dropped the
-// source's read-state, and a FAILED rename (EPERM/EACCES/EINVAL) left the
-// file physically in place but untracked - a later write_file false-
-// positived the blind-write warning for a file the agent HAD read.
-
 import (
 	"context"
 	"os"
@@ -26,15 +21,12 @@ func TestIssue4448_FailedMoveKeepsTrackerReadState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate the agent having read the source.
 	defaultFileTracker.RecordRead(src)
 	t.Cleanup(func() { defaultFileTracker.RemoveTracking(src) })
 	if !defaultFileTracker.HasBeenSeen(src) {
 		t.Fatal("precondition: source must be tracked after RecordRead")
 	}
 
-	// Make the rename fail with a non-EXDEV error: remove write permission
-	// from the directory so rename(2) returns EACCES.
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -54,11 +46,11 @@ func TestIssue4448_FailedMoveKeepsTrackerReadState(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("move under a read-only directory must fail: %s", result.Content)
 	}
-	// The physical file is untouched.
+
 	if b, _ := os.ReadFile(src); string(b) != "data" {
 		t.Fatalf("source damaged: %q", b)
 	}
-	// #4448: the read-state must survive the failed move.
+
 	if !defaultFileTracker.HasBeenSeen(src) {
 		t.Fatal("failed move dropped the source's read-state (#4448): a later write_file would false-positive the blind-write warning")
 	}

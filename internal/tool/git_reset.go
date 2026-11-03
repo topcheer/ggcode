@@ -7,9 +7,6 @@ import (
 	"strings"
 )
 
-// GitReset implements the git_reset tool.
-// It resets the staging area and/or working tree to a specified state.
-// This is a write operation that can discard uncommitted changes.
 type GitReset struct{ WorkingDir string }
 
 func (t GitReset) Name() string { return "git_reset" }
@@ -75,11 +72,8 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// File-specific reset: unstage specific files (always mixed mode)
 	if len(args.Files) > 0 {
-		// #1689 case 3: without the separator, a repo file literally named
-		// "HEAD" (or any dash-prefixed name) is consumed as a ref/option -
-		// git_show's file argument has had "--" all along.
+
 		gitArgs := append([]string{"reset", "--"}, args.Files...)
 		cmd := gitCommand(ctx, gitArgs...)
 		cmd.Dir = dir
@@ -94,10 +88,6 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{Content: trimmed}, nil
 	}
 
-	// #1689 case 1: a dash-prefixed target reaches git as an OPTION -
-	// "--pathspec-from-file=..." can steer a DESTRUCTIVE hard reset's
-	// pathspec from an external file. git_revert guards this (#1325);
-	// reset, the more destructive sibling, never did.
 	if strings.HasPrefix(target, "-") {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid reset target %q: leading dash (refusing option injection)", target)}, nil
 	}
@@ -113,7 +103,6 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	trimmed := strings.TrimSpace(string(out))
 
-	// Add advisory for hard reset
 	if mode == "hard" {
 		msg := "Reset to " + target + " (hard). Uncommitted changes were permanently discarded."
 		if trimmed != "" {
@@ -132,7 +121,6 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitReset) Clone() Tool {
 	return &GitReset{WorkingDir: t.WorkingDir}
 }

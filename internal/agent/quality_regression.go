@@ -1,33 +1,5 @@
 package agent
 
-// Quality Regression Detector -- Eval-Driven Development regression detection.
-//
-// Background: Eval-Driven Development (LangSmith Evals, Braintrust, OpenAI Evals
-// Framework) is the 2025-2026 core methodology for systematically measuring AI
-// agent quality and driving continuous improvement. A central capability of
-// every eval platform is REGRESSION DETECTION: flagging when a run's quality
-// has dropped significantly below the historical baseline, so teams can catch
-// quality degradation early rather than discovering it weeks later.
-//
-// Gap in ggcode: ResponseQualityScorer records a per-run QualityEntry and can
-// compare providers A/B, but it NEVER compares the latest run against its own
-// rolling historical baseline. So a slow quality erosion (e.g. from a config
-// change, a model swap, or accumulating context bloat) goes completely silent.
-// This detector fills that gap.
-//
-// Design: deterministic, zero LLM overhead. After each scored run it builds a
-// rolling baseline (mean over the previous N runs for the SAME provider/model
-// pair) and classifies the current run's deviation. It surfaces:
-//   - Overall score regression (current << baseline mean)
-//   - Iteration inflation (current iterations >> baseline mean) -- the single
-//     most actionable leading indicator of degrading agent efficiency
-//   - Error-rate regression (current error rate >> baseline mean)
-//
-// Severity tiers mirror the gate/check pattern used elsewhere in this package:
-// advisory only, never blocks the run. The latest report is stored on the
-// scorer so any reporting/telemetry surface can retrieve it. Detection also
-// emits a debug.Log so regressions are observable without wiring.
-
 import (
 	"fmt"
 	"math"
@@ -37,28 +9,18 @@ import (
 )
 
 const (
-	// regressionMinHistory: minimum prior runs (same provider/model) needed to
-	// form a trustworthy baseline. Below this, variance noise dominates.
 	regressionMinHistory = 3
 
-	// regressionWindow: how many most-recent prior runs form the baseline.
 	regressionWindow = 10
 
-	// regressionScoreDrop: an absolute score drop (0-1 scale) at or beyond this
-	// versus the baseline mean flags a regression.
 	regressionScoreDrop = 0.15
 
-	// regressionIterationMultiple: if current iterations exceed baseline-mean
-	// iterations by this multiple, flag iteration inflation.
 	regressionIterationMultiple = 1.6
 
-	// regressionErrorMultiple: if current error-rate exceeds baseline-mean
-	// error-rate by this multiple (and is non-trivial), flag error regression.
 	regressionErrorMultiple = 1.8
-	regressionErrorFloor    = 0.15 // below this absolute error rate, ignore
+	regressionErrorFloor    = 0.15
 )
 
-// RegressionSeverity classifies how far below baseline the current run fell.
 type RegressionSeverity string
 
 const (
@@ -68,8 +30,6 @@ const (
 	SeveritySevere   RegressionSeverity = "severe"
 )
 
-// RegressionReport summarizes a quality-regression detection for one run.
-// Returned by ResponseQualityScorer.DetectRegression.
 type RegressionReport struct {
 	Detected     bool
 	Severity     RegressionSeverity
@@ -78,27 +38,18 @@ type RegressionReport struct {
 	CurrentScore float64
 	BaselineMean float64
 	BaselineMin  float64
-	RunCount     int // prior runs in the baseline
+	RunCount     int
 	Signals      []string
 }
 
-// baselineStats holds aggregate statistics over a window of prior runs.
 type baselineStats struct {
 	count       int
 	meanScore   float64
 	minScore    float64
-	meanIter    float64 // mean IterationRatio across baseline
-	meanErrRate float64 // mean ErrorRate across baseline
+	meanIter    float64
+	meanErrRate float64
 }
 
-// DetectRegression compares the most recently scored run against the rolling
-// baseline of prior runs for the same provider/model pair. Returns a report
-// describing whether and how severely the run regressed.
-//
-// The "current" run is the last entry appended. The baseline is built from the
-// preceding runs matching the same provider/model, up to regressionWindow.
-// If there are fewer than regressionMinHistory prior runs, detection is
-// skipped (Detected=false) because the baseline is not yet trustworthy.
 func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -108,7 +59,6 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 	}
 	current := s.runs[len(s.runs)-1]
 
-	// Collect prior runs for the same provider/model (excluding current).
 	var prior []QualityEntry
 	for i := 0; i < len(s.runs)-1; i++ {
 		r := s.runs[i]
@@ -125,10 +75,9 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 	}
 
 	if len(prior) < regressionMinHistory {
-		return rep // insufficient history -- cannot trust a baseline
+		return rep
 	}
 
-	// Use only the most recent regressionWindow prior runs for the baseline.
 	start := len(prior) - regressionWindow
 	if start < 0 {
 		start = 0
@@ -140,7 +89,6 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 
 	var signals []string
 
-	// 1) Overall score regression.
 	scoreDrop := bs.meanScore - current.Score
 	if scoreDrop >= regressionScoreDrop {
 		signals = append(signals, fmt.Sprintf(
@@ -148,8 +96,6 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 			current.Score, bs.meanScore, scoreDrop))
 	}
 
-	// 2) Iteration inflation: leading indicator of degrading efficiency.
-	// Compare current IterationRatio to baseline mean.
 	if bs.meanIter > 0 && current.Signals.IterationRatio > bs.meanIter*regressionIterationMultiple {
 		signals = append(signals, fmt.Sprintf(
 			"iteration ratio %.2fx vs baseline %.2fx (%.1fx baseline)",
@@ -157,14 +103,6 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 			current.Signals.IterationRatio/bs.meanIter))
 	}
 
-	// 3) Error-rate regression.
-	// #422: the old branch switch (baseline < floor → any current > floor
-	// fires vs baseline ≥ floor → needs 1.8x) was DISCONTINUOUS at the
-	// boundary: baseline 0.149 triggered at current 0.151, baseline 0.151
-	// needed current 0.272 — a dirtier baseline was harder to alert on than
-	// a slightly cleaner one. Unified semantics: trigger when current
-	// exceeds BOTH the absolute floor AND 1.8x the baseline mean (max of the
-	// two thresholds), continuous across the boundary.
 	errThreshold := math.Max(regressionErrorFloor, bs.meanErrRate*regressionErrorMultiple)
 	if current.Signals.ErrorRate > errThreshold {
 		if bs.meanErrRate < regressionErrorFloor {
@@ -189,7 +127,6 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 	return rep
 }
 
-// computeBaseline aggregates a window of QualityEntry into baselineStats.
 func computeBaseline(entries []QualityEntry) baselineStats {
 	if len(entries) == 0 {
 		return baselineStats{}
@@ -214,10 +151,8 @@ func computeBaseline(entries []QualityEntry) baselineStats {
 	}
 }
 
-// classifyRegression assigns a severity tier based on score drop magnitude and
-// whether the run also underperformed the historical minimum.
 func classifyRegression(scoreDrop float64, current QualityEntry, bs baselineStats) RegressionSeverity {
-	// Score-drop based tiers (absolute 0-1 scale).
+
 	switch {
 	case scoreDrop >= 0.35:
 		return SeveritySevere
@@ -227,11 +162,6 @@ func classifyRegression(scoreDrop float64, current QualityEntry, bs baselineStat
 		return SeverityMinor
 	}
 
-	// #421: iteration-inflation tiers must align with the DETECTION threshold
-	// (regressionIterationMultiple=1.6x). The old 2.0x-only tier left the
-	// 1.6x–2.0x band Detected=true with Severity=none (downstream filters
-	// silently dropped it) and made 2.0x jump straight to Moderate, skipping
-	// Minor.
 	if bs.meanIter > 0 {
 		iterMult := current.Signals.IterationRatio / bs.meanIter
 		switch {
@@ -242,29 +172,22 @@ func classifyRegression(scoreDrop float64, current QualityEntry, bs baselineStat
 		}
 	}
 
-	// #421: error-rate signals must classify too — error-only regressions
-	// previously returned SeverityNone despite Detected=true.
 	if bs.meanErrRate > 0 {
 		if current.Signals.ErrorRate >= bs.meanErrRate*regressionErrorMultiple {
 			return SeverityMinor
 		}
 	} else if current.Signals.ErrorRate >= regressionErrorFloor {
-		return SeverityMinor // emerged above floor from a clean baseline
+		return SeverityMinor
 	}
 
-	// Even without a large overall drop, if the run fell below the
-	// historical minimum score, that is at least minor.
 	if current.Score < bs.minScore-0.05 {
 		return SeverityMinor
 	}
 	return SeverityNone
 }
 
-// round3 rounds to 3 decimal places (matches the scorer's precision).
 func round3(v float64) float64 { return float64(int(v*1000+0.5)) / 1000 }
 
-// Format returns a human-readable summary of the regression report.
-// Empty if no regression was detected.
 func (r RegressionReport) Format() string {
 	if !r.Detected {
 		return ""
@@ -281,9 +204,6 @@ func (r RegressionReport) Format() string {
 	return b.String()
 }
 
-// maybeDetectRegression is called from the reflection path after a run is
-// scored. It detects regression against the rolling baseline and, when found,
-// emits a debug log so the degradation is observable. Non-fatal: never blocks.
 func (s *ResponseQualityScorer) maybeDetectRegression() {
 	if s == nil {
 		return
@@ -292,7 +212,7 @@ func (s *ResponseQualityScorer) maybeDetectRegression() {
 	if !rep.Detected {
 		return
 	}
-	// Store latest report for any reporting surface.
+
 	s.mu.Lock()
 	s.latestRegression = rep
 	s.mu.Unlock()

@@ -1,36 +1,5 @@
 package agent
 
-// Unchecked Type Assertion Detection in Go Code
-//
-// Problem: AI coding agents frequently produce Go code with unchecked type
-// assertions: `val := x.(SomeType)` without the comma-ok idiom. If the
-// assertion fails at runtime, Go panics with "interface conversion" - a crash
-// that is often not caught by tests (the failing input may be rare in the
-// happy path) and manifests as a production incident.
-//
-// The safe pattern is the comma-ok form: `val, ok := x.(SomeType)` which
-// returns a zero value and `false` instead of panicking, allowing graceful
-// handling.
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external linters)
-//   - Cursor: no automatic detection (lint-on-save may catch via go vet)
-//   - Cline/OpenHands: reactive only -- caught by tests or production incidents
-//   - Aider: no automatic detection
-//   - Windsurf: no automatic detection
-//
-// External linters (errcheck, staticcheck S1033) can catch some cases but
-// require a separate lint cycle and are not always installed. go vet does
-// not flag type assertions at all. This check provides immediate, zero-
-// dependency feedback at write time using Go stdlib AST parser.
-//
-// Approach: AST-based analysis. Walk all assignments and value specs looking
-// for TypeAssertExpr in single-value context (not comma-ok). The comma-ok form
-// produces an AssignStmt with two LHS operands; the unchecked form has one.
-// We also catch unchecked assertions in function call arguments and return
-// statements where the panic would propagate to the caller. Delta-aware: only
-// flags NEW unchecked assertions introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -39,15 +8,11 @@ import (
 	"strings"
 )
 
-// uncheckedAssertInfo records a single unchecked type assertion with its line and expression text.
 type uncheckedAssertInfo struct {
 	line int
-	expr string // the assertion expression text for fingerprinting
+	expr string
 }
 
-// checkUncheckedTypeAssert detects unchecked type assertions in Go code.
-// Returns warning strings. Only flags NEW instances introduced by this edit
-// (delta-aware).
 func checkUncheckedTypeAssert(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -59,13 +24,6 @@ func checkUncheckedTypeAssert(filePath, oldContent, newContent string) []string 
 	oldAsserts := findUncheckedAsserts(filePath, oldContent)
 	newAsserts := findUncheckedAsserts(filePath, newContent)
 
-	// Delta: per-expression multiset (count) comparison — neither plain set
-	// membership nor a raw total count. Set membership swallows a NEW
-	// same-text assertion (two handlers each asserting x.(*MyError) in one
-	// file: the second is filtered as "pre-existing"). A raw total count
-	// misses fix-one-add-another swaps. Per-expression count difference
-	// catches both, and a pure line shift keeps every count unchanged, so the
-	// #157 no-reflag guarantee is preserved.
 	oldCounts := make(map[string]int)
 	for _, a := range oldAsserts {
 		oldCounts[assertFingerprint(a)]++
@@ -97,10 +55,6 @@ func checkUncheckedTypeAssert(filePath, oldContent, newContent string) []string 
 	}
 }
 
-// findUncheckedAsserts parses Go source and returns all unchecked type
-// assertions. An assertion is "unchecked" when it appears in a single-value
-// context (one LHS in an assignment, or in a call argument / return / send).
-// The comma-ok form (`val, ok := x.(T)`) has two LHS operands and is safe.
 func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -110,10 +64,8 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 		return nil
 	}
 
-	// Collect positions of all comma-ok type assertions so we can exclude them.
 	okAssertions := make(map[token.Pos]bool)
 
-	// Collect positions of all type assertions found anywhere.
 	allAssertions := make(map[token.Pos]bool)
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -121,8 +73,7 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 		if !ok {
 			return true
 		}
-		// Skip type switch guards: `switch t := v.(type)` produces a
-		// TypeAssertExpr with nil Type. These are always safe.
+
 		if ta.Type == nil {
 			return true
 		}
@@ -130,15 +81,13 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 		return true
 	})
 
-	// Mark comma-ok assertions: assignments with 2 LHS where one RHS is a
-	// TypeAssertExpr.
 	for _, decl := range file.Decls {
 		ast.Inspect(decl, func(n ast.Node) bool {
 			assign, ok := n.(*ast.AssignStmt)
 			if !ok {
 				return true
 			}
-			// Comma-ok: exactly 2 LHS and 1 RHS that is a TypeAssertExpr.
+
 			if len(assign.Lhs) == 2 && len(assign.Rhs) == 1 {
 				if ta, ok := assign.Rhs[0].(*ast.TypeAssertExpr); ok {
 					okAssertions[ta.Pos()] = true
@@ -148,8 +97,6 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 		})
 	}
 
-	// Also check ValueSpec (var declarations) for comma-ok form.
-	// Rare but valid Go syntax.
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok {
@@ -160,7 +107,7 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 			if !ok {
 				continue
 			}
-			// Comma-ok in var decl: 2 names, 1 value that is TypeAssertExpr.
+
 			if len(vs.Names) == 2 && len(vs.Values) == 1 {
 				if ta, ok := vs.Values[0].(*ast.TypeAssertExpr); ok {
 					okAssertions[ta.Pos()] = true
@@ -181,10 +128,6 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 	return results
 }
 
-// assertExprAt finds the TypeAssertExpr starting at pos and renders it with
-// the package-level exprText helper, independent of line numbers (fix #157:
-// position strings change when lines shift above the assertion, re-flagging
-// pre-existing issues).
 func assertExprAt(file *ast.File, pos token.Pos) string {
 	var target ast.Expr
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -204,23 +147,10 @@ func assertExprAt(file *ast.File, pos token.Pos) string {
 	if !ok {
 		return fmt.Sprintf("pos:%d", pos)
 	}
-	// Render the full assertion shape — both the asserted expression and the
-	// target type. exprText alone has no *ast.TypeAssertExpr case (its switch
-	// covers Ident/SelectorExpr/ParenExpr/BasicLit only) and returned "" for
-	// EVERY assertion, collapsing all fingerprints to the empty string and
-	// permanently silencing the detector on files with any pre-existing
-	// assertion (#169).
+
 	return exprText(ta.X) + ".(" + exprText(ta.Type) + ")"
 }
 
-// assertFingerprint returns a content-based key for delta comparison.
-// Uses the expression text so the same assertion at different line numbers
-// is recognized as the same issue (pinned by
-// TestCheckUncheckedTypeAssert_LineShiftNotReflagged). #1518 case D1
-// proposed adding the line (two identical assertions in one function
-// share a fingerprint, so fix-one-add-another nets to zero), but that
-// directly contradicts the deliberate line-shift-stability design - kept
-// as a documented trade-off, not changed.
 func assertFingerprint(a uncheckedAssertInfo) string {
 	return a.expr
 }

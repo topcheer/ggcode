@@ -1,9 +1,5 @@
 package agentruntime
 
-// #3868 probes: enum membership enforced on the accept path with native-type
-// restoration, whole-string numeric parsing, integer integrality, and the
-// empty-string enum member rejected at schema validation.
-
 import (
 	"testing"
 
@@ -26,7 +22,7 @@ func issue3868Schema() mcp.ElicitationSchema {
 
 func TestIssue3868_FreeformOffEnumRejected(t *testing.T) {
 	schema := issue3868Schema()
-	// A violating surface feeds freeform text into an enum field.
+
 	resp := tool.AskUserResponse{Answers: []tool.AskUserAnswer{
 		{ID: "replicas", FreeformText: "999"},
 		{ID: "verdict", SelectedChoices: []string{"go"}},

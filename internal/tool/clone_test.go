@@ -5,29 +5,21 @@ import (
 	"testing"
 )
 
-// TestCloneCreatesIndependentInstances verifies that Clone() returns a new
-// registry where tools with WorkingDir are independent copies — mutating one
-// does not affect the other. This is the core correctness property for
-// concurrent sub-agents and swarm teammates using different worktrees.
 func TestCloneCreatesIndependentInstances(t *testing.T) {
 	orig := NewRegistry()
 
-	// Register tools with WorkingDir
 	orig.Register(&RunCommand{WorkingDir: "/original", Policy: nil})
 	orig.Register(&GitStatus{WorkingDir: "/original"})
 	orig.Register(&EnterWorktree{WorkingDir: "/original"})
 
-	// Register a stateless tool (no WorkingDir, no Clone)
 	orig.Register(SleepTool{})
 
 	cloned := orig.Clone()
 
-	// Verify cloned registry has same tool count
 	if len(cloned.tools) != len(orig.tools) {
 		t.Fatalf("expected %d tools in clone, got %d", len(orig.tools), len(cloned.tools))
 	}
 
-	// Mutate cloned tool's WorkingDir
 	rc, ok := cloned.Get("run_command")
 	if !ok {
 		t.Fatal("run_command not found in cloned registry")
@@ -46,7 +38,6 @@ func TestCloneCreatesIndependentInstances(t *testing.T) {
 	}
 	ew.(*EnterWorktree).WorkingDir = "/cloned"
 
-	// Verify original registry is unaffected
 	rcOrig, _ := orig.Get("run_command")
 	if rcOrig.(*RunCommand).WorkingDir != "/original" {
 		t.Errorf("original RunCommand.WorkingDir changed to %q after clone mutation", rcOrig.(*RunCommand).WorkingDir)
@@ -63,10 +54,6 @@ func TestCloneCreatesIndependentInstances(t *testing.T) {
 	}
 }
 
-// TestCloneSharesStatelessTools verifies that tools without mutable state
-// (no Cloner interface) are shared between original and cloned registries,
-// not copied. This is important for tools like command job managers that
-// intentionally share state across agents.
 func TestCloneSharesStatelessTools(t *testing.T) {
 	orig := NewRegistry()
 	orig.Register(SleepTool{})
@@ -76,16 +63,11 @@ func TestCloneSharesStatelessTools(t *testing.T) {
 	stOrig, _ := orig.Get("sleep")
 	stClone, _ := cloned.Get("sleep")
 
-	// Stateless tools should be the exact same pointer (shared)
 	if stOrig != stClone {
 		t.Error("stateless tool should be shared (same pointer), not cloned")
 	}
 }
 
-// TestCloneConcurrentWorkingDirMutations simulates the real scenario:
-// multiple agents (sub-agents / swarm teammates) each get their own cloned
-// registry and concurrently set WorkingDir. No agent should see another
-// agent's WorkingDir.
 func TestCloneConcurrentWorkingDirMutations(t *testing.T) {
 	orig := NewRegistry()
 	orig.Register(&RunCommand{WorkingDir: "/base"})
@@ -100,12 +82,9 @@ func TestCloneConcurrentWorkingDirMutations(t *testing.T) {
 		go func(agentID int) {
 			defer wg.Done()
 
-			// Each agent gets its own cloned registry
 			reg := orig.Clone()
 			dir := "/agent-" + string(rune('A'+agentID))
 
-			// Set WorkingDir on all tools via syncToolWorkingDir pattern
-			// (directly, since we're testing tool independence)
 			rc, _ := reg.Get("run_command")
 			rc.(*RunCommand).WorkingDir = dir
 
@@ -115,7 +94,6 @@ func TestCloneConcurrentWorkingDirMutations(t *testing.T) {
 			gc, _ := reg.Get("git_commit")
 			gc.(*GitCommit).WorkingDir = dir
 
-			// Verify this agent sees its own dir
 			if rc.(*RunCommand).WorkingDir != dir {
 				t.Errorf("agent %d: RunCommand.WorkingDir = %q, want %q", agentID, rc.(*RunCommand).WorkingDir, dir)
 			}
@@ -130,15 +108,12 @@ func TestCloneConcurrentWorkingDirMutations(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify original is still "/base"
 	rcOrig, _ := orig.Get("run_command")
 	if rcOrig.(*RunCommand).WorkingDir != "/base" {
 		t.Errorf("original RunCommand.WorkingDir = %q, want /base", rcOrig.(*RunCommand).WorkingDir)
 	}
 }
 
-// TestClonePreservesAllToolNames verifies that Clone() preserves the full
-// set of tool names, including after filtering via Unregister.
 func TestClonePreservesAllToolNames(t *testing.T) {
 	orig := NewRegistry()
 	orig.Register(&RunCommand{WorkingDir: "/base"})
@@ -163,11 +138,8 @@ func TestClonePreservesAllToolNames(t *testing.T) {
 	}
 }
 
-// TestAllWorkingDirToolsImplementCloner is a compile-time/runtime safety check:
-// every tool type that has a WorkingDir field MUST implement the Cloner interface.
-// If someone adds a new tool with WorkingDir but forgets Clone(), this test fails.
 func TestAllWorkingDirToolsImplementCloner(t *testing.T) {
-	// List of tool instances that have WorkingDir — must all implement Cloner
+
 	toolsWithWorkingDir := []Tool{
 		&RunCommand{},
 		&GitStatus{},
@@ -195,8 +167,6 @@ func TestAllWorkingDirToolsImplementCloner(t *testing.T) {
 	}
 }
 
-// TestCloneFiltersCorrectly tests the pattern used in BuildToolSet:
-// clone → unregister specific tools → verify only allowed tools remain.
 func TestCloneFiltersCorrectly(t *testing.T) {
 	orig := NewRegistry()
 	orig.Register(&RunCommand{WorkingDir: "/base"})
@@ -204,7 +174,6 @@ func TestCloneFiltersCorrectly(t *testing.T) {
 	orig.Register(SpawnAgentTool{})
 	orig.Register(SleepTool{})
 
-	// Clone and remove agent lifecycle tools (like BuildToolSet does)
 	cloned := orig.Clone()
 	cloned.Unregister("spawn_agent")
 	cloned.Unregister("wait_agent")
@@ -217,7 +186,6 @@ func TestCloneFiltersCorrectly(t *testing.T) {
 		}
 	}
 
-	// Run command and git should still be there
 	if _, ok := cloned.Get("run_command"); !ok {
 		t.Error("run_command should still be in cloned registry")
 	}
@@ -225,7 +193,6 @@ func TestCloneFiltersCorrectly(t *testing.T) {
 		t.Error("git_status should still be in cloned registry")
 	}
 
-	// Original should still have spawn_agent
 	if _, ok := orig.Get("spawn_agent"); !ok {
 		t.Error("original registry should still have spawn_agent")
 	}

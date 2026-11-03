@@ -16,41 +16,23 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Strategy Playbook — inspired by ACE (Agentic Context Engineering,
-// Zhang et al., ICLR 2026, arXiv:2510.04618).
-//
-// ACE treats contexts as "evolving playbooks that accumulate, refine, and
-// organize strategies." ggcode's ratchet rules learn from FAILURES (error
-// patterns → prevention rules). The playbook learns from SUCCESSES: which
-// tool call patterns lead to efficient task completion.
-//
-// Key design:
-//   - Records successful tool call sequences categorized by task type
-//   - Persists to .ggcode/playbook.json (per-workspace)
-//   - Injects brief strategy hints into the system prompt at run start
-//   - Uses incremental updates (ACE principle: prevent "context collapse")
-//   - Groups similar patterns to avoid unbounded growth
-//   - No LLM cost — pure heuristic pattern extraction
-
 const (
 	defaultMaxPlaybookEntries = 30
 )
 
-// PlaybookEntry records a successful strategy pattern for a task type.
 type PlaybookEntry struct {
 	ID           string    `json:"id"`
-	TaskType     string    `json:"task_type"`      // bugfix, feature, refactor, review, test, build, other
-	ToolSequence string    `json:"tool_sequence"`  // abstracted: "read→edit→build"
-	FileTypes    string    `json:"file_types"`     // ".go", ".ts", ".py", mixed
-	Uses         int       `json:"uses"`           // how many times this pattern was seen
-	SuccessRate  float64   `json:"success_rate"`   // running success rate (0-1)
-	AvgIter      float64   `json:"avg_iter"`       // average iterations to complete
-	AvgDurationS float64   `json:"avg_duration_s"` // average duration in seconds
+	TaskType     string    `json:"task_type"`
+	ToolSequence string    `json:"tool_sequence"`
+	FileTypes    string    `json:"file_types"`
+	Uses         int       `json:"uses"`
+	SuccessRate  float64   `json:"success_rate"`
+	AvgIter      float64   `json:"avg_iter"`
+	AvgDurationS float64   `json:"avg_duration_s"`
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// Playbook accumulates successful strategy patterns across sessions.
 type Playbook struct {
 	mu         sync.Mutex
 	path       string
@@ -59,8 +41,6 @@ type Playbook struct {
 	maxEntries int
 }
 
-// NewPlaybook creates a Playbook for the given working directory.
-// Returns nil if workingDir is empty.
 func NewPlaybook(workingDir string) *Playbook {
 	if workingDir == "" {
 		return nil
@@ -79,7 +59,7 @@ func (pb *Playbook) load() {
 	pb.loaded = true
 	data, err := os.ReadFile(pb.path)
 	if err != nil {
-		return // first run — no playbook yet
+		return
 	}
 	if err := json.Unmarshal(data, &pb.entries); err != nil {
 		debug.Log("playbook", "failed to load playbook: %v", err)
@@ -101,8 +81,7 @@ func (pb *Playbook) save() {
 		debug.Log("playbook", "failed to marshal playbook: %v", err)
 		return
 	}
-	// Atomic write: write to temp file, then rename. Prevents corruption
-	// if the process is interrupted mid-write.
+
 	tmp := pb.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		debug.Log("playbook", "failed to write playbook tmp: %v", err)
@@ -110,21 +89,10 @@ func (pb *Playbook) save() {
 	}
 	if err := os.Rename(tmp, pb.path); err != nil {
 		debug.Log("playbook", "failed to rename playbook: %v", err)
-		os.Remove(tmp) // cleanup
+		os.Remove(tmp)
 	}
 }
 
-// classifyTaskType determines the task category from the user prompt.
-// Order matters: more specific categories are checked first to avoid
-// misclassification (e.g., "add test" should be "test" not "feature").
-// Keywords are matched on word boundaries (#2745): bare substring matching
-// classified "upgrade to the latest version" as test (laTEST), "refactor
-// the contest module" as test (conTEST), "address the failing build" as
-// feature (ADDRESS), and "rebuild the parser" as build (REBUILD) - the
-// misclassified type then polluted the persisted playbook fingerprint and
-// system prompt injection. Keywords written with an explicit leading or
-// trailing space (" fail", "make ", "ci ", "new ") already encode their
-// own anchoring and keep the substring behavior.
 func classifyTaskType(userPrompt string) string {
 	p := strings.ToLower(userPrompt)
 	switch {
@@ -145,27 +113,24 @@ func classifyTaskType(userPrompt string) string {
 	}
 }
 
-// abstractToolSequence converts a tool call map into a compact sequence string.
-// Tools are grouped into categories to generalize patterns:
-// read, edit, execute, search, vcs, lsp, agent, other.
 func abstractToolSequence(tools map[string]int) string {
 	categories := map[string]string{
-		// read
+
 		"read_file": "read", "multi_file_read": "read", "list_directory": "read",
 		"glob": "read", "grep": "read", "search_files": "read",
-		// edit
+
 		"edit_file": "edit", "multi_edit_file": "edit", "multi_file_edit": "edit",
 		"write_file": "edit", "multi_file_write": "edit", "notebook_edit": "edit",
-		// execute
+
 		"run_command": "exec", "start_command": "exec",
-		// search
+
 		"web_search": "search", "web_fetch": "search",
-		// vcs
+
 		"git_status": "vcs", "git_diff": "vcs", "git_log": "vcs", "git_add": "vcs",
 		"git_commit": "vcs", "git_show": "vcs", "git_branch_list": "vcs",
 		"git_remote": "vcs", "git_blame": "vcs", "git_stash": "vcs",
 		"git_stash_list": "vcs",
-		// lsp
+
 		"lsp_definition": "lsp", "lsp_references": "lsp", "lsp_hover": "lsp",
 		"lsp_symbols": "lsp", "lsp_workspace_symbols": "lsp", "lsp_diagnostics": "lsp",
 		"lsp_rename": "lsp", "lsp_implementation": "lsp", "lsp_code_actions": "lsp",
@@ -176,7 +141,7 @@ func abstractToolSequence(tools map[string]int) string {
 
 	seen := map[string]bool{}
 	var parts []string
-	// Use a deterministic order for categories
+
 	order := []string{"read", "edit", "exec", "search", "vcs", "lsp", "agent", "other"}
 	for tool := range tools {
 		cat := categories[tool]
@@ -195,7 +160,6 @@ func abstractToolSequence(tools map[string]int) string {
 	return strings.Join(parts, "→")
 }
 
-// extractFileTypes determines the primary file types from edited files.
 func extractFileTypes(filesEdited []string) string {
 	exts := map[string]bool{}
 	for _, f := range filesEdited {
@@ -212,7 +176,6 @@ func extractFileTypes(filesEdited []string) string {
 			return ext
 		}
 	}
-	// Multiple extensions — sort for deterministic fingerprint
 	var sorted []string
 	for ext := range exts {
 		sorted = append(sorted, ext)
@@ -221,19 +184,11 @@ func extractFileTypes(filesEdited []string) string {
 	return strings.Join(sorted, "+")
 }
 
-// Record extracts a strategy pattern from a run and updates the playbook.
-// Called from maybeReflect after an agent run. Successful runs create new
-// entries; failed runs only degrade the SuccessRate of an existing matching
-// fingerprint (r389, AutoRefine: patterns must originate from success, but
-// without negative evidence SuccessRate is meaningless and the repository
-// degrades as stale strategies accumulate). Cancellation never reaches here
-// (maybeReflect is skipped on isCancelled), so failures are genuine.
 func (pb *Playbook) Record(stats *RunStats) {
 	if pb == nil || stats == nil {
 		return
 	}
 
-	// Only record meaningful runs
 	totalCalls := 0
 	for _, c := range stats.ToolCalls {
 		totalCalls += c
@@ -245,16 +200,6 @@ func (pb *Playbook) Record(stats *RunStats) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
-	// #2726: recordPlaybook builds a FRESH Playbook per run, so the
-	// instance mutex serializes nothing across instances. Two ggcode
-	// processes (multi-window / multi-IM on one workspace) recording near-
-	// simultaneously both loaded the same on-disk state and the last writer
-	// erased the other's entries. Hold the cross-process file lock around
-	// the whole load->modify->save cycle; on acquisition failure proceed
-	// unlocked (fail-open, same degraded semantics as the cron/probe-cache
-	// callers) rather than blocking the reflection path. The directory must
-	// exist BEFORE the lock open, or O_CREATE fails ENOENT and every
-	// first-run Record silently takes the unlocked path.
 	if pb.path != "" {
 		_ = os.MkdirAll(filepath.Dir(pb.path), 0755)
 	}
@@ -270,18 +215,13 @@ func (pb *Playbook) Record(stats *RunStats) {
 	toolSeq := abstractToolSequence(stats.ToolCalls)
 	fileTypes := extractFileTypes(stats.FilesEdited)
 
-	// Pattern fingerprint: taskType + toolSeq + fileTypes
 	fingerprint := taskType + "|" + toolSeq + "|" + fileTypes
 
-	// Try to find an existing entry with the same fingerprint.
-	// Failures only update a matching entry's success rate; they never
-	// create entries (see Record doc).
 	for i := range pb.entries {
 		e := &pb.entries[i]
 		ep := e.TaskType + "|" + e.ToolSequence + "|" + e.FileTypes
 		if ep == fingerprint {
-			// Update existing entry with incremental average (ACE principle:
-			// "structured, incremental updates that preserve detailed knowledge")
+
 			pb.updateEntry(e, stats)
 			pb.prune()
 			pb.save()
@@ -290,10 +230,9 @@ func (pb *Playbook) Record(stats *RunStats) {
 		}
 	}
 	if !stats.Success {
-		return // failed run with no matching pattern: nothing to learn
+		return
 	}
 
-	// Create new entry
 	now := time.Now()
 	entry := PlaybookEntry{
 		ID:           randomID(),
@@ -301,7 +240,7 @@ func (pb *Playbook) Record(stats *RunStats) {
 		ToolSequence: toolSeq,
 		FileTypes:    fileTypes,
 		Uses:         1,
-		SuccessRate:  1.0, // first observation was successful
+		SuccessRate:  1.0,
 		AvgIter:      float64(stats.Iterations),
 		AvgDurationS: stats.Duration.Seconds(),
 		LastSeen:     now,
@@ -309,11 +248,8 @@ func (pb *Playbook) Record(stats *RunStats) {
 	}
 	pb.entries = append(pb.entries, entry)
 
-	// Anti-degradation (r389, AutoRefine maintenance): drop entries whose
-	// empirical record has collapsed before falling back to LRU eviction.
 	pb.prune()
 
-	// Evict if over capacity (keep most recently used)
 	if len(pb.entries) > pb.maxEntries {
 		pb.evict()
 	}
@@ -322,12 +258,6 @@ func (pb *Playbook) Record(stats *RunStats) {
 	debug.Log("playbook", "recorded new %s strategy: %s (files=%s)", taskType, toolSeq, fileTypes)
 }
 
-// updateEntry merges a new observation into an existing entry using
-// incremental averaging. SuccessRate is an incremental mean over ALL
-// observations of the fingerprint (r389): successes pull it up, failures
-// pull it down. Historical on-disk entries recorded only successes, so
-// their Uses counts as successes for the mean - correct under the old
-// recording policy.
 func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	n := float64(e.Uses)
 	e.AvgIter = (e.AvgIter*n + float64(stats.Iterations)) / (n + 1)
@@ -341,12 +271,6 @@ func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	e.LastSeen = time.Now()
 }
 
-// prune removes entries whose strategy has empirically collapsed
-// (r389, AutoRefine repository-maintenance: score, prune, merge - without
-// it a stale strategy survives on historical frequency alone). An entry is
-// pruned only after enough evidence (Uses >= pruneMinUses) AND a collapsed
-// success rate (< pruneSuccessFloor); young entries are protected so a
-// single early failure cannot kill a new pattern.
 const (
 	pruneMinUses      = 5
 	pruneSuccessFloor = 0.3
@@ -365,38 +289,17 @@ func (pb *Playbook) prune() {
 	pb.entries = kept
 }
 
-// evict removes the least recently used entries to stay within capacity.
 func (pb *Playbook) evict() {
 	if len(pb.entries) <= pb.maxEntries {
 		return
 	}
-	// Sort by LastSeen descending (most recent first), keep top maxEntries
+
 	sort.Slice(pb.entries, func(i, j int) bool {
 		return pb.entries[i].LastSeen.After(pb.entries[j].LastSeen)
 	})
 	pb.entries = pb.entries[:pb.maxEntries]
 }
 
-// HintsForPrompt generates brief strategy hints for the system prompt.
-// Returns at most maxHints entries, prioritized by a composite score that
-// considers both frequency and efficiency.
-//
-// Inspired by SICA's utility function (Robeyns et al., arXiv:2504.15228):
-// patterns that lead to faster completion are more valuable than patterns
-// used frequently but slowly. The score combines:
-//   - Frequency weight: more observations = higher confidence
-//   - Efficiency weight: fewer iterations = better strategy
-//
-// This ensures that a pattern observed 3 times at ~5 iterations ranks higher
-// than one observed 5 times at ~50 iterations.
-// HintsForPrompt generates brief strategy hints for the system prompt.
-// r387 (SimpleMem intent-aware retrieval, ICML 2026): the current run's
-// prompt is classified with the same task-type taxonomy used at record time,
-// and entries matching that task type are boosted in ranking so injected
-// hints follow the current task's intent instead of pure global frequency.
-// An empty or unclassifiable prompt keeps the original global ranking, and
-// matching entries only get a boost (never a hard filter), so rare task
-// types never starve the hint budget.
 func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 	if pb == nil {
 		return ""
@@ -409,15 +312,6 @@ func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 		return ""
 	}
 
-	// Sort entries by composite score (descending).
-	// Score = frequency × efficiency, where:
-	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
-	//   efficiency = 10 / avgIter — fewer iterations = higher score
-	// This rewards patterns that are both well-observed AND efficient.
-	// Intent-aware ranking (r387): matching entries form the primary tier,
-	// non-matching entries fill the remaining budget - SimpleMem's
-	// intent-centroid retrieval semantics (retrieve for the task at hand,
-	// fall back to global) without starving rare task types.
 	intent := classifyTaskType(runPrompt)
 	intentMatch := func(e PlaybookEntry) bool {
 		return intent != "" && intent != "other" && e.TaskType == intent
@@ -427,7 +321,7 @@ func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 	sort.Slice(sorted, func(i, j int) bool {
 		mi, mj := intentMatch(sorted[i]), intentMatch(sorted[j])
 		if mi != mj {
-			return mi // matching tier first
+			return mi
 		}
 		return playbookScore(sorted[i]) > playbookScore(sorted[j])
 	})
@@ -455,10 +349,7 @@ func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 		lines = append(lines, fmt.Sprintf("- %s%s: %s (%d runs, ~%.0f iter%s)",
 			e.TaskType, fileHint, e.ToolSequence, e.Uses, e.AvgIter, durHint))
 	}
-	// sa-148 (tool composition): bridge learned patterns to callable assets.
-	// A well-observed read-heavy pattern is a macro candidate - hint once so
-	// the model knows it can persist the sequence via the macro tool instead
-	// of re-deriving every call each run.
+
 	for i := 0; i < maxHints; i++ {
 		if sorted[i].Uses >= 3 {
 			lines = append(lines, "Tip: a recurring read-only tool pattern above can be persisted once with the macro tool (action=define) and replayed by name (action=run).")
@@ -468,14 +359,6 @@ func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 	return strings.Join(lines, "\n")
 }
 
-// playbookScore computes a composite score for ranking playbook entries.
-// Higher is better. Combines frequency (more observations = higher confidence)
-// with efficiency (fewer iterations = better strategy).
-//
-// Formula: score = min(uses, 10) * (10 / max(avgIter, 1))
-//   - A pattern used 5 times at ~10 iterations scores 5.0
-//   - A pattern used 10 times at ~50 iterations scores 2.0
-//   - A pattern used 3 times at ~5 iterations scores 6.0
 func playbookScore(e PlaybookEntry) float64 {
 	freq := float64(e.Uses)
 	if freq > 10 {
@@ -488,12 +371,6 @@ func playbookScore(e PlaybookEntry) float64 {
 	return freq * (10.0 / iter)
 }
 
-// recordPlaybook is called from maybeReflect to record run outcomes.
-// Failed runs are NOT filtered here: Record (r389) needs failure samples to
-// degrade SuccessRate of existing entries and let prune evict degraded
-// strategies. The old !stats.Success gate (75eccdddd) predates that semantic
-// and made the r389 negative-evidence channel unreachable in production
-// (#3557).
 func (a *Agent) recordPlaybook(stats *RunStats) {
 	if stats == nil {
 		return
@@ -518,9 +395,6 @@ func containsAny(s string, substrs ...string) bool {
 	return false
 }
 
-// containsAnyWord matches whole words only (#2745). A keyword containing
-// an explicit space (" fail", "make ", "new ") encodes its own anchoring
-// and falls back to substring matching, preserving the original intent.
 func containsAnyWord(s string, keywords ...string) bool {
 	for _, kw := range keywords {
 		if strings.ContainsAny(kw, " \t") {
@@ -546,10 +420,6 @@ func containsAnyWord(s string, keywords ...string) bool {
 	return false
 }
 
-// wordBoundaryAt reports whether position i in s is a word boundary:
-// either string edge, or the neighboring bytes are not word bytes on both
-// sides of the boundary. Reuses isWordByte from success_declare.go
-// (identifier semantics: [a-z0-9_]).
 func wordBoundaryAt(s string, i int) bool {
 	if i <= 0 || i >= len(s) {
 		return true

@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// newTestLanChatToolWithWorkspace creates a test tool with a custom workspace path.
 func newTestLanChatToolWithWorkspace(t *testing.T, workspace string) (LanChatTool, *lanchat.Hub) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -21,8 +20,6 @@ func newTestLanChatToolWithWorkspace(t *testing.T, workspace string) (LanChatToo
 	return tool, hub
 }
 
-// TestSharedWorkspaceHint_SameWorkspace verifies that a DM to a peer sharing
-// the same workspace path includes a shared-workspace collaboration warning.
 func TestSharedWorkspaceHint_SameWorkspace(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/home/alice/project")
 
@@ -33,7 +30,7 @@ func TestSharedWorkspaceHint_SameWorkspace(t *testing.T) {
 		Endpoint:  "http://localhost:2",
 		Role:      "dev",
 		Online:    true,
-		Workspace: "/home/alice/project", // same workspace!
+		Workspace: "/home/alice/project",
 	})
 
 	ctx := context.Background()
@@ -42,8 +39,6 @@ func TestSharedWorkspaceHint_SameWorkspace(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The send may fail on network (no real transport in test), but the result
-	// content should still contain the workspace hint
 	if !strings.Contains(r.Content, "Shared workspace") {
 		t.Errorf("expected 'Shared workspace' in result, got: %s", r.Content)
 	}
@@ -55,8 +50,6 @@ func TestSharedWorkspaceHint_SameWorkspace(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_DifferentWorkspace verifies that cross-workspace DMs
-// do NOT include the shared-workspace warning.
 func TestSharedWorkspaceHint_DifferentWorkspace(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/home/alice/project")
 
@@ -67,7 +60,7 @@ func TestSharedWorkspaceHint_DifferentWorkspace(t *testing.T) {
 		Endpoint:  "http://localhost:2",
 		Role:      "dev",
 		Online:    true,
-		Workspace: "/home/bob/other-project", // different workspace
+		Workspace: "/home/bob/other-project",
 	})
 
 	ctx := context.Background()
@@ -81,8 +74,6 @@ func TestSharedWorkspaceHint_DifferentWorkspace(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_EmptyWorkspace verifies that peers with unknown
-// workspace are treated as cross-workspace (no false positive).
 func TestSharedWorkspaceHint_EmptyWorkspace(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/home/alice/project")
 
@@ -92,7 +83,6 @@ func TestSharedWorkspaceHint_EmptyWorkspace(t *testing.T) {
 		AgentNick: "bob_dev_agent",
 		Endpoint:  "http://localhost:2",
 		Online:    true,
-		// Workspace not set (empty)
 	})
 
 	ctx := context.Background()
@@ -106,8 +96,6 @@ func TestSharedWorkspaceHint_EmptyWorkspace(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_HumanSendSkipped verifies that human-originated DMs
-// do not get the workspace hint (only agent-originated messages need it).
 func TestSharedWorkspaceHint_HumanSendSkipped(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/home/alice/project")
 
@@ -116,7 +104,7 @@ func TestSharedWorkspaceHint_HumanSendSkipped(t *testing.T) {
 		AgentNick: "bob_dev_agent",
 		Endpoint:  "http://localhost:2",
 		Online:    true,
-		Workspace: "/home/alice/project", // same workspace
+		Workspace: "/home/alice/project",
 	})
 
 	ctx := context.Background()
@@ -130,9 +118,6 @@ func TestSharedWorkspaceHint_HumanSendSkipped(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_MixedRecipients verifies that when sending to
-// multiple recipients where only some share the workspace, the hint names
-// only the same-workspace peers.
 func TestSharedWorkspaceHint_MixedRecipients(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/shared/ws")
 
@@ -141,14 +126,14 @@ func TestSharedWorkspaceHint_MixedRecipients(t *testing.T) {
 		AgentNick: "bob_agent",
 		Endpoint:  "http://localhost:2",
 		Online:    true,
-		Workspace: "/shared/ws", // same workspace
+		Workspace: "/shared/ws",
 	})
 	hub.HandlePresence(lanchat.Participant{
 		NodeID:    "node-carol",
 		AgentNick: "carol_agent",
 		Endpoint:  "http://localhost:3",
 		Online:    true,
-		Workspace: "/other/ws", // different workspace
+		Workspace: "/other/ws",
 	})
 
 	hint := tool.sharedWorkspaceHint([]string{"node-bob", "node-carol"})
@@ -163,8 +148,6 @@ func TestSharedWorkspaceHint_MixedRecipients(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_NoSameWorkspacePeers verifies that when none of the
-// recipients share the workspace, the hint is empty.
 func TestSharedWorkspaceHint_NoSameWorkspacePeers(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/my/ws")
 
@@ -182,8 +165,6 @@ func TestSharedWorkspaceHint_NoSameWorkspacePeers(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspaceHint_BroadcastIncludesHint verifies that broadcast
-// includes the shared-workspace hint when same-workspace peers exist.
 func TestSharedWorkspaceHint_BroadcastIncludesHint(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/shared/ws")
 
@@ -201,15 +182,11 @@ func TestSharedWorkspaceHint_BroadcastIncludesHint(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// broadcast will fail on network but the result should still have the hint
-	// since we collect participants before sending
 	if !strings.Contains(r.Content, "Shared workspace") {
 		t.Errorf("broadcast to same-workspace peers should include hint, got: %s", r.Content)
 	}
 }
 
-// TestSharedWorkspaceHint_SendTeamIncludesHint verifies that send_team
-// includes the shared-workspace hint when team members share the workspace.
 func TestSharedWorkspaceHint_SendTeamIncludesHint(t *testing.T) {
 	tool, hub := newTestLanChatToolWithWorkspace(t, "/shared/ws")
 

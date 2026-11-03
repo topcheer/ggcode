@@ -14,7 +14,7 @@ func TestSolutionFixation_NoEdits(t *testing.T) {
 
 func TestSolutionFixation_BelowThreshold(t *testing.T) {
 	s := newSolutionFixationState()
-	// 2 failed edits (below threshold of 3)
+
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	if msg := s.checkAndWarn(); msg != "" {
@@ -43,7 +43,7 @@ func TestSolutionFixation_SuccessfulEditsDoNotCount(t *testing.T) {
 	s := newSolutionFixationState()
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
-	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, false) // success
+	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, false)
 	if msg := s.checkAndWarn(); msg != "" {
 		t.Fatalf("expected no warning when only 2 failures, got: %s", msg)
 	}
@@ -61,21 +61,21 @@ func TestSolutionFixation_DifferentFilesDoNotTrigger(t *testing.T) {
 
 func TestSolutionFixation_MaxWarnings(t *testing.T) {
 	s := newSolutionFixationState()
-	// Trigger on auth.go
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	}
 	if msg := s.checkAndWarn(); msg == "" {
 		t.Fatal("expected first warning")
 	}
-	// Trigger on user.go - second warning
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/user.go"}`, true)
 	}
 	if msg := s.checkAndWarn(); msg == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third trigger - should be suppressed
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/db.go"}`, true)
 	}
@@ -92,7 +92,7 @@ func TestSolutionFixation_DoesNotRefireSameFile(t *testing.T) {
 	if msg := s.checkAndWarn(); msg == "" {
 		t.Fatal("expected first warning")
 	}
-	// More failures on same file - should not refire
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	}
@@ -103,11 +103,11 @@ func TestSolutionFixation_DoesNotRefireSameFile(t *testing.T) {
 
 func TestSolutionFixation_WindowEviction(t *testing.T) {
 	s := newSolutionFixationState()
-	// Fill window with failures on auth.go, then push them out with other calls
+
 	for i := 0; i < 3; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	}
-	// Now add 13 calls to other files to push auth.go failures out of window
+
 	for i := 0; i < 13; i++ {
 		s.recordToolCall("edit_file", `{"file_path":"/src/other.go"}`, false)
 	}
@@ -147,17 +147,14 @@ func TestSolutionFixation_WriteFile(t *testing.T) {
 }
 
 func TestSolutionFixation_ExtractPathJSON(t *testing.T) {
-	// #393: extraction returns the full path; normalization (now keeping
-	// the full cleaned path, not the base name) is tested separately.
-	// #639: extraction returns ALL paths (multi-file tools attribute every
-	// files[] entry), compared as a comma-joined list for readability.
+
 	tests := []struct {
 		name string
 		args string
 		want string
 	}{
 		{"file_path field", `{"file_path":"/foo/bar.go","old_text":"x"}`, "/foo/bar.go"},
-		// #1496 D: extraction normalizes ./ away - same counting key.
+
 		{"path field", `{"path":"./baz.go"}`, "baz.go"},
 		{"notebook_path field", `{"notebook_path":"/x/nb.ipynb"}`, "/x/nb.ipynb"},
 		{"empty", `{}`, ""},
@@ -179,7 +176,7 @@ func TestSolutionFixation_Reset(t *testing.T) {
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
 	s.recordToolCall("edit_file", `{"file_path":"/src/auth.go"}`, true)
-	s.checkAndWarn() // fires
+	s.checkAndWarn()
 	s.reset()
 	if msg := s.checkAndWarn(); msg != "" {
 		t.Fatalf("expected no warning after reset, got: %s", msg)
@@ -190,16 +187,13 @@ func TestSolutionFixation_Reset(t *testing.T) {
 }
 
 func TestSolutionFixation_NormalizePath(t *testing.T) {
-	// #393: the counting key keeps the FULL cleaned path — the old base-name
-	// reduction merged cmd/a/main.go with internal/b/main.go and stacked
-	// failures from different targets into one false warning.
+
 	tests := []struct {
 		input string
 		want  string
 	}{
 		{"/abs/path/file.go", "/abs/path/file.go"},
-		// #1496 D: "./" is cleaned so the same file shares one counting
-		// key with its bare spelling.
+
 		{"./relative/file.go", "relative/file.go"},
 		{"file.go", "file.go"},
 		{"", ""},

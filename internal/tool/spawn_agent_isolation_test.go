@@ -56,7 +56,7 @@ func TestSpawnAgentIsolationNoneAccepted(t *testing.T) {
 	if strings.Contains(result.Content, "worktree") {
 		t.Errorf("isolation=none must not mention a worktree: %s", result.Content)
 	}
-	// Give the goroutine a moment to start before Shutdown.
+
 	time.Sleep(100 * time.Millisecond)
 }
 
@@ -70,9 +70,6 @@ func TestCreateAgentWorktree(t *testing.T) {
 		t.Fatalf("createAgentWorktree: %v", err)
 	}
 
-	// Worktree directory must exist under <repo>/.ggcode/worktrees/.
-	// Compare resolved paths: on macOS t.TempDir() may report /var/... while
-	// findGitRoot returns the resolved /private/var/... form.
 	worktreesDir := filepath.Join(repo, ".ggcode", "worktrees")
 	resolvedWt, err := filepath.EvalSymlinks(wtPath)
 	if err != nil {
@@ -86,12 +83,10 @@ func TestCreateAgentWorktree(t *testing.T) {
 		t.Errorf("worktree %q not under %q", resolvedWt, resolvedDir)
 	}
 
-	// Branch must exist.
 	if out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", branch).CombinedOutput(); err != nil {
 		t.Errorf("branch %q not found: %v: %s", branch, err, string(out))
 	}
 
-	// Worktree must be registered in git.
 	out, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git worktree list: %v: %s", err, string(out))
@@ -100,8 +95,6 @@ func TestCreateAgentWorktree(t *testing.T) {
 		t.Errorf("worktree not registered:\n%s", string(out))
 	}
 
-	// A second creation must get a distinct name (IDs restart per process,
-	// so name collisions across sessions would fail git worktree add).
 	wtPath2, _, err := createAgentWorktree(ctx, repo, "sa-1")
 	if err != nil {
 		t.Fatalf("second createAgentWorktree: %v", err)
@@ -142,7 +135,6 @@ func TestSpawnAgentWorktreeIsolationEndToEnd(t *testing.T) {
 		t.Fatalf("spawn result missing worktree info: %s", result.Content)
 	}
 
-	// Extract the worktree path from the result and verify it exists.
 	idx := strings.Index(result.Content, "Isolated in git worktree: ")
 	rest := result.Content[idx+len("Isolated in git worktree: "):]
 	end := strings.IndexByte(rest, ' ')
@@ -154,7 +146,6 @@ func TestSpawnAgentWorktreeIsolationEndToEnd(t *testing.T) {
 		t.Errorf("worktree dir missing: %v", err)
 	}
 
-	// Snapshot must surface the worktree path for wait_agent.
 	id := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(result.Content, "\n", 2)[0], "Sub-agent spawned with ID: "))
 	snap, ok := mgr.SnapshotByID(id)
 	if !ok {
@@ -164,7 +155,6 @@ func TestSpawnAgentWorktreeIsolationEndToEnd(t *testing.T) {
 		t.Errorf("snapshot worktree = %q, want %q", snap.Worktree, wtPath)
 	}
 
-	// Give the goroutine a moment before Shutdown.
 	time.Sleep(100 * time.Millisecond)
 }
 

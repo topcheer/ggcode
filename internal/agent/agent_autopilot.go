@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// currentMode returns the current permission mode from the policy.
 func (a *Agent) currentMode() permission.PermissionMode {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -18,14 +17,6 @@ func (a *Agent) currentMode() permission.PermissionMode {
 	return permission.SupervisedMode
 }
 
-// IsAutopilotMode reports whether the autopilot cruise control (goal
-// declaration, strategist oversight) is active. Cruise now rides on the
-// bypass permission surface (two-mode refactor): the standalone
-// AutopilotMode is a legacy alias for BypassMode. Runtime reload wiring
-// (ApplySessionTimeout call sites) must re-derive the cruise default
-// timeout with the REAL mode, not a hardcoded false - a mid-run reload
-// used to silently disarm the 600-min wall-clock guard when
-// session_timeout was unset (#3958).
 func (a *Agent) IsAutopilotMode() bool {
 	if a == nil {
 		return false
@@ -33,12 +24,6 @@ func (a *Agent) IsAutopilotMode() bool {
 	return a.currentMode().IsCruiseMode()
 }
 
-// --- Autopilot Goal management ---
-
-// clearGoalIfNotCruise clears the goal if cruise control is no longer
-// active (i.e. the mode left the bypass surface). This handles TUI's
-// cp.SetMode() which mutates the policy in place without calling
-// agent.SetPermissionPolicy().
 func (a *Agent) clearGoalIfNotAutopilot() {
 	if !a.currentMode().IsCruiseMode() {
 		a.mu.Lock()
@@ -52,25 +37,6 @@ func (a *Agent) clearGoalIfNotAutopilot() {
 	}
 }
 
-// maybeInjectAutopilotGoalCollection is called at the start of each
-// RunStreamWithContent. On the first call after entering autopilot mode,
-// it injects a meta-instruction for goal handling.
-//
-// The instruction is designed so the LLM itself judges whether the user's
-// prompt is clear enough to adopt directly as a goal, or whether it needs
-// clarification via ask_user. No programmatic heuristic is applied.
-//
-// The LLM must declare the goal using a "GOAL:" sentinel line so the
-// agent runtime can extract it for the strategist.
-// detection.
-// SuppressAutopilotInjection opts this agent out of the cruise-mode
-// (autopilot) behavioral injections while leaving the permission surface
-// untouched: no goal-collection meta-instruction and no end-of-turn
-// strategist prompt, so a text-only turn ends the run normally. The linear
-// frontend uses this - its REPL is hand-driven line by line and the
-// strategist's "keep going" guidance would restart the loop after every
-// answer. Idempotent; there is deliberately no re-enable path because
-// mid-session re-entry would need goal-state resync.
 func (a *Agent) SuppressAutopilotInjection() {
 	if a == nil {
 		return
@@ -111,10 +77,6 @@ func (a *Agent) maybeInjectAutopilotGoalCollection() {
 	})
 }
 
-// extractGoalFromText checks if the LLM's output contains a "GOAL:" line
-// and extracts the goal text. Returns the goal and true if found.
-// Expected format: a line starting with "GOAL:" (case-insensitive), the
-// rest of the line is the goal description.
 func extractGoalFromText(text string) (string, bool) {
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -131,15 +93,8 @@ func extractGoalFromText(text string) (string, bool) {
 	return "", false
 }
 
-// maybeSetAutopilotGoalFromLLMOutput scans the LLM's text output for a
-// "GOAL:" declaration line and sets the autopilot goal if one is found
-// and no goal has been set yet. This is called on every LLM response
-// (both text-only and tool-call turns) to capture the goal as early as
-// possible.
 func (a *Agent) maybeSetAutopilotGoalFromLLMOutput(text string) {
-	// Cruise modes only: goal capture is a cruise-control feature. Early
-	// return when NOT cruising (negated predicate - the old form compared
-	// against the raw AutopilotMode enum before the two-mode refactor).
+
 	if !a.currentMode().IsCruiseMode() {
 		return
 	}
@@ -162,8 +117,6 @@ func (a *Agent) maybeSetAutopilotGoalFromLLMOutput(text string) {
 	debug.Log("agent", "autopilot goal extracted from LLM output: %s", goal)
 }
 
-// SetAutopilotGoal stores the confirmed goal text. Called by the
-// ask_user result handler when the goal confirmation question is answered.
 func (a *Agent) SetAutopilotGoal(goal string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -172,27 +125,22 @@ func (a *Agent) SetAutopilotGoal(goal string) {
 	debug.Log("agent", "autopilot goal set: %s", goal)
 }
 
-// getAutopilotGoal returns the current goal text (empty if none).
 func (a *Agent) getAutopilotGoal() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.autopilotGoal
 }
 
-// GetAutopilotGoal returns the current autopilot goal text (empty if none).
-// Public accessor for TUI/API consumers (e.g. /goal slash command).
 func (a *Agent) GetAutopilotGoal() string {
 	return a.getAutopilotGoal()
 }
 
-// hasAutopilotGoal returns true if a goal has been confirmed.
 func (a *Agent) hasAutopilotGoal() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.autopilotGoalSet && a.autopilotGoal != ""
 }
 
-// ClearAutopilotGoal removes the current goal.
 func (a *Agent) ClearAutopilotGoal() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

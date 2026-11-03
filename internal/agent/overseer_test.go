@@ -19,8 +19,7 @@ func TestOverseer_TooFewCalls(t *testing.T) {
 
 func TestOverseer_ToolSpam(t *testing.T) {
 	o := newOverseerState()
-	// Call search_files enough times to exceed spamThreshold.
-	// analyze() needs len(trajectory) >= overseerInterval.
+
 	for i := 0; i < overseerInterval; i++ {
 		o.recordToolCall("search_files", false, "", "", i)
 	}
@@ -35,9 +34,7 @@ func TestOverseer_ToolSpam(t *testing.T) {
 
 func TestOverseer_ReadOnlyStall_MixedReadOnlyTools(t *testing.T) {
 	o := newOverseerState()
-	// Use different read-only tools so tool-spam doesn't fire first.
-	// Need stallThreshold read-only ITERATIONS (#4075: the stall window
-	// counts distinct iterations, not calls - one call per iteration here).
+
 	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob",
 		"git_log", "git_status", "git_diff", "lsp_definition", "lsp_references",
 		"web_search", "web_fetch", "lsp_symbols", "git_blame", "git_show"}
@@ -48,19 +45,16 @@ func TestOverseer_ReadOnlyStall_MixedReadOnlyTools(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected read-only stall intervention")
 	}
-	// Could be stall or spam — both are valid interventions.
-	// Verify it mentions something about exploration or acting.
+
 }
 
 func TestOverseer_FileStuck(t *testing.T) {
 	o := newOverseerState()
-	// Read the same file fileStuckThreshold times (all read_file, which
-	// triggers both spam and file-stuck — spam fires first).
-	// Use different read tools to avoid spam, but same file.
+
 	for i := 0; i < fileStuckThreshold; i++ {
 		o.recordToolCall("read_file", false, "/important/file.go", "", i)
 	}
-	// Pad with other read-only tools to reach overseerInterval.
+
 	for i := 0; i < overseerInterval-fileStuckThreshold; i++ {
 		o.recordToolCall("grep", false, "", "", i)
 	}
@@ -72,8 +66,7 @@ func TestOverseer_FileStuck(t *testing.T) {
 
 func TestOverseer_Drift(t *testing.T) {
 	o := newOverseerState()
-	// driftThreshold iterations without productive action.
-	// Use alternating read-only tools to avoid tool-spam firing first.
+
 	tools := []string{"read_file", "grep", "search_files", "glob"}
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
@@ -82,26 +75,22 @@ func TestOverseer_Drift(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected drift intervention")
 	}
-	// Could be drift or stall — both are valid for all-readonly.
+
 }
 
 func TestOverseer_ProductiveActionResetsStall(t *testing.T) {
 	o := newOverseerState()
-	// Do some reads, then a productive action, then more reads.
+
 	for i := 0; i < stallThreshold-5; i++ {
 		o.recordToolCall("read_file", false, "/some/path.go", "", i)
 	}
-	o.recordToolCall("edit_file", false, "/some/path.go", "", 0) // productive
+	o.recordToolCall("edit_file", false, "/some/path.go", "", 0)
 	for i := 0; i < 5; i++ {
 		o.recordToolCall("read_file", false, "/some/path.go", "", i)
 	}
-	// The stall window covers the last stallThreshold distinct ITERATIONS
-	// (#4075), not entries. The trajectory here spans only ~11 distinct
-	// iterations ({0..9} + the post-edit reads 0..4), short of 15, and the
-	// edit sits inside any window that does exist.
+
 	msg := o.analyze(stallThreshold + 1)
-	// Should NOT trigger stall: too few distinct iterations AND the edit
-	// broke the read-only streak.
+
 	if msg != "" && strings.Contains(msg, "reading and searching") {
 		t.Fatalf("should not trigger stall after productive action, got: %s", msg)
 	}
@@ -109,12 +98,12 @@ func TestOverseer_ProductiveActionResetsStall(t *testing.T) {
 
 func TestOverseer_ErrorEscalation(t *testing.T) {
 	o := newOverseerState()
-	// First 10 calls: 1 error (10%)
+
 	o.recordToolCall("run_command", true, "", "", 0)
 	for i := 0; i < 9; i++ {
 		o.recordToolCall("run_command", false, "", "", i)
 	}
-	// Last 10 calls: 8 errors (80%)
+
 	for i := 0; i < 2; i++ {
 		o.recordToolCall("run_command", false, "", "", i)
 	}
@@ -132,7 +121,7 @@ func TestOverseer_ErrorEscalation(t *testing.T) {
 
 func TestOverseer_EachPatternFiresOnce(t *testing.T) {
 	o := newOverseerState()
-	// Trigger stall with mixed read-only tools.
+
 	readOnlyTools := []string{"read_file", "grep", "search_files"}
 	for i := 0; i < stallThreshold; i++ {
 		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go", "", i)
@@ -142,14 +131,11 @@ func TestOverseer_EachPatternFiresOnce(t *testing.T) {
 		t.Fatal("expected first intervention")
 	}
 
-	// Continue same pattern — should not re-trigger the same pattern type.
-	// But a different pattern type could fire. We check that the SAME
-	// message doesn't repeat.
 	for i := 0; i < overseerInterval; i++ {
 		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go", "", i)
 	}
 	msg2 := o.analyze(stallThreshold + overseerInterval)
-	// Either empty or a different intervention — not the same one.
+
 	if msg2 == msg1 {
 		t.Fatalf("expected no re-trigger of same pattern, got identical message: %s", msg2)
 	}
@@ -157,7 +143,7 @@ func TestOverseer_EachPatternFiresOnce(t *testing.T) {
 
 func TestOverseer_Reset(t *testing.T) {
 	o := newOverseerState()
-	// Push trajectory past drift threshold so driftLevel advances.
+
 	for i := 0; i < driftThreshold*3; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -180,7 +166,6 @@ func TestOverseer_Reset(t *testing.T) {
 		t.Fatalf("driftLevel should be 0 after reset, got %d", o.driftLevel)
 	}
 
-	// Verify drift detection works again after reset.
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -192,7 +177,7 @@ func TestOverseer_Reset(t *testing.T) {
 
 func TestOverseer_Cooldown(t *testing.T) {
 	o := newOverseerState()
-	// Fill trajectory with read-only calls to trigger intervention.
+
 	readOnlyTools := []string{"read_file", "grep", "search_files"}
 	for i := 0; i < stallThreshold; i++ {
 		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go", "", i)
@@ -202,7 +187,6 @@ func TestOverseer_Cooldown(t *testing.T) {
 		t.Fatal("expected intervention")
 	}
 
-	// Only 2 more iterations — cooldown should prevent re-analysis.
 	for i := 0; i < 2; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -279,11 +263,8 @@ func TestExtractFileHintJSON(t *testing.T) {
 	}
 }
 
-// TestExtractFileHints pins #1480 case C: multi_file_read batches expand to
-// EVERY path; other tools fall back to the single-hint scan; malformed
-// input degrades to empty.
 func TestExtractFileHints(t *testing.T) {
-	// Batch expansion - all four files, in order.
+
 	batch := []byte(`{"files":[{"path":"/a.go","offset":1,"limit":10},{"path":"/b.go"},{"path":"/c.go"},{"path":"/d.go"}]}`)
 	got := extractFileHints("multi_file_read", batch)
 	want := []string{"/a.go", "/b.go", "/c.go", "/d.go"}
@@ -296,33 +277,25 @@ func TestExtractFileHints(t *testing.T) {
 		}
 	}
 
-	// Non-batch tool: single-hint fallback (first "path" occurrence).
 	single := extractFileHints("read_file", []byte(`{"path":"/x.go","offset":5}`))
 	if len(single) != 1 || single[0] != "/x.go" {
 		t.Errorf("single: got %v, want [/x.go]", single)
 	}
 
-	// Malformed multi_file_read JSON degrades to empty (no panic).
 	if got := extractFileHints("multi_file_read", []byte(`{"files": not-json`)); got != nil {
 		t.Errorf("malformed: got %v, want nil", got)
 	}
 
-	// Empty batch array.
 	if got := extractFileHints("multi_file_read", []byte(`{"files":[]}`)); got != nil {
 		t.Errorf("empty batch: got %v, want nil", got)
 	}
 }
 
-// TestOverseer_FailedCommandNotProductive verifies that a failed run_command
-// does NOT reset itersSinceProductive. Previously, ALL run_command calls were
-// treated as productive, which suppressed drift detection when the agent was
-// stuck running failing builds in a loop.
 func TestOverseer_FailedCommandNotProductive(t *testing.T) {
 	o := newOverseerState()
 
-	// Run driftThreshold failed commands — these should NOT reset the drift counter.
 	for i := 0; i < driftThreshold; i++ {
-		o.recordToolCall("run_command", true, "", "", i) // failed build
+		o.recordToolCall("run_command", true, "", "", i)
 	}
 
 	if o.itersSinceProductive < driftThreshold {
@@ -330,19 +303,15 @@ func TestOverseer_FailedCommandNotProductive(t *testing.T) {
 			driftThreshold, driftThreshold, o.itersSinceProductive)
 	}
 
-	// Drift should fire because failed commands are not productive.
 	msg := o.analyze(driftThreshold)
 	if msg == "" {
 		t.Fatal("expected drift intervention after repeated failed commands")
 	}
 }
 
-// TestOverseer_SuccessfulCommandResetsProductive verifies that a successful
-// run_command DOES reset itersSinceProductive (the normal case).
 func TestOverseer_SuccessfulCommandResetsProductive(t *testing.T) {
 	o := newOverseerState()
 
-	// Some read-only calls.
 	for i := 0; i < 10; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -350,13 +319,11 @@ func TestOverseer_SuccessfulCommandResetsProductive(t *testing.T) {
 		t.Fatalf("expected itersSinceProductive=10, got %d", o.itersSinceProductive)
 	}
 
-	// A successful command resets the counter.
 	o.recordToolCall("run_command", false, "", "", 0)
 	if o.itersSinceProductive != 0 {
 		t.Fatalf("expected itersSinceProductive=0 after successful command, got %d", o.itersSinceProductive)
 	}
 
-	// File-read tracking should also be reset.
 	if len(o.fileReadsSinceEdit) != 0 {
 		t.Fatalf("expected fileReadsSinceEdit cleared after successful command, got %d entries", len(o.fileReadsSinceEdit))
 	}
@@ -366,7 +333,6 @@ func TestOverseer_ProgressiveDrift(t *testing.T) {
 	o := newOverseerState()
 	tools := []string{"read_file", "grep", "search_files", "glob"}
 
-	// Level 1: driftThreshold iterations
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -381,7 +347,6 @@ func TestOverseer_ProgressiveDrift(t *testing.T) {
 		t.Fatalf("expected driftLevel=1, got %d", o.driftLevel)
 	}
 
-	// Level 2: 2×driftThreshold iterations
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -396,7 +361,6 @@ func TestOverseer_ProgressiveDrift(t *testing.T) {
 		t.Fatalf("expected driftLevel=2, got %d", o.driftLevel)
 	}
 
-	// Level 3: 3×driftThreshold iterations
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -411,7 +375,6 @@ func TestOverseer_ProgressiveDrift(t *testing.T) {
 		t.Fatalf("expected driftLevel=3, got %d", o.driftLevel)
 	}
 
-	// No further escalation beyond level 3
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -425,7 +388,6 @@ func TestOverseer_DriftResetsOnProductiveAction(t *testing.T) {
 	o := newOverseerState()
 	tools := []string{"read_file", "grep", "search_files", "glob"}
 
-	// Trigger drift level 1
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -434,13 +396,11 @@ func TestOverseer_DriftResetsOnProductiveAction(t *testing.T) {
 		t.Fatal("expected drift intervention")
 	}
 
-	// Productive action resets drift tracking (including driftLevel)
 	o.recordToolCall("edit_file", false, "/path.go", "", 0)
 	if o.driftLevel != 0 {
 		t.Fatalf("expected driftLevel reset to 0 after productive action, got %d", o.driftLevel)
 	}
 
-	// More read-only calls — should trigger level 1 again, not level 2
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i+driftThreshold)
 	}
@@ -453,14 +413,10 @@ func TestOverseer_DriftResetsOnProductiveAction(t *testing.T) {
 	}
 }
 
-// TestOverseer_ResearchMode_NoPrematureStall verifies that in research mode,
-// read-only operations don't trigger stall/spam/drift at normal thresholds.
 func TestOverseer_ResearchMode_NoPrematureStall(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = true
 
-	// In normal mode, 15 mixed read-only calls would trigger stall.
-	// In research mode, this should NOT fire.
 	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob",
 		"git_log", "git_status", "git_diff", "lsp_definition", "lsp_references",
 		"web_search", "web_fetch", "lsp_symbols", "git_blame", "git_show"}
@@ -473,15 +429,11 @@ func TestOverseer_ResearchMode_NoPrematureStall(t *testing.T) {
 	}
 }
 
-// TestOverseer_ResearchMode_NoPrematureSpam verifies that in research mode,
-// repeated read tool calls don't trigger spam at the normal threshold.
 func TestOverseer_ResearchMode_NoPrematureSpam(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = true
 
-	// In normal mode, >6 calls to search_files triggers spam.
-	// In research mode, we need >researchSpamThreshold (15).
-	for i := 0; i < spamThreshold+5; i++ { // 11 calls — above normal threshold
+	for i := 0; i < spamThreshold+5; i++ {
 		o.recordToolCall("search_files", false, "", "", i)
 	}
 	msg := o.analyze(spamThreshold + 5)
@@ -491,15 +443,12 @@ func TestOverseer_ResearchMode_NoPrematureSpam(t *testing.T) {
 	}
 }
 
-// TestOverseer_ResearchMode_NoPrematureDrift verifies that in research mode,
-// drift doesn't fire at the normal threshold.
 func TestOverseer_ResearchMode_NoPrematureDrift(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = true
 
 	tools := []string{"read_file", "grep", "search_files", "glob"}
-	// In normal mode, driftThreshold (20) iterations triggers drift.
-	// In research mode, this should NOT fire.
+
 	for i := 0; i < driftThreshold; i++ {
 		o.recordToolCall(tools[i%len(tools)], false, "/path.go", "", i)
 	}
@@ -509,14 +458,12 @@ func TestOverseer_ResearchMode_NoPrematureDrift(t *testing.T) {
 	}
 }
 
-// TestOverseer_ResearchMode_StallAtHighThreshold verifies that stall DOES
-// eventually fire in research mode at the higher threshold.
 func TestOverseer_ResearchMode_StallAtHighThreshold(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = true
 
 	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob"}
-	// Need researchStallThreshold (40) consecutive read-only calls.
+
 	for i := 0; i < researchStallThreshold; i++ {
 		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go", "", i)
 	}
@@ -524,20 +471,16 @@ func TestOverseer_ResearchMode_StallAtHighThreshold(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected stall intervention at research threshold")
 	}
-	// Research-mode stall message should mention "research" or "findings", not "implementing your solution"
+
 	if strings.Contains(msg, "implementing your solution") {
 		t.Fatalf("research-mode stall should not push for implementation, got: %s", msg)
 	}
 }
 
-// TestOverseer_ResearchMode_ResearchToolsAreProductive verifies that in
-// research mode, web_search/code_search count as productive work and reset
-// the drift counter.
 func TestOverseer_ResearchMode_ResearchToolsAreProductive(t *testing.T) {
 	o := newOverseerState()
 	o.researchMode = true
 
-	// Read some files, then do a web_search (should reset productive counter).
 	for i := 0; i < 10; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -546,7 +489,6 @@ func TestOverseer_ResearchMode_ResearchToolsAreProductive(t *testing.T) {
 		t.Fatalf("expected itersSinceProductive=0 after web_search in research mode, got %d", o.itersSinceProductive)
 	}
 
-	// code_search should also be productive in research mode.
 	for i := 0; i < 10; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
 	}
@@ -556,11 +498,9 @@ func TestOverseer_ResearchMode_ResearchToolsAreProductive(t *testing.T) {
 	}
 }
 
-// TestOverseer_ResearchMode_ResearchToolsNotProductiveInNormalMode verifies
-// that web_search/code_search are NOT productive in normal (implementation) mode.
 func TestOverseer_ResearchMode_ResearchToolsNotProductiveInNormalMode(t *testing.T) {
 	o := newOverseerState()
-	o.researchMode = false // normal implementation mode
+	o.researchMode = false
 
 	for i := 0; i < 10; i++ {
 		o.recordToolCall("read_file", false, "/path.go", "", i)
@@ -571,7 +511,6 @@ func TestOverseer_ResearchMode_ResearchToolsNotProductiveInNormalMode(t *testing
 	}
 }
 
-// TestDetectResearchMode verifies keyword detection for research tasks.
 func TestDetectResearchMode(t *testing.T) {
 	researchTasks := []string{
 		"Research the latest trends in AI agents",
@@ -605,14 +544,8 @@ func TestDetectResearchMode(t *testing.T) {
 	}
 }
 
-// #1859: the three read-only classification tables are maintained
-// independently and had drifted from serialReadOnlyTools. This pins the
-// previously-missing members so a future table edit cannot silently
-// re-open the gap (a read-only run of dep_graph/code_health calls must
-// satisfy the all-read condition, and screenshot must be classified
-// explore, not other).
 func TestReadOnlyTablesIncludeFormerGaps(t *testing.T) {
-	// The eight pure-read tools serialReadOnlyTools always covered.
+
 	for _, name := range []string{
 		"code_search", "git_stash_list", "lsp_workspace_symbols",
 		"lsp_implementation", "lsp_code_actions", "dep_graph",
@@ -633,9 +566,6 @@ func TestReadOnlyTablesIncludeFormerGaps(t *testing.T) {
 	}
 }
 
-// #1762 case 1: partial_success carries IsError=true for the whole result,
-// but written_paths ARE on disk - the whole-result gate excluded real
-// modifications from the revert list.
 func TestExtractWrittenPaths(t *testing.T) {
 	got := extractWrittenPaths(`{"written_files":1,"written_paths":["/a.go"],"failed_files":1,"failed_paths":["/b.go"]}`)
 	if len(got) != 1 || got[0] != "/a.go" {

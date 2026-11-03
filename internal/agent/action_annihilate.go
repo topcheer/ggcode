@@ -10,103 +10,33 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Action Annihilation Detector -- Cross-Tool Side-Effect Cancellation Awareness
-//
-// Research basis:
-//   - "A Self-Improving Coding Agent" (SICA, arXiv:2504.15228, NeurIPS 2025):
-//     identifies trajectory waste as the primary bottleneck in agent performance.
-//     Agents waste 17-53% of iterations on actions that don't advance the task.
-//     The paper's key insight: non-gradient learning via reflection on which
-//     actions contributed to success vs. waste.
-//   - "Unsupervised Approaches to Futile Cycle Detection in AI Agents" (IBM
-//     Research, 2025): introduces the concept of repetitive futile cycles where
-//     the agent revisits state-space regions without forward progress.
-//   - SWE-bench trajectory analysis: ~15% of failing trajectories contain
-//     action reversal pairs where the agent creates, then destroys, the same
-//     state -- net-zero progress on wasted iterations.
-//
-// Problem: AI coding agents sometimes issue tool calls whose side effects
-// cancel a prior call's side effects within the same run. Examples:
-//
-//	git_add("file.go") → git_reset("file.go")     // stage then unstage
-//	git_commit("msg")   → git_revert(commit)       // commit then revert
-//	edit_file(X)        → undo_edit                // edit then undo
-//	mkdir("dir")        → delete("dir")            // create then destroy
-//	git_checkout(B)     → git_checkout(A)          // switch then switch back
-//	start_command(cmd)  → stop_command(job)        // start then kill (no read)
-//
-// Each annihilation pair represents wasted iterations -- the agent spent tokens
-// and time creating state, then more tokens destroying it, with net-zero
-// forward progress. Left unchecked, these pairs compound: the agent may repeat
-// the cycle multiple times across a run.
-//
-// Distinct from existing detectors:
-//   - edit_oscillation_detect.go: tracks SEMANTIC content reversal on the SAME
-//     file (old_text/new_text swap). Action annihilation tracks CROSS-TOOL
-//     side-effect cancellation (git_add vs git_reset, mkdir vs delete).
-//   - futile_cycle.go: tracks read revisits without mutation. Action annihilation
-//     tracks MUTATING actions that cancel each other.
-//   - bgorphan_detect.go: tracks unchecked background commands. Action annihilation
-//     tracks explicitly stopped commands that were never read.
-//   - tool_sequence.go: tracks suboptimal ORDERING. Action annihilation tracks
-//     actions that produce ZERO net state change.
-//
-// What it detects: When the agent's most recent tool call cancels a prior tool
-// call's side effects within a sliding window. When detected, it injects a
-// guidance nudge to reflect on whether the approach is productive.
-
-// annihilationPair defines a cancellation relationship between two tool calls.
 type annihilationPair struct {
-	// priorTool is the tool whose side effect gets cancelled.
-	priorTool string
-	// cancelTool is the tool that cancels the prior side effect.
-	cancelTool string
-	// matchFn returns true if the cancel call's args match the prior call.
-	// If nil, any prior→cancel sequence within the window matches.
-	matchFn func(priorArgs, cancelArgs json.RawMessage) bool
-	// qualifyFn optionally downgrades the warning when the cancellation is
-	// only PARTIAL (#3477): it returns a corrective qualifier that REPLACES
-	// the net-zero claim (which would be factually wrong), or "" to keep
-	// the full net-zero wording. nil means the pair always fully cancels.
-	qualifyFn func(priorArgs, cancelArgs json.RawMessage) string
-	// description for the warning message.
+	priorTool   string
+	cancelTool  string
+	matchFn     func(priorArgs, cancelArgs json.RawMessage) bool
+	qualifyFn   func(priorArgs, cancelArgs json.RawMessage) string
 	description string
 }
 
-// trackedAction records a mutating tool call for annihilation matching.
 type trackedAction struct {
 	tool      string
 	args      json.RawMessage
 	iteration int
 }
 
-// actionAnnihilateState tracks tool calls to detect side-effect cancellation pairs.
 type actionAnnihilateState struct {
 	mu sync.Mutex
 
-	// recent actions within the lookback window (max 20).
 	actions []trackedAction
 
-	// #2684: new-commit hash produced by each successful git_commit, keyed
-	// by the iteration that made it. The commit->revert pair requires the
-	// revert's commit argument to match one of these hashes (prefix
-	// compare, both directions of abbreviation) -- reverting an unrelated
-	// historical commit is a first-class bug-fix workflow, not net-zero
-	// waste. Entries are pruned when their iteration leaves the lookback
-	// window alongside s.actions.
 	commitHashes map[int]string
 
-	// cancellation count this run.
 	cancelCount int
-	// max warnings per run.
-	maxWarns int
-	// warns issued so far.
+	maxWarns    int
 	warnsIssued int
-	// lookback iterations (how many recent tool calls to search for a match).
-	lookback int
+	lookback    int
 }
 
-// newActionAnnihilateState creates a new detector instance.
 func newActionAnnihilateState() *actionAnnihilateState {
 	return &actionAnnihilateState{
 		maxWarns:     2,
@@ -124,11 +54,6 @@ func (s *actionAnnihilateState) reset() {
 	s.commitHashes = make(map[int]string)
 }
 
-// recordCommitHash stores the new-commit hash that a successful git_commit
-// at the given iteration produced, parsed from the tool result by the wiring
-// layer (extractNewCommitHash). A commit whose hash could not be parsed is
-// simply never recorded and can therefore never match a revert -- failing
-// safe toward silence instead of a factually false "net-zero" claim (#2684).
 func (s *actionAnnihilateState) recordCommitHash(iteration int, hash string) {
 	if hash == "" {
 		return
@@ -138,8 +63,6 @@ func (s *actionAnnihilateState) recordCommitHash(iteration int, hash string) {
 	s.commitHashes[iteration] = hash
 }
 
-// annihilationPairs defines known cancellation patterns.
-// Each pair (priorTool → cancelTool) represents a net-zero state change.
 var annihilationPairs = []annihilationPair{
 	{
 		priorTool:   "git_add",
@@ -152,11 +75,8 @@ var annihilationPairs = []annihilationPair{
 		priorTool:   "git_commit",
 		cancelTool:  "git_revert",
 		description: "git_commit then git_revert (committed then reverted)",
-		// #2684: matchFn stays nil because args alone cannot prove the revert
-		// targets the prior commit. The wiring records each commit result hash
-		// (recordCommitHash) and checkAnnihilation enforces a hash-prefix match
-		// for this pair, so only reverting YOUR OWN commit fires the warning.
-		matchFn: nil, // any commit→revert pair within window
+
+		matchFn: nil,
 	},
 	{
 		priorTool:   "edit_file",
@@ -190,28 +110,22 @@ var annihilationPairs = []annihilationPair{
 	},
 }
 
-// recordToolCall processes a tool call and returns a warning if an annihilation
-// pair is detected. The warning is empty if no cancellation is found or if the
-// warning cap has been reached.
 func (s *actionAnnihilateState) recordToolCall(toolName string, args json.RawMessage, iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	warning := s.checkAnnihilation(toolName, args, iteration)
 
-	// Record this action for future matching.
 	s.actions = append(s.actions, trackedAction{
 		tool:      toolName,
 		args:      args,
 		iteration: iteration,
 	})
 
-	// Trim to lookback window.
 	if len(s.actions) > s.lookback {
 		dropped := s.actions[:len(s.actions)-s.lookback]
 		s.actions = s.actions[len(s.actions)-s.lookback:]
-		// #2684: drop commit hashes whose actions left the window so the
-		// side map cannot grow unbounded over a long run.
+
 		for _, d := range dropped {
 			delete(s.commitHashes, d.iteration)
 		}
@@ -220,17 +134,12 @@ func (s *actionAnnihilateState) recordToolCall(toolName string, args json.RawMes
 	return warning
 }
 
-// checkAnnihilation examines whether the current tool call cancels a prior one.
 func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArgs json.RawMessage, iteration int) string {
-	// undo_edit is handled as one unified case (#744): action=list is a pure
-	// read (checkpoint listing) that cancels nothing, and undo/revert must
-	// cite the most recent prior edit across edit_file/multi_edit_file/
-	// write_file rather than pair-declaration order.
+
 	if currentTool == "undo_edit" {
 		return s.checkUndoEditAnnihilation(currentArgs, iteration)
 	}
-	// #2634: git_checkout roundtrip needs a barrier the generic loop cannot
-	// express -- see checkCheckoutRoundtripAnnihilation.
+
 	if currentTool == "git_checkout" {
 		return s.checkCheckoutRoundtripAnnihilation(currentArgs, iteration)
 	}
@@ -240,31 +149,20 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 			continue
 		}
 
-		// Search recent actions for a matching prior call.
 		for i := len(s.actions) - 1; i >= 0; i-- {
 			prior := s.actions[i]
-			// #1436-B: a git_commit between add and reset CONSUMED the
-			// staging - the standard amend flow (add -> commit -> reset
-			// HEAD~1) unstages a commit, it does not cancel an add. Without
-			// this barrier every amend triggered a bogus 'net-zero wasted'
-			// warning on the highest-frequency legitimate workflow. The
-			// barrier applies ONLY to the add->reset pair: commit->revert
-			// remains a genuine annihilation (a revert undoes the commit).
+
 			if pair.priorTool == "git_add" && prior.tool == "git_commit" {
 				break
 			}
 			if prior.tool != pair.priorTool {
 				continue
 			}
-			// #2684: commit->revert must target the agent's own commit. The
-			// revert's commit argument (an arbitrary historical hash otherwise)
-			// is prefix-compared against the hash the wiring recorded for this
-			// prior commit. No recorded hash means we cannot verify -- skip
-			// (fail-safe silence) rather than claim a false net-zero.
+
 			if pair.priorTool == "git_commit" && !s.commitHashMatches(prior.iteration, currentArgs) {
 				continue
 			}
-			// Only match if they're close enough in the window (already trimmed).
+
 			if pair.matchFn != nil && !pair.matchFn(prior.args, currentArgs) {
 				continue
 			}
@@ -276,9 +174,7 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 			s.warnsIssued++
 			debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
 				iteration, pair.description, s.cancelCount)
-			// #3477: a pair may cancel only PART of the prior side effect --
-			// the qualifier swaps the (then false) net-zero claim for wording
-			// that matches what actually happened.
+
 			qualifier := ""
 			if pair.qualifyFn != nil {
 				qualifier = pair.qualifyFn(prior.args, currentArgs)
@@ -290,14 +186,6 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 	return ""
 }
 
-// checkUndoEditAnnihilation detects edit→undo_edit annihilation with two
-// corrections over naive pair matching (#744):
-//   - undo_edit with action=list is a pure read and never fires a warning;
-//   - the warning cites the most recent prior edit tool by iteration, so
-//     mixed edit_file/write_file sequences attribute to the edit actually
-//     undone, not to whichever pair is declared first.
-//
-// Caller must hold s.mu.
 func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMessage, iteration int) string {
 	if undoEditAction(currentArgs) == "list" {
 		return ""
@@ -320,23 +208,6 @@ func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMe
 	return ""
 }
 
-// checkCheckoutRoundtripAnnihilation detects checkout A → checkout B →
-// checkout A thrashing with a #2634 barrier the generic pair loop could not
-// express: a substantive action (any non-git_checkout tool call) between the
-// two same-branch checkouts means the agent did real work while away --
-// e.g. checking out a reference branch to read its implementation, then
-// switching back. That is legitimate multi-branch navigation, not net-zero
-// cancellation. Only a path consisting solely of git_checkout hops back to
-// the same branch is flagged (A → B → A, or A → B → C → A).
-//
-// #2675: the matching same-branch prior additionally requires at least one
-// different-branch hop (the B leg) in between. Without it, an idempotent
-// re-checkout (A → A) -- and the failed-retry variant, since failed calls
-// are no longer recorded at the wiring level -- fired "branch thrashing"
-// with a factually false net-zero claim; a checkout back to where you
-// already are undoes nothing.
-//
-// Caller must hold s.mu.
 func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs json.RawMessage, iteration int) string {
 	currentBranch := extractStringField(currentArgs, "branch")
 	if currentBranch == "" {
@@ -346,18 +217,15 @@ func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs j
 	for i := len(s.actions) - 1; i >= 0; i-- {
 		prior := s.actions[i]
 		if prior.tool != "git_checkout" {
-			// Barrier (#2634): substantive work happened between the
-			// checkouts -- the roundtrip produced value, not net-zero.
+
 			return ""
 		}
 		if extractStringField(prior.args, "branch") != currentBranch {
-			sawDifferentHop = true // the B leg of a true roundtrip
-			continue               // a different branch hop; keep scanning checkouts only
+			sawDifferentHop = true
+			continue
 		}
 		if !sawDifferentHop {
-			// Same-branch prior with no different-branch hop in between:
-			// idempotent re-checkout, not a roundtrip (#2675). Keep scanning
-			// for an earlier A that DOES have a B leg between it and now.
+
 			continue
 		}
 		s.cancelCount++
@@ -373,9 +241,6 @@ func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs j
 	return ""
 }
 
-// checkoutRoundtripDescription sources the git_checkout pair description from
-// annihilationPairs so descriptions stay in one place. ok is false if the
-// pair entry is ever removed.
 func checkoutRoundtripDescription() (string, bool) {
 	for _, p := range annihilationPairs {
 		if p.priorTool == "git_checkout" && p.cancelTool == "git_checkout" {
@@ -385,9 +250,6 @@ func checkoutRoundtripDescription() (string, bool) {
 	return "git_checkout switch then switch back (branch thrashing)", false
 }
 
-// undoEditAction extracts the action argument of an undo_edit call. Missing
-// or unparsable args are treated as "undo" (state-changing) so detection
-// stays conservative on malformed input.
 func undoEditAction(args json.RawMessage) string {
 	var parsed struct {
 		Action string `json:"action"`
@@ -398,9 +260,6 @@ func undoEditAction(args json.RawMessage) string {
 	return parsed.Action
 }
 
-// undoEditPriorDescription maps an edit tool to its undo_edit annihilation
-// description, sourced from annihilationPairs so descriptions stay in one
-// place. ok is false for tools that are not edit-undo priors.
 func undoEditPriorDescription(priorTool string) (string, bool) {
 	for _, p := range annihilationPairs {
 		if p.cancelTool == "undo_edit" && p.priorTool == priorTool {
@@ -414,9 +273,7 @@ func formatAnnihilationWarning(desc string, priorIter, curIter int, totalCancels
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[Action Annihilation] Iterations %d-%d: %s.\n", priorIter, curIter, desc))
 	if qualifier != "" {
-		// Partial cancellation (#3477): the net-zero claim would be a false
-		// statement of fact, and the oscillation meta-critique does not fit
-		// standard curation workflows. The qualifier speaks for itself.
+
 		sb.WriteString(qualifier)
 		return sb.String()
 	}
@@ -428,21 +285,18 @@ func formatAnnihilationWarning(desc string, priorIter, curIter int, totalCancels
 	return sb.String()
 }
 
-// --- Matchers ---
-
-// matchGitAddReset checks if git_reset targets the same files that git_add staged.
 func matchGitAddReset(priorArgs, cancelArgs json.RawMessage) bool {
 	priorFiles := extractStringSlice(priorArgs, "files")
 	if len(priorFiles) == 0 || (len(priorFiles) == 1 && (priorFiles[0] == "." || priorFiles[0] == "*")) {
-		// git_add with ["."], ["*"], or no specific files -- match any reset.
+
 		return true
 	}
 	resetFiles := extractStringSlice(cancelArgs, "files")
 	if len(resetFiles) == 0 {
-		// git_reset with no specific files -- resets everything, matches.
+
 		return true
 	}
-	// Check if any file overlaps.
+
 	priorSet := make(map[string]bool, len(priorFiles))
 	for _, f := range priorFiles {
 		priorSet[f] = true
@@ -455,28 +309,16 @@ func matchGitAddReset(priorArgs, cancelArgs json.RawMessage) bool {
 	return false
 }
 
-// partialResetQualifier replaces the net-zero claim when a reset cancels
-// only part of the staged set (#3477). The old wording flatly asserted
-// "net-zero state change" right after the agent had staged dozens of files
-// and unstaged exactly one -- a factually wrong statement aimed at the
-// project's own recommended release-sweep curation workflow
-// (stage-all, then unstage swept-in WIP files).
 const partialResetQualifier = "This reset cancelled only PART of the staged set -- most staged files remain staged, so this is NOT net-zero. Partial unstaging after a stage-all (e.g. excluding swept-in WIP files before a release commit) is a standard curation step; if that is what you did, proceed. Repeated partial resets, however, may signal an unsettled staging plan."
 
-// qualifyGitAddResetPartial returns "" when the reset cancels the ENTIRE
-// staged set (keep the original net-zero wording), and a corrective
-// qualifier when it cancels only part of it (#3477):
-//   - reset with no files  -> full reset, genuinely net-zero
-//   - add ["."]/["*"]/none -> the reset can only ever cancel a part
-//   - concrete file lists  -> net-zero only if every staged file is reset
 func qualifyGitAddResetPartial(priorArgs, cancelArgs json.RawMessage) string {
 	resetFiles := extractStringSlice(cancelArgs, "files")
 	if len(resetFiles) == 0 {
-		return "" // full reset unstages everything -- genuinely net-zero
+		return ""
 	}
 	priorFiles := extractStringSlice(priorArgs, "files")
 	if len(priorFiles) == 0 || (len(priorFiles) == 1 && (priorFiles[0] == "." || priorFiles[0] == "*")) {
-		return partialResetQualifier // stage-all + selective unstage
+		return partialResetQualifier
 	}
 	resetSet := make(map[string]bool, len(resetFiles))
 	for _, f := range resetFiles {
@@ -484,13 +326,12 @@ func qualifyGitAddResetPartial(priorArgs, cancelArgs json.RawMessage) string {
 	}
 	for _, f := range priorFiles {
 		if !resetSet[f] {
-			return partialResetQualifier // some staged file survives
+			return partialResetQualifier
 		}
 	}
-	return "" // every staged file was unstaged
+	return ""
 }
 
-// matchMkdirDelete checks if file_ops delete targets a path that was mkdir'd.
 func matchMkdirDelete(priorArgs, cancelArgs json.RawMessage) bool {
 	priorOps := extractOps(priorArgs)
 	cancelOps := extractOps(cancelArgs)
@@ -507,19 +348,12 @@ func matchMkdirDelete(priorArgs, cancelArgs json.RawMessage) bool {
 	return false
 }
 
-// matchCheckoutRoundtrip is retained for documentation of the pair's arg
-// semantics: the prior and current checkouts must target the same branch.
-// Matching itself moved to checkCheckoutRoundtripAnnihilation (#2634), which
-// adds the substantive-action barrier the pure arg matcher cannot express.
 func matchCheckoutRoundtrip(priorArgs, cancelArgs json.RawMessage) bool {
 	priorBranch := extractStringField(priorArgs, "branch")
 	cancelBranch := extractStringField(cancelArgs, "branch")
 	return priorBranch != "" && priorBranch == cancelBranch
 }
 
-// --- Helpers ---
-
-// extractStringField extracts a single string field from JSON args.
 func extractStringField(args json.RawMessage, field string) string {
 	var m map[string]interface{}
 	if err := json.Unmarshal(args, &m); err != nil {
@@ -536,7 +370,6 @@ func extractStringField(args json.RawMessage, field string) string {
 	return str
 }
 
-// extractStringSlice extracts a []string field from JSON args.
 func extractStringSlice(args json.RawMessage, field string) []string {
 	var m map[string]interface{}
 	if err := json.Unmarshal(args, &m); err != nil {
@@ -559,13 +392,11 @@ func extractStringSlice(args json.RawMessage, field string) []string {
 	return result
 }
 
-// fileOpEntry represents one operation in file_ops's "operations" array.
 type fileOpEntry struct {
 	action string
 	source string
 }
 
-// extractOps extracts operations from file_ops args.
 func extractOps(args json.RawMessage) []fileOpEntry {
 	var m map[string]interface{}
 	if err := json.Unmarshal(args, &m); err != nil {
@@ -594,9 +425,6 @@ func extractOps(args json.RawMessage) []fileOpEntry {
 	return result
 }
 
-// commitHashMatches reports whether the git_revert call's commit argument
-// targets the commit recorded at iter. Abbreviated hashes are accepted in
-// either direction (git accepts them as prefixes). Caller must hold s.mu.
 func (s *actionAnnihilateState) commitHashMatches(iter int, revertArgs json.RawMessage) bool {
 	var parsed struct {
 		Commit string `json:"commit"`
@@ -617,20 +445,8 @@ func (s *actionAnnihilateState) commitHashMatches(iter int, revertArgs json.RawM
 	return target[:shorter] == recorded[:shorter]
 }
 
-// newCommitHashRegex matches the "[branch abbrev-hash] summary" line git
-// prints on a successful commit, e.g. "[main 5c2b1a3] fix A".
-// #2804: the bracket label is not always a single token -- detached HEAD
-// ("[detached HEAD 466523b] msg", the norm for worktrees/CI checkouts) and
-// root commits ("[master (root-commit) d329121] msg") are standard git
-// output. The lazy [^]]*? prefix plus the trailing "]" anchor makes the
-// capture the LAST bracket token of 7-40 hex chars, which is the hash in
-// every git commit-summary form.
 var newCommitHashRegex = regexp.MustCompile(`\[[^\]]*?([0-9a-f]{7,40})\]`)
 
-// extractNewCommitHash pulls the new commit hash out of a successful
-// git_commit tool result (raw `git commit` output). Empty when no hash can
-// be found (e.g. nothing-to-commit, non-git VCS, unexpected output) -- the
-// caller then leaves the commit unrecorded, failing safe (#2684).
 func extractNewCommitHash(content string) string {
 	m := newCommitHashRegex.FindStringSubmatch(content)
 	if m == nil {

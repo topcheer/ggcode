@@ -9,31 +9,16 @@ import (
 	"strings"
 )
 
-// ── Kitty remote control CLI helpers ─────────────────────────────────────────
-//
-// Kitty's remote control is accessed via the `kitten @` or `kitty @` CLI.
-// The `@` argument tells kitty/kitten to operate in remote control mode.
-//
-// Environment variables:
-//   - TERM_PROGRAM=kitty         — identifies Kitty
-//   - KITTY_WINDOW_ID=N          — numeric ID of the current window
-//   - KITTY_LISTEN_ON=unix:PATH  — socket for remote control (may be empty
-//                                  if allow_remote_control is not set)
-//
-// The `--to` flag passes the socket address when KITTY_LISTEN_ON is set.
-
-// kittyBinaryPath returns the path to the kitten or kitty binary, or empty if not found.
-// Prefers `kitten` (standalone remote control client) over `kitty`.
 func kittyBinaryPath() string {
-	// Try `kitten` in PATH first (standalone, smaller, preferred for RC)
+
 	if p, err := exec.LookPath("kitten"); err == nil {
 		return p
 	}
-	// Try `kitty` in PATH
+
 	if p, err := exec.LookPath("kitty"); err == nil {
 		return p
 	}
-	// macOS app bundle locations
+
 	if runtime.GOOS == "darwin" {
 		for _, name := range []string{"kitten", "kitty"} {
 			p := fmt.Sprintf("/Applications/kitty.app/Contents/MacOS/%s", name)
@@ -42,7 +27,7 @@ func kittyBinaryPath() string {
 			}
 		}
 	}
-	// Linux common locations
+
 	for _, p := range []string{"/usr/bin/kitten", "/usr/local/bin/kitten", "/opt/homebrew/bin/kitten"} {
 		if _, err := os.Stat(p); err == nil {
 			return p
@@ -56,18 +41,12 @@ func kittyBinaryPath() string {
 	return ""
 }
 
-// kittyAt runs a `kitten @ <cmd>` / `kitty @ <cmd>` command and returns stdout.
-// It automatically adds the `--to` flag if KITTY_LISTEN_ON is set.
-// kittyAtCtx runs a kitty remote-control command with cancellation
-// (#1692 case 1: the old kittyAt used exec.Command - ctx from Execute was
-// never referenced and none of the 5 subprocess sites could be cancelled).
 func kittyAtCtx(ctx context.Context, args ...string) (string, error) {
 	bin := kittyBinaryPath()
 	if bin == "" {
 		return "", fmt.Errorf("kitty/kitten binary not found")
 	}
 
-	// Build the full command: <binary> @ [--to SOCKET] <args...>
 	cmdArgs := []string{"@"}
 	if sock := os.Getenv("KITTY_LISTEN_ON"); sock != "" {
 		cmdArgs = append(cmdArgs, "--to", sock)
@@ -89,11 +68,6 @@ func kittyAtCtx(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// matchID builds a --match=id:N argument for targeting a specific window.
-// If windowID is 0, returns empty string (targets the current focused window).
-// #1692 case 5: negative IDs are REJECTED - kitty never assigns them, and
-// the old code silently fell through to no-match, so close(-3) closed the
-// FOCUSED window while reporting success on the requested one.
 func matchID(windowID int) string {
 	if windowID > 0 {
 		return fmt.Sprintf("id:%d", windowID)
@@ -101,12 +75,9 @@ func matchID(windowID int) string {
 	return ""
 }
 
-// errInvalidWindowID reports a negative window target.
 func errInvalidWindowID(windowID int) Result {
 	return Result{IsError: true, Content: fmt.Sprintf("invalid window_id %d - kitty window ids are positive; 0 targets the focused window", windowID)}
 }
-
-// ── Action implementations ──────────────────────────────────────────────────
 
 func (k *KittyTool) executeStatus(ctx context.Context) Result {
 	if !kittyAvailable() {
@@ -135,7 +106,6 @@ func (k *KittyTool) executeStatus(ctx context.Context) Result {
 		b.WriteString("listen socket: not set (remote control may require allow_remote_control=yes in kitty.conf)\n")
 	}
 
-	// Try to get kitty version
 	if binPath != "" {
 		if v, err := exec.CommandContext(ctx, binPath, "--version").Output(); err == nil {
 			b.WriteString(fmt.Sprintf("version: %s", strings.TrimSpace(string(v))))
@@ -150,8 +120,7 @@ func (k *KittyTool) executeList(ctx context.Context) Result {
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("kitty list failed: %v", err)}
 	}
-	// The output from `kitten @ ls` is JSON. Return it as-is — it's
-	// structured and useful for programmatic consumption.
+
 	return Result{Content: out}
 }
 
@@ -164,7 +133,6 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 		dir = "right"
 	}
 
-	// Map direction to kitty launch --location
 	var location string
 	switch dir {
 	case "right", "left":
@@ -182,20 +150,10 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 
 	args := []string{"launch", "--type=window", "--location=" + location, "--cwd=" + wd}
 
-	// #4450: windowID used to be validated and then never used - the split
-	// always landed in the FOCUSED window while the Result claimed success
-	// on the requested one (the same silent-wrong-target family #1692/
-	// #2597 fixed for focus/zoom/close). kitten @ launch accepts --match
-	// to anchor the new window relative to the requested one.
 	if windowID > 0 {
 		args = append(args, "--match="+matchID(windowID))
 	}
 
-	// Size bias: kitty uses --bias N where N is 1-99 here (the new window's
-	// share of the split; 100 would leave nothing for the original window).
-	// #4553-B: out-of-range sizes used to be silently dropped - the split ran
-	// unresized with zero disclosure while the caller believed it took
-	// effect. Reject instead (0 stays "unspecified").
 	if size != 0 {
 		if size < 1 || size > 99 {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid size %d: kitty bias maps the new window's share and must be 1-99 (0 = unspecified)", size)}
@@ -203,18 +161,10 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 		args = append(args, fmt.Sprintf("--bias=%d", size))
 	}
 
-	// For left/up splits, add --no-tab-mgmt is not needed, but kitty doesn't
-	// directly support creating splits on the left/top. We create the split
-	// normally — the direction just determines vsplit vs hsplit.
 	if dir == "left" || dir == "up" {
-		// Kitty always creates vsplit to the right and hsplit below.
-		// For left/up, we note the limitation.
+
 	}
 
-	// Command to run in the new window.
-	// Wrap in /bin/sh -c so the command string is handled as a shell command,
-	// matching the behavior of tmux/xterm/ghostty. Without this, kitty would
-	// treat the entire command string as a single program name.
 	if strings.TrimSpace(command) != "" {
 		args = append(args, "--", "/bin/sh", "-c", command)
 	}
@@ -328,18 +278,12 @@ func (k *KittyTool) executeSelectTab(ctx context.Context, tabIndex int) Result {
 		return Result{IsError: true, Content: "tab_index must be >= 1 (1-based)"}
 	}
 
-	// kitty focus-tab uses --match=index:N (0-based internally, but
-	// many kitty versions use a `recent` or `index` matcher).
-	// We use index:N where N is 0-based, so we subtract 1 from our 1-based input.
 	_, err := kittyAtCtx(ctx, "focus-tab", fmt.Sprintf("--match=index:%d", tabIndex-1))
 	if err != nil {
-		// Some kitty versions might not support index matcher; try
-		// the `--match=order:N` alternative.
+
 		_, err2 := kittyAtCtx(ctx, "focus-tab", fmt.Sprintf("--match=order:%d", tabIndex-1))
 		if err2 != nil {
-			// #1692 case 7: report BOTH failures - returning only the first
-			// (index-matcher unsupported) misled when the real blocker was the
-			// second (environmental) error.
+
 			return Result{IsError: true, Content: fmt.Sprintf("kitty select_tab failed: index matcher: %v; order matcher: %v", err, err2)}
 		}
 	}
@@ -381,24 +325,16 @@ func (k *KittyTool) executeSendKey(ctx context.Context, windowID int, key, modif
 		return Result{IsError: true, Content: "key is required for send_key action"}
 	}
 
-	// Map common key names to kitty escape sequences for send-text.
-	// For special keys that don't have simple text representations,
-	// we use the `action` command instead.
 	keyLower := strings.ToLower(strings.TrimSpace(key))
 
-	// Check if modifiers are specified
 	if strings.TrimSpace(modifiers) != "" {
-		// With modifiers, use action command for key combos.
-		// Map common Ctrl+key combos to kitty action names.
+
 		return k.sendKeyViaAction(ctx, windowID, keyLower, modifiers)
 	}
 
-	// Without modifiers, try to send via send-text with escape sequences.
 	escSeq, isSpecial := kittyKeyEscapeSeq(keyLower)
 	if isSpecial {
-		// Use send-text with the escape sequence.
-		// kitty's send-text interprets these escape sequences when sent
-		// as literal bytes via stdin.
+
 		args := []string{"send-text", "--stdin"}
 		m := matchID(windowID)
 		if m != "" {
@@ -430,7 +366,7 @@ func (k *KittyTool) executeSendKey(ctx context.Context, windowID int, key, modif
 			return Result{IsError: true, Content: fmt.Sprintf("kitty send_key failed: %v", err)}
 		}
 	} else {
-		// Regular character — send via send-text
+
 		args := kittySendTextArgs(windowID, key)
 
 		_, err := kittyAtCtx(ctx, args...)
@@ -446,14 +382,11 @@ func (k *KittyTool) executeSendKey(ctx context.Context, windowID int, key, modif
 	return Result{Content: fmt.Sprintf("kitty key sent to %s: %s", label, key)}
 }
 
-// sendKeyViaAction sends key combos (with modifiers) via the `action` command.
-// Kitty maps common key combos to action names.
 func (k *KittyTool) sendKeyViaAction(ctx context.Context, windowID int, key, modifiers string) Result {
 	if windowID < 0 {
 		return errInvalidWindowID(windowID)
 	}
-	// For Ctrl+C, Ctrl+V, etc., we use send-text with the control character.
-	// Ctrl+letter = byte 1-26 (a=1, b=2, ..., z=26)
+
 	mods := strings.Split(modifiers, ",")
 	hasControl := false
 	hasAlt := false
@@ -467,12 +400,9 @@ func (k *KittyTool) sendKeyViaAction(ctx context.Context, windowID int, key, mod
 	}
 
 	if hasControl && len(key) == 1 && key[0] >= 'a' && key[0] <= 'z' {
-		// Ctrl+letter → control character
+
 		escSeq := string(rune(key[0] - 'a' + 1))
-		// #1692 case 2: Ctrl+Alt+letter → ESC followed by the control
-		// character. The old branch fired on hasControl alone and silently
-		// dropped Alt - only 0x01 went out while the result claimed
-		// "control,alt+a" was sent.
+
 		if hasAlt {
 			escSeq = "\x1b" + escSeq
 		}
@@ -511,11 +441,8 @@ func (k *KittyTool) sendKeyViaAction(ctx context.Context, windowID int, key, mod
 		return Result{Content: fmt.Sprintf("kitty key sent: %s+%s", modifiers, key)}
 	}
 
-	// For other modifier combos, try the action command.
-	// Kitty has action names like "debug_config", "previous_tab", etc.
-	// For generic combos, we fall back to send-text.
 	if hasAlt && len(key) == 1 {
-		// Alt+letter → ESC followed by letter
+
 		escSeq := "\x1b" + key
 
 		args := []string{"send-text", "--stdin"}
@@ -548,16 +475,6 @@ func (k *KittyTool) sendKeyViaAction(ctx context.Context, windowID int, key, mod
 	return Result{IsError: true, Content: fmt.Sprintf("unsupported key combo: %s+%s (use simple keys with control/alt modifiers)", modifiers, key)}
 }
 
-// kittyKeyEscapeSeq returns the escape sequence for a special key name,
-// and true if the key is a special key. Returns ("", false) for regular characters.
-// kittySendTextArgs builds the kitten @ send-text argv for a positional text
-// payload. #2598: kitty's argument parser (master tools/cli/parse-args.go)
-// treats any "-"-prefixed positional as an option unless it comes after "--"
-// ("--help" printed usage, "--stdin" got swallowed as the documented option,
-// "-la" errored as unknown option) - all three reported fake success or a
-// confusing failure while sending nothing. executeSplit already used "--";
-// this helper gives input and send_key's regular-character branch the same
-// guard.
 func kittySendTextArgs(windowID int, text string) []string {
 	args := []string{"send-text"}
 	if m := matchID(windowID); m != "" {
@@ -596,10 +513,7 @@ func kittyKeyEscapeSeq(key string) (string, bool) {
 		return "\x1b[3~", true
 	case "space":
 		return " ", true
-	// #2598: F-keys are keyboard events, not typed text. Without these
-	// cases, send_key("f5") fell to the regular-character branch and sent
-	// the LITERAL characters "f5" via send-text while reporting success.
-	// Sequences mirror iterm2_darwin.go (SS3 for F1-F4, CSI for F5-F12).
+
 	case "f1":
 		return "\x1bOP", true
 	case "f2":
@@ -685,7 +599,6 @@ func (k *KittyTool) executeGetText(ctx context.Context, windowID int) Result {
 		label = "current window"
 	}
 
-	// Truncate very long output for readability
 	if len([]rune(out)) > 5000 {
 		out = string([]rune(out)[:5000]) + "\n... (truncated, use list to get window IDs)"
 	}
@@ -697,14 +610,11 @@ func (k *KittyTool) executeZoom(ctx context.Context, windowID int) Result {
 	if windowID < 0 {
 		return errInvalidWindowID(windowID)
 	}
-	// Toggle between the current layout and the 'stack' layout (zoom).
+
 	args := []string{"action", "toggle_layout", "stack"}
 	m := matchID(windowID)
 	if m != "" {
-		// action doesn't support --match, so focus the window first.
-		// #1692 case 6: the focus error was discarded - when the target
-		// window no longer exists the action ran on the WRONG window and
-		// reported success.
+
 		if _, ferr := kittyAtCtx(ctx, "focus-window", "--match="+m); ferr != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("kitty zoom: focusing window %d failed: %v", windowID, ferr)}
 		}
@@ -739,20 +649,16 @@ func (k *KittyTool) executeAction(ctx context.Context, windowID int, actionStr s
 		return Result{IsError: true, Content: "text (action name) is required for action command"}
 	}
 
-	// Focus the target window first if a specific ID is given.
 	m := matchID(windowID)
 	if m != "" {
-		// action doesn't support --match, so focus the window first.
-		// #2597: the #1692 case-6 fix covered zoom but missed this twin
-		// site - a discarded focus error meant the action ran on the
-		// WRONG window and reported success.
+
 		if _, ferr := kittyAtCtx(ctx, "focus-window", "--match="+m); ferr != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("kitty action: focusing window %d failed: %v", windowID, ferr)}
 		}
 	}
 
 	args := []string{"action"}
-	// Split actionStr into parts (e.g. "scroll_page_down" or "send_key string f1")
+
 	parts := strings.Fields(actionStr)
 	args = append(args, parts...)
 

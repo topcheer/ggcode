@@ -1,16 +1,5 @@
 package agentruntime
 
-// Tests covering GitHub issues #1154 and #1155 in internal/agentruntime.
-//
-// #1154: SectionCollector Stop was not idempotent (bare close panicked on the
-// second caller) and the package-global collector pointer was read/written
-// without synchronization. The install/removal/snapshot paths are now guarded
-// by globalCollectorMu and Stop uses sync.Once.
-//
-// #1155: Skill description truncation sliced bytes instead of runes, so CJK
-// descriptions could be cut mid-rune, producing invalid UTF-8 that strict
-// providers reject with HTTP 400. Truncation now goes through truncateRunes.
-
 import (
 	"strings"
 	"sync"
@@ -21,11 +10,8 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// issue1155MaxDescChars mirrors the truncation cap used by
-// BuildSkillsSystemPromptWithPromptRefs (local const there).
 const issue1155MaxDescChars = 180
 
-// findSkillLine extracts the rendered "- name: ..." entry from a skills prompt.
 func findSkillLine(t *testing.T, prompt, name string) string {
 	t.Helper()
 	prefix := "- " + name + ": "
@@ -38,12 +24,8 @@ func findSkillLine(t *testing.T, prompt, name string) string {
 	return ""
 }
 
-// TestIssue1155SkillDescriptionTruncationRuneSafe feeds a far-over-limit CJK
-// description through the skills prompt builder and asserts the truncated
-// description stays valid UTF-8 and respects the rune cap (#1155). Under the
-// old byte slicing, desc[:179] landed inside a 3-byte rune almost surely.
 func TestIssue1155SkillDescriptionTruncationRuneSafe(t *testing.T) {
-	longCJK := strings.Repeat("汉", 250) // 750 bytes, 250 runes
+	longCJK := strings.Repeat("汉", 250)
 	skills := []*commands.Command{
 		{
 			Name:        "cn-heavy",
@@ -76,8 +58,6 @@ func TestIssue1155SkillDescriptionTruncationRuneSafe(t *testing.T) {
 	}
 }
 
-// TestIssue1155WhenToUseMergeTruncationRuneSafe covers the merged
-// Description+" - "+WhenToUse path crossing the cap (#1155).
 func TestIssue1155WhenToUseMergeTruncationRuneSafe(t *testing.T) {
 	skills := []*commands.Command{
 		{
@@ -102,9 +82,6 @@ func TestIssue1155WhenToUseMergeTruncationRuneSafe(t *testing.T) {
 	}
 }
 
-// TestIssue1155ASCIIDescriptionBoundary pins boundary behavior: exactly at the
-// cap nothing changes; above it the result is deterministically capped at 180
-// runes ending in "..." (#1155 regression guard for pure-ASCII input).
 func TestIssue1155ASCIIDescriptionBoundary(t *testing.T) {
 	skills := []*commands.Command{
 		{Name: "ascii-exact", Description: strings.Repeat("a", issue1155MaxDescChars), Enabled: true},
@@ -131,9 +108,6 @@ func TestIssue1155ASCIIDescriptionBoundary(t *testing.T) {
 	}
 }
 
-// TestIssue1154SectionCollectorStopIdempotentConcurrent proves Stop can be
-// called repeatedly and from many goroutines at once without double-close
-// panics or hangs (#1154 desktop multi-ChatBridge scenario).
 func TestIssue1154SectionCollectorStopIdempotentConcurrent(t *testing.T) {
 	sc := newSectionCollector(t.TempDir())
 	sc.Start()
@@ -164,18 +138,14 @@ func TestIssue1154SectionCollectorStopIdempotentConcurrent(t *testing.T) {
 		t.Error("background loop did not exit after Stop")
 	}
 
-	// Extra sequential Stops must stay silent no-ops.
 	sc.Stop()
 	sc.Stop()
 }
 
-// TestIssue1154SectionCollectorLifecycleEdges guards Start/Stop ordering:
-// repeated Start must not spawn duplicate loops (which would race to close
-// done), and Stop-before-Start must neither hang nor leak a loop (#1154).
 func TestIssue1154SectionCollectorLifecycleEdges(t *testing.T) {
 	sc := newSectionCollector(t.TempDir())
 	sc.Start()
-	sc.Start() // duplicate Start: must be a no-op
+	sc.Start()
 	doneSignal := make(chan struct{})
 	go func() {
 		sc.Stop()
@@ -190,7 +160,7 @@ func TestIssue1154SectionCollectorLifecycleEdges(t *testing.T) {
 	sc2 := newSectionCollector(t.TempDir())
 	finished := make(chan struct{})
 	go func() {
-		sc2.Stop() // never started: must return promptly
+		sc2.Stop()
 		close(finished)
 	}()
 	select {
@@ -198,7 +168,7 @@ func TestIssue1154SectionCollectorLifecycleEdges(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("Stop without Start hung waiting for done")
 	}
-	// Starting afterwards still works and exits cleanly via the pre-closed stop.
+
 	sc2.Start()
 	select {
 	case <-sc2.done:
@@ -207,10 +177,6 @@ func TestIssue1154SectionCollectorLifecycleEdges(t *testing.T) {
 	}
 }
 
-// TestIssue1154GlobalCollectorInitStopSnapshotRaceStress hammers the shared
-// global collector: concurrent Init (two different dirs), Snapshot, and Stop.
-// Run under -race this fails if any access to globalSectionCollector is
-// unsynchronized or if Stop double-closes (#1154).
 func TestIssue1154GlobalCollectorInitStopSnapshotRaceStress(t *testing.T) {
 	dirA := t.TempDir()
 	dirB := t.TempDir()
@@ -255,8 +221,6 @@ func TestIssue1154GlobalCollectorInitStopSnapshotRaceStress(t *testing.T) {
 		t.Fatal("global collector stress test exceeded deadline")
 	}
 
-	// Converge to a defined live state and verify snapshot availability, then
-	// let the deferred Stop clean up for other tests in the package.
 	InitGlobalSectionCollector(dirA)
 	if _, ok := GlobalSectionSnapshot(); !ok {
 		t.Fatal("expected available snapshot after final Init")

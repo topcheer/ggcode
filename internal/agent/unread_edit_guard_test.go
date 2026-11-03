@@ -12,18 +12,15 @@ import (
 func TestUnreadEditState_BasicTracking(t *testing.T) {
 	s := newUnreadEditState()
 
-	// Initially, nothing is read.
 	if s.hasBeenRead("/foo/bar.go") {
 		t.Fatal("expected file to be unread")
 	}
 
-	// Record a read.
 	s.recordRead("/foo/bar.go")
 	if !s.hasBeenRead("/foo/bar.go") {
 		t.Fatal("expected file to be read after recordRead")
 	}
 
-	// Should not warn for a file that was read.
 	if hint := s.checkUnreadEdit("/foo/bar.go"); hint != "" {
 		t.Fatalf("expected empty hint for read file, got: %s", hint)
 	}
@@ -37,7 +34,6 @@ func TestUnreadEditState_WarnsOnUnread(t *testing.T) {
 		t.Fatal("expected non-empty hint for unread file")
 	}
 
-	// Should warn only once per file.
 	hint2 := s.checkUnreadEdit("/foo/baz.go")
 	if hint2 != "" {
 		t.Fatal("expected empty hint on second check (already warned)")
@@ -47,7 +43,6 @@ func TestUnreadEditState_WarnsOnUnread(t *testing.T) {
 func TestUnreadEditState_CreatedFilesExempt(t *testing.T) {
 	s := newUnreadEditState()
 
-	// write_file creates a file — no read needed.
 	s.recordCreated("/foo/new.go")
 
 	if hint := s.checkUnreadEdit("/foo/new.go"); hint != "" {
@@ -67,14 +62,13 @@ func TestUnreadEditState_Reset(t *testing.T) {
 
 	s.reset()
 
-	// After reset, everything should be unread again.
 	if s.hasBeenRead("/foo/a.go") {
 		t.Fatal("expected filesRead to be cleared after reset")
 	}
 	if s.hasBeenRead("/foo/b.go") {
 		t.Fatal("expected filesCreated to be cleared after reset")
 	}
-	// Should be able to warn again after reset.
+
 	hint := s.checkUnreadEdit("/foo/c.go")
 	if hint == "" {
 		t.Fatal("expected warning after reset for previously-warned file")
@@ -84,7 +78,6 @@ func TestUnreadEditState_Reset(t *testing.T) {
 func TestUnreadEditState_PathNormalization(t *testing.T) {
 	s := newUnreadEditState()
 
-	// Trailing slashes and spaces should be normalized.
 	s.recordRead("/foo/bar.go/")
 
 	if !s.hasBeenRead("/foo/bar.go") {
@@ -143,9 +136,7 @@ func TestExtractEditFilePaths(t *testing.T) {
 	})
 
 	t.Run("file_ops_mkdir_skipped", func(t *testing.T) {
-		// mkdir edits no file content and its source is a brand-new
-		// directory path that can never have been read - feeding it to
-		// the read-before-edit check was a guaranteed false positive.
+
 		args, _ := json.Marshal(map[string]any{
 			"operations": []any{
 				map[string]any{"action": "mkdir", "source": "/Volumes/new/brand-new-dir"},
@@ -158,8 +149,7 @@ func TestExtractEditFilePaths(t *testing.T) {
 	})
 
 	t.Run("file_ops_delete_move_kept", func(t *testing.T) {
-		// delete/move change which file lives at a path - freshness and
-		// readHash bookkeeping still want the path extracted.
+
 		args, _ := json.Marshal(map[string]any{
 			"operations": []any{
 				map[string]any{"action": "delete", "source": "/a/old.go"},
@@ -234,7 +224,7 @@ func TestExtractCreateFilePaths(t *testing.T) {
 	})
 
 	t.Run("batch_replace", func(t *testing.T) {
-		// #1520: batch_replace rewrites EXISTING files - never "created".
+
 		args, _ := json.Marshal(map[string]any{
 			"files":       []any{"/x/y.go"},
 			"pattern":     "a",
@@ -246,11 +236,9 @@ func TestExtractCreateFilePaths(t *testing.T) {
 	})
 }
 
-// --- Stale-read detection tests ---
-
 func TestStaleRead_NoWarningForUnreadFile(t *testing.T) {
 	s := newUnreadEditState()
-	// A file that was never read should not trigger stale-read.
+
 	if hint := s.checkStaleRead("/nonexistent/path.go"); hint != "" {
 		t.Fatalf("expected empty hint for unread file, got: %s", hint)
 	}
@@ -267,7 +255,6 @@ func TestStaleRead_WarnsOnExternalModification(t *testing.T) {
 	s := newUnreadEditState()
 	s.recordRead(path)
 
-	// Simulate external modification with a newer mtime.
 	future := time.Now().Add(2 * time.Second)
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
@@ -293,7 +280,6 @@ func TestStaleRead_NoWarningForUnchangedFile(t *testing.T) {
 	s := newUnreadEditState()
 	s.recordRead(path)
 
-	// No modification — should not warn.
 	if hint := s.checkStaleRead(path); hint != "" {
 		t.Fatalf("expected no warning for unchanged file, got: %s", hint)
 	}
@@ -315,12 +301,11 @@ func TestStaleRead_WarnsOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First check should warn.
 	hint1 := s.checkStaleRead(path)
 	if hint1 == "" {
 		t.Fatal("expected first stale-read warning")
 	}
-	// Second check should not warn (already warned).
+
 	hint2 := s.checkStaleRead(path)
 	if hint2 != "" {
 		t.Fatal("expected no second stale-read warning (already warned)")
@@ -337,14 +322,13 @@ func TestStaleRead_CreatedFilesExempt(t *testing.T) {
 
 	s := newUnreadEditState()
 	s.recordRead(path)
-	s.recordCreated(path) // Agent wrote this file after reading
+	s.recordCreated(path)
 
 	future := time.Now().Add(2 * time.Second)
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
 	}
 
-	// Even though file changed on disk, agent authored it — no warning.
 	if hint := s.checkStaleRead(path); hint != "" {
 		t.Fatalf("expected no stale warning for agent-created file, got: %s", hint)
 	}
@@ -373,7 +357,6 @@ func TestStaleRead_ResetClearsMtime(t *testing.T) {
 
 	s.reset()
 
-	// After reset, no mtime is tracked — should not warn.
 	hint2 := s.checkStaleRead(path)
 	if hint2 != "" {
 		t.Fatalf("expected no stale warning after reset, got: %s", hint2)
@@ -396,22 +379,17 @@ func TestStaleRead_ReReadClearsStaleState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First check warns.
 	if hint := s.checkStaleRead(path); hint == "" {
 		t.Fatal("expected first stale-read warning")
 	}
 
-	// Agent re-reads the file — this updates the mtime baseline.
 	s.recordRead(path)
 
-	// No further external modification — should not warn.
 	if hint := s.checkStaleRead(path); hint != "" {
 		t.Fatalf("expected no warning after re-read, got: %s", hint)
 	}
 }
 
-// Test #162: after re-reading a file, a SECOND external modification must be
-// able to warn again (the stale key is cleared on recordRead).
 func TestStaleRead_RewarnAfterReread(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.go")
@@ -423,7 +401,6 @@ func TestStaleRead_RewarnAfterReread(t *testing.T) {
 	s := newUnreadEditState()
 	s.recordRead(path)
 
-	// First external modification → warn.
 	t1 := time.Now().Add(2 * time.Second)
 	if err := os.Chtimes(path, t1, t1); err != nil {
 		t.Fatal(err)
@@ -432,11 +409,8 @@ func TestStaleRead_RewarnAfterReread(t *testing.T) {
 		t.Fatal("expected first stale-read warning")
 	}
 
-	// Agent re-reads the file → staleness baseline refreshed.
 	s.recordRead(path)
 
-	// Second external modification → must warn again (#162: previously the
-	// stale key was never cleared, so this stayed silent forever).
 	t2 := t1.Add(2 * time.Second)
 	if err := os.Chtimes(path, t2, t2); err != nil {
 		t.Fatal(err)
@@ -446,8 +420,6 @@ func TestStaleRead_RewarnAfterReread(t *testing.T) {
 	}
 }
 
-// TestStaleRead_OwnEditNotFlagged pins fix #168: after the agent's own
-// successful edit (recordWrite), the bumped mtime must NOT warn as stale.
 func TestStaleRead_OwnEditNotFlagged(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.go")
@@ -456,21 +428,18 @@ func TestStaleRead_OwnEditNotFlagged(t *testing.T) {
 	}
 	s := newUnreadEditState()
 	s.recordRead(p)
-	s.recordWrite(p) // agent's own edit — refreshes baseline to now
+	s.recordWrite(p)
 	if hint := s.checkStaleRead(p); hint != "" {
 		t.Fatalf("own-edit refresh must not warn: %q", hint)
 	}
 }
 
-// Regression for #1520: batch_replace's files[] are EXISTING files being
-// batch-modified - they must NOT be recorded as "created" (recordCreated
-// made later edits skip both the unread and stale-read checks).
 func TestExtractCreateFilePathsExcludesBatchReplace(t *testing.T) {
 	args := `{"pattern":"X","replacement":"Y","files":["/w/a.go","/w/b.go"]}`
 	if got := extractCreateFilePaths("batch_replace", json.RawMessage(args)); len(got) != 0 {
 		t.Fatalf("batch_replace files must not be treated as created, got %v", got)
 	}
-	// Sanity: write_file still creates.
+
 	if got := extractCreateFilePaths("write_file", json.RawMessage(`{"path":"/w/new.go","content":"x"}`)); len(got) != 1 {
 		t.Fatalf("write_file must still extract created path, got %v", got)
 	}

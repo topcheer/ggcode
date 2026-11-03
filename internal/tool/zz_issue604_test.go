@@ -1,15 +1,5 @@
 package tool
 
-// Regression tests for issue #604:
-//   T1 — multi_edit_file never resolved relative paths via resolveToolPath
-//        (wrong-file edit risk + SandboxCheck basis mismatch vs edit_file)
-//   T2 — whitespace-tolerant fallback matching bypassed the uniqueness gate
-//        (semantically-duplicate blocks silently collapsed to a single
-//        byte-exact match and the first block was edited without warning)
-//   T3 — RunCommand.Clone() dropped JobManager, so teammate/sub-agent copies
-//        failed to auto-background long commands ("command job manager not
-//        available").
-
 import (
 	"context"
 	"encoding/json"
@@ -29,10 +19,6 @@ func issue604Write(t *testing.T, path, content string) {
 	}
 }
 
-// ---------- T1: multi_edit_file resolves relative paths via WorkingDir ----------
-
-// T1a: when a same-named file exists in the process CWD, multi_edit_file with a
-// relative path must edit the WorkingDir copy, not the CWD one.
 func TestIssue604_T1_MultiEditResolvesRelativePathAgainstWorkingDir(t *testing.T) {
 	workDir := t.TempDir()
 	cwdDir := t.TempDir()
@@ -42,8 +28,6 @@ func TestIssue604_T1_MultiEditResolvesRelativePathAgainstWorkingDir(t *testing.T
 	issue604Write(t, filepath.Join(workDir, "rel.txt"), workContent)
 	issue604Write(t, filepath.Join(cwdDir, "rel.txt"), cwdContent)
 
-	// Move the process CWD so the pre-fix behavior (reading the bare relative
-	// path) would resolve to cwdDir/rel.txt.
 	restore := issue604Chdir(t, cwdDir)
 
 	tool := MultiEditFile{WorkingDir: workDir}
@@ -82,8 +66,6 @@ func TestIssue604_T1_MultiEditResolvesRelativePathAgainstWorkingDir(t *testing.T
 	restore()
 }
 
-// T1b: SandboxCheck must receive the resolved absolute path, matching
-// edit_file's judgment basis.
 func TestIssue604_T1_MultiEditSandboxCheckReceivesAbsolutePath(t *testing.T) {
 	workDir := t.TempDir()
 	issue604Write(t, filepath.Join(workDir, "rel.txt"), "alpha\nbeta\n")
@@ -124,8 +106,6 @@ func TestIssue604_T1_MultiEditSandboxCheckReceivesAbsolutePath(t *testing.T) {
 	}
 }
 
-// issue604Chdir changes the process working directory and returns a restore
-// func. Tests using it must not run in parallel.
 func issue604Chdir(t *testing.T, dir string) (restore func()) {
 	t.Helper()
 	old, err := os.Getwd()
@@ -142,18 +122,10 @@ func issue604Chdir(t *testing.T, dir string) (restore func()) {
 	}
 }
 
-// ---------- T2: fallback matching must not bypass the uniqueness gate ----------
-
-// T2a: two blocks differing only in trailing whitespace; old_text matches via
-// the trailing-whitespace-tolerant fallback and canonical count is 1 — the
-// edit must now fail with a disambiguation error instead of silently editing
-// the first block.
 func TestIssue604_T2_TrailingWhitespaceFallbackUniqueness(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
-	// Block 1 lines have 3 trailing spaces; block 2 lines have 1. The
-	// multi-line old_text (no trailing ws) byte-matches neither → the
-	// trailing-whitespace-tolerant fallback fires and canonical = block 1.
+
 	content := "header\ndup   \nvalue   \nmiddle\ndup \nvalue \nfooter\n"
 	issue604Write(t, path, content)
 
@@ -180,7 +152,6 @@ func TestIssue604_T2_TrailingWhitespaceFallbackUniqueness(t *testing.T) {
 	}
 }
 
-// T2b: same scenario through multi_edit_file (planTextEdits path).
 func TestIssue604_T2_MultiEditTrailingWhitespaceFallbackUniqueness(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
@@ -210,14 +181,10 @@ func TestIssue604_T2_MultiEditTrailingWhitespaceFallbackUniqueness(t *testing.T)
 	}
 }
 
-// T2c: indent-shift fallback with two blocks that differ only in indentation
-// depth must also refuse rather than edit the first silently.
 func TestIssue604_T2_IndentShiftFallbackUniqueness(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
-	// Two structurally identical blocks at different indentation levels; the
-	// agent's old_text carries yet another base indent → leading-indent-shift
-	// matches block 1 (canonical count 1), loose recount finds 2.
+
 	content := "start\n\t\tline one\n\t\tline two\nmid\n\t\t\t\tline one\n\t\t\t\tline two\nend\n"
 	issue604Write(t, path, content)
 
@@ -243,8 +210,6 @@ func TestIssue604_T2_IndentShiftFallbackUniqueness(t *testing.T) {
 	}
 }
 
-// T2d: regression guard — a fallback match that IS unique under lenient
-// semantics must still succeed (the gate must not become a false blocker).
 func TestIssue604_T2_UniqueFallbackStillSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "single.txt")
@@ -269,8 +234,6 @@ func TestIssue604_T2_UniqueFallbackStillSucceeds(t *testing.T) {
 	}
 }
 
-// T2e: byte-exact multi-occurrence detection (pre-existing behavior) must
-// keep working alongside the new lenient gate.
 func TestIssue604_T2_ByteExactDuplicateStillRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
@@ -294,8 +257,6 @@ func TestIssue604_T2_ByteExactDuplicateStillRejected(t *testing.T) {
 		t.Errorf("expected byte-exact duplicate message, got: %s", res.Content)
 	}
 }
-
-// ---------- T3: RunCommand.Clone() preserves JobManager ----------
 
 func TestIssue604_T3_ClonePreservesJobManager(t *testing.T) {
 	jm := NewCommandJobManager("issue604-test")

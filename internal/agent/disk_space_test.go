@@ -21,7 +21,7 @@ func TestDiskSpaceReset(t *testing.T) {
 	if d.fired {
 		t.Error("reset should clear fired flag")
 	}
-	// reset preserves lastResult for cross-run caching
+
 	if d.lastResult != "test" {
 		t.Error("reset should preserve lastResult for caching")
 	}
@@ -37,17 +37,15 @@ func TestDiskSpaceCheckEmptyDir(t *testing.T) {
 
 func TestDiskSpaceCheckValidDir(t *testing.T) {
 	d := newDiskSpaceState()
-	// Use current directory (always valid and has free space)
+
 	msg := d.check(".")
-	// On a normal dev machine with plenty of space, this should be empty.
-	// We can't guarantee low disk, so just verify it doesn't panic
-	// and returns a string (possibly empty).
+
 	_ = msg
 }
 
 func TestDiskSpaceCheckFiresOnce(t *testing.T) {
 	d := newDiskSpaceState()
-	// Simulate already-fired state
+
 	d.fired = true
 	d.lastResult = ""
 	msg := d.check(".")
@@ -60,7 +58,7 @@ func TestDiskSpaceCheckCaching(t *testing.T) {
 	d := newDiskSpaceState()
 	d.lastCheck = time.Now()
 	d.lastResult = "cached warning"
-	// Should return cached result without re-checking
+
 	msg := d.check(".")
 	if msg != "cached warning" {
 		t.Errorf("expected cached result, got: %s", msg)
@@ -95,7 +93,7 @@ func TestDiskUsageValidPath(t *testing.T) {
 		t.Skip("diskUsage not available on this platform or path invalid")
 	}
 	if free == 0 {
-		// Could be true on a full disk, but unlikely in test env
+
 	}
 	if total == 0 {
 		t.Error("total disk size should be non-zero")
@@ -104,7 +102,6 @@ func TestDiskUsageValidPath(t *testing.T) {
 
 func TestDiskUsageInvalidPath(t *testing.T) {
 	_, _, ok := diskUsage("/nonexistent/path/that/should/not/exist")
-	// May or may not fail depending on platform behavior,
-	// but should not panic.
+
 	_ = ok
 }

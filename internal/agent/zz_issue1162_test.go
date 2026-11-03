@@ -2,35 +2,12 @@ package agent
 
 import "testing"
 
-// Regression tests for GitHub issue #1162.
-//
-// The reasoning-action alignment verifier previously required every stated
-// intent category to be matched by an action category on the SAME turn. Two
-// systematic false positives followed:
-//
-//  1. Multi-intent two-step plans: "Let me fix the bug and then I'll verify
-//     with tests." + edit_file flagged the verify intent because the fix step
-//     ran first - a fully aligned plan opening move.
-//  2. Sequential plans: "Let me verify the fix works. First, let me find
-//     where the tests are." + grep flagged verify-vs-search even though the
-//     verify action simply comes one turn later.
-//
-// This file pins, per the issue's fix direction:
-//  1. sequential plans no longer misfire (temporal tolerance window +
-//     coordination-marker exemption);
-//  2. multi-intent statements are exempt from escalation entirely;
-//  3. an intent fulfilled within raAlignmentWindow turns stays silent;
-//  4. a genuinely abandoned intent (never acted on, single stated category)
-//     still escalates after the window closes.
-
 func TestIssue1162_SequentialPlanNotMisaligned(t *testing.T) {
 	s := newReasonActionState()
-	// Exactly the issue-#1162 false positive: verify intent planned AFTER a
-	// preparatory search; only grep runs on the statement turn, run_command
-	// (verify) arrives two turns later.
+
 	seq := []toolCallInfo{
-		{Name: "grep"},        // find tests first
-		{Name: "run_command"}, // then run them to verify
+		{Name: "grep"},
+		{Name: "run_command"},
 	}
 	for i, tc := range seq {
 		hint := s.checkAlignment(
@@ -47,9 +24,7 @@ func TestIssue1162_SequentialPlanNotMisaligned(t *testing.T) {
 
 func TestIssue1162_TwoStepPlanMultiIntentExempt(t *testing.T) {
 	s := newReasonActionState()
-	// Stated categories {fix, verify}; only fix executes on this turn and the
-	// agent keeps editing afterwards. The multi-intent exemption (#1162) must
-	// prevent ANY escalation across and beyond the window.
+
 	text := "Let me fix the bug and then I'll verify with tests."
 	for _, tc := range []toolCallInfo{
 		{Name: "edit_file"},
@@ -59,9 +34,7 @@ func TestIssue1162_TwoStepPlanMultiIntentExempt(t *testing.T) {
 			t.Fatalf("multi-intent plan wrongly escalated on %s: %s", tc.Name, hint)
 		}
 	}
-	// Keep working past the window on turns whose prose states NO new intent,
-	// so the original exempt pending drains silently (#1162) instead of being
-	// re-created by restated plans.
+
 	for i := 0; i < raAlignmentWindow+2; i++ {
 		if hint := s.checkAlignment("Still working through the module now.",
 			[]toolCallInfo{{Name: "edit_file"}}); hint != "" {
@@ -78,9 +51,7 @@ func TestIssue1162_TwoStepPlanMultiIntentExempt(t *testing.T) {
 
 func TestIssue1162_IntentFulfilledWithinWindowStaysSilent(t *testing.T) {
 	s := newReasonActionState()
-	// Single category, NO coordination marker: verify-stated against a fix
-	// action today but the verification genuinely runs on turn 3, inside the
-	// raAlignmentWindow tolerance. No warning may fire at any point (#1162).
+
 	turns := [][]toolCallInfo{
 		{{Name: "edit_file"}},
 		{{Name: "read_file"}},
@@ -98,9 +69,7 @@ func TestIssue1162_IntentFulfilledWithinWindowStaysSilent(t *testing.T) {
 
 func TestIssue1162_StaleSingleIntentStillEscalates(t *testing.T) {
 	s := newReasonActionState()
-	// True misalignment remains detectable: ONE strictly-stated verify intent,
-	// no sequencing language, no matching action for the whole window plus a
-	// margin. The warning names the stored intent phrase and conflicting tool.
+
 	text := "I should verify the coverage numbers now."
 	var hint string
 	for i := 0; i < raAlignmentWindow+2 && hint == ""; i++ {
@@ -136,9 +105,7 @@ func containsSub(haystack, needle string) bool {
 }
 
 func TestIssue1162_WindowLengthMatchesIssueDirection(t *testing.T) {
-	// Pin the tolerance threshold taken from the issue's fix direction so it
-	// survives accidental edits (#1162): stale intents escalate on the first
-	// check following the window close, not earlier.
+
 	s := newReasonActionState()
 	text := "I should verify the schema migration results."
 	firstConflict := s.checkAlignment(text, []toolCallInfo{{Name: "edit_file"}})

@@ -168,8 +168,7 @@ func f() int {
 }
 
 func TestCheckConstantConditional_NoDescendIntoDeadBody(t *testing.T) {
-	// The inner if false is inside an always-true outer if; we should not
-	// descend into the dead body, so only 1 warning (the outer).
+
 	src := `package x
 func f() int {
 	if true {
@@ -214,7 +213,7 @@ func TestCheckConstantConditional_Truncation(t *testing.T) {
 }
 
 func TestCheckConstantConditional_VariableNumeric(t *testing.T) {
-	// Variables are not constants; should not warn.
+
 	src := `package x
 func f(n int) bool {
 	if n > 0 {

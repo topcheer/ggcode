@@ -2,14 +2,6 @@
 
 package tool
 
-// Regression test for GitHub issue #4482:
-// - Bug 1: logs lines < 1 (LLM-generated negative or JSON typo) passed
-//   through unnormalized and made the tail-trim slice underflow panic in
-//   both backends. Execute must normalize before touching a backend.
-// - Bug 2: iosBackend.cachedUDID was read/written without a lock while
-//   parallel tool-execution batches can call defaultDevice concurrently -
-//   a Go memory model violation caught by -race. The mutex must hold.
-
 import (
 	"context"
 	"encoding/json"
@@ -19,8 +11,7 @@ import (
 
 func TestIssue4482_NegativeLinesNormalized(t *testing.T) {
 	tool := &MobileDeviceTool{}
-	// No backend/device available in CI: the call must still terminate with
-	// an error Result instead of panicking on the negative slice bound.
+
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"logs","lines":-5}`))
 	if err != nil {
 		t.Fatalf("negative lines must not hard-error the tool, got err %v", err)

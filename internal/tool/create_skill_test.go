@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// stubReloader implements SkillReloader for testing.
 type stubReloader struct {
 	cmds map[string]*commands.Command
 }
@@ -45,7 +44,6 @@ func TestCreateSkill_Execute_Success(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", result.Content)
 	}
 
-	// Verify file was created
 	skillFile := filepath.Join(dir, ".ggcode", "skills", "deploy-app", "SKILL.md")
 	if _, err := os.Stat(skillFile); os.IsNotExist(err) {
 		t.Fatal("expected SKILL.md to be created")
@@ -79,7 +77,6 @@ func TestCreateSkill_Execute_InvalidName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		// Fix: use properly encoded name
 		var input json.RawMessage
 		if tt.name == "too long" {
 			longName := makeLongName(81)

@@ -1,57 +1,5 @@
 package agent
 
-// Outcome Misattribution Detector
-//
-// Research basis:
-//   - "Why AI Coding Agents Fail" (SWE-bench analysis, 2025-2026): a top-3
-//     failure mode is "phantom success" - the agent receives a tool result
-//     containing error/failure indicators (build failure, test failure,
-//     "not found", empty results) but then claims success or completion
-//     in its narrative, proceeding as if the operation succeeded.
-//   - CogCal-1 (2025): cognitive calibration gaps where the agent's
-//     self-assessment diverges from objective evidence.
-//   - Agent-R self-training (arXiv:2503.07657): "outcome delusion" where
-//     agents misattribute negative results as positive, compounding into
-//     cascading failures.
-//
-// Problem: After a tool returns content containing failure indicators
-// (compile errors, test failures, "no results found", "file not found"),
-// the agent sometimes describes the outcome as successful ("done", "fixed",
-// "works correctly", "all set") and moves on. This silently ships broken
-// work and is invisible to the user without careful inspection.
-//
-// Existing ggcode detectors that are RELATED but do NOT cover this:
-//   - verify_disconnect.go: tracks whether verification was *run* after
-//     edits, and whether the agent *advanced past* a verification failure.
-//     It does NOT check whether the agent *narrated success* despite the
-//     failure - the agent could acknowledge the failure and still be
-//     flagged. This detector catches the opposite: the agent NARRATES
-//     success despite objective failure in tool output.
-//   - verify_scope_narrow.go: detects narrowing of verification scope
-//     (e.g., testing fewer cases). Does not compare narrative to results.
-//   - unverified_confidence / evidence_overconfidence: track whether
-//     verification was done, not whether it contradicted the narrative.
-//   - trajectory_confidence_scorer.go: scores overall trajectory quality,
-//     does not detect per-result misattribution.
-//
-// Gap: No detector compares the agent's POST-RESULT NARRATIVE ("done",
-// "fixed", "works") against FAILURE INDICATORS in the tool result that
-// preceded it. This detector fills that gap.
-//
-// Design:
-//   - Phase 1 (recordResult): called during tool execution. Examines the
-//     result content for failure indicators (error patterns, test
-//     failures, "not found", empty results). Records the failure for
-//     the current iteration.
-//   - Phase 2 (checkMisattribution): called after assistantText is
-//     captured in the next iteration. Scans the text for success claims
-//     ("done", "fixed", "works", "all set", "complete"). If a success
-//     claim appears in the iteration immediately following a recorded
-//     failure - and no corrective tool call (edit, fix, retry) was made
-//     between the failure and the claim - inject guidance to re-verify.
-//   - Zero LLM cost - pure deterministic pattern matching.
-//   - Fires at most 2 times per run (advisory, non-blocking).
-
 import (
 	"regexp"
 	"strings"
@@ -61,32 +9,16 @@ const (
 	outcomeMisattribMaxWarnings = 2
 )
 
-// Failure indicator patterns in tool results.
 var outcomeFailureRe = regexp.MustCompile(
 	`(?i)(?:error[s]?\s|fail(?:ed|ure|ures)?\b|panic:|fatal:|cannot |could not |not found\b|no results?\b|no matches?\b|no such file|undefined:|compilation aborted|BUILD FAILURE|exit code [1-9]|0 tests? pass|0 matches|traceback|exception|segfault|core dumped)`,
 )
 
-// outcomeZeroCountContextRe matches the text IMMEDIATELY BEFORE a
-// countable-family token (failed/failures/errors) when it is a zero-count
-// summary ("0 failed", "zero failures", "0 errors") - the passing-state
-// summaries every major test runner and linter prints (cargo "0 failed;
-// 0 ignored", jest "0 failed, 0 skipped", ruff "Found 0 errors").
-// #2913: these must NOT count as failure indicators, same discipline as
-// the existing "0 tests pass" / "0 matches" guards above.
-// #2916: the exemption extends to the error family - the error[s]?\s
-// alternative of outcomeFailureRe matches "errors\n" in line-end form
-// ("Found 0 errors\n") while the comma form ("0 errors, 0 warnings")
-// never matches, so only the line-end form needs the guard.
 var outcomeZeroCountContextRe = regexp.MustCompile(`(?i)(?:0|zero)\s+$`)
 
-// isZeroCountMatch reports whether the fail/error-family token at
-// content[start:end] is preceded by a standalone zero count. Only
-// countable families qualify; tokens that never take a count prefix
-// (panic:, not found, traceback, ...) are left to the plain rules.
 func isZeroCountMatch(content string, start, end int) bool {
 	tok := strings.ToLower(content[start:end])
 	if !strings.Contains(tok, "fail") && !strings.Contains(tok, "error") {
-		return false // not a countable-family hit; the zero guard doesn't apply
+		return false
 	}
 	if start == 0 {
 		return false
@@ -96,30 +28,17 @@ func isZeroCountMatch(content string, start, end int) bool {
 	if loc == nil {
 		return false
 	}
-	// A trailing "0" inside a larger count ("10 failed", "100 errors")
-	// must not read as a zero count (#2916): the digit run must end at
-	// the matched "0"/"zero". Match-position inspection instead of
-	// lookbehind (Go regexp lacks it).
+
 	if loc[0] > 0 && prefix[loc[0]-1] >= '0' && prefix[loc[0]-1] <= '9' {
 		return false
 	}
 	return true
 }
 
-// Success claim patterns in assistant narrative.
 var outcomeSuccessClaimRe = regexp.MustCompile(
 	`(?i)\b(?:done|fixed|resolved|solved|works?\s+(?:correctly|as\s+expected|now)|all\s+(?:set|good|passing|tests?\s+(?:pass|are\s+passing))|verified\s+(?:that\s+)?(?:it|this|everything)\s+works|successfully\s+(?:completed|implemented|fixed|updated)|everything\s+(?:looks?|is)\s+(?:good|correct|fine)|the\s+(?:fix|change|test|build)\s+(?:works?|passes?|is\s+correct)|no\s+(?:issues?|problems?|errors?))\b`,
 )
 
-// Tools whose results carry verifiable pass/fail semantics of the agent's
-// own actions (build/test/lint command output, explicit git operation
-// results, compiler diagnostics).
-// #1139: Content-returning read-class tools (read_file, grep, glob,
-// search_files, lsp_hover, lsp_definition, lsp_references) were removed
-// from this set. Their output is EXTERNAL CONTENT, not an outcome of the
-// agent's own work, so scanning it for bare words like "error" or "fail"
-// misfires whenever the agent merely reads ordinary Go source that contains
-// error-handling code (e.g. "return fmt.Errorf(...)") and then says 'done'.
 var outcomeVerifiableTools = map[string]bool{
 	"run_command":         true,
 	"start_command":       true,
@@ -128,43 +47,29 @@ var outcomeVerifiableTools = map[string]bool{
 	"lsp_diagnostics":     true,
 }
 
-// Corrective tools that invalidate a misattribution check (if used
-// between the failure and the success claim, the agent is addressing it).
-// Aliased to the canonical sourceMutatingTools superset (#738).
 var outcomeCorrectiveTools = sourceMutatingTools
 
-// outcomeMisattribState tracks failures and corrective actions per run.
 type outcomeMisattribState struct {
-	warnings int
-	// pendingFailure records the iteration where the last failure was seen.
-	pendingFailureIter int
-	// pendingFailureType briefly categorizes the failure for the message.
-	pendingFailureType string
-	// correctiveActionSeen tracks whether a corrective tool was used
-	// after the failure was recorded.
+	warnings             int
+	pendingFailureIter   int
+	pendingFailureType   string
 	correctiveActionSeen bool
 }
 
 func newOutcomeMisattribState() *outcomeMisattribState {
 	return &outcomeMisattribState{
-		pendingFailureIter: -1, // -1 = no pending failure
+		pendingFailureIter: -1,
 	}
 }
 
-// containsFailureIndicator checks if a tool result content has failure signals.
 func containsFailureIndicator(content string) (bool, string) {
 	if len(content) < 5 {
 		return false, ""
 	}
-	// #2913: scan ALL matches, not just the first - a passing test summary
-	// like cargo's "5 passed; 0 failed;" may contain an earlier benign
-	// "fail"-family token that is zero-guarded while a REAL failure signal
-	// appears later in the same output. First-match-wins would either
-	// misfire on the zero guard or miss the real signal depending on order.
 	var hit string
 	for _, m := range outcomeFailureRe.FindAllStringIndex(content, -1) {
 		if isZeroCountMatch(content, m[0], m[1]) {
-			continue // "0 failed" / "zero failures" / "0 errors" = passing summary
+			continue
 		}
 		hit = content[m[0]:m[1]]
 		break
@@ -172,7 +77,7 @@ func containsFailureIndicator(content string) (bool, string) {
 	if hit == "" {
 		return false, ""
 	}
-	// Classify the failure type for a more useful message.
+
 	lower := strings.ToLower(hit)
 	switch {
 	case strings.Contains(lower, "test") || strings.Contains(lower, "fail"):
@@ -186,10 +91,8 @@ func containsFailureIndicator(content string) (bool, string) {
 	}
 }
 
-// recordResult examines a tool result for failure indicators.
-// Called during tool execution for each tool result.
 func (s *outcomeMisattribState) recordResult(toolName string, resultContent string, isError bool, iter int) {
-	// If the result is an explicit error result, always record it.
+
 	if isError {
 		s.pendingFailureIter = iter
 		s.pendingFailureType = "tool error"
@@ -197,7 +100,6 @@ func (s *outcomeMisattribState) recordResult(toolName string, resultContent stri
 		return
 	}
 
-	// Only check verifiable tools for embedded failure indicators.
 	if !outcomeVerifiableTools[toolName] {
 		return
 	}
@@ -210,7 +112,6 @@ func (s *outcomeMisattribState) recordResult(toolName string, resultContent stri
 	}
 }
 
-// recordToolCallForOM tracks corrective actions taken after a failure.
 func (s *outcomeMisattribState) recordToolCallForOM(toolName string) {
 	if s.pendingFailureIter < 0 {
 		return
@@ -220,8 +121,6 @@ func (s *outcomeMisattribState) recordToolCallForOM(toolName string) {
 	}
 }
 
-// checkMisattribution scans assistant text for success claims that follow
-// a recorded failure without corrective action. Returns a guidance string.
 func (s *outcomeMisattribState) checkMisattribution(assistantText string, iter int) string {
 	if s.pendingFailureIter < 0 {
 		return ""
@@ -229,9 +128,9 @@ func (s *outcomeMisattribState) checkMisattribution(assistantText string, iter i
 	if s.warnings >= outcomeMisattribMaxWarnings {
 		return ""
 	}
-	// Only check the iteration immediately following the failure.
+
 	if iter != s.pendingFailureIter+1 {
-		// If more than one iteration has passed, the failure is stale.
+
 		if iter > s.pendingFailureIter+1 {
 			s.pendingFailureIter = -1
 		}
@@ -242,14 +141,8 @@ func (s *outcomeMisattribState) checkMisattribution(assistantText string, iter i
 		return ""
 	}
 
-	// If corrective action was taken, the agent may have legitimately fixed
-	// the issue - don't flag unless we can see it didn't help.
 	if s.correctiveActionSeen {
-		// Still check: if the agent claims success but the fix happened in
-		// the same iteration (not yet verified), it's premature. But if the
-		// corrective action was in a prior iteration and then verification
-		// ran in the current one and passed, that's legitimate.
-		// For simplicity, if corrective action was taken, reset and don't warn.
+
 		s.pendingFailureIter = -1
 		return ""
 	}
@@ -260,9 +153,8 @@ func (s *outcomeMisattribState) checkMisattribution(assistantText string, iter i
 	}
 
 	s.warnings++
-	s.pendingFailureIter = -1 // consume the pending failure
+	s.pendingFailureIter = -1
 
-	// Build a concise excerpt of the first claim.
 	claimExcerpt := claims[0]
 	if len(claimExcerpt) > 50 {
 		claimExcerpt = claimExcerpt[:50]

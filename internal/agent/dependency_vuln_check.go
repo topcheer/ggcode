@@ -1,29 +1,5 @@
 package agent
 
-// Dependency Vulnerability Check (SCA - Software Composition Analysis)
-//
-// Research basis: SCA is a top-tier DevSecOps capability that Claude Code,
-// Cursor, Aider, Cline/OpenHands, and Windsurf all lack as a write-time
-// feature. Dependabot, Snyk, and npm audit exist as separate CI/external
-// tools, but no AI coding agent proactively warns when it introduces a
-// dependency with a known critical vulnerability.
-//
-// Unlike:
-//   - insecure_pattern_check.go: detects unsafe CODE patterns (TLS bypass,
-//     SQL injection, etc.) in source files
-//   - hardcoded_secret_check.go: detects hardcoded credentials
-//
-// THIS check focuses on the supply chain: when the agent edits a dependency
-// manifest file (go.mod, package.json, requirements.txt, Cargo.toml), it:
-//   1. Parses dependencies from old and new content
-//   2. Identifies ADDED or CHANGED dependencies (delta-aware)
-//   3. Checks each against an embedded database of well-known critical CVEs
-//   4. Flags any match with CVE ID, severity, and remediation advice
-//
-// The embedded database covers only the most critical, widely-known
-// vulnerabilities across Go, Node.js, Python, and Rust ecosystems.
-// It is intentionally small and manually curated for accuracy.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -33,22 +9,17 @@ import (
 	"strings"
 )
 
-// vulnEntry represents a known vulnerable package version range.
 type vulnEntry struct {
-	ecosystem   string // "go", "npm", "pypi", "cargo"
-	pkg         string // package name (normalized: lowercase)
-	maxSafeV    string // first PATCHED version (anything < this is vulnerable)
-	cve         string // CVE or advisory ID
-	severity    string // "Critical", "High", "Medium"
-	description string // brief vulnerability description
+	ecosystem   string
+	pkg         string
+	maxSafeV    string
+	cve         string
+	severity    string
+	description string
 }
 
-// knownVulns is a curated database of the most critical, widely-known
-// dependency vulnerabilities. Covers Go modules, npm packages, PyPI
-// packages, and Rust crates. For comprehensive scanning, run the
-// ecosystem-specific scanner (govulncheck, npm audit, pip-audit, cargo audit).
 var knownVulns = []vulnEntry{
-	// --- Go modules ---
+
 	{ecosystem: "go", pkg: "golang.org/x/crypto", maxSafeV: "0.31.0", cve: "CVE-2024-45337", severity: "Critical", description: "SSH server authorization bypass via crafted public key"},
 	{ecosystem: "go", pkg: "golang.org/x/crypto", maxSafeV: "0.17.0", cve: "CVE-2023-48795", severity: "Medium", description: "Terrapin SSH attack (prefix truncation)"},
 	{ecosystem: "go", pkg: "golang.org/x/net", maxSafeV: "0.23.0", cve: "CVE-2024-45338", severity: "High", description: "DoS via crafted HTML in x/net/html"},
@@ -58,7 +29,6 @@ var knownVulns = []vulnEntry{
 	{ecosystem: "go", pkg: "github.com/golang-jwt/jwt", maxSafeV: "3.2.2", cve: "CVE-2020-26160", severity: "High", description: "JWT aud claim parsing allows auth bypass"},
 	{ecosystem: "go", pkg: "github.com/dgrijalva/jwt-go", maxSafeV: "999.0.0", cve: "CVE-2020-26160", severity: "High", description: "Package DEPRECATED - switch to golang-jwt/jwt/v4"},
 
-	// --- npm packages ---
 	{ecosystem: "npm", pkg: "lodash", maxSafeV: "4.17.21", cve: "CVE-2021-23337", severity: "High", description: "Command injection via template"},
 	{ecosystem: "npm", pkg: "minimist", maxSafeV: "1.2.6", cve: "CVE-2021-44906", severity: "Critical", description: "Prototype pollution leading to RCE"},
 	{ecosystem: "npm", pkg: "handlebars", maxSafeV: "4.7.7", cve: "CVE-2021-23369", severity: "High", description: "Remote code execution via crafted template"},
@@ -71,7 +41,6 @@ var knownVulns = []vulnEntry{
 	{ecosystem: "npm", pkg: "axios", maxSafeV: "0.21.2", cve: "CVE-2021-3749", severity: "High", description: "ReDoS via trimmed whitespace"},
 	{ecosystem: "npm", pkg: "jsonwebtoken", maxSafeV: "9.0.0", cve: "CVE-2022-23529", severity: "Critical", description: "Auth bypass via crafted key header"},
 
-	// --- PyPI packages ---
 	{ecosystem: "pypi", pkg: "urllib3", maxSafeV: "1.26.18", cve: "CVE-2023-45803", severity: "Medium", description: "Cookie leak on cross-origin redirect"},
 	{ecosystem: "pypi", pkg: "requests", maxSafeV: "2.32.0", cve: "CVE-2024-35195", severity: "Medium", description: "verify=False bypassed on redirected requests"},
 	{ecosystem: "pypi", pkg: "pyyaml", maxSafeV: "5.4.0", cve: "CVE-2020-1747", severity: "Critical", description: "Arbitrary code execution via yaml.load"},
@@ -81,11 +50,9 @@ var knownVulns = []vulnEntry{
 	{ecosystem: "pypi", pkg: "pillow", maxSafeV: "10.3.0", cve: "CVE-2024-28219", severity: "High", description: "Buffer overflow in _imagingcms.c"},
 	{ecosystem: "pypi", pkg: "aiohttp", maxSafeV: "3.9.4", cve: "CVE-2024-23334", severity: "High", description: "Path traversal in static file serving"},
 
-	// --- Rust crates ---
 	{ecosystem: "cargo", pkg: "openssl", maxSafeV: "0.10.41", cve: "CVE-2021-3711", severity: "High", description: "SM2 Decryption Buffer Overflow (inherited from OpenSSL)"},
 }
 
-// depVulnFiles maps manifest file names to ecosystem identifiers.
 var depVulnFiles = map[string]string{
 	"go.mod":           "go",
 	"package.json":     "npm",
@@ -95,8 +62,6 @@ var depVulnFiles = map[string]string{
 	"pyproject.toml":   "pypi",
 }
 
-// checkDependencyVulnsAsString wraps the slice-returning check for the
-// registry's stringCheck adapter.
 func checkDependencyVulnsAsString(filePath, oldContent, newContent string) string {
 	warnings := checkDependencyVulns(filePath, oldContent, newContent)
 	if len(warnings) == 0 {
@@ -105,9 +70,6 @@ func checkDependencyVulnsAsString(filePath, oldContent, newContent string) strin
 	return strings.Join(warnings, "\n")
 }
 
-// checkDependencyVulns detects when a dependency manifest is modified and
-// checks added/changed dependencies against the embedded vulnerability database.
-// Delta-aware: only flags dependencies that are NEW or CHANGED in this edit.
 func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 	if strings.TrimSpace(newContent) == "" {
 		return nil
@@ -122,7 +84,6 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 	oldDeps := parseDependencies(ecosystem, oldContent)
 	newDeps := parseDependencies(ecosystem, newContent)
 
-	// Find added or changed dependencies.
 	var changes []depChange
 	for name, newVer := range newDeps {
 		oldVer, existed := oldDeps[name]
@@ -137,12 +98,9 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Check each changed dependency against the vulnerability database.
 	var warnings []string
 	matchedPkgs := make(map[string]bool)
-	// #3046 B2: a package that matched the vuln DB but is already at a safe
-	// version has just been (correctly) upgraded; the generic "consider
-	// running <scanner>" reminder right after that upgrade is noise.
+
 	vulnMatched := false
 
 	for _, ch := range changes {
@@ -165,7 +123,6 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 		}
 	}
 
-	// If no known vulns matched but dependencies changed, remind about scanning.
 	if len(warnings) == 0 && !vulnMatched {
 		warnings = append(warnings, fmt.Sprintf(
 			"[Dependency Change] %d dependency(ies) %s in %s - consider running %s to check for known vulnerabilities.",
@@ -216,7 +173,6 @@ func scannerName(ecosystem string) string {
 	return "a vulnerability scanner"
 }
 
-// parseDependencies extracts package name→version from manifest content.
 func parseDependencies(ecosystem, content string) map[string]string {
 	switch ecosystem {
 	case "go":
@@ -231,7 +187,6 @@ func parseDependencies(ecosystem, content string) map[string]string {
 	return nil
 }
 
-// --- Go: go.mod parser ---
 var goModRequireRe = regexp.MustCompile(`^\s*(\S+)\s+(v[\d.]+(?:-\S+)?)`)
 
 func parseGoMod(content string) map[string]string {
@@ -264,7 +219,6 @@ func parseGoMod(content string) map[string]string {
 	return deps
 }
 
-// --- npm: package.json parser ---
 func parsePackageJSON(content string) map[string]string {
 	deps := make(map[string]string)
 	var pkgJSON struct {
@@ -272,13 +226,12 @@ func parsePackageJSON(content string) map[string]string {
 		DevDependencies map[string]string `json:"devDependencies"`
 	}
 
-	// Parse as JSON first (handles both single-line minified and multi-line formatted)
 	if err := json.Unmarshal([]byte(content), &pkgJSON); err == nil {
-		// Extract from dependencies
+
 		for name, version := range pkgJSON.Dependencies {
 			if !strings.HasPrefix(name, "//") {
 				if isNonConcreteVersionSpec(version) {
-					continue // #1451-B: no exact version to compare against
+					continue
 				}
 				version = strings.TrimLeft(version, "^~>=< ")
 				if version != "" {
@@ -286,11 +239,11 @@ func parsePackageJSON(content string) map[string]string {
 				}
 			}
 		}
-		// Extract from devDependencies
+
 		for name, version := range pkgJSON.DevDependencies {
 			if !strings.HasPrefix(name, "//") {
 				if isNonConcreteVersionSpec(version) {
-					continue // #1451-B
+					continue
 				}
 				version = strings.TrimLeft(version, "^~>=< ")
 				if version != "" {
@@ -301,7 +254,6 @@ func parsePackageJSON(content string) map[string]string {
 		return deps
 	}
 
-	// Fallback to line-by-line regex for malformed JSON (preserves backward compatibility)
 	re := regexp.MustCompile(`"([^"]+)"\s*:\s*"([^"]+)"`)
 	lines := strings.Split(content, "\n")
 	inDeps := false
@@ -328,7 +280,6 @@ func parsePackageJSON(content string) map[string]string {
 	return deps
 }
 
-// --- PyPI: requirements.txt parser ---
 var requirementsLineRe = regexp.MustCompile(`^([a-zA-Z0-9_.-]+)\s*(==|>=|~=|>|<)\s*([0-9][\w.!?+*-]*)`)
 
 func parseRequirements(content string) map[string]string {
@@ -346,7 +297,6 @@ func parseRequirements(content string) map[string]string {
 	return deps
 }
 
-// --- Rust: Cargo.toml parser ---
 var cargoDepRe = regexp.MustCompile(`^\s*([a-zA-Z0-9_-]+)\s*=\s*"([\d.]+)"`)
 
 func parseCargoToml(content string) map[string]string {
@@ -372,15 +322,8 @@ func parseCargoToml(content string) map[string]string {
 	return deps
 }
 
-// isVulnerableVersion checks if a version string falls below the first
-// patched version (maxSafeV). Anything strictly less than maxSafeV is vulnerable.
 func isVulnerableVersion(version string, vuln vulnEntry) bool {
-	// #3360: pseudo-versions (commit pins like v0.0.0-20250101120000-abcdef123456
-	// or base-tag pins like v0.30.0-0.20241220...-hash) cannot be judged by
-	// semver: the commit may already contain the fix regardless of the base tag,
-	// and v0.0.0- pseudo-versions previously truncated to "0.0.0" and ALWAYS
-	// reported a known Critical CVE. Skip them - a pinned commit is auditable
-	// by hash, not by version comparison.
+
 	if isGoPseudoVersion(version) {
 		return false
 	}
@@ -388,30 +331,16 @@ func isVulnerableVersion(version string, vuln vulnEntry) bool {
 	return compareVersions(cleanVer, vuln.maxSafeV) < 0
 }
 
-// isGoPseudoVersion reports whether a go.mod version is a pseudo-version
-// (commit pin): either no base tag (v0.0.0-timestamp-hash) or a base-tag
-// pin (vX.Y.Z-<N>.timestamp.hash). The distinguishing mark is the
-// 14-digit UTC timestamp segment.
-// #3363: N (commits since the base tag) has NO upper bound in the
-// pseudo-version spec - the previous \d{0,3} cap let N>=1000 pins fall
-// through to semver comparison and resurrect the #3360 false-Critical.
 var goPseudoTimestampRe = regexp.MustCompile(`-\d*\.?\d{14}-`)
 
 func isGoPseudoVersion(version string) bool {
 	return goPseudoTimestampRe.MatchString(version)
 }
 
-// stripVersionPrefix removes the leading "v" decoration only. Prerelease
-// suffixes (-rc1, -beta) are semantic and stay - compareVersions orders
-// them (#3360).
 func stripVersionPrefix(version string) string {
 	return strings.TrimPrefix(version, "v")
 }
 
-// compareVersions compares two semver-like version strings.
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-// #3360: semver prerelease ordering - a prerelease sorts BEFORE its release
-// (0.31.0-rc1 < 0.31.0), so an rc of an unpatched line is NOT "safe".
 func compareVersions(a, b string) int {
 	baseA, preA := splitPrerelease(a)
 	baseB, preB := splitPrerelease(b)
@@ -439,10 +368,7 @@ func compareVersions(a, b string) int {
 			return 1
 		}
 	}
-	// #3360: numeric bases equal - semver orders the plain release ABOVE any
-	// prerelease of it (0.31.0 > 0.31.0-rc1), and two prereleases compare
-	// lexically. Without this, v0.31.0-rc1 truncated to "0.31.0" and read as
-	// already-patched (false negative).
+
 	switch {
 	case preA == "" && preB == "":
 		return 0
@@ -458,8 +384,6 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
-// splitPrerelease splits a semver-like string into its numeric base and
-// prerelease suffix ("0.31.0-rc1" -> "0.31.0", "rc1").
 func splitPrerelease(s string) (base, pre string) {
 	if idx := strings.Index(s, "-"); idx >= 0 {
 		return s[:idx], s[idx+1:]
@@ -467,7 +391,6 @@ func splitPrerelease(s string) (base, pre string) {
 	return s, ""
 }
 
-// parseVersionPart extracts the numeric portion of a version component.
 func parseVersionPart(s string) int {
 	numStr := ""
 	for _, c := range s {
@@ -484,13 +407,6 @@ func parseVersionPart(s string) int {
 	return n
 }
 
-// isNonConcreteVersionSpec reports whether a package.json version string
-// denotes ANY/relative resolution rather than a pin-pointable version
-// (#1451-B): "*", "latest", "x", "workspace:*", "file:...", "npm:...",
-// URL/git specs. Comparing them as concrete versions parses "*" into
-// 0.0.0 and reports "vulnerable, upgrade to X+" on a spec that allows
-// ANY version - pure noise; range specs (^1.2.3 / >=2) are still handled
-// by the trim-then-compare path (conservative for the common ^ case).
 func isNonConcreteVersionSpec(v string) bool {
 	switch strings.TrimSpace(v) {
 	case "", "*", "latest", "x", "X":

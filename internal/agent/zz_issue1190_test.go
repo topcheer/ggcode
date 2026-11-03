@@ -1,14 +1,5 @@
 package agent
 
-// Regression tests for issue #1190: verificationSignature previously
-// fingerprinted only the FIRST pipeline/command segment, so
-// `cd internal/agent && go test ./agentruntime/` fingerprinted as
-// "cd internal/agent". A subsequent `cd internal/agent && go test ./auth/`
-// collided and was wrongly flagged as a redundant re-run, discouraging the
-// agent from legitimate verification of a different target (violating the
-// #1173 design intent: different verification targets are never idempotent
-// re-runs of each other).
-
 import (
 	"strings"
 	"testing"
@@ -61,8 +52,6 @@ func TestIssue1190_VerificationSignature_SelectsVerificationSegment(t *testing.T
 	}
 }
 
-// Different test targets behind the same cd prefix must NOT be treated as
-// redundant re-runs (issue #1190 core scenario).
 func TestIssue1190_DifferentTargetAfterCdPrefix_NoWarning(t *testing.T) {
 	s := newRedundantReverifyState()
 	h1 := s.recordToolCall("run_command", "cd internal/agent && go test ./agentruntime/", 1, false)
@@ -75,8 +64,6 @@ func TestIssue1190_DifferentTargetAfterCdPrefix_NoWarning(t *testing.T) {
 	}
 }
 
-// Same verification target expressed with different prefix forms MUST still
-// be flagged as a redundant re-run (the fix must not over-suppress).
 func TestIssue1190_SameTargetDifferentPrefixForms_StillWarns(t *testing.T) {
 	s := newRedundantReverifyState()
 	if h := s.recordToolCall("run_command", "go test ./internal/agent/", 1, false); h != "" {
@@ -90,7 +77,6 @@ func TestIssue1190_SameTargetDifferentPrefixForms_StillWarns(t *testing.T) {
 	}
 }
 
-// Identical full command still warns (baseline behavior preserved).
 func TestIssue1190_IdenticalCommandWithCdPrefix_StillWarns(t *testing.T) {
 	s := newRedundantReverifyState()
 	if h := s.recordToolCall("run_command", "cd internal/agent && go test ./...", 1, false); h != "" {
@@ -101,7 +87,6 @@ func TestIssue1190_IdenticalCommandWithCdPrefix_StillWarns(t *testing.T) {
 	}
 }
 
-// Build commands behind cd prefixes are covered by the same mechanism.
 func TestIssue1190_BuildSegmentAfterCdPrefix(t *testing.T) {
 	s := newRedundantReverifyState()
 	if h := s.recordToolCall("run_command", "cd cmd/ggcode && go build ./...", 1, false); h != "" {
@@ -112,15 +97,12 @@ func TestIssue1190_BuildSegmentAfterCdPrefix(t *testing.T) {
 	}
 }
 
-// Fallback: no segment matches a verification verb -> full args fingerprint,
-// so identical unmatched commands still collide deterministically.
 func TestIssue1190_FallbackFullArgsWhenNoVerbSegment(t *testing.T) {
 	if got := verificationSignature("echo hi"); got != "echo hi" {
 		t.Errorf("fallback signature = %q, want %q", got, "echo hi")
 	}
 }
 
-// commandSegments sanity: || binds before |, empty segments dropped.
 func TestIssue1190_CommandSegments(t *testing.T) {
 	segs := commandSegments("a && b || c ; d | e")
 	want := []string{"a", "b", "c", "d", "e"}

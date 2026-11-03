@@ -1,10 +1,5 @@
 package agent
 
-// #612: consumeReadyPreCompact's discard branch did not refund the 2-minute
-// precompact cooldown set at schedule time. When tokens are still above the
-// auto-compact threshold, the stale cooldown blocks re-scheduling and the
-// only escape left is destructive truncation once tokens cross promptBudget.
-
 import (
 	"testing"
 	"time"
@@ -14,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// injectDonePrecompact installs a completed (done) precompact state whose
-// result will be discarded by ApplyCompactResult (Changed=false).
 func injectDonePrecompact(t *testing.T, a *Agent) {
 	t.Helper()
 	pc := &precompactState{
@@ -29,11 +22,6 @@ func injectDonePrecompact(t *testing.T, a *Agent) {
 	a.mu.Unlock()
 }
 
-// Discard while tokens are still over the auto-compact threshold must refund
-// the cooldown so the next loop pass can schedule a fresh precompact.
-// #633: the refund now applies ONLY to the live-shrunk discard (successful
-// summarization, live context moved on); no-change/empty failures keep the
-// cooldown — see zz_issue633_test.go.
 func TestIssue612_DiscardRefundsCooldownWhenOverThreshold(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	defer a.Close()
@@ -45,9 +33,9 @@ func TestIssue612_DiscardRefundsCooldownWhenOverThreshold(t *testing.T) {
 	a.precompactCooldownUntil = future
 	pc := &precompactState{
 		done:     make(chan struct{}),
-		startTok: 500, // #651: the refund gate reads tokens at SCHEDULE time
+		startTok: 500,
 		snapshot: ctxpkg.CompactSnapshot{OrigLen: 3, Messages: make([]provider.Message, 3)},
-		result:   ctxpkg.CompactResult{Changed: true, Messages: []provider.Message{{Role: "system"}}}, // successful summary, apply rejected (live shrunk)
+		result:   ctxpkg.CompactResult{Changed: true, Messages: []provider.Message{{Role: "system"}}},
 	}
 	close(pc.done)
 	a.precompact = pc
@@ -65,12 +53,10 @@ func TestIssue612_DiscardRefundsCooldownWhenOverThreshold(t *testing.T) {
 	}
 }
 
-// Discard while tokens have fallen below the threshold must KEEP the cooldown
-// (the cooldown-on-failure design stays intact when there is no pressure).
 func TestIssue612_DiscardKeepsCooldownWhenUnderThreshold(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	defer a.Close()
-	a.ContextManager().SetContextWindow(50000) // threshold far above tokens
+	a.ContextManager().SetContextWindow(50000)
 	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hi")}})
 
 	future := time.Now().Add(2 * time.Minute)

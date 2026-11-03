@@ -9,13 +9,10 @@ import (
 	"time"
 )
 
-// journalDirForTest creates a temp journal dir and returns a cleanup func.
 func journalDirForTest(t *testing.T) (dir string, cleanup func()) {
 	t.Helper()
 	dir = t.TempDir()
 
-	// Override journalDir by setting TMPDIR-like mechanism: we monkey-patch
-	// via a package-level override for testing.
 	orig := journalDirFunc
 	journalDirFunc = func() string { return dir }
 	return dir, func() {
@@ -30,7 +27,7 @@ func TestMarkRunning_CreatesJournal(t *testing.T) {
 	MarkRunning("test-session-1", "fix the bug", 12345)
 
 	path := filepath.Join(t.TempDir(), "test-session-1_"+journalFileName)
-	// journalDirFunc was overridden, so re-read from the override
+
 	dir := journalDirFunc()
 	path = filepath.Join(dir, "test-session-1_"+journalFileName)
 
@@ -102,13 +99,6 @@ func TestCheckCrashedRun_DetectsCrash(t *testing.T) {
 	dir := journalDirFunc()
 	path := filepath.Join(dir, "crashed-session_"+journalFileName)
 
-	// Write a stale "running" entry with a PID that never enters the
-	// liveness branch. #4816 family: 999999 was "very unlikely to exist"
-	// luck, not a guarantee - with StartTime only 2h back (inside the 4h
-	// trust window), a live process holding that PID on a busy runner turns
-	// the crash verdict into nil ("concurrent access"). PID 0 makes the
-	// detection deterministic on every machine; the genuine live-PID paths
-	// stay covered by run_journal_3222_test.go (os.Getpid()).
 	entry := RunJournalEntry{
 		SessionID:  "crashed-session",
 		State:      "running",
@@ -134,7 +124,6 @@ func TestCheckCrashedRun_DetectsCrash(t *testing.T) {
 		t.Errorf("age_hours = %.1f, want > 1.0", info.AgeHours)
 	}
 
-	// Journal should be cleaned up after detection
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("journal file should be removed after crash detection")
 	}
@@ -186,9 +175,7 @@ func TestFormatCrashRecoveryMessage(t *testing.T) {
 	if msg[:16] != "[Crash Recovery]" {
 		t.Errorf("message should start with [Crash Recovery], got: %s", msg[:20])
 	}
-	// #1123: the message must not assert "crashed or killed" as fact - the
-	// detection only proves the run did not exit cleanly (deliberate stops
-	// included). Factual wording only.
+
 	if strings.Contains(msg, "crashed or killed") {
 		t.Errorf("message must not assert crash cause as fact, got: %s", msg)
 	}
@@ -222,7 +209,6 @@ func TestMarkCompleted_NoJournalFile(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
 
-	// Should not panic or error when journal doesn't exist
 	MarkCompleted("nonexistent-session", true, 1, 0)
 }
 
@@ -232,7 +218,6 @@ func TestCleanupOldJournals(t *testing.T) {
 	journalDirFunc = func() string { return dir }
 	defer func() { journalDirFunc = orig }()
 
-	// Create an old journal (2 days ago)
 	oldEntry := RunJournalEntry{
 		SessionID: "old-session",
 		State:     "completed",
@@ -242,21 +227,17 @@ func TestCleanupOldJournals(t *testing.T) {
 	data, _ := json.Marshal(oldEntry)
 	os.WriteFile(oldPath, data, 0o644)
 
-	// Backdate the file mod time
 	oldTime := time.Now().Add(-48 * time.Hour)
 	os.Chtimes(oldPath, oldTime, oldTime)
 
-	// Create a recent journal
 	MarkRunning("recent-session", "task", 123)
 
 	CleanupOldJournals(24 * time.Hour)
 
-	// Old journal should be removed
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Error("old journal should be removed")
 	}
 
-	// Recent journal should remain
 	recentPath := filepath.Join(dir, "recent-session_"+journalFileName)
 	if _, err := os.Stat(recentPath); os.IsNotExist(err) {
 		t.Error("recent journal should still exist")
@@ -272,20 +253,13 @@ func TestMarkCompleted_CorruptedJournal(t *testing.T) {
 	path := filepath.Join(dir, "corrupt_"+journalFileName)
 	os.WriteFile(path, []byte("{invalid json"), 0o644)
 
-	// Should not panic
 	MarkCompleted("corrupt", true, 1, 0)
 
-	// #1666 case 2: corrupted journals are EVIDENCE (the process died
-	// mid-write - crash-suspect behavior), preserved for inspection
-	// instead of silently deleted.
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("corrupted journal should be preserved, stat err=%v", err)
 	}
 }
 
-// TestCheckCrashedRun_CorruptJournalReportsSuspect pins #1666 case 2: a
-// torn running-journal write is itself crash evidence - the reader must
-// report it as a recovery candidate, not delete it and return "no crash".
 func TestCheckCrashedRun_CorruptJournalReportsSuspect(t *testing.T) {
 	dir := t.TempDir()
 	orig := journalDirFunc
@@ -293,7 +267,7 @@ func TestCheckCrashedRun_CorruptJournalReportsSuspect(t *testing.T) {
 	defer func() { journalDirFunc = orig }()
 
 	path := filepath.Join(dir, "torn_"+journalFileName)
-	os.WriteFile(path, []byte(`{"state":"run`), 0o644) // torn mid-write
+	os.WriteFile(path, []byte(`{"state":"run`), 0o644)
 
 	info := CheckCrashedRun("torn")
 	if info == nil {
@@ -307,10 +281,6 @@ func TestCheckCrashedRun_CorruptJournalReportsSuspect(t *testing.T) {
 	}
 }
 
-// Regression for #1490: isProcessAlive's local Signal(0) implementation
-// returned false for LIVE processes on Windows (EWINDOWS), so a concurrent
-// /resume misjudged the instance as crashed and removed its live anchor.
-// The delegation to util.IsProcessAlive must report the current process alive.
 func TestIsProcessAliveCurrentProcess(t *testing.T) {
 	if !isProcessAlive(os.Getpid()) {
 		t.Fatal("current process must be reported alive")

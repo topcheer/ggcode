@@ -33,19 +33,17 @@ func TestClassifyVerificationCommand(t *testing.T) {
 }
 
 func TestExtractGoTestScope(t *testing.T) {
-	// Broad scope (./...)
+
 	scope := extractGoTestScope("go test ./...")
 	if !strings.Contains(scope, "scope:broad") {
 		t.Errorf("expected scope:broad, got %q", scope)
 	}
 
-	// With package
 	scope = extractGoTestScope("go test ./internal/agent/")
 	if !strings.Contains(scope, "pkg:./internal/agent/") {
 		t.Errorf("expected pkg:./internal/agent/, got %q", scope)
 	}
 
-	// With -run filter
 	scope = extractGoTestScope("go test -run TestFoo ./internal/agent/")
 	if !strings.Contains(scope, "run:TestFoo") {
 		t.Errorf("expected run:TestFoo, got %q", scope)
@@ -53,22 +51,19 @@ func TestExtractGoTestScope(t *testing.T) {
 }
 
 func TestIsNarrower(t *testing.T) {
-	// Broad -> specific package
+
 	if !isNarrower("pkg:./internal/agent/|", "scope:broad") {
 		t.Error("broad -> specific package should be narrower")
 	}
 
-	// Specific package -> same package + run filter
 	if !isNarrower("run:TestFoo|pkg:./internal/agent/", "pkg:./internal/agent/") {
 		t.Error("adding -run filter should be narrower")
 	}
 
-	// Same scope should not be narrower
 	if isNarrower("scope:broad", "scope:broad") {
 		t.Error("same scope should not be narrower")
 	}
 
-	// Fewer packages
 	if !isNarrower("pkg:./internal/agent/", "pkg:./internal/agent/|pkg:./internal/config/") {
 		t.Error("fewer packages should be narrower")
 	}
@@ -77,21 +72,18 @@ func TestIsNarrower(t *testing.T) {
 func TestScopeNarrow_DetectionFires(t *testing.T) {
 	s := newScopeNarrowState()
 
-	// 1. Broad go test -> fails
 	msg := s.recordVerificationCommand("run_command", "go test ./...",
 		"FAIL  pkg1 [build failed]\nFAIL", true)
 	if msg != "" {
 		t.Fatal("first call should not fire")
 	}
 
-	// 2. Narrowed to one package -> still fails
 	msg = s.recordVerificationCommand("run_command", "go test ./internal/agent/",
 		"FAIL  TestFoo [run failed]", true)
 	if msg != "" {
 		t.Fatal("second call should not fire")
 	}
 
-	// 3. Narrowed further with -run filter -> passes
 	msg = s.recordVerificationCommand("run_command", "go test -run TestBar ./internal/agent/",
 		"ok  internal/agent/", false)
 	if msg == "" {
@@ -105,7 +97,6 @@ func TestScopeNarrow_DetectionFires(t *testing.T) {
 func TestScopeNarrow_NoDetectionWhenExpanding(t *testing.T) {
 	s := newScopeNarrowState()
 
-	// Narrow first, then expand - should NOT fire
 	s.recordVerificationCommand("run_command", "go test -run TestFoo ./internal/agent/",
 		"FAIL", true)
 	s.recordVerificationCommand("run_command", "go test ./internal/agent/",
@@ -120,7 +111,6 @@ func TestScopeNarrow_NoDetectionWhenExpanding(t *testing.T) {
 func TestScopeNarrow_NoDetectionWhenAllPass(t *testing.T) {
 	s := newScopeNarrowState()
 
-	// All pass - no fail->pass transition, should not fire
 	s.recordVerificationCommand("run_command", "go test ./...", "ok", false)
 	s.recordVerificationCommand("run_command", "go test ./internal/agent/", "ok", false)
 	msg := s.recordVerificationCommand("run_command", "go test -run TestFoo ./internal/agent/", "ok", false)
@@ -139,7 +129,6 @@ func TestScopeNarrow_FiresOnlyOnce(t *testing.T) {
 		t.Fatal("should fire first time")
 	}
 
-	// More narrowing - should not fire again
 	msg2 := s.recordVerificationCommand("run_command", "go test -run TestBar ./internal/agent/", "ok", false)
 	if msg2 != "" {
 		t.Fatal("should not fire second time")
@@ -208,8 +197,6 @@ func TestLooksLikeTestFailure(t *testing.T) {
 func TestScopeNarrow_MixedCategoriesDontCrossFire(t *testing.T) {
 	s := newScopeNarrowState()
 
-	// go test fails, then pytest fails, then go test narrowed passes
-	// Only 2 go-test entries, should not fire (need 3 same category)
 	s.recordVerificationCommand("run_command", "go test ./...", "FAIL", true)
 	s.recordVerificationCommand("run_command", "pytest", "FAIL", true)
 	msg := s.recordVerificationCommand("run_command", "go test -run TestFoo ./internal/agent/", "ok", false)

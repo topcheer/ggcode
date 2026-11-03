@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// lockTrajFile is the Windows counterpart: an exclusive-create lock
-// file with bounded retry (flock semantics are unavailable without
-// LockFileEx plumbing; the O_EXCL marker is sufficient for the
-// lost-update window here and self-heals on process exit via the
-// stale-age sweep).
 func lockTrajFile(lockPath string) (func(), error) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -22,7 +17,7 @@ func lockTrajFile(lockPath string) (func(), error) {
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		// Stale sweep: a lock older than 30s is from a crashed holder.
+
 		if fi, statErr := os.Stat(lockPath); statErr == nil && time.Since(fi.ModTime()) > 30*time.Second {
 			os.Remove(lockPath)
 			continue

@@ -34,7 +34,7 @@ func TestExplorationFrag_ResetOnMutatingTool(t *testing.T) {
 		args, _ := json.Marshal(map[string]string{"path": "/file" + string(rune('a'+i)) + ".go"})
 		s.recordToolCall("read_file", args, i+1)
 	}
-	// Now do a mutating tool call -- should reset
+
 	args, _ := json.Marshal(map[string]string{"file_path": "/filea.go"})
 	warn := s.recordToolCall("edit_file", args, 6)
 	if warn != "" {
@@ -60,18 +60,18 @@ func TestExplorationFrag_TriggerOnScatteredCalls(t *testing.T) {
 
 func TestExplorationFrag_MaxWarnings(t *testing.T) {
 	s := newExploreFragState()
-	// First burst: should warn
+
 	for i := 0; i < 6; i++ {
 		args, _ := json.Marshal(map[string]string{"path": "/scatter" + string(rune('a'+i)) + ".go"})
 		w := s.recordToolCall("read_file", args, i+1)
 		if w != "" && s.warnings == 1 {
-			break // first warning fired
+			break
 		}
 	}
 	if s.warnings != 1 {
 		t.Fatalf("expected 1 warning, got %d", s.warnings)
 	}
-	// Reset and trigger again
+
 	s.reset()
 	for i := 0; i < 6; i++ {
 		args, _ := json.Marshal(map[string]string{"path": "/new" + string(rune('a'+i)) + ".go"})
@@ -80,7 +80,7 @@ func TestExplorationFrag_MaxWarnings(t *testing.T) {
 	if s.warnings != 2 {
 		t.Fatalf("expected 2 warnings, got %d", s.warnings)
 	}
-	// Third trigger should NOT warn (max reached)
+
 	s.reset()
 	warn := ""
 	for i := 0; i < 6; i++ {
@@ -94,7 +94,7 @@ func TestExplorationFrag_MaxWarnings(t *testing.T) {
 
 func TestExplorationFrag_MixedToolsTrigger(t *testing.T) {
 	s := newExploreFragState()
-	// Mix of different exploration tools across different targets
+
 	calls := []struct {
 		tool string
 		args map[string]string
@@ -148,9 +148,6 @@ func TestExplorationFrag_IgnoresNonExplorationTools(t *testing.T) {
 	}
 }
 
-// TestExploreFragSingleBatchNotFragmentation pins #1459-A: one parallel
-// batch (6 reads, 6 targets, ALL at the same iteration - the runtime's
-// recommended shape) must NOT fire - entries must span >=2 iterations.
 func TestExploreFragSingleBatchNotFragmentation(t *testing.T) {
 	s := newExploreFragState()
 	last := ""
@@ -160,7 +157,7 @@ func TestExploreFragSingleBatchNotFragmentation(t *testing.T) {
 	if last != "" {
 		t.Fatalf("single-batch parallel reads flagged: %s", last)
 	}
-	// Same shape spread across 2 iterations still fires.
+
 	s2 := newExploreFragState()
 	for i := 0; i < 3; i++ {
 		last = s2.recordToolCall("read_file", mustFragJSON(t, "/repo/a"+string(rune('a'+i))+".go"), 5)
@@ -178,8 +175,6 @@ func mustFragJSON(t *testing.T, p string) []byte {
 	return []byte(`{"path":"` + p + `"}`)
 }
 
-// #1559-C: relative reads and absolute edits must key the same map entry
-// once the workspace root is wired via SetWorkingDir.
 func TestUnreadEditAnchoredNormalization1559(t *testing.T) {
 	a := &Agent{unreadEdit: newUnreadEditState(), expiredRead: newExpiredReadState()}
 	a.SetWorkingDir("/repo")
@@ -193,19 +188,17 @@ func TestUnreadEditAnchoredNormalization1559(t *testing.T) {
 	}
 }
 
-// #1559-D: firing empties the window - the very next exploration call must
-// not re-fire with the same full-window message.
 func TestExplorationFragWindowClearsOnFire1559(t *testing.T) {
 	s := newExploreFragState()
 	first := ""
 	for i := 0; i < exploreFragWindow+4 && first == ""; i++ {
-		iter := (i / 2) + 1 // spread across iterations (2-distinct gate)
+		iter := (i / 2) + 1
 		first = s.recordToolCall("read_file", mustFragArgs(t, fmt.Sprintf("/x/dir%d/f%d.go", i%5, i)), iter)
 	}
 	if first == "" {
 		t.Fatal("expected fire once thresholds met")
 	}
-	s.warnings = 0 // isolate the window-clearing behavior from the max-2 cap
+	s.warnings = 0
 	if second := s.recordToolCall("read_file", mustFragArgs(t, "/x/once.go"), 99); second != "" {
 		t.Fatal("window must empty on fire - next call cannot re-fire")
 	}

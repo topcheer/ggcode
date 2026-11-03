@@ -1,11 +1,5 @@
 package agent
 
-// #3621 probe: camelToSnakeLower must split acronym runs at the standard
-// boundary. "HTTPServer" produced the single token "httpserver" (boundary
-// only before an uppercase that FOLLOWS a non-uppercase), which never
-// matched conventional test names like "test_http_server" - exported
-// functions with acronym-prefixed names were misreported untested.
-
 import "testing"
 
 func TestIssue3621_AcronymRunBoundary(t *testing.T) {
@@ -28,7 +22,7 @@ func TestIssue3621_PlainCamelCaseUnchanged(t *testing.T) {
 		"GetUser":       "get_user",
 		"lower":         "lower",
 		"GetUserByName": "get_user_by_name",
-		"HTTPS":         "https", // pure acronym run: no internal boundary
+		"HTTPS":         "https",
 	}
 	for in, want := range cases {
 		if got := camelToSnakeLower(in); got != want {

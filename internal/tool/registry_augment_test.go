@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// stubTool is a minimal Tool for registry-level tests.
 type stubTool struct{ name string }
 
 func (s stubTool) Name() string                { return s.name }
@@ -17,15 +16,11 @@ func (s stubTool) Execute(ctx context.Context, args json.RawMessage) (Result, er
 	return Result{Content: "ok"}, nil
 }
 
-// r35: the description augmenter overlays learned per-tool usage hints
-// onto definitions before they reach the provider; tools without hints
-// and the no-augmenter default path stay untouched.
 func TestToDefinitionsDescriptionAugmenter(t *testing.T) {
 	r := NewRegistry()
 	r.Register(stubTool{name: "alpha"})
 	r.Register(stubTool{name: "beta"})
 
-	// Default: no augmenter, descriptions unchanged.
 	for _, d := range r.ToDefinitions() {
 		if strings.Contains(d.Description, "usage hints") {
 			t.Fatalf("unexpected overlay without augmenter: %q", d.Description)

@@ -14,9 +14,6 @@ func issue748Input(t *testing.T, cmd string) string {
 	return string(b)
 }
 
-// Regression guard for #748: commandIsVerification must recognize the three
-// real-world shapes the old prefix-only match missed: cd-prefixed, env-prefixed,
-// and #-comment-prefixed (the run_command schema's own convention).
 func TestCommandIsVerification_PositionAware(t *testing.T) {
 	cases := []struct {
 		name string
@@ -26,7 +23,7 @@ func TestCommandIsVerification_PositionAware(t *testing.T) {
 		{"cd && go test", "cd internal/agent && go test ./...", true},
 		{"env-prefixed make verify", "GOFLAGS=\"-p=1\" GOMEMLIMIT=2GiB make verify-ci", true},
 		{"# comment then go test", "# Run tests\ngo test -tags goolm ./internal/agent/", true},
-		{"bash verify script", "bash scripts/run-tests.sh", false}, // script body unknown; conservative
+		{"bash verify script", "bash scripts/run-tests.sh", false},
 		{"plain go test", "go test ./...", true},
 		{"non-verify cd && ls", "cd /tmp && ls", false},
 		{"non-verify echo", "echo done", false},

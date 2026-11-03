@@ -36,9 +36,6 @@ func TestBuildInteractiveRuntimeCoreRegistersSharedBootstrapTools(t *testing.T) 
 	}
 }
 
-// TestBuildInteractiveRuntimeCoreGatesProjectMCPServers pins the startup
-// containment wiring: a workspace .mcp.json stdio server must NOT enter the
-// MCP manager until approved for this workspace (or explicitly bypassed).
 func TestBuildInteractiveRuntimeCoreGatesProjectMCPServers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(mcp.ProjectGateEnvVar, "")
@@ -65,15 +62,13 @@ func TestBuildInteractiveRuntimeCoreGatesProjectMCPServers(t *testing.T) {
 	if snapshotNames(core)["proj-srv"] {
 		t.Fatal("project .mcp.json server must be gated out at startup")
 	}
-	// sa-45: the gate's user-facing warning must ride StartupNotices so
-	// the TUI first frame can surface it (not debug.Log only).
+
 	if !slices.ContainsFunc(core.StartupNotices, func(n string) bool {
 		return strings.Contains(n, `blocked project MCP server "proj-srv"`)
 	}) {
 		t.Fatalf("gate warning missing from StartupNotices: %v", core.StartupNotices)
 	}
 
-	// Explicit per-invocation bypass (disclosed via warnings) admits it.
 	t.Setenv(mcp.ProjectGateEnvVar, "1")
 	core, err = BuildInteractiveRuntimeCore(cfg, wd, policy)
 	if err != nil {
@@ -124,8 +119,7 @@ func TestInteractivePermissionMode(t *testing.T) {
 		t.Fatalf("empty mode = %v, want supervised", got)
 	}
 	if got := InteractivePermissionModeWithDefault(cfg, false, "auto"); got != permission.SupervisedMode {
-		// two-mode refactor: legacy "auto" default normalizes to supervised at
-		// parse time, so the resolved default mode is SupervisedMode, not AutoMode.
+
 		t.Fatalf("default auto mode = %v, want supervised", got)
 	}
 	cfg.DefaultMode = "plan"
@@ -150,8 +144,7 @@ func TestBuildInteractivePermissionPolicyMatchesConfigToolPerms(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected policy")
 	}
-	// two-mode refactor: cfg.DefaultMode "auto" normalizes to supervised
-	// when building the interactive policy, so Mode() reports SupervisedMode.
+
 	if got := policy.Mode(); got != permission.SupervisedMode {
 		t.Fatalf("mode = %v, want supervised", got)
 	}

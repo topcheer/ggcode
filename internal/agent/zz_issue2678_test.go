@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-// Issue #2678: detectSendAfterClose must not pair close/send that sit on
-// mutually exclusive control-flow paths. #2648 fixed flat if/else siblings
-// and early returns; these tests pin the remaining else-if chain case plus
-// regression guards for true same-path violations.
-
-// runChannelSafetyOnCode parses src and returns all channel safety instances.
 func runChannelSafetyOnCode(t *testing.T, src string) []channelSafetyInstance {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -41,8 +35,6 @@ func hasSendAfterClose(instances []channelSafetyInstance) bool {
 	return false
 }
 
-// Scenario 1 (#2678 original): close in `if`, send in `else` -- flat siblings.
-// Already fixed by #2648; guard against regression.
 func TestIssue2678_IfElseExclusiveNoWarning(t *testing.T) {
 	src := `package p
 func f(ch chan int, done bool) {
@@ -58,7 +50,6 @@ func f(ch chan int, done bool) {
 	}
 }
 
-// Scenario 2 (#2678 original): close followed by return -- path terminates.
 func TestIssue2678_CloseThenReturnNoWarning(t *testing.T) {
 	src := `package p
 func f(ch chan int, err error) {
@@ -74,9 +65,6 @@ func f(ch chan int, err error) {
 	}
 }
 
-// Scenario 3 (residual gap after #2648): else-if chain -- the close in the
-// first `if` branch and the send in the `else if` branch share the OUTER if
-// as exclusive ancestor. #2648's innermost-if-only check missed this.
 func TestIssue2678_ElseIfChainExclusiveNoWarning(t *testing.T) {
 	src := `package p
 func f(ch chan int, a, b bool) {
@@ -92,7 +80,6 @@ func f(ch chan int, a, b bool) {
 	}
 }
 
-// Scenario 4: true same-path violation must still warn (regression guard).
 func TestIssue2678_TruePositiveStillWarns(t *testing.T) {
 	src := `package p
 func f(ch chan int, done bool) {

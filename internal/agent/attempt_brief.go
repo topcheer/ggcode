@@ -8,30 +8,20 @@ import (
 	"sync"
 )
 
-// attemptBriefState tracks tool-call outcomes within a single run and, when
-// the agent has accumulated enough failed attempts, injects a compact brief
-// summarising what was tried and why it failed - so the agent pivots rather
-// than repeating the same dead-end strategy.
-//
-// Frontier basis: "Scaling Test-Time Compute for Agentic Coding"
-// (arXiv:2604.16529, April 2026): "The main challenge is no longer generating
-// more attempts, but representing prior experience in a form that can be
-// effectively selected from and reused." This detector produces a lightweight,
-// deterministic version of that compact trajectory representation.
 const (
-	maxAttemptBriefFire    = 2  // inject at most 2 briefs per run
-	maxAttemptBriefEntries = 40 // track at most 40 recent tool outcomes
-	briefMinFailures       = 3  // need ≥3 failures before generating a brief
-	briefMinDistinctTools  = 2  // need failures across ≥2 distinct tools/operations
-	briefCooldownIter      = 4  // iterations to wait between fires
+	maxAttemptBriefFire    = 2
+	maxAttemptBriefEntries = 40
+	briefMinFailures       = 3
+	briefMinDistinctTools  = 2
+	briefCooldownIter      = 4
 )
 
 type toolOutcome struct {
 	tool     string
-	target   string // file path or command (truncated)
+	target   string
 	success  bool
 	iter     int
-	errLabel string // short error category (e.g. "not_unique", "exit_1")
+	errLabel string
 }
 
 type attemptBriefState struct {
@@ -51,27 +41,19 @@ func (s *attemptBriefState) reset() {
 	defer s.mu.Unlock()
 	s.entries = s.entries[:0]
 	s.firedCount = 0
-	s.lastFireIter = -briefCooldownIter // allow first fire as soon as threshold met
+	s.lastFireIter = -briefCooldownIter
 	s.runIter = 0
 }
 
-// recordOutcome logs a tool call result. toolName is the tool's name; target is
-// an optional short identifier (file path, command snippet, search pattern).
-// errSnippet is the raw error text (if any) from which we derive a label.
 func (s *attemptBriefState) recordOutcome(toolName, target string, success bool, iter int, errSnippet string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// #342: a later success on the same tool+target invalidates the earlier
-	// failure (same pattern as #331's false_premise fix). fail→fix→re-run→pass
-	// is the agent's core correct workflow; keeping the failure entry lets
-	// stale failures assemble a "prior approaches did NOT work" narrative
-	// during an unbroken success streak.
 	if success {
 		kept := s.entries[:0]
 		for _, e := range s.entries {
 			if !e.success && e.tool == toolName && e.target == truncateBrief(target, 60) {
-				continue // superseded by this success
+				continue
 			}
 			kept = append(kept, e)
 		}
@@ -94,8 +76,6 @@ func (s *attemptBriefState) recordOutcome(toolName, target string, success bool,
 	s.entries = append(s.entries, entry)
 }
 
-// maybeBrief inspects accumulated failures and returns a compact guidance string
-// if the agent should be reminded of what's already been tried.
 func (s *attemptBriefState) maybeBrief(iter int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,21 +88,9 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 		return ""
 	}
 
-	// Collect failures since last fire (#342: the "since last fire" filter
-	// the comment always promised but never implemented — each fire reports
-	// only NEW failures, and the same batch is never reused for a second fire).
 	failures := make([]toolOutcome, 0, 10)
 	for _, e := range s.entries {
-		// #1439-A: two index conventions met on one watermark - recordOutcome
-		// passes i while maybeBrief passes i+1, so a fire at end of iteration
-		// k set lastFireIter=k+1 while entries carry e.iter=k. The strict '>'
-		// then dropped iteration k+1's failures entirely (k+1 > k+1 is false):
-		// the failure-dense stretch right AFTER a fire was systematically
-		// excluded, contradicting the "only NEW failures" comment above, and
-		// combined with the 40-entry ring window + maxAttemptBriefFire=2 the
-		// second (final) brief could never trigger. '>=' restores the intended
-		// semantics: lastFireIter=k+1 means "k and earlier were reported",
-		// so k+1 onward is new.
+
 		if !e.success && e.iter >= s.lastFireIter {
 			failures = append(failures, e)
 		}
@@ -131,7 +99,6 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 		return ""
 	}
 
-	// Check diversity: need at least 2 distinct tools or targets that failed.
 	distinct := make(map[string]bool)
 	for _, f := range failures {
 		distinct[f.tool] = true
@@ -143,7 +110,6 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 	s.firedCount++
 	s.lastFireIter = iter
 
-	// Build compact brief: group failures by tool + error label.
 	type groupKey struct{ tool, label string }
 	groups := make(map[groupKey][]string)
 	for _, f := range failures {
@@ -158,7 +124,7 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 
 	gIdx := 0
 	for k, targets := range groups {
-		if gIdx >= 6 { // cap detail
+		if gIdx >= 6 {
 			sb.WriteString("  ...\n")
 			break
 		}
@@ -179,7 +145,6 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 	return sb.String()
 }
 
-// classifyError derives a short label from an error snippet.
 func classifyError(err string) string {
 	err = strings.ToLower(err)
 	switch {
@@ -202,8 +167,6 @@ func classifyError(err string) string {
 	}
 }
 
-// extractToolTarget pulls a short target identifier (file path, command,
-// pattern) from raw tool arguments for attempt-brief tracking.
 func extractToolTarget(_ string, rawArgs string) string {
 	if rawArgs == "" {
 		return ""
@@ -242,8 +205,7 @@ func extractJSONStringFieldBrief(raw, key string) string {
 func truncateBrief(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if max < 4 {
-		// Cannot fit an ellipsis; defensive against future callers passing
-		// tiny/negative budgets (s[:max-3] would slice out of range).
+
 		return s
 	}
 	if len(s) > max {

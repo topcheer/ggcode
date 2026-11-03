@@ -1,17 +1,5 @@
 package agent
 
-// Companion tests for the stale-observation re-verify escalation
-// (reverify_escalation.go, research round sa-134 / arXiv:2610.01415).
-//
-// Case matrix:
-//   (a) fresh negative + immediate success claim (age < 6)  -> no fire
-//   (b) aged negative + mutation after + success claim      -> fires hard
-//       re-run instruction; observation consumed; warning cap at 2
-//   (c) aged negative but NO mutation since                 -> no fire
-//   (d) error-acknowledging text                            -> no fire
-//   (e) later successful non-negative same-tool result      -> superseded
-//   (f) non-positive text                                   -> no fire
-
 import (
 	"strings"
 	"testing"
@@ -19,11 +7,11 @@ import (
 
 func TestReverifyEscalationAgedMutationFires(t *testing.T) {
 	s := newReverifyState()
-	// Iteration 1: successful grep returns "no matches".
+
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "No matches found for pattern foo", false, 1)
-	// Iteration 2: a mutation happens.
+
 	s.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 2)
-	// Iteration 8: aged (8-1 >= 6) and mutated after observation.
+
 	msg := s.checkStaleTrap("The fix is complete, everything works now.", 8)
 	if msg == "" {
 		t.Fatal("expected escalation for aged negative + mutation + success claim, got none")
@@ -36,7 +24,7 @@ func TestReverifyEscalationAgedMutationFires(t *testing.T) {
 	if s.warnings != 1 {
 		t.Fatalf("warnings = %d, want 1", s.warnings)
 	}
-	// Observation consumed: same claim again must not re-fire.
+
 	if again := s.checkStaleTrap("all tests pass", 9); again != "" {
 		t.Fatalf("consumed observation re-fired: %s", again)
 	}
@@ -53,7 +41,7 @@ func TestReverifyEscalationFreshObservationNoFire(t *testing.T) {
 func TestReverifyEscalationNoMutationNoFire(t *testing.T) {
 	s := newReverifyState()
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "no matches", false, 1)
-	// Only reads afterward; no mutation advances lastMutationIter.
+
 	s.recordToolResult("read_file", `{"path":"x.go"}`, "contents...", false, 3)
 	if msg := s.checkStaleTrap("the task is finished", 9); msg != "" {
 		t.Fatalf("aged but un-mutated observation must not fire, got: %s", msg)
@@ -74,28 +62,22 @@ func TestReverifyEscalationSupersededByNewerEvidence(t *testing.T) {
 	s := newReverifyState()
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "no matches", false, 1)
 	s.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 2)
-	// Iteration 4: same tool now returns actual matches - supersedes.
+
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "a.go:3: foo found here", false, 4)
 	if msg := s.checkStaleTrap("found the reference, everything is fixed", 8); msg != "" {
 		t.Fatalf("superseded observation must not fire, got: %s", msg)
 	}
 }
 
-// #4173: supersede must be keyed by (toolName, argSummary). A successful
-// same-tool result for a DIFFERENT query says nothing about an earlier
-// negative observation - especially after a mutation changed the match
-// surface - and must not silently clear it.
 func TestReverifyEscalationDifferentQueryDoesNotSupersede(t *testing.T) {
 	s := newReverifyState()
-	// Iteration 1: grep pattern=TODO -> no matches (negative observation).
+
 	s.recordToolResult("grep", `{"pattern":"TODO"}`, "no matches found", false, 1)
-	// Iteration 3: a mutation changes the match surface.
+
 	s.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 3)
-	// Iteration 5: grep pattern="func main" HITS - a different query.
-	// Old code superseded by toolName alone, dropping the TODO observation.
+
 	s.recordToolResult("grep", `{"pattern":"func main"}`, "a.go:10: func main() {", false, 5)
-	// Iteration 8: agent claims all TODOs cleaned up. The aged+mutated TODO
-	// observation must still be there to trigger the re-run instruction.
+
 	msg := s.checkStaleTrap("All TODOs are cleaned up, everything is done now.", 8)
 	if msg == "" {
 		t.Fatal("different-query success must not supersede the TODO observation; expected escalation, got none")
@@ -103,7 +85,7 @@ func TestReverifyEscalationDifferentQueryDoesNotSupersede(t *testing.T) {
 	if !strings.Contains(msg, "TODO") {
 		t.Fatalf("escalation should reference the surviving TODO observation: %s", msg)
 	}
-	// Fallback: an arg-less successful call keeps the old broad supersede.
+
 	s2 := newReverifyState()
 	s2.recordToolResult("tool_x", `{"q":"first"}`, "empty", false, 1)
 	s2.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 2)
@@ -124,7 +106,7 @@ func TestReverifyEscalationNonPositiveTextNoFire(t *testing.T) {
 
 func TestReverifyEscalationWarningCap(t *testing.T) {
 	s := newReverifyState()
-	// Three distinct aged+mutated observations.
+
 	s.recordToolResult("grep", `{"pattern":"a"}`, "no matches", false, 1)
 	s.recordToolResult("glob", `{"pattern":"b"}`, "no files found", false, 2)
 	s.recordToolResult("search_files", `{"pattern":"c"}`, "no results", false, 3)
@@ -142,7 +124,7 @@ func TestReverifyEscalationWarningCap(t *testing.T) {
 
 func TestReverifyEscalationToolErrorNotObserved(t *testing.T) {
 	s := newReverifyState()
-	// Error results belong to the false-premise detector, not this channel.
+
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "command failed: exit 1", true, 1)
 	s.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 2)
 	if msg := s.checkStaleTrap("everything is fixed", 8); msg != "" {

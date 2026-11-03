@@ -46,24 +46,19 @@ func TestScanApproachPivots(t *testing.T) {
 			text: "I'll try a different strategy this time.",
 			want: 1,
 		},
-		// #2641: branch-level cases for the i'll pivot branch. The
-		// fallback branch (`different (tack|strategy|approach)`) does NOT
-		// cover way/tactic or another/alternative phrasing, so these
-		// inputs can only match via the i\s*'ll branch itself - before
-		// the fix (i\s+'ll requiring whitespace inside "I'll") all three
-		// were silent misses.
+
 		{
-			name: "I'll try a different way", // #2641
+			name: "I'll try a different way",
 			text: "I'll try a different way of parsing the input.",
 			want: 1,
 		},
 		{
-			name: "I'll try another tactic", // #2641
+			name: "I'll try another tactic",
 			text: "I'll try another tactic if this fails again.",
 			want: 1,
 		},
 		{
-			name: "I'll try an alternative approach", // #2641
+			name: "I'll try an alternative approach",
 			text: "I'll try an alternative approach here.",
 			want: 1,
 		},
@@ -97,32 +92,27 @@ func TestScanApproachPivots(t *testing.T) {
 func TestCapabilityBoundaryState(t *testing.T) {
 	s := newCapabilityBoundaryState()
 
-	// Initial state
 	if s.warnings != 0 || len(s.pivots) != 0 || s.failErrors != 0 {
 		t.Fatal("initial state not zero")
 	}
 
-	// Record pivots
 	s.recordApproachPivot("pivot 1")
 	s.recordApproachPivot("pivot 2")
 	if len(s.pivots) != 2 {
 		t.Errorf("expected 2 pivots, got %d", len(s.pivots))
 	}
 
-	// Record tool results
 	s.recordToolResult(true)
 	s.recordToolResult(true)
 	if s.failErrors != 2 {
 		t.Errorf("expected 2 failErrors, got %d", s.failErrors)
 	}
 
-	// Success resets failErrors
 	s.recordToolResult(false)
 	if s.failErrors != 0 {
 		t.Errorf("expected 0 failErrors after success, got %d", s.failErrors)
 	}
 
-	// Reset
 	s.reset()
 	if s.warnings != 0 || len(s.pivots) != 0 || s.failErrors != 0 {
 		t.Errorf("reset failed: warnings=%d pivots=%d failErrors=%d", s.warnings, len(s.pivots), s.failErrors)
@@ -132,7 +122,6 @@ func TestCapabilityBoundaryState(t *testing.T) {
 func TestMaybeWarnCapabilityBoundary_NoWarning(t *testing.T) {
 	a := &Agent{capBoundary: newCapabilityBoundaryState()}
 
-	// Not enough pivots
 	hint := a.maybeWarnCapabilityBoundary("Let me try a different approach.")
 	if hint != "" {
 		t.Errorf("expected empty hint with <3 pivots, got: %s", hint)
@@ -142,12 +131,10 @@ func TestMaybeWarnCapabilityBoundary_NoWarning(t *testing.T) {
 func TestMaybeWarnCapabilityBoundary_NoErrors(t *testing.T) {
 	a := &Agent{capBoundary: newCapabilityBoundaryState()}
 
-	// Add 3 pivots but no failures
 	a.maybeWarnCapabilityBoundary("Let me try a different approach.")
 	a.maybeWarnCapabilityBoundary("Alternatively, let me try another strategy.")
 	a.maybeWarnCapabilityBoundary("Let me reconsider this from scratch.")
 
-	// Should NOT fire because no tool errors recorded
 	hint := a.maybeWarnCapabilityBoundary("Taking a different tack now.")
 	if hint != "" {
 		t.Errorf("expected empty hint when no errors recorded, got: %s", hint)
@@ -157,18 +144,14 @@ func TestMaybeWarnCapabilityBoundary_NoErrors(t *testing.T) {
 func TestMaybeWarnCapabilityBoundary_FiresWithPivotsAndErrors(t *testing.T) {
 	a := &Agent{capBoundary: newCapabilityBoundaryState()}
 
-	// Record tool errors
 	a.capBoundary.recordToolResult(true)
 	a.capBoundary.recordToolResult(true)
 
-	// Record pivots - second call will accumulate enough + find pivots in text
 	hint := a.maybeWarnCapabilityBoundary("Let me try a different approach.")
 	if hint != "" {
 		t.Fatalf("expected empty hint with only 1 pivot, got: %s", hint)
 	}
 
-	// Second call: text contains 2 pivot phrases ("Alternatively" + "another strategy")
-	// total pivots becomes 3, and failErrors=2 → should fire
 	hint = a.maybeWarnCapabilityBoundary("Alternatively, let me try another strategy.")
 	if hint == "" {
 		t.Fatal("expected non-empty hint with 3 pivots and 2+ errors")
@@ -185,7 +168,6 @@ func TestMaybeWarnCapabilityBoundary_FiresWithPivotsAndErrors(t *testing.T) {
 func TestMaybeWarnCapabilityBoundary_MaxOncePerRun(t *testing.T) {
 	a := &Agent{capBoundary: newCapabilityBoundaryState()}
 
-	// Set up conditions for fire
 	a.capBoundary.recordToolResult(true)
 	a.capBoundary.recordToolResult(true)
 	a.capBoundary.recordApproachPivot("p1")
@@ -197,7 +179,6 @@ func TestMaybeWarnCapabilityBoundary_MaxOncePerRun(t *testing.T) {
 		t.Fatal("expected first warning to fire")
 	}
 
-	// Should not fire again even with more pivots/errors
 	a.capBoundary.recordToolResult(true)
 	a.capBoundary.recordApproachPivot("p4")
 	hint2 := a.maybeWarnCapabilityBoundary("")
@@ -209,12 +190,10 @@ func TestMaybeWarnCapabilityBoundary_MaxOncePerRun(t *testing.T) {
 func TestCapabilityBoundaryReset(t *testing.T) {
 	a := &Agent{capBoundary: newCapabilityBoundaryState()}
 
-	// Accumulate state
 	a.capBoundary.recordToolResult(true)
 	a.capBoundary.recordApproachPivot("p1")
 	a.capBoundary.warnings = 1
 
-	// Reset via the field (simulating new user turn)
 	a.capBoundary.reset()
 
 	if a.capBoundary.warnings != 0 || len(a.capBoundary.pivots) != 0 || a.capBoundary.failErrors != 0 {

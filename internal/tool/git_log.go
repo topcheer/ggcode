@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// GitLog implements the git_log tool.
 type GitLog struct{ WorkingDir string }
 
 func (t GitLog) Name() string { return "git_log" }
@@ -54,12 +53,11 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	if args.Count <= 0 {
 		args.Count = 10
 	} else if args.Count > 100 {
-		args.Count = 100 // #1688 case 4: over-limit CLAMPS to the max, not silently back to 10 - an agent asking for 500 got 10 and misread the history
+		args.Count = 100
 	}
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Log(ctx, dir, args.Count)
 		if err != nil {
@@ -88,7 +86,6 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitLog) Clone() Tool {
 	return &GitLog{WorkingDir: t.WorkingDir}
 }

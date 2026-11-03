@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-// r447 negative-signal probes: USER-initiated undo (RecordUserUndo from the
-// TUI /undo checkpoint path - #3249 corrected the attribution; the agent's
-// own undo_edit is a self-correction wired to NoteAgentUndo instead) cancels
-// pending observations, repeated user undos retire promoted user_edit rules,
-// other rules are never touched.
-
-// seedPending simulates one prior positive observation for path.
 func seedPending(o *UserEditObserver, path string, mt time.Time) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -21,8 +14,6 @@ func seedPending(o *UserEditObserver, path string, mt time.Time) {
 	o.pending[path] = &userEditObservation{turns: 1, lastSeen: time.Now()}
 }
 
-// TestNegativeSignalCancelsPending: an undo must erase the pending positive
-// observation - the "user rewrites this file" reading was a rejection.
 func TestNegativeSignalCancelsPending(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "main.go")
@@ -47,13 +38,11 @@ func TestNegativeSignalCancelsPending(t *testing.T) {
 	}
 }
 
-// TestNegativeSignalsRetirePromotedRule: two undos retire a promoted
-// user_edit rule (symmetric with userEditPromoteTurns=2).
 func TestNegativeSignalsRetirePromotedRule(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "main.go")
-	o.store.AddRule(userEditRule(f, 2)) // as-if promoted by r444 path
-	// An error-sourced rule must survive the recycling.
+	o.store.AddRule(userEditRule(f, 2))
+
 	o.store.AddRule(Rule{Category: "build", Rule: "unrelated", ToolPattern: "main.go", Source: ""})
 	o.NoteNegativeSignal(f)
 	if n := len(o.store.Rules()); n != 2 {
@@ -69,7 +58,7 @@ func TestNegativeSignalsRetirePromotedRule(t *testing.T) {
 			t.Fatalf("user_edit rule survived recycling: %+v", r)
 		}
 	}
-	// And the negHit is consumed (a third undo starts a fresh count).
+
 	o.mu.Lock()
 	if _, still := o.negHits[f]; still {
 		t.Fatal("negHits must be consumed after retirement")
@@ -77,16 +66,13 @@ func TestNegativeSignalsRetirePromotedRule(t *testing.T) {
 	o.mu.Unlock()
 }
 
-// TestNegativeSignalRequiresStore: nil-store observer stays nil-safe.
 func TestNegativeSignalRequiresStore(t *testing.T) {
 	var o *UserEditObserver
-	o.NoteNegativeSignal("/x/y.go") // must not panic
+	o.NoteNegativeSignal("/x/y.go")
 	o2 := newUserEditObserver(nil)
-	o2.NoteNegativeSignal("/x/y.go") // nil store: no-op, no panic
+	o2.NoteNegativeSignal("/x/y.go")
 }
 
-// TestRemoveUserEditRulesScopesToSourceAndPattern: only user_edit rules
-// for the exact basename are removed.
 func TestRemoveUserEditRulesScopesToSourceAndPattern(t *testing.T) {
 	_, dir := newTestObserver(t)
 	rs := NewRuleStore(dir)
@@ -105,8 +91,6 @@ func TestRemoveUserEditRulesScopesToSourceAndPattern(t *testing.T) {
 	}
 }
 
-// TestNegativeHitsDecayWithTTL: stale negHits decay at turn boundaries
-// like pending observations.
 func TestNegativeHitsDecayWithTTL(t *testing.T) {
 	o, _ := newTestObserver(t)
 	f := "/decay/target.go"

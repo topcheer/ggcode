@@ -2,15 +2,6 @@
 
 package tool
 
-// Regression tests for GitHub issue #4549:
-//   A) multi-** patterns silently returned a wrong subset: the second **
-//      inside the remainder was treated as a plain single-segment glob by
-//      the tail-aligned filepath.Match loop. '**/docs/**/*.md' missed files
-//      directly under docs/; '**/**/*.go' missed depth-1 files entirely.
-//   B) walkGlob stored filepath.Abs(path), so with a default directory of
-//      "." the caller's Rel(".", abs) errored and absolute paths leaked,
-//      diverging from filepath.Glob's relative-path output contract.
-
 import (
 	"os"
 	"path/filepath"
@@ -41,8 +32,6 @@ func mkIssue4549Tree(t *testing.T) string {
 	return base
 }
 
-// Issue repro A1: '**/docs/**/*.md' must match every .md under any docs/
-// directory at any depth (z.md and x.md were silently missed before).
 func TestIssue4549_MultiStarStarDocsMd(t *testing.T) {
 	base := mkIssue4549Tree(t)
 	got := walkGlob(base, "**/docs/**/*.md", nil)
@@ -66,12 +55,10 @@ func TestIssue4549_MultiStarStarDocsMd(t *testing.T) {
 	}
 }
 
-// Issue repro A2: '**/**/*.go' must match depth-1 files (c.go was missed
-// before because the tail alignment required len(rSegs) >= len(sSegs)).
 func TestIssue4549_MultiStarStarDepthOne(t *testing.T) {
 	base := mkIssue4549Tree(t)
 	got := walkGlob(base, "**/**/*.go", nil)
-	if len(got) != 3 { // c.go, a/b.go, a/deep/d.go — incl. depth-1 c.go
+	if len(got) != 3 {
 		rels := make([]string, 0, len(got))
 		for _, m := range got {
 			r, _ := filepath.Rel(base, m)
@@ -81,15 +68,13 @@ func TestIssue4549_MultiStarStarDepthOne(t *testing.T) {
 	}
 }
 
-// B: results must be walk-relative paths, not absolute, so the caller's
-// Rel(args.Directory, m) with directory "." yields relative output.
 func TestIssue4549_RelativePathContract(t *testing.T) {
 	base := mkIssue4549Tree(t)
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the caller: directory defaults to ".".
+
 	if err := os.Chdir(base); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +97,6 @@ func TestIssue4549_RelativePathContract(t *testing.T) {
 	}
 }
 
-// Guard: single-** semantics from #829 must be unchanged.
 func TestIssue4549_SingleStarStarRegression(t *testing.T) {
 	if !matchStarStarSuffix("*.go", "sub/nested.go") {
 		t.Fatal("single-segment wildcard suffix must match base at any depth (#829)")

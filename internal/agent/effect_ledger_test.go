@@ -1,11 +1,5 @@
 package agent
 
-// Tests for the effect ledger (side-effect duplicate guard).
-//
-// The ledger records failed/uncertain shell executions and annotates retries
-// of the identical command so the model verifies external state instead of
-// treating the retry output as authoritative.
-
 import (
 	"encoding/json"
 	"strings"
@@ -53,12 +47,10 @@ func TestClassifyEffectOutcome(t *testing.T) {
 func TestEffectLedgerRetryHint(t *testing.T) {
 	e := newEffectLedger()
 
-	// No prior attempt -> no hint.
 	if h := e.priorHint("git push origin main", "/repo"); h != "" {
 		t.Fatalf("no prior attempt: got hint %q", h)
 	}
 
-	// A failed attempt for a different command must not leak.
 	e.record("make test", "/repo", effectFailed)
 	if h := e.priorHint("git push origin main", "/repo"); h != "" {
 		t.Fatalf("different command: got hint %q", h)
@@ -73,14 +65,12 @@ func TestEffectLedgerRetryHint(t *testing.T) {
 		t.Errorf("hint text incomplete: %q", h)
 	}
 
-	// Different workDir is a different effect key.
 	if h := e.priorHint("git push origin main", "/other"); h != "" {
 		t.Fatalf("different workDir: got hint %q", h)
 	}
 
-	// Successes are never recorded, so they never produce hints.
 	e.record("make lint", "/repo", effectFailed)
-	_ = e.priorHint("make lint", "/repo") // consumes nothing; records are not deleted
+	_ = e.priorHint("make lint", "/repo")
 }
 
 func TestEffectLedgerWindow(t *testing.T) {
@@ -122,14 +112,12 @@ func TestRecordEffectAttemptSelfNotHinted(t *testing.T) {
 	a := &Agent{effectLedger: newEffectLedger()}
 	args := mkCmdArgs("git push origin main", "/repo")
 
-	// First attempt (times out): no hint, but recorded.
 	hint := a.recordEffectAttempt("run_command", args,
 		tool.Result{IsError: true, Content: "command timed out after 30m0s"})
 	if hint != "" {
 		t.Fatalf("first attempt must not hint itself, got %q", hint)
 	}
 
-	// Identical retry: hint present even though this attempt also failed.
 	hint = a.recordEffectAttempt("run_command", args,
 		tool.Result{IsError: true, Content: "Command failed: exit status 1"})
 	if hint == "" || !strings.Contains(hint, "Effect Ledger") {
@@ -149,7 +137,7 @@ func TestRecordEffectAttemptIgnoresOtherTools(t *testing.T) {
 
 func TestEffectKeyStripsLeadingComment(t *testing.T) {
 	a := &Agent{effectLedger: newEffectLedger()}
-	// The mandated '# activity' comment line (#1530) must not defeat matching.
+
 	a.recordEffectAttempt("run_command", mkCmdArgs("# pushing changes\ngit push origin main", "/repo"),
 		tool.Result{IsError: true, Content: "Command failed: context deadline exceeded"})
 	hint := a.recordEffectAttempt("run_command", mkCmdArgs("git push origin main", "/repo"),

@@ -2,11 +2,6 @@ package tool
 
 import "encoding/json"
 
-// argRationaleWriteToolNames mirrors internal/agent.argComplexityWriteTools
-// (kept in sync manually; cross-referenced from tool_arg_complexity.go).
-// These are the write-class tools whose LLM-visible schema gains the
-// optional arg_rationale property so schema-strict models can actually send
-// the justification the argument-complexity gate asks for (defect A fix).
 var argRationaleWriteToolNames = map[string]bool{
 	"run_command":      true,
 	"edit_file":        true,
@@ -24,17 +19,10 @@ var argRationaleWriteToolNames = map[string]bool{
 	"git_commit":       true,
 }
 
-// ArgRationaleField is the optional justification parameter accepted by all
-// write-class tools. The agent-side argument-complexity gate consumes it
-// pre-dispatch and strips it before the tool executes; tools never see it.
 const ArgRationaleField = "arg_rationale"
 
 const argRationaleDesc = "Optional one-line justification for this call's heavy parameters (why this target, why this scope, why now). Required only when the argument-complexity gate has rejected this call once; attaching it skips that reject round and is recorded in debug logs."
 
-// injectArgRationaleSchema adds the optional arg_rationale property to a
-// write tool's parameters schema. Non-write tools and schemas that already
-// declare the field pass through unchanged; a malformed schema passes
-// through untouched (the gate tolerates its absence at the call level).
 func injectArgRationaleSchema(name string, params json.RawMessage) json.RawMessage {
 	if !argRationaleWriteToolNames[name] || len(params) == 0 {
 		return params

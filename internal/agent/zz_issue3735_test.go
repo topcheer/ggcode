@@ -1,12 +1,5 @@
 package agent
 
-// #3735 probes: "xit("/"xtest(" as plain substrings hit the tail of every
-// mainstream exit call (os.Exit / sys.exit / process.exit / C exit), firing
-// a spec-gaming accusation on normal error handling and burning the
-// fired-once budget. The boundary forms must catch real Jest/Mocha skips
-// while letting exit calls through - on ALL three consumer paths
-// (containsAnySkipMarker / hasSkipMarkersInCommands / hasSkipMarkersInEdits).
-
 import (
 	"encoding/json"
 	"testing"
@@ -19,7 +12,7 @@ func TestIssue3735_ExitCallsNotFlagged(t *testing.T) {
 		`process.exit(1)`,
 		`exit(EXIT_FAILURE)`,
 		`os.Exit(code)`,
-		`nextest(1)`, // xtest( suffix collision, per the filer
+		`nextest(1)`,
 	}
 	for _, s := range exits {
 		if containsAnySkipMarker(s) {
@@ -36,17 +29,17 @@ func TestIssue3735_ExitCallsNotFlagged(t *testing.T) {
 
 func TestIssue3735_RealSkipStillCaught(t *testing.T) {
 	reals := []string{
-		`xit("flaky")`,                   // standalone
-		`it('works'); xit('flaky', ...)`, // after punctuation
-		`xtest('math', () => {})`,        // standalone
-		`suite: xtest('a')`,              // after colon-space
+		`xit("flaky")`,
+		`it('works'); xit('flaky', ...)`,
+		`xtest('math', () => {})`,
+		`suite: xtest('a')`,
 	}
 	for _, s := range reals {
 		if !containsAnySkipMarker(s) {
 			t.Fatalf("real skip marker missed: %s", s)
 		}
 	}
-	// Edit path end-to-end: injecting xit( via edit_file must fire.
+
 	ag := NewAgent(nil, nil, "sys", 5)
 	stats := &RunStats{}
 	extractPathsFromToolCall("edit_file", json.RawMessage(
@@ -57,8 +50,7 @@ func TestIssue3735_RealSkipStillCaught(t *testing.T) {
 }
 
 func TestIssue3735_ContainsAnyLowersInput(t *testing.T) {
-	// Doc comment promised case-insensitive; the old shape only lowered the
-	// marker. Mixed-case real markers must hit.
+
 	if !containsAnySkipMarker(`T.SKIP("broken")`) {
 		t.Fatal("uppercase t.SKIP( must be caught (case-insensitive promise)")
 	}

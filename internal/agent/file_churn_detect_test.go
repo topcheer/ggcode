@@ -67,7 +67,7 @@ func TestChurnState_Reset(t *testing.T) {
 	if g := s.check(); g != "" {
 		t.Fatal("expected no guidance after reset")
 	}
-	// Should fire again after new edits post-reset.
+
 	s.recordEdit([]string{"b.go"})
 	s.recordEdit([]string{"b.go"})
 	s.recordEdit([]string{"b.go"})
@@ -79,7 +79,7 @@ func TestChurnState_Reset(t *testing.T) {
 
 func TestChurnState_MultipleChurnedFiles(t *testing.T) {
 	s := newChurnState()
-	// Two files churned
+
 	for i := 0; i < 4; i++ {
 		s.recordEdit([]string{"a.go"})
 	}
@@ -100,7 +100,7 @@ func TestChurnState_MultipleChurnedFiles(t *testing.T) {
 
 func TestChurnState_MultiFileEdit(t *testing.T) {
 	s := newChurnState()
-	// multi_file_edit passes multiple paths
+
 	paths := []string{"x.go", "y.go"}
 	s.recordEdit(paths)
 	s.recordEdit(paths)
@@ -137,11 +137,11 @@ func TestChurnState_DifferentFilesNoChurn(t *testing.T) {
 
 func TestChurnState_MaxTrackedEviction(t *testing.T) {
 	s := newChurnState()
-	// Fill beyond churnMaxTracked to test eviction logic.
+
 	for i := 0; i < churnMaxTracked+10; i++ {
 		s.recordEdit([]string{string(rune('a'+i%26)) + ".go"})
 	}
-	// Should not panic and should still work.
+
 	_ = s.check()
 }
 
@@ -164,7 +164,7 @@ func TestChurnState_GuidanceContent(t *testing.T) {
 
 func TestChurnState_TopNFilesOnly(t *testing.T) {
 	s := newChurnState()
-	// Create more churned files than churnMaxWarningFiles
+
 	for i := 0; i < churnMaxWarningFiles+2; i++ {
 		fname := string(rune('a'+i)) + ".go"
 		for j := 0; j < churnThreshold; j++ {
@@ -175,9 +175,9 @@ func TestChurnState_TopNFilesOnly(t *testing.T) {
 	if g == "" {
 		t.Fatal("expected guidance")
 	}
-	// Count how many files are listed (look for ".go" in guidance)
+
 	count := strings.Count(g, ".go")
-	// Should be capped at churnMaxWarningFiles (plus any in surrounding text)
+
 	if count > churnMaxWarningFiles+2 {
 		t.Errorf("too many files listed: %d (max should be ~%d)", count, churnMaxWarningFiles)
 	}

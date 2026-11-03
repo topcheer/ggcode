@@ -10,46 +10,14 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Subgoal Completion Integrity Detector -- Missing-Step Planning Failure Awareness
-//
-// Research basis:
-//   - "Taxonomy of Failure Mode in Agentic AI Systems" (arXiv:2508.13143,
-//     Microsoft, 2025): three-tier taxonomy identifies "missing steps" under
-//     planning errors as a top failure cause. Agents declare multi-step plans
-//     but skip individual subgoals without acknowledgment, leading to
-//     incomplete deliverables.
-//   - "Reducing Cost of LLM Agents with Trajectory Reduction" (arXiv:2509.23586):
-//     trajectory analysis shows agents waste iterations on unrelated work
-//     while stated subgoals remain unaddressed -- a token-efficiency failure.
-//   - "Exploring Autonomous Agents: Why They Fail" (arXiv:2508.13143):
-//     planning errors (including step omission) account for a significant
-//     fraction of agent failures in multi-step software engineering tasks.
-//
-// The gap: ggcode has planAbandon (entire plan abandoned), fulfillmentGate
-// (user request vs work match), and inputUnderspec (vague request detection).
-// NONE track INDIVIDUAL subgoals within a multi-step plan. An agent that says
-// "1. Fix auth 2. Update tests 3. Update docs" but only does steps 1 and 2
-// won't trigger any existing detector until fulfillmentGate fires at the end.
-// This detector provides EARLY awareness when subgoals are being skipped
-// mid-run, giving the agent a chance to course-correct.
-//
-// Design:
-//  1. Extracts numbered subgoals from assistant text (e.g., "1. Fix auth")
-//  2. Derives keyword signatures from each subgoal
-//  3. Tracks whether subsequent tool calls reference those keywords
-//  4. After enough iterations pass with unaddressed subgoals, warns
-//  5. Non-blocking, advisory, zero LLM cost
-//  6. Fires at most once per run to avoid noise
-
 const (
-	sgMaxSubgoals       = 8   // max subgoals to track (avoid noise from long lists)
-	sgMinSubgoals       = 3   // only track plans with 3+ items
-	sgMinIterGap        = 3   // min iterations before checking coverage
-	sgUnaddressedThresh = 0.4 // warn if >40% of subgoals are unaddressed
-	sgMaxWarns          = 1   // fire at most once per run
+	sgMaxSubgoals       = 8
+	sgMinSubgoals       = 3
+	sgMinIterGap        = 3
+	sgUnaddressedThresh = 0.4
+	sgMaxWarns          = 1
 )
 
-// subgoalEntry tracks a single extracted subgoal.
 type subgoalEntry struct {
 	number    int
 	text      string
@@ -57,12 +25,11 @@ type subgoalEntry struct {
 	addressed bool
 }
 
-// subgoalState tracks multi-step plan subgoals across a run.
 type subgoalState struct {
 	mu       sync.Mutex
 	subgoals []subgoalEntry
-	planIter int  // iteration when the plan was declared
-	fired    bool // whether the warning has been issued
+	planIter int
+	fired    bool
 }
 
 func newSubgoalState() *subgoalState {
@@ -77,11 +44,8 @@ func (s *subgoalState) reset() {
 	s.fired = false
 }
 
-// numberedItemRe matches lines like "1. Fix the auth module" or "2) Update tests".
 var numberedItemRe = regexp.MustCompile(`(?m)^\s*(\d+)[.)]\s+(.{3,80})$`)
 
-// extractSubgoals parses numbered list items from agent text.
-// Returns at most sgMaxSubgoals entries; requires sgMinSubgoals items to activate.
 func extractSubgoals(text string) []subgoalEntry {
 	matches := numberedItemRe.FindAllStringSubmatch(text, sgMaxSubgoals+2)
 	if len(matches) < sgMinSubgoals {
@@ -92,7 +56,7 @@ func extractSubgoals(text string) []subgoalEntry {
 		num := 0
 		fmt.Sscanf(m[1], "%d", &num)
 		desc := strings.TrimSpace(m[2])
-		// Skip non-action items (e.g., "see above", "etc.")
+
 		if len(desc) < 5 {
 			continue
 		}
@@ -111,8 +75,6 @@ func extractSubgoals(text string) []subgoalEntry {
 	return result
 }
 
-// extractKeywords derives lowercase keyword tokens from a subgoal description.
-// Filters common English stop words and short tokens.
 var sgStopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "to": true, "of": true, "in": true,
 	"for": true, "and": true, "or": true, "on": true, "at": true, "by": true,
@@ -124,7 +86,7 @@ var sgStopWords = map[string]bool{
 }
 
 func extractSubgoalKeywords(desc string) []string {
-	// Split on non-alphanumeric
+
 	tokens := regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9_-]{2,}`).FindAllString(desc, -1)
 	var kws []string
 	seen := make(map[string]bool)
@@ -139,21 +101,15 @@ func extractSubgoalKeywords(desc string) []string {
 	return kws
 }
 
-// recordAssistantText captures the plan from agent text (only the first
-// numbered list with enough items).
 func (s *subgoalState) recordAssistantText(text string, iter int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Only capture the first plan
+
 	if len(s.subgoals) > 0 {
 		return
 	}
 	subs := extractSubgoals(text)
-	// #1499 case A: a numbered list is NOT necessarily a plan - diagnostic
-	// output ("Found 3 problems: 1. missing nil check ...") matched the
-	// same regex, got promoted to "planned subgoals", and the agent was
-	// later accused of skipping steps it never planned. Require plan
-	// intent in the surrounding text before adopting a list.
+
 	if len(subs) >= sgMinSubgoals && hasPlanIntent(text) {
 		s.subgoals = subs
 		s.planIter = iter
@@ -161,20 +117,12 @@ func (s *subgoalState) recordAssistantText(text string, iter int) {
 	}
 }
 
-// sgPlanIntentPhrases mark text that ANNOUNCES a plan (vs. text that
-// merely ENUMERATES findings, errors, options...).
 var sgPlanIntentPhrases = []string{
 	"plan", "steps", "going to", "will do", "todo", "to-do", "to do",
 	"approach", "roadmap", "checklist", "road map", "next up", "my tasks",
 	"任务", "计划", "步骤",
 }
 
-// hasPlanIntent reports whether the text carries plan-intent language.
-// #4229: bare substring matching turned "explanation" into "plan", "plant"
-// into "plan" and "auto download" into "to do", adopting diagnostic lists as
-// plans. Match phrases on word boundaries via sgKeywordPresent (the #2829
-// helper). CJK phrases have no word bytes around them, so any occurrence still
-// matches, preserving recall for 任务/计划/步骤.
 func hasPlanIntent(text string) bool {
 	lower := strings.ToLower(text)
 	for _, p := range sgPlanIntentPhrases {
@@ -185,7 +133,6 @@ func hasPlanIntent(text string) bool {
 	return false
 }
 
-// recordToolCall checks whether a tool call addresses any unaddressed subgoal.
 func (s *subgoalState) recordToolCall(toolName, args string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -198,18 +145,7 @@ func (s *subgoalState) recordToolCall(toolName, args string) {
 			continue
 		}
 		for _, kw := range s.subgoals[i].keywords {
-			// #2758: match keywords against the tool ARGUMENTS only. The old
-			// `|| strings.Contains(toolLower, kw)` matched tool NAMES - any
-			// read_file whitewashed a "file" keyword, search_files a "search"
-			// keyword - so unrelated calls marked subgoals addressed and the
-			// un-addressed-subgoal warning went silent (systematic
-			// under-reporting). Tool names are generic verbs/nouns by design
-			// and carry no evidence about WHICH subgoal was addressed.
-			//
-			// #2829: the hit itself now requires a word boundary
-			// (sgKeywordPresent) - pure substring matching let "runtime"
-			// satisfy a "run" keyword and "author.go" satisfy "auth",
-			// burning the addressed flag on unrelated calls the same way.
+
 			if sgKeywordPresent(argLower, kw) {
 				s.subgoals[i].addressed = true
 				break
@@ -218,13 +154,6 @@ func (s *subgoalState) recordToolCall(toolName, args string) {
 	}
 }
 
-// sgKeywordPresent reports whether kw occurs in lower as a standalone word
-// (#2829). Boundaries use sgKeywordWordByte - alphanumerics only, '_' is a
-// SEPARATOR: tool args are full of snake_case tokens where '_' delimits words
-// (test_suite.go legitimately satisfies "test"/"suite"), while letters glue
-// real words ("runtime" does not satisfy "run", "author.go" does not satisfy
-// "auth"). CJK keywords are unaffected - UTF-8 continuation bytes are never
-// word bytes, so every occurrence is a whole-word hit, same as Contains.
 func sgKeywordPresent(lower, kw string) bool {
 	if kw == "" {
 		return false
@@ -243,22 +172,17 @@ func sgKeywordPresent(lower, kw string) bool {
 	}
 }
 
-// sgKeywordWordByte is the word class for subgoal keyword matching against
-// tool args: alphanumerics only. Unlike isWordByte (#2745, identifier
-// semantics where '_' belongs to the name) it treats '_' as a word
-// SEPARATOR, matching how '_' reads inside paths and snake_case tokens.
 func sgKeywordWordByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
-// maybeWarn checks if unaddressed subgoals warrant a warning.
 func (s *subgoalState) maybeWarn(currentIter int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fired || len(s.subgoals) < sgMinSubgoals {
 		return ""
 	}
-	// Need enough iterations to have had a chance to address subgoals
+
 	if currentIter-s.planIter < sgMinIterGap {
 		return ""
 	}
@@ -266,11 +190,7 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 	trackable := 0
 	var missing []string
 	for _, sg := range s.subgoals {
-		// #2839: subgoals whose description yielded NO trackable keywords
-		// (e.g. pure CJK plans - the extractor regex is ASCII-only) can
-		// never be marked addressed by recordToolCall, so counting them
-		// guarantees a false skip-step warning. Exclude them from both
-		// numerator and denominator.
+
 		if len(sg.keywords) == 0 {
 			continue
 		}
@@ -297,17 +217,12 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		unaddressed, trackable, strings.Join(missing, "\n"))
 }
 
-// truncate cuts s to at most max bytes, appending an ellipsis when it
-// truncates. #4229: the old s[:max-3] byte slice could split a multi-byte
-// rune mid-sequence, producing invalid UTF-8 in the guidance message. Snap
-// the cut point back to a rune boundary first (same pattern as
-// truncateRunesUTF8 in traj_intel.go).
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
 	if max < 3 {
-		// No room for an ellipsis; cut on a rune boundary only.
+
 		cut := max
 		for cut > 0 && !utf8.RuneStart(s[cut]) {
 			cut--
@@ -321,7 +236,4 @@ func truncate(s string, max int) string {
 	return s[:cut] + "..."
 }
 
-// markUndelivered (#4224) rolls back the one-shot quota consumed by maybeWarn
-// when the guidance budget suppressed delivery, mirroring the #3380 rollback
-// pattern: only a delivered warning keeps its quota.
 func (s *subgoalState) markUndelivered() { s.fired = false }

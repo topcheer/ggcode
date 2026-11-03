@@ -1,8 +1,5 @@
 package agent
 
-// zz_issue3752_lint_tags_test.go -- companion tests for #3752: go vet must
-// carry the detected build tags, and compile-error lines must not be
-// extracted as lint warnings.
 import (
 	"os"
 	"path/filepath"
@@ -14,8 +11,7 @@ func TestIssue3752VetCarriesBuildTags(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo 1.27\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Makefile with tags but NO lint target - exactly the #3752 shape where
-	// detectLintCommand used to fall through to a bare `go vet ./...`.
+
 	makefile := "TAGS := mytag3752\n\nbuild:\n\tgo build -tags \"$(TAGS)\" ./...\n"
 	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefile), 0o644); err != nil {
 		t.Fatal(err)
@@ -51,8 +47,7 @@ func TestIssue3752MakeLintStillWins(t *testing.T) {
 }
 
 func TestIssue3752CompileErrorsNotLintWarnings(t *testing.T) {
-	// The exact #3752 repro: vet without tags on a tag-gated repo emits
-	// undefined-symbol compile errors; they must NOT become lint warnings.
+
 	output := "# github.com/topcheer/ggcode/internal/agent [build failed]\n" +
 		"internal/agent/agent.go:381: undefined: attemptBriefState\n" +
 		"internal/agent/tool.go:12: imported and not used: \"fmt\"\n" +
@@ -65,7 +60,7 @@ func TestIssue3752CompileErrorsNotLintWarnings(t *testing.T) {
 }
 
 func TestIssue3752RealVetFindingsStillExtracted(t *testing.T) {
-	// Guard against over-filtering: genuine vet diagnostics must survive.
+
 	output := "internal/agent/verify.go:120: Printf-style function has dynamic arg list\n" +
 		"internal/util/x.go:42: copylocks: assignment copies lock value\n"
 	warnings := extractLintWarnings(output)

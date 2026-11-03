@@ -1,9 +1,5 @@
 package agent
 
-// #3649 probes: (1) sibling test files using table-driven naming
-// (TestFoo_tableDriven) must not misreport Foo as untested; (2) a
-// parse-failed sibling must suppress (not escalate) untested reporting.
-
 import (
 	"os"
 	"path/filepath"
@@ -41,7 +37,7 @@ func TestIssue3649_SiblingParseFailedSuppressesMisreport(t *testing.T) {
 	dir := t.TempDir()
 	writeIssue3649Files(t, dir, map[string]string{
 		"foo.go": "package pkg\n\nfunc Foo() int { return 1 }\n",
-		// Broken mid-edit WIP sibling: parse fails.
+
 		"foo_test.go": "package pkg\n\nimport \"testing\"\n\nfunc TestFoo(t *testing.T) { this is not valid go",
 	})
 	got := untestedExportedFuncs(dir, "foo.go")

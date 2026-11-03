@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// GitTag implements the git_tag tool for creating, listing, and deleting tags.
-// Tags are commonly used for release management.
 type GitTag struct{ WorkingDir string }
 
 func (t GitTag) Name() string { return "git_tag" }
@@ -82,7 +80,6 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if trimmed == "" {
 			return Result{Content: "No tags found."}, nil
 		}
-		// Cap output for repos with many tags
 		const maxTagLines = 50
 		lines := strings.Split(trimmed, "\n")
 		if len(lines) > maxTagLines {
@@ -96,13 +93,7 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if args.Name == "" {
 			return Result{IsError: true, Content: "name is required for create action"}, nil
 		}
-		// #2133: fifth instance of the git flag-family guard
-		// (#1325/#1687/#1689/#1690). name goes into the command line
-		// BEFORE "--" on the lightweight path, so "-d" DELETED the tag the
-		// caller meant to create (probe: name="-d" commit="v1.0" printed
-		// "Deleted tag 'v1.0'") and "-f" silently force-moved it. The
-		// annotated path degenerates into a usage error (exit 129) - safe
-		// by accident; the guard covers both uniformly.
+
 		if strings.HasPrefix(args.Name, "-") {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid name %q: leading dash (refusing option injection)", args.Name)}, nil
 		}
@@ -110,13 +101,11 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if args.Message != "" {
 			gitArgs = append(gitArgs, "-a", args.Name, "-m", args.Message)
 		} else {
-			// Lightweight tag (no annotation)
+
 			gitArgs = append(gitArgs, args.Name)
 		}
 		if args.Commit != "" {
-			// #1690 case 2: a dash-prefixed rev reached git as an OPTION -
-			// "-d" DELETED an existing tag, "-f" force-moved it. The git
-			// flag-family guard (#1325/#1687/#1689), fourth instance.
+
 			if strings.HasPrefix(args.Commit, "-") {
 				return Result{IsError: true, Content: fmt.Sprintf("invalid commit %q: leading dash (refusing option injection)", args.Commit)}, nil
 			}
@@ -147,11 +136,7 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if args.Name == "" {
 			return Result{IsError: true, Content: "name is required for delete action"}, nil
 		}
-		// #2139: symmetric with the create guard (#2133). No exploitable
-		// side effect exists here (probe: the delete option set has no
-		// deleterious flags), but "-d"/"--delete" was silently swallowed
-		// as a duplicate option - git exited 0 with NO tag deleted and the
-		// empty-output fallback reported "Deleted tag -d." (fake success).
+
 		if strings.HasPrefix(args.Name, "-") {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid name %q: leading dash (refusing option injection)", args.Name)}, nil
 		}
@@ -172,7 +157,6 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	}
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitTag) Clone() Tool {
 	return &GitTag{WorkingDir: t.WorkingDir}
 }

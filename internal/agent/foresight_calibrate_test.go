@@ -12,7 +12,6 @@ func TestForesightCalibrate_NoPredictions(t *testing.T) {
 	calls := []provider.ToolCallDelta{{Name: "read_file"}}
 	s.recordPrediction(text, calls, 1)
 
-	// No prediction language -> no pending predictions
 	if len(s.predictions) != 0 {
 		t.Fatalf("expected 0 predictions, got %d", len(s.predictions))
 	}
@@ -31,7 +30,6 @@ func TestForesightCalibrate_SuccessPrediction_MatchResult(t *testing.T) {
 		t.Fatal("expected predictedOK=true")
 	}
 
-	// Actual result: success -> no mismatch
 	hint := s.checkCalibration("run_command", "All tests passed", false, 1)
 	if hint != "" {
 		t.Fatalf("expected no hint on match, got: %s", hint)
@@ -47,12 +45,11 @@ func TestForesightCalibrate_SuccessPrediction_FailureResult(t *testing.T) {
 	calls := []provider.ToolCallDelta{{Name: "run_command"}}
 	s.recordPrediction(text, calls, 1)
 
-	// Actual result: failure -> mismatch
 	hint := s.checkCalibration("run_command", "exit status 1: compilation failed", false, 1)
 	if s.mismatches != 1 {
 		t.Fatalf("expected 1 mismatch, got %d", s.mismatches)
 	}
-	// Only 1 mismatch, threshold is 3 -> no hint yet
+
 	if hint != "" {
 		t.Fatalf("expected no hint at 1 mismatch, got: %s", hint)
 	}
@@ -61,7 +58,6 @@ func TestForesightCalibrate_SuccessPrediction_FailureResult(t *testing.T) {
 func TestForesightCalibrate_ThresholdReached(t *testing.T) {
 	s := newForesightCalibrateState()
 
-	// Generate 3 mismatches
 	for i := 0; i < 3; i++ {
 		text := "This should pass."
 		calls := []provider.ToolCallDelta{{Name: "run_command"}}
@@ -73,8 +69,6 @@ func TestForesightCalibrate_ThresholdReached(t *testing.T) {
 		t.Fatalf("expected 3 mismatches, got %d", s.mismatches)
 	}
 
-	// 4th mismatch should trigger hint (threshold=3, but hint fires when reaching 3)
-	// Actually the 3rd mismatch should have already triggered it
 }
 
 func TestForesightCalibrate_FailurePrediction_SuccessResult(t *testing.T) {
@@ -90,7 +84,6 @@ func TestForesightCalibrate_FailurePrediction_SuccessResult(t *testing.T) {
 		t.Fatal("expected predictedOK=false for failure prediction")
 	}
 
-	// Actual result: success -> mismatch
 	s.checkCalibration("run_command", "Build succeeded", false, 1)
 	if s.mismatches != 1 {
 		t.Fatalf("expected 1 mismatch, got %d", s.mismatches)
@@ -106,7 +99,6 @@ func TestForesightCalibrate_EmptyResult_Mismatch(t *testing.T) {
 		t.Fatalf("expected 1 prediction, got %d", len(s.predictions))
 	}
 
-	// Actual result: empty/nothing -> mismatch (predicted content, got nothing)
 	s.checkCalibration("read_file", "", false, 1)
 	if s.mismatches != 1 {
 		t.Fatalf("expected 1 mismatch for empty result, got %d", s.mismatches)
@@ -115,7 +107,7 @@ func TestForesightCalibrate_EmptyResult_Mismatch(t *testing.T) {
 
 func TestForesightCalibrate_AmbiguousPrediction_Skipped(t *testing.T) {
 	s := newForesightCalibrateState()
-	// Both success and failure language -> ambiguous, skip
+
 	text := "This should pass but might fail."
 	calls := []provider.ToolCallDelta{{Name: "run_command"}}
 	s.recordPrediction(text, calls, 1)
@@ -128,7 +120,6 @@ func TestForesightCalibrate_AmbiguousPrediction_Skipped(t *testing.T) {
 func TestForesightCalibrate_MaxWarnings(t *testing.T) {
 	s := newForesightCalibrateState()
 
-	// Generate enough mismatches to trigger hint twice
 	for i := 0; i < 8; i++ {
 		text := "This should pass."
 		calls := []provider.ToolCallDelta{{Name: "run_command"}}
@@ -136,7 +127,6 @@ func TestForesightCalibrate_MaxWarnings(t *testing.T) {
 		s.checkCalibration("run_command", "exit status 1: failed", false, i+1)
 	}
 
-	// warnCount should be capped at 2
 	if s.warnCount != 2 {
 		t.Fatalf("expected warnCount=2, got %d", s.warnCount)
 	}
@@ -156,7 +146,7 @@ func TestForesightCalibrate_Reset(t *testing.T) {
 
 func TestForesightCalibrate_NilSafety(t *testing.T) {
 	var s *foresightCalibrateState
-	// Should not panic
+
 	s.recordPrediction("text", nil, 1)
 	hint := s.checkCalibration("tool", "result", false, 1)
 	if hint != "" {
@@ -171,10 +161,8 @@ func TestExtractForesightSnippet(t *testing.T) {
 	if snippet == "" {
 		t.Fatal("expected non-empty snippet")
 	}
-	// Should contain "should pass"
+
 	if !contains(snippet, "should pass") {
 		t.Fatalf("snippet should contain prediction text, got: %s", snippet)
 	}
 }
-
-// contains/containsStr are already defined in reflection_test.go

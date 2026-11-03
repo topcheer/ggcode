@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// checkIncompleteTodos reads the current session's todo file and returns
-// a non-empty reminder message if there are pending or in_progress items.
-// Returns "" if no todos exist, all are done, or the tool is unavailable.
 func (a *Agent) checkIncompleteTodos() string {
 	t, ok := a.tools.Get("todo_write")
 	if !ok {
@@ -38,7 +35,7 @@ func (a *Agent) checkIncompleteTodos() string {
 	}
 
 	if len(incomplete) == 0 {
-		return "" // all done
+		return ""
 	}
 
 	var sb strings.Builder
@@ -59,8 +56,6 @@ func (a *Agent) checkIncompleteTodos() string {
 	return sb.String()
 }
 
-// codeChangedInRun returns true if any file-editing tool was used during this run.
-// Used to gate auto-verification — no point running build/test for Q&A conversations.
 func codeChangedInRun(runStats *RunStats) bool {
 	for name := range runStats.ToolCalls {
 		if fileEditingTools[name] {

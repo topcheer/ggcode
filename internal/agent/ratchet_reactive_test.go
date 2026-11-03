@@ -10,7 +10,6 @@ func TestMatchingRulesForResult_MatchesKnownError(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuleStore(dir)
 
-	// Add a rule that matches "cannot find package" errors
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "Go commands must use -tags goolm",
@@ -41,7 +40,6 @@ func TestMatchingRulesForResult_NoMatchForSuccess(t *testing.T) {
 		FixHint:      "Add -tags goolm",
 	})
 
-	// Successful output — should not match
 	result := "Build successful. All tests passed."
 	matched := rs.MatchingRulesForResult(result, "go build ./...")
 
@@ -61,9 +59,6 @@ func TestMatchingRulesForResult_PatternMatchesWithoutErrorMarkers(t *testing.T) 
 		FixHint:      "Run goimports",
 	})
 
-	// #4605: the marker-word gate is gone - the rule's own MatchPattern is
-	// authoritative. The result contains the pattern itself while carrying
-	// none of the 9 old marker substrings ("cycle" is not a marker).
 	result := "go build: import cycle not allowed in internal/graph"
 	matched := rs.MatchingRulesForResult(result, "")
 
@@ -100,7 +95,7 @@ func TestMatchingRulesForResult_MatchesMultipleRules(t *testing.T) {
 func TestMergeRuleSets_Deduplicates(t *testing.T) {
 	r1 := Rule{ID: "r-aaa", Category: "build", Rule: "Use -tags goolm"}
 	r2 := Rule{ID: "r-bbb", Category: "test", Rule: "Run with -p 1"}
-	r3 := Rule{ID: "r-aaa", Category: "build", Rule: "Use -tags goolm"} // dup of r1
+	r3 := Rule{ID: "r-aaa", Category: "build", Rule: "Use -tags goolm"}
 
 	merged := mergeRuleSets([]Rule{r1, r2}, []Rule{r3})
 	if len(merged) != 2 {
@@ -135,7 +130,6 @@ func TestMatchingRulesForResult_DetectsVariousErrorMarkers(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuleStore(dir)
 
-	// Add rules with different patterns
 	rs.AddRule(Rule{ID: "r-1", Category: "build", Rule: "Build error", MatchPattern: `FAIL to build`})
 	rs.AddRule(Rule{ID: "r-2", Category: "security", Rule: "Permission error", MatchPattern: `permission denied`})
 
@@ -160,9 +154,6 @@ func TestMatchingRulesForResult_DetectsVariousErrorMarkers(t *testing.T) {
 	}
 }
 
-// TestInjectRulesIntoResult_ReactiveMatching tests the full integration:
-// when a tool result contains an error matching a known rule, the FixHint
-// should be injected into the tool result.
 func TestInjectRulesIntoResult_ReactiveMatching(t *testing.T) {
 	dir := t.TempDir()
 	rulesPath := filepath.Join(dir, ".ggcode", "agent-rules.json")
@@ -170,7 +161,6 @@ func TestInjectRulesIntoResult_ReactiveMatching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write rules file with a pattern matching "olm" errors
 	ruleJSON := `{"version":1,"rules":[{"id":"r-test1","category":"build","rule":"Use -tags goolm","match_pattern":"cannot find.*olm","tool_pattern":"","fix_hint":"Add -tags goolm","hit_count":3,"created_at":"2025-01-01T00:00:00Z","last_seen":"2025-01-01T00:00:00Z"}]}`
 	if err := os.WriteFile(rulesPath, []byte(ruleJSON), 0644); err != nil {
 		t.Fatal(err)

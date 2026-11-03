@@ -1,68 +1,5 @@
 package agent
 
-// ═══ TOMBSTONE (#556): DEAD CODE — zero production call sites ═══
-//
-// checkPrematureExit is never invoked: write_integrity.go and every
-// registration table in this package have no exit-call entry (verified by
-// the ver-43 probe, GitHub issue #556). Per the #328/#330/#499 dead-detector
-// convention this file is kept with a tombstone rather than deleted, and
-// must NOT be wired into the write-integrity registry as-is.
-//
-// If resurrected, fix these two probe-verified defects FIRST:
-//
-//  1. Method-name false exemption: findPrematureExitCalls skips every
-//     FuncDecl named "main", including METHODS like `func (a *App) main()`,
-//     whose body is NOT a process entry point. The exemption must require
-//     d.Recv == nil (plain function) before skipping.
-//
-//  2. Whole-file cmd/ exemption is too broad: isCmdPackage returns true when
-//     ANY path component equals "cmd" — so `pkg/cmd/util.go` or an
-//     `internal/foo/cmd_helper`-style tree is entirely exempted even though
-//     such files are library code, not binary entry points. It must only
-//     exempt files in a top-level cmd/<name>/ tree whose package is main.
-//
-// ═══ END TOMBSTONE ═══
-
-// Premature Exit Call Detection in Go Code
-//
-// Problem: AI coding agents frequently produce Go code that calls os.Exit(),
-// log.Fatal(), log.Fatalf(), log.Fatalln(), or log.Panic() inside helper
-// functions, middleware, library packages, or service handlers. These calls:
-//
-//  1. Skip all deferred functions (defer Body.Close(), defer Unlock(), etc.)
-//     causing resource leaks, unflushed buffers, and data corruption.
-//  2. Make the function untestable -- the test process is killed, making it
-//     impossible to assert error behavior in unit tests.
-//  3. Prevent callers from handling or recovering from errors, violating the
-//     Go convention of returning errors.
-//  4. In long-running services (HTTP servers, workers), a single bad request
-//     can crash the entire process.
-//
-// Correct usage of these functions is limited to:
-//   - main() and init() functions (top-level program bootstrap)
-//   - The top level of cmd/ binaries
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external linters)
-//   - Cursor: lint-on-save may catch via go vet, but not at write time
-//   - Cline/OpenHands: reactive only -- caught by tests or production incidents
-//   - Aider: no automatic detection
-//   - Windsurf: no automatic detection
-//   - go vet: does not flag os.Exit in non-main functions
-//   - staticcheck: does not flag premature exit calls
-//   - gosec: does not flag this pattern
-//
-// None provide INLINE detection at write time. This check provides immediate,
-// zero-dependency feedback in <1ms per file using Go's standard library AST
-// parser.
-//
-// Approach: AST-based analysis. Walk the file and find all function/method/
-// closure declarations. For each, check if its body contains calls to
-// os.Exit(), log.Fatal(), log.Fatalf(), log.Fatalln(), log.Panic(),
-// log.Panicf(), or log.Panicln(). If the function is NOT named "main" or
-// "init" (and is not in a _test.go file), emit a warning. Delta-aware: only
-// flags patterns newly introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -71,8 +8,6 @@ import (
 	"strings"
 )
 
-// prematureExitFuncs maps fully-qualified function names that unconditionally
-// terminate the process. The boolean is always true (used as a set).
 var prematureExitFuncs = map[string]bool{
 	"os.Exit":     true,
 	"log.Fatal":   true,
@@ -83,19 +18,11 @@ var prematureExitFuncs = map[string]bool{
 	"log.Panicln": true,
 }
 
-// exitCallInfo records a single premature exit call with location and function name.
 type exitCallInfo struct {
-	funcName string // e.g., "os.Exit", "log.Fatal"
-	line     int    // 1-based line number (best-effort from AST positions)
+	funcName string
+	line     int
 }
 
-// checkPrematureExit detects os.Exit/log.Fatal/log.Panic calls in non-main/init
-// Go functions. Returns warning strings. Only flags NEW occurrences (delta-aware).
-//
-// Parameters:
-//   - filePath: path of the written file (used for language detection)
-//   - oldContent: the file content before the write ("" for new files)
-//   - newContent: the file content after the write
 func checkPrematureExit(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -104,13 +31,10 @@ func checkPrematureExit(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Skip test files -- os.Exit in TestMain or test helpers is acceptable.
 	if isTestFile(filePath) {
 		return nil
 	}
 
-	// Skip files in cmd/ directories -- these are typically main packages
-	// where os.Exit is expected (CLI tools, entry points).
 	if isCmdPackage(filePath) {
 		return nil
 	}
@@ -120,7 +44,6 @@ func checkPrematureExit(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: parse old content and subtract pre-existing calls.
 	if strings.TrimSpace(oldContent) != "" {
 		oldCalls := findPrematureExitCalls(filePath, oldContent)
 		if len(oldCalls) > 0 {
@@ -145,7 +68,6 @@ func checkPrematureExit(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Build summary message.
 	funcCounts := make(map[string]int)
 	for _, c := range newCalls {
 		funcCounts[c.funcName]++
@@ -173,8 +95,6 @@ func checkPrematureExit(filePath, oldContent, newContent string) []string {
 	}
 }
 
-// findPrematureExitCalls parses Go source and returns all premature exit calls
-// found in non-main/init functions/methods/closures.
 func findPrematureExitCalls(filename, src string) []exitCallInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -186,19 +106,16 @@ func findPrematureExitCalls(filename, src string) []exitCallInfo {
 
 	var results []exitCallInfo
 
-	// Walk all function declarations and function literals (closures).
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			// Skip main() and init() -- these are the only non-test functions
-			// where process exit is acceptable.
+
 			if d.Name.Name == "main" || d.Name.Name == "init" {
 				continue
 			}
 			results = append(results, scanForExitCalls(d.Body, fset)...)
 		case *ast.GenDecl:
-			// GenDecl (var, const, type, import) -- may contain function literals
-			// in var initializers. Walk for FuncLit nodes.
+
 			ast.Inspect(d, func(n ast.Node) bool {
 				if fl, ok := n.(*ast.FuncLit); ok {
 					results = append(results, scanForExitCalls(fl.Body, fset)...)
@@ -208,10 +125,9 @@ func findPrematureExitCalls(filename, src string) []exitCallInfo {
 		}
 	}
 
-	// Also scan function literals that appear in expressions (not in var decls).
 	ast.Inspect(file, func(n ast.Node) bool {
 		if fl, ok := n.(*ast.FuncLit); ok {
-			_ = fl // FuncLit inside FuncDecl bodies are covered by scanForExitCalls.
+			_ = fl
 		}
 		return true
 	})
@@ -219,8 +135,6 @@ func findPrematureExitCalls(filename, src string) []exitCallInfo {
 	return results
 }
 
-// scanForExitCalls walks a function body (recursively through nested blocks,
-// closures, if/switch/for/select) and collects all premature exit calls.
 func scanForExitCalls(body *ast.BlockStmt, fset *token.FileSet) []exitCallInfo {
 	if body == nil {
 		return nil
@@ -253,9 +167,6 @@ func scanForExitCalls(body *ast.BlockStmt, fset *token.FileSet) []exitCallInfo {
 	return results
 }
 
-// qualifiedCallName extracts the fully-qualified function name from a call
-// expression. Returns "os.Exit" for os.Exit(), "log.Fatal" for log.Fatal(),
-// etc. Returns "" for non-package-qualified calls.
 func qualifiedCallName(call *ast.CallExpr) string {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -268,10 +179,8 @@ func qualifiedCallName(call *ast.CallExpr) string {
 	return pkg.Name + "." + sel.Sel.Name
 }
 
-// isCmdPackage returns true if the file is in a cmd/ directory (typical Go
-// binary entry point).
 func isCmdPackage(filePath string) bool {
-	// Check if any path component is "cmd".
+
 	parts := strings.Split(filepath.ToSlash(filePath), "/")
 	for _, p := range parts {
 		if p == "cmd" {
@@ -281,8 +190,6 @@ func isCmdPackage(filePath string) bool {
 	return false
 }
 
-// joinStrings joins a slice of strings with a separator. This is a small helper
-// to avoid importing strings.Join (which is fine but keeps the pattern explicit).
 func joinStrings(parts []string, sep string) string {
 	if len(parts) == 0 {
 		return ""

@@ -10,52 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// Tainted Data Influence Detector (Information-Flow Control).
-//
-// Research basis:
-//   - Microsoft Research, "Securing AI Agents with Information-Flow Control"
-//     (arXiv:2505.23643, 2025): formal IFC model for agent planners that
-//     tracks how untrusted external data (tool results, fetched documents)
-//     flows into privileged operations (file writes, command execution).
-//   - OWASP Agentic AI Threat rules (ATR-2026-00032): Goal Hijacking via
-//     tool-response injection channels.
-//   - CausalFlow (arXiv:2605.25338): failed agent traces contain structured
-//     signals about where execution broke down -- taint propagation is a
-//     leading indicator.
-//
-// Gap this closes:
-//   The existing prompt_injection_guard.go detects injection patterns at the
-//   point of INGESTION (tool output) and wraps them with a boundary marker.
-//   But it does NOT track whether that tainted content actually FLOWS into
-//   privileged tool calls -- the agent's ACTIONS. The IFC research's central
-//   insight: the dangerous event is not tainted content existing in context,
-//   but tainted content INFLUENCING write/exec operations.
-//
-//   This detector implements two-tier information-flow tracking:
-//
-//  1. DIRECT PROPAGATION (high precision): checks if a distinctive snippet
-//     from tainted tool output appears literally in the arguments of a
-//     subsequent privileged tool call (edit_file, write_file, run_command,
-//     etc.). This catches cases where the agent copies untrusted text into
-//     a file or embeds it in a command.
-//
-//  2. DESTRUCTIVE INFLUENCE WINDOW (medium precision): when a destructive
-//     tool (rm, git reset --hard, file_ops delete) is invoked within a small
-//     window of tool calls after tainted content was received, injects a
-//     cautionary notice. This catches indirect influence where tainted
-//     content steered the agent toward a destructive action without being
-//     literally copied.
-//
-// Both tiers are heuristic, deterministic, zero-LLM-cost.
-
-// privilegedSinkTools are tools whose arguments constitute privileged actions
-// (state mutation, file system changes, command execution). If tainted
-// content flows into their arguments, that is an information-flow violation.
-//
-// Derived from the canonical sourceMutatingTools superset (#738): every
-// registered disk-writing tool (multi_file_edit, multi_file_write,
-// lsp_rename, ...) is a sink, plus command-execution and git side-effect
-// tools that sit outside the file-editing canon.
 var privilegedSinkTools = derivedEditTools(map[string]bool{
 	"run_command":         true,
 	"start_command":       true,
@@ -69,49 +23,37 @@ var privilegedSinkTools = derivedEditTools(map[string]bool{
 	"git_tag":             true,
 })
 
-// destructiveSinkTools are a subset of privileged sinks that cause
-// irreversible state changes. These trigger the broader influence-window
-// check even without direct text propagation.
 var destructiveSinkTools = map[string]bool{
-	"file_ops":     true, // delete, move
-	"git_reset":    true, // --hard discards work
+	"file_ops":     true,
+	"git_reset":    true,
 	"git_revert":   true,
-	"git_checkout": true, // can discard uncommitted changes
-	"run_command":  true, // may execute destructive shell commands
+	"git_checkout": true,
+	"run_command":  true,
 }
 
 const (
-	maxTaintFingerprints = 6 // max fingerprints stored per run
-	// Tier-1 (direct verbatim propagation, high precision) and Tier-2
-	// (indirect influence window, medium precision) previously shared one
-	// warning budget, letting noisy Tier-2 notices silence later real Tier-1
-	// violations. Budgets are now separate (issue #720).
-	maxDirectTaintWarnings    = 3   // Tier-1: direct verbatim propagation
-	maxInfluenceTaintWarnings = 2   // Tier-2: destructive influence window
-	taintWindowSize           = 60  // char window extracted around injection pattern
-	taintMinSnippetLen        = 15  // minimum snippet length to be useful
-	influenceWindowSteps      = 6   // tool-call proximity window for indirect influence
-	taintExpirySeconds        = 300 // fingerprints expire after 5 minutes
+	maxTaintFingerprints      = 6
+	maxDirectTaintWarnings    = 3
+	maxInfluenceTaintWarnings = 2
+	taintWindowSize           = 60
+	taintMinSnippetLen        = 15
+	influenceWindowSteps      = 6
+	taintExpirySeconds        = 300
 )
 
-// taintFingerprint is a distinctive substring extracted from tool output that
-// was flagged by the injection guard. Stored so we can later check if it
-// appears in privileged tool arguments.
 type taintFingerprint struct {
-	snippet    string    // distinctive window around injection pattern
-	sourceTool string    // tool that produced the tainted content
-	recordedAt time.Time // when taint was received (for expiry)
-	stepIndex  int       // tool-call index when taint was received
+	snippet    string
+	sourceTool string
+	recordedAt time.Time
+	stepIndex  int
 }
 
-// taintInfluenceState tracks tainted content fingerprints and checks whether
-// they flow into privileged tool calls.
 type taintInfluenceState struct {
 	fingerprints    []taintFingerprint
-	warnedDirect    int // Tier-1 warnings emitted this run
-	warnedInfluence int // Tier-2 warnings emitted this run
-	warnedPseudo    int // S-04 pseudo-directive slot warnings this run
-	stepCounter     int // increments each tool call (for proximity window)
+	warnedDirect    int
+	warnedInfluence int
+	warnedPseudo    int
+	stepCounter     int
 }
 
 func newTaintInfluenceState() *taintInfluenceState {
@@ -126,19 +68,15 @@ func (s *taintInfluenceState) reset() {
 	s.stepCounter = 0
 }
 
-// recordIfTainted extracts fingerprints from content that was flagged by the
-// injection guard. The content at this point has the injectionWarning prefix
-// prepended by guardPromptInjection. We detect that prefix to know flagging
-// occurred, then extract distinctive snippets from the underlying patterns.
 func (s *taintInfluenceState) recordIfTainted(toolName, content string) {
 	if len(content) < len(injectionWarning)+20 {
 		return
 	}
-	// Only process content that was actually flagged by the guard.
+
 	if !strings.HasPrefix(content, injectionWarning) {
 		return
 	}
-	// Strip the warning prefix to get original content.
+
 	original := strings.TrimPrefix(content, injectionWarning)
 
 	snippets := extractTaintFingerprints(original)
@@ -157,21 +95,13 @@ func (s *taintInfluenceState) recordIfTainted(toolName, content string) {
 	}
 }
 
-// extractTaintFingerprints finds injection patterns in content and extracts
-// distinctive character windows around each match. These windows serve as
-// "fingerprints" that can be substring-matched against future tool arguments.
 func extractTaintFingerprints(content string) []string {
 	if len(content) < taintMinSnippetLen {
 		return nil
 	}
 	var fingerprints []string
 	seen := make(map[string]bool)
-	// G1 (sa-157): the whole pipeline (guard-side detection, fingerprint
-	// extraction, consumer-side checkInfluence matching) runs on the same
-	// normalized+lowered copy. The old code indexed the lowered copy but
-	// sliced the ORIGINAL content; slicing normCopy here would still be
-	// misaligned because caller-side ToLower changes byte length for
-	// İ/ẞ-class chars (#3572 lesson: index and slice must share one string).
+
 	lowered := strings.ToLower(memory.NormalizeForInjectionMatch(content))
 
 	for _, pattern := range memory.InjectionPatterns {
@@ -182,9 +112,7 @@ func extractTaintFingerprints(content string) []string {
 		if idx < 0 {
 			continue
 		}
-		// Extract a window starting at the pattern match point (no prefix noise).
-		// This ensures direct propagation detection works when agents pass the
-		// injection sentence verbatim to tool args without the original context.
+
 		start := idx
 		end := idx + len(pattern) + 35
 		if end > len(lowered) {
@@ -197,7 +125,7 @@ func extractTaintFingerprints(content string) []string {
 		if len(snippet) < taintMinSnippetLen {
 			continue
 		}
-		key := snippet // already lowercase - lowered IS the slice source
+		key := snippet
 		if seen[key] {
 			continue
 		}
@@ -207,23 +135,10 @@ func extractTaintFingerprints(content string) []string {
 	return fingerprints
 }
 
-// pseudoDirectiveRe matches forged control pseudo-directives that arrive
-// in tool-call argument slots via the S-04 contamination loop (large tool
-// result -> context -> next tool call's params). Line-anchored standalone
-// sentinel forms only ([PAUSE], **PAUSE**, PAUSE/stop, STOP-NOW on their
-// own line) so prose like "stop the build" or "pause the deploy" inside
-// legitimate task text does not trip it.
 var pseudoDirectiveRe = regexp.MustCompile(`(?im)(?:^|[\r\n]|\\n)\s*[\[\{*\(<]{0,3}(?:pause(?:[\s/_-]*(?:now|stop))?|stop[\s/_-]+now|halt[\s/_-]+now|ignore[\s/_-]+all[\s/_-]+prior[\s/_-]+directives)[\]\}*/\)>]{0,3}\s*(?:$|[\r\n]|\\n)`)
 
 const maxPseudoDirectiveWarnings = 2
 
-// checkPseudoDirectiveArgs (#4776 / S-04): unlike checkInfluence's Tier-1,
-// this runs for EVERY tool call, not just privileged sinks - the observed
-// attacks filled non-privileged parameter slots (sha/value fields of batch
-// tools) with forged PAUSE/stop sentinels. Tier-1 also required a >=15-char
-// verbatim fingerprint; a standalone directive line is often shorter, so it
-// escaped both gates. Returns a guidance string when a forged directive
-// form is found; zero LLM cost, deterministic.
 func (s *taintInfluenceState) checkPseudoDirectiveArgs(toolName, argsStr string) string {
 	s.stepCounter++
 	if s.warnedPseudo >= maxPseudoDirectiveWarnings {
@@ -245,9 +160,6 @@ func (s *taintInfluenceState) checkPseudoDirectiveArgs(toolName, argsStr string)
 	)
 }
 
-// checkInfluence determines whether tainted content has flowed into the
-// arguments of a privileged tool call. Returns a non-empty guidance string
-// when an information-flow violation is detected.
 func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) string {
 	s.stepCounter++
 
@@ -258,7 +170,6 @@ func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) st
 		return ""
 	}
 
-	// Prune expired fingerprints.
 	now := time.Now()
 	fps := s.pruneExpired(now)
 	if len(fps) == 0 {
@@ -267,10 +178,6 @@ func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) st
 
 	lowerArgs := strings.ToLower(memory.NormalizeForInjectionMatch(argsStr))
 
-	// Tier 1: Direct propagation -- tainted snippet appears literally in args.
-	// Budgets are per-tier (issue #720): exhausting the noisier Tier-2 window
-	// must not silence a later verbatim propagation, which is the
-	// higher-precision signal.
 	if s.warnedDirect < maxDirectTaintWarnings {
 		for _, fp := range fps {
 			if strings.Contains(lowerArgs, strings.ToLower(fp.snippet)) {
@@ -289,12 +196,6 @@ func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) st
 		}
 	}
 
-	// Tier 2: Destructive influence window -- a destructive tool was called
-	// within a small proximity window of receiving tainted content, even
-	// without literal text propagation. This catches indirect influence
-	// where injected instructions steered the agent toward a harmful action.
-	// For run_command the args are arbitrary shell text, so a proximity hit
-	// alone is too noisy: it is gated on destructive keywords (issue #720).
 	if s.warnedInfluence < maxInfluenceTaintWarnings && destructiveSinkTools[toolName] {
 		if toolName != "run_command" || taintDestructiveCommand(argsStr) {
 			for _, fp := range fps {
@@ -318,14 +219,8 @@ func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) st
 	return ""
 }
 
-// taintDestructiveCmdRe gates Tier-2 influence-window warnings for
-// run_command: the tool's args are arbitrary shell text, so proximity alone
-// fires on benign commands (ls, go test, ...). Word boundaries avoid
-// matching "confirm" or "algorithm".
 var taintDestructiveCmdRe = regexp.MustCompile(`(?i)\b(rm|rmdir|del|drop|delete|truncate|force|shred|wipe|mkfs)\b`)
 
-// taintDestructiveCommand reports whether a run_command argument string
-// contains a destructive keyword.
 func taintDestructiveCommand(argsStr string) bool {
 	return taintDestructiveCmdRe.MatchString(argsStr)
 }

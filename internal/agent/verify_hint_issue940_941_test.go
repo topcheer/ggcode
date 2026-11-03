@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestHasMakeTargetExcludesAssignments (#941): "test:=foo" is a variable
-// assignment, not a rule - the doc comment promised this exclusion but the
-// implementation missed it, creating phantom targets that made make exit 2
-// (not 127) and bypass the verify exit-code guard.
 func TestHasMakeTargetExcludesAssignments(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -21,12 +17,12 @@ func TestHasMakeTargetExcludesAssignments(t *testing.T) {
 		{"real rule", "all:\n\techo hi\n", "all", true},
 		{"indented rule", "  test:\n\techo\n", "test", true},
 		{"commented rule", "# test:\nall:\n", "test", false},
-		{"assign no-space colon-eq", "test:=foo\nall:\n", "test", false},         // #941 repro
-		{"assign double-colon-eq", "test::=foo\nall:\n", "test", false},          // GNU ::=
-		{"assign spaced eq", "test = foo\nall:\n", "test", false},                // was already OK
-		{"assign upper spaced colon-eq", "TEST := foo\nall:\n", "test", false},   // case-sensitive, was already OK
-		{"rule with prereq still matches", "test: deps\n\techo\n", "test", true}, // rest starts with space, not '='
-		{"double-colon rule still matches", "test::\n\techo\n", "test", true},    // rest = ":", not ":="
+		{"assign no-space colon-eq", "test:=foo\nall:\n", "test", false},
+		{"assign double-colon-eq", "test::=foo\nall:\n", "test", false},
+		{"assign spaced eq", "test = foo\nall:\n", "test", false},
+		{"assign upper spaced colon-eq", "TEST := foo\nall:\n", "test", false},
+		{"rule with prereq still matches", "test: deps\n\techo\n", "test", true},
+		{"double-colon rule still matches", "test::\n\techo\n", "test", true},
 	}
 	for _, c := range cases {
 		if got := hasMakeTarget(c.makefile, c.target); got != c.want {
@@ -35,15 +31,9 @@ func TestHasMakeTargetExcludesAssignments(t *testing.T) {
 	}
 }
 
-// TestDetectBuildSystemTaskfileAnchoring (#940): task detection must anchor
-// task names at line start so "integration-test:" / "docker-build:" /
-// "image: node:latest" don't satisfy the bare substring check for "test:" /
-// "build:" - which previously produced "task test", a command that exits 1
-// (not 127) and triggered false verification failures + wasted auto-repair.
 func TestDetectBuildSystemTaskfileAnchoring(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Only hyphenated tasks: must NOT be detected as "task test"/"task build".
 	hyphenDir := filepath.Join(tmp, "hyphen")
 	os.MkdirAll(hyphenDir, 0755)
 	os.WriteFile(filepath.Join(hyphenDir, "Taskfile.yml"), []byte(
@@ -55,17 +45,11 @@ func TestDetectBuildSystemTaskfileAnchoring(t *testing.T) {
 			"    cmds: [docker build .]\n"+
 			"    env:\n"+
 			"      image: node:latest\n"), 0644)
-	// #2123: the bare "task" fallback was REMOVED - bare `task` lists
-	// tasks or runs the default one (usually exit 0, unrelated output):
-	// a guaranteed false green. No matching recipe now falls through to
-	// the next probe, mirroring the Makefile branch. The #940 concern
-	// (hyphenated tasks must not satisfy "test:"/"build:") still holds -
-	// the result is anything but "task test"/"task build".
+
 	if cmd := detectBuildSystem(hyphenDir); cmd == "task test" || cmd == "task build" || strings.HasPrefix(cmd, "task ") {
 		t.Errorf("hyphen-only Taskfile: must not synthesize a task command, got %q (substring match regression #940)", cmd)
 	}
 
-	// Real indented task key: must be detected.
 	realDir := filepath.Join(tmp, "real")
 	os.MkdirAll(realDir, 0755)
 	os.WriteFile(filepath.Join(realDir, "Taskfile.yml"), []byte(
@@ -77,7 +61,6 @@ func TestDetectBuildSystemTaskfileAnchoring(t *testing.T) {
 		t.Errorf("real test task: expected %q, got %q", "task test", cmd)
 	}
 
-	// Verify-ci wins over test in priority order.
 	ciDir := filepath.Join(tmp, "ci")
 	os.MkdirAll(ciDir, 0755)
 	os.WriteFile(filepath.Join(ciDir, "Taskfile.yml"), []byte(
@@ -92,15 +75,11 @@ func TestDetectBuildSystemTaskfileAnchoring(t *testing.T) {
 	}
 }
 
-// TestVerifyCommandAvailableBashScriptPath (#941 companion): the bash/sh
-// script-path check must actually run (it was dead code behind an earlier
-// unconditional return true).
 func TestVerifyCommandAvailableBashScriptPath(t *testing.T) {
 	if verifyCommandAvailable("bash /definitely/not/a/real/script_xyz123.sh") {
 		t.Error("bash with nonexistent script path should be unavailable")
 	}
-	// Any existing file passes the fileExists check (executability is the
-	// shell's business - its 127 is caught by the exit-code guard).
+
 	if !verifyCommandAvailable("bash /etc/hosts") && !fileExists("/etc/hosts") {
 		t.Error("bash with existing script path should be available when file exists")
 	}

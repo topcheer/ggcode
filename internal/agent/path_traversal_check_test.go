@@ -98,7 +98,7 @@ func readConfig() {
 }
 
 func TestCheckPathTraversal_DeltaAware(t *testing.T) {
-	// The pattern already exists in old content -- should NOT warn.
+
 	content := `package main
 import "net/http"
 import "path/filepath"
@@ -192,7 +192,7 @@ func TestCheckPathTraversal_EmptyContentReturnsNil(t *testing.T) {
 
 func TestCheckPathTraversal_MaxWarnings(t *testing.T) {
 	old := ""
-	// Multiple different traversal patterns.
+
 	new := `package main
 import (
 	"os"
@@ -219,9 +219,7 @@ func d(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestCheckPathTraversal_DeltaNewSameCategoryReported(t *testing.T) {
-	// Old content already has one filepath.Join vulnerability. The edit adds
-	// ANOTHER filepath.Join instance (same category + detail) -- it must NOT be
-	// suppressed by the delta, since only identical line text is suppressed.
+
 	old := `package main
 import (
 	"net/http"
@@ -243,8 +241,7 @@ func handler2(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestCheckPathTraversal_DeltaIdenticalLineSuppressed(t *testing.T) {
-	// Two handlers with the IDENTICAL vulnerable line: only one is new
-	// relative to old content.
+
 	old := `package main
 import (
 	"net/http"
@@ -266,8 +263,7 @@ func handler2(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestCheckPathTraversal_JSStatusQueryNoFalsePositive(t *testing.T) {
-	// `req.query.status` contains "stat" -- must NOT match the stat() fs call
-	// thanks to word-boundary matching.
+
 	old := ""
 	new := "router.get('/x', (req, res) => {\n" +
 		"\tres.send('ok: ' + req.query.status);\n" +
@@ -281,7 +277,7 @@ func TestCheckPathTraversal_JSStatusQueryNoFalsePositive(t *testing.T) {
 }
 
 func TestCheckPathTraversal_JSStatCallStillDetected(t *testing.T) {
-	// Real stat() call with concatenated user input is still detected.
+
 	old := ""
 	new := "const fs = require('fs');\n" +
 		"function check(req, res) {\n" +
@@ -331,7 +327,6 @@ func TestDetectLangExt(t *testing.T) {
 	}
 }
 
-// ptContainsStr checks if a substring appears in any element of the slice.
 func ptContainsStr(slice []string, substr string) bool {
 	for _, s := range slice {
 		if ptHasSubstring(s, substr) {

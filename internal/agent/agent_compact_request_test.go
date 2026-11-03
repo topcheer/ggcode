@@ -42,9 +42,7 @@ func TestRequestAutoCompactBelowThresholdIsHonest(t *testing.T) {
 	if got == "" {
 		t.Fatal("status must be non-empty")
 	}
-	// An empty context is far below the auto-compact threshold: the status
-	// must NOT claim a full summarization was scheduled (honesty prevents
-	// the model from retrying or assuming context was summarized).
+
 	if strings.Contains(got, "scheduled in the background") {
 		t.Fatalf("must not claim full summarization below threshold: %q", got)
 	}

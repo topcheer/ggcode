@@ -1,12 +1,5 @@
 package agent
 
-// zz_issue4605_test.go pins the #4605 fix: MatchingRulesForResult must not
-// gate pattern matching behind a hardcoded list of English error-marker
-// substrings. The learning path (ratchet LLM prompt) generates match_pattern
-// for ANY error output shape, so reactive injection must try every pattern
-// regardless of markers. Each case below is a real marker-free error shape
-// that the old gate silently dropped.
-
 import "testing"
 
 func TestIssue4605_MarkerFreeErrorShapesStillMatch(t *testing.T) {
@@ -52,7 +45,7 @@ func TestIssue4605_NonMatchingSuccessStillQuiet(t *testing.T) {
 		MatchPattern: `signal: killed`,
 		FixHint:      "retry with GOFLAGS=-p=1",
 	})
-	// Successful output must still not trigger injection.
+
 	if got := rs.MatchingRulesForResult("ok  all tests passed", ""); len(got) != 0 {
 		t.Fatalf("expected 0 matches for success output, got %d", len(got))
 	}

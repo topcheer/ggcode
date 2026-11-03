@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #4013: runToolNames must be appended only when a result is actually
-// produced, never in the planning loop (dedup/ask_user/redaction skips used
-// to leave phantom names, violating the agent_state_fields contract
-// "appended only as tools execute during a run").
 func TestIssue4013RunToolNamesAppendedAtExecutionOnly(t *testing.T) {
 	src, err := os.ReadFile("agent.go")
 	if err != nil {

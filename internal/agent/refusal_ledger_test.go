@@ -28,7 +28,7 @@ func TestExtractRefusalsNegationOnly(t *testing.T) {
 	if !strings.Contains(joined, "--force") {
 		t.Errorf("flag refusal missing: %v", got)
 	}
-	// "Only use X" is a directive, not a refusal.
+
 	if strings.Contains(strings.ToLower(joined), "only use") {
 		t.Errorf("exclusivity directive leaked into refusal ledger: %v", got)
 	}
@@ -43,8 +43,6 @@ func TestRefusalRecordIdempotent(t *testing.T) {
 	}
 }
 
-// zz #4284: quoted text / pasted logs / code comments must never produce
-// ledger entries - only direct user instructions enter extraction.
 func TestIssue4284NonDirectiveTextFiltered(t *testing.T) {
 	text := "look at this:\n" +
 		"```go\n// don't touch config/production.yaml manually\n```\n" +
@@ -70,11 +68,9 @@ func TestIssue4284NonDirectiveTextFiltered(t *testing.T) {
 	}
 }
 
-// zz #4284: legacy entries (empty Kind) are re-annotated at load;
-// comment/quote/log-shaped excerpts become advisory-only and never block.
 func TestIssue4284LegacyReannotationAndAdvisorySkip(t *testing.T) {
 	l := newRefusalTestLedger(t)
-	// Simulate a pre-#4284 ledger: kind field absent on disk.
+
 	l.data.Entries = []refusalEntry{
 		{Excerpt: "// don't touch internal/auth/core.go", Source: "nl", Ts: time.Now().Unix()},
 		{Excerpt: "> never use git push --force", Source: "nl", Ts: time.Now().Unix()},
@@ -90,7 +86,7 @@ func TestIssue4284LegacyReannotationAndAdvisorySkip(t *testing.T) {
 		}
 	}
 	l.saveLocked()
-	// Reload from disk: load() must reproduce the same annotation.
+
 	l2 := newRefusalLedger(l.workingDir)
 	args := `{"command":"cat internal/auth/core.go"}`
 	if msg := l2.checkBlocked("run_command", args); msg != "" {
@@ -99,7 +95,7 @@ func TestIssue4284LegacyReannotationAndAdvisorySkip(t *testing.T) {
 	if msg := l2.checkBlocked("edit_file", `{"file_path":"internal/util/paths.go","old_text":"a","new_text":"b"}`); msg == "" {
 		t.Errorf("user-direct entry must still block")
 	}
-	// New recording path tags user-direct.
+
 	l2.record("never edit build/release.sh", "nl", refusalKindDirect)
 	if msg := l2.checkBlocked("edit_file", `{"file_path":"build/release.sh","new_text":"x"}`); msg == "" {
 		t.Errorf("fresh user-direct entry must block matching write")
@@ -143,7 +139,7 @@ func TestRefusalReadToolsNeverBlock(t *testing.T) {
 func TestRefusalNoStructuredTargetNoBlock(t *testing.T) {
 	l := newRefusalTestLedger(t)
 	l.record("don't be so verbose in replies", "nl", refusalKindDirect)
-	// Pure-semantic refusal: no path/flag anchor -> must not hard-block.
+
 	if msg := l.checkBlocked("run_command", `{"command":"echo hi"}`); msg != "" {
 		t.Errorf("target-less refusal must not block: %q", msg)
 	}
@@ -152,7 +148,7 @@ func TestRefusalNoStructuredTargetNoBlock(t *testing.T) {
 func TestRefusalExpiry(t *testing.T) {
 	l := newRefusalTestLedger(t)
 	l.record("never run git push --force", "nl", refusalKindDirect)
-	// Age the entry beyond the recency window.
+
 	l.data.Entries[0].Ts = time.Now().Add(-31 * 24 * time.Hour).Unix()
 	if msg := l.checkBlocked("run_command", `{"command":"git push --force"}`); msg != "" {
 		t.Errorf("expired refusal must not block: %q", msg)
@@ -181,7 +177,7 @@ func TestRefusalRelease(t *testing.T) {
 func TestRefusalReleaseWithoutPhraseNoop(t *testing.T) {
 	l := newRefusalTestLedger(t)
 	l.record("never run git push --force", "nl", refusalKindDirect)
-	// Mentions the target but is not a lift phrase -> must NOT release.
+
 	if n := l.release("remember, git push --force is dangerous"); n != 0 {
 		t.Fatalf("non-lift mention must not release, released %d", n)
 	}
@@ -195,7 +191,7 @@ func TestRefusalPersistenceAcrossInstances(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("ledger not persisted: %v", err)
 	}
-	l2 := newRefusalLedger(dir) // simulates a fresh run/compaction
+	l2 := newRefusalLedger(dir)
 	if msg := l2.checkBlocked("write_file", `{"path":"internal/auth/core.go"}`); msg == "" {
 		t.Fatal("refusal must survive across instances (the enforceable part)")
 	}
@@ -210,10 +206,6 @@ func TestRefusalClearAndSummary(t *testing.T) {
 	}
 }
 
-// Agent-level wiring (r23): the ledger is constructed with the agent,
-// re-anchored on SetWorkingDir, and fed from user text via
-// recordUserRefusals -- the same entry point agent.go calls after
-// recordConstraints.
 func TestAgentRefusalLedgerWiring(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	if a.refusalLedger == nil {
@@ -228,11 +220,11 @@ func TestAgentRefusalLedgerWiring(t *testing.T) {
 	if len(a.refusalLedger.data.Entries) != 1 {
 		t.Fatalf("recordUserRefusals must persist, got %d entries", len(a.refusalLedger.data.Entries))
 	}
-	// The enforced path must work through the Agent's ledger instance.
+
 	if msg := a.refusalLedger.checkBlocked("edit_file", `{"file_path":"`+dir+`/internal/auth/core.go"}`); msg == "" {
 		t.Fatal("wired ledger must block matching write")
 	}
-	// Conversational lift through the Agent entry point releases it.
+
 	if n := a.ReleaseMatchingRefusals("ok, you can modify internal/auth/core.go now"); n != 1 {
 		t.Fatalf("ReleaseMatchingRefusals must lift, got %d", n)
 	}

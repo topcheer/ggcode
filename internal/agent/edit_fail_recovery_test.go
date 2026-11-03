@@ -8,7 +8,7 @@ import (
 
 func TestEditFailRecovery_BelowThreshold(t *testing.T) {
 	s := newEditFailState()
-	// First failure — no guidance yet.
+
 	hint := s.recordEditFailure("/src/foo.go")
 	if hint != "" {
 		t.Fatalf("expected no guidance on first failure, got: %s", hint)
@@ -37,7 +37,7 @@ func TestEditFailRecovery_NoDuplicateGuidance(t *testing.T) {
 	if hint1 == "" {
 		t.Fatal("expected guidance on 2nd failure")
 	}
-	// Third failure — guidance already fired, should not repeat.
+
 	hint2 := s.recordEditFailure("/src/foo.go")
 	if hint2 != "" {
 		t.Fatalf("expected no duplicate guidance, got: %s", hint2)
@@ -48,7 +48,7 @@ func TestEditFailRecovery_SuccessResets(t *testing.T) {
 	s := newEditFailState()
 	s.recordEditFailure("/src/foo.go")
 	s.recordEditSuccess("/src/foo.go")
-	// After success, next failure should be "first" again.
+
 	hint := s.recordEditFailure("/src/foo.go")
 	if hint != "" {
 		t.Fatalf("expected no guidance after success reset, got: %s", hint)
@@ -59,7 +59,7 @@ func TestEditFailRecovery_ReadResets(t *testing.T) {
 	s := newEditFailState()
 	s.recordEditFailure("/src/foo.go")
 	s.recordRead("/src/foo.go")
-	// After read, next failure should be "first" again.
+
 	hint := s.recordEditFailure("/src/foo.go")
 	if hint != "" {
 		t.Fatalf("expected no guidance after read reset, got: %s", hint)
@@ -68,15 +68,15 @@ func TestEditFailRecovery_ReadResets(t *testing.T) {
 
 func TestEditFailRecovery_PerFileTracking(t *testing.T) {
 	s := newEditFailState()
-	// Failures on different files are tracked independently.
+
 	s.recordEditFailure("/src/a.go")
 	s.recordEditFailure("/src/b.go")
-	// Second failure on a.go triggers guidance.
+
 	hintA := s.recordEditFailure("/src/a.go")
 	if hintA == "" {
 		t.Fatal("expected guidance for a.go on its 2nd failure")
 	}
-	// b.go only has 1 failure — no guidance.
+
 	hintB := s.recordEditFailure("/src/b.go")
 	if hintB == "" {
 		t.Fatal("expected guidance for b.go on its 2nd failure")
@@ -86,9 +86,9 @@ func TestEditFailRecovery_PerFileTracking(t *testing.T) {
 func TestEditFailRecovery_Reset(t *testing.T) {
 	s := newEditFailState()
 	s.recordEditFailure("/src/foo.go")
-	s.recordEditFailure("/src/foo.go") // guidance fires
+	s.recordEditFailure("/src/foo.go")
 	s.reset()
-	// After reset, same file starts fresh.
+
 	hint := s.recordEditFailure("/src/foo.go")
 	if hint != "" {
 		t.Fatalf("expected no guidance after reset, got: %s", hint)
@@ -102,7 +102,7 @@ func TestEditFailRecovery_EmptyPath(t *testing.T) {
 	}
 	s.recordEditSuccess("")
 	s.recordRead("")
-	// Should not panic
+
 }
 
 func TestEditFailRecovery_Summarize(t *testing.T) {
@@ -128,7 +128,7 @@ func TestExtractFileForEdit(t *testing.T) {
 	if path != "/src/test.go" {
 		t.Errorf("expected /src/test.go, got %s", path)
 	}
-	// Unknown tool
+
 	if path := extractFileForEdit("unknown", args); path != "" {
 		t.Errorf("expected empty for unknown tool, got %s", path)
 	}

@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// Tests for the cascade escalation hint (subagent_cascade.go): when a
-// sub-agent fails on an alternate model, the parent gets a one-shot hint
-// to escalate to its own model before concluding task infeasibility.
-
 func TestCascadeHint_FiresOnFailedAlternateModel(t *testing.T) {
 	snap := subagent.Snapshot{
 		ID:     "agent-1",
@@ -90,7 +86,6 @@ func TestWaitAgentCascadeHint_OneShot(t *testing.T) {
 		t.Fatalf("first wait should carry the escalation hint: %s", res.Content)
 	}
 
-	// Re-polling a terminal run must NOT repeat the hint (one-shot budget).
 	res2, err := tool.Execute(context.Background(), input)
 	if err != nil || res2.IsError {
 		t.Fatalf("second Execute failed: err=%v result=%+v", err, res2)
@@ -101,7 +96,7 @@ func TestWaitAgentCascadeHint_OneShot(t *testing.T) {
 }
 
 func TestWaitAgent_NoHintWithoutTracker(t *testing.T) {
-	// Hints are opt-in wiring: a zero-value tool must behave exactly as before.
+
 	mgr := subagent.NewManager(config.SubAgentConfig{})
 	id := mgr.Spawn("cheap", "do work", "do work", nil, context.Background())
 	sa, _ := mgr.Get(id)
@@ -140,7 +135,6 @@ func TestListAgentsCascadeHint_OneShot(t *testing.T) {
 		t.Fatalf("list_agents should surface the escalation hint: %s", res.Content)
 	}
 
-	// Same tracker shared with wait_agent: the budget is already spent.
 	wa := WaitAgentTool{
 		Manager:      mgr,
 		ParentModel:  func() string { return "glm-5.3" },
@@ -157,8 +151,7 @@ func TestListAgentsCascadeHint_OneShot(t *testing.T) {
 }
 
 func TestUseNamedAgent_InvocationModelOverride(t *testing.T) {
-	// Template pins a stale/unknown model, but the invocation overrides it
-	// with a whitelisted one: invocation must take precedence (#cascade).
+
 	mgr, tool := newNamedAgentTestEnv(t, clonableFakeProvider{}, []string{"glm-5.3", "glm-5.2"})
 	if err := tool.Store.Save(subagent.NamedAgentTemplate{
 		Name:  "escalatable",
@@ -179,7 +172,6 @@ func TestUseNamedAgent_InvocationModelOverride(t *testing.T) {
 		t.Fatalf("expected 1 spawned agent, got %d", len(agents))
 	}
 
-	// Unknown invocation model is rejected by the same whitelist gate.
 	res2, err := tool.Execute(context.Background(), json.RawMessage(
 		`{"name":"escalatable","task":"do thing","model":"nonexistent-model"}`))
 	if err != nil {
@@ -191,8 +183,7 @@ func TestUseNamedAgent_InvocationModelOverride(t *testing.T) {
 }
 
 func TestUseNamedAgent_InvocationModelOverrideProviderCapability(t *testing.T) {
-	// An invocation-level override must not be silently ignored when the
-	// provider cannot clone itself with a model (#551-C semantics).
+
 	_, tool := newNamedAgentTestEnv(t, fakeNamedAgentProvider{}, []string{"glm-5.3"})
 	if err := tool.Store.Save(subagent.NamedAgentTemplate{Name: "plain"}); err != nil {
 		t.Fatalf("Save template: %v", err)

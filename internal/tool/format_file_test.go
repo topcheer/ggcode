@@ -17,13 +17,13 @@ func TestFormatGoBytes_NonGoFile(t *testing.T) {
 }
 
 func TestFormatGoBytes_GoFmt(t *testing.T) {
-	// Unformatted Go code.
+
 	data := []byte("package main\n\nfunc main( ){\nfmt.Println(\"hi\")\n}\n")
 	out, changed := formatGoBytes("main.go", data)
 	if !changed {
 		t.Fatalf("expected gofmt to change the content")
 	}
-	// Should be valid Go after formatting.
+
 	if !bytes.Contains(out, []byte("package main")) {
 		t.Fatalf("formatted output should still be valid Go")
 	}

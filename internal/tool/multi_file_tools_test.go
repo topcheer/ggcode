@@ -238,7 +238,6 @@ func TestMultiFileEdit_AutoMergesDuplicatePaths(t *testing.T) {
 	fp := filepath.Join(dir, "test.txt")
 	os.WriteFile(fp, []byte("line1 old\nline2 old\nline3 old\n"), 0644)
 
-	// Two files[] entries with the same path — edits should be auto-merged.
 	input, _ := json.Marshal(map[string]any{
 		"files": []map[string]any{
 			{
@@ -283,7 +282,6 @@ func TestMultiFileRead_DuplicatePathSkipped(t *testing.T) {
 	fp := filepath.Join(dir, "test.txt")
 	os.WriteFile(fp, []byte("hello world\n"), 0644)
 
-	// Two files[] entries with the same path — second should be silently skipped.
 	input, _ := json.Marshal(map[string]any{
 		"files": []map[string]any{
 			{"path": fp},
@@ -299,7 +297,7 @@ func TestMultiFileRead_DuplicatePathSkipped(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success with duplicate skipped, got error: %s", res.Content)
 	}
-	// Should contain content from the first read only.
+
 	if !strings.Contains(res.Content, "hello world") {
 		t.Errorf("expected file content in result, got: %s", res.Content)
 	}

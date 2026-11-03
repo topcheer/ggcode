@@ -10,29 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// maxAutopilotStrategistCalls is the per-Run budget for strategist LLM calls.
-// Set to 100 to support large-scale implementation tasks that span many hours
-// or days. Each strategist call consumes one LLM turn; the budget prevents
-// runaway loops while giving long-horizon goals (e.g. multi-day feature
-// implementation with hundreds of subtasks) enough room to complete.
 const maxAutopilotStrategistCalls = 100
 
-// strategistCompleteMarker is the exact sentinel the strategist must emit to
-// declare the goal achieved. It is deliberately an uncommon XML-like tag rather
-// than the bare phrase "GOAL_ACHIEVED" so that the strategist can freely discuss
-// the concept (e.g. "do NOT emit the GOAL_ACHIEVED tag yet, more work remains")
-// without accidentally triggering completion. Detection matches only this tag,
-// not the substring "GOAL_ACHIEVED" anywhere in the response.
 const strategistCompleteMarker = "<GOAL_ACHIEVED/>"
 
-// stripStrategistCompleteMarker removes the completion marker (case-
-// insensitive, possibly markdown-wrapped) from s and returns the trimmed
-// remainder with the ORIGINAL casing preserved. (#4015: indexing a
-// strings.ToUpper copy yields byte offsets of that copy, not of s - simple
-// case mappings that change byte length (probe-verified family: ɐ→Ɐ +1B,
-// ſ→S and ı→I −1B; Go applies no special casing, so ß/ﬁ do NOT drift)
-// shifted the slice cut and corrupted the displayed summary.
-// indexFoldASCII keeps offsets valid on s.)
 func stripStrategistCompleteMarker(s string) string {
 	if idx := indexFoldASCII(s, strategistCompleteMarker); idx >= 0 {
 		return strings.TrimSpace(s[idx+len(strategistCompleteMarker):])
@@ -40,29 +21,13 @@ func stripStrategistCompleteMarker(s string) string {
 	return s
 }
 
-// maxConsecutiveStrategistNoProgress is the maximum number of consecutive
-// strategist calls where the main agent made NO tool calls between them.
-// When the agent says "I'm done" but the strategist keeps saying "verify first"
-// and the agent still doesn't call tools, this creates a deadlock loop that
-// burns the entire 100-call budget. After this many consecutive no-progress
-// rounds, the autopilot force-terminates with the agent's last result.
 const maxConsecutiveStrategistNoProgress = 3
 
-// strategistResult is the output from the autopilot strategist LLM call.
 type strategistResult struct {
-	Guidance string // text to inject into the main agent as a user message
-	Complete bool   // true if the strategist believes the goal is achieved
+	Guidance string
+	Complete bool
 }
 
-// runAutopilotStrategist calls an independent LLM reasoning pass to decide
-// what the main agent should do next. It receives only the conversation
-// context (compaction summary + recent messages with all tool_use/tool_result
-// stripped, keeping only text). The result is injected as a user message to
-// drive the next turn.
-//
-// This replaces the old deterministic text-pattern-matching autopilot logic
-// (shouldAutopilotContinue, shouldAutopilotAskUser, looksLike*, etc.) with a
-// single LLM-based reasoning step that understands context holistically.
 func (a *Agent) runAutopilotStrategist(ctx context.Context, lastAssistantText string) (*strategistResult, error) {
 	goal := a.getAutopilotGoal()
 	contextStr := a.extractStrategistContext()
@@ -142,12 +107,7 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 	}
 
 	upper := strings.ToUpper(result.Guidance)
-	// Match the exact completion marker only. We deliberately do NOT use
-	// Contains("GOAL_ACHIEVED") because the strategist may legitimately write
-	// "do not emit GOAL_ACHIEVED yet, more work remains" while continuing — a
-	// substring match would falsely stop the agent. The marker is an uncommon
-	// XML-like tag (<GOAL_ACHIEVED/>) that the prompt tells the strategist to
-	// use ONLY to declare completion, and never to mention otherwise.
+
 	if strings.Contains(upper, strategistCompleteMarker) {
 		result.Complete = true
 	}
@@ -156,20 +116,9 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 	return result, nil
 }
 
-// extractStrategistContext builds a condensed view of the conversation for
-// the strategist. It finds the compaction summary (if any) and then includes
-// all subsequent messages, converting tool_use/tool_result blocks into short
-// summaries so the strategist can see what was done and what happened.
-//
-// Without tool results, the strategist cannot judge whether a goal is actually
-// achieved — it would only see the assistant's claims ("tests pass now") with
-// no evidence.
-//
-// If no compaction summary exists yet, it falls back to the last 20 messages.
 func (a *Agent) extractStrategistContext() string {
 	msgs := a.contextManager.Messages()
 
-	// Find the compaction summary boundary.
 	summaryIdx := -1
 	for i, msg := range msgs {
 		for _, block := range msg.Content {
@@ -186,7 +135,7 @@ func (a *Agent) extractStrategistContext() string {
 	var b strings.Builder
 
 	if summaryIdx >= 0 {
-		// Include the compaction summary itself.
+
 		for _, block := range msgs[summaryIdx].Content {
 			if block.Type == "text" {
 				b.WriteString("--- Earlier Conversation Summary ---\n")
@@ -197,7 +146,7 @@ func (a *Agent) extractStrategistContext() string {
 		}
 		msgs = msgs[summaryIdx+1:]
 	} else {
-		// No compaction yet — take last 20 messages.
+
 		start := len(msgs) - 20
 		if start < 0 {
 			start = 0
@@ -216,11 +165,11 @@ func (a *Agent) extractStrategistContext() string {
 					parts = append(parts, t)
 				}
 			case "tool_use":
-				// Summarize what tool was called with what key params.
+
 				summary := summarizeToolUse(block.ToolName, block.Input)
 				parts = append(parts, summary)
 			case "tool_result":
-				// Include a truncated view of the tool output.
+
 				summary := summarizeToolResult(block.ToolName, block.Output, block.IsError)
 				if summary != "" {
 					parts = append(parts, summary)
@@ -231,7 +180,6 @@ func (a *Agent) extractStrategistContext() string {
 			continue
 		}
 		text := strings.Join(parts, "\n")
-		// Truncate very long individual messages to keep the strategist input manageable.
 		const maxMsgLen = 3000
 		if len(text) > maxMsgLen {
 			runes := []rune(text)
@@ -255,14 +203,12 @@ func (a *Agent) extractStrategistContext() string {
 	return strings.TrimSpace(b.String())
 }
 
-// summarizeToolUse produces a one-line summary of a tool call for the
-// strategist context. It shows the tool name and key parameters.
 func summarizeToolUse(toolName string, input json.RawMessage) string {
 	var m map[string]any
 	if err := json.Unmarshal(input, &m); err != nil {
 		return fmt.Sprintf("[Tool Call: %s]", toolName)
 	}
-	// Extract the most relevant parameter (path, command, pattern, etc).
+
 	keys := []string{"path", "file_path", "command", "pattern", "url", "query", "name", "agent", "task"}
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
@@ -276,15 +222,6 @@ func summarizeToolUse(toolName string, input json.RawMessage) string {
 	return fmt.Sprintf("[Tool Call: %s]", toolName)
 }
 
-// summarizeToolResult produces a truncated summary of a tool result for the
-// strategist context. It includes enough of the output to evidence success or
-// failure without consuming excessive tokens.
-//
-// For command/shell tools, the result is split: first 300 chars (command echo,
-// initial output) + last 700 chars (test results, PASS/FAIL, error summary).
-// This is critical because build/test output puts the success/failure verdict
-// at the END — a head-only truncation would hide the exact evidence the
-// strategist's anti-premature-convergence gate needs.
 func summarizeToolResult(toolName, output string, isError bool) string {
 	if output == "" {
 		return ""
@@ -295,13 +232,6 @@ func summarizeToolResult(toolName, output string, isError bool) string {
 	}
 	runes := []rune(output)
 
-	// Command tools need head+tail to capture test verdicts at the end.
-	// #1440-B: read_command_output/wait_command are the DOCUMENTED
-	// collection channels for background commands (start_command's own
-	// description says so) and their snapshots put Recent output - the
-	// PASS/FAIL/make-error verdict lines - at the END; head-only 500
-	// truncation hid exactly the evidence the docblock says must not be
-	// hidden.
 	if toolName == "run_command" || toolName == "bash" || toolName == "start_command" || toolName == "powershell" || toolName == "read_command_output" || toolName == "wait_command" {
 		const headLen = 300
 		const tailLen = 700
@@ -313,8 +243,6 @@ func summarizeToolResult(toolName, output string, isError bool) string {
 		return fmt.Sprintf("[Tool Result %s: %s\n...[%d chars omitted]...\n%s]", tag, head, len(runes)-headLen-tailLen, tail)
 	}
 
-	// Other tools: head-only truncation at 500 chars (file content headers,
-	// search match previews, etc. — the relevant info is at the top).
 	const maxOut = 500
 	if len(runes) > maxOut {
 		return fmt.Sprintf("[Tool Result %s: %s...]", tag, string(runes[:maxOut]))

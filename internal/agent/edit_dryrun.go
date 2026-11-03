@@ -10,40 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Edit Dry-Run Pre-Validation - fatal error detection BEFORE the write happens.
-//
-// Research basis: Claude Code and Cursor both perform pre-write validation
-// that can block harmful edits before they touch disk. ggcode already has
-// extensive POST-write integrity checks (write_integrity.go, 30+ checks),
-// but these only fire AFTER the file has been modified. The agent then has
-// to spend another iteration to fix the problem - wasting API calls, time,
-// and triggering cascading recovery hooks.
-//
-// This module runs a FATAL-ONLY subset of the integrity checks on the
-// proposed content (before safeExecute) and returns a blocking error if a
-// guaranteed-failure condition is detected:
-//
-//   1. Go syntax errors - guaranteed `go build` failure
-//   2. Binary corruption (null bytes) - corrupted file
-//   3. Complete content loss - non-empty file becoming empty
-//   4. Merge conflict markers - guaranteed build failure
-//
-// Non-fatal checks (style, patterns, potential issues) are intentionally
-// excluded from the pre-write gate. These run post-write as warnings.
-// Only conditions that are GUARANTEED to cause a build/runtime failure
-// are blocked, minimizing false positives that could frustrate the agent.
-//
-// The gate is advisory: it returns an error result that stops the write,
-// but the agent can retry with corrected content. This is strictly better
-// than the current flow (write -> detect -> warn -> agent reads warning ->
-// re-reads file -> re-edits), saving 2-3 iterations per fatal edit.
-
-// dryRunValidate checks proposed file content for fatal errors before writing.
-// Returns a non-empty string if a fatal issue is detected (write should be blocked).
-// Returns empty string if the content passes fatal checks (write should proceed).
-// countConflictMarkers counts conflict-block lines (start/end markers;
-// separator counting only matters for the message, not the delta).
-// #1454-B delta semantics.
 func countConflictMarkers(content string) int {
 	n := 0
 	for _, marker := range []string{"<<<<<<<", ">>>>>>>"} {
@@ -55,7 +21,6 @@ func countConflictMarkers(content string) int {
 func dryRunValidate(filePath, oldContent, newContent string) string {
 	var fatalErrors []string
 
-	// 1. Go syntax errors - guaranteed build failure.
 	if filepath.Ext(filePath) == ".go" && strings.TrimSpace(newContent) != "" {
 		fset := token.NewFileSet()
 		_, parseErr := parser.ParseFile(fset, filePath, newContent, 0)
@@ -76,27 +41,18 @@ func dryRunValidate(filePath, oldContent, newContent string) string {
 		}
 	}
 
-	// 2. Binary corruption - null bytes in text content.
 	if strings.ContainsRune(newContent, 0) {
 		count := strings.Count(newContent, "\x00")
 		fatalErrors = append(fatalErrors,
 			fmt.Sprintf("Content contains %d null byte(s) (\\x00) - file would be corrupted.", count))
 	}
 
-	// 3. Complete content loss - non-empty file becoming empty/whitespace.
 	if strings.TrimSpace(oldContent) != "" && strings.TrimSpace(newContent) == "" {
 		fatalErrors = append(fatalErrors,
 			fmt.Sprintf("This edit would result in an EMPTY file (was %d bytes). "+
 				"The old_text match likely consumed the entire file content.", len(oldContent)))
 	}
 
-	// 4. Merge conflict markers - guaranteed build failure in most languages.
-	// #1454-B: DELTA semantics (same as the post-write advisory layer's
-	// deltaGateNew wrapper): counting the WHOLE file blocked the very
-	// operation that resolves conflicts - a file with pre-existing markers
-	// (git merge awaiting resolution) failed pre-write validation with
-	// 'remove ALL markers', which a single per-hunk edit_file cannot do.
-	// Only markers the edit ADDS are fatal.
 	oldMarkers := countConflictMarkers(oldContent)
 	newMarkers := countConflictMarkers(newContent)
 	if newMarkers > oldMarkers {
@@ -123,8 +79,6 @@ func dryRunValidate(filePath, oldContent, newContent string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// dryRunValidateBatch validates multiple proposed edits and returns a map
-// from file path to fatal error message. Files not in the map passed validation.
 func dryRunValidateBatch(plans []fileEditPlan) map[string]string {
 	blockers := make(map[string]string)
 	for _, p := range plans {
@@ -138,8 +92,6 @@ func dryRunValidateBatch(plans []fileEditPlan) map[string]string {
 	return blockers
 }
 
-// fileEditPlan is a lightweight alias for tool.PlannedFileEdit to avoid
-// importing the tool package in validation logic.
 type fileEditPlan struct {
 	Path       string
 	OldContent string

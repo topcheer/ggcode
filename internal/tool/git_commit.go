@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// GitCommit implements the git_commit tool.
 type GitCommit struct{ WorkingDir string }
 
 func (t GitCommit) Name() string { return "git_commit" }
@@ -60,12 +59,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "message is required"}, nil
 	}
 
-	// Message quality check: warn about vague commit messages that don't
-	// explain what changed or why. This is advisory (non-blocking) — the
-	// commit still proceeds, but the warning helps the agent self-correct.
 	msgWarning := checkCommitMessageQuality(args.Message)
 
-	// Append Co-Authored-By trailer unless opted out via GGCODE_NO_COAUTHOR
 	fullMessage := args.Message
 	if !coAuthorInjectionDisabled() {
 		fullMessage += "\n\n" + coAuthorTrailer
@@ -73,12 +68,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Branch safety: warn when committing to main/master/trunk to prevent
-	// accidental direct-to-trunk commits. We check the current branch name
-	// and append a warning to the commit result if it's a protected branch.
 	branchWarning := checkProtectedBranch(ctx, dir)
 
-	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Commit(ctx, dir, fullMessage)
 		if err != nil {
@@ -91,21 +82,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: trimmed}, nil
 	}
 
-	// Pre-commit build gate: run a fast project-wide build check to catch
-	// compile errors before they enter the commit history. Advisory (non-blocking).
 	buildWarning := precommitBuildCheck(ctx, dir)
 
-	// Pre-commit analysis: check changes for quality issues (debug statements,
-	// merge conflict markers, secrets, TODOs, debugger breakpoints) and evaluate
-	// commit scope (size, cohesion). Also suggest Conventional Commits format.
-	// All advisory (non-blocking).
-	//
-	// For regular commits, scan staged changes ("git diff --cached").
-	// For all:true commits (git commit -a), scan ALL tracked changes relative
-	// to HEAD ("git diff HEAD") — this is exactly the set that -a will commit.
-	// Previously, the all:true path skipped the scan entirely, which meant
-	// debug statements and secrets slipped through on the most common commit
-	// path.
 	var diffScanWarning, scopeWarning, convTip string
 	var diffOutput string
 	if args.All {
@@ -118,9 +96,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	stagingWarning := AnalyzeStagingQuality(diffOutput)
 	cohesion, size := AnalyzeCommitScope(diffOutput)
 	scopeWarning = combineScopeWarnings(cohesion, size)
-	// When scope analysis detects multi-concern changes, append a concrete
-	// partition plan so the agent knows exactly which files to group together
-	// in separate commits — rather than having to reason about it from scratch.
+
 	if scopeWarning != "" {
 		if partition := SuggestCommitPartition(diffOutput); len(partition) >= 2 {
 			scopeWarning += "\n\n" + FormatCommitPartition(partition)
@@ -128,10 +104,6 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	convTip = AnalyzeCommitMessage(args.Message)
 
-	// Message-diff consistency: cross-check the claims in the commit
-	// message (files, symbols, scope) against the actual staged diff so a
-	// description that drifted from the change is caught before it enters
-	// history. Advisory (non-blocking), same tier as the checks above.
 	consistencyWarning := AnalyzeMessageDiffConsistency(args.Message, diffOutput)
 
 	gitArgs := []string{"commit", "-m", fullMessage}
@@ -148,7 +120,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
-	// Append advisory warnings (build gate, branch, message quality, diff scan, scope, convention tip, consistency).
+
 	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip, consistencyWarning} {
 		if w != "" {
 			trimmed += "\n\n" + w
@@ -169,8 +141,6 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	return Result{Content: trimmed}, nil
 }
 
-// checkCommitMessageQuality returns a warning string if the commit message
-// is too short or matches common vague patterns. Non-blocking advisory.
 func checkCommitMessageQuality(msg string) string {
 	trimmed := strings.TrimSpace(msg)
 	if len(trimmed) < 10 {
@@ -195,20 +165,16 @@ func checkCommitMessageQuality(msg string) string {
 	return ""
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitCommit) Clone() Tool {
 	return &GitCommit{WorkingDir: t.WorkingDir}
 }
 
-// checkProtectedBranch returns a warning string if the current git branch
-// is a protected branch (main, master, trunk, develop). Returns empty string
-// if on a feature/working branch or not in a git repo.
 func checkProtectedBranch(ctx context.Context, dir string) string {
 	cmd := gitCommand(ctx, "symbolic-ref", "--short", "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "" // not in git repo or detached HEAD — don't block
+		return ""
 	}
 	branch := strings.TrimSpace(string(out))
 

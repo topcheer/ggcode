@@ -11,10 +11,6 @@ func TestCommandJobPollingNoDuplicateLines(t *testing.T) {
 	workDir := t.TempDir()
 	manager := NewCommandJobManager(workDir)
 
-	// Use "sleep 1 && echo hello" so the process stays alive long enough for
-	// at least one poll cycle to observe it running and capture the output.
-	// "echo hello && sleep 2" was flaky on CI because the output could be
-	// consumed and the process exit before the first poll.
 	snapshot, err := manager.Start(context.Background(), "sleep 1 && echo hello", false, 0)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -36,13 +32,11 @@ func TestCommandJobPollingNoDuplicateLines(t *testing.T) {
 		}
 		sinceLine = current.TotalLines
 		if !current.Running {
-			// Final drain: the process just exited but the last chunk of output
-			// may not have been captured yet. Poll once more with a generous
-			// timeout to ensure we get everything.
+
 			if len(allLines) == 0 {
 				final, err := manager.Wait(context.Background(), snapshot.ID, 500*time.Millisecond, 400, sinceLine)
 				if err != nil {
-					// Job is gone, that's fine — we already have what we need.
+
 					break
 				}
 				if len(final.Lines) > 0 {

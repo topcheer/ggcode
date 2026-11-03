@@ -1,38 +1,5 @@
 package agent
 
-// Resource Leak Detection in Go Code
-//
-// Problem: AI coding agents (and human developers) frequently produce Go code
-// that acquires resources -- file handles, HTTP response bodies, mutex locks,
-// network listeners -- without the corresponding defer cleanup call. This
-// causes file descriptor exhaustion, goroutine leaks, deadlocks, and memory
-// pressure that manifest as intermittent production failures.
-//
-// LLMs are especially prone to this because they focus on the happy-path logic
-// and frequently omit the defer statement that a careful human would add
-// immediately after the resource acquisition.
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external linters)
-//   - Cursor: no automatic detection (lint-on-save may catch via golangci-lint)
-//   - Cline/OpenHands: reactive only -- caught by tests or production incidents
-//   - Aider: no automatic detection
-//   - Windsurf: no automatic detection
-//   - GitHub Copilot: sometimes warns via lint integration
-//
-// None provide INLINE detection at write time. External tools (staticcheck,
-// errcheck, revive) can catch some of these, but require a separate lint cycle
-// and are not always installed. This check provides immediate, zero-dependency
-// feedback in <1ms per file using Go's standard library AST parser.
-//
-// Approach: AST-based analysis of Go functions. For each resource-acquiring
-// call pattern, verify that a corresponding cleanup call exists in the same
-// function body. Only unambiguous patterns are checked to minimize false
-// positives:
-//  1. os.Open / os.Create / os.OpenFile -> defer f.Close()
-//  2. http.Get / http.Post / http.Head -> defer resp.Body.Close()
-//  3. net.Listen -> defer l.Close()
-
 import (
 	"fmt"
 	"go/ast"
@@ -43,17 +10,14 @@ import (
 	"strings"
 )
 
-// resourceAcquisition defines a function call that creates a resource
-// requiring cleanup.
 type resourceAcquisition struct {
-	pkg           string   // package qualifier (e.g., "os", "net", "http")
-	funcs         []string // function names that acquire the resource
-	resourceHint  string   // description for the warning message
-	cleanupMethod string   // expected cleanup method name (e.g., "Close")
-	bodyField     bool     // if true, track .Body sub-field (http responses)
+	pkg           string
+	funcs         []string
+	resourceHint  string
+	cleanupMethod string
+	bodyField     bool
 }
 
-// resourceAcquisitions lists the resource-acquiring call patterns we check.
 var resourceAcquisitions = []resourceAcquisition{
 	{
 		pkg:           "os",
@@ -76,36 +40,24 @@ var resourceAcquisitions = []resourceAcquisition{
 	},
 }
 
-// resourceLeak represents a detected resource acquisition without cleanup.
 type resourceLeak struct {
 	varName      string
 	resourceHint string
 	pos          token.Pos
-	sig          string // normalized source text of the acquisition call (#1192)
+	sig          string
 }
 
-// resourceLeakDeltaIndex holds one consumable suppression token per leak
-// present in the old content (#1192, modeled on nilDerefDeltaIndex/#1186):
-// exact-key first, rename-tolerant suffix key as fallback, and each old token
-// suppresses at most one new instance so a set of same-shape tokens can never
-// absorb a genuinely new leak in a different function.
 type resourceLeakDeltaIndex struct {
 	tokens []oldResourceLeakToken
 }
 
-// oldResourceLeakToken is one consumable suppression token for a pre-existing
-// leak (#1192).
 type oldResourceLeakToken struct {
-	key       string // fnName|varName (exact)
-	suffixKey string // acquisitionCallSig|varName (fnName-independent)
-	oldFnName string // to verify the old name vanished on fallback match
+	key       string
+	suffixKey string
+	oldFnName string
 	used      bool
 }
 
-// matchOldResourceLeak consumes one unconsumed old token for the given new
-// leak: prefer the exact fnName|varName key; fall back to the rename-tolerant
-// suffix key only when the token's old function name no longer exists in the
-// new file (pure function rename, #1192). Returns false when no token remains.
 func (idx *resourceLeakDeltaIndex) matchOldResourceLeak(inst resourceLeak, fnName string, newFnNames map[string]bool) bool {
 	exact := fnName + "|" + inst.varName
 	for i := range idx.tokens {
@@ -121,9 +73,7 @@ func (idx *resourceLeakDeltaIndex) matchOldResourceLeak(inst resourceLeak, fnNam
 		if t.used || t.suffixKey != suffix {
 			continue
 		}
-		// Rename fallback (#1192): the old function name must have disappeared
-		// from the new file; if it still exists, this is a new same-shape
-		// instance elsewhere and must be reported.
+
 		if newFnNames[t.oldFnName] {
 			continue
 		}
@@ -133,9 +83,6 @@ func (idx *resourceLeakDeltaIndex) matchOldResourceLeak(inst resourceLeak, fnNam
 	return false
 }
 
-// collectOldResourceLeakIndex parses oldContent and returns one token per
-// leak present before the edit (#1192). Uses the same exemption rules
-// (cleanup + ownership transfer) as the new-content pass for consistency.
 func collectOldResourceLeakIndex(filePath, oldContent string) resourceLeakDeltaIndex {
 	idx := resourceLeakDeltaIndex{}
 	if strings.TrimSpace(oldContent) == "" {
@@ -177,17 +124,6 @@ func collectOldResourceLeakIndex(filePath, oldContent string) resourceLeakDeltaI
 	return idx
 }
 
-// checkResourceLeaks performs AST-based resource leak detection on Go source.
-// Returns warnings for resources acquired without corresponding cleanup calls.
-// Delta-aware: parses oldContent and suppresses pre-existing (unchanged)
-// acquisitions so unrelated edits do not re-warn and squeeze out the single
-// maxIntegrityWarnings slot (#221). Rename-tolerant since #1192: a pure
-// function rename no longer re-reports an existing leak.
-//
-// Parameters:
-//   - filePath: path of the written file (used for language detection)
-//   - oldContent: the file content before the write ("" for new files)
-//   - src: the file content after the write
 func checkResourceLeaks(filePath, oldContent, src string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -201,11 +137,8 @@ func checkResourceLeaks(filePath, oldContent, src string) []string {
 		return nil
 	}
 
-	// Delta: collect one consumable token per pre-existing leak (#221, #1192).
 	oldIdx := collectOldResourceLeakIndex(filePath, oldContent)
 
-	// Function names present in the new content: the rename fallback must
-	// only fire when the old function name has disappeared (#1192).
 	newFnNames := map[string]bool{}
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil {
@@ -226,9 +159,6 @@ func checkResourceLeaks(filePath, oldContent, src string) []string {
 	return warnings
 }
 
-// newResourceLeakWarnings flags resources acquired in fn that have no cleanup
-// call, no ownership transfer (#1191), and no matching pre-existing token in
-// the delta index (#1192).
 func newResourceLeakWarnings(fn *ast.FuncDecl, fset *token.FileSet, oldIdx *resourceLeakDeltaIndex, newFnNames map[string]bool) []string {
 	acquired := findResourceAcquisitions(fn)
 	if len(acquired) == 0 {
@@ -246,13 +176,12 @@ func newResourceLeakWarnings(fn *ast.FuncDecl, fset *token.FileSet, oldIdx *reso
 		if _, cleaned := cleanedVars[acq.varName]; cleaned {
 			continue
 		}
-		// #1191: acquire-and-return / ownership-transfer idiom -- the
-		// caller (or callee) owns the resource and closes it.
+
 		if ownershipTransferred(fn, acq.varName) {
 			continue
 		}
 		if oldIdx.matchOldResourceLeak(acq, fnName, newFnNames) {
-			continue // pre-existing leak (possibly renamed), already warned
+			continue
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Possible resource leak: %s acquired (variable %s at %s) but no defer .Close() "+
@@ -265,8 +194,6 @@ func newResourceLeakWarnings(fn *ast.FuncDecl, fset *token.FileSet, oldIdx *reso
 	return warnings
 }
 
-// findResourceAcquisitions walks a function body and finds resource-acquiring
-// calls, returning the variable names they are assigned to.
 func findResourceAcquisitions(fn *ast.FuncDecl) []resourceLeak {
 	var leaks []resourceLeak
 
@@ -309,9 +236,6 @@ func findResourceAcquisitions(fn *ast.FuncDecl) []resourceLeak {
 	return leaks
 }
 
-// nodeSignature renders an AST node back to normalized source text; identical
-// acquisition calls produce identical signatures regardless of surrounding
-// formatting or enclosing function name (#1192 rename-tolerant delta key).
 func nodeSignature(n ast.Node) string {
 	var b strings.Builder
 	if err := printer.Fprint(&b, token.NewFileSet(), n); err != nil {
@@ -320,11 +244,6 @@ func nodeSignature(n ast.Node) string {
 	return b.String()
 }
 
-// ownershipTransferred reports whether the resource variable escapes the
-// function (#1191): it appears in any return statement expression, or is
-// passed as an argument to another function call (acquire-and-return /
-// acquire-and-hand-off idiom). In both cases the caller or callee owns the
-// resource and is responsible for closing it.
 func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 	base := varName
 	if i := strings.Index(base, "."); i >= 0 {
@@ -344,10 +263,7 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 				}
 			}
 		case *ast.CallExpr:
-			// #1884 case B: io.Copy/ReadAll/decoder constructors only CONSUME
-			// a closer-handle field (resp.Body) - they read it and never own
-			// or close it. Treating that as a handoff silently passed real
-			// leaks on connections that are never reused.
+
 			consumer := isKnownBodyConsumer(node)
 			for _, arg := range node.Args {
 				if !exprIsResourceHandoff(arg, base) {
@@ -361,12 +277,7 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 			}
 		case *ast.AssignStmt:
 			for _, lhs := range node.Lhs {
-				// An assignment transfers ownership when the LHS is a
-				// container someone else owns and the RHS is the resource
-				// itself. #1488: `srv.l = l` (another struct's field).
-				// #1884 case A: `m["k"] = l` / `arr[i] = l` (a container
-				// cell). Self-writes (`l.x = ...`, `l[k] = ...`) and plain
-				// rebinds (`x = l`) are not transfers.
+
 				owner := false
 				switch v := lhs.(type) {
 				case *ast.SelectorExpr:
@@ -391,7 +302,7 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 				}
 			}
 		case *ast.SendStmt:
-			// #1488: `ch <- l` - the receiver owns the resource now.
+
 			if exprIsResourceHandoff(node.Value, base) {
 				transferred = true
 				return false
@@ -402,12 +313,6 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 	return transferred
 }
 
-// exprIsResourceHandoff reports whether e HANDS OFF the resource itself:
-// `l`, `&l`, or a direct field of it (`l.Body` - a transferable handle),
-// NOT an expression that merely READS from it (#1680 case 1:
-// `s.lastStatus = resp.StatusCode` contains resp, but a scalar read is
-// not ownership - the contains-check silenced real leaks. #1488
-// widened that flaw to assignments and sends).
 func exprIsResourceHandoff(e ast.Expr, name string) bool {
 	for {
 		if u, ok := e.(*ast.UnaryExpr); ok && (u.Op == token.AND || u.Op == token.MUL) {
@@ -421,9 +326,7 @@ func exprIsResourceHandoff(e ast.Expr, name string) bool {
 	}
 	if sel, ok := e.(*ast.SelectorExpr); ok {
 		if id, ok := sel.X.(*ast.Ident); ok && id.Name == name {
-			// Only closer-handle fields transfer (resp.Body); reading a
-			// scalar field (resp.StatusCode) is NOT ownership even though
-			// both are `base.Field` shapes (#1680 case 1).
+
 			switch sel.Sel.Name {
 			case "Body", "File", "Conn", "Handle":
 				return true
@@ -431,10 +334,7 @@ func exprIsResourceHandoff(e ast.Expr, name string) bool {
 			return false
 		}
 	}
-	// Wrapped return/handoff: `return &reader{f: f}` embeds the resource
-	// itself into the returned struct (#1191 wrapped-return transfer).
-	// Only DIRECT element handoffs recurse - `status{c: resp.StatusCode}`
-	// is a scalar read, not a transfer (#1680 case 1 keeps that excluded).
+
 	if lit, ok := e.(*ast.CompositeLit); ok {
 		for _, elt := range lit.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
@@ -448,9 +348,6 @@ func exprIsResourceHandoff(e ast.Expr, name string) bool {
 	return false
 }
 
-// isCloserFieldRef reports whether e is `name.Field` (after unary unwrap)
-// where Field is one of the closer-handle whitelist names - the shape the
-// #1884 case B consumer carve-out applies to.
 func isCloserFieldRef(e ast.Expr, name string) bool {
 	for {
 		if u, ok := e.(*ast.UnaryExpr); ok && (u.Op == token.AND || u.Op == token.MUL) {
@@ -474,21 +371,18 @@ func isCloserFieldRef(e ast.Expr, name string) bool {
 	return false
 }
 
-// bodyConsumerFuncs lists functions that merely CONSUME a reader/closer
-// field without ever owning or closing it (#1884 case B). Passing
-// resp.Body to any of these is not an ownership transfer.
 var bodyConsumerFuncs = map[string]bool{
-	"Copy":        true, // io.Copy
-	"CopyBuffer":  true, // io.CopyBuffer
-	"CopyN":       true, // io.CopyN
-	"ReadAll":     true, // io.ReadAll
-	"ReadFull":    true, // io.ReadFull
-	"ReadAtLeast": true, // io.ReadAtLeast
-	"NewDecoder":  true, // json/xml/etc.NewDecoder - wraps, never closes
-	"NewReader":   true, // bufio.NewReader - wraps, never closes
-	"NewScanner":  true, // bufio.NewScanner - wraps, never closes
-	"TeeReader":   true, // io.TeeReader
-	"MultiReader": true, // io.MultiReader
+	"Copy":        true,
+	"CopyBuffer":  true,
+	"CopyN":       true,
+	"ReadAll":     true,
+	"ReadFull":    true,
+	"ReadAtLeast": true,
+	"NewDecoder":  true,
+	"NewReader":   true,
+	"NewScanner":  true,
+	"TeeReader":   true,
+	"MultiReader": true,
 }
 
 func isKnownBodyConsumer(call *ast.CallExpr) bool {
@@ -501,8 +395,6 @@ func isKnownBodyConsumer(call *ast.CallExpr) bool {
 	return false
 }
 
-// matchResourceCall checks if a call expression matches a known resource
-// acquisition pattern (e.g., os.Open, http.Get).
 func matchResourceCall(call *ast.CallExpr) *resourceAcquisition {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -528,8 +420,6 @@ func matchResourceCall(call *ast.CallExpr) *resourceAcquisition {
 	return nil
 }
 
-// extractVarName gets the variable name from an assignment LHS expression.
-// For bodyField=true (http.Get), it extracts the receiver.Body accessor.
 func extractVarName(expr ast.Expr, bodyField bool) string {
 	ident, ok := expr.(*ast.Ident)
 	if !ok {
@@ -541,8 +431,6 @@ func extractVarName(expr ast.Expr, bodyField bool) string {
 	return ident.Name
 }
 
-// findCleanupCalls walks a function body and returns a set of variable names
-// that have a Close (or similar cleanup) method called on them.
 func findCleanupCalls(fn *ast.FuncDecl) map[string]bool {
 	cleaned := make(map[string]bool)
 
@@ -565,8 +453,6 @@ func findCleanupCalls(fn *ast.FuncDecl) map[string]bool {
 			return true
 		}
 
-		// Only count calls to cleanup-like methods (Close, CloseAll, etc.)
-		// This avoids treating f.Read() as a cleanup for f.
 		if !isCleanupMethod(sel.Sel.Name) {
 			return true
 		}
@@ -591,7 +477,6 @@ func findCleanupCalls(fn *ast.FuncDecl) map[string]bool {
 	return cleaned
 }
 
-// cleanupMethods lists method names that constitute resource cleanup.
 var cleanupMethods = map[string]bool{
 	"Close":    true,
 	"CloseAll": true,
@@ -604,7 +489,6 @@ var cleanupMethods = map[string]bool{
 	"RUnlock":  true,
 }
 
-// isCleanupMethod returns true if the method name is a known cleanup method.
 func isCleanupMethod(name string) bool {
 	return cleanupMethods[name]
 }

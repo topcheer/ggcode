@@ -1,15 +1,5 @@
 package tool
 
-// #4545 companion tests for the code_index_manager triple review:
-//   B) Stop must not steal the flock from an in-flight builder.
-//   C) rebuildDirty's replace path must respect the term budget on the
-//      distinct-term delta, and the budget unit must be len(tf) corpus-wide
-//      (doBuild always counted distinct terms).
-//   D) a first-build timeout must publish the completed subset - the old
-//      early return left started=true/ready=false with nothing persisted,
-//      a lifetime dead index (MarkDirty swallowed by rebuildDirty's !ready
-//      gate, periodicCheck bailed on index==nil).
-
 import (
 	"context"
 	"os"
@@ -19,15 +9,11 @@ import (
 	"time"
 )
 
-// B: Stop while a builder holds the lock - the lock must survive Stop and
-// remain releasable by the builder's own unlock.
 func TestIssue4545_StopDoesNotStealBuildersLock(t *testing.T) {
 	dir := t.TempDir()
 	m := NewCodeIndexManager(dir)
 	defer m.Stop()
 
-	// Simulate an in-flight builder (initial build / lazyLoad / rebuildDirty
-	// all hold the flock only transiently and release via defer unlock).
 	if !m.tryLock() {
 		t.Fatal("tryLock failed on a fresh lock file")
 	}
@@ -40,7 +26,6 @@ func TestIssue4545_StopDoesNotStealBuildersLock(t *testing.T) {
 		t.Fatal("#4545: Stop stole the in-flight builder's flock (fd closed early; the builder's own unlock became a nil no-op and cross-process mutual exclusion broke)")
 	}
 
-	// The builder's own release still works after Stop.
 	m.unlock()
 	m.mu.RLock()
 	gone := m.lockFile == nil
@@ -50,8 +35,6 @@ func TestIssue4545_StopDoesNotStealBuildersLock(t *testing.T) {
 	}
 }
 
-// C: the replace path enforces the term budget on the distinct-term delta -
-// repeatedly editing an already-indexed file must not be a #4428 side door.
 func TestIssue4545_ReplaceRespectsTermBudget(t *testing.T) {
 	dir := t.TempDir()
 	writeVars := func(n int) {
@@ -67,7 +50,7 @@ func TestIssue4545_ReplaceRespectsTermBudget(t *testing.T) {
 
 	writeVars(40)
 	m := NewCodeIndexManager(dir)
-	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "-1") // unlimited baseline build
+	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "-1")
 	defer m.Stop()
 	m.doBuild(context.Background())
 
@@ -78,9 +61,6 @@ func TestIssue4545_ReplaceRespectsTermBudget(t *testing.T) {
 		t.Fatal("baseline index empty")
 	}
 
-	// Phase 1: growth within budget -> replace applies (exactly +3 distinct
-	// terms over the 40-var baseline; the tokenizer's fixed keyword overhead
-	// is part of measured base, so the delta is exact).
 	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", itoa(base+10))
 	writeVars(43)
 	m.MarkDirty([]string{"big.go"})
@@ -92,8 +72,6 @@ func TestIssue4545_ReplaceRespectsTermBudget(t *testing.T) {
 		t.Fatalf("within-budget replace must apply: tf=%d want %d", got, base+3)
 	}
 
-	// Phase 2: growth far beyond budget -> replace skipped, old doc kept
-	// (47 new distinct terms vs a headroom of 7).
 	writeVars(90)
 	m.MarkDirty([]string{"big.go"})
 	m.rebuildDirty("test")
@@ -105,13 +83,9 @@ func TestIssue4545_ReplaceRespectsTermBudget(t *testing.T) {
 	}
 }
 
-// D: a first-build timeout publishes the indexed subset instead of leaving a
-// lifetime-dead index for this process.
 func TestIssue4545_TimeoutPublishesIndexedSubset(t *testing.T) {
 	dir := t.TempDir()
-	// ~600k distinct terms across 100 files (~12MB): far beyond what a 50ms
-	// deadline can index, so the timeout is guaranteed to fire mid-loop with
-	// a substantial subset already accumulated.
+
 	for i := 0; i < 100; i++ {
 		var b strings.Builder
 		b.WriteString("package p\n")
@@ -123,7 +97,7 @@ func TestIssue4545_TimeoutPublishesIndexedSubset(t *testing.T) {
 		}
 	}
 	m := NewCodeIndexManager(dir)
-	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "-1") // isolate the timeout path from budget truncation
+	t.Setenv("GGCODE_CODE_INDEX_MAX_TERMS", "-1")
 	defer m.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

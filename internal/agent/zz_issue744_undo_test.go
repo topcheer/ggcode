@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Regression guard for #744 defect 1: undo_edit with action=list is a pure
-// read (checkpoint listing) and must never fire an annihilation warning,
-// even when edits precede it in the window.
 func TestActionAnnihilate_UndoEditListIsPureRead(t *testing.T) {
 	s := newActionAnnihilateState()
 	editArgs := rawJSON(t, map[string]interface{}{"file_path": "/tmp/x.go"})
@@ -25,9 +22,6 @@ func TestActionAnnihilate_UndoEditListIsPureRead(t *testing.T) {
 	}
 }
 
-// Regression guard for #744 defect 2: when mixed edit tools precede an
-// undo, the warning must cite the most recent prior edit (write_file), not
-// whichever pair is declared first in annihilationPairs (edit_file).
 func TestActionAnnihilate_UndoAttributionMostRecentPrior(t *testing.T) {
 	s := newActionAnnihilateState()
 	editA := rawJSON(t, map[string]interface{}{"file_path": "/tmp/a.go"})
@@ -55,8 +49,6 @@ func TestActionAnnihilate_UndoAttributionMostRecentPrior(t *testing.T) {
 	}
 }
 
-// undo_edit with missing/unparsable args must stay conservative and be
-// treated as a state-changing undo (existing detection behavior preserved).
 func TestActionAnnihilate_UndoEditMalformedArgsStillWarns(t *testing.T) {
 	s := newActionAnnihilateState()
 	editArgs := rawJSON(t, map[string]interface{}{"file_path": "/tmp/x.go"})

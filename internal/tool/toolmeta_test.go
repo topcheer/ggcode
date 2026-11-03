@@ -4,7 +4,6 @@ import (
 	"testing"
 )
 
-// TestToolMeta verifies that tools implementing MetaProvider return valid metadata.
 func TestToolMeta(t *testing.T) {
 	r := registerTestTools(t)
 
@@ -37,10 +36,9 @@ func TestToolMeta(t *testing.T) {
 	}
 }
 
-// TestToolMeta_NotProvided verifies that tools without MetaProvider return false.
 func TestToolMeta_NotProvided(t *testing.T) {
 	r := registerTestTools(t)
-	// read_file is a local tool that shouldn't provide metadata
+
 	meta, ok := r.GetMeta("read_file")
 	if ok {
 		t.Errorf("read_file should not provide metadata, got %+v", meta)

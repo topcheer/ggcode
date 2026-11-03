@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// #4635: BindSession and ResetStreamState reset the same stream state
-// (currentMsgID / finalized / needsFinalize) that pushTextEvent and the
-// rollover path mutate under pushMu - the #4564 contract requires the
-// reset to serialize on pushMu too, with pushMu OUTSIDE mu to match
-// pushTextEvent's lock order.
 func TestIssue4635_StreamResetsHoldPushMu(t *testing.T) {
 	data, err := os.ReadFile("tunnel_host.go")
 	if err != nil {
@@ -25,7 +20,7 @@ func TestIssue4635_StreamResetsHoldPushMu(t *testing.T) {
 		if i < 0 {
 			t.Fatalf("%s not found", fn)
 		}
-		// Function head up to the currentMsgID reset.
+
 		j := strings.Index(text[i:], `h.currentMsgID = ""`)
 		if j < 0 {
 			t.Fatalf("stream reset not found in %s", fn)

@@ -75,7 +75,7 @@ func bar() error {
 }
 
 func TestCheckEmptyErrorBody_DeltaAware(t *testing.T) {
-	// Old content already has one empty error body.
+
 	old := `package main
 
 func bar() error {
@@ -85,7 +85,7 @@ func bar() error {
 	return nil
 }
 `
-	// New content adds a second one (but keeps the first).
+
 	new := `package main
 
 func bar() error {
@@ -118,7 +118,7 @@ func bar() error {
 	return nil
 }
 `
-	// Same content, no new empty bodies.
+
 	warnings := checkEmptyErrorBody("test.go", old, old)
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings for unchanged content, got %v", warnings)
@@ -126,7 +126,7 @@ func bar() error {
 }
 
 func TestCheckEmptyErrorBody_NilCheckVar(t *testing.T) {
-	// Tests err variable suffix detection.
+
 	old := ""
 	new := `package main
 
@@ -144,8 +144,7 @@ func bar() error {
 }
 
 func TestCheckEmptyErrorBody_EqNilCheck(t *testing.T) {
-	// `if err == nil {}` with empty body is NOT error swallowing —
-	// it's a valid happy-path no-op. Should NOT be flagged.
+
 	old := ""
 	new := `package main
 
@@ -162,7 +161,7 @@ func bar() {
 }
 
 func TestCheckEmptyErrorBody_NotAnErrorCheck(t *testing.T) {
-	// `if x != nil {}` where x is not an error-named variable should not trigger.
+
 	old := ""
 	new := `package main
 
@@ -193,7 +192,7 @@ func TestCheckEmptyErrorBody_InvalidGoSyntax(t *testing.T) {
 }
 
 func TestCheckEmptyErrorBody_MaxWarnings(t *testing.T) {
-	// Add 5 new empty error bodies; should cap at 3.
+
 	old := ""
 	new := `package main
 
@@ -251,7 +250,7 @@ func TestIsErrorNilCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues := findEmptyErrorBodies(tt.src)
-			// We just want to verify isErrorNilCheck works in context.
+
 			if tt.want && len(issues) == 0 {
 				t.Errorf("expected detection but got none")
 			}
@@ -262,11 +261,6 @@ func TestIsErrorNilCheck(t *testing.T) {
 	}
 }
 
-// TestFindEmptyErrorBodiesCommentSuppressionExempt pins #1455-B: the
-// guidance text says 'or explicitly suppress with a comment explaining
-// why' - a comment-only if-body must be exempt, not reported (comments
-// never appear as statements in BlockStmt.List, so the old check flagged
-// the very form it recommended).
 func TestFindEmptyErrorBodiesCommentSuppressionExempt(t *testing.T) {
 	src := `package p
 
@@ -283,7 +277,7 @@ func f() error {
 	if got := findEmptyErrorBodies(src); len(got) != 0 {
 		t.Fatalf("documented suppression still reported: %+v", got)
 	}
-	// Undocumented empty body still reported.
+
 	bare := `package p
 
 import "os"

@@ -32,34 +32,27 @@ func TestEstimateTokens(t *testing.T) {
 func TestTokenWasteBudgetState_RecordAndRatio(t *testing.T) {
 	s := newTokenWasteBudgetState()
 
-	// Record productive result (large, non-error).
 	s.recordToolResult("read_file", strings.Repeat("x", 4000), false, false, nil)
 	if s.wasteTokens != 0 {
 		t.Errorf("expected 0 waste tokens, got %d", s.wasteTokens)
 	}
 
-	// Record error result (waste).
 	s.recordToolResult("edit_file", "error: file not found", true, false, nil)
 	if s.wasteTokens == 0 {
 		t.Error("expected waste tokens > 0 after error")
 	}
 
-	// Record empty result (waste). NOTE (#419): "no matches" is now a
-	// high-value NEGATIVE result and is exempt — use a short whitespace-only
-	// result (a truly empty string estimates to 0 tokens and can't register).
 	s.recordToolResult("grep", "  \n  ", false, false, nil)
 	if s.catTotals[wasteEmpty] == 0 {
 		t.Error("expected wasteEmpty category to have tokens")
 	}
 
-	// #419: structured negative results must NOT count as wasteEmpty.
 	before := s.catTotals[wasteEmpty]
 	s.recordToolResult("grep", "no matches found for FooBar", false, false, nil)
 	if s.catTotals[wasteEmpty] != before {
 		t.Error("negative-result search must be exempt from wasteEmpty")
 	}
 
-	// Record redundant result (waste).
 	s.recordToolResult("read_file", strings.Repeat("y", 2000), false, true, nil)
 	if s.catTotals[wasteRedundant] == 0 {
 		t.Error("expected wasteRedundant category to have tokens")
@@ -76,13 +69,11 @@ func TestTokenWasteBudgetState_RecordAndRatio(t *testing.T) {
 func TestTokenWasteBudgetState_ExpiredMarking(t *testing.T) {
 	s := newTokenWasteBudgetState()
 
-	// Record a read of a file.
 	s.recordToolResult("read_file", strings.Repeat("code", 500), false, false, []string{"/path/file.go"})
 	if s.wasteTokens != 0 {
 		t.Errorf("expected 0 waste before edit, got %d", s.wasteTokens)
 	}
 
-	// Mark the file as edited - should expire the prior read.
 	s.markFileEdited("/path/file.go")
 	if s.wasteTokens == 0 {
 		t.Error("expected waste tokens > 0 after expiration")
@@ -91,7 +82,6 @@ func TestTokenWasteBudgetState_ExpiredMarking(t *testing.T) {
 		t.Error("expected wasteExpired category to have tokens")
 	}
 
-	// Double-edit should not double-count (already expired).
 	before := s.wasteTokens
 	s.markFileEdited("/path/file.go")
 	if s.wasteTokens != before {
@@ -118,12 +108,10 @@ func TestTokenWasteBudgetState_Reset(t *testing.T) {
 func TestMaybeWarnTokenWaste_BelowThreshold(t *testing.T) {
 	a := &Agent{tokenWasteBudget: newTokenWasteBudgetState()}
 
-	// Record only productive results.
 	for i := 0; i < 6; i++ {
 		a.tokenWasteBudget.recordToolResult("read_file", strings.Repeat("x", 2000), false, false, nil)
 	}
 
-	// Waste ratio is 0% - should not warn.
 	if hint := a.maybeWarnTokenWaste(); hint != "" {
 		t.Errorf("expected no warning at 0%% waste, got: %s", hint)
 	}
@@ -132,8 +120,6 @@ func TestMaybeWarnTokenWaste_BelowThreshold(t *testing.T) {
 func TestMaybeWarnTokenWaste_AboveThreshold(t *testing.T) {
 	a := &Agent{tokenWasteBudget: newTokenWasteBudgetState()}
 
-	// Record enough waste to exceed both thresholds.
-	// 6 large errors (waste) + 1 small productive result.
 	for i := 0; i < 6; i++ {
 		a.tokenWasteBudget.recordToolResult("edit_file", strings.Repeat("error ", 1000), true, false, nil)
 	}
@@ -151,7 +137,6 @@ func TestMaybeWarnTokenWaste_AboveThreshold(t *testing.T) {
 func TestMaybeWarnTokenWaste_InsufficientData(t *testing.T) {
 	a := &Agent{tokenWasteBudget: newTokenWasteBudgetState()}
 
-	// Only 2 results, below wasteMinToolResults.
 	a.tokenWasteBudget.recordToolResult("edit_file", "error", true, false, nil)
 	a.tokenWasteBudget.recordToolResult("edit_file", "error2", true, false, nil)
 

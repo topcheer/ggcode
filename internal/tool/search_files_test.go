@@ -52,7 +52,7 @@ func TestSearchFilesNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if containsStr(result.Content, "0 matches") || containsStr(result.Content, "No matches") {
-		return // ok
+		return
 	}
 	t.Logf("result: %s", result.Content)
 }
@@ -111,7 +111,7 @@ func TestSearchFilesEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should not panic
+
 	t.Logf("result: %s", result.Content)
 }
 
@@ -129,7 +129,7 @@ func TestSearchFilesSandboxCheck(t *testing.T) {
 
 func TestSearchFilesMaxResults(t *testing.T) {
 	dir := t.TempDir()
-	// Create files with matches
+
 	for i := 0; i < 10; i++ {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.txt", i)), []byte("matchline\n"), 0o644)
 	}
@@ -144,16 +144,10 @@ func TestSearchFilesMaxResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should return limited results
+
 	t.Logf("result: %s", result.Content)
 }
 
-// TestSearchFilesIncludePatternDeepPath1702: the git fast path treats
-// include_pattern as a pathspec (src/*.go matches src/deep/f.go); the
-// fallback used basename-only matching, so the SAME argument silently
-// returned zero results when git was unavailable. The fallback now
-// accepts the repo-relative path too. Run in a directory that is NOT a
-// git repo to force the fallback path.
 func TestSearchFilesIncludePatternDeepPath1702(t *testing.T) {
 	dir := t.TempDir()
 	deep := filepath.Join(dir, "src", "nested")
@@ -163,7 +157,7 @@ func TestSearchFilesIncludePatternDeepPath1702(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deep, "f.go"), []byte("needleXYZ\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Sanity: t.TempDir is outside any git repo work tree.
+
 	s := SearchFiles{}
 	input, _ := json.Marshal(map[string]interface{}{"pattern": "needleXYZ", "directory": dir, "include_pattern": "src/*.go", "max_results": 10})
 	r, err := s.Execute(context.Background(), input)

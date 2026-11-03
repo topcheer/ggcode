@@ -10,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/codehealth"
 )
 
-// CodeHealthTool implements the code_health tool that analyzes Go source
-// code for cyclomatic complexity, function length, nesting depth, and other
-// quality metrics to identify technical debt hotspots.
 type CodeHealthTool struct{ WorkingDir string }
 
 func (t CodeHealthTool) Name() string { return "code_health" }
@@ -86,8 +83,7 @@ func (t CodeHealthTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if args.MaxFiles > 0 {
 		opts.MaxFiles = args.MaxFiles
 	} else {
-		// #810: schema documents '0 = no limit' but MaxFiles only honors >0,
-		// silently scanning 500. Honor the documented 0 = unlimited.
+
 		opts.MaxFiles = 1_000_000
 	}
 
@@ -96,13 +92,11 @@ func (t CodeHealthTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("code health analysis failed: %v", err)}, nil
 	}
 
-	// Format the report for the LLM
 	content := formatReport(report, absDir)
 
 	return Result{Content: content}, nil
 }
 
-// formatReport renders the analysis as a human/LLM-readable text report.
 func formatReport(r *codehealth.Report, basePath string) string {
 	var b strings.Builder
 
@@ -115,7 +109,6 @@ func formatReport(r *codehealth.Report, basePath string) string {
 		return b.String()
 	}
 
-	// Severity summary
 	var critical, high, medium int
 	for _, f := range r.TopFunctions {
 		switch f.Severity {
@@ -143,7 +136,6 @@ func formatReport(r *codehealth.Report, basePath string) string {
 		b.WriteString("\n\n")
 	}
 
-	// Top functions table
 	b.WriteString("### Top Complex Functions (Refactoring Targets)\n\n")
 	b.WriteString("| Severity | Complexity | Function | File:Line | Length | Nesting | Params |\n")
 	b.WriteString("|----------|------------|----------|-----------|--------|---------|--------|\n")
@@ -156,7 +148,6 @@ func formatReport(r *codehealth.Report, basePath string) string {
 			f.Severity, f.Complexity, f.Function, relFile, f.Line, f.Length, f.NestingDepth, f.Params))
 	}
 
-	// File summaries
 	if len(r.FileSummaries) > 0 {
 		b.WriteString("\n### Files by Max Complexity\n\n")
 		b.WriteString("| File | Functions | Max Complexity | Avg Complexity | Statements |\n")
@@ -171,7 +162,6 @@ func formatReport(r *codehealth.Report, basePath string) string {
 		}
 	}
 
-	// Refactoring guidance
 	if r.HealthScore < 70 {
 		b.WriteString("\n> **Recommendation:** Multiple high-complexity functions detected. ")
 		b.WriteString("Consider refactoring functions with complexity > 20 by extracting helper functions, ")
@@ -181,7 +171,6 @@ func formatReport(r *codehealth.Report, basePath string) string {
 	return b.String()
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t CodeHealthTool) Clone() Tool {
 	return &CodeHealthTool{WorkingDir: t.WorkingDir}
 }

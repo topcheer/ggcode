@@ -1,45 +1,5 @@
 package agent
 
-// Self-Modification Safety Detector
-//
-// Research basis:
-//   - "Agentic AI Security: Threats, Defenses, Evaluation, and Open Challenges"
-//     (arXiv:2510.23883, IEEE Access 2026): identifies self-modification of
-//     agent configuration, security parameters, and memory as a critical
-//     threat vector. Self-evolving agents that modify their own guardrails
-//     create "emergent risks" that bypass traditional security boundaries.
-//   - "Your Agent May Misevolve: Emergent Risks in Self-evolving LLM Agents"
-//     (ICLR 2026, arXiv:2510.23883): demonstrates that agents autonomously
-//     editing their own configuration files, memory stores, or permission
-//     rules is a leading cause of security degradation in production.
-//   - OWASP LLM Top 10 (2025): LLM08 "Excessive Agency" specifically calls
-//     out agents modifying their own constraints as a top vulnerability.
-//
-// Problem: AI coding agents with file editing capabilities can modify their
-// own infrastructure files -- configuration, memory, system prompts, permission
-// rules, hooks, MCP server configs. An agent that edits:
-//   - ggcode.yaml / config files (changes its own permissions)
-//   - .ggcode/memory/ files (injects persistent behavior changes)
-//   - system prompt files (weakens its own guardrails)
-//   - permission/allowlist files (grants itself new powers)
-//   - hooks/lifecycle scripts (bypasses safety checkpoints)
-//   ...is performing a self-modification that may be benign (legitimate config
-// update requested by user) or dangerous (security weakening, guardrail
-// removal). No detector currently warns about these operations.
-//
-// Approach: When a write tool targets a self-referential file path (config,
-// memory, hooks, permissions), inject an advisory warning. Non-blocking,
-// zero LLM cost. The agent is reminded that modifying its own infrastructure
-// has security implications and should only be done when explicitly requested.
-//
-// Interaction with existing systems:
-//   - prompt_injection_guard.go: detects adversarial content IN tool results.
-//     We detect risky tool actions TARGETED AT self-infrastructure.
-//   - file_integrity (write_integrity.go): protects file integrity post-write.
-//     We detect the agent editing its own infrastructure files.
-//   - critical_file_warning: warns about editing critical project files.
-//     We focus specifically on agent-self-referential files.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -49,33 +9,22 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// selfModState tracks self-modification warnings across a run.
 type selfModState struct {
 	mu sync.Mutex
 
-	// warningCount caps warnings per run to avoid flooding.
 	warningCount int
 
-	// warnedPaths tracks paths already warned about (dedup).
 	warnedPaths map[string]bool
 
-	// root is the agent working directory (workspace root), used to
-	// normalize absolute paths before matching (#2954). Empty means unknown
-	// (unit tests) - paths are then matched as given.
 	root string
 }
 
 const (
-	// selfModMaxWarnings caps how many warnings per run.
 	selfModMaxWarnings = 3
 
-	// selfModMaxPathDisplay truncates paths in warning messages.
 	selfModMaxPathDisplay = 80
 )
 
-// selfModPatterns defines patterns for self-referential file paths.
-// These are file/directory patterns that, when modified by the agent,
-// constitute self-modification of its own infrastructure.
 var selfModPatterns = []selfModTarget{
 	{
 		name:     "ggcode config",
@@ -85,16 +34,14 @@ var selfModPatterns = []selfModTarget{
 	},
 	{
 		name: "memory store",
-		// Anchored to agent-infrastructure roots only (fix #163: a bare
-		// "/memory/" collided with ordinary paths like internal/memory/cache.go).
+
 		patterns: []string{".ggcode/memory/", "agents.md", "ggcode.md", "claude.md", "copilot.md"},
 		severity: "high",
 		reason:   "This is the agent's persistent memory. Content written here persists across sessions and influences future behavior.",
 	},
 	{
 		name: "system prompt",
-		// Anchored: require an infra-root or file extension so ordinary
-		// files like tests/system_prompt_test.go don't collide.
+
 		patterns: []string{".ggcode/system_prompt", ".ggcode/systemprompt", "/prompts/system", "system_prompt.json", "systemprompt.json"},
 		severity: "critical",
 		reason:   "This is the agent's system prompt or instruction layer. Modifying it can weaken or override core guardrails.",
@@ -107,17 +54,14 @@ var selfModPatterns = []selfModTarget{
 	},
 	{
 		name: "permission rules",
-		// Bare allowlist/denylist removed (fix #163: collided with ordinary
-		// security/allowlist_util.py etc.). Anchored to infra roots and
-		// exact config filenames.
+
 		patterns: []string{".ggcode/permissions", "permission_config", "allowlist.json", "denylist.json"},
 		severity: "critical",
 		reason:   "Permission rules control what the agent is allowed to do. Modifying them can grant unauthorized capabilities.",
 	},
 	{
 		name: "MCP server config",
-		// Anchored: require a config extension or infra root (bare mcp_server
-		// collided with api/mcp_server.go).
+
 		patterns: []string{".ggcode/mcp", "mcp_servers.json", "mcp_server.json", "mcp_server.yaml", "mcp_server.yml"},
 		severity: "medium",
 		reason:   "MCP server configuration controls external tool integrations. Changes can introduce new attack surfaces.",
@@ -130,7 +74,6 @@ var selfModPatterns = []selfModTarget{
 	},
 }
 
-// selfModTarget describes a category of self-referential file targets.
 type selfModTarget struct {
 	name     string
 	patterns []string
@@ -151,16 +94,12 @@ func (s *selfModState) reset() {
 	s.warnedPaths = make(map[string]bool)
 }
 
-// setRoot records the workspace root for absolute-path normalization.
 func (s *selfModState) setRoot(root string) {
 	s.mu.Lock()
 	s.root = strings.ReplaceAll(root, "\\", "/")
 	s.mu.Unlock()
 }
 
-// normalizeSelfModPath strips the workspace-root prefix from an absolute
-// path and folds Windows separators, so "/ws/agents.md" matches the bare
-// "agents.md" pattern the same way the relative "agents.md" does (#2954).
 func normalizeSelfModPath(p, root string) string {
 	p = strings.ReplaceAll(p, "\\", "/")
 	if root != "" && strings.HasPrefix(p, root+"/") {
@@ -169,15 +108,10 @@ func normalizeSelfModPath(p, root string) string {
 	return p
 }
 
-// checkSelfModification examines a write tool call's arguments for
-// self-referential file targets. Returns a guidance message if found.
 func (s *selfModState) checkSelfModification(toolName string, args json.RawMessage) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Only check write-type tools. Use the canonical sourceMutatingTools map
-	// (#163: the previous local map missed multi_file_write, notebook_edit,
-	// and lsp_rename, letting self-modification bypass the advisory).
 	if !sourceMutatingTools[toolName] {
 		return ""
 	}
@@ -186,7 +120,6 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 		return ""
 	}
 
-	// Extract target paths from arguments
 	paths := extractSelfModPaths(args, toolName)
 	if len(paths) == 0 {
 		return ""
@@ -200,7 +133,7 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 		if matched == nil {
 			continue
 		}
-		// Deduplicate: warn about each unique path once
+
 		if s.warnedPaths[path] {
 			continue
 		}
@@ -218,7 +151,6 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 	s.warningCount++
 	debug.Log("self-mod", "self-modification detected: %d target(s) via %s", len(warnings), toolName)
 
-	// Build guidance message
 	var sb strings.Builder
 	sb.WriteString("[Self-Modification Warning] You are modifying the agent's own infrastructure files.\n\n")
 	for _, w := range warnings {
@@ -234,23 +166,8 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 	return sb.String()
 }
 
-// matchSelfModTarget checks if a path matches any self-modification pattern.
-// #2954: pattern semantics are split by shape -
-//   - anchored patterns (containing "/", e.g. ".ggcode/memory/") keep
-//     substring matching as before;
-//   - bare filename patterns ("agents.md", "system_prompt.json", ...) are
-//     matched by ROOT-LEVEL equality only (path == name or "./"+name).
-//     The old Contains match hit ordinary files in ANY subdirectory
-//     (docs/agents.md, assets/system_prompt.json, examples/mcp_server.json)
-//     with HIGH/CRITICAL "Self-Modification Warning" + prompt-injection
-//     wording - the same defect class fix #163 already ruled a bug for the
-//     "/memory/" and "allowlist" bare substrings. Bare config filenames are
-//     only self-infrastructure when they sit at the workspace root; callers
-//     normalize absolute paths against the workspace root first
-//     (normalizeSelfModPath).
 func matchSelfModTarget(path string) *selfModTarget {
-	// Normalize separators so a Windows-style "\\agents.md" is still treated
-	// as a root-level file, not a subdirectory.
+
 	lp := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
 	lp = strings.TrimPrefix(lp, "./")
 	for i := range selfModPatterns {
@@ -262,7 +179,7 @@ func matchSelfModTarget(path string) *selfModTarget {
 				}
 				continue
 			}
-			// Bare filename: root-level equality only.
+
 			if lp == lpat {
 				return &selfModPatterns[i]
 			}
@@ -271,7 +188,6 @@ func matchSelfModTarget(path string) *selfModTarget {
 	return nil
 }
 
-// extractSelfModPaths extracts file paths from write tool arguments.
 func extractSelfModPaths(args json.RawMessage, _ string) []string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(args, &raw); err != nil {
@@ -288,14 +204,12 @@ func extractSelfModPaths(args json.RawMessage, _ string) []string {
 		seen[p] = true
 	}
 
-	// Single file path fields
 	for _, key := range []string{"path", "file_path", "source", "notebook_path"} {
 		if s, ok := raw[key].(string); ok {
 			add(s)
 		}
 	}
 
-	// Multi-file arrays (multi_file_edit: files with path; batch_replace: string files)
 	for _, key := range []string{"files", "edits"} {
 		arr, ok := raw[key].([]interface{})
 		if !ok {
@@ -306,11 +220,6 @@ func extractSelfModPaths(args json.RawMessage, _ string) []string {
 		}
 	}
 
-	// #1492-D: file_ops carries {action, source, destination} objects in
-	// an `operations` array - none of the shapes above matched, so
-	// `file_ops delete .ggcode/hooks/x.sh` or a move INTO .ggcode/ passed
-	// the guard silently even though file_ops is in sourceMutatingTools
-	// (the guard ran but always returned empty).
 	if ops, ok := raw["operations"].([]interface{}); ok {
 		for _, item := range ops {
 			m, ok := item.(map[string]interface{})
@@ -328,7 +237,6 @@ func extractSelfModPaths(args json.RawMessage, _ string) []string {
 	return paths
 }
 
-// extractPathsFromItem handles both map items (multi_file_edit) and string items (batch_replace).
 func extractPathsFromItem(item interface{}, add func(string)) {
 	if m, ok := item.(map[string]interface{}); ok {
 		for _, pk := range []string{"path", "file_path"} {
@@ -343,14 +251,11 @@ func extractPathsFromItem(item interface{}, add func(string)) {
 	}
 }
 
-// --- Agent integration methods ---
-
 func (a *Agent) checkSelfModification(toolName string, args json.RawMessage) string {
 	if a.selfMod == nil {
 		return ""
 	}
-	// #2954: supply the workspace root so absolute tool paths are normalized
-	// to workspace-relative before bare-filename matching.
+
 	a.selfMod.setRoot(a.workingDir)
 	return a.selfMod.checkSelfModification(toolName, args)
 }

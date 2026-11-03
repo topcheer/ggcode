@@ -11,11 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #4212: the r27 safe-default advisory was computed by checkAskQualityGate
-// and then dropped (log only) - the model never saw the "proceed with the
-// stated default" guidance. Wiring-level test: run a stream whose only tool
-// call is an ask_user with a safe-default choice and assert the advisory
-// text appears in the tool RESULT the next provider turn consumes.
 func TestAskSafeDefaultAdvisoryWiredIntoResult(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{

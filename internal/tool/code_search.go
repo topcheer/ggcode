@@ -13,14 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// CodeSearch implements a semantic code search tool using BM25 ranking.
-// Unlike grep (exact regex matching), it ranks files by relevance to a
-// natural-language query — finding "where authentication is handled" even
-// when the exact keywords don't appear in the code.
-//
-// The index is maintained by CodeIndexManager in the background. If the
-// index is not yet ready, the tool returns an error directing the LLM
-// to retry shortly — it never blocks the agent loop to build the index.
 type CodeSearch struct {
 	SandboxCheck AllowedPathChecker
 	Index        *CodeIndexManager
@@ -63,7 +55,6 @@ func (t CodeSearch) Parameters() json.RawMessage {
 	}`)
 }
 
-// searchArgs holds the parsed tool arguments.
 type searchArgs struct {
 	Query      string `json:"query"`
 	Path       string `json:"path"`
@@ -95,18 +86,12 @@ func (t CodeSearch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.MaxResults = 50
 	}
 
-	// If no index manager is configured, fall back to the legacy
-	// ephemeral index path (used in tests and non-agent contexts).
 	if t.Index == nil {
 		return t.executeLegacy(ctx, args)
 	}
 
-	// Lazy start: trigger background index build on first code_search call
-	// rather than at tool registration time. This avoids loading ~60MB of
-	// index data for instances that never use code_search.
 	t.Index.StartBackgroundIndex()
 
-	// Query the persistent background index.
 	results, err := t.Index.Search(args.Query, args.MaxResults)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -115,20 +100,14 @@ func (t CodeSearch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{Content: fmt.Sprintf("No files matched query %q. Try different keywords or broader search terms.", args.Query)}, nil
 	}
 
-	// Tokenize query for both search and re-ranking.
 	queryTerms := tokenizeForSearch(args.Query)
 
-	// Re-rank with path-based boosting (no structural boost for index path
-	// since we don't have file contents readily available).
 	rerankResults(results, queryTerms, nil)
 
 	stats := t.Index.Stats()
 	return formatSearchResults(results, queryTerms, stats.TotalFiles, args), nil
 }
 
-// executeLegacy is the fallback path that builds an ephemeral index
-// from the specified directory. Used when no CodeIndexManager is wired
-// (e.g., in unit tests).
 func (t CodeSearch) executeLegacy(ctx context.Context, args searchArgs) (Result, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -154,9 +133,8 @@ func (t CodeSearch) executeLegacy(ctx context.Context, args searchArgs) (Result,
 		return Result{Content: fmt.Sprintf("No files matched query %q. Try different keywords or broader search terms.", args.Query)}, nil
 	}
 
-	// Re-rank with path and structural signal boosting.
 	rerankResults(results, queryTerms, contents)
-	// Trim to maxResults after re-ranking (boosts may change order).
+
 	if args.MaxResults > 0 && len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
 	}
@@ -164,7 +142,6 @@ func (t CodeSearch) executeLegacy(ctx context.Context, args searchArgs) (Result,
 	return formatSearchResults(results, queryTerms, len(files), args), nil
 }
 
-// collectSourceFiles walks the directory and returns a list of source files.
 func collectSourceFiles(ctx context.Context, baseDir, fileType string, sandboxCheck AllowedPathChecker) []string {
 	tracked := gitTrackedFiles(ctx, baseDir)
 
@@ -198,10 +175,7 @@ func collectSourceFiles(ctx context.Context, baseDir, fileType string, sandboxCh
 		if len(globs) > 0 {
 			matched := false
 			for _, g := range globs {
-				// #807: filepath.Match sees only the base name, so patterns with
-				// directory parts ('src/*.ts', 'cmd/*.go') matched nothing, and
-				// '**' was unsupported despite the docs. Match against the
-				// repo-relative path, expanding '**/' to 'any depth'.
+
 				if globMatchPath(g, relPath) || globMatchPath(g, d.Name()) {
 					matched = true
 					break
@@ -230,7 +204,6 @@ func collectSourceFiles(ctx context.Context, baseDir, fileType string, sandboxCh
 	return files
 }
 
-// readFilesParallel reads file contents concurrently with bounded parallelism.
 func readFilesParallel(ctx context.Context, files []string, baseDir string) map[string]string {
 	maxWorkers := 8
 	if len(files) < maxWorkers {
@@ -273,7 +246,6 @@ func readFilesParallel(ctx context.Context, files []string, baseDir string) map[
 	return contents
 }
 
-// formatSearchResults formats BM25 results for the LLM.
 func formatSearchResults(results []bm25Result, queryTerms []string, totalFiles int, args searchArgs) Result {
 	var sb strings.Builder
 
@@ -281,7 +253,7 @@ func formatSearchResults(results []bm25Result, queryTerms []string, totalFiles i
 	fmt.Fprintf(&sb, "Ranked %d file(s) by relevance (of %d searched):\n\n", len(results), totalFiles)
 
 	for i, r := range results {
-		// Convert score to a 0-100 "relevance" for readability
+
 		relevance := int(r.score * 10)
 		if relevance > 100 {
 			relevance = 100
@@ -297,9 +269,6 @@ func formatSearchResults(results []bm25Result, queryTerms []string, totalFiles i
 	return Result{Content: sb.String()}
 }
 
-// globMatchPath matches a glob against a slash-normalized relative path,
-// supporting the documented '**' (any depth) form that filepath.Match
-// lacks (#807).
 func globMatchPath(pattern, path string) bool {
 	pattern = filepath.ToSlash(pattern)
 	path = filepath.ToSlash(path)

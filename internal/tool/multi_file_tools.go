@@ -90,9 +90,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: %v", i, err)}, nil
 		}
-		// #1696 case 4: validate EVERY entry before the duplicate skip -
-		// a duplicated path carrying a negative offset used to slip past
-		// validation silently (the skip ran first).
+
 		if f.Offset < 0 {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: offset must be >= 0", i)}, nil
 		}
@@ -103,16 +101,13 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: limit %d exceeds max %d. Narrow the range or split the batch.", i, f.Limit, maxExplicitMultiFileReadLimit)}, nil
 		}
 		if _, ok := seen[path]; ok {
-			// Duplicate path — skip silently (first occurrence wins).
+
 			continue
 		}
 		seen[path] = struct{}{}
 		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
 	}
 
-	// Read all files concurrently for better I/O throughput.
-	// Each file read is independent (stat + readfile + content processing),
-	// so parallelizing them turns N sequential I/O operations into ~ceil(N/concurrency) batches.
 	type readResult struct {
 		index int
 		block string
@@ -151,12 +146,11 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 	wg.Wait()
 
-	// Assemble output in original order with cumulative limit enforcement.
 	var body strings.Builder
 	succeeded, failed, skipped := 0, 0, 0
 	currentLines, currentBytes := 0, 0
 	limitReached := false
-	seenContent := make([]bool, len(reqs)) // whether the agent actually saw this file's content
+	seenContent := make([]bool, len(reqs))
 	for i := range reqs {
 		if limitReached {
 			body.WriteString(formatMultiFileReadSkippedBlock(reqs[i].Path))
@@ -195,11 +189,6 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		content += "\n\n" + strings.TrimSuffix(body.String(), "\n")
 	}
 
-	// Record mtimes only for files whose content the agent actually saw.
-	// ERROR blocks (sandbox denial / read failure) and skipped files must not
-	// be recorded: HasBeenSeen must imply the agent saw the content, otherwise
-	// write_file's blind-overwrite warning is silently suppressed for files
-	// the agent never saw.
 	for i := range reqs {
 		if seenContent[i] {
 			defaultFileTracker.RecordRead(reqs[i].Path)
@@ -273,10 +262,6 @@ func (t MultiFileEdit) Parameters() json.RawMessage {
 }`)
 }
 
-// snapshotDriftLines re-reads every planned file and reports which ones no
-// longer match the content the plan was resolved against (#4798 / S-29).
-// Only CHANGED files are listed (unchanged files contribute nothing - the
-// retry can reuse its anchors for them); a deleted file is reported as such.
 func snapshotDriftLines(plans []PlannedFileEdit) []string {
 	var drift []string
 	for _, plan := range plans {
@@ -288,7 +273,7 @@ func snapshotDriftLines(plans []PlannedFileEdit) []string {
 			if os.IsNotExist(err) {
 				drift = append(drift, fmt.Sprintf("%s: deleted on disk since the batch was planned", plan.Path))
 			}
-			continue // transient read error: no verdict either way
+			continue
 		}
 		if string(disk) == plan.OldContent {
 			continue
@@ -303,8 +288,7 @@ func snapshotDriftLines(plans []PlannedFileEdit) []string {
 		for firstDiff < max && oldLines[firstDiff] == newLines[firstDiff] {
 			firstDiff++
 		}
-		// Content-line counts (a trailing newline does not add a line), not
-		// strings.Split element counts.
+
 		oldCount, newCount := len(oldLines), len(newLines)
 		if strings.HasSuffix(plan.OldContent, "\n") {
 			oldCount--
@@ -359,8 +343,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		out.SkippedFiles = len(out.SkippedPaths)
 		out.FailedPaths = collectMultiFileEditPaths(out.Results, "error")
 		out.Summary = fmt.Sprintf("Requested %d files: 0 written, %d failed, %d skipped by atomic mode", len(entries), out.FailedFiles, out.SkippedFiles)
-		// #4798 (S-29): attach which planned files drifted on disk since the
-		// batch was planned, so the retry re-anchors in one step.
+
 		out.SnapshotDrift = snapshotDriftLines(plans)
 		content, err := json.Marshal(out)
 		if err != nil {
@@ -370,14 +353,12 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if mode == "atomic" {
-		// Capture diagnostic baselines BEFORE any writes so post-edit
-		// diagnostics only report newly introduced issues.
+
 		for _, plan := range plans {
 			CaptureDiagnosticBaseline(t.WorkingDir, plan.Path)
 		}
 		if failedPath, writeErr := applyAtomicPlans(ctx, plans); writeErr != nil {
-			// Writes were rolled back: drop the stale baselines so a later
-			// edit doesn't diff against a snapshot that no longer matches.
+
 			for _, plan := range plans {
 				ClearDiagnosticBaseline(plan.Path)
 			}
@@ -396,8 +377,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedFiles = len(out.FailedPaths)
 			out.SkippedFiles = len(out.SkippedPaths)
 			out.Summary = fmt.Sprintf("Requested %d files: 0 written, %d failed, %d skipped by atomic mode", len(entries), out.FailedFiles, out.SkippedFiles)
-			// #4798 (S-29): writes were rolled back - the disk state is what the
-			// next round must re-anchor against; report drift vs the snapshot.
+
 			out.SnapshotDrift = snapshotDriftLines(plans)
 			content, err := json.Marshal(out)
 			if err != nil {
@@ -418,7 +398,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
 			out.DiagnosticWarnings += syntaxCheck(plan.Path, []byte(plan.NewContent))
-			// Record the file's new mtime for stale-read detection.
+
 			defaultFileTracker.RecordWrite(plan.Path)
 		}
 		content, err := json.Marshal(out)
@@ -440,8 +420,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedPaths = append(out.FailedPaths, plan.Path)
 			continue
 		}
-		// #4903: same stale-read guard as the atomic path/#2327 - per-file
-		// failure marks only this file error; the rest of the batch proceeds.
+
 		unlockW, staleErr := guardStaleWrite(plan.Path)
 		if staleErr != nil {
 			idx := byPath[plan.Path]
@@ -452,7 +431,6 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
 
-		// No-op guard: skip files whose content is already identical.
 		if string(writeData) == plan.OldContent {
 			unlockW()
 			idx := byPath[plan.Path]
@@ -492,7 +470,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
 			out.DiagnosticWarnings += syntaxCheck(plan.Path, []byte(plan.NewContent))
-			// Record the file's new mtime for stale-read detection.
+
 			defaultFileTracker.RecordWrite(plan.Path)
 		}
 	}
@@ -537,8 +515,6 @@ func (t MultiFileEdit) parseInput(input json.RawMessage) (string, []multiFileEdi
 	}
 	totalEdits := 0
 	totalPayloadBytes := 0
-	// Use a slice + map for dedup: the slice preserves order, the map
-	// records which path is at which index so we can merge duplicates.
 	var entries []multiFileEditEntry
 	pathIndex := map[string]int{}
 	for i, f := range args.Files {
@@ -552,7 +528,7 @@ func (t MultiFileEdit) parseInput(input json.RawMessage) (string, []multiFileEdi
 		if len(f.Edits) > maxMultiFileEditEditsPerFile {
 			return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d]: too many edits: got %d, max %d", i, len(f.Edits), maxMultiFileEditEditsPerFile)}
 		}
-		// Validate individual edits first.
+
 		validatedEdits := make([]textEdit, len(f.Edits))
 		for j, edit := range f.Edits {
 			if edit.OldText == "" {
@@ -562,9 +538,8 @@ func (t MultiFileEdit) parseInput(input json.RawMessage) (string, []multiFileEdi
 			totalPayloadBytes += len(edit.OldText) + len(edit.NewText)
 		}
 
-		// Merge into existing entry or create new one.
 		if idx, ok := pathIndex[path]; ok {
-			// Duplicate path — append edits to existing entry.
+
 			existingCount := len(entries[idx].Edits)
 			mergedCount := existingCount + len(validatedEdits)
 			if mergedCount > maxMultiFileEditEditsPerFile {
@@ -595,15 +570,11 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 		errMsg     string
 	}
 	planResults := make([]planResult, len(entries))
-	// Pre-initialize to a safe error so a recovered panic (which leaves the
-	// zero-value result) doesn't cause downstream code to treat the file as
-	// successfully planned with empty content — that would truncate it.
+
 	for i := range planResults {
 		planResults[i] = planResult{errMsg: "internal error: edit planning did not complete"}
 	}
 
-	// Read files + plan edits concurrently.
-	// Each entry's read + planTextEdits is independent — no data dependency between entries.
 	concurrency := 5
 	if len(entries) < concurrency {
 		concurrency = len(entries)
@@ -641,7 +612,6 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 	}
 	wg.Wait()
 
-	// Assemble results in order.
 	plans := make([]PlannedFileEdit, 0, len(entries))
 	results := make([]MultiFileEditFileResult, len(entries))
 	hasFailures := false
@@ -661,17 +631,12 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 			OldContent:       pr.oldContent,
 			NewContent:       pr.newContent,
 			AppliedEditCount: pr.applied,
-			Existed:          true, // multi_file_edit only touches pre-existing files (missing ones fail planning)
+			Existed:          true,
 		})
 	}
 	return plans, results, hasFailures
 }
 
-// guardStaleWrite takes the per-path write lock and rejects the write
-// when the file changed on disk since the agent's last read/write - the
-// #2327/#2315 discipline multi_file_write already follows. Returns the
-// unlock func and a nil error when the write may proceed; on staleness the
-// lock is already released and staleErr is non-nil (#4903).
 func guardStaleWrite(path string) (func(), error) {
 	unlock := LockWritePath(path)
 	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
@@ -687,15 +652,13 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 	written := make([]PlannedFileEdit, 0, len(plans))
 	for _, plan := range plans {
 		if ctx.Err() != nil {
-			// #1331: surface rollback failures instead of discarding them.
+
 			if err := rollbackPlans(written); err != nil {
 				return plan.Path, fmt.Errorf("cancelled (rollback incomplete: %v)", err)
 			}
 			return plan.Path, fmt.Errorf("cancelled")
 		}
-		// #4903: same stale-read guard as multi_file_write/#2327 - the plan
-		// was built from a read that may predate an external/other-seat
-		// write; blind overwriting silently lost those changes.
+
 		unlockW, staleErr := guardStaleWrite(plan.Path)
 		if staleErr != nil {
 			if rerr := rollbackPlans(written); rerr != nil {
@@ -717,15 +680,13 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 	return "", nil
 }
 
-// rollbackPlans restores already-applied plans to their old content and
-// reports any restore failure (#1331: errors were silently discarded).
 func rollbackPlans(written []PlannedFileEdit) error {
 	var firstErr error
 	for i := len(written) - 1; i >= 0; i-- {
 		if err := atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("%s: %v", written[i].Path, err)
 		}
-		// Rollback rewrote the file; its mtime changed again.
+
 		defaultFileTracker.RecordWrite(written[i].Path)
 	}
 	return firstErr

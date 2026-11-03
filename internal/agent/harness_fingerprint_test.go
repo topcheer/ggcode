@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// stubToolForHarness is a minimal Tool implementation for fingerprint tests.
 type stubToolForHarness struct{}
 
 func (stubToolForHarness) Name() string        { return "test_tool" }
@@ -21,9 +20,6 @@ func (stubToolForHarness) Execute(ctx context.Context, input json.RawMessage) (t
 	return tool.Result{}, nil
 }
 
-// TestHarnessFingerprint_StableAndSensitive verifies the fingerprint is
-// stable across repeated computation on an unchanged agent and sensitive to
-// the harness surfaces it covers.
 func TestHarnessFingerprint_StableAndSensitive(t *testing.T) {
 	a := &Agent{}
 	a.baseSystemPrompt = "base prompt v1"
@@ -37,13 +33,11 @@ func TestHarnessFingerprint_StableAndSensitive(t *testing.T) {
 		t.Fatalf("Sum() missing components: %s", fp1.Sum())
 	}
 
-	// Surface 1: system prompt change must move the fingerprint.
 	a.baseSystemPrompt = "base prompt v2"
 	if a.ComputeHarnessFingerprint().Sum() == fp1.Sum() {
 		t.Fatal("fingerprint did not change after system prompt edit")
 	}
 
-	// Surface 3: tool registration must move the fingerprint.
 	a.tools = tool.NewRegistry()
 	if err := a.tools.Register(stubToolForHarness{}); err != nil {
 		t.Fatalf("Register failed: %v", err)
@@ -56,12 +50,9 @@ func TestHarnessFingerprint_StableAndSensitive(t *testing.T) {
 		t.Fatalf("ToolsCount = %d, want 1", fpTools.ToolsCount)
 	}
 
-	// nil registry must be tolerated (tools surface simply empty).
 	harnessToolNames(nil)
 }
 
-// TestHashNames_OrderInsensitive verifies the sorted-hash contract: the same
-// set of names in different orders yields the same SHA and count.
 func TestHashNames_OrderInsensitive(t *testing.T) {
 	h1, n1 := hashNames([]string{"b", "a", "c"})
 	h2, n2 := hashNames([]string{"c", "a", "b"})
@@ -74,8 +65,6 @@ func TestHashNames_OrderInsensitive(t *testing.T) {
 	}
 }
 
-// TestLogHarnessFingerprint_ChangeDetection verifies the once-on-first and
-// once-on-change logging contract at the state level.
 func TestLogHarnessFingerprint_ChangeDetection(t *testing.T) {
 	a := &Agent{}
 	a.baseSystemPrompt = "p1"
@@ -86,7 +75,7 @@ func TestLogHarnessFingerprint_ChangeDetection(t *testing.T) {
 		t.Fatal("harnessFPLast not populated after first log")
 	}
 
-	a.logHarnessFingerprint() // unchanged — must be a no-op
+	a.logHarnessFingerprint()
 	if a.harnessFPLast != first {
 		t.Fatal("unchanged harness altered fingerprint state")
 	}

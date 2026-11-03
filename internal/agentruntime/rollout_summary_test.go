@@ -25,7 +25,7 @@ func TestSummarizeTrajectory_Classification(t *testing.T) {
 	if !containsLine(s.Progress, "build passes") {
 		t.Errorf("Progress = %v, want build passes", s.Progress)
 	}
-	// "tests pass check failed" contains progress signal but looks like failure.
+
 	if !containsLineSubstr(s.Failures, "tests pass check failed") {
 		t.Errorf("Failures = %v, want misclassified-progress guarded", s.Failures)
 	}
@@ -60,7 +60,7 @@ func TestTournament(t *testing.T) {
 	if got := RecursiveTournament(nil, 4); got.Verdict != "failed" {
 		t.Errorf("empty field winner = %q", got.Verdict)
 	}
-	// Determinism: same input, same winner content.
+
 	w2 := RecursiveTournament([]RolloutSummary{bad, partial, good, bad}, 4)
 	if strings.Join(w.Progress, "|") != strings.Join(w2.Progress, "|") {
 		t.Error("tournament not deterministic")

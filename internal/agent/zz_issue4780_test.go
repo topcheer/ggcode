@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// #4780 (S-09): the argument-complexity gate scored chained commands by
-// their whole-string bulk - individually-safe steps (gh pr merge + gh pr
-// comment + patrol compound) aggregated pipes and length across the entire
-// chain and crossed the threshold, rejecting the WHOLE command and forcing
-// costly step-splitting. Scoring is now per-subcommand (max, not sum):
-// a chain fires only when one of its subcommands is itself heavy.
 func zz4780RunCmd(t *testing.T, cmd string) (int, bool) {
 	t.Helper()
 	args, _ := json.Marshal(map[string]string{"command": cmd})
@@ -24,9 +18,7 @@ func zz4780RunCmd(t *testing.T, cmd string) (int, bool) {
 }
 
 func TestIssue4780_SafeChainNoLongerAggregates(t *testing.T) {
-	// The observed incident shape: merge + comment + view compound, all
-	// read-safe / individually light verbs, but a long total string with
-	// several pipes inside segments.
+
 	chain := strings.Join([]string{
 		`gh pr merge 4859 --repo topcheer/ggcode --squash --delete-branch`,
 		`gh pr comment 4779 --repo topcheer/ggcode --body "merged in 646720df9; thanks for the fake-gh end-to-end coverage and the once-per-branch cap work"`,
@@ -37,7 +29,7 @@ func TestIssue4780_SafeChainNoLongerAggregates(t *testing.T) {
 	if len(chain) <= 400 {
 		t.Fatalf("fixture must exceed the old length tier, got %d bytes", len(chain))
 	}
-	wholeScore := scoreShellComplexity(chain) // old whole-string view
+	wholeScore := scoreShellComplexity(chain)
 	score, fires := zz4780RunCmd(t, chain)
 	if fires {
 		t.Fatalf("safe chain must not fire: per-sub score=%d (whole-string legacy score=%d)", score, wholeScore)
@@ -48,13 +40,12 @@ func TestIssue4780_SafeChainNoLongerAggregates(t *testing.T) {
 }
 
 func TestIssue4780_RiskySubcommandStillFires(t *testing.T) {
-	// One destructive subcommand buried in an otherwise-safe chain.
+
 	chain := `gh pr view 4859 --json state && rm -rf /tmp/scratch-dir && gh pr list --limit 5`
 	if score, fires := zz4780RunCmd(t, chain); !fires {
 		t.Fatalf("chain containing a hard-token subcommand must fire (score=%d)", score)
 	}
-	// Substitution-heavy single subcommand also still fires: >4 pipes,
-	// 3 command substitutions, and >200 chars in ONE segment.
+
 	heavy := `r=$(git log --oneline --decorate -30 origin/main) $(git status --porcelain=v1 --branch) $(git branch --list --format='%(refname:short) %(objectname:short)' 'fix-*' 'patrol-*') | grep -E 'issue|fix|patrol' | sort -u | uniq -c | sort -rn | head -10 | tee /tmp/ggcode-arg-complexity-fixture-output.txt`
 	if score, fires := zz4780RunCmd(t, heavy); !fires {
 		t.Fatalf("substitution-heavy subcommand must fire (score=%d)", score)
@@ -62,9 +53,7 @@ func TestIssue4780_RiskySubcommandStillFires(t *testing.T) {
 }
 
 func TestIssue4780_SubstitutionBoundaryKeptIntact(t *testing.T) {
-	// A $() containing && must NOT be split: the substitution belongs to
-	// its one subcommand. With the boundary honored, the segment keeps its
-	// substitution weight and still fires.
+
 	cmd := `v=$(gh pr list --state open && gh pr view 1) && echo "$v" | head -3`
 	subs := splitShellSubcommands(cmd)
 	if len(subs) != 2 {

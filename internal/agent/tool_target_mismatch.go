@@ -1,42 +1,5 @@
 package agent
 
-// Tool-Target Mismatch Detector
-//
-// Research basis:
-//   - "Why AI Coding Agents Fail" (beginnersinai.org, 2026): intent-action
-//     misalignment is a top failure mode -- the agent reasons about one target
-//     (file, search term, path) but invokes a tool on a different target.
-//   - SWE-bench analysis (2025): ~15% of agent failures involve the agent
-//     operating on the wrong file or search term despite correct reasoning.
-//   - CogCal-1 (2025): cognitive calibration gaps where stated intent and
-//     executed action diverge indicate degraded planning fidelity.
-//
-// Problem: AI coding agents frequently state their intent in natural language
-// ("Let me read the config file", "I'll search for the auth handler", "Let me
-// edit internal/agent/agent.go") but then invoke a tool with a different target
-// (reads a different file, searches for a different term). This mismatch is
-// invisible to the user and silently sends the agent down the wrong path.
-//
-// Existing ggcode detectors that are RELATED but do NOT cover this:
-//   - symbol_grounding.go: checks hallucinated references in assistant text
-//   - stale_read_detection.go: checks if re-read files have changed
-//   - plan_abandon_detect.go: checks if declared steps were completed
-//   None of these compare the agent's STATED TARGET to its ACTUAL tool target.
-//
-// Gap: No detector compares the natural-language intent ("I'll read X") against
-// the actual tool arguments (path=X) to detect divergence. This detector fills
-// that gap.
-//
-// Design:
-//   - Scans the assistant text for intent statements mentioning specific file
-//     paths or search terms ("I'll read internal/foo.go", "search for bar")
-//   - Extracts the targets (paths, search patterns) from those statements
-//   - Compares against the actual tool call arguments (file_path, pattern, path, etc.)
-//   - When a mismatch is detected (stated target != actual target), injects
-//     guidance to re-verify the correct target
-//   - Zero LLM cost -- pure deterministic pattern matching
-//   - Fires at most 2 times per run (advisory, non-blocking)
-
 import (
 	"encoding/json"
 	"fmt"
@@ -47,58 +10,38 @@ import (
 )
 
 const (
-	// toolTargetMaxWarnings: max warnings per run.
 	toolTargetMaxWarnings = 2
 
-	// toolTargetMinConfidence: minimum number of mismatch signals to trigger.
-	// #468: raised 1→2 — a single prose-noun vs path gap ("update
-	// documentation" then edit README.md) is the normal intent/wording
-	// difference, not evidence of operating on the wrong file.
 	toolTargetMinConfidence = 2
 )
 
-// toolTargetIntentRe detects intent statements that mention specific file paths
-// or search targets. Matches patterns like:
-//
-//	"I'll read internal/agent/foo.go"
-//	"Let me search for authenticationHandler"
-//	"I'll edit src/main.go"
 var toolTargetIntentRe = regexp.MustCompile(
 	`(?i)(?:i(?:'ll|\s+will|\s+need\s+to)?\s+(?:read|edit|check|look\s+at|open|modify|update|examine|inspect|review|search|find|grep|scan)\s+(?:for\s+)?|let\s+me\s+(?:read|edit|check|look\s+at|open|modify|update|examine|inspect|review|search\s+for|find|grep|scan)\s+(?:for\s+)?)([^\s.,;:!?\n]+(?:/[^\s.,;:!?\n]+)*\.?[^\s.,;:!?\n]*)`,
 )
 
-// toolTargetSearchIntentRe detects search-specific intent with quoted terms.
 var toolTargetSearchIntentRe = regexp.MustCompile(
 	"(?i)(?:i(?:'ll|\\s+will|\\s+need\\s+to)?\\s+(?:search|grep|look\\s+for|find)\\s+for\\s+|let\\s+me\\s+(?:search|grep|look\\s+for|find)\\s+for\\s+)(?:[\"'`])([^\"'`]+)(?:[\"'`])",
 )
 
-// statedTarget represents a target mentioned in the agent's intent text.
 type statedTarget struct {
-	intentType string // "file", "search", "path"
+	intentType string
 	value      string
 }
 
-// toolTarget represents targets extracted from an actual tool call.
 type toolTarget struct {
 	toolName string
 	targets  []string
 }
 
-// toolTargetState tracks mismatches across iterations.
 type toolTargetState struct {
 	warnings int
 	curIter  int
 }
 
-// newToolTargetState constructs a fresh tool-target mismatch state (issue #341:
-// previously the Agent field was never initialized, so the nil guard in
-// maybeWarnToolTargetMismatch silently disabled the detector).
 func newToolTargetState() *toolTargetState {
 	return &toolTargetState{}
 }
 
-// extractStatedTargets extracts file paths and search terms from assistant text
-// intent statements. Returns a list of statedTarget pairs.
 func extractStatedTargets(text string) []statedTarget {
 	if len(text) == 0 {
 		return nil
@@ -107,7 +50,6 @@ func extractStatedTargets(text string) []statedTarget {
 	var targets []statedTarget
 	seen := make(map[string]bool)
 
-	// Extract path-like targets from intent statements
 	matches := toolTargetIntentRe.FindAllStringSubmatch(text, -1)
 	for _, m := range matches {
 		if len(m) < 2 {
@@ -117,19 +59,16 @@ func extractStatedTargets(text string) []statedTarget {
 		if raw == "" || len(raw) < 3 {
 			continue
 		}
-		// Filter out common false positives (articles, pronouns, etc.)
+
 		lower := strings.ToLower(raw)
 		if isFalsePositiveTarget(lower) {
 			continue
 		}
-		// #468: prose nouns ("documentation", "the config") are not stated
-		// file targets. Non-search intents must be path-like (contain a
-		// separator or a file extension); SEARCH terms are exempt
-		// (identifiers like authenticationHandler).
+
 		if classifyIntent(m[0]) != "search" && !targetLooksLikeFile(raw) {
 			continue
 		}
-		// Normalize: strip trailing punctuation
+
 		raw = strings.TrimRight(raw, ".,;:!?")
 		if raw == "" {
 			continue
@@ -144,7 +83,6 @@ func extractStatedTargets(text string) []statedTarget {
 		targets = append(targets, statedTarget{intentType: intentType, value: raw})
 	}
 
-	// Extract quoted search terms
 	searchMatches := toolTargetSearchIntentRe.FindAllStringSubmatch(text, -1)
 	for _, m := range searchMatches {
 		if len(m) < 2 {
@@ -166,7 +104,6 @@ func extractStatedTargets(text string) []statedTarget {
 	return targets
 }
 
-// isFalsePositiveTarget filters out non-target words that the regex might capture.
 func isFalsePositiveTarget(s string) bool {
 	falsePositives := map[string]bool{
 		"the": true, "a": true, "an": true, "this": true, "that": true,
@@ -176,9 +113,6 @@ func isFalsePositiveTarget(s string) bool {
 	return falsePositives[s]
 }
 
-// targetLooksLikeFile reports whether a stated target is path-like:
-// contains a path separator or ends with a short alphanumeric extension
-// (#468). Prose nouns like "documentation" fail this check.
 func targetLooksLikeFile(s string) bool {
 	if strings.ContainsAny(s, "/\\") {
 		return true
@@ -200,7 +134,6 @@ func targetLooksLikeFile(s string) bool {
 	return true
 }
 
-// classifyIntent determines the type of intent from the matched phrase.
 func classifyIntent(phrase string) string {
 	lower := strings.ToLower(phrase)
 	if strings.Contains(lower, "search") || strings.Contains(lower, "grep") ||
@@ -210,7 +143,6 @@ func classifyIntent(phrase string) string {
 	return "file"
 }
 
-// extractActualToolTargets extracts targets from actual tool call arguments.
 func extractActualToolTargets(toolCalls []provider.ToolCallDelta) []toolTarget {
 	var targets []toolTarget
 
@@ -226,7 +158,6 @@ func extractActualToolTargets(toolCalls []provider.ToolCallDelta) []toolTarget {
 
 		tt := toolTarget{toolName: tc.Name}
 
-		// Extract path-like arguments
 		for _, key := range []string{"path", "file_path", "directory", "glob_pattern", "pattern"} {
 			if v, ok := args[key]; ok {
 				if s, ok := v.(string); ok && s != "" {
@@ -235,7 +166,6 @@ func extractActualToolTargets(toolCalls []provider.ToolCallDelta) []toolTarget {
 			}
 		}
 
-		// For edit tools, also extract old_text to compare against intent
 		if v, ok := args["old_text"]; ok {
 			if s, ok := v.(string); ok && len(s) > 10 {
 				tt.targets = append(tt.targets, s)
@@ -250,14 +180,11 @@ func extractActualToolTargets(toolCalls []provider.ToolCallDelta) []toolTarget {
 	return targets
 }
 
-// checkMismatch compares stated intent targets against actual tool call targets.
-// Returns a guidance message if a mismatch is detected, "" otherwise.
 func (s *toolTargetState) checkMismatch(statedTargets []statedTarget, actualTargets []toolTarget) string {
 	if len(statedTargets) == 0 || len(actualTargets) == 0 {
 		return ""
 	}
 
-	// Build a set of all actual target strings (normalized)
 	actualSet := make(map[string]bool)
 	for _, at := range actualTargets {
 		for _, t := range at.targets {
@@ -312,12 +239,6 @@ func (s *toolTargetState) checkMismatch(statedTargets []statedTarget, actualTarg
 	)
 }
 
-// normalizePathTarget normalizes a target string for comparison.
-// No length truncation here (#2769): targets are compared, not displayed, and
-// a tail cut at 60 chars sliced off basenames of longer paths - the basename
-// and boundaryContains branches in targetsMatch both died, flagging perfectly
-// aligned intent/action as mismatch. Display-side truncation is handled
-// separately by the excerpt logic above.
 func normalizePathTarget(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "\"'`")
@@ -325,12 +246,11 @@ func normalizePathTarget(s string) string {
 	return s
 }
 
-// targetsMatch checks if a stated target matches an actual target.
 func targetsMatch(stated, actual string) bool {
 	if stated == actual {
 		return true
 	}
-	// Check basename match
+
 	statedBase := stated
 	if idx := strings.LastIndex(stated, "/"); idx >= 0 {
 		statedBase = stated[idx+1:]
@@ -342,9 +262,7 @@ func targetsMatch(stated, actual string) bool {
 	if statedBase != "" && statedBase == actualBase {
 		return true
 	}
-	// Substring containment with path-component boundary check.
-	// The match must occur at a path separator (/, _, ., -) or string
-	// boundary to avoid false matches like "log.go" matching "dialog.go".
+
 	if len(stated) >= 4 && boundaryContains(actual, stated) {
 		return true
 	}
@@ -354,10 +272,6 @@ func targetsMatch(stated, actual string) bool {
 	return false
 }
 
-// boundaryContains checks if needle appears in haystack at a word/path boundary.
-// A valid match must be preceded by start-of-string or a delimiter (/, _, ., -)
-// and followed by end-of-string or a delimiter. This prevents "log.go" matching
-// "dialog.go" while still allowing "agent" to match "internal/agent/agent.go".
 func boundaryContains(haystack, needle string) bool {
 	searchStart := 0
 	for {
@@ -380,7 +294,6 @@ func isPathDelimiter(ch byte) bool {
 	return ch == '/' || ch == '_' || ch == '.' || ch == '-'
 }
 
-// maybeWarnToolTargetMismatch is the entry point called from the agent loop.
 func (a *Agent) maybeWarnToolTargetMismatch(assistantText string, toolCalls []provider.ToolCallDelta) string {
 	if a.toolTargetMismatch == nil {
 		return ""

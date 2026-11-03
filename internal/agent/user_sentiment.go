@@ -1,47 +1,5 @@
 package agent
 
-// User Sentiment Detection - Negative Feedback Course Correction
-//
-// Research basis: Studies in conversational AI and coding assistant UX show that
-// detecting user frustration and corrective signals is critical for maintaining
-// trust and avoiding the "repeated wrong approach" failure mode. Key references:
-//
-//   - Lai et al. "User Reactions to Coding Assistants" (CHI 2024): Users who
-//     express frustration through short corrective messages ("no", "wrong",
-//     "stop") are 3x more likely to abandon the tool if it doesn't adjust.
-//   - Devin/SICA overseer (arXiv:2504.15228): mentions "user satisfaction
-//     monitoring" as a key signal for when to reset agent state.
-//   - Cursor's telemetry tracks implicit signals (accept/reject rates) but
-//     does not analyze explicit user message sentiment at runtime.
-//   - Claude Code: no runtime sentiment detection; relies on system prompt
-//     guidance only.
-//
-// Existing ggcode systems that overlap but don't cover this gap:
-//   - correction_feedback.go: detects FILE REVERTS (undo) as negative signal,
-//     but not TEXTUAL feedback in user messages.
-//   - repetition_tracker.go: tracks repeated TOOL CALLS, not user frustration.
-//   - overseer.go: monitors agent trajectory shape, not user sentiment.
-//   - convergence_lock.go: prevents premature convergence, but doesn't detect
-//     when the user is telling the agent it's on the wrong track.
-//
-// This module fills the gap with deterministic, zero-LLM-cost detection:
-//
-//   1. NEGATIVE FEEDBACK DETECTION: analyzes each user message for patterns
-//      indicating the agent's previous output was wrong, unwanted, or the user
-//      is frustrated. Uses keyword matching + message brevity heuristics.
-//
-//   2. ESCALATION TRACKING: tracks how many consecutive negative messages the
-//      user has sent. First detection → gentle guidance. Second → stronger.
-//      Third+ → force the agent to stop and ask for clarification.
-//
-//   3. STATE RESET: when strong negative feedback is detected, resets the
-//      monitoring systems (overseer, repetition tracker, etc.) because the
-//      user's correction invalidates the previous trajectory - those systems
-//      would otherwise carry stale "progress" data from the rejected approach.
-//
-// All operations are pure string matching and counter increments - no I/O,
-// no blocking, no external dependencies.
-
 import (
 	"bytes"
 	"fmt"
@@ -53,28 +11,18 @@ import (
 )
 
 const (
-	// sentimentEscalationSoft: first negative message → gentle course correction.
-	sentimentEscalationSoft = 1
-	// sentimentEscalationStrong: second consecutive negative → strong guidance.
+	sentimentEscalationSoft   = 1
 	sentimentEscalationStrong = 2
-	// sentimentEscalationMax: third+ → force stop and ask clarification.
-	sentimentEscalationMax = 3
+	sentimentEscalationMax    = 3
 )
 
-// userSentimentState tracks user feedback patterns across runs.
 type userSentimentState struct {
 	mu sync.Mutex
 
-	// consecutiveNegatives counts consecutive user messages that express
-	// negative feedback. Reset to 0 when a non-negative message is received.
 	consecutiveNegatives int
 
-	// totalCorrections tracks the total number of negative feedback events
-	// in the session (never reset). Used for session-level analytics.
 	totalCorrections int
 
-	// lastDetectedCategory remembers what type of negative feedback was
-	// detected most recently, so guidance can be tailored.
 	lastDetectedCategory string
 }
 
@@ -88,62 +36,34 @@ func (s *userSentimentState) reset() {
 	s.consecutiveNegatives = 0
 }
 
-// NegFeedbackCategory classifies the type of negative feedback detected.
 const (
-	negCatRejection   = "rejection"   // "no", "wrong", "not what I wanted"
-	negCatFrustration = "frustration" // "stop", "ugh", "this is broken"
-	negCatRedirection = "redirection" // "instead", "actually", "I meant"
+	negCatRejection   = "rejection"
+	negCatFrustration = "frustration"
+	negCatRedirection = "redirection"
 )
 
-// sentimentPositiveWhitelist lists phrases that look negative to the word
-// matcher but are actually positive/neutral acknowledgements (#1223).
-// "no problem" / "no worries" / "not bad" all contain bare rejection words
-// ("no", "bad") yet mean the opposite; technical how-to questions like
-// "how do I stop the daemon" contain "stop" without any frustration intent.
-// A first line containing any of these phrases is never classified as
-// negative feedback.
 var sentimentPositiveWhitelist = []string{
 	"no problem", "no problems", "no worries", "no issues", "no issue", "no need",
-	// #4203: plural/collective "no X" confirmations — "no problems, looks
-	// good" etc. The bare "no" must be masked before the rejection scan,
-	// same family as #1223/#4197. #4207: "no biggie"/"no rush" - benign
-	// pacing/reassurance ("No rush, take your time") is not a rejection.
+
 	"no sweat", "no complaints", "no concerns", "no biggie", "no rush",
 	"not bad", "not too bad", "looks good", "looks great", "looks fine",
 	"all good", "well done", "good job", "nice work", "great work",
 	"perfect", "excellent", "awesome", "thank you", "thanks",
 	"how do i stop", "how to stop", "how can i stop", "how do you stop",
 	"how do i restart", "how to restart",
-	// #3739 CJK positives: same masking role for Chinese acknowledgements.
+
 	"没问题", "不碍事", "谢谢", "好的", "很好", "不错", "可以了", "太好了",
 	"干得好", "看起来不错", "完美", "棒",
-	// #4149 CJK neutral carriers: bare CJK negative words have no word
-	// boundaries (isAlnum is false for all bytes >= 0x80, so wordContains
-	// degenerates to substring matching), and everyday Chinese compounds
-	// EMBED the trigger patterns: 算了 inside 计算了/结算, 垃圾 inside
-	// 垃圾回收, 没用 inside 没用上/没用过, 不对 inside 不对齐, 停一下
-	// inside 帮我停一下, 我是说 inside 我是说中文. These are the CJK
-	// counterparts of the English #1223/#4104 false-positive families:
-	// masking the carrier blanks the embedded trigger while leaving any
-	// other negative words in the line still detectable.
+
 	"计算了", "预算了", "结算", "打算了",
 	"垃圾回收", "没用上", "没用到", "没用过", "不对齐",
 	"帮我停一下", "我是说中文", "我是说英文", "我是说英语",
-	// #4181: 还是错 inside 还是错误处理/还是错误码 (a neutral
-	// technical recommendation, not a rejection of the agent's output)
-	// - same carrier family as #4149.
+
 	"还是错误",
-	// Mid-compound straddle carriers: 别动 inside 区别动态, 重来 inside
-	// 重庆来. A clause-start position rule was tried and rejected - it also
-	// killed genuine mid-sentence predicates ("这个方案错了", #4003 test
-	// suite) - so these two niche straddles are masked as carriers instead.
+
 	"区别动", "重庆来",
 }
 
-// containsCJKANotA reports whether s contains an A-not-A construction
-// (V不V, 是不是, 对不对, 行不行, 好不好, 能不能, 要不要...): a 不 rune whose
-// preceding 1-3 runes are repeated verbatim right after it. RE2 has no
-// backreferences, so this is scanned by hand.
 func containsCJKANotA(s string) bool {
 	r := []rune(s)
 	for i, c := range r {
@@ -159,9 +79,6 @@ func containsCJKANotA(s string) bool {
 	return false
 }
 
-// patternHasCJK reports whether the pattern contains at least one CJK rune.
-// #4149 gates below apply only to such patterns; ASCII patterns keep the
-// wordContains boundary semantics unchanged.
 func patternHasCJK(pat string) bool {
 	for _, r := range pat {
 		if r >= 0x4E00 && r <= 0x9FFF {
@@ -171,10 +88,6 @@ func patternHasCJK(pat string) bool {
 	return false
 }
 
-// isCJKQuestionLine reports whether the (first) line is an interrogative:
-// after trimming trailing spaces and sentence-final 。/！/， it ends with ？,
-// ?, 吗 or 呢. Diagnostic questions ("服务为什么停下了？", "部署没成功吗？")
-// carry bare negative substrings without any feedback intent. (#4149)
 func isCJKQuestionLine(line string) bool {
 	t := strings.TrimRight(line, "。！!，, \t")
 	if t == "" {
@@ -188,18 +101,8 @@ func isCJKQuestionLine(line string) bool {
 	return false
 }
 
-// isEnglishQuestionLine reports whether the (first) line is an English
-// interrogative: it ends with a question mark, or opens with a question
-// word. Diagnostic questions ("is the build still broken?", "why does the
-// auth flow keep failing?") embed rejection substrings without feedback
-// intent - the ASCII counterpart of the #4149 CJK question gate. (#4190)
 func isEnglishQuestionLine(line string) bool {
-	// #4194: lowercase INSIDE the function. IM clients auto-capitalize the
-	// first letter and drop the question mark ("Why is this still failing"),
-	// which used to defeat both the suffix check and the all-lowercase
-	// prefix list while the rejection scanner happily lowercased its own
-	// copy. Also accept the full-width question mark: mixed CJK/English
-	// lines commonly end with ？ and were invisible to the ASCII suffix.
+
 	t := strings.ToLower(strings.TrimSpace(line))
 	if t == "" {
 		return false
@@ -234,9 +137,6 @@ func runesEqual(a, b []rune) bool {
 	return true
 }
 
-// isCJKANotAQuestion reports whether the line is a short CJK confirmation
-// question: it carries an A-not-A construction AND an interrogative ending
-// (？/?/吗/呢). (#4004)
 func isCJKANotAQuestion(line string) bool {
 	if utf8.RuneCountInString(line) > 40 || !containsCJKANotA(line) {
 		return false
@@ -246,208 +146,92 @@ func isCJKANotAQuestion(line string) bool {
 		strings.HasSuffix(t, "吗") || strings.HasSuffix(t, "呢")
 }
 
-// negFeedbackPatterns maps patterns to categories. Matching is case-insensitive
-// and checks for word boundaries to avoid false positives (e.g., "now" matching
-// "no"). Patterns are ordered by priority - earlier matches take precedence.
 var negFeedbackPatterns = []struct {
 	patterns []string
 	category string
 }{
-	// Rejection: direct negation of agent's work.
-	// #1223: bare "no"/"bad" remain here deliberately - the positive whitelist
-	// above neutralizes the opposite-meaning phrases ("no problem", "not bad")
-	// before these patterns are consulted.
+
 	{[]string{"no", "nope", "wrong", "incorrect", "not right", "not what", "not correct",
 		"that's wrong", "thats wrong", "this is wrong", "bad", "doesn't work",
 		"doesnt work", "didnt work", "didn't work", "broken", "still broken",
 		"still failing", "still not working", "still doesn't", "still doesnt",
 		"not working", "fails", "failing", "error again",
-		// #3739 CJK: Chinese users correcting the agent were 100% invisible to
-		// this detector (pure-CJK text matched no English pattern, resetting
-		// the escalation counter mid-sequence). CJK has no \b semantics, but
-		// wordContains degenerates safely to substring matching for CJK (its
-		// boundary check isAlnum is false for all bytes >= 0x80).
+
 		"错了", "不对", "不正确", "不是这样", "不是我要的", "改错了",
 		"坏了", "坏掉了", "不行", "不能用", "没成功", "又错了",
 		"还是错", "还是不对", "还是不行", "又失败"},
 		negCatRejection},
-	// Redirection: user changing direction.
+
 	{[]string{"instead", "actually", "i meant", "i should have", "let me rephrase",
 		"let me clarify", "what i actually", "what i really", "on second thought",
 		"never mind", "nevermind", "ignore that", "forget that", "disregard",
 		"start over", "try again", "redo",
-		// #3739 CJK redirection.
+
 		"重新来", "重来", "重新开始", "再来一次", "换个", "改用", "换成",
 		"我是说", "我的意思是", "我是想要", "算了", "别管了", "忽略刚才"},
 		negCatRedirection},
-	// Frustration: emotional signals.
-	// #1223: "why are you" removed - it matched technical questions like
-	// "why are you using a mutex here?". How-to-stop questions are whitelist
-	// phrases above.
-	// #4104: bare "stop" removed - see isBareStopCommand; imperative ops
-	// commands ("stop the dev server") must not read as frustration.
-	// #4127: "why do you keep"/"you keep"/"why are you doing" narrowed to
-	// gerund/deixis forms - keep+doing/making is frustration, keep/doing + a
-	// noun phrase ("keep a mutex", "doing a bounds check") is a neutral
-	// technical question, the same false-positive family #1223 removed.
+
 	{[]string{"ugh", "wtf", "this is frustrating", "frustrating",
 		"why are you doing this", "why are you doing that", "why do you still",
 		"you keep doing", "you keep making", "you keep trying",
 		"stop doing", "stop trying",
-		// #4129: bare "i said"/"as i said"/"like i said"/"i already told"
-		// removed - neutral technical restatement ("as I said, the parser
-		// retries on 429") read as frustration and two such messages
-		// reset monitoring. Only the agent-directed reprimand form keeps
-		// firing; the CJK counterpart 我说过了 is already reprimand-shaped.
+
 		"i already told you",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
 		"nonsense", "garbage", "useless", "terrible",
-		// #3739 CJK frustration.
+
 		"停下", "停一下", "别改了", "别动", "烦死了", "太差了", "垃圾",
 		"没用", "我说过了", "说过多少次", "你听了吗", "看我的消息"},
 		negCatFrustration},
 }
 
-// detectNegativeFeedback analyzes a user message and returns the feedback
-// category (empty string if no negative feedback detected).
-//
-// Heuristics:
-//  1. SHORT MESSAGE + REJECTION/FRUSTRATION WORD: a very short message
-//     (<100 chars) containing a rejection or frustration keyword is a strong
-//     negative signal. Short messages are more likely to be reactive feedback.
-//  2. REDIRECTION KEYWORDS anywhere: these indicate course correction
-//     regardless of message length.
-//  3. MULTI-LINE messages are NOT treated as pure negative feedback -
-//     the user is likely providing detailed context, even if they express
-//     some frustration. Only treat as negative if the FIRST line is a
-//     clear rejection/frustration signal.
 func detectNegativeFeedback(message string) string {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return ""
 	}
 
-	// Analyze only the first line for multi-line messages - the first line
-	// captures the reactive sentiment; subsequent lines usually contain context.
 	firstLine := message
 	if idx := strings.IndexByte(message, '\n'); idx >= 0 {
 		firstLine = strings.TrimSpace(message[:idx])
 	}
 
 	lower := strings.ToLower(firstLine)
-	// #3968: rune count, not byte length - UTF-8 CJK runs 3 bytes/char, so
-	// `len() < 100` classified every Chinese message over ~33 chars as long,
-	// silently skipping rejection/frustration hits and resetting the
-	// escalation counter mid-sequence (exactly what #3739's CJK keywords
-	// were added to prevent). Rune count keeps the threshold semantics
-	// identical for ASCII (1 byte = 1 rune).
+
 	isShort := utf8.RuneCountInString(firstLine) < 100
 
-	// Positive-phrase masking (#1223, refined by #1227): whitelist phrases
-	// like "no problem" / "not bad" contain bare rejection words but express
-	// satisfaction. Rather than short-circuiting the whole line - which hid
-	// genuine negative signals in mixed messages like "thanks, but still
-	// broken" and wrongly reset the escalation counter - the matched phrases
-	// are blanked out and the negative patterns then scan what remains.
 	scanText := maskPositivePhrases(lower)
 
-	// Check patterns in priority order.
-	// #4104: bare "stop" no longer sits in the frustration pattern list -
-	// it fired on imperative ops commands ("stop the dev server and check
-	// the logs") and injected a misleading course-correction signal, and two
-	// such commands escalated to a monitoring reset. Genuine bare-stop
-	// ABORT intent is the message consisting of essentially only "stop"
-	// ("stop", "stop!", "stop."); frustrated-work stop is already covered
-	// by "stop doing"/"stop trying".
 	if isBareStopCommand(lower) {
 		return negCatFrustration
 	}
 	for _, group := range negFeedbackPatterns {
-		// #4004: CJK A-not-A confirmation questions (对不对/行不行/是不是…)
-		// contain bare rejection substrings but mean the OPPOSITE - they ask
-		// for confirmation, the exact mirror of the English "no problem"/
-		// "not bad" whitelist problem #1223 solved. Masking cannot handle the
-		// nested form (是不是不对 masks 是不是 and still hits 不对), so the
-		// whole rejection category is skipped for short interrogative lines
-		// carrying an A-not-A construction. Genuine rejections (不对，重新做 /
-		// 还是错) carry no trailing interrogative and stay detected.
+
 		if group.category == negCatRejection && isCJKANotAQuestion(lower) {
 			continue
 		}
 		for _, pat := range group.patterns {
 			if wordContains(scanText, pat) {
-				// #4149: CJK bare words carry no word boundaries, so an
-				// additional gate applies before a CJK pattern counts:
-				// QUESTION GATE: a line ending in an interrogative
-				//     (吗/呢/？/?) is a diagnostic question, not feedback -
-				//     "服务为什么停下了？" / "部署没成功吗？". Same conservative
-				//     direction as the #4004 A-not-A question skip above.
-				//     Mid-compound straddles (区别动态->别动, 重庆来->重来) and
-				//     neutral carriers (计算了/垃圾回收/没用上) are handled by
-				//     masking in the whitelist above; a clause-start position
-				//     rule was tried and rejected - it killed genuine
-				//     mid-sentence predicates like "这个方案错了".
+
 				if patternHasCJK(pat) {
 					if isCJKQuestionLine(firstLine) {
 						continue
 					}
 				} else if group.category == negCatRejection && isEnglishQuestionLine(firstLine) {
-					// #4190: ASCII mirror of the #4149 gate. English
-					// diagnostic questions ("is the build still broken?",
-					// "why does the auth flow keep failing?") embed
-					// rejection substrings without feedback intent.
-					// Scoped to the rejection category so genuinely
-					// emotional questions keep their category signal.
+
 					continue
 				}
-				// All categories only trigger for short messages to avoid
-				// false positives in detailed technical messages. A long
-				// message with "actually" mid-sentence is context, not
-				// a course-correction signal.
-				//
-				// #1521 case C: redirection fires on long messages too (the
-				// header heuristic #2 promises "regardless of length"), but
-				// only as an OPENER - the first 40 chars. The old isShort
-				// gate swallowed a 150-char "Actually, I meant X" opener,
-				// which also reset consecutiveNegatives (two detailed
-				// corrections in a row restarted from the level-1 nudge);
-				// while firing on a mid-sentence "actually" in a long
-				// reflective message was the exact FP the gate existed for.
+
 				if isShort {
 					return group.category
 				}
-				// Opener exception: a strong signal word near the START of a
-				// LONG message is still course-correction feedback, not
-				// context. #1521 introduced this for redirection; #4126
-				// extends it to rejection/frustration - a detailed
-				// correction opening with "不对/错了/烦死了" (CJK corrections
-				// run long fast: 100 runes is ~2-3 sentences) was swallowed
-				// AND reset consecutiveNegatives, systematically delaying the
-				// escalation ladder exactly when the user is escalating.
-				// Two-tier window: redirection markers ("instead",
-				// "actually") are unambiguous course words and keep the
-				// #1521/#3968 40-rune window; bare rejection/frustration
-				// words ("wrong", "bad") are common inside reflective prose
-				// ("I was thinking about how the wrong approach might
-				// actually be right...") and only qualify when the message
-				// essentially BEGINS with them (12 runes of preamble).
+
 				openerWindow := 40
 				if group.category != negCatRedirection {
 					openerWindow = 12
 				}
-				// #3968: the index is a BYTE index; compare the rune
-				// count of the prefix so the window is CHARACTERS in any
-				// script. ASCII behavior is unchanged (byte index == rune
-				// count when the prefix is pure ASCII).
-				// #4174: use wordIndexIn, not strings.Index. The gate that
-				// got us here is wordContains (word-bounded), so the
-				// position check must use the same boundary semantics:
-				// strings.Index finds a substring embedded in an unrelated
-				// word at the START ("no" inside "Now that..."), and that
-				// borrowed position passes the 12-rune opener window even
-				// though the word-bounded match that actually fired is
-				// mid-message - exactly what the window exists to exclude.
+
 				if idx := wordIndexIn([]byte(scanText), pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
 					return group.category
 				}
@@ -458,19 +242,10 @@ func detectNegativeFeedback(message string) string {
 	return ""
 }
 
-// isBareStopCommand reports whether the message is essentially just the
-// word "stop" with optional trailing punctuation - a genuine abort
-// command, not an imperative ops instruction that merely starts with
-// "stop" (#4104).
 func isBareStopCommand(lower string) bool {
 	return strings.Trim(lower, " !.!~\t\n") == "stop"
 }
 
-// maskPositivePhrases blanks out word-bounded occurrences of every
-// whitelist phrase in text, returning the text with those spans replaced by
-// spaces. Blanking keeps surrounding word boundaries intact (spaces are
-// non-alphanumeric), so leftover negative-signal words are still matched by
-// wordContains on the returned text (#1227).
 func maskPositivePhrases(text string) string {
 	b := []byte(text)
 	for _, w := range sentimentPositiveWhitelist {
@@ -487,8 +262,6 @@ func maskPositivePhrases(text string) string {
 	return string(b)
 }
 
-// wordIndexIn returns the start of the first word-bounded occurrence of
-// pattern in b, or -1. Boundary semantics mirror wordContains.
 func wordIndexIn(b []byte, pattern string) int {
 	pb := []byte(pattern)
 	for from := 0; from+len(pb) <= len(b); {
@@ -508,27 +281,18 @@ func wordIndexIn(b []byte, pattern string) int {
 	return -1
 }
 
-// wordContains checks if text contains the pattern as a standalone word
-// (bounded by non-word characters or string boundaries). This prevents
-// false positives like "now" matching "no".
-// #4033: hyphens and underscores are word-continuation bytes, NOT boundaries,
-// so "no-op"/"bad-API"/"stop-gaps" are single tokens and no longer match the
-// bare negative patterns "no"/"bad"/"stop". Without this, any hyphenated
-// compound sharing its first syllable with a negative word fired the
-// sentiment escalation ladder on neutral technical messages ("this is a
-// no-op change").
 func wordContains(text, pattern string) bool {
 	idx := strings.Index(text, pattern)
 	for idx >= 0 {
-		// Check character before.
+
 		beforeOK := idx == 0 || !isAlnum(text[idx-1])
-		// Check character after.
+
 		afterIdx := idx + len(pattern)
 		afterOK := afterIdx >= len(text) || !isAlnum(text[afterIdx])
 		if beforeOK && afterOK {
 			return true
 		}
-		// Search for next occurrence.
+
 		next := strings.Index(text[idx+1:], pattern)
 		if next < 0 {
 			break
@@ -538,29 +302,22 @@ func wordContains(text, pattern string) bool {
 	return false
 }
 
-// isAlnum reports whether b continues a word: ASCII alphanumerics, the
-// apostrophe ("don't"), and - #4033 - hyphen/underscore, so a hyphenated
-// compound is one token rather than two boundary-separated words.
 func isAlnum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\'' || b == '-' || b == '_'
 }
 
-// SentimentFeedback represents the result of sentiment analysis for a single
-// user message. If Level is 0, no negative feedback was detected.
 type SentimentFeedback struct {
-	Level    int    // 0=none, 1=soft, 2=strong, 3=max
-	Category string // rejection, frustration, redirection, or empty
+	Level    int
+	Category string
 }
 
-// analyzeAndUpdate checks the user message for negative feedback and updates
-// internal state. Returns the current escalation level and category.
 func (s *userSentimentState) analyzeAndUpdate(message string) SentimentFeedback {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	category := detectNegativeFeedback(message)
 	if category == "" {
-		// Non-negative message resets the consecutive counter.
+
 		s.consecutiveNegatives = 0
 		return SentimentFeedback{Level: 0}
 	}
@@ -580,9 +337,6 @@ func (s *userSentimentState) analyzeAndUpdate(message string) SentimentFeedback 
 	return SentimentFeedback{Level: level, Category: category}
 }
 
-// buildSentimentGuidance generates the guidance message to inject when negative
-// feedback is detected. The guidance is tailored to the escalation level and
-// feedback category.
 func buildSentimentGuidance(fb SentimentFeedback) string {
 	if fb.Level == 0 {
 		return ""
@@ -621,7 +375,6 @@ func buildSentimentGuidance(fb SentimentFeedback) string {
 	return b.String()
 }
 
-// tailoredSuffix adds category-specific context to the guidance message.
 func tailoredSuffix(category string, _ bool) string {
 	switch category {
 	case negCatRejection:
@@ -635,20 +388,10 @@ func tailoredSuffix(category string, _ bool) string {
 	}
 }
 
-// shouldResetMonitoringOnFeedback returns true when the negative feedback level
-// is strong enough to warrant resetting agent monitoring state.
-//
-// Rationale: the overseer, repetition tracker, scope drift, and other monitoring
-// systems accumulate trajectory data across iterations. When the user explicitly
-// rejects the agent's approach, that trajectory data becomes stale - it reflects
-// work that was wrong. Resetting ensures these systems start fresh with the
-// corrected approach, avoiding false "drift" or "stuck" alerts triggered by
-// the now-irrelevant previous trajectory.
 func shouldResetMonitoringOnFeedback(fb SentimentFeedback) bool {
 	return fb.Level >= sentimentEscalationStrong
 }
 
-// formatSentimentLogLine produces a debug log line for the feedback event.
 func formatSentimentLogLine(fb SentimentFeedback) string {
 	return fmt.Sprintf("sentiment feedback: level=%d category=%s", fb.Level, fb.Category)
 }

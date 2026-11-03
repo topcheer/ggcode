@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// mockIMManager implements IMManager for testing.
 type mockIMManager struct {
 	snapshot           IMSnapshot
 	muted              map[string]bool
@@ -21,7 +20,7 @@ type mockIMManager struct {
 	disableErr         error
 	enableErr          error
 	otherInstances     bool
-	healthyAfterAction bool // when true, waitForHealthy will succeed after unmute/enable
+	healthyAfterAction bool
 }
 
 func (m *mockIMManager) Snapshot() IMSnapshot { return m.snapshot }
@@ -43,7 +42,7 @@ func (m *mockIMManager) UnmuteBinding(name string) error {
 		m.muted = make(map[string]bool)
 	}
 	delete(m.muted, name)
-	// Simulate adapter becoming healthy after unmute
+
 	if m.healthyAfterAction {
 		for i := range m.snapshot.Adapters {
 			if m.snapshot.Adapters[i].Name == name {
@@ -72,7 +71,7 @@ func (m *mockIMManager) EnableBinding(name string) error {
 		m.disabled = make(map[string]bool)
 	}
 	delete(m.disabled, name)
-	// Simulate adapter becoming healthy after enable
+
 	if m.healthyAfterAction {
 		for i := range m.snapshot.Adapters {
 			if m.snapshot.Adapters[i].Name == name {
@@ -244,8 +243,6 @@ func TestIMTool_DisableEnable(t *testing.T) {
 	}
 }
 
-// --- send tests ---
-
 func TestIMTool_SendDirect(t *testing.T) {
 	mgr := &mockIMManager{
 		snapshot: IMSnapshot{
@@ -259,19 +256,16 @@ func TestIMTool_SendDirect(t *testing.T) {
 	}
 	tool := IMTool{Manager: mgr}
 
-	// Missing adapter
 	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"action":"send","message":"hello"}`))
 	if !result.IsError {
 		t.Error("expected error when adapter is empty")
 	}
 
-	// Missing message
 	result, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"send","adapter":"tg-bot"}`))
 	if !result.IsError {
 		t.Error("expected error when message is empty")
 	}
 
-	// Success - adapter healthy
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"send","adapter":"tg-bot","message":"hello world"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -364,7 +358,7 @@ func TestIMTool_SendDisabledAutoStart(t *testing.T) {
 func TestIMTool_SendAutoStartMultiInstanceConflict(t *testing.T) {
 	mgr := &mockIMManager{
 		muted:          map[string]bool{"tg-bot": true},
-		otherInstances: true, // another instance has active channels
+		otherInstances: true,
 		snapshot: IMSnapshot{
 			CurrentBindings: []IMChannelBinding{
 				{Adapter: "tg-bot", Platform: "telegram", ChannelID: "12345", Muted: true},

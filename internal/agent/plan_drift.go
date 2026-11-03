@@ -9,50 +9,17 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Plan Drift Detection - Spec-Driven Development Gap
-//
-// Research: Kiro (AWS spec-first IDE), GitHub Spec Kit, Claude Code plan mode,
-// Cursor composer spec, Factory.ai all implement spec-driven development where
-// a plan/spec is created BEFORE implementation. The critical gap these tools
-// address: ensuring the agent actually follows its own plan.
-//
-// ggcode already has:
-//   - enter_plan_mode / exit_plan_mode tools
-//   - spec specparser.go (ParseSpec, ValidateSpec, SpecToTasks)
-//   - task_create / task_update with dependencies
-//   - fulfillment_gate.go (request-vs-work match)
-//
-// The gap: when exit_plan_mode presents a plan, the plan content is NEVER
-// stored or tracked. The agent can silently ignore its own plan - implementing
-// only partial items, skipping steps, or doing completely different work.
-// No competitor (Claude Code, Cursor, Aider, Devin) performs plan-item-level
-// reconciliation after plan exit.
-//
-// This gate fills that gap with a deterministic, zero-LLM-cost heuristic:
-//  1. CAPTURE: When exit_plan_mode fires, extract plan items (bullet points,
-//     numbered lists, heading-level tasks from the plan markdown)
-//  2. KEYWORD EXTRACTION: For each plan item, extract distinctive keywords
-//     (file names, function names, technology terms)
-//  3. DRIFT CHECK: Before completion, verify that plan items have corresponding
-//     work - files edited, tools called, or assistant text mentioning them
-//  4. INJECT: If significant plan items are unaddressed, remind the agent
-//
-// The gate fires AT MOST ONCE per run (advisory, doesn't block completion).
-
-// planDriftState tracks the plan from exit_plan_mode and whether drift was checked.
 type planDriftState struct {
-	captured bool       // whether a plan was captured this run
-	fired    bool       // whether the gate already fired
-	items    []planItem // extracted plan items
+	captured bool
+	fired    bool
+	items    []planItem
 
-	// adherence (r34) exposes the internally computed plan coverage as a
-	// continuous per-run trend; the fire-once warning above stays as-is.
 	adherence planAdherenceTrend
 }
 
 type planItem struct {
-	Text     string   // raw item text
-	Keywords []string // distinctive keywords extracted from the item
+	Text     string
+	Keywords []string
 }
 
 func newPlanDriftState() *planDriftState {
@@ -66,8 +33,6 @@ func (p *planDriftState) reset() {
 	p.adherence = planAdherenceTrend{}
 }
 
-// capturePlan extracts structured items from a plan presented via exit_plan_mode.
-// It parses markdown bullet points, numbered lists, and heading-level tasks.
 func (p *planDriftState) capturePlan(planContent string) {
 	if strings.TrimSpace(planContent) == "" {
 		return
@@ -88,7 +53,6 @@ func (p *planDriftState) capturePlan(planContent string) {
 		}
 	}
 
-	// Limit to reasonable number of items to avoid noise
 	if len(p.items) > 30 {
 		p.items = p.items[:30]
 	}
@@ -96,28 +60,24 @@ func (p *planDriftState) capturePlan(planContent string) {
 	debug.Log("agent", "Plan drift: captured %d plan items", len(p.items))
 }
 
-// extractPlanItem determines if a line is a plan item and extracts keywords.
 func extractPlanItem(line string) planItem {
 	var text string
 
-	// Bullet point: "- item" or "* item"
 	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
 		text = strings.TrimSpace(line[2:])
 	}
 
-	// Numbered list: "1. item" or "1) item"
 	if text == "" {
 		text = stripNumberedPrefix(line)
 	}
 
-	// Heading: "## item" or "### item" (treated as plan sections)
 	if text == "" && strings.HasPrefix(line, "#") {
 		hashEnd := 0
 		for hashEnd < len(line) && line[hashEnd] == '#' {
 			hashEnd++
 		}
 		rest := strings.TrimSpace(line[hashEnd:])
-		// Only treat H2/H3 as items (H1 is usually the plan title)
+
 		if hashEnd >= 2 && hashEnd <= 3 && rest != "" {
 			text = rest
 		}
@@ -127,7 +87,6 @@ func extractPlanItem(line string) planItem {
 		return planItem{}
 	}
 
-	// Skip non-actionable lines (metadata, notes, etc.)
 	lower := strings.ToLower(text)
 	skipPrefixes := []string{"note:", "summary:", "overview", "background", "timeline", "estimated"}
 	for _, sp := range skipPrefixes {
@@ -144,7 +103,6 @@ func extractPlanItem(line string) planItem {
 	return planItem{Text: text, Keywords: keywords}
 }
 
-// stripNumberedPrefix removes "N. " or "N) " prefix from a line.
 func stripNumberedPrefix(line string) string {
 	i := 0
 	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
@@ -163,8 +121,6 @@ func stripNumberedPrefix(line string) string {
 	return ""
 }
 
-// extractKeywords pulls distinctive terms from plan item text.
-// It looks for: file paths, code identifiers, quoted terms, and capitalized words.
 func extractKeywords(text string) []string {
 	var keywords []string
 	seen := make(map[string]bool)
@@ -176,7 +132,6 @@ func extractKeywords(text string) []string {
 			continue
 		}
 
-		// File paths with extensions
 		if strings.Contains(clean, "/") && strings.Contains(clean, ".") {
 			lower := strings.ToLower(clean)
 			if !seen[lower] {
@@ -186,7 +141,6 @@ func extractKeywords(text string) []string {
 			continue
 		}
 
-		// File extensions alone (e.g., ".go", ".py")
 		if strings.HasPrefix(clean, ".") && len(clean) > 1 && isAlpha(clean[1:]) {
 			lower := strings.ToLower(clean)
 			if !seen[lower] {
@@ -196,7 +150,6 @@ func extractKeywords(text string) []string {
 			continue
 		}
 
-		// CamelCase or snake_case identifiers (likely code symbols)
 		if isCodeIdentifier(clean) && len(clean) >= 4 {
 			lower := strings.ToLower(clean)
 			if !seen[lower] {
@@ -206,7 +159,6 @@ func extractKeywords(text string) []string {
 		}
 	}
 
-	// Quoted terms: "foo bar" or `foo bar`
 	extractQuoted(text, '"', &keywords, seen)
 	extractQuoted(text, '\'', &keywords, seen)
 	extractQuoted(text, '`', &keywords, seen)
@@ -214,20 +166,13 @@ func extractKeywords(text string) []string {
 	return keywords
 }
 
-// extractQuoted finds quoted substrings and adds them as keywords.
 func extractQuoted(text string, quote byte, keywords *[]string, seen map[string]bool) {
 	for {
 		idx := strings.IndexByte(text, quote)
 		if idx < 0 {
 			break
 		}
-		// #3724: a single-quote flanked by letters on BOTH sides is an
-		// English contraction apostrophe (don't / it's / user's), not a
-		// delimiter. Pairing those turned the phonetic residue between two
-		// contractions ("don' ... user'") into a phantom keyword, which made
-		// prose-only plan items (no code symbols at all) permanently
-		// "unaddressed" - a deterministic drift false-positive. A real quote
-		// delimiter always has a non-letter on at least one side.
+
 		if quote == '\'' && isContractionApostrophe(text, idx) {
 			text = text[idx+1:]
 			continue
@@ -249,16 +194,11 @@ func extractQuoted(text string, quote byte, keywords *[]string, seen map[string]
 	}
 }
 
-// isContractionApostrophe reports whether the single quote at text[i] sits
-// between two letters (an intra-word contraction apostrophe). Both quote
-// delimiters of a real quoted term have a non-letter boundary on at least
-// one side, so only contractions match this test.
 func isContractionApostrophe(text string, i int) bool {
 	return i > 0 && i+1 < len(text) &&
 		isAlphaByte(text[i-1]) && isAlphaByte(text[i+1])
 }
 
-// isCodeIdentifier checks if a string looks like a code identifier.
 func isCodeIdentifier(s string) bool {
 	if s == "" {
 		return false
@@ -282,7 +222,6 @@ func isCodeIdentifier(s string) bool {
 	return hasUpper || hasUnder
 }
 
-// isAlpha checks if a string contains only ASCII letters.
 func isAlpha(s string) bool {
 	for _, r := range s {
 		if !unicode.IsLetter(r) {
@@ -292,8 +231,6 @@ func isAlpha(s string) bool {
 	return s != ""
 }
 
-// checkPlanDrift verifies that plan items have corresponding work.
-// Returns a non-empty message if significant drift is detected.
 func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 	if !p.captured || p.fired || len(p.items) == 0 {
 		return ""
@@ -301,17 +238,8 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 
 	p.fired = true
 
-	// Build a corpus of "work done" from TOOL-FACED EVIDENCE only.
-	// #1850 case 1: the corpus used to start from assistantText - an LLM
-	// that RESTATED the plan in its reply ("next I'll update
-	// config_loader and auth_middleware...") marked unwritten items as
-	// addressed and the reminder went silent exactly when needed.
-	// Restating a plan is not doing it; compare against what the tools
-	// actually touched (the todo_staleness pattern: silencing requires
-	// tool-pattern evidence, not text promises).
 	workCorpus := buildPlanWorkCorpus(runStats)
 
-	// Check each plan item for keyword coverage
 	var unaddressed []string
 	for _, item := range p.items {
 		if len(item.Keywords) == 0 {
@@ -357,11 +285,6 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 	return b.String()
 }
 
-// buildPlanWorkCorpus assembles the "work done" corpus from tool-faced
-// evidence only: edited file paths/names and commands run. Tool names are
-// EXCLUDED: plan-item keywords colliding with generic tool names
-// (grep/search/read) would count as "work done" without any action.
-// Shared by the fire-once drift warning and the continuous adherence score.
 func buildPlanWorkCorpus(runStats *RunStats) string {
 	var b strings.Builder
 	for _, f := range runStats.FilesEdited {
@@ -386,7 +309,6 @@ func truncatePlanItem(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-// extractPlanFromArgs parses the "plan" field from exit_plan_mode tool arguments.
 func extractPlanFromArgs(args json.RawMessage) string {
 	var v struct {
 		Plan string `json:"plan"`

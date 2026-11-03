@@ -1,21 +1,3 @@
-// Package agentruntime: rollout trajectory summarization and selection.
-//
-// Implements the test-time scaling mechanisms from "Scaling Test-Time Compute
-// for Agentic Coding" (arXiv:2604.16529): each agent rollout (an extended
-// trajectory of actions/observations/errors/partial progress) is converted
-// into a compact structured summary preserving salient hypotheses, progress,
-// and failure modes while discarding low-signal trace details. Two scaling
-// forms are supported:
-//
-//   - Parallel: RecursiveTournament narrows a population of rollout summaries
-//     through small-group comparisons (RTV).
-//   - Sequential: DistillIntoPrompt conditions a new rollout on summaries
-//     distilled from prior attempts (agentic PDR).
-//
-// The module is deliberately dependency-free (fmt/sort/strings only) so it can
-// be used from the agent loop, the fallback chain, or sub-agent spawning
-// without import cycles. It never mutates message history and never inserts
-// messages between tool calls and tool results.
 package agentruntime
 
 import (
@@ -24,29 +6,20 @@ import (
 	"strings"
 )
 
-// TrajectoryEntry is one observation from an agent rollout. Kind is one of
-// "action", "observation", "error", "result", "note".
 type TrajectoryEntry struct {
 	Kind string
 	Text string
 }
 
-// RolloutSummary is the compact representation of one rollout: what was
-// attempted (Hypotheses), what succeeded (Progress), what went wrong
-// (Failures), and a confidence signal for selection.
 type RolloutSummary struct {
-	Hypotheses []string // salient approaches tried (e.g. "rename symbol via LSP")
-	Progress   []string // verified forward steps (e.g. "tests added", "build passes")
-	Failures   []string // failure modes with context (e.g. "vet failed: unused var x")
-	Verdict    string   // one-line outcome: "succeeded" | "partial" | "failed"
+	Hypotheses []string
+	Progress   []string
+	Failures   []string
+	Verdict    string
 }
 
-// maxDetailEntries caps each summary section so the representation stays
-// compact regardless of trajectory length (low-signal trace detail is dropped).
 const maxDetailEntries = 5
 
-// failureSignals mark an entry as a failure mode. Sorted by severity weight
-// in severityOf.
 var failureSignals = map[string]int{
 	"error":    3,
 	"failed":   3,
@@ -57,36 +30,23 @@ var failureSignals = map[string]int{
 	"conflict": 2,
 }
 
-// progressSignals mark an entry as verified forward progress.
 var progressSignals = []string{
 	"pass", "succeed", "ok:", "no error", "built", "committed", "created", "verified",
 }
 
-// negationSignals are explicitly positive statements whose text still
-// contains a bare failure substring ("no error" contains "error")  -  the
-// failure-substring switch case used to swallow them, making the
-// progressSignals "no error" entry unreachable dead code (#2997).
 var negationSignals = []string{
 	"no error", "no errors", "0 errors", "0 error",
 	"no failures", "0 failures", "without error",
 }
 
-// resolutionSignals mark past-tense fix confirmations: "fixed the error"
-// describes a success whose text contains a failure substring (#2997).
-// The "fail" exclusion keeps "fix failed"/"failed to fix" classified as
-// failure ("failed" never appears in a pure resolution phrase).
 var resolutionSignals = []string{
 	"fixed", "resolved", "now passes", "now pass", "already fixed",
 }
 
-// hypothesisSignals mark an entry as an approach/hypothesis worth carrying.
 var hypothesisSignals = []string{
 	"plan:", "approach:", "attempt", "try", "hypothesis", "strategy", "fix:",
 }
 
-// SummarizeTrajectory distills a raw rollout into a RolloutSummary. Entries
-// are classified by kind and keyword signals; entries classified into no
-// section are treated as low-signal trace detail and dropped, per the paper.
 func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 	s := RolloutSummary{Verdict: "failed"}
 	anyProgress := false
@@ -100,10 +60,6 @@ func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 		lower := strings.ToLower(text)
 		kind := strings.ToLower(e.Kind)
 
-		// #2997: explicit negations/resolutions must win over bare failure
-		// substrings  -  "go build: no error, all packages compile" and
-		// "fixed the error; test now passes" are progress, not failure.
-		// kind=="error" stays structural failure regardless of wording.
 		positive := kind != "error" && positiveStatement(lower)
 
 		switch {
@@ -121,7 +77,7 @@ func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 		case kind == "action" || hasAny(lower, hypothesisSignals):
 			s.addHypothesis(compactLine(text, 160))
 		default:
-			// low-signal trace detail: dropped
+
 		}
 	}
 
@@ -142,7 +98,7 @@ func appendCapped(dst *[]string, v string) {
 	if len(*dst) >= maxDetailEntries {
 		return
 	}
-	// Dedup identical lines (common with repeated retries).
+
 	for _, existing := range *dst {
 		if existing == v {
 			return
@@ -151,9 +107,6 @@ func appendCapped(dst *[]string, v string) {
 	*dst = append(*dst, v)
 }
 
-// failureSignalsKeys is the pre-sorted key set of failureSignals, hoisted out
-// of the per-entry classification loop (it was previously rebuilt and
-// re-sorted on every entry).
 var failureSignalsKeys = func() []string {
 	keys := make([]string, 0, len(failureSignals))
 	for k := range failureSignals {
@@ -174,10 +127,6 @@ func hasAny(lower string, signals []string) bool {
 	return false
 }
 
-// positiveStatement reports whether lower is an explicitly positive
-// statement that the bare failure substrings would misread as failure
-// (#2997): an explicit negation ("no error") or a resolution phrase
-// ("fixed the error") without a live failure word.
 func positiveStatement(lower string) bool {
 	if hasAny(lower, negationSignals) {
 		return true
@@ -185,14 +134,10 @@ func positiveStatement(lower string) bool {
 	return hasAny(lower, resolutionSignals) && !strings.Contains(lower, "fail")
 }
 
-// looksLikeFailure guards against progress-keyword false positives such as
-// "tests pass check failed" or "0 passing".
 func looksLikeFailure(lower string) bool {
 	return strings.Contains(lower, "fail") || strings.Contains(lower, "error")
 }
 
-// compactLine truncates a trace line to at most limit runes with an ellipsis,
-// keeping the head of the line where the signal usually lives.
 func compactLine(text string, limit int) string {
 	text = strings.Join(strings.Fields(text), " ")
 	r := []rune(text)
@@ -202,10 +147,6 @@ func compactLine(text string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
-// score rates a summary for tournament selection: verified progress dominates,
-// failure severity subtracts, and a success verdict gets a bonus. Mirrors the
-// paper's finding that list-wise comparison over compact summaries is the
-// strongest selection method.
 func (s RolloutSummary) score() int {
 	v := 10 * len(s.Progress)
 	for _, f := range s.Failures {
@@ -224,13 +165,11 @@ func (s RolloutSummary) score() int {
 	case "partial":
 		v += 5
 	}
-	// Hypotheses are informative for reuse but not evidence of success.
+
 	v += len(s.Hypotheses) / 2
 	return v
 }
 
-// Compare evaluates two summaries head-to-head, returning the better one.
-// Small-group comparisons like this are the building block of RTV.
 func Compare(a, b RolloutSummary) RolloutSummary {
 	sa, sb := a.score(), b.score()
 	if sa > sb {
@@ -239,7 +178,7 @@ func Compare(a, b RolloutSummary) RolloutSummary {
 	if sb > sa {
 		return b
 	}
-	// Tie-break deterministically on content so selection is stable.
+
 	if strings.Join(b.Progress, "|")+strings.Join(b.Failures, "|") <
 		strings.Join(a.Progress, "|")+strings.Join(a.Failures, "|") {
 		return b
@@ -247,10 +186,6 @@ func Compare(a, b RolloutSummary) RolloutSummary {
 	return a
 }
 
-// RecursiveTournament narrows a population of rollout summaries through
-// small-group comparisons (Recursive Tournament Voting, groupSize typically
-// 4). It recursively halves the field until one winner remains; an empty
-// population yields the zero summary. Deterministic and side-effect free.
 func RecursiveTournament(candidates []RolloutSummary, groupSize int) RolloutSummary {
 	if len(candidates) == 0 {
 		return RolloutSummary{Verdict: "failed"}
@@ -259,7 +194,7 @@ func RecursiveTournament(candidates []RolloutSummary, groupSize int) RolloutSumm
 		return candidates[0]
 	}
 	if groupSize < 2 {
-		groupSize = 4 // paper default
+		groupSize = 4
 	}
 
 	var next []RolloutSummary
@@ -278,10 +213,6 @@ func RecursiveTournament(candidates []RolloutSummary, groupSize int) RolloutSumm
 	return RecursiveTournament(next, groupSize)
 }
 
-// DistillIntoPrompt renders summaries from prior attempts into a conditioning
-// block for a new rollout (sequential PDR). The caller appends the returned
-// text to its prompt; the function itself never touches message history, so
-// the tool-call/tool-result protocol sequence is preserved.
 func DistillIntoPrompt(prior []RolloutSummary) string {
 	if len(prior) == 0 {
 		return ""

@@ -1,11 +1,5 @@
 package agent
 
-// zz_issue4344_test.go -- regression nail for #4344: #4338's write-evidence
-// list was writer+separator ENUMERATION, so combination shapes past a
-// read-only prefix still fail-opened the exemption: newline separators,
-// pipes into interpreters/ssh, and xargs feeding path-qualified or
-// env-wrapped writers.
-
 import (
 	"strings"
 	"testing"
@@ -13,31 +7,31 @@ import (
 
 func TestIssue4344ResidualWriteVectorsPattern(t *testing.T) {
 	must := []string{
-		"echo hi\nrm -rf config.yaml", // newline separator
-		"cat f | sh",                  // pipe into interpreter
+		"echo hi\nrm -rf config.yaml",
+		"cat f | sh",
 		"cat f | bash",
 		"cat f | python -c 'open(\"x\",\"w\")'",
 		"cat f | python3 scrub.py",
 		"cat list.txt | perl -ne 'unlink'",
-		"find . -name '*.log' | xargs /bin/rm", // path-qualified writer
-		"ls | xargs env rm",                    // env-wrapped writer
-		"find . | xargs sudo rm",               // sudo-wrapped writer (#4344 delta re-review)
-		"find . | xargs sh -c 'rm -f $0'",      // xargs shell
-		"cat f | ssh host 'rm -f x'",           // remote sink, no redirect
-		"echo done; sh cleanup.sh",             // ';' into shell
+		"find . -name '*.log' | xargs /bin/rm",
+		"ls | xargs env rm",
+		"find . | xargs sudo rm",
+		"find . | xargs sh -c 'rm -f $0'",
+		"cat f | ssh host 'rm -f x'",
+		"echo done; sh cleanup.sh",
 	}
 	for _, s := range must {
 		if !refusalCmdWriteEvidence.MatchString(s) {
 			t.Errorf("write evidence not detected: %q", s)
 		}
 	}
-	// Reader chains and benign shapes must stay exempt-eligible.
+
 	mustNot := []string{
 		"echo hi; ls",
 		"cat a | grep x",
 		"cat a | wc -l",
 		"cat a | sort",
-		"cat f | sha256sum", // 'sh' inside sha256sum: no \b
+		"cat f | sha256sum",
 		"cat f | shasum",
 		"grep -c foo bar | wc -l",
 		"cat a.md && cat config.yaml",
@@ -57,7 +51,7 @@ func TestIssue4344ResidualVectorsBlocked(t *testing.T) {
 	l.record("never touch config.yaml", "nl", refusalKindDirect)
 
 	bypass := []string{
-		"echo hi\\nrm -rf config.yaml", // JSON-escaped newline -> decoded separator
+		"echo hi\\nrm -rf config.yaml",
 		"cat config.yaml | bash",
 		"find . -name config.yaml | xargs /bin/rm",
 		"ls | xargs env rm config.yaml",

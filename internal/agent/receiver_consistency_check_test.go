@@ -35,7 +35,7 @@ func (s *Server) Addr()  string { return s.addr }
 }
 
 func TestCheckReceiverConsistency_InconsistentReceivers(t *testing.T) {
-	// New file: methods on Server use "s", "srv", and "this".
+
 	src := `package main
 
 type Server struct{ addr string }
@@ -55,20 +55,20 @@ func (this *Server) Addr() string { return this.addr }
 	if !strings.Contains(combined, "s") || !strings.Contains(combined, "srv") {
 		t.Errorf("expected warning to mention receiver names 's' and 'srv', got: %s", combined)
 	}
-	// "this" should be flagged as anti-pattern.
+
 	if !strings.Contains(combined, "anti-pattern") {
 		t.Errorf("expected anti-pattern mention for 'this', got: %s", combined)
 	}
 }
 
 func TestCheckReceiverConsistency_DeltaAware_PreExistingInconsistency(t *testing.T) {
-	// Old content already has inconsistency: (s *Foo) and (f *Foo).
+
 	oldSrc := `package main
 type Foo struct{}
 func (s *Foo) A() {}
 func (f *Foo) B() {}
 `
-	// New content has the same inconsistency -- should NOT warn (pre-existing).
+
 	newSrc := `package main
 type Foo struct{}
 func (s *Foo) A() {}
@@ -82,13 +82,13 @@ func (s *Foo) C() {}
 }
 
 func TestCheckReceiverConsistency_DeltaAware_NewInconsistency(t *testing.T) {
-	// Old content is consistent.
+
 	oldSrc := `package main
 type Foo struct{}
 func (s *Foo) A() {}
 func (s *Foo) B() {}
 `
-	// New content introduces inconsistency: method C uses "f" instead of "s".
+
 	newSrc := `package main
 type Foo struct{}
 func (s *Foo) A() {}
@@ -116,7 +116,7 @@ func (bz *Baz) Y() {}
 func (z *Baz) Z() {}
 `
 	result := checkReceiverConsistency("test.go", "", src)
-	// Only Baz is inconsistent; Bar is fine.
+
 	if len(result) != 1 {
 		t.Fatalf("expected exactly 1 warning (for Baz), got %d: %v", len(result), result)
 	}
@@ -163,7 +163,7 @@ type Foo struct{}
 func (_ *Foo) A() {}
 func (f *Foo) B() {}
 `
-	// Blank receiver should be skipped; only "f" is registered, so no inconsistency.
+
 	result := checkReceiverConsistency("test.go", "", src)
 	if len(result) != 0 {
 		t.Errorf("expected no warnings when blank receiver is used, got: %v", result)
@@ -188,7 +188,7 @@ func (ch *Cache[K, V]) Set(k K, v V) { ch.data[k] = v }
 }
 
 func TestCheckReceiverConsistency_SyntaxError(t *testing.T) {
-	// Garbage that won't parse -- should return nil gracefully.
+
 	src := "package main\n\ntype Foo struct{\nfunc (s *"
 	result := checkReceiverConsistency("test.go", "", src)
 	if len(result) != 0 {
@@ -197,8 +197,7 @@ func TestCheckReceiverConsistency_SyntaxError(t *testing.T) {
 }
 
 func TestReceiverTypeName(t *testing.T) {
-	// Test internal type extraction via the public check behavior.
-	// We verify through findReceiverInconsistencies which uses receiverTypeName.
+
 	groups := findReceiverInconsistencies(`package main
 
 type Foo struct{}
@@ -207,7 +206,7 @@ func (f *Foo) M() {}
 type Bar struct{}
 func (b Bar) N() {}
 `)
-	// Should find 2 types, both consistent.
+
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 type groups, got %d", len(groups))
 	}

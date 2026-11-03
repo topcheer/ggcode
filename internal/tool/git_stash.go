@@ -10,35 +10,16 @@ import (
 	"sync"
 )
 
-// GitStash implements the git_stash tool for push/pop/apply/drop operations.
 type GitStash struct{ WorkingDir string }
 
-// Stash seat isolation (#4777 / S-05): the workspace-wide git stash stack is
-// shared by every seat and sub-agent in a shared checkout, and a sub-agent's
-// cleanup once deleted another seat's live entry (e7746bd, 2026-09-20). The
-// tool now (a) stamps every push it creates with an owner tag and (b) refuses
-// pop/apply/drop on entries it did not create - foreign-tagged (another seat)
-// or untagged (CLI-created / pre-existing). Listing stays open via
-// git_stash_list; manual entries are managed from the CLI as before.
 const stashOwnerTagPrefix = "[ggcode-seat:"
 
 var (
-	stashOwnerOnce sync.Once
-	stashOwnerID   string
-	// stashOwnerTagRe extracts the tag payload from a `git stash list` line.
-	// #4841: the push path appends the tool's own tag LAST, so extraction is
-	// anchored to the END of the subject. The previous first-match regex let a
-	// user message like "work [ggcode-seat:other-seat-999]" (or any injected
-	// content flowing into the message param) forge an earlier tag that the
-	// extractor trusted - enabling self-DoS (owner mismatch on your own entry)
-	// and victim worktree injection (attacker-tagged content passing the
-	// victim's pop ownership check). Tail-anchoring makes forged earlier tags
-	// inert; the only trusted tag is the one the tool itself appended.
+	stashOwnerOnce  sync.Once
+	stashOwnerID    string
 	stashOwnerTagRe = regexp.MustCompile(regexp.QuoteMeta(stashOwnerTagPrefix) + `([^\]]+)\]$`)
 )
 
-// stashOwner returns a per-process owner identity (hostname-pid). Stable for
-// this session, distinct across seats and sub-agents.
 func stashOwner() string {
 	stashOwnerOnce.Do(func() {
 		host, err := os.Hostname()
@@ -50,8 +31,6 @@ func stashOwner() string {
 	return stashOwnerID
 }
 
-// stashEntryOwner inspects `git stash list` and returns the owner tag of the
-// entry at the given index ("" when the entry or its tag is absent).
 func stashEntryOwner(ctx context.Context, dir string, index int) (string, bool) {
 	cmd := gitCommand(ctx, "stash", "list")
 	cmd.Dir = dir
@@ -61,7 +40,7 @@ func stashEntryOwner(ctx context.Context, dir string, index int) (string, bool) 
 	}
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
-		return "", false // empty stack: no entry at any index
+		return "", false
 	}
 	lines := strings.Split(trimmed, "\n")
 	if index < 0 || index >= len(lines) {
@@ -69,7 +48,7 @@ func stashEntryOwner(ctx context.Context, dir string, index int) (string, bool) 
 	}
 	m := stashOwnerTagRe.FindStringSubmatch(lines[index])
 	if m == nil {
-		return "", true // entry exists, no tag
+		return "", true
 	}
 	return m[1], true
 }
@@ -137,8 +116,7 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	switch action {
 	case "push":
 		gitArgs = []string{"stash", "push"}
-		// #4777: stamp ownership so later pop/drop from this tooling can tell
-		// its own entries from other seats'. The user's message stays first.
+
 		msg := strings.TrimSpace(args.Message)
 		msg = strings.TrimSpace(strings.Join([]string{msg, stashOwnerTagPrefix + stashOwner() + "]"}, " "))
 		gitArgs = append(gitArgs, "-m", msg)
@@ -147,8 +125,7 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
 		} else if args.Index < 0 {
-			// #833: a negative index silently skipped the stash@{N} arg and
-			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+
 			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	case "apply":
@@ -156,8 +133,7 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
 		} else if args.Index < 0 {
-			// #833: a negative index silently skipped the stash@{N} arg and
-			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+
 			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	case "drop":
@@ -165,8 +141,7 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
 		} else if args.Index < 0 {
-			// #833: a negative index silently skipped the stash@{N} arg and
-			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+
 			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	default:
@@ -176,11 +151,6 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	cmd := gitCommand(ctx, gitArgs...)
 	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
-	// #4777 (S-05): pop/apply/drop mutate the SHARED stash stack - refuse
-	// entries this process did not create (foreign seat's tag, or no tag at
-	// all: CLI-created / pre-existing). The incident class is a sub-agent
-	// cleanup deleting another seat's live entry; the stash stack has no
-	// per-seat namespace, so the message tag is the isolation boundary.
 	if action == "pop" || action == "apply" || action == "drop" {
 		owner, exists := stashEntryOwner(ctx, cmd.Dir, args.Index)
 		if !exists {
@@ -208,9 +178,6 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	trimmed := strings.TrimSpace(string(out))
 
-	// After push: warn about untracked files that were NOT stashed.
-	// git stash push only saves tracked changes by default. Untracked
-	// files (e.g., newly created by the agent) remain in the working tree.
 	if action == "push" {
 		untracked := countUntrackedFiles(ctx, cmd.Dir)
 		if untracked > 0 {
@@ -234,7 +201,6 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	return Result{Content: trimmed}, nil
 }
 
-// countUntrackedFiles runs 'git status --porcelain' and counts untracked entries (?? prefix).
 func countUntrackedFiles(ctx context.Context, dir string) int {
 	cmd := gitCommand(ctx, "status", "--porcelain")
 	cmd.Dir = dir
@@ -251,7 +217,6 @@ func countUntrackedFiles(ctx context.Context, dir string) int {
 	return count
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitStash) Clone() Tool {
 	return &GitStash{WorkingDir: t.WorkingDir}
 }

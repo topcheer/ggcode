@@ -1,9 +1,5 @@
 package agent
 
-// #3860 companions: commandMatches must preprocess compound/env-prefixed
-// commands exactly like the verify_hint gate family (#2122/#3751), and
-// infix *x* globs must be suffix-anchored instead of contains-anywhere.
-
 import "testing"
 
 func TestIssue3860_CompoundAndEnvPreprocessing(t *testing.T) {
@@ -44,7 +40,7 @@ func TestIssue3860_InfixWordAnchored(t *testing.T) {
 	if commandMatches(pats, "pushy-comment") {
 		t.Error("substring `push` inside `pushy-comment` must not match word-anchored infix glob")
 	}
-	// Legacy semantics preserved: `go test ./...` keeps matching `*test*`.
+
 	if !commandMatches([]string{"*test*"}, "go test ./...") {
 		t.Error("`go test ./...` must keep matching *test* (word anchor, verb=go)")
 	}

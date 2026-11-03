@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2838_test.go - probe for #2838: the renamed method-value idiom
-// (un := mu.Unlock; defer un()) must be exempted via its ASSIGNMENT source,
-// not by variable-name substring. Conversely #2826's tightened posture must
-// hold: a defer bound to a non-release method must NOT exempt a missing
-// Unlock.
 func parseFirstFunc2838(t *testing.T, src string) (*ast.FuncDecl, *token.FileSet) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -40,7 +35,7 @@ func renamed(mu *sync.Mutex) {
 `
 	fn, fset := parseFirstFunc2838(t, src)
 	if fnHasIndirectRelease(fn) {
-		return // exempted via assignment source - correct
+		return
 	}
 	instances := simulateHeldLocks(fn, fset)
 	if len(instances) > 0 {
@@ -49,8 +44,7 @@ func renamed(mu *sync.Mutex) {
 }
 
 func TestIssue2838NonReleaseBindingStillWarns(t *testing.T) {
-	// #2826 posture: un bound to a NON-release method must not exempt, and
-	// the genuinely missing Unlock must be reported.
+
 	src := `package a
 import "sync"
 

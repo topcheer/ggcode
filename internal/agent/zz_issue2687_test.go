@@ -10,17 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #2687: on a successful auto-precompact consumption (applied=true),
-// on_compaction fired TWICE - the sa-159 auto-trigger call plus a legacy
-// trailing call with an empty CompactTrigger that sa-159 failed to delete.
-// Every counting/notification hook double-counted and the second event fell
-// outside the documented auto/reactive/manual trigger enum. The invariant:
-// exactly ONE fire, with trigger="auto".
 func TestIssue2687_SingleOnCompactionFireOnApplied(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	defer a.Close()
 
-	// Seed the live context so the compact result applies (not discarded).
 	for i := 0; i < 3; i++ {
 		a.ContextManager().Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "m"}}})
 	}

@@ -21,7 +21,7 @@ func main() {
 }
 
 func TestSyntaxCheckGoMissingBrace(t *testing.T) {
-	// Missing closing brace — a common syntax error.
+
 	invalidGo := []byte(`package main
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 }
 
 func TestSyntaxCheckGoNotGoFile(t *testing.T) {
-	// Non-Go file should return empty.
+
 	result := syntaxCheck("/tmp/test.py", []byte("def foo(:\n  pass"))
 	if result != "" {
 		t.Errorf("expected empty result for non-Go file, got: %s", result)
@@ -64,8 +64,7 @@ func TestSyntaxCheckGoNotGoFile(t *testing.T) {
 }
 
 func TestSyntaxCheckGoValidAfterFormat(t *testing.T) {
-	// This tests that formatGoBytes + syntaxCheck work together.
-	// Code that is valid but unformatted should NOT trigger a syntax error.
+
 	validUnformatted := []byte(`package main
 import "fmt"
 func main(){
@@ -88,7 +87,7 @@ func TestSyntaxCheckJSONValid(t *testing.T) {
 }
 
 func TestSyntaxCheckJSONInvalid(t *testing.T) {
-	// Missing closing brace.
+
 	invalidJSON := []byte(`{"name": "test", "value": 42`)
 	result := syntaxCheck("/tmp/test.json", invalidJSON)
 	if result == "" {
@@ -108,7 +107,7 @@ func TestSyntaxCheckJSONTrailingComma(t *testing.T) {
 }
 
 func TestSyntaxCheckJSONEmpty(t *testing.T) {
-	// Empty content should return empty (no warning).
+
 	result := syntaxCheck("/tmp/test.json", []byte(""))
 	if result != "" {
 		t.Errorf("expected empty result for empty JSON, got: %s", result)
@@ -120,7 +119,7 @@ func TestSyntaxCheckJSONEmpty(t *testing.T) {
 }
 
 func TestSyntaxCheckUnsupportedExtension(t *testing.T) {
-	// Unsupported file types should return empty.
+
 	result := syntaxCheck("/tmp/test.yaml", []byte("invalid: ["))
 	if result != "" {
 		t.Errorf("expected empty result for unsupported extension, got: %s", result)
@@ -132,35 +131,33 @@ func TestSyntaxCheckUnsupportedExtension(t *testing.T) {
 }
 
 func TestSyntaxCheckGoFatalError(t *testing.T) {
-	// Completely broken file — parser returns nil file.
+
 	brokenGo := []byte(`!!! this is not Go at all`)
 	result := syntaxCheck("/tmp/test.go", brokenGo)
 	if result == "" {
 		t.Fatal("expected non-empty result for completely broken Go")
 	}
-	// Should contain the parser's error message about expected 'package'.
+
 	if !strings.Contains(result, "expected 'package'") {
 		t.Errorf("expected 'expected package' error message, got: %s", result)
 	}
 }
 
 func TestSyntaxCheckGoErrorPathTrimmed(t *testing.T) {
-	// Error messages should use basename, not full path.
+
 	invalidGo := []byte(`package main
 func foo() {`)
 	result := syntaxCheck("/some/very/long/path/to/file.go", invalidGo)
 	if !strings.Contains(result, "file.go") {
 		t.Errorf("expected basename in error, got: %s", result)
 	}
-	// Should NOT contain the full path.
+
 	if strings.Contains(result, "/some/very/long/path/") {
 		t.Errorf("expected basename only, but full path found in: %s", result)
 	}
 }
 
-// Test that syntaxCheck is fast enough for large files (non-blocking requirement).
 func TestSyntaxCheckGoPerformance(t *testing.T) {
-	// Generate a large valid Go file (~5000 lines).
 	var sb strings.Builder
 	sb.WriteString("package main\n\n")
 	for i := 0; i < 1000; i++ {
@@ -172,7 +169,7 @@ func TestSyntaxCheckGoPerformance(t *testing.T) {
 		sb.WriteString(" }\n")
 	}
 	data := []byte(sb.String())
-	// This should complete in well under 100ms.
+
 	result := syntaxCheck("/tmp/large.go", data)
 	if result != "" {
 		t.Errorf("expected empty result for valid large Go file, got: %s", result)

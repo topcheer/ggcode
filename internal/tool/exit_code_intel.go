@@ -1,35 +1,5 @@
 package tool
 
-// Exit Code Intelligence -- Process Termination Diagnosis
-//
-// Research basis: Terminal output parsing/structuring is identified as a
-// blue-ocean gap. While cmd_output_parser.go handles test/build result
-// extraction and diagnoseCommandFailure handles output-text patterns,
-// neither interprets process exit codes. When a command is killed by a
-// signal (OOM, segfault, abort), the agent sees only "Command failed:
-// signal: killed" with no actionable explanation, wasting iterations on
-// trial-and-error.
-//
-// Competitor analysis:
-//   - Claude Code: shows raw exit status, no interpretation
-//   - Cursor: shows exit code in UI, no actionable diagnosis
-//   - Cline/OpenHands: raw error message, no exit code analysis
-//   - Aider: raw error string only
-//
-// Gap: No deterministic exit code to human-readable interpretation mapping.
-// Exit codes 128+N (signal terminations) carry critical diagnostic info:
-//   137 (SIGKILL) often means OOM killer -- agent should reduce parallelism
-//   139 (SIGSEGV) means segfault -- agent should look for memory safety bugs
-//   130 (SIGINT)  means user interrupted -- not a real failure
-//   134 (SIGABRT) means abort/assertion -- agent should check assertions
-// Without this, the agent treats all signal kills identically.
-//
-// Design:
-//   - Zero LLM cost (deterministic lookup table)
-//   - Produces a concise "[Exit Code]" diagnostic appended to error messages
-//   - Only fires for non-obvious codes (126+ and signal-based terminations)
-//   - Includes actionable hints for the most impactful codes
-
 import (
 	"errors"
 	"fmt"
@@ -39,15 +9,11 @@ import (
 	"syscall"
 )
 
-// exitCodeInfo describes a non-standard exit code with an explanation and
-// optional actionable hint for the agent.
 type exitCodeInfo struct {
 	description string
-	hint        string // empty if no specific hint
+	hint        string
 }
 
-// signalExitCodes maps exit codes to their meanings.
-// Only includes codes where the explanation adds value beyond "command failed".
 var exitCodeIntelMap = map[int]exitCodeInfo{
 	126: {
 		description: "command found but not executable (permission denied)",
@@ -83,20 +49,7 @@ var exitCodeIntelMap = map[int]exitCodeInfo{
 	},
 }
 
-// exitCodeFromErr normalizes a cmd.Wait error to a POSIX-style exit code.
-// #2588: exec.ExitError.ExitCode() returns -1 when the process was killed
-// by a signal (NOT the shell-semantic 128+N), so interpretExitCode's early
-// `exitCode <= 1` return fired and every 128+N signal diagnostic (137 OOM /
-// 139 segfault / ...) was dead code exactly on the kills it exists for --
-// util.NewShellCommandContext's `sh -c` exec-optimizes single commands, so
-// the waited-on process IS the worker and a SIGKILL yields -1. The signal
-// number IS available via WaitStatus: convert to 128+N there. On Windows
-// Signaled() is always false and the original -1 flows through -- consistent
-// with the #1683 Windows 128+N shielding in interpretExitCode.
 func exitCodeFromErr(err error) int {
-	// #3135 V2 (rider): errors.As instead of a bare type assertion - the
-	// current caller passes an unwrapped error, but any future wrap would
-	// silently degrade #2588's OOM/signal diagnosis (128+N) to -1.
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
 		return -1
@@ -110,29 +63,18 @@ func exitCodeFromErr(err error) int {
 	return -1
 }
 
-// interpretExitCode returns a human-readable diagnostic string for non-trivial
-// exit codes. Returns "" for codes that don't need interpretation (0 = success,
-// 1 = generic error, or any code not in the intel map).
 func interpretExitCode(exitCode int) string {
 	if exitCode <= 1 {
 		return ""
 	}
 
 	info, ok := exitCodeIntelMap[exitCode]
-	// #1683 case 1 (complete): the specific map's 128+N entries are POSIX
-	// signals too - on Windows they are exactly as wrong as the generic
-	// band below (exit 137 is a legal PowerShell status, not an OOM kill).
-	// Only the 126/127 command-not-found class carries meaning there.
+
 	if runtime.GOOS == "windows" && exitCode > 127 {
 		return ""
 	}
 	if !ok {
-		// Generic 128+N signal code not in the specific map
-		// #1683 case 1: POSIX signal semantics do not exist on Windows -
-		// a PowerShell program legally exiting 137/143 was diagnosed as
-		// "OOM killed"/"SIGTERM" with Unix-only remediation hints, sending
-		// the agent down a completely wrong debugging path. On Windows only
-		// the 126/127 entries (command-not-found class) carry meaning.
+
 		if runtime.GOOS != "windows" && exitCode > 128 && exitCode < 160 {
 			signal := exitCode - 128
 			return fmt.Sprintf("[Exit Code] %d (terminated by signal %d)", exitCode, signal)

@@ -12,8 +12,6 @@ import (
 	"testing"
 )
 
-// --- web_fetch tests ---
-
 func TestWebFetchDescriptionClarifiesNonInteractiveUse(t *testing.T) {
 	desc := WebFetch{}.Description()
 	for _, want := range []string{"Does not summarize", "interactive/login pages", "browser automation"} {
@@ -69,7 +67,7 @@ func TestWebFetch_HTTPError(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error for 404")
 	}
-	// Should include status code and final URL
+
 	if !strings.Contains(result.Content, "HTTP 404") {
 		t.Errorf("expected 'HTTP 404' in output, got: %s", result.Content)
 	}
@@ -91,7 +89,7 @@ func TestWebFetch_HTTPErrorWithBody(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error for 403")
 	}
-	// Non-200 responses should now include body content for diagnostics
+
 	if !strings.Contains(result.Content, "Rate limit exceeded") {
 		t.Errorf("expected body content in error response, got: %s", result.Content)
 	}
@@ -207,7 +205,7 @@ func TestStripHTML(t *testing.T) {
 }
 
 func TestStripHTMLContentExtraction(t *testing.T) {
-	// Simulate a typical web page with nav, article, sidebar, footer
+
 	html := `<html><head><title>Test Page</title></head><body>
 	<nav><a href="/">Home</a> <a href="/about">About</a></nav>
 	<header><h1>Site Brand</h1></header>
@@ -221,15 +219,15 @@ func TestStripHTMLContentExtraction(t *testing.T) {
 	</body></html>`
 
 	result := stripHTML(html)
-	// Nav should NOT be in result
+
 	if strings.Contains(result, "Home") && strings.Contains(result, "About") {
 		t.Errorf("navigation text should be removed, got: %s", result)
 	}
-	// Footer should NOT be in result
+
 	if strings.Contains(result, "Copyright") {
 		t.Errorf("footer text should be removed, got: %s", result)
 	}
-	// Article content SHOULD be in result
+
 	if !strings.Contains(result, "How to Use This Feature") {
 		t.Errorf("article heading should be in result, got: %s", result)
 	}
@@ -267,8 +265,6 @@ func TestWebToolDescriptions_ClarifyLLMResponsibilities(t *testing.T) {
 	}
 }
 
-// --- web_search tests ---
-
 func TestWebSearch_InvalidInput(t *testing.T) {
 	ws := WebSearch{}
 	result, err := ws.Execute(context.Background(), json.RawMessage(`{}`))
@@ -295,7 +291,6 @@ func TestWebSearch_DDGMock(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// We can't easily redirect to the test server, so test the parser directly
 	results := parseDDGResults(html, 2)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -344,8 +339,6 @@ func TestWebSearchDomainFiltersMatchSubdomains(t *testing.T) {
 	}
 }
 
-// --- todo_write tests ---
-
 func TestTodoWrite_Basic(t *testing.T) {
 	withTestHome(t)
 	sessionID := "test-session-basic"
@@ -366,7 +359,6 @@ func TestTodoWrite_Basic(t *testing.T) {
 		t.Fatalf("unexpected tool error: %s", result.Content)
 	}
 
-	// Verify file
 	data, err := os.ReadFile(TodoFilePath(sessionID))
 	if err != nil {
 		t.Fatalf("failed to read todo file: %v", err)
@@ -382,7 +374,6 @@ func TestTodoWrite_Basic(t *testing.T) {
 		t.Errorf("expected status 'done', got %q", todos[0].Status)
 	}
 
-	// Verify summary
 	if result.Content == "" {
 		t.Error("expected non-empty summary")
 	}
@@ -498,9 +489,6 @@ func TestTodoWrite_AllowsMultipleInProgress(t *testing.T) {
 	}
 }
 
-// TestParseDDGResultsIgnoresStructuralWrappers pins #1352: structural
-// wrappers (class="results" container, result__extras blocks) must not be
-// parsed as result blocks, and each result must appear exactly once.
 func TestParseDDGResultsIgnoresStructuralWrappers(t *testing.T) {
 	html := `<div id="links" class="results">
 	<div class="result results_links results_links_deep web-result">
@@ -519,8 +507,6 @@ func TestParseDDGResultsIgnoresStructuralWrappers(t *testing.T) {
 	</div>
 </div>`
 
-	// max=3: with the old class="result[^"]*" pattern the wrappers ate
-	// slots and titles duplicated down to ~1/3 of the requested count.
 	results := parseDDGResults(html, 3)
 	if len(results) != 3 {
 		t.Fatalf("expected 3 unique results, got %d: %+v", len(results), results)
@@ -539,12 +525,8 @@ func TestParseDDGResultsIgnoresStructuralWrappers(t *testing.T) {
 	}
 }
 
-// TestParseDDGResultsBlockTruncation pins the block-bounds half of #1352:
-// an extras block that leaks in must not swallow the next result's title.
 func TestParseDDGResultsBlockTruncation(t *testing.T) {
-	// A lone extras div (no result__a of its own) followed by a real
-	// result: without truncation the extras block matched the real
-	// result's title and duplicated it.
+
 	html := `<div class="result__extras__url">stray.example</div>
 	<div class="result">
 		<a class="result__a" href="https://real.example">Real Result</a>

@@ -1,57 +1,5 @@
 package agent
 
-// Guidance Coalescer - Alert Overload Suppressor
-//
-// Research basis:
-//   - arXiv:2506.05109 "Truly Self-Improving Agents Require Intrinsic
-//     Metacognitive Learning" (2025): effective self-improvement requires
-//     intrinsic metacognitive monitoring - the agent must be aware of its
-//     own cognitive guidance stream, not just the environment. When too
-//     many meta-guidance messages fire simultaneously, the agent's
-//     metacognitive bandwidth is overwhelmed, reducing the effectiveness
-//     of each individual message.
-//   - Alert fatigue in observability (Google SRE Book Ch.6, 2025 update):
-//     when humans (and LLMs) receive too many simultaneous alerts, each
-//     alert's marginal informational value drops to near-zero. The system
-//     enters a "cry wolf" state where all alerts are ignored.
-//   - ACE Framework (ICLR 2026): identifies "context collision" as a
-//     primary trajectory failure mode - when 3+ guidance directives
-//     arrive in the same turn, the model cannot prioritize among them,
-//     leading to partial compliance or conflicting actions.
-//   - Anthropic "Context Engineering" (Sep 2025): every token of guidance
-//     competes for attention budget. Stacking 5+ advisory messages in a
-//     single tool result dilutes the signal of the most important one.
-//
-// Problem: ggcode has 37+ independent detectors (maybeWarn*) that each
-// generate guidance text appended to tool results. In a single iteration,
-// multiple detectors can fire simultaneously:
-//
-//	[STRATEGY-STAGNATION] web_search has failed 2 consecutive times...
-//	[Silent Error Warning] You have 3 unaddressed tool errors...
-//	[Tool Call Storm] 4 consecutive tool calls detected...
-//	[Analysis Paralysis] 9 exploration calls detected...
-//	[Tool Diversity Alert] 8 of your last 10 tool calls...
-//	[Context Pressure: CRITICAL] Context window is 63% full...
-//
-// When 5+ of these stack into one tool result, the model:
-//  1. Cannot determine which directive is most important
-//  2. May receive contradictory guidance (one says "explore more",
-//     another says "act now")
-//  3. Spends tokens processing advisory overhead instead of acting
-//  4. Eventually learns to ignore all guidance ("alert fatigue")
-//
-// Gap: No mechanism coalesces, deduplicates, or prioritizes guidance
-// hints before injection. Each detector independently appends its message
-// to the hints slice with no awareness of what else is being injected.
-//
-// Design:
-//   - Extracts the tag ([TAG-NAME]) from each hint for deduplication
-//   - Deduplicates by tag (keeps first occurrence of each tag)
-//   - Applies per-result cap (default 3) to prevent overload
-//   - Prioritizes critical tags (errors, safety) over advisory tags
-//   - When truncating, appends a brief summary of suppressed hints
-//   - Zero LLM cost - pure deterministic text processing
-
 import (
 	"fmt"
 	"regexp"
@@ -61,20 +9,13 @@ import (
 )
 
 const (
-	// coalesceMaxHints: maximum hints to inject per tool result.
-	// Reduced from 3 to 1 - each hint wastes 100-300 tokens of context.
-	// Only the single most critical hint should be surfaced.
 	coalesceMaxHints = 1
 
-	// coalesceMaxSuppressedSummary: max suppressed tag names to list.
 	coalesceMaxSuppressedSummary = 3
 )
 
-// hintTagRe extracts the leading [TAG] from a guidance hint.
 var hintTagRe = regexp.MustCompile(`^\s*\[([A-Za-z][A-Za-z0-9 _:-]*?)\]`)
 
-// criticalHintTags are always retained regardless of cap. These represent
-// immediate correctness or safety issues that must not be suppressed.
 var criticalHintTags = map[string]bool{
 	"CRITICAL":              true,
 	"PERMISSION":            true,
@@ -91,8 +32,6 @@ var criticalHintTags = map[string]bool{
 	"non-atomic":            true,
 }
 
-// extractHintTag returns the bracketed tag at the start of a hint, or ""
-// if no tag is found.
 func extractHintTag(hint string) string {
 	m := hintTagRe.FindStringSubmatch(hint)
 	if len(m) < 2 {
@@ -101,12 +40,6 @@ func extractHintTag(hint string) string {
 	return strings.TrimSpace(m[1])
 }
 
-// criticalHintTagsLower is the lowercase-normalized view of
-// criticalHintTags (#607 B1: the old fallback probed
-// criticalHintTags[strings.ToUpper(tag)] against lowercase-hyphen keys like
-// "hardcoded-secret" — ToUpper could never hit, so Pascal/Title forms such
-// as "Hardcoded-Secret" lost both cap exemption and budget bypass. Both
-// sides now normalize via strings.ToLower.)
 var criticalHintTagsLower = func() map[string]bool {
 	m := make(map[string]bool, len(criticalHintTags))
 	for k := range criticalHintTags {
@@ -115,10 +48,6 @@ var criticalHintTagsLower = func() map[string]bool {
 	return m
 }()
 
-// isCriticalTag returns true if the tag represents a critical/safety issue
-// that should always be retained. #441: EXACT match only (case-insensitive)
-// — the old substring fallback let tags like "[SECURITY-TIP]" or
-// "[BLOCKED-FOR-NOW]" inherit permanent budget exemption just by naming.
 func isCriticalTag(tag string) bool {
 	if tag == "" {
 		return false
@@ -126,33 +55,21 @@ func isCriticalTag(tag string) bool {
 	return criticalHintTagsLower[strings.ToLower(tag)]
 }
 
-// coalesceGuidance takes a slice of guidance hints for a single tool
-// result, deduplicates by tag, applies priority ordering, and caps the
-// total to prevent alert overload.
-//
-// The algorithm:
-//  1. Extract tag from each hint.
-//  2. Deduplicate by tag (keep first occurrence).
-//  3. Separate critical hints from advisory hints.
-//  4. If total exceeds cap, keep all critical + top advisory hints.
-//  5. If hints are suppressed, append a brief summary.
 func coalesceGuidance(hints []string) []string {
 	if len(hints) == 0 {
 		return hints
 	}
 	if len(hints) <= coalesceMaxHints {
-		// Even with few hints, deduplicate by tag.
+
 		deduped, dropped := dedupByTag(hints)
 		return noteDedupDropped(deduped, dropped)
 	}
 
-	// Deduplicate first.
 	deduped, dropped := dedupByTag(hints)
 	if len(deduped) <= coalesceMaxHints {
 		return noteDedupDropped(deduped, dropped)
 	}
 
-	// Separate critical from advisory.
 	var critical, advisory []string
 	for _, h := range deduped {
 		tag := extractHintTag(h)
@@ -163,19 +80,11 @@ func coalesceGuidance(hints []string) []string {
 		}
 	}
 
-	// If critical alone exceeds cap, keep the first N. #1465-B: the
-	// criticalHintTags comment says 'always retained regardless of cap...
-	// must not be suppressed' - this slice says otherwise. Currently
-	// UNREACHABLE (no caller routes critical-tagged hints through this
-	// coalescer; the guidance_budget exemption applies instead), but any
-	// future detector using this path would be silently downgraded: fix
-	// the comment OR add priority ordering when the path goes live.
 	if len(critical) >= coalesceMaxHints {
 		result := critical[:coalesceMaxHints]
 		return appendWithSuppression(result, critical[coalesceMaxHints:], advisory)
 	}
 
-	// Fill remaining slots with advisory hints.
 	remaining := coalesceMaxHints - len(critical)
 	result := make([]string, 0, coalesceMaxHints+1)
 	result = append(result, critical...)
@@ -195,11 +104,6 @@ func coalesceGuidance(hints []string) []string {
 	return result
 }
 
-// dedupByTag removes hints with duplicate tags, keeping the first
-// occurrence of each tag. Dropped copies are reported via the returned
-// count so the loss is visible (#1840 case 3): same-tag drops used to be
-// fully silent AND ran before the cap stage, so they never reached the
-// suppression summary - two detectors reusing one tag collided invisibly.
 func dedupByTag(hints []string) ([]string, int) {
 	if len(hints) <= 1 {
 		return hints, 0
@@ -223,8 +127,6 @@ func dedupByTag(hints []string) ([]string, int) {
 	return result, dropped
 }
 
-// noteDedupDropped appends a one-line visibility note when same-tag
-// dedup dropped content (#1840 case 3).
 func noteDedupDropped(result []string, dropped int) []string {
 	if dropped <= 0 {
 		return result
@@ -234,15 +136,11 @@ func noteDedupDropped(result []string, dropped int) []string {
 		dropped))
 }
 
-// appendWithSuppression adds a suppression summary when critical hints
-// themselves are truncated.
 func appendWithSuppression(result, suppressedCritical, suppressedAdvisory []string) []string {
 	all := append(suppressedCritical, suppressedAdvisory...)
 	return appendSuppressedSummary(result, all)
 }
 
-// appendSuppressedSummary adds a brief note about which hints were
-// suppressed to prevent alert overload.
 func appendSuppressedSummary(result, suppressed []string) []string {
 	if len(suppressed) == 0 {
 		return result
@@ -255,7 +153,7 @@ func appendSuppressedSummary(result, suppressed []string) []string {
 		}
 		tag := extractHintTag(h)
 		if tag == "" {
-			// Keep first 30 chars of untagged hint.
+
 			preview := strings.TrimSpace(h)
 			if len(preview) > 30 {
 				preview = preview[:30] + "..."
@@ -281,17 +179,6 @@ func appendSuppressedSummary(result, suppressed []string) []string {
 	return append(result, summary)
 }
 
-// applyToolResultGuidance assembles guidance hints from various detectors,
-// coalesces them, records tags for cross-session promotion, and appends the
-// result to the tool output content. Both vision and non-vision tool result
-// paths share this method to avoid divergent hint-assembly logic.
-//
-// Parameters are individual hint strings (empty = not applicable):
-//   - loopGuidance: sequence pattern guidance (e.g., strategy-stagnation)
-//   - searchParamHint: search parameter optimization guidance
-//   - redundancyHint: tool result redundancy guidance
-//   - equivHint: equivalent tool call guidance
-//   - overuseHint: tool overuse guidance
 func (a *Agent) applyToolResultGuidance(
 	result *tool.Result,
 	loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint string,
@@ -305,8 +192,7 @@ func (a *Agent) applyToolResultGuidance(
 		hints = append(hints, searchParamHint)
 	}
 	if undoBlindHint != "" {
-		// #1799 case 1: computed BEFORE execution, attached to the result of
-		// the very call it warned about.
+
 		hints = append(hints, undoBlindHint)
 	}
 	if loopGuidance != "" {
@@ -321,14 +207,6 @@ func (a *Agent) applyToolResultGuidance(
 
 	hints = coalesceGuidance(hints)
 
-	// #607 B2: tool-result hint injection previously bypassed the per-turn
-	// guidance budget entirely — the budget's "hard per-turn limit across ALL
-	// detectors" only gated injectGuidance, so every tool result could stack
-	// additional advisory hints past the 5/turn cap. Route through the same
-	// budget (critical hints still bypass).
-	// #607 B3: allowDeduped also deduplicates by tag across tool results in
-	// the same turn, so the same meta-hint is not re-injected result after
-	// result.
 	injected := make([]string, 0, len(hints))
 	for _, h := range hints {
 		if a.guidanceBudget.allowDeduped(h) {
@@ -336,16 +214,6 @@ func (a *Agent) applyToolResultGuidance(
 		}
 	}
 
-	// #607 B3: the conflict meta-hint itself counts against the budget
-	// (previously it was prepended AFTER coalescing, pushing the total past
-	// the per-result cap), and its detection input must not contain our own
-	// [guidance-coalesced] suppression summaries — those quote suppressed
-	// tag names and can re-enter as pseudo-conflicts.
-	// Mirror of #1840 case 4 for this direction: the scan must also include
-	// the turn's already-delivered hints (allowDeduped records every
-	// injected hint into guidanceBudget.delivered). A conflict between a
-	// hint delivered on an earlier tool result and one delivered now was
-	// previously invisible - only intra-result conflicts were detected.
 	scan := append(append([]string{}, a.guidanceBudget.delivered...), injected...)
 	if ch := detectGuidanceConflict(stripCoalescedSummaries(scan)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
 		injected = append([]string{ch}, injected...)
@@ -355,16 +223,9 @@ func (a *Agent) applyToolResultGuidance(
 		return
 	}
 
-	// (#466: promoter RecordTag removed along with the write-only
-	// persistence — injected hints never depended on it.)
-
 	result.Content = result.Content + "\n\n" + strings.Join(injected, "\n\n")
 }
 
-// stripCoalescedSummaries removes [guidance-coalesced] suppression summary
-// lines from the hint set before conflict detection (#607 B3: the summary
-// text quotes suppressed directive tag names, which the keyword-based
-// conflict detector can mistake for a real retained directive pair).
 func stripCoalescedSummaries(hints []string) []string {
 	filtered := make([]string, 0, len(hints))
 	for _, h := range hints {

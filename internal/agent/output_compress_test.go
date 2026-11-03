@@ -46,9 +46,7 @@ func TestCompressRepetitiveLines_EmptyAndSingleLine(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_PrefixSimilar(t *testing.T) {
-	// Lines with a shared 10+ char prefix AND template+counter bodies -
-	// identical after digit stripping. #1475-B: prefix alone no longer
-	// folds (grep file listings are unique information).
+
 	lines := []string{
 		"Compiling module 1 of 8 done",
 		"Compiling module 2 of 8 done",
@@ -68,7 +66,7 @@ func TestCompressRepetitiveLines_PrefixSimilar(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_PrefixBelowThreshold(t *testing.T) {
-	// 4 similar lines (below threshold of 5) should NOT be compressed.
+
 	lines := []string{
 		"Compiling module alpha step 1...",
 		"Compiling module beta step 2...",
@@ -83,7 +81,7 @@ func TestCompressRepetitiveLines_PrefixBelowThreshold(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_PrefixTooShort(t *testing.T) {
-	// Lines with short prefix (< minPrefixLen) should not trigger prefix compression.
+
 	lines := []string{
 		"short x1",
 		"short x2",
@@ -143,7 +141,6 @@ func TestCompressRepetitiveLines_LargeInputSkipped(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_RealWorldBuildLog(t *testing.T) {
-	// Simulates a realistic go build output with repeated download lines.
 	var sb strings.Builder
 	sb.WriteString("# project/module\n")
 	for i := 0; i < 8; i++ {
@@ -161,7 +158,7 @@ func TestCompressRepetitiveLines_RealWorldBuildLog(t *testing.T) {
 	if !strings.Contains(got, "BUILD SUCCESSFUL") {
 		t.Errorf("expected BUILD SUCCESSFUL preserved, got:\n%s", got)
 	}
-	// Compression ratio should be significant.
+
 	ratio := float64(len(got)) / float64(len(input))
 	if ratio > 0.5 {
 		t.Errorf("expected >50%% reduction, got %.0f%% remaining, len=%d input=%d", ratio*100, len(got), len(input))
@@ -190,9 +187,6 @@ func TestFormatDupMarker_LongSample(t *testing.T) {
 	}
 }
 
-// TestCompressUniqueFileListingNotFolded pins #1475-B: a grep
-// files_with_matches style listing - every line a DIFFERENT file sharing a
-// project-path prefix - is unique information and must NOT be folded.
 func TestCompressUniqueFileListingNotFolded(t *testing.T) {
 	lines := []string{
 		"internal/agent/alpha.go",
@@ -212,7 +206,6 @@ func TestCompressUniqueFileListingNotFolded(t *testing.T) {
 	}
 }
 
-// Regression for #1590-B: digit-carrying UNIQUE data must not fold.
 func TestFoldLinesHomogeneousExemptsUniqueDigitShapes(t *testing.T) {
 	fold := []string{
 		"check[1] passed",

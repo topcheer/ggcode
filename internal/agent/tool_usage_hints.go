@@ -13,42 +13,12 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// tool_usage_hints.go (r35): JTPRO-style runtime tool-prompt co-optimization,
-// online and deterministic. JTPRO (arXiv:2604.19821, ACL 2026 Findings)
-// shows per-tool schema/argument description refinement from failure
-// rollouts lifts overall success rate 5-20% relative - and that optimizing
-// tool docs beats optimizing instructions alone. ggcode's near neighbours
-// all act on different objects (r118 repairs JSON syntax once per call;
-// tool_effectiveness keeps run-local boolean stats; run_command's
-// diagnose hints are a static table for one tool). What is missing - and
-// what this file adds - is the closed loop: distill parameter-usage
-// failures into per-tool hints, persist them across sessions, and inject
-// them into the tool description the LLM sees, so the model stops
-// repeating the same argument mistakes.
-//
-// Design constraints (deterministic, no LLM rewrites - a self-modifying
-// tool schema is a prompt-injection surface):
-//   - only errors with parameter/schema semantics are distilled
-//   - messages are normalized to templates (paths, numbers, quoted
-//     values stripped) so hints generalize instead of memorizing
-//   - success decays per-hint (#3405): each success decrements every
-//     hint's FailCount for the tool; a hint dies only when its count
-//     reaches zero. One-off mistakes still clear on the first success
-//     (same-run correction stays cheap), but a repeated failure pattern
-//     needs proportionally more evidence it is gone, so an unrelated
-//     success from a high-frequency tool cannot wipe the whole set and
-//     void the persist-across-sessions contract. TTL is the only
-//     time-based eviction.
-//   - capped: <=5 hints/tool, <=400 bytes/tool, 7-day TTL
-//   - stored at <project>/.ggcode/tool-usage-hints.json; corrupt file
-//     degrades to empty (invariants.go precedent), never bricks a run
-
 const (
 	usageHintsFileName   = "tool-usage-hints.json"
 	usageHintsPerTool    = 5
 	usageHintsMaxBytes   = 400
 	usageHintsTTL        = 7 * 24 * time.Hour
-	usageHintsMaxMsgLen  = 200 // per-hint message cap after normalization
+	usageHintsMaxMsgLen  = 200
 	usageHintsInjectMark = "\n[usage hints from past failures]"
 )
 
@@ -61,19 +31,16 @@ type usageHint struct {
 
 type toolUsageHintStore struct {
 	mu   sync.Mutex
-	path string // "" = inert (no working dir yet)
+	path string
 
 	loaded bool
-	hints  map[string][]usageHint // tool -> newest-last
+	hints  map[string][]usageHint
 }
 
 func newToolUsageHintStore() *toolUsageHintStore {
 	return &toolUsageHintStore{hints: map[string][]usageHint{}}
 }
 
-// attach binds the store to <dir>/tool-usage-hints.json and lazily loads it.
-// Called on first use from the agent loop (workingDir is not known at
-// construction time). Safe to call repeatedly.
 func (s *toolUsageHintStore) attach(dir string) {
 	if s == nil || dir == "" {
 		return
@@ -89,7 +56,7 @@ func (s *toolUsageHintStore) attach(dir string) {
 	s.hints = map[string][]usageHint{}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return // absent = start clean
+		return
 	}
 	var all []usageHint
 	if err := json.Unmarshal(data, &all); err != nil {
@@ -105,10 +72,6 @@ func (s *toolUsageHintStore) attach(dir string) {
 	}
 }
 
-// usageHintParamSemanticsRe identifies parameter-usage failures worth
-// distilling. Deliberately narrow: infrastructure errors (network, OOM,
-// timeouts) say nothing about HOW to call the tool and would only bloat
-// descriptions.
 var usageHintParamSemanticsRe = regexp.MustCompile(`(?i)missing required|required parameter|must be|must not|expects?|invalid \w+|unknown parameter|unexpected parameter|type mismatch|expects? .+ (got|have)`)
 
 var (
@@ -118,8 +81,6 @@ var (
 	usageHintParamName = regexp.MustCompile(`(?i)\b(?:parameter|param|field|argument|arg)\s+"?([a-z_][a-z0-9_.-]{1,40})"?`)
 )
 
-// distillUsageHint normalizes a parameter-semantics error into a reusable
-// template. Returns "" when the error carries no usage signal.
 func distillUsageHint(errText string) string {
 	if len(errText) == 0 || len(errText) > 4*1024 {
 		return ""
@@ -128,8 +89,7 @@ func distillUsageHint(errText string) string {
 		return ""
 	}
 	msg := strings.TrimSpace(errText)
-	// Keep the FIRST line - later lines are often stack traces or hints
-	// from other subsystems that do not generalize.
+
 	if i := strings.IndexAny(msg, "\n"); i > 0 {
 		msg = msg[:i]
 	}
@@ -146,9 +106,6 @@ func distillUsageHint(errText string) string {
 	return msg
 }
 
-// recordFailure distills a failed tool result. Errors that fail the
-// semantics filter are ignored; a repeated identical hint bumps its
-// fail count and timestamp instead of duplicating.
 func (s *toolUsageHintStore) recordFailure(tool, errText string) {
 	if s == nil || tool == "" {
 		return
@@ -171,20 +128,12 @@ func (s *toolUsageHintStore) recordFailure(tool, errText string) {
 	}
 	list = append(list, usageHint{Tool: tool, Message: msg, LastSeen: time.Now(), FailCount: 1})
 	if len(list) > usageHintsPerTool {
-		list = list[1:] // ring: drop the oldest
+		list = list[1:]
 	}
 	s.hints[tool] = list
 	s.persistLocked()
 }
 
-// recordSuccess decays per-hint (#3405): each success decrements every
-// hint's FailCount for the tool; a hint is removed only when its count
-// reaches zero. A one-off mistake (FailCount=1) still clears on the first
-// success, but a repeated failure pattern survives isolated successes -
-// an unrelated success from a high-frequency tool (read_file/grep/...)
-// no longer wipes strong-evidence hints and voids the
-// persist-across-sessions contract. TTL remains the only time-based
-// eviction (description-budget lesson still holds via the byte cap).
 func (s *toolUsageHintStore) recordSuccess(tool string) {
 	if s == nil {
 		return
@@ -210,8 +159,6 @@ func (s *toolUsageHintStore) recordSuccess(tool string) {
 	s.persistLocked()
 }
 
-// OverlayFor returns the hint block appended to a tool description, or ""
-// when the tool has no live hints. Byte-capped.
 func (s *toolUsageHintStore) OverlayFor(tool string) string {
 	if s == nil {
 		return ""
@@ -239,8 +186,6 @@ func (s *toolUsageHintStore) OverlayFor(tool string) string {
 	return b.String()
 }
 
-// persistLocked writes the store atomically; failure is logged and
-// non-fatal (hints are advisory).
 func (s *toolUsageHintStore) persistLocked() {
 	if s.path == "" {
 		return

@@ -1,12 +1,5 @@
 package agent
 
-// #2879 regression: prefix-phrase ambiguity patterns used to fire on
-// fully-disambiguated instructions ("sort the users by last_login descending"
-// got "clarify ascending or descending" - contradicting the prompt itself).
-// The sentence-level suppressors must silence exactly those shapes while
-// genuinely vague variants keep firing. Also pins the fired-once semantics:
-// a suppressed signal must NOT consume the run's single firing budget.
-
 import "testing"
 
 func TestAmbiguityPointDisambiguatedPrefixesSuppressed(t *testing.T) {
@@ -30,8 +23,7 @@ func TestAmbiguityPointDisambiguatedPrefixesSuppressed(t *testing.T) {
 			if msg := a.checkAmbiguityPoints(tt.prompt); msg != "" {
 				t.Errorf("expected no message, got: %s", msg[:min(80, len(msg))])
 			}
-			// A suppressed detection must not mark the detector as fired:
-			// the run's only firing budget stays intact for real ambiguity.
+
 			if a.ambiguityPoint.fired {
 				t.Error("suppressed signal consumed the fired-once budget")
 			}

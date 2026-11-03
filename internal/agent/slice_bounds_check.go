@@ -1,43 +1,5 @@
 package agent
 
-// Slice Bounds Risk Detection - Unguarded Index Access After Risky Slice Operations
-//
-// Problem: AI coding agents frequently index into slices returned by functions
-// that may produce empty or nil results without checking the length first.
-// This causes runtime panics (index out of range), which are among the most
-// common crashes in production Go services.
-//
-// Common patterns this check catches:
-//
-//  1. re.FindStringSubmatch(s) -> match[1] without nil/len check
-//     (FindStringSubmatch returns nil when no match is found; indexing nil panics)
-//  2. strings.Split(s, sep) -> parts[1] without len check
-//     (Split returns >=1 element, but parts[1] panics if the separator is absent)
-//  3. strings.Fields(s) -> fields[0] without len check
-//     (Fields returns an empty slice when input is all whitespace)
-//  4. Same pattern for bytes.Split, filepath.SplitList, regexp.FindAll*
-//
-// Competitor analysis:
-//   - Claude Code: no write-time detection
-//   - Cursor: no write-time detection (only crashes at runtime)
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//   - go vet: does NOT detect unchecked slice indexing
-//   - staticcheck: does NOT detect this pattern
-//   - golangci-lint: no built-in linter for this
-//
-// Research basis:
-//   - OWASP: "insufficient input validation" is a top-10 vulnerability
-//   - Go blog "Errors are values": unchecked slice access is a common panic source
-//   - Production postmortems: nil-slice indexing after regexp match is a
-//     recurring root cause of 500 errors in Go HTTP handlers
-//
-// Approach: AST-based analysis. For each function, find assignments from known
-// "risky slice" functions, then check if the result variable is subsequently
-// indexed (with a literal index >= the function's minimum risky index) without
-// a len() guard between the assignment and the index access.
-// Delta-aware: only flags patterns INTRODUCED by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -49,9 +11,6 @@ import (
 
 const maxSliceBoundsWarnings = 4
 
-// riskySliceByPkg maps "pkg.Method" to the minimum literal index that is risky.
-// Index 0 being risky means even [0] can panic (function may return nil/empty).
-// Index 1 means [0] is always safe but [1] or higher may panic.
 var riskySliceByPkg = map[string]int{
 	"strings.Split":      1,
 	"strings.SplitN":     1,
@@ -62,9 +21,6 @@ var riskySliceByPkg = map[string]int{
 	"filepath.SplitList": 1,
 }
 
-// riskySliceByMethod maps method names (matched regardless of receiver) to
-// minimum risky index. Used for regexp methods where the receiver is typically
-// a local variable (e.g., re.FindStringSubmatch).
 var riskySliceByMethod = map[string]int{
 	"FindStringSubmatch":    0,
 	"FindSubmatch":          0,
@@ -73,17 +29,14 @@ var riskySliceByMethod = map[string]int{
 	"FindAllSubmatch":       0,
 }
 
-// sliceBoundsRisk represents a detected unguarded slice index access.
 type sliceBoundsRisk struct {
 	line        int
 	varName     string
 	index       int
 	funcName    string
-	fingerprint string // content-based delta key: enclosingFunc + ":" + varName + "[index]"
+	fingerprint string
 }
 
-// checkSliceBoundsRisk detects indexing of slices returned by risky functions
-// without a length guard. Only flags NEW instances introduced by this edit.
 func checkSliceBoundsRisk(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -134,15 +87,12 @@ func checkSliceBoundsRisk(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// riskyAssign tracks a variable assigned from a risky slice-returning function.
 type riskyAssign struct {
 	assignLine    int
 	funcName      string
 	minRiskyIndex int
 }
 
-// findSliceBoundsRisks walks the AST to find unguarded index access on
-// variables assigned from known risky slice-returning functions.
 func findSliceBoundsRisks(fset *token.FileSet, file *ast.File, srcLines []string) []sliceBoundsRisk {
 	var risks []sliceBoundsRisk
 
@@ -167,8 +117,6 @@ func findSliceBoundsRisks(fset *token.FileSet, file *ast.File, srcLines []string
 	return risks
 }
 
-// handleSliceBoundsNode processes a single AST node for slice bounds risks.
-// It tracks risky assignments and checks for unguarded index access.
 func handleSliceBoundsNode(n ast.Node, fset *token.FileSet, srcLines []string,
 	tracked map[string]riskyAssign, risks *[]sliceBoundsRisk, enclosingFunc string) {
 
@@ -227,8 +175,6 @@ func handleSliceBoundsNode(n ast.Node, fset *token.FileSet, srcLines []string,
 	})
 }
 
-// extractRiskySliceFunc checks if an assignment RHS is a call to a known risky
-// slice-returning function. Returns the function name and minimum risky index.
 func extractRiskySliceFunc(rhs []ast.Expr) (string, int) {
 	if len(rhs) == 0 {
 		return "", 0
@@ -253,8 +199,6 @@ func extractRiskySliceFunc(rhs []ast.Expr) (string, int) {
 	return "", 0
 }
 
-// extractSliceIndexValue extracts a literal integer index from an index expression.
-// Returns -1 for non-literal indices (e.g., arr[i]).
 func extractSliceIndexValue(idx ast.Expr) int {
 	lit, ok := idx.(*ast.BasicLit)
 	if !ok || lit.Kind != token.INT {
@@ -270,17 +214,8 @@ func extractSliceIndexValue(idx ast.Expr) int {
 	return n
 }
 
-// hasLengthGuard checks if len(varName) appears in the source lines between
-// the assignment line and the index access line (inclusive).
 func hasLengthGuard(lines []string, varName string, fromLine, toLine int) bool {
 	needle := "len(" + varName + ")"
-	// #1496 C(a): two relaxations of the old any-line text match, which
-	// exempted EVERY later index after one legitimate guard - including
-	// bare m[2] thirty lines below - and even matched len(m) inside
-	// comments or string literals. (1) The guard must be CONTROL-FLOW NEAR
-	// the access (same line or within the 10 preceding lines) - a bounds
-	// check far above does not cover a later access. (2) Comment and
-	// string-literal occurrences do not count.
 	const guardWindow = 10
 	start := toLine - guardWindow
 	if start < fromLine {
@@ -297,8 +232,6 @@ func hasLengthGuard(lines []string, varName string, fromLine, toLine int) bool {
 	return false
 }
 
-// stripCommentsAndStrings1496 removes line-comment tails and the contents
-// of string literals so textual guards inside them are not counted.
 func stripCommentsAndStrings1496(line string) string {
 	if idx := strings.Index(line, "//"); idx >= 0 {
 		line = line[:idx]
@@ -310,7 +243,7 @@ func stripCommentsAndStrings1496(line string) string {
 		case r == '"':
 			inString = !inString
 		case inString:
-			// drop string contents
+
 		default:
 			out.WriteRune(r)
 		}

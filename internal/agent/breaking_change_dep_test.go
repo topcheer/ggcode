@@ -105,7 +105,7 @@ require github.com/some/unknown v2.1.0
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
 	}
-	// Should include generic Go import path guidance
+
 	if !strings.Contains(warnings[0], "/v2") {
 		t.Fatalf("expected Go import path guidance with /v2 suffix, got: %s", warnings[0])
 	}
@@ -214,8 +214,6 @@ require github.com/gin-gonic/gin v2.0.0
 	}
 }
 
-// #148: legal Go module major upgrade changes the path (/v2 suffix) — must
-// be detected via base-path matching.
 func TestCheckBreakingChangeDep_GoModV2PathSuffix(t *testing.T) {
 	old := "module example.com/app\n\ngo 1.21\n\nrequire (\n\tgithub.com/foo/bar v1.9.0\n)\n"
 	new_ := "module example.com/app\n\ngo 1.21\n\nrequire (\n\tgithub.com/foo/bar/v2 v2.0.0\n)\n"
@@ -228,7 +226,6 @@ func TestCheckBreakingChangeDep_GoModV2PathSuffix(t *testing.T) {
 	}
 }
 
-// goModuleBase unit tests (#148).
 func TestGoModuleBase(t *testing.T) {
 	cases := []struct {
 		in     string
@@ -238,8 +235,8 @@ func TestGoModuleBase(t *testing.T) {
 		{"github.com/foo/bar", "github.com/foo/bar", false},
 		{"github.com/foo/bar/v2", "github.com/foo/bar", true},
 		{"github.com/foo/bar/v10", "github.com/foo/bar", true},
-		{"github.com/foo/v2rest", "github.com/foo/v2rest", false}, // suffix must be exactly vN
-		{"example.com/pkg/v1", "example.com/pkg/v1", false},       // v1 never a path suffix
+		{"github.com/foo/v2rest", "github.com/foo/v2rest", false},
+		{"example.com/pkg/v1", "example.com/pkg/v1", false},
 	}
 	for _, c := range cases {
 		b, s := goModuleBase(c.in)

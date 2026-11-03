@@ -9,9 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// CreateNamedAgentTool implements the create_namedagent tool.
-// It lets the LLM define reusable subagent templates that are persisted
-// per-workspace and can be invoked via use_namedagent.
 type CreateNamedAgentTool struct {
 	Store *subagent.TemplateStore
 }
@@ -98,7 +95,6 @@ func (t CreateNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 		Model:        args.Model,
 	}
 
-	// Check existence BEFORE save to determine created vs updated
 	_, isUpdate := t.Store.LoadExisting(tmpl.Name)
 	if err := t.Store.Save(tmpl); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save template: %v", err)}, nil
@@ -126,7 +122,6 @@ func (t CreateNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 		tmpl.Name, verb, tmpl.Description, toolInfo, mcpInfo, modelInfo)}, nil
 }
 
-// DeleteNamedAgentTool implements the delete_namedagent tool.
 type DeleteNamedAgentTool struct {
 	Store *subagent.TemplateStore
 }
@@ -169,8 +164,6 @@ func (t DeleteNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 		return Result{IsError: true, Content: "name is required"}, nil
 	}
 
-	// Verify the template exists before deleting for a better error message.
-	// #1696 case 6: create trims on save - trim here for the same reason.
 	if _, err := t.Store.Load(strings.TrimSpace(args.Name)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("named subagent '%s' not found", args.Name)}, nil
 	}
@@ -182,7 +175,6 @@ func (t DeleteNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 	return Result{Content: fmt.Sprintf("Named subagent '%s' deleted successfully.", args.Name)}, nil
 }
 
-// ListNamedAgentTool implements the list_namedagent tool.
 type ListNamedAgentTool struct {
 	Store *subagent.TemplateStore
 }

@@ -20,7 +20,6 @@ func TestAddSystemPromptLayerRegisterAndReplace(t *testing.T) {
 		t.Fatalf("layer callback misbehaving: got %q, calls=%d", got, calls)
 	}
 
-	// Re-registering the same name must replace, not append.
 	a.AddSystemPromptLayer("resume-reconciliation", func() string { return "note-v2" })
 	if len(a.systemPromptLayers) != 1 {
 		t.Fatalf("re-register should replace by name, got %d layers", len(a.systemPromptLayers))
@@ -29,8 +28,6 @@ func TestAddSystemPromptLayerRegisterAndReplace(t *testing.T) {
 		t.Errorf("replaced layer should return note-v2, got %q", got)
 	}
 
-	// Distinct names append; nil fns are skipped at injection time by the
-	// caller, registration still records them.
 	a.AddSystemPromptLayer("other-layer", nil)
 	if len(a.systemPromptLayers) != 2 || a.systemPromptLayers[1].name != "other-layer" {
 		t.Fatalf("distinct name should append: %+v", a.systemPromptLayers)

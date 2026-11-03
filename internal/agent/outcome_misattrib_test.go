@@ -38,13 +38,11 @@ func TestContainsFailureIndicator(t *testing.T) {
 }
 
 func TestOutcomeMisattribRecordAndCheck(t *testing.T) {
-	// Scenario: tool result has failure, next iteration claims success.
+
 	s := newOutcomeMisattribState()
 
-	// Record a failure from run_command at iteration 3.
 	s.recordResult("run_command", "FAIL  TestFoo [0.001s]", false, 3)
 
-	// Iteration 4: agent claims success without corrective action.
 	hint := s.checkMisattribution("Great, the fix works correctly now!", 4)
 	if hint == "" {
 		t.Fatal("expected misattribution warning but got none")
@@ -58,12 +56,12 @@ func TestOutcomeMisattribRecordAndCheck(t *testing.T) {
 }
 
 func TestOutcomeMisattribWithCorrectiveAction(t *testing.T) {
-	// Scenario: failure at iter 3, corrective edit at iter 4, success at iter 5.
+
 	s := newOutcomeMisattribState()
 
 	s.recordResult("run_command", "panic: nil pointer dereference", false, 3)
 	s.recordToolCallForOM("edit_file")
-	// Iteration 4 - same as failure+1, but corrective action was taken.
+
 	hint := s.checkMisattribution("done", 4)
 	if hint != "" {
 		t.Errorf("expected no warning after corrective action, got: %s", hint)
@@ -71,7 +69,7 @@ func TestOutcomeMisattribWithCorrectiveAction(t *testing.T) {
 }
 
 func TestOutcomeMisattribNoSuccessClaim(t *testing.T) {
-	// Failure at iter 3, no success claim at iter 4.
+
 	s := newOutcomeMisattribState()
 
 	s.recordResult("run_command", "error: something went wrong", false, 3)
@@ -82,7 +80,7 @@ func TestOutcomeMisattribNoSuccessClaim(t *testing.T) {
 }
 
 func TestOutcomeMisattribStaleFailure(t *testing.T) {
-	// Failure at iter 3, no check until iter 6 (too late).
+
 	s := newOutcomeMisattribState()
 
 	s.recordResult("run_command", "FAIL test", false, 3)
@@ -90,14 +88,14 @@ func TestOutcomeMisattribStaleFailure(t *testing.T) {
 	if hint != "" {
 		t.Errorf("expected no warning for stale failure, got: %s", hint)
 	}
-	// Pending failure should be cleared.
+
 	if s.pendingFailureIter != -1 {
 		t.Errorf("expected pendingFailureIter=-1 after stale check, got %d", s.pendingFailureIter)
 	}
 }
 
 func TestOutcomeMisattribNonVerifiableTool(t *testing.T) {
-	// Non-verifiable tool results should not be checked.
+
 	s := newOutcomeMisattribState()
 	s.recordResult("todo_write", "error in some task", false, 3)
 	hint := s.checkMisattribution("done", 4)
@@ -107,7 +105,7 @@ func TestOutcomeMisattribNonVerifiableTool(t *testing.T) {
 }
 
 func TestOutcomeMisattribExplicitError(t *testing.T) {
-	// IsError results should always be recorded, regardless of tool.
+
 	s := newOutcomeMisattribState()
 	s.recordResult("some_random_tool", "whatever", true, 5)
 	hint := s.checkMisattribution("The fix is done and verified.", 6)

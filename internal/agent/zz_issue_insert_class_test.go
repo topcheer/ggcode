@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue_insert_class: pin the InterruptionInsert composite-signal contract
-// (P0-1, delegation steering). Miss-to-Addition is REQUIRED for short or
-// single-sentence guidance; hit only on long multi-sentence task briefs.
-
-// long enough (>=120 runes) AND multi-sentence => Insert.
 func TestClassifyInsertedTaskHit(t *testing.T) {
 	en := "Please also review the billing module for double-charge bugs. The finance team reported duplicated invoices on renewals. Reproduce with the fixture in testdata/billing, then propose a minimal fix with tests."
 	if got := classifyInterruption(en); got != InterruptionInsert {
@@ -21,7 +16,6 @@ func TestClassifyInsertedTaskHit(t *testing.T) {
 	}
 }
 
-// short OR single-sentence => stays Addition (never misfires on clarifications).
 func TestClassifyInsertedTaskMissConservative(t *testing.T) {
 	cases := []struct{ name, text string }{
 		{"short follow-up", "also add a README while you are in there"},
@@ -36,7 +30,6 @@ func TestClassifyInsertedTaskMissConservative(t *testing.T) {
 	}
 }
 
-// retraction and revision still take precedence over Insert.
 func TestClassifyInsertPrecedence(t *testing.T) {
 	long := "Please switch to plan B entirely and drop the old approach. It must also cover the retry path with tests."
 	if got := classifyInterruption(long); got != InterruptionRevision {
@@ -47,8 +40,6 @@ func TestClassifyInsertPrecedence(t *testing.T) {
 	}
 }
 
-// preamble must be advisory (consider), mention spawn_agent, suspended main
-// thread, and resume - and must NOT contain revision-style supersession.
 func TestInsertPreambleContract(t *testing.T) {
 	p := interruptionPreamble(InterruptionInsert)
 	for _, want := range []string{"SEPARATE task", "consider delegating", "spawn_agent", "suspended main task", "resume the suspended main thread"} {

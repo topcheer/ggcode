@@ -41,13 +41,13 @@ func TestIsRefactoringContent(t *testing.T) {
 		{
 			name:    "similar size restructuring",
 			oldText: strings.Repeat("a", 500),
-			newText: strings.Repeat("b", 480), // delta=20, ratio=0.04 < 0.3
+			newText: strings.Repeat("b", 480),
 			want:    true,
 		},
 		{
 			name:    "adding new code (big size difference)",
 			oldText: strings.Repeat("a", 100),
-			newText: strings.Repeat("b", 500), // delta=400, ratio=0.8 > 0.3
+			newText: strings.Repeat("b", 500),
 			want:    false,
 		},
 		{
@@ -75,7 +75,7 @@ func TestIsRefactoringContent(t *testing.T) {
 }
 
 func TestClassifyRefactorEdit(t *testing.T) {
-	// edit_file with similar sizes -> refactoring
+
 	editArgs, _ := json.Marshal(map[string]string{
 		"old_text": strings.Repeat("a", 300),
 		"new_text": strings.Repeat("b", 290),
@@ -84,7 +84,6 @@ func TestClassifyRefactorEdit(t *testing.T) {
 		t.Error("edit_file with similar sizes should be classified as refactoring")
 	}
 
-	// edit_file with big size diff -> not refactoring
 	editArgsBig, _ := json.Marshal(map[string]string{
 		"old_text": strings.Repeat("a", 300),
 		"new_text": strings.Repeat("b", 800),
@@ -93,7 +92,6 @@ func TestClassifyRefactorEdit(t *testing.T) {
 		t.Error("edit_file with big size diff should NOT be classified as refactoring")
 	}
 
-	// batch_replace is always refactoring
 	batchArgs, _ := json.Marshal(map[string]interface{}{
 		"files": []map[string]string{{"pattern": "foo", "replacement": "bar"}},
 	})
@@ -101,24 +99,21 @@ func TestClassifyRefactorEdit(t *testing.T) {
 		t.Error("batch_replace should always be classified as refactoring")
 	}
 
-	// non-edit tool -> false
 	if classifyRefactorEdit("read_file", editArgs) {
 		t.Error("read_file should not be classified as refactoring")
 	}
 
-	// invalid JSON -> false
 	if classifyRefactorEdit("edit_file", json.RawMessage(`{invalid`)) {
 		t.Error("invalid JSON should return false")
 	}
 
-	// empty args -> false
 	if classifyRefactorEdit("edit_file", nil) {
 		t.Error("empty args should return false")
 	}
 }
 
 func TestClassifyRefactorEdit_MultiEdit(t *testing.T) {
-	// multi_edit_file with one refactoring sub-edit
+
 	multiArgs, _ := json.Marshal(map[string]interface{}{
 		"edits": []map[string]string{
 			{
@@ -135,18 +130,15 @@ func TestClassifyRefactorEdit_MultiEdit(t *testing.T) {
 func TestPrematureRefactorCheck(t *testing.T) {
 	a := &Agent{prematureRefactor: newPrematureRefactorState()}
 
-	// No edits yet -> no warning
 	if g := a.prematureRefactorCheck(); g != "" {
 		t.Error("expected no guidance with zero edits")
 	}
 
-	// One refactoring edit -> not enough
 	a.prematureRefactor.refactorEdits = 1
 	if g := a.prematureRefactorCheck(); g != "" {
 		t.Error("expected no guidance with only 1 refactoring edit")
 	}
 
-	// Two refactoring edits without verification -> warning
 	a.prematureRefactor.refactorEdits = 2
 	g := a.prematureRefactorCheck()
 	if g == "" {
@@ -159,12 +151,10 @@ func TestPrematureRefactorCheck(t *testing.T) {
 		t.Errorf("guidance should mention build/test: %s", g)
 	}
 
-	// Already warned -> no more warnings
 	if g2 := a.prematureRefactorCheck(); g2 != "" {
 		t.Error("should not warn again after already warned")
 	}
 
-	// After verification -> no warning even if not yet warned
 	a2 := &Agent{prematureRefactor: newPrematureRefactorState()}
 	a2.prematureRefactor.refactorEdits = 5
 	a2.prematureRefactor.hasVerified = true
@@ -176,7 +166,6 @@ func TestPrematureRefactorCheck(t *testing.T) {
 func TestPrematureRefactorRecordEdit(t *testing.T) {
 	a := &Agent{prematureRefactor: newPrematureRefactorState()}
 
-	// Record a refactoring edit
 	editArgs, _ := json.Marshal(map[string]string{
 		"old_text": strings.Repeat("a", 300),
 		"new_text": strings.Repeat("b", 295),
@@ -187,7 +176,6 @@ func TestPrematureRefactorRecordEdit(t *testing.T) {
 		t.Errorf("expected 1 refactoring edit, got %d", a.prematureRefactor.refactorEdits)
 	}
 
-	// Record a non-refactoring edit (big size diff) -> should not increment
 	bigArgs, _ := json.Marshal(map[string]string{
 		"old_text": strings.Repeat("a", 100),
 		"new_text": strings.Repeat("b", 800),
@@ -198,7 +186,6 @@ func TestPrematureRefactorRecordEdit(t *testing.T) {
 		t.Errorf("non-refactoring edit should not increment: got %d", a.prematureRefactor.refactorEdits)
 	}
 
-	// Record another refactoring edit -> now 2
 	a.prematureRefactorRecordEdit("edit_file", editArgs)
 
 	if a.prematureRefactor.refactorEdits != 2 {
@@ -251,7 +238,6 @@ func TestPrematureRefactorReset(t *testing.T) {
 func TestPrematureRefactor_NilSafe(t *testing.T) {
 	a := &Agent{prematureRefactor: nil}
 
-	// All methods should be nil-safe
 	a.prematureRefactorRecordEdit("edit_file", nil)
 	a.prematureRefactorRecordVerify()
 	if g := a.prematureRefactorCheck(); g != "" {

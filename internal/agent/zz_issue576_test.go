@@ -8,11 +8,7 @@ import (
 	"testing"
 )
 
-// TestIssue576_BugC_EmbeddedPromotion tests that interface compliance checks
-// properly handle method promotion from embedded fields (Bug C).
 func TestIssue576_BugC_EmbeddedPromotion(t *testing.T) {
-	// Probe scenario: base has Read(), Wrapper embeds base and has Close()
-	// Interface Closer{Read();Close()} should NOT flag Wrapper (has Read via promotion)
 	const oldContent = `package test
 
 type base struct{}
@@ -52,24 +48,20 @@ func (w Wrapper) Close() error {
 }
 `
 
-	// Use a helper to check only the content provided, without scanning directory
 	typeMethods := checkEmbeddedPromotionOnly(newContent)
 
-	// Wrapper should have both Read (from embedded base) and Close (own)
 	if methods, ok := typeMethods["Wrapper"]; !ok {
 		t.Error("Bug C not fixed: Wrapper should have methods")
 	} else if !methods["Read"] || !methods["Close"] {
 		t.Errorf("Bug C not fixed: Wrapper should have Read and Close, got: %v", methods)
 	}
 
-	// base should have only Read
 	if methods, ok := typeMethods["base"]; !ok {
 		t.Error("base should have methods")
 	} else if !methods["Read"] {
 		t.Errorf("base should have Read, got: %v", methods)
 	}
 
-	// But if a type genuinely lacks a method (not from promotion), it should still be caught
 	const missingContent = `package test
 
 type Closer interface {
@@ -88,8 +80,6 @@ type NotEnough struct {
 }
 `
 	_ = checkInterfaceCompliance("test.go", oldContent, missingContent)
-	// NotEnough has no methods, so it shouldn't be flagged (no overlap heuristic)
-	// But if we modify it to have one method, it should be flagged for the other
 	const partialContent = `package test
 
 type Closer interface {
@@ -116,16 +106,14 @@ func (p Partial) Read() error {
 	}
 }
 
-// checkEmbeddedPromotionOnly tests embedded promotion without directory scanning
 func checkEmbeddedPromotionOnly(content string) map[string]map[string]bool {
-	// Parse the content to extract type declarations with embedded fields
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, 0)
 	if err != nil {
 		return nil
 	}
 
-	// Collect type declarations
 	typeDecls := make(map[string][]string)
 	for _, decl := range file.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
@@ -156,7 +144,6 @@ func checkEmbeddedPromotionOnly(content string) map[string]map[string]bool {
 		}
 	}
 
-	// Collect methods
 	methods := make(map[string]map[string]bool)
 	for _, decl := range file.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
@@ -173,7 +160,6 @@ func checkEmbeddedPromotionOnly(content string) map[string]map[string]bool {
 		methods[recvType][funcDecl.Name.Name] = true
 	}
 
-	// Promote from embedded types
 	result := make(map[string]map[string]bool)
 	for typeName, ownMethods := range methods {
 		completeMethods := make(map[string]bool)
@@ -187,7 +173,6 @@ func checkEmbeddedPromotionOnly(content string) map[string]map[string]bool {
 	return result
 }
 
-// TestIssue576_BugC_MultiLevelEmbedding tests multi-level embedded promotion.
 func TestIssue576_BugC_MultiLevelEmbedding(t *testing.T) {
 	const oldContent = `package test
 
@@ -247,15 +232,11 @@ func (l Level3) C() error {
 
 	warning := checkInterfaceCompliance("test.go", oldContent, newContent)
 
-	// Level3 should have A (from Level1 via Level2), B (from Level2), and C (own)
-	// No warnings expected
 	if strings.Contains(warning, "Level3 is missing method") {
 		t.Errorf("Multi-level promotion not working: Level3 should have A and B via promotion\nGot: %s", warning)
 	}
 }
 
-// TestIssue576_BugB_InterfaceMethodRemoval tests that export_guard detects
-// when methods are removed from exported interfaces (Bug B).
 func TestIssue576_BugB_InterfaceMethodRemoval(t *testing.T) {
 	const oldContent = `package test
 
@@ -280,17 +261,15 @@ type InterfaceA interface {
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 
-	// Bug B fix: Should detect that InterfaceA's method set changed (C removed)
 	if len(changes) == 0 {
 		t.Error("Bug B not fixed: Interface method removal should be detected")
 	}
 
-	// Should report signature-changed for the interface
 	found := false
 	for _, c := range changes {
 		if c.Symbol == "InterfaceA" && c.Kind == "signature-changed" {
 			found = true
-			// Verify the old and new signatures show the method removal
+
 			if !strings.Contains(c.Detail, "→") {
 				t.Errorf("Expected old→new signature format, got: %s", c.Detail)
 			}
@@ -302,9 +281,6 @@ type InterfaceA interface {
 	}
 }
 
-// TestIssue576_BugB_InterfaceRenameNoChange tests that renaming an interface
-// without changing its method set correctly detects the old name as removed.
-// Note: The new name is not reported as "added" because diff only checks old symbols.
 func TestIssue576_BugB_InterfaceRenameNoChange(t *testing.T) {
 	const oldContent = `package test
 
@@ -327,7 +303,6 @@ type HelperNewName interface {
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 
-	// Should detect Helper was removed (not signature-changed, since it's gone)
 	hasHelperRemoved := false
 	for _, c := range changes {
 		if c.Symbol == "Helper" && c.Kind == "removed" {
@@ -340,8 +315,6 @@ type HelperNewName interface {
 	}
 }
 
-// TestIssue576_BugB_InterfaceSignatureChange tests that interface method
-// signature changes are still detected correctly.
 func TestIssue576_BugB_InterfaceSignatureChange(t *testing.T) {
 	const oldContent = `package test
 
@@ -364,7 +337,6 @@ type InterfaceX interface {
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 
-	// Should detect signature change
 	found := false
 	for _, c := range changes {
 		if c.Symbol == "InterfaceX" && c.Kind == "signature-changed" {

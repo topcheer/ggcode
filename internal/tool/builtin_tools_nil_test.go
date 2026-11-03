@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// TestNilManagerTaskTools verifies that all task tools return errors
-// (not panics) when Manager is nil.
 func TestNilManagerTaskTools(t *testing.T) {
 	ctx := context.Background()
 
@@ -44,8 +42,6 @@ func TestNilManagerTaskTools(t *testing.T) {
 	})
 }
 
-// TestNilSwitcherPlanModeTools verifies that plan mode tools return errors
-// (not panics) when Switcher is nil.
 func TestNilSwitcherPlanModeTools(t *testing.T) {
 	ctx := context.Background()
 
@@ -62,8 +58,6 @@ func TestNilSwitcherPlanModeTools(t *testing.T) {
 	})
 }
 
-// TestNilSchedulerCronTools verifies that cron tools return errors
-// (not panics) when Scheduler is nil.
 func TestNilSchedulerCronTools(t *testing.T) {
 	ctx := context.Background()
 
@@ -86,8 +80,6 @@ func TestNilSchedulerCronTools(t *testing.T) {
 	})
 }
 
-// assertNoPanic runs inside a testify-style helper: it verifies that the tool
-// either returned an error Result or a Go error, but did NOT panic.
 func assertNoPanic(t *testing.T, toolName string, result Result, err error) {
 	t.Helper()
 	if err != nil {

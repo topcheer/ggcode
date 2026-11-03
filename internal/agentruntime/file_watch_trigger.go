@@ -14,23 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// FileWatchTrigger implements ambient, event-driven agent firing (r372):
-// watch user-configured glob patterns and enqueue a prompt when a change
-// settles, instead of waiting for a human to ask. This is the
-// drift-detection trigger pattern from the 2026 ambient-agents literature
-// (fire on change, not on schedule) layered on the same enqueue channel
-// cron already uses, so routing, busy handling and persistence semantics
-// stay in one place.
-//
-// Polling, not fsnotify: the repo convention (mcp_hotreload.go, config
-// hot reload) is dependency-free polling - identical behavior on
-// macOS/Linux/Windows (#574 lesson) at the cost of a 2s detection window.
-//
-// Debounce: a change set only fires after it is observed IDENTICAL on two
-// consecutive ticks (editor temp-file+rename storms coalesce), and each
-// trigger has a cooldown (default 10s) so save-storms cannot spam the
-// agent. Globs use filepath.Glob semantics (no ** recursion; list
-// directory-scoped patterns instead).
 type FileWatchTrigger struct {
 	triggers   []config.WatchTriggerConfig
 	workingDir string
@@ -39,18 +22,11 @@ type FileWatchTrigger struct {
 	interval time.Duration
 	cooldown time.Duration
 
-	mu      sync.Mutex
-	stopped bool
-	// snapshots[i] is the per-trigger baseline: path -> file fingerprint.
-	snapshots []map[string]fileFingerprint
-	// pending[i] is the change set seen on the previous tick, awaiting a
-	// stable (identical) second tick before firing.
-	pending []map[string]bool
-	// primed[i]: the first poll only establishes the baseline - files
-	// existing at startup are NOT a change (else every ggcode start with
-	// a watch: section would fire all triggers once).
-	primed []bool
-	// cooldownUntil[i] blocks re-firing until the wall clock passes it.
+	mu            sync.Mutex
+	stopped       bool
+	snapshots     []map[string]fileFingerprint
+	pending       []map[string]bool
+	primed        []bool
 	cooldownUntil []time.Time
 }
 
@@ -59,17 +35,12 @@ type fileFingerprint struct {
 	size  int64
 }
 
-// DefaultWatchInterval / DefaultWatchCooldown match the polling
-// convention (2s) and a conservative re-fire cadence.
 const (
 	DefaultWatchInterval = 2 * time.Second
 	DefaultWatchCooldown = 10 * time.Second
 	maxFilesInPrompt     = 10
 )
 
-// NewFileWatchTrigger creates a watcher for the configured triggers. emit
-// may be nil-safe through the cron scheduler's no-op default; firing
-// before an enqueue is wired is dropped with a debug log.
 func NewFileWatchTrigger(triggers []config.WatchTriggerConfig, workingDir string, emit func(prompt string, queueIfBusy bool)) *FileWatchTrigger {
 	t := &FileWatchTrigger{
 		triggers:      triggers,
@@ -87,9 +58,6 @@ func NewFileWatchTrigger(triggers []config.WatchTriggerConfig, workingDir string
 	return t
 }
 
-// Start launches the polling loop in the background. Safe to call once;
-// a nil-receiver or empty trigger list is a no-op (zero behavior change
-// for users without a watch: config section).
 func (t *FileWatchTrigger) Start() {
 	if t == nil || len(t.triggers) == 0 {
 		return
@@ -110,7 +78,6 @@ func (t *FileWatchTrigger) Start() {
 	})
 }
 
-// Stop terminates the polling loop and waits for it to observe the flag.
 func (t *FileWatchTrigger) Stop() {
 	if t == nil {
 		return
@@ -138,14 +105,7 @@ func (t *FileWatchTrigger) poll() {
 		case len(changed) == 0:
 			t.pending[i] = nil
 		case pending != nil && sameSet(pending, changed):
-			// Stable across two ticks. The baseline and pending set are only
-			// consumed when the change actually FIRES: advancing the baseline
-			// while the cooldown is active would silently swallow the event
-			// (the next diff against the advanced baseline is empty, so an
-			// independent edit settling inside the cooldown window would be
-			// dropped forever). Keeping them intact makes the change settle
-			// again and fire once the cooldown expires, while the cooldown
-			// timer still caps the fire rate (#3064).
+
 			if !now.Before(t.cooldownUntil[i]) {
 				cd := trig.CooldownSec
 				if cd <= 0 {
@@ -161,17 +121,13 @@ func (t *FileWatchTrigger) poll() {
 				debug.Log("watch", "[watch] trigger %d change settled but cooldown active, deferring until cooldown ends", i)
 			}
 		default:
-			// Storm still in flight: remember the latest change set and wait
-			// for a quiet (identical) tick. Baseline deliberately NOT touched.
+
 			t.pending[i] = changed
 		}
 		t.mu.Unlock()
 	}
 }
 
-// scan expands a trigger's globs relative to the working directory and
-// fingerprints every match. Unreadable files are skipped (treated as
-// unchanged) - watching must never crash the runtime.
 func (t *FileWatchTrigger) scan(trig config.WatchTriggerConfig) map[string]fileFingerprint {
 	out := make(map[string]fileFingerprint)
 	for _, pattern := range trig.Globs {
@@ -223,10 +179,6 @@ func (t *FileWatchTrigger) fire(trig config.WatchTriggerConfig, changed map[stri
 	t.emit(prompt, trig.QueueIfBusy)
 }
 
-// diffChanged returns paths whose fingerprint differs, that are new, or
-// that vanished since the baseline. A deletion is a change: log-rotation
-// and artifact-cleanup watch scenarios must fire, so baseline-only paths
-// are detected via a reverse sweep (#3064).
 func diffChanged(baseline, current map[string]fileFingerprint) map[string]bool {
 	changed := make(map[string]bool)
 	for p, fp := range current {

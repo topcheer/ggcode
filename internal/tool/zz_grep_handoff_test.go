@@ -7,20 +7,6 @@ import (
 	"testing"
 )
 
-// Regression tests for the rg-path fixes from the cron-2 business-logic
-// review handoff (internal/tool scope):
-//
-//  1. error path: rg exit 2+ (bad glob, permission, unknown --type) used to
-//     fall into an unconditional len(out)==0 branch and was misreported as
-//     "No matches found."; the nested len(out)==0 check was unreachable
-//     dead code. Real errors must surface as IsError with rg's stderr.
-//  2. count mode on the rg path had no output cap at all (the Go fallback
-//     applies offset+head_limit), so a broad pattern dumped an unbounded
-//     per-file count list into context.
-//  3. files_with_matches/count on the rg path ignored offset (the fallback
-//     supports it), so paging on rg-equipped machines always returned the
-//     first page.
-
 func TestRgCountModeAppliesHeadLimitAndOffset(t *testing.T) {
 	var sb strings.Builder
 	for i := 0; i < 600; i++ {
@@ -83,14 +69,12 @@ func TestRgFilesWithMatchesAppliesOffset(t *testing.T) {
 }
 
 func TestRgExitResultClassifiesExitCode(t *testing.T) {
-	// exec.ExitError cannot be fabricated (ProcessState wraps syscall data),
-	// so build genuine ones with tiny subprocesses; skip where no sh exists.
+
 	shPath, shErr := exec.LookPath("sh")
 	if shErr != nil {
 		t.Skip("no sh on PATH; exit-code classification covered by build only")
 	}
 
-	// exit 2 with stderr: real error, must be IsError carrying trimmed stderr
 	cmdErr := exec.Command(shPath, "-c", "echo ' error parsing glob ' >&2; exit 2")
 	_, err := cmdErr.Output()
 	if err == nil {
@@ -107,8 +91,6 @@ func TestRgExitResultClassifiesExitCode(t *testing.T) {
 		t.Fatalf("exit 2 result should carry trimmed stderr, got: %q", res.Content)
 	}
 
-	// exit 1: rg's legitimate no-matches signal; NOT handled (caller falls
-	// through to the formatter's no-matches rendering)
 	cmdNo := exec.Command(shPath, "-c", "exit 1")
 	_, err = cmdNo.Output()
 	if err == nil {
@@ -118,7 +100,6 @@ func TestRgExitResultClassifiesExitCode(t *testing.T) {
 		t.Fatalf("exit 1 must not be classified as an error")
 	}
 
-	// spawn failure (non-ExitError): a real error
 	res, handled = rgExitResult(errors.New("exec: not found"))
 	if !handled || !res.IsError {
 		t.Fatalf("spawn failure must surface as IsError, got handled=%v res=%+v", handled, res)

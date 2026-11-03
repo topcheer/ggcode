@@ -5,16 +5,10 @@ import (
 	"testing"
 )
 
-// #anchor-boundary regression: flag anchors must only come from token-start
-// dashes. Production false-positive chain (2026-10-17): the persisted
-// excerpt "...请追踪 mid-run 用户消息注入路径..." leaked "-run" as an anchor
-// via the old free-floating regex, then blocked every
-// `go test ./pkg -run 'TestX'` invocation; a sibling entry leaked "-search"
-// from "re-search" the same way. Hyphenated prose words are NOT flags.
 func TestRefusalFlagsTokenStartOnly(t *testing.T) {
 	cases := []struct {
 		excerpt string
-		want    string // joined with comma; "" means no anchors
+		want    string
 	}{
 		{"请追踪 mid-run 用户消息注入路径（agent", ""},
 		{"do not re-search covered ground", ""},
@@ -30,8 +24,6 @@ func TestRefusalFlagsTokenStartOnly(t *testing.T) {
 	}
 }
 
-// Min body length is 3 chars after the dash(es), matching the old regex's
-// `{2,}` plus the mandatory first letter.
 func TestRefusalFlagsMinBody(t *testing.T) {
 	got := refusalFlags("avoid -p 1 and --go and -ok and -run")
 	for _, f := range got {
@@ -44,7 +36,6 @@ func TestRefusalFlagsMinBody(t *testing.T) {
 	}
 }
 
-// The exact production excerpts must no longer produce ANY flag anchor.
 func TestRefusalFlagsProductionPollutionExcerpts(t *testing.T) {
 	for _, e := range []string{
 		`do not modify the auth module"，这条消息是否经过 recordConstraints？请追踪 mid-run 用户消息注入路径（agent`,
@@ -57,8 +48,6 @@ func TestRefusalFlagsProductionPollutionExcerpts(t *testing.T) {
 	}
 }
 
-// End-to-end: a persisted entry holding "mid-run" prose must NOT block a
-// go test command using the literal -run flag.
 func TestCheckBlockedMidRunProseDoesNotBlockGoTest(t *testing.T) {
 	l := newRefusalLedger(t.TempDir())
 	l.record(`do not modify the auth module"，这条消息是否经过 recordConstraints？请追踪 mid-run 用户消息注入路径（agent`, "nl", refusalKindDirect)
@@ -68,8 +57,6 @@ func TestCheckBlockedMidRunProseDoesNotBlockGoTest(t *testing.T) {
 	}
 }
 
-// True refusal anchors still block: a "never use --force push" entry must
-// block a command that carries --force.
 func TestCheckBlockedRealFlagStillBlocks(t *testing.T) {
 	l := newRefusalLedger(t.TempDir())
 	l.record("never use --force push to main", "nl", refusalKindDirect)
@@ -79,7 +66,6 @@ func TestCheckBlockedRealFlagStillBlocks(t *testing.T) {
 	}
 }
 
-// Path anchors: in-word extension fragments are not anchors.
 func TestRefusalPathInWordExtensionNotAnchor(t *testing.T) {
 	got := refusalTargets("keep xconfig.yaml untouched")
 	for _, a := range got {

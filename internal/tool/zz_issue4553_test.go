@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #4553 companion tests: three independently confirmed silent-mismatch bugs.
-
-// A: macro define args must be a JSON OBJECT - the old syntax-only probe
-// accepted arrays/strings/numbers and exploded at run time instead.
 func TestIssue4553A_MacroDefineRejectsNonObjectArgs(t *testing.T) {
 	mt := &MacroTool{WorkingDir: t.TempDir(), Registry: NewRegistry()}
 	out, err := mt.Execute(context.Background(), json.RawMessage(
@@ -24,8 +20,6 @@ func TestIssue4553A_MacroDefineRejectsNonObjectArgs(t *testing.T) {
 	}
 }
 
-// B: kitty split size out of 1-99 must fail loudly, not silently split
-// unresized. Validation fires before any kitty invocation.
 func TestIssue4553B_KittySplitRejectsOutOfRangeSize(t *testing.T) {
 	k := &KittyTool{}
 	for _, size := range []int{100, 150, -5} {
@@ -39,9 +33,6 @@ func TestIssue4553B_KittySplitRejectsOutOfRangeSize(t *testing.T) {
 	}
 }
 
-// C: "*" anywhere in the recipient list means broadcast-to-all. A mesh
-// harness is out of scope for the minimal fix - source-pin the loop shape
-// (the old single-element check silently dropped "*" from mixed lists).
 func TestIssue4553C_WildcardAnywhereBroadcasts(t *testing.T) {
 	raw, err := os.ReadFile("lanchat_tool.go")
 	if err != nil {

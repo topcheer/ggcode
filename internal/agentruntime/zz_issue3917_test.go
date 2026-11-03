@@ -1,9 +1,5 @@
 package agentruntime
 
-// #3917 probe: ApplyProviderToAgent must not re-wrap an already-wrapped
-// tape provider - every hot model switch would otherwise leak an O_APPEND
-// fd (record) or reset the replay cursor to 0.
-
 import (
 	"os"
 	"testing"
@@ -11,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// The idempotency gate is pinned at source level plus a behavioral check
-// via the exported type: wrapping twice through the helper must yield ONE
-// TapeProvider layer when the inner provider is already a *TapeProvider.
 func TestIssue3917_NoDoubleWrapOnHotSwitch(t *testing.T) {
 	t.Setenv("GGCODE_LLM_TAPE", "")
 	raw, err := os.ReadFile("model_switch.go")

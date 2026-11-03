@@ -11,10 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// ClipboardTool lets the agent read from and write to the system clipboard.
-// This bridges the terminal and other applications — the agent can retrieve
-// text the user copied (error messages, URLs, code snippets) or place output
-// (generated code, commit messages) on the clipboard for the user to paste.
 type ClipboardTool struct{}
 
 func (ClipboardTool) Name() string { return "clipboard" }
@@ -66,8 +62,7 @@ func (t ClipboardTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if strings.TrimSpace(args.Text) == "" {
 			return Result{IsError: true, Content: "action='write' requires non-empty 'text' parameter"}, nil
 		}
-		// #809: rune count, not bytes -- CJK text (3 bytes/rune) got a ~1/3
-		// quota under len().
+
 		if utf8.RuneCountInString(args.Text) > clipboardMaxChars {
 			return Result{IsError: true, Content: fmt.Sprintf("text exceeds maximum of %d characters", clipboardMaxChars)}, nil
 		}
@@ -96,8 +91,6 @@ func (ClipboardTool) readClipboard(ctx context.Context) (Result, error) {
 	return Result{Content: text}, nil
 }
 
-// truncateRunes cuts s to at most max runes without splitting a
-// multi-byte rune (#809).
 func truncateRunes(s string, max int) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
@@ -122,19 +115,15 @@ func (ClipboardTool) writeClipboard(ctx context.Context, text string) (Result, e
 	return Result{Content: fmt.Sprintf("Copied %d characters to clipboard: %s", len(text), preview)}, nil
 }
 
-// clipboardReadCmd returns an exec.Cmd that writes clipboard contents to stdout.
 func clipboardReadCmd(ctx context.Context) (*exec.Cmd, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbpaste"), nil
 	case "windows":
-		// #1822 case 1: Get-Clipboard emits through [Console]::OutputEncoding,
-		// which Windows PowerShell 5.1 defaults to the OEM code page (936 on
-		// CJK machines) - Go then UTF-8-decoded GBK bytes into mojibake.
-		// The #1642-2 "symmetric fix" set only the WRITE side's encodings.
+
 		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
 			"[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard"), nil
-	default: // linux, freebsd, etc.
+	default:
 		if path, _ := exec.LookPath("wl-paste"); path != "" {
 			return exec.CommandContext(ctx, path), nil
 		}
@@ -148,19 +137,12 @@ func clipboardReadCmd(ctx context.Context) (*exec.Cmd, error) {
 	}
 }
 
-// clipboardWriteCmd returns an exec.Cmd that reads from stdin and writes to the clipboard.
 func clipboardWriteCmd(ctx context.Context) (*exec.Cmd, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbcopy"), nil
 	case "windows":
-		// #1642-2: clip.exe decodes stdin with the SYSTEM ANSI code page
-		// (GBK/936 etc.) - CJK/emoji wrote mojibake while the READ side
-		// already uses PowerShell UTF-8. Symmetric Set-Clipboard fixes it.
-		// #1822 case 2: a hard-coded "powershell" broke Nano Server/Server
-		// Core containers (no Windows PowerShell) where clip.exe works -
-		// mirror the Linux three-tier degradation: powershell, then pwsh,
-		// then clip.exe (old behavior, mojibake limitation beats nothing).
+
 		if path, _ := exec.LookPath("powershell"); path != "" {
 			return exec.CommandContext(ctx, path, "-NoProfile", "-Command", "$OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"), nil
 		}
@@ -185,8 +167,6 @@ func clipboardWriteCmd(ctx context.Context) (*exec.Cmd, error) {
 	}
 }
 
-// ClipboardAvailable reports whether a clipboard utility is installed.
-// Exported so callers (e.g. registration guards) can check before registering.
 func ClipboardAvailable() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

@@ -11,11 +11,7 @@ import (
 )
 
 func TestAwaitApprovalHonorsBufferedDecisionOnCtxDone(t *testing.T) {
-	// Regression for #1482: when ResolveApproval has buffered the decision
-	// (and already acknowledged it to the UI) and ctx.Done fires in the same
-	// select window, the old code randomly returned Deny - discarding an
-	// approval the user saw as granted. Run the race 20 times so the old
-	// behavior cannot pass by luck.
+
 	for i := 0; i < 20; i++ {
 		b := NewInteractionBroker()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -36,18 +32,13 @@ func TestAwaitApprovalHonorsBufferedDecisionOnCtxDone(t *testing.T) {
 			cancel()
 			t.Fatal("waiter not found - registration race in test setup")
 		}
-		cancel() // both select cases ready; the drain must win
+		cancel()
 		if d := <-got; d != permission.Allow {
 			t.Fatalf("iter %d: buffered Allow discarded on ctx.Done (got %v)", i, d)
 		}
 	}
 }
 
-// Regression for #1657: with 2+ pending approvals (parallel tool calls),
-// FirstPendingApproval used "for range map return first" - Go map iteration
-// order is randomized, so a text "y" landed on an arbitrary request. Run
-// 20 times so random iteration order cannot pass by luck: the
-// earliest-registered approval must always win.
 func TestFirstPendingApprovalDeterministicOrder(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		b := NewInteractionBroker()
@@ -65,8 +56,6 @@ func TestFirstPendingApprovalDeterministicOrder(t *testing.T) {
 			t.Fatalf("iteration %d: FirstPendingApproval returned %q, want earliest-registered %q", i, req.ID, "first")
 		}
 
-		// After resolving the first, the next First call must return the
-		// second one (not a random one).
 		if _, ok := b.ResolveApproval("first", permission.Deny); !ok {
 			t.Fatalf("iteration %d: first waiter not found", i)
 		}
@@ -123,9 +112,6 @@ func waitForAskMapLen(t *testing.T, b *InteractionBroker, want int) {
 	}
 }
 
-// #3370: with NO buffered decision, a fired ctx.Done must return the
-// matching NON-DECISION outcome (timeout/cancelled), never a bare Deny -
-// downstream audit/approval-memory/throttle must not blame the user.
 func TestAwaitApprovalCtxDoneReturnsNonDecision(t *testing.T) {
 	t.Run("deadline-expired", func(t *testing.T) {
 		b := NewInteractionBroker()
@@ -160,10 +146,6 @@ func TestAwaitApprovalCtxDoneReturnsNonDecision(t *testing.T) {
 	})
 }
 
-// #4151: concurrent approvals must resolve independently when each carries a
-// distinct request ID. This is the routing premise the desktop fix relies on:
-// unique IDs per request mean one approval's decision can never silence or
-// cross-wire another pending waiter.
 func TestConcurrentDistinctIDsResolveIndependently(t *testing.T) {
 	b := NewInteractionBroker()
 
@@ -179,8 +161,6 @@ func TestConcurrentDistinctIDsResolveIndependently(t *testing.T) {
 		}()
 	}
 
-	// Registrations are keyed by ID; wait for all to be pending so resolves
-	// hit registered waiters deterministically.
 	deadline := time.After(5 * time.Second)
 	for {
 		if b.ApprovalCount() == waiters {
@@ -193,7 +173,6 @@ func TestConcurrentDistinctIDsResolveIndependently(t *testing.T) {
 		}
 	}
 
-	// Even-indexed waiters are allowed, odd denied.
 	for i := 0; i < waiters; i += 2 {
 		if _, ok := b.ResolveApproval(fmt.Sprintf("req-%d", i), permission.Allow); !ok {
 			t.Fatalf("resolve req-%d should hit a registered waiter", i)

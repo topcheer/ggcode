@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestCoerceIntegerFloatOverflow verifies that float strings outside int64
-// range are not coerced (converting them is undefined and silently produced
-// garbage values downstream, #261).
 func TestCoerceIntegerFloatOverflow(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -37,18 +34,15 @@ func TestCoerceIntegerFloatOverflow(t *testing.T) {
 	}
 }
 
-// TestCoerceIntegerNanAndBoundary verifies NaN and 2^63 are rejected (#296):
-// math.MaxInt64 converts to float64 as exactly 2^63, so `>` let it through,
-// and NaN compares false with everything.
 func TestCoerceIntegerNanAndBoundary(t *testing.T) {
 	cases := []struct {
 		in   string
-		want bool // whether coercion succeeds
+		want bool
 	}{
-		{"9223372036854775808", false}, // 2^63 exactly
+		{"9223372036854775808", false},
 		{"NaN", false},
 		{"nan", false},
-		{"-9223372036854775808", true}, // MinInt64 is a legal int64 (ParseInt path)
+		{"-9223372036854775808", true},
 		{"123", true},
 		{"42.0", true},
 	}

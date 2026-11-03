@@ -18,7 +18,7 @@ func TestErrRegressionState_Reset(t *testing.T) {
 
 func TestErrRegressionState_NoPreviousBaseline(t *testing.T) {
 	s := newErrRegressionState()
-	// First verification ever -- no baseline to compare against.
+
 	got := s.recordVerify("go test", "error: foo", true)
 	if got != "" {
 		t.Fatalf("expected no guidance on first verify, got: %s", got)
@@ -27,9 +27,9 @@ func TestErrRegressionState_NoPreviousBaseline(t *testing.T) {
 
 func TestErrRegressionState_NoEditsBetweenVerifies(t *testing.T) {
 	s := newErrRegressionState()
-	// First verify sets baseline.
+
 	s.recordVerify("go test", buildOutput(5), true)
-	// Second verify with more errors but no edits in between.
+
 	got := s.recordVerify("go test", buildOutput(10), true)
 	if got != "" {
 		t.Fatalf("expected no guidance without edits, got: %s", got)
@@ -40,7 +40,7 @@ func TestErrRegressionState_RegressionDetected(t *testing.T) {
 	s := newErrRegressionState()
 	s.recordVerify("go test", buildOutput(2), true)
 	s.recordEdit()
-	got := s.recordVerify("go test", buildOutput(8), true) // +6 > threshold of 3
+	got := s.recordVerify("go test", buildOutput(8), true)
 	if got == "" {
 		t.Fatal("expected regression guidance, got empty string")
 	}
@@ -56,7 +56,7 @@ func TestErrRegressionState_SmallIncreaseNoWarning(t *testing.T) {
 	s := newErrRegressionState()
 	s.recordVerify("go test", buildOutput(3), true)
 	s.recordEdit()
-	got := s.recordVerify("go test", buildOutput(5), true) // +2 < threshold of 3
+	got := s.recordVerify("go test", buildOutput(5), true)
 	if got != "" {
 		t.Fatalf("expected no guidance for small increase, got: %s", got)
 	}
@@ -66,7 +66,7 @@ func TestErrRegressionState_ErrorDecreasesNoWarning(t *testing.T) {
 	s := newErrRegressionState()
 	s.recordVerify("go test", buildOutput(10), true)
 	s.recordEdit()
-	got := s.recordVerify("go test", buildOutput(3), true) // -7, improvement
+	got := s.recordVerify("go test", buildOutput(3), true)
 	if got != "" {
 		t.Fatalf("expected no guidance when errors decrease, got: %s", got)
 	}
@@ -76,7 +76,7 @@ func TestErrRegressionState_SuccessNoWarning(t *testing.T) {
 	s := newErrRegressionState()
 	s.recordVerify("go test", buildOutput(5), true)
 	s.recordEdit()
-	got := s.recordVerify("go test", "", false) // verification succeeded
+	got := s.recordVerify("go test", "", false)
 	if got != "" {
 		t.Fatalf("expected no guidance on success, got: %s", got)
 	}
@@ -84,7 +84,7 @@ func TestErrRegressionState_SuccessNoWarning(t *testing.T) {
 
 func TestErrRegressionState_MaxWarnings(t *testing.T) {
 	s := newErrRegressionState()
-	// Fire 3 regressions; only first 2 should produce guidance.
+
 	for i := 0; i < 3; i++ {
 		s.recordVerify("go test", buildOutput(2), true)
 		s.recordEdit()
@@ -114,8 +114,7 @@ func TestCountErrors(t *testing.T) {
 		{"mixed case", "Error: something\nERROR: other", 2},
 		{"with file prefix", "main.go:10: error: syntax error", 1},
 		{"filters zero errors", "0 errors found\nno error detected", 0},
-		// #1498: 'undefined:' IS a Go compiler error - the old regex missed it
-		// entirely, which is exactly the detector's target scenario going blind.
+
 		{"go compiler", "./main.go:5:2: undefined: foo\n./main.go:6:3: undefined: bar", 2},
 	}
 	for _, tt := range tests {
@@ -130,17 +129,16 @@ func TestCountErrors(t *testing.T) {
 
 func TestErrorRegressionCheckCommand(t *testing.T) {
 	a := &Agent{errRegression: newErrRegressionState()}
-	// Non-run_command tools should be ignored.
+
 	if g := a.errorRegressionCheckCommand("read_file", nil, buildOutput(5), true); g != "" {
 		t.Fatalf("expected empty for non-verify tool, got: %s", g)
 	}
-	// Non-verify commands should be ignored.
+
 	if g := a.errorRegressionCheckCommand("run_command", []byte(`{"command":"ls -la"}`), buildOutput(5), true); g != "" {
 		t.Fatalf("expected empty for non-verify command, got: %s", g)
 	}
 }
 
-// buildOutput returns a string with n error-like lines.
 func buildOutput(n int) string {
 	var b strings.Builder
 	for i := 0; i < n; i++ {
@@ -149,10 +147,6 @@ func buildOutput(n int) string {
 	return b.String()
 }
 
-// Regression for #1498: the old error-lines regex required the word "error"
-// plus [\s:], missing go build ('undefined:'), go test ('--- FAIL:'), cargo
-// ('error[E0308]') and pytest output entirely - countVerifyErrors scored
-// zero on the exact build/test stalls the detector targets.
 func TestErrorLinesReMatchesToolchainOutput(t *testing.T) {
 	for _, line := range []string{
 		"./internal/agent/foo.go:12:5: undefined: helpers.Render",
@@ -176,46 +170,40 @@ func TestErrorLinesReMatchesToolchainOutput(t *testing.T) {
 	}
 }
 
-// --- #1662: verifyCommandKind separator symmetry and scope granularity ---
-
 func TestVerifyCommandKindSemicolonPipeSeparated(t *testing.T) {
-	// Entry accepts ';'-separated compounds; the kind must not key on the
-	// cd/setup prefix.
+
 	if got := verifyCommandKind("cd /app; go test ./..."); got != "go test ./..." {
 		t.Errorf("semicolon compound: got %q, want %q", got, "go test ./...")
 	}
 	if got := verifyCommandKind("cd /app | go test ./..."); got != "go test ./..." {
 		t.Errorf("pipe compound: got %q, want %q", got, "go test ./...")
 	}
-	// build vs test behind a semicolon must be DIFFERENT kinds (the
-	// #1457-C family resurrected via another separator).
+
 	kb := verifyCommandKind("cd /x; go build ./...")
 	kt := verifyCommandKind("cd /x; go test ./...")
 	if kb == kt {
 		t.Errorf("build and test behind semicolon compared as same kind: %q", kb)
 	}
-	// Legacy && form and env prefixes still work.
+
 	if got := verifyCommandKind("GOFLAGS=-p=1 cd /app && go test ./..."); got != "go test ./..." {
 		t.Errorf("legacy && compound: got %q", got)
 	}
 }
 
 func TestVerifyCommandKindScopeAndVerbosity(t *testing.T) {
-	// Focused subset vs full run are different workflows - the error-count
-	// delta is mostly pre-existing errors newly exposed, not regressions.
+
 	focused := verifyCommandKind("go test ./internal/agent -run TestFoo")
 	full := verifyCommandKind("go test ./...")
 	if focused == full {
 		t.Errorf("focused and full runs share kind %q - focus-to-full would false-fire", focused)
 	}
-	// Verbosity changes the counting itself (verbose log lines match the
-	// error-lines regex); -v must not compare against quiet.
+
 	quiet := verifyCommandKind("go test ./...")
 	verbose := verifyCommandKind("go test ./... -v")
 	if quiet == verbose {
 		t.Errorf("-v shares kind with quiet run: %q", quiet)
 	}
-	// Same scope+flags still compare equal (no false split).
+
 	if a, b := verifyCommandKind("go test ./internal/im/"), verifyCommandKind("go test ./internal/im/"); a != b {
 		t.Errorf("identical commands got different kinds: %q vs %q", a, b)
 	}

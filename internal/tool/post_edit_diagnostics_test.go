@@ -26,9 +26,7 @@ func TestPostEditDiagnostics_EmptyWorkingDir(t *testing.T) {
 }
 
 func TestPostEditDiagnostics_NonSourceFile(t *testing.T) {
-	// Even if LSP is "available", non-source files should be skipped.
-	// Since this test doesn't have a real LSP server, it would return "" anyway,
-	// but we test the isSourceFile guard explicitly.
+
 	if isSourceFile("/path/to/readme.md") {
 		t.Fatal("expected .md to not be a source file")
 	}
@@ -52,9 +50,6 @@ func TestFormatDiagnostics_NoErrors(t *testing.T) {
 		t.Fatalf("expected empty for nil diagnostics, got %q", result)
 	}
 
-	// #1332: info/hint now render (aligned with the #820 baseline path) -
-	// gopls reports "imported and not used" at Info severity and it is a
-	// compile blocker; the fallback path must not hide it.
 	result = formatDiagnostics([]lsp.Diagnostic{
 		{Severity: 3, Message: "some info", Range: lsp.Range{Start: lsp.Position{Line: 0}}},
 		{Severity: 4, Message: "some hint", Range: lsp.Range{Start: lsp.Position{Line: 1}}},
@@ -102,7 +97,7 @@ func TestFormatDiagnostics_WithWarnings(t *testing.T) {
 }
 
 func TestFormatDiagnostics_ErrorAndWarningCap(t *testing.T) {
-	// Generate 15 errors and 8 warnings — should cap at 10 errors and 5 warnings.
+
 	diags := make([]lsp.Diagnostic, 0, 23)
 	for i := 0; i < 15; i++ {
 		diags = append(diags, lsp.Diagnostic{Severity: 1, Message: "err", Range: lsp.Range{Start: lsp.Position{Line: i}}})

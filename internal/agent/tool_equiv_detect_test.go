@@ -62,15 +62,11 @@ func TestToolEquivDetect_ReorderedKeys(t *testing.T) {
 	call1 := []byte(`{"pattern":"TODO","path":"/src"}`)
 	call2 := []byte(`{"path":"/src","pattern":"TODO"}`)
 
-	// First call - no warning
 	hint1 := s.recordCall("grep", call1, rawFp("grep", call1))
 	if hint1 != "" {
 		t.Errorf("first call should not warn, got: %q", hint1)
 	}
 
-	// Reordered keys = DIVERGENT raw fingerprints: this is the
-	// semantic-equivalence case. Threshold is 3 (#494) — second call
-	// only counts, third one warns.
 	hint2 := s.recordCall("grep", call2, rawFp("grep", call2))
 	if hint2 != "" {
 		t.Errorf("second call is below threshold 3, no warning yet, got: %q", hint2)
@@ -91,7 +87,6 @@ func TestToolEquivDetect_VolatileFields(t *testing.T) {
 		t.Errorf("first call should not warn")
 	}
 
-	// Volatile-only divergence: below threshold 3 no warning yet (#494).
 	hint2 := s.recordCall("search", call2, rawFp("search", call2))
 	if hint2 != "" {
 		t.Errorf("second call is below threshold 3, no warning yet, got: %q", hint2)
@@ -106,10 +101,6 @@ func TestToolEquivDetect_ExactMatchNoDoubleWarn(t *testing.T) {
 	s := newToolEquivDetectState()
 	args := []byte(`{"pattern":"foo"}`)
 
-	// Byte-identical repetition: raw fingerprints are identical, so
-	// tool_redundancy already owns the warning — this detector YIELDS
-	// (#494 implements the documented :32 contract; the old write-only
-	// rawFingerprints map never actually suppressed anything).
 	hint1 := s.recordCall("grep", args, rawFp("grep", args))
 	if hint1 != "" {
 		t.Errorf("first call should not warn")
@@ -123,7 +114,7 @@ func TestToolEquivDetect_ExactMatchNoDoubleWarn(t *testing.T) {
 
 func TestToolEquivDetect_MaxWarnings(t *testing.T) {
 	s := newToolEquivDetectState()
-	// Fire enough to hit max warnings
+
 	for i := 0; i < 10; i++ {
 		call := []byte(`{"q":"val"}`)
 		hint := s.recordCall("search", call, rawFp("search", call))
@@ -143,7 +134,7 @@ func TestToolEquivDetect_DifferentTools(t *testing.T) {
 	if hint1 != "" {
 		t.Errorf("first call should not warn")
 	}
-	// Same args but different tool name - should NOT trigger
+
 	hint2 := s.recordCall("search", call2, rawFp("search", call2))
 	if hint2 != "" {
 		t.Errorf("different tool name with same args should not cross-trigger")

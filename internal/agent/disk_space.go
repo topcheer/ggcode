@@ -1,31 +1,5 @@
 package agent
 
-// Disk Space / Resource Monitor
-//
-// Detects low disk space on the workspace volume before the agent starts working.
-// When the workspace is critically low on disk, file operations (write_file,
-// edit_file, git operations, build/test commands) will fail silently or with
-// cryptic "no space left on device" errors. The agent then wastes iterations
-// retrying or misdiagnosing the problem.
-//
-// Competitor analysis:
-//   - Claude Code: no disk space awareness; fails on write errors
-//   - Cursor: IDE shows OS-level warnings but agent has no awareness
-//   - Devin: no proactive disk monitoring
-//   - OpenHands/Cline: no disk awareness; sandbox OOM/disk-full is top crash cause
-//   - Aider: git-based, fails on commit when disk is full
-//
-// ggcode's approach: check free space once at run start. If below warning or
-// critical thresholds, inject a concise advisory so the agent can prioritize
-// cleanup (clear caches, remove large temp files, prune worktrees) before
-// proceeding with the task. Zero LLM cost, fires at most once per run.
-//
-// Design constraints:
-//   - Cross-platform: syscall.Statfs on Unix, windows.GetDiskFreeSpaceEx on Windows
-//   - Non-blocking: 50ms timeout via context
-//   - Non-fatal: if stat fails (network FS, permission), silently skip
-//   - At most one injection per run
-
 import (
 	"fmt"
 	"path/filepath"
@@ -36,28 +10,19 @@ import (
 )
 
 const (
-	// diskWarnThreshold: below this, inject a warning advisory.
-	// 2 GiB - enough headroom for most builds but signals the agent should
-	// be mindful of large file operations.
 	diskWarnThreshold = uint64(2 * 1024 * 1024 * 1024)
 
-	// diskCriticalThreshold: below this, inject a critical advisory.
-	// 500 MiB - git operations, builds, and temp files will likely fail.
 	diskCriticalThreshold = uint64(500 * 1024 * 1024)
 
-	// diskCheckInterval: minimum time between disk space checks across runs.
-	// Avoids repeated syscall.Statfs on every user turn.
 	diskCheckInterval = 2 * time.Minute
 )
 
-// diskSpaceState tracks whether the disk space advisory has been injected
-// and caches the last check to avoid redundant statfs calls.
 type diskSpaceState struct {
 	fired      bool
 	lastCheck  time.Time
 	lastFree   uint64
 	lastTotal  uint64
-	lastResult string // cached message, empty if no issue
+	lastResult string
 }
 
 func newDiskSpaceState() *diskSpaceState {
@@ -66,18 +31,14 @@ func newDiskSpaceState() *diskSpaceState {
 
 func (d *diskSpaceState) reset() {
 	d.fired = false
-	// Keep lastCheck/lastFree to allow cross-run caching within diskCheckInterval
+
 }
 
-// checkDiskSpace inspects the free space on the volume containing the working
-// directory. Returns a non-empty advisory message if space is low, or empty
-// string if space is adequate or the check failed.
 func (d *diskSpaceState) check(workingDir string) string {
 	if d.fired {
 		return d.lastResult
 	}
 
-	// Use cached result if checked recently
 	if time.Since(d.lastCheck) < diskCheckInterval && d.lastResult != "" {
 		d.fired = true
 		return d.lastResult
@@ -128,7 +89,6 @@ func (d *diskSpaceState) check(workingDir string) string {
 	return msg
 }
 
-// formatDiskSize renders a byte count as a human-readable string.
 func formatDiskSize(bytes uint64) string {
 	const (
 		kiB = 1024
@@ -147,8 +107,6 @@ func formatDiskSize(bytes uint64) string {
 	}
 }
 
-// diskUsage returns (free bytes, total bytes, ok) for the filesystem containing path.
-// Platform-specific implementations are in disk_space_unix.go and disk_space_windows.go.
 func diskUsage(path string) (free, total uint64, ok bool) {
 	return diskUsageOS(path)
 }

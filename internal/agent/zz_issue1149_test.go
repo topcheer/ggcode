@@ -2,9 +2,6 @@ package agent
 
 import "testing"
 
-// Guards #1149: the delta suppression must be multiset-based and the method
-// fingerprint must key on the receiver TYPE, not the receiver variable name.
-
 func TestIssue1149_SecondIdenticalClosureReported(t *testing.T) {
 	old := `package p
 func use() {
@@ -48,7 +45,7 @@ func use() {
 	f2 := func(a, b, c, d, e, f int) int { return b }
 	_, _ = f1, f2
 }`
-	new := old // unchanged file: line-shift safety net (#1142) must hold
+	new := old
 	warns := checkExcessiveParams("a.go", old, new)
 	if len(warns) != 0 {
 		t.Fatalf("unchanged identical instances must stay silent, got %d: %v", len(warns), warns)

@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// NotebookEdit edits Jupyter Notebook (.ipynb) cells.
 type NotebookEdit struct {
 	SandboxCheck AllowedPathChecker
 }
@@ -92,14 +91,9 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// #2327: serialize stale-check→write per path, same as write_file -
-	// a parallel same-path writer could otherwise pass its own guard
-	// inside our window.
 	unlockNB := LockWritePath(args.NotebookPath)
 	defer unlockNB()
-	// #1696 case 1: notebook_edit was the only writer in the package not
-	// running the stale guard - it silently overwrote notebooks modified
-	// externally after the agent's last read.
+
 	if stale, since := defaultFileTracker.CheckStale(args.NotebookPath); stale {
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"notebook was modified externally since last read (changed after %s). "+
@@ -108,7 +102,6 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		)}, nil
 	}
 
-	// Read and parse notebook
 	data, err := os.ReadFile(args.NotebookPath)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error reading notebook: %v", err)}, nil
@@ -137,15 +130,12 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if err := json.Unmarshal(cells[idx], &cell); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error parsing cell %d: %v", idx, err)}, nil
 		}
-		// #854: omitted source deserializes to "" and would silently wipe
-		// the cell's content — require it explicitly.
+
 		if args.Source == "" {
 			return Result{IsError: true, Content: "source is required for replace operation (omitting it would wipe the cell content)"}, nil
 		}
 		sourceJSON, _ := json.Marshal(sourceToLines(args.Source))
 		cell["source"] = sourceJSON
-		// #853: outputs/execution_count are forbidden on markdown/raw cells
-		// (nbformat schema) — mirror the add branch's cell_type handling.
 		var cellType string
 		if ctRaw, ok := cell["cell_type"]; ok {
 			_ = json.Unmarshal(ctRaw, &cellType)
@@ -161,8 +151,7 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		cells[idx] = updatedCell
 
 	case "add":
-		// #854: same silent-wipe guard as replace — an add without source
-		// creates an empty cell that overwrites nothing but reports success.
+
 		if args.Source == "" {
 			return Result{IsError: true, Content: "source is required for add operation"}, nil
 		}
@@ -170,8 +159,7 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if cellType == "" {
 			cellType = "code"
 		}
-		// #1696 case 5: a typo like "python" silently produced an
-		// nbformat-invalid cell while reporting success.
+
 		switch cellType {
 		case "code", "markdown", "raw":
 		default:
@@ -200,7 +188,7 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 				insertAt = len(cells)
 			}
 		}
-		// Insert at position
+
 		cells = append(cells[:insertAt], append([]json.RawMessage{newCellJSON}, cells[insertAt:]...)...)
 
 	case "delete":
@@ -217,31 +205,25 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("unknown operation %q — use replace, add, or delete", args.Operation)}, nil
 	}
 
-	// Rebuild notebook
 	cellsJSON, _ := json.Marshal(cells)
 	notebook["cells"] = cellsJSON
 
-	// Use compact but readable formatting
 	output, err := json.MarshalIndent(notebook, "", " ")
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error serializing notebook: %v", err)}, nil
 	}
-	// Ensure trailing newline
+
 	output = append(output, '\n')
 
 	if err := atomicWriteFile(args.NotebookPath, output, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing notebook: %v", err)}, nil
 	}
-	// #1696 case 1: the package-wide contract - seven write sites call
-	// RecordWrite, notebook_edit was the lone exception. Without it,
-	// read(.ipynb) -> notebook_edit -> write_file tripped CheckStale's
-	// "modified externally" misreport on the agent's OWN edit.
+
 	defaultFileTracker.RecordWrite(args.NotebookPath)
 
 	return Result{Content: fmt.Sprintf("Notebook %s: %s operation completed (%d cells)", args.NotebookPath, args.Operation, len(cells))}, nil
 }
 
-// sourceToLines converts a string source to the ipynb format: []string with trailing newlines.
 func sourceToLines(source string) []string {
 	if source == "" {
 		return []string{}
@@ -249,14 +231,14 @@ func sourceToLines(source string) []string {
 	lines := strings.Split(source, "\n")
 	result := make([]string, len(lines))
 	for i, line := range lines {
-		// All lines except the last get a trailing newline
+
 		if i < len(lines)-1 {
 			result[i] = line + "\n"
 		} else {
 			result[i] = line
 		}
 	}
-	// If the source ends with a newline, the last element is just "" — trim it
+
 	if len(result) > 0 && result[len(result)-1] == "" {
 		result = result[:len(result)-1]
 	}

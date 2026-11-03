@@ -22,7 +22,7 @@ func TestCapturePlan_BulletItems(t *testing.T) {
 	if len(s.items) != 5 {
 		t.Fatalf("expected 5 items (1 heading + 4 bullets), got %d", len(s.items))
 	}
-	// First item should reference plan_drift.go
+
 	found := false
 	for _, item := range s.items {
 		for _, kw := range item.Keywords {
@@ -150,9 +150,9 @@ func TestCheckPlanDrift_SingleItemNoFire(t *testing.T) {
 	stats := newRunStats("test")
 	stats.FilesEdited = []string{"done.go"}
 	msg := s.checkPlanDrift(stats, "done")
-	// Only 1 of 2 unaddressed, ratio 0.5 - should fire since >= 2 items check is len<2 && ratio<0.5
+
 	if msg == "" {
-		// 1/2 = 0.5, and len(unaddressed)=1 < 2 && ratio=0.5 which is NOT < 0.5, so should fire
+
 		t.Error("expected drift to fire for 1 of 2 (50% threshold met)")
 	}
 }
@@ -232,19 +232,17 @@ func containsStrPD(s, substr string) bool {
 	return false
 }
 
-// #1850 case 1: restating the plan in the reply text must NOT count as
-// addressing plan items - only tool-faced evidence does.
 func TestPlanDriftRestatedPlanDoesNotMute1850(t *testing.T) {
 	s := newPlanDriftState()
 	s.captured = true
 	s.items = []planItem{{Text: "update auth middleware", Keywords: []string{"auth", "middleware"}}}
 	stats := &RunStats{}
-	// Assistant text literally restates the plan; NO files edited.
+
 	msg := s.checkPlanDrift(stats, "Next I will update the auth middleware.")
 	if msg == "" {
 		t.Fatal("restated-but-not-done plan must stay flagged")
 	}
-	// Tool-faced evidence does mute.
+
 	stats2 := &RunStats{FilesEdited: []string{"internal/auth/middleware.go"}}
 	s2 := newPlanDriftState()
 	s2.captured = true

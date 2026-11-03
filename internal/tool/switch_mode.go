@@ -10,29 +10,20 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// policyModeSwitcher is implemented by permission policies that support
-// runtime mode changes (e.g., *permission.ConfigPolicy).
 type policyModeSwitcher interface {
 	Mode() permission.PermissionMode
 	SetMode(permission.PermissionMode)
 }
 
-// SwitchModeTool lets the LLM switch between permission modes at runtime.
-// It is registered in RegisterBuiltinTools with just the policy (works for
-// headless mode). TUI and Desktop inject a ModeSwitcher via SetSwitcher()
-// after registration so that the UI is notified of mode changes.
 type SwitchModeTool struct {
 	policy   permission.PermissionPolicy
-	Switcher ModeSwitcher // optional; injected by TUI/Desktop after registration
+	Switcher ModeSwitcher
 }
 
-// NewSwitchModeTool creates a switch_mode tool bound to the given policy.
 func NewSwitchModeTool(policy permission.PermissionPolicy) *SwitchModeTool {
 	return &SwitchModeTool{policy: policy}
 }
 
-// SetSwitcher injects a ModeSwitcher for UI notification. Called by
-// TUI (replModeSwitcher) and Desktop after tool registration.
 func (t *SwitchModeTool) SetSwitcher(s ModeSwitcher) {
 	t.Switcher = s
 }
@@ -73,10 +64,7 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(args.Mode))
-	// Two-mode refactor: users (and the LLM on their behalf) may only
-	// switch between supervised and bypass. Legacy names auto/autopilot
-	// normalize silently (config compat); plan is tool-internal only
-	// (enter_plan_mode / exit_plan_mode).
+
 	switch mode {
 	case "auto":
 		mode = "supervised"
@@ -91,8 +79,6 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 
 	newMode := permission.ParsePermissionMode(mode)
 
-	// If a ModeSwitcher is injected (TUI/Desktop), use it — it handles both
-	// policy update AND UI notification (modeChangeMsg / SetPermissionPolicy).
 	if t.Switcher != nil {
 		oldMode := t.Switcher.Mode()
 		if oldMode == newMode {
@@ -103,7 +89,6 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		return Result{Content: fmt.Sprintf("Switched permission mode: %s → %s", oldMode.String(), newMode.String())}, nil
 	}
 
-	// Fallback: direct policy manipulation (daemon/pipe mode, no UI to notify).
 	if t.policy == nil {
 		return Result{IsError: true, Content: "no permission policy configured"}, nil
 	}

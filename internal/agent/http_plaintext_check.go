@@ -1,29 +1,5 @@
 package agent
 
-// HTTP Plaintext Detection in Source Code
-//
-// Research basis: Insecure transport is OWASP Top 10 A02:2021 (Cryptographic
-// Failures). AI coding agents frequently generate http:// URLs when they
-// should use https://, especially when:
-//   1. Writing API client code (http://api.example.com/... instead of https://)
-//   2. Setting up webhook URLs
-//   3. Configuring redirect URLs
-//   4. Writing test fixtures with hardcoded endpoints
-//
-// This is DIFFERENT from insecure_pattern_check.go which detects TLS bypass
-// (InsecureSkipVerify: true). THIS check catches the simpler but equally
-// dangerous case of using plaintext HTTP for non-localhost traffic.
-//
-// Competitor analysis:
-//   - GitHub Copilot: no write-time HTTP plaintext detection
-//   - Cursor: no detection (relies on external linters)
-//   - Claude Code: no detection
-//   - gosec (G107): only flags SSRF via http.Get(userInput)
-//
-// ggcode's approach: delta-aware text pattern matching. Flags http:// URLs
-// pointing to non-localhost hosts (localhost, 127.0.0.1, 0.0.0.0, [::1] are
-// exempted). Zero LLM cost, <1ms.
-
 import (
 	"fmt"
 	"net"
@@ -31,45 +7,33 @@ import (
 	"strings"
 )
 
-// httpPlaintextRe matches http:// URLs in source code.
-// Captures the host portion after "http://". Fix #726: the host alternation
-// now includes the bracketed IPv6 form `[2001:db8::1]` - the previous charset
-// lacked brackets, so public IPv6 plaintext HTTP URLs never matched at all
-// (and the `[::1]` whitelist entry was dead code).
 var httpPlaintextRe = regexp.MustCompile(`http://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._:-]+)`)
 
-// localhostHosts lists host patterns that are exempt from plaintext HTTP
-// warnings because they represent local development environments.
 var localhostHosts = []string{
 	"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1",
 }
 
-// maxPlaintextWarnings limits warnings per file to avoid noise.
 const maxPlaintextWarnings = 3
 
-// checkHTTPPlaintext detects http:// URLs introduced by this edit that point
-// to non-localhost hosts. Delta-aware: only flags URLs not present in oldContent.
 func checkHTTPPlaintext(filePath, oldContent, newContent string) []string {
 	if strings.TrimSpace(newContent) == "" {
 		return nil
 	}
 
-	// Find all http:// URLs in old and new content.
 	oldURLs := extractHTTPHosts(oldContent)
 	newURLs := extractHTTPHosts(newContent)
 
-	// Find newly-introduced non-localhost URLs.
 	var warnings []string
 	seen := make(map[string]bool)
 	for u := range newURLs {
 		if oldURLs[u] {
-			continue // existed before
+			continue
 		}
 		if seen[u] {
-			continue // already reported
+			continue
 		}
 		if isLocalhost(u) {
-			continue // exempt
+			continue
 		}
 		seen[u] = true
 		warnings = append(warnings, fmt.Sprintf(
@@ -86,22 +50,18 @@ func checkHTTPPlaintext(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// extractHTTPHosts finds all http:// host portions in the content and returns
-// them as a set (map) for quick lookup.
 func extractHTTPHosts(content string) map[string]bool {
 	matches := httpPlaintextRe.FindAllStringSubmatch(content, -1)
 	result := make(map[string]bool, len(matches))
 	for _, m := range matches {
 		if len(m) >= 2 {
-			// Take only the host part (before port or path)
+
 			host := m[1]
 			if strings.HasPrefix(host, "[") {
-				// Bracketed IPv6 literal (fix #726): the port, if any, follows the
-				// closing ']' and is outside the capture. Strip the brackets so the
-				// bare address compares against the whitelist ("::1" et al).
+
 				host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 			} else if idx := strings.IndexByte(host, ':'); idx > 0 {
-				host = host[:idx] // strip port
+				host = host[:idx]
 			}
 			result[host] = true
 		}
@@ -109,29 +69,19 @@ func extractHTTPHosts(content string) map[string]bool {
 	return result
 }
 
-// isLocalhost checks if a host represents a local development address.
-// Fix #3536: the old exact-string whitelist missed standard dev addresses:
-//   - `*.localhost` subdomains (RFC 6761 §6.3 reserves the whole domain for
-//     loopback; Vite's recommended `host: true` setup uses app.localhost)
-//   - the rest of 127.0.0.0/8 (RFC 1122 §3.2.1.3 - 127.0.0.2 is a common
-//     multi-service local test address on macOS/Linux)
 func isLocalhost(host string) bool {
 	lower := strings.ToLower(host)
-	// Exact whitelist kept as fallback (covers "0.0.0.0" and malformed but
-	// intended-local spellings that net.ParseIP rejects).
+
 	for _, lh := range localhostHosts {
 		if lower == strings.ToLower(lh) {
 			return true
 		}
 	}
-	// *.localhost subdomains: any depth under the reserved loopback domain.
-	// Suffix match is safe: "evil.localhost.example.com" does not end in
-	// ".localhost".
+
 	if strings.HasSuffix(lower, ".localhost") {
 		return true
 	}
-	// IP literals: covers all of 127.0.0.0/8 and ::1 (brackets are already
-	// stripped by extractHTTPHosts).
+
 	if ip := net.ParseIP(lower); ip != nil && ip.IsLoopback() {
 		return true
 	}

@@ -57,9 +57,6 @@ func FilterWorkspaceSessions(sessions []*session.Session, workingDir string) []*
 	return filtered
 }
 
-// lastMessagePreview extracts a short preview of the last text message.
-// It scans messages backward, skipping system messages and tool blocks,
-// and returns the first non-empty text content truncated to ~80 chars.
 func lastMessagePreview(msgs []provider.Message) string {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		m := msgs[i]
@@ -72,7 +69,7 @@ func lastMessagePreview(msgs []provider.Message) string {
 				if text == "" {
 					continue
 				}
-				// Take first line only
+
 				if idx := strings.IndexByte(text, '\n'); idx > 0 {
 					text = text[:idx]
 				}
@@ -159,9 +156,6 @@ func ClearSession() SessionState {
 	return SessionState{}
 }
 
-// DeleteSessionIfEmpty removes a session from the store if it has no
-// user messages. Used to clean up ephemeral sessions that were created
-// but never used (e.g., desktop auto-created when latest was locked).
 func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
 	if store == nil || ses == nil {
 		return nil
@@ -172,9 +166,6 @@ func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
 	return store.Delete(ses.ID)
 }
 
-// RestoreSessionIntoAgent loads session messages into the agent's context
-// manager and runs reconciliation + microcompaction. Returns whether
-// microcompaction occurred and the before/after token counts.
 func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (compacted bool, beforeTokens int, afterTokens int) {
 	if agentInst == nil || ses == nil {
 		return false, 0, 0
@@ -184,39 +175,10 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		msgs = ses.Messages
 	}
 
-	// ContextMessages is already the checkpoint-aware slice: it contains
-	// [summary_msg, ...post-checkpoint messages]. Load ALL of them -- do NOT
-	// slice by CheckpointMessageCount (that would skip the entire context).
-	//
-	// The legacy code that needed CheckpointMessageCount slicing was for the
-	// old format where ContextMessages was built from ses.Messages (all records)
-	// and CheckpointMessageCount was used to skip pre-checkpoint messages.
-	// With the new format, loadSession() already builds ContextMessages
-	// correctly from summary_msg_id + last_msg_id, so no slicing is needed.
-
-	// Load messages via Add() (accumulates local token estimates).
 	for _, msg := range msgs {
 		agentInst.AddMessage(msg)
 	}
 
-	// Use the last real usage entry as the token baseline. This is more
-	// accurate than local estimation and replaces the old checkpoint-tokens
-	// approach. The first real LLM call after restore will refine it via
-	// RecordUsage. Fall back to CheckpointTokens if no usage history exists.
-	//
-	// Stale-baseline clamp (under-direction only): the last usage entry
-	// measured the context as it stood at the END of the previous run.
-	// Session reload reconstructs a DIFFERENT context slice (post-compaction
-	// summary + tail, or the unwindowed tail for checkpoint-less sessions),
-	// so the recorded usage can grossly UNDER-report what was just restored
-	// -- e.g. a session last saved by a buggy build (few-K stub context)
-	// keeps showing few-K usage after a fixed reload. When the recorded
-	// measurement is far BELOW the calibrated estimate of the restored
-	// messages, trust the estimate. The over-direction is deliberately NOT
-	// clamped: the local estimator can legitimately under-price CJK content,
-	// and a real measurement larger than the estimate must keep winning
-	// (see TestRestoreSessionWithCheckpoint). RecordUsage corrects the
-	// baseline on the first real call either way.
 	if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
 		cand := 0
 		if n := len(ses.UsageHistory); n > 0 {
@@ -228,9 +190,7 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		if cand == 0 && ses.CheckpointTokens > 0 {
 			cand = ses.CheckpointTokens
 		}
-		// Estimate of exactly the restored slice. No baseline has been set
-		// yet on a fresh agent, so TokenCount() is the calibrated local
-		// estimate here.
+
 		if est := agentInst.ContextManager().TokenCount(); est > 0 && cand > 0 && cand < est/2 {
 			debug.Log("agentruntime", "restore baseline stale (under-reports restored context): usage=%d vs restored estimate=%d for session %s -- using estimate",
 				cand, est, ses.ID)
@@ -241,9 +201,6 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		}
 	}
 
-	// Apply session-level ContextWindow/MaxTokens BEFORE microcompact so the
-	// threshold check uses the correct context window. These take priority
-	// over endpoint/per-model config when restoring a session.
 	if ses.ContextWindow > 0 {
 		agentInst.ContextManager().SetContextWindow(ses.ContextWindow)
 	}
@@ -254,32 +211,16 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 	agentInst.ReconcileToolCalls()
 	compacted, beforeTokens, afterTokens = agentInst.MicrocompactIfOverThreshold()
 
-	// Clear runAdded: AddMessage() during restore populated it, but these
-	// messages already exist in the JSONL file. Without this, the next
-	// persistFullSessionMessages() would re-write all of them back to disk,
-	// doubling the session file on every restart.
 	agentInst.StartRunTracking()
 
 	return compacted, beforeTokens, afterTokens
 }
 
-// CheckCrashRecovery detects whether the session's previous run was interrupted
-// by a crash (SIGKILL, panic, power loss). If so, it returns a human-readable
-// recovery message that callers can display to the user or inject into the
-// agent's context, plus the raw prompt of the interrupted task (second return
-// value) for the confirm-to-resume flow (sa-117 /continue-task). Both are
-// empty when no crash is detected. The task prompt is empty when the journal
-// was corrupt (placeholder text carries no real task).
-//
-// This should be called after RestoreSessionIntoAgent during session resume.
 func CheckCrashRecovery(sessionID string) (string, string) {
 	info := agent.CheckCrashedRun(sessionID)
 	return agent.FormatCrashRecoveryMessage(info), crashResumeTask(info)
 }
 
-// crashResumeTask extracts the interrupted task prompt, excluding the
-// corrupt-journal placeholder (run_journal.go formats it as
-// "<journal corrupted: ...>" - it names the evidence file, not a task).
 func crashResumeTask(info *agent.CrashRecoveryInfo) string {
 	if info == nil || info.UserPrompt == "" {
 		return ""
@@ -290,20 +231,10 @@ func crashResumeTask(info *agent.CrashRecoveryInfo) string {
 	return info.UserPrompt
 }
 
-// SeedCrashDedupWindow opens the crash-restore idempotency window
-// (tool_dedup_crash.go): mutating calls that succeeded before the crash are
-// re-seeded into the agent's duplicate-suppression ledger, so a post-resume
-// replay is suppressed with an advisory instead of re-executing the side
-// effect (ACRFence arXiv:2603.20625). One-shot no-op when no crash sidecar
-// exists. Call after CheckCrashRecovery detected a crashed run.
 func SeedCrashDedupWindow(a *agent.Agent, sessionID string) {
 	agent.SeedCrashDedup(a, sessionID)
 }
 
-// CheckContinuation returns a model-facing continuation-point message
-// when the session's previous run was user-interrupted (r445). Unlike
-// CheckCrashRecovery this covers same-session Ctrl+C; the snapshot is
-// consumed on read. Empty string means nothing to resume.
 func CheckContinuation(sessionID string) string {
 	return agent.CheckContinuation(sessionID)
 }

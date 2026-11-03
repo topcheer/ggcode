@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// #4127: "why do you keep"/"you keep"/"why are you doing" followed by a NOUN
-// phrase is a neutral technical question (keep = hold/retain, doing =
-// executing), the same false-positive family #1223 removed ("why are you
-// using a mutex here?"). Only gerund/deixis frustration forms stay.
 func TestIssue4127_TechnicalQuestionsNotFrustration(t *testing.T) {
 	questions := []string{
 		"why do you keep a mutex here?",

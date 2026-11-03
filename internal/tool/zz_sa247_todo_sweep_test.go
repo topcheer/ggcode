@@ -1,10 +1,5 @@
 package tool
 
-// #3346 (sa-247 audit): todo files live at ~/.ggcode/todos/<sessionID>.json
-// with no deletion path anywhere - same unbounded growth as sessions before
-// #3337. SweepStaleTodoFiles must remove stale files, keep fresh ones and
-// files of live sessions, and no-op when the dir does not exist.
-
 import (
 	"os"
 	"path/filepath"
@@ -49,7 +44,7 @@ func TestSweepStaleTodoFiles(t *testing.T) {
 }
 
 func TestSweepStaleTodoFilesNoDir(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // no todos dir created
+	t.Setenv("HOME", t.TempDir())
 	if n := SweepStaleTodoFiles(30 * 24 * time.Hour); n != 0 {
 		t.Fatalf("missing dir: removed = %d, want 0", n)
 	}

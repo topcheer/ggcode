@@ -78,8 +78,7 @@ func TestHydrateProjectionReplayFromSessionLedgerDedupesAndReloads(t *testing.T)
 	if err != nil {
 		t.Fatalf("hydrate: %v", err)
 	}
-	// HydrateProjectionReplayFromSessionLedger is now a no-op — tunnel events
-	// are no longer stored in session JSONL. The replay should be unchanged.
+
 	if len(replay) != len(initial) {
 		t.Fatalf("expected %d replay events (unchanged), got %d", len(initial), len(replay))
 	}

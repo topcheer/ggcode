@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// EditFile implements the edit_file tool for find-and-replace editing.
 type EditFile struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -83,9 +82,6 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// #2327: serialize the whole read→match→write sequence per path,
-	// same as write_file - a parallel same-path writer could otherwise
-	// pass its own guard inside our window.
 	unlockEdit := LockWritePath(args.FilePath)
 	defer unlockEdit()
 	data, err := os.ReadFile(args.FilePath)
@@ -117,10 +113,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	count := strings.Count(content, oldText)
 	if !args.ReplaceAll && !mr.anchored {
-		// #604 T2: a fallback transform (trailing-ws/indent-shift/fuzzy) can
-		// fold semantically-duplicate blocks into a single byte-exact canonical
-		// match. Re-count under the lenient semantics the fallback actually used;
-		// if that finds more than one match, refuse to silently edit the first.
+
 		if count <= 1 {
 			if loose, looseLines := lenientRecount(content, args.OldText, mr); loose > 1 {
 				msg := fmt.Sprintf(
@@ -150,20 +143,11 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: msg}, nil
 	}
 
-	// Apply the same transform to new_text so the replacement matches the
-	// file's conventions (indentation, line endings, line-number stripping).
 	newText := args.NewText
 	if mr.transform != "" {
 		newText = adjustNewText(content, args.NewText, mr)
 	}
-	// #1676 case 3: normalize new_text to the file's line-ending convention.
-	// The previous condition only fired when old_text itself contained
-	// \r\n, so a single-line match in a CRLF file with a multi-line LF
-	// new_text silently introduced mixed line endings (.go files get
-	// rescued by formatGoBytes; .md/.yaml/.cs have no formatting hook and
-	// stayed mixed forever). The content-based helper covers that case and
-	// the byte-exact CRLF old_text case (tryCRLFMatch covers the opposite
-	// LF-old/CRLF-file matching direction).
+
 	newText = normalizeNewTextEOL(content, newText)
 
 	var newContent string
@@ -175,10 +159,6 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		newContent = strings.Replace(content, oldText, newText, 1)
 	}
 
-	// No-op guard: if the edit produces identical content, skip the write.
-	// This prevents unnecessary mtime changes, checkpoint saves, cache
-	// invalidation, and file-integrity tracking noise from no-effect edits
-	// (e.g. the LLM retried an edit that was already applied).
 	if newContent == content {
 		return Result{Content: fmt.Sprintf(
 			"No change: old_text and new_text produce identical content in %s. The file is already in the desired state.",
@@ -186,22 +166,16 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		)}, nil
 	}
 
-	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
-	// can diff and show only newly introduced issues.
 	CaptureDiagnosticBaseline(t.WorkingDir, args.FilePath)
 
 	writeData := []byte(newContent)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
-		// #824: the write failed — the file on disk is unchanged, so the
-		// baseline captured above must not survive (its own comment: "used
-		// when an edit is skipped or fails"). A stale baseline misattributes
-		// diagnostics on later edits.
+
 		ClearDiagnosticBaseline(args.FilePath)
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
-	// Build a summary
 	oldLines := strings.Count(args.OldText, "\n") + 1
 	newLines := strings.Count(args.NewText, "\n") + 1
 	var msg string
@@ -221,18 +195,11 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	msg += CheckContentForConflicts(newContent)
 	msg += swallowedDeclarationWarning(oldText, newText)
 
-	// Record the file's new mtime so subsequent write_file calls don't see
-	// a false stale-read from this edit.
 	defaultFileTracker.RecordWrite(args.FilePath)
 
 	return Result{Content: msg}, nil
 }
 
-// declarationLineRe matches high-precision declaration-OPENING lines across
-// the languages this repo edits (Go / Python / Rust / TS-Java family). Only
-// unit-level declarations (function / type / class / interface / enum / trait
-// heads) qualify; member or statement lines are deliberately excluded to keep
-// the #4796 heuristic warning false-positive-free.
 var declarationLineRe = regexp.MustCompile(`^\s*(?:` +
 	`func\s|` +
 	`type\s+\w+\s+(?:struct|interface)\b|` +
@@ -242,15 +209,6 @@ var declarationLineRe = regexp.MustCompile(`^\s*(?:` +
 	`(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:class|interface|enum)\s` +
 	`)`)
 
-// swallowedDeclarationWarning (#4796 / S-27): a generously-copied multi-line
-// old_text can include lines beyond the intended semantic unit (e.g. the next
-// function's declaration). The replacement then deletes those adjacent lines
-// silently - a declaration vanishes and the build breaks with no hint that
-// out-of-unit lines were consumed (#4717 fix needed 2 re-layouts from this).
-// Heuristic per the issue's suggested direction: when a declaration-like line
-// is deleted by the replacement (present in the matched old_text region but
-// absent from new_text), name it in the result so the caller can restore it.
-// Non-blocking advisory appended to the success summary.
 func swallowedDeclarationWarning(oldText, newText string) string {
 	matches := declarationLineRe.FindAllString(strings.ReplaceAll(oldText, "\r\n", "\n"), -1)
 	if len(matches) == 0 {
@@ -279,10 +237,6 @@ func swallowedDeclarationWarning(oldText, newText string) string {
 		len(vanished), strings.Join(list, " | "))
 }
 
-// normalizeIndentation converts the indentation of text to match the file's style.
-// If the file uses tabs and text uses spaces, leading spaces are converted to tabs.
-// If the file uses spaces and text uses tabs, leading tabs are converted to spaces.
-// The width parameter is inferred from the file content.
 func normalizeIndentation(fileContent, text string) string {
 	fileUsesTabs := false
 	fileTabWidth := 0
@@ -331,7 +285,6 @@ func normalizeIndentation(fileContent, text string) string {
 		}
 	}
 
-	// Check what the text uses
 	textHasTabs := false
 	textHasLeadingSpaces := false
 	for _, line := range strings.Split(text, "\n") {
@@ -343,12 +296,10 @@ func normalizeIndentation(fileContent, text string) string {
 		}
 	}
 
-	// File uses tabs, text uses spaces → convert leading spaces to tabs
 	if fileUsesTabs && !textHasTabs && textHasLeadingSpaces {
 		return convertSpacesToTabs(text, fileTabWidth)
 	}
 
-	// File uses spaces, text uses tabs → convert leading tabs to spaces
 	if !fileUsesTabs && textHasTabs {
 		return convertTabsToSpaces(text, fileTabWidth)
 	}
@@ -356,19 +307,13 @@ func normalizeIndentation(fileContent, text string) string {
 	return text
 }
 
-// convertSpacesToTabs converts leading spaces to tabs based on tabWidth.
-// For example, with tabWidth=4:
-//
-//	"    foo" → "\tfoo"
-//	"        bar" → "\t\tbar"
-//	"  baz" → "\tbaz"  (non-multiple: consume one tab for any leading spaces)
 func convertSpacesToTabs(text string, tabWidth int) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
-		// Count leading spaces
+
 		spaces := 0
 		for spaces < len(line) && line[spaces] == ' ' {
 			spaces++
@@ -378,7 +323,7 @@ func convertSpacesToTabs(text string, tabWidth int) string {
 		}
 		tabs := spaces / tabWidth
 		remainder := spaces % tabWidth
-		// Use at least 1 tab if there are any leading spaces
+
 		if tabs == 0 && spaces > 0 {
 			tabs = 1
 			remainder = 0
@@ -388,7 +333,6 @@ func convertSpacesToTabs(text string, tabWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
-// convertTabsToSpaces converts leading tabs to spaces based on tabWidth.
 func convertTabsToSpaces(text string, tabWidth int) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -408,10 +352,6 @@ func convertTabsToSpaces(text string, tabWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
-// diagnoseMatchFailure provides actionable hints when old_text is not found.
-// It checks for common causes: tab vs space, trailing whitespace, line ending differences.
-// When possible, it also finds the nearest matching lines in the file so the
-// agent can see exactly what changed without a separate read_file call.
 func diagnoseMatchFailure(content, oldText string) string {
 	oldHasTabs := strings.Contains(oldText, "\t")
 	oldHasLeadingSpaces := false
@@ -424,7 +364,6 @@ func diagnoseMatchFailure(content, oldText string) string {
 
 	allLines := strings.Split(content, "\n")
 
-	// Detect indentation style from a sample of lines
 	fileHasTabs := false
 	fileIndentSpaces := 0
 	sampleLimit := len(allLines)
@@ -442,22 +381,16 @@ func diagnoseMatchFailure(content, oldText string) string {
 
 	var hints []string
 
-	// Check for CRLF vs LF
 	if strings.Contains(content, "\r\n") && !strings.Contains(oldText, "\r\n") {
 		hints = append(hints, "file uses CRLF line endings — re-read the file to get exact content")
 	}
 
-	// Check for tab/space mismatch
 	if fileHasTabs && !oldHasTabs && oldHasLeadingSpaces {
 		hints = append(hints, "file uses tab indentation — use \\t in old_text")
 	} else if !fileHasTabs && oldHasTabs && fileIndentSpaces > 0 {
 		hints = append(hints, "file uses space indentation — remove \\t from old_text")
 	}
 
-	// Try to find the nearest matching lines in the full file.
-	// This is the most useful diagnostic: it shows the agent exactly what the
-	// file looks like near the intended edit location, with line numbers that
-	// can be used as anchors for a corrected edit_file retry.
 	if nearest := findNearestLines(allLines, oldText, 3); len(nearest) > 0 {
 		var parts []string
 		for _, nl := range nearest {
@@ -473,16 +406,11 @@ func diagnoseMatchFailure(content, oldText string) string {
 	return strings.Join(hints, "; ")
 }
 
-// nearestLine holds a line's content and its 1-based line number.
 type nearestLine struct {
 	lineNum int
 	text    string
 }
 
-// findNearestLines searches the entire file for lines most similar to the
-// first line of oldText. It returns up to `maxResults` lines sorted by
-// similarity (descending). Uses token-level Jaccard similarity which is
-// fast and works well for code.
 func findNearestLines(fileLines []string, oldText string, maxResults int) []nearestLine {
 	oldFirst := strings.TrimSpace(strings.Split(oldText, "\n")[0])
 	if oldFirst == "" || len(oldFirst) < 3 {
@@ -510,7 +438,7 @@ func findNearestLines(fileLines []string, oldText string, maxResults int) []near
 			continue
 		}
 		score := jaccardSimilarity(oldTokens, lineTokens)
-		if score > 0.3 { // minimum threshold for "similar enough"
+		if score > 0.3 {
 			candidates = append(candidates, scored{
 				nearestLine: nearestLine{lineNum: i + 1, text: line},
 				score:       score,
@@ -518,7 +446,6 @@ func findNearestLines(fileLines []string, oldText string, maxResults int) []near
 		}
 	}
 
-	// Sort by score descending, keep top N
 	for i := 0; i < len(candidates); i++ {
 		for j := i + 1; j < len(candidates); j++ {
 			if candidates[j].score > candidates[i].score {
@@ -537,7 +464,6 @@ func findNearestLines(fileLines []string, oldText string, maxResults int) []near
 	return result
 }
 
-// tokenize splits a string into lowercase tokens for fuzzy comparison.
 func tokenize(s string) map[string]struct{} {
 	tokens := make(map[string]struct{})
 	var current strings.Builder
@@ -557,8 +483,6 @@ func tokenize(s string) map[string]struct{} {
 	return tokens
 }
 
-// jaccardSimilarity computes the Jaccard similarity between two token sets.
-// J(A,B) = |A ∩ B| / |A ∪ B|
 func jaccardSimilarity(a, b map[string]struct{}) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -576,8 +500,6 @@ func jaccardSimilarity(a, b map[string]struct{}) float64 {
 	return float64(intersection) / float64(union)
 }
 
-// visualizeWhitespace replaces tab characters with the literal string "<TAB>"
-// so the LLM can see the exact whitespace pattern in diagnostic messages.
 func visualizeWhitespace(line string) string {
 	return strings.ReplaceAll(line, "\t", "<TAB>")
 }

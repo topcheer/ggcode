@@ -1,23 +1,5 @@
 package agentruntime
 
-// Multi-language symbol extraction for the system prompt.
-//
-// This complements buildGoPackageSymbolsSection which only handles Go.
-// Many ggcode users work with TypeScript/JavaScript or Python projects that
-// get zero symbol-level awareness in the system prompt. This module adds
-// lightweight regex-based extraction for those languages -- no external
-// dependencies (tree-sitter, language servers), consistent with the Go path's
-// pure-stdlib approach.
-//
-// Design:
-//   - Same time budget as Go symbol extraction (200ms).
-//   - Same depth limit (0-2 directory levels).
-//   - Same output format for prompt consistency.
-//   - Regex patterns target exported/public declarations only:
-//       TypeScript/JS: export function, export class, export const, export type
-//       Python: top-level def, class (convention: no leading underscore = public)
-//   - Skips test files, node_modules, __pycache__, venv, .venv
-
 import (
 	"fmt"
 	"os"
@@ -30,9 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// --- TypeScript/JavaScript ---
-
-// hasTSSource performs a fast two-level check for any .ts/.tsx/.js/.jsx file.
 func hasTSSource(root string) bool {
 	return hasSourceWithSuffixes(root, []string{".ts", ".tsx", ".js", ".jsx"})
 }
@@ -50,11 +29,11 @@ func hasSourceWithSuffixes(root string, suffixes []string) bool {
 		}
 		return false
 	}
-	// Depth 0
+
 	if dirContainsMatchingFile(root, match) {
 		return true
 	}
-	// Depth 1 and 2
+
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return false
@@ -67,7 +46,7 @@ func hasSourceWithSuffixes(root string, suffixes []string) bool {
 		if dirContainsMatchingFile(dir1, match) {
 			return true
 		}
-		// Depth 2
+
 		sub, err := os.ReadDir(dir1)
 		if err != nil {
 			continue
@@ -84,8 +63,6 @@ func hasSourceWithSuffixes(root string, suffixes []string) bool {
 	return false
 }
 
-// dirContainsMatchingFile checks whether a directory has at least one
-// non-directory entry matching the given predicate.
 func dirContainsMatchingFile(dir string, match func(string) bool) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -99,14 +76,10 @@ func dirContainsMatchingFile(dir string, match func(string) bool) bool {
 	return false
 }
 
-// skipScanDir returns true for directories that should never be scanned
-// (hidden, overview-skip-listed).
 func skipScanDir(name string) bool {
 	return overviewSkipDirs[name] || strings.HasPrefix(name, ".")
 }
 
-// TS/JS export patterns.
-// Matches: export function foo, export const bar, export class Baz, export type Qux
 var (
 	tsExportFuncRe  = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+(\w+)`)
 	tsExportClassRe = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:abstract\s+)?class\s+(\w+)`)
@@ -114,27 +87,18 @@ var (
 	tsExportConstRe = regexp.MustCompile(`^\s*export\s+(?:const|let|var)\s+(\w+)`)
 )
 
-// jsSuffixes are the file extensions we treat as JS/TS source.
 var jsSuffixes = map[string]bool{".ts": true, ".tsx": true, ".js": true, ".jsx": true}
 
-// buildTSSymbolsSection generates a compact summary of exported declarations
-// for TypeScript/JavaScript projects. Returns "" if the project has no TS/JS
-// source or if no symbols are found.
 func buildTSSymbolsSection(root string) string {
 	return buildMultilangSymbolsSection(root, "ts", "Package symbols",
 		"TypeScript/JavaScript", hasTSSource, extractTSSymbols)
 }
 
-// buildPythonSymbolsSection generates a compact summary of top-level
-// declarations for Python projects.
 func buildPythonSymbolsSection(root string) string {
 	return buildMultilangSymbolsSection(root, "py", "Package symbols",
 		"Python", hasPythonSource, extractPythonSymbols)
 }
 
-// buildMultilangSymbolsSection is the shared driver for non-Go symbol extraction.
-// It mirrors the Go path's structure: collect dirs at depth 0-2, extract symbols
-// per directory, render a compact summary with a package cap.
 func buildMultilangSymbolsSection(
 	root string,
 	langTag string,
@@ -228,8 +192,6 @@ func buildMultilangSymbolsSection(
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// collectMultilangDirs finds directories at depth 0-2 that contain source files
-// of the given language tag ("ts" or "py"). Same skip rules as the Go path.
 func collectMultilangDirs(root string, langTag string, deadline time.Time) []string {
 	var dirs []string
 
@@ -239,7 +201,6 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 		})
 	}
 
-	// Root level
 	if hasFiles(root) {
 		dirs = append(dirs, root)
 	}
@@ -262,7 +223,6 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 			dirs = append(dirs, dir1)
 		}
 
-		// Depth 2
 		level2, err := os.ReadDir(dir1)
 		if err != nil {
 			continue
@@ -281,19 +241,17 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 	return dirs
 }
 
-// isMultilangSourceFile reports whether a filename is a parseable source file
-// for the given language tag. Excludes test files and config files.
 func isMultilangSourceFile(name string, langTag string) bool {
 	switch langTag {
 	case "ts":
 		if !jsSuffixes[strings.ToLower(filepath.Ext(name))] {
 			return false
 		}
-		// Skip .d.ts declaration files
+
 		if strings.HasSuffix(name, ".d.ts") {
 			return false
 		}
-		// Skip test files
+
 		base := strings.TrimSuffix(name, filepath.Ext(name))
 		if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".spec") {
 			return false
@@ -303,7 +261,7 @@ func isMultilangSourceFile(name string, langTag string) bool {
 		if !strings.HasSuffix(name, ".py") {
 			return false
 		}
-		// Skip __init__.py and test files
+
 		if name == "__init__.py" {
 			return false
 		}
@@ -318,8 +276,6 @@ func isMultilangSourceFile(name string, langTag string) bool {
 	return false
 }
 
-// extractTSSymbols parses all TS/JS source files in a directory and returns
-// a sorted, deduplicated list of exported declaration names.
 func extractTSSymbols(dir string, deadline time.Time) ([]string, int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -345,7 +301,7 @@ func extractTSSymbols(dir string, deadline time.Time) ([]string, int) {
 
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
-			// Only scan the first ~1000 chars of each line to avoid pathological cases
+
 			if len(line) > 1000 {
 				line = line[:1000]
 			}
@@ -363,9 +319,7 @@ func extractTSSymbols(dir string, deadline time.Time) ([]string, int) {
 				continue
 			}
 			if m := tsExportConstRe.FindStringSubmatch(line); m != nil {
-				// Only include const exports that look like important constants
-				// (uppercase or single-word identifiers) to avoid noise from
-				// many small const exports.
+
 				name := m[1]
 				if isLikelyImportantExport(name) {
 					seen[name] = true
@@ -386,15 +340,11 @@ func extractTSSymbols(dir string, deadline time.Time) ([]string, int) {
 	return symbols, fileCount
 }
 
-// Python patterns.
 var (
 	pyFuncRe  = regexp.MustCompile(`^\s*(?:async\s+)?def\s+(\w+)`)
 	pyClassRe = regexp.MustCompile(`^\s*class\s+(\w+)`)
 )
 
-// extractPythonSymbols parses all Python source files in a directory and returns
-// a sorted, deduplicated list of top-level public declarations (functions and
-// classes without a leading underscore).
 func extractPythonSymbols(dir string, deadline time.Time) ([]string, int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -424,10 +374,9 @@ func extractPythonSymbols(dir string, deadline time.Time) ([]string, int) {
 				line = line[:1000]
 			}
 
-			// Only top-level (no indent) declarations are public API
 			trimmed := strings.TrimLeft(line, " \t")
 			if len(line) == len(trimmed) {
-				// No indent -- top-level
+
 				if m := pyFuncRe.FindStringSubmatch(line); m != nil {
 					name := m[1]
 					if !strings.HasPrefix(name, "_") {
@@ -457,23 +406,19 @@ func extractPythonSymbols(dir string, deadline time.Time) ([]string, int) {
 	return symbols, fileCount
 }
 
-// isLikelyImportantExport heuristically decides whether a const export name is
-// significant enough to show in the symbol map. Filters out trivial exports
-// like `export const x = 1` while keeping `export const MAX_RETRIES = 5` or
-// `export const AppConfig`.
 func isLikelyImportantExport(name string) bool {
 	if len(name) < 2 {
 		return false
 	}
-	// UPPERCASE names (constants) are always interesting
+
 	if name == strings.ToUpper(name) && name != strings.ToLower(name) {
 		return true
 	}
-	// PascalCase names (likely constructors / config objects)
+
 	first := name[0]
 	if first >= 'A' && first <= 'Z' {
 		return true
 	}
-	// camelCase single words are too noisy (export const items = [])
+
 	return false
 }

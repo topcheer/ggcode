@@ -11,29 +11,17 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Transient tool retry: automatically retry idempotent, read-only tools when
-// they fail with transient errors (LSP not ready, network blips, file races).
-// This mirrors the retry-on-transient-failure pattern in production agent
-// frameworks (LangChain RetryError, AutoGen retry policies). Without auto-retry,
-// a single LSP timeout costs a full LLM iteration — the model receives "tool
-// timed out", re-issues the same call, and by then the LSP server is ready.
-// The retry absorbs that latency silently.
-
-// retryableTools is the set of idempotent, read-only tools that are safe to
-// retry on transient errors. Mutating tools (edit_file, write_file, git_commit)
-// are NEVER retried automatically — a retry could apply a change twice or
-// commit twice. Tools with side effects manage their own retry logic.
 var retryableTools = map[string]bool{
-	// File reads (idempotent)
+
 	"read_file":       true,
 	"multi_file_read": true,
 	"list_directory":  true,
-	// Search (idempotent)
+
 	"search_files": true,
 	"grep":         true,
 	"glob":         true,
 	"code_search":  true,
-	// LSP queries (transient: server may be indexing)
+
 	"lsp_hover":               true,
 	"lsp_definition":          true,
 	"lsp_references":          true,
@@ -45,17 +33,13 @@ var retryableTools = map[string]bool{
 	"lsp_code_actions":        true,
 	"lsp_incoming_calls":      true,
 	"lsp_outgoing_calls":      true,
-	// #1514: lsp_rename removed - it applies LSP workspace edits (writes
-	// files) and contradicts this table's own "mutating tools are NEVER
-	// retried" contract. A retry after a misjudged transient could double-
-	// apply a rename or fail on an already-renamed symbol.
-	// Web (transient: network errors, rate limits)
+
 	"web_fetch":  true,
 	"web_search": true,
-	// Code health / TODO scan (read-only analysis)
+
 	"code_health": true,
 	"scan_todos":  true,
-	// Git reads (idempotent)
+
 	"git_status":      true,
 	"git_diff":        true,
 	"git_log":         true,
@@ -64,35 +48,27 @@ var retryableTools = map[string]bool{
 	"git_branch_list": true,
 	"git_remote":      true,
 	"git_stash_list":  true,
-	// Debug log (read-only)
+
 	"debug_log": true,
-	// Syntax check (read-only)
+
 	"syntax_check": true,
 }
 
-// maxTransientRetries is the maximum number of automatic retries for a
-// transient failure. With 2 retries, the tool is called up to 3 times total.
 const maxTransientRetries = 2
 
-// transientRetryBaseDelay is the base delay for exponential backoff between
-// retries. Actual delay: 200ms, then 400ms.
 const transientRetryBaseDelay = 200 * time.Millisecond
 
-// maxTransientRetryBudgetPerRun bounds the total retries per agent run,
-// preventing retry storms in pathological scenarios.
 const maxTransientRetryBudgetPerRun = 8
 
-// transientErrorPatterns are substrings that indicate a transient error.
-// Matched case-insensitively against the tool result content.
 var transientErrorPatterns = []string{
-	// LSP not ready / indexing
+
 	"lsp",
 	"language server",
 	"server not ready",
 	"server crashed",
 	"server starting",
 	"indexing",
-	// Network errors
+
 	"timeout",
 	"timed out",
 	"deadline exceeded",
@@ -102,20 +78,18 @@ var transientErrorPatterns = []string{
 	"i/o timeout",
 	"temporary failure",
 	"unexpected eof",
-	// File system races
+
 	"resource temporarily unavailable",
-	// Rate limiting
+
 	"rate limit",
 	"too many requests",
 	"429",
 	"503",
-	// Generic transient
+
 	"try again",
 	"unavailable",
 }
 
-// permanentErrorPatterns take priority over transient patterns — if an error
-// matches both, it's treated as permanent.
 var permanentErrorPatterns = []string{
 	"permission denied",
 	"not permitted",
@@ -130,10 +104,9 @@ var permanentErrorPatterns = []string{
 	"blocked by hook",
 	"protected path",
 	"validation failed",
-	"no such file or directory", // permanent for read operations
+	"no such file or directory",
 }
 
-// isTransientError classifies whether a tool error is worth retrying.
 func isTransientError(content string) bool {
 	lower := strings.ToLower(content)
 	if lower == "" {
@@ -152,25 +125,10 @@ func isTransientError(content string) bool {
 	return false
 }
 
-// isRetryableTool returns true if the tool is idempotent and safe to retry.
 func isRetryableTool(toolName string) bool {
 	return retryableTools[toolName]
 }
 
-// executeWithTransientRetry runs a tool, retrying on transient failures.
-// Only idempotent, read-only tools are retried. Mutating tools return after
-// a single attempt. The retry budget is decremented per retry across the run.
-//
-// The execFn parameter is the single-attempt executor (typically calling
-// safeExecute). This indirection allows the caller to inject pre/post hooks
-// around each attempt.
-
-// cancellationFlattenNote labels a cancellation/deadline error being
-// flattened into a tool Result (#1779): #1597 taught the plugin adapter
-// to return these as ERRORS (cancellation is not a business failure),
-// but every flatten site rebuilt them as ordinary IsError tool output -
-// the agent loop then iterated against a dead context holding what read
-// like a plugin bug. Mark it for what it is.
 func cancellationFlattenNote(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return " (cancelled - not a tool failure; the run is ending)"
@@ -187,7 +145,7 @@ func (a *Agent) executeWithTransientRetry(
 	args []byte,
 	execFn func(context.Context, []byte) (tool.Result, error),
 ) tool.Result {
-	// Non-retryable tools: single attempt, no retry.
+
 	if !isRetryableTool(toolName) {
 		result, err := execFn(ctx, args)
 		if err != nil {
@@ -196,7 +154,6 @@ func (a *Agent) executeWithTransientRetry(
 		return result
 	}
 
-	// Check retry budget.
 	a.mu.Lock()
 	budget := a.transientRetryBudget
 	a.mu.Unlock()
@@ -218,7 +175,6 @@ func (a *Agent) executeWithTransientRetry(
 
 		lastResult, lastErr = execFn(ctx, args)
 
-		// Check if retry-worthy.
 		shouldRetry := false
 		if lastErr != nil {
 			shouldRetry = isTransientError(lastErr.Error())
@@ -233,7 +189,6 @@ func (a *Agent) executeWithTransientRetry(
 			return lastResult
 		}
 
-		// Transient error — decide whether to retry.
 		if attempt >= maxTransientRetries {
 			errDetail := lastResult.Content
 			if lastErr != nil {
@@ -244,12 +199,11 @@ func (a *Agent) executeWithTransientRetry(
 			break
 		}
 
-		// Decrement budget and wait with exponential backoff.
 		a.mu.Lock()
 		a.transientRetryBudget--
 		a.mu.Unlock()
 
-		delay := transientRetryBaseDelay * (1 << attempt) // 200ms, 400ms
+		delay := transientRetryBaseDelay * (1 << attempt)
 		debug.Log("agent", "transient retry for %s: attempt %d failed, retrying in %v",
 			toolName, attempt+1, delay)
 
@@ -261,14 +215,12 @@ func (a *Agent) executeWithTransientRetry(
 		}
 	}
 
-	// Return the last error/result after retries exhausted.
 	if lastErr != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error (after %d retries): %v", maxTransientRetries, lastErr), IsError: true}
 	}
 	return lastResult
 }
 
-// resetTransientRetryBudget resets the retry budget at the start of each run.
 func (a *Agent) resetTransientRetryBudget() {
 	a.mu.Lock()
 	a.transientRetryBudget = maxTransientRetryBudgetPerRun

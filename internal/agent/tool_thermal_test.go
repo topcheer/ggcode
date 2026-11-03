@@ -8,7 +8,6 @@ import (
 func TestThermalState_ExploreHeavy(t *testing.T) {
 	s := newThermalState()
 
-	// Simulate 15 reads and only 1 edit (93% explore, 7% modify)
 	for i := 0; i < 15; i++ {
 		s.recordToolCall("read_file")
 	}
@@ -29,7 +28,6 @@ func TestThermalState_ExploreHeavy(t *testing.T) {
 func TestThermalState_Balanced_NoWarning(t *testing.T) {
 	s := newThermalState()
 
-	// Simulate balanced: 5 reads, 4 edits, 2 commands, 2 git checks
 	for i := 0; i < 5; i++ {
 		s.recordToolCall("read_file")
 	}
@@ -52,7 +50,6 @@ func TestThermalState_Balanced_NoWarning(t *testing.T) {
 func TestThermalState_TooFewSamples(t *testing.T) {
 	s := newThermalState()
 
-	// Only 5 calls (below thermalMinSamples=12)
 	for i := 0; i < 5; i++ {
 		s.recordToolCall("read_file")
 	}
@@ -66,7 +63,6 @@ func TestThermalState_TooFewSamples(t *testing.T) {
 func TestThermalState_VerifyHeavy(t *testing.T) {
 	s := newThermalState()
 
-	// 5 reads, 1 edit, 8 git_diff (40% verify, 5% modify)
 	for i := 0; i < 5; i++ {
 		s.recordToolCall("read_file")
 	}
@@ -92,22 +88,18 @@ func TestThermalState_Cooldown(t *testing.T) {
 	}
 	s.recordToolCall("edit_file")
 
-	// First warning fires
 	warn1 := s.maybeWarn(10)
 	if warn1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second warning should be suppressed (cooldown)
 	warn2 := s.maybeWarn(12)
 	if warn2 != "" {
 		t.Fatalf("expected cooldown to suppress, got: %s", warn2)
 	}
 
-	// After cooldown iterations, warning can fire again
 	warn3 := s.maybeWarn(10 + thermalWarnCooldown + 1)
-	// Note: this may or may not fire depending on whether conditions still hold.
-	// The key check is warn2 being empty.
+
 	_ = warn3
 }
 
@@ -160,7 +152,6 @@ func TestThermalState_UnknownTool(t *testing.T) {
 func TestThermalState_HighModifyNoWarning(t *testing.T) {
 	s := newThermalState()
 
-	// Mostly edits with some reads - healthy coding pattern
 	for i := 0; i < 8; i++ {
 		s.recordToolCall("edit_file")
 	}
@@ -174,13 +165,11 @@ func TestThermalState_HighModifyNoWarning(t *testing.T) {
 	}
 }
 
-// #1855 case 3: explore and verify modes must keep SEPARATE cooldown
-// clocks - a shared one let an explore warning cool down a verify trigger.
 func TestThermalSeparateModeCooldowns1855(t *testing.T) {
 	ts := newThermalState()
-	// Seed an explore-heavy warning at iter 10 (separate clock).
+
 	ts.lastExploreWarnIter = 10
-	// Verify-heavy conditions met at iter 11 (within shared cooldown range).
+
 	ts.categories[thermalVerify] = 50
 	ts.categories[thermalModify] = 1
 	ts.total = 51

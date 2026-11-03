@@ -16,7 +16,7 @@ func TestSearchParamGuard_Reset(t *testing.T) {
 
 func TestSearchParamGuard_MaxFires(t *testing.T) {
 	g := newSearchParamGuard()
-	// Fire 3 times
+
 	for i := 0; i < 3; i++ {
 		args, _ := json.Marshal(map[string]string{"pattern": ".*"})
 		hint := g.checkParamQuality("grep", args)
@@ -24,7 +24,7 @@ func TestSearchParamGuard_MaxFires(t *testing.T) {
 			t.Fatalf("expected hint on call %d", i)
 		}
 	}
-	// 4th call should be suppressed
+
 	args, _ := json.Marshal(map[string]string{"pattern": ".*"})
 	hint := g.checkParamQuality("grep", args)
 	if hint != "" {
@@ -79,7 +79,7 @@ func TestSearchParamGuard_SearchFilesSingleChar(t *testing.T) {
 
 func TestSearchParamGuard_GlobAllFiles(t *testing.T) {
 	for _, p := range []string{"*", "**/*", "**", "*.*"} {
-		g := newSearchParamGuard() // fresh guard per pattern to avoid max-fires
+		g := newSearchParamGuard()
 		args, _ := json.Marshal(map[string]string{"pattern": p})
 		hint := g.checkParamQuality("glob", args)
 		if hint == "" {

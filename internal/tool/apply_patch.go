@@ -1,41 +1,5 @@
 package tool
 
-// OpenAI Responses apply_patch tool (client-executed harness) - sa-67.
-//
-// The Responses API's apply_patch tool (tools=[{"type":"apply_patch"}]) makes
-// the model emit structured V4A diffs as apply_patch_call output items. The
-// call is NOT executed server-side: the client must apply the patch to its
-// working tree and report back an apply_patch_call_output item. ggcode wires
-// this through the standard agent loop: the Responses provider converts each
-// apply_patch_call into a call to this hidden tool, and maps this tool's
-// Result back into apply_patch_call_output (status completed/failed).
-//
-// The tool is registered but hidden from ToDefinitions (Available()==false):
-// the model reaches it through the typed apply_patch tool declaration, never
-// as an advertised function tool.
-//
-// V4A patch grammar (subset implemented here, matching the common model
-// output; reference: openai-agents-python src/agents/apply_diff.py):
-//
-//	*** Begin Patch
-//	*** Update File: src/app.py
-//	@@ def main():
-//	-    print("Hello")
-//	+    print("Hello, world!")
-//	*** Add File: docs/new.md
-//	+# Title
-//	*** Delete File: old.txt
-//	*** Move to: renamed.txt   (optional, follows Update File)
-//	*** End Patch
-//
-// Update hunks are located by their context/delete lines, searched forward
-// from the previous hunk's position (monotonic, like real V4A). Context must
-// match exactly; a trailing-whitespace-insensitive retry runs before failing.
-//
-// References:
-//   - https://developers.openai.com/api/docs/guides/tools-apply-patch
-//   - https://github.com/openai/openai-agents-python/blob/main/src/agents/apply_diff.py
-
 import (
 	"context"
 	"encoding/json"
@@ -45,8 +9,6 @@ import (
 	"strings"
 )
 
-// ApplyPatch applies OpenAI V4A patches emitted via the Responses apply_patch
-// tool to the local working tree.
 type ApplyPatch struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -54,8 +16,6 @@ type ApplyPatch struct {
 
 func (t ApplyPatch) Name() string { return "apply_patch" }
 
-// Available hides the tool from ToDefinitions: it is invoked only through the
-// provider's apply_patch_call mapping, never advertised as a function tool.
 func (t ApplyPatch) Available() bool { return false }
 
 func (t ApplyPatch) Description() string {
@@ -94,7 +54,7 @@ func (t ApplyPatch) Execute(ctx context.Context, input json.RawMessage) (Result,
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("Error: invalid apply_patch input: %v", err)}, nil
 	}
-	// Also accept the nested {"operation":{...}} shape for robustness.
+
 	if args.Path == "" {
 		var nested struct {
 			Operation struct {
@@ -137,12 +97,6 @@ func (t ApplyPatch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
 	}
 
-	// #3951: a "Move to:" relocation target must pass the same sandbox gate
-	// as the primary path. The check uses the EXACT target formula that
-	// applyV4ASection uses to write (Clean(Join(Dir(root), moveTo))) so the
-	// validated path and the written path can never drift apart — checking
-	// the raw moveTo string would allow "../../" forms to pass a naive
-	// substring check while the joined form still escapes.
 	if sec.moveTo != "" && sec.moveTo != sec.path {
 		moveTarget := filepath.Clean(filepath.Join(filepath.Dir(resolved), sec.moveTo))
 		if t.SandboxCheck != nil && !t.SandboxCheck(moveTarget) {
@@ -157,24 +111,19 @@ func (t ApplyPatch) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return Result{Content: summary}, nil
 }
 
-// ---- V4A parsing ----
-
 type v4aSection struct {
-	kind   string   // "add", "update", "delete"
-	path   string   // target path as written in the patch
-	moveTo string   // optional relocation target for update sections
-	lines  []string // body lines (context/-/+ for updates, +content for adds)
+	kind   string
+	path   string
+	moveTo string
+	lines  []string
 }
 
-// parseV4APatch parses a V4A patch body. The Begin Patch / End Patch envelope
-// is optional; unknown directives are rejected (fail closed) so a
-// misunderstood patch never half-applies silently.
 func parseV4APatch(diff string) ([]v4aSection, error) {
 	if strings.TrimSpace(diff) == "" {
 		return nil, fmt.Errorf("patch body is empty")
 	}
 	raw := strings.Split(diff, "\n")
-	// Trim the optional envelope and surrounding blank lines.
+
 	for len(raw) > 0 && strings.TrimSpace(raw[0]) == "" {
 		raw = raw[1:]
 	}
@@ -231,14 +180,6 @@ func parseV4APatch(diff string) ([]v4aSection, error) {
 	return sections, nil
 }
 
-// selectV4ASection picks the section matching the apply_patch_call operation.
-// The Responses protocol sends one operation per call, but a model-generated
-// diff may bundle several file sections; only the addressed one applies.
-//
-// #3158: the section's kind must AGREE with the requested opType - a
-// self-contradictory call (type=delete_file but the path's section is an
-// "*** Update File:" body) used to silently execute the section's kind
-// (writing instead of deleting), violating the fail-closed contract.
 func selectV4ASection(sections []v4aSection, opType, opPath string) (v4aSection, error) {
 	var opKind string
 	switch opType {
@@ -273,10 +214,8 @@ func selectV4ASection(sections []v4aSection, opType, opPath string) (v4aSection,
 	return v4aSection{}, fmt.Errorf("patch has no section for %q (op %s)", opPath, opType)
 }
 
-// ---- V4A application ----
-
 type v4aLine struct {
-	kind byte // ' ' context, '-' delete, '+' add
+	kind byte
 	text string
 }
 
@@ -284,10 +223,6 @@ type v4aHunk struct {
 	lines []v4aLine
 }
 
-// applyV4ASection applies one parsed section to disk. root is the resolved
-// target path from the operation. Both root and any "Move to:" target are
-// sandbox-checked by Execute (#3951: the move target with the exact same
-// Clean(Join(Dir(root), moveTo)) formula used below).
 func applyV4ASection(root string, sec v4aSection) (string, error) {
 	switch sec.kind {
 	case "add":
@@ -345,11 +280,7 @@ func applyV4ASection(root string, sec v4aSection) (string, error) {
 		}
 		if target != root {
 			if err := os.Remove(root); err != nil {
-				// #3110: the new content IS on disk at target - only the old-file
-				// removal failed (Windows lock/AV/EPERM). A bare "removing old
-				// failed" hides the half-migrated state and misleads the model into
-				// treating it as a conflict (delete+add hits the existing target)
-				// and retrying into the same error. State the actual disk state.
+
 				return "", fmt.Errorf("move: removing old %s: %v (partial migration: new content already written to %s; resolve the file lock or remove %s manually, then treat the update as applied)", sec.path, err, target, root)
 			}
 			return fmt.Sprintf("Moved %s -> %s (%d hunks applied)", sec.path, sec.moveTo, len(hunks)), nil
@@ -360,9 +291,6 @@ func applyV4ASection(root string, sec v4aSection) (string, error) {
 	}
 }
 
-// parseV4AHunks splits an update section body into hunks. Lines starting with
-// "@@" are context anchors; they carry no match semantics here (the hunk's
-// own context lines locate it) but delimit independent hunks.
 func parseV4AHunks(lines []string) ([]v4aHunk, error) {
 	hunks := make([]v4aHunk, 0, 2)
 	var cur *v4aHunk
@@ -380,7 +308,7 @@ func parseV4AHunks(lines []string) ([]v4aHunk, error) {
 			continue
 		}
 		if cur == nil {
-			// Tolerate hunks without an @@ separator: start one implicitly.
+
 			cur = &v4aHunk{}
 		}
 		if line == "" {
@@ -401,11 +329,6 @@ func parseV4AHunks(lines []string) ([]v4aHunk, error) {
 	return hunks, nil
 }
 
-// applyV4AHunks applies hunks sequentially to src. Each hunk is located by
-// its context/delete lines, searched forward from the previous hunk's end
-// (monotonic scan, mirroring V4A semantics). Context must match exactly; a
-// trailing-whitespace-insensitive retry runs before the hunk is declared
-// unapplicable.
 func applyV4AHunks(src string, hunks []v4aHunk) (string, error) {
 	lines := strings.Split(src, "\n")
 	pos := 0
@@ -423,8 +346,7 @@ func applyV4AHunks(src string, hunks []v4aHunk) (string, error) {
 		if idx < 0 {
 			return "", fmt.Errorf("hunk %d: context not found (%d line(s) starting %q); re-read the file and retry", hi+1, len(pattern), pattern[0])
 		}
-		// Replacement = hunk lines minus deletions (context stays in place,
-		// additions splice in wherever '+' lines appear among them).
+
 		replacement := make([]string, 0, len(h.lines))
 		for _, l := range h.lines {
 			if l.kind != '-' {
@@ -441,8 +363,6 @@ func applyV4AHunks(src string, hunks []v4aHunk) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// matchV4APattern finds pattern in lines, first exact, then
-// trailing-whitespace-insensitive. Returns the index relative to lines, or -1.
 func matchV4APattern(lines []string, pattern []string) int {
 	if len(pattern) > len(lines) {
 		return -1

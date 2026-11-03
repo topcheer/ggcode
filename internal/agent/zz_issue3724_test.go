@@ -1,12 +1,5 @@
 package agent
 
-// #3724 probe: extractQuoted paired CONTRACTION apostrophes (don't / it's /
-// user's) as quote delimiters, turning the residue between two contractions
-// into a phantom keyword ("Don't break the user's API contract" -> keyword
-// "t break the user"). A prose-only plan item's ONLY keyword was that
-// phantom, so checkPlanDrift judged it permanently unaddressed - a
-// deterministic drift false-positive on prohibitive prose items.
-
 import (
 	"strings"
 	"testing"
@@ -25,10 +18,7 @@ func TestIssue3724_ContractionApostropheNoPhantomKeyword(t *testing.T) {
 }
 
 func TestIssue3724_ProsePlanItemNotPermanentlyUnaddressed(t *testing.T) {
-	// Full path: a prohibitive prose item yields NO keywords, so it must not
-	// be counted as unaddressed against a tool-evidence corpus. (Capitalized
-	// words like "Make" are legitimately extracted by design - keep this
-	// fixture all-lowercase to isolate the contraction path.)
+
 	kw := extractKeywords("make sure it's backwards compatible and don't regress the API")
 	if len(kw) != 0 {
 		t.Fatalf("prose-only item must extract zero keywords, got: %v", kw)

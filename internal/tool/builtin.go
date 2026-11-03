@@ -10,25 +10,13 @@ import (
 	"github.com/topcheer/ggcode/internal/tmux"
 )
 
-// RegisterBuiltinTools registers all built-in tools.
-// If policy is nil, no sandbox path checking is enforced (permissive mode).
-// protectedPaths are optional glob patterns that block write tools from
-// modifying sensitive files (e.g. ".env*", ".git/", "*.lock").
-// sandbox, when non-nil and Enabled, activates OS-level containment for
-// shell execution (no-op where the OS lacks native sandboxing).
 func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string, sandbox *SandboxPolicy) error {
-	// Session-level security ledger (sa-216): shared by run_command so
-	// denials aggregate across every call in this agent session.
+
 	secLedger := &SecurityLedger{}
-	riskLedger := NewAllowedRiskLedger() // r28: allowed-risk dual, shared by run_command + start_command
+	riskLedger := NewAllowedRiskLedger()
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
-	// #443: FileGuard is write-only protection ("Read tools are never
-	// blocked" per its design). Merging it into READ tools' sandbox check
-	// blocked read_file/grep/glob on .env/.git paths — a functional
-	// regression under the default config. Read tools get the policy
-	// sandbox only; write tools additionally get the file guard.
 	sandboxFor := func(toolName string) AllowedPathChecker {
 		var base AllowedPathChecker
 		if policy != nil {
@@ -52,15 +40,12 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
 	tools := []Tool{
-		// File operations — read tools use readSandboxFor (#443: FileGuard
-		// is write-only; it must never gate reads).
+
 		ReadFile{SandboxCheck: readSandboxFor("read_file")},
 		MultiFileRead{SandboxCheck: readSandboxFor("multi_file_read")},
 		WriteFile{SandboxCheck: sandboxFor("write_file"), WorkingDir: workingDir},
 		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write"), WorkingDir: workingDir},
-		// sa-67: Responses apply_patch harness. Registered but hidden
-		// (Available()==false): the model reaches it via the in-API
-		// apply_patch tool; the provider routes its calls here for execution.
+
 		ApplyPatch{SandboxCheck: sandboxFor("apply_patch"), WorkingDir: workingDir},
 		ListDir{SandboxCheck: readSandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
@@ -69,7 +54,6 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		BatchReplace{SandboxCheck: sandboxFor("batch_replace"), WorkingDir: workingDir},
 		FileOps{SandboxCheck: sandboxFor("file_ops"), WorkingDir: workingDir},
 
-		// Search
 		SearchFiles{SandboxCheck: readSandboxFor("search_files")},
 		Grep{SandboxCheck: readSandboxFor("grep")},
 		Glob{SandboxCheck: readSandboxFor("glob")},
@@ -78,31 +62,25 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	tools = append(tools, NewLSPTools(workingDir, readSandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
 
-		// Notebook
 		NotebookEdit{SandboxCheck: sandboxFor("notebook_edit")},
 
-		// Sleep
 		SleepTool{},
 
-		// Debug log access
 		DebugLogTool{},
 
-		// Worktree
 		&EnterWorktree{WorkingDir: workingDir},
 		&ExitWorktree{WorkingDir: workingDir},
 		&ListWorktree{WorkingDir: workingDir},
 		MergeWorktree{WorkingDir: workingDir},
 
-		// Execution
 		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger, RiskLedger: riskLedger},
-		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger, RiskLedger: riskLedger}, // #3294: background starts join the session denial ledger
+		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger, RiskLedger: riskLedger},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},
 		WriteCommandInputTool{Manager: jobManager},
 		ListCommandsTool{Manager: jobManager},
 
-		// Git (read-only)
 		&GitStatus{},
 		&GitDiff{},
 		&GitLog{},
@@ -112,7 +90,6 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&GitRemote{},
 		&GitStashList{},
 
-		// Git (write — require approval)
 		&GitAdd{},
 		&GitCommit{},
 		&GitStash{},
@@ -121,77 +98,53 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&GitReset{},
 		&GitTag{},
 
-		// Web
 		WebFetch{},
 		WebSearch{},
 		NewBrowser(),
 
-		// Productivity
 		NewAskUserTool(),
-		NewTodoWrite(""), // session ID set later via agent.SetSessionID()
+		NewTodoWrite(""),
 		NewCurrentTimeTool(),
 
-		// Permission
 		NewSwitchModeTool(policy),
 
-		// Self-restart (requester injected post-registration by TUI/Desktop)
 		&RestartTool{},
 
-		// IM (manager injected post-registration via SetManager)
 		IMTool{},
 
-		// Mobile file transfer (broker adapter injected post-registration
-		// by the TUI when a mobile share starts)
 		MobileFileTool{},
 
-		// Mobile share lifecycle (controller adapter injected post-registration
-		// by the TUI at startup; the phone still completes pairing via QR/URL)
 		StartShareTool{},
 		StopShareTool{},
 
-		// Runtime status (provider injected post-registration via SetRuntimeStatusProvider)
 		RuntimeTool{},
 
-		// Screenshot
 		ScreenshotTool{},
 
-		// Desktop control (OS-level mouse, keyboard, window, app management)
 		DesktopControlTool{WorkingDir: workingDir},
 
-		// Clipboard (read/write system clipboard)
 		ClipboardTool{},
 
-		// Open file in external editor/IDE
 		OpenEditorTool{WorkingDir: workingDir},
 
-		// Code health analysis (cyclomatic complexity, technical debt)
 		CodeHealthTool{WorkingDir: workingDir},
 
-		// Technical debt marker scanner (TODO/FIXME/HACK/XXX/BUG/NOTE)
 		ScanTodosTool{WorkingDir: workingDir},
 
-		// Undo/revert file edits (checkpoint-based, intercepted by agent runtime)
 		UndoEditTool{},
 
-		// CI/CD pipeline status (read-only GitHub Actions integration via gh CLI)
 		CIStatusTool{WorkingDir: workingDir},
 
-		// Code review (on-demand structured diff analysis)
 		ReviewChanges{WorkingDir: workingDir},
 
-		// Command snippet library (persistent, project-scoped reusable shell commands)
 		&CmdSnippetTool{WorkingDir: workingDir},
 
-		// Package-level dependency graph analysis (import graph, cycles, hotspots)
 		DepGraphTool{WorkingDir: workingDir},
 
-		// Cross-session knowledge graph (typed entities + relationships)
 		&KnowledgeGraphTool{WorkingDir: workingDir},
 
-		// Durable hierarchical goal graph (long-horizon goal -> milestone -> task)
 		&GoalGraphTool{WorkingDir: workingDir},
 
-		// Project scaffolding (multi-language templates: Go, TS, Python, Rust)
 		ScaffoldProject{SandboxCheck: sandboxFor("scaffold_project"), WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
@@ -230,20 +183,14 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		}
 	}
 
-	// Code Execution (PTC): must be registered last — it holds a reference
-	// to the registry to look up tools at execution time.
 	if err := registry.Register(CodeExecution{Registry: registry}); err != nil {
 		return err
 	}
 
-	// Tool macros (sa-148): record/replay reusable read-only tool-call
-	// sequences. Also holds a registry reference for run-time lookup.
 	if err := registry.Register(&MacroTool{WorkingDir: workingDir, Registry: registry}); err != nil {
 		return err
 	}
 
-	// Agent-defined parametrized tools (r13): macro step DSL + params
-	// schema, called as first-class parameterized tools.
 	if err := registry.Register(&DefineTool{WorkingDir: workingDir, Registry: registry}); err != nil {
 		return err
 	}
@@ -260,9 +207,7 @@ func shouldRegisterWarpTool() bool {
 }
 
 func shouldRegisterKittyTool() bool {
-	// Kitty sets TERM_PROGRAM=kitty, but this can be lost when running
-	// through tmux, screen, or other wrappers. KITTY_WINDOW_ID is always
-	// set by kitty and is a reliable fallback.
+
 	return os.Getenv("TERM_PROGRAM") == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
 

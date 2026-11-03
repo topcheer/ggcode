@@ -6,24 +6,14 @@ import (
 	"testing"
 )
 
-// --- #487: premature_refactor was 100% dead in production ---
-
-// The exact issue scenario: read_file → refactor edit → refactor edit →
-// detector must warn. Previously the FIRST read_file already set
-// hasVerified (unconditional setter on every tool result), so the check
-// stayed silent forever.
 func TestPrematureRefactor_WiringOrderBug_IsDead(t *testing.T) {
 	a := &Agent{prematureRefactor: newPrematureRefactorState()}
 
-	// Simulate the real wiring order from agent.go's tool-result path.
-	// 1. read_file foo.go — NOT a verify command.
 	a.prematureRefactorRecordVerifyForTool(json.RawMessage(`{"path":"foo.go"}`))
 	if a.prematureRefactor.hasVerified {
 		t.Fatal("read_file must NOT set hasVerified (#487): detector was 100% dead")
 	}
 
-	// 2. Two refactoring-type edits (large similar-size old/new, keyword-free
-	// so they exercise the size heuristic with a real core delta).
 	old1 := strings.Repeat("some existing code line that is fairly long\n", 6)
 	new1 := strings.Repeat("renamed existing code line fairly long\n", 6)
 	a.prematureRefactorRecordEdit("edit_file", mustMarshalEdit(old1, new1))
@@ -52,9 +42,6 @@ func TestPrematureRefactor_RealVerifyCommandSilences(t *testing.T) {
 	}
 }
 
-// F1: same-length localized fixes (`>`→`>=`, `,`→`;`) must not classify as
-// refactoring — resurrecting the dead detector would have made the common
-// "read → two small fixes → verify" flow fire constantly.
 func TestPrematureRefactor_LocalizedFixNotRefactoring(t *testing.T) {
 	old := "if len(x) > 3 {\n\tdoSomething(a, b)\n}\n" + strings.Repeat("// padding to exceed the min edit length threshold for classification\n", 4)
 	new := "if len(x) >= 3 {\n\tdoSomething(a; b)\n}\n" + strings.Repeat("// padding to exceed the min edit length threshold for classification\n", 4)
@@ -63,8 +50,6 @@ func TestPrematureRefactor_LocalizedFixNotRefactoring(t *testing.T) {
 	}
 }
 
-// F2: bare substring keyword matches (extractTargets / os.Rename /
-// abstractHandler / "optimize later" comments) must not classify either.
 func TestPrematureRefactor_KeywordWordBoundary(t *testing.T) {
 	base := strings.Repeat("unrelated code line content here padding\n", 6)
 	for _, tc := range []struct{ name, newText string }{
@@ -77,9 +62,7 @@ func TestPrematureRefactor_KeywordWordBoundary(t *testing.T) {
 			t.Errorf("%s: identifier/comment hit must NOT classify as refactoring keyword (#487 F2)", tc.name)
 		}
 	}
-	// Positive control: a keyword-free RESTRUCTURING edit (whole lines
-	// rewritten, similar total size, large line-level core delta) still
-	// classifies via the size heuristic.
+
 	ro := "func process(items []string) {\n\tfor i := range items {\n\t\thandleOne(items[i])\n\t}\n}\n" + strings.Repeat("// pad line to keep sizes similar here\n", 5)
 	rn := "func process(items []string) {\n\tbatch := collectAll(items)\n\tfor _, it := range batch {\n\t\thandleOneItem(it)\n\t}\n}\n" + strings.Repeat("// pad line to keep sizes similar here\n", 5)
 	if !isRefactoringContent(ro, rn) {

@@ -72,7 +72,7 @@ func TestScanStagedDiffForIssues_TestFileExcluded(t *testing.T) {
  }
 `
 	issues := ScanStagedDiffForIssues(diff)
-	// Debug statements in test files should NOT be flagged
+
 	for _, iss := range issues {
 		if iss.Category == "debug-stmt" {
 			t.Errorf("debug-stmt should not be flagged in test files: %+v", iss)
@@ -157,7 +157,7 @@ func TestScanStagedDiffForIssues_DebuggerBreakpoint(t *testing.T) {
 }
 
 func TestScanStagedDiffForIssues_ContextLinesIgnored(t *testing.T) {
-	// Context lines (starting with space) should not be flagged.
+
 	diff := `diff --git a/main.go b/main.go
 +++ b/main.go
 @@ -1,3 +1,3 @@
@@ -166,7 +166,7 @@ func TestScanStagedDiffForIssues_ContextLinesIgnored(t *testing.T) {
  doSomething()
 `
 	issues := ScanStagedDiffForIssues(diff)
-	// These are context lines (start with space), not additions
+
 	for _, iss := range issues {
 		if iss.Category == "debug-stmt" {
 			t.Errorf("context lines should not be flagged: %+v", iss)
@@ -175,7 +175,7 @@ func TestScanStagedDiffForIssues_ContextLinesIgnored(t *testing.T) {
 }
 
 func TestScanStagedDiffForIssues_RemovedLinesIgnored(t *testing.T) {
-	// Removed lines (starting with -) should not be flagged.
+
 	diff := `diff --git a/main.go b/main.go
 +++ b/main.go
 @@ -1,3 +1,2 @@
@@ -218,7 +218,7 @@ diff --git a/b.go b/b.go
 }
 
 func TestScanStagedDiffForIssues_LineNumbers(t *testing.T) {
-	// Verify that line numbers are correctly tracked.
+
 	diff := `diff --git a/main.go b/main.go
 +++ b/main.go
 @@ -10,3 +10,5 @@
@@ -241,7 +241,6 @@ func TestScanStagedDiffForIssues_LineNumbers(t *testing.T) {
 }
 
 func TestScanStagedDiffForIssues_MaxIssuesCap(t *testing.T) {
-	// Generate a diff with many debug statements to verify the cap.
 	var diff string
 	diff += "diff --git a/big.go b/big.go\n+++ b/big.go\n@@ -1,1 +1,1 @@\n old\n"
 	for i := 0; i < 50; i++ {
@@ -293,7 +292,6 @@ func TestFormatDiffIssues_OnlyInfo(t *testing.T) {
 	}
 }
 
-// TestScanStagedDiffForIssues_RealWorldDiff tests with a realistic diff.
 func TestScanStagedDiffForIssues_RealWorldDiff(t *testing.T) {
 	diff := `diff --git a/internal/handler/auth.go b/internal/handler/auth.go
 index 1a2b3c4..5d6e7f8 100644
@@ -326,7 +324,6 @@ diff --git a/config.yml b/config.yml
 		categories[iss.Category]++
 	}
 
-	// Should detect: debug-stmt, todo (FIXME), and possibly secret
 	if categories["debug-stmt"] == 0 {
 		t.Error("expected at least one debug-stmt issue")
 	}
@@ -335,8 +332,6 @@ diff --git a/config.yml b/config.yml
 	}
 }
 
-// TestScanStagedDiffForIssues_DiffHeaderSkipped tests that "+++" and "---"
-// lines are not mistakenly treated as added content.
 func TestScanStagedDiffForIssues_DiffHeaderSkipped(t *testing.T) {
 	diff := `diff --git a/main_test.go b/main_test.go
 --- a/main_test.go
@@ -346,8 +341,7 @@ func TestScanStagedDiffForIssues_DiffHeaderSkipped(t *testing.T) {
 +something else
 `
 	issues := ScanStagedDiffForIssues(diff)
-	// The "+++ b/main_test.go" line should not be treated as content.
-	// No issues expected since it's a test file and no debug/merge patterns.
+
 	for _, iss := range issues {
 		if iss.Category == "debug-stmt" {
 			t.Errorf("test file should not trigger debug-stmt: %+v", iss)
@@ -355,8 +349,6 @@ func TestScanStagedDiffForIssues_DiffHeaderSkipped(t *testing.T) {
 	}
 }
 
-// TestScanStagedDiffForIssues_HunkWithoutLineCount tests hunk headers
-// that omit the count (e.g. @@ -5 +5 @@).
 func TestScanStagedDiffForIssues_HunkWithoutLineCount(t *testing.T) {
 	diff := `diff --git a/main.go b/main.go
 +++ b/main.go
@@ -373,19 +365,14 @@ func TestScanStagedDiffForIssues_HunkWithoutLineCount(t *testing.T) {
 	}
 }
 
-// TestScanStagedDiffForIssues_SecretNotStarvedByTodos pins #1676 case 1:
-// the old per-line break capped ALL categories at 15 - 15 leading TODO
-// lines starved the secret scan on every later line. Secrets (and merge
-// conflicts) are now always scanned; only the low-severity tail is capped.
 func TestScanStagedDiffForIssues_SecretNotStarvedByTodos(t *testing.T) {
-	// 20 TODO lines, then a line with an obvious API-key-shaped secret.
 	var sb strings.Builder
 	sb.WriteString("diff --git a/f.txt b/f.txt\n")
 	sb.WriteString("--- a/f.txt\n+++ b/f.txt\n@@ -1,25 +1,25 @@\n")
 	for i := 0; i < 20; i++ {
 		sb.WriteString("+// TODO fix this thing\n")
 	}
-	// AWS-access-key-shaped string (security scanner's classic pattern).
+
 	sb.WriteString("+aws_access_key_id = \"AKIAIOSFODNN7EXAMPLE\"\n")
 	issues := ScanStagedDiffForIssues(sb.String())
 	var todoCount, secretCount int
@@ -405,9 +392,6 @@ func TestScanStagedDiffForIssues_SecretNotStarvedByTodos(t *testing.T) {
 	}
 }
 
-// TestPythonFileReNoSubstringMatches pins #1676 case 2: a path merely
-// CONTAINING "python" (mypythonlib.js) must not gate Python-only patterns
-// on; a real python path segment must.
 func TestPythonFileReNoSubstringMatches(t *testing.T) {
 	if pythonFileRe.MatchString("src/mypythonlib.js") {
 		t.Error("substring 'python' must not match")

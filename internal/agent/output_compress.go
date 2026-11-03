@@ -6,43 +6,16 @@ import (
 	"strings"
 )
 
-// Consecutive-line compression for tool output.
-//
-// Research basis: Context engineering studies (Anthropic 2025, Fundesk 2026)
-// identify tool output as the dominant context consumer. Build logs, test
-// output, and installation traces frequently contain long runs of identical
-// or near-identical lines (e.g., "go: downloading ...", "--- PASS: TestX",
-// "Compiling ..."). These runs waste context tokens without adding information.
-//
-// This pass runs BEFORE the size-based output guard, so compressed output
-// may avoid truncation entirely. It is purely mechanical (no LLM cost) and
-// preserves all unique information — only redundancy is collapsed.
-//
-// Two layers:
-//  1. Exact consecutive duplicates: 3+ identical lines → 1 line + count marker
-//  2. Prefix-similar consecutive lines: 5+ lines sharing a long common prefix
-//     (10+ chars) → first 2 + last 1 + count marker
-
 const (
-	// exactDupThreshold is the minimum run length for exact duplicate compression.
 	exactDupThreshold = 3
 
-	// prefixSimilarThreshold is the minimum run length for prefix-similar compression.
 	prefixSimilarThreshold = 5
 
-	// minPrefixLen is the minimum common prefix length for two lines to be
-	// considered "similar". Short prefixes would over-match and collapse
-	// genuinely different lines.
 	minPrefixLen = 10
 
-	// maxCompressInputLines caps the number of lines processed to bound CPU.
-	// Outputs beyond this are handled by the size-based output guard instead.
 	maxCompressInputLines = 5000
 )
 
-// compressRepetitiveLines collapses consecutive identical or prefix-similar
-// lines in tool output. Returns the compressed string. If the content has no
-// compressible runs, it is returned unchanged.
 func compressRepetitiveLines(content string) string {
 	lines := strings.Split(content, "\n")
 	if len(lines) < exactDupThreshold {
@@ -55,7 +28,7 @@ func compressRepetitiveLines(content string) string {
 	var out []string
 	i := 0
 	for i < len(lines) {
-		// Layer 1: exact consecutive duplicates.
+
 		runEnd := i + 1
 		for runEnd < len(lines) && lines[runEnd] == lines[i] {
 			runEnd++
@@ -68,17 +41,6 @@ func compressRepetitiveLines(content string) string {
 			continue
 		}
 
-		// Layer 2: prefix-similar consecutive lines.
-		// Two lines are "similar" if they share a common prefix of at least
-		// minPrefixLen characters (or the entire shorter line if it's shorter).
-		// #1475-B: prefix alone is NOT redundancy evidence - a project path
-		// (internal/agent/, /Volumes/new) makes ANY grep file listing share
-		// 10+ chars while every line is a DIFFERENT (unique) file name; the
-		// old fold kept 2+1 and deterministically destroyed unique
-		// information with no recovery, violating the file's own contract.
-		// The fold additionally requires high homogeneity: the lines must
-		// match after stripping a common directory-style tail (path:line
-		// bodies equal), i.e. genuine near-duplicates.
 		if len(lines[i]) >= minPrefixLen {
 			prefix := lines[i][:minPrefixLen]
 			sRunEnd := i + 1
@@ -87,7 +49,7 @@ func compressRepetitiveLines(content string) string {
 			}
 			sRunLen := sRunEnd - i
 			if sRunLen >= prefixSimilarThreshold && foldLinesHomogeneous(lines[i:sRunEnd]) {
-				// Keep first 2, last 1, and a count marker.
+
 				out = append(out, lines[i])
 				if i+1 < sRunEnd {
 					out = append(out, lines[i+1])
@@ -114,7 +76,6 @@ func compressRepetitiveLines(content string) string {
 	return strings.Join(out, "\n")
 }
 
-// formatDupMarker generates a marker for omitted identical lines.
 func formatDupMarker(omitted int, sample string) string {
 	display := sample
 	if len(display) > 60 {
@@ -126,24 +87,10 @@ func formatDupMarker(omitted int, sample string) string {
 	return "[" + strconv.Itoa(omitted) + " identical lines omitted: " + display + "]"
 }
 
-// formatSimilarMarker generates a marker for omitted prefix-similar lines.
 func formatSimilarMarker(omitted int) string {
 	return "[" + strconv.Itoa(omitted) + " similar lines omitted]"
 }
 
-// foldLinesHomogeneous reports whether the run's lines are genuine
-// near-duplicates: identical after stripping ALL digit runs (#1475-B).
-// Template-plus-counter output (Compiling module step 1..8, gen_1/gen_2,
-// retry #3) is true redundancy; a grep file listing shares a project-path
-// prefix but its trailing names are DIFFERENT WORDS (alpha/beta/gamma) and
-// digits-stripping exposes exactly that distinction. The first version of
-// this check (directory-body equality) misjudged same-directory unique
-// foldLinesHomogeneous reports whether the lines differ ONLY in digits -
-// safe to fold as template repeats. #1590-B: date/line-number/shard-like
-// shapes carry UNIQUE information despite matching the digits-template -
-// folding 2026-09-01..05 logs, grep -n line runs, or v1.9..v1.11 listings
-// irrecoverably dropped the middle entries. Exempt lines whose digit runs
-// look like dates, file:line refs, or dotted versions.
 func foldLinesHomogeneous(lines []string) bool {
 	if len(lines) < 2 {
 		return false
@@ -165,9 +112,6 @@ func foldLinesHomogeneous(lines []string) bool {
 	return true
 }
 
-// lineCarriesUniqueDigits reports digit shapes whose variance is DATA, not
-// template noise: ISO dates (2026-09-01), file:line refs (foo.go:12),
-// dotted versions (v1.10 / 1.2.3), and _NNN suffix runs (shard_001).
 var reUniqueDigitShape = regexp.MustCompile(
 	`\d{4}-\d{2}-\d{2}|:\d+|v?\d+\.\d+(\.\d+)?|_\d{3,}`)
 
@@ -175,7 +119,6 @@ func lineCarriesUniqueDigits(line string) bool {
 	return reUniqueDigitShape.MatchString(line)
 }
 
-// stripDigits removes all runs of decimal digits for template comparison.
 func stripDigits(s string) string {
 	var b strings.Builder
 	inDigit := false

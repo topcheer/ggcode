@@ -2,7 +2,6 @@ package agent
 
 import "testing"
 
-// #2647 probes: all legitimate reasoning (X != Y) — none may be flagged.
 func TestIssue2647_LegitReasoningNotFlagged(t *testing.T) {
 	probes := []string{
 		"In order to fix the race condition, we should handle the mutex ordering carefully.",
@@ -18,7 +17,6 @@ func TestIssue2647_LegitReasoningNotFlagged(t *testing.T) {
 	}
 }
 
-// True tautologies must still be flagged.
 func TestIssue2647_TrueTautologiesStillFlagged(t *testing.T) {
 	probes := []string{
 		"To fix the build error, we should fix the build error.",

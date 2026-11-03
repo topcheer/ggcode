@@ -9,7 +9,6 @@ import (
 func TestAttentionFragment_HighSwitchDensity(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// Simulate 10 tool calls, each targeting a different directory.
 	dirs := []string{
 		"/proj/internal/agent/file.go",
 		"/proj/internal/config/file.go",
@@ -38,7 +37,6 @@ func TestAttentionFragment_HighSwitchDensity(t *testing.T) {
 func TestAttentionFragment_LowSwitchDensity(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// Simulate 10 tool calls all in the same directory - no fragmentation.
 	for i := 0; i < 10; i++ {
 		s.recordToolCall("read_file", map[string]interface{}{
 			"file_path": "/proj/internal/agent/file.go",
@@ -54,7 +52,6 @@ func TestAttentionFragment_LowSwitchDensity(t *testing.T) {
 func TestAttentionFragment_TooFewUniqueDirs(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// Alternating between only 2 dirs - high density but not enough unique dirs.
 	for i := 0; i < 5; i++ {
 		s.recordToolCall("read_file", map[string]interface{}{
 			"file_path": "/proj/internal/agent/a.go",
@@ -73,7 +70,6 @@ func TestAttentionFragment_TooFewUniqueDirs(t *testing.T) {
 func TestAttentionFragment_WindowNotFull(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// Only 5 calls - window not full enough to analyze.
 	for _, d := range []string{"a/x.go", "b/x.go", "c/x.go", "d/x.go", "e/x.go"} {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}
@@ -87,7 +83,6 @@ func TestAttentionFragment_WindowNotFull(t *testing.T) {
 func TestAttentionFragment_MaxWarnings(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// Fill window with fragmented calls.
 	dirs := []string{
 		"/p/agent/a.go", "/p/config/b.go", "/p/tool/c.go",
 		"/p/chat/d.go", "/p/im/e.go", "/p/cron/f.go",
@@ -102,8 +97,6 @@ func TestAttentionFragment_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second attempt is capped at 1 per run (batch 2 guidance-noise cleanup;
-	// a fresh warning is possible only after compaction resets the counter).
 	for _, d := range dirs {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}
@@ -112,7 +105,6 @@ func TestAttentionFragment_MaxWarnings(t *testing.T) {
 		t.Errorf("expected no second warning (max=%d), got: %s", afMaxWarnings, msg2)
 	}
 
-	// Third attempt should also be capped.
 	for _, d := range dirs {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}
@@ -125,7 +117,6 @@ func TestAttentionFragment_MaxWarnings(t *testing.T) {
 func TestAttentionFragment_IrrelevantToolIgnored(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// web_search doesn't target a file - should be ignored.
 	for i := 0; i < 15; i++ {
 		s.recordToolCall("web_search", map[string]interface{}{"query": "test"})
 	}
@@ -149,9 +140,9 @@ func TestAttentionFragment_ExtractDir(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got := extractAFDir(tt.input)
-		// For single-component paths, result may vary by OS.
+
 		if tt.want != "" && !strings.Contains(got, tt.want) && got != tt.want {
-			// Some OS variance is acceptable; just verify it's non-empty when expected.
+
 			if got == "" {
 				t.Errorf("extractAFDir(%q) = %q, want something containing %q", tt.input, got, tt.want)
 			}
@@ -162,26 +153,24 @@ func TestAttentionFragment_ExtractDir(t *testing.T) {
 func TestAttentionFragment_ModerateSwitchDensity(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// 10 calls, 5 dirs (A,B,A,B,C,D,E pattern) - 60% density, below threshold.
 	seq := []string{
-		"/p/agent/a.go",  // A
-		"/p/config/b.go", // B (switch)
-		"/p/agent/c.go",  // A (switch back)
-		"/p/config/d.go", // B (switch)
-		"/p/tool/e.go",   // C (switch)
-		"/p/chat/f.go",   // D (switch)
-		"/p/im/g.go",     // E (switch)
-		"/p/im/h.go",     // E (no switch)
-		"/p/im/i.go",     // E (no switch)
-		"/p/im/j.go",     // E (no switch)
+		"/p/agent/a.go",
+		"/p/config/b.go",
+		"/p/agent/c.go",
+		"/p/config/d.go",
+		"/p/tool/e.go",
+		"/p/chat/f.go",
+		"/p/im/g.go",
+		"/p/im/h.go",
+		"/p/im/i.go",
+		"/p/im/j.go",
 	}
 	for _, d := range seq {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}
 
-	// 5 unique dirs, 5 switches / 9 pairs = 55.6% - below 70% threshold.
 	msg := s.analyze()
-	// Could fire if density exactly at threshold; verify it behaves sanely.
+
 	if msg != "" && !strings.Contains(msg, "attention-fragment") {
 		t.Errorf("unexpected message format: %s", msg)
 	}
@@ -190,7 +179,6 @@ func TestAttentionFragment_ModerateSwitchDensity(t *testing.T) {
 func TestAttentionFragment_EditTools(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// edit_file and write_file should also be tracked.
 	dirs := []string{
 		"/p/agent/a.go", "/p/config/b.go", "/p/tool/c.go",
 		"/p/chat/d.go", "/p/im/e.go", "/p/cron/f.go",
@@ -213,7 +201,6 @@ func TestAttentionFragment_EditTools(t *testing.T) {
 func TestAttentionFragment_MultiFileRead(t *testing.T) {
 	s := newAttentionFragmentState()
 
-	// multi_file_read uses "files" array - first path should be extracted.
 	for i := 0; i < 10; i++ {
 		s.recordToolCall("multi_file_read", map[string]interface{}{
 			"files": []interface{}{
@@ -228,10 +215,6 @@ func TestAttentionFragment_MultiFileRead(t *testing.T) {
 	}
 }
 
-// #1855 case 1: the guidance-noise cleanup set max=1 but left the
-// refire-gap/firedAt machinery behind as unreachable dead code. The
-// machinery is now REMOVED - this pins the honest single-shot semantics
-// (one warning per run; reset() re-arms).
 func TestAttentionFragmentSingleShotHonest1855(t *testing.T) {
 	s := newAttentionFragmentState()
 	for i := 0; i < s.windowSize; i++ {
@@ -243,18 +226,14 @@ func TestAttentionFragmentSingleShotHonest1855(t *testing.T) {
 	if s.warnCount != 1 {
 		t.Fatalf("warnCount = %d, want 1", s.warnCount)
 	}
-	// Sustained fragmentation stays silent (single-shot).
+
 	for i := 0; i < s.windowSize*3; i++ {
 		s.recordToolCall("read_file", map[string]interface{}{"path": fmt.Sprintf("/more%d/f.go", i%4)})
 	}
 	if m := s.analyze(); m != "" {
 		t.Fatalf("single-shot violated: %s", m)
 	}
-	// #1843 case 2 wins over this test's original pin: reset() is called
-	// once per user turn (agent.go), and warnCount=0 there re-opens the
-	// quota - otherwise afMaxWarnings=1 means ONE warning per SESSION,
-	// contradicting the "per run" comment. The two pins conflicted; the
-	// #1843 semantics is the correct one, so this test now asserts it.
+
 	s.reset()
 	if s.warnCount != 0 {
 		t.Fatalf("warnCount must re-open per user turn (reset), got %d", s.warnCount)

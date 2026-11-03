@@ -6,19 +6,8 @@ import (
 	"testing"
 )
 
-// TestCheckCopylock_TruncationBug verifies the truncation count bug:
-// When delta-aware filtering skips pre-existing issues, the truncation message
-// incorrectly uses len(issues) (which includes skipped old issues) instead of
-// the actual count of remaining NEW issues.
-//
-// Bug scenario:
-// - New content has 11 issues (5 old + 6 new)
-// - Delta filter skips 5 old issues
-// - After adding 4 new warnings, we trigger truncation
-// - Current code: len(issues) - len(warnings) = 11 - 4 = 7 (WRONG - includes old issues)
-// - Correct: should count only NEW issues = 6 - 4 = 2
 func TestCheckCopylock_TruncationBug(t *testing.T) {
-	// Old content with 5 pre-existing copylock violations
+
 	oldSrc := `package main
 
 import "sync"
@@ -30,7 +19,6 @@ func old4(d sync.Mutex) {}
 func old5(e sync.Mutex) {}
 `
 
-	// New content adds 6 NEW copylock violations (total = 11 issues)
 	newSrc := `package main
 
 import "sync"
@@ -55,7 +43,6 @@ func new6(k sync.Mutex) {}
 		t.Fatal("expected warnings for new copylock issues, got none")
 	}
 
-	// Find the truncation message
 	var truncationMsg string
 	for _, w := range result {
 		if strings.Contains(w, "more copylock issue") {
@@ -68,16 +55,12 @@ func new6(k sync.Mutex) {}
 		t.Fatal("expected truncation message, found none")
 	}
 
-	// Extract the number from the truncation message
-	// Expected format: "...and %d more copylock issue(s)"
 	var reportedCount int
 	_, err := fmt.Sscanf(truncationMsg, "...and %d more", &reportedCount)
 	if err != nil {
 		t.Fatalf("failed to parse truncation message '%s': %v", truncationMsg, err)
 	}
 
-	// The bug: reportedCount will be 7 (11 total - 4 shown)
-	// But it should be 2 (6 new - 4 shown = 2 remaining new issues)
 	expectedCount := 2
 
 	if reportedCount != expectedCount {
@@ -93,9 +76,6 @@ func new6(k sync.Mutex) {}
 			reportedCount, expectedCount, truncationMsg)
 	}
 
-	// Count how many new warnings we actually have (should be 4 or 5 due to truncation)
-	// Should be: 4 shown + 1 truncation message = 5 total
-	// But the truncation message says "7 more" which is wrong
 	t.Logf("Truncation message: %s", truncationMsg)
 	t.Logf("Reported count: %d, Actual remaining new issues: %d", reportedCount, expectedCount)
 }

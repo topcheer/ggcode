@@ -47,7 +47,7 @@ func TestReadFileWithOffsetLimit(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should contain 5 lines
+
 	t.Logf("result length: %d", len(result.Content))
 }
 
@@ -112,15 +112,14 @@ func TestReadFileSandboxCheck(t *testing.T) {
 }
 
 func TestReadFileLargeFileWithOffsetLimit(t *testing.T) {
-	// Create a file larger than maxFileSize (>10MB) and verify that
-	// offset/limit reads work via the streaming path.
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "large.txt")
 	var sb strings.Builder
 	for i := 0; i < 200000; i++ {
 		sb.WriteString("this is a line of content for testing\n")
 	}
-	// Each line is ~37 bytes, 200000 lines = ~7.4MB. Add more to exceed 10MB.
+
 	for i := 0; i < 100000; i++ {
 		sb.WriteString("extra padding line to make this file very large indeed\n")
 	}
@@ -131,7 +130,6 @@ func TestReadFileLargeFileWithOffsetLimit(t *testing.T) {
 		t.Fatalf("test file too small: %d bytes (need > %d)", info.Size(), maxFileSize)
 	}
 
-	// Without offset/limit: should error
 	r := ReadFile{}
 	input, _ := json.Marshal(map[string]string{"path": fp})
 	result, _ := r.Execute(context.Background(), input)
@@ -139,7 +137,6 @@ func TestReadFileLargeFileWithOffsetLimit(t *testing.T) {
 		t.Fatal("expected error for large file without offset/limit")
 	}
 
-	// With offset/limit: should succeed via streaming reader
 	input, _ = json.Marshal(map[string]interface{}{"path": fp, "offset": 100, "limit": 10})
 	result, _ = r.Execute(context.Background(), input)
 	if result.IsError {
@@ -155,7 +152,6 @@ func TestReadFileStreamingRangeDirect(t *testing.T) {
 	fp := filepath.Join(dir, "test.txt")
 	os.WriteFile(fp, []byte("alpha\nbeta\ngamma\ndelta\nepsilon\n"), 0o644)
 
-	// Read lines 2-3 (beta, gamma)
 	text, err := readFileRangeStreaming(fp, 2, 2, readFileRangeOptions{
 		defaultLimit: maxOutputLines,
 		moreHint:     "test hint",
@@ -186,7 +182,7 @@ func TestReadFileStreamingRangeBeyondEnd(t *testing.T) {
 }
 
 func TestReadFileStreamingTruncationReportsTotal(t *testing.T) {
-	// Create a 100-line file and read with limit=10 — should report total
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "medium.txt")
 	var sb strings.Builder
@@ -202,13 +198,7 @@ func TestReadFileStreamingTruncationReportsTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// #1698 case 6: the reader stops at the limit instead of scanning to
-	// EOF for an exact count (a multi-GB file paid full IO just for the
-	// "~N" hint). #2306: with the early break, totalLines == the last
-	// DISPLAYED line, so "~N" was not a lower bound but the count already
-	// shown ("1-2000 of ~2000") - agents stopped paginating. The hint now
-	// says "more below" WITHOUT a number; an honest total would need the
-	// very EOF scan case 6 removed.
+
 	if !strings.Contains(text, "More lines exist below") {
 		t.Errorf("truncation must hint continuation without a total: %s", text[strings.LastIndex(text, "["):])
 	}

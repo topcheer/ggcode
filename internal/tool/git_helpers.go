@@ -9,13 +9,11 @@ import (
 	"unicode/utf8"
 )
 
-// truncateUTF8Safe truncates s to at most maxBytes bytes, backing off to the
-// nearest UTF-8 rune boundary to avoid producing invalid UTF-8.
 func truncateUTF8Safe(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	// Back up to the nearest valid rune start.
+
 	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
 		maxBytes--
 	}
@@ -24,15 +22,10 @@ func truncateUTF8Safe(s string, maxBytes int) string {
 
 const coAuthorTrailer = "Co-Authored-By: ggcode <noreply@ggcode.dev>"
 
-// coAuthorInjectionDisabled reports whether the user opted out of the
-// automatic Co-Authored-By trailer via GGCODE_NO_COAUTHOR (any non-empty
-// value). Follows the GGCODE_SKIP_AUTOCONFIG "set = disable" convention.
 func coAuthorInjectionDisabled() bool {
 	return os.Getenv("GGCODE_NO_COAUTHOR") != ""
 }
 
-// resolveDir returns the first non-empty path from the given values.
-// Used by git tools to fall back from explicit path arg to WorkingDir.
 func resolveDir(paths ...string) string {
 	for _, p := range paths {
 		if p != "" {
@@ -42,15 +35,12 @@ func resolveDir(paths ...string) string {
 	return ""
 }
 
-// gitCommand creates a git command with GIT_PAGER=cat to prevent pager hangs.
 func gitCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	return cmd
 }
 
-// gitTrackedFiles returns the set of files tracked by git (respects .gitignore).
-// Returns nil if the directory is not inside a git repository.
 func gitTrackedFiles(ctx context.Context, dir string) map[string]struct{} {
 	cmd := gitCommand(ctx, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	cmd.Dir = dir
@@ -72,9 +62,8 @@ func gitTrackedFiles(ctx context.Context, dir string) map[string]struct{} {
 	return result
 }
 
-// isGitCommitCommand detects whether a shell command is a git commit.
 func isGitCommitCommand(cmd string) bool {
-	// Strip env var prefixes like "GIT_PAGER=cat "
+
 	s := cmd
 	for {
 		idx := strings.Index(s, "=")
@@ -85,7 +74,7 @@ func isGitCommitCommand(cmd string) bool {
 		if spaceIdx >= 0 {
 			break
 		}
-		// Skip past "KEY=VALUE " pattern
+
 		after := s[idx+1:]
 		if spIdx := strings.Index(after, " "); spIdx >= 0 {
 			s = after[spIdx+1:]
@@ -94,27 +83,26 @@ func isGitCommitCommand(cmd string) bool {
 		}
 	}
 	s = strings.TrimSpace(s)
-	// Match "git commit" with optional flags/args before the subcommand
+
 	if !strings.HasPrefix(s, "git ") && s != "git" {
 		return false
 	}
 	rest := strings.TrimSpace(s[3:])
-	// Handle "git -c key=val commit" pattern — skip flag arguments
+
 	for {
 		rest = strings.TrimSpace(rest)
 		if !strings.HasPrefix(rest, "-") {
 			break
 		}
-		// Skip the flag token
+
 		spIdx := strings.Index(rest, " ")
 		if spIdx < 0 {
 			return false
 		}
 		rest = strings.TrimSpace(rest[spIdx+1:])
-		// If the flag value contains = (e.g. -c user.name=x), skip past it too
-		// But only if current token is not another flag or commit subcommand
+
 		if rest != "" && !strings.HasPrefix(rest, "-") && !strings.HasPrefix(rest, "commit") {
-			// This token is the flag's value, skip it
+
 			spIdx = strings.Index(rest, " ")
 			if spIdx < 0 {
 				return false
@@ -125,8 +113,6 @@ func isGitCommitCommand(cmd string) bool {
 	return strings.HasPrefix(rest, "commit")
 }
 
-// injectCoAuthorTrailer injects Co-Authored-By into a git commit command.
-// If the command already contains the trailer, it is not duplicated.
 func injectCoAuthorTrailer(cmd string) string {
 	if coAuthorInjectionDisabled() {
 		return cmd
@@ -135,18 +121,13 @@ func injectCoAuthorTrailer(cmd string) string {
 		return cmd
 	}
 
-	// Try injecting into -m "message" — append trailer to the message
-	// Find the last -m flag and append trailer to its quoted string
 	if idx := findLastMFlag(cmd); idx >= 0 {
 		return injectIntoMFlag(cmd, idx)
 	}
 
-	// No -m flag: append --trailer
 	return cmd + " --trailer \"" + coAuthorTrailer + "\""
 }
 
-// findLastMFlag finds the start index of the last -m flag in the command.
-// Returns -1 if not found.
 func findLastMFlag(cmd string) int {
 	idx := -1
 	searchFrom := 0
@@ -156,7 +137,7 @@ func findLastMFlag(cmd string) int {
 			break
 		}
 		absIdx := searchFrom + found
-		// Make sure it's a standalone -m flag (not part of another flag like --message)
+
 		before := ""
 		if absIdx > 0 {
 			before = string(cmd[absIdx-1])
@@ -176,11 +157,10 @@ func findLastMFlag(cmd string) int {
 	return idx
 }
 
-// injectIntoMFlag appends the Co-Authored-By trailer to the message after -m.
 func injectIntoMFlag(cmd string, mIdx int) string {
-	// Skip past "-m"
+
 	pos := mIdx + 2
-	// Skip whitespace
+
 	for pos < len(cmd) && cmd[pos] == ' ' {
 		pos++
 	}
@@ -190,25 +170,15 @@ func injectIntoMFlag(cmd string, mIdx int) string {
 
 	quote := cmd[pos]
 	if quote != '"' && quote != '\'' {
-		// #831: injecting a raw newline into an unquoted -m message corrupts
-		// the shell command (the trailer line becomes a separate command and
-		// '<noreply@...>' parses as an input redirection). Use the --trailer
-		// flag form (same as the no-m path) — git appends it to the message
-		// body itself, no shell structure is touched.
+
 		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
 
-	// Quoted message — find closing quote, skipping backslash escapes.
-	// #4077: strings.IndexByte hits the quote INSIDE \" and cuts the message
-	// mid-way (odd-quote leftover variant = bash syntax error, no commit at
-	// all; balanced variant = message truncated with args spilling outside
-	// -m). Scan with escape state instead; on any parse trouble fall back to
-	// the proven --trailer form (#831).
-	pos++ // skip opening quote
+	pos++
 	var absClose = -1
 	for i := pos; i < len(cmd); i++ {
 		if cmd[i] == '\\' {
-			i++ // consume the escaped byte (\" \\ etc.) in pairs
+			i++
 			continue
 		}
 		if cmd[i] == quote {
@@ -224,8 +194,6 @@ func injectIntoMFlag(cmd string, mIdx int) string {
 	return cmd[:pos] + newMsg + cmd[absClose:]
 }
 
-// isBinaryFile checks if a file appears to be binary by reading the first 8KB
-// and looking for null bytes.
 func isBinaryFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -245,7 +213,6 @@ func isBinaryFile(path string) bool {
 	return false
 }
 
-// skipDirs are directories always skipped during file walks.
 var skipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
@@ -253,10 +220,9 @@ var skipDirs = map[string]bool{
 	"__pycache__":  true,
 }
 
-// isGitCommand checks whether a shell command string starts with "git".
 func isGitCommand(cmd string) bool {
 	s := strings.TrimSpace(cmd)
-	// Skip env var prefixes like "VAR=val "
+
 	for strings.Contains(s, "=") && strings.Index(s, "=") < strings.Index(s, " ") {
 		if spIdx := strings.Index(s, " "); spIdx >= 0 {
 			s = strings.TrimSpace(s[spIdx+1:])

@@ -5,18 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue2938_test.go - regression probes for #2938: the sequential channel
-// safety detectors (double-close, send-after-close) had no mutual-exclusion
-// context for switch/select case clauses - Go runs exactly one clause (no
-// fallthrough across select cases, no case-body fallthrough in switch), so
-// close-in-one-case vs send/close-in-another-case patterns (the standard
-// error-handling / select idiom) were flagged as "will panic" false
-// positives. Ops in sibling clauses of the same switch/select (outside
-// loops) must be treated as mutually exclusive, same principle as #2648 if
-// sibling branches. Inside loops the exemption is conservatively withheld:
-// a loop re-executes the select across iterations, and loop-carried risk
-// belongs to detectCloseInLoops.
-
 func TestIssue2938SelectSiblingCasesNotFlagged(t *testing.T) {
 	src := `package p
 func f(done chan struct{}, ch chan int) {
@@ -51,10 +39,7 @@ func g(ch chan int, mode int) {
 }
 
 func TestIssue2938LoopSelectStillChecked(t *testing.T) {
-	// Conservative scope: inside a loop the same select re-executes across
-	// iterations, so close-in-one-case vs send-in-another is a REAL
-	// loop-carried risk and must stay checkable (loop risk is
-	// detectCloseInLoops' turf - the #2938 exemption must not swallow it).
+
 	src := `package p
 func h(done chan struct{}, ch chan int) {
 	for {
@@ -80,8 +65,7 @@ func h(done chan struct{}, ch chan int) {
 }
 
 func TestIssue2938SameCasePairStillChecked(t *testing.T) {
-	// Ops in the SAME clause keep source-order semantics: close then send
-	// within one case body is a real double-run of the same clause path.
+
 	src := `package p
 func k(mode int, ch chan int) {
 	switch mode {

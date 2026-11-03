@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- ValidateSchemaConstraints tests ---
-
 func TestValidateSchemaConstraints_EnumValid(t *testing.T) {
 	schema := json.RawMessage(`{
 		"type": "object",
@@ -171,16 +169,13 @@ func TestValidateSchemaConstraints_SkipsMissingParams(t *testing.T) {
 		},
 		"required": ["action"]
 	}`)
-	// Missing "action" — ValidateSchemaConstraints should not report it
-	// (that's ValidateRequiredParams's job).
+
 	args := json.RawMessage(`{}`)
 	msg := ValidateSchemaConstraints(schema, args)
 	if msg != "" {
 		t.Errorf("missing params should not be reported by constraint validation, got: %s", msg)
 	}
 }
-
-// --- StripUnknownParams tests ---
 
 func TestStripUnknownParams_RemovesExtras(t *testing.T) {
 	schema := json.RawMessage(`{
@@ -220,7 +215,7 @@ func TestStripUnknownParams_NoExtras(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"path": "/tmp/test.go"}`)
 	out := StripUnknownParams(schema, args)
-	// Should return the same bytes since nothing was stripped
+
 	if string(out) != string(args) {
 		t.Errorf("no extras = no change, got: %s", string(out))
 	}
@@ -236,7 +231,6 @@ func TestStripUnknownParams_AdditionalPropertiesTrue(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"path": "/tmp", "custom": 42}`)
 	out := StripUnknownParams(schema, args)
-	// additionalProperties: true means extras are allowed, should be unchanged
 	var result map[string]json.RawMessage
 	json.Unmarshal(out, &result)
 	if _, exists := result["custom"]; !exists {

@@ -2,14 +2,6 @@
 
 package agent
 
-// #4398 regression tests: inline-quote escape. The #4284 line-shape strip
-// only catches line-leading quote shapes; inline-quoted discussion
-// ("don't touch config" wrapped in quotes mid-sentence, backtick regex
-// source, English negate keywords inside CJK prose) escaped it and
-// entered the ledger as user-direct (production data: 13/15 entries
-// polluted). Such excerpts must record as the advisory-only fragment
-// kind; real direct directives keep user-direct.
-
 import (
 	"strings"
 	"testing"
@@ -25,7 +17,7 @@ func TestIssue4398_InlineQuoteEscapeDowngraded(t *testing.T) {
 	if !excerptLooksDiscussed("touch config.yaml 之后不要继续修改") {
 		t.Fatalf("English negate inside CJK prose must be detected (#4398)")
 	}
-	// Real directives stay direct.
+
 	for _, real := range []string{
 		"don't touch config.yaml",
 		"never modify the production database",
@@ -37,9 +29,6 @@ func TestIssue4398_InlineQuoteEscapeDowngraded(t *testing.T) {
 	}
 }
 
-// End-to-end through recordUserRefusals: discussion excerpt lands as
-// fragment (advisory-only); real directive lands as direct and still
-// blocks write tools.
 func TestIssue4398_RecordUserRefusalsKindSplit(t *testing.T) {
 	a := &Agent{}
 	a.refusalLedger = newRefusalTestLedger(t)
@@ -63,7 +52,6 @@ func TestIssue4398_RecordUserRefusalsKindSplit(t *testing.T) {
 		t.Fatalf("real directive must still be recorded as direct, entries: %+v (#4398)", a.refusalLedger.data.Entries)
 	}
 
-	// Kind split in enforcement: only the direct entry may hard-block.
 	if got := a.refusalLedger.checkBlocked("edit_file", `{"file_path":"/x/configs/deploy.go"}`); got == "" {
 		t.Fatalf("direct configs/deploy entry must block edit_file (#4398)")
 	}
@@ -72,9 +60,6 @@ func TestIssue4398_RecordUserRefusalsKindSplit(t *testing.T) {
 	}
 }
 
-// Dedup upgrade (#4398): a discussion entry followed by the user's REAL
-// directive with the same key must upgrade to direct, never stay
-// advisory-only.
 func TestIssue4398_DedupUpgradeDiscussionToDirect(t *testing.T) {
 	a := &Agent{}
 	a.refusalLedger = newRefusalTestLedger(t)

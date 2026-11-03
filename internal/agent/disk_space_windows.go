@@ -7,8 +7,6 @@ import (
 	"unsafe"
 )
 
-// diskUsageOS returns (free bytes, total bytes, ok) for the filesystem
-// containing path, using GetDiskFreeSpaceEx.
 func diskUsageOS(path string) (free, total uint64, ok bool) {
 	var freeBytes, totalBytes, totalFreeBytes uint64
 	ptr, err := syscall.UTF16PtrFromString(path)

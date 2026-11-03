@@ -2,15 +2,6 @@
 
 package tool
 
-// Regression tests for GitHub issue #4551:
-//   A) file_ops delete used os.Stat (follows symlinks), so a dangling
-//      symlink was reported "file does not exist" and skipped forever.
-//   B) directory move did not migrate per-child read-tracking (exact-path
-//      keyed tracker), so write_file to newdir/a.go false-positived the
-//      blind-write warning for a file the agent HAD read under olddir/.
-//   C) copyRecursive failure inside the EXDEV branch must roll back the
-//      partial destination (verified at unit level below).
-
 import (
 	"os"
 	"path/filepath"
@@ -18,7 +9,6 @@ import (
 	"testing"
 )
 
-// A: a dangling symlink must be deletable (status ok), not skipped.
 func TestIssue4551_DanglingSymlinkDelete(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "gone.txt")
@@ -29,7 +19,7 @@ func TestIssue4551_DanglingSymlinkDelete(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(target); err != nil { // dangle the link
+	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
 	fops := FileOps{}
@@ -42,7 +32,6 @@ func TestIssue4551_DanglingSymlinkDelete(t *testing.T) {
 	}
 }
 
-// B: tracked read-state must follow a directory move.
 func TestIssue4551_DirMoveMigratesChildTracking(t *testing.T) {
 	base := t.TempDir()
 	oldDir := filepath.Join(base, "olddir")
@@ -69,7 +58,6 @@ func TestIssue4551_DirMoveMigratesChildTracking(t *testing.T) {
 	}
 }
 
-// B-companion: delete of a directory must drop child tracking.
 func TestIssue4551_DirDeleteDropsChildTracking(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "d")
@@ -81,10 +69,7 @@ func TestIssue4551_DirDeleteDropsChildTracking(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultFileTracker.RecordRead(child)
-	// Capture the resolved key the child is actually stored under
-	// (normalizePath resolves /var -> /private/var on macOS; the file is
-	// gone after the delete, so a later HasBeenSeen(child) would query the
-	// LEXICAL spelling and pass vacuously).
+
 	var childKey string
 	for k := range defaultFileTracker.SnapshotTracked() {
 		if filepath.Base(k) == "x.go" && strings.Contains(k, "/d/") {
@@ -103,10 +88,6 @@ func TestIssue4551_DirDeleteDropsChildTracking(t *testing.T) {
 	}
 }
 
-// C (unit level): the EXDEV rollback contract - copyRecursive error must
-// leave no destination tree behind. Missing source is the portable error
-// injection; the production branch calls os.RemoveAll(destination) which
-// this test exercises via the same primitive on a pre-created tree.
 func TestIssue4551_CopyFailureRollsBackDestination(t *testing.T) {
 	base := t.TempDir()
 	dst := filepath.Join(base, "dst")
@@ -119,7 +100,7 @@ func TestIssue4551_CopyFailureRollsBackDestination(t *testing.T) {
 	if err := copyRecursive(filepath.Join(base, "no-such-src"), dst); err == nil {
 		t.Fatal("copyRecursive from missing source unexpectedly succeeded")
 	}
-	// The production EXDEV error branch performs exactly this rollback.
+
 	if err := os.RemoveAll(dst); err != nil {
 		t.Fatal(err)
 	}

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestBatchReplaceInvalidGroupRefs verifies #385: regex replacements
-// referencing capture groups beyond the pattern's group count are rejected
-// up front instead of silently expanding to empty strings.
 func TestBatchReplaceInvalidGroupRefs(t *testing.T) {
 	cases := []struct {
 		name        string

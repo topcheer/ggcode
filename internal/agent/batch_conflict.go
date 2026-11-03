@@ -10,30 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Batch Edit Conflict Detection — detects when the LLM emits multiple
-// file-editing tool calls targeting the same file in a single batch.
-//
-// Problem: When the model returns multiple edit_file / multi_edit_file calls
-// for the same file in one response, the edits are executed sequentially.
-// The first edit modifies the file, so the second edit's old_text may no
-// longer match — causing a confusing failure that the model struggles to
-// diagnose. This wastes iterations and triggers cascading recovery hooks
-// (edit_fail_recovery, error_streak, repetition_tracker) unnecessarily.
-//
-// Solution: Before the sequential loop, scan all file-editing tool calls in
-// the batch and build a conflict map. When a file is targeted by 2+ edits,
-// inject a warning into the tool results so the model understands:
-//   - Why the second edit may fail (file was already modified)
-//   - How to fix it: use multi_edit_file for multiple edits to the same file
-//
-// Competitor analysis:
-//   - Claude Code: warns when parallel edits collide; suggests consolidation
-//   - Cursor: detects overlapping edits and asks for clarification
-//   - Cline/OpenHands: serializes same-file writes with explicit warnings
-//   - Aider: uses a unified edit protocol that batches same-file edits
-
-// batchFileConflictWarning is injected into the result of the first tool call
-// in a batch that targets a file also edited by another call in the same batch.
 const firstConflictWarning = `[batch conflict detected] This file is also targeted by %d other edit(s) in the same response.
 ` +
 	`When multiple edits are applied to the same file in one batch, the file changes after each edit, so ` +
@@ -43,28 +19,16 @@ const firstConflictWarning = `[batch conflict detected] This file is also target
 ` +
 	`- For dependent edits, wait for this edit to complete before sending the next one.`
 
-// batchFileConflictSubsequent is injected into subsequent tool calls targeting
-// a file that was already modified earlier in this batch.
 const subsequentConflictWarning = `[batch conflict detected] This file was already modified by an earlier edit in this response (tool call #%d).
 ` +
 	`The file content has changed since you composed this edit, so old_text may not match anymore. ` +
 	`Re-read the file if this edit fails, or consolidate same-file edits using multi_edit_file.`
 
-// detectBatchEditConflicts scans all tool calls in the batch and identifies
-// file-editing calls that target the same file path. Returns a map from tool
-// call index to a warning string for each conflicting call.
-//
-// For each file with multiple edit targets:
-//   - The first call gets firstConflictWarning (tells the model others are coming)
-//   - Subsequent calls get subsequentConflictWarning (tells the model the file changed)
-//
-// This is a pure function — no state, no side effects.
 func detectBatchEditConflicts(toolCalls []provider.ToolCallDelta) map[int]string {
 	if len(toolCalls) < 2 {
 		return nil
 	}
 
-	// Map: normalized file path → ordered list of tool-call indices targeting it.
 	fileToIndices := make(map[string][]int)
 
 	for i, tc := range toolCalls {
@@ -83,12 +47,11 @@ func detectBatchEditConflicts(toolCalls []provider.ToolCallDelta) map[int]string
 		if len(indices) < 2 {
 			continue
 		}
-		// indices[0] is the first call to this file — warn about upcoming conflicts.
+
 		firstIdx := indices[0]
 		otherCount := len(indices) - 1
 		warnings[firstIdx] = fmt.Sprintf(firstConflictWarning, otherCount)
 
-		// Subsequent calls — warn that the file was already modified.
 		for k := 1; k < len(indices); k++ {
 			warnings[indices[k]] = fmt.Sprintf(subsequentConflictWarning, firstIdx+1)
 		}
@@ -100,10 +63,6 @@ func detectBatchEditConflicts(toolCalls []provider.ToolCallDelta) map[int]string
 	return warnings
 }
 
-// extractFilePathsForConflict extracts target file paths from a file-editing
-// extractFilePathsForConflict pulls the target file paths from a tool call's
-// arguments. It handles both single-file tools (edit_file, write_file) and
-// multi-file tools (multi_edit_file, multi_file_write, multi_file_edit).
 func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	if len(tc.Arguments) == 0 {
 		return nil
@@ -141,7 +100,7 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 		appendStr("file_path")
 	case "multi_edit_file":
 		appendStr("file_path")
-		// multi_edit_file edits array also contains path in some variants.
+
 		appendFromList("edits", "path")
 	case "multi_file_edit", "multi_file_write":
 		appendFromList("files", "path")
@@ -151,14 +110,6 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	return paths
 }
 
-// normalizeBatchPath canonicalizes the path for same-file matching.
-// Case folding applies ONLY on case-insensitive filesystems (macOS APFS/HFS+,
-// Windows NTFS) — there Foo.go and foo.go are the same file. On case-sensitive
-// filesystems (Linux ext4 and most CI runners) Config.yaml and config.yaml are
-// genuinely different files; folding them would misreport two independent edits
-// as a same-file conflict and push the model toward the wrong remedy (#714).
-// ASCII-only folding (mirroring internal/permission's pathFoldActive pattern)
-// avoids Unicode folds that change byte lengths.
 func normalizeBatchPath(p string) string {
 	p = strings.TrimSpace(p)
 	if !batchPathFoldActive() {
@@ -167,8 +118,6 @@ func normalizeBatchPath(p string) string {
 	return asciiFoldLower(p)
 }
 
-// batchPathFoldActive reports whether this platform's filesystem compares
-// paths case-insensitively by default.
 func batchPathFoldActive() bool {
 	switch runtime.GOOS {
 	case "darwin", "windows":
@@ -177,7 +126,6 @@ func batchPathFoldActive() bool {
 	return false
 }
 
-// asciiFoldLower lowercases ASCII letters only (byte-length preserving).
 func asciiFoldLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {

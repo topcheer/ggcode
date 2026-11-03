@@ -42,13 +42,11 @@ func TestRedundantReverifyNoFalsePositiveOnFirstRun(t *testing.T) {
 func TestRedundantReverifyDetectsRedundantRerun(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// First test run passes
 	hint1 := s.recordToolCall("run_command", "go test ./...", 1, false)
 	if hint1 != "" {
 		t.Fatalf("first run should not trigger: %s", hint1)
 	}
 
-	// Second test run without edits -> should trigger
 	hint2 := s.recordToolCall("run_command", "go test ./...", 2, false)
 	if hint2 == "" {
 		t.Fatal("second verification without edits should trigger hint")
@@ -58,13 +56,10 @@ func TestRedundantReverifyDetectsRedundantRerun(t *testing.T) {
 func TestRedundantReverifyNoTriggerAfterEdit(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// First test run
 	s.recordToolCall("run_command", "go test ./...", 1, false)
 
-	// Make an edit
 	s.recordEdit("edit_file")
 
-	// Second test run should NOT trigger (edits happened)
 	hint := s.recordToolCall("run_command", "go test ./...", 2, false)
 	if hint != "" {
 		t.Errorf("verification after edits should not trigger hint: %s", hint)
@@ -74,11 +69,8 @@ func TestRedundantReverifyNoTriggerAfterEdit(t *testing.T) {
 func TestRedundantReverifyNoTriggerAfterFailedRun(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// First test run FAILS
 	s.recordToolCall("run_command", "go test ./...", 1, true)
 
-	// Second test run without edits -> should NOT trigger because prev was error
-	// (agent may re-run to reproduce or check after diagnostic changes)
 	hint := s.recordToolCall("run_command", "go test ./...", 2, false)
 	if hint != "" {
 		t.Errorf("re-run after failed verification should not trigger hint: %s", hint)
@@ -88,8 +80,6 @@ func TestRedundantReverifyNoTriggerAfterFailedRun(t *testing.T) {
 func TestRedundantReverifyMaxWarnings(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// Run test repeatedly without edits: iter 1 is first, iter 2+ are redundant.
-	// With max=2, hints should fire on iterations 2 and 3, then be capped.
 	s.recordToolCall("run_command", "go test ./...", 1, false)
 
 	hint2 := s.recordToolCall("run_command", "go test ./...", 2, false)
@@ -102,7 +92,6 @@ func TestRedundantReverifyMaxWarnings(t *testing.T) {
 		t.Fatal("expected hint on 3rd redundant run")
 	}
 
-	// 4th redundant run should be capped
 	hint4 := s.recordToolCall("run_command", "go test ./...", 4, false)
 	if hint4 != "" {
 		t.Errorf("hint should be capped at %d warnings, got: %s", redundantReverifyMaxWarnings, hint4)
@@ -112,7 +101,6 @@ func TestRedundantReverifyMaxWarnings(t *testing.T) {
 func TestRedundantReverifyReset(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// Record a run and trigger a warning
 	s.recordToolCall("run_command", "go test ./...", 1, false)
 	s.recordToolCall("run_command", "go test ./...", 2, false)
 
@@ -133,10 +121,8 @@ func TestRedundantReverifyReset(t *testing.T) {
 func TestRedundantReverifyDifferentCategoryNoTrigger(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// Build test
 	s.recordToolCall("run_command", "go build ./...", 1, false)
 
-	// Test run (different category) should not trigger
 	hint := s.recordToolCall("run_command", "go test ./...", 2, false)
 	if hint != "" {
 		t.Errorf("different verification category should not trigger: %s", hint)
@@ -146,15 +132,12 @@ func TestRedundantReverifyDifferentCategoryNoTrigger(t *testing.T) {
 func TestRedundantReverifyRecordEditIgnoresNonEditTools(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// First test run
 	s.recordToolCall("run_command", "go test ./...", 1, false)
 
-	// Non-edit tool should not count as edit
 	s.recordEdit("read_file")
 	s.recordEdit("grep")
 	s.recordEdit("run_command")
 
-	// Should still trigger since no real edits happened
 	hint := s.recordToolCall("run_command", "go test ./...", 2, false)
 	if hint == "" {
 		t.Fatal("non-edit tools should not reset editsSince counter")
@@ -164,9 +147,8 @@ func TestRedundantReverifyRecordEditIgnoresNonEditTools(t *testing.T) {
 func TestRedundantReverifyCrossLanguageBuild(t *testing.T) {
 	s := newRedundantReverifyState()
 
-	// cargo build
 	s.recordToolCall("run_command", "cargo build", 1, false)
-	// cargo build again without edits
+
 	hint := s.recordToolCall("run_command", "cargo build", 2, false)
 	if hint == "" {
 		t.Fatal("cargo build re-run without edits should trigger")
@@ -180,8 +162,6 @@ func TestMaybeWarnRedundantReverifyReturnsEmpty(t *testing.T) {
 	}
 }
 
-// #343: text operations whose arguments mention verification commands are
-// data, not execution — and must not poison the first real verification run.
 func TestReverifyTextOpsNotVerification(t *testing.T) {
 	s := newRedundantReverifyState()
 	if cat := s.classifyVerificationCommand("run_command", `grep -rn "go test" docs/`); cat != "" {
@@ -193,19 +173,16 @@ func TestReverifyTextOpsNotVerification(t *testing.T) {
 	if cat := s.classifyVerificationCommand("grep", `"pattern": "go test ./..."`); cat != "" {
 		t.Fatalf("non-shell tool misclassified as %q", cat)
 	}
-	// First real go test after the grep above must NOT be flagged redundant.
+
 	if hint := s.recordToolCall("run_command", "go test ./...", 1, false); hint != "" {
 		t.Fatalf("first real verification falsely flagged: %s", hint)
 	}
-	// Actual redundant re-run still detected.
+
 	if hint := s.recordToolCall("run_command", "go test ./...", 2, false); hint == "" {
 		t.Fatal("genuine redundant re-run not flagged")
 	}
 }
 
-// Regression for #1486: a shell source mutation (sed -i) must bump
-// editsSince so a re-run is not branded "cannot produce new information" -
-// the command cache already invalidates on the same heuristic.
 func TestRecordShellSourceMutationSuppressesReverifyWarning(t *testing.T) {
 	s := newRedundantReverifyState()
 	args := `{"command":"go test ./..."}`
@@ -218,9 +195,6 @@ func TestRecordShellSourceMutationSuppressesReverifyWarning(t *testing.T) {
 	}
 }
 
-// TestReverifyBumpsOnTreeMutations pins #1679 case 2: whole-tree rewrites
-// (git_checkout and friends) and undo_edit must bump editsSince - a
-// re-test after a branch switch is NOT "cannot produce new information".
 func TestReverifyBumpsOnTreeMutations(t *testing.T) {
 	s := newRedundantReverifyState()
 	s.lastRun["test"] = &reverifyRun{toolName: "run_command", iteration: 1}
@@ -230,7 +204,7 @@ func TestReverifyBumpsOnTreeMutations(t *testing.T) {
 	if got := s.lastRun["test"].editsSince; got != 5 {
 		t.Fatalf("tree-mutating tools must bump editsSince, got %d want 5 (#1679 case 2)", got)
 	}
-	// Non-mutating tools still don't.
+
 	s.recordEdit("read_file")
 	if got := s.lastRun["test"].editsSince; got != 5 {
 		t.Fatalf("read_file must not bump, got %d", got)

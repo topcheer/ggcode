@@ -9,11 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #4201: OpenAI-compatible gateways (older vLLM / LiteLLM / Ollama compat
-// layers) may stream complete text but report a final usage chunk with
-// {output_tokens: 0}. The empty-response detector must not misread that as
-// an empty response: doing so dropped the normal reply from history,
-// injected a misleading nudge, and three such replies hard-aborted the run.
 func TestRunStreamTextWithZeroOutputTokensNotEmpty(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{{
@@ -45,9 +40,6 @@ func TestRunStreamTextWithZeroOutputTokensNotEmpty(t *testing.T) {
 	}
 }
 
-// Control: a response with NO text and NO message content must still be
-// treated as empty (nudge injected → second stream call), so the guard above
-// does not mask genuine empty responses.
 func TestRunStreamGenuinelyEmptyStillRetried(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{

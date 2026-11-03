@@ -1,13 +1,5 @@
 package agent
 
-// Probes for #3271:
-//   - A: global-tier injected entries must land their outcome counters on
-//     the GLOBAL file (the workspace pass cannot match their keys by
-//     construction). Without the dual sink the r461 retirement gate never
-//     fired for the whole global tier.
-//   - B: a cancelled run must drop its injected-key set instead of leaking
-//     it into the next run's accounting.
-
 import (
 	"encoding/json"
 	"os"
@@ -18,9 +10,8 @@ import (
 
 func TestIssue3271_GlobalTierOutcomeWrittenToGlobalFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home) // redirect TrajGlobalPath
+	t.Setenv("HOME", home)
 
-	// Global store: one entry whose category the workspace lacks.
 	gp := filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl")
 	if err := os.MkdirAll(filepath.Dir(gp), 0o755); err != nil {
 		t.Fatal(err)
@@ -30,15 +21,13 @@ func TestIssue3271_GlobalTierOutcomeWrittenToGlobalFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Workspace store: a DIFFERENT category only.
 	dir := t.TempDir()
 	writeLearnings(t, dir, []trajectoryLearning{
 		mkLearning(time.Now(), "recovery", "local_cat", "local insight"),
 	})
 
 	s := newTrajIntelState()
-	// Simulate a run that injected BOTH rows (renderer would top up from
-	// global for global_cat).
+
 	s.mu.Lock()
 	s.recordInjectedLocked(g)
 	s.recordInjectedLocked(mkLearning(time.Now(), "recovery", "local_cat", "local insight"))
@@ -46,7 +35,6 @@ func TestIssue3271_GlobalTierOutcomeWrittenToGlobalFile(t *testing.T) {
 
 	s.recordInjectionOutcome(dir, false)
 
-	// Workspace counters: local_cat got the failure.
 	views := TrajListLearnings(dir)
 	var local *TrajLearningView
 	for i := range views {
@@ -57,7 +45,7 @@ func TestIssue3271_GlobalTierOutcomeWrittenToGlobalFile(t *testing.T) {
 	if local == nil || local.Reinforced != 0 {
 		t.Fatalf("setup sanity: local row missing")
 	}
-	// (InjectedRuns is not in the view; read the file directly.)
+
 	wsRows, err := loadTrajFile(filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl"))
 	if err != nil || len(wsRows) != 1 {
 		t.Fatalf("workspace read: %v rows=%d", err, len(wsRows))
@@ -66,7 +54,6 @@ func TestIssue3271_GlobalTierOutcomeWrittenToGlobalFile(t *testing.T) {
 		t.Fatalf("workspace counters wrong: %+v", wsRows)
 	}
 
-	// Global counters: global_cat must ALSO have been bumped (the bug: 0).
 	gRows, gErr := loadTrajFile(gp)
 	if gErr != nil || len(gRows) != 1 {
 		t.Fatalf("global read: %v rows=%d", gErr, len(gRows))
@@ -88,11 +75,8 @@ func TestIssue3271_CancelledRunDropsInjectedKeys(t *testing.T) {
 	s.recordInjectedLocked(mkLearning(time.Now(), "strategy", "s1", "insight"))
 	s.mu.Unlock()
 
-	// Cancelled path: clear instead of record.
 	s.clearInjectedRun()
 
-	// A later (completed) run must find NOTHING to account: no double
-	// counting from the leaked keys.
 	s.recordInjectionOutcome(dir, true)
 	wsRows2, err := loadTrajFile(filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl"))
 	if err != nil || len(wsRows2) != 1 {

@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
-	// Build a minimal registry with a few tools
+
 	reg := tool.NewRegistry()
 	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project", nil, nil)
 
@@ -27,7 +27,6 @@ func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "review the code", "Explore")
 
-	// Verify the prompt contains expected sections
 	checks := []struct {
 		name     string
 		contains string
@@ -52,12 +51,10 @@ func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
 func TestBuildSubAgentSystemPrompt_NilFields(t *testing.T) {
 	ctx := SubAgentPromptContext{
 		WorkingDir: "/tmp/test",
-		// Cfg, Registry, CommandMgr, GlobalAutoMem, ProjectAutoMem, GitStatus, RemoteAgentsInfo all nil
 	}
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "do something", "")
 
-	// Should still produce a prompt with the base system prompt and constraints
 	if !strings.Contains(prompt, "Permission mode is bypass") {
 		t.Error("prompt should contain bypass constraint even with nil fields")
 	}
@@ -132,7 +129,6 @@ func TestBuildSubAgentSystemPrompt_NoSlashCommands(t *testing.T) {
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
 
-	// Sub-agent prompts should NOT include the "## Custom Slash Commands" section
 	if strings.Contains(prompt, "## Custom Slash Commands") {
 		t.Error("sub-agent prompt should not contain custom slash commands section")
 	}
@@ -158,8 +154,6 @@ func TestBuildSubAgentSystemPrompt_WithMemory(t *testing.T) {
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
 
-	// Even with (empty) auto-memory, the prompt should build without error
-	// and contain the core constraints.
 	if !strings.Contains(prompt, "Permission mode is bypass") {
 		t.Error("prompt should contain bypass constraint")
 	}
@@ -200,7 +194,6 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
 
-	// If memory sections exist, they should be framed as reference data
 	if strings.Contains(prompt, "## Auto Memory") {
 		if !strings.Contains(prompt, "reference information") {
 			t.Error("auto-memory section should contain framing text indicating it's reference data")
@@ -208,15 +201,12 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 	}
 }
 
-// withTestHome isolates HOME so config/memory operations don't pollute the real ~/.ggcode/
 func withTestHome(t *testing.T) {
 	t.Helper()
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 }
 
-// r388: Explore-type sub-agents get a structured output contract; other
-// types do not.
 func TestBuildSubAgentSystemPrompt_ExploreContract(t *testing.T) {
 	reg := tool.NewRegistry()
 	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project", nil, nil)

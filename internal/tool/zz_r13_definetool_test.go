@@ -1,7 +1,5 @@
 package tool
 
-// zz_r13_definetool_test.go -- companion tests for define_tool (r13):
-// parametrized agent-defined tools over the macro step DSL.
 import (
 	"context"
 	"encoding/json"
@@ -9,9 +7,6 @@ import (
 	"testing"
 )
 
-// zzDTProbe is a read-only probe tool that echoes its args, registered
-// into the read-only whitelist for the duration of each test (same
-// technique as zz_issue_sa148_test.go).
 type zzDTProbe struct{}
 
 func (zzDTProbe) Name() string        { return "zz_dt_probe" }
@@ -85,8 +80,7 @@ func TestR13DefineRejectsWriteTools(t *testing.T) {
 
 func TestR13UnknownPlaceholderRejectedAtCall(t *testing.T) {
 	dt, _ := newDTTool(t)
-	// No params_schema: call-time substitution must still fail loudly on
-	// a placeholder with no matching param instead of grepping literally.
+
 	if res := dtCall(t, dt, `{"action":"define","name":"probe_2","steps":[{"tool":"zz_dt_probe","args":{"pattern":"{{ghost}}"}}]}`); res.IsError {
 		t.Fatalf("define: %s", res.Content)
 	}

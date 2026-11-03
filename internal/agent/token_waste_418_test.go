@@ -5,18 +5,13 @@ import (
 	"testing"
 )
 
-// #418: editing a file after MULTIPLE reads must expire ALL of them, not
-// just the last — the old overwrite-style readPaths kept only the final
-// index, and if that one was redundant the earlier productive read was
-// never reclassified (waste systematically undercounted).
 func TestTokenWasteMultiReadAllExpired(t *testing.T) {
 	s := newTokenWasteBudgetState()
 
-	// Read a.go productively (1000 productive tokens).
 	s.recordToolResult("read_file", strings.Repeat("x", 4000), false, false, []string{"a.go"})
-	// Read a.go AGAIN (flagged redundant).
+
 	s.recordToolResult("read_file", strings.Repeat("x", 4000), false, true, []string{"a.go"})
-	// Edit a.go — both reads are now expired waste.
+
 	s.markFileEdited("a.go")
 
 	if s.wasteTokens != s.totalTokens {
@@ -28,7 +23,6 @@ func TestTokenWasteMultiReadAllExpired(t *testing.T) {
 	}
 }
 
-// #419: negative/exclusion results are exempt from wasteEmpty.
 func TestTokenWasteNegativeResultExempt(t *testing.T) {
 	s := newTokenWasteBudgetState()
 	negatives := []string{

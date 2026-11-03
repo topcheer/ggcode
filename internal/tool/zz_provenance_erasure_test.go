@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Trust-cascade defense (EMNLP 2026 provenance-erasure finding): the
-// delegation boundary must attribute a result's external-source usage.
 func TestProvenanceHeaderAggregates(t *testing.T) {
 	h := provenanceHeader(map[string]int{"web_fetch": 3, "browser": 1})
 	if !strings.Contains(h, "4 external-source call(s)") {
@@ -26,7 +24,6 @@ func TestProvenanceHeaderEmptyNoChange(t *testing.T) {
 	}
 }
 
-// Deterministic rendering (sorted) regardless of map iteration order.
 func TestProvenanceHeaderDeterministic(t *testing.T) {
 	a := provenanceHeader(map[string]int{"z_tool": 1, "a_tool": 1})
 	b := provenanceHeader(map[string]int{"a_tool": 1, "z_tool": 1})

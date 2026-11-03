@@ -1,17 +1,5 @@
 package agent
 
-// #4009: driftRecurrenceRecord was fed extractFileHint (single path), so a
-// multi_file_edit whose non-first files hit a warned-about dir never counted
-// as a recurrence and the escalation warning went unreported. The agent.go
-// wiring now uses the #2992 case 3 form: extractFileHints + written_paths
-// override + per-path record. These tests pin the scenario contract:
-// - the old single-path feed misses the warned dir (the bug's mechanism),
-// - the new multi-path feed catches it,
-// - verification counting stays single-shot and outcome-blind (#1544 case B),
-// - failed edits stay ok-gated (#1452-B).
-// Mirror style follows checks_1544_test.go (drive the wrapper without a
-// full Agent loop; the wiring block mirrors the scopeDrift siblings).
-
 import "testing"
 
 func issue4009MultiEditArgs() []byte {
@@ -19,13 +7,10 @@ func issue4009MultiEditArgs() []byte {
 }
 
 func issue4009WrittenContent() string {
-	// extractWrittenPaths decodes leading JSON tokens; the tool-layer summary
-	// body leads with the JSON object (file_batch_helpers.go WrittenPaths).
+
 	return `{"written":2,"failed":0,"skipped":0,"written_paths":["internal/agent/a.go","internal/tool/b.go"]}`
 }
 
-// Pre-#4009 single-path feed: extractFileHint sees only files[0], so the
-// drift-target dir (internal/tool, file #2) recurrence is invisible.
 func TestIssue4009SinglePathFeedMissesWarnedDir(t *testing.T) {
 	a := &Agent{driftRecurrence: newDriftRecurrenceState()}
 	a.driftRecurrenceMarkWarn(3)
@@ -42,8 +27,6 @@ func TestIssue4009SinglePathFeedMissesWarnedDir(t *testing.T) {
 	}
 }
 
-// #4009 wiring form: extractFileHints + written_paths override + per-path
-// record - the warned-dir recurrence becomes visible and counted.
 func TestIssue4009MultiPathFeedRecordsWarnedDir(t *testing.T) {
 	a := &Agent{driftRecurrence: newDriftRecurrenceState()}
 	a.driftRecurrenceMarkWarn(3)
@@ -68,16 +51,11 @@ func TestIssue4009MultiPathFeedRecordsWarnedDir(t *testing.T) {
 	}
 }
 
-// The verification side is path-independent and must stay single-shot and
-// outcome-blind: a red `go test` (ok=false) still counts exactly once even
-// though the wiring now loops over paths (#1544 case B regression guard;
-// run_command is hint-free so the loop body runs exactly once via the
-// empty-hints fallback).
 func TestIssue4009VerificationSingleShotOutcomeBlind(t *testing.T) {
 	a := &Agent{driftRecurrence: newDriftRecurrenceState()}
 	a.driftRecurrenceMarkWarn(1)
 	args := `{"command":"go test ./..."}`
-	// Mirror the wiring: hints empty -> fallback single call.
+
 	paths := extractFileHints("run_command", []byte(args))
 	if len(paths) != 0 {
 		t.Fatalf("run_command unexpectedly yielded file hints: %v", paths)
@@ -94,8 +72,6 @@ func TestIssue4009VerificationSingleShotOutcomeBlind(t *testing.T) {
 	}
 }
 
-// Failed edits must stay gated even on the multi-path feed (#1452-B /
-// #1491 pattern shared with the sibling trackers).
 func TestIssue4009FailedMultiEditNotRecorded(t *testing.T) {
 	a := &Agent{driftRecurrence: newDriftRecurrenceState()}
 	a.driftRecurrenceMarkWarn(2)

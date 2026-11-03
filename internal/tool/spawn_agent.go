@@ -13,19 +13,13 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// subAgentBlockedTools lists tools that are unconditionally removed from every
-// sub-agent's tool set, regardless of what allowedTools requests. Sub-agents
-// must never interact with the user, spawn nested agents, or manage teams.
 var subAgentBlockedTools = []string{
 	"ask_user",
-	// compact_context (CAT) requests compaction of the OWNING agent's
-	// conversation; a one-shot sub-agent must not compact its parent.
+
 	"compact_context",
 	"spawn_agent",
 	"best_of_n",
-	// r436: a workflow is a fan-out of sub-agents; nested workflows inside
-	// sub-agents would multiply spawn slots unboundedly (16-slot session
-	// budget). One level of workflow nesting only, enforced here.
+
 	"workflow_run",
 	"wait_agent",
 	"list_agents",
@@ -34,9 +28,7 @@ var subAgentBlockedTools = []string{
 	"teammate_shutdown",
 	"team_create",
 	"team_delete",
-	// #864: swarm/team board + messaging tools were missing — a sub-agent
-	// could inject tasks into the shared board, message arbitrary teammates,
-	// and trigger other agents' approval loops (live-verified by re-review).
+
 	"swarm_task_create",
 	"swarm_task_claim",
 	"swarm_task_complete",
@@ -49,26 +41,20 @@ var subAgentBlockedTools = []string{
 	"a2a_send_task",
 }
 
-// SpawnAgentTool implements the spawn_agent tool.
 type SpawnAgentTool struct {
 	Manager             *subagent.Manager
-	Provider            provider.Provider        // static fallback; prefer ProviderGetter if set
-	ProviderGetter      func() provider.Provider // resolves the parent agent's live provider
-	AvailableModels     func() []string          // resolves models on the current endpoint for validation
+	Provider            provider.Provider
+	ProviderGetter      func() provider.Provider
+	AvailableModels     func() []string
 	Tools               *Registry
 	AgentFactory        subagent.AgentFactory
-	WorkingDir          string // working directory to propagate to sub-agent
+	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
-	OnMetric            func(metrics.MetricEvent)           // forwarded to the sub-agent's Agent so its LLM/tool telemetry reaches the parent collector (sa-218)
-	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
-	// TrajBackflow (r460, injected by the agent side to avoid a tool->agent
-	// import cycle) folds a worktree-isolated sub-agent's extracted
-	// learnings back into the main workspace store after its run.
-	TrajBackflow func(mainWorkingDir, worktreePath string)
+	OnMetric            func(metrics.MetricEvent)
+	SystemPromptBuilder func(task, agentType string) string
+	TrajBackflow        func(mainWorkingDir, worktreePath string)
 }
 
-// currentProvider returns the live provider if ProviderGetter is set, otherwise
-// falls back to the static Provider field.
 func (t SpawnAgentTool) currentProvider() provider.Provider {
 	if t.ProviderGetter != nil {
 		return t.ProviderGetter()
@@ -152,9 +138,6 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("invalid isolation %q: supported values are \"none\" (inherit the parent working directory) and \"worktree\" (run in a fresh git worktree from HEAD)", isolation)}, nil
 	}
 
-	// Validate requested tool names against the registry. Warn (don't block)
-	// if unknown tools are requested — the BuildToolSet filter will silently
-	// drop them, so the sub-agent would run with fewer tools than expected.
 	if len(args.Tools) > 0 && t.Tools != nil {
 		var unknown []string
 		for _, name := range args.Tools {
@@ -167,7 +150,6 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
-	// Validate model override against available models on the current endpoint.
 	if model := strings.TrimSpace(args.Model); model != "" && t.AvailableModels != nil {
 		available := t.AvailableModels()
 		if len(available) > 0 {
@@ -195,11 +177,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if args.Context != "" {
 		args.Task = args.Context + "\n\n" + args.Task
 	}
-	// r453 read-back handshake: when the task carries acceptance criteria,
-	// instruct the sub-agent to restate them (own words, per criterion)
-	// before doing any work. The restatement is checked at wait time
-	// (readBackReminder) - closes the front-end gap of the delegation
-	// contract; r384 acceptance covers the back end.
+
 	args.Task += readBackNudge(args.Task)
 
 	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
@@ -222,9 +200,6 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	return Result{Content: content}, nil
 }
 
-// LaunchOptions carries the pre-validated inputs for one sub-agent launch.
-// It is the seam the best_of_n orchestrator (internal/agentruntime) uses to
-// launch parallel candidates through the exact same run path as spawn_agent.
 type LaunchOptions struct {
 	Name        string
 	Task        string
@@ -235,16 +210,9 @@ type LaunchOptions struct {
 	Isolation   string
 }
 
-// Launch spawns one sub-agent and starts its run goroutine. Inputs are
-// expected to be already validated by the caller (Execute or an
-// orchestrator); Launch performs spawn, display-model resolution, optional
-// worktree isolation, and the background run launch. Returns the sub-agent
-// ID and the isolation worktree path ("" when not isolated).
 func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string, string, error) {
 	id := t.Manager.Spawn(opts.Name, opts.Task, opts.DisplayTask, opts.Tools, ctx)
 
-	// Store the model name on the sub-agent for display purposes.
-	// When no model override is specified, inherit the parent agent's runtime model.
 	displayModel := opts.Model
 	if displayModel == "" {
 		if prov := t.currentProvider(); prov != nil {
@@ -255,9 +223,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 	}
 	if displayModel != "" {
 		if sa, ok := t.Manager.Get(id); ok && sa != nil {
-			// #4161: all Model readers (snapshot/statusInfo) hold sa.mu and the
-			// runner write path locks too - a bare write here is a data race
-			// (string header tear) that -race flags even though it is display-only.
+
 			sa.SetModel(displayModel)
 		}
 	}
@@ -274,8 +240,6 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 		}
 	}
 
-	// Use the manager's lifecycle ctx, NOT the caller's per-call ctx, so the
-	// sub-agent survives the parent turn ending (see locks.md S6).
 	tools := t.Tools
 	runCtx := t.Manager.RootContext()
 	model := strings.TrimSpace(opts.Model)
@@ -287,11 +251,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 
 	prov := t.currentProvider()
 	safego.Go("tool.spawnAgent.subagent", func() {
-		// r460: fold any learnings the isolated sub-agent extracted back
-		// into the main workspace store before its run context ends.
-		// Without this, worktree-isolated experience died with the
-		// transient worktree (sub-agent WorkingDir = worktreePath, so its
-		// post-run persist landed in .ggcode/worktrees/<id>/). Best effort.
+
 		if worktreePath != "" && t.TrajBackflow != nil {
 			backflow := t.TrajBackflow
 			mainWD := t.WorkingDir
@@ -312,9 +272,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-				// Clone the registry so each sub-agent gets its own tool
-				// instances with independent WorkingDir fields (data-race
-				// safety across concurrent candidates in different worktrees).
+
 				cloned := tools.Clone()
 				for _, name := range subAgentBlockedTools {
 					cloned.Unregister(name)
@@ -334,19 +292,11 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 	return id, worktreePath, nil
 }
 
-// setupIsolationWorktree creates the isolation worktree for a spawned
-// sub-agent when isolation="worktree". Synthetic IDs (sa-shutdown-/*
-// sa-budget-/* sa-limit-*) are pre-failed registrations that never run, so no
-// worktree is created for them. On creation failure the sub-agent is
-// cancelled rather than silently downgraded to non-isolated, and the wrapped
-// error is returned.
 func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, id string) (string, error) {
 	if isolation != "worktree" {
 		return "", nil
 	}
-	// #4160: must cover sa-budget-* too - budget exhaustion is an expected
-	// saturation state (subagents.max_total), and each pass-through here
-	// deterministically leaked one worktree + branch on the terminal entry.
+
 	if subagent.IsSyntheticID(id) {
 		return "", nil
 	}
@@ -359,9 +309,6 @@ func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, i
 	return wtPath, nil
 }
 
-// Clone returns an independent copy of SpawnAgentTool for use by a different agent.
-// Manager, Provider, AgentFactory, and Tools are intentionally shared across agents
-// (they coordinate sub-agent lifecycle). Only WorkingDir is agent-specific.
 func (t SpawnAgentTool) Clone() Tool {
 	return SpawnAgentTool{
 		Manager:             t.Manager,
@@ -378,7 +325,6 @@ func (t SpawnAgentTool) Clone() Tool {
 	}
 }
 
-// contains checks if a string slice contains a given string.
 func sliceContains(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {

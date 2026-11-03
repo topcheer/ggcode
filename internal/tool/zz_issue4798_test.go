@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// #4798 (S-29): an atomic multi_file_edit failure must carry a snapshot-drift
-// summary - which planned files changed on disk since the batch was planned,
-// with line counts and the first differing line - so the retry re-anchors in
-// one step instead of a whack-a-mole loop.
-
 func runAtomicEdit(t *testing.T, files map[string]string, edits map[string][]textEdit) Result {
 	t.Helper()
 	for path, content := range files {
@@ -56,8 +51,7 @@ func TestIssue4798_AtomicPlanFailureReportsSnapshotDrift(t *testing.T) {
 	dir := t.TempDir()
 	fileA := filepath.Join(dir, "a.go")
 	fileB := filepath.Join(dir, "b.go")
-	// fileA's anchor resolves; fileB's anchor text does not exist -> the whole
-	// atomic batch fails at plan time and NOTHING is written.
+
 	res := runAtomicEdit(t,
 		map[string]string{
 			fileA: "line1\nline2\nline3\n",
@@ -72,7 +66,6 @@ func TestIssue4798_AtomicPlanFailureReportsSnapshotDrift(t *testing.T) {
 		t.Fatalf("expected atomic failure, got success: %s", res.Content)
 	}
 
-	// No external change between plan and failure: no drift lines.
 	var before struct {
 		SnapshotDrift []string `json:"snapshot_drift"`
 	}
@@ -83,23 +76,16 @@ func TestIssue4798_AtomicPlanFailureReportsSnapshotDrift(t *testing.T) {
 		t.Fatalf("expected no drift before external change, got %v", before.SnapshotDrift)
 	}
 
-	// Simulate a concurrent formatter rewriting fileA AFTER the plan snapshot:
-	// rerun the same doomed batch against the changed disk state.
 	res2 := runAtomicEdit(t,
 		map[string]string{
-			fileA: "line1\nline2\nline3\nline4\nline5\n", // formatter appended 2 lines
+			fileA: "line1\nline2\nline3\nline4\nline5\n",
 			fileB: "alpha\nbeta\n",
 		},
 		map[string][]textEdit{
-			fileA: {{OldText: "line2", NewText: "LINE2"}}, // plan snapshot taken fresh here
+			fileA: {{OldText: "line2", NewText: "LINE2"}},
 			fileB: {{OldText: "no-such-anchor", NewText: "x"}},
 		},
 	)
-	// Both runs plan from a fresh read, so drift is only observable when the
-	// disk changes BETWEEN plan and the drift probe. To pin the drift summary
-	// itself, exercise the helper directly on a stale plan (below) - the
-	// end-to-end contract here is that the field exists and never fires on a
-	// quiescent tree.
 	var after struct {
 		SnapshotDrift []string `json:"snapshot_drift"`
 	}
@@ -126,7 +112,7 @@ func TestIssue4798_SnapshotDriftLinesChangedDeletedUnchanged(t *testing.T) {
 		{Path: deleted, OldContent: "one\ntwo\nthree\n", Existed: true},
 		{Path: same, OldContent: "one\ntwo\nthree\n", Existed: true},
 	}
-	// External rewrite: line 2 differs and one line was appended.
+
 	if err := os.WriteFile(changed, []byte("one\nTWO\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

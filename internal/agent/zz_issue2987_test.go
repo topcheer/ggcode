@@ -8,14 +8,6 @@ import (
 	"testing"
 )
 
-// zz_issue2987_test.go - regression probes for #2987: the #1527 case A
-// receiver exemption only matched type names ending in "Server", but the FP
-// mechanism is SHAPE, not the name - any worker method holding the wg on the
-// struct (`p.wg.Done()`) has its Add() in the spawner, invisible to
-// function-granularity analysis. *Pool/*Manager/*Worker (the most common Go
-// worker names) all got the misleading "Done() panics, call Add first"
-// advice that #1527 proved agents follow into a Wait deadlock.
-
 const issue2987PoolSrc = `package pool
 
 import "sync"
@@ -45,9 +37,7 @@ func TestIssue2987NonServerReceiverWorkerNotFlagged(t *testing.T) {
 }
 
 func TestIssue2987LocalWGVariableStillChecked(t *testing.T) {
-	// A method using a LOCAL wg variable (not the receiver field) with
-	// Done-but-no-Add stays a true positive: the field scan finds nothing
-	// and the general path applies.
+
 	src := `package p
 import "sync"
 func (m *Manager) bad() {

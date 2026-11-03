@@ -20,7 +20,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Grep implements a powerful file content search tool (ripgrep wrapper with Go fallback).
 type Grep struct {
 	SandboxCheck AllowedPathChecker
 }
@@ -124,15 +123,8 @@ func (t Grep) Parameters() json.RawMessage {
 }`)
 }
 
-// grepArgs holds all parsed arguments.
-// maxFilesWithMatches caps files_with_matches/count output when no explicit
-// head_limit is given. Matches glob's maxGlobResults convention.
 const maxFilesWithMatches = 500
 
-// maxContentHeadLimit is the documented default head_limit for content
-// mode (schema: "Defaults: 250 in content mode"). #3170: the cap sites
-// only applied an explicit head_limit, so an omitted one streamed
-// unbounded content on broad patterns - the docs promised 250.
 const maxContentHeadLimit = 250
 
 type grepArgs struct {
@@ -181,12 +173,6 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 
 	args.normalizeAliases()
 
-	// Panic guard: offset/head_limit come straight from model-generated JSON.
-	// The pagination sites slice with lines[start:end] and only clamp the
-	// UPPER bound, so a negative offset (typo like offset:-1, or an
-	// underflowed computed value) panics the whole CLI process with
-	// "slice bounds out of range". Normalize once here; offset 0 behaves as
-	// no offset, head_limit 0 keeps its "unlimited" meaning.
 	if args.Offset < 0 {
 		args.Offset = 0
 	}
@@ -211,14 +197,11 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	if args.HeadLimit == 0 && args.OutputMode == "content" {
 		args.HeadLimit = 250
 	}
-	// files_with_matches/count: same protection as content mode (500 files,
-	// matching glob's cap). Set here so BOTH the rg path and the Go fallback
-	// formatters honor it - CI environments without ripgrep take the fallback.
+
 	if args.HeadLimit == 0 && (args.OutputMode == "files_with_matches" || args.OutputMode == "count") {
 		args.HeadLimit = maxFilesWithMatches
 	}
 
-	// Validate regex
 	flags := ""
 	if args.IgnoreCase {
 		flags = "(?i)"
@@ -231,43 +214,33 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		return Result{IsError: true, Content: fmt.Sprintf("invalid regex: %v", err)}, nil
 	}
 
-	// Try rg first, then Go fallback
 	if rgAvailable() {
 		return t.rgSearch(ctx, args, re)
 	}
 	return t.goSearch(ctx, args, re)
 }
 
-// ── rg (ripgrep) path ────────────────────────────────────────────
-
 var (
-	rgPath      atomic.Value // stores *string (nil means not found)
-	rgLastCheck atomic.Int64 // Unix timestamp of last detection attempt
-	rgTrying    atomic.Bool  // prevent concurrent install attempts
+	rgPath      atomic.Value
+	rgLastCheck atomic.Int64
+	rgTrying    atomic.Bool
 )
 
-// rgRecheckWindow is how long to wait before re-probing after a failed detection.
-// Made variable for testing; default 5 minutes in production.
 var rgRecheckWindow = 5 * time.Minute
 
-// rgAvailable checks if ripgrep is available. Uses atomic.Value for thread-safe
-// path storage and timestamp-gated re-probing to allow retrying after failed
-// initial detection (e.g., if user installs rg manually).
 func rgAvailable() bool {
-	// Fast path: if we have a cached path, return it
+
 	if ptr := rgPath.Load(); ptr != nil {
 		return true
 	}
 
-	// Check if we should retry detection (only if last check failed)
 	now := time.Now().Unix()
 	last := rgLastCheck.Load()
 	if last > 0 && now-last < int64(rgRecheckWindow.Seconds()) {
-		// Too soon to retry
+
 		return false
 	}
 
-	// Attempt detection
 	rgLastCheck.Store(now)
 	p, err := exec.LookPath("rg")
 	if err == nil {
@@ -275,15 +248,12 @@ func rgAvailable() bool {
 		return true
 	}
 
-	// Try silent async install (fire and forget)
 	if rgTrying.CompareAndSwap(false, true) {
 		safego.Go("tool.grep.installRG", installRG)
 	}
 	return false
 }
 
-// installRG attempts to install ripgrep silently. On success, sets rgPath atomically.
-// Logs failures via debug.Log instead of discarding output.
 func installRG() {
 	defer rgTrying.Store(false)
 
@@ -306,13 +276,11 @@ func installRG() {
 		return
 	}
 
-	// Run install and capture any errors
 	if err := cmd.Run(); err != nil {
 		debug.Log("grep", "ripgrep install via %s failed: %v", mgr, err)
 		return
 	}
 
-	// Check if it worked (pip may install outside PATH)
 	p, err := exec.LookPath("rg")
 	if err != nil {
 		debug.Log("grep", "ripgrep install via %s succeeded but 'rg' not found in PATH (may need PATH update)", mgr)
@@ -367,8 +335,7 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	if args.HeadLimit > 0 && args.OutputMode == "content" {
 		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", args.HeadLimit+args.Offset))
 	} else if args.OutputMode == "content" {
-		// #3170: schema-documented default - omitted head_limit still caps
-		// rg emission (per file) at offset+250 instead of streaming unbounded.
+
 		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", maxContentHeadLimit+args.Offset))
 	}
 
@@ -376,7 +343,7 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 	ptr := rgPath.Load()
 	if ptr == nil {
-		// Should not happen: rgAvailable() returns true only when rgPath is set
+
 		return Result{IsError: true, Content: "ripgrep path not available"}, nil
 	}
 	path := ptr.(*string)
@@ -387,21 +354,12 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 		if res, handled := rgExitResult(err); handled {
 			return res, nil
 		}
-		// exit 1: no matches; fall through so formatGrepOutput renders the
-		// standard no-matches result with search hints
+
 	}
 
 	return formatGrepOutput(string(out), args)
 }
 
-// rgExitResult classifies a ripgrep execution error. It returns
-// handled=true with a ready Result for real failures (exit 2+ such as a bad
-// glob, permission denied, or unknown --type; spawn/IO failures like a
-// missing binary or cancelled context) and handled=false for exit 1, which
-// is rg's legitimate "no matches" signal that must render as an empty
-// result, not an error. Previously an unconditional len(out)==0 branch
-// misreported real errors as "No matches found." and its nested len(out)==0
-// check was unreachable dead code.
 func rgExitResult(err error) (Result, bool) {
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		if exitErr.ExitCode() >= 2 {
@@ -437,15 +395,8 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 
 	total := len(lines)
 
-	// Apply offset + head_limit for content mode
 	if args.OutputMode == "content" {
-		// #3145: rg's multi-threaded output order is NOT stable, so an
-		// offset slice could skip or duplicate lines between two paginated
-		// calls. Sort by (path, lineNum) first - the same deterministic
-		// order formatContentMatches applies on the Go fallback path - so
-		// pagination semantics are isomorphic across backends. Lines that
-		// do not parse as path:line:content (continuation lines) keep
-		// their relative position (stable sort) after their anchor line.
+
 		sortRgContentLines(lines)
 		start := args.Offset
 		if start > total {
@@ -455,7 +406,7 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		if args.HeadLimit > 0 && start+args.HeadLimit < end {
 			end = start + args.HeadLimit
 		} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
-			end = start + maxContentHeadLimit // #3170: documented default cap
+			end = start + maxContentHeadLimit
 		}
 		lines = lines[start:end]
 
@@ -470,21 +421,10 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		return Result{Content: sb.String()}, nil
 	}
 
-	// files_with_matches or count — sort by match count (count mode) or
-	// alphabetical (files_with_matches mode, already sorted by rg).
-	// For files_with_matches, we re-sort files by match density: files
-	// that appear more relevant (shorter path = likely closer to project root)
-	// are shown first. This helps the agent focus on the most relevant files.
 	var sb strings.Builder
 	totalCount := 0
 	if args.OutputMode == "count" {
-		// count mode previously had no output cap at all on the rg path (the
-		// Go fallback applies offset+head_limit), so a broad pattern in a
-		// large repo dumped an unbounded per-file count list into context.
-		// Mirror the files_with_matches discipline: honor offset for
-		// pagination and cap the list at head_limit (default 500), with a
-		// trailing summary of what was withheld. totalCount still sums every
-		// file so the "total" stays truthful.
+
 		for _, l := range lines {
 			if idx := strings.LastIndex(l, ":"); idx >= 0 {
 				var n int
@@ -513,18 +453,12 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 			fmt.Fprintf(&sb, "\n(showing %d-%d of %d files; use offset/head_limit to page or narrow the pattern)", start+1, end, total)
 		}
 	} else {
-		// files_with_matches: sort by path depth (shorter paths first = closer to root)
+
 		sortedLines := make([]string, len(lines))
 		copy(sortedLines, lines)
-		// #3145/#3171: (pathDepth, lexicographic) TOTAL order, shared with
-		// the fallback via sortPathsDepthThenLex - a stable sort that kept
-		// rg's within-depth emission order made the same offset/head_limit
-		// window differ between rg and no-rg machines. Determinism wins.
+
 		sortPathsDepthThenLex(sortedLines)
-		// Pagination parity with content mode: rg previously ignored offset
-		// here (the Go fallback supports it), so paging on rg-equipped
-		// machines always returned the first page. Honor offset before the
-		// cap, and keep the 500 default cap with its withheld-count hint.
+
 		start := args.Offset
 		if start > total {
 			start = total
@@ -554,13 +488,6 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 	return Result{Content: sb.String()}, nil
 }
 
-// pathDepth returns the number of path separators in a string.
-// sortPathsDepthThenLex orders paths shallow-first with a lexicographic
-// tie-break - a total order shared by BOTH grep backends so the same
-// offset/head_limit window shows identical files with or without
-// ripgrep (#3171; the content-mode sibling of this contract was #3145).
-// The tie-break deliberately trades rg's within-depth emission order (a
-// relevance heuristic) for cross-backend determinism.
 func sortPathsDepthThenLex(paths []string) {
 	sort.Slice(paths, func(i, j int) bool {
 		di, dj := pathDepth(paths[i]), pathDepth(paths[j])
@@ -571,15 +498,10 @@ func sortPathsDepthThenLex(paths []string) {
 	})
 }
 
-// Used for relevance ranking: files closer to the project root (fewer
-// path segments) are likely more relevant to the current task.
 func pathDepth(path string) int {
 	return strings.Count(path, string(filepath.Separator))
 }
 
-// ── Go fallback path ─────────────────────────────────────────────
-
-// typeGlobs maps file type names to glob patterns.
 var typeGlobs = map[string][]string{
 	"js":   {"*.js", "*.jsx", "*.mjs", "*.cjs"},
 	"ts":   {"*.ts", "*.tsx", "*.mts", "*.cts"},
@@ -602,7 +524,7 @@ type fileMatch struct {
 }
 
 func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (Result, error) {
-	// Collect files to search
+
 	tracked := gitTrackedFiles(ctx, args.Path)
 
 	var globs []string
@@ -629,14 +551,12 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 		relPath, _ := filepath.Rel(args.Path, path)
 
-		// gitignore filter
 		if tracked != nil {
 			if _, ok := tracked[filepath.ToSlash(relPath)]; !ok {
 				return nil
 			}
 		}
 
-		// glob filter
 		if len(globs) > 0 {
 			matched := false
 			for _, g := range globs {
@@ -650,7 +570,6 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 			}
 		}
 
-		// Skip binary
 		if isBinaryFile(path) {
 			return nil
 		}
@@ -660,15 +579,10 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	})
 
 	if len(files) == 0 {
-		// r403 (ACI consistency): the Go-fallback path previously returned
-		// a bare "No matches found." while the ripgrep path formats the same
-		// outcome with actionable suggestions (-i, spelling, type widening).
-		// Two feedback qualities for one outcome made agent behavior drift
-		// depending on which engine happened to run; reuse the formatter.
+
 		return formatGrepOutput("", args)
 	}
 
-	// Parallel search
 	numWorkers := runtime.NumCPU()
 	if numWorkers > 8 {
 		numWorkers = 8
@@ -712,7 +626,7 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 						fileCounts[relPath] = cnt
 						mu.Unlock()
 					}
-				default: // content
+				default:
 					matches := grepFileContent(path, re, args)
 					if len(matches) > 0 {
 						mu.Lock()
@@ -725,7 +639,6 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	}
 	wg.Wait()
 
-	// Format output
 	switch args.OutputMode {
 	case "files_with_matches":
 		return formatFilesWithMatches(matchedFiles, args), nil
@@ -736,10 +649,6 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	}
 }
 
-// grepMaxLineLen caps the per-line buffer for the file scanners (#3190).
-// Lines longer than this are treated as unmatchable instead of killing
-// the whole scan; 10MB covers minified JS/bundles/lockfiles comfortably
-// while bounding memory per line.
 const grepMaxLineLen = 10 * 1024 * 1024
 
 func grepFileHasMatch(path string, re *regexp.Regexp) bool {
@@ -750,10 +659,7 @@ func grepFileHasMatch(path string, re *regexp.Regexp) bool {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	// #3190: default 64KB token limit makes >64KB lines hit ErrTooLong,
-	// which Scan() surfaces as a silent stop - matches in the rest of the
-	// file are missed. Raise the cap; lines beyond it are skipped with the
-	// error surfaced via scanner.Err() below.
+
 	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
@@ -772,7 +678,7 @@ func grepFileCount(path string, re *regexp.Regexp) int {
 
 	count := 0
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
 			count++
@@ -788,10 +694,9 @@ func grepFileContent(path string, re *regexp.Regexp, args grepArgs) []fileMatch 
 	}
 	defer f.Close()
 
-	// Read all lines for context support
 	var lines []string
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
@@ -805,7 +710,7 @@ func grepFileContent(path string, re *regexp.Regexp, args grepArgs) []fileMatch 
 	}
 
 	var matches []fileMatch
-	// Track which lines have been included (to avoid duplicates with context)
+
 	included := make(map[int]bool)
 
 	for i, line := range lines {
@@ -841,7 +746,7 @@ func formatFilesWithMatches(matchedFiles map[string]bool, args grepArgs) Result 
 	for p := range matchedFiles {
 		paths = append(paths, p)
 	}
-	sortPathsDepthThenLex(paths) // #3171: same (depth, lex) order as the rg backend
+	sortPathsDepthThenLex(paths)
 
 	total := len(paths)
 	start := args.Offset
@@ -901,15 +806,7 @@ func formatCount(fileCounts map[string]int, args grepArgs) Result {
 	return Result{Content: sb.String()}
 }
 
-// sortRgContentLines orders rg content lines by (path, lineNum) so the
-// offset/head_limit window is deterministic across calls (#3145) and
-// matches the fallback scanner's formatContentMatches ordering. Lines
-// without a parseable "path:lineNum:" prefix sort last, keeping their
-// relative order (continuation lines stay attached to their anchor).
 func sortRgContentLines(lines []string) {
-	// Pre-scan: unparseable lines (multi-line match continuations)
-	// inherit the key of the nearest preceding parseable line, so they
-	// stay attached to their anchor through the stable sort.
 	type rgLinePair struct {
 		k rgLineKey
 		s string
@@ -925,9 +822,7 @@ func sortRgContentLines(lines []string) {
 		}
 		pairs[i] = rgLinePair{k: k, s: l}
 	}
-	// Sort the (key, line) pairs so keys travel with their lines; write
-	// the ordered lines back (a bare keys[] snapshot desyncs from the
-	// slice-stable swaps).
+
 	sort.SliceStable(pairs, func(i, j int) bool {
 		ki, kj := pairs[i].k, pairs[j].k
 		if ki.path != kj.path {
@@ -936,7 +831,7 @@ func sortRgContentLines(lines []string) {
 		if ki.line != kj.line {
 			return ki.line < kj.line
 		}
-		// Same anchor: the anchor line itself precedes its continuations.
+
 		return !ki.cont && kj.cont
 	})
 	for i := range pairs {
@@ -948,12 +843,11 @@ type rgLineKey struct {
 	path string
 	line int
 	ok   bool
-	cont bool // inherited key (continuation line)
+	cont bool
 }
 
 func rgContentKey(l string) rgLineKey {
-	// rg content format: path:lineNum:content (or path-lineNum-content for
-	// context lines; treat both).
+
 	for i := 0; i < len(l); i++ {
 		if l[i] == ':' || l[i] == '-' {
 			rest := l[i+1:]
@@ -974,7 +868,7 @@ func rgContentKey(l string) rgLineKey {
 }
 
 func formatContentMatches(matches []fileMatch, args grepArgs) Result {
-	// Sort matches by path then line number
+
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].path != matches[j].path {
 			return matches[i].path < matches[j].path
@@ -991,7 +885,7 @@ func formatContentMatches(matches []fileMatch, args grepArgs) Result {
 	if args.HeadLimit > 0 && start+args.HeadLimit < end {
 		end = start + args.HeadLimit
 	} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
-		end = start + maxContentHeadLimit // #3170: documented default cap
+		end = start + maxContentHeadLimit
 	}
 	matches = matches[start:end]
 

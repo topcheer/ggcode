@@ -1,24 +1,5 @@
 package agent
 
-// test_impact_lang.go implements multi-language Test Impact Analysis (TIA).
-// It extends the Go-only TIA (test_impact.go, test_impact_ast.go) to support
-// TypeScript/JavaScript, Python, Rust, Java, Ruby, Swift, and Dart — covering
-// the most popular programming languages used in real-world projects.
-//
-// For each language we define:
-//   - Source file extensions and test file naming conventions
-//   - The default test runner command
-//   - A regex-based function/method extractor for coverage gap detection
-//
-// Go still uses the superior AST-based approach (go/parser). Other languages
-// use lightweight regex extraction — accurate enough for coverage nudges
-// without introducing tree-sitter or language-specific parser dependencies.
-//
-// Competitor mapping:
-//   - GitHub Copilot: AST/regex function analysis across languages
-//   - Cursor: language-aware test suggestions
-//   - JetBrains AI: per-language coverage gap detection
-
 import (
 	"bytes"
 	"context"
@@ -32,24 +13,16 @@ import (
 	"time"
 )
 
-// langProfile defines the test conventions for a programming language.
 type langProfile struct {
-	Name       string            // "go", "typescript", "python", etc.
-	Extensions []string          // source file extensions including the dot
-	IsTestFile func(string) bool // returns true if filename is a test file
-	// testFilePath returns the candidate test file path(s) for a source file.
-	// Multiple candidates may exist (e.g., foo.test.ts and foo.spec.ts).
-	TestFilePaths func(workingDir, srcFile string) []string
-	// targetedTestCmd returns a scope-limited test command for a single file/dir.
+	Name            string
+	Extensions      []string
+	IsTestFile      func(string) bool
+	TestFilePaths   func(workingDir, srcFile string) []string
 	TargetedTestCmd func(workingDir, srcFile string) string
-	// funcRegex extracts exported/public function names from source.
-	// For Go this is unused (AST is used instead).
-	FuncRegex *regexp.Regexp
-	// skipFuncNames matches function names that should not be flagged as untested.
-	SkipFuncNames *regexp.Regexp
+	FuncRegex       *regexp.Regexp
+	SkipFuncNames   *regexp.Regexp
 }
 
-// --- Go ---
 var goLangProfile = langProfile{
 	Name:       "go",
 	Extensions: []string{".go"},
@@ -65,14 +38,10 @@ var goLangProfile = langProfile{
 	TargetedTestCmd: func(workingDir, srcFile string) string {
 		return goTargetedTestCommand(workingDir, srcFile)
 	},
-	// Go uses AST-based extraction; regex not used.
 }
 
-// --- TypeScript / JavaScript ---
 var tsFuncRegex = regexp.MustCompile(
-	// Matches: export function foo, export async function foo,
-	//          export const foo =, export class Foo
-	//          public foo(, private foo( (class methods)
+
 	`(?:export\s+(?:async\s+)?(?:function|const)\s+(\w+))|(?:export\s+class\s+(\w+))|(?:^|\n)\s*(?:public|private|protected)?\s*(\w+)\s*\([^)]*\)\s*\{`,
 )
 
@@ -111,40 +80,36 @@ var tsLangProfile = langProfile{
 			return ""
 		}
 		dir := filepath.Dir(srcFile)
-		// vitest/jest can run a directory
+
 		return runner + " " + filepath.ToSlash(dir)
 	},
 	FuncRegex:     tsFuncRegex,
 	SkipFuncNames: tsSkipFunc,
 }
 
-// detectJSRunner checks package.json to determine the test runner.
-// Returns "npx vitest run", "npx jest", "npm test", or "" if no runner found.
 func detectJSRunner(workingDir string) string {
 	data, err := os.ReadFile(filepath.Join(workingDir, "package.json"))
 	if err != nil {
 		return ""
 	}
 	content := string(data)
-	// Check for vitest in dependencies
+
 	if strings.Contains(content, "vitest") {
 		return "npx vitest run"
 	}
-	// Check for jest
+
 	if strings.Contains(content, "jest") {
 		return "npx jest"
 	}
-	// Fall back to npm test
+
 	if strings.Contains(content, "\"test\"") {
 		return "npm test"
 	}
 	return ""
 }
 
-// --- Python ---
 var pyFuncRegex = regexp.MustCompile(
-	// Matches: def foo(, async def foo(
-	// Captures only the function name
+
 	`(?:^|\n)\s*(?:async\s+)?def\s+(\w+)`,
 )
 
@@ -172,7 +137,7 @@ var pyLangProfile = langProfile{
 		}
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
-		// Check if pytest is available
+
 		if fileExists(filepath.Join(workingDir, "pyproject.toml")) ||
 			fileExists(filepath.Join(workingDir, "pytest.ini")) ||
 			fileExists(filepath.Join(workingDir, "setup.py")) ||
@@ -186,9 +151,8 @@ var pyLangProfile = langProfile{
 	SkipFuncNames: pySkipFunc,
 }
 
-// --- Rust ---
 var rustFuncRegex = regexp.MustCompile(
-	// Matches: pub fn foo, pub async fn foo, fn foo (only pub is exported)
+
 	`(?:^|\n)\s*pub\s+(?:async\s+)?fn\s+(\w+)`,
 )
 
@@ -198,7 +162,7 @@ var rustLangProfile = langProfile{
 	Name:       "rust",
 	Extensions: []string{".rs"},
 	IsTestFile: func(name string) bool {
-		// Rust tests are usually inline (#[test]) or in tests/ directory
+
 		return strings.HasSuffix(name, "_test.rs") || strings.HasSuffix(name, "test.rs")
 	},
 	TestFilePaths: func(workingDir, srcFile string) []string {
@@ -212,8 +176,7 @@ var rustLangProfile = langProfile{
 		}
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
-		// Rust can't easily scope to a single source file without knowing
-		// the binary/lib name. Just suggest `cargo test`.
+
 		if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
 			return "cargo test"
 		}
@@ -223,10 +186,8 @@ var rustLangProfile = langProfile{
 	SkipFuncNames: rustSkipFunc,
 }
 
-// --- Java ---
 var javaFuncRegex = regexp.MustCompile(
-	// Matches: public ReturnType foo(, public static void main(,
-	//          protected void foo(, @Test public void foo(
+
 	`(?:public|protected)\s+(?:static\s+)?(?:\w+(?:<[^>]*>)?\s+)+(\w+)\s*\(`,
 )
 
@@ -245,11 +206,7 @@ var javaLangProfile = langProfile{
 		dir := filepath.Dir(srcFile)
 		base := filepath.Base(srcFile)
 		name := strings.TrimSuffix(base, ".java")
-		// #1502: for the Maven layout src/main/java/com/foo the old
-		// Join(dir, "..", "..", "test", "java") produced src/main/test/java -
-		// "main" unstripped, package path unretreated, all three candidates
-		// wrong, so EVERY Java source file was branded 'no tests'. Replace
-		// the main tree segment with the test tree, keeping the package path.
+
 		testDir := dir
 		if i := strings.Index(dir, filepath.Join("src", "main", "java")); i >= 0 {
 			testDir = dir[:i] + filepath.Join("src", "test", "java") + dir[i+len(filepath.Join("src", "main", "java")):]
@@ -276,9 +233,8 @@ var javaLangProfile = langProfile{
 	SkipFuncNames: javaSkipFunc,
 }
 
-// --- Ruby ---
 var rubyFuncRegex = regexp.MustCompile(
-	// Matches: def foo, def self.foo, def Foo.bar
+
 	`(?:^|\n)\s*def\s+(?:self\.)?(\w+)`,
 )
 
@@ -303,14 +259,7 @@ var rubyLangProfile = langProfile{
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
 		dir := filepath.Dir(srcFile)
-		// #1502 case F: (1) a directory merely CONTAINING the substring
-		// "spec" (app/services/spec_builder/) is not an RSpec project -
-		// Minitest projects got rspec commands that fail outright. Require
-		// the marker config, or a path segment that IS "spec".
-		// (2) `rspec <srcFile>` on a SOURCE (non-_spec) file matches 0
-		// examples: it "passes" without verifying anything. Only emit rspec
-		// for spec files themselves; for source files fall through to the
-		// project's test runner.
+
 		isRSpecProject := fileExists(filepath.Join(workingDir, ".rspec")) ||
 			fileExists(filepath.Join(workingDir, "spec"))
 		for _, seg := range strings.Split(filepath.ToSlash(dir), "/") {
@@ -327,9 +276,8 @@ var rubyLangProfile = langProfile{
 	SkipFuncNames: rubySkipFunc,
 }
 
-// --- Swift ---
 var swiftFuncRegex = regexp.MustCompile(
-	// Matches: func foo(, public func foo(, static func foo(
+
 	`(?:^|\n)\s*(?:public\s+|static\s+|class\s+)*func\s+(\w+)`,
 )
 
@@ -351,20 +299,19 @@ var swiftLangProfile = langProfile{
 		}
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
-		// For Swift Package Manager projects
+
 		if fileExists(filepath.Join(workingDir, "Package.swift")) {
 			return "swift test"
 		}
-		// Xcode projects can't easily be scoped
+
 		return ""
 	},
 	FuncRegex:     swiftFuncRegex,
 	SkipFuncNames: swiftSkipFunc,
 }
 
-// --- Dart ---
 var dartFuncRegex = regexp.MustCompile(
-	// Matches: void foo(, Future<void> foo(, foo() {, static foo(
+
 	`(?:^|\n)\s*(?:static\s+)?(?:\w+(?:<[^>]*>)?\s+)?(\w+)\s*\([^)]*\)\s*(?:async\s*)?\{`,
 )
 
@@ -380,21 +327,13 @@ var dartLangProfile = langProfile{
 		dir := filepath.Dir(srcFile)
 		base := filepath.Base(srcFile)
 		name := strings.TrimSuffix(base, ".dart")
-		// #1778 case 6: Flutter's standard layout is lib/foo.dart covered
-		// by test/foo_test.dart at the PROJECT ROOT - the old candidates
-		// (lib/foo_test.dart, lib/test/foo_test.dart) almost never exist,
-		// so every lib/ source was branded 'no tests'.
-		// #1878: git status yields REPO-RELATIVE paths while callers pass
-		// an ABSOLUTE workingDir; filepath.Rel errors on that mix and the
-		// fix never fired on the standard call path. Normalize like the
-		// rust branch (join relative srcFile onto workingDir) first.
+
 		abs := srcFile
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(workingDir, abs)
 		}
 		if rel, err := filepath.Rel(workingDir, abs); err == nil && strings.HasPrefix(rel, "lib"+string(filepath.Separator)) {
-			// Mirror the lib/ sub-tree under test/ (Flutter convention:
-			// lib/src/models/user.dart -> test/src/models/user_test.dart).
+
 			sub := strings.TrimSuffix(strings.TrimPrefix(rel, "lib"+string(filepath.Separator)), ".dart")
 			return []string{
 				filepath.Join("test", sub+"_test.dart"),
@@ -409,7 +348,7 @@ var dartLangProfile = langProfile{
 	TargetedTestCmd: func(workingDir, srcFile string) string {
 		dir := filepath.Dir(srcFile)
 		if fileExists(filepath.Join(workingDir, "pubspec.yaml")) {
-			// Check if it's a Flutter project
+
 			data, err := os.ReadFile(filepath.Join(workingDir, "pubspec.yaml"))
 			if err == nil && strings.Contains(string(data), "flutter") {
 				return "flutter test " + filepath.ToSlash(dir)
@@ -422,9 +361,6 @@ var dartLangProfile = langProfile{
 	SkipFuncNames: dartSkipFunc,
 }
 
-// controlFlowKeywords is a set of control-flow and reserved keywords that
-// should never be treated as function names by regex-based extraction.
-// This is used to filter false positives from TS and Dart function regexes.
 var controlFlowKeywords = map[string]bool{
 	"if": true, "for": true, "while": true, "switch": true,
 	"catch": true, "else": true, "do": true, "try": true,
@@ -438,14 +374,10 @@ var controlFlowKeywords = map[string]bool{
 	"double": true, "String": true, "dynamic": true, "Object": true,
 }
 
-// isControlFlowKeyword returns true if the name is a control-flow keyword or
-// reserved word that should not be treated as a function name.
 func isControlFlowKeyword(name string) bool {
 	return controlFlowKeywords[name]
 }
 
-// allLangProfiles returns all supported language profiles in priority order
-// (most popular first for detection).
 func allLangProfiles() []langProfile {
 	return []langProfile{
 		goLangProfile,
@@ -459,8 +391,6 @@ func allLangProfiles() []langProfile {
 	}
 }
 
-// langProfileForFile returns the language profile matching a file's extension.
-// Returns nil for unsupported file types.
 func langProfileForFile(filePath string) *langProfile {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == "" {
@@ -476,25 +406,18 @@ func langProfileForFile(filePath string) *langProfile {
 	return nil
 }
 
-// isSourceFile checks whether a path is a source file in a supported language
-// (not a test file, not a vendored/generated file).
 func isSupportedSourceFile(path string) bool {
 	p := langProfileForFile(path)
 	if p == nil {
 		return false
 	}
-	// Exclude test files themselves
+
 	if p.IsTestFile(filepath.Base(path)) {
 		return false
 	}
 	return true
 }
 
-// --- Multi-language changed file detection ---
-
-// changedSourceFilesFromGit returns all changed source files (modified, staged,
-// newly added) across all supported languages, excluding test files. Uses
-// `git status --short --untracked-files=all`. Returns slash-separated paths.
 func changedSourceFilesFromGit(workingDir string) []string {
 	files := changedFilesFromGitRaw(workingDir)
 	var result []string
@@ -506,9 +429,6 @@ func changedSourceFilesFromGit(workingDir string) []string {
 	return result
 }
 
-// changedFilesFromGitRaw returns all changed files from git status without
-// language filtering. Shared infrastructure for both Go-specific and
-// multi-language callers.
 func changedFilesFromGitRaw(workingDir string) []string {
 	if workingDir == "" {
 		return nil
@@ -534,8 +454,6 @@ func changedFilesFromGitRaw(workingDir string) []string {
 	return files
 }
 
-// runGitStatusShort executes `git status --short --untracked-files=all` and
-// returns its output.
 func runGitStatusShort(workingDir string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -544,11 +462,6 @@ func runGitStatusShort(workingDir string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-// --- Multi-language test file existence check ---
-
-// hasTestFile checks whether a source file has a corresponding test file in
-// any of the language's conventional test file locations. Returns the found
-// test file path, or "" if none exists.
 func hasTestFile(workingDir, srcFile string) string {
 	profile := langProfileForFile(srcFile)
 	if profile == nil {
@@ -564,11 +477,7 @@ func hasTestFile(workingDir, srcFile string) string {
 			return candidate
 		}
 	}
-	// #1500: Go compiles tests per package with no same-name convention -
-	// helpers_test.go covering foo.go is the norm in this very repo. For Go
-	// sources, any *_test.go in the same directory counts as coverage;
-	// without this, fully-covered files got branded 'no tests' and the
-	// agent was nudged to generate redundant foo_test.go files.
+
 	if strings.HasSuffix(srcFile, ".go") {
 		dir := filepath.Dir(srcFile)
 		if !filepath.IsAbs(dir) {
@@ -582,11 +491,7 @@ func hasTestFile(workingDir, srcFile string) string {
 			}
 		}
 	}
-	// #1778 case 5: Rust's STANDARD convention is inline #[test] mod tests
-	// in the source file itself (the profile comment says so) - but the
-	// candidate list only names sibling files, so every .rs edit was
-	// branded 'no tests'. The source file IS its own test file when it
-	// carries test attributes.
+
 	if strings.HasSuffix(srcFile, ".rs") {
 		abs := srcFile
 		if !filepath.IsAbs(abs) {
@@ -601,10 +506,6 @@ func hasTestFile(workingDir, srcFile string) string {
 	return ""
 }
 
-// --- Multi-language untested files ---
-
-// untestedChangedFilesMulti returns changed source files (any language) that
-// lack a corresponding test file. Candidates for test generation suggestions.
 func untestedChangedFilesMulti(workingDir string) []string {
 	files := changedSourceFilesFromGit(workingDir)
 	if len(files) == 0 {
@@ -619,10 +520,6 @@ func untestedChangedFilesMulti(workingDir string) []string {
 	return untested
 }
 
-// --- Multi-language test coverage nudge ---
-
-// testCoverageNudgeMulti generates a hint string about changed files (any
-// language) that lack test coverage. Caps at 5 files to avoid noise.
 func testCoverageNudgeMulti(workingDir string) string {
 	untested := untestedChangedFilesMulti(workingDir)
 	if len(untested) == 0 {
@@ -648,24 +545,16 @@ func testCoverageNudgeMulti(workingDir string) string {
 	return b.String()
 }
 
-// --- Multi-language function-level coverage ---
-
-// parseExportedFuncsMulti extracts exported/public function names from source
-// files using language-appropriate parsing:
-//   - Go: AST-based (go/parser) for precision
-//   - Others: regex-based for zero-dependency portability
-//
-// Returns nil if the file can't be parsed or has no exported functions.
 func parseExportedFuncsMulti(filePath string) []exportedFuncInfo {
 	profile := langProfileForFile(filePath)
 	if profile == nil {
 		return nil
 	}
-	// Go uses the superior AST approach
+
 	if profile.Name == "go" {
 		return parseExportedFuncs(filePath)
 	}
-	// Other languages use regex
+
 	if profile.FuncRegex == nil {
 		return nil
 	}
@@ -680,8 +569,7 @@ func parseExportedFuncsMulti(filePath string) []exportedFuncInfo {
 	}
 	var funcs []exportedFuncInfo
 	for _, m := range matches {
-		// regex has multiple capture groups for different patterns;
-		// find the first non-empty group
+
 		name := ""
 		for _, g := range m[1:] {
 			if g != "" {
@@ -692,13 +580,11 @@ func parseExportedFuncsMulti(filePath string) []exportedFuncInfo {
 		if name == "" {
 			continue
 		}
-		// Skip names that match the skip pattern
+
 		if profile.SkipFuncNames != nil && profile.SkipFuncNames.MatchString(name) {
 			continue
 		}
-		// For TypeScript and Dart, filter out control-flow keywords
-		// that are accidentally captured by the function regex.
-		// See issue #1204.
+
 		if (profile.Name == "typescript" || profile.Name == "dart") && isControlFlowKeyword(name) {
 			continue
 		}
@@ -710,36 +596,26 @@ func parseExportedFuncsMulti(filePath string) []exportedFuncInfo {
 	return funcs
 }
 
-// parseTestFuncNamesMulti extracts test function names from a test file.
-// For Go this uses AST; for other languages it scans for test patterns.
 func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]bool {
 	if profile == nil {
 		return nil
 	}
-	// Go uses AST
+
 	if profile.Name == "go" {
 		names, _ := parseTestFuncNames(filePath)
 		return names
 	}
-	// For other languages, read and scan for test patterns
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil
 	}
 	content := string(data)
 	names := make(map[string]bool)
-	// Generic test function detection:
-	//   - Python: def test_foo( → "test_foo"
-	//   - TypeScript: it("foo" / test("foo" → "foo"
-	//   - Rust: #[test] fn foo( → "foo"
-	//   - Ruby: def test_foo / it "foo"
-	//   - Swift: func testFoo()
-	//   - Dart: test("foo" / testFoo()
-	//   - Java: @Test public void testFoo()
-	// We collect the identifier after test/it keywords.
+
 	switch profile.Name {
 	case "typescript":
-		// vitest/jest: test("name") or it("name")
+
 		testRe := regexp.MustCompile(`(?:it|test)\s*\(\s*['"]([^'"]+)['"]`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -747,7 +623,7 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "python":
-		// pytest/unittest: def test_foo(
+
 		testRe := regexp.MustCompile(`def\s+(test_\w+)`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -755,7 +631,7 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "rust":
-		// #[test] fn foo or #[tokio::test] async fn foo
+
 		testRe := regexp.MustCompile(`#\[(?:\w+::)*test\]\s*(?:async\s+)?fn\s+(\w+)`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -763,14 +639,14 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "ruby":
-		// Minitest: def test_foo / RSpec: it "does something"
+
 		testRe := regexp.MustCompile(`def\s+(test_\w+)`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
 				names[m[1]] = true
 			}
 		}
-		// RSpec it blocks
+
 		itRe := regexp.MustCompile(`it\s+['"]([^'"]+)['"]`)
 		for _, m := range itRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -778,7 +654,7 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "swift":
-		// XCTest: func testFoo()
+
 		testRe := regexp.MustCompile(`func\s+(test\w+)`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -786,7 +662,7 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "dart":
-		// test("description") or testFoo()
+
 		testRe := regexp.MustCompile(`test\s*\(\s*['"]([^'"]+)['"]`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -794,7 +670,7 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 			}
 		}
 	case "java":
-		// @Test public void testFoo() or @Test void testFoo()
+
 		testRe := regexp.MustCompile(`@Test\s*(?:public\s+)?(?:static\s+)?void\s+(\w+)`)
 		for _, m := range testRe.FindAllStringSubmatch(content, -1) {
 			if len(m) > 1 {
@@ -805,15 +681,12 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 	return names
 }
 
-// untestedExportedFuncsMulti returns the display names of exported functions
-// in a source file (any language) that have no corresponding test function.
-// For Go it uses the precise AST approach; for others it uses regex matching.
 func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 	profile := langProfileForFile(srcFile)
 	if profile == nil {
 		return nil
 	}
-	// Go uses the existing AST-based implementation
+
 	if profile.Name == "go" {
 		return untestedExportedFuncs(workingDir, srcFile)
 	}
@@ -827,7 +700,6 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 		return nil
 	}
 
-	// Find test file candidates
 	candidates := profile.TestFilePaths(workingDir, srcFile)
 	var testFuncs map[string]bool
 	for _, c := range candidates {
@@ -842,7 +714,7 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 	}
 
 	if len(testFuncs) == 0 {
-		// No test file — all exported functions are untested
+
 		result := make([]string, 0, len(funcs))
 		for _, f := range funcs {
 			result = append(result, f.DisplayName)
@@ -850,13 +722,6 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 		return result
 	}
 
-	// For non-Go languages, matching test names to function names is
-	// heuristic. We use token-boundary matching: a function is considered
-	// tested if its camelCase/snake_case name (normalized into lowercase
-	// tokens) appears as a CONTIGUOUS token subsequence of a normalized
-	// test name. This avoids false positives like function "Get" being
-	// matched by test "test_user_settings" (single "get" token absent),
-	// while "test_get_user" still covers "GetUser". See issue #1204.
 	testSeqs := make([]string, 0, len(testFuncs))
 	for name := range testFuncs {
 		tokens := tokenizeHintName(name)
@@ -885,22 +750,12 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 	return untested
 }
 
-// camelToSnakeLower converts camelCase/PascalCase to lowercase snake_case
-// ("GetUser" -> "get_user"). Boundaries are inserted before an uppercase
-// letter that follows a lowercase letter or digit, AND at the end of an
-// acronym run followed by a lowercase letter (#3621: "HTTPServer" ->
-// "http_server", not the single token "httpserver" that never matched
-// conventional test names like "test_http_server").
 func camelToSnakeLower(s string) string {
 	var b strings.Builder
 	runes := []rune(s)
 	for i, r := range runes {
 		if r >= 'A' && r <= 'Z' {
-			// Boundary BEFORE this uppercase when it opens a word:
-			// - the previous char is lowercase/digit ("GetUser" -> get_user), or
-			// - it is the LAST capital of an acronym run and a lowercase word
-			//   follows ("HTTPServer": the S of SERVER) - the boundary goes
-			//   before S, keeping the acronym intact: http_server (#3621).
+
 			if i > 0 {
 				prev := runes[i-1]
 				nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
@@ -916,9 +771,6 @@ func camelToSnakeLower(s string) string {
 	return b.String()
 }
 
-// tokenizeHintName normalizes a function or test name into lowercase tokens:
-// camelCase unfolded to snake_case, all separators (_ - space . :) treated as
-// token boundaries (#1204).
 func tokenizeHintName(name string) []string {
 	normalized := strings.ToLower(camelToSnakeLower(name))
 	normalized = strings.ReplaceAll(normalized, "-", "_")
@@ -934,8 +786,6 @@ func tokenizeHintName(name string) []string {
 	return tokens
 }
 
-// funcLevelCoverageGapsMulti analyzes changed files (any language) and returns
-// per-file lists of untested exported functions.
 func funcLevelCoverageGapsMulti(workingDir string, maxFiles, maxFuncsPerFile int) []funcCoverageGap {
 	files := changedSourceFilesFromGit(workingDir)
 	if len(files) == 0 {
@@ -961,10 +811,6 @@ func funcLevelCoverageGapsMulti(workingDir string, maxFiles, maxFuncsPerFile int
 	return gaps
 }
 
-// --- Multi-language targeted test command ---
-
-// targetedVerifyCommandMulti returns a scope-limited test command for any
-// supported language. Delegates to the language profile's TargetedTestCmd.
 func targetedVerifyCommandMulti(workingDir, filePath string) string {
 	profile := langProfileForFile(filePath)
 	if profile == nil {
@@ -973,14 +819,8 @@ func targetedVerifyCommandMulti(workingDir, filePath string) string {
 	return profile.TargetedTestCmd(workingDir, filePath)
 }
 
-// --- Multi-language impact-scoped test command ---
-
-// impactScopedTestCommandMulti builds a test command covering all changed
-// packages/directories. For Go it uses the existing enhanced approach with
-// import graph. For other languages it falls back to language-appropriate
-// commands.
 func impactScopedTestCommandMulti(workingDir string) string {
-	// Try Go first (most sophisticated: import graph + transitive deps)
+
 	if fileExists(filepath.Join(workingDir, "go.mod")) {
 		if cmd := impactScopedTestCommandWithDeps(workingDir); cmd != "" {
 			return cmd
@@ -990,13 +830,11 @@ func impactScopedTestCommandMulti(workingDir string) string {
 		}
 	}
 
-	// Group changed files by language and directory
 	files := changedSourceFilesFromGit(workingDir)
 	if len(files) == 0 {
 		return ""
 	}
 
-	// Detect the dominant language in changed files
 	langCounts := make(map[string]int)
 	for _, f := range files {
 		if p := langProfileForFile(f); p != nil {
@@ -1007,7 +845,6 @@ func impactScopedTestCommandMulti(workingDir string) string {
 		return ""
 	}
 
-	// Find the dominant language
 	dominantLang := ""
 	maxCount := 0
 	for lang, count := range langCounts {
@@ -1017,14 +854,13 @@ func impactScopedTestCommandMulti(workingDir string) string {
 		}
 	}
 
-	// Build commands per dominant language
 	switch dominantLang {
 	case "typescript":
 		runner := detectJSRunner(workingDir)
 		if runner == "" {
 			return ""
 		}
-		// Group by unique directories
+
 		dirs := changedDirsForLang(files, "typescript")
 		if len(dirs) == 0 {
 			return runner
@@ -1077,8 +913,6 @@ func impactScopedTestCommandMulti(workingDir string) string {
 	return ""
 }
 
-// changedDirsForLang returns unique directory paths for changed files of the
-// given language, slash-separated and sorted.
 func changedDirsForLang(files []string, lang string) []string {
 	seen := make(map[string]bool)
 	var dirs []string
@@ -1088,11 +922,7 @@ func changedDirsForLang(files []string, lang string) []string {
 			continue
 		}
 		dir := filepath.ToSlash(filepath.Dir(f))
-		// #3664 (mirrors the Go path's #3648 fix): keep "." - the module
-		// root. npm/pytest projects with root-level index.ts / main.py are
-		// a common shape; dropping the root dir left dirs empty and the
-		// suggested test command degraded to the bare full-suite runner.
-		// Renderers accept "." (e.g. `pytest .` = explicit root scope).
+
 		if dir == "" {
 			continue
 		}

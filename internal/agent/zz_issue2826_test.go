@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-// #2826: fnHasIndirectRelease treated ANY `defer <Ident>()` as an indirect
-// release and exempted the whole function from lock simulation. defer
-// cancel() (context), defer close(ch) (builtin), defer cleanup()/done() are
-// ubiquitous non-lock defers, so a missing mu.Unlock() beside them was
-// systematically invisible. Only unlock/release-named bare defers (the
-// `v := mu.Unlock; defer v()` method-value idiom, #2433 FP side) keep the
-// whole-function exemption.
-
 func TestIssue2826_DeferCancelDoesNotExemptMissingUnlock(t *testing.T) {
 	old := ""
 	new := `package main

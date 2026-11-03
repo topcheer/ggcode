@@ -8,62 +8,26 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Tool Argument Size Guard.
-//
-// Research basis: Context engineering studies (Anthropic 2025, ACE Zhang et al.
-// ICLR 2026) identify tool call arguments as a major source of context waste.
-// When models paste entire file contents as old_text anchors in edit_file
-// (instead of using concise line-number anchors), or send massive search
-// patterns, they consume disproportionate context tokens — the arguments live
-// in the assistant message's tool_use blocks and persist until compaction.
-//
-// Claude Code's diff-based editing and Cursor's selection-based edits address
-// this implicitly. ggcode's system prompt already recommends line-number
-// anchors, but there is no runtime guard to detect and correct this anti-pattern.
-//
-// This guard analyzes tool arguments for known bloat patterns:
-//   - edit_file/multi_edit_file: oversized old_text (should use line-number anchors)
-//   - write_file: oversized content (should use edit_file for targeted changes)
-//   - grep/search_files: oversized patterns
-//   - Any tool: total argument payload exceeding a threshold
-//
-// The guard fires AT MOST ONCE per run to avoid repetition. It injects a
-// guidance hint into the tool result — it does NOT block execution.
-// No LLM cost — purely mechanical JSON inspection.
-
 const (
-	// argSizeWarnTotal is the total argument size (bytes) that triggers a warning.
-	// 8KB of JSON arguments is already substantial (~2K tokens in tool_use blocks).
 	argSizeWarnTotal = 8 * 1024
 
-	// argSizeWarnField is the per-field size that triggers a warning for known
-	// content fields. 4KB for a single field is a strong signal of bloat.
 	argSizeWarnField = 4 * 1024
 
-	// argSizeSevereField: fields larger than this are almost certainly wasteful.
 	argSizeSevereField = 16 * 1024
 
-	// maxArgSizeGuardFires limits the number of times the guard injects guidance
-	// in a single run. After the first fire, the model should adjust. This
-	// prevents repeated nagging.
 	maxArgSizeGuardFires = 1
 )
 
-// argSizeFields maps tool names to fields that are commonly oversized.
 var argSizeFields = map[string][]string{
 	"edit_file":    {"old_text", "new_text"},
 	"write_file":   {"content"},
 	"grep":         {"pattern"},
 	"search_files": {"pattern"},
-	// multi_edit_file and multi_file_edit have nested edits[] structures,
-	// handled separately below.
+
 	"multi_edit_file": {},
 	"multi_file_edit": {},
 }
 
-// checkArgSizeGuard inspects tool arguments for excessive size and returns
-// a guidance message if oversized arguments are detected. Returns empty string
-// when arguments are within reasonable bounds.
 func (a *Agent) checkArgSizeGuard(toolName string, args []byte) string {
 	if a.argSizeGuardFires >= maxArgSizeGuardFires {
 		return ""
@@ -79,24 +43,20 @@ func (a *Agent) checkArgSizeGuard(toolName string, args []byte) string {
 	return guidance
 }
 
-// analyzeArgSize performs the actual size analysis. Separated from
-// checkArgSizeGuard for testability.
 func analyzeArgSize(toolName string, args []byte) string {
 	totalLen := len(args)
 	if totalLen < argSizeWarnTotal {
-		// Quick check: if total payload is small, skip field analysis.
-		// Still check known fields for individual bloat (rare but possible).
+
 	}
 
 	var argMap map[string]json.RawMessage
 	if err := json.Unmarshal(args, &argMap); err != nil {
-		// Can't parse — let the tool handle the error.
+
 		return ""
 	}
 
 	var hints []string
 
-	// Check total payload size.
 	if totalLen >= argSizeWarnTotal {
 		hints = append(hints, fmt.Sprintf(
 			"total argument size is %s — consider using more concise parameters to save context tokens",
@@ -104,7 +64,6 @@ func analyzeArgSize(toolName string, args []byte) string {
 		))
 	}
 
-	// Check known content fields for this tool.
 	fields, known := argSizeFields[toolName]
 	if known {
 		for _, field := range fields {
@@ -136,15 +95,12 @@ func analyzeArgSize(toolName string, args []byte) string {
 		}
 	}
 
-	// Handle multi_file_edit with nested files[].edits[] structure.
 	if toolName == "multi_file_edit" {
 		if editsHint := analyzeMultiFileEditSize(argMap); editsHint != "" {
 			hints = append(hints, editsHint)
 		}
 	}
 
-	// Handle multi_edit_file with nested edits[] array: apply the same
-	// per-field logic as edit_file to each edit's old_text/new_text.
 	if toolName == "multi_edit_file" {
 		if editsHint := analyzeMultiEditFileSize(argMap); editsHint != "" {
 			hints = append(hints, editsHint)
@@ -166,11 +122,6 @@ func analyzeArgSize(toolName string, args []byte) string {
 	return sb.String()
 }
 
-// analyzeMultiFileEditSize checks the files[].edits[] structure for oversized
-// old_text or new_text values, applying the same per-field thresholds as
-// edit_file (argSizeWarnField / argSizeSevereField). #2880: the initial
-// version only warned at the severe threshold, silently passing the
-// 4KB-16KB range that edit_file and multi_edit_file already flag.
 func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 	filesRaw, ok := argMap["files"]
 	if !ok {
@@ -206,9 +157,6 @@ func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 	return maxWarn
 }
 
-// analyzeMultiEditFileSize checks the edits[] structure of multi_edit_file
-// for oversized old_text or new_text values, applying the same per-field
-// thresholds as edit_file (argSizeWarnField / argSizeSevereField).
 func analyzeMultiEditFileSize(argMap map[string]json.RawMessage) string {
 	editsRaw, ok := argMap["edits"]
 	if !ok {
@@ -240,8 +188,6 @@ func analyzeMultiEditFileSize(argMap map[string]json.RawMessage) string {
 	return maxWarn
 }
 
-// argSizeEditFieldHint returns the hint message(s) for an oversized edit
-// text field, mirroring edit_file's warn/severe tiers.
 func argSizeEditFieldHint(field string, fieldLen int) []string {
 	if fieldLen >= argSizeSevereField {
 		return []string{fmt.Sprintf(

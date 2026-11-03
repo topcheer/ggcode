@@ -1,58 +1,5 @@
 package agent
 
-// Foresight Calibration Tracker (WorldEvolver-inspired)
-//
-// Research basis:
-//   - WorldEvolver (arXiv:2606.30639, Jun 2026): "Self-Evolving World Models
-//     for LLM Agent Planning." World models give agents foresight -- predictions
-//     of action consequences before execution. However, unreliable foresight
-//     can be ignored, misused, or degrade decision-making. The key insight:
-//     prediction-observation mismatches are the strongest learning signal.
-//   - WorldEvolver's Semantic Memory module extracts persistent heuristic rules
-//     from prediction-observation mismatches, improving calibration over time.
-//   - Selective Foresight module filters low-confidence predictions before
-//     injecting them into agent reasoning context.
-//
-// Problem: AI coding agents frequently make explicit predictions about what
-// a tool call will return, then receive results that contradict those
-// predictions -- but no detector tracks this calibration gap:
-//
-//  1. "This file should contain the database config" → file is empty/missing
-//  2. "The test will pass after my fix" → test fails
-//  3. "This function returns a string" → returns an int
-//  4. "The build should succeed now" → build errors
-//  5. "I expect the API to return JSON" → returns HTML error page
-//
-// Each mismatch reveals the agent's world model is wrong. Repeated mismatches
-// in a single run indicate the agent is operating with a fundamentally
-// incorrect mental model of the codebase/API/system -- a high-risk situation
-// where subsequent actions are likely based on flawed assumptions.
-//
-// Existing ggcode detectors that are RELATED but do NOT cover this:
-//   - outcome_misattribution.go: checks success claims vs failure indicators
-//     in results (narrative vs result), not prediction vs observation.
-//   - tool_target_mismatch.go: checks stated intent vs actual tool target
-//     (text vs tool call), not prediction vs result content.
-//   - tool_claim_verify.go: checks if agent misread existing tool output,
-//     not predictions made BEFORE seeing the output.
-//   - error_strategy_loop.go: checks repeated error patterns, not
-//     prediction-observation gaps.
-//
-// Gap: No detector captures the agent's explicit predictions about tool
-// outcomes and compares them against actual results. This is the core
-// "prediction-observation mismatch" signal from WorldEvolver that identifies
-// when the agent's world model is miscalibrated.
-//
-// Design:
-//   - Phase 1 (recordPrediction): scans assistant text BEFORE tool execution
-//     for prediction language ("should", "expect", "will", "probably returns").
-//     Extracts the predicted outcome category (success/failure/content type).
-//   - Phase 2 (checkCalibration): after tool execution, compares the predicted
-//     category against the actual result. Mismatches accumulate.
-//   - Threshold: 3+ mismatches in a single run → inject calibration guidance
-//   - Zero LLM cost -- pure deterministic text + result pattern matching
-//   - Fires at most 2 times per run (advisory, non-blocking)
-
 import (
 	"fmt"
 	"regexp"
@@ -62,128 +9,67 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// ---------------------------------------------------------------------------
-// Prediction patterns -- phrases where the agent commits to a specific outcome
-// before seeing the result. These are the agent's "world model" in action.
-// ---------------------------------------------------------------------------
-
-// predictionRe matches sentences containing forward-looking predictions about
-// tool outcomes. Captures the prediction context for later comparison.
 var foresightPredictionRe = regexp.MustCompile(`(?i)(?:this\s+(?:should|will|should)\s+(?:contain|return|show|reveal|have|include)|the\s+(?:test|build|command|file|function|api|response)\s+(?:should|will|must|might|may)\s+(?:pass|fail|succeed|work|return|contain|show|be)|i\s+expect\s+(?:this|the|it)\s+to|this\s+will\s+(?:likely\s+)?(?:pass|fail|work|succeed|return|contain)|the\s+output\s+(?:should|will)\s+be|should\s+(?:now\s+)?(?:pass|work|succeed|compile|build)|(?:should|will|might|may)\s+(?:it\s+to\s+)?be\s+empty|(?:might|may)\s+(?:it\s+to\s+)?(?:fail|error|throw|crash|not\s+(?:work|exist|be\s+found|compile|pass))|probably\s+(?:returns?|contains?|is)|likely\s+(?:returns?|contains?|is|will))`)
 
-// successPredictionRe matches predictions that the outcome will be positive
-// (pass, succeed, work, return expected content). #4625: `be empty` was
-// removed from the alternation — an emptiness expectation is its own
-// polarity (foresightEmptyPredRe), not a content-success prediction: routing
-// it through this regex made checkCalibration judge "should be empty" +
-// actually-empty (a fully correct prediction) as a mismatch.
 var foresightSuccessPredRe = regexp.MustCompile(`(?i)(?:should|will|must|expect)\s+(?:it\s+to\s+)?(?:pass|succeed|work|compile|build\s+successfully|return\s+(?:the\s+)?(?:expected\s+)?(?:value|result|data|content|json)|contain\s+(?:the\s+)?(?:config|definition|function|key|field)|be\s+(?:present|found|there|valid|correct))|will\s+(?:likely\s+)?(?:pass|succeed|work)`)
 
-// foresightEmptyPredRe matches predictions that the result will be EMPTY —
-// a success expectation OF emptiness ("the file should be empty" / "expect it
-// to return no matches"). Tracked separately so predicted-empty +
-// actually-empty counts as a correct prediction while predicted-empty +
-// content counts as a genuine stale-world-model mismatch (#4625).
 var foresightEmptyPredRe = regexp.MustCompile(`(?i)(?:should|will|must|expect)\s+(?:it\s+to\s+)?be\s+empty|expect\s+(?:this|the|it)\s+to\s+return\s+no\s+(?:results?|matches?)`)
 
-// failurePredictionRe matches predictions that the outcome will be negative
-// (fail, error, not found). These are rarer but important -- when an agent
-// predicts failure and gets success, it may be surprised/confused.
 var foresightFailurePredRe = regexp.MustCompile(`(?i)(?:should|will|might|may|expect)\s+(?:it\s+to\s+)?(?:fail|error|not\s+(?:work|exist|be\s+found|compile|pass)|throw|crash|return\s+(?:an?\s+)?error|be\s+(?:missing|absent|null|undefined))`)
 
-// resultFailureRe detects failure indicators in tool results. Restricted to
-// STRUCTURED failure signals (exit codes, status prefixes, tracebacks) — the
-// old bare-word alternation (error|failed|cannot|undefined|...) matched the
-// error-handling idioms present in virtually every normal source file, so a
-// successful read_file of ordinary Go code was judged "actual failure" and
-// every success prediction became a mismatch (#394).
 var foresightResultFailureRe = regexp.MustCompile(`(?i)(?:exit\s+code\s+[1-9]|exit\s+status\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|panic:|fatal:|traceback\s+\(|compilation\s+failed|\bIsError\b|tool_result_error)`)
 
-// resultEmptyRe detects empty or minimal results (prediction said content
-// exists). #613: restricted to STRUCTURED empty signals — the old bare-word
-// alternation (|empty|no results|...) substring-matched the entire tool
-// result, so a successful read_file of ordinary source code containing
-// "ErrEmpty" / "empty string" was judged "actually empty" and every content
-// prediction became a false mismatch (same family as the #394 failure-regex
-// fix; the twin branch was missed then).
 var foresightResultEmptyRe = regexp.MustCompile(`(?i)^(?:$|no\s+(?:results?|matches?|content|output|data)\s+found$|(?:is\s+)?empty$|0\s+(?:bytes|lines|matches|results)$|nothing\s+(?:found|returned|matched)$)`)
 
-// foresightResultEmpty determines whether a tool result is actually empty
-// using structural signals, not substring matching (#613 defect 1):
-//   - zero-length content
-//   - whitespace-only content
-//   - a short (<80 chars) result consisting of a structured "no matches /
-//     empty" marker line — long file contents merely mentioning the word
-//     "empty" are NOT empty results.
 func foresightResultEmpty(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return true
 	}
 	if len(trimmed) > 80 {
-		// Real content (e.g., a file read) that merely contains the word
-		// "empty" somewhere is not an empty result.
+
 		return false
 	}
 	return foresightResultEmptyRe.MatchString(trimmed)
 }
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 type foresightPrediction struct {
 	iteration      int
-	predictedOK    bool   // true = predicted success, false = predicted failure
-	predictedEmpty bool   // #4625: true = success expectation OF emptiness (own polarity)
-	snippet        string // prediction text for reporting
-	toolName       string // tool that was about to be called
-	expectCheck    string // non-empty = structured EXPECT declaration (sa-140), overrides polarity checks
+	predictedOK    bool
+	predictedEmpty bool
+	snippet        string
+	toolName       string
+	expectCheck    string
 }
 
 type foresightCalibrateState struct {
-	predictions    []foresightPrediction // pending predictions awaiting results
-	mismatches     int                   // total prediction-observation mismatches
-	warnCount      int                   // how many times we've injected guidance
-	expectWarns    int                   // immediate asymmetric warnings issued (sa-140, cap 4)
-	protocolTaught bool                  // one-time EXPECT protocol announcement sent
+	predictions    []foresightPrediction
+	mismatches     int
+	warnCount      int
+	expectWarns    int
+	protocolTaught bool
 }
 
 func newForesightCalibrateState() *foresightCalibrateState {
 	return &foresightCalibrateState{}
 }
 
-// ---------------------------------------------------------------------------
-// Phase 1: recordPrediction -- called BEFORE tool execution
-// Scans assistant text for predictions about the upcoming tool's outcome.
-// ---------------------------------------------------------------------------
-
-// recordPrediction scans assistant text for outcome predictions and stores
-// them as pending predictions awaiting verification. Called before tool calls
-// are executed.
 func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCalls []provider.ToolCallDelta, iteration int) {
 	if s == nil || len(toolCalls) == 0 {
 		return
 	}
 
-	// sa-140 (TVAE): structured EXPECT declarations take priority over the
-	// free-regex path. A declaration naming a tool is attributable even in a
-	// multi-tool turn (fixing the coverage hole where such turns were skipped
-	// entirely); an unattributed declaration is only safe for single-tool turns.
 	if decls := parseExpectDeclarations(assistantText); len(decls) > 0 {
 		called := make(map[string]bool, len(toolCalls))
 		for _, tc := range toolCalls {
 			called[tc.Name] = true
 		}
-		// #4747-A: only swallow the turn when at least one declaration was
-		// actually attributable. Stale leftovers (every decl hitting the
-		// not-called continue path) used to trigger the unconditional return and
-		// silently drop the free-regex predictions in the same text.
+
 		recorded := 0
 		for _, d := range decls {
 			if d.toolName != "" {
 				if !called[d.toolName] {
-					continue // declaration for a tool not in this turn: stale text
+					continue
 				}
 				s.recordExpect(d.toolName, d.check, iteration)
 				recorded++
@@ -197,37 +83,21 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 		}
 	}
 
-	// Only scan text near tool calls (the prediction context). Use the full
-	// text -- predictions can appear anywhere but are usually near the call.
 	if !foresightPredictionRe.MatchString(assistantText) {
 		return
 	}
 
-	// Determine the turn's prediction polarity ONCE. The old loop appended
-	// one prediction PER tool call with the same turn-level polarity, so a
-	// single prediction sentence backed by 2 tool calls was consumed and
-	// judged twice — double-counting mismatches toward the threshold of 3
-	// (#394). One turn, one prediction, attributed to the FIRST tool call.
 	var predictedOK bool
 	var predictedEmpty bool
 	hasSuccess := foresightSuccessPredRe.MatchString(assistantText)
 	hasFailure := foresightFailurePredRe.MatchString(assistantText)
 	hasEmpty := foresightEmptyPredRe.MatchString(assistantText)
 	if hasEmpty && hasFailure {
-		// #4747-B: empty+failure coexistence ("should be empty; otherwise the
-		// lookup might fail") is ambiguous — hard-wiring either polarity
-		// scores a correct prediction as a mismatch. Same skip as below.
+
 		return
 	}
 	if hasEmpty && !hasFailure {
-		// #4625: emptiness is its own polarity — a success expectation OF
-		// emptiness. It must not flow through the content-success branch
-		// ("predicted content but empty" misjudge), and dropping it would
-		// leave empty predictions permanently unverified.
-		// #4747-B: "should be empty or missing" hits BOTH the empty and the
-		// failure polarity regexes; letting empty unconditionally win scored a
-		// correctly-predicted missing-file error as a mismatch. Coexistence now
-		// takes the same ambiguous skip as success+failure below.
+
 		predictedOK = true
 		predictedEmpty = true
 	} else if hasSuccess && !hasFailure {
@@ -235,15 +105,10 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 	} else if hasFailure && !hasSuccess {
 		predictedOK = false
 	} else {
-		// Ambiguous or both -- no prediction for this turn.
+
 		return
 	}
-	// Multi-tool turns (#613 defect 2): a turn-level prediction cannot be
-	// attributed to toolCalls[0] — in a [read_file, run_command] turn where
-	// the prediction actually concerns run_command, the first-arriving
-	// read_file result would consume it and record a spurious mismatch while
-	// the real run_command outcome goes unverified. Per the issue's guidance,
-	// reconcile ONLY single-tool turns; skip recording for multi-tool turns.
+
 	if len(toolCalls) > 1 {
 		return
 	}
@@ -258,9 +123,6 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 	s.capPending()
 }
 
-// recordExpect stores one structured EXPECT declaration as a pending
-// prediction (sa-140). predictedOK mirrors the check's polarity so the legacy
-// consumption/matching path in checkCalibration works unchanged.
 func (s *foresightCalibrateState) recordExpect(toolName, check string, iteration int) {
 	s.predictions = append(s.predictions, foresightPrediction{
 		iteration:   iteration,
@@ -273,35 +135,31 @@ func (s *foresightCalibrateState) recordExpect(toolName, check string, iteration
 }
 
 func (s *foresightCalibrateState) capPending() {
-	// Cap pending predictions to avoid unbounded growth.
+
 	if len(s.predictions) > 30 {
 		s.predictions = s.predictions[len(s.predictions)-30:]
 	}
 }
 
-// extractForesightSnippet returns the first prediction-relevant sentence,
-// truncated for reporting.
 func extractForesightSnippet(text string) string {
 	loc := foresightPredictionRe.FindStringIndex(text)
 	if loc == nil {
 		return ""
 	}
-	// Find sentence boundary around the match.
+
 	start := loc[0]
 	end := loc[1]
-	// Extend backwards to sentence start.
+
 	for start > 0 && text[start-1] != '.' && text[start-1] != '\n' && start > loc[0]-80 {
 		start--
 	}
-	// Extend forward to sentence end.
+
 	for end < len(text) && text[end] != '.' && text[end] != '\n' && end < loc[1]+80 {
 		end++
 	}
 	snippet := strings.TrimSpace(text[start:end])
 	if len(snippet) > 120 {
-		// #4625: rune-safe truncation (#1029 precedent in constraint_amnesia)
-		// — byte slicing at 117 could split a multi-byte CJK rune and inject
-		// invalid UTF-8 into the guidance text.
+
 		runes := []rune(snippet)
 		cut := 117
 		if cut > len(runes) {
@@ -312,25 +170,11 @@ func extractForesightSnippet(text string) string {
 	return snippet
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2: checkCalibration -- called AFTER tool execution
-// Compares predicted outcome against actual result. Returns guidance if
-// mismatch threshold exceeded.
-// ---------------------------------------------------------------------------
-
-// checkCalibration compares pending predictions against actual tool results.
-// Called after tool execution. Returns guidance message if threshold exceeded.
 func (s *foresightCalibrateState) checkCalibration(toolName string, resultContent string, isError bool, iteration int) string {
 	if s == nil || len(s.predictions) == 0 {
 		return ""
 	}
 
-	// #4625: expire stale predictions. The documented settle window is one
-	// iteration ("single-tool rounds legitimately settle one iteration later");
-	// predictions older than that can never be legitimately consumed. The old
-	// path kept them forever (capPending only capped COUNT, never age), so a
-	// 35-round-old run_command prediction could be charged against today's
-	// same-name result — attributing the wrong outcome to the wrong prediction.
 	{
 		kept := s.predictions[:0]
 		for _, p := range s.predictions {
@@ -344,16 +188,6 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 		return ""
 	}
 
-	// Match predictions to this tool call. #613 defect 2: predictions must be
-	// consumed on the SAME agent loop iteration they were recorded on — the
-	// iteration field existed but was never compared, letting a multi-tool
-	// turn's prediction be eaten by the wrong tool's result. Preferred match:
-	// same iteration AND same tool name. Deferred-attribution predictions
-	// (toolName == "", recorded for multi-tool turns) accept any tool result
-	// from the SAME iteration. A prediction from a different iteration is
-	// only consumed as a last resort when it is an exact tool-name match
-	// (single-tool rounds legitimately settle one iteration later because
-	// tool execution happens after the next iteration's recordPrediction).
 	matched := -1
 	fallback := -1
 	for i, p := range s.predictions {
@@ -362,9 +196,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 			break
 		}
 		if p.toolName == toolName && fallback < 0 && iteration-p.iteration <= 1 {
-			// #4625: bound the fallback to adjacent iterations — the comment
-			// always claimed "settle one iteration later", but the check was
-			// missing, making the fallback unbounded.
+
 			fallback = i
 		}
 	}
@@ -376,14 +208,9 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	}
 
 	pred := s.predictions[matched]
-	// Remove the matched prediction.
+
 	s.predictions = append(s.predictions[:matched], s.predictions[matched+1:]...)
 
-	// sa-140 (TVAE) structured path: deterministic check evaluation with
-	// ASYMMETRIC immediate feedback. A declared-positive check that FAILED is
-	// the hallucinated-success case VeriGUI penalizes 4x -- it fires on the
-	// step, ahead of the legacy threshold. A declared-negative check that
-	// succeeded is a false alarm: count it, never inject.
 	if pred.expectCheck != "" {
 		passed, detail := evaluateExpectCheck(pred.expectCheck, resultContent, isError)
 		if passed {
@@ -404,37 +231,30 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 		)
 	}
 
-	// Determine actual outcome polarity.
 	actualOK := !isError && !foresightResultFailureRe.MatchString(resultContent)
 	actualEmpty := foresightResultEmpty(resultContent)
 
-	// Check for mismatch.
 	mismatch := false
 	mismatchDetail := ""
 
 	if !actualOK {
 		if pred.predictedOK {
-			// Predicted success, got failure. (Empty-expectations land here
-			// too on errors: an error is not the predicted emptiness.)
+
 			mismatch = true
 			mismatchDetail = "predicted success but the result indicates failure"
 		}
 	} else if pred.predictedEmpty {
-		// #4625: emptiness expectations get their own comparison. Predicted
-		// empty AND actually empty is a FULLY CORRECT prediction — the old
-		// code routed it through the content-success branch and counted it
-		// as a mismatch ("predicted content but empty"), punishing exactly
-		// the correct behavior 3 times into misleading guidance.
+
 		if !actualEmpty {
 			mismatch = true
 			mismatchDetail = "predicted the result to be empty but it has content"
 		}
 	} else if pred.predictedOK && actualEmpty {
-		// Predicted content/existence, got empty.
+
 		mismatch = true
 		mismatchDetail = "predicted content but the result is empty or not found"
 	} else if !pred.predictedOK && !actualEmpty {
-		// Predicted failure, got success (rare but indicates miscalibration).
+
 		mismatch = true
 		mismatchDetail = "predicted failure but the result succeeded"
 	}
@@ -442,12 +262,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	if mismatch {
 		s.mismatches++
 		debug.Log("foresight-calibrate", "Iteration %d: prediction-observation mismatch #%d (%s)", iteration, s.mismatches, mismatchDetail)
-		// #4625: inject ONLY on an actual mismatch. The old threshold check
-		// sat outside this branch, so once mismatches>=3 a fully CORRECT
-		// prediction could still trigger a warning whose cited snippet was
-		// the correct prediction and whose detail string was empty — a
-		// self-contradictory message accusing the agent of being wrong
-		// about something it got right.
+
 		if s.mismatches >= 3 && s.warnCount < 2 {
 			s.warnCount++
 			return fmt.Sprintf(
@@ -460,9 +275,6 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	return ""
 }
 
-// reset clears state for a new user turn (#1843: previously dead code
-// outside compaction - warnCount/mismatches accumulated across the whole
-// session, turning "at most 2 per run" into a lifetime quota).
 func (s *foresightCalibrateState) reset() {
 	if s == nil {
 		return

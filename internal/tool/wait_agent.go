@@ -14,15 +14,9 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// WaitAgentTool implements the wait_agent tool.
 type WaitAgentTool struct {
-	Manager *subagent.Manager
-	// ParentModel resolves the parent agent's current model name. When a
-	// failed run used an alternate model, the snapshot is annotated with a
-	// one-shot cascade escalation hint (see subagent_cascade.go).
-	ParentModel func() string
-	// CascadeHints deduplicates escalation hints across wait_agent and
-	// list_agents so each failed run is annotated at most once.
+	Manager      *subagent.Manager
+	ParentModel  func() string
 	CascadeHints *CascadeHintTracker
 }
 
@@ -74,20 +68,13 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	wait := 30 * time.Second
 	if args.WaitSeconds > 0 {
-		// #1349: cap aligned with the sleep tool's 30-minute maximum.
-		// Without it an LLM passing 86400 blocks the agent loop for 24h -
-		// the only escape hatches are ctx cancellation or the child agent
-		// reaching a terminal state.
+
 		if args.WaitSeconds > 1800 {
 			return Result{IsError: true, Content: fmt.Sprintf("wait_seconds %d exceeds maximum of 1800 (30 minutes); wait in shorter increments and re-poll instead", args.WaitSeconds)}, nil
 		}
 		wait = time.Duration(args.WaitSeconds) * time.Second
 	}
 
-	// Extract progress callback from context (if available) for live streaming.
-	// Structured protocol (sa-217): the wait window gives exact percent/ETA,
-	// which the legacy bare-string pipe could never express. EmitProgress
-	// falls back to the legacy ToolProgressKey automatically.
 	var progressFn subagent.SnapshotProgressFunc
 	if ctx.Value(ToolProgressKey{}) != nil || ctx.Value(ProgressEmitterKey{}) != nil {
 		start := time.Now()
@@ -113,41 +100,20 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 	}
 
-	// #4139: any completed run with a non-empty result takes the full-result
-	// path. The old condition also demanded ProgressSummary=="" &&
-	// CurrentTool=="" - but Complete() already clears CurrentTool on terminal
-	// states while NOTHING clears ProgressSummary, so a run whose last tool
-	// was a command tool (the only category that sets a progress summary)
-	// fell through to the snapshot formatter, which truncates Result to 200
-	// chars for the list_agents multi-row display (#3176). A 100KB delivery
-	// report was silently cut to 200 chars depending on the type of the
-	// sub-agent's last tool. Snapshot status lines remain for non-terminal
-	// runs and completed runs with an empty result.
 	if snap.Status == subagent.StatusCompleted && snap.Result != "" {
-		// #3237: snap.Task carries the nudge spawn appended; strip it so
-		// both reminders extract the ORIGINAL acceptance criteria.
+
 		task := stripReadBackNudge(snap.Task)
 		return Result{Content: annotateWorktree(provenanceHeader(snap.ExternalSources)+snap.Result+formatExploreRegions(snap.Result)+readBackReminder(task, snap.Result)+acceptanceReminder(task, snap.Result), snap)}, nil
 	}
 	var reminder string
 	if snap.Status == subagent.StatusCompleted {
-		// r453: front-end handshake report first (did the sub-agent
-		// restate the criteria before starting?), then the r384
-		// validator-side reminder - both on completed runs only.
-		// #3237: same strip as above - reminders see the original task.
+
 		task := stripReadBackNudge(snap.Task)
 		reminder = readBackReminder(task, snap.Result) + acceptanceReminder(task, snap.Result) + formatExploreRegions(snap.Result)
 	}
 	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap)+reminder, snap)}, nil
 }
 
-// annotateWorktree appends the isolation worktree path to a wait_agent
-// snapshot so the parent can locate the sub-agent's edits after the run.
-// For COMPLETED runs it also appends a delivery hint (#r31, Background
-// Agents pattern: delegated work should return as a review-ready diff):
-// when the worktree branch carries commits no remote has, the parent is
-// reminded to push and open a draft PR so the work is reviewable and
-// cannot be lost.
 func annotateWorktree(content string, snap subagent.Snapshot) string {
 	if snap.Worktree == "" {
 		return content
@@ -165,10 +131,6 @@ func annotateWorktree(content string, snap subagent.Snapshot) string {
 	return content
 }
 
-// unpushedCommitCount returns how many commits HEAD has that no remote
-// ref contains, i.e. work that exists only in the isolated worktree.
-// Any git failure (not a repo, no commits yet, git missing) maps to 0 -
-// the hint is advisory and must never turn into an error path.
 func unpushedCommitCount(worktree string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -180,8 +142,6 @@ func unpushedCommitCount(worktree string) int {
 	return parseUnpushedCount(string(out))
 }
 
-// parseUnpushedCount is the pure parsing half of unpushedCommitCount,
-// split out for table-driven tests.
 func parseUnpushedCount(out string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil || n < 0 {
@@ -190,17 +150,8 @@ func parseUnpushedCount(out string) int {
 	return n
 }
 
-// exploreRegionRe matches the "path:startLine-endLine" contract lines an
-// Explore sub-agent must emit under its "## Regions" section (r388,
-// FastContext Kim et al. 2026: structured region handoff beats free-form
-// notes; the parent consumes regions directly as targeted reads).
 var exploreRegionRe = regexp.MustCompile(`(?m)^\s*(\S+?):(\d+)-(\d+)\b`)
 
-// formatExploreRegions turns the region list into an explicit targeted-read
-// block (path + offset + limit) so the parent can issue offset/limit reads
-// without re-scanning the free-text result for paths. Returns "" when the
-// "## Regions" marker is absent - non-Explore runs pass through unchanged,
-// and results whose region section failed to parse also stay untouched.
 func formatExploreRegions(result string) string {
 	idx := strings.Index(result, "## Regions")
 	if idx < 0 {

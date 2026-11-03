@@ -1,17 +1,10 @@
 package agent
 
-// Feature test for #572: FP hardening for 4 reward-hacking detectors.
-// Verifies that false positives are fixed while true positives still fire.
-
 import (
 	"strings"
 	"testing"
 )
 
-// --- Bug B: suppression_directive_check.go ---
-
-// TestIssue572_SuppressionScopedAllowsRuleNumber verifies scoped directives
-// with specific rule codes are NOT flagged (B2 FP fix).
 func TestIssue572_SuppressionScopedAllowsRuleNumber(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("suppression-directives")
@@ -87,8 +80,6 @@ func TestIssue572_SuppressionScopedAllowsRuleNumber(t *testing.T) {
 	}
 }
 
-// TestIssue572_SuppressionMarkdownProseIgnored verifies prose mentions
-// in Markdown files don't fire (B3 FP fix).
 func TestIssue572_SuppressionMarkdownProseIgnored(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("suppression-directives")
@@ -96,7 +87,6 @@ func TestIssue572_SuppressionMarkdownProseIgnored(t *testing.T) {
 		t.Fatal("suppression-directives not registered")
 	}
 
-	// Prose mention in Markdown should NOT fire
 	warnings := c.Run(CheckContext{
 		FilePath:   "README.md",
 		OldContent: "",
@@ -107,7 +97,6 @@ func TestIssue572_SuppressionMarkdownProseIgnored(t *testing.T) {
 		t.Errorf("Prose mention in Markdown should not fire, got: %v", warnings)
 	}
 
-	// But actual code comment in a known language file SHOULD fire
 	warnings = c.Run(CheckContext{
 		FilePath:   "foo.go",
 		OldContent: "",
@@ -119,8 +108,6 @@ func TestIssue572_SuppressionMarkdownProseIgnored(t *testing.T) {
 	}
 }
 
-// TestIssue572_SuppressionLangAnyIgnored verifies language-bound patterns
-// don't fire on unknown extensions (B3 FP fix).
 func TestIssue572_SuppressionLangAnyIgnored(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("suppression-directives")
@@ -128,23 +115,17 @@ func TestIssue572_SuppressionLangAnyIgnored(t *testing.T) {
 		t.Fatal("suppression-directives not registered")
 	}
 
-	// rubocop:disable should NOT fire on .unknown file (LangAny patterns
-	// should only work for known languages)
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo.unknown",
 		OldContent: "",
 		NewContent: "# rubocop:disable all",
-		Lang:       0, // detectLanguage returns 0 for unknown
+		Lang:       0,
 	})
 	if len(warnings) > 0 {
 		t.Errorf("Language-bound pattern should not fire on unknown extension, got: %v", warnings)
 	}
 }
 
-// --- Bug C: placeholder_check.go ---
-
-// TestIssue572_PlaceholderLineDriftFixed verifies delta detection uses
-// line content, not line numbers (C2 FP fix).
 func TestIssue572_PlaceholderLineDriftFixed(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("placeholder-code")
@@ -159,8 +140,6 @@ func f() {
 	fmt.Println("hello")
 }`
 
-	// Insert a line above the existing TODO - line number changes but
-	// content doesn't, so should NOT fire
 	newContent := `package foo
 
 const x = 1
@@ -180,7 +159,6 @@ func f() {
 		t.Errorf("Pre-existing TODO with line drift should not fire, got: %v", warnings)
 	}
 
-	// But actually adding a new vague TODO SHOULD fire
 	newContentWithNewTodo := `package foo
 
 func f() {
@@ -200,10 +178,6 @@ func f() {
 	}
 }
 
-// --- Bug A: hardcoded_output_check.go ---
-
-// TestIssue572_HardcodedDataTablesAllowed verifies legitimate static
-// data tables are allowed (A3 FP fix).
 func TestIssue572_HardcodedDataTablesAllowed(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("hardcoded-output")
@@ -287,8 +261,6 @@ var currencySymbols = map[string]string{
 	}
 }
 
-// TestIssue572_HardcodedPythonSingleQuoteFixed verifies Python
-// single-quoted dicts are detected (A6 FN fix).
 func TestIssue572_HardcodedPythonSingleQuoteFixed(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("hardcoded-output")
@@ -296,7 +268,6 @@ func TestIssue572_HardcodedPythonSingleQuoteFixed(t *testing.T) {
 		t.Fatal("hardcoded-output not registered")
 	}
 
-	// Single-quoted dict should fire
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo.py",
 		OldContent: "",
@@ -317,10 +288,6 @@ func TestIssue572_HardcodedPythonSingleQuoteFixed(t *testing.T) {
 	}
 }
 
-// --- Bug D: assertion_presence_check.go ---
-
-// TestIssue572_AssertionSkipAllowed verifies t.Skip is not flagged
-// as a hollow test (D2 FP fix).
 func TestIssue572_AssertionSkipAllowed(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("assertion-presence")
@@ -328,7 +295,6 @@ func TestIssue572_AssertionSkipAllowed(t *testing.T) {
 		t.Fatal("assertion-presence not registered")
 	}
 
-	// t.Skip with environment check should NOT fire
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo_test.go",
 		OldContent: "",
@@ -348,7 +314,6 @@ func TestRequiresDocker(t *testing.T) {
 		t.Errorf("t.Skip should not be flagged as hollow test, got: %v", warnings)
 	}
 
-	// t.Skipf should also NOT fire
 	warnings = c.Run(CheckContext{
 		FilePath:   "foo_test.go",
 		OldContent: "",
@@ -368,8 +333,6 @@ func TestRequiresDockerf(t *testing.T) {
 	}
 }
 
-// TestIssue572_AssertionExpectRecognized verifies gomega Expect()
-// is recognized as an assertion (D8 FN fix).
 func TestIssue572_AssertionExpectRecognized(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("assertion-presence")
@@ -377,7 +340,6 @@ func TestIssue572_AssertionExpectRecognized(t *testing.T) {
 		t.Fatal("assertion-presence not registered")
 	}
 
-	// gomega Expect().To() should NOT be flagged as hollow test
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo_test.go",
 		OldContent: "",
@@ -400,8 +362,6 @@ func TestWithGomega(t *testing.T) {
 	}
 }
 
-// TestIssue572_AssertionTPStillFires verifies true positives still
-// fire (D1/D6 from issue).
 func TestIssue572_AssertionTPStillFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("assertion-presence")
@@ -409,7 +369,6 @@ func TestIssue572_AssertionTPStillFires(t *testing.T) {
 		t.Fatal("assertion-presence not registered")
 	}
 
-	// D1: Constructing data and discarding it - SHOULD fire
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo_test.go",
 		OldContent: "",
@@ -427,7 +386,6 @@ func TestDiscardsData(t *testing.T) {
 		t.Error("Hollow test without assertions should fire")
 	}
 
-	// D6: Removing assertions - should still fire (regression detection)
 	warnings = c.Run(CheckContext{
 		FilePath: "foo_test.go",
 		OldContent: `package foo
@@ -455,10 +413,8 @@ func TestRegression(t *testing.T) {
 	}
 }
 
-// --- Cross-check: verify we didn't break existing #571 tests ---
-
 func TestIssue572_RegressionIssue571TestsStillPass(t *testing.T) {
-	// These tests from #571 should still pass
+
 	t.Run("Issue571_HardcodedOutputFires", TestIssue571_HardcodedOutputFires)
 	t.Run("Issue571_SuppressionDirectivesFires", TestIssue571_SuppressionDirectivesFires)
 	t.Run("Issue571_PlaceholderCodeFires", TestIssue571_PlaceholderCodeFires)

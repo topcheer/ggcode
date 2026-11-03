@@ -1,8 +1,5 @@
 package agent
 
-// sa-114 acceptance tests: claim-level evidence citation for the final
-// assistant answer (deterministic /evidence backend).
-
 import (
 	"strings"
 	"testing"
@@ -11,7 +8,7 @@ import (
 )
 
 func citeMsgs() []provider.Message {
-	// Tool call turn: read_file on agent.go, result contains the anchor.
+
 	toolTurn := provider.Message{Role: "assistant", Content: []provider.ContentBlock{
 		{Type: "text", Text: "reading the file"},
 		{Type: "tool_use", ToolID: "tu-1", ToolName: "read_file", Input: []byte(`{"path":"/repo/internal/agent/agent.go"}`)},
@@ -25,8 +22,6 @@ func citeMsgs() []provider.Message {
 	return []provider.Message{toolTurn, toolRes, answer}
 }
 
-// Acceptance 1: a claim anchor backed by a recorded tool result yields a
-// citation linking answer excerpt to tool evidence.
 func TestEvidenceCitations_AnchoredClaim(t *testing.T) {
 	cites := EvidenceCitations(citeMsgs())
 	if len(cites) == 0 {
@@ -52,8 +47,6 @@ func TestEvidenceCitations_AnchoredClaim(t *testing.T) {
 	}
 }
 
-// Acceptance 2: anchors with no recorded backing produce no citation
-// (and no panic) - absence is the signal.
 func TestEvidenceCitations_UnsupportedAnchorOmitted(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
@@ -74,8 +67,6 @@ func TestEvidenceCitations_UnsupportedAnchorOmitted(t *testing.T) {
 	}
 }
 
-// Acceptance 3: no final answer yet (last assistant message carries tool
-// calls) → nil.
 func TestEvidenceCitations_NoFinalAnswer(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
@@ -87,8 +78,6 @@ func TestEvidenceCitations_NoFinalAnswer(t *testing.T) {
 	}
 }
 
-// Acceptance 4: nearest evidence wins - two read_file turns both contain
-// the anchor; the later one is cited.
 func TestEvidenceCitations_NearestEvidenceWins(t *testing.T) {
 	mk := func(id, out string) []provider.Message {
 		return []provider.Message{
@@ -113,13 +102,11 @@ func TestEvidenceCitations_NearestEvidenceWins(t *testing.T) {
 	}
 }
 
-// Acceptance 5: plain quoted words are not anchors; empty conversation is
-// safe; formatter renders the linked list.
 func TestEvidenceCitations_Guardrails(t *testing.T) {
 	if cites := EvidenceCitations(nil); cites != nil {
 		t.Fatal("nil msgs must yield nil")
 	}
-	// Backticked plain word (no code shape) must not anchor.
+
 	msgs := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
 			{Type: "text", Text: "The `problem` is obvious; see internal/agent/x.go:1 for detail."},

@@ -68,8 +68,6 @@ func TestCheckDebugStmts_DebuggerJS(t *testing.T) {
 	}
 }
 
-// #512: print() is Python's only stdout primitive; a normal CLI print is
-// deliberately NOT flagged (sa-171 A1 FP). The debug constructs are.
 func TestCheckDebugStmts_PythonPrintNotFlagged(t *testing.T) {
 	old := "def foo():\n    pass\n"
 	new := "def foo():\n    print('result ready')\n"
@@ -88,8 +86,6 @@ func TestCheckDebugStmts_PythonBreakpoint(t *testing.T) {
 	}
 }
 
-// #512: println! is Rust's standard output macro; normal output is not
-// flagged. dbg! remains the explicit debug signal.
 func TestCheckDebugStmts_RustPrintlnNotFlagged(t *testing.T) {
 	old := "fn main() {}\n"
 	new := "fn main() {\n    println!(\"Server listening on {}\", port);\n}\n"
@@ -109,7 +105,7 @@ func TestCheckDebugStmts_RustDbgMacro(t *testing.T) {
 }
 
 func TestCheckDebugStmts_PreExistingNotFlagged(t *testing.T) {
-	// If the debug statement was already in oldContent, it should NOT be flagged
+
 	old := "package main\n\nfunc main() {\n\tfmt.Println(\"existing\")\n}\n"
 	new := old + "\n// added comment\n"
 	warning := checkDebugStmts("main.go", old, new)
@@ -182,8 +178,6 @@ func TestCheckDebugStmts_MultipleTypes(t *testing.T) {
 	}
 }
 
-// #512: System.out is Java's standard output primitive; normal output is
-// not flagged (sa-171 A3 FP).
 func TestCheckDebugStmts_JavaSystemOutNotFlagged(t *testing.T) {
 	old := "public class App {\n}\n"
 	new := "public class App {\n    public void run() {\n        System.out.println(\"Listening on 8080\");\n    }\n}\n"
@@ -193,8 +187,6 @@ func TestCheckDebugStmts_JavaSystemOutNotFlagged(t *testing.T) {
 	}
 }
 
-// #512: printf is C's standard output primitive; CLI usage output is not
-// flagged (sa-171 A2 FP).
 func TestCheckDebugStmts_CPPPrintfNotFlagged(t *testing.T) {
 	old := "int main() {\n    return 0;\n}\n"
 	new := "int main() {\n    printf(\"Usage: %s <input>\\n\", argv[0]);\n    return 0;\n}\n"
@@ -205,11 +197,11 @@ func TestCheckDebugStmts_CPPPrintfNotFlagged(t *testing.T) {
 }
 
 func TestCheckDebugStmts_LanguageIsolation(t *testing.T) {
-	// fmt.Println should NOT trigger in a .js file
+
 	old := ""
 	new := "// using fmt-like syntax\nconst x = fmtPrintln();\n"
 	warning := checkDebugStmts("foo.js", old, new)
-	// fmt.Print pattern should only match .go files, not .js
+
 	if warning != "" {
 		t.Errorf("expected language isolation: fmt.Print should not trigger in .js, got: %s", warning)
 	}

@@ -41,7 +41,7 @@ func TestGhosttyTool_Clone(t *testing.T) {
 }
 
 func TestGhosttyTool_StatusNotDetected(t *testing.T) {
-	// Ensure TERM_PROGRAM is not ghostty.
+
 	orig := os.Getenv("TERM_PROGRAM")
 	t.Setenv("TERM_PROGRAM", "xterm")
 	defer os.Setenv("TERM_PROGRAM", orig)
@@ -70,7 +70,6 @@ func TestGhosttyTool_NotDetectedReturnsError(t *testing.T) {
 
 	tool := NewGhosttyTool("/tmp")
 
-	// All actions except status should fail when not in Ghostty.
 	for _, action := range []string{"list", "split", "focus", "close"} {
 		input, _ := json.Marshal(map[string]string{
 			"action":      action,
@@ -84,8 +83,7 @@ func TestGhosttyTool_NotDetectedReturnsError(t *testing.T) {
 }
 
 func TestGhosttyTool_InvalidAction(t *testing.T) {
-	// Set TERM_PROGRAM to ghostty so we pass the detection check,
-	// but the action is invalid.
+
 	t.Setenv("TERM_PROGRAM", "ghostty")
 
 	tool := NewGhosttyTool("/tmp")
@@ -170,13 +168,12 @@ func TestGhosttyTool_SplitInvalidDirection(t *testing.T) {
 }
 
 func TestGhosttyTool_Registration(t *testing.T) {
-	// When not in Ghostty, the tool should not be registered.
+
 	t.Setenv("TERM_PROGRAM", "xterm")
 	if shouldRegisterGhosttyTool() {
 		t.Fatal("should not register ghostty tool when TERM_PROGRAM != ghostty")
 	}
 
-	// When in Ghostty, the tool should be registered.
 	t.Setenv("TERM_PROGRAM", "ghostty")
 	if !shouldRegisterGhosttyTool() {
 		t.Fatal("should register ghostty tool when TERM_PROGRAM == ghostty")
@@ -184,7 +181,7 @@ func TestGhosttyTool_Registration(t *testing.T) {
 }
 
 func TestGhosttyTool_RegisterWithBuiltinTools(t *testing.T) {
-	// Verify that RegisterBuiltinTools registers ghostty when in Ghostty.
+
 	t.Setenv("TERM_PROGRAM", "ghostty")
 
 	registry := NewRegistry()
@@ -231,19 +228,17 @@ func TestEscapeAS(t *testing.T) {
 }
 
 func TestTerminalSpecifier(t *testing.T) {
-	// Empty terminalID should target focused terminal.
+
 	if got := terminalSpecifier(""); got != "focused terminal of selected tab of window 1" {
 		t.Errorf("terminalSpecifier(\"\") = %q", got)
 	}
 
-	// Non-empty should target by ID.
 	got := terminalSpecifier("ABC-123")
 	want := `first terminal whose id is "ABC-123"`
 	if got != want {
 		t.Errorf("terminalSpecifier(\"ABC-123\") = %q, want %q", got, want)
 	}
 
-	// Special characters should be escaped.
 	got = terminalSpecifier(`test"id`)
 	want = `first terminal whose id is "test\"id"`
 	if got != want {

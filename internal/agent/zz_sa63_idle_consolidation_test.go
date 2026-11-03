@@ -5,16 +5,13 @@ import (
 	"time"
 )
 
-// sa-63: the secondary maintenance callback must run on EVERY idle fire,
-// independent of the pre-compact ratio gate, so idle windows the ratio
-// floor would waste are reclaimed for memory re-consolidation.
 func TestIdleMaintenanceFiresBelowRatioFloor(t *testing.T) {
 	fired := make(chan struct{}, 4)
 	precompact := 0
 	m := NewIdleMaintainer(time.Minute, 0.9,
-		func() float64 { return 0 }, // ratio far below floor
+		func() float64 { return 0 },
 		func() { precompact++ })
-	m.after = 0 // in-package override: force idle immediately
+	m.after = 0
 	m.SetMaintenance(func() { fired <- struct{}{} })
 
 	m.check()
@@ -28,7 +25,6 @@ func TestIdleMaintenanceFiresBelowRatioFloor(t *testing.T) {
 	}
 }
 
-// One fire per idle period; Touch re-arms maintenance too (sa-63).
 func TestIdleMaintenanceSingleFireAndTouchRearm(t *testing.T) {
 	count := 0
 	m := NewIdleMaintainer(time.Minute, 0.9, func() float64 { return 0 }, nil)
@@ -47,7 +43,6 @@ func TestIdleMaintenanceSingleFireAndTouchRearm(t *testing.T) {
 	}
 }
 
-// A run in flight is activity, never idleness: no maintenance fire.
 func TestIdleMaintenanceSkipsWhenInflight(t *testing.T) {
 	count := 0
 	m := NewIdleMaintainer(time.Minute, 0, func() float64 { return 1 }, nil)
@@ -66,8 +61,6 @@ func TestIdleMaintenanceSkipsWhenInflight(t *testing.T) {
 	}
 }
 
-// A panicking maintenance callback must not take down the watcher loop
-// (safego.Recover isolation) and must not block later fires.
 func TestIdleMaintenancePanicIsolated(t *testing.T) {
 	count := 0
 	m := NewIdleMaintainer(time.Minute, 0, func() float64 { return 1 }, nil)
@@ -79,7 +72,7 @@ func TestIdleMaintenancePanicIsolated(t *testing.T) {
 		}
 	})
 
-	m.check() // first fire panics; Recover must swallow it
+	m.check()
 	if count != 1 {
 		t.Fatalf("panicking maintenance must still have run, got %d", count)
 	}
@@ -90,13 +83,11 @@ func TestIdleMaintenancePanicIsolated(t *testing.T) {
 	}
 }
 
-// SetMaintenance with nil (or on a nil receiver) must be a safe no-op:
-// unset maintenance simply means an idle period with no secondary work.
 func TestIdleMaintenanceNilCallbackSafe(t *testing.T) {
 	m := NewIdleMaintainer(time.Minute, 0.9, func() float64 { return 0 }, nil)
 	m.after = 0
-	m.SetMaintenance(nil) // #4122: clears via sentinel, must not fire anything
-	m.check()             // must not panic with cleared maintenance
+	m.SetMaintenance(nil)
+	m.check()
 	var nilM *IdleMaintainer
-	nilM.SetMaintenance(func() {}) // nil receiver: no-op
+	nilM.SetMaintenance(func() {})
 }

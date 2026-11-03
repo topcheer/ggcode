@@ -1,40 +1,5 @@
 package agent
 
-// Tool Error Fallback Chain - Actionable Recovery Suggestions on Tool Failure
-//
-// Research basis: "ACE: AI Context Engineering" (ICLR 2026) and error-recovery
-// studies show that when tools fail, AI agents waste 2-4 iterations figuring out
-// what to try next - they re-read the error, attempt the same approach with minor
-// tweaks, or give up. Production frameworks (LangChain, AutoGen, CrewAI) embed
-// fallback strategies into tool wrappers. Claude Code and Cursor leave this to
-// the model's own judgment, which is unreliable and costly.
-//
-// Gap in existing ggcode systems:
-//   - transient_retry.go: silently retries the SAME tool on transient errors.
-//     Doesn't suggest ALTERNATIVE tools when the failure is structural.
-//   - error_classifier.go: classifies error TYPE (syntax, permission, etc.) and
-//     fires once per category. Doesn't map failures to specific fallback actions.
-//   - recurring_error.go: detects when the same build error persists across
-//     edits. Reactive - fires only after 2+ identical failures.
-//   - empty_search_spiral: detects consecutive empty searches. Only covers
-//     search tools, and fires after multiple consecutive failures.
-//   - error_streak: detects consecutive failures across any tools. But gives
-//     generic "step back and think" guidance, not actionable alternatives.
-//
-// This component provides DETERMINISTIC, tool-specific fallback suggestions on
-// the FIRST failure, mapping each tool's common failure modes to concrete
-// alternative actions the agent can take immediately. This saves iterations by
-// giving the agent a recovery path without trial-and-error.
-//
-// Design:
-//   - Zero LLM cost (deterministic lookup table + heuristics)
-//   - Fires on first failure per tool per run (subsequent failures already have
-//     the suggestion in context)
-//   - Tool-specific: each tool has tailored fallbacks based on its common
-//     failure modes
-//   - Error-content-aware: parses the error to pick the most relevant fallback
-//   - Non-blocking: suggestion appended to error result, agent proceeds
-
 import (
 	"strings"
 	"sync"
@@ -42,11 +7,9 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// toolFallbackState tracks which tools have already received fallback suggestions
-// in the current run, so each tool only gets a suggestion once.
 type toolFallbackState struct {
 	mu    sync.Mutex
-	fired map[string]bool // tool name → already fired
+	fired map[string]bool
 }
 
 func newToolFallbackState() *toolFallbackState {
@@ -61,17 +24,11 @@ func (t *toolFallbackState) reset() {
 	t.fired = make(map[string]bool)
 }
 
-// fallbackRule defines a conditional fallback suggestion for a specific tool.
-// The match function receives the error content and returns true if this rule
-// applies. The suggestion is the actionable guidance text.
 type fallbackRule struct {
 	match      func(errorContent string) bool
 	suggestion string
 }
 
-// fallbackRules maps tool names to ordered lists of fallback rules.
-// The first matching rule wins. A default rule (always-matching) at the end
-// provides a generic fallback if no specific pattern matches.
 var fallbackRules = map[string][]fallbackRule{
 	"grep": {
 		{
@@ -257,7 +214,7 @@ var fallbackRules = map[string][]fallbackRule{
 			suggestion: "[fallback] git_diff: not in a git repository. Check the working directory, or use run_command 'git status' to diagnose.",
 		},
 	},
-	// Default fallback for any tool not explicitly handled
+
 	"_default": {
 		{
 			match: func(e string) bool { return true },
@@ -267,9 +224,6 @@ var fallbackRules = map[string][]fallbackRule{
 	},
 }
 
-// maybeFallbackSuggestion checks whether a fallback suggestion should be injected
-// for the given tool failure. Returns the suggestion text, or "" if none applies.
-// Each tool gets at most one suggestion per run.
 func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent string) string {
 	t.mu.Lock()
 	if t.fired[toolName] {
@@ -286,9 +240,7 @@ func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent strin
 	lowerContent := strings.ToLower(errorContent)
 	for _, rl := range rules {
 		if rl.match(lowerContent) {
-			// #1508: mark fired only on an actual suggestion - the old
-			// upfront marking burned the tool's single per-run slot even
-			// when no rule matched the error.
+
 			t.mu.Lock()
 			t.fired[toolName] = true
 			t.mu.Unlock()
@@ -298,15 +250,9 @@ func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent strin
 		}
 	}
 
-	// Should not reach here since _default always matches, but be safe.
 	return ""
 }
 
-// --- Agent integration methods ---
-
-// toolFallbackCheck evaluates a failed tool result and returns an actionable
-// fallback suggestion if one is available. Called after all other error hooks
-// so the suggestion is the last (most actionable) piece of guidance.
 func (a *Agent) toolFallbackCheck(toolName, errorContent string) string {
 	if a.toolFallback == nil {
 		return ""
@@ -317,7 +263,6 @@ func (a *Agent) toolFallbackCheck(toolName, errorContent string) string {
 	return a.toolFallback.maybeFallbackSuggestion(toolName, errorContent)
 }
 
-// resetToolFallback clears state for a new run.
 func (a *Agent) resetToolFallback() {
 	if a.toolFallback != nil {
 		a.toolFallback.reset()

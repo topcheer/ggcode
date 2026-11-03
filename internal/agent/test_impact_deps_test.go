@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// initTestModule creates a temporary Go module with a basic go.mod.
 func initTestModule(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -17,7 +16,6 @@ func initTestModule(t *testing.T) string {
 	return dir
 }
 
-// writeTestGoFile writes a Go file with imports in the test module.
 func writeTestGoFile(t *testing.T, dir, relPath, content string) {
 	t.Helper()
 	abs := filepath.Join(dir, relPath)
@@ -29,21 +27,16 @@ func writeTestGoFile(t *testing.T, dir, relPath, content string) {
 	}
 }
 
-// TestTransitiveImporters_TwoLevelChain tests the core transitive behavior:
-// A imports B, B imports C, C changed → A should be in the result.
 func TestTransitiveImporters_TwoLevelChain(t *testing.T) {
 	resetImportGraphCache()
 	dir := initTestModule(t)
 
-	// Create a three-level import chain: A → B → C
-	// Package C (leaf)
 	writeTestGoFile(t, dir, "pkg/c/c.go", "package c\n")
-	// Package B imports C
+
 	writeTestGoFile(t, dir, "pkg/b/b.go", "package b\nimport \"test/pkg/c\"\n")
-	// Package A imports B (but not C directly)
+
 	writeTestGoFile(t, dir, "pkg/a/a.go", "package a\nimport \"test/pkg/b\"\n")
 
-	// Debug: list files in the test directory
 	files, _ := os.ReadDir(dir)
 	for _, f := range files {
 		t.Logf("test dir root: %s", f.Name())
@@ -59,12 +52,9 @@ func TestTransitiveImporters_TwoLevelChain(t *testing.T) {
 		}
 	}
 
-	// The first call to transitiveImporters triggers a background build.
-	// Call it twice: the first triggers the build, the second uses the cache.
 	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
-	// Now call with the actual changed package
 	importers, _ := transitiveImporters(dir, []string{"pkg/c"})
 
 	t.Logf("importers result: %v", importers)
@@ -73,7 +63,6 @@ func TestTransitiveImporters_TwoLevelChain(t *testing.T) {
 		t.Fatal("expected importers, got nil")
 	}
 
-	// Verify that both B and A are included (transitive closure)
 	foundB := false
 	foundA := false
 	for _, imp := range importers {
@@ -93,14 +82,10 @@ func TestTransitiveImporters_TwoLevelChain(t *testing.T) {
 	}
 }
 
-// TestTransitiveImporters_Determinism tests that the same input produces
-// the same output ordering (deterministic BFS with sorted iteration).
 func TestTransitiveImporters_Determinism(t *testing.T) {
 	resetImportGraphCache()
 	dir := initTestModule(t)
 
-	// Create a small graph: Z imports C, Y imports B, X imports A
-	// All A, B, C are changed.
 	writeTestGoFile(t, dir, "pkg/a/a.go", "package a\n")
 	writeTestGoFile(t, dir, "pkg/b/b.go", "package b\n")
 	writeTestGoFile(t, dir, "pkg/c/c.go", "package c\n")
@@ -108,11 +93,9 @@ func TestTransitiveImporters_Determinism(t *testing.T) {
 	writeTestGoFile(t, dir, "pkg/y/y.go", "package y\nimport \"test/pkg/b\"\n")
 	writeTestGoFile(t, dir, "pkg/z/z.go", "package z\nimport \"test/pkg/c\"\n")
 
-	// Trigger cache build
 	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
-	// Run twice and compare
 	importers1, _ := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
 	importers2, _ := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
 
@@ -133,7 +116,6 @@ func TestTransitiveImporters_Determinism(t *testing.T) {
 		}
 	}
 
-	// Verify sorted order (A < B < C < X < Y < Z alphabetically)
 	expected := []string{"pkg/x", "pkg/y", "pkg/z"}
 	for i, exp := range expected {
 		if importers1[i] != exp {
@@ -142,18 +124,15 @@ func TestTransitiveImporters_Determinism(t *testing.T) {
 	}
 }
 
-// TestTransitiveImporters_NoGraph tests graceful fallback when import graph
-// can't be built.
 func TestTransitiveImporters_NoGraph(t *testing.T) {
 	resetImportGraphCache()
-	// Non-existent directory
+
 	importers, _ := transitiveImporters("/nonexistent/path", []string{"pkg/a"})
 	if importers != nil {
 		t.Errorf("expected nil for non-existent dir, got %v", importers)
 	}
 }
 
-// TestTransitiveImporters_EmptyChanges tests empty changed dirs list.
 func TestTransitiveImporters_EmptyChanges(t *testing.T) {
 	resetImportGraphCache()
 	dir := initTestModule(t)
@@ -163,25 +142,20 @@ func TestTransitiveImporters_EmptyChanges(t *testing.T) {
 	}
 }
 
-// TestTransitiveImporters_ExternalImports tests that only module-internal
-// importers are included (packages outside the module are ignored).
 func TestTransitiveImporters_ExternalImports(t *testing.T) {
 	resetImportGraphCache()
 	dir := initTestModule(t)
 
-	// Package A imports stdlib (not in module)
 	writeTestGoFile(t, dir, "pkg/a/a.go", "package a\nimport \"fmt\"\n")
-	// Package B changes
+
 	writeTestGoFile(t, dir, "pkg/b/b.go", "package b\n")
 
-	// A does not import B, so no importers should be found
 	importers, _ := transitiveImporters(dir, []string{"pkg/b"})
 	if importers != nil {
 		t.Errorf("expected nil (A imports fmt, not B), got %v", importers)
 	}
 }
 
-// containsSubstring is a helper for string containment checks.
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && indexOfSubstring(s, substr) >= 0)
 }
@@ -195,8 +169,6 @@ func indexOfSubstring(s, substr string) int {
 	return -1
 }
 
-// waitForCacheBuild waits for the background import graph build to complete.
-// This is only used in tests to ensure the cache is ready before querying.
 func waitForCacheBuild(workingDir string) {
 	for i := 0; i < 20; i++ {
 		importGraphCache.Lock()
@@ -209,8 +181,6 @@ func waitForCacheBuild(workingDir string) {
 	}
 }
 
-// resetImportGraphCache resets the shared import graph cache.
-// This should be called in tests that use different working directories.
 func resetImportGraphCache() {
 	importGraphCache.Lock()
 	defer importGraphCache.Unlock()

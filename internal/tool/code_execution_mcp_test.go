@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// fakeMCPTool is a minimal registry tool shaped like the MCP adapter's
-// registered tools (mcp__ prefix + optional SandboxSafe declaration) for
-// exercising the code-execution MCP bridge (sa-19) without a live server.
 type fakeMCPTool struct {
 	name  string
 	desc  string
@@ -27,8 +24,6 @@ func (f *fakeMCPTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
 }
 
-// SandboxSafe mirrors mcpTool.SandboxSafe: safe=true only for read_only
-// servers' tools.
 func (f *fakeMCPTool) SandboxSafe() bool { return f.safe }
 
 func (f *fakeMCPTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
@@ -58,7 +53,7 @@ func mcpTestRegistry() (*Registry, *fakeMCPTool, *fakeMCPTool) {
 		resp: "created",
 	}
 	reg := NewRegistry()
-	// Registration order does not matter; ToolNames sorts by name.
+
 	_ = reg.Register(safe)
 	_ = reg.Register(unsafe)
 	return reg, safe, unsafe
@@ -71,10 +66,6 @@ func runMCPSandbox(t *testing.T, reg *Registry, code string) (Result, error) {
 	return result, err
 }
 
-// TestCodeExecution_MCPListAndDescribe verifies discovery: mcpList reports
-// every MCP tool with its sandbox eligibility, and mcpDescribe returns the
-// on-demand schema — including for sandbox=false tools (describing is
-// read-only).
 func TestCodeExecution_MCPListAndDescribe(t *testing.T) {
 	reg, safe, unsafe := mcpTestRegistry()
 
@@ -112,8 +103,6 @@ func TestCodeExecution_MCPListAndDescribe(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_MCPDescribeRejectsNonMCP verifies mcpDescribe only
-// accepts mcp__-prefixed names.
 func TestCodeExecution_MCPDescribeRejectsNonMCP(t *testing.T) {
 	reg, _, _ := mcpTestRegistry()
 	result, _ := runMCPSandbox(t, reg, "await tools.mcpDescribe('read_file');\n")
@@ -125,9 +114,6 @@ func TestCodeExecution_MCPDescribeRejectsNonMCP(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_MCPSafeToolCallable verifies a sandbox-safe MCP tool is
-// callable from JS and its result stays inside the sandbox (only the model's
-// console.log summary reaches the context).
 func TestCodeExecution_MCPSafeToolCallable(t *testing.T) {
 	reg, safe, _ := mcpTestRegistry()
 	code := "var r = JSON.parse(await tools['mcp__test__search']({q: 'x'}));\n" +
@@ -147,8 +133,6 @@ func TestCodeExecution_MCPSafeToolCallable(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_MCPWriteToolNotExposed verifies write-capable MCP tools
-// are not injected: calling them from JS throws.
 func TestCodeExecution_MCPWriteToolNotExposed(t *testing.T) {
 	reg, _, unsafe := mcpTestRegistry()
 	code := "await tools['mcp__test__create_issue']({title: 'nope'});\n" +
@@ -165,9 +149,6 @@ func TestCodeExecution_MCPWriteToolNotExposed(t *testing.T) {
 	}
 }
 
-// TestCodeExecution_MCPBudgetExceeded verifies the per-run MCP call budget:
-// beyond maxMCPCallsPerRun calls, further calls are rejected and the run
-// errors out.
 func TestCodeExecution_MCPBudgetExceeded(t *testing.T) {
 	reg, safe, _ := mcpTestRegistry()
 	code := "var last = '';\n" +

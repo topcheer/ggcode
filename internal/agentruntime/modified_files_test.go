@@ -24,7 +24,7 @@ func setupTestGitRepo(t *testing.T) string {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	// Initial commit
+
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,6 @@ func TestModifiedFilesSection_DirtyRepo(t *testing.T) {
 	}
 	dir := setupTestGitRepo(t)
 
-	// Create modified, staged, and untracked files
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# changed\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +100,6 @@ func TestModifiedFilesSection_Truncation(t *testing.T) {
 	}
 	dir := setupTestGitRepo(t)
 
-	// Create and commit tracked files first, then modify them to exceed the cap.
-	// Using tracked files is much faster than untracked ones for git status.
 	fileCount := modifiedFilesMax + 3
 	for i := 0; i < fileCount; i++ {
 		name := filepath.Join(dir, "f"+string(rune('a'+i%26))+string(rune('a'+i/26))+".go")
@@ -119,7 +116,6 @@ func TestModifiedFilesSection_Truncation(t *testing.T) {
 	c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
 	c.Run()
 
-	// Now modify all of them
 	for i := 0; i < fileCount; i++ {
 		name := filepath.Join(dir, "f"+string(rune('a'+i%26))+string(rune('a'+i/26))+".go")
 		if err := os.WriteFile(name, []byte("package main // changed\n"), 0644); err != nil {
@@ -158,9 +154,8 @@ func TestModifiedFilesSection_NoHang(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("modifiedFilesSection hung")
 	case <-done:
-		// OK
+
 	}
 
-	// Use ctx to avoid unused import
 	_ = context.Background()
 }

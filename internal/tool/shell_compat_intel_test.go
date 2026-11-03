@@ -7,7 +7,7 @@ import (
 )
 
 func TestDiagnoseShellCompat(t *testing.T) {
-	// On Linux, all GNU commands are native -- function should return empty.
+
 	isLinux := runtime.GOOS == "linux"
 
 	tests := []struct {
@@ -15,7 +15,7 @@ func TestDiagnoseShellCompat(t *testing.T) {
 		command string
 		stdout  string
 		stderr  string
-		want    string // expected substring in output, empty = no match
+		want    string
 	}{
 		{
 			name:    "sed -i GNU syntax fails on BSD",
@@ -115,7 +115,7 @@ func TestDiagnoseShellCompat(t *testing.T) {
 			got := diagnoseShellCompat(tt.command, tt.stdout, tt.stderr)
 
 			if isLinux {
-				// On Linux, no compat hints should fire
+
 				if got != "" {
 					t.Errorf("on Linux, expected empty result, got: %s", got)
 				}
@@ -152,8 +152,6 @@ func TestDiagnoseShellCompatFormat(t *testing.T) {
 	}
 }
 
-// #1342/#868: find/head patterns must anchor to the command word - bare
-// substring matching fires on "refind-printf" or paths containing "find".
 func TestShellCompatFindHeadAnchoring(t *testing.T) {
 	noise := []string{
 		"echo refind-printf-usage",

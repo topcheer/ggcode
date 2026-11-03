@@ -1,8 +1,5 @@
 package tool
 
-// Guard tests for the #839-#852 fix round. Each test pins the new semantics
-// so a regression reintroduces a visible failure instead of silent drift.
-
 import (
 	"strings"
 	"testing"
@@ -11,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// TestKGPartialUpdatePreservesContent (#844): an add/update on an existing
-// id carrying only status must not wipe accumulated Content/Title.
 func TestKGPartialUpdatePreservesContent(t *testing.T) {
 	tk := &KnowledgeGraphTool{}
 	s := &kgStore{Nodes: map[string]*kgNode{
@@ -36,9 +31,8 @@ func TestKGPartialUpdatePreservesContent(t *testing.T) {
 	}
 }
 
-// TestKGRuneSafePreview (#850): 200-rune CJK preview must not split bytes.
 func TestKGRuneSafePreview(t *testing.T) {
-	cjk := strings.Repeat("世", 250) // 750 bytes, 250 runes
+	cjk := strings.Repeat("世", 250)
 	n := &kgNode{Type: "note", Title: "t", Content: cjk}
 	var sb strings.Builder
 	formatNodeShort(&sb, n)
@@ -51,8 +45,6 @@ func TestKGRuneSafePreview(t *testing.T) {
 	}
 }
 
-// TestKittyWindowLabelFocused (#852): omitted window_id shows "(focused)"
-// instead of "<nil>".
 func TestKittyWindowLabelFocused(t *testing.T) {
 	if got := kittyWindowLabel(map[string]any{}); got != "window (focused)" {
 		t.Fatalf("empty window_id label = %q", got)
@@ -62,9 +54,6 @@ func TestKittyWindowLabelFocused(t *testing.T) {
 	}
 }
 
-// TestBroadcastRoleHumanDefault (#845): human-originated broadcasts must
-// target RoleHuman; only as_agent flips to RoleAgent. Pin that the two
-// roles are distinct so the branch stays meaningful.
 func TestBroadcastRoleHumanDefault(t *testing.T) {
 	if lanchat.RoleHuman == lanchat.RoleAgent {
 		t.Fatal("RoleHuman and RoleAgent collapsed - broadcast targeting broken")

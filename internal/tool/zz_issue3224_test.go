@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-// #3224: when EVERY trial fails to produce committed or verify-passed work,
-// pickWinner still returns a pure-score index and the report used to print a
-// WINNER block plus pointers to already-deleted worktrees (kept<0 →
-// cleanupWorktrees removed everything). The body contradicted IsError and
-// actively misled the calling agent. formatTrialReport must gate the winner
-// block on the caller's usability verdict and the zero-commit warning on
-// the winner actually being kept.
-
 func mkResult3224(idx, commits int, verifyPass, kept bool) trialResult {
 	return trialResult{
 		Index:      idx,
@@ -32,7 +24,7 @@ func TestIssue3224_AllFailedNoWinnerBlock(t *testing.T) {
 		mkResult3224(1, 0, false, false),
 		mkResult3224(2, 0, false, false),
 	}
-	// pickWinner returns >=0 here (pure score); caller passes anyUsable=false.
+
 	report := formatTrialReport("0123456789abcdef", "", results, 0, false)
 	if strings.Contains(report, "WINNER: trial") {
 		t.Fatalf("all-failed run must not print a WINNER block:\n%s", report)
@@ -66,8 +58,7 @@ func TestIssue3224_RealWinnerUnchanged(t *testing.T) {
 }
 
 func TestIssue3224_VerifyPassZeroCommitWarningKept(t *testing.T) {
-	// #2795 original scenario: verify passed, nothing committed, winner
-	// kept - the warning (and its kept-worktree pointer) is correct there.
+
 	r := mkResult3224(1, 0, true, true)
 	report := formatTrialReport("0123456789abcdef", "go test ./...", []trialResult{r}, 0, true)
 	if !strings.Contains(report, "passed verify but committed nothing") {

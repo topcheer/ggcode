@@ -24,8 +24,7 @@ func TestBuildProjectOverview_Basic(t *testing.T) {
 			t.Errorf("overview missing %q:\n%s", want, out)
 		}
 	}
-	// At the root, key manifest files sort before directories so they
-	// survive the line budget.
+
 	if strings.Index(out, "go.mod") > strings.Index(out, "internal/") {
 		t.Errorf("expected root files before directories:\n%s", out)
 	}
@@ -68,8 +67,7 @@ func TestBuildProjectOverview_DepthLimit(t *testing.T) {
 func TestBuildProjectOverview_FilesOnlyAtRoot(t *testing.T) {
 	root := t.TempDir()
 	mustMkdir(t, filepath.Join(root, "pkg", "sub"))
-	// Many files inside a subdirectory must not consume the line budget —
-	// only directory names are shown below the root.
+
 	for i := 0; i < 30; i++ {
 		mustWrite(t, filepath.Join(root, "pkg", strings.Repeat("f", i+1)+".go"), "package pkg\n")
 	}
@@ -92,7 +90,7 @@ func TestBuildProjectOverview_FilesOnlyAtRoot(t *testing.T) {
 
 func TestBuildProjectOverview_Truncates(t *testing.T) {
 	root := t.TempDir()
-	// Create more entries than the cap at depth 0.
+
 	for i := 0; i < overviewMaxEntries+10; i++ {
 		mustWrite(t, filepath.Join(root, "file"+string(rune('a'+i%26))+string(rune('a'+i/26))+".txt"), "x")
 	}

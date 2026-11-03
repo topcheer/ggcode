@@ -1,9 +1,5 @@
 package agent
 
-// #3908 probes: separators inside quoted shell literals must not produce
-// segments that satisfy the verify/evidence matchers, while real compound
-// commands keep splitting.
-
 import (
 	"strings"
 	"testing"
@@ -43,13 +39,11 @@ func TestIssue3908_RealCompoundStillSplits(t *testing.T) {
 	if !found {
 		t.Fatal("real verify segments must still be recognized")
 	}
-	// Background form and empty-filtering parity with the old FieldsFunc.
+
 	if got := splitCompoundCommand("sleep 5 &"); len(got) != 1 || strings.TrimSpace(got[0]) != "sleep 5" {
 		t.Fatalf("background form regressed: %q", got)
 	}
-	// Consecutive separators: no EMPTY string segments (each emitted
-	// segment has content - parity with the old FieldsFunc, which also
-	// kept whitespace-only segments between separator runs).
+
 	got := splitCompoundCommand("a && && b")
 	if len(got) == 0 {
 		t.Fatalf("expected segments, got none")

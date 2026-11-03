@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ============================================================================
-// #958: fallbacks.append must not be shadowed by the fallbacks.<N> prefix case
-// ============================================================================
-
 func TestConfigAccess_FallbacksAppendSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -37,7 +33,6 @@ func TestConfigAccess_FallbacksAppendSucceeds(t *testing.T) {
 		t.Fatalf("appended entry wrong: %+v", appended)
 	}
 
-	// The appended entry must be readable through the indexed key path.
 	v, err := access.Get("fallbacks.1.model")
 	if err != nil {
 		t.Fatalf("read fallbacks.1.model: %v", err)
@@ -46,10 +41,6 @@ func TestConfigAccess_FallbacksAppendSucceeds(t *testing.T) {
 		t.Fatalf("fallbacks.1.model = %q, want m2", v)
 	}
 }
-
-// ============================================================================
-// #956: pure Get must not mutate the live config (redact deep copy)
-// ============================================================================
 
 func TestConfigAccess_GetMCPServerDoesNotPolluteConfig(t *testing.T) {
 	t.Setenv("GGCODE_TEST_MCP_TOKEN", "sk-test-secret-value-1234")
@@ -75,7 +66,6 @@ func TestConfigAccess_GetMCPServerDoesNotPolluteConfig(t *testing.T) {
 		t.Fatalf("output should contain masked secret, got: %s", out)
 	}
 
-	// The live config must keep the original ${VAR} reference untouched.
 	if got := cfg.MCPServers[0].Env["API_TOKEN"]; got != "${GGCODE_TEST_MCP_TOKEN}" {
 		t.Fatalf("Env[API_TOKEN] polluted by Get: %q", got)
 	}
@@ -118,10 +108,6 @@ func TestConfigAccess_GetIMAdapterDoesNotPolluteConfig(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// #957 problem 1: List/Delete must hold cfgMu while hot-reload refreshes fields
-// ============================================================================
-
 func TestConfigAccess_ListConcurrentHotReload(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -133,7 +119,7 @@ func TestConfigAccess_ListConcurrentHotReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh.MaxIterations = 42 // scalar field applyFreshConfig writes under lock
+	fresh.MaxIterations = 42
 
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -173,9 +159,7 @@ func TestConfigAccess_DeleteConcurrentHotReload(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for j := 0; j < 300; j++ {
-			// Delete of a non-existent server exercises the unlocked config
-			// reads (MCPServers, save scope) against the locked hot-reload
-			// field writes.
+
 			_ = access.Delete("mcp_servers.no-such-server")
 		}
 	}()
@@ -188,10 +172,6 @@ func TestConfigAccess_DeleteConcurrentHotReload(t *testing.T) {
 	}()
 	wg.Wait()
 }
-
-// ============================================================================
-// #957 problem 2: provider probe (network) must run outside the config lock
-// ============================================================================
 
 func TestConfigAccess_SetModelProbeDoesNotBlockGet(t *testing.T) {
 	cfg := &config.Config{
@@ -212,7 +192,7 @@ func TestConfigAccess_SetModelProbeDoesNotBlockGet(t *testing.T) {
 	orig := probeProviderFn
 	probeProviderFn = func(r *config.ResolvedEndpoint) error {
 		close(probeStarted)
-		<-release // simulate a slow network probe
+		<-release
 		return nil
 	}
 	t.Cleanup(func() { probeProviderFn = orig })
@@ -228,7 +208,6 @@ func TestConfigAccess_SetModelProbeDoesNotBlockGet(t *testing.T) {
 		t.Fatal("probe never started")
 	}
 
-	// While the probe is in flight, Get must not block on cfgMu.
 	getDone := make(chan struct{})
 	go func() {
 		_, _ = access.Get("vendor")

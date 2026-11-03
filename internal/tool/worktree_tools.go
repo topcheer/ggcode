@@ -15,20 +15,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// resolveWorktreeBase (#4778 / S-06): worktree branches must base on the
-// canonical main tip, not the local HEAD - on a shared multi-branch tree
-// whose HEAD sits on a feature branch, HEAD-basing silently carried
-// unmerged commits into every 'fresh' worktree (sa-1/sa-2/sa-3 all hit
-// it). Fetch-first: prefer origin/main; when the remote is unreachable,
-// fall back to the local main tip; only when neither resolves use HEAD.
-// Returns the pinned commit hash (never a ref name, so the base cannot
-// drift between resolution and `git worktree add`) plus a user-facing
-// note naming the base commit, with an explicit warning on fallback.
 func resolveWorktreeBase(ctx context.Context, gitRoot string) (base string, note string) {
 	warn := func(ref string) string {
 		return fmt.Sprintf("Warning: worktree is based on %s (%.7s), NOT origin/main - the remote was unreachable or has no main branch; it may carry unmerged commits (#4778).", ref, base)
 	}
-	// Fetch first; a failed fetch (offline, no remote) must not block work.
+
 	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", "main", "--quiet")
 	fetch.Dir = gitRoot
 	fetch.Env = append(os.Environ(), "GIT_PAGER=cat")
@@ -46,7 +37,7 @@ func resolveWorktreeBase(ctx context.Context, gitRoot string) (base string, note
 			return base, warn(ref)
 		}
 	}
-	// Last resort: HEAD itself (single-branch repo, no main at all).
+
 	c := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
 	c.Dir = gitRoot
 	c.Env = append(os.Environ(), "GIT_PAGER=cat")
@@ -57,7 +48,6 @@ func resolveWorktreeBase(ctx context.Context, gitRoot string) (base string, note
 	return "HEAD", "Warning: could not resolve a base commit; using HEAD as-is."
 }
 
-// EnterWorktree creates a new git worktree for isolated work.
 type EnterWorktree struct {
 	WorkingDir string
 }
@@ -98,24 +88,20 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	name := args.Name
 	if name == "" {
-		// Generate a random-ish name
+
 		name = fmt.Sprintf("wt-%s-%04d", time.Now().Format("20060102"), rand.Intn(10000))
 	}
 
-	// Sanitize name: only allow safe characters
 	for _, c := range name {
 		if !isWorktreeNameChar(c) {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid worktree name %q: only letters, digits, dots, underscores, and dashes allowed", name)}, nil
 		}
 	}
-	// #1710 case 5: "."/".." pass the character check (dot allowed) but are
-	// path components - filepath.Join(worktreesDir, "..") escapes the
-	// worktrees directory.
+
 	if !isSafeWorktreeName(name) {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid worktree name %q: must not be a path component ('.', '..') or contain separators", name)}, nil
 	}
 
-	// Find git root
 	gitRoot, err := findGitRoot(ctx, t.WorkingDir)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
@@ -129,21 +115,13 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	worktreePath := filepath.Join(worktreesDir, name)
 	branchName := name
 
-	// #4778 (S-06): base on the fetched origin/main tip (fallback local
-	// main) instead of local HEAD, so a shared tree checked out on a
-	// feature branch does not leak unmerged commits into fresh worktrees.
 	base, baseNote := resolveWorktreeBase(ctx, gitRoot)
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, base)
 	cmd.Dir = gitRoot
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// #4802 (S-34): a name collision used to surface git's bare
-		// "fatal: a branch named '<name>' already exists" with no guidance.
-		// The dead end pushed agents toward main-tree checkout operations
-		// (the friction layer of the 2026-10-31 shared-tree violations).
-		// Enrich the two collision classes with the existing branch's head,
-		// whether a worktree already holds it, and the concrete next moves.
+
 		return Result{IsError: true, Content: t.collisionGuidance(ctx, gitRoot, branchName, worktreePath, out)}, nil
 	}
 
@@ -153,17 +131,6 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}, nil
 }
 
-// collisionGuidance turns a failed `git worktree add` into an actionable
-// error message (#4802 / S-34). Two collision classes are enriched:
-//
-//  1. Branch collision - "a branch named '<name>' already exists": reports
-//     the existing branch's head SHA and whether a worktree already holds
-//     it, then gives the three safe next moves (reuse via
-//     `git worktree add <path> <branch>` when free, pick another name, or
-//     recreate from HEAD with `git worktree add -B <name> <path> HEAD`
-//     after confirming the old branch is disposable). Never touches the
-//     main tree's checkout.
-//  2. Any other failure - the raw git output, unchanged.
 func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchName, worktreePath string, out []byte) string {
 	raw := strings.TrimSpace(string(out))
 	if !strings.Contains(raw, "already exists") {
@@ -171,15 +138,14 @@ func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchNam
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("error creating worktree %q: %s\n", branchName, raw))
-	// git quotes branch names with SINGLE quotes ("a branch named 'x'") -
-	// %q would emit double quotes and never match.
+
 	branchCollision := strings.Contains(raw, "a branch named '"+branchName+"'") || strings.Contains(raw, fmt.Sprintf("branch '%s' already exists", branchName))
 	if !branchCollision {
-		// Path/directory collision (e.g. the worktrees dir entry exists).
+
 		sb.WriteString(fmt.Sprintf("Next: remove or rename the existing entry at %s, or pick a different worktree name.", worktreePath))
 		return sb.String()
 	}
-	// Branch collision: enrich with the existing head + holder status.
+
 	headCmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", branchName)
 	headCmd.Dir = gitRoot
 	headCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
@@ -200,10 +166,6 @@ func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchNam
 	return sb.String()
 }
 
-// worktreeHoldingBranch returns the path of the worktree that has branchName
-// checked out, or "" when the branch is free. Reads `git worktree list
-// --porcelain` block by block: each block starts with a "worktree <path>"
-// line and may carry a "branch refs/heads/<name>" line.
 func worktreeHoldingBranch(ctx context.Context, gitRoot, branchName string) string {
 	listCmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	listCmd.Dir = gitRoot
@@ -225,12 +187,6 @@ func worktreeHoldingBranch(ctx context.Context, gitRoot, branchName string) stri
 	return ""
 }
 
-// createAgentWorktree creates an isolated git worktree for a spawned
-// sub-agent under <gitRoot>/.ggcode/worktrees/, cut from HEAD on a dedicated
-// branch. The sub-agent runs with its working directory set to the worktree
-// so its file edits cannot collide with the parent's working tree.
-// Worktrees are left in place after the run (never auto-removed); the parent
-// finds the path via the spawn result and Snapshot.Worktree.
 func createAgentWorktree(ctx context.Context, workingDir, agentID string) (string, string, error) {
 	gitRoot, err := findGitRoot(ctx, workingDir)
 	if err != nil {
@@ -242,16 +198,13 @@ func createAgentWorktree(ctx context.Context, workingDir, agentID string) (strin
 		return "", "", fmt.Errorf("error creating worktrees dir: %w", err)
 	}
 
-	// Sub-agent IDs restart at sa-1 in every process, so embed a timestamp
-	// and random suffix to avoid colliding with worktrees left behind by
-	// earlier sessions.
 	name := fmt.Sprintf("agent-%s-%s-%04d", agentID, time.Now().Format("0102-150405"), rand.Intn(10000))
 	for _, c := range name {
 		if !isWorktreeNameChar(c) {
 			return "", "", fmt.Errorf("invalid worktree name %q", name)
 		}
 	}
-	// #1710 case 5: "."/".." pass the character check but are path components.
+
 	if !isSafeWorktreeName(name) {
 		return "", "", fmt.Errorf("invalid worktree name %q", name)
 	}
@@ -259,8 +212,6 @@ func createAgentWorktree(ctx context.Context, workingDir, agentID string) (strin
 	worktreePath := filepath.Join(worktreesDir, name)
 	branchName := name
 
-	// #4778 (S-06): same base policy as enter_worktree - fetched
-	// origin/main tip first, local main fallback with warning, HEAD last.
 	base, baseNote := resolveWorktreeBase(ctx, gitRoot)
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, base)
 	cmd.Dir = gitRoot
@@ -273,7 +224,6 @@ func createAgentWorktree(ctx context.Context, workingDir, agentID string) (strin
 	return worktreePath, branchName, nil
 }
 
-// ExitWorktree exits and optionally removes a git worktree.
 type ExitWorktree struct {
 	WorkingDir string
 }
@@ -325,13 +275,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
-	// #1406-A: 'keep' vs remove used to be decided by a single =="keep"
-	// check - every OTHER value, including a typo ('exit', 'close' - both
-	// beyond CoerceEnumValues' distance-2 correction) AND a MISSING action
-	// (json.Unmarshal does not enforce required), fell through to REMOVE:
-	// worktree deleted + 'git branch -D'. Missing parameter meant delete.
-	// Fail closed now: only the two spelled-out values act, anything else
-	// is a parameter error (with a near-miss suggestion when one exists).
+
 	if args.Action != "keep" && args.Action != "remove" {
 		msg := fmt.Sprintf("invalid action %q: must be 'keep' or 'remove'. Refusing to default to the destructive 'remove'.", args.Action)
 		if s := suggestClosestEnum(args.Action, []json.RawMessage{json.RawMessage(`"keep"`), json.RawMessage(`"remove"`)}); s != "" {
@@ -340,13 +284,11 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: msg}, nil
 	}
 
-	// Find git root
 	gitRoot, err := findGitRoot(ctx, t.WorkingDir)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
 	}
 
-	// Check if we're actually in a worktree
 	isWorktree, worktreePath, err := isInsideWorktree(gitRoot)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error checking worktree status: %v", err)}, nil
@@ -355,7 +297,6 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "not currently inside a worktree created by enter_worktree"}, nil
 	}
 
-	// Find the main repo root so we can suggest switching back
 	mainRepoRoot, _ := findGitRootFromWorktree(worktreePath)
 
 	if args.Action == "keep" {
@@ -365,8 +306,6 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		}, nil
 	}
 
-	// action == "remove"
-	// Check for uncommitted changes
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = gitRoot
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
@@ -378,30 +317,14 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "worktree has uncommitted changes. Set discard_changes=true to remove anyway, or commit/stash your changes first."}, nil
 	}
 
-	// Get the branch currently checked out (may differ from the creation
-	// branch if the agent switched mid-worktree).
 	branchCmd := exec.CommandContext(ctx, "git", "branch", "--show-current")
 	branchCmd.Dir = gitRoot
 	branchCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	branchOut, _ := branchCmd.Output()
 	currentBranch := strings.TrimSpace(string(branchOut))
-	// #4905: the deletion TARGET is the creation-time branch, derived from
-	// the worktree directory name (enter_worktree creates the branch with the
-	// same name as the directory - a creation-time invariant). The old code
-	// deleted whatever branch was checked out NOW: an agent that switched
-	// branches inside the worktree had the WRONG branch deleted while the
-	// creation-time branch became a silent orphan, and a detached HEAD
-	// (empty --show-current) skipped branch cleanup entirely.
+
 	branchName := filepath.Base(worktreePath)
 
-	// Remove the worktree. #1356: --force only when the caller explicitly
-	// authorized discarding. Passing it unconditionally disabled git's own
-	// dirty-refusal protection at all times, leaving only the status check
-	// above - a real TOCTOU window in this multi-agent/parallel-tool
-	// codebase, where a concurrent write landing between check and remove
-	// was silently destroyed. Without --force, git checks-and-removes
-	// atomically and its "contains modified or untracked files" error
-	// covers untracked files too.
 	forceArgs := []string{}
 	if args.DiscardChanges {
 		forceArgs = []string{"--force"}
@@ -417,14 +340,9 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("error removing worktree: %s", strings.TrimSpace(string(rmOut)))}, nil
 	}
 
-	// Optionally delete the branch
 	deletedBranch := ""
 	if branchName != "" && branchName != "main" && branchName != "master" {
-		// #1710 case 1: gate the force-delete on unmerged/unpushed commits.
-		// The old code ran `git branch -D` unconditionally and swallowed the
-		// error, so committed-but-unpushed work was destroyed with ZERO gate -
-		// strictly weaker protection than the dirty-files gate above, for data
-		// that is worth strictly more.
+
 		unmergedCmd := exec.CommandContext(ctx, "git", "rev-list", "--count", branchName, "--not", "HEAD")
 		unpushedCmd := exec.CommandContext(ctx, "git", "rev-list", "--count", branchName, "--not", "--remotes")
 		unmergedCmd.Dir = mainRepoRoot
@@ -435,8 +353,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		unpushedOut, uerr2 := unpushedCmd.Output()
 		unmerged, _ := strconv.Atoi(strings.TrimSpace(string(unmergedOut)))
 		unpushed, _ := strconv.Atoi(strings.TrimSpace(string(unpushedOut)))
-		// If the safety probes themselves fail, do NOT force-delete (fail
-		// closed); keep the branch and tell the user.
+
 		if uerr1 == nil && uerr2 == nil && (unmerged > 0 || unpushed > 0) && !args.DiscardChanges {
 			return Result{
 				Content:             fmt.Sprintf("worktree removed, but branch %s has %d unmerged and %d unpushed commit(s); branch kept. Set discard_changes=true to delete the branch too, or push/merge it first (recoverable via reflog for ~30 days after -D).", branchName, unmerged, unpushed),
@@ -449,7 +366,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 			delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
 			delCmd.Dir = mainRepoRoot
 			delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
-			if err := delCmd.Run(); err == nil { // best effort
+			if err := delCmd.Run(); err == nil {
 				deletedBranch = branchName
 			}
 		}
@@ -457,14 +374,10 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	result := fmt.Sprintf("Removed worktree %s", worktreePath)
 	if deletedBranch != "" {
-		// #4905: the reflog recovery hint belongs on the ACTUAL -D execution
-		// path (the old hint existed only on the branch-kept path above).
+
 		result += fmt.Sprintf(" and deleted branch %s (recoverable via reflog for ~30 days)", deletedBranch)
 	}
-	// #4905: if the agent switched to a different branch mid-worktree, that
-	// branch is left behind on purpose (deleting an unknown branch the caller
-	// never named is a wrong-target deletion) - surface it instead of orphaning
-	// it silently.
+
 	if currentBranch != "" && currentBranch != branchName && currentBranch != "main" && currentBranch != "master" {
 		result += fmt.Sprintf(". Note: branch %s was checked out in the worktree (not created by enter_worktree); it was kept - delete it manually if unwanted", currentBranch)
 	}
@@ -475,14 +388,10 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}, nil
 }
 
-// isWorktreeNameChar returns true for characters allowed in worktree names.
 func isWorktreeNameChar(c rune) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
 }
 
-// isSafeWorktreeName rejects names that are themselves path components
-// (#1710 case 5): "." and ".." pass isWorktreeNameChar (dot allowed) and
-// then escape the worktrees directory through filepath.Join.
 func isSafeWorktreeName(name string) bool {
 	if name == "." || name == ".." || strings.Contains(name, "/") || strings.Contains(name, string(os.PathSeparator)) {
 		return false
@@ -490,7 +399,6 @@ func isSafeWorktreeName(name string) bool {
 	return true
 }
 
-// findGitRoot finds the git repository root from a directory.
 func findGitRoot(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
@@ -502,43 +410,27 @@ func findGitRoot(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// isInsideWorktree reports whether gitDir is the root of a worktree created
-// by enter_worktree, returning the worktree path when true.
-//
-// Ownership verification (#542): every linked worktree — manual `git worktree
-// add`, submodule, or ggcode-managed — has a regular .git FILE whose content
-// is "gitdir: <main-repo>/.git/worktrees/<name>". That structure alone proves
-// nothing about who created the worktree. The previous implementation treated
-// ANY .git-file repository as a ggcode worktree, so exit_worktree(remove)
-// destructively deleted user-created worktrees and force-deleted their
-// unpushed branches. Now we additionally require that the worktree checkout
-// path is anchored under <main-repo>/.ggcode/worktrees/ — the location where
-// enter_worktree creates its worktrees.
 func isInsideWorktree(gitDir string) (bool, string, error) {
 	absPath, _ := filepath.Abs(gitDir)
 
 	gitFile := filepath.Join(gitDir, ".git")
 	info, err := os.Lstat(gitFile)
 	if err != nil || !info.Mode().IsRegular() {
-		// .git missing or a directory: main repository, not a linked worktree.
+
 		return false, "", nil
 	}
 	data, err := os.ReadFile(gitFile)
 	if err != nil || !strings.HasPrefix(string(data), "gitdir: ") {
-		// Unreadable or malformed .git file: cannot verify ownership, refuse.
+
 		return false, "", nil
 	}
 	gitdir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Join(gitDir, gitdir)
 	}
-	// gitdir points at <main-repo>/.git/worktrees/<name>; three levels up is
-	// the main repository root (same layout findGitRootFromWorktree relies on).
+
 	mainRoot := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
 
-	// Anchored containment: the worktree checkout must live under
-	// <main-repo>/.ggcode/worktrees/ — not merely have that substring
-	// somewhere along its path.
 	worktreesDir := filepath.Join(mainRoot, ".ggcode", "worktrees")
 	resolvedPath, resolvedBase := absPath, worktreesDir
 	if r, err := filepath.EvalSymlinks(absPath); err == nil {
@@ -555,22 +447,19 @@ func isInsideWorktree(gitDir string) (bool, string, error) {
 	return true, absPath, nil
 }
 
-// findGitRootFromWorktree finds the main repo root from a worktree path.
 func findGitRootFromWorktree(worktreePath string) (string, error) {
 	gitFile := filepath.Join(worktreePath, ".git")
 	data, err := os.ReadFile(gitFile)
 	if err != nil {
 		return "", err
 	}
-	// Content is like: gitdir: /path/to/main-repo/.git/worktrees/wt-name
+
 	gitdir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
-	// gitdir points to .git/worktrees/<name>, so we need 3 levels up:
-	// .git/worktrees/<name> → .git/worktrees → .git → main repo root
+
 	gitDir := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
 	return gitDir, nil
 }
 
-// ListWorktree lists all git worktrees with their branches, dirty status, and paths.
 type ListWorktree struct {
 	WorkingDir string
 }
@@ -627,7 +516,6 @@ func (t ListWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}, nil
 }
 
-// parseWorktreeList runs `git worktree list --porcelain` and parses the output.
 func parseWorktreeList(ctx context.Context, gitRoot string) ([]worktreeEntry, error) {
 	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = gitRoot
@@ -658,7 +546,6 @@ func parseWorktreeList(ctx context.Context, gitRoot string) ([]worktreeEntry, er
 	return entries, nil
 }
 
-// checkWorktreeDirty checks each worktree for uncommitted changes in-place.
 func checkWorktreeDirty(ctx context.Context, entries []worktreeEntry) {
 	for i := range entries {
 		stCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
@@ -668,9 +555,7 @@ func checkWorktreeDirty(ctx context.Context, entries []worktreeEntry) {
 		if stErr == nil && len(strings.TrimSpace(string(stOut))) > 0 {
 			entries[i].Dirty = true
 		}
-		// #1710 case 5: a failed probe used to leave Dirty=false - a
-		// worktree whose status could not be read rendered "clean". Fail
-		// safe: mark dirty (unknown state must not look safe).
+
 		if stErr != nil {
 			debug.Log("tool.worktree", "dirty probe failed for %s: %v; marking dirty (fail-safe)", entries[i].Path, stErr)
 			entries[i].Dirty = true
@@ -678,7 +563,6 @@ func checkWorktreeDirty(ctx context.Context, entries []worktreeEntry) {
 	}
 }
 
-// formatWorktreeList renders worktree entries as a human-readable summary.
 func formatWorktreeList(entries []worktreeEntry) string {
 	if len(entries) == 0 {
 		return "0 worktree(s)."
@@ -706,17 +590,14 @@ func formatWorktreeList(entries []worktreeEntry) string {
 	return fmt.Sprintf("%d worktree(s):\n%s", len(entries), strings.TrimSpace(sb.String()))
 }
 
-// Clone returns an independent copy of ListWorktree for use by a different agent.
 func (t ListWorktree) Clone() Tool {
 	return &ListWorktree{WorkingDir: t.WorkingDir}
 }
 
-// Clone returns an independent copy of EnterWorktree for use by a different agent.
 func (t EnterWorktree) Clone() Tool {
 	return &EnterWorktree{WorkingDir: t.WorkingDir}
 }
 
-// Clone returns an independent copy of ExitWorktree for use by a different agent.
 func (t ExitWorktree) Clone() Tool {
 	return &ExitWorktree{WorkingDir: t.WorkingDir}
 }

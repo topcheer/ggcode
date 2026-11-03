@@ -8,10 +8,9 @@ import (
 func TestFixAmnesia_BasicDetection(t *testing.T) {
 	d := newFixAmnesiaState()
 
-	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
 	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
-	// Now check content in fileB.go that matches the pattern
+	d.recordFileEdited("/src/fileA.go")
+
 	content := `
 for i := 0; i < 10; i++ {
 	defer f.Close()
@@ -34,15 +33,15 @@ for i := 0; i < 10; i++ {
 
 func TestFixAmnesia_SameFileNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
-	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
+
 	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
+	d.recordFileEdited("/src/fileA.go")
 	content := `
 for i := 0; i < 10; i++ {
 	defer f.Close()
 }
 `
-	// Same file should not trigger (fixing the same file, not amnesia)
+
 	got := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileA.go", content)
 	if got != "" {
 		t.Errorf("expected no warning for same file, got: %s", got)
@@ -52,7 +51,6 @@ for i := 0; i < 10; i++ {
 func TestFixAmnesia_NoPriorFixNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
 
-	// No prior error observed — should not trigger
 	content := `
 for i := 0; i < 10; i++ {
 	defer f.Close()
@@ -66,10 +64,10 @@ for i := 0; i < 10; i++ {
 
 func TestFixAmnesia_DifferentCategoryNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
-	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
+
 	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
-	// Content does NOT match defer-in-loop pattern
+	d.recordFileEdited("/src/fileA.go")
+
 	content := `package main
 func main() {
 	fmt.Println("hello")
@@ -85,24 +83,22 @@ func TestFixAmnesia_MaxWarnings(t *testing.T) {
 	d := newFixAmnesiaState()
 	d.maxWarnings = 1
 
-	// First trigger (Issue #1059: defer-in-loop replaced removed nil-deref category)
 	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
-	// Second category armed in a different file
+	d.recordFileEdited("/src/fileA.go")
+
 	d.recordErrorObserved("map-concurrent-write", "/src/fileC.go")
-	d.recordFileEdited("/src/fileC.go") // #754: observed errors only arm after a successful edit
+	d.recordFileEdited("/src/fileC.go")
 	content := `
 for i := 0; i < 10; i++ {
 	defer f.Close()
 }
 `
-	// First should warn
+
 	got1 := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileB.go", content)
 	if got1 == "" {
 		t.Error("expected first warning")
 	}
 
-	// Second category should not warn because maxWarnings=1
 	content2 := `
 go func() {
 	m[key] = 1
@@ -118,19 +114,18 @@ func TestFixAmnesia_AlreadyWarnedCategory(t *testing.T) {
 	d := newFixAmnesiaState()
 
 	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
+	d.recordFileEdited("/src/fileA.go")
 	content := `
 for i := 0; i < 10; i++ {
 	defer f.Close()
 }
 `
-	// First trigger
+
 	got1 := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileB.go", content)
 	if got1 == "" {
 		t.Error("expected first warning")
 	}
 
-	// Second file with same category should not warn again
 	got2 := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileC.go", content)
 	if got2 != "" {
 		t.Errorf("expected no duplicate warning for same category, got: %s", got2)
@@ -143,9 +138,7 @@ func TestClassifyToolError(t *testing.T) {
 		wantCat string
 	}{
 		{"panic: runtime error: nil pointer dereference", "nil-deref-after-nil-check"},
-		// #754: these are NOT missing-import errors -- "declared and not
-		// used" is an unused variable, "imported and not used" is fixed by
-		// DELETING an import. Old rows asserted the misclassification.
+
 		{"./main.go:10:2: declared and not used: x", "unused-variable"},
 		{"./main.go:5:2: imported and not used: \"fmt\"", "unused-import"},
 		{"./main.go:7:2: undefined: fmt.Stringer", "missing-import"},
@@ -181,38 +174,32 @@ func TestExtractFilePathFromError(t *testing.T) {
 
 func TestAppendIfMissing(t *testing.T) {
 	s := []string{"a", "b"}
-	s = appendIfMissing(s, "a") // duplicate
+	s = appendIfMissing(s, "a")
 	if len(s) != 2 {
 		t.Errorf("expected length 2, got %d", len(s))
 	}
-	s = appendIfMissing(s, "c") // new
+	s = appendIfMissing(s, "c")
 	if len(s) != 3 {
 		t.Errorf("expected length 3, got %d", len(s))
 	}
 }
 
-// TestFixAmnesiaRelativeVsAbsolutePromotion pins #1462-A: the observe side
-// extracts RELATIVE compiler paths while the edit side passes ABSOLUTE arg
-// paths - without shared normalization the observe->fixed promotion (the
-// detector's main path) never matched once.
 func TestFixAmnesiaRelativeVsAbsolutePromotion(t *testing.T) {
 	d := newFixAmnesiaState()
 	d.recordErrorObserved("missing-import", "internal/agent/foo.go")
-	// Edit arrives as an absolute path pointing at the same file.
+
 	d.recordFileEdited("/repo/root/internal/agent/foo.go")
 	if len(d.fixedPatterns["missing-import"]) != 1 {
 		t.Fatalf("relative-observed vs absolute-edited promotion failed: %v", d.fixedPatterns["missing-import"])
 	}
-	// Same-form paths still promote (regression guard).
+
 	d2 := newFixAmnesiaState()
 	d2.recordErrorObserved("missing-import", "a/b.go")
 	d2.recordFileEdited("a/b.go")
 	if len(d2.fixedPatterns["missing-import"]) != 1 {
 		t.Fatal("same-form promotion regressed")
 	}
-	// Windows edit paths arrive OS-separated while compiler output is
-	// slash-form; the normalization must reconcile them on every platform
-	// (dc6b6609).
+
 	d3 := newFixAmnesiaState()
 	d3.recordErrorObserved("missing-import", "internal/agent/foo.go")
 	d3.recordFileEdited(`C:\repo\root\internal\agent\foo.go`)
@@ -221,10 +208,6 @@ func TestFixAmnesiaRelativeVsAbsolutePromotion(t *testing.T) {
 	}
 }
 
-// TestFixAmnesiaImportInDiffPrefixedHunk pins #1462-B: a '+ ' prefixed diff
-// line carrying the import must satisfy hasImportFor - the old line-anchored
-// regex never matched diff content and every cross-file fmt. usage after one
-// fixed missing-import got a deterministic false warning.
 func TestFixAmnesiaImportInDiffPrefixedHunk(t *testing.T) {
 	if missingImportInContent("+ import \"fmt\"\n+ fmt.Println(\"hi\")\n") {
 		t.Fatal("import present in the same diff hunk still reported missing")
@@ -234,12 +217,9 @@ func TestFixAmnesiaImportInDiffPrefixedHunk(t *testing.T) {
 	}
 }
 
-// Regression for #1566-B: suffix matching is directory-anchored - bare
-// filenames and one-segment relatives must not promote to unrelated
-// paths sharing the tail, and the early-exit must honor sameFile.
 func TestFixAmnesiaSameFileAnchoring(t *testing.T) {
 	ok := [][2]string{
-		{"./internal/agent/foo.go", "/Volumes/w/ggcode/internal/agent/foo.go"}, // rel vs abs
+		{"./internal/agent/foo.go", "/Volumes/w/ggcode/internal/agent/foo.go"},
 		{"/w/internal/agent/foo.go", "internal/agent/foo.go"},
 	}
 	for _, c := range ok {
@@ -248,10 +228,10 @@ func TestFixAmnesiaSameFileAnchoring(t *testing.T) {
 		}
 	}
 	bad := [][2]string{
-		{"foo_test.go", "/w/other/foo_test.go"},              // bare name
-		{"foo.go", "/w/anywhere/foo.go"},                     // bare name 2
-		{"agent/foo.go", "/w/desktop/wailskit/agent/foo.go"}, // one-segment vs mirror tree
-		{"/w/a/internal/x/foo.go", "/w/b/internal/x/foo.go"}, // same tail, different roots
+		{"foo_test.go", "/w/other/foo_test.go"},
+		{"foo.go", "/w/anywhere/foo.go"},
+		{"agent/foo.go", "/w/desktop/wailskit/agent/foo.go"},
+		{"/w/a/internal/x/foo.go", "/w/b/internal/x/foo.go"},
 	}
 	for _, c := range bad {
 		if fixAmnesiaSameFile(c[0], c[1]) {

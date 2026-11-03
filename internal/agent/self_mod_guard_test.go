@@ -206,9 +206,6 @@ func TestSelfMod_BenignPathsWithSimilarNames(t *testing.T) {
 	}
 }
 
-// Test #163: ordinary project paths that merely contain pattern substrings
-// (src/hooks/, internal/memory/, allowlist_util.py, system_prompt_test.go,
-// api/mcp_server.go) must NOT trigger self-modification advisories.
 func TestSelfMod_OrdinaryProjectPathsNotFlagged(t *testing.T) {
 	s := newSelfModState()
 	for _, path := range []string{
@@ -227,8 +224,6 @@ func TestSelfMod_OrdinaryProjectPathsNotFlagged(t *testing.T) {
 	}
 }
 
-// Test #163: the gate must cover ALL registered write tools, including the
-// previously-missing multi_file_write, notebook_edit, and lsp_rename.
 func TestSelfMod_GateCoversAllWriteTools(t *testing.T) {
 	for _, tool := range []string{
 		"write_file", "edit_file", "multi_edit_file", "multi_file_edit",
@@ -246,11 +241,10 @@ func TestSelfMod_GateCoversAllWriteTools(t *testing.T) {
 			args, _ = json.Marshal(map[string][]string{
 				"files": {".ggcode/memory/x.md"},
 			})
-		default: // write_file, edit_file, multi_edit_file, lsp_rename
+		default:
 			args, _ = json.Marshal(map[string]string{"path": ".ggcode/memory/x.md"})
 		}
-		// Fresh state per tool: warnedPaths dedup would otherwise swallow
-		// repeats of the same target path across iterations.
+
 		s := newSelfModState()
 		if got := s.checkSelfModification(tool, args); got == "" {
 			t.Errorf("#163 false negative: %s writing to .ggcode/memory/ must trigger the advisory", tool)
@@ -258,8 +252,6 @@ func TestSelfMod_GateCoversAllWriteTools(t *testing.T) {
 	}
 }
 
-// #1492-D: file_ops operations[].source/destination must feed the
-// self-modification guard.
 func TestSelfModGuardFileOpsShapes1492(t *testing.T) {
 	paths := extractSelfModPaths(json.RawMessage(`{"operations":[
 		{"action":"delete","source":".ggcode/hooks/x.sh"},
@@ -274,9 +266,6 @@ func TestSelfModGuardFileOpsShapes1492(t *testing.T) {
 	}
 }
 
-// #1492-E: the mandated LSP serial chain (symbols -> definition ->
-// references) is dependent by construction - three such single-read
-// turns must NOT fire the "independent reads" guidance.
 func TestSerialReadLSPChainExempt1492(t *testing.T) {
 	s := newSerialReadState()
 	for i, tool := range []string{"lsp_symbols", "lsp_definition", "lsp_references"} {
@@ -285,7 +274,7 @@ func TestSerialReadLSPChainExempt1492(t *testing.T) {
 			t.Fatalf("LSP serial chain must be exempt, got: %s", msg)
 		}
 	}
-	// Mixed chain: two LSP turns then a plain read_file turn still fires.
+
 	s2 := newSerialReadState()
 	s2.recordToolCall("lsp_symbols")
 	s2.endTurn(1)

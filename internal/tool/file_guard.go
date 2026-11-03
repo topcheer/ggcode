@@ -9,42 +9,18 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// FileGuard enforces user-configured write-protection patterns.
-//
-// Competitor analysis:
-//   - Cursor: .cursorrules + workspace boundaries restrict agent writes
-//   - Claude Code: permission system with file restrictions per mode
-//   - OpenHands: configurable file access controls (deny/allow lists)
-//   - Aider: .aider.conf.yml with "chat-files" / "read-only-files"
-//
-// ggcode previously only had AllowedPathChecker (sandbox boundary) — no
-// per-path deny list. This guard adds that missing layer: patterns like
-// ".env*", ".git/", "*.lock", or "src/secrets/**" block write tools from
-// modifying sensitive files even within the allowed workspace.
-//
-// The guard is applied AFTER the sandbox check: the path must be inside
-// the workspace AND not match any protected pattern. Read tools are never
-// blocked — protection is write-only.
-
-// DefaultProtectedPatterns are applied automatically unless the user
-// explicitly sets protected_paths in config (which replaces these).
 var DefaultProtectedPatterns = []string{
 	".env",
 	".env.*",
 	".git/",
 }
 
-// FileGuard holds compiled protected-path patterns and checks paths against them.
 type FileGuard struct {
 	mu       sync.RWMutex
 	patterns []string
-	// explicit: true if the user set protected_paths in config (overrides defaults)
 	explicit bool
 }
 
-// NewFileGuard creates a FileGuard from config patterns.
-// If patterns is non-empty, those replace the defaults (explicit=true).
-// If patterns is empty, DefaultProtectedPatterns are used.
 func NewFileGuard(patterns []string) *FileGuard {
 	fg := &FileGuard{}
 	if len(patterns) > 0 {
@@ -57,15 +33,12 @@ func NewFileGuard(patterns []string) *FileGuard {
 	return fg
 }
 
-// Patterns returns the current protected patterns (for display).
 func (g *FileGuard) Patterns() []string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return append([]string{}, g.patterns...)
 }
 
-// IsProtected returns true if the given path matches any protected pattern,
-// along with the matched pattern for the error message.
 func (g *FileGuard) IsProtected(absPath, workingDir string) (bool, string) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -74,7 +47,6 @@ func (g *FileGuard) IsProtected(absPath, workingDir string) (bool, string) {
 		return false, ""
 	}
 
-	// Normalize the path for pattern matching
 	rel := absPath
 	if workingDir != "" {
 		if r, err := filepath.Rel(workingDir, absPath); err == nil && !strings.HasPrefix(r, "..") {
@@ -92,23 +64,11 @@ func (g *FileGuard) IsProtected(absPath, workingDir string) (bool, string) {
 	return false, ""
 }
 
-// matchProtectedPattern checks if a path matches a protection pattern.
-// Patterns support:
-//   - Glob: ".env*", "*.lock", "src/secrets/**"
-//   - Directory prefix: ".git/" matches any path under .git/
-//   - Exact file: "go.sum" matches go.sum at workspace root
-//
-// fsCaseInsensitive reports whether the local filesystem resolves names
-// case-insensitively (macOS APFS default, Windows NTFS). Linux stays
-// case-sensitive (#1683 case 2: a literal `.GIT`/`.ENV` must not slip the
-// guard on the platforms where the OS would resolve it to .git/.env).
 func fsCaseInsensitive() bool {
 	goos := runtime.GOOS
 	return goos == "darwin" || goos == "windows"
 }
 
-// matchSegFS matches one pattern segment against one path segment under
-// the local FS semantics (fold before filepath.Match on insensitive FSes).
 func matchSegFS(pattern, name string) bool {
 	if fsCaseInsensitive() {
 		pattern = strings.ToLower(pattern)
@@ -124,36 +84,26 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 		return false
 	}
 
-	// Directory prefix match: "dir/" matches "dir/anything" or "subdir/dir/anything"
 	if strings.HasSuffix(pat, "/") {
 		prefix := pat
-		// #4060: fold the prefix comparisons on case-insensitive FSes so a
-		// literal ".GIT/" variant cannot slip this branch — the OS resolves
-		// subdir/.GIT/config to the real .git/config (same file), and the
-		// guard must judge it under FS semantics, like matchSegFS does.
+
 		hasPrefix := strings.HasPrefix
 		if fsCaseInsensitive() {
 			hasPrefix = func(s, p string) bool {
 				return strings.HasPrefix(strings.ToLower(s), strings.ToLower(p))
 			}
 		}
-		// Match at workspace root
+
 		if hasPrefix(relPath+"/", prefix) ||
 			hasPrefix(slashPath+"/", prefix) ||
 			relPath+"/" == prefix {
 			return true
 		}
-		// Match as any path component (e.g. ".git/" matches "subdir/.git/refs").
-		// #1322 (Windows): when the judged path is outside the working dir,
-		// relPath falls back to the absolute path, which keeps OS-native
-		// separators - on Windows that is '\' so splitting by "/" alone finds
-		// no components and the guard silently fails OPEN. Check the
-		// ToSlash-normalized slashPath components too.
+
 		dirName := strings.TrimSuffix(pat, "/")
 		for _, p := range []string{relPath, slashPath} {
 			for _, seg := range strings.Split(p, "/") {
-				// #4060: segment equality must also fold on case-insensitive
-				// FSes ("subdir/.GIT/refs" carries seg ".GIT" vs dirName ".git").
+
 				if seg == dirName || (fsCaseInsensitive() && strings.EqualFold(seg, dirName)) {
 					return true
 				}
@@ -162,19 +112,16 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 		return false
 	}
 
-	// Try glob match against relative path
 	matched, err := matchGlob(pat, relPath)
 	if err == nil && matched {
 		return true
 	}
 
-	// Try glob match against the full slash path
 	matched, err = matchGlob(pat, slashPath)
 	if err == nil && matched {
 		return true
 	}
 
-	// Also check if the pattern matches just the basename
 	base := filepath.Base(relPath)
 	matched, err = matchGlob(pat, base)
 	if err == nil && matched {
@@ -184,44 +131,27 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 	return false
 }
 
-// matchGlob is a thin wrapper around filepath.Match that also supports
-// "**" (match any number of path components).
 func matchGlob(pattern, name string) (bool, error) {
-	// Handle ** patterns by splitting on **
+
 	if strings.Contains(pattern, "**") {
 		return matchDoubleStar(pattern, name)
 	}
-	matched := matchSegFS(pattern, name) // #1683: FS-aware fold
+	matched := matchSegFS(pattern, name)
 	return matched, nil
 }
 
-// matchDoubleStar handles glob patterns containing **.
-// "src/**" matches anything under src/.
-// "src/**/test" matches src/a/test, src/a/b/test, etc.
-// #4443: '**' may appear anywhere ("**/a/**/b", "src/**/a/**/b"); the old
-// split-on-first-** implementation fed a non-trailing '**' in the suffix
-// into single-segment glob matching (it degraded to matching ONE segment,
-// never crossing '/'), so protected-path patterns with mid-'**' silently
-// failed OPEN. The segment-wise recursive matcher below handles '**' at
-// any position: it consumes zero or more whole segments with backtracking,
-// preserving the documented #445/#830/#4089 behaviors.
 func matchDoubleStar(pattern, name string) (bool, error) {
 	return matchSegsFS(strings.Split(pattern, "/"), strings.Split(name, "/")), nil
 }
 
-// matchSegsFS matches pattern segments against name segments, honoring
-// '**' (zero or more segments, with backtracking) and per-segment globs
-// via matchSegFS (#4060 FS-aware folding).
 func matchSegsFS(p, n []string) bool {
 	for len(p) > 0 {
 		if p[0] == "**" {
 			if len(p) == 1 {
-				// Trailing '**' consumes the rest (including zero
-				// remaining segments - the prefix-as-file case, e.g.
-				// "a/**" matching "a" itself per the old #445 path).
+
 				return true
 			}
-			// Non-trailing '**': try consuming 0..len(n) segments.
+
 			for i := 0; i <= len(n); i++ {
 				if matchSegsFS(p[1:], n[i:]) {
 					return true
@@ -237,12 +167,6 @@ func matchSegsFS(p, n []string) bool {
 	return len(n) == 0
 }
 
-// resolveSymlinkPrefix resolves symlinks for the longest existing prefix
-// of path (mirrors permission.sandbox resolvePath semantics). Used so the
-// file guard judges the path the write will ACTUALLY land on, not just
-// the lexical one (#1322: a workspace-internal symlink to ../.git used
-// to bypass the .git/ protection because only the lexical path was
-// matched while the sandbox layer resolved and allowed it).
 func resolveSymlinkPrefix(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return filepath.Clean(resolved)
@@ -263,15 +187,12 @@ func resolveSymlinkPrefix(path string) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return path // reached root without resolution
+			return path
 		}
 		dir = parent
 	}
 }
 
-// CheckWritePath is called by write tools (write_file, edit_file, etc.)
-// before writing. Returns an error message if the path is protected,
-// or empty string if the write is allowed.
 func (g *FileGuard) CheckWritePath(path, workingDir string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -279,9 +200,7 @@ func (g *FileGuard) CheckWritePath(path, workingDir string) string {
 	}
 	protected, pattern := g.IsProtected(abs, workingDir)
 	if !protected {
-		// #1322: also judge the symlink-resolved destination — os.WriteFile
-		// follows symlinks, so lnk/config pointing at ../.git/config must
-		// hit the .git/ protection even though the lexical path does not.
+
 		resolved := resolveSymlinkPrefix(abs)
 		if resolved != abs {
 			protected, pattern = g.IsProtected(resolved, workingDir)
@@ -295,9 +214,6 @@ func (g *FileGuard) CheckWritePath(path, workingDir string) string {
 		"If you need to modify this file, remove or adjust the pattern in protected_paths config."
 }
 
-// MergeFileGuards wraps a sandbox AllowedPathChecker with file-guard protection.
-// The returned checker returns false (deny) if EITHER the sandbox denies the
-// path OR the file guard protects it.
 func MergeFileGuards(sandbox AllowedPathChecker, guard *FileGuard, workingDir string) AllowedPathChecker {
 	if guard == nil {
 		return sandbox
@@ -307,10 +223,7 @@ func MergeFileGuards(sandbox AllowedPathChecker, guard *FileGuard, workingDir st
 			return false
 		}
 		if msg := guard.CheckWritePath(path, workingDir); msg != "" {
-			// We can't return an error message from AllowedPathChecker,
-			// so we log it and return false. The write tool will show a
-			// generic "path not allowed" message.
-			// For better UX, write tools should call CheckWritePath directly.
+
 			debug.Log("fileguard", "denied by guard: %s", path)
 			return false
 		}

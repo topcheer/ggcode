@@ -21,9 +21,7 @@ func TestClassifyDegraded(t *testing.T) {
 		{"undefined value", "some_tool", "undefined", degradedNullish},
 		{"empty json object", "some_tool", "{}", degradedNullish},
 		{"empty json array", "some_tool", "[]", degradedNullish},
-		// #1457-A: a footer WITH pagination guidance is the tool's designed
-		// paging signal, not degradation - the old expectation codified the
-		// contradiction (2-per-run budget burned on normal paging reads).
+
 		{"guided pagination footer is NOT degraded", "read_file", "     1\tpackage main\n[File truncated: showing lines 1-1 of 50. Use read_file with offset/limit for more.]", degradedNone},
 		{"guided pagination multi_file_read", "multi_file_read", "[showing lines 1-10 of 200. Use offset/limit]", degradedNone},
 		{"output too large footer", "grep", "[output too large, showing first 10]", degradedTruncated},
@@ -32,12 +30,11 @@ func TestClassifyDegraded(t *testing.T) {
 		{"no results found", "search_files", "no results found", degradedNoResult},
 		{"no matches", "grep", "0 matches", degradedNoResult},
 		{"no such file", "read_file", "no such file or directory", degradedNoResult},
-		// Designed truncation with a recovery advisory (truncationAdvisory
-		// footers) is a continuation signal, not degradation.
+
 		{"web_fetch advisory-backed truncation is NOT degraded", "web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]", degradedNone},
 		{"grep narrowing advisory is NOT degraded", "grep", "[... output truncated: 50KB total]\nSearch results (50KB) were truncated. Narrow your search: use more specific patterns.", degradedNone},
 		{"code_search refine advisory is NOT degraded", "code_search", "[... output truncated: 20KB total]\nCode search results (20KB) were truncated. Refine your query to be more specific.", degradedNone},
-		// Raw guard marker WITHOUT any advisory still signals lost content.
+
 		{"guard marker without advisory is degraded", "web_fetch", "some page text\n[... output truncated: 12.9KB total, showing head + tail ...]", degradedTruncated},
 		{"file not found", "read_file", "Error: file not found", degradedNoResult},
 		{"no symbols", "lsp_workspace_symbols", "no symbols found", degradedNoResult},
@@ -48,7 +45,7 @@ func TestClassifyDegraded(t *testing.T) {
 		{"valid content - normal short non-content tool", "run_command", "ok", degradedNone},
 		{"valid content - substantial", "grep", "found 5 matches in 3 files:\nfile1.go:10:match1\nfile1.go:25:match2", degradedNone},
 		{"nullish not exact - longer text", "read_file", "null pointer dereference occurred at runtime", degradedNone},
-		// #143: "not found" in legitimate code content must NOT be degradedNoResult.
+
 		{"#143 grep returns error-handling code with 'not found'", "grep", "main.go:42:  return fmt.Errorf(\"record not found: %w\", err)", degradedNone},
 		{"#143 read_file reads file with error definitions", "read_file", "// ErrNotFound is returned when key not found in cache\nvar ErrNotFound = errors.New(\"not found\")", degradedNone},
 		{"#143 run_command output mentions 'not found' in test", "run_command", "PASS (ok: github.com/pkg/errors)\nok github.com/myproject/handler 0.123s\n  handler.go: \"not found\" error path tested", degradedNone},
@@ -61,8 +58,7 @@ func TestClassifyDegraded(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("classifyDegraded(%q, %q) = %v, want %v", tt.tool, tt.content, got, tt.want)
 			}
-			// web_fetch guard truncation WITH the tool's designed recovery advisory
-			// is a continuation signal, not degradation - no chain must be created.
+
 			e2 := newErrorPropagateState()
 			e2.totalSteps = 1
 			e2.recordGuardedTruncation("web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]")
@@ -70,7 +66,6 @@ func TestClassifyDegraded(t *testing.T) {
 				t.Fatalf("advisory-backed guard truncation must not start a chain, got %d", len(e2.chains))
 			}
 
-			// grep narrowing advisory likewise.
 			e3 := newErrorPropagateState()
 			e3.totalSteps = 1
 			e3.recordGuardedTruncation("grep", "[... output truncated: 50KB total]\nSearch results (50KB) were truncated. Narrow your search: use more specific patterns.")
@@ -78,8 +73,6 @@ func TestClassifyDegraded(t *testing.T) {
 				t.Fatalf("grep narrowing advisory must not start a chain, got %d", len(e3.chains))
 			}
 
-			// classifyDegraded: the same advisory-backed web_fetch output is NOT
-			// degraded even though its guard-marker line matches a truncation prefix.
 			if got := classifyDegraded("web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]"); got != degradedNone {
 				t.Fatalf("advisory-backed web_fetch output should not be degraded, got %v", got)
 			}
@@ -90,19 +83,16 @@ func TestClassifyDegraded(t *testing.T) {
 func TestErrorPropagateDetection(t *testing.T) {
 	s := newErrorPropagateState()
 
-	// Step 1: a degraded output (empty result on a read_file that "succeeded").
 	g := s.recordResult("read_file", "", false)
 	if g != "" {
 		t.Fatalf("first degraded output should not immediately warn, got: %s", g)
 	}
 
-	// Step 2: subsequent tool call (potential downstream consumer).
 	g = s.recordResult("grep", "some valid content here that is long enough", false)
 	if g != "" {
 		t.Fatalf("only 1 downstream call should not trigger yet, got: %s", g)
 	}
 
-	// Step 3: another subsequent call -- now threshold reached.
 	g = s.recordResult("edit_file", "edited successfully", false)
 	if g == "" {
 		t.Fatal("should trigger propagation warning after 2 downstream calls")
@@ -121,7 +111,6 @@ func TestErrorPropagateDetection(t *testing.T) {
 func TestErrorPropagateNoFalsePositive(t *testing.T) {
 	s := newErrorPropagateState()
 
-	// Normal valid outputs should never trigger.
 	for i := 0; i < 10; i++ {
 		g := s.recordResult("read_file", "package main\n\nfunc main() {}\n", false)
 		if g != "" {
@@ -133,14 +122,11 @@ func TestErrorPropagateNoFalsePositive(t *testing.T) {
 func TestErrorPropagateExplicitErrorIgnored(t *testing.T) {
 	s := newErrorPropagateState()
 
-	// Explicit errors (IsError=true) are handled by error_cascade.go,
-	// not this detector. Should not create a chain.
-	g := s.recordResult("read_file", "", true) // isError = true
+	g := s.recordResult("read_file", "", true)
 	if g != "" {
 		t.Fatalf("explicit errors should not trigger propagation chain, got: %s", g)
 	}
 
-	// Even with downstream calls, no chain exists.
 	g = s.recordResult("grep", "valid content", false)
 	if g != "" {
 		t.Fatalf("no chain should exist from explicit errors, got: %s", g)
@@ -154,7 +140,6 @@ func TestErrorPropagateExplicitErrorIgnored(t *testing.T) {
 func TestErrorPropagateMaxWarnings(t *testing.T) {
 	s := newErrorPropagateState()
 
-	// Create first degraded chain and trigger it.
 	s.recordResult("read_file", "", false)
 	s.recordResult("edit_file", "ok", false)
 	g1 := s.recordResult("edit_file", "ok", false)
@@ -162,7 +147,6 @@ func TestErrorPropagateMaxWarnings(t *testing.T) {
 		t.Fatal("first chain should trigger")
 	}
 
-	// Create second degraded chain and trigger it.
 	s.recordResult("read_file", "null", false)
 	s.recordResult("edit_file", "ok", false)
 	g2 := s.recordResult("edit_file", "ok", false)
@@ -170,7 +154,6 @@ func TestErrorPropagateMaxWarnings(t *testing.T) {
 		t.Fatal("second chain should trigger")
 	}
 
-	// Third degraded chain should NOT trigger (max 2 warnings per run).
 	s.recordResult("read_file", "", false)
 	s.recordResult("edit_file", "ok", false)
 	g3 := s.recordResult("edit_file", "ok", false)
@@ -201,7 +184,6 @@ func TestErrorPropagateReset(t *testing.T) {
 func TestErrorPropagateNullishDegraded(t *testing.T) {
 	s := newErrorPropagateState()
 
-	// A null return that is not an error.
 	g := s.recordResult("run_command", "null", false)
 	if g != "" {
 		t.Fatalf("immediate nullish should not warn yet, got: %s", g)
@@ -291,10 +273,6 @@ func TestIsContentTool(t *testing.T) {
 	}
 }
 
-// contains and containsStr are defined in reflection_test.go
-
-// TestIssue1554C_HeadTailMarkerDetected pins #1554-C: the EXACT marker
-// guardToolOutput writes must be classified as a truncation footer.
 func TestIssue1554C_HeadTailMarkerDetected(t *testing.T) {
 	marker := fmt.Sprintf("\n\n%s %s total, showing head + tail ...]\n\n", toolHeadTailTruncationPrefix, "1.2 MB")
 	if !hasTruncationFooter(marker) {
@@ -305,22 +283,14 @@ func TestIssue1554C_HeadTailMarkerDetected(t *testing.T) {
 	}
 }
 
-// TestErrorPropagateGuardedTruncationBackfill pins #1664: recordResult runs
-// BEFORE the output guard with the RAW content, so a guard-induced
-// truncation is invisible to classifyDegraded. recordGuardedTruncation (wired
-// in the guard branch) back-fills the chain - the #1554-C marker pairing now
-// has a runtime-reachable path.
 func TestErrorPropagateGuardedTruncationBackfill(t *testing.T) {
-	e := newErrorPropagateState() // or zero value init
-	// Step 1: raw 50KB log, no truncation markers - recordResult alone
-	// classifies it clean (the old dead-at-runtime behavior).
+	e := newErrorPropagateState()
+
 	if g := e.recordResult("run_command", strings.Repeat("build log line\n", 4000), false); g != "" {
 		t.Fatalf("unexpected guidance on clean raw output: %s", g)
 	}
-	// Guard truncates afterwards -> back-fill fires.
+
 	e.recordGuardedTruncation("run_command", "[... output truncated: 100KB total, showing head + tail ...]")
-	// Subsequent tool calls build on the (truncated) result; the chain
-	// must now reach the propagation threshold and warn.
 	var got string
 	for i := 0; i < 8 && got == ""; i++ {
 		got = e.recordResult("edit_file", "ok", false)
@@ -333,9 +303,6 @@ func TestErrorPropagateGuardedTruncationBackfill(t *testing.T) {
 	}
 }
 
-// TestErrorPropagateGuardedTruncationNoDuplicate: when the RAW content
-// already carried a tool-internal truncation footer (read_file), recordResult
-// started a chain itself - the back-fill must not double it.
 func TestErrorPropagateGuardedTruncationNoDuplicate(t *testing.T) {
 	e := newErrorPropagateState()
 	raw := strings.Repeat("x", 300) + "\n[... output truncated: 5000 -> 300 bytes]\n"
@@ -343,8 +310,6 @@ func TestErrorPropagateGuardedTruncationNoDuplicate(t *testing.T) {
 		t.Fatalf("unexpected early guidance: %s", g)
 	}
 	e.recordGuardedTruncation("read_file", "[... output truncated: 100KB total, showing head + tail ...]")
-	// Exactly one chain origin for this step: count warnings ceiling - fire
-	// threshold once, then confirm only one warning ever fires for the pair.
 	var warns int
 	for i := 0; i < 10; i++ {
 		if g := e.recordResult("edit_file", "ok", false); g != "" {

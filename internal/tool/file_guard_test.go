@@ -12,7 +12,7 @@ func TestNewFileGuard_Defaults(t *testing.T) {
 	if len(pats) != 3 {
 		t.Fatalf("expected 3 default patterns, got %d: %v", len(pats), pats)
 	}
-	// Defaults should include .env and .git/
+
 	found := map[string]bool{}
 	for _, p := range pats {
 		found[p] = true
@@ -70,15 +70,12 @@ func TestFileGuard_CustomPatterns(t *testing.T) {
 	dir := t.TempDir()
 	g := NewFileGuard([]string{"*.lock", "src/secrets/**"})
 
-	// *.lock should match lock files
 	protected, _ := g.IsProtected(filepath.Join(dir, "package-lock.json"), dir)
-	// *.lock glob matches "package-lock.json" via filepath.Match? No - *.lock matches filenames ending in .lock
-	// "package-lock.json" does NOT end in .lock, so it should NOT match
+
 	if protected {
 		t.Error("package-lock.json should not match *.lock")
 	}
 
-	// yarn.lock should match *.lock
 	protected, _ = g.IsProtected(filepath.Join(dir, "yarn.lock"), dir)
 	if !protected {
 		t.Error("yarn.lock should match *.lock")
@@ -89,13 +86,11 @@ func TestFileGuard_CheckWritePath(t *testing.T) {
 	dir := t.TempDir()
 	g := NewFileGuard(nil)
 
-	// Protected path
 	msg := g.CheckWritePath(filepath.Join(dir, ".env"), dir)
 	if msg == "" {
 		t.Error("expected protection message for .env")
 	}
 
-	// Normal path
 	msg = g.CheckWritePath(filepath.Join(dir, "main.go"), dir)
 	if msg != "" {
 		t.Errorf("expected empty message for main.go, got: %s", msg)
@@ -115,29 +110,25 @@ func TestMergeFileGuards_ProtectedPath(t *testing.T) {
 	dir := t.TempDir()
 	g := NewFileGuard(nil)
 
-	// Wrap with MergeFileGuards (no base sandbox)
 	checker := MergeFileGuards(nil, g, dir)
 	if checker == nil {
 		t.Fatal("expected non-nil checker")
 	}
 
-	// Protected path should be blocked
 	if checker(filepath.Join(dir, ".env")) {
 		t.Error("expected .env to be blocked by file guard")
 	}
 
-	// Normal path should be allowed
 	if !checker(filepath.Join(dir, "main.go")) {
 		t.Error("expected main.go to be allowed")
 	}
 }
 
 func TestFileGuard_SymlinkEnv(t *testing.T) {
-	// .env should be blocked regardless of working directory
+
 	dir := t.TempDir()
 	g := NewFileGuard(nil)
 
-	// Create .env file
 	envPath := filepath.Join(dir, ".env")
 	abs, _ := filepath.Abs(envPath)
 	protected, pattern := g.IsProtected(abs, dir)
@@ -153,7 +144,6 @@ func TestFileGuard_DeepNestedPath(t *testing.T) {
 	dir := t.TempDir()
 	g := NewFileGuard(nil)
 
-	// .git in a deep path
 	deepGit := filepath.Join(dir, "subdir", ".git", "refs", "heads", "main")
 	abs, _ := filepath.Abs(deepGit)
 	protected, _ := g.IsProtected(abs, dir)
@@ -162,12 +152,8 @@ func TestFileGuard_DeepNestedPath(t *testing.T) {
 	}
 }
 
-// #1322: workspace-internal symlinks bypassed the guard. A symlink
-// lnk -> ../.git inside the workspace passes the sandbox (resolved path
-// still in workspace) but writes land in .git/. The guard must judge
-// the symlink-resolved destination too.
 func TestFileGuardSymlinkBypass(t *testing.T) {
-	// Root with the protected sibling dirs.
+
 	root := t.TempDir()
 	ws := filepath.Join(root, "ws")
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -180,59 +166,47 @@ func TestFileGuardSymlinkBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	g := NewFileGuard(nil) // default protected paths (.env*, .git/)
+	g := NewFileGuard(nil)
 
-	// Case 1: symlink to the .git directory; write via lnk/config.
 	if err := os.Symlink(filepath.Join(root, ".git"), filepath.Join(ws, "lnk")); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
 	if msg := g.CheckWritePath(filepath.Join(ws, "lnk", "config"), ws); msg == "" {
 		t.Error("write via symlink into .git must be blocked")
 	}
-	// Case 2: symlink to a protected file directly.
+
 	if err := os.Symlink(filepath.Join(root, ".env"), filepath.Join(ws, "lnk2")); err != nil {
 		t.Fatal(err)
 	}
 	if msg := g.CheckWritePath(filepath.Join(ws, "lnk2"), ws); msg == "" {
 		t.Error("write via symlink to .env must be blocked")
 	}
-	// Control: plain workspace write stays allowed.
+
 	if msg := g.CheckWritePath(filepath.Join(ws, "normal.go"), ws); msg != "" {
 		t.Errorf("normal write blocked: %s", msg)
 	}
 }
 
-// Companion to TestFileGuardSymlinkBypass that does not depend on symlink
-// support (t.Skipf there leaves the fix uncovered on Windows without
-// developer mode). When the judged path is outside the working dir, relPath
-// falls back to the OS-native absolute path; on Windows its '\' separators
-// made the dir-prefix component match fail open (#1322 follow-up).
 func TestFileGuard_DirPrefixOutsideWorkingDir(t *testing.T) {
 	root := t.TempDir()
 	ws := filepath.Join(root, "ws")
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	g := NewFileGuard(nil) // default patterns include ".git/"
+	g := NewFileGuard(nil)
 
-	// Path outside ws containing a .git component: Rel(ws, ...) starts with
-	// "..", so IsProtected judges the absolute (OS-native) path.
 	outside := filepath.Join(root, "other", ".git", "config")
 	protected, _ := g.IsProtected(outside, ws)
 	if !protected {
 		t.Error("expected .git/ component outside working dir to stay protected")
 	}
-	// Control: non-protected outside path is allowed.
+
 	plain := filepath.Join(root, "other", "notes.txt")
 	if protected, _ := g.IsProtected(plain, ws); protected {
 		t.Error("plain outside path must not be protected")
 	}
 }
 
-// TestProtectedPatternFoldsOnCaseInsensitiveFS pins #1683 case 2: on
-// macOS/Windows a literal .GIT/.ENV resolves to the protected target -
-// segment equality and glob matching must fold there (and stay exact on
-// Linux, but that's the host's own semantics).
 func TestProtectedPatternFoldsOnCaseInsensitiveFS(t *testing.T) {
 	if !fsCaseInsensitive() {
 		t.Skip("host FS is case-sensitive - fold path not compiled in")

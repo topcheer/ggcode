@@ -45,7 +45,7 @@ func TestValidateRequiredParams_MultipleMissing(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected missing params error, got empty")
 	}
-	// pattern and description should both be listed
+
 	for _, s := range []string{"pattern", "description"} {
 		if !containsStr(msg, s) {
 			t.Errorf("expected %q in message, got: %s", s, msg)
@@ -72,9 +72,7 @@ func TestValidateRequiredParams_WhitespaceString(t *testing.T) {
 		"properties": {"path": {"type": "string"}},
 		"required": ["path"]
 	}`)
-	// #542: whitespace-only strings are treated as missing, consistent with
-	// CheckRequired's Trim behavior in tool.go — a whitespace path or grep
-	// pattern is useless and previously bypassed the required-param gateway.
+
 	args := json.RawMessage(`{"path": "  "}`)
 	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
@@ -101,7 +99,7 @@ func TestValidateRequiredParams_NumberZero(t *testing.T) {
 		"properties": {"offset": {"type": "integer"}},
 		"required": ["offset"]
 	}`)
-	// 0 is a valid value — should NOT be treated as missing
+
 	args := json.RawMessage(`{"offset": 0}`)
 	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
@@ -115,7 +113,7 @@ func TestValidateRequiredParams_BooleanFalse(t *testing.T) {
 		"properties": {"headless": {"type": "boolean"}},
 		"required": ["headless"]
 	}`)
-	// false is a valid value — should NOT be treated as missing
+
 	args := json.RawMessage(`{"headless": false}`)
 	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
@@ -123,8 +121,6 @@ func TestValidateRequiredParams_BooleanFalse(t *testing.T) {
 	}
 }
 
-// #568: an explicitly provided empty array is a valid value (e.g. clearing
-// a list), NOT a missing parameter.
 func TestValidateRequiredParams_EmptyArray(t *testing.T) {
 	schema := json.RawMessage(`{
 		"type": "object",
@@ -136,7 +132,7 @@ func TestValidateRequiredParams_EmptyArray(t *testing.T) {
 	if msg != "" {
 		t.Errorf("explicit empty array should be treated as provided, got: %s", msg)
 	}
-	// Absent key and null must still be reported as missing.
+
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`), ""); msg == "" {
 		t.Error("absent required field should be reported missing")
 	}
@@ -203,7 +199,7 @@ func TestIsEmptyValue(t *testing.T) {
 	}{
 		{`null`, true},
 		{`""`, true},
-		// #568: explicit empty containers are provided values, not missing.
+
 		{`[]`, false},
 		{`{}`, false},
 		{`""`, true},

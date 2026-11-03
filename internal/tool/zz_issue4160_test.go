@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4160: a budget-exhausted Spawn returns a synthetic sa-budget-* entry.
-// The isolation-worktree setup must skip it - each pass-through used to
-// deterministically create and leak one worktree + branch on the terminal
-// (failed) entry, unbounded across retry attempts.
 func TestSetupIsolationWorktreeSkipsSyntheticIDs(t *testing.T) {
 	dir := t.TempDir()
 	tt := SpawnAgentTool{WorkingDir: dir}
@@ -23,7 +19,7 @@ func TestSetupIsolationWorktreeSkipsSyntheticIDs(t *testing.T) {
 			t.Fatalf("synthetic id %s: got worktree %q, want empty", id, got)
 		}
 	}
-	// No worktree directory may exist for synthetic entries.
+
 	wtRoot := filepath.Join(dir, ".ggcode", "worktrees")
 	if entries, err := os.ReadDir(wtRoot); err == nil && len(entries) > 0 {
 		t.Fatalf("synthetic ids created worktrees: %v", entries)

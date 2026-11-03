@@ -2,9 +2,6 @@
 
 package agent
 
-// #3781 probes: cross-package collision, non-go-test gating, save-failure
-// reset ordering, and the positive same-test-twice path.
-
 import (
 	"os"
 	"path/filepath"
@@ -64,7 +61,7 @@ func Test3781SaveFailureStillResets(t *testing.T) {
 	c := newTestFailCollector()
 	c.record("go test ./...", "=== RUN   TestX\n--- FAIL: TestX (0.00s)\nFAIL\tpkg/x\t0.1s\nFAIL\n")
 	a := &Agent{workingDir: ro, testFails: c}
-	a.routeWeaknessSignals() // save must fail inside read-only dir
+	a.routeWeaknessSignals()
 	if len(c.snapshot()) != 0 {
 		t.Fatalf("counts must be cleared even when save fails: %v", c.snapshot())
 	}
@@ -92,7 +89,7 @@ func Test3781SameTestTwiceStillForgetting(t *testing.T) {
 
 func Test3781DegradedFallbackMarked(t *testing.T) {
 	c := newTestFailCollector()
-	// -run output stripped through a pipe: no FAIL\t<pkg> summary line.
+
 	c.record("go test ./... -v | tee out.log", "--- FAIL: TestX (0.00s)\nFAIL\n")
 	if c.snapshot()["TestX"] != 1 {
 		t.Fatalf("fallback must keep pre-#3781 bare-name key: %v", c.snapshot())

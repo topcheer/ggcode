@@ -45,7 +45,6 @@ func TestUsageHintStoreLifecycle(t *testing.T) {
 	s := newToolUsageHintStore()
 	s.attach(dir)
 
-	// Failure records a hint; duplicate bumps count instead of appending.
 	s.recordFailure("edit_file", `missing required parameter "old_text" in /tmp/f.go`)
 	s.recordFailure("edit_file", `missing required parameter "old_text" in /tmp/g.go`)
 	if got := len(s.hints["edit_file"]); got != 1 {
@@ -59,15 +58,12 @@ func TestUsageHintStoreLifecycle(t *testing.T) {
 		t.Fatal("unrelated tool must have no overlay")
 	}
 
-	// Roundtrip: a fresh store loading the persisted file sees the hint.
 	s2 := newToolUsageHintStore()
 	s2.attach(dir)
 	if s2.OverlayFor("edit_file") == "" {
 		t.Fatal("hint did not persist across stores")
 	}
 
-	// Success decays per-hint (#3405): FailCount=2 here, so one success
-	// decrements to 1 and the hint survives; a second success clears it.
 	s2.recordSuccess("edit_file")
 	if s2.OverlayFor("edit_file") == "" {
 		t.Fatal("single success must not wipe a repeated-failure hint (FailCount was 2)")
@@ -99,7 +95,6 @@ func TestUsageHintStoreCapAndTTL(t *testing.T) {
 		t.Fatalf("cap not enforced: %d hints", got)
 	}
 
-	// TTL: stale entries dropped on load.
 	s.hints["browser"] = []usageHint{{
 		Tool: "browser", Message: "invalid parameter: must be string",
 		LastSeen: time.Now().Add(-usageHintsTTL - time.Hour), FailCount: 1,
@@ -118,7 +113,7 @@ func TestUsageHintStoreCorruptFileDegrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newToolUsageHintStore()
-	s.attach(dir) // must not panic or brick
+	s.attach(dir)
 	s.recordFailure("grep", `missing required parameter "pattern"`)
 	if s.OverlayFor("grep") == "" {
 		t.Fatal("post-corruption recording must still work in-memory")

@@ -36,7 +36,7 @@ func TestEmitProgressLegacyFallback(t *testing.T) {
 }
 
 func TestEmitProgressNoConsumer(t *testing.T) {
-	// Must not panic when nothing is injected (progress silently dropped).
+
 	EmitProgress(context.Background(), ProgressEvent{Message: "x"})
 }
 

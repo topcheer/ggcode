@@ -5,24 +5,19 @@ import (
 	"testing"
 )
 
-// #4182: a FAILED mutation has no side effects and must not advance
-// lastMutationIter - otherwise failed edits manufacture a "mutatedAfter"
-// that fires the stale-trap with a false "file changes have happened since"
-// assertion.
 func TestReverifyFailedMutationDoesNotAdvance(t *testing.T) {
 	s := newReverifyState()
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "No matches found", false, 2)
-	// Six failed edits (old_text mismatch): zero file changes.
+
 	for i := 3; i <= 8; i++ {
 		s.recordToolResult("edit_file", `{"path":"a.go"}`, "old_text not found", true, i)
 	}
-	// Aged 7>=6 but NOTHING mutated after the observation: must NOT fire.
+
 	if msg := s.checkStaleTrap("The fix is complete, everything works now.", 9); msg != "" {
 		t.Fatalf("failed mutations must not stale the observation, got: %s", msg)
 	}
 }
 
-// Control: a SUCCESSFUL mutation still advances the tracker (old semantics).
 func TestReverifySuccessfulMutationStillAdvances(t *testing.T) {
 	s := newReverifyState()
 	s.recordToolResult("grep", `{"pattern":"foo"}`, "No matches found", false, 2)
@@ -33,14 +28,11 @@ func TestReverifySuccessfulMutationStillAdvances(t *testing.T) {
 	}
 }
 
-// #4181: "还是错" embedded in the neutral compound "还是错误处理" is a
-// technical recommendation, not a rejection of the agent's output. The
-// carrier masks only the embedded occurrence.
 func TestIssue4181_HaishiCuowuCarrier(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  string
-		want bool // whether rejection should fire
+		want bool
 	}{
 		{"neutral recommendation, short", "还是错误处理更简单，直接 try-catch 吧", false},
 		{"neutral error-code compound", "看下还是错误码没变，日志里有线索", false},
@@ -54,8 +46,6 @@ func TestIssue4181_HaishiCuowuCarrier(t *testing.T) {
 	}
 }
 
-// The carrier must not blank OTHER negatives on the same line (#4149
-// carrier contract: mask only the embedded trigger).
 func TestIssue4181_CarrierDoesNotBlankOtherNegatives(t *testing.T) {
 	msg := "还是错误处理更简单，这个方案真的是垃圾实现"
 	if got := detectNegativeFeedback(msg); got == "" {

@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// #1652 case 2 probes: write_file and multi_edit_file must flag conflict
-// markers in the content they land (edit_file and read_file already do).
-
 func TestWriteFileFlagsConflictMarkers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

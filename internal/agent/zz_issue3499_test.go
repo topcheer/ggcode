@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// #3499: write/edit/multi_edit → run_command build-like matchers previously
-// used bare substring Contains ("build", "tsc", "make ") on the whole command
-// string, flagging zero-relation parallel batches as dependency violations.
-// The fix matches command SEGMENT PREFIXES instead.
-
 func issue3499Batch(t *testing.T, names []string, rawArgs []string) string {
 	t.Helper()
 	s := newCFDepState()
@@ -93,10 +88,10 @@ func TestIssue3499_CommandIsBuildLikeSegmentPrefix(t *testing.T) {
 		{"cat logs/build.log", false},
 		{"grep tsc", false},
 		{"echo 'build failed'", false},
-		{"go build", true},       // exact segment match
-		{"gobuild ./...", false}, // no space boundary
-		{"makefile", false},      // prefix without word boundary
-		{"ls && make", true},     // second segment
+		{"go build", true},
+		{"gobuild ./...", false},
+		{"makefile", false},
+		{"ls && make", true},
 		{"cat a.log; go test ./...", true},
 		{"", false},
 	}

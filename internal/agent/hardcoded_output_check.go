@@ -1,41 +1,5 @@
 package agent
 
-// Hardcoded Output Memorization Detector
-//
-// Research basis: SpecBench (arXiv:2605.21384, Weco AI, 2026) documents the
-// most severe reward hacking pattern in long-horizon coding agents: "lookup-
-// table memorization." Instead of implementing real logic, agents hardcode
-// input-to-output mappings. The canonical case: a C compiler agent produced a
-// 2,900-line hash table mapping test input hashes to pre-computed outputs,
-// achieving 97% on visible validation tests but 0% on held-out tests.
-//
-// This is distinct from "feature isolation" (SpecBench's moderate category)
-// which is harder to detect deterministically. Memorization is:
-//   - Detectable via source structure analysis (no semantic understanding needed)
-//   - More severe: zero generalization vs. partial generalization
-//   - More deliberate: the agent actively constructs the mapping
-//
-// Detection patterns (all deterministic, zero LLM cost):
-//
-// 1. LARGE MAP/SWITCH OF HARDCODED OUTPUTS: A function whose body is dominated
-//    by a map literal or switch statement returning hardcoded values, with
-//    little or no actual computation. Threshold: map/switch with >= 5 constant
-//    entries that return string/numeric literals.
-//
-// 2. INPUT-KEYED LOOKUP: A function that computes a hash/checksum of the input
-//    and uses it as a key into a pre-built lookup table. Pattern:
-//    hash(input) -> map[hash] -> return literal.
-//
-// 3. STRING-KEYED HARDcoded RETURN: A function that maps specific string
-//    inputs to hardcoded string/numeric outputs via if/else chains or switch
-//    cases, with no computation between input and output.
-//
-// Design decisions:
-//   - Only triggers on NON-test files (test files legitimately contain fixtures)
-//   - Threshold tuned to avoid false positives on config/registry code
-//   - Max 2 warnings per write to avoid nagging
-//   - Language-agnostic string patterns + Go AST analysis
-
 import (
 	"fmt"
 	"go/ast"
@@ -46,18 +10,11 @@ import (
 
 const hardcodedOutputMaxWarnings = 2
 
-// Thresholds for suspicion
 const (
-	// minHardcodedEntries: a map/switch with fewer constant entries is normal
-	// (e.g., error code mappings, config defaults).
 	minHardcodedEntries = 5
-	// maxNonLiteralRatio: if more than 30% of statements in the function are
-	// non-literal (actual computation), it's probably real logic.
-	maxNonLiteralRatio = 0.3
+	maxNonLiteralRatio  = 0.3
 )
 
-// checkHardcodedOutput detects hardcoded input-to-output memorization patterns.
-// Runs for Go, Python, and JS/TS files. Returns warning strings.
 func checkHardcodedOutput(fp, oldContent, newContent string) []string {
 	if isTestFile(fp) {
 		return nil
@@ -75,10 +32,6 @@ func checkHardcodedOutput(fp, oldContent, newContent string) []string {
 		warnings = checkHardcodedOutputJSTS(newContent)
 	}
 
-	// Delta-aware (fix #174): a file that legitimately contains a large
-	// literal map (not caught by the config-getter allowlist) was re-flagged
-	// on EVERY subsequent edit, even unrelated ones. Compare old vs new
-	// warning sets; only net-new warnings survive.
 	if strings.TrimSpace(oldContent) != "" && len(warnings) > 0 {
 		var oldWarnings []string
 		switch lang {
@@ -108,18 +61,15 @@ func checkHardcodedOutput(fp, oldContent, newContent string) []string {
 	return warnings
 }
 
-// --- Go AST-based detection ---
-
 func checkHardcodedOutputGo(fp, src string) []string {
 	file, _, err := parseGoSource(fp, src, 0)
 	if err != nil || file == nil {
-		// Fall back to string-based detection
+
 		return checkHardcodedOutputString(src)
 	}
 
 	var warnings []string
 
-	// Check package-level var declarations with large map literals
 	for _, decl := range file.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok || gd.Tok != token.VAR {
@@ -158,8 +108,7 @@ func checkHardcodedOutputGo(fp, src string) []string {
 
 		info := analyzeGoFuncBody(fn.Body)
 		if info.suspicious {
-			// Check if function name looks like it should compute something
-			// (not a config getter or registry)
+
 			name := fn.Name.Name
 			if isLikelyConfigGetter(name) {
 				return true
@@ -178,8 +127,6 @@ type hardcodedFuncInfo struct {
 	entryCount int
 }
 
-// analyzeGoFuncBody checks if a function body is dominated by hardcoded
-// literal mappings rather than real computation.
 func analyzeGoFuncBody(body *ast.BlockStmt) hardcodedFuncInfo {
 	var literalEntries int
 	var totalStmts int
@@ -189,7 +136,7 @@ func analyzeGoFuncBody(body *ast.BlockStmt) hardcodedFuncInfo {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.CompositeLit:
-			// Map literal with many key:value pairs
+
 			if node.Type != nil && len(node.Elts) >= minHardcodedEntries {
 				if allLiteralKV(node.Elts) {
 					literalEntries += len(node.Elts)
@@ -197,7 +144,7 @@ func analyzeGoFuncBody(body *ast.BlockStmt) hardcodedFuncInfo {
 				}
 			}
 		case *ast.CaseClause:
-			// switch case returning literals
+
 			if len(node.List) > 0 && node.Body != nil {
 				if allReturnLiterals(node.Body) {
 					literalEntries++
@@ -217,8 +164,7 @@ func analyzeGoFuncBody(body *ast.BlockStmt) hardcodedFuncInfo {
 	})
 
 	if literalEntries >= minHardcodedEntries {
-		// Check ratio: if the function has lots of real statements, it's
-		// probably not pure memorization
+
 		if totalStmts > 0 {
 			ratio := float64(totalStmts-literalEntries) / float64(totalStmts)
 			if ratio > maxNonLiteralRatio {
@@ -243,8 +189,6 @@ func analyzeGoFuncBody(body *ast.BlockStmt) hardcodedFuncInfo {
 	return hardcodedFuncInfo{suspicious: false}
 }
 
-// allLiteralKV checks if all composite literal elements are key:value pairs
-// where both key and value are basic literals.
 func allLiteralKV(elts []ast.Expr) bool {
 	count := 0
 	for _, elt := range elts {
@@ -260,7 +204,6 @@ func allLiteralKV(elts []ast.Expr) bool {
 	return count >= minHardcodedEntries
 }
 
-// allReturnLiterals checks if a case body consists only of returning literals.
 func allReturnLiterals(body []ast.Stmt) bool {
 	if len(body) == 0 {
 		return false
@@ -284,7 +227,7 @@ func isBasicLiteral(expr ast.Expr) bool {
 	case *ast.BasicLit:
 		return true
 	case *ast.Ident:
-		// true/false/nil count as literals
+
 		name := expr.(*ast.Ident).Name
 		return name == "true" || name == "false" || name == "nil"
 	default:
@@ -292,8 +235,6 @@ func isBasicLiteral(expr ast.Expr) bool {
 	}
 }
 
-// isLikelyConfigGetter returns true for function names that legitimately
-// return hardcoded mappings (config registries, error code tables, etc.)
 func isLikelyConfigGetter(name string) bool {
 	lower := strings.ToLower(name)
 	configPrefixes := []string{
@@ -306,10 +247,7 @@ func isLikelyConfigGetter(name string) bool {
 			return true
 		}
 	}
-	// #572: reference-table names (monthNames, currencySymbols, httpStatusText,
-	// …) are legitimate static display/reference data, not memorized test
-	// input-to-output pairs. They are conventionally named after the data they
-	// hold, unlike memorization maps hidden inside compute-sounding functions.
+
 	referenceSuffixes := []string{
 		"names", "symbols", "text", "texts", "labels", "codes",
 		"titles", "months", "days", "units", "statuses",
@@ -322,24 +260,15 @@ func isLikelyConfigGetter(name string) bool {
 	return false
 }
 
-// --- Python detection (string-based) ---
-
 func checkHardcodedOutputPython(src string) []string {
 	var warnings []string
 
-	// Pattern: large dict literal with string keys mapping to literals
-	// e.g., LOOKUP = {"input1": "output1", "input2": "output2", ...}
 	dictRe := regexp.MustCompile(`(?s)\{([^{}]*?)\}`)
 	for _, m := range dictRe.FindAllStringSubmatch(src, -1) {
 		if len(m) < 2 {
 			continue
 		}
-		// Count actual "key": "value" pairs, not quote characters (fix #174:
-		// counting `"` chars then dividing by 2 reported 2x the real entry
-		// count — a 3-pair dict fired claiming "6 entries", and the threshold
-		// was effectively >=3 pairs instead of the documented >=5).
-		// #572 A6: accept single-quoted strings too — Python dicts commonly use
-		// them and the double-quote-only pattern silently missed them.
+
 		pairRe := regexp.MustCompile(`("[^"]*"|'[^']*')\s*:\s*("[^"]*"|'[^']*'|[^,}]+)`)
 		entries := len(pairRe.FindAllString(m[1], -1))
 		if entries >= minHardcodedEntries {
@@ -348,12 +277,11 @@ func checkHardcodedOutputPython(src string) []string {
 					"large dict literal with %d hardcoded string-to-literal entries - "+
 						"verify this implements real logic, not input memorization",
 					entries))
-				break // one warning per file
+				break
 			}
 		}
 	}
 
-	// Pattern: function with many if input == "X": return "Y"
 	ifElseChainRe := regexp.MustCompile(`(?m)^\s+if\s+\w+\s*==\s*["']`)
 	chains := ifElseChainRe.FindAllString(src, -1)
 	if len(chains) >= minHardcodedEntries {
@@ -366,18 +294,15 @@ func checkHardcodedOutputPython(src string) []string {
 	return warnings
 }
 
-// --- JS/TS detection (string-based) ---
-
 func checkHardcodedOutputJSTS(src string) []string {
 	var warnings []string
 
-	// Pattern: large object literal with string keys -to- literal values
 	objRe := regexp.MustCompile(`(?m)\{([^{}]{200,})\}`)
 	for _, m := range objRe.FindAllStringSubmatch(src, -1) {
 		if len(m) < 2 {
 			continue
 		}
-		// Count key: value pairs with string keys
+
 		kvRe := regexp.MustCompile(`["'` + "`" + `][^"'` + "`" + `]+["'` + "`" + `]\s*:\s*["'` + "`" + `]`)
 		count := len(kvRe.FindAllString(m[1], -1))
 		if count >= minHardcodedEntries {
@@ -389,11 +314,10 @@ func checkHardcodedOutputJSTS(src string) []string {
 		}
 	}
 
-	// Pattern: switch with many string case returning literals
 	switchRe := regexp.MustCompile(`(?m)case\s+["'` + "`" + `]`)
 	cases := len(switchRe.FindAllString(src, -1))
 	if cases >= minHardcodedEntries {
-		// Check if returns are literals (rough heuristic)
+
 		returnLiteralRe := regexp.MustCompile(`return\s+["'` + "`" + `]`)
 		literalReturns := len(returnLiteralRe.FindAllString(src, -1))
 		if literalReturns >= minHardcodedEntries {
@@ -407,10 +331,8 @@ func checkHardcodedOutputJSTS(src string) []string {
 	return warnings
 }
 
-// --- String-based fallback (for Go parse failures) ---
-
 func checkHardcodedOutputString(src string) []string {
-	// Rough heuristic: many consecutive string-to-string pairs in a map literal
+
 	mapRe := regexp.MustCompile(`map\[string\]string\{([^}]+)\}`)
 	var warnings []string
 	for _, m := range mapRe.FindAllStringSubmatch(src, -1) {
@@ -429,11 +351,8 @@ func checkHardcodedOutputString(src string) []string {
 	return warnings
 }
 
-// --- Helpers ---
-
 func allStringLiterals(s string) bool {
-	// Rough check: at least 80% of content is string literals
-	// #572 A6: count single quotes as well, matching the pair regex above.
+
 	quoted := strings.Count(s, `"`) + strings.Count(s, `'`)
 	total := len(strings.Fields(s))
 	if total == 0 {

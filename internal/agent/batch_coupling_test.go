@@ -123,15 +123,15 @@ func TestBatchCoupling_MaxWarnings(t *testing.T) {
 		{name: "edit_file", args: couplingRawJSON(t, map[string]interface{}{"file_path": "/foo.go"})},
 		{name: "read_file", args: couplingRawJSON(t, map[string]interface{}{"path": "/foo.go"})},
 	}
-	// First call fires.
+
 	if got := s.checkBatchCoupling(calls); got == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second call fires (maxWarns=2).
+
 	if got := s.checkBatchCoupling(calls); got == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third call should be suppressed.
+
 	if got := s.checkBatchCoupling(calls); got != "" {
 		t.Fatalf("expected suppression after maxWarns, got: %s", got)
 	}
@@ -148,8 +148,7 @@ func TestBatchCoupling_Reset(t *testing.T) {
 
 func TestBatchCoupling_ReverseOrderFlagged(t *testing.T) {
 	s := newBatchCouplingState()
-	// #150: read_file before edit_file — parallel execution would return
-	// pre-edit content, so the reverse order is ALSO flagged now.
+
 	calls := []couplingToolCall{
 		{name: "read_file", args: couplingRawJSON(t, map[string]interface{}{"path": "/foo.go"})},
 		{name: "edit_file", args: couplingRawJSON(t, map[string]interface{}{"file_path": "/foo.go"})},

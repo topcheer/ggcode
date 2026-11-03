@@ -96,7 +96,7 @@ func increment() {
 }
 
 func TestCheckRaceVerifyHint_NoChange(t *testing.T) {
-	// Same concurrency primitives, no new additions -- should NOT fire.
+
 	content := `package main
 
 import "sync"
@@ -114,7 +114,7 @@ func worker() {
 }
 
 func TestCheckRaceVerifyHint_ConcurrencyRemoved(t *testing.T) {
-	// Removing goroutine -- should NOT fire (delta is negative).
+
 	old := `package main
 
 func worker() {
@@ -141,7 +141,7 @@ func TestCheckRaceVerifyHint_NonGoFile(t *testing.T) {
 }
 
 func TestCheckRaceVerifyHint_TestFile(t *testing.T) {
-	// Test files should not trigger the hint.
+
 	old := `package main`
 	new := `package main
 
@@ -216,7 +216,7 @@ func TestCountConcurrencyPrimitives_Empty(t *testing.T) {
 }
 
 func TestCountConcurrencyPrimitives_InvalidGo(t *testing.T) {
-	// Should fall back to string matching for unparseable code.
+
 	score := countConcurrencyPrimitives("this is not valid Go code at all")
 	if score < 0 {
 		t.Errorf("score should be non-negative, got %d", score)

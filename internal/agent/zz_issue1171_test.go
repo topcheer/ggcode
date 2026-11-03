@@ -1,10 +1,5 @@
 package agent
 
-// Regression tests for issue #1171: the excessive-parameter-count detector
-// must flag function literals wherever they appear - var declarations,
-// call arguments, go and defer statements - not only direct RHS elements
-// of `:=` assignments.
-
 import (
 	"strings"
 	"testing"
@@ -46,14 +41,13 @@ func Assign1171() {
 }
 `
 
-// All six-param literal shapes are detected exactly once each.
 func TestIssue1171_FuncLiteralFormsDetected(t *testing.T) {
 	insts := findExcessiveParams(issue1171Src, false)
 	var forms []string
 	for _, inst := range insts {
 		forms = append(forms, strings.Join(inst.params, ","))
 	}
-	want := 4 // var f1171, go, defer, := assignment
+	want := 4
 	if len(insts) != want {
 		t.Fatalf("got %d instances, want %d:\n%s", len(insts), want, strings.Join(forms, "\n"))
 	}
@@ -64,7 +58,6 @@ func TestIssue1171_FuncLiteralFormsDetected(t *testing.T) {
 	}
 }
 
-// A short (5-param) literal in any form must not be flagged.
 func TestIssue1171_UnderThresholdLiteralsNotFlagged(t *testing.T) {
 	src := `package sample
 
@@ -80,8 +73,6 @@ func Go() {
 	}
 }
 
-// Nested function literals are each counted exactly once (no double
-// counting after the AssignStmt branch was removed, issue #1171).
 func TestIssue1171_NestedLiteralsCountedOnce(t *testing.T) {
 	src := `package sample
 

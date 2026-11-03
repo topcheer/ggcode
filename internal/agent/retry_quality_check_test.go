@@ -291,7 +291,6 @@ func fetch(url string) {
 	}
 }
 
-// hasWarning checks if any warning contains the given substring.
 func hasWarning(warnings []string, sub string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, sub) {
@@ -301,8 +300,6 @@ func hasWarning(warnings []string, sub string) bool {
 	return false
 }
 
-// #570 Bug D: lowercase (unexported) method names must be detected as
-// failing calls, matching Go convention for internal methods.
 func TestRetryQuality_LowercaseUnexportedMethod(t *testing.T) {
 	src := `package main
 import "net/http"
@@ -326,7 +323,6 @@ func fetch(c *client) {
 	}
 }
 
-// #570 Bug D: ForStmt-only changes (no new functions added) must be detected.
 func TestRetryQuality_ForStmtOnlyChange(t *testing.T) {
 	old := `package main
 import "net/http"
@@ -334,7 +330,7 @@ func fetch(url string) {
 	resp, _ := http.Get(url)
 	_ = resp
 }`
-	// New code adds a retry loop to existing function
+
 	new := `package main
 import "net/http"
 func fetch(url string) {

@@ -1,10 +1,5 @@
 package tool
 
-// #r481 probe: a .ggskill bundle body is injected as a USER message when
-// the skill loads, so malicious content that survives importSkill's
-// STRUCTURAL guards (traversal, bombs, SSRF) must still be flagged at
-// import time. The scan is advisory - it reports, never blocks.
-
 import (
 	"context"
 	"encoding/json"
@@ -100,9 +95,6 @@ func TestScanSkillDir_WalksImportedBundle(t *testing.T) {
 	}
 }
 
-// End-to-end: importing a bundle whose body carries injection text must
-// still SUCCEED (advisory, never blocking) but surface the warning in
-// the tool result the agent sees.
 func TestSkillToolImportScanAdvisoryEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
 	skillDir := filepath.Join(tmp, "evil-skill")

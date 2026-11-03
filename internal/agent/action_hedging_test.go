@@ -44,7 +44,7 @@ func TestScanActionHedging(t *testing.T) {
 			name:     "multiple hedging signals",
 			text:     "This should hopefully fix the bug. Let's try it. If this doesn't work, we can try something else.",
 			wantMin:  3,
-			wantHigh: 2, // "let's try it" downgraded to MEDIUM (#359)
+			wantHigh: 2,
 		},
 		{
 			name:     "fallback narration is not hedging (#359)",
@@ -101,19 +101,16 @@ func TestMaybeWarnActionHedging(t *testing.T) {
 		actionHedging: newActionHedgingState(),
 	}
 
-	// No mutation - should not fire even with hedging language
 	hint := a.maybeWarnActionHedging("This should hopefully fix it. Let's try.", false)
 	if hint != "" {
 		t.Error("should not fire without mutation")
 	}
 
-	// Single hedging signal - below threshold
 	hint = a.maybeWarnActionHedging("This should hopefully fix the bug.", true)
 	if hint != "" {
 		t.Error("should not fire for single signal (below threshold of 2)")
 	}
 
-	// Multiple hedging signals with mutation
 	hint = a.maybeWarnActionHedging("This should hopefully fix it. Let's try. If this doesn't work we'll try something else.", true)
 	if hint == "" {
 		t.Fatal("should fire for 3 hedging signals with mutation")
@@ -125,13 +122,11 @@ func TestMaybeWarnActionHedging(t *testing.T) {
 		t.Errorf("hint should explain the issue: %s", hint)
 	}
 
-	// Second warning should fire
 	hint = a.maybeWarnActionHedging("This is my best guess. Let's try this approach.", true)
 	if hint == "" {
 		t.Fatal("second warning should fire")
 	}
 
-	// Third warning should not fire (max 2)
 	hint = a.maybeWarnActionHedging("This should hopefully fix it. Let's try again.", true)
 	if hint != "" {
 		t.Error("should not fire after max warnings reached")
@@ -171,9 +166,9 @@ func TestIsMutationTool(t *testing.T) {
 }
 
 func TestActionHedgingDedup(t *testing.T) {
-	// Same pattern repeated should be deduplicated
+
 	hits := scanActionHedging("This should hopefully fix it. This should hopefully fix it again.")
-	// Should only get 2 unique excerpts, not 4 of the same
+
 	keys := make(map[string]bool)
 	for _, h := range hits {
 		key := h.level + ":" + h.excerpt

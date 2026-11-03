@@ -1,12 +1,5 @@
 package agent
 
-// #3758 probes: two false-positive shapes in the value-receiver mutation
-// detector. (A) The "return the new value" idiom (time.Time.Add et al.)
-// mutates the copy on purpose and hands it back - warning on it (and
-// advising a pointer receiver) damages correct immutable APIs. (B) A `:=`
-// shadow of the receiver name makes later mutations of that name hit the
-// shadow, not the receiver.
-
 import (
 	"go/ast"
 	"go/parser"

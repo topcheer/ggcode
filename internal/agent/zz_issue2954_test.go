@@ -2,12 +2,6 @@ package agent
 
 import "testing"
 
-// #2954: bare-filename self-mod patterns (agents.md, system_prompt.json,
-// mcp_server.json, ...) must match ONLY at the workspace root. Subdirectory
-// files with the same basename are ordinary project files and must not
-// trigger HIGH/CRITICAL "Self-Modification Warning". Anchored (.ggcode/...)
-// patterns keep substring matching.
-
 func TestIssue2954SubdirectoryBareNamesDoNotMatch(t *testing.T) {
 	ordinary := []string{
 		"docs/agents.md", "docs/guide/ggcode.md", "examples/claude.md",
@@ -61,8 +55,7 @@ func TestIssue2954AnchoredDotGgcodePatternsKeepSubstringMatch(t *testing.T) {
 }
 
 func TestIssue2954RootAwareAbsolutePathNormalization(t *testing.T) {
-	// Real agent flow: tools pass ABSOLUTE paths; the state receives the
-	// workspace root and must normalize before bare-name matching.
+
 	s := newSelfModState()
 	s.setRoot("/Volumes/ws/repo")
 
@@ -80,8 +73,7 @@ func TestIssue2954RootAwareAbsolutePathNormalization(t *testing.T) {
 }
 
 func TestIssue2954CheckSelfModificationEndToEnd(t *testing.T) {
-	// End-to-end: editing docs/agents.md must produce no warning, while
-	// writing the root AGENTS.md must still produce the advisory.
+
 	s := newSelfModState()
 
 	if w := s.checkSelfModification("write_file", mustJSON(t, map[string]any{

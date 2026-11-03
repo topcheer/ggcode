@@ -30,7 +30,6 @@ func TestBrowserToolInterface(t *testing.T) {
 		t.Fatal("schema missing properties")
 	}
 
-	// Verify all expected properties exist
 	requiredProps := []string{"action", "url", "profile", "session", "selector", "text", "expression", "wait_for", "headless", "description"}
 	for _, prop := range requiredProps {
 		if _, ok := props[prop]; !ok {
@@ -38,7 +37,6 @@ func TestBrowserToolInterface(t *testing.T) {
 		}
 	}
 
-	// Verify required includes action and description
 	required, ok := schema["required"].([]interface{})
 	if !ok {
 		t.Fatal("schema missing required array")
@@ -78,12 +76,10 @@ func TestBrowserToolUnknownAction(t *testing.T) {
 	}
 }
 
-// #741: file:// navigation must be refused at the Execute level before any
-// Chrome session is created - no Chrome binary required to run this test.
 func TestBrowserNavigateRejectsFileScheme(t *testing.T) {
 	b := NewBrowser()
 	for _, rawURL := range []string{
-		"file:///Users/x/.ssh/id_rsa", // the #741 attack
+		"file:///Users/x/.ssh/id_rsa",
 		"file:///etc/passwd",
 		"chrome://settings",
 		"data:text/html,<script>1</script>",
@@ -142,15 +138,12 @@ func TestBrowserProfileManagement(t *testing.T) {
 func TestBrowserCloserInterface(t *testing.T) {
 	b := NewBrowser()
 
-	// Browser must implement Closer
 	var _ Closer = b
 
-	// Close on a fresh browser (no profiles created) should be safe
 	if err := b.Close(); err != nil {
 		t.Errorf("Close() on fresh browser should not error: %v", err)
 	}
 
-	// Close again (idempotent) should be safe
 	if err := b.Close(); err != nil {
 		t.Errorf("Close() twice should be safe: %v", err)
 	}
@@ -163,18 +156,15 @@ func TestRegistryCloseAll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Register a non-Closer tool too - CloseAll should skip it
 	if err := r.Register(WebFetch{}); err != nil {
 		t.Fatal(err)
 	}
 
-	// CloseAll should call Close on Browser but skip WebFetch
 	errs := r.CloseAll()
 	if len(errs) != 0 {
 		t.Errorf("CloseAll should not return errors, got: %v", errs)
 	}
 
-	// Verify browser profiles were cleared
 	browser.mu.Lock()
 	cleared := len(browser.profiles) == 0
 	browser.mu.Unlock()
@@ -191,7 +181,6 @@ func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
 	}
 	props := schema["properties"].(map[string]interface{})
 
-	// Profile param must exist and mention cookies/sessions
 	profileDesc, _ := props["profile"].(map[string]interface{})
 	if profileDesc == nil {
 		t.Fatal("missing 'profile' property")
@@ -201,7 +190,6 @@ func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
 		t.Errorf("profile description should mention profiles, got: %s", descStr)
 	}
 
-	// Session param must exist
 	if _, ok := props["session"]; !ok {
 		t.Error("missing 'session' property")
 	}
@@ -219,7 +207,7 @@ func TestBrowserMissingAction(t *testing.T) {
 }
 
 func TestFindChromeExecutable(t *testing.T) {
-	// Should find Chrome or Chromium on the dev machine
+
 	path := findChromeExecutable()
 	if path == "" {
 		t.Skip("no Chrome/Chromium installed on this machine")

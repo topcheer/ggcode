@@ -7,22 +7,12 @@ import (
 	"testing"
 )
 
-// #4703: the Linux ghostty new_tab/new_window paths must honor the same
-// cd-only contract darwin has had since #2589/#1324/#3140:
-//   - command empty + working_dir set -> the surface still starts in wd
-//     (cd-only sh -c argv; the old bare new-window call silently dropped wd);
-//   - working_dir empty -> fall back to the tool process cwd (schema:
-//     "defaults to cwd"), never a Ghostty-chosen default.
-// gdbusCall shells out to the real bus, so the companion tests pin the pure
-// argv/param builders and the directory resolution; the execute paths are
-// thin compositions of exactly these helpers.
-
 func TestIssue4703CdOnlyArgvCarriesWorkingDir(t *testing.T) {
 	argv := ghosttyLinuxCdOnlyArgv("/tmp/with space")
 	if len(argv) != 3 || argv[0] != "sh" || argv[1] != "-c" {
 		t.Fatalf("cd-only argv = %v, want [sh -c \"cd ...\"]", argv)
 	}
-	// The cd target must be single-quoted so spaces survive sh -c.
+
 	if !strings.HasPrefix(argv[2], "cd ") || !strings.Contains(argv[2], "'/tmp/with space'") {
 		t.Fatalf("cd-only shell cmd = %q, want cd '<wd>' with shell quoting", argv[2])
 	}

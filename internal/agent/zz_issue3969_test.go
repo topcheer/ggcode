@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #3969: extractPathsFromToolCall's switch omitted file_ops and
-// batch_replace, so renames/reorgs done purely via those tools never
-// entered RunStats.FilesEdited. buildPlanWorkCorpus (plan drift's work
-// evidence) then missed the destination keyword and flagged a completed
-// plan item as unaddressed.
-
 func filesEditedBy(t *testing.T, toolName string, raw string) map[string]bool {
 	t.Helper()
 	s := &RunStats{}
@@ -50,8 +44,6 @@ func TestIssue3969BatchReplaceRecordsFiles(t *testing.T) {
 	}
 }
 
-// Malformed/empty inputs must stay silent no-ops, matching the existing
-// switch arms' json.Unmarshal error path.
 func TestIssue3969FileOpsMalformedNoPanic(t *testing.T) {
 	for _, tc := range []struct{ name, raw string }{
 		{"bad json", `{"operations":[`},

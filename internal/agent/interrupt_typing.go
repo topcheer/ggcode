@@ -1,23 +1,5 @@
 package agent
 
-// Interruption typing (InterruptBench, arXiv:2604.00892): the three
-// formalized user-interruption types are addition (new requirement),
-// revision (goal change), and retraction (withdrawal). ggcode's mid-run
-// steering channel treated every injected message as generic "new guidance"
-// (addition semantics), so a bare retraction ("stop"/"算了") let the loop
-// keep burning LLM turns on a withdrawn task, and a revision never told the
-// model that old-goal-only artifacts were dead weight.
-//
-// Classification is deterministic and deliberately narrow: RetractStop fires
-// only when the ENTIRE message is a stop phrase (exact set match after
-// normalization), so "stop adding tests" or "cancel the timer refactor" -
-// which carry task content - stay Addition. Revision needs an explicit
-// redirection marker. Insert (a complex task unrelated to the main thread)
-// needs a composite signal - length >= 120 runes AND >= 2 sentence units -
-// so short clarifications never misclassify; prefer miss-to-Addition over
-// false positives. Everything else keeps the existing addition preamble;
-// behavior for addition is byte-identical to pre-typing.
-
 import (
 	"strings"
 	"unicode"
@@ -25,62 +7,31 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// InterruptionKind classifies a mid-run user interruption.
 type InterruptionKind string
 
 const (
-	// InterruptionAddition: new requirement layered on the current goal.
-	InterruptionAddition InterruptionKind = "addition"
-	// InterruptionRevision: the user changed the goal; old-goal-only work
-	// is superseded.
-	InterruptionRevision InterruptionKind = "revision"
-	// InterruptionRetractStop: the user withdrew the request entirely.
-	// The run aborts without another LLM call; the injected notice survives
-	// in context for the next resume.
+	InterruptionAddition    InterruptionKind = "addition"
+	InterruptionRevision    InterruptionKind = "revision"
 	InterruptionRetractStop InterruptionKind = "retraction-stop"
-	// InterruptionInsert: a complex SEPARATE task injected mid-run, unrelated
-	// to the current main thread. The preamble suggests delegating it to a
-	// sub-agent and resuming the suspended main thread afterwards. Advisory
-	// only - misclassification costs one extra suggestion sentence, so the
-	// detector errs toward Addition.
-	InterruptionInsert InterruptionKind = "inserted-task"
+	InterruptionInsert      InterruptionKind = "inserted-task"
 )
 
-// retractPhrases: whole-message stop phrases (normalized: lowercased,
-// whitespace/punctuation stripped). A message classifies as retraction only
-// if its normalized form is IN this set - substring matches are rejected so
-// constraint-bearing text ("stop adding tests") can never retract a task.
 var retractPhrases = map[string]struct{}{
-	// English imperatives (+ leading please / trailing particles absorbed
-	// by normalization).
+
 	"stop": {}, "stophalt": {}, "halt": {}, "abort": {}, "cancel": {},
 	"cancelit": {}, "cancelthis": {}, "cancelthetask": {}, "stopeverything": {},
 	"stopit": {}, "stopthetask": {}, "stopworking": {}, "pleasestop": {},
 	"pleasecancel": {}, "nevermind": {}, "forgetit": {}, "dont": {},
 	"dontdoit": {}, "callitoff": {},
-	// Chinese equivalents.
+
 	"取消": {}, "取消任务": {}, "取消这个任务": {}, "取消了吧": {}, "停止": {},
 	"停止任务": {}, "停止当前任务": {}, "别做了": {}, "别做": {}, "算了": {},
 	"算了吧": {}, "放弃": {}, "放弃任务": {}, "撤销": {}, "撤销全部": {},
 	"不用做了": {}, "不用了": {}, "请取消": {}, "请停止": {}, "请别做了": {},
 }
 
-// revisionMarkers: explicit redirection signal inside the message.
-// #4121/#4180 family bar: a marker earns its place only when its ordinary
-// technical usage is RARE. Bare connectives ("instead", "rather than",
-// "switch to") and bare CJK modification verbs (改为/改成/换成/改用 - the most
-// ordinary way to request a rename or reorder) fired on everyday refinement,
-// and the Revision preamble then told the model to abandon in-flight work
-// that was still valid. Remaining forms all carry explicit redirection
-// semantics: deictic references to the prior plan ("instead of that/this",
-// "change it to"), goal language ("revise/change the goal", "new/different
-// direction or goal", "switch to plan N"), or scheme-swap compounds
-// (改成/换成方案, 换个思路/方向) that ordinary refinements ("把变量名改为
-// camelCase 再继续") never produce contiguously.
 var revisionMarkers = []string{
-	// "instead," with the comma is the imperative swap form ("instead, use
-	// the buffered writer", pinned by #4121) - distinct from the trailing
-	// connective ("use X instead of Y", the #4180 FP family, no comma).
+
 	"instead,", "actually, do", "change it to", "instead of that", "instead of this",
 	"revise the goal", "change the goal", "new direction", "different goal",
 	"switch to plan",
@@ -88,8 +39,6 @@ var revisionMarkers = []string{
 	"改目标", "需求变了", "需求改了",
 }
 
-// normalizeRetract folds a candidate phrase: lowercase, drop all whitespace
-// and punctuation (ASCII + CJK) so "Stop!  " / "。算了吧" hit the same entry.
 func normalizeRetract(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
@@ -101,7 +50,6 @@ func normalizeRetract(s string) string {
 	return b.String()
 }
 
-// classifyInterruption maps one interruption message to its kind.
 func classifyInterruption(text string) InterruptionKind {
 	if text == "" {
 		return InterruptionAddition
@@ -121,18 +69,11 @@ func classifyInterruption(text string) InterruptionKind {
 	return InterruptionAddition
 }
 
-// insertedTask thresholds: a message this long AND this structured is a
-// plausible self-contained task brief rather than an in-thread correction.
 const (
 	insertMinRunes        = 120
 	insertMinSentenceUnit = 2
 )
 
-// looksLikeInsertedTask reports whether text plausibly carries a complex
-// separate task (not an in-thread clarification). Composite signal, both
-// required: total length >= insertMinRunes AND >= insertMinSentenceUnit
-// sentence-ending units. Conservative: anything shorter or single-sentence
-// stays Addition.
 func looksLikeInsertedTask(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if len([]rune(trimmed)) < insertMinRunes {
@@ -148,8 +89,6 @@ func looksLikeInsertedTask(text string) bool {
 	return units >= insertMinSentenceUnit
 }
 
-// firstTextBlock returns the text of the first non-blank text block
-// (non-text blocks carry no directive semantics; empty text stays addition).
 func firstTextBlock(blocks []provider.ContentBlock) string {
 	for _, b := range blocks {
 		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
@@ -159,9 +98,6 @@ func firstTextBlock(blocks []provider.ContentBlock) string {
 	return ""
 }
 
-// interruptionPreamble returns the injected framing text for a kind. The
-// addition preamble is byte-identical to the pre-typing guidance text so
-// existing steering behavior is unchanged.
 func interruptionPreamble(kind InterruptionKind) string {
 	switch kind {
 	case InterruptionRevision:

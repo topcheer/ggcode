@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// #4854: ref-based snapshot interaction + click validity pre-checks
-// (agent-browser parity). These unit tests pin the pure surfaces: registry
-// lifecycle (store/resolve/invalidate = ref stability until navigation),
-// CSS passthrough back-compat, render format, and the blocked-click
-// message shapes (covering element named).
-
 func newTestBrowserRefs() *Browser {
 	return &Browser{refs: newBrowserRefRegistry()}
 }
@@ -30,8 +24,7 @@ func TestIssue4854_RefRegistryStoreResolveInvalidate(t *testing.T) {
 	if !ok || got.Selector != "body > button:nth-of-type(1)" || got.Role != "button" {
 		t.Fatalf("resolve @e2 = %+v ok=%v", got, ok)
 	}
-	// Ref stability across an in-page mutation (a later store bumps the
-	// generation but refs keep working until NAVIGATION invalidates them).
+
 	b.refs.store(key, []browserRefEntry{
 		{Ref: "@e1", Role: "link", Name: "Sign in", Selector: "body > a:nth-of-type(1)"},
 	})
@@ -41,7 +34,7 @@ func TestIssue4854_RefRegistryStoreResolveInvalidate(t *testing.T) {
 	if _, ok := b.refs.resolve(key, "@e2"); ok {
 		t.Fatal("@e2 belonged to the superseded snapshot - must not resolve")
 	}
-	// Navigation kills all refs for the tab.
+
 	b.refs.invalidate(key)
 	if b.refs.hasRefs(key) {
 		t.Fatal("invalidate must drop the tab snapshot")
@@ -50,14 +43,14 @@ func TestIssue4854_RefRegistryStoreResolveInvalidate(t *testing.T) {
 
 func TestIssue4854_ResolveSelectorArgCSSPassthroughAndRefResolution(t *testing.T) {
 	b := newTestBrowserRefs()
-	// CSS selectors pass through untouched (back-compat contract).
+
 	for _, css := range []string{"button.submit", "#login-form", "a[href*=\"github\"]", ""} {
 		got, ok := b.resolveSelectorArg("default", "default", css)
 		if !ok || got != css {
 			t.Fatalf("CSS passthrough %q -> (%q,%v)", css, got, ok)
 		}
 	}
-	// A ref with no snapshot -> actionable failure.
+
 	if _, ok := b.resolveSelectorArg("default", "default", "@e3"); ok {
 		t.Fatal("ref without snapshot must fail resolution")
 	}
@@ -68,7 +61,7 @@ func TestIssue4854_ResolveSelectorArgCSSPassthroughAndRefResolution(t *testing.T
 	if !ok || got != "body > form > input:nth-of-type(2)" {
 		t.Fatalf("@e3 resolution = (%q,%v)", got, ok)
 	}
-	// Another tab's snapshot must not leak into this tab.
+
 	if _, ok := b.resolveSelectorArg("default", "other-tab", "@e3"); ok {
 		t.Fatal("refs are per-tab; cross-tab resolution must fail")
 	}
@@ -110,7 +103,7 @@ func TestIssue4854_FormatClickBlockedNamesCoveringElement(t *testing.T) {
 }
 
 func TestIssue4854_PrecheckJSVerdictDecode(t *testing.T) {
-	// The pre-check JS returns a JSON string; decode mirrors the runtime path.
+
 	verdict := `{"ok":false,"reason":"covered","by":"div#overlay \"Accept\""}`
 	var res browserClickPrecheckResult
 	if err := json.Unmarshal([]byte(verdict), &res); err != nil {

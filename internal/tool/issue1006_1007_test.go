@@ -8,19 +8,13 @@ import (
 	"testing"
 )
 
-// TestIssue1006ParseGitBlameTrailingEmptyLine pins the fix: git blame
-// --line-porcelain output ends with \n, so Split always yields a trailing
-// empty line; the old unguarded 'a'-'f' clause panicked on it.
 func TestIssue1006ParseGitBlameTrailingEmptyLine(t *testing.T) {
-	// Real-shaped porcelain output ending with \n (trailing empty element).
-	// The header line carries finalLine=1; the panic regression is that
-	// this call completes at all - the old code crashed on the trailing
-	// empty line before returning.
+
 	out := "a1b2c3d 1 1\nauthor Alice\nauthor-mail <a@x.com>\nauthor-time 1700000000\nauthor-tz +0800\nsummary init\n\tline one\n\n"
 	if m := parseGitBlame([]byte(out)); len(m) == 0 || m[1].author == "" {
 		t.Errorf("expected blame for line 1 with author, got %v", m)
 	}
-	// Empty input edges: must return without panic and without entries.
+
 	if m := parseGitBlame([]byte("")); len(m) != 0 {
 		t.Errorf("empty input must yield no entries, got %v", m)
 	}
@@ -29,9 +23,6 @@ func TestIssue1006ParseGitBlameTrailingEmptyLine(t *testing.T) {
 	}
 }
 
-// TestIssue1007PythonInitPyRealNewline pins the fix: __init__.py must end
-// with a real newline, not a literal backslash-n, or Python import fails
-// with SyntaxError 100% of the time.
 func TestIssue1007PythonInitPyRealNewline(t *testing.T) {
 	dir := t.TempDir()
 	tool := ScaffoldProject{WorkingDir: dir}

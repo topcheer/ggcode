@@ -79,7 +79,6 @@ func TestKittyTool_NotDetectedReturnsError(t *testing.T) {
 
 	tool := NewKittyTool("/tmp")
 
-	// All actions except status should fail when not in Kitty.
 	for _, action := range []string{"list", "split", "focus", "close", "input", "get_text"} {
 		input, _ := json.Marshal(map[string]string{
 			"action":      action,
@@ -222,20 +221,18 @@ func TestKittyTool_ActionValidation(t *testing.T) {
 }
 
 func TestKittyTool_Registration(t *testing.T) {
-	// When not in Kitty, the tool should not be registered.
+
 	t.Setenv("TERM_PROGRAM", "xterm")
 	t.Setenv("KITTY_WINDOW_ID", "")
 	if shouldRegisterKittyTool() {
 		t.Fatal("should not register kitty tool when not in kitty")
 	}
 
-	// When in Kitty (TERM_PROGRAM=kitty), the tool should be registered.
 	t.Setenv("TERM_PROGRAM", "kitty")
 	if !shouldRegisterKittyTool() {
 		t.Fatal("should register kitty tool when TERM_PROGRAM == kitty")
 	}
 
-	// When TERM_PROGRAM is lost but KITTY_WINDOW_ID is set (e.g. inside tmux in kitty).
 	t.Setenv("TERM_PROGRAM", "xterm")
 	t.Setenv("KITTY_WINDOW_ID", "1")
 	if !shouldRegisterKittyTool() {
@@ -244,7 +241,7 @@ func TestKittyTool_Registration(t *testing.T) {
 }
 
 func TestKittyTool_RegisterWithBuiltinTools(t *testing.T) {
-	// Verify that RegisterBuiltinTools registers kitty when in Kitty.
+
 	t.Setenv("TERM_PROGRAM", "kitty")
 
 	registry := NewRegistry()
@@ -303,12 +300,11 @@ func TestKittyKeyEscapeSeq(t *testing.T) {
 }
 
 func TestMatchID(t *testing.T) {
-	// Zero window ID should return empty string (target current window).
+
 	if got := matchID(0); got != "" {
 		t.Errorf("matchID(0) = %q, want empty", got)
 	}
 
-	// Positive window ID should return "id:N".
 	if got := matchID(42); got != "id:42" {
 		t.Errorf("matchID(42) = %q, want %q", got, "id:42")
 	}

@@ -17,7 +17,7 @@ func TestPlanResearchSubQueries_PerspectiveHit(t *testing.T) {
 		}
 		seen[s.Perspective] = true
 	}
-	// "how" -> technical, "compare"/" vs" -> comparison: both must fire.
+
 	if !seen["technical"] {
 		t.Errorf("technical perspective not matched: %v", seen)
 	}
@@ -59,7 +59,7 @@ func TestPlanResearchSubQueries_EmptyGoal(t *testing.T) {
 }
 
 func TestPlanResearchSubQueries_Cap(t *testing.T) {
-	// Hit all four perspectives (8 sub-queries uncapped) with cap 3.
+
 	subs := PlanResearchSubQueries("compare how to use it and its security risks and design", 3)
 	if len(subs) != 3 {
 		t.Fatalf("cap must be honored, got %d", len(subs))

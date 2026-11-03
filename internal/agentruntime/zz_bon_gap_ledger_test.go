@@ -7,19 +7,12 @@ import (
 	"testing"
 )
 
-// sa-64: the bon gap ledger turns the generator-verifier-gap admission
-// question (does this task family's ensemble pay for its k-times budget?)
-// into cheap cross-run bookkeeping. These tests cover the window math, the
-// two hint rules, the sample gate, persistence round-trip, and the nil /
-// test-mode safety of the package-level wiring.
-
 func mkRep(n int, successes int, winnerUsable, degraded bool) BestOfNReport {
 	rep := BestOfNReport{N: n, WinnerIndex: -1, Degraded: degraded}
 	for i := 0; i < n; i++ {
 		st, vd := "failed", "failed"
 		if i < successes {
-			// #4136: a "success" candidate is completed AND verdict-succeeded;
-			// use mkRepCompletedOnly to build the completed-but-failed shape.
+
 			st, vd = "completed", "succeeded"
 		}
 		rep.Candidates = append(rep.Candidates, CandidateOutcome{
@@ -34,11 +27,6 @@ func mkRep(n int, successes int, winnerUsable, degraded bool) BestOfNReport {
 	return rep
 }
 
-// #4136 regression shape: every candidate's process completed but none
-// actually succeeded (2 failed + 1 partial, discriminator saving none).
-// Status-basis counting read this as successes=3/3 (headroom 1.0, hint
-// silent); the verdict basis must read 0 successes and fire the headroom
-// hint naming generator-pool exhaustion.
 func mkRepCompletedOnly(n int, winnerUsable, degraded bool, partials int) BestOfNReport {
 	rep := BestOfNReport{N: n, WinnerIndex: -1, Degraded: degraded}
 	for i := 0; i < n; i++ {
@@ -58,8 +46,7 @@ func mkRepCompletedOnly(n int, winnerUsable, degraded bool, partials int) BestOf
 
 func TestBONGapLedgerHeadroomHint(t *testing.T) {
 	l := NewBONGapLedger("")
-	// 5 runs, N=3, at most one success each -> mean headroom 1/3... use
-	// all-zero successes for an unambiguous sub-0.2 mean.
+
 	for i := 0; i < 5; i++ {
 		l.Record("patrol the repo", mkRep(3, 0, false, true))
 	}
@@ -72,10 +59,6 @@ func TestBONGapLedgerHeadroomHint(t *testing.T) {
 	}
 }
 
-// #4136: completed-but-verdict-failed candidates must NOT count as
-// successes - the exact scenario the issue documented (N=3, 2 failed + 1
-// partial, all processes completed) previously read headroom 1.0 and
-// misdiagnosed as a selector problem or stayed fully silent.
 func TestBONGapLedgerCompletedOnlyIsZeroHeadroom(t *testing.T) {
 	l := NewBONGapLedger("")
 	for i := 0; i < 5; i++ {
@@ -95,8 +78,7 @@ func TestBONGapLedgerCompletedOnlyIsZeroHeadroom(t *testing.T) {
 
 func TestBONGapLedgerSelectorHint(t *testing.T) {
 	l := NewBONGapLedger("")
-	// Successes exist (headroom ok) but selector rarely picks them and
-	// degrades most runs: eta 0.25 < 0.6, degraded 0.8 > 0.4.
+
 	for i := 0; i < 4; i++ {
 		l.Record("fix flaky test", mkRep(2, 2, false, true))
 	}
@@ -128,7 +110,7 @@ func TestBONGapLedgerSampleGate(t *testing.T) {
 	if _, ok := l.AdmissionHint("sparse task"); ok {
 		t.Fatal("below the minimum sample count the ledger must not speak")
 	}
-	// An unrelated task must not borrow another family's history.
+
 	if _, ok := l.AdmissionHint("different task entirely"); ok {
 		t.Fatal("unrelated task must have no history")
 	}
@@ -136,9 +118,7 @@ func TestBONGapLedgerSampleGate(t *testing.T) {
 
 func TestBONGapLedgerWindowTrim(t *testing.T) {
 	l := NewBONGapLedger("")
-	// Window of failures, then bonLedgerWindow healthy runs: the healthy
-	// tail must evict the failures and clear the hint (families can
-	// re-qualify after model/tooling changes).
+
 	for i := 0; i < bonLedgerWindow; i++ {
 		l.Record("recovering task", mkRep(2, 0, false, true))
 	}
@@ -188,21 +168,19 @@ func TestBONGapLedgerCorruptStateQuarantined(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	l := NewBONGapLedger(path) // must not panic; starts fresh
+	l := NewBONGapLedger(path)
 	if _, ok := l.AdmissionHint("anything"); ok {
 		t.Fatal("corrupt state must behave as an empty ledger")
 	}
 }
 
 func TestBONGapLedgerNilAndTestModeSafe(t *testing.T) {
-	// Nil receiver: every entry point must be a no-op, never a panic.
 	var nilLedger *BONGapLedger
 	nilLedger.Record("t", mkRep(2, 2, true, false))
 	if _, ok := nilLedger.AdmissionHint("t"); ok {
 		t.Fatal("nil ledger must not speak")
 	}
-	// Default ledger under `go test` is disabled: package helpers no-op.
-	// (testing.Testing() is true here, so DefaultBONGapLedger() == nil.)
+
 	RecordBestOfNGap("t", mkRep(2, 2, true, false))
 	if _, ok := BestOfNAdmissionHint("t"); ok {
 		t.Fatal("test mode must not consult or mutate real user state")
@@ -227,7 +205,7 @@ func TestBestOfNReportRendersAdmissionHint(t *testing.T) {
 	if !strings.Contains(out, "Note: ensemble admission: history says stop") {
 		t.Fatalf("admission hint must render as a trailing Note, got: %s", out)
 	}
-	// Without a hint the report must be unchanged (no empty Note line).
+
 	rep2 := mkRep(2, 2, true, false)
 	if out2 := formatBestOfNReport(rep2, "succeeded"); strings.Contains(out2, "Note:") {
 		t.Fatalf("no-hint report must not contain a Note line, got: %s", out2)

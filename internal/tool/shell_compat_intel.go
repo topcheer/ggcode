@@ -1,70 +1,30 @@
 package tool
 
-// Shell Compatibility Intelligence -- BSD vs GNU Command Incompatibility Detection
-//
-// Research basis: AI agents frequently generate shell commands trained on Linux
-// (GNU coreutils), which fail on macOS (BSD coreutils). Common examples:
-//   - sed -i 's/x/y/' file     -> BSD needs backup suffix: sed -i '' 's/x/y/'
-//   - readlink -f path         -> BSD doesn't support -f; use realpath or python
-//   - grep -P 'pattern'        -> BSD grep lacks PCRE; use grep -E or rg
-//   - date -d 'yesterday'      -> BSD uses date -v-1d
-//   - stat -c '%s' file        -> BSD uses stat -f '%z'
-//   - find . -printf '%p\n'    -> BSD doesn't support -printf
-//   - head -n -1 file          -> BSD doesn't support negative offsets
-//   - timeout 5 cmd            -> not available on macOS; use gtimeout or perl
-//
-// Competitor analysis:
-//   - Claude Code: no platform-aware shell diagnostics
-//   - Cursor: no detection of BSD/GNU differences
-//   - Cline/OpenHands: raw error output, no compatibility hints
-//   - Aider: no platform-awareness
-//
-// Gap: When a command fails due to BSD/GNU incompatibility, the error message
-// is often cryptic ("illegal option", "extra characters", etc.) and the agent
-// wastes multiple iterations debugging instead of switching to a compatible
-// command.
-//
-// Design:
-//   - Zero LLM cost (deterministic pattern matching)
-//   - Produces a "[Shell Compat]" diagnostic with the specific fix
-//   - Only fires when a known incompatibility pattern is detected
-//   - Includes the corrected command as an actionable suggestion
-//   - Detects from BOTH the command itself (proactive) and error output (reactive)
-
 import (
 	"runtime"
 	"strings"
 )
 
-// shellCompatPattern matches a known BSD/GNU incompatibility in command output
-// or command syntax, providing the fix.
 type shellCompatPattern struct {
-	// match function checks if this pattern applies
 	match func(command, combinedOutput string) bool
-	// fix describes the correct cross-platform approach
-	fix string
+	fix   string
 }
 
-// shellCompatPatterns is the ordered list of incompatibility detectors.
-// Order matters: more specific patterns first.
 var shellCompatPatterns = []shellCompatPattern{
-	// --- sed -i without backup suffix (GNU) vs BSD ---
+
 	{
 		match: func(cmd, out string) bool {
-			// BSD sed error when -i is used without backup suffix argument
+
 			return strings.Contains(out, "extra characters at the end of") ||
 				strings.Contains(out, "command a expects") ||
 				(strings.Contains(out, "sed:") && strings.Contains(out, "-i"))
 		},
 		fix: "BSD sed requires a backup suffix after -i. Use: sed -i '' 's/old/new/' file  (macOS/BSD) instead of sed -i 's/old/new/' file  (GNU)",
 	},
-	// --- readlink -f (GNU only) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #2792: anchor the flag to the readlink invocation itself -
-			// the old " -f" Contains matched a flag on any later pipeline/
-			// chain segment (e.g. `readlink l | sort -f`, where -f is a legal
-			// BSD sort flag).
+
 			if segmentHasFlagToken(cmd, "readlink", "-f", "--canonicalize") {
 				return true
 			}
@@ -73,12 +33,10 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "readlink -f is GNU-only. On macOS/BSD use: realpath file  or  python3 -c \"import os; print(os.path.realpath('file'))\"",
 	},
-	// --- grep -P (GNU PCRE) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #2792: anchor the flag to the grep invocation itself (cmd is
-			// lowercased by the caller, so -P arrives as -p) - the old " -p"
-			// Contains matched flags of later segments (curl -P, find -print).
+
 			if segmentHasFlagToken(cmd, "grep", "-p", "--perl-regexp") {
 				return true
 			}
@@ -87,11 +45,10 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "grep -P (PCRE) is GNU-only. Use: grep -E 'pattern' (ERE, cross-platform) or rg 'pattern' (ripgrep, if installed)",
 	},
-	// --- date -d (GNU) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #2792: anchor to the date invocation itself - the old " -d"
-			// Contains matched later-segment flags (curl -D).
+
 			if segmentHasFlagToken(cmd, "date", "-d", "--date") {
 				return true
 			}
@@ -100,11 +57,10 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "date -d is GNU-only. On macOS/BSD use: date -v-1d (yesterday) or date -v+1d (tomorrow). For parsing use: python3 -c \"from datetime import datetime; print(datetime.strptime('2024-01-01', '%Y-%m-%d'))\"",
 	},
-	// --- stat -c (GNU) vs stat -f (BSD) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #2792: anchor to the stat invocation itself - the old " -c"
-			// Contains matched later-segment flags (tail -c).
+
 			if segmentHasFlagToken(cmd, "stat", "-c", "--format") {
 				return true
 			}
@@ -113,11 +69,10 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "stat -c is GNU-only. On macOS/BSD use: stat -f '%z' file (file size), stat -f '%m' file (mtime). Or use: wc -c < file for size",
 	},
-	// --- find -printf (GNU only) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #1342/#868: anchor to the find command itself - a bare Contains
-			// matches any 'find' substring (refind-printf, ./findings/...).
+
 			isFind := strings.HasPrefix(cmd, "find ") || strings.Contains(cmd, " find ") || cmd == "find"
 			return (isFind && strings.Contains(cmd, "-printf")) ||
 				strings.Contains(out, "find: -printf: unknown primary") ||
@@ -125,18 +80,17 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "find -printf is GNU-only. On macOS/BSD use: find . -name '*.go' | xargs -I{} echo {}  or  find . -name '*.go' -exec echo {} \\;",
 	},
-	// --- head -n -N (GNU negative offset) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #1342/#868: anchor to the head command (forehead, path
-			// components containing 'head' must not trigger).
+
 			isHead := strings.HasPrefix(cmd, "head ") || strings.Contains(cmd, " head ") || cmd == "head"
 			return strings.Contains(out, "head: illegal line count -- -") ||
 				(isHead && strings.Contains(cmd, "-n -"))
 		},
 		fix: "head -n -N (drop last N lines) is GNU-only. On macOS/BSD use: head -n $(( $(wc -l < file) - N )) file  or  sed '$d' file (drop last line)",
 	},
-	// --- timeout command (GNU coreutils) ---
+
 	{
 		match: func(cmd, out string) bool {
 			trimmed := strings.TrimSpace(cmd)
@@ -145,44 +99,28 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "timeout is GNU coreutils, not on macOS by default. Install with: brew install coreutils (provides gtimeout), or use: perl -e 'alarm shift; exec @ARGV' 5 cmd",
 	},
-	// --- (sort -V pattern removed, #2607) ---
-	// #1703 case 5 added a sort -V version-sort pattern, but it was dead
-	// on both arms: diagnoseShellCompat lowercases the command, so the
-	// `tok == "-V"` (capital V) proactive arm never matched, and the
-	// reactive arm expected GNU-style 'unrecognized option' text while
-	// real macOS/BSD sort emits 'invalid option -- V'. Worse, current
-	// macOS (verified on 27.0) natively supports sort -V, so the advice
-	// itself is wrong on the supported platforms. Removed along with its
-	// skewed tests (direct r.match bypassing ToLower; fabricated GNU
-	// stderr) and the docs/guide table row.
-	// --- du --max-depth (GNU) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #868: anchor to the du COMMAND (not substrings like "gradle",
-			// "tools/") - same token-anchoring style as sibling patterns.
+
 			isDu := strings.HasPrefix(cmd, "du ") || strings.Contains(cmd, " du ") || cmd == "du"
 			return isDu && strings.Contains(cmd, "--max-depth")
 		},
 		fix: "du --max-depth is GNU-only. On macOS/BSD use: du -d N -h (e.g., du -d 1 -h for depth 1)",
 	},
-	// --- ls with GNU long options ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #868: anchor to the ls command; tokens containing "ls" as a
-			// substring (e.g. "tools", "curls") must not trigger.
+
 			isLs := strings.HasPrefix(cmd, "ls ") || strings.Contains(cmd, " ls ") || cmd == "ls"
 			return isLs && (strings.Contains(cmd, "--color") || strings.Contains(cmd, "--group-directories"))
 		},
 		fix: "ls --color and --group-directories are GNU-only. On macOS/BSD use: ls -G (color), CLICOLOR=1 ls, or exa/eza if installed",
 	},
-	// --- xargs -r / --no-run-if-empty (GNU) ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #1703 case 2: two independent substrings ("xargs" anywhere,
-			// " -r" anywhere) misfired on perfectly legal macOS pipelines like
-			// `grep -r pattern . | xargs ls` - the " -r" belongs to grep on the
-			// LEFT of the pipe. Tokenize and require the flag to be an argument
-			// of the xargs invocation itself (the segment containing "xargs").
+
 			for _, seg := range strings.Split(cmd, "|") {
 				if !strings.Contains(seg, "xargs") {
 					continue
@@ -199,12 +137,10 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "xargs -r/--no-run-if-empty is GNU-only. On macOS/BSD guard with: cmd | grep -q . && cmd | xargs ...  or use: if [ -s file ]; then ...",
 	},
-	// --- mktemp template differences ---
+
 	{
 		match: func(cmd, out string) bool {
-			// #868: require mktemp-specific diagnostics, not any 'error' text:
-			// failed commands routinely have 'error' in stderr, and BSD mktemp
-			// ACCEPTS a template without -t (live-verified on macOS).
+
 			if !strings.Contains(cmd, "mktemp") {
 				return false
 			}
@@ -216,14 +152,6 @@ var shellCompatPatterns = []shellCompatPattern{
 	},
 }
 
-// segmentHasFlagToken reports whether any pipeline/chain segment of cmd
-// (split on |, &&, and ;) STARTS with the named command and contains one
-// of the given flags as an exact whitespace-delimited token. This anchors
-// flag detection to the command's own invocation: a -p/-f/-d/-c flag on a
-// LATER segment (curl -P, sort -f, find -print, tail -c...) belongs to a
-// different command and must not fire this command's arm (#2792, the
-// pattern the #1703 xargs -r fix established). cmd arrives lowercased
-// from diagnoseShellCompat; flags must therefore be listed lowercase.
 func segmentHasFlagToken(cmd, name string, flags ...string) bool {
 	flagSet := make(map[string]bool, len(flags))
 	for _, f := range flags {
@@ -245,15 +173,8 @@ func segmentHasFlagToken(cmd, name string, flags ...string) bool {
 	return false
 }
 
-// diagnoseShellCompat detects BSD/GNU command incompatibilities and returns
-// a concise diagnostic with the correct cross-platform alternative.
-// Returns empty string if no known incompatibility is detected.
-//
-// The function examines both the command string (proactive detection of
-// GNU-only flags) and the combined output (reactive detection from error
-// messages). Only fires on macOS/BSD; on Linux all GNU commands work natively.
 func diagnoseShellCompat(command, stdout, stderr string) string {
-	// On Linux, GNU commands are native -- no compatibility issues expected.
+
 	if runtime.GOOS == "linux" {
 		return ""
 	}

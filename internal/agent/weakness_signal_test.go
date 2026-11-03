@@ -1,8 +1,5 @@
 package agent
 
-// sa-112 weakness-signal router acceptance tests (CoEvolve-inspired
-// forgetting/boundary/rare taxonomy -> cross-run store -> project memory).
-
 import (
 	"encoding/json"
 	"os"
@@ -38,9 +35,6 @@ func readWeaknessMemory(t *testing.T, dir string) string {
 	return string(b)
 }
 
-// Acceptance 1: same-fingerprint failure across two runs classifies as
-// forgetting and routes an "enforce:" line into project memory on the
-// second run.
 func TestWeaknessForgetTwoRunsRoutesEnforce(t *testing.T) {
 	a, dir := weaknessTestAgent(t)
 	for run := 0; run < 2; run++ {
@@ -55,7 +49,7 @@ func TestWeaknessForgetTwoRunsRoutesEnforce(t *testing.T) {
 	if rec := store["drift-recurrence"]; rec.Count != 2 || rec.Class != WeakForgetting || !rec.Routed {
 		t.Fatalf("store record = %+v, want Count=2 WeakForgetting Routed", rec)
 	}
-	// Third run must NOT duplicate the line (Routed flag sticky).
+
 	a.driftRecurrence.fired = true
 	a.routeWeaknessSignals()
 	if strings.Count(readWeaknessMemory(t, dir), "enforce: drift-recurrence") != 1 {
@@ -63,8 +57,6 @@ func TestWeaknessForgetTwoRunsRoutesEnforce(t *testing.T) {
 	}
 }
 
-// Acceptance 2: the same error-classifier category firing in two runs
-// classifies as boundary and routes a skill-candidate line.
 func TestWeaknessBoundaryByCategory(t *testing.T) {
 	a, dir := weaknessTestAgent(t)
 	for run := 0; run < 2; run++ {
@@ -79,8 +71,6 @@ func TestWeaknessBoundaryByCategory(t *testing.T) {
 	}
 }
 
-// Acceptance 3: an isolated single failed edit is rare - counted in the
-// store, never routed to memory.
 func TestWeaknessRareArchiveOnly(t *testing.T) {
 	a, dir := weaknessTestAgent(t)
 	a.repetition.mu.Lock()
@@ -98,8 +88,6 @@ func TestWeaknessRareArchiveOnly(t *testing.T) {
 		t.Fatalf("rare must not route, got memory:\n%s", mem)
 	}
 
-	// Recurrence upgrades rare -> forgetting (a rare failure that repeats
-	// is no longer rare) and then routes.
 	a.repetition.mu.Lock()
 	a.repetition.failedEditsByFile["main.go"] = 2
 	a.repetition.mu.Unlock()
@@ -110,8 +98,6 @@ func TestWeaknessRareArchiveOnly(t *testing.T) {
 	}
 }
 
-// Acceptance 4: corrupt store degrades gracefully - empty store, no panic,
-// routing still works.
 func TestWeaknessStoreCorruptFallback(t *testing.T) {
 	a, dir := weaknessTestAgent(t)
 	if err := os.MkdirAll(filepath.Dir(weaknessStorePath(dir)), 0755); err != nil {
@@ -121,7 +107,7 @@ func TestWeaknessStoreCorruptFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.driftRecurrence.fired = true
-	a.routeWeaknessSignals() // must not panic
+	a.routeWeaknessSignals()
 
 	store := loadWeaknessStore(weaknessStorePath(dir))
 	if store["drift-recurrence"].Count != 1 {
@@ -129,8 +115,6 @@ func TestWeaknessStoreCorruptFallback(t *testing.T) {
 	}
 }
 
-// Acceptance 5: stale fingerprints age out at load; over-cap stores evict
-// oldest first.
 func TestWeaknessAgingAndEviction(t *testing.T) {
 	dir := t.TempDir()
 	path := weaknessStorePath(dir)
@@ -151,7 +135,6 @@ func TestWeaknessAgingAndEviction(t *testing.T) {
 		t.Fatal("fresh fingerprint must survive")
 	}
 
-	// Eviction: 3 entries, cap 2 -> oldest dropped.
 	big := weaknessSignalStore{}
 	base := time.Now()
 	for i, fp := range []string{"a", "b", "c"} {
@@ -166,24 +149,21 @@ func TestWeaknessAgingAndEviction(t *testing.T) {
 	}
 }
 
-// r17: one go-test failure sighting in a run seeds WeakRare; rerunning the
-// same failing test within one run (2 sightings) is WeakForgetting - the
-// agent was told and did not adapt.
 func TestTestFailSightingClassification(t *testing.T) {
 	out := "--- PASS: TestOther (0.00s)\n--- FAIL: TestWidget (0.01s)\nFAIL\n"
 	a, dir := weaknessTestAgent(t)
 	a.testFails = newTestFailCollector()
-	a.testFails.record("go test ./...", out) // single sighting
+	a.testFails.record("go test ./...", out)
 	a.routeWeaknessSignals()
 	store := loadWeaknessStore(weaknessStorePath(dir))
 	if rec := store["test-fail:TestWidget"]; rec.Count != 1 || rec.Class != WeakRare {
 		t.Fatalf("single sighting: store record = %+v, want Count=1 WeakRare", rec)
 	}
-	// Route-end reset: collector must be empty for the next run.
+
 	if n := len(a.testFails.snapshot()); n != 0 {
 		t.Fatalf("collector not reset after route: %d entries", n)
 	}
-	// Rerun in one run: same test fails again -> WeakForgetting + enforce line.
+
 	a.testFails.record("go test ./...", out)
 	a.testFails.record("go test ./...", out)
 	a.routeWeaknessSignals()

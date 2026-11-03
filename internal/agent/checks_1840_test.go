@@ -5,18 +5,17 @@ import (
 	"testing"
 )
 
-// #1840 case 1 pin: a budget-rejected hint must not occupy its dedup slot.
 func Test1840DedupSlotOnlyOnDelivery(t *testing.T) {
-	g := &guidanceBudget{injected: guidanceBudgetPerTurn} // count cap reached
+	g := &guidanceBudget{injected: guidanceBudgetPerTurn}
 	long := "[loop-guard] " + strings.Repeat("x", 100)
 	if g.allowDeduped(long) {
 		t.Fatal("precondition: count cap must reject")
 	}
-	// The rejected hint must NOT have taken its dedup slot.
+
 	if g.seenHintTags["loop-guard"] {
 		t.Fatal("rejected hint must not occupy the dedup slot")
 	}
-	// Positive control: a delivered hint DOES take it.
+
 	if !g.allowDeduped("[hardcoded-secret] critical passes the count cap") {
 		t.Fatal("critical must bypass the count cap")
 	}
@@ -28,15 +27,13 @@ func Test1840DedupSlotOnlyOnDelivery(t *testing.T) {
 	}
 }
 
-// #1840 case 2 pin: critical hints have a dedicated byte pool - a full
-// advisory pool cannot starve them.
 func Test1840CriticalDedicatedPool(t *testing.T) {
 	g := &guidanceBudget{}
-	g.appendedBytes = guidanceBudgetBytesPerTurn // advisory pool FULL
+	g.appendedBytes = guidanceBudgetBytesPerTurn
 	if !g.allowDeduped("[hardcoded-secret] critical notice") {
 		t.Fatal("critical must not starve behind a full advisory pool")
 	}
-	// Flood of critical is still bounded by the dedicated pool.
+
 	g2 := &guidanceBudget{}
 	big := "[hardcoded-secret] " + strings.Repeat("y", guidanceBudgetCriticalBytesPerTurn-100)
 	if !g2.allowDeduped(big) {
@@ -47,7 +44,6 @@ func Test1840CriticalDedicatedPool(t *testing.T) {
 	}
 }
 
-// #1840 case 3 pin: same-tag dedup loss is visible.
 func Test1840DedupLossVisible(t *testing.T) {
 	hints := []string{
 		"[loop-guard] first content",
@@ -65,7 +61,6 @@ func Test1840DedupLossVisible(t *testing.T) {
 	}
 }
 
-// #1840 case 4 pin: iteration-level guidance joins conflict arbitration.
 func Test1840ConflictAcrossPaths(t *testing.T) {
 	g := &guidanceBudget{}
 	g.delivered = []string{"Error rush: ACT NOW and commit to a fix."}

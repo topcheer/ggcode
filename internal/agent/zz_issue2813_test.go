@@ -7,11 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// zz_issue2813_test.go guards against the read-then-grep false-positive
-// (#2813): Pattern 4 warned unconditionally, including after edits to the
-// file (verify-phase re-grounding) and after ranged reads that never had the
-// full content.
-
 func issue2813Validator(t *testing.T) *toolSequenceValidator {
 	t.Helper()
 	v := newToolSequenceValidator()
@@ -21,8 +16,6 @@ func issue2813Validator(t *testing.T) *toolSequenceValidator {
 	return v
 }
 
-// TestIssue2813EditBetweenReadAndGrepExempt: read → edit → grep must NOT
-// warn (the "you already have the content" premise is stale).
 func TestIssue2813EditBetweenReadAndGrepExempt(t *testing.T) {
 	v := issue2813Validator(t)
 	v.record(provider.ToolCallDelta{Name: "read_file", Arguments: []byte(`{"path":"/a.go"}`)}, 1)
@@ -33,8 +26,6 @@ func TestIssue2813EditBetweenReadAndGrepExempt(t *testing.T) {
 	}
 }
 
-// TestIssue2813RangedReadExempt: a read with offset (or limit) never held
-// the full content - grepping to locate a section must not warn.
 func TestIssue2813RangedReadExempt(t *testing.T) {
 	v := issue2813Validator(t)
 	v.record(provider.ToolCallDelta{Name: "read_file", Arguments: []byte(`{"path":"/big.go","offset":100,"limit":50}`)}, 1)
@@ -44,8 +35,6 @@ func TestIssue2813RangedReadExempt(t *testing.T) {
 	}
 }
 
-// TestIssue2813FullReadStillWarns: the legitimate case (default full read,
-// no edits) keeps the guidance.
 func TestIssue2813FullReadStillWarns(t *testing.T) {
 	v := issue2813Validator(t)
 	v.record(provider.ToolCallDelta{Name: "read_file", Arguments: []byte(`{"path":"/a.go"}`)}, 1)
@@ -55,8 +44,6 @@ func TestIssue2813FullReadStillWarns(t *testing.T) {
 	}
 }
 
-// TestIssue2813UnrelatedEditDoesNotExempt: an edit to a DIFFERENT file does
-// not invalidate the read of X.
 func TestIssue2813UnrelatedEditDoesNotExempt(t *testing.T) {
 	v := issue2813Validator(t)
 	v.record(provider.ToolCallDelta{Name: "read_file", Arguments: []byte(`{"path":"/a.go"}`)}, 1)

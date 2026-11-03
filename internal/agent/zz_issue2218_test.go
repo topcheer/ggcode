@@ -2,12 +2,6 @@ package agent
 
 import "testing"
 
-// #2218 case A: directory-suffix references get the same ambiguity probe
-// as bare basenames - anchored is not unique. Two distinct edit paths
-// ending in "/api/types.go" both match a relative "api/types.go" compile
-// error; the tie must tier down to weak evidence, not let recency win
-// with the max-authority "references this file" wording.
-
 func TestIssue2218SuffixAmbiguityFlagged(t *testing.T) {
 	amb := bareAmbiguousNames([]causalEditStep{
 		{filePath: "pkg/api/types.go"}, {filePath: "internal/api/types.go"},
@@ -34,7 +28,7 @@ func TestIssue2218AmbiguousSuffixTiersDown(t *testing.T) {
 }
 
 func TestIssue2218UniqueSuffixStaysStrong(t *testing.T) {
-	// only one edit path ends in /api/types.go -> unambiguous, full weight
+
 	amb := bareAmbiguousNames([]causalEditStep{
 		{filePath: "pkg/api/types.go"}, {filePath: "internal/other/thing.go"},
 	}, []string{"api/types.go"})
@@ -48,7 +42,6 @@ func TestIssue2218UniqueSuffixStaysStrong(t *testing.T) {
 	}
 }
 
-// Regression: the bare-name probe keeps its exact #2171 gap-2 semantics.
 func TestIssue2218BareProbeUnchanged(t *testing.T) {
 	amb := bareAmbiguousNames([]causalEditStep{
 		{filePath: "packages/a/api.ts"}, {filePath: "packages/b/api.ts"},

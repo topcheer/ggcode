@@ -189,8 +189,7 @@ func broken( {
 }
 
 func TestCheckGoImports_NoFalsePositiveLocalVar(t *testing.T) {
-	// 'json' as a local variable name should not trigger missing import warning
-	// if not used as a package qualifier
+
 	src := `package main
 
 func main() {
@@ -199,8 +198,7 @@ func main() {
 }
 `
 	warnings := checkGoImports("main.go", src)
-	// 'json' is used as an assignment target, not as a package qualifier.
-	// SelectorExpr detection should not fire since json["key"] uses index, not selection.
+
 	for _, w := range warnings {
 		if strings.Contains(w, "missing import") && strings.Contains(w, "json") {
 			t.Errorf("local variable 'json' should not trigger missing import: %s", w)
@@ -216,7 +214,7 @@ func TestCheckGoImports_EmptyFile(t *testing.T) {
 }
 
 func TestCheckGoImports_NonGoFile(t *testing.T) {
-	// Should be called with Go files only, but verify it handles gracefully
+
 	warnings := checkGoImports("main.py", "print('hello')")
 	if warnings != nil {
 		t.Errorf("expected nil for non-parseable content, got: %v", warnings)
@@ -243,9 +241,7 @@ func TestIsVersionSegment(t *testing.T) {
 }
 
 func TestCheckGoImports_VersionedPathNoFalsePositive(t *testing.T) {
-	// "charm.land/lipgloss/v2" has path segment "v2" which is NOT the package name.
-	// The code uses "lipgloss.Width()" but the analyzer would see "v2" as the name
-	// and incorrectly report it as unused. This test verifies the fix.
+
 	src := `package main
 
 import (
@@ -277,23 +273,23 @@ require (
 )
 `
 	result := parseGoModRequires(content, "github.com/topcheer/ggcode")
-	// lipgloss from a versioned module path
+
 	if p, ok := result["lipgloss"]; !ok {
 		t.Errorf("expected lipgloss in go.mod import map, got: %v", result)
 	} else if p != "github.com/charmbracelet/lipgloss/v2" {
 		t.Errorf("lipgloss path = %q, want github.com/charmbracelet/lipgloss/v2", p)
 	}
-	// logrus from a direct module path
+
 	if p, ok := result["logrus"]; !ok {
 		t.Errorf("expected logrus in go.mod import map")
 	} else if p != "github.com/sirupsen/logrus" {
 		t.Errorf("logrus path = %q, want github.com/sirupsen/logrus", p)
 	}
-	// indirect deps should be skipped
+
 	if _, ok := result["mod"]; ok {
 		t.Errorf("indirect dep golang.org/x/mod should not be in import map")
 	}
-	// internal modules should be skipped
+
 	if _, ok := result["internal"]; ok {
 		t.Errorf("internal module should not be in import map")
 	}
@@ -306,7 +302,7 @@ func TestLoadGoModImports_Caching(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Clear cache for this dir
+
 	goModCacheMu.Lock()
 	delete(goModCacheStore, dir)
 	goModCacheMu.Unlock()
@@ -319,7 +315,6 @@ func TestLoadGoModImports_Caching(t *testing.T) {
 		t.Errorf("logrus not found correctly in go.mod import map: %v", result)
 	}
 
-	// Second call should use cache and return same result
 	result2 := loadGoModImports(dir)
 	if p, ok := result2["logrus"]; !ok || p != "github.com/sirupsen/logrus" {
 		t.Errorf("cached call returned different result: %v", result2)
@@ -340,7 +335,7 @@ func TestLoadGoModImports_NoGoMod(t *testing.T) {
 func TestCheckGoImportsWithDir_MissingThirdPartyImport(t *testing.T) {
 	dir := t.TempDir()
 	goMod := filepath.Join(dir, "go.mod")
-	// Create a go.mod with a third-party dependency
+
 	err := os.WriteFile(goMod, []byte(`module test.example/mymod
 
 go 1.26
@@ -353,12 +348,10 @@ require (
 		t.Fatal(err)
 	}
 
-	// Clear cache
 	goModCacheMu.Lock()
 	delete(goModCacheStore, dir)
 	goModCacheMu.Unlock()
 
-	// Source that uses logrus without importing it
 	src := `package main
 
 func main() {
@@ -398,8 +391,6 @@ require (
 	delete(goModCacheStore, dir)
 	goModCacheMu.Unlock()
 
-	// Source uses logger as a package reference without importing it.
-	// Since logger is in go.mod, this SHOULD be detected as missing import.
 	src := `package main
 
 func main() {
@@ -419,7 +410,7 @@ func main() {
 }
 
 func TestCheckGoImportsWithDir_EmptyWorkingDir(t *testing.T) {
-	// With empty workingDir, should behave exactly like checkGoImports (stdlib only)
+
 	src := `package main
 
 func main() {

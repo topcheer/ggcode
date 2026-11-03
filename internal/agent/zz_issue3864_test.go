@@ -1,9 +1,5 @@
 package agent
 
-// #3864 probes: start_command reaches the invalidation gate, branch
-// creation and soft/mixed resets do not burn the warning budget, and the
-// extra global flags are skipped.
-
 import (
 	"os"
 	"strings"
@@ -16,14 +12,14 @@ func TestIssue3864_ClassifyExemptions(t *testing.T) {
 		ro    bool
 		found bool
 	}{
-		{"git checkout -b fix-x", true, true},           // #3864 B
-		{"git switch -c fix-x", true, true},             // #3864 B
-		{"git checkout main", false, true},              // target checkout mutates
-		{"git reset --soft HEAD~1", true, true},         // #3864 C
-		{"git reset --hard HEAD~1", false, true},        // hard rewrites tree
-		{"git reset -- path/to/file", false, true},      // pathspec form mutates
-		{"git --no-replace-objects status", true, true}, // #3864 D
-		{"git --bare log", true, true},                  // #3864 D
+		{"git checkout -b fix-x", true, true},
+		{"git switch -c fix-x", true, true},
+		{"git checkout main", false, true},
+		{"git reset --soft HEAD~1", true, true},
+		{"git reset --hard HEAD~1", false, true},
+		{"git reset -- path/to/file", false, true},
+		{"git --no-replace-objects status", true, true},
+		{"git --bare log", true, true},
 	}
 	for _, c := range cases {
 		ro, found := classifyGitCommandLine(c.cmd)

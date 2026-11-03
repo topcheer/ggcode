@@ -16,7 +16,7 @@ func TestEditFile_NoOpIdenticalContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defaultFileTracker.RecordWrite(path) // avoid stale-read false positive
+	defaultFileTracker.RecordWrite(path)
 
 	mtimeBefore, _ := os.Stat(path)
 
@@ -24,7 +24,7 @@ func TestEditFile_NoOpIdenticalContent(t *testing.T) {
 	args, _ := json.Marshal(map[string]string{
 		"file_path": path,
 		"old_text":  "func foo() {}",
-		"new_text":  "func foo() {}", // identical → no-op
+		"new_text":  "func foo() {}",
 	})
 	result, err := ef.Execute(context.Background(), args)
 	if err != nil {
@@ -37,7 +37,6 @@ func TestEditFile_NoOpIdenticalContent(t *testing.T) {
 		t.Fatalf("expected no-op message, got: %s", result.Content)
 	}
 
-	// Verify file mtime did not change (no write occurred).
 	mtimeAfter, _ := os.Stat(path)
 	if !mtimeBefore.ModTime().Equal(mtimeAfter.ModTime()) {
 		t.Fatalf("file was written despite being a no-op edit (mtime changed)")
@@ -87,7 +86,7 @@ func TestWriteFile_NoOpIdenticalContent(t *testing.T) {
 	wf := WriteFile{WorkingDir: dir}
 	args, _ := json.Marshal(map[string]string{
 		"path":    path,
-		"content": content, // identical → no-op
+		"content": content,
 	})
 	result, err := wf.Execute(context.Background(), args)
 	if err != nil {
@@ -139,7 +138,7 @@ func TestMultiFileWrite_NoOpIdenticalContent(t *testing.T) {
 	mfw := MultiFileWrite{WorkingDir: dir}
 	args, _ := json.Marshal(map[string]any{
 		"files": []map[string]string{
-			{"path": path, "content": content}, // identical → skip
+			{"path": path, "content": content},
 		},
 	})
 	result, err := mfw.Execute(context.Background(), args)
@@ -158,7 +157,7 @@ func TestMultiEditFile_NoOpIdenticalContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defaultFileTracker.RecordWrite(path) // avoid stale-read false positive
+	defaultFileTracker.RecordWrite(path)
 
 	mtimeBefore, _ := os.Stat(path)
 
@@ -166,8 +165,8 @@ func TestMultiEditFile_NoOpIdenticalContent(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{
 		"file_path": path,
 		"edits": []map[string]string{
-			{"old_text": "func foo() {}", "new_text": "func foo() {}"}, // identical → no-op
-			{"old_text": "func bar() {}", "new_text": "func bar() {}"}, // identical → no-op
+			{"old_text": "func foo() {}", "new_text": "func foo() {}"},
+			{"old_text": "func bar() {}", "new_text": "func bar() {}"},
 		},
 	})
 	result, err := me.Execute(context.Background(), args)
@@ -184,7 +183,6 @@ func TestMultiEditFile_NoOpIdenticalContent(t *testing.T) {
 		t.Fatalf("expected edit count in message, got: %s", result.Content)
 	}
 
-	// Verify file mtime did not change (no write occurred).
 	mtimeAfter, _ := os.Stat(path)
 	if !mtimeBefore.ModTime().Equal(mtimeAfter.ModTime()) {
 		t.Fatalf("file was written despite being a no-op edit (mtime changed)")
@@ -204,7 +202,7 @@ func TestMultiEditFile_RealChangeStillWrites(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{
 		"file_path": path,
 		"edits": []map[string]string{
-			{"old_text": "func foo() {}", "new_text": "func bar() {}"}, // real change
+			{"old_text": "func foo() {}", "new_text": "func bar() {}"},
 		},
 	})
 	result, err := me.Execute(context.Background(), args)

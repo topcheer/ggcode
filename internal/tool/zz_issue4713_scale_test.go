@@ -4,10 +4,6 @@ package tool
 
 import "testing"
 
-// #4713 (main defect, high): iPhone 16/17 Pro (402pt -> 1206px) and
-// 17 Pro Max (440pt -> 1320px) logical widths were missing from the probe
-// table - the scale fell back to (1,1), raw physical-pixel coordinates went
-// to AppleScript, taps landed off-screen while reporting success.
 func TestIssue4713_ProbeLogicalScaleCovers3xProWidths(t *testing.T) {
 	cases := []struct {
 		pxW            int
@@ -38,8 +34,6 @@ func TestIssue4713_ProbeLogicalScaleCovers3xProWidths(t *testing.T) {
 	}
 }
 
-// The table itself stays ascending and free of duplicates - a probe-order
-// assumption (first ascending match wins) that a bad edit would silently break.
 func TestIssue4713_LogicalWidthsAscending(t *testing.T) {
 	for i := 1; i < len(iosLogicalWidths); i++ {
 		if iosLogicalWidths[i] <= iosLogicalWidths[i-1] {

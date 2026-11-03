@@ -1,32 +1,5 @@
 package tool
 
-// Smart Commit Partitioning — Logical Commit Grouping Suggestions
-//
-// Trend: GitHub Copilot Workspace, Sourcegraph Cody, and Aider all help users
-// organize changes into focused commits. Claude Code and Cursor leave it to the
-// user/agent to figure out which files belong together.
-//
-// Gap: ggcode's AnalyzeCommitScope detected multi-concern commits and warned
-// "consider splitting," but gave no actionable partition plan. The agent was
-// forced to reason about file grouping itself — expensive, error-prone LLM
-// work for a task that can be done deterministically.
-//
-// This module analyzes a staged/working-tree diff and produces a concrete
-// partition plan: which files belong in which commit, what type each commit
-// should be, and a suggested message prefix. Zero LLM cost, fully deterministic.
-//
-// Grouping heuristics (applied in order):
-//  1. Test files merge into the group of their corresponding source file
-//     (handler_test.go → handler.go's group).
-//  2. Remaining files group by (category, directory) — files in the same
-//     package/module directory with the same category form one group.
-//  3. Groups are ordered by size (largest first) so the most important changes
-//     are committed first.
-//
-// Integration: called from AnalyzeCommitScope when a cohesion warning fires.
-// The partition suggestion is appended to the cohesion warning, giving the
-// agent a ready-to-execute plan instead of a vague "consider splitting."
-
 import (
 	"fmt"
 	"path/filepath"
@@ -35,26 +8,23 @@ import (
 	"strings"
 )
 
-// FileChangeInfo captures per-file change metadata for partitioning.
 type FileChangeInfo struct {
-	Path      string // file path as shown in diff (b/ prefix stripped)
+	Path      string
 	Category  FileCategory
-	Dir       string // directory portion of the path
-	Base      string // filename without directory
+	Dir       string
+	Base      string
 	Additions int
 	Deletions int
 }
 
-// CommitGroup represents a suggested logical commit grouping.
 type CommitGroup struct {
 	Files    []FileChangeInfo
 	Category FileCategory
-	Dir      string // primary directory for this group
-	Label    string // human-readable label (e.g. "source code in internal/agent")
-	Type     string // suggested Conventional Commits type
+	Dir      string
+	Label    string
+	Type     string
 }
 
-// TotalLines returns total additions + deletions for this group.
 func (g CommitGroup) TotalLines() int {
 	total := 0
 	for _, f := range g.Files {
@@ -63,13 +33,8 @@ func (g CommitGroup) TotalLines() int {
 	return total
 }
 
-// diffDevNullHeader matches the "+++ /dev/null" marker of a deleted file.
-// Lives here (not diff_scan.go) because only parseFileChanges consumes it.
 var diffDevNullHeader = regexp.MustCompile(`^\+\+\+\s+/dev/null`)
 
-// parseFileChanges extracts per-file change info from a unified diff.
-// Unlike parseDiffStats (which returns aggregate counts), this returns
-// structured per-file data needed for intelligent grouping.
 func parseFileChanges(diffOutput string) []FileChangeInfo {
 	if strings.TrimSpace(diffOutput) == "" {
 		return nil
@@ -80,23 +45,15 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	currentAdd := 0
 	currentDel := 0
 	newLineNum := 0
-	// #3126: b/ path from the most recent "diff --git a/x b/x" header -
-	// the only path source for pure mode-change hunks (analyzer pattern).
+
 	lastGitPath := ""
-	// Last "--- a/path" header seen; a following "+++ /dev/null" means
-	// the file was DELETED - the only place its path survives in the diff
-	// (#1319: deleted files dropped out of partition plans entirely).
+
 	lastOldFile := ""
-	// #3164: true when the previous line was consumed as a minus-side
-	// file header ("--- a/x" at the oldFileHeader branch, or the
-	// "--- /dev/null" literal below). The very next line being
-	// "+++"-prefixed is then a residual header, not content.
+
 	prevWasOldHeader := false
 
 	flush := func() {
-		// Reset counters even on the empty-file early return (#1319: the
-		// early return leaked pending -N lines into the next parsed file,
-		// inflating e.g. +5/-2 to +5/-22 when a deletion preceded it).
+
 		add, del := currentAdd, currentDel
 		currentAdd = 0
 		currentDel = 0
@@ -122,13 +79,10 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	lines := strings.Split(diffOutput, "\n")
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		// #3164: capture-and-clear the header-adjacency flag for THIS line
-		// before any branch consumes it.
+
 		afterOld := prevWasOldHeader
 		prevWasOldHeader = false
-		// #3126: track the b/ path from "diff --git a/x b/x" lines - the
-		// only anchor for pure mode-change hunks (same pattern as
-		// parseDiffStats in commit_analyzer.go).
+
 		if m := diffGitHeader.FindStringSubmatch(line); m != nil && (m[1] != "" || (len(m) > 2 && m[2] != "")) {
 			lastGitPath = normalizeGitDiffPath(m[1])
 			if m[1] == "" {
@@ -136,10 +90,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			}
 		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			// #3126: a rename+edit hunk emits "rename to x" AND a
-			// "+++ b/x" header for the same path - keep counting into the
-			// entry the rename branch opened instead of flushing a
-			// duplicate 0/0 record.
+
 			if p := diffHeaderPath(m); p != currentFile {
 				flush()
 				currentFile = p
@@ -148,12 +99,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		// #3126: pure rename hunk - git emits "rename from/to" + similarity
-		// and NO +++
-		// line, so the file never matched diffFileHeader and silently
-		// dropped out of the partition plan (staged "git mv" changes were
-		// left uncommitted by the generated plan). The "rename to" path is
-		// the file's new identity.
+
 		if m := diffRenameTo.FindStringSubmatch(line); m != nil {
 			flush()
 			currentFile = m[1]
@@ -161,8 +107,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		// #3126: binary change - no hunks, no +/- lines, no +++ header;
-		// the b/ path comes from the "Binary files a/x and b/x differ" line.
+
 		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
 			flush()
 			bSide := m[3]
@@ -174,11 +119,9 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		// #3126: pure mode change - no hunks; the preceding diff --git
-		// header is the only path source. Register on the mode marker so
-		// mode-only changes stop vanishing from partition plans.
+
 		if diffModeChange.MatchString(line) && lastGitPath != "" {
-			// old-mode AND new-mode lines both match - register once.
+
 			if currentFile != lastGitPath {
 				flush()
 				currentFile = lastGitPath
@@ -187,10 +130,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		// Deleted file: "--- a/path" followed by "+++ /dev/null". The
-		// +++ line does not match diffFileHeader (no b/ prefix), so the
-		// old path from the --- header is the only source (#1319:
-		// deleted files used to drop out of partition plans entirely).
+
 		if diffDevNullHeader.MatchString(line) && lastOldFile != "" {
 			flush()
 			currentFile = lastOldFile
@@ -198,13 +138,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		// #4433: a real old-side header is ALWAYS immediately followed by a
-		// "+++" line; without that adjacency check, deleted content like
-		// "-- a/foo" (content "-- a/foo" + its own '-' prefix) was consumed
-		// as a header - the removal was skipped, lastOldFile was polluted,
-		// and a following "+++ b/x"-shaped content line vanished via
-		// prevWasOldHeader. Non-adjacent matches fall through to the content
-		// counters below, exactly what the #3164 comment prescribes.
+
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
 			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ") {
 			lastOldFile = diffHeaderPath(m)
@@ -219,23 +153,13 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			continue
 		}
 		if line[0] == '+' {
-			// #3164: real "+++ b/x" and "+++ /dev/null" headers were already
-			// consumed by the regexes above. A "+++"-prefixed line here is
-			// header-shaped content (source line starts with "++": nested
-			// diff examples, "++" markers) UNLESS it immediately follows a
-			// consumed minus-side header - adjacency is the only remaining
-			// discriminator (covers new-file "+++ b/x" after "--- /dev/null"
-			// when the a/-regex did not match its old side).
+
 			if strings.HasPrefix(line, "+++") && afterOld {
 				continue
 			}
 			currentAdd++
 		} else if line[0] == '-' {
-			// #3164: the only real header reaching here is the new-file old
-			// side "--- /dev/null" (the a/-form was consumed above); flag it
-			// so the "+++ b/x" that follows is header-adjacent. Every other
-			// "---"-shaped line is diff CONTENT (markdown hr "----", "--"
-			// strikethrough markers) and must be counted, not skipped.
+
 			if strings.HasPrefix(line, "--- /dev/null") {
 				prevWasOldHeader = true
 				continue
@@ -248,21 +172,12 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	return files
 }
 
-// SuggestCommitPartition analyzes file changes and returns a concrete plan for
-// splitting them into logical commits. Returns nil when the changes are
-// cohesive enough for a single commit (fewer than 2 groups).
-//
-// The partition is generated using directory + category proximity heuristics
-// and test-file pairing. Each group includes a suggested Conventional Commits
-// type and a human-readable label.
 func SuggestCommitPartition(diffOutput string) []CommitGroup {
 	files := parseFileChanges(diffOutput)
 	if len(files) < 2 {
 		return nil
 	}
 
-	// Build groups by (category, directory), with test files merging into
-	// their source counterpart's group.
 	type groupKey struct {
 		category FileCategory
 		dir      string
@@ -271,7 +186,6 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 	groups := make(map[groupKey]*CommitGroup)
 	var keyOrder []groupKey
 
-	// First pass: create groups for non-test files.
 	for _, f := range files {
 		if f.Category == CatTest {
 			continue
@@ -290,12 +204,11 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 		groups[k].Files = append(groups[k].Files, f)
 	}
 
-	// Second pass: merge test files into source groups.
 	for _, f := range files {
 		if f.Category != CatTest {
 			continue
 		}
-		// Find matching source file's group: strip _test suffix and look up.
+
 		sourceBase := testToSourceBase(f.Base)
 		merged := false
 		if sourceBase != "" {
@@ -313,7 +226,7 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 				_ = k
 			}
 		}
-		// If no source match, create a dedicated test group.
+
 		if !merged {
 			k := groupKey{category: CatTest, dir: f.Dir}
 			if _, ok := groups[k]; !ok {
@@ -329,7 +242,6 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 		}
 	}
 
-	// Collect and sort groups by total lines (largest first), then by label.
 	result := make([]CommitGroup, 0, len(groups))
 	for _, k := range keyOrder {
 		result = append(result, *groups[k])
@@ -341,7 +253,6 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 		return result[i].Label < result[j].Label
 	})
 
-	// Only suggest a partition when there are 2+ groups.
 	if len(result) < 2 {
 		return nil
 	}
@@ -349,48 +260,39 @@ func SuggestCommitPartition(diffOutput string) []CommitGroup {
 	return result
 }
 
-// testToSourceBase converts a test file base name to its source counterpart.
-// Returns empty string if no clear mapping exists.
-//
-//	handler_test.go    → handler.go
-//	auth.test.ts       → auth.ts
-//	test_user.py       → user.py
-//	user_spec.rb       → user.rb
 func testToSourceBase(testBase string) string {
 	lower := strings.ToLower(testBase)
 
-	// Go: _test.go
 	if strings.HasSuffix(lower, "_test.go") {
 		return testBase[:len(testBase)-len("_test.go")] + ".go"
 	}
-	// JS/TS: .test.js, .test.ts, .test.jsx, .test.tsx, .spec.*
+
 	for _, suffix := range []string{".test.js", ".test.ts", ".test.jsx", ".test.tsx",
 		".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx"} {
 		if strings.HasSuffix(lower, suffix) {
-			ext := suffix[strings.LastIndex(suffix, "."):] // e.g. ".js"
+			ext := suffix[strings.LastIndex(suffix, "."):]
 			return testBase[:len(testBase)-len(suffix)] + ext
 		}
 	}
-	// Python: test_*.py
+
 	if strings.HasPrefix(lower, "test_") && strings.HasSuffix(lower, ".py") {
 		return testBase[len("test_"):]
 	}
-	// Python: *_test.py
+
 	if strings.HasSuffix(lower, "_test.py") {
 		return testBase[:len(testBase)-len("_test.py")] + ".py"
 	}
-	// Ruby: *_spec.rb
+
 	if strings.HasSuffix(lower, "_spec.rb") {
 		return testBase[:len(testBase)-len("_spec.rb")] + ".rb"
 	}
-	// Rust: *_test.rs or tests/*.rs
+
 	if strings.HasSuffix(lower, "_test.rs") {
 		return testBase[:len(testBase)-len("_test.rs")] + ".rs"
 	}
 	return ""
 }
 
-// groupLabel generates a human-readable label for a commit group.
 func groupLabel(cat FileCategory, dir string) string {
 	catLabel := categoryLabel(cat)
 	if dir == "" {
@@ -399,7 +301,6 @@ func groupLabel(cat FileCategory, dir string) string {
 	return fmt.Sprintf("%s in %s/", catLabel, dir)
 }
 
-// categoryCommitType maps a file category to a suggested Conventional Commits type.
 func categoryCommitType(cat FileCategory) string {
 	switch cat {
 	case CatSource:
@@ -415,8 +316,6 @@ func categoryCommitType(cat FileCategory) string {
 	}
 }
 
-// FormatCommitPartition renders a partition plan into a human-readable string
-// suitable for appending to a git_commit result or scope warning.
 func FormatCommitPartition(groups []CommitGroup) string {
 	if len(groups) == 0 {
 		return ""
@@ -433,7 +332,7 @@ func FormatCommitPartition(groups []CommitGroup) string {
 		b.WriteString(fmt.Sprintf("  %d. %s (%s, %d files, +%d/-%d):\n",
 			i+1, g.Type, g.Label, len(g.Files),
 			sumAdditions(g.Files), sumDeletions(g.Files)))
-		// Show up to 5 files per group, then "... and N more".
+
 		showCount := len(fileNames)
 		if showCount > 5 {
 			showCount = 5
@@ -451,7 +350,6 @@ func FormatCommitPartition(groups []CommitGroup) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// sumAdditions returns total additions across files.
 func sumAdditions(files []FileChangeInfo) int {
 	total := 0
 	for _, f := range files {
@@ -460,7 +358,6 @@ func sumAdditions(files []FileChangeInfo) int {
 	return total
 }
 
-// sumDeletions returns total deletions across files.
 func sumDeletions(files []FileChangeInfo) int {
 	total := 0
 	for _, f := range files {

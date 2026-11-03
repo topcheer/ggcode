@@ -9,12 +9,6 @@ import (
 	"time"
 )
 
-// TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite is a regression
-// test for #283: in the agent loop (agent.go), validateContentAtEdit must run
-// BEFORE recordWriteHash within the same edit iteration. recordWriteHash
-// deletes the stored hash, so validating after it always misses and the
-// detector is dead in production. Unit tests calling tracker methods directly
-// bypassed this wiring and stayed green.
 func TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "wire.go")
@@ -24,16 +18,12 @@ func TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite(t *testing.T) {
 
 	tr := newReadHashTracker()
 
-	// 1. Agent reads the file.
 	tr.recordReadHash(f)
 
-	// 2. External modification in the same second (mtime-blind change).
 	if err := os.WriteFile(f, []byte("package main\n\nfunc B() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// 3. Correct agent-loop order: validate FIRST, then record the write.
-	// This mirrors the wiring in agent.go post-#283.
 	hint := tr.validateContentAtEdit(f, 100)
 	if hint == "" {
 		t.Fatal("expected content mismatch warning when validate runs before recordWriteHash — detector is mis-wired again")
@@ -44,10 +34,6 @@ func TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite(t *testing.T) {
 	}
 }
 
-// TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug documents the
-// pre-#283 bug: validating after recordWriteHash silently suppresses the
-// warning. If this test ever fails, it means the wiring got "fixed" in a way
-// that makes this order detectable — re-check the agent loop ordering.
 func TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "wire2.go")
@@ -61,7 +47,6 @@ func TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Buggy order: record write first (hash deleted), then validate.
 	tr.recordWriteHash(f)
 	hint := tr.validateContentAtEdit(f, 100)
 	if hint != "" {
@@ -69,9 +54,6 @@ func TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug(t *testing.T) {
 	}
 }
 
-// TestExtractOldTextLen verifies old_text length extraction from edit tool
-// arguments (#283): previously hardcoded 0, making the small-edit soft-hint
-// branch (0 < oldTextLen < 50) unreachable in production.
 func TestExtractOldTextLen(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -126,8 +108,6 @@ func TestExtractOldTextLen(t *testing.T) {
 	}
 }
 
-// TestReadHashTracker_SmallEditSoftHint verifies the soft-hint branch that
-// was unreachable before #283 (oldTextLen between 1 and staleHashThreshold-1).
 func TestReadHashTracker_SmallEditSoftHint(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "small.go")
@@ -157,13 +137,11 @@ func TestReadHashTracker_BasicFlow(t *testing.T) {
 
 	tr := newReadHashTracker()
 
-	// Record hash at read time.
 	tr.recordReadHash(f)
 	if len(tr.hashes) != 1 {
 		t.Fatalf("expected 1 hash stored, got %d", len(tr.hashes))
 	}
 
-	// Edit with unchanged content -> no warning.
 	hint := tr.validateContentAtEdit(f, 100)
 	if hint != "" {
 		t.Errorf("expected no warning for unchanged content, got: %s", hint)
@@ -178,7 +156,6 @@ func TestReadHashTracker_ContentChanged(t *testing.T) {
 	tr := newReadHashTracker()
 	tr.recordReadHash(f)
 
-	// Simulate external modification (same second -- mtime won't change on HFS+).
 	os.WriteFile(f, []byte("package main\n\nfunc B() {}\n"), 0644)
 
 	hint := tr.validateContentAtEdit(f, 100)
@@ -195,7 +172,6 @@ func TestReadHashTracker_FalsePositiveSuppression(t *testing.T) {
 	tr := newReadHashTracker()
 	tr.recordReadHash(f)
 
-	// Simulate touch: mtime changes but content stays the same.
 	os.Chtimes(f, time.Now().Add(10*time.Second), time.Now().Add(10*time.Second))
 
 	hint := tr.validateContentAtEdit(f, 100)
@@ -286,7 +262,6 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "large.go")
 
-	// Create a file larger than maxHashBytes (1MB since #627).
 	large := make([]byte, maxHashBytes+4096)
 	for i := range large {
 		large[i] = byte(i % 256)
@@ -296,7 +271,6 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 	tr := newReadHashTracker()
 	tr.recordReadHash(f)
 
-	// Modify beyond the hashed prefix -- should NOT be detected.
 	large[maxHashBytes+100] = 255
 	os.WriteFile(f, large, 0644)
 
@@ -305,7 +279,6 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 		t.Error("changes beyond hashed prefix should not trigger warning (by design)")
 	}
 
-	// Modify within the hashed prefix -- SHOULD be detected.
 	large[100] = 255
 	os.WriteFile(f, large, 0644)
 
@@ -315,14 +288,10 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 	}
 }
 
-// #627 defect 2: a tail edit in a file that fits the (now 1MB) hash window
-// must be detected even when mtime is restored to the original value, which
-// simulates a sub-second edit the mtime check cannot see.
 func TestReadHashTracker_TailEditWithinWindowDetected(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "big.go")
 
-	// 32KB file: fully hashed now, tail beyond the old 16KB window.
 	content := make([]byte, 32*1024)
 	for i := range content {
 		content[i] = byte(i % 251)
@@ -339,7 +308,6 @@ func TestReadHashTracker_TailEditWithinWindowDetected(t *testing.T) {
 	tr := newReadHashTracker()
 	tr.recordReadHash(f)
 
-	// Edit deep in the tail (byte 31KB) and restore the original mtime.
 	content[31*1024] = 99
 	if err := os.WriteFile(f, content, 0o644); err != nil {
 		t.Fatal(err)
@@ -362,14 +330,11 @@ func TestReadHashTracker_SmallEditThreshold(t *testing.T) {
 	tr.recordReadHash(f)
 	os.WriteFile(f, []byte("modified\n"), 0644)
 
-	// Small old_text -> softer wording but still warns.
 	hint := tr.validateContentAtEdit(f, 10)
 	if hint == "" {
 		t.Error("expected warning even for small edit")
 	}
 }
-
-// --- batch_replace path extraction tests ---
 
 func TestExtractEditFilePaths_BatchReplace(t *testing.T) {
 	args := json.RawMessage(`{"files": ["/a/foo.go", "/b/bar.go"], "pattern": "old", "replacement": "new"}`)
@@ -382,9 +347,6 @@ func TestExtractEditFilePaths_BatchReplace(t *testing.T) {
 	}
 }
 
-// #1520: batch_replace files[] are EXISTING files (pattern replacement
-// cannot create); recording them as "created" made later edits skip both
-// the unread and stale-read guards. Reversed expectation.
 func TestExtractCreateFilePaths_BatchReplace(t *testing.T) {
 	args := json.RawMessage(`{"files": ["/x/y.go"], "pattern": "a", "replacement": "b"}`)
 	if paths := extractCreateFilePaths("batch_replace", args); len(paths) != 0 {

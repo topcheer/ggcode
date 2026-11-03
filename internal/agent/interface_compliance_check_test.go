@@ -10,7 +10,6 @@ import (
 func TestCheckInterfaceCompliance_NewMethodAdded(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Create an implementor file.
 	implFile := filepath.Join(tmp, "impl.go")
 	implSrc := `package foo
 
@@ -24,7 +23,6 @@ func (r *Reader) Read(p []byte) (int, error) {
 		t.Fatal(err)
 	}
 
-	// The interface file: old version had only Read, new adds Write.
 	oldSrc := `package foo
 
 type ReadWriter interface {
@@ -55,7 +53,6 @@ type ReadWriter interface {
 func TestCheckInterfaceCompliance_NoViolation(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Implementor has all methods.
 	implFile := filepath.Join(tmp, "impl.go")
 	implSrc := `package foo
 
@@ -191,7 +188,6 @@ func (s *Store) Set(key, val string) error { return nil }
 		t.Fatal(err)
 	}
 
-	// New interface (didn't exist before).
 	newSrc := `package foo
 
 type Cache interface {

@@ -2,21 +2,12 @@ package agent
 
 import "testing"
 
-// #3812: verify_scope_narrow business-logic accuracy.
-//   A: isNarrower must not treat a bare package-count drop as narrowing —
-//      `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
-//      debugging pivot (disjoint packages), not scope gaming. Only true
-//      subsets (b ⊂ a) and path-prefix containment count.
-//   B: isGoSubcommand / pytest classification must only match at the head of
-//      a shell segment — `git commit -m "go test passed"` must NOT be
-//      recorded as a passed verification; `cd /x && go test ./...` MUST.
-
 func TestIssue3812_LenOnlyDropIsNotNarrowing(t *testing.T) {
-	// Disjoint packages: a→c is a pivot, not narrowing (was true before #3812).
+
 	if isNarrower("pkg:./pkg/c/", "pkg:./pkg/a/|pkg:./pkg/b/") {
 		t.Fatal("package-count drop without containment must not count as narrowing")
 	}
-	// Partial overlap, still not a subset: {a,b,c} → {c,d}.
+
 	if isNarrower("pkg:./pkg/c/|pkg:./pkg/d/", "pkg:./pkg/a/|pkg:./pkg/b/|pkg:./pkg/c/") {
 		t.Fatal("intersecting-but-not-subset scope switch must not count as narrowing")
 	}
@@ -26,7 +17,7 @@ func TestIssue3812_TrueSubsetStillNarrows(t *testing.T) {
 	if !isNarrower("pkg:./pkg/a/", "pkg:./pkg/a/|pkg:./pkg/b/") {
 		t.Fatal("true subset (b ⊂ a, fewer) must still count as narrowing")
 	}
-	// Path-prefix containment (#2810) unaffected by the len-only removal.
+
 	if !isNarrower("pkg:./internal/agent/sub/", "pkg:./internal/agent/") {
 		t.Fatal("path-prefix containment must still count as narrowing")
 	}
@@ -35,13 +26,12 @@ func TestIssue3812_TrueSubsetStillNarrows(t *testing.T) {
 	}
 }
 
-// goSub3812 asserts the command classifies as go-test, go-vet, or go-build.
 func goSub3812(cmd string) bool {
 	return isGoSubcommand(cmd, "test") || isGoSubcommand(cmd, "vet") || isGoSubcommand(cmd, "build")
 }
 
 func TestIssue3812_GoSubcommandHeadOnly(t *testing.T) {
-	// Must classify.
+
 	for _, cmd := range []string{
 		"go test ./...",
 		"go vet ./internal/...",
@@ -57,7 +47,7 @@ func TestIssue3812_GoSubcommandHeadOnly(t *testing.T) {
 			t.Fatalf("expected go subcommand classification for %q", cmd)
 		}
 	}
-	// Must NOT classify: "go <sub>" only inside arguments/quoted text.
+
 	for _, cmd := range []string{
 		`git commit -m "go test passed"`,
 		`echo go build ok`,

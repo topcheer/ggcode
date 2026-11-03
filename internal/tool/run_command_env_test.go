@@ -8,7 +8,6 @@ import (
 func TestNormalizedCommandEnv_ContainsOverrides(t *testing.T) {
 	env := normalizedCommandEnv()
 
-	// Verify all expected overrides are present.
 	expected := map[string]string{
 		"TERM=dumb":   "",
 		"NO_COLOR=1":  "",
@@ -27,7 +26,7 @@ func TestNormalizedCommandEnv_ContainsOverrides(t *testing.T) {
 }
 
 func TestNormalizedCommandEnv_OverridesTakePrecedence(t *testing.T) {
-	// Temporarily set conflicting values in the real environment.
+
 	os.Setenv("TERM", "xterm-256color")
 	os.Setenv("NO_COLOR", "0")
 	os.Setenv("COLUMNS", "40")
@@ -41,7 +40,6 @@ func TestNormalizedCommandEnv_OverridesTakePrecedence(t *testing.T) {
 
 	env := normalizedCommandEnv()
 
-	// In Go's cmd.Env, later entries win. Verify our overrides come last.
 	termValue := ""
 	colorValue := ""
 	colWidth := ""
@@ -76,7 +74,7 @@ func TestNormalizedCommandEnv_OverridesTakePrecedence(t *testing.T) {
 }
 
 func TestNormalizedCommandEnv_PreservesUserEnv(t *testing.T) {
-	// Set a custom env var that should be preserved.
+
 	os.Setenv("GGCODE_TEST_VAR", "hello")
 	defer os.Unsetenv("GGCODE_TEST_VAR")
 
@@ -94,7 +92,6 @@ func TestNormalizedCommandEnv_PreservesUserEnv(t *testing.T) {
 	}
 }
 
-// matchEnvVar extracts the value part from a "KEY=VALUE" string for the given key.
 func matchEnvVar(entry, key string) (string, bool) {
 	prefix := key + "="
 	if len(entry) > len(prefix) && entry[:len(prefix)] == prefix {

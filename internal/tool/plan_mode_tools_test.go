@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// mockModeSwitcher implements ModeSwitcher for testing
 type mockModeSwitcher struct {
 	currentMode  permission.PermissionMode
 	previousMode permission.PermissionMode
@@ -36,8 +35,6 @@ func (m *mockModeSwitcher) RestoreMode(fallback permission.PermissionMode) permi
 	return fallback
 }
 
-// ---- Enter Plan Mode Tests ----
-
 func TestEnterPlanMode_Basic(t *testing.T) {
 	switcher := &mockModeSwitcher{currentMode: permission.BypassMode}
 	tool := EnterPlanModeTool{Switcher: switcher}
@@ -52,7 +49,7 @@ func TestEnterPlanMode_Basic(t *testing.T) {
 	if switcher.currentMode != permission.PlanMode {
 		t.Errorf("mode = %v, want PlanMode", switcher.currentMode)
 	}
-	// Should have remembered BypassMode
+
 	if switcher.previousMode != permission.BypassMode {
 		t.Errorf("previousMode = %v, want BypassMode", switcher.previousMode)
 	}
@@ -93,12 +90,10 @@ func TestEnterPlanModeDescriptionMatchesReadOnlyPolicy(t *testing.T) {
 	}
 }
 
-// ---- Exit Plan Mode Tests ----
-
 func TestExitPlanMode_RestoresPreviousMode(t *testing.T) {
 	switcher := &mockModeSwitcher{
 		currentMode:  permission.PlanMode,
-		previousMode: permission.BypassMode, // simulated: was bypass before plan
+		previousMode: permission.BypassMode,
 	}
 	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
 
@@ -109,7 +104,7 @@ func TestExitPlanMode_RestoresPreviousMode(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should restore to BypassMode, NOT SupervisedMode
+
 	if switcher.currentMode != permission.BypassMode {
 		t.Errorf("mode = %v, want BypassMode", switcher.currentMode)
 	}
@@ -118,7 +113,7 @@ func TestExitPlanMode_RestoresPreviousMode(t *testing.T) {
 func TestExitPlanMode_NoPreviousModeUsesDefault(t *testing.T) {
 	switcher := &mockModeSwitcher{
 		currentMode:  permission.PlanMode,
-		previousMode: 0, // no previous mode remembered
+		previousMode: 0,
 	}
 	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
 
@@ -155,23 +150,19 @@ func TestExitPlanMode_EmptyPlan(t *testing.T) {
 	}
 }
 
-// ---- Full Round-Trip Test ----
-
 func TestPlanModeRoundTrip_Bypass(t *testing.T) {
-	// Simulate: user is in bypass mode → enters plan → exits plan → should be back in bypass
+
 	switcher := &mockModeSwitcher{currentMode: permission.BypassMode}
 
 	enterTool := EnterPlanModeTool{Switcher: switcher}
 	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
 
-	// 1. Enter plan mode
 	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{}`))
 	if switcher.currentMode != permission.PlanMode {
 		t.Fatalf("step 1: mode = %v, want PlanMode", switcher.currentMode)
 	}
 	t.Logf("enter result: %s", result.Content)
 
-	// 2. Exit plan mode (no explicit mode → should restore bypass)
 	result, _ = exitTool.Execute(context.Background(), json.RawMessage(`{"plan":"refactor the module"}`))
 	if switcher.currentMode != permission.BypassMode {
 		t.Errorf("step 2: mode = %v, want BypassMode (restored)", switcher.currentMode)
@@ -185,13 +176,11 @@ func TestPlanModeRoundTrip_Autopilot(t *testing.T) {
 	enterTool := EnterPlanModeTool{Switcher: switcher}
 	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
 
-	// Enter
 	enterTool.Execute(context.Background(), json.RawMessage(`{}`))
 	if switcher.currentMode != permission.PlanMode {
 		t.Fatal("should be in plan mode")
 	}
 
-	// Exit → should restore AutopilotMode
 	exitTool.Execute(context.Background(), json.RawMessage(`{"plan":"plan content"}`))
 	if switcher.currentMode != permission.AutopilotMode {
 		t.Errorf("mode = %v, want AutopilotMode (restored)", switcher.currentMode)
@@ -207,13 +196,10 @@ func TestPlanModeRoundTrip_Supervised(t *testing.T) {
 	enterTool.Execute(context.Background(), json.RawMessage(`{}`))
 	exitTool.Execute(context.Background(), json.RawMessage(`{"plan":"plan content"}`))
 
-	// Supervised → Plan → exit (no explicit mode) → should use default (supervised)
 	if switcher.currentMode != permission.SupervisedMode {
 		t.Errorf("mode = %v, want SupervisedMode", switcher.currentMode)
 	}
 }
-
-// ---- Parameter Schema Test ----
 
 func TestExitPlanMode_Description(t *testing.T) {
 	tool := ExitPlanModeTool{}
@@ -239,9 +225,6 @@ func containsHelper(s, substr string) bool {
 	return false
 }
 
-// #350: exit_plan_mode is the only plan→execution gate; its description must
-// carry the pre-mortem protocol (prospective hindsight) so non-trivial plans
-// enumerate failure modes before any irreversible step runs.
 func TestExitPlanModeDescriptionDocumentsPreMortem(t *testing.T) {
 	desc := ExitPlanModeTool{}.Description()
 	for _, want := range []string{"Pre-Mortem", "failure", "irreversible", "rollback"} {

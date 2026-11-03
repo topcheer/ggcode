@@ -280,7 +280,7 @@ func check(x int) bool {
 	if !strings.Contains(result, "constant literals") {
 		t.Errorf("expected constant-literals reason, got: %s", result)
 	}
-	// x == 42 has a variable operand and must NOT be flagged here.
+
 	if strings.Contains(result, "x == 42") {
 		t.Errorf("variable-vs-literal comparison wrongly flagged: %s", result)
 	}
@@ -313,7 +313,7 @@ func check(r float64) bool {
 }
 `
 	result := checkSuspiciousComparison("test.go", oldCode, newCode)
-	// Should only flag the NEW float comparison (0.2), not the existing one (0.1)
+
 	if !strings.Contains(result, "0.2") {
 		t.Errorf("expected detection of new 0.2 comparison, got: %s", result)
 	}

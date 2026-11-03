@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// Regression for #1483: rnpNilCompareIdent only accepted plain identifiers,
-// so the most idiomatic Go nil-protection form - `if p.Field != nil` guarding
-// `for range *p.Field` - was doubly locked out (the selector never entered
-// the guards table, and rnpExprName returned "" for selectors, which routed
-// to the misleading "store in a variable" warning) and correct code got
-// warned on every write.
 func TestCheckRangeNilPtr_SelectorGuardExempt(t *testing.T) {
 	src := `package main
 

@@ -11,57 +11,18 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Anthropic Memory Tool (memory_20250818): provider-declared, client-executed
-// long-term memory across the GA "memory tool" surface
-// (docs.en/agents-and-tools/tool-use/memory-tool). The API only defines the
-// contract: the model issues tool_use blocks named "memory" with one of six
-// commands against a virtual /memories filesystem, and the CLIENT implements
-// storage and returns the results (contrast with web_search/web_fetch, which
-// run server-side). Declaration happens in the Anthropic provider
-// (SetMemoryTool → {"type":"memory_20250818"}); this file is the client-side
-// executor, following the agent-side meta-tool pattern of tool_search.go so
-// the tool never appears in Registry.ToDefinitions.
-//
-// Storage layout: the virtual /memories prefix maps onto
-// <workingDir>/.ggcode/memories, created on demand. Project-local means the
-// store persists across sessions for the same project while different
-// projects never share files.
-//
-// Path confinement is enforced on every call: paths must start with
-// /memories, traversal ("..", percent-encoded variants) and symlink escapes
-// are rejected, so the permission fast path (config_policy.go treats the
-// memory tool like save_memory) can never touch files outside the store.
-
 const (
-	// memoryToolName is the tool name the model calls. Fixed by the API
-	// contract (MemoryTool20250818Param defaults its name to "memory").
 	memoryToolName = "memory"
 
-	// memoryVirtualPrefix is the only legal root of every memory path.
 	memoryVirtualPrefix = "/memories"
 
-	// memoryDirName is the on-disk store directory under the working dir.
 	memoryDirName = ".ggcode/memories"
 
-	// memoryMaxViewLines caps a full-file view; the API errors above this.
 	memoryMaxViewLines = 999_999
 
-	// memoryViewSnippetWindow bounds the snippet echoed after str_replace.
 	memoryViewSnippetWindow = 40
 )
 
-// memoryToolState executes memory tool calls. Stateless apart from the lazy
-// root binding: the working directory is read at call time so agents created
-// before SetWorkingDir still resolve the correct store.
-//
-// #2511: enabled gates the agent-side dispatch. The tool is only declared to
-// the model when the Anthropic provider is configured with
-// `memory_tool: true` (provider registry). The executor must mirror that
-// gate: the intercept in executeToolInner runs before the registry lookup,
-// so without an enabled check here a name="memory" call on any other
-// provider (or a future registry tool named "memory") would be swallowed by
-// this executor instead of failing with UnknownToolError - same enabled-gate
-// shape as toolSearchState.
 type memoryToolState struct {
 	enabled bool
 }
@@ -70,8 +31,6 @@ func newMemoryToolState() *memoryToolState {
 	return &memoryToolState{}
 }
 
-// memoryRawArgs is the argument shape of every command. view_range arrives
-// as a [start, end] integer tuple, so it is decoded as a slice.
 type memoryRawArgs struct {
 	Command    string  `json:"command"`
 	Path       string  `json:"path"`
@@ -85,15 +44,8 @@ type memoryRawArgs struct {
 	ViewRange  []int64 `json:"view_range"`
 }
 
-// executeResult dispatches a memory tool call. workingDir is the agent's
-// current project directory; empty falls back to the process cwd.
 func (s *memoryToolState) executeResult(args json.RawMessage, workingDir string) tool.Result {
-	// #2511: not declared to the model -> this executor must not answer. A
-	// name="memory" call reaching here without the declaration is either a
-	// hallucination or a different tool the registry should own; failing
-	// loudly (IsError, no side effects, no .ggcode/memories mkdir) lets the
-	// normal unknown-tool correction happen instead of a semantic argument
-	// error that invites further /memories protocol iteration.
+
 	if s == nil || !s.enabled {
 		return memoryErr("Error: memory tool is not enabled for this endpoint.")
 	}
@@ -131,14 +83,10 @@ func (s *memoryToolState) executeResult(args json.RawMessage, workingDir string)
 	}
 }
 
-// memoryErr wraps an error string as a tool result flagged with IsError, the
-// same convention the docs use for the reference implementations: errors are
-// ordinary string results the model can read and react to.
 func memoryErr(msg string) tool.Result {
 	return tool.Result{Content: msg, IsError: true}
 }
 
-// memoryRootDir resolves the on-disk directory backing /memories.
 func memoryRootDir(workingDir string) (string, error) {
 	base := strings.TrimSpace(workingDir)
 	if base == "" {
@@ -155,8 +103,6 @@ func memoryRootDir(workingDir string) (string, error) {
 	return filepath.Join(abs, memoryDirName), nil
 }
 
-// resolveMemoryPath validates a virtual path and maps it onto the real store.
-// Returns the canonical virtual path and the real filesystem path.
 func resolveMemoryPath(root, virtual string) (string, string, error) {
 	p := strings.TrimSpace(virtual)
 	if p == "" {
@@ -181,18 +127,13 @@ func resolveMemoryPath(root, virtual string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	// Resolve the store root through any symlinks (e.g. /tmp -> /private/tmp
-	// on macOS, symlinked project directories) so the containment check
-	// below compares like-for-like resolved paths. The root always exists by
-	// the time this runs (executeResult creates it up front).
+
 	if resolvedRoot, rerr := filepath.EvalSymlinks(realRoot); rerr == nil {
 		realRoot = resolvedRoot
 	}
 	rel := strings.TrimPrefix(clean, memoryVirtualPrefix)
 	real := filepath.Join(realRoot, rel)
 
-	// Symlink hardening: resolve what already exists (the leaf may be new,
-	// so fall back to its parent) and re-verify containment inside the store.
 	probe := real
 	if _, err := os.Lstat(real); err != nil {
 		probe = filepath.Dir(real)
@@ -209,7 +150,6 @@ func resolveMemoryPath(root, virtual string) (string, string, error) {
 	return clean, real, nil
 }
 
-// memoryErrf returns a memory path error for a failed resolution.
 func memoryErrf(virtual string, err error) tool.Result {
 	if err != nil {
 		return memoryErr(err.Error())
@@ -217,7 +157,6 @@ func memoryErrf(virtual string, err error) tool.Result {
 	return memoryErr(fmt.Sprintf("Error: Invalid path %q.", virtual))
 }
 
-// humanizeSize renders a byte count for directory listings ("4.0K" style).
 func humanizeSize(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -234,14 +173,10 @@ func humanizeSize(n int64) string {
 	return fmt.Sprintf("%.1fP", value/unit)
 }
 
-// memoryPathError renders the canonical missing-path error string.
 func memoryPathError(virtual string) tool.Result {
 	return memoryErr(fmt.Sprintf("Error: The path %s does not exist.", virtual))
 }
 
-// view implements view: directory listing (2 levels, hidden entries and
-// node_modules excluded) or numbered file content with an optional
-// view_range [start, end] (inclusive; negative end = through EOF).
 func (s *memoryToolState) view(root string, raw memoryRawArgs) tool.Result {
 	clean, real, err := resolveMemoryPath(root, raw.Path)
 	if err != nil {
@@ -275,11 +210,7 @@ func (s *memoryToolState) view(root string, raw memoryRawArgs) tool.Result {
 	if len(lines) > memoryMaxViewLines {
 		return memoryErr(fmt.Sprintf("Error: Cannot view %s: it has more than %d lines. Use view_range to view specific portions of the file.", clean, memoryMaxViewLines))
 	}
-	// Optional view_range [start, end], 1-based inclusive; a negative or
-	// omitted end means "through EOF" (the API convention). Invalid ranges
-	// error out so the model can correct itself instead of reading the
-	// wrong slice silently. numberBase keeps line numbering absolute when a
-	// slice is shown, matching what the model wrote to the file.
+
 	numberBase := 1
 	if len(raw.ViewRange) > 0 {
 		start := raw.ViewRange[0]
@@ -304,7 +235,6 @@ func (s *memoryToolState) view(root string, raw memoryRawArgs) tool.Result {
 	return tool.Result{Content: strings.TrimRight(b.String(), "\n")}
 }
 
-// viewDir renders the two-level listing format from the reference clients.
 func (s *memoryToolState) viewDir(clean, real string) tool.Result {
 	entries := listDirEntries(real, clean)
 	var b strings.Builder
@@ -331,9 +261,6 @@ type memoryDirEntry struct {
 	isDir    bool
 }
 
-// listDirEntries returns visible, sorted entries of dir. vdir is the virtual
-// path of the directory being listed (e.g. "/memories"), used to build each
-// entry's virtual path directly.
 func listDirEntries(dir, vdir string) []memoryDirEntry {
 	raw, err := os.ReadDir(dir)
 	if err != nil {
@@ -366,9 +293,6 @@ func listDirEntries(dir, vdir string) []memoryDirEntry {
 	return entries
 }
 
-// writeNumberedLines renders lines with absolute line numbers: the first
-// entry gets number base (full files pass 1; view_range slices pass the
-// slice's start so the model sees original positions).
 func writeNumberedLines(b *strings.Builder, lines []string, base int) {
 	for i, line := range lines {
 		fmt.Fprintf(b, "%6d\t%s\n", base+i, line)
@@ -383,7 +307,6 @@ func isImagePath(p string) bool {
 	return false
 }
 
-// create implements create: write file_text to a NEW file.
 func (s *memoryToolState) create(root string, raw memoryRawArgs) tool.Result {
 	clean, real, err := resolveMemoryPath(root, raw.Path)
 	if err != nil {
@@ -404,7 +327,6 @@ func (s *memoryToolState) create(root string, raw memoryRawArgs) tool.Result {
 	return tool.Result{Content: fmt.Sprintf("File created successfully at: %s", clean)}
 }
 
-// loadFileLines reads a file as lines for the editing commands.
 func loadFileLines(clean, real string) ([]string, error) {
 	content, err := os.ReadFile(real)
 	if err != nil {
@@ -417,8 +339,6 @@ func loadFileLines(clean, real string) ([]string, error) {
 	return strings.Split(trimmed, "\n"), nil
 }
 
-// strReplace implements str_replace: replace the unique occurrence of
-// old_str with new_str (omitted new_str = deletion).
 func (s *memoryToolState) strReplace(root string, raw memoryRawArgs) tool.Result {
 	clean, real, err := resolveMemoryPath(root, raw.Path)
 	if err != nil {
@@ -473,8 +393,6 @@ func (s *memoryToolState) strReplace(root string, raw memoryRawArgs) tool.Result
 	return tool.Result{Content: strings.TrimRight(b.String(), "\n")}
 }
 
-// insert implements insert: insert_text goes AFTER line insert_line
-// (insert_line 0 = very beginning of the file).
 func (s *memoryToolState) insert(root string, raw memoryRawArgs) tool.Result {
 	clean, real, err := resolveMemoryPath(root, raw.Path)
 	if err != nil {
@@ -505,8 +423,6 @@ func (s *memoryToolState) insert(root string, raw memoryRawArgs) tool.Result {
 	return tool.Result{Content: fmt.Sprintf("The file %s has been edited.", clean)}
 }
 
-// delete implements delete: removes files or directories (recursively).
-// Deleting the memory root itself is rejected.
 func (s *memoryToolState) delete(root string, raw memoryRawArgs) tool.Result {
 	clean, real, err := resolveMemoryPath(root, raw.Path)
 	if err != nil {
@@ -524,7 +440,6 @@ func (s *memoryToolState) delete(root string, raw memoryRawArgs) tool.Result {
 	return tool.Result{Content: fmt.Sprintf("Successfully deleted %s", clean)}
 }
 
-// rename implements rename: move old_path to new_path (files or dirs).
 func (s *memoryToolState) rename(root string, raw memoryRawArgs) tool.Result {
 	cleanOld, realOld, err := resolveMemoryPath(root, raw.OldPath)
 	if err != nil {

@@ -101,7 +101,6 @@ func TestCheckInsecurePatterns_GoMathRandForToken(t *testing.T) {
 	}
 }
 
-// fix #243: aliased crypto/rand import must not be misclassified as math/rand.
 func TestCheckInsecurePatterns_CryptoRandAliasNotFlagged(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -120,7 +119,6 @@ func TestCheckInsecurePatterns_CryptoRandAliasNotFlagged(t *testing.T) {
 	}
 }
 
-// fix #243: plain crypto/rand import is also secure and must not be flagged.
 func TestCheckInsecurePatterns_CryptoRandDefaultImportNotFlagged(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -139,7 +137,6 @@ func TestCheckInsecurePatterns_CryptoRandDefaultImportNotFlagged(t *testing.T) {
 	}
 }
 
-// fix #243: aliased math/rand must still be flagged (regression guard).
 func TestCheckInsecurePatterns_MathRandAliasStillFlagged(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -238,7 +235,6 @@ func TestCheckInsecurePatterns_DeltaAware(t *testing.T) {
 	content := "package main\n" +
 		"cfg := &tls.Config{InsecureSkipVerify: true}\n"
 
-	// Same content in old and new - should not report.
 	warnings := checkInsecurePatterns("test.go", content, content)
 	if len(warnings) > 0 {
 		t.Fatalf("expected no warnings for pre-existing patterns (delta-aware), got: %v", warnings)
@@ -259,10 +255,6 @@ func TestCheckInsecurePatterns_EmptyContent(t *testing.T) {
 	}
 }
 
-// ---- fix #245: Python verify=False false negatives ----
-
-// httpx calls carry no "requests"/"ssl"/"session" context word; the old
-// three-condition AND silently missed them.
 func TestCheckInsecurePatterns_PythonHttpxVerifyFalse(t *testing.T) {
 	old := "# old code\n"
 	new := "import httpx\n" +
@@ -281,7 +273,6 @@ func TestCheckInsecurePatterns_PythonHttpxVerifyFalse(t *testing.T) {
 	}
 }
 
-// aiohttp TCPConnector(ssl=False) must be caught by the ssl= form.
 func TestCheckInsecurePatterns_PythonAiohttpSSLFalse(t *testing.T) {
 	old := "# old code\n"
 	new := "connector = aiohttp.TCPConnector(ssl=False)\n"
@@ -299,7 +290,6 @@ func TestCheckInsecurePatterns_PythonAiohttpSSLFalse(t *testing.T) {
 	}
 }
 
-// verify=0 without spaces was missed by the old "= 0" substring check.
 func TestCheckInsecurePatterns_PythonVerifyZero(t *testing.T) {
 	old := "# old code\n"
 	new := "resp = httpx.get(url, verify=0)\n"
@@ -317,9 +307,6 @@ func TestCheckInsecurePatterns_PythonVerifyZero(t *testing.T) {
 	}
 }
 
-// ---- fix #245: Go SQL false positives ----
-
-// `i++` on a line containing SQL keywords is not concatenation.
 func TestCheckInsecurePatterns_GoSQLIncrementNotConcat(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -336,7 +323,6 @@ func TestCheckInsecurePatterns_GoSQLIncrementNotConcat(t *testing.T) {
 	}
 }
 
-// Full-line comments containing SQL keywords must be skipped.
 func TestCheckInsecurePatterns_GoSQLCommentNotFlagged(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -351,7 +337,6 @@ func TestCheckInsecurePatterns_GoSQLCommentNotFlagged(t *testing.T) {
 	}
 }
 
-// INSERT ... VALUES has no FROM clause and must still be recognized.
 func TestCheckInsecurePatterns_GoSQLInsertValues(t *testing.T) {
 	old := "package main\n"
 	new := "package main\n" +
@@ -370,9 +355,6 @@ func TestCheckInsecurePatterns_GoSQLInsertValues(t *testing.T) {
 	}
 }
 
-// ---- fix #245: JS rejectUnauthorized / NODE_TLS false positives ----
-
-// `timeout: 0` on a rejectUnauthorized line must not trigger the "0" check.
 func TestCheckInsecurePatterns_JSTimeoutZeroNotFlagged(t *testing.T) {
 	old := "// old\n"
 	new := "const agent = new https.Agent({ rejectUnauthorized: true, timeout: 0 });\n"
@@ -385,8 +367,6 @@ func TestCheckInsecurePatterns_JSTimeoutZeroNotFlagged(t *testing.T) {
 	}
 }
 
-// Comparison guards (=== / !==) against NODE_TLS_REJECT_UNAUTHORIZED='0'
-// are legitimate code and must not warn.
 func TestCheckInsecurePatterns_JSNodeTLSComparisonNotFlagged(t *testing.T) {
 	old := "// old\n"
 	new := "if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {\n" +
@@ -403,7 +383,6 @@ func TestCheckInsecurePatterns_JSNodeTLSComparisonNotFlagged(t *testing.T) {
 	}
 }
 
-// Assigning the disabling value (with or without quotes) must warn.
 func TestCheckInsecurePatterns_JSNodeTLSAssignmentFlagged(t *testing.T) {
 	old := "// old\n"
 	new := "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\n"
@@ -421,7 +400,6 @@ func TestCheckInsecurePatterns_JSNodeTLSAssignmentFlagged(t *testing.T) {
 	}
 }
 
-// rejectUnauthorized: 0 (numeric form) must warn via the tightened regex.
 func TestCheckInsecurePatterns_JSRejectUnauthorizedZero(t *testing.T) {
 	old := "// old\n"
 	new := "const agent = new https.Agent({ rejectUnauthorized: 0 });\n"
@@ -527,7 +505,7 @@ func TestPyStripCommentsAndStrings(t *testing.T) {
 		{`url = base + "?verify=0"`, "url = base + "},
 		{`"""ssl=False doc"""`, ""},
 		{`r = httpx.get(url, verify=False)`, "r = httpx.get(url, verify=False)"},
-		{"'don#t' # comment", " "}, // # inside string is protected; trailing comment stripped
+		{"'don#t' # comment", " "},
 	}
 	for _, c := range cases {
 		if got := pyStripCommentsAndStrings(c.in); got != c.want {

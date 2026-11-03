@@ -7,15 +7,9 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Batch 2 of the guidance-noise cleanup: B-class detectors inject at most
-// once per run, and a successful context compaction resets the injection
-// counters (the injected guidance text was compacted away with the rest of
-// the context). These tests pin both halves of that contract.
-
 func TestGuidanceCountersResetAfterCompaction(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 
-	// Burn the once-per-run quota of verify_debt.
 	a.verifyDebt.mu.Lock()
 	a.verifyDebt.warningsIssued = 1
 	a.verifyDebt.mu.Unlock()
@@ -47,7 +41,6 @@ func TestGuidanceCountersResetAfterCompaction(t *testing.T) {
 func TestGuidanceCountersResetKeepsBehavioralWindows(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 
-	// Behavioral state that must survive the counter reset.
 	a.verifyDebt.mu.Lock()
 	a.verifyDebt.editsSinceGreen = 7
 	a.verifyDebt.mu.Unlock()
@@ -66,7 +59,7 @@ func TestGuidanceCountersResetKeepsBehavioralWindows(t *testing.T) {
 }
 
 func TestBClassDetectorsOncePerRun(t *testing.T) {
-	// verify_debt: first warning fires, second is suppressed.
+
 	s := newVerifyDebtState()
 	for i := 0; i < verifyDebtWarn1; i++ {
 		s.recordSourceEdit()
@@ -81,9 +74,8 @@ func TestBClassDetectorsOncePerRun(t *testing.T) {
 		t.Fatalf("expected second verify_debt warning to be suppressed (1/run), got: %s", msg)
 	}
 
-	// attention_fragment: same contract via analyze().
 	af := newAttentionFragmentState()
-	// 10 unique dirs, 100% switch density (mirrors the canonical test).
+
 	for i := 0; i < 10; i++ {
 		d := "/proj/internal/d" + string(rune('0'+i)) + "/file.go"
 		af.recordToolCall("read_file", map[string]interface{}{"file_path": d})
@@ -101,8 +93,6 @@ func TestBClassDetectorsOncePerRun(t *testing.T) {
 	}
 }
 
-// #1651: the enumerative gap closed - sample pins across both groups
-// (int counter, quota map, quota bools) must all reset.
 func TestResetGuidanceCounters1651Extension(t *testing.T) {
 	a := &Agent{
 		trajectoryHealth: &trajectoryHealthState{warnings: 2},
@@ -132,10 +122,6 @@ func TestResetGuidanceCounters1651Extension(t *testing.T) {
 	}
 }
 
-// #1646: the compaction reset must reopen the RIGHT debt detector -
-// verifDebt (maxWarn=2, the SAUP model the #1605 commit message named)
-// and overcorrection_cascade (maxWarn=2), not a byte-identical duplicate
-// of the verifyDebt (max=1) block above.
 func TestResetGuidanceCounters1646RightTracker(t *testing.T) {
 	a := &Agent{
 		verifDebt:      &verificationDebtState{warningsIssued: 2},

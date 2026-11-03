@@ -9,65 +9,25 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Tool Call Sequence Validator — Anti-Pattern Detection Across Iterations
-//
-// Research basis: Tool-use optimization literature (ToolGen, Gorilla, ToolLLM)
-// shows that LLM agents waste 15-30% of iterations on suboptimal tool call
-// sequences. The waste comes from patterns where the agent uses a BROAD tool
-// call first and then NARROWS down, instead of starting with a targeted call.
-//
-// This is different from existing systems:
-//   - Loop detector: catches exact duplicates (same tool + same args)
-//   - Memoization: prevents re-execution of identical calls
-//   - Repetition tracker: catches read-edit-fail cycles
-//   - Empty search spiral: catches futile searches
-//
-// This validator catches CROSS-TOOL anti-patterns: sequences of DIFFERENT tool
-// calls that are suboptimal together. Examples:
-//
-//  1. Full read → targeted re-read: read_file(X) then read_file(X, offset, limit)
-//     — the agent should have started with targeted reads.
-//  2. Sequential individual reads: read_file(A), read_file(B), read_file(C)
-//     — should use multi_file_read for batch efficiency.
-//  3. Directory listing then glob: list_directory(X) then glob(pattern, X)
-//     — redundant exploration of the same directory.
-//  4. Read then grep same file: read_file(X) then grep(pattern, path=X)
-//     — the agent already has the content, should search inline.
-//  5. Broad search then narrow: search_files("TODO") then search_files("TODO", dir=X)
-//     — should have narrowed the scope first.
-//
-// Each anti-pattern fires at most once per run to avoid nagging. Hints are
-// concise and actionable, suggesting the specific more efficient alternative.
-
 const (
-	// seqWindow: number of recent tool calls to keep for pattern matching.
-	// Must be large enough to catch sequential individual reads (3+ calls)
-	// but small enough to avoid false positives from unrelated interleaving.
 	seqWindow = 12
 
-	// seqConsecutiveReads: number of individual read_file calls in sequence
-	// (within seqWindow) that triggers a batch suggestion.
 	seqConsecutiveReads = 3
 
-	// r361 Pattern 6: an identical cross-tool sequence of seqRepeatLen calls
-	// repeating seqRepeatCount times inside the window is a stable SOP the
-	// agent keeps re-issuing by hand (Tool-Making, arXiv 2607.08010: repeated
-	// SOP re-generation wastes latency and reliability). 3×3 = 9 of the 12
-	// window slots is an unambiguous signal.
 	seqRepeatLen   = 3
 	seqRepeatCount = 3
 )
 
 type seqEntry struct {
 	tool     string
-	filePath string // primary file/path argument, if any
+	filePath string
 	args     map[string]interface{}
-	iter     int // iteration number when this call was made
+	iter     int
 }
 
 type toolSequenceValidator struct {
 	history    []seqEntry
-	hintsGiven map[string]bool // anti-pattern type → fired flag
+	hintsGiven map[string]bool
 }
 
 func newToolSequenceValidator() *toolSequenceValidator {
@@ -78,12 +38,10 @@ func newToolSequenceValidator() *toolSequenceValidator {
 
 func (v *toolSequenceValidator) reset() {
 	v.history = v.history[:0]
-	// Clear the map by re-allocating (reset is called per-run)
+
 	v.hintsGiven = make(map[string]bool)
 }
 
-// record adds a tool call to the sequence history and returns guidance text
-// if an anti-pattern is detected. The guidance is injected into the tool result.
 func (v *toolSequenceValidator) record(tc provider.ToolCallDelta, iter int) string {
 	entry := seqEntry{
 		tool: tc.Name,
@@ -92,17 +50,13 @@ func (v *toolSequenceValidator) record(tc provider.ToolCallDelta, iter int) stri
 	}
 	entry.filePath = extractPrimaryPath(entry.tool, entry.args)
 
-	// Check anti-patterns BEFORE adding to history (current call vs recent history)
 	guidance := v.checkAntiPatterns(entry)
 
-	// Add to history
 	v.history = append(v.history, entry)
 	if len(v.history) > seqWindow {
 		v.history = v.history[len(v.history)-seqWindow:]
 	}
 
-	// Pattern 6 needs the current call IN the history (full-window scan),
-	// so it runs after the append above, unlike patterns 1-5.
 	if guidance == "" {
 		guidance = v.checkRepeatedSequence()
 	}
@@ -119,32 +73,27 @@ func (v *toolSequenceValidator) record(tc provider.ToolCallDelta, iter int) stri
 }
 
 func (v *toolSequenceValidator) checkAntiPatterns(curr seqEntry) string {
-	// Pattern 1: Full read → targeted re-read of same file
+
 	if guidance := v.checkFullReadThenTargeted(curr); guidance != "" {
 		return guidance
 	}
 
-	// Pattern 2: Sequential individual reads (should use multi_file_read)
 	if guidance := v.checkSequentialReads(curr); guidance != "" {
 		return guidance
 	}
 
-	// Pattern 3: list_directory → glob on same directory
 	if guidance := v.checkDirThenGlob(curr); guidance != "" {
 		return guidance
 	}
 
-	// Pattern 4: read_file → grep on same file
 	if guidance := v.checkReadThenGrep(curr); guidance != "" {
 		return guidance
 	}
 
-	// Pattern 5: Broad search → narrow search
 	if guidance := v.checkBroadThenNarrowSearch(curr); guidance != "" {
 		return guidance
 	}
 
-	// Pattern 7: text search → LSP workspace symbol search for the same symbol
 	if guidance := v.checkSymbolRetrievalDup(curr); guidance != "" {
 		return guidance
 	}
@@ -152,8 +101,6 @@ func (v *toolSequenceValidator) checkAntiPatterns(curr seqEntry) string {
 	return ""
 }
 
-// Pattern 1: read_file(X) [no offset/limit] → read_file(X, offset, limit)
-// The agent should have used targeted reads from the start.
 func (v *toolSequenceValidator) checkFullReadThenTargeted(curr seqEntry) string {
 	if v.hintsGiven["full_read_then_targeted"] {
 		return ""
@@ -164,13 +111,13 @@ func (v *toolSequenceValidator) checkFullReadThenTargeted(curr seqEntry) string 
 	if curr.filePath == "" {
 		return ""
 	}
-	// Current call has offset or limit → it's a targeted read
+
 	hasOffset := hasIntArg(curr.args, "offset")
 	hasLimit := hasIntArg(curr.args, "limit")
 	if !hasOffset && !hasLimit {
 		return ""
 	}
-	// Check if there was a full read (no offset/limit) of the same file earlier
+
 	for i := len(v.history) - 1; i >= 0; i-- {
 		e := v.history[i]
 		if e.tool == "read_file" && e.filePath == curr.filePath {
@@ -188,7 +135,6 @@ func (v *toolSequenceValidator) checkFullReadThenTargeted(curr seqEntry) string 
 	return ""
 }
 
-// Pattern 2: Multiple sequential read_file calls should use multi_file_read
 func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	if v.hintsGiven["sequential_reads"] {
 		return ""
@@ -196,7 +142,7 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	if curr.tool != "read_file" {
 		return ""
 	}
-	// Count consecutive read_file calls in recent history (not including current)
+
 	consecutive := 0
 	for i := len(v.history) - 1; i >= 0; i-- {
 		if v.history[i].tool == "read_file" {
@@ -205,17 +151,11 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 			break
 		}
 	}
-	// Current call is the (consecutive+1)th read_file in a row
+
 	if consecutive+1 < seqConsecutiveReads {
 		return ""
 	}
-	// #2767: same-iteration parallel read_file batches are the RECOMMENDED
-	// pattern (system prompt encourages parallel tool calls in one block) —
-	// the hint is only for cross-iteration serial reads. Require the trigger
-	// window (history tail + current) to span at least 2 distinct iterations.
-	// The trailing `consecutive` entries are all read_file by construction,
-	// so a single reverse pass collects both the iteration set and the
-	// distinct-file set (different files; same-file re-reads are memoized).
+
 	iters := make(map[int]bool)
 	files := make(map[string]bool)
 	iters[curr.iter] = true
@@ -228,11 +168,11 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 		}
 	}
 	if len(iters) < 2 {
-		return "" // single parallel batch, not sequential reads
+		return ""
 	}
-	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
+
 	if len(files) < seqConsecutiveReads {
-		return "" // re-reads of same file, not a batch scenario
+		return ""
 	}
 	v.hintsGiven["sequential_reads"] = true
 	return fmt.Sprintf(
@@ -243,7 +183,6 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	)
 }
 
-// Pattern 3: list_directory(X) → glob(pattern, X) on the same directory
 func (v *toolSequenceValidator) checkDirThenGlob(curr seqEntry) string {
 	if v.hintsGiven["dir_then_glob"] {
 		return ""
@@ -270,8 +209,6 @@ func (v *toolSequenceValidator) checkDirThenGlob(curr seqEntry) string {
 	return ""
 }
 
-// Pattern 4: read_file(X) → grep(pattern, path=X)
-// The agent already has the file content, should search within it.
 func (v *toolSequenceValidator) checkReadThenGrep(curr seqEntry) string {
 	if v.hintsGiven["read_then_grep"] {
 		return ""
@@ -285,17 +222,12 @@ func (v *toolSequenceValidator) checkReadThenGrep(curr seqEntry) string {
 	}
 	for i := len(v.history) - 1; i >= 0; i-- {
 		e := v.history[i]
-		// #2813: an edit to X after the read invalidates the "you already
-		// have the content" premise - grepping X to re-ground on the CHANGED
-		// content is standard verify behavior and must not be discouraged
-		// (same staleness principle as #2675: state changed → history entry
-		// no longer applies).
+
 		if sourceMutatingTools[e.tool] && e.filePath == searchPath {
 			return ""
 		}
 		if e.tool == "read_file" && e.filePath == searchPath {
-			// #2813: a ranged read (offset/limit) never produced the full
-			// content - grepping to locate a section is legitimate.
+
 			if _, hasOffset := e.args["offset"]; hasOffset {
 				return ""
 			}
@@ -314,8 +246,6 @@ func (v *toolSequenceValidator) checkReadThenGrep(curr seqEntry) string {
 	return ""
 }
 
-// Pattern 5: search_files(pattern, no dir) → search_files(pattern, dir=X)
-// The agent should have narrowed the scope from the start.
 func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string {
 	if v.hintsGiven["broad_then_narrow"] {
 		return ""
@@ -346,7 +276,7 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 				eDir, _ = e.args["directory"].(string)
 			}
 			ePattern, _ := e.args["pattern"].(string)
-			// Same pattern, but previous call had no directory (broad search)
+
 			if ePattern == currPattern && eDir == "" {
 				v.hintsGiven["broad_then_narrow"] = true
 				return fmt.Sprintf(
@@ -360,29 +290,11 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 	return ""
 }
 
-// Pattern 7 (sa-98): grep/search_files(pattern≈sym) → lsp_workspace_symbols
-// (query≈sym). Symbol-level duplicate retrieval is invisible to result-content
-// Jaccard (tool_result_redundancy: grep emits matched lines, LSP emits
-// file:line lists - formats never overlap ≥0.6), and tool_redundancy only
-// catches same-tool repeats. Process-axis framing (PRM survey, arXiv
-// 2510.08049): outcome gates see "found it"; only a sequence check sees the
-// wasted second retrieval. Grounded: literal symbol alignment only - the
-// coordinate-based LSP calls (lsp_references/definition take path+line+char,
-// no symbol string) are deliberately NOT matched because aligning a grep
-// pattern to a source position would be intent-guessing. LSP→grep is also
-// excluded: that direction is the documented fallback path when LSP is
-// cold/unavailable (tool_error_fallback).
 const (
-	// seqRetrievalGap: max iterations between the two retrievals. Beyond it
-	// the earlier result may legitimately be considered stale.
-	seqRetrievalGap = 3
-	// seqMinSymbolRunes: shorter symbols/pattern fragments match too easily.
+	seqRetrievalGap   = 3
 	seqMinSymbolRunes = 5
 )
 
-// checkSymbolRetrievalDup fires when the current lsp_workspace_symbols query
-// re-retrieves a symbol that a recent grep/search_files already searched
-// for, with no source mutation in between (#2813 staleness principle).
 func (v *toolSequenceValidator) checkSymbolRetrievalDup(curr seqEntry) string {
 	if v.hintsGiven["symbol_retrieval_dup"] {
 		return ""
@@ -400,9 +312,7 @@ func (v *toolSequenceValidator) checkSymbolRetrievalDup(curr seqEntry) string {
 			continue
 		}
 		pattern, _ := e.args["pattern"].(string)
-		// Literal containment either way (a grep pattern often wraps the bare
-		// symbol with anchors/whitespace): "MyFunc" ≈ "MyFunc", "^\s*MyFunc\("
-		// ≈ "MyFunc". Go symbols are case-sensitive; keep it that way.
+
 		shorter := query
 		if len(pattern) < len(query) {
 			shorter = pattern
@@ -411,8 +321,7 @@ func (v *toolSequenceValidator) checkSymbolRetrievalDup(curr seqEntry) string {
 			(!strings.Contains(pattern, query) && !strings.Contains(query, pattern)) {
 			continue
 		}
-		// Any source mutation between the two retrievals invalidates the
-		// earlier hit set (symbols may have moved) - same principle as #2813.
+
 		for j := len(v.history) - 1; j > i; j-- {
 			if sourceMutatingTools[v.history[j].tool] {
 				return ""
@@ -429,10 +338,6 @@ func (v *toolSequenceValidator) checkSymbolRetrievalDup(curr seqEntry) string {
 	return ""
 }
 
-// Pattern 6: identical cross-tool sequence repeated seqRepeatCount times -
-// a stable SOP being re-issued by hand. Suggest consolidating it into a
-// saved cmd_snippet / skill. Suggestion only (r340/r361 decision): auto-
-// saving risks固化 mistyped or situational sequences.
 func (v *toolSequenceValidator) checkRepeatedSequence() string {
 	if v.hintsGiven["repeated_sequence"] {
 		return ""
@@ -441,14 +346,13 @@ func (v *toolSequenceValidator) checkRepeatedSequence() string {
 	if n < seqRepeatLen*seqRepeatCount {
 		return ""
 	}
-	// Try sequence lengths 3 then 4; the tail is the most recent SOP.
+
 	for L := seqRepeatLen; L <= seqRepeatLen+1; L++ {
 		if n < L*seqRepeatCount {
 			continue
 		}
 		tail := v.history[n-L:]
-		// Cross-tool only: a single-tool repeat is the loop detector's /
-		// repetition tracker's domain, not this validator's charter.
+
 		distinct := make(map[string]bool, len(tail))
 		for _, e := range tail {
 			distinct[e.tool] = true
@@ -464,12 +368,7 @@ func (v *toolSequenceValidator) checkRepeatedSequence() string {
 					match = false
 					break
 				}
-				// #3050: the fingerprint must repeat the same TARGETS, not
-				// just the same tool names - a normal cross-file
-				// read -> edit -> verify loop is three different jobs, not
-				// one SOP re-issued by hand. Compare filePath when the tail
-				// entry carries one; entries without a path (e.g. plain
-				// run_command) match on tool name alone, as before.
+
 				if tail[j].filePath != "" && v.history[i+j].filePath != tail[j].filePath {
 					match = false
 					break
@@ -497,7 +396,6 @@ func (v *toolSequenceValidator) checkRepeatedSequence() string {
 	return ""
 }
 
-// parseArgsMap safely parses tool call arguments JSON into a map.
 func parseArgsMap(args []byte) map[string]interface{} {
 	if len(args) == 0 {
 		return nil
@@ -509,16 +407,15 @@ func parseArgsMap(args []byte) map[string]interface{} {
 	return m
 }
 
-// extractPrimaryPath extracts the primary file path argument from common tool calls.
 func extractPrimaryPath(toolName string, args map[string]interface{}) string {
 	if args == nil {
 		return ""
 	}
-	// Most tools use "path" as the primary file argument
+
 	if p, ok := args["path"].(string); ok && p != "" {
 		return p
 	}
-	// read_file uses "path", glob uses "directory"
+
 	if p, ok := args["file_path"].(string); ok && p != "" {
 		return p
 	}
@@ -528,7 +425,6 @@ func extractPrimaryPath(toolName string, args map[string]interface{}) string {
 	return ""
 }
 
-// hasIntArg checks if an integer argument exists and has a non-zero value.
 func hasIntArg(args map[string]interface{}, key string) bool {
 	if args == nil {
 		return false

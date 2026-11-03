@@ -12,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Policy-rule denials must be auditable (sa-17 / policy-engine governance):
-// the user's OWN deny decisions were recorded, but the user's CONFIGURED
-// rules firing left zero trace - the single most compliance-relevant
-// permission event was the only silent one.
 func TestPolicyDeniedIsAudited(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	t.Setenv(auditLedgerEnv, path)
@@ -54,8 +50,6 @@ func TestPolicyDeniedIsAudited(t *testing.T) {
 	}
 }
 
-// Default-off contract preserved: without the ledger env var the added
-// calls stay inert no-ops.
 func TestPolicyDeniedAuditInertWhenLedgerOff(t *testing.T) {
 	t.Setenv(auditLedgerEnv, "")
 	st := newAuditLedgerState()
@@ -70,5 +64,5 @@ func TestPolicyDeniedAuditInertWhenLedgerOff(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("deny must still error with the ledger off")
 	}
-	// No panic and nothing written (state inert) is the contract.
+
 }

@@ -1,80 +1,40 @@
 package agent
 
-// Attribution Experiment State - Dov-inspired intervention-driven
-// validation of causal attribution hypotheses (r405).
-//
-// Research: "Dov: Intervention-driven Auto Debugging for LLM-agent Systems"
-// (2026, openreview 99fe1321). Key critique: log-only debugging ATTRIBUTES a
-// failure to a step but never VALIDATES the attribution - the agent may keep
-// fixing a non-root-cause and burn repair iterations.
-//
-// THE GAP IN GGCODE (r405 grep-confirmed):
-// causal_attribution.go computes a CRS-scored top suspect and injects "review
-// that change / consider revert and re-verify" as free text - nothing tracks
-// whether the revert+rerun experiment ever ran, and nothing interprets the
-// rerun outcome back into a CONFIRMED/REFUTED verdict on the attribution.
-//
-// WHAT THIS STATE MACHINE DOES (guidance-injection pattern, isomorphic to the
-// reproducer lifecycle - but the validated object is the ATTRIBUTION, not the
-// bug fix):
-//  1. arm(suspect, verifyCmd): when causal attribution names a top suspect,
-//     remember the suspect file and the exact failing command, and inject the
-//     minimal-intervention protocol (stash suspect -> rerun -> restore).
-//  2. observeCommand: watch subsequent command-channel executions:
-//     - an intervention (git stash push / git restore / git checkout -- /
-//       undo_edit) flips the experiment to intervened.
-//     - a rerun of the verify command while intervened is the experimental
-//       read-out: still-failing => attribution REFUTED (stop fixing the
-//       suspect), now-passing => attribution CONFIRMED.
-//  3. The verdict carries a restore reminder unless a git stash pop/apply
-//     was already observed.
-//
-// Design constraints:
-//   - Zero LLM cost (string matching only).
-//   - At most 1 active experiment, 2 arms, 2 verdicts per run.
-//   - Gives up after attrExpGiveUpSteps command-channel steps without a
-//     read-out, so a stale hypothesis never nags the loop.
-//   - Non-blocking: guidance appended to the tool result.
-
 import (
 	"fmt"
 	"strings"
 )
 
 const (
-	attrExpMaxArms      = 2  // total experiments armed per run
-	attrExpMaxVerdicts  = 2  // total verdicts injected per run
-	attrExpGiveUpSteps  = 25 // command-channel steps before abandoning
-	attrExpMinSubstring = 12 // min normalized length for substring rerun match
+	attrExpMaxArms      = 2
+	attrExpMaxVerdicts  = 2
+	attrExpGiveUpSteps  = 25
+	attrExpMinSubstring = 12
 )
 
 type attributionExperimentState struct {
 	active    bool
-	suspect   string // file path of the attributed top suspect
-	verifyCmd string // normalized failing command to rerun
+	suspect   string
+	verifyCmd string
 
-	intervened bool // a revert of the suspect was observed
-	restored   bool // git stash pop/apply observed after the intervention
-	concluded  bool // verdict already injected for this experiment
+	intervened bool
+	restored   bool
+	concluded  bool
 
-	steps     int  // command-channel steps observed since arm
-	arms      int  // total arms this run
-	verdicts  int  // total verdicts this run
-	armHinted bool // protocol hint injected for the current experiment
+	steps     int
+	arms      int
+	verdicts  int
+	armHinted bool
 }
 
 func newAttributionExperimentState() *attributionExperimentState {
 	return &attributionExperimentState{}
 }
 
-// reset clears state for a new run.
 func (s *attributionExperimentState) reset() {
 	*s = attributionExperimentState{}
 }
 
-// arm records a fresh causal attribution as a testable hypothesis and
-// returns the experiment-protocol guidance, or "" when the experiment must
-// not be armed (budget exhausted, duplicate hypothesis, empty suspect).
 func (s *attributionExperimentState) arm(suspect, verifyCmd string) string {
 	suspect = strings.TrimSpace(suspect)
 	verifyCmd = strings.TrimSpace(verifyCmd)
@@ -82,7 +42,7 @@ func (s *attributionExperimentState) arm(suspect, verifyCmd string) string {
 		return ""
 	}
 	if s.active && s.suspect == suspect && normalizeVerifyCmd(s.verifyCmd) == normalizeVerifyCmd(verifyCmd) {
-		return "" // same hypothesis re-armed: no repeat nagging
+		return ""
 	}
 	if s.arms >= attrExpMaxArms || s.verdicts >= attrExpMaxVerdicts {
 		return ""
@@ -104,13 +64,9 @@ func (s *attributionExperimentState) arm(suspect, verifyCmd string) string {
 		suspect, verifyCmd)
 }
 
-// observeCommand inspects a command-channel tool execution for experiment
-// events (intervention, restore, rerun read-out) and returns verdict
-// guidance or "".
 func (s *attributionExperimentState) observeCommand(toolName, cmd string, errored bool, content string) string {
 	if !s.active || s.concluded {
-		// Still track restore even when idle: a stray pop after a concluded
-		// experiment must not re-trigger the restore reminder later.
+
 		if isRestoreIntervention(toolName, cmd) {
 			s.restored = true
 		}
@@ -135,8 +91,6 @@ func (s *attributionExperimentState) observeCommand(toolName, cmd string, errore
 	return s.readOut(errored, content)
 }
 
-// readOut concludes the experiment from the rerun outcome and formats the
-// verdict guidance.
 func (s *attributionExperimentState) readOut(errored bool, content string) string {
 	s.active = false
 	s.concluded = true
@@ -161,21 +115,6 @@ func (s *attributionExperimentState) readOut(errored bool, content string) strin
 	return sb.String()
 }
 
-// isRevertIntervention reports whether the tool execution removes the
-// suspect's change from the working tree: a stash push (bare `git stash`
-// included), git restore, git checkout --, or the undo_edit tool.
-//
-// #3150: the revert must actually touch the SUSPECT. A revert of an
-// unrelated file (git restore other.go, git stash push -- other.go) must
-// not flip the experiment to intervened, or a passing rerun would inject
-// a false CONFIRMED verdict on an innocent change. Pathspec-limited
-// reverts count only when the suspect path appears in the command; a
-// bare stash push (no pathspec after --) reverts everything, suspect
-// included. undo_edit cannot name its target from cmd alone, so it too
-// counts only when the suspect path is present (the command-channel gate
-// does not route undo_edit here today - this is the defensive branch if
-// that ever changes; a missed true intervention just lets the experiment
-// give up, while a false one actively misleads).
 func isRevertIntervention(toolName, cmd, suspect string) bool {
 	c := strings.ToLower(cmd)
 	suspectHit := func() bool {
@@ -187,16 +126,16 @@ func isRevertIntervention(toolName, cmd, suspect string) bool {
 	if strings.Contains(c, "git stash") {
 		for _, drop := range []string{"pop", "apply", "list", "show", "drop", "clear"} {
 			if strings.Contains(c, "git stash "+drop) {
-				return false // stash-management, not a push
+				return false
 			}
 		}
 		if strings.TrimSpace(lastPathspec(c)) != "" {
-			return suspectHit() // pathspec-limited stash: suspect must be named
+			return suspectHit()
 		}
 		if len(stashPushPathspecs(c)) > 0 {
-			return suspectHit() // #3161: git allows `git stash push <path>` without `--`
+			return suspectHit()
 		}
-		return true // bare stash push reverts everything, suspect included
+		return true
 	}
 	if strings.Contains(c, "git restore ") || strings.Contains(c, "git checkout --") {
 		return suspectHit()
@@ -204,12 +143,6 @@ func isRevertIntervention(toolName, cmd, suspect string) bool {
 	return false
 }
 
-// suspectNamedIn reports whether the suspect path is named in the command
-// with path boundaries: a whitespace-separated token equals the suspect path
-// or equals it after stripping a leading "./" (cwd-relative spelling of the
-// same file). #3161: substring (or slash-suffix) matching would let suspect
-// "util/files.go" match the unrelated longer path "cmd/util/files.go" -
-// a different file - and flip the verdict.
 func suspectNamedIn(c, suspect string) bool {
 	sl := strings.ToLower(strings.TrimSpace(suspect))
 	if sl == "" {
@@ -220,8 +153,7 @@ func suspectNamedIn(c, suspect string) bool {
 		if tok == sl || strings.TrimPrefix(tok, "./") == sl {
 			return true
 		}
-		// JSON-embedded args (undo_edit `{"file":"<path>"}`): the suspect
-		// path delimited by quotes carries its own boundary.
+
 		if strings.Contains(tok, `"`+sl+`"`) {
 			return true
 		}
@@ -229,12 +161,6 @@ func suspectNamedIn(c, suspect string) bool {
 	return false
 }
 
-// stashPushPathspecs extracts pathspec tokens from a `git stash push`
-// command line (lowercased): non-flag arguments that follow "push",
-// skipping flags (-u, -a, -p, -k, -q, --include-untracked, ...) and the
-// message value consumed by -m/--message/-- <msg is never a pathspec>.
-// #3161: git accepts `git stash push <path>` without the `--` separator,
-// which must be treated as pathspec-limited, not bare.
 func stashPushPathspecs(c string) []string {
 	fields := strings.Fields(c)
 	start := -1
@@ -245,11 +171,11 @@ func stashPushPathspecs(c string) []string {
 		}
 	}
 	if start < 0 {
-		return nil // bare `git stash` (implicit push) has no pathspec
+		return nil
 	}
 	var specs []string
-	skipValue := false // next token is the value of -m/--message
-	inMsg := false     // inside a space-spanning quoted message value
+	skipValue := false
+	inMsg := false
 	for _, f := range fields[start:] {
 		if inMsg {
 			if strings.HasSuffix(f, `"`) {
@@ -260,7 +186,7 @@ func stashPushPathspecs(c string) []string {
 		if skipValue {
 			skipValue = false
 			if strings.HasPrefix(f, `"`) && !strings.HasSuffix(f, `"`) {
-				inMsg = true // message opened with a quote, spans tokens
+				inMsg = true
 			}
 			continue
 		}
@@ -268,7 +194,7 @@ func stashPushPathspecs(c string) []string {
 		case f == "-m" || f == "--message":
 			skipValue = true
 		case strings.HasPrefix(f, "-"):
-			// -u/-a/-p/-k/-q/--include-untracked/etc: flags, not pathspecs
+
 		default:
 			specs = append(specs, f)
 		}
@@ -276,9 +202,6 @@ func stashPushPathspecs(c string) []string {
 	return specs
 }
 
-// lastPathspec returns whatever follows the last "--" separator in a
-// (lowercased) git command line: git limits the operation to those
-// pathspecs. Empty when there is no separator or nothing after it.
 func lastPathspec(c string) string {
 	idx := strings.LastIndex(c, "--")
 	if idx < 0 {
@@ -287,8 +210,6 @@ func lastPathspec(c string) string {
 	return c[idx+2:]
 }
 
-// isRestoreIntervention reports whether the command restores a stashed/
-// reverted change.
 func isRestoreIntervention(toolName, cmd string) bool {
 	if toolName == "undo_edit" {
 		return false
@@ -298,9 +219,6 @@ func isRestoreIntervention(toolName, cmd string) bool {
 		strings.Contains(c, "git stash apply")
 }
 
-// isRerunOf reports whether cmd is an execution of the stored verify
-// command: normalized equality, or containment when the shorter side is
-// long enough to be meaningful (cd-prefixes and trailing redirects differ).
 func isRerunOf(cmd, verifyCmd string) bool {
 	a := normalizeVerifyCmd(cmd)
 	b := normalizeVerifyCmd(verifyCmd)
@@ -316,8 +234,6 @@ func isRerunOf(cmd, verifyCmd string) bool {
 	return len(a) >= attrExpMinSubstring && strings.Contains(b, a)
 }
 
-// normalizeVerifyCmd canonicalizes a command for rerun comparison:
-// lowercase, whitespace-collapsed, trailing redirect noise stripped.
 func normalizeVerifyCmd(cmd string) string {
 	c := strings.Join(strings.Fields(strings.ToLower(cmd)), " ")
 	c = strings.TrimSuffix(c, "2>&1")

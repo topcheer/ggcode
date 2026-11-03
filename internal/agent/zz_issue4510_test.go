@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4510: the negate object arm excluded '.', so "don't touch config.yaml"
-// truncated to "...config" and the dotted filename never became an anchor
-// (fail-open for the most common refusal shape). The arm now allows '.' and
-// trimExcerptAtSentence cuts the greedy match at the next sentence boundary.
 func TestIssue4510_DottedFilenameBecomesAnchor(t *testing.T) {
 	text := "don't touch config.yaml during the cleanup"
 	excerpts := refusalNegatePattern.FindAllString(text, -1)
@@ -35,8 +31,6 @@ func TestIssue4510_DottedFilenameBecomesAnchor(t *testing.T) {
 		t.Fatalf("no excerpt carried the dotted filename: %v", excerpts)
 	}
 
-	// Sentence periods still terminate the match: a multi-sentence line
-	// yields one candidate per negation sentence (old behavior preserved).
 	multi := "don't touch internal/auth/anything.go. Only use pattern Y. Never run git push --force."
 	seen := map[string]bool{}
 	for _, e := range refusalNegatePattern.FindAllString(multi, -1) {

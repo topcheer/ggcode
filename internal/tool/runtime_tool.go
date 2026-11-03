@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// RuntimeStatusProvider provides runtime status information to the runtime tool.
-// Each host (TUI, daemon, desktop) implements this to expose its current state.
 type RuntimeStatusProvider interface {
 	RuntimeSessionID() string
 	RuntimePermissionMode() string
@@ -22,7 +20,6 @@ type RuntimeStatusProvider interface {
 	RuntimeMobile() RuntimeMobileInfo
 }
 
-// RuntimeIMAdapterInfo describes one IM adapter's status.
 type RuntimeIMAdapterInfo struct {
 	Name     string `json:"name"`
 	Platform string `json:"platform"`
@@ -31,7 +28,6 @@ type RuntimeIMAdapterInfo struct {
 	Channel  string `json:"channel,omitempty"`
 }
 
-// RuntimeMobileInfo describes the mobile tunnel connection status.
 type RuntimeMobileInfo struct {
 	Connected   bool   `json:"connected"`
 	RelayURL    string `json:"relay_url,omitempty"`
@@ -39,8 +35,6 @@ type RuntimeMobileInfo struct {
 	ConnectCode string `json:"connect_code,omitempty"`
 }
 
-// RuntimeTool lets the LLM query runtime status: session ID, permission mode,
-// IM adapters, mobile connection, and provider configuration.
 type RuntimeTool struct {
 	Provider RuntimeStatusProvider
 }
@@ -92,7 +86,6 @@ func (f runtimeStatusFormatter) String() string {
 		b = append(b, fmt.Sprintf("  Max output tokens: %d\n", mt)...)
 	}
 
-	// IM adapters
 	adapters := p.RuntimeIMAdapters()
 	if len(adapters) == 0 {
 		b = append(b, "  IM adapters: none configured\n"...)
@@ -114,7 +107,6 @@ func (f runtimeStatusFormatter) String() string {
 		}
 	}
 
-	// Mobile
 	mobile := p.RuntimeMobile()
 	if mobile.Connected {
 		b = append(b, "  Mobile: connected\n"...)

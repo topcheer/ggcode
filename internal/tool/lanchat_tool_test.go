@@ -20,10 +20,9 @@ func newTestLanChatTool(t *testing.T) (LanChatTool, *lanchat.Hub) {
 	hub := lanchat.NewHub("node-self", "tui", "http://localhost:1", "", store, lanchat.WorkspaceMeta{
 		Workspace: "/tmp/test-project",
 	})
-	// Use a very short HTTP timeout so tests that try to send to non-existent
-	// endpoints (localhost:2, etc.) fail fast instead of waiting 2s each.
+
 	hub.SetHTTPTimeout(50 * time.Millisecond)
-	// Eliminate retry delays so postToPeerWithRetry doesn't sleep 1s between attempts
+
 	origRetryDelay := lanchat.PeerRetryDelayFn
 	lanchat.PeerRetryDelayFn = func(int) time.Duration { return 0 }
 	t.Cleanup(func() { lanchat.PeerRetryDelayFn = origRetryDelay })
@@ -50,8 +49,6 @@ func TestLanChatListIncludesTeam(t *testing.T) {
 		t.Fatalf("doList returned error: %s", result.Content)
 	}
 
-	// doList output format: "Participants (N):\n<json array>"
-	// Strip the header line to parse the JSON array
 	output := result.Content
 	idx := strings.Index(output, "[")
 	if idx < 0 {
@@ -82,7 +79,6 @@ func TestLanChatListIncludesTeam(t *testing.T) {
 func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 
-	// Add an online participant so broadcast has a target
 	hub.HandlePresence(lanchat.Participant{
 		NodeID:    "node-bob",
 		HumanNick: "bob_dev",
@@ -91,8 +87,6 @@ func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 		Online:    true,
 	})
 
-	// broadcast should not be rate-limited for human (transport fails in test,
-	// but that's expected — we only verify no rate-limit error)
 	result, err := tool.doSend(context.Background(), "hello", []string{"*"}, false, "")
 	if err != nil {
 		t.Fatalf("doSend with '*' returned error: %v", err)
@@ -105,7 +99,6 @@ func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 func TestLanChatSendEmptyNodeIDTriggersError(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
-	// Empty toNodeID is now an error (recipient required)
 	result, err := tool.doSend(context.Background(), "hello", nil, false, "")
 	if err != nil {
 		t.Fatalf("doSend with nil toNodeIDs returned error: %v", err)
@@ -140,7 +133,6 @@ func TestLanChatSendTeamUnknownTeam(t *testing.T) {
 		Online:    true,
 	})
 
-	// Try to send to non-existent team
 	result, err := tool.doSendTeam(context.Background(), "hello", "nonexistent", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -148,7 +140,7 @@ func TestLanChatSendTeamUnknownTeam(t *testing.T) {
 	if !result.IsError {
 		t.Errorf("send to unknown team should return error")
 	}
-	// Should list valid teams
+
 	if !strings.Contains(result.Content, "platform") {
 		t.Errorf("error should list valid teams including 'platform', got: %s", result.Content)
 	}
@@ -181,7 +173,6 @@ func TestLanChatSendTeamRequiresTeam(t *testing.T) {
 func TestLanChatSendTeamRequiresContentAndTeam(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
-	// Both empty
 	result, err := tool.doSendTeam(context.Background(), "", "", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -194,18 +185,15 @@ func TestLanChatSendTeamRequiresContentAndTeam(t *testing.T) {
 func TestLanChatSendTeamSkipsSelf(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 
-	// Self is in "platform" team
 	hub.SetNickRoleTeam("alice", "frontend", "platform")
 
-	// No other peers — should report 0 members even though self is in the team
 	result, err := tool.doSendTeam(context.Background(), "hello team", "platform", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should error since no other online team members exist (self is skipped)
+
 	if !result.IsError {
-		// Actually with 0 members it might not error but report 0 sent
-		// Let me check: doSendTeam checks len(members) == 0 → error
+
 	}
 	if !result.IsError {
 		t.Errorf("send_team with only self should error (0 members after skipping self)")
@@ -216,7 +204,6 @@ func TestLanChatSetIdentity(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 	hub.SetNickRoleTeam("alice", "frontend", "platform")
 
-	// Change all three
 	result, err := tool.doSetIdentity("bob", "backend", "infra")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -239,7 +226,6 @@ func TestLanChatSetIdentityPartial(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 	hub.SetNickRoleTeam("alice", "frontend", "platform")
 
-	// Only change role, keep nick and team
 	result, err := tool.doSetIdentity("", "backend", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -270,19 +256,17 @@ func TestLanChatSetIdentityRequiresOne(t *testing.T) {
 	}
 }
 
-// #1693 case 1: doSendTeam must follow the sender identity for toRole -
-// human send_team landed in every member AGENT inbox (#845 same-class).
 func TestSendTeamToRoleFollowsIdentity1693(t *testing.T) {
-	// Static pin: the branch must exist and assign RoleHuman when not asAgent.
+
 	src, err := os.ReadFile("lanchat_tool.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	needle := "toRole = lanchat.RoleHuman // human sender: land in the chat panel"
+	needle := "toRole = lanchat.RoleHuman"
 	if !bytes.Contains(src, []byte(needle)) {
 		t.Fatal("doSendTeam must set RoleHuman for human-identity sends (#845/#1693)")
 	}
-	// And the hardcoded default must no longer be unconditional.
+
 	if bytes.Contains(src, []byte("toRole := lanchat.RoleAgent // default: reach their agent")) {
 		t.Fatal("stale hardcoded toRole comment still present")
 	}

@@ -6,14 +6,8 @@ import (
 	"testing"
 )
 
-// zz_issue2880_test.go - regression probe for #2880: multi_file_edit must
-// flag oversized old_text/new_text at the same 4KB warn threshold as
-// edit_file and multi_edit_file; the 4KB-16KB range used to pass silently
-// (only the 16KB severe threshold was checked).
 func TestIssue2880MultiFileEditWarnTierAlignment(t *testing.T) {
-	// 6KB old_text: above the 4KB warn threshold, below the 16KB severe
-	// threshold, with total payload under 8KB so the total-size hint cannot
-	// contaminate the result.
+
 	big := strings.Repeat("x", 6*1024)
 	payload, err := json.Marshal(map[string]any{
 		"files": []any{
@@ -44,8 +38,6 @@ func TestIssue2880MultiFileEditWarnTierAlignment(t *testing.T) {
 func TestIssue2880ThreeEditToolsConsistent(t *testing.T) {
 	big := strings.Repeat("x", 6*1024)
 
-	// Same oversized old_text through edit_file / multi_edit_file /
-	// multi_file_edit: all three must produce a hint.
 	editFileArgs, _ := json.Marshal(map[string]any{
 		"file_path": "/tmp/a.go", "old_text": big, "new_text": "y",
 	})

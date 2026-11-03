@@ -1,10 +1,5 @@
 package agent
 
-// #3363 probes: the pseudo-version regex's 3-digit N-segment cap let
-// base-tag pins with N>=1000 (commits since the base tag) fall through to
-// semver comparison and resurrect the #3360 false-Critical. N has no spec
-// upper bound; the timestamp segment remains the distinguishing mark.
-
 import "testing"
 
 func TestIssue3363_LargeNPseudoPinsNotFlagged(t *testing.T) {
@@ -25,15 +20,14 @@ func TestIssue3363_LargeNPseudoPinsNotFlagged(t *testing.T) {
 
 func TestIssue3363_NonPseudoNotExempted(t *testing.T) {
 	vuln := vulnEntry{maxSafeV: "0.31.0"}
-	// Prereleases of the vulnerable line stay vulnerable - the exemption
-	// must not swallow anything lacking the 14-digit timestamp mark.
+
 	if isGoPseudoVersion("v0.30.0-rc1") {
 		t.Fatal("plain prerelease must not match the pseudo-version regex")
 	}
 	if !isVulnerableVersion("v0.30.0-rc1", vuln) {
 		t.Fatal("prerelease below maxSafeV must stay vulnerable")
 	}
-	// Sanity: normal vulnerable release still flagged, patched release not.
+
 	if !isVulnerableVersion("v0.30.2", vuln) {
 		t.Fatal("version below maxSafeV must stay vulnerable")
 	}

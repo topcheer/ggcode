@@ -6,7 +6,7 @@ import (
 )
 
 func TestScanScopeCreep_BenignText(t *testing.T) {
-	// Text that stays within scope - should not trigger.
+
 	texts := []string{
 		"I have completed the analysis using the three databases you specified. Here are the results.",
 		"The sales data for Q4 shows a 15% increase. Here is the formatted report.",
@@ -63,7 +63,7 @@ func TestScanScopeCreep_Justification(t *testing.T) {
 }
 
 func TestScanScopeCreep_NoticedOtherIssues(t *testing.T) {
-	// "Noticed other issues" justification pattern.
+
 	text := "I noticed some other issues that I also fixed."
 	hits := scanScopeCreep(text)
 	if len(hits) < 1 {
@@ -105,7 +105,7 @@ func TestScanScopeCreep_EmptyText(t *testing.T) {
 
 func TestMaybeWarnScopeCreep_BelowThreshold(t *testing.T) {
 	a := &Agent{scopeCreep: newScopeCreepState()}
-	// Single signal - below threshold of 2.
+
 	text := "While I'm at it, this is one signal."
 	msg := a.maybeWarnScopeCreep(text)
 	if msg != "" {
@@ -115,7 +115,7 @@ func TestMaybeWarnScopeCreep_BelowThreshold(t *testing.T) {
 
 func TestMaybeWarnScopeCreep_AtThreshold(t *testing.T) {
 	a := &Agent{scopeCreep: newScopeCreepState()}
-	// Two signals in one text.
+
 	text := "While I'm at it, let me also clean up the imports. I've gone ahead and reformatted everything too."
 	msg := a.maybeWarnScopeCreep(text)
 	if msg == "" {
@@ -129,7 +129,7 @@ func TestMaybeWarnScopeCreep_AtThreshold(t *testing.T) {
 func TestMaybeWarnScopeCreep_MaxWarnings(t *testing.T) {
 	a := &Agent{scopeCreep: newScopeCreepState()}
 	text := "While I'm at it, let me also fix this. I've gone ahead and cleaned up the imports too."
-	// First two warnings should fire.
+
 	msg1 := a.maybeWarnScopeCreep(text)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
@@ -138,7 +138,7 @@ func TestMaybeWarnScopeCreep_MaxWarnings(t *testing.T) {
 	if msg2 == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third should be suppressed.
+
 	msg3 := a.maybeWarnScopeCreep(text)
 	if msg3 != "" {
 		t.Error("expected no warning after max warnings exceeded")
@@ -155,11 +155,10 @@ func TestScopeCreepState_Reset(t *testing.T) {
 }
 
 func TestScanScopeCreep_Deduplication(t *testing.T) {
-	// Same pattern repeated should not produce duplicate hits.
+
 	text := "While I'm at it, let me fix this. While I'm at it, let me fix that."
 	hits := scanScopeCreep(text)
-	// The "while I'm at it" pattern should match but excerpts may differ,
-	// so we mainly verify it doesn't crash or produce excessive duplicates.
+
 	if len(hits) > 10 {
 		t.Errorf("too many hits (dedup not working): %d", len(hits))
 	}

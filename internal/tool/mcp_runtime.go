@@ -189,9 +189,6 @@ func (t GetMCPPromptTool) Execute(ctx context.Context, input json.RawMessage) (R
 		}
 	}
 	out := strings.TrimSpace(sb.String())
-	// #1694 case 4: prompts are as arbitrarily large as resources (the
-	// resource path caps at 50KB with the exact same rationale) - an
-	// uncapped prompt dump fills the context in one call.
 	const maxMCPPromptBytes = 50 * 1024
 	if len(out) > maxMCPPromptBytes {
 		out = truncateUTF8Safe(out, maxMCPPromptBytes) +
@@ -270,12 +267,9 @@ func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage)
 		}
 	}
 	out := strings.TrimSpace(sb.String())
-	// Cap result size — MCP resources (database dumps, log files, etc.)
-	// can be arbitrarily large. 50KB matches mcpTool.Execute's cap.
 	const maxMCPResourceBytes = 50 * 1024
 	if len(out) > maxMCPResourceBytes {
-		// #568: byte slicing split multi-byte runes and left U+FFFD shards.
-		// Use the rune-boundary-safe truncator from #262's sibling path.
+
 		out = truncateUTF8Safe(out, maxMCPResourceBytes) +
 			fmt.Sprintf("\n\n[... MCP resource truncated: %d bytes total, showing first %d ...]",
 				len(out), maxMCPResourceBytes)
@@ -283,10 +277,6 @@ func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage)
 	return Result{Content: out}, nil
 }
 
-// joinOrNone joins names with ", ", or "(none)" when empty. #3177: the
-// list is capped by joinCapped (4KB) so a huge server enumeration cannot
-// flood the context in one call - same intent as the 50KB caps the
-// prompt/resource CONTENT paths already enforce.
 func joinOrNone(values []string) string {
 	if len(values) == 0 {
 		return "(none)"
@@ -294,12 +284,8 @@ func joinOrNone(values []string) string {
 	return joinCapped(values, maxListOutputBytes)
 }
 
-// maxListOutputBytes caps a joined name list (per list) so listing a
-// marketplace-aggregate MCP server stays context-cheap (#3177).
 const maxListOutputBytes = 4096
 
-// joinCapped joins values with ", " until the budget is spent, then
-// summarizes the remainder as "+N more" instead of streaming it.
 func joinCapped(values []string, maxBytes int) string {
 	var sb strings.Builder
 	shown := 0

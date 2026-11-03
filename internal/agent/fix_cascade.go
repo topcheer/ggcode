@@ -1,41 +1,5 @@
 package agent
 
-// Failed Fix Cascade Detection -- Wrong-Hypothesis Lock-In Prevention
-//
-// Research basis: Dead-end detection literature (moltq.chat 2026 industry
-// discussion, AgentDiet FSE 2026) identifies "wrong-hypothesis lock-in" as a
-// critical failure mode: the agent pursues a plausible but incorrect solution
-// path, makes incremental edits, runs verification, fails, then interprets
-// each failure as "my fix was incomplete" rather than "my hypothesis is wrong."
-//
-// The signature pattern is a cascade of edit->verify->fail cycles:
-//   1. Agent edits a file (addressing its hypothesis)
-//   2. Agent runs build/test/lint (verifies)
-//   3. Verification fails (but with a DIFFERENT error than before, because the
-//      code changed)
-//   4. Agent edits again in the same direction
-//   5. Repeat 2-4 without productive progress
-//
-// Existing ggcode systems do NOT detect this meta-pattern:
-//   - recurring_error.go: detects the EXACT SAME error fingerprint recurring.
-//     In a wrong-hypothesis lock-in, errors CHANGE with each edit (different
-//     line numbers, different symbols), so the fingerprint never matches.
-//   - loop_detect: catches consecutive IDENTICAL tool calls, but here each
-//     cycle involves different edit content and different error output.
-//   - convergence_lock: fires after successful verification (opposite scenario).
-//   - self_correction_gate: detects repeated edit-fail on the SAME file, but
-//     cascades often span multiple files as the agent's fix ripples outward.
-//   - compounding_failure: tracks aggregate cross-tool failure rate, not the
-//     edit->verify->fail cycle specifically.
-//
-// This detector fills the gap by tracking edit->verify->fail CYCLES regardless
-// of which specific errors or files are involved. After 3 such cycles, the
-// agent is very likely locked into a wrong hypothesis and should step back to
-// reconsider its approach from scratch.
-//
-// Design: zero LLM cost, deterministic state machine. Fires at most once per
-// run. Reset on new user turn.
-
 import (
 	"encoding/json"
 	"strconv"
@@ -44,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// strictVerifyCommands is the fix-cascade verification subset (#469):
-// build / test / lint only. Formatters (gofmt/prettier - they fail on
-// unrelated mid-refactor syntax errors) and bare task-runners (make /
-// just / task - "make deploy" is not verification) are excluded.
 var strictVerifyCommands = map[string]bool{
 	"go build": true, "go test": true, "go vet": true,
 	"cargo build": true, "cargo test": true, "cargo clippy": true,
@@ -56,16 +16,6 @@ var strictVerifyCommands = map[string]bool{
 	"golangci-lint": true, "eslint": true, "ruff": true,
 }
 
-// isStrictVerifyCommand reports whether cmd contains one of the strict
-// verify commands (#469). #1462-C: the #950 hardening (env stripping +
-// compound splitting, ef57cedf) was applied to the loose isVerifyCommand
-// but never synced here - `GOFLAGS="-p=1" go test ./...` (this repo's own
-// documented OOM-avoidance form) and `cd /app && go test` were invisible,
-// starving the cascade counter. Each segment is env-stripped and matched.
-// #1564-C: the third separator is mirrored too - `cat tests.txt | pytest -`
-// fed the whole pipeline to the prefix match and never counted; the loose
-// splitCompoundCommand already splits on && / ; / | (same quote-context
-// tradeoff accepted there).
 func isStrictVerifyCommand(cmd string) bool {
 	for _, seg := range strings.Split(cmd, "&&") {
 		for _, semi := range strings.Split(seg, ";") {
@@ -85,11 +35,6 @@ func isStrictVerifyCommand(cmd string) bool {
 	return false
 }
 
-// fixCascadeCheckCommand is the Agent-level wrapper that checks whether a
-// tool call result represents a verify command failure, and if so, records
-// it in the fix cascade state machine. Returns guidance if threshold reached.
-// content is the tool result text (needed for the async path's terminal-state
-// classification, mirroring correctionSpiral's #1773 case-4 wiring).
 func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError bool, content string) string {
 	if a.fixCascade == nil {
 		return ""
@@ -98,37 +43,19 @@ func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError boo
 		return a.fixCascadeCheckAsync(toolName, args, content)
 	}
 	cmd := extractCommandFromArgs(args)
-	// #469: fix-cascade uses the STRICT verification set; verify_hint's
-	// looser isVerifyCommand stays for its own counter-reset purpose.
+
 	if cmd == "" || !isStrictVerifyCommand(cmd) {
 		return ""
 	}
-	// #3530 second blind path: run_command that hits its timeout returns a
-	// NON-error handoff notice ("Automatically moved to background (job N)").
-	// Counting that as a successful verify would reset the cascade counter
-	// and zero editCount just before the real (failed) outcome arrives via
-	// read_command_output - the async path above then sees hadEdits=false
-	// and never counts the cycle. The handoff is not an outcome: skip it.
+
 	if !isError && strings.Contains(content, "Automatically moved to background") {
 		return ""
 	}
-	// Record the verify result. hadEdits is derived from editCount > 0.
+
 	hadEdits := a.fixCascade.editCount > 0
 	return a.fixCascade.recordVerify(hadEdits, isError)
 }
 
-// fixCascadeCheckAsync (#3530): the final outcome of a long verification
-// run arrives via wait_command / read_command_output / task_output, not the
-// originating run_command (which may itself have timed out into the
-// background with a non-error "moved-to-background" result). correctionSpiral
-// fixed this exact blind spot in #1773; the cascade detector kept the
-// run_command-only wiring and stayed silent in its highest-risk scenario -
-// long test suites, the very runs this repo's own guidance steers to
-// start_command. Same gateway, same discipline: only jobs registered as
-// verification (#1153 registry) and only TERMINAL snapshots count; the
-// tools' IsError describes the wait/read ACTION, not the job, so the
-// pass/fail verdict comes from psTerminalVerifyOutcome. A still-running
-// poll changes nothing (no reset, no increment).
 func (a *Agent) fixCascadeCheckAsync(toolName string, args []byte, content string) string {
 	switch toolName {
 	case "wait_command", "read_command_output", "task_output":
@@ -150,35 +77,19 @@ func (a *Agent) fixCascadeCheckAsync(toolName string, args []byte, content strin
 	if !terminal {
 		return ""
 	}
-	// Edit-count window: edits made while waiting belong to the SAME cycle
-	// (edit -> verify -> fail) - a failure after further edits is an even
-	// stronger lock-in signal, so the coarse editCount>0 form matches the
-	// synchronous semantics.
+
 	return a.fixCascade.recordVerify(a.fixCascade.editCount > 0, !passed)
 }
 
 const (
-	// cascadeThreshold: number of edit->verify->fail cycles before guidance fires.
-	// Research suggests 4-5 tool calls in the same direction rarely self-correct;
-	// 3 failed verify cycles with edits between them is the actionable threshold.
 	cascadeThreshold = 3
 )
 
-// fixCascadeState tracks edit->verify->fail cycles to detect wrong-hypothesis
-// lock-in -- the pattern where the agent repeatedly edits code and fails
-// verification, each time with different errors, because its fundamental
-// approach is wrong.
 type fixCascadeState struct {
-	// editCount tracks file edits since the last verify command. Reset when
-	// a verify command completes (success or failure).
 	editCount int
 
-	// failedVerifyCount tracks how many times a verify command has failed
-	// immediately after file edits. This is the cascade depth.
 	failedVerifyCount int
 
-	// guidanceFired tracks whether cascade guidance has been injected
-	// this run. Prevents repeated messages.
 	guidanceFired bool
 }
 
@@ -192,34 +103,23 @@ func (f *fixCascadeState) reset() {
 	f.guidanceFired = false
 }
 
-// recordEdit increments the edit counter. Called after a successful file edit.
 func (f *fixCascadeState) recordEdit() {
 	f.editCount++
 }
 
-// recordVerify processes a verification command result and returns guidance
-// if the cascade threshold has been reached.
-//
-// Parameters:
-//   - hadEdits: whether file edits occurred since the last verify
-//   - failed: whether this verification failed (IsError or exit code != 0)
-//
-// Returns guidance string if cascade threshold reached, empty string otherwise.
 func (f *fixCascadeState) recordVerify(hadEdits bool, failed bool) string {
 	if !failed {
-		// Successful verification resets the cascade counter -- the agent
-		// made progress. This mirrors convergence_lock logic.
+
 		f.failedVerifyCount = 0
 		f.editCount = 0
 		return ""
 	}
 
 	if hadEdits {
-		// An edit->verify->fail cycle: the agent changed code, tried to
-		// verify, and verification failed. This is a meaningful cascade step.
+
 		f.failedVerifyCount++
 	}
-	// Reset edit counter regardless -- the verify marks the end of a cycle.
+
 	f.editCount = 0
 
 	if f.failedVerifyCount >= cascadeThreshold && !f.guidanceFired {
@@ -231,8 +131,6 @@ func (f *fixCascadeState) recordVerify(hadEdits bool, failed bool) string {
 	return ""
 }
 
-// cascadeGuidance generates the guidance message injected when the cascade
-// threshold is reached.
 func cascadeGuidance(failedCount int) string {
 	return "[HYPOTHESIS LOCK-IN WARNING] " +
 		"You have completed " + strconv.Itoa(failedCount) + " edit->build->fail cycles, " +

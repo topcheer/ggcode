@@ -1,8 +1,5 @@
 package agent
 
-// Tests for the r405 attribution experiment state machine (Dov-inspired
-// intervention-driven validation of causal attributions).
-
 import (
 	"strings"
 	"testing"
@@ -65,9 +62,7 @@ func TestR405_RerunWithoutIntervention_NoVerdict(t *testing.T) {
 }
 
 func TestR405_UndoEditWithoutSuspectPath_NotIntervention(t *testing.T) {
-	// #3150: undo_edit cannot name its target file from cmd alone, so it
-	// no longer counts unconditionally - an undo of an UNRELATED edit must
-	// not arm a false CONFIRMED on the suspect.
+
 	s := r405Arm(t)
 	if g := s.observeCommand("undo_edit", `{"checkpoint_id":"cp1"}`, false, "reverted"); g != "" {
 		t.Fatalf("undo_edit observation must be silent, got %q", g)
@@ -75,8 +70,7 @@ func TestR405_UndoEditWithoutSuspectPath_NotIntervention(t *testing.T) {
 	if g := s.observeCommand("run_command", r405Verify+" 2>&1", false, "ok"); g != "" {
 		t.Fatalf("unverified undo_edit must not count as intervention, got %q", g)
 	}
-	// Defensive arm: if a future caller routes undo_edit with the suspect
-	// path in its args, it counts.
+
 	s2 := r405Arm(t)
 	s2.observeCommand("undo_edit", `{"file":"`+r405Suspect+`"}`, false, "reverted")
 	if g := s2.observeCommand("run_command", r405Verify, false, "ok"); !strings.Contains(g, "CONFIRMED") {
@@ -109,7 +103,7 @@ func TestR405_GiveUpAfterSteps(t *testing.T) {
 
 func TestR405_ArmBudget(t *testing.T) {
 	s := r405Arm(t)
-	// Different hypothesis arms again (conclude nothing: budget only).
+
 	if g := s.arm("internal/util/x.go", r405Verify); g == "" {
 		t.Fatal("second distinct hypothesis should arm")
 	}
@@ -126,9 +120,9 @@ func TestR405_RerunMatchTolerance(t *testing.T) {
 		{r405Verify, true},
 		{r405Verify + " 2>&1", true},
 		{"cd /repo && " + r405Verify, true},
-		{r405Verify + " -run TestGrep", true}, // superset rerun still counts
-		{"go build ./...", false},             // different command
-		{"echo", false},                       // too short for substring
+		{r405Verify + " -run TestGrep", true},
+		{"go build ./...", false},
+		{"echo", false},
 	}
 	for _, c := range cases {
 		if got := isRerunOf(c.cmd, r405Verify); got != c.want {

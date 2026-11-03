@@ -6,48 +6,18 @@ import (
 	"unicode"
 )
 
-// r453: Delegation Read-Back Handshake.
-//
-// Production-agent three-party handoff research (A2A task lifecycle
-// consensus states, read-back/hear-back protocols from aviation safety,
-// builder-validator separation) shows the highest-leverage failure window
-// in delegation is BEFORE the child starts: the parent writes acceptance
-// criteria, the child reads them, and nothing verifies the child's
-// UNDERSTANDING until the final result. r384 (delegation_acceptance.go)
-// guards the back end - the parent validates the result against the
-// author's criteria. This file guards the front end: the child must
-// restate the criteria in its own words before starting, and the
-// restatement is checked for per-criterion coverage deterministically.
-
 const readBackMarker = "=== DoD READ-BACK ==="
 
-// stripReadBackNudge removes a previously appended read-back nudge block
-// from a stored task (#3237). spawn_agent appends readBackNudge(task) to
-// the task before storing it; wait-side extraction must operate on the
-// ORIGINAL criteria, not on the nudge's restatement template lines, or
-// every rule-following sub-agent gets 5+ phantom MISSING verdicts. The
-// nudge is always appended at the end, so Cut strips it wholesale; a
-// marker echoed in the sub-agent's RESULT is untouched (only the task
-// side is cut). Idempotent and allocation-free when no marker is present.
 func stripReadBackNudge(task string) string {
 	if clean, _, ok := strings.Cut(task, readBackMarker); ok {
-		// TrimRight drops the blank separator the nudge prefixed before the
-		// marker; trailing whitespace has no extraction significance.
+
 		return strings.TrimRight(clean, " \t\n")
 	}
 	return task
 }
 
-// maxReadBackNudges mirrors the inline-tool-call nudge cap: the handshake
-// instruction is appended at spawn time only (once per task), so this
-// guards against a task text that already embeds the marker (re-spawn of
-// a literally re-sent task).
 const maxReadBackNudges = 1
 
-// readBackNudge returns the instruction block appended to a spawn task
-// when the task carries recognizable acceptance criteria. Empty string
-// when the task has no criteria section (nothing to read back) or the
-// marker is already present (idempotent re-spawn).
 func readBackNudge(task string) string {
 	if task == "" || strings.Count(task, readBackMarker) >= maxReadBackNudges {
 		return ""
@@ -67,7 +37,6 @@ func readBackNudge(task string) string {
 	return b.String()
 }
 
-// readBackCoverage classifies one criterion against the read-back text.
 type readBackCoverage int
 
 const (
@@ -77,22 +46,16 @@ const (
 )
 
 const (
-	// overlap thresholds on content-word sets: >=0.6 covered, >=0.3 fuzzy.
 	readBackPassThreshold  = 0.6
 	readBackFuzzyThreshold = 0.3
 )
 
-// readBackReport is the deterministic per-criterion comparison of the
-// child's restatement against the author's original criteria.
 type readBackReport struct {
 	Criteria []string
 	Verdicts []readBackCoverage
-	HadBlock bool // child produced a recognizable read-back block at all
+	HadBlock bool
 }
 
-// compareReadBack extracts the criteria from the task, locates the
-// read-back block in the child's response, and scores per-criterion
-// keyword overlap. Pure lexical, zero LLM cost.
 func compareReadBack(task, response string) readBackReport {
 	rep := readBackReport{Criteria: extractAcceptanceCriteria(task)}
 	if len(rep.Criteria) == 0 {
@@ -100,14 +63,14 @@ func compareReadBack(task, response string) readBackReport {
 	}
 	block := extractReadBackBlock(response)
 	if block == "" {
-		return rep // no block: HadBlock=false, all verdicts stay Miss
+		return rep
 	}
 	rep.HadBlock = true
 	blockWords := contentWordSet(block)
 	for _, c := range rep.Criteria {
 		words := contentWordSet(c)
 		if len(words) == 0 {
-			rep.Verdicts = append(rep.Verdicts, coveragePass) // nothing scoreable; don't nag
+			rep.Verdicts = append(rep.Verdicts, coveragePass)
 			continue
 		}
 		hit := 0
@@ -129,8 +92,6 @@ func compareReadBack(task, response string) readBackReport {
 	return rep
 }
 
-// extractReadBackBlock returns the text between the read-back marker and
-// the next markdown heading or end of response, whichever comes first.
 func extractReadBackBlock(response string) string {
 	idx := strings.Index(response, readBackMarker)
 	if idx < 0 {
@@ -143,15 +104,9 @@ func extractReadBackBlock(response string) string {
 	return rest
 }
 
-// readBackReminder builds the report block prepended to a completed
-// delegation result (before the acceptance checkpoint). Empty when the
-// task carries no criteria. When the child never produced a read-back
-// block the report says so - the parent then knows the front-end half of
-// the handshake was skipped and treats the builder's self-report with the
-// corresponding caution.
 func readBackReminder(task, result string) string {
 	if result == "" || strings.Contains(result, "=== DoD READ-BACK REPORT") {
-		return "" // already reported (re-poll)
+		return ""
 	}
 	rep := compareReadBack(task, result)
 	if len(rep.Criteria) == 0 {
@@ -191,10 +146,6 @@ func readBackReminder(task, result string) string {
 	return b.String()
 }
 
-// contentWordSet lowercases and tokenizes text into content words
-// (length > 2, minus common English stop words). Punctuation splits
-// tokens; English plurals are normalized to their stem (passes -> pass)
-// so a restatement does not have to copy the author's exact inflection.
 func contentWordSet(s string) map[string]bool {
 	stop := map[string]bool{
 		"the": true, "and": true, "for": true, "are": true, "but": true,
@@ -207,13 +158,7 @@ func contentWordSet(s string) map[string]bool {
 	for _, f := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
-		// CJK text has no spaces: FieldsFunc yields whole sentences as
-		// single tokens, so overlap degenerates to exact-match 0.0/1.0
-		// and any faithful paraphrase of a Chinese criterion scored
-		// MISSING - directly contradicting the protocol's own "restate
-		// in your own words" instruction (#3261). Split CJK runs into
-		// character bigrams ("测试必须" -> 测试 试必 必须) so overlap
-		// regains a continuous value range.
+
 		if hasCJKRun(f) {
 			addCJKBigrams(words, f)
 			continue
@@ -222,8 +167,7 @@ func contentWordSet(s string) map[string]bool {
 			continue
 		}
 		words[f] = true
-		// crude plural normalization: register both -s and -es stems so
-		// "pass" matches "passes" and "file" matches "files".
+
 		if stem := strings.TrimSuffix(f, "es"); len(stem) > 2 {
 			words[stem] = true
 		}
@@ -234,8 +178,6 @@ func contentWordSet(s string) map[string]bool {
 	return words
 }
 
-// hasCJKRun reports whether the token contains at least one Han, Hiragana,
-// Katakana, or Hangul character.
 func hasCJKRun(tok string) bool {
 	for _, r := range tok {
 		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
@@ -246,13 +188,6 @@ func hasCJKRun(tok string) bool {
 	return false
 }
 
-// addCJKBigrams registers character unigrams AND bigrams for each
-// contiguous CJK run in tok (a run of exactly one character registers just
-// that character). Non-CJK bytes within a mixed token break the runs.
-// Unigrams are included alongside bigrams because faithful Chinese
-// paraphrases routinely keep every content character while reshuffling
-// word order - bigrams alone still under-score those, which is what
-// short-criteria denominators punish most (#3261).
 func addCJKBigrams(words map[string]bool, tok string) {
 	var run []rune
 	flush := func() {

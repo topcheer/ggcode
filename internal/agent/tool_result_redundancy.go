@@ -1,48 +1,5 @@
 package agent
 
-// Tool Result Redundancy Detector
-//
-// Research basis: AgentDiet (arXiv 2509.23586, "Improving the Efficiency of
-// LLM Agent Systems through Trajectory Reduction") identifies "redundant
-// information" as a primary source of trajectory waste: "Duplicate or
-// near-duplicate content across tool calls. If two queries returned overlapping
-// records, only the unique content needs to be retained." AgentDiet showed
-// 39.9-59.7% input token reduction by pruning redundant/useless/expired info.
-//
-// The Alignment for Efficient Tool Calling paper (arXiv 2503.06708) identifies
-// "over-tool-reliance" - models invoke tools even when they possess sufficient
-// information already in context. Both failure modes share a root cause: the
-// agent re-gathers information it already has from prior tool results.
-//
-// Problem: AI coding agents frequently make tool calls whose results
-// substantially overlap with earlier tool results still in context. Examples:
-//   - Reading file A, then grep'ing the same file for a pattern (the grep
-//     output is a subset of what was already read)
-//   - Running git_log then git_show on a commit whose diff was already shown
-//     in the log output
-//   - Calling lsp_references then grep for the same symbol name
-//   - Reading a file then reading it again via a different path or with
-//     overlapping offset ranges
-//   - Running two searches that return overlapping result sets
-//
-// Each redundant call wastes: output tokens (generating the call), wall-clock
-// latency (waiting for the tool), and input tokens at every subsequent step
-// (the duplicate result stays in context). Over a multi-step trajectory this
-// compounds significantly.
-//
-// Gap: No existing detector tracks CONTENT-LEVEL overlap between tool results:
-//   - wasted_explore: tracks search → file-path utilization (paths only, not content)
-//   - redundant_read: detects exact same file re-read (path match, not content overlap)
-//   - futile_cycle: detects circular read working-sets between writes (set pattern)
-//   - loop_detect: detects exact argument match loops
-//   - tool_output_guard: handles result SIZE, not duplication
-//
-// Approach: Normalize each substantial tool result to a set of distinctive
-// lines (stripped, deduplicated, non-trivial). Compute Jaccard similarity
-// against a rolling window of prior result line-sets. If overlap exceeds a
-// threshold, inject a targeted nudge to use information already in context.
-// Zero LLM cost, deterministic.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -52,58 +9,44 @@ import (
 )
 
 const (
-	// trMinLines: minimum lines in a result to make overlap comparison
-	// meaningful. Results with fewer lines are too small to be worth tracking.
 	trMinLines = 5
 
-	// trOverlapThreshold: Jaccard similarity threshold for declaring results
-	// "redundant". 0.6 means 60% of the union is shared content.
 	trOverlapThreshold = 0.6
 
-	// trMaxWarnings: cap warnings per run to avoid noise.
 	trMaxWarnings = 2
 
-	// trWindowSize: number of recent results to retain for comparison.
 	trWindowSize = 8
 
-	// trMaxLineLen: lines longer than this are truncated before storage to
-	// bound memory and focus on meaningful code/content lines.
 	trMaxLineLen = 200
 )
 
-// trStatePollingTools are tools whose results legitimately change between
-// calls (CI status, git state, running command output, etc.). Even if their
-// output looks similar, re-querying is intentional — the agent is polling
-// for state changes. These must NOT be flagged as redundant.
 var trStatePollingTools = map[string]bool{
-	"ci_status":           true,  // CI pipeline status changes over time
-	"git_status":          true,  // working tree state changes
-	"git_log":             true,  // new commits may have arrived
-	"git_diff":            true,  // diff changes as files are edited
-	"read_command_output": true,  // background command output grows
-	"wait_command":        true,  // command output evolves
-	"list_commands":       true,  // background jobs change state
-	"task_list":           true,  // tasks change status
-	"task_output":         true,  // task output evolves
-	"list_agents":         true,  // agent status changes
-	"wait_agent":          true,  // agent result appears when done
-	"teammate_list":       true,  // teammate status changes
-	"teammate_results":    true,  // results appear when ready
-	"swarm_task_list":     true,  // task board state changes
-	"debug_log":           true,  // log ring buffer changes
-	"lsp_diagnostics":     true,  // diagnostics change after edits
-	"read_file":           false, // static files CAN be redundant (handled normally)
-	"lanchat":             true,  // chat messages arrive asynchronously
+	"ci_status":           true,
+	"git_status":          true,
+	"git_log":             true,
+	"git_diff":            true,
+	"read_command_output": true,
+	"wait_command":        true,
+	"list_commands":       true,
+	"task_list":           true,
+	"task_output":         true,
+	"list_agents":         true,
+	"wait_agent":          true,
+	"teammate_list":       true,
+	"teammate_results":    true,
+	"swarm_task_list":     true,
+	"debug_log":           true,
+	"lsp_diagnostics":     true,
+	"read_file":           false,
+	"lanchat":             true,
 }
 
-// toolResultEntry stores a normalized line-set from a prior tool result.
 type toolResultEntry struct {
 	toolName string
 	lines    map[string]bool
 	iter     int
 }
 
-// toolResultRedundancyState tracks tool results for content overlap detection.
 type toolResultRedundancyState struct {
 	entries        []toolResultEntry
 	warningsFired  int
@@ -120,13 +63,6 @@ func (t *toolResultRedundancyState) reset() {
 	t.lastWarnedIter = 0
 }
 
-// recordToolCall is the entry point used by the agent loop (#3698). It
-// applies the verification-rerun exemption before content-overlap analysis:
-// re-running build/test/lint commands in a fix loop is verification work —
-// the diff between near-identical outputs IS the decision signal — so the
-// "use existing context" nudge is semantically wrong there and would fight
-// verify_debt / postEditVerifyHint. Truly redundant re-verification is
-// already handled by redundant_reverify.go (with the #3588 blacklist).
 func (t *toolResultRedundancyState) recordToolCall(toolName string, args json.RawMessage, content string, iteration int) string {
 	if trIsVerifyRerun(toolName, args) {
 		return ""
@@ -134,8 +70,6 @@ func (t *toolResultRedundancyState) recordToolCall(toolName string, args json.Ra
 	return t.recordResult(toolName, content, iteration)
 }
 
-// trIsVerifyRerun reports whether this tool call is a build/test/lint
-// command rerun (run_command whose command matches isVerifyCommand).
 func trIsVerifyRerun(toolName string, args json.RawMessage) bool {
 	if toolName != "run_command" {
 		return false
@@ -144,12 +78,8 @@ func trIsVerifyRerun(toolName string, args json.RawMessage) bool {
 	return cmd != "" && isVerifyCommand(cmd)
 }
 
-// recordResult processes a tool result and checks for redundancy with prior results.
-// Returns a guidance message if significant overlap is detected, "" otherwise.
 func (t *toolResultRedundancyState) recordResult(toolName, content string, iteration int) string {
-	// State-polling tools (ci_status, git_status, wait_command, etc.) query
-	// time-varying state. Their results may look similar but legitimately
-	// need re-querying. Skip redundancy detection for these tools entirely.
+
 	if trStatePollingTools[toolName] {
 		return ""
 	}
@@ -165,20 +95,13 @@ func (t *toolResultRedundancyState) recordResult(toolName, content string, itera
 		return ""
 	}
 
-	// Check against prior entries.
 	for _, entry := range t.entries {
 		if len(entry.lines) < trMinLines {
 			continue
 		}
 		jaccard := trJaccard(lines, entry.lines)
 		if jaccard >= trOverlapThreshold {
-			// Avoid re-warning on consecutive iterations.
-			// #1855 case 2: this compared EQUALITY (iteration ==
-			// lastWarnedIter), which only suppressed same-iteration
-			// parallel duplicates - two warnings burned on iters N and
-			// N+1 while sustained redundancy stayed silent after. The
-			// comment's intent ("consecutive iterations" cooldown) needs
-			// adjacency suppression across iterations.
+
 			if t.warningsFired > 0 && iteration <= t.lastWarnedIter+1 {
 				t.storeEntry(toolName, content, iteration)
 				return ""
@@ -202,11 +125,10 @@ func (t *toolResultRedundancyState) recordResult(toolName, content string, itera
 	return ""
 }
 
-// storeEntry adds a result entry to the rolling window.
 func (t *toolResultRedundancyState) storeEntry(toolName, content string, iteration int) {
 	lines := trNormalize(content)
 	if len(lines) < trMinLines {
-		return // don't track tiny results
+		return
 	}
 	t.entries = append(t.entries, toolResultEntry{
 		toolName: toolName,
@@ -218,14 +140,12 @@ func (t *toolResultRedundancyState) storeEntry(toolName, content string, iterati
 	}
 }
 
-// trNormalize converts tool result content into a set of distinctive lines.
-// Strips whitespace, skips trivially short lines, and deduplicates.
 func trNormalize(content string) map[string]bool {
 	lines := make(map[string]bool)
 	for _, raw := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(raw)
 		if len(line) < 4 {
-			continue // skip blank/decorative lines
+			continue
 		}
 		if len(line) > trMaxLineLen {
 			line = line[:trMaxLineLen]
@@ -235,7 +155,6 @@ func trNormalize(content string) map[string]bool {
 	return lines
 }
 
-// trJaccard computes the Jaccard similarity between two line-sets.
 func trJaccard(a, b map[string]bool) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0

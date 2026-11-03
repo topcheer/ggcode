@@ -16,68 +16,31 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Parallel Tool Execution — inspired by LLMCompiler (Kim et al., ICML 2024,
-// arXiv:2312.04511) and the W&D framework (Lin et al., Salesforce, 2026,
-// arXiv:2602.07359).
-//
-// When the LLM returns multiple tool calls in a single response, independent
-// read-only tools can be executed concurrently instead of sequentially.
-// LLMCompiler showed 3.7x latency speedup; W&D found 3 parallel tools per
-// turn is optimal with 60% fewer turns to completion.
-//
-// Safety:
-//   - Only read-only tools are parallelized (same safe list as speculator)
-//   - Permission checks still run in the sequential loop
-//   - Post-processing (error-streak, overseer, ratchet) runs sequentially
-//   - Only the actual I/O (tool.Execute) is parallelized
-//   - Max 3 concurrent goroutines (W&D optimal width)
-
 const (
-	// parallelMaxConcurrent bounds the number of concurrent tool executions.
-	// W&D (arXiv:2602.07359) found 3 parallel tools per turn optimal.
 	parallelMaxConcurrent = 3
 )
 
-// preExecutedResult holds a result from parallel pre-execution.
 type preExecutedResult struct {
 	result   tool.Result
 	duration time.Duration
 }
 
-// preExecuteReadOnlyTools identifies read-only tool calls in the batch that
-// are NOT already in the speculative cache, and executes them concurrently.
-// Returns a map from tool call index to result.
-//
-// This function is safe because:
-//  1. Only read-only, idempotent tools are executed (no side effects)
-//  2. Permission checks are deferred to the sequential loop
-//  3. If permission denies a tool in the sequential loop, the pre-computed
-//     result is simply discarded (no harm from executing a read-only tool)
-//  4. Context cancellation propagates to all goroutines
-//
-// Context-fill-aware throttling: when the context window is getting full,
-// pre-execution is reduced or skipped to avoid pushing in multiple large
-// results simultaneously (research: "parallel tool results arrive in batches,
-// potentially pushing context length significantly").
 func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provider.ToolCallDelta) map[int]preExecutedResult {
 	if len(toolCalls) <= 1 {
 		return nil
 	}
 
-	// Context-fill-aware throttling: reduce or skip parallel pre-execution
-	// when the context window is under pressure. At 75%+ fill, a batch of
-	// 3 large results landing simultaneously could trigger compaction.
 	maxConcurrent := parallelMaxConcurrent
 	if a.contextManager != nil {
 		if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
 			fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
 			switch {
 			case fillRatio >= contextFillCritical:
-				// Context critically full — skip pre-execution entirely.
+
 				debug.Log("parallel", "skipping pre-execution: context fill %.0f%%", fillRatio*100)
 				return nil
 			case fillRatio >= contextFillHigh:
-				// High fill — reduce to single tool at a time.
+
 				maxConcurrent = 1
 				debug.Log("parallel", "reduced pre-execution to 1: context fill %.0f%%", fillRatio*100)
 			}
@@ -88,7 +51,7 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	if !ok || len(batch) == 0 {
 		return nil
 	}
-	// Cap at maxConcurrent to bound resource usage.
+
 	if len(batch) > maxConcurrent {
 		batch = batch[:maxConcurrent]
 	}
@@ -123,28 +86,12 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	return results
 }
 
-// pending is one read-only call queued for speculative pre-execution.
 type pending struct {
 	index int
 	name  string
 	args  json.RawMessage
 }
 
-// buildPreExecBatch selects the calls worth pre-executing. Scheduling guards
-// first: #1475-A used to drop ALL pre-execution when ANY mutating tool was
-// present - read_file X racing edit_file X handed back pre-edit content
-// unlabeled, and the model re-applied the edit. #1590-A/#1607-A/#1649/#1829
-// extended that to shell commands, delegate, sub-agent spawns and warp,
-// whose write sets are not statically knowable.
-//
-// Conflict-aware scheduling (parallel_scheduling.go): for file-scoped
-// mutators (edit_file/write_file/multi_edit_file/notebook_edit) the write
-// target IS knowable, so only reads whose scan scope covers the mutated
-// path are withheld; unrelated reads keep their parallel latency win (the
-// guard's own asymmetry note: FP = lost parallelism only). Colliding reads
-// fall back to the sequential loop, preserving emitted-order semantics
-// exactly as the serial path does. Speculative-cache and memoized hits are
-// skipped as redundant.
 func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending, bool) {
 	mutatedPaths, schedulable := partitionBatchForParallelism(toolCalls)
 	if !schedulable {
@@ -172,9 +119,6 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 	return batch, true
 }
 
-// preExecOne speculatively executes a single read-only call with a short
-// timeout; failures are logged and dropped - the sequential loop re-executes
-// them, so a dropped speculative result is never visible to the model.
 func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Duration, bool) {
 	if ctx.Err() != nil {
 		return tool.Result{}, 0, false
@@ -195,11 +139,6 @@ func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Du
 	return result, dur, true
 }
 
-// usePreExecutedWithPermission runs the permission check for a tool and,
-// if allowed, returns the pre-executed result. If permission is denied,
-// returns a denial message (discarding the pre-executed result safely).
-// This mirrors the permission logic in executeToolWithPermission but uses
-// the pre-computed result instead of calling executeTool.
 func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.ToolCallDelta, pre preExecutedResult) tool.Result {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
@@ -222,7 +161,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				IsError: true,
 			}
 		case permission.Ask:
-			// Mode-scoped memory + danger re-check, mirroring agent_tool.go (#1281).
+
 			if a.approvalMemory != nil && policy != nil {
 				a.approvalMemory.EnsureModeScope(policy.Mode())
 			}
@@ -232,7 +171,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				break
 			}
 			if onApproval != nil {
-				// Approval-fatigue circuit breaker, same policy as the serial path.
+
 				if a.askThrottle.ShouldSuppress(tc.Name, tc.Arguments) {
 					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "suppressed by ask throttle (repeated denial, parallel)", 0, "")
 					debug.Log("approval-throttle", "suppressed re-ask for %s (parallel, denied twice recently)", tc.Name)
@@ -243,7 +182,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
-					// ATR-2026-00118: denial is a first-class auditable event.
+
 					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate (parallel)", 0, "")
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
@@ -255,8 +194,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 					}
 				}
 				if resp.IsNonDecision() {
-					// #3370: mirror of the serial path - timeout/cancellation is
-					// fail-closed but never attributed to the user.
+
 					note := "approval timed out (no user response, parallel)"
 					if resp == permission.Cancelled {
 						note = "approval cancelled (run interrupted or request displaced, parallel)"
@@ -281,7 +219,6 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 		}
 	}
 
-	// Permission allowed — use pre-executed result. Emit metric with actual duration.
 	errMsg := ""
 	if pre.result.IsError {
 		errMsg = truncateString(pre.result.Content, 200)

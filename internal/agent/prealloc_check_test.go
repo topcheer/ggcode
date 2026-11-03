@@ -98,7 +98,7 @@ func process(items []int) []int {
 	}
 	return results
 }`
-	// Same code, should produce no new warnings (already existed).
+
 	warnings := checkMissingPrealloc("test.go", oldSrc, oldSrc)
 	if len(warnings) != 0 {
 		t.Fatalf("expected no delta warnings for unchanged code, got: %v", warnings)
@@ -133,7 +133,7 @@ func processMore(items []string) []string {
 	if len(warnings) == 0 {
 		t.Fatal("expected 1 delta warning for new append-in-loop")
 	}
-	// Should only flag "more", not "results" (already existed).
+
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "more") {
@@ -149,9 +149,7 @@ func processMore(items []string) []string {
 }
 
 func TestCheckMissingPrealloc_SameVarNameDifferentFunc(t *testing.T) {
-	// #1145: two functions declaring the same local slice name. The delta
-	// used a set keyed on varName only, so func A's pre-existing violation
-	// masked func B's brand-new one and the new warning was silently dropped.
+
 	oldSrc := `package main
 func collectA(items []int) []int {
 	var results []int
@@ -176,8 +174,7 @@ func collectB(items []string) []string {
 	return results
 }`
 	warnings := checkMissingPrealloc("test.go", oldSrc, newSrc)
-	// The new func B violation must survive the delta even though the
-	// varName "results" already existed in old content.
+
 	if len(warnings) == 0 {
 		t.Fatal("expected 1 delta warning for new same-named append-in-loop")
 	}
@@ -280,10 +277,6 @@ func TestCheckMissingPrealloc_EmptyContent(t *testing.T) {
 	}
 }
 
-// Issue #1103 regression: fA leaves a zero-capacity declaration on the
-// books; fB uses a DIFFERENT s that arrives as a parameter and fills it.
-// The old file-wide bare-name index matched fB's loop writes against fA's
-// declaration and emitted a misattributed suggestion about fB's parameter.
 func TestCheckMissingPrealloc_NoCrossFunctionCollision(t *testing.T) {
 	src := `package main
 
@@ -307,7 +300,6 @@ func fB(pairs []Pair, s []string) {
 	}
 }
 
-// Scoped collection must not suppress same-function detection.
 func TestCheckMissingPrealloc_SameFunctionStillDetected(t *testing.T) {
 	src := `package main
 
@@ -328,10 +320,6 @@ func collect(n int) []int {
 	}
 }
 
-// TestPreallocBreakLoopExempt pins #1480 case B: the header has always
-// promised a data-dependent-early-break exemption; now it exists - a loop
-// with break/continue/goto at any depth must NOT be flagged (the capacity
-// is unknowable, and the old advice pushed the agent to invent one).
 func TestPreallocBreakLoopExempt(t *testing.T) {
 	code := `package main
 func f(items []int) []int {
@@ -348,7 +336,7 @@ func f(items []int) []int {
 	if got := checkMissingPrealloc("test.go", "", code); len(got) != 0 {
 		t.Errorf("loop with early break must be exempt, got: %v", got)
 	}
-	// continue and goto too.
+
 	code2 := `package main
 func g(items []int) []int {
 	var out []int
@@ -364,7 +352,7 @@ func g(items []int) []int {
 	if got := checkMissingPrealloc("test2.go", "", code2); len(got) != 0 {
 		t.Errorf("loop with continue must be exempt, got: %v", got)
 	}
-	// No break: still flagged (the detector keeps its teeth).
+
 	code3 := `package main
 func h(items []int) []int {
 	var out []int
@@ -379,8 +367,6 @@ func h(items []int) []int {
 	}
 }
 
-// TestPreallocConditionalAppendExempt pins #1480 case B: an append inside
-// an if body is conditional - the final count is data-dependent.
 func TestPreallocConditionalAppendExempt(t *testing.T) {
 	code := `package main
 func f(items []int) []int {
@@ -398,11 +384,8 @@ func f(items []int) []int {
 	}
 }
 
-// #3355: `var x []T` later granted capacity via plain assignment
-// (x = make([]T, 0, N)) is correctly preallocated and must NOT be flagged.
-// Mirrors the map check's excludeShadowedBinds (#1103) conservatism.
 func TestPreallocAssignMakeCapacityExempt(t *testing.T) {
-	// Plain delayed-init form (real trigger: change_reconcile.go shape).
+
 	code := `package main
 func collect(lines []string) []string {
 	var files []string
@@ -417,7 +400,6 @@ func collect(lines []string) []string {
 		t.Errorf("var decl later granted capacity via = make(0,N) must be exempt, got: %v", got)
 	}
 
-	// Branch-selected capacities count too.
 	code2 := `package main
 func g(n int, big bool) []int {
 	var out []int
@@ -436,8 +418,6 @@ func g(n int, big bool) []int {
 		t.Errorf("branch-selected capacity via = make(0,N) must be exempt, got: %v", got)
 	}
 
-	// make with no capacity (x = make([]T, 0)) still warns - the fix must
-	// not silently exempt genuinely unsized delayed inits.
 	code3 := `package main
 func h(n int) []int {
 	var out []int
@@ -452,7 +432,6 @@ func h(n int) []int {
 		t.Errorf("= make(0) without capacity must still warn")
 	}
 
-	// True positive control: bare var with no sized assignment still warns.
 	code4 := `package main
 func k(items []int) []int {
 	var out []int

@@ -13,14 +13,6 @@ import (
 	"time"
 )
 
-// linuxDisplayBackend selects the automation backend at runtime.
-// Wayland sessions (WAYLAND_DISPLAY set) need ydotool (uinput); X11 keeps
-// xdotool. Cached after first resolution since session type cannot change
-// within a process lifetime.
-// #4611: the cache is process-shared and desktop_control Execute calls this
-// on every invocation - concurrent sessions (sub-agents, swarm teammates, IM
-// adapters) can race the lazy init. sync.Once makes the one-shot resolution
-// safe; behavior is unchanged.
 var (
 	linuxBackendOnce     sync.Once
 	linuxBackendWayland  bool
@@ -29,16 +21,13 @@ var (
 
 func isWaylandSession() bool {
 	linuxBackendOnce.Do(func() {
-		// XDG_SESSION_TYPE=wayland without WAYLAND_DISPLAY still has no
-		// wayland socket to talk over; require the socket variable.
+
 		linuxBackendWayland = os.Getenv("WAYLAND_DISPLAY") != ""
 		linuxBackendResolved = true
 	})
 	return linuxBackendWayland
 }
 
-// runArgvSeq executes a sequence of full argv commands, stopping at the
-// first failure.
 func runArgvSeq(ctx context.Context, cmds [][]string) error {
 	for _, argv := range cmds {
 		if len(argv) == 0 {
@@ -57,10 +46,9 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return executeDesktopControlWayland(ctx, p)
 	}
 	switch p.Action {
-	// ── Mouse ──
+
 	case "click":
-		// Move to coordinates first, then click - matching macOS behavior.
-		// #1665: honor p.Button (xdotool button codes: 1=left 2=middle 3=right).
+
 		code, err := x11ButtonCode(p.Button)
 		if err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
@@ -83,7 +71,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "middle_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "2")
 	case "mouse_down", "mouse_up":
-		// xdotool button codes: 1=left, 2=middle, 3=right.
+
 		btn := "1"
 		if p.Button == "right" {
 			btn = "3"
@@ -98,31 +86,22 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "move":
 		return xdotoolResult(ctx, "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y))
 	case "drag":
-		// Chain the full gesture in ONE xdotool invocation with --sync so a
-		// mid-sequence failure surfaces - the old form dropped the first three
-		// steps' errors and only mouseup's exit status was visible, reporting
-		// OK for a drag that never happened - and each move is consumed by the
-		// server before the next event fires (#3881). Same shape as
-		// modifier_click (#216).
+
 		return xdotoolResult(ctx, x11DragArgs(p.X, p.Y, p.ToX, p.ToY)...)
 	case "scroll":
-		btn := "4" // up
+		btn := "4"
 		if p.Direction == "down" {
 			btn = "5"
 		}
 		args := []string{"click", "--repeat", fmt.Sprintf("%d", p.Amount), btn}
 		return xdotoolResult(ctx, args...)
 	case "modifier_click":
-		// Validate and normalize the modifier spec first so typos fail
-		// before anything is clicked.
+
 		mods, err := normalizeModifiers(p.Text)
 		if err != nil {
 			return Result{}, err
 		}
-		// xdotool click takes no modifier syntax (atoi(argv[0]) only -
-		// "ctrl+1" parses as button 0). Chain keydown/click/keyup in a
-		// single xdotool invocation instead (#216). fn has no X mapping;
-		// error explicitly like the Wayland path does.
+
 		args := []string{"mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y)}
 		for _, m := range mods {
 			xd, ok := xdModifierName(m)
@@ -131,10 +110,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			}
 			args = append(args, "keydown", xd)
 		}
-		// #3876: honor the schema button contract ("right" was silently
-		// left-clicked, same breach as #1665 fixed for plain click).
-		// #4440: middle was still silently left-clicked, and unknown
-		// buttons erred the same way.
+
 		clickBtn := "1"
 		switch p.Button {
 		case "right":
@@ -154,46 +130,32 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "mouse_position":
 		return xdotoolResult(ctx, "getmouselocation")
 
-	// ── Keyboard ──
 	case "type":
 		return xdotoolResult(ctx, "type", p.Text)
 	case "key_press", "key_combo":
-		// xdotool uses + for combos: ctrl+c, alt+Tab
+
 		return xdotoolResult(ctx, "key", p.Text)
 	case "hold_key":
 		return holdKeyX11(ctx, p)
 
-	// ── Window management ──
 	case "set_window_bounds":
 		if p.ToX <= 0 || p.ToY <= 0 {
 			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 		}
-		// Target the named window when given; otherwise the active window.
-		// #4696: xdotool command chaining needs windowmove BEFORE the
-		// coordinates and %1 to reference the selected window — the bare
-		// getactivewindow base made "X" parse as the next command name
-		// (Unknown command), so the default active-window path always
-		// failed. Aligns with the named branch below (and #4440/#4459).
+
 		base := []string{"getactivewindow", "windowmove", "%1"}
 		if strings.TrimSpace(p.Text) != "" {
-			// #4440: xdotool chaining defaults to %@ = ALL matches, so a broad
-			// --name pattern moved and resized every matching window at once.
-			// %1 scopes both follow-up commands to the FIRST match only.
-			// #4459: literal-regex the pattern too — "." must not match all.
+
 			base = []string{"search", "--name", xdLiteralPattern(p.Text), "windowmove", "%1"}
 		}
 		args := append(base, fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y),
 			"windowsize", "%1", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
 		return xdotoolResult(ctx, args...)
 	case "list_windows":
-		// "." matches any non-empty window name; an empty regex in xdotool
-		// matches EVERYTHING (every window has a title, even an empty one),
-		// which would make chained %@ tokens target all windows.
+
 		return xdotoolResult(ctx, "search", "--onlyvisible", "--name", ".")
 	case "focus_window", "close_window", "minimize_window":
-		// Guard: an empty pattern matches ALL windows and %@ applies the action
-		// to every search hit - close_window would close the entire desktop.
-		// Erroring is safer than an active-window fallback for destructive ops (#349).
+
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("%s requires 'text' (window title); refusing to run: empty pattern matches ALL windows", p.Action)
 		}
@@ -203,23 +165,15 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		} else if p.Action == "minimize_window" {
 			verb = "windowminimize"
 		}
-		// #4459: pass the pattern as a LITERAL regex — "."/".*"/"^" must not
-		// fan the chained %@ verb out to every window on the desktop.
+
 		return xdotoolResult(ctx, "search", "--name", xdLiteralPattern(p.Text), verb, "%@")
 	case "maximize_window":
-		// Use the target window name when provided; fall back to the active
-		// window so we never maximize every visible window (empty pattern
-		// matches all).
-		//
-		// #4058: --add (instead of toggle semantics) makes this idempotent - a retry
-		// "make sure it's maximized" must not UN-maximize the window.
-		// Matches Windows ShowWindow(swMaximize) semantics.
+
 		if strings.TrimSpace(p.Text) != "" {
 			return xdotoolResult(ctx, "search", "--name", xdLiteralPattern(p.Text), "windowstate", "--add", "--maximized", "%@")
 		}
 		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--add", "--maximized")
 
-	// ── Application ──
 	case "open":
 		target := strings.TrimSpace(p.Text)
 		if target == "" {
@@ -236,8 +190,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		return runAppResult(ctx, fields[0], fields[1:]...)
 	case "quit_app":
-		// Same guard as window ops: empty --class regex matches every window
-		// (all windows have a WM_CLASS) and %@ closes them all (#349).
+
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("quit_app requires 'text' (app name); refusing to run: empty pattern matches ALL windows")
 		}
@@ -247,10 +200,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "active_app":
 		return xdotoolResult(ctx, "getactivewindow", "getwindowname")
 
-	// UI-tree actions use AT-SPI (the Linux desktop accessibility API) via
-	// python3-gi - works on both X11 and Wayland. display_info has no
-	// xdotool equivalent; menu_select needs a menu-bar accessibility walk
-	// (deferred).
 	case "snapshot_ui":
 		return atspiSnapshot(ctx, p.MaxDepth)
 	case "find_element", "find_and_click", "wait_and_click":
@@ -265,10 +214,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	}
 }
 
-// atspiScript is the python3-gi AT-SPI probe: dumps the flattened
-// accessibility tree of the currently focused application as JSON lines.
-// Requires gir1.2-atspi-2.0 (preinstalled on GNOME/KDE systems). Shared by
-// the X11 and Wayland backends.
 const atspiScript = `#!/usr/bin/env python3
 import json, sys
 import gi
@@ -330,7 +275,6 @@ if active is None:
 walk(active, 0)
 `
 
-// atspiRun executes the probe and returns the flattened elements.
 func atspiRun(ctx context.Context, maxDepth int) ([]ATSPIElement, error) {
 	if maxDepth <= 0 {
 		maxDepth = 8
@@ -371,8 +315,6 @@ func atspiSnapshot(ctx context.Context, maxDepth int) (Result, error) {
 	return Result{Content: atspiFormat(els)}, nil
 }
 
-// atspiLocate implements find_element / find_and_click / wait_and_click on
-// top of the shared snapshot+match helpers.
 func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	if p.Action == "wait_and_click" {
@@ -385,12 +327,7 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 	for {
 		els, err := atspiRun(ctx, p.MaxDepth)
 		if err != nil {
-			// #4478: an AT-SPI probe error is routinely transient - the target
-			// app has not registered its a11y tree yet, or the DBus bridge is
-			// still coming up. That start-up window is exactly what
-			// wait_and_click exists to ride out; bailing out on the first
-			// probe error made it no better than a one-shot find_and_click.
-			// Keep polling until the deadline; only ctx cancellation aborts.
+
 			if p.Action != "wait_and_click" || ctx.Err() != nil {
 				return Result{}, err
 			}
@@ -411,10 +348,10 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 			if p.Action == "find_element" {
 				return Result{Content: fmt.Sprintf("found %d matches:\n%s", len(matches), atspiFormat(matches))}, nil
 			}
-			// Click via the session's own backend: X11 xdotool, Wayland ydotool.
+
 			var clickErr error
 			if isWaylandSession() {
-				// #3881: honor p.Button instead of hardcoding BTN_LEFT.
+
 				clickCmds, cerr := ydoClickArgs(p.Button, 1)
 				if cerr != nil {
 					clickErr = cerr
@@ -453,23 +390,12 @@ func retrySuffix(action string) string {
 	return ""
 }
 
-// executeDesktopControlWayland implements the ydotool-backed subset for
-// Wayland sessions. Mouse move/click/drag, typing, and key combos work;
-// scroll has no ydotool equivalent (REL_WHEEL is not a BTN event, so the
-// click subcommand cannot send it) and window management has no protocol
-// for external clients - both report clear messages instead of failing
-// cryptically.
-// ydoModifierClick holds normalized modifiers while clicking via ydotool.
 func ydoModifierClick(ctx context.Context, x, y int, modifierSpec, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifierSpec)
 	if err != nil {
 		return Result{}, err
 	}
-	// #3876: 0xC0=BTN_LEFT, 0xC1=BTN_RIGHT in ydotool's linux/uapi codes.
-	// #4459: middle was silently left-clicked and unknown buttons fell
-	// through the same way — the #4440 fix covered X11/darwin/windows
-	// modifier_click but missed this Wayland twin. ydoClickCode mirrors
-	// the full mapping and rejects unknown buttons.
+
 	clickCode, err := ydoClickCode(button)
 	if err != nil {
 		return Result{}, err
@@ -541,10 +467,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		return Result{}, fmt.Errorf("desktop_control: scroll is not supported on Wayland via ydotool (no REL_WHEEL event in the click API)")
 
 	case "mouse_down", "mouse_up":
-		// ydotool click bitmask: low bits = button (0 left, 1 right, 2
-		// middle); 0x40 = down-only, 0x80 = up-only. The old -d/-u flags do
-		// not exist upstream and 0xC0 always performs a full click (#191).
-		// #4459: unknown buttons used to silently fall to BTN_LEFT here.
+
 		button, err := ydoButtonMask(p.Button)
 		if err != nil {
 			return Result{}, err
@@ -567,9 +490,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo)")
 		}
-		// Build press list from modifier tokens; sleeps go between press and
-		// release. Non-modifier keys have no evdev mapping here - rejected
-		// explicitly (see ydoModifierKeyArgs).
+
 		var pressCmds [][]string
 		var releaseCmds [][]string
 		for _, part := range strings.Split(p.Text, "+") {
@@ -588,17 +509,11 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, fmt.Errorf("hold_key requires at least one key")
 		}
 		all := append([][]string{}, pressCmds...)
-		// coreutils sleep accepts fractional seconds - integer division
-		// turned 500ms into an instant tap (#192).
+
 		all = append(all, []string{"sleep", fmt.Sprintf("%.3f", float64(duration)/1000)})
 		all = append(all, releaseCmds...)
 		if err := runArgvSeq(ctx, all); err != nil {
-			// runArgvSeq stops at the first failure (ctx cancel kills the
-			// sleep); re-issue the release sequence on a bounded background
-			// context so modifiers do not stay pressed at the compositor
-			// level. #4546: bound it - ydotoold half-dead used to hang this
-			// synchronous Execute path forever (best-effort release must not
-			// become a permanent hang). Mirrors holdKeyX11's recovery.
+
 			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rcancel()
 			_ = runArgvSeq(rctx, releaseCmds)
@@ -606,33 +521,24 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		}
 		return Result{Content: "OK"}, nil
 
-	// UI-tree actions work on Wayland too: AT-SPI is display-server
-	// independent, and atspiLocate clicks via ydotool on this backend.
 	case "snapshot_ui":
 		return atspiSnapshot(ctx, p.MaxDepth)
 	case "find_element", "find_and_click", "wait_and_click":
 		return atspiLocate(ctx, p)
 
-	// Window management has no Wayland protocol for external clients, and
-	// ydotool exposes no position read.
 	case "mouse_position", "list_windows", "focus_window", "close_window", "minimize_window",
 		"maximize_window", "set_window_bounds", "quit_app", "list_apps", "active_app",
 		"display_info", "menu_select":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Wayland (no protocol for external clients; run the target under XWayland for X11 tooling)", p.Action)
 
-	// key_press/key_combo are supported on the X11 backend but not wired
-	// through the ydotool key path here. Report the platform limitation
-	// explicitly instead of falling through to a misleading "unknown
-	// action" that makes the agent retry with different action names (#193).
 	case "key_press", "key_combo":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not yet supported on Wayland (only modifier-based actions are wired to ydotool); run the target under XWayland for X11 key injection", p.Action)
 
 	default:
-		// App launching is display-server independent - delegate to the
-		// shared path below.
+
 		break
 	}
-	// Shared, display-server-independent actions.
+
 	switch p.Action {
 	case "open":
 		target := strings.TrimSpace(p.Text)
@@ -654,16 +560,10 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 	}
 }
 
-// x11ButtonCode maps the schema's button enum to X11/xdotool button codes
-// (1=left, 2=middle, 3=right).
-// #4896/#4691: normalize case/whitespace, then REJECT unknown values -
-// the old default-to-left silently turned "Right"/typos into a LEFT
-// click (dangerous misdirection); every sibling path (darwin mouseClick,
-// Wayland ydoClickArgs, mouseButtonEvent) already rejects.
 func x11ButtonCode(button string) (string, error) {
 	button = strings.ToLower(strings.TrimSpace(button))
 	if button == "" {
-		button = "left" // schema default: absent/empty button means left click
+		button = "left"
 	}
 	switch button {
 	case "left":
@@ -677,12 +577,6 @@ func x11ButtonCode(button string) (string, error) {
 	}
 }
 
-// x11DragArgs chains the full drag gesture in one xdotool invocation. Both
-// moves use --sync so (a) any step's failure is visible in the single exit
-// status - the pre-#3881 form swallowed the first three steps' errors and
-// reported OK when only the final mouseup succeeded - and (b) each pointer
-// move is consumed before the next event is injected, avoiding a release
-// landing at a midpoint coordinate (#3881).
 func x11DragArgs(x, y, toX, toY int) []string {
 	return []string{
 		"mousemove", "--sync", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y),
@@ -715,18 +609,7 @@ func wmctrlResult(ctx context.Context, args ...string) (Result, error) {
 }
 
 func runAppResult(ctx context.Context, name string, args ...string) (Result, error) {
-	// exec does not go through a shell: name must be the bare executable
-	// and every argument a separate argv entry. Concatenating them into one
-	// string makes exec look for a file literally named "xdg-open <url>".
-	//
-	// #4546: exec.Command, NOT exec.CommandContext - this is fire-and-forget
-	// (the background Wait below is zombie reaping, not result tracking),
-	// but CommandContext kills the child when ctx fires. Parallel tool calls
-	// run under a 30s WithTimeout (parallel_tools.go), so a GUI app launched
-	// via launch_app/open was SIGKILLed 30 seconds after the tool had already
-	// returned OK. The ctx parameter stays in the signature for interface
-	// consistency; it must not gate the child's lifetime. The darwin path
-	// uses `open` which exits immediately, so this is Linux-only.
+
 	_ = ctx
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = nil
@@ -735,14 +618,11 @@ func runAppResult(ctx context.Context, name string, args ...string) (Result, err
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("failed to launch %s: %w", name, err)
 	}
-	// Reap the child in the background so repeated launches don't
-	// accumulate zombies.
+
 	go func() { _ = cmd.Wait() }()
 	return Result{Content: fmt.Sprintf("OK: launched %s %s (PID %d)", name, strings.Join(args, " "), cmd.Process.Pid)}, nil
 }
 
-// holdKeyX11 implements hold_key via xdotool keydown/sleep/keyup with
-// context-cancellation-safe release.
 func holdKeyX11(ctx context.Context, p desktopParams) (Result, error) {
 	duration, err := holdKeyDurationClamp(p.Duration)
 	if err != nil {
@@ -756,10 +636,7 @@ func holdKeyX11(ctx context.Context, p desktopParams) (Result, error) {
 	}
 	select {
 	case <-ctx.Done():
-		// Always attempt release so a cancelled context doesn't leave the
-		// key stuck down. #4546: bound the best-effort release - a half-dead
-		// X server used to hang this synchronous path forever; killed-mid-
-		// release is still better than a permanent hang.
+
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer rcancel()
 		_, _ = exec.CommandContext(rctx, "xdotool", "keyup", p.Text).Output()

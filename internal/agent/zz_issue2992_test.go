@@ -1,9 +1,5 @@
 package agent
 
-// Tests for #2992: post-edit detector wiring fixes.
-// - case 2 core: bgVerifyRegistry register/take semantics (consume-once,
-//   bounded, nil-safe) and job_id extraction from raw tool arguments.
-
 import (
 	"encoding/json"
 	"strings"
@@ -13,11 +9,11 @@ import (
 func TestIssue2992BgVerifyRegistryPollThenConsume(t *testing.T) {
 	r := newBgVerifyRegistry()
 	r.register("job-1", "go test ./...")
-	// First poll sees Status: running - the registration MUST survive.
+
 	if cmd, ok := r.peek("job-1"); !ok || cmd != "go test ./..." {
 		t.Fatalf("peek(running): ok=%v cmd=%q", ok, cmd)
 	}
-	// Terminal poll consumes; a repeated wait must miss (no double clear).
+
 	if _, ok := r.peek("job-1"); !ok {
 		t.Fatal("entry must survive until terminal status")
 	}
@@ -42,11 +38,11 @@ func TestIssue2992BgVerifyRegistryBounded(t *testing.T) {
 
 func TestIssue2992BgVerifyRegistryEmptyInputs(t *testing.T) {
 	var r *bgVerifyRegistry
-	r.register("j", "c") // nil-safe, must not panic
+	r.register("j", "c")
 	if _, ok := r.peek("j"); ok {
 		t.Fatal("nil registry peek should miss")
 	}
-	r.remove("j") // nil-safe, must not panic
+	r.remove("j")
 	ok := newBgVerifyRegistry()
 	ok.register("", "c")
 	ok.register("j", "")
@@ -74,9 +70,6 @@ func TestIssue2992BgVerifyExtractJobID(t *testing.T) {
 	}
 }
 
-// The wait/read completion path grades from the rendered job snapshot via
-// psTerminalVerifyOutcome(psParseJobStatus(...)). Pin the outcomes that the
-// wiring treats as a green background verification.
 func TestIssue2992BackgroundOutcomeGrading(t *testing.T) {
 	cases := []struct {
 		snapshot string
@@ -84,9 +77,9 @@ func TestIssue2992BackgroundOutcomeGrading(t *testing.T) {
 		terminal bool
 	}{
 		{"Command: go test ./...\nStatus: completed (exit 0)\nTotal lines: 3", true, true},
-		{"Status: running\n", false, false},        // still running: no clear
-		{"Status: failed (exit 1)\n", false, true}, // terminal failure: no clear
-		{"Status: cancelled\n", false, true},       // terminal non-pass: no clear
+		{"Status: running\n", false, false},
+		{"Status: failed (exit 1)\n", false, true},
+		{"Status: cancelled\n", false, true},
 		{"garbage with no status header", false, false},
 	}
 	for _, c := range cases {

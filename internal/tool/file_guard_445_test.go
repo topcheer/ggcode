@@ -2,7 +2,6 @@ package tool
 
 import "testing"
 
-// #445: glob metacharacters in the prefix before ** must expand.
 func TestMatchDoubleStarGlobPrefix(t *testing.T) {
 	cases := []struct {
 		pattern, name string

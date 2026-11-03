@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #4430 companion tests (bugs 1+2; 3 analyzed in the issue thread, 4 below).
-
-// Bug 1: `<<<` is a here-STRING - the following lines are live commands, so
-// a catastrophic rm there must stay Block (was downgraded to Ask because the
-// heredoc opener regex matched from the 2nd '<' and blanked the body).
 func TestIssue4430_HereStringLinesStayLive(t *testing.T) {
 	gate := NewCommandGate()
 	for _, cmd := range []string{
@@ -23,8 +18,6 @@ func TestIssue4430_HereStringLinesStayLive(t *testing.T) {
 	}
 }
 
-// Bug 2: the tilde word-boundary in rmP was a dead anchor - dispersed long
-// flags wiping the home directory hit NO rule and ran Allowed.
 func TestIssue4430_TildeHomeDeletionBlocks(t *testing.T) {
 	gate := NewCommandGate()
 	for _, cmd := range []string{
@@ -39,14 +32,13 @@ func TestIssue4430_TildeHomeDeletionBlocks(t *testing.T) {
 	}
 }
 
-// Benign rm shapes must stay unaffected by the tilde/here-string tightening.
 func TestIssue4430_BenignRmUnaffected(t *testing.T) {
 	gate := NewCommandGate()
 	for _, cmd := range []string{
-		"rm -f note.txt",               // plain file - Allow/Ask, never Block
-		"rm -rf /tmp/build-cache",      // benign prefix
-		"rm -rf ./build",               // relative
-		"cat << EOF\nrm -rf /etc\nEOF", // REAL heredoc body stays inert (quotedInert) - Allow/Ask
+		"rm -f note.txt",
+		"rm -rf /tmp/build-cache",
+		"rm -rf ./build",
+		"cat << EOF\nrm -rf /etc\nEOF",
 	} {
 		if r := gate.Check(cmd); r.Behavior == Block {
 			t.Fatalf("benign command must not Block: %q (%s)", cmd, r.Reason)
@@ -54,10 +46,6 @@ func TestIssue4430_BenignRmUnaffected(t *testing.T) {
 	}
 }
 
-// Bug 4: the GIT_PAGER clean rule's `\S+` stopped at the first space of a
-// quoted override (`GIT_PAGER="less -R"` left ` -R"` behind), producing an
-// unbalanced-quote, invalid-shell CleanedCmd. The rule now consumes the
-// quoted form fully.
 func TestIssue4430_Bug4_GITPAGERQuoteAwareClean(t *testing.T) {
 	g := NewCommandGate()
 	for name, cmd := range map[string]string{

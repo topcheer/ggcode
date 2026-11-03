@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-// #1179: nil_deref_check.go delta keys embed the enclosing function name
-// (fnName|path|var). A rename or extract-function refactoring changes that
-// component while the finding itself is unchanged, so pre-existing instances
-// were re-reported as "new" - the third-generation regression surface of the
-// #1069/#1128 suppression series. The delta filter now falls back to a
-// name-independent suffix key (path|var): renamed code stays suppressed while
-// a pattern absent from the old content still reports as genuinely new.
-
 const issue1179RenameOld = `package main
 
 import "fmt"
@@ -43,9 +35,6 @@ func handleRequest() {
 }
 `
 
-// TestNilDerefDeltaKeySurvivesFunctionRename_Issue1179 reproduces #1179: the
-// identical finding moved from oldHandler to handleRequest must stay
-// suppressed, exactly as #1128 required it to survive line shifts.
 func TestNilDerefDeltaKeySurvivesFunctionRename_Issue1179(t *testing.T) {
 	first := checkNilDerefAfterError("test.go", "", issue1179RenameNew)
 	if first == "" {
@@ -58,9 +47,6 @@ func TestNilDerefDeltaKeySurvivesFunctionRename_Issue1179(t *testing.T) {
 	}
 }
 
-// TestNilDerefDeltaKeyStillReportsGenuinelyNewPattern_Issue1179 guards the
-// fallback against over-suppression: a dereference pattern whose suffix key
-// (path|var) is absent from the old content must still report.
 func TestNilDerefDeltaKeyStillReportsGenuinelyNewPattern_Issue1179(t *testing.T) {
 	codeNew := issue1179RenameNew + `
 func extra() {
@@ -75,9 +61,6 @@ func extra() {
 	}
 }
 
-// TestNilDerefDeltaKeySurvivesExtractFunction_Issue1179 covers the
-// extract-function refactoring named by the issue: the dereference moves from
-// run() into a helper render() whose name the old content never contained.
 func TestNilDerefDeltaKeySurvivesExtractFunction_Issue1179(t *testing.T) {
 	codeOld := `package main
 

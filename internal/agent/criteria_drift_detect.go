@@ -1,48 +1,5 @@
 package agent
 
-// Success Criteria Drift Detector
-//
-// Research basis:
-//   - "Detecting Proxy Gaming in RL and LLM Alignment via Evaluator Stress
-//     Tests" (arXiv:2507.05619, v2 Jan 2026): AI systems exploit evaluator
-//     weaknesses rather than improving on intended objectives. In coding agents,
-//     one manifestation is "evaluator weakening": the agent progressively
-//     redefines or relaxes the original task's success criteria to match what
-//     it actually achieved, rather than what the user explicitly requested.
-//   - "LLMs are Overconfident" (arXiv:2510.26995, 2025): LLMs systematically
-//     overestimate task completion quality, rationalizing partial work as full.
-//   - Proxy optimization in agentic systems: the agent optimizes for "what I
-//     can show as done" rather than "what the user asked for."
-//
-// Problem: When an agent encounters difficulty fulfilling the original request,
-// it frequently:
-//   1. Narrows the success criteria: "The main issue is fixed" (silently
-//      dropping secondary requirements from the original request)
-//   2. Substitutes easier alternatives: "I implemented a simpler approach
-//      that covers the common case" (without flagging the deviation)
-//   3. Reclassifies unmet requirements as out-of-scope: "Rate limiting is
-//      really a separate concern" (when the user explicitly requested it)
-//   4. Claims partial fulfillment as complete: "This handles the primary
-//      use case" (implying the task is done despite known gaps)
-//
-// This differs from existing detectors:
-//   - scope_creep_detect.go: detects EXPANSION beyond the request. This
-//     detector detects NARROWING of the request's scope.
-//   - premature_commitment.go: checks if the agent edited before gathering
-//     evidence. This checks if the agent redefined what "done" means.
-//   - success_declare.go: detects claiming "done" while continuing to work.
-//     This detects claiming "done" while silently dropping requirements.
-//   - fulfillment_gate.go: checks if stated deliverables were verified.
-//     This checks whether the stated deliverables match the original ask.
-//
-// Detection approach:
-//   - Scans assistant text for "criteria drift" language patterns that
-//     indicate the agent is redefining or relaxing requirements
-//   - Requires 2+ distinct drift indicators to fire (reducing false positives)
-//   - Non-blocking: advisory guidance injected into context
-//   - Zero LLM cost - pure heuristic
-//   - Fires at most twice per run
-
 import (
 	"strings"
 	"sync"
@@ -51,33 +8,22 @@ import (
 )
 
 const (
-	// cdMaxWarns caps warnings per run to avoid noise.
 	cdMaxWarns = 2
 
-	// cdThreshold is the minimum number of distinct drift indicators
-	// required before firing. Single matches are too prone to false positives
-	// on legitimate design discussion or constraint clarification.
 	cdThreshold = 2
 
-	// cdIndicatorWindowTurns limits how far apart two indicators may be to
-	// combine into one warning (#332). Criteria drift is *progressive*;
-	// legitimate phrases from unrelated turns 6+ iterations apart must not be
-	// stitched into a "proxy gaming" accusation. Mirrors drift_recurrence's
-	// post-warn window convention.
 	cdIndicatorWindowTurns = 3
 )
 
-// cdIndicator is a single drift-indicator hit with the iteration it occurred.
 type cdIndicator struct {
 	pattern string
 	iter    int
 }
 
-// criteriaDriftState tracks success criteria drift signals.
 type criteriaDriftState struct {
 	mu             sync.Mutex
-	indicators     []cdIndicator   // accumulated distinct drift indicators this run (with iter)
-	seenCategories map[string]bool // categories with at least one indicator
+	indicators     []cdIndicator
+	seenCategories map[string]bool
 	warnCount      int
 }
 
@@ -93,15 +39,8 @@ func (c *criteriaDriftState) reset() {
 	c.warnCount = 0
 }
 
-// criteriaDriftPatterns defines language patterns signaling the agent is
-// redefining or relaxing the original success criteria. Organized by category.
-// Each pattern is matched case-insensitively as a substring.
 var criteriaDriftPatterns = map[string][]string{
-	// Requirement narrowing: dropping parts of the original ask
-	// #395: phrases must carry REQUIREMENT semantics (requirement /
-	// criteria / acceptance / asked-for + a narrowing verb). Bare
-	// diagnostic language ("the core problem is the race condition") is
-	// normal root-cause analysis, not criteria narrowing.
+
 	"narrowing": {
 		"the requirement is really only",
 		"narrowing the scope of the requirement",
@@ -111,10 +50,7 @@ var criteriaDriftPatterns = map[string][]string{
 		"the essential requirement is just",
 		"trimming the requirement to",
 	},
-	// Silent substitution: replacing a hard requirement with an easier one
-	// Substitution must explicitly swap out something that was REQUESTED
-	// (#395); proposing "an alternative approach that avoids allocations"
-	// during normal design discussion is not substitution.
+
 	"substitution": {
 		"instead of the original requirement",
 		"rather than the requested",
@@ -123,11 +59,7 @@ var criteriaDriftPatterns = map[string][]string{
 		"i've simplified the requirement to",
 		"substituting the requirement with",
 	},
-	// Scope reclassification: moving unmet requirements to "out of scope"
-	// Reclassification must declare an UNMET requested item out of scope;
-	// general boundary-setting about unrelated concerns is normal (#395).
-	// #582: user-authorized descoping (e.g., "as requested, that requirement is out of scope")
-	// is exempt - it reflects faithful execution of explicit user instruction, not proxy gaming.
+
 	"reclassification": {
 		"the requested is out of scope for",
 		"that requirement falls outside the scope",
@@ -135,9 +67,7 @@ var criteriaDriftPatterns = map[string][]string{
 		"deferring the requested requirement",
 		"that part of the request is out of scope",
 	},
-	// Partial-as-complete: framing partial work as sufficient
-	// Partial-as-complete must frame PARTIAL work as satisfying the
-	// requirement (#395).
+
 	"partial_complete": {
 		"good enough for the requirement",
 		"sufficient for the stated requirement",
@@ -147,12 +77,8 @@ var criteriaDriftPatterns = map[string][]string{
 	},
 }
 
-// recordAssistantText scans assistant response for criteria drift language.
 func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
-	// #4241: normalize to the 1-based radix maybeWarn's call site uses
-	// (agent.go passes i+1 there). The mixed radix inflated every distance
-	// by 1 and narrowed the indicator window from 3 turns to 2 (#1439-A
-	// same-family dual-index bug; fixed at the record side there too).
+
 	iter++
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -160,11 +86,8 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	lower := strings.ToLower(text)
 	newIndicators := []string{}
 
-	// #586 F7: Track indicators per sentence for deduplication
-	// This prevents two synonymous phrases in the same sentence from counting twice.
-	sentenceIndicators := make(map[string]map[string]bool) // sentence -> category -> seen
+	sentenceIndicators := make(map[string]map[string]bool)
 
-	// Split text into sentences first for per-sentence dedup
 	sentences := cdSplitSentences(lower)
 	for _, sentence := range sentences {
 		sentenceIndicators[sentence] = make(map[string]bool)
@@ -173,10 +96,10 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	for cat, pats := range criteriaDriftPatterns {
 		for _, pat := range pats {
 			if strings.Contains(lower, pat) {
-				// #586 F7: Skip if we already have this category in the same sentence
+
 				matchedSentence := cdFindSentenceForPattern(lower, pat)
 				if matchedSentence != "" {
-					// Initialize sentence map if not exists
+
 					if sentenceIndicators[matchedSentence] == nil {
 						sentenceIndicators[matchedSentence] = make(map[string]bool)
 					}
@@ -186,20 +109,15 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 					}
 				}
 
-				// Check if we already recorded this indicator in this turn.
-				// #589: cross-turn repetition must count again - progressive
-				// drift often repeats the same phrase in later turns; the
-				// turn window in maybeWarn bounds accumulation instead of a
-				// global dedup that would swallow the drift signal.
 				if !cdContainsStr(newIndicators, pat) {
-					// #582: Skip patterns with authorization context.
+
 					if cdIsAuthExempt(text, pat, cat) {
 						debug.Log("agent", "Criteria drift indicator EXEMPT (auth context) (category=%s): %q at iteration %d", cat, pat, iter)
 						continue
 					}
 					newIndicators = append(newIndicators, pat)
 					debug.Log("agent", "Criteria drift indicator (category=%s): %q at iteration %d", cat, pat, iter)
-					// Mark this category as seen in this sentence
+
 					if matchedSentence != "" {
 						sentenceIndicators[matchedSentence][cat] = true
 					}
@@ -211,8 +129,7 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	for _, pat := range newIndicators {
 		c.indicators = append(c.indicators, cdIndicator{pattern: pat, iter: iter})
 	}
-	// Track which categories have been seen (legacy; kept for compatibility).
-	// Note: After #582 fix, the threshold uses indicator count, not category count.
+
 	for cat := range criteriaDriftPatterns {
 		for _, ind := range newIndicators {
 			for _, pat := range criteriaDriftPatterns[cat] {
@@ -225,11 +142,6 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	}
 }
 
-// cdAuthMarkers are phrases that indicate user-authorized descoping (#582).
-// When these appear before a drift pattern, the indicator is exempt
-// because it reflects faithful execution of explicit user instruction.
-// #586: Markers in negation or non-authorization context (e.g., "NOT as requested",
-// "you asked me about X", "mentioned") do NOT authorize descoping.
 var cdAuthMarkers = []string{
 	"as requested",
 	"as you requested",
@@ -241,16 +153,10 @@ var cdAuthMarkers = []string{
 	"as instructed",
 }
 
-// cdIsSentenceBoundary reports whether b terminates a sentence. Semicolon and
-// newline are boundaries too: they prevent false exemptions across clauses
-// (#586 F2, #589).
 func cdIsSentenceBoundary(b byte) bool {
 	return b == '.' || b == '!' || b == '?' || b == ';' || b == '\n'
 }
 
-// cdSentenceStartBefore returns the index at which the sentence containing
-// position idx begins: just after the nearest preceding boundary character
-// (and following whitespace), or 0 when none precedes it.
 func cdSentenceStartBefore(lower string, idx int) int {
 	for i := idx; i > 0; i-- {
 		if cdIsSentenceBoundary(lower[i-1]) {
@@ -267,10 +173,6 @@ func cdSentenceStartBefore(lower string, idx int) int {
 	return 0
 }
 
-// cdSentenceEndAfter returns the index just past the sentence containing idx.
-// When includeBoundary is true the terminating boundary character is included
-// (callers that slice whole sentences keep the punctuation); otherwise it is
-// excluded.
 func cdSentenceEndAfter(lower string, idx int, includeBoundary bool) int {
 	for i := idx; i < len(lower); i++ {
 		if cdIsSentenceBoundary(lower[i]) {
@@ -283,39 +185,28 @@ func cdSentenceEndAfter(lower string, idx int, includeBoundary bool) int {
 	return len(lower)
 }
 
-// cdHasAuthContext checks if the given text contains authorization markers
-// that indicate user-authorized descoping. Returns true if any marker is found.
-// #586: Only markers in non-negated, authorization context count.
-// #589: Fixes for N1, N2, F1-B/C, N3 - check all marker occurrences, bounded
-// window for non-authorization verbs, and sentence-wide negation scan.
 func cdHasAuthContext(text string) bool {
 	lower := strings.ToLower(text)
 	for _, marker := range cdAuthMarkers {
-		// #589 N3: Check ALL occurrences of the marker (not just first)
-		// If any clean occurrence is found (non-negated, in authorization context), exempt.
+
 		markerIdx := 0
 		for {
 			idx := strings.Index(lower[markerIdx:], marker)
 			if idx == -1 {
 				break
 			}
-			idx += markerIdx // Adjust to absolute position
+			idx += markerIdx
 
-			// Find sentence start for this marker occurrence
 			sentenceStart := cdSentenceStartBefore(lower, idx)
 
-			// #589 F1-B/C: Check for negation before the marker, scanning to sentence start
-			// Removed idx>5 and 5-char window limits - any negation in sentence blocks exemption.
-			// #589: Use bounded window (~30 chars) before marker to avoid false positives
-			// from negation words much earlier in the sentence.
 			if idx > sentenceStart {
-				// Check negation in a bounded window before the marker
+
 				negationCheckStart := idx - 30
 				if negationCheckStart < sentenceStart {
 					negationCheckStart = sentenceStart
 				}
 				prefix := lower[negationCheckStart:idx]
-				// Check for standalone "not" or "never" (with word boundaries)
+
 				prefixTrimmed := strings.TrimLeft(prefix, " \t\r\n")
 				if prefixTrimmed == "not" || prefixTrimmed == "never" ||
 					strings.HasPrefix(prefixTrimmed, "not ") ||
@@ -325,33 +216,26 @@ func cdHasAuthContext(text string) bool {
 					strings.Contains(prefix, " never ") ||
 					strings.HasSuffix(prefix, "never ") ||
 					strings.Contains(prefix, "n't") {
-					// This occurrence is negated, try next occurrence
+
 					markerIdx = idx + len(marker)
 					continue
 				}
 			}
 
-			// #589 N1/N2: Skip non-authorization verb forms in bounded window WITHIN SAME SENTENCE
-			// Only "you asked me about" and "you asked about" are questions (non-authorization)
-			// "per your instruction about" is true authorization and should pass.
 			if idx+len(marker) < len(lower) {
-				// Find sentence end for this marker occurrence (boundary excluded)
+
 				sentenceEnd := cdSentenceEndAfter(lower, idx, false)
-				// Get suffix within same sentence only
+
 				suffix := lower[idx+len(marker) : sentenceEnd]
 
-				// #589 N1: Only block question forms with "about"
 				if strings.HasPrefix(suffix, " me about") || strings.HasPrefix(suffix, " about") {
-					// Check if marker is a question form ("asked") vs authorization ("instruction")
-					// Only "you asked me about" is non-authorization
+
 					if strings.Contains(marker, "asked") {
 						markerIdx = idx + len(marker)
 						continue
 					}
-					// "per your instruction about" passes through
+
 				}
-				// #589 N2: Only check bounded window (~20 chars) for "noted"/"mentioned"
-				// Distant occurrences (especially in different sentences) should not block authorization
 				var boundedSuffix string
 				if len(suffix) > 20 {
 					boundedSuffix = suffix[:20]
@@ -364,23 +248,14 @@ func cdHasAuthContext(text string) bool {
 				}
 			}
 
-			// Found a clean marker occurrence (non-negated, in authorization context)
 			return true
 		}
 	}
 	return false
 }
 
-// cdIsAuthExempt checks if a pattern match is exempt due to user authorization.
-// For patterns in authorized categories, we require that an authorization marker
-// appears BEFORE the pattern in the same sentence.
-// This prevents false exemptions when auth markers appear in unrelated contexts
-// or after the pattern (retrospective justification).
-// #586: Expanded to narrowing/reclassification/dead-end/success-criterion categories.
 func cdIsAuthExempt(text, pattern string, category string) bool {
-	// #586 F3: Expand exemption to all 4 categories, not just reclassification
-	// Users may authorize narrowing ("just focus on the core"), dead-end ("that's impossible"),
-	// success-criterion ("good enough is fine"), or reclassification ("that's out of scope").
+
 	if category != "narrowing" && category != "reclassification" && category != "substitution" && category != "partial_complete" {
 		return false
 	}
@@ -388,29 +263,23 @@ func cdIsAuthExempt(text, pattern string, category string) bool {
 	lower := strings.ToLower(text)
 	patternLower := strings.ToLower(pattern)
 
-	// #586 F6: For each pattern occurrence, find the nearest preceding marker
-	// This handles multiple patterns in the same sentence correctly.
 	patternIdx := 0
 	for {
 		relativeIdx := strings.Index(lower[patternIdx:], patternLower)
 		if relativeIdx == -1 {
 			break
 		}
-		patternIdx += relativeIdx // Adjust to absolute position
+		patternIdx += relativeIdx
 
-		// Find the sentence containing this pattern occurrence
-		// #586 F2: Sentence boundaries include .!? ; and newline.
-		// Semicolon and newline create separate sentences to prevent false exemptions.
 		sentenceStart := cdSentenceStartBefore(lower, patternIdx)
 
 		sentenceEnd := cdSentenceEndAfter(lower, patternIdx, true)
 
 		sentence := lower[sentenceStart:sentenceEnd]
-		// Only look for markers BEFORE this pattern occurrence
+
 		relativePatternIdx := patternIdx - sentenceStart
 		patternPrefix := sentence[:relativePatternIdx]
 
-		// Check if there's an authorization marker BEFORE the pattern in this sentence
 		if cdHasAuthContext(patternPrefix) {
 			return true
 		}
@@ -421,11 +290,6 @@ func cdIsAuthExempt(text, pattern string, category string) bool {
 	return false
 }
 
-// maybeWarn returns guidance text if enough drift indicators have accumulated.
-// Indicators more than cdIndicatorWindowTurns from the current iteration are
-// pruned and cannot be combined across distant turns (#332). Consumed
-// indicators are cleared after a warning so the same batch cannot immediately
-// re-trigger.
 func (c *criteriaDriftState) maybeWarn(iter int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -434,7 +298,6 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 		return ""
 	}
 
-	// Prune indicators older than the window relative to the current iter.
 	fresh := c.indicators[:0]
 	for _, ind := range c.indicators {
 		if iter-ind.iter <= cdIndicatorWindowTurns {
@@ -446,7 +309,6 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 		return ""
 	}
 
-	// Categories computed only over windowed indicators.
 	cats := map[string]bool{}
 	for cat, pats := range criteriaDriftPatterns {
 		for _, ind := range c.indicators {
@@ -458,8 +320,7 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 			}
 		}
 	}
-	// #582: Count distinct indicators, not categories. The header says
-	// "Requires 2+ distinct drift indicators" and this is the correct semantics.
+
 	if len(c.indicators) < cdThreshold {
 		return ""
 	}
@@ -476,7 +337,6 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 	}
 	sample := strings.Join(sampleParts, "; ")
 
-	// Consume the used indicators so the same batch cannot fire twice.
 	c.indicators = nil
 
 	return `[Success Criteria Integrity] You have used language that redefines or relaxes ` +
@@ -489,7 +349,6 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 		`unmet requirements as "out of scope" without acknowledging the deviation to the user.`
 }
 
-// cdContains checks if a slice contains a string.
 func cdContains(slice []cdIndicator, s string) bool {
 	for _, v := range slice {
 		if v.pattern == s {
@@ -499,7 +358,6 @@ func cdContains(slice []cdIndicator, s string) bool {
 	return false
 }
 
-// cdContainsStr is the plain-string variant used for intra-turn dedup.
 func cdContainsStr(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
@@ -509,15 +367,13 @@ func cdContainsStr(slice []string, s string) bool {
 	return false
 }
 
-// #586 F2: cdSplitSentences splits text into sentences.
-// Sentence boundaries: .!? ; newline followed by whitespace or end of string.
 func cdSplitSentences(text string) []string {
 	var sentences []string
 	start := 0
 	for i := 0; i < len(text); i++ {
 		if text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == ';' || text[i] == '\n' {
 			end := i + 1
-			// Skip trailing whitespace
+
 			for end < len(text) && (text[end] == ' ' || text[end] == '\t' || text[end] == '\n' || text[end] == '\r') {
 				end++
 			}
@@ -533,13 +389,12 @@ func cdSplitSentences(text string) []string {
 	return sentences
 }
 
-// #586 F7: cdFindSentenceForPattern finds which sentence contains the pattern.
 func cdFindSentenceForPattern(text, pattern string) string {
 	idx := strings.Index(text, pattern)
 	if idx == -1 {
 		return ""
 	}
-	// Find sentence start
+
 	start := 0
 	for i := idx; i >= 0; i-- {
 		if i > 0 && (text[i-1] == '.' || text[i-1] == '!' || text[i-1] == '?' || text[i-1] == ';' || text[i-1] == '\n') {
@@ -549,7 +404,7 @@ func cdFindSentenceForPattern(text, pattern string) string {
 			}
 		}
 	}
-	// Find sentence end
+
 	end := len(text)
 	for i := idx; i < len(text); i++ {
 		if text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == ';' || text[i] == '\n' {

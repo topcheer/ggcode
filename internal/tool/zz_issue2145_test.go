@@ -1,15 +1,5 @@
 package tool
 
-// #2145 regression: multi_file_write returned a PLAIN-TEXT summary while
-// the #2143 integrity loop (and the checkpoint unmarshal) probed the
-// result for the MultiFileEditContent JSON shape - the unmarshal failed
-// structurally for every multi_file_write result, so the per-file-outcome
-// gate never activated and partial_success mode kept reporting false
-// post-write mismatches for files the summary itself listed as failed.
-// The tool now returns the JSON shape (human-readable lines in Summary).
-// These tests drive the REAL tool output through the JSON probe, so a
-// shape mismatch can never slip through synthetic literals again.
-
 import (
 	"context"
 	"encoding/json"
@@ -36,7 +26,6 @@ func TestIssue2145_WriteResultCarriesWrittenPathsJSON(t *testing.T) {
 		t.Fatalf("unexpected error: %s", res.Content)
 	}
 
-	// The consumer-side probe (#2143): unmarshal written_paths.
 	var wp struct {
 		WrittenPaths []string `json:"written_paths"`
 		FailedPaths  []string `json:"failed_paths"`
@@ -53,8 +42,6 @@ func TestIssue2145_WriteResultCarriesWrittenPathsJSON(t *testing.T) {
 	}
 }
 
-// The partial_success failure shape: a denied file must land in
-// failed_paths (the integrity loop skips exactly these).
 func TestIssue2145_WritePartialFailureShape(t *testing.T) {
 	dir := t.TempDir()
 	okFile := filepath.Join(dir, "ok.txt")
@@ -65,7 +52,7 @@ func TestIssue2145_WritePartialFailureShape(t *testing.T) {
 
 	tw := MultiFileWrite{
 		WorkingDir: dir,
-		// Deny the blocked file via the sandbox path checker.
+
 		SandboxCheck: func(path string) bool {
 			return !strings.Contains(path, "blocked")
 		},

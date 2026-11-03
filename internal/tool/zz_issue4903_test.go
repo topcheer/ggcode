@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-// zz_issue4903_test.go pins the fix for #4903: multi_file_edit's apply paths
-// (atomic and partial_success) wrote plan-stage snapshots blindly - no
-// LockWritePath, no CheckStale. The #2327/#2315 stale discipline only ever
-// covered write_file/multi_file_write/edit_file-single. The fix mirrors
-// multi_file_write.go's guard via guardStaleWrite in BOTH apply paths.
-
 func runMultiFileEdit(t *testing.T, dir string, files []map[string]string, mode string) Result {
 	t.Helper()
 	tool := MultiFileEdit{}
@@ -37,9 +31,6 @@ func runMultiFileEdit(t *testing.T, dir string, files []map[string]string, mode 
 	return res
 }
 
-// TestAtomicPathRejectsStaleFile: mutate a target file externally AFTER the
-// plan is built (simulated by poisoning the tracker's baseline) - the atomic
-// apply must refuse to overwrite and leave the external content intact.
 func TestAtomicPathRejectsStaleFile(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")
@@ -47,10 +38,9 @@ func TestAtomicPathRejectsStaleFile(t *testing.T) {
 	os.WriteFile(a, []byte("original-a\n"), 0644)
 	os.WriteFile(b, []byte("original-b\n"), 0644)
 
-	// Register reads (the agent's read baseline).
 	defaultFileTracker.RecordRead(a)
 	defaultFileTracker.RecordRead(b)
-	// External modification lands between plan and apply.
+
 	time.Sleep(2 * time.Millisecond)
 	os.WriteFile(a, []byte("original-a\nexternal-tail\n"), 0644)
 
@@ -70,8 +60,6 @@ func TestAtomicPathRejectsStaleFile(t *testing.T) {
 	}
 }
 
-// TestPartialPathRejectsStaleFile: same scenario through partial_success -
-// only the stale file fails, the healthy sibling still applies.
 func TestPartialPathRejectsStaleFile(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")
@@ -91,20 +79,18 @@ func TestPartialPathRejectsStaleFile(t *testing.T) {
 	if !strings.Contains(res.Content, "modified externally") {
 		t.Fatalf("stale file must be reported as an error entry:\n%s", res.Content)
 	}
-	// Healthy sibling applied.
+
 	gotA, _ := os.ReadFile(a)
 	if !strings.Contains(string(gotA), "agent-a") {
 		t.Fatalf("healthy file should still apply, got %q", gotA)
 	}
-	// Stale file untouched.
+
 	gotB, _ := os.ReadFile(b)
 	if !strings.Contains(string(gotB), "external-tail") {
 		t.Fatalf("stale file must keep external content, got %q", gotB)
 	}
 }
 
-// TestFreshEditStillApplies: the guard must not reject normal flows - a file
-// read then edited in the same breath applies cleanly in atomic mode.
 func TestFreshEditStillApplies(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")

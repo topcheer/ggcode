@@ -16,13 +16,9 @@ import (
 	"time"
 )
 
-// iosBackend implements mobileBackend using xcrun simctl on macOS.
-// Only compiled on darwin platforms.
 type iosBackend struct {
 	xcrunPath string
-	// #4482: cachedUDID is read/written from defaultDevice(), which
-	// parallel tool-execution batches can call concurrently - guard it
-	// (Go memory model / -race CI).
+
 	mu         sync.Mutex
 	cachedUDID string
 }
@@ -58,7 +54,7 @@ func (b *iosBackend) defaultDevice() string {
 	if err := json.Unmarshal([]byte(out), &list); err != nil {
 		return ""
 	}
-	// Find first booted device
+
 	for _, devs := range list.Devices {
 		for _, d := range devs {
 			if d.State == "Booted" {
@@ -94,7 +90,6 @@ func (b *iosBackend) devices(ctx context.Context) (Result, error) {
 	bootedCount := 0
 	totalCount := 0
 
-	// Sort runtimes for consistent output
 	runtimes := make([]string, 0, len(list.Devices))
 	for rt := range list.Devices {
 		runtimes = append(runtimes, rt)
@@ -103,7 +98,7 @@ func (b *iosBackend) devices(ctx context.Context) (Result, error) {
 
 	for _, runtime := range runtimes {
 		devs := list.Devices[runtime]
-		// Filter to only show devices (not clones)
+
 		var realDevs []struct {
 			UDID  string `json:"udid"`
 			State string `json:"state"`
@@ -142,13 +137,13 @@ func (b *iosBackend) devices(ctx context.Context) (Result, error) {
 func (b *iosBackend) boot(ctx context.Context, device string) (Result, error) {
 	_, stderr, err := runCommand(ctx, 60*time.Second, b.xcrunPath, "simctl", "boot", device)
 	if err != nil {
-		// Already booted is not an error
+
 		if strings.Contains(stderr, "already booted") || strings.Contains(stderr, "Unable to boot device in current state") {
 			return Result{Content: fmt.Sprintf("Device %s is already booted.", device)}, nil
 		}
 		return Result{IsError: true, Content: fmt.Sprintf("boot failed: %v\n%s", err, stderr)}, nil
 	}
-	// Open Simulator app
+
 	exec.Command("open", "-a", "Simulator").Start()
 	return Result{Content: fmt.Sprintf("Booted simulator %s.", device)}, nil
 }
@@ -186,19 +181,12 @@ func (b *iosBackend) close(ctx context.Context, device, pkg string) (Result, err
 }
 
 func (b *iosBackend) snapshot(ctx context.Context, device string) (Result, error) {
-	// iOS Simulator doesn't have a direct "accessibility tree dump" via simctl.
-	// We use the screenshot + describe approach. For a text-based snapshot,
-	// we try to get the app's UI via the accessibility audit.
-	//
-	// simctl accessibility <udid> enable  (enables accessibility)
-	// Then we can query the tree via private API or AppleScript.
-	// For now, we provide device info and suggest using screenshot.
+
 	devInfo := fmt.Sprintf("Platform: iOS\nDevice: %s\n", device)
 
-	// Try to get frontmost app
 	out, _, err := runCommand(ctx, 10*time.Second, b.xcrunPath, "simctl", "spawn", device, "launchctl", "list")
 	if err == nil && out != "" {
-		// Parse for any app-like process
+
 		for _, line := range strings.Split(out, "\n") {
 			if strings.Contains(line, "Application") || strings.Contains(line, "UIKitApplication") {
 				devInfo += "Running apps detected.\n"
@@ -240,16 +228,11 @@ func (b *iosBackend) screenshot(ctx context.Context, device, format string, qual
 }
 
 func (b *iosBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
-	// #843: mirror the Android backend - a ref without coordinates cannot
-	// be resolved here; silently defaulting to (0,0) clicks the top-left of
-	// the SCREEN (outside the Simulator window) while reporting success.
+
 	if ref != "" {
 		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first with explicit coordinates"}, nil
 	}
-	// #842: screenshot pixels are DEVICE physical pixels (2x/3x Retina),
-	// while click-at coordinates are screen-absolute points. Divide by the
-	// device scale factor so coordinates inferred from screenshots land on
-	// their targets.
+
 	sx, sy := b.scaleForDevice(device)
 	if sx > 1 || sy > 1 {
 		x, y = x/sx, y/sy
@@ -267,20 +250,8 @@ end tell`, x, y)
 	return Result{Content: fmt.Sprintf("Tapped at (%d, %d).", x, y)}, nil
 }
 
-// scaleForDevice returns the pixel scale factor of the booted simulator
-// (2 for Retina, 3 for Plus/Pro Max; 1 when unknown) (#842). Derived by
-// capturing a screenshot and comparing its pixel width against the
-// device's logical screen width from simctl list --json.
-// iosLogicalWidths is the probe table for probeLogicalScale: common iPhone
-// and iPad logical (point) widths, ascending. #4713: 402 (iPhone 16/17 Pro)
-// and 440 (17 Pro Max) were missing - a 1206px/1320px screenshot matched
-// nothing and the fallback (1,1) sent raw physical-pixel coordinates to
-// AppleScript, tapping off-screen while reporting success.
 var iosLogicalWidths = []int{320, 375, 390, 393, 402, 414, 428, 430, 440, 744, 768, 1024}
 
-// probeLogicalScale derives the Retina scale factor from a screenshot's
-// pixel width by probing known logical widths (pxW % logical == 0 and
-// 1 <= s <= 3). Pure for testability; callers own the xcrun probes.
 func probeLogicalScale(pxW int) (int, int) {
 	for _, logical := range iosLogicalWidths {
 		if pxW%logical == 0 {
@@ -294,7 +265,7 @@ func probeLogicalScale(pxW int) (int, int) {
 }
 
 func (b *iosBackend) scaleForDevice(device string) (int, int) {
-	// Screenshot pixel size: PNG header bytes 16-24 hold width/height.
+
 	tmp, err := os.CreateTemp("", "ggcode-scale-*.png")
 	if err != nil {
 		return 1, 1
@@ -314,11 +285,7 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 	if pxW <= 0 || pxH <= 0 {
 		return 1, 1
 	}
-	// Logical size from simctl device list JSON.
-	// #1329: receive order was inverted (_, out, _) which captured stderr
-	// and discarded stdout - simctl prints JSON to stdout, so scale always
-	// fell back to (1,1) and Retina taps landed 2-3x off target (#842
-	// silently dead). Same shape as the #1005 logs bug.
+
 	out, _, _ := runCommand(context.Background(), 10*time.Second, "xcrun", "simctl", "list", "devices", "--json")
 	var list struct {
 		Devices map[string][]struct {
@@ -339,12 +306,9 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 
 func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
 	if x != 0 || y != 0 {
-		// #1694 case 1: the discarded tap result was the iOS twin of the
-		// #840 swallow - a failed pre-tap typed into whatever held focus
-		// while reporting success. Fail loud now.
+
 		if tapRes, err := b.tap(ctx, device, "", x, y); err != nil || tapRes.IsError {
-			// #1970 nit: when only tapRes.IsError fired (err == nil), the %v
-			// rendered "<nil>" - carry the result text instead.
+
 			reason := error(err)
 			if reason == nil {
 				reason = fmt.Errorf("%s", tapRes.Content)
@@ -353,11 +317,7 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	// Use AppleScript to type into the Simulator.
-	// #2605: escape BACKSLASHES first, then double quotes (order matters):
-	// in AppleScript strings a backslash is the escape introducer, so a lone
-	// \U (Windows paths) was a compile-time syntax error and \n/\t/\r were
-	// silently interpreted as newline/tab/return instead of literal text.
+
 	escapedText := escapeAppleScriptString(text)
 	script := fmt.Sprintf(`
 tell application "Simulator" to activate
@@ -373,13 +333,11 @@ end tell`, escapedText)
 }
 
 func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
-	// #4457: mirror the tap guard (#843) and the Android swipe fix
-	// (#1694 case 2) - this signature receives ref but never used it, so a
-	// ref-only swipe ran (0,0)->(0,0) and reported success.
+
 	if ref != "" {
 		return Result{IsError: true, Content: "element reference requires a prior snapshot - swipe with explicit start/end coordinates"}, nil
 	}
-	// #4576: absent ends must be an error, not a silent swipe to (0,0).
+
 	if endX == nil || endY == nil {
 		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
 	}
@@ -387,9 +345,7 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, en
 	if x == 0 && y == 0 && ex == 0 && ey == 0 {
 		return Result{IsError: true, Content: "swipe requires explicit start/end coordinates (got all zeros)"}, nil
 	}
-	// #841: discrete clicks are full press+release cycles - iOS never
-	// recognizes them as a pan. Build a sustained mouse down -> move ->
-	// mouse up drag via System Events.
+
 	sx, sy := b.scaleForDevice(device)
 	if sx > 1 || sy > 1 {
 		x, y, ex, ey = x/sx, y/sy, ex/sx, ey/sy
@@ -422,7 +378,7 @@ func (b *iosBackend) press(ctx context.Context, device, key string) (Result, err
 delay 0.1
 tell application "System Events" to keystroke (ASCII character 28) using {shift down, command down}`
 	case "back":
-		// iOS doesn't have a back button; use the app-specific back gesture
+
 		return Result{IsError: true, Content: "iOS does not have a hardware back button. Use swipe from left edge."}, nil
 	case "enter":
 		script = `tell application "Simulator" to activate
@@ -433,8 +389,7 @@ tell application "System Events" to keystroke return`
 delay 0.1
 tell application "System Events" to key code 53`
 	default:
-		// #2605: same escaping as typeText - the raw key went into
-		// keystroke "%s" unescaped, so a quote or backslash broke/injected.
+
 		script = fmt.Sprintf(`tell application "Simulator" to activate
 delay 0.1
 tell application "System Events" to keystroke "%s"`, escapeAppleScriptString(key))
@@ -447,7 +402,7 @@ tell application "System Events" to keystroke "%s"`, escapeAppleScriptString(key
 }
 
 func (b *iosBackend) logs(ctx context.Context, device, pkg string, lines int) (Result, error) {
-	// iOS Simulator logs via simctl spawn log
+
 	args := []string{"simctl", "spawn", device, "log", "show", "--last", fmt.Sprintf("%dm", 5), "--style", "compact"}
 	if pkg != "" {
 		args = append(args, "--predicate", fmt.Sprintf("subsystem CONTAINS %q OR processImagePath CONTAINS %q", pkg, pkg))
@@ -463,10 +418,6 @@ func (b *iosBackend) logs(ctx context.Context, device, pkg string, lines int) (R
 	return Result{Content: strings.Join(allLines, "\n")}, nil
 }
 
-// escapeAppleScriptString escapes a literal for embedding inside an
-// AppleScript double-quoted string: backslashes first (they are the escape
-// introducer), then double quotes. Order matters - flipping it would
-// double-escape the quotes' own backslash. #2605.
 func escapeAppleScriptString(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	return strings.ReplaceAll(s, "\"", "\\\"")
@@ -477,12 +428,7 @@ func (b *iosBackend) listApps(ctx context.Context, device string) (Result, error
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("listapps failed: %v\n%s", err, stderr)}, nil
 	}
-	// simctl listapps outputs a plist; extract bundle identifiers
-	// #2604: values come in OpenStep plist form - `"com.apple.Bridge";` -
-	// with surrounding quotes and a trailing semicolon. The old TrimSpace
-	// left them attached, so HasPrefix("com.apple.") NEVER matched (39
-	// system apps leaked as "third-party") and every reported ID was
-	// malformed for launch/uninstall.
+
 	var sb strings.Builder
 	sb.WriteString("Installed apps:\n")
 	count := 0

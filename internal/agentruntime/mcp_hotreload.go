@@ -16,32 +16,21 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// MCPHotReload watches mcp_servers.yaml for changes and triggers a hot-reload
-// of MCP server connections via MCPManager.Reload(). It uses polling (no fsnotify
-// dependency) with a 2-second interval and a debounce window to coalesce rapid
-// writes (e.g. editors that write via temp file + rename).
 type MCPHotReload struct {
-	mcpPath    string // path to the GLOBAL mcp_servers.yaml (always watched)
-	configDir  string // dir holding mcp_deleted.yaml tombstones (#980)
-	workingDir string // for MergeStartupServers
+	mcpPath    string
+	configDir  string
+	workingDir string
 	manager    *plugin.MCPManager
-	// watched holds per-path watch state (#521): every watched file is
-	// judged against ITS OWN (mtime, sha256) baseline. The previous single
-	// global mtime watermark let a newer global file permanently mask
-	// workspace mcp_servers.yaml edits, and scope files had no content-hash
-	// debounce at all.
-	watched  map[string]*watchState
-	interval time.Duration
+	watched    map[string]*watchState
+	interval   time.Duration
 }
 
-// watchState records the last-observed state of one watched file (#521).
 type watchState struct {
 	exists bool
 	mtime  time.Time
-	hash   string // sha256 of content at last observation
+	hash   string
 }
 
-// NewMCPHotReload creates a watcher for the given config directory.
 func NewMCPHotReload(configDir, workingDir string, mgr *plugin.MCPManager) *MCPHotReload {
 	return &MCPHotReload{
 		mcpPath:    config.MCPServersPath(configDir),
@@ -53,15 +42,6 @@ func NewMCPHotReload(configDir, workingDir string, mgr *plugin.MCPManager) *MCPH
 	}
 }
 
-// resolveScopeMCPServers computes the effective server list for the session's
-// scope (#497): when the working dir has its own ggcode.yaml (workspace
-// scope), the session's manager runs the WORKSPACE mcp_servers.yaml — the
-// same file resolution wailskit's LoadConfigForWorkspace performs. The old
-// code always fed the GLOBAL file's list into Reload, so a global-file edit
-// kicked the workspace session's workspace-only servers out as "removed"
-// (name-diff, no scope awareness) and silently injected global-only servers
-// into the workspace session. Global scope (no workspace yaml) keeps reading
-// the global file, matching the pre-#497 behavior for unaffected users.
 func (w *MCPHotReload) resolveScopeMCPServers() []config.MCPServerConfig {
 	if w.workingDir != "" {
 		for _, rel := range []string{"mcp_servers.yaml", filepath.Join(".ggcode", "mcp_servers.yaml")} {
@@ -74,17 +54,8 @@ func (w *MCPHotReload) resolveScopeMCPServers() []config.MCPServerConfig {
 	return config.LoadMCPServersPublic(w.mcpPath)
 }
 
-// Start launches the watcher goroutine. It returns immediately.
-// The watcher runs until ctx is cancelled.
 func (w *MCPHotReload) Start(ctx context.Context) {
-	// #521: seed per-path (mtime, sha256) baselines for every watched file
-	// so the first poll does not fire, and so each file's later edits are
-	// compared against its own state instead of a single global watermark.
-	// Files that do not exist yet are recorded as absent, so their later
-	// APPEARANCE is treated as a change.
-	// #497: workspace-scoped sessions must also react to edits of their OWN
-	// mcp_servers.yaml — previously only the global file was watched, so
-	// manual edits to the workspace file never reloaded the session's manager.
+
 	for _, p := range w.watchedPaths() {
 		if w.seedState(p) {
 			debug.Log("mcp-hotreload", "watching %s (baseline seeded)", p)
@@ -107,9 +78,6 @@ func (w *MCPHotReload) Start(ctx context.Context) {
 	})
 }
 
-// scopeWatchPaths returns the scope-specific files to watch in addition to
-// the global file: for a workspace-scoped session, its workspace
-// mcp_servers.yaml (#497).
 func (w *MCPHotReload) scopeWatchPaths() []string {
 	if w.workingDir == "" {
 		return nil
@@ -125,13 +93,7 @@ func (w *MCPHotReload) scopeWatchPaths() []string {
 }
 
 func (w *MCPHotReload) checkAndReload(ctx context.Context) {
-	// #497: watch both the global file and the session's scope file. Whichever
-	// changed, the reload input must be the SCOPE-RESOLVED list, not blindly
-	// the global file's contents.
-	// #521: every watched path carries its own (mtime, sha256) state — a
-	// newer global file can no longer mask an older-timestamped workspace
-	// edit, and mtime-only bumps (touch / editor rewrite) are debounced by
-	// content hash on ALL watched paths, not just the global one.
+
 	changed := false
 	for _, p := range w.watchedPaths() {
 		if w.pathChanged(p) {
@@ -142,33 +104,14 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 		return
 	}
 
-	// Debounce: wait a short window to let multi-write operations settle.
 	time.Sleep(500 * time.Millisecond)
 
 	debug.Log("mcp-hotreload", "change detected, reloading MCP servers")
 
-	// Scope-resolved list (#497): workspace sessions reload from their own
-	// mcp_servers.yaml; global sessions from the global file — matching the
-	// manager's initial set computation instead of clobbering it.
-	//
-	// #980: the reload input is the SAME merged set the runtime runs at
-	// startup (yaml ∪ project .mcp.json ∪ ~/.claude.json, via
-	// MergeStartupServersWithDeleted) — the identical contract as
-	// wailskit's reloadSessionMCPServers. The watcher used to push the
-	// yaml-only scope list, so any panel write to the yaml re-kicked every
-	// Claude-migrated server from the running session within one poll (~2s).
-	// The old "no merge here, or deletes resurrect" premise is replaced by
-	// deletion tombstones: panel Remove records the name in mcp_deleted.yaml
-	// and the merge filters tombstoned names, so user deletions still stick
-	// while .mcp.json additions land without waiting for a restart. Manual
-	// yaml-only deletes of a .mcp.json-provided server now mirror startup
-	// migration semantics (re-imported) — deletion is authoritative only via
-	// the panel / tombstone path.
 	servers := w.resolveScopeMCPServers()
 	deleted := config.LoadMCPDeleted(w.configDir)
 	merged, mergeWarnings := mcp.MergeStartupServersWithDeleted(w.workingDir, servers, deleted)
-	// Same containment as startup: a .mcp.json added or edited behind the
-	// running session's back cannot start new child processes unasked.
+
 	merged, gateWarnings := applyProjectMCPGate(merged, w.workingDir)
 	for _, warning := range append(mergeWarnings, gateWarnings...) {
 		debug.Log("mcp", "%s", warning)
@@ -176,9 +119,6 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 	w.manager.Reload(ctx, merged)
 }
 
-// watchedPaths returns every path currently under watch: the global file
-// plus the session's scope files (#497). Scope files are resolved live so a
-// workspace mcp_servers.yaml created after Start is picked up as well.
 func (w *MCPHotReload) watchedPaths() []string {
 	paths := []string{w.mcpPath}
 	for _, p := range w.scopeWatchPaths() {
@@ -186,36 +126,28 @@ func (w *MCPHotReload) watchedPaths() []string {
 			paths = append(paths, p)
 		}
 	}
-	// Watch the project-gate grants file too (#3438 follow-up): without
-	// this, `ggcode mcp approve` only takes effect after a restart, because
-	// the gate re-runs exclusively on watched-file reloads.
+
 	if grantsPath := mcp.ProjectGrantsPath(w.workingDir); grantsPath != "" && !slices.Contains(paths, grantsPath) {
 		paths = append(paths, grantsPath)
 	}
 	return paths
 }
 
-// pathChanged reports whether path's content changed since the last
-// observation, updating the recorded per-path state. An mtime bump with
-// identical content does not count (#521 Bug A: hash debounce now applies
-// to every watched path, not just the global file).
 func (w *MCPHotReload) pathChanged(path string) bool {
 	st, seeded := w.watched[path]
 	info, err := os.Stat(path)
 	if err != nil {
 		if seeded {
-			st.exists = false // disappeared; reappearance will be a change
+			st.exists = false
 		}
 		return false
 	}
 	if !seeded {
-		// Never seen before: either Start hasn't run (direct invocation) or
-		// the file appeared after Start seeded the then-existing files —
-		// treat the appearance as a change so fresh scope configs hot-reload.
+
 		return w.seedState(path)
 	}
 	if !st.exists {
-		// Appeared since the last poll.
+
 		st.exists = true
 		st.mtime = info.ModTime()
 		st.hash = hashFile(path)
@@ -226,7 +158,7 @@ func (w *MCPHotReload) pathChanged(path string) bool {
 	}
 	h := hashFile(path)
 	if h != "" && h == st.hash {
-		st.mtime = info.ModTime() // content unchanged: just an mtime bump
+		st.mtime = info.ModTime()
 		return false
 	}
 	st.mtime = info.ModTime()
@@ -234,8 +166,6 @@ func (w *MCPHotReload) pathChanged(path string) bool {
 	return true
 }
 
-// seedState records the current (mtime, hash) of path as its baseline and
-// reports whether the file exists (#521).
 func (w *MCPHotReload) seedState(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -246,7 +176,6 @@ func (w *MCPHotReload) seedState(path string) bool {
 	return true
 }
 
-// hashFile returns the hex sha256 of path's content, or "" if unreadable.
 func hashFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

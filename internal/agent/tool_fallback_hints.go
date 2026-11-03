@@ -1,37 +1,9 @@
 package agent
 
-// Tool Error Fallback Hints - Context-aware alternative suggestions on tool failures.
-//
-// Research basis: Claude Code and Cursor both inject "did you mean" style hints
-// when tools fail. When an LSP query times out, Claude Code suggests "try
-// search_files instead." When grep returns nothing, Cursor suggests "try broader
-// patterns or code_search." These hints save 1-2 wasted agent iterations where
-// the model blindly retries the same failing tool.
-//
-// Gap in ggcode: tool errors return raw error messages without suggesting
-// alternative approaches. The agent retries the same tool or hallucinates a
-// new approach, wasting iterations. This module adds deterministic, zero-LLM-cost
-// fallback hints keyed on tool name + error pattern.
-//
-// Design:
-//   - Hints are only appended when result.IsError is true
-//   - Hints are context-specific (LSP timeout vs. file not found vs. grep empty)
-//   - Hints are short (1-2 lines) to minimize token overhead
-//   - Each tool gets at most one hint per error to avoid noise
-//   - Hints suggest CONCRETE alternative tools, not generic advice
-
 import (
 	"strings"
 )
 
-// toolFallbackHintOnSuccess reports whether a SUCCESS result of this tool
-// should also flow through toolFallbackHint (#3641): the search tools
-// render zero matches as success, and their empty-result hints are the
-// documented headline scenario of this module.
-// #3673-C: coverage set is shared with isZeroMatchSuccess - both engines
-// must agree on which tools' SUCCESS results are inspected, otherwise
-// lsp_* zero-match successes behave differently depending on which
-// call site sees them first.
 func toolFallbackHintOnSuccess(toolName string) bool {
 	switch toolName {
 	case "grep", "search_files", "code_search",
@@ -41,11 +13,6 @@ func toolFallbackHintOnSuccess(toolName string) bool {
 	return false
 }
 
-// toolFallbackHint returns a short, context-aware fallback suggestion for a
-// failed tool call. Returns empty string if no hint is applicable.
-//
-// The suggestion is based on the tool name and the error content. It maps known
-// failure patterns to concrete alternative tools the agent should try next.
 func toolFallbackHint(toolName, errorContent string) string {
 	if toolName == "" || errorContent == "" {
 		return ""
@@ -54,16 +21,10 @@ func toolFallbackHint(toolName, errorContent string) string {
 	lower := strings.ToLower(errorContent)
 
 	switch {
-	// LSP tools — suggest search-based alternatives
+
 	case isLSPTool(toolName):
 		return lspFallbackHint(lower)
 
-	// Grep/search returning empty — suggest broader search
-	// #3670/#3673-A: zero-match judgment is isZeroMatchSuccess (first-line
-	// sentinel, not bare substrings) so rich results that QUOTE the phrase
-	// are not misjudged. Real zero matches render as a short sentinel-led
-	// payload (grep.go contract); error-path empty messages are short too
-	// and match the same sentinels.
 	case toolName == "grep" || toolName == "search_files":
 		if isZeroMatchSuccess(toolName, errorContent) {
 			return "\n[Hint: No matches found. Try: (1) broaden the pattern with wildcards, (2) use code_search for semantic matching, (3) use glob to find files by name pattern, (4) check if the file extension filter is too narrow.]"
@@ -72,26 +33,21 @@ func toolFallbackHint(toolName, errorContent string) string {
 			return "\n[Hint: Search timed out. Try narrowing the search scope (specific directory) or use glob to find files first, then read specific files.]"
 		}
 
-	// Code search returning empty — suggest keyword-based alternatives
 	case toolName == "code_search":
 		if isZeroMatchSuccess(toolName, errorContent) {
 			return "\n[Hint: Semantic search found nothing. Try: (1) grep with exact keywords, (2) glob for file name patterns, (3) list_directory to explore the structure.]"
 		}
 
-	// Read file not found — file_suggest.go already handles this, but add
-	// a hint for permission errors
 	case toolName == "read_file":
 		if strings.Contains(lower, "permission denied") || strings.Contains(lower, "not permitted") {
 			return "\n[Hint: Permission denied. The file may be protected. Try run_command with 'cat <file>' if shell access is available, or check file permissions.]"
 		}
 
-	// Edit/write failures — suggest reading the file first
 	case toolName == "edit_file" || toolName == "write_file" || toolName == "multi_edit_file":
 		if strings.Contains(lower, "old_text") || strings.Contains(lower, "not found in file") || strings.Contains(lower, "does not match") {
 			return "\n[Hint: Edit anchor not found. The file may have changed since last read. Re-read the file with read_file to get current content, then retry the edit with exact lines.]"
 		}
 
-	// Web fetch/search failures — suggest alternative approach
 	case toolName == "web_fetch":
 		if isNetworkError(lower) {
 			return "\n[Hint: Web fetch failed. Try: (1) web_search to find alternative URLs, (2) retry after a few seconds for transient errors, (3) use browser tool for JavaScript-heavy pages.]"
@@ -101,13 +57,11 @@ func toolFallbackHint(toolName, errorContent string) string {
 			return "\n[Hint: Search rate limited. Wait a moment and try with different keywords or fewer results.]"
 		}
 
-	// Git operations — suggest checking status first
 	case toolName == "git_add" || toolName == "git_commit":
 		if strings.Contains(lower, "nothing to commit") || strings.Contains(lower, "no changes") {
 			return "\n[Hint: No changes staged. Run git_status to see current state, then git_diff to review modifications.]"
 		}
 
-	// Run command — suggest start_command for long-running
 	case toolName == "run_command":
 		if isTimeout(lower) {
 			return "\n[Hint: Command timed out. For long-running processes (dev servers, watchers, builds), use start_command to run in background, then use read_command_output to check results.]"
@@ -117,7 +71,6 @@ func toolFallbackHint(toolName, errorContent string) string {
 	return ""
 }
 
-// isLSPTool returns true for any LSP-based tool.
 func isLSPTool(name string) bool {
 	switch name {
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_implementation",
@@ -129,7 +82,6 @@ func isLSPTool(name string) bool {
 	return false
 }
 
-// lspFallbackHint returns hints for LSP tool failures.
 func lspFallbackHint(lowerErr string) string {
 	if isTimeout(lowerErr) || strings.Contains(lowerErr, "not ready") ||
 		strings.Contains(lowerErr, "server crashed") || strings.Contains(lowerErr, "starting") {
@@ -141,17 +93,6 @@ func lspFallbackHint(lowerErr string) string {
 	return ""
 }
 
-// isZeroMatchSuccess reports whether a SUCCESS (non-error) tool result is a
-// zero-match outcome for a search-class tool (#3641). grep/search_files
-// render "No matches found" as a successful empty result, so IsError-gated
-// fallback hints never fired for the detector's headline scenario.
-// Deliberately narrow: only search tools, and the match must be the
-// result's OWN sentinel line, not content that happens to contain the
-// phrase (#3670: a rich grep result whose hit lines quote the literal
-// "no match" source text must not be mistaken for a zero match).
-// A real zero-match payload is short: sentinel line + optional suggestion
-// block (grep.go: "No matches found.\nSuggestions:..."). Anything longer
-// than zeroMatchMaxBytes is by definition a rich result.
 const zeroMatchMaxBytes = 512
 
 func isZeroMatchSuccess(toolName, content string) bool {
@@ -180,20 +121,17 @@ func isZeroMatchSuccess(toolName, content string) bool {
 	return false
 }
 
-// isTimeout checks if the error indicates a timeout.
 func isTimeout(s string) bool {
 	return strings.Contains(s, "timeout") || strings.Contains(s, "timed out") ||
 		strings.Contains(s, "deadline exceeded")
 }
 
-// isNetworkError checks for common network error patterns.
 func isNetworkError(s string) bool {
 	return strings.Contains(s, "connection") || strings.Contains(s, "dns") ||
 		strings.Contains(s, "network") || strings.Contains(s, "timeout") ||
 		strings.Contains(s, "eof") || strings.Contains(s, "unreachable")
 }
 
-// isRateLimited checks for rate limiting patterns.
 func isRateLimited(s string) bool {
 	return strings.Contains(s, "rate limit") || strings.Contains(s, "too many") ||
 		strings.Contains(s, "429") || strings.Contains(s, "throttl")

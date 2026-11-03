@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// withFreshTracker swaps defaultFileTracker for a clean instance and restores it.
 func withFreshTracker(t *testing.T) {
 	t.Helper()
 	orig := defaultFileTracker
@@ -17,11 +16,6 @@ func withFreshTracker(t *testing.T) {
 	t.Cleanup(func() { defaultFileTracker = orig })
 }
 
-// TestMultiFileRead_RecordsOnlySeenFiles (#321) verifies that RecordRead is
-// only called for files whose content actually made it into the output.
-// ERROR files (sandbox denial / read failure) and skipped files must NOT be
-// recorded — otherwise HasBeenSeen lies and write_file's blind-overwrite
-// warning is suppressed for files the agent never saw.
 func TestMultiFileRead_RecordsOnlySeenFiles(t *testing.T) {
 	withFreshTracker(t)
 	dir := t.TempDir()
@@ -37,7 +31,7 @@ func TestMultiFileRead_RecordsOnlySeenFiles(t *testing.T) {
 	input, _ := json.Marshal(map[string]any{
 		"files": []map[string]any{
 			{"path": good},
-			{"path": missing}, // read failure → ERROR block
+			{"path": missing},
 		},
 	})
 	res, err := MultiFileRead{}.Execute(context.Background(), input)
@@ -52,7 +46,6 @@ func TestMultiFileRead_RecordsOnlySeenFiles(t *testing.T) {
 		t.Error("file that failed to read (ERROR block) must NOT be tracked")
 	}
 
-	// Sandbox-denied file must not be tracked either.
 	origTracker := defaultFileTracker
 	defaultFileTracker = NewFileIntegrityTracker()
 	defer func() { defaultFileTracker = origTracker }()
@@ -71,8 +64,6 @@ func TestMultiFileRead_RecordsOnlySeenFiles(t *testing.T) {
 	}
 }
 
-// TestMultiFileRead_SkippedFileNotTracked (#321) verifies that files skipped
-// due to the cumulative output limit are not recorded as seen.
 func TestMultiFileRead_SkippedFileNotTracked(t *testing.T) {
 	withFreshTracker(t)
 	dir := t.TempDir()
@@ -85,9 +76,6 @@ func TestMultiFileRead_SkippedFileNotTracked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Craft a first file whose block alone exceeds the cumulative byte cap
-	// (long lines keep it under the per-file default line limit), so the
-	// second file is skipped.
 	big := filepath.Join(dir, "big.txt")
 	var sb strings.Builder
 	longLine := strings.Repeat("x", maxMultiFileReadTotalBytes/4)
@@ -102,8 +90,8 @@ func TestMultiFileRead_SkippedFileNotTracked(t *testing.T) {
 
 	input, _ := json.Marshal(map[string]any{
 		"files": []map[string]any{
-			{"path": big}, // exceeds line budget alone
-			{"path": b},   // must be skipped
+			{"path": big},
+			{"path": b},
 		},
 	})
 	res, err := MultiFileRead{}.Execute(context.Background(), input)
@@ -113,7 +101,7 @@ func TestMultiFileRead_SkippedFileNotTracked(t *testing.T) {
 	if !strings.Contains(res.Content, "skipped=2") {
 		t.Fatalf("expected both files skipped (big exceeds budget), got: %s", res.Content)
 	}
-	// Neither the oversized file nor the following file was seen by the agent.
+
 	if defaultFileTracker.HasBeenSeen(b) {
 		t.Error("skipped file must NOT be tracked")
 	}
@@ -122,9 +110,6 @@ func TestMultiFileRead_SkippedFileNotTracked(t *testing.T) {
 	}
 }
 
-// TestMultiFileEdit_AtomicRecordsWrite (#322a) verifies that after an atomic
-// multi_file_edit, the tracker recorded the write so a subsequent write_file
-// on the same file does NOT produce a stale-read false positive.
 func TestMultiFileEdit_AtomicRecordsWrite(t *testing.T) {
 	withFreshTracker(t)
 	dir := t.TempDir()
@@ -164,16 +149,12 @@ func TestMultiFileEdit_AtomicRecordsWrite(t *testing.T) {
 		t.Error("file edited by atomic multi_file_edit must not be reported stale (missing RecordWrite)")
 	}
 
-	// Same for the partial_success path (already had RecordWrite; regression guard).
 	data, _ := os.ReadFile(target)
 	if err := os.WriteFile(target, data, 0644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestMultiFileEdit_DiagnosticBaselineClearedOnRollback (#322b) verifies that
-// when an atomic edit fails and rolls back, no stale diagnostic baseline is
-// left behind for the planned files.
 func TestMultiFileEdit_DiagnosticBaselineClearedOnRollback(t *testing.T) {
 	diagBaselineMu.Lock()
 	saved := diagBaselines
@@ -191,8 +172,6 @@ func TestMultiFileEdit_DiagnosticBaselineClearedOnRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Force a write failure mid-atomic-batch by making the second target a
-	// directory (write to it errors → rollback of first file).
 	badDir := filepath.Join(dir, "badpath")
 	if err := os.Mkdir(badDir, 0755); err != nil {
 		t.Fatal(err)
@@ -224,7 +203,6 @@ func TestMultiFileEdit_DiagnosticBaselineClearedOnRollback(t *testing.T) {
 		t.Errorf("expected diagnostic baselines to be cleared after rollback, found %d", n)
 	}
 
-	// okFile must be rolled back to original content.
 	data, _ := os.ReadFile(okFile)
 	if strings.Contains(string(data), "edited") {
 		t.Error("atomic mode should roll back already-written files on failure")

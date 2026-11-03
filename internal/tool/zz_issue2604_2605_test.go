@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #2604: simctl listapps emits OpenStep plist lines like
-// `CFBundleIdentifier = "com.apple.Bridge";` - the old parser TrimSpace'd
-// only whitespace, leaving the quotes/semicolon attached, so the
-// com.apple.* system-app filter NEVER matched. Pin the clean extraction.
 func TestIssue2604_ListAppsBundleIDExtraction(t *testing.T) {
 	lines := []string{
 		`CFBundleIdentifier = "com.apple.Bridge";`,
@@ -38,9 +34,6 @@ func TestIssue2604_ListAppsBundleIDExtraction(t *testing.T) {
 	}
 }
 
-// #2605: AppleScript string escaping must handle backslashes (the escape
-// introducer) BEFORE double quotes; the old code only escaped quotes, so
-// `C:\Users\foo` failed to compile and `\n` silently typed a newline.
 func TestIssue2604_AppleScriptEscaping(t *testing.T) {
 	cases := map[string]string{
 		`plain`:        `plain`,

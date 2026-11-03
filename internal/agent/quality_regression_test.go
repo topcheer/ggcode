@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// helper: build a RunStats and score it
 func scoreRunForTest(s *ResponseQualityScorer, iterations int, errCount int, success bool, provider, model string) {
 	stats := &RunStats{
 		ToolCalls:         map[string]int{"read_file": 2, "edit_file": 1},
@@ -21,14 +20,14 @@ func scoreRunForTest(s *ResponseQualityScorer, iterations int, errCount int, suc
 	for i := 0; i < errCount; i++ {
 		stats.Errors = append(stats.Errors, "err")
 	}
-	// #1490-A: scorers read ErrorCount, not len(Errors) - keep in sync.
+
 	stats.ErrorCount = errCount
 	s.ScoreRun(stats, provider, model)
 }
 
 func TestDetectRegression_InsufficientHistory(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Only 1 prior run - below regressionMinHistory (3)
+
 	scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 
@@ -51,11 +50,11 @@ func TestDetectRegression_NoRegression(t *testing.T) {
 
 func TestDetectRegression_ScoreDrop(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Build a healthy baseline (4 successful runs)
+
 	for i := 0; i < 4; i++ {
 		scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	}
-	// Now a bad run: high iterations, errors, failure
+
 	scoreRunForTest(s, 12, 4, false, "anthropic", "claude")
 
 	rep := s.DetectRegression()
@@ -83,11 +82,11 @@ func TestDetectRegression_ScoreDrop(t *testing.T) {
 
 func TestDetectRegression_IterationInflation(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Baseline: low iterations, success, no errors -> high score
+
 	for i := 0; i < 4; i++ {
 		scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	}
-	// Current: succeeds but takes many more iterations (iteration inflation)
+
 	scoreRunForTest(s, 10, 0, true, "anthropic", "claude")
 
 	rep := s.DetectRegression()
@@ -107,11 +106,11 @@ func TestDetectRegression_IterationInflation(t *testing.T) {
 
 func TestDetectRegression_ErrorRateEmergence(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Clean baseline
+
 	for i := 0; i < 4; i++ {
 		scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	}
-	// Current: errors emerge
+
 	scoreRunForTest(s, 5, 2, true, "anthropic", "claude")
 
 	rep := s.DetectRegression()
@@ -131,15 +130,15 @@ func TestDetectRegression_ErrorRateEmergence(t *testing.T) {
 
 func TestDetectRegression_DifferentProvidersIsolated(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Build baseline for provider A
+
 	for i := 0; i < 4; i++ {
 		scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	}
-	// First run for provider B (should not cross-contaminate A's baseline)
+
 	scoreRunForTest(s, 3, 0, true, "openai", "gpt-4o")
 
 	rep := s.DetectRegression()
-	// The current run is provider B with only 1 run - no baseline for B yet.
+
 	if rep.Detected {
 		t.Error("should not detect regression for a new provider with no history")
 	}
@@ -150,11 +149,11 @@ func TestDetectRegression_DifferentProvidersIsolated(t *testing.T) {
 
 func TestDetectRegression_SeveritySevere(t *testing.T) {
 	s := NewResponseQualityScorer(50)
-	// Perfect baseline
+
 	for i := 0; i < 4; i++ {
 		scoreRunForTest(s, 3, 0, true, "anthropic", "claude")
 	}
-	// Catastrophic run
+
 	scoreRunForTest(s, 15, 6, false, "anthropic", "claude")
 
 	rep := s.DetectRegression()
@@ -164,7 +163,7 @@ func TestDetectRegression_SeveritySevere(t *testing.T) {
 }
 
 func TestMaybeDetectRegression_NilSafe(t *testing.T) {
-	// Should not panic when scorer is nil
+
 	var s *ResponseQualityScorer
 	s.maybeDetectRegression() //nolint:staticcheck // intentional nil test
 }

@@ -1,13 +1,5 @@
 package agent
 
-// Tests for #4007: extractEditedPaths must cover every member of the
-// canonical sourceMutatingTools superset. Before the fix, multi_edit_file,
-// batch_replace, lsp_rename and file_ops passed the edit-tool gates at both
-// call sites (agent.go MarkDirty + fileChurn/tunnelVision/prematureCommit
-// wiring) but yielded zero paths, silently starving every downstream
-// detector. This test walks the superset so the hand-written switch can
-// never drift from verify_hint.go's canonical map again.
-
 import (
 	"encoding/json"
 	"slices"
@@ -16,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// issue4007SampleArgs carries one realistic argument payload per
-// source-mutating tool, matching the registered tool schemas.
 var issue4007SampleArgs = map[string]string{
 	"edit_file":        `{"file_path": "a.go", "old_text": "x", "new_text": "y"}`,
 	"write_file":       `{"path": "b.go", "content": "..."}`,
@@ -30,8 +20,6 @@ var issue4007SampleArgs = map[string]string{
 	"notebook_edit":    `{"notebook_path": "n.ipynb", "operation": "add"}`,
 }
 
-// TestIssue4007ExtractEditedPathsCoversSuperset: every source-mutating tool
-// must produce at least one path - the anti-drift pin.
 func TestIssue4007ExtractEditedPathsCoversSuperset(t *testing.T) {
 	for name := range sourceMutatingTools {
 		sample, ok := issue4007SampleArgs[name]
@@ -46,8 +34,6 @@ func TestIssue4007ExtractEditedPathsCoversSuperset(t *testing.T) {
 	}
 }
 
-// TestIssue4007SpecificShapes pins the exact extraction semantics added by
-// the fix.
 func TestIssue4007SpecificShapes(t *testing.T) {
 	t.Run("batch_replace files is a string array", func(t *testing.T) {
 		paths := extractEditedPaths(provider.ToolCallDelta{

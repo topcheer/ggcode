@@ -73,11 +73,10 @@ func TestSuccessDeclare_SameIterationNoWarn(t *testing.T) {
 	s.recordToolCall()
 	s.recordToolCall()
 
-	// currentIter == declarationIter+1 = 2, should NOT warn (same/cleanup round)
 	if msg := s.maybeWarn(2); msg != "" {
 		t.Errorf("expected no warning in immediate next iteration, got: %s", msg)
 	}
-	// currentIter == declarationIter+2 = 3, SHOULD warn
+
 	if msg := s.maybeWarn(3); msg == "" {
 		t.Error("expected warning at iteration 3 (2 after declaration)")
 	}
@@ -85,7 +84,7 @@ func TestSuccessDeclare_SameIterationNoWarn(t *testing.T) {
 
 func TestSuccessDeclare_CaveatSkipsDeclaration(t *testing.T) {
 	s := newSuccessDeclareState()
-	// "all done" is present but hedged with "still need to"
+
 	s.recordAssistantText("The core logic is all done, but we still need to write tests.", 0)
 	s.recordToolCall()
 	s.recordToolCall()
@@ -194,7 +193,6 @@ func TestItoaSD(t *testing.T) {
 	}
 }
 
-// toLowerSD avoids importing strings in test file redundantly.
 func toLowerSD(s string) string {
 	b := make([]byte, len(s))
 	for i := range s {
@@ -207,16 +205,12 @@ func toLowerSD(s string) string {
 	return string(b)
 }
 
-// TestSuccessDeclare_WrapUpPhrasingNotVetoed (#352): standard wrap-up
-// language elsewhere in the reply must not veto a legitimate declaration.
-// Full-text caveat matching previously discarded these and permanently
-// blinded the detector (only the first declaration is tracked).
 func TestSuccessDeclare_WrapUpPhrasingNotVetoed(t *testing.T) {
 	cases := []string{
-		"All done. There are no remaining issues.",                                              // "remaining" self-veto
-		"Everything is working. Note that I also refactored the helper.",                        // "note that"
-		"The task is complete. However, see the docs for details.",                              // "however"
-		"All done. For reference, a sensible next step for you would be deploying it yourself.", // "next step" beyond trailing window
+		"All done. There are no remaining issues.",
+		"Everything is working. Note that I also refactored the helper.",
+		"The task is complete. However, see the docs for details.",
+		"All done. For reference, a sensible next step for you would be deploying it yourself.",
 	}
 	for _, text := range cases {
 		s := newSuccessDeclareState()
@@ -227,8 +221,6 @@ func TestSuccessDeclare_WrapUpPhrasingNotVetoed(t *testing.T) {
 	}
 }
 
-// TestSuccessDeclare_NearbyCaveatStillVetoes (#352): hedging immediately
-// adjacent to the claim still vetoes it — the window is local, not removed.
 func TestSuccessDeclare_NearbyCaveatStillVetoes(t *testing.T) {
 	s := newSuccessDeclareState()
 	s.recordAssistantText("All done, but first we need to run the tests.", 0)
@@ -237,8 +229,6 @@ func TestSuccessDeclare_NearbyCaveatStillVetoes(t *testing.T) {
 	}
 }
 
-// TestSuccessDeclare_ExpandedPhrases (#352): common declaration variants
-// previously missed by the phrase table.
 func TestSuccessDeclare_ExpandedPhrases(t *testing.T) {
 	cases := []struct {
 		text    string
@@ -247,7 +237,7 @@ func TestSuccessDeclare_ExpandedPhrases(t *testing.T) {
 		{"Task complete.", true},
 		{"Done!", true},
 		{"The fix works.", true},
-		{"Please review the wall setup drawing.", false}, // "all set" substring must not match
+		{"Please review the wall setup drawing.", false},
 	}
 	for _, c := range cases {
 		s := newSuccessDeclareState()

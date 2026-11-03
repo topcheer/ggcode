@@ -8,46 +8,34 @@ import (
 	"time"
 )
 
-// ResponseQualityScorer tracks per-run quality metrics to enable
-// provider/model comparison. Unlike failover (which reacts to failures),
-// this proactively measures response quality signals so users can make
-// informed A/B decisions when switching models.
-//
-// Design: lightweight, deterministic, zero LLM overhead. All signals are
-// derived from existing RunStats — no extra API calls needed.
 type ResponseQualityScorer struct {
 	mu     sync.RWMutex
 	runs   []QualityEntry
 	maxRun int
 
-	// latestRegression is the most recent regression report (if any).
-	// Populated by maybeDetectRegression after each scored run.
 	latestRegression RegressionReport
 }
 
-// QualityEntry records quality signals for a single agent run.
 type QualityEntry struct {
-	Provider   string    // provider name (e.g. "anthropic", "openai")
-	Model      string    // model name (e.g. "claude-sonnet-4")
-	Timestamp  time.Time // when the run completed
-	Score      float64   // overall quality score 0.0–1.0
+	Provider   string
+	Model      string
+	Timestamp  time.Time
+	Score      float64
 	Signals    QualitySignals
-	UserPrompt string // first 100 chars
+	UserPrompt string
 	RunID      string
 }
 
-// QualitySignals are the individual metrics that compose the overall score.
 type QualitySignals struct {
-	ToolEfficiency   float64 // successful_tools / total_tools (0–1)
-	ErrorRate        float64 // errors / iterations (0 = best)
-	IterationRatio   float64 // iterations_used / expected (lower = better)
+	ToolEfficiency   float64
+	ErrorRate        float64
+	IterationRatio   float64
 	Success          bool
 	DurationSecs     float64
 	FilesEdited      int
-	ContextPeakRatio float64 // context_peak / context_window (lower = better)
+	ContextPeakRatio float64
 }
 
-// NewResponseQualityScorer creates a scorer with the given history capacity.
 func NewResponseQualityScorer(maxRuns int) *ResponseQualityScorer {
 	if maxRuns <= 0 {
 		maxRuns = 100
@@ -55,8 +43,6 @@ func NewResponseQualityScorer(maxRuns int) *ResponseQualityScorer {
 	return &ResponseQualityScorer{maxRun: maxRuns}
 }
 
-// ScoreRun computes quality signals from RunStats and records the entry.
-// provider and model identify the LLM used for this run.
 func (s *ResponseQualityScorer) ScoreRun(stats *RunStats, providerName, modelName string) QualityEntry {
 	entry := s.computeScore(stats, providerName, modelName)
 	s.mu.Lock()
@@ -68,7 +54,6 @@ func (s *ResponseQualityScorer) ScoreRun(stats *RunStats, providerName, modelNam
 	return entry
 }
 
-// computeScore derives quality signals from RunStats.
 func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, modelName string) QualityEntry {
 	signals := QualitySignals{
 		Success:      stats.Success,
@@ -76,16 +61,11 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 		DurationSecs: stats.Duration.Seconds(),
 	}
 
-	// Tool efficiency: ratio of non-error tool calls to total tool calls.
 	totalTools := 0
 	for _, count := range stats.ToolCalls {
 		totalTools += count
 	}
-	// #1490-A: use the untruncated counter, not len(Errors) - the list
-	// caps at 10 for the reflection prompt, so error-heavy runs (22
-	// failures in 25 calls) read as 10/25 and the quality score
-	// systematically OVERESTIMATED bad runs exactly where reflection
-	// and provider A/B need the most discrimination.
+
 	errorCount := stats.ErrorCount
 	if totalTools > 0 {
 		failedTools := 0
@@ -96,33 +76,27 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 		}
 		signals.ToolEfficiency = float64(totalTools-failedTools) / float64(totalTools)
 	} else if stats.Success {
-		signals.ToolEfficiency = 1.0 // no tools needed, answered directly
+		signals.ToolEfficiency = 1.0
 	}
-	// Error rate: errors per iteration.
+
 	if stats.Iterations > 0 {
 		signals.ErrorRate = float64(errorCount) / float64(stats.Iterations)
 	}
 
-	// Iteration ratio: how many turns were needed? Lower is better.
-	// Expected baseline: 3 iterations for a simple task.
 	expectedIter := 3
 	if stats.Iterations > 0 {
 		signals.IterationRatio = float64(stats.Iterations) / float64(expectedIter)
 	}
 
-	// Context usage efficiency.
 	if stats.ContextWindow > 0 {
 		signals.ContextPeakRatio = float64(stats.ContextPeakTokens) / float64(stats.ContextWindow)
 	}
 
-	// Compute overall score (weighted sum, 0.0–1.0).
 	score := s.weightedScore(signals)
 
 	prompt := stats.UserPrompt
 	if len(prompt) > 100 {
-		// #420: truncate by RUNE, not bytes — the old prompt[:100] sliced
-		// mid-codepoint for CJK prompts (60 Chinese chars = 180 bytes →
-		// invalid UTF-8 → U+FFFD mojibake after JSON serialization).
+
 		prompt = truncateRunes(prompt, 100)
 	}
 
@@ -137,34 +111,27 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 	}
 }
 
-// weightedScore combines individual signals into an overall score.
 func (s *ResponseQualityScorer) weightedScore(sig QualitySignals) float64 {
 	var score float64
 
-	// Success is the most important signal (40%).
 	if sig.Success {
 		score += 0.40
 	}
 
-	// Tool efficiency (25%): how well the agent used tools without errors.
 	score += 0.25 * clamp01(sig.ToolEfficiency)
 
-	// Error rate penalty (15%): fewer errors per iteration is better.
 	errorScore := clamp01(1.0 - sig.ErrorRate)
 	score += 0.15 * errorScore
 
-	// Iteration efficiency (10%): fewer iterations than expected is better.
-	iterScore := clamp01(1.5 - sig.IterationRatio) // 1.5 so even 50% over gets some credit
+	iterScore := clamp01(1.5 - sig.IterationRatio)
 	score += 0.10 * iterScore
 
-	// Context efficiency (10%): using less of the context window is better.
 	ctxScore := clamp01(1.0 - sig.ContextPeakRatio)
 	score += 0.10 * ctxScore
 
-	return math.Round(score*1000) / 1000 // 3 decimal places
+	return math.Round(score*1000) / 1000
 }
 
-// ProviderComparison returns aggregated stats per provider/model pair.
 type ProviderComparison struct {
 	Provider    string
 	Model       string
@@ -175,7 +142,6 @@ type ProviderComparison struct {
 	BestScore   float64
 }
 
-// Compare returns per-provider/model aggregated comparisons.
 func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -187,10 +153,6 @@ func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 		durSum   float64
 		best     float64
 	}
-	// #420: struct key, not string concat — "openrouter/anthropic"+"claude-3.5"
-	// concatenated to "openrouter/anthropic/claude-3.5" and SplitN("/",2)
-	// then reparsed it as provider="openrouter", model="anthropic/claude-3.5",
-	// mis-attributing A/B comparison stats.
 	type pmKey struct{ provider, model string }
 	aggs := map[pmKey]*agg{}
 
@@ -226,7 +188,6 @@ func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 		result = append(result, comp)
 	}
 
-	// Sort by avg score descending.
 	for i := 0; i < len(result); i++ {
 		for j := i + 1; j < len(result); j++ {
 			if result[j].AvgScore > result[i].AvgScore {
@@ -237,7 +198,6 @@ func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 	return result
 }
 
-// FormatComparison returns a human-readable summary of provider performance.
 func (s *ResponseQualityScorer) FormatComparison() string {
 	comps := s.Compare()
 	if len(comps) == 0 {
@@ -258,7 +218,6 @@ func (s *ResponseQualityScorer) FormatComparison() string {
 	return b.String()
 }
 
-// Recent returns the last n quality entries.
 func (s *ResponseQualityScorer) Recent(n int) []QualityEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -271,8 +230,6 @@ func (s *ResponseQualityScorer) Recent(n int) []QualityEntry {
 	return result
 }
 
-// truncateRunes truncates s to at most n runes without splitting a
-// multi-byte codepoint (#420).
 func truncateRunes(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -287,7 +244,6 @@ func truncateRunes(s string, n int) string {
 	return s
 }
 
-// clamp01 limits a value to the [0, 1] range.
 func clamp01(v float64) float64 {
 	if v < 0 {
 		return 0

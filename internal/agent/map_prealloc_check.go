@@ -1,51 +1,5 @@
 package agent
 
-// Post-Write Map Preallocation Detection (Check #57)
-//
-// Trend: Memory Allocation Optimization - Map Growth & Rehashing Cost
-//
-// Problem: AI coding agents generate code like:
-//
-//	m := make(map[K]V)
-//	for _, item := range items {
-//	    m[item.Key] = item.Value
-//	}
-//
-// Without a size hint, the Go runtime starts with a small hash table and
-// rehashes (rebuilds) it multiple times as entries are added. Each rehash
-// is O(N) and causes a burst of allocations. For N=10000, this means ~13
-// rehashes and significant GC churn. The fix is trivial:
-// make(map[K]V, len(items)) allocates the right-sized table once.
-//
-// Competitor analysis:
-//   - gocritic: no map preallocation check
-//   - staticcheck: no map preallocation check
-//   - go vet: does not flag this pattern
-//   - prealloc linter: only covers slices, not maps
-//   - Claude Code / Cursor / Cline / OpenHands / Aider: no detection
-//
-// Detection approach: AST-based, delta-aware, function-scoped. Find for/range
-// loops where:
-//  1. A map is declared via make(map[K]V) without a size hint (single arg)
-//     inside the same function unit as the loop
-//  2. Inside the loop body, the map is written to (map[key] = value)
-//  3. The range expression iterates a slice/array whose len() is known
-//     at declaration time (same variable name or make immediately before loop)
-//
-// False positive avoidance:
-//   - Skip if make already has a second argument (size hint present)
-//   - Skip if the loop body has a conditional (if/guard) that might skip entries
-//   - Skip if the range source is a channel (unknown size)
-//   - Skip test files
-//   - #1103: skip when the hintless map declaration belongs to a different
-//     function than the loop. Each function unit is scanned against only its
-//     own declarations, so a same-named slice populated by a loop in another
-//     function can no longer be mistaken for a cross-file-scope map write.
-//   - #1121: skip package-level var maps entirely when assembling candidate
-//     declarations. Such maps are registries/caches accumulated across many
-//     calls, so no single loop's len(source) is a meaningful size hint and
-//     per-loop "add a size hint" advice cannot be implemented there.
-
 import (
 	"fmt"
 	"go/ast"
@@ -55,15 +9,12 @@ import (
 	"strings"
 )
 
-// mapPreallocWarning represents a single map preallocation warning.
 type mapPreallocWarning struct {
 	varName   string
 	loopLine  int
-	sourceLen string // expression whose len() should be used as hint
+	sourceLen string
 }
 
-// checkMapPrealloc detects maps created without a size hint that are then
-// populated from a known-size source inside a for/range loop.
 func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 	if !strings.HasSuffix(filePath, ".go") {
 		return nil
@@ -85,11 +36,6 @@ func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta: subtract patterns already present in old content.
-	// #1145: count-based matching per (varName, sourceLen), not a set-subtract
-	// on p.String() (varName only). Different functions commonly declare the
-	// same map name, so a name-only set key masked brand-new violations
-	// behind pre-existing ones in sibling functions.
 	if strings.TrimSpace(oldContent) != "" {
 		oldAST, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
 		if oldAST != nil {
@@ -105,7 +51,7 @@ func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 					key := p.varName + "|" + p.sourceLen
 					if matched[key] < oldCounts[key] {
 						matched[key]++
-						continue // pairs with an existing old instance
+						continue
 					}
 					delta = append(delta, p)
 				}
@@ -133,29 +79,16 @@ func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// mapDeclInfo tracks a map variable declared without a size hint.
 type mapDeclInfo struct {
 	name string
 	pos  token.Pos
 }
 
-// findMissingMapPrealloc scans the AST for map-population-in-loop patterns
-// where the map lacks a size hint.
-//
-// #1103: analysis is performed per function unit (top-level FuncDecl and
-// nested FuncLit). A unit only correlates loop writes against declarations
-// reachable from that unit - its own locals - so declarations in sibling
-// functions never satisfy a loop in another one.
-// #1121: package-level var maps are excluded from candidates entirely;
-// registry/cache accumulation semantics make a one-shot size hint wrong.
 func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWarning {
 	var warnings []mapPreallocWarning
 
-	// scanUnit checks one function body: declarations and loops are both
-	// taken from the same lexical region.
 	scanUnit := func(body *ast.BlockStmt, fnType *ast.FuncType) {
-		// Visible declarations: this unit's own local make(map[K]V)
-		// bindings only (#1121: package-level var maps are not warned).
+
 		binds := make(map[string]*mapDeclInfo, 4)
 		collectLocalMapBinds(body, binds)
 		if fnType != nil {
@@ -164,17 +97,11 @@ func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWa
 			excludeShadowedBinds(nil, body, binds)
 		}
 
-		// One warning per variable name within a unit, mirroring the
-		// historical per-file suppression.
 		unitWarned := make(map[string]bool)
 		unsafeSources := collectUnsafeRangeSources(fnTypeParams(fnType), body)
 
 		onLoop := func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool) {
-			// #2910: a provably len()-unsafe source (channel / int / func)
-			// has no knowable iteration count — the size-hint advice itself
-			// is unimplementable, so suppress the warning entirely instead of
-			// suggesting make(map[K]V, len(ch)) which is semantically wrong
-			// (channel) or does not compile (range-over-int/func).
+
 			if sourceName != "" && unsafeSources[sourceName] {
 				return
 			}
@@ -214,16 +141,11 @@ func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWa
 	return warnings
 }
 
-// collectLocalMapBinds adds hintless map bindings declared by short defines
-// and var declarations directly inside a function unit body. Function
-// literals within the body constitute their own units; descending into them
-// would leak closure-internal names outward (issue #1103), so that branch is
-// pruned.
 func collectLocalMapBinds(body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.FuncLit:
-			return false // nested closure: analyzed as its own unit
+			return false
 		case *ast.GenDecl:
 			if node.Tok != token.VAR {
 				return true
@@ -260,12 +182,6 @@ func collectLocalMapBinds(body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
 	})
 }
 
-// excludeShadowedBinds drops candidate bindings whose bare name can refer to
-// a different value inside the unit: a parameter shadows same-named bindings
-// collected from inner blocks, and a same-name assignment of an already-sized
-// make(map[K]V, n) means the write belongs to the sized variable (issue
-// #1103 conservatism - under-detection is preferred over a harmful
-// slice-to-map rewrite hint).
 func excludeShadowedBinds(params *ast.FieldList, body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
 	if len(binds) == 0 {
 		return
@@ -307,8 +223,6 @@ func excludeShadowedBinds(params *ast.FieldList, body *ast.BlockStmt, binds map[
 	}
 }
 
-// analyzeMapInit checks if an initialization expression is make(map[K]V)
-// without a size hint. Returns nil if not a hintless map.
 func analyzeMapInit(name string, pos token.Pos, expr ast.Expr) *mapDeclInfo {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -321,24 +235,18 @@ func analyzeMapInit(name string, pos token.Pos, expr ast.Expr) *mapDeclInfo {
 	if len(call.Args) == 0 {
 		return nil
 	}
-	// First arg must be a map type.
+
 	mt, ok := call.Args[0].(*ast.MapType)
 	if !ok || mt == nil {
 		return nil
 	}
-	// make(map[K]V) with 1 arg = no hint.
-	// make(map[K]V, n) with 2 args = has hint.
+
 	if len(call.Args) == 1 {
 		return &mapDeclInfo{name: name, pos: pos}
 	}
 	return nil
 }
 
-// getRangeSourceName extracts the variable name from a range expression.
-// Returns "" for complex expressions where the source size is unknown.
-// #2910: a returned name is NOT yet proof that len() is valid — the caller
-// must also check collectUnsafeRangeSources, which flags identifiers
-// declared as channels, integer builtins or funcs (range-over-func).
 func getRangeSourceName(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -351,23 +259,12 @@ func getRangeSourceName(expr ast.Expr) string {
 	return ""
 }
 
-// rangeUnsafeBuiltins are integer builtin types: ranging over them yields
-// index values (Go 1.22+ range-over-int), where len(source) does not compile
-// (#2910).
 var rangeUnsafeBuiltins = map[string]bool{
 	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
 	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
 	"uintptr": true, "byte": true, "rune": true,
 }
 
-// collectUnsafeRangeSources returns identifiers whose declared type makes a
-// len() size hint invalid or meaningless: channels, integer builtins and
-// func values (range-over-func, Go 1.23+). go/parser carries no type
-// information, so the detector cannot prove an arbitrary range source is a
-// slice/array/map — but for sources it CAN prove unsafe, the warning (and
-// its len() advice) must be suppressed entirely: a channel/int/func range
-// has no knowable iteration count, so the "add a size hint" advice itself
-// is unimplementable (#2910).
 func collectUnsafeRangeSources(params *ast.FieldList, body *ast.BlockStmt) map[string]bool {
 	unsafe := make(map[string]bool)
 	markType := func(name string, typ ast.Expr) {
@@ -394,7 +291,7 @@ func collectUnsafeRangeSources(params *ast.FieldList, body *ast.BlockStmt) map[s
 		ast.Inspect(body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.FuncLit:
-				return false // nested closure: analyzed as its own unit
+				return false
 			case *ast.GenDecl:
 				if node.Tok != token.VAR {
 					return true
@@ -430,8 +327,6 @@ func collectUnsafeRangeSources(params *ast.FieldList, body *ast.BlockStmt) map[s
 	return unsafe
 }
 
-// markUnsafeExpr flags identifiers bound to expressions whose range has no
-// knowable iteration count (#2910).
 func markUnsafeExpr(name string, expr ast.Expr, unsafe map[string]bool) {
 	if name == "" || expr == nil {
 		return
@@ -447,26 +342,22 @@ func markUnsafeExpr(name string, expr ast.Expr, unsafe map[string]bool) {
 					}
 				}
 			case "len", "cap":
-				// n := len(x): integer value; range-over-int (#2910).
+
 				unsafe[name] = true
 			}
 		}
 	case *ast.BasicLit:
 		if v.Kind == token.INT {
-			unsafe[name] = true // n := 10
+			unsafe[name] = true
 		}
 	case *ast.FuncLit, *ast.ChanType:
-		// iterator := func(yield ...) / var c chan T: range-over-func / chan.
+
 		unsafe[name] = true
 	}
 }
 
-// onLoopFn receives each loop discovered in a unit: its body block, position,
-// rendered range source (empty when unknown), and whether the range source
-// supports a reliable len() hint.
 type onLoopFn func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool)
 
-// fnTypeParams returns the parameter list of fn, or nil.
 func fnTypeParams(fn *ast.FuncType) *ast.FieldList {
 	if fn == nil {
 		return nil
@@ -474,9 +365,6 @@ func fnTypeParams(fn *ast.FuncType) *ast.FieldList {
 	return fn.Params
 }
 
-// scanUnitLoops invokes fn for every for/range loop lexically inside body,
-// including loops located in nested closures (closure loops still consult
-// the enclosing unit's visible declarations conservatively).
 func scanUnitLoops(body *ast.BlockStmt, fn onLoopFn) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch loop := n.(type) {
@@ -490,18 +378,13 @@ func scanUnitLoops(body *ast.BlockStmt, fn onLoopFn) {
 			if loop.Body == nil {
 				return true
 			}
-			// For C-style for loops we cannot know the source size
-			// reliably; expectedSize is placeholder guidance.
+
 			fn(loop.Body, loop.Pos(), "", false)
 		}
 		return true
 	})
 }
 
-// scanForMapWrite searches a loop body for map write operations
-// (map[key] = value) and returns the names of hintless maps that are written.
-// A binding qualifies only when it was declared textually before the loop
-// (#1103: declarations collected from the same function unit as the loop).
 func scanForMapWrite(body *ast.BlockStmt, loopPos token.Pos, decls map[string]*mapDeclInfo) []string {
 	var result []string
 	found := make(map[string]bool)
@@ -522,9 +405,7 @@ func scanForMapWrite(body *ast.BlockStmt, loopPos token.Pos, decls map[string]*m
 			}
 			info, exists := decls[ident.Name]
 			if exists && info.pos < loopPos && !found[ident.Name] {
-				// Check if the loop body has conditionals that might skip entries.
-				// If we find an if statement at the top level of the body,
-				// be conservative and skip this warning.
+
 				if hasConditionalSkip(body) {
 					continue
 				}
@@ -538,13 +419,6 @@ func scanForMapWrite(body *ast.BlockStmt, loopPos token.Pos, decls map[string]*m
 	return result
 }
 
-// hasConditionalSkip returns true if the loop body contains if/guard
-// statements that might conditionally skip map entries. This is a
-// conservative check to reduce false positives.
-// #1126: recursion now matches scanForMapWrite - conditional writes can sit
-// inside nested blocks/if branches, so only a full-depth traversal detects
-// every shape that could skip entries. Function literals are skipped:
-// their bodies execute in another scope and cannot gate loop iterations.
 func hasConditionalSkip(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false

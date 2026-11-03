@@ -2,29 +2,22 @@
 
 package agentruntime
 
-// Regression test for GitHub issue #4565: TunnelHost.Close stopped the
-// online/ref brokers (#4503) but only nil'd the offline projection broker,
-// leaking its senderLoop + textFlushLoop goroutines and 300ms ticker on
-// every runtime teardown (desktop session switches leak cumulatively).
-
 import (
 	"runtime"
 	"testing"
 	"time"
 )
 
-// After Close, every goroutine NewBroker(nil) started for the projection
-// broker must be gone: the count returns to the pre-host baseline.
 func TestIssue4565_CloseStopsProjectionBroker(t *testing.T) {
-	// Warm up any lazy goroutines so the baseline is stable.
+
 	h0 := NewTunnelHost()
 	h0.Close()
 	time.Sleep(150 * time.Millisecond)
 	baseline := runtime.NumGoroutine()
 
-	h := NewTunnelHost() // creates projBroker = tunnel.NewBroker(nil)
+	h := NewTunnelHost()
 	h.Close()
-	// Give the two stopped loops time to observe textDone/outDone and exit.
+
 	time.Sleep(150 * time.Millisecond)
 
 	after := runtime.NumGoroutine()
@@ -35,8 +28,6 @@ func TestIssue4565_CloseStopsProjectionBroker(t *testing.T) {
 	}
 }
 
-// Control for the measurement above: an UNSTOPPED broker keeps its loops
-// alive, proving the convergence in the previous test is meaningful.
 func TestIssue4565_UnstoppedBrokerKeepsLoops(t *testing.T) {
 	h0 := NewTunnelHost()
 	h0.Close()
@@ -44,7 +35,7 @@ func TestIssue4565_UnstoppedBrokerKeepsLoops(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	h := NewTunnelHost()
-	defer h.Close() // do not double-leak in the test binary
+	defer h.Close()
 	time.Sleep(150 * time.Millisecond)
 
 	after := runtime.NumGoroutine()
@@ -53,9 +44,8 @@ func TestIssue4565_UnstoppedBrokerKeepsLoops(t *testing.T) {
 	}
 }
 
-// Close must stay idempotent with a projection broker present.
 func TestIssue4565_CloseIdempotent(t *testing.T) {
 	h := NewTunnelHost()
 	h.Close()
-	h.Close() // must not panic (Stop is sync.Once; fields are nil'd under lock)
+	h.Close()
 }

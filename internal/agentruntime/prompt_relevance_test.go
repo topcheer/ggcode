@@ -1,9 +1,5 @@
 package agentruntime
 
-// sa-113 end-to-end wiring smoke: a sub-agent prompt built with a task
-// must not inline persistent memories lexically unrelated to that task,
-// while the index keeps them retrievable.
-
 import (
 	"strings"
 	"testing"
@@ -33,8 +29,7 @@ func TestSubAgentPromptMemoryRelevanceWiring(t *testing.T) {
 	if !strings.Contains(prompt, "postgres-migration-impl") {
 		t.Fatal("related memory must be present in the sub-agent prompt")
 	}
-	// The unrelated docker memory must not be inlined (full body absent)
-	// but its key stays in the index section for read_file retrieval.
+
 	if strings.Contains(prompt, "docker push registry.example") {
 		t.Fatal("unrelated memory body must not be inlined into the sub-agent prompt")
 	}

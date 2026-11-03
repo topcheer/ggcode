@@ -1,31 +1,5 @@
 package agent
 
-// JS/TS Anti-Pattern Detection in File Writes
-//
-// Problem: AI coding agents writing JavaScript/TypeScript frequently
-// introduce common anti-patterns that cause runtime bugs or defeat the
-// purpose of TypeScript:
-//   - Loose equality (==, !=) instead of strict (===, !==): type coercion bugs
-//   - var declarations instead of const/let: scope and hoisting bugs
-//   - Explicit `any` type annotations: defeats TypeScript type safety
-//   - `as any` type assertions: bypasses TypeScript type checking
-//   - Empty catch blocks: silently swallows errors, hides bugs
-//   - @ts-ignore / @ts-nocheck: suppresses compiler diagnostics, masks type errors
-//
-// Competitor analysis:
-//   - Claude Code: no automatic detection (relies on external linters)
-//   - Cursor: delegates to ESLint/TSLint integration (not always configured)
-//   - Cline/OpenHands: no inline detection
-//   - Aider: no detection
-//   - Windsurf: relies on external lint integration
-//
-// ggcode's approach: delta-based, zero-LLM-cost inline detection. Only flags
-// anti-patterns INTRODUCED by this edit (count increased vs oldContent),
-// avoiding false positives on pre-existing code. Runs in <1ms per file.
-//
-// This complements insecure_pattern_check.go (which covers eval, XSS, etc.)
-// and debug_stmt_check.go (which covers console.log, debugger, etc.).
-
 import (
 	"fmt"
 	"path/filepath"
@@ -33,22 +7,14 @@ import (
 	"strings"
 )
 
-// jstsAntiPattern defines a common JS/TS anti-pattern.
 type jstsAntiPattern struct {
-	name        string
-	pattern     *regexp.Regexp
-	description string
-	// tsOnly restricts to .ts/.tsx/.mts/.cts files (not plain JS)
-	tsOnly bool
-	// commentDirective marks patterns whose target lives inside comments
-	// (@ts-ignore / @ts-nocheck / @ts-expect-error are compiler directives
-	// written as line comments). These are scanned against a strings-only
-	// stripped view: string contents removed, comments KEPT - stripping
-	// comments would strip the detection target itself (#2904).
+	name             string
+	pattern          *regexp.Regexp
+	description      string
+	tsOnly           bool
 	commentDirective bool
 }
 
-// jstsAntiPatterns lists the anti-patterns to detect, ordered by severity.
 var jstsAntiPatterns = []jstsAntiPattern{
 	{
 		name:        "loose equality ==/!=",
@@ -86,13 +52,11 @@ var jstsAntiPatterns = []jstsAntiPattern{
 	},
 }
 
-// jstsExemptDirs lists directories where anti-patterns are expected.
 var jstsExemptDirs = []string{
 	"node_modules/", "vendor/", "dist/", "build/",
 	".min.js", "bundle.js",
 }
 
-// jstsExts and tsExts define file extensions for JS/TS and TS-only files.
 var jstsExts = map[string]bool{
 	".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
 	".ts": true, ".tsx": true, ".mts": true, ".cts": true,
@@ -102,7 +66,6 @@ var tsExts = map[string]bool{
 	".ts": true, ".tsx": true, ".mts": true, ".cts": true,
 }
 
-// capScanLen truncates content to the maximum scan length.
 func capScanLen(s string) string {
 	const maxScan = 256 * 1024
 	if len(s) > maxScan {
@@ -111,7 +74,6 @@ func capScanLen(s string) string {
 	return s
 }
 
-// isExemptJSTSPath returns true if the file is in an exempt directory or is minified.
 func isExemptJSTSPath(lowerPath string) bool {
 	for _, dir := range jstsExemptDirs {
 		if strings.Contains(lowerPath, dir) {
@@ -121,10 +83,6 @@ func isExemptJSTSPath(lowerPath string) bool {
 	return false
 }
 
-// detectJSTSAntiPatternDeltas compares old vs new content for each applicable
-// anti-pattern and returns descriptions of newly introduced ones. scanOld/
-// scanNew carry the comment+string stripped view; directiveOld/directiveNew
-// carry the strings-only view for comment-directive patterns (#2904).
 func detectJSTSAntiPatternDeltas(scanOld, scanNew, directiveOld, directiveNew string, isTS bool) []string {
 	var flagged []string
 	for _, ap := range jstsAntiPatterns {
@@ -144,16 +102,6 @@ func detectJSTSAntiPatternDeltas(scanOld, scanNew, directiveOld, directiveNew st
 	return flagged
 }
 
-// checkJSTSAntiPatterns detects JS/TS anti-patterns INTRODUCED by this edit.
-// Returns a combined warning string if any new anti-patterns are found.
-//
-// #2904: comment/string stripping. Old and new content are stripped through
-// jsStripCommentsAndStrings (line-level, same heuristic the insecure-pattern
-// JS path uses since #1063) BEFORE delta counting, so mentions inside string
-// literals ("expect(msg).toContain(': any')") or comments
-// ("// migrate var to let") no longer count as introduced anti-patterns.
-// Known limitation (shared with #1063): the stripper is line-scoped, so a
-// template literal opened on a previous line is not tracked across lines.
 func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 	if strings.TrimSpace(newContent) == "" {
 		return ""
@@ -182,10 +130,6 @@ func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 	)
 }
 
-// jstsStripForScan strips comments and string-literal contents from every
-// line so pattern counting only sees real code. Line structure is preserved
-// (one output line per input line) to keep multi-line patterns such as the
-// empty-catch regex working across the stripped text.
 func jstsStripForScan(content string) string {
 	if content == "" {
 		return ""
@@ -197,9 +141,6 @@ func jstsStripForScan(content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// jstsStripStringsOnly removes string-literal contents but KEEPS comments,
-// for comment-directive patterns (@ts-ignore etc.) whose detection target is
-// the comment text itself (#2904).
 func jstsStripStringsOnly(content string) string {
 	if content == "" {
 		return ""
@@ -211,9 +152,6 @@ func jstsStripStringsOnly(content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// stripJSStringLiteralsKeepComments removes '...'/"..."/`...` literal
-// contents from a single line, leaving everything else (including // comments)
-// intact. Escape sequences inside quotes are honored.
 func stripJSStringLiteralsKeepComments(line string) string {
 	var b strings.Builder
 	r := []rune(line)
@@ -226,11 +164,11 @@ func stripJSStringLiteralsKeepComments(line string) string {
 			j := i + 1
 			for j < n && r[j] != quote {
 				if r[j] == '\\' && j+1 < n {
-					j++ // skip escaped char
+					j++
 				}
 				j++
 			}
-			i = j + 1 // consume contents + closing quote (or rest of line)
+			i = j + 1
 			continue
 		}
 		b.WriteRune(c)

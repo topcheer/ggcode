@@ -2,11 +2,8 @@ package agent
 
 import "testing"
 
-// TestPsIsVerifyCommandFilenameArgs (#483): file/dir name arguments that
-// happen to start with verify-ish prefixes must NOT count as verification;
-// only command-position (tokens[0]) hyphen variants do.
 func TestPsIsVerifyCommandFilenameArgs(t *testing.T) {
-	// Every entry from the issue's 11/11 reproduction table.
+
 	falseCmds := []string{
 		"git add test-utils.go",
 		"rm -rf build-artifacts/",
@@ -25,26 +22,23 @@ func TestPsIsVerifyCommandFilenameArgs(t *testing.T) {
 			t.Errorf("psIsVerifyCommand(%q) = true — filename argument must not arm the detector (#483)", c)
 		}
 	}
-	// Real positives that must survive.
+
 	trueCmds := []string{
-		"go test ./...",          // exact token match
-		"go vet ./...",           // exact token
-		"ninja check-all",        // hmm — check-all at arg position...
-		"go build ./...",         // exact token
-		"python -m pytest tests", // phrase
-		"cargo test",             // exact token
+		"go test ./...",
+		"go vet ./...",
+		"ninja check-all",
+		"go build ./...",
+		"python -m pytest tests",
+		"cargo test",
 	}
-	// NOTE: "ninja check-all" has check-all at position 1. Under the new
-	// rule that is NOT verification — matching the issue's own analysis
-	// ("only real positive is ninja check-all targets" acknowledged as the
-	// sole legitimate casualty class, accepted trade-off).
+
 	trueCmds = []string{
 		"go test ./...",
 		"go vet ./...",
 		"go build ./...",
 		"python -m pytest tests",
 		"cargo test",
-		"check-all", // command position hyphen variant stays valid
+		"check-all",
 		"test-flight --quick",
 	}
 	for _, c := range trueCmds {
@@ -54,23 +48,21 @@ func TestPsIsVerifyCommandFilenameArgs(t *testing.T) {
 	}
 }
 
-// TestWeNormalizePathAndMatch (#482): cross-format path matching.
 func TestWeNormalizePathAndMatch(t *testing.T) {
 	cases := []struct {
 		consumed, found string
 		want            bool
 	}{
-		// grep "./internal/agent/foo.go" vs read_file absolute path —
-		// the highest-frequency pair from the issue.
+
 		{"/Volumes/new/root/internal/agent/foo.go", "./internal/agent/foo.go", true},
-		// identical relative vs relative
+
 		{"internal/agent/foo.go", "./internal/agent/foo.go", true},
-		// different files must not match
+
 		{"internal/agent/foo.go", "internal/agent/bar.go", false},
-		// base-name rescue for distinctive names
+
 		{"./cmd/ggcode/main.go", "/other/path/main.go", true},
-		// too-generic bases must NOT rescue
-		{"./a/go.mod", "/b/go.mod", true}, // go.mod IS distinctive enough
+
+		{"./a/go.mod", "/b/go.mod", true},
 	}
 	for _, c := range cases {
 		if got := wePathsMatch(c.consumed, c.found); got != c.want {
@@ -79,8 +71,6 @@ func TestWeNormalizePathAndMatch(t *testing.T) {
 	}
 }
 
-// TestExtractPathFromLineCodeSearchFormat (#482): "N. path (relevance: X%)"
-// lines must yield the path, not "N.".
 func TestExtractPathFromLineCodeSearchFormat(t *testing.T) {
 	cases := []struct{ line, want string }{
 		{"1. internal/agent/foo.go (relevance: 87%)", "internal/agent/foo.go"},

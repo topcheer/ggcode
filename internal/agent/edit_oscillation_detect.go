@@ -1,41 +1,5 @@
 package agent
 
-// Edit Oscillation Detector - Semantic Back-and-Forth Detection
-//
-// Research basis:
-//   - "Convergence Detection in Iterative Agent Refinement" (agentpatterns.ai, 2026):
-//     identifies OSCILLATION as a critical failure pattern: "output alternates
-//     between two versions across passes; the agent cannot resolve a trade-off
-//     without external input." When detected, a restart is needed rather than
-//     continued iteration.
-//   - RefineBench (Lee et al., 2025): self-refinement without external feedback
-//     yields +1.8pp or less over 5 iterations; models routinely get stuck in
-//     oscillation loops - re-adding code they previously removed, or re-removing
-//     code they previously added.
-//   - "Evaluating Goal Drift in Language Model Agents" (Arike et al., 2025):
-//     pattern-matching behavior deep in context drives oscillation - the agent
-//     matches the pattern of its earlier edits rather than converging.
-//
-// What it detects: When the agent semantically reverts its own work - editing
-// the same file's old_text to contain what it previously had as new_text, or
-// vice versa. This indicates the agent is oscillating between two approaches
-// without resolving the underlying trade-off.
-//
-// This is different from:
-//   - fileChurn: tracks edit COUNT per file (assumption invalidation)
-//   - convergenceLock: tracks edits AFTER successful verification
-//   - fixCascade: tracks edit-verify-fail cycles
-//   - convergence_lock: unnecessary edits post-verification
-// Edit oscillation tracks SEMANTIC REVERSAL - the agent undoing its own prior
-// change, specifically via content signature matching.
-//
-// The detector extracts content fingerprints from edit_file/multi_edit_file
-// old_text and new_text fields. When it detects that an edit's old_text matches
-// a prior new_text (or new_text matches a prior old_text) for the same file,
-// it counts a reversal. After 2+ reversals on the same file, it fires.
-//
-// Zero LLM cost. Non-blocking. Fires at most once per run.
-
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,32 +11,24 @@ import (
 )
 
 const (
-	// oscillationReversalThreshold: number of content reversals needed to trigger
 	oscillationReversalThreshold = 2
 
-	// oscillationMaxTracked: maximum files to track signatures for
 	oscillationMaxTracked = 30
 
-	// oscillationSigMaxLen: truncate content to this many bytes before hashing
-	// to avoid excessive memory use on large edits
 	oscillationSigMaxLen = 2048
 
-	// oscillationMaxWarnings: max times the detector fires per run
 	oscillationMaxWarnings = 1
 )
 
-// oscillationState tracks content signatures per file to detect reversals.
 type oscillationState struct {
-	// signatures maps file path to a list of content signatures seen,
-	// alternating between old_text sigs and new_text sigs.
 	signatures map[string][]sigEntry
 	fired      int
 }
 
 type sigEntry struct {
-	sig     string // content fingerprint
-	isNew   bool   // true = new_text sig, false = old_text sig
-	iterTag int    // iteration number for debugging
+	sig     string
+	isNew   bool
+	iterTag int
 }
 
 func newOscillationState() *oscillationState {
@@ -86,7 +42,6 @@ func (o *oscillationState) reset() {
 	o.fired = 0
 }
 
-// contentSig produces a short fingerprint of edit content for comparison.
 func contentSig(text string) string {
 	text = strings.TrimSpace(text)
 	if len(text) > oscillationSigMaxLen {
@@ -96,8 +51,6 @@ func contentSig(text string) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// recordEdit tracks old_text/new_text content signatures for edited files.
-// args is the raw JSON arguments from the tool call.
 func (o *oscillationState) recordEdit(toolName string, args json.RawMessage, iteration int) {
 	if len(args) == 0 {
 		return
@@ -120,7 +73,6 @@ func (o *oscillationState) recordEdit(toolName string, args json.RawMessage, ite
 		if path == "" || len(edits) == 0 {
 			return
 		}
-		// Combine all old/new text into aggregate signatures
 		var allOld, allNew strings.Builder
 		for _, e := range edits {
 			allOld.WriteString(e.oldText)
@@ -129,19 +81,15 @@ func (o *oscillationState) recordEdit(toolName string, args json.RawMessage, ite
 		o.addSignature(path, allOld.String(), allNew.String(), iteration)
 
 	case "multi_file_edit":
-		// Per-file aggregation: each file's edits form one signature so a
-		// reversal that only touches one file is still caught.
+
 		o.recordMultiFileEditSignatures(parsed, iteration)
 
 	case "batch_replace":
-		// One signature per target file: same pattern/replacement applied
-		// across files, reversal (A->B then B->A) must count per file.
+
 		o.recordBatchReplaceSignatures(parsed, iteration)
 	}
 }
 
-// recordMultiFileEditSignatures aggregates each file's edits in a
-// multi_file_edit call into one per-file signature.
 func (o *oscillationState) recordMultiFileEditSignatures(parsed map[string]any, iteration int) {
 	type fileEdit struct {
 		Path  string `json:"path"`
@@ -171,9 +119,6 @@ func (o *oscillationState) recordMultiFileEditSignatures(parsed map[string]any, 
 	}
 }
 
-// recordBatchReplaceSignatures records one signature per target file:
-// the same pattern/replacement applied across files - a reversal must
-// count per file, exactly as if each file had been edited separately.
 func (o *oscillationState) recordBatchReplaceSignatures(parsed map[string]any, iteration int) {
 	pattern, _ := parsed["pattern"].(string)
 	if pattern == "" {
@@ -243,24 +188,19 @@ func extractMultiEditContent(args map[string]any) (path string, edits []multiEdi
 func (o *oscillationState) addSignature(path, oldText, newText string, iter int) {
 	if len(o.signatures) >= oscillationMaxTracked {
 		if _, exists := o.signatures[path]; !exists {
-			return // at capacity, don't track new files
+			return
 		}
 	}
 
 	oldSig := contentSig(oldText)
 	newSig := contentSig(newText)
 
-	// Skip if old and new are identical (no-op edit)
 	if oldSig == newSig || (oldText == "" && newText == "") {
 		return
 	}
 
 	sigs := o.signatures[path]
 
-	// Track old_text and new_text signatures. Skip empty sides: pure
-	// insertions (old_text == "") and pure deletions (new_text == "") would
-	// otherwise share the hash("") signature, making any four deletions look
-	// like two reversals (issue #308).
 	if oldText != "" {
 		sigs = append(sigs, sigEntry{sig: oldSig, isNew: false, iterTag: iter})
 	}
@@ -268,7 +208,6 @@ func (o *oscillationState) addSignature(path, oldText, newText string, iter int)
 		sigs = append(sigs, sigEntry{sig: newSig, isNew: true, iterTag: iter})
 	}
 
-	// Trim old entries to prevent unbounded growth
 	if len(sigs) > 20 {
 		sigs = sigs[len(sigs)-20:]
 	}
@@ -276,21 +215,6 @@ func (o *oscillationState) addSignature(path, oldText, newText string, iter int)
 	o.signatures[path] = sigs
 }
 
-// countReversals counts how many times the agent directionally reverts its
-// own work. A reversal occurs when an edit's new_text signature matches a
-// signature previously recorded as an old_text (isNew=false) — i.e. the agent
-// is re-adding content it previously removed, returning the file to a prior
-// state. This is direction-aware:
-//
-//   - Repeated identical batch replacements (same old->new applied three
-//     times) do NOT count: the new_text sig never appeared as an old_text sig.
-//   - Progressive chained edits (A->B, B->C, C->D) do NOT count: chaining an
-//     edit onto the prior edit's new_text is forward progress, not a revert.
-//   - True oscillation (A->B, B->A, A->B) re-adds A and then B, producing
-//     2 reversals and firing the warning.
-//
-// Each prior old_text sighting is consumed at most once so a single revert
-// that spans multiple edits is not double-counted.
 func (o *oscillationState) countReversals(path string) int {
 	sigs := o.signatures[path]
 	if len(sigs) < 2 {
@@ -298,12 +222,11 @@ func (o *oscillationState) countReversals(path string) int {
 	}
 
 	reversals := 0
-	seenAsOld := make(map[string]int) // sig -> unconsumed old_text sightings
+	seenAsOld := make(map[string]int)
 	for _, s := range sigs {
 		if s.isNew {
 			if seenAsOld[s.sig] > 0 {
-				// This new_text content was previously removed as old_text:
-				// the agent is putting back its own prior removal.
+
 				reversals++
 				seenAsOld[s.sig]--
 			}
@@ -314,7 +237,6 @@ func (o *oscillationState) countReversals(path string) int {
 	return reversals
 }
 
-// check returns guidance if oscillation is detected.
 func (o *oscillationState) check() string {
 	if o.fired >= oscillationMaxWarnings {
 		return ""

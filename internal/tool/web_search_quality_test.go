@@ -62,7 +62,7 @@ func TestAssessSearchResults_DomainDeduplication(t *testing.T) {
 		{Title: "Result 4", URL: "https://go.dev/doc", Snippet: "go docs"},
 	}
 	out := assessSearchResults("answer", results, nil)
-	// StackOverflow should be capped at maxResultsPerDomain (2)
+
 	soCount := 0
 	for _, r := range out {
 		if domainFromURL(r.URL) == "stackoverflow.com" {
@@ -80,7 +80,7 @@ func TestAssessSearchResults_RelevanceScoring(t *testing.T) {
 		{Title: "Go context package guide", URL: "https://example.com/b", Snippet: "context.Background usage in Go"},
 	}
 	out := assessSearchResults("go context package", results, nil)
-	// The more relevant result should be ranked first
+
 	if len(out) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(out))
 	}
@@ -98,7 +98,7 @@ func TestAssessSearchResults_EmptyInput(t *testing.T) {
 
 func TestTokenizeQuery(t *testing.T) {
 	terms := tokenizeQuery("how to parse JSON in Go")
-	// "how", "to", "in" are stop words; should keep "parse", "json", "go"
+
 	want := []string{"parse", "json", "go"}
 	if len(terms) != len(want) {
 		t.Fatalf("expected %d terms, got %d: %v", len(want), len(terms), terms)
@@ -112,12 +112,12 @@ func TestTokenizeQuery(t *testing.T) {
 
 func TestScoreResult(t *testing.T) {
 	queryTerms := []string{"go", "context", "cancel"}
-	// High score: all terms in title
+
 	high := scoreResult(queryTerms, searchResult{
 		Title:   "Go context cancel guide",
 		Snippet: "Using context.Cancel in Go",
 	})
-	// Low score: no terms in title or snippet
+
 	low := scoreResult(queryTerms, searchResult{
 		Title:   "Cat pictures gallery",
 		Snippet: "Funny cats and dogs",
@@ -170,7 +170,7 @@ func TestIsSpamDomain(t *testing.T) {
 }
 
 func TestAssessSearchResults_DiversityAfterDedup(t *testing.T) {
-	// 5 results from same domain + 2 from another
+
 	results := []searchResult{
 		{Title: "A1", URL: "https://example.com/1", Snippet: "test a"},
 		{Title: "A2", URL: "https://example.com/2", Snippet: "test a"},
@@ -181,16 +181,12 @@ func TestAssessSearchResults_DiversityAfterDedup(t *testing.T) {
 		{Title: "B2", URL: "https://other.com/2", Snippet: "test b"},
 	}
 	out := assessSearchResults("test", results, nil)
-	// Should be maxResultsPerDomain (2) from example.com + 2 from other.com = 4
+
 	if len(out) != 4 {
 		t.Errorf("expected 4 results after dedup, got %d", len(out))
 	}
 }
 
-// TestAssessSearchResultsAllowedDomainExemptFromDedup pins #1357: the user's
-// explicit allowed_domains must override the per-domain diversity cap - a
-// single-domain filter previously left only maxResultsPerDomain=2 results
-// no matter how many were requested or prefetched.
 func TestAssessSearchResultsAllowedDomainExemptFromDedup(t *testing.T) {
 	var results []searchResult
 	for i := 0; i < 8; i++ {
@@ -205,19 +201,12 @@ func TestAssessSearchResultsAllowedDomainExemptFromDedup(t *testing.T) {
 		t.Fatalf("expected all 8 allowed-domain results to survive the dedup cap, got %d", len(out))
 	}
 
-	// Without the exemption the diversity cap applies as before.
 	out = assessSearchResults("python stdlib", results, nil)
 	if len(out) != maxResultsPerDomain {
 		t.Fatalf("expected diversity cap of %d without exemption, got %d", maxResultsPerDomain, len(out))
 	}
 }
 
-// TestAssessSearchResultsExemptionNormalization pins #1406-B: an agent
-// passing "https://example.com" (or "example.com.") as an allowed domain
-// passed filterByDomain but MISSED the exemption key (weaker normalization
-// than the filter), so #1357's single-domain guarantee silently regressed
-// - 5 same-domain results cut to 2 despite the 3x prefetch. Both sides
-// share normalizeDomains now.
 func TestAssessSearchResultsExemptionNormalization(t *testing.T) {
 	results := make([]searchResult, 5)
 	for i := range results {
@@ -231,15 +220,11 @@ func TestAssessSearchResultsExemptionNormalization(t *testing.T) {
 	}
 }
 
-// TestAssessSearchResultsExemptionParity pins #1428: the exemption must
-// match the filter's documented semantics - www-prefixed allow entries
-// and SUBDOMAIN results of allowed root domains are exempt (the old
-// exact-map lookup missed both while the filter passed them).
 func TestAssessSearchResultsExemptionParity(t *testing.T) {
 	mk := func(domain string) searchResult {
 		return searchResult{Title: "t", URL: "https://" + domain + "/x"}
 	}
-	// A: www-prefixed allow entry exempts its host.
+
 	gotA := assessSearchResults("q",
 		[]searchResult{mk("www.npmjs.com"), mk("www.npmjs.com"), mk("www.npmjs.com")},
 		[]string{"https://www.npmjs.com."},
@@ -247,7 +232,7 @@ func TestAssessSearchResultsExemptionParity(t *testing.T) {
 	if len(gotA) != 3 {
 		t.Fatalf("www-prefixed allow entry not exempt: %d results", len(gotA))
 	}
-	// B: subdomains of an allowed root are exempt.
+
 	subs := []searchResult{mk("learn.microsoft.com"), mk("learn.microsoft.com"), mk("learn.microsoft.com"), mk("docs.microsoft.com")}
 	gotB := assessSearchResults("q", subs, []string{"microsoft.com"})
 	if len(gotB) != 4 {

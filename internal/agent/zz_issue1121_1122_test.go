@@ -19,11 +19,6 @@ func process(items []int) {
 }
 `
 
-// --- Issue #1121 ---
-
-// registrySrc1121 mirrors the registry pattern from #1121: a package-level
-// hintless map accumulated across many register() calls must never trigger
-// the single-loop size-hint warning.
 const registrySrc1121 = `package main
 type Handler struct{ Name string }
 
@@ -36,9 +31,6 @@ func register(items []Handler) {
 }
 `
 
-// TestIssue1121_PackageLevelRegistryNoWarning guards #1121: loop writes into
-// a package-level hintless map must produce zero warnings (the decl is
-// excluded from candidate binds when assembling each function unit).
 func TestIssue1121_PackageLevelRegistryNoWarning(t *testing.T) {
 	warnings := checkMapPrealloc("registry.go", "", registrySrc1121)
 	if len(warnings) != 0 {
@@ -46,9 +38,6 @@ func TestIssue1121_PackageLevelRegistryNoWarning(t *testing.T) {
 	}
 }
 
-// TestIssue1121_LocalMapStillWarnedInMixedFunc guards that excluding package
-// level maps did not over-suppress: in one function that also builds a
-// function-local hintless map, exactly that local map is still warned.
 func TestIssue1121_LocalMapStillWarnedInMixedFunc(t *testing.T) {
 	code := `package main
 type Handler struct{ Name string }
@@ -74,13 +63,6 @@ func register(items []Item) map[string]bool {
 	}
 }
 
-// --- Issue #1122 ---
-
-// TestIssue1122_VersionResolvedFromEditedFileDir guards defect (a): the Go
-// version used for the downgrade decision comes from the edited file's own
-// module, not the process cwd. Chdir into a go 1.21 parent module while
-// editing inside its go 1.22 submodule: the capture warning must still be
-// downgraded to per-iteration phrasing.
 func TestIssue1122_VersionResolvedFromEditedFileDir(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "submod")
@@ -99,8 +81,7 @@ func TestIssue1122_VersionResolvedFromEditedFileDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(oldWD) }()
-	// cwd now sits in the parent's go 1.21 module (#1122 pre-fix behavior
-	// would have resolved the version from here).
+
 	if err := os.Chdir(root); err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +101,6 @@ func TestIssue1122_VersionResolvedFromEditedFileDir(t *testing.T) {
 	}
 }
 
-// TestIssue1122_Pre122ModuleKeepsClassicGotcha guards the reverse direction:
-// editing a file whose module declares go 1.21 keeps the full classic-gotcha
-// warning regardless of where the process cwd happens to be.
 func TestIssue1122_Pre122ModuleKeepsClassicGotcha(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module legacy\n\ngo 1.21\n"), 0o644); err != nil {
@@ -144,9 +122,6 @@ func TestIssue1122_Pre122ModuleKeepsClassicGotcha(t *testing.T) {
 	}
 }
 
-// TestIssue1122_ConcurrentFirstLookupNoRace guards defect (c): concurrent
-// first-time resolution of the same directory's go.mod must be race-free.
-// Run under -race to verify.
 func TestIssue1122_ConcurrentFirstLookupNoRace(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.22\n"), 0o644); err != nil {

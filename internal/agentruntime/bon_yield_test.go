@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// r441 probes: first-success auction close (yieldLaggards).
-
 func TestYieldLaggards(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -16,7 +14,7 @@ func TestYieldLaggards(t *testing.T) {
 		{"no laggards", 10, nil, nil},
 		{"zero leader spend", 0, map[string]int{"a": 100}, nil},
 		{"all cheap - no yield", 10, map[string]int{"a": 15}, nil},
-		{"one lost cause", 10, map[string]int{"a": 15, "b": 20}, []string{"b"}}, // 20 > 1.5*10
+		{"one lost cause", 10, map[string]int{"a": 15, "b": 20}, []string{"b"}},
 		{"all lost causes - sorted", 2, map[string]int{"c": 30, "a": 10, "b": 20}, []string{"a", "b", "c"}},
 	}
 	for _, c := range cases {

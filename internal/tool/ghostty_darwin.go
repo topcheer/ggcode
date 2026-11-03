@@ -13,12 +13,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ── AppleScript helpers (macOS only) ────────────────────────────────────────
-
-// runAppleScript executes an AppleScript string and returns stdout output.
 func runAppleScript(ctx context.Context, script string) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err // #1686 case 1: cancelled sessions must not touch the user's terminal
+		return "", err
 	}
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	out, err := cmd.Output()
@@ -35,9 +32,6 @@ func runAppleScript(ctx context.Context, script string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// escapeAS escapes a string for safe embedding in AppleScript double-quoted strings.
-// Handles backslash, double-quote, and common control characters (tab, newline,
-// carriage return) that could break AppleScript syntax.
 func escapeAS(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -61,8 +55,6 @@ func escapeAS(s string) string {
 	return b.String()
 }
 
-// escapeShellSingleQuote escapes a string for safe use inside single quotes
-// in a shell command (e.g., cd 'path'). Replaces ' with '\”.
 func escapeShellSingleQuote(s string) string {
 	return strings.ReplaceAll(s, `'`, `'\''`)
 }
@@ -81,8 +73,6 @@ func oppositeDir(dir string) string {
 	return dir
 }
 
-// termCellDims returns the terminal's (cols, rows) via TIOCGWINSZ on /dev/tty.
-// Falls back to (80, 24) if unavailable (e.g. piped stdin/stdout).
 func termCellDims() (cols, rows int) {
 	cols, rows = 80, 24
 	f, err := os.Open("/dev/tty")
@@ -106,21 +96,16 @@ func termCellDims() (cols, rows int) {
 	return
 }
 
-// termWidthPx estimates the terminal window pixel width from grid dimensions.
-// Ghostty default font (~13pt) has cell width ~8px.
 func termWidthPx() int {
 	cols, _ := termCellDims()
 	return cols * 8
 }
 
-// termHeightPx estimates the terminal window pixel height from grid dimensions.
-// Ghostty default font (~13pt) has line height ~17px.
 func termHeightPx() int {
 	_, rows := termCellDims()
 	return rows * 17
 }
 
-// terminalSpecifier builds an AppleScript specifier for a terminal.
 func terminalSpecifier(terminalID string) string {
 	if terminalID == "" {
 		return "focused terminal of selected tab of window 1"
@@ -128,20 +113,17 @@ func terminalSpecifier(terminalID string) string {
 	return fmt.Sprintf(`first terminal whose id is "%s"`, escapeAS(terminalID))
 }
 
-// ghosttyBinaryPath returns the path to the ghostty CLI binary, or empty if not found.
 func ghosttyBinaryPath() string {
 	if p, err := exec.LookPath("ghostty"); err == nil {
 		return p
 	}
-	// Check common macOS install location
+
 	p := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
 	if _, err := exec.LookPath(p); err == nil {
 		return p
 	}
 	return ""
 }
-
-// ── Action implementations (macOS) ──────────────────────────────────────────
 
 func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 	if !ghosttyAvailable() {
@@ -227,23 +209,17 @@ func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction st
 	spec := terminalSpecifier(terminalID)
 
 	var resizePart string
-	if size > 0 && size <= 99 { // #838: schema max is 99; < 99 silently ignored the documented maximum
-		// Ghostty resize_split amount is in PIXELS, not percentage.
-		// After a 50/50 split, move the divider so the new pane is size%.
+	if size > 0 && size <= 99 {
+
 		delta := 50 - size
 		var resizeDir string
 		if delta >= 0 {
-			resizeDir = dir // shrink new pane
+			resizeDir = dir
 		} else {
-			resizeDir = oppositeDir(dir) // grow new pane
+			resizeDir = oppositeDir(dir)
 			delta = -delta
 		}
 
-		// Ghostty sdef has no window bounds/size property. We estimate
-		// pixel dimensions from the terminal grid size (cols/rows) obtained
-		// via TIOCGWINSZ on /dev/tty. Ghostty default font ~13pt gives
-		// cell width ~8px and line height ~17px, which is accurate enough
-		// for proportional split resizing.
 		var pixAmt int
 		if dir == "right" || dir == "left" {
 			pixAmt = delta * termWidthPx() / 100
@@ -272,22 +248,12 @@ end tell`, spec, dir, resizePart, cmdPart)
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty split failed: %v", err)}
 	}
 
-	if size > 0 && size <= 99 { // #838: schema max is 99; < 99 silently ignored the documented maximum
+	if size > 0 && size <= 99 {
 		return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, size=%d%%, terminal_id=%s", dir, size, out)}
 	}
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, terminal_id=%s", dir, out)}
 }
 
-// buildSplitCmdPart builds the "input text" fragment for a new split pane.
-// #832: working_dir went through AppleScript escaping only -- no shell-level
-// quoting. 'cd /Volumes/new ggai' broke ('too many arguments') and a crafted
-// working_dir executed as-is. Match the iTerm2 implementation: single-quote
-// with shell escaping.
-// #2589: command empty + working_dir set still cd's -- matches the iTerm2
-// split cd-only branch and the schema contract (working_dir is an
-// independent parameter, not a modifier of command). Without this,
-// split(working_dir=X) silently created the pane in the OLD cwd and later
-// input commands ran in the wrong directory.
 func buildSplitCmdPart(command, wd string) string {
 	if strings.TrimSpace(command) != "" {
 		return fmt.Sprintf("\n\tinput text \"cd '%s' && %s\" to newTerm", escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
@@ -303,8 +269,7 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 
 	var script string
 	if strings.TrimSpace(command) != "" {
-		// #1324: same fix as #832/executeSplit — working_dir needs
-		// shell-level single-quoting, not just AppleScript escaping.
+
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newTab to new tab in window 1
@@ -313,10 +278,7 @@ tell application "Ghostty"
 	return id of term
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else if wd != "" {
-		// #3140: #2589's cd-only contract applies to tab/window too -
-		// working_dir without a command must still cd (schema: it is an
-		// independent parameter, not a modifier of command). The old bare
-		// else silently opened the tab in Ghostty's default directory.
+
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newTab to new tab in window 1
@@ -349,7 +311,7 @@ func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir 
 
 	var script string
 	if strings.TrimSpace(command) != "" {
-		// #1324: same fix as #832/executeSplit — shell-level quoting.
+
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newWindow to new window
@@ -358,7 +320,7 @@ tell application "Ghostty"
 	return id of term
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else if wd != "" {
-		// #3140: symmetric cd-only branch for new_window (see new_tab).
+
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newWindow to new window
@@ -513,17 +475,13 @@ func (g *GhosttyTool) executeSelectTab(ctx context.Context, tabIndex int) Result
 		return Result{IsError: true, Content: "tab_index must be >= 1 (1-based)"}
 	}
 
-	// Ghostty's sdef defines "select tab" as a command whose direct parameter
-	// is a tab specifier. The correct AppleScript syntax is:
-	//   tell window 1 to select tab (first tab) / (second tab) / etc.
-	// We convert the 1-based index to an ordinal.
 	ordinals := []string{"", "first", "second", "third", "fourth", "fifth",
 		"sixth", "seventh", "eighth", "ninth", "tenth"}
 	var tabRef string
 	if tabIndex < len(ordinals) {
 		tabRef = ordinals[tabIndex] + " tab"
 	} else {
-		// For indices beyond our ordinal list, use "item N of tabs"
+
 		tabRef = fmt.Sprintf("item %d of tabs", tabIndex)
 	}
 

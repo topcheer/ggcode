@@ -4,15 +4,12 @@ import (
 	"testing"
 )
 
-// TestIssue1092_VarConstTypeChange verifies that exported var/const type changes
-// are detected by the export guard. Previously, var/const signatures were empty,
-// so type changes (e.g., int -> int64) were silently ignored.
 func TestIssue1092_VarConstTypeChange(t *testing.T) {
 	tests := []struct {
 		name     string
 		oldSrc   string
 		newSrc   string
-		wantDiff int // number of signature-changed entries
+		wantDiff int
 	}{
 		{
 			name: "var int to int64",
@@ -83,10 +80,6 @@ var (
 	}
 }
 
-// TestIssue1092_UnnamedReceiverPtrValChange verifies that methods with unnamed
-// receivers detect pointer vs value changes. Previously, the check
-// len(recv.List[0].Names) > 0 filtered out unnamed receivers, so
-// func (*T) Foo -> func (T) Foo was not detected as a signature change.
 func TestIssue1092_UnnamedReceiverPtrValChange(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -137,10 +130,6 @@ func (*T) Foo() {}`,
 	}
 }
 
-// TestIssue1092_NamedReceiverNameChangeShouldNotAlert verifies that adding or
-// removing a receiver name (without changing ptr/val) should NOT trigger a
-// signature change. Previously, the len(recv.List[0].Names) > 0 check made
-// named vs unnamed receivers look different.
 func TestIssue1092_NamedReceiverNameChangeShouldNotAlert(t *testing.T) {
 	tests := []struct {
 		name     string

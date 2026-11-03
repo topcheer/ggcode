@@ -23,7 +23,7 @@ func TestGitCommandEnv(t *testing.T) {
 }
 
 func TestGitTrackedFiles(t *testing.T) {
-	// Skip if git not available
+
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -31,25 +31,20 @@ func TestGitTrackedFiles(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_git_test_*")
 	defer os.RemoveAll(dir)
 
-	// Not a git repo yet
 	if tracked := gitTrackedFiles(t.Context(), dir); tracked != nil {
 		t.Fatal("expected nil outside git repo")
 	}
 
-	// Init git repo
 	cmd := exec.Command("git", "init", dir)
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create files
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main"), 0644)
 	os.WriteFile(filepath.Join(dir, "debug.log"), []byte("log output"), 0644)
 
-	// Create .gitignore
 	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
 
-	// Add and commit
 	cmd = exec.Command("git", "add", ".")
 	cmd.Dir = dir
 	cmd.Run()
@@ -92,19 +87,17 @@ func TestIsGitCommitCommand(t *testing.T) {
 }
 
 func TestInjectCoAuthorTrailer(t *testing.T) {
-	// Inject into -m message
+
 	result := injectCoAuthorTrailer(`git commit -m "feat: add feature"`)
 	if !containsCoAuthor(result) {
 		t.Errorf("expected Co-Authored-By in result: %s", result)
 	}
 
-	// Don't duplicate
 	result2 := injectCoAuthorTrailer(result)
 	if count := countCoAuthor(result2); count != 1 {
 		t.Errorf("expected exactly 1 Co-Authored-By, got %d: %s", count, result2)
 	}
 
-	// No -m: use --trailer
 	result3 := injectCoAuthorTrailer(`git commit`)
 	if !containsCoAuthor(result3) {
 		t.Errorf("expected Co-Authored-By via --trailer: %s", result3)
@@ -123,7 +116,7 @@ func TestInjectCoAuthorTrailerDisabled(t *testing.T) {
 	if got := injectCoAuthorTrailer(original); got != original {
 		t.Errorf("expected no injection when disabled, got: %s", got)
 	}
-	// No -m path must also pass through untouched.
+
 	if got := injectCoAuthorTrailer("git commit"); got != "git commit" {
 		t.Errorf("expected no --trailer injection when disabled, got: %s", got)
 	}
@@ -133,14 +126,12 @@ func TestIsBinaryFile(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_binary_test_*")
 	defer os.RemoveAll(dir)
 
-	// Text file
 	textFile := filepath.Join(dir, "test.txt")
 	os.WriteFile(textFile, []byte("hello world\nthis is text"), 0644)
 	if isBinaryFile(textFile) {
 		t.Error("text file should not be binary")
 	}
 
-	// Binary file (contains null bytes)
 	binFile := filepath.Join(dir, "test.bin")
 	os.WriteFile(binFile, []byte("hello\x00world"), 0644)
 	if !isBinaryFile(binFile) {
@@ -200,29 +191,26 @@ func containsStringAt(s, substr string) int {
 }
 
 func TestCheckProtectedBranch(t *testing.T) {
-	// Create a temporary git repo
+
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Init repo
+
 	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
 		t.Skipf("git not available: %v\n%s", err, out)
 	}
-	// Set git config for commit
+
 	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
 	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
 
-	// Default branch might be master or main depending on git version.
-	// Create a file and commit to have at least one commit.
 	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("test"), 0644)
 	exec.Command("git", "-C", dir, "add", "test.txt").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
 
-	// Test: default branch (main or master) should trigger warning
 	warning := checkProtectedBranch(t.Context(), dir)
 	if warning == "" {
-		// Might be on a non-default branch in CI, check current branch
+
 		out, _ := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
 		branch := strings.TrimSpace(string(out))
 		if branch == "main" || branch == "master" {
@@ -234,7 +222,6 @@ func TestCheckProtectedBranch(t *testing.T) {
 		}
 	}
 
-	// Create a feature branch and test no warning
 	exec.Command("git", "-C", dir, "checkout", "-b", "feature/test").Run()
 	warning = checkProtectedBranch(t.Context(), dir)
 	if warning != "" {

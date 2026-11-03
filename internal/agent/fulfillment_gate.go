@@ -7,37 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Request Fulfillment Gate — Pre-Completion Coverage Verification
-//
-// Research basis: Claude Code, Cursor, and Aider all implement some form of
-// completion verification before the agent declares a task done. The pattern:
-//   - Claude Code: "check your work" system prompt + auto-verify loop
-//   - Cursor: inline diff review + "did you complete the task?" meta-check
-//   - Aider: explicit diff display + user confirmation before commit
-//   - Devin: SICA overseer verifies goal completion before stopping
-//
-// The gap in ggcode: the agent loop has build verification (verify.go), todo
-// completion checks (todo_check.go), and convergence pressure (iteration
-// budget warnings). But NONE of these verify that the agent's actual WORK
-// matches the USER'S REQUEST. The agent can silently finish after:
-//   - Only implementing 2 of 3 requested features (no todos created)
-//   - Reading/exploring code but never making changes when changes were expected
-//   - Making edits to the wrong files (not matching the request's intent)
-//
-// This gate fills that gap with a deterministic, zero-LLM-cost heuristic:
-//   1. ACTION DETECTION: analyze the user's request for actionable intent
-//      (fix, add, create, implement, refactor, delete, etc.)
-//   2. PRODUCTIVITY CHECK: verify the agent performed matching actions
-//      (files edited matching request keywords, commands run, etc.)
-//   3. KEYWORD OVERLAP: check if files the agent edited relate to the
-//      files/concepts mentioned in the user's request
-//   4. MULTI-PART DETECTION: if the request has multiple action items
-//      ("add X and Y", "fix A, then update B"), check coverage
-//
-// The gate fires AT MOST ONCE per run, injecting a reminder message that
-// gives the agent a final chance to address gaps before returning.
-
-// actionVerbs are verbs that indicate the user expects concrete code changes.
 var actionVerbs = []string{
 	"add", "create", "implement", "fix", "repair", "build",
 	"refactor", "update", "modify", "change", "remove", "delete",
@@ -45,22 +14,18 @@ var actionVerbs = []string{
 	"rename", "replace", "insert", "move", "split", "merge",
 }
 
-// questionIndicators suggest the request is informational, not actionable.
 var questionIndicators = []string{
 	"what ", "why ", "how does", "how do", "explain", "is there",
 	"are there", "can you tell", "show me", "list all", "where is",
 	"where are", "find ", "search for", "describe",
 }
 
-// readOnlyIndicators suggest the request is a read-only/audit task where
-// no file edits are expected, even if the prompt contains action verbs.
 var readOnlyIndicators = []string{
 	"check", "review", "inspect", "audit", "scan", "examine",
 	"verify", "monitor", "query", "lookup", "report", "summarize",
 	"定时审查", "检查", "审查", "查询", "确认", "汇总",
 }
 
-// fulfillmentGateState tracks whether the gate has already fired this run.
 type fulfillmentGateState struct {
 	fired bool
 }
@@ -73,20 +38,6 @@ func (f *fulfillmentGateState) reset() {
 	f.fired = false
 }
 
-// checkFulfillmentGate runs at the "about to return" exit point to verify
-// the agent's work matches the user's request. Returns a non-empty message
-// if a gap is detected that warrants a final reminder.
-//
-// Parameters:
-//   - userPrompt: the original user message text
-//   - runStats: accumulated stats from the run (tool calls, files edited, etc.)
-//   - assistantText: the agent's final response text
-//
-// Returns "" when:
-//   - the gate already fired this run
-//   - the request appears informational (no action expected)
-//   - the agent made productive changes matching the request
-//   - todos exist and were checked separately
 func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assistantText string) string {
 	if a.fulfillmentGate.fired {
 		return ""
@@ -97,41 +48,33 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 		return ""
 	}
 
-	// If the request is primarily a question, skip the gate.
 	if isInformationalRequest(prompt) {
 		debug.Log("fulfillment-gate", "request appears informational, skipping")
 		return ""
 	}
 
-	// If the request is a read-only/audit task (check, review, inspect, etc.),
-	// skip the gate — no file edits are expected even if action verbs appear.
 	if isReadOnlyTask(prompt) {
 		debug.Log("fulfillment-gate", "request appears read-only/audit task, skipping")
 		return ""
 	}
 
-	// Detect action verbs in the request.
 	actions := detectActions(prompt)
 	if len(actions) == 0 {
 		debug.Log("fulfillment-gate", "no action verbs detected in request, skipping")
 		return ""
 	}
 
-	// Extract significant keywords from the request (file names, function names, etc.)
 	requestKeywords := extractRequestKeywords(prompt)
 	if len(requestKeywords) == 0 {
-		// Can't determine coverage without keywords — skip.
+
 		debug.Log("fulfillment-gate", "no extractable keywords in request, skipping")
 		return ""
 	}
 
-	// Check what the agent actually did.
 	filesEdited := runStats.FilesEdited
 	hasEdits := len(filesEdited) > 0
 	hasCommands := len(runStats.CommandsRun) > 0
 
-	// Case 1: Action requested but no files edited and no commands run.
-	// The agent explored but didn't make changes.
 	if !hasEdits && !hasCommands && len(runStats.ToolCalls) > 0 {
 		a.fulfillmentGate.fired = true
 		debug.Log("fulfillment-gate", "action requested but no edits or commands — injecting reminder")
@@ -143,12 +86,9 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 		)
 	}
 
-	// Case 2: Files edited but keyword overlap is low — may have edited
-	// unrelated files. Only trigger when the request mentions specific files/concepts.
 	if hasEdits && len(requestKeywords) >= 1 {
 		matched := countFileKeywordMatches(requestKeywords, filesEdited)
-		// If none of the request keywords appear in any edited file path,
-		// it's possible the agent edited the wrong files.
+
 		if matched == 0 && len(filesEdited) <= 5 {
 			a.fulfillmentGate.fired = true
 			debug.Log("fulfillment-gate", "edited files have no keyword overlap with request — injecting reminder")
@@ -160,12 +100,9 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 		}
 	}
 
-	// Case 3: Multi-part request — check if all parts seem addressed.
-	// We detect multi-part via conjunctions and list patterns.
 	parts := detectMultiPart(prompt)
 	if parts >= 2 && hasEdits {
-		// Heuristic: if the request has N parts, expect at least ceil(N/2)
-		// distinct files edited (some parts may target the same file).
+
 		expected := (parts + 1) / 2
 		if expected < 1 {
 			expected = 1
@@ -187,13 +124,8 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 	return ""
 }
 
-// isInformationalRequest returns true if the prompt looks like a question
-// rather than an action request.
 func isInformationalRequest(prompt string) bool {
-	// Lowercase once: indicators are lowercase and sentence-initial
-	// "What"/"How" must still count (#557 — the issue's prompt starts
-	// mid-sentence lowercase, but capitalized sentence starts exposed the
-	// case-sensitive gap).
+
 	prompt = strings.ToLower(prompt)
 	questionCount := 0
 	for _, indicator := range questionIndicators {
@@ -204,13 +136,7 @@ func isInformationalRequest(prompt string) bool {
 	if questionCount == 0 {
 		return false
 	}
-	// Only classify as informational if there are NO action verbs,
-	// or questions heavily outnumber actions.
-	// Word-boundary matching (#557): "what does the updateHandler function
-	// do?" must not count "update" — the bare substring hit misclassified
-	// informational prompts as executable, triggering no-files-edited
-	// reminders on plain Q&A turns. containsWord is the same guard
-	// isReadOnlyTask below already uses.
+
 	actionCount := 0
 	for _, verb := range actionVerbs {
 		if containsWord(prompt, verb) {
@@ -220,9 +146,6 @@ func isInformationalRequest(prompt string) bool {
 	return actionCount == 0 || questionCount > actionCount
 }
 
-// isReadOnlyTask returns true if the prompt contains read-only/audit task
-// indicators (check, review, inspect, etc.) that suggest no file edits are
-// expected, even if action verbs like "update" appear in embedded instructions.
 func isReadOnlyTask(prompt string) bool {
 	readOnlyCount := 0
 	for _, indicator := range readOnlyIndicators {
@@ -233,8 +156,7 @@ func isReadOnlyTask(prompt string) bool {
 	if readOnlyCount == 0 {
 		return false
 	}
-	// Only classify as read-only when indicators STRICTLY outnumber action verbs.
-	// Using >= causes "fix X and check Y" (1 action + 1 read-only) to bypass the gate.
+
 	actionCount := 0
 	for _, verb := range actionVerbs {
 		if containsWord(prompt, verb) {
@@ -244,8 +166,6 @@ func isReadOnlyTask(prompt string) bool {
 	return readOnlyCount > actionCount
 }
 
-// containsWord checks for a word boundary match to avoid substring false positives
-// (e.g. "check" matching "checkpoint", "checksum", "checkout").
 func containsWord(text, word string) bool {
 	idx := strings.Index(strings.ToLower(text), strings.ToLower(word))
 	for idx >= 0 {
@@ -268,9 +188,6 @@ func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
-// detectActions returns the action verbs found in the prompt.
-// Word-boundary matching (#557): bare substring hits counted identifier
-// fragments ("updateHandler" as "update"), same class as #553/#546.
 func detectActions(prompt string) []string {
 	var found []string
 	seen := make(map[string]bool)
@@ -283,19 +200,15 @@ func detectActions(prompt string) []string {
 	return found
 }
 
-// extractRequestKeywords pulls significant terms from the request that are
-// likely file names, function names, or package names.
 func extractRequestKeywords(prompt string) []string {
 	var keywords []string
 	seen := make(map[string]bool)
 
-	// Match file paths: foo/bar.go, foo/baz.py
 	words := strings.Fields(prompt)
 	for _, word := range words {
 		clean := strings.Trim(word, "`\"'()[]{},.;:!?")
 		clean = strings.ToLower(clean)
 
-		// File with extension
 		if strings.Contains(clean, ".") && len(clean) > 3 {
 			parts := strings.Split(clean, "/")
 			name := parts[len(parts)-1]
@@ -305,7 +218,6 @@ func extractRequestKeywords(prompt string) []string {
 			}
 		}
 
-		// CamelCase / snake_case identifiers (likely function/type names)
 		if isIdentifier(clean) && len(clean) > 4 && !isStopWord(clean) {
 			if !seen[clean] {
 				keywords = append(keywords, clean)
@@ -316,8 +228,6 @@ func extractRequestKeywords(prompt string) []string {
 	return keywords
 }
 
-// countFileKeywordMatches counts how many request keywords appear in any edited
-// file path.
 func countFileKeywordMatches(keywords, files []string) int {
 	matched := 0
 	for _, kw := range keywords {
@@ -331,12 +241,9 @@ func countFileKeywordMatches(keywords, files []string) int {
 	return matched
 }
 
-// detectMultiPart returns the estimated number of distinct action items in
-// the request, based on conjunction patterns and list formatting.
 func detectMultiPart(prompt string) int {
-	count := 1 // at least one part
+	count := 1
 
-	// Conjunctions that separate distinct tasks
 	conjunctions := []string{" and ", " then ", " also ", " after that "}
 	for _, conj := range conjunctions {
 		if strings.Contains(prompt, conj) {
@@ -344,7 +251,6 @@ func detectMultiPart(prompt string) int {
 		}
 	}
 
-	// Numbered/bulleted lists: "1. ", "2. ", "- ", "* "
 	for i := 2; i <= 9; i++ {
 		marker := fmt.Sprintf("%d. ", i)
 		if strings.Contains(prompt, marker) {
@@ -355,19 +261,17 @@ func detectMultiPart(prompt string) int {
 		count++
 	}
 
-	// Multiple action verbs also suggest multiple parts
 	actions := detectActions(prompt)
 	if len(actions) > count {
 		count = len(actions)
 	}
 
 	if count > 5 {
-		count = 5 // cap to avoid false positives from wordy prompts
+		count = 5
 	}
 	return count
 }
 
-// isIdentifier checks if a string looks like a code identifier.
 func isIdentifier(s string) bool {
 	if s == "" {
 		return false
@@ -381,7 +285,6 @@ func isIdentifier(s string) bool {
 	return true
 }
 
-// isStopWord returns true for common words that aren't meaningful identifiers.
 func isStopWord(s string) bool {
 	stopWords := map[string]bool{
 		"the": true, "this": true, "that": true, "with": true, "from": true,

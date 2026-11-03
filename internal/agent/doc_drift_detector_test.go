@@ -51,7 +51,7 @@ func TestDocDriftAdvisory_TestFilesExcluded(t *testing.T) {
 		"c_test.go",
 		"d_test.go",
 	}
-	// Only a.go counts (tests excluded) -> below threshold -> silence.
+
 	if msg := docDriftAdvisory(files); msg != "" {
 		t.Errorf("test files must not count toward the threshold, got %q", msg)
 	}

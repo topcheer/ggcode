@@ -163,7 +163,7 @@ func TestCheckInitSideEffects_NonGoFile(t *testing.T) {
 }
 
 func TestCheckInitSideEffects_SyncMutex(t *testing.T) {
-	// sync operations are not flagged - they're safe
+
 	src := `package main
 import "sync"
 var mu sync.Mutex
@@ -178,8 +178,6 @@ func init() {
 	}
 }
 
-// TestInitSE_1577 pins #1577: time.Now/http.NewServeMux pure constructors
-// stay silent, time.Sleep still flags, bare panic() is caught.
 func TestInitSE_1577(t *testing.T) {
 	cases := []struct {
 		name, src string

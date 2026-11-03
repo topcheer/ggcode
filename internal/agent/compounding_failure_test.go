@@ -13,7 +13,7 @@ func TestCompoundingFailure_DoesNotFireWithEmptyWindow(t *testing.T) {
 
 func TestCompoundingFailure_DoesNotFireBelowThreshold(t *testing.T) {
 	c := newCompoundingFailureState()
-	// 5 failures out of 10 = 50%, below 70% threshold
+
 	results := []struct {
 		tool string
 		err  bool
@@ -39,7 +39,7 @@ func TestCompoundingFailure_DoesNotFireBelowThreshold(t *testing.T) {
 
 func TestCompoundingFailure_DoesNotFireSingleCategory(t *testing.T) {
 	c := newCompoundingFailureState()
-	// 8 failures but ALL in "editing" category - only 1 distinct category
+
 	for i := 0; i < 8; i++ {
 		c.recordResult("edit_file", true)
 	}
@@ -52,21 +52,21 @@ func TestCompoundingFailure_DoesNotFireSingleCategory(t *testing.T) {
 
 func TestCompoundingFailure_FiresOnHighRateMultiCategory(t *testing.T) {
 	c := newCompoundingFailureState()
-	// 8 failures out of 10 across 3 categories
+
 	results := []struct {
 		tool string
 		err  bool
 	}{
-		{"edit_file", true},   // editing
-		{"grep", true},        // search
-		{"run_command", true}, // command
+		{"edit_file", true},
+		{"grep", true},
+		{"run_command", true},
 		{"read_file", false},
-		{"edit_file", true},   // editing
-		{"grep", true},        // search
-		{"run_command", true}, // command
-		{"edit_file", true},   // editing
+		{"edit_file", true},
+		{"grep", true},
+		{"run_command", true},
+		{"edit_file", true},
 		{"read_file", false},
-		{"lsp_hover", true}, // lsp
+		{"lsp_hover", true},
 	}
 	for _, r := range results {
 		c.recordResult(r.tool, r.err)
@@ -86,12 +86,12 @@ func TestCompoundingFailure_FiresOnlyOnce(t *testing.T) {
 		c.recordResult("edit_file", true)
 	}
 	c.recordResult("read_file", false)
-	c.recordResult("grep", true) // search category
+	c.recordResult("grep", true)
 	_ = c.check()
 	if !c.fired {
 		t.Fatal("expected fired after first check")
 	}
-	// Second check should return empty
+
 	if msg := c.check(); msg != "" {
 		t.Fatalf("expected empty on second check, got: %s", msg)
 	}
@@ -117,18 +117,18 @@ func TestCompoundingFailure_Reset(t *testing.T) {
 
 func TestCompoundingFailure_SlidingWindowEviction(t *testing.T) {
 	c := newCompoundingFailureState()
-	// Fill window with 10 errors in 2 categories
+
 	for i := 0; i < 5; i++ {
-		c.recordResult("edit_file", true) // editing
+		c.recordResult("edit_file", true)
 	}
 	for i := 0; i < 5; i++ {
-		c.recordResult("grep", true) // search
+		c.recordResult("grep", true)
 	}
-	// Now add 10 successes - this should evict all failures
+
 	for i := 0; i < 10; i++ {
 		c.recordResult("read_file", false)
 	}
-	// Window should have 0 failures now
+
 	failCount := 0
 	for _, e := range c.window {
 		if e.isError {
@@ -145,9 +145,7 @@ func TestCompoundingFailure_SlidingWindowEviction(t *testing.T) {
 
 func TestCompoundingFailure_InterleavedSuccessesMaskedBySlidingWindow(t *testing.T) {
 	c := newCompoundingFailureState()
-	// Pattern that consecutive-error detection CANNOT catch:
-	// fail, fail, SUCCEED, fail, fail, SUCCEED, fail, fail, SUCCEED, fail
-	// Max consecutive = 2, but failure rate = 70%
+
 	results := []struct {
 		tool string
 		err  bool
@@ -166,8 +164,7 @@ func TestCompoundingFailure_InterleavedSuccessesMaskedBySlidingWindow(t *testing
 	for _, r := range results {
 		c.recordResult(r.tool, r.err)
 	}
-	// 7/10 = 70%, 4 categories (editing, search, command, reading is success)
-	// Failed categories: editing, search, command = 3
+
 	msg := c.check()
 	if msg == "" {
 		t.Fatal("expected guidance for interleaved failure pattern (70%% rate, 3 categories)")

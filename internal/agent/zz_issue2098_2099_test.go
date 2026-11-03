@@ -1,15 +1,5 @@
 package agent
 
-// #2098/#2099 regression:
-//   - #2098: extractJobID computed the "job id:" offset on the ToLower
-//     COPY but sliced the ORIGINAL - length-changing runes (İ 2B->1B,
-//     ẞ 3B->2B) in a prepended Rules block shifted the cut and the
-//     "extracted" id was ":" (orphan detection blind on the real job).
-//   - #2099: causalErrorFileRe matched only .go while causalVerifyRe
-//     deliberately covers npm/cargo/pytest/jest/gradlew - non-Go
-//     failures never produced errorFiles and the detector stayed
-//     silent outside Go projects.
-
 import (
 	"testing"
 )
@@ -20,7 +10,7 @@ func TestExtractJobIDUnicodeShift(t *testing.T) {
 	if got := extractJobID(s); got != "job-a1b2c3" {
 		t.Fatalf("extractJobID = %q, want job-a1b2c3 (offset shifted by length-changing runes)", got)
 	}
-	// Case variants still match (the old path's intent).
+
 	if got := extractJobID("job id: job-x9\n"); got != "job-x9" {
 		t.Fatalf("lowercase variant: %q", got)
 	}

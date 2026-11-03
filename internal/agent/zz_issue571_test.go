@@ -1,28 +1,20 @@
 package agent
 
-// Feature test for #571: write_integrity registry full reconciliation.
-// Verifies that newly registered checks appear in allChecks.
-
 import (
 	"strings"
 	"testing"
 )
 
-// TestIssue571_AllRegisteredDetectors verifies all detectors from the issue
-// are registered in allChecks.
 func TestIssue571_AllRegisteredDetectors(t *testing.T) {
 	ensureRegistryInited()
 
-	// Discovery 1 (HIGH): race-verify-hint
 	checkRegistered(t, "race-verify-hint")
 
-	// Discovery 2 (MEDIUM-HIGH): reward-hacking detectors
 	checkRegistered(t, "hardcoded-output")
 	checkRegistered(t, "suppression-directives")
 	checkRegistered(t, "placeholder-code")
 	checkRegistered(t, "assertion-presence")
 
-	// Discovery 3 (MEDIUM): silent wrong behavior detectors (priority order)
 	checkRegistered(t, "value-recv-mutation")
 	checkRegistered(t, "unsafe-usage")
 	checkRegistered(t, "unreachable-code")
@@ -32,18 +24,14 @@ func TestIssue571_AllRegisteredDetectors(t *testing.T) {
 	checkRegistered(t, "unkeyed-struct")
 	checkRegistered(t, "unicode-check")
 
-	// Discovery 3 (MEDIUM): http-plaintext (security)
 	checkRegistered(t, "http-plaintext")
 
-	// #567: typosquat (should already be registered)
 	checkRegistered(t, "typosquat")
 
-	// #570: content-growth and edit-blast-radius (should already be registered)
 	checkRegistered(t, "content-growth")
 	checkRegistered(t, "edit-blast-radius")
 }
 
-// checkRegistered is a helper that verifies a check is in allChecks.
 func checkRegistered(t *testing.T, name string) {
 	t.Helper()
 	found := false
@@ -58,7 +46,6 @@ func checkRegistered(t *testing.T, name string) {
 	}
 }
 
-// TestIssue571_RaceVerifyHintFires verifies race-verify-hint fires on new concurrency.
 func TestIssue571_RaceVerifyHintFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("race-verify-hint")
@@ -79,7 +66,6 @@ func TestIssue571_RaceVerifyHintFires(t *testing.T) {
 	}
 }
 
-// TestIssue571_HardcodedOutputFires verifies hardcoded-output fires on large map.
 func TestIssue571_HardcodedOutputFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("hardcoded-output")
@@ -105,7 +91,6 @@ func TestIssue571_HardcodedOutputFires(t *testing.T) {
 	}
 }
 
-// TestIssue571_SuppressionDirectivesFires verifies suppression-directives fires.
 func TestIssue571_SuppressionDirectivesFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("suppression-directives")
@@ -123,7 +108,6 @@ func TestIssue571_SuppressionDirectivesFires(t *testing.T) {
 	}
 }
 
-// TestIssue571_PlaceholderCodeFires verifies placeholder-code fires.
 func TestIssue571_PlaceholderCodeFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("placeholder-code")
@@ -141,14 +125,13 @@ func TestIssue571_PlaceholderCodeFires(t *testing.T) {
 	}
 }
 
-// TestIssue571_AssertionPresenceFires verifies assertion-presence fires on hollow test.
 func TestIssue571_AssertionPresenceFires(t *testing.T) {
 	ensureRegistryInited()
 	c := findCheck("assertion-presence")
 	if c == nil {
 		t.Fatal("assertion-presence not registered")
 	}
-	// Use valid Go code - empty function body with no assertions
+
 	warnings := c.Run(CheckContext{
 		FilePath:   "foo_test.go",
 		OldContent: "",
@@ -166,7 +149,6 @@ func TestFoo(t *testing.T) {
 	}
 }
 
-// findCheck returns the IntegrityCheck with the given name, or nil.
 func findCheck(name string) *IntegrityCheck {
 	for i := range allChecks {
 		if allChecks[i].Name == name {
@@ -176,7 +158,6 @@ func findCheck(name string) *IntegrityCheck {
 	return nil
 }
 
-// ensureRegistryInited forces the check registry to initialize.
 func ensureRegistryInited() {
 	if allChecks == nil {
 		registerAllChecks()

@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// withTestHome isolates HOME so tests don't pollute ~/.ggcode/todos/.
 func withTestHome(t *testing.T) {
 	t.Helper()
 	tmpHome := t.TempDir()

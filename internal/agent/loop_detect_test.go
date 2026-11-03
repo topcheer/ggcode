@@ -10,25 +10,21 @@ import (
 func TestLoopDetector_ConsecutiveErrors(t *testing.T) {
 	var ld loopDetector
 
-	// First error — no guidance
 	g := ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Errorf("expected no guidance on first error, got: %s", g)
 	}
 
-	// Second error — no guidance yet
 	g = ld.recordResult(true, "run_command")
 	if g != "" {
 		t.Errorf("expected no guidance on second error, got: %s", g)
 	}
 
-	// Third error — still no guidance (threshold is 4)
 	g = ld.recordResult(true, "write_file")
 	if g != "" {
 		t.Errorf("expected no guidance on third error, got: %s", g)
 	}
 
-	// Fourth error — guidance should appear
 	g = ld.recordResult(true, "edit_file")
 	if g == "" {
 		t.Error("expected guidance on fourth consecutive error, got empty string")
@@ -37,7 +33,6 @@ func TestLoopDetector_ConsecutiveErrors(t *testing.T) {
 		t.Errorf("expected guidance to mention consecutive errors, got: %s", g)
 	}
 
-	// Fifth error — guidance already given, should not repeat
 	g = ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Errorf("expected no repeat guidance after already given, got: %s", g)
@@ -47,7 +42,6 @@ func TestLoopDetector_ConsecutiveErrors(t *testing.T) {
 func TestLoopDetector_ErrorStreakResetsOnSuccess(t *testing.T) {
 	var ld loopDetector
 
-	// Three errors, then a success
 	ld.recordResult(true, "edit_file")
 	ld.recordResult(true, "edit_file")
 	ld.recordResult(true, "run_command")
@@ -57,7 +51,6 @@ func TestLoopDetector_ErrorStreakResetsOnSuccess(t *testing.T) {
 		t.Errorf("expected no guidance on success, got: %s", g)
 	}
 
-	// After reset, need 4 more errors to trigger again
 	ld.recordResult(true, "edit_file")
 	ld.recordResult(true, "edit_file")
 	ld.recordResult(true, "edit_file")
@@ -70,23 +63,19 @@ func TestLoopDetector_ErrorStreakResetsOnSuccess(t *testing.T) {
 func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 	var ld loopDetector
 
-	// Simulate: duplicate call (exact same args), then different error calls
 	tc1 := testToolCall("edit_file", `{"file_path":"/tmp/a.go","old_text":"x","new_text":"y"}`)
 	tc2 := testToolCall("edit_file", `{"file_path":"/tmp/b.go","old_text":"z","new_text":"w"}`)
 
-	// First call — check duplicate (should not warn, first time)
 	g1 := ld.checkDuplicate(tc1)
 	if g1 != "" {
 		t.Errorf("first call should not trigger duplicate warning: %s", g1)
 	}
 
-	// Different call — resets fingerprint streak
 	g2 := ld.checkDuplicate(tc2)
 	if g2 != "" {
 		t.Errorf("different call should not trigger duplicate warning: %s", g2)
 	}
 
-	// Record some errors
 	g := ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Error("should not trigger at 1 error")
@@ -107,7 +96,6 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 		t.Errorf("expected errorGuidanceLevel=1 after 4 errors, got %d", ld.errorGuidanceLevel)
 	}
 
-	// Continue errors — should NOT re-trigger level 1
 	g = ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Error("should not re-trigger level 1 at 5 errors")
@@ -117,7 +105,6 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 		t.Error("should not re-trigger level 1 at 6 errors")
 	}
 
-	// 7th error — should trigger level 2
 	g = ld.recordResult(true, "run_command")
 	if g == "" {
 		t.Error("should trigger level 2 guidance at 7 errors")
@@ -126,7 +113,6 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 		t.Errorf("expected errorGuidanceLevel=2 after 7 errors, got %d", ld.errorGuidanceLevel)
 	}
 
-	// Continue errors — should NOT re-trigger level 2
 	g = ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Error("should not re-trigger level 2 at 8 errors")
@@ -136,7 +122,6 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 		t.Error("should not re-trigger level 2 at 9 errors")
 	}
 
-	// 10th error — should trigger level 3
 	g = ld.recordResult(true, "write_file")
 	if g == "" {
 		t.Error("should trigger level 3 guidance at 10 errors")
@@ -145,13 +130,11 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 		t.Errorf("expected errorGuidanceLevel=3 after 10 errors, got %d", ld.errorGuidanceLevel)
 	}
 
-	// More errors after level 3 — should not trigger anything new
 	g = ld.recordResult(true, "edit_file")
 	if g != "" {
 		t.Error("should not trigger anything after level 3")
 	}
 
-	// Success resets everything
 	g = ld.recordResult(false, "edit_file")
 	if g != "" {
 		t.Error("success should not trigger guidance")
@@ -164,7 +147,6 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 	}
 }
 
-// testToolCall creates a ToolCallDelta for testing.
 func testToolCall(name string, args string) provider.ToolCallDelta {
 	return provider.ToolCallDelta{
 		Name:      name,
@@ -172,9 +154,6 @@ func testToolCall(name string, args string) provider.ToolCallDelta {
 	}
 }
 
-// TestLoopDetector_LongStreakPeriodicRewarn pins #1471-B: streaks past 5
-// stayed silent forever - coverage for context-farming by re-reading the
-// same large file resumes with a re-warn every 5 further duplicates.
 func TestLoopDetector_LongStreakPeriodicRewarn(t *testing.T) {
 	var ld loopDetector
 	tc := testToolCall("read_file", `{"path":"/big/file.go"}`)
@@ -182,11 +161,11 @@ func TestLoopDetector_LongStreakPeriodicRewarn(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		g := ld.checkDuplicate(tc)
 		switch i {
-		case 2: // third call = streak 3
+		case 2:
 			saw3 = g != ""
-		case 4: // fifth call = streak 5
+		case 4:
 			saw5 = g != ""
-		case 9: // tenth call = streak 10 -> periodic re-warn
+		case 9:
 			saw10 = g != ""
 		default:
 			if g != "" {

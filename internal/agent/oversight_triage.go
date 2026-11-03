@@ -1,32 +1,5 @@
 package agent
 
-// Oversight Triage — route human review attention to novel decisions.
-//
-// Research basis (r397): Anthropic 2026 Agentic Coding Trends Report (via
-// stacmac 8-trends survey) — developers use AI in ~60% of their work yet
-// can "fully delegate" only 0-20% of tasks; the top-leadership priority is
-// to "scale human-AI oversight intelligently: concentrate human attention
-// on genuinely novel decisions and strategic calls — not routine
-// verification. Make every hour of human review count."
-//
-// The gap in ggcode (sa-144 verdict, file:line verified): every existing
-// mechanism either guides the MODEL (diffSummaryGate/fulfillmentGate/
-// overseer inject self-review guidance) or gates PERMISSIONS
-// (irreversibility/reckless/breaking-change detectors decide whether to
-// block). Nothing classifies the run's decisions by novelty and tells the
-// HUMAN where their attention pays off most. The sa-74 confidence notice
-// (agent.go) is the closest precedent but keys on model logprob
-// uncertainty only — absent on Anthropic — and says nothing about WHAT
-// changed or why it merits review.
-//
-// V1 is deterministic and zero-LLM-cost:
-//   novel = supply-chain/critical file edits, irreversible remote ops,
-//           wide-blast codemods (>5 files in one call)
-//   routine = everything else (reads, single-file edits, tests, builds)
-// At run end, if any novel decision occurred, emit a compact digest via
-// a system event; routine actions fold into a single count. Non-blocking:
-// this informs the human, it never interrupts the agent.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -36,10 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// oversightCriticalFiles are path suffixes where edits change the trust or
-// build surface of the whole project — the decisions a human reviewer
-// should never rubber-stamp. Mirrors the critical_file.go table used for
-// model-side warnings (internal/tool), kept local to avoid an import cycle.
 var oversightCriticalFiles = []string{
 	"go.mod", "go.sum",
 	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -51,14 +20,10 @@ var oversightCriticalFiles = []string{
 	"Makefile", "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
 }
 
-// oversightCriticalDirs are directory prefixes whose contents are
-// infrastructure (CI/CD, release tooling).
 var oversightCriticalDirs = []string{
 	".github/workflows/", ".gitea/workflows/", ".circleci/", ".gitlab-ci",
 }
 
-// oversightIrreversibleTools change shared/remote state or history —
-// cheap to glance at, expensive to undo.
 var oversightIrreversibleTools = map[string]bool{
 	"git_push":  true,
 	"git_reset": true,
@@ -89,9 +54,6 @@ func (o *oversightTriageState) reset() {
 	o.emitted = false
 }
 
-// record classifies one executed tool call. Deterministic; never fails;
-// malformed arguments count as routine (worst case: a missed digest line,
-// never a false alarm).
 func (o *oversightTriageState) record(tc provider.ToolCallDelta) {
 	var args map[string]any
 	if len(tc.Arguments) > 0 {
@@ -104,12 +66,11 @@ func (o *oversightTriageState) record(tc provider.ToolCallDelta) {
 		o.routineCount++
 		return
 	}
-	if len(o.novel) < 10 { // cap the digest source list
+	if len(o.novel) < 10 {
 		o.novel = append(o.novel, item)
 	}
 }
 
-// oversightArgStr pulls a string value for the first key that hits.
 func oversightArgStr(args map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := args[k]; ok {
@@ -121,8 +82,6 @@ func oversightArgStr(args map[string]any, keys ...string) string {
 	return ""
 }
 
-// oversightExtractPath pulls the most relevant target path (or op summary)
-// out of the call args for display.
 func oversightExtractPath(tool string, args map[string]any) string {
 	switch tool {
 	case "edit_file", "write_file", "multi_edit_file":
@@ -146,8 +105,6 @@ func oversightExtractPath(tool string, args map[string]any) string {
 	}
 }
 
-// oversightIsCriticalPath reports whether the path hits the supply-chain /
-// infrastructure surface.
 func oversightIsCriticalPath(p string) bool {
 	if p == "" {
 		return false
@@ -166,7 +123,6 @@ func oversightIsCriticalPath(p string) bool {
 	return false
 }
 
-// oversightWideBlast reports whether a single call touched many files.
 func oversightWideBlast(tool string, args map[string]any) bool {
 	if tool != "batch_replace" && tool != "multi_file_edit" && tool != "multi_file_write" {
 		return false
@@ -175,7 +131,6 @@ func oversightWideBlast(tool string, args map[string]any) bool {
 	return ok && len(files) > 5
 }
 
-// oversightFileOpsIsDelete detects a delete operation in file_ops args.
 func oversightFileOpsIsDelete(args map[string]any) bool {
 	for _, opsKey := range []string{"operations", "ops"} {
 		if raw, ok := args[opsKey]; ok {
@@ -193,7 +148,6 @@ func oversightFileOpsIsDelete(args map[string]any) bool {
 	return false
 }
 
-// classifyOversight maps a tool call to (item, novel).
 func classifyOversight(tool string, args map[string]any) (oversightItem, bool) {
 	target := oversightExtractPath(tool, args)
 	switch {
@@ -215,9 +169,6 @@ func classifyOversight(tool string, args map[string]any) (oversightItem, bool) {
 	}
 }
 
-// digest renders the end-of-run attention routing message, or "" when
-// nothing novel happened (deliberately silent — routine runs deserve
-// exactly zero review noise). Emits at most once per run.
 func (o *oversightTriageState) digest() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()

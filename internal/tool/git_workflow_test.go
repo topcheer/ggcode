@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// setupGitRepo creates a temporary git repo with an initial commit and returns its path.
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,7 +22,7 @@ func setupGitRepo(t *testing.T) string {
 	run("init")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "Test")
-	// Create a file and commit it
+
 	writeTestFile(t, dir+"/hello.txt", "hello\n")
 	run("add", ".")
 	run("commit", "-m", "initial commit")
@@ -32,7 +31,7 @@ func setupGitRepo(t *testing.T) string {
 
 func TestGitRevert_Execute(t *testing.T) {
 	dir := setupGitRepo(t)
-	// Make a second commit to revert
+
 	writeTestFile(t, dir+"/world.txt", "world\n")
 	runGit := func(args ...string) {
 		cmd := exec.Command("git", args...)
@@ -44,7 +43,6 @@ func TestGitRevert_Execute(t *testing.T) {
 	runGit("add", ".")
 	runGit("commit", "-m", "add world")
 
-	// Get the commit hash
 	cmd := exec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = dir
 	hashOut, _ := cmd.Output()
@@ -66,7 +64,6 @@ func TestGitRevert_Execute(t *testing.T) {
 		t.Fatalf("expected revert mention in output, got: %s", result.Content)
 	}
 
-	// Verify the file was removed by the revert
 	if fileExists(dir + "/world.txt") {
 		t.Fatal("world.txt should have been removed by revert")
 	}
@@ -85,7 +82,7 @@ func TestGitRevert_NoCommitRequired(t *testing.T) {
 
 func TestGitReset_SoftUnstage(t *testing.T) {
 	dir := setupGitRepo(t)
-	// Stage a new file
+
 	writeTestFile(t, dir+"/new.txt", "new\n")
 	runGit := func(args ...string) {
 		cmd := exec.Command("git", args...)
@@ -109,7 +106,6 @@ func TestGitReset_SoftUnstage(t *testing.T) {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
 
-	// File should still exist (mixed doesn't delete)
 	if !fileExists(dir + "/new.txt") {
 		t.Fatal("file should still exist after mixed reset")
 	}
@@ -158,7 +154,6 @@ func TestGitTag_ListCreateDelete(t *testing.T) {
 	dir := setupGitRepo(t)
 	tool := GitTag{WorkingDir: dir}
 
-	// List (empty)
 	input, _ := json.Marshal(map[string]interface{}{
 		"action":      "list",
 		"description": "test list",
@@ -171,7 +166,6 @@ func TestGitTag_ListCreateDelete(t *testing.T) {
 		t.Fatalf("expected no tags, got: %s", result.Content)
 	}
 
-	// Create
 	input, _ = json.Marshal(map[string]interface{}{
 		"action":      "create",
 		"name":        "v1.0.0",
@@ -186,7 +180,6 @@ func TestGitTag_ListCreateDelete(t *testing.T) {
 		t.Fatalf("expected tag name in output, got: %s", result.Content)
 	}
 
-	// List (should show tag)
 	input, _ = json.Marshal(map[string]interface{}{
 		"action":      "list",
 		"description": "test list",
@@ -196,7 +189,6 @@ func TestGitTag_ListCreateDelete(t *testing.T) {
 		t.Fatalf("expected v1.0.0 in list, got: %s", result.Content)
 	}
 
-	// Delete
 	input, _ = json.Marshal(map[string]interface{}{
 		"action":      "delete",
 		"name":        "v1.0.0",
@@ -207,7 +199,6 @@ func TestGitTag_ListCreateDelete(t *testing.T) {
 		t.Fatalf("delete failed: %s", result.Content)
 	}
 
-	// List (should be empty again)
 	input, _ = json.Marshal(map[string]interface{}{
 		"action":      "list",
 		"description": "test list",
@@ -230,7 +221,6 @@ func TestGitTag_CreateRequiresName(t *testing.T) {
 	}
 }
 
-// Helper functions
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {

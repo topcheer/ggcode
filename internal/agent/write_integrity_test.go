@@ -8,7 +8,7 @@ import (
 )
 
 func TestCheckWriteIntegrity_GoSyntaxError(t *testing.T) {
-	// Go file with a syntax error (missing closing brace)
+
 	badGo := "package main\n\nfunc broken( {\n\treturn nil\n"
 	old := "package main\n\nfunc broken() {\n\treturn nil\n}\n"
 
@@ -44,7 +44,7 @@ func TestCheckWriteIntegrity_NullBytes(t *testing.T) {
 }
 
 func TestCheckWriteIntegrity_ContentLoss(t *testing.T) {
-	// Non-empty file becomes empty after edit
+
 	warning := checkWriteIntegrity("main.go", "package main\nfunc main() {}\n", "")
 	if warning == "" {
 		t.Fatal("expected content loss warning")
@@ -55,7 +55,7 @@ func TestCheckWriteIntegrity_ContentLoss(t *testing.T) {
 }
 
 func TestCheckWriteIntegrity_NoWarningForNewFile(t *testing.T) {
-	// New file (old="") with valid content should produce no warning
+
 	warning := checkWriteIntegrity("main.go", "", "package main\nfunc main() {}\n")
 	if warning != "" {
 		t.Errorf("expected no warning for new valid file, got: %s", warning)
@@ -63,17 +63,17 @@ func TestCheckWriteIntegrity_NoWarningForNewFile(t *testing.T) {
 }
 
 func TestCheckWriteIntegrity_NonGoFileSkipsSyntaxCheck(t *testing.T) {
-	// Non-Go file with unbalanced brackets should not trigger syntax check
+
 	content := "{ this is not valid code but not Go either"
 	warning := checkWriteIntegrity("readme.md", "old content", content)
-	// Should be no warning — no null bytes, no content loss, not a Go file
+
 	if warning != "" {
 		t.Errorf("expected no warning for non-Go file, got: %s", warning)
 	}
 }
 
 func TestCheckWriteIntegrity_WhitespaceOnlyContentLoss(t *testing.T) {
-	// File with content becomes whitespace-only
+
 	warning := checkWriteIntegrity("main.go", "package main\n", "   \n  \t  ")
 	if warning == "" {
 		t.Fatal("expected content loss warning for whitespace-only result")
@@ -84,13 +84,13 @@ func TestCheckWriteIntegrity_WhitespaceOnlyContentLoss(t *testing.T) {
 }
 
 func TestCheckGoSyntax_MultipleErrors(t *testing.T) {
-	// File with multiple syntax errors
+
 	badGo := "package main\n\nfunc a( {\nfunc b( {\nfunc c( {\n"
 	warnings := checkGoSyntax("multi.go", badGo)
 	if len(warnings) == 0 {
 		t.Fatal("expected syntax errors")
 	}
-	// Should cap at maxGoSyntaxErrors + 1 "more" message
+
 	if len(warnings) > maxGoSyntaxErrors+1 {
 		t.Errorf("too many warnings: %d (max should be %d+1)", len(warnings), maxGoSyntaxErrors)
 	}
@@ -127,28 +127,24 @@ func fetch(url string) error {
 	if warning == "" {
 		t.Fatal("expected at least one warning, got empty string")
 	}
-	// With maxIntegrityWarnings=1, only the first warning surfaces.
-	// The code triggers both http-timeout and error-order warnings;
-	// either one is acceptable.
+
 	if !strings.Contains(warning, "http") && !strings.Contains(warning, "resp") {
 		t.Errorf("warning should mention http-timeout or resp, got: %s", warning)
 	}
 }
 
 func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
-	// Create content that triggers multiple warnings:
-	// null bytes + content loss + Go syntax errors
+
 	bad := "\x00\x00\x00"
 	warning := checkWriteIntegrity("main.go", "package main\nfunc main(){}\n", bad)
 	if warning == "" {
 		t.Fatal("expected warning")
 	}
-	// Count warning lines (each separated by newline in the header block)
+
 	lines := strings.Split(warning, "\n")
-	// First line is header, rest are warnings (capped at maxIntegrityWarnings)
-	warningLines := lines[1:] // skip header
-	// Allow maxIntegrityWarnings substantive warnings plus a single
-	// "... and N more suppressed" indicator line.
+
+	warningLines := lines[1:]
+
 	indicator := 0
 	for _, l := range warningLines {
 		if strings.Contains(l, "more integrity warning(s) suppressed") {
@@ -162,7 +158,7 @@ func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 		t.Errorf("expected at most %d warnings (plus indicator), got %d: %v", maxIntegrityWarnings, len(warningLines), warningLines)
 	}
 	if len(warningLines) == maxIntegrityWarnings+indicator && indicator == 1 {
-		// When capped, the indicator must be present and count must be accurate.
+
 		last := warningLines[len(warningLines)-1]
 		if !strings.Contains(last, "2 more integrity warning(s) suppressed") {
 			t.Errorf("indicator should report 2 suppressed warnings, got: %s", last)
@@ -171,8 +167,7 @@ func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 }
 
 func TestCheckWriteIntegrity_BarePanicSafety(t *testing.T) {
-	// A bare panic() in library code should trigger the panic safety check
-	// via the main checkWriteIntegrity entry.
+
 	src := `package mypkg
 
 func validate(x int) int {
@@ -192,9 +187,7 @@ func validate(x int) int {
 }
 
 func TestCheckWriteIntegrity_HardcodedPathRegistered(t *testing.T) {
-	// #516: hardcoded-path spent multiple census rounds as unregistered dead
-	// code precisely because nothing asserted its registration. This guards
-	// against silent deregistration (e.g., a future registry refactor).
+
 	old := "package mypkg\n\nfunc load() string { return \"\" }\n"
 	newSrc := "package mypkg\n\nfunc load() string { return \"/Users/john/project/config.yaml\" }\n"
 	warning := checkWriteIntegrity("src/mypkg/loader.go", old, newSrc)
@@ -206,10 +199,8 @@ func TestCheckWriteIntegrity_HardcodedPathRegistered(t *testing.T) {
 	}
 }
 
-// #1065: Test that interface-design check is registered and active.
-// This guards against silent deregistration (similar to #516 pattern).
 func TestCheckWriteIntegrity_InterfaceDesignRegistered(t *testing.T) {
-	// Create a file with a single-implementation interface that will trigger the check
+
 	oldCode := `package mypkg
 
 type MyInterface interface {
@@ -220,8 +211,7 @@ type MyImpl struct{}
 
 func (m *MyImpl) Method() {}
 `
-	// Add a new implementation - the delta-aware check should NOT fire
-	// because we're adding safety, not introducing anti-patterns
+
 	newCode := `package mypkg
 
 type MyInterface interface {
@@ -237,18 +227,12 @@ type AnotherImpl struct{}
 func (a *AnotherImpl) Method() {}
 `
 	warning := checkWriteIntegrity("src/mypkg/interfaces.go", oldCode, newCode)
-	// The interface-design check is registered and runs, but this specific
-	// edit (adding an impl) should not trigger it - so we just verify the
-	// detector is loaded by checking it doesn't crash
+
 	if strings.Contains(warning, "internal error") {
 		t.Fatalf("interface-design check caused internal error (may not be properly registered): %s", warning)
 	}
 }
 
-// TestCheckWriteIntegrityReadBack pins #1786 case 2: the promised disk
-// read-back actually happens - a file whose on-disk content differs from
-// what was written (partial write / immediate rewrite) surfaces a mismatch
-// warning; a matching file does not.
 func TestCheckWriteIntegrityReadBack(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.txt")
@@ -261,8 +245,7 @@ func TestCheckWriteIntegrityReadBack(t *testing.T) {
 	if err := os.WriteFile(p, []byte("intended-new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Matching file: no mismatch warning (other checks may still fire; for
-	// plain text they don't).
+
 	if w := checkWriteIntegrity(p, "old", "intended-new"); w != "" {
 		t.Fatalf("matching disk content must not warn, got %q", w)
 	}

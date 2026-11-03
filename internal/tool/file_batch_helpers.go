@@ -35,12 +35,7 @@ type PlannedFileEdit struct {
 	OldContent       string
 	NewContent       string
 	AppliedEditCount int
-	// Existed reports whether Path was present on disk when the plan was
-	// made. #3512: multi_file_write can CREATE files, and the checkpoint
-	// layer needs the create-vs-edit distinction to undo by removal instead
-	// of writing back "" (issue #554 B, multi-file leg). Edit-only planners
-	// (multi_file_edit / multi_edit_file / batch_replace) set it true.
-	Existed bool
+	Existed          bool
 }
 
 type MultiFileEditFileResult struct {
@@ -64,11 +59,7 @@ type MultiFileEditContent struct {
 	Results            []MultiFileEditFileResult `json:"results"`
 	SecretWarnings     string                    `json:"secret_warnings,omitempty"`
 	DiagnosticWarnings string                    `json:"diagnostic_warnings,omitempty"`
-	// SnapshotDrift (#4798 / S-29): on an atomic-batch failure, per-file
-	// summary of files whose on-disk content no longer matches the snapshot
-	// the plan was resolved against (concurrent formatter / editor). Lets
-	// the next round re-anchor in one step instead of whack-a-mole.
-	SnapshotDrift []string `json:"snapshot_drift,omitempty"`
+	SnapshotDrift      []string                  `json:"snapshot_drift,omitempty"`
 }
 
 func cleanAbsolutePath(path string) (string, error) {
@@ -174,9 +165,7 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 			}
 			return "", 0, msg
 		}
-		// #604 T2 (multi_edit_file): same lenient recount as edit_file — a
-		// whitespace-tolerant fallback must not bypass the uniqueness gate when
-		// semantically-duplicate blocks collapse to one byte-exact match.
+
 		if !mr.anchored && count <= 1 {
 			if loose, looseLines := lenientRecount(content, edit.OldText, mr); loose > 1 {
 				msg := fmt.Sprintf(
@@ -197,12 +186,7 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 		if mr.transform != "" {
 			newText = adjustNewText(content, edit.NewText, mr)
 		}
-		// #1676 case 3 (planTextEdits had no CRLF handling at all - only
-		// edit_file did): normalize new_text to the file's line-ending
-		// convention so batch edits cannot introduce mixed endings. The
-		// crlf-converted transform branch above already converts new_text;
-		// normalizeNewTextEOL is a no-op there, but it is the only guard for
-		// byte-exact/anchored matches in CRLF files.
+
 		newText = normalizeNewTextEOL(content, newText)
 		positions = append(positions, editPos{
 			start: idx,

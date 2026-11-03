@@ -1,38 +1,5 @@
 package agent
 
-// Unsafe Package Usage Detection
-//
-// Problem: AI coding agents frequently suggest `unsafe` package operations
-// for "optimization" (zero-copy conversions, manual pointer arithmetic)
-// without understanding Go's GC and memory model. The most dangerous patterns:
-//
-//  1. Pointer arithmetic via uintptr: unsafe.Pointer(uintptr(p) + offset).
-//     The GC may move the object between the uintptr() conversion and the
-//     unsafe.Pointer() reconversion, creating a dangling pointer. The only
-//     safe way is unsafe.Add() (Go 1.17+).
-//
-//  2. reflect.SliceHeader / reflect.StringHeader usage (deprecated since
-//     Go 1.20). Direct manipulation of the .Data field is undefined behavior
-//     and may break in future Go versions. Use unsafe.Slice / unsafe.String /
-//     unsafe.StringData / unsafe.SliceData instead.
-//
-//  3. Storing uintptr from unsafe.Pointer: offset := uintptr(unsafe.Pointer(p)).
-//     A uintptr is just an integer - the GC does not treat it as a pointer.
-//     If the object moves during GC, the stored uintptr becomes stale.
-//
-// Competitor analysis:
-//   - Claude Code: no write-time unsafe detection
-//   - Cursor: relies on go vet -unsafeptr (catches only one narrow pattern)
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//   - Devin: no detection
-//   - go vet -unsafeptr: detects only one pattern (uintptr stored in a
-//     variable and converted back to unsafe.Pointer). Misses reflect header
-//     misuse and general pointer arithmetic.
-//
-// Approach: AST-based analysis. Delta-aware: only flags patterns newly
-// introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -41,11 +8,10 @@ import (
 	"strings"
 )
 
-// unsafeInstance represents a detected unsafe package misuse.
 type unsafeInstance struct {
-	category string // "pointer-arith", "reflect-header", "stored-uintptr"
-	detail   string // specific detail
-	line     int    // line number (0 if unknown)
+	category string
+	detail   string
+	line     int
 }
 
 const (
@@ -56,8 +22,6 @@ const (
 	unsafeDetailStored   = "uintptr stored from unsafe.Pointer (not GC-tracked)"
 )
 
-// checkUnsafeUsage detects dangerous unsafe package patterns in Go source.
-// Returns warnings for newly-introduced issues. Delta-aware.
 func checkUnsafeUsage(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -72,19 +36,13 @@ func checkUnsafeUsage(filePath, oldContent, newContent string) []string {
 	oldCount := countUnsafeIssues(oldContent)
 	newInstances := findUnsafeIssues(newContent)
 
-	// #1218: multiset counting per category|detail. The detail for
-	// pointer-arith / stored-uintptr is a fixed constant, so a set-based key
-	// collided across every instance of the same category: once a file held
-	// one pointer-arith, any number of NEW pointer-arith expressions were
-	// silently swallowed. Counting (same #1214/#1215 precedent) reports the
-	// delta while pure line moves and re-saves stay silent.
 	var warnings []string
 	seen := make(map[string]int, len(oldCount))
 	for _, inst := range newInstances {
 		key := inst.category + "|" + inst.detail
 		seen[key]++
 		if seen[key] <= oldCount[key] {
-			continue // matched against a pre-existing instance
+			continue
 		}
 		warnings = append(warnings, formatUnsafeWarning(inst))
 		if len(warnings) >= 3 {
@@ -94,7 +52,6 @@ func checkUnsafeUsage(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// formatUnsafeWarning converts an unsafeInstance into a human-readable warning.
 func formatUnsafeWarning(inst unsafeInstance) string {
 	loc := ""
 	if inst.line > 0 {
@@ -123,7 +80,6 @@ func formatUnsafeWarning(inst unsafeInstance) string {
 	return ""
 }
 
-// findUnsafeIssues parses Go source and returns all unsafe misuse instances.
 func findUnsafeIssues(src string) []unsafeInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -146,7 +102,6 @@ func findUnsafeIssues(src string) []unsafeInstance {
 		return true
 	})
 
-	// Pattern 3: stored uintptr from unsafe.Pointer (requires assignment context).
 	uintptrIdents := map[string]bool{}
 	ast.Inspect(file, func(node ast.Node) bool {
 		as, ok := node.(*ast.AssignStmt)
@@ -156,9 +111,7 @@ func findUnsafeIssues(src string) []unsafeInstance {
 		for _, rhs := range as.Rhs {
 			stored := isUintptrOfUnsafePointer(rhs)
 			if !stored {
-				// #1520 case C first half: `off := uintptr(unsafe.Pointer(p)) + 16`
-				// stores a DERIVED uintptr - the bare-conversion check missed
-				// the arithmetic wrapper entirely.
+
 				stored = containsUintptrOfUnsafePointer(rhs)
 			}
 			if stored {
@@ -167,14 +120,7 @@ func findUnsafeIssues(src string) []unsafeInstance {
 					detail:   unsafeDetailStored,
 					line:     fset.Position(as.Pos()).Line,
 				})
-				// #1520 case C: track the LHS ident - the classic two-line
-				// idiom stores the (possibly arithmetic) uintptr in a
-				// variable and reconverts it lines later:
-				//   off := uintptr(unsafe.Pointer(p)) + 16
-				//   q  := unsafe.Pointer(off)
-				// Pattern 2 below requires the arithmetic INLINE, so the
-				// reconversion half was invisible. Remember derived-uintptr
-				// idents so unsafe.Pointer(<ident>) can be flagged.
+
 				if len(as.Lhs) == 1 {
 					if id, ok := as.Lhs[0].(*ast.Ident); ok {
 						uintptrIdents[id.Name] = true
@@ -185,10 +131,6 @@ func findUnsafeIssues(src string) []unsafeInstance {
 		return true
 	})
 
-	// #1520 case C second half: unsafe.Pointer(<ident>) where <ident> was
-	// assigned (possibly with arithmetic) from uintptr(unsafe.Pointer(...)).
-	// This is exactly the vet-unsafeptr pattern the header claims parity
-	// with; the inline-arithmetic-only check missed the two-line form.
 	ast.Inspect(file, func(node ast.Node) bool {
 		ce, ok := node.(*ast.CallExpr)
 		if !ok || !isUnsafePointerCall(ce) || len(ce.Args) == 0 {
@@ -207,7 +149,6 @@ func findUnsafeIssues(src string) []unsafeInstance {
 	return instances
 }
 
-// checkUnsafePointerArith detects unsafe.Pointer(uintptr(...) +/- offset).
 func checkUnsafePointerArith(fset *token.FileSet, ce *ast.CallExpr) []unsafeInstance {
 	if !isUnsafePointerCall(ce) || len(ce.Args) == 0 {
 		return nil
@@ -222,8 +163,6 @@ func checkUnsafePointerArith(fset *token.FileSet, ce *ast.CallExpr) []unsafeInst
 	return nil
 }
 
-// hasUintptrInBinaryExpr checks if a binary expression involves uintptr(...)
-// conversions combined with + or -.
 func hasUintptrInBinaryExpr(expr ast.Expr) bool {
 	be, ok := expr.(*ast.BinaryExpr)
 	if !ok {
@@ -238,7 +177,6 @@ func hasUintptrInBinaryExpr(expr ast.Expr) bool {
 	return hasUintptrInBinaryExpr(be.X) || hasUintptrInBinaryExpr(be.Y)
 }
 
-// checkReflectHeader detects reflect.SliceHeader / reflect.StringHeader usage.
 func checkReflectHeader(fset *token.FileSet, se *ast.SelectorExpr) []unsafeInstance {
 	if se.Sel.Name != "SliceHeader" && se.Sel.Name != "StringHeader" {
 		return nil
@@ -254,7 +192,6 @@ func checkReflectHeader(fset *token.FileSet, se *ast.SelectorExpr) []unsafeInsta
 	}}
 }
 
-// isUnsafePointerCall returns true if ce is unsafe.Pointer(...).
 func isUnsafePointerCall(ce *ast.CallExpr) bool {
 	se, ok := ce.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -267,7 +204,6 @@ func isUnsafePointerCall(ce *ast.CallExpr) bool {
 	return se.Sel.Name == "Pointer"
 }
 
-// isUintptrCall returns true if expr is a bare uintptr(...) conversion.
 func isUintptrCall(expr ast.Expr) bool {
 	ce, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -277,8 +213,6 @@ func isUintptrCall(expr ast.Expr) bool {
 	return ok && ident.Name == "uintptr"
 }
 
-// containsUintptrOfUnsafePointer reports whether expr anywhere contains a
-// uintptr(unsafe.Pointer(...)) conversion (e.g. as an arithmetic operand).
 func containsUintptrOfUnsafePointer(expr ast.Expr) bool {
 	if expr == nil {
 		return false
@@ -303,7 +237,6 @@ func containsUintptrOfUnsafePointer(expr ast.Expr) bool {
 	return false
 }
 
-// isUintptrOfUnsafePointer returns true if expr is uintptr(unsafe.Pointer(...)).
 func isUintptrOfUnsafePointer(expr ast.Expr) bool {
 	ce, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -320,9 +253,6 @@ func isUintptrOfUnsafePointer(expr ast.Expr) bool {
 	return ok && isUnsafePointerCall(inner)
 }
 
-// countUnsafeIssues parses old content and returns per-key counts of existing
-// unsafe usage signatures for delta-aware suppression (#1218: counts, not a
-// set - same-category instances must be individually subtractable).
 func countUnsafeIssues(src string) map[string]int {
 	if strings.TrimSpace(src) == "" {
 		return nil

@@ -42,12 +42,12 @@ func TestCheckPlaceholderCode_JSThrow(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_PreExistingNotFlagged(t *testing.T) {
-	// panic("not implemented") already in old content - should NOT be flagged
+
 	old := "package main\n\nfunc process() {\n\tpanic(\"not implemented\")\n}\n"
-	new := old // no change
+	new := old
 
 	warnings := checkPlaceholderCode("process.go", old, new)
-	// Same count - should not flag
+
 	for _, w := range warnings {
 		if strings.Contains(w, "panic") {
 			t.Errorf("pre-existing placeholder should not be flagged: %s", w)
@@ -56,7 +56,7 @@ func TestCheckPlaceholderCode_PreExistingNotFlagged(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_RemovedPlaceholderNotFlagged(t *testing.T) {
-	// Agent REMOVES a placeholder - should definitely not be flagged
+
 	old := "package main\n\nfunc process() {\n\tpanic(\"not implemented\")\n}\n"
 	new := "package main\n\nfunc process() {\n\tfmt.Println(\"done\")\n}\n"
 
@@ -84,7 +84,7 @@ func TestCheckPlaceholderCode_VagueTODO(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_SpecificTODONotFlagged(t *testing.T) {
-	// A specific, actionable TODO should NOT be flagged
+
 	old := "package main\n\nfunc process() {\n\treturn\n}\n"
 	new := "package main\n\n// TODO: add error handling for nil pointer edge case\nfunc process() {\n\treturn\n}\n"
 
@@ -136,7 +136,7 @@ func TestCheckPlaceholderCode_MultipleNew(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_WarningCap(t *testing.T) {
-	// Introduce many different placeholders
+
 	old := "package main\n"
 	new := `package main
 
@@ -153,8 +153,6 @@ func e() { panic("stub") }
 	}
 }
 
-// Integration: verify placeholder check works through checkWriteIntegrity
-
 func TestCheckWriteIntegrity_NoPlaceholderWarningForValidCode(t *testing.T) {
 	goodGo := "package main\n\nimport \"fmt\"\n\nfunc process() {\n\tfmt.Println(\"hello\")\n}\n"
 	warning := checkWriteIntegrity("main.go", "", goodGo)
@@ -163,8 +161,6 @@ func TestCheckWriteIntegrity_NoPlaceholderWarningForValidCode(t *testing.T) {
 	}
 }
 
-// TestPlaceholder_MovedPatternDetected pins fix #175: removing panic("TODO")
-// in one function while adding it in another (net 0) must be reported.
 func TestPlaceholder_MovedPatternDetected(t *testing.T) {
 	old := "package main\nfunc a() { panic(\"TODO\") }\nfunc b() {}\n"
 	newC := "package main\nfunc a() { println(\"done\") }\nfunc b() { panic(\"TODO\") }\n"
@@ -180,10 +176,6 @@ func TestPlaceholder_MovedPatternDetected(t *testing.T) {
 	}
 }
 
-// TestPlaceholder_CommentAndDocstringMentionsNotFlagged pins fix #730 (same
-// family as #723/#728): MENTIONS of placeholder patterns inside comments,
-// block-comment bodies, trailing comments, and Python docstrings must NOT
-// count as introduced placeholders.
 func TestPlaceholder_CommentAndDocstringMentionsNotFlagged(t *testing.T) {
 	cases := []struct {
 		name string
@@ -205,10 +197,6 @@ func TestPlaceholder_CommentAndDocstringMentionsNotFlagged(t *testing.T) {
 	}
 }
 
-// TestPlaceholder_RealStubsStillFlaggedAfterStrip is the control side of fix
-// #730: real (non-comment) placeholder code must still be detected after
-// comment stripping - including the quote-containing Python pattern whose
-// literal is preserved by pyStripCommentsKeepStrings.
 func TestPlaceholder_RealStubsStillFlaggedAfterStrip(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -220,11 +208,9 @@ func TestPlaceholder_RealStubsStillFlaggedAfterStrip(t *testing.T) {
 		{"Python raise stub", "app.py", "def f(x):\n    raise NotImplementedError\n", "NotImplementedError"},
 		{"Python quote-containing stub", "app.py", "def f(x):\n    raise Exception(\"TODO\")\n", "TODO"},
 		{"JS throw stub", "app.ts", "function f() {\n  throw new Error(\"not implemented\");\n}\n", "throw"},
-		// Real placeholder AFTER a docstring: proves cross-line docstring state
-		// does not swallow subsequent code lines.
+
 		{"Stub after docstring", "app.py", "def f():\n    \"\"\"Doc.\"\"\"\n    raise NotImplementedError\n", "NotImplementedError"},
-		// Real placeholder inside what looks like comment territory: code line
-		// with trailing comment stripped, placeholder intact.
+
 		{"Go code then trailing comment", "main.go", "package main\n\nfunc f() { panic(\"TODO\") } // hint\n", "TODO"},
 	}
 	for _, c := range cases {

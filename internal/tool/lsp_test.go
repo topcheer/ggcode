@@ -137,7 +137,7 @@ func TestLSPDocumentHighlightsToolWithInstalledGopls(t *testing.T) {
 	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
 		t.Fatalf("WriteFile(sample.go) error = %v", err)
 	}
-	// Index 3 = lsp_document_highlights
+
 	tool := NewLSPTools(workspace, nil, nil)[3]
 	input, err := json.Marshal(map[string]any{"path": path, "line": 5, "character": 22})
 	if err != nil {
@@ -150,7 +150,7 @@ func TestLSPDocumentHighlightsToolWithInstalledGopls(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %+v", result)
 	}
-	// Should highlight both occurrences of Add in the file
+
 	if strings.Contains(result.Content, "No document highlights returned.") {
 		t.Fatalf("expected document highlights, got %q", result.Content)
 	}
@@ -243,13 +243,9 @@ func TestLSPToolsWithExternalPythonFixture(t *testing.T) {
 	}
 }
 
-// TestApplyLSPFileEdits_BlastRadiusWarning verifies that when a rename touches
-// 3+ files, the result includes a prominent blast-radius warning. This prevents
-// the agent from silently modifying many files when renaming exported symbols.
 func TestApplyLSPFileEdits_BlastRadiusWarning(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create 4 files with content to edit (exceeds threshold of 3)
 	files := make([]string, 4)
 	for i := range files {
 		files[i] = filepath.Join(dir, fmt.Sprintf("file%d.go", i))
@@ -284,8 +280,6 @@ func TestApplyLSPFileEdits_BlastRadiusWarning(t *testing.T) {
 	}
 }
 
-// TestApplyLSPFileEdits_NoWarningForSingleFile verifies that a rename touching
-// only 1 file does NOT trigger the blast-radius warning.
 func TestApplyLSPFileEdits_NoWarningForSingleFile(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "single.go")
@@ -316,10 +310,6 @@ func TestApplyLSPFileEdits_NoWarningForSingleFile(t *testing.T) {
 	}
 }
 
-// #1328: sort.Slice was unstable for same-offset zero-length inserts
-// (comparator returns false both ways), so same-offset inserts could be
-// reversed; overlapping edits spliced silently-corrupt output. Both the
-// LSP array-order rule and overlap rejection are pinned here.
 func TestApplyTextEditsSameOffsetOrder(t *testing.T) {
 	edits := []lsp.TextEdit{
 		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 1}, End: lsp.Position{Line: 1, Character: 1}}, NewText: "A"},

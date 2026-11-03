@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// TestRecentCommitsSection_RealGitRepo creates a temp git repo with commits
-// and verifies the section is generated correctly.
 func TestRecentCommitsSection_RealGitRepo(t *testing.T) {
 	t.Parallel()
 
@@ -35,8 +33,6 @@ func TestRecentCommitsSection_RealGitRepo(t *testing.T) {
 	}
 }
 
-// TestRecentCommitsSection_EmptyRepo verifies that a repo with no commits
-// returns an empty string.
 func TestRecentCommitsSection_EmptyRepo(t *testing.T) {
 	t.Parallel()
 
@@ -49,7 +45,6 @@ func TestRecentCommitsSection_EmptyRepo(t *testing.T) {
 	}
 }
 
-// TestRecentCommitsSection_NonGitDir returns empty for a non-VCS directory.
 func TestRecentCommitsSection_NonGitDir(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +55,6 @@ func TestRecentCommitsSection_NonGitDir(t *testing.T) {
 	}
 }
 
-// TestRecentCommitsSection_EmptyDir returns empty for empty workingDir.
 func TestRecentCommitsSection_EmptyDir(t *testing.T) {
 	t.Parallel()
 
@@ -70,14 +64,12 @@ func TestRecentCommitsSection_EmptyDir(t *testing.T) {
 	}
 }
 
-// TestRecentCommitsSection_MaxEntries verifies that the section caps at
-// recentCommitsMax entries even when the repo has many commits.
 func TestRecentCommitsSection_MaxEntries(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	gitInit(t, dir)
-	// Create more commits than recentCommitsMax.
+
 	for i := 0; i < recentCommitsMax+5; i++ {
 		gitCommit(t, dir, "commit "+string(rune('A'+i)))
 	}
@@ -87,8 +79,6 @@ func TestRecentCommitsSection_MaxEntries(t *testing.T) {
 		t.Fatal("expected non-empty section")
 	}
 
-	// Count lines that look like commit entries (oneline hash + message).
-	// Skip header lines.
 	lines := 0
 	for _, line := range strings.Split(section, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -103,15 +93,13 @@ func TestRecentCommitsSection_MaxEntries(t *testing.T) {
 	}
 }
 
-// --- helpers ---
-
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	cmd := exec.Command("git", "init", dir)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
-	// Set required git config for commits in CI/test environments.
+
 	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
 		c := exec.Command("git", "config", kv[0], kv[1])
 		c.Dir = dir
@@ -123,7 +111,7 @@ func gitInit(t *testing.T, dir string) {
 
 func gitCommit(t *testing.T, dir, msg string) {
 	t.Helper()
-	// Write a unique file so each commit has content.
+
 	f, err := os.Create(filepath.Join(dir, "file_"+msg+".txt"))
 	if err != nil {
 		t.Fatalf("create file: %v", err)

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// r460: learning-store topology probes (merge/export/backflow/global tier).
-
 func mkR460(ts time.Time, cat, insight string) trajectoryLearning {
 	return trajectoryLearning{Timestamp: ts, Type: "strategy", Category: cat, Insight: insight, Success: true}
 }
@@ -25,7 +23,7 @@ func writeR460Store(t *testing.T, path string, entries []trajectoryLearning) {
 }
 
 func TestTrajMergeInto_DedupesAndIsIdempotent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	t.Setenv("HOME", t.TempDir())
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	main := t.TempDir()
@@ -43,7 +41,7 @@ func TestTrajMergeInto_DedupesAndIsIdempotent(t *testing.T) {
 	if err != nil || added != 0 {
 		t.Fatalf("re-merge must be idempotent: added=%d err=%v", added, err)
 	}
-	// Partial dedupe: one new + one known.
+
 	writeR460Store(t, src, []trajectoryLearning{
 		mkR460(now, "a", "alpha"),
 		mkR460(now, "c", "gamma"),
@@ -68,7 +66,7 @@ func TestTrajMergeInto_AbsentSourceNoop(t *testing.T) {
 }
 
 func TestTrajExportImportRoundtrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	t.Setenv("HOME", t.TempDir())
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	ws := t.TempDir()
@@ -82,7 +80,7 @@ func TestTrajExportImportRoundtrip(t *testing.T) {
 	if err != nil || n != 2 {
 		t.Fatalf("export: %d %v", n, err)
 	}
-	// Import into a fresh workspace.
+
 	ws2 := t.TempDir()
 	added, err := TrajMergeInto(ws2, out)
 	if err != nil || added != 2 {
@@ -94,11 +92,11 @@ func TestTrajExportImportRoundtrip(t *testing.T) {
 }
 
 func TestTrajBackflowFromWorktree(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	t.Setenv("HOME", t.TempDir())
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()
-	wt := t.TempDir() // stands in for the transient worktree
+	wt := t.TempDir()
 	now := time.Now()
 	writeR460Store(t, filepath.Join(wt, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
 		mkR460(now, "iso", "worktree-only insight"),
@@ -108,7 +106,7 @@ func TestTrajBackflowFromWorktree(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0].Insight, "worktree-only") {
 		t.Fatalf("backflow must fold isolated learnings: %+v", got)
 	}
-	// Repeat backflow must not duplicate.
+
 	TrajBackflowFromWorktree(mainDir, wt)
 	if got := TrajListLearnings(mainDir); len(got) != 1 {
 		t.Fatalf("repeat backflow must be idempotent, got %d", len(got))
@@ -116,16 +114,16 @@ func TestTrajBackflowFromWorktree(t *testing.T) {
 }
 
 func TestTrajBackflow_NoStoreOrSameDirNoop(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	t.Setenv("HOME", t.TempDir())
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()
-	emptyWT := t.TempDir() // no learning store inside
+	emptyWT := t.TempDir()
 	TrajBackflowFromWorktree(mainDir, emptyWT)
 	if got := TrajListLearnings(mainDir); got != nil {
 		t.Fatalf("no store in worktree must be a noop, got %d", len(got))
 	}
-	TrajBackflowFromWorktree(mainDir, mainDir) // same dir: self-merge guard
+	TrajBackflowFromWorktree(mainDir, mainDir)
 	if got := TrajListLearnings(mainDir); got != nil {
 		t.Fatalf("same-dir backflow must be a noop, got %d", len(got))
 	}
@@ -136,12 +134,12 @@ func TestRenderPromptSection_GlobalTierTopsUp(t *testing.T) {
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	ws := t.TempDir()
 	now := time.Now()
-	// Workspace knows category "local"; global knows "local" + "general".
+
 	writeR460Store(t, filepath.Join(ws, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
 		mkR460(now, "local", "local insight"),
 	})
 	home := t.TempDir()
-	t.Setenv("HOME", home) // redirect TrajGlobalPath for this test
+	t.Setenv("HOME", home)
 	writeR460Store(t, filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
 		mkR460(now, "local", "shadowed global"),
 		mkR460(now, "general", "cross-project insight"),

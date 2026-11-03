@@ -56,9 +56,7 @@ func TestCommandJobManagerStop(t *testing.T) {
 }
 
 func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
-	// After the fix, start_command uses context.Background() internally so
-	// that cancelling the caller's context does NOT kill the background
-	// process. The process must be stopped explicitly via Stop().
+
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr := NewCommandJobManager(t.TempDir())
 
@@ -69,10 +67,8 @@ func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
 
 	cancel()
 
-	// Give a brief moment for any potential (now absent) cancellation to propagate.
 	time.Sleep(100 * time.Millisecond)
 
-	// The process should still be running.
 	snap, err := mgr.Read(started.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("read command job: %v", err)
@@ -81,16 +77,13 @@ func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
 		t.Fatalf("expected running status after owner context cancel, got %s", snap.Status)
 	}
 
-	// Clean up: stop the job explicitly.
 	if _, err := mgr.Stop(started.ID); err != nil {
 		t.Fatalf("stop command job: %v", err)
 	}
 }
 
 func TestCommandJobManagerWaitHonoursCancelledContext(t *testing.T) {
-	// #513: waitForCommandJob honors caller cancellation. A cancelled
-	// context returns ctx.Err() immediately instead of waiting out the
-	// poll window (the old discard-ctx behavior was an API trap).
+
 	mgr := NewCommandJobManager(t.TempDir())
 	started, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
 	if err != nil {
@@ -170,9 +163,6 @@ func TestCommandJobToolDescriptionsGuideInteractiveUse(t *testing.T) {
 	}
 }
 
-// TestSecondsToDurationClampsOverflow (#513 Bug1): the seconds→Duration
-// multiplication must never overflow int64 — 9223372037s wraps negative
-// (WithTimeout expires instantly) and 18446744074s wraps to ~290ms.
 func TestSecondsToDurationClampsOverflow(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -196,9 +186,6 @@ func TestSecondsToDurationClampsOverflow(t *testing.T) {
 	}
 }
 
-// TestSnapshotTotalLinesExcludesPartial (#513 Bug2): the trailing partial
-// line must not occupy a line number — when the next chunk completes it,
-// since_line polling must return the merged line instead of [].
 func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 	started, err := mgr.Start(context.Background(), "printf 'line1\\npartial-without-newline'; sleep 0.3; printf -- '-continued\\n'", false, 10*time.Second)
@@ -206,7 +193,6 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	// Poll until the first chunk (partial, no trailing newline) is buffered.
 	var snap1 *CommandJobSnapshot
 	for i := 0; i < 50; i++ {
 		s, err := mgr.Read(started.ID, 10, 0)
@@ -222,12 +208,11 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 	if snap1 == nil {
 		t.Fatal("never observed the partial-line snapshot")
 	}
-	// The partial line is visible as a preview but must NOT be counted.
+
 	if snap1.TotalLines != 1 {
 		t.Fatalf("snapshot with trailing partial: TotalLines = %d, want 1 (completed lines only)", snap1.TotalLines)
 	}
 
-	// Wait for the second chunk to complete the merge.
 	var snap2 *CommandJobSnapshot
 	for i := 0; i < 100; i++ {
 		s, err := mgr.Read(started.ID, 10, 0)
@@ -247,9 +232,6 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 		t.Fatalf("after merge: TotalLines = %d, want 2", snap2.TotalLines)
 	}
 
-	// The since_line=1 poll must now return the merged complete line
-	// (the old bug returned [] — the merged line occupied a line number
-	// already burned by the partial preview).
 	s, err := mgr.Read(started.ID, 10, 1)
 	if err != nil {
 		t.Fatalf("read since: %v", err)
@@ -264,24 +246,18 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 		t.Fatalf("since_line=1 polling must return the merged line, got %q", s.Lines)
 	}
 
-	// #4431: Stop on the already-completed job now returns the documented
-	// "already finished" error - this call is cleanup; tolerate it.
 	if _, err := mgr.Stop(started.ID); err != nil && !strings.Contains(err.Error(), "already finished") {
 		t.Fatalf("stop: %v", err)
 	}
 }
 
-// #1318: completed jobs lived in the manager map forever (forget() only
-// covered run_command quick paths) - unbounded memory plus ever-growing
-// list_commands output. Terminal jobs are now capped at maxFinishedJobs,
-// evicted oldest-first; running jobs are never evicted.
 func TestCommandJobs_FinishedJobEviction(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
 
 	total := maxFinishedJobs + 10
 	for i := 0; i < total; i++ {
 		job := m.newJob(fmt.Sprintf("echo %d", i), time.Minute, func() {})
-		// Simulate completion through the real finish path.
+
 		job.finish(CommandJobCompleted, "")
 		m.mu.Lock()
 		m.recordFinishLocked(job)
@@ -295,7 +271,7 @@ func TestCommandJobs_FinishedJobEviction(t *testing.T) {
 	if count != maxFinishedJobs {
 		t.Fatalf("expected %d retained finished jobs, got %d", maxFinishedJobs, count)
 	}
-	// The most RECENT jobs must survive; the oldest must be gone.
+
 	if _, err := m.get("cmd-1"); err == nil {
 		t.Error("oldest finished job should have been evicted")
 	}
@@ -304,7 +280,6 @@ func TestCommandJobs_FinishedJobEviction(t *testing.T) {
 	}
 }
 
-// Running jobs must never be evicted even when many finished ones churn.
 func TestCommandJobs_RunningJobNeverEvicted(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
 	runner := m.newJob("sleep 100", time.Minute, func() {})
@@ -325,7 +300,7 @@ func TestCommandJobs_RunningJobNeverEvicted(t *testing.T) {
 
 func TestCommandJobManager_SandboxPolicyDisabled(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
-	// Disabled policy must be accepted and change nothing.
+
 	mgr.SetSandboxPolicy(NewSandboxPolicy(false, nil, nil))
 
 	started, err := mgr.Start(context.Background(), "printf 'job-ok'", false, 5*time.Second)

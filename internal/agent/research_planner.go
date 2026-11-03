@@ -8,34 +8,13 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Research planner (r343 deep-research second component; sa-130). Deep-
-// research production systems (Perplexity Sonar Deep Research, Open Deep
-// Research, DRA roadmap arXiv:2506.18096; STORM arXiv:2402.14207 for the
-// perspective pattern) all front-load a PLANNER that decomposes the goal
-// into perspective-scoped sub-queries before retrieval starts, instead of
-// letting the agent fire one monolithic search.
-//
-// Like the r365 gate, this is deterministic and zero-LLM-cost: it derives a
-// sub-query plan from the goal text via keyword-based perspective detection
-// (STORM's multi-perspective questioning, reduced to a deterministic
-// taxonomy) plus fixed query templates. It fires ONCE per run, at the same
-// early point where plannerAnalyze runs, and only when the run is in
-// research mode (same detectResearchMode signal the overseer uses).
-
-// researchPerspective is one axis of STORM-style multi-perspective
-// questioning. Keywords are matched case-insensitively against the goal;
-// Chinese and English surfaces are both covered.
 type researchPerspective struct {
-	name     string
-	keywords []string
-	// templates are query shapes expanded with the goal text.
+	name      string
+	keywords  []string
 	templates []string
-	// priority orders perspectives when maxQueries forces a cut.
-	priority int
+	priority  int
 }
 
-// researchPerspectives is the deterministic perspective taxonomy. Order of
-// the slice is the fallback order; priority drives the final ordering.
 var researchPerspectives = []researchPerspective{
 	{
 		name:      "technical",
@@ -63,23 +42,14 @@ var researchPerspectives = []researchPerspective{
 	},
 }
 
-// ResearchSubQuery is one planned sub-query with the perspective it serves.
 type ResearchSubQuery struct {
 	Perspective string
 	Query       string
 	Priority    int
 }
 
-// defaultResearchSubQueryCap bounds the plan: deep-research systems that
-// fire dozens of sub-searches burn latency and context; the gate only needs
-// multi-hop coverage, and 6 sub-queries x 4 perspectives headroom suffices.
 const defaultResearchSubQueryCap = 6
 
-// PlanResearchSubQueries decomposes a research goal into perspective-scoped
-// sub-queries. Pure function, deterministic, zero I/O. maxQueries <= 0
-// falls back to the default cap. An empty/unmatched goal still yields the
-// generic set (the goal text itself as one query) so research-mode runs
-// always get a usable plan.
 func PlanResearchSubQueries(goal string, maxQueries int) []ResearchSubQuery {
 	if maxQueries <= 0 {
 		maxQueries = defaultResearchSubQueryCap
@@ -113,7 +83,7 @@ func PlanResearchSubQueries(goal string, maxQueries int) []ResearchSubQuery {
 		}
 	}
 	if !matched {
-		// No perspective keyword: the bare goal is still a valid seed query.
+
 		subs = append(subs, ResearchSubQuery{
 			Perspective: "general",
 			Query:       goal,
@@ -126,7 +96,6 @@ func PlanResearchSubQueries(goal string, maxQueries int) []ResearchSubQuery {
 	return subs
 }
 
-// researchPlanText renders the injection message for a planned run.
 func researchPlanText(subs []ResearchSubQuery) string {
 	if len(subs) == 0 {
 		return ""
@@ -142,7 +111,6 @@ func researchPlanText(subs []ResearchSubQuery) string {
 	return b.String()
 }
 
-// researchPlanState guards the fire-once semantics of plan injection.
 type researchPlanState struct {
 	mu       sync.Mutex
 	injected bool
@@ -158,23 +126,12 @@ func (p *researchPlanState) shouldInject() bool {
 	return true
 }
 
-// reset re-arms the fire-once latch for a NEW run. #4023: the header comment
-// promised "fires ONCE per run" but nothing ever reset injected - the actual
-// semantics were once per Agent lifetime, so a second research run in the
-// same session got no plan and the stale researchPlanSubs from run 1 fed the
-// r365 gap report (marking every run-1 sub-query as uncovered and steering
-// run 2 off-target). Called from the per-run reset block next to
-// resetPlanner.
 func (p *researchPlanState) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.injected = false
 }
 
-// perspectiveKeywords returns the planner taxonomy's vocabulary for a
-// perspective name (nil when unknown, e.g. "general"). The synthesizer
-// reuses the exact words the planner matched so producer and consumer
-// stay semantically aligned (#3999).
 func perspectiveKeywords(name string) []string {
 	for _, p := range researchPerspectives {
 		if p.name == name {
@@ -184,11 +141,6 @@ func perspectiveKeywords(name string) []string {
 	return nil
 }
 
-// maybeInjectResearchPlan fires the ONE-TIME research sub-query plan for
-// research-mode runs (same detectResearchMode signal the overseer uses).
-// The plan text is injected as a user message at the same early point the
-// agent-side planner runs, and the planned sub-queries are saved so the
-// r365 gate can compute uncovered gaps at synthesis time.
 func (a *Agent) maybeInjectResearchPlan(content string) {
 	if !detectResearchMode(content) {
 		return

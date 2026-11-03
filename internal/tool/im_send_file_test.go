@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// Reuses mockIMManager from im_tool_test.go (captures lastSendEvent /
-// lastSendAdapter). Binding + healthy adapter = the direct-send fast path.
 func newSendFileMock() *mockIMManager {
 	return &mockIMManager{
 		snapshot: IMSnapshot{
@@ -43,8 +41,6 @@ func TestIMToolSendFile(t *testing.T) {
 		return res
 	}
 
-	// Image file: caption + path must reach SendDirect with the path on its
-	// own trailing segment so adapter-side ExtractImagesFromText picks it up.
 	res := run(`{"action":"send_file","adapter":"qq","path":` + jsonString(imgPath) + `,"caption":"执行结果截图"}`)
 	if res.IsError {
 		t.Fatalf("image send_file failed: %s", res.Content)
@@ -63,7 +59,6 @@ func TestIMToolSendFile(t *testing.T) {
 		t.Fatalf("path must end the message for extraction: %q", got)
 	}
 
-	// Non-image file: delivered as path text with an explicit note.
 	res = run(`{"action":"send_file","adapter":"qq","path":` + jsonString(txtPath) + `}`)
 	if res.IsError {
 		t.Fatalf("pdf send_file failed: %s", res.Content)
@@ -75,7 +70,6 @@ func TestIMToolSendFile(t *testing.T) {
 		t.Fatalf("pdf path not delivered: %q", mgr.lastSendEvent.Text)
 	}
 
-	// Validation errors.
 	for _, tc := range []struct {
 		name, args, wantErr string
 	}{

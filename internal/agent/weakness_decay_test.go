@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// weaknessDecayFactor: exp(-age/half-life), clamped at the 30d horizon.
-// Zero/future LastTS (test-built records) weigh 1.
 func TestWeaknessDecayFactorMonotonic(t *testing.T) {
 	now := time.Now()
 	if got := weaknessDecayFactor(time.Time{}, now); got != 1 {
@@ -28,19 +26,13 @@ func TestWeaknessDecayFactorMonotonic(t *testing.T) {
 	}
 }
 
-// Memory-decay gate: a fresh 2-count record routes; a 29-day-old 2-count
-// record does not (decayed below threshold) BUT stays in the store - the
-// 30d eviction semantics (#3863 D: a surviving rec is never stale) are
-// untouched by the routing discount.
 func TestWeaknessRouteDecayGate(t *testing.T) {
 	now := time.Now()
 	store := weaknessSignalStore{
 		"fresh-fp": {Class: WeakForgetting, Count: 2, Evidence: "e1", LastTS: now},
 		"stale-fp": {Class: WeakForgetting, Count: 2, Evidence: "e2", LastTS: now.Add(-29 * 24 * time.Hour)},
 	}
-	// t.TempDir: NewProjectAutoMemory may be nil without a project layout,
-	// in which case routeMatureSignalsLocked returns before marking Routed.
-	// Call the gate predicate through the same code path the loop uses.
+
 	decayed := float64(store["stale-fp"].Count) * weaknessDecayFactor(store["stale-fp"].LastTS, now)
 	fresh := float64(store["fresh-fp"].Count) * weaknessDecayFactor(store["fresh-fp"].LastTS, now)
 	if decayed >= float64(weaknessRouteThreshold) {

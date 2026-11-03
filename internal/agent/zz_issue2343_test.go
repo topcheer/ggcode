@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #2343: the scatter-dup hint must assert only what the detector can
-// prove. Source pin (same style as the #1509 pin): the unprovable sister
-// sentences are gone from the advisory template.
 func TestIssue2343HintAssertsOnlyProvableFacts(t *testing.T) {
 	src := readToolRedundancySrc(t)
 
@@ -21,18 +18,22 @@ func TestIssue2343HintAssertsOnlyProvableFacts(t *testing.T) {
 	if !strings.Contains(src, "If the earlier results are still valid") {
 		t.Fatal("replacement must condition the reuse advice on validity (provable phrasing)")
 	}
-	// The provable core survives: call count from the map is factual.
+
 	if !strings.Contains(src, "identical arguments %d times in this session") {
 		t.Fatal("the provable count statement must remain")
 	}
 }
 
-// The escalation tier never contained the unprovable claims - pin that it
-// stays that way through any future rewording.
 func TestIssue2343EscalationTierStaysProvable(t *testing.T) {
 	src := readToolRedundancySrc(t)
-	esc := src[strings.Index(src, "Escalation at higher thresholds"):]
-	esc = esc[:strings.Index(esc, "\n\t}\n")]
+	escStart := strings.Index(src, "Warning: %s called %d times with identical arguments")
+	if escStart < 0 {
+		t.Fatal("escalation warning string not found - tool_redundancy.go drifted")
+	}
+	esc := src[escStart:]
+	if end := strings.Index(esc, "\n\t}\n"); end >= 0 {
+		esc = esc[:end]
+	}
 	for _, banned := range []string{"not consecutively", "already in your context", "has not changed"} {
 		if strings.Contains(esc, banned) {
 			t.Fatalf("escalation tier must not reintroduce unprovable claim %q", banned)

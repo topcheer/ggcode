@@ -185,14 +185,9 @@ func process(s *S) {
 	}
 }
 `
-	// s.Items is a selector expression, not a simple Ident
-	// This should still warn but may show as non-variable or no warning
-	// since rnpExprName only handles *ast.Ident
+
 	w := checkRangeNilPtr("test.go", "", src)
-	// Selector deref: rnpExprName returns "" for selectors, so it either warns
-	// as non-variable or no warning. Verify it doesn't crash.
-	// The star expr is detected but since s.Items is a SelectorExpr (not Ident),
-	// it gets the non-variable message.
+
 	if w == "" {
 		t.Error("expected warning for selector dereference range")
 	}
@@ -207,7 +202,7 @@ func TestRnpExprName_Ident(t *testing.T) {
 }
 
 func TestRnpExprName_NonIdent(t *testing.T) {
-	// A CallExpr is not an Ident, should return ""
+
 	name := rnpExprName(&ast.CallExpr{})
 	if name != "" {
 		t.Errorf("expected empty string for non-Ident, got '%s'", name)
@@ -254,7 +249,7 @@ func process(items *[]Item) {
 }
 
 func TestCheckRangeNilPtr_NilGuardReversedOrder(t *testing.T) {
-	// `if nil == items` (reversed operand order) also counts as a guard.
+
 	src := `package main
 
 func process(items *[]int) {
@@ -273,7 +268,7 @@ func process(items *[]int) {
 }
 
 func TestCheckRangeNilPtr_GuardDifferentVarStillWarns(t *testing.T) {
-	// A guard on a different variable does not protect the range.
+
 	src := `package main
 
 func process(a *[]int, b *[]int) {
@@ -292,7 +287,7 @@ func process(a *[]int, b *[]int) {
 }
 
 func TestCheckRangeNilPtr_NilCheckAfterRangeStillWarns(t *testing.T) {
-	// A nil check appearing AFTER the range statement does not guard it.
+
 	src := `package main
 
 func process(items *[]int) {
@@ -311,7 +306,7 @@ func process(items *[]int) {
 }
 
 func TestCheckRangeNilPtr_EqNilBlockWrappingStillWarns(t *testing.T) {
-	// Range inside `if items == nil` block is NOT guarded (inverted logic).
+
 	src := `package main
 
 func process(items *[]int) {
@@ -329,7 +324,7 @@ func process(items *[]int) {
 }
 
 func TestCheckRangeNilPtr_DeltaSuppressesPreexisting(t *testing.T) {
-	// The identical unguarded range already exists in old content -- no warning.
+
 	src := `package main
 
 func process(items *[]int) {
@@ -353,7 +348,7 @@ func process(items *[]int) {
 	}
 }
 `
-	// A new unguarded range on a different variable is introduced.
+
 	newContent := old[:len(old)-2] + `
 	for _, v := range *other {
 		_ = v
@@ -377,9 +372,6 @@ func TestRnpFormatPos(t *testing.T) {
 	}
 }
 
-// TestCheckRangeNilPtr_ElseBlockOfNEQStillWarns verifies #271: a range *x
-// inside the ELSE block of `if x != nil` proves x IS nil there, so it must
-// warn (deterministic panic) instead of being treated as guarded.
 func TestCheckRangeNilPtr_ElseBlockOfNEQStillWarns(t *testing.T) {
 	src := `package main
 
@@ -402,8 +394,6 @@ func process(items *[]int) {
 	}
 }
 
-// TestCheckRangeNilPtr_ElseBlockOfEQLNoWarn verifies #271: a range *x inside
-// the ELSE block of `if x == nil` proves x is non-nil there -- no warning.
 func TestCheckRangeNilPtr_ElseBlockOfEQLNoWarn(t *testing.T) {
 	src := `package main
 
@@ -423,10 +413,6 @@ func process(items *[]int) {
 	}
 }
 
-// TestCheckRangeNilPtr_ElseIfChainInnerGuardStillWarns verifies #271
-// conservative handling of else-if chains: `else if y != nil { range *x }`
-// must still warn (the chain link's own condition does not guard x), and the
-// outer guard's else-region inversion must not be misapplied to the chain.
 func TestCheckRangeNilPtr_ElseIfChainInnerGuardStillWarns(t *testing.T) {
 	src := `package main
 
@@ -440,19 +426,13 @@ func process(items *[]int) {
 	}
 }
 `
-	// `items == nil` returns early, so inside the else-if chain items is
-	// non-nil in reality; but our conservative chain handling means the
-	// else-if body region falls through to the next guard check. The outer
-	// guard has thenEnd < rangePos < ifEnd with a non-plain else, so no
-	// inversion is applied and no guard matches -> warning expected.
+
 	w := checkRangeNilPtr("test.go", "", src)
 	if w == "" {
 		t.Fatal("expected warning for range *items inside else-if chain (conservative)")
 	}
 }
 
-// TestCheckRangeNilPtr_ThenBlockStillGuardedAfterRefactor ensures #271 did not
-// break the original then-block semantics.
 func TestCheckRangeNilPtr_ThenBlockStillGuardedAfterRefactor(t *testing.T) {
 	src := `package main
 
@@ -470,9 +450,6 @@ func process(items *[]int) {
 	}
 }
 
-// #1677 case 1a: composite-condition guards must suppress the warning
-// (end-to-end detector direction, complementing the guard-table matrix in
-// zz_issue1677_case1a_test.go).
 func TestCheckRangeNilPtr_CompositeAndGuardSuppressed(t *testing.T) {
 	src := `package main
 
@@ -491,8 +468,7 @@ func f(x *T) {
 }
 
 func TestCheckRangeNilPtr_CompositeOrNeqNilStillWarns(t *testing.T) {
-	// `x != nil || y` does not prove non-nil on the then path - the warning
-	// must still fire.
+
 	src := `package main
 
 type T struct{}
@@ -509,8 +485,6 @@ func f(x *T, y bool) {
 	}
 }
 
-// sa-179 third-audit shape: a parenthesized same-operator group on the
-// right arm must not lose its leaves (companion pin for the zz matrix).
 func TestCheckRangeNilPtr_ParenthesizedChainGuardSuppressed(t *testing.T) {
 	src := `package main
 

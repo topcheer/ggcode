@@ -47,7 +47,7 @@ func TestCVCheckViolation_AvoidPattern(t *testing.T) {
 	if !violated {
 		t.Error("expected violation for avoid pattern matching")
 	}
-	// Non-matching path should not violate
+
 	violated2, _ := cvCheckViolation(c, "internal/auth/login.go")
 	if violated2 {
 		t.Error("expected no violation for non-matching path")
@@ -59,12 +59,12 @@ func TestCVCheckViolation_ScopePattern(t *testing.T) {
 		constraintT: "scope",
 		pattern:     "auth",
 	}
-	// Path within scope - no violation
+
 	violated, _ := cvCheckViolation(c, "internal/auth/login.go")
 	if violated {
 		t.Error("expected no violation for path within scope")
 	}
-	// Path outside scope - violation
+
 	violated2, _ := cvCheckViolation(c, "internal/database/schema.go")
 	if !violated2 {
 		t.Error("expected violation for path outside scope")
@@ -95,14 +95,12 @@ func TestConstraintViolation_RecordAndCheck(t *testing.T) {
 	s := newConstraintViolationState()
 	s.recordReasoning("I'll only modify files in the auth/ directory.", 1)
 
-	// Tool call within scope - no warning
 	args := map[string]any{"file_path": "internal/auth/login.go"}
 	msg := s.checkToolCall("edit_file", args, 2)
 	if msg != "" {
 		t.Errorf("expected no warning for in-scope edit, got: %s", msg)
 	}
 
-	// Tool call outside scope - should warn
 	args2 := map[string]any{"file_path": "internal/database/schema.go"}
 	msg2 := s.checkToolCall("edit_file", args2, 3)
 	if msg2 == "" {
@@ -126,17 +124,17 @@ func TestConstraintViolation_MaxWarnings(t *testing.T) {
 	s.recordReasoning("I'll only modify files in auth/.", 1)
 
 	args := map[string]any{"file_path": "internal/database/db.go"}
-	// First violation
+
 	msg1 := s.checkToolCall("edit_file", args, 2)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second violation
+
 	msg2 := s.checkToolCall("edit_file", args, 3)
 	if msg2 == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third should be suppressed
+
 	msg3 := s.checkToolCall("edit_file", args, 4)
 	if msg3 != "" {
 		t.Error("expected third warning to be suppressed (max reached)")
@@ -159,7 +157,7 @@ func TestConstraintViolation_Reset(t *testing.T) {
 }
 
 func TestCVExtractConstraints_LeaveAlone(t *testing.T) {
-	// "leaving X alone" should be detected as an avoid constraint
+
 	text := "I'll focus on the auth handler, leaving the config module alone."
 	constraints := cvExtractConstraints(text, 1)
 	found := false
@@ -174,7 +172,7 @@ func TestCVExtractConstraints_LeaveAlone(t *testing.T) {
 }
 
 func TestCVExtractConstraints_LeaveAloneVariant(t *testing.T) {
-	// "leave X alone" (without -ing) should also work
+
 	text := "Please leave the test suite alone for now."
 	constraints := cvExtractConstraints(text, 1)
 	found := false
@@ -200,10 +198,7 @@ func TestCVExtractConstraints_LeaveAloneViolation(t *testing.T) {
 }
 
 func TestCVExtractConstraints_LeaveAloneFilesSuffix(t *testing.T) {
-	// #2801: "leave the X files alone" -- English puts the noun before
-	// "files", so the trailing " files" must be suffix-stripped. Otherwise
-	// the pattern keeps an embedded space, which can never match a path
-	// segment and the whole avoid constraint goes dead (silent no-warning).
+
 	text := "I'll leave the config files alone and only fix the auth bug."
 	constraints := cvExtractConstraints(text, 1)
 	found := false
@@ -218,8 +213,7 @@ func TestCVExtractConstraints_LeaveAloneFilesSuffix(t *testing.T) {
 }
 
 func TestCVExtractConstraints_LeaveAloneFilesSuffixViolation(t *testing.T) {
-	// #2801 end-to-end: editing a file under the promised-untouched module
-	// must fire the violation warning after the suffix strip lands.
+
 	s := newConstraintViolationState()
 	s.recordReasoning("I'll leave the config files alone and only fix the auth bug.", 1)
 
@@ -231,7 +225,7 @@ func TestCVExtractConstraints_LeaveAloneFilesSuffixViolation(t *testing.T) {
 }
 
 func TestCVExtractConstraints_LeaveAloneFileSingular(t *testing.T) {
-	// #2801: singular "X file" must normalize the same way.
+
 	text := "Please leave the schema file alone."
 	constraints := cvExtractConstraints(text, 1)
 	found := false
@@ -246,8 +240,7 @@ func TestCVExtractConstraints_LeaveAloneFileSingular(t *testing.T) {
 }
 
 func TestCVExtractPathAfter_FilesSuffix(t *testing.T) {
-	// #2801: cvExtractPathAfter must normalize "X files" tails as well so
-	// both extraction paths share the same normalization contract.
+
 	got := cvExtractPathAfter("i will avoid changing config files", len("i will avoid changing"))
 	if got != "config" {
 		t.Errorf("expected 'config' with files-suffix strip, got %q", got)
@@ -292,12 +285,12 @@ func TestCVExtractPathFromArgs(t *testing.T) {
 }
 
 func TestParseToolArgs(t *testing.T) {
-	// Valid JSON
+
 	args := parseToolArgs([]byte(`{"file_path": "test.go"}`))
 	if args["file_path"] != "test.go" {
 		t.Errorf("expected file_path=test.go, got %v", args["file_path"])
 	}
-	// Invalid JSON returns empty map
+
 	args2 := parseToolArgs([]byte(`invalid`))
 	if len(args2) != 0 {
 		t.Errorf("expected empty map for invalid JSON, got %v", args2)

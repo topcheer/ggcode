@@ -10,30 +10,15 @@ import (
 )
 
 const (
-	// recallExperienceDefaultMax is the default number of past cases the
-	// recall tool returns; enough to compare approaches without flooding
-	// context with stale cases.
 	recallExperienceDefaultMax = 3
 
-	// recallExperienceMaxMax caps the max parameter; experience cases are
-	// injected verbatim, so more than 5 rarely helps and mostly burns context.
 	recallExperienceMaxMax = 5
 )
 
-// RecallExperienceTool lets the agent proactively query the project
-// experience store at ANY decision moment (r381, memory-as-tool). The
-// automatic gates only fire at run start and on the first matching failure
-// (r379); this tool covers everything between - approach selection,
-// mid-run debugging, non-failure decisions - because AgeMem
-// (arXiv 2601.01885) shows memory operations work best as tool actions the
-// agent decides to invoke, and Hindsight (arXiv 2512.12818) treats recall
-// as a first-class reasoning primitive rather than injection-only.
 type RecallExperienceTool struct {
 	workingDir string
 }
 
-// NewRecallExperienceTool creates a recall_experience tool bound to a
-// working directory. Read-only: it never writes to the experience store.
 func NewRecallExperienceTool(workingDir string) *RecallExperienceTool {
 	return &RecallExperienceTool{workingDir: workingDir}
 }

@@ -18,12 +18,12 @@ func todoArgs(t *testing.T, items ...todoItem) json.RawMessage {
 
 func TestTodoDropDetectsSilentRemoval(t *testing.T) {
 	d := newTodoDropState()
-	// First call: establish a list with two pending items.
+
 	d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Implement function A", Status: "in_progress"},
 		todoItem{ID: "2", Content: "Write tests for A", Status: "pending"},
 	))
-	// Second call: only item 1 remains (marked done), item 2 silently dropped.
+
 	msg := d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Implement function A", Status: "done"},
 	))
@@ -41,12 +41,12 @@ func TestTodoDropNoFalsePositiveOnDoneItems(t *testing.T) {
 		todoItem{ID: "1", Content: "Task A", Status: "pending"},
 		todoItem{ID: "2", Content: "Task B", Status: "pending"},
 	))
-	// Both items completed then removed: no drop.
+
 	d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Task A", Status: "done"},
 		todoItem{ID: "2", Content: "Task B", Status: "done"},
 	))
-	// Third call with only item 1.
+
 	msg := d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Task A", Status: "done"},
 	))
@@ -60,7 +60,7 @@ func TestTodoDropRewordedItemNotFlagged(t *testing.T) {
 	d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Implement the authentication module with JWT tokens", Status: "pending"},
 	))
-	// Same item, reworded but highly similar.
+
 	msg := d.checkDrop(todoArgs(t,
 		todoItem{ID: "1b", Content: "Implement the authentication module with JWT tokens and tests", Status: "in_progress"},
 	))
@@ -99,7 +99,7 @@ func TestTodoDropFiresOnlyOnce(t *testing.T) {
 	if msg1 == "" {
 		t.Fatal("first drop should fire")
 	}
-	// Third call: another drop but should not fire again.
+
 	msg2 := d.checkDrop(todoArgs(t))
 	if msg2 != "" {
 		t.Errorf("should only fire once per run, got second message: %s", msg2)
@@ -127,7 +127,7 @@ func TestTodoDropReset(t *testing.T) {
 	))
 	d.checkDrop(todoArgs(t))
 	d.reset()
-	// After reset, should be able to fire again.
+
 	msg := d.checkDrop(todoArgs(t,
 		todoItem{ID: "1", Content: "Task one", Status: "pending"},
 	))

@@ -1,61 +1,5 @@
 package agent
 
-// Drift Recurrence Detector - Insufficient Course Correction After Warning
-//
-// Research basis:
-//   - "Agent drift: why long-running AI agents lose the plot" (usewire.io, 2026):
-//     Behavioral baseline tracking reveals that "drift becomes visible in
-//     patterns before it becomes visible in individual outputs." Agents that
-//     receive a drift warning but only make a token acknowledgment -- then
-//     resume the same drifted behavior -- exhibit "drift recurrence."
-//   - "Maintaining and Preventing Drift in Agentic AI" (taazaa.com, 2025-2026):
-//     Emphasizes that adaptive replanning requires DETECTING that a previous
-//     correction was ineffective. Without recurrence detection, the agent
-//     enters a "drift-warning-superficial-fix-drift" cycle.
-//   - AgentDebug (arXiv:2509.25370): identifies "performative self-correction"
-//     where agents appear to correct but don't change underlying strategy.
-//   - KAPRO (arXiv:2606.20661, 2026): the "Knowing-Acting" quadrant shows
-//     that self-awareness capability degradation manifests as agents that
-//     acknowledge feedback but fail to ACT on it meaningfully.
-//
-// Problem: ggcode has multiple drift/warning detectors (scope_drift, plan_drift,
-// tunnel_vision, analysis_paralysis, etc.). Each fires at most once or twice
-// and injects guidance. But NO detector tracks whether the agent actually
-// CHANGED BEHAVIOR after the warning. The critical failure pattern:
-//
-//   iter N:   scope_drift fires → "you're touching too many directories"
-//   iter N+1: agent says "you're right, let me focus" → makes 1 focused edit
-//   iter N+2: agent immediately goes back to editing 5+ new directories
-//   iter N+3: same broad pattern continues
-//
-// The agent performed "performative compliance" -- a token acknowledgment
-// followed by behavioral recurrence. The existing detectors fired once and
-// moved on, unaware that their guidance was ignored.
-//
-// Existing ggcode systems that are RELATED but do NOT cover this:
-//   - scope_drift.go: fires once when file diversity exceeds threshold.
-//     Doesn't check if the agent continued the pattern after the warning.
-//   - user_sentiment.go: tracks CONSECUTIVE negative user messages, but this
-//     is about agent behavior recurrence, not user sentiment.
-//   - convergence_lock.go: detects post-verification unnecessary edits, not
-//     recurrence of a warned pattern.
-//   - repetition_tracker.go: tracks repeated TOOL CALLS (same tool+file+error),
-//     not recurrence of a behavioral PATTERN after feedback.
-//
-// Gap: No detector monitors whether the agent's behavioral trajectory ACTUALLY
-// improved after a warning, or whether it merely paused before resuming the
-// same pattern. This detector fills that gap with zero LLM cost.
-//
-// Design:
-//   - Tracks unique directories touched by edits AFTER any drift warning fires
-//   - If the agent continues to expand into new directories at the same rate
-//     post-warning, it signals that the guidance was ignored
-//   - Also tracks post-warning edit-to-verification ratio: if the agent was
-//     warned about insufficient verification but continues editing without
-//     verifying, that's recurrence
-//   - Fires at most once per run (advisory, non-blocking)
-//   - Zero LLM cost -- pure counter-based heuristics
-
 import (
 	"fmt"
 	"path/filepath"
@@ -65,49 +9,29 @@ import (
 )
 
 const (
-	// driftRecurrenceNewDirThreshold: after a drift warning, if the agent
-	// touches this many NEW directories (not seen before the warning),
-	// it signals that the warning was not heeded.
 	driftRecurrenceNewDirThreshold = 4
 
-	// driftRecurrenceMinEditsPostWarn: minimum edits after warning before
-	// evaluating recurrence. Prevents false positives from a single edit.
 	driftRecurrenceMinEditsPostWarn = 3
 
-	// driftRecurrencePostWarnWindow: how many iterations after a warning
-	// to monitor for recurrence.
 	driftRecurrencePostWarnWindow = 8
 )
 
-// driftRecurrenceState tracks whether the agent's behavior improved after
-// receiving a drift-related warning.
 type driftRecurrenceState struct {
-	// preWarnDirs is the set of unique directory signatures touched BEFORE
-	// any drift warning fired. Used to identify NEW directories post-warning.
-	preWarnDirs map[string]bool
-	// preWarnBaseline is the baseline size captured at arm time (#1544 C).
+	preWarnDirs     map[string]bool
 	preWarnBaseline int
 
-	// postWarnDirs is the set of unique directory signatures touched AFTER
-	// a drift warning fired.
 	postWarnDirs map[string]bool
 
-	// warned tracks whether any drift-related warning has fired this run.
 	warned bool
 
-	// warnIteration records the iteration when the warning fired (1-based).
 	warnIteration int
 
-	// postWarnEdits counts edits made after the warning.
 	postWarnEdits int
 
-	// postWarnVerifies counts verification commands after the warning.
 	postWarnVerifies int
 
-	// fired tracks whether the recurrence warning has already fired.
 	fired bool
 
-	// currentIteration tracks the current loop iteration.
 	currentIteration int
 }
 
@@ -129,12 +53,10 @@ func (d *driftRecurrenceState) reset() {
 	d.currentIteration = 0
 }
 
-// recordIteration updates the current iteration counter.
 func (d *driftRecurrenceState) recordIteration(iteration int) {
 	d.currentIteration = iteration
 }
 
-// recordEdit tracks a file modification relative to any drift warning.
 func (d *driftRecurrenceState) recordEdit(filePath string) {
 	if filePath == "" {
 		return
@@ -154,47 +76,34 @@ func (d *driftRecurrenceState) recordEdit(filePath string) {
 	}
 }
 
-// recordVerification tracks a verification action (build/test/lint/diagnostics).
 func (d *driftRecurrenceState) recordVerification() {
 	if d.warned {
 		d.postWarnVerifies++
 	}
 }
 
-// markWarning records that a drift-related warning fired at the given iteration.
-// Called by scope_drift, plan_drift, or similar detectors when they inject guidance.
 func (d *driftRecurrenceState) markWarning(iteration int) {
 	if !d.warned {
 		d.warned = true
 		d.warnIteration = iteration
-		// #1544 case C: the diff against preWarnDirs assumes the pre-warn
-		// baseline is FAT (scope_drift arms late, after ~5 dirs). plan_drift
-		// arms EARLY on the wrap-up path, where the baseline can be empty -
-		// every subsequent dir then counts as "new", and the normal
-		// src + _test two-dir workflow read as "STILL SCATTERING". Record
-		// the baseline size so check() can raise the bar for weak baselines.
+
 		d.preWarnBaseline = len(d.preWarnDirs)
 	}
 }
 
-// check evaluates whether the agent has recurred into the warned pattern.
-// Returns a guidance message if recurrence is detected, empty otherwise.
 func (d *driftRecurrenceState) check() string {
 	if d.fired || !d.warned {
 		return ""
 	}
 
-	// Only check within the post-warning window.
 	if d.currentIteration-d.warnIteration > driftRecurrencePostWarnWindow {
 		return ""
 	}
 
-	// Need minimum edits post-warning to evaluate.
 	if d.postWarnEdits < driftRecurrenceMinEditsPostWarn {
 		return ""
 	}
 
-	// Count directories that are NEW (not in pre-warn set).
 	newDirs := 0
 	for pd := range d.postWarnDirs {
 		if !d.preWarnDirs[pd] {
@@ -202,38 +111,20 @@ func (d *driftRecurrenceState) check() string {
 		}
 	}
 
-	// Also check verification ratio: if the agent made many edits but
-	// zero verifications post-warning, that signals continued drift.
 	verifyRatio := 0.0
 	if d.postWarnEdits > 0 {
 		verifyRatio = float64(d.postWarnVerifies) / float64(d.postWarnEdits)
 	}
 
-	// #473: the verify-ratio branch only fires when there IS directory
-	// expansion — a compliant agent (0 new dirs after the scope warning,
-	// mid-refactor before the build step) must not be accused of
-	// "performative compliance". newDirs==0 is compliance, not recurrence.
-	// #1452-A: CONVERGED work must not fire either - after the warning the
-	// agent legitimately re-focuses on 1-3 existing dirs and edits in
-	// batches before one verification pass (edit-then-verify is the normal
-	// zero-command phase shape). Under-threshold + zero-verifies only
-	// counts as drift when the agent is STILL SCATTERING (newDirs >= 2);
-	// a single concentrated dir is convergence, not recurrence.
 	if newDirs < driftRecurrenceNewDirThreshold {
 		if newDirs <= 1 {
 			return ""
 		}
-		// #1544 case C: the relaxed 2-3-new-dirs scattering branch assumes
-		// a non-empty pre-warn baseline (late-armed scope_drift, #473's
-		// shape). An early-armed plan_drift with an EMPTY baseline makes
-		// every dir trivially "new" - a normal src+_test workflow was
-		// branded "STILL SCATTERING". With an empty baseline, require the
-		// FULL threshold; any non-empty baseline keeps #473 semantics.
+
 		if d.preWarnBaseline == 0 && newDirs <= 2 {
 			return ""
 		}
-		// Under threshold but scattering (2-3 new dirs): require zero
-		// verifies across the minimum edit count to still call it drift.
+
 		if !(d.postWarnVerifies == 0) {
 			return ""
 		}
@@ -272,27 +163,11 @@ func (d *driftRecurrenceState) check() string {
 	return sb.String()
 }
 
-// --- Agent integration ---
-
-// driftRecurrenceRecord tracks an edit for drift recurrence analysis.
-// #1452-B: ok=false (failed tool call) counts NOTHING - the sibling
-// detectors in the same loop gate on result.IsError; without the gate,
-// 3 failed edit retries (old_text mismatch / permission) with ZERO
-// successful edits satisfied the recurrence threshold and fired STOP.
-// #1452-B: run_command verification reuses classifyDebtAction's CONTENT
-// classification (#1224: ls/git status are neutral) - the bare table
-// lookup classified every run_command as verifying, contradicting the
-// debt detector on the same command.
 func (a *Agent) driftRecurrenceRecord(toolName string, fileHint string, args string, ok bool) {
 	if a.driftRecurrence == nil {
 		return
 	}
-	// #1544 case B: the blanket !ok gate also swallowed FAILED
-	// verifications - a red-phase `go test` (non-zero exit, IsError=true)
-	// is still verification RUN, but the warning then claimed "You have
-	// not run ANY verification" about an agent that just ran it. Only the
-	// EDIT side keeps the !ok gate (#1452-B, aligned with the sibling
-	// detectors' IsError gates); verification counting is outcome-blind.
+
 	if productiveEditTools[toolName] && ok {
 		a.driftRecurrence.recordEdit(fileHint)
 	}
@@ -307,14 +182,12 @@ func (a *Agent) driftRecurrenceRecord(toolName string, fileHint string, args str
 	}
 }
 
-// driftRecurrenceMarkWarn records that a drift warning fired.
 func (a *Agent) driftRecurrenceMarkWarn(iteration int) {
 	if a.driftRecurrence != nil {
 		a.driftRecurrence.markWarning(iteration)
 	}
 }
 
-// driftRecurrenceCheck returns guidance if drift recurrence is detected.
 func (a *Agent) driftRecurrenceCheck() string {
 	if a.driftRecurrence == nil {
 		return ""
@@ -322,7 +195,6 @@ func (a *Agent) driftRecurrenceCheck() string {
 	return a.driftRecurrence.check()
 }
 
-// resetDriftRecurrence clears state for a new run.
 func (a *Agent) resetDriftRecurrence() {
 	if a.driftRecurrence != nil {
 		a.driftRecurrence.reset()

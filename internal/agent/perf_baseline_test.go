@@ -33,7 +33,6 @@ func TestPerfBaselineLoadMissing(t *testing.T) {
 
 func TestPerfBaselineRollingWindow(t *testing.T) {
 	tmp := t.TempDir()
-	// Save more than perfBaselineMaxRuns entries.
 	var runs []perfBaselineEntry
 	for i := 0; i < perfBaselineMaxRuns+10; i++ {
 		runs = append(runs, perfBaselineEntry{
@@ -54,7 +53,7 @@ func TestMedianInt(t *testing.T) {
 		want  int
 	}{
 		{[]int{1, 2, 3}, 2},
-		{[]int{1, 2, 3, 4}, 2}, // (2+3)/2 = 2 (integer div)
+		{[]int{1, 2, 3, 4}, 2},
 		{[]int{5}, 5},
 		{[]int{10, 20, 30, 40, 50}, 30},
 		{[]int{}, 0},
@@ -94,7 +93,7 @@ func TestComputeMedianBaselineSkipsFailed(t *testing.T) {
 		{Iterations: 14, ToolCalls: 24, Errors: 0, Success: true},
 	}
 	mid := computeMedianBaseline(runs)
-	// Should only use 5 successful runs: 8,10,10,12,14 -> median=10
+
 	if mid.Iterations != 10 {
 		t.Errorf("expected median iterations=10 (from successful runs), got %d", mid.Iterations)
 	}
@@ -103,28 +102,24 @@ func TestComputeMedianBaselineSkipsFailed(t *testing.T) {
 func TestCheckSingleRunRegression(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 20, Errors: 0, DurationSec: 30, ContextPeak: 5000}
 
-	// No regression
 	run := perfBaselineEntry{Iterations: 12, ToolCalls: 22, Errors: 0, DurationSec: 35, ContextPeak: 6000}
 	hit, _ := checkSingleRunRegression(run, baseline)
 	if hit {
 		t.Error("expected no regression for normal run")
 	}
 
-	// Iterations regression: 20 iterations vs 10 baseline (2x > 1.5x)
 	run = perfBaselineEntry{Iterations: 20, ToolCalls: 22, Errors: 0, DurationSec: 35}
 	hit, metric := checkSingleRunRegression(run, baseline)
 	if !hit || metric != "iterations" {
 		t.Errorf("expected iterations regression, got hit=%v metric=%s", hit, metric)
 	}
 
-	// Duration regression: 60s vs 30s baseline (2x > 1.5x)
 	run = perfBaselineEntry{Iterations: 12, ToolCalls: 22, Errors: 0, DurationSec: 60}
 	hit, metric = checkSingleRunRegression(run, baseline)
 	if !hit || metric != "duration" {
 		t.Errorf("expected duration regression, got hit=%v metric=%s", hit, metric)
 	}
 
-	// Error rate regression: 0 baseline errors, >5% error rate
 	run = perfBaselineEntry{Iterations: 12, ToolCalls: 20, Errors: 2, DurationSec: 35}
 	hit, metric = checkSingleRunRegression(run, baseline)
 	if !hit || metric != "error_rate" {
@@ -135,7 +130,7 @@ func TestCheckSingleRunRegression(t *testing.T) {
 func TestCheckSingleRunRegressionShortDuration(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, DurationSec: 5}
 	run := perfBaselineEntry{Iterations: 11, DurationSec: 20}
-	// Baseline duration too short (<=10s) - should not trigger duration regression
+
 	hit, metric := checkSingleRunRegression(run, baseline)
 	if hit && metric == "duration" {
 		t.Error("should not trigger duration regression when baseline is very short")
@@ -170,7 +165,7 @@ func TestRecordPerfBaseline(t *testing.T) {
 
 func TestRecordPerfBaselineSkipsTrivial(t *testing.T) {
 	tmp := t.TempDir()
-	// Run with no meaningful work should be skipped
+
 	stats := &RunStats{
 		ToolCalls:  map[string]int{"read_file": 1},
 		Iterations: 1,
@@ -200,7 +195,6 @@ func TestFormatPerfRegressionWarning(t *testing.T) {
 	}
 }
 
-// r394: token-spend regression dimension.
 func TestTokenRegression(t *testing.T) {
 	base := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 50000}
 	run := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 120000}
@@ -215,15 +209,14 @@ func TestTokenRegression(t *testing.T) {
 		t.Fatalf("2.4x token spend must hit tokens metric, got %v", hits)
 	}
 
-	// Old baselines (Tokens=0, field predates) must never fire.
 	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 999999}, perfBaselineEntry{Tokens: 0}); len(hits) != 0 {
 		t.Errorf("zero-token baseline must not fire tokens regression, got %v", hits)
 	}
-	// Sub-floor baseline must not fire (noise guard).
+
 	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 9999}, perfBaselineEntry{Tokens: 100}); len(hits) != 0 {
 		t.Errorf("sub-10k baseline must not fire tokens regression, got %v", hits)
 	}
-	// Within 2x must not fire.
+
 	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 99999}, base); len(hits) != 0 {
 		t.Errorf("2x-epsilon token spend must not fire, got %v", hits)
 	}
@@ -281,16 +274,14 @@ func TestTrimZeros(t *testing.T) {
 
 func TestPerfBaselineDataFile(t *testing.T) {
 	tmp := t.TempDir()
-	// Verify that .ggcode directory is created automatically.
+
 	path := perfBaselinePath(tmp)
 	dir := filepath.Dir(path)
 
-	// Directory may not exist yet.
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Skip("directory already exists")
 	}
 
-	// Save should create it.
 	savePerfBaseline(tmp, []perfBaselineEntry{{RunID: "test", Success: true}})
 	if _, err := os.Stat(dir); err != nil {
 		t.Errorf("expected directory created, got error: %v", err)
@@ -334,8 +325,6 @@ func TestFormatPerfRegressionWarningIncludesRunShape(t *testing.T) {
 		t.Errorf("iterations advisory should carry run-shape diagnostics: %s", msg)
 	}
 
-	// Legacy baseline recorded before TopTools existed: must not panic or
-	// fabricate a top-tools segment.
 	legacyMsg := formatPerfRegressionWarning("duration",
 		perfBaselineEntry{DurationSec: 100},
 		perfBaselineEntry{DurationSec: 200, Iterations: 5})
@@ -368,8 +357,6 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 	}
 }
 
-// --- r386 tool-mix drift check (arXiv 2601.04170 tool-usage-pattern stability) ---
-
 func TestPerfTopToolNames(t *testing.T) {
 	e := perfBaselineEntry{TopTools: []string{"run_command:5", "read_file:3"}}
 	got := perfTopToolNames(e)
@@ -388,18 +375,18 @@ func TestJaccardToolSets(t *testing.T) {
 	if s := jaccardToolSets([]string{"a", "b"}, []string{"c", "d"}); s != 0 {
 		t.Errorf("disjoint sets: %v", s)
 	}
-	// {a,b} vs {a,b,c}: 2/3
+
 	if s := jaccardToolSets([]string{"a", "b"}, []string{"a", "b", "c"}); s < 0.66 || s > 0.67 {
 		t.Errorf("partial overlap: %v", s)
 	}
-	// Empty side: not comparable, treated as consistent (no drift signal).
+
 	if s := jaccardToolSets(nil, []string{"a"}); s != 1 {
 		t.Errorf("empty side: %v", s)
 	}
 }
 
 func TestModalTopTools(t *testing.T) {
-	// 4 runs: read_file+grep dominate 3 of 4; run_command only in 1.
+
 	runs := []perfBaselineEntry{
 		{Success: true, TopTools: []string{"read_file:5", "grep:3"}},
 		{Success: true, TopTools: []string{"read_file:4", "grep:2"}},
@@ -413,7 +400,7 @@ func TestModalTopTools(t *testing.T) {
 	if got[0] != "grep:3" || got[1] != "read_file:3" {
 		t.Errorf("modal counts wrong: %v (want grep:3, read_file:3 - ties sort name-asc)", got)
 	}
-	// Fewer than 3 runs with TopTools: no modal set (old baselines).
+
 	if modalTopTools(runs[:2]) != nil {
 		t.Error("insufficient history should yield nil")
 	}
@@ -421,7 +408,7 @@ func TestModalTopTools(t *testing.T) {
 
 func TestCollectRunRegressionMetricsToolMix(t *testing.T) {
 	base := perfBaselineEntry{TopTools: []string{"read_file:5", "grep:3"}}
-	// Fully drifted workflow: run_command+browser, zero overlap.
+
 	drifted := perfBaselineEntry{TopTools: []string{"run_command:9", "browser:4"}}
 	hits := collectRunRegressionMetrics(drifted, base)
 	found := false
@@ -433,7 +420,7 @@ func TestCollectRunRegressionMetricsToolMix(t *testing.T) {
 	if !found {
 		t.Errorf("tool_mix drift not detected: %v", hits)
 	}
-	// Same shape: no tool_mix hit.
+
 	same := perfBaselineEntry{TopTools: []string{"read_file:7", "grep:5"}}
 	hits = collectRunRegressionMetrics(same, base)
 	for _, m := range hits {
@@ -441,7 +428,7 @@ func TestCollectRunRegressionMetricsToolMix(t *testing.T) {
 			t.Error("consistent tool mix falsely flagged")
 		}
 	}
-	// Legacy baseline without TopTools: never drifts (guard).
+
 	legacy := perfBaselineEntry{}
 	hits = collectRunRegressionMetrics(drifted, legacy)
 	for _, m := range hits {
@@ -460,8 +447,6 @@ func TestFormatPerfRegressionWarningToolMix(t *testing.T) {
 	}
 }
 
-// #3102 V1: perfMetricValue must expose the tokens dimension so
-// selectWorstPerfHit picks the highest-spend hit run, not the first.
 func TestPerfMetricValueTokens(t *testing.T) {
 	e := perfBaselineEntry{Tokens: 12345}
 	if got := perfMetricValue(e, "tokens"); got != 12345 {

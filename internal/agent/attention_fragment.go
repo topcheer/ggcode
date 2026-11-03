@@ -1,47 +1,5 @@
 package agent
 
-// attention_fragment.go -- Attention Fragmentation Detector
-//
-// Research basis:
-//   - "Overloaded minds and machines: a cognitive load framework" (Springer
-//     2026, s10462-026-11510-z): maps Cognitive Load Theory (CLT) to LLM
-//     agents. Human working memory fragments under rapid attention-switching;
-//     LLM "working memory" (context window) suffers the same degradation.
-//   - "United Minds or Isolated Agents?" (arXiv:2506.06843): proposes CLT as
-//     a principled design lens for LLM systems. The bottleneck is bounded
-//     working memory, analogous to human cognitive load constraints.
-//   - Cognitive Load Theory (Sweller 1988, refined through 2025): distinguishes
-//     three load types - intrinsic (task complexity), extraneous (wasted
-//     overhead from poor information organization), and germane (productive
-//     schema-building). Rapid topic-switching creates EXTRANEOUS load.
-//
-// This detector identifies a specific anti-pattern: the agent makes consecutive
-// tool calls that rapidly switch between unrelated directories/packages without
-// dwelling on any single concern. Each switch forces the model to reload
-// context about a different part of the codebase, creating extraneous cognitive
-// load and reducing effective working memory for the actual task.
-//
-// The metric: "switch density" = fraction of consecutive tool-call pairs in a
-// sliding window that target DIFFERENT directories. High switch density means
-// the agent is thrashing between concerns rather than maintaining coherent focus.
-//
-// Example anti-pattern (switch density = 1.0, every call jumps to new dir):
-//   read auth/login.go → grep db/query.go → edit api/handler.go →
-//   read config/loader.go → test utils/helpers.go
-//
-// Healthy pattern (switch density low, dwells in one area):
-//   read auth/login.go → read auth/session.go → edit auth/login.go →
-//   test auth/login_test.go
-//
-// Distinct from existing detectors:
-//   - target_scatter: measures BREADTH (N unique targets with no mutation)
-//   - edit_oscillation: same-file back-and-forth edits
-//   - futile_cycle: re-reading the SAME files repeatedly
-//   - tool_diversity_gate: diversity of TOOL TYPES, not target paths
-//   - THIS detector: measures SWITCH RATE between distinct directories
-//     across consecutive calls - the cognitive cost of context-switching,
-//     regardless of whether mutations occur.
-
 import (
 	"fmt"
 	"path/filepath"
@@ -50,38 +8,19 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// attentionFragmentState tracks directory-level context switches.
 type attentionFragmentState struct {
-	// recentDirs is a sliding window of directories from recent tool calls.
-	recentDirs []string
-	// switchCount counts how many consecutive pairs had different dirs.
+	recentDirs  []string
 	switchCount int
-	// windowSize is the max number of calls to retain.
-	windowSize int
-	// warnCount caps warnings per run.
-	warnCount int
-	// totalCalls counts all recorded calls.
-	totalCalls int
+	windowSize  int
+	warnCount   int
+	totalCalls  int
 }
 
 const (
-	// afWindowSize is the sliding window length for switch-density calculation.
-	afWindowSize = 10
-	// afSwitchThreshold is the minimum switch density to trigger (70%).
+	afWindowSize      = 10
 	afSwitchThreshold = 0.70
-	// afMinUniqueDirs is the minimum number of unique directories in the
-	// window before the detector fires (avoids firing on 2-dir alternation).
-	afMinUniqueDirs = 4
-	// afMaxWarnings caps how many times this detector warns per run.
-	// #1855 case 1: a guidance-noise cleanup batch lowered this from 2
-	// to 1 but left afRefireGap and firedAt behind as dead code (the
-	// warnCount>=max return made them unreachable), so the code still
-	// LOOKED multi-shot while the implementation memory documented
-	// "2x/run, 8-call refire gap". Single-shot is the intended behavior
-	// (see TestAttentionFragment_MaxWarnings); the dead refire machinery
-	// is removed to make the semantics honest. A fresh warning is
-	// possible only after reset() (new run / compaction).
-	afMaxWarnings = 1
+	afMinUniqueDirs   = 4
+	afMaxWarnings     = 1
 )
 
 func newAttentionFragmentState() *attentionFragmentState {
@@ -90,20 +29,15 @@ func newAttentionFragmentState() *attentionFragmentState {
 	}
 }
 
-// extractDir extracts the top-2 directory components from a file path,
-// normalizing to forward slashes. Returns empty string if no path is found.
 func extractAFDir(pathStr string) string {
 	if pathStr == "" {
 		return ""
 	}
-	// Normalize to forward slashes.
+
 	normalized := strings.ReplaceAll(pathStr, "\\", "/")
-	// Try to extract a path-like substring from the argument.
-	// For tool calls, paths typically appear as quoted strings or bare values.
-	// We look for the first segment that resembles a file path.
+
 	dir := filepath.Dir(normalized)
 	parts := strings.Split(dir, "/")
-	// Take up to 2 meaningful components to group related files.
 	var meaningful []string
 	for _, p := range parts {
 		if p == "" || p == "." {
@@ -114,13 +48,12 @@ func extractAFDir(pathStr string) string {
 	if len(meaningful) <= 2 {
 		return strings.Join(meaningful, "/")
 	}
-	// Take last 2 components for deeper paths (e.g., internal/agent).
+
 	return strings.Join(meaningful[len(meaningful)-2:], "/")
 }
 
-// extractPathFromToolCall tries to find a file path in common tool call arguments.
 func extractPathFromToolCall(_ string, args map[string]interface{}) string {
-	// Tools that carry a primary path argument.
+
 	pathKeys := []string{"file_path", "path", "source", "directory", "glob"}
 	for _, key := range pathKeys {
 		if val, ok := args[key]; ok {
@@ -129,7 +62,7 @@ func extractPathFromToolCall(_ string, args map[string]interface{}) string {
 			}
 		}
 	}
-	// For tools with "files" array (e.g., multi_file_read, multi_file_edit).
+
 	if files, ok := args["files"]; ok {
 		switch v := files.(type) {
 		case []interface{}:
@@ -144,13 +77,10 @@ func extractPathFromToolCall(_ string, args map[string]interface{}) string {
 			return v
 		}
 	}
-	// For grep/search with "pattern" but sometimes path in "path" already covered.
-	// For edit tools, "old_text" is content not path.
+
 	return ""
 }
 
-// isAFRelevantTool returns true if the tool call targets a file/directory
-// and thus contributes to attention context-switching.
 func isAFRelevantTool(name string) bool {
 	switch name {
 	case "read_file", "multi_file_read", "edit_file", "multi_edit_file",
@@ -167,7 +97,6 @@ func isAFRelevantTool(name string) bool {
 	}
 }
 
-// recordToolCall records a tool call and its target directory.
 func (s *attentionFragmentState) recordToolCall(name string, args map[string]interface{}) {
 	if !isAFRelevantTool(name) {
 		return
@@ -175,7 +104,7 @@ func (s *attentionFragmentState) recordToolCall(name string, args map[string]int
 	pathStr := extractPathFromToolCall(name, args)
 	dir := extractAFDir(pathStr)
 	if dir == "" {
-		// Tool call has no extractable path; skip but don't reset.
+
 		return
 	}
 	s.totalCalls++
@@ -185,7 +114,6 @@ func (s *attentionFragmentState) recordToolCall(name string, args map[string]int
 	}
 }
 
-// analyze computes switch density and fires guidance if fragmented.
 func (s *attentionFragmentState) analyze() string {
 	if s.warnCount >= afMaxWarnings {
 		return ""
@@ -194,7 +122,6 @@ func (s *attentionFragmentState) analyze() string {
 		return ""
 	}
 
-	// Count switches (consecutive pairs with different dirs).
 	switches := 0
 	uniqueDirs := map[string]bool{}
 	for i, d := range s.recentDirs {
@@ -226,13 +153,6 @@ func (s *attentionFragmentState) analyze() string {
 	)
 }
 
-// reset clears state for a new user turn.
-// #1843 case 2: warnCount previously persisted across the Agent's
-// LIFETIME (the only reset call site is the per-user-turn block), so
-// afMaxWarnings=1 meant ONE warning for the whole session - the comment
-// claimed "per run" but nothing re-opened the quota. warnCount now
-// resets per user turn, matching the caller's semantics; totalCalls
-// stays monotonic (the refire-gap arithmetic depends on it).
 func (s *attentionFragmentState) reset() {
 	s.recentDirs = s.recentDirs[:0]
 	s.switchCount = 0

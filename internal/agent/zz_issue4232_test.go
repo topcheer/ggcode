@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #4232 case 1: the provider stream layer cancels a per-request child
-// context on idle-timeout while the main run ctx stays alive. The terminal
-// stream-error path must NOT report the aborted run as success: the old code
-// emitted an Error event carrying a nil error and returned ctx.Err()==nil.
 func TestRunStreamWatchdogCancelReportedAsFailure(t *testing.T) {
 	watchdogErr := fmt.Errorf("stream idle-timeout: %w", context.Canceled)
 	mp := &mockProvider{streamErr: watchdogErr}
@@ -41,11 +37,6 @@ func TestRunStreamWatchdogCancelReportedAsFailure(t *testing.T) {
 	}
 }
 
-// #4232 case 2: gateways that report all-zero usage (older vLLM / LiteLLM)
-// previously bypassed the empty-response guard entirely because of the
-// InputTokens > 0 conjunct - a single empty reply exited as silent success.
-// With the conjunct removed, a genuinely empty reply must still trigger the
-// recovery nudge (second stream call).
 func TestRunStreamAllZeroUsageEmptyStillRetried(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{
@@ -74,9 +65,6 @@ func TestRunStreamAllZeroUsageEmptyStillRetried(t *testing.T) {
 	}
 }
 
-// #4232 case 2 (abort leg): three consecutive genuinely-empty responses on
-// an all-zero-usage gateway must abort with a distinguishable error, not
-// exit silently as success after the first one (old behavior).
 func TestRunStreamAllZeroUsageThreeEmptiesAbort(t *testing.T) {
 	empty := []provider.StreamEvent{{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 0, OutputTokens: 0}}}
 	mp := &mockProvider{

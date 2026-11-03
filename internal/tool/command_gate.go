@@ -8,18 +8,6 @@ import (
 	"unicode"
 )
 
-// ---------------------------------------------------------------------------
-// GateBehavior — Claude Code inspired three-state model
-//
-//   Allow  → command is safe, execute immediately
-//   Ask    → command needs user confirmation (destructive or suspicious)
-//   Block  → command is never executed (catastrophic, no legitimate use)
-//
-// In Claude Code, nearly everything is "ask" rather than "block". The only
-// hard blocks are patterns that have zero legitimate use for an AI coding
-// assistant and would cause immediate irreversible harm.
-// ---------------------------------------------------------------------------
-
 type GateBehavior int
 
 const (
@@ -28,37 +16,19 @@ const (
 	Block
 )
 
-// GateResult is the outcome of a command gate check.
 type GateResult struct {
 	Behavior   GateBehavior
-	CleanedCmd string   // sanitized command (may differ from original)
-	Reason     string   // human-readable explanation
-	Warnings   []string // informational warnings (shown but don't affect flow)
+	CleanedCmd string
+	Reason     string
+	Warnings   []string
 }
 
-// Allowed returns true if the command can execute without confirmation.
 func (r GateResult) Allowed() bool { return r.Behavior == Allow }
 
-// NeedsConfirmation returns true if the command requires user approval.
 func (r GateResult) NeedsConfirmation() bool { return r.Behavior == Ask }
 
-// IsBlocked returns true if the command must never execute.
 func (r GateResult) IsBlocked() bool { return r.Behavior == Block }
 
-// ---------------------------------------------------------------------------
-// CommandGate — the safety checker
-// ---------------------------------------------------------------------------
-
-// CommandGate performs safety checks on shell commands before execution.
-// Inspired by Claude Code's bashSecurity.ts architecture:
-//
-// Layer 1: Pre-checks — control chars, injection patterns, parser differentials
-// Layer 2: Catastrophic block — patterns with zero legitimate use
-// Layer 3: Destructive warning — informational, doesn't block
-//
-// The gate runs regardless of autopilot mode. In supervised mode, "ask" results
-// prompt the user. In autopilot mode, "ask" results still block execution unless
-// an explicit override is configured.
 type CommandGate struct {
 	blockRules []*gateRule
 	askRules   []*gateRule
@@ -66,82 +36,37 @@ type CommandGate struct {
 }
 
 type gateRule struct {
-	desc    string
-	pattern *regexp.Regexp
-	kind    string // "catastrophic" | "injection" | "destructive" | "security"
-	// #814: evaluate ONLY against the quote/heredoc-inert form — the shell
-	// never executes quoted interiors or heredoc bodies as command args.
-	quotedInert bool
-	// #813: path prefixes that are legitimate (macOS/Windows temp caches);
-	// matched text containing these is rewritten inert before matching, so
-	// `rm -rf /var/folders/.../T/cache` stops hitting the /var root rule
-	// while `rm -rf /var` itself still Blocks.
+	desc           string
+	pattern        *regexp.Regexp
+	kind           string
+	quotedInert    bool
 	benignPrefixes []string
 }
 
 type cleanRule struct {
 	desc    string
 	pattern *regexp.Regexp
-	// replace defaults to "" (delete the match); a rule may carry a
-	// template like "$1" to keep captured groups (#4923: leading env
-	// assignments other than the override survive the clean).
 	replace string
 }
 
-// NewCommandGate creates the command safety gate with all rules.
 func NewCommandGate() *CommandGate {
 	g := &CommandGate{}
 
-	// rm dispersed-form subpatterns (#384): f-flag, r-flag, critical path.
-	// RE2 has no lookarounds, so "all three in any order" below is spelled
-	// as the 6 permutations of F/R/P — this catches dispersed forms like
-	// `rm --force /etc --recursive` where the target sits BETWEEN flags.
 	rmF := `(?:-[a-zA-Z]*f[a-zA-Z]*|--force)`
 	rmR := `(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)`
-	// #813: bare `/` matched the leading slash of ANY absolute path, so
-	// routine build hygiene (rm -rf /tmp/build-cache) was hard-Blocked as
-	// root destruction. Keep only genuine catastrophic roots; /tmp and
-	// /var/folders style caches are deliberate non-members.
-	// #4430 bug 2: `~` is a non-word char, so `~\b` only ever matched
-	// `~word` - `~/` and bare `~` (EOL/space-adjacent) fell through and
-	// `rm --recursive ~ --force` was fully Allowed. Same dead-anchor family
-	// as #817. RE2 has no lookahead, so the tilde branches consume their
-	// delimiter (harmless: rmGap matches empty).
+
 	rmP := `(?:(~/|~(?:[ \t]|$))|(/home|/Users|/etc|/var|/usr|/bin|/sbin|/lib|/boot)\b|/dev/)`
-	// #436: newline is a shell command separator too — the gap class must
-	// not cross it, else a benign multi-line script (`# comment` + `rm -f x`
-	// + `grep -r ... /etc`) let the grep segment contribute -r and /etc to
-	// the rm segment and hard-blocked the whole command.
+
 	rmGap := `[^;&|\n]*`
 
-	// ================================================================
-	// BLOCK — catastrophic commands with zero legitimate use
-	// ================================================================
 	g.blockRules = []*gateRule{
 
-		// --- Filesystem destruction ---
-		// #814: quotedInert — the shell never executes quoted interiors or
-		// heredoc bodies as rm arguments, so these rules must not assemble
-		// F/R/P elements across quotes (`grep 'rm -rf /etc/hosts' README.md`,
-		// script-writing heredocs).
 		{kind: "catastrophic", desc: "recursive force delete of root/critical directory", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
 			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
 		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
-			// Long-flag alternation uses literal --recursive/--force: inside a
-			// raw string the old \\-\\- form only matched a literal backslash
-			// before each dash, so the long-flag branch was dead code (#384).
-			// RE2 has no lookarounds, so "all three elements in any order" is
-			// expressed as the 6 permutations of F(f-flag), R(r-flag), P(path)
-			// — this also fixes the dispersed form `rm --force /etc
-			// --recursive` where the target sits BETWEEN the flags (the old
-			// pattern required the path strictly after both flags).
-			// #410: the gap between elements must not cross command separators
-			// (; & |) — otherwise a later, unrelated segment of a compound
-			// command could contribute the "missing" flag or path anchor and
-			// hard-block benign commands like `rm -f old.tar && grep -r x /etc`.
-			// The rule therefore only evaluates the single rm sub-command.
+
 			pattern: regexp.MustCompile(`(?i)\brm\s+(?:` +
 				rmGap + rmF + rmGap + rmR + rmGap + rmP + `|` +
 				rmGap + rmF + rmGap + rmP + rmGap + rmR + `|` +
@@ -155,11 +80,9 @@ func NewCommandGate() *CommandGate {
 		{kind: "catastrophic", desc: "fork bomb",
 			pattern: regexp.MustCompile(`(?i)(:\(\)\{\s*:\|:\&\s*\}|fork\s+bomb)`)},
 		{kind: "catastrophic", desc: "filesystem wipe via chmod",
-			// #3425: the trailing \s+/ matched ANY absolute path (chmod 000
-			// /some/deep/dir), not just the filesystem root. Anchor the target
-			// to '/' itself: the slash must be followed by a delimiter or EOL.
+
 			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/($|[\s;"'&|])`)},
-		// --- Windows filesystem destruction ---
+
 		{kind: "catastrophic", desc: "Windows recursive delete (rd/rmdir /s /q on system drive)",
 			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+"?([Cc]:\\"?\s*$|[Cc]:\\(Windows|Users|Program))`)},
 		{kind: "catastrophic", desc: "Windows force delete of system files (del /s /q on system dir)",
@@ -167,74 +90,46 @@ func NewCommandGate() *CommandGate {
 		{kind: "catastrophic", desc: "Windows disk format (format command)",
 			pattern: regexp.MustCompile(`(?i)\bformat\s+"?[A-Za-z]:("?$|[\s/"])`)},
 
-		// --- System control ---
 		{kind: "catastrophic", desc: "system shutdown/reboot",
-			// #1648-2: quotedInert — grepping a log/doc that contains the word
-			// 'shutdown' or 'reboot' must not hard-Block (rm-family parity).
+
 			quotedInert: true,
 			pattern:     regexp.MustCompile(`(?i)\b(shutdown\b.*(-h|-r|now)|\breboot\b|\bhalt\b|\bpoweroff\b|init\s+[06])`)},
 		{kind: "catastrophic", desc: "kernel module manipulation",
 			pattern: regexp.MustCompile(`(?i)\b(rmmod|insmod|modprobe)\s+`)},
 
-		// --- Credential exfiltration ---
 		{kind: "catastrophic", desc: "credential exfiltration via network",
-			// #817: the two file-path alternates previously carried \b anchors
-			// before NON-word chars (~ and /) — a boundary never exists there,
-			// so `curl -T ~/.ssh/id_rsa` and `-d @/etc/passwd` passed the hard
-			// Block. Path alternates are now anchored by their own delimiters.
+
 			pattern: regexp.MustCompile(`(?i)\b(curl|wget|nc|ncat)\s+.*((~|@|=|\s|\()/\.(ssh|gnupg|aws|env)/|(^|[\s=@(])/etc/(passwd|shadow)|--post-file.*\.(ssh|aws|env|gnupg)|<\s*~?/\.\w+/)`)},
 
-		// --- History manipulation to hide tracks ---
 		{kind: "catastrophic", desc: "history manipulation to hide tracks",
-			// #1648-2: quotedInert — same quoted-text parity as rm rules.
+
 			quotedInert: true,
 			pattern:     regexp.MustCompile(`(?i)(unset\s+HISTFILE|export\s+HISTFILE=/dev/null|history\s+(-c|--clear)|>\s*~?/\.(bash_history|zsh_history))`)},
 
-		// --- Disable security tools ---
 		{kind: "catastrophic", desc: "disable security tooling",
-			// #1648-2: quotedInert — quoted text mentioning Little Snitch etc.
-			// is prose, not a killall invocation.
+
 			quotedInert: true,
 			pattern:     regexp.MustCompile(`(?i)\b(killall|pkill)\s+(-[0-9]+\s+)?(Little.?Snitch|LuLu|SecuritySpy|fseventsd|sandboxd)`)},
 
-		// --- Overwrite critical files (block, not ask — no legitimate use for AI) ---
 		{kind: "catastrophic", desc: "overwrite critical system files",
 			pattern: regexp.MustCompile(`(?i)>\s*/etc/(passwd|shadow|sudoers|fstab)\b`)},
 		{kind: "catastrophic", desc: "overwrite SSH authorized_keys",
 			pattern: regexp.MustCompile(`(?i)>\s*~/\.ssh/authorized_keys\b`)},
 		{kind: "catastrophic", desc: "recursive chown on root",
-			// #3425: '\s+/' matched any absolute path, so 'chown -R opendkim:opendkim
-			// /etc/opendkim/keys' hard-Blocked as 'chown on root'. The target must
-			// be the root itself: slash followed by delimiter/EOL. Subdirectory
-			// targets fall through to the ASK tier (recursive permission change).
+
 			pattern: regexp.MustCompile(`(?i)\bchown\s+-R\s+\S+\s+/($|[\s;"'&|])`)},
 	}
 
-	// ================================================================
-	// ASK — destructive or suspicious, needs user confirmation
-	// ================================================================
 	g.askRules = []*gateRule{
 
-		// --- Command injection patterns (#4273 rewrite) ---
-		// The old five bare-symbol rules ($(), <(, >(`, ${) keyed on shell
-		// SYNTAX PRIMITIVES, which are ordinary composition in bash and
-		// DAILY syntax in PowerShell (${var}, $(...) subexpressions) - a
-		// legitimate deploy chain asked on every command. Nested dangerous
-		// commands are already covered by the content rules below ($(curl|sh)
-		// hits the pipe-to-shell rule, $(rm -rf) hits rm). The one real gap
-		// the bare rules caught - decode-then-shell - is now explicit:
 		{kind: "injection", desc: "decoded payload piped into shell",
 			pattern: regexp.MustCompile(`(?i)\b(base64|openssl\s+enc\s+-d|xxd\s+-r\s+-p)\b.*\|\s*(ba)?sh\b`)},
 
-		// --- Dangerous file operations ---
 		{kind: "destructive", desc: "recursive force delete", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?-[a-zA-Z]*r[a-zA-Z]*\s+`)},
 		{kind: "destructive", desc: "force delete without confirmation", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+`)},
-		// Windows recursive delete — #816: the old /[a-z]{0,3}s[a-z]{0,2}
-		// token shape matched plain Unix dirs (/srv, /src, /sys). Real
-		// Windows invocations carry a drive letter or backslash path; require
-		// that context so Unix rmdir/del stop false-triggering.
+
 		{kind: "destructive", desc: "Windows recursive directory delete (rd/rmdir /s)",
 			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+([^&|;\n]*[/\\]s(\s|$)[^&|;\n]*([a-z]:[\\/]|\\\\)|[a-z]:[\\/][^&|;\n]*[/\\]s(\s|$))`)},
 		{kind: "destructive", desc: "Windows recursive file delete (del /s)",
@@ -246,19 +141,15 @@ func NewCommandGate() *CommandGate {
 		{kind: "destructive", desc: "overwrite SSH config/known_hosts",
 			pattern: regexp.MustCompile(`(?i)>\s*~/\.ssh/(config|known_hosts)\b`)},
 
-		// --- Privilege escalation ---
 		{kind: "security", desc: "sudo command requires elevated privileges", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\bsudo\s+`)},
 
-		// --- Network-based risks ---
 		{kind: "security", desc: "piping remote content to shell",
-			// #815: trailing \b — 'sh' is a prefix of sha256sum/shasum/shfmt,
-			// so checksum verification (curl ... | sha256sum -c) was flagged.
+
 			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*\|\s*(ba)?sh\b`)},
 		{kind: "security", desc: "download and execute script",
 			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*>\s*/tmp/.*\.\w+\s*&&\s*(ba)?sh\s+/tmp/`)},
 
-		// --- Infrastructure (from Claude Code destructiveCommandWarning) ---
 		{kind: "destructive", desc: "git reset --hard may discard uncommitted changes",
 			pattern: regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`)},
 		{kind: "destructive", desc: "git push --force may overwrite remote history",
@@ -274,40 +165,23 @@ func NewCommandGate() *CommandGate {
 		{kind: "destructive", desc: "terraform destroy may remove infrastructure",
 			pattern: regexp.MustCompile(`(?i)\bterraform\s+destroy\b`)},
 
-		// --- Permission modifications ---
 		{kind: "security", desc: "chmod on system directories",
 			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?[0-7]+\s+/(etc|var|usr|System)\b`)},
-		// #3425: recursive chown/chmod below the root is no longer
-		// catastrophic (the Block tier now anchors to '/' itself), but a
-		// recursive ownership/permission change on an absolute path still
-		// deserves confirmation before it runs.
+
 		{kind: "security", desc: "recursive chown on absolute path",
 			pattern: regexp.MustCompile(`(?i)\bchown\s+-R\s+\S+\s+/`)},
 		{kind: "security", desc: "recursive chmod 000 on absolute path",
 			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/`)},
 
-		// --- Destructive cron ---
 		{kind: "destructive", desc: "destructive cron job",
 			pattern: regexp.MustCompile(`(?i)crontab\s+.*\brm\s+-r`)},
 	}
 
-	// ================================================================
-	// CLEAN — auto-fix known safe transformations
-	// ================================================================
 	g.cleanRules = []cleanRule{
 		{desc: "remove dangerous GIT_PAGER override",
-			// #4430 bug 4: consume the QUOTED form fully. `GIT_PAGER="less -R"`
-			// made \\S+ stop at the space, leaving ` -R"` behind - the cleaned
-			// command then had unbalanced quotes (invalid shell downstream).
-			// #4923: POSITION-LOCKED to the leading env-assignment segment
-			// (optionally after `env`) - a shell env override only takes effect
-			// there. The old global replace rewrote CleanedCmd (the command that
-			// EXECUTES) at any token position: `git -c GIT_PAGER=cat log` became
-			// `git -c  log` (git fatal), `grep GIT_PAGER=x Makefile` lost its
-			// pattern, and quoted echo text was silently edited.
+
 			pattern: regexp.MustCompile(`(?i)^((?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)*)(?:env\s+)?GIT_PAGER=(?:'[^']*'|"[^"]*"|\S+)\s*`),
-			// keep the OTHER leading env assignments ($1) - only the
-			// GIT_PAGER override is removed from the leading segment.
+
 			replace: "$1",
 		},
 	}
@@ -315,39 +189,21 @@ func NewCommandGate() *CommandGate {
 	return g
 }
 
-// Check evaluates a command against all safety rules.
-// Returns a GateResult with Behavior = Allow, Ask, or Block.
 func (g *CommandGate) Check(cmd string) GateResult {
 	result := GateResult{
 		Behavior:   Allow,
 		CleanedCmd: cmd,
 	}
 
-	// #1648-3: backslash-newline continuations split a single logical
-	// command across lines, so every per-line regex missed the assembled
-	// form. Join continuations BEFORE any layer sees the command (the
-	// original cmd is preserved in CleanedCmd for display).
 	joined := strings.ReplaceAll(strings.ReplaceAll(cmd, "\\\r\n", " "), "\\\n", " ")
 	if joined != cmd {
 		cmd = joined
 	}
 
-	// ---- Layer 0: Pre-checks (Claude Code's parseForSecurity pre-checks) ----
 	if pre := g.preChecks(cmd); pre.Behavior != Allow {
 		return pre
 	}
 
-	// ---- Layer 1: Block rules (catastrophic, never execute) ----
-	// #436: shell does NOT treat separators inside quotes as separators,
-	// but our regex gap class consumed them — `rm -f "a;b" -r /etc`
-	// de-blocked to a mere Ask. Match against a normalized view where
-	// quoted segments keep their outer quotes but drop inner separator
-	// noise... simplest correct approach: match BOTH the raw and the
-	// quote-stripped-interior form; if the quote-stripped form blocks, the
-	// user's real intent still contains the destructive combination.
-	// #3125: gateMatchViews additionally unwraps quotes around simple
-	// (space-free) tokens so quote-wrapped flags (`rm "-rf" x`) match the
-	// same rules as their bare forms.
 	matchViews := gateMatchViews(cmd)
 	matchCmd := strings.Join(matchViews, "\n")
 	inertCmd := blankQuotedAndHeredocs(cmd)
@@ -368,22 +224,10 @@ func (g *CommandGate) Check(cmd string) GateResult {
 		}
 	}
 
-	// ---- Layer 2: Ask rules (destructive/suspicious, needs confirmation) ----
-	// #4923 Bug B: quotedInert ask rules (rm/DROP/sudo/DELETE families) match
-	// the INERT-UNWRAPPED view: simple quoted tokens are unwrapped FIRST
-	// (#3125 defense — `rm "-rf" x` still fires), then remaining quoted TEXT
-	// (space-containing payloads like `echo "rm -rf demo"`) and heredoc
-	// bodies are blanked (#814 semantics — argument text the shell never
-	// executes must not fire an Ask). Plain inertCmd was unusable here: it
-	// blanks "-rf" itself, which is exactly how the first fix attempt broke
-	// the quoted-flag defense tests.
 	inertUnwrapped := blankQuotedAndHeredocs(unwrapSimpleQuotedTokens(cmd))
 	var askReasons []string
 	for _, rule := range g.askRules {
-		// #3125: ask rules previously matched ONLY the raw cmd - the same
-		// quote-wrapped-flag bypass as the Block layer (`rm "-rf" x` was
-		// Allow). Match the same normalized views; quotedInert rules keep
-		// their inert-unwrapped view (quoted argument TEXT must not fire them).
+
 		if rule.quotedInert {
 			if rule.pattern.MatchString(inertUnwrapped) {
 				askReasons = append(askReasons, rule.desc)
@@ -403,18 +247,12 @@ func (g *CommandGate) Check(cmd string) GateResult {
 		result.Reason = fmt.Sprintf("Command requires confirmation: %s", strings.Join(askReasons, "; "))
 	}
 
-	// ---- Layer 3: Destructive warnings (informational only) ----
 	result.Warnings = g.destructiveWarnings(cmd)
 
-	// ---- Layer 3b: Interactive command warning ----
-	// Detect commands that will hang indefinitely waiting for stdin or that
-	// run forever. These waste the full timeout. We add it as a warning so
-	// the agent sees it in the tool result.
 	if interactive := g.InteractiveCommandWarning(cmd); interactive != "" {
 		result.Warnings = append(result.Warnings, interactive)
 	}
 
-	// ---- Apply cleaning rules ----
 	cleaned := cmd
 	for _, rule := range g.cleanRules {
 		cleaned = rule.pattern.ReplaceAllString(cleaned, rule.replace)
@@ -424,16 +262,10 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	return result
 }
 
-// stripQuotedSeparators removes shell separator characters (; & |) that
-// appear INSIDE quoted segments (#436). The regex gate treats those chars
-// as command separators, but a real shell does not — so `rm -f "a;b" -r /etc`
-// must be evaluated as if the quoted content contained no separator, letting
-// the rule see the true destructive flag combination. Unquoted separators
-// are preserved so segment scoping (#410) still applies.
 func stripQuotedSeparators(cmd string) string {
 	var b strings.Builder
 	b.Grow(len(cmd))
-	var quote byte // 0 = outside quotes
+	var quote byte
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
@@ -442,7 +274,7 @@ func stripQuotedSeparators(cmd string) string {
 				quote = 0
 				b.WriteByte(c)
 			} else if c == ';' || c == '&' || c == '|' {
-				// separator inside quotes — drop it
+
 			} else {
 				b.WriteByte(c)
 			}
@@ -456,12 +288,6 @@ func stripQuotedSeparators(cmd string) string {
 	return b.String()
 }
 
-// blankQuotedAndHeredocs replaces quoted-string interiors and heredoc
-// bodies with inert filler (#814). The rm permutation rules must not
-// assemble F/R/P elements from text the shell will never execute as rm
-// arguments — `grep 'rm -rf /etc/hosts' README.md` or a script-writing
-// heredoc mentioning rm must not hard-Block the enclosing legitimate
-// command.
 func blankQuotedAndHeredocs(cmd string) string {
 	lines := strings.Split(cmd, "\n")
 	out := make([]string, 0, len(lines))
@@ -477,11 +303,7 @@ func blankQuotedAndHeredocs(cmd string) string {
 			continue
 		}
 		out = append(out, blankQuotes(line))
-		// #4430 bug 1: `<<<` is a here-STRING, not a heredoc opener - the
-		// regex matched from the 2nd `<` (`<< EOF`), so the following lines
-		// were blanked as heredoc body and a real `rm -rf /etc` on the next
-		// line escaped the catastrophic tier (Block downgraded to Ask).
-		// RE2 has no negative lookahead - mask `<<<` before probing.
+
 		probe := line
 		if strings.Contains(probe, "<<<") {
 			probe = strings.ReplaceAll(probe, "<<<", "   ")
@@ -495,7 +317,6 @@ func blankQuotedAndHeredocs(cmd string) string {
 
 var heredocOpenerRe = regexp.MustCompile(`<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)`)
 
-// blankQuotes replaces quoted interiors (single/double) with a space.
 func blankQuotes(line string) string {
 	var b strings.Builder
 	b.Grow(len(line))
@@ -508,7 +329,7 @@ func blankQuotes(line string) string {
 				quote = 0
 				b.WriteByte(c)
 			}
-			// interior blanked
+
 		case c == '"' || c == '\'':
 			quote = c
 			b.WriteByte(c)
@@ -519,17 +340,6 @@ func blankQuotes(line string) string {
 	return b.String()
 }
 
-// unwrapSimpleQuotedTokens removes quotes around space-free simple tokens
-// (#3125). Shell argv equivalence: `rm "-rf" x` passes rm the exact same
-// argv as `rm -rf x` - the quotes are parser noise a human drops, but our
-// \b/flag-anchored rules never see through them (`"` breaks \brm\s+-r and
-// every flag-shape regex), which made quote-wrapped flags a universal
-// Block+Ask bypass left open by #436's separator-only normalization.
-// Quotes around tokens CONTAINING spaces stay (`echo "rm -rf demo"` keeps
-// its quotes - the payload is argument TEXT, not a flag); the ask layer
-// pairs this view with blankQuotedAndHeredocs (#4923 Bug B) so quoted TEXT
-// cannot fire an Ask either. Heredoc bodies are skipped verbatim
-// (literal data, mirrors blankQuotedAndHeredocs's heredoc handling).
 func unwrapSimpleQuotedTokens(cmd string) string {
 	lines := strings.Split(cmd, "\n")
 	out := make([]string, 0, len(lines))
@@ -542,8 +352,7 @@ func unwrapSimpleQuotedTokens(cmd string) string {
 			out = append(out, line)
 			continue
 		}
-		// The heredoc delimiter's quotes carry meaning (quoted = no
-		// expansion in body) - shield opener quotes from unwrapping.
+
 		shielded := heredocOpenerRe.ReplaceAllStringFunc(line, func(m string) string {
 			return strings.NewReplacer(`"`, "\x01", "'", "\x02").Replace(m)
 		})
@@ -558,9 +367,6 @@ func unwrapSimpleQuotedTokens(cmd string) string {
 
 var simpleQuotedTokenRe = regexp.MustCompile(`"([^"\s]+)"|'([^'\s]+)'`)
 
-// gateMatchViews returns every normalized view the Block/Ask pattern layers
-// must match against (#436 separator view + #3125 unwrapped-flag view).
-// Duplicate views collapse; order is raw-first.
 func gateMatchViews(cmd string) []string {
 	views := []string{cmd}
 	seen := map[string]bool{cmd: true}
@@ -577,11 +383,8 @@ func gateMatchViews(cmd string) []string {
 	return views
 }
 
-// preChecks runs Claude Code-style pre-validation that catches parser
-// differentials and injection vectors before pattern matching.
 func (g *CommandGate) preChecks(cmd string) GateResult {
-	// Control characters (null bytes, etc.) — bash silently drops them
-	// but they confuse our regex checks.
+
 	for _, ch := range cmd {
 		if ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' {
 			return GateResult{
@@ -599,7 +402,6 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 		}
 	}
 
-	// Unicode whitespace — shell-quote and bash disagree on word boundaries
 	for _, ch := range cmd {
 		if unicode.IsSpace(ch) && ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r' {
 			return GateResult{
@@ -610,29 +412,19 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 		}
 	}
 
-	// Multiple commands via semicolons with suspicious patterns
 	if strings.Contains(cmd, ";") {
-		// #2582: the per-part match must apply the SAME transformations as
-		// the main-flow Layer 1, or the compound branch diverges from the
-		// single-command verdicts:
-		//   - quotedInert rules match the blankQuotedAndHeredocs view
-		//     (text inside quotes is inert - `grep 'rm -rf /etc' README.md`
-		//     must stay Allow/Ask, not Block)
-		//   - benignPrefixes rewrite (`rm -rf /var/folders/...` = Ask via
-		//     the main flow, not Block here)
+
 		parts := splitSemicolons(cmd)
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				continue
 			}
-			// Check if any sub-command is catastrophic
+
 			for _, rule := range g.blockRules {
 				target := part
 				if rule.quotedInert {
-					// Re-derive the inert view per part: quoted text is
-					// blanked, so a destructive phrase inside quotes no
-					// longer matches (#814 semantics for compounds).
+
 					target = blankQuotedAndHeredocs(part)
 				}
 				for _, bp := range rule.benignPrefixes {
@@ -652,12 +444,8 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 	return GateResult{Behavior: Allow, CleanedCmd: cmd}
 }
 
-// destructiveWarnings returns informational warnings about destructive patterns.
-// These are shown to the user but don't affect the allow/ask/block decision.
-// Modeled after Claude Code's destructiveCommandWarning.ts.
 func (g *CommandGate) destructiveWarnings(cmd string) []string {
-	// These are separate from askRules — they provide context in the
-	// permission dialog without changing the gate behavior.
+
 	warnings := []string{}
 
 	destructivePatterns := []struct {
@@ -689,31 +477,12 @@ func (g *CommandGate) destructiveWarnings(cmd string) []string {
 	return warnings
 }
 
-// InteractiveCommandWarning detects commands that will hang indefinitely waiting
-// for stdin or that run forever without exiting. These are the #1 cause of
-// 30-minute timeout waste in AI coding agents.
-//
-// Three categories:
-//  1. Bare REPL invocations — `python`, `node`, `irb` without a script argument.
-//     These drop into a read-eval-print loop that blocks on stdin forever.
-//  2. Interactive pagers/editors — `vim`, `nano`, `less`, `more` always wait
-//     for keystrokes and never exit on their own.
-//  3. Infinite-follow/monitor commands — `tail -f`, `top`, `watch` run forever
-//     by design.
-//
-// Returns a non-empty warning string if detected, or "" otherwise.
 func (g *CommandGate) InteractiveCommandWarning(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return ""
 	}
 
-	// Handle compound commands: check each sub-command independently.
-	// Split on common separators (|, ;, &&, ||) and check each part.
-	// #337: segments on the RIGHT side of a pipe receive stdin from the
-	// upstream segment, which closes on completion — bare cat/tee there read
-	// EOF and exit immediately. The stdin-reader infinite check is skipped
-	// for pipe-fed segments (it stays active for the first segment).
 	parts, pipeFed := splitCompoundCommandWithPipes(cmd)
 	for idx, part := range parts {
 		part = strings.TrimSpace(part)
@@ -727,10 +496,6 @@ func (g *CommandGate) InteractiveCommandWarning(cmd string) string {
 	return ""
 }
 
-// checkInteractivePartPart is checkInteractivePart with pipe-context awareness
-// (#337): pipeFed=true means the segment's stdin comes from the upstream
-// pipeline, so bare stdin-readers (cat/tee/sleep) exit on EOF instead of
-// hanging.
 func checkInteractivePartPart(cmd string, pipeFed bool) string {
 	if pipeFed {
 		fields := strings.Fields(cmd)
@@ -744,9 +509,6 @@ func checkInteractivePartPart(cmd string, pipeFed bool) string {
 	return checkInteractivePart(cmd)
 }
 
-// splitCompoundCommandWithPipes additionally returns pipeFed, parallel to
-// segs: pipeFed[i] is true when segment i receives stdin from a pipe (the
-// separator before it was a single '|'). The first segment is never pipe-fed.
 func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 	var parts []string
 	var current strings.Builder
@@ -758,7 +520,6 @@ func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 	for i < len(cmd) {
 		ch := cmd[i]
 
-		// Handle escape sequences outside single quotes.
 		if ch == '\\' && !inSingleQuote && i+1 < len(cmd) {
 			current.WriteByte(ch)
 			current.WriteByte(cmd[i+1])
@@ -766,7 +527,6 @@ func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 			continue
 		}
 
-		// Toggle quote state.
 		if ch == '\'' && !inDoubleQuote {
 			inSingleQuote = !inSingleQuote
 			current.WriteByte(ch)
@@ -780,7 +540,6 @@ func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 			continue
 		}
 
-		// Check for top-level separators when not quoted.
 		if !inSingleQuote && !inDoubleQuote {
 			if sep, isPipe, advance := matchSeparator(cmd, i); sep {
 				parts = append(parts, current.String())
@@ -803,10 +562,6 @@ func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 	return parts, pipeFed
 }
 
-// matchSeparator checks if position i in cmd is a shell separator (|, ;, &&, ||).
-// Returns (matched, isPipe, advance): isPipe is true only for a single '|'
-// (a pipeline feeding the next segment's stdin); '||' is a logical OR whose
-// right side does NOT receive a pipe (#337).
 func matchSeparator(cmd string, i int) (matched, isPipe bool, advance int) {
 	ch := cmd[i]
 	if ch == ';' || ch == '|' {
@@ -821,30 +576,23 @@ func matchSeparator(cmd string, i int) (matched, isPipe bool, advance int) {
 	return false, false, 0
 }
 
-// checkInteractivePart checks a single command pipeline segment for interactive
-// behavior.
 func checkInteractivePart(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 
-	// Extract the first word (the command name) and the remaining arguments.
 	fields := strings.Fields(cmd)
 	if len(fields) == 0 {
 		return ""
 	}
 
-	// Strip any path prefix from the command (e.g., /usr/bin/python → python).
 	binName := filepath.Base(fields[0])
 	binName = strings.ToLower(binName)
-	// Strip common Windows extensions.
+
 	for _, ext := range []string{".exe", ".bat", ".cmd", ".ps1"} {
 		binName = strings.TrimSuffix(binName, ext)
 	}
 
 	args := fields[1:]
 
-	// --- Category 1: Bare REPL invocations (no script argument) ---
-	// These launch a REPL when invoked without arguments. With -c, -e, or a
-	// script file, they run one-shot and exit normally.
 	if isBareREPL(binName, args) {
 		return fmt.Sprintf(
 			"Command %q appears to be a bare REPL invocation that will wait for stdin input indefinitely "+
@@ -853,10 +601,8 @@ func checkInteractivePart(cmd string) string {
 			binName, binName, binName)
 	}
 
-	// --- Category 2: Interactive pagers and editors ---
-	// These ALWAYS wait for keyboard input regardless of arguments.
 	if isInteractiveApp(binName) {
-		// Check for non-interactive overrides that make these safe.
+
 		if hasNonInteractiveOverride(binName, args) {
 			return ""
 		}
@@ -867,8 +613,6 @@ func checkInteractivePart(cmd string) string {
 			binName, suggestion)
 	}
 
-	// --- Category 3: Infinite-follow and monitor commands ---
-	// tail -f, top, watch, etc. run forever by design.
 	if isInfiniteCommand(binName, args) {
 		suggestion := infiniteCommandSuggestion(binName)
 		return fmt.Sprintf(
@@ -880,8 +624,6 @@ func checkInteractivePart(cmd string) string {
 	return ""
 }
 
-// isBareREPL returns true if the binary is a REPL interpreter invoked without
-// a script file or inline-code flag.
 func isBareREPL(bin string, args []string) bool {
 	repls := map[string]bool{
 		"python": true, "python2": true, "python3": true,
@@ -906,30 +648,18 @@ func isBareREPL(bin string, args []string) bool {
 		return false
 	}
 
-	// Common flags that make REPLs non-interactive (run-once).
-	// - python: -c (inline code), -m (run module)
-	// - node: -e (inline), --eval
-	// - deno: -e (inline)
-	// - bun: -e (inline)
-	// - sqlite3: < file.sql or .read
-	// - bc: -q (quiet, but still interactive without input)
 	nonInteractiveFlags := map[string]bool{
 		"-c": true, "--command": true,
 		"-e": true, "--eval": true,
 		"-m": true,
 	}
-	// #1001: exit-type flags — the command prints and exits immediately
-	// (version/help probes are among the most common agent invocations and
-	// previously earned a false "will wait for stdin indefinitely" warning).
-	// These are NOT run-once code flags: REPL-type flags like python -u/-I
-	// still drop into the REPL and must keep the warning.
+
 	exitFlags := map[string]bool{
 		"-V": true, "-v": true, "--version": true,
 		"-h": true, "--help": true,
 		"--check": true, "-?": true,
 	}
-	// If any argument is a non-interactive flag or a file path (not starting
-	// with -), the REPL will run one-shot, not hang.
+
 	for _, a := range args {
 		if nonInteractiveFlags[a] {
 			return false
@@ -937,47 +667,38 @@ func isBareREPL(bin string, args []string) bool {
 		if exitFlags[a] {
 			return false
 		}
-		// A positional argument that looks like a file (has a dot, or is a
-		// relative/absolute path) means a script file — non-interactive.
+
 		if !strings.HasPrefix(a, "-") {
 			return false
 		}
 	}
 
-	// Special case: sqlite3 with a database file but no piped input.
-	// `sqlite3 db.sqlite` still drops into interactive mode.
-	// However, `sqlite3 db.sqlite < dump.sql` or with a SQL command arg is fine.
-	// We only flag truly bare invocations.
 	if bin == "sqlite3" || bin == "mysql" || bin == "psql" || bin == "redis-cli" {
-		// These hang with just a database/connection name.
+
 		return true
 	}
 
 	return true
 }
 
-// isInteractiveApp returns true for pagers and editors that always wait for
-// keyboard input.
 func isInteractiveApp(bin string) bool {
 	apps := map[string]bool{
-		// Editors
+
 		"vim": true, "vi": true, "nvim": true, "nano": true, "emacs": true,
 		"pico": true, "micro": true, "helix": true, "hx": true,
 		"ed": true, "ex": true,
-		// Pagers
+
 		"less": true, "more": true, "most": true,
-		// Interactive monitors
+
 		"top": true, "htop": true, "btop": true, "iotop": true, "atop": true,
 		"glances": true,
-		// Interactive shells launched explicitly
+
 		"bash": true, "zsh": true, "sh": true, "fish": true, "csh": true,
 		"tcsh": true, "pwsh": true, "powershell": true,
 	}
 	return apps[bin]
 }
 
-// nonInteractiveOverrides maps binary names to the set of flags that make
-// them non-interactive (exit after one-shot).
 var nonInteractiveOverrides = map[string]map[string]bool{
 	"less":       {"-E": true, "--quit-at-eof": true, "-F": true, "--quit-if-one-screen": true},
 	"bash":       {"-c": true},
@@ -990,8 +711,6 @@ var nonInteractiveOverrides = map[string]map[string]bool{
 	"pwsh":       {"-Command": true, "-c": true, "-File": true},
 }
 
-// hasNonInteractiveOverride checks if the command has flags that make an
-// otherwise interactive app non-interactive.
 func hasNonInteractiveOverride(bin string, args []string) bool {
 	overrides, ok := nonInteractiveOverrides[bin]
 	if !ok {
@@ -1001,7 +720,7 @@ func hasNonInteractiveOverride(bin string, args []string) bool {
 		if overrides[a] {
 			return true
 		}
-		// Combined short flags: top -n1, top -bn1
+
 		if bin == "top" && strings.HasPrefix(a, "-n") {
 			return true
 		}
@@ -1009,8 +728,6 @@ func hasNonInteractiveOverride(bin string, args []string) bool {
 	return false
 }
 
-// interactiveAppSuggestion returns a helpful suggestion for how to replace the
-// interactive command with a non-interactive alternative.
 func interactiveAppSuggestion(bin string) string {
 	switch bin {
 	case "vim", "vi", "nvim", "nano", "emacs", "pico", "micro", "helix", "hx", "ed", "ex":
@@ -1028,9 +745,6 @@ func interactiveAppSuggestion(bin string) string {
 	}
 }
 
-// infiniteCmdCheckers maps binary names to functions that check whether the
-// command runs forever. Each checker receives the args and returns true if the
-// invocation is infinite/hanging.
 var infiniteCmdCheckers = map[string]func(args []string) bool{
 	"tail":   isInfiniteTail,
 	"cat":    isBareStdinReader,
@@ -1043,7 +757,6 @@ var infiniteCmdCheckers = map[string]func(args []string) bool{
 	"yes":    func(_ []string) bool { return true },
 }
 
-// isInfiniteCommand returns true for commands that run forever by design.
 func isInfiniteCommand(bin string, args []string) bool {
 	checker, ok := infiniteCmdCheckers[bin]
 	if !ok {
@@ -1052,13 +765,12 @@ func isInfiniteCommand(bin string, args []string) bool {
 	return checker(args)
 }
 
-// isInfiniteTail detects tail -f / --follow / -F / combined -fq flags.
 func isInfiniteTail(args []string) bool {
 	for _, a := range args {
 		if a == "-f" || a == "--follow" || strings.HasPrefix(a, "-F") {
 			return true
 		}
-		// Combined short flags containing 'f' (e.g. -fq)
+
 		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "f") {
 			return true
 		}
@@ -1066,13 +778,10 @@ func isInfiniteTail(args []string) bool {
 	return false
 }
 
-// isBareStdinReader returns true when a command that normally reads from stdin
-// is invoked with no arguments (cat, tee, sleep without duration).
 func isBareStdinReader(args []string) bool {
 	return len(args) == 0
 }
 
-// isInfiniteNetcat detects nc/ncat/netcat in listen mode (-l / --listen).
 func isInfiniteNetcat(args []string) bool {
 	for _, a := range args {
 		if a == "-l" || a == "--listen" {
@@ -1082,8 +791,6 @@ func isInfiniteNetcat(args []string) bool {
 	return false
 }
 
-// infiniteCommandSuggestion returns a helpful suggestion for making an infinite
-// command exit.
 func infiniteCommandSuggestion(bin string) string {
 	switch bin {
 	case "tail":
@@ -1101,12 +808,6 @@ func infiniteCommandSuggestion(bin string) string {
 	}
 }
 
-// IsDestructive returns true if the command matches any block or ask rule.
-// #444: ask rules are included — the gate classifies 'rm -rf <relative>',
-// 'git reset --hard', 'terraform destroy' etc. as ask-level destructive,
-// and the doc contract (and any danger-assessing caller) must see them.
-// #3125: matches the same multi-view normalization as Check — previously
-// it matched only the raw cmd, so quote-wrapped flags bypassed it too.
 func (g *CommandGate) IsDestructive(cmd string) bool {
 	views := gateMatchViews(cmd)
 	for _, rule := range g.blockRules {
@@ -1126,7 +827,6 @@ func (g *CommandGate) IsDestructive(cmd string) bool {
 	return false
 }
 
-// splitSemicolons splits a command on unquoted semicolons.
 func splitSemicolons(cmd string) []string {
 	var parts []string
 	var current strings.Builder

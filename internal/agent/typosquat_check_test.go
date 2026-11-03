@@ -65,7 +65,7 @@ func TestCheckTyposquatting_DeltaAware(t *testing.T) {
   }
 }`
 	warnings := checkTyposquatting("package.json", oldPkg, newPkg)
-	// 'lodahs' existed before, just changed version - no new typosquat
+
 	if len(warnings) != 0 {
 		t.Fatalf("pre-existing typosquat should not re-alert: %v", warnings)
 	}
@@ -105,7 +105,7 @@ func TestLevenshtein(t *testing.T) {
 		{"cat", "cut", 1},
 		{"kitten", "sitting", 3},
 		{"flaw", "lawn", 2},
-		{"lodahs", "lodash", 2}, // transposition = distance 2
+		{"lodahs", "lodash", 2},
 	}
 	for _, tc := range cases {
 		got := levenshtein(tc.a, tc.b)

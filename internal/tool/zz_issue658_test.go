@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// TestSleepOverflowsRejected covers #658: seconds values that overflow
-// int64 in the seconds->nanoseconds multiplication (e.g. 9223372037 wraps
-// negative) must be rejected with an error, never reported as a successful
-// "Slept for 0s". The clamp happens before the multiplication.
 func TestSleepOverflowsRejected(t *testing.T) {
 	tool := SleepTool{}
 	for _, sec := range []int{1801, 3600, 9223372037, 18446744074} {
@@ -28,7 +24,6 @@ func TestSleepOverflowsRejected(t *testing.T) {
 	}
 }
 
-// TestSleepZeroStillSucceeds: the legitimate zero-duration path stays a success.
 func TestSleepZeroStillSucceeds(t *testing.T) {
 	tool := SleepTool{}
 	input, _ := json.Marshal(map[string]any{"seconds": 0, "description": "t"})
@@ -38,7 +33,6 @@ func TestSleepZeroStillSucceeds(t *testing.T) {
 	}
 }
 
-// TestSleepBoundaryAccepted: exactly 30m is within the cap (interrupted via ctx).
 func TestSleepBoundaryAccepted(t *testing.T) {
 	tool := SleepTool{}
 	input, _ := json.Marshal(map[string]any{"seconds": 1800, "description": "t"})
@@ -50,4 +44,4 @@ func TestSleepBoundaryAccepted(t *testing.T) {
 	}
 }
 
-var _ = fmt.Sprintf // keep fmt if unused in future edits
+var _ = fmt.Sprintf

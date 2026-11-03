@@ -1,10 +1,5 @@
 package agent
 
-// #3629 probe: commandMayRewriteWorkspace must catch tight pipe/semicolon
-// adjacency. The fragment table is space-delimited (" tee "), so
-// `cmd |tee broken.go` matched nothing - the mutation epoch never bumped
-// and the dedup cache replayed stale results over a rewritten workspace.
-
 import "testing"
 
 func mkArgs3629(cmd string) string {
@@ -12,7 +7,7 @@ func mkArgs3629(cmd string) string {
 }
 
 func quoteJSON3629(s string) string {
-	// minimal: no quotes/backslashes in the fixtures
+
 	return `"` + s + `"`
 }
 
@@ -41,7 +36,7 @@ func TestIssue3629_ReadonlyCommandsUnchanged(t *testing.T) {
 			t.Fatalf("read-only command misdetected as rewrite: %q", cmd)
 		}
 	}
-	// Non-shell tools are out of scope.
+
 	if commandMayRewriteWorkspace("read_file", mkArgs3629("whatever |tee x")) {
 		t.Fatal("non-shell tool must not go through shell rewrite detection")
 	}

@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #4779 (S-07): after a push to a review-gated branch, the toolchain must
-// warn inline when the earlier APPROVED review went stale, instead of the
-// merge refusal being the first signal. gh is faked via PATH injection so
-// the full gate path (push receipt -> PR lookup -> decision query) runs.
 func zz4779FakeGh(t *testing.T, prListOut, viewOut string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,8 +27,7 @@ func zz4779Agent(t *testing.T, wd string) *Agent {
 	t.Helper()
 	a := &Agent{}
 	a.staleReview = newStaleReviewState()
-	// WorkingDir without a full ctor: reuse the exported field path used by
-	// tests in this package; fall back to a temp dir when unset.
+
 	a.workingDir = wd
 	return a
 }
@@ -54,7 +49,7 @@ func TestIssue4779_StaleApprovalWarns(t *testing.T) {
 			t.Errorf("warning missing %q: %s", want, got)
 		}
 	}
-	// Once-per-branch cap: a second push does not nag again.
+
 	if again := a.checkPushReviewStaleness("run_command", args, zz4779PushReceipt); again != "" {
 		t.Errorf("second push on same branch must stay silent, got: %s", again)
 	}
@@ -70,16 +65,16 @@ func TestIssue4779_FreshApprovalSilent(t *testing.T) {
 }
 
 func TestIssue4779_NoPRAndNonPushSilent(t *testing.T) {
-	wd := zz4779FakeGh(t, "", "") // gh answers empty: no open PR
+	wd := zz4779FakeGh(t, "", "")
 	a := zz4779Agent(t, wd)
 	if got := a.checkPushReviewStaleness("run_command", []byte(`{"command":"git push -u origin fix/issue-4779"}`), zz4779PushReceipt); got != "" {
 		t.Errorf("no-PR push must stay silent, got: %s", got)
 	}
-	// Non-push command with push-shaped output: silent (shape gate on command).
+
 	if got := a.checkPushReviewStaleness("run_command", []byte(`{"command":"git status"}`), zz4779PushReceipt); got != "" {
 		t.Errorf("non-push command must stay silent, got: %s", got)
 	}
-	// Failed push (no ref-update receipt): silent.
+
 	if got := a.checkPushReviewStaleness("run_command", []byte(`{"command":"git push -u origin fix/issue-4779"}`), "error: fetch failed"); got != "" {
 		t.Errorf("failed push must stay silent, got: %s", got)
 	}

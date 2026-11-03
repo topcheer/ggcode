@@ -134,13 +134,13 @@ func TestReversibilityCheckSafeToolNoWarn(t *testing.T) {
 func TestReversibilityMaxWarnings(t *testing.T) {
 	r := newReversibilityState()
 	r.maxWarnings = 2
-	// First two should warn
+
 	g1 := r.checkPreAction("git_commit", `{"message":"a"}`)
 	g2 := r.checkPreAction("run_command", `{"command":"git reset --hard"}`)
 	if g1 == "" || g2 == "" {
 		t.Fatal("expected first two warnings")
 	}
-	// Third should be suppressed (maxWarnings reached)
+
 	g3 := r.checkPreAction("file_ops", `{"operations":[{"action":"delete","source":"x"}]}`)
 	if g3 != "" {
 		t.Fatalf("expected third warning to be suppressed, got: %s", g3)
@@ -173,9 +173,6 @@ func TestReversibilityCommitAfterStagingNoWarn(t *testing.T) {
 	}
 }
 
-// TestReversibilityMakeTargetSensitivity pins #2552: non-build make targets
-// (clean/fmt/tidy/install-*) must NOT flip buildRan - they used to disarm the
-// commit/push "verify first" guidance without any real compilation.
 func TestReversibilityMakeTargetSensitivity(t *testing.T) {
 	for _, tc := range []struct {
 		cmd   string
@@ -186,8 +183,8 @@ func TestReversibilityMakeTargetSensitivity(t *testing.T) {
 		{`make fmt`, false, false},
 		{`make tidy`, false, false},
 		{`make install-git-hooks`, false, false},
-		{`make`, true, false},               // bare make: default target is conventionally all/build
-		{`{"command":"make"}`, true, false}, // bare make via JSON envelope
+		{`make`, true, false},
+		{`{"command":"make"}`, true, false},
 		{`make build`, true, false},
 		{`make all`, true, false},
 		{`make verify-ci`, true, false},
@@ -205,10 +202,6 @@ func TestReversibilityMakeTargetSensitivity(t *testing.T) {
 	}
 }
 
-// TestReversibilityMultiGitGlobalFlagStripping pins #2560: the range
-// snapshot in stripGitGlobalFlagTokens left later git segments unstripped
-// after the first rebuild - the subcommand anchored on "-C" and the
-// destructive bigram was silently missed.
 func TestReversibilityMultiGitGlobalFlagStripping(t *testing.T) {
 	cases := []struct {
 		name string
@@ -230,10 +223,6 @@ func TestReversibilityMultiGitGlobalFlagStripping(t *testing.T) {
 	}
 }
 
-// TestReversibilityColonValuesInGitFlags pins #2563: git global-flag values
-// legally contain colons (http.proxy=http://p:8080, --git-dir=/a:b/.git);
-// cutting on ':' left value debris that the subcommand anchored on and
-// destructive git went undetected in the reversibility layer.
 func TestReversibilityColonValuesInGitFlags(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -243,9 +232,9 @@ func TestReversibilityColonValuesInGitFlags(t *testing.T) {
 		{"git -c http.proxy=socks5://127.0.0.1:1080 reset --hard", true},
 		{"git -c url.http://example.com.proxy=instead clean -fdx", true},
 		{"git --git-dir=/a:b/.git clean -fd", true},
-		{"git -c color.ui=true clean -fd", true}, // colon-free control
+		{"git -c color.ui=true clean -fd", true},
 		{`{"command":"git -c http.proxy=http://proxy.example:8080 clean -fd"}`, true},
-		{"git -c color.ui=true log", false}, // benign control
+		{"git -c color.ui=true log", false},
 	}
 	for _, tc := range cases {
 		if got := isDestructiveGit(tc.cmd); got != tc.want {

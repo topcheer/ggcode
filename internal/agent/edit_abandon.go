@@ -7,27 +7,9 @@ import (
 	"sync"
 )
 
-// editAbandonState detects when the agent has edited files but then shifted
-// its attention to entirely different files without verifying the edits.
-//
-// This is inspired by the PASTE (Pattern-Aware Speculative Tool Execution)
-// framework (Sui et al., March 2026) and LLMCompiler (ICML 2024), which show
-// that coding agent tool sequences follow predictable patterns:
-// read -> edit -> build -> test. When the agent breaks this pattern by
-// editing files then pivoting to unrelated exploration, the unverified edits
-// are likely to be forgotten -- a qualitative attention-shift failure that
-// simple count-based verification-debt detectors cannot capture.
-//
-// Key distinction from verification_debt:
-//   - verification_debt: quantitative (warns at 5+ total unverified edits)
-//   - edit_abandon: qualitative (warns when ATTENTION shifts away from
-//     edited files to unrelated files, regardless of edit count)
-//
-// Zero LLM cost. Non-blocking.
-
 const (
-	eaMinEditedFiles    = 2 // need at least 2 edited files to be "abandonable"
-	eaMinAttentionShift = 3 // 3+ consecutive tool calls on non-edited files
+	eaMinEditedFiles    = 2
+	eaMinAttentionShift = 3
 	eaMaxWarnings       = 2
 	eaMinTotalCalls     = 6
 )
@@ -35,10 +17,8 @@ const (
 type editAbandonState struct {
 	mu sync.Mutex
 
-	// files that have been modified but not yet verified
 	editedFiles map[string]bool
 
-	// count of consecutive tool calls targeting files NOT in editedFiles
 	consecutiveNonEdit int
 
 	totalCalls int
@@ -62,10 +42,8 @@ func (s *editAbandonState) reset() {
 	s.fired = false
 }
 
-// eaPathRe extracts the "path" or "file" field from a JSON tool argument string.
 var eaPathRe = regexp.MustCompile(`"(?:path|file|file_path)"\s*:\s*"([^"]+)"`)
 
-// extractEAPaths pulls file paths from tool call arguments via regex.
 func extractEAPaths(args string) []string {
 	if args == "" {
 		return nil
@@ -78,7 +56,6 @@ func extractEAPaths(args string) []string {
 	return paths
 }
 
-// eaIsEditTool is derived from the canonical sourceMutatingTools superset (#738).
 func eaIsEditTool(tool string) bool {
 	return sourceMutatingTools[tool]
 }
@@ -117,7 +94,6 @@ func eaExtractCommand(args string) string {
 	return ""
 }
 
-// recordToolCall updates the abandonment state based on the tool called.
 func (s *editAbandonState) recordToolCall(tool, args string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,7 +142,6 @@ func (s *editAbandonState) recordToolCall(tool, args string) {
 	s.consecutiveNonEdit++
 }
 
-// maybeWarn returns a guidance message if edit abandonment is detected.
 func (s *editAbandonState) maybeWarn() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// r388 (FastContext Kim et al. 2026): Explore sub-agent results carry a
-// structured "## Regions" section that wait_agent converts into explicit
-// targeted-read lines for the parent.
 func TestFormatExploreRegions(t *testing.T) {
 	result := `Explored the retry logic. The backoff loop lives in one place.
 
@@ -33,7 +30,7 @@ func TestFormatExploreRegionsNoMarker(t *testing.T) {
 }
 
 func TestFormatExploreRegionsBadRanges(t *testing.T) {
-	// Malformed ranges are skipped, not fatal.
+
 	result := "## Regions\na.go:0-9 - zero start\nb.go:30-10 - inverted\nc.go:5-9 - valid"
 	out := formatExploreRegions(result)
 	if !strings.Contains(out, "c.go (offset 5, limit 5)") {

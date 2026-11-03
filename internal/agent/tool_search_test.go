@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// fakeMCPTool is a minimal registry-backed MCP-named tool for wiring tests.
 type fakeMCPTool struct {
 	name string
 }
@@ -26,8 +25,6 @@ func (f *fakeMCPTool) Execute(_ context.Context, _ json.RawMessage) (tool.Result
 	return tool.Result{Content: "ok"}, nil
 }
 
-// newToolSearchTestAgent builds an Agent whose registry carries nMCP MCP tools
-// and runs the run-start tool search init exactly as agent.go does.
 func newToolSearchTestAgent(t *testing.T, nMCP int) (*Agent, *tool.Registry) {
 	t.Helper()
 	reg := tool.NewRegistry()
@@ -44,12 +41,8 @@ func newToolSearchTestAgent(t *testing.T, nMCP int) (*Agent, *tool.Registry) {
 	return a, reg
 }
 
-// TestAgentExecuteToolDispatchesToolSearch covers the agent_tool.go dispatch:
-// the meta-tool is handled agent-side without a registry lookup, and a
-// successful search feeds activation state seen by the next request.
 func TestAgentExecuteToolDispatchesToolSearch(t *testing.T) {
-	// Deferred disclosure is opt-in only (default-off ruling); enable it
-	// for the mechanism tests so they exercise the feature, not the default.
+
 	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold)
 	if !a.toolSearch.enabled {
@@ -76,9 +69,6 @@ func TestAgentExecuteToolDispatchesToolSearch(t *testing.T) {
 	}
 }
 
-// TestAgentExecuteToolAutoActivatesDeferredMCP covers the by-name fallback:
-// calling a deferred MCP tool directly executes it AND promotes its schema so
-// subsequent requests stay consistent with tools the conversation references.
 func TestAgentExecuteToolAutoActivatesDeferredMCP(t *testing.T) {
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold+2)
 	target := "mcp__srv__tool_07"
@@ -99,9 +89,6 @@ func TestAgentExecuteToolAutoActivatesDeferredMCP(t *testing.T) {
 	}
 }
 
-// TestAgentBelowThresholdSendsFullList verifies the send-site behavior end to
-// end when tool search is disabled: every registered tool (no meta-tool) is
-// included, so small setups keep zero-round-trip semantics.
 func TestAgentBelowThresholdSendsFullList(t *testing.T) {
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold-1)
 	if a.toolSearch.enabled {
@@ -152,8 +139,7 @@ func TestToolSearchBelowThresholdKeepsFullList(t *testing.T) {
 }
 
 func TestToolSearchDefersAndActivates(t *testing.T) {
-	// Deferred disclosure is opt-in only (default-off ruling); enable it
-	// for the mechanism tests so they exercise the feature, not the default.
+
 	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	s := newToolSearchState()
 	defs := toolSearchTestDefs(toolSearchThreshold+5, 3)
@@ -162,7 +148,7 @@ func TestToolSearchDefersAndActivates(t *testing.T) {
 		t.Fatal("expected enabled at/above threshold")
 	}
 	got := s.activeDefs(defs)
-	// core + tool_search meta-tool only; MCP schemas deferred.
+
 	if want := toolSearchThreshold + 5 - (toolSearchThreshold + 5) + 3 + 1; len(got) != want {
 		t.Fatalf("expected %d defs (3 core + meta), got %d", want, len(got))
 	}
@@ -186,7 +172,7 @@ func TestToolSearchDefersAndActivates(t *testing.T) {
 	if !strings.Contains(res.Content, "mcp__github__") {
 		t.Fatalf("expected github tools in result, got: %s", res.Content)
 	}
-	// Activated schemas now appear in the next request.
+
 	got2 := s.activeDefs(defs)
 	nActivated := 0
 	for _, d := range got2 {
@@ -197,7 +183,7 @@ func TestToolSearchDefersAndActivates(t *testing.T) {
 	if nActivated == 0 {
 		t.Fatal("search did not activate any schema")
 	}
-	// Second search for the same scope returns nothing (already activated).
+
 	res2 := s.executeResult(json.RawMessage(`{"query":"github pull"}`))
 	if res2.IsError {
 		t.Fatalf("unexpected error result: %s", res2.Content)
@@ -208,8 +194,7 @@ func TestToolSearchDefersAndActivates(t *testing.T) {
 }
 
 func TestToolSearchAutoActivateByName(t *testing.T) {
-	// Deferred disclosure is opt-in only (default-off ruling); enable it
-	// for the mechanism tests so they exercise the feature, not the default.
+
 	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	s := newToolSearchState()
 	defs := toolSearchTestDefs(toolSearchThreshold, 0)
@@ -294,15 +279,8 @@ func TestToolSearchRequiresQuery(t *testing.T) {
 	}
 }
 
-// TestServerToolSearchHandoff verifies the server-side Tool Search Tool
-// handoff (Anthropic advanced-tool-use beta): disable() yields the client
-// meta-tool so activeDefs returns the full registry, and markServerDeferred
-// flags exactly the MCP schemas for defer_loading while built-ins stay
-// non-deferred (the API requires >=1 non-deferred tool).
 func TestServerToolSearchHandoff(t *testing.T) {
-	// Client-side deferred disclosure is opt-in only (default-off ruling
-	// 2026-09-21); this handoff test still exercises the client->server
-	// transition mechanics, so enable the client side explicitly.
+
 	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold)
 	if !a.toolSearch.enabled {
@@ -334,10 +312,6 @@ func TestServerToolSearchHandoff(t *testing.T) {
 	}
 }
 
-// TestToolSearchDefaultOff pins the 2026-09-21 ruling: deferred MCP schema
-// disclosure must NOT ship by default - each tool_search lookup is a full
-// LLM round-trip, which costs far more than the upfront schemas it saves.
-// A registry above the threshold with no env opt-in must send the full list.
 func TestToolSearchDefaultOff(t *testing.T) {
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold+5)
 	if a.toolSearch.enabled {

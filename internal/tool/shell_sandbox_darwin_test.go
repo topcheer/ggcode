@@ -22,8 +22,7 @@ func TestWrapShellCommandOS_DarwinRewrites(t *testing.T) {
 
 	wrapped, err := wrapShellCommandOS(cmd, workspace, p)
 	if err != nil {
-		// sandbox-exec missing: the contract is fail-closed, not silently
-		// unwrapped.
+
 		if errors.Is(err, errSandboxUnavailable) {
 			t.Skipf("sandbox-exec unavailable: %v", err)
 		}
@@ -69,10 +68,7 @@ func TestSeatbeltProfile_RejectsUnsafePath(t *testing.T) {
 }
 
 func TestRunCommand_SandboxDeniesHomeWrite(t *testing.T) {
-	// NOTE: this package's TestMain redirects HOME to a scratch dir that
-	// lives under TMPDIR (and is therefore sandbox-allowed). The denial
-	// probe must target the REAL user home, so resolve it from the passwd
-	// database instead of the environment.
+
 	u, err := user.Current()
 	if err != nil || u.HomeDir == "" {
 		t.Skipf("cannot resolve real home dir: %v", err)

@@ -8,13 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// #3835: commands-only steps (on_commands, no artifact_glob) were
-// permanently incomplete - every artifact completion path bails on the
-// empty glob - so any step listing them in Requires deadlocked block mode
-// on a spec that could never be satisfied. Grounding lives inside
-// recordAttempt's multi-step attribution walk: a successful guarded
-// command IS the product of a commands-only step.
-
 const spec3835 = `{
   "steps": [
     {"id":"tests","on_commands":["go test*"]},
@@ -27,9 +20,6 @@ var push3835 = provider.ToolCallDelta{Name: "run_command", Arguments: json.RawMe
 var goTest3835 = provider.ToolCallDelta{Name: "run_command", Arguments: json.RawMessage(`{"command":"go test ./..."}`)}
 var makeBuild3835 = provider.ToolCallDelta{Name: "run_command", Arguments: json.RawMessage(`{"command":"make build"}`)}
 
-// Core deadlock: before the guarded command succeeds, release blocks on the
-// commands-only tests step; after a successful `go test` the step grounds
-// and the dependent unblocks (previously impossible - no artifact existed).
 func TestIssue3835_CommandsOnlyStepGroundsOnSuccess(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3835)
 	if v := e.checkPreconditions(push3835.Name, push3835.Arguments); v == nil || v.Missing != "tests" {
@@ -44,9 +34,6 @@ func TestIssue3835_CommandsOnlyStepGroundsOnSuccess(t *testing.T) {
 	}
 }
 
-// A FAILED guarded command must not ground (failure ledger keeps it
-// incomplete and the block stays honest), and a command matching no
-// on_commands pattern must not ground either.
 func TestIssue3835_FailedOrNonMatchingCommandDoesNotGround(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3835)
 	e.recordAttempt("run_command", goTest3835.Arguments, tool.Result{Content: "exit status 1: FAIL", IsError: true})
@@ -62,9 +49,6 @@ func TestIssue3835_FailedOrNonMatchingCommandDoesNotGround(t *testing.T) {
 	}
 }
 
-// Hybrid steps (artifact_glob AND on_commands) keep artifact precedence:
-// a successful matching command alone must NOT ground them - the glob is
-// the stronger, filesystem-grounded proof.
 func TestIssue3835_HybridStepKeepsArtifactPrecedence(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3835)
 	e.recordAttempt("run_command", makeBuild3835.Arguments, tool.Result{Content: "ok built"})
@@ -73,8 +57,6 @@ func TestIssue3835_HybridStepKeepsArtifactPrecedence(t *testing.T) {
 	}
 }
 
-// outstandingSteps must continue to ignore commands-only steps (no artifact
-// to expect) - the fix must not surface them in the end-of-run audit.
 func TestIssue3835_CommandsOnlyStepNotInAudit(t *testing.T) {
 	e := newWFEngineWithSpec(t, spec3835)
 	e.recordAttempt("run_command", goTest3835.Arguments, tool.Result{Content: "ok"})

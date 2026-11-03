@@ -5,13 +5,9 @@ import (
 	"testing"
 )
 
-// #1692 case 3: query with tags filters (the parameter docs promise it).
-// #1692 case 4: same-slug different-title adds disambiguate instead of
-// silently overwriting.
 func Test1692KnowledgeGraphTagsAndSlug(t *testing.T) {
 	tt := &KnowledgeGraphTool{WorkingDir: t.TempDir()}
 
-	// Two different titles, same slug "c-api".
 	add := func(title, content string) string {
 		p := &kgParams{Action: "add", Title: title, Content: content, Type: "note"}
 		var raw json.RawMessage
@@ -35,7 +31,6 @@ func Test1692KnowledgeGraphTagsAndSlug(t *testing.T) {
 		t.Fatalf("colliding node must be disambiguated, got %+v", s.Nodes["c-api-2"])
 	}
 
-	// Same title again: legitimate update path, still one node.
 	add("C++ API", "updated")
 	s2, _ := tt.load()
 	if s2.Nodes["c-api-3"] != nil {
@@ -45,7 +40,6 @@ func Test1692KnowledgeGraphTagsAndSlug(t *testing.T) {
 		t.Fatalf("same-title re-add must update in place, got %q", s2.Nodes["c-api"].Content)
 	}
 
-	// Tags filter: query with tags only returns nodes carrying them.
 	tagged := &kgParams{Action: "add", Title: "tagged node", Content: "x", Type: "note", Tags: []string{"alpha"}}
 	b2, _ := json.Marshal(tagged)
 	tt.Execute(nil, b2)

@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 )
 
-// ————————————————————————————————————————
-// TeamCreate
-// ————————————————————————————————————————
-
 type TeamCreateTool struct {
 	Manager *swarm.Manager
 }
@@ -66,10 +62,6 @@ func (t TeamCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// ————————————————————————————————————————
-// TeamDelete
-// ————————————————————————————————————————
-
 type TeamDeleteTool struct {
 	Manager *swarm.Manager
 }
@@ -112,10 +104,6 @@ func (t TeamDeleteTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 	return Result{Content: fmt.Sprintf("Team %s deleted.\n", args.TeamID)}, nil
 }
-
-// ————————————————————————————————————————
-// TeammateSpawn
-// ————————————————————————————————————————
 
 type TeammateSpawnTool struct {
 	Manager *swarm.Manager
@@ -188,10 +176,6 @@ func (t TeammateSpawnTool) Execute(_ context.Context, input json.RawMessage) (Re
 	return Result{Content: string(out) + "\n"}, nil
 }
 
-// ————————————————————————————————————————
-// TeammateList
-// ————————————————————————————————————————
-
 type TeammateListTool struct {
 	Manager *swarm.Manager
 }
@@ -253,10 +237,6 @@ func (t TeammateListTool) Execute(_ context.Context, input json.RawMessage) (Res
 	return Result{Content: sb.String()}, nil
 }
 
-// ————————————————————————————————————————
-// TeammateShutdown
-// ————————————————————————————————————————
-
 type TeammateShutdownTool struct {
 	Manager *swarm.Manager
 }
@@ -306,10 +286,6 @@ func (t TeammateShutdownTool) Execute(_ context.Context, input json.RawMessage) 
 	return Result{Content: fmt.Sprintf("Teammate %s in team %s shut down.\n", args.TeammateID, args.TeamID)}, nil
 }
 
-// ————————————————————————————————————————
-// TeammateResults — collect task outputs from teammates
-// ————————————————————————————————————————
-
 type TeammateResultsTool struct {
 	Manager *swarm.Manager
 }
@@ -355,7 +331,6 @@ func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	// Single teammate result
 	if args.TeammateID != "" {
 		result, ok := t.Manager.GetTeammateResult(args.TeamID, args.TeammateID)
 		if !ok {
@@ -364,25 +339,21 @@ func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (
 		return Result{Content: fmt.Sprintf("Result from %s:\n%s\n", args.TeammateID, result)}, nil
 	}
 
-	// All teammate results
 	results := t.Manager.GetTeamResults(args.TeamID)
 	if len(results) == 0 {
 		return Result{Content: "No results available from any teammate yet.\n"}, nil
 	}
 
-	// Get team info for names
 	team, ok := t.Manager.GetTeam(args.TeamID)
 	if !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("team %q not found", args.TeamID)}, nil
 	}
 
-	// Build name lookup
 	names := make(map[string]string)
 	for _, tm := range team.Teammates {
 		names[tm.ID] = tm.Name
 	}
 
-	// Sort by teammate ID for stable output
 	ids := make([]string, 0, len(results))
 	for id := range results {
 		ids = append(ids, id)

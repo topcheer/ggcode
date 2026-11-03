@@ -16,7 +16,7 @@ func TestConsensusState_BelowThreshold(t *testing.T) {
 	s := newConsensusState()
 	s.recordFiring("Error Rush", 1)
 	s.recordFiring("Tunnel Vision", 1)
-	// Only 2 detectors, threshold is 3
+
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected empty with only 2 detectors, got: %s", msg)
 	}
@@ -45,32 +45,26 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 	s.recordFiring("Tunnel Vision", 1)
 	s.recordFiring("Analysis Paralysis", 1)
 
-	// First alert
 	if msg := s.check(); msg == "" {
 		t.Fatal("expected first alert")
 	}
 
-	// Advance the tool-call step past the cooldown, fire again (#1446-C:
-	// the step axis is caller-supplied - advancing it is the caller's job).
 	for i := 1; i <= consensusCooldownSteps; i++ {
 		s.recordFiring("Error Rush", 10+i)
 	}
 	s.recordFiring("Tunnel Vision", 10+consensusCooldownSteps)
 	s.recordFiring("Analysis Paralysis", 10+consensusCooldownSteps)
 
-	// Second alert (recurring)
 	if msg := s.check(); msg == "" {
 		t.Fatal("expected second alert")
 	}
 
-	// Reset step again for third attempt
 	for i := 1; i <= consensusCooldownSteps; i++ {
 		s.recordFiring("Error Rush", 30+i)
 	}
 	s.recordFiring("Tunnel Vision", 1)
 	s.recordFiring("Analysis Paralysis", 1)
 
-	// Third alert should be blocked (max 2)
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected no third alert (max %d), got: %s", consensusMaxAlerts, msg)
 	}
@@ -86,7 +80,6 @@ func TestConsensusState_Cooldown(t *testing.T) {
 		t.Fatal("expected first alert")
 	}
 
-	// Immediately fire again within cooldown window
 	s.recordFiring("Error Rush", 1)
 	s.recordFiring("Tunnel Vision", 1)
 	s.recordFiring("Analysis Paralysis", 1)
@@ -113,7 +106,7 @@ func TestConsensusState_Reset(t *testing.T) {
 
 func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 	s := newConsensusState()
-	// First alert
+
 	s.recordFiring("Error Rush", 1)
 	s.recordFiring("Tunnel Vision", 1)
 	s.recordFiring("Analysis Paralysis", 1)
@@ -125,7 +118,6 @@ func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 		t.Errorf("first alert should not contain RECURRING: %s", msg1)
 	}
 
-	// Wait for cooldown (#1446-C: advance the caller-supplied step axis)
 	for i := 1; i <= consensusCooldownSteps; i++ {
 		s.recordFiring("Error Rush", 10+i)
 	}
@@ -142,7 +134,7 @@ func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 
 func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 	s := newConsensusState()
-	// Same detector fires 5 times, but only counts as 1 distinct
+
 	for i := 0; i < 5; i++ {
 		s.recordFiring("Error Rush", 1)
 	}
@@ -150,8 +142,3 @@ func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 		t.Errorf("expected no alert with single distinct detector, got: %s", msg)
 	}
 }
-
-// scanAndCheck and its baseline-slicing tests (incl. the #147 raw-content
-// hazard simulation) were removed with the function itself in the #952
-// follow-up cleanup: firings are recorded explicitly via recordFiring at each
-// detector call site, so there is no content scan left to test.

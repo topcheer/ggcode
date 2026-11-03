@@ -110,7 +110,7 @@ func main() {
 }
 
 func TestCheckDeprecatedAPI_DeltaAware(t *testing.T) {
-	// ioutil already in old content should NOT be flagged
+
 	content := `package main
 import (
 	"io/ioutil"
@@ -145,7 +145,7 @@ this is not valid go
 }
 
 func TestCheckDeprecatedAPI_IoutilAliased(t *testing.T) {
-	// Test ioutil with custom alias
+
 	old := `package main
 func read() {}
 `
@@ -169,14 +169,12 @@ func TestCheckDeprecatedAPI_IoutilAllFunctions(t *testing.T) {
 	for _, fn := range functions {
 		old := "package main\n"
 		new := "package main\nimport \"io/ioutil\"\nfunc main() {\n  _ = ioutil." + fn + "\n}"
-		// Use ioutil directly without import for non-ReadFile/WriteFile
+
 		new = "package main\nimport (\n\"io/ioutil\"\n\"bytes\"\n)\nfunc main() {\n  _, _ = ioutil." + fn + "(nil)\n  _ = bytes.NewBuffer(nil)\n}"
 		result := checkDeprecatedAPI("test.go", old, new)
-		// At minimum, the import itself should be flagged
+
 		if result == "" {
 			t.Errorf("expected warning for ioutil.%s", fn)
 		}
 	}
 }
-
-// contains is defined in reflection_test.go

@@ -1,7 +1,5 @@
 package agent
 
-// r484 probes: harness-side toolflow next-step hint.
-
 import (
 	"os"
 	"path/filepath"
@@ -12,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// buildSessionFile writes a fake session JSONL under <dir>/.ggcode/sessions/
-// (where AnalyzeToolFlows scans): each tool call is one line carrying a
-// "tool_name":"x" field (the format ExtractToolSequence mines).
 func buildSessionFile(t *testing.T, dir, name string, tools ...string) {
 	t.Helper()
 	sessions := filepath.Join(dir, ".ggcode", "sessions")
@@ -39,10 +34,10 @@ func TestToolflowPrefixMatchesSuffix(t *testing.T) {
 		{[]string{"run_command", "git_add"}, true},
 		{[]string{"git_add"}, true},
 		{[]string{"edit_file", "run_command", "git_add"}, true},
-		{[]string{"read_file"}, false}, // present but not a suffix
+		{[]string{"read_file"}, false},
 		{[]string{"read_file", "edit_file"}, false},
 		{[]string{}, false},
-		{[]string{"a", "b", "c", "d", "e"}, false}, // longer than seq
+		{[]string{"a", "b", "c", "d", "e"}, false},
 	}
 	for _, c := range cases {
 		if got := toolflowPrefixMatchesSuffix(c.prefix, seq); got != c.want {
@@ -56,7 +51,7 @@ func TestMaybeToolflowSuggestion_OneShotGate(t *testing.T) {
 	if got := a.maybeToolflowSuggestion([]string{"read_file", "edit_file"}); got != "" {
 		t.Errorf("fired gate must suppress, got %q", got)
 	}
-	// Short history (below min calls) also returns empty without firing.
+
 	b := &Agent{}
 	if got := b.maybeToolflowSuggestion([]string{"read_file"}); got != "" {
 		t.Errorf("short history must be empty, got %q", got)
@@ -75,10 +70,7 @@ func resetToolflowCacheForTest() {
 }
 
 func TestMaybeToolflowSuggestion_ColdStore(t *testing.T) {
-	// HOME pointed at a dir with no .ggcode/sessions: mining returns no
-	// patterns; the call must return "" without firing. The store is
-	// re-mined at most once per TTL window per process (#3436) - a later
-	// run may pick sessions up after the window expires.
+
 	resetToolflowCacheForTest()
 	defer resetToolflowCacheForTest()
 	t.Setenv("HOME", t.TempDir())
@@ -92,9 +84,7 @@ func TestMaybeToolflowSuggestion_ColdStore(t *testing.T) {
 }
 
 func TestMaybeToolflowSuggestion_MatchAndWording(t *testing.T) {
-	// Build a fake sessions dir with one session whose tool sequence repeats
-	// read_file -> edit_file -> run_command six times: prefix [read_file,
-	// edit_file] -> run_command reaches support 6, confidence 1.0.
+
 	dir := t.TempDir()
 	buildSessionFile(t, dir, "s1.jsonl", "read_file", "edit_file", "run_command",
 		"read_file", "edit_file", "run_command",
@@ -124,10 +114,8 @@ func TestMaybeToolflowSuggestion_MatchAndWording(t *testing.T) {
 	}
 }
 
-// r340 consolidation exit: the cmd_snippet suggestion appears only when the
-// matched pattern involves run_command AND support clears the doubled bar.
 func TestToolflowConsolidationAdvice(t *testing.T) {
-	// High-support run_command workflow: must carry the consolidation advice.
+
 	hot := &memory.ToolFlowPattern{
 		Prefix:     []string{"edit_file", "run_command"},
 		Next:       "git_add",
@@ -138,7 +126,7 @@ func TestToolflowConsolidationAdvice(t *testing.T) {
 	if got := a.toolflowConsolidationAdvice(hot); !strings.Contains(got, "cmd_snippet save") {
 		t.Errorf("high-support run_command pattern must suggest cmd_snippet save, got:\n%s", got)
 	}
-	// Just below the bar: no advice (hint-level support is not enough).
+
 	cool := &memory.ToolFlowPattern{
 		Prefix:     []string{"edit_file", "run_command"},
 		Next:       "git_add",
@@ -148,7 +136,7 @@ func TestToolflowConsolidationAdvice(t *testing.T) {
 	if got := a.toolflowConsolidationAdvice(cool); got != "" {
 		t.Errorf("below-bar support must not advise consolidation, got:\n%s", got)
 	}
-	// High support but pure read orchestration: no snippet makes sense.
+
 	read := &memory.ToolFlowPattern{
 		Prefix:     []string{"grep", "read_file"},
 		Next:       "edit_file",
@@ -160,9 +148,6 @@ func TestToolflowConsolidationAdvice(t *testing.T) {
 	}
 }
 
-// End to end: a mined run_command-heavy workflow with support >= the doubled
-// bar produces a hint that carries the consolidation advice; the advice stays
-// reference-level (no instruction wording).
 func TestMaybeToolflowSuggestion_ConsolidationEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	seq := []string{"read_file", "run_command", "git_add"}

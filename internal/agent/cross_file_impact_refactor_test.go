@@ -1,10 +1,5 @@
 package agent
 
-// Helper-level tests for the checkCrossFileImpact decomposition
-// (r116 refactor). The orchestrator's end-to-end behavior is covered by
-// TestIssue550_* and cross_file_impact_test.go; these tests pin the
-// extracted helpers' contracts so future refactors stay semantic-preserving.
-
 import (
 	"go/ast"
 	"go/parser"
@@ -148,13 +143,13 @@ func TestScanSiblingsForImpactHonorsDeadline(t *testing.T) {
 
 func TestResolveImpactPendingsNoopGuards(t *testing.T) {
 	dirFset := token.NewFileSet()
-	// No pendings → no-op even with owners and time left.
+
 	scan := impactSiblingScan{affectedSet: make(map[string]bool)}
 	resolveImpactPendings(dirFset, &scan, "", "", map[string]map[string]bool{"m": {"T": true}}, time.Now().Add(time.Minute))
 	if len(scan.affectedSet) != 0 || len(scan.pkgFiles) != 0 {
 		t.Fatalf("no pendings must be a no-op: %+v", scan)
 	}
-	// Expired deadline → no-op even with pendings.
+
 	file, err := parser.ParseFile(dirFset, "sib.go", "package p\n\nfunc f(s T) { s.m() }\n", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +166,7 @@ func TestResolveImpactPendingsNoopGuards(t *testing.T) {
 }
 
 func TestAnalyzeEditedFileImpactMissingBaselineNil(t *testing.T) {
-	// No git repo → gitFileContentAtHEAD fails → nil, no panic.
+
 	dir := t.TempDir()
 	edited := filepath.Join(dir, "a.go")
 	if err := os.WriteFile(edited, []byte("package p\n"), 0o644); err != nil {

@@ -7,70 +7,16 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Strategy Stagnation Detector
-//
-// Research basis:
-//   - Error Recovery and Fallback Strategies in AI Agent Development
-//     (GoCodeo, 2025): emphasizes "Modular Agent Design for Fallback
-//     Paths" and "Semantic Fallback with Prompt Variants" - agents must
-//     switch strategies after failure, not repeat the same approach.
-//   - From Aleatoric to Epistemic: Exploring Uncertainty Quantification
-//     (arXiv 2501.03282, 2025): under epistemic uncertainty, repeated
-//     identical attempts provide diminishing information gain.
-//   - Agentic Metacognition (arXiv 2509.19783): strategy diversity
-//     after failure is a key metacognitive skill that prevents agents
-//     from getting stuck in local minima.
-//
-// Problem: When a tool call fails (returns an error), the agent often
-// retries with the same tool and same target (file path, command, etc.)
-// without changing its approach. This "strategy stagnation" wastes
-// tokens and indicates the agent is stuck in a local minimum - trying
-// harder with the same strategy instead of trying differently.
-//
-// Existing ggcode detectors that are RELATED but do NOT cover this:
-//   - edit_oscillation.go: detects back-and-forth semantic reversals.
-//   - failed_fix_cascade.go: detects same wrong assumption compounding.
-//   - tool_diversity.go: detects lack of tool variety overall.
-//   - convergence_lock.go: detects repeated failed tool calls generally.
-//
-// Gap: No detector specifically identifies the pattern of same-tool +
-// same-target retries after error. This detector catches when the agent
-// should pivot to a fundamentally different strategy (e.g., read more
-// context, try a different file, use a different tool).
-//
-// Design:
-//   - Tracks the last N tool calls with their name, target, and success.
-//   - When 2+ consecutive failures with same tool + same target occur,
-//     inject guidance to try a different approach.
-//   - Non-blocking advisory, max 2 warnings per run.
-//   - Zero LLM cost - pure deterministic pattern matching.
-
 const (
-	// stagnationHistorySize: number of recent tool attempts to track.
 	stagnationHistorySize = 8
 
-	// stagnationFailureThreshold: consecutive same-tool+target failures
-	// (#1498 case D: was 2 - a single transient failure retried verbatim,
-	// the exact recovery transient_retry endorses, got branded "local
-	// minimum / STOP retrying / waste of tokens" on its SECOND failure.
-	// Three consecutive failures with no approach change is a real rut.)
-	// needed to trigger a warning.
 	stagnationFailureThreshold = 3
 
-	// stagnationMaxWarnings: max warnings per run.
 	stagnationMaxWarnings = 2
 
-	// shellHealthProbeMarker aliases util.ShellHealthProbeCommand: the
-	// literal command the run_command degraded gate directs the agent to
-	// use for shell-channel health checks (#4787 / S-16). Single source in
-	// util so the gate text and this exemption can never drift apart.
 	shellHealthProbeMarker = util.ShellHealthProbeCommand
 )
 
-// isShellOutageFailure reports whether error content carries the Go runtime
-// spawn-failure signature seen during S-16 shell-outage windows: every
-// fork/exec fails with "no such file or directory" for minutes and then
-// self-heals. Environmental, not a strategy problem (#4787).
 func isShellOutageFailure(errContent string) bool {
 	if errContent == "" {
 		return false
@@ -79,14 +25,12 @@ func isShellOutageFailure(errContent string) bool {
 	return strings.Contains(c, "fork/exec") && strings.Contains(c, "no such file or directory")
 }
 
-// stagnationAttempt records one tool call attempt.
 type stagnationAttempt struct {
 	toolName string
-	target   string // extracted key argument (file path, command, etc.)
+	target   string
 	success  bool
 }
 
-// strategyStagnationState tracks recent tool attempts for stagnation.
 type strategyStagnationState struct {
 	recent   []stagnationAttempt
 	warnings int
@@ -101,10 +45,6 @@ func (s *strategyStagnationState) reset() {
 	s.warnings = 0
 }
 
-// stagnationToolCovered reports whether toolName is inside
-// extractStagnationTarget's switch (#3409: only the covered domain is
-// recorded - uncovered tools would all collapse onto the degenerate
-// ""-target trajectory).
 func stagnationToolCovered(toolName string) bool {
 	switch toolName {
 	case "edit_file", "write_file", "read_file", "multi_edit_file",
@@ -117,10 +57,6 @@ func stagnationToolCovered(toolName string) bool {
 	return false
 }
 
-// extractStagnationTarget pulls the primary target identifier from tool
-// call arguments. For file-editing tools, this is the file path. For
-// command/search tools, the command or pattern. Used to detect whether
-// the agent is retrying the exact same target.
 func extractStagnationTarget(toolName, argsJSON string) string {
 	switch toolName {
 	case "edit_file", "write_file", "read_file", "multi_edit_file",
@@ -141,15 +77,13 @@ func extractStagnationTarget(toolName, argsJSON string) string {
 	}
 }
 
-// extractJSONStringFieldStag extracts a string field from JSON, trying
-// multiple keys in order. Returns "" if none found.
 func extractJSONStringFieldStag(jsonStr string, keys ...string) string {
 	for _, k := range keys {
-		// Search for "key": "value" pattern
+
 		search := "\"" + k + "\":\""
 		idx := strings.Index(jsonStr, search)
 		if idx == -1 {
-			// Try with space after colon
+
 			search = "\"" + k + "\": \""
 			idx = strings.Index(jsonStr, search)
 			if idx == -1 {
@@ -166,33 +100,17 @@ func extractJSONStringFieldStag(jsonStr string, keys ...string) string {
 	return ""
 }
 
-// recordAttempt records a tool call result and returns true if a
-// strategy stagnation warning should fire.
 func (s *strategyStagnationState) recordAttempt(toolName, argsJSON string, success bool) bool {
 	return s.recordAttemptDetail(toolName, argsJSON, success, "")
 }
 
-// isShellHealthProbe reports whether argsJSON is the run_command shell-health
-// probe the tool layer emits when the shell channel fails to spawn (#4787 /
-// S-16: during transient fork/exec-ENOENT outage windows, honest shell
-// liveness probes must not be branded "local minimum / STOP retrying" by
-// the stagnation gate - the retries ARE the recovery strategy).
 func isShellHealthProbe(argsJSON string) bool {
 	return strings.Contains(argsJSON, shellHealthProbeMarker)
 }
 
-// recordAttemptDetail is recordAttempt with the failure content available.
-// errContent (when non-empty) enables the #4787 shell-outage exemption.
 func (s *strategyStagnationState) recordAttemptDetail(toolName, argsJSON string, success bool, errContent string) bool {
 	target := extractStagnationTarget(toolName, argsJSON)
-	// #3409: tools OUTSIDE extractStagnationTarget's switch can never yield
-	// a target, and the tail-match (toolName && target) degenerates when
-	// both sides are "" - every distinct call of such a tool collapses onto
-	// ONE trajectory: failures on different real targets falsely chain
-	// into stagnation, and any success erases a genuinely-stuck chain (互消).
-	// Skip recording the uncovered domain entirely. Covered tools keep the
-	// legacy semantics even when extraction comes up empty (the #1498
-	// contract chains same-tool failures on bare/"" targets).
+
 	if !stagnationToolCovered(toolName) {
 		return false
 	}
@@ -202,22 +120,10 @@ func (s *strategyStagnationState) recordAttemptDetail(toolName, argsJSON string,
 		success:  success,
 	}
 
-	// #4787 (S-16) exemption A: shell-health PROBES are the recovery
-	// strategy for a degraded shell channel - never stagnation. Skip
-	// recording them entirely so a probe chain can't later combine with
-	// unrelated run_command failures into a false trajectory.
-	// Exempt FAILED probes only; successful probes must still be recorded
-	// (a recorded success breaks failure chains, cannot fire the gate).
 	if !success && toolName == "run_command" && isShellHealthProbe(argsJSON) {
 		return false
 	}
-	// #4787 (S-16) exemption B: during a shell-outage window (every spawn
-	// fails fork/exec-ENOENT), even legitimate commands look like a
-	// same-target retry rut. The failure is environmental and self-heals;
-	// gate guidance would demand strategy pivots mid-outage. Exempt the
-	// bare fork/exec-ENOENT signature from stagnation chaining.
-	// Exempt the FAILURE signature only; a SUCCESS whose output merely
-	// quotes the signature (logs, this repo's own tests) must be recorded.
+
 	if !success && toolName == "run_command" && isShellOutageFailure(errContent) {
 		return false
 	}
@@ -227,7 +133,6 @@ func (s *strategyStagnationState) recordAttemptDetail(toolName, argsJSON string,
 		s.recent = s.recent[1:]
 	}
 
-	// Check for consecutive same-tool+target failures at the tail.
 	if success || len(s.recent) < stagnationFailureThreshold {
 		return false
 	}
@@ -250,7 +155,6 @@ func (s *strategyStagnationState) recordAttemptDetail(toolName, argsJSON string,
 	return false
 }
 
-// strategyStagnationWarning returns guidance text when the detector fires.
 func strategyStagnationWarning(toolName, target string, failures int) string {
 	msg := "[STRATEGY-STAGNATION] " + toolName
 	if target != "" {

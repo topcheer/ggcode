@@ -6,7 +6,7 @@ import (
 )
 
 func TestExtractSubgoals(t *testing.T) {
-	// 3+ numbered items should be extracted
+
 	text := `Here's my plan:
 1. Fix the auth middleware
 2. Update the test suite for auth
@@ -25,7 +25,7 @@ func TestExtractSubgoals(t *testing.T) {
 }
 
 func TestExtractSubgoalsTooFew(t *testing.T) {
-	// Only 2 items should not trigger
+
 	text := "1. Do thing A\n2. Do thing B"
 	subs := extractSubgoals(text)
 	if subs != nil {
@@ -35,7 +35,7 @@ func TestExtractSubgoalsTooFew(t *testing.T) {
 
 func TestSubgoalRecordAndWarn(t *testing.T) {
 	s := newSubgoalState()
-	// Record a plan with 4 subgoals
+
 	planText := `Plan:
 1. Fix auth middleware
 2. Update test suite
@@ -46,12 +46,9 @@ func TestSubgoalRecordAndWarn(t *testing.T) {
 		t.Fatalf("expected >=3 subgoals tracked, got %d", len(s.subgoals))
 	}
 
-	// Simulate tool calls addressing some subgoals
 	s.recordToolCall("edit_file", `{"path": "auth/middleware.go"}`)
 	s.recordToolCall("edit_file", `{"path": "auth_test.go"}`)
-	// Subgoals 3 and 4 unaddressed
 
-	// Need sgMinIterGap iterations before warning
 	warn := s.maybeWarn(1 + sgMinIterGap)
 	if warn == "" {
 		t.Fatal("expected warning for unaddressed subgoals")
@@ -60,7 +57,6 @@ func TestSubgoalRecordAndWarn(t *testing.T) {
 		t.Errorf("warning missing expected prefix: %s", warn)
 	}
 
-	// Should fire only once
 	warn2 := s.maybeWarn(1 + sgMinIterGap + 5)
 	if warn2 != "" {
 		t.Error("expected no second warning (maxWarns=1)")
@@ -95,7 +91,7 @@ func TestSubgoalReset(t *testing.T) {
 
 func TestExtractSubgoalKeywords(t *testing.T) {
 	kws := extractSubgoalKeywords("Fix the auth middleware")
-	// Should include "auth" and "middleware" but not stop words
+
 	has := func(w string) bool {
 		for _, k := range kws {
 			if k == w {

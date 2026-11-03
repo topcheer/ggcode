@@ -1,11 +1,5 @@
 package tool
 
-// sa-148 (tool composition) probes: the macro builtin must (a) persist and
-// replay reusable read-only tool-call sequences with positional
-// placeholders, (b) refuse write tools at define time so macros can never
-// bypass the per-call permission flow, (c) stop at the first failing step
-// during replay, (d) survive corrupt store files fail-open.
-
 import (
 	"context"
 	"encoding/json"
@@ -15,8 +9,6 @@ import (
 	"testing"
 )
 
-// fakeProbeTool is a minimal Tool registered under a temporarily
-// read-only-whitelisted name so macros can call it in tests.
 type fakeProbeTool struct {
 	name string
 	out  string
@@ -66,8 +58,6 @@ func macroExec(t *testing.T, m *MacroTool, payload string) Result {
 	return res
 }
 
-// P1: define -> list -> get -> run round trip with {{1}} placeholder
-// substitution across two steps.
 func TestSA148_MacroDefineRunRoundTrip(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	def := macroExec(t, m, `{"action":"define","name":"release-check","description":"pre-release checks","steps":[
@@ -107,8 +97,6 @@ func TestSA148_MacroDefineRunRoundTrip(t *testing.T) {
 	}
 }
 
-// P2: write tools are rejected at define time - a macro must never
-// bypass the normal per-call permission flow.
 func TestSA148_MacroRejectsWriteTools(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	for _, bad := range []string{"edit_file", "write_file", "run_command", "macro"} {
@@ -122,7 +110,6 @@ func TestSA148_MacroRejectsWriteTools(t *testing.T) {
 	}
 }
 
-// P3: validation - bad name, empty steps, too many steps, unknown tool.
 func TestSA148_MacroValidation(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	cases := []struct {
@@ -153,7 +140,6 @@ func TestSA148_MacroValidation(t *testing.T) {
 	}
 }
 
-// P4: replay stops at the first failing step and reports which one.
 func TestSA148_MacroRunStopsAtFailure(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	def := macroExec(t, m, `{"action":"define","name":"boom-macro","steps":[
@@ -176,8 +162,6 @@ func TestSA148_MacroRunStopsAtFailure(t *testing.T) {
 	}
 }
 
-// P5: persistence - a fresh MacroTool over the same dir sees saved macros
-// (workspace-shared asset, not per-session).
 func TestSA148_MacroPersistsAcrossInstances(t *testing.T) {
 	m, reg := newMacroTestEnv(t)
 	if res := macroExec(t, m, `{"action":"define","name":"persist-macro","steps":[{"tool":"zz_probe"}]}`); res.IsError {
@@ -188,13 +172,12 @@ func TestSA148_MacroPersistsAcrossInstances(t *testing.T) {
 	if run.IsError {
 		t.Fatalf("second instance must see the macro: %s", run.Content)
 	}
-	// And it really is on disk.
+
 	if _, err := os.Stat(filepath.Join(m.WorkingDir, ".ggcode", macroFileName)); err != nil {
 		t.Fatalf("store file missing: %v", err)
 	}
 }
 
-// P6: corrupt store is quarantined fail-open, not a hard wedge.
 func TestSA148_MacroCorruptStoreFailOpen(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	if err := os.MkdirAll(filepath.Join(m.WorkingDir, ".ggcode"), 0o755); err != nil {
@@ -215,8 +198,6 @@ func TestSA148_MacroCorruptStoreFailOpen(t *testing.T) {
 	}
 }
 
-// P7: placeholder expansion JSON-escapes values so injection cannot break
-// out of the string literal.
 func TestSA148_MacroPlaceholderEscaping(t *testing.T) {
 	m, _ := newMacroTestEnv(t)
 	if res := macroExec(t, m, `{"action":"define","name":"esc-macro","steps":[{"tool":"zz_probe","args":{"q":"{{1}}"}}]}`); res.IsError {

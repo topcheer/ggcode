@@ -10,7 +10,6 @@ import (
 	"testing"
 )
 
-// runGit runs a git command in dir, failing the test on error.
 func runGit542(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -23,7 +22,6 @@ func runGit542(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// initRepo542 creates a temporary git repo with an initial commit.
 func initRepo542(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -38,17 +36,12 @@ func initRepo542(t *testing.T) string {
 	return dir
 }
 
-// TestExitWorktreeRemove_RejectsUserCreatedWorktree verifies Bug A: a manually
-// created worktree (git worktree add outside .ggcode/worktrees) must NOT be
-// recognized as a ggcode-managed worktree; exit_worktree remove must refuse,
-// leaving the directory and the unpushed branch intact.
 func TestExitWorktreeRemove_RejectsUserCreatedWorktree(t *testing.T) {
 	mainRepo := initRepo542(t)
 
 	userWT := filepath.Join(t.TempDir(), "user-worktree")
 	runGit542(t, mainRepo, "worktree", "add", "-b", "userbranch", userWT)
 
-	// Unpushed commit on the user branch — losing it is the destructive bug.
 	if err := os.WriteFile(filepath.Join(userWT, "work.txt"), []byte("unpushed work"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +65,6 @@ func TestExitWorktreeRemove_RejectsUserCreatedWorktree(t *testing.T) {
 		t.Fatalf("unexpected rejection message: %s", res.Content)
 	}
 
-	// The worktree directory and its unpushed branch must survive.
 	if info, err := os.Stat(filepath.Join(userWT, "work.txt")); err != nil || info.IsDir() {
 		t.Fatalf("user worktree file was destroyed: %v", err)
 	}
@@ -81,13 +73,9 @@ func TestExitWorktreeRemove_RejectsUserCreatedWorktree(t *testing.T) {
 		t.Fatal("unpushed branch userbranch was deleted by exit_worktree")
 	}
 
-	// Cleanup worktree registration without touching branches.
 	runGit542(t, mainRepo, "worktree", "remove", "--force", userWT)
 }
 
-// TestExitWorktreeRemove_AllowsGgcodeManagedWorktree verifies the ownership
-// fix does not break the legitimate path: enter_worktree-style worktrees
-// under <main>/.ggcode/worktrees/ are still recognized and removable.
 func TestExitWorktreeRemove_AllowsGgcodeManagedWorktree(t *testing.T) {
 	mainRepo := initRepo542(t)
 
@@ -114,14 +102,10 @@ func TestExitWorktreeRemove_AllowsGgcodeManagedWorktree(t *testing.T) {
 	}
 }
 
-// TestIsInsideWorktree_SubmoduleRejected: a submodule checkout has a .git file
-// too, and must never be treated as a ggcode worktree.
 func TestIsInsideWorktree_SubmoduleRejected(t *testing.T) {
 	parent := initRepo542(t)
 	child := initRepo542(t)
-	// Git >= 2.38.1 denies the local file transport by default
-	// (protocol.file.allow); this temp-dir submodule fixture legitimately
-	// needs it, so enable it for this one command only.
+
 	runGit542(t, parent, "-c", "protocol.file.allow=always", "submodule", "add", child, "sub")
 	runGit542(t, parent, "commit", "-m", "add submodule")
 
@@ -135,11 +119,9 @@ func TestIsInsideWorktree_SubmoduleRejected(t *testing.T) {
 	}
 }
 
-// TestWriteFile_RelativePathResolvedAgainstWorkingDir verifies Bug B: a
-// relative path with WorkingDir set lands in WorkingDir, not the process CWD.
 func TestWriteFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
-	dirA := t.TempDir() // WorkingDir
-	dirB := t.TempDir() // process CWD stand-in
+	dirA := t.TempDir()
+	dirB := t.TempDir()
 
 	tf := WriteFile{WorkingDir: dirA}
 	input, _ := json.Marshal(map[string]any{
@@ -147,7 +129,7 @@ func TestWriteFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 		"content":     "from worktree",
 		"description": "probe",
 	})
-	// chdir to dirB to prove the file does NOT land in the process CWD.
+
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -169,8 +151,6 @@ func TestWriteFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 	}
 }
 
-// TestReadFile_RelativePathResolvedAgainstWorkingDir: read_file resolves
-// relative paths against WorkingDir.
 func TestReadFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 	dirA := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dirA, "rel.txt"), []byte("content-A"), 0644); err != nil {
@@ -187,8 +167,6 @@ func TestReadFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 	}
 }
 
-// TestEditFile_RelativePathResolvedAgainstWorkingDir: edit_file resolves
-// relative paths against WorkingDir.
 func TestEditFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 	dirA := t.TempDir()
 	target := filepath.Join(dirA, "rel.txt")
@@ -213,8 +191,6 @@ func TestEditFile_RelativePathResolvedAgainstWorkingDir(t *testing.T) {
 	}
 }
 
-// TestResolveToolPath covers the shared resolver: absolute paths untouched,
-// relative joined to workingDir, empty rejected.
 func TestResolveToolPath(t *testing.T) {
 	base := string(filepath.Separator) + "abs" + string(filepath.Separator) + "base"
 	got, err := resolveToolPath(base, "/other")
@@ -233,9 +209,6 @@ func TestResolveToolPath(t *testing.T) {
 	}
 }
 
-// TestIsEmptyValue_WhitespaceStringIsEmpty verifies Bug C: a whitespace-only
-// string value (" ") is treated as empty by the agent-level required-param
-// gateway, matching CheckRequired's Trim semantics.
 func TestIsEmptyValue_WhitespaceStringIsEmpty(t *testing.T) {
 	cases := map[string]bool{
 		`""`:    true,
@@ -245,7 +218,7 @@ func TestIsEmptyValue_WhitespaceStringIsEmpty(t *testing.T) {
 		`"a"`:   false,
 		`" a "`: false,
 		`null`:  true,
-		// #568: explicit empty containers are provided values.
+
 		`[]`:    false,
 		`{}`:    false,
 		`0`:     false,
@@ -258,8 +231,6 @@ func TestIsEmptyValue_WhitespaceStringIsEmpty(t *testing.T) {
 	}
 }
 
-// TestValidateRequiredParams_WhitespaceBypass: end-to-end gateway check —
-// a required field set to " " must be reported as missing.
 func TestValidateRequiredParams_WhitespaceBypass(t *testing.T) {
 	schema := json.RawMessage(`{
 		"type": "object",
@@ -276,8 +247,6 @@ func TestValidateRequiredParams_WhitespaceBypass(t *testing.T) {
 	}
 }
 
-// TestValidateRequiredParams_ExplicitEmptyIsProvided: regression guard for
-// #568 — an explicit [] or {} counts as provided; absent and null stay missing.
 func TestValidateRequiredParams_ExplicitEmptyIsProvided(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"files":{"type":"array"}},"required":["files"]}`)
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":[]}`), ""); msg != "" {

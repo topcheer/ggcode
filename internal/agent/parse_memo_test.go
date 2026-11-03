@@ -9,9 +9,6 @@ import (
 
 const memoTestSrc = "package p\n\nfunc F() int { return 1 }\n"
 
-// TestParseGoSourceMemoHit verifies that a repeated call with an identical
-// (filePath, mode, src) key returns the cached result - same *ast.File and
-// *token.FileSet pointers, no re-parse.
 func TestParseGoSourceMemoHit(t *testing.T) {
 	resetParseMemo()
 
@@ -31,15 +28,13 @@ func TestParseGoSourceMemoHit(t *testing.T) {
 	}
 }
 
-// TestParseGoSourceMemoKeyIsolation verifies that differing filePath, mode,
-// or src each get their own cache entry (no cross-key AST sharing).
 func TestParseGoSourceMemoKeyIsolation(t *testing.T) {
 	resetParseMemo()
 
 	fa, _, _ := parseGoSource("a.go", memoTestSrc, 0)
-	fb, _, _ := parseGoSource("b.go", memoTestSrc, 0) // different path
+	fb, _, _ := parseGoSource("b.go", memoTestSrc, 0)
 	fc, _, _ := parseGoSource("a.go", memoTestSrc, parser.ParseComments)
-	fd, _, _ := parseGoSource("a.go", memoTestSrc+"\n// x\n", 0) // different src
+	fd, _, _ := parseGoSource("a.go", memoTestSrc+"\n// x\n", 0)
 
 	for name, f := range map[string]*ast.File{
 		"b.go": fb, "comments-mode": fc, "different-src": fd,
@@ -50,8 +45,6 @@ func TestParseGoSourceMemoKeyIsolation(t *testing.T) {
 	}
 }
 
-// TestParseGoSourceMemoReset verifies resetParseMemo drops all entries: the
-// next identical-key parse must produce a fresh AST.
 func TestParseGoSourceMemoReset(t *testing.T) {
 	resetParseMemo()
 
@@ -63,9 +56,6 @@ func TestParseGoSourceMemoReset(t *testing.T) {
 	}
 }
 
-// TestParseGoSourceMemoErrorSemantics verifies that parse failures are cached
-// exactly like successes: repeated identical bad input yields the same
-// (possibly partial) AST and error, mirroring a direct parser.ParseFile call.
 func TestParseGoSourceMemoErrorSemantics(t *testing.T) {
 	resetParseMemo()
 
@@ -78,20 +68,15 @@ func TestParseGoSourceMemoErrorSemantics(t *testing.T) {
 	if f1 != f2 {
 		t.Error("expected identical (partial) AST across memo hits on error")
 	}
-	// Error values may not be pointer-equal after wrapping; require the same
-	// text so callers' error-handling is stable.
+
 	if err1.Error() != err2.Error() {
 		t.Errorf("error text differs across memo hits: %q vs %q", err1, err2)
 	}
 }
 
-// TestParseGoSourceMemoBounded verifies the memo evicts oldest entries beyond
-// parseMemoMaxEntries instead of growing unboundedly.
 func TestParseGoSourceMemoBounded(t *testing.T) {
 	resetParseMemo()
 
-	// Fill with parseMemoMaxEntries + 1 distinct keys, then re-request the
-	// first: it must have been evicted (fresh AST), proving bounded size.
 	var first *ast.File
 	for i := 0; i <= parseMemoMaxEntries; i++ {
 		f, _, _ := parseGoSource("f.go", memoTestSrc, parser.Mode(i))
@@ -112,10 +97,6 @@ func TestParseGoSourceMemoBounded(t *testing.T) {
 	}
 }
 
-// TestParseGoSourceMemoConcurrent verifies the memo is safe under the access
-// pattern of runChecksParallel: many goroutines parsing overlapping sources
-// (cache hits racing with misses) without corruption or deadlock. Run with
-// -race in CI to make this meaningful.
 func TestParseGoSourceMemoConcurrent(t *testing.T) {
 	resetParseMemo()
 

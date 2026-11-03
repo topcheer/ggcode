@@ -1,55 +1,5 @@
 package agent
 
-// Cross-Turn State Contradiction Detector
-//
-// Research basis:
-//   - "Self-Contra: Self-Contradictory Hallucinations of Large Language Models"
-//     (EMNLP 2024 Findings, arXiv 2305.15852): shows that LLMs frequently
-//     produce self-contradictory statements within the same conversation --
-//     asserting X at one point and asserting not-X (or a different X) later,
-//     without acknowledging the reversal.
-//   - "LLM-as-Judge in Production" (Zylos, 2026): intrinsic self-correction
-//     without external grounding is unreliable; contradictions compound because
-//     the agent never re-checks earlier claims against new evidence.
-//   - SWE-bench trajectory analysis: ~12% of failing trajectories contain
-//     root-cause reversals where the agent identifies the bug in file A, then
-//     later identifies the bug in file B without explaining why the earlier
-//     conclusion was wrong.
-//
-// Problem: AI coding agents often make a definitive root-cause or location
-// claim in one turn ("the bug is in auth.go", "the issue is caused by the
-// config parser"), then in a later turn make a DIFFERENT claim about the same
-// issue ("the real problem is in router.go", "actually the timeout is caused
-// by the retry loop") -- without acknowledging the contradiction. This wastes
-// iterations because the agent may have acted on the now-contradicted claim
-// (edited the wrong file, applied a fix that didn't address the real cause).
-//
-// Distinct from existing detectors:
-//   - circular_reasoning.go: detects tautological justification (correct
-//     because it's correct). Contradiction detection tracks factual reversals
-//     across turns, not structural vacuity.
-//   - selective_evidence.go: detects confirmation bias (emphasizing positives
-//     while dismissing negatives). Contradiction detection is about the agent
-//     disagreeing with its OWN prior statement.
-//   - unverified_claim.go: detects success claims without verification.
-//     Contradiction detection catches the opposite: two conflicting claims
-//     about root cause.
-//   - drift_recurrence.go: detects topic drift. Contradiction detection is
-//     about the same topic but conflicting conclusions.
-//
-// Design:
-//   - Scans assistant text for root-cause / issue-location claim patterns:
-//     1. "the bug/issue/problem/error is in <X>"
-//     2. "the root cause is <X>"
-//     3. "<X> is causing the <Y>"
-//     4. "the error comes from <X>"
-//   - Normalizes the claimed entity (file/module/function name)
-//   - Tracks distinct claims; when a NEW claim contradicts a prior one,
-//     records a contradiction instance
-//   - When 2+ contradictions accumulate, injects guidance to reconcile
-//   - Zero LLM cost -- pure deterministic pattern matching
-//   - Non-blocking advisory, max 2 warnings per run
-
 import (
 	"fmt"
 	"regexp"
@@ -57,45 +7,29 @@ import (
 )
 
 const (
-	// contradictionMaxWarnings: max warnings per run.
 	contradictionMaxWarnings = 2
 
-	// contradictionThreshold: contradictions before warning.
 	contradictionThreshold = 2
 
-	// contradictionMaxClaims: cap stored claims to bound memory.
 	contradictionMaxClaims = 30
 
-	// contradictionMaxExcerpts: max excerpts shown in warning.
 	contradictionMaxExcerpts = 4
 )
 
-// contradictionClaim represents a single root-cause/location claim.
 type contradictionClaim struct {
-	entity    string // normalized claimed location/cause
-	excerpt   string
-	iteration int
-	// acknowledged marks a claim that sits right after an ack phrase
-	// (#1536 case C): it enters history but skips pairing this iteration.
+	entity       string
+	excerpt      string
+	iteration    int
 	acknowledged bool
-	// superseded marks a claim retired by an acknowledged revision
-	// (#1536 case D): kept in history for audit, excluded from pairing.
-	superseded bool
-	// revision marks a claim following a STRONG revision phrase ("I was
-	// wrong", "correction:", ...). A revision retires the superseded
-	// prior claims (#1536 case D) so a later restatement of the corrected
-	// assertion cannot pair against the stale one. Weak openers like
-	// "actually, i" acknowledge without retiring anything.
-	revision bool
+	superseded   bool
+	revision     bool
 }
 
-// contradictionInstance represents a detected cross-turn reversal.
 type contradictionInstance struct {
 	priorClaim contradictionClaim
 	newClaim   contradictionClaim
 }
 
-// contradictionState tracks claims and detected reversals across a run.
 type contradictionState struct {
 	claims         []contradictionClaim
 	contradictions []contradictionInstance
@@ -112,38 +46,27 @@ func (s *contradictionState) reset() {
 	s.warnings = 0
 }
 
-// Root-cause / issue-location claim patterns.
-// Each captures group 1 = the claimed entity (file, module, function, or noun phrase).
 var contradictionClaimPatterns = []*regexp.Regexp{
-	// "the bug/issue/problem/error/failure is in <X>"
+
 	regexp.MustCompile(`(?i)\b(?:the\s+)?(?:bug|issue|problem|error|failure|crash)\s+is\s+(?:in|located in|found in|coming from|from)\s+([A-Za-z_][\w./-]{2,60})`),
 
-	// "the root cause is <X>" (optionally skip "the"/"a"/"an" article)
 	regexp.MustCompile(`(?i)\b(?:the\s+)?root cause\s+is\s+(?:(?:the|a|an)\s+)?([A-Za-z_][\w. /-]{2,60})`),
 
-	// "the source of the problem is <X>"
 	regexp.MustCompile(`(?i)\b(?:the\s+)?source of (?:the\s+)?(?:problem|error|bug)\s+is\s+(?:(?:in|the|a|an)\s+)?([A-Za-z_][\w. /-]{2,60})`),
 
-	// "<X> is causing the <Y>" (multi-word entity, flexible Y)
 	regexp.MustCompile(`(?i)\b([A-Za-z]\w*(?:\s+\w+){0,4})\s+is\s+causing\s+(?:the\s+|a\s+|an\s+)?\w+`),
 
-	// "<X> is the root cause / source of the problem"
 	regexp.MustCompile(`(?i)\b([A-Za-z]\w*(?:\s+\w+){0,4})\s+is\s+(?:the\s+)?(?:root cause|source of (?:the\s+)?(?:problem|error|bug))`),
 
-	// "the real issue is in <X>" (explicitly revising)
 	regexp.MustCompile(`(?i)\b(?:the\s+)?real (?:issue|problem|cause)\s+is\s+(?:in\s+)?([A-Za-z_][\w./-]{2,60})`),
 }
 
-// stopWords for entity normalization -- these are common words that should
-// not be treated as meaningful entities.
 var contradictionStopWords = map[string]bool{
 	"that": true, "this": true, "the": true, "a": true, "an": true,
 	"not": true, "yes": true, "no": true, "it": true, "our": true,
 	"some": true, "most": true, "more": true, "very": true,
 }
 
-// normalizeContradictionEntity normalizes a claimed entity for comparison.
-// Extracts the core identifier (file/module/function name).
 func normalizeContradictionEntity(raw string) string {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimSuffix(raw, ".")
@@ -151,7 +74,6 @@ func normalizeContradictionEntity(raw string) string {
 	raw = strings.TrimSuffix(raw, "'s")
 	raw = strings.ToLower(raw)
 
-	// Strip leading articles from multi-word entities.
 	raw = strings.TrimPrefix(raw, "the ")
 	raw = strings.TrimPrefix(raw, "a ")
 	raw = strings.TrimPrefix(raw, "an ")
@@ -163,7 +85,6 @@ func normalizeContradictionEntity(raw string) string {
 		return ""
 	}
 
-	// If it looks like a file path, keep the last component for comparison.
 	if strings.Contains(raw, "/") {
 		parts := strings.Split(raw, "/")
 		raw = parts[len(parts)-1]
@@ -172,7 +93,6 @@ func normalizeContradictionEntity(raw string) string {
 	return raw
 }
 
-// extractContradictionExcerpt returns a trimmed excerpt around a match.
 func extractContradictionExcerpt(text string, matchStart, matchEnd int) string {
 	start := matchStart - 40
 	if start < 0 {
@@ -189,38 +109,20 @@ func extractContradictionExcerpt(text string, matchStart, matchEnd int) string {
 	return excerpt
 }
 
-// extractClaims finds all root-cause/location claims in text.
 func extractClaims(text string, iteration int) []contradictionClaim {
 	if len(text) < 15 {
 		return nil
 	}
 
 	var claims []contradictionClaim
-	seen := make(map[string]bool) // deduplicate by entity within same text
+	seen := make(map[string]bool)
 
-	// #1447-A: an ACKNOWLEDGED revision is not a contradiction - the
-	// "real issue is in X" pattern's own comment says "(explicitly
-	// revising)", yet the claim was still recorded and paired against the
-	// superseded one: "Earlier I thought A, but I was wrong - the root
-	// cause is B" counted as a contradiction against the detector's own
-	// 'without acknowledging' charter. Skip texts that explicitly
-	// acknowledge the revision.
 	lower := strings.ToLower(text)
-	// #1447-A + #1536 C/D: an ACKNOWLEDGED revision is not a contradiction -
-	// but the old whole-text exemption ("return nil") blinded the detector
-	// to every OTHER claim in the same message and dropped the corrected
-	// claims from history ("actually, i" is an extremely common opener:
-	// "Actually, I already ran the tests. The bug is in handler.go" washed
-	// out the handler.go root-cause migration entirely). Claim-level
-	// proximity instead: a claim is 'acknowledged' only when an ack phrase
-	// sits within a window before it; acknowledged claims are recorded in
-	// history (fixing the stale-pairing false positive when the corrected
-	// assertion is later restated) but skip contradiction pairing this
-	// iteration.
+
 	ackPositions := []int{}
 	revisionPositions := []int{}
 	for _, ack := range []string{"i was wrong", "i was mistaken", "i misread", "earlier i thought", "i previously thought", "let me correct", "correction:", "on second thought", "actually, i", "to correct myself"} {
-		strong := ack != "actually, i" // weak opener: acknowledges, does not retire
+		strong := ack != "actually, i"
 		for start := 0; start < len(lower); {
 			idx := strings.Index(lower[start:], ack)
 			if idx < 0 {
@@ -234,8 +136,7 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 		}
 	}
 	nearAny := func(positions []int, entityStart int) bool {
-		// An ack phrase within 150 chars before the claim entity
-		// acknowledges THAT claim, not one three paragraphs later.
+
 		for _, pos := range positions {
 			if pos <= entityStart && entityStart-pos <= 150 {
 				return true
@@ -277,16 +178,9 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 	return claims
 }
 
-// recordContradictionClaims adds new claims from the current iteration's text
-// and detects contradictions against prior claims.
 func (s *contradictionState) recordContradictionClaims(text string, iteration int) {
 	newClaims := extractClaims(text, iteration)
 
-	// Check new claims against prior claims for contradictions.
-	// #1536 case C: only non-acknowledged claims pair; acknowledged ones
-	// still enter history below (case D) so a later restatement of the
-	// corrected assertion pairs against the CURRENT belief instead of the
-	// superseded one.
 	hasRevision := false
 	for _, nc := range newClaims {
 		if nc.revision {
@@ -294,10 +188,7 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 		}
 	}
 	if hasRevision {
-		// #1536 case D: a strong revision retires prior claims not
-		// re-asserted in the revision message - the agent's standing
-		// belief moved; later restatements of the corrected assertion
-		// must pair against the CURRENT belief, not the stale one.
+
 		reasserted := make(map[string]bool, len(newClaims))
 		for _, nc := range newClaims {
 			reasserted[nc.entity] = true
@@ -314,11 +205,9 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 		}
 		for _, pc := range s.claims {
 			if pc.superseded {
-				continue // retired by an acknowledged revision
+				continue
 			}
-			// A contradiction occurs when the new entity differs from a prior
-			// entity AND they aren't substrings of each other (e.g. "auth" vs
-			// "auth.go" are the same root, not a contradiction).
+
 			if nc.entity == pc.entity {
 				continue
 			}
@@ -330,11 +219,10 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 				priorClaim: pc,
 				newClaim:   nc,
 			})
-			break // only record one contradiction per new claim
+			break
 		}
 	}
 
-	// Append new claims to history (bounded).
 	for _, c := range newClaims {
 		s.claims = append(s.claims, c)
 	}
@@ -343,8 +231,6 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 	}
 }
 
-// maybeWarnContradiction checks for accumulated cross-turn contradictions
-// and returns a guidance message. Returns empty string if no warning is needed.
 func (a *Agent) maybeWarnContradiction(assistantText string, iteration int) string {
 	if a.contradiction == nil {
 		return ""
@@ -363,7 +249,6 @@ func (a *Agent) maybeWarnContradiction(assistantText string, iteration int) stri
 
 	a.contradiction.warnings++
 
-	// Build excerpts from recent contradictions.
 	var excerpts []string
 	startIdx := 0
 	if total > contradictionMaxExcerpts {

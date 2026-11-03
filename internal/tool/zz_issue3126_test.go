@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-// #3126 probes, three parts.
-
-// --- Main: parseFileChanges must register rename-only / binary / pure
-// mode-change files (a partition plan that omits them silently skips
-// staging them).
-
 func TestIssue3126_ParseRenameOnlyDiff(t *testing.T) {
 	diff := "diff --git a/old.go b/new.go\n" +
 		"similarity index 100%\n" +
@@ -44,7 +38,6 @@ func TestIssue3126_ParseModeChangeDiff(t *testing.T) {
 	}
 }
 
-// Mixed: renames must coexist with normal text hunks in one diff.
 func TestIssue3126_MixedRenameAndTextDiff(t *testing.T) {
 	diff := "diff --git a/renamed.go b/renamed.go\n" +
 		"similarity index 90%\n" +
@@ -80,12 +73,9 @@ func TestIssue3126_MixedRenameAndTextDiff(t *testing.T) {
 	}
 }
 
-// --- A: failed jobs must enter the eviction ledger, not squat m.jobs.
-
 func TestIssue3126_FailedJobsAreEvicted(t *testing.T) {
 	m := NewCommandJobManager("")
-	// A shell command ggcode cannot resolve fails at NewShellCommandContext
-	// time - the Start failure path. Fire more than maxFinishedJobs of them.
+
 	dud := "\x00invalid-shell-syntax\x00"
 	for i := 0; i < maxFinishedJobs+5; i++ {
 		snap, err := m.Start(context.Background(), dud, false, 0)
@@ -105,18 +95,15 @@ func TestIssue3126_FailedJobsAreEvicted(t *testing.T) {
 	}
 }
 
-// --- B: start marker exactness.
-
 func TestIssue3126_ConflictStartMarkerExactness(t *testing.T) {
-	// A documentation/fixture example with a longer marker run must NOT
-	// open a conflict region.
+
 	doc := "some doc line\n" +
 		"<<<<<<<< eight markers are not a conflict marker\n" +
 		"trailing\n"
 	if regions := DetectMergeConflicts(doc); len(regions) != 0 {
 		t.Fatalf("8-char marker opened a phantom region: %+v", regions)
 	}
-	// The real form - bare marker or marker + space + label - must work.
+
 	for _, marker := range []string{"<<<<<<<\n", "<<<<<<< HEAD\n"} {
 		doc := "a\n" + marker + "======\n" + ">>>>>>> other\n"
 		if regions := DetectMergeConflicts(doc); len(regions) != 1 {
@@ -125,7 +112,6 @@ func TestIssue3126_ConflictStartMarkerExactness(t *testing.T) {
 	}
 }
 
-// Guard against flake: eviction keeps the most recent finished jobs.
 func TestIssue3126_EvictionKeepsRecent(t *testing.T) {
 	m := NewCommandJobManager("")
 	dud := "\x00invalid-shell-syntax\x00"

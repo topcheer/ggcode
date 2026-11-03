@@ -12,43 +12,14 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// RunStateJournal tracks the lifecycle of agent runs to detect crashes.
-//
-// When an agent starts a run (RunStreamWithContent), it writes a "running"
-// journal entry. When the run completes normally (success or error), it
-// updates the journal to "completed". If the process crashes (SIGKILL,
-// panic, power loss) during a run, the journal remains in "running" state.
-//
-// On the next session load, CheckCrashedRun() detects the stale "running"
-// journal and returns a recovery message so the user knows their previous
-// session was interrupted unexpectedly.
-//
-// This fills a gap identified in competitor analysis: Claude Code detects
-// unexpected exits, Aider uses git checkpoints, Cursor maintains undo
-// history. ggcode previously had no crash detection at all.
-//
-// The journal is intentionally lightweight (single JSON file per session)
-// to minimize I/O overhead on the agent hot path.
-
 const (
 	journalFileName = "run_journal.json"
 
-	// crashLivePIDTrustWindow (#3222): a live-PID "concurrent access" verdict
-	// is only trusted for journals younger than this. Beyond it, PID reuse
-	// (crash + reboot reallocates low PIDs to unrelated long-lived processes)
-	// is far more likely than a same-PID run alive for hours with zero
-	// journal updates, so the entry is reported as a crash suspect.
 	crashLivePIDTrustWindow = 4 * time.Hour
 
-	// runningJournalHardDelete (#3222): running/corrupt journals are exempt
-	// from the normal CleanupOldJournals maxAge so CheckCrashedRun can still
-	// report them on /resume; past this much longer window a report is no
-	// longer actionable and the files are removed to prevent unbounded
-	// accumulation.
 	runningJournalHardDelete = 7 * 24 * time.Hour
 )
 
-// journalDirFunc is the directory resolver. Overridable for testing.
 var journalDirFunc = defaultJournalDir
 
 func defaultJournalDir() string {
@@ -60,37 +31,23 @@ func defaultJournalDir() string {
 	return filepath.Join(configDir, "ggcode", "journals")
 }
 
-// journalDir returns the directory for journal files.
 func journalDir() string {
 	return journalDirFunc()
 }
 
-// RunJournalEntry represents a single run lifecycle state.
 type RunJournalEntry struct {
-	SessionID   string    `json:"session_id"`
-	State       string    `json:"state"` // "running", "completed"
-	StartTime   time.Time `json:"start_time"`
-	EndTime     time.Time `json:"end_time,omitempty"`
-	PID         int       `json:"pid"`
-	UserPrompt  string    `json:"user_prompt,omitempty"`
-	Iterations  int       `json:"iterations,omitempty"`
-	FilesEdited int       `json:"files_edited,omitempty"`
-	Success     bool      `json:"success,omitempty"`
-	// Interrupted holds the r445 continuation snapshot when the run was
-	// user-interrupted (Ctrl+C) rather than crashed. Nil on clean runs.
-	// Consumed (cleared) by CheckContinuation on the next resume.
+	SessionID   string             `json:"session_id"`
+	State       string             `json:"state"`
+	StartTime   time.Time          `json:"start_time"`
+	EndTime     time.Time          `json:"end_time,omitempty"`
+	PID         int                `json:"pid"`
+	UserPrompt  string             `json:"user_prompt,omitempty"`
+	Iterations  int                `json:"iterations,omitempty"`
+	FilesEdited int                `json:"files_edited,omitempty"`
+	Success     bool               `json:"success,omitempty"`
 	Interrupted *InterruptSnapshot `json:"interrupted,omitempty"`
 }
 
-// InterruptSnapshot is the structured continuation point captured when a
-// run is interrupted mid-flight (r445). Unlike the crash path (#1123),
-// which only fires on dead-PID journals, this covers same-session
-// Ctrl+C: the run defer marks the journal completed and stamps the
-// snapshot, so the next resume can tell the model WHERE it was - not
-// just that "operation cancelled" placeholders exist. It is also stamped
-// on a typed retraction-stop interruption (whole-message stop phrase,
-// interrupt_typing.go): the resume then sees both this snapshot and the
-// injected withdrawal notice, so it must not continue the old task.
 type InterruptSnapshot struct {
 	Timestamp    time.Time `json:"timestamp"`
 	LastTool     string    `json:"last_tool,omitempty"`
@@ -103,9 +60,6 @@ func journalPath(sessionID string) string {
 	return filepath.Join(journalDir(), sessionID+"_"+journalFileName)
 }
 
-// MarkRunning writes a "running" journal entry at the start of a run.
-// This is the crash-detection anchor: if the process dies before
-// MarkCompleted is called, the journal stays in "running" state.
 func MarkRunning(sessionID, userPrompt string, pid int) {
 	if sessionID == "" {
 		return
@@ -131,9 +85,7 @@ func MarkRunning(sessionID, userPrompt string, pid int) {
 	}
 
 	path := journalPath(sessionID)
-	// A fresh run invalidates any crash-window sidecar from an older run
-	// (tool_dedup_crash.go): the crash window opens only when the PREVIOUS
-	// run crashed, and MarkRunning starts a new run.
+
 	_ = os.Remove(crashSidecarPath(sessionID))
 	if err := atomicWriteJournal(path, data); err != nil {
 		debug.Log("run_journal", "MarkRunning: write failed: %v", err)
@@ -141,11 +93,6 @@ func MarkRunning(sessionID, userPrompt string, pid int) {
 	debug.Log("run_journal", "MarkRunning: session=%s pid=%d", sessionID, pid)
 }
 
-// atomicWriteJournal writes via tmp+rename (#1666 case 2): MarkRunning
-// runs in the hot path and MarkCompleted runs inside panic-unwinding
-// defers - a SIGKILL/OOM mid-write left a truncated JSON that the reader
-// then DELETED as evidence. Torn writes are now impossible: rename is
-// atomic on every supported filesystem.
 func atomicWriteJournal(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -154,15 +101,11 @@ func atomicWriteJournal(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// MarkCompleted updates the journal to "completed" state. Safe to call
-// even if MarkRunning was never called (no-op if journal doesn't exist).
 func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) {
 	if sessionID == "" {
 		return
 	}
-	// Clean run: the crash sidecar is no longer needed - MarkCompleted is
-	// reached only when the run unwound normally (not via SIGKILL). Runs even
-	// when the journal is missing (no run / already consumed).
+
 	_ = os.Remove(crashSidecarPath(sessionID))
 	path := journalPath(sessionID)
 
@@ -173,10 +116,7 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		// #1666 case 2: do NOT delete - a torn write means the process died
-		// mid-MarkRunning/MarkCompleted (the exact crash this facility
-		// exists to detect). Keep the file for the reader to treat as a
-		// crash suspect.
+
 		debug.Log("run_journal", "MarkCompleted: journal corrupt (%v) - preserved", err)
 		return
 	}
@@ -198,7 +138,6 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 	debug.Log("run_journal", "MarkCompleted: session=%s success=%v", sessionID, success)
 }
 
-// CrashRecoveryInfo describes a detected crashed run.
 type CrashRecoveryInfo struct {
 	SessionID  string    `json:"session_id"`
 	StartTime  time.Time `json:"start_time"`
@@ -207,12 +146,6 @@ type CrashRecoveryInfo struct {
 	AgeHours   float64   `json:"age_hours"`
 }
 
-// CheckCrashedRun checks if the given session has a stale "running" journal
-// entry, indicating the previous run was interrupted by a crash. Returns
-// nil if no crash is detected (journal is completed, missing, or the PID
-// is still alive).
-//
-// The journal file is cleaned up after detection. This is a one-shot check.
 func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 	if sessionID == "" {
 		return nil
@@ -226,10 +159,7 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		// #1666 case 2: a corrupt journal is evidence, not noise - the
-		// process died mid-write, which is itself crash-suspect behavior.
-		// Report it as a crash recovery candidate (best-effort fields) and
-		// PRESERVE the file for inspection instead of deleting it.
+
 		debug.Log("run_journal", "CheckCrashedRun: journal corrupt (%v) - preserved, reporting as crash suspect", err)
 		return &CrashRecoveryInfo{
 			SessionID:  sessionID,
@@ -237,7 +167,6 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 		}
 	}
 
-	// Already completed: clean exit, no crash
 	if entry.State == "completed" {
 		if time.Since(entry.EndTime) > 24*time.Hour {
 			os.Remove(path)
@@ -245,24 +174,15 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 		return nil
 	}
 
-	// State is "running": check if the PID is still alive.
-	// #3222: a live PID alone must not be trusted on old journals - after a
-	// crash + reboot, PIDs are reallocated from the low range and an
-	// unrelated long-lived process can hold the old PID forever, silently
-	// turning every real crash into "concurrent access". For journals older
-	// than crashLivePIDTrustWindow, PID reuse is far more likely than a
-	// same-PID run being alive for hours with zero journal updates, so the
-	// entry is reported as a crash suspect regardless of isProcessAlive.
 	journalAge := time.Since(entry.StartTime)
 	if entry.PID > 0 && isProcessAlive(entry.PID) && journalAge < crashLivePIDTrustWindow {
-		// The process is still running: not a crash, just concurrent access
+
 		return nil
 	}
 	if entry.PID > 0 && isProcessAlive(entry.PID) {
 		debug.Log("run_journal", "CheckCrashedRun: running journal age=%.1fh exceeds trust window despite live PID %d - treating as PID-reuse crash suspect", journalAge.Hours(), entry.PID)
 	}
 
-	// Stale "running" entry with dead PID: this is a crash
 	info := &CrashRecoveryInfo{
 		SessionID:  entry.SessionID,
 		StartTime:  entry.StartTime,
@@ -271,7 +191,6 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 		AgeHours:   time.Since(entry.StartTime).Hours(),
 	}
 
-	// Clean up the stale journal
 	os.Remove(path)
 
 	debug.Log("run_journal", "CheckCrashedRun: detected crash session=%s age=%.1fh",
@@ -280,8 +199,6 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 	return info
 }
 
-// FormatCrashRecoveryMessage formats a human-readable crash recovery message
-// that the agent can inject as context when resuming a crashed session.
 func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 	if info == nil {
 		return ""
@@ -290,10 +207,7 @@ func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 	ageStr := formatDuration(time.Duration(info.AgeHours * float64(time.Hour)))
 
 	return fmt.Sprintf(
-		// #1123: the detection signal (journal State=running + dead PID) only
-		// proves the run did not exit cleanly. Asserting "crashed or killed"
-		// mis-characterizes deliberate Ctrl+C / terminal close / reboot stops
-		// and pushes the agent toward needless defensive git inspection.
+
 		"[Crash Recovery] Your previous session did not exit cleanly "+
 			"(aborted, crashed, or the terminal closed are all possible) "+
 			"approximately %s ago. The last task was: %q. "+
@@ -302,11 +216,6 @@ func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 		ageStr, info.UserPrompt)
 }
 
-// MarkInterrupted stamps a continuation snapshot onto the session journal
-// (r445). Called from the run's cancellation path: MarkCompleted has
-// already flipped State to "completed" (or will - read-modify-write here
-// preserves either), and this adds the WHERE-was-I payload. No-op if the
-// journal does not exist (run never got far enough to MarkRunning).
 func MarkInterrupted(sessionID string, snap InterruptSnapshot) {
 	if sessionID == "" {
 		return
@@ -318,8 +227,7 @@ func MarkInterrupted(sessionID string, snap InterruptSnapshot) {
 	}
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		// Same #1666 discipline as MarkCompleted: corrupt journal is
-		// evidence, never overwrite it.
+
 		return
 	}
 	if snap.Timestamp.IsZero() {
@@ -335,14 +243,8 @@ func MarkInterrupted(sessionID string, snap InterruptSnapshot) {
 	}
 }
 
-// continuationFreshWindow: how long an interrupt snapshot stays meaningful.
-// A Ctrl+C from yesterday is stale context, not a continuation point.
 const continuationFreshWindow = 2 * time.Hour
 
-// CheckContinuation returns a model-facing continuation message if the
-// session's last run was user-interrupted within the fresh window. The
-// snapshot is consumed on read (one-shot, mirroring CheckCrashedRun) so
-// it never replays twice. Returns "" when there is nothing to resume.
 func CheckContinuation(sessionID string) string {
 	if sessionID == "" {
 		return ""
@@ -360,21 +262,14 @@ func CheckContinuation(sessionID string) string {
 	if snap == nil {
 		return ""
 	}
-	// Consume the snapshot regardless of freshness (stale = discard, not
-	// re-offer), then decide whether it merits a message.
+
 	entry.Interrupted = nil
 	if updated, merr := json.Marshal(entry); merr == nil {
 		if werr := atomicWriteJournal(path, updated); werr != nil {
 			debug.Log("run_journal", "CheckContinuation: consume write failed: %v", werr)
 		}
 	}
-	// #3220: Success=true means the run COMPLETED - an Interrupted snapshot
-	// riding on it is the cancel-during-finalize race (err==nil but the ctx
-	// was already cancelled when isCancelled was evaluated), not a real
-	// mid-flight interruption. There is nothing to resume; offering
-	// "continue where it left off" would mislead the model into redoing
-	// finished work. The consume above already cleared the contradictory
-	// snapshot so it cannot replay later.
+
 	if entry.Success {
 		return ""
 	}
@@ -384,10 +279,6 @@ func CheckContinuation(sessionID string) string {
 	return formatContinuationMessage(&entry, snap)
 }
 
-// formatContinuationMessage renders the continuation point for both the
-// model (via AddMessage on resume) and the user (chat system item).
-// Wording deliberately says "interrupted" - never "crashed" (#1123: do
-// not assert a cause the evidence does not support).
 func formatContinuationMessage(entry *RunJournalEntry, snap *InterruptSnapshot) string {
 	var b strings.Builder
 	b.WriteString("Continuation point: the previous run in this session was interrupted mid-flight")
@@ -407,15 +298,6 @@ func formatContinuationMessage(entry *RunJournalEntry, snap *InterruptSnapshot) 
 	return b.String()
 }
 
-// CleanupOldJournals removes journal files older than maxAge. Called at
-// startup to prevent unbounded journal accumulation.
-//
-// #3222: "running"-state journals are NOT removed at maxAge - deleting
-// them silently would destroy crash evidence before CheckCrashedRun ever
-// gets to report it (the only report path is /resume). They are kept until
-// runningJournalHardDelete, a much longer window past which a report is no
-// longer actionable. Corrupt journals (#1666 evidence) get the same grace:
-// unparseable state is treated as running for retention purposes.
 func CleanupOldJournals(maxAge time.Duration) {
 	dir := journalDir()
 	matches, err := filepath.Glob(filepath.Join(dir, "*_"+journalFileName))
@@ -433,11 +315,10 @@ func CleanupOldJournals(maxAge time.Duration) {
 			continue
 		}
 		if info.ModTime().After(cutoff) {
-			continue // young enough: keep regardless of state
+			continue
 		}
 		if info.ModTime().After(hardCutoff) && journalStateUncertain(path) {
-			// running/corrupt: retain for CheckCrashedRun crash reporting
-			// until the hard-delete window expires
+
 			continue
 		}
 		os.Remove(path)
@@ -448,26 +329,18 @@ func CleanupOldJournals(maxAge time.Duration) {
 	}
 }
 
-// journalStateUncertain reports whether the journal at path is in a state
-// whose deletion would destroy unreported crash evidence: "running" or
-// unparseable (#1666 torn writes are themselves crash-suspect evidence).
 func journalStateUncertain(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false // unreadable: fall back to age-based removal
+		return false
 	}
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		return true // corrupt = evidence, retain
+		return true
 	}
 	return entry.State == "running"
 }
 
-// isProcessAlive checks if a process with the given PID is running.
-// Delegates to util.IsProcessAlive, which has a correct Windows
-// implementation (#1490). The previous local Signal(0) version returned
-// false for LIVE processes on Windows (EWINDOWS), so a concurrent /resume
-// misjudged the instance as crashed and os.Remove'd its live crash anchor.
 func isProcessAlive(pid int) bool {
 	return util.IsProcessAlive(pid)
 }

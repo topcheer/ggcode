@@ -8,12 +8,11 @@ import (
 func TestScopeDriftState_Simple(t *testing.T) {
 	s := newScopeDriftState()
 
-	// Simple task: 3 files in 2 directories — should not trigger.
 	s.recordEdit("internal/agent/foo.go")
 	s.recordEdit("internal/agent/bar.go")
 	s.recordEdit("internal/config/baz.go")
 
-	msg := s.check(false) // not complex
+	msg := s.check(false)
 	if msg != "" {
 		t.Fatalf("expected no scope drift warning for 2 dirs, got: %s", msg)
 	}
@@ -22,7 +21,6 @@ func TestScopeDriftState_Simple(t *testing.T) {
 func TestScopeDriftState_TriggerOnDirCount(t *testing.T) {
 	s := newScopeDriftState()
 
-	// Touch 6 directories with 1 file each (simple task, threshold=5).
 	dirs := []string{
 		"internal/agent/a.go",
 		"internal/config/b.go",
@@ -35,7 +33,7 @@ func TestScopeDriftState_TriggerOnDirCount(t *testing.T) {
 		s.recordEdit(f)
 	}
 
-	msg := s.check(false) // simple task, threshold=5 dirs
+	msg := s.check(false)
 	if msg == "" {
 		t.Fatal("expected scope drift warning for 6 dirs on simple task")
 	}
@@ -46,7 +44,6 @@ func TestScopeDriftState_TriggerOnDirCount(t *testing.T) {
 		t.Fatal("fired flag should be true after trigger")
 	}
 
-	// Should only fire once.
 	msg2 := s.check(false)
 	if msg2 != "" {
 		t.Fatal("expected no second warning after already fired")
@@ -56,7 +53,6 @@ func TestScopeDriftState_TriggerOnDirCount(t *testing.T) {
 func TestScopeDriftState_ComplexTaskHigherThreshold(t *testing.T) {
 	s := newScopeDriftState()
 
-	// 7 directories on a complex task (threshold=10) — should NOT trigger.
 	dirs := []string{
 		"internal/agent/a.go",
 		"internal/config/b.go",
@@ -70,7 +66,7 @@ func TestScopeDriftState_ComplexTaskHigherThreshold(t *testing.T) {
 		s.recordEdit(f)
 	}
 
-	msg := s.check(true) // complex task, threshold=10
+	msg := s.check(true)
 	if msg != "" {
 		t.Fatalf("expected no scope drift warning for 7 dirs on complex task, got: %s", msg)
 	}
@@ -79,7 +75,6 @@ func TestScopeDriftState_ComplexTaskHigherThreshold(t *testing.T) {
 func TestScopeDriftState_ComplexTaskTriggers(t *testing.T) {
 	s := newScopeDriftState()
 
-	// 11 directories on a complex task (threshold=10) — should trigger.
 	for i := 0; i < 11; i++ {
 		dir := "pkg" + string(rune('a'+i)) + "/sub"
 		s.recordEdit(dir + "/file.go")
@@ -94,7 +89,6 @@ func TestScopeDriftState_ComplexTaskTriggers(t *testing.T) {
 func TestScopeDriftState_FileCountThreshold(t *testing.T) {
 	s := newScopeDriftState()
 
-	// 26 files in 2 directories — triggers on file count, not dir count.
 	for i := 0; i < 26; i++ {
 		s.recordEdit("internal/agent/file" + string(rune('a'+i%26)) + ".go")
 	}
@@ -111,7 +105,6 @@ func TestScopeDriftState_FileCountThreshold(t *testing.T) {
 func TestScopeDriftState_MinOpsBeforeCheck(t *testing.T) {
 	s := newScopeDriftState()
 
-	// Only 3 productive ops — should not check yet (scopeWarnAfter=6).
 	s.recordEdit("dir1/a.go")
 	s.recordEdit("dir2/b.go")
 	s.recordEdit("dir3/c.go")
@@ -124,7 +117,7 @@ func TestScopeDriftState_MinOpsBeforeCheck(t *testing.T) {
 
 func TestScopeDriftState_EmptyPath(t *testing.T) {
 	s := newScopeDriftState()
-	s.recordEdit("") // should be ignored
+	s.recordEdit("")
 	if len(s.editFiles) != 0 || s.productiveCount != 0 {
 		t.Fatal("empty path should not be recorded")
 	}

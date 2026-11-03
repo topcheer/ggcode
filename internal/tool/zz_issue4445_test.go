@@ -2,11 +2,6 @@
 
 package tool
 
-// #4445 regression: file_ops move must refuse to silently overwrite an
-// existing destination (Unix rename replaces regular files atomically and
-// the EXDEV fallback clobbers via os.WriteFile), and must not RecordRead a
-// destination it never read.
-
 import (
 	"context"
 	"os"
@@ -35,7 +30,7 @@ func TestIssue4445_MoveRefusesExistingDestination(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("move onto existing destination must fail (#4445): %s", result.Content)
 	}
-	// The precious content must be intact and the source untouched.
+
 	if b, _ := os.ReadFile(dst); string(b) != "precious" {
 		t.Fatalf("destination was overwritten: %q (#4445)", b)
 	}

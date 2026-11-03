@@ -1,9 +1,5 @@
 package agent
 
-// Tests for the r492 AREX closed loop: the r392 constraint audit forces a
-// per-item verdict; this file's follow-up state parses that verdict and
-// drives bounded targeted follow-up for [not done] items.
-
 import (
 	"strings"
 	"testing"
@@ -64,7 +60,6 @@ func TestFollowupLoopBoundedAndClosing(t *testing.T) {
 	f := newConstraintFollowupState()
 	reply := "1. [done] done\n2. [not done] docs untouched\n3. [not done] no test yet"
 
-	// Round 1: targeted follow-up naming both unmet items by list text.
 	msg1 := f.checkAndInject(reply, audit)
 	if msg1 == "" {
 		t.Fatal("unmet items must trigger follow-up injection")
@@ -78,7 +73,6 @@ func TestFollowupLoopBoundedAndClosing(t *testing.T) {
 		t.Errorf("round must be 1, got %d", got)
 	}
 
-	// Round 2: still unmet -> second targeted injection.
 	if msg2 := f.checkAndInject(reply, audit); msg2 == "" {
 		t.Fatal("second unmet verdict must inject round 2")
 	}
@@ -86,7 +80,6 @@ func TestFollowupLoopBoundedAndClosing(t *testing.T) {
 		t.Errorf("round must be 2, got %d", got)
 	}
 
-	// Round 3: budget exhausted -> ONE closing notice, then silence.
 	msg3 := f.checkAndInject(reply, audit)
 	if msg3 == "" || !strings.Contains(msg3, "state each remaining gap") {
 		t.Fatalf("post-budget reply must be the explicit-gap closing notice, got:\n%s", msg3)
@@ -105,7 +98,7 @@ func TestFollowupClosesCleanlyWhenAllDone(t *testing.T) {
 }
 
 func TestFollowupInactiveBeforeAuditFires(t *testing.T) {
-	audit := newConstraintAuditState() // not fired
+	audit := newConstraintAuditState()
 	audit.constraints = []string{"a requirement", "b requirement"}
 	f := newConstraintFollowupState()
 	if msg := f.checkAndInject("1. [not done] nope", audit); msg != "" {

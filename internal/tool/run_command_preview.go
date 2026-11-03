@@ -7,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// dryRunPreview renders the r451 command rehearsal for the run_command
-// dry_run path. Pure lexical analysis - the command is never spawned.
 func (t RunCommand) dryRunPreview(command string) Result {
 	rep := permission.PreviewCommand(command)
 	var b strings.Builder

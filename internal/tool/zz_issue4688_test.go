@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #4688: URLs and emails in commit messages are not file references. Any
-// message carrying a PR/issue link used to raise phantom absent-file
-// warnings ("github.com", "bar.com", "page.html"); both must stay silent
-// while genuine phantom-file detection stays live.
-
 func TestIssue4688UrlInMessageNoPhantomWarning(t *testing.T) {
 	msg := "fix(session): repair rollback in git_commit.go (see https://github.com/topcheer/ggcode/pull/4648)"
 	got := AnalyzeMessageDiffConsistency(msg, consistencyDiff)
@@ -35,8 +30,7 @@ func TestIssue4688EmailInMessageNoPhantomWarning(t *testing.T) {
 }
 
 func TestIssue4688BareDomainNoPhantomWarning(t *testing.T) {
-	// Scheme-less host mention - covered by the public-suffix shape filter,
-	// not the URL stripper.
+
 	msg := "fix: git_commit.go mirrors an upstream pattern from github.com"
 	got := AnalyzeMessageDiffConsistency(msg, consistencyDiff)
 	if got != "" {
@@ -45,8 +39,7 @@ func TestIssue4688BareDomainNoPhantomWarning(t *testing.T) {
 }
 
 func TestIssue4688RealPhantomStillWarnsAlongsideUrl(t *testing.T) {
-	// A genuine absent-file mention next to a PR link must still warn - the
-	// filter must not over-suppress real detection.
+
 	msg := "fix(tool): repair checkCommitMessageQuality in provider_panel.go, refs https://github.com/topcheer/ggcode/issues/4688"
 	got := AnalyzeMessageDiffConsistency(msg, consistencyDiff)
 	if !strings.Contains(got, "provider_panel.go") {

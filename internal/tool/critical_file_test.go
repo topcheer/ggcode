@@ -30,7 +30,7 @@ func TestCriticalFileWarning(t *testing.T) {
 		{"eslint config", "proj/eslint.config.js", "", "Linter/formatter", false},
 		{"biome.json", "proj/biome.json", "", "Linter/formatter", false},
 		{"pyproject.toml", "proj/pyproject.toml", "", "poetry install", false},
-		// Non-critical files return empty
+
 		{"regular go file", "proj/main.go", "", "", true},
 		{"regular md file", "proj/README.md", "", "", true},
 		{"regular test file", "proj/foo_test.go", "", "", true},
@@ -57,17 +57,15 @@ func TestCriticalFileWarning(t *testing.T) {
 }
 
 func TestCriticalFileWarning_NoFalsePositives(t *testing.T) {
-	// Files with similar names but in wrong location should not match
-	// unless they actually look like the critical file.
+
 	nonMatching := []string{
 		"vendor/go.mod.backup",
 		"docs/go.mod.txt",
-		"some/path/Dockerfile.readme", // dockerfile. prefix matches, but this is a readme
+		"some/path/Dockerfile.readme",
 	}
 	for _, p := range nonMatching {
 		got := criticalFileWarning(p)
-		// Dockerfile.readme will match dockerfile. prefix — that's acceptable
-		// since it's still likely about Docker. We just verify no crash.
+
 		_ = got
 	}
 }

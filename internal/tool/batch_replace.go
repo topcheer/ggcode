@@ -17,13 +17,9 @@ const (
 	maxBatchReplaceMatches      = 500
 	maxBatchReplacePatternLen   = 10 * 1024
 	maxBatchReplaceReplaceLen   = 100 * 1024
-	maxBatchReplacePayloadBytes = 5 * 1024 * 1024 // 5MB combined file content
+	maxBatchReplacePayloadBytes = 5 * 1024 * 1024
 )
 
-// BatchReplace applies a literal or regex find-and-replace across multiple files
-// in a single tool call. This is the "codemod" use case: renaming a symbol,
-// replacing a deprecated API call, or standardizing a pattern across a codebase
-// without reading and editing each file individually.
 type BatchReplace struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -75,16 +71,14 @@ func (t BatchReplace) Parameters() json.RawMessage {
 	}`)
 }
 
-// batchReplaceFileResult is the per-file outcome.
 type batchReplaceFileResult struct {
 	Path       string `json:"path"`
-	Status     string `json:"status"`                // "changed", "skipped", "error"
-	Matches    int    `json:"matches,omitempty"`     // number of replacements
-	SampleDiff string `json:"sample_diff,omitempty"` // truncated first diff line (dry_run only)
+	Status     string `json:"status"`
+	Matches    int    `json:"matches,omitempty"`
+	SampleDiff string `json:"sample_diff,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
-// batchReplaceContent is the full structured output.
 type batchReplaceContent struct {
 	Summary      string                   `json:"summary"`
 	FilesChanged int                      `json:"files_changed"`
@@ -124,7 +118,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("too many files: got %d, max %d", len(args.Files), maxBatchReplaceFiles)}, nil
 	}
 
-	// Compile regex if needed.
 	var re *regexp.Regexp
 	if args.IsRegex {
 		var err error
@@ -132,16 +125,12 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid regex pattern: %v", err)}, nil
 		}
-		// Go's regexp.Expand silently expands $N references to nonexistent
-		// capture groups as EMPTY strings — a literal "$5" intent would
-		// silently delete all matches (#385). Reject out-of-range group
-		// references up front; literal dollars must be written as $$.
+
 		if bad := invalidGroupRefs(re, args.Replacement); bad != "" {
 			return Result{IsError: true, Content: fmt.Sprintf("replacement references capture group %s but the pattern has only %d group(s); use $$ for a literal $", bad, re.NumSubexp())}, nil
 		}
 	}
 
-	// Deduplicate file paths preserving order.
 	seen := map[string]struct{}{}
 	var paths []string
 	for _, f := range args.Files {
@@ -156,7 +145,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		paths = append(paths, path)
 	}
 
-	// Process files concurrently.
 	type procResult struct {
 		path       string
 		status     string
@@ -208,14 +196,14 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 				if matchCount > 0 {
 					newContent = re.ReplaceAllString(content, args.Replacement)
 				} else {
-					newContent = content // no change
+					newContent = content
 				}
 			} else {
 				matchCount = strings.Count(content, args.Pattern)
 				if matchCount > 0 {
 					newContent = strings.ReplaceAll(content, args.Pattern, args.Replacement)
 				} else {
-					newContent = content // no change
+					newContent = content
 				}
 			}
 
@@ -224,11 +212,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 				return
 			}
 
-			// Build a sample diff for dry_run mode (first changed line).
-			// #1638-1: format the SAME way the real write would - gofmt runs
-			// only on the write path, so the preview (and the approval based
-			// on it) showed pre-format content while the landed file differed
-			// in indentation/blank lines.
 			var sampleDiff string
 			if args.DryRun {
 				if formatted, changed := formatGoBytes(p, []byte(newContent)); changed {
@@ -253,7 +236,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("combined file content too large: %d bytes, max %d. Reduce the number of files.", totalPayloadBytes, maxBatchReplacePayloadBytes)}, nil
 	}
 
-	// Assemble results and enforce global match cap.
 	out := batchReplaceContent{DryRun: args.DryRun}
 	out.Results = make([]batchReplaceFileResult, 0, len(procResults))
 	totalMatches := 0
@@ -290,7 +272,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{Content: string(content)}, nil
 	}
 
-	// Write changed files (non-dry-run mode).
 	for i := range procResults {
 		pr := procResults[i]
 		if pr.status != "changed" {
@@ -301,38 +282,26 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 			out.Results[i].Error = "cancelled"
 			out.FilesError++
 			out.FilesChanged--
-			// #1817 case 3: #1638-2 fixed the write-failure branch below but
-			// missed this sibling - a cancelled file never reached disk, so
-			// its matches must leave TotalMatches too or the summary counts
-			// matches that were never written ("3 changed (120 total
-			// matches)" with a cancelled file inside).
+
 			out.TotalMatches -= pr.matches
 			continue
 		}
 		CaptureDiagnosticBaseline(t.WorkingDir, pr.path)
 		writeData, _ := formatGoBytes(pr.path, []byte(pr.newContent))
 		if err := atomicWriteFile(pr.path, writeData, 0644); err != nil {
-			// #1676 case 4: the just-captured baseline has no consumer on
-			// this path - clear it or the next edit_file on this file mis-
-			// attributes stale diagnostics as new (#824 pattern).
+
 			ClearDiagnosticBaseline(pr.path)
 			out.Results[i].Status = "error"
 			out.Results[i].Error = fmt.Sprintf("error writing file: %v", err)
 			out.FilesError++
 			out.FilesChanged--
-			// #1638-2: the file's matches were counted as landed - roll them
-			// back or the summary overstates the actual change ("2 changed
-			// (120 total matches), 1 errors" counted a file that failed).
+
 			out.TotalMatches -= pr.matches
 			continue
 		}
-		// Post-write checks (reuse existing infrastructure).
+
 		out.Results[i].Error += syntaxCheck(pr.path, []byte(pr.newContent))
-		// #1676 case 4: the baseline captured above must be CONSUMED here
-		// like every other edit path does (edit_file L205 family) - the
-		// old capture-without-consume left a stale entry that the next
-		// edit_file's postEditDiagnostics mis-attributed, plus wasted the
-		// 150ms LSP capture per file.
+
 		if diagMsg := postEditDiagnostics(t.WorkingDir, pr.path); diagMsg != "" {
 			out.Results[i].Error += "\n" + diagMsg
 		}
@@ -349,8 +318,6 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 	return Result{Content: string(content), IsError: out.FilesError > 0}, nil
 }
 
-// extractSampleDiff finds the first differing line between old and new content
-// and returns a truncated diff preview.
 func extractSampleDiff(oldContent, newContent string) string {
 	oldLines := strings.Split(oldContent, "\n")
 	newLines := strings.Split(newContent, "\n")
@@ -382,11 +349,6 @@ func truncateForDiff(s string) string {
 	return s
 }
 
-// invalidGroupRefs scans replacement for $N / ${N} capture-group references
-// and returns the first reference whose group number exceeds re.NumSubexp().
-// Named references ($name) are checked against re.SubexpNames(). Returns ""
-// when every reference is valid. This prevents Go's regexp.Expand from
-// silently expanding out-of-range references to empty strings (#385).
 func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 	maxGroup := re.NumSubexp()
 	named := map[string]bool{}
@@ -400,7 +362,7 @@ func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 			continue
 		}
 		if i+1 < len(replacement) && replacement[i+1] == '$' {
-			i++ // escaped literal $$ — skip both
+			i++
 			continue
 		}
 		if i+1 < len(replacement) && replacement[i+1] == '{' {
@@ -411,10 +373,7 @@ func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 						return ref
 					}
 				} else if !named[ref] {
-					// #435: braced named refs (${name}) are equivalent
-					// syntax to bare $name in Go regexp — the old code only
-					// validated numeric refs here, so an unknown ${c}
-					// silently expanded to an empty string (content loss).
+
 					return ref
 				}
 				i = end
@@ -422,7 +381,7 @@ func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 			}
 			continue
 		}
-		// $name or $N — consume the longest run of letters/digits/underscore
+
 		j := i + 1
 		for j < len(replacement) && isRefByte(replacement[j]) {
 			j++
@@ -438,8 +397,7 @@ func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 			i = j - 1
 			continue
 		}
-		// Named reference: only flag names that look numeric-ish invalid;
-		// unknown names also expand to empty, so reject them too (#385).
+
 		if !named[ref] {
 			return ref
 		}

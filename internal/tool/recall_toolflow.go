@@ -12,26 +12,14 @@ import (
 )
 
 const (
-	// recallToolFlowDefaultMax / recallToolFlowMaxMax bound the pattern list:
-	// workflows are advisory context, a long list is noise.
 	recallToolFlowDefaultMax = 5
 	recallToolFlowMaxMax     = 10
 )
 
-// RecallToolFlowTool lets the agent consult cross-session tool workflow
-// statistics (r449, AWM-style workflow memory). The experience store answers
-// "what happened in similar cases"; this answers "which multi-tool sequences
-// does this user's actual usage keep repeating" - so when a prefix matches
-// the current plan, the statistically dominant continuation can be treated
-// as the established next step instead of re-derived from scratch.
-// Read-only; mining is lexical n-gram counting over session JSONL (no LLM).
 type RecallToolFlowTool struct {
-	// sessionsDir overrides the default ~/.ggcode/sessions location
-	// (injected by tests). Empty = resolve at Execute time.
 	sessionsDir string
 }
 
-// NewRecallToolFlowTool creates a recall_toolflow tool. Read-only.
 func NewRecallToolFlowTool() *RecallToolFlowTool {
 	return &RecallToolFlowTool{}
 }

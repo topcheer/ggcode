@@ -9,8 +9,7 @@ import (
 )
 
 type fakeShareController struct {
-	active bool
-	// startErr simulates a frontend failure.
+	active   bool
 	startErr error
 	stopped  bool
 	started  bool
@@ -74,7 +73,7 @@ func TestStartShareToolSuccessRelaysFullURL(t *testing.T) {
 	if !fc.started {
 		t.Fatal("controller not started")
 	}
-	// The full connect URL must be relayed verbatim for the user.
+
 	if !strings.Contains(res.Content, "https://relay.example/join?room=AB12&token=tok") {
 		t.Fatalf("full connect URL missing from result: %s", res.Content)
 	}
@@ -124,16 +123,16 @@ func TestStopShareToolSuccess(t *testing.T) {
 }
 
 func TestShareToolDescriptionsReflectState(t *testing.T) {
-	// nil controller: degraded availability wording.
+
 	if d := (StartShareTool{}).Description(); !strings.Contains(d, "Not available") {
 		t.Fatalf("nil controller description should degrade: %s", d)
 	}
-	// active: start warns against double start.
+
 	fc := &fakeShareController{active: true}
 	if d := (StartShareTool{Controller: fc}).Description(); !strings.Contains(d, "ALREADY active") {
 		t.Fatalf("active description should warn: %s", d)
 	}
-	// active: stop offers itself.
+
 	if d := (StopShareTool{Controller: fc}).Description(); !strings.Contains(d, "Stop the active") {
 		t.Fatalf("stop description mismatch: %s", d)
 	}

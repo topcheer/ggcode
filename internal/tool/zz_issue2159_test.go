@@ -1,12 +1,5 @@
 package tool
 
-// #2159 regression: extractFirstTag closed on the FIRST </tag> with no
-// depth counting - a nested same-name block (HTML5's own article-in-
-// article comment pattern) silently replaced the real body. And the
-// id/attr selector tails had no delimiter anchor: data-id/data-role
-// satisfied id=/role= and the WRONG (or empty) container won, starving
-// the real one of its retry.
-
 import (
 	"strings"
 	"testing"

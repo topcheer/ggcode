@@ -1,12 +1,5 @@
 package agent
 
-// speculate_persist_test.go -- r486 persistence probes.
-//
-// Covers: disk model seeds a fresh speculator (cold-start warmup), corrupt
-// JSON degrades to empty, merge never invents zero/negative counts, save
-// throttling coalesces bursts, and top-N trimming keeps the highest-count
-// edges. HOME is isolated because ConfigDir() is testguarded.
-
 import (
 	"context"
 	"encoding/json"
@@ -24,8 +17,7 @@ import (
 func isolateSpecHome(t *testing.T) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	// specLoadOnce is process-wide; re-arm per test so on-disk variations
-	// are not order-dependent, and restore the armed state afterwards.
+
 	resetSpecPersistForTest()
 	t.Cleanup(resetSpecPersistForTest)
 	return specPatternsPath()
@@ -58,8 +50,7 @@ func TestSpecPersist_LoadSeedsNewSpeculator(t *testing.T) {
 	if got != 7 {
 		t.Fatalf("persisted count not merged: got %d, want 7", got)
 	}
-	// Cold-start prediction must be immediately actionable: adaptiveMinCount
-	// starts at 2 and the seeded count exceeds it.
+
 	nexts := s.predictNext("grep")
 	if len(nexts) == 0 || nexts[0] != "read_file" {
 		t.Fatalf("seeded model must predict read_file after grep, got %v", nexts)
@@ -82,8 +73,7 @@ func TestSpecPersist_CorruptJSONDegradesToEmpty(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("corrupt file must degrade to empty model, got %d roots", n)
 	}
-	// recordObservation on the degraded model still works (fresh start).
-	// Two rounds clear the conservative adaptiveMinCount=2 threshold.
+
 	for i := 0; i < 2; i++ {
 		s.recordObservation("grep")
 		s.recordObservation("read_file")
@@ -135,8 +125,6 @@ func TestSpecPersist_SaveThrottleAndRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost counts: %v", onDisk)
 	}
 
-	// Throttled: mutate the model, persist again immediately - the disk
-	// must still hold the FIRST snapshot (within the same interval).
 	s.recordObservation("glob")
 	maybePersistSpecPatterns(s)
 	data2, _ := os.ReadFile(path)
@@ -144,8 +132,6 @@ func TestSpecPersist_SaveThrottleAndRoundTrip(t *testing.T) {
 		t.Fatal("save must be throttled inside the interval")
 	}
 
-	// Outside the interval it saves again. The new observation chains from
-	// the LAST observed tool (bigram), so glob follows read_file.
 	reset()
 	maybePersistSpecPatterns(s)
 	data3, _ := os.ReadFile(path)
@@ -160,13 +146,13 @@ func TestSpecPersist_TopTransitionsTrims(t *testing.T) {
 	model := map[string]map[string]int{}
 	for i := 0; i < 40; i++ {
 		root := "t" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		model[root] = map[string]int{"next": i + 1} // counts 1..40
+		model[root] = map[string]int{"next": i + 1}
 	}
 	trimmed := topTransitions(model, 10)
 	if len(trimmed) != 10 {
 		t.Fatalf("expected 10 roots after trim, got %d", len(trimmed))
 	}
-	// Highest counts survive: root with count 40 must be present.
+
 	found := false
 	for _, nexts := range trimmed {
 		for _, c := range nexts {
@@ -178,7 +164,7 @@ func TestSpecPersist_TopTransitionsTrims(t *testing.T) {
 	if !found {
 		t.Fatal("highest-count edge must survive trimming")
 	}
-	// Below the limit the map is returned untouched.
+
 	small := map[string]map[string]int{"a": {"b": 1}}
 	if got := topTransitions(small, 500); len(got) != 1 {
 		t.Fatal("small model must pass through untrimmed")
@@ -187,7 +173,7 @@ func TestSpecPersist_TopTransitionsTrims(t *testing.T) {
 
 func TestSpecPersist_ConcurrentSaves(t *testing.T) {
 	isolateSpecHome(t)
-	specLastPersist = time.Time{} // force eligibility
+	specLastPersist = time.Time{}
 
 	s := newSpeculator()
 	s.recordObservation("grep")
@@ -197,12 +183,12 @@ func TestSpecPersist_ConcurrentSaves(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			maybePersistSpecPatterns(s) // first wins, rest throttled
-			_ = s.predictNext("grep")   // concurrent reader
+			maybePersistSpecPatterns(s)
+			_ = s.predictNext("grep")
 		}()
 	}
 	wg.Wait()
-	// No race under -race and the file (if written) is valid JSON.
+
 	if data, err := os.ReadFile(specPatternsPath()); err == nil {
 		var m map[string]map[string]int
 		if err := json.Unmarshal(data, &m); err != nil {
@@ -211,13 +197,8 @@ func TestSpecPersist_ConcurrentSaves(t *testing.T) {
 	}
 }
 
-// ConfigDir reference keeps the config import honest if assertions change.
 var _ = config.ConfigDir
 
-// Run-end save wiring (r486): the maybePersistSpecPatterns defer mounted in
-// RunStreamWithContent must fire after a real run completes. Mirrors the
-// r485 lesson - unit probes cannot see hand-located mount points - so this
-// drives an actual RunStream and asserts the model reached the disk.
 func TestSpecPersist_RunEndSaveWiring(t *testing.T) {
 	path := isolateSpecHome(t)
 	mp := &mockProvider{chatResponses: []*provider.ChatResponse{
@@ -239,7 +220,5 @@ func TestSpecPersist_RunEndSaveWiring(t *testing.T) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("persisted model must be valid JSON: %v", err)
 	}
-	// Load wiring is exercised implicitly: isolateSpecHome re-armed the
-	// one-shot load and this test's own NewAgent (via newSpeculator) ran it
-	// against the empty file; the save here writes what the run observed.
+
 }

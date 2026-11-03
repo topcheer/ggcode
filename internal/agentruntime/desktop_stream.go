@@ -95,8 +95,7 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 	case provider.StreamEventToolResult:
 		resultText := ev.Result
 		rawArgs := string(ev.Tool.Arguments)
-		// Format lanchat list results into a human-readable list
-		// instead of raw JSON.
+
 		if pres, ok := toolpkg.DescribeToolResult(ev.Tool.Name, rawArgs, resultText, ev.IsError); ok && pres.Payload != "" {
 			resultText = pres.Payload
 		}
@@ -157,9 +156,7 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 			mirror.Flush(true)
 			mirror.PushError(message)
 		}
-		// #1482: reset the round so an aborted turn's partial text and
-		// tool counts don't leak into the next turn's EmitRoundSummary
-		// (the Done branch resets; this branch didn't).
+
 		round.Reset()
 		return DesktopStreamSemantic{Type: ev.Type, ErrorText: message}, true
 	}

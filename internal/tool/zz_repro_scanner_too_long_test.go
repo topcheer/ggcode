@@ -8,14 +8,12 @@ import (
 	"testing"
 )
 
-// Temporary reproduction test for scanner.ErrTooLong silent miss in fallback grep.
 func TestReproScannerTooLongSilentMiss(t *testing.T) {
 	dir := t.TempDir()
 
-	// File: normal line, then a >64KB single line (minified bundle style), then a line containing the match.
 	var sb strings.Builder
 	sb.WriteString("line1 normal\n")
-	sb.WriteString(strings.Repeat("a", 100*1024)) // 100KB single line
+	sb.WriteString(strings.Repeat("a", 100*1024))
 	sb.WriteString("\n")
 	sb.WriteString("TARGET_MATCH_HERE\n")
 	sb.WriteString("line4 normal\n")
@@ -37,7 +35,6 @@ func TestReproScannerTooLongSilentMiss(t *testing.T) {
 		t.Errorf("grepFileContent: got %d matches, want 1 (silent miss after >64KB line)", len(matches))
 	}
 
-	// Control: same file without the long line → all three find it.
 	var sb2 strings.Builder
 	sb2.WriteString("line1 normal\nTARGET_MATCH_HERE\nline4 normal\n")
 	path2 := filepath.Join(dir, "normal.js")

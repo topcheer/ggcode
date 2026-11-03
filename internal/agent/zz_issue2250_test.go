@@ -1,12 +1,5 @@
 package agent
 
-// #2250: the #2242 nested-loop barrier covered only loopBodyHasErrorRetry;
-// branchContinuesOnError and loopBodyHasFailingCall - the other two halves
-// of the isRetryLoop conjunction - still descended into nested loops, so
-// the exact #1490-C misattribution returned via the if-body shape: an
-// inner range's skip-continue plus an inner failing call sufficed to flag
-// the OUTER loop. Both scanners now stop at nested for/range.
-
 import (
 	"go/ast"
 	"go/parser"
@@ -24,8 +17,7 @@ func parse2250(t *testing.T, src string) *ast.File {
 }
 
 func TestIssue2250NestedLoopBarrierBothScanners(t *testing.T) {
-	// Issue shape: outer for + if err!=nil{...;continue} + inner range
-	// carrying the ONLY failing call and its OWN skip-continue.
+
 	f := parse2250(t, `package p
 import "net/http"
 func f(urls []string) {
@@ -77,8 +69,7 @@ func f(urls []string) {
 }
 
 func TestIssue2250DirectCallAndContinueStillFlag(t *testing.T) {
-	// Positive control: no nesting - the failing call and the continue
-	// sit DIRECTLY in the outer body. Both halves must still fire.
+
 	f := parse2250(t, `package p
 import "net/http"
 func f(urls []string) {

@@ -1,52 +1,13 @@
 package agent
 
-// undo_blind.go -- Undo-Edit Blind Continuation Detector
-//
-// Research basis:
-//   - AgentDebug (arXiv:2509.25370): agents that use rollback/undo operations
-//     frequently proceed based on their stale mental model of the pre-undo
-//     state, rather than re-reading the actual current file content. This
-//     "blind continuation" after rollback is a top-3 source of compounding
-//     edit errors in multi-turn agent trajectories.
-//   - SICA (arXiv:2504.15228, NeurIPS 2025): trajectory analysis shows that
-//     after undo operations, agents that skip re-reading the affected file
-//     have a 3x higher rate of subsequent edit failures compared to those
-//     that re-read first.
-//   - Context Engineering for Agents (Anthropic 2025): emphasizes that any
-//     state-changing operation (including undo/revert) invalidates the agent's
-//     cached understanding of file contents - the agent must re-ground by
-//     re-reading before acting.
-//
-// What this detects: after the agent calls undo_edit (or git_revert, git_reset),
-// if the agent's NEXT action on the same file is a mutation (edit/write) WITHOUT
-// an intervening read_file/multi_file_read of that file, it is operating blind.
-//
-// The dangerous pattern:
-//   undo_edit(file.go) -> edit_file(file.go, ...)   // BLIND: no re-read
-//
-// The safe pattern:
-//   undo_edit(file.go) -> read_file(file.go) -> edit_file(file.go, ...)
-//
-// Distinct from existing detectors:
-//   - wt_invalidation: detects cross-file stale reads after ANY edit to file A
-//     when file B depends on A. This detector is about the SAME file after undo.
-//   - stale_read: detects reading a file whose git status changed. This is about
-//     editing without reading at all.
-//   - unread_edit_guard: detects edits to files not yet read in this session.
-//     This is specifically about the post-undo context invalidation.
-
 import (
 	"fmt"
 	"strings"
 )
 
-// undoBlindState tracks files that were undone/reverted and need re-reading.
 type undoBlindState struct {
-	// pendingUndoFiles maps file path -> true for files that were undone
-	// and haven't been re-read yet.
 	pendingUndoFiles map[string]bool
-	// warnCount caps total warnings per run.
-	warnCount int
+	warnCount        int
 }
 
 const (
@@ -64,7 +25,6 @@ func (s *undoBlindState) reset() {
 	s.warnCount = 0
 }
 
-// undoBlindIsUndoOp returns true for tools that revert file state.
 func undoBlindIsUndoOp(toolName string) bool {
 	switch toolName {
 	case "undo_edit", "git_revert", "git_reset", "git_checkout", "git_stash":
@@ -73,13 +33,10 @@ func undoBlindIsUndoOp(toolName string) bool {
 	return false
 }
 
-// undoBlindIsMutation returns true for tools that modify files.
-// Derived from the canonical sourceMutatingTools superset (#738).
 func undoBlindIsMutation(toolName string) bool {
 	return sourceMutatingTools[toolName]
 }
 
-// undoBlindIsRead returns true for tools that read file content.
 func undoBlindIsRead(toolName string) bool {
 	switch toolName {
 	case "read_file", "multi_file_read", "git_show", "git_diff":
@@ -88,32 +45,19 @@ func undoBlindIsRead(toolName string) bool {
 	return false
 }
 
-// recordToolCall updates undo tracking state.
-// Returns a warning string if a blind mutation after undo is detected.
 func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string {
-	// If this is an undo/revert operation, mark affected files as pending re-read
+
 	if undoBlindIsUndoOp(toolName) {
 		fp := undoBlindExtractFilePath(toolName, argsJSON)
 		if fp != "" {
 			s.pendingUndoFiles[fp] = true
 		} else {
-			// For git operations without a specific file, we can't track
-			// precisely. Mark a generic sentinel. For git_reset/git_stash/
-			// git_checkout/git_revert without file args, and for undo_edit
-			// (whose args carry only action/checkpoint_id/description - no path
-			// fields - so extraction is ALWAYS empty), we track via a wildcard
-			// since we can't know which files changed (#1518 case B: undo_edit
-			// is the charter's #1 scenario "undo_edit(file.go) ->
-			// edit_file(file.go) // BLIND" and was 100% dead: zero marks, zero
-			// warnings. git_revert joins the wildcard group too - bare revert
-			// has no path arg, and with a path arg it names a repo object, never
-			// a working-tree file, so it never matched file-level tracking
-			// either way).
+
 			if toolName == "git_reset" || toolName == "git_stash" || toolName == "git_checkout" ||
 				toolName == "git_revert" || toolName == "undo_edit" {
-				// Check if args contain specific file paths
+
 				if !undoBlindArgsHasFilePath(argsJSON) {
-					// Whole-tree revert — set a wildcard
+
 					s.pendingUndoFiles["*"] = true
 				}
 			}
@@ -121,27 +65,18 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 		return ""
 	}
 
-	// If this is a read, clear the pending flag for that file (agent re-grounded)
 	if undoBlindIsRead(toolName) {
 		fp := undoBlindExtractFilePath(toolName, argsJSON)
 		if fp != "" {
 			delete(s.pendingUndoFiles, fp)
 		}
-		// #1518 case D2 + #2772: the wildcard used to be cleared by ANY read.
-		// #1518 stopped no-path reads from clearing it; #2772 closes the
-		// residual hole - a single path-carrying read (even of a file
-		// unrelated to the revert) is NOT a re-grounding of the whole tree.
-		// Reading one file is not re-reading every affected file, so nothing on
-		// the read side may clear the wildcard anymore; only the mutation
-		// branch consuming it (with its warning) clears the tree-wide guard.
+
 		return ""
 	}
 
-	// If this is a mutation and the target file was undone but not re-read → BLIND
 	if undoBlindIsMutation(toolName) {
 		fp := undoBlindExtractFilePath(toolName, argsJSON)
 
-		// Check wildcard first (whole-tree undo)
 		if s.pendingUndoFiles["*"] {
 			if s.warnCount < undoBlindMaxWarns {
 				s.warnCount++
@@ -166,11 +101,10 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 					fp, fp,
 				)
 			}
-			// Still clear even if we've maxed warnings
+
 			delete(s.pendingUndoFiles, fp)
 		}
 
-		// For multi_file_edit, check all paths
 		if toolName == "multi_edit_file" || toolName == "multi_file_write" || toolName == "multi_file_edit" {
 			paths := undoBlindExtractAllPaths(argsJSON)
 			for _, p := range paths {
@@ -193,27 +127,24 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 	return ""
 }
 
-// undoBlindExtractFilePath gets the file path from tool args.
 func undoBlindExtractFilePath(toolName string, argsJSON []byte) string {
 	if len(argsJSON) == 0 {
 		return ""
 	}
-	// Use shared helper for standard tools
+
 	fp := extractFilePathFromArgs(toolName, argsJSON)
 	return fp
 }
 
-// undoBlindArgsHasFilePath checks if args contain a file_path or path argument.
 func undoBlindArgsHasFilePath(argsJSON []byte) bool {
 	s := string(argsJSON)
 	return strings.Contains(s, "file_path") || strings.Contains(s, "\"path\"")
 }
 
-// undoBlindExtractAllPaths extracts all file paths from multi-file tool args.
 func undoBlindExtractAllPaths(argsJSON []byte) []string {
 	s := string(argsJSON)
 	var paths []string
-	// Simple extraction: look for "path":"..." or "file_path":"..."
+
 	idx := 0
 	for {
 		pos := strings.Index(s[idx:], `"path":`)
@@ -221,7 +152,7 @@ func undoBlindExtractAllPaths(argsJSON []byte) []string {
 			break
 		}
 		pos += idx
-		// Find the value after the colon
+
 		quoteStart := strings.Index(s[pos:], `"`)
 		if quoteStart < 0 {
 			break

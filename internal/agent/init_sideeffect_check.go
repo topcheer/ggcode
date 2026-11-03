@@ -1,37 +1,5 @@
 package agent
 
-// Init Function with Side Effects Detection
-//
-// Problem: Go's init() functions run at package import time, before main().
-// AI coding agents sometimes put I/O operations (file reads, network calls,
-// environment variable reads, goroutine launches) in init(), which:
-//   1. Makes the package unimportable in test environments without those resources
-//   2. Causes import-time panics that are hard to debug
-//   3. Hides side effects from the import graph
-//   4. Makes the code untestable — you can't mock or skip the side effect
-//
-// Common anti-patterns flagged:
-//
-//	func init() {
-//	    data, _ := os.ReadFile("config.json")   // I/O at import time
-//	    http.Get("http://example.com/health")     // network at import time
-//	    go startServer()                           // goroutine at import time
-//	    os.Setenv("KEY", "val")                    // env mutation at import time
-//	    log.Fatal("cannot proceed")               // terminates process at import
-//	}
-//
-// Recommended fix: Move the logic to an explicit Setup() or New() function
-// called from main(), so callers control when side effects happen.
-//
-// Competitor analysis:
-//   - Claude Code / Cursor / OpenHands / Aider: no write-time detection
-//   - golangci-lint: gochecknoinits flags ALL init() but not side effects
-//   - staticcheck: does not check init() side effects
-//
-// Approach: AST-based. Walk each init() FuncDecl body, inspect call expressions
-// for known side-effect-indicating patterns (os.*, net/http.*, log.Fatal*,
-// go statements). Zero LLM cost.
-
 import (
 	"fmt"
 	"go/ast"
@@ -42,19 +10,12 @@ import (
 
 const maxInitSEWarnings = 5
 
-// isePackagePrefixes lists package names whose presence in an init()
-// body strongly suggests an import-time side effect. Keys are the short
-// package names as they appear in source code (not import paths).
 var isePackagePrefixes = map[string]string{
 	"os":     "file/env I/O",
 	"ioutil": "file I/O",
 	"log":    "logging I/O",
 }
 
-// isePkgFuncBlacklists (#1577-A): 'time' and 'http' hit PURE constructors
-// too (time.Now timestamp capture, http.NewServeMux) - blanket package
-// prefixes false-positived the most idiomatic init patterns. These
-// packages flag only their genuinely effectful functions.
 var isePkgFuncBlacklists = map[string]map[string]string{
 	"time": {
 		"Sleep": "timer/sleep", "NewTicker": "starts a ticker",
@@ -67,21 +28,13 @@ var isePkgFuncBlacklists = map[string]map[string]string{
 	},
 }
 
-// iseFmtIOFuncs lists fmt functions that actually perform I/O.
-// Pure fmt functions (Sprintf, Errorf, Sprint) do NOT perform I/O
-// and should not be flagged as side effects in init().
 var iseFmtIOFuncs = map[string]bool{
 	"Print": true, "Printf": true, "Println": true,
 	"Fprint": true, "Fprintf": true, "Fprintln": true,
 	"Scan": true, "Scanf": true, "Scanln": true,
 	"Fscan": true, "Fscanf": true, "Fscanln": true,
-	// #1577-D: Sscan/Sscanf/Sscanln parse IN-MEMORY strings - zero I/O -
-	// flagging them contradicted this header ("pure fmt functions do NOT
-	// perform I/O"). Stdin/file scans stay flagged; memory scans removed.
 }
 
-// iseFuncNames lists specific function calls that are definite side effects
-// inside init().
 var iseFuncNames = map[string]string{
 	"Fatal":   "terminates the process",
 	"Fatalf":  "terminates the process",
@@ -92,8 +45,6 @@ var iseFuncNames = map[string]string{
 	"Exit":    "terminates the process",
 }
 
-// checkInitSideEffects detects init() functions that perform I/O or other
-// side effects at package import time.
 func checkInitSideEffects(filePath, _, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -111,11 +62,7 @@ func checkInitSideEffects(filePath, _, newContent string) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		// #1619-B: a METHOD named init (func (s *Server) init()) is a
-		// legal lifecycle method that runs only when CALLED - flagging it
-		// with "runs at import time"/"makes the package unimportable"
-		// asserted facts that are simply false and pushed the agent into
-		// pointless refactors. Only package-level init qualifies.
+
 		if !ok || fn.Name == nil || fn.Name.Name != "init" || fn.Recv != nil {
 			continue
 		}
@@ -136,9 +83,8 @@ func checkInitSideEffects(filePath, _, newContent string) []string {
 	return warnings
 }
 
-// iseInspectNode checks a single AST node for init() side-effect patterns.
 func iseInspectNode(n ast.Node, fset *token.FileSet, warnings *[]string) {
-	// Check go statements: `go expr()` launches a goroutine
+
 	if gs, ok := n.(*ast.GoStmt); ok {
 		pos := fset.Position(gs.Pos())
 		*warnings = append(*warnings,
@@ -154,8 +100,6 @@ func iseInspectNode(n ast.Node, fset *token.FileSet, warnings *[]string) {
 		return
 	}
 
-	// #1577-C: bare panic("...") is the most common import-time bomb and
-	// has no selector - the selector-only path let it through silently.
 	if id, ok := ce.Fun.(*ast.Ident); ok && id.Name == "panic" {
 		pos := fset.Position(ce.Pos())
 		*warnings = append(*warnings,
@@ -166,24 +110,15 @@ func iseInspectNode(n ast.Node, fset *token.FileSet, warnings *[]string) {
 		return
 	}
 
-	// Check selector calls: pkg.Func()
 	if se, ok := ce.Fun.(*ast.SelectorExpr); ok {
 		iseCheckSelectorCall(se, fset, warnings)
 	}
 }
 
-// iseCheckSelectorCall inspects a pkg.Func() call for known side-effect patterns.
 func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[]string) {
 	pkgName := iseExtractPkg(se.X)
 	funcName := se.Sel.Name
 
-	// Check for Fatal/Panic/Exit - #1467-C: the bare-name branch ran
-	// BEFORE and INDEPENDENT of the package check, so app.Exit() /
-	// err.Panic() / server.Fatalf() (method calls on arbitrary types)
-	// warned 'terminates the process' just like real os.Exit. Restrict
-	// the bare-name shortcut to canonical single-letter packages (os,
-	// log) and route everything else through the package-prefix patterns
-	// below.
 	if desc, found := iseFuncNames[funcName]; found && (pkgName == "os" || pkgName == "log") {
 		pos := fset.Position(se.Pos())
 		*warnings = append(*warnings,
@@ -194,16 +129,14 @@ func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[
 		return
 	}
 
-	// Check package-prefix patterns
 	if pkgName != "" {
-		// fmt package: only flag actual I/O functions, not pure functions
-		// like Sprintf, Errorf, Sprint that return values without side effects.
+
 		if pkgName == "fmt" {
 			if iseFmtIOFuncs[funcName] {
 				iseEmitPkgWarning(pkgName+"."+funcName, "I/O or panic", se, fset, warnings)
 				return
 			}
-			return // pure fmt function — no side effect
+			return
 		}
 		if bl, ok := isePkgFuncBlacklists[pkgName]; ok {
 			if desc, found := bl[funcName]; found {
@@ -218,7 +151,6 @@ func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[
 	}
 }
 
-// iseEmitPkgWarning appends a warning for a package-prefixed side effect.
 func iseEmitPkgWarning(call, desc string, se *ast.SelectorExpr, fset *token.FileSet, warnings *[]string) {
 	pos := fset.Position(se.Pos())
 	*warnings = append(*warnings,
@@ -229,7 +161,6 @@ func iseEmitPkgWarning(call, desc string, se *ast.SelectorExpr, fset *token.File
 			pos.Filename, pos.Line, call, desc))
 }
 
-// iseExtractPkg extracts the package identifier from an expression.
 func iseExtractPkg(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:

@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// #4293 regression tests for the over-loose reactive rule-injection path.
-// Live case: a legitimate `git worktree remove ... && git branch -D ...`
-// cleanup command failed with git's own "use --force to delete it" hint, the
-// harness's DESTRUCTIVE-operation banner echoed "rm -rf recursively force-
-// deletes files", and the rm-rule injected its advice onto a command that
-// never ran rm at all.
-
-// gitWorktreeFailure is the actual failure output shape from the live case
-// (git hint + harness banner quoting danger keywords).
 const gitWorktreeFailure = `STDERR:
 fatal: '/tmp/wt-4291b' contains modified or untracked files, use --force to delete it
 
@@ -37,15 +28,11 @@ func Test4293_ReactiveToolPatternRequiresArgsMatch(t *testing.T) {
 		FixHint:      "Use explicit file paths instead of wildcards",
 	})
 
-	// The live false positive: output quotes the banner, but the command
-	// was git cleanup - no rm -rf anywhere in the args.
 	matched := rs.MatchingRulesForResult(gitWorktreeFailure, `git worktree remove /tmp/wt && git branch -D pr-x`)
 	if len(matched) != 0 {
 		t.Fatalf("command-shaped rule must not fire without matching args, got %d", len(matched))
 	}
 
-	// The genuine case: the gate actually blocked an rm -rf run; the block
-	// text is real payload (not advisory wrapping) and the args contain rm -rf.
 	gateBlocked := "Error: Command blocked: recursive force delete of critical directory /"
 	matched = rs.MatchingRulesForResult(gateBlocked, `rm -rf /tmp/wt`)
 	if len(matched) != 1 {
@@ -56,8 +43,7 @@ func Test4293_ReactiveToolPatternRequiresArgsMatch(t *testing.T) {
 func Test4293_HarnessBannerDoesNotFeedRuleMatching(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuleStore(dir)
-	// No ToolPattern: output-only matching stays available, but only
-	// against the payload, not the advisory wrapping.
+
 	rs.AddRule(Rule{
 		Category:     "security",
 		Rule:         "Never run rm -rf on root or critical directories",
@@ -65,9 +51,6 @@ func Test4293_HarnessBannerDoesNotFeedRuleMatching(t *testing.T) {
 		FixHint:      "Use explicit paths",
 	})
 
-	// Banner-only output (nothing else in the payload is an rm error):
-	// after stripping, no error marker or pattern content remains that
-	// justifies the injection.
 	matched := rs.MatchingRulesForResult(gitWorktreeFailure, `git branch -D pr-x`)
 	if len(matched) != 0 {
 		t.Fatalf("banner text must not feed rule matching, got %d matches", len(matched))
@@ -92,8 +75,7 @@ func Test4293_ShortLearnedPatternSkipped(t *testing.T) {
 		MatchPattern: `force`,
 		FixHint:      "n/a",
 	})
-	// "force" appears in real error prose constantly ("use --force");
-	// fragments below the quality floor must never inject.
+
 	matched := rs.MatchingRulesForResult("fatal: use --force to delete it", `git branch -D x`)
 	if len(matched) != 0 {
 		t.Fatalf("sub-floor pattern must be skipped, got %d", len(matched))
@@ -123,7 +105,6 @@ func Test4293_PerInjectionCap(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(rulesPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Five rules that all reactively match the same result.
 	var rules []string
 	for i := 0; i < 5; i++ {
 		rules = append(rules, `{"id":"r-c`+string(rune('a'+i))+`","category":"build","rule":"rule `+string(rune('a'+i))+`","match_pattern":"cannot find package olm","fix_hint":"hint","hit_count":1,"created_at":"2025-01-01T00:00:00Z","last_seen":"2025-01-01T00:00:00Z"}`)

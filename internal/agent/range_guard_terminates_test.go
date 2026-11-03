@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestRangeNilGuardRequiresTermination verifies that a non-terminating
-// `if x == nil { log }` before `range *x` is NOT treated as a guard (#265).
 func TestRangeNilGuardRequiresTermination(t *testing.T) {
 	src := `package p
 import "log"
@@ -25,8 +23,6 @@ func f(items *[]int) {
 	}
 }
 
-// TestRangeNilGuardTerminatingNoWarn verifies a terminating guard
-// (`if items == nil { return }`) suppresses the warning (#265).
 func TestRangeNilGuardTerminatingNoWarn(t *testing.T) {
 	src := `package p
 func f(items *[]int) {
@@ -42,7 +38,6 @@ func f(items *[]int) {
 	}
 }
 
-// compile-time sanity: ifBodyTerminates reused via collector.
 var _ = func() bool {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "x.go", "package p", 0)

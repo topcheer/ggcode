@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// Regression guard for #4718: Registry.Clone() dropped descAugment, so
-// swarm teammates / sub-agents built from a cloned registry never saw the
-// r35 learned-hint overlay in their tool definitions even though the parent
-// did ("MCP tool descriptions pass through the same path").
 type zz4718Stub struct{}
 
 func (zz4718Stub) Name() string { return "zz4718_probe" }

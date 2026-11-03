@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// newAutopilotTestAgent builds a minimal agent parked on the cruise surface
-// (bypass/autopilot) - the precondition for goal-collection injection.
 func newAutopilotTestAgent() *Agent {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -25,10 +23,6 @@ func newAutopilotTestAgent() *Agent {
 	return a
 }
 
-// TestAutopilotGoalCollectionInjectsOnCruise verifies the baseline the
-// suppress flag turns off: on the cruise surface the first
-// maybeInjectAutopilotGoalCollection injects the meta-instruction exactly
-// once (asked latch) and never twice.
 func TestAutopilotGoalCollectionInjectsOnCruise(t *testing.T) {
 	a := newAutopilotTestAgent()
 	before := len(a.contextManager.Messages())
@@ -45,10 +39,6 @@ func TestAutopilotGoalCollectionInjectsOnCruise(t *testing.T) {
 	}
 }
 
-// TestSuppressAutopilotInjectionSkipsGoalCollection verifies the linear
-// frontend's opt-out: with the flag set, the cruise-mode goal-collection
-// meta-instruction is never injected and the asked latch stays false, so a
-// later re-check still sees a clean state.
 func TestSuppressAutopilotInjectionSkipsGoalCollection(t *testing.T) {
 	a := newAutopilotTestAgent()
 	a.SuppressAutopilotInjection()
@@ -65,16 +55,13 @@ func TestSuppressAutopilotInjectionSkipsGoalCollection(t *testing.T) {
 	}
 }
 
-// TestSuppressAutopilotInjectionIdempotentAndModeIntact verifies the flag is
-// idempotent and - by design - does NOT change the permission surface: the
-// agent still reports cruise mode after opting out.
 func TestSuppressAutopilotInjectionIdempotentAndModeIntact(t *testing.T) {
 	a := newAutopilotTestAgent()
 	if !a.IsAutopilotMode() {
 		t.Fatal("fixture must start on the cruise surface")
 	}
 	a.SuppressAutopilotInjection()
-	a.SuppressAutopilotInjection() // idempotent, no panic
+	a.SuppressAutopilotInjection()
 	if !a.IsAutopilotMode() {
 		t.Error("suppression must not downgrade the permission mode")
 	}
@@ -82,5 +69,5 @@ func TestSuppressAutopilotInjectionIdempotentAndModeIntact(t *testing.T) {
 		t.Error("nil-guard branch documentation")
 	}
 	var nilAgent *Agent
-	nilAgent.SuppressAutopilotInjection() // nil-safe, no panic
+	nilAgent.SuppressAutopilotInjection()
 }

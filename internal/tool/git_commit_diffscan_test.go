@@ -9,19 +9,14 @@ import (
 	"testing"
 )
 
-// TestGetWorkingTreeDiff verifies that getWorkingTreeDiff returns the correct
-// diff for unstaged changes relative to HEAD. This is the function used by
-// git_commit when all:true to scan for quality issues before auto-staging.
 func TestGetWorkingTreeDiff(t *testing.T) {
 	dir := t.TempDir()
 	gitInitTest(t, dir)
 
-	// Create initial committed file.
 	original := "package main\n\nfunc main() {}\n"
 	writeFileTest(t, filepath.Join(dir, "main.go"), original)
 	gitAddAndCommitTest(t, dir, "initial")
 
-	// Modify the file without staging.
 	modified := "package main\n\nfunc main() {\n	fmt.Println(\"debug\")\n}\n"
 	writeFileTest(t, filepath.Join(dir, "main.go"), modified)
 
@@ -30,12 +25,10 @@ func TestGetWorkingTreeDiff(t *testing.T) {
 		t.Fatal("expected non-empty diff from getWorkingTreeDiff")
 	}
 
-	// The diff should contain the added debug line.
 	if !strings.Contains(diff, "fmt.Println") {
 		t.Errorf("diff should contain added line, got:\n%s", diff)
 	}
 
-	// ScanStagedDiffForIssues should detect the debug statement.
 	issues := ScanStagedDiffForIssues(diff)
 	if len(issues) == 0 {
 		t.Errorf("expected issues from scan of working tree diff, got 0")
@@ -52,8 +45,6 @@ func TestGetWorkingTreeDiff(t *testing.T) {
 	}
 }
 
-// TestGetWorkingTreeDiff_NoHead verifies graceful handling when there's no
-// HEAD commit (empty repo).
 func TestGetWorkingTreeDiff_NoHead(t *testing.T) {
 	dir := t.TempDir()
 	gitInitTest(t, dir)
@@ -61,13 +52,12 @@ func TestGetWorkingTreeDiff_NoHead(t *testing.T) {
 	writeFileTest(t, filepath.Join(dir, "file.txt"), "content")
 
 	diff := getWorkingTreeDiff(context.Background(), dir)
-	// "git diff HEAD" fails on repos with no commits — should return "".
+
 	if diff != "" {
 		t.Errorf("expected empty diff when no HEAD exists, got: %s", diff)
 	}
 }
 
-// TestGetWorkingTreeDiff_NoChanges verifies empty diff when working tree is clean.
 func TestGetWorkingTreeDiff_NoChanges(t *testing.T) {
 	dir := t.TempDir()
 	gitInitTest(t, dir)
@@ -80,8 +70,6 @@ func TestGetWorkingTreeDiff_NoChanges(t *testing.T) {
 		t.Errorf("expected empty diff for clean working tree, got: %s", diff)
 	}
 }
-
-// --- helpers (test-scoped, suffixed to avoid collisions) ---
 
 func gitInitTest(t *testing.T, dir string) {
 	t.Helper()

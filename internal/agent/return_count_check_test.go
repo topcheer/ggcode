@@ -107,8 +107,7 @@ func TestMyFunc(t int) int {
 	return 0
 }
 `
-	// #1193: the Test/Benchmark exemption only applies to _test.go files, so this
-	// test must use a _test.go path to exercise the exemption.
+
 	warnings := checkExcessiveReturns("file_test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected 0 warnings for test function, got %d", len(warnings))
@@ -169,7 +168,7 @@ func complex(x int) int {
 	return 0
 }
 `
-	// Same function, 5 unrelated lines inserted above it (#157).
+
 	shifted := `package main
 
 // unrelated comment 1
@@ -192,10 +191,6 @@ func complex(x int) int {
 	}
 }
 
-// TestExcessiveReturnsGrowthNotMasked pins #2562: the delta fingerprint
-// includes the return count - editing an existing over-threshold function
-// so it grows (8 -> 12) is the detector's core target and must warn;
-// same-content line moves (comment insert) stay suppressed (#157).
 func TestExcessiveReturnsGrowthNotMasked(t *testing.T) {
 	mk := func(rets int, extra string) string {
 		body := "package p\n\nfunc classify(x int) int {\n" + extra

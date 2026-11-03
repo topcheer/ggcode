@@ -1,25 +1,3 @@
-// Package agentruntime: execution-based tie-breaking for best-of-N (r439).
-//
-// Research basis: "Scaling Agentic Verifier for Competitive Coding" (ICML
-// 2026) — when candidate solutions look textually similar, an execution-based
-// verifier actively reasons about program behavior and searches for highly
-// discriminative test inputs that expose behavioral discrepancies among the
-// candidates. Companion line: AgentV-RL (ACL 2026) — verification as a
-// multi-turn, tool-augmented deliberation rather than single-turn scoring.
-//
-// ggcode's BoN ranking (r377) is distilled-summary consensus: pure text
-// heuristics, zero execution. When consensus cannot separate the top
-// candidates the run degrades to sequential-retry conditioning — even when
-// the candidates ARE behaviorally distinguishable by a few checks. This file
-// adds the missing half: before degrading, ONE discriminator sub-agent reads
-// both top candidates' worktrees, crafts 3-5 discriminating checks (edge
-// arguments, error paths, task-contract assertions), executes them in each
-// worktree, and reports which candidate behaves correctly.
-//
-// Safety/non-interference: discrimination only breaks ties. If it is
-// inconclusive, fails to parse, errors, or ctx expires, the existing Degraded
-// path runs unchanged. The discriminator runs in the PARENT workspace with a
-// read/execute-only tool whitelist and never edits either worktree.
 package agentruntime
 
 import (
@@ -32,20 +10,12 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// discriminationTimeout bounds the whole tie-break attempt. It runs only
-// after N candidates have already finished, on the caller's critical path,
-// so it must be clearly cheaper than re-running a candidate.
 const discriminationTimeout = 5 * time.Minute
 
-// discriminatorTools is a read/execute-only whitelist. No edit/write tools:
-// the discriminator observes both worktrees, it never mutates them.
 var discriminatorTools = []string{"run_command", "read_file", "grep", "git_diff"}
 
-// discriminationMarker anchors the machine-readable verdict in the
-// discriminator's final message (single line, end of output).
 const discriminationMarker = "DISCRIMINATION:"
 
-// verdictWeight orders candidate outcomes for top-2 selection.
 func verdictWeight(v string) int {
 	switch v {
 	case "succeeded":
@@ -58,10 +28,6 @@ func verdictWeight(v string) int {
 	return 0
 }
 
-// pickTiePair selects the two best candidates worth discriminating: highest
-// verdict weight first, then non-empty result. Requires both to have an
-// isolated worktree to execute checks in. Returns indices into cands, or
-// ok=false when fewer than two discriminable candidates exist.
 func pickTiePair(cands []CandidateOutcome) (int, int, bool) {
 	first, second := -1, -1
 	for i, c := range cands {
@@ -85,16 +51,10 @@ func pickTiePair(cands []CandidateOutcome) (int, int, bool) {
 	return first, second, true
 }
 
-// discriminateTie attempts an execution-based tie-break between the top two
-// candidates. Returns (winnerIndex, evidence, true) when a candidate was
-// demonstrably better; ok=false means inconclusive — caller must fall back
-// to the unchanged Degraded path.
 func discriminateTie(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, cands []CandidateOutcome, opts BestOfNOptions) (int, string, bool) {
 	poll := opts.Poll
 	if poll <= 0 {
-		// The tool bridge (BestOfNRunnerFor) builds BestOfNOptions without
-		// Poll; without this clamp waitOne would time.After(0)-spin at full
-		// CPU for the whole discrimination timeout (final-review r443).
+
 		poll = bestOfNDefaultPoll
 	}
 	a, b, ok := pickTiePair(cands)
@@ -138,10 +98,7 @@ You must NOT edit either worktree. End your final message with exactly one line:
 		return 0, "", false
 	}
 	pick := parseDiscrimination(snap.Result)
-	// Provenance tag: which model judged the tie ("" = inherited parent
-	// model, the r439 default). Cross-family verification beats
-	// same-family (arXiv:2512.02304), so the report must show whether the
-	// verdict was actually independent.
+
 	tag := fmt.Sprintf("[verifier=%s] ", vmOrInherited(opts.verifierModelFor(cands[a], cands[b])))
 	switch pick {
 	case "A":
@@ -149,7 +106,7 @@ You must NOT edit either worktree. End your final message with exactly one line:
 	case "B":
 		return b, tag + clip(snap.Result, 2000), true
 	}
-	return 0, "", false // inconclusive or unparsed
+	return 0, "", false
 }
 
 func vmOrInherited(m string) string {
@@ -159,8 +116,6 @@ func vmOrInherited(m string) string {
 	return m
 }
 
-// parseDiscrimination extracts the winner from the marker line. Scans the
-// last 5 lines (the contract says final line; tolerant for trailing prose).
 func parseDiscrimination(out string) string {
 	lines := strings.Split(strings.TrimRight(out, "\n "), "\n")
 	start := len(lines) - 5

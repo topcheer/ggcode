@@ -13,32 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/toolreplay"
 )
 
-// Harness integration for deterministic record/replay of tool executions
-// (the "VCR/cassette" pattern; the internal/toolreplay package).
-//
-// The toolreplay package existed as a fully implemented but entirely
-// unwired capability: nothing outside its own package imported it. This
-// file activates it at the single choke point every tool call already
-// flows through (Agent.safeExecute), behind an opt-in environment variable:
-//
-//	GGCODE_TOOL_TAPE=record:/path/to/session.tape.json
-//	    Run every tool for real, and persist each (tool, input) → result
-//	    pair to the tape file after every call (atomic write, crash-safe:
-//	    a tape captured up to the failure point is more valuable than none).
-//
-//	GGCODE_TOOL_TAPE=replay:/path/to/session.tape.json
-//	    Never invoke real tools. Results are served from the tape by
-//	    (tool name, canonical input hash), FIFO per repeated input. A tape
-//	    miss returns an explicit error result — the real tool is NOT
-//	    silently executed, so a replay can never diverge into live side
-//	    effects without the operator noticing.
-//
-// This is the harness-engineering "inspectable execution history" lever:
-// a failing session can be replayed deterministically for debugging,
-// attached to a bug report, or reused as a regression fixture — without
-// touching the filesystem, network, or subprocesses a second time.
-
-// toolTapeMode selects how the tape is used during a session.
 type toolTapeMode int
 
 const (
@@ -47,14 +21,8 @@ const (
 	toolTapeReplay
 )
 
-// toolTapeEnv is the environment variable that enables tape mode.
 const toolTapeEnv = "GGCODE_TOOL_TAPE"
 
-// toolTapeState holds the session-wide tape plus a save mutex. Tape.Lookup
-// and Tape.Record are internally synchronized, but Tape.Save marshals the
-// whole tape and writes through a fixed ".tmp" path followed by a rename,
-// so concurrent saves from parallel tool calls could interleave corrupt
-// output; the mutex serializes them.
 type toolTapeState struct {
 	mu   sync.Mutex
 	tape *toolreplay.Tape
@@ -62,13 +30,6 @@ type toolTapeState struct {
 	path string
 }
 
-// parseToolTapeEnv parses the GGCODE_TOOL_TAPE value. Accepted forms:
-//
-//	record:<path>   | RECORD:<path>   (case-insensitive prefix)
-//	replay:<path>
-//
-// An empty/whitespace value means "off" (no error), so users can comment
-// the variable out with GGCODE_TOOL_TAPE= without breaking startup.
 func parseToolTapeEnv(raw string) (toolTapeMode, string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -92,12 +53,6 @@ func parseToolTapeEnv(raw string) (toolTapeMode, string, error) {
 	}
 }
 
-// newToolTapeState resolves the tape mode from the environment. It always
-// returns a non-nil state with mode off by default, so NewAgent fully
-// initializes the field (TestNewAgentInitializesAllStateFields guards
-// against nil state fields) and an unset env var stays inert. Any failure
-// (bad value, unreadable tape) degrades to "off" with a debug log line -
-// tape support must never prevent a session from starting.
 func newToolTapeState() *toolTapeState {
 	mode, path, err := parseToolTapeEnv(os.Getenv(toolTapeEnv))
 	if err != nil {
@@ -124,11 +79,6 @@ func newToolTapeState() *toolTapeState {
 	return st
 }
 
-// replayToolCall serves a recorded result for (name, args) without invoking
-// the real tool. handled=true means the caller must return immediately.
-// A tape miss is an explicit error result, never a silent fallback to the
-// real tool: divergence from the recorded run must be visible, or the
-// replay is not a replay.
 func (a *Agent) replayToolCall(name string, args json.RawMessage) (tool.Result, error, bool) {
 	st := a.toolTape
 	if st == nil || st.mode != toolTapeReplay {
@@ -149,9 +99,6 @@ func (a *Agent) replayToolCall(name string, args json.RawMessage) (tool.Result, 
 	return res, rerr, true
 }
 
-// toolResultFromEntry converts a recorded entry back into a tool result.
-// The Go-level error (rare: most tool failures are Result.IsError=true)
-// is reproduced as well, for full fidelity.
 func toolResultFromEntry(e toolreplay.Entry) (tool.Result, error) {
 	result := tool.Result{Content: e.Result.Content, IsError: e.Result.IsError}
 	if len(e.Result.Images) > 0 {
@@ -173,12 +120,6 @@ func toolResultFromEntry(e toolreplay.Entry) (tool.Result, error) {
 	return result, err
 }
 
-// recordToolCall persists a completed tool execution to the tape and flushes
-// it to disk. Calls that ended in context cancellation are skipped — a
-// cancellation result reflects the harness, not the tool, and replaying it
-// would misrepresent the recorded run. Flush-after-every-call keeps the
-// tape crash-safe: debugging a hang or OOM is exactly when the tail of the
-// tape matters most.
 func (a *Agent) recordToolCall(ctx context.Context, name string, args json.RawMessage, result tool.Result, err error) {
 	st := a.toolTape
 	if st == nil || st.mode != toolTapeRecord || ctx.Err() != nil {
@@ -186,7 +127,7 @@ func (a *Agent) recordToolCall(ctx context.Context, name string, args json.RawMe
 	}
 	entry := toolreplay.Entry{
 		ToolName:  name,
-		Input:     append([]byte(nil), args...), // defensive copy
+		Input:     append([]byte(nil), args...),
 		InputHash: toolreplay.HashInput(args),
 		Result: toolreplay.Result{
 			Content: result.Content,

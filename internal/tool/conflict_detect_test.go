@@ -109,8 +109,7 @@ println("ours")
 }
 
 func TestDetectMergeConflicts_falsePositives(t *testing.T) {
-	// Strings containing conflict-like patterns should not trigger false positives
-	// because the detector checks for markers at the START of the line.
+
 	content := `package main
 
 const msg = ">>>>>>> not a conflict"
@@ -127,7 +126,7 @@ func main() {
 }
 
 func TestDetectMergeConflicts_crlf(t *testing.T) {
-	// Windows line endings should not break detection
+
 	content := "package main\r\n\r\n<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> dev\r\n"
 	regions := DetectMergeConflicts(content)
 	if len(regions) != 1 {

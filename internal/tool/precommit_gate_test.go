@@ -35,7 +35,7 @@ func TestPrecommitBuildCheck_NoBuildSystem(t *testing.T) {
 
 func TestPrecommitBuildCheck_GoPasses(t *testing.T) {
 	dir := t.TempDir()
-	// Write a minimal go.mod that doesn't depend on anything.
+
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestPrecommitBuildCheck_GoFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Write a Go file with an obvious compile error.
+
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {\n\tx = undefinedVar\n}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,15 +70,14 @@ func TestPrecommitBuildCheck_GoFails(t *testing.T) {
 
 func TestPrecommitBuildCheck_Makefile(t *testing.T) {
 	dir := t.TempDir()
-	// Create a Makefile with a build target that always fails.
+
 	makefile := "build:\n\t@echo 'Makefile build error'\n\t@exit 1\n"
 	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefile), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	got := precommitBuildCheck(context.Background(), dir)
-	// The build target fails, but since the output goes to stdout (not stderr)
-	// and doesn't match our error patterns, we get a generic warning.
+
 	if got == "" {
 		t.Fatal("expected warning for failing Makefile build")
 	}
@@ -139,7 +138,7 @@ func TestExtractBuildErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		output  string
-		wantMin int // minimum number of expected errors
+		wantMin int
 	}{
 		{
 			name: "go errors",

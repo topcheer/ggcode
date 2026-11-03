@@ -31,7 +31,7 @@ func Shutdown() {}
 			t.Errorf("symbol section missing %q:\n%s", want, out)
 		}
 	}
-	// Methods should NOT appear (only top-level functions)
+
 	if strings.Contains(out, "Handle()") {
 		t.Errorf("methods should be excluded:\n%s", out)
 	}
@@ -52,10 +52,10 @@ func TestBuildGoPackageSymbolsSection_NonGoProject(t *testing.T) {
 func TestBuildGoPackageSymbolsSection_NestedPackages(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example\n")
-	// Depth-1 package
+
 	mustMkdir(t, filepath.Join(root, "cmd"))
 	mustWrite(t, filepath.Join(root, "cmd", "app.go"), "package cmd\nfunc Run() {}\n")
-	// Depth-2 package
+
 	mustMkdir(t, filepath.Join(root, "internal", "agent"))
 	mustWrite(t, filepath.Join(root, "internal", "agent", "agent.go"), "package agent\ntype Agent struct{}\nfunc New() *Agent { return nil }\n")
 
@@ -89,10 +89,10 @@ func TestBuildGoPackageSymbolsSection_TestFilesExcluded(t *testing.T) {
 func TestBuildGoPackageSymbolsSection_SkipsNoiseDirs(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example\n")
-	// vendor should be skipped
+
 	mustMkdir(t, filepath.Join(root, "vendor", "lib"))
 	mustWrite(t, filepath.Join(root, "vendor", "lib", "v.go"), "package lib\nfunc VendorFunc() {}\n")
-	// Real package
+
 	mustMkdir(t, filepath.Join(root, "pkg"))
 	mustWrite(t, filepath.Join(root, "pkg", "p.go"), "package pkg\nfunc RealFunc() {}\n")
 
@@ -123,10 +123,9 @@ func helperFunc() {}
 	if !strings.Contains(out, "ExportedFunc()") {
 		t.Errorf("expected ExportedFunc():\n%s", out)
 	}
-	// unexported should not appear (but "Exported" contains substring, so check exact)
+
 	for _, line := range strings.Split(out, "\n") {
-		// Each symbol is separated by ", " or is inside parentheses
-		// Check that "unexported" doesn't appear as a standalone symbol
+
 		if strings.Contains(line, "unexported") || strings.Contains(line, "helperFunc") {
 			t.Errorf("unexported symbols should be excluded, found in: %s", line)
 		}
@@ -136,13 +135,13 @@ func helperFunc() {}
 func TestBuildGoPackageSymbolsSection_ParseErrorGraceful(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example\n")
-	// A file with syntax errors
+
 	mustWrite(t, filepath.Join(root, "broken.go"), "package main\nfunc broken(\n")
-	// A valid file in the same dir
+
 	mustWrite(t, filepath.Join(root, "good.go"), "package main\nfunc Good() {}\n")
 
 	out := buildGoPackageSymbolsSection(root)
-	// Should still pick up Good() from the valid file despite parse errors
+
 	if !strings.Contains(out, "Good()") {
 		t.Errorf("expected Good() despite parse errors:\n%s", out)
 	}
@@ -165,7 +164,7 @@ func TestBuildGoPackageSymbolsSection_FileCount(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "c_test.go"), "package main\nfunc TestC() {}\n")
 
 	out := buildGoPackageSymbolsSection(root)
-	// Should show 2 files (excluding test file)
+
 	if !strings.Contains(out, "2 files") {
 		t.Errorf("expected 2 files in output:\n%s", out)
 	}
@@ -175,7 +174,7 @@ func TestBuildGoPackageSymbolsSection_FileCount(t *testing.T) {
 }
 
 func TestHasGoSource(t *testing.T) {
-	// Go project
+
 	goRoot := t.TempDir()
 	mustWrite(t, filepath.Join(goRoot, "go.mod"), "module x\n")
 	mustWrite(t, filepath.Join(goRoot, "main.go"), "package main\n")
@@ -183,14 +182,12 @@ func TestHasGoSource(t *testing.T) {
 		t.Error("expected true for Go project")
 	}
 
-	// Non-Go project
 	nonGo := t.TempDir()
 	mustWrite(t, filepath.Join(nonGo, "README.md"), "hi\n")
 	if hasGoSource(nonGo) {
 		t.Error("expected false for non-Go project")
 	}
 
-	// Go file in subdir
 	subGo := t.TempDir()
 	mustMkdir(t, filepath.Join(subGo, "pkg"))
 	mustWrite(t, filepath.Join(subGo, "pkg", "p.go"), "package pkg\n")
@@ -216,7 +213,7 @@ func TestDirHasGoFiles(t *testing.T) {
 
 func TestExtractPackageSymbols_Dedup(t *testing.T) {
 	dir := t.TempDir()
-	// Same symbol name in two files of the same package should be listed once
+
 	mustWrite(t, filepath.Join(dir, "a.go"), "package x\ntype Foo struct{}\nfunc Bar() {}\n")
 	mustWrite(t, filepath.Join(dir, "b.go"), "package x\nfunc Bar() {}\n")
 
@@ -224,7 +221,7 @@ func TestExtractPackageSymbols_Dedup(t *testing.T) {
 	if fc != 2 {
 		t.Errorf("expected 2 files, got %d", fc)
 	}
-	// Bar() should appear only once
+
 	count := 0
 	for _, s := range syms {
 		if s == "Bar()" {
@@ -234,7 +231,7 @@ func TestExtractPackageSymbols_Dedup(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected Bar() once, got %d times in %v", count, syms)
 	}
-	// Foo should be there
+
 	found := false
 	for _, s := range syms {
 		if s == "Foo" {
@@ -246,5 +243,4 @@ func TestExtractPackageSymbols_Dedup(t *testing.T) {
 	}
 }
 
-// Ensure os import is used (referenced in extractPackageSymbols signature)
 var _ = os.Stat

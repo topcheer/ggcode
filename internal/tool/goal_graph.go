@@ -12,17 +12,6 @@ import (
 	"time"
 )
 
-// GoalGraphTool provides a persistent, project-scoped hierarchical goal
-// graph for long-horizon work: goal -> milestone -> task levels, per-node
-// status lifecycle, progress rollup, cross-session resume, and stall
-// detection. Unlike the session-scoped task board (swarm_task_*) and
-// todo list, the goal graph persists in the workspace and is discovered
-// by every new session, enabling break-point continuation of multi-day
-// projects (frontier: ReAcTree arXiv:2511.02424, HIPIF hierarchical
-// subgoal progress, TMS goal management).
-//
-// Storage: <workingDir>/.ggcode/goal-graph.json
-
 const (
 	ggMaxTitle     = 200
 	ggMaxNextStep  = 500
@@ -60,7 +49,6 @@ type ggParams struct {
 	NextStep string `json:"next_step"`
 }
 
-// GoalGraphTool is the durable hierarchical goal-graph tool.
 type GoalGraphTool struct {
 	WorkingDir string
 
@@ -153,7 +141,7 @@ func (t *GoalGraphTool) doAdd(s *ggStore, p *ggParams) (Result, error) {
 		if !ok {
 			return Result{IsError: true, Content: fmt.Sprintf("parent %q not found", p.Parent)}, nil
 		}
-		// Hierarchy must be strictly goal -> milestone -> task.
+
 		if ggLevelRank(level) != ggLevelRank(parent.Level)+1 {
 			return Result{IsError: true, Content: fmt.Sprintf("a %s cannot be nested under a %s (hierarchy is goal -> milestone -> task)", level, parent.Level)}, nil
 		}
@@ -233,7 +221,6 @@ func (t *GoalGraphTool) doTree(s *ggStore) (Result, error) {
 }
 
 func (t *GoalGraphTool) doResume(s *ggStore) (Result, error) {
-	// Leaves that are not done/dropped, ordered goal-first for context.
 	var leaves []*ggNode
 	for _, n := range s.Nodes {
 		if n.Status == "done" || n.Status == "dropped" {
@@ -304,7 +291,7 @@ func (t *GoalGraphTool) doDelete(s *ggStore, p *ggParams) (Result, error) {
 	if _, ok := s.Nodes[p.ID]; !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("node %q not found", p.ID)}, nil
 	}
-	// Cascade delete the subtree (a parent without its children is a broken goal).
+
 	removed := t.deleteSubtree(s, p.ID)
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
@@ -326,8 +313,6 @@ func (t *GoalGraphTool) deleteSubtree(s *ggStore, id string) int {
 	}
 	return removed
 }
-
-// --- Helpers ---
 
 func ggLevelRank(level string) int {
 	switch level {
@@ -378,9 +363,6 @@ func (t *GoalGraphTool) hasChildren(s *ggStore, id string) bool {
 	return false
 }
 
-// rollupText computes descendant progress ("3/5 children done, 60%") for a
-// node. A parent's own status is never auto-flipped (the agent owns goal
-// semantics); rollup is reported so the agent can decide.
 func (t *GoalGraphTool) rollupText(s *ggStore, id string) string {
 	kids := t.children(s, id)
 	if len(kids) == 0 {

@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// GitStatus implements the git_status tool.
 type GitStatus struct{ WorkingDir string }
 
 func (t GitStatus) Name() string { return "git_status" }
@@ -47,7 +46,6 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Fast path: if git repo, use the existing optimized command.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Status(ctx, dir)
 		if err != nil {
@@ -73,23 +71,16 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: "Working tree clean. No changes."}, nil
 	}
 
-	// Cap output — repos with thousands of untracked files (e.g., missing
-	// .gitignore for node_modules) would flood the context.
 	const maxGitStatusLines = 200
 	lines := strings.Split(trimmed, "\n")
 	if len(lines) > maxGitStatusLines {
-		// Count by status type for the summary
 		var modified, added, deleted, untracked, conflicted int
 		for _, l := range lines {
 			if len(l) < 2 {
 				continue
 			}
 			switch {
-			// #1690 case 1: unmerged states FIRST - AA/AU/UA contain "A" and
-			// DD/DU/UD contain "D", so the added/deleted buckets above ate
-			// five of the six unmerged states and the #834 arms were dead
-			// code. Only UU ever reached conflicted: "0 CONFLICTED" false
-			// negatives on merged repos.
+
 			case l[:2] == "AA" || l[:2] == "DD" || l[:2] == "UU" ||
 				l[:2] == "AU" || l[:2] == "UA" || l[:2] == "DU" || l[:2] == "UD":
 				conflicted++
@@ -102,7 +93,7 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			case strings.Contains(l[:2], "D"):
 				deleted++
 			case strings.Contains(l[:2], "R") || strings.Contains(l[:2], "C"):
-				// #834: renamed/copied entries fell through every bucket.
+
 				modified++
 			}
 		}
@@ -121,7 +112,6 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	return Result{Content: trimmed}, nil
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitStatus) Clone() Tool {
 	return &GitStatus{WorkingDir: t.WorkingDir}
 }

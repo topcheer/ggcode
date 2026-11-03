@@ -6,14 +6,6 @@ import (
 	"testing"
 )
 
-// #2583: the desktop_control schema promised that the `app` parameter targets
-// the window for set_window_bounds, but all three platforms ignore it (macOS
-// and Linux fall back to the frontmost/active window, Windows requires a
-// title match via `text`). Until per-app window addressing lands, the schema
-// must disclose the real targeting contract (`text` = title substring on
-// Linux/Windows) so models do not call set_window_bounds with app= and hit a
-// silent-wrong-target or hard-error path. These assertions pin the schema
-// disclosure; they do not change tool behavior.
 func TestIssue2583SchemaDisclosesSetWindowBoundsTargeting(t *testing.T) {
 	var schema struct {
 		Properties map[string]struct {
@@ -25,7 +17,6 @@ func TestIssue2583SchemaDisclosesSetWindowBoundsTargeting(t *testing.T) {
 		t.Fatalf("desktop_control parameters schema is not valid JSON: %v", err)
 	}
 
-	// 1. The `text` param must document its set_window_bounds role.
 	textDesc, ok := schema.Properties["text"]
 	if !ok {
 		t.Fatal("schema is missing the text property")
@@ -37,8 +28,6 @@ func TestIssue2583SchemaDisclosesSetWindowBoundsTargeting(t *testing.T) {
 		t.Errorf("text param description must say 'title substring' for set_window_bounds, got: %q", textDesc.Description)
 	}
 
-	// 2. The `app` param must not promise set_window_bounds targeting it does
-	//    not honor (the original false promise: "whose window to resize").
 	appDesc, ok := schema.Properties["app"]
 	if !ok {
 		t.Fatal("schema is missing the app property")
@@ -51,7 +40,6 @@ func TestIssue2583SchemaDisclosesSetWindowBoundsTargeting(t *testing.T) {
 		t.Errorf("app param description must flag set_window_bounds as not yet honored, got: %q", appDesc.Description)
 	}
 
-	// 3. The tool-level description must explain target selection per platform.
 	toolDesc := (DesktopControlTool{}).Description()
 	for _, want := range []string{"Target selection", "frontmost", "title substring"} {
 		if !strings.Contains(toolDesc, want) {

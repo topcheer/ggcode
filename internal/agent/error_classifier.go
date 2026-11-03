@@ -6,37 +6,14 @@ import (
 	"sync"
 )
 
-// compileMissingFileRe matches the go compiler's missing-source form
-// `open /path/to/x.go: no such file or directory` emitted by go build/test
-// when a package references a deleted or renamed file (#3525).
 var compileMissingFileRe = regexp.MustCompile(`open \S+\.go: no such file or directory`)
 
-// ErrorClassifier provides error-type-specific guidance for tool failures.
-//
-// Research basis: AgentDebug (arXiv:2509.25370) found that targeted feedback
-// generated from failure analysis yields up to 26% relative improvement in
-// task success across benchmarks. The key insight is that error-type-specific
-// guidance (e.g. "file not found → check path") is far more effective than
-// generic "reconsider your strategy" advice, especially when delivered
-// immediately on the first error rather than waiting for a streak.
-//
-// Design:
-//   - classifyToolError categorizes errors into known patterns
-//   - Each category has specific, actionable guidance
-//   - Guidance is injected on the FIRST error of each category (not waiting
-//     for a streak of 4), giving the agent immediate direction
-//   - Each category fires at most once per run (deduplication)
-//   - The existing error-streak system (4/7/10 errors) still fires for
-//     cumulative failures, providing escalating guidance for sustained problems
 type ErrorClassifier struct {
 	mu sync.Mutex
 
-	// fired tracks which categories have already provided guidance.
-	// Each category fires at most once per run.
 	fired map[string]bool
 }
 
-// ErrorCategory represents a classified error type.
 type ErrorCategory struct {
 	Name     string
 	Guidance string
@@ -54,9 +31,6 @@ func (ec *ErrorClassifier) reset() {
 	ec.fired = make(map[string]bool)
 }
 
-// firedCategories snapshots the category names that fired this run
-// (weakness-signal collection, sa-112). The classifier's mu also guards
-// parallel tool batches touching it mid-run.
 func (ec *ErrorClassifier) firedCategories() []string {
 	ec.mu.Lock()
 	defer ec.mu.Unlock()
@@ -67,11 +41,6 @@ func (ec *ErrorClassifier) firedCategories() []string {
 	return out
 }
 
-// classifyToolError examines a tool error result and returns a category with
-// targeted guidance. Returns empty Name if the error doesn't match a known
-// pattern or if guidance for this category was already fired.
-//
-// The result content is the full error output from the tool.
 func (ec *ErrorClassifier) classifyToolError(toolName, resultContent string) ErrorCategory {
 	ec.mu.Lock()
 	defer ec.mu.Unlock()
@@ -81,7 +50,6 @@ func (ec *ErrorClassifier) classifyToolError(toolName, resultContent string) Err
 		return ErrorCategory{}
 	}
 
-	// Each category fires at most once per run
 	if ec.fired[cat.Name] {
 		return ErrorCategory{}
 	}
@@ -90,19 +58,9 @@ func (ec *ErrorClassifier) classifyToolError(toolName, resultContent string) Err
 	return cat
 }
 
-// classifyErrorContent performs the actual pattern matching.
-// Exported for testing (package-private).
 func classifyErrorContent(toolName, content string) ErrorCategory {
 	c := strings.ToLower(content)
 
-	// Order matters: most specific patterns first
-
-	// Auth errors (#3525): 'unauthorized' / HTTP 401 / expired tokens are API
-	// authentication failures (MCP tools, web_fetch), NOT filesystem
-	// permission problems - misfiling them into permission_denied injected
-	// "check file write access / do not retry" guidance that blocked the
-	// legitimate fix (rotate the key, then retry). Checked before both
-	// file_not_found and permission_denied.
 	if errorContainsAny(c,
 		"unauthorized",
 		"http 401",
@@ -121,13 +79,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Compile-form missing file FIRST (#3525): `go build` emits
-	// `open /path/x.go: no such file or directory` when a package references
-	// a deleted/renamed file. The path comes from the compiler's resolution of
-	// package declarations, not from anything the agent typed - filing it as
-	// file_not_found ("check path spelling") wastes an iteration. Scoped to
-	// command-execution tools and the .go compile form; genuine tool-level
-	// path typos (read_file/write_file) keep the file_not_found branch.
 	if (toolName == "run_command" || toolName == "start_command" ||
 		toolName == "wait_command" || toolName == "read_command_output") &&
 		compileMissingFileRe.MatchString(c) {
@@ -139,13 +90,12 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// File not found / does not exist
 	if errorContainsAny(c,
 		"no such file or directory",
 		"file does not exist",
 		"file not found",
 		"does not exist",
-		// "cannot find" is too generic — "cannot find package" should match import_error
+
 		"no such file",
 	) {
 		return ErrorCategory{
@@ -156,7 +106,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Permission denied
 	if errorContainsAny(c,
 		"permission denied",
 		"access denied",
@@ -171,11 +120,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Test-deadlock timeout FIRST (#1457-B): 'panic: test timed out' is a
-	// DETERMINISTIC test failure - the bare 'panic:' prefix below caught it
-	// as nil_pointer and the bare 'timed out' substring as timeout_network
-	// ('transient - retry'). #653 removed the same bare substrings from
-	// error_rush; the classifier syncs.
 	if errorContainsAny(c,
 		"panic: test timed out",
 		"test timed out after",
@@ -188,7 +132,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Nil pointer / panic
 	if errorContainsAny(c,
 		"nil pointer",
 		"panic:",
@@ -203,7 +146,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Type mismatch / type errors
 	if errorContainsAny(c,
 		"cannot use",
 		"as type",
@@ -223,7 +165,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Import / dependency errors
 	if errorContainsAny(c,
 		"cannot find package",
 		"no required module provides",
@@ -241,7 +182,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Syntax errors
 	if errorContainsAny(c,
 		"syntax error",
 		"unexpected token",
@@ -260,7 +200,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Timeout / deadline exceeded
 	if errorContainsAny(c,
 		"timeout",
 		"timed out",
@@ -279,7 +218,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Build/compile errors (specific to Go)
 	if errorContainsAny(c,
 		"build failed",
 		"compilation failed",
@@ -297,8 +235,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Git lock contention - concurrent git operations (common in multi-agent
-	// workflows with spawn_agent, swarm teammates, or parallel user activity)
 	if errorContainsAny(c,
 		"index.lock",
 		"another git process",
@@ -314,7 +250,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Edit-specific: anchor text not found
 	if toolName == "edit_file" || toolName == "multi_edit_file" {
 		if errorContainsAny(c,
 			"old_text",
@@ -335,13 +270,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Test failures - checked BEFORE timeout (#1457-B): a `go test`
-	// deadlock prints 'panic: test timed out after 10m0s' - the bare
-	// 'timed out' substring hijacked it into timeout_network ('transient,
-	// retry') when it is a DETERMINISTIC failure. #653 already removed the
-	// same bare substring from error_rush with the identical rationale;
-	// the classifier now syncs. Content patterns catch test output even
-	// when toolName is a bare run_command.
 	if strings.Contains(toolName, "test") || errorContainsAny(c,
 		"test failed",
 		"assertion failed",
@@ -358,11 +286,9 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Generic fallback — no specific pattern matched
 	return ErrorCategory{Name: ""}
 }
 
-// errorContainsAny checks if the string contains any of the substrings.
 func errorContainsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if strings.Contains(s, sub) {

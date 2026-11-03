@@ -60,7 +60,6 @@ func TestFileOps_DeleteNonEmptyDir_WithoutRecursive(t *testing.T) {
 		t.Fatalf("expected error for non-empty dir delete without recursive")
 	}
 
-	// Dir should still exist.
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("dir should still exist: %v", err)
 	}
@@ -144,11 +143,10 @@ func TestFileOps_Move(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", res.Content)
 	}
 
-	// Source should be gone.
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
 		t.Fatalf("source should not exist after move")
 	}
-	// Destination should have the content.
+
 	data, err := os.ReadFile(dst)
 	if err != nil {
 		t.Fatalf("error reading destination: %v", err)
@@ -255,11 +253,10 @@ func TestFileOps_MultipleOps(t *testing.T) {
 		t.Fatalf("expected 0 errors, got %d", content.Errors)
 	}
 
-	// Verify file moved.
 	if _, err := os.Stat(filepath.Join(newdir, "f1.txt")); err != nil {
 		t.Fatalf("moved file should exist: %v", err)
 	}
-	// Verify file deleted.
+
 	if _, err := os.Stat(f2); !os.IsNotExist(err) {
 		t.Fatalf("f2 should be deleted")
 	}
@@ -272,7 +269,6 @@ func TestFileOps_SandboxBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sandbox that blocks everything.
 	tool := FileOps{
 		WorkingDir:   dir,
 		SandboxCheck: func(path string) bool { return false },
@@ -288,7 +284,6 @@ func TestFileOps_SandboxBlocked(t *testing.T) {
 		t.Fatalf("expected error from sandbox block")
 	}
 
-	// File should still exist.
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("file should still exist after sandbox block: %v", err)
 	}
@@ -320,7 +315,6 @@ func TestFileOps_TrackerIntegration(t *testing.T) {
 	}
 	defaultFileTracker.RecordRead(target)
 
-	// Verify it's tracked.
 	if !defaultFileTracker.HasBeenSeen(target) {
 		t.Fatal("file should be tracked before delete")
 	}
@@ -340,7 +334,6 @@ func TestFileOps_TrackerIntegration(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", res.Content)
 	}
 
-	// After delete, the tracker should no longer track this path.
 	if defaultFileTracker.HasBeenSeen(target) {
 		t.Fatal("file should not be tracked after delete")
 	}
@@ -372,7 +365,6 @@ func TestFileOps_MoveTrackerIntegration(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", res.Content)
 	}
 
-	// Source should be untracked, destination should be tracked.
 	if defaultFileTracker.HasBeenSeen(src) {
 		t.Fatal("source should not be tracked after move")
 	}
@@ -419,9 +411,6 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	return data
 }
 
-// #1323: copyRecursive followed symlinks (Stat) with no cycle detection;
-// a link pointing back at an ancestor recursed forever - unbounded disk
-// writes or an unrecoverable stack-overflow fatal on cross-device move.
 func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
@@ -431,11 +420,11 @@ func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Ancestor-pointing link inside the tree.
+
 	if err := os.Symlink(src, filepath.Join(src, "loop")); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
-	// Parent link too (.. style).
+
 	if err := os.Symlink(root, filepath.Join(src, "up")); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +440,7 @@ func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("copyRecursive did not terminate - symlink cycle infinite recursion")
 	}
-	// Symlinks must be recreated as links, not materialized copies.
+
 	fi, err := os.Lstat(filepath.Join(dst, "loop"))
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("loop link not recreated as symlink: %v", err)
@@ -465,9 +454,6 @@ func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 	}
 }
 
-// TestIsCrossDeviceErrorForms pins #1684 case 2: errno check plus the
-// Windows ERROR_NOT_SAME_DEVICE text (which mentions neither "cross-device"
-// nor "EXDEV") so the copy+remove fallback fires there too.
 func TestIsCrossDeviceErrorForms(t *testing.T) {
 	if !isCrossDeviceError(syscall.EXDEV) {
 		t.Fatal("errno EXDEV must be recognized")

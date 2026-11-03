@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// WebSearch implements the web_search tool — searches using DuckDuckGo HTML.
 type WebSearch struct{}
 
 func (t WebSearch) Name() string { return "web_search" }
@@ -20,11 +19,10 @@ func (t WebSearch) Description() string {
 	return "Search the web using DuckDuckGo. Returns search result snippets, not full page contents. Use web_fetch on a selected result URL when you need the page text."
 }
 
-// ToolMeta provides Gen 3 metadata for cost-aware and rate-aware selection.
 func (t WebSearch) ToolMeta() ToolMeta {
 	return ToolMeta{
-		CostEstimate: 0.0001, // ~$0.0001 per search (DuckDuckGo is free but has rate limits)
-		RateLimitRPS: 2.0,    // DuckDuckGo suggests max 2 requests/sec to avoid blocking
+		CostEstimate: 0.0001,
+		RateLimitRPS: 2.0,
 		RetryPolicy:  "exponential",
 		MaxRetries:   3,
 	}
@@ -108,7 +106,6 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
 	}
 
-	// Fetch more results when domain filtering is active to compensate for filtered-out entries
 	fetchLimit := args.MaxResults
 	if len(args.AllowedDomains) > 0 || len(args.BlockedDomains) > 0 {
 		fetchLimit = args.MaxResults * 3
@@ -119,14 +116,10 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	results := parseDDGResults(string(body), fetchLimit)
 
-	// Apply domain filtering
 	results = filterByDomain(results, args.AllowedDomains, args.BlockedDomains)
 
-	// Apply quality assessment: spam filtering, type classification,
-	// relevance scoring, domain deduplication.
 	results, bestScore := assessSearchResultsScored(args.Query, results, args.AllowedDomains)
 
-	// Trim to requested max after filtering
 	total := len(results)
 	if len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
@@ -140,31 +133,19 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("%d. %s\n   URL: %s\n   %s\n\n", i+1, r.Title, r.URL, r.Snippet))
 	}
-	// #1835 case 2: domain filtering fetches up to 3x the requested count
-	// and this trim silently dropped up to 2/3 of the surviving candidates -
-	// a bare numbered list let the agent conclude "the docs don't cover it"
-	// without knowing results were withheld. Say how many survived filtering
-	// (the grep/search_files of-N convention).
+
 	if total > len(results) {
 		sb.WriteString(fmt.Sprintf("... [showing %d of %d filtered results — refine allowed_domains or raise max_results to see the rest]\n", len(results), total))
 	}
-	// r364 (r343 evaluator slice, Agentic-RAG low-confidence loop): when even
-	// the best result matches under 30% of the query terms, the results are
-	// vocabulary-mismatched - say so instead of letting the agent iterate
-	// blindly on the same wording. CJK/no-token queries never fire (flat 50
-	// fallback trusts the upstream ranker we cannot tokenize).
+
 	if bestScore < weakSearchBestScore {
 		sb.WriteString(fmt.Sprintf("[search-quality] best result matches only %d%% of query terms - results look weak. Consider rephrasing with vocabulary the target docs actually use, or narrowing via allowed_domains.\n", bestScore))
 	}
 	return Result{Content: sb.String()}, nil
 }
 
-// weakSearchBestScore is the r364 weak-result threshold: below it, the
-// tool appends a rephrase hint. 30 = the top result matched under a third
-// of the query's meaningful terms.
 const weakSearchBestScore = 30
 
-// filterByDomain applies allowed_domains and blocked_domains filters.
 func filterByDomain(results []searchResult, allowedDomains, blockedDomains []string) []searchResult {
 	if len(allowedDomains) == 0 && len(blockedDomains) == 0 {
 		return results
@@ -196,9 +177,7 @@ func normalizeDomains(domains []string) []string {
 		d = strings.TrimPrefix(d, "http://")
 		d = strings.TrimPrefix(d, "https://")
 		d = strings.TrimSuffix(strings.Split(d, "/")[0], ".")
-		// #1428-A: strip a leading www so the exempt-map KEY matches the
-		// lookup side (which strips www from result domains) - a
-		// www.npmjs.com allow entry kept its www and never hit.
+
 		d = strings.TrimPrefix(d, "www.")
 		if d == "" || seen[d] {
 			continue
@@ -222,7 +201,6 @@ func domainMatchesAny(host string, domains []string) bool {
 	return false
 }
 
-// domainFromURL extracts the hostname from a URL string.
 func domainFromURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -238,23 +216,17 @@ type searchResult struct {
 }
 
 func parseDDGResults(htmlBody string, max int) []searchResult {
-	// DuckDuckGo HTML wraps each result in a <div class="result">
-	// with <a class="result__a"> for title/link and <a class="result__snippet"> for snippet.
+
 	reResult := regexp.MustCompile(`(?is)<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
 	reSnippet := regexp.MustCompile(`(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
 	reHref := regexp.MustCompile(`href="([^"]+)"`)
 
-	// #1352: the class value needs a boundary after "result" - the old
-	// pattern class="result[^"]*" also matched structural wrappers
-	// (class="results", class="result__extras", class="result__extras__url"),
-	// so pseudo-blocks consumed result slots and duplicated titles.
 	resultBlocks := regexp.MustCompile(`(?is)<div[^>]+class="result[\s"][^>]*>`)
 	indices := resultBlocks.FindAllStringIndex(htmlBody, max)
 
 	var results []searchResult
 	for i, idx := range indices {
-		// Limit block to next result div or end (the comment claimed this
-		// but it was never implemented - blocks ran to document end).
+
 		block := htmlBody[idx[0]:]
 		if i+1 < len(indices) {
 			block = htmlBody[idx[0]:indices[i+1][0]]

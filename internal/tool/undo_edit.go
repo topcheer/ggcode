@@ -8,26 +8,6 @@ import (
 	"time"
 )
 
-// UndoEditTool provides agent-accessible undo/revert for file edits.
-//
-// Research basis: AI coding agents (Claude Code, Cursor, Cline) all support
-// some form of checkpoint/rewind — the ability to roll back file changes when
-// the agent realises a mistake. Without this, the agent's only option is
-// "fix forward" (apply another edit to correct the previous one), which
-// compounds errors and wastes tokens, especially after context compaction
-// when the original file content may no longer be in the conversation history.
-//
-// ggcode already has an internal checkpoint.Manager with Undo/Revert/List/Redo,
-// but it was only accessible via the user-facing Esc+Esc rewind. This tool
-// exposes that capability to the LLM so it can:
-//   - undo: revert the most recent file edit
-//   - list: see what edits are available to undo
-//   - revert: roll back to a specific checkpoint by ID
-//
-// The actual undo logic is executed in the Agent layer (agent_tool.go) which
-// has access to the checkpoint.Manager. The tool struct here only provides the
-// schema; when Execute is called directly (outside the agent), it returns a
-// helpful error explaining the tool requires the agent runtime.
 type UndoEditTool struct{}
 
 func (t UndoEditTool) Name() string { return "undo_edit" }
@@ -62,16 +42,13 @@ func (t UndoEditTool) Parameters() json.RawMessage {
 }
 
 func (t UndoEditTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
-	// When executed directly (not through the agent dispatch), we cannot access
-	// the checkpoint manager. This is a fallback that should never be reached
-	// in normal operation — the agent intercepts undo_edit calls in executeTool.
+
 	return Result{
 		IsError: true,
 		Content: "undo_edit must be executed through the agent runtime (checkpoint manager is not available in standalone mode).",
 	}, nil
 }
 
-// CheckpointInfo is a summary of a single checkpoint, used for the 'list' action.
 type CheckpointInfo struct {
 	ID        string    `json:"id"`
 	FilePath  string    `json:"file_path"`
@@ -80,7 +57,6 @@ type CheckpointInfo struct {
 	IsNew     bool      `json:"is_new"`
 }
 
-// FormatCheckpointList formats checkpoint summaries for display to the LLM.
 func FormatCheckpointList(checkpoints []CheckpointInfo) string {
 	if len(checkpoints) == 0 {
 		return "No checkpoints available. File edits made in this session will appear here."
@@ -89,7 +65,6 @@ func FormatCheckpointList(checkpoints []CheckpointInfo) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Recent file edits (%d, most recent first):\n\n", len(checkpoints)))
 
-	// Show most recent first
 	maxShow := 15
 	start := len(checkpoints)
 	if start > maxShow {
@@ -112,7 +87,6 @@ func FormatCheckpointList(checkpoints []CheckpointInfo) string {
 	return sb.String()
 }
 
-// FormatUndoResult formats the result of an undo operation.
 func FormatUndoResult(filePath, toolCall string, isNew bool) string {
 	verb := "Reverted edit to"
 	if isNew {

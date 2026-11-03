@@ -5,7 +5,6 @@ import "testing"
 func TestEditPropagation_BasicTracking(t *testing.T) {
 	s := newEditPropagationState()
 
-	// Editing the same file 3 times should count as 1 distinct file
 	s.recordEdit("edit_file", `{"file_path":"/foo/bar.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/foo/bar.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/foo/bar.go"}`)
@@ -35,7 +34,6 @@ func TestEditPropagation_WarnAt4Files(t *testing.T) {
 	s.recordEdit("edit_file", `{"file_path":"/b.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/c.go"}`)
 
-	// 3 files: no warning yet
 	msg := s.maybeWarn(5)
 	if msg != "" {
 		t.Error("should not warn at 3 files")
@@ -43,7 +41,6 @@ func TestEditPropagation_WarnAt4Files(t *testing.T) {
 
 	s.recordEdit("edit_file", `{"file_path":"/d.go"}`)
 
-	// 4 files: first warning
 	msg = s.maybeWarn(5)
 	if msg == "" {
 		t.Error("should warn at 4 files")
@@ -91,14 +88,11 @@ func TestEditPropagation_MaxWarnings(t *testing.T) {
 	s.recordEdit("edit_file", `{"file_path":"/c.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/d.go"}`)
 
-	// First warning fires (soft tier, 4+)
 	msg1 := s.maybeWarn(5)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// #2709: second tier (7+) fires the escalation once — the cap is two
-	// (one per tier), not the batch-2 cap=1 residue that made this dead code.
 	s.recordEdit("edit_file", `{"file_path":"/e.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/f.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/g.go"}`)
@@ -108,7 +102,6 @@ func TestEditPropagation_MaxWarnings(t *testing.T) {
 		t.Fatal("expected escalation warning at 7 files (#2709 two-tier semantics)")
 	}
 
-	// Third call: suppressed (both tier quotas spent)
 	msg3 := s.maybeWarn(5)
 	if msg3 != "" {
 		t.Error("should not warn more than max times")
@@ -134,7 +127,6 @@ func TestEditPropagation_Reset(t *testing.T) {
 func TestEditPropagation_MultiFileEdit(t *testing.T) {
 	s := newEditPropagationState()
 
-	// multi_file_edit with files array containing multiple paths
 	s.recordEdit("multi_file_edit", `{"files":[{"path":"/a.go"},{"path":"/b.go"}]}`)
 
 	if len(s.distinctFiles) != 2 {
@@ -145,7 +137,6 @@ func TestEditPropagation_MultiFileEdit(t *testing.T) {
 func TestEditPropagation_NonEditToolIgnored(t *testing.T) {
 	s := newEditPropagationState()
 
-	// read_file is not an editing tool, should be ignored
 	s.recordEdit("read_file", `{"file_path":"/a.go"}`)
 
 	if len(s.distinctFiles) != 0 {

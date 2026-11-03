@@ -19,8 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// CronStorePaths returns the per-session store path and the legacy
-// workspace-scoped store path for migration.
 func CronStorePaths(sessionID string) (sessionPath, legacyPath string) {
 	base := filepath.Join(config.HomeDir(), ".ggcode")
 	legacyPath = filepath.Join(base, "cron-jobs.json")
@@ -30,15 +28,10 @@ func CronStorePaths(sessionID string) (sessionPath, legacyPath string) {
 	return
 }
 
-// NewSessionCronScheduler creates a cron scheduler that persists jobs
-// per-session under ~/.ggcode/cron-jobs/<sessionID>.json.
-// If sessionID is empty, the scheduler works without persistence until
-// SetSession is called.
 func NewSessionCronScheduler(sessionID, workingDir string, enqueue func(prompt string, queueIfBusy bool)) *cron.Scheduler {
 	sessionPath, legacyPath := CronStorePaths(sessionID)
 	scheduler := cron.NewScheduler(enqueue, sessionPath)
 
-	// Migrate old workspace-scoped jobs to this session (once per workspace).
 	if sessionPath != "" && workingDir != "" {
 		cron.MigrateWorkspaceJobs(legacyPath, sessionPath, workingDir)
 	}
@@ -47,10 +40,6 @@ func NewSessionCronScheduler(sessionID, workingDir string, enqueue func(prompt s
 	return scheduler
 }
 
-// ApplyIdleMaintenance enables sleep-time compute (r373) on the agent:
-// an idle watcher that pre-compacts the context during user-idle windows
-// so the next message doesn't pay compaction latency. Returns nil (and
-// changes nothing) unless cfg.Enabled.
 func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMaintainer {
 	if ag == nil || !cfg.Enabled {
 		return nil
@@ -77,14 +66,6 @@ func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMai
 	return m
 }
 
-// AttachIdleConsolidation wires the memory re-consolidation sweep (sa-63,
-// Letta sleep-time compute "from a queue" trigger) into an idle
-// maintainer. The sweep is deterministic, idempotent and cheap (capped
-// pairwise scan), so it runs on EVERY idle fire - including the fires the
-// pre-compact ratio gate skips - surfacing stale / conflicting /
-// near-duplicate memory long before the next process start instead of
-// waiting for the startup-only sweep. No-op when either input is nil
-// (e.g. idle maintenance disabled).
 func AttachIdleConsolidation(m *agent.IdleMaintainer, autoMem *memory.AutoMemory, workingDir string) {
 	if m == nil || autoMem == nil {
 		return
@@ -148,7 +129,7 @@ func NewSubAgentManager(
 	availableModels func() []string,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
-	onMetric func(metrics.MetricEvent), // sa-218: sub-agent telemetry into the parent collector
+	onMetric func(metrics.MetricEvent),
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	systemPromptBuilder func(task, agentType string) string,
 ) *subagent.Manager {
@@ -167,21 +148,17 @@ func NewSubAgentManager(
 		OnUsage:             onUsage,
 		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
-		// r460: worktree-isolated sub-agent experience backflow (injected
-		// here to keep the tool package free of an agent import).
+
 		TrajBackflow: agent.TrajBackflowFromWorktree,
 	}
 	_ = registry.Register(spawnTool)
-	// r377: trajectory-level best-of-N sampling on top of the spawn pipeline.
-	// r380: AvailableModels enables per-candidate model validation for
-	// heterogeneous ensembles (models=[...] on best_of_n).
+
 	_ = registry.Register(tool.BestOfNTool{
 		Manager:         mgr,
 		Run:             BestOfNRunnerFor(spawnTool, mgr),
 		AvailableModels: availableModels,
 	})
-	// r436: dynamic workflow orchestration (externalized task graph:
-	// decompose -> parallel workers -> adversarial verify -> synthesize).
+
 	_ = registry.Register(tool.WorkflowRunTool{
 		Manager: mgr,
 		Run:     WorkflowRunnerFor(spawnTool, mgr),
@@ -199,7 +176,6 @@ func NewSubAgentManager(
 		CascadeHints: cascadeHints,
 	})
 
-	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(workingDir)
 	_ = registry.Register(tool.CreateNamedAgentTool{Store: tmplStore})
 	_ = registry.Register(tool.DeleteNamedAgentTool{Store: tmplStore})
@@ -214,7 +190,7 @@ func NewSubAgentManager(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
-		OnMetric:            onMetric, // #3296: named-agent forks stop being OTLP black boxes
+		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
 	})
 	return mgr

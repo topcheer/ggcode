@@ -9,10 +9,6 @@ import (
 	"testing"
 )
 
-// #4803 (S-35): while the shared main tree sat on a fix branch, every seat
-// running validation there computed against the wrong baseline. The guard
-// appends a warning to validation-command results run on a non-main branch
-// of the shared tree; worktrees and main itself stay silent; once per run.
 func zz4803Agent(dir string) *Agent {
 	a := &Agent{workingDir: dir}
 	return a
@@ -25,17 +21,17 @@ func zz4803Run(t *testing.T, a *Agent, cmd string) string {
 }
 
 func TestIssue4803_WarnsOnFixBranchInSharedTree(t *testing.T) {
-	// Real repo on a non-main branch (this test file's own branch).
+
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	msg := zz4803Run(t, zz4803Agent(dir), "echo seeded") // seed once-state
+	msg := zz4803Run(t, zz4803Agent(dir), "echo seeded")
 	_ = msg
 	resetSharedTreeBranchGuard()
 	shared := t.TempDir()
 	zz4803Git(t, shared, "init", "-b", "fix-branch-x")
-	// git init already leaves HEAD on fix-branch-x (unborn but show-current works).
+
 	a := zz4803Agent(shared)
 	msg = zz4803Run(t, a, "go test ./...")
 	if msg == "" {
@@ -44,7 +40,7 @@ func TestIssue4803_WarnsOnFixBranchInSharedTree(t *testing.T) {
 	if !strings.Contains(msg, "fix-branch-x") || !strings.Contains(msg, "SHARED") {
 		t.Fatalf("warning must name branch and shared-tree risk, got: %s", msg)
 	}
-	// Once per run: a second validation command stays silent.
+
 	if again := zz4803Run(t, a, "make test"); again != "" {
 		t.Fatalf("warn-once violated: %s", again)
 	}

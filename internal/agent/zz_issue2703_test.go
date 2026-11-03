@@ -1,17 +1,5 @@
 package agent
 
-// #2703 regression: the regex declaration counter must not flag legal
-// block-scoped declarations as duplicates.
-//
-// Scenario 1 (JS local const): two functions each declare a local
-// `const result` — block scope, legal, must not be flagged.
-// Scenario 2 (JS nested function): two functions each nest
-// `function init()` — legal ES6 block scoping, must not be flagged.
-// Scenario 3 (Python nested def): two methods of one class each define a
-// nested `def helper()` — local functions, must not be counted twice as
-// A.helper.
-// Control: genuine top-level duplicates are still flagged.
-
 import "testing"
 
 func TestIssue2703_JSLocalConstNotFlagged(t *testing.T) {
@@ -80,11 +68,11 @@ func TestIssue2703_PythonNestedDefNotFlagged(t *testing.T) {
 }
 
 func TestIssue2703_PythonModuleDefAfterClassNotMisattributed(t *testing.T) {
-	// A module-level def AFTER a class must not be attributed to it.
+
 	old := "class A:\n    def run(self):\n        pass\n"
 	new := "class A:\n    def run(self):\n        pass\n\ndef run():\n    pass\n"
 	dups := checkPythonDuplicateDecls(old, new)
-	// A.run (method) and top-level run (function) are different keys: no dup.
+
 	for _, d := range dups {
 		if d.kind == "method" && d.name == "A.run" {
 			t.Fatalf("module-level def after class misattributed as method: %+v", d)
@@ -93,7 +81,7 @@ func TestIssue2703_PythonModuleDefAfterClassNotMisattributed(t *testing.T) {
 }
 
 func TestIssue2703_GenuineTopLevelDuplicatesStillFlagged(t *testing.T) {
-	// Control: true file-scope duplicates keep firing.
+
 	old := "const foo = () => 1;\n"
 	new := "const foo = () => 1;\nconst foo = () => 2;\n"
 	dups := checkJSDuplicateDecls(old, new, ".js")

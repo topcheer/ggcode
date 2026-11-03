@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// #2612 characterization: pin the Execute dispatch layer's argument
-// validation before the handler-table refactor. Each case asserts the
-// exact error copy for a missing required argument; the refactor must
-// keep every message byte-identical.
 func TestBrowserExecuteValidationCharacterization(t *testing.T) {
 	cases := []struct {
 		name  string

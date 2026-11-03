@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #589 N1: Test that "per your instruction about X" is authorization (not a question).
-// The fix should distinguish between:
-// - "you asked me about X" = question/non-authorization
-// - "per your instruction about X" = true authorization
 func TestIssue589N1_PerInstructionAboutIsAuthorization(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -52,8 +48,6 @@ func TestIssue589N1_PerInstructionAboutIsAuthorization(t *testing.T) {
 	}
 }
 
-// #589 N2: Test that "noted"/"mentioned" only checked in bounded window.
-// The fix should only scan ~20 chars after marker, not entire remaining text.
 func TestIssue589N2_NotedMentionedBoundedWindow(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -65,7 +59,7 @@ func TestIssue589N2_NotedMentionedBoundedWindow(t *testing.T) {
 			name:         "immediate 'noted' in suffix should NOT exempt",
 			text:         "As you requested earlier (you noted this too), that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: false, // "you noted" is in the immediate context (~20 chars) after marker
+			expectExempt: false,
 		},
 		{
 			name:         "immediate 'mentioned' in suffix should NOT exempt",
@@ -77,13 +71,13 @@ func TestIssue589N2_NotedMentionedBoundedWindow(t *testing.T) {
 			name:         "noted in distant parenthesis (30+ chars) should exempt",
 			text:         "As requested earlier (and you noted this requirement separately in another conversation), that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: true, // "noted" is far away (>20 chars), should not block authorization
+			expectExempt: true,
 		},
 		{
 			name:         "mentioned in distant sentence should NOT exempt (different sentence)",
 			text:         "As you requested earlier. You mentioned it before, but that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: false, // Marker and pattern are in different sentences (separated by period)
+			expectExempt: false,
 		},
 	}
 
@@ -97,8 +91,6 @@ func TestIssue589N2_NotedMentionedBoundedWindow(t *testing.T) {
 	}
 }
 
-// #589 F1-B: Test that negation at any position in sentence prevents exemption.
-// The fix should scan to sentence start, not just 5 chars with idx>5 limit.
 func TestIssue589F1B_NegationAnyPositionInSentence(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -110,7 +102,7 @@ func TestIssue589F1B_NegationAnyPositionInSentence(t *testing.T) {
 			name:         "Not as requested at idx=4 (<5) should NOT exempt",
 			text:         "Not as requested, that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: false, // "Not" at position 0, marker at 4, should still detect negation
+			expectExempt: false,
 		},
 		{
 			name:         "never as requested should NOT exempt",
@@ -142,7 +134,6 @@ func TestIssue589F1B_NegationAnyPositionInSentence(t *testing.T) {
 	}
 }
 
-// #589 F1-C: Test that negation beyond 5-char window still prevents exemption.
 func TestIssue589F1C_NegationBeyond5CharWindow(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -154,7 +145,7 @@ func TestIssue589F1C_NegationBeyond5CharWindow(t *testing.T) {
 			name:         "not only as requested (negation 8 chars before) should NOT exempt",
 			text:         "not only as requested but also more, that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: false, // "not" is 8 chars before marker, should still detect
+			expectExempt: false,
 		},
 		{
 			name:         "never really as requested (negation 6 chars before) should NOT exempt",
@@ -174,8 +165,6 @@ func TestIssue589F1C_NegationBeyond5CharWindow(t *testing.T) {
 	}
 }
 
-// #589 N3: Test that marker side checks all occurrences, not just first.
-// If first occurrence is negated but second is clean, should exempt.
 func TestIssue589N3_MarkerSideChecksAllOccurrences(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -187,7 +176,7 @@ func TestIssue589N3_MarkerSideChecksAllOccurrences(t *testing.T) {
 			name:         "first 'as requested' negated, second clean should exempt",
 			text:         "Earlier it was not as requested, so now redoing it as requested: that requirement is out of scope.",
 			pattern:      "that requirement is out of scope",
-			expectExempt: true, // Second "as requested" is clean and precedes pattern
+			expectExempt: true,
 		},
 		{
 			name:         "multiple markers, first negated, last clean should exempt",
@@ -213,18 +202,14 @@ func TestIssue589N3_MarkerSideChecksAllOccurrences(t *testing.T) {
 	}
 }
 
-// #589 N4: Design choice - colon+newline splitting does not exempt.
-// This documents the known tradeoff of F2 strictness.
 func TestIssue589N4_ColonNewlineSplittingTradeoff(t *testing.T) {
-	// "As requested:\n- that requirement is out of scope"
-	// The colon+newline creates a sentence boundary, so marker and pattern are in different sentences.
-	// This is a known tradeoff of F2 strictness - not considered a defect.
+
 	text := "As requested:\n- that requirement is out of scope for this phase."
 	result := cdIsAuthExempt(text, "that requirement is out of scope", "reclassification")
 	if result {
 		t.Error("Expected NO exemption when marker and pattern are separated by colon+newline (known F2 strictness tradeoff)")
 	}
-	// Same line should still exempt
+
 	textSameLine := "As requested, that requirement is out of scope for this phase."
 	resultSameLine := cdIsAuthExempt(textSameLine, "that requirement is out of scope", "reclassification")
 	if !resultSameLine {
@@ -232,7 +217,6 @@ func TestIssue589N4_ColonNewlineSplittingTradeoff(t *testing.T) {
 	}
 }
 
-// #589 Combined: Test all fixes together in realistic scenarios.
 func TestIssue589_CombinedScenario(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -303,36 +287,30 @@ func TestIssue589_CombinedScenario(t *testing.T) {
 	}
 }
 
-// #589 Integration: Test that indicators accumulate correctly with the fixes.
 func TestIssue589_IndicatorAccumulation(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Turn 1: True authorization (should be exempt)
 	c.recordAssistantText("Per your instruction about the deadline, that requirement is out of scope.", 1)
 	if len(c.indicators) != 0 {
 		t.Errorf("Turn 1: Expected 0 indicators (exempt), got %d", len(c.indicators))
 	}
 
-	// Turn 2: Non-authorization question (should count)
 	c.recordAssistantText("You asked me about the scope, that requirement is out of scope.", 2)
 	if len(c.indicators) != 1 {
 		t.Errorf("Turn 2: Expected 1 indicator, got %d", len(c.indicators))
 	}
 
-	// Turn 3: Negated marker (should count)
 	c.recordAssistantText("Not as requested, that requirement is out of scope.", 3)
 	if len(c.indicators) != 2 {
 		t.Errorf("Turn 3: Expected 2 indicators, got %d", len(c.indicators))
 	}
 
-	// Turn 4: Should trigger with 2 indicators
 	msg := c.maybeWarn(4)
 	if msg == "" {
 		t.Error("Expected warning after 2 indicators accumulated")
 	}
 
-	// Verify warning content
 	if !strings.Contains(msg, "Success Criteria Integrity") {
 		t.Errorf("Warning missing expected label: %s", msg)
 	}

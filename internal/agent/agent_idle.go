@@ -8,44 +8,21 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// IdleMaintainer implements sleep-time compute (r373, Letta/Berkeley
-// arXiv 2504.13171): use user-idle windows to do maintenance work that
-// would otherwise add latency or token cost to the next interaction.
-//
-// The maintainer watches two signals:
-//   - lastActivity: bumped by Touch()/RunBegin()/RunEnd() (wired from
-//     the agent run loop), and
-//   - inflight: the number of agent runs in progress (a long run must
-//     never be mistaken for idleness even past the threshold).
-//
-// After `after` of continuous idleness it fires ONCE per idle period
-// (until the next Touch resets the period): when the context usage ratio
-// is at/above ratioFloor it kicks a pre-compact, moving the compaction
-// LLM call into the idle window instead of the next user message's
-// critical path. StartPreCompact is snapshot-based and reentry-guarded,
-// so firing is safe at any run boundary - and we only ever fire between
-// runs (inflight == 0), the same boundary consumeReadyPreCompact uses.
 type IdleMaintainer struct {
 	after      time.Duration
 	ratioFloor float64
 	ratioFn    func() float64
 	action     func()
 
-	// maintenance (sa-63) is the secondary, ratio-INDEPENDENT idle-window
-	// callback (memory re-consolidation). atomic.Value so it can be attached
-	// after construction without a lock on the ticker hot path.
-	maintenance atomic.Value // func()
+	maintenance atomic.Value
 
 	interval     time.Duration
-	lastActivity atomic.Int64 // unix nanos
+	lastActivity atomic.Int64
 	inflight     atomic.Int32
-	fired        atomic.Bool // one fire per idle period
+	fired        atomic.Bool
 	stopped      atomic.Bool
 }
 
-// NewIdleMaintainer builds a maintainer. ratioFn may be nil (treated as
-// "never enough context"); action may be nil (idle period consumed, no
-// work). Tests override interval after construction.
 func NewIdleMaintainer(after time.Duration, ratioFloor float64, ratioFn func() float64, action func()) *IdleMaintainer {
 	if after <= 0 {
 		after = 10 * time.Minute
@@ -64,19 +41,8 @@ func NewIdleMaintainer(after time.Duration, ratioFloor float64, ratioFn func() f
 	return m
 }
 
-// maintenanceCleared is the sentinel stored in place of nil: atomic.Value
-// cannot hold a nil func. Calling it is observationally identical to having
-// no maintenance registered (#4122: "Pass nil to clear" was previously a
-// no-op, so a registered callback could never be stopped).
 var maintenanceCleared = func() {}
 
-// SetMaintenance registers a secondary idle-window callback that runs on
-// EVERY idle fire, independent of the pre-compact ratio gate (sa-63, Letta
-// sleep-time compute "every few turns / from a queue" trigger). Use it for
-// deterministic, idempotent work such as memory re-consolidation - it
-// reclaims the fires the ratio gate below would otherwise consume without
-// doing anything. fn must be safe to run between runs (inflight == 0).
-// Pass nil to clear. No-op on a nil receiver.
 func (m *IdleMaintainer) SetMaintenance(fn func()) {
 	if m == nil {
 		return
@@ -87,7 +53,6 @@ func (m *IdleMaintainer) SetMaintenance(fn func()) {
 	m.maintenance.Store(fn)
 }
 
-// Touch records user activity and re-arms the idle period.
 func (m *IdleMaintainer) Touch() {
 	if m == nil {
 		return
@@ -96,7 +61,6 @@ func (m *IdleMaintainer) Touch() {
 	m.fired.Store(false)
 }
 
-// RunBegin marks an agent run in progress (also counts as activity).
 func (m *IdleMaintainer) RunBegin() {
 	if m == nil {
 		return
@@ -105,7 +69,6 @@ func (m *IdleMaintainer) RunBegin() {
 	m.Touch()
 }
 
-// RunEnd closes one agent run.
 func (m *IdleMaintainer) RunEnd() {
 	if m == nil {
 		return
@@ -114,7 +77,6 @@ func (m *IdleMaintainer) RunEnd() {
 	m.Touch()
 }
 
-// Start launches the idle watcher goroutine.
 func (m *IdleMaintainer) Start() {
 	if m == nil {
 		return
@@ -132,7 +94,6 @@ func (m *IdleMaintainer) Start() {
 	})
 }
 
-// Stop terminates the watcher loop.
 func (m *IdleMaintainer) Stop() {
 	if m == nil {
 		return
@@ -142,21 +103,18 @@ func (m *IdleMaintainer) Stop() {
 
 func (m *IdleMaintainer) check() {
 	if m.inflight.Load() > 0 {
-		m.Touch() // a run in flight is activity, not idleness
+		m.Touch()
 		return
 	}
 	last := time.Unix(0, m.lastActivity.Load())
 	if time.Since(last) < m.after {
 		return
 	}
-	// One fire per idle period: CAS prevents every tick from re-firing.
+
 	if !m.fired.CompareAndSwap(false, true) {
 		return
 	}
-	// Secondary maintenance (sa-63): deterministic, ratio-independent work
-	// runs on every idle fire - including the fires the ratio gate below
-	// would otherwise waste. Recover-isolated so a maintenance panic can
-	// never take down the watcher loop.
+
 	if fn, ok := m.maintenance.Load().(func()); ok && fn != nil {
 		func() {
 			defer safego.Recover("idle-maintenance")

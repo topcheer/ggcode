@@ -1,8 +1,5 @@
 package tool
 
-// sa-85 tests: Graph-of-Skills dependency closure - chain expansion,
-// cycle safety, missing/mismatch reporting, depth cap, search rendering.
-
 import (
 	"strings"
 	"testing"
@@ -21,7 +18,6 @@ func mkSkill(name string, deps ...string) *commands.Command {
 	return &commands.Command{Name: name, Enabled: true, Dependencies: deps}
 }
 
-// Chain: c -> b -> a fully expands past the direct hop.
 func TestSkillClosure_Chain(t *testing.T) {
 	lookup := closureSkillLookup{
 		"a": mkSkill("a"),
@@ -37,7 +33,6 @@ func TestSkillClosure_Chain(t *testing.T) {
 	}
 }
 
-// Cycle: a -> b -> a terminates and still reports the reachable member.
 func TestSkillClosure_Cycle(t *testing.T) {
 	lookup := closureSkillLookup{
 		"a": mkSkill("a", "b"),
@@ -49,7 +44,6 @@ func TestSkillClosure_Cycle(t *testing.T) {
 	}
 }
 
-// Missing and disabled deps are named, not silently dropped.
 func TestSkillClosure_MissingAndDisabled(t *testing.T) {
 	lookup := closureSkillLookup{
 		"c":   mkSkill("c", "ghost", "off"),
@@ -61,7 +55,6 @@ func TestSkillClosure_MissingAndDisabled(t *testing.T) {
 	}
 }
 
-// Version-constrained dep that fails the constraint lands in Mismatch.
 func TestSkillClosure_VersionMismatch(t *testing.T) {
 	lookup := closureSkillLookup{
 		"root": mkSkill("root", "dep@>=2.0.0"),
@@ -76,10 +69,6 @@ func TestSkillClosure_VersionMismatch(t *testing.T) {
 	}
 }
 
-// Depth cap truncates a 4-deep chain at skillClosureMaxDepth: the node
-// AT the cap still has an unexplored edge (s4), so Truncated is set (#3492:
-// a capped LEAF with no outgoing edges must NOT be flagged - old test
-// pinned that false positive).
 func TestSkillClosure_DepthCap(t *testing.T) {
 	lookup := closureSkillLookup{
 		"s1": mkSkill("s1", "s2"),
@@ -93,7 +82,6 @@ func TestSkillClosure_DepthCap(t *testing.T) {
 	}
 }
 
-// String renders a compact hint; nothing to report -> empty.
 func TestSkillClosure_String(t *testing.T) {
 	lookup := closureSkillLookup{"b": mkSkill("b")}
 	c := DependencyClosure(mkSkill("c", "b"), lookup, 0)
@@ -105,8 +93,6 @@ func TestSkillClosure_String(t *testing.T) {
 	}
 }
 
-// Search rendering surfaces the closure line for matched skills (queried
-// path only; the full listing stays unchanged).
 func TestSkillClosure_SearchRender(t *testing.T) {
 	lookup := closureSkillLookup{
 		"deploy-web": mkSkill("deploy-web", "build-assets"),
@@ -119,14 +105,13 @@ func TestSkillClosure_SearchRender(t *testing.T) {
 	if !strings.Contains(out, "Deps(closure)") || !strings.Contains(out, "chain: deploy-web -> build-assets -> install-deps") {
 		t.Fatalf("search result must carry the closure chain, got:\n%s", out)
 	}
-	// Listing (empty query) must not append closures.
+
 	listing := formatSkillSearchResults(matches, "", "", 1, lookup)
 	if strings.Contains(listing, "Deps(closure)") {
 		t.Fatalf("listing must stay unchanged, got:\n%s", listing)
 	}
 }
 
-// Load-time hint upgrade: chain prefix + legacy advisory both present.
 func TestSkillClosure_LoadHint(t *testing.T) {
 	lookup := closureSkillLookup{"b": mkSkill("b")}
 	got := closureDependencyHint(mkSkill("c", "b"), lookup)
@@ -135,7 +120,6 @@ func TestSkillClosure_LoadHint(t *testing.T) {
 	}
 }
 
-// Nil safety: nil cmd / nil lookup never panic.
 func TestSkillClosure_NilSafe(t *testing.T) {
 	if s := (DependencyClosure(nil, nil, 0)).String(); s != "" {
 		t.Fatalf("nil closure must render empty, got %s", s)

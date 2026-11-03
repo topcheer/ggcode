@@ -133,7 +133,7 @@ func foo() {
 	fmt.Println("already dead")
 }
 `
-	newContent := oldContent // no change
+	newContent := oldContent
 	warnings := checkUnreachableCode("test.go", oldContent, newContent)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for pre-existing unreachable code (delta-aware), got: %v", warnings)
@@ -169,8 +169,7 @@ func foo() {
 }
 
 func TestCheckUnreachableCode_SyntaxErrorSkipped(t *testing.T) {
-	// Syntax errors should not trigger unreachable code warnings -
-	// the syntax check (#3) already handles those.
+
 	newContent := "package main\n\nfunc foo() {\n\treturn\n\tthis is not valid go\n}\n"
 	warnings := checkUnreachableCode("test.go", "", newContent)
 	if len(warnings) != 0 {

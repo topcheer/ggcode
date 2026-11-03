@@ -40,7 +40,7 @@ func TestTruncationAdvisory_UnknownTool(t *testing.T) {
 }
 
 func TestAdvisoryForTruncation_SmallOutput(t *testing.T) {
-	// Below 8KB threshold, no advisory should be generated
+
 	if advisory := advisoryForTruncation("run_command", 4000); advisory != "" {
 		t.Errorf("expected empty advisory for small output, got: %s", advisory)
 	}

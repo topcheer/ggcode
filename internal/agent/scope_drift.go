@@ -1,30 +1,5 @@
 package agent
 
-// Scope Drift Detection — Semantic Task Scope Creep Warning
-//
-// While the overseer detects quantitative drift (no productive actions for N
-// iterations), this guard detects qualitative/semantic drift: the agent IS
-// making productive changes (edits, writes, commands) but the set of files
-// and directories being modified has grown far beyond what the original task
-// implied. This is "scope creep" — a common failure mode in autonomous agents:
-//
-//   - Agent fixes a bug, then starts refactoring nearby code "while I'm here"
-//   - Agent adds tests for files unrelated to the original task
-//   - Agent edits configuration files outside the expected scope
-//   - Agent touches >15 files across >6 directories for a "fix one function" task
-//
-// Competitor approaches:
-//   - Claude Code: system prompt with scope guidance, no runtime detection
-//   - Cursor Composer: explicit user-selected scope, no auto-detection
-//   - OpenHands: periodic re-planning by a separate LLM planner (costs tokens)
-//   - Devin: SICA overseer monitors trajectory shape but not file diversity
-//
-// Our approach: deterministic file-diversity tracking. Zero LLM cost.
-// Tracks unique directories touched by productive operations and fires when
-// the diversity suggests scope creep. The threshold adapts to task complexity
-// detected by the planner: complex multi-file tasks get a higher bar before
-// triggering, while simple single-file tasks trigger earlier.
-
 import (
 	"fmt"
 	"path/filepath"
@@ -34,37 +9,22 @@ import (
 )
 
 const (
-	// scopeDirThresholdSimple: max unique directories for simple tasks before
-	// scope creep warning. A simple "fix this function" task shouldn't touch
-	// more than a few directories.
 	scopeDirThresholdSimple = 5
 
-	// scopeDirThresholdComplex: max unique directories for complex tasks.
-	// Multi-file refactors may legitimately touch more directories.
 	scopeDirThresholdComplex = 10
 
-	// scopeFileThreshold: max unique files before warning regardless of
-	// task complexity. Even complex tasks rarely need >25 files.
 	scopeFileThreshold = 25
 
-	// scopeWarnAfter: minimum number of productive operations before the
-	// guard starts checking. Avoids false positives during early exploration.
 	scopeWarnAfter = 6
 )
 
-// scopeDriftState tracks the diversity of files/directories modified during
-// a run to detect semantic scope creep.
 type scopeDriftState struct {
-	// editedDirs: set of unique top-level-ish directories modified.
 	editedDirs map[string]bool
 
-	// editedFiles: set of unique file paths modified.
 	editFiles map[string]bool
 
-	// productiveCount: total productive operations (edits/writes).
 	productiveCount int
 
-	// fired: whether the scope drift warning has already been injected.
 	fired bool
 }
 
@@ -75,7 +35,6 @@ func newScopeDriftState() *scopeDriftState {
 	}
 }
 
-// reset clears state for a new run.
 func (s *scopeDriftState) reset() {
 	s.editedDirs = make(map[string]bool)
 	s.editFiles = make(map[string]bool)
@@ -83,17 +42,14 @@ func (s *scopeDriftState) reset() {
 	s.fired = false
 }
 
-// recordEdit tracks a file modification (edit/write operation).
 func (s *scopeDriftState) recordEdit(filePath string) {
 	if filePath == "" {
 		return
 	}
-	// Normalize path.
+
 	fp := filepath.Clean(filePath)
 	s.editFiles[fp] = true
 
-	// Extract a directory signature. Use the first 2-3 path segments to group
-	// related files (e.g., "internal/agent" counts as one scope area).
 	dir := filepath.Dir(fp)
 	sig := dirSignature(dir)
 	if sig != "" {
@@ -102,28 +58,15 @@ func (s *scopeDriftState) recordEdit(filePath string) {
 	s.productiveCount++
 }
 
-// dirSignature reduces a directory path to a 2-segment signature for grouping.
-// e.g., "internal/agent/sub" -> "internal/agent"
-//
-//	"src/components" -> "src/components"
-//	"pkg" -> "pkg"
 func dirSignature(dir string) string {
-	// #473: strip leading separators (and Windows drive letters) so
-	// absolute paths ("/project/pkgA" -> "project/pkgA") keep their two
-	// meaningful segments instead of collapsing every sibling under "/project".
-	// #1491-D residue: on a DEEP absolute path ("/Volumes/x/repo/internal/agent")
-	// the top-2 segments ("Volumes/x") are the same for every directory in
-	// the workspace - the signature stopped discriminating and the
-	// per-directory threshold was structurally unreachable. Absolute paths
-	// now take the LAST two segments (the semantically meaningful ones);
-	// relative paths keep top-2.
+
 	wasAbs := strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "\\") || (len(dir) >= 2 && dir[1] == ':')
 	dir = strings.TrimLeft(dir, "/\\")
 	if len(dir) >= 2 && dir[1] == ':' {
 		dir = dir[2:]
 	}
 	parts := strings.Split(dir, "/")
-	// Drop empty segments (double separators) before slicing.
+
 	clean := parts[:0]
 	for _, p := range parts {
 		if p != "" {
@@ -139,8 +82,6 @@ func dirSignature(dir string) string {
 	return clean[0] + "/" + clean[1]
 }
 
-// check returns a guidance message if scope drift is detected, empty otherwise.
-// isComplex adapts the threshold based on the planner's complexity assessment.
 func (s *scopeDriftState) check(isComplex bool) string {
 	if s.fired || s.productiveCount < scopeWarnAfter {
 		return ""
@@ -154,14 +95,12 @@ func (s *scopeDriftState) check(isComplex bool) string {
 	dirCount := len(s.editedDirs)
 	fileCount := len(s.editFiles)
 
-	// Trigger if either directories or files exceed their thresholds.
 	if dirCount <= dirThreshold && fileCount <= scopeFileThreshold {
 		return ""
 	}
 
 	s.fired = true
 
-	// Build a list of touched directories for the guidance message.
 	dirs := make([]string, 0, len(s.editedDirs))
 	for d := range s.editedDirs {
 		dirs = append(dirs, d)
@@ -195,9 +134,6 @@ func (s *scopeDriftState) check(isComplex bool) string {
 	)
 }
 
-// --- Agent integration ---
-
-// scopeDriftRecord tracks a productive file operation for scope drift analysis.
 func (a *Agent) scopeDriftRecord(toolName string, fileHint string) {
 	if a.scopeDrift == nil {
 		return
@@ -208,7 +144,6 @@ func (a *Agent) scopeDriftRecord(toolName string, fileHint string) {
 	a.scopeDrift.recordEdit(fileHint)
 }
 
-// scopeDriftCheck returns guidance if scope drift is detected.
 func (a *Agent) scopeDriftCheck() string {
 	if a.scopeDrift == nil {
 		return ""
@@ -222,14 +157,10 @@ func (a *Agent) scopeDriftCheck() string {
 	return a.scopeDrift.check(isComplex)
 }
 
-// resetScopeDrift clears state for a new run.
 func (a *Agent) resetScopeDrift() {
 	if a.scopeDrift != nil {
 		a.scopeDrift.reset()
 	}
 }
 
-// productiveEditTools are tools that modify files (subset of productiveTools).
-// Aliased to the canonical sourceMutatingTools superset (#738) so it can
-// never drift from the registered tool set.
 var productiveEditTools = sourceMutatingTools

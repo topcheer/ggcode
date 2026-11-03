@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #1691 case 2 (upstream semantics): control characters are NOT rejected
-// but REPORTED - countDroppedControlRunes drives an honest note so the
-// caller knows the terminal received less than was asked.
 func TestIterm2DroppedControlCounted1691(t *testing.T) {
 	if got := countDroppedControlRunes("ok\x1b[Ax\x07"); got != 2 {
 		t.Fatalf("dropped control count = %d, want 2", got)
@@ -19,7 +16,6 @@ func TestIterm2DroppedControlCounted1691(t *testing.T) {
 	}
 }
 
-// #1691 case 3: waitForHealthy must honor ctx cancellation.
 func TestIMWaitForHealthyCtxCancel1691(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

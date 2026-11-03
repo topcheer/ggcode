@@ -46,7 +46,7 @@ func TestResponseQuality_ScoreRun_WithErrors(t *testing.T) {
 			"edit_file": 3,
 		},
 		FilesEdited: []string{"a.go"},
-		// #1490-A: scorers read ErrorCount, not len(Errors).
+
 		Errors:     []string{"edit failed", "another error"},
 		ErrorCount: 2,
 		Duration:   30 * time.Second,
@@ -71,7 +71,6 @@ func TestResponseQuality_ScoreRun_WithErrors(t *testing.T) {
 func TestResponseQuality_Compare(t *testing.T) {
 	scorer := NewResponseQualityScorer(100)
 
-	// Provider A: 2 successful runs
 	for i := 0; i < 2; i++ {
 		stats := &RunStats{
 			ToolCalls:         map[string]int{"read_file": 1},
@@ -85,11 +84,10 @@ func TestResponseQuality_Compare(t *testing.T) {
 		scorer.ScoreRun(stats, "anthropic", "claude-sonnet-4")
 	}
 
-	// Provider B: 1 failed run
 	stats := &RunStats{
 		ToolCalls:  map[string]int{"edit_file": 1},
 		Errors:     []string{"failed"},
-		ErrorCount: 1, // #1490-A: scorer reads the counter
+		ErrorCount: 1,
 		Duration:   60 * time.Second,
 		Iterations: 10,
 		Success:    false,
@@ -102,7 +100,6 @@ func TestResponseQuality_Compare(t *testing.T) {
 		t.Fatalf("expected 2 comparisons, got %d", len(comps))
 	}
 
-	// Anthropic should rank first (higher avg score)
 	if comps[0].Provider != "anthropic" {
 		t.Errorf("expected anthropic first, got %s", comps[0].Provider)
 	}

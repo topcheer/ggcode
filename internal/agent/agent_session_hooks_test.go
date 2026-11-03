@@ -13,11 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Session lifecycle hook wiring tests (on_session_start / on_session_end).
-// Frontier parity: Claude Code SessionStart fires once per session with a
-// source (startup/resume) and its stdout is added to context; SessionEnd
-// flushes state on teardown (https://code.claude.com/docs/en/hooks).
-
 func newSessionHookAgent(t *testing.T) *Agent {
 	t.Helper()
 	mp := &mockProvider{
@@ -68,10 +63,6 @@ func TestSessionStartSourceStartupVsResume(t *testing.T) {
 		OnSessionStart: []hooks.Hook{{Match: "*", Command: "echo $GGCODE_SESSION_SOURCE >> " + srcFile}},
 	}
 
-	// #3385: a system message alone (the TUI rebuilder / desktop
-	// SetPermissionMode both inject one before a brand-new session's first
-	// turn) must NOT flip the source to "resume" - only prior conversation
-	// history does.
 	fresh := newSessionHookAgent(t)
 	fresh.AddMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "system prompt"}}})
 	fresh.SetHookConfig(hookCfg)
@@ -143,5 +134,5 @@ func TestSessionEndHookFiresOnClose(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("on_session_end hook did not run on Close: %v", err)
 	}
-	a.Close() // idempotent; must not hang or double-fire
+	a.Close()
 }

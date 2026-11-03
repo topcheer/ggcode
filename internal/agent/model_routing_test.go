@@ -1,7 +1,5 @@
 package agent
 
-// model_routing_test.go -- tests for task-tier aux model routing.
-
 import (
 	"context"
 	"testing"
@@ -14,7 +12,7 @@ import (
 
 func newRoutingTestAgent(t *testing.T) *Agent {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir()) // config: isolate from real user home
+	t.Setenv("HOME", t.TempDir())
 	prov, err := provider.NewProvider(&config.ResolvedEndpoint{
 		VendorID: "zai",
 		Protocol: "openai",
@@ -39,7 +37,6 @@ func auxRoutingEndpoint(model string) *config.ResolvedEndpoint {
 	}
 }
 
-// Unset aux model: routing disabled, aux provider == main provider.
 func TestAuxRoutingDisabledByDefault(t *testing.T) {
 	a := newRoutingTestAgent(t)
 	if a.auxResolved != nil {
@@ -50,7 +47,6 @@ func TestAuxRoutingDisabledByDefault(t *testing.T) {
 	}
 }
 
-// SetAuxModel with empty or same-as-main model keeps routing disabled.
 func TestSetAuxModelNoops(t *testing.T) {
 	a := newRoutingTestAgent(t)
 	a.SetAuxModel(auxRoutingEndpoint("glm-4.6"), "")
@@ -63,8 +59,6 @@ func TestSetAuxModelNoops(t *testing.T) {
 	}
 }
 
-// A distinct aux model clones the resolved endpoint with Model overridden
-// and lazily builds a second provider.
 func TestSetAuxModelEnablesRouting(t *testing.T) {
 	a := newRoutingTestAgent(t)
 	a.SetAuxModel(auxRoutingEndpoint("glm-4.6"), "glm-4.5-air")
@@ -84,22 +78,17 @@ func TestSetAuxModelEnablesRouting(t *testing.T) {
 	if got == a.provider {
 		t.Fatal("enabled routing must build a separate provider instance")
 	}
-	// Cached: second call returns the same instance.
+
 	if got2 := a.auxProviderFor(); got2 != got {
 		t.Fatal("aux provider must be cached across calls")
 	}
 }
 
-// auxChat delegates to the routed provider without altering the message
-// protocol shape (same provider.Chat contract).
 func TestAuxChatDelegates(t *testing.T) {
 	a := newRoutingTestAgent(t)
-	// Disabled routing: auxChat uses the main provider; the call will fail
-	// (unreachable endpoint) but must return the provider's error, proving
-	// delegation happened through the normal Chat path.
+
 	msgs := []provider.Message{{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("ping")}}}
-	// Short deadline so the provider's internal retry loop (20 attempts)
-	// cannot stretch this test; delegation is proven by any error returned.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, err := a.auxChat(ctx, msgs, nil)
@@ -108,12 +97,10 @@ func TestAuxChatDelegates(t *testing.T) {
 	}
 }
 
-// Failed aux provider construction degrades permanently to the main
-// provider instead of breaking auxiliary calls.
 func TestAuxProviderBuildFailureFallsBack(t *testing.T) {
 	a := newRoutingTestAgent(t)
 	a.SetAuxModel(auxRoutingEndpoint("glm-4.6"), "glm-4.5-air")
-	// Sabotage: invalid protocol forces NewProvider to fail.
+
 	a.auxResolved.Protocol = "no-such-protocol"
 	got := a.auxProviderFor()
 	if got != a.provider {
@@ -122,7 +109,7 @@ func TestAuxProviderBuildFailureFallsBack(t *testing.T) {
 	if !a.auxFailed {
 		t.Fatal("auxFailed flag must be set after a build failure")
 	}
-	// Permanent: even after the flag, still the main provider.
+
 	if got2 := a.auxProviderFor(); got2 != a.provider {
 		t.Fatal("fallback must be permanent")
 	}

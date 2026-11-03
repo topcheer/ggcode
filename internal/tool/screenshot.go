@@ -9,23 +9,20 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 )
 
-// ScreenshotTool captures screenshots of the screen, a specific display,
-// a window, or a screen region. Supports cursor inclusion, delay, format
-// selection, auto-resize, and listing available displays/windows.
 type ScreenshotTool struct{}
 
 type screenshotParams struct {
-	Action        string            `json:"action"`          // capture, list_displays, list_windows
-	Window        string            `json:"window"`          // window title/app name
-	Display       int               `json:"display"`         // 1-based monitor index
-	Region        *screenshotRegion `json:"region"`          // rectangular area
-	Cursor        bool              `json:"cursor"`          // include cursor
-	DelayMs       int               `json:"delay_ms"`        // delay before capture
-	Format        string            `json:"format"`          // png or jpeg
-	Quality       int               `json:"quality"`         // jpeg quality 1-100
-	OutputPath    string            `json:"output_path"`     // save finalized image to file
-	RawOutputPath string            `json:"raw_output_path"` // save raw (unprocessed) image to file
-	MaxWidth      int               `json:"max_width"`       // auto-resize max width
+	Action        string            `json:"action"`
+	Window        string            `json:"window"`
+	Display       int               `json:"display"`
+	Region        *screenshotRegion `json:"region"`
+	Cursor        bool              `json:"cursor"`
+	DelayMs       int               `json:"delay_ms"`
+	Format        string            `json:"format"`
+	Quality       int               `json:"quality"`
+	OutputPath    string            `json:"output_path"`
+	RawOutputPath string            `json:"raw_output_path"`
+	MaxWidth      int               `json:"max_width"`
 }
 
 type screenshotRegion struct {

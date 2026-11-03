@@ -11,39 +11,29 @@ func TestIrrevClassifyTool(t *testing.T) {
 		args string
 		want int
 	}{
-		// Tier 0: read-only
+
 		{"read_file", `{"path":"/tmp/f.go"}`, irrevTierNone},
 		{"grep", `{"pattern":"foo"}`, irrevTierNone},
 		{"git_status", `{}`, irrevTierNone},
 		{"git_diff", `{}`, irrevTierNone},
 
-		// Tier 1: low irreversibility
 		{"edit_file", `{"file_path":"/tmp/f.go"}`, irrevTierLow},
 		{"write_file", `{"path":"/tmp/f.go"}`, irrevTierLow},
 		{"git_add", `{"files":["a.go"]}`, irrevTierLow},
 		{"undo_edit", `{}`, irrevTierLow},
 
-		// Tier 2: medium
 		{"git_commit", `{"message":"x"}`, irrevTierMedium},
 		{"file_ops", `{"ops":[]}`, irrevTierMedium},
 		{"batch_replace", `{"pattern":"x","replacement":"y","files":[]}`, irrevTierMedium},
 
-		// Tier 3: high
-		// #1468-C: soft/mixed resets are Low; only --hard is High.
 		{"git_reset", `{"mode":"soft"}`, irrevTierLow},
 		{"git_reset", `{"args":"git reset --hard HEAD~3"}`, irrevTierHigh},
-		// #1579 follow-up: the REAL tool schema shape - mode is a field,
-		// the '--hard' literal never appears in the agent's arguments.
+
 		{"git_reset", `{"mode":"hard","target":"HEAD~3"}`, irrevTierHigh},
 		{"git_reset", `{"mode":"soft","target":"HEAD"}`, irrevTierLow},
 		{"git_reset", `{"mode":"mixed"}`, irrevTierLow},
 		{"git_push", `{"force":true}`, irrevTierHigh},
 
-		// CUA tools (sa-22 / appscale 2026 layer-2 gating): the schema
-		// "action" enum decides the tier, not the tool name. Observation
-		// actions are Tier 0; quit_app/uninstall have no recovery path
-		// (High); evaluate/upload/install carry external side effects
-		// (Medium); ordinary reversible interaction stays Low.
 		{"desktop_control", `{"action":"quit_app","text":"Xcode"}`, irrevTierHigh},
 		{"desktop_control", `{"action":"snapshot_ui","max_depth":8}`, irrevTierNone},
 		{"desktop_control", `{"action":"find_element","text":"Save"}`, irrevTierNone},
@@ -58,13 +48,9 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"browser", `{"action":"navigate","url":"https://example.com"}`, irrevTierLow},
 		{"browser", `{"action":"links"}`, irrevTierNone},
 		{"browser", `{"action":"click","selector":"button.submit"}`, irrevTierLow},
-		// Malformed args keep the pre-existing default: Low, not a crash.
+
 		{"desktop_control", `not-json`, irrevTierLow},
 
-		// sa-28: read-only / verification shell commands = Tier 0 (parity
-		// with their dedicated-tool counterparts above). The first case is
-		// the exact first-hand FP sequence that fired the gate at session
-		// start.
 		{"run_command", `{"command":"git fetch origin main 2>&1 | tail -2; git log --oneline -25 origin/main"}`, irrevTierNone},
 		{"run_command", `{"command":"git status"}`, irrevTierNone},
 		{"run_command", `{"command":"go build -o /tmp/ggcode ./cmd/ggcode"}`, irrevTierNone},
@@ -73,13 +59,11 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"run_command", `{"command":"cat a.go | grep foo | wc -l"}`, irrevTierNone},
 		{"run_command", "{\"command\":\"# fetch latest\\n cd /tmp && git status\"}", irrevTierNone},
 
-		// Destructive commands via run_command
 		{"run_command", `{"command":"git push --force origin main"}`, irrevTierHigh},
 		{"run_command", `{"command":"git reset --hard HEAD~3"}`, irrevTierHigh},
 		{"run_command", `{"command":"rm -rf /tmp/foo"}`, irrevTierHigh},
 		{"run_command", `{"command":"echo hello"}`, irrevTierMedium},
 
-		// Unknown tool defaults to low
 		{"unknown_tool", `{}`, irrevTierLow},
 	}
 
@@ -104,15 +88,12 @@ func TestIrrevIsDestructiveCommand(t *testing.T) {
 			t.Errorf("irrevIsDestructiveCommand(%q) = false, want true", c)
 		}
 	}
-	// Non-destructive
+
 	if irrevIsDestructiveCommand(`{"command":"echo hello"}`) {
 		t.Error("echo should not be destructive")
 	}
 }
 
-// sa-28 first-hand FP: a session whose very first command is a read-only
-// fetch/log sequence was told to "check repository state" with structurally
-// zero grounding. Read-only commands must never consume an advisory slot.
 func TestIrrevGate_FirstReadOnlyCommandNoAdvisory(t *testing.T) {
 	s := newIrrevGateState()
 	warn := s.recordAction("run_command",
@@ -125,9 +106,6 @@ func TestIrrevGate_FirstReadOnlyCommandNoAdvisory(t *testing.T) {
 	}
 }
 
-// The read-only classifier is conservative: writes, unknown binaries,
-// command substitution, file redirects, and state-mutating subcommands all
-// fall through to the previous (Medium) behavior.
 func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 	stayNonReadOnly := []string{
 		"echo hello",
@@ -149,7 +127,6 @@ func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 	}
 }
 
-// Destructive patterns keep precedence over the read-only fast path.
 func TestIrrevReadOnlyDestructivePrecedence(t *testing.T) {
 	if got := irrevClassifyTool("run_command", `{"command":"git fetch origin main && rm -rf /tmp/x"}`); got != irrevTierHigh {
 		t.Errorf("destructive pattern must win over read-only, got %d", got)
@@ -167,7 +144,7 @@ func TestIrrevIsGroundingAction(t *testing.T) {
 		}
 	}
 	notGrounding := []string{"edit_file", "write_file", "git_commit"}
-	// #1468-A: a successful run_command IS grounding.
+
 	if !irrevIsGroundingAction("run_command") {
 		t.Error("run_command should count as grounding (#1468-A)")
 	}
@@ -180,7 +157,7 @@ func TestIrrevIsGroundingAction(t *testing.T) {
 
 func TestIrrevGate_HighImpactNoGrounding(t *testing.T) {
 	s := newIrrevGateState()
-	// First action is high-impact with zero grounding
+
 	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn == "" {
 		t.Error("expected warning for high-impact action with no grounding")
@@ -189,10 +166,10 @@ func TestIrrevGate_HighImpactNoGrounding(t *testing.T) {
 
 func TestIrrevGate_HighImpactWithGrounding(t *testing.T) {
 	s := newIrrevGateState()
-	// Two grounding actions first
+
 	s.recordAction("git_status", `{}`)
 	s.recordAction("git_diff", `{}`)
-	// Now high-impact action should not warn
+
 	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn != "" {
 		t.Error("expected no warning for high-impact action after 2 grounding actions")
@@ -201,7 +178,7 @@ func TestIrrevGate_HighImpactWithGrounding(t *testing.T) {
 
 func TestIrrevGate_MediumImpactInsufficientGrounding(t *testing.T) {
 	s := newIrrevGateState()
-	// Medium-impact with no grounding
+
 	warn := s.recordAction("git_commit", `{"message":"x"}`)
 	if warn == "" {
 		t.Error("expected warning for medium-impact action with no grounding")
@@ -210,9 +187,9 @@ func TestIrrevGate_MediumImpactInsufficientGrounding(t *testing.T) {
 
 func TestIrrevGate_MediumImpactWithGrounding(t *testing.T) {
 	s := newIrrevGateState()
-	// One grounding action
+
 	s.recordAction("read_file", `{"path":"a.go"}`)
-	// Medium-impact should be OK with 1 grounding
+
 	warn := s.recordAction("git_commit", `{"message":"x"}`)
 	if warn != "" {
 		t.Error("expected no warning for medium-impact after 1 grounding")
@@ -237,16 +214,15 @@ func TestIrrevGate_LowImpactNoWarning(t *testing.T) {
 
 func TestIrrevGate_MaxWarnings(t *testing.T) {
 	s := newIrrevGateState()
-	// Fire max warnings
+
 	for i := 0; i < irrevMaxWarnings; i++ {
 		s.recordAction("git_commit", `{"message":"x"}`)
-		s.reset() // reset grounding but keep warnings count
+		s.reset()
 	}
-	// Next one should be suppressed
+
 	s.reset()
 	warn := s.recordAction("git_commit", `{"message":"x"}`)
-	// After reset, warnings count is 0, so this would fire again
-	// Actually reset() clears warnings too. Let me test without reset.
+
 	_ = warn
 }
 
@@ -284,21 +260,20 @@ func TestIrrevGate_Reset(t *testing.T) {
 
 func TestIrrevGate_GroundingWindowDecay(t *testing.T) {
 	s := newIrrevGateState()
-	// Do 2 grounding actions, then many non-grounding to push them out of window
+
 	s.recordAction("git_diff", `{}`)
 	s.recordAction("git_status", `{}`)
-	// Fill window with non-grounding actions
+
 	for i := 0; i < irrevGroundingWindow+2; i++ {
 		s.recordAction("edit_file", `{"file_path":"a.go"}`)
 	}
-	// Now high-impact action should warn again (grounding fell out of window)
+
 	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn == "" {
 		t.Error("expected warning after grounding decayed out of window")
 	}
 }
 
-// Regression for #1621-A/B: destructive schema-field actions must tier up.
 func TestStashDropAndTagDeleteTierUp(t *testing.T) {
 	if got := irrevClassifyTool("git_stash", `{"action":"drop","index":3}`); got != irrevTierHigh {
 		t.Fatalf("stash drop must be High, got %v", got)
@@ -314,13 +289,9 @@ func TestStashDropAndTagDeleteTierUp(t *testing.T) {
 	}
 }
 
-// TestIrrevGateRecordOutcomeRevokesFailedGrounding pins #1776 case 3: a
-// FAILED run_command is not grounding - the optimistic pre-execution append
-// must be retroactively revoked, or a string of failed tests satisfies the
-// threshold and push --force sails through ungated.
 func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
 	s := newIrrevGateState()
-	// Successful verification grounds.
+
 	s.recordAction("run_command", "go test ./...")
 	s.recordOutcome("run_command", false)
 	s.recordAction("run_command", "go build ./...")
@@ -328,7 +299,7 @@ func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
 	if s.totalGrounded != 2 {
 		t.Fatalf("successful verifications must ground, got %d", s.totalGrounded)
 	}
-	// A FAILED one gets revoked.
+
 	s.recordAction("run_command", "go test ./pkg/...")
 	s.recordOutcome("run_command", true)
 	if s.totalGrounded != 2 {
@@ -337,7 +308,7 @@ func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
 	if s.grounding[len(s.grounding)-1] {
 		t.Fatal("grounding ledger tail must be false after revocation")
 	}
-	// Outcome for a DIFFERENT tool must not revoke anything.
+
 	s.recordAction("run_command", "go vet ./...")
 	before := s.totalGrounded
 	s.recordOutcome("grep", true)
@@ -346,8 +317,6 @@ func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
 	}
 }
 
-// #1621 side note: files-present resets ignore mode (per-file mixed
-// unstage) - a stale "mode":"hard" next to files is not a hard reset.
 func TestIrrevClassifyTool1621ModeIgnoredWithFiles(t *testing.T) {
 	if got := irrevClassifyTool("git_reset", `{"mode":"hard","files":["a.go"]}`); got != irrevTierLow {
 		t.Fatalf("mode+files must tier Low (mixed unstage), got %d", got)

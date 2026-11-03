@@ -2,12 +2,6 @@ package agent
 
 import "testing"
 
-// #2829: recordToolCall keyword matching was pure substring Contains on tool
-// args. "runtime"/"truncate" satisfied a "run" keyword, "author.go" satisfied
-// "auth" - the addressed flag burned on unrelated calls and the skip-step
-// warning went silent. Hits now require word boundaries (sgKeywordPresent,
-// reusing #2745's isWordByte).
-
 func TestIssue2829_SubstringHitDoesNotMarkAddressed(t *testing.T) {
 	s := newSubgoalState()
 	s.subgoals = []subgoalEntry{

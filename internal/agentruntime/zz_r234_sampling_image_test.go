@@ -1,8 +1,5 @@
 package agentruntime
 
-// R234 (R232 audit item): an image-typed sampling message must convert
-// to provider.ImageBlock, not silently degrade to empty text.
-
 import (
 	"context"
 	"testing"
@@ -11,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// fakeProvider234 captures the messages handed to Chat.
 type fakeProvider234 struct {
 	provider.Provider
 	got []provider.Message

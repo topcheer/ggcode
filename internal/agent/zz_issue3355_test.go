@@ -1,10 +1,5 @@
 package agent
 
-// Regression tests for #3355: the slice prealloc check (Check #56) must not
-// flag `var x []T` bindings that are later granted capacity via plain
-// assignment (x = make([]T, 0, N)) - including branch-selected capacities -
-// while still catching genuinely zero-cap appends.
-
 import "testing"
 
 func TestIssue3355_VarDeclAssignMakeWithCapNoWarning(t *testing.T) {
@@ -44,7 +39,7 @@ func collect(lines []string, big bool) []string {
 }
 
 func TestIssue3355_AssignZeroCapMakeStillWarns(t *testing.T) {
-	// make([]T, 0) grants no capacity: the guard must not over-suppress.
+
 	src := `package main
 func collect(lines []string) []string {
 	var files []string
@@ -76,9 +71,7 @@ func collect(lines []string) []string {
 }
 
 func TestIssue3355_UpgradeDoesNotLeakAcrossUnits(t *testing.T) {
-	// A package-level zero-cap var granted capacity in one function must not
-	// silently flip the shared decl seen by a sibling function that appends
-	// without any capacity grant - that function still deserves its warning.
+
 	src := `package main
 
 var sink []string

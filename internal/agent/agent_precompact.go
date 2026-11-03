@@ -15,47 +15,30 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// precompactState tracks an in-flight background pre-compaction.
-//
-// Lifecycle:
-//
-//	idle ──► StartPreCompact() creates state, launches goroutine ──► COMPACTING
-//	COMPACTING ──► goroutine writes err then closes done ──► DONE
-//	next RunStreamWithContent ──► consumeReadyPreCompact applies if done ──► cleared
-//
-// All field reads on this struct are guarded by either:
-//   - holding Agent.mu (for the *precompactState pointer itself), or
-//   - having observed the close of `done` (happens-before via channel close).
 type precompactState struct {
-	done      chan struct{}          // closed when the goroutine exits
-	cancel    context.CancelFunc     // cancels this pre-compact's own bgCtx
-	startedAt time.Time              // when the goroutine started; for status display
-	startTok  int                    // token count snapshot when started
-	snapshot  ctxpkg.CompactSnapshot // immutable live-context snapshot compacted in background
-	result    ctxpkg.CompactResult   // populated before close(done) — read only after <-done
-	err       error                  // populated before close(done) — read only after <-done
-	cancelled atomic.Bool            // set if CancelPreCompact was called externally (#1828: written by the canceller, read by the consumer with no common lock - plain bool was racy on natural-completion/concurrent-cancel)
+	done      chan struct{}
+	cancel    context.CancelFunc
+	startedAt time.Time
+	startTok  int
+	snapshot  ctxpkg.CompactSnapshot
+	result    ctxpkg.CompactResult
+	err       error
+	cancelled atomic.Bool
 }
 
 const (
 	precompactBackgroundTimeout = 180 * time.Second
-	// precompactStartDelay staggers the compression LLM call away from the
-	// agent's regular LLM turn to avoid API rate-limit collisions.
-	precompactStartDelay = 6 * time.Second
+	precompactStartDelay        = 6 * time.Second
 )
 
-// precompactDelayCtx is the delay applied before the background compression
-// request fires. Tests override this to zero for fast execution.
 var precompactDelay = precompactStartDelay
 
-// isRetryableCompactError returns true for transient network/timeout errors
-// that warrant a retry from the precompact background goroutine.
 func isRetryableCompactError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
-		return false // agent shutting down
+		return false
 	}
 	s := strings.ToLower(err.Error())
 	for _, keyword := range []string{
@@ -78,29 +61,15 @@ func isRetryableCompactError(err error) bool {
 type snapshotCompactManager interface {
 	CompactSnapshot() ctxpkg.CompactSnapshot
 	ApplyCompactResult(ctxpkg.CompactSnapshot, ctxpkg.CompactResult) (bool, int)
-	// LastCompactRejectReason reports why the most recent ApplyCompactResult
-	// refused its result (#663) — the agent refunds the cooldown only for
-	// USER-DRIVEN resets, not benign internal cleanup.
 	LastCompactRejectReason() ctxpkg.CompactRejectReason
 }
 
-// PreCompactStatus is a UI-friendly snapshot of any in-flight pre-compact.
-// Returned by Agent.PreCompactStatus(). All fields are zero-valued when none
-// is running.
 type PreCompactStatus struct {
 	Running   bool
 	StartedAt time.Time
 	StartTok  int
 }
 
-// StartPreCompact initiates a background compaction if conditions warrant it.
-// Returns immediately. Safe to call after every agent run; it self-skips when
-// tokens are below threshold or a compact is already in flight.
-//
-// The background goroutine compacts an immutable snapshot with its own
-// context.WithTimeout(60s). It never mutates the live context directly; the
-// result is applied later by consumeReadyPreCompact only if it has already
-// finished at a safe run boundary.
 func (a *Agent) StartPreCompact() {
 	a.mu.Lock()
 	if a.precompact != nil {
@@ -123,16 +92,9 @@ func (a *Agent) StartPreCompact() {
 	threshold := cm.AutoCompactThreshold()
 	tokens := cm.TokenCount()
 
-	// Superseded read compaction: compact any file reads that have been
-	// superseded by a later read of the same file. This is the safest
-	// mechanical operation because the newer read always has more current
-	// content (Headroom-inspired context deduplication).
 	if threshold > 0 {
 		if mgr, ok := cm.(*ctxpkg.Manager); ok {
-			// Reasoning block compaction: cheapest tier — replaces verbose
-			// reasoning text from old turns with compact placeholders. This
-			// runs first because reasoning blocks are often the single largest
-			// source of context waste in reasoning-model sessions.
+
 			freed := mgr.CompactOldReasoningBlocks()
 			if freed > 0 {
 				debug.Log("precompact", "REASONING: freed %d tokens from old reasoning blocks", freed)
@@ -144,10 +106,7 @@ func (a *Agent) StartPreCompact() {
 			if freed > 0 {
 				tokens = cm.TokenCount()
 			}
-			// Superseded command compaction: re-run commands (build/test
-			// cycles) leave expired output in context — only the latest
-			// run reflects the current state of the code (AgentDiet's
-			// "expired" waste category).
+
 			freed = mgr.CompactSupersededCommands()
 			if freed > 0 {
 				debug.Log("precompact", "SUPERSEDED-CMD: freed %d tokens from re-run commands", freed)
@@ -161,14 +120,9 @@ func (a *Agent) StartPreCompact() {
 		debug.Log("precompact", "SKIP: tokens=%d threshold=%d", tokens, threshold)
 		return
 	}
-	// Insert a compaction marker into live messages.  This physical marker
-	// survives any message additions/removals during the background
-	// compaction goroutine and allows ApplyCompactResult to precisely
-	// identify which messages are "extra" (arrived during compaction).
+
 	snapshot := snapshotMgr.CompactSnapshot()
 
-	// Use the agent's shutdown context as base so precompact is cancelled
-	// when the agent is closed, not just on timeout.
 	bgCtx, cancel := context.WithTimeout(a.shutdownCtx, precompactBackgroundTimeout)
 	pc := &precompactState{
 		done:      make(chan struct{}),
@@ -184,17 +138,10 @@ func (a *Agent) StartPreCompact() {
 		tokens, threshold, float64(tokens)/float64(threshold), len(snapshot.Messages), snapshot.LastMsgID, snapshot.Version)
 
 	safego.Go("agent.precompact.run", func() {
-		// Capture pc locally — never touch a.precompact directly from this
-		// goroutine, otherwise a concurrent consumeReadyPreCompact +
-		// StartPreCompact pair could redirect our writes/close to a NEW state
-		// struct and corrupt the channel close invariant.
+
 		defer close(pc.done)
 		defer cancel()
 
-		// sa-159: fire pre_compact hooks BEFORE the summarization request so
-		// hooks get a last chance to persist critical state while the full
-		// context still exists. Best-effort: hook failures never abort the
-		// compaction (refusing to compact would strand the session at PTL).
 		if res := hooks.RunPreCompactHooks(a.GetHookConfig(), hooks.HookEnv{
 			TokenBefore:    tokens,
 			CompactTrigger: "auto",
@@ -202,16 +149,8 @@ func (a *Agent) StartPreCompact() {
 			debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
 		}
 
-		// r491: pre-compaction memory flush — persist constraint-line facts
-		// from the about-to-be-folded slice into project memory BEFORE the
-		// summarizer condenses it. Deterministic, bounded, idempotent; failures
-		// are logged inside and never abort the compaction.
 		a.preflushFacts("auto", snapshot.Messages)
 
-		// Delay before sending the compression request.
-		// When precompact triggers, the agent's regular LLM turn fires
-		// simultaneously — the API rate-limits one of them if both hit at
-		// the same time. Staggering them avoids the collision.
 		if d := precompactDelay; d > 0 {
 			select {
 			case <-bgCtx.Done():
@@ -226,14 +165,7 @@ func (a *Agent) StartPreCompact() {
 		result, err := snapshot.Compact(bgCtx, prov)
 		if err != nil && isRetryableCompactError(err) && a.shutdownCtx.Err() == nil {
 			debug.Log("precompact", "first attempt failed (%v), retrying...", err)
-			// #1828 case 1: derive from bgCtx, NOT shutdownCtx. bgCtx is
-			// cancelled by CancelPreCompact (pc.cancel) and by the agent's
-			// shutdown; a shutdownCtx-derived retry survived CancelPreCompact
-			// with a fresh full budget - after Clear() the LLM compression
-			// kept burning tokens for up to 180s while the slot was detached
-			// and the status showed idle. A cancel landing on the FIRST
-			// Compact yields context.Canceled which isRetryableCompactError
-			// rejects, so the retry window was exactly the unguarded one.
+
 			retryCtx, retryCancel := context.WithTimeout(bgCtx, precompactBackgroundTimeout)
 			defer retryCancel()
 			result, err = snapshot.Compact(retryCtx, prov)
@@ -249,14 +181,8 @@ func (a *Agent) StartPreCompact() {
 	})
 }
 
-// sa159RunCompactionHooks routes the auto-path on_compaction fire through a
-// package-level var so tests can count invocations (#2687: the deleted
-// legacy duplicate fire made this untestable from the agent side).
 var sa159RunCompactionHooks = hooks.RunCompactionHooks
 
-// consumeReadyPreCompact applies a completed background pre-compact without
-// waiting. If compaction is still running, the current LLM turn proceeds with
-// the existing context; a later turn can apply the result.
 func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool {
 	a.mu.RLock()
 	pc := a.precompact
@@ -268,12 +194,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 
 	select {
 	case <-pc.done:
-		// Clear the slot. Safe under lock — the goroutine no longer touches
-		// a.precompact (it only touches the captured pc).
-		// #1828 case 2: capture the CURRENT context manager under the same
-		// lock — SetContextManager swaps it under a.mu, and reading it
-		// unlocked below could hand an old snapshot's ApplyCompactResult to
-		// a manager swapped in mid-race.
+
 		a.mu.Lock()
 		if a.precompact == pc {
 			a.precompact = nil
@@ -299,12 +220,9 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		applied, newTokens := snapshotMgr.ApplyCompactResult(pc.snapshot, pc.result)
 		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d result.changed=%t result.msgs=%d", applied, newTokens, pc.startTok, pc.result.Changed, len(pc.result.Messages))
 		if applied {
-			// Batch 2: guidance injection counters reset after compaction
-			// (the injected guidance text was compacted away).
+
 			a.resetGuidanceCounters()
-			// sa-159: on_compaction now also covers the primary auto path
-			// (background precompact consumption); previously only the reactive
-			// PTL-recovery path fired compaction hooks.
+
 			sa159RunCompactionHooks(a.GetHookConfig(), hooks.HookEnv{
 				TokenBefore:    pc.startTok,
 				TokenAfter:     newTokens,
@@ -314,16 +232,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		if !applied {
 			reason := "unknown"
 			liveShrunk := false
-			// #663: prefer the Manager's structured reject reason. liveShrunk is
-			// now refined into user-reset (refund-eligible) vs benign-trim (NOT
-			// refund-eligible): benign internal cleanup (retry truncation via
-			// RemoveLastAssistantGroup, orphan tool-result removal) removes tail
-			// messages with no semantic loss — the live context is still the one
-			// that warranted compaction, so refunding the cooldown made
-			// maybeAutoCompact reschedule a redundant full-context LLM
-			// summarization on every turn (retry storms repeated the waste).
-			// The legacy exclusion-style classification stays as fallback for
-			// managers that do not expose a reject reason.
+
 			if rr, ok := snapshotMgr.(interface {
 				LastCompactRejectReason() ctxpkg.CompactRejectReason
 			}); ok {
@@ -339,8 +248,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 					reason = "benign internal cleanup (retry truncation/orphan removal) during compaction window"
 					liveShrunk = false
 				default:
-					// CompactRejectNone but applied==false — should not happen;
-					// fall through to the legacy classification below.
+
 				}
 			}
 			if reason == "unknown" {
@@ -354,26 +262,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 				}
 			}
 			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(cm.Messages()))
-			// #612: a discarded result leaves the stale 2-minute cooldown set
-			// by maybeAutoCompact at schedule time. The cooldown-on-failure is
-			// intentional for genuinely failed compactions, but a DISCARD means
-			// the summarization itself succeeded while the live context moved
-			// on — if tokens are still above the auto-compact threshold, refund
-			// the cooldown so the next loop pass can schedule a fresh precompact
-			// against the current context. Otherwise the only remaining escape
-			// is destructive truncation once tokens cross promptBudget.
-			// #633: the refund exists for the "live context moved on" case
-			// ONLY. no-change/empty are real summarization failures — refunding
-			// their cooldown made maybeAutoCompact reschedule a full-context
-			// LLM summarization every single turn (back-to-back, no backoff)
-			// that failed the same way each time. Those keep the cooldown.
-			// #651: the threshold gate must use the token count observed when
-			// the compaction was SCHEDULED (pc.startTok), not the post-shrink
-			// live count. liveShrunk means messages were REMOVED during the
-			// window, so the live context is now far BELOW the threshold —
-			// gating on TokenCount() made the refund unreachable in
-			// production (mock-only) even though discard-by-shrink is exactly
-			// the case the refund exists for.
+
 			if liveShrunk {
 				if threshold := cm.AutoCompactThreshold(); threshold > 0 && pc.startTok >= threshold {
 					a.mu.Lock()
@@ -382,7 +271,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 					debug.Log("precompact", "RESULT DISCARDED (live shrunk) but scheduled tokens %d still over threshold %d; cooldown refunded for immediate re-schedule", pc.startTok, threshold)
 				}
 			}
-			// Remove the compaction marker — compaction failed, marker is stale.
+
 			if onEvent != nil {
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... result discarded (messages changed)]"})
 			}
@@ -392,12 +281,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		if onEvent != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
 		}
-		// #2687: the legacy on_compaction fire that used to live here was
-		// REMOVED - sa-159 added the auto-trigger call above (L288) without
-		// deleting it, so every successful auto-precompact fired on_compaction
-		// twice (second event with an empty CompactTrigger, polluting trigger
-		// classification and doubling counting hooks). Exactly one fire with
-		// trigger=auto per successful compaction is pinned in zz_issue2687_test.
+
 		return true
 	default:
 		debug.Log("precompact", "still running; continuing without waiting")
@@ -405,11 +289,6 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 	}
 }
 
-// CancelPreCompact aborts any in-flight pre-compact. Safe to call from
-// session-clear, /clear, /compact, SetContextManager or app shutdown.
-//
-// The goroutine sees its bgCtx cancelled, marks the state as cancelled, then
-// closes done. A later consumeReadyPreCompact will discard the result.
 func (a *Agent) CancelPreCompact() {
 	a.mu.Lock()
 	pc := a.precompact
@@ -422,15 +301,10 @@ func (a *Agent) CancelPreCompact() {
 	if pc.cancel != nil {
 		pc.cancel()
 	}
-	// Remove the compaction marker from live messages — the compaction
-	// is cancelled, so the marker is no longer needed.
+
 	debug.Log("precompact", "CANCELLED externally")
 }
 
-// PreCompactStatus reports the current background pre-compact status, or a
-// zero value if none is running. Used by the TUI status panel to surface a
-// "compacting…" indicator instead of leaving the user wondering why tokens are
-// at the threshold.
 func (a *Agent) PreCompactStatus() PreCompactStatus {
 	a.mu.RLock()
 	pc := a.precompact
@@ -438,7 +312,7 @@ func (a *Agent) PreCompactStatus() PreCompactStatus {
 	if pc == nil {
 		return PreCompactStatus{}
 	}
-	// Drain the done channel non-blockingly to detect completion.
+
 	select {
 	case <-pc.done:
 		return PreCompactStatus{}

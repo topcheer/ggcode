@@ -7,16 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// MAST I1 (Information Asymmetry) defense: a parent agent's established
-// user constraints (constraintAmnesiaState) used to stay parent-only - a
-// delegated sub-agent never learned "do not touch X", so especially in
-// isolated worktrees it could freely edit forbidden files. The Berkeley
-// "Why Do Multi-Agent LLM Systems Fail?" taxonomy classifies this as the
-// textbook inter-agent failure; the fix is deterministic inheritance at
-// the delegation boundary (zero LLM cost).
-
-// delegationTaskField maps each delegation tool to the argument that
-// carries the task text.
 var delegationTaskField = map[string]string{
 	"spawn_agent":    "task",
 	"use_namedagent": "task",
@@ -25,7 +15,6 @@ var delegationTaskField = map[string]string{
 
 const inheritedConstraintsMarker = "[inherited-constraints]"
 
-// snapshotConstraints returns the recorded constraint excerpts (nil-safe).
 func (s *constraintAmnesiaState) snapshotConstraints() []string {
 	if s == nil {
 		return nil
@@ -39,9 +28,6 @@ func (s *constraintAmnesiaState) snapshotConstraints() []string {
 	return out
 }
 
-// inheritDelegationConstraints appends the parent's binding constraints to
-// the delegation task argument. Idempotent (marker short-circuits); any
-// parse failure returns tc unchanged - inheritance must never break a call.
 func (a *Agent) inheritDelegationConstraints(tc provider.ToolCallDelta) provider.ToolCallDelta {
 	field, ok := delegationTaskField[tc.Name]
 	if !ok {
@@ -53,7 +39,7 @@ func (a *Agent) inheritDelegationConstraints(tc provider.ToolCallDelta) provider
 	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(tc.Arguments, &args); err != nil || args == nil {
-		return tc // includes literal-null arguments (#4693 family): nil map
+		return tc
 	}
 	raw, ok := args[field]
 	if !ok {
@@ -64,10 +50,10 @@ func (a *Agent) inheritDelegationConstraints(tc provider.ToolCallDelta) provider
 		return tc
 	}
 	if strings.Contains(task, inheritedConstraintsMarker) {
-		return tc // already inherited (retry / replay)
+		return tc
 	}
 	if len(cs) > 8 {
-		cs = cs[:8] // bounded; excerpts are already excerpt-limited
+		cs = cs[:8]
 	}
 	var b strings.Builder
 	b.WriteString(task)

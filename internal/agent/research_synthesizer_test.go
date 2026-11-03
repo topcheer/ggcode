@@ -82,7 +82,7 @@ func TestSynthesizeResearchReport_GroupsAndNumbers(t *testing.T) {
 		"- [src 1] https://a.io/x (web_search): s1",
 		"- [src 2] https://b.org/y (web_search): s2",
 		"## Sub-query: https://c.com/z",
-		"2 distinct hosts", // conflict candidate note within the group
+		"2 distinct hosts",
 	} {
 		if !strings.Contains(draft, want) {
 			t.Errorf("draft missing %q:\n%s", want, draft)

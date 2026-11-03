@@ -1,18 +1,14 @@
 package agent
 
-// #3841 companion: the git-branch flag scan must stop at compound-command
-// boundaries - a later command's -m (git log -m, echo "use -m to move")
-// must not classify a read-only branch listing as mutating.
-
 import "testing"
 
 func TestIssue3841_BranchScanStopsAtBoundary(t *testing.T) {
 	readOnlyCases := []string{
-		`git branch && git log -m`,               // log's merge-diff flag
-		`git branch -a && echo "use -m to move"`, // prose in a later command
-		`git branch --list || git tag -m v1 msg`, // tag -m after ||
-		`git branch ; git status`,                // ; separator, all read-only
-		`git branch | grep -m 1 main`,            // pipe + grep's -m
+		`git branch && git log -m`,
+		`git branch -a && echo "use -m to move"`,
+		`git branch --list || git tag -m v1 msg`,
+		`git branch ; git status`,
+		`git branch | grep -m 1 main`,
 	}
 	for _, cmd := range readOnlyCases {
 		ro, isGit := classifyGitCommandLine(cmd)
@@ -25,9 +21,9 @@ func TestIssue3841_BranchScanStopsAtBoundary(t *testing.T) {
 	}
 
 	mutatingCases := []string{
-		`git branch -m old new`,               // genuine move before any boundary
-		`git branch -D wip`,                   // genuine delete
-		`git branch && git branch -m old new`, // mutation in the second command
+		`git branch -m old new`,
+		`git branch -D wip`,
+		`git branch && git branch -m old new`,
 	}
 	for _, cmd := range mutatingCases {
 		ro, isGit := classifyGitCommandLine(cmd)

@@ -1,40 +1,5 @@
 package agent
 
-// Redundant Re-verification Detector -- Verification Idempotency Violation
-//
-// Research basis:
-//   - SICA (arXiv:2504.15228, NeurIPS 2025): trajectory waste as primary agent
-//     efficiency bottleneck -- redundant actions that produce no new information.
-//   - Agent-R (arXiv:2506.20469, 2025): self-correction via trajectory trimming
-//     identifies repeat actions with identical preconditions as waste.
-//   - ACE (ICLR 2026): context-efficient agent frameworks flag re-execution of
-//     deterministic operations whose inputs haven't changed.
-//
-// Problem: Coding agents sometimes re-run verification commands (go build, go
-// test, make lint, npm test) without having made any file modifications since
-// the previous run. Verification is idempotent: if no source files changed, the
-// result will be identical. Re-running it wastes a full iteration + context
-// budget on a foregone conclusion.
-//
-// This is distinct from:
-//   - futile_cycle: tracks re-READS (information gathering without mutation)
-//   - phantom_verify: claims verification success without running commands
-//
-// (#1821 case 2: verify_scope_decay and verify_disconnect were deleted in
-// 387282a6 - the advance-past-failures surface is partially carried by
-// outcomeMisattrib (recordResult) - neither remains a division partner.)
-//
-// This detector specifically catches: "you ran `go test`, it passed, you made
-// no edits, then you ran `go test` again." The second run cannot produce new
-// information.
-//
-// Design:
-//   - Zero LLM cost -- pure deterministic tool-call + edit tracking.
-//   - Tracks verification command categories and the file-edit count since each
-//     category was last run.
-//   - Non-blocking advisory hint, capped at 2 injections per run.
-//   - Resets each user turn.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -49,24 +14,19 @@ const (
 	redundantReverifyMaxWarnings = 2
 )
 
-// redundantReverifyState tracks verification commands and file modifications to
-// detect idempotent re-verification (same command, no intervening edits).
 type redundantReverifyState struct {
 	warnings int
-	lastRun  map[string]*reverifyRun // category -> last run info
+	lastRun  map[string]*reverifyRun
 }
 
-// reverifyRun records the state of the last verification command for a category.
 type reverifyRun struct {
 	toolName    string
 	iteration   int
-	editsSince  int    // file modifications since this verification ran
-	resultError bool   // did the last run produce an error?
-	signature   string // normalized command fingerprint (issue #1173)
+	editsSince  int
+	resultError bool
+	signature   string
 }
 
-// isVerificationCommand checks if a tool name + arguments constitutes a
-// verification command (build, test, lint, typecheck, etc.).
 var reverifyCmdPatterns = map[string]*regexp.Regexp{
 	"build":     regexp.MustCompile(`(?i)\b(go\s+build|make\s+build|cargo\s+build|npm\s+run\s+build|yarn\s+build|pnpm\s+build|cmake\b|meson\b)\b`),
 	"test":      regexp.MustCompile(`(?i)\b(go\s+test|make\s+test|cargo\s+test|npm\s+test|npm\s+run\s+test|yarn\s+test|pnpm\s+test|pytest\b|jest\b|vitest\b|mocha\b)\b`),
@@ -75,8 +35,6 @@ var reverifyCmdPatterns = map[string]*regexp.Regexp{
 	"fmtcheck":  regexp.MustCompile(`(?i)\b(gofmt\s+-l|goimports\s+-l|rustfmt\s+--check)\b`),
 }
 
-// editToolSet identifies tools that modify files (write operations).
-// Now an alias of the canonical sourceMutatingTools superset (#154).
 var reverifyEditTools = sourceMutatingTools
 
 func newRedundantReverifyState() *redundantReverifyState {
@@ -90,22 +48,12 @@ func (s *redundantReverifyState) reset() {
 	s.lastRun = make(map[string]*reverifyRun)
 }
 
-// classifyVerificationCommand returns the verification category if the tool
-// name + arguments match a known verification pattern, or "" otherwise.
-// #343: only shell executions can RUN a verification command. Text-manipulation
-// tools (grep/sed/echo) whose ARGUMENTS mention "go test" were previously
-// misclassified as verification runs, so the agent's first REAL `go test` was
-// warned about as a redundant re-run. Beyond the tool-name gate, the first
-// word of the first pipeline segment must not be a text/shell builtin that
-// merely references the command.
 var reverifyTextToolFirstWords = map[string]bool{
 	"grep": true, "rg": true, "sed": true, "awk": true, "echo": true, "cat": true,
 	"printf": true, "tail": true, "head": true, "less": true, "sort": true,
 	"uniq": true, "wc": true, "tr": true, "cut": true, "tee": true, "xargs": true,
 	"man": true, "which": true, "type": true, "find": true, "ls": true,
-	// #3588: content operations and wrapper commands whose ARGUMENTS quote
-	// verification verbs (git grep "go test", git commit -m "make test pass",
-	// docker run make test) - the verb is data there, not execution.
+
 	"git": true, "docker": true, "kubectl": true, "podman": true,
 }
 
@@ -119,11 +67,8 @@ func firstPipelineSegment(args string) string {
 	return seg
 }
 
-// reverifySegmentSeps splits a shell command line into its individual command
-// segments (issue #1190). || and && must be matched before the bare |.
 var reverifySegmentSeps = regexp.MustCompile(`\|\||&&|[|;]`)
 
-// commandSegments returns the non-empty command segments of a shell line.
 func commandSegments(args string) []string {
 	var segs []string
 	for _, seg := range reverifySegmentSeps.Split(args, -1) {
@@ -134,19 +79,12 @@ func commandSegments(args string) []string {
 	return segs
 }
 
-// reverifyEnvAssignRe matches leading environment-assignment prefix tokens
-// like FOO=1 that do not change the verification identity (issue #1190).
 var reverifyEnvAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
-// stripLeadingPrefixes removes command prefixes that do not alter the
-// verification target: $(...) expansions (which may span several
-// whitespace-split tokens), `cd X` directory changes, and FOO=1 env
-// assignments (issue #1190).
 func stripLeadingPrefixes(fields []string) []string {
 	for len(fields) > 0 {
 		if strings.HasPrefix(fields[0], "$(") {
-			// Consume the whole expansion: tokens up to and including the
-			// first one containing the closing ')'.
+
 			for len(fields) > 0 {
 				first := fields[0]
 				fields = fields[1:]
@@ -169,11 +107,6 @@ func stripLeadingPrefixes(fields []string) []string {
 	return fields
 }
 
-// extractShellCommand returns the shell command string from raw tool
-// arguments. Production call sites pass the raw JSON arguments
-// (agent.go: tc.Arguments), where the command lives in the "command"
-// field; shell-level quoting only has meaning AFTER extraction (#3588).
-// Non-JSON input (bare command, test-compat) is returned unchanged.
 func extractShellCommand(args string) string {
 	var wrapper struct {
 		Command string `json:"command"`
@@ -184,16 +117,8 @@ func extractShellCommand(args string) string {
 	return args
 }
 
-// verificationSignature returns a normalized fingerprint of the verification
-// command (issues #1173, #1190). The fingerprint is taken from the FIRST
-// command segment that actually matches a verification verb, not blindly the
-// first segment: `cd internal/agent && go test ./agentruntime/` previously
-// fingerprinted as "cd internal/agent", so a subsequent
-// `cd internal/agent && go test ./auth/` collided and was wrongly flagged as
-// a redundant re-run. Leading cd/env/$(...) prefixes are stripped from the
-// chosen segment. If no segment matches, the full args are used as fallback.
 func verificationSignature(args string) string {
-	args = extractShellCommand(args) // #3588: fingerprint the shell command, not the JSON wrapper
+	args = extractShellCommand(args)
 	chosen := ""
 	for _, seg := range commandSegments(args) {
 		for _, re := range reverifyCmdPatterns {
@@ -207,25 +132,22 @@ func verificationSignature(args string) string {
 		}
 	}
 	if chosen == "" {
-		chosen = args // fallback: no segment matched a known verb
+		chosen = args
 	}
 	fields := stripLeadingPrefixes(strings.Fields(chosen))
 	return strings.ToLower(strings.Join(fields, " "))
 }
 
 func (s *redundantReverifyState) classifyVerificationCommand(toolName, args string) string {
-	// #343: only command-executing tools can perform verification.
+
 	if toolName != "run_command" && toolName != "start_command" {
 		return ""
 	}
-	// #3588: production args are raw JSON; the shell command lives in the
-	// "command" field. Extract it first so shell-level quoting is analyzed
-	// in its own layer (JSON string quoting never reaches the matcher).
+
 	args = extractShellCommand(args)
-	// Take the first pipeline segment's first word: if the command itself is a
-	// text operation, any "go test" mention is data, not execution.
+
 	fields := strings.Fields(firstPipelineSegment(args))
-	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") { // skip env prefixes crudely
+	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") {
 		fields = fields[1:]
 	}
 	if len(fields) > 0 {
@@ -234,11 +156,7 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 			return ""
 		}
 	}
-	// #3588: quoted spans are DATA, not command position - strip their
-	// contents before pattern matching so `git grep -n "go test"` (also
-	// first-word blocked) or `commit -m "make test pass"` cannot match a
-	// verification verb that lives only inside a string literal. Unquoted
-	// command positions (including later pipeline segments) still match.
+
 	combined := toolName + " " + stripQuotedSpans(args)
 	for cat, re := range reverifyCmdPatterns {
 		if re.MatchString(combined) {
@@ -248,10 +166,6 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 	return ""
 }
 
-// stripQuotedSpans replaces the contents of single/double-quoted spans
-// (including the quote characters) with spaces. Escaped quotes (\" and \')
-// do not toggle quote state. Shell command substitution inside quotes is
-// also data at match time, which is the desired semantics here.
 func stripQuotedSpans(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -275,21 +189,16 @@ func stripQuotedSpans(s string) string {
 	return b.String()
 }
 
-// recordToolCall tracks verification commands and checks for redundant
-// re-verification. Returns a hint message if redundant re-verification detected.
 func (s *redundantReverifyState) recordToolCall(toolName, args string, iteration int, resultError bool) string {
 	cat := s.classifyVerificationCommand(toolName, args)
 	if cat == "" {
 		return ""
 	}
-	// Issue #1173: redundancy requires an identical normalized command, not
-	// just the same category. Verification of a different scope or target
-	// produces new information and must never be flagged.
+
 	sig := verificationSignature(args)
 
 	prev := s.lastRun[cat]
 
-	// Update the current run entry (will overwrite after checking)
 	s.lastRun[cat] = &reverifyRun{
 		toolName:    toolName,
 		iteration:   iteration,
@@ -298,10 +207,6 @@ func (s *redundantReverifyState) recordToolCall(toolName, args string, iteration
 		signature:   sig,
 	}
 
-	// Check for redundancy: previous run of same category AND same command
-	// exists, no edits since, and the previous run was NOT an error (errors
-	// may need re-runs after diagnosis even without edits, so we only flag
-	// successful re-runs).
 	if prev != nil && prev.editsSince == 0 && !prev.resultError && prev.signature == sig {
 		if s.warnings >= redundantReverifyMaxWarnings {
 			return ""
@@ -320,14 +225,8 @@ This run: %s (iteration %d)`,
 	return ""
 }
 
-// recordEdit increments the edit counter for all tracked verification
-// categories. Called whenever a file-modifying tool is executed.
 func (s *redundantReverifyState) recordEdit(toolName string) {
-	// #1679 case 2: use mutatesSourceTree (the cache-invalidation
-	// predicate) instead of the 9-tool file-edit map - git_checkout/
-	// git_revert/git_stash/git_reset rewrite the whole tree and undo_edit
-	// restores content, yet none bumped editsSince, so a re-test after a
-	// branch switch was factually told "cannot produce new information".
+
 	if !mutatesSourceTree(toolName) {
 		return
 	}
@@ -336,12 +235,6 @@ func (s *redundantReverifyState) recordEdit(toolName string) {
 	}
 }
 
-// recordShellSourceMutation bumps the edit counter for run_command shells
-// that rewrote source files (#1486). The command cache already invalidates
-// on the same heuristic (agent.go shellMutatesSources), so a re-run genuinely
-// can produce new information - without this bump the detector kept asserting
-// "running it again cannot produce new information" right after a sed -i,
-// contradicting the cache's own judgment on the identical change.
 func (s *redundantReverifyState) recordShellSourceMutation() {
 	for _, run := range s.lastRun {
 		run.editsSince++
@@ -349,5 +242,5 @@ func (s *redundantReverifyState) recordShellSourceMutation() {
 }
 
 func (a *Agent) maybeWarnRedundantReverify(_ string) string {
-	return "" // detection is inline in recordToolCall because it needs the tool result
+	return ""
 }

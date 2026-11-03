@@ -5,20 +5,6 @@ import (
 	"strings"
 )
 
-// r384 builder-validator separation (arXiv 2510.10460: 75.3% of multi-agent
-// code-generation failures stem from planner-coder handoff drift; MAST
-// arXiv 2503.13657: explicit verification phases add +15.6% task success).
-// ggcode's delegation loop had the contract side (spawn_agent task schema
-// coaches acceptance criteria into the task text) but no validator side:
-// wait_agent returned the sub-agent's self-report and the parent LLM
-// typically consumed it as-is. These helpers extract the acceptance
-// criteria the ORIGINATOR wrote into the task and append a checkpoint
-// reminder so the parent validates the returned evidence against the
-// original contract - not against the builder's own summary.
-
-// acceptanceHeadings are section markers whose following lines are
-// acceptance criteria. Matched case-insensitively at line start, with or
-// without markdown heading/leading whitespace.
 var acceptanceHeadings = []string{
 	"acceptance criteria",
 	"acceptance",
@@ -28,22 +14,12 @@ var acceptanceHeadings = []string{
 	"done:",
 }
 
-// maxAcceptanceItems caps extraction so a pathological task cannot blow up
-// the tool result.
 const maxAcceptanceItems = 10
 
-// maxAcceptanceItemLen trims each criterion to keep the reminder compact.
 const maxAcceptanceItemLen = 200
 
-// acceptanceMarker lets consumers detect that a reminder was already
-// appended (re-polls of a completed run stay idempotent).
 const acceptanceMarker = "=== ACCEPTANCE CHECKPOINT (delegation validation) ==="
 
-// extractAcceptanceCriteria pulls the acceptance-criteria items the task
-// author wrote into the task text. Supports markdown headings ("##
-// Acceptance Criteria") and plain-line markers ("Done when:"), bullet or
-// numbered lists under them, and stops at the next section heading.
-// Returns nil when the task carries no recognizable criteria section.
 func extractAcceptanceCriteria(task string) []string {
 	if task == "" {
 		return nil
@@ -61,8 +37,7 @@ func extractAcceptanceCriteria(task string) []string {
 			for _, h := range acceptanceHeadings {
 				if strings.HasPrefix(lower, h) {
 					inSection = true
-					// Heading itself may inline the first criterion:
-					// "done: tests pass" - take what follows the colon.
+
 					if rest := textAfterMarker(lower, h); rest != "" {
 						items = appendCriterion(items, line)
 					}
@@ -72,13 +47,10 @@ func extractAcceptanceCriteria(task string) []string {
 			continue
 		}
 
-		// Inside the criteria section: stop at the next heading/section.
 		if line == "" {
-			continue // blank lines between bullets are tolerated
+			continue
 		}
-		// #3237 defensive: decorated section markers ("=== ... ===") close
-		// the criteria section just like "#" headings do - otherwise the
-		// catch-all below swallows following prose as criteria.
+
 		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "=== ") {
 			break
 		}
@@ -93,12 +65,6 @@ func extractAcceptanceCriteria(task string) []string {
 	return items
 }
 
-// stripListPrefix removes a bullet marker and an OPTIONAL list index
-// ("1." / "12)") without eating metric-shaped content: TrimLeft over all
-// digits and dots used to greedily consume "2GB memory limit" -> "GB
-// memory limit" and "3.5s p99" -> "s p99" (#4052). A '.' directly followed
-// by another digit is a decimal, not an index separator, so the number is
-// kept intact.
 func stripListPrefix(s string) string {
 	b := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s), "-*•"))
 	i := 0
@@ -111,30 +77,27 @@ func stripListPrefix(s string) string {
 	if b[i] == '.' || b[i] == ')' {
 		rest := b[i+1:]
 		if b[i] == '.' && len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-			return b // decimal like "3.5s", not an index
+			return b
 		}
 		return strings.TrimSpace(rest)
 	}
 	return b
 }
 
-// appendCriterion normalizes a bullet/numbered/plain line into a criterion
-// string, enforcing the item cap and per-item length trim.
 func appendCriterion(items []string, line string) []string {
 	if len(items) >= maxAcceptanceItems {
 		return items
 	}
-	c := stripListPrefix(line) // #4052: index-aware, metric prefixes preserved
+	c := stripListPrefix(line)
 	if c == "" {
 		return items
 	}
 	if len(c) > maxAcceptanceItemLen {
-		c = truncateUTF8Safe(c, maxAcceptanceItemLen) + "..." // #4090: byte slicing cut CJK criteria mid-rune
+		c = truncateUTF8Safe(c, maxAcceptanceItemLen) + "..."
 	}
 	return append(items, c)
 }
 
-// textAfterMarker returns the text following "heading:" inline, if any.
 func textAfterMarker(lower, heading string) string {
 	idx := strings.Index(lower, heading)
 	if idx < 0 {
@@ -144,8 +107,6 @@ func textAfterMarker(lower, heading string) string {
 	return strings.TrimPrefix(rest, ":")
 }
 
-// sectionStopWords end the criteria block when seen at a line start (the
-// task schema coaches objective/boundaries/constraints/acceptance sections).
 var sectionStopWords = []string{
 	"objective", "boundaries", "constraints", "context", "evidence",
 	"deliverable", "background", "notes", "scope",
@@ -168,15 +129,12 @@ func isListLine(line string) bool {
 	return r == '-' || r == '*' || r == '•' || (r >= '0' && r <= '9')
 }
 
-// acceptanceReminder builds the checkpoint block appended to a COMPLETED
-// delegation result. Empty string when there is nothing to remind about
-// (no criteria in the task, or no result text).
 func acceptanceReminder(task, result string) string {
 	if result == "" {
 		return ""
 	}
 	if strings.Contains(result, acceptanceMarker) {
-		return "" // already reminded (re-poll)
+		return ""
 	}
 	items := extractAcceptanceCriteria(task)
 	if len(items) == 0 {

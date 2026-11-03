@@ -47,7 +47,7 @@ func TestSummarizeCommandProgress(t *testing.T) {
 
 func TestCommandGateIsDestructive(t *testing.T) {
 	g := NewCommandGate()
-	// With default rules, rm should be destructive
+
 	if !g.IsDestructive("rm -rf /") {
 		t.Error("expected 'rm -rf /' to be destructive")
 	}
@@ -74,7 +74,7 @@ func TestCommandJobManager_List_Empty(t *testing.T) {
 
 func TestAskUserTool_HasHandler(t *testing.T) {
 	tool := &AskUserTool{}
-	// No handler set
+
 	if tool.HasHandler() {
 		t.Error("expected false with no handler")
 	}

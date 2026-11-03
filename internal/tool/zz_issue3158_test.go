@@ -1,11 +1,5 @@
 package tool
 
-// Regression probes for #3158: selectV4ASection matched sections by path
-// only and ignored the opType-vs-kind agreement - a self-contradictory
-// call (type=delete_file over an "*** Update File:" section) silently
-// executed the section's own kind, violating the file's fail-closed
-// contract ("never half-applies silently").
-
 import (
 	"context"
 	"encoding/json"
@@ -28,8 +22,6 @@ func v4aUpdateSection3158(path string) v4aSection {
 	}
 }
 
-// The core bug: delete_file over an update section must be REJECTED, not
-// silently applied as an update.
 func TestIssue3158_DeleteOpOverUpdateSectionRejected(t *testing.T) {
 	_, err := selectV4ASection([]v4aSection{v4aUpdateSection3158("a/x.go")}, "delete_file", "a/x.go")
 	if err == nil {
@@ -40,8 +32,6 @@ func TestIssue3158_DeleteOpOverUpdateSectionRejected(t *testing.T) {
 	}
 }
 
-// Matrix: every opType x matching-kind combination still selects; every
-// mismatch is rejected.
 func TestIssue3158_OpKindMatrix(t *testing.T) {
 	kinds := map[string]string{
 		"create_file": "add",
@@ -65,8 +55,6 @@ func TestIssue3158_OpKindMatrix(t *testing.T) {
 	}
 }
 
-// Single-section default path (opPath empty) carries the same agreement
-// check.
 func TestIssue3158_SingleSectionDefaultPathChecked(t *testing.T) {
 	_, err := selectV4ASection([]v4aSection{v4aUpdateSection3158("b/y.go")}, "delete_file", "")
 	if err == nil {
@@ -74,15 +62,12 @@ func TestIssue3158_SingleSectionDefaultPathChecked(t *testing.T) {
 	}
 }
 
-// Unknown opType is rejected (fail closed) instead of silently selecting.
 func TestIssue3158_UnknownOpTypeRejected(t *testing.T) {
 	if _, err := selectV4ASection([]v4aSection{v4aUpdateSection3158("c/z.go")}, "rename_file", "c/z.go"); err == nil {
 		t.Fatal("unknown opType must be rejected")
 	}
 }
 
-// End-to-end: the Execute path surfaces the contradiction as an error
-// result, not a wrong write.
 func TestIssue3158_ExecuteSurfacesContradiction(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "victim.txt")
@@ -98,7 +83,7 @@ func TestIssue3158_ExecuteSurfacesContradiction(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("contradictory call must return an error result, got: %s", res.Content)
 	}
-	// The file must be untouched (no delete AND no update).
+
 	b, rerr := os.ReadFile(target)
 	if rerr != nil || string(b) != "old\n" {
 		t.Fatalf("victim file must be untouched, got %q err=%v", string(b), rerr)

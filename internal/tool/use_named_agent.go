@@ -12,27 +12,20 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// UseNamedAgentTool implements the use_namedagent tool.
-// It loads a persisted template and spawns a one-shot execution.
 type UseNamedAgentTool struct {
 	Store               *subagent.TemplateStore
 	Manager             *subagent.Manager
-	Provider            provider.Provider        // static fallback; prefer ProviderGetter if set
-	ProviderGetter      func() provider.Provider // resolves the parent agent's live provider
+	Provider            provider.Provider
+	ProviderGetter      func() provider.Provider
 	Tools               *Registry
 	AgentFactory        func(provider.Provider, interface{}, string, int) subagent.AgentRunner
 	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
-	OnMetric            func(metrics.MetricEvent) // sub-agent telemetry forwarding (#3296); runner stamps SubAgentID
+	OnMetric            func(metrics.MetricEvent)
 	SystemPromptBuilder func(task, agentType string) string
-	// AvailableModels returns the models offered by the current endpoint.
-	// When set and non-empty, a template's Model override must be on the
-	// list (#551-C) — same gate as SpawnAgentTool.
-	AvailableModels func() []string
+	AvailableModels     func() []string
 }
 
-// currentProvider returns the live provider if ProviderGetter is set, otherwise
-// falls back to the static Provider field.
 func (t UseNamedAgentTool) currentProvider() provider.Provider {
 	if t.ProviderGetter != nil {
 		return t.ProviderGetter()
@@ -91,12 +84,9 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		return Result{IsError: true, Content: "task is required"}, nil
 	}
 
-	// Load the template
-	// #1696 case 6: create trims the name before saving - trim here too,
-	// else " reviewer " is stored as "reviewer" but invoked by its raw form.
 	tmpl, err := t.Store.Load(strings.TrimSpace(args.Name))
 	if err != nil {
-		// Suggest available templates
+
 		available, _ := t.Store.List()
 		if len(available) > 0 {
 			names := make([]string, len(available))
@@ -108,18 +98,15 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		return Result{IsError: true, Content: fmt.Sprintf("named subagent '%s' not found. Use create_namedagent to create one.", args.Name)}, nil
 	}
 
-	// Build the task string
 	task := args.Task
 	if args.Context != "" {
 		task = args.Context + "\n\n" + args.Task
 	}
 	displayTask := args.Task
 
-	// Spawn into the manager (same as spawn_agent)
-	// Combine template tools + blocked_tools for the allowedTools parameter
 	allowedTools := tmpl.Tools
 	if len(tmpl.BlockedTools) > 0 {
-		// If only blocked_tools specified (no allowlist), start from all then remove
+
 		if len(allowedTools) == 0 {
 			if t.Tools != nil {
 				for _, name := range t.Tools.ToolNames() {
@@ -128,11 +115,9 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 					}
 				}
 			}
-			// If t.Tools is nil, we can't enumerate all tools, so blocked_tools
-			// can't be applied here — they will still be filtered in BuildToolSet
-			// below via the cloned registry's Unregister calls.
+
 		} else {
-			// Both allowlist and denylist: filter allowlist
+
 			filtered := make([]string, 0, len(allowedTools))
 			for _, name := range allowedTools {
 				if !sliceContains(tmpl.BlockedTools, name) {
@@ -143,15 +128,6 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
-	// #4775 (S-03): validate the template's tool allowlist against the
-	// registry BEFORE Spawn - a declared-but-missing tool (e.g. lanchat
-	// declared in a config where the session's registry never registered
-	// it) previously spawned anyway and the sub-agent only discovered the
-	// absence mid-run ("no lanchat in this session"). Same fail-loudly
-	// shape as the #551-C model gate below: checked before Spawn so a
-	// rejection leaves no zombie sub-agent entry. Skip only when the
-	// registry is unavailable (nil Tools = cannot enumerate; the existing
-	// blocked_tools path already documents that degradation).
 	if len(tmpl.Tools) > 0 && t.Tools != nil {
 		available := t.Tools.ToolNames()
 		var missing []string
@@ -167,20 +143,11 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
-	// Resolve the effective model override: a per-invocation model takes
-	// precedence over the template's Model field. The invocation-level
-	// override is the escalation lever for model-tiered cascades: when a
-	// cheap-tier run fails, the parent escalates by re-invoking the same
-	// template with model=<stronger> instead of editing the template.
 	effectiveModel := strings.TrimSpace(args.Model)
 	if effectiveModel == "" {
 		effectiveModel = strings.TrimSpace(tmpl.Model)
 	}
 
-	// Validate the effective model override against available models on
-	// the current endpoint (#551-C). spawn_agent has enforced this since its
-	// L131-148 whitelist; without the same gate here, an unknown model
-	// silently spawned on the parent's model.
 	if effectiveModel != "" && t.AvailableModels != nil {
 		available := t.AvailableModels()
 		if len(available) > 0 && !sliceContains(available, effectiveModel) {
@@ -190,12 +157,6 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
-	// Determine provider: clone with model override if set. Fail loudly
-	// when the provider cannot honor a model override (#551-C) — previously
-	// CloneProviderWithModel silently returned the original provider and the
-	// template ran on the parent's model, which the template author never
-	// asked for and may not even support. Checked BEFORE Spawn so a rejected
-	// override does not leave a zombie sub-agent entry behind.
 	runProv := t.currentProvider()
 	if effectiveModel != "" {
 		if c, ok := runProv.(provider.ClonableWithModel); ok {
@@ -209,7 +170,6 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 
 	id := t.Manager.Spawn(tmpl.Name, task, displayTask, allowedTools, ctx)
 
-	// Build tool info list
 	var allToolInfo []subagent.ToolInfo
 	if t.Tools != nil {
 		for _, ti := range t.Tools.List() {
@@ -217,14 +177,9 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
-	// Capture for goroutine closure
 	tools := t.Tools
 	runCtx := t.Manager.RootContext()
 
-	// #872: the comment and the create_namedagent schema both promise a
-	// FULL system-prompt override ('Complete system prompt defining the
-	// subagent's role') - honor it: when the template defines a prompt, it
-	// REPLACES the standard builder output instead of being diluted by it.
 	customBuilder := func(task, agentType string) string {
 		if tmpl.SystemPrompt != "" {
 			return tmpl.SystemPrompt
@@ -251,11 +206,11 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 			SystemPromptBuilder: customBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				cloned := tools.Clone()
-				// Always remove sub-agent blocked tools
+
 				for _, name := range subAgentBlockedTools {
 					cloned.Unregister(name)
 				}
-				// Also block named agent management tools
+
 				cloned.Unregister("create_namedagent")
 				cloned.Unregister("use_namedagent")
 				cloned.Unregister("list_namedagent")
@@ -275,7 +230,6 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 	return Result{Content: fmt.Sprintf("Named subagent '%s' started with ID: %s\nUse wait_agent or list_agents to monitor progress.", tmpl.Name, id)}, nil
 }
 
-// Clone returns an independent copy for use by a different agent.
 func (t UseNamedAgentTool) Clone() Tool {
 	return UseNamedAgentTool{
 		Store:               t.Store,

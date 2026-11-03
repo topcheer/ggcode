@@ -15,12 +15,10 @@ func swarmTestManager(t *testing.T) *swarm.Manager {
 	return swarm.NewManager(
 		config.SwarmConfig{},
 		nil,
-		nil, // agentFactory not needed for tool tests
-		nil, // toolBuilder not needed for tool tests
+		nil,
+		nil,
 	)
 }
-
-// ——— TeamCreate ———
 
 func TestTeamCreateTool(t *testing.T) {
 	mgr := swarmTestManager(t)
@@ -63,8 +61,6 @@ func TestTeamCreateTool_InvalidJSON(t *testing.T) {
 	}
 }
 
-// ——— TeamDelete ———
-
 func TestTeamDeleteTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
@@ -91,8 +87,6 @@ func TestTeamDeleteTool_NotFound(t *testing.T) {
 		t.Error("expected error for nonexistent team")
 	}
 }
-
-// ——— TeammateSpawn ———
 
 func TestTeammateSpawnTool(t *testing.T) {
 	mgr := swarmTestManager(t)
@@ -144,8 +138,6 @@ func TestTeammateSpawnTool_TeamNotFound(t *testing.T) {
 	}
 }
 
-// ——— TeammateList ———
-
 func TestTeammateListTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
@@ -178,8 +170,6 @@ func TestTeammateListTool_Empty(t *testing.T) {
 		t.Errorf("expected 'No teammates.', got %q", result.Content)
 	}
 }
-
-// ——— TeammateShutdown ———
 
 func TestTeammateShutdownTool(t *testing.T) {
 	mgr := swarmTestManager(t)
@@ -251,8 +241,6 @@ func TestTeamToolDescriptionsClarifyTeammateLifecycleAndResults(t *testing.T) {
 	}
 }
 
-// TestTeammateSpawnDescriptionDocumentsLimit ensures the tool description
-// keeps documenting the per-team cap so the LLM knows the spawn ceiling.
 func TestTeammateSpawnDescriptionDocumentsLimit(t *testing.T) {
 	desc := TeammateSpawnTool{}.Description()
 	if !strings.Contains(desc, "16 teammates") {

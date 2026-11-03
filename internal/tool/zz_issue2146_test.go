@@ -1,15 +1,5 @@
 package tool
 
-// #2146 regression:
-//   - P1: the spam-phase exemption was an exact map lookup on the RAW
-//     host (keeps www) against www-stripped keys, with no subdomain
-//     check - DDG returns www-prefixed URLs for most spam-list domains,
-//     so allowed=["w3schools.com"] killed every result the filter had
-//     kept ("No results found" for the explicitly allowed domain).
-//   - P2: extractByID/extractAttrMatch closed on the first closing tag
-//     of ANY name - a container's first child element ended the capture
-//     (short child: silent failure; long child: truncated product).
-
 import (
 	"strings"
 	"testing"
@@ -26,7 +16,6 @@ func TestIssue2146_SpamExemptionMatchesWwwAndSubdomains(t *testing.T) {
 		t.Fatalf("allowed www + subdomain results must all survive the spam phase, got %d: %+v", len(out), out)
 	}
 
-	// Without the exemption the spam domains are still filtered.
 	out = assessSearchResults("go tutorial", results, nil)
 	for _, r := range out {
 		if strings.Contains(r.URL, "w3schools") || strings.Contains(r.URL, "geeksforgeeks") {

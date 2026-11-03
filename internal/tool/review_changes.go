@@ -1,17 +1,5 @@
 package tool
 
-// review_changes.go - On-Demand Structured Code Review Tool
-//
-// Gap filled: ggcode's ScanStagedDiffForIssues (diff_scan.go) only runs
-// automatically inside git_commit. There is no on-demand tool the agent or
-// user can call to get a structured review of current changes at any time.
-//
-// This tool wraps the existing scan logic and adds:
-//   - On-demand invocation (not tied to commit)
-//   - Scope selection (staged / unstaged / all)
-//   - Additional checks: commented-out code blocks, large file changes
-//   - Structured report with categorized severity summary
-
 import (
 	"bytes"
 	"context"
@@ -24,15 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// ReviewChanges implements the review_changes tool.
 type ReviewChanges struct{ WorkingDir string }
 
-// Clone implements Cloner (#2596 siblings): these tools are registered by
-// value, so a registry clone without a Cloner shares one instance whose
-// WorkingDir can never be Set through reflection (value semantics) - every
-// teammate/sub-agent's review_changes would analyze the original registry's
-// workspace instead of its own worktree. Returning a pointer copy makes
-// syncToolWorkingDir target each agent independently.
 func (t ReviewChanges) Clone() Tool { return &ReviewChanges{WorkingDir: t.WorkingDir} }
 
 func (t ReviewChanges) Name() string { return "review_changes" }
@@ -63,7 +44,6 @@ func (t ReviewChanges) Parameters() json.RawMessage {
 	}`)
 }
 
-// commentedCodePatterns detect lines that look like commented-out code.
 var commentedCodePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*//\s*(if|for|func|var|const|type|return|switch|case|defer|go |select|chan|map\[|interface)\b`),
 	regexp.MustCompile(`^\s*//\s*\w+\([^)]*\)\s*\{?\s*$`),
@@ -71,10 +51,8 @@ var commentedCodePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*//\s*(import|package|struct)\s+`),
 }
 
-// largeFileThreshold flags files with many added lines for manual review.
 const reviewLargeFileThreshold = 50
 
-// Execute runs the review_changes tool.
 func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Path  string `json:"path"`
@@ -90,7 +68,6 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 		scope = "all"
 	}
 
-	// Get the diff based on scope
 	diff, err := getReviewDiff(ctx, dir, scope)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to get diff: %v", err)}, nil
@@ -100,23 +77,18 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{Content: "No changes found in the working tree."}, nil
 	}
 
-	// Reuse existing ScanStagedDiffForIssues for core checks (debug stmts,
-	// secrets, TODOs, merge conflicts, debugger statements).
 	issues := ScanStagedDiffForIssues(diff)
 
-	// Additional checks not covered by ScanStagedDiffForIssues
 	files := parseReviewDiff(diff)
 	var totalAdd, totalDel int
 	for _, file := range files {
 		totalAdd += file.addedCount
 		totalDel += file.removedCount
 
-		// Commented-out code blocks (3+ consecutive lines)
 		for _, fb := range detectCommentBlocks(file) {
 			issues = append(issues, fb)
 		}
 
-		// Large file change info
 		if file.addedCount > reviewLargeFileThreshold {
 			issues = append(issues, DiffIssue{
 				File:     file.path,
@@ -127,7 +99,6 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 	}
 
-	// Check for untracked files (only in "all" scope)
 	if scope == "all" {
 		for _, f := range getUntrackedFiles(ctx, dir) {
 			issues = append(issues, DiffIssue{
@@ -139,7 +110,6 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 	}
 
-	// Build the report
 	report := formatReviewReport(issues, len(files), totalAdd, totalDel)
 
 	debug.Log("review-changes", "reviewed %d files, %d findings",
@@ -148,7 +118,6 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: report}, nil
 }
 
-// getReviewDiff retrieves the appropriate diff based on scope.
 func getReviewDiff(ctx context.Context, dir, scope string) (string, error) {
 	switch scope {
 	case "staged":
@@ -156,20 +125,13 @@ func getReviewDiff(ctx context.Context, dir, scope string) (string, error) {
 	case "unstaged":
 		return runReviewGit(ctx, dir, "diff", "--no-color")
 	default:
-		// "all" — staged + unstaged combined. #860: a partially staged file
-		// (staged, then edited further) appears in BOTH diffs, double-counting
-		// its changes and duplicating findings. `git diff HEAD` is the single
-		// authoritative source for the full working-tree delta.
+
 		return runReviewGit(ctx, dir, "diff", "HEAD", "--no-color")
 	}
 }
 
-// runReviewGit runs a git command and returns stdout.
 func runReviewGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	// #1699 case 5: cmd.Output() discards stderr - an unborn-HEAD exit 128
-	// surfaced as a bare "exit status 128" with the real git message
-	// ("does not have any commits yet") invisible in review diagnostics.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -182,7 +144,6 @@ func runReviewGit(ctx context.Context, dir string, args ...string) (string, erro
 	return string(out), nil
 }
 
-// getUntrackedFiles returns untracked files from git status.
 func getUntrackedFiles(ctx context.Context, dir string) []string {
 	out, err := runReviewGit(ctx, dir, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
@@ -194,9 +155,7 @@ func getUntrackedFiles(ctx context.Context, dir string) []string {
 		if len(line) >= 3 {
 			status := line[:2]
 			file := strings.TrimSpace(line[2:])
-			// #1699 case 6: git quotes paths containing special characters
-			// C-style when core.quotePath is on; strip the quotes so the
-			// returned path is usable.
+
 			if len(file) >= 2 && file[0] == '"' && file[len(file)-1] == '"' {
 				file = file[1 : len(file)-1]
 			}
@@ -207,8 +166,6 @@ func getUntrackedFiles(ctx context.Context, dir string) []string {
 	}
 	return untracked
 }
-
-// --- Diff parsing for additional checks ---
 
 type reviewDiffLine struct {
 	lineNum int
@@ -244,23 +201,12 @@ func parseReviewDiff(diff string) []*reviewDiffFile {
 		} else if strings.HasPrefix(line, "+++ /dev/null") {
 			current.path = "(deleted)"
 		} else if strings.HasPrefix(line, "--- a/") || strings.HasPrefix(line, "--- /dev/null") {
-			// #2606: consume the '-' side of the file header symmetrically
-			// with '+++' above. Without this branch every "--- a/<path>"
-			// fell into the '-' content branch below (removedCount++), so
-			// the review header over-counted removals by exactly the number
-			// of files, and new files ("--- /dev/null") reported phantom
-			// removals they cannot have.
+
 			continue
 		} else if strings.HasPrefix(line, "@@") {
 			newLineNum = parseReviewHunkStart(line)
 		} else if strings.HasPrefix(line, "+") {
-			// #1699 case 1: the header branches above already consumed the
-			// exact "+++ b/" / "+++ /dev/null" forms, so ANY remaining
-			// "+"-prefixed line is content. The old bare !HasPrefix("+++")
-			// guard skipped real content lines starting with ++ (a C-family
-			// "++i" in the diff), dropping them from added-count and
-			// comment-block detection while path extraction above used the
-			// exact form - two different judgments in one function.
+
 			current.addedLines = append(current.addedLines, reviewDiffLine{
 				lineNum: newLineNum,
 				content: line[1:],
@@ -268,8 +214,7 @@ func parseReviewDiff(diff string) []*reviewDiffFile {
 			current.addedCount++
 			newLineNum++
 		} else if strings.HasPrefix(line, "-") {
-			// Same for removals: "--- a/" was consumed above; a remaining
-			// "--x" decrement line is content.
+
 			current.removedCount++
 		} else if strings.HasPrefix(line, " ") || line == "" {
 			newLineNum++
@@ -300,7 +245,6 @@ func parseReviewHunkStart(hunkLine string) int {
 	return num
 }
 
-// detectCommentBlocks finds 3+ consecutive commented-out code lines.
 func detectCommentBlocks(file *reviewDiffFile) []DiffIssue {
 	var findings []DiffIssue
 	consecutive := 0
@@ -316,9 +260,7 @@ func detectCommentBlocks(file *reviewDiffFile) []DiffIssue {
 			}
 		}
 		if isCommentedCode {
-			// #860: "consecutive" must mean adjacent IN THE FILE (lineNum
-			// contiguous), not adjacent in the added-lines slice — scattered
-			// comment lines separated by context lines were flagged as blocks.
+
 			if consecutive > 0 && dl.lineNum != prevLineNum+1 {
 				if consecutive >= 3 {
 					findings = append(findings, DiffIssue{
@@ -361,7 +303,6 @@ func detectCommentBlocks(file *reviewDiffFile) []DiffIssue {
 	return findings
 }
 
-// formatReviewReport produces the final structured report.
 func formatReviewReport(issues []DiffIssue, fileCount, totalAdd, totalDel int) string {
 	var sb strings.Builder
 
@@ -372,7 +313,6 @@ func formatReviewReport(issues []DiffIssue, fileCount, totalAdd, totalDel int) s
 		return sb.String()
 	}
 
-	// Group by severity
 	var critical, warnings, infos []DiffIssue
 	for _, iss := range issues {
 		switch iss.Severity {
@@ -385,7 +325,6 @@ func formatReviewReport(issues []DiffIssue, fileCount, totalAdd, totalDel int) s
 		}
 	}
 
-	// Output each severity group
 	for _, group := range []struct {
 		label string
 		items []DiffIssue
@@ -407,7 +346,6 @@ func formatReviewReport(issues []DiffIssue, fileCount, totalAdd, totalDel int) s
 		}
 	}
 
-	// Summary line
 	if len(critical) > 0 {
 		sb.WriteString(fmt.Sprintf("\n%d critical issue(s) should be fixed before commit.", len(critical)))
 	} else if len(warnings) > 0 {

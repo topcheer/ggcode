@@ -1,24 +1,5 @@
 package agent
 
-// Excessive Parameter Count Check (SonarQube S107 / CodeClimate "Too Many Parameters")
-//
-// Research basis: SonarQube rule S107 (function-parameter-count), CodeClimate
-// "Too Many Parameters" engine, and Clean Code (Robert Martin) all flag functions
-// with too many parameters as a maintainability risk. Functions with >5 parameters
-// are harder to understand, test, and call correctly - parameter order confusion
-// and missing arguments are common bug sources.
-//
-// This check fills a gap in ggcode's quality intelligence: while we have
-// complexity_gate (cyclomatic complexity) and various pattern checks, we do NOT
-// detect parameter-count code smells at write time.
-//
-// Design:
-//   - Zero-LLM-cost: deterministic AST analysis (go/ast)
-//   - Delta-aware: only flags NEW instances introduced by this edit
-//   - Threshold: 6+ parameters (including receiver for methods) - matches
-//     SonarQube's default, allows common Go idioms (5 params OK)
-//   - Capped at 3 warnings per file to avoid context flooding
-
 import (
 	"fmt"
 	"go/ast"
@@ -28,12 +9,8 @@ import (
 )
 
 const (
-	// paramCountThreshold is the maximum number of parameters before flagging.
-	// SonarQube default is 7 (including receiver), but we use 6 as Go functions
-	// tend to have one fewer formal parameter (receiver is separate).
 	paramCountThreshold = 6
 
-	// maxParamCountWarnings caps warnings per file.
 	maxParamCountWarnings = 3
 )
 
@@ -42,26 +19,10 @@ type paramCountInstance struct {
 	pos      token.Position
 	count    int
 	params   []string
-	paramTs  []string // per-param TYPE text; keys the fingerprint (#1184)
-	recvType string   // receiver type text ("*Server" etc); empty for plain funcs and literals
+	paramTs  []string
+	recvType string
 }
 
-// pcFingerprint keys an instance for delta suppression (fix #1142). It uses
-// normalized content text (receiver TYPE + function name + parameter TYPES
-// + count), NOT the line:column position - inserting a comment line above a
-// function must not re-report the pre-existing function as newly introduced.
-// Pattern follows pathTraversalInstance.ptFingerprint.
-//
-// The receiver TYPE (not the variable name) is part of the key (#1149):
-// (s *Server) handle and (s *Client) handle are different functions and must
-// not collide just because both receivers are named `s`.
-//
-// Parameter NAMES are deliberately excluded from the key (#1184): the smell
-// (too many params, SonarQube S107) is identical before and after a pure
-// parameter rename, so name-based keys made every renamed param miss its
-// old entry and re-reported the pre-existing instance as newly introduced -
-// the same delta-contract violation family as #1179. Types + count carry
-// the whole semantic identity of the smell; display still uses names.
 func (i paramCountInstance) pcFingerprint() string {
 	norm := strings.Join(i.paramTs, ",")
 	return fmt.Sprintf("%s[%s]|%d|%s", i.recvType, i.funcName, i.count, norm)
@@ -75,22 +36,12 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: only flag newly introduced instances (fix #142).
-	// #1187: the Test*/Benchmark* name exemption applies only to _test.go
-	// files - go test only ever compiles such functions from _test.go, so a
-	// Test-prefixed function in production code (TestMatch, TestIMConnection,
-	// ...) must still be checked.
 	isTestFile := strings.HasSuffix(filePath, "_test.go")
 	newInstances := findExcessiveParams(newContent, isTestFile)
 	if len(newInstances) == 0 {
 		return nil
 	}
 
-	// Delta suppression is multiset/count-based, not set-based (#1149): a
-	// plain set merges N colliding old instances (same fingerprint - e.g. two
-	// anonymous literals with identical params) into one entry and silently
-	// absorbs a NEW (N+1)-th instance. Each old occurrence consumes one match;
-	// only the surplus over the old count is reported as new.
 	var oldCounts map[string]int
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findExcessiveParams(oldContent, isTestFile) {
@@ -104,8 +55,7 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 	var warnings []string
 	newCount := 0
 	for _, inst := range newInstances {
-		// Delta-suppress pre-existing instances by content fingerprint so a
-		// pure line shift (comment insertion above) stays silent (#1142).
+
 		key := inst.pcFingerprint()
 		if oldCounts[key] > 0 {
 			oldCounts[key]--
@@ -157,11 +107,7 @@ func findExcessiveParams(src string, isTestFile bool) []paramCountInstance {
 			if ok {
 				instances = append(instances, inst)
 			}
-		// #1171: inspect every function literal wherever it appears -
-		// var declarations, call arguments, go/defer statements - not only
-		// direct RHS elements of `:=` assignments. ast.Inspect descends
-		// into nested literals individually, so removing the old
-		// AssignStmt branch avoids double counting.
+
 		case *ast.FuncLit:
 			if inst := inspectFuncLit(node, fset); inst != nil {
 				instances = append(instances, *inst)
@@ -173,14 +119,11 @@ func findExcessiveParams(src string, isTestFile bool) []paramCountInstance {
 	return instances
 }
 
-// inspectFuncDecl checks a named function declaration for excessive params.
-// Returns the instance and true if it should be flagged.
 func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet, isTestFile bool) (paramCountInstance, bool) {
 	if fn.Name == nil {
 		return paramCountInstance{}, false
 	}
-	// #1187: exempt Test/Benchmark names only in _test.go files; production
-	// code with such names (health probes, connection testers) stays checked.
+
 	if isTestFile && isTestOrBenchFunction(fn.Name.Name) {
 		return paramCountInstance{}, false
 	}
@@ -205,7 +148,7 @@ func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet, isTestFile bool) (pa
 
 	return paramCountInstance{
 		funcName: fn.Name.Name,
-		recvType: recvTypeText(fn.Recv), // #1149: type, not the variable name
+		recvType: recvTypeText(fn.Recv),
 		pos:      fset.Position(fn.Pos()),
 		count:    count,
 		params:   params,
@@ -213,8 +156,6 @@ func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet, isTestFile bool) (pa
 	}, true
 }
 
-// recvTypeText renders the receiver type ("*Server", "Client") for the
-// delta fingerprint (#1149). Empty for nil receivers.
 func recvTypeText(recv *ast.FieldList) string {
 	if recv == nil || len(recv.List) == 0 || recv.List[0].Type == nil {
 		return ""
@@ -222,7 +163,6 @@ func recvTypeText(recv *ast.FieldList) string {
 	return types.ExprString(recv.List[0].Type)
 }
 
-// inspectFuncLit checks an anonymous function literal for excessive params.
 func inspectFuncLit(lit *ast.FuncLit, fset *token.FileSet) *paramCountInstance {
 	count := countParams(lit.Type.Params)
 	if count < paramCountThreshold {
@@ -237,18 +177,11 @@ func inspectFuncLit(lit *ast.FuncLit, fset *token.FileSet) *paramCountInstance {
 	}
 }
 
-// isTestOrBenchFunction returns true for Test/Benchmark/Fuzz function names.
-// Fuzz targets (Go 1.18+, FuzzXxx(f *testing.F)) are the third standard test
-// entry point compiled and executed by `go test`; the many-returns and
-// many-params exemption rationale for Test/Benchmark applies to them
-// identically (#2558).
 func isTestOrBenchFunction(name string) bool {
 	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
 		strings.HasPrefix(name, "Fuzz")
 }
 
-// countParams counts the total number of named parameters in a FieldList.
-// In Go AST, a field like `a, b, c int` counts as 3 params.
 func countParams(fields *ast.FieldList) int {
 	if fields == nil {
 		return 0
@@ -256,7 +189,7 @@ func countParams(fields *ast.FieldList) int {
 	count := 0
 	for _, f := range fields.List {
 		if len(f.Names) == 0 {
-			// Unnamed parameter (e.g., in function types)
+
 			count++
 			continue
 		}
@@ -265,7 +198,6 @@ func countParams(fields *ast.FieldList) int {
 	return count
 }
 
-// paramNames returns parameter names from a FieldList.
 func paramNames(fields *ast.FieldList) []string {
 	if fields == nil {
 		return nil
@@ -283,11 +215,6 @@ func paramNames(fields *ast.FieldList) []string {
 	return names
 }
 
-// paramTypes returns one TYPE text per parameter (#1184): each name
-// occurrence in a grouped field ("a, b int") contributes the field's type,
-// and unnamed parameters contribute their type directly. This is the
-// rename-stable identity used by pcFingerprint, unlike paramNames (display
-// only). Prealloc: len is an upper bound of entries per field list.
 func paramTypes(fields *ast.FieldList) []string {
 	if fields == nil {
 		return nil
@@ -313,7 +240,6 @@ func paramTypes(fields *ast.FieldList) []string {
 	return ts
 }
 
-// typeString produces a short type name for display.
 func typeString(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.Ident:

@@ -24,8 +24,6 @@ type SkillLookup interface {
 	Get(name string) (*commands.Command, bool)
 }
 
-// SkillNameLister provides all available skill names for fuzzy matching.
-// Implemented by commands.Manager.
 type SkillNameLister interface {
 	SkillNames() []string
 }
@@ -58,12 +56,12 @@ type SkillTool struct {
 	Provider            provider.Provider
 	Tools               *Registry
 	AgentFactory        subagent.AgentFactory
-	WorkingDir          string // working directory to propagate to sub-agent
+	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
-	OnMetric            func(metrics.MetricEvent)           // sub-agent telemetry forwarding (#3296); runner stamps SubAgentID
-	OnSkillUsed         func(ref string)                    // optional callback when a skill is loaded by the agent
-	OnSkillCompleted    func(event SkillExecutionEvent)     // optional callback when execution finishes
-	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
+	OnMetric            func(metrics.MetricEvent)
+	OnSkillUsed         func(ref string)
+	OnSkillCompleted    func(event SkillExecutionEvent)
+	SystemPromptBuilder func(task, agentType string) string
 }
 
 func (t SkillTool) Name() string { return "skill" }
@@ -107,16 +105,16 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if t.Skills == nil {
 		return Result{IsError: true, Content: "skill system is unavailable"}, nil
 	}
-	// Skill search mode: prefix '?' triggers keyword search across all skills.
+
 	if strings.HasPrefix(args.Skill, "?") {
 		query := strings.TrimSpace(strings.TrimPrefix(args.Skill, "?"))
 		return t.searchSkills(query), nil
 	}
-	// Skill export mode: prefix '#export:' packages a skill into a .ggskill bundle.
+
 	if rest, ok := strings.CutPrefix(args.Skill, "#export:"); ok {
 		return t.handleExportSkill(rest, strings.TrimSpace(args.Args)), nil
 	}
-	// Skill import mode: prefix '#import:' extracts a .ggskill bundle.
+
 	if rest, ok := strings.CutPrefix(args.Skill, "#import:"); ok {
 		return t.handleImportSkill(rest, strings.TrimSpace(args.Args)), nil
 	}
@@ -132,10 +130,7 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		t.OnSkillUsed(ref)
 	}
 	if cmd.LoadedFrom == commands.LoadedFromMCP {
-		// #871: with no MCP runtime injected (disconnected / not configured),
-		// falling through to the inline branch Expand()s the placeholder
-		// command and injects contentless metadata as if it were the skill.
-		// Error out explicitly instead.
+
 		if t.Runtime == nil {
 			msg := "MCP runtime unavailable: this skill was loaded from an MCP server whose runtime is not available in the current session. Reconnect the MCP server or use a local skill."
 			t.notifySkillCompleted(cmd, SkillExecutionModeMCP, Result{IsError: true, Content: msg}, nil)
@@ -157,23 +152,14 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	})
 	content = strings.TrimSpace(content)
 
-	// If the skill declares dependencies on other skills, advise the agent
-	// (sa-85: closure-aware chain, not just direct deps - GoS prerequisite gap).
 	if depHint := closureDependencyHint(cmd, t.Skills); depHint != "" {
 		content = depHint + "\n\n" + content
 	}
 
-	// NLAH-style contracts and failure taxonomy (r466): surface the skill's
-	// declared precondition/postcondition/state semantics and recovery paths
-	// so mid-workflow failures consult the author's recovery plan instead of
-	// falling straight through to the generic error classifier.
 	if contractHint := buildContractHint(cmd); contractHint != "" {
 		content = contractHint + "\n\n" + content
 	}
 
-	// Return a brief confirmation + inject skill content as follow-up user message.
-	// This forces the model to process and act on the skill instructions,
-	// matching Claude Code's inline skill behavior.
 	loadMsg := fmt.Sprintf("Skill %q loaded.", cmd.Name)
 	if v := strings.TrimSpace(cmd.Version); v != "" {
 		loadMsg = fmt.Sprintf("Skill %q (v%s) loaded.", cmd.Name, v)
@@ -193,18 +179,10 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	return result, nil
 }
 
-// skillSourceTag is the trust-boundary marker wrapping third-party skill
-// bodies injected inline (r482, contextual authorization). The system
-// prompt declares that content inside this region is data at tool-output
-// trust level, not first-class instructions.
 const skillSourceTag = "skill-source"
 
 var skillSourceCloseRe = regexp.MustCompile(`(?i)<\s*/\s*skill-source\s*>`)
 
-// wrapSkillSource wraps a skill body in a <skill-source> trust boundary.
-// Any forged closing tag inside the body is neutralized so the region
-// cannot be terminated early by malicious skill content (same escaping
-// discipline as untrusted_tool_output.go for tool results).
 func wrapSkillSource(name, version, content string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -217,10 +195,6 @@ func wrapSkillSource(name, version, content string) string {
 	return fmt.Sprintf("<%s%s>\n%s\n</%s>", skillSourceTag, attrs, skillSourceCloseRe.ReplaceAllString(content, "<\u200b/skill-source>"), skillSourceTag)
 }
 
-// resolveSkill looks up the named skill, handles MCP prompt fallback,
-// and validates enabled/model-invocation/required-tools constraints.
-// Returns (cmd, errorResult, true) on success, or (nil, errorResult, false)
-// if the caller should return the errorResult immediately.
 func (t SkillTool) resolveSkill(ctx context.Context, name, rawArgs string) (*commands.Command, Result, bool) {
 	cmd, ok := t.Skills.Get(name)
 	if !ok {
@@ -237,7 +211,7 @@ func (t SkillTool) resolveSkill(ctx context.Context, name, rawArgs string) (*com
 	if cmd.DisableModelInvocation {
 		return nil, Result{IsError: true, Content: fmt.Sprintf("skill %q is only available for direct user invocation", cmd.Name)}, false
 	}
-	// Validate external CLI tool dependencies before execution.
+
 	if missing := checkRequiredTools(cmd.RequiresTools); len(missing) > 0 {
 		return nil, Result{IsError: true, Content: fmt.Sprintf(
 			"skill %q requires the following tools to be installed and on PATH: %s. Install them before invoking this skill.",
@@ -283,8 +257,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-				// Clone the registry so each skill sub-agent gets its own tool
-				// instances with independent WorkingDir fields.
+
 				cloned := t.Tools.Clone()
 				if len(allowedTools) > 0 {
 					all := cloned.ToolNames()
@@ -421,9 +394,6 @@ func skillScopeForCommand(cmd *commands.Command) string {
 	return ""
 }
 
-// Clone returns an independent copy of SkillTool for use by a different agent.
-// Skills, Runtime, Provider, Tools, AgentFactory, and callbacks are shared.
-// Only WorkingDir is agent-specific.
 func (t SkillTool) Clone() Tool {
 	return SkillTool{
 		Skills:              t.Skills,
@@ -441,8 +411,6 @@ func (t SkillTool) Clone() Tool {
 	}
 }
 
-// skillNotFoundMsg returns an error message for an unknown skill, augmented
-// with fuzzy match suggestions when close matches exist.
 func (t SkillTool) skillNotFoundMsg(query string) string {
 	q := strings.TrimSpace(query)
 	base := fmt.Sprintf("skill %q not found", q)
@@ -466,8 +434,6 @@ func (t SkillTool) skillNotFoundMsg(query string) string {
 	return sb.String()
 }
 
-// searchSkills performs keyword search across all available skills and returns
-// ranked results. Empty query returns all skills (for browsing/discovery).
 func (t SkillTool) searchSkills(query string) Result {
 	if t.NameLister == nil || t.Skills == nil {
 		return Result{IsError: true, Content: "skill search is unavailable"}
@@ -496,13 +462,6 @@ type skillSearchMatch struct {
 	score   int
 }
 
-// collectSkillMatches iterates all skills, scoring each against the query.
-// #r484 (SkillForge pruning core): lexical score alone lets a skill that has
-// been unused for months rank level with a skill the agent invokes daily.
-// The knight scheduler already DETECTS staleness (30-day notice) but nothing
-// feeds that back into retrieval. Here the lexical score is decayed by the
-// skill's last-used age from .ggcode/skill-usage.json: never-used skills are
-// NOT penalized (new skills need discovery), stale ones sink in ranking.
 func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skillSearchMatch {
 	usageIdx := loadSkillUsageIndex(t.WorkingDir)
 	var matches []skillSearchMatch
@@ -515,8 +474,7 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 		if score > 0 {
 			score -= stalePenalty(usageIdx, name, time.Now())
 			if score < 1 {
-				// Clamp: a strong lexical match stays retrievable even at
-				// maximum staleness - demote, never erase.
+
 				score = 1
 			}
 			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, score: score})
@@ -525,20 +483,12 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 	return matches
 }
 
-// skillUsageLite mirrors the fields of knight's skillUsage
-// (internal/knight/usage_tracker.go) that retrieval cares about. Kept as a
-// local type so internal/tool does not import the knight package (which
-// would drag scheduler/governance deps into the tool layer).
 type skillUsageLite struct {
 	LastUsed time.Time `json:"last_used"`
 }
 
-// skillUsageIndex maps skill name -> last-used timestamp.
 type skillUsageIndex map[string]skillUsageLite
 
-// loadSkillUsageIndex reads .ggcode/skill-usage.json once per search call.
-// Any failure (missing file, parse error, permission) yields an empty index:
-// retrieval degrades to the pre-#r484 pure-lexical behavior, never errors.
 func loadSkillUsageIndex(workingDir string) skillUsageIndex {
 	idx := skillUsageIndex{}
 	if workingDir == "" {
@@ -555,11 +505,6 @@ func loadSkillUsageIndex(workingDir string) skillUsageIndex {
 	return raw
 }
 
-// stalePenalty returns the score deduction for a skill based on how long
-// since its last recorded use (SkillForge-style decay; aligned with the
-// knight scheduler's 30-day staleness notice and 90-day deep-staleness
-// window). Zero for skills with no usage record - new skills must not be
-// buried before they ever get a chance.
 func stalePenalty(idx skillUsageIndex, name string, now time.Time) int {
 	entry, ok := idx[name]
 	if !ok || entry.LastUsed.IsZero() {
@@ -568,14 +513,13 @@ func stalePenalty(idx skillUsageIndex, name string, now time.Time) int {
 	age := now.Sub(entry.LastUsed)
 	switch {
 	case age > 90*24*time.Hour:
-		return 8 // deep-stale: heavy demotion, clamp keeps score >= 1
+		return 8
 	case age > 30*24*time.Hour:
-		return 4 // stale: same threshold the knight notice uses
+		return 4
 	}
 	return 0
 }
 
-// scoreSkill returns a relevance score and display description for a skill.
 func scoreSkill(name string, cmd *commands.Command, queryLower string) (int, string) {
 	desc := strings.TrimSpace(cmd.Description)
 	when := strings.TrimSpace(cmd.WhenToUse)
@@ -629,8 +573,7 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 				sb.WriteString(": " + m.desc)
 			}
 		}
-		// sa-85 GoS prerequisite-gap fix: for searched (not listed) skills,
-		// surface the dependency closure so the bundle is execution-complete.
+
 		if queryLower != "" && lookup != nil {
 			if closure := skillClosureForSearch(m.name, lookup); closure != "" {
 				sb.WriteString("\n  " + closure)
@@ -645,7 +588,6 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 	return sb.String()
 }
 
-// checkRequiredTools returns the subset of tools that are not found on PATH.
 func checkRequiredTools(tools []string) []string {
 	var missing []string
 	for _, tool := range tools {
@@ -660,9 +602,6 @@ func checkRequiredTools(tools []string) []string {
 	return missing
 }
 
-// buildContractHint renders a skill's NLAH-style declarations (precondition,
-// postcondition, state contract, failure taxonomy) as a compact advisory
-// preamble. Returns "" when the skill declares none.
 func buildContractHint(cmd *commands.Command) string {
 	if cmd == nil {
 		return ""
@@ -697,10 +636,6 @@ func buildContractHint(cmd *commands.Command) string {
 	return "[skill contract] " + strings.Join(lines, "\n[skill contract] ")
 }
 
-// buildDependencyHint returns a short advisory message if the skill declares
-// prerequisite skills that should be loaded first. Missing dependencies are
-// noted but do not block execution - the agent can still proceed.
-// Supports version constraints: "dep-name@>=1.0.0".
 func buildDependencyHint(cmd *commands.Command, lookup SkillLookup) string {
 	if cmd == nil || len(cmd.Dependencies) == 0 {
 		return ""
@@ -747,8 +682,6 @@ func nonEmptyVersion(v string) string {
 	return v
 }
 
-// handleExportSkill packages the named skill into a .ggskill bundle.
-// rest is "skillName" and args is the optional output path.
 func (t SkillTool) handleExportSkill(rest, args string) Result {
 	name := strings.TrimSpace(rest)
 	if name == "" {
@@ -758,7 +691,7 @@ func (t SkillTool) handleExportSkill(rest, args string) Result {
 	if !ok || cmd == nil {
 		return Result{IsError: true, Content: t.skillNotFoundMsg(name)}
 	}
-	// Determine output path: explicit arg, or default to ./<name>.ggskill
+
 	outPath := strings.TrimSpace(args)
 	if outPath == "" {
 		outPath = name + ".ggskill"
@@ -781,8 +714,6 @@ func (t SkillTool) handleExportSkill(rest, args string) Result {
 	return Result{Content: sb.String()}
 }
 
-// handleImportSkill extracts a .ggskill bundle into the user skills directory.
-// rest is "source-path-or-url" and args is the optional destination directory.
 func (t SkillTool) handleImportSkill(rest, args string) Result {
 	source := strings.TrimSpace(rest)
 	if source == "" {
@@ -809,10 +740,7 @@ func (t SkillTool) handleImportSkill(rest, args string) Result {
 	if manifest.Description != "" {
 		sb.WriteString(fmt.Sprintf("Description: %s\n", manifest.Description))
 	}
-	// #r481: advisory content scan. The bundle body is injected as a USER
-	// message when this skill loads, so malicious text that survived the
-	// structural import guards must be visible at import time. Warnings do
-	// NOT block the import (false positives must not lock users out).
+
 	if warns := scanSkillDir(skillDir); len(warns) > 0 {
 		sb.WriteString(fmt.Sprintf("\nWarning: security scan flagged %d issue(s) - review before invoking this skill:\n", len(warns)))
 		for _, w := range warns {

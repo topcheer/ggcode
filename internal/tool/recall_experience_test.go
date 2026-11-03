@@ -51,8 +51,7 @@ func TestRecallExperienceTool(t *testing.T) {
 	})
 
 	t.Run("HOME working dir disables store gracefully", func(t *testing.T) {
-		// NewProjectExperienceStore returns nil when workingDir == HOME;
-		// exercise the nil path via an empty workingDir (also nil).
+
 		res, _ := NewRecallExperienceTool("").Execute(context.Background(), json.RawMessage(`{"query":"anything"}`))
 		if res.IsError {
 			t.Fatalf("disabled store must be a friendly no-op, got %q", res.Content)

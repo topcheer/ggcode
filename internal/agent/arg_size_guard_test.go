@@ -20,7 +20,7 @@ func TestAnalyzeArgSize_SmallArgs(t *testing.T) {
 }
 
 func TestAnalyzeArgSize_OversizedOldText(t *testing.T) {
-	// Create a 5KB old_text — above argSizeWarnField (4KB)
+
 	big := strings.Repeat("x", 5*1024)
 	args, _ := json.Marshal(map[string]interface{}{
 		"file_path": "/tmp/test.go",
@@ -40,7 +40,7 @@ func TestAnalyzeArgSize_OversizedOldText(t *testing.T) {
 }
 
 func TestAnalyzeArgSize_SevereOldText(t *testing.T) {
-	// Create a 20KB old_text — above argSizeSevereField (16KB)
+
 	big := strings.Repeat("y", 20*1024)
 	args, _ := json.Marshal(map[string]interface{}{
 		"file_path": "/tmp/test.go",
@@ -87,8 +87,7 @@ func TestAnalyzeArgSize_OversizedGrepPattern(t *testing.T) {
 }
 
 func TestAnalyzeArgSize_TotalPayloadSize(t *testing.T) {
-	// 10KB total args — above argSizeWarnTotal (8KB), but individual fields
-	// may be below argSizeWarnField. Should still warn about total size.
+
 	big := strings.Repeat("a", 5000)
 	big2 := strings.Repeat("b", 4000)
 	args, _ := json.Marshal(map[string]interface{}{
@@ -117,9 +116,7 @@ func TestAnalyzeArgSize_MultiFileEditOversized(t *testing.T) {
 }
 
 func TestAnalyzeArgSize_MultiEditFileOversizedOldText(t *testing.T) {
-	// 3KB old_text nested in edits[] -- below severe (16KB) but above warn
-	// (4KB is the edit_file warn threshold; use 5KB to stay consistent with
-	// the edit_file tests) triggers the warn tier for multi_edit_file.
+
 	big := strings.Repeat("m", 5*1024)
 	args, _ := json.Marshal(map[string]interface{}{
 		"file_path": "/tmp/test.go",
@@ -198,7 +195,7 @@ func TestCheckArgSizeGuard_FiresOnce(t *testing.T) {
 
 func TestCheckArgSizeGuard_ResetsOnNewRun(t *testing.T) {
 	a := &Agent{argSizeGuardFires: 1}
-	a.argSizeGuardFires = 0 // simulate reset
+	a.argSizeGuardFires = 0
 
 	big := strings.Repeat("x", 20*1024)
 	args, _ := json.Marshal(map[string]interface{}{

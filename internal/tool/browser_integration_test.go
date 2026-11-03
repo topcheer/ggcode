@@ -16,9 +16,6 @@ var (
 	chromeSkipMsg  string
 )
 
-// skipIfNoChrome skips the test if Chrome/Chromium is not available or the
-// test site is unreachable. Uses sync.Once so the check runs only once per
-// test binary execution, avoiding 12 separate Chrome launches.
 func skipIfNoChrome(t *testing.T) {
 	t.Helper()
 	chromeSkipOnce.Do(func() {
@@ -54,7 +51,6 @@ func skipIfNoChrome(t *testing.T) {
 	}
 }
 
-// runBrowserAction is a helper that executes a browser action and returns the result.
 func runBrowserAction(t *testing.T, b *Browser, action string, extra map[string]interface{}) Result {
 	t.Helper()
 	args := map[string]interface{}{
@@ -76,8 +72,6 @@ func runBrowserAction(t *testing.T, b *Browser, action string, extra map[string]
 
 const testSite = "https://www.facebook.com"
 
-// TestBrowserIntegration_NavigateContent tests navigate + content actions against Facebook.
-// Facebook is a heavy SPA — this validates real-world JavaScript rendering.
 func TestBrowserIntegration_NavigateContent(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -94,13 +88,12 @@ func TestBrowserIntegration_NavigateContent(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("content failed: %s", result.Content)
 	}
-	// Facebook should render something — title or content
+
 	if len(result.Content) < 50 {
 		t.Errorf("content too short for a SPA page: %s", result.Content)
 	}
 }
 
-// TestBrowserIntegration_NavigateWaitFor verifies SPA dynamic content via wait_for.
 func TestBrowserIntegration_NavigateWaitFor(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -115,7 +108,6 @@ func TestBrowserIntegration_NavigateWaitFor(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Extract tests element extraction.
 func TestBrowserIntegration_Extract(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -123,19 +115,17 @@ func TestBrowserIntegration_Extract(t *testing.T) {
 
 	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": testSite})
 
-	// Extract all links
 	result := runBrowserAction(t, b, "extract", map[string]interface{}{
 		"selector": "a",
 	})
 	if result.IsError {
 		t.Fatalf("extract a failed: %s", result.Content)
 	}
-	// Facebook should have links
+
 	if !strings.Contains(result.Content, "[a") {
 		t.Errorf("extract a should find link elements: %s", result.Content)
 	}
 
-	// Extract full page text (no selector)
 	result = runBrowserAction(t, b, "extract", nil)
 	if result.IsError {
 		t.Fatalf("extract full page failed: %s", result.Content)
@@ -145,7 +135,6 @@ func TestBrowserIntegration_Extract(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Links tests links action.
 func TestBrowserIntegration_Links(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -161,7 +150,6 @@ func TestBrowserIntegration_Links(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Evaluate tests JS evaluation.
 func TestBrowserIntegration_Evaluate(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -169,19 +157,17 @@ func TestBrowserIntegration_Evaluate(t *testing.T) {
 
 	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": testSite})
 
-	// Get title via JS
 	result := runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"expression": "document.title",
 	})
 	if result.IsError {
 		t.Fatalf("evaluate title failed: %s", result.Content)
 	}
-	// Facebook title should contain "Facebook"
+
 	if !strings.Contains(strings.ToLower(result.Content), "facebook") {
 		t.Logf("title was: %s (Facebook may have changed title)", result.Content)
 	}
 
-	// Arithmetic
 	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"expression": "6 * 7",
 	})
@@ -192,7 +178,6 @@ func TestBrowserIntegration_Evaluate(t *testing.T) {
 		t.Errorf("evaluate 6*7 should be 42: %s", result.Content)
 	}
 
-	// DOM query — count forms/inputs
 	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"expression": "document.querySelectorAll('input').length",
 	})
@@ -202,7 +187,6 @@ func TestBrowserIntegration_Evaluate(t *testing.T) {
 	t.Logf("Facebook has %s input elements", result.Content)
 }
 
-// TestBrowserIntegration_Type tests typing into a form field.
 func TestBrowserIntegration_Type(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -210,8 +194,6 @@ func TestBrowserIntegration_Type(t *testing.T) {
 
 	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": testSite})
 
-	// Facebook login page has email/password inputs
-	// Type into the email field
 	result := runBrowserAction(t, b, "type", map[string]interface{}{
 		"selector": "input[name=email]",
 		"text":     "test@example.com",
@@ -220,7 +202,6 @@ func TestBrowserIntegration_Type(t *testing.T) {
 		t.Fatalf("type into email failed: %s", result.Content)
 	}
 
-	// Verify the text was typed
 	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"expression": `document.querySelector('input[name=email]').value`,
 	})
@@ -232,7 +213,6 @@ func TestBrowserIntegration_Type(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Scroll tests scroll action.
 func TestBrowserIntegration_Scroll(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -249,7 +229,6 @@ func TestBrowserIntegration_Scroll(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Screenshot tests PNG screenshot capture.
 func TestBrowserIntegration_Screenshot(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -270,7 +249,6 @@ func TestBrowserIntegration_Screenshot(t *testing.T) {
 	t.Logf("captured %d chars of base64 image data", len(result.Images[0].Base64))
 }
 
-// TestBrowserIntegration_WaitTimeout tests wait timeout for missing element.
 func TestBrowserIntegration_WaitTimeout(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
@@ -290,19 +268,15 @@ func TestBrowserIntegration_WaitTimeout(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Back tests back navigation.
 func TestBrowserIntegration_Back(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
 	defer b.doCloseSession("default", "itest")
 
-	// Navigate to Facebook
 	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": testSite})
 
-	// Navigate to a different page
 	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": "https://www.google.com"})
 
-	// Go back
 	result := runBrowserAction(t, b, "back", nil)
 	if result.IsError {
 		t.Fatalf("back failed: %s", result.Content)
@@ -312,14 +286,12 @@ func TestBrowserIntegration_Back(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_MultiSession tests multiple independent sessions (tabs).
 func TestBrowserIntegration_MultiSession(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()
 	defer b.doCloseSession("default", "sess-a")
 	defer b.doCloseSession("default", "sess-b")
 
-	// Session A: Facebook
 	result := runBrowserAction(t, b, "navigate", map[string]interface{}{
 		"url":     testSite,
 		"session": "sess-a",
@@ -328,7 +300,6 @@ func TestBrowserIntegration_MultiSession(t *testing.T) {
 		t.Fatalf("sess-a navigate: %s", result.Content)
 	}
 
-	// Session B: Google
 	result = runBrowserAction(t, b, "navigate", map[string]interface{}{
 		"url":     "https://www.google.com",
 		"session": "sess-b",
@@ -337,7 +308,6 @@ func TestBrowserIntegration_MultiSession(t *testing.T) {
 		t.Fatalf("sess-b navigate: %s", result.Content)
 	}
 
-	// Verify session A still on Facebook
 	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"session":    "sess-a",
 		"expression": "window.location.hostname",
@@ -349,7 +319,6 @@ func TestBrowserIntegration_MultiSession(t *testing.T) {
 		t.Errorf("sess-a should be on facebook: %s", result.Content)
 	}
 
-	// Verify session B on Google
 	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
 		"session":    "sess-b",
 		"expression": "window.location.hostname",
@@ -362,7 +331,6 @@ func TestBrowserIntegration_MultiSession(t *testing.T) {
 	}
 }
 
-// TestBrowserIntegration_Close tests close action.
 func TestBrowserIntegration_Close(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()

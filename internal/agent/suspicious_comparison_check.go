@@ -1,31 +1,5 @@
 package agent
 
-// Suspicious Comparison & Equality Intelligence (Check #50)
-//
-// Problem: AI coding agents frequently generate Go code with comparison patterns
-// that are either incorrect (break error handling) or always-true/false (dead logic).
-// Detected categories:
-//
-//  1. Sentinel error comparison with == instead of errors.Is() (errors.Is gap):
-//     `if err == sql.ErrNoRows` breaks when errors are wrapped (fmt.Errorf %w).
-//  2. Float equality comparison (staticcheck SA4003):
-//     `if ratio == 0.1` is unreliable due to floating-point representation errors.
-//     Should use math.Abs(ratio - 0.1) < epsilon.
-//  3. Self-comparison (staticcheck SA4000):
-//     `if x == x` is always true (except for NaN), indicating a typo.
-//  4. Constant boolean condition (staticcheck SA4015):
-//     `if true { ... }` or `if 1 > 2 { ... }` — always-true/false conditions are
-//     dead logic, usually indicating a logic error.
-//
-// Competitor analysis:
-//   - Claude Code: no write-time detection
-//   - Cursor: staticcheck may catch SA4000/SA4003/SA4015 post-hoc, inconsistent
-//   - Cline/OpenHands: no detection
-//   - Aider: no detection
-//
-// Approach: AST-based analysis, zero LLM cost. Delta-aware: only flags patterns
-// newly introduced by this edit.
-
 import (
 	"fmt"
 	"go/ast"
@@ -36,8 +10,6 @@ import (
 	"strings"
 )
 
-// knownSentinelErrors are well-known Go sentinel errors that must be compared
-// with errors.Is(), never ==. These are from the standard library.
 var knownSentinelErrors = map[string]bool{
 	"io.EOF":                     true,
 	"io.ErrClosedPipe":           true,
@@ -69,7 +41,6 @@ var knownSentinelErrors = map[string]bool{
 	"bufio.ErrTooLong":           true,
 }
 
-// suspiciousCmpInstance represents a detected suspicious comparison.
 type suspiciousCmpInstance struct {
 	posStr    string
 	leftText  string
@@ -78,8 +49,6 @@ type suspiciousCmpInstance struct {
 	reason    string
 }
 
-// checkSuspiciousComparison detects suspicious comparison patterns in Go code.
-// Delta-aware: only flags instances newly introduced by this edit.
 func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 	if filepath.Ext(filePath) != ".go" || strings.TrimSpace(newContent) == "" {
 		return ""
@@ -123,7 +92,6 @@ func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 	return b.String()
 }
 
-// findSuspiciousComparisons traverses an AST and returns suspicious comparison instances.
 func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspiciousCmpInstance {
 	var instances []suspiciousCmpInstance
 
@@ -147,7 +115,6 @@ func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspicious
 			return true
 		}
 
-		// SA4000: self-comparison (x == x) is always true except for NaN
 		if leftText != "" && leftText == rightText && isSimpleIdent(leftText) {
 			pos := fset.Position(binExpr.Pos())
 			instances = append(instances, suspiciousCmpInstance{
@@ -160,10 +127,6 @@ func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspicious
 			return true
 		}
 
-		// SA4003: float equality comparison is unreliable — except against
-		// zero, which IEEE 754 represents exactly (SA4003 itself exempts
-		// zero). Fix #564: `x == 0.0` advisories pushed users to optimize
-		// correct code.
 		if isNonZeroFloatLiteral(binExpr.X) || isNonZeroFloatLiteral(binExpr.Y) {
 			pos := fset.Position(binExpr.Pos())
 			instances = append(instances, suspiciousCmpInstance{
@@ -195,8 +158,6 @@ func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspicious
 	return instances
 }
 
-// detectSuspiciousCmp checks if a comparison between left and right text
-// is suspicious. Returns a non-empty reason string if suspicious.
 func detectSuspiciousCmp(left, right string) string {
 	operands := []string{left, right}
 	for _, op := range operands {
@@ -212,13 +173,6 @@ func detectSuspiciousCmp(left, right string) string {
 	return ""
 }
 
-// isErrorNamed checks if an identifier name suggests it's an error VALUE.
-// Matches: err, error, err2, errResult, or selectors like pkg.ErrXxx.
-// Deliberately does NOT match counter/metric names that merely start with
-// "error" (errorCount, errorTotal, errorRate, obj.errorCount) — those are
-// ints and flagging `errorCount == errorTotal` trained users to ignore
-// advisories (#564). Boundary rule: after the err prefix the next char
-// must be an uppercase letter or digit (camelCase edge).
 func isErrorNamed(text string) bool {
 	if text == "" {
 		return false
@@ -245,10 +199,6 @@ func isErrorNamed(text string) bool {
 	return false
 }
 
-// hasErrPrefixBoundary reports whether s starts with err/Err in camelCase
-// boundary form: the character after the prefix is an uppercase letter or
-// digit (errRead, ErrFoo, err2). Lowercase continuations (errorCount,
-// errorTotal) are counters, not error values.
 func hasErrPrefixBoundary(s string) bool {
 	if len(s) < 4 {
 		return false
@@ -260,17 +210,14 @@ func hasErrPrefixBoundary(s string) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// isIdentStart reports whether ch can start a Go identifier.
 func isIdentStart(ch rune) bool {
 	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
-// isIdentPart reports whether ch can appear in a Go identifier (after the first char).
 func isIdentPart(ch rune) bool {
 	return isIdentStart(ch) || (ch >= '0' && ch <= '9')
 }
 
-// isSimpleIdent checks if text is a simple Go identifier.
 func isSimpleIdent(s string) bool {
 	if s == "" || strings.Contains(s, ".") {
 		return false
@@ -286,11 +233,6 @@ func isSimpleIdent(s string) bool {
 	return true
 }
 
-// exprText converts an AST expression to its source text representation.
-// Extended expression coverage (fix #176): the original 4-case switch folded
-// complex asserted expressions — e.g. getA().(int) and getB().(int) both
-// rendered ".(int)" — leaving the unchecked-assert fingerprint collision
-// class open for method-chain/index/conversion results.
 func exprText(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -334,8 +276,6 @@ func exprText(expr ast.Expr) string {
 	}
 }
 
-// collectSuspiciousCmps parses old content and returns a set of existing
-// comparison texts. Used for delta-aware suppression.
 func collectSuspiciousCmps(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return nil
@@ -354,9 +294,6 @@ func collectSuspiciousCmps(filePath, oldContent string) map[string]bool {
 	return result
 }
 
-// isNonZeroFloatLiteral reports whether expr is a float literal with a
-// nonzero value. Zero is exactly representable, so `x == 0.0` is reliable
-// and not advisory-worthy (staticcheck SA4003 agrees). Fix #564 FP.
 func isNonZeroFloatLiteral(expr ast.Expr) bool {
 	lit, ok := expr.(*ast.BasicLit)
 	if !ok || lit.Kind != token.FLOAT {
@@ -364,22 +301,15 @@ func isNonZeroFloatLiteral(expr ast.Expr) bool {
 	}
 	v, err := strconv.ParseFloat(lit.Value, 64)
 	if err != nil {
-		return true // unparseable (hex float etc.): stay conservative
+		return true
 	}
 	return v != 0
 }
 
-// findConstantConditions detects conditions that are always true or false (SA4015).
-// Flags: literal `true`/`false` used as if/for conditions, and binary expressions
-// where both operands are constant literals (e.g., 1 > 2, 3.0 <= 3.0), including
-// operands nested under && / || (if x && 1 > 2). Fix #1500 case A: the header
-// promised the literal-vs-literal form since the detector's introduction but the
-// implementation only covered true/false idents.
 func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmpInstance {
 	var instances []suspiciousCmpInstance
 
 	ast.Inspect(file, func(n ast.Node) bool {
-		// Detect `if true` / `if false` and `for true` / `for false`
 		var cond ast.Expr
 		switch stmt := n.(type) {
 		case *ast.IfStmt:
@@ -400,8 +330,7 @@ func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmp
 					reason:    "constant boolean condition is always " + ident.Name + " - likely a logic error or leftover debug code",
 				})
 			}
-			// SA4015 literal-vs-literal comparisons anywhere inside the
-			// condition, descending through && / || and parentheses.
+
 			collectConstLiteralCmps(cond, fset, &instances)
 		}
 		return true
@@ -410,8 +339,6 @@ func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmp
 	return instances
 }
 
-// collectConstLiteralCmps walks a condition expression and appends an instance
-// for every comparison whose operands are both constant numeric literals.
 func collectConstLiteralCmps(cond ast.Expr, fset *token.FileSet, instances *[]suspiciousCmpInstance) {
 	switch e := cond.(type) {
 	case *ast.BinaryExpr:
@@ -436,10 +363,6 @@ func collectConstLiteralCmps(cond ast.Expr, fset *token.FileSet, instances *[]su
 	}
 }
 
-// isConstLiteralCmp reports whether be is a numeric comparison (==, !=, <, >,
-// <=, >=) whose operands are both constant INT/FLOAT literals. Variable
-// operands (`x == 0.1`) are deliberately out of scope here: float-vs-literal
-// equality has its own SA4003 advisory above.
 func isConstLiteralCmp(be *ast.BinaryExpr) bool {
 	switch be.Op {
 	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ:
@@ -449,7 +372,6 @@ func isConstLiteralCmp(be *ast.BinaryExpr) bool {
 	return isNumericLiteral(be.X) && isNumericLiteral(be.Y)
 }
 
-// isNumericLiteral reports whether expr is an INT or FLOAT basic literal.
 func isNumericLiteral(expr ast.Expr) bool {
 	lit, ok := expr.(*ast.BasicLit)
 	return ok && (lit.Kind == token.INT || lit.Kind == token.FLOAT)

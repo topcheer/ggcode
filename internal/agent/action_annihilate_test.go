@@ -29,8 +29,7 @@ func TestActionAnnihilate_GitAddThenReset_SameFiles(t *testing.T) {
 	if s.cancelCount != 1 {
 		t.Errorf("expected cancelCount=1, got %d", s.cancelCount)
 	}
-	// #3477: only b.go was unstaged; a.go is still staged -- this is a
-	// PARTIAL cancellation and must not be described as net-zero.
+
 	if strings.Contains(warn, "net-zero state change") {
 		t.Errorf("partial reset mislabeled as net-zero: %q", warn)
 	}
@@ -63,9 +62,7 @@ func TestActionAnnihilate_GitAddDotThenReset(t *testing.T) {
 	if warn == "" {
 		t.Fatal("expected annihilation warning for git_add . → git_reset")
 	}
-	// #3477: stage-all then unstage ONE file is the release-sweep curation
-	// workflow (release-sweep-exclude-broken-wip) -- the trigger stays, but
-	// the wording must not claim net-zero nor call it oscillation.
+
 	if strings.Contains(warn, "net-zero state change") || strings.Contains(warn, "oscillating") {
 		t.Errorf("stage-all + single-file unstage mislabeled as net-zero/oscillation: %q", warn)
 	}
@@ -75,8 +72,7 @@ func TestActionAnnihilate_GitAddDotThenReset(t *testing.T) {
 }
 
 func TestActionAnnihilate_GitAddDotThenFullReset_KeepsNetZeroWording(t *testing.T) {
-	// #3477 symmetric guard: a reset with NO files unstages everything, so
-	// the original net-zero wording is factually correct and must stay.
+
 	s := newActionAnnihilateState()
 	addArgs := rawJSON(t, map[string]interface{}{"files": []string{"."}})
 	resetArgs := rawJSON(t, map[string]interface{}{})
@@ -93,7 +89,7 @@ func TestActionAnnihilate_GitAddDotThenFullReset_KeepsNetZeroWording(t *testing.
 }
 
 func TestActionAnnihilate_GitAddThenReset_ExactSet_KeepsNetZeroWording(t *testing.T) {
-	// #3477: resetting EXACTLY the staged set cancels the whole add.
+
 	s := newActionAnnihilateState()
 	addArgs := rawJSON(t, map[string]interface{}{"files": []string{"a.go"}})
 	resetArgs := rawJSON(t, map[string]interface{}{"files": []string{"a.go"}})
@@ -144,8 +140,7 @@ func TestActionAnnihilate_MultiEditThenUndo(t *testing.T) {
 func TestActionAnnihilate_GitCommitThenRevert(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_commit", rawJSON(t, map[string]interface{}{"message": "msg"}), 1)
-	// #2684: the warning fires only when the revert targets the commit the
-	// agent itself made (hash recorded by the wiring layer).
+
 	s.recordCommitHash(1, "abc1234")
 	warn := s.recordToolCall("git_revert", rawJSON(t, map[string]interface{}{"commit": "abc123"}), 2)
 
@@ -199,9 +194,9 @@ func TestActionAnnihilate_FileOpsMkdirDeleteDifferentPath(t *testing.T) {
 func TestActionAnnihilate_GitCheckoutRoundtrip(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 1)
-	// Intermediate checkout to different branch (not a match)
+
 	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 2)
-	// Back to main - matches the first checkout
+
 	warn := s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 3)
 
 	if warn == "" {
@@ -219,10 +214,6 @@ func TestActionAnnihilate_GitCheckoutDifferentBranches(t *testing.T) {
 	}
 }
 
-// TestActionAnnihilate_GitCheckoutRoundtrip_ReferenceWorkflow (#2634):
-// checkout feature → edit → checkout release-ref → read (reference lookup,
-// substantive work) → checkout feature must NOT warn. The whole flow has
-// real output; only the barrier-free generic matcher flagged it before.
 func TestActionAnnihilate_GitCheckoutRoundtrip_ReferenceWorkflow(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 1)
@@ -240,9 +231,6 @@ func TestActionAnnihilate_GitCheckoutRoundtrip_ReferenceWorkflow(t *testing.T) {
 	}
 }
 
-// TestActionAnnihilate_GitCheckoutRoundtrip_EditBetweenBarriers (#2634):
-// even a single non-checkout action (edit on the detour branch) breaks the
-// roundtrip pairing.
 func TestActionAnnihilate_GitCheckoutRoundtrip_EditBetweenBarriers(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 1)
@@ -255,9 +243,6 @@ func TestActionAnnihilate_GitCheckoutRoundtrip_EditBetweenBarriers(t *testing.T)
 	}
 }
 
-// TestActionAnnihilate_GitCheckoutRoundtrip_MultiHopThrash (#2634):
-// A → B → C → A with only checkout hops in between is still pure thrashing
-// and must fire.
 func TestActionAnnihilate_GitCheckoutRoundtrip_MultiHopThrash(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 1)
@@ -284,15 +269,13 @@ func TestActionAnnihilate_NoAnnihilation(t *testing.T) {
 
 func TestActionAnnihilate_MaxWarns(t *testing.T) {
 	s := newActionAnnihilateState()
-	// First pair: edit→undo
+
 	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/a.go"}), 1)
 	warn1 := s.recordToolCall("undo_edit", rawJSON(t, map[string]interface{}{"action": "undo"}), 2)
 
-	// Second pair: edit→undo
 	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/b.go"}), 3)
 	warn2 := s.recordToolCall("undo_edit", rawJSON(t, map[string]interface{}{"action": "undo"}), 4)
 
-	// Third pair: edit→undo -- should be suppressed
 	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/c.go"}), 5)
 	warn3 := s.recordToolCall("undo_edit", rawJSON(t, map[string]interface{}{"action": "undo"}), 6)
 
@@ -329,13 +312,11 @@ func TestActionAnnihilate_LookbackWindow(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.lookback = 3
 
-	// Fill with unrelated actions to push prior out of window
 	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/a.go"}), 1)
 	s.recordToolCall("read_file", rawJSON(t, map[string]interface{}{"path": "/tmp/b.go"}), 2)
 	s.recordToolCall("read_file", rawJSON(t, map[string]interface{}{"path": "/tmp/c.go"}), 3)
 	s.recordToolCall("read_file", rawJSON(t, map[string]interface{}{"path": "/tmp/d.go"}), 4)
 
-	// Now undo_edit -- the prior edit_file should be pushed out of the window
 	warn := s.recordToolCall("undo_edit", rawJSON(t, map[string]interface{}{"action": "undo"}), 5)
 
 	if warn != "" {
@@ -346,16 +327,16 @@ func TestActionAnnihilate_LookbackWindow(t *testing.T) {
 func TestActionAnnihilate_WarningContainsDescription(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_commit", rawJSON(t, map[string]interface{}{"message": "m"}), 1)
-	// #2684: revert must target the recorded commit hash to warn.
+
 	s.recordCommitHash(1, "abc1234")
 	warn := s.recordToolCall("git_revert", rawJSON(t, map[string]interface{}{"commit": "abc"}), 2)
 
 	if warn == "" {
 		t.Fatal("expected warning")
 	}
-	// Should mention the specific pair description
+
 	assertContains(t, warn, "git_commit then git_revert")
-	// Should include actionable guidance
+
 	assertContains(t, warn, "Reflect")
 }
 

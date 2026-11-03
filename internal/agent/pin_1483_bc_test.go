@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// TestQueryConvergeGlobIsNotAQuery pins #1483 case B: glob's pattern argument
-// is path syntax (internal/agent/*.go), not a natural-language query. Three
-// DIFFERENT packages' globs must not look like the same question rephrased -
-// if glob tokenization leaks back in, this test fails with a spurious warning.
 func TestQueryConvergeGlobIsNotAQuery(t *testing.T) {
 	q := newQueryConvergeState()
 	q.recordToolCall("glob", `{"pattern":"internal/agent/*.go"}`, 1)
@@ -16,10 +12,6 @@ func TestQueryConvergeGlobIsNotAQuery(t *testing.T) {
 	}
 }
 
-// TestCountConcurrencyPrimitivesAliasedImports pins #1483 case C: an aliased
-// import (`import concur "sync"`) must resolve to its real package, so
-// concur.Mutex counts as a concurrency primitive. The old code compared the
-// LOCAL name against "sync"/"atomic" literally and counted zero.
 func TestCountConcurrencyPrimitivesAliasedImports(t *testing.T) {
 	src := `package x
 
@@ -39,7 +31,6 @@ func f() {
 		t.Fatal("aliased sync/sync-atomic imports must count as concurrency primitives, got 0")
 	}
 
-	// Control: same code with default import names (baseline sanity).
 	plain := `package x
 
 import (
@@ -60,7 +51,6 @@ func f() {
 		t.Fatal("plain sync/sync-atomic imports must count, got 0")
 	}
 
-	// Negative: an unrelated package aliased as "sync" must NOT count.
 	wrong := `package x
 
 import sync "fmt"

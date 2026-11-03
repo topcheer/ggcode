@@ -25,8 +25,6 @@ func TestRecordUncertainty(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Record multiple uncertainty events (the three production-wired
-	// categories — the assumptions feed was retired with its detector, #484).
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("false_premise", weightFalsePremise)
@@ -39,7 +37,7 @@ func TestRecordUncertainty(t *testing.T) {
 
 func TestRecordUncertainty_NilSafe(t *testing.T) {
 	a := &Agent{}
-	// Should not panic when compoundedUncert is nil.
+
 	a.recordUncertainty("hedging", weightHedging)
 }
 
@@ -48,12 +46,10 @@ func TestMaybeWarnCompoundedUncertainty_BelowThreshold(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Accumulate just below threshold.
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
-	// total = 1.0 + 1.5 + 1.0 + 1.5 = 5.0, below threshold of 5.5
 
 	msg := a.maybeWarnCompoundedUncertainty()
 	if msg != "" {
@@ -69,8 +65,6 @@ func TestMaybeWarnCompoundedUncertainty_AtThreshold(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Accumulate above threshold.
-	// 2 hedging (2.0) + 2 unverified_success (3.0) + 1 false_premise (2.0) = 7.0
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
@@ -85,7 +79,6 @@ func TestMaybeWarnCompoundedUncertainty_AtThreshold(t *testing.T) {
 		t.Error("expected fired=true after warning")
 	}
 
-	// Check message contains expected content.
 	if !strings.Contains(msg, "compounded-trajectory-uncertainty") {
 		t.Error("expected message to contain detector name")
 	}
@@ -102,7 +95,6 @@ func TestMaybeWarnCompoundedUncertainty_FiresOnceOnly(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Trigger once.
 	for i := 0; i < 6; i++ {
 		a.recordUncertainty("hedging", weightHedging)
 	}
@@ -112,7 +104,6 @@ func TestMaybeWarnCompoundedUncertainty_FiresOnceOnly(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Add more uncertainty - should NOT fire again.
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("hedging", weightHedging)
 
@@ -135,7 +126,6 @@ func TestMaybeWarnCompoundedUncertainty_ReliabilityMessage(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// With weight=6.0, compounded reliability = 0.85^6 = 0.377 = ~37%
 	for i := 0; i < 6; i++ {
 		a.recordUncertainty("hedging", weightHedging)
 	}
@@ -145,7 +135,6 @@ func TestMaybeWarnCompoundedUncertainty_ReliabilityMessage(t *testing.T) {
 		t.Fatal("expected warning")
 	}
 
-	// Should mention a percentage (compounded reliability).
 	if !strings.Contains(msg, "%") {
 		t.Error("expected message to contain a reliability percentage")
 	}
@@ -156,12 +145,10 @@ func TestMaybeWarnCompoundedUncertainty_MultipleCategories(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Mix categories: hedging + unverified_success + false_premise + one more unverified
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("false_premise", weightFalsePremise)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
-	// total = 1.0 + 1.5 + 2.0 + 1.5 = 6.0
 
 	msg := a.maybeWarnCompoundedUncertainty()
 	if msg == "" {

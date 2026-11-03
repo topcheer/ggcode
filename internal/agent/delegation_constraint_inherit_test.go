@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// MAST I1: the parent's established constraints must ride along into
-// delegated tasks; idempotent; non-delegation tools untouched.
 func TestInheritDelegationConstraints(t *testing.T) {
 	a := &Agent{constraintAmnesia: newConstraintAmnesiaState()}
 	a.constraintAmnesia.constraints = []constraintEntry{
@@ -35,13 +33,11 @@ func TestInheritDelegationConstraints(t *testing.T) {
 		t.Fatal("original task text must be preserved first")
 	}
 
-	// Idempotent: a second pass (retry/replay) does not double-append.
 	tc2 := a.inheritDelegationConstraints(tc)
 	if string(tc2.Arguments) != string(tc.Arguments) {
 		t.Fatal("second pass must be a no-op (idempotent)")
 	}
 
-	// delegate maps to the prompt field.
 	tcD := a.inheritDelegationConstraints(provider.ToolCallDelta{
 		Name:      "delegate",
 		Arguments: json.RawMessage(`{"prompt":"review please"}`),
@@ -52,13 +48,11 @@ func TestInheritDelegationConstraints(t *testing.T) {
 		t.Fatal("delegate prompt must inherit constraints")
 	}
 
-	// Non-delegation tool: untouched.
 	plain := provider.ToolCallDelta{Name: "read_file", Arguments: json.RawMessage(`{"path":"x"}`)}
 	if got := a.inheritDelegationConstraints(plain); string(got.Arguments) != string(plain.Arguments) || got.Name != plain.Name {
 		t.Fatal("non-delegation tool calls must pass through unchanged")
 	}
 
-	// No recorded constraints: untouched.
 	b := &Agent{constraintAmnesia: newConstraintAmnesiaState()}
 	if got := b.inheritDelegationConstraints(provider.ToolCallDelta{
 		Name: "spawn_agent", Arguments: json.RawMessage(`{"task":"x"}`),
@@ -66,14 +60,12 @@ func TestInheritDelegationConstraints(t *testing.T) {
 		t.Fatal("no constraints = no injection")
 	}
 
-	// Literal null arguments (#4693 family): unchanged, no panic.
 	if got := a.inheritDelegationConstraints(provider.ToolCallDelta{
 		Name: "spawn_agent", Arguments: json.RawMessage(`null`),
 	}); string(got.Arguments) != `null` {
 		t.Fatal("null arguments must pass through")
 	}
 
-	// Cap at 8 constraints.
 	a.constraintAmnesia.constraints = nil
 	for i := 0; i < 12; i++ {
 		a.constraintAmnesia.constraints = append(a.constraintAmnesia.constraints, constraintEntry{excerpt: "c" + string(rune('a'+i))})

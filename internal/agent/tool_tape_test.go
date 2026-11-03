@@ -12,8 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/toolreplay"
 )
 
-// tapeStubTool is a minimal tool.Tool whose Execute counts invocations so
-// tests can prove the real tool was (or was not) called.
 type tapeStubTool struct {
 	name  string
 	calls int
@@ -63,7 +61,6 @@ func TestToolTapeRecordReplayRoundtrip(t *testing.T) {
 	tapePath := filepath.Join(dir, "session.tape.json")
 	ctx := context.Background()
 
-	// --- Record phase: two calls with distinct inputs, one with images. ---
 	stub := &tapeStubTool{name: "read_file", resp: tool.Result{Content: "hello world"}}
 	a := &Agent{toolTape: &toolTapeState{
 		tape: toolreplay.NewTape(),
@@ -88,7 +85,6 @@ func TestToolTapeRecordReplayRoundtrip(t *testing.T) {
 		t.Fatalf("tape file not flushed after record: %v", err)
 	}
 
-	// --- Replay phase: reload from disk, real tool must never run. ---
 	loaded, err := toolreplay.LoadTape(tapePath)
 	if err != nil {
 		t.Fatalf("LoadTape: %v", err)
@@ -157,7 +153,7 @@ func TestToolTapeFIFORepeatedInput(t *testing.T) {
 			t.Fatalf("FIFO call %d: content %q, want %q", i, res.Content, want)
 		}
 	}
-	// Third identical call: tape exhausted, explicit miss (never live).
+
 	res, err := a.safeExecute(stub, context.Background(), input)
 	if err != nil || !res.IsError || !strings.Contains(res.Content, "tape miss") {
 		t.Fatalf("FIFO exhaustion: want explicit miss error, got (%+v, %v)", res, err)
@@ -173,7 +169,7 @@ func TestToolTapeCancelNotRecorded(t *testing.T) {
 	stub := &tapeStubTool{name: "slow_tool"}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled: safeExecute takes the cancellation path
+	cancel()
 	res, err := a.safeExecute(stub, ctx, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("cancelled call: %v", err)

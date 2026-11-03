@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue2902_test.go - regression probes for #2902: Go string-literal
-// CONTENTS must not reach the text-based insecure-pattern checks. Fixtures,
-// error messages, and assertions like want := "InsecureSkipVerify: true"
-// used to fire false [Security] warnings (JS #1063 and Python already strip
-// strings; Go was the asymmetric gap).
-
 func TestIssue2902StringLiteralContentsNotScanned(t *testing.T) {
 	src := `package test
 
@@ -57,8 +51,7 @@ func client() {
 }
 
 func TestIssue2902EscapedQuoteHandling(t *testing.T) {
-	// The string contains an escaped quote; the stripper must not
-	// terminate early and leak the remainder of the line as code.
+
 	src := `package test
 
 var s = "quoted: \" InsecureSkipVerify: true still inside string"
@@ -72,11 +65,7 @@ var _ = s
 }
 
 func TestIssue2902SQLConcatInStringNotFlagged(t *testing.T) {
-	// A bare doc mention of SELECT inside one string (no concatenation on
-	// the line at all) must not be flagged. Note: a literal+literal concat
-	// like "SELECT " + " docs" still reads as a concatenation signal post-
-	// strip ("" + "") - distinguishing it needs operand analysis and is left
-	// out deliberately; the fix targets mention-only false positives.
+
 	src := `package test
 
 func msg() string { return "we never SELECT from user input here" }

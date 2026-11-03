@@ -11,12 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// gitAddArgsDirLike reports whether any git_add file argument is
-// directory-shaped: "."/"..", trailing slash, glob chars, or - #2131 - a
-// BARE directory name ("config", no slash/glob), which is a directory in
-// git semantics and the most natural agent phrasing, yet matched none of
-// the #1687 shape checks. Bare names are resolved with os.Stat relative
-// to CWD and to the repo dir.
 func gitAddArgsDirLike(dir string, files []string) bool {
 	for _, f := range files {
 		tf := strings.TrimSpace(f)
@@ -35,7 +29,6 @@ func gitAddArgsDirLike(dir string, files []string) bool {
 	return false
 }
 
-// GitAdd implements the git_add tool.
 type GitAdd struct {
 	WorkingDir string
 }
@@ -88,18 +81,15 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Sensitive file detection: warn about files that commonly contain
-	// secrets and should not be committed. Non-blocking advisory.
 	secretWarning := checkSensitiveFiles(args.Files)
 
-	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Add(ctx, dir, args.Files)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("%s add failed: %v", v.Name(), err)}, nil
 		}
 		trimmed := strings.TrimSpace(out)
-		// #835: the sensitive-file advisory must fire on hg/svn too.
+
 		if secretWarning != "" {
 			trimmed = strings.TrimSpace(trimmed + "\n\n" + secretWarning)
 		}
@@ -120,10 +110,6 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		return Result{IsError: true, Content: fmt.Sprintf("git add failed: %v\n%s", err, out)}, nil
 	}
 
-	// #1687 case 1: directory/dot/glob arguments (".", "config/", "*")
-	// carry no literal file name for checkSensitiveFiles to match - the
-	// advisory went silent exactly where mass-staging is most likely to
-	// sweep in secrets. Scan what actually landed in the index instead.
 	if secretWarning == "" {
 		if gitAddArgsDirLike(dir, args.Files) {
 			if staged := stagedSensitiveFiles(ctx, dir); len(staged) > 0 {
@@ -147,7 +133,6 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	return Result{Content: trimmed}, nil
 }
 
-// sensitiveFilePatterns are file names/suffixes that commonly contain secrets.
 var sensitiveFilePatterns = []string{
 	".env", ".env.local", ".env.production", ".env.staging", ".env.development",
 	".aws/credentials", ".npmrc", ".pypirc",
@@ -157,8 +142,6 @@ var sensitiveFilePatterns = []string{
 	".htpasswd", ".netrc",
 }
 
-// checkSensitiveFiles returns a warning if any staged file matches known
-// sensitive file patterns. Non-blocking advisory.
 func checkSensitiveFiles(files []string) string {
 	var flagged []string
 	for _, f := range files {
@@ -178,12 +161,6 @@ func checkSensitiveFiles(files []string) string {
 	)
 }
 
-// matchSensitivePath reports whether a single path matches any sensitive
-// pattern. #1687 case 3: the #835 anchoring used SUBSTRING forms - "/.env"
-// hit foo/.envrc and ".env/" hit dir.env/x. Exact matching now compares
-// path SEGMENTS: a pattern's own "/" splits must align with the path's
-// segment boundaries (so ".aws/credentials" matches exactly that
-// sub-path), and a slash-less pattern matches only a whole basename.
 func matchSensitivePath(path string) bool {
 	lf := strings.ToLower(strings.TrimSpace(path))
 	if lf == "" {
@@ -193,17 +170,13 @@ func matchSensitivePath(path string) bool {
 	base := segs[len(segs)-1]
 	for _, pattern := range sensitiveFilePatterns {
 		if !strings.Contains(pattern, "/") {
-			// Slash-less patterns are basename SUFFIXES: .pem matches
-			// server.pem and .env matches prod.env. Segment-splitting
-			// first kills the #835 regressions: foo/.envrc does not
-			// end in .env, and dir.env/x has basename x.
+
 			if strings.HasSuffix(base, pattern) {
 				return true
 			}
 			continue
 		}
-		// Slash patterns (.aws/credentials) match an exact segment run
-		// ending at the last segment.
+
 		p := strings.Split(pattern, "/")
 		if len(segs) >= len(p) {
 			match := true
@@ -221,11 +194,6 @@ func matchSensitivePath(path string) bool {
 	return false
 }
 
-// stagedSensitiveFiles lists sensitive files currently staged (index vs
-// HEAD). #1687 case 1: `files: ["."]` (explicitly allowed by the schema)
-// or a directory argument carries no literal name for the literal-argument
-// check to match - the advisory went silent exactly where mass-staging is
-// most likely to sweep in .env files. Called on the git path after add.
 func stagedSensitiveFiles(ctx context.Context, dir string) []string {
 	cmd := gitCommand(ctx, "diff", "--cached", "--name-only")
 	cmd.Dir = dir
@@ -243,7 +211,6 @@ func stagedSensitiveFiles(ctx context.Context, dir string) []string {
 	return flagged
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitAdd) Clone() Tool {
 	return &GitAdd{WorkingDir: t.WorkingDir}
 }

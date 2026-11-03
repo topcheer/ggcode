@@ -6,10 +6,7 @@ import (
 )
 
 func TestPlannerSuggestSurvivesRunStartReset(t *testing.T) {
-	// Regression for #1480: RunStreamWithContent used to call plannerAnalyze
-	// ~80 lines BEFORE the run-start resetPlanner, so reset wiped isComplex
-	// and maybeSuggestPlan could never fire on the production path. The fixed
-	// order is reset FIRST, then analyze - mirror that order here end-to-end.
+
 	a := &Agent{planner: newPlanState()}
 	a.resetPlanner()
 	a.plannerAnalyze("Add error handling across agent.go, prompt.go, and config.go. " +
@@ -21,7 +18,7 @@ func TestPlannerSuggestSurvivesRunStartReset(t *testing.T) {
 
 func TestAnalyzeUserPrompt_SimpleRequest(t *testing.T) {
 	p := newPlanState()
-	// Simple request: single file, single action, short.
+
 	score := p.analyzeUserPrompt("What does this file do?")
 	if score >= complexityThreshold {
 		t.Errorf("simple request scored %d (threshold %d), want < %d", score, complexityThreshold, complexityThreshold)
@@ -35,7 +32,7 @@ func TestAnalyzeUserPrompt_SimpleRequest(t *testing.T) {
 
 func TestAnalyzeUserPrompt_ComplexMultiFile(t *testing.T) {
 	p := newPlanState()
-	// Complex request: multiple files, multiple verbs, sequential markers.
+
 	prompt := "Add error handling across agent.go, prompt.go, and config.go. " +
 		"First update the error types, then add retry logic, and finally add tests."
 	score := p.analyzeUserPrompt(prompt)
@@ -46,8 +43,7 @@ func TestAnalyzeUserPrompt_ComplexMultiFile(t *testing.T) {
 
 func TestAnalyzeUserPrompt_RefactorPattern(t *testing.T) {
 	p := newPlanState()
-	// Refactor is a known multi-step pattern. Combined with architecture language
-	// and a broad scope indicator, it should score as complex.
+
 	prompt := "Refactor the agent package to use interfaces across all modules."
 	score := p.analyzeUserPrompt(prompt)
 	if score < complexityThreshold {
@@ -57,7 +53,7 @@ func TestAnalyzeUserPrompt_RefactorPattern(t *testing.T) {
 
 func TestAnalyzeUserPrompt_LongDetailedPrompt(t *testing.T) {
 	p := newPlanState()
-	// Very long prompt with architecture language.
+
 	prompt := "Design a new architecture for the authentication system. " +
 		"Create a new module called auth/ with the following components: " +
 		"a token service, a session manager, and a middleware layer. " +
@@ -83,19 +79,16 @@ func TestPlanState_ShouldSuggestPlan(t *testing.T) {
 	p := newPlanState()
 	p.setIsComplex(true, "complex prompt here")
 
-	// At iteration 0, should not suggest yet.
 	if p.shouldSuggestPlan(0) {
 		t.Error("should not suggest at iteration 0")
 	}
 
-	// At iteration 1, should suggest.
 	if !p.shouldSuggestPlan(planSuggestionIter) {
 		t.Error("should suggest at planSuggestionIter")
 	}
 
 	p.markSuggested()
 
-	// After suggestion, should not suggest again.
 	if p.shouldSuggestPlan(planSuggestionIter + 1) {
 		t.Error("should not suggest again after already suggested")
 	}
@@ -115,24 +108,20 @@ func TestPlanState_ReminderAfterSuggestion(t *testing.T) {
 	p := newPlanState()
 	p.setIsComplex(true, "complex prompt")
 
-	// Suggest first.
 	if !p.shouldSuggestPlan(planSuggestionIter) {
 		t.Error("should suggest at planSuggestionIter")
 	}
 	p.markSuggested()
 
-	// Should not remind before planReminderIter.
 	if p.shouldRemindPlan(planReminderIter - 1) {
 		t.Error("should not remind before planReminderIter")
 	}
 
-	// Should remind at planReminderIter.
 	if !p.shouldRemindPlan(planReminderIter) {
 		t.Error("should remind at planReminderIter")
 	}
 	p.markReminded()
 
-	// Should not remind again.
 	if p.shouldRemindPlan(planReminderIter + 1) {
 		t.Error("should not remind again")
 	}
@@ -153,23 +142,20 @@ func TestPlanState_Reset(t *testing.T) {
 }
 
 func TestCountFileReferences(t *testing.T) {
-	// No files.
+
 	if count := countFileReferences("hello world"); count != 0 {
 		t.Errorf("countFileReferences('hello world') = %d, want 0", count)
 	}
 
-	// Single file.
 	if count := countFileReferences("edit main.go"); count < 1 {
 		t.Errorf("countFileReferences('edit main.go') = %d, want >= 1", count)
 	}
 
-	// Multiple files.
 	count := countFileReferences("edit main.go, utils.go, and handler.go")
 	if count < 3 {
 		t.Errorf("countFileReferences with 3 files = %d, want >= 3", count)
 	}
 
-	// Path-based references.
 	count = countFileReferences("update internal/agent/ and internal/config/")
 	if count < 1 {
 		t.Errorf("countFileReferences with paths = %d, want >= 1", count)
@@ -177,8 +163,7 @@ func TestCountFileReferences(t *testing.T) {
 }
 
 func TestCountFileReferences_ExcludesURLs(t *testing.T) {
-	// URLs should not count as file references. The URL stripping logic
-	// removes protocol+host+path before counting slash-separated paths.
+
 	count := countFileReferences("check https://example.com/path/to/page and also http://test.org/another/path")
 	if count > 0 {
 		t.Errorf("URLs counted as files: %d", count)
@@ -191,11 +176,11 @@ func TestStripURLs(t *testing.T) {
 	}{
 		{"no urls here", "no urls here"},
 		{"see https://example.com/a/b end", "see  end"},
-		{"http://a.com/x https://b.org/y", " "},             // both removed
-		{"ftp://files.example.com/pub/x.txt next", " next"}, // trailing text kept
-		{"ssh://git@host/repo.git tail", " tail"},           // ssh scheme stripped
-		{"ssh://host/repo", ""},                             // URL alone at end
-		{"keep a/b/c paths", "keep a/b/c paths"},            // non-URL slashes kept
+		{"http://a.com/x https://b.org/y", " "},
+		{"ftp://files.example.com/pub/x.txt next", " next"},
+		{"ssh://git@host/repo.git tail", " tail"},
+		{"ssh://host/repo", ""},
+		{"keep a/b/c paths", "keep a/b/c paths"},
 	}
 	for _, c := range cases {
 		if got := stripURLs(c.in); got != c.want {
@@ -209,11 +194,11 @@ func TestHasMultiSegmentPath(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"internal/agent/planner.go", true}, // 2+ separators
-		{"internal/agent/", true},           // trailing slash dir ref
-		{"main.go", false},                  // no separator
-		{"src/main.go", false},              // only 1 separator
-		{"https://example.com/a/b", false},  // slashes only inside URL
+		{"internal/agent/planner.go", true},
+		{"internal/agent/", true},
+		{"main.go", false},
+		{"src/main.go", false},
+		{"https://example.com/a/b", false},
 		{"", false},
 	}
 	for _, c := range cases {
@@ -230,7 +215,7 @@ func TestIsFilenameByte(t *testing.T) {
 			t.Errorf("isFilenameByte(%q) = false, want true", valid[i])
 		}
 	}
-	invalid := "ABC X+~" // uppercase, space and punctuation are not filename bytes
+	invalid := "ABC X+~"
 	for i := 0; i < len(invalid); i++ {
 		if isFilenameByte(invalid[i]) {
 			t.Errorf("isFilenameByte(%q) = true, want false", invalid[i])
@@ -243,7 +228,7 @@ func TestCollectExtensionRefs_Boundaries(t *testing.T) {
 		name string
 		in   string
 		ext  string
-		want []string // distinct filenames expected in seen
+		want []string
 	}{
 		{
 			name: "plain filename",
@@ -255,19 +240,19 @@ func TestCollectExtensionRefs_Boundaries(t *testing.T) {
 			name: "domain not a filename (example.com)",
 			in:   "visit example.com today",
 			ext:  ".c",
-			want: nil, // char after ".c" is 'o' -> not a match
+			want: nil,
 		},
 		{
 			name: "word-internal ext is not a file (foo.cbar)",
 			in:   "use foo.cbar here",
 			ext:  ".c",
-			want: nil, // char after ".c" is 'b' -> not a match
+			want: nil,
 		},
 		{
 			name: "ext preceded by separator is not a file",
 			in:   "edit .c file",
 			ext:  ".c",
-			want: nil, // char before ".c" is ' ' -> rejected
+			want: nil,
 		},
 		{
 			name: "path-prefixed filename",
@@ -279,13 +264,13 @@ func TestCollectExtensionRefs_Boundaries(t *testing.T) {
 			name: "trailing x consumes tsx",
 			in:   "rename component.tsx",
 			ext:  ".ts",
-			want: []string{"component.tsx"}, // 'x' after ".ts" is absorbed
+			want: []string{"component.tsx"},
 		},
 		{
 			name: "trailing slash directory ref kept",
 			in:   "scan main.go/ all",
 			ext:  ".go",
-			want: []string{"main.go"}, // '/' after ext is allowed (dir ref), not absorbed
+			want: []string{"main.go"},
 		},
 	}
 	for _, c := range cases {
@@ -304,17 +289,15 @@ func TestCollectExtensionRefs_Boundaries(t *testing.T) {
 }
 
 func TestCountKeywordMatches(t *testing.T) {
-	// No keywords.
+
 	if c := countKeywordMatches("hello world", []string{"foo", "bar"}); c != 0 {
 		t.Errorf("expected 0, got %d", c)
 	}
 
-	// One keyword.
 	if c := countKeywordMatches("create something", []string{"create", "delete"}); c != 1 {
 		t.Errorf("expected 1, got %d", c)
 	}
 
-	// Multiple keywords (count each once).
 	if c := countKeywordMatches("create and delete and create again", []string{"create", "delete"}); c != 2 {
 		t.Errorf("expected 2, got %d", c)
 	}

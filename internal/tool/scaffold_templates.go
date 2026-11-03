@@ -5,15 +5,12 @@ import (
 	"strings"
 )
 
-// goTemplate generates a Go project skeleton.
 func goTemplate(name, rootDir, modulePath string, ci, docker bool) []scaffoldFile {
 	if modulePath == "" {
 		modulePath = "github.com/example/" + sanitizeModuleName(name)
 	}
 	var files []scaffoldFile
 
-	// Determine the subdirectory for Go source files.
-	// Convention: cmd/<name>/main.go
 	cmdDir := "cmd/" + sanitizeModuleName(name)
 
 	files = append(files, scaffoldFile{
@@ -97,15 +94,12 @@ ENTRYPOINT ["/%s"]
 	return files
 }
 
-// tsTemplate generates a TypeScript/Node.js project skeleton.
 func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 	var files []scaffoldFile
 
 	files = append(files, scaffoldFile{
 		Path: "package.json",
-		// #1335: devDependencies were empty while scripts referenced
-		// tsc/ts-node/jest/eslint - nothing installed, CI red even after
-		// install. Declare the dev toolchain the scripts expect.
+
 		Content: fmt.Sprintf(`{
   "name": "%s",
   "version": "1.0.0",
@@ -159,10 +153,6 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 `, name),
 	})
 
-	// #1701 case 1: eslint 9 requires a flat config and jest needs a TS
-	// transform for .test.ts - the CI workflow (npm run lint && npm test)
-	// failed on every freshly generated repo (#1335 added the deps but
-	// no configs).
 	files = append(files, scaffoldFile{
 		Path: "eslint.config.js",
 		Content: `const js = require("@eslint/js");
@@ -235,17 +225,13 @@ CMD ["node", "dist/index.js"]
 	return files
 }
 
-// pythonTemplate generates a Python project skeleton.
 func pythonTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 	pkgName := sanitizePyModuleName(name)
 	var files []scaffoldFile
 
 	files = append(files, scaffoldFile{
 		Path: "pyproject.toml",
-		// #1334: build-backend was an invalid mashup
-		// ("setuptools.backends._legacy:_Backend") of the two legal values -
-		// pip install -e . failed 100%. Use the standard backend plus explicit
-		// package discovery so flat-layout tests/ does not trip auto-discovery.
+
 		Content: fmt.Sprintf(`[build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
@@ -269,11 +255,7 @@ testpaths = ["tests"]
 
 	files = append(files, scaffoldFile{
 		Path: pkgName + "/__init__.py",
-		// #1007: a backquoted Go string is a RAW string - the old form's \n
-		// was a literal backslash+n, so every generated __init__.py ended
-		// with two junk bytes after the docstring and `import` failed with
-		// SyntaxError 100% of the time. Interpreted string makes \n a real
-		// newline.
+
 		Content: fmt.Sprintf("\"\"\"%s package.\"\"\"\n", name),
 	})
 
@@ -326,7 +308,6 @@ CMD ["python", "-m", "%s.main"]
 	return files
 }
 
-// rustTemplate generates a Rust project skeleton.
 func rustTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 	var files []scaffoldFile
 
@@ -394,8 +375,6 @@ CMD ["./target/release/%s"]
 	return files
 }
 
-// --- Helpers ---
-
 func sanitizeModuleName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = strings.ReplaceAll(s, " ", "-")
@@ -441,8 +420,6 @@ MIT
 `, name, lang, lang)
 }
 
-// --- Test files ---
-
 func testFileGo(name string) string {
 	return fmt.Sprintf(`package main
 
@@ -482,8 +459,6 @@ fn test_placeholder() {
 }
 `
 }
-
-// --- .gitignore files ---
 
 func goGitignore() string {
 	return `# Binaries
@@ -551,8 +526,6 @@ target/
 *.swp
 `
 }
-
-// --- CI files ---
 
 func goCI() string {
 	return `name: CI

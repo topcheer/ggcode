@@ -21,19 +21,19 @@ func TestSelectVisionModel(t *testing.T) {
 		},
 		{
 			name:   "no candidate fits - last resort returns largest vision window",
-			models: []string{"gpt-4o"}, // 128k
+			models: []string{"gpt-4o"},
 			refWin: 1000000,
 			want:   "gpt-4o",
 		},
 		{
 			name:   "smallest qualifying window wins",
-			models: []string{"gpt-4.1", "gpt-4o"}, // 1M vs 128k, both vision
+			models: []string{"gpt-4.1", "gpt-4o"},
 			refWin: 128000,
 			want:   "gpt-4o",
 		},
 		{
 			name:   "exact 1M reference matches 1M vision candidate",
-			models: []string{"glm-5.3", "glm-5.3-flash"}, // non-vision + 1M vision
+			models: []string{"glm-5.3", "glm-5.3-flash"},
 			refWin: 1000000,
 			want:   "glm-5.3-flash",
 		},
@@ -82,19 +82,11 @@ func TestVisionTurnModel(t *testing.T) {
 			},
 		}
 	}
-	// Non-vision active model with a vision sibling whose window is smaller:
-	// models.dev gives glm-5.3 a 1048576 window but glm-5.3-flash 1000000.
-	// The old comparable-window rule rejected the switch outright - which is
-	// exactly what fed the image-400 retry loop on text-only endpoints. The
-	// rule now falls back to the largest-window vision candidate: a slightly
-	// smaller window may still hold the session, and a genuine overflow
-	// degrades via the 400 text-only fallback instead of hard-failing every
-	// image turn.
+
 	if got := VisionTurnModel(newCfg("glm-5.3")); got != "glm-5.3-flash" {
 		t.Errorf("VisionTurnModel(glm-5.3) = %q, want glm-5.3-flash (last-resort largest vision window)", got)
 	}
-	// Same endpoint, but with a sibling whose window is genuinely large
-	// enough: the switch must select it.
+
 	cfgBig := newCfg("glm-5.3")
 	epBig := cfgBig.Vendors["zai"].Endpoints["coding"]
 	epBig.Models = []string{"glm-5.3", "z-ai-glm-5-3-flash"}
@@ -102,11 +94,11 @@ func TestVisionTurnModel(t *testing.T) {
 	if got := VisionTurnModel(cfgBig); got != "z-ai-glm-5-3-flash" {
 		t.Errorf("VisionTurnModel(glm-5.3, big sibling) = %q, want z-ai-glm-5-3-flash", got)
 	}
-	// Vision active model -> no switch needed.
+
 	if got := VisionTurnModel(newCfg("glm-5.3-flash")); got != "" {
 		t.Errorf("VisionTurnModel(glm-5.3-flash) = %q, want empty", got)
 	}
-	// No vision candidates on the endpoint.
+
 	cfg := newCfg("deepseek-chat")
 	ep := cfg.Vendors["zai"].Endpoints["coding"]
 	ep.Models = []string{"deepseek-chat", "glm-5.3"}
@@ -119,14 +111,6 @@ func TestVisionTurnModel(t *testing.T) {
 	}
 }
 
-// TestVisionTurnModelWithPopulatedZaiModels pins the user-reported scenario
-// end to end: a zai vendor endpoint (cn-coding style) gets its model list
-// from the models.dev snapshot at load time - the
-// list contains glm-5.3-flash which the capability table marks as vision.
-// With the keyword heuristics removed, VisionTurnModel must select it;
-// under the old substring rules glm-5.3-flash ("flash" has no "v") was
-// classified text-only and the whole list was skipped, so image-bearing
-// turns 400ed against the text-only coding endpoint in a retry loop.
 func TestVisionTurnModelWithPopulatedZaiModels(t *testing.T) {
 	cfg := &config.Config{
 		Vendor:   "zai",
@@ -139,10 +123,7 @@ func TestVisionTurnModelWithPopulatedZaiModels(t *testing.T) {
 					Protocol:      "openai",
 					BaseURL:       "https://api.z.ai/api/coding/paas/v4",
 					SelectedModel: "glm-5.3",
-					// Equals what populateDefaultModels fills from the
-					// models.dev snapshot for zai-coding-plan at load time
-					// (see vendor_defaults.go); the populate step itself is
-					// covered by the config package tests.
+
 					Models: []string{"glm-5.3-flash", "glm-5.3", "glm-5.3-highspeed", "glm-5.2", "glm-5.2-highspeed", "glm-5-turbo", "glm-4.7"},
 				},
 			},

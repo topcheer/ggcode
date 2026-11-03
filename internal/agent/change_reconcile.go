@@ -1,36 +1,5 @@
 package agent
 
-// Pre-Completion Change Reconciliation Gate
-//
-// Research basis: A 2026 industry analysis of AI coding agent failure modes
-// identifies "unintended side-effect changes" as a top-5 quality issue. When
-// agents run shell commands (go mod tidy, npm install, code generation tools,
-// format-on-save hooks), these commands can modify source files the agent
-// didn't explicitly edit. The agent declares "done" without knowing about
-// these collateral changes, leading to:
-//
-//   - Unexpected files in commits
-//   - Auto-generated code that hasn't been reviewed
-//   - Configuration drift from tooling commands
-//   - Lock file changes that mask real dependency issues
-//
-// Competitor analysis:
-//   - Claude Code: shows full diff before commit, but no automatic reconciliation
-//   - Cursor: diff review step in IDE, requires user action
-//   - Devin: post-completion summary includes all changed files
-//   - OpenHands/Cline: no reconciliation; relies on git diff review
-//   - Aider: commits per-edit, so side effects are visible between steps
-//
-// ggcode's approach: after all other pre-completion gates pass (todos,
-// fulfillment, companion, verify, complexity), run `git diff --name-only`
-// and compare against runStats.FilesEdited. Flag source files that changed
-// but were NOT explicitly edited by the agent — these are side effects.
-// Common side-effect files (lock files, generated files) are excluded to
-// minimize false positives.
-//
-// This is zero-LLM-cost, runs in <50ms (git diff --name-only is very fast),
-// and fires at most once per run.
-
 import (
 	"fmt"
 	"os/exec"
@@ -42,12 +11,10 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// changeReconcileState tracks whether the reconciliation gate has fired
-// and stores the set of files that were already dirty before the run started.
 type changeReconcileState struct {
 	fired          bool
-	preRunDirty    map[string]bool // normalized paths of files changed before this run
-	preRunCaptured bool            // true after capturePreRunState has executed
+	preRunDirty    map[string]bool
+	preRunCaptured bool
 }
 
 func newChangeReconcileState() *changeReconcileState {
@@ -56,14 +23,6 @@ func newChangeReconcileState() *changeReconcileState {
 	}
 }
 
-// capturePreRunState records the set of files with uncommitted changes
-// relative to HEAD at the START of a run. This lets checkChangeReconcile
-// distinguish pre-existing dirty files (user's own work) from genuine
-// side-effect changes introduced by the agent's tool calls.
-//
-// Without this, any file the user left uncommitted before invoking the
-// agent would be flagged as an "unexpected side effect" — a false positive
-// that undermines trust in the reconciliation gate.
 func (c *changeReconcileState) capturePreRunState(workingDir string) {
 	if c.preRunCaptured || workingDir == "" {
 		return
@@ -83,23 +42,16 @@ func (c *changeReconcileState) capturePreRunState(workingDir string) {
 	}
 }
 
-// dirtyFileCount returns the number of pre-existing dirty files (for
-// run-start awareness injection).
 func (c *changeReconcileState) dirtyFileCount() int {
 	return len(c.preRunDirty)
 }
 
-// reset clears the state so the gate can fire on a new run.
-// Called once at the start of each RunStreamWithContent.
 func (c *changeReconcileState) reset() {
 	c.fired = false
 	c.preRunCaptured = false
 	c.preRunDirty = make(map[string]bool)
 }
 
-// sideEffectFiles are files commonly modified by tooling commands (go mod tidy,
-// npm install, code generators, etc.). Changes to these files are expected
-// side effects and should NOT trigger a warning.
 var sideEffectFiles = map[string]bool{
 	"go.sum":            true,
 	"go.mod":            true,
@@ -118,9 +70,6 @@ var sideEffectFiles = map[string]bool{
 	".tool-versions":    true,
 }
 
-// sourceCodeExts are extensions that indicate a source code file. Only
-// unexpected changes to source files trigger the warning — binary files,
-// config files, and lock files are ignored.
 var sourceCodeExts = map[string]bool{
 	".go": true, ".rs": true, ".py": true, ".js": true, ".ts": true,
 	".jsx": true, ".tsx": true, ".java": true, ".kt": true, ".rb": true,
@@ -134,20 +83,10 @@ var sourceCodeExts = map[string]bool{
 	".md": true,
 }
 
-// gitDiffTimeout bounds the git diff command to prevent hangs in large repos
-// or network-mounted filesystems.
 const gitDiffTimeout = 5 * time.Second
 
-// maxUnexpectedFiles caps the number of unexpected files listed in the warning
-// to avoid flooding the agent context when a code generator modifies many files.
 const maxUnexpectedFiles = 10
 
-// checkChangeReconcile runs `git diff --name-only HEAD` and compares the
-// changed files against runStats.FilesEdited. Returns a non-empty warning
-// string if unexpected source file changes are detected.
-//
-// The gate fires at most once per run. It is advisory — it doesn't block
-// completion but alerts the agent to review unintended changes before finishing.
 func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 	if a.changeReconcile == nil {
 		return ""
@@ -162,7 +101,6 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		return ""
 	}
 
-	// Get files changed according to git.
 	gitChanged, err := gitChangedFiles(workingDir)
 	if err != nil {
 		debug.Log("reconcile", "git diff failed: %v", err)
@@ -172,14 +110,11 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		return ""
 	}
 
-	// Build a set of files the agent explicitly edited (normalized).
 	edited := make(map[string]bool, len(runStats.FilesEdited))
 	for _, f := range runStats.FilesEdited {
 		edited[normalizeReconcilePath(workingDir, f)] = true
 	}
 
-	// Find unexpected changes: in git diff, NOT explicitly edited, and is a
-	// source code file (not a known side-effect file).
 	var unexpected []string
 	for _, f := range gitChanged {
 		base := filepath.Base(f)
@@ -194,8 +129,7 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		if edited[normalized] {
 			continue
 		}
-		// Skip files that were already dirty before this run started.
-		// These are the user's own uncommitted changes, not agent side effects.
+
 		if a.changeReconcile.preRunDirty[normalized] {
 			continue
 		}
@@ -206,12 +140,8 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		return ""
 	}
 
-	// #550 D2: deterministic ordering — git diff order varies with index
-	// state, which made the truncated display list flap between otherwise
-	// identical runs.
 	sort.Strings(unexpected)
 
-	// Build the warning message.
 	display := unexpected
 	if len(display) > maxUnexpectedFiles {
 		display = display[:maxUnexpectedFiles]
@@ -236,13 +166,11 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 	return msg
 }
 
-// gitChangedFiles returns the list of files with uncommitted changes relative
-// to HEAD. Returns the raw output of `git diff --name-only HEAD`.
 func gitChangedFiles(workingDir string) ([]string, error) {
 	cmd := exec.Command("git", "-C", workingDir, "diff", "--name-only", "HEAD")
 	output, err := runGitCommandWithTimeout(cmd, gitDiffTimeout)
 	if err != nil {
-		// If HEAD doesn't exist (new repo with no commits), try unstaged diff.
+
 		cmd2 := exec.Command("git", "-C", workingDir, "diff", "--name-only")
 		output, err = runGitCommandWithTimeout(cmd2, gitDiffTimeout)
 		if err != nil {
@@ -251,15 +179,8 @@ func gitChangedFiles(workingDir string) ([]string, error) {
 	}
 
 	output = strings.TrimSpace(output)
-	// #2884: an empty diff is NOT "no changes" anymore - untracked files
-	// live only in porcelain status, so fall through to the merge below
-	// instead of returning early.
 	var files []string
 
-	// #550 D2: trim each line and drop empties — git output carrying CR
-	// line endings (core.autocrlf checkouts) or stray padding previously
-	// produced keys like "foo.go\r" that never matched the edited set,
-	// flagging every changed file as unreconciled.
 	lines := strings.Split(output, "\n")
 	files = make([]string, 0, len(lines))
 	for _, l := range lines {
@@ -268,15 +189,6 @@ func gitChangedFiles(workingDir string) ([]string, error) {
 		}
 	}
 
-	// #2884: `git diff --name-only HEAD` NEVER includes untracked files,
-	// so source files CREATED by shell commands (protoc/swag/
-	// openapi-generator output - exactly the side-effect class this gate
-	// exists to catch, per the docblock) were invisible to reconciliation.
-	// Merge untracked entries from porcelain, same shape as diff_summary_gate
-	// #1451-A. Use -uall: plain porcelain folds a fully-untracked directory
-	// into a single "?? dir/" entry, which would slip whole trees of fresh
-	// source files through the sourceCodeExts/base filters (the zz_issue705
-	// lesson).
 	if st, err := runGitCommandWithTimeout(
 		gitCommand(workingDir, "status", "--porcelain", "-uall"),
 		gitDiffTimeout,
@@ -300,8 +212,6 @@ func gitChangedFiles(workingDir string) ([]string, error) {
 	return files, nil
 }
 
-// runGitCommandWithTimeout runs a git command with a timeout. Returns trimmed
-// stdout output.
 func runGitCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, error) {
 	timer := time.AfterFunc(timeout, func() {
 		_ = cmd.Process.Kill()
@@ -315,11 +225,6 @@ func runGitCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, err
 	return string(out), nil
 }
 
-// normalizeReconcilePath converts a file path to a canonical form for
-// comparison. Both sides — git diff output (repo-relative) and
-// FilesEdited (frequently absolute, as edit_file records what the agent
-// passed) — reduce to a repo-root-relative path so the SAME file compares
-// equal regardless of which form it arrived in.
 func normalizeReconcilePath(workingDir, path string) string {
 	wd, err := filepath.Abs(workingDir)
 	if err != nil {
@@ -327,18 +232,13 @@ func normalizeReconcilePath(workingDir, path string) string {
 	}
 	p := filepath.Clean(strings.TrimSpace(path))
 	if !filepath.IsAbs(p) {
-		// Git diff paths are repo-relative — anchor them to the working dir.
+
 		p = filepath.Join(wd, p)
 	}
-	// #550 D1: an ABSOLUTE path must never be joined onto workingDir —
-	// filepath.Join(wd, "/w/repo/x.go") silently produces the double
-	// prefix "/w/repo/w/repo/x.go", so every normal edit of an
-	// absolute-path file was misjudged "unreconciled" (systematic false
-	// positives on the main workflow). Reduce both forms to the
-	// repo-root-relative path via filepath.Rel instead.
+
 	rel, rerr := filepath.Rel(wd, p)
 	if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return p // outside the working dir (or Rel failed): keep it absolute
+		return p
 	}
 	return rel
 }

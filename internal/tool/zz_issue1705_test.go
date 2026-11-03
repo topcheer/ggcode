@@ -1,10 +1,5 @@
 package tool
 
-// #1705 case 2: swarm_task_create accepted any assignee string - a typo'd
-// or name-form assignee stranded the task permanently (metadata carried
-// it, the idle runner skipped it), and swarm_task_complete was
-// double-fireable with no idempotence guard.
-
 import (
 	"context"
 	"encoding/json"

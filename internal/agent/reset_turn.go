@@ -1,9 +1,5 @@
 package agent
 
-// resetTurnDetectors resets every loop-scoped detector and tracker before a
-// new user turn starts. It is called once from RunStreamWithContent; any
-// state that must not leak across user turns belongs here. When adding a new
-// detector field on Agent, add its reset() call in this method.
 func (a *Agent) resetTurnDetectors() {
 	a.resetLoopDetector()
 	a.errorClassifier.reset()
@@ -38,15 +34,10 @@ func (a *Agent) resetTurnDetectors() {
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
 	a.cfDep.reset()
-	// #1843 case 1: foresightCalib.reset() was never called outside
-	// compaction - "at most 2 per run" (file-header promise) was in fact
-	// per-LIFETIME: mismatches and warnCount accumulated across every
-	// user turn, so after two early warnings the detector stayed silent
-	// for the rest of the session.
+
 	a.foresightCalib.reset()
 	a.expiredRead.reset()
-	// Convergence lock must reset per run so post-verification edit drift
-	// counters don't leak across runs (issue #341).
+
 	a.resetConvergenceLock()
 	a.integrationResetForRun()
 	a.resetSelfMod()
@@ -62,7 +53,7 @@ func (a *Agent) resetTurnDetectors() {
 	}
 	a.diminishingEdit.reset()
 	a.overcorrection.reset()
-	// #1823 case 2: give-up + rollback re-add is per-run.
+
 	a.giveupRevert = &giveupRevertState{}
 	a.prematureRefactor.reset()
 	a.errorCompound.reset()

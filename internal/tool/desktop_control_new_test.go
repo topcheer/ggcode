@@ -23,12 +23,12 @@ func TestNormalizeModifiers(t *testing.T) {
 		{in: "option", want: "alt"},
 		{in: "opt", want: "alt"},
 		{in: "fn", want: "fn"},
-		{in: "cmd+cmd", want: "cmd"},                                 // dedup
-		{in: "cmd+shift+ctrl+alt+fn", want: "cmd+shift+ctrl+alt+fn"}, // all five
-		{in: "", wantErr: true},                                      // empty
-		{in: "cmd++shift", wantErr: true},                            // empty component
-		{in: "cmd+c", wantErr: true},                                 // non-modifier key
-		{in: "superkey", wantErr: true},                              // typo
+		{in: "cmd+cmd", want: "cmd"},
+		{in: "cmd+shift+ctrl+alt+fn", want: "cmd+shift+ctrl+alt+fn"},
+		{in: "", wantErr: true},
+		{in: "cmd++shift", wantErr: true},
+		{in: "cmd+c", wantErr: true},
+		{in: "superkey", wantErr: true},
 	}
 	for _, c := range cases {
 		mods, err := normalizeModifiers(c.in)
@@ -57,9 +57,9 @@ func TestParseMenuPath(t *testing.T) {
 		{in: "File > Save", want: []string{"File", "Save"}},
 		{in: "View > Sort By > Name", want: []string{"View", "Sort By", "Name"}},
 		{in: " File >  Export… ", want: []string{"File", "Export…"}},
-		{in: "File", wantErr: true}, // single item: nothing to select
-		{in: "  ", wantErr: true},   // empty
-		{in: " > ", wantErr: true},  // only separators
+		{in: "File", wantErr: true},
+		{in: "  ", wantErr: true},
+		{in: " > ", wantErr: true},
 	}
 	for _, c := range cases {
 		got, err := parseMenuPath(c.in)
@@ -79,13 +79,9 @@ func TestParseMenuPath(t *testing.T) {
 	}
 }
 
-// TestDesktopControlNewActionValidation exercises parameter validation that
-// runs on every platform BEFORE any OS automation fires, so these tests are
-// safe in CI without accessibility permissions.
 func TestDesktopControlNewActionValidation(t *testing.T) {
 	tool := DesktopControlTool{}
 
-	// hold_key without duration must error before anything is held.
 	input, _ := json.Marshal(map[string]any{
 		"action": "hold_key", "text": "shift", "duration": 0,
 	})
@@ -94,7 +90,6 @@ func TestDesktopControlNewActionValidation(t *testing.T) {
 		t.Fatal("expected error for hold_key with zero duration")
 	}
 
-	// hold_key over the cap must error.
 	input, _ = json.Marshal(map[string]any{
 		"action": "hold_key", "text": "shift", "duration": 60000,
 	})
@@ -103,7 +98,6 @@ func TestDesktopControlNewActionValidation(t *testing.T) {
 		t.Fatal("expected error for hold_key over 30s cap")
 	}
 
-	// modifier_click with a bogus modifier must error, not click.
 	input, _ = json.Marshal(map[string]any{
 		"action": "modifier_click", "x": 10, "y": 10, "text": "cmd+junk",
 	})
@@ -112,14 +106,12 @@ func TestDesktopControlNewActionValidation(t *testing.T) {
 		t.Fatal("expected error for invalid modifier in modifier_click")
 	}
 
-	// open without a target must error.
 	input, _ = json.Marshal(map[string]any{"action": "open"})
 	_, err = tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("expected error for open without text")
 	}
 
-	// set_window_bounds without dimensions must error.
 	input, _ = json.Marshal(map[string]any{"action": "set_window_bounds", "x": 0, "y": 0})
 	_, err = tool.Execute(context.Background(), input)
 	if err == nil {
@@ -127,9 +119,6 @@ func TestDesktopControlNewActionValidation(t *testing.T) {
 	}
 }
 
-// TestDesktopControlSchemaCoversNewActions pins that every new action is a
-// valid enum value in the JSON schema — the agent can only call what the
-// schema advertises.
 func TestDesktopControlSchemaCoversNewActions(t *testing.T) {
 	var schema struct {
 		Properties struct {

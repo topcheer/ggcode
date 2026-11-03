@@ -8,23 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-// ValidateSchemaConstraints checks tool arguments against the JSON Schema beyond
-// just required fields. It validates:
-//
-//   - enum: value must be one of the allowed options
-//   - minimum / maximum (exclusiveMinimum / exclusiveMaximum): numeric bounds
-//   - minLength / maxLength: string length bounds
-//
-// Returns an empty string if all constraints pass, or a human-readable error
-// message describing the first violation. This is called after CoerceArguments
-// and ValidateRequiredParams in the agent's tool execution pipeline.
-//
-// Rationale: Weak models frequently send invalid enum values (e.g. "xyz" when
-// the enum is ["read", "write"]) or out-of-range numbers. Without early
-// validation, the tool either fails with a confusing error or silently
-// misbehaves, wasting a full agent loop iteration. By catching schema
-// violations before execution, the model gets a precise correction message and
-// can fix the call on the next turn.
 func ValidateSchemaConstraints(schema json.RawMessage, args json.RawMessage) string {
 	if len(schema) == 0 || len(args) == 0 {
 		return ""
@@ -51,7 +34,7 @@ func ValidateSchemaConstraints(schema json.RawMessage, args json.RawMessage) str
 	for fieldName, fieldSchema := range properties {
 		val, exists := argMap[fieldName]
 		if !exists || isEmptyValue(val) {
-			continue // missing params are handled by ValidateRequiredParams
+			continue
 		}
 		if msg := validateField(fieldName, fieldSchema, val); msg != "" {
 			return msg
@@ -61,7 +44,6 @@ func ValidateSchemaConstraints(schema json.RawMessage, args json.RawMessage) str
 	return ""
 }
 
-// validateField checks a single argument value against its schema definition.
 func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 	var spec struct {
 		Enum             []json.RawMessage `json:"enum"`
@@ -76,7 +58,6 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 		return ""
 	}
 
-	// Enum check
 	if len(spec.Enum) > 0 {
 		if !enumContains(spec.Enum, val) {
 			allowed := make([]string, len(spec.Enum))
@@ -84,7 +65,7 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 				allowed[i] = strings.Trim(string(e), `"`)
 			}
 			msg := fmt.Sprintf("parameter %q must be one of [%s], got %s", fieldName, strings.Join(allowed, ", "), strings.TrimSpace(string(val)))
-			// Suggest closest match for typos (did-you-mean hint).
+
 			provided := strings.TrimSpace(strings.Trim(string(val), `"`))
 			if hint := suggestClosestEnum(provided, spec.Enum); hint != "" {
 				msg += fmt.Sprintf(". Did you mean %q?", hint)
@@ -93,7 +74,6 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 		}
 	}
 
-	// Numeric bounds (apply to integer and number types)
 	if spec.Minimum != nil || spec.Maximum != nil || spec.ExclusiveMinimum != nil || spec.ExclusiveMaximum != nil {
 		var numType struct {
 			Type string `json:"type"`
@@ -118,7 +98,6 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 		}
 	}
 
-	// String length bounds
 	if spec.MinLength != nil || spec.MaxLength != nil {
 		var numType struct {
 			Type string `json:"type"`
@@ -127,10 +106,7 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 		if numType.Type == "string" {
 			var s string
 			if err := json.Unmarshal(val, &s); err == nil {
-				// #1702 case 3: count RUNES, not bytes - 4 CJK chars are
-				// 12 bytes and sailed past minLength=10 while the error
-				// message said "characters". utf8.RuneCountInString is the
-				// metric the message (and JSON Schema) promise.
+
 				rlen := utf8.RuneCountInString(s)
 				if spec.MinLength != nil && rlen < *spec.MinLength {
 					return fmt.Sprintf("parameter %q must be at least %d characters, got %d", fieldName, *spec.MinLength, rlen)
@@ -145,7 +121,6 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 	return ""
 }
 
-// enumContains checks if a value matches any entry in the enum list.
 func enumContains(enum []json.RawMessage, val json.RawMessage) bool {
 	normalized := strings.TrimSpace(string(val))
 	for _, e := range enum {
@@ -156,8 +131,6 @@ func enumContains(enum []json.RawMessage, val json.RawMessage) bool {
 	return false
 }
 
-// parseJSONNumber parses a JSON number from RawMessage, returning false if
-// the value is not a number.
 func parseJSONNumber(val json.RawMessage) (float64, bool) {
 	s := strings.TrimSpace(string(val))
 	if s == "" || s[0] == '"' {
@@ -170,15 +143,6 @@ func parseJSONNumber(val json.RawMessage) (float64, bool) {
 	return n, true
 }
 
-// StripUnknownParams removes arguments that are not declared in the tool's
-// schema properties. Weak models sometimes hallucinate extra parameters (e.g.
-// sending {"path": "...", "recursive": true} to a tool that has no "recursive"
-// parameter). While Go's json.Unmarshal silently ignores unknown fields in most
-// cases, some tools use strict unmarshalling or map-based deserialization where
-// unexpected keys cause failures or misbehavior.
-//
-// Returns the cleaned arguments JSON. If the schema has no properties or the
-// arguments can't be parsed, the original input is returned unchanged.
 func StripUnknownParams(schema json.RawMessage, args json.RawMessage) json.RawMessage {
 	if len(schema) == 0 || len(args) == 0 {
 		return args
@@ -190,7 +154,7 @@ func StripUnknownParams(schema json.RawMessage, args json.RawMessage) json.RawMe
 	}
 	propertiesRaw, ok := props["properties"]
 	if !ok {
-		return args // no properties → can't determine what's known
+		return args
 	}
 	var properties map[string]json.RawMessage
 	if err := json.Unmarshal(propertiesRaw, &properties); err != nil {
@@ -202,7 +166,6 @@ func StripUnknownParams(schema json.RawMessage, args json.RawMessage) json.RawMe
 		return args
 	}
 
-	// Check if additionalProperties is explicitly true (allow extras)
 	if ap, ok := props["additionalProperties"]; ok {
 		var allow bool
 		if err := json.Unmarshal(ap, &allow); err == nil && allow {

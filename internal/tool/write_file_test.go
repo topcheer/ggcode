@@ -123,31 +123,24 @@ func TestWriteFileSpecialCharacters(t *testing.T) {
 	}
 }
 
-// #1311 S3: the initial SandboxCheck passes, but the parent directory is
-// swapped for a symlink pointing outside the sandbox between the check and
-// the write (MkdirAll follows it). The post-MkdirAll re-check must refuse
-// the write before any bytes land outside the sandbox.
 func TestWriteFileSandboxRecheckAfterMkdirAll(t *testing.T) {
 	dir := t.TempDir()
-	outside := t.TempDir() // simulates sandbox-external target
+	outside := t.TempDir()
 
 	checks := 0
-	// Mirror PathSandbox.Allowed/resolvePath: resolve the LONGEST EXISTING
-	// PREFIX (the parent dir; the file itself need not exist), then compare.
+
 	inSandbox := func(path string) bool {
 		base := filepath.Base(path)
 		resolved, err := filepath.EvalSymlinks(filepath.Dir(path))
 		if err != nil {
-			return true // unresolvable - mirror falls back to raw path
+			return true
 		}
 		return strings.HasPrefix(filepath.Join(resolved, base), dir) && !strings.HasPrefix(filepath.Join(resolved, base), outside)
 	}
 	w := WriteFile{WorkingDir: dir, SandboxCheck: func(path string) bool {
 		checks++
 		if checks == 1 {
-			// First check passes (nothing swapped yet) - and the "attacker"
-			// races the window right after: parent becomes a link to
-			// outside, exactly between the check and the write.
+
 			if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil && !os.IsExist(err) {
 				t.Fatalf("symlink setup: %v", err)
 			}
@@ -171,16 +164,11 @@ func TestWriteFileSandboxRecheckAfterMkdirAll(t *testing.T) {
 	}
 }
 
-// TestWriteFile_SecondWriteNotFlaggedStale pins #1358: write_file must
-// RecordWrite its own writes (like edit_file does). Without it, the
-// temp+rename's new mtime made the SECOND write in a read->write->write
-// sequence misreport "modified externally since last read".
 func TestWriteFile_SecondWriteNotFlaggedStale(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "seq.txt")
 	os.WriteFile(path, []byte("v0"), 0o644)
 
-	// read -> write #1 -> write #2: the exact sequence from the issue.
 	defaultFileTracker.RecordRead(path)
 	wf := WriteFile{WorkingDir: tmp}
 	mk := func(c string) json.RawMessage {

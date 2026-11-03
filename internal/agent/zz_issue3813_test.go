@@ -11,11 +11,6 @@ import (
 	"testing"
 )
 
-// #3813: a linter exiting non-zero while extractLintWarnings parses ZERO
-// warnings used to be indistinguishable from a clean run - the failure
-// (including timeouts and linter crashes) was swallowed whole. The fix
-// synthesizes one warning carrying the exit status and a raw-output tail.
-
 func fakeLinterDir(t *testing.T, script string) string {
 	t.Helper()
 	dir := t.TempDir()

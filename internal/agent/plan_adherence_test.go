@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// mkAdherenceStats builds RunStats with the given edited files.
 func mkAdherenceStats(files []string) *RunStats {
 	rs := &RunStats{}
 	for _, f := range files {
@@ -31,7 +30,7 @@ func TestComputePlanAdherence_PartialCoverage(t *testing.T) {
 		{Text: "edit auth middleware", Keywords: []string{"auth_middleware.go"}},
 		{Text: "add tests", Keywords: []string{"config_loader_test.go"}},
 	}
-	// Only config_loader.go was touched: 2 of 3 items unaddressed -> 1/3.
+
 	rs := mkAdherenceStats([]string{"internal/config/config_loader.go"})
 	if got := computePlanAdherence(items, rs); got < 0.32 || got > 0.34 {
 		t.Errorf("partial coverage: got %.2f, want ~0.33", got)
@@ -48,13 +47,13 @@ func TestAdherenceTrend_SampleGapAndTrend(t *testing.T) {
 	items := []planItem{
 		{Text: "edit config loader", Keywords: []string{"config_loader.go"}},
 	}
-	rs := mkAdherenceStats(nil) // nothing done yet: score 0
+	rs := mkAdherenceStats(nil)
 
 	var tr planAdherenceTrend
 	for i := 0; i < 12; i++ {
 		tr.noteToolCall(items, rs)
 	}
-	// Gap=5: samples at call 1, 6, 11 -> 3 samples, 12 calls counted.
+
 	if got := len(tr.Samples()); got != 3 {
 		t.Fatalf("sample gap: got %d samples, want 3", got)
 	}
@@ -65,7 +64,6 @@ func TestAdherenceTrend_SampleGapAndTrend(t *testing.T) {
 		t.Errorf("first sample score: got %.2f, want 0 (no work yet)", s[0].Score)
 	}
 
-	// Work appears: next sample must rise above 0 (trend visible).
 	rs2 := mkAdherenceStats([]string{"internal/config/config_loader.go"})
 	for i := 0; i < 5; i++ {
 		tr.noteToolCall(items, rs2)
@@ -93,13 +91,12 @@ func TestAdherenceTrend_EmptyPlanNoOp(t *testing.T) {
 
 func TestAdherenceTrend_NilReceiverSafe(t *testing.T) {
 	var tr *planAdherenceTrend
-	tr.noteToolCall(nil, nil) // must not panic
+	tr.noteToolCall(nil, nil)
 	if tr.Samples() != nil {
 		t.Error("nil receiver Samples should be nil")
 	}
 }
 
-// The planDriftState wiring: reset clears the trend; captured plan feeds it.
 func TestPlanDriftState_AdherenceResetWithDriftState(t *testing.T) {
 	p := newPlanDriftState()
 	p.capturePlan("- edit config_loader.go for the fix")
@@ -119,9 +116,6 @@ func TestPlanDriftState_AdherenceResetWithDriftState(t *testing.T) {
 	}
 }
 
-// buildPlanWorkCorpus equivalence: the extracted helper must produce the
-// same corpus shape the fire-once warning relies on (lowercased paths,
-// basenames, commands).
 func TestBuildPlanWorkCorpus(t *testing.T) {
 	rs := &RunStats{}
 	rs.FilesEdited = []string{"internal/agent/Plan_Drift.go"}

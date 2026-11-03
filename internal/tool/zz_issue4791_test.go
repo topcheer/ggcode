@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// #4791 (S-21): a command session whose workingDir was inside a REMOVED
-// worktree failed every subsequent spawn with ENOENT-class errors and a
-// cd prefix could not save it. NearestLiveDir + the Start guard respawn at
-// the nearest live ancestor instead.
 func TestIssue4791_NearestLiveDir(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "wt", "inner")
@@ -42,7 +38,6 @@ func TestIssue4791_StartRecoversAfterWorkdirRemoved(t *testing.T) {
 	m := NewCommandJobManager(dead)
 	defer m.ShutdownAll(2 * time.Second)
 
-	// Healthy spawn inside the (still alive) working dir.
 	snap, err := m.Start(context.Background(), "pwd", false, 10*time.Second)
 	if err != nil {
 		t.Fatalf("healthy start: %v", err)
@@ -55,13 +50,10 @@ func TestIssue4791_StartRecoversAfterWorkdirRemoved(t *testing.T) {
 		t.Fatalf("healthy job must succeed, got %s (%s)", final.Status, final.ErrText)
 	}
 
-	// The worktree is removed mid-session (S-21 trigger).
 	if err := os.RemoveAll(dead); err != nil {
 		t.Fatal(err)
 	}
 
-	// The next spawn must RECOVER: run at the nearest live ancestor
-	// instead of failing every command forever.
 	snap2, err := m.Start(context.Background(), "pwd", false, 10*time.Second)
 	if err != nil {
 		t.Fatalf("recovery start: %v", err)

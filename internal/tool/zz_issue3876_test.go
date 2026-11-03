@@ -2,13 +2,6 @@
 
 package tool
 
-// #3876 companions (darwin surface): keyComboResult's len(parts)==0 check
-// was unreachable dead code — strings.Split never returns an empty slice —
-// so an empty combo or a trailing "+" produced `keystroke ""` and an
-// opaque osascript runtime error instead of a clear tool-level error.
-// applescriptQuote did not escape control characters, so a newline in a
-// user-supplied app name produced osascript -2739 syntax errors.
-
 import (
 	"strings"
 	"testing"
@@ -27,8 +20,7 @@ func TestIssue3876_KeyComboEmptyRejected(t *testing.T) {
 }
 
 func TestIssue3876_KeyComboTrailingPlusRejected(t *testing.T) {
-	// "cmd+" splits to ["cmd", ""] — the empty key must be caught before
-	// it reaches osascript as `keystroke ""`.
+
 	if _, err := keyComboResult(t.Context(), "cmd+"); err == nil {
 		t.Fatal("trailing '+' must be rejected with a clear error (#3876)")
 	}

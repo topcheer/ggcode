@@ -36,7 +36,6 @@ func TestMultiFileWrite_CreateMultiple(t *testing.T) {
 		t.Fatalf("unexpected error result: %s", result.Content)
 	}
 
-	// Verify all files exist with correct content.
 	for i, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
@@ -92,7 +91,7 @@ func TestMultiFileWrite_DuplicatePath(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success with last-write-wins, got error: %s", result.Content)
 	}
-	// Last write should win.
+
 	got, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -123,14 +122,12 @@ func TestMultiFileWrite_SandboxViolation(t *testing.T) {
 		},
 	})
 
-	// Sandbox always denies.
 	tool := MultiFileWrite{SandboxCheck: func(path string) bool { return false }}
 	result, _ := tool.Execute(context.Background(), input)
 	if !result.IsError {
 		t.Error("expected error for sandbox violation")
 	}
 
-	// File should not have been written.
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Error("file should not exist after sandbox violation in atomic mode")
 	}
@@ -149,7 +146,6 @@ func TestMultiFileWrite_PartialSuccess(t *testing.T) {
 		},
 	})
 
-	// Sandbox denies only sandboxedPath.
 	tool := MultiFileWrite{SandboxCheck: func(path string) bool {
 		return path != sandboxedPath
 	}}
@@ -158,7 +154,6 @@ func TestMultiFileWrite_PartialSuccess(t *testing.T) {
 		t.Fatalf("partial_success should not set IsError: %s", result.Content)
 	}
 
-	// Good file should exist.
 	data, err := os.ReadFile(goodPath)
 	if err != nil {
 		t.Fatalf("good file not written: %v", err)
@@ -167,7 +162,6 @@ func TestMultiFileWrite_PartialSuccess(t *testing.T) {
 		t.Errorf("good file: got %q, want %q", string(data), "ok")
 	}
 
-	// Bad file should not exist.
 	if _, err := os.Stat(sandboxedPath); !os.IsNotExist(err) {
 		t.Error("sandboxed file should not exist")
 	}
@@ -177,10 +171,7 @@ func TestMultiFileWrite_AtomicRollback(t *testing.T) {
 	dir := t.TempDir()
 	goodPath := filepath.Join(dir, "good.txt")
 	blockedPath := filepath.Join(dir, "blocked.txt")
-	// A directory at the target path makes the WRITE phase fail (after
-	// good.txt is already written), which is what actually exercises the
-	// rollback path - a sandbox denial happens at planning time, before
-	// anything is on disk (#1331 follow-up).
+
 	if err := os.Mkdir(blockedPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -199,14 +190,10 @@ func TestMultiFileWrite_AtomicRollback(t *testing.T) {
 		t.Error("atomic mode with failures should set IsError")
 	}
 
-	// good.txt was written then rolled back.
 	if _, err := os.Stat(goodPath); !os.IsNotExist(err) {
 		t.Error("good file should not exist after atomic failure")
 	}
 
-	// #1331: summary and per-file detail must not contradict each other -
-	// rolled-back files render as "rolled_back" lines under written=0,
-	// never as "✓ ... written" lines.
 	if !strings.Contains(result.Content, "written=0") {
 		t.Errorf("summary should report written=0, got: %s", result.Content)
 	}
@@ -216,7 +203,7 @@ func TestMultiFileWrite_AtomicRollback(t *testing.T) {
 	if !strings.Contains(result.Content, "rolled back") {
 		t.Errorf("rolled-back file should be marked in detail: %s", result.Content)
 	}
-	// Successful rollback must NOT claim INCOMPLETE.
+
 	if strings.Contains(result.Content, "INCOMPLETE") {
 		t.Errorf("successful rollback wrongly reported as incomplete: %s", result.Content)
 	}

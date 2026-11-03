@@ -8,48 +8,14 @@ import (
 	"unicode/utf8"
 )
 
-// constraintAuditState implements the constraint-wise audit from AREX
-// (arXiv 2607.21461): tasks that list MULTIPLE explicit requirements are
-// audited item-by-item before the agent finishes, instead of relying on a
-// single aggregate "did the work match the request" heuristic.
-//
-// ggcode already had the neighbors (all verified during r392 research):
-//   - fulfillment_gate: aggregate multi-part heuristic (filesEdited >=
-//     ceil(parts/2)) - fires once, no per-item structure
-//   - constraint_amnesia: reminds that constraints exist as context grows,
-//     no pass/fail audit
-//   - criteria_drift: detects self-relaxed wording, not item coverage
-//
-// This audit covers structurally-listed requirements (numbered or
-// bulleted lines) - those decompose deterministically with zero
-// extraction risk - and, since the DeCRIM result (arXiv 2410.06458:
-// decomposing multi-constraint instructions into individually
-// checkable units cuts silent drops by 7-8%), a conservative prose
-// extractor for list-free multi-request messages: prose qualifies
-// ONLY with >=2 verb-initial constraint clauses (imperative or
-// 必须/不要-class modality). Narrative sentences almost never start
-// with a bare verb, which is the false-positive control; interrogative
-// sentences are dropped whole; fewer than 2 qualifying clauses keeps
-// the message with the aggregate fulfillment gate (prefer missing the
-// audit over auditing narrative). The injected prompt forces a
-// per-item binary verdict ([done]/[not done]) - the cheap structured
-// audit AREX shows is the right control signal - and only unmet items
-// need follow-up work.
 type constraintAuditState struct {
-	mu sync.Mutex
-	// constraints holds the extracted requirement items; nil until a
-	// qualifying task message is seen (or ruled out).
+	mu          sync.Mutex
 	constraints []string
-	// fired gates the one-shot injection.
-	fired bool
+	fired       bool
 }
 
 const (
-	// constraintAuditMinItems: single-requirement tasks have no list to
-	// audit (the fulfillment gate covers them).
 	constraintAuditMinItems = 2
-	// constraintAuditMaxItems caps pathological lists; beyond this the
-	// message is likely a log/paste, not a task list.
 	constraintAuditMaxItems = 12
 )
 
@@ -57,8 +23,6 @@ func newConstraintAuditState() *constraintAuditState {
 	return &constraintAuditState{}
 }
 
-// reset clears per-run state (constraints are re-extracted from each new
-// task message).
 func (c *constraintAuditState) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -67,24 +31,10 @@ func (c *constraintAuditState) reset() {
 }
 
 var (
-	// Numbered list item: "1." / "1、" / "1)" / "(1)" line starts, plus the
-	// Chinese ordinal forms the comment has always claimed (#3093):
-	// "步骤1：" and "一、/二、/十、" ordinals. Ordinal branches REQUIRE a
-	// separator so prose like "一定要修复…" is not misread as a list item.
-	// The spacing class tolerates full-width spaces.
 	constraintNumberedRe = regexp.MustCompile(`^\s*(步骤\s*\d{1,3}[、.．:：]|[一二三四五六七八九十]{1,3}[、.．:：]|\d{1,3}[.)、]|[(（]\d{1,3}[)）])[\s　]*(.{3,200})$`)
-	// Bulleted list item: "- " / "* " / "• ".
-	constraintBulletRe = regexp.MustCompile(`^\s*[-*•]\s+(.{3,200})$`)
+	constraintBulletRe   = regexp.MustCompile(`^\s*[-*•]\s+(.{3,200})$`)
 
-	// --- DeCRIM-style prose constraint extraction (arXiv 2410.06458) ---
-	// Clause separators inside a sentence: Chinese comma/顿号 and English
-	// coordinating conjunctions. Sentence terminators are handled by
-	// splitProseSentences so interrogatives can be dropped whole.
-	proseClauseSplitRe = regexp.MustCompile(`[，,、]|\s+(?:and\s+then|and|then)\s+|并且|以及|，然后|然后`)
-	// Constraint-signal prefixes: a clause qualifies only when it STARTS
-	// with an imperative/requirement verb (zh) or one of these en forms.
-	// Bare "测试" is deliberately absent: sentence-initial 测试 is more
-	// often narrative ("测试失败了") than imperative.
+	proseClauseSplitRe        = regexp.MustCompile(`[，,、]|\s+(?:and\s+then|and|then)\s+|并且|以及|，然后|然后`)
 	zhProseConstraintPrefixes = []string{
 		"支持", "新增", "增加", "添加", "修复", "编写", "补充", "包含",
 		"确保", "保证", "使用", "采用", "处理", "实现", "必须", "不要",
@@ -95,28 +45,16 @@ var (
 		`(?i)^(add|support|fix|write|include|ensure|make|use|handle|implement|` +
 			`update|remove|create|keep|refactor|test|don't|dont|do not|` +
 			`must|should|shall|need to|needs to)\b`)
-	// Polite fillers stripped before the prefix test.
 	proseFillerPrefixes = []string{"请", "麻烦", "please"}
 )
 
 const (
-	// proseConstraintMinClauses: a single qualifying clause carries no
-	// list semantics (the fulfillment gate covers single asks).
 	proseConstraintMinClauses = 2
-	// proseConstraintMaxClauses caps extraction; beyond this the message
-	// reads as narrative/notes, not a compact multi-request.
 	proseConstraintMaxClauses = 8
-	// Rune-length window for a qualifying clause: shorter fragments are
-	// conversational ("别急"), longer ones are pasted content.
-	proseClauseMinRunes = 4
-	proseClauseMaxRunes = 200
+	proseClauseMinRunes       = 4
+	proseClauseMaxRunes       = 200
 )
 
-// buildConstraints extracts requirement items from a task message.
-// Structural lists (>=2 items) qualify directly; list-free prose falls
-// through to extractProseConstraints, which requires >=2 verb-initial
-// constraint clauses before the per-item audit activates. Fenced/indented
-// code is skipped so pasted logs do not masquerade as requirements.
 func buildConstraints(prompt string) []string {
 	if prompt == "" || isReadOnlyTask(prompt) {
 		return nil
@@ -134,7 +72,7 @@ func buildConstraints(prompt string) []string {
 		if inCode {
 			continue
 		}
-		// Skip indented (quoted/code) lines.
+
 		if raw != strings.TrimLeft(raw, " \t") && strings.HasPrefix(raw, "    ") {
 			continue
 		}
@@ -150,19 +88,12 @@ func buildConstraints(prompt string) []string {
 		prose.WriteString(trimmed)
 		prose.WriteByte('\n')
 	}
-	// A message usually mixes styles only incidentially; prefer the
-	// dominant (longer) list, and require it to look like a task list.
+
 	items := numbered
 	if len(bullets) > len(numbered) {
 		items = bullets
 	} else if len(numbered) > 0 && !ordinalSequenceCoherent(numberedOrdinals) {
-		// #3095: explanatory prose enumerations ("一、这是性能原因" /
-		// "二、这是设计原因" as background, not requirements) match the
-		// ordinal branch structurally. A genuine task list starts at 1/一
-		// and increments strictly; prose picks arbitrary or isolated
-		// ordinals. Incoherent => not a task list; fall through to the
-		// prose extractor, whose verb-initial gate still screens such
-		// narrative out.
+
 		items = nil
 	}
 	if len(items) >= constraintAuditMinItems && len(items) <= constraintAuditMaxItems {
@@ -171,9 +102,6 @@ func buildConstraints(prompt string) []string {
 	return extractProseConstraints(prose.String())
 }
 
-// ordinalValue converts a matched ordinal prefix (regex group 1) to its
-// numeric value: Arabic forms directly, Chinese ordinals (一...九十九) via
-// digit parse. Returns -1 when unparseable - treated as breaking coherence.
 func ordinalValue(prefix string) int {
 	prefix = strings.TrimSpace(prefix)
 	prefix = strings.TrimPrefix(prefix, "步骤")
@@ -189,8 +117,6 @@ func ordinalValue(prefix string) int {
 
 var chineseDigit = map[rune]int{'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
 
-// chineseOrdinal parses 一..九十九 (task lists never go higher); -1 for
-// anything else.
 func chineseOrdinal(s string) int {
 	if s == "十" {
 		return 10
@@ -222,8 +148,6 @@ func chineseOrdinal(s string) int {
 	return -1
 }
 
-// ordinalSequenceCoherent reports whether the ordinals form a strict
-// ascending run starting at 1 (1,2,3... or 一,二,三...). Any -1 breaks it.
 func ordinalSequenceCoherent(ords []int) bool {
 	for i, v := range ords {
 		if v != i+1 {
@@ -233,10 +157,6 @@ func ordinalSequenceCoherent(ords []int) bool {
 	return true
 }
 
-// splitProseSentences splits prose into sentences on terminators
-// (。．！？!?；; and newline), dropping interrogative segments whole:
-// a question is never a requirement. A ? both terminates its sentence
-// and marks that sentence interrogative; the flag resets afterwards.
 func splitProseSentences(s string) []string {
 	var out []string
 	start := 0
@@ -261,13 +181,6 @@ func splitProseSentences(s string) []string {
 	return out
 }
 
-// extractProseConstraints pulls individually-checkable requirement units
-// from list-free prose. A clause qualifies ONLY when it starts with a
-// constraint verb (imperative or 必须/不要-class modality) after polite
-// fillers are stripped; narrative sentences almost never start with a
-// bare verb, which is the false-positive control. Activation requires
-// >=2 qualifying clauses within [4,200] runes; anything else returns nil
-// (the aggregate fulfillment gate remains the fallback).
 func extractProseConstraints(nonCodeText string) []string {
 	if strings.TrimSpace(nonCodeText) == "" {
 		return nil
@@ -291,7 +204,7 @@ func extractProseConstraints(nonCodeText string) []string {
 	if len(clauses) < proseConstraintMinClauses || len(clauses) > proseConstraintMaxClauses {
 		return nil
 	}
-	// Dedup (case-insensitive for en).
+
 	seen := map[string]bool{}
 	var out []string
 	for _, cl := range clauses {
@@ -305,9 +218,6 @@ func extractProseConstraints(nonCodeText string) []string {
 	return out
 }
 
-// proseClauseIsConstraint reports whether a clause starts with a
-// constraint signal (zh imperative/modality prefix or en imperative /
-// deontic verb).
 func proseClauseIsConstraint(cl string) bool {
 	for _, p := range zhProseConstraintPrefixes {
 		if strings.HasPrefix(cl, p) {
@@ -317,8 +227,6 @@ func proseClauseIsConstraint(cl string) bool {
 	return enProseConstraintStartRe.MatchString(cl)
 }
 
-// observe records the task message once per run; subsequent calls are
-// no-ops (the first user message defines the task).
 func (c *constraintAuditState) observe(prompt string) {
 	if c == nil {
 		return
@@ -331,8 +239,6 @@ func (c *constraintAuditState) observe(prompt string) {
 	c.constraints = buildConstraints(prompt)
 }
 
-// checkAndInject returns the per-item audit prompt when a multi-item task
-// is about to finish without having been audited. One-shot per run.
 func (c *constraintAuditState) checkAndInject() string {
 	if c == nil {
 		return ""

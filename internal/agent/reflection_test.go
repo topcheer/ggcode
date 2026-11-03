@@ -26,7 +26,7 @@ func TestRunStatsRecordFileEdit(t *testing.T) {
 	s := newRunStats("test")
 	s.recordFileEdit("/path/to/file.go")
 	s.recordFileEdit("/path/to/other.go")
-	s.recordFileEdit("/path/to/file.go") // duplicate
+	s.recordFileEdit("/path/to/file.go")
 
 	if len(s.FilesEdited) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(s.FilesEdited))
@@ -84,7 +84,7 @@ func TestRunStatsFinalizeWithError(t *testing.T) {
 	if s.Success {
 		t.Error("expected success=false for error")
 	}
-	// Agent loop errors are NOT recorded — only tool errors are collected.
+
 	if len(s.Errors) != 0 {
 		t.Errorf("expected 0 errors (agent loop errors not recorded), got %d", len(s.Errors))
 	}
@@ -102,7 +102,6 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 	args, _ = json.Marshal(map[string]string{"command": "go build ./..."})
 	extractPathsFromToolCall("run_command", args, s)
 
-	// multi_file_edit with files array
 	args, _ = json.Marshal(map[string]any{
 		"files": []map[string]any{
 			{"path": "/src/a.go", "edits": []any{}},
@@ -111,7 +110,6 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 	})
 	extractPathsFromToolCall("multi_file_edit", args, s)
 
-	// multi_file_write with files array
 	args, _ = json.Marshal(map[string]any{
 		"files": []map[string]any{
 			{"path": "/src/c.go", "content": "package main"},
@@ -119,7 +117,6 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 	})
 	extractPathsFromToolCall("multi_file_write", args, s)
 
-	// notebook_edit
 	args, _ = json.Marshal(map[string]string{"notebook_path": "/notebooks/analysis.ipynb"})
 	extractPathsFromToolCall("notebook_edit", args, s)
 
@@ -130,10 +127,6 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 		t.Errorf("expected 1 command, got %d", len(s.CommandsRun))
 	}
 
-	// Regression: read_file must NOT be recorded as a file edit.
-	// Previously, read_file was in the same case as write/edit tools,
-	// causing false-positive warnings from post-completion gates
-	// (complexity_gate, companion_guard) on read-only turns.
 	readArgs, _ := json.Marshal(map[string]string{"path": "/src/readonly.go"})
 	before := len(s.FilesEdited)
 	extractPathsFromToolCall("read_file", readArgs, s)
@@ -264,7 +257,7 @@ func TestSetReflectionFuncNil(t *testing.T) {
 		ToolCalls: map[string]int{},
 		startTime: time.Now(),
 	}
-	a.maybeReflect(stats) // should not panic
+	a.maybeReflect(stats)
 }
 
 func TestMaybeReflectNilStats(t *testing.T) {
@@ -321,7 +314,7 @@ func containsStr(s, substr string) bool {
 }
 
 func TestRunStatsSummary(t *testing.T) {
-	// Empty stats — only iterations shown.
+
 	s := newRunStats("test")
 	s.Iterations = 5
 	summary := s.Summary()
@@ -329,7 +322,6 @@ func TestRunStatsSummary(t *testing.T) {
 		t.Errorf("expected '5 iterations' in summary: %s", summary)
 	}
 
-	// With tool calls.
 	s.recordToolCall("read_file")
 	s.recordToolCall("edit_file")
 	s.recordToolCall("edit_file")
@@ -338,14 +330,12 @@ func TestRunStatsSummary(t *testing.T) {
 		t.Errorf("expected '3 tool calls' in summary: %s", summary)
 	}
 
-	// With errors.
 	s.recordToolError("run_command", "exit status 1")
 	summary = s.Summary()
 	if !contains(summary, "1 errors") {
 		t.Errorf("expected '1 errors' in summary: %s", summary)
 	}
 
-	// With files edited.
 	s.recordFileEdit("/foo.go")
 	s.recordFileEdit("/bar.go")
 	summary = s.Summary()
@@ -353,7 +343,6 @@ func TestRunStatsSummary(t *testing.T) {
 		t.Errorf("expected '2 files edited' in summary: %s", summary)
 	}
 
-	// With commands run.
 	s.recordCommand("go build ./...")
 	summary = s.Summary()
 	if !contains(summary, "1 commands run") {
@@ -393,7 +382,6 @@ func TestTotalToolCalls(t *testing.T) {
 	}
 }
 
-// r394: token accumulation for the perf-baseline cost dimension.
 func TestRunStatsRecordTokens(t *testing.T) {
 	var s RunStats
 	s.recordTokens(1000, 500)

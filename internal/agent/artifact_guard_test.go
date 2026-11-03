@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// Merge conflict marker detection tests
-// ---------------------------------------------------------------------------
-
 func TestCheckMergeConflictMarkers_Detected(t *testing.T) {
 	content := `package main
 
@@ -41,7 +37,7 @@ func main() {
 	}
 }
 `
-	// Ensure comparison operators that resemble < and > don't trigger.
+
 	result := checkMergeConflictMarkers("test.go", content)
 	if result != "" {
 		t.Errorf("expected no warning for clean code, got: %s", result)
@@ -49,9 +45,7 @@ func main() {
 }
 
 func TestCheckMergeConflictMarkers_OnlySeparatorNotFlagged(t *testing.T) {
-	// An isolated "=======" line with no conflict start/end markers is
-	// legitimate syntax (Markdown setext heading underline, RST section
-	// underline) and must not trigger a false positive (issue #309).
+
 	content := `package main
 
 func main() {}
@@ -65,7 +59,7 @@ func extra() {}
 }
 
 func TestCheckMergeConflictMarkers_MarkdownSetextH1NotFlagged(t *testing.T) {
-	// Markdown setext H1 uses "Title\n=======" as a legal heading underline.
+
 	content := `# Project Docs
 
 Title
@@ -83,7 +77,7 @@ Some body text.
 }
 
 func TestCheckMergeConflictMarkers_RstSectionUnderlineNotFlagged(t *testing.T) {
-	// RST uses "=======" (or longer) lines as section underlines.
+
 	content := `Introduction
 ============
 
@@ -96,7 +90,7 @@ This is valid reStructuredText.
 }
 
 func TestCheckMergeConflictMarkers_FullBlockStillDetected(t *testing.T) {
-	// A complete conflict block (start + separator + end) must still fire.
+
 	content := `package main
 
 <<<<<<< HEAD
@@ -115,7 +109,7 @@ func b() {}
 }
 
 func TestCheckMergeConflictMarkers_PartialBlockStillDetected(t *testing.T) {
-	// Start/end markers present even without a separator: still a conflict.
+
 	content := `package main
 
 <<<<<<< HEAD
@@ -151,8 +145,7 @@ func TestCheckMergeConflictMarkers_EmptyContent(t *testing.T) {
 }
 
 func TestCheckMergeConflictMarkers_NoFalsePositiveBase64(t *testing.T) {
-	// A line of 7+ equals could appear in base64 strings. Make sure "======="
-	// inside a base64 blob doesn't trigger — only exact line match counts.
+
 	content := "data := \"ABCD======\"\n"
 	result := checkMergeConflictMarkers("test.go", content)
 	if result != "" {
@@ -175,12 +168,8 @@ func TestCheckMergeConflictMarkers_JavaScript(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Content growth detection tests
-// ---------------------------------------------------------------------------
-
 func TestCheckContentGrowth_MassiveGrowth(t *testing.T) {
-	// Create old content with ~10 lines, new content with ~60 lines (6x).
+
 	old := "package main\n\nfunc a() {}\nfunc b() {}\nfunc c() {}\nfunc d() {}\nfunc e() {}\nfunc f() {}\nfunc g() {}\nfunc h() {}\nfunc i() {}\n"
 	new := old
 	for i := 0; i < 50; i++ {
@@ -230,8 +219,8 @@ func TestCheckContentGrowth_EmptyNewContent(t *testing.T) {
 }
 
 func TestCheckContentGrowth_Exactly5x(t *testing.T) {
-	old := strings.Repeat("line\n", 10) // 10 lines
-	new := strings.Repeat("line\n", 50) // 50 lines = 5.0x
+	old := strings.Repeat("line\n", 10)
+	new := strings.Repeat("line\n", 50)
 	result := checkContentGrowth("test.go", old, new)
 	if result == "" {
 		t.Fatal("expected warning at exactly 5x growth")
@@ -239,17 +228,13 @@ func TestCheckContentGrowth_Exactly5x(t *testing.T) {
 }
 
 func TestCheckContentGrowth_JustUnder5x(t *testing.T) {
-	old := strings.Repeat("line\n", 10) // 10 lines
-	new := strings.Repeat("line\n", 49) // 49 lines = 4.9x
+	old := strings.Repeat("line\n", 10)
+	new := strings.Repeat("line\n", 49)
 	result := checkContentGrowth("test.go", old, new)
 	if result != "" {
 		t.Errorf("expected no warning at 4.9x growth, got: %s", result)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Integration: write_integrity pipeline includes the new checks
-// ---------------------------------------------------------------------------
 
 func TestCheckWriteIntegrity_MergeConflictMarkers(t *testing.T) {
 	newContent := `package main

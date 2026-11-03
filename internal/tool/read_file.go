@@ -12,10 +12,8 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 )
 
-// AllowedPathChecker is a function that checks if a path is allowed by sandbox policy.
 type AllowedPathChecker func(path string) bool
 
-// ReadFile implements the read_file tool.
 type ReadFile struct {
 	SandboxCheck AllowedPathChecker
 	WorkingDir   string
@@ -56,7 +54,7 @@ func (t ReadFile) Parameters() json.RawMessage {
 }`)
 }
 
-const maxFileSize = 10 * 1024 * 1024 // 10MB pre-check limit
+const maxFileSize = 10 * 1024 * 1024
 
 func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -82,7 +80,6 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// Pre-check file size — but allow range reads of large files via offset/limit
 	info, err := os.Stat(args.Path)
 	if err != nil {
 		msg := fmt.Sprintf("error accessing file: %v", err)
@@ -94,11 +91,7 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: msg}, nil
 	}
 	if info.Size() > maxFileSize {
-		// #1698 case 1: mime sniff BEFORE the range branch - a >10MB image
-		// or PDF with offset/limit used to stream raw binary as numbered
-		// text straight into context (the dispatch below only ran on the
-		// <=10MB path), and the no-offset error told the agent to use
-		// offset/limit - guiding it into the same bad path.
+
 		if image.IsImageFile(args.Path) {
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"%s is an image (%d MB) - too large for multimodal decode; image range reading is not supported. Downscale the file externally if you need its contents.",
@@ -110,7 +103,7 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 				filepath.Base(args.Path), filepath.Ext(args.Path), info.Size()/(1024*1024))}, nil
 		}
 		if args.Offset > 0 || args.Limit > 0 {
-			// Streaming range read: only read the requested lines
+
 			text, err := readFileRangeStreaming(args.Path, args.Offset, args.Limit, readFileRangeOptions{
 				defaultLimit: maxOutputLines,
 				moreHint:     "Use read_file with offset/limit for more.",
@@ -118,15 +111,12 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			if err != nil {
 				return Result{IsError: true, Content: err.Error()}, nil
 			}
-			// #1698 case 2: the streaming path skipped BOTH guards the
-			// small-file path runs - stale-read detection never saw a
-			// >10MB ranged read (write_file's CheckStale went blind) and
-			// merge-conflict markers slipped through unflagged.
+
 			defaultFileTracker.RecordRead(args.Path)
 			text += CheckContentForConflicts(text)
 			return Result{Content: text}, nil
 		}
-		// Count lines so the agent knows the range to use
+
 		lineCount := countFileLines(args.Path)
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"file too large (%d MB, ~%d lines). Use read_file with offset and limit for range reading (e.g. offset=1 limit=500 to read the first 500 lines).",
@@ -139,7 +129,6 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
 	}
 
-	// Image file handling: decode and return as multimodal result (ignores offset/limit).
 	if image.IsImageFile(args.Path) {
 		img, err := image.Decode(data)
 		if err != nil {
@@ -166,18 +155,13 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	// Record the file's mtime for stale-read detection by write_file.
 	defaultFileTracker.RecordRead(args.Path)
 
-	// Check for unresolved merge conflict markers in the raw content and
-	// append a warning. We check raw content (not the line-numbered display
-	// text) because line-number prefixes shift the markers off column 0.
 	text += CheckContentForConflicts(string(data))
 
 	return Result{Content: text}, nil
 }
 
-// detectIndentStyle analyzes the first ~200 lines to determine tab vs space indentation.
 func detectIndentStyle(content string) string {
 	tabs, spaces := 0, 0
 	lines := strings.Split(content, "\n")
@@ -208,8 +192,7 @@ func detectIndentStyle(content string) string {
 	if tabs > spaces {
 		return "indent: tab"
 	}
-	// Detect base indent unit by finding the greatest common divisor
-	// of all leading-space counts. This handles 2-space YAML vs 4-space Python/etc.
+
 	widths := map[int]int{}
 	for _, line := range lines[:limit] {
 		if len(line) == 0 || line[0] != ' ' {
@@ -226,7 +209,7 @@ func detectIndentStyle(content string) string {
 	if len(widths) == 0 {
 		return "indent: spaces"
 	}
-	// Find GCD of all observed widths
+
 	allWidths := make([]int, 0, len(widths))
 	for w := range widths {
 		allWidths = append(allWidths, w)
@@ -248,7 +231,6 @@ func gcd(a, b int) int {
 	return a
 }
 
-// detectEncoding checks for BOM or non-UTF-8 content.
 func detectEncoding(data []byte) string {
 	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
 		return "encoding: UTF-8 BOM"

@@ -4,14 +4,9 @@ import (
 	"testing"
 )
 
-// ============================================================================
-// InteractiveCommandWarning tests -- detect commands that hang on stdin/forever
-// ============================================================================
-
 func TestInteractiveCommand_BareREPL(t *testing.T) {
 	gate := NewCommandGate()
 
-	// Bare REPL invocations with no arguments hang on stdin.
 	hanging := []string{
 		"python",
 		"python3",
@@ -37,7 +32,6 @@ func TestInteractiveCommand_BareREPL(t *testing.T) {
 func TestInteractiveCommand_REPLWithArgsIsSafe(t *testing.T) {
 	gate := NewCommandGate()
 
-	// REPL invocations with script files or inline code flags are safe.
 	safe := []string{
 		"python script.py",
 		"python3 main.py",
@@ -108,7 +102,6 @@ func TestInteractiveCommand_Pagers(t *testing.T) {
 func TestInteractiveCommand_PagerWithNonInteractiveFlag(t *testing.T) {
 	gate := NewCommandGate()
 
-	// less -F (quit-if-one-screen) and less -E (quit-at-eof) are non-interactive.
 	safe := []string{
 		"less -F file.txt",
 		"less -E file.txt",
@@ -144,16 +137,15 @@ func TestInteractiveCommand_TopAndMonitors(t *testing.T) {
 func TestInteractiveCommand_TopBatchMode(t *testing.T) {
 	gate := NewCommandGate()
 
-	// top -b (batch mode) and top -n 1 (one iteration) are non-interactive.
 	safe := []string{
 		"top -b -n 1",
 		"top -n 1",
-		"htop -C", // htop -C is not batch mode but doesn't hang in CI
+		"htop -C",
 	}
 
 	for _, cmd := range safe {
 		w := gate.InteractiveCommandWarning(cmd)
-		// top -b -n 1 and top -n 1 should be safe
+
 		if cmd == "top -b -n 1" || cmd == "top -n 1" {
 			if w != "" {
 				t.Errorf("expected no interactive warning for %q, got: %s", cmd, w)
@@ -165,7 +157,6 @@ func TestInteractiveCommand_TopBatchMode(t *testing.T) {
 func TestInteractiveCommand_TailFollow(t *testing.T) {
 	gate := NewCommandGate()
 
-	// tail -f runs forever.
 	hanging := []string{
 		"tail -f log.txt",
 		"tail --follow log.txt",
@@ -180,7 +171,6 @@ func TestInteractiveCommand_TailFollow(t *testing.T) {
 		}
 	}
 
-	// tail without -f exits normally.
 	safe := []string{
 		"tail -n 100 log.txt",
 		"tail log.txt",
@@ -198,7 +188,6 @@ func TestInteractiveCommand_TailFollow(t *testing.T) {
 func TestInteractiveCommand_WatchAndYes(t *testing.T) {
 	gate := NewCommandGate()
 
-	// watch and yes run forever by design.
 	hanging := []string{
 		"watch ls",
 		"watch -n 1 'date'",
@@ -217,13 +206,11 @@ func TestInteractiveCommand_WatchAndYes(t *testing.T) {
 func TestInteractiveCommand_BareCatHangs(t *testing.T) {
 	gate := NewCommandGate()
 
-	// cat with no args reads from stdin forever.
 	w := gate.InteractiveCommandWarning("cat")
 	if w == "" {
 		t.Errorf("expected interactive warning for bare 'cat', got empty")
 	}
 
-	// cat with a file argument is fine.
 	w = gate.InteractiveCommandWarning("cat file.txt")
 	if w != "" {
 		t.Errorf("expected no interactive warning for 'cat file.txt', got: %s", w)
@@ -233,7 +220,6 @@ func TestInteractiveCommand_BareCatHangs(t *testing.T) {
 func TestInteractiveCommand_NormalCommandsSafe(t *testing.T) {
 	gate := NewCommandGate()
 
-	// Normal build/test/git commands should not trigger interactive warnings.
 	safe := []string{
 		"go build ./...",
 		"go test ./...",
@@ -269,7 +255,6 @@ func TestInteractiveCommand_NormalCommandsSafe(t *testing.T) {
 func TestInteractiveCommand_CompoundCommands(t *testing.T) {
 	gate := NewCommandGate()
 
-	// Compound commands where one part hangs should warn.
 	hanging := []string{
 		"echo hello; python",
 		"ls && vim",
@@ -284,7 +269,6 @@ func TestInteractiveCommand_CompoundCommands(t *testing.T) {
 		}
 	}
 
-	// Compound commands where all parts are safe should not warn.
 	safe := []string{
 		"go build && go test",
 		"echo hello; echo world",
@@ -303,7 +287,6 @@ func TestInteractiveCommand_CompoundCommands(t *testing.T) {
 func TestInteractiveCommand_ShellWithDashC(t *testing.T) {
 	gate := NewCommandGate()
 
-	// bash -c 'commands' runs one-shot and exits.
 	safe := []string{
 		"bash -c 'echo hello'",
 		"sh -c 'ls -la'",
@@ -331,7 +314,6 @@ func TestInteractiveCommand_EmptyCommand(t *testing.T) {
 func TestInteractiveCommand_WiredIntoCheck(t *testing.T) {
 	gate := NewCommandGate()
 
-	// Verify that interactive warnings appear in Check().Warnings.
 	result := gate.Check("python")
 	found := false
 	for _, w := range result.Warnings {
@@ -344,7 +326,6 @@ func TestInteractiveCommand_WiredIntoCheck(t *testing.T) {
 		t.Errorf("expected interactive warning in Check().Warnings for 'python', got: %v", result.Warnings)
 	}
 
-	// Safe command should not have interactive warnings.
 	result = gate.Check("python -c 'print(1)'")
 	found = false
 	for _, w := range result.Warnings {
@@ -361,7 +342,6 @@ func TestInteractiveCommand_WiredIntoCheck(t *testing.T) {
 func TestInteractiveCommand_SuggestionContent(t *testing.T) {
 	gate := NewCommandGate()
 
-	// Verify warning includes actionable suggestion.
 	w := gate.InteractiveCommandWarning("vim")
 	if !containsAnyStr(w, []string{"edit_file", "write_file", "read_file"}) {
 		t.Errorf("expected vim warning to suggest edit_file/write_file/read_file, got: %s", w)
@@ -373,7 +353,6 @@ func TestInteractiveCommand_SuggestionContent(t *testing.T) {
 	}
 }
 
-// containsAnyStr checks if s contains any of the substrings.
 func containsAnyStr(s string, subs []string) bool {
 	for _, sub := range subs {
 		if len(s) >= len(sub) && (s == sub ||

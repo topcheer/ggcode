@@ -11,9 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
-// GitCheckout implements the git_checkout tool for creating new branches and
-// switching between existing branches. Includes safety checks for uncommitted
-// changes, branch name validation, and protected branch warnings.
 type GitCheckout struct{ WorkingDir string }
 
 func (t GitCheckout) Name() string { return "git_checkout" }
@@ -69,47 +66,36 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: "branch is required"}, nil
 	}
 
-	// Validate branch name to prevent shell injection and invalid names.
 	if err := validateBranchName(args.Branch); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	// #1687 case 2: validateBranchName trims an internal COPY, so " main "
-	// passed validation but the ORIGINAL value reached git and failed
-	// ("did not match any file(s)") - validated-but-doomed. Execute the
-	// trimmed value validation actually approved.
+
 	args.Branch = strings.TrimSpace(args.Branch)
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Detect VCS and use the appropriate checkout implementation.
 	vcsImpl := vcs.Detect(dir)
 	if vcsImpl == nil {
 		return Result{IsError: true, Content: "no VCS detected in " + dir}, nil
 	}
 
-	// Safety check: warn about uncommitted changes before switching.
 	clean, _ := vcsImpl.IsClean(ctx, dir)
 	var dirtyWarning string
 	if !clean {
 		dirtyWarning = checkWorkingTreeDirty(ctx, dir, vcsImpl.Name())
 	}
 
-	// Track the branch we're leaving for context in the result.
 	prevBranch, _ := vcsImpl.CurrentBranch(ctx, dir)
 
-	// Validate start point if provided. #2590: start_point is a revspec
-	// (HEAD~2, main^ ...) - validate with revspec semantics, not ref-name
-	// rules.
 	if args.Create && args.StartPoint != "" {
 		if err := validateRevspec(args.StartPoint); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		// Same #1687 case 2 trim-copy mismatch as Branch above.
+
 		args.StartPoint = strings.TrimSpace(args.StartPoint)
 	}
 
-	// Execute checkout via VCS abstraction.
-	out, err := vcsImpl.Checkout(ctx, dir, strings.TrimSpace(args.Branch), args.Create, strings.TrimSpace(args.StartPoint)) // #1687 case 2: validate trims a COPY - execute the trimmed value, else " main " passes validation but git rejects it
+	out, err := vcsImpl.Checkout(ctx, dir, strings.TrimSpace(args.Branch), args.Create, strings.TrimSpace(args.StartPoint))
 	if err != nil {
 		if errors.Is(err, vcs.ErrCheckoutNotSupported) {
 			return Result{IsError: true, Content: fmt.Sprintf("%s does not support branch checkout", vcsImpl.DisplayName())}, nil
@@ -117,7 +103,6 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: fmt.Sprintf("%s checkout failed: %v\n%s", vcsImpl.Name(), err, out)}, nil
 	}
 
-	// Build result message.
 	trimmed := strings.TrimSpace(string(out))
 	nowBranch, _ := vcsImpl.CurrentBranch(ctx, dir)
 
@@ -130,12 +115,10 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 		b.WriteString(fmt.Sprintf("Switched to branch %q.", args.Branch))
 	}
 
-	// Confirm current branch after checkout.
 	if nowBranch != "" && nowBranch != prevBranch {
 		b.WriteString(fmt.Sprintf("\nCurrent branch: %s", nowBranch))
 	}
 
-	// Append dirty warning if there were uncommitted changes.
 	if dirtyWarning != "" {
 		b.WriteString("\n\n" + dirtyWarning)
 	}
@@ -143,9 +126,6 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 	return Result{Content: b.String()}, nil
 }
 
-// validateBranchName checks that a branch name is safe for use as a git
-// command argument. It prevents shell injection and rejects names that git
-// itself would reject.
 func validateBranchName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -154,7 +134,7 @@ func validateBranchName(name string) error {
 	if len(name) > 200 {
 		return fmt.Errorf("branch name too long (%d chars)", len(name))
 	}
-	// Git branch names cannot contain: space, ~, ^, :, ?, *, [, \, control chars
+
 	for _, ch := range name {
 		switch ch {
 		case ' ', '~', '^', ':', '?', '*', '[', '\\':
@@ -164,18 +144,18 @@ func validateBranchName(name string) error {
 			return fmt.Errorf("branch name %q contains control character", name)
 		}
 	}
-	// Branch names cannot start with '-' (would be interpreted as a flag).
+
 	if strings.HasPrefix(name, "-") {
 		return fmt.Errorf("branch name %q starts with '-' — use a letter or '/' prefix", name)
 	}
-	// Branch names cannot contain '..' (range syntax) or '@{' (reflog syntax).
+
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("branch name %q contains '..' (reserved by git)", name)
 	}
 	if strings.Contains(name, "@{") {
 		return fmt.Errorf("branch name %q contains '@{' (reserved by git)", name)
 	}
-	// Cannot end with '/' or '.lock'.
+
 	if strings.HasSuffix(name, "/") {
 		return fmt.Errorf("branch name %q ends with '/'", name)
 	}
@@ -185,14 +165,6 @@ func validateBranchName(name string) error {
 	return nil
 }
 
-// validateRevspec validates a git revspec (HEAD~2, HEAD^, main@{1},
-// tag~3 ...) for command-line safety. The parameter is a revspec, NOT a
-// ref name: '~', '^' and '@{...}' are legal revision syntax, so the
-// check-ref-format character rules of validateRefName must NOT apply here
-// (#2590 - git_blame/git_checkout wrongly refused HEAD~N and the family).
-// The actual injection vector (#1687 case 4) is a LEADING '-' (git would
-// consume the argv as an option); '..' stays blocked to keep the argument
-// a single commit, not a range. exec argv passes the rest inertly.
 func validateRevspec(rev string) error {
 	rev = strings.TrimSpace(rev)
 	if rev == "" {
@@ -215,9 +187,6 @@ func validateRevspec(rev string) error {
 	return nil
 }
 
-// validateRefName validates a git reference (commit hash, tag, branch) for
-// command-line safety. Similar to branch validation but more permissive for
-// hex hashes.
 func validateRefName(ref string) error {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -232,10 +201,7 @@ func validateRefName(ref string) error {
 	if strings.HasPrefix(ref, "@{") || strings.HasSuffix(ref, ".lock") {
 		return fmt.Errorf("start_point %q uses a reserved form", ref)
 	}
-	// Block characters git itself forbids in ref names (check-ref-format).
-	// #837: execution goes through exec.CommandContext (no shell), so '$',
-	// backtick, parens and quotes are legal ref characters; 'release$v2' was
-	// wrongly refused by the old shell-metacharacter blacklist.
+
 	for _, ch := range ref {
 		switch ch {
 		case ' ', '~', '^', ':', '?', '*', '[', '\n', '\r', '\\':
@@ -251,27 +217,24 @@ func validateRefName(ref string) error {
 	return nil
 }
 
-// checkWorkingTreeDirty checks if the working tree has uncommitted changes
-// and returns a warning string if so. Non-blocking advisory.
 func checkWorkingTreeDirty(ctx context.Context, dir string, vcsName string) string {
 	var cmd *exec.Cmd
 	if vcsName == "git" {
 		cmd = exec.CommandContext(ctx, "git", "status", "--porcelain")
 	} else {
-		// For non-git VCS, just check if status output is non-empty.
+
 		cmd = exec.CommandContext(ctx, vcsName, "status")
 	}
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "" // can't check — don't block
+		return ""
 	}
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
 		return ""
 	}
 
-	// Count by type for a concise summary.
 	lines := strings.Split(trimmed, "\n")
 	var staged, unstaged, untracked int
 	for _, l := range lines {
@@ -309,8 +272,6 @@ func checkWorkingTreeDirty(ctx context.Context, dir string, vcsName string) stri
 	)
 }
 
-// currentBranchName returns the current git branch name, or empty string if
-// it cannot be determined.
 func currentBranchName(ctx context.Context, dir string) string {
 	cmd := gitCommand(ctx, "symbolic-ref", "--short", "HEAD")
 	cmd.Dir = dir
@@ -321,7 +282,6 @@ func currentBranchName(ctx context.Context, dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Clone returns an independent copy of this tool for use by a different agent.
 func (t GitCheckout) Clone() Tool {
 	return &GitCheckout{WorkingDir: t.WorkingDir}
 }

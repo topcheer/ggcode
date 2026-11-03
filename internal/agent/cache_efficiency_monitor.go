@@ -1,40 +1,5 @@
 package agent
 
-// Prompt Cache Efficiency Monitor - Context Engineering Intelligence
-//
-// Research basis: Anthropic's Context Engineering guide (2025) emphasizes prompt
-// cache stability as a primary cost lever. The cache prefix (system prompt +
-// early conversation) is cached with a 5-minute sliding TTL. When the prefix
-// changes - even by a single token - the ENTIRE cache is invalidated and the
-// full prefix is re-written at 1.25x cost on the next call.
-//
-// Common cache-busting patterns in coding agents:
-//   1. Dynamic tool pruning: adding/removing tools mid-run changes the tools
-//      array in the API request, busting the cache from the tools breakpoint.
-//   2. Adaptive effort: changing reasoning_effort per-turn alters the request
-//      metadata, potentially busting cache if the provider includes it in the
-//      prefix hash.
-//   3. Pinned context updates: injecting/updating pinned context mid-conversation
-//      modifies the system prompt, busting cache from the system breakpoint.
-//   4. System prompt mutations: intelligence gates that inject advisory messages
-//      into the system prompt cause cache invalidation on every injection.
-//   5. Timestamp/nonce injection: some agents inject current timestamps into
-//      the system prompt, busting cache on every single call.
-//
-// What this monitor does:
-//   - Tracks cache_read / cache_write / input tokens per LLM call
-//   - Computes a rolling cache hit ratio (cache_read / total_input)
-//   - Detects "cache bust storms": consecutive calls where cache_read drops
-//     to near-zero after previously being high, indicating prefix instability
-//   - When a storm is detected, injects guidance identifying the likely cause
-//
-// This is different from an idle-TTL cache warm-up (the former
-// cache_keepalive concept has been removed from the codebase): this monitor
-// detects cache INSTABILITY during ACTIVE runs (prefix-bust-based), not
-// idle expiry.
-//
-// Zero LLM cost - deterministic token arithmetic + rolling window analysis.
-
 import (
 	"fmt"
 	"strings"
@@ -45,42 +10,30 @@ import (
 )
 
 const (
-	// cacheEffWindow is the rolling window size for efficiency analysis.
 	cacheEffWindow = 8
 
-	// cacheEffMinCalls: minimum calls before analysis activates.
 	cacheEffMinCalls = 4
 
-	// cacheHitRatioThreshold: calls above this ratio are considered "cache warm".
 	cacheHitRatioThreshold = 0.50
 
-	// cacheBustRatioThreshold: calls below this ratio are considered "cache cold".
 	cacheBustRatioThreshold = 0.15
 
-	// cacheStormConsecutive: number of consecutive cold calls (after warm)
-	// that triggers a storm alert.
 	cacheStormConsecutive = 3
-
-	// cacheEffWarnOnce: fire at most once per run to avoid nagging.
-	// After the first alert, the root cause guidance has been delivered.
 )
 
-// cacheEffSample records cache metrics for a single LLM call.
 type cacheEffSample struct {
-	input     int // raw input tokens (non-cached)
-	cacheRead int // tokens served from cache
-	total     int // input + cacheRead (total prompt size)
+	input     int
+	cacheRead int
+	total     int
 }
 
-// cacheEffMonitor tracks prompt cache efficiency across an agent run and
-// detects cache invalidation storms.
 type cacheEffMonitor struct {
 	mu sync.Mutex
 
-	samples    []cacheEffSample // rolling window of recent calls
-	warmSeen   bool             // true once we've observed a high-cache-hit call
-	coldStreak int              // consecutive cold calls since last warm call
-	alerted    bool             // fired alert this run
+	samples    []cacheEffSample
+	warmSeen   bool
+	coldStreak int
+	alerted    bool
 }
 
 func newCacheEffMonitor() *cacheEffMonitor {
@@ -89,7 +42,6 @@ func newCacheEffMonitor() *cacheEffMonitor {
 	}
 }
 
-// reset clears state for a new run.
 func (m *cacheEffMonitor) reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -99,43 +51,30 @@ func (m *cacheEffMonitor) reset() {
 	m.alerted = false
 }
 
-// record tracks a new LLM call's cache metrics. Returns guidance if a cache
-// bust storm is detected.
 func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// #1441-B: OpenAI-compat semantics make CacheRead a SUBSET of
-	// InputTokens (openai.go: PromptTokens already includes
-	// CachedTokens). The raw sum double-counted the cached portion:
-	// warm's >=0.5 ratio became mathematically unreachable (C/(P0+2C)
-	// with a real 90% hit computes 0.474), so warmSeen never set and the
-	// storm detector stayed no-op on the mainline providers
-	// (openrouter/deepseek/glm). provider.DisplayInputTokens already
-	// performs exactly this normalization for display - reuse it so the
-	// monitor sees the same numbers the user does.
 	sample := cacheEffSample{
 		input:     usage.InputTokens,
 		cacheRead: usage.CacheRead,
 		total:     usage.DisplayInputTokens() + usage.CacheRead,
 	}
 
-	// Append to rolling window
 	m.samples = append(m.samples, sample)
 	if len(m.samples) > cacheEffWindow {
 		m.samples = m.samples[1:]
 	}
 
 	if m.alerted {
-		return "" // already fired this run
+		return ""
 	}
 
 	if len(m.samples) < cacheEffMinCalls {
-		return "" // not enough data
+		return ""
 	}
 
-	// Skip analysis if provider doesn't use caching at all.
 	hasCacheActivity := false
 	for _, samp := range m.samples {
 		if samp.cacheRead > 0 {
@@ -147,7 +86,6 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 		return ""
 	}
 
-	// Compute hit ratio for this sample
 	ratio := m.hitRatio(sample)
 
 	if ratio >= cacheHitRatioThreshold {
@@ -158,7 +96,7 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 			m.coldStreak++
 		}
 	} else {
-		// Intermediate ratio — don't increment cold streak but don't reset either
+
 	}
 
 	if m.coldStreak >= cacheStormConsecutive {
@@ -171,7 +109,6 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 	return ""
 }
 
-// hitRatio computes the cache hit ratio for a single sample.
 func (m *cacheEffMonitor) hitRatio(s cacheEffSample) float64 {
 	if s.total == 0 {
 		return 0
@@ -179,8 +116,6 @@ func (m *cacheEffMonitor) hitRatio(s cacheEffSample) float64 {
 	return float64(s.cacheRead) / float64(s.total)
 }
 
-// formatStormGuidance produces actionable guidance when a cache bust storm
-// is detected.
 func (m *cacheEffMonitor) formatStormGuidance() string {
 	var sb strings.Builder
 
@@ -201,7 +136,6 @@ func (m *cacheEffMonitor) formatStormGuidance() string {
 	return sb.String()
 }
 
-// windowSummary returns a compact summary of the current window for diagnostics.
 func (m *cacheEffMonitor) windowSummary() string {
 	if len(m.samples) == 0 {
 		return "(empty)"

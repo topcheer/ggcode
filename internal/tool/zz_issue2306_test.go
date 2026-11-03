@@ -1,10 +1,5 @@
 package tool
 
-// #2306: the #1698 case-6 early break made totalLines == the last shown
-// line, so a truncated range reported "[Showing lines 1-2000 of ~2000]" -
-// the fake total equaled the displayed count and agents stopped
-// paginating. Truncated output must not fabricate a total.
-
 import (
 	"fmt"
 	"os"
@@ -33,7 +28,7 @@ func TestIssue2306TruncatedRangeNoFakeTotal(t *testing.T) {
 	if !strings.Contains(out, "More lines exist below") {
 		t.Fatalf("truncated range must hint at continuation, got tail: %q", lastLine2306(out))
 	}
-	// And an untruncated read (EOF reached) must not claim more below.
+
 	out2, err := readFileRangeStreaming(p, 2900, 2000, readFileRangeOptions{defaultLimit: 2000, moreHint: "use offset to page"})
 	if err != nil {
 		t.Fatal(err)

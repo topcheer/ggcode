@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// r-sa-99: task_output is a side path that must not bypass delegation
-// validation. When the provider can supply the task text of a completed
-// sub-agent run whose task carried acceptance criteria, the same acceptance
-// checkpoint wait_agent appends must appear here too.
-
 type fakeDelegationProvider struct {
 	output map[string]string
 	tasks  map[string]string
@@ -66,13 +61,10 @@ Fix X
 }
 
 func TestTaskOutputNoTaskTextNoCheckpoint(t *testing.T) {
-	// Shell jobs / providers without DelegationTaskTextProvider: nothing to
-	// validate against, output unchanged.
 	type plainProvider struct{ out string }
 
 	p := &fakeDelegationProvider{
 		output: map[string]string{"job-1": "build ok"},
-		// no tasks entry -> GetTaskText ok=false
 	}
 	out := execTaskOutput(t, p, "job-1")
 	if strings.Contains(out, acceptanceMarker) {
@@ -81,7 +73,7 @@ func TestTaskOutputNoTaskTextNoCheckpoint(t *testing.T) {
 }
 
 func TestTaskOutputNoCriteriaNoCheckpoint(t *testing.T) {
-	// Task text without an acceptance section: reminder is a no-op.
+
 	p := &fakeDelegationProvider{
 		output: map[string]string{"agent-2": "summary of work"},
 		tasks:  map[string]string{"agent-2": "do a thing and report back"},
@@ -93,8 +85,7 @@ func TestTaskOutputNoCriteriaNoCheckpoint(t *testing.T) {
 }
 
 func TestTaskOutputTailLinesSkipsCheckpoint(t *testing.T) {
-	// tail_lines bisects the output; appending the checkpoint after the
-	// truncation banner would be noise, so it is skipped there.
+
 	tool := TaskOutputTool{Provider: &fakeDelegationProvider{
 		output: map[string]string{"agent-3": strings.Repeat("line\n", 30)},
 		tasks: map[string]string{"agent-3": `## Acceptance Criteria

@@ -19,7 +19,6 @@ func mkToolCall(name string, args map[string]interface{}) provider.ToolCallDelta
 func TestToolSequence_FullReadThenTargeted(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// Full read (no offset/limit)
 	g := v.record(mkToolCall("read_file", map[string]interface{}{
 		"path": "/foo/bar.go",
 	}), 1)
@@ -27,7 +26,6 @@ func TestToolSequence_FullReadThenTargeted(t *testing.T) {
 		t.Fatalf("first read should not trigger: got %q", g)
 	}
 
-	// Targeted re-read (with offset)
 	g = v.record(mkToolCall("read_file", map[string]interface{}{
 		"path":   "/foo/bar.go",
 		"offset": 100,
@@ -40,7 +38,6 @@ func TestToolSequence_FullReadThenTargeted(t *testing.T) {
 		t.Fatal("hint should be marked as given")
 	}
 
-	// Subsequent same pattern should NOT fire again
 	g = v.record(mkToolCall("read_file", map[string]interface{}{
 		"path":   "/foo/bar.go",
 		"offset": 200,
@@ -54,7 +51,6 @@ func TestToolSequence_FullReadThenTargeted(t *testing.T) {
 func TestToolSequence_SequentialReads(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// First read - no hint
 	g := v.record(mkToolCall("read_file", map[string]interface{}{
 		"path": "/foo/a.go",
 	}), 1)
@@ -62,7 +58,6 @@ func TestToolSequence_SequentialReads(t *testing.T) {
 		t.Fatalf("first read should not trigger: got %q", g)
 	}
 
-	// Second read - no hint
 	g = v.record(mkToolCall("read_file", map[string]interface{}{
 		"path": "/foo/b.go",
 	}), 2)
@@ -70,7 +65,6 @@ func TestToolSequence_SequentialReads(t *testing.T) {
 		t.Fatalf("second read should not trigger: got %q", g)
 	}
 
-	// Third read - should trigger batch suggestion
 	g = v.record(mkToolCall("read_file", map[string]interface{}{
 		"path": "/foo/c.go",
 	}), 3)
@@ -82,7 +76,6 @@ func TestToolSequence_SequentialReads(t *testing.T) {
 func TestToolSequence_SequentialReadsSameFile(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// Three reads of the SAME file should NOT trigger (handled by memoization)
 	for i := 1; i <= 3; i++ {
 		g := v.record(mkToolCall("read_file", map[string]interface{}{
 			"path": "/foo/a.go",
@@ -134,7 +127,6 @@ func TestToolSequence_ReadThenGrep(t *testing.T) {
 func TestToolSequence_BroadThenNarrowSearch(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// Broad search (no directory)
 	g := v.record(mkToolCall("grep", map[string]interface{}{
 		"pattern": "TODO",
 	}), 1)
@@ -142,7 +134,6 @@ func TestToolSequence_BroadThenNarrowSearch(t *testing.T) {
 		t.Fatalf("broad search should not trigger: got %q", g)
 	}
 
-	// Narrowed search (same pattern, now with path)
 	g = v.record(mkToolCall("grep", map[string]interface{}{
 		"pattern": "TODO",
 		"path":    "/foo",
@@ -155,7 +146,6 @@ func TestToolSequence_BroadThenNarrowSearch(t *testing.T) {
 func TestToolSequence_Reset(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// Trigger a hint
 	_ = v.record(mkToolCall("read_file", map[string]interface{}{"path": "/a.go"}), 1)
 	_ = v.record(mkToolCall("read_file", map[string]interface{}{"path": "/a.go", "offset": 10}), 2)
 	if len(v.hintsGiven) == 0 {
@@ -175,7 +165,6 @@ func TestToolSequence_Reset(t *testing.T) {
 func TestToolSequence_NoFalsePositiveEdit(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// edit_file calls should not trigger read patterns
 	g := v.record(mkToolCall("edit_file", map[string]interface{}{
 		"file_path": "/foo/bar.go",
 	}), 1)
@@ -194,7 +183,6 @@ func TestToolSequence_NoFalsePositiveEdit(t *testing.T) {
 func TestToolSequence_BoundaryNoHint(t *testing.T) {
 	v := newToolSequenceValidator()
 
-	// Two reads of different files should NOT trigger (need 3)
 	g := v.record(mkToolCall("read_file", map[string]interface{}{"path": "/a.go"}), 1)
 	if g != "" {
 		t.Fatalf("first read should not trigger: got %q", g)
@@ -205,7 +193,6 @@ func TestToolSequence_BoundaryNoHint(t *testing.T) {
 		t.Fatalf("second read should not trigger: got %q", g)
 	}
 
-	// An intervening edit should break the consecutive read chain
 	g = v.record(mkToolCall("edit_file", map[string]interface{}{
 		"file_path": "/a.go",
 	}), 3)
@@ -213,7 +200,6 @@ func TestToolSequence_BoundaryNoHint(t *testing.T) {
 		t.Fatalf("edit_file should not trigger: got %q", g)
 	}
 
-	// This is the 2nd consecutive read (after the edit), not 3rd
 	g = v.record(mkToolCall("read_file", map[string]interface{}{"path": "/c.go"}), 4)
 	if g != "" {
 		t.Fatalf("read after edit should not trigger sequential hint: got %q", g)
@@ -221,16 +207,13 @@ func TestToolSequence_BoundaryNoHint(t *testing.T) {
 }
 
 func TestBroadThenNarrowSearch_SearchFiles(t *testing.T) {
-	// Regression test for #99: search_files uses "directory" param, not "path".
-	// The broad-then-narrow detector should fire for search_files.
+
 	v := &toolSequenceValidator{history: []seqEntry{}, hintsGiven: map[string]bool{}}
 
-	// Step 1: Broad search_files with no directory
 	v.record(mkToolCall("search_files", map[string]interface{}{
 		"pattern": "TODO",
 	}), 1)
 
-	// Step 2: Narrow search_files with directory
 	g := v.record(mkToolCall("search_files", map[string]interface{}{
 		"pattern":   "TODO",
 		"directory": "/foo",
@@ -245,7 +228,7 @@ func TestBroadThenNarrowSearch_SearchFiles(t *testing.T) {
 }
 
 func TestBroadThenNarrowSearch_GrepPath(t *testing.T) {
-	// Ensure grep still works with "path" param after the fix.
+
 	v := &toolSequenceValidator{history: []seqEntry{}, hintsGiven: map[string]bool{}}
 
 	v.record(mkToolCall("grep", map[string]interface{}{

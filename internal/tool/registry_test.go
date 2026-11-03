@@ -45,9 +45,6 @@ func TestToolRegistry_ToDefinitions(t *testing.T) {
 	}
 }
 
-// List() must be deterministic: it backs ToDefinitions(), whose output forms
-// the front of the provider prompt prefix. Non-deterministic tool order breaks
-// provider-side prompt/KV caching on every run (see List() doc comment).
 func TestToolRegistry_ListDeterministicOrder(t *testing.T) {
 	r := registerTestTools(t)
 	first := r.ToDefinitions()
@@ -102,12 +99,11 @@ func TestFormatCommandJobSnapshot_NilInput(t *testing.T) {
 }
 
 func TestCheckRequired(t *testing.T) {
-	// All present
+
 	if msg := CheckRequired("path", "/tmp/test.go", "content", "hello"); msg != "" {
 		t.Errorf("expected empty message, got %q", msg)
 	}
 
-	// Single missing
 	msg := CheckRequired("path", "", "content", "hello")
 	if !strings.Contains(msg, "path") {
 		t.Errorf("expected 'path' in message, got %q", msg)
@@ -116,19 +112,16 @@ func TestCheckRequired(t *testing.T) {
 		t.Errorf("should not mention 'content', got %q", msg)
 	}
 
-	// Multiple missing
 	msg = CheckRequired("path", "", "content", "")
 	if !strings.Contains(msg, "path") || !strings.Contains(msg, "content") {
 		t.Errorf("expected both 'path' and 'content', got %q", msg)
 	}
 
-	// Whitespace-only
 	msg = CheckRequired("path", "   ")
 	if msg == "" {
 		t.Error("expected error for whitespace-only path")
 	}
 
-	// No arguments
 	if msg := CheckRequired(); msg != "" {
 		t.Errorf("expected empty message for no fields, got %q", msg)
 	}

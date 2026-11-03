@@ -24,7 +24,6 @@ func TestCriteriaDriftSingleIndicatorNoWarn(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Single indicator should NOT trigger (threshold = 2)
 	c.recordAssistantText("The requirement is really only the happy path.", 1)
 
 	if msg := c.maybeWarn(2); msg != "" {
@@ -36,7 +35,6 @@ func TestCriteriaDriftTwoIndicatorsWarn(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Two indicators from different categories should trigger
 	text := "The requirement is really only the login form. Rather than the requested caching, I used direct queries."
 	c.recordAssistantText(text, 1)
 
@@ -61,24 +59,17 @@ func TestCriteriaDriftFiresOnce(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// #332: consumed indicators are cleared after a warning — the same batch
-	// cannot immediately re-trigger; a second warning requires fresh
-	// indicators within the turn window.
 	second := c.maybeWarn(3)
 	if second != "" {
 		t.Fatal("expected no second warning from consumed indicators")
 	}
 
-	// New indicators within the window DO allow the second warning.
-	// ("Is really a separate concern" = reclassification, "I took a different
-	// approach" = substitution — 2 distinct categories.)
 	c.recordAssistantText("That requirement is out of scope for now. Rather than the requested X I used a stub.", 3)
 	third := c.maybeWarn(4)
 	if third == "" {
 		t.Fatal("expected second warning from fresh indicators (warnCount=1 < cdMaxWarns=2)")
 	}
 
-	// Fourth attempt blocked by warnCount >= cdMaxWarns
 	c.recordAssistantText("A simpler solution. Good enough for now.", 5)
 	if msg := c.maybeWarn(6); msg != "" {
 		t.Fatal("expected no third warning (warnCount >= cdMaxWarns)")
@@ -93,11 +84,9 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	c.recordAssistantText(text1, 1)
 	_ = c.maybeWarn(2)
 
-	// Add new drift categories within the window to trigger a second warning
 	c.recordAssistantText("Is really a separate concern. Good enough for now.", 3)
 	_ = c.maybeWarn(4)
 
-	// Third attempt should be blocked by maxWarns (warnCount >= cdMaxWarns=2)
 	c.recordAssistantText("A simpler solution. Out of scope.", 5)
 	msg := c.maybeWarn(6)
 	if msg != "" {
@@ -105,15 +94,12 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	}
 }
 
-// #332: indicators from distant turns must not be stitched into a warning.
 func TestCriteriaDriftDistantTurnsNoWarn(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// iter 3: legitimate root-cause analysis (narrowing category)
 	c.recordAssistantText("The core problem is the nil map at line 42.", 3)
-	// iters 4-8: neutral tool turns
-	// iter 9: legitimate follow-up suggestion (reclassification category)
+
 	c.recordAssistantText("The flaky test should be a follow-up task.", 9)
 
 	if msg := c.maybeWarn(10); msg != "" {
@@ -121,7 +107,6 @@ func TestCriteriaDriftDistantTurnsNoWarn(t *testing.T) {
 	}
 }
 
-// #332: same-turn (adjacent) multi-category indicators still fire.
 func TestCriteriaDriftAdjacentTurnsWarn(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
@@ -138,17 +123,11 @@ func TestCriteriaDriftNoDedup(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Intra-turn dedup still applies: the same phrase twice in ONE response
-	// (even across two sentences) counts once.
 	c.recordAssistantText("The requirement is really only login. The requirement is really only logout.", 1)
 	if len(c.indicators) != 1 {
 		t.Fatalf("expected 1 unique indicator within a turn, got %d", len(c.indicators))
 	}
 
-	// #589: Cross-turn repetition counts again. Progressive drift often
-	// repeats the same phrase in later turns; the turn window in maybeWarn
-	// bounds accumulation instead of a global dedup that would swallow the
-	// drift signal.
 	c.recordAssistantText("The requirement is really only login, again.", 2)
 	if len(c.indicators) != 2 {
 		t.Fatalf("expected 2 indicators after cross-turn repetition, got %d", len(c.indicators))
@@ -171,14 +150,9 @@ func TestCriteriaDriftReclassificationCategory(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// #582: Threshold now uses indicator count (not category count).
-	// "that requirement is out of scope for now" → reclassification
-	// "rather than the requested caching" → substitution
-	// Total: 2 indicators from 2 categories, should trigger.
 	text := "That requirement is out of scope for now. Rather than the requested caching I used a stub."
 	c.recordAssistantText(text, 1)
 
-	// seenCategories is still tracked for compatibility (legacy field)
 	if len(c.seenCategories) < 2 {
 		t.Fatalf("expected 2+ categories tracked, got %d: %v", len(c.seenCategories), c.seenCategories)
 	}
@@ -233,7 +207,6 @@ func TestCriteriaDriftWarningContent(t *testing.T) {
 
 	msg := c.maybeWarn(2)
 
-	// Check warning contains key guidance elements
 	checks := []string{
 		"Success Criteria Integrity",
 		"proxy gaming",

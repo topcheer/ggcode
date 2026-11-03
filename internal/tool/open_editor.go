@@ -13,33 +13,10 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// OpenEditorTool lets the agent open a file (optionally at a specific line) in
-// the user's preferred external editor or IDE. This bridges the terminal-based
-// agent loop and GUI-based code review workflows.
-//
-// The tool auto-detects the editor from (in priority order):
-//  1. The $GID_EDITOR / $GGCODE_EDITOR env var (ggcode-specific override)
-//  2. The $VISUAL env var
-//  3. The $EDITOR env var
-//  4. Well-known CLI launchers detected via exec.LookPath: VS Code (`code`),
-//     Cursor (`cursor`), Zed (`zed`), Sublime Text (`subl`), IntelliJ IDEA
-//     (`idea`), WebStorm (`webstorm`), GoLand (`goland`), Neovim (`nvim`),
-//     Vim (`vim`), Emacs (`emacs`).
-//
-// On macOS, if no CLI launcher is found, the tool falls back to `open` which
-// uses the system default application. On Linux it falls back to `xdg-open`.
-// On Windows it falls back to `start`.
-//
-// The command is launched in detached mode (non-blocking): the tool returns
-// immediately after starting the editor process, so the agent loop is not
-// stalled waiting for the user to close the editor.
 type OpenEditorTool struct {
 	WorkingDir string
 }
 
-// Clone implements Cloner (#2596 siblings): same contract as the other
-// WorkingDir-holding tools - a pointer copy per agent so syncToolWorkingDir
-// can retarget each clone instead of sharing the registry-construction dir.
 func (t OpenEditorTool) Clone() Tool { return &OpenEditorTool{WorkingDir: t.WorkingDir} }
 
 func (OpenEditorTool) Name() string { return "open_editor" }
@@ -122,15 +99,10 @@ func (t OpenEditorTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("could not build launch command for editor %q on %s", editor, runtime.GOOS)}, nil
 	}
 
-	// Detach the editor process so it doesn't block the agent loop.
-	// Set process group / creation flags so the child survives independent of ggcode.
 	if err := startDetached(cmd); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to launch editor %q: %v", editor, err)}, nil
 	}
 
-	// #1697 case 2: honest success message. Never claim the user's editor
-	// opened at line N when a platform opener ran and/or the position was
-	// dropped.
 	loc := ""
 	if args.Line > 0 && !launchInfo.lineDropped {
 		loc = fmt.Sprintf(" at line %d", args.Line)
@@ -153,25 +125,22 @@ func (t OpenEditorTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	return Result{Content: fmt.Sprintf("Opened %s in %s%s", filepath.Base(absPath), editorName(editor), loc)}, nil
 }
 
-// detectEditor returns the best available editor command.
 func detectEditor() string {
-	// 1. ggcode-specific override
+
 	for _, key := range []string{"GGCODE_EDITOR", "GID_EDITOR"} {
 		if v := os.Getenv(key); v != "" {
-			// #857: same Fields[0] strip as VISUAL/EDITOR below — values like
-			// "code --wait" are documented usage; returning them verbatim made
-			// the highest-priority override the one that breaks.
+
 			return strings.Fields(v)[0]
 		}
 	}
-	// 2. Standard env vars
+
 	for _, key := range []string{"VISUAL", "EDITOR"} {
 		if v := os.Getenv(key); v != "" {
-			// Strip common arguments like "code --wait" — take just the binary
+
 			return strings.Fields(v)[0]
 		}
 	}
-	// 3. Well-known IDE launchers
+
 	for _, name := range ideLaunchers() {
 		if path, _ := exec.LookPath(name); path != "" {
 			return name
@@ -180,12 +149,10 @@ func detectEditor() string {
 	return ""
 }
 
-// ideLaunchers returns IDE/editor CLI binaries in priority order.
 func ideLaunchers() []string {
 	return []string{"code", "cursor", "zed", "subl", "idea", "webstorm", "goland", "pycharm", "nvim", "vim", "emacs"}
 }
 
-// editorName returns a human-friendly name for the editor binary.
 func editorName(editor string) string {
 	switch strings.ToLower(filepath.Base(editor)) {
 	case "code":
@@ -217,26 +184,18 @@ func editorName(editor string) string {
 	}
 }
 
-// editorLaunchInfo reports what buildEditorCommand actually did, so the
-// caller can report an honest success message (#1697 case 2): the old
-// "Opened X in <editor> at line N" was false on both counts when the editor
-// was unknown - the platform opener ran instead of the user's editor, and
-// the line/column were silently dropped.
 type editorLaunchInfo struct {
-	platformOpener bool // the user's editor was NOT launched; system opener was
-	lineDropped    bool // a requested line/col could not be passed through
+	platformOpener bool
+	lineDropped    bool
 }
 
-// buildEditorCommand constructs an exec.Cmd for the given editor, file, and
-// optional line/column. Returns nil if the editor/platform combo is unsupported.
 func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLaunchInfo) {
 	base := strings.ToLower(filepath.Base(editor))
 	hasLine := line > 0
 
-	// Build the argument list based on the editor type.
 	switch base {
 	case "code", "cursor", "zed", "code-insiders":
-		// VS Code family: editor --goto file:line:column
+
 		args := []string{}
 		if hasLine {
 			loc := fmt.Sprintf("%s:%d", file, line)
@@ -250,7 +209,7 @@ func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLa
 		return exec.Command(editor, args...), editorLaunchInfo{}
 
 	case "subl":
-		// Sublime Text: subl file:line:column
+
 		if hasLine {
 			loc := fmt.Sprintf("%s:%d", file, line)
 			if col > 0 {
@@ -261,14 +220,14 @@ func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLa
 		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "idea", "webstorm", "goland", "pycharm", "phpstorm", "rubymine", "clion":
-		// JetBrains IDEs: editor --line N file
+
 		if hasLine {
 			return exec.Command(editor, "--line", fmt.Sprintf("%d", line), file), editorLaunchInfo{}
 		}
 		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "nvim", "vim":
-		// Vim/Neovim: editor +line file  (or +line,column for nvim)
+
 		if hasLine {
 			flag := fmt.Sprintf("+%d", line)
 			if col > 0 && base == "nvim" {
@@ -279,22 +238,20 @@ func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLa
 		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "emacs":
-		// Emacs: editor +N file
+
 		if hasLine {
 			return exec.Command(editor, fmt.Sprintf("+%d", line), file), editorLaunchInfo{}
 		}
 		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "nano", "micro", "jed", "joe":
-		// Terminal editors that support +line
+
 		if hasLine {
 			return exec.Command(editor, fmt.Sprintf("+%d", line), file), editorLaunchInfo{}
 		}
 		return exec.Command(editor, file), editorLaunchInfo{}
 	}
 
-	// Fallback (#1697 case 2): unknown editor. Report honestly what happens
-	// instead of letting the caller claim the user's editor opened at line N.
 	info := editorLaunchInfo{lineDropped: line > 0}
 	switch runtime.GOOS {
 	case "darwin":
@@ -308,15 +265,13 @@ func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLa
 			info.platformOpener = true
 			return exec.Command(path, file), info
 		}
-		// No platform opener: launch the editor bare (line still dropped).
+
 		return exec.Command(editor, file), info
 	}
 }
 
-// startDetached launches the command in a detached process so it doesn't
-// block the calling goroutine or get killed when ggcode exits.
 func startDetached(cmd *exec.Cmd) error {
-	// Don't inherit stdin/stdout/stderr — the editor manages its own I/O.
+
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -326,10 +281,7 @@ func startDetached(cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// #1673: detached (setsid/DETACHED_PROCESS) children are STILL our
-	// children - without a Wait, every editor launch leaked a zombie
-	// until ggcode exited. Reap in the background like the desktop-control
-	// runAppResult path does.
+
 	safego.Go("tool.openEditor.reap", func() { _ = cmd.Wait() })
 	return nil
 }

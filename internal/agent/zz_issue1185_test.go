@@ -2,10 +2,6 @@ package agent
 
 import "testing"
 
-// #1185: the nil-deref detector must model && short-circuit evaluation.
-// `v != nil && v.Field != ""` is the canonical Go nil guard: the right
-// conjunct only evaluates when v is non-nil, and the if body likewise.
-// staticcheck SA5011 stays silent on this idiom; so must we.
 func TestNilDerefLandShortCircuitGuardSuppressed(t *testing.T) {
 	src := `package p
 
@@ -24,8 +20,6 @@ func f() {
 	}
 }
 
-// Guard AFTER the deref: `v.Field != "" && v != nil` evaluates v.Field
-// unguarded (short-circuit only protects the RIGHT side). Must still report.
 func TestNilDerefLandDerefBeforeGuardStillReports(t *testing.T) {
 	src := `package p
 
@@ -42,8 +36,6 @@ func f() {
 	}
 }
 
-// err == nil as a conjunct guards every value returned alongside it, for
-// later conjuncts AND the if body.
 func TestNilDerefLandErrNilConjunctSuppresses(t *testing.T) {
 	src := `package p
 
@@ -60,8 +52,6 @@ func f() {
 	}
 }
 
-// `err != nil && v.Field != ""` keeps the risk: values are likely nil when
-// the error is non-nil. Must still report.
 func TestNilDerefLandErrNotNilKeepsRisk(t *testing.T) {
 	src := `package p
 
@@ -78,8 +68,6 @@ func f() {
 	}
 }
 
-// || does not short-circuit into a guard: `v.Field != "" || v != nil`
-// evaluates v.Field with v at risk. Reporting stays (unchanged #1068 path).
 func TestNilDerefLorNotAGuard(t *testing.T) {
 	src := `package p
 
@@ -96,8 +84,6 @@ func f() {
 	}
 }
 
-// The else branch of an && condition proves nothing: NOT(a && b) permits any
-// conjunct to be false, so a deref in else stays risky.
 func TestNilDerefLandElseBranchStaysRisky(t *testing.T) {
 	src := `package p
 
@@ -116,7 +102,6 @@ func f() {
 	}
 }
 
-// Parenthesized && grouping must not hide the guard: (a && b) && c flattens.
 func TestNilDerefLandParenGroupFlattened(t *testing.T) {
 	src := `package p
 

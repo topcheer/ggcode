@@ -8,15 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestNewAgentInitializesAllStateFields is a regression guard for issue #341:
-// detector state fields declared on the Agent struct but never initialized in
-// the NewAgent literal silently short-circuit (all wrapper methods have
-// nil guards), so the detector never fires in production. This test walks
-// every Agent struct field via reflection and asserts that pointer- and
-// interface-typed fields are non-nil after construction.
-//
-// Fields intentionally nil at construction belong in nilFieldsAllowed with a
-// reason — they are lazily initialized, injected via setters, or are optional.
 func TestNewAgentInitializesAllStateFields(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -32,9 +23,6 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		t.Fatal("NewAgent returned nil")
 	}
 
-	// nilFieldsAllowed lists fields that are legitimately nil right after
-	// NewAgent, with the reason. Every entry must be justified — do not add
-	// fields here just to make the test pass for a detector state.
 	nilFieldsAllowed := map[string]string{
 		"systemPromptInjector":      "optional callback, injected via setter",
 		"systemPromptLayers":        "optional named prompt layers (e.g. resume reconciliation), registered via AddSystemPromptLayer",
@@ -74,9 +62,6 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"wfEngine":                  "r26 workflow-spec engine, built lazily by workflowEngineLazy once workingDir is known (guarded; nil = no workflow-spec.json, inert)",
 	}
 
-	// Dereference via the pointer (ValueOf(a).Elem()) instead of copying
-	// the struct with ValueOf(*a): Agent embeds a sync.RWMutex and vet's
-	// copylocks flags by-value reflection copies.
 	v := reflect.ValueOf(a).Elem()
 	typ := v.Type()
 	for i := 0; i < typ.NumField(); i++ {
@@ -84,9 +69,6 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		fv := v.Field(i)
 		kind := fv.Kind()
 
-		// Check pointer, interface, map, slice, func, and channel kinds.
-		// Note: nil-able value kinds (maps, slices, funcs, channels) that are
-		// core state should also be initialized; allow-list covers the rest.
 		var isNilable bool
 		switch kind {
 		case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:

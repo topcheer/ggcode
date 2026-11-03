@@ -54,8 +54,7 @@ func TestExecuteVerifyCommand_MissingBinarySkips(t *testing.T) {
 	a := &Agent{
 		workingDir: ".",
 	}
-	// A command whose binary does not exist should be skipped (Passed=true),
-	// not treated as a verification failure.
+
 	result := a.executeVerifyCommand(context.Background(), "nonexistent_tool_xyz123 --flag")
 	if !result.Passed {
 		t.Errorf("expected pass (skip) for missing binary, got errors: %v", result.Errors)
@@ -69,12 +68,12 @@ func TestExecuteVerifyCommand_OutputTruncated(t *testing.T) {
 	a := &Agent{
 		workingDir: ".",
 	}
-	// Generate output longer than 2000 chars.
+
 	result := a.executeVerifyCommand(context.Background(), "yes 'x' | head -5000")
 	if !result.Passed {
 		t.Errorf("expected pass, got errors: %v", result.Errors)
 	}
-	if len(result.Output) > 2100 { // 2000 + "..." slack
+	if len(result.Output) > 2100 {
 		t.Errorf("output not truncated: %d chars", len(result.Output))
 	}
 }
@@ -128,14 +127,7 @@ func TestExecuteVerifyCommand_PytestNoTestsSkips(t *testing.T) {
 	a := &Agent{
 		workingDir: ".",
 	}
-	// pytest exits 5 when no tests are collected ("no tests ran"). That is
-	// "nothing to verify", not a code defect - must be a skip, not a failure
-	// that would inject errors and trigger auto-repair loops.
-	// #4402: the old shape `... 2>/dev/null || exit 5` synthesized exit 5
-	// via a COMPOUND command - exactly the silent-green-chain pattern the
-	// new guard rejects (`go test; pytest` swallowing a real failure).
-	// Use a stub pytest binary in PATH instead: a SIMPLE command that
-	// exits 5, preserving the integration semantics.
+
 	binDir := t.TempDir()
 	stub := filepath.Join(binDir, "pytest")
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 5\n"), 0755); err != nil {
@@ -156,10 +148,7 @@ func TestExecuteVerifyCommand_NpmMissingScriptStillFails(t *testing.T) {
 	a := &Agent{
 		workingDir: ".",
 	}
-	// Guard the isNonFailureExit whitelist: exit 1 from npm (missing script
-	// or real failure) is NOT whitelisted at executeVerifyCommand level.
-	// The npm missing-script case is handled earlier by packageJSONHasScript
-	// in detectBuildSystem, so any npm failure that reaches here is real.
+
 	result := a.executeVerifyCommand(context.Background(), "npm run definitely-missing-script-xyz")
 	if result.Passed {
 		t.Error("npm missing-script at execute level should surface as failure (handled upstream by detection)")

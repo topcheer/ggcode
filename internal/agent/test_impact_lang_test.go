@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestLangProfileForFile verifies that language detection works for all
-// supported extensions and returns nil for unsupported types.
 func TestLangProfileForFile(t *testing.T) {
 	tests := []struct {
 		path string
@@ -50,7 +48,6 @@ func TestLangProfileForFile(t *testing.T) {
 	}
 }
 
-// TestIsSupportedSourceFile checks the source file classifier.
 func TestIsSupportedSourceFile(t *testing.T) {
 	tests := []struct {
 		path string
@@ -64,11 +61,11 @@ func TestIsSupportedSourceFile(t *testing.T) {
 		{"foo.rb", true},
 		{"Foo.swift", true},
 		{"foo.dart", true},
-		// Test files should be excluded
+
 		{"foo_test.go", false},
 		{"foo.test.ts", false},
 		{"test_foo.py", false},
-		// Non-code files
+
 		{"foo.txt", false},
 		{"foo.md", false},
 		{"README", false},
@@ -83,41 +80,40 @@ func TestIsSupportedSourceFile(t *testing.T) {
 	}
 }
 
-// TestIsTestFile checks that test file detection works for all languages.
 func TestIsTestFile(t *testing.T) {
 	tests := []struct {
 		lang string
 		file string
 		want bool
 	}{
-		// Go
+
 		{"go", "foo_test.go", true},
 		{"go", "foo.go", false},
-		// TypeScript/JavaScript
+
 		{"typescript", "foo.test.ts", true},
 		{"typescript", "foo.spec.tsx", true},
 		{"typescript", "foo.test.js", true},
 		{"typescript", "foo.spec.jsx", true},
 		{"typescript", "foo.ts", false},
-		// Python
+
 		{"python", "test_foo.py", true},
 		{"python", "foo_test.py", true},
 		{"python", "foo.py", false},
-		// Rust
+
 		{"rust", "foo_test.rs", true},
 		{"rust", "foo.rs", false},
-		// Java
+
 		{"java", "FooTest.java", true},
 		{"java", "FooTests.java", true},
 		{"java", "Foo.java", false},
-		// Ruby
+
 		{"ruby", "foo_test.rb", true},
 		{"ruby", "foo_spec.rb", true},
 		{"ruby", "foo.rb", false},
-		// Swift
+
 		{"swift", "FooTests.swift", true},
 		{"swift", "Foo.swift", false},
-		// Dart
+
 		{"dart", "foo_test.dart", true},
 		{"dart", "foo.dart", false},
 	}
@@ -141,22 +137,18 @@ func TestIsTestFile(t *testing.T) {
 	}
 }
 
-// TestHasTestFileTypeScript tests test file detection for TypeScript projects.
 func TestHasTestFileTypeScript(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src")
 	os.MkdirAll(srcDir, 0o755)
 
-	// Create foo.ts
 	srcFile := filepath.Join(srcDir, "foo.ts")
 	os.WriteFile(srcFile, []byte("export function foo() {}"), 0o644)
 
-	// No test file yet
 	if hasTestFile(dir, "src/foo.ts") != "" {
 		t.Error("expected no test file found")
 	}
 
-	// Create foo.test.ts
 	testFile := filepath.Join(srcDir, "foo.test.ts")
 	os.WriteFile(testFile, []byte("test('foo', () => {})"), 0o644)
 
@@ -165,20 +157,16 @@ func TestHasTestFileTypeScript(t *testing.T) {
 	}
 }
 
-// TestHasTestFilePython tests test file detection for Python projects.
 func TestHasTestFilePython(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create calculator.py
 	srcFile := filepath.Join(dir, "calculator.py")
 	os.WriteFile(srcFile, []byte("def add(a, b): return a + b"), 0o644)
 
-	// No test file
 	if hasTestFile(dir, "calculator.py") != "" {
 		t.Error("expected no test file found")
 	}
 
-	// Create test_calculator.py
 	testFile := filepath.Join(dir, "test_calculator.py")
 	os.WriteFile(testFile, []byte("def test_add(): pass"), 0o644)
 
@@ -187,19 +175,16 @@ func TestHasTestFilePython(t *testing.T) {
 	}
 }
 
-// TestHasTestFileDart tests test file detection for Dart projects.
 func TestHasTestFileDart(t *testing.T) {
 	dir := t.TempDir()
 
 	srcFile := filepath.Join(dir, "utils.dart")
 	os.WriteFile(srcFile, []byte("void greet() {}"), 0o644)
 
-	// No test
 	if hasTestFile(dir, "utils.dart") != "" {
 		t.Error("expected no test file found")
 	}
 
-	// Create utils_test.dart
 	testFile := filepath.Join(dir, "utils_test.dart")
 	os.WriteFile(testFile, []byte("test('greet', () {})"), 0o644)
 
@@ -208,7 +193,6 @@ func TestHasTestFileDart(t *testing.T) {
 	}
 }
 
-// TestParseExportedFuncsTypeScript tests regex-based function extraction.
 func TestParseExportedFuncsTypeScript(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "service.ts")
@@ -238,7 +222,7 @@ export const VERSION = '1.0'
 	os.WriteFile(srcFile, []byte(content), 0o644)
 
 	funcs := parseExportedFuncsMulti(srcFile)
-	// Should find: getUser, fetchUser, UserService, findById, VERSION
+
 	names := make(map[string]bool)
 	for _, f := range funcs {
 		names[f.DisplayName] = true
@@ -249,13 +233,12 @@ export const VERSION = '1.0'
 	if !names["fetchUser"] {
 		t.Errorf("expected fetchUser in %v", names)
 	}
-	// Should NOT include internal
+
 	if names["internal"] {
 		t.Error("internal should not be detected as exported")
 	}
 }
 
-// TestParseExportedFuncsPython tests regex-based function extraction for Python.
 func TestParseExportedFuncsPython(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "service.py")
@@ -285,14 +268,14 @@ def test_something():
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find get_user, fetch_user, find_by_id
+
 	if !names["get_user"] {
 		t.Errorf("expected get_user in %v", names)
 	}
 	if !names["fetch_user"] {
 		t.Errorf("expected fetch_user in %v", names)
 	}
-	// Should NOT include _internal, __init__, test_something
+
 	if names["_internal"] {
 		t.Error("_internal should be skipped")
 	}
@@ -304,7 +287,6 @@ def test_something():
 	}
 }
 
-// TestParseExportedFuncsRust tests regex-based function extraction for Rust.
 func TestParseExportedFuncsRust(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "service.rs")
@@ -335,7 +317,7 @@ impl UserService {
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find: get_user, fetch_user, find_by_id
+
 	if !names["get_user"] {
 		t.Errorf("expected get_user in %v", names)
 	}
@@ -345,13 +327,12 @@ impl UserService {
 	if !names["find_by_id"] {
 		t.Errorf("expected find_by_id in %v", names)
 	}
-	// Should NOT include internal
+
 	if names["internal"] {
 		t.Error("internal should not be detected as exported")
 	}
 }
 
-// TestParseExportedFuncsJava tests regex-based function extraction for Java.
 func TestParseExportedFuncsJava(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "UserService.java")
@@ -385,7 +366,7 @@ func TestParseExportedFuncsJava(t *testing.T) {
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find: getUser, findById, deleteUser
+
 	if !names["getUser"] {
 		t.Errorf("expected getUser in %v", names)
 	}
@@ -395,13 +376,12 @@ func TestParseExportedFuncsJava(t *testing.T) {
 	if !names["deleteUser"] {
 		t.Errorf("expected deleteUser in %v", names)
 	}
-	// toString should be skipped
+
 	if names["toString"] {
 		t.Error("toString should be skipped")
 	}
 }
 
-// TestParseExportedFuncsRuby tests regex-based function extraction for Ruby.
 func TestParseExportedFuncsRuby(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "service.rb")
@@ -428,14 +408,14 @@ end
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find: get_user, find_user
+
 	if !names["get_user"] {
 		t.Errorf("expected get_user in %v", names)
 	}
 	if !names["find_user"] {
 		t.Errorf("expected find_user in %v", names)
 	}
-	// initialize and test_something should be skipped
+
 	if names["initialize"] {
 		t.Error("initialize should be skipped")
 	}
@@ -444,7 +424,6 @@ end
 	}
 }
 
-// TestParseExportedFuncsSwift tests regex-based function extraction for Swift.
 func TestParseExportedFuncsSwift(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "UserService.swift")
@@ -473,7 +452,7 @@ func TestParseExportedFuncsSwift(t *testing.T) {
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find: getUser, fetchUser, shared
+
 	if !names["getUser"] {
 		t.Errorf("expected getUser in %v", names)
 	}
@@ -485,7 +464,6 @@ func TestParseExportedFuncsSwift(t *testing.T) {
 	}
 }
 
-// TestParseExportedFuncsDart tests regex-based function extraction for Dart.
 func TestParseExportedFuncsDart(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "service.dart")
@@ -514,7 +492,7 @@ class Service {
 	for _, f := range funcs {
 		names[f.DisplayName] = true
 	}
-	// Should find: getUser, fetchUser, findUser
+
 	if !names["getUser"] {
 		t.Errorf("expected getUser in %v", names)
 	}
@@ -524,14 +502,12 @@ class Service {
 	if !names["findUser"] {
 		t.Errorf("expected findUser in %v", names)
 	}
-	// main should be skipped
+
 	if names["main"] {
 		t.Error("main should be skipped")
 	}
 }
 
-// TestUntestedExportedFuncsMultiTypeScript tests function-level coverage gap
-// detection for TypeScript: a file with exported functions and no test file.
 func TestUntestedExportedFuncsMultiTypeScript(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "api.ts")
@@ -540,20 +516,18 @@ export function getUsers() { return [] }
 export function deleteUser(id) { return true }
 `), 0o644)
 
-	// No test file — all exported functions should be untested
 	untested := untestedExportedFuncsMulti(dir, "api.ts")
 	if len(untested) != 2 {
 		t.Errorf("expected 2 untested functions, got %d: %v", len(untested), untested)
 	}
 
-	// Create a test file that covers one function
 	testFile := filepath.Join(dir, "api.test.ts")
 	os.WriteFile(testFile, []byte(`
 test('getUsers returns empty', () => {})
 `), 0o644)
 
 	untested = untestedExportedFuncsMulti(dir, "api.ts")
-	// deleteUser should still be untested
+
 	found := false
 	for _, name := range untested {
 		if name == "deleteUser" {
@@ -565,7 +539,6 @@ test('getUsers returns empty', () => {})
 	}
 }
 
-// TestUntestedExportedFuncsMultiPython tests function-level coverage for Python.
 func TestUntestedExportedFuncsMultiPython(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "calc.py")
@@ -580,13 +553,11 @@ def _internal():
     pass
 `), 0o644)
 
-	// No test file — all exported functions should be untested
 	untested := untestedExportedFuncsMulti(dir, "calc.py")
 	if len(untested) < 2 {
 		t.Errorf("expected at least 2 untested functions, got %d: %v", len(untested), untested)
 	}
 
-	// Create test file covering add
 	testFile := filepath.Join(dir, "test_calc.py")
 	os.WriteFile(testFile, []byte(`
 def test_add():
@@ -594,7 +565,7 @@ def test_add():
 `), 0o644)
 
 	untested = untestedExportedFuncsMulti(dir, "calc.py")
-	// multiply should still be untested
+
 	found := false
 	for _, name := range untested {
 		if name == "multiply" {
@@ -606,7 +577,6 @@ def test_add():
 	}
 }
 
-// TestTargetedVerifyCommandMulti tests targeted test commands per language.
 func TestTargetedVerifyCommandMulti(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -736,7 +706,6 @@ func TestTargetedVerifyCommandMulti(t *testing.T) {
 	}
 }
 
-// TestDetectJSRunner verifies JavaScript test runner detection.
 func TestDetectJSRunner(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -784,7 +753,6 @@ func TestDetectJSRunner(t *testing.T) {
 	}
 }
 
-// TestChangedDirsForLang tests the directory grouping helper.
 func TestChangedDirsForLang(t *testing.T) {
 	files := []string{
 		"src/api/user.ts",
@@ -804,7 +772,6 @@ func TestChangedDirsForLang(t *testing.T) {
 		}
 	}
 
-	// Go files should return empty for typescript
 	goDirs := changedDirsForLang(files, "go")
 	wantGo := []string{"internal/agent", "internal/tool"}
 	if len(goDirs) != len(wantGo) {
@@ -812,7 +779,6 @@ func TestChangedDirsForLang(t *testing.T) {
 	}
 }
 
-// TestParseTestFuncNamesMultiTypeScript tests test name extraction from TS.
 func TestParseTestFuncNamesMultiTypeScript(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "foo.test.ts")
@@ -839,7 +805,6 @@ function helper() {}
 	}
 }
 
-// TestParseTestFuncNamesMultiPython tests test name extraction from Python.
 func TestParseTestFuncNamesMultiPython(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "test_foo.py")
@@ -868,7 +833,6 @@ def helper():
 	}
 }
 
-// TestParseTestFuncNamesMultiRust tests test name extraction from Rust.
 func TestParseTestFuncNamesMultiRust(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "foo_test.rs")
@@ -901,7 +865,6 @@ fn validates_input() {
 	}
 }
 
-// TestParseTestFuncNamesMultiJava tests test name extraction from Java.
 func TestParseTestFuncNamesMultiJava(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "FooTest.java")
@@ -938,12 +901,10 @@ func TestParseTestFuncNamesMultiJava(t *testing.T) {
 	}
 }
 
-// TestIssue1204_DartControlFlowFiltering verifies that control-flow keywords
-// are filtered out from Dart function extraction.
 func TestIssue1204_DartControlFlowFiltering(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "test.dart")
-	// Contains control-flow statements that might match the regex
+
 	content := `void foo() {}
 void bar() {}
 
@@ -961,7 +922,6 @@ switch (v) {}
 		names[f.DisplayName] = true
 	}
 
-	// Should find foo and bar
 	if !names["foo"] {
 		t.Error("expected foo")
 	}
@@ -969,7 +929,6 @@ switch (v) {}
 		t.Error("expected bar")
 	}
 
-	// Should NOT find control-flow keywords
 	keywords := []string{"if", "for", "while", "switch"}
 	for _, kw := range keywords {
 		if names[kw] {
@@ -978,8 +937,6 @@ switch (v) {}
 	}
 }
 
-// TestIssue1204_TypeScriptControlFlowFiltering verifies that control-flow keywords
-// are filtered out from TypeScript function extraction.
 func TestIssue1204_TypeScriptControlFlowFiltering(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "test.ts")
@@ -1000,7 +957,6 @@ switch (v) {}
 		names[f.DisplayName] = true
 	}
 
-	// Should find foo and bar
 	if !names["foo"] {
 		t.Error("expected foo")
 	}
@@ -1008,7 +964,6 @@ switch (v) {}
 		t.Error("expected bar")
 	}
 
-	// Should NOT find control-flow keywords
 	keywords := []string{"if", "for", "while", "switch"}
 	for _, kw := range keywords {
 		if names[kw] {
@@ -1017,10 +972,6 @@ switch (v) {}
 	}
 }
 
-// TestIssue1204_TokenBoundaryMatching verifies that function-to-test matching
-// uses contiguous token-boundary matching: "GetUser" normalizes to tokens
-// [get user], which "test_get_user" contains contiguously. "delete_user"
-// covers nothing (its tokens [delete user] contain no function sequence).
 func TestIssue1204_TokenBoundaryMatching(t *testing.T) {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "api.ts")
@@ -1037,7 +988,6 @@ test("delete_user", () => {});       // Should NOT match anything
 
 	untested := untestedExportedFuncsMulti(dir, "api.ts")
 
-	// GetUser should be tested (contiguous [get user] in test_get_user)
 	foundGetUser := false
 	for _, name := range untested {
 		if name == "GetUser" {
@@ -1048,7 +998,6 @@ test("delete_user", () => {});       // Should NOT match anything
 		t.Error("GetUser should be tested (matched by test_get_user)")
 	}
 
-	// SaveUser should be untested (no contiguous [save user] sequence)
 	foundSaveUser := false
 	for _, name := range untested {
 		if name == "SaveUser" {
@@ -1060,10 +1009,6 @@ test("delete_user", () => {});       // Should NOT match anything
 	}
 }
 
-// Regression for #1502: the Java TestFilePaths built src/main/test/java from
-// src/main/java/com/foo (main unstripped, package path lost), so every Java
-// source file was branded 'no tests'. The Maven test tree must mirror the
-// main tree keeping the package path.
 func TestHasTestFileJavaMavenLayout(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src", "main", "java", "com", "foo")
@@ -1084,18 +1029,11 @@ func TestHasTestFileJavaMavenLayout(t *testing.T) {
 	}
 }
 
-// Regression for #1878 (residual of #1778 case 6): git status yields
-// REPO-RELATIVE paths (lib/foo.dart) while callers pass an ABSOLUTE
-// workingDir; filepath.Rel errors on that mix, so the dart lib/ -> test/
-// mapping never fired on the standard call path. The mapping must also
-// mirror the lib/ sub-tree under test/ (Flutter convention).
 func TestHasTestFileDartFlutterLayout(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "lib", "src", "models"), 0o755)
 	os.MkdirAll(filepath.Join(dir, "test", "src", "models"), 0o755)
 
-	// Relative srcFile (as changedSourceFilesFromGit produces) + absolute
-	// workingDir (as the agent passes) - the exact inert combination.
 	srcRel := filepath.Join("lib", "src", "models", "user.dart")
 	os.WriteFile(filepath.Join(dir, srcRel), []byte("class User {}"), 0o644)
 
@@ -1108,7 +1046,6 @@ func TestHasTestFileDartFlutterLayout(t *testing.T) {
 		t.Fatal("Flutter-mirrored test/src/models/user_test.dart must be found from relative srcFile + absolute workingDir")
 	}
 
-	// Top-level lib file maps to root test/.
 	srcTop := filepath.Join("lib", "main.dart")
 	os.WriteFile(filepath.Join(dir, srcTop), []byte("void main() {}"), 0o644)
 	if hasTestFile(dir, srcTop) != "" {

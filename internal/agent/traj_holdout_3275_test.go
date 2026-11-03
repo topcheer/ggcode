@@ -5,23 +5,14 @@ import (
 	"time"
 )
 
-// #3275 regression probes. The r462-era fixtures seeded candidates without
-// injection-arm history and single-candidate categories - exactly the shapes
-// the fix removes from rotation - so these tests assert the NEW contract:
-// never-injected insights and lone candidates are never claimed, and verdict
-// releases persist as suppression windows instead of row deletion.
-
 func hold3275Learning(cat, typ string, conf float64, injRuns int) trajectoryLearning {
 	l := holdoutLearning(cat, typ, conf)
-	// Full success on the injection arm: keeps the entry clear of the r461
-	// effectivenessGated retirement (0% success + >= min samples gates).
+
 	l.InjectedRuns = injRuns
 	l.AfterSuccess = injRuns
 	return l
 }
 
-// (a) never-injected insights must not be claimed - claiming one froze its
-// InjectedRuns at 0 and deadlocked the verdict guard (>= 3 needed) forever.
 func TestHoldout3275_NeverInjectedNotClaimed(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -39,9 +30,6 @@ func TestHoldout3275_NeverInjectedNotClaimed(t *testing.T) {
 	}
 }
 
-// (b) a single-candidate category (the production norm: 1:1 category/type
-// consolidation leaves exactly one key per category) is skipped - slot =
-// day%1 == 0 claimed the sole insight forever with no counterfactual value.
 func TestHoldout3275_SingleCandidateCategorySkipped(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -58,8 +46,6 @@ func TestHoldout3275_SingleCandidateCategorySkipped(t *testing.T) {
 	}
 }
 
-// (c) a released key (suppression window) must not be re-claimed when its
-// slot rotates back - the pre-fix deletion-based release was a no-op.
 func TestHoldout3275_ReleasedNotReclaimed(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -79,8 +65,6 @@ func TestHoldout3275_ReleasedNotReclaimed(t *testing.T) {
 		claimed = k
 	}
 
-	// Simulate the verdict release exactly as recordHoldoutOutcome now does:
-	// persist the row with a suppression window.
 	hp := trajHoldoutPath(dir)
 	ledger, _ := loadHoldoutLedger(hp)
 	for i := range ledger {
@@ -90,12 +74,11 @@ func TestHoldout3275_ReleasedNotReclaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Same slot again (day pinned): the released key must not be re-claimed.
 	held2 := trajHoldoutSelect(dir, entries)
 	if held2[claimed] {
 		t.Fatalf("released key re-claimed: %v", held2)
 	}
-	// Rotation to a different slot (day 101) resumes normally.
+
 	trajHoldoutDay = func() int64 { return 101 }
 	held3 := trajHoldoutSelect(dir, entries)
 	if len(held3) != 1 || held3[claimed] {
@@ -103,10 +86,9 @@ func TestHoldout3275_ReleasedNotReclaimed(t *testing.T) {
 	}
 }
 
-// Verdict release keeps the ledger row with a future suppression window.
 func TestHoldout3275_VerdictReleasePersistsRow(t *testing.T) {
 	dir := t.TempDir()
-	// Injection arm 3/3 vs holdout arm 1/5 => delta 0.6 >= 0.10 => release.
+
 	s := holdoutTestState(t, dir, hold3275Learning("build", "pattern", 0.9, 3))
 	if err := s.rewriteAllLocked(func(existing []trajectoryLearning, _ error) ([]trajectoryLearning, error) {
 		existing[0].InjectedRuns = 3
@@ -128,9 +110,6 @@ func TestHoldout3275_VerdictReleasePersistsRow(t *testing.T) {
 	}
 }
 
-// End-to-end: two eligible candidates, one held; held entry's r461 counters
-// stay at zero while the injected sibling accumulates (arm isolation holds
-// under the new eligibility rules).
 func TestHoldout3275_ArmIsolationUnderNewRules(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -151,15 +130,12 @@ func TestHoldout3275_ArmIsolationUnderNewRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, l := range ls {
-		if l.InjectedRuns != 3 { // unchanged from the seed value
+		if l.InjectedRuns != 3 {
 			t.Fatalf("control arm must not touch injection counters: %+v", l)
 		}
 	}
 }
 
-// #3277: a cancelled run must clear BOTH per-run sets - a stale
-// holdoutThisRun would inflate the next completed run's HoldoutRuns for
-// keys that run actually injected (double-arm counting).
 func TestHoldout3277_CancelClearsHoldoutSet(t *testing.T) {
 	dir := t.TempDir()
 	s := holdoutTestState(t, dir)

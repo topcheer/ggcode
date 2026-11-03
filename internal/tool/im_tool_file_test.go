@@ -1,8 +1,5 @@
 package tool
 
-// #3316 tool-layer probes: send_file dispatch to the FileSender capability
-// and the legacy path-text fallback for unsupported adapters.
-
 import (
 	"context"
 	"encoding/json"
@@ -12,14 +9,10 @@ import (
 	"testing"
 )
 
-// SendFileDirect default: capability absent (existing tests keep their
-// legacy path-text expectations). The interface grew in #3316.
 func (m *mockIMManager) SendFileDirect(ctx context.Context, adapter string, file IMOutboundFile, caption string) (bool, error) {
 	return false, nil
 }
 
-// fileCapableManager embeds the existing mock and adds SendFileDirect
-// capture (the interface grew in #3316; the base mock keeps its defaults).
 type fileCapableManager struct {
 	mockIMManager
 	supported bool
@@ -85,14 +78,14 @@ func TestIssue3316_ToolSendFileFallsBackToPathText(t *testing.T) {
 	if err := os.WriteFile(logf, []byte("line"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := newFileToolManager(t, false) // capability absent
+	m := newFileToolManager(t, false)
 	tool := IMTool{Manager: m}
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"send_file","adapter":"probe","path":"`+logf+`"}`))
 	if err != nil || res.IsError {
 		t.Fatalf("send_file failed: err=%v res=%+v", err, res)
 	}
-	// Fallback: the message text carries the path (SendDirect was used).
+
 	if m.lastSendAdapter != "probe" {
 		t.Fatalf("unsupported adapter must fall back to SendDirect, last adapter=%q", m.lastSendAdapter)
 	}

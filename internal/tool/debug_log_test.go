@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #1320: export category/keyword were joined into the filename unsanitized;
-// a keyword like "../../../etc/foo" escaped the temp dir and
-// created/truncated an arbitrary .log path.
 func TestDebugLogSanitizeNamePart(t *testing.T) {
 	hostile := []string{
 		"../../../etc/foo",
@@ -35,7 +32,6 @@ func TestDebugLogSanitizeNamePart(t *testing.T) {
 		t.Errorf("normal category mangled: %q", got)
 	}
 
-	// End-to-end: the assembled export path must stay inside the temp dir.
 	ts := "20060102-150405"
 	filename := fmt.Sprintf("ggcode-debug-%s-%s.log", ts,
 		sanitizeLogNamePart("../../../etc/foo"))

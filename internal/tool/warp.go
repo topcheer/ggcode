@@ -9,14 +9,6 @@ import (
 	"time"
 )
 
-// WarpTool lets the agent manage Warp terminal panes, tabs, and windows
-// when ggcode is running inside Warp.
-//
-// Platform support:
-//   - macOS: Uses System Events menu item clicks (via osascript)
-//   - Linux: Not yet supported (Warp on Linux has limited automation surface)
-//
-// See warp_darwin.go for the implementation.
 type WarpTool struct {
 	WorkingDir string
 }
@@ -89,7 +81,6 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "action is required"}, nil
 	}
 
-	// Status doesn't require Warp to be running — it reports detection.
 	if action == "status" {
 		return w.executeStatus(), nil
 	}
@@ -98,7 +89,6 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "Warp is not detected (TERM_PROGRAM != WarpTerminal). This tool only works when ggcode runs inside the Warp terminal emulator."}, nil
 	}
 
-	// Menu-based actions
 	menuActions := map[string]string{
 		"new_tab":           "New Terminal Tab",
 		"new_agent_tab":     "New Agent Tab",
@@ -130,7 +120,7 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	menuItem, isMenu := menuActions[action]
 	if isMenu {
 		result := w.clickMenu(ctx, menuItem)
-		// If a command was provided and the action creates a new surface, type the command
+
 		if result.IsError == false && args.Command != "" {
 			surfaceActions := map[string]bool{
 				"new_tab":       true,
@@ -142,11 +132,7 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 				"split_up":      true,
 			}
 			if surfaceActions[action] {
-				// Brief delay to let the new surface get focus
-				// #1348: the surface was created but typing/enter failures were
-				// silently discarded - the LLM believed the command had run.
-				// Surface was created (menu click succeeded), so degrade to a
-				// warning appended to the result instead of a bare error.
+
 				typeRes := w.executeInput(ctx, args.Command)
 				enterRes := Result{}
 				if !typeRes.IsError {
@@ -176,15 +162,10 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 }
 
-// ── Detection (shared) ─────────────────────────────────────────────────────
-
 func warpAvailable() bool {
 	return os.Getenv("TERM_PROGRAM") == "WarpTerminal"
 }
 
-// warpSleep pauses briefly (letting a new surface gain focus) while
-// remaining cancellable: an automation-permission dialog can hang the
-// osascript child, and the tool call must not outlive its context (#1348).
 func warpSleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -195,8 +176,6 @@ func warpSleep(ctx context.Context, d time.Duration) error {
 		return ctx.Err()
 	}
 }
-
-// ── Utility (shared) ────────────────────────────────────────────────────────
 
 func (w *WarpTool) workingDir() string {
 	if w != nil && strings.TrimSpace(w.WorkingDir) != "" {

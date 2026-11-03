@@ -17,7 +17,7 @@ func TestSpillBelowMinReturnsEmpty(t *testing.T) {
 
 func TestSpillWritesFullContent(t *testing.T) {
 	o := newOutputOffloader()
-	// 200KB content whose middle section contains a unique marker.
+
 	head := strings.Repeat("head line\n", 2000)
 	mid := "UNIQUE_MIDDLE_MARKER needle-42\n" + strings.Repeat("mid\n", 40000)
 	tail := strings.Repeat("tail line\n", 2000)
@@ -91,7 +91,7 @@ func TestSpillPrunesOldestBeyondCap(t *testing.T) {
 	if len(entries) > maxSpillFiles {
 		t.Fatalf("spill dir exceeds cap: %d files", len(entries))
 	}
-	// The first (oldest) spilled file must have been pruned.
+
 	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
 		t.Fatal("oldest spill file must be pruned when cap exceeded")
 	}

@@ -1,14 +1,5 @@
 package tool
 
-// Probes for the sa-216 detection-surface pair:
-//   - #3293: RunCommand.Clone() dropped the SecLedger pointer - every
-//     sub-agent registry clone (spawn_agent / trial_fork / skill / swarm /
-//     desktop) silently lost sandbox-probe detection for its run_command.
-//   - #3294: StartCommandTool had no ledger at all, and its three denial
-//     paths (block, bypass ask->allow, supervised ask-as-block) recorded
-//     nothing - background starts were invisible to the probing
-//     fingerprint.
-
 import (
 	"context"
 	"encoding/json"
@@ -26,9 +17,7 @@ func TestIssue3293_ClonePreservesSecLedger(t *testing.T) {
 	if clone.SecLedger != ledger {
 		t.Fatal("Clone() must carry the session SecLedger pointer - a dropped pointer blinds every sub-agent's denial accounting")
 	}
-	// The cloned tool's records land in the SAME session ledger and its
-	// escalation (threshold = 3 same-source denials) fires from the SHARED
-	// window regardless of which clone recorded.
+
 	for i := 0; i < 3; i++ {
 		clone.SecLedger.Record("gate", "block", "rm -rf /")
 	}
@@ -38,25 +27,19 @@ func TestIssue3293_ClonePreservesSecLedger(t *testing.T) {
 }
 
 func TestIssue3294_StartCommandDenialsRecorded(t *testing.T) {
-	// Needs a blocked-command shape the gate rejects and an ask shape it
-	// flags; use the gate's own classification to stay coupled to real
-	// rules rather than hardcoding strings the gate may retune.
+
 	gate := NewCommandGate()
 
 	blockCmd := "rm -rf /"
 	if !gate.Check(blockCmd).IsBlocked() {
 		t.Skip("gate no longer blocks the sample command; retune probe input")
 	}
-	// #4273: bare-symbol ask rules were removed; use a command that still
-	// asks under content rules (decode-then-shell).
+
 	askProbeCmd := "echo xxx | base64 -d | sh"
 	if !gate.Check(askProbeCmd).NeedsConfirmation() {
 		t.Skip("gate no longer asks for the sample command; retune probe input")
 	}
 
-	// Bypass mode: block + ask->allow both recorded (helpers shared with
-	// the #3282 probes: newBypassPolicy + askProbeCmd). A real manager is
-	// required: the Manager nil-guard precedes the gate.
 	ledger := &SecurityLedger{}
 	tk := StartCommandTool{Manager: NewCommandJobManager(t.TempDir()), Policy: newBypassPolicy(), SecLedger: ledger}
 	if _, err := tk.Execute(context.Background(), mustJSON3294(t, map[string]any{"command": blockCmd})); err != nil {
@@ -76,13 +59,11 @@ func TestIssue3294_StartCommandDenialsRecorded(t *testing.T) {
 	if kinds["block"] != 1 {
 		t.Fatalf("gate block via start_command must record kind=block, kinds=%v", kinds)
 	}
-	// #4273: bypass ask->allow is NOT recorded as a denial anymore.
+
 	if kinds["ask-allowed"] != 0 {
 		t.Fatalf("bypass ask->allow must not record kind=ask-allowed (#4273), kinds=%v", kinds)
 	}
 
-	// Supervised mode: ask becomes a hard denial for background jobs and
-	// is recorded under its own kind.
 	ledger2 := &SecurityLedger{}
 	tk2 := StartCommandTool{Manager: NewCommandJobManager(t.TempDir()), SecLedger: ledger2}
 	if _, err := tk2.Execute(context.Background(), mustJSON3294(t, map[string]any{"command": askProbeCmd})); err != nil {
@@ -96,7 +77,7 @@ func TestIssue3294_StartCommandDenialsRecorded(t *testing.T) {
 }
 
 func TestIssue3294_NilLedgerStillSafe(t *testing.T) {
-	tk := StartCommandTool{} // unwired: zero-value tool must not panic
+	tk := StartCommandTool{}
 	if _, err := tk.Execute(context.Background(), mustJSON3294(t, map[string]any{"command": "echo hi"})); err != nil {
 		t.Fatal(err)
 	}

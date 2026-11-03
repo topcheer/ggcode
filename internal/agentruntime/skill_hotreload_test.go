@@ -36,13 +36,11 @@ func TestSkillHotReloadComputeSignature(t *testing.T) {
 		t.Fatal("expected non-empty signature")
 	}
 
-	// Same files → same signature.
 	sig2 := w.computeSignature()
 	if sig1 != sig2 {
 		t.Fatal("expected identical signatures for unchanged files")
 	}
 
-	// Modify file content (must change mtime).
 	time.Sleep(10 * time.Millisecond)
 	_ = os.WriteFile(skillFile, []byte("---\nname: my-skill\n---\nmodified body"), 0o644)
 
@@ -59,7 +57,6 @@ func TestSkillHotReloadReloadsOnAdd(t *testing.T) {
 
 	sigBefore := w.computeSignature()
 
-	// Add a new skill directory + SKILL.md.
 	newSkill := filepath.Join(dir, "added-skill")
 	_ = os.MkdirAll(newSkill, 0o755)
 	_ = os.WriteFile(filepath.Join(newSkill, "SKILL.md"),
@@ -93,7 +90,7 @@ func TestSkillHotReloadReloadsOnDelete(t *testing.T) {
 func TestSkillHotReloadDetectsAndReloads(t *testing.T) {
 	projectDir := t.TempDir()
 	mgr := commands.NewManager(projectDir)
-	// Override interval for fast test.
+
 	w := &SkillHotReload{
 		manager:  mgr,
 		dirs:     mgr.WatchedDirs(),
@@ -108,13 +105,11 @@ func TestSkillHotReloadDetectsAndReloads(t *testing.T) {
 
 	w.Start(ctx)
 
-	// Find the project-local skills dir (e.g. projectDir/.ggcode/skills).
 	skillsDir := filepath.Join(projectDir, ".ggcode", "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Add a new skill after Start — should be picked up after reload.
 	newDir := filepath.Join(skillsDir, "added-later")
 	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -124,11 +119,10 @@ func TestSkillHotReloadDetectsAndReloads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Poll for up to 3 seconds for the skill to appear.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := mgr.Get("added-later"); ok {
-			return // success
+			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -136,7 +130,7 @@ func TestSkillHotReloadDetectsAndReloads(t *testing.T) {
 }
 
 func TestSkillHotReloadStartNilManager(t *testing.T) {
-	// Should not panic with nil manager.
+
 	w := NewSkillHotReload(nil, []string{"/tmp"})
 	w.Start(context.Background())
 }
@@ -144,5 +138,5 @@ func TestSkillHotReloadStartNilManager(t *testing.T) {
 func TestSkillHotReloadStartEmptyDirs(t *testing.T) {
 	mgr := commands.NewManager(t.TempDir())
 	w := NewSkillHotReload(mgr, nil)
-	w.Start(context.Background()) // should be a no-op
+	w.Start(context.Background())
 }

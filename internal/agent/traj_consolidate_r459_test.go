@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// r459: learning consolidation probes.
-
-// mkConfLearning builds a learning carrying explicit consolidation fields.
 func mkConfLearning(ts time.Time, typ, cat, insight string, conf float64, reinforced int, last time.Time) trajectoryLearning {
 	return trajectoryLearning{
 		Timestamp: ts, Type: typ, Category: cat, Insight: insight,
@@ -22,7 +19,7 @@ func TestConsolidateLearnings_MergesAndReinforces(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	all := []trajectoryLearning{
 		mkConfLearning(base, "strategy", "over_exploration", "old insight", 0.5, 0, base),
-		mkConfLearning(base.Add(time.Minute), "strategy", "over_exploration", "repeat", 0.5, 0, base), // Success=true -> up
+		mkConfLearning(base.Add(time.Minute), "strategy", "over_exploration", "repeat", 0.5, 0, base),
 	}
 	out := consolidateLearnings(all)
 	if len(out) != 1 {
@@ -31,8 +28,7 @@ func TestConsolidateLearnings_MergesAndReinforces(t *testing.T) {
 	if out[0].Reinforced != 1 || out[0].Confidence <= 0.5 {
 		t.Fatalf("reinforcement must bump confidence: %+v", out[0])
 	}
-	// #3266(J): newest text wins arbitration - keeping the oldest froze
-	// the merged row at the stalest digest while confidence only rose.
+
 	if out[0].Insight != "repeat" {
 		t.Fatalf("newest text wins arbitration: %q", out[0].Insight)
 	}
@@ -81,7 +77,7 @@ func TestEffectiveConfidence_LegacyBaselineAndDecay(t *testing.T) {
 func TestRenderPromptSection_LowConfidenceGated(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
@@ -101,7 +97,7 @@ func TestRenderPromptSection_LowConfidenceGated(t *testing.T) {
 func TestRenderPromptSection_ReinforcedOlderBeatsFreshNoise(t *testing.T) {
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
-	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
@@ -116,10 +112,10 @@ func TestRenderPromptSection_ReinforcedOlderBeatsFreshNoise(t *testing.T) {
 }
 
 func TestPersistConsolidatesDuplicateRows(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Now()
-	// Simulate a store with duplicates: persist twice with same category.
+
 	s := newTrajIntelState()
 	s.filePath = filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl")
 	s.mu.Lock()
@@ -141,8 +137,8 @@ func TestPersistConsolidatesDuplicateRows(t *testing.T) {
 }
 
 func TestTrajListAndClear_UserSurface(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
-	trajHoldoutEnabled = false    // r462 holdout claims single-candidate fixtures
+	t.Setenv("HOME", t.TempDir())
+	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	dir := t.TempDir()
 	now := time.Now()

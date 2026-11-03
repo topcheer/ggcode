@@ -14,11 +14,6 @@ import (
 	"unsafe"
 )
 
-// Windows implementation via the SendInput API (core subset: mouse,
-// keyboard, application launch). Window-management and UI-tree actions
-// require UI Automation / Win32 APIs and are reported as unsupported for
-// now so the agent gets a clear message instead of "unknown action".
-
 var (
 	user32                    = syscall.NewLazyDLL("user32.dll")
 	pSendInput                = user32.NewProc("SendInput")
@@ -42,61 +37,50 @@ const (
 	swRestore  = 9
 )
 
-// Virtual key codes for the modifiers and special keys we map.
 var winVK = map[string]uint16{
-	"ctrl":      0x11, // VK_CONTROL
+	"ctrl":      0x11,
 	"control":   0x11,
-	"alt":       0x12, // VK_MENU
+	"alt":       0x12,
 	"option":    0x12,
 	"opt":       0x12,
-	"shift":     0x10, // VK_SHIFT
-	"cmd":       0x5B, // VK_LWIN (Windows key is the cmd analogue)
+	"shift":     0x10,
+	"cmd":       0x5B,
 	"command":   0x5B,
 	"meta":      0x5B,
 	"super":     0x5B,
 	"win":       0x5B,
-	"fn":        0x5D, // VK_APPS (no true fn key; closest analogue)
-	"enter":     0x0D, // VK_RETURN
+	"fn":        0x5D,
+	"enter":     0x0D,
 	"return":    0x0D,
-	"tab":       0x09, // VK_TAB
-	"esc":       0x1B, // VK_ESCAPE
+	"tab":       0x09,
+	"esc":       0x1B,
 	"escape":    0x1B,
 	"escape2":   0x1B,
-	"backspace": 0x08, // VK_BACK
-	"delete":    0x2E, // VK_DELETE
-	"up":        0x26, // VK_UP
-	"down":      0x28, // VK_DOWN
-	"left":      0x25, // VK_LEFT
-	"right":     0x27, // VK_RIGHT
-	"space":     0x20, // VK_SPACE
-	"home":      0x24, // VK_HOME
-	"end":       0x23, // VK_END
-	"pageup":    0x21, // VK_PRIOR
-	"pagedown":  0x22, // VK_NEXT
+	"backspace": 0x08,
+	"delete":    0x2E,
+	"up":        0x26,
+	"down":      0x28,
+	"left":      0x25,
+	"right":     0x27,
+	"space":     0x20,
+	"home":      0x24,
+	"end":       0x23,
+	"pageup":    0x21,
+	"pagedown":  0x22,
 }
 
-// INPUT struct layout for SendInput (winuser.h). On x64 the Win32 INPUT
-// is 40 bytes: DWORD type (4) + 4 padding + 32-byte union (the largest
-// member, MOUSEINPUT, contains ULONG_PTR ExtraInfo requiring 8-alignment).
-// The union itself must be 32 bytes — a smaller byte array made
-// unsafe.Sizeof(winINPUT{}) = 32 ≠ 40, so SendInput rejected every event
-// (#188).
 type winINPUT struct {
 	Type uint32
-	_    uint32 // alignment padding before the 8-aligned union
+	_    uint32
 	U    [32]byte
 }
 
-// winMOUSEINPUT / winKEYBDINPUT mirror the UNION members only (no leading
-// Type field — that belongs to the enclosing INPUT). Fields are ordered
-// exactly as in winuser.h so the byte copy below lays out the union
-// correctly. ExtraInfo is uintptr (8 bytes on x64) matching ULONG_PTR.
 type winMOUSEINPUT struct {
 	Dx, Dy    int32
 	MouseData uint32
 	DwFlags   uint32
 	Time      uint32
-	_         uint32 // padding to 8-align ExtraInfo
+	_         uint32
 	ExtraInfo uintptr
 }
 
@@ -105,7 +89,7 @@ type winKEYBDINPUT struct {
 	Scan      uint16
 	Flags     uint32
 	Time      uint32
-	_         uint32 // padding to 8-align ExtraInfo
+	_         uint32
 	ExtraInfo uintptr
 }
 
@@ -113,18 +97,18 @@ const (
 	inputMouse    = 0
 	inputKeyboard = 1
 
-	mouseMove        = 0x0001 // MOUSEEVENTF_MOVE (relative)
-	mouseAbsolute    = 0x8000 // MOUSEEVENTF_ABSOLUTE
-	mouseVirtualDesk = 0x4000 // MOUSEEVENTF_VIRTUALDESK
+	mouseMove        = 0x0001
+	mouseAbsolute    = 0x8000
+	mouseVirtualDesk = 0x4000
 	mouseLeftDown    = 0x0002
 	mouseLeftUp      = 0x0004
 	mouseRightDown   = 0x0008
 	mouseRightUp     = 0x0010
-	mouseMiddleDown  = 0x0020 // MOUSEEVENTF_MIDDLEDOWN
-	mouseMiddleUp    = 0x0040 // MOUSEEVENTF_MIDDLEUP
+	mouseMiddleDown  = 0x0020
+	mouseMiddleUp    = 0x0040
 	mouseWheel       = 0x0800
 
-	keyUp = 0x0002 // KEYEVENTF_KEYUP
+	keyUp = 0x0002
 )
 
 func sendInput(inputs []winINPUT) error {
@@ -150,16 +134,11 @@ func mouseEventInput(flags uint32, dx, dy int32) winINPUT {
 	}
 	var in winINPUT
 	in.Type = inputMouse
-	// mi has no Type field; its first byte is dx — exactly union offset 0.
+
 	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&mi))[:])
 	return in
 }
 
-// wheelEventInput builds a MOUSEEVENTF_WHEEL event. Win32 reads the wheel
-// delta from MOUSEINPUT.mouseData — dx/dy are meaningless for wheel events.
-// #4459: the old call passed the delta as dy while mouseData stayed 0, so
-// SendInput delivered zero-delta wheel events: scroll silently no-opped
-// while reporting OK (the #189 direction fix never reached mouseData).
 func wheelEventInput(delta int32) winINPUT {
 	mi := winMOUSEINPUT{
 		MouseData: uint32(delta),
@@ -182,11 +161,6 @@ func keyEventInput(vk uint16, flags uint32) winINPUT {
 	return in
 }
 
-// absCoord converts a logical pixel coordinate to the 0..65535 normalized
-// range SendInput expects with MOUSEEVENTF_ABSOLUTE|VIRTUALDESK, anchored
-// at the virtual screen ORIGIN (#818): the VIRTUALDESK space starts at the
-// virtual screen top-left, so multi-monitor layouts with a negative origin
-// (left-side monitor) must subtract it before normalizing.
 func absCoord(v, origin, total int32) int32 {
 	if total <= 0 {
 		return 0
@@ -201,14 +175,9 @@ func absCoord(v, origin, total int32) int32 {
 	return int32((int64(rel) * 65535) / int64(total))
 }
 
-// virtualScreen returns the virtual screen origin and size.
-// #818: the old screenSpan passed index 76 (SM_XVIRTUALSCREEN = virtual
-// screen ORIGIN x) as the WIDTH; width is 78 (SM_CXVIRTUALSCREEN). Even
-// single-monitor clicks landed at garbage normalized coordinates.
 func virtualScreen() (vsx, vsy, vsw, vsh int32) {
 	p := user32.NewProc("GetSystemMetrics")
-	// SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77 (origin)
-	// SM_CXVIRTUALSCREEN=78, SM_CYVIRTUALSCREEN=79 (size)
+
 	x, _, _ := p.Call(76)
 	y, _, _ := p.Call(77)
 	w, _, _ := p.Call(78)
@@ -218,7 +187,7 @@ func virtualScreen() (vsx, vsy, vsw, vsh int32) {
 
 func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error) {
 	switch p.Action {
-	// ── Mouse ──
+
 	case "click", "double_click", "triple_click":
 		count := 1
 		if p.Action == "double_click" {
@@ -247,7 +216,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		return Result{Content: fmt.Sprintf("%d %d", pt.X, pt.Y)}, nil
 
-	// ── Keyboard ──
 	case "type":
 		return winType(ctx, p.Text)
 	case "key_press", "key_combo":
@@ -255,7 +223,6 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "hold_key":
 		return winHoldKey(ctx, p)
 
-	// ── Application ──
 	case "launch_app", "open":
 		return winOpenApp(ctx, p)
 
@@ -302,9 +269,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		// Idempotent: ShowWindow(swMaximize) is a no-op on an already
-		// maximized window — a retry "make sure it's maximized" never
-		// restores it (#4058; this is the semantics Linux/macOS now match).
+
 		pShowWindow.Call(uintptr(h), swMaximize)
 		return Result{Content: "OK: maximized " + windowText(h)}, nil
 
@@ -312,10 +277,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if p.ToX <= 0 || p.ToY <= 0 {
 			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 		}
-		// #4440: unify the empty-text semantics with the other platforms -
-		// empty text now targets the FOREGROUND window (this used to hard-
-		// error while Linux fell back to the active window: one instruction,
-		// opposite behaviors per platform).
+
 		var h uintptr
 		if strings.TrimSpace(p.Text) == "" {
 			fh, _, _ := user32.NewProc("GetForegroundWindow").Call()
@@ -338,15 +300,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return Result{Content: fmt.Sprintf("OK: window at (%d,%d) size %dx%d", p.X, p.Y, p.ToX, p.ToY)}, nil
 
 	case "quit_app":
-		// #1673: no app-level quit primitive without process enumeration;
-		// best-effort = close EVERY visible window whose title matches the
-		// given app name (the old code found the FIRST match only - a
-		// multi-window app stayed alive behind one closed window, and the
-		// comment falsely claimed "close all windows whose class matches").
-		// #2584/#349: an empty target must NEVER match - strings.Contains
-		// (s, "") is always true, which would WM_CLOSE every visible window
-		// (unsaved data lost). Align with findWindowByTitle /
-		// windowTitleMatches / the Linux quit_app guard.
+
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("quit_app requires a window title text; refusing to match all windows")
 		}
@@ -368,10 +322,9 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return Result{Content: fmt.Sprintf("OK: close requested for %d window(s) matching %q", closed, p.Text)}, nil
 
 	case "display_info":
-		// Virtual screen span via GetSystemMetrics (76/79); origin via 76/77
-		// is the primary origin — report span as the multi-monitor extent.
+
 		p := user32.NewProc("GetSystemMetrics")
-		cx, _, _ := p.Call(78) // #1673: SM_CXVIRTUALSCREEN (was 76 = X origin, reporting "0x1080" on single-monitor)
+		cx, _, _ := p.Call(78)
 		cy, _, _ := p.Call(79)
 		return Result{Content: fmt.Sprintf("virtual screen: %dx%d logical pixels (multi-monitor extent)", int32(cx), int32(cy))}, nil
 
@@ -390,13 +343,6 @@ type winWindowInfo struct {
 	pid    int
 }
 
-// enumCBOnce caches the EnumWindows callback across calls (#3133):
-// syscall.NewCallback slots are NEVER recycled and the runtime panics
-// past ~2000 per process ("too many callbacks"). Every desktop_control
-// call (list_windows, find-window actions, quit_app) used to allocate a
-// fresh slot for what is a stateless callback - a long-lived IM-driven
-// session could exhaust the budget and crash. The per-call result is
-// passed via the LPARAM pointer instead of closure capture.
 var enumCBOnce sync.Once
 
 var enumCB uintptr
@@ -406,7 +352,7 @@ func initEnumCB() {
 		out := (*[]winWindowInfo)(unsafe.Pointer(lparam))
 		vis, _, _ := pIsWindowVisible.Call(hwnd)
 		if vis == 0 {
-			return 1 // continue
+			return 1
 		}
 		title := windowText(hwnd)
 		if strings.TrimSpace(title) == "" {
@@ -424,7 +370,6 @@ func initEnumCB() {
 	})
 }
 
-// enumVisibleWindows lists top-level visible windows with non-empty titles.
 func enumVisibleWindows() ([]winWindowInfo, error) {
 	enumCBOnce.Do(initEnumCB)
 	var out []winWindowInfo
@@ -447,8 +392,6 @@ func className(hwnd uintptr) string {
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// findWindowByTitle finds the first visible top-level window whose title
-// contains the given text, using the shared windowTitleMatches semantics.
 func findWindowByTitle(needle string) (uintptr, error) {
 	if strings.TrimSpace(needle) == "" {
 		return 0, fmt.Errorf("window target text is required")
@@ -470,9 +413,6 @@ func getForegroundWindow() uintptr {
 	h, _, _ := p.Call()
 	return h
 }
-
-// ── Extracted action helpers (thin dispatch, fat helpers — same shape as
-// the darwin backend) ──
 
 func winClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
 	vsx, vsy, vsw, vsh := virtualScreen()
@@ -498,7 +438,6 @@ func winClick(ctx context.Context, x, y int, button string, count int) (Result, 
 	return Result{Content: "OK"}, nil
 }
 
-// winMouseButtonEvent posts a single button-down or -up event at (x,y).
 func winMouseButtonEvent(ctx context.Context, x, y int, button string, down bool) (Result, error) {
 	vsx, vsy, vsw, vsh := virtualScreen()
 	btn := uint32(mouseLeftDown)
@@ -529,7 +468,6 @@ func winMouseButtonEvent(ctx context.Context, x, y int, button string, down bool
 	return Result{Content: "OK"}, nil
 }
 
-// winHoldKey presses a key/combo, sleeps durationMs, releases.
 func winHoldKey(ctx context.Context, p desktopParams) (Result, error) {
 	duration, err := holdKeyDurationClamp(p.Duration)
 	if err != nil {
@@ -570,7 +508,7 @@ func winHoldKey(ctx context.Context, p desktopParams) (Result, error) {
 	}
 	select {
 	case <-ctx.Done():
-		// Release even on cancellation so the key doesn't stick.
+
 		_ = release()
 		return Result{}, ctx.Err()
 	case <-time.After(time.Duration(duration) * time.Millisecond):
@@ -608,10 +546,8 @@ func winDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
 }
 
 func winScroll(ctx context.Context, direction string, amount int) (Result, error) {
-	// Win32: positive mouseData with MOUSEEVENTF_WHEEL scrolls FORWARD,
-	// i.e. content moves UP — matching the darwin backend. The old code
-	// mapped "up" to -120, inverting the requested direction (#189).
-	d := int32(-120) // down
+
+	d := int32(-120)
 	if direction == "up" {
 		d = 120
 	}
@@ -630,10 +566,7 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec, button string
 	if err != nil {
 		return Result{}, err
 	}
-	// #3876: honor the schema button contract ("right" was silently
-	// left-clicked, same breach as #1665 fixed for plain click).
-	// #4440: middle was still silently left-clicked (only the plain click
-	// path had it), and unknown buttons erred the same way.
+
 	var down, up uint32 = mouseLeftDown, mouseLeftUp
 	switch button {
 	case "right":
@@ -663,11 +596,7 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec, button string
 }
 
 func winType(ctx context.Context, text string) (Result, error) {
-	// Unicode via KEYEVENTF_UNICODE (0x0004) per UTF-16 code unit — no
-	// keyboard layout dependence. KEYEVENTF_UNICODE injects one code unit
-	// per event, so astral-plane runes (emoji, CJK ext B-F) must be split
-	// into surrogate pairs; casting the rune directly to uint16 truncated
-	// them into PUA garbage (#190).
+
 	const keyUnicode = 0x0004
 	var inputs []winINPUT
 	for _, u := range utf16.Encode([]rune(text)) {
@@ -718,13 +647,7 @@ func winOpenApp(ctx context.Context, p desktopParams) (Result, error) {
 	if target == "" {
 		return Result{}, fmt.Errorf("%s requires 'text'", p.Action)
 	}
-	// #4459: keep app/target as SEPARATE argv tokens. The old form joined
-	// them into one quoted string, so `start "" "msedge https://x"` looked
-	// for an executable literally named "msedge https://x" — open+app and
-	// multi-word launch_app were both unconditionally broken (a #1673
-	// regression: the quoting fix was meant for bare URLs only). Go quotes
-	// each token as needed when building the cmd.exe command line, so
-	// injection via '&'/'^' stays closed while args split correctly.
+
 	var argv []string
 	if app := strings.TrimSpace(p.App); app != "" {
 		argv = append(argv, app)
@@ -756,7 +679,7 @@ func winListWindows() (Result, error) {
 }
 
 func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
-	// KEYEVENTF_UNICODE path: vk stays 0, scan carries the UTF-16 code unit.
+
 	ki := winKEYBDINPUT{
 		Vk:    0,
 		Scan:  scan,
@@ -769,12 +692,7 @@ func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
 }
 
 func runWindowsCommand(ctx context.Context, argv ...string) error {
-	// Use cmd /c start "" <argv...> so URLs and documents open via
-	// shell associations, matching the macOS `open` semantics.
-	// #1673: each token is passed as its own argv entry — Go quotes it
-	// when spaces require it, so cmd.exe never re-parses '&'/'^' inside
-	// a URL, while app+target still split into program and argument
-	// (#4459; the old single-quoted-string form broke open+app).
+
 	startArgs := append([]string{"/c", "start", ""}, argv...)
 	c := exec.CommandContext(ctx, "cmd", startArgs...)
 	if out, err := c.CombinedOutput(); err != nil {

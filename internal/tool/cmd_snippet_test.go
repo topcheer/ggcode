@@ -31,7 +31,6 @@ func TestCmdSnippet_SaveAutoSnippetIdempotent(t *testing.T) {
 		t.Fatalf("expected duplicate save to be refreshed, got: %s", res.Content)
 	}
 
-	// Only one entry should exist; the duplicate must not have been appended.
 	store, err := tool.load()
 	if err != nil {
 		t.Fatalf("load failed: %v", err)
@@ -43,7 +42,6 @@ func TestCmdSnippet_SaveAutoSnippetIdempotent(t *testing.T) {
 		t.Fatalf("expected UseCount=2, got %d", store.Entries[0].UseCount)
 	}
 
-	// Empty command must be rejected.
 	if _, err := tool.SaveAutoSnippet("x", "  ", "", nil); err == nil {
 		t.Fatal("expected error for empty command")
 	}
@@ -52,7 +50,6 @@ func TestCmdSnippet_SaveAutoSnippetIdempotent(t *testing.T) {
 func TestCmdSnippet_SaveAndGet(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 
-	// Save
 	input, _ := json.Marshal(map[string]string{
 		"action":            "save",
 		"name":              "build-go",
@@ -68,7 +65,6 @@ func TestCmdSnippet_SaveAndGet(t *testing.T) {
 		t.Fatalf("save returned error: %s", result.Content)
 	}
 
-	// Get
 	input, _ = json.Marshal(map[string]string{
 		"action":      "get",
 		"name":        "build-go",
@@ -105,7 +101,6 @@ func TestCmdSnippet_ListEmpty(t *testing.T) {
 func TestCmdSnippet_SaveUpdate(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 
-	// Save first version
 	input, _ := json.Marshal(map[string]string{
 		"action":      "save",
 		"name":        "test-cmd",
@@ -114,7 +109,6 @@ func TestCmdSnippet_SaveUpdate(t *testing.T) {
 	})
 	_, _ = tool.Execute(context.Background(), input)
 
-	// Save updated version (same name)
 	input, _ = json.Marshal(map[string]string{
 		"action":            "save",
 		"name":              "test-cmd",
@@ -127,7 +121,6 @@ func TestCmdSnippet_SaveUpdate(t *testing.T) {
 		t.Fatalf("update failed: %s", result.Content)
 	}
 
-	// Verify update
 	input, _ = json.Marshal(map[string]string{
 		"action":      "get",
 		"name":        "test-cmd",
@@ -142,7 +135,6 @@ func TestCmdSnippet_SaveUpdate(t *testing.T) {
 func TestCmdSnippet_Delete(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 
-	// Save
 	input, _ := json.Marshal(map[string]string{
 		"action":      "save",
 		"name":        "to-delete",
@@ -151,7 +143,6 @@ func TestCmdSnippet_Delete(t *testing.T) {
 	})
 	_, _ = tool.Execute(context.Background(), input)
 
-	// Delete
 	input, _ = json.Marshal(map[string]string{
 		"action":      "delete",
 		"name":        "to-delete",
@@ -162,7 +153,6 @@ func TestCmdSnippet_Delete(t *testing.T) {
 		t.Fatalf("delete failed: %s", result.Content)
 	}
 
-	// Verify deleted
 	input, _ = json.Marshal(map[string]string{
 		"action":      "get",
 		"name":        "to-delete",
@@ -177,7 +167,6 @@ func TestCmdSnippet_Delete(t *testing.T) {
 func TestCmdSnippet_Search(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 
-	// Save multiple snippets
 	snippets := []struct {
 		name, command, desc string
 		tags                []string
@@ -198,7 +187,6 @@ func TestCmdSnippet_Search(t *testing.T) {
 		_, _ = tool.Execute(context.Background(), input)
 	}
 
-	// Search by name keyword
 	input, _ := json.Marshal(map[string]string{
 		"action":      "search",
 		"query":       "build",
@@ -211,11 +199,11 @@ func TestCmdSnippet_Search(t *testing.T) {
 	if result.Content == "" {
 		t.Fatal("expected search results")
 	}
-	// Should match build-go
+
 	if !strings.Contains(result.Content, "build-go") {
 		t.Errorf("search should find 'build-go', got: %s", result.Content)
 	}
-	// Should NOT match deploy-k8s
+
 	if strings.Contains(result.Content, "deploy-k8s") {
 		t.Errorf("search should not find 'deploy-k8s', got: %s", result.Content)
 	}
@@ -225,7 +213,6 @@ func TestCmdSnippet_PersistenceAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	tool1 := &CmdSnippetTool{WorkingDir: dir}
 
-	// Save with first instance
 	input, _ := json.Marshal(map[string]string{
 		"action":      "save",
 		"name":        "persisted-cmd",
@@ -234,7 +221,6 @@ func TestCmdSnippet_PersistenceAcrossInstances(t *testing.T) {
 	})
 	_, _ = tool1.Execute(context.Background(), input)
 
-	// Create a new instance pointing to same dir
 	tool2 := &CmdSnippetTool{WorkingDir: dir}
 	input, _ = json.Marshal(map[string]string{
 		"action":      "get",
@@ -246,7 +232,6 @@ func TestCmdSnippet_PersistenceAcrossInstances(t *testing.T) {
 		t.Fatalf("persistence failed: %s", result.Content)
 	}
 
-	// Verify file exists
 	path := filepath.Join(dir, ".ggcode", cmdSnippetFileName)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected snippet file at %s: %v", path, err)
@@ -301,7 +286,6 @@ func TestCmdSnippet_TagsSearch(t *testing.T) {
 	})
 	_, _ = tool.Execute(context.Background(), input)
 
-	// Search by tag
 	input, _ = json.Marshal(map[string]string{
 		"action":      "search",
 		"query":       "important",
@@ -316,8 +300,6 @@ func TestCmdSnippet_TagsSearch(t *testing.T) {
 	}
 }
 
-// #1644 case 6: tag truncation is visible in the save result (Execute-level
-// companion to the zz_issue1644 doSave pin).
 func TestCmdSnippet_TagTruncationNoted(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 	tags := make([]string, cmdSnippetMaxTags+3)

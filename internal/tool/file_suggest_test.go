@@ -9,11 +9,10 @@ import (
 
 func TestSuggestFilePath_Typo(t *testing.T) {
 	dir := t.TempDir()
-	// Create a file that the agent might misspell
+
 	mustWriteFile(t, filepath.Join(dir, "agent_runtime.go"), "package agent")
 	mustWriteFile(t, filepath.Join(dir, "overseer.go"), "package agent")
 
-	// Typo: "agent_runtim.go" (missing 'e')
 	suggestion := suggestFilePath(filepath.Join(dir, "agent_runtim.go"))
 	if suggestion == "" {
 		t.Fatal("expected suggestion for typo'd path, got empty")
@@ -27,7 +26,6 @@ func TestSuggestFilePath_WrongExtension(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "config.go"), "package config")
 
-	// Wrong extension: "config.ts" instead of "config.go"
 	suggestion := suggestFilePath(filepath.Join(dir, "config.ts"))
 	if suggestion == "" {
 		t.Fatal("expected suggestion for wrong extension, got empty")
@@ -42,7 +40,6 @@ func TestSuggestFilePath_PrefixMatch(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "checkpoint.go"), "package checkpoint")
 	mustWriteFile(t, filepath.Join(dir, "checkpoint_test.go"), "package checkpoint")
 
-	// Short name that's a prefix of existing files
 	suggestion := suggestFilePath(filepath.Join(dir, "check.go"))
 	if suggestion == "" {
 		t.Fatal("expected suggestion for prefix match, got empty")
@@ -53,7 +50,6 @@ func TestSuggestFilePath_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "completely_different.go"), "package main")
 
-	// Completely unrelated path
 	suggestion := suggestFilePath(filepath.Join(dir, "xyz123.go"))
 	if suggestion != "" {
 		t.Errorf("expected no suggestion for unrelated path, got: %s", suggestion)
@@ -71,7 +67,7 @@ func TestSuggestFilePath_EmptyDir(t *testing.T) {
 func TestSuggestFilePath_SkipsNodeModules(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "target.go"), "package main")
-	// Create node_modules with a matching file that should NOT be suggested
+
 	nodeDir := filepath.Join(dir, "node_modules")
 	os.MkdirAll(nodeDir, 0755)
 	mustWriteFile(t, filepath.Join(nodeDir, "target.js"), "module.exports = {}")
@@ -91,7 +87,6 @@ func TestSuggestFilePath_Subdirectory(t *testing.T) {
 	os.MkdirAll(subDir, 0755)
 	mustWriteFile(t, filepath.Join(subDir, "agent_runtime.go"), "package agent")
 
-	// Try to read from the wrong parent directory
 	suggestion := suggestFilePath(filepath.Join(dir, "agent_runtim.go"))
 	if suggestion == "" {
 		t.Fatal("expected suggestion from subdirectory, got empty")
@@ -124,9 +119,9 @@ func TestIsLikelyMatch(t *testing.T) {
 		stem1, stem2, full1, full2 string
 		expected                   bool
 	}{
-		{"agent", "agent", "agent.go", "agent.ts", true},           // same stem
-		{"check", "checkpoint", "check.go", "checkpoint.go", true}, // prefix
-		{"agent", "overseer", "agent.go", "overseer.go", false},    // unrelated
+		{"agent", "agent", "agent.go", "agent.ts", true},
+		{"check", "checkpoint", "check.go", "checkpoint.go", true},
+		{"agent", "overseer", "agent.go", "overseer.go", false},
 	}
 	for _, tt := range tests {
 		got := isLikelyMatch(tt.stem1, tt.stem2, tt.full1, tt.full2)
@@ -135,8 +130,6 @@ func TestIsLikelyMatch(t *testing.T) {
 		}
 	}
 }
-
-// --- helpers ---
 
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()

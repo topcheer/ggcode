@@ -71,8 +71,7 @@ func helper(x int, y int) int {
 	return z
 }
 `
-	// Non-stub body so the skip can only come from the _test.go path (#1219:
-	// the previous fixture was a 1-statement stub and never exercised it).
+
 	warnings := checkUnusedParam("foo_test.go", "", src)
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings for test file, got: %v", warnings)
@@ -159,8 +158,6 @@ func indexOfSub(s, substr string) int {
 	return -1
 }
 
-// TestUnusedParam_DeltaNoReflag pins #1219 B: findings already present in the
-// old content are not re-flagged on every edit of the file.
 func TestUnusedParam_DeltaNoReflag(t *testing.T) {
 	src := `package main
 func helper(x int, y int) int {
@@ -173,8 +170,7 @@ func helper(x int, y int) int {
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning for unused 'y' on fresh content, got %d: %v", len(warnings), warnings)
 	}
-	// Re-save with an unrelated comment edit above: the pre-existing finding
-	// must stay silent instead of firing on every write.
+
 	edited := "package main\n\n// new comment\n" + strings.TrimPrefix(src, "package main\n")
 	warnings = checkUnusedParam("test.go", src, edited)
 	if len(warnings) != 0 {
@@ -182,9 +178,6 @@ func helper(x int, y int) int {
 	}
 }
 
-// TestUnusedParam_DeltaSecondSameNameFunc: adding a second method with the
-// same name (and thus the same delta key) is still reported - multiset
-// counting, not set membership (#1215 family).
 func TestUnusedParam_DeltaSecondSameNameFunc(t *testing.T) {
 	old := "package main\ntype A struct{}\ntype B struct{}\n" +
 		"func (a A) helper(x int, y int) int { z := x * 2; _ = z; return z }\n"
@@ -195,9 +188,6 @@ func TestUnusedParam_DeltaSecondSameNameFunc(t *testing.T) {
 	}
 }
 
-// TestUnusedParam_ShadowingDetected pins #1219 C: an inner shadowing
-// declaration (x := 5) no longer masks an unused parameter - scope-aware
-// usage via parser object resolution.
 func TestUnusedParam_ShadowingDetected(t *testing.T) {
 	src := `package main
 func f(x int) int {
@@ -220,8 +210,6 @@ func f(x int) int {
 	}
 }
 
-// TestUnusedParam_Registered pins #1219 A: the check is wired into the
-// write-integrity pipeline for Go files (previously dead code).
 func TestUnusedParam_Registered(t *testing.T) {
 	for _, c := range allChecks {
 		if c.Name == "unused-param" {

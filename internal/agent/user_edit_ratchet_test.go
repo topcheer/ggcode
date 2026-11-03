@@ -21,8 +21,6 @@ func newTestObserver(t *testing.T) (*UserEditObserver, string) {
 	return newUserEditObserver(rs), dir
 }
 
-// TestUserEditSingleObservationNoPromotion: one turn-gap rewrite must NOT
-// become a rule (anti-false-learn: user experiments, one-off fmt runs).
 func TestUserEditSingleObservationNoPromotion(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "main.go")
@@ -34,7 +32,7 @@ func TestUserEditSingleObservationNoPromotion(t *testing.T) {
 	old := mtimeOf
 	mtimeOf = func(string) (time.Time, error) { return t1, nil }
 	o.NoteAgentWrite(f)
-	// gap: user rewrote the file -> mtime moved
+
 	mtimeOf = func(string) (time.Time, error) { return t1.Add(time.Minute), nil }
 	o.CheckTurnBoundary()
 	restoreMtime(old)
@@ -47,8 +45,6 @@ func TestUserEditSingleObservationNoPromotion(t *testing.T) {
 	}
 }
 
-// TestUserEditTwoGapsPromote: two independent turn-gap rewrites promote a
-// user_edit rule with basename ToolPattern and Source set.
 func TestUserEditTwoGapsPromote(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "widget.go")
@@ -84,14 +80,12 @@ func TestUserEditTwoGapsPromote(t *testing.T) {
 	if !strings.Contains(r.Rule, "widget.go") {
 		t.Fatalf("Rule text must mention the file: %q", r.Rule)
 	}
-	// promotion consumes the pending observation
+
 	if _, still := o.pending[f]; still {
 		t.Fatal("promotion must clear pending observation")
 	}
 }
 
-// TestUserEditNoExternalChangeNoObservation: untouched mtime across the
-// gap records nothing.
 func TestUserEditNoExternalChangeNoObservation(t *testing.T) {
 	o, dir := newTestObserver(t)
 	f := filepath.Join(dir, "same.go")
@@ -110,9 +104,6 @@ func TestUserEditNoExternalChangeNoObservation(t *testing.T) {
 	}
 }
 
-// TestUserEditRuleSourceBackwardCompat: pre-r444 agent-rules.json (no
-// source field) loads with empty Source; rewrite keeps omitempty so the
-// file stays byte-compatible for the error path.
 func TestUserEditRuleSourceBackwardCompat(t *testing.T) {
 	dir := t.TempDir()
 	gg := filepath.Join(dir, ".ggcode")
@@ -128,7 +119,7 @@ func TestUserEditRuleSourceBackwardCompat(t *testing.T) {
 	if len(rules) != 1 || rules[0].Source != "" {
 		t.Fatalf("legacy rule must load with empty Source, got %+v", rules)
 	}
-	// add a user_edit rule and verify JSON round-trip keeps both sources
+
 	rs.AddRule(userEditRule(filepath.Join(dir, "x.go"), 2))
 	rs.mu.Lock()
 	raw, err := os.ReadFile(filepath.Join(gg, "agent-rules.json"))
@@ -153,9 +144,6 @@ func TestUserEditRuleSourceBackwardCompat(t *testing.T) {
 	}
 }
 
-// TestExtractUserEditPath: argument shapes for the write tools. #3214
-// renamed the extractor to a multi-path API; single-file tools keep
-// first-path semantics (want=="" means empty slice).
 func TestExtractUserEditPath(t *testing.T) {
 	cases := []struct {
 		name, args, want string
@@ -181,15 +169,12 @@ func TestExtractUserEditPath(t *testing.T) {
 	}
 }
 
-// TestUserEditObserverNilSafety: nil store observer never panics.
 func TestUserEditObserverNilSafety(t *testing.T) {
 	o := newUserEditObserver(nil)
 	o.NoteAgentWrite("/whatever/exists.go")
-	o.CheckTurnBoundary() // must not panic
+	o.CheckTurnBoundary()
 }
 
-// TestUserEditFloodGuard: per-turn tracked-file cap stops novel paths
-// beyond userEditMaxTracked while re-writes of tracked files still record.
 func TestUserEditFloodGuard(t *testing.T) {
 	o, _ := newTestObserver(t)
 	mt := time.Now()
@@ -204,5 +189,3 @@ func TestUserEditFloodGuard(t *testing.T) {
 		t.Fatalf("flood guard: wrote = %d, want %d", len(o.wrote), userEditMaxTracked)
 	}
 }
-
-// fakeClock shim kept unused-var clean.

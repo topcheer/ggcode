@@ -211,28 +211,25 @@ func TestScanTodos_Clone(t *testing.T) {
 }
 
 func TestFormatAge(t *testing.T) {
-	// Recent (within a day)
+
 	recent := time.Now().Add(-2 * time.Hour)
 	age := formatAge(recent)
 	if age != "today" && !strings.Contains(age, "d") {
 		t.Errorf("expected 'today' or 'Nd', got %s", age)
 	}
 
-	// 10 days old
 	old := time.Now().Add(-10 * 24 * time.Hour)
 	age = formatAge(old)
 	if !strings.Contains(age, "d") {
 		t.Errorf("expected days, got %s", age)
 	}
 
-	// 60 days old (should show months)
 	older := time.Now().Add(-60 * 24 * time.Hour)
 	age = formatAge(older)
 	if !strings.Contains(age, "mo") {
 		t.Errorf("expected months, got %s", age)
 	}
 
-	// 400 days old (should show years)
 	ancient := time.Now().Add(-400 * 24 * time.Hour)
 	age = formatAge(ancient)
 	if !strings.Contains(age, "y") {

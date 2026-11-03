@@ -8,22 +8,6 @@ import (
 	"strings"
 )
 
-// KittyTool lets the agent manage Kitty terminal windows, tabs, and panes
-// when ggcode is running inside Kitty.
-//
-// Kitty has a first-class remote control protocol accessible via the
-// `kitten @` (or `kitty @`) CLI. This provides:
-//   - Structured JSON output (kitten @ ls)
-//   - Per-window targeting by numeric ID (--match=id:N)
-//   - Screen content retrieval (kitten @ get-text)
-//   - Native command execution (kitten @ launch -- CMD)
-//   - Full tab/window/layout management
-//
-// Unlike Ghostty and Warp which require platform-specific implementations
-// (AppleScript on macOS, DBus on Linux, menu clicking on macOS), Kitty's
-// remote control CLI works identically on all platforms.
-//
-// See kitty_impl.go for the implementation.
 type KittyTool struct {
 	WorkingDir string
 }
@@ -137,7 +121,6 @@ func (k *KittyTool) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: "action is required"}, nil
 	}
 
-	// Status doesn't require Kitty to be running — it reports detection.
 	if action == "status" {
 		return k.executeStatus(ctx), nil
 	}
@@ -184,16 +167,10 @@ func (k *KittyTool) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 }
 
-// ── Detection (shared) ─────────────────────────────────────────────────────
-
 func kittyAvailable() bool {
-	// Kitty sets TERM_PROGRAM=kitty, but this can be lost when running
-	// through tmux, screen, or other wrappers. KITTY_WINDOW_ID is always
-	// set by kitty and is a reliable fallback.
+
 	return os.Getenv("TERM_PROGRAM") == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
 }
-
-// ── Utility (shared) ────────────────────────────────────────────────────────
 
 func (k *KittyTool) workingDir() string {
 	if k != nil && strings.TrimSpace(k.WorkingDir) != "" {

@@ -6,13 +6,9 @@ import (
 	"testing"
 )
 
-// TestIssue1614_NestedModuleFanInSource pins #1614-A: a nested module's
-// intra-module imports must be COUNTED under its own module key - the
-// #1574 query-side fix alone was a no-op because the counting loop
-// classified nested-module imports as external.
 func TestIssue1614_NestedModuleFanInSource(t *testing.T) {
 	root := t.TempDir()
-	// Nested module ggcode-relay: module github.com/topcheer/ggcode-relay.
+
 	relay := filepath.Join(root, "ggcode-relay")
 	if err := os.MkdirAll(filepath.Join(relay, "core"), 0o755); err != nil {
 		t.Fatal(err)
@@ -29,7 +25,7 @@ func TestIssue1614_NestedModuleFanInSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.sum"), []byte("\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Six importers of relay/core: the nested-module key must reach them.
+
 	for i := 0; i < 6; i++ {
 		dir := filepath.Join(relay, "user"+string(rune('a'+i)))
 		if err := os.MkdirAll(dir, 0o755); err != nil {

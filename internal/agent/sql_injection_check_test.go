@@ -108,8 +108,7 @@ func f(db *sql.DB, a, b string) {
 }
 
 func TestSQLInjection_CappedWarnings(t *testing.T) {
-	// Fixture uses identifier concat (unsafe). Issue #720 made literal-only
-	// concat safe, so distinct string prefixes keep 5 distinct fingerprints.
+
 	src := `package main
 import "database/sql"
 func f(db *sql.DB, a string) {
@@ -125,7 +124,6 @@ func f(db *sql.DB, a string) {
 	}
 }
 
-// Issue #720: type-safe integer concatenation must not be flagged.
 func TestSQLInjection_IntConcatSafe(t *testing.T) {
 	src := `package main
 import ("database/sql"; "strconv")
@@ -151,7 +149,7 @@ func f(db *sql.DB, id int64) {
 }
 
 func TestSQLInjection_LiteralOnlyConcatSafe(t *testing.T) {
-	// All-literal concat is a compile-time constant query: nothing dynamic.
+
 	src := `package main
 import "database/sql"
 func f(db *sql.DB) {
@@ -164,7 +162,7 @@ func f(db *sql.DB) {
 }
 
 func TestSQLInjection_MixedIntAndIdentFlagged(t *testing.T) {
-	// One unsafe (identifier) operand in the chain keeps the warning.
+
 	src := `package main
 import ("database/sql"; "strconv")
 func f(db *sql.DB, id int, name string) {
@@ -204,8 +202,7 @@ func f(db *sql.DB, userInput string) {
 }
 
 func TestSQLInjection_SprintfMixedVerbsFlagged(t *testing.T) {
-	// A single string-capable verb (%s) makes the whole format unsafe even
-	// when other verbs are integer-only.
+
 	src := `package main
 import ("database/sql"; "fmt")
 func f(db *sql.DB, limit int, name string) {
@@ -218,8 +215,7 @@ func f(db *sql.DB, limit int, name string) {
 }
 
 func TestSQLInjection_SprintfDynamicTableAdvisoryWording(t *testing.T) {
-	// Dynamic table names cannot be parameterized; the warning must be
-	// advisory (issue #720), not an imperative rewrite instruction.
+
 	src := `package main
 import ("database/sql"; "fmt")
 func f(db *sql.DB, table string) {
@@ -238,7 +234,7 @@ func f(db *sql.DB, table string) {
 }
 
 func TestSQLInjection_SprintfNoVerbsSafe(t *testing.T) {
-	// No verbs -> constant query.
+
 	src := `package main
 import ("database/sql"; "fmt")
 func f(db *sql.DB) {
@@ -251,7 +247,7 @@ func f(db *sql.DB) {
 }
 
 func TestSQLInjection_SprintfNonLiteralFormatFlagged(t *testing.T) {
-	// Non-literal format string: conservatively unsafe.
+
 	src := `package main
 import ("database/sql"; "fmt")
 func f(db *sql.DB, format string, arg int) {
@@ -338,15 +334,14 @@ func f(db *sql.DB, name string) {
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 new warning (pre-existing suppressed), got %d: %v", len(warnings), warnings)
 	}
-	// The warning text carries the position; the new Exec call is on line 5.
+
 	if !strings.Contains(warnings[0], "test.go:5") {
 		t.Errorf("expected the NEW instance (line 5) to be reported, got: %s", warnings[0])
 	}
 }
 
 func TestSQLInjection_CacheGetNotFlagged(t *testing.T) {
-	// cache.Get / fmt.Sprintf is a redis/cache idiom, not SQL. Get was removed
-	// from sqlInjMethods.
+
 	src := `package main
 import "fmt"
 func f(cache *Cache, key string) string {
@@ -381,8 +376,6 @@ func f(tx *Tx, table string) {
 	}
 }
 
-// Note: `contains` helper is defined in reflection_test.go
-
 func TestSQLInjection_MultilineDeltaNotSuppressed(t *testing.T) {
 	oldSrc := "package main\n" +
 		"import \"database/sql\"\n" +
@@ -392,7 +385,7 @@ func TestSQLInjection_MultilineDeltaNotSuppressed(t *testing.T) {
 		"	_ = rows\n" +
 		"	_ = err\n" +
 		"}\n"
-	// Same first line, but query changed SELECT -> DELETE on the arg line.
+
 	newSrc := "package main\n" +
 		"import \"database/sql\"\n" +
 		"func f(db *sql.DB, id string) {\n" +
@@ -431,7 +424,7 @@ func TestSQLInjection_SingleLineDeltaStillSuppressed(t *testing.T) {
 		"func f(db *sql.DB, id string) {\n" +
 		"	db.Query(\"SELECT * FROM t WHERE id = \" + id)\n" +
 		"}\n"
-	// Same single-line call with an unrelated edit elsewhere.
+
 	newSrc := "package main\n" +
 		"import \"database/sql\"\n" +
 		"func f(db *sql.DB, id string) {\n" +
@@ -444,9 +437,6 @@ func TestSQLInjection_SingleLineDeltaStillSuppressed(t *testing.T) {
 	}
 }
 
-// Regression for #1498: %c renders the code point character itself, so a
-// user-controlled 39 emits a quote closing the string literal - it must not
-// be exempted as an "integer-safe" verb.
 func TestSQLInjectionPercentCNotExempt(t *testing.T) {
 	if sqlInjIsIntVerb('c') {
 		t.Fatal("verb 'c' must not be classified as an integer-safe verb")

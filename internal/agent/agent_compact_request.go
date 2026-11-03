@@ -1,24 +1,5 @@
 package agent
 
-// RequestAutoCompact powers the compact_context tool (CAT - "Context as a
-// Tool", ACL 2026 Findings): the model can reclaim context budget at
-// semantically clean boundaries instead of waiting for the threshold cliff.
-//
-// Protocol safety: this NEVER rewrites conversation history synchronously in
-// the tool-execution window - at that point the assistant's tool_use for
-// compact_context has no tool_result yet, and a mid-flight Summarize could
-// desync that pairing. Instead:
-//   - the cheap mechanical pass (superseded-read reclaim) runs immediately;
-//     it only rewrites content of OLD messages behind the context manager's
-//     own lock, and is the same pass StartPreCompact runs;
-//   - full LLM summarization goes through the existing background precompact
-//     machinery (StartPreCompact), whose result is applied at the next turn
-//     boundary by consumeReadyPreCompact - exactly how auto-compaction works.
-//
-// Per the clearing-tiers architecture note, proactive reclaim stays
-// independent of the compaction handler: this entry point is agent-invoked
-// and adds nothing to StartPreCompact itself.
-
 import (
 	"fmt"
 	"strings"
@@ -26,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// RequestAutoCompact is bound to the compact_context tool by cmd wiring.
-// reason is the model-supplied rationale (logged for observability). The
-// returned string is the tool-result body: a non-empty status line on every
-// success path.
 func (a *Agent) RequestAutoCompact(reason string) string {
 	if reason != "" {
 		debug.Log("agent", "compact_context requested: %s", reason)
@@ -53,9 +30,6 @@ func (a *Agent) RequestAutoCompact(reason string) string {
 		b.WriteString("Usage is below the auto-compact threshold: full summarization not scheduled. ")
 	}
 
-	// Mechanical reclaim is independent of the compaction handler and is
-	// always safe to run: superseded reads are old file-read results whose
-	// content was re-read later, so dropping them loses nothing current.
 	if m, ok := cm.(interface{ CompactSupersededReads() int }); ok {
 		if freed := m.CompactSupersededReads(); freed > 0 {
 			b.WriteString(fmt.Sprintf("Mechanical reclaim dropped superseded file reads (-%d tokens). ", freed))

@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// #3951 companion (from the issue author, verified red on pre-fix main):
-// out-of-sandbox Move to must error with ZERO writes and zero source
-// deletion; in-sandbox Move to must keep working.
 func TestIssue3951AuthorCompanionBidirectional(t *testing.T) {
 	base := t.TempDir()
 	sandbox := filepath.Join(base, "sandbox")
@@ -27,7 +24,6 @@ func TestIssue3951AuthorCompanionBidirectional(t *testing.T) {
 	}
 	mkTool := func() *ApplyPatch { return &ApplyPatch{WorkingDir: sandbox, SandboxCheck: inside} }
 
-	// 1) Escape: rejected before any write; source intact; nothing on disk outside.
 	diff := "*** Update File: orig.txt\n@@\n-old\n+new\n*** Move to: ../../escaped.txt\n"
 	b, _ := json.Marshal(map[string]string{"path": "orig.txt", "diff": diff})
 	res, err := mkTool().Execute(context.Background(), b)
@@ -44,7 +40,6 @@ func TestIssue3951AuthorCompanionBidirectional(t *testing.T) {
 		t.Fatal("file escaped the sandbox")
 	}
 
-	// 2) In-sandbox: normal move works, content updated at the new location.
 	if err := os.WriteFile(filepath.Join(sandbox, "orig.txt"), []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

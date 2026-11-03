@@ -8,11 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4620: the five tool-call counters (runStats.recordToolCall,
-// toolCallBudget.record, toolThermal, iterPressure, extractPathsFromToolCall)
-// must live past the in-turn dedup / ask_user quality gate / redaction write
-// guard - skipped calls must not burn budget or inflate stats, matching
-// #4013's no-phantom-record contract for runToolNames.
 func TestIssue4620_CountersPastSkipGates(t *testing.T) {
 	data, err := os.ReadFile("agent.go")
 	if err != nil {
@@ -38,7 +33,7 @@ func TestIssue4620_CountersPastSkipGates(t *testing.T) {
 			t.Fatalf("counter %q sits before the post-gate runToolNames append (#4620)", marker)
 		}
 	}
-	// And exactly one occurrence of each (no stray pre-gate copy left behind).
+
 	for _, marker := range []string{"runStats.recordToolCall(tc.Name)", "a.toolCallBudget.record()"} {
 		if strings.Count(text, marker) != 1 {
 			t.Fatalf("expected exactly one %q, found %d", marker, strings.Count(text, marker))
@@ -46,16 +41,12 @@ func TestIssue4620_CountersPastSkipGates(t *testing.T) {
 	}
 }
 
-// #4621: server-tool blocks (server_tool_use / *_tool_result) are real
-// provider-side output with empty Text - hasNonThinkingContent must report
-// content so a server-tool-only reply is not treated as an empty response
-// (#1672-family false-empty abort).
 func TestIssue4621_ServerToolBlocksCountAsContent(t *testing.T) {
 	if hasNonThinkingContent([]provider.ContentBlock{
 		{Type: "thinking", Text: "reasoning"},
 		{Type: "server_tool_use", Text: ""},
 	}) {
-		return // pass
+		return
 	}
 	t.Fatal("server_tool_use block must count as non-thinking content (#4621)")
 }

@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #2953: isSensitiveFieldName must not flag token COUNTING/QOTA fields
-// (MaxTokens, TokenCount, Tokens, TokenUsage) as credential leaks, while
-// genuine credential names (BotToken, AccessToken, TokenSecret) stay flagged.
-
 func TestIssue2953TokenCounterFieldsNotSensitive(t *testing.T) {
 	benign := []string{
 		"MaxTokens", "Tokens", "TokenCount", "TokenUsage", "TokenLimit",
@@ -31,7 +27,7 @@ func TestIssue2953CredentialTokenFieldsStillSensitive(t *testing.T) {
 }
 
 func TestIssue2953NoWarningForCounterStructFields(t *testing.T) {
-	// The exact reproducer from the issue: three counter fields, zero warnings.
+
 	src := `package p
 
 type Request struct {
@@ -47,7 +43,7 @@ type Request struct {
 }
 
 func TestIssue2953WarningStillFiresForCredentialField(t *testing.T) {
-	// Regression guard: a genuine credential field must still warn.
+
 	src := `package p
 
 type Creds struct {

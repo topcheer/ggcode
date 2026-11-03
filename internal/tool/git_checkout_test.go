@@ -79,9 +79,6 @@ func TestValidateRefName(t *testing.T) {
 		}
 	}
 
-	// #837: execution goes through exec.CommandContext (no shell), so
-	// shell metacharacters are NOT valid rejection reasons anymore — only
-	// characters git's check-refformat forbids. These stay invalid:
 	invalid := map[string]string{
 		"a b":   "space (git forbidden)",
 		"a~b":   "tilde (git forbidden)",
@@ -98,7 +95,7 @@ func TestValidateRefName(t *testing.T) {
 			t.Errorf("validateRefName(%q) = nil, want error (%s)", ref, reason)
 		}
 	}
-	// Legal git refs the old shell-metachar blacklist wrongly refused.
+
 	for _, ref := range []string{"release$v2", `fix(typo)`, "quote\"name", "a;b"} {
 		if err := validateRefName(ref); err != nil {
 			t.Errorf("#837: validateRefName(%q) = %v, want nil (legal git ref)", ref, err)
@@ -107,7 +104,7 @@ func TestValidateRefName(t *testing.T) {
 }
 
 func TestGitCheckoutCreateAndSwitch(t *testing.T) {
-	// Create a temp git repo for this test.
+
 	tmpDir := t.TempDir()
 	if err := initTestRepo(tmpDir); err != nil {
 		t.Fatalf("failed to init test repo: %v", err)
@@ -115,7 +112,6 @@ func TestGitCheckoutCreateAndSwitch(t *testing.T) {
 
 	gc := GitCheckout{WorkingDir: tmpDir}
 
-	// Create a new branch.
 	input, _ := json.Marshal(map[string]any{
 		"branch":      "feature/test-branch",
 		"create":      true,
@@ -129,13 +125,11 @@ func TestGitCheckoutCreateAndSwitch(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", result.Content)
 	}
 
-	// Verify we're on the new branch.
 	current := currentBranchName(context.Background(), tmpDir)
 	if current != "feature/test-branch" {
 		t.Fatalf("expected branch 'feature/test-branch', got %q", current)
 	}
 
-	// Switch back to main.
 	input, _ = json.Marshal(map[string]any{
 		"branch":      "main",
 		"description": "test",
@@ -160,14 +154,12 @@ func TestGitCheckoutDirtyWarning(t *testing.T) {
 		t.Fatalf("failed to init test repo: %v", err)
 	}
 
-	// Create a dirty file.
 	if err := os.WriteFile(filepath.Join(tmpDir, "uncommitted.txt"), []byte("dirty"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	gc := GitCheckout{WorkingDir: tmpDir}
 
-	// Create a new branch — should succeed with warning.
 	input, _ := json.Marshal(map[string]any{
 		"branch":      "feature/dirty-switch",
 		"create":      true,
@@ -193,7 +185,6 @@ func TestGitCheckoutNonexistentBranch(t *testing.T) {
 
 	gc := GitCheckout{WorkingDir: tmpDir}
 
-	// Try switching to a branch that doesn't exist (without create=true).
 	input, _ := json.Marshal(map[string]any{
 		"branch":      "nonexistent-branch",
 		"description": "test",
@@ -207,7 +198,6 @@ func TestGitCheckoutNonexistentBranch(t *testing.T) {
 	}
 }
 
-// initTestRepo creates a minimal git repo with an initial commit in tmpDir.
 func initTestRepo(tmpDir string) error {
 	ctx := context.Background()
 
@@ -225,7 +215,6 @@ func initTestRepo(tmpDir string) error {
 		}
 	}
 
-	// Create initial commit.
 	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# test"), 0644); err != nil {
 		return err
 	}

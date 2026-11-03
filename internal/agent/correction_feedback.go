@@ -9,29 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// maybeInjectCorrectionFeedback checks whether the user has undone agent file
-// changes since the last run (via /undo or /undo-run). If so, it injects an
-// assistant-visible guidance message into the conversation so the agent knows
-// its previous approach was rejected and should try a different strategy.
-//
-// This implements the "Undo as Negative Signal" pattern: user undo is the
-// strongest implicit feedback an agent can receive. Without surfacing it,
-// the agent has no awareness that its work was rejected and will repeat the
-// same approach on the next run.
-//
-// Competitor analysis:
-//   - Cursor: tracks per-suggestion accept/reject rates internally but does
-//     not feed them back into the agent's context for the next turn.
-//   - Claude Code: shows undo history in the UI but the agent itself is
-//     unaware that its work was reverted.
-//   - Cline/OpenHands: no undo feedback mechanism.
-//
-// ggcode is the first to surface undo feedback as an explicit in-context
-// guidance message, creating a closed-loop correction signal.
-//
-// The correction is one-shot: once injected, corrections are cleared so they
-// don't accumulate. Only corrections from the immediately preceding run are
-// surfaced (older undos are stale context).
 func (a *Agent) maybeInjectCorrectionFeedback() {
 	a.mu.RLock()
 	cpMgr := a.checkpoints
@@ -45,14 +22,6 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 		return
 	}
 
-	// #1449-A: only USER reverts are rejection signals. An agent's own
-	// undo_edit (self-correction after a failed verification) lands in the
-	// same corrections list; narrating it as "The user reverted your
-	// changes... likely wrong or unwanted... consider a fundamentally
-	// different approach" weaponizes the strongest authority signal
-	// against encouraged behavior - and the one-shot clear makes the
-	// injection irreversible for the run. Empty Source is legacy data
-	// (pre-field) - treat as user to preserve old behavior.
 	filtered := make([]checkpoint.Correction, 0, len(corrections))
 	for _, c := range corrections {
 		if c.Source == "" || c.Source == "user" {
@@ -64,7 +33,6 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 	}
 	corrections = filtered
 
-	// Build a concise summary of what was undone.
 	fileSet := make(map[string]bool)
 	for _, c := range corrections {
 		for _, f := range c.Files {
@@ -80,7 +48,7 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 	var b strings.Builder
 	b.WriteString("Note: The user reverted your previous file changes (via /undo or /undo-run).\n")
 	b.WriteString("The following files were reverted to their pre-edit state:\n")
-	// Cap at 10 files to avoid context bloat.
+
 	for i, f := range files {
 		if i >= 10 {
 			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(files)-10))
@@ -97,8 +65,6 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 
 	msg := b.String()
 
-	// Inject as a user message so it's visible to the model and distinct
-	// from the user's actual request that follows.
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{
@@ -108,19 +74,9 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 
 	debug.Log("agent", "injected correction feedback: %d corrections, %d unique files", len(corrections), len(files))
 
-	// Clear corrections so they're one-shot -- only the most recent undo
-	// batch is surfaced, not accumulated history.
 	cpMgr.ClearCorrections()
 }
 
-// maybeInjectSentimentFeedback analyzes the user's latest message for negative
-// feedback signals (frustration, rejection, redirection). When detected, it
-// injects escalating course-correction guidance and resets monitoring state
-// (overseer, repetition tracker, scope drift) so the agent starts fresh with
-// the corrected approach.
-//
-// This complements maybeInjectCorrectionFeedback (which handles file reverts)
-// by catching TEXTUAL negative feedback in the user's message itself.
 func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
 	if a.userSentiment == nil {
 		return
@@ -145,13 +101,8 @@ func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
 
 	debug.Log("agent", "%s", formatSentimentLogLine(fb))
 
-	// Reset monitoring state when the user strongly rejects the approach.
-	// The previous trajectory is now invalid -- those systems would carry
-	// stale progress data from the rejected work.
 	if shouldResetMonitoringOnFeedback(fb) {
-		// #4003: reseed researchMode from the correcting prompt itself -
-		// "stop researching, start fixing" must flip the mode, which the
-		// stale session-first-message fallback never could.
+
 		a.resetOverseer(userPrompt)
 		a.resetScopeDrift()
 		a.recurringError.reset()

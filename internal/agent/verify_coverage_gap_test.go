@@ -47,7 +47,6 @@ func TestCoverageNoGapWhenFullScope(t *testing.T) {
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// Full scope ./... covers everything
 	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./..."}))
 	if warn != "" {
 		t.Fatalf("expected no warning for ./... scope, got: %s", warn)
@@ -73,19 +72,16 @@ func TestCoverageGapMaxWarns(t *testing.T) {
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// First narrow verify - should warn
 	w1 := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./internal/agent/"}))
 	if w1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second narrow verify (different command) - should warn
 	w2 := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go build ./internal/agent/"}))
 	if w2 == "" {
 		t.Fatal("expected second warning")
 	}
 
-	// Third - should be capped
 	w3 := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go vet ./internal/agent/"}))
 	if w3 != "" {
 		t.Fatal("expected no third warning due to cap")
@@ -97,7 +93,6 @@ func TestCoverageGapDedupSameCmd(t *testing.T) {
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// Same command twice - only warn once
 	w1 := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./internal/agent/"}))
 	if w1 == "" {
 		t.Fatal("expected first warning")
@@ -113,7 +108,6 @@ func TestCoverageNoGapSinglePackage(t *testing.T) {
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/bar.go"}))
 
-	// Both files in same package - no gap
 	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./internal/agent/"}))
 	if warn != "" {
 		t.Fatalf("expected no warning for single package, got: %s", warn)
@@ -125,7 +119,6 @@ func TestCoverageNonVerifyCommand(t *testing.T) {
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// Non-verification command should not trigger
 	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "ls -la"}))
 	if warn != "" {
 		t.Fatalf("expected no warning for non-verify command, got: %s", warn)
@@ -175,22 +168,18 @@ func TestCoverageExtractVerifyScope(t *testing.T) {
 		{"go test ./internal/agent/", "internal/agent"},
 		{"go build ./internal/config", "internal/config"},
 		{"go test", "."},
-		// Project-wide opaque runners skip scope detection (#354): assuming
-		// zero coverage (".") systematically false-positived and exhausted
-		// the warning budget, muting real gaps.
+
 		{"npm test", ""},
 		{"make test", ""},
 		{"make verify-ci", ""},
 		{"pytest", ""},
 		{"cargo test", ""},
-		{"pytest tests/unit/test_x.py", ""}, // file arg is not a package scope (#354)
+		{"pytest tests/unit/test_x.py", ""},
 		{"ls -la", ""},
-		// #3749: a subtree wildcard covers the subtree, not the whole
-		// module - ALL here permanently marked cross-package edits
-		// verified and swallowed exactly the gaps this detector hunts.
+
 		{"go vet ./internal/...", "internal"},
-		{"go test github.com/topcheer/ggcode/internal/agent", ""}, // fully-qualified path unextractable (#354)
-		{"git commit -m 'make test pass'", ""},                    // commit message is not a verify run (#354)
+		{"go test github.com/topcheer/ggcode/internal/agent", ""},
+		{"git commit -m 'make test pass'", ""},
 	}
 	for _, c := range cases {
 		got := coverageExtractVerifyScope(c.cmd)
@@ -234,7 +223,7 @@ func TestCoverageThreePackagesPartialVerify(t *testing.T) {
 	if warn == "" {
 		t.Fatal("expected warning with 3 packages and partial verify")
 	}
-	// Should mention both uncovered packages
+
 	if !strings.Contains(warn, "internal/config") {
 		t.Error("should mention internal/config")
 	}
@@ -252,17 +241,11 @@ func jsonStr(t *testing.T, v interface{}) string {
 	return string(b)
 }
 
-// #2984: `go test ./` tests the CURRENT DIRECTORY package only (recursive is
-// ./...). It must NOT be treated as ALL-scope coverage — that marked every
-// edited package VERIFIED and masked the exact cross-package coverage gap
-// this detector exists to surface (#550 B1 inflation class).
 func TestCoverageBareDotSlashIsCwdNotAll(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// Bare ./ behaves like bare `go test`: cwd-package scoping, so the
-	// non-cwd edited package stays unverified and the gap warning fires.
 	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./"}))
 	if warn == "" {
 		t.Fatal("expected coverage-gap warning for `go test ./` with 2 edited packages (cwd-only scope)")
@@ -272,7 +255,6 @@ func TestCoverageBareDotSlashIsCwdNotAll(t *testing.T) {
 	}
 }
 
-// Direct unit lock on the scope extraction: `./` yields "." (cwd), not ALL.
 func TestCoverageExtractBareDotSlashScope(t *testing.T) {
 	if got := coverageExtractVerifyScope("go test ./"); got != "." {
 		t.Fatalf("coverageExtractVerifyScope(`go test ./`) = %q, want \".\"", got)

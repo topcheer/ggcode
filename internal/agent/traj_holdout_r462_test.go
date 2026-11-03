@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// r462 shadow-holdout control arm probes.
-
 func holdoutTestState(t *testing.T, dir string, learnings ...trajectoryLearning) *trajIntelState {
 	t.Helper()
 	s := newTrajIntelState()
@@ -37,11 +35,6 @@ func holdoutLearning(cat, typ string, conf float64) trajectoryLearning {
 	}
 }
 
-// 1. Rotation determinism: same day + same candidates -> same held key,
-// across independent calls; a changed day rotates within the category.
-// #3275: candidates now need injection-arm history (InjectedRuns > 0) and
-// multi-candidate categories - single-candidate / never-injected shapes
-// moved to traj_holdout_3275_test.go as regression probes.
 func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
@@ -64,9 +57,7 @@ func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 			t.Fatalf("selection not deterministic: %v vs %v", a, b)
 		}
 	}
-	// Streak preservation: same day re-select keeps counters (written below).
-	// Day-100 slot in the two-key "test" category selects a deterministic
-	// key; record against whatever WAS held, then verify its run count.
+
 	heldTestKey := a[trajKey{cat: "test", typ: "pattern"}] || a[trajKey{cat: "test", typ: "failure"}]
 	if !heldTestKey {
 		t.Fatalf("expected a test-category hold, got %v", a)
@@ -89,7 +80,7 @@ func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 			t.Fatalf("holdout run not recorded: %+v", e)
 		}
 	}
-	// Day change rotates the slot within the category (3 candidates).
+
 	trajHoldoutDay = func() int64 { return 101 }
 	c := trajHoldoutSelect(dir, entries)
 	if len(c) != 2 {
@@ -97,12 +88,9 @@ func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 	}
 }
 
-// 2. Render skips held entries and the outcome write-back feeds only the
-// holdout ledger — the r461 injection counters stay untouched (decoupling).
 func TestHoldout_RenderSkipAndCounterDecoupling(t *testing.T) {
 	dir := t.TempDir()
-	// #3275: two eligible candidates so the category actually rotates
-	// (single-candidate categories are exempt from the holdout now).
+
 	entries := []trajectoryLearning{
 		hold3275Learning("build", "pattern", 0.9, 3),
 		hold3275Learning("build", "failure", 0.7, 3),
@@ -126,8 +114,7 @@ func TestHoldout_RenderSkipAndCounterDecoupling(t *testing.T) {
 	if len(s.holdoutThisRun) != 0 {
 		t.Fatal("outcome write-back must consume the per-run set")
 	}
-	// r461 counters of the HELD entry untouched on disk; the non-held
-	// sibling was genuinely injected and may advance its counters normally.
+
 	ls, err := s.loadFromFile()
 	if err != nil {
 		t.Fatal(err)
@@ -141,13 +128,10 @@ func TestHoldout_RenderSkipAndCounterDecoupling(t *testing.T) {
 	}
 }
 
-// 3. Verdict boundaries: delta <= 0 decays Confidence (via the r459
-// channel, clamped at the floor) and releases; delta >= 10pp releases
-// without decay; immature arms stay held and unjudged.
 func TestHoldout_VerdictBoundaries(t *testing.T) {
 	t.Run("negative-delta decays and releases", func(t *testing.T) {
 		dir := t.TempDir()
-		// Injection arm 1/4 vs holdout arm 2/4 -> delta = -0.25.
+
 		s := holdoutTestState(t, dir, holdoutLearning("build", "pattern", 0.9))
 		if err := s.rewriteAllLocked(func(existing []trajectoryLearning, _ error) ([]trajectoryLearning, error) {
 			existing[0].InjectedRuns = 4
@@ -158,7 +142,7 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 		}
 		seedLedgerWithRuns(t, dir, "build", "pattern", 4, 2)
 		s.recordHoldoutLocked(holdoutLearning("build", "pattern", 0.9))
-		s.recordHoldoutOutcome(dir, true) // any outcome: verdict is what matters
+		s.recordHoldoutOutcome(dir, true)
 		ls, err := s.loadFromFile()
 		if err != nil {
 			t.Fatal(err)
@@ -167,7 +151,7 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 			t.Fatalf("confidence not decayed: %v", got)
 		}
 		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 1 || !led[0].ReleasedUntil.After(time.Now()) {
-			// #3275: release = persisted row + suppression window (not deletion).
+
 			t.Fatalf("verdict must release via suppression window, got %+v", led)
 		}
 	})
@@ -181,7 +165,7 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		seedLedgerWithRuns(t, dir, "build", "pattern", 5, 2) // 1.0 - 0.4 = 0.6
+		seedLedgerWithRuns(t, dir, "build", "pattern", 5, 2)
 		s.recordHoldoutLocked(holdoutLearning("build", "pattern", 0.9))
 		s.recordHoldoutOutcome(dir, false)
 		ls, _ := s.loadFromFile()
@@ -189,14 +173,14 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 			t.Fatalf("helpful insight must not decay: %v", ls[0].Confidence)
 		}
 		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 1 || !led[0].ReleasedUntil.After(time.Now()) {
-			// #3275: release = persisted row + suppression window (not deletion).
+
 			t.Fatalf("helpful verdict must release via suppression window, got %+v", led)
 		}
 	})
 	t.Run("immature injection arm stays held unjudged", func(t *testing.T) {
 		dir := t.TempDir()
 		s := holdoutTestState(t, dir, holdoutLearning("build", "pattern", 0.9))
-		// Injection counters absent (InjectedRuns=0 < min 3).
+
 		seedLedgerWithRuns(t, dir, "build", "pattern", 5, 0)
 		s.recordHoldoutLocked(holdoutLearning("build", "pattern", 0.9))
 		s.recordHoldoutOutcome(dir, true)
@@ -207,7 +191,6 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 	})
 }
 
-// 4. Ledger IO round-trip via the atomic writer leaves no stray temp files.
 func TestHoldout_LedgerNoStrayTemp(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeHoldoutLedger(trajHoldoutPath(dir), []trajHoldoutEntry{{

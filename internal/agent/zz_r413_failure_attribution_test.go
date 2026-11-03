@@ -1,9 +1,5 @@
 package agent
 
-// r413 probes: persisted failure attribution (task-level credit
-// assignment across sessions). Verifies the record->aggregate->inject
-// loop and the takeFinalSuspect single-consumption contract.
-
 import (
 	"encoding/json"
 	"os"
@@ -13,7 +9,6 @@ import (
 	"time"
 )
 
-// Record aggregates by (taskType, suspectFile) and persists.
 func TestR413_RecordAggregatesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	RecordFailureAttribution(dir, "fix the bug in parser.go", "edit_file", "internal/x/parser.go", 40)
@@ -35,12 +30,11 @@ func TestR413_RecordAggregatesAndPersists(t *testing.T) {
 	}
 }
 
-// Distinct files create distinct entries; task types segregate.
 func TestR413_DistinctFilesAndTaskTypes(t *testing.T) {
 	dir := t.TempDir()
 	RecordFailureAttribution(dir, "fix bug in parser.go", "edit_file", "a/parser.go", 40)
 	RecordFailureAttribution(dir, "fix bug in other.go", "edit_file", "a/other.go", 30)
-	// Same file, different task intent -> separate entry.
+
 	RecordFailureAttribution(dir, "add feature to parser.go", "write_file", "a/parser.go", 50)
 
 	entries := loadFailureEntries(failureStorePath(dir))
@@ -49,7 +43,6 @@ func TestR413_DistinctFilesAndTaskTypes(t *testing.T) {
 	}
 }
 
-// Injection renders the persisted memory, intent-tiered.
 func TestR413_FailureHintsForPrompt(t *testing.T) {
 	dir := t.TempDir()
 	RecordFailureAttribution(dir, "fix the bug in parser.go", "edit_file", "internal/x/parser.go", 40)
@@ -70,7 +63,6 @@ func TestR413_FailureHintsForPrompt(t *testing.T) {
 	}
 }
 
-// Empty store injects nothing.
 func TestR413_NoEntriesNoHints(t *testing.T) {
 	dir := t.TempDir()
 	if got := FailureHintsForPrompt(dir, "anything", 2); got != "" {
@@ -78,7 +70,6 @@ func TestR413_NoEntriesNoHints(t *testing.T) {
 	}
 }
 
-// Corrupt store degrades to empty, not an error.
 func TestR413_CorruptStoreTolerated(t *testing.T) {
 	dir := t.TempDir()
 	path := failureStorePath(dir)
@@ -87,7 +78,7 @@ func TestR413_CorruptStoreTolerated(t *testing.T) {
 	if got := FailureHintsForPrompt(dir, "anything", 2); got != "" {
 		t.Fatalf("hints = %q, want empty on corrupt store", got)
 	}
-	// Recording over a corrupt store replaces it with valid JSON.
+
 	RecordFailureAttribution(dir, "fix bug", "edit_file", "a.go", 30)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -99,8 +90,6 @@ func TestR413_CorruptStoreTolerated(t *testing.T) {
 	}
 }
 
-// takeFinalSuspect is single-consumption: a second call returns nothing,
-// so a stale suspect can never leak into a later turn's terminal record.
 func TestR413_TakeFinalSuspectSingleConsumption(t *testing.T) {
 	s := newCausalAttributionState()
 	step, crs := s.takeFinalSuspect()
@@ -108,7 +97,6 @@ func TestR413_TakeFinalSuspectSingleConsumption(t *testing.T) {
 		t.Fatalf("empty state take = (%v, %d), want (nil, 0)", step, crs)
 	}
 
-	// Simulate an attribution (mirrors attributeFailure's bookkeeping).
 	cp := causalEditStep{iteration: 3, toolName: "edit_file", filePath: "a.go", dirPath: "a"}
 	s.lastSuspectStep = &cp
 	s.lastSuspectCRS = 42
@@ -123,9 +111,6 @@ func TestR413_TakeFinalSuspectSingleConsumption(t *testing.T) {
 	}
 }
 
-// reset also clears the r413 suspect so a new turn starts clean (companion
-// to the existing reset tests in causal_attribution_test.go, which predate
-// the lastSuspectStep field and do not assert it).
 func TestR413_ResetClearsSuspect(t *testing.T) {
 	s := newCausalAttributionState()
 	cp := causalEditStep{iteration: 1, toolName: "edit_file", filePath: "a.go"}
@@ -137,12 +122,10 @@ func TestR413_ResetClearsSuspect(t *testing.T) {
 	}
 }
 
-// recordFailureAttribution: success runs and suspect-less failed runs
-// write nothing.
 func TestR413_TerminalHookGates(t *testing.T) {
 	dir := t.TempDir()
 	a := &Agent{}
-	// Agent literal without working dir: record must no-op safely.
+
 	a.recordFailureAttribution(&RunStats{Success: true, UserPrompt: "fix bug"})
 	a.recordFailureAttribution(&RunStats{Success: false, UserPrompt: "fix bug"})
 	if _, err := os.Stat(failureStorePath(dir)); err == nil {
@@ -150,21 +133,18 @@ func TestR413_TerminalHookGates(t *testing.T) {
 	}
 }
 
-// Prune caps the store at maxFailureEntries, evicting lowest occurrences.
-// (#3146: entries carry fresh LastSeen - the TTL would otherwise evict
-// them before the capacity comparison gets exercised.)
 func TestR413_PruneCapsEntries(t *testing.T) {
 	now := time.Now()
 	entries := make([]PlaybookFailureEntry, maxFailureEntries+5)
 	for i := range entries {
-		entries[i].Occurrences = i // increasing value; the first 5 are weakest
+		entries[i].Occurrences = i
 		entries[i].LastSeen = now
 	}
 	got := pruneFailureEntries(entries)
 	if len(got) != maxFailureEntries {
 		t.Fatalf("len = %d, want %d", len(got), maxFailureEntries)
 	}
-	// Highest occurrences survive (24..5); the five weakest (0..4) are evicted.
+
 	if got[0].Occurrences != 24 || got[len(got)-1].Occurrences != 5 {
 		t.Fatalf("eviction wrong: first=%d last=%d, want 24..5", got[0].Occurrences, got[len(got)-1].Occurrences)
 	}

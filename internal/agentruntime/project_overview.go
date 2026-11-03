@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// overviewSkipDirs are directory names excluded from the project layout.
-// Hidden entries (starting with ".") are always skipped as well.
 var overviewSkipDirs = map[string]bool{
 	"node_modules": true,
 	"vendor":       true,
@@ -22,8 +20,6 @@ var overviewSkipDirs = map[string]bool{
 	"bin":          true,
 }
 
-// overviewSkipFileExts are file extensions excluded from the root listing —
-// build artifacts, media, and archives carry no structural signal.
 var overviewSkipFileExts = map[string]bool{
 	".exe": true, ".test": true, ".out": true,
 	".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
@@ -34,18 +30,10 @@ var overviewSkipFileExts = map[string]bool{
 }
 
 const (
-	// overviewMaxDepth limits how deep the layout walk descends (root = depth 0).
-	overviewMaxDepth = 2
-	// overviewMaxEntries caps the total number of lines in the layout so the
-	// system prompt stays small even in huge repositories.
+	overviewMaxDepth   = 2
 	overviewMaxEntries = 60
 )
 
-// BuildProjectOverview returns a compact, depth-limited directory layout of the
-// workspace root for injection into the system prompt. It gives the model
-// upfront codebase awareness (similar in spirit to Aider's repo map) without
-// any tool calls. Returns an empty string if the directory cannot be read or
-// contains nothing worth showing.
 func BuildProjectOverview(root string) string {
 	if _, err := os.ReadDir(root); err != nil {
 		return ""
@@ -74,17 +62,12 @@ func BuildProjectOverview(root string) string {
 			if item.IsDir() && overviewSkipDirs[name] {
 				continue
 			}
-			// Files are only listed at the root (depth 0) — they are usually
-			// the few important manifests (go.mod, package.json, README).
-			// Deeper levels show directory names only, so the line budget
-			// covers the whole directory tree instead of being consumed by
-			// file listings in a single large subdirectory.
+
 			if !item.IsDir() {
 				if depth > 0 || overviewSkipFileExts[strings.ToLower(filepath.Ext(name))] {
 					continue
 				}
-				// Skip extension-less executables (built binaries like
-				// `ggcode`) but keep Makefile/LICENSE-style files.
+
 				if filepath.Ext(name) == "" {
 					if info, err := item.Info(); err == nil && info.Mode()&0o111 != 0 {
 						continue
@@ -95,10 +78,7 @@ func BuildProjectOverview(root string) string {
 		}
 		sort.Slice(names, func(i, j int) bool {
 			if names[i].IsDir() != names[j].IsDir() {
-				// At the root, files come first: they are the few key
-				// manifests (go.mod, README, Makefile) and would otherwise
-				// be truncated away by subdirectory listings. Deeper levels
-				// contain directories only (see filter above).
+
 				if depth == 0 {
 					return !names[i].IsDir()
 				}
@@ -134,7 +114,6 @@ func BuildProjectOverview(root string) string {
 	return out
 }
 
-// projectOverviewSection wraps BuildProjectOverview output as a prompt section.
 func projectOverviewSection(workingDir string) string {
 	if strings.TrimSpace(workingDir) == "" {
 		return ""

@@ -155,19 +155,16 @@ func TestToolFallbackState_DefaultForUnknownTool(t *testing.T) {
 func TestToolFallbackState_FiresOncePerTool(t *testing.T) {
 	s := newToolFallbackState()
 
-	// First failure should produce a suggestion.
 	hint1 := s.maybeFallbackSuggestion("grep", "no matches found")
 	if hint1 == "" {
 		t.Fatal("expected first grep failure to produce fallback")
 	}
 
-	// Second failure for the same tool should NOT produce a suggestion.
 	hint2 := s.maybeFallbackSuggestion("grep", "no matches found again")
 	if hint2 != "" {
 		t.Fatalf("expected no fallback on second grep failure, got: %s", hint2)
 	}
 
-	// A different tool should still get a suggestion.
 	hint3 := s.maybeFallbackSuggestion("lsp_definition", "no definition found")
 	if hint3 == "" {
 		t.Fatal("expected first lsp_definition failure to produce fallback")
@@ -204,8 +201,6 @@ func TestToolFallbackState_GlobNoMatches(t *testing.T) {
 	}
 }
 
-// --- Agent integration tests ---
-
 func TestAgentToolFallbackCheck(t *testing.T) {
 	a := &Agent{toolFallback: newToolFallbackState()}
 
@@ -214,7 +209,6 @@ func TestAgentToolFallbackCheck(t *testing.T) {
 		t.Fatal("expected fallback hint from agent method")
 	}
 
-	// Second call for same tool should not fire.
 	hint2 := a.toolFallbackCheck("grep", "no matches found again")
 	if hint2 != "" {
 		t.Fatalf("expected no second fallback, got: %s", hint2)
@@ -240,15 +234,12 @@ func TestAgentResetToolFallback(t *testing.T) {
 	}
 }
 
-// Regression for #1508: fired was marked BEFORE rule evaluation, so an
-// error matching no rule still burned the tool's single per-run slot.
-// After the fix, fired is set only when a suggestion is actually returned.
 func TestMaybeFallbackSuggestionFiresOnlyOnMatch(t *testing.T) {
 	tf := newToolFallbackState()
 	if tf.fired["grep"] {
 		t.Fatal("fired must start unset")
 	}
-	// "no match" is grep's first rule - must fire AND mark fired.
+
 	if s := tf.maybeFallbackSuggestion("grep", "grep: no match in file"); s == "" {
 		t.Fatal("expected a fallback suggestion for the no-match rule")
 	}

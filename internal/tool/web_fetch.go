@@ -18,8 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// maxResponseBodyBytes limits HTTP response body reads to prevent memory exhaustion.
-const maxResponseBodyBytes = 10 * 1024 * 1024 // 10 MB
+const maxResponseBodyBytes = 10 * 1024 * 1024
 
 var (
 	privateNetworksOnce sync.Once
@@ -27,9 +26,7 @@ var (
 	privateNetworksErr  error
 )
 
-// WebFetch implements the web_fetch tool — fetches a URL and returns text content.
 type WebFetch struct {
-	// AllowPrivate disables SSRF protection. Only use for testing.
 	AllowPrivate bool
 }
 
@@ -38,11 +35,10 @@ func (t WebFetch) Description() string {
 	return "Fetch a URL and return its text content. Strips HTML tags, truncates to 20000 chars (context-efficiency cap; #874: description previously promised 50000). Does not summarize — use the optional prompt to instruct the LLM. For interactive/login pages, use browser automation."
 }
 
-// ToolMeta provides Gen 3 metadata for cost-aware and rate-aware selection.
 func (t WebFetch) ToolMeta() ToolMeta {
 	return ToolMeta{
-		CostEstimate: 0.0001, // ~$0.0001 per fetch (HTTP is free but has rate limits)
-		RateLimitRPS: 5.0,    // Conservative limit to avoid overwhelming servers
+		CostEstimate: 0.0001,
+		RateLimitRPS: 5.0,
 		RetryPolicy:  "exponential",
 		MaxRetries:   2,
 	}
@@ -102,10 +98,6 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	if !t.AllowPrivate {
-		// #1353: build the SSRF-guarded dialer on the transport that
-		// WrapTransport RETURNS (its single Clone). The old flow cloned
-		// DefaultTransport here and WrapTransport cloned again - two
-		// Transports per fetch, the first instantly garbage.
 		var base *http.Transport
 		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
 			base = dt
@@ -113,14 +105,9 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			base = &http.Transport{}
 		}
 		transport := util.WrapTransport(base)
-		// The per-fetch transport owns a connection pool nobody will reuse
-		// (a fresh one is built next call) - drain idle fds when done.
+
 		defer transport.CloseIdleConnections()
-		// When a proxy is configured (HTTP_PROXY/HTTPS_PROXY), the custom
-		// DialContext receives the proxy address (often localhost/internal)
-		// rather than the target host. Skip the DialContext override in that
-		// case so the proxy connection succeeds. SSRF protection is still
-		// enforced at URL level (line ~81) and redirect level (below).
+
 		proxyInUse := isProxyConfigured(transport, u)
 
 		if !proxyInUse {
@@ -137,14 +124,7 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 				return origDial(dialCtx, network, dialAddr)
 			}
 		} else if !t.AllowPrivate {
-			// #2165: the proxy resolves the hostname itself, so the dial-level
-			// guard above never runs - and the old comment claimed "SSRF still
-			// enforced at URL level", but that check is LITERAL (localhost
-			// variants / .internal / ParseIP): a domain whose A record points
-			// at a private IP passed straight through to the proxy, which then
-			// dialed the internal network. Resolve locally and reject on any
-			// private IP before the request leaves (lookup failures still go -
-			// the proxy may resolve differently than we can).
+
 			if err := rejectIfHostResolvesPrivate(ctx, u.Hostname(), net.DefaultResolver.LookupIPAddr); err != nil {
 				return Result{IsError: true, Content: fmt.Sprintf("fetch failed: %v", err)}, nil
 			}
@@ -156,7 +136,6 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		client.Transport = transport
 	}
 
-	// #2165: redirect guard needs the transport even on the plain path.
 	var redirectGuardTransport *http.Transport
 	if ht, ok := client.Transport.(*http.Transport); ok {
 		redirectGuardTransport = ht
@@ -166,8 +145,7 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if !t.AllowPrivate && isPrivateHost(req.URL.Hostname()) {
 			return fmt.Errorf("redirect to private/internal network address is not allowed")
 		}
-		// #2165: same DNS-level guard for redirects - the literal check
-		// alone let a redirect to a private-A-record domain through.
+
 		if !t.AllowPrivate && redirectGuardTransport != nil && isProxyConfigured(redirectGuardTransport, req.URL) {
 			if err := rejectIfHostResolvesPrivate(req.Context(), req.URL.Hostname(), net.DefaultResolver.LookupIPAddr); err != nil {
 				return err
@@ -185,16 +163,13 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	defer resp.Body.Close()
 
-	// For non-200 responses, still read a truncated body — many APIs and
-	// websites return useful error details (JSON messages, HTML hints) that
-	// help the agent diagnose the problem and choose a fallback strategy.
 	if resp.StatusCode != http.StatusOK {
 		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 10000))
 		if readErr != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, resp.Status)}, nil
 		}
 		errText := stripHTML(string(errBody))
-		// Truncate non-200 response bodies to keep context usage minimal
+
 		if len([]rune(errText)) > 2000 {
 			errText = string([]rune(errText)[:2000]) + "\n... [error body truncated]"
 		}
@@ -211,20 +186,12 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
 	}
 
-	// Strip HTML first to reduce byte count before truncation check
 	text := stripHTML(string(body))
 
-	// #1353: truncate by RUNES, not bytes. The old byte-based slice could
-	// cut a multi-byte CJK rune in half (invalid UTF-8) and, for Chinese
-	// pages, 20000 bytes is only ~6600 chars - contradicting the tool
-	// description's "20000 chars" and the rune-based error path below.
-	// The old "avoid double rune conversion" comment optimized away
-	// correctness; one conversion here is fine (single-shot, off hot path).
-	const maxWebFetchChars = 20000 // Reduced from 50000 based on 2025 efficiency research
+	const maxWebFetchChars = 20000
 	if utf8.RuneCountInString(text) > maxWebFetchChars {
 		runes := []rune(text)
-		// Find a safe truncation point (end of sentence or line) to avoid
-		// cutting mid-word.
+
 		cutoff := maxWebFetchChars
 		for i := cutoff; i > cutoff-200 && i > 0; i-- {
 			if runes[i] == '.' || runes[i] == '\n' {
@@ -239,13 +206,11 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		text = string(runes[:shown]) + "\n\n... [truncated: " + fmt.Sprintf("%d/%d chars", shown, len(runes)) + " shown]"
 	}
 
-	// Include final URL if redirected (helpful for shortened URLs, etc.)
 	finalURL := resp.Request.URL.String()
 	if finalURL != args.URL {
 		text = fmt.Sprintf("[Redirected to: %s]\n\n%s", finalURL, text)
 	}
 
-	// When a prompt is provided, prepend it so the LLM can process accordingly
 	if args.Prompt != "" {
 		text = fmt.Sprintf("Prompt: %s\n\n---\n\n%s", args.Prompt, text)
 	}
@@ -253,13 +218,10 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	return Result{Content: text}, nil
 }
 
-// IsPrivateHost checks if a hostname resolves to a private IP or is a loopback hostname.
-// Exported for reuse by the TUI's URL auto-fetch expansion.
 func IsPrivateHost(host string) bool {
 	return isPrivateHost(host)
 }
 
-// isPrivateHost checks if a hostname resolves to a private IP or is a loopback hostname.
 func isPrivateHost(host string) bool {
 	lower := strings.ToLower(host)
 	if lower == "localhost" || lower == "localhost.localdomain" ||
@@ -276,11 +238,10 @@ func isPrivateHost(host string) bool {
 	return false
 }
 
-// isPrivateIP returns true if the IP is in a private, loopback, or link-local range.
 func isPrivateIP(ip net.IP) bool {
 	networks, err := getPrivateNetworks()
 	if err != nil {
-		// Fail closed if the internal network list cannot be initialized.
+
 		return true
 	}
 	for _, network := range networks {
@@ -291,8 +252,6 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// isProxyConfigured checks whether the transport's Proxy function (typically
-// http.ProxyFromEnvironment) would route the given URL through a proxy.
 func isProxyConfigured(transport *http.Transport, u *url.URL) bool {
 	if transport.Proxy == nil {
 		return false
@@ -318,14 +277,9 @@ func resolvePublicDialAddress(ctx context.Context, host, port string, lookup fun
 	return net.JoinHostPort(ips[0].IP.String(), port), nil
 }
 
-// rejectIfHostResolvesPrivate enforces the DNS-level SSRF guard on the
-// proxy path (#2165): the proxy resolves the hostname itself, so the
-// dial-level check never fires - resolve locally and reject when ANY
-// address is private. Lookup failures do not reject (the proxy may
-// resolve differently than the local resolver).
 func rejectIfHostResolvesPrivate(ctx context.Context, host string, lookup func(context.Context, string) ([]net.IPAddr, error)) error {
 	if host == "" || net.ParseIP(host) != nil {
-		return nil // literal IPs already covered by isPrivateHost
+		return nil
 	}
 	ips, err := lookup(ctx, host)
 	if err != nil {
@@ -344,15 +298,13 @@ func getPrivateNetworks() ([]*net.IPNet, error) {
 		privateNetworks, privateNetworksErr = parsePrivateNetworks([]string{
 			"127.0.0.0/8",
 			"::1/128",
-			// #874: 0.0.0.0/8 — connect() to 0.0.0.0 is loopback-equivalent on
-			// major OSes (classic probe-localhost bypass).
+
 			"0.0.0.0/8",
 			"10.0.0.0/8",
 			"172.16.0.0/12",
 			"192.168.0.0/16",
 			"169.254.0.0/16",
-			// #874: fc00::/7 — IPv6 ULA (fd00::/8 internal addresses) passed
-			// the guard and reached internal services.
+
 			"fc00::/7",
 			"fe80::/10",
 			"::ffff:127.0.0.0/104",
@@ -373,47 +325,32 @@ func parsePrivateNetworks(cidrs []string) ([]*net.IPNet, error) {
 	return networks, nil
 }
 
-// StripHTML removes HTML tags and decodes common entities.
 func StripHTML(s string) string {
 	return stripHTML(s)
 }
 
-// stripHTML removes HTML tags, extracts main content, and decodes entities.
-// It prioritizes semantic content containers (<article>, <main>, role="main")
-// and removes boilerplate elements (<nav>, <header>, <footer>, <aside>) to
-// produce cleaner text that uses fewer tokens and is easier for the LLM to
-// parse. Falls back to full-page extraction when no semantic container is found.
 func stripHTML(s string) string {
-	// Phase 1: Remove non-content elements entirely
-	// Go's RE2 does not support backreferences (\1), so we enumerate each tag.
+
 	for _, tag := range []string{"script", "style", "noscript", "template", "svg", "nav", "header", "footer", "aside", "form", "iframe"} {
 		re := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>.*?</` + tag + `\s*>`)
 		s = re.ReplaceAllString(s, "")
 	}
-	// Also remove self-closing non-content tags
+
 	s = regexp.MustCompile(`(?is)<(meta|link|input|button)\b[^>]*/?>`).ReplaceAllString(s, "")
 
-	// Phase 2: Try to extract main content from semantic containers
-	// Priority: <article> > <main> > [role="main"] > #content > .content > .post > .entry-content
 	if extracted := extractMainContent(s); extracted != "" {
 		s = extracted
 	}
 
-	// Phase 3: Convert block-level elements to newlines for readability
-	// This preserves paragraph/heading structure that the LLM uses for comprehension
 	blockRe := regexp.MustCompile(`(?i)</?(p|div|section|article|header|footer|h[1-6]|li|tr|blockquote|pre|ul|ol|table|figure|figcaption|dt|dd)\b[^>]*>`)
 	s = blockRe.ReplaceAllString(s, "\n")
-	// Convert <br> to newline
+
 	s = regexp.MustCompile(`(?i)<br\s*/?>`).ReplaceAllString(s, "\n")
 
-	// Phase 4: Strip remaining tags
 	s = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
 
-	// Phase 5: Decode HTML entities
 	s = html.UnescapeString(s)
 
-	// Phase 6: Collapse whitespace but preserve line structure
-	// Collapse spaces within lines, collapse 3+ newlines to 2
 	lines := strings.Split(s, "\n")
 	var cleaned []string
 	for _, line := range lines {
@@ -425,22 +362,20 @@ func stripHTML(s string) string {
 	return strings.Join(cleaned, "\n")
 }
 
-// extractMainContent tries to find the primary content container in an HTML page.
-// Returns the inner HTML of the container, or empty string if none found.
 func extractMainContent(htmlStr string) string {
-	// Try <article> first — most reliable for blog posts and documentation
+
 	if content := extractFirstTag(htmlStr, "article"); content != "" {
 		return content
 	}
-	// Try <main>
+
 	if content := extractFirstTag(htmlStr, "main"); content != "" {
 		return content
 	}
-	// Try [role="main"]
+
 	if content := extractAttrMatch(htmlStr, "role", "main"); content != "" {
 		return content
 	}
-	// Try common content div patterns
+
 	for _, idPattern := range []string{"content", "main-content", "post-content", "page-content", "body-content", "wiki-content"} {
 		if content := extractByID(htmlStr, idPattern); content != "" {
 			return content
@@ -449,7 +384,6 @@ func extractMainContent(htmlStr string) string {
 	return ""
 }
 
-// extractFirstTag extracts the inner content of the first occurrence of a tag.
 func extractFirstTag(s, tag string) string {
 	openRe := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>`)
 	closeRe := regexp.MustCompile(`(?is)</` + tag + `\s*>`)
@@ -458,10 +392,7 @@ func extractFirstTag(s, tag string) string {
 	if openMatch == nil {
 		return ""
 	}
-	// #2159: count same-name nesting to the MATCHING close - the old
-	// first-</tag> close handed a nested same-name block back as the
-	// container (an inner <article> comment block silently replaced the
-	// real body). Same discipline as extractTaggedBlock (#2151).
+
 	start := s[openMatch[1]:]
 	rest := start
 	consumed := 0
@@ -472,7 +403,7 @@ func extractFirstTag(s, tag string) string {
 		if closeMatch == nil {
 			return ""
 		}
-		// Any same-name opens INSIDE the segment up to this close bump depth.
+
 		seg := rest[:closeMatch[0]]
 		nested := len(openRe.FindAllStringIndex(seg, -1))
 		depth += nested
@@ -484,23 +415,13 @@ func extractFirstTag(s, tag string) string {
 		consumed += closeMatch[1]
 		rest = rest[closeMatch[1]:]
 	}
-	// Only use if it contains meaningful text (>100 chars)
+
 	if len(strings.TrimSpace(stripTagsOnly(inner))) < 100 {
 		return ""
 	}
 	return inner
 }
 
-// extractTaggedBlock finds the first opening tag whose attribute tail
-// matches attrTailRE (a pattern matching the rest of the tag after the
-// name) and returns its inner HTML up to the MATCHING same-name closing
-// tag (#2146). The old `(.*?)</\w+>` closed on the first closing tag of
-// ANY name - a container's first child element ended the capture
-// (short child: silent <100-char failure fell through every phase-2
-// tier; long child: a truncated product was returned, silently dropping
-// everything after it). Go's RE2 has no backreferences, so same-name
-// matching is a two-step scan: capture the opening name, then count
-// nested opens/closes of that name.
 func extractTaggedBlock(s, attrTailRE string) string {
 	re := regexp.MustCompile(`(?is)<(\w+)[^>]*` + attrTailRE + `[^>]*>`)
 	loc := re.FindStringSubmatchIndex(s)
@@ -521,12 +442,7 @@ func extractTaggedBlock(s, attrTailRE string) string {
 		if rest[m[2]:m[3]] == "/" {
 			depth--
 			if depth == 0 {
-				// #2151: slice from the ORIGINAL start (right after the
-				// opening tag), not from the advanced rest - rest has
-				// moved past every intermediate same-name tag, so the
-				// old content := rest[:m[0]] dropped each inner same-name
-				// block entirely (a 427B container yielded only its last
-				// 207B child; Wikipedia's #mw-content-text nests 109 divs).
+
 				content := start[:consumed+m[0]]
 				if len(strings.TrimSpace(stripTagsOnly(content))) < 100 {
 					return ""
@@ -541,23 +457,16 @@ func extractTaggedBlock(s, attrTailRE string) string {
 	}
 }
 
-// extractAttrMatch extracts content from a tag with a specific attribute value.
 func extractAttrMatch(s, attr, val string) string {
-	// #2159: the attribute must start after a delimiter (space/quote) -
-	// a bare `\s*attr=` tail let `data-role="main"` satisfy role= and
-	// the WRONG container win (and a short one silently starve the real
-	// id container of its retry).
+
 	return extractTaggedBlock(s, `[\s"']`+regexp.QuoteMeta(attr)+`\s*=\s*["']`+regexp.QuoteMeta(val)+`["']`)
 }
 
-// extractByID extracts content from a tag with a specific id attribute.
 func extractByID(s, id string) string {
-	// #2159: `\bid=` matched `data-id=` (\b holds across the hyphen);
-	// the delimited form requires a real attribute boundary.
+
 	return extractTaggedBlock(s, `[^>]*[\s"']id\s*=\s*["']`+regexp.QuoteMeta(id)+`["']`)
 }
 
-// stripTagsOnly removes HTML tags without any entity decoding or whitespace handling.
 func stripTagsOnly(s string) string {
 	return regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
 }

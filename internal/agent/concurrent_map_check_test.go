@@ -159,10 +159,6 @@ func TestCheckConcurrentMapAccess_EmptyContent(t *testing.T) {
 	}
 }
 
-// TestCheckConcurrentMapAccess_SliceFanOutNotMap pins #1445-A: indexed
-// writes to a SLICE (the extremely common parallel fan-out collection
-// pattern) must not be counted as map writes - 'map out is accessed
-// without sync' fired on an object that was never a map.
 func TestCheckConcurrentMapAccess_SliceFanOutNotMap(t *testing.T) {
 	src := `package main
 

@@ -1,10 +1,5 @@
 package agent
 
-// #3822 companion: a requires entry referencing a nonexistent step ID
-// (typo) must surface as an explicit "does not exist" attribution rather
-// than the generic "never attempted" dead end - in block mode the guarded
-// command would otherwise be rejected forever with no repair hint.
-
 import (
 	"strings"
 	"testing"
@@ -14,7 +9,7 @@ func TestIssue3822_UnknownRequiresAttribution(t *testing.T) {
 	e := newWFEngineWithSpec(t, `{"steps":[
 		{"id":"test","mode":"block","on_commands":["git push*"],"requires":["tests"],"artifact_glob":"ok.txt"}
 	]}`)
-	v := e.checkPreconditions(runGitPush.Name, runGitPush.Arguments) // lazily loads the spec
+	v := e.checkPreconditions(runGitPush.Name, runGitPush.Arguments)
 	if v == nil {
 		t.Fatalf("block mode must still reject (unknown req is unsatisfiable)")
 	}

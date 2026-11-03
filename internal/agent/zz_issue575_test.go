@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// TestIssue575_ConfigSyntaxRegistered verifies that config-syntax check
-// is registered in allChecks (Bug A: dead code - never called).
 func TestIssue575_ConfigSyntaxRegistered(t *testing.T) {
 	registerAllChecks()
 	found := false
@@ -20,9 +18,6 @@ func TestIssue575_ConfigSyntaxRegistered(t *testing.T) {
 	}
 }
 
-// TestIssue575_UnclosedBlockComment verifies that unclosed /* */ block
-// comments in JSONC files are detected (Bug A.1: NOFLAG probe verified
-// that "{ /* unclosed\n\"x\": 1 }" was stripped to valid "{}").
 func TestIssue575_UnclosedBlockComment(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -67,8 +62,6 @@ func TestIssue575_UnclosedBlockComment(t *testing.T) {
 	}
 }
 
-// TestIssue575_YAML_DuplicateKeys verifies that YAML files with duplicate
-// mapping keys are detected (Bug A.2: yaml.Node does not check duplicate keys).
 func TestIssue575_YAML_DuplicateKeys(t *testing.T) {
 	tests := []struct {
 		name    string

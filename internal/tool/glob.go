@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-// Glob implements the glob tool for file path matching.
 type Glob struct {
 	SandboxCheck AllowedPathChecker
 }
@@ -62,14 +61,10 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		args.Directory = "."
 	}
 
-	// Get git-tracked files for gitignore filtering
 	tracked := gitTrackedFiles(ctx, args.Directory)
 
-	// Support ** for recursive matching via filepath.Glob doublestar
 	pattern := filepath.Join(args.Directory, args.Pattern)
-	// #1690 case 3: the pattern itself was never sandbox-checked - "../../*"
-	// joined its way out of the allowed directory and Glob happily walked
-	// it. Clean the joined path and require it to stay inside.
+
 	if t.SandboxCheck != nil {
 		joined := filepath.Clean(pattern)
 		if !t.SandboxCheck(joined) {
@@ -81,14 +76,10 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		return Result{IsError: true, Content: fmt.Sprintf("glob error: %v", err)}, nil
 	}
 
-	// #829: filepath.Glob treats ** as a single * (one segment). For
-	// '**/*.go' Glob returns depth-1 files only, so the old
-	// 'len(matches)==0 && Contains(**)' guard never fired and deep files
-	// were silently missing. Any ** pattern goes to walkGlob unconditionally.
 	if strings.Contains(args.Pattern, "**") {
 		matches = walkGlob(args.Directory, args.Pattern, tracked)
 	} else if tracked != nil {
-		// Filter by gitignore
+
 		filtered := filterByTracked(matches, args.Directory, tracked)
 		matches = filtered
 	}
@@ -102,12 +93,11 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		if !strings.ContainsAny(args.Pattern, "*?[") {
 			hints = append(hints, "Your pattern has no wildcards — try adding * (e.g., '*.go') or ** for recursive search.")
 		}
-		// Suggest listing the directory to see what's there
+
 		hints = append(hints, fmt.Sprintf("Try list_directory on %q to see available files, or broaden the pattern.", args.Directory))
 		return Result{Content: strings.Join(hints, "\n")}, nil
 	}
 
-	// Make paths relative
 	for i, m := range matches {
 		rel, err := filepath.Rel(args.Directory, m)
 		if err == nil {
@@ -115,10 +105,8 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		}
 	}
 
-	// Sort matches alphabetically for predictable output
 	sort.Strings(matches)
 
-	// Cap results to avoid flooding context with large file lists
 	const maxGlobResults = 500
 	totalCount := len(matches)
 	if totalCount > maxGlobResults {
@@ -133,12 +121,6 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	return Result{Content: result}, nil
 }
 
-// filterByTracked removes files not in the git-tracked set.
-// tracked keys are slash-separated paths relative to baseDir (git ls-files
-// output), so membership must be an exact relative-path lookup, not a
-// suffix match. HasSuffix(".../build/main.go", "main.go") is true even when
-// only the root main.go is tracked, which let ignored/untracked files slip
-// through the gitignore filter.
 func filterByTracked(matches []string, baseDir string, tracked map[string]struct{}) []string {
 	var filtered []string
 	for _, m := range matches {
@@ -153,13 +135,8 @@ func filterByTracked(matches []string, baseDir string, tracked map[string]struct
 	return filtered
 }
 
-// walkGlob handles ** patterns by walking the directory tree.
 func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
-	// Split pattern on the FIRST ** : prefix anchors the walk root, and the
-	// (possibly still **-containing) remainder is matched segment-wise below.
-	// #4549: only the first split is taken on purpose — matchStarStarSuffix
-	// now handles any number of additional ** segments in the remainder
-	// recursively, so multi-** patterns no longer silently mis-match.
+
 	parts := strings.SplitN(pattern, "**", 2)
 	if len(parts) < 2 {
 		return nil
@@ -168,11 +145,6 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 
 	var results []string
 
-	// #4705: a prefix carrying its own wildcards (*/**/*.go, pkg-*/**/x.go)
-	// used to be Joined literally into a nonexistent startDir - WalkDir then
-	// delivered one root error the callback swallowed, producing a silent
-	// zero-match with a misleading "no subdirectories" hint. Expand the
-	// prefix into concrete directories first and walk each.
 	startDirs := []string{filepath.Join(baseDir, prefix)}
 	if strings.ContainsAny(prefix, "*?[") {
 		if expanded, err := filepath.Glob(filepath.Join(baseDir, prefix)); err == nil && len(expanded) > 0 {
@@ -191,7 +163,6 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 				return nil
 			}
 
-			// Filter by gitignore if available
 			if tracked != nil {
 				rel, _ := filepath.Rel(baseDir, path)
 				if _, ok := tracked[filepath.ToSlash(rel)]; !ok {
@@ -199,19 +170,11 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 				}
 			}
 
-			// Remove prefix, try matching suffix against remainder.
-			// #829: filepath.Match's * does not cross '/', so a suffix like
-			// '/*.go' never matched 'deep/two.go'. Match segment-wise, allowing
-			// '**' to absorb any number of leading segments.
 			rel, _ := filepath.Rel(startDir, path)
 			relSlash := filepath.ToSlash(rel)
 			suffixSlash := strings.TrimPrefix(filepath.ToSlash(suffix), "/")
 			matched := matchStarStarSuffix(suffixSlash, relSlash)
-			// #4549: store the walk-relative path, NOT filepath.Abs(path).
-			// The caller converts results via filepath.Rel(args.Directory, m);
-			// with a default directory of "." Rel(".", "/abs/path") always
-			// errors and the absolute path leaked through, breaking the
-			// relative-path output contract shared with filepath.Glob.
+
 			if matched {
 				results = append(results, path)
 			}
@@ -222,29 +185,19 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 	return results
 }
 
-// matchStarStarSuffix matches rel against a '**/'-style suffix where **
-// absorbs any number of leading segments (#829). #4549: a suffix may itself
-// contain further '**' segments (e.g. pattern "**/docs/**/*.md" leaves
-// suffix "docs/**/*.md"); those absorb zero or more whole segments via
-// matchSegs. The suffix still aligns at any position of rel, preserving the
-// original "first ** absorbs the prefix" semantics.
 func matchStarStarSuffix(suffix, rel string) bool {
 	if suffix == "" {
 		return true
 	}
 	if !strings.Contains(suffix, "/") {
-		// Single-segment suffix with wildcards (e.g. '*.go'): * does not
-		// cross '/', so match the BASE segment ('sub/nested.go' vs '*.go')
-		// or, for literal names, any tail segment.
+
 		if strings.ContainsAny(suffix, "*?[") {
 			ok, _ := filepath.Match(suffix, filepath.Base(rel))
 			return ok
 		}
 		return rel == suffix || strings.HasSuffix(rel, "/"+suffix)
 	}
-	// Multi-segment suffix: try aligning it at every position of rel (the
-	// split-off leading '**' absorbs any number of leading segments), and let
-	// literal '**' segments inside the suffix absorb any run of segments.
+
 	sSegs := strings.Split(suffix, "/")
 	rSegs := strings.Split(rel, "/")
 	for i := 0; i < len(rSegs); i++ {
@@ -255,10 +208,6 @@ func matchStarStarSuffix(suffix, rel string) bool {
 	return false
 }
 
-// matchSegs matches suffix segments against rel segments. A literal "**"
-// segment absorbs zero or more whole segments; other segments match via
-// filepath.Match (single-segment wildcards only). An empty suffix segment
-// list matches any remaining tail.
 func matchSegs(sSegs, rSegs []string) bool {
 	if len(sSegs) == 0 {
 		return true

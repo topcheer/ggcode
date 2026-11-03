@@ -2,9 +2,6 @@ package agentruntime
 
 import "testing"
 
-// Regression guard for #745: maskPlaintext must guard on rune count, not byte
-// length. Byte guard diverges from rune slicing for multibyte values: 3-7
-// runes panic (negative Repeat), 8 runes leak the secret verbatim.
 func TestMaskPlaintextMultibyte(t *testing.T) {
 	cases := []struct {
 		name  string

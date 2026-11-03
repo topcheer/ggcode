@@ -27,7 +27,7 @@ func TestSuggestSkills_SubstringMatch(t *testing.T) {
 	if len(sugs) == 0 {
 		t.Fatal("expected suggestions for 'verify'")
 	}
-	// Should prioritize verify-changes and verify-lint as substring matches
+
 	hasVerify := false
 	for _, s := range sugs {
 		if s == "verify-changes" || s == "verify-lint" {
@@ -74,7 +74,7 @@ func TestSuggestSkills_EmptyNames(t *testing.T) {
 }
 
 func TestSuggestSkills_LimitResults(t *testing.T) {
-	// Many close matches should be capped at maxFuzzyResults (3)
+
 	names := []string{"verify-changes", "verify-lint", "verify-regression", "verify-build"}
 	sugs := suggestSkills("verify", names)
 	if len(sugs) > maxFuzzyResults {

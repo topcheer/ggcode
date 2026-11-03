@@ -1,44 +1,5 @@
 package agent
 
-// Struct Tag Consistency Intelligence for Go source files.
-//
-// Problem: AI coding agents frequently generate Go structs for JSON/API
-// serialization with inconsistent or malformed struct tags. The three most
-// common mistakes are:
-//
-//  1. PascalCase json tag names: `json:"FieldName"` -- JSON convention is
-//     camelCase or snake_case. A capitalized first letter almost always
-//     indicates the developer forgot to lowercase the tag value.
-//  2. Redundant json tags: `json:"Name"` on a field named "Name" -- the
-//     default Go JSON serialization already uses the field name verbatim.
-//     The tag adds nothing and likely masks a typo or forgotten rename.
-//  3. Inconsistent tag coverage: a struct where most exported fields have
-//     json tags but one or two don't. The untagged fields will serialize
-//     with their Go PascalCase names, producing inconsistent JSON keys
-//     (e.g. {"user_name":"bob", "Email":"bob@x.com"}).
-//
-// Research basis:
-//   - "API Contract Testing for LLM-Generated Code" (ICSE 2025): 22% of
-//     LLM-generated Go structs had at least one malformed json tag.
-//   - Go encoding/json docs: untagged exported fields use field name as key.
-//   - staticcheck does not flag any of these patterns.
-//   - Claude Code, Cursor, Cline/OpenHands: none detect struct tag issues
-//     at write time.
-//
-// Detection approach: AST-based scan of struct type declarations. Pure
-// deterministic analysis, zero LLM cost. Delta-agnostic -- malformed tags
-// are wrong regardless of prior state.
-//
-// False positive mitigation:
-//   - Structs with fewer than 2 json-tagged fields are not checked for
-//     coverage inconsistency (they may not be JSON models).
-//   - Embedded (anonymous) fields are skipped entirely.
-//   - Unexported fields are skipped (they don't serialize by default).
-//   - `json:"-"` (explicit omission) is respected, not flagged.
-//   - Tags with only options (e.g. `json:",omitempty"`) are skipped.
-//   - Test files are excluded (struct tags in tests are often for
-//     test fixtures, not real serialization).
-
 import (
 	"fmt"
 	"go/ast"
@@ -51,17 +12,14 @@ import (
 
 const maxStructTagWarnings = 8
 
-// structFieldInfo holds parsed metadata for a single struct field.
 type structFieldInfo struct {
-	name     string // Go field name
-	jsonTag  string // raw json tag value (e.g. "name,omitempty"), empty if none
+	name     string
+	jsonTag  string
 	line     int
 	exported bool
-	hasTag   bool // field has any struct tag literal
+	hasTag   bool
 }
 
-// checkStructTagConsistency analyzes Go struct declarations for json tag
-// inconsistencies. Returns a list of human-readable warnings.
 func checkStructTagConsistency(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -96,7 +54,6 @@ func checkStructTagConsistency(filePath, oldContent, newContent string) []string
 	return capStructTagWarnings(warnings)
 }
 
-// collectStructFields extracts field metadata from a struct type.
 func collectStructFields(fset *token.FileSet, st *ast.StructType) []structFieldInfo {
 	if st.Fields == nil {
 		return nil
@@ -104,7 +61,7 @@ func collectStructFields(fset *token.FileSet, st *ast.StructType) []structFieldI
 	var result []structFieldInfo
 	for _, field := range st.Fields.List {
 		if len(field.Names) == 0 {
-			continue // embedded/anonymous field -- skip
+			continue
 		}
 		line := fset.Position(field.Pos()).Line
 		jsonTag, hasTag := "", false
@@ -125,7 +82,6 @@ func collectStructFields(fset *token.FileSet, st *ast.StructType) []structFieldI
 	return result
 }
 
-// checkJSONTagNaming detects PascalCase tag names and redundant tags.
 func checkJSONTagNaming(fields []structFieldInfo) []string {
 	var warnings []string
 	for _, fi := range fields {
@@ -149,8 +105,6 @@ func checkJSONTagNaming(fields []structFieldInfo) []string {
 	return warnings
 }
 
-// checkTagCoverage detects exported fields missing json tags when siblings
-// have them, indicating inconsistent JSON serialization.
 func checkTagCoverage(fields []structFieldInfo) []string {
 	taggedCount := 0
 	var untaggedExported []structFieldInfo
@@ -178,8 +132,6 @@ func checkTagCoverage(fields []structFieldInfo) []string {
 	return warnings
 }
 
-// extractJSONTagValue parses the raw struct tag literal and returns the
-// value of the "json" key. Returns empty string if no json tag present.
 func extractJSONTagValue(tagLit *ast.BasicLit) string {
 	if tagLit == nil {
 		return ""
@@ -197,7 +149,6 @@ func extractJSONTagValue(tagLit *ast.BasicLit) string {
 	return reflect.StructTag(raw).Get("json")
 }
 
-// tagBaseName returns the json tag name before any comma-separated options.
 func tagBaseName(jsonTag string) string {
 	if idx := strings.Index(jsonTag, ","); idx >= 0 {
 		return jsonTag[:idx]
@@ -205,17 +156,14 @@ func tagBaseName(jsonTag string) string {
 	return jsonTag
 }
 
-// isExportedIdent returns true if the identifier starts with an uppercase letter.
 func isExportedIdent(name string) bool {
 	return len(name) > 0 && isUpperASCII(name[0])
 }
 
-// isUpperASCII checks if a byte is an uppercase ASCII letter.
 func isUpperASCII(b byte) bool {
 	return b >= 'A' && b <= 'Z'
 }
 
-// lowerFirst lowercases the first ASCII letter of a string.
 func lowerFirst(s string) string {
 	if len(s) == 0 {
 		return s
@@ -226,7 +174,6 @@ func lowerFirst(s string) string {
 	return s
 }
 
-// capStructTagWarnings truncates the warning list and appends a notice.
 func capStructTagWarnings(warnings []string) []string {
 	if len(warnings) <= maxStructTagWarnings {
 		return warnings

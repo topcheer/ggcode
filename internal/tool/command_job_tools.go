@@ -13,21 +13,12 @@ import (
 )
 
 type StartCommandTool struct {
-	Manager *CommandJobManager
-	Policy  permission.PermissionPolicy
-	// OutputTee, if non-nil, receives a copy of stdout/stderr in real time.
-	// Used by the TUI to mirror command output to a tmux command pane.
+	Manager    *CommandJobManager
+	Policy     permission.PermissionPolicy
 	OutputTee  io.Writer
 	OnPreExec  func(command, description string)
 	OnPostExec func(exitCode int, err error)
-	// SecLedger (#3294): background commands pass the same command gate as
-	// run_command, so their denials (block, bypass-downgraded ask,
-	// supervised ask-as-block) are part of the same sandbox-probing
-	// fingerprint. Nil-safe: unwired = no detection.
-	SecLedger *SecurityLedger
-	// RiskLedger (r28): the allowed-side dual shared with run_command -
-	// gate-passed dangerous-classified background starts accumulate the
-	// same session risk score. Nil-safe.
+	SecLedger  *SecurityLedger
 	RiskLedger *AllowedRiskLedger
 }
 
@@ -65,8 +56,6 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 }`)
 }
 
-// isBypassMode returns true when the permission policy allows
-// automatic execution of Ask-level commands (Bypass or Autopilot).
 func (t StartCommandTool) isBypassMode() bool {
 	if t.Policy == nil {
 		return false
@@ -88,12 +77,10 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		return Result{IsError: true, Content: "command job manager is unavailable"}, nil
 	}
 
-	// === Safety gate (Allow/Ask/Block) ===
 	gate := NewCommandGate()
 	gateResult := gate.Check(args.Command)
 	if gateResult.IsBlocked() {
-		// #3294: same denial sources as run_command's gate - background
-		// starts are equally probeable.
+
 		t.SecLedger.Record("gate", "block", args.Command)
 		content := gateResult.Reason
 		if esc := t.SecLedger.Escalation(); esc != "" {
@@ -104,13 +91,9 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	if gateResult.NeedsConfirmation() {
 		if t.isBypassMode() {
 			debug.Log("command-gate", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-			// #4273: no ledger Record - a downgraded-allow runs and is not a
-			// denial (same ruling as run_command). The BLOCKED path above
-			// records ("gate","block") separately.
+
 		} else {
-			// In non-bypass mode, treat Ask as Block for background jobs.
-			// #3294: that IS a denial (the command never starts) - record it
-			// under its own kind so supervised-mode probing stays visible.
+
 			t.SecLedger.Record("gate", "ask-blocked", args.Command)
 			content := "Command requires confirmation: " + gateResult.Reason
 			if esc := t.SecLedger.Escalation(); esc != "" {
@@ -126,14 +109,11 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		args.Command = gateResult.CleanedCmd
 	}
 
-	// Surface interactive-command warnings to the agent so it can self-correct.
 	var preWarning string
 	if interactive := gate.InteractiveCommandWarning(args.Command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
 	}
-	// r28: gate PASSED (block/ask-blocked branches returned above) - the
-	// allowed-side dual of the SecLedger.Record calls up there. Bypass
-	// downgrades (ask-allowed) land here too: the command really runs.
+
 	t.RiskLedger.Accumulate(args.Command)
 	if esc := t.RiskLedger.Escalation(); esc != "" {
 		preWarning += esc + "\n\n"
@@ -146,10 +126,7 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		t.Manager.SetOutputTee(t.OutputTee)
 		defer t.Manager.SetOutputTee(nil)
 	}
-	// #1756 case 1: Start now derives the job ctx from the passed context
-	// (the TUI shell Esc-cancel chain depends on it). The agent tool path
-	// must NOT tie the job to this request ctx - it dies when the tool call
-	// returns - so pass Background explicitly, preserving the old behavior.
+
 	snap, err := t.Manager.Start(context.Background(), args.Command, args.Detach, secondsToDuration(args.Timeout, defaultCommandTimeout))
 	if err != nil {
 		if t.OnPostExec != nil {
@@ -157,9 +134,7 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		}
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	// start_command is async — we don't know the exit code yet.
-	// OnPostExec will be called by the caller via read_command_output/wait_command
-	// when the job completes, not here.
+
 	return Result{Content: preWarning + formatCommandJobSnapshot(*snap, false)}, nil
 }
 
@@ -279,14 +254,11 @@ func (t WaitCommandTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	wait := secondsToDuration(args.WaitSeconds, 30*time.Second)
 	tailLines := args.TailLines
 	if tailLines <= 0 {
-		tailLines = 5 // default tail for streaming
+		tailLines = 5
 	}
 
-	// Extract progress callback from context (if available).
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
-	// Polling loop: read output every 2s during the wait period,
-	// streaming the last `tailLines` lines to the TUI.
 	pollInterval := 2 * time.Second
 	deadline := time.Now().Add(wait)
 	ticker := time.NewTicker(pollInterval)
@@ -295,30 +267,26 @@ func (t WaitCommandTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	var lastSnap CommandJobSnapshot
 
 	for {
-		// Read current output on every iteration (including first).
+
 		snap, err := t.Manager.Read(args.JobID, tailLines, args.SinceLine)
 		if err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
 		lastSnap = snap
 
-		// Stream to TUI if output changed.
 		if progressFn != nil {
 			output := formatStreamingOutput(snap, tailLines)
 			progressFn("", "wait_command", output)
 		}
 
-		// Check if job is done.
 		if isFinishedCommandStatus(snap.Status) {
 			return Result{Content: formatCommandJobSnapshot(snap, true)}, nil
 		}
 
-		// Check deadline.
 		if !time.Now().Before(deadline) {
 			return Result{Content: formatCommandJobSnapshot(snap, true)}, nil
 		}
 
-		// Wait for next poll interval or cancellation.
 		select {
 		case <-ctx.Done():
 			return Result{Content: formatCommandJobSnapshot(lastSnap, true)}, nil
@@ -328,8 +296,6 @@ func (t WaitCommandTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 }
 
-// formatStreamingOutput renders the tail of command output for live display.
-// Shows only the recent lines, creating a scrolling-log effect.
 func formatStreamingOutput(snap CommandJobSnapshot, tailLines int) string {
 	var sb strings.Builder
 	if isFinishedCommandStatus(snap.Status) {
@@ -500,8 +466,7 @@ func secondsToDuration(seconds int, fallback time.Duration) time.Duration {
 	if seconds <= 0 {
 		return fallback
 	}
-	// #513: clamp before multiplication — same overflow class as
-	// run_command.go (9223372037s wraps negative → instant kill).
+
 	if seconds > maxCommandTimeoutSeconds {
 		seconds = maxCommandTimeoutSeconds
 	}

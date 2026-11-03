@@ -17,28 +17,19 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// LanChatTool lets the agent interact with the LAN Chat system:
-// list participants, send messages, read history, and manage pending approvals.
 type LanChatTool struct {
 	Hub         *lanchat.Hub
 	rateLimiter *agentRateLimiter
-	dmCooldown  time.Duration // per-recipient agent DM cooldown
+	dmCooldown  time.Duration
 }
 
-// NewLanChatTool creates a LanChatTool with an initialized agent rate limiter.
-// The rate limiter prevents LLM-originated message storms that can cause
-// cascading noise across all agents on the LAN.
-//
-// If cfg provides a non-zero dm_cooldown, that value is used instead of the default.
 func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 	t := LanChatTool{
 		Hub:         hub,
 		rateLimiter: newAgentRateLimiter(),
 		dmCooldown:  cfg.EffectiveDMCooldown(),
 	}
-	// Register inbound DM callback so the rate limiter automatically resets
-	// the self→sender DM cooldown when a non-broadcast message arrives.
-	// This allows the local agent to reply immediately without being blocked.
+
 	if hub != nil {
 		hub.SetOnInboundDM(func(fromNodeID string) {
 			t.OnInboundDM(fromNodeID)
@@ -47,24 +38,11 @@ func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 	return t
 }
 
-// agentRateLimiter prevents LLM message storms by rate-limiting agent-originated
-// lanchat messages. This is critical because each agent message may trigger
-// another agent's LLM inference cycle (expensive, slow, and noisy).
-//
-// Rate limiting is per-recipient for all send paths (send, broadcast,
-// broadcast_all, send_team). Each sender→receiver pair has a configurable
-// cooldown (default 150s, set via lanchat.dm_cooldown), allowing the same agent
-// to message different peers in parallel while preventing repeated spam to the
-// same peer.
-//
-// Only applies when asAgent=true (agent is the sender). Human-originated
-// messages are never rate-limited.
 type agentRateLimiter struct {
 	mu         sync.Mutex
-	dmLastSent map[string]time.Time // key: "sender→receiver"
+	dmLastSent map[string]time.Time
 }
 
-// defaultAgentDMCooldown is used when no config is provided (e.g. in tests).
 const defaultAgentDMCooldown = 150 * time.Second
 
 func newAgentRateLimiter() *agentRateLimiter {
@@ -73,9 +51,6 @@ func newAgentRateLimiter() *agentRateLimiter {
 	}
 }
 
-// checkDM returns empty string if allowed, or an error message if rate-limited.
-// The key is "sender→receiver" so both parties are explicitly recorded.
-// cooldown defaults to defaultAgentDMCooldown when zero.
 func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Duration) string {
 	if cooldown <= 0 {
 		cooldown = defaultAgentDMCooldown
@@ -83,7 +58,7 @@ func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Durat
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := sender + "\u2192" + recipient // "sender→recipient"
+	key := sender + "\u2192" + recipient
 	last, ok := r.dmLastSent[key]
 	if !ok {
 		return ""
@@ -100,7 +75,6 @@ func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Durat
 	)
 }
 
-// recordDM marks a DM from sender to recipient as sent at the current time.
 func (r *agentRateLimiter) recordDM(sender, recipient string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -108,9 +82,6 @@ func (r *agentRateLimiter) recordDM(sender, recipient string) {
 	r.dmLastSent[key] = time.Now()
 }
 
-// resetDMForPeer clears the DM cooldown for the self→peer direction.
-// Called when a non-broadcast message arrives from peer, allowing
-// the local agent to reply immediately without waiting for cooldown.
 func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -118,13 +89,6 @@ func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
 	delete(r.dmLastSent, key)
 }
 
-// sharedWorkspaceHint returns a concise collaboration warning string when any
-// of the given recipient node IDs share the same workspace path as this node.
-// This is injected into lanchat tool results so the LLM knows to include
-// workspace-safety instructions when delegating work to same-workspace peers.
-//
-// Returns "" when no recipient shares the workspace (cross-workspace DMs,
-// or recipients whose workspace is unknown).
 func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
 	if t.Hub == nil {
 		return ""
@@ -171,9 +135,6 @@ func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
 		strings.Join(sameWSNames, ", "), selfWS)
 }
 
-// OnInboundDM resets the DM cooldown for the sender when a non-broadcast
-// agent message arrives, so the local agent can reply without being
-// rate-limited. Called from the TUI's lanchat message callback.
 func (t *LanChatTool) OnInboundDM(fromNodeID string) {
 	if t.rateLimiter == nil || t.Hub == nil {
 		return
@@ -182,8 +143,6 @@ func (t *LanChatTool) OnInboundDM(fromNodeID string) {
 	t.rateLimiter.resetDMForPeer(selfID, fromNodeID)
 }
 
-// displayName returns the best human-readable name for a nodeID.
-// Prefers agent nick, then human nick, then falls back to the nodeID itself.
 func (t *LanChatTool) displayName(nodeID string) string {
 	if t.Hub == nil {
 		return nodeID
@@ -199,14 +158,13 @@ func (t *LanChatTool) displayName(nodeID string) string {
 			break
 		}
 	}
-	// Node not in participants list - show a short prefix instead of the full long ID
+
 	if len(nodeID) > 16 {
 		return string([]rune(nodeID)[:16]) + "..."
 	}
 	return nodeID
 }
 
-// formatCooldown formats a duration as a human-readable string.
 func formatCooldown(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -298,7 +256,6 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: "lanchat: hub not available (LAN discovery may be disabled)"}, nil
 	}
 
-	// 'to' can be a JSON array of strings or a single string
 	var args struct {
 		Action    string          `json:"action"`
 		Message   string          `json:"message"`
@@ -316,15 +273,11 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	// as_agent defaults to true - this tool is almost always called by the
-	// agent, so messages should come from the agent identity. Only explicitly
-	// set as_agent=false should override this.
 	asAgent := true
 	if args.AsAgent != nil {
 		asAgent = *args.AsAgent
 	}
 
-	// Parse 'to' which may be a string or an array of strings
 	toNodeIDs := parseNodeIDs(args.RawTo)
 
 	switch args.Action {
@@ -353,20 +306,16 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	}
 }
 
-// parseNodeIDs accepts 'to' as a string ("id1") , comma-separated ("id1,id2"),
-// or a JSON array (["id1","id2"]). Returns a deduplicated list of node IDs.
 func parseNodeIDs(raw json.RawMessage) []string {
 	if len(raw) == 0 {
 		return nil
 	}
 
-	// Try JSON array first
 	var arr []string
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		return dedupStrings(arr)
 	}
 
-	// Fall back to string (may be comma-separated)
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil
@@ -392,19 +341,6 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
-// resolveRecipients maps user-supplied identifiers (node IDs, full nicks,
-// or partial nick prefixes) to actual node IDs from the known peers list.
-//
-// Resolution order per identifier:
-//  1. Exact node_id match in active peers
-//  2. Exact human_nick or agent_nick match in active peers (case-insensitive)
-//  3. Unique prefix match on human_nick or agent_nick
-//  4. Archive fallback: look up the identifier in the archive ring buffer.
-//     If found, use the archived peer's team+role to find a currently
-//     active peer (the peer may have restarted with a new NodeID).
-//
-// If no match is found for any identifier, returns nil.
-// joinNodeIDs renders a node-id set deterministically for ambiguity errors.
 func joinNodeIDs(set map[string]bool) string {
 	ids := make([]string, 0, len(set))
 	for id := range set {
@@ -419,28 +355,19 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	return resolved, ambiguous
 }
 
-// resolveRecipientsFull additionally returns the identifiers that resolved
-// to nothing (#4452: lets doSend report honest drop counts instead of
-// input-count minus deduped-output-count).
 func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []string) {
 	participants := t.Hub.Participants()
 
-	// Build lookup maps (case-insensitive)
-	byNodeID := make(map[string]string) // lower(nodeID) -> nodeID
-	// #1272: nick -> set of DISTINCT nodeIDs. Two instances sharing a nick
-	// (common with default, unchanged nicknames) used to make the map build
-	// silently keep the LAST writer, DMing the wrong peer with no warning.
-	// A nick claimed by more than one node is ambiguous and must error out
-	// with the candidate node_ids instead of a coin-flip delivery.
-	byNick := make(map[string]map[string]bool) // lower(nick) -> {nodeID}
+	byNodeID := make(map[string]string)
+
+	byNick := make(map[string]map[string]bool)
 	byPrefix := make([]struct{ nick, id string }, 0)
 
-	// Also build team+role index for archive fallback
-	byTeamRole := make(map[string]map[string]bool) // "team|role" -> node-id set (#2142)
+	byTeamRole := make(map[string]map[string]bool)
 
 	for _, p := range participants {
 		if p.NodeID == t.Hub.NodeID() {
-			continue // skip self
+			continue
 		}
 		byNodeID[strings.ToLower(p.NodeID)] = p.NodeID
 		for _, nick := range []string{p.HumanNick, p.AgentNick} {
@@ -456,11 +383,7 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 		}
 		if p.Team != "" && p.Role != "" {
 			key := p.Team + "|" + p.Role
-			// #2142: collect ALL nodes per team|role - the old first-wins
-			// picked whichever peer Go's randomized map iteration visited
-			// first, so the archive fallback delivered to a random "colleague"
-			// sharing the team+role with zero ambiguity report (#1272's
-			// refuse-coin-flip semantics must cover this path too).
+
 			if byTeamRole[key] == nil {
 				byTeamRole[key] = make(map[string]bool)
 			}
@@ -479,7 +402,6 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 		}
 		lower := strings.ToLower(raw)
 
-		// 1. Exact node_id
 		if id, ok := byNodeID[lower]; ok {
 			if !seen[id] {
 				resolved = append(resolved, id)
@@ -487,7 +409,7 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 			}
 			continue
 		}
-		// 2. Exact nick - #1272: ambiguous when multiple distinct nodes claim it
+
 		if idSet, ok := byNick[lower]; ok {
 			if len(idSet) > 1 {
 				ambiguous = append(ambiguous, fmt.Sprintf("%q matches %d peers with the same nick: %s - address by node_id instead",
@@ -502,17 +424,6 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 			}
 			continue
 		}
-		// 3. Prefix match - #1272: the old "first wins" break delivered to an
-		// arbitrary peer when the prefix matched several; require uniqueness.
-		// #2137: collect hits WITHOUT touching `seen` first - marking during
-		// the scan (before the ambiguity determination) let one entry's
-		// prefix scan pollute the shared dedup set: a later exact node_id
-		// in the same batch was silently swallowed, and in the reverse
-		// order an ambiguous prefix lost its already-resolved candidate and
-		// was silently delivered to the remaining one - bypassing #1272.
-		// Ambiguity considers ALL matching peers; only the delivered unique
-		// hit enters `seen`. Multi-nick peers still dedupe within the scan
-		// via the local set.
 		var prefixHits []string
 		scanDedup := map[string]bool{}
 		for _, entry := range byPrefix {
@@ -534,28 +445,20 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 			continue
 		}
 
-		// Not found in active peers - try archive fallback
 		unresolved = append(unresolved, raw)
 	}
 
-	// 4. Archive fallback: for each unresolved identifier, search the
-	//    archive ring buffer. If found, use team+role to find the peer's
-	//    current NodeID in the active peers map.
 	var stillUnresolved []string
 	for _, raw := range unresolved {
-		// Try archive by node_id
+
 		ap := t.Hub.LookupArchiveByNodeID(raw)
 		if ap == nil {
-			// Try archive by nick
+
 			ap = t.Hub.LookupArchiveByNick(raw)
 		}
 
 		if ap != nil && ap.Team != "" && ap.Role != "" {
-			// Found in archive - try to find a currently active peer
-			// with the same team+role (the peer may have restarted).
-			// #2142: 2+ active peers sharing the exact team|role is a
-			// coin-flip - report it instead of silently picking one (#1272
-			// semantics on the archive path).
+
 			key := ap.Team + "|" + ap.Role
 			if ids, ok := byTeamRole[key]; ok {
 				if len(ids) > 1 {
@@ -572,9 +475,7 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 				continue
 			}
 		}
-		// If nothing matched, track it so the caller can report honestly
-		// (#4452: input-count minus output-count over-reports drops when
-		// several identifiers dedup onto one node).
+
 		stillUnresolved = append(stillUnresolved, raw)
 	}
 
@@ -599,14 +500,14 @@ func (t LanChatTool) doList(teamFilter string) Result {
 		ProjectName string   `json:"project_name,omitempty"`
 		Languages   []string `json:"languages,omitempty"`
 		AgentBusy   bool     `json:"agent_busy"`
-		AgentStatus string   `json:"agent_status,omitempty"` // "" healthy; quota/rate_limited/auth degraded
+		AgentStatus string   `json:"agent_status,omitempty"`
 		Model       string   `json:"model,omitempty"`
 		Self        bool     `json:"self"`
 	}
 
 	var peers []peerInfo
 	for _, p := range participants {
-		// Apply team filter if specified
+
 		if teamFilter != "" && !strings.EqualFold(p.Team, teamFilter) {
 			continue
 		}
@@ -650,9 +551,6 @@ func (t LanChatTool) doList(teamFilter string) Result {
 	return Result{Content: fmt.Sprintf("Participants (%d)%s:\n%s\n", len(peers), label, string(out))}
 }
 
-// doSend sends a direct message to one or more recipients.
-// toNodeIDs supports multiple recipients (comma-separated or JSON array).
-// A "*" in the list triggers a global broadcast (broadcast_all semantics).
 func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []string, asAgent bool, toRole string) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for send"}, nil
@@ -661,39 +559,28 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return Result{IsError: true, Content: "recipient 'to' is required for send (use action='list' to find node_id)"}, nil
 	}
 
-	// Check for wildcard broadcast (#4553-C): "*" ANYWHERE in the list means
-	// everyone - mixed lists like "*,node1" used to drop the "*" into
-	// unresolved (silently skipped) and send only to the named nodes,
-	// losing the broadcast intent entirely.
 	for _, id := range toNodeIDs {
 		if id == "*" {
 			return t.doBroadcastAll(ctx, content, asAgent)
 		}
 	}
 
-	// Resolve nicks to node IDs. The LLM naturally uses nicks (e.g.
-	// "dd_dev_agent") or partial nicks (e.g. "dd") as the 'to' value.
-	// We try exact node_id match first, then exact nick match, then
-	// prefix match (nick starts with the given string).
 	resolved, ambiguous, unresolvedInputs := t.resolveRecipientsFull(toNodeIDs)
 	if len(ambiguous) > 0 {
-		// #1272: refuse coin-flip delivery - surface the candidates so the
-		// caller (agent or human) can re-address by node_id from action='list'.
+
 		hint := t.doList("")
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"ambiguous recipient(s):\n%s\nUse action='list' and address by node_id.\n%s",
 			strings.Join(ambiguous, "\n"), hint.Content)}, nil
 	}
 	if len(resolved) == 0 {
-		// No matches at all - show available participants to help
+
 		hint := t.doList("")
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"no recipient found for: %s. Use action='list' to see valid node_ids and nicks.\n%s",
 			strings.Join(toNodeIDs, ", "), hint.Content)}, nil
 	}
 
-	// Default toRole: when sending as agent, target the recipient's agent;
-	// when sending as human, target the human chat panel.
 	if toRole == "" {
 		if asAgent {
 			toRole = lanchat.RoleAgent
@@ -702,8 +589,6 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		}
 	}
 
-	// Rate-limit check for agent-originated messages (anti-storm protection).
-	// Each sender→recipient pair has an independent cooldown (default 150s, configurable via lanchat.dm_cooldown).
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		selfID := t.Hub.NodeID()
@@ -716,14 +601,13 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 			}
 		}
 		if len(allowed) == 0 {
-			// All recipients are rate-limited
+
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"All recipients are rate-limited:\n%s", strings.Join(rateLimited, "\n"))}, nil
 		}
 		resolved = allowed
 	}
 
-	// Send to each recipient individually
 	var errors []string
 	sent := 0
 	for _, nodeID := range resolved {
@@ -737,7 +621,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		} else {
 			sent++
-			// Record rate-limit timestamp for successful sends
+
 			if asAgent && t.rateLimiter != nil {
 				selfID := t.Hub.NodeID()
 				t.rateLimiter.recordDM(selfID, nodeID)
@@ -761,7 +645,6 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	// Build display names from the actually delivered recipients
 	var displayTargets []string
 	for _, id := range resolved {
 		displayTargets = append(displayTargets, t.displayName(id))
@@ -772,10 +655,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	result := fmt.Sprintf("Message sent to %s as %s", target, role)
-	// Report silently dropped recipients (unresolved nicks).
-	// #4452: resolved is post-rate-limit AND post-dedup (several input
-	// identifiers may map to one node), so input-count minus output-count
-	// over-reports. Track the unresolved identifier count instead.
+
 	if len(unresolvedInputs) > 0 {
 		result += fmt.Sprintf(" (%d recipient(s) could not be resolved and were skipped: %s)",
 			len(unresolvedInputs), strings.Join(unresolvedInputs, ", "))
@@ -792,8 +672,6 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	return Result{Content: result + ".\n"}, nil
 }
 
-// doBroadcastTeam broadcasts to members of the sender's own team.
-// This is the default broadcast behavior - it respects team isolation.
 func (t LanChatTool) doBroadcastTeam(ctx context.Context, content string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for broadcast"}, nil
@@ -807,12 +685,6 @@ func (t LanChatTool) doBroadcastTeam(ctx context.Context, content string, asAgen
 	return t.doSendTeam(ctx, content, myTeam, asAgent)
 }
 
-// isUnknownDeliveryErr reports whether err leaves the delivery outcome
-// UNKNOWN rather than definitely-failed. #4774 (S-02): lanchat sends are
-// fire-and-forget over UDP under a hub deadline - a timeout does NOT prove
-// non-delivery (the datagram may already be on the wire), so lumping it with
-// hard failures invited re-send storms, while counting nil returns as
-// delivered hid partial loss. A timeout gets its own verdict.
 func isUnknownDeliveryErr(err error) bool {
 	if err == nil {
 		return false
@@ -827,11 +699,8 @@ func isUnknownDeliveryErr(err error) bool {
 	return false
 }
 
-// outcomeListCap bounds the per-recipient status lines so a large LAN
-// broadcast report stays readable.
 const outcomeListCap = 8
 
-// appendOutcomeLines adds one "  name: reason" line per entry, capped.
 func appendOutcomeLines(b *strings.Builder, entries []string) {
 	for i, e := range entries {
 		if i >= outcomeListCap {
@@ -842,9 +711,6 @@ func appendOutcomeLines(b *strings.Builder, entries []string) {
 	}
 }
 
-// appendUnknownAndFailed renders the #4774 three-way outcome tail: UNKNOWN
-// (timeout - neither failure nor confirmed success) and definitely-failed
-// sections, each with per-recipient status.
 func appendUnknownAndFailed(b *strings.Builder, unknown, failed []string, total int) {
 	if len(unknown) > 0 {
 		fmt.Fprintf(b, "Delivery UNKNOWN for %d/%d recipients (timeout is neither failure nor confirmed success):\n", len(unknown), total)
@@ -856,15 +722,11 @@ func appendUnknownAndFailed(b *strings.Builder, unknown, failed []string, total 
 	}
 }
 
-// doBroadcastAll sends to every participant on the LAN, regardless of team.
-// Uses per-peer DM cooldowns (not a single broadcast cooldown) so that peers
-// who recently messaged us (cooldown reset) can still receive the broadcast.
 func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for broadcast_all"}, nil
 	}
 
-	// Collect all non-self participant node IDs
 	selfID := t.Hub.NodeID()
 	var allPeers []string
 	for _, p := range t.Hub.Participants() {
@@ -877,14 +739,11 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		return Result{IsError: true, Content: "no online participants to broadcast to"}, nil
 	}
 
-	// #845: mirror doSend's as_agent semantics - a human broadcast must land
-	// in human chat panels, not trigger every peer's agent approval loop.
 	toRole := lanchat.RoleHuman
 	if asAgent {
 		toRole = lanchat.RoleAgent
 	}
 
-	// Per-peer rate-limit check for agent-originated messages
 	var allowed []string
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
@@ -903,11 +762,6 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		allowed = allPeers
 	}
 
-	// Send to each allowed recipient individually. #4774 (S-02): the per-peer
-	// outcome is three-way - queued (handed to transport; no delivery receipt
-	// exists yet), UNKNOWN (timeout: neither failure nor success), failed. A
-	// deadline that already hit marks every remaining recipient UNKNOWN
-	// instead of hammering sends that cannot complete.
 	var queued []string
 	var unknown, failed []string
 	for _, nodeID := range allowed {
@@ -962,9 +816,6 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 	return Result{Content: result}, nil
 }
 
-// doSendTeam sends a message to all participants belonging to a specific team.
-// It iterates participants, filters by the team field, and sends individual DMs
-// to each matching member. If no team matches, returns an error listing valid teams.
 func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for send_team"}, nil
@@ -983,7 +834,7 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 			teamsSeen[p.Team] = true
 		}
 		if p.NodeID == selfNodeID {
-			continue // skip self
+			continue
 		}
 		if !p.Online {
 			continue
@@ -1004,7 +855,6 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 		)}, nil
 	}
 
-	// Per-peer rate-limit check for agent-originated team sends (anti-storm)
 	var allowed []string
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
@@ -1022,17 +872,10 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 		members = allowed
 	}
 
-	// Send to each team member
-	// #1693 case 1 / #845: toRole must follow the sender's identity - a
-	// hardcoded RoleAgent delivered human-originated send_team messages to
-	// every member's AGENT, triggering their approval/reasoning loop (the
-	// same bug #845 fixed in doSend and doBroadcastAll; this path was
-	// missed).
 	toRole := lanchat.RoleAgent
 	if !asAgent {
-		toRole = lanchat.RoleHuman // human sender: land in the chat panel
+		toRole = lanchat.RoleHuman
 	}
-	// #4774 (S-02): same three-way outcome accounting as doBroadcastAll.
 	var queued []string
 	var unknown, failed []string
 	for _, nodeID := range members {
@@ -1086,7 +929,6 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	return Result{Content: result}, nil
 }
 
-// summarizeContent truncates a message body to a single-line summary.
 func summarizeContent(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.TrimSpace(s)
@@ -1107,7 +949,6 @@ func (t LanChatTool) doHistory(limit int) Result {
 		return Result{Content: "No messages in history.\n"}
 	}
 
-	// Get last N messages
 	start := len(messages) - limit
 	if start < 0 {
 		start = 0
@@ -1117,7 +958,7 @@ func (t LanChatTool) doHistory(limit int) Result {
 	var lines []string
 	for _, m := range recent {
 		ts := time.UnixMilli(m.Timestamp).Format("15:04:05")
-		from := m.FromNick // FromNick already includes role suffix (e.g. "CleverOtter_developer_agent")
+		from := m.FromNick
 		body := summarizeContent(m.Content)
 		if m.ToNodeID != "" {
 			lines = append(lines, fmt.Sprintf("  [%s] %s → (DM) %s", ts, from, body))
@@ -1137,7 +978,7 @@ func (t LanChatTool) doPending() Result {
 
 	var lines []string
 	for _, p := range pending {
-		from := p.Message.FromNick // already includes role suffix
+		from := p.Message.FromNick
 		age := time.Since(p.Received).Round(time.Second).String() + " ago"
 		lines = append(lines, fmt.Sprintf("  • [%s] from %s (%s): %s", p.Message.ID, from, age, summarizeContent(p.Message.Content)))
 	}
@@ -1175,12 +1016,10 @@ func (t LanChatTool) doSetIdentity(nick, role, team string) (Result, error) {
 		return Result{IsError: true, Content: "at least one of 'nick', 'role', or 'team' is required for set_identity"}, nil
 	}
 
-	// Merge with current values for fields not provided
 	curNick := t.Hub.HumanNick()
 	curRole := t.Hub.Role()
 	curTeam := t.Hub.Team()
 
-	// HumanNick is a composite "name_role" - extract the name part
 	if nick == "" {
 		if idx := strings.LastIndex(curNick, "_"); idx >= 0 {
 			nick = curNick[:idx]

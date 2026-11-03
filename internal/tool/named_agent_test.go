@@ -11,16 +11,12 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// setupDeleteTestStore creates a TemplateStore with an isolated HOME directory
-// so tests don't interfere with real subagent templates.
 func setupDeleteTestStore(t *testing.T) (*subagent.TemplateStore, string) {
 	t.Helper()
 	homeDir := t.TempDir()
-	// Setenv must happen BEFORE NewTemplateStore, since NewTemplateStore
-	// calls config.HomeDir() at construction time.
+
 	t.Setenv("HOME", homeDir)
 
-	// Use a unique workspace path to avoid collisions.
 	workspace := filepath.Join(homeDir, "myproject")
 	store := subagent.NewTemplateStore(workspace)
 
@@ -47,7 +43,6 @@ func TestDeleteNamedAgentTool_Success(t *testing.T) {
 	store, hashDir := setupDeleteTestStore(t)
 	createTestTemplate(t, store, "code-reviewer", "Code reviewer", "You are a code reviewer.")
 
-	// Verify file exists.
 	path := filepath.Join(hashDir, "code-reviewer.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("template file should exist: %v", err)
@@ -66,12 +61,10 @@ func TestDeleteNamedAgentTool_Success(t *testing.T) {
 		t.Errorf("unexpected result: %s", result.Content)
 	}
 
-	// Verify file is gone.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("template file should be deleted")
 	}
 
-	// Verify Load fails.
 	if _, err := store.Load("code-reviewer"); err == nil {
 		t.Errorf("Load should fail after deletion")
 	}
@@ -197,17 +190,14 @@ func TestDeleteNamedAgentTool_DeleteOneOfMultiple(t *testing.T) {
 		t.Errorf("expected success: %s", result.Content)
 	}
 
-	// code-reviewer should be gone.
 	if _, err := os.Stat(filepath.Join(hashDir, "code-reviewer.json")); !os.IsNotExist(err) {
 		t.Errorf("code-reviewer should be deleted")
 	}
 
-	// test-writer should still exist.
 	if _, err := os.Stat(filepath.Join(hashDir, "test-writer.json")); err != nil {
 		t.Errorf("test-writer should still exist: %v", err)
 	}
 
-	// List should only return test-writer.
 	templates, err := store.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -224,7 +214,6 @@ func TestCreateNamedAgentTool_CreatedVsUpdated(t *testing.T) {
 	store, _ := setupDeleteTestStore(t)
 	tool := CreateNamedAgentTool{Store: store}
 
-	// First save should say "created"
 	input, _ := json.Marshal(map[string]string{
 		"name":          "reviewer",
 		"description":   "Code reviewer",
@@ -238,7 +227,6 @@ func TestCreateNamedAgentTool_CreatedVsUpdated(t *testing.T) {
 		t.Errorf("expected 'created', got: %s", result.Content)
 	}
 
-	// Second save should say "updated"
 	input2, _ := json.Marshal(map[string]string{
 		"name":          "reviewer",
 		"description":   "Updated reviewer",
@@ -252,7 +240,6 @@ func TestCreateNamedAgentTool_CreatedVsUpdated(t *testing.T) {
 		t.Errorf("expected 'updated', got: %s", result2.Content)
 	}
 
-	// Verify CreatedAt was preserved, not reset
 	tmpl, err := store.Load("reviewer")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -265,16 +252,13 @@ func TestCreateNamedAgentTool_CreatedVsUpdated(t *testing.T) {
 func TestTemplateStore_LoadExisting(t *testing.T) {
 	dir := t.TempDir()
 
-	// Use NewTemplateStore with a known workspace path
 	store := subagent.NewTemplateStore(dir)
 
-	// Non-existent
 	_, exists := store.LoadExisting("nope")
 	if exists {
 		t.Error("expected false for non-existent template")
 	}
 
-	// Create and check
 	store.Save(subagent.NamedAgentTemplate{Name: "test", Description: "d", SystemPrompt: "p"})
 	tmpl, exists := store.LoadExisting("test")
 	if !exists {

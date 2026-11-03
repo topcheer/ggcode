@@ -1,9 +1,5 @@
 package agent
 
-// #3861 probes: permanent coverage credit requires a completed run_command
-// (a start_command launch is registration, not a result), and env-prefixed
-// verify commands are recognized.
-
 import (
 	"encoding/json"
 	"testing"
@@ -19,11 +15,7 @@ func TestIssue3861_LaunchDoesNotCreditCoverage(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", issue3861CmdRaw(t, "/ws/internal/agent/foo.go"))
 	s.recordToolCall("edit_file", issue3861CmdRaw(t, "/ws/internal/context/bar.go"))
-	// start_command launch covering internal/agent: THIS call is
-	// legitimately silent for that scope, but it must not credit PERMANENT
-	// coverage - a later verification of the other package must still flag
-	// internal/agent UNVERIFIED (the background outcome never reaches this
-	// state machine).
+
 	tool, args := issue3861Cmd(t, "start_command", "go test ./internal/agent/...")
 	s.recordToolCall(tool, args)
 
@@ -37,8 +29,7 @@ func TestIssue3861_CompletedRunStillCredits(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", issue3861CmdRaw(t, "/ws/internal/agent/foo.go"))
 	s.recordToolCall("edit_file", issue3861CmdRaw(t, "/ws/internal/context/bar.go"))
-	// A completed run_command covering internal/agent credits it; a later
-	// verification of the other package must no longer flag internal/agent.
+
 	tool, args := issue3861Cmd(t, "run_command", "go test ./internal/agent/...")
 	if warn := s.recordToolCall(tool, args); warn == "" {
 		t.Fatal("unverified context package must warn on the first covering-agent run")

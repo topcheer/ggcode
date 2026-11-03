@@ -28,8 +28,7 @@ func TestEnvDrift_AllVarsSet(t *testing.T) {
 
 func TestEnvDrift_MissingVars(t *testing.T) {
 	dir := t.TempDir()
-	// API_KEY/REDIS_URL use empty template values (no default) so they count
-	// as required; DATABASE_URL carries a default and must be skipped (#1034).
+
 	writeEnvFile(t, dir, ".env.example", "DATABASE_URL=postgresql://localhost\nAPI_KEY=\nREDIS_URL=\n")
 	writeEnvFile(t, dir, ".env", "DATABASE_URL=postgresql://localhost\n")
 
@@ -128,8 +127,7 @@ func TestEnvDrift_ExportSyntax(t *testing.T) {
 
 func TestEnvDrift_DefaultedVarsSkipped(t *testing.T) {
 	dir := t.TempDir()
-	// #1034: vars with non-empty defaults are not required from the user;
-	// only truly unset vars (empty / "" / '') are reported.
+
 	writeEnvFile(t, dir, ".env.example", "LOG_LEVEL=info\nDB_URL=postgres://localhost\nAPI_KEY=\n")
 
 	s := newEnvDriftState()
@@ -182,7 +180,7 @@ export EXPORTED=yes
 INVALID==double
 `
 	result := parseEnvContent(content)
-	// FOO, BAZ, EXPORTED, INVALID(="=double") are non-empty; EMPTY is empty
+
 	if len(result) != 4 {
 		t.Errorf("expected 4 set vars, got %d: %v", len(result), result)
 	}

@@ -1,41 +1,5 @@
 package agent
 
-// Concurrency Race Detection Verification Hint
-//
-// Research basis: Data races are the #1 source of subtle, non-deterministic
-// bugs in concurrent Go programs. They are invisible to static analysis --
-// only the Go race detector (`go test -race`) catches them at runtime.
-//
-// Industry trend: Agent verification loops ("verify, don't assume") -- the
-// dominant pattern in 2025-2026 AI agent design (Anthropic's verifiers,
-// Cognition/Devin, OpenHands). The agent should proactively verify its
-// concurrency changes with the appropriate tool.
-//
-// Competitor analysis:
-//   - Claude Code: no automatic -race suggestion
-//   - Cursor: no automatic -race suggestion
-//   - Cline/OpenHands: no automatic -race suggestion
-//   - Aider: no automatic -race suggestion
-//   - GitHub Copilot: sometimes mentions -race in chat, no automated trigger
-//
-// Gap: ggcode has extensive static concurrency checks (goroutine-leak,
-// lock-without-unlock, concurrent-map-access, select-timer-leak), but none
-// proactively suggests runtime verification. Static checks catch structural
-// issues; the race detector catches temporal issues (concurrent read/write
-// to the same variable without synchronization). These are complementary.
-//
-// This check is delta-aware: it only fires when concurrency primitives are
-// NEWLY introduced or MODIFIED in the edit. If the old content already had
-// the same concurrency patterns, no hint is generated (avoiding noise on
-// reformats or unrelated edits).
-//
-// Design:
-//   - Zero LLM cost (AST-based detection, deterministic)
-//   - Fires at most once per edit (no spam)
-//   - Only triggers for Go files
-//   - Only fires when NEW concurrency code is introduced (delta-aware)
-//   - Produces a concise, actionable hint to run `go test -race`
-
 import (
 	"go/ast"
 	"path/filepath"
@@ -43,27 +7,6 @@ import (
 	"strings"
 )
 
-// concurrencyPrimitive patterns that warrant race detector verification.
-// When these are newly introduced in an edit, the race detector should be run.
-//
-// Detection targets:
-//   1. `go` statements (goroutine launches) -- most common race source
-//   2. sync.Mutex / sync.RWMutex -- shared state protection
-//   3. sync.WaitGroup -- goroutine coordination
-//   4. sync.Map -- concurrent map access
-//   5. sync.Once -- one-time initialization
-//   6. sync.Cond -- condition variables
-//   7. sync.Pool -- object pooling
-//   8. atomic.* operations -- lock-free concurrency
-//   9. channel send/receive in new goroutine context
-//
-// We deliberately do NOT trigger on:
-//   - context.WithCancel/WithTimeout (these are for cancellation, not races)
-//   - time.After/Timer (single-goroutine timing)
-//   - errgroup (already provides synchronization)
-
-// checkRaceVerifyHint detects newly introduced concurrency primitives and
-// suggests running the Go race detector.
 func checkRaceVerifyHint(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
@@ -72,8 +15,6 @@ func checkRaceVerifyHint(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Skip test files -- they already run under `go test`, and the hint is
-	// about verifying the production code they test.
 	if strings.HasSuffix(filePath, "_test.go") {
 		return nil
 	}
@@ -81,17 +22,10 @@ func checkRaceVerifyHint(filePath, oldContent, newContent string) []string {
 	oldScore := countConcurrencyPrimitives(oldContent)
 	newScore := countConcurrencyPrimitives(newContent)
 
-	// Delta-aware: trigger if new concurrency primitives were introduced...
 	if newScore > oldScore {
 		return raceVerifyHintMessages()
 	}
-	// #1841 case 2: ...AND if synchronization primitives were REMOVED while
-	// goroutines stayed (or grew) - deleting a mutex while keeping the
-	// goroutine is the classic race-introducing refactor (Mutex->channel /
-	// Mutex->atomic rewrites with a net-zero primitive count previously
-	// scored 1<=1 and slipped through silently, despite the file header's
-	// "NEWLY introduced or MODIFIED" claim). Sync-removal is a trigger on
-	// its own, decoupled from goroutine delta.
+
 	{
 		oldSync := countSyncPrimitives(oldContent)
 		newSync := countSyncPrimitives(newContent)
@@ -106,9 +40,6 @@ func checkRaceVerifyHint(filePath, oldContent, newContent string) []string {
 	return nil
 }
 
-// countSyncPrimitives counts synchronization constructs (the combined
-// countConcurrencyPrimitives score does not necessarily cover plain
-// sync.Mutex DECLARATIONS, so removal detection needs its own counter).
 func countSyncPrimitives(src string) int {
 	if strings.TrimSpace(src) == "" {
 		return 0
@@ -126,7 +57,6 @@ func countSyncPrimitives(src string) int {
 	return n
 }
 
-// raceVerifyHintMessages is the single hint body shared by both triggers.
 func raceVerifyHintMessages() []string {
 	return []string{
 		"Concurrency code modified -- data races are invisible to static analysis. " +
@@ -135,7 +65,6 @@ func raceVerifyHintMessages() []string {
 	}
 }
 
-// countGoroutineLaunches counts `go ` statement launches via AST.
 func countGoroutineLaunches(src string) int {
 	if strings.TrimSpace(src) == "" {
 		return 0
@@ -154,8 +83,6 @@ func countGoroutineLaunches(src string) int {
 	return count
 }
 
-// countConcurrencyPrimitives returns a count of concurrency-relevant patterns
-// in Go source code. Uses AST parsing for accuracy.
 func countConcurrencyPrimitives(src string) int {
 	if strings.TrimSpace(src) == "" {
 		return 0
@@ -163,17 +90,12 @@ func countConcurrencyPrimitives(src string) int {
 
 	file, _, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
-		// Fall back to simple string matching if AST parsing fails.
+
 		return countConcurrencyPatternsString(src)
 	}
 
 	count := 0
 
-	// #1483 case C: build local-name -> import-path map so aliased
-	// imports (`import concur "sync"`) resolve to their real package -
-	// the old code compared the LOCAL name against "sync"/"atomic"
-	// literally, so an aliased import counted ZERO concurrency
-	// primitives, breaking even the "NEWLY introduced" promise.
 	aliasToPath := map[string]string{"sync": "sync", "atomic": "sync/atomic"}
 	for _, imp := range file.Imports {
 		path, err := strconv.Unquote(imp.Path.Value)
@@ -187,7 +109,7 @@ func countConcurrencyPrimitives(src string) int {
 				continue
 			}
 		} else {
-			// Default local name: last path segment.
+
 			parts := strings.Split(path, "/")
 			local = parts[len(parts)-1]
 		}
@@ -199,12 +121,11 @@ func countConcurrencyPrimitives(src string) int {
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.GoStmt:
-			// Goroutine launch -- primary race risk.
+
 			count++
 
 		case *ast.SelectorExpr:
-			// Check for sync.* and atomic.* package usage (including
-			// aliased imports - resolved via aliasToPath).
+
 			if ident, ok := n.X.(*ast.Ident); ok {
 				pkg := aliasToPath[ident.Name]
 				sel := n.Sel.Name
@@ -216,13 +137,13 @@ func countConcurrencyPrimitives(src string) int {
 						count++
 					}
 				case "sync/atomic":
-					// Any atomic operation indicates concurrent access.
+
 					count++
 				}
 			}
 
 		case *ast.SendStmt:
-			// Channel send -- can cause races if receiver is concurrent.
+
 			count++
 		}
 		return true
@@ -231,30 +152,28 @@ func countConcurrencyPrimitives(src string) int {
 	return count
 }
 
-// countConcurrencyPatternsString is a fallback when AST parsing fails.
-// Uses simple substring matching for the most critical patterns.
 func countConcurrencyPatternsString(src string) int {
 	count := 0
-	// Goroutine launches: "go func" or "go someFunc"
+
 	count += strings.Count(src, "go func(") + strings.Count(src, "go func (")
-	// Look for "go someFunc(" pattern (word boundary before "go")
+
 	for _, line := range strings.Split(src, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "go ") && !strings.HasPrefix(trimmed, "go func") {
-			// Likely a goroutine launch like "go process()"
+
 			if strings.Contains(trimmed, "(") {
 				count++
 			}
 		}
 	}
-	// sync primitives
+
 	for _, pat := range []string{
 		"sync.Mutex", "sync.RWMutex", "sync.WaitGroup",
 		"sync.Map", "sync.Once", "sync.Cond", "sync.Pool",
 	} {
 		count += strings.Count(src, pat)
 	}
-	// atomic operations
+
 	count += strings.Count(src, "atomic.")
 	return count
 }

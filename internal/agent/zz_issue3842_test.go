@@ -1,9 +1,5 @@
 package agent
 
-// #3842 probes: environment/timeout lint failures get a "did not complete"
-// phrasing and a template that stops advising "fix these lint issues";
-// partial-warning runs get a truncation marker.
-
 import (
 	"context"
 	"os"
@@ -17,8 +13,7 @@ func TestIssue3842_TimeoutFailureSaysDidNotComplete(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make unavailable")
 	}
-	// A linter that prints nothing and exits 1: the #3813 synthesized
-	// warning must now use the "did not complete" phrasing.
+
 	dir := fakeLinterDir(t, "echo 'env crash'\nexit 1\n")
 	a := NewAgent(nil, nil, "sys", 5)
 	res := a.runLintCheck(context.Background(), dir)
@@ -34,8 +29,7 @@ func TestIssue3842_PartialWarningsGetTruncationMarker(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make unavailable")
 	}
-	// One parseable warning line, then the linter dies: the marker entry
-	// must follow the parsed warnings.
+
 	dir := fakeLinterDir(t, "echo 'foo.go:1:1: some warning'\necho 'crash tail'\nexit 2\n")
 	a := NewAgent(nil, nil, "sys", 5)
 	res := a.runLintCheck(context.Background(), dir)
@@ -60,8 +54,7 @@ func TestIssue3842_CleanRunKeepsQualityClosing(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make unavailable")
 	}
-	// Completed run with parseable warnings: closing line stays the
-	// original quality-debt advice.
+
 	dir := fakeLinterDir(t, "echo 'foo.go:1:1: some warning'\nexit 0\n")
 	a := NewAgent(nil, nil, "sys", 5)
 	res := a.runLintCheck(context.Background(), dir)
@@ -72,10 +65,7 @@ func TestIssue3842_CleanRunKeepsQualityClosing(t *testing.T) {
 
 func issue3842RenderedHint(t *testing.T, warnings []string) string {
 	t.Helper()
-	// Mirror the template's gating logic through the same prefix check the
-	// production code uses (kept simple: the renderer is internal; the
-	// probe pins the CONTRACT that did-not-complete entries flip the
-	// closing line).
+
 	for _, w := range warnings {
 		if strings.HasPrefix(w, "lint did not complete") {
 			return "investigate"

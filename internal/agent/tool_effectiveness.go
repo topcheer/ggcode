@@ -8,40 +8,16 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Tool effectiveness tracking.
-//
-// Monitors per-tool success/failure rates during a run. When a specific tool
-// has a poor effectiveness score (high error rate, frequent empty results, or
-// repeated rejections), the tracker injects guidance suggesting the agent try
-// a different tool or approach.
-//
-// This is distinct from:
-//   - empty_search_tracker: only tracks consecutive empty searches (not per-tool rates)
-//   - error_cascade: tracks cross-tool error streaks (not individual tool patterns)
-//   - tool_redundancy: detects repeated identical calls (not effectiveness)
-//
-// Inspiration: Windsurf's SWE-1 models have "tool-call reasoning" that learns
-// when to use terminal, browser, or editor tools. Claude Code tracks tool
-// effectiveness to decide when to suggest alternative approaches. This tracker
-// provides similar capability with zero LLM cost - pure statistical tracking.
-
 const (
-	// toolEffMinSample is the minimum calls before effectiveness is evaluated.
-	// Avoids premature judgment from a single failure.
 	toolEffMinSample = 3
 
-	// toolEffThreshold is the effectiveness ratio below which guidance fires.
-	// 0.34 means fewer than 1 in 3 calls succeeded.
 	toolEffThreshold = 0.34
 
-	// toolEffMaxFires caps guidance injections per run per tool.
 	toolEffMaxFires = 2
 
-	// toolEffWindow is the sliding window size for recent results.
 	toolEffWindow = 8
 )
 
-// toolAltSuggestions maps tool names to alternative approaches.
 var toolAltSuggestions = map[string][]string{
 	"grep": {
 		"Try code_search for semantic/natural-language matching",
@@ -80,19 +56,17 @@ var toolAltSuggestions = map[string][]string{
 	},
 }
 
-// toolEffEntry records a single tool call outcome.
 type toolEffEntry struct {
 	successful bool
 }
 
-// toolEffTracker tracks per-tool effectiveness within a run.
 type toolEffTracker struct {
 	mu         sync.Mutex
-	calls      map[string][]toolEffEntry // tool name -> recent results (sliding window)
-	errors     map[string]int            // tool name -> total errors
-	successes  map[string]int            // tool name -> total successful calls (successful = !isError && !isPoorResult)
-	totals     map[string]int            // tool name -> total calls
-	firedCount map[string]int            // tool name -> guidance fires this run
+	calls      map[string][]toolEffEntry
+	errors     map[string]int
+	successes  map[string]int
+	totals     map[string]int
+	firedCount map[string]int
 }
 
 func newToolEffTracker() *toolEffTracker {
@@ -115,38 +89,20 @@ func (t *toolEffTracker) reset() {
 	t.firedCount = make(map[string]int)
 }
 
-// editResultTools are the tools whose failure phrasing ("old_text not
-// found", "no changes applied", ...) is a genuine rejection result. The
-// edit-rejection branch of isPoorResult is scoped to these (#1211): the
-// phrases are substrings that routinely appear in file/command content read
-// by other tools, where they are payload, not status.
 var editResultTools = map[string]bool{
 	"edit_file":       true,
 	"multi_edit_file": true,
 	"write_file":      true,
 }
 
-// filePayloadTools are the tools whose result content is raw FILE CONTENT
-// (possibly binary-extracted) rather than a status/report the tool layer
-// composed. Their isPoorResult truncation-marker branch is skipped entirely
-// (#2964): any "[output truncated]"-style literal inside the result is
-// payload the file itself contains (this repository's own tool sources embed
-// those marker strings), never a tool-layer advisory - read_file and
-// multi_file_read append no markers from the truncation list, and read_file's
-// own range hint "[File truncated: showing lines X-Y of N]" is informational
-// only (not degraded output). Scoping mirrors the #1211 edit-rejection fix.
 var filePayloadTools = map[string]bool{
 	"read_file":       true,
 	"multi_file_read": true,
 }
 
-// runCommandPoorResult applies the run_command-specific line-anchored
-// marker check (#3632). Unique-phrasing forms stay as raw Contains;
-// bracket forms must start a line (after optional leading whitespace or a
-// leading ellipsis) to count as tool-layer advisories rather than payload.
 func runCommandPoorResult(content string) bool {
 	lower := strings.ToLower(content)
-	// truncateMiddle head+tail markers (run_command.go) - unique phrasing.
+
 	if strings.Contains(lower, "truncated, showing tail]") {
 		return true
 	}
@@ -170,9 +126,6 @@ func runCommandPoorResult(content string) bool {
 	return false
 }
 
-// lineStartsWithAdvisoryMarker reports whether ln begins with one of the
-// bracketed truncation advisories the tool layer emits (LSP, MCP adapters,
-// plugin output; #1208 list).
 func lineStartsWithAdvisoryMarker(ln string) bool {
 	for _, m := range []string{
 		"[output truncated]",
@@ -191,15 +144,6 @@ func lineStartsWithAdvisoryMarker(ln string) bool {
 	return false
 }
 
-// sourceEchoTools are the tools whose result content ECHOES repository
-// source text (patches, previews, fetched page/source dumps) rather than a
-// status the tool layer composed (#3663, the #3632 residual): git_show and
-// git_diff of this repository's own tool sources embed the truncation
-// marker literals verbatim, batch_replace dry-run previews them, and
-// browser content fetches pages that mention them - none of these tools
-// ever APPENDS a marker from the truncation list, so a bare substring hit
-// is always payload, never a degradation advisory. Same skip semantics as
-// filePayloadTools.
 var sourceEchoTools = map[string]bool{
 	"git_show":      true,
 	"git_diff":      true,
@@ -207,38 +151,19 @@ var sourceEchoTools = map[string]bool{
 	"browser":       true,
 }
 
-// isPoorResult checks if a non-error result is still effectively a failure
-// (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
 	if searchTools[toolName] {
 		return isEmptyResult(content)
 	}
-	// File-payload tools: content is file data, not a tool-layer report -
-	// marker literals are payload (#2964). See filePayloadTools doc comment.
+
 	if filePayloadTools[toolName] || sourceEchoTools[toolName] {
 		return false
 	}
-	// run_command payloads are arbitrary command stdout/stderr: cat-ing or
-	// grepping this repository's own sources surfaces the bracketed marker
-	// literals MID-LINE (a self-referential but successful lookup, #3632).
-	// Tool-layer advisories, in contrast, always sit on their own line
-	// (possibly ellipsis-prefixed from a head-cut). So for run_command the
-	// bracket markers are line-start anchored (#1208 emitted forms keep
-	// firing; mid-line payload mentions do not) instead of raw Contains.
+
 	if toolName == "run_command" {
 		return runCommandPoorResult(content)
 	}
-	// Check for truncation advisory markers in tool output. Anchored to the
-	// bracketed advisory form or the result-header form so file CONTENT that
-	// merely mentions the phrase (read_file on source containing "output
-	// truncated" in the middle of a line) doesn't self-trip the detector
-	// (#358). The additional variants below are markers that the TOOL LAYER
-	// itself embeds in result content before recordCall sees it — LSP
-	// (tool/lsp.go), MCP adapters (mcp/adapter.go, tool/mcp_runtime.go),
-	// plugin output (plugin/plugin.go), and sub-agent results
-	// (subagent/runner.go). The output-guard's appended advisory is
-	// intentionally NOT matched here: guardToolOutput runs after recordCall,
-	// and truncClaim tracks that case separately (#363).
+
 	lower := strings.ToLower(content)
 	if strings.Contains(lower, "[output truncated]") ||
 		strings.Contains(lower, "[result too large]") ||
@@ -247,12 +172,7 @@ func isPoorResult(toolName, content string) bool {
 		strings.Contains(lower, "[... mcp result truncated:") ||
 		strings.Contains(lower, "[... mcp resource truncated:") ||
 		strings.Contains(lower, "[output truncated at") ||
-		// run_command truncateMiddle head+tail marker: "... [N lines
-		// omitted - output truncated, showing tail] ..." (and the stderr
-		// variant). The "truncated, showing tail]" tail is unique to that
-		// marker; output_compress's "[N similar lines omitted]" (agent-side
-		// redundancy compression of guidance lines) must NOT match - that
-		// output is not degraded. Found in #1208 review.
+
 		strings.Contains(lower, "truncated, showing tail]") ||
 		strings.Contains(lower, "[... truncated:") ||
 		strings.HasPrefix(lower, "output truncated") ||
@@ -260,13 +180,7 @@ func isPoorResult(toolName, content string) bool {
 		strings.HasPrefix(lower, "max results reached") {
 		return true
 	}
-	// Edit/write rejections. Scoped to the edit tools that actually emit
-	// these rejection messages (#1211): applying them to arbitrary tools
-	// made read_file on content that CONTAINS the phrases (e.g. this
-	// repository's own source, changelogs) count as failures. git_status
-	// legitimately reports "No changes." on a clean tree and knowledge_graph
-	// idempotently reports "already exists" - both are successes, not poor
-	// results. Only match the edit-tool rejection forms (#358).
+
 	if editResultTools[toolName] {
 		if strings.Contains(lower, "old_text not found") ||
 			strings.Contains(lower, "no changes applied") ||
@@ -278,8 +192,6 @@ func isPoorResult(toolName, content string) bool {
 	return false
 }
 
-// recordCall records a tool call outcome and returns guidance if the tool's
-// effectiveness has dropped below threshold. Returns "" if no guidance needed.
 func (t *toolEffTracker) recordCall(toolName, content string, isError bool) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -293,7 +205,6 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 		t.successes[toolName]++
 	}
 
-	// Append to sliding window
 	entry := toolEffEntry{successful: successful}
 	window := t.calls[toolName]
 	window = append(window, entry)
@@ -302,7 +213,6 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 	}
 	t.calls[toolName] = window
 
-	// Check if we should fire guidance
 	totalCalls := t.totals[toolName]
 	if totalCalls < toolEffMinSample {
 		return ""
@@ -311,7 +221,6 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 		return ""
 	}
 
-	// Calculate effectiveness over recent window
 	recent := window
 	if len(recent) < toolEffMinSample {
 		return ""
@@ -338,7 +247,7 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 func (t *toolEffTracker) buildGuidance(toolName string, rate float64, successes, total int) string {
 	alts, ok := toolAltSuggestions[toolName]
 	if !ok {
-		// Generic guidance for tools without specific alternatives
+
 		alts = []string{
 			"Try a different tool or approach",
 			"Verify your inputs (parameters, paths, patterns) are correct",
@@ -358,12 +267,6 @@ func (t *toolEffTracker) buildGuidance(toolName string, rate float64, successes,
 	return "[Tool Effectiveness] " + strings.Join(lines, "\n  - ")
 }
 
-// summary returns a brief effectiveness summary for logging/debugging.
-// Success accounting matches recordCall's window semantics (#1213):
-// successful = !isError && !isPoorResult. Previously the rate here was
-// (total-errors)/total, silently discarding poor results and reporting 100%
-// for a tool whose every call was a non-error failure (e.g. repeated empty
-// searches).
 func (t *toolEffTracker) summary() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -89,8 +89,7 @@ func TestDetectCommentBlocks_Detects(t *testing.T) {
 		path: "main.go",
 		addedLines: []reviewDiffLine{
 			{1, "//	if err != nil {"},
-			// #860: a gap in FILE line numbers (context line in between) must
-			// split the block; lines must be file-adjacent to count as one.
+
 			{2, "//		return fmt.Errorf(\"bad\")"},
 			{3, "//	for i := 0; i < 10; i++ {"},
 			{4, "//		_ = i"},
@@ -153,9 +152,7 @@ func TestFormatReviewReport_WithIssues(t *testing.T) {
 }
 
 func TestGetUntrackedFiles_ParseStatus(t *testing.T) {
-	// Test the parsing logic without git
-	// We can't easily test getUntrackedFiles without a git repo,
-	// but we verified the parsing in TestParseReviewDiff above.
+
 }
 
 func TestCommentedCodePatterns(t *testing.T) {
@@ -186,9 +183,6 @@ func TestCommentedCodePatterns(t *testing.T) {
 	}
 }
 
-// Note: contains and indexOf helpers are already defined in plan_mode_tools_test.go
-
-// #1699 case 1: content lines starting with ++ are additions, not headers.
 func TestParseReviewDiffDoublePlusContentLine(t *testing.T) {
 	diff := "diff --git a/x.c b/x.c\n--- a/x.c\n+++ b/x.c\n@@ -1,2 +1,3 @@\n int i;\n++i;\n return i;\n"
 	files := parseReviewDiff(diff)

@@ -19,7 +19,7 @@ import (
 )
 
 func init() {
-	// Zero the precompact start delay so tests don't wait 6 seconds.
+
 	precompactDelay = 0
 }
 
@@ -27,8 +27,6 @@ type mockTool struct {
 	name   string
 	result tool.Result
 
-	// delay, when > 0, is slept inside Execute so tool-duration metrics are
-	// measurable on hosts with coarse monotonic clocks (~0.6ms VM QPC).
 	delay time.Duration
 }
 
@@ -81,7 +79,6 @@ func (t countingTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	return tool.Result{Content: "ok"}, nil
 }
 
-// mockProvider is a simple mock for testing agent basics.
 type mockProvider struct {
 	mu            sync.Mutex
 	chatResp      *provider.ChatResponse
@@ -92,20 +89,10 @@ type mockProvider struct {
 	tokenCount    int
 	chatCalls     int
 	streamCalls   int
-	// capturedMsgs records every ChatStream request's messages (#1672):
-	// recovery-nudge delivery assertions compare consecutive requests.
-	capturedMsgs [][]provider.Message
+	capturedMsgs  [][]provider.Message
 
-	// firstEventDelay, when > 0, delays delivery of the first streamed event
-	// by this duration (goroutine delivery, ctx-aware). Metric tests use it so
-	// TTFT/Duration exceed one tick of coarse monotonic clocks: Windows VM QPC
-	// can be ~0.6ms, where an instant mock measures 0 and "expected positive"
-	// assertions cannot distinguish a recorded metric from a zero one.
 	firstEventDelay time.Duration
 
-	// eventInterval, when > 0, additionally spaces every subsequent event,
-	// making event-to-event windows (e.g. Reasoning→Done think time) measurable
-	// on the same coarse clocks.
 	eventInterval time.Duration
 }
 
@@ -175,13 +162,9 @@ type delayedSummaryProvider struct {
 	mu              sync.Mutex
 	releaseSummary  chan struct{}
 	summaryReturned chan struct{}
-	// summaryOnce guards the summaryReturned close: PCC (parallel context
-	// compaction) fans the summary payload out to multiple concurrent Chat
-	// calls, each of which signals completion — closing on every call would
-	// panic on the second close. PCC-agnostic: single-call path closes once too.
-	summaryOnce    sync.Once
-	streamCalls    int
-	streamMessages [][]provider.Message
+	summaryOnce     sync.Once
+	streamCalls     int
+	streamMessages  [][]provider.Message
 }
 
 func newDelayedSummaryProvider() *delayedSummaryProvider {
@@ -319,9 +302,7 @@ func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Messa
 	m.mu.Unlock()
 	ch := make(chan provider.StreamEvent, len(events))
 	if m.firstEventDelay > 0 || m.eventInterval > 0 {
-		// Delayed/spaced event delivery so elapsed-time metrics (TTFT, Duration,
-		// think-time windows between events) exceed one clock tick on hosts with
-		// coarse monotonic clocks.
+
 		go func() {
 			for i, event := range events {
 				d := m.eventInterval
@@ -359,7 +340,6 @@ func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Mess
 
 func (m *mockProvider) Name() string { return "mock" }
 
-// streamCallCount reports how many ChatStream calls were made.
 func (m *mockProvider) streamCallCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -621,7 +601,7 @@ func TestRunStreamWithContent_CompactsSilentlyAndProducesResponse(t *testing.T) 
 	}
 
 	joined := strings.Join(texts, "\n")
-	// Compaction is now silent — no "[compacting conversation...]" or "[conversation compacted]" text events.
+
 	if strings.Contains(joined, "[compacting conversation to stay within context window]") {
 		t.Fatalf("compaction should be silent, but found progress message in %q", joined)
 	}
@@ -727,12 +707,10 @@ func TestPreCompactAppliesBetweenLLMTurnsAndPreservesNewDialogue(t *testing.T) {
 		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 50))}})
 	}
 
-	// Pre-release the summary so the background precompact's Chat() returns immediately.
 	close(mp.releaseSummary)
 
 	a.StartPreCompact()
-	// Wait for the background precompact to complete so consumeReadyPreCompact
-	// can apply it at the top of the first loop iteration (before any hard guard fires).
+
 	a.mu.RLock()
 	pc := a.precompact
 	a.mu.RUnlock()
@@ -770,7 +748,7 @@ func waitForPrecompactDone(t *testing.T, a *Agent) {
 		pc := a.precompact
 		a.mu.RUnlock()
 		if pc == nil {
-			// Precompact was already consumed (completed and applied).
+
 			return
 		}
 		select {
@@ -975,8 +953,6 @@ func TestRunStreamInterruptReplansBeforeRemainingToolCalls(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	// New behavior: ALL tool calls execute before user interruption is injected.
-	// This ensures every tool_call has a matching tool_result (required by APIs).
 	if firstCount != 1 {
 		t.Fatalf("expected first tool to run once, got %d", firstCount)
 	}
@@ -1054,8 +1030,7 @@ func TestRunStreamInjectsPathScopedProjectMemoryBeforeExecutingNestedTool(t *tes
 	if mp.streamCalls != 3 {
 		t.Fatalf("expected project memory replan to trigger 3 stream calls, got %d", mp.streamCalls)
 	}
-	// New behavior: all tool calls execute before memory injection.
-	// read_file is called in iteration 1 + iteration 2 (after memory injection) = 2 times.
+
 	if readCount != 2 {
 		t.Fatalf("expected read_file to execute twice (before and after memory injection), got %d", readCount)
 	}
@@ -1138,17 +1113,16 @@ func TestRunStreamCancellationStopsRemainingToolCalls(t *testing.T) {
 }
 
 func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
-	// With the strategist-based autopilot, agent needs a confirmed goal.
-	// Flow: stream→question | Chat strategist→guidance | stream→fixed | Chat strategist→GOAL_ACHIEVED
+
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			// [0] ChatStream call 1: agent asks a question (no tool calls)
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Should I inspect the tests first or jump straight into the implementation?")}}},
-			// [1] Chat call 1 (strategist): tells agent to inspect tests
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Start by inspecting the tests, then fix the root cause.")}}},
-			// [2] ChatStream call 2: agent reports completion
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and fixed the root cause.")}}},
-			// [3] Chat call 2 (strategist): goal achieved
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nThe agent fixed the root cause.")}}},
 		},
 	}
@@ -1288,16 +1262,16 @@ func TestRunStreamInterruptsStreamingTurnForReplan(t *testing.T) {
 }
 
 func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
-	// Strategist-based autopilot: agent needs goal, strategist drives continuation.
+
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			// [0] stream 1: partial progress
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I fixed the obvious lint issue and identified two more hotspots to optimize next.")}}},
-			// [1] Chat strategist: continue
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Continue optimizing the remaining hotspots.")}}},
-			// [2] stream 2: completion
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the optimization pass and updated the related code paths.")}}},
-			// [3] Chat strategist: goal achieved
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nOptimization complete.")}}},
 		},
 	}
@@ -1318,23 +1292,16 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 	}
 }
 
-// TestRunStreamAutopilotSurvivesEmptyStrategistResponse guards against #1036:
-// a strategist Chat call returning zero text blocks (content-filtered /
-// 200-empty provider soft failure) is an anomaly, not a "goal achieved"
-// signal. The run must continue (default continuation guidance injected)
-// instead of clearing the goal and returning early with all completion
-// gates skipped.
 func TestRunStreamAutopilotSurvivesEmptyStrategistResponse(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			// [0] stream 1: partial progress
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Finished the first module; two modules remain.")}}},
-			// [1] Chat strategist: EMPTY response (no text blocks) - simulates
-			// a content-filtered or malformed provider response.
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{}}},
-			// [2] stream 2: agent continues after injected continuation guidance
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the remaining modules and verified the build.")}}},
-			// [3] Chat strategist: goal achieved
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nAll modules done.")}}},
 		},
 	}
@@ -1347,8 +1314,6 @@ func TestRunStreamAutopilotSurvivesEmptyStrategistResponse(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	// With the old hard-stop behavior the run ended right after the empty
-	// strategist response (1 stream call). Continuing proves the fix.
 	if mp.streamCalls != 2 {
 		t.Fatalf("expected 2 stream calls (agent survived empty strategist response), got %d", mp.streamCalls)
 	}
@@ -1357,21 +1322,16 @@ func TestRunStreamAutopilotSurvivesEmptyStrategistResponse(t *testing.T) {
 	}
 }
 
-// TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues
-// guards against the false-stop bug: the strategist must emit the exact
-// <GOAL_ACHIEVED/> marker to stop the agent. Merely discussing the concept
-// (e.g. "do NOT emit GOAL_ACHIEVED yet, more work remains") must NOT stop it.
 func TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			// [0] stream 1: agent reports partial work
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I finished the first half of the refactor.")}}},
-			// [1] strategist mentions the marker in prose while telling agent to CONTINUE.
-			// This must NOT be treated as completion (old substring-match bug would stop).
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Do not emit GOAL_ACHIEVED yet — there is still the second half to refactor. Continue with it.")}}},
-			// [2] stream 2: agent continues
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Refactored the second half as directed.")}}},
-			// [3] strategist: real completion marker
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nRefactor complete.")}}},
 		},
 	}
@@ -1384,8 +1344,6 @@ func TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues(t
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	// The strategist's prose mention must not terminate early: we expect the full
-	// 2 stream calls + 2 strategist calls before the real marker stops it.
 	if mp.streamCalls != 2 {
 		t.Fatalf("expected 2 stream calls (agent kept working after prose mention), got %d", mp.streamCalls)
 	}
@@ -1425,8 +1383,7 @@ func TestRunStreamAutopilotStopsOnExplicitCompletion(t *testing.T) {
 }
 
 func TestRunStreamAutopilotEscalatesExternalBlockerToAskUser(t *testing.T) {
-	// The deterministic blocker escalation is replaced by the strategist.
-	// Skip: strategist-based escalation depends on LLM reasoning, not deterministic patterns.
+
 	t.Skip("blocker escalation now handled by strategist LLM, not deterministic text matching")
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
@@ -1609,7 +1566,7 @@ func TestRunStreamReactiveCompactRetriesPromptTooLong(t *testing.T) {
 		t.Fatalf("expected prompt-too-long recovery to retry once, got %d stream calls", mp.streamCalls)
 	}
 	joined := joinTextEvents(events)
-	// Compaction is now silent — no visible compression messages emitted.
+
 	if strings.Contains(joined, "[compacting conversation to stay within context window]") {
 		t.Fatalf("compaction should be silent, but found progress message in %q", joined)
 	}
@@ -1655,7 +1612,7 @@ func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
 	}
 
 	joined := joinTextEvents(events)
-	// Transient compact errors are now logged silently via debug.Log instead of emitted as text events.
+
 	if strings.Contains(joined, "[conversation compaction skipped due to transient provider error:") {
 		t.Fatalf("transient compact skip should be silent, but found message in %q", joined)
 	}
@@ -1670,7 +1627,7 @@ func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
 }
 
 func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
-	// The loop guard mechanism is removed — replaced by the strategist.
+
 	t.Skip("loop guard removed, strategist replaces deterministic autopilot loop detection")
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -1723,7 +1680,7 @@ func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
 		t.Fatalf("expected loop guard to stop before a third empty turn, got %d stream calls", mp.streamCalls)
 	}
 	joined := joinTextEvents(events)
-	// Compression is now silent — no visible compact/loop-guard messages.
+
 	if strings.Contains(joined, "[autopilot loop guard triggered") {
 		t.Fatalf("loop guard should be silent, but found message in %q", joined)
 	}
@@ -1788,16 +1745,16 @@ func TestRunStreamAutoModeNeverUsesAutopilotContinuation(t *testing.T) {
 }
 
 func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
-	// With strategist-based autopilot, zero max iterations still allows continuation.
+
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			// [0] stream 1
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I fixed one part and still need to update the remaining UI pieces.")}}},
-			// [1] Chat strategist: continue
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Continue updating the remaining UI pieces.")}}},
-			// [2] stream 2
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the requested UI updates.")}}},
-			// [3] Chat strategist: goal achieved
+
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nUI updates complete.")}}},
 		},
 	}
@@ -1847,7 +1804,7 @@ func TestRunStreamEmitsErrorWhenMaxIterationsReached(t *testing.T) {
 
 func TestRunStreamEmitsLLMMetric(t *testing.T) {
 	mp := &mockProvider{
-		firstEventDelay: time.Millisecond, // measurable TTFT on coarse clocks (~0.6ms VM QPC)
+		firstEventDelay: time.Millisecond,
 		streamEvents: [][]provider.StreamEvent{{
 			{Type: provider.StreamEventText, Text: "Hello"},
 			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
@@ -1869,7 +1826,6 @@ func TestRunStreamEmitsLLMMetric(t *testing.T) {
 		t.Fatal("expected at least 1 metric event")
 	}
 
-	// Find the LLM metric
 	var llmMetric *metrics.MetricEvent
 	for i := range collectedMetrics {
 		if collectedMetrics[i].Type == "llm" {
@@ -1889,7 +1845,7 @@ func TestRunStreamEmitsLLMMetric(t *testing.T) {
 	if llmMetric.Duration < llmMetric.TTFT {
 		t.Errorf("Duration %v should be >= TTFT %v", llmMetric.Duration, llmMetric.TTFT)
 	}
-	// Verify token usage is populated in metric event
+
 	if llmMetric.InputTokens != 10 {
 		t.Errorf("InputTokens = %d, want 10", llmMetric.InputTokens)
 	}
@@ -1917,7 +1873,6 @@ func TestEmitUsageWithSource(t *testing.T) {
 		t.Errorf("source = %q, want %q", receivedSource, "strategist")
 	}
 
-	// Default emitUsage should set source to "agent"
 	a.emitUsage(provider.TokenUsage{InputTokens: 1})
 	if a.UsageSource() != "agent" {
 		t.Errorf("default source = %q, want %q", a.UsageSource(), "agent")
@@ -1926,7 +1881,7 @@ func TestEmitUsageWithSource(t *testing.T) {
 
 func TestRunStreamEmitsToolMetric(t *testing.T) {
 	mp := &mockProvider{
-		firstEventDelay: time.Millisecond, // measurable durations on coarse clocks (~0.6ms VM QPC)
+		firstEventDelay: time.Millisecond,
 		streamEvents: [][]provider.StreamEvent{
 			{
 				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc1", Name: "mock", Arguments: json.RawMessage(`{}`)}},
@@ -1942,7 +1897,7 @@ func TestRunStreamEmitsToolMetric(t *testing.T) {
 	if err := registry.Register(mockTool{
 		name:   "mock",
 		result: tool.Result{Content: "ok"},
-		delay:  time.Millisecond, // measurable tool duration on coarse clocks (~0.6ms VM QPC)
+		delay:  time.Millisecond,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1959,7 +1914,6 @@ func TestRunStreamEmitsToolMetric(t *testing.T) {
 		t.Fatalf("RunStream() error = %v", err)
 	}
 
-	// Find tool metric
 	var toolMetric *metrics.MetricEvent
 	for i := range collectedMetrics {
 		if collectedMetrics[i].Type == "tool" {
@@ -2035,8 +1989,8 @@ func TestRunStreamEmitsToolMetricOnFailure(t *testing.T) {
 
 func TestRunStreamEmitsReasoningMetric(t *testing.T) {
 	mp := &mockProvider{
-		firstEventDelay: time.Millisecond, // measurable TTFT on coarse clocks (~0.6ms VM QPC)
-		eventInterval:   time.Millisecond, // Reasoning→Done think window spans multiple ticks
+		firstEventDelay: time.Millisecond,
+		eventInterval:   time.Millisecond,
 		streamEvents: [][]provider.StreamEvent{
 			{
 				{Type: provider.StreamEventReasoning, Text: "thinking..."},
@@ -2074,16 +2028,14 @@ func TestRunStreamEmitsReasoningMetric(t *testing.T) {
 }
 
 func TestAutopilotGoalLifecycle(t *testing.T) {
-	// Test the full lifecycle: goal not set → set → cleared.
+
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 
-	// Initially no goal
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected no goal initially")
 	}
 
-	// Set goal
 	a.SetAutopilotGoal("Fix all failing tests in the auth module")
 	if !a.hasAutopilotGoal() {
 		t.Fatal("expected goal to be set")
@@ -2092,7 +2044,6 @@ func TestAutopilotGoalLifecycle(t *testing.T) {
 		t.Fatalf("unexpected goal: %s", a.getAutopilotGoal())
 	}
 
-	// Clear goal
 	a.ClearAutopilotGoal()
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected goal to be cleared")
@@ -2102,20 +2053,17 @@ func TestAutopilotGoalLifecycle(t *testing.T) {
 func TestAutopilotGoalClearedOnModeSwitch(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 
-	// Enter autopilot and set a goal
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 	a.SetAutopilotGoal("Do something autonomous")
 	if !a.hasAutopilotGoal() {
 		t.Fatal("expected goal to be set")
 	}
 
-	// Switch to auto mode — goal should be cleared
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode))
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected goal to be cleared after leaving autopilot")
 	}
 
-	// Switch back to autopilot — goal should still be empty
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected no goal after re-entering autopilot")
@@ -2153,12 +2101,10 @@ func TestMaybeSetAutopilotGoalFromLLMOutput(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 
-	// Before: no goal.
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected no goal initially")
 	}
 
-	// LLM outputs a GOAL declaration.
 	a.maybeSetAutopilotGoalFromLLMOutput("GOAL: optimize the database layer")
 
 	if !a.hasAutopilotGoal() {
@@ -2168,7 +2114,6 @@ func TestMaybeSetAutopilotGoalFromLLMOutput(t *testing.T) {
 		t.Fatalf("goal = %q, want %q", got, "optimize the database layer")
 	}
 
-	// Subsequent GOAL lines should not override the first.
 	a.maybeSetAutopilotGoalFromLLMOutput("GOAL: different goal")
 	if got := a.getAutopilotGoal(); got != "optimize the database layer" {
 		t.Fatalf("goal should not change after first set, got %q", got)
@@ -2199,22 +2144,22 @@ func TestSummarizeToolUse(t *testing.T) {
 }
 
 func TestSummarizeToolResult(t *testing.T) {
-	// Normal result
+
 	got := summarizeToolResult("run_command", "PASS\nok  github.com/topcheer/ggcode 1.0s", false)
 	if !strings.Contains(got, "OK") || !strings.Contains(got, "PASS") {
 		t.Fatalf("expected OK tag and PASS content, got %q", got)
 	}
-	// Error result
+
 	got = summarizeToolResult("run_command", "exit code 1: FAIL", true)
 	if !strings.Contains(got, "ERROR") || !strings.Contains(got, "FAIL") {
 		t.Fatalf("expected ERROR tag and FAIL content, got %q", got)
 	}
-	// Empty result
+
 	got = summarizeToolResult("some_tool", "", false)
 	if got != "" {
 		t.Fatalf("expected empty for empty output, got %q", got)
 	}
-	// Long result truncation
+
 	long := strings.Repeat("x", 600)
 	got = summarizeToolResult("read_file", long, false)
 	if !strings.Contains(got, "...") {
@@ -2239,20 +2184,19 @@ func TestIsAgentRetryableLLMError(t *testing.T) {
 		{errors.New("i/o timeout"), true},
 		{errors.New("openai stream: 20 retry attempts exhausted"), true},
 		{errors.New("anthropic stream: 20 retry attempts exhausted"), true},
-		// Rate limiting and server overload are retryable
+
 		{errors.New("rate limit exceeded"), true},
 		{errors.New("Too Many Requests"), true},
 		{errors.New("Error: 429 rate_limit_error"), true},
 		{errors.New("overloaded"), true},
 		{errors.New("service unavailable"), true},
 		{errors.New("502 bad gateway"), true},
-		// Non-retryable:
+
 		{errors.New("401 unauthorized"), false},
 		{errors.New("context length exceeded"), false},
 		{errors.New("invalid api key"), false},
 		{errors.New("model not found"), false},
-		// Quota exhaustion with 429 status — NOT retryable even though
-		// the error message may contain "rate limit" or "429"
+
 		{errors.New("429: coding plan package has expired"), false},
 		{errors.New("429 rate_limit: usage limit exceeded"), false},
 		{errors.New("429: 已达到 5 hour 的使用上限"), false},
@@ -2270,10 +2214,6 @@ func TestIsAgentRetryableLLMError(t *testing.T) {
 	}
 }
 
-// TestRunStreamPolicyBlockedPartialDoesNotContinue verifies that a response
-// truncated by a provider policy filter (SAFETY/etc.) does NOT trigger the
-// automatic "continue from where you left off" retry loop — the partial text
-// is kept and the run ends after a single stream call (#266).
 func TestRunStreamPolicyBlockedPartialDoesNotContinue(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{{
@@ -2303,7 +2243,6 @@ func TestRunStreamPolicyBlockedPartialDoesNotContinue(t *testing.T) {
 	if strings.Contains(joined, "truncated by output length limit") {
 		t.Fatalf("misleading length-limit continuation notice present: %q", joined)
 	}
-	// Partial text must land in history.
 	var lastAssistant string
 	for _, m := range a.ContextManager().Messages() {
 		if m.Role == "assistant" {
@@ -2319,9 +2258,6 @@ func TestRunStreamPolicyBlockedPartialDoesNotContinue(t *testing.T) {
 	}
 }
 
-// TestRunStreamPolicyBlockedEmptyReportsOnce verifies that a fully blocked
-// response (no output tokens, no text) does not inject empty-response nudges
-// or report a context-overflow reset — it reports the policy block and stops (#266).
 func TestRunStreamPolicyBlockedEmptyReportsOnce(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{{
@@ -2337,9 +2273,7 @@ func TestRunStreamPolicyBlockedEmptyReportsOnce(t *testing.T) {
 			allTexts = append(allTexts, event.Text)
 		}
 	})
-	// #4249: the blocked run must surface a distinguishable error - the
-	// old nil return reported "blocked by a safety filter" as success to
-	// ACP/A2A/Knight callers.
+
 	if err == nil || !strings.Contains(err.Error(), "safety filter") {
 		t.Fatalf("RunStream() error = %v, want distinguishable safety-filter error", err)
 	}
@@ -2358,8 +2292,6 @@ func TestRunStreamPolicyBlockedEmptyReportsOnce(t *testing.T) {
 	}
 }
 
-// TestRunStreamTruncatedStillContinues verifies the length-truncation
-// auto-continuation path still fires when PolicyBlocked is false (#266 regression guard).
 func TestRunStreamTruncatedStillContinues(t *testing.T) {
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{
@@ -2394,17 +2326,10 @@ func TestRunStreamTruncatedStillContinues(t *testing.T) {
 	}
 }
 
-// --- #1672: recovery-path message delivery and honest empty-abort ---
-
-// TestAgentEmptyResponseAbortReturnsError pins #1672 case 2: three
-// consecutive empty responses abort the run with a DISTINGUISHABLE error -
-// the old code claimed "[context overflow - conversation reset for
-// recovery]" (nothing reset anything) and returned nil, reporting the
-// failure upstream as a normal completion.
 func TestAgentEmptyResponseAbortReturnsError(t *testing.T) {
 	emptyStream := []provider.StreamEvent{{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 100, OutputTokens: 0}}}
 	mp := &mockProvider{
-		streamEvents: [][]provider.StreamEvent{emptyStream, emptyStream, emptyStream}, // three usage-real empty streams
+		streamEvents: [][]provider.StreamEvent{emptyStream, emptyStream, emptyStream},
 	}
 	a := NewAgent(mp, tool.NewRegistry(), t.TempDir(), 10)
 	err := a.RunStream(context.Background(), "do something", func(ev provider.StreamEvent) {})
@@ -2416,16 +2341,11 @@ func TestAgentEmptyResponseAbortReturnsError(t *testing.T) {
 	}
 }
 
-// TestAgentEmptyResponseNudgeDelivered pins #1672 case 1: the nudge injected
-// after an empty response must reach the model - the NEXT ChatStream request
-// must contain it. The old code sent a byte-identical request (the injected
-// message never left the context manager), so nudges replayed into the
-// 3-empty abort and gates ping-ponged to maxIter.
 func TestAgentEmptyResponseNudgeDelivered(t *testing.T) {
 	emptyStream := []provider.StreamEvent{{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 100, OutputTokens: 0}}}
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{
-			emptyStream, // 1st: empty -> nudge injected
+			emptyStream,
 			streamEventsFromResponse(&provider.ChatResponse{
 				Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("recovered")}},
 			}),
@@ -2456,9 +2376,6 @@ func TestAgentEmptyResponseNudgeDelivered(t *testing.T) {
 	}
 }
 
-// TestRunStreamConfidenceNotice (sa-74): a low-confidence turn (mean token
-// logprob < -2.5) surfaces a [confidence] system notice; a healthy or
-// absent confidence value stays silent.
 func TestRunStreamConfidenceNotice(t *testing.T) {
 	low := -3.2
 	high := -0.5
@@ -2502,19 +2419,12 @@ func TestRunStreamConfidenceNotice(t *testing.T) {
 	}
 }
 
-// TestRunStreamCarriesPTCCallerIntoNextRequest verifies the agent persists the
-// verbatim Anthropic programmatic-tool-calling caller field on the streamed
-// tool_use block so the FOLLOW-UP request (carrying the client tool_result)
-// echoes it back - required for the code execution container to match the
-// result to its pending programmatic call.
 func TestRunStreamCarriesPTCCallerIntoNextRequest(t *testing.T) {
 	caller := json.RawMessage(`{"type":"code_execution_20260120","tool_id":"srvtoolu_ce1"}`)
 	mp := &mockProvider{
 		streamEvents: [][]provider.StreamEvent{
 			{
-				// Programmatic tool_use for an unregistered tool: execution
-				// fails, the agent replans with a tool_result and must echo
-				// the caller back on the assistant tool_use block.
+
 				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{
 					ID: "toolu_ptc1", Name: "read_file",
 					Arguments: json.RawMessage(`{"path":"x.go"}`), Caller: caller,

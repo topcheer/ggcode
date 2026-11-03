@@ -159,7 +159,6 @@ func TestDetectCommittedTopics(t *testing.T) {
 func TestRecordSpiralTurn_UncertaintyRecording(t *testing.T) {
 	a := &Agent{spiralState: newSpiralHallucinationState()}
 
-	// Turn 1: express uncertainty
 	a.recordSpiralTurn("I assume the database is PostgreSQL with connection pooling")
 	if len(a.spiralState.topics) == 0 {
 		t.Fatal("expected topics to be recorded after uncertainty turn")
@@ -172,13 +171,11 @@ func TestRecordSpiralTurn_UncertaintyRecording(t *testing.T) {
 func TestRecordSpiralTurn_VerificationBreaksSpiral(t *testing.T) {
 	a := &Agent{spiralState: newSpiralHallucinationState()}
 
-	// Turn 1: express uncertainty
 	a.recordSpiralTurn("I assume the database is PostgreSQL")
 	if a.spiralState.topicsAreVerified() {
 		t.Fatal("should not be verified yet")
 	}
 
-	// Turn 2: verification occurs (test passed)
 	a.recordSpiralTurn("I ran the test and it passed. The build succeeded.")
 	if !a.spiralState.topicsAreVerified() {
 		t.Fatal("should be verified after test/build turn")
@@ -188,12 +185,8 @@ func TestRecordSpiralTurn_VerificationBreaksSpiral(t *testing.T) {
 func TestMaybeWarnSpiralHallucination_SpiralPattern(t *testing.T) {
 	a := &Agent{spiralState: newSpiralHallucinationState()}
 
-	// Turn 1: express uncertainty about PostgreSQL
 	a.recordSpiralTurn("I assume the database is PostgreSQL with some specific config")
 
-	// Turn 2: commitment at gap=1 — below spiralMinGap=2, does NOT count
-	// (#493 A: too close to the uncertainty is ordinary inconsistency,
-	// not a spiral).
 	a.recordSpiralTurn("Since we're using PostgreSQL, the schema needs migration")
 	if got := s_counts(a)["postgresql"]; got != 0 {
 		t.Fatalf("gap=1 commitment must not count (#493 A), got %d", got)
@@ -204,22 +197,18 @@ func TestMaybeWarnSpiralHallucination_SpiralPattern(t *testing.T) {
 		t.Fatal("should not warn with zero counted commitments")
 	}
 
-	// Turn 3: commitment at gap=2 — first counted statement
 	a.recordSpiralTurn("Given that PostgreSQL is our database, the connection pool needs tuning")
 	if got := s_counts(a)["postgresql"]; got != 1 {
 		t.Fatalf("gap=2 commitment must count, got %d", got)
 	}
 
-	// Should not fire yet (only 1 counted committed statement)
 	hint = a.maybeWarnSpiralHallucination()
 	if hint != "" {
 		t.Fatal("should not warn after only 1 counted committed statement")
 	}
 
-	// Turn 4: more commitment (second counted statement)
 	a.recordSpiralTurn("Therefore the PostgreSQL tuning plan proceeds in this order")
 
-	// Now should fire (2 counted committed statements)
 	hint = a.maybeWarnSpiralHallucination()
 	if hint == "" {
 		t.Fatal("expected spiral warning after 2 counted committed statements on uncertain topic")
@@ -232,7 +221,6 @@ func TestMaybeWarnSpiralHallucination_SpiralPattern(t *testing.T) {
 		t.Fatalf("hint should mention spiraled topic: %s", hint)
 	}
 
-	// Should not fire again (max 1 warning)
 	hint2 := a.maybeWarnSpiralHallucination()
 	if hint2 != "" {
 		t.Fatal("should not warn again after max warnings reached")
@@ -242,20 +230,14 @@ func TestMaybeWarnSpiralHallucination_SpiralPattern(t *testing.T) {
 func TestMaybeWarnSpiralHallucination_VerificationPrevents(t *testing.T) {
 	a := &Agent{spiralState: newSpiralHallucinationState()}
 
-	// Turn 1: express uncertainty
 	a.recordSpiralTurn("I assume the framework is Django")
 
-	// Turn 2: verify (breaks spiral)
 	a.recordSpiralTurn("I ran the test suite and confirmed the framework. Build passed.")
 
-	// Turn 3: committed assertion (but verified)
 	a.recordSpiralTurn("Since we're using Django, the models need updating")
 
-	// Turn 4: another committed assertion
 	a.recordSpiralTurn("Given that Django is our framework, the ORM needs configuration")
 
-	// Should not fire because verification broke the spiral chain
-	// (unless 3+ topics spiraled, which is not the case here)
 	hint := a.maybeWarnSpiralHallucination()
 	if hint != "" {
 		t.Fatal("should not warn when verification broke the spiral for a single topic")
@@ -265,7 +247,6 @@ func TestMaybeWarnSpiralHallucination_VerificationPrevents(t *testing.T) {
 func TestMaybeWarnSpiralHallucination_NoTopicsTracked(t *testing.T) {
 	a := &Agent{spiralState: newSpiralHallucinationState()}
 
-	// No uncertainty expressed, just committed language
 	a.recordSpiralTurn("Since we're using PostgreSQL, the config needs updating")
 	a.recordSpiralTurn("Given that PostgreSQL is our database, we need migrations")
 
@@ -285,15 +266,12 @@ func TestMaybeWarnSpiralHallucination_NilState(t *testing.T) {
 
 func TestRecordSpiralTurn_NilState(t *testing.T) {
 	a := &Agent{spiralState: nil}
-	// Should not panic
+
 	a.recordSpiralTurn("some text")
 }
 
 func TestSpiralVerificationRegex(t *testing.T) {
-	// #161: generic narrative mentions of test/build/error/result must NOT
-	// disable the detector — only explicit first-person verification
-	// assertions count (real tool calls are the primary signal, recorded
-	// via recordSpiralVerification from the tool execution loop).
+
 	tests := []struct {
 		text    string
 		matches bool
@@ -320,7 +298,7 @@ func TestSpiralVerificationRegex(t *testing.T) {
 }
 
 func TestSpiralMaxTopicsEnforced(t *testing.T) {
-	// Generate text with many distinct topics after an uncertainty marker
+
 	words := []string{}
 	for i := 0; i < 50; i++ {
 		words = append(words, fmt.Sprintf("topic%d", i))
@@ -332,9 +310,6 @@ func TestSpiralMaxTopicsEnforced(t *testing.T) {
 	}
 }
 
-// TestSpiralVerification_ReadOnlyToolsNotCounted pins fix #167: only
-// execution-type tools count as verification; read-only tools must not
-// re-silence the detector.
 func TestSpiralVerification_ReadOnlyToolsNotCounted(t *testing.T) {
 	for _, ro := range []string{"read_file", "grep", "glob", "list_directory"} {
 		if spiralExecutionTools[ro] {

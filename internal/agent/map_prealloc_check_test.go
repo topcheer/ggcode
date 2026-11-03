@@ -5,9 +5,7 @@ import (
 )
 
 func TestMapPrealloc_SameVarNameDifferentFunc(t *testing.T) {
-	// #1145: two functions declaring the same map name. The delta used a set
-	// keyed on varName only, so func A's pre-existing violation masked func
-	// B's brand-new one and the new warning was silently dropped.
+
 	oldSrc := `package main
 type Item struct { Key string; Val int }
 func buildA(items []Item) map[string]int {
@@ -117,11 +115,11 @@ func process(items []string) map[string]bool {
 	return other
 }`
 	warnings := checkMapPrealloc("test.go", oldCode, newCode)
-	// Should detect only the new "other" map, not the existing "m".
+
 	if len(warnings) == 0 {
 		t.Fatal("expected delta warning for new map")
 	}
-	// Should warn about "other" specifically
+
 	foundOther := false
 	for _, w := range warnings {
 		if strContains(w, "other") {
@@ -149,7 +147,7 @@ func process(items []Item) map[string]int {
 	return m
 }`
 	warnings := checkMapPrealloc("test.go", "", code)
-	// Conditional skip means we can't reliably know the size.
+
 	if len(warnings) > 0 {
 		t.Fatalf("expected no warning for conditional map write, got: %v", warnings)
 	}
@@ -258,11 +256,6 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-// Issue #1103 regression: two functions sharing a bare variable name must
-// stay isolated. fA declares a hintless map but never populates it; fB
-// populates a SLICE named m. The old whole-file bare-name index matched fB's
-// loop writes against fA's map declaration and emitted a harmful "preallocate
-// your slice" suggestion.
 func TestMapPrealloc_NoCrossFunctionCollision(t *testing.T) {
 	code := `package main
 type Row struct { A int }
@@ -285,8 +278,6 @@ func fB(rows []Row) {
 	}
 }
 
-// Same-name isolation must not regress detection when decl and loop share a
-// function unit.
 func TestMapPrealloc_SameFunctionStillDetected(t *testing.T) {
 	code := `package main
 type Item struct { Key string }
@@ -303,10 +294,6 @@ func insert(items []Item) map[string]bool {
 	}
 }
 
-// Issue #1121: package-level var maps are no longer candidates - they act
-// as registries/caches accumulated across calls, so a per-loop size hint is
-// not meaningful. Loops writing them stay silent; function-local behavior is
-// unchanged.
 func TestMapPrealloc_PackageLevelMapNotDetected(t *testing.T) {
 	code := `package main
 var cache = make(map[string]bool)
@@ -339,9 +326,6 @@ func insert(cache map[string]bool, items []Item) {
 	}
 }
 
-// Closures are analyzed as their own units: part is warned inside its own
-// scope exactly once, and total (declared outside, written nowhere) must not
-// be misattributed from the closure's loop.
 func TestMapPrealloc_ClosureUnit(t *testing.T) {
 	code := `package main
 type Item struct { Key string; Val int }

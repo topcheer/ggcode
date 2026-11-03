@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- Conventional Commit Message Analysis ---
-
 func TestAnalyzeCommitMessage_AlreadyConventional(t *testing.T) {
 	msgs := []string{
 		"feat: add user authentication",
@@ -75,8 +73,6 @@ func TestInferCommitType(t *testing.T) {
 	}
 }
 
-// --- File Categorization ---
-
 func TestCategorizeFile(t *testing.T) {
 	cases := []struct {
 		path string
@@ -103,8 +99,6 @@ func TestCategorizeFile(t *testing.T) {
 		}
 	}
 }
-
-// --- Diff Stats Parsing ---
 
 func TestParseDiffStats(t *testing.T) {
 	diff := `diff --git a/main.go b/main.go
@@ -140,8 +134,6 @@ func TestParseDiffStats_Empty(t *testing.T) {
 		t.Errorf("expected zero stats for empty diff, got %+v", stats)
 	}
 }
-
-// --- Commit Scope Analysis ---
 
 func TestAnalyzeCommitScope_CleanDiff(t *testing.T) {
 	diff := `diff --git a/main.go b/main.go
@@ -227,7 +219,7 @@ diff --git a/migration.sql b/migration.sql
 }
 
 func TestAnalyzeCommitScope_SourceAndTestOkay(t *testing.T) {
-	// Source + test should NOT trigger cohesion warning.
+
 	diff := `diff --git a/handler.go b/handler.go
 --- a/handler.go
 +++ b/handler.go

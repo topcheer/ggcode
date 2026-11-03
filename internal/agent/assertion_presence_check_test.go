@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #2638: pure gomega tests (RegisterFailHandler style) use bare package-level
-// Expect/Eventually/Consistently whose Fun is *ast.Ident. These previously
-// counted as zero assertions and triggered a bogus hollow-test warning.
 func TestCheckAssertionPresence_PureGomegaBareExpect(t *testing.T) {
 	newContent := `package agent
 
@@ -30,8 +27,6 @@ func TestPureGomega(t *testing.T) {
 	}
 }
 
-// #2638: qualified gomega.Expect(x) form must also count, while gomega setup
-// calls (RegisterFailHandler) alone must NOT make a hollow test pass.
 func TestCheckAssertionPresence_QualifiedGomegaExpect(t *testing.T) {
 	newContent := `package agent
 
@@ -53,7 +48,6 @@ func TestQualifiedGomega(t *testing.T) {
 	}
 }
 
-// #2638: gomega setup without any assertion entry point is still hollow.
 func TestCheckAssertionPresence_GomegaSetupOnlyStillHollow(t *testing.T) {
 	newContent := `package agent
 
@@ -78,8 +72,6 @@ func TestSetupOnly(t *testing.T) {
 	}
 }
 
-// #2638 guard: a bare identifier call that merely shares a name with a
-// testing.T method (e.g. Error(...)) must not count as an assertion.
 func TestCheckAssertionPresence_BareErrorIdentNotAssertion(t *testing.T) {
 	newContent := `package agent
 
@@ -213,10 +205,8 @@ func TestMain(m *testing.M) {
 	}
 }
 
-// --- #320 regression: delegation and closure parameter rebinding ---
-
 func TestCheckAssertionPresence_DelegatedHelperNotHollow(t *testing.T) {
-	// Table-driven delegation: assertions live in runFooCases(t) (#320a).
+
 	newContent := `package agent
 
 import "testing"
@@ -241,7 +231,7 @@ func runFooCases(t *testing.T) {
 }
 
 func TestCheckAssertionPresence_SubTestClosureRebinding(t *testing.T) {
-	// Outer param "tt", inner closure func(t *testing.T) with t.Error (#320b).
+
 	newContent := `package agent
 
 import "testing"
@@ -262,7 +252,7 @@ func TestOuter(tt *testing.T) {
 }
 
 func TestCheckAssertionPresence_TrulyHollowStillFlagged(t *testing.T) {
-	// Positive control: genuinely hollow test is still flagged.
+
 	newContent := `package agent
 
 import "testing"
@@ -279,7 +269,7 @@ func TestNoAssert(t *testing.T) {
 }
 
 func TestCheckAssertionPresence_PreExistingHollowNotFlagged(t *testing.T) {
-	// A hollow test that existed before should not be flagged (delta-aware).
+
 	oldContent := `package agent
 
 import "testing"
@@ -288,7 +278,7 @@ func TestHollow(t *testing.T) {
 	_ = 1
 }
 `
-	newContent := oldContent // no change
+	newContent := oldContent
 	result := checkAssertionPresence("foo_test.go", oldContent, newContent)
 	if result != "" {
 		t.Errorf("expected no warning for pre-existing hollow test, got: %s", result)
@@ -375,8 +365,7 @@ func TestBad(t *testing.T) {
 }
 
 func TestCheckAssertionPresence_SubTestWithRunExcluded(t *testing.T) {
-	// A test that calls t.Run (sub-tests) should not be flagged because
-	// assertions may be in the sub-test closures.
+
 	newContent := `package agent
 
 import "testing"
@@ -389,8 +378,7 @@ func TestParent(t *testing.T) {
 	})
 }
 `
-	// This test DOES have assertions in the sub-test, but our AST walker
-	// will find the t.Error inside the closure. Let's verify it doesn't flag.
+
 	result := checkAssertionPresence("foo_test.go", "", newContent)
 	if result != "" {
 		t.Errorf("expected no warning for test with sub-test assertions, got: %s", result)

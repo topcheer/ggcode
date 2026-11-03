@@ -18,41 +18,29 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 )
 
-// SkillManifest is embedded inside a .ggskill bundle to carry metadata.
 type SkillManifest struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Version     string    `json:"version"`
 	ExportedAt  time.Time `json:"exported_at"`
 	ExportedBy  string    `json:"exported_by,omitempty"`
-	// Files lists all files included in the bundle (relative paths).
-	Files []string `json:"files"`
+	Files       []string  `json:"files"`
 }
 
-// MaxSkillBundleSize limits how large a skill bundle can be (16 MB).
 const MaxSkillBundleSize = 16 << 20
 
-// HTTPTimeout for downloading skill bundles from URLs.
 const skillHTTPTimeout = 30 * time.Second
 
-// --- Export ---
-
-// exportSkill packages the named skill (including companion files) into a
-// .ggskill tarball at outputPath. Returns the manifest and the output path.
 func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, string, error) {
 	if cmd == nil {
 		return nil, "", fmt.Errorf("skill is nil")
 	}
 	skillDir := skillDirFromPath(cmd.Path)
 	if skillDir == "" {
-		// Single-file skill: bundle just the .md file.
+
 		return exportSingleFileSkill(cmd, outputPath)
 	}
 
-	// Directory-based skill: walk the directory recursively and bundle ALL
-	// files (#869: ReadDir + IsDir-skip silently dropped subdirectories like
-	// templates/, scripts/, assets/ - the export reported success but the
-	// bundle could never round-trip a skill with companion directories).
 	var files []string
 	var total int64
 	walkErr := filepath.WalkDir(skillDir, func(p string, d os.DirEntry, err error) error {
@@ -67,7 +55,7 @@ func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, stri
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		// Skip hidden files and lock files (any depth).
+
 		base := filepath.Base(rel)
 		if strings.HasPrefix(base, ".") || base == "go.sum" {
 			return nil
@@ -79,9 +67,7 @@ func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, stri
 		if info.Size() > MaxSkillBundleSize {
 			return fmt.Errorf("file %s is too large (%d bytes, max %d)", rel, info.Size(), MaxSkillBundleSize)
 		}
-		// #1341: symmetric total cap with import (readBundle). Without it
-		// an exported multi-file bundle could exceed the import-side
-		// compressed-stream limit and fail to round-trip.
+
 		total += info.Size()
 		if total > MaxSkillBundleSize {
 			return fmt.Errorf("skill directory total size %d exceeds max %d", total, MaxSkillBundleSize)
@@ -128,7 +114,6 @@ func exportSingleFileSkill(cmd *commands.Command, outputPath string) (*SkillMani
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Copy the single file into a temp dir for consistent bundling.
 	dst := filepath.Join(tmpDir, filepath.Base(cmd.Path))
 	if err := copyFile(cmd.Path, dst); err != nil {
 		return nil, "", err
@@ -153,9 +138,7 @@ func writeBundle(outputPath string, manifest *SkillManifest, baseDir string, fil
 
 	gw := gzip.NewWriter(f)
 	tw := tar.NewWriter(gw)
-	// #1341: gzip/tar buffer internally - a full disk only surfaces at
-	// Close. Capture Close errors explicitly (reverse order) so a
-	// truncated bundle is never reported as a successful export.
+
 	defer func() {
 		if cerr := tw.Close(); cerr != nil && err == nil {
 			err = cerr
@@ -165,13 +148,11 @@ func writeBundle(outputPath string, manifest *SkillManifest, baseDir string, fil
 		}
 	}()
 
-	// Write manifest.json first.
 	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := writeTarEntry(tw, manifestFileName, manifestData); err != nil {
 		return err
 	}
 
-	// Write each skill file.
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(baseDir, name))
 		if err != nil {
@@ -184,10 +165,6 @@ func writeBundle(outputPath string, manifest *SkillManifest, baseDir string, fil
 	return nil
 }
 
-// --- Import ---
-
-// importSkill reads a .ggskill bundle from sourcePath (local file or URL),
-// extracts it into destDir/skillName/, and returns the extracted manifest.
 func importSkill(sourcePath, destDir string) (*SkillManifest, string, error) {
 	reader, cleanup, err := openSkillSource(sourcePath)
 	if err != nil {
@@ -214,16 +191,13 @@ func importSkill(sourcePath, destDir string) (*SkillManifest, string, error) {
 	}
 
 	for name, data := range files {
-		// Security: prevent path traversal - allow relative subpaths
-		// (skills may carry templates/, scripts/ companion dirs, #869),
-		// but reject absolute paths, parent refs, and any component
-		// traversal.
+
 		clean := filepath.ToSlash(filepath.Clean(name))
 		if clean != name || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "../") || clean == ".." || strings.Contains(clean, "/../") {
 			return nil, "", fmt.Errorf("refusing to extract file with unsafe path: %s", name)
 		}
 		if filepath.Base(clean) == manifestFileName {
-			continue // already parsed
+			continue
 		}
 		outPath := filepath.Join(skillDir, filepath.FromSlash(clean))
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
@@ -237,7 +211,6 @@ func importSkill(sourcePath, destDir string) (*SkillManifest, string, error) {
 	return manifest, skillDir, nil
 }
 
-// openSkillSource opens a .ggskill bundle from a local path or HTTP(S) URL.
 func openSkillSource(source string) (io.Reader, func(), error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
@@ -245,12 +218,7 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 	}
 
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		// #1703 case 1: the imported SKILL.md is injected as a USER message
-		// ("forcing the model to act on them") - an arbitrary-URL #import is
-		// a remote prompt-injection delivery channel. Three guards:
-		// literal private/loopback hosts blocked, DNS-resolved private
-		// targets blocked (rebinding), and redirects re-checked so a public
-		// URL can't bounce to an internal one.
+
 		u, err := url.Parse(source)
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid import URL: %w", err)
@@ -260,11 +228,7 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), skillHTTPTimeout)
 		defer cancel()
-		// #2793: the pre-check used to fail open (lookup error silently
-		// skipped, falling through to the client's own resolution) - a
-		// SERVFAIL for the attacker's domain bypassed the guard entirely.
-		// Skill import is a rare, operator-driven action: refuse on lookup
-		// failure instead.
+
 		addrs, lerr := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
 		if lerr != nil {
 			return nil, nil, fmt.Errorf("cannot resolve skill import host %q: %w", u.Hostname(), lerr)
@@ -274,15 +238,6 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 				return nil, nil, fmt.Errorf("refusing to import skill from %q: resolves to private address %s", u.Hostname(), ip)
 			}
 		}
-		// #2793: the redirect guard below was LITERAL-only (isPrivateHost),
-		// so a public URL bouncing 302 to a domain whose A record points at
-		// 127.0.0.5/10.0.0.5 sailed through, and the pre-check above plus
-		// the client's own lookup formed a classic rebinding TOCTOU. Close
-		// both with the web_fetch.go pattern: a custom DialContext resolves
-		// once and dials the verified IP (fail-closed, covers every hop
-		// including redirects); with a proxy configured the dial-level
-		// check never fires, so the redirect hook additionally re-resolves
-		// the target host and rejects private answers (#2165 pattern).
 		var base *http.Transport
 		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
 			base = dt.Clone()
@@ -318,11 +273,7 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 				if isPrivateHost(req.URL.Hostname()) {
 					return fmt.Errorf("redirect to private host %q refused", req.URL.Hostname())
 				}
-				// #2793: re-resolve the redirect target - the literal check
-				// above passes domains whose A record points at private IP
-				// space. This is the main line of defense on the proxy path
-				// (where the DialContext guard never fires); without a proxy
-				// it is belt-and-braces on top of the dial-level check.
+
 				if rerr := rejectIfHostResolvesPrivate(req.Context(), req.URL.Hostname(), net.DefaultResolver.LookupIPAddr); rerr != nil {
 					return fmt.Errorf("redirect to %q refused: %w", req.URL.Hostname(), rerr)
 				}
@@ -340,7 +291,6 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 		return resp.Body, func() { resp.Body.Close() }, nil
 	}
 
-	// Expand ~ prefix for local paths.
 	if strings.HasPrefix(source, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -355,9 +305,8 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 	return f, func() { f.Close() }, nil
 }
 
-// readBundle reads a .ggskill tar.gz and returns the manifest + file contents.
 func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
-	// Wrap in LimitedReader to prevent decompression bombs.
+
 	lr := &io.LimitedReader{R: reader, N: MaxSkillBundleSize + 1}
 
 	gw, err := gzip.NewReader(lr)
@@ -380,7 +329,6 @@ func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
 			return nil, nil, fmt.Errorf("error reading bundle: %w", err)
 		}
 
-		// Skip directories.
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
@@ -397,11 +345,7 @@ func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
 		if int64(len(data)) > MaxSkillBundleSize {
 			return nil, nil, fmt.Errorf("bundle exceeds max size of %d bytes", MaxSkillBundleSize)
 		}
-		// #1341: cumulative decompressed cap. The compressed-stream
-		// LimitedReader (16MB) does NOT bound total decompressed bytes: a
-		// ~1000x-compressible gzip bomb (all-zero tar entries, each under
-		// the per-file cap) could otherwise expand to tens of GB resident
-		// in the files map. #import:<url> makes this remotely deliverable.
+
 		total += int64(len(data))
 		if total > MaxSkillBundleSize {
 			return nil, nil, fmt.Errorf("bundle total decompressed size exceeds %d bytes", MaxSkillBundleSize)
@@ -424,12 +368,8 @@ func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
 	return manifest, files, nil
 }
 
-// --- Helpers ---
-
 const manifestFileName = "manifest.json"
 
-// skillDirFromPath returns the parent directory if the skill is directory-based,
-// or empty string if it's a standalone .md file.
 func skillDirFromPath(skillPath string) string {
 	if skillPath == "" {
 		return ""

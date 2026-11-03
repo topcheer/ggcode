@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- #471: stripLeadingShellComment / extractCommandFromArgs ---
-
 func TestStripLeadingShellComment(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"# Run tests\ngo test ./...", "go test ./..."},
@@ -32,8 +30,6 @@ func TestExtractCommandFromArgsStripsComment(t *testing.T) {
 	}
 }
 
-// --- #469: isStrictVerifyCommand excludes formatters and bare task-runners ---
-
 func TestIsStrictVerifyCommand(t *testing.T) {
 	strict := []string{"go test ./...", "go build ./...", "npm test", "pytest", "cargo test"}
 	for _, c := range strict {
@@ -48,8 +44,6 @@ func TestIsStrictVerifyCommand(t *testing.T) {
 		}
 	}
 }
-
-// --- #472: convergence lock excludes pure formatters ---
 
 func TestIsConvergenceVerifyCommandExcludesFormatters(t *testing.T) {
 	if isConvergenceVerifyCommand("gofmt -w .") {
@@ -68,8 +62,6 @@ func TestIsConvergenceVerifyCommandExcludesFormatters(t *testing.T) {
 		t.Error("make test must still arm the convergence lock")
 	}
 }
-
-// --- #463: readArgsHaveWindow ---
 
 func TestReadArgsHaveWindow(t *testing.T) {
 	windowed := []json.RawMessage{
@@ -94,12 +86,10 @@ func TestReadArgsHaveWindow(t *testing.T) {
 	}
 }
 
-// --- #465: serial read unknown tools are neutral (fail-open) ---
-
 func TestSerialReadUnknownToolNeutral(t *testing.T) {
 	s := newSerialReadState()
 	s.recordToolCall("read_file")
-	s.recordToolCall("todo_write") // unknown → neutral, must NOT set mutation
+	s.recordToolCall("todo_write")
 	if s.currentTurnHasMutation {
 		t.Error("unknown tool (todo_write) must be neutral, not a mutation (#465)")
 	}

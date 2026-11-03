@@ -1,9 +1,5 @@
 package agent
 
-// #3648 probes: (1) root-package edits (main.go at repo root) must produce
-// a scoped `go test .` instead of vanishing the whole Go TIA chain; (2) the
-// goPkgArg rendering must keep normal dirs intact.
-
 import (
 	"os"
 	"os/exec"
@@ -12,9 +8,6 @@ import (
 	"testing"
 )
 
-// setupRootPkgRepo creates a temp git repo whose only Go files live at the
-// module root, commits them, then modifies main.go so it shows up in
-// git-changed files.
 func setupRootPkgRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +35,7 @@ func setupRootPkgRepo(t *testing.T) string {
 	write("main_test.go", "package main\n\nimport \"testing\"\n\nfunc TestMainFn(t *testing.T) {}\n")
 	run("add", ".")
 	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
-	// Modify the root package AFTER commit so changedGoFilesFromGit sees it.
+
 	write("main.go", "package main\n\nfunc main() { println(1) }\n")
 	return dir
 }

@@ -5,15 +5,11 @@ import (
 	"testing"
 )
 
-// #416: absolute-path edits must match relative verify scopes — a fully
-// verified package was warned UNVERIFIED in the most common production
-// workflow (edit_file with absolute paths, go test with relative ./scope).
 func TestCoverageAbsolutePathMatchesRelativeScope(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
 
-	// Verifies agent — the agent package itself must NOT be warned.
 	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./internal/agent/"}))
 	if warn == "" {
 		t.Fatal("expected gap warning for internal/config")
@@ -25,8 +21,6 @@ func TestCoverageAbsolutePathMatchesRelativeScope(t *testing.T) {
 		t.Error("agent package should now be marked verified")
 	}
 
-	// Sequential verification of the remaining package is a legitimate
-	// strategy — no re-warning after config is verified too (#417).
 	if warn2 := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./internal/config/"})); warn2 != "" {
 		t.Errorf("sequential per-package verification must not re-warn, got: %s", warn2)
 	}
@@ -35,7 +29,6 @@ func TestCoverageAbsolutePathMatchesRelativeScope(t *testing.T) {
 	}
 }
 
-// #417: multi-path verify commands cover ALL listed ./paths.
 func TestCoverageMultiPathScope(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "internal/agent/a.go"}))
@@ -51,8 +44,6 @@ func TestCoverageMultiPathScope(t *testing.T) {
 	}
 }
 
-// #417: bare `go test` in a package directory verifies that package (cwd
-// proxied by the most recently edited package) instead of covering nothing.
 func TestCoverageBareGoTestCoversLastEditedPkg(t *testing.T) {
 	s := newEditCoverageState()
 	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "internal/agent/a.go"}))
@@ -62,8 +53,7 @@ func TestCoverageBareGoTestCoversLastEditedPkg(t *testing.T) {
 	if warn == "" {
 		t.Fatal("expected gap warning — only the last-edited package is covered by bare go test")
 	}
-	// Last edit was internal/config/b.go, so bare `go test` covers config;
-	// internal/agent remains uncovered and should be the one listed.
+
 	if !strings.Contains(warn, "internal/agent") {
 		t.Errorf("warning should list uncovered internal/agent, got: %s", warn)
 	}

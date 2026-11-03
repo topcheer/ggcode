@@ -1,9 +1,5 @@
 package tool
 
-// r29 wiring probe: WithActor(ctx, id) -> save_memory Execute -> sidecar
-// records the writer identity + result surfaces the attribution. A bare
-// ctx (main agent) keeps byte-identical legacy behavior.
-
 import (
 	"context"
 	"encoding/json"

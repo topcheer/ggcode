@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// r71 lifecycle governance tests: concurrent running-job cap, memory-pressure
-// admission refusal, and ShutdownAll reaping at session/process exit.
-
 func TestShutdownAllReapsRunningJob(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 	started, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
@@ -29,8 +26,7 @@ func TestShutdownAllReapsRunningJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read after shutdown: %v", err)
 	}
-	// The cancelled job stays as a terminal entry so late polling still
-	// explains why it stopped.
+
 	if snap.Running {
 		t.Fatalf("job still running after ShutdownAll")
 	}
@@ -48,7 +44,7 @@ func TestShutdownAllWithNoJobsReturnsZero(t *testing.T) {
 
 func TestRunningJobCapRefusesNewJob(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
-	mgr.maxRunningJobs = 1 // test-scoped cap; production default is maxRunningJobsDefault
+	mgr.maxRunningJobs = 1
 
 	first, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
 	if err != nil {
@@ -63,8 +59,6 @@ func TestRunningJobCapRefusesNewJob(t *testing.T) {
 		t.Fatalf("refusal message not actionable: %v", err)
 	}
 
-	// A refused start must NOT leave a job entry behind (ownership never
-	// transferred), otherwise the cap would count phantom jobs.
 	if n := mgr.countRunningForTest(); n != 1 {
 		t.Fatalf("running jobs after refusal = %d, want 1 (no phantom entries)", n)
 	}
@@ -81,7 +75,7 @@ func TestRunningJobCapRefusesNewJob(t *testing.T) {
 func TestMemoryPressureRefusesNewJob(t *testing.T) {
 	orig := jobMemSampleFn
 	defer func() { jobMemSampleFn = orig }()
-	jobMemSampleFn = func() uint64 { return 10 << 30 } // 10 GiB
+	jobMemSampleFn = func() uint64 { return 10 << 30 }
 
 	mgr := NewCommandJobManager(t.TempDir())
 	mgr.maxJobMemBytes = 3 << 30
@@ -96,7 +90,7 @@ func TestMemoryPressureRefusesNewJob(t *testing.T) {
 }
 
 func TestResolveJobMemLimitEnvOverride(t *testing.T) {
-	t.Setenv("GGCODE_JOB_MEM_LIMIT", "1073741824") // 1 GiB
+	t.Setenv("GGCODE_JOB_MEM_LIMIT", "1073741824")
 	if got := resolveJobMemLimit(); got != 1<<30 {
 		t.Fatalf("resolveJobMemLimit = %d, want %d", got, uint64(1)<<30)
 	}

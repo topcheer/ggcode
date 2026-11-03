@@ -1,34 +1,12 @@
 package tool
 
-// Skill Fuzzy Matching with Suggestions
-//
-// Research basis: Claude Code and Cursor both provide fuzzy/did-you-mean
-// matching when users or the LLM invoke skills with slightly wrong names.
-// Common mismatches include:
-//   - underscore vs hyphen: "browser_automation" vs "browser-automation"
-//   - missing suffix: "verify" vs "verify-changes"
-//   - word order: "review-changes" vs "changes-review"
-//   - case differences: "Debug" vs "debug"
-//
-// Without suggestions, the LLM wastes an iteration on a hard error and then
-// has to re-read the available skills list. With suggestions, it gets the
-// correct name immediately and can retry.
-//
-// This uses Levenshtein edit distance (no external dependency) with a
-// threshold based on input length. Normalization (lowercase, strip non-alnum)
-// handles most real-world mismatches.
-
 import (
 	"strings"
 	"unicode"
 )
 
-// maxFuzzyResults limits how many suggestions we return.
 const maxFuzzyResults = 3
 
-// suggestSkills returns up to maxFuzzyResults skill names that are close
-// to the input query. Closeness is determined by normalized Levenshtein
-// distance. Returns nil if no good matches are found.
 func suggestSkills(query string, allNames []string) []string {
 	query = normalizeSkillName(query)
 	if query == "" || len(allNames) == 0 {
@@ -45,20 +23,18 @@ func suggestSkills(query string, allNames []string) []string {
 		if norm == "" {
 			continue
 		}
-		// If the normalized name exactly matches the normalized query,
-		// this is a high-confidence suggestion (e.g. "browser_automation"
-		// matches "browser-automation" after normalization).
+
 		if norm == query {
 			candidates = append(candidates, candidate{name: n, dist: 0})
 			continue
 		}
-		// Check if either contains the other as a substring -- high-confidence.
+
 		if strings.Contains(norm, query) || strings.Contains(query, norm) {
 			candidates = append(candidates, candidate{name: n, dist: -1})
 			continue
 		}
 		d := levenshtein(query, norm)
-		// Dynamic threshold: allow more edits for longer queries.
+
 		threshold := len(query) / 3
 		if threshold < 1 {
 			threshold = 1
@@ -71,11 +47,6 @@ func suggestSkills(query string, allNames []string) []string {
 		}
 	}
 
-	// Sort: exact (0) first, then substring (-1), then by distance.
-	// #1704 case 3: -1 < 0 put every SUBSTRING/SUPERSTRING match ahead
-	// of the exact hit - "verify-changes" outranked "verify" itself,
-	// and >=3 substring candidates could push the exact match out of
-	// the top-3 entirely.
 	for i := 0; i < len(candidates); i++ {
 		for j := i + 1; j < len(candidates); j++ {
 			if rank(candidates[j].dist) < rank(candidates[i].dist) {
@@ -98,8 +69,6 @@ func suggestSkills(query string, allNames []string) []string {
 	return result
 }
 
-// normalizeSkillName lowercases and strips non-alphanumeric characters.
-// "browser_automation" and "browser-automation" both become "browserautomation".
 func normalizeSkillName(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
@@ -110,10 +79,6 @@ func normalizeSkillName(s string) string {
 	return b.String()
 }
 
-// levenshtein and min3 are defined in file_suggest.go and tool_suggest.go respectively.
-
-// rank maps candidate distances to sort priority: exact 0 first, then
-// substring -1, then real distances ascending (#1704 case 3).
 func rank(dist int) int {
 	if dist == 0 {
 		return 0

@@ -88,7 +88,7 @@ func TestRunCommand_Stderr(t *testing.T) {
 }
 
 func TestRunCommand_WorkingDirIgnored(t *testing.T) {
-	// The LLM-provided working_dir should be ignored; only struct field matters
+
 	rc := RunCommand{WorkingDir: "/tmp"}
 	input := json.RawMessage(`{"command": "pwd", "working_dir": "/nonexistent"}`)
 	result, err := rc.Execute(context.Background(), input)
@@ -98,7 +98,7 @@ func TestRunCommand_WorkingDirIgnored(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	// Should use /tmp, not /nonexistent
+
 	if !containsStr(result.Content, "/tmp") {
 		t.Errorf("expected /tmp in output, got %q", result.Content)
 	}
@@ -106,7 +106,7 @@ func TestRunCommand_WorkingDirIgnored(t *testing.T) {
 
 func TestRunCommand_OutputTruncation(t *testing.T) {
 	rc := RunCommand{WorkingDir: "/tmp"}
-	// Generate output larger than 100KB
+
 	input := json.RawMessage(`{"command": "python3 -c \"print('x'*200000)\" || yes x | head -n 200000"}`)
 	result, err := rc.Execute(context.Background(), input)
 	if err != nil {
@@ -160,7 +160,6 @@ func TestTruncateMiddle_ShortStringUnchanged(t *testing.T) {
 }
 
 func TestTruncateMiddle_PreservesHeadAndTail(t *testing.T) {
-	// Create a 10000-byte string: "HEAD_START" + padding + "TAIL_END"
 	var sb strings.Builder
 	sb.WriteString("HEAD_START")
 	for i := 0; i < 9980; i++ {
@@ -193,7 +192,6 @@ func TestTruncateMiddle_ExactSize(t *testing.T) {
 }
 
 func TestTruncateMiddle_LineAwareNoPartialLines(t *testing.T) {
-	// Build multi-line output where each line is 50 chars
 	var sb strings.Builder
 	for i := 0; i < 200; i++ {
 		fmt.Fprintf(&sb, "line %03d: %s\n", i, strings.Repeat("x", 38))
@@ -202,23 +200,21 @@ func TestTruncateMiddle_LineAwareNoPartialLines(t *testing.T) {
 
 	got := truncateMiddle(s, 2000, "output")
 
-	// Every line in the result should be complete (end with \n or be the last line)
 	for _, line := range strings.Split(got, "\n") {
 		if line == "" {
 			continue
 		}
-		// Skip the truncation marker line
+
 		if containsStr(line, "omitted") {
 			continue
 		}
-		// Each visible line should start with "line" (meaning it's complete)
+
 		if !containsStr(line, "line ") && !containsStr(line, "x") {
-			// Could be a fragment if truncation cut mid-line
+
 			t.Errorf("found partial line (line-aware truncation should prevent this): %q", line)
 		}
 	}
 
-	// Should mention lines omitted (not bytes)
 	if !containsStr(got, "lines omitted") {
 		t.Error("line-aware truncation should report 'lines omitted'")
 	}
@@ -294,9 +290,6 @@ func TestDiagnoseCommandFailure(t *testing.T) {
 	}
 }
 
-// #2284-A: registered secret names must not leak into child shells. A key
-// set via /config (Setenv for same-process ${VAR} expansion) must be
-// invisible to an arbitrary `env` the agent spawns.
 func TestNormalizedCommandEnvStripsRegisteredSecrets(t *testing.T) {
 	util.ResetSecretEnvForTests()
 	defer util.ResetSecretEnvForTests()
@@ -318,7 +311,7 @@ func TestNormalizedCommandEnvStripsRegisteredSecrets(t *testing.T) {
 	if !found {
 		t.Error("PATH must survive the filter")
 	}
-	// Overrides still applied (last-wins semantics).
+
 	if !containsExact(env, "TERM=dumb") {
 		t.Error("terminal overrides must still be applied")
 	}

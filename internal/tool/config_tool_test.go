@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// mockConfigAccess implements ConfigAccess for testing.
 type mockConfigAccess struct {
 	data      map[string]string
 	listData  string

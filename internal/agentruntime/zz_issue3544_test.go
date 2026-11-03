@@ -1,11 +1,5 @@
 package agentruntime
 
-// #3544 probe: a finalized step must free its window slot IMMEDIATELY so a
-// ready downstream step launches while the finished step's batch siblings
-// are still running. The old compaction only ran when ALL in-flight steps
-// had finished, so with workflowLayerCap saturated the downstream step
-// starved below the cap.
-
 import (
 	"context"
 	"fmt"
@@ -20,8 +14,8 @@ import (
 type winFake struct {
 	mu      sync.Mutex
 	seq     int
-	launchN map[string]int // launch order per name
-	names   []string       // launch order
+	launchN map[string]int
+	names   []string
 	polls   map[string]int
 }
 
@@ -38,7 +32,6 @@ func (f *winFake) Launch(_ context.Context, opts tool.LaunchOptions) (string, st
 	return "w-" + opts.Name, "", nil
 }
 
-// s0 completes after one poll; everyone else runs forever.
 func (f *winFake) Snapshot(id string) (subagent.Snapshot, bool) {
 	f.mu.Lock()
 	f.polls[id]++
@@ -57,10 +50,8 @@ func TestIssue3544_FinishedStepFreesWindowForDownstream(t *testing.T) {
 		t.Fatalf("probe assumes cap >= 2, cap=%d", workflowLayerCap)
 	}
 	f := newWinFake()
-	// Fill the whole window with independent slow steps, plus s0 -> s0b
-	// chain: s0 finishes early, s0b becomes ready, and must launch while
-	// the other cap-1 siblings are still running.
-	wide := workflowLayerCap - 1 // s0 + these fill the window exactly
+
+	wide := workflowLayerCap - 1
 	spec := WorkflowSpec{
 		Steps:     []WorkflowStep{{ID: "s0", Task: "t"}, {ID: "s0b", Task: "t", DependsOn: []string{"s0"}}},
 		Synthesis: "fold",
@@ -68,10 +59,7 @@ func TestIssue3544_FinishedStepFreesWindowForDownstream(t *testing.T) {
 	for i := 0; i < wide; i++ {
 		spec.Steps = append(spec.Steps, WorkflowStep{ID: fmt.Sprintf("w%d", i), Task: "t"})
 	}
-	// Guard the probe: the fake never completes the wide steps, so the run
-	// can only end via cancellation. Cancel shortly after launch; before
-	// cancelling, s0b must already have launched (it only becomes ready
-	// after s0 completes, which happens while wide steps still run).
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -96,7 +84,7 @@ func TestIssue3544_FinishedStepFreesWindowForDownstream(t *testing.T) {
 	if !launched {
 		t.Fatalf("downstream s0b never launched (starved below cap): partial=%v launches=%v", rep.Partial, f.names)
 	}
-	// s0b may only launch after its dependency s0.
+
 	if s0, ok := f.launchN["wf-s0"]; !ok || order < s0 {
 		t.Fatalf("s0b launched before dependency s0: %+v", f.launchN)
 	}

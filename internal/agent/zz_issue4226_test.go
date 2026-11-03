@@ -8,12 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4226: mid-run injected guidance must feed the constraint-amnesia ledger.
-// Before the fix, recordConstraints was only called from Run() on the entry
-// userText; onInterrupt drains queued messages (they never replay as a
-// Run()-entry userText), so steering constraints like "do not modify the auth
-// module" scrolled out of attention untracked and maybeWarn stayed silent in
-// exactly the long-run scenario the detector exists for.
 func TestInjectedInterruptionRecordsConstraints(t *testing.T) {
 	a := &Agent{
 		contextManager:    ctxpkg.NewManager(200000),
@@ -35,20 +29,17 @@ func TestInjectedInterruptionRecordsConstraints(t *testing.T) {
 	if len(a.constraintAmnesia.constraints) == 0 {
 		t.Fatal("mid-run constraint was not recorded - detector stays blind (#4226 regression)")
 	}
-	// Aging is measured from the injection iteration: recorded at 10, warned
-	// at 10+12 iterations minimum.
+
 	if got := a.constraintAmnesia.constraints[0].messageIdx; got != 10 {
 		t.Fatalf("messageIdx = %d, want injection iteration 10", got)
 	}
-	// #4242 interplay: the reminder is now edit-gated - simulate the edit
-	// that typically follows a steering injection before expecting fire.
+
 	a.constraintAmnesia.noteEdit(21)
 	if w := a.constraintAmnesia.maybeWarn(22); w == "" {
 		t.Fatalf("reminder did not fire 12 iterations after mid-run constraint")
 	}
 }
 
-// No blank drain: whitespace-only queued blocks must not record anything.
 func TestInjectedInterruptionBlankRecordsNothing(t *testing.T) {
 	a := &Agent{
 		contextManager:    ctxpkg.NewManager(200000),
@@ -68,7 +59,6 @@ func TestInjectedInterruptionBlankRecordsNothing(t *testing.T) {
 	}
 }
 
-// Constraint-free steering text must not create entries (ledger stays clean).
 func TestInjectedInterruptionNoConstraintStaysEmpty(t *testing.T) {
 	a := &Agent{
 		contextManager:    ctxpkg.NewManager(200000),

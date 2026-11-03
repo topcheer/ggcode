@@ -1,10 +1,5 @@
 package agent
 
-// #3547 (reopen) probe: batch write tools must expand PER FILE in
-// invariantOpTargets - a protected path in ANY position fires the rule.
-// The first fix only extracted files[0], so moving the sensitive file to
-// position 2 silently bypassed path_glob block rules.
-
 import (
 	"encoding/json"
 	"testing"
@@ -25,8 +20,7 @@ func TestIssue3547B_MultiFileWriteExpandsPerFile(t *testing.T) {
 }
 
 func TestIssue3547B_NonFirstProtectedPathBlocks(t *testing.T) {
-	// Engine-level: a path_glob block on .env must fire when .env is the
-	// SECOND file in the batch (the exact reopen scenario).
+
 	e := newTestEngine(t, `{"invariants":[`+
 		`{"id":"env","op":"write","path_glob":"**/.env","mode":"block","message":"env is protected"}`+
 		`]}`)

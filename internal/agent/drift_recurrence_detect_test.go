@@ -31,13 +31,12 @@ func TestDriftRecurrence_TooFewEditsPostWarn(t *testing.T) {
 func TestDriftRecurrence_NewDirsExceedThreshold(t *testing.T) {
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
-	d.recordEdit("/project/src/main.go") // pre-warn
-	d.recordEdit("/project/src/util.go") // pre-warn
+	d.recordEdit("/project/src/main.go")
+	d.recordEdit("/project/src/util.go")
 
 	d.markWarning(2)
 	d.recordIteration(3)
 
-	// Post-warning: edit files in 5 NEW directories
 	d.recordEdit("/project/pkgA/file.go")
 	d.recordEdit("/project/pkgB/file.go")
 	d.recordEdit("/project/pkgC/file.go")
@@ -56,7 +55,7 @@ func TestDriftRecurrence_NewDirsExceedThreshold(t *testing.T) {
 func TestDriftRecurrence_SameDirsNotRecurrence(t *testing.T) {
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
-	// Pre-warn: edit in several directories
+
 	d.recordEdit("/project/src/main.go")
 	d.recordEdit("/project/src/util.go")
 	d.recordEdit("/project/src/helper.go")
@@ -65,7 +64,6 @@ func TestDriftRecurrence_SameDirsNotRecurrence(t *testing.T) {
 	d.markWarning(2)
 	d.recordIteration(3)
 
-	// Post-warning: edit in SAME directories, plus one verification
 	d.recordEdit("/project/src/main.go")
 	d.recordEdit("/project/src/util.go")
 	d.recordEdit("/project/src/helper.go")
@@ -78,10 +76,7 @@ func TestDriftRecurrence_SameDirsNotRecurrence(t *testing.T) {
 }
 
 func TestDriftRecurrence_NoVerificationPostWarn(t *testing.T) {
-	// #473: edits confined to ALREADY-SEEN directories after the warning
-	// (0 new dirs) is COMPLIANCE, not recurrence — even with zero
-	// verifications (the agent may simply be mid-refactor before its
-	// build step). Must NOT fire.
+
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
 	d.recordEdit("/project/src/main.go")
@@ -90,7 +85,6 @@ func TestDriftRecurrence_NoVerificationPostWarn(t *testing.T) {
 	d.markWarning(2)
 	d.recordIteration(3)
 
-	// Post-warning: edits in same dirs but NO verification at all
 	d.recordEdit("/project/src/main.go")
 	d.recordEdit("/project/src/util.go")
 	d.recordEdit("/project/src/helper.go")
@@ -102,8 +96,7 @@ func TestDriftRecurrence_NoVerificationPostWarn(t *testing.T) {
 }
 
 func TestDriftRecurrence_NewDirsNoVerifyStillDrift(t *testing.T) {
-	// #473: under-threshold (1 < 4) but NONZERO new dirs with zero
-	// verifications is still drift.
+
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
 	d.recordEdit("/project/src/main.go")
@@ -127,7 +120,6 @@ func TestDriftRecurrence_FiresOnceOnly(t *testing.T) {
 	d.markWarning(2)
 	d.recordIteration(3)
 
-	// Trigger recurrence
 	d.recordEdit("/project/pkgA/file.go")
 	d.recordEdit("/project/pkgB/file.go")
 	d.recordEdit("/project/pkgC/file.go")
@@ -138,7 +130,6 @@ func TestDriftRecurrence_FiresOnceOnly(t *testing.T) {
 		t.Fatal("expected first guidance")
 	}
 
-	// Should NOT fire again
 	msg2 := d.check()
 	if msg2 != "" {
 		t.Fatal("expected empty on second check (fires once)")
@@ -149,7 +140,7 @@ func TestDriftRecurrence_PostWarnWindowExceeded(t *testing.T) {
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
 	d.markWarning(2)
-	// Move iteration past the window
+
 	d.recordIteration(2 + driftRecurrencePostWarnWindow + 1)
 
 	d.recordEdit("/project/pkgA/file.go")
@@ -212,7 +203,6 @@ func TestDriftRecurrence_VerificationOnlyPostWarn(t *testing.T) {
 	d.markWarning(2)
 	d.recordIteration(3)
 
-	// Edits in same dirs + verification should NOT trigger
 	d.recordEdit("/project/src/main.go")
 	d.recordEdit("/project/src/main.go")
 	d.recordEdit("/project/src/main.go")
@@ -224,16 +214,11 @@ func TestDriftRecurrence_VerificationOnlyPostWarn(t *testing.T) {
 	}
 }
 
-// TestDriftRecurrence_ConvergedSingleDirSpared pins #1452-A: converging
-// to ONE new directory after the warning (batched edits before a single
-// build pass - the normal edit-then-verify phase) must not fire the
-// 'performative compliance... STOP' hammer; only continued scattering
-// (2+ new dirs, zero verifies) counts as recurrence.
 func TestDriftRecurrence_ConvergedSingleDirSpared(t *testing.T) {
 	d := newDriftRecurrenceState()
 	d.recordIteration(5)
 	d.markWarning(5)
-	// Converged: all post-warning edits in ONE new directory.
+
 	d.recordEdit("/project/src/feature.go")
 	d.recordEdit("/project/src/feature_util.go")
 	d.recordEdit("/project/src/feature_test.go")
@@ -241,7 +226,7 @@ func TestDriftRecurrence_ConvergedSingleDirSpared(t *testing.T) {
 	if msg := d.check(); msg != "" {
 		t.Fatalf("converged single-dir workflow accused: %s", msg)
 	}
-	// Still scattering (3 new dirs, zero verifies) must still fire.
+
 	d2 := newDriftRecurrenceState()
 	d2.recordIteration(5)
 	d2.markWarning(5)

@@ -8,7 +8,6 @@ import (
 func TestOrphanFileNewSourceFile(t *testing.T) {
 	o := newOrphanFileState()
 
-	// Create a new Go file
 	warn := o.recordToolCall("write_file", `{"path":"newfile.go"}`, 1)
 	if warn != "" {
 		t.Fatalf("expected no warning on creation, got: %s", warn)
@@ -21,14 +20,11 @@ func TestOrphanFileNewSourceFile(t *testing.T) {
 func TestOrphanFileThresholdWarning(t *testing.T) {
 	o := newOrphanFileState()
 
-	// Create a new Go file
 	o.recordToolCall("write_file", `{"path":"newfile.go"}`, 1)
 
-	// 2 subsequent non-integration calls (below threshold)
 	o.recordToolCall("read_file", `{"path":"other.go"}`, 2)
 	o.recordToolCall("grep", `{"pattern":"test"}`, 3)
 
-	// 3rd call: threshold reached, should warn
 	warn := o.recordToolCall("list_directory", `{"path":"."}`, 4)
 	if warn == "" {
 		t.Fatal("expected orphan warning after 3 non-integration calls")
@@ -41,10 +37,8 @@ func TestOrphanFileThresholdWarning(t *testing.T) {
 func TestOrphanFileEditIntegration(t *testing.T) {
 	o := newOrphanFileState()
 
-	// Create a new Go file
 	o.recordToolCall("write_file", `{"path":"newfile.go"}`, 1)
 
-	// Edit an existing file -- should mark as integrated
 	warn := o.recordToolCall("edit_file", `{"file_path":"main.go"}`, 2)
 	if warn != "" {
 		t.Fatalf("expected no warning after integration edit, got: %s", warn)
@@ -59,7 +53,6 @@ func TestOrphanFileBuildIntegration(t *testing.T) {
 
 	o.recordToolCall("write_file", `{"path":"helper.go"}`, 1)
 
-	// Run a build -- should mark as integrated
 	warn := o.recordToolCall("run_command", `{"command":"go build ./..."}`, 2)
 	if warn != "" {
 		t.Fatalf("expected no warning after build, got: %s", warn)
@@ -69,7 +62,6 @@ func TestOrphanFileBuildIntegration(t *testing.T) {
 func TestOrphanFileNonSourceIgnored(t *testing.T) {
 	o := newOrphanFileState()
 
-	// Create a markdown file -- should NOT be tracked as source
 	o.recordToolCall("write_file", `{"path":"README.md"}`, 1)
 	if len(o.newFiles) != 0 {
 		t.Fatalf("non-source files should not be tracked, got %d", len(o.newFiles))
@@ -98,7 +90,7 @@ func TestOrphanFileMaxWarnings(t *testing.T) {
 	o := newOrphanFileState()
 
 	warnCount := 0
-	// Create file, then many non-integration calls
+
 	o.recordToolCall("write_file", `{"path":"f.go"}`, 1)
 	for i := 0; i < 20; i++ {
 		w := o.recordToolCall("read_file", `{"path":"x"}`, i+2)
@@ -123,7 +115,7 @@ func TestOrphanFileReset(t *testing.T) {
 
 func TestOrphanFileMultiFileWrite(t *testing.T) {
 	args := `{"files":[{"path":"a.go","content":"x"},{"path":"b.go","content":"y"}]}`
-	// #1473-B: ALL paths extracted now, not just files[0].
+
 	paths := extractFilePathsOrArg(args, "multi_file_write")
 	if len(paths) != 2 || paths[0] != "a.go" || paths[1] != "b.go" {
 		t.Fatalf("expected [a.go b.go], got %v", paths)
@@ -148,14 +140,11 @@ func TestOrphanFileMultiFileEditIntegration(t *testing.T) {
 	}
 }
 
-// TestIssue1587_PreExecSnapshot pins #1587-A: overwrite decisions come
-// from the PRE-execution snapshot, not a post-execution stat (which sees
-// every successful creation as "already on disk" and never tracks).
 func TestIssue1587_PreExecSnapshot(t *testing.T) {
 	o := newOrphanFileState()
 	existing := "/tmp/definitely/existing/note.go"
 	created := "/tmp/definitely/absent/created.go"
-	// Pre-exec: only 'existing' is on disk.
+
 	o.preExecExisted = map[string]bool{existing: true, created: false}
 	w := o.recordToolCall("write_file", `{"path":"`+existing+`"}`, 1)
 	_ = w

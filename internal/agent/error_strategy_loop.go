@@ -1,34 +1,5 @@
 package agent
 
-// Error Strategy Loop Detector -- Procedural Memory Failure
-//
-// Research basis: ProcMEM (arXiv:2602.01869, Feb 2026) demonstrates that
-// LLM agents "re-derive solutions even in recurring scenarios" causing
-// "computational redundancy and execution instability." The paper introduces
-// procedural memory -- encoding reusable skills from experience so the agent
-// doesn't repeat the same failed approaches. The core insight: agents that
-// don't leverage within-run experience keep hitting the same wall.
-//
-// Distinction from existing detectors:
-//   - recurring_error.go: detects same BUILD/TEST error fingerprint recurring
-//     across edit cycles (content-level fingerprint matching)
-//   - correction_spiral.go: error SEVERITY escalation (things getting worse)
-//   - edit_fail_recovery.go: single edit failure → recovery guidance
-//   - fix_cascade.go: edit→verify→fail cycle with DIFFERENT errors
-//
-// THIS detector fills the orthogonal gap: detects when the same broad error
-// CATEGORY (file-not-found, old-text-mismatch, timeout, permission, etc.)
-// recurs across potentially DIFFERENT tools and files. This indicates a
-// SYSTEMIC approach failure -- the agent's strategy is wrong, not just one
-// edit. Example: agent keeps getting "file not found" on different files,
-// meaning it never verified paths exist before editing.
-//
-// Design:
-//   - Zero LLM cost -- pure error classification + recurrence counting
-//   - Fires at most 2 times per run
-//   - Non-blocking: hint injected as user message, agent continues
-//   - Threshold: 3+ same-category errors within a sliding window of 15
-
 import (
 	"sort"
 	"strings"
@@ -51,7 +22,7 @@ const (
 )
 
 type errStrategyState struct {
-	recentResults []bool // isError flags in window order
+	recentResults []bool
 	recentCats    []errCategory
 	catCounts     map[errCategory]int
 	warningCount  int
@@ -75,14 +46,9 @@ func (s *errStrategyState) reset() {
 	s.firedFor = make(map[errCategory]bool)
 }
 
-// classifyErrResult categorizes a tool result into an error category.
-// Returns the category and true if it's an error, false otherwise.
 func classifyErrResult(resultContent string, isError bool) (errCategory, bool) {
 	if !isError {
-		// #340: only isError=true results count as error evidence. Successful
-		// outputs routinely contain "error"/"not found" substrings (source code,
-		// "0 errors" vet output, other detectors' guidance text), and counting
-		// them turned "3 same-category errors" into "any 3 error-worded results".
+
 		return errCatGeneric, false
 	}
 	lower := strings.ToLower(resultContent)
@@ -135,17 +101,10 @@ func (s *errStrategyState) pushEntry(cat errCategory, isErr bool) {
 	}
 }
 
-// checkAndWarn returns guidance if a recurring error pattern is detected.
 func (s *errStrategyState) checkAndWarn() string {
 	if s.warningCount >= maxErrStrategyWarnings {
 		return ""
 	}
-	// #1850 case 2: evaluate candidates in a DETERMINISTIC order (map
-	// iteration is random - ties picked a nondeterministic winner) and do
-	// not let a sub-threshold dominant category mask a QUALIFIED one:
-	// 4 generic + 3 timeout used to return early on generic (below its
-	// strengthened bar) without ever looking at timeout, silencing a
-	// legitimate strategy warning for the rest of the run.
 	type candidate struct {
 		cat   errCategory
 		count int
@@ -167,13 +126,12 @@ func (s *errStrategyState) checkAndWarn() string {
 		if s.firedFor[cand.cat] {
 			continue
 		}
-		// #340: generic has no semantic identity — require a stronger
-		// threshold for the catch-all bucket.
+
 		if cand.cat == errCatGeneric && cand.count < 5 {
 			continue
 		}
 		if cand.count < errStrategyThreshold {
-			// Sorted descending: no later candidate can qualify either.
+
 			break
 		}
 		dominantCat, dominantCount, found = cand.cat, cand.count, true
@@ -215,7 +173,6 @@ func formatErrStrategyWarning(cat errCategory, count int) string {
 		"your approach is not working. Strategy change: " + strategy
 }
 
-// itoa is a local int-to-string to avoid fmt import overhead.
 func errStrategyItoa(n int) string {
 	if n == 0 {
 		return "0"

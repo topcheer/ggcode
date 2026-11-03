@@ -39,19 +39,15 @@ func TestCheckHTTPPlaintext_LocalhostExempt(t *testing.T) {
 	}
 }
 
-// TestCheckHTTPPlaintext_Issue3536 covers the loopback whitelist widening:
-// *.localhost subdomains (RFC 6761 §6.3) and the full 127.0.0.0/8 range
-// (RFC 1122 §3.2.1.3) are local dev addresses and must not trigger the
-// SeverityCritical plaintext-HTTP guidance.
 func TestCheckHTTPPlaintext_Issue3536(t *testing.T) {
 	exempt := []string{
-		`const url = "http://app.localhost:3000/api"`,    // *.localhost (Vite style)
-		`const url = "http://api.localhost:3000"`,        // another subdomain
-		`const url = "http://sub.deep.localhost:8080/x"`, // nested depth
-		`url = "http://127.0.0.2:8080/health"`,           // 127.0.0.0/8
-		`url = "http://127.1.2.3/x"`,                     // far into the /8
-		`url = "http://LOCALHOST:8080/x"`,                // case-insensitive exact
-		`url = "http://APP.LOCALHOST:3000/x"`,            // case-insensitive suffix
+		`const url = "http://app.localhost:3000/api"`,
+		`const url = "http://api.localhost:3000"`,
+		`const url = "http://sub.deep.localhost:8080/x"`,
+		`url = "http://127.0.0.2:8080/health"`,
+		`url = "http://127.1.2.3/x"`,
+		`url = "http://LOCALHOST:8080/x"`,
+		`url = "http://APP.LOCALHOST:3000/x"`,
 	}
 	for _, nc := range exempt {
 		if warnings := checkHTTPPlaintext("config.js", "", nc); len(warnings) != 0 {
@@ -60,10 +56,10 @@ func TestCheckHTTPPlaintext_Issue3536(t *testing.T) {
 	}
 
 	flagged := []string{
-		`const url = "http://evil.localhost.example.com/x"`, // .localhost must be a suffix, not infix
-		`const url = "http://localhost.evil.com/x"`,         // subdomain OF someone else
-		`url = "http://127.0.0.256/x"`,                      // invalid IP literal
-		`url = "http://api.example.com/x"`,                  // plain public host
+		`const url = "http://evil.localhost.example.com/x"`,
+		`const url = "http://localhost.evil.com/x"`,
+		`url = "http://127.0.0.256/x"`,
+		`url = "http://api.example.com/x"`,
 	}
 	for _, nc := range flagged {
 		if warnings := checkHTTPPlaintext("config.js", "", nc); len(warnings) == 0 {
@@ -107,7 +103,7 @@ func TestCheckHTTPPlaintext_DeltaAware(t *testing.T) {
 	oldContent := `const url = "http://api.example.com/old"`
 	newContent := `const url = "http://api.example.com/new"`
 	warnings := checkHTTPPlaintext("config.js", oldContent, newContent)
-	// Host 'api.example.com' existed before, so no new warning
+
 	if len(warnings) != 0 {
 		t.Fatalf("pre-existing host should not re-alert: %v", warnings)
 	}

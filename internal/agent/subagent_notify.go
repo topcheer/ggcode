@@ -8,44 +8,21 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Subagent completion push notification (P1-1): without this, a spawned
-// sub-agent's result is invisible to the main loop until the model thinks
-// to poll wait_agent, so models learn spawn -> wait -> wait. The completion
-// feed turns "run finished" into an injected notice at the next LLM turn
-// boundary - same injection point as user mid-run steering.
-//
-// Design constraints (independent-review revisions):
-//   - ONE merged notice per boundary even when several agents finished
-//     (avoid intervention fatigue from consecutive injections).
-//   - First observation establishes a baseline: already-terminal agents are
-//     marked seen WITHOUT injecting - they predate this loop and flooding
-//     them in would be noise, not signal.
-//   - Advisory wording: the model harvests via wait_agent when relevant;
-//     it must not re-spawn or drop what it is doing.
-
-// SubagentCompletion carries one terminal sub-agent state across the feed.
-// Local type: internal/agent must not import internal/subagent (which
-// imports agent for its runner factory) - the wiring layer converts.
 type SubagentCompletion struct {
 	ID      string
 	Name    string
 	Failed  bool
-	Summary string // truncated result / error text
+	Summary string
 }
 
 const subagentNotifySummaryRunes = 200
 
-// SetSubagentCompletionFeed installs the completion source. Pass nil to
-// disable. Safe to call before or during a run.
 func (a *Agent) SetSubagentCompletionFeed(fn func() []SubagentCompletion) {
 	a.mu.Lock()
 	a.subagentCompletionFeed = fn
 	a.mu.Unlock()
 }
 
-// injectSubagentCompletions polls the feed and, when at least one NEW
-// terminal transition is observed, injects one merged user notice. Returns
-// whether a notice was injected.
 func (a *Agent) injectSubagentCompletions() bool {
 	a.mu.RLock()
 	feed := a.subagentCompletionFeed
@@ -73,8 +50,7 @@ func (a *Agent) injectSubagentCompletions() bool {
 		fresh = append(fresh, c)
 	}
 	if baseline {
-		// First observation: already-terminal agents predate this loop -
-		// mark seen WITHOUT injecting (baseline swallow).
+
 		return false
 	}
 	if len(fresh) == 0 {

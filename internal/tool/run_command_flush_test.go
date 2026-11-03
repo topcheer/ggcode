@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// Regression: a command whose final output lands inside the 300ms throttle
-// window must still emit its tail once - the streaming view must not lose
-// the last burst when the process exits mid-window.
 func TestStreamingProgressWriterFlushEmitsThrottledTail(t *testing.T) {
 	var mu sync.Mutex
 	var emissions []string
@@ -23,9 +20,8 @@ func TestStreamingProgressWriterFlushEmitsThrottledTail(t *testing.T) {
 	var buf bytes.Buffer
 	w := newStreamingProgressWriter(&buf, nil, progress)
 
-	// Prime the throttle window so the next Write is suppressed.
 	w.Write([]byte("first line\n"))
-	w.Write([]byte("last burst line\n")) // inside throttle window: buffered only
+	w.Write([]byte("last burst line\n"))
 
 	mu.Lock()
 	n := len(emissions)
@@ -58,8 +54,6 @@ func TestStreamingProgressWriterFlushEmptyNoEmit(t *testing.T) {
 	}
 }
 
-// Flush must also update the throttle timestamp semantics: a flush followed
-// by more output should behave sanely (flush does not wedge the writer).
 func TestStreamingProgressWriterFlushThenWrite(t *testing.T) {
 	var mu sync.Mutex
 	var emissions []string
@@ -70,12 +64,12 @@ func TestStreamingProgressWriterFlushThenWrite(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	w := newStreamingProgressWriter(&buf, nil, progress)
-	w.Write([]byte("a\n"))   // emission 1 (window fresh)
-	w.flush()                // emission 2 (forced)
-	w.lastEmit = time.Time{} // simulate window expiry
-	w.Write([]byte("b\n"))   // emission 3 (window expired)
-	w.flush()                // no-op: line b already emitted? No - flush is
-	// unconditional tail emission, so this is emission 4.
+	w.Write([]byte("a\n"))
+	w.flush()
+	w.lastEmit = time.Time{}
+	w.Write([]byte("b\n"))
+	w.flush()
+
 	mu.Lock()
 	defer mu.Unlock()
 	if len(emissions) != 4 {

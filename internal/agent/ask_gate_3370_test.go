@@ -14,11 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #3370 regression: an approval that ends in timeout/cancellation is
-// fail-closed (tool does not run) but must never be attributed to the user -
-// audit records ask_timeout, approval memory learns nothing, and two
-// timeouts must NOT arm the ask throttle with a false "denied twice" story.
-
 func new3370Agent(onApproval func(ctx context.Context, name, args string) permission.Decision) *Agent {
 	a := &Agent{
 		policy:         &stubAskPolicy{mode: permission.AutoMode},
@@ -31,8 +26,6 @@ func new3370Agent(onApproval func(ctx context.Context, name, args string) permis
 
 var tc3370 = provider.ToolCallDelta{Name: "edit_file", Arguments: json.RawMessage(`{"file_path":"/tmp/c/z.go"}`)}
 
-// Timeout at the gate: fail-closed, message names the timeout and never
-// claims the user denied/rejected anything.
 func TestAskGateTimeoutFailClosedWithoutUserBlame(t *testing.T) {
 	a := new3370Agent(func(ctx context.Context, name, args string) permission.Decision {
 		return permission.Timeout
@@ -51,9 +44,6 @@ func TestAskGateTimeoutFailClosedWithoutUserBlame(t *testing.T) {
 	}
 }
 
-// The issue's headline scenario: TWO consecutive timeouts must leave the ask
-// throttle unarmed - the third ask still prompts (no suppression, no false
-// "denied twice" message).
 func TestAskGateDoubleTimeoutDoesNotThrottle(t *testing.T) {
 	prompts := 0
 	a := new3370Agent(func(ctx context.Context, name, args string) permission.Decision {
@@ -74,7 +64,6 @@ func TestAskGateDoubleTimeoutDoesNotThrottle(t *testing.T) {
 	}
 }
 
-// A displaced/interrupted approval (Cancelled) mirrors the timeout handling.
 func TestAskGateCancelledMirrorsTimeout(t *testing.T) {
 	a := new3370Agent(func(ctx context.Context, name, args string) permission.Decision {
 		return permission.Cancelled
@@ -86,15 +75,12 @@ func TestAskGateCancelledMirrorsTimeout(t *testing.T) {
 	if strings.Contains(strings.ToLower(res.Content), "denied") {
 		t.Errorf("cancelled message must not blame the user:\n%s", res.Content)
 	}
-	// And it must not count toward the throttle either.
+
 	if a.askThrottle.ShouldSuppress(tc3370.Name, tc3370.Arguments) {
 		t.Fatal("cancelled non-decision armed the ask throttle")
 	}
 }
 
-// Timeout/cancel non-decisions must not enter the approval-memory learning
-// sample: after a timeout, RecordApproval-style auto-approve must still need
-// the full 3 real approvals (i.e. the timeout recorded nothing).
 func TestAskGateTimeoutNotInApprovalMemory(t *testing.T) {
 	a := new3370Agent(func(ctx context.Context, name, args string) permission.Decision {
 		return permission.Timeout
@@ -105,8 +91,6 @@ func TestAskGateTimeoutNotInApprovalMemory(t *testing.T) {
 	}
 }
 
-// The audit ledger must record the timeout as ask_timeout (wiring the
-// previously dead StatusAskTimeout constant), not as a user denial.
 func TestAskGateTimeoutAuditedAsAskTimeout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	lg, err := audit.Open(path, "sess-3370")
@@ -146,20 +130,18 @@ func TestAskGateTimeoutAuditedAsAskTimeout(t *testing.T) {
 	}
 }
 
-// Timeouts must not extend the throttle window for a DIFFERENT key either
-// (isolation guard for the exemption itself).
 func TestAskGateTimeoutThenRealDenialStillCountsOnce(t *testing.T) {
 	calls := 0
 	a := new3370Agent(func(ctx context.Context, name, args string) permission.Decision {
 		calls++
 		if calls == 1 {
-			return permission.Timeout // not counted
+			return permission.Timeout
 		}
 		return permission.Deny
 	})
-	a.executeToolWithPermission(context.Background(), tc3370) // timeout
-	a.executeToolWithPermission(context.Background(), tc3370) // real deny #1
-	// One real denial alone must not suppress.
+	a.executeToolWithPermission(context.Background(), tc3370)
+	a.executeToolWithPermission(context.Background(), tc3370)
+
 	if a.askThrottle.ShouldSuppress(tc3370.Name, tc3370.Arguments) {
 		t.Fatal("single real denial suppressed asks - timeout inflated the count")
 	}

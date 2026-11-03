@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// mockACPAgentRegistry implements ACPAgentRegistry for testing.
 type mockACPAgentRegistry struct {
 	agents       map[string]agentEntry
 	promptErr    error
@@ -87,7 +86,6 @@ func (m *mockACPAgentClient) Close() error {
 	return nil
 }
 
-// errAgentNotFound for test purposes.
 type errAgentNotFound struct{ name string }
 
 func (e errAgentNotFound) Error() string { return "agent not found: " + e.name }
@@ -340,7 +338,6 @@ func TestDelegateToolExecuteMissingParams(t *testing.T) {
 	mgr := &mockACPAgentRegistry{agents: map[string]agentEntry{}}
 	tool := DelegateTool{Manager: mgr}
 
-	// Missing agent
 	input, _ := json.Marshal(map[string]string{"prompt": "test"})
 	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
@@ -350,7 +347,6 @@ func TestDelegateToolExecuteMissingParams(t *testing.T) {
 		t.Error("expected error for missing agent")
 	}
 
-	// Missing prompt
 	input, _ = json.Marshal(map[string]string{"agent": "copilot"})
 	result, err = tool.Execute(context.Background(), input)
 	if err != nil {

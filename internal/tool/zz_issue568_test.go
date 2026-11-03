@@ -1,8 +1,5 @@
 package tool
 
-// Regression tests for issue #568 (tool batch fixes).
-// Bug A (GUI SIGKILL) is covered by zz_issue568_unix_test.go.
-
 import (
 	"context"
 	"encoding/json"
@@ -13,16 +10,13 @@ import (
 	"unicode/utf8"
 )
 
-// --- Bug F: explicit empty containers are provided, not missing ---
-
 func TestEmptyArrayRequiredNotMissing(t *testing.T) {
 	schema := json.RawMessage(`{
 		"type": "object",
 		"properties": {"todos": {"type": "array", "items": {"type": "object"}}},
 		"required": ["todos"]
 	}`)
-	// The todo_write clear operation: "Existing todos not in this list are
-	// removed" — [] is the legitimate clearing value.
+
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":[]}`), ""); msg != "" {
 		t.Fatalf("explicit [] must be treated as provided, got: %s", msg)
 	}
@@ -32,7 +26,7 @@ func TestEmptyArrayRequiredNotMissing(t *testing.T) {
 	if msg := isEmptyValue(json.RawMessage(`{}`)); msg {
 		t.Fatal("isEmptyValue({}) must be false — explicit empty object is provided")
 	}
-	// Guards: key absent and null are still missing.
+
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`), ""); msg == "" {
 		t.Fatal("absent required field must still be missing")
 	}
@@ -44,8 +38,6 @@ func TestEmptyArrayRequiredNotMissing(t *testing.T) {
 	}
 }
 
-// --- Bug D: ~ expansion ---
-
 func TestExpandHomePath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -56,7 +48,7 @@ func TestExpandHomePath(t *testing.T) {
 		"~/":            home,
 		"~/notes.txt":   filepath.Join(home, "notes.txt"),
 		"~/a/b/c.txt":   filepath.Join(home, "a", "b", "c.txt"),
-		"~other/x":      "~other/x", // another user's home — untouched
+		"~other/x":      "~other/x",
 		"~user":         "~user",
 		"relative.txt":  "relative.txt",
 		"/abs/path.txt": "/abs/path.txt",
@@ -111,7 +103,7 @@ func TestWriteFileTildePath(t *testing.T) {
 	if string(data) != "issue568" {
 		t.Fatalf("unexpected content: %q", data)
 	}
-	// No literal "~" directory may appear in the working dir.
+
 	if _, err := os.Stat(filepath.Join(tool.WorkingDir, "~")); !os.IsNotExist(err) {
 		t.Error("literal '~' directory was created under working dir")
 	}
@@ -152,13 +144,11 @@ func TestFileOpsTildePath(t *testing.T) {
 	if _, err := os.Stat(srcFile); !os.IsNotExist(err) {
 		t.Error("source still exists after move")
 	}
-	// No literal "~" directory in working dir.
+
 	if _, err := os.Stat(filepath.Join(tool.WorkingDir, "~")); !os.IsNotExist(err) {
 		t.Error("literal '~' directory was created under working dir")
 	}
 }
-
-// --- Bug C: read_mcp_resource rune-boundary-safe truncation ---
 
 type issue568FakeRuntime struct{ text string }
 
@@ -171,8 +161,7 @@ func (f issue568FakeRuntime) ReadResource(ctx context.Context, server, uri strin
 }
 
 func TestReadMCPResourceRuneBoundary(t *testing.T) {
-	// 20000 CJK runes = 60000 bytes > 50KB cap. A byte-slice cut at 51200
-	// splits a 3-byte rune and produced U+FFFD shards (#568).
+
 	text := strings.Repeat("汉", 20000)
 	tool := ReadMCPResourceTool{Runtime: issue568FakeRuntime{text: text}}
 	input, _ := json.Marshal(map[string]string{"server": "s", "uri": "test://r"})
@@ -193,8 +182,6 @@ func TestReadMCPResourceRuneBoundary(t *testing.T) {
 		t.Fatal("truncation notice missing")
 	}
 }
-
-// --- Bug E: nested schema-aware coercion ---
 
 func TestCoerceNestedValues(t *testing.T) {
 	schema := json.RawMessage(`{
@@ -266,8 +253,7 @@ func TestCoerceNestedUnchangedWhenTyped(t *testing.T) {
 	}`)
 	args := json.RawMessage(`{"list":[{"n":1},{"n":"2"}]}`)
 	out := CoerceArguments(schema, args)
-	// Only the string-encoded element changes; already-typed values keep
-	// their exact JSON representation.
+
 	want := `{"list":[{"n":1},{"n":2}]}`
 	if got := string(out); got != want {
 		t.Fatalf("got %s, want %s", got, want)

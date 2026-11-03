@@ -11,10 +11,6 @@ import (
 func TestResolveMemoryPathConfinement(t *testing.T) {
 	root := t.TempDir()
 
-	// Valid paths map inside the store and keep the canonical virtual form.
-	// The real path is built on the symlink-resolved root, so compare against
-	// the resolved root (root itself usually contains no links; macOS temp
-	// dirs do).
 	resolvedRoot, rerr := filepath.EvalSymlinks(root)
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -30,7 +26,6 @@ func TestResolveMemoryPathConfinement(t *testing.T) {
 		t.Fatalf("real = %q, want %q", real, want)
 	}
 
-	// The root itself is legal (directory listing target).
 	if _, real, err := resolveMemoryPath(root, "/memories"); err != nil || real != resolvedRoot {
 		t.Fatalf("root path: real=%q err=%v", real, err)
 	}
@@ -69,7 +64,7 @@ func TestResolveMemoryPathRejectsSymlinkEscape(t *testing.T) {
 
 func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 	s := newMemoryToolState()
-	s.enabled = true // #2511: round-trip tests model the declared (enabled) tool
+	s.enabled = true
 	dir := t.TempDir()
 
 	call := func(t *testing.T, args map[string]any) toolResultProbe {
@@ -82,7 +77,6 @@ func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 		return toolResultProbe{content: res.Content, isErr: res.IsError}
 	}
 
-	// create
 	if p := call(t, map[string]any{"command": "create", "path": "/memories/todo.txt", "file_text": "alpha\n"}); p.isErr {
 		t.Fatalf("create failed: %s", p.content)
 	}
@@ -91,33 +85,27 @@ func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("on-disk content = %q err=%v, want %q", b, err, "alpha\n")
 	}
 
-	// view (full file, numbered)
 	p := call(t, map[string]any{"command": "view", "path": "/memories/todo.txt"})
 	if p.isErr || !strings.Contains(p.content, "1\talpha") {
 		t.Fatalf("view = %q isErr=%v", p.content, p.isErr)
 	}
 
-	// str_replace
 	if p := call(t, map[string]any{"command": "str_replace", "path": "/memories/todo.txt", "old_str": "alpha", "new_str": "beta"}); p.isErr {
 		t.Fatalf("str_replace failed: %s", p.content)
 	}
-	if b, err := os.ReadFile(onDisk); err != nil || string(b) != "beta" { // line-normalized store drops the trailing newline
+	if b, err := os.ReadFile(onDisk); err != nil || string(b) != "beta" {
 		t.Fatalf("after replace content = %q err=%v", b, err)
 	}
 
-	// insert
 	if p := call(t, map[string]any{"command": "insert", "path": "/memories/todo.txt", "insert_line": 1, "insert_text": "gamma"}); p.isErr {
 		t.Fatalf("insert failed: %s", p.content)
 	}
 
-	// view_range: only line 2 - insert at line 1 puts "gamma" after "beta",
-	// so the file is beta/gamma and the slice keeps absolute line numbers.
 	p = call(t, map[string]any{"command": "view", "path": "/memories/todo.txt", "view_range": []int{2, 2}})
 	if p.isErr || !strings.Contains(p.content, "2\tgamma") || strings.Contains(p.content, "1\t") {
 		t.Fatalf("view_range = %q isErr=%v", p.content, p.isErr)
 	}
 
-	// rename
 	if p := call(t, map[string]any{"command": "rename", "old_path": "/memories/todo.txt", "new_path": "/memories/notes/done.txt"}); p.isErr {
 		t.Fatalf("rename failed: %s", p.content)
 	}
@@ -125,12 +113,10 @@ func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("old path still exists after rename: err=%v", err)
 	}
 
-	// delete
 	if p := call(t, map[string]any{"command": "delete", "path": "/memories/notes/done.txt"}); p.isErr {
 		t.Fatalf("delete failed: %s", p.content)
 	}
 
-	// Unknown command and malformed arguments surface as error results.
 	if p := call(t, map[string]any{"command": "exploit", "path": "/memories/x"}); !p.isErr {
 		t.Fatalf("unknown command must be an error result, got %q", p.content)
 	}
@@ -139,7 +125,6 @@ func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 	}
 }
 
-// toolResultProbe decouples the test from the tool.Result struct shape.
 type toolResultProbe struct {
 	content string
 	isErr   bool

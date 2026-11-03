@@ -1,13 +1,5 @@
 package tool
 
-// #2151 regression: extractTaggedBlock (#2146's two-step same-name scan)
-// sliced its capture from the ADVANCED rest pointer - rest had moved past
-// every intermediate same-name tag, so each inner same-name block was
-// silently dropped and only the container's tail survived (probe: a 427B
-// container with an inner div yielded just its last 207B child; the
-// #2146 regression tests only used differently-named children, so the
-// depth++ branch had zero coverage).
-
 import (
 	"strings"
 	"testing"

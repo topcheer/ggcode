@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #2699: detectCloseInLoops must not flag the canonical loop-exit idiom
-// where close(ch) is followed by a guaranteed terminator (return, or a bare
-// break that binds to the enclosing loop). Regression guards ensure the
-// exemption does not swallow true positives.
-
 func TestIssue2699_CloseThenReturnInSelect(t *testing.T) {
 	src := `package main
 
@@ -78,8 +73,7 @@ func worker(in <-chan int, out chan int) {
 }
 
 func TestIssue2699_BreakInsideSelectStillWarns(t *testing.T) {
-	// break inside a select case binds to the select, not the loop: the loop
-	// can reach close() again on the next iteration. Must keep warning.
+
 	src := `package main
 
 func worker(in <-chan int, out chan int) {
@@ -131,8 +125,7 @@ func worker(in <-chan int, out chan int) {
 }
 
 func TestIssue2699_ConditionalTerminatorStillWarns(t *testing.T) {
-	// A return nested inside an if between close and the loop tail is
-	// conditional: the close can execute and the loop continue.
+
 	src := `package main
 
 func worker(in <-chan int, out chan int) {
@@ -158,7 +151,7 @@ func worker(in <-chan int, out chan int) {
 }
 
 func TestIssue2699_ReturnInFuncLitStillWarns(t *testing.T) {
-	// return inside a function literal only exits the closure.
+
 	src := `package main
 
 func worker(in <-chan int, out chan int) {
@@ -185,7 +178,7 @@ func worker(in <-chan int, out chan int) {
 }
 
 func TestIssue2699_TruePositiveStillWarns(t *testing.T) {
-	// Plain close with no terminator: original detection must be preserved.
+
 	src := `package main
 
 func worker(in <-chan int, out chan int) {
@@ -210,7 +203,7 @@ func worker(in <-chan int, out chan int) {
 }
 
 func TestIssue2699_GoCloseThenReturn(t *testing.T) {
-	// go close(ch); return: the close is spawned once and the loop exits.
+
 	src := `package main
 
 func worker(in <-chan int, out chan int) {

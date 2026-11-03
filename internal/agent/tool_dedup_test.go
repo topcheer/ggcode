@@ -61,7 +61,7 @@ func TestToolDedupEpochInvalidatesAfterFileEdit(t *testing.T) {
 func TestToolDedupExpiresAfterTTL(t *testing.T) {
 	l := newTestDedupLedger()
 	l.record("git_commit", `{"message":"x"}`, tool.Result{Content: "ok"})
-	// Simulate TTL expiry by rewriting the recorded timestamp.
+
 	for fp, e := range l.table {
 		e.at = time.Now().Add(-3 * time.Second)
 		l.table[fp] = e
@@ -77,12 +77,7 @@ func TestToolDedupMCPPrefixTreatedAsMutating(t *testing.T) {
 		t.Fatal("mcp__ tools must be treated as mutating")
 	}
 	l.record("mcp__github__create_pull_request", `{"title":"t"}`, tool.Result{Content: "PR #1"})
-	// #3680: a successful mutating mcp__* call now bumps the epoch, so the
-	// old assertion (the duplicate is suppressed) no longer holds - epoch
-	// invalidation crosses tools by design (#2486: a workspace change makes
-	// every command fingerprint stale). The duplicate still CACHES (same
-	// tool, same args, fresh entry) but cannot suppress across the bump.
-	// Re-record the duplicate to prove the entry still lands post-bump.
+
 	if got := l.suppressDuplicate("mcp__github__create_pull_request", `{"title":"t"}`); got != nil {
 		t.Fatal("duplicate across its own epoch bump must re-execute (safe direction)")
 	}

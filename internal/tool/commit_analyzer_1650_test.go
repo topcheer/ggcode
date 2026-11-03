@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #1650 case 1 probes: parseDiffStats must register binary changes, pure
-// deletions (+++ /dev/null), and pure mode changes - previously all three
-// shapes produced zero files, so the maxFilesPerCommit/maxLinesPerCommit
-// warnings silently missed large pure-deletion changes.
-
 func TestParseDiffStatsNormalAndDeletion(t *testing.T) {
 	diff := `diff --git a/keep.txt b/keep.txt
 index 111..222 100644

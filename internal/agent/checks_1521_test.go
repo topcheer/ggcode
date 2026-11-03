@@ -2,7 +2,6 @@ package agent
 
 import "testing"
 
-// #1521 case B pins: bare CJK substrings must NOT fire.
 func Test1521CJKBareFormsNotFlagged(t *testing.T) {
 	mkAgent := func() *Agent { return &Agent{ambiguityPoint: newAmbiguityPointState()} }
 	for _, msg := range []string{
@@ -23,7 +22,6 @@ func Test1521CJKBareFormsNotFlagged(t *testing.T) {
 	}
 }
 
-// #1521 case C pin: long redirection messages must still classify.
 func Test1521LongRedirectionDetected(t *testing.T) {
 	long := "Actually, I meant the opposite - " + makeStr('x', 150)
 	mid := makeStr('y', 120) + " the wrong approach might actually be right if we consider edge cases"
@@ -35,7 +33,6 @@ func Test1521LongRedirectionDetected(t *testing.T) {
 	}
 }
 
-// #1521 case D pin: a failed test run must not satisfy verification.
 func Test1521FailedRunNotVerification(t *testing.T) {
 	rs := &RunStats{
 		CommandsRun: []string{"go test ./..."},

@@ -2,7 +2,6 @@ package tool
 
 import "testing"
 
-// #1704 case 3: exact matches outrank substring superstrings.
 func TestSkillFuzzyExactOutranksSubstring1704(t *testing.T) {
 	names := []string{"verify-changes", "verify", "verify-coverage", "verify-deep"}
 	got := suggestSkills("verify", names)

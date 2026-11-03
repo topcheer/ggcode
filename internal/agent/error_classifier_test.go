@@ -155,19 +155,16 @@ func TestClassifyErrorContent_GenericFallback(t *testing.T) {
 func TestErrorClassifier_FiresOncePerCategory(t *testing.T) {
 	ec := NewErrorClassifier()
 
-	// First call — should fire
 	cat1 := ec.classifyToolError("edit_file", "no such file or directory")
 	if cat1.Name != "file_not_found" {
 		t.Fatalf("expected file_not_found on first call, got %s", cat1.Name)
 	}
 
-	// Second call with same category — should NOT fire (already fired)
 	cat2 := ec.classifyToolError("read_file", "file does not exist")
 	if cat2.Name != "" {
 		t.Errorf("expected empty (already fired), got %s", cat2.Name)
 	}
 
-	// Different category — should fire
 	cat3 := ec.classifyToolError("run_command", "panic: nil pointer dereference")
 	if cat3.Name != "nil_pointer" {
 		t.Errorf("expected nil_pointer, got %s", cat3.Name)
@@ -177,10 +174,8 @@ func TestErrorClassifier_FiresOncePerCategory(t *testing.T) {
 func TestErrorClassifier_Reset(t *testing.T) {
 	ec := NewErrorClassifier()
 
-	// Fire a category
 	ec.classifyToolError("edit_file", "no such file or directory")
 
-	// Reset — should allow firing again
 	ec.reset()
 
 	cat := ec.classifyToolError("read_file", "file does not exist")
@@ -223,24 +218,19 @@ func TestErrorContainsAny(t *testing.T) {
 }
 
 func TestClassifyErrorContent_OrderingPrecedence(t *testing.T) {
-	// "cannot find package" should match import_error now (since we removed
-	// the generic "cannot find" from file_not_found)
+
 	cat := classifyErrorContent("run_command", "cannot find package github.com/foo/bar")
 	if cat.Name != "import_error" {
 		t.Errorf("expected import_error, got %s", cat.Name)
 	}
 }
 
-// TestClassifyErrorContent_TestDeadlockTimeoutIsTestFailure pins #1457-B:
-// `panic: test timed out after 10m0s` is a DETERMINISTIC test failure, not
-// a transient network timeout - the bare 'timed out' substring used to
-// route it to timeout_network with 'retry' guidance (#653 synced).
 func TestClassifyErrorContent_TestDeadlockTimeoutIsTestFailure(t *testing.T) {
 	cat := classifyErrorContent("run_command", "panic: test timed out after 10m0s\nrunning tests:\n	TestFoo(10s)")
 	if cat.Name != "test_failure" {
 		t.Fatalf("test-deadlock timeout classified as %q, want test_failure", cat.Name)
 	}
-	// A REAL network timeout still classifies as timeout.
+
 	netCat := classifyErrorContent("run_command", "fetching url: context deadline exceeded")
 	if netCat.Name == "test_failure" {
 		t.Fatal("network deadline hijacked into test_failure")
