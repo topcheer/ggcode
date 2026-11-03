@@ -98,8 +98,17 @@ func TestApprovalDedupBranchBumpsUnread(t *testing.T) {
 }
 
 func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
-	nm := NewNotificationManager()
-	nm.SetFocused(false)
+	// Construct by hand: NewNotificationManager starts a drainWinQueue worker
+	// goroutine that races the fill below (a filled slot gets consumed before
+	// the second enqueue, flipping the assertion - flaky without a worker-free
+	// instance).
+	nm := &NotificationManager{
+		focused:   false,
+		enabled:   true,
+		lastShown: make(map[string]time.Time),
+		winQueue:  make(chan winToast, 4),
+		unixQueue: make(chan unixToast, 4),
+	}
 
 	for i := 0; i < cap(nm.winQueue); i++ {
 		nm.winQueue <- winToast{title: "fill", body: ""}
@@ -136,6 +145,9 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 		t.Fatal("lastShown still contains the rolled-back key — a retry within 5s would hit dedup and never re-queue")
 	}
 
+	// Free one slot deterministically (the real worker would have consumed
+	// one by now) so the retry below can enqueue and re-record the dedup key.
+	<-nm.winQueue
 	nm.Notify("GGCode", "Task completed (turn-1)")
 	nm.mu.Lock()
 	_, retried := nm.lastShown["GGCode\x00Task completed (turn-1)"]
@@ -146,7 +158,12 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 }
 
 func TestEnqueueWinToastAcceptsWhenCapacity(t *testing.T) {
-	nm := NewNotificationManager()
+	nm := &NotificationManager{
+		focused:   true,
+		enabled:   true,
+		lastShown: make(map[string]time.Time),
+		winQueue:  make(chan winToast, 4),
+	}
 	if !nm.enqueueWinToast("title", "body") {
 		t.Fatal("enqueueWinToast failed on an empty queue")
 	}
