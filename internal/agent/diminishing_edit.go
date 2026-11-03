@@ -225,6 +225,58 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		}
 		return total
 
+	case "batch_replace":
+		var p struct {
+			Pattern     string   `json:"pattern"`
+			Replacement string   `json:"replacement"`
+			Files       []string `json:"files"`
+		}
+		if json.Unmarshal(args, &p) != nil {
+			return 0
+		}
+		per := editChangeDistance(p.Pattern, p.Replacement)
+		if per < len(p.Pattern) {
+			per = len(p.Pattern)
+		}
+		if n := len(p.Files); n > 1 {
+			return per * n
+		}
+		return per
+
+	case "lsp_rename":
+		var p struct {
+			NewName string `json:"new_name"`
+		}
+		if json.Unmarshal(args, &p) != nil {
+			return 0
+		}
+		return len(p.NewName)
+
+	case "file_ops":
+		var p struct {
+			Operations []struct {
+				Source      string `json:"source"`
+				Destination string `json:"destination"`
+			} `json:"operations"`
+		}
+		if json.Unmarshal(args, &p) != nil {
+			return 0
+		}
+		total := 0
+		for _, op := range p.Operations {
+			total += len(op.Source) + len(op.Destination)
+		}
+		return total
+
+	case "notebook_edit":
+		var p struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(args, &p) != nil {
+			return 0
+		}
+		return len(p.Source)
+
 	default:
 		return 0
 	}
