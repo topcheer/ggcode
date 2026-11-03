@@ -1,6 +1,4 @@
 #!/usr/bin/env pwsh
-# Dry-run: validates winget publish parameters without submitting.
-# Usage: ./scripts/release/winget-dryrun.ps1 [-Tag v1.3.67] [-Repo topcheer/ggcode]
 
 param(
     [string]$Tag = "v1.3.67",
@@ -19,7 +17,6 @@ $packages = @(
 foreach ($pkg in $packages) {
     Write-Host "`n--- $($pkg.Id) $packageVersion ---"
 
-    # Check each installer URL exists (HTTP HEAD)
     $urls = @()
     foreach ($arch in @("X64", "Arm64")) {
         $file = $pkg[$arch]
@@ -42,7 +39,6 @@ foreach ($pkg in $packages) {
         continue
     }
 
-    # Check existing manifest to compare installer count
     Write-Host -NoNewline "  Existing manifest installers: "
     try {
         $manifests = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/$($pkg.Id -replace '\.','/')/$($pkg.Id)/$packageVersion"
@@ -57,7 +53,7 @@ foreach ($pkg in $packages) {
                 Write-Host "  OK: installer count matches"
             }
         } else {
-            # No existing version, check latest
+
             $versions = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/$($pkg.Id -replace '\.','/')/$($pkg.Id)"
             $latestVersion = ($versions | Sort-Object name -Descending | Select-Object -First 1).name
             Write-Host "No manifest for $packageVersion, latest is $latestVersion"

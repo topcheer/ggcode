@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# Knight 一键自动化评估
-# 用法:
-#   ./scripts/dev/knight-eval.sh              # A/B 对比（baseline vs knight）
-#   ./scripts/dev/knight-eval.sh --knight     # 仅 Knight 模式
-#   ./scripts/dev/knight-eval.sh --baseline   # 仅 Baseline 模式
-#   ./scripts/dev/knight-eval.sh --tasks task-01,task-02  # 指定任务
-#   ./scripts/dev/knight-eval.sh --workdir ~/ggai/eval-workbench  # 指定测试项目
+
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${repo_root}"
 
-# ---- 颜色 ----
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,7 +16,6 @@ ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
-# ---- 依赖检查 ----
 check_deps() {
     if ! command -v ggcode &>/dev/null; then
         fail "ggcode binary not found in PATH. Run 'make build' first."
@@ -33,7 +25,6 @@ check_deps() {
         fail "python3 not found."
     fi
 
-    # Check httpx
     if ! python3 -c "import httpx" 2>/dev/null; then
         warn "httpx not installed. Installing..."
         pip3 install httpx openai 2>/dev/null || pip install httpx openai 2>/dev/null
@@ -42,7 +33,6 @@ check_deps() {
     ok "Dependencies checked."
 }
 
-# ---- 重置测试项目 ----
 reset_workdir() {
     local wd="$1"
     if [[ ! -d "${wd}/.git" ]]; then
@@ -53,7 +43,6 @@ reset_workdir() {
     ok "Test project reset to clean state."
 }
 
-# ---- 参数解析 ----
 MODE_FLAG=""
 EXTRA_ARGS=()
 TASKS_ARG=""
@@ -90,19 +79,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default: A/B comparison
 if [[ -z "${MODE_FLAG}" ]]; then
     MODE_FLAG="--ab"
 fi
 
-# Default workdir
 WORKDIR="${WORKDIR:-$HOME/ggai/eval-workbench}"
-WORKDIR="$(eval echo "${WORKDIR}")"  # expand ~
+WORKDIR="$(eval echo "${WORKDIR}")"
 
 timestamp="$(date +"%Y%m%d-%H%M%S")"
 OUTPUT_DIR="${OUTPUT_DIR:-${repo_root}/.tmp/knight-eval-${timestamp}}"
 
-# ---- 主流程 ----
 echo ""
 echo "========================================================"
 echo "  Knight Automated Evaluation"
@@ -116,14 +102,12 @@ echo ""
 
 check_deps
 
-# Reset test project
 if [[ -z "${NO_RESET:-}" ]]; then
     reset_workdir "${WORKDIR}"
 fi
 
 mkdir -p "${OUTPUT_DIR}"
 
-# Run the Python orchestrator
 info "Starting evaluation orchestrator..."
 
 python3 "${repo_root}/scripts/eval/run_eval.py" \
@@ -150,7 +134,6 @@ echo "Results:"
 echo "  Workdir:   ${WORKDIR}"
 echo "  Output:    ${OUTPUT_DIR}"
 
-# Show scorecard if exists
 for sc in "${OUTPUT_DIR}/ab-comparison.scorecard.md" \
          "${OUTPUT_DIR}/knight.scorecard.md" \
          "${OUTPUT_DIR}/baseline.scorecard.md"; do

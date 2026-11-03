@@ -47,8 +47,6 @@ try {
             Pop-Location
         }
 
-        # perUser MSI — default, no suffix (no admin required)
-        # Different UpgradeCode from perMachine — winget handles cross-scope migration.
         $msiUser = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
         & wix build `
             -d "Version=$packageVersion" `
@@ -60,7 +58,6 @@ try {
             throw "wix build (perUser) failed for $($build.WixArch)"
         }
 
-        # perMachine MSI — for enterprise, gets _machine suffix
         $msiMachine = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}_machine.msi" -f $packageVersion, $build.Suffix)
         & wix build `
             -d "Version=$packageVersion" `

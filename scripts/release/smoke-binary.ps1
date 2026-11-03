@@ -4,24 +4,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Unblock the downloaded binary to remove the Zone.Identifier alternate data stream.
-# This prevents Windows Defender / SmartScreen from treating the file as "downloaded
-# from the internet" and hanging the process during first-run scanning.
 try {
     Unblock-File -Path $BinaryPath -ErrorAction SilentlyContinue
 } catch {
-    # May not exist — ignore
+
 }
 
-# Defender exclusions (best-effort on non-admin GitHub Actions runners).
 $binDir = Split-Path -Parent $BinaryPath
 if ($binDir -eq "") { $binDir = "." }
 try { Add-MpPreference -ExclusionPath $binDir -ErrorAction SilentlyContinue } catch {}
 try { Add-MpPreference -ExclusionProcess (Split-Path -Leaf $BinaryPath) -ErrorAction SilentlyContinue } catch {}
 try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}
 
-# Use a helper that runs a command with a hard timeout.
-# This prevents Defender from hanging the entire job indefinitely.
 function Invoke-WithTimeout {
     param([string]$Cmd, [string[]]$Args, [int]$Seconds = 30)
     $tmpOut = [System.IO.Path]::GetTempFileName()

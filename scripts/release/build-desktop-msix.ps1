@@ -1,17 +1,10 @@
-# Build GGCode Desktop MSIX packages for Microsoft Store submission.
-# Runs on windows-latest (Windows SDK makeappx.exe available).
-# Per arch (x64/arm64):
-#   - wails build -> build\bin\GGCode-Desktop.exe
-#   - derive Assets/*.png from build/appicon.png (System.Drawing)
-#   - makeappx pack -> ggcode-desktop_<ver>_windows_<arch>.msix (Store re-signs)
-# Identity placeholders are injected from parameters (values come from
-# Partner Center -> App management -> App identity).
+
 param(
-  [Parameter(Mandatory=$true)][string]$Version,        # e.g. 1.3.268.0 (four parts)
+  [Parameter(Mandatory=$true)][string]$Version,
   [Parameter(Mandatory=$true)][string]$OutputDir,
-  [Parameter(Mandatory=$true)][string]$IdentityName,   # Package/Identity Name
-  [Parameter(Mandatory=$true)][string]$Publisher,      # CN=... publisher id
-  [string]$Archs = "x64,arm64"                         # comma separated
+  [Parameter(Mandatory=$true)][string]$IdentityName,
+  [Parameter(Mandatory=$true)][string]$Publisher,
+  [string]$Archs = "x64,arm64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,12 +19,10 @@ New-Item -ItemType Directory -Force -Path $AbsOutputDir | Out-Null
 $Commit = if ($env:GGCODE_COMMIT) { $env:GGCODE_COMMIT } else { (git -C $RootDir rev-parse --short HEAD) }
 $BuildDate = if ($env:GGCODE_DATE) { $env:GGCODE_DATE } else { (Get-Date -Format "yyyy-MM-dd") }
 
-# Validate four-part version (MSIX requirement)
 if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
   throw "MSIX Version must be four-part (e.g. 1.3.268.0), got: $PackageVersion"
 }
 
-# Locate makeappx from Windows SDK
 $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue |
   Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 if (-not $makeappx) { throw "makeappx.exe not found (Windows SDK required)" }
@@ -73,7 +64,6 @@ foreach ($arch in ($Archs -split ",")) {
 
   Write-Host "=== Building $arch ($goArch) ==="
 
-  # 1. wails build
   Push-Location $WailsDir
   try {
     $env:CGO_ENABLED = "1"; $env:GOOS = "windows"; $env:GOARCH = $goArch
@@ -84,7 +74,6 @@ foreach ($arch in ($Archs -split ",")) {
     Copy-Item $builtExe (Join-Path $stageDir "GGCode-Desktop.exe")
   } finally { Pop-Location }
 
-  # 2. derive store assets from appicon
   $src = New-Object System.Drawing.Bitmap((Join-Path $WailsDir "build\appicon.png"))
   try {
     New-StoreAsset $src (Join-Path $assetsDir "Square44x44Logo.png") 44 44
@@ -95,7 +84,6 @@ foreach ($arch in ($Archs -split ",")) {
     New-StoreAsset $src (Join-Path $assetsDir "StoreLogo.png") 100 100
   } finally { $src.Dispose() }
 
-  # 3. render manifest
   $manifest = (Get-Content $ManifestTemplate -Raw) `
     -replace '\{\{IDENTITY_NAME\}\}', $IdentityName `
     -replace '\{\{PUBLISHER\}\}', ($Publisher -replace '\\', '\\') `
@@ -104,9 +92,6 @@ foreach ($arch in ($Archs -split ",")) {
   $manifestPath = Join-Path $stageDir "AppxManifest.xml"
   [System.IO.File]::WriteAllText($manifestPath, $manifest)
 
-  # Directory pack: stageDir already holds GGCode-Desktop.exe + Assets\ +
-  # AppxManifest.xml, so /d packs everything without a mapping file (mapping
-  # quoting proved fragile across CI environments).
   $outMsix = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_${arch}.msix"
   & $makeappx pack /d $stageDir /p $outMsix /v
   if ($LASTEXITCODE -ne 0) { throw "makeappx failed for $arch" }

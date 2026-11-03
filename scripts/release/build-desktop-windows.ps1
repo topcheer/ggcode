@@ -1,7 +1,4 @@
-# Build GGCode Desktop (Wails) for Windows (amd64 + arm64) and matching MSI installers.
-# Produces per arch:
-#   - perUser (default, no suffix): ggcode-desktop_X.Y.Z_windows_x64.msi / _arm64.msi
-#   - perMachine (_machine suffix): ggcode-desktop_X.Y.Z_windows_x64_machine.msi / _arm64_machine.msi
+
 param(
   [Parameter(Mandatory=$true)]
   [string]$Version,
@@ -20,7 +17,6 @@ $Commit = if ($env:GGCODE_COMMIT) { $env:GGCODE_COMMIT } else { "" }
 $BuildDate = if ($env:GGCODE_DATE) { $env:GGCODE_DATE } else { "" }
 $UpgradeCode = "{CB2D6759-52A6-4C5E-8D56-FF21F3E3CE9D}"
 
-# Resolve OutputDir to absolute path
 $AbsOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $pwd $OutputDir }
 New-Item -ItemType Directory -Force -Path $AbsOutputDir | Out-Null
 
@@ -41,7 +37,6 @@ if (-not (Test-Path $WxsUserPath)) {
   throw "missing WiX source at $WxsUserPath"
 }
 
-# Install Wails CLI if not present
 $wailsExe = Get-Command wails -ErrorAction SilentlyContinue
 if (-not $wailsExe) {
   Write-Host "Installing Wails CLI..."
@@ -52,12 +47,10 @@ if (-not $wailsExe) {
   }
 }
 
-# Update wails.json product version
 $wailsJson = Get-Content (Join-Path $WailsDir "wails.json") -Raw | ConvertFrom-Json
 $wailsJson.info.productVersion = $PackageVersion
 $wailsJson | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $WailsDir "wails.json")
 
-# Build matrix: amd64 → x64, arm64 → arm64
 $builds = @(
   @{ GoArch = "amd64"; WixArch = "x64";   Suffix = "x64"   },
   @{ GoArch = "arm64"; WixArch = "arm64"; Suffix = "arm64" }
@@ -76,7 +69,6 @@ foreach ($build in $builds) {
     $env:GOOS = "windows"
     $env:GOARCH = $build.GoArch
 
-    # Wails build produces build/bin/GGCode-Desktop.exe
     wails build -tags goolm -ldflags $Ldflags -platform "windows/$($build.GoArch)" -clean -skipbindings
     if ($LASTEXITCODE -ne 0) {
       throw "wails build failed for desktop windows $($build.GoArch) binary"
@@ -94,7 +86,6 @@ foreach ($build in $builds) {
 
   Copy-Item $outFile (Join-Path $stageDir "ggcode-desktop.exe")
 
-  # --- Build perUser MSI (default, no suffix) ---
   $msiUserTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_$($build.Suffix).msi"
   & wix build `
     -d "Version=$PackageVersion" `
@@ -107,7 +98,6 @@ foreach ($build in $builds) {
   }
   Write-Host "Built perUser MSI: $msiUserTarget"
 
-  # --- Build perMachine MSI (_machine suffix) ---
   $msiMachineTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_$($build.Suffix)_machine.msi"
   & wix build `
     -d "Version=$PackageVersion" `

@@ -12,9 +12,8 @@ $releaseVersion = $Version.TrimStart("v")
 $wingetCreate = Join-Path $PWD "wingetcreate.exe"
 $manifestDir = Join-Path $PWD "manifest-output"
 
-# Detect package type — CLI and Desktop have different manifest structures
 $isCli = $PackageId -like "*-cli"
-# All MSI installers are perUser (LocalAppData, no admin required)
+
 $scope = "user"
 Write-Host "Package: $PackageId (CLI=$isCli, Scope=$scope)"
 
@@ -22,7 +21,6 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
 
-# --- Idempotency: skip if a PR for this version already exists ---
 Write-Host "Checking for existing PRs for $PackageId version $releaseVersion..."
 try {
     $searchQuery = "repo:microsoft/winget-pkgs type:pr state:open $PackageId version $releaseVersion in:title"
@@ -38,7 +36,6 @@ try {
     Write-Warning "PR search failed: $_. Proceeding with submission."
 }
 
-# --- Cleanup: close stale PRs from older versions ---
 Write-Host "Checking for stale PRs (older versions of $PackageId)..."
 try {
     $staleQuery = "repo:microsoft/winget-pkgs type:pr state:open $PackageId in:title"
@@ -64,7 +61,6 @@ try {
     Write-Warning "Stale PR cleanup failed: $_. Continuing with submission."
 }
 
-# Check if package already exists
 & $wingetCreate show $PackageId | Out-Null
 $packageExists = $LASTEXITCODE -eq 0
 
@@ -76,12 +72,8 @@ if (-not $packageExists) {
     exit 0
 }
 
-# --- Step 1: Generate base manifest via wingetcreate update ---
-# wingetcreate downloads each MSI, computes SHA256, extracts ProductCode/UpgradeCode,
-# and preserves the manifest structure from the previous version.
 Write-Host "Step 1: Generating base manifest..."
 
-# Build URL list — must match the number of installers in the existing manifest
 $urls = @("${InstallerUrl}|x64|${scope}")
 if ($InstallerUrlArm64) {
     $urls += "${InstallerUrlArm64}|arm64|${scope}"
@@ -95,10 +87,6 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# --- Step 2: Patch the generated installer YAML with missing top-level fields ---
-# wingetcreate update --urls only populates per-installer fields. We need to add
-# top-level ProductCode, AppsAndFeaturesEntries (Desktop) and Commands (CLI) to
-# match the structure wingetbot validation expects.
 Write-Host "Step 2: Patching installer YAML with top-level fields..."
 
 $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
@@ -110,17 +98,14 @@ if (-not $installerFile) {
 $yaml = Get-Content -Path $installerFile.FullName -Raw
 Write-Host "  Generated installer YAML is $($yaml.Length) bytes"
 
-# Extract the first per-installer ProductCode (wingetcreate already extracted it from the MSI)
 $productCodeMatch = [regex]::Match($yaml, "ProductCode:\s*['""]?(\{[0-9A-Fa-f-]+\})['""]?")
 $productCode = if ($productCodeMatch.Success) { $productCodeMatch.Groups[1].Value } else { "" }
 Write-Host "  Extracted ProductCode from installer entry: $productCode"
 
-# Extract UpgradeCode if present
 $upgradeCodeMatch = [regex]::Match($yaml, "UpgradeCode:\s*['""]?(\{[0-9A-Fa-f-]+\})['""]?")
 $upgradeCode = if ($upgradeCodeMatch.Success) { $upgradeCodeMatch.Groups[1].Value } else { "" }
 Write-Host "  Extracted UpgradeCode: $upgradeCode"
 
-# Check if top-level ProductCode already exists (wingetcreate may add it in newer versions)
 $hasTopLevelProductCode = $yaml -match "(?m)^ProductCode:"
 $hasTopLevelAppsAndFeatures = $yaml -match "(?m)^AppsAndFeaturesEntries:"
 $hasCommands = $yaml -match "(?m)^Commands:"
@@ -129,7 +114,6 @@ Write-Host "  Top-level ProductCode: $(if ($hasTopLevelProductCode) {'present'} 
 Write-Host "  Top-level AppsAndFeaturesEntries: $(if ($hasTopLevelAppsAndFeatures) {'present'} else {'MISSING'})"
 Write-Host "  Commands: $(if ($hasCommands) {'present'} else {'MISSING'})"
 
-# Determine display name and publisher
 $displayName = if ($isCli) { "ggcode" } else { "GGCode Desktop" }
 $publisher = "GG AI Studio"
 
@@ -138,7 +122,7 @@ $result = @()
 $insertedTopLevel = $false
 
 foreach ($line in $lines) {
-    # Force top-level Scope to user (wingetcreate inherits from old manifest which may be machine)
+
     if ($line -match "^Scope:\s*(.+)$") {
         $oldScope = $matches[1].Trim()
         if ($oldScope -ne $scope) {
@@ -148,15 +132,13 @@ foreach ($line in $lines) {
         }
     }
 
-    # Insert top-level fields just before "Installers:" section
     if ($line -match "^Installers:" -and -not $insertedTopLevel) {
-        # Add Commands for CLI if missing
+
         if ($isCli -and -not $hasCommands) {
             $result += "Commands:"
             $result += "- ggcode"
         }
 
-        # Add top-level ProductCode and AppsAndFeaturesEntries for Desktop if missing
         if (-not $isCli) {
             if (-not $hasTopLevelProductCode -and $productCode) {
                 $result += "ProductCode: '$productCode'"
@@ -183,7 +165,6 @@ $patchedYaml = ($result -join "`n")
 Set-Content -Path $installerFile.FullName -Value $patchedYaml -NoNewline
 Write-Host "  Patched installer YAML written ($(($patchedYaml -split "`n").Count) lines)"
 
-# --- Step 3: Submit the manifest ---
 $yamlDir = Split-Path -Parent $installerFile.FullName
 Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
 & $wingetCreate submit $yamlDir --token $GitHubToken --no-open
@@ -191,15 +172,9 @@ Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Manifest submitted successfully!"
 } else {
-    # v1.3.219/v1.3.220 both silently failed here: winget-create's internal
-    # fork sync gave up ("The forked repository could not be synced with the
-    # upstream commits") when the fork lagged upstream, the warning was
-    # swallowed by exit 0, and the release stayed green with no PR. Recover
-    # the known-good way (merge-upstream + retry once), and go RED if it
-    # still fails so releases never silently skip winget again.
+
     Write-Warning "Manifest submission failed (exit code $LASTEXITCODE). Re-syncing fork and retrying once..."
-    # Stagger: the desktop and CLI winget jobs sync the same fork in
-    # parallel; give a concurrent sync time to finish first.
+
     Start-Sleep -Seconds 20
     try {
         $syncHeaders = @{ Authorization = "token $GitHubToken"; Accept = "application/vnd.github+json" }

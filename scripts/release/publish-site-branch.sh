@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publishes the website (docs/site/) to a deployment branch.
-#
-# IMPORTANT: This script creates an ORPHAN branch containing ONLY the
-# docs/site/ directory plus a generated download manifest. It does NOT
-# copy the full repo or commit any binary files. Download links point
-# to GitHub Releases URLs.
-#
-# This keeps the git repo from growing by ~1.5 GB per release.
-
 target_branch=""
 remote_url=""
 source_label=""
@@ -29,7 +20,7 @@ while [[ $# -gt 0 ]]; do
       asset_dirs+=("${2:-}")
       shift 2
       ;;
-    # Kept for backward compatibility — no longer used.
+
     --preserve-latest)
       shift
       ;;
@@ -67,31 +58,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Initialize orphan branch (no parent history).
 git init -b "${target_branch}" "${publish_dir}" >/dev/null
 git -C "${publish_dir}" remote add origin "${remote_url}"
 
-# Railway deploys from this branch with Root Directory = docs/site.
-# So all site files must live under docs/site/ in the orphan branch.
 site_dir="${publish_dir}/docs/site"
 mkdir -p "${site_dir}"
 
-# Copy ONLY the site content — not the full repo.
 if [[ -d docs/site ]]; then
   rsync -a --delete --exclude '.git' docs/site/ "${site_dir}/"
 else
   echo "WARNING: docs/site/ not found, publishing empty site"
 fi
 
-# Copy install scripts so they're served from ggcode.dev/install.sh and /install.ps1
 if [[ -d scripts/install ]]; then
   cp scripts/install/install.sh "${site_dir}/install.sh" 2>/dev/null || true
   cp scripts/install/install.ps1 "${site_dir}/install.ps1" 2>/dev/null || true
 fi
 
-# Generate a download manifest from release assets WITHOUT copying binaries.
-# The manifest lists files and their GitHub Releases download URLs so the
-# website can link directly to GitHub-hosted assets.
 latest_dir="${site_dir}/downloads/latest"
 mkdir -p "${latest_dir}"
 
@@ -107,7 +90,6 @@ if [[ ${#asset_dirs[@]} -gt 0 ]]; then
     return 1
   }
 
-  # Collect asset names (NOT file contents) for the manifest.
   asset_names=()
   for asset_dir in "${asset_dirs[@]}"; do
     if [[ ! -d "${asset_dir}" ]]; then
@@ -120,7 +102,6 @@ if [[ ${#asset_dirs[@]} -gt 0 ]]; then
     done < <(find "${asset_dir}" -maxdepth 1 -type f -print0)
   done
 
-  # Generate manifest.json with GitHub Releases URLs.
   release_tag="${source_label}"
   python3 - "${latest_dir}" "${release_tag}" "${asset_names[@]}" <<'PY'
 import html
@@ -143,8 +124,7 @@ for name in sorted(asset_names):
     })
 
 with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-    # Include both "version" and "source" so the manifest can be consumed by
-    # install.go (which expects {"version": "v1.3.71"}) and by humans/scripts.
+
     import re
     version = release_tag
     match = re.match(r'v?(\d+\.\d+\.\d+)', release_tag)
@@ -167,7 +147,7 @@ page = f"""<!doctype html>
       body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 56rem; padding: 0 1rem; }}
       ul {{ padding-left: 1.25rem; }}
       li {{ margin: 0.5rem 0; }}
-      code {{ background: #f3f3f3; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }}
+      code {{ background:
     </style>
   </head>
   <body>
@@ -184,9 +164,6 @@ with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as fh:
 PY
 fi
 
-# Generate railway.json under docs/site/ to force DOCKERFILE builder.
-# This overrides Railway's default Railpack driver which fails to resolve
-# the Root Directory path.
 cat > "${site_dir}/railway.json" <<'RAILJSON'
 {
   "$schema": "https://railway.com/railway.schema.json",

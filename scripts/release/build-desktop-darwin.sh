@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build GGCode Desktop (Wails) for macOS: universal binary + .app bundle + codesign + notarize + .dmg
+
 set -euo pipefail
 
 VERSION="${1:?usage: build-desktop-darwin.sh <version> <output-dir>}"
@@ -13,7 +13,6 @@ BUILD_DATE="${GGCODE_DATE:-}"
 APP_NAME="GGCode-Desktop"
 APP_ID="com.ggcode.desktop"
 
-# Signing / notarization (set by CI via environment or skip if not available)
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:-}"
 P12_PATH="${APPLE_DEVELOPER_ID_P12_PATH:-}"
 P12_PASSWORD="${APPLE_DEVELOPER_ID_P12_PASSWORD:-}"
@@ -35,7 +34,6 @@ mkdir -p "${OUTPUT_DIR}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-# Install Wails CLI if not present
 ensure_wails() {
   if command -v wails >/dev/null 2>&1; then
     return
@@ -44,7 +42,6 @@ ensure_wails() {
   go install github.com/wailsapp/wails/v2/cmd/wails@latest
 }
 
-# Update wails.json product version
 update_wails_version() {
   if [[ "$(uname)" == "Darwin" ]]; then
     sed -i '' "s/\"productVersion\": \".*\"/\"productVersion\": \"${PACKAGE_VERSION}\"/" "${WAILS_DIR}/wails.json"
@@ -58,7 +55,6 @@ echo "=== Building GGCode Desktop (Wails) for macOS (universal) ==="
 ensure_wails
 update_wails_version
 
-# Build with Wails (produces .app bundle in build/bin/)
 pushd "${WAILS_DIR}" >/dev/null
 
 LDFLAGS="-s -w -X github.com/topcheer/ggcode/internal/version.Version=${VERSION} -X github.com/topcheer/ggcode/internal/version.Commit=${COMMIT} -X github.com/topcheer/ggcode/internal/version.Date=${BUILD_DATE}"
@@ -66,8 +62,7 @@ LDFLAGS="-s -w -X github.com/topcheer/ggcode/internal/version.Version=${VERSION}
 echo "  Building for amd64..."
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
   wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/amd64 -clean -skipbindings
-# Wails uses wails.json "name" for the .app bundle name, not -o flag.
-# Rename to arch-specific name before building the next arch.
+
 mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAME}-amd64.app" 2>/dev/null || true
 
 echo "  Building for arm64..."
@@ -75,9 +70,6 @@ CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
   wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/arm64 -skipbindings
 mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app" 2>/dev/null || true
 
-# Build the out-of-process tray helper into each arch bundle (#1350).
-# wails build only compiles the main package (the helper is exec'd, never
-# imported), so without this step the tray is silently dead in production.
 echo "  Building trayhelper (amd64)..."
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
   go build -tags goolm -ldflags "${LDFLAGS}" \
@@ -89,7 +81,6 @@ CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
 
 popd >/dev/null
 
-# Create universal binary from the two .app bundles
 AMD64_APP="${WAILS_DIR}/build/bin/${APP_NAME}-amd64.app"
 ARM64_APP="${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app"
 UNIVERSAL_APP="${WORK_DIR}/${APP_NAME}.app"
@@ -97,7 +88,6 @@ UNIVERSAL_APP="${WORK_DIR}/${APP_NAME}.app"
 echo "  Creating universal .app bundle..."
 cp -R "${AMD64_APP}" "${UNIVERSAL_APP}"
 
-# Merge the executables into a universal binary
 EXEC_PATH="Contents/MacOS/${APP_NAME}"
 lipo -create \
   "${AMD64_APP}/${EXEC_PATH}" \
@@ -105,8 +95,6 @@ lipo -create \
   -output "${UNIVERSAL_APP}/${EXEC_PATH}"
 chmod 0755 "${UNIVERSAL_APP}/${EXEC_PATH}"
 
-# Merge the tray helper into a universal binary too (#1350) and expose it
-# for the bare-binary channel alongside the main executables.
 HELPER_PATH="Contents/MacOS/trayhelper"
 if [[ -f "${AMD64_APP}/${HELPER_PATH}" && -f "${ARM64_APP}/${HELPER_PATH}" ]]; then
   lipo -create \
@@ -121,16 +109,13 @@ else
   echo "  WARNING: trayhelper missing from arch bundles - tray will be disabled in production (#1350)" >&2
 fi
 
-# Also extract arch-specific bare binaries for Homebrew formula
 cp "${AMD64_APP}/${EXEC_PATH}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_darwin_amd64"
 cp "${ARM64_APP}/${EXEC_PATH}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_darwin_arm64"
 echo "  Extracted darwin_amd64 and darwin_arm64 bare binaries"
 
-# Free disk space
 rm -rf "${WAILS_DIR}/build/bin"
 go clean -cache 2>/dev/null || true
 
-# ── Codesign ──────────────────────────────────────────────
 if [[ "${DO_SIGN}" == "true" ]]; then
   echo "  Codesigning..."
   KEYCHAIN="${WORK_DIR}/signing.keychain-db"
@@ -166,7 +151,6 @@ hdiutil_create() {
   return 1
 }
 
-# ── Create DMG ─────────────────────────────────────────────
 echo "  Creating .dmg..."
 DMG_NAME="ggcode-desktop_${PACKAGE_VERSION}_darwin_universal.dmg"
 DMG_PATH="${OUTPUT_DIR}/${DMG_NAME}"
@@ -178,7 +162,6 @@ ln -s /Applications "${DMG_STAGING}/Applications"
 hdiutil_create
 rm -rf "${DMG_STAGING}"
 
-# ── Notarize ───────────────────────────────────────────────
 if [[ "${DO_NOTARIZE}" == "true" ]]; then
   echo "  Notarizing..."
   xcrun notarytool submit "${DMG_PATH}" \
@@ -190,7 +173,6 @@ if [[ "${DO_NOTARIZE}" == "true" ]]; then
   echo "  Stapling notarization ticket..."
   xcrun stapler staple "${UNIVERSAL_APP}"
 
-  # Re-create DMG with stapled ticket
   rm -f "${DMG_PATH}"
   mkdir -p "${DMG_STAGING}"
   cp -R "${UNIVERSAL_APP}" "${DMG_STAGING}/"
@@ -202,7 +184,6 @@ else
   echo "  Skipping notarization (no API key)"
 fi
 
-# Cleanup keychain
 if [[ "${DO_SIGN}" == "true" ]]; then
   security delete-keychain "${KEYCHAIN}" 2>/dev/null || true
 fi

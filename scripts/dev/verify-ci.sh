@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
-# Clear inherited Git execution context so nested temp repos in tests behave like CI.
 while IFS='=' read -r name _; do
   case "${name}" in
     GIT_*)
@@ -21,34 +20,15 @@ unset ZAI_API_KEY
 unset GGCODE_ZAI_API_KEY
 unset ZAI_MODEL
 
-# ── Config ────────────────────────────────────────────────────────────────
-# Default GOMEMLIMIT scales to the environment's REAL memory budget (see
-# derivation below). The historical fixed value was 2GiB to match GitHub CI,
-# but a hard 2GiB per-worker cap OOM-kills runs inside cgroup-limited
-# verification sandboxes whose total budget is at or below the cap - go
-# workers climb straight into the ceiling and the kernel kills them with the
-# bare "signal: killed" the retry machinery kept seeing. Explicit override
-# via VERIFY_CI_MEMLIMIT still wins.
 if [ -n "${VERIFY_CI_MEMLIMIT:-}" ]; then
   GOMEMLIMIT="${VERIFY_CI_MEMLIMIT}"
 else
-  # Placeholder; sized precisely once memory probes exist (below).
+
   GOMEMLIMIT="2GiB"
 fi
-# NOTE: build/vet/test concurrency is NOT pinned here anymore. A fixed
-# -p 1 -parallel 1 GOMAXPROCS=1 mode is safe under memory pressure but ~10x
-# slower; on a roomy machine a cold-cache run then exceeds the caller's own
-# timeout and gets SIGKILLed with an identical bare "signal: killed" — the
-# same symptom the OOM mitigations were built for, reproduced by a different
-# cause (timeout kill, not OS OOM). Concurrency is picked adaptively from LIVE
-# available memory (pick_tier below) and auto-downgraded on every OOM kill
-# inside run_with_oom_retry. GOMEMLIMIT stays as the per-process soft cap, so
-# even the highest tier bounds each compile/test worker.
-# Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
+
 FULL="${VERIFY_CI_FULL:-0}"
 
-# avail_mem_mb: best-effort available system memory in MiB (0 if unknown).
-# macOS: vm_stat free+inactive+speculative pages. Linux: /proc/meminfo MemAvailable.
 avail_mem_mb() {
   if command -v vm_stat >/dev/null 2>&1; then
     vm_stat | awk '
@@ -65,15 +45,9 @@ avail_mem_mb() {
   fi
 }
 
-# cgroup_free_mb: free headroom INSIDE this process's cgroup limit, in MiB
-# (empty when unknown or unlimited). On containerized CI runners /proc/meminfo
-# reports HOST memory, but the kernel OOM-kills against the CGROUP limit - so
-# sizing the -p tier off host stats picks high concurrency deterministically,
-# and parallel compile/test workers then push RSS past the quota and every
-# attempt dies with a bare "signal: killed" before any retry can help.
 cgroup_free_mb() {
   local lim cur free_bytes
-  # cgroup v2 unified hierarchy
+
   if [ -r /sys/fs/cgroup/memory.max ] && [ -r /sys/fs/cgroup/memory.current ]; then
     lim="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
     cur="$(cat /sys/fs/cgroup/memory.current 2>/dev/null || true)"
@@ -89,8 +63,7 @@ cgroup_free_mb() {
     fi
     return
   fi
-  # cgroup v1 (legacy); limits at/above 256GiB are page-counter sentinels
-  # meaning unlimited, not real quotas.
+
   if [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ] && \
      [ -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]; then
     lim="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || true)"
@@ -108,9 +81,6 @@ cgroup_free_mb() {
   fi
 }
 
-# effective_avail_mb: min(host available, cgroup free); falls back to the host
-# number whenever one side is unknown. All tier-picking and mem-gate checks
-# below must use THIS function - it is the only value the OOM killer respects.
 effective_avail_mb() {
   local h c
   h="$(avail_mem_mb 2>/dev/null || true)"
@@ -122,13 +92,6 @@ effective_avail_mb() {
   fi
 }
 
-# wait_for_memory: block until available memory recovers (>=1500 MiB) or the
-# given cap (default 120s) elapses. Returns as soon as pressure clears.
-# Caps are chosen by the caller's tier philosophy: while downgrades remain,
-# forward progress at a lower tier beats waiting (short cap); once at the
-# tier-1 floor with memory still short, proceeding is near-certain death,
-# so patience (long cap) is the only survival strategy under SUSTAINED
-# co-tenant storms - transient spikes clear in seconds either way.
 wait_for_memory() {
   local max_wait="${1:-120}"
   local waited=0 avail
@@ -143,22 +106,9 @@ wait_for_memory() {
   return 0
 }
 
-# pick_tier: set build/vet/test concurrency from live available memory.
-#   low  (<3GiB avail or unknown): -p 1  -parallel 1  GOMAXPROCS=1 (safe mode)
-#   mid  (3-10GiB):                -p 2  -parallel 2  GOMAXPROCS=2
-#   high (>=10GiB):                -p 4  -parallel 4  GOMAXPROCS=4
-# The mem-gate threshold scales with the tier: starting -p 4 safely needs more
-# headroom than starting -p 1.
-# Load cap: free memory measured at selection time does not account for what
-# concurrent agent workloads are ABOUT to allocate. On shared machines the
-# same co-tenant builds that spike memory mid-run show up as elevated load
-# average first, so the 1-minute load is used to cap the tier: >=6 caps at
-# mid (-p 2), >=12 caps at safe (-p 1). This only ever lowers a tier, never
-# raises one - an idle machine behaves exactly as before.
 VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
 vc_load_1m() {
-  # Portable 1-minute load average: Linux /proc/loadavg, macOS sysctl, then
-  # uptime as last resort. Prints a single float or nothing.
+
   if [ -r /proc/loadavg ]; then
     head -1 /proc/loadavg 2>/dev/null | awk '{print $1; exit}'
   elif sysctl -n vm.loadavg >/dev/null 2>&1; then
@@ -169,11 +119,7 @@ vc_load_1m() {
 }
 pick_tier() {
   local avail; avail="$(effective_avail_mb 2>/dev/null || true)"
-  # Tier-4 headroom raised from 8192MiB to 10240MiB: -p 4 workers each hold
-  # up to GOMEMLIMIT (2GiB), and on shared machines co-tenant agent builds can
-  # push the margin negative right after the check, producing OOM kills that
-  # burn retry attempts. Requiring real headroom before entering tier 4 keeps
-  # most runs in a tier they can finish without downgrades.
+
   if [ -n "${avail}" ] && [ "${avail}" -ge 10240 ]; then
     VC_P=4; VC_PARALLEL=4; VC_GOMAXPROCS=4; VC_MEM_GATE_MB=4096
   elif [ -n "${avail}" ] && [ "${avail}" -ge 3072 ]; then
@@ -194,8 +140,7 @@ pick_tier() {
   export GOMAXPROCS="${VC_GOMAXPROCS}"
   echo "[verify-ci] concurrency tier: -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS} (avail ${avail:-?}MiB, load ${load:-?})"
 }
-# downgrade_tier: halve concurrency (floor 1) after an OOM kill; retrying at
-# the same concurrency under the same pressure just burns attempts.
+
 downgrade_tier() {
   if [ "${VC_P}" -gt 1 ]; then
     VC_P=$((VC_P / 2)); VC_PARALLEL=$((VC_PARALLEL / 2)); VC_GOMAXPROCS=$((VC_GOMAXPROCS / 2))
@@ -204,25 +149,13 @@ downgrade_tier() {
   fi
 }
 
-# ── Green-verdict short-circuit ──────────────────────────────────────────
-# Repeated verification of an IDENTICAL working tree is guaranteed to return
-# the identical verdict (build/test are deterministic). On shared machines the
-# verification harness and several agents re-run `make verify-ci` against the
-# same unchanged tree while other runs hold the single-instance lock; the
-# stacked run then exceeds the caller's own timeout and is SIGKILLed with a
-# bare "signal: killed" (timeout kill, not OOM). A fresh green verdict for the
-# same tree fingerprint short-circuits in seconds instead.
-# Fingerprint = HEAD commit + tracked diff + untracked file content hashes +
-# FULL flag, so ANY source change invalidates it. Freshness window 30min.
-# Disable with VERIFY_CI_NO_SHORTCUT=1.
 VC_VERDICT_FILE="${TMPDIR:-/tmp}/ggcode-verify-ci.verdict"
 VC_VERDICT_TTL=1800
 vc_tree_fingerprint() {
   {
     git rev-parse HEAD 2>/dev/null || echo no-head
     git diff HEAD 2>/dev/null
-    # Portable untracked-content hashing (BSD xargs has no -r; a plain
-    # while-read loop works everywhere).
+
     git ls-files --others --exclude-standard 2>/dev/null |
       while IFS= read -r f; do
         [ -f "${f}" ] && git hash-object "${f}" 2>/dev/null
@@ -248,32 +181,17 @@ if [ "${VERIFY_CI_NO_SHORTCUT:-0}" != "1" ]; then
 fi
 unset _fp _cached_fp _cached_ts _now 2>/dev/null || true
 
-# ── Single-instance lock ─────────────────────────────────────────────────
-# On shared machines several agents (and the verification harness itself)
-# may launch verify-ci at once. Two full suites at tier 4 stack their
-# GOMEMLIMIT peaks (~4GiB+ combined) and OOM-kill each other with a bare
-# "signal: killed" before any per-chunk retry can help. Serialize instead:
-# a second invocation waits for the first to finish, then runs uncontended.
-# Fail-open after 90s (was 5min): a caller-timed verifier stacked behind a
-# slow holder burns its whole budget on idle lock waiting and dies to a
-# timeout SIGKILL that looks exactly like the OOM kill this lock prevents;
-# 90s caps the stacking cost while still riding out most short holds, and
-# the tier gates below make a fail-open double-run self-regulating (both
-# suites downgrade under the mutual memory/load pressure).
 VC_LOCK_DIR="${TMPDIR:-/tmp}/ggcode-verify-ci.lock"
 VC_LOCK_WAITED=0
 while ! mkdir "${VC_LOCK_DIR}" 2>/dev/null; do
-  # Recover a stale lock whose owner process no longer exists.
+
   _lock_pid="$(cat "${VC_LOCK_DIR}/pid" 2>/dev/null || true)"
   if [ -n "${_lock_pid}" ] && ! kill -0 "${_lock_pid}" 2>/dev/null; then
     echo "[verify-ci] removing stale verify-ci lock from dead pid ${_lock_pid}"
     rm -rf "${VC_LOCK_DIR}"
     continue
   fi
-  # A holder that never wrote a pid file (killed in the mkdir->echo window;
-  # SIGKILL fires no traps) is unrecoverable by pid - fall back to lock age.
-  # A healthy holder writes pid within milliseconds, so a lock dir older
-  # than 30s with no pid file is definitively orphaned.
+
   if [ -z "${_lock_pid}" ]; then
     _lock_age=$(( $(date +%s) - $(stat -f %m "${VC_LOCK_DIR}" 2>/dev/null || stat -c %Y "${VC_LOCK_DIR}" 2>/dev/null || echo 0) ))
     if [ "${_lock_age}" -ge 30 ]; then
@@ -295,10 +213,6 @@ done
 trap 'rm -rf "${VC_LOCK_DIR}" 2>/dev/null || true' EXIT
 echo $$ > "${VC_LOCK_DIR}/pid" 2>/dev/null || true
 
-# #2406: whole-run tee to a stable path - buffered transcript heads were
-# lost on long runs (v1.3.239 observability question became undecidable
-# because the "was OOM-killed" lines scrolled out of the cmd-3 buffer).
-# Skippable with VERIFY_CI_NO_TEE=1 for callers that already capture.
 if [ "${VERIFY_CI_NO_TEE:-0}" != "1" ]; then
   _tee_log="${TMPDIR:-/tmp}/verify-ci-$(date +%Y%m%d-%H%M%S).log"
   echo "[verify-ci] full log: ${_tee_log}"
@@ -306,8 +220,7 @@ if [ "${VERIFY_CI_NO_TEE:-0}" != "1" ]; then
 fi
 
 if [ -n "${VERIFY_CI_GOMAXPROCS:-}" ]; then
-  # Manual pin (existing override knob): value applies to -p, -parallel and
-  # GOMAXPROCS alike; OOM kills will NOT downgrade below it.
+
   VC_P="${VERIFY_CI_GOMAXPROCS}"; VC_PARALLEL="${VERIFY_CI_GOMAXPROCS}"; VC_GOMAXPROCS="${VERIFY_CI_GOMAXPROCS}"
   VC_PINNED=1
   export GOMAXPROCS="${VC_GOMAXPROCS}"
@@ -317,47 +230,29 @@ else
   pick_tier
 fi
 
-# Size GOMEMLIMIT from the environment's true memory budget when the caller
-# did not pin it. Keep each worker comfortably BELOW the cgroup/host headroom:
-# Go heap target near the ceiling guarantees an OOM kill, and margin must also
-# absorb non-heap overhead (runtime stacks, mmapped binaries, page tables).
 if [ -z "${VERIFY_CI_MEMLIMIT:-}" ]; then
   _mem_avail="$(effective_avail_mb 2>/dev/null || true)"
   case "${_mem_avail:-0}" in ''|*[!0-9]*) _mem_avail=0 ;; esac
   if [ "${_mem_avail}" -ge 8192 ]; then
-    GOMEMLIMIT="2GiB"     # roomy: unchanged legacy cap
+    GOMEMLIMIT="2GiB"
   elif [ "${_mem_avail}" -ge 4096 ]; then
     GOMEMLIMIT="1536MiB"
   elif [ "${_mem_avail}" -ge 2048 ]; then
     GOMEMLIMIT="1024MiB"
   else
-    GOMEMLIMIT="768MiB"   # tight cgroup sandbox: stay well under the cap
+    GOMEMLIMIT="768MiB"
   fi
   echo "[verify-ci] GOMEMLIMIT=${GOMEMLIMIT} (derived from avail=${_mem_avail:-?}MiB)"
   unset _mem_avail
 fi
 
-# run_with_oom_retry <desc> <cmd...>
-# Runs cmd; if it is OOM-killed ("signal: killed" or exit 137), waits for the
-# system memory pressure on shared machines to actually subside (polling
-# available RAM, not a blind sleep), then retries — up to 5 attempts with
-# escalating backoff. A bare OOM kill carries no code signal; real errors
-# still fail immediately with the original exit code.
-# 5 attempts (was 3): sustained pressure from concurrent agent workloads on
-# shared machines can outlast 3 attempts x 3min waits; the larger budget only
-# costs wall-clock under pressure and never changes the pass/fail verdict.
 run_with_oom_retry() {
   local desc="$1"; shift
   local log status attempt backoff
   log="$(mktemp -t verifyci)"
   backoff=20
   for attempt in 1 2 3 4 5; do
-    # Gate before EVERY attempt (incl. the first). Tier-aware patience:
-    #   - tier > 1 and memory short: DOWNGRADE AND GO - a lower tier needs
-    #     less memory, so forward progress is safer than waiting.
-    #   - already at tier 1 and memory short: proceeding is near-certain
-    #     death (single vet/test processes still need GiBs), so wait LONG
-    # for the sustained co-tenant storm to pass. Cheap no-op otherwise.
+
     if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
       _avail="$(effective_avail_mb)"
       if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
@@ -377,9 +272,7 @@ run_with_oom_retry() {
       return 0
     fi
     status=$?
-    # #2406: attribute every failed attempt in the stream - a bare FAIL
-    # blob could not be traced back to its attempt/rc, which left the
-    # v1.3.239 observability question undecidable from the transcript.
+
     echo "[verify-ci] ${desc}: attempt ${attempt} failed, rc=${status}"
     if grep -q "signal: killed" "${log}" || [ "${status}" -eq 137 ]; then
       if [ "${attempt}" -eq 5 ]; then
@@ -392,20 +285,14 @@ run_with_oom_retry() {
       if [ "${VC_PINNED:-0}" != "1" ]; then
         downgrade_tier
       fi
-      # Tier-aware patience after a kill: at tier 1 there is nothing left to
-      # downgrade into - the process footprint itself exceeds free memory,
-      # so waiting out the storm (long) is the only strategy that changes
-      # the outcome; above tier 1 the downgrade plus a short breather (120s)
-      # suffices for transient spikes.
+
       if [ "${VC_P}" -eq 1 ]; then
         wait_for_memory 600
       else
         wait_for_memory 120
       fi
       sleep "${backoff}"
-      # Cap backoff growth at 60s: under sustained pressure the previous
-      # 20->60->180->540s ladder alone burned ~15min of wall-clock, which a
-      # caller-timed run pays for with its life.
+
       if [ "${backoff}" -lt 60 ]; then
         backoff=$((backoff * 3))
       fi
@@ -418,19 +305,8 @@ run_with_oom_retry() {
   return 1
 }
 
-# Startup memory gate: on shared machines the run may start while memory
-# pressure is already high. Tier-aware patience (same philosophy as the
-# per-attempt gate): downgrade to tier 1 first - lower tiers need less
-# memory - and only when already at the floor, wait out a sustained storm
-# (long cap); a near-exhausted machine cannot run even tier-1 vet, so
-# waiting is its only path to a green run. Override with
-# VERIFY_CI_SKIP_MEM_GATE=1.
 if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
-  # effective_avail_mb, not avail_mem_mb: the file-wide contract above requires
-  # every mem-gate check to respect the cgroup limit - on containerized runners
-  # host-level free memory stays high while the cgroup is exhausted, and gating
-  # on the host number let tier selection skip the downgrade and walk straight
-  # into cgroup OOM kills.
+
   _avail="$(effective_avail_mb)"
   if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
     echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); downgrading to tier 1"
@@ -441,7 +317,6 @@ if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
   fi
 fi
 
-# ── Main module (mirrors .github/workflows/ci.yml) ────────────────────────
 echo "[verify-ci] checking gofmt cleanliness"
 if ! test -z "$(gofmt -l ./cmd ./internal)"; then
   echo "[verify-ci] gofmt found unformatted files:"
@@ -450,54 +325,25 @@ if ! test -z "$(gofmt -l ./cmd ./internal)"; then
 fi
 
 echo "[verify-ci] downloading modules"
-# Wrapped: mod download/extract spikes RSS on large go.sum sets and is killed
-# with a bare "signal: killed" under memory pressure — same class as the
-# build/vet/test steps below.
+
 run_with_oom_retry "go mod download" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go mod download
 
 echo "[verify-ci] building ggcode"
-# -p 1 on build too: parallel compilation of large packages (desktop/wailskit,
-# internal/agent) spikes peak RSS past GOMEMLIMIT on shared machines and gets
-# OOM-killed ("signal: killed") - same rationale as the -p 1 on vet/test below.
+
 run_with_oom_retry "go build" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p "${VC_P}" -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
-# -p 1: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
-# parallel type-checking of large packages (internal/agent, desktop) spikes
-# peak RSS past GOMEMLIMIT and the process gets OOM-killed ("signal: killed")
-# before any code issue is reported. Same rationale as the -p 1 on go test
-# below. -p 2 still reproduced the OOM kill on shared machines, so 1 is the
-# default; override via VERIFY_CI_VET_P.
+
 run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm -p "${VERIFY_CI_VET_P:-${VC_P}}" ./...
 
 echo "[verify-ci] running goroutine protection check"
-# Panic-safety gate (see 55eb91c1 for the v1.3.224 crash audit that motivated
-# it): every `go` launch must be safego-protected (Go/Run/defer Recover, or a
-# hand-rolled defer recover) or explicitly allowlisted with a justification.
-# AST-based, no build - cheap enough to always run.
+
 go run ./scripts/dev/goroutine_check.go ./internal ./cmd ./desktop
 
 echo "[verify-ci] running tests (main module, unit only)"
-# NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
-# tests that spawn Chrome) are too heavy for CI and will OOM.
-# -parallel 1: same rationale as the Makefile `test` target - packages using
-# t.Parallel() still spike peak RSS when many test funcs run concurrently on
-# memory-constrained machines; run one test func at a time.
-#
-# Chunked per top-level dir: a single `go test ./cmd/... ./internal/...` is one
-# long serial retry unit; under sustained memory pressure from concurrent agent
-# workloads on shared machines an OOM kill deep into the run burns the whole
-# 3-attempt budget and verify-ci dies with a bare "signal: killed". Per-dir
-# chunks shrink the retry unit - each chunk gets its own OOM budget and
-# completed chunks are kept by the go test result cache, so a kill mid-suite
-# only re-runs the affected chunk, not the whole 10+ minute serial pass.
+
 test_chunks="./cmd"
-# module path github.com/topcheer/ggcode/internal/<subdir> -> <subdir> is field 5
-# Chunk discovery itself is OOM-retry-wrapped: the previously unwrapped
-# `go list ./internal/...` loads the entire package graph and was the one
-# heavy step left OUTSIDE any retry budget - under sustained memory pressure
-# from concurrent agent workloads it died with a bare "signal: killed",
-# aborting verify-ci before the protected test stages ever ran.
+
 test_chunks_file="$(mktemp -t verifyci-chunks)"
 if ! run_with_oom_retry "go list (test chunks)" \
 	env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 \
@@ -516,15 +362,13 @@ done
 echo "[verify-ci] core checks passed"
 vc_write_verdict
 
-# ── Optional full checks (VERIFY_CI_FULL=1) ───────────────────────────────
 if [ "${FULL}" = "1" ]; then
   echo ""
   echo "[verify-ci:full] cross-platform compile check (linux + windows)"
   for target in "linux/amd64" "windows/amd64"; do
     os="${target%%/*}"
     arch="${target##*/}"
-    # Wrapped (same OOM-retry class as core steps): cross-compilation of the
-    # full dependency graph spikes peak RSS identically to the native build.
+
     if ! run_with_oom_retry "cross-compile ${os}/${arch}" env CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -tags goolm ./cmd/ggcode; then
       echo "[verify-ci:full] cross-compile FAILED for ${os}/${arch}"
       exit 1
@@ -532,7 +376,6 @@ if [ "${FULL}" = "1" ]; then
   done
   echo "[verify-ci:full] cross-platform compile check passed"
 
-  # ── Desktop module (CGO required, macOS only) ────────────────────────────
   desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
   if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
     echo ""
@@ -553,7 +396,6 @@ if [ "${FULL}" = "1" ]; then
     (cd "${desktop_dir}" && run_with_oom_retry "desktop go test" env CGO_ENABLED=1 GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -count=1 -timeout 120s ./...)
   fi
 
-  # ── Frontend Vitest (no CGO needed) ───────────────────────────────────────
   frontend_dir="${desktop_dir}/frontend"
   if [ -d "${frontend_dir}" ] && [ -f "${frontend_dir}/package.json" ]; then
     echo ""
@@ -567,8 +409,7 @@ if [ "${FULL}" = "1" ]; then
   fi
 
   echo ""
-  # r358: eval-harness integrity gate (task templates + scoring smoke).
-  # Zero-LLM so it is CI-safe; skips with a warning if python3 is absent.
+
   if command -v python3 >/dev/null 2>&1; then
     python3 scripts/eval/validate_tasks.py || exit 1
     echo "[verify-ci:eval] eval harness integrity passed"

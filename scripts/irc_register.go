@@ -50,24 +50,20 @@ func main() {
 			continue
 		}
 
-		// Respond to PING
 		if strings.HasPrefix(line, "PING ") {
 			prefix := strings.TrimPrefix(line, "PING ")
 			fmt.Fprintf(conn, "PONG %s\r\n", prefix)
 			continue
 		}
 
-		// Show all server messages
 		if strings.Contains(line, "ChanServ") || strings.Contains(line, "NickServ") || strings.Contains(line, " 433 ") || strings.Contains(line, "JOIN") || strings.Contains(line, "MODE") {
 			fmt.Printf("← %s\n", line)
 		}
 
-		// After welcome
 		if !got001 && strings.Contains(line, " 001 ") {
 			got001 = true
 			fmt.Println("Connected. Authenticating...")
 
-			// Identify first
 			fmt.Fprintf(conn, "PRIVMSG NickServ :IDENTIFY %s %s\r\n", nick, password)
 			fmt.Println("→ IDENTIFY ***")
 
@@ -93,7 +89,7 @@ func main() {
 				fmt.Printf("→ REGISTER *** ***\n")
 
 			case "channel":
-				// Join and register #ggcode
+
 				fmt.Fprintf(conn, "JOIN #ggcode\r\n")
 				fmt.Println("→ JOIN #ggcode")
 				time.Sleep(5 * time.Second)

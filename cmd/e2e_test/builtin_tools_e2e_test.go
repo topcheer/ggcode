@@ -20,7 +20,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// noopModeSwitcher is a no-op ModeSwitcher for tests.
 type noopModeSwitcher struct{}
 
 func (n *noopModeSwitcher) SetMode(mode permission.PermissionMode) {}
@@ -31,13 +30,11 @@ func (n *noopModeSwitcher) RestoreMode(fallback permission.PermissionMode) permi
 	return fallback
 }
 
-// e2eBuiltinToolRegistry creates a registry with file tools + task/plan/cron built-in tools.
 func e2eBuiltinToolRegistry(t *testing.T, dir string) *tool.Registry {
 	t.Helper()
 	reg := tool.NewRegistry()
 	sandbox := func(string) bool { return true }
 
-	// File tools
 	reg.Register(tool.ReadFile{SandboxCheck: sandbox})
 	reg.Register(tool.WriteFile{SandboxCheck: sandbox})
 	reg.Register(tool.ListDir{SandboxCheck: sandbox})
@@ -45,7 +42,6 @@ func e2eBuiltinToolRegistry(t *testing.T, dir string) *tool.Registry {
 	reg.Register(tool.Grep{SandboxCheck: sandbox})
 	reg.Register(tool.SearchFiles{SandboxCheck: sandbox})
 
-	// Built-in tools with real dependencies
 	taskMgr := task.NewManager()
 	sched := cron.NewScheduler(nil, "")
 	switcher := &noopModeSwitcher{}
@@ -64,8 +60,6 @@ func e2eBuiltinToolRegistry(t *testing.T, dir string) *tool.Registry {
 	return reg
 }
 
-// e2eBuiltinToolLoop sends a prompt to the LLM, executes tool calls, returns final text.
-// Max 5 tool rounds to prevent infinite loops.
 func e2eBuiltinToolLoop(ctx context.Context, t *testing.T, prov provider.Provider, reg *tool.Registry, userPrompt string) string {
 	t.Helper()
 	messages := []provider.Message{
@@ -132,7 +126,6 @@ func e2eBuiltinToolLoop(ctx context.Context, t *testing.T, prov provider.Provide
 	return "max tool rounds reached"
 }
 
-// TestE2E_TaskCreateViaLLM verifies task tools don't crash through the LLM pipeline.
 func TestE2E_TaskCreateViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -149,7 +142,6 @@ func TestE2E_TaskCreateViaLLM(t *testing.T) {
 	t.Logf("LLM response: %s", result)
 }
 
-// TestE2E_TaskCreateAndUpdateViaLLM tests the full task lifecycle through the LLM.
 func TestE2E_TaskCreateAndUpdateViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -169,7 +161,6 @@ func TestE2E_TaskCreateAndUpdateViaLLM(t *testing.T) {
 	t.Logf("LLM response: %s", result)
 }
 
-// TestE2E_PlanModeViaLLM tests enter/exit plan mode through the LLM.
 func TestE2E_PlanModeViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -184,7 +175,6 @@ func TestE2E_PlanModeViaLLM(t *testing.T) {
 	t.Logf("LLM response: %s", result)
 }
 
-// TestE2E_CronCreateViaLLM tests cron tools through the LLM.
 func TestE2E_CronCreateViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -199,7 +189,6 @@ func TestE2E_CronCreateViaLLM(t *testing.T) {
 	t.Logf("LLM response: %s", result)
 }
 
-// TestE2E_AgentToolExecutionNoPanic runs built-in tools through the full agent streaming pipeline.
 func TestE2E_AgentToolExecutionNoPanic(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -227,14 +216,12 @@ func TestE2E_AgentToolExecutionNoPanic(t *testing.T) {
 	}
 }
 
-// TestE2E_NilManagerViaAgent verifies nil-dependency tools don't crash the agent
-// when called through the full streaming pipeline with a real LLM.
 func TestE2E_NilManagerViaAgent(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
 
 	reg := tool.NewRegistry()
-	// Register tools with nil dependencies — worst case crash scenario
+
 	reg.Register(tool.TaskCreateTool{Manager: nil})
 	reg.Register(tool.TaskListTool{Manager: nil})
 	reg.Register(tool.EnterPlanModeTool{Switcher: nil})
@@ -269,7 +256,6 @@ func TestE2E_NilManagerViaAgent(t *testing.T) {
 	}
 }
 
-// TestE2E_NilManagerDirectCalls verifies each tool with nil deps doesn't panic (direct calls).
 func TestE2E_NilManagerDirectCalls(t *testing.T) {
 	skipE2E(t)
 
@@ -322,8 +308,6 @@ func TestE2E_NilManagerDirectCalls(t *testing.T) {
 	}
 }
 
-// e2eBuiltinProvider creates a provider using ggcode's official config (from env).
-// Uses the same env vars as swarm_e2e_test.go.
 func e2eBuiltinProvider(t *testing.T) provider.Provider {
 	t.Helper()
 	apiKey := os.Getenv("GGCODE_E2E_API_KEY")

@@ -13,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestE2E_WorktreeCreateViaLLM tests that the LLM can create a worktree via tool call.
 func TestE2E_WorktreeCreateViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -40,15 +39,12 @@ func TestE2E_WorktreeCreateViaLLM(t *testing.T) {
 	t.Logf("Final working dir: %s", currentDir)
 	t.Logf("LLM response: %s", result)
 
-	// Verify worktree was created
 	wtPath := filepath.Join(dir, ".ggcode", "worktrees", "e2e-test")
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
 		t.Errorf("worktree was not created at %s", wtPath)
 	}
 }
 
-// TestE2E_WorktreeWriteAndVerifyViaLLM tests the LLM creates a worktree, writes
-// a file inside it, and the file only exists in the worktree.
 func TestE2E_WorktreeWriteAndVerifyViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -76,7 +72,6 @@ func TestE2E_WorktreeWriteAndVerifyViaLLM(t *testing.T) {
 	t.Logf("Final working dir: %s", currentDir)
 	t.Logf("LLM response: %s", result)
 
-	// Verify the file exists in the worktree
 	wtPath := filepath.Join(dir, ".ggcode", "worktrees", "e2e-write")
 	expFile := filepath.Join(wtPath, "experiment.txt")
 	data, err := os.ReadFile(expFile)
@@ -87,18 +82,14 @@ func TestE2E_WorktreeWriteAndVerifyViaLLM(t *testing.T) {
 		t.Errorf("file content = %q, want to contain 'test data from worktree'", string(data))
 	}
 
-	// Verify the file does NOT exist in main working tree
 	mainFile := filepath.Join(dir, "experiment.txt")
 	if _, err := os.Stat(mainFile); !os.IsNotExist(err) {
 		t.Error("experiment.txt should NOT exist in main working tree")
 	}
 
-	// Cleanup
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
 
-// TestE2E_WorktreeRoundTripViaLLM tests the full create → use → remove lifecycle
-// triggered by an LLM prompt.
 func TestE2E_WorktreeRoundTripViaLLM(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -125,7 +116,6 @@ func TestE2E_WorktreeRoundTripViaLLM(t *testing.T) {
 	t.Logf("Final working dir: %s", currentDir)
 	t.Logf("LLM response: %s", result)
 
-	// Verify the worktree is removed
 	wtPath := filepath.Join(dir, ".ggcode", "worktrees", "e2e-roundtrip")
 	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
 		t.Errorf("worktree should be removed but still exists at %s", wtPath)
@@ -133,8 +123,6 @@ func TestE2E_WorktreeRoundTripViaLLM(t *testing.T) {
 	}
 }
 
-// TestE2E_WorktreeViaAgent tests worktree tools through the full agent streaming
-// pipeline — the most realistic e2e scenario.
 func TestE2E_WorktreeViaAgent(t *testing.T) {
 	skipE2E(t)
 	prov := newProviderFromEnv(t)
@@ -170,12 +158,11 @@ func TestE2E_WorktreeViaAgent(t *testing.T) {
 
 	t.Logf("Tool results: %v", toolResults)
 
-	// Verify worktree was created
 	wtPath := filepath.Join(dir, ".ggcode", "worktrees", "agent-test")
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
 		t.Errorf("worktree not created at %s", wtPath)
 	} else {
-		// Verify file was written in worktree
+
 		helloFile := filepath.Join(wtPath, "hello.txt")
 		data, err := os.ReadFile(helloFile)
 		if err != nil {
@@ -183,7 +170,7 @@ func TestE2E_WorktreeViaAgent(t *testing.T) {
 		} else if !strings.Contains(string(data), "hello from worktree") {
 			t.Errorf("hello.txt content = %q", string(data))
 		}
-		// Cleanup
+
 		exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 	}
 }

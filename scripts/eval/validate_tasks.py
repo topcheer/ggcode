@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""Deterministic eval-harness integrity gate (r358; regression-blocks CI door).
-
-2026 agent CI/CD guidance (baeseokjae five-gate model; futureagi) marks
-regression blocks as a gate traditional pipelines lack. The full
-LLM-in-the-loop eval (`make knight-eval`) is too costly/flaky for CI, but
-the HARNESS itself can be gated deterministically:
-
-  1. Task-template integrity: both TASKS sets must have unique non-empty
-     ids, valid types, non-empty descriptions, sane timeouts, and typed
-     expect_* flags. A malformed template would silently skew every eval
-     run - that is a regression of the measurement instrument.
-  2. Scoring smoke: compute_knight_score on a FIXED input must return the
-     hand-computed expected dict. If someone re-weights the score formula,
-     this gate forces the change to be visible in CI.
-
-Exit 0 = harness intact. Zero third-party deps (stdlib only).
-"""
 
 import sys
 from pathlib import Path
@@ -26,9 +9,7 @@ sys.path.insert(0, str(HERE))
 VALID_TYPES = {"code_edit", "test_debug", "docs"}
 REQUIRED_FIELDS = ("id", "type", "description", "timeout_sec")
 
-
 def validate_template(module_name: str) -> list[str]:
-    """Return a list of violation strings for one TASKS module."""
     import importlib
 
     mod = importlib.import_module(module_name)
@@ -61,9 +42,7 @@ def validate_template(module_name: str) -> list[str]:
                 errors.append(f"{module_name}[{i}] ({tid or '?'}): {flag} must be bool, got {task[flag]!r}")
     return errors
 
-
 def smoke_compute_knight_score() -> list[str]:
-    """Fixed-input smoke of the scoring formula with a hand-computed value."""
     from run_eval import compute_knight_score
 
     errors = []
@@ -80,7 +59,7 @@ def smoke_compute_knight_score() -> list[str]:
         "tool_calls": 10, "rounds": 4, "tool_errors": 0, "knight_reports": 1,
     }]
     got = compute_knight_score(baseline, knight)
-    expected = 0.395  # 0.35*0 + 0.20*0.5 + 0.15*0.5 + 0.10*0.2 + 0.10*1.0 + 0.10*1.0
+    expected = 0.395
     if abs(got.get("knight_score", -1) - expected) > 1e-9:
         errors.append(
             f"score formula drifted: got {got.get('knight_score')!r}, expected {expected} "
@@ -90,13 +69,12 @@ def smoke_compute_knight_score() -> list[str]:
         errors.append(f"aux fields wrong: {got!r}")
     return errors
 
-
 def main() -> int:
     all_errors = []
     for module in ("task_templates", "task_templates_teamclaw"):
         try:
             all_errors += validate_template(module)
-        except Exception as exc:  # import failure = harness broken
+        except Exception as exc:
             all_errors.append(f"{module}: import failed: {exc}")
     try:
         all_errors += smoke_compute_knight_score()
@@ -110,7 +88,6 @@ def main() -> int:
         return 1
     print("[eval-check] task templates valid, scoring formula intact")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

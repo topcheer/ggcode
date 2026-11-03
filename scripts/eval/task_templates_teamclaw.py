@@ -1,17 +1,6 @@
-"""Evaluation task templates for Knight automated evaluation — TeamClaw project.
-
-Targets the real TeamClaw codebase at ~/ggai/teamclaw/.
-Tasks are designed to test agent capability on a production TypeScript/Node.js
-project with complex architecture, real business logic, and meaningful scale.
-
-Task types:
-  - code_edit: agent writes/modifies code
-  - test_debug: agent fixes bugs found by tests
-  - docs: agent writes/fixes documentation
-"""
 
 TASKS = [
-    # ── code_edit: real feature implementation ──────────────────────────
+
     {
         "id": "task-01",
         "type": "code_edit",
@@ -126,7 +115,7 @@ TASKS = [
         "expect_knight": False,
         "timeout_sec": 600,
     },
-    # ── test_debug: find and fix real bugs ──────────────────────────────
+
     {
         "id": "task-08",
         "type": "test_debug",
@@ -171,7 +160,7 @@ TASKS = [
         "expect_knight": False,
         "timeout_sec": 600,
     },
-    # ── docs: documentation accuracy ────────────────────────────────────
+
     {
         "id": "task-11",
         "type": "docs",
@@ -213,7 +202,7 @@ TASKS = [
         "expect_knight": True,
         "timeout_sec": 300,
     },
-    # ── code_edit: vague/complex requirements (ask_user expected) ───────
+
     {
         "id": "task-14",
         "type": "code_edit",
@@ -248,15 +237,11 @@ TASKS = [
     },
 ]
 
-
 def get_task(task_id: str) -> dict | None:
-    """Return a task by ID, or None if not found."""
     for t in TASKS:
         if t["id"] == task_id:
             return t
     return None
 
-
 def get_tasks_by_type(task_type: str) -> list[dict]:
-    """Return all tasks of a given type."""
     return [t for t in TASKS if t["type"] == task_type]
