@@ -299,7 +299,18 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	result := output.String()
 
 	if len(result) > maxSubAgentResultBytes {
-		marker := fmt.Sprintf("\n\n[... truncated: %d bytes total, showing head + tail ...]\n\n", len(result))
+		// #4792 (S-22): the full text used to be discarded after the
+		// head+tail splice - review/closure flows that need verbatim
+		// receipts then burned a whole extra subagent just to re-read the
+		// output compactly. Persist the FULL result to a receipt file and
+		// point the truncation marker at it. Best-effort: a write failure
+		// keeps the old behavior (inline truncation, no receipt line).
+		full := result
+		receiptPath := writeFullResultReceipt(cfg.SubAgentID, full)
+		marker := fmt.Sprintf("\n\n[... truncated: %d bytes total, showing head + tail ...]\n\n", len(full))
+		if receiptPath != "" {
+			marker += fmt.Sprintf("[full receipt: %s - read it with read_file when a verbatim echo is required]\n\n", receiptPath)
+		}
 		budget := maxSubAgentResultBytes - len(marker)
 		if budget >= 1000 {
 			headEnd := util.SnapToRuneStart(result, budget/2)
@@ -314,8 +325,8 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 
 			result = result[util.SnapToRuneStart(result, len(result)-maxSubAgentResultBytes):]
 		}
-		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d",
-			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
+		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d receipt=%s",
+			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes, receiptPath)
 	}
 
 	todoPath := filepath.Join(config.HomeDir(), ".ggcode", "todos", cfg.SubAgentID+".json")
@@ -335,6 +346,25 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		debug.Log("cancel", "Run: completed successfully, calling Complete id=%s", cfg.SubAgentID)
 		cfg.Manager.Complete(cfg.SubAgentID, result, nil)
 	}
+}
+
+// writeFullResultReceipt persists an over-cap sub-agent result verbatim to
+// <home>/.ggcode/subagent-results/<id>.txt and returns the path ("" on any
+// failure - the receipt channel is best-effort and never blocks completion).
+// #4792 (S-22).
+func writeFullResultReceipt(subAgentID, full string) string {
+	if subAgentID == "" || full == "" {
+		return ""
+	}
+	dir := filepath.Join(config.HomeDir(), ".ggcode", "subagent-results")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, subAgentID+".txt")
+	if err := os.WriteFile(path, []byte(full), 0o644); err != nil {
+		return ""
+	}
+	return path
 }
 
 func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
