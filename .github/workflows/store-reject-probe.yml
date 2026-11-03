@@ -18,10 +18,9 @@ jobs:
           echo "=== app ==="
           curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT" | python3 -m json.tool | head -20
           echo "=== submissions list ==="
-          sub=$(curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT/submissions")
-          echo "$sub" | python3 -m json.tool | head -40
+          appj=$(curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT")
           echo "=== latest submission detail ==="
-          sid=$(echo "$sub" | python3 -c "import sys,json;d=json.load(sys.stdin);v=d.get('value',[]);print(v[0]['id'] if v else '')")
+          sid=$(echo "$appj" | python3 -c "import sys,json;d=json.load(sys.stdin);print((d.get('pendingApplicationSubmission') or {}).get('id',''))")
           echo "sid=$sid"
           if [ -n "$sid" ]; then
             curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT/submissions/$sid" > /tmp/sub.json
