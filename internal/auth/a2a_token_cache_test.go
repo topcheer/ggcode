@@ -24,14 +24,12 @@ func TestTokenCacheSaveLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify file content
 	data, err := os.ReadFile(filepath.Join(dir, "github.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("Cached: %s", string(data))
 
-	// Load it back
 	loaded := cache.Load("github")
 	if loaded == nil {
 		t.Fatal("expected non-nil token")
@@ -50,7 +48,7 @@ func TestTokenCacheExpiredNoRefresh(t *testing.T) {
 
 	token := &PKCEToken{
 		AccessToken: "expired-token",
-		Expiry:      time.Now().Add(-time.Hour), // expired
+		Expiry:      time.Now().Add(-time.Hour),
 	}
 	cache.Save("github", token, "client-abc")
 
@@ -84,7 +82,7 @@ func TestTokenCacheLoadValidExpired(t *testing.T) {
 	token := &PKCEToken{
 		AccessToken:  "almost-expired",
 		RefreshToken: "",
-		Expiry:       time.Now().Add(2 * time.Minute), // within 5-min buffer
+		Expiry:       time.Now().Add(2 * time.Minute),
 	}
 	cache.Save("github", token, "client-abc")
 
@@ -154,7 +152,6 @@ func TestTokenCacheFilePermissions(t *testing.T) {
 }
 
 func TestCacheKeyIsolation(t *testing.T) {
-	// Same provider, different clientIDs → different keys
 	key1 := CacheKey("github", "client-aaa")
 	key2 := CacheKey("github", "client-bbb")
 	if key1 == key2 {
@@ -162,13 +159,11 @@ func TestCacheKeyIsolation(t *testing.T) {
 	}
 	t.Logf("key1=%s key2=%s", key1, key2)
 
-	// Same provider, same clientID → same key
 	key3 := CacheKey("github", "client-aaa")
 	if key1 != key3 {
 		t.Errorf("same inputs should produce same key")
 	}
 
-	// No clientID → just provider name
 	key4 := CacheKey("github", "")
 	if key4 != "github" {
 		t.Errorf("expected 'github', got %s", key4)
@@ -179,21 +174,18 @@ func TestTokenCacheMultiClientIsolation(t *testing.T) {
 	dir := t.TempDir()
 	cache := NewTokenCache(dir)
 
-	// Instance A with client-aaa
 	tokenA := &PKCEToken{
 		AccessToken: "token-for-aaa",
 		Expiry:      time.Now().Add(time.Hour),
 	}
 	cache.Save(CacheKey("github", "client-aaa"), tokenA, "client-aaa")
 
-	// Instance B with client-bbb
 	tokenB := &PKCEToken{
 		AccessToken: "token-for-bbb",
 		Expiry:      time.Now().Add(time.Hour),
 	}
 	cache.Save(CacheKey("github", "client-bbb"), tokenB, "client-bbb")
 
-	// Load each — should get the right one
 	loadedA := cache.LoadValid(CacheKey("github", "client-aaa"))
 	if loadedA == nil || loadedA.AccessToken != "token-for-aaa" {
 		t.Errorf("expected token-for-aaa, got %v", loadedA)

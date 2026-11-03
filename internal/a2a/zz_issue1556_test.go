@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-// Regression for #1556: the DEFAULT (apiKey) client must carry the #1458
-// fixes that previously landed only on the WithMTLS branch - no hard
-// Client.Timeout over SSE streams, header-only timeout instead, and the
-// cross-host key-strip redirect hook.
 func TestNewClientDefaultHasStreamSafeTransport(t *testing.T) {
 	c := NewClient("https://example.a2a", "secret-key")
 	if c.httpClient.Timeout != 0 {
@@ -26,7 +22,6 @@ func TestNewClientDefaultHasStreamSafeTransport(t *testing.T) {
 	if tr.ResponseHeaderTimeout <= 0 || tr.ResponseHeaderTimeout > 15*time.Minute {
 		t.Fatalf("ResponseHeaderTimeout = %v, want (0, 15min]", tr.ResponseHeaderTimeout)
 	}
-	// mTLS branch keeps its protections too.
 	m := NewClient("https://example.a2a", "", WithMTLS(&tls.Config{}))
 	if m.httpClient.Timeout != 0 || m.httpClient.CheckRedirect == nil {
 		t.Fatal("mTLS client must keep the #1458 protections")

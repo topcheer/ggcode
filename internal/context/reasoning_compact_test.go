@@ -10,8 +10,7 @@ import (
 func TestCompactOldReasoningBlocks(t *testing.T) {
 	m := NewManager(100000)
 
-	// Old assistant message with large reasoning content
-	longReasoning := strings.Repeat("thinking about the problem ", 100) // ~2600 chars
+	longReasoning := strings.Repeat("thinking about the problem ", 100)
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{
@@ -27,7 +26,6 @@ func TestCompactOldReasoningBlocks(t *testing.T) {
 		},
 	})
 
-	// Most recent assistant message with reasoning — should be protected
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{
@@ -48,20 +46,13 @@ func TestCompactOldReasoningBlocks(t *testing.T) {
 	}
 
 	msgs := m.Messages()
-	// Old reasoning block should be compacted
 	oldBlock := msgs[0].Content[0]
 	if !strings.HasPrefix(oldBlock.ReasoningContent, "[compacted:") {
 		t.Fatalf("expected old reasoning compacted, got %q", oldBlock.ReasoningContent)
 	}
-	// ThinkingSignature must be cleared: the signature is a cryptographic
-	// binding to the original reasoning text; keeping it alongside the
-	// placeholder would cause Anthropic 400 "invalid signature in thinking
-	// block" on every subsequent request (issue #323). With the signature
-	// empty, buildParams skips the block entirely on echo-back.
 	if oldBlock.ThinkingSignature != "" {
 		t.Fatalf("expected ThinkingSignature cleared on compaction, got %q", oldBlock.ThinkingSignature)
 	}
-	// Most recent reasoning should NOT be compacted
 	recentBlock := msgs[2].Content[0]
 	if strings.HasPrefix(recentBlock.ReasoningContent, "[compacted:") {
 		t.Fatalf("expected recent reasoning preserved, got %q", recentBlock.ReasoningContent)
@@ -109,7 +100,6 @@ func TestCompactOldReasoningBlocksDeepSeek(t *testing.T) {
 	m := NewManager(100000)
 	longReasoning := strings.Repeat("DeepSeek reasoning step ", 100)
 
-	// DeepSeek-style: type "text" with ReasoningContent, no ThinkingSignature
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{
@@ -139,7 +129,6 @@ func TestCompactOldReasoningBlocksDeepSeek(t *testing.T) {
 func TestCompactOldReasoningBlocksSkipsShort(t *testing.T) {
 	m := NewManager(100000)
 
-	// Short reasoning below threshold should be skipped
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{

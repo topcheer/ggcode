@@ -1,10 +1,5 @@
 package acp
 
-// #3483 probe: session/resume with a DIFFERENT CWD used to keep the old
-// workspace-hash SaveDir (the only registration path that skipped
-// SetSaveDir after a CWD change) - subsequent saves and compaction
-// checkpoints landed in the OLD workspace's store.
-
 import (
 	"bytes"
 	"encoding/json"

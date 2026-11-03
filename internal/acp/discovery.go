@@ -10,22 +10,19 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// AgentDef describes a known ACP-compatible CLI tool.
 type AgentDef struct {
-	Name        string   // canonical name: "copilot", "droid", "opencode"
-	Title       string   // display name: "GitHub Copilot", "Droid"
-	Binaries    []string // candidate binary names to search in $PATH
-	ACPCommand  []string // args to start ACP mode, e.g. ["--acp"] or ["acp"]
-	Description string   // short description for the tool registry
+	Name        string
+	Title       string
+	Binaries    []string
+	ACPCommand  []string
+	Description string
 }
 
-// DiscoveredAgent represents an agent found on the system.
 type DiscoveredAgent struct {
 	Def  AgentDef
-	Path string // absolute path to the binary
+	Path string
 }
 
-// KnownAgents is the built-in registry of known ACP agents.
 var KnownAgents = []AgentDef{
 	{
 		Name:        "copilot",
@@ -50,8 +47,6 @@ var KnownAgents = []AgentDef{
 	},
 }
 
-// Discover scans $PATH for known ACP agents.
-// Returns only agents whose binary is found and is executable.
 func Discover() []DiscoveredAgent {
 	var found []DiscoveredAgent
 	for _, def := range KnownAgents {
@@ -68,7 +63,6 @@ func Discover() []DiscoveredAgent {
 	return found
 }
 
-// findBinary searches for the first match among candidate binary names in $PATH.
 func findBinary(names []string) (string, error) {
 	cwd, _ := os.Getwd()
 	for _, name := range names {

@@ -1,9 +1,5 @@
 package context
 
-// #3745 probes: RemoveLastAssistantGroup must not irreversibly delete the
-// assistant reply when there is no user text to re-submit, and must skip
-// tool_result carriers (Role:"user") when scanning for the prompt.
-
 import (
 	"testing"
 
@@ -35,7 +31,6 @@ func TestIssue3745_CarrierSkippedInUserScan(t *testing.T) {
 	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
 		{Type: "tool_use", ToolID: "t1", ToolName: "list_directory"},
 	}})
-	// ReconcileToolCalls-style carrier: Role user, tool_result only.
 	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
 		provider.ToolResultBlock("t1", "file a\nfile b", false),
 	}})
@@ -47,7 +42,6 @@ func TestIssue3745_CarrierSkippedInUserScan(t *testing.T) {
 	if got != "list the files" {
 		t.Fatalf("carrier must be skipped, expected the real prompt, got %q", got)
 	}
-	// Truncation point: back to (and including) the real user prompt.
 	if len(m.Messages()) != 1 {
 		t.Fatalf("expected history truncated to the prompt, got %d messages", len(m.Messages()))
 	}

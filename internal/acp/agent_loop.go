@@ -19,9 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// AgentLoop runs the headless agent loop for ACP sessions.
-// It reuses ggcode's existing Agent.RunStreamWithContent and converts
-// provider.StreamEvents into ACP session/update notifications.
 type AgentLoop struct {
 	cfg        *config.Config
 	registry   *tool.Registry
@@ -29,26 +26,14 @@ type AgentLoop struct {
 	session    *Session
 	clientCaps ClientCapabilities
 	agent      *agent.Agent
-	// cancelMu guards cancel: Stop() may be called from any goroutine
-	// concurrently with ExecutePrompt's assignment (e.g. session/cancel vs a
-	// new prompt racing on a cached loop). Without the mutex this is a data
-	// race and Stop can observe nil or a stale cancel func (#1033).
 	cancelMu   sync.Mutex
 	cancel     context.CancelFunc
-	cancelGen  uint64 // generation of the installed cancel (guards stale clears)
+	cancelGen  uint64
 	modeMu     sync.Mutex
-	mode       string // permission mode: "supervised", "auto", "bypass", "autopilot"
-	modeLocked bool   // true once the Client explicitly set a mode via session/set_mode
+	mode       string
+	modeLocked bool
 }
 
-// NewAgentLoop creates a new AgentLoop for the given session.
-// It configures the agent identically to the TUI/daemon path:
-//   - Project memory (GGCODE.md, AGENTS.md, etc.)
-//   - Hook config (pre/post tool hooks)
-//   - Auto compaction (via contextManager)
-//   - Usage tracking
-//   - Checkpoint support
-//   - Vision support
 func NewAgentLoop(
 	cfg *config.Config,
 	registry *tool.Registry,
@@ -66,7 +51,6 @@ func NewAgentLoop(
 	a := agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	a.SetWorkingDir(session.CWD)
 
-	// --- Resolve endpoint for context window and model capabilities ---
 	resolved, resolveErr := cfg.ResolveActiveEndpoint()
 	if resolveErr != nil {
 		debug.Log("acp", "warning: could not resolve endpoint: %v", resolveErr)
@@ -77,17 +61,10 @@ func NewAgentLoop(
 		a.SetSupportsVision(resolved.SupportsVision)
 	}
 
-	// --- Hook config ---
 	a.SetHookConfig(cfg.Hooks)
 
-	// --- Checkpoint manager ---
 	a.SetCheckpointManager(checkpoint.NewPersistentManager(50, session.CWD))
-	// #1047: the pre-write checkpoint hook is registered per ExecutePrompt run
-	// (see ExecutePrompt) instead of the package global - the global was
-	// overwritten by every NewAgentLoop, so with concurrent ACP sessions the
-	// last-initialized loop received every session's checkpoint callbacks.
 
-	// --- Default mode: auto ---
 	defaultMode := "auto"
 
 	al := &AgentLoop{
@@ -100,24 +77,11 @@ func NewAgentLoop(
 		mode:       defaultMode,
 	}
 
-	// --- Permission policy ---
-	// Canonical supervised literal (dev_developer final-review nit): the
-	// legacy AutoMode alias behaves identically here, but keeping the enum
-	// surface canonical avoids ambiguity against the normalization contract.
 	permMode := permission.SupervisedMode
 	policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permMode)
 	a.SetPermissionPolicy(policy)
 
-	// Route tool approvals through ACP permission request to Client
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		// #1085: Even in bypass/autopilot mode, respect the three hard security doors
-		// (extremely dangerous commands, network exfiltration, sensitive path redirects).
-		// Let the policy decide first; only Allow can skip client approval.
-		//
-		// #1093: consult the agent's CURRENT policy, not the `policy` local
-		// captured here - applyModePolicy swaps the policy via SetPermissionPolicy
-		// on SetMode, and a stale AutoMode closure let auto-allowed tools skip
-		// client approval even after switching to supervised mode.
 		currentPolicy := al.agent.PermissionPolicy()
 		if currentPolicy == nil {
 			currentPolicy = policy
@@ -126,12 +90,10 @@ func NewAgentLoop(
 		if decision == permission.Allow {
 			return permission.Allow
 		}
-		// Deny or Ask → ask the Client (or respect Deny)
 		if decision == permission.Deny {
 			return permission.Deny
 		}
 
-		// Ask case: request approval from Client (supervised/auto/bypass/autopilot all reach here)
 		approved, err := al.RequestPermission(ctx, "tool_use",
 			ToolCallUpdate{
 				Title: fmt.Sprintf("Execute tool: %s", toolName),
@@ -148,18 +110,11 @@ func NewAgentLoop(
 		return permission.Deny
 	})
 
-	// Route diff confirmations through ACP permission request to Client
 	a.SetDiffConfirm(func(ctx context.Context, filePath, diffText string) bool {
 		mode := al.Mode()
 		if mode == "bypass" || mode == "autopilot" {
 			return true
 		}
-		// #4634: legacy "auto" is normalized to supervised everywhere else
-		// (approval handler, permission layer) - only an explicit bypass or
-		// autopilot session auto-approves workspace writes. A default session
-		// (client never called session/set_mode) must still get the diff
-		// confirmation request; the old auto branch silently wrote files
-		// with no Client confirmation at all.
 		approved, err := al.RequestPermission(ctx, "fs_write",
 			ToolCallUpdate{
 				Title:     fmt.Sprintf("Write file: %s", filePath),
@@ -174,15 +129,11 @@ func NewAgentLoop(
 		return approved
 	})
 
-	// --- Usage tracking ---
 	a.SetUsageHandler(func(usage provider.TokenUsage) {
 		debug.Log("acp", "token usage: input=%d output=%d total=%d", usage.InputTokens, usage.OutputTokens, usage.InputTokens+usage.OutputTokens)
 	})
 
-	// --- Checkpoint handler: persist compacted context to session ---
 	a.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
-		// ACP uses its own session storage, not JSONL checkpoints.
-		// Save full message list to the ACP session.
 		msgs, _ := a.ContextManager().MessagesAndTokenCount()
 		acpMsgs := providerToACPMessage(msgs)
 		al.session.ReplaceConversation(acpMsgs)
@@ -193,19 +144,13 @@ func NewAgentLoop(
 		}
 	})
 
-	// --- Project memory ---
 	al.loadProjectMemory()
 
-	// --- AskUser handler: route through ACP permission request ---
-	// #1116: handlers are stored per session on a registry-level dispatcher
-	// instead of overwriting a shared SetHandler slot.
 	al.setupAskUserHandler()
 
 	return al
 }
 
-// loadProjectMemory injects a project memory index hint as a system message
-// into the agent's context. Full content is loaded on demand via read_file.
 func (al *AgentLoop) loadProjectMemory() {
 	files, err := memory.ProjectMemoryFilesForPath(al.session.CWD)
 	if err != nil {
@@ -226,8 +171,6 @@ func (al *AgentLoop) loadProjectMemory() {
 	debug.Log("acp", "loaded %d project memory files", len(files))
 }
 
-// RestoreConversation restores previously saved messages into the agent's context.
-// Used by session/resume to rebuild the conversation history.
 func (al *AgentLoop) RestoreConversation(messages []Message) {
 	for _, msg := range messages {
 		providerContent := acpToProviderContent(msg.Content)
@@ -239,11 +182,6 @@ func (al *AgentLoop) RestoreConversation(messages []Message) {
 	debug.Log("acp", "restored %d messages to agent context", len(messages))
 }
 
-// SetMode updates the permission mode for this agent loop and marks it as
-// explicitly set by the Client. Once set, the mode survives loop recreation
-// between prompts (see Handler.applySessionModes) — it never silently reverts
-// to the default "auto". Guarded by modeMu so concurrent reads from the
-// approval/diff-confirm handlers stay race-free.
 func (al *AgentLoop) SetMode(mode string) {
 	al.modeMu.Lock()
 	al.mode = mode
@@ -252,25 +190,18 @@ func (al *AgentLoop) SetMode(mode string) {
 	al.applyModePolicy(mode)
 }
 
-// Mode returns the current permission mode.
 func (al *AgentLoop) Mode() string {
 	al.modeMu.Lock()
 	defer al.modeMu.Unlock()
 	return al.mode
 }
 
-// applyModePolicy rebuilds the permission policy for the given mode.
 func (al *AgentLoop) applyModePolicy(mode string) {
-	// two-mode refactor: single-point normalization - legacy names (auto /
-	// autopilot) map to supervised / bypass, unknown input falls back to the
-	// supervised default instead of silently becoming a legacy alias.
 	permMode := permission.ParsePermissionMode(mode)
 	policy := permission.NewConfigPolicyWithMode(nil, al.cfg.AllowedDirs, permMode)
 	al.agent.SetPermissionPolicy(policy)
 }
 
-// ExecutePrompt runs a single prompt through the agent loop.
-// Stream events are converted to ACP session/update notifications.
 func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) error {
 	ctx, cancel := context.WithCancel(ctx)
 	al.cancelMu.Lock()
@@ -279,9 +210,6 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 	al.cancel = cancel
 	al.cancelMu.Unlock()
 	defer func() {
-		// Clear only if this run's cancel is still installed (generation
-		// check): a newer run may have replaced it, and funcs cannot be
-		// compared directly in Go.
 		al.cancelMu.Lock()
 		if al.cancelGen == myGen {
 			al.cancel = nil
@@ -290,29 +218,20 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		cancel()
 	}()
 
-	// #1047: scope the pre-write checkpoint hook to this run so concurrent
-	// sessions do not overwrite each other's hook (package-global
-	// last-writer-wins hijacked checkpoints to the newest loop). Tools only
-	// execute within ExecutePrompt, so run scope covers all writes.
 	removePreWriteHook := tool.AddPreWriteHook(tool.CheckpointSaver(al.agent.CheckpointManager()))
 	defer removePreWriteHook()
 
-	// Convert ACP ContentBlocks to provider ContentBlocks
 	providerContent := acpToProviderContent(prompt)
 
-	// Store user message in session
 	al.session.AddMessage("user", prompt)
 
-	// Accumulate assistant response for session persistence
 	var assistantText string
 	var toolCalls []ContentBlock
 
-	// Run agent and convert stream events to ACP notifications
 	onEvent := func(event provider.StreamEvent) {
 		if err := al.handleStreamEvent(event); err != nil {
 			debug.Log("acp", "error handling stream event: %v", err)
 		}
-		// Accumulate for persistence
 		switch event.Type {
 		case provider.StreamEventText:
 			assistantText += event.Text
@@ -334,10 +253,6 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		}
 	}
 
-	// #1116: tag the run context with this loop's session ID so ask_user can
-	// dispatch to THIS loop's handler even when other sessions have loops
-	// created later. Without the tag, every ask_user call from this session
-	// would resolve against whichever loop was constructed last.
 	ctx = context.WithValue(ctx, acpAskUserSessionKey{}, al.session.ID)
 
 	err := al.agent.RunStreamWithContent(ctx, providerContent, onEvent, "human")
@@ -345,11 +260,6 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		return fmt.Errorf("agent execution: %w", err)
 	}
 
-	// Store assistant message in session for persistence.
-	// #1048: tool_result blocks must NOT ride inside the assistant message:
-	// the merged assistant+tool_result shape is an illegal request structure
-	// for the Anthropic API after restore (tool results belong in a follow-up
-	// user-role message). Split them so persisted sessions replay legally.
 	var assistantContent []ContentBlock
 	var toolResultBlocks []ContentBlock
 	if assistantText != "" {
@@ -369,7 +279,6 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		al.session.AddMessage("user", toolResultBlocks)
 	}
 
-	// Persist session to disk
 	if err := al.session.Save(al.session.SaveDir()); err != nil {
 		debug.Log("acp", "session save error: %v", err)
 	}
@@ -377,7 +286,6 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 	return nil
 }
 
-// Stop cancels the current agent execution.
 func (al *AgentLoop) Stop() {
 	al.cancelMu.Lock()
 	cancel := al.cancel
@@ -387,7 +295,6 @@ func (al *AgentLoop) Stop() {
 	}
 }
 
-// handleStreamEvent converts a provider.StreamEvent to an ACP session/update notification.
 func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 	switch event.Type {
 	case provider.StreamEventText:
@@ -421,7 +328,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		if event.IsError {
 			status = "failed"
 		}
-		// tool_call_update is what the IDE actually renders — show human-readable command
 		present := tool.DescribeTool(event.Tool.Name, string(event.Tool.Arguments))
 		title := tool.FormatToolInline(present.DisplayName, present.Detail)
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
@@ -453,7 +359,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 	return nil
 }
 
-// toolKind maps tool names to ACP tool kinds: "read", "write", or "execute".
 func toolKind(toolName string) string {
 	switch toolName {
 	case "read_file", "list_directory", "search_files", "glob", "grep", "code_search",
@@ -466,9 +371,6 @@ func toolKind(toolName string) string {
 	}
 }
 
-// acpToProviderContent converts ACP ContentBlocks to provider ContentBlocks.
-// #1086: Preserve tool_use/tool_result blocks during conversation restore.
-// This mirrors providerToACPMessage which stores all fields to disk.
 func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 	out := make([]provider.ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
@@ -478,7 +380,6 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 		case "image":
 			out = append(out, provider.ImageBlock(b.ImageMIME, b.ImageData))
 		case "tool_use":
-			// #1086: Preserve tool_use block with all fields
 			out = append(out, provider.ContentBlock{
 				Type:     "tool_use",
 				ToolName: b.ToolName,
@@ -487,7 +388,6 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				IsError:  b.IsError,
 			})
 		case "tool_result":
-			// #1086: Preserve tool_result block with all fields
 			out = append(out, provider.ContentBlock{
 				Type:     "tool_result",
 				ToolName: b.ToolName,
@@ -496,12 +396,6 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				IsError:  b.IsError,
 			})
 		case "resource":
-			// #1659 case 1: we declare EmbeddedContext:true in
-			// InitializeResult, so a spec-compliant peer legitimately sends
-			// resource attachments - the old code dropped them here because
-			// b.Text is an independent JSON field that is always empty for
-			// resources (content lives in b.Resource.Text/Blob). Degrade to
-			// text; log the type for blob resources we cannot inline.
 			if b.Resource != nil {
 				if b.Resource.Text != nil && b.Resource.Text.Text != "" {
 					out = append(out, provider.TextBlock(b.Resource.Text.Text))
@@ -509,21 +403,12 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 					debug.Log("acp-bridge", "resource blob %q (%s) not inlinable - placeholder only", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)
 					out = append(out, provider.TextBlock(fmt.Sprintf("[embedded binary resource: %s (%s)]", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)))
 				} else {
-					// #1848 case 2: a resource block with neither text nor
-					// blob used to vanish without a trace - the same
-					// silent-drop this commit's default branch condemns.
 					debug.Log("acp-bridge", "dropping resource block (no text and no blob content)")
 				}
 			} else {
-				// #1848 case 2: a "resource" block without a Resource
-				// object is malformed - drop visibly, not silently.
 				debug.Log("acp-bridge", "dropping resource block with nil resource object (malformed payload)")
 			}
 		default:
-			// #1647: audio/resource/resource_link arriving without Text were
-			// dropped SILENTLY (the handler declares audio:false - a peer
-			// violating that contract lost data with no trace). Log the drop;
-			// degrade to text when a Text field exists.
 			if b.Text != "" {
 				out = append(out, provider.TextBlock(b.Text))
 			} else {
@@ -534,24 +419,19 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 	return out
 }
 
-// providerToACPMessage converts provider Messages to ACP Messages.
-// Used by the checkpoint handler to persist compacted context.
 func providerToACPMessage(msgs []provider.Message) []Message {
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
 		blocks := make([]ContentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			blocks = append(blocks, ContentBlock{
-				Type:     b.Type,
-				Text:     b.Text,
-				ToolName: b.ToolName,
-				ToolID:   b.ToolID,
-				Input:    b.Input,
-				Output:   b.Output,
-				IsError:  b.IsError,
-				// #1071: image fields must survive the roundtrip - dropping them
-				// produced empty image blocks that vision providers reject with
-				// a request-level 400 after compaction/restore.
+				Type:      b.Type,
+				Text:      b.Text,
+				ToolName:  b.ToolName,
+				ToolID:    b.ToolID,
+				Input:     b.Input,
+				Output:    b.Output,
+				IsError:   b.IsError,
 				ImageMIME: b.ImageMIME,
 				ImageData: b.ImageData,
 			})
@@ -561,7 +441,6 @@ func providerToACPMessage(msgs []provider.Message) []Message {
 	return out
 }
 
-// RequestPermission sends a permission request to the Client and waits for response.
 func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, toolCall ToolCallUpdate) (bool, error) {
 	options := []PermissionOption{
 		{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
@@ -590,23 +469,10 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, too
 	return response.Outcome.Outcome == "selected" && response.Outcome.SelectedOption != nil && response.Outcome.SelectedOption.OptionID == "allow", nil
 }
 
-// acpAskUserSessionKey is the context key that tags a prompt run with its ACP
-// session ID so ask_user dispatch finds the originating loop (#1116).
 type acpAskUserSessionKey struct{}
 
-// acpAskUserMu serializes dispatcher installation across concurrent AgentLoop
-// constructors (#1116).
 var acpAskUserMu sync.Mutex
 
-// acpAskUserSession wraps the ask_user slot in a shared tool registry so each
-// AgentLoop carries its own handler keyed by session ID (#1116).
-//
-// The previously installed *tool.AskUserTool singleton has exactly one
-// handler slot; every NewAgentLoop called SetHandler and the last-created
-// loop won, mis-routing session A's questions into session B's UI.
-// The dispatcher delegates schema methods to the base singleton (unchanged
-// prompts/metadata) and dispatches execution by the session ID carried on
-// the run context (tagged in ExecutePrompt).
 type acpAskUserSession struct {
 	mu       sync.RWMutex
 	handlers map[string]tool.AskUserHandler
@@ -639,7 +505,6 @@ func (s *acpAskUserSession) handlerFor(ctx context.Context) (tool.AskUserHandler
 
 func (s *acpAskUserSession) Name() string { return s.base.Name() }
 
-// sessionIDOf extracts the #1116 run-context session tag, if any.
 func sessionIDOf(ctx context.Context) string {
 	id, _ := ctx.Value(acpAskUserSessionKey{}).(string)
 	return id
@@ -649,9 +514,6 @@ func (s *acpAskUserSession) Description() string { return s.base.Description() }
 
 func (s *acpAskUserSession) Parameters() json.RawMessage { return s.base.Parameters() }
 
-// Execute mirrors tool.AskUserTool.Execute's normalization/post-processing,
-// then routes to the per-session handler (#1116). Duplicated here because
-// AskUserTool internals are unexported and internal/tool is out of scope.
 func (s *acpAskUserSession) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	var req tool.AskUserRequest
 	if err := json.Unmarshal(input, &req); err != nil {
@@ -661,14 +523,8 @@ func (s *acpAskUserSession) Execute(ctx context.Context, input json.RawMessage) 
 	if !ok {
 		tag := sessionIDOf(ctx)
 		if tag == "" {
-			// No session tag on the context: defer to the singleton's legacy
-			// default handler so callers that bypass ExecutePrompt keep their
-			// pre-#1116 behavior.
 			return s.base.Execute(ctx, input)
 		}
-		// Tagged but no handler registered for this session (cancelled or
-		// unknown): fail cleanly - traffic must never leak to another
-		// session's default (#1116).
 		return tool.Result{IsError: true, Content: fmt.Sprintf("ask_user has no handler for ACP session %q", tag)}, nil
 	}
 	resp, err := handler(ctx, req)
@@ -698,9 +554,6 @@ func (s *acpAskUserSession) Execute(ctx context.Context, input json.RawMessage) 
 	return tool.Result{Content: string(data)}, nil
 }
 
-// ensureAskUserDispatcher installs the per-session dispatcher under the
-// registry's ask_user name (replacing the plain singleton once), returning
-// the active dispatcher (#1116).
 func ensureAskUserDispatcher(registry *tool.Registry, base *tool.AskUserTool) *acpAskUserSession {
 	acpAskUserMu.Lock()
 	defer acpAskUserMu.Unlock()
@@ -714,16 +567,12 @@ func ensureAskUserDispatcher(registry *tool.Registry, base *tool.AskUserTool) *a
 		return nil
 	}
 	if err := registry.Register(disp); err != nil {
-		// Best effort restore of the original singleton slot.
 		_ = registry.Register(base)
 		return nil
 	}
 	return disp
 }
 
-// #1140: askUserPermissionOptions maps one question's choices to
-// session/request_permission PermissionOption entries. Single/multi choice
-// questions present their choices; any other shape falls back to OK/Cancel.
 func askUserPermissionOptions(question tool.AskUserQuestion) []PermissionOption {
 	var options []PermissionOption
 	switch question.Kind {
@@ -751,17 +600,11 @@ func askUserPermissionOptions(question tool.AskUserQuestion) []PermissionOption 
 	return options
 }
 
-// setupAskUserHandler wires the ACP-side ask_user implementation. Every
-// question in a batch is round-tripped through session/request_permission
-// (#1140); text questions error out up front so the LLM falls back to plain
-// text, matching the pre-#1140 contract for single text questions.
 func (al *AgentLoop) setupAskUserHandler() {
 	askTool, ok := al.registry.Get("ask_user")
 	if !ok {
 		return
 	}
-	// #1116: accept either the raw singleton (first construction) or an
-	// already-installed per-session dispatcher (loop rebuilds reuse it).
 	var base *tool.AskUserTool
 	switch t := askTool.(type) {
 	case *tool.AskUserTool:
@@ -773,14 +616,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 	}
 
 	handler := func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
-		// #1140: process every question in the batch. The schema allows
-		// minItems:1 with no upper bound and the TUI path renders one tab per
-		// question, so multi-question batches are a product contract. The old
-		// code only round-tripped req.Questions[0] through the IDE permission
-		// UI while still reporting QuestionCount=N, silently dropping questions
-		// 2..N behind a fake success signal. Each question now gets its own
-		// session/request_permission round trip; answers are aggregated in
-		// question order so AnsweredCount matches QuestionCount.
 
 		title := req.Title
 		if len(req.Questions) > 0 && title == "" && req.Questions[0].Prompt != "" {
@@ -793,10 +628,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 			QuestionCount: len(req.Questions),
 		}
 
-		// #1140 + #1116 compatibility: every question gets its own round trip,
-		// and an EMPTY batch still performs exactly one attempt with the
-		// zero-value question shape - mirroring the pre-#1140 single-trip flow
-		// that issue1116's guard relies on for aborted-wait error surfacing.
 		total := max(len(req.Questions), 1)
 		for i := 0; i < total; i++ {
 			var question tool.AskUserQuestion
@@ -817,7 +648,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 
 			selectedID, ok := requestPermissionSelectedID(response)
 			if !ok {
-				// User dismissed the modal - fail loudly instead of faking success.
 				return tool.AskUserResponse{}, fmt.Errorf(
 					"ask_user: the user dismissed the question in the IDE. " +
 						"Please ask the user directly in your response text instead.",
@@ -826,8 +656,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 
 			switch question.Kind {
 			case tool.AskUserKindSingle, tool.AskUserKindMulti:
-				// Permission options only allow single selection - multi
-				// questions degrade to single-choice answers (#1140).
 				resp.Answers = append(resp.Answers, tool.AskUserAnswer{
 					ID:                question.ID,
 					Title:             question.Title,
@@ -841,11 +669,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 				resp.AnsweredCount++
 
 			case tool.AskUserKindText, "":
-				// Text question - IDE permission UI doesn't support freeform
-				// text input. Return an error so the LLM falls back to asking
-				// in plain text (pre-#1140 contract preserved per question;
-				// #1140 names the offending question so batches never fail
-				// silently either way).
 				return tool.AskUserResponse{}, fmt.Errorf(
 					"ask_user: the IDE does not support text input for question %q (%s). "+
 						"Please ask the user directly in your response text instead.",
@@ -857,13 +680,6 @@ func (al *AgentLoop) setupAskUserHandler() {
 		return resp, nil
 	}
 
-	// #1116: register the handler keyed by THIS session's ID instead of
-	// overwriting the shared tool singleton blindly. With >=2 concurrent
-	// sessions the old SetHandler-per-loop scheme let the last-created loop
-	// capture every session's ask_user traffic (same last-writer-wins class
-	// as #1047). The base singleton also keeps this handler as a legacy
-	// default so untagged callers (paths outside ExecutePrompt) keep their
-	// pre-#1116 behavior.
 	disp := ensureAskUserDispatcher(al.registry, base)
 	if disp == nil {
 		debug.Log("acp", "ask_user dispatcher installation failed for session %s", al.session.ID)
@@ -874,16 +690,8 @@ func (al *AgentLoop) setupAskUserHandler() {
 	debug.Log("acp", "ask_user handler registered for session %s", al.session.ID)
 }
 
-// sendAskUserPermission performs one ask_user permission round trip on the
-// loop transport (session/request_permission). Extracted per-question by the
-// #1140 batch fix to keep setupAskUserHandler readable.
 func (al *AgentLoop) sendAskUserPermission(ctx context.Context, title string, options []PermissionOption) (json.RawMessage, error) {
 	return al.transport.SendRequest(
-		// #1105: pass the run ctx (not context.Background()) so Stop()/
-		// user cancellation aborts the questionnaire wait - the other
-		// requestPermission-family handlers already do this, and the
-		// transport honors ctx.Done since #1046. Without it a cancelled
-		// run could block up to the 5-minute questionnaire timeout.
 		ctx,
 		"session/request_permission",
 		RequestPermissionRequest{
@@ -898,17 +706,11 @@ func (al *AgentLoop) sendAskUserPermission(ctx context.Context, title string, op
 	)
 }
 
-// askUserOptionsFor maps a question kind to its permission modal options.
-// Single/multi questions show their own choices (#1140 per-question options);
-// text questions keep the pre-#1140 Submit/Cancel wire contract; unknown
-// kinds degrade to OK/Cancel.
 func askUserOptionsFor(question tool.AskUserQuestion) []PermissionOption {
 	switch question.Kind {
 	case tool.AskUserKindSingle, tool.AskUserKindMulti:
 		return askUserPermissionOptions(question)
 	case tool.AskUserKindText, "":
-		// Text question - offer Submit/Cancel (the IDE may support
-		// freeform text in the permission UI).
 		return []PermissionOption{
 			{OptionID: "submit", Name: "Submit", Kind: PermissionOptionAllowOnce},
 			{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
@@ -921,9 +723,6 @@ func askUserOptionsFor(question tool.AskUserQuestion) []PermissionOption {
 	}
 }
 
-// requestPermissionSelectedID reports whether the user picked an option and
-// returns its wire id. cancelled/rejected outcomes yield ok=false so callers
-// fail loudly instead of faking success (#1140).
 func requestPermissionSelectedID(resp RequestPermissionResponse) (string, bool) {
 	switch resp.Outcome.Outcome {
 	case "cancelled", "rejected":

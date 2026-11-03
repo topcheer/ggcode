@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// pagetokenTestPost performs an authenticated JSON-RPC POST (testPost in
-// a2a_test.go is behind the integration_local build tag).
 func pagetokenTestPost(url string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -23,10 +21,6 @@ func pagetokenTestPost(url string, body []byte) (*http.Response, error) {
 	return client.Do(req)
 }
 
-// TestClientNegotiateAuthAPIKeyFallbackRejected (fix #257): a client built
-// with NewClient(url, "some-key") pointing at a server that only declares
-// oauth2/bearer schemes must NOT silently negotiate apiKey success — the old
-// fallback deferred the failure to the first request's 401.
 func TestClientNegotiateAuthAPIKeyFallbackRejected(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
 	client.card.Store(&AgentCard{
@@ -46,8 +40,6 @@ func TestClientNegotiateAuthAPIKeyFallbackRejected(t *testing.T) {
 	}
 }
 
-// TestClientNegotiateAuthAPIKeyFallbackBearerOnly verifies the same fix
-// against a server declaring only an http bearer scheme.
 func TestClientNegotiateAuthAPIKeyFallbackBearerOnly(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
 	client.card.Store(&AgentCard{
@@ -63,8 +55,6 @@ func TestClientNegotiateAuthAPIKeyFallbackBearerOnly(t *testing.T) {
 	}
 }
 
-// TestClientNegotiateAuthAPIKeyStillOKWhenDeclared: when the server DOES
-// declare an apiKey scheme, the pre-configured apiKey fallback stays valid.
 func TestClientNegotiateAuthAPIKeyStillOKWhenDeclared(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
 	client.card.Store(&AgentCard{
@@ -83,9 +73,6 @@ func TestClientNegotiateAuthAPIKeyStillOKWhenDeclared(t *testing.T) {
 	}
 }
 
-// TestListTasksInvalidPageToken (fix #258): a stale pageToken (task deleted
-// by cleanup) must surface an error instead of silently returning page one
-// with an identical nextToken, which looped pagination clients forever.
 func TestListTasksInvalidPageToken(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	_, next, err := handler.ListTasks("ghost-token", 10)
@@ -97,8 +84,6 @@ func TestListTasksInvalidPageToken(t *testing.T) {
 	}
 }
 
-// TestListTasksRPCInvalidPageToken verifies the JSON-RPC layer maps the stale
-// token error to invalid params (-32602) rather than a first-page result.
 func TestListTasksRPCInvalidPageToken(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
@@ -119,9 +104,6 @@ func TestListTasksRPCInvalidPageToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rpcResp JSONRPCResponse
-	// Check the decode: under full-suite load a truncated/empty body decodes
-	// to a zero-value response whose Error is nil, which used to surface as a
-	// false "expected JSON-RPC error for stale page token, got success".
 	if derr := json.NewDecoder(resp.Body).Decode(&rpcResp); derr != nil {
 		t.Fatalf("decoding JSON-RPC response: %v", derr)
 	}

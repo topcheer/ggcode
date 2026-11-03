@@ -16,7 +16,6 @@ func TestNewManager(t *testing.T) {
 func TestManager_Reload(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir)
-	// Second reload should work (may return false if no change)
 	result := m.Reload()
 	_ = result
 }
@@ -71,7 +70,6 @@ func TestManager_SetExtraProviders(t *testing.T) {
 func TestManager_SetEnabled(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir)
-	// Should not panic
 	m.SetEnabled("nonexistent", true)
 	m.SetEnabled("nonexistent", false)
 }
@@ -120,9 +118,6 @@ func TestManager_UserSlashCommands(t *testing.T) {
 	}
 }
 
-// Regression for #1513: SkillNames held m.mu.RLock while combinedCommands
-// takes m.mu.Lock internally - RWMutex is not reentrant, so every skill
-// search deadlocked. The test calls SkillNames with a timeout guard.
 func TestSkillNamesNoSelfDeadlock(t *testing.T) {
 	mgr := NewManager(t.TempDir())
 	done := make(chan []string, 1)
@@ -131,7 +126,7 @@ func TestSkillNamesNoSelfDeadlock(t *testing.T) {
 	}()
 	select {
 	case names := <-done:
-		_ = names // returned without deadlock
+		_ = names
 	case <-time.After(5 * time.Second):
 		t.Fatal("SkillNames deadlocked (RLock vs internal Lock)")
 	}

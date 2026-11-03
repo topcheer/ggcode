@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #4500: the bare "test." substring made ordinary files like latest.go /
-// contest.go flip HasTests to a false true in the agent card. The precise
-// suffix conditions must still catch real test files.
 func TestIssue4500_HasTestsNoFalsePositiveFromPlainNames(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"latest.go", "contest.go", "protest.go", "main.go"} {
@@ -33,9 +30,6 @@ func TestIssue4500_HasTestsNoFalsePositiveFromPlainNames(t *testing.T) {
 	}
 }
 
-// #4501: Discover() must return a private copy - in-place mutation of the
-// returned slice must not leak into the cache (and via it into every later
-// Discover/CachedInstances call).
 func TestIssue4501_DiscoverReturnsCopyNotCacheBacking(t *testing.T) {
 	r := &Registry{}
 	r.SetCachedInstances([]InstanceInfo{{ID: "a"}, {ID: "b"}})
@@ -47,7 +41,6 @@ func TestIssue4501_DiscoverReturnsCopyNotCacheBacking(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("expected 2 instances, got %d", len(out))
 	}
-	// Caller-side in-place mutation (sort swap / field edit).
 	out[0].ID = "MUTATED"
 
 	again, _ := r.Discover()

@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #4634: the DiffConfirm callback must NOT auto-approve on the legacy
-// "auto" mode - auto is normalized to supervised everywhere else (approval
-// handler, permission layer), and a default session (client never called
-// session/set_mode) must still get the diff confirmation request.
 func TestIssue4634_DiffConfirmDoesNotAutoApproveLegacyAuto(t *testing.T) {
 	data, err := os.ReadFile("agent_loop.go")
 	if err != nil {

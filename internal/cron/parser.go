@@ -7,23 +7,12 @@ import (
 	"time"
 )
 
-// cronField represents a parsed cron field as a set of matching values.
 type cronField struct {
-	values map[int]bool // which values match
-	min    int          // domain minimum (e.g. 0 for minute)
-	max    int          // domain maximum (e.g. 59 for minute)
+	values map[int]bool
+	min    int
+	max    int
 }
 
-// NextTime calculates the next time that matches the 5-field cron expression
-// after the given 'from' time. Returns the next fire time or an error.
-//
-// Supported syntax per field:
-//   - *        — any value
-//   - */N      — every Nth value
-//   - N        — exact value
-//   - N,M,K    — list of values
-//   - N-M      — range (inclusive)
-//   - N-M/S    — range with step
 func NextTime(expr string, from time.Time) (time.Time, error) {
 	fields := splitFields(expr)
 	if len(fields) != 5 {
@@ -46,58 +35,41 @@ func NextTime(expr string, from time.Time) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("month field: %w", err)
 	}
-	dow, err := parseField(fields[4], 0, 6) // 0=Sunday
+	dow, err := parseField(fields[4], 0, 6)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("day-of-week field: %w", err)
 	}
 
-	// Start from the next second after 'from'.
 	t := time.Date(from.Year(), from.Month(), from.Day(), from.Hour(), from.Minute(), 0, 0, from.Location()).Add(time.Minute)
 
-	// Search forward, cap at ~4 years to prevent infinite loops.
-	// #1532: the cap is an ITERATION count, not an absolute-time deadline -
-	// a clock that stops advancing (the DST spin above) never reaches an
-	// absolute deadline, defeating the very loop guard it exists for.
 	dayRestricted := !isWildcard(fields[2])
 	dowRestricted := !isWildcard(fields[4])
 
 	deadline := from.AddDate(4, 0, 0)
-	maxIterations := 5 * 366 * 24 * 60 // minute steps over 5 years, generous margin
+	maxIterations := 5 * 366 * 24 * 60
 	for iter := 0; t.Before(deadline) && iter < maxIterations; iter++ {
 		if !month.values[int(t.Month())] {
 			t = firstOfNextMonth(t)
 			continue
 		}
 
-		// Day matching: standard cron semantics.
-		// If both day-of-month and day-of-week are restricted: OR (either matches).
-		// If only one is restricted: only that one matters.
 		dayMatch := day.values[t.Day()]
 		dowMatch := dow.values[int(t.Weekday())]
 		var dayOK bool
 		if dayRestricted && dowRestricted {
-			dayOK = dayMatch || dowMatch // OR
+			dayOK = dayMatch || dowMatch
 		} else if dayRestricted {
 			dayOK = dayMatch
 		} else if dowRestricted {
 			dayOK = dowMatch
 		} else {
-			dayOK = true // both wildcard
+			dayOK = true
 		}
 		if !dayOK {
 			t = addOneDay(t)
 			continue
 		}
 		if !hour.values[t.Hour()] {
-			// #1532: advance in WALL-clock semantics. The old
-			// .Add(time.Hour) added an absolute duration: on a DST
-			// fall-back day wall hour 1 occurs twice, time.Date(...,1,...)
-			// always picks the earlier (EDT) instance and adding one
-			// absolute hour landed back in EST hour 1 - t never advanced
-			// and the loop spun forever (eight callers hold scheduler
-			// locks, so the spin deadlocked the whole scheduler).
-			// Rebuilding with Hour()+1 crosses the ambiguity in wall time
-			// (23+1 rolls the day over via time.Date normalization).
 			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
 			continue
 		}
@@ -111,12 +83,10 @@ func NextTime(expr string, from time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("no matching time found within 4 years for %q", expr)
 }
 
-// isWildcard returns true if the field is "*" (matches all values).
 func isWildcard(field string) bool {
 	return field == "*"
 }
 
-// parseField parses a single cron field into a set of matching integer values.
 func parseField(field string, minVal, maxVal int) (cronField, error) {
 	cf := cronField{
 		values: make(map[int]bool),
@@ -124,7 +94,6 @@ func parseField(field string, minVal, maxVal int) (cronField, error) {
 		max:    maxVal,
 	}
 
-	// Handle multiple comma-separated expressions
 	parts := strings.Split(field, ",")
 	for _, part := range parts {
 		if err := parseFieldPart(part, minVal, maxVal, cf.values); err != nil {
@@ -140,7 +109,6 @@ func parseField(field string, minVal, maxVal int) (cronField, error) {
 }
 
 func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error {
-	// Handle step (*/N, N-M/S)
 	if strings.Contains(part, "/") {
 		slashParts := strings.SplitN(part, "/", 2)
 		if len(slashParts) != 2 {
@@ -156,18 +124,12 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 
 		rangeStart, rangeEnd := minVal, maxVal
 		if rangeStr == "*" {
-			// */N — all values with step
 		} else if strings.Contains(rangeStr, "-") {
 			rParts := strings.SplitN(rangeStr, "-", 2)
 			rangeStart, err = strconv.Atoi(rParts[0])
 			if err != nil {
 				return fmt.Errorf("invalid range start in %q", part)
 			}
-			// #451: reversed-range validation for the STEP path — #439
-			// fixed the plain N-M branch, but N-M/S silently produced an
-			// empty set inside comma lists (1,5-3/2 accepted, job ran on
-			// the wrong schedule). */N and N/S forms start at minVal and
-			// are naturally valid.
 			endVal, rerr := strconv.Atoi(rParts[1])
 			if rerr != nil {
 				return fmt.Errorf("invalid range end in %q", part)
@@ -184,10 +146,6 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 			rangeEnd = maxVal
 		}
 
-		// #415: reject out-of-range bounds instead of clamping — the single-
-		// value path errors on `60` hours, so `60/5` silently becoming 23:00
-		// (and `13-20` months becoming just December) rewrote the user's
-		// mistaken expression into different semantics.
 		if rangeStart < minVal || rangeStart > maxVal {
 			return fmt.Errorf("value %d out of range [%d-%d] in %q", rangeStart, minVal, maxVal, part)
 		}
@@ -200,7 +158,6 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		return nil
 	}
 
-	// Handle range (N-M)
 	if strings.Contains(part, "-") {
 		rParts := strings.SplitN(part, "-", 2)
 		start, err := strconv.Atoi(rParts[0])
@@ -211,18 +168,12 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		if err != nil {
 			return fmt.Errorf("invalid range end in %q", part)
 		}
-		// #415: reject out-of-range bounds instead of clamping (same policy
-		// as the single-value path).
 		if start < minVal || start > maxVal {
 			return fmt.Errorf("value %d out of range [%d-%d] in %q", start, minVal, maxVal, part)
 		}
 		if end < minVal || end > maxVal {
 			return fmt.Errorf("value %d out of range [%d-%d] in %q", end, minVal, maxVal, part)
 		}
-		// #439: a REVERSED range (start > end) is a user typo (50-10 vs
-		// 10-50). Standalone it trips the empty-set check, but inside a list
-		// (`5,50-10`) the non-empty rest silently swallowed it — the job ran
-		// on the wrong schedule with no diagnostic. Reject it up front.
 		if end < start {
 			return fmt.Errorf("reversed range %d-%d in %q (start must be <= end)", start, end, part)
 		}
@@ -232,7 +183,6 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		return nil
 	}
 
-	// Wildcard *
 	if part == "*" {
 		for v := minVal; v <= maxVal; v++ {
 			values[v] = true
@@ -240,7 +190,6 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		return nil
 	}
 
-	// Single number
 	v, err := strconv.Atoi(part)
 	if err != nil {
 		return fmt.Errorf("invalid value %q", part)

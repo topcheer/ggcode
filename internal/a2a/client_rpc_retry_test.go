@@ -14,7 +14,6 @@ func TestRPCRetriesTransientFailures(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) <= 2 {
-			// Transient faults: a connection-level error then a 503.
 			if attempts.Load() == 1 {
 				panic(http.ErrAbortHandler)
 			}
@@ -111,8 +110,6 @@ func TestRPCRetryRespectsContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after context deadline")
 	}
-	// Base backoff is 100ms; jitter keeps total wait under ~300ms for the
-	// early attempt, but the cancelled context must cut retries short.
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("SendMessage took %v after 50ms deadline; retries ignored ctx", elapsed)
 	}

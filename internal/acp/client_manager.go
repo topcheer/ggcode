@@ -7,9 +7,8 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// ClientManager manages the lifecycle of all ACP agent clients.
 type ClientManager struct {
-	clients      map[string]*Client // keyed by agent name
+	clients      map[string]*Client
 	discoveries  map[string]DiscoveredAgent
 	mu           sync.RWMutex
 	workingDir   string
@@ -19,9 +18,6 @@ type ClientManager struct {
 	onApproval   ApprovalHandler
 }
 
-// NewClientManager discovers ACP agents and stores their shared startup config.
-// ACP delegates intentionally send an empty mcpServers array because MCP
-// passthrough is disabled for stability.
 func NewClientManager(workingDir string, policy permission.PermissionPolicy) *ClientManager {
 	mgr := &ClientManager{
 		clients:     make(map[string]*Client),
@@ -50,7 +46,6 @@ func (m *ClientManager) SetWorkingDir(dir string) {
 	}
 }
 
-// Available returns the list of available agent names.
 func (m *ClientManager) Available() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -61,7 +56,6 @@ func (m *ClientManager) Available() []string {
 	return names
 }
 
-// AgentInfo returns display information for an agent.
 func (m *ClientManager) AgentInfo(name string) (title, description string, ok bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -72,7 +66,6 @@ func (m *ClientManager) AgentInfo(name string) (title, description string, ok bo
 	return d.Def.Title, d.Def.Description, true
 }
 
-// CloseAll shuts down all running agent processes.
 func (m *ClientManager) CloseAll() {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

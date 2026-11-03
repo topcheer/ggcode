@@ -2,39 +2,6 @@
 
 package a2a
 
-// ---------------------------------------------------------------------------
-// TestFiveInstanceMesh: 5 instances using different auth methods, all interop
-//
-// Topology:
-//
-//   Instance 1 (Central Hub)
-//   ├── auth: apiKey
-//   ├── accepts connections from all others
-//   │
-//   Instance 2 (Worker A)
-//   ├── auth: none (no auth)
-//   └── connects to Instance 1 with apiKey
-//
-//   Instance 3 (Worker B)
-//   ├── auth: bearer token (simulated OAuth2)
-//   └── connects to Instance 1 with apiKey, connects to Instance 2 with no auth
-//
-//   Instance 4 (Worker C)
-//   ├── auth: mTLS
-//   └── connects to Instance 1 with apiKey
-//
-//   Instance 5 (Observer)
-//   ├── auth: apiKey (different key)
-//   └── connects to Instance 1, discovers all instances
-//
-// Verifications:
-// 1. Each client can Discover the server's Agent Card
-// 2. Each client can NegotiateAuth with matching credentials
-// 3. Each client can send a task and get a response
-// 4. Cross-auth scenarios work (apiKey client → bearer server, etc.)
-// 5. Wrong credentials are rejected
-// ---------------------------------------------------------------------------
-
 import (
 	"bytes"
 	"context"
@@ -70,9 +37,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	// -----------------------------------------------------------------------
-	// Instance 1: Central Hub — apiKey auth
-	// -----------------------------------------------------------------------
 	t.Log("🌐 Starting Instance 1 (Central Hub, apiKey)...")
 	hubHandler := NewTaskHandler(tmpDir, nil, nil)
 	hubSrv := NewServer(ServerConfig{
@@ -86,9 +50,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	defer hubSrv.Stop()
 	t.Logf("   Instance 1 listening: %s", hubSrv.Endpoint())
 
-	// -----------------------------------------------------------------------
-	// Instance 2: Worker A — no auth
-	// -----------------------------------------------------------------------
 	t.Log("🌐 Starting Instance 2 (Worker A, no auth)...")
 	workerADir := filepath.Join(tmpDir, "worker-a")
 	os.MkdirAll(workerADir, 0755)
@@ -103,9 +64,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	defer workerASrv.Stop()
 	t.Logf("   Instance 2 listening: %s", workerASrv.Endpoint())
 
-	// -----------------------------------------------------------------------
-	// Instance 3: Worker B — bearer token auth (simulated OAuth2)
-	// -----------------------------------------------------------------------
 	t.Log("🌐 Starting Instance 3 (Worker B, bearer token)...")
 	workerBDir := filepath.Join(tmpDir, "worker-b")
 	os.MkdirAll(workerBDir, 0755)
@@ -114,7 +72,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		Host: "127.0.0.1",
 		Port: 0,
 	}, workerBHandler)
-	// Use a test TokenValidator that accepts our test JWT
 	workerBTV, _ := auth.NewTokenValidator("test-client", "https://example.com", auth.WithHMACSecret("test-client"))
 	workerBSrv.SetTokenValidator(workerBTV)
 	if err := workerBSrv.Start(); err != nil {
@@ -123,20 +80,15 @@ func TestFiveInstanceMesh(t *testing.T) {
 	defer workerBSrv.Stop()
 	t.Logf("   Instance 3 listening: %s", workerBSrv.Endpoint())
 
-	// -----------------------------------------------------------------------
-	// Instance 4: Worker C — mTLS
-	// -----------------------------------------------------------------------
 	t.Log("🌐 Starting Instance 4 (Worker C, mTLS)...")
 	workerCDir := filepath.Join(tmpDir, "worker-c")
 	os.MkdirAll(workerCDir, 0755)
 	workerCHandler := NewTaskHandler(workerCDir, nil, nil)
 
-	// Generate self-signed CA + server cert + client cert
 	ca := generateTestCA(t)
 	serverPair := generateTestChild(t, ca, "Instance 4 Server")
 	clientPair := generateTestChild(t, ca, "Instance 4 Client")
 
-	// Write certs to temp files
 	certDir := filepath.Join(tmpDir, "certs")
 	os.MkdirAll(certDir, 0755)
 	serverCertPEM, serverKeyPEM := encodeCertPEM(serverPair.Cert, serverPair.Key)
@@ -170,9 +122,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	defer workerCSrv.Stop()
 	t.Logf("   Instance 4 listening: %s", workerCSrv.Endpoint())
 
-	// -----------------------------------------------------------------------
-	// Instance 5: Observer — apiKey (different key)
-	// -----------------------------------------------------------------------
 	t.Log("🌐 Starting Instance 5 (Observer, different apiKey)...")
 	observerDir := filepath.Join(tmpDir, "observer")
 	os.MkdirAll(observerDir, 0755)
@@ -188,12 +137,8 @@ func TestFiveInstanceMesh(t *testing.T) {
 	defer observerSrv.Stop()
 	t.Logf("   Instance 5 listening: %s", observerSrv.Endpoint())
 
-	// =======================================================================
-	// Phase 1: Discover + NegotiateAuth for all pairs
-	// =======================================================================
 	t.Log("\n📋 Phase 1: Discover + NegotiateAuth")
 
-	// Client 2 → Instance 1 (noAuth client → apiKey server, using apiKey)
 	t.Log("   Client 2 → Instance 1 (apiKey auth)...")
 	client2To1 := NewClient(hubSrv.Endpoint(), meshAPIKey1)
 	card, err := client2To1.Discover(ctx)
@@ -211,9 +156,7 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Log("   ✅ Client 2 → Instance 1: apiKey negotiated")
 
-	// Client 3 → Instance 1 (bearer client → apiKey server, using apiKey)
 	t.Log("   Client 3 → Instance 1 (apiKey auth, bearer client)...")
-	// Create a test HS256 JWT for Instance 3's bearer token
 	testJWT := createTestJWT(t, "test-client", "https://example.com", time.Hour)
 	client3To1 := NewClient(hubSrv.Endpoint(), meshAPIKey1, WithBearerToken(testJWT))
 	_, err = client3To1.Discover(ctx)
@@ -223,10 +166,8 @@ func TestFiveInstanceMesh(t *testing.T) {
 	if err := client3To1.NegotiateAuth(); err != nil {
 		t.Fatalf("Client 3 negotiate Instance 1: %v", err)
 	}
-	// Should pick apiKey (first in security list) since both are available
 	t.Logf("   ✅ Client 3 → Instance 1: %s negotiated", client3To1.authMethod)
 
-	// Client 3 → Instance 2 (bearer client → noAuth server)
 	t.Log("   Client 3 → Instance 2 (no auth needed)...")
 	client3To2 := NewClient(workerASrv.Endpoint(), "", WithBearerToken(testJWT))
 	card2, err := client3To2.Discover(ctx)
@@ -244,7 +185,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Log("   ✅ Client 3 → Instance 2: no auth needed")
 
-	// Client 3 → Instance 3 (bearer client → bearer server)
 	t.Log("   Client 3 → Instance 3 (bearer token auth)...")
 	client3To3 := NewClient(workerBSrv.Endpoint(), "", WithBearerToken(testJWT))
 	card3, err := client3To3.Discover(ctx)
@@ -262,7 +202,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Log("   ✅ Client 3 → Instance 3: bearer token negotiated")
 
-	// Client 4 → Instance 1 (mTLS client → apiKey server, using apiKey)
 	t.Log("   Client 4 → Instance 1 (apiKey auth, mTLS client)...")
 	client4To1 := NewClient(hubSrv.Endpoint(), meshAPIKey1, WithMTLS(&tls.Config{
 		Certificates: []tls.Certificate{
@@ -278,7 +217,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Logf("   ✅ Client 4 → Instance 1: %s negotiated", client4To1.authMethod)
 
-	// Client 4 → Instance 4 (mTLS client → mTLS server)
 	t.Log("   Client 4 → Instance 4 (mTLS auth)...")
 	client4To4 := NewClient(workerCSrv.Endpoint(), "",
 		WithMTLS(&tls.Config{
@@ -303,7 +241,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Log("   ✅ Client 4 → Instance 4: mTLS negotiated")
 
-	// Client 5 → Instance 1 (different apiKey client → apiKey server)
 	t.Log("   Client 5 → Instance 1 (apiKey auth, different key)...")
 	client5To1 := NewClient(hubSrv.Endpoint(), meshAPIKey1)
 	_, err = client5To1.Discover(ctx)
@@ -315,12 +252,8 @@ func TestFiveInstanceMesh(t *testing.T) {
 	}
 	t.Log("   ✅ Client 5 → Instance 1: apiKey negotiated")
 
-	// =======================================================================
-	// Phase 2: Verify auth by sending raw HTTP requests
-	// =======================================================================
 	t.Log("\n📋 Phase 2: Auth verification via HTTP requests")
 
-	// Client 2 (apiKey) → Instance 1 (apiKey server)
 	t.Log("   Client 2 → Instance 1: authenticated request...")
 	resp2 := doAuthenticatedRequest(t, ctx, hubSrv.Endpoint(), "apiKey", meshAPIKey1, "")
 	if resp2.StatusCode != 200 {
@@ -329,7 +262,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Log("   ✅ apiKey → apiKey server: 200 OK")
 	}
 
-	// Client 3 (bearer) → Instance 3 (bearer server)
 	t.Log("   Client 3 → Instance 3: authenticated request...")
 	resp3 := doAuthenticatedRequest(t, ctx, workerBSrv.Endpoint(), "bearer", "", testJWT)
 	if resp3.StatusCode != 200 {
@@ -338,7 +270,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Log("   ✅ bearer → bearer server: 200 OK")
 	}
 
-	// Client 3 (no auth) → Instance 2 (no auth server)
 	t.Log("   Client 3 → Instance 2: no-auth request...")
 	resp4 := doAuthenticatedRequest(t, ctx, workerASrv.Endpoint(), "", "", "")
 	if resp4.StatusCode != 200 {
@@ -347,7 +278,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Log("   ✅ noAuth → noAuth server: 200 OK")
 	}
 
-	// Client 4 (mTLS) → Instance 4 (mTLS server)
 	t.Log("   Client 4 → Instance 4: mTLS request...")
 	resp5 := doMTLSRequest(t, ctx, workerCSrv.Endpoint(), certDir)
 	if resp5.StatusCode != 200 {
@@ -356,12 +286,8 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Log("   ✅ mTLS → mTLS server: 200 OK")
 	}
 
-	// =======================================================================
-	// Phase 3: Negative tests — wrong credentials rejected
-	// =======================================================================
 	t.Log("\n📋 Phase 3: Negative tests (wrong credentials)")
 
-	// Wrong API key → Instance 1
 	t.Log("   Wrong apiKey → Instance 1...")
 	wrongResp := doAuthenticatedRequest(t, ctx, hubSrv.Endpoint(), "apiKey", "wrong-key-xxx", "")
 	if wrongResp.StatusCode == 200 {
@@ -370,7 +296,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Logf("   ✅ Rejected: status %d", wrongResp.StatusCode)
 	}
 
-	// No auth → Instance 1 (which requires auth)
 	t.Log("   No auth → Instance 1...")
 	noAuthResp := doAuthenticatedRequest(t, ctx, hubSrv.Endpoint(), "", "", "")
 	if noAuthResp.StatusCode == 200 {
@@ -379,7 +304,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Logf("   ✅ Rejected: status %d", noAuthResp.StatusCode)
 	}
 
-	// Expired JWT → Instance 3
 	t.Log("   Expired JWT → Instance 3...")
 	expiredJWT := createTestJWT(t, "test-client", "https://example.com", -time.Hour)
 	expiredResp := doAuthenticatedRequest(t, ctx, workerBSrv.Endpoint(), "bearer", "", expiredJWT)
@@ -389,9 +313,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 		t.Logf("   ✅ Rejected: status %d", expiredResp.StatusCode)
 	}
 
-	// =======================================================================
-	// Summary
-	// =======================================================================
 	t.Log("\n" + "════════════════════════════════════════════════════════════════")
 	t.Log("  ✅ Five-Instance Mesh Test PASSED")
 	t.Log("════════════════════════════════════════════════════════════════")
@@ -412,11 +333,6 @@ func TestFiveInstanceMesh(t *testing.T) {
 	t.Log("    expired   → bearer server  ✅ rejected")
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-// certKeyPair holds a generated certificate and its private key.
 type certKeyPair struct {
 	Cert *x509.Certificate
 	Key  *rsa.PrivateKey

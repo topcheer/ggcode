@@ -18,19 +18,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// ---------------------------------------------------------------------------
-// Multi-Agent Collaboration Test
-//
-// Design principle: give PM agent a HIGH-LEVEL requirement.
-// PM's LLM must AUTONOMOUSLY decide:
-//   - What to delegate to which worker
-//   - In what order (respecting dependencies)
-//   - How to handle failures
-//
-// We do NOT specify a2a_remote parameters in the prompt.
-// The LLM must figure out the tool calls itself.
-// ---------------------------------------------------------------------------
-
 const mAPIKey = "ggcode-a2a-test-key-2025"
 
 type agentNode struct {
@@ -94,9 +81,8 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 		remoteTool := NewRemoteTool(reg, mAPIKey)
 		registry.Register(remoteTool)
 
-		// First agent (coordinator) gets longer timeout since it waits for all workers.
 		taskTimeout := 5 * time.Minute
-		if len(c.nodes) == 0 { // first node = coordinator
+		if len(c.nodes) == 0 {
 			taskTimeout = 15 * time.Minute
 		}
 
@@ -134,7 +120,6 @@ func (c *testCluster) dispatchAndWait(ctx context.Context, target, skill, messag
 	if err != nil {
 		c.t.Fatalf("[%s] send: %v", target, err)
 	}
-	// Use ctx deadline for polling.
 	deadline, ok := ctx.Deadline()
 	timeout := 10 * time.Minute
 	if ok {
@@ -185,7 +170,6 @@ func (c *testCluster) logTask(target string, task *Task) {
 	}
 }
 
-// countGoFiles counts .go files with real content (>20 bytes) in a worker's dir.
 func (c *testCluster) countGoFiles(target string) int {
 	c.t.Helper()
 	n := c.node(target)
@@ -202,7 +186,6 @@ func (c *testCluster) countGoFiles(target string) int {
 	return count
 }
 
-// scanWorkerOutput lists all files created by a worker.
 func (c *testCluster) scanWorkerOutput(target string) []string {
 	c.t.Helper()
 	n := c.node(target)
@@ -226,12 +209,6 @@ func truncStr(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// ===========================================================================
-// Test Scenarios — HIGH-LEVEL requirements, LLM decides the rest
-// ===========================================================================
-
-// Scenario 1: 2 agents — PM + engineer
-// PM receives a vague requirement, must figure out what to tell the engineer.
 func TestMultiAgent_2_ArchitectAndEngineer(t *testing.T) {
 	c := newCluster(t, []struct{ Name, Role string }{
 		{"architect", "software architect who designs systems and delegates implementation to engineers"},
@@ -242,7 +219,6 @@ func TestMultiAgent_2_ArchitectAndEngineer(t *testing.T) {
 
 	t.Log("=== Scenario: Architect receives vague requirement, must design + delegate ===")
 
-	// Give architect a REAL-WORLD requirement — no tool call instructions.
 	task := c.dispatchAndWait(ctx, "architect", "full-task",
 		"I need a URL shortener service. It should accept a long URL and return a short code, "+
 			"and redirect short codes back to the original URL. "+
@@ -255,7 +231,6 @@ func TestMultiAgent_2_ArchitectAndEngineer(t *testing.T) {
 		t.Fatalf("architect failed: %s", task.Status.State)
 	}
 
-	// Verify: engineer's workspace should have at least 1 .go file.
 	goFiles := c.countGoFiles("engineer")
 	if goFiles == 0 {
 		t.Error("engineer produced no .go files — architect may not have delegated properly")
@@ -264,7 +239,6 @@ func TestMultiAgent_2_ArchitectAndEngineer(t *testing.T) {
 	}
 }
 
-// Scenario 2: 3 agents — PM + backend + frontend
 func TestMultiAgent_3_FullStack(t *testing.T) {
 	c := newCluster(t, []struct{ Name, Role string }{
 		{"pm", "product manager who coordinates backend and frontend teams"},
@@ -289,7 +263,6 @@ func TestMultiAgent_3_FullStack(t *testing.T) {
 		t.Fatalf("PM failed: %s", task.Status.State)
 	}
 
-	// Both workers should have files.
 	backendFiles := c.countGoFiles("backend")
 	frontendFiles := c.scanWorkerOutput("frontend")
 
@@ -308,8 +281,6 @@ func TestMultiAgent_3_FullStack(t *testing.T) {
 	}
 }
 
-// Scenario 3: 5 agents — microservice system
-// PM must figure out the architecture and delegate to the right agents.
 func TestMultiAgent_5_Microservices(t *testing.T) {
 	c := newCluster(t, []struct{ Name, Role string }{
 		{"tech-lead", "tech lead who designs microservice architecture and delegates to service teams"},
@@ -340,7 +311,6 @@ func TestMultiAgent_5_Microservices(t *testing.T) {
 		t.Fatalf("tech-lead failed: %s", task.Status.State)
 	}
 
-	// Verify: at least 3 out of 4 teams should have produced files.
 	var teamsWithCode int
 	for _, name := range []string{"user-team", "order-team", "payment-team", "infra-team"} {
 		count := c.countGoFiles(name)
@@ -360,7 +330,6 @@ func TestMultiAgent_5_Microservices(t *testing.T) {
 	}
 }
 
-// Scenario 4: Cross-review — worker A writes code, worker B reviews and fixes it.
 func TestMultiAgent_CrossReview(t *testing.T) {
 	c := newCluster(t, []struct{ Name, Role string }{
 		{"lead", "team lead who assigns tasks and coordinates reviews"},
@@ -385,11 +354,9 @@ func TestMultiAgent_CrossReview(t *testing.T) {
 		t.Fatalf("lead task failed: %s", task.Status.State)
 	}
 
-	// Verify: junior should have written something.
 	juniorFiles := c.scanWorkerOutput("junior")
 	t.Logf("Junior created: %v", juniorFiles)
 
-	// Verify: reviewer should have created a reviewed/fixed version.
 	reviewerFiles := c.scanWorkerOutput("reviewer")
 	t.Logf("Reviewer created: %v", reviewerFiles)
 

@@ -2,11 +2,6 @@ package checkpoint
 
 import "testing"
 
-// TestModifiedFilesIsNewSurvivesEviction pins #1539 case D: a file's IsNew
-// answer must survive FIFO eviction of the checkpoint that recorded its
-// creation. The manager remembers each file's first-recorded Existed value,
-// so the first surviving (mid-life) checkpoint no longer misreports an
-// agent-created file as pre-existing.
 func TestModifiedFilesIsNewSurvivesEviction(t *testing.T) {
 	m := NewManager(3)
 	m.StartRun("r1")
@@ -14,8 +9,6 @@ func TestModifiedFilesIsNewSurvivesEviction(t *testing.T) {
 	m.SaveWithExistence("created.txt", "v1", "v2", "edit_file", true)
 	m.SaveWithExistence("created.txt", "v2", "v3", "edit_file", true)
 
-	// maxCheckpoints=3: this r2 entry evicts the first non-active-run
-	// checkpoint — created.txt's creation record (r1).
 	m.StartRun("r2")
 	m.Save("other.txt", "x", "y", "edit_file")
 
@@ -34,8 +27,6 @@ func TestModifiedFilesIsNewSurvivesEviction(t *testing.T) {
 	}
 }
 
-// Control: the same shape without eviction keeps reporting IsNew correctly
-// for both created and pre-existing files.
 func TestModifiedFilesIsNewWithoutEviction(t *testing.T) {
 	m := NewManager(50)
 	m.StartRun("r1")

@@ -37,20 +37,10 @@ type Store struct {
 }
 
 var (
-	// storeMuRegistryMu guards storeMuRegistry itself.
 	storeMuRegistryMu sync.Mutex
-	// storeMuRegistry keys store paths to a mutex shared by EVERY Store
-	// instance bound to that path (#1505 case 3): DefaultStore() hands out a
-	// fresh instance per call, so a per-instance s.mu never serialized
-	// anything — overlapping background-refresh, login and panel saves ran
-	// interleaved load-modify-write cycles that silently rolled back rotated
-	// refresh tokens or dropped concurrent providers' entries.
-	storeMuRegistry = map[string]*sync.Mutex{}
+	storeMuRegistry   = map[string]*sync.Mutex{}
 )
 
-// muFor returns the mutex shared by all Store instances using the same
-// path, so separate instances (DefaultStore is per-call) still serialize
-// their mutations.
 func muFor(path string) *sync.Mutex {
 	storeMuRegistryMu.Lock()
 	defer storeMuRegistryMu.Unlock()
@@ -85,7 +75,6 @@ func (s *Store) Load(providerID string) (*Info, error) {
 	return s.loadLocked(providerID)
 }
 
-// loadLocked is the internal unlocked version of Load.
 func (s *Store) loadLocked(providerID string) (*Info, error) {
 	all, err := s.loadAll()
 	if err != nil {
@@ -137,13 +126,6 @@ func (s *Store) Delete(providerID string) error {
 	return s.withFileLock(s.saveAll, all)
 }
 
-// withFileLock takes a best-effort cross-process exclusive lock around a
-// mutating store write (#1505 case 3): the in-process shared mutex cannot
-// see the desktop/daemon/TUI processes the product explicitly supports
-// running in parallel, whose interleaved load-modify-write cycles lose
-// updates the same way. Following the FileLock contract (#1337), lock
-// failure fails OPEN: the atomic rename still prevents torn files, only
-// update serialization is lost, and persistence never hard-fails.
 func (s *Store) withFileLock(fn func(map[string]Info) error, all map[string]Info) error {
 	unlock, err := util.FileLock(s.path + ".lock")
 	if err != nil {
@@ -154,7 +136,6 @@ func (s *Store) withFileLock(fn func(map[string]Info) error, all map[string]Info
 	return fn(all)
 }
 
-// IsExpired returns true if the token is expired or will expire within 5 minutes.
 func (i *Info) IsExpired() bool {
 	if i == nil {
 		return true
@@ -177,8 +158,6 @@ func (s *Store) HasUsableToken(providerID string) (bool, error) {
 		return false, nil
 	}
 	if !info.ExpiresAt.IsZero() && time.Now().After(info.ExpiresAt) {
-		// Add 30s clock skew tolerance - if token expired less than 30s ago,
-		// consider it still valid to avoid race conditions at the exact expiration moment
 		if time.Now().Sub(info.ExpiresAt) < 30*time.Second {
 			return true, nil
 		}
@@ -219,10 +198,6 @@ func (s *Store) saveAll(all map[string]Info) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("creating auth store directory: %w", err)
 	}
-	// #1505 case 3: the fixed ".tmp" name let two writers (processes or
-	// unlocked instances) O_TRUNC the same scratch file concurrently, mixing
-	// two JSON documents before rename and permanently corrupting the store.
-	// CreateTemp gives every writer its own scratch file, created 0600.
 	f, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("creating auth store temp file: %w", err)

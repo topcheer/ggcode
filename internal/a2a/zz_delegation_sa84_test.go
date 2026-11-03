@@ -11,11 +11,6 @@ import (
 	"testing"
 )
 
-// sa-84 (A-JWT-lite): delegation declarations in message metadata.
-// These tests pin the client-side injection contract and the server-side
-// policy gate. Default behavior (no SetDelegation / zero policy) MUST be
-// byte-identical to before the feature existed.
-
 func newDelegationCaptureServer(t *testing.T, body *atomic.Value) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,12 +138,10 @@ func TestServerRejectsDepthExceeded(t *testing.T) {
 		t.Fatalf("unexpected error body: %s", rr.Body.String())
 	}
 
-	// Within bound passes.
 	rr2 := httptest.NewRecorder()
 	if !srv.checkDelegation(rr2, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(`{"ggcode.dev/delegation":{"delegation-depth":2}}`)}) {
 		t.Fatalf("depth 2 with max 2 must pass, body: %s", rr2.Body.String())
 	}
-	// No declaration at all passes (depth check only constrains declared chains).
 	rr3 := httptest.NewRecorder()
 	if !srv.checkDelegation(rr3, json.RawMessage(`1`), &Message{}) {
 		t.Fatalf("bare message must pass a depth-only policy, body: %s", rr3.Body.String())
@@ -158,34 +151,28 @@ func TestServerRejectsDepthExceeded(t *testing.T) {
 func TestServerDelegationPolicyDisabledByDefault(t *testing.T) {
 	srv := &Server{}
 
-	// Declared message passes.
 	rr := httptest.NewRecorder()
 	if !srv.checkDelegation(rr, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(`{"ggcode.dev/on-behalf-of":"eve","ggcode.dev/delegation":{"delegation-depth":99}}`)}) {
 		t.Fatalf("default policy must accept declared messages, body: %s", rr.Body.String())
 	}
-	// Bare message passes — old peers keep working.
 	rr2 := httptest.NewRecorder()
 	if !srv.checkDelegation(rr2, json.RawMessage(`1`), &Message{}) {
 		t.Fatalf("default policy must accept bare messages, body: %s", rr2.Body.String())
 	}
 
-	// RequireOnBehalfOf rejects messages without the declaration...
 	srv2 := &Server{delegation: DelegationPolicy{RequireOnBehalfOf: true}}
 	rr3 := httptest.NewRecorder()
 	if srv2.checkDelegation(rr3, json.RawMessage(`1`), &Message{}) {
 		t.Fatal("RequireOnBehalfOf must reject bare messages")
 	}
-	// ...including an empty-string declaration.
 	rr4 := httptest.NewRecorder()
 	if srv2.checkDelegation(rr4, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(`{"ggcode.dev/on-behalf-of":""}`)}) {
 		t.Fatal("RequireOnBehalfOf must reject empty on-behalf-of")
 	}
-	// ...and accepts a real declaration.
 	rr5 := httptest.NewRecorder()
 	if !srv2.checkDelegation(rr5, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(`{"ggcode.dev/on-behalf-of":"alice"}`)}) {
 		t.Fatalf("RequireOnBehalfOf must accept declared messages, body: %s", rr5.Body.String())
 	}
-	// #4168: JSON null or any non-string value is NOT a valid declaration.
 	for name, raw := range map[string]string{
 		"json null":   `{"ggcode.dev/on-behalf-of":null}`,
 		"number":      `{"ggcode.dev/on-behalf-of":123}`,

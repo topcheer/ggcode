@@ -16,7 +16,6 @@ func TestUndoRecordsCorrection(t *testing.T) {
 	m.Save(fp, "old", "new", "edit_file")
 	os.WriteFile(fp, []byte("new"), 0644)
 
-	// No corrections before undo.
 	if c := m.RecentCorrections(); c != nil {
 		t.Fatalf("expected nil corrections before undo, got %v", c)
 	}
@@ -41,7 +40,6 @@ func TestUndoRecordsCorrection(t *testing.T) {
 		t.Errorf("expected run_id run-1, got %s", c.RunID)
 	}
 
-	// Verify the returned checkpoint matches.
 	if cp.FilePath != fp {
 		t.Errorf("expected checkpoint file %s, got %s", fp, cp.FilePath)
 	}
@@ -77,7 +75,6 @@ func TestUndoRunRecordsCorrection(t *testing.T) {
 	if len(c.Files) != 2 {
 		t.Errorf("expected 2 files in correction, got %d", len(c.Files))
 	}
-	// RunID should be the reverted run.
 	if c.RunID != "run-1" {
 		t.Errorf("expected run_id run-1, got %s", c.RunID)
 	}

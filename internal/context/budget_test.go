@@ -59,28 +59,23 @@ func TestAnalyzeBudget_BasicCategorization(t *testing.T) {
 		t.Fatal("expected non-nil breakdown")
 	}
 
-	// Verify total > 0
 	if bd.TotalTokens == 0 {
 		t.Error("expected non-zero total tokens")
 	}
 
-	// Find categories
 	catMap := make(map[BudgetCategory]CategoryTokens)
 	for _, c := range bd.Categories {
 		catMap[c.Category] = c
 	}
 
-	// System category should exist
 	if _, ok := catMap[CategorySystem]; !ok {
 		t.Error("expected system category")
 	}
 
-	// User category should exist
 	if _, ok := catMap[CategoryUser]; !ok {
 		t.Error("expected user category")
 	}
 
-	// Tool call category should exist
 	if tc, ok := catMap[CategoryToolCall]; ok {
 		if tc.Count == 0 {
 			t.Error("expected at least 1 tool call")
@@ -89,7 +84,6 @@ func TestAnalyzeBudget_BasicCategorization(t *testing.T) {
 		t.Error("expected tool_call category")
 	}
 
-	// Tool result category should exist
 	if tr, ok := catMap[CategoryToolResult]; ok {
 		if tr.Count == 0 {
 			t.Error("expected at least 1 tool result")
@@ -113,12 +107,10 @@ func TestAnalyzeBudget_TopMessages(t *testing.T) {
 		t.Fatal("expected top messages")
 	}
 
-	// The long message should be first
 	if bd.TopMessages[0].Tokens < bd.TopMessages[len(bd.TopMessages)-1].Tokens {
 		t.Error("expected top messages sorted by tokens descending")
 	}
 
-	// Verify the long message has more tokens
 	if bd.TopMessages[0].Tokens <= 10 {
 		t.Errorf("expected largest message to have many tokens, got %d", bd.TopMessages[0].Tokens)
 	}
@@ -155,7 +147,6 @@ func TestAnalyzeBudget_LargestToolResults(t *testing.T) {
 		t.Fatal("expected largest tool results")
 	}
 
-	// The large result should be first
 	if bd.LargestToolResults[0].Tokens < 100 {
 		t.Errorf("expected largest tool result to have many tokens, got %d",
 			bd.LargestToolResults[0].Tokens)
@@ -170,7 +161,6 @@ func TestAnalyzeBudget_Percentage(t *testing.T) {
 
 	bd := AnalyzeBudget(msgs)
 
-	// Percentages should sum to ~100%
 	sysPct := bd.Percentage(CategorySystem)
 	userPct := bd.Percentage(CategoryUser)
 
@@ -186,14 +176,13 @@ func TestAnalyzeBudget_Percentage(t *testing.T) {
 }
 
 func TestAnalyzeBudget_TokenEstimation(t *testing.T) {
-	// ~4 chars per token
-	text := "abcdefgh" // 8 chars = 2 tokens
+	text := "abcdefgh"
 	tokens := estimateTokensChars(text)
 	if tokens != 2 {
 		t.Errorf("expected 2 tokens for 8 chars, got %d", tokens)
 	}
 
-	text = "abc" // 3 chars = 1 token (rounded up)
+	text = "abc"
 	tokens = estimateTokensChars(text)
 	if tokens != 1 {
 		t.Errorf("expected 1 token for 3 chars, got %d", tokens)
@@ -255,7 +244,6 @@ func TestAnalyzeBudget_ErrorToolResult(t *testing.T) {
 		t.Fatal("expected top messages")
 	}
 
-	// Preview should indicate error
 	if !strings.Contains(bd.TopMessages[0].Preview, "error") {
 		t.Errorf("expected preview to indicate error, got: %s", bd.TopMessages[0].Preview)
 	}
@@ -286,7 +274,7 @@ func TestMessagePreview_Truncation(t *testing.T) {
 	}
 
 	preview := messagePreview(longMsg)
-	if len(preview) > 83 { // 80 + "..."
+	if len(preview) > 83 {
 		t.Errorf("preview too long: %d chars", len(preview))
 	}
 	if !strings.HasSuffix(preview, "...") {

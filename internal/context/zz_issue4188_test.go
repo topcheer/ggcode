@@ -6,10 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4188: a vision-fallback retry re-projects the same user turn (image ->
-// text-only); the caller removes the original before retrying so the turn
-// is not doubled. RemoveLastUserMessage must drop the trailing REAL user
-// message, skip tool_result carriers, and be a no-op on empty history.
 func TestRemoveLastUserMessage(t *testing.T) {
 	t.Run("removes trailing real user message", func(t *testing.T) {
 		m := NewManager(128000)
@@ -19,7 +15,6 @@ func TestRemoveLastUserMessage(t *testing.T) {
 		if !m.RemoveLastUserMessage() {
 			t.Fatal("expected removal of trailing user message")
 		}
-		// The retry re-adds the projection; the turn must appear exactly once.
 		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2-textonly"}}})
 		var userCount int
 		for _, msg := range m.Messages() {
@@ -36,7 +31,6 @@ func TestRemoveLastUserMessage(t *testing.T) {
 		m := NewManager(128000)
 		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
 		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
-		// Carrier inserted by ReconcileToolCalls sits at the tail.
 		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
 			{Type: "tool_result", ToolID: "t1"},
 		}})

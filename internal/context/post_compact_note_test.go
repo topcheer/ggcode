@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// buildFiveMessageContext assembles a minimal 5-message conversation
-// (same shape as the pinned-context tests) on cm.
 func buildFiveMessageContext(cm *Manager) {
 	sys := provider.Message{Role: "system"}
 	sys.Content = []provider.ContentBlock{{Type: "text", Text: "System prompt."}}
@@ -47,9 +45,6 @@ func countSystemMsg(text string, msgs []provider.Message) int {
 	return n
 }
 
-// TestPostCompactNoteSurvivesDirectSummarize verifies that the registered
-// post-compaction note (task-board rehydration) is re-materialized right
-// after the summary on the direct Summarize path (PTL recovery, /compact).
 func TestPostCompactNoteSurvivesDirectSummarize(t *testing.T) {
 	cm := NewManager(10000)
 	buildFiveMessageContext(cm)
@@ -75,9 +70,6 @@ func TestPostCompactNoteSurvivesDirectSummarize(t *testing.T) {
 	}
 }
 
-// TestPostCompactNoteAppliedViaApplyCompactResult verifies the note is also
-// re-materialized on the ApplyCompactResult path (the precompact consumer),
-// not just the direct Summarize path.
 func TestPostCompactNoteAppliedViaApplyCompactResult(t *testing.T) {
 	cm := NewManager(10000)
 	buildFiveMessageContext(cm)
@@ -120,8 +112,6 @@ func TestPostCompactNoteAppliedViaApplyCompactResult(t *testing.T) {
 	}
 }
 
-// TestPostCompactNoteStaleReplaced verifies a second compaction replaces
-// the stale note instead of accumulating copies.
 func TestPostCompactNoteStaleReplaced(t *testing.T) {
 	cm := NewManager(10000)
 	buildFiveMessageContext(cm)
@@ -146,12 +136,9 @@ func TestPostCompactNoteStaleReplaced(t *testing.T) {
 	}
 }
 
-// TestPostCompactNoteEmptyProviderOmits verifies a nil provider or an
-// empty return injects nothing (and does not leave stale copies).
 func TestPostCompactNoteEmptyProviderOmits(t *testing.T) {
 	cm := NewManager(10000)
 	buildFiveMessageContext(cm)
-	// No provider set at all.
 	if err := cm.Summarize(context.Background(), &mockProvider{}); err != nil {
 		t.Fatalf("Summarize failed: %v", err)
 	}
@@ -159,7 +146,6 @@ func TestPostCompactNoteEmptyProviderOmits(t *testing.T) {
 		t.Fatalf("expected no note without provider, got %d", n)
 	}
 
-	// Empty-returning provider after a note existed: stale copy removed.
 	board := "temporary board"
 	cm.SetPostCompactNoteProvider(func() string { return board })
 	if err := cm.Summarize(context.Background(), &mockProvider{}); err != nil {

@@ -1,10 +1,5 @@
 package context
 
-// #3797 probe: the removed-count in RemoveLastAssistantGroup's debug log
-// is computed BEFORE truncation. Functional pin: with a 6-message history
-// the truncation removes exactly oldLen-(lastUserIdx+1) messages; the
-// precomputed `removed` variable carries that same value into the log.
-
 import (
 	"testing"
 
@@ -25,11 +20,11 @@ func TestIssue3797_TruncationRemovesFullTailCount(t *testing.T) {
 		t.Fatalf("prompt = %q", got)
 	}
 	remaining := len(m.Messages())
-	wantRemoved := oldLen - remaining // exactly what the log must report
-	if wantRemoved != 5 {             // r1 + two carriers + r2 + trailing carrier (carriers skip in the user scan)
+	wantRemoved := oldLen - remaining
+	if wantRemoved != 5 {
 		t.Fatalf("fixture: expected 5 removed messages, math says %d", wantRemoved)
 	}
-	if remaining != 1 { // only the real user prompt survives
+	if remaining != 1 {
 		t.Fatalf("remaining = %d, want 1", remaining)
 	}
 }

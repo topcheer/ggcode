@@ -8,7 +8,6 @@ import (
 )
 
 func TestClientManagerNew(t *testing.T) {
-	// Create manager with empty PATH (no agents found)
 	t.Setenv("PATH", t.TempDir())
 	mgr := NewClientManager(t.TempDir(), nil)
 
@@ -42,12 +41,10 @@ func TestClientManagerCloseAll(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	mgr := NewClientManager(t.TempDir(), nil)
 
-	// CloseAll should not panic even with no agents
 	mgr.CloseAll()
 }
 
 func TestClientManagerDiscoverWithAgents(t *testing.T) {
-	// Create fake agent binaries
 	dir := t.TempDir()
 	for _, name := range []string{"copilot"} {
 		path := dir + "/" + name
@@ -111,7 +108,6 @@ func TestClientGetWithoutStart(t *testing.T) {
 		t.Errorf("expected description = %q, got %q", "Test agent", client.Description())
 	}
 
-	// Starting a nonexistent binary should fail
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

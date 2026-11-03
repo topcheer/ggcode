@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #2897: a fresh stateless agent must receive the full task history, not
-// just the last follow-up message.
 func TestBuildTranscriptPromptMultiTurn(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Parts: []Part{{Kind: "text", Text: "Fix the parser bug in cmd/foo.go"}}},
@@ -28,15 +26,11 @@ func TestBuildTranscriptPromptMultiTurn(t *testing.T) {
 	}
 }
 
-// Single-message histories degenerate to the bare request (old behavior).
 func TestBuildTranscriptPromptSingle(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Parts: []Part{{Kind: "text", Text: "review internal/bar.go"}}},
 	}
 	got := buildTranscriptPrompt(msgs)
-	// r406: single-message histories keep the payload verbatim (no
-	// conversation scaffolding) but are still wrapped as untrusted peer
-	// content - a lone peer message is exactly as untrusted as a transcript.
 	if !strings.Contains(got, "review internal/bar.go") {
 		t.Errorf("payload lost: %q", got)
 	}
@@ -45,11 +39,10 @@ func TestBuildTranscriptPromptSingle(t *testing.T) {
 	}
 }
 
-// Empty-tail messages must not leak empty current-request sections.
 func TestBuildTranscriptPromptEmptyTail(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Parts: []Part{{Kind: "text", Text: "task"}}},
-		{Role: "user", Parts: []Part{}}, // empty follow-up
+		{Role: "user", Parts: []Part{}},
 	}
 	got := buildTranscriptPrompt(msgs)
 	if strings.Contains(got, "Current request") {

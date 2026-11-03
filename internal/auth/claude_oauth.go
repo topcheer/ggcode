@@ -30,7 +30,6 @@ const (
 	claudeOAuthCallbackPath   = "/callback"
 )
 
-// ClaudeOAuthFlow holds the state for an in-progress OAuth 2.0 + PKCE flow.
 type ClaudeOAuthFlow struct {
 	AutoURL      string
 	ManualURL    string
@@ -48,15 +47,12 @@ type claudeCallbackResult struct {
 	Error       error
 }
 
-// ClaudeTokenResponse holds the parsed token exchange response.
 type ClaudeTokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
 }
-
-// --- PKCE helpers ---
 
 func generateCodeVerifier() (string, error) {
 	b := make([]byte, 32)
@@ -83,14 +79,9 @@ func base64urlEncode(data []byte) string {
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
 }
 
-// --- Local callback server ---
-
-// startClaudeCallbackListenerNet starts the local HTTP server on a random port.
 func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, error) {
 	ch := make(chan claudeCallbackResult, 1)
 
-	// codeDelivered latches on the first successful callback so the
-	// authorization code is single-consumption (#560).
 	var codeDelivered atomic.Bool
 
 	mux := http.NewServeMux()
@@ -107,17 +98,12 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 		errParam := q.Get("error")
 
 		if errParam != "" {
-			// State validation required even in error branch (#599): prevents
-			// single-packet abortion of in-flight auth flows via crafted
-			// /callback?error= requests without a valid state parameter.
 			if state != expectedState {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, "Invalid callback: state mismatch in error response")
 				return
 			}
-			// Single-consumption guard (#560): reject duplicate error callbacks
-			// after a code has been delivered or error already processed.
 			if codeDelivered.Load() {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusGone)
@@ -146,11 +132,6 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 			return
 		}
 
-		// Single-consumption guard (#560): the authorization code is delivered
-		// exactly once. Previously the success branch left the listener running
-		// with no completion flag, so while CompleteAnthropicOAuth was still in
-		// the token-exchange step (up to 30s) a second callback carrying the
-		// same valid state could inject another code into the channel.
 		if !codeDelivered.CompareAndSwap(false, true) {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusGone)
@@ -158,7 +139,6 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 			return
 		}
 
-		// Redirect browser to success page
 		w.Header().Set("Location", claudeOAuthSuccessURL)
 		w.WriteHeader(http.StatusFound)
 		fmt.Fprint(w, "Authorization successful. You can close this tab.")
@@ -168,10 +148,6 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 		default:
 		}
 
-		// Stop accepting further callbacks immediately: the deferred
-		// flow.Close() in CompleteAnthropicOAuth only runs after the token
-		// exchange. Async because http.Server.Shutdown waits for in-flight
-		// handlers (including this one) to return before completing.
 		safego.Go("auth.claudeOAuth.shutdown", func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -179,7 +155,6 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 		})
 	})
 
-	// Use net.Listen to get a random port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("starting callback listener: %w", err)
@@ -196,7 +171,6 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 	return flow, nil
 }
 
-// StartClaudeOAuthFlow initiates a new OAuth 2.0 + PKCE flow.
 func StartClaudeOAuthFlow(_ context.Context) (*ClaudeOAuthFlow, error) {
 	verifier, err := generateCodeVerifier()
 	if err != nil {
@@ -217,7 +191,6 @@ func StartClaudeOAuthFlow(_ context.Context) (*ClaudeOAuthFlow, error) {
 	flow.CodeVerifier = verifier
 	flow.State = state
 
-	// Build automatic URL (localhost redirect)
 	params := url.Values{}
 	params.Set("code", "true")
 	params.Set("client_id", claudeOAuthClientID)
@@ -229,7 +202,6 @@ func StartClaudeOAuthFlow(_ context.Context) (*ClaudeOAuthFlow, error) {
 	params.Set("state", state)
 	flow.AutoURL = claudeOAuthAuthorizeURL + "?" + params.Encode()
 
-	// Build manual URL (platform redirect)
 	manualParams := url.Values{}
 	manualParams.Set("code", "true")
 	manualParams.Set("client_id", claudeOAuthClientID)
@@ -244,7 +216,6 @@ func StartClaudeOAuthFlow(_ context.Context) (*ClaudeOAuthFlow, error) {
 	return flow, nil
 }
 
-// WaitForClaudeAuthCode waits for the authorization code from the local callback.
 func WaitForClaudeAuthCode(ctx context.Context, flow *ClaudeOAuthFlow) (string, bool, error) {
 	if flow == nil || flow.callbackCh == nil {
 		return "", false, fmt.Errorf("flow is nil or not initialized")
@@ -258,7 +229,6 @@ func WaitForClaudeAuthCode(ctx context.Context, flow *ClaudeOAuthFlow) (string, 
 	}
 }
 
-// ExchangeClaudeCodeForTokens exchanges an authorization code for OAuth tokens.
 func ExchangeClaudeCodeForTokens(ctx context.Context, code, codeVerifier string, isManual bool, port int) (*ClaudeTokenResponse, error) {
 	redirectURI := fmt.Sprintf("http://localhost:%d%s", port, claudeOAuthCallbackPath)
 	if isManual {
@@ -311,7 +281,6 @@ func ExchangeClaudeCodeForTokens(ctx context.Context, code, codeVerifier string,
 	return &tokenResp, nil
 }
 
-// RefreshClaudeToken refreshes an expired access token using the refresh token.
 func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error) {
 	body := map[string]interface{}{
 		"grant_type":    "refresh_token",
@@ -367,7 +336,6 @@ func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error)
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
 	}
-	// Preserve existing refresh token if not returned
 	if info.RefreshToken == "" {
 		info.RefreshToken = refreshToken
 	}
@@ -375,18 +343,11 @@ func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error)
 	return info, nil
 }
 
-// Close shuts down the callback HTTP server. If another goroutine is
-// blocked in WaitForClaudeAuthCode on this flow, a cancellation result is
-// sent to the callback channel so the waiter returns immediately instead
-// of hanging until its context timeout (#295).
 func (f *ClaudeOAuthFlow) Close() {
 	if f == nil {
 		return
 	}
 	if f.callbackCh != nil {
-		// Non-blocking cancel signal: buffered channel with capacity 1; if a
-		// real callback result is already pending it wins, otherwise the
-		// waiter observes the cancellation and exits promptly.
 		select {
 		case f.callbackCh <- claudeCallbackResult{Error: fmt.Errorf("oauth flow closed")}:
 		default:

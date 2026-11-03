@@ -11,36 +11,23 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// MCPManager manages dynamically connected MCP servers for ACP sessions.
-// It connects servers, discovers their tools, registers them in the tool registry,
-// and provides cleanup on Close().
 type MCPManager struct {
 	clients  []*mcp.Client
 	adapters []*mcp.Adapter
 	registry *tool.Registry
 }
 
-// NewMCPManager creates a new MCP manager.
 func NewMCPManager(registry *tool.Registry) *MCPManager {
 	return &MCPManager{
 		registry: registry,
 	}
 }
 
-// ConnectServers starts and connects the given MCP servers.
-// Each server is initialized, its tools are discovered via tools/list,
-// and registered in the tool registry with "mcp__" prefix.
 func (m *MCPManager) ConnectServers(ctx context.Context, servers []MCPServer) error {
 	var failures []string
 	for _, srv := range servers {
 		if err := m.connectServer(ctx, srv); err != nil {
 			debug.Log("acp", "failed to connect MCP server %q: %v", srv.Name, err)
-			// #1797: this failure used to be debug-log-only - an ACP peer that
-			// legitimately mounted a type:"sse" server (per the stale upstream-spec
-			// comment on MCPServer.Type) got "unsupported transport" swallowed and
-			// a session that silently lacked the server's tools. Keep per-server
-			// isolation (one bad server must not kill the session) but surface the
-			// aggregate to the caller so the peer sees WHY tools are missing.
 			failures = append(failures, fmt.Sprintf("%s: %v", srv.Name, err))
 		}
 	}
@@ -50,7 +37,6 @@ func (m *MCPManager) ConnectServers(ctx context.Context, servers []MCPServer) er
 	return nil
 }
 
-// connectServer connects a single MCP server, initializes it, and registers tools.
 func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 	cfgSrv := acpMCPServerToConfig(srv)
 
@@ -59,26 +45,21 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 		return fmt.Errorf("starting MCP server %q: %w", srv.Name, err)
 	}
 
-	// Initialize the MCP session
 	if _, err := client.Initialize(ctx); err != nil {
 		client.Close()
 		return fmt.Errorf("initializing MCP server %q: %w", srv.Name, err)
 	}
 
-	// Discover tools
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		debug.Log("acp", "failed to list tools from %q: %v", srv.Name, err)
-		// Continue — server may not support tools
 	} else {
-		// Register tools via adapter
 		var adapter *mcp.Adapter
 		if srv.ReadOnly {
 			adapter = mcp.NewReadOnlyAdapter(srv.Name, client, tools)
 		} else {
 			adapter = mcp.NewAdapter(srv.Name, client, tools)
 		}
-		// sa-44: surface the server's initialize instructions on its tools.
 		adapter.SetServerInstructions(client.Instructions())
 		if err := adapter.RegisterTools(m.registry); err != nil {
 			debug.Log("acp", "failed to register tools from %q: %v", srv.Name, err)
@@ -90,19 +71,8 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 	return nil
 }
 
-// Close shuts down all connected MCP servers.
 func (m *MCPManager) Close() error {
 	var firstErr error
-	// #1477-A: unregister every tool these adapters registered BEFORE
-	// closing - the shared registry outlives the session, and orphaned
-	// mcp__name__* entries made same-named (or ANY later) sessions skip
-	// their own registration (adapter collision-skip) while exposing the
-	// DEAD tools of this session as hallucinated available. The plugin
-	// loader (mcp_loader.go) already did this; the ACP path didn't.
-	// #1594-A: unregister only what THESE adapters actually registered -
-	// ToolNames() includes collision-skipped names owned by a concurrent
-	// same-named session, and unregistering them cross-killed that
-	// session's live tools mid-prompt.
 	for _, a := range m.adapters {
 		for _, tn := range a.RegisteredNames() {
 			m.registry.Unregister(tn)
@@ -118,7 +88,6 @@ func (m *MCPManager) Close() error {
 	return firstErr
 }
 
-// acpMCPServerToConfig converts an ACP MCPServer to a config.MCPServerConfig.
 func acpMCPServerToConfig(srv MCPServer) config.MCPServerConfig {
 	env := make(map[string]string)
 	for _, e := range srv.Env {
@@ -134,22 +103,9 @@ func acpMCPServerToConfig(srv MCPServer) config.MCPServerConfig {
 	if transportType == "" && srv.Command != "" {
 		transportType = "stdio"
 	}
-	// #1606-B: a URL-only server (no type, no command) fell through with
-	// Type "" - the transport switch defaults to stdio and
-	// exec.Command("") fails on connect, with the per-server error
-	// swallowed (non-fatal by design) so the peer never learned the
-	// mount failed. URL presence implies streamable http.
 	if transportType == "" && srv.URL != "" {
 		transportType = "http"
 	}
-	// #1786 case 3: the config layer accepts "sse" as legal (validated
-	// alongside http), but the runtime transport switch only knows
-	// http/ws/stdio - a peer declaring {"type":"sse"} passed through
-	// verbatim, Start() returned unsupported, and ConnectServers merely
-	// debug-logged and continued: the mount failed with NO signal to the
-	// peer. Normalize SSE/streamable-http spellings to the http transport
-	// (the streamable-http protocol supersedes SSE and shares the URL
-	// client path).
 	switch strings.ToLower(transportType) {
 	case "sse", "streamable-http", "streamable_http", "https":
 		transportType = "http"

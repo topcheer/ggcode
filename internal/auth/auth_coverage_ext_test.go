@@ -26,10 +26,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// ---------------------------------------------------------------------------
-// exchangeCodeForToken
-// ---------------------------------------------------------------------------
-
 func TestExchangeCodeForToken_JSONResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -141,15 +137,10 @@ func TestExchangeCodeForToken_EmptyAccessToken(t *testing.T) {
 
 	cfg := A2AOAuth2Config{TokenURL: srv.URL, ClientID: "test"}
 	token, _ := exchangeCodeForToken(context.Background(), cfg, "code", "redirect", "verifier")
-	// URL-encoded fallback parses but access_token is empty
 	if token.AccessToken != "" {
 		t.Errorf("expected empty access token for garbage response, got %q", token.AccessToken)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// pollDeviceToken
-// ---------------------------------------------------------------------------
 
 func TestPollDeviceToken_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -249,10 +240,6 @@ func TestPollDeviceToken_OtherError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// JWT validation — HS256 with client_id
-// ---------------------------------------------------------------------------
-
 func TestValidateJWT_HS256Success(t *testing.T) {
 	tv, _ := NewTokenValidator("my-client", "https://example.com",
 		WithHMACSecret("test-hmac-secret"),
@@ -331,10 +318,6 @@ func TestValidateJWT_UnsupportedSigningMethod(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// JWT validation — RS256 with JWKS
-// ---------------------------------------------------------------------------
-
 func makeRSATestServer(t *testing.T, kid string) (*httptest.Server, *rsa.PrivateKey) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -369,7 +352,6 @@ func TestValidateJWT_RS256Success(t *testing.T) {
 	srv, privateKey := makeRSATestServer(t, "rsa-kid-1")
 
 	tv, _ := NewTokenValidator("test-client", srv.URL+"/.well-known/openid-configuration")
-	// OIDC discovery returns issuer "https://rsa-test.example.com" which overwrites issuerURL
 	claims := jwt.MapClaims{"sub": "rsa-user", "aud": "test-client", "iss": "https://rsa-test.example.com", "exp": time.Now().Add(time.Hour).Unix()}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "rsa-kid-1"
@@ -399,11 +381,6 @@ func TestValidateJWT_RS256KeyNotFound(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// parseJWK — key types
-// ---------------------------------------------------------------------------
-
-// jwkRaw is the anonymous struct type expected by TokenValidator.parseJWK.
 type jwkRaw = struct {
 	Kid string `json:"kid"`
 	Kty string `json:"kty"`
@@ -527,10 +504,6 @@ func TestParseJWK_EC_InvalidBase64(t *testing.T) {
 		t.Error("expected error for invalid base64 X")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// refreshJWKS edge cases
-// ---------------------------------------------------------------------------
 
 func TestRefreshJWKS_NoKeysInJWKS(t *testing.T) {
 	var srv *httptest.Server
@@ -672,10 +645,6 @@ func TestRefreshJWKS_DirectJWKSURL(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// validateOpaqueToken
-// ---------------------------------------------------------------------------
-
 func TestValidateOpaqueToken_IntrospectionFromTokenURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -734,10 +703,6 @@ func TestValidateOpaqueToken_NetworkError(t *testing.T) {
 		t.Error("expected error for unreachable server")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// BuildTLSConfig
-// ---------------------------------------------------------------------------
 
 func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
 	t.Helper()
@@ -823,10 +788,6 @@ func TestBuildTLSConfig_NoCA(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// NewTokenProviderFromPreset
-// ---------------------------------------------------------------------------
-
 func TestNewTokenProviderFromPreset_PKCE(t *testing.T) {
 	provider, err := NewTokenProviderFromPreset("github", "", false)
 	if err != nil {
@@ -878,10 +839,6 @@ func TestNewTokenProviderFromPreset_ForceDevice(t *testing.T) {
 		t.Error("expected DeviceFlowTokenProvider when PKCE not supported")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// GetToken cache hit paths (no real OAuth)
-// ---------------------------------------------------------------------------
 
 func TestPKCETokenProvider_GetToken_CacheHit(t *testing.T) {
 	dir := t.TempDir()
@@ -943,10 +900,6 @@ func TestDeviceFlowTokenProvider_GetToken_CacheHit(t *testing.T) {
 		t.Errorf("expected device-cached, got %s", accessToken)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Store edge cases
-// ---------------------------------------------------------------------------
 
 func TestStoreSave_NilInfo(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "test.json"))
@@ -1025,12 +978,8 @@ func TestInfoIsExpired_Nil(t *testing.T) {
 
 func TestStoreDelete_NoFile(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "nonexistent", "test.json"))
-	_ = store.Delete("anything") // should not panic
+	_ = store.Delete("anything")
 }
-
-// ---------------------------------------------------------------------------
-// Copilot edge cases
-// ---------------------------------------------------------------------------
 
 func TestNormalizeEnterpriseURL_Empty(t *testing.T) {
 	_, err := NormalizeEnterpriseURL("")
@@ -1077,10 +1026,6 @@ func TestCopilotClientID_Default(t *testing.T) {
 		t.Errorf("expected default ID, got %s", id)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Claude OAuth callback server
-// ---------------------------------------------------------------------------
 
 func TestStartClaudeCallbackListenerNet_Success(t *testing.T) {
 	flow, err := startClaudeCallbackListenerNet("test-state")
@@ -1186,10 +1131,6 @@ func TestClaudeCallback_OAuthError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WaitForClaudeAuthCode
-// ---------------------------------------------------------------------------
-
 func TestWaitForClaudeAuthCode_NilFlow(t *testing.T) {
 	_, _, err := WaitForClaudeAuthCode(context.Background(), nil)
 	if err == nil {
@@ -1216,22 +1157,14 @@ func TestWaitForClaudeAuthCode_Cancelled(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ClaudeOAuthFlow.Close
-// ---------------------------------------------------------------------------
-
 func TestClaudeOAuthFlow_Close_Nil(t *testing.T) {
 	var flow *ClaudeOAuthFlow
-	flow.Close() // should not panic
+	flow.Close()
 }
 
 func TestClaudeOAuthFlow_Close_NoServer(t *testing.T) {
-	(&ClaudeOAuthFlow{}).Close() // should not panic
+	(&ClaudeOAuthFlow{}).Close()
 }
-
-// ---------------------------------------------------------------------------
-// StartClaudeOAuthFlow
-// ---------------------------------------------------------------------------
 
 func TestStartClaudeOAuthFlow_Success(t *testing.T) {
 	flow, err := StartClaudeOAuthFlow(context.Background())
@@ -1259,10 +1192,6 @@ func TestStartClaudeOAuthFlow_Success(t *testing.T) {
 		t.Error("auto URL should contain PKCE method")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Token cache edge cases
-// ---------------------------------------------------------------------------
 
 func TestTokenCache_CorruptedFile(t *testing.T) {
 	dir := t.TempDir()
@@ -1295,10 +1224,6 @@ func TestCacheKey_LongClientID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// base64URLDecode padding cases
-// ---------------------------------------------------------------------------
-
 func TestBase64URLDecode_Padding2(t *testing.T) {
 	input := base64.RawURLEncoding.EncodeToString([]byte("x"))
 	decoded, err := base64URLDecode(input)
@@ -1320,10 +1245,6 @@ func TestBase64URLDecode_NoPadding(t *testing.T) {
 		t.Errorf("expected 'hello world', got %q", decoded)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// NewTokenValidator URL construction
-// ---------------------------------------------------------------------------
 
 func TestNewTokenValidator_WellKnownURL(t *testing.T) {
 	tv, err := NewTokenValidator("client", "https://example.com/.well-known/openid-configuration")
@@ -1355,10 +1276,6 @@ func TestNewTokenValidator_TrailingSlash(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// normalizeDomain helper
-// ---------------------------------------------------------------------------
-
 func TestNormalizeDomain(t *testing.T) {
 	tests := []struct{ input, want string }{
 		{"https://company.ghe.com", "company.ghe.com"},
@@ -1373,10 +1290,6 @@ func TestNormalizeDomain(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ResolveA2AAuth edge cases
-// ---------------------------------------------------------------------------
 
 func TestResolveA2AAuth_UnknownProvider(t *testing.T) {
 	authURL, _, _, _, err := ResolveA2AAuth("unknown", "", "", "")
@@ -1398,10 +1311,6 @@ func TestResolveA2AAuth_NoClientID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PKCE round-trip
-// ---------------------------------------------------------------------------
-
 func TestPKCEChallenge_RoundTrip(t *testing.T) {
 	verifier, err := GenerateCodeVerifier()
 	if err != nil {
@@ -1416,10 +1325,6 @@ func TestPKCEChallenge_RoundTrip(t *testing.T) {
 		t.Errorf("expected 43-char challenge, got %d", len(challenge))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Copilot device flow with TLS mock
-// ---------------------------------------------------------------------------
 
 func newTLSCopilotMock(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
@@ -1470,7 +1375,6 @@ func TestStartCopilotDeviceFlow_EnterpriseURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startCopilotDeviceFlow: %v", err)
 	}
-	// EnterpriseURL is normalized (scheme stripped)
 	if flow.EnterpriseURL == "" {
 		t.Error("expected non-empty enterprise URL")
 	}
@@ -1491,7 +1395,6 @@ func TestStartCopilotDeviceFlow_BadResponse(t *testing.T) {
 
 func TestStartCopilotDeviceFlow_NonTLSSuccess(t *testing.T) {
 	t.Setenv("GGCODE_GITHUB_COPILOT_CLIENT_ID", "test-id")
-	// The function always uses https://, so non-TLS will fail with connection error
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"device_code":      "dev-plain",
@@ -1503,7 +1406,6 @@ func TestStartCopilotDeviceFlow_NonTLSSuccess(t *testing.T) {
 	defer srv.Close()
 
 	_, err := startCopilotDeviceFlow(context.Background(), srv.Client(), srv.URL)
-	// Expected to fail because function uses https:// but server is http://
 	if err == nil {
 		t.Log("startCopilotDeviceFlow plain unexpectedly succeeded")
 	}
@@ -1521,7 +1423,6 @@ func TestPollCopilotDeviceFlow_PendingThenSuccess(t *testing.T) {
 		}
 	})
 
-	// Strip https:// from srv.URL to get domain:port for the CopilotDeviceFlow
 	domain := strings.TrimPrefix(srv.URL, "https://")
 	flow := &CopilotDeviceFlow{DeviceCode: "dev", VerificationURI: "https://github.com/login/device", Domain: domain}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1552,10 +1453,6 @@ func TestPollCopilotDeviceFlow_ContextCancelled(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Store Delete and loadAll/saveAll edge cases
-// ---------------------------------------------------------------------------
-
 func TestStoreDelete_Success(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "store.json"))
@@ -1581,7 +1478,6 @@ func TestStoreDelete_NonExistent(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "store.json"))
 	err := store.Delete("nonexistent")
-	// Should not error for non-existent key
 	_ = err
 }
 
@@ -1597,7 +1493,6 @@ func TestStoreSaveAndReload(t *testing.T) {
 		ExpiresAt:   time.Now().Add(time.Hour),
 	})
 
-	// Create new store instance from same file
 	store2 := NewStore(path)
 	ok, err := store2.HasUsableToken("test-reload")
 	if err != nil {
@@ -1633,10 +1528,6 @@ func TestStoreSave_MultipleProviders(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TokenCache Save with scope
-// ---------------------------------------------------------------------------
-
 func TestTokenCache_SaveAndLoadWithScope(t *testing.T) {
 	dir := t.TempDir()
 	cache := NewTokenCache(dir)
@@ -1667,10 +1558,6 @@ func TestTokenCache_LoadValid_Nil(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ResolveA2AAuth with preset
-// ---------------------------------------------------------------------------
-
 func TestResolveA2AAuth_GithubPreset(t *testing.T) {
 	authURL, _, _, _, err := ResolveA2AAuth("github", "my-client", "", "")
 	if err != nil {
@@ -1687,8 +1574,6 @@ func TestResolveA2AAuth_IssuerWithClientID(t *testing.T) {
 		t.Fatalf("ResolveA2AAuth issuer: %v", err)
 	}
 	if authURL != "" {
-		// When only issuer is provided without provider, URL should be empty
-		// because we can't determine auth/token URLs from just an issuer
 		t.Logf("authURL: %s", authURL)
 	}
 	if clientID != "my-client" {
@@ -1706,10 +1591,6 @@ func TestResolveA2AAuth_WithClientSecret(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ValidateToken dispatch for opaque tokens
-// ---------------------------------------------------------------------------
-
 func TestValidateToken_OpaqueTokenDispatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "opaque-user"})
@@ -1726,10 +1607,6 @@ func TestValidateToken_OpaqueTokenDispatch(t *testing.T) {
 		t.Errorf("expected opaque-user, got %v", result["sub"])
 	}
 }
-
-// ---------------------------------------------------------------------------
-// sleepWithMargin
-// ---------------------------------------------------------------------------
 
 func TestSleepWithMargin_ImmediateCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1754,10 +1631,6 @@ func TestSleepWithMargin_TimerExpires(t *testing.T) {
 		t.Errorf("sleepWithMargin should wait for timer, took %v", elapsed)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Info.IsExpired with valid token
-// ---------------------------------------------------------------------------
 
 func TestInfoIsExpired_FutureExpiry(t *testing.T) {
 	info := &Info{

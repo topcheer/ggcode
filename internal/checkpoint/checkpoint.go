@@ -12,98 +12,50 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Checkpoint represents a saved file state before a tool edit.
 type Checkpoint struct {
-	ID         string `json:"id"`
-	FilePath   string `json:"file_path"`
-	OldContent string `json:"old_content"`
-	NewContent string `json:"new_content"`
-	// Existed records whether the file existed on disk before the tool call
-	// that produced this checkpoint. For write_file on a missing path it is
-	// false and OldContent is "", so undo must REMOVE the file rather than
-	// write back an empty buffer (which leaves a stray 0-byte file that can
-	// break builds). OldContent=="" alone cannot distinguish a newly created
-	// file from a pre-existing empty file (empty __init__.py, .gitkeep) —
-	// that conflation is issue #554 B/C. Manager.Save defaults it to true,
-	// which is correct for edit_file (its compute path fails when the file
-	// cannot be read).
-	Existed   bool      `json:"existed,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	ToolCall  string    `json:"tool_call"`
-	RunID     string    `json:"run_id,omitempty"` // agent run that created this checkpoint
-	// Intent (sa-91, agent-native edit provenance à la PROV-AGENT arXiv
-	// 2508.02866) answers WHY this edit exists: which todo/subtask it
-	// served and a one-line rationale. Zero value for legacy checkpoints
-	// and runs without an active todo - all existing behavior unchanged.
-	Intent EditIntent `json:"intent,omitempty"`
+	ID         string     `json:"id"`
+	FilePath   string     `json:"file_path"`
+	OldContent string     `json:"old_content"`
+	NewContent string     `json:"new_content"`
+	Existed    bool       `json:"existed,omitempty"`
+	Timestamp  time.Time  `json:"timestamp"`
+	ToolCall   string     `json:"tool_call"`
+	RunID      string     `json:"run_id,omitempty"`
+	Intent     EditIntent `json:"intent,omitempty"`
 }
 
-// EditIntent captures the motivation metadata attached to a checkpoint at
-// save time. It is populated automatically from the agent's active todo
-// state (Manager.SetActiveIntent), never from model free-typed arguments,
-// so provenance stays tied to the real task state machine.
 type EditIntent struct {
-	TaskID    string `json:"task_id,omitempty"`   // active todo item ID
-	TaskDesc  string `json:"task_desc,omitempty"` // todo content (what the item is)
-	Rationale string `json:"rationale,omitempty"` // tool-call purpose summary
+	TaskID    string `json:"task_id,omitempty"`
+	TaskDesc  string `json:"task_desc,omitempty"`
+	Rationale string `json:"rationale,omitempty"`
 }
 
-// Correction represents a user-initiated undo of agent file changes.
-// It captures which files were reverted and the tool that made the original
-// change, enabling the agent to learn from the rejection and try a different
-// approach on the next run.
 type Correction struct {
-	Files    []string  // file paths that were reverted
-	ToolCall string    // the tool call that made the original change
-	RunID    string    // the run ID whose changes were reverted
-	Time     time.Time // when the correction occurred
-	// Source records WHO performed the undo (#1449-A): the user (/undo,
-	// /undo-run) or the agent itself (undo_edit self-correction). The
-	// correction-feedback detector must only narrate USER reverts as
-	// rejection - an agent's own rollback after a failed verification is
-	// encouraged behavior, not a route rejection.
-	Source string // "user" or "agent"; empty treated as "user" (legacy)
+	Files    []string
+	ToolCall string
+	RunID    string
+	Time     time.Time
+	Source   string
 }
 
-// Manager manages file checkpoints for undo/redo support.
 type Manager struct {
 	checkpoints    []Checkpoint
-	redoStack      []Checkpoint // checkpoints popped by Undo, available for Redo
+	redoStack      []Checkpoint
 	maxCheckpoints int
 	mu             sync.Mutex
-	currentRunID   string // active run ID, set by StartRun
+	currentRunID   string
 
-	// evictedRuns records run IDs that lost checkpoints to the
-	// maxCheckpoints FIFO eviction. UndoRun refuses to batch-revert a run
-	// whose earliest checkpoints were evicted: the earliest surviving
-	// checkpoint is then a mid-run state, not the pre-run baseline, and
-	// writing it back would silently corrupt the file (issue #517).
 	evictedRuns map[string]bool
 
-	// fileExisted remembers the Existed value recorded by each file's FIRST
-	// checkpoint. FIFO eviction can remove that earliest entry, after which
-	// ModifiedFiles would derive IsNew from the first surviving (mid-life)
-	// checkpoint and misreport an agent-created file as pre-existing
-	// (#1539 case D). Display-only: rollback correctness is unaffected.
 	fileExisted map[string]bool
 
-	// corrections records user-initiated undos so the agent can be told its
-	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
 
-	// activeIntent (sa-91 edit provenance) is stamped onto every checkpoint
-	// saved while it is set. The agent updates it when the in_progress todo
-	// item changes; zero value = no attribution attached.
 	activeIntent EditIntent
 
-	// journal persists every mutation to an append-only JSONL file so undo
-	// history survives a process restart (see journal.go). nil for plain
-	// NewManager Managers - journalAppendLocked is then a no-op, making the
-	// journal strictly opt-in. Only touched while holding mu.
 	journal *journalWriter
 }
 
-// NewManager creates a new checkpoint manager with the given max limit.
 func NewManager(maxCheckpoints int) *Manager {
 	if maxCheckpoints <= 0 {
 		maxCheckpoints = 50
@@ -111,40 +63,24 @@ func NewManager(maxCheckpoints int) *Manager {
 	return &Manager{maxCheckpoints: maxCheckpoints}
 }
 
-// StartRun marks the beginning of a new agent run. All subsequent Save()
-// calls are tagged with runID until the next StartRun. This enables
-// UndoRun() to batch-revert all file changes from a single run.
 func (m *Manager) StartRun(runID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.currentRunID = runID
-	m.activeIntent = EditIntent{} // sa-91: task attribution does not cross runs
+	m.activeIntent = EditIntent{}
 	m.journalAppendLocked(journalEvent{Type: evStartRun, RunID: runID})
 }
 
-// SetActiveIntent (sa-91 edit provenance) sets the task attribution stamped
-// onto checkpoints saved afterwards. The agent calls this when the
-// in_progress todo item changes; pass the zero value to clear.
 func (m *Manager) SetActiveIntent(in EditIntent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.activeIntent = in
 }
 
-// Save records a checkpoint before a file edit.
-// A new edit invalidates the redo history (standard undo/redo semantics).
-// It assumes the file existed before the edit (true for edit_file, whose
-// compute path fails when the file cannot be read). Callers that can create
-// files (write_file) must call SaveWithExistence with the real stat result so
-// undo removes the file instead of writing back "" (issue #554 B).
 func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkpoint {
 	return m.SaveWithExistence(filePath, oldContent, newContent, toolCall, true)
 }
 
-// SaveWithExistence is Save with an explicit existed-before-edit flag.
-// existed=false marks a file-creating edit: OldContent is "" because the file
-// was absent, and undo restores that absence by deleting the file
-// (issue #554 B).
 func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall string, existed bool) Checkpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,16 +102,9 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 	return cp
 }
 
-// applySaveLocked applies one recorded checkpoint to Manager state: append,
-// first-existence tracking (#1539 case D), FIFO eviction (#517), and redo
-// invalidation. Split out of SaveWithExistence so journal replay rebuilds
-// the identical state from an evSave event without regenerating IDs.
-// Must hold m.mu.
 func (m *Manager) applySaveLocked(cp Checkpoint) {
 	m.checkpoints = append(m.checkpoints, cp)
 
-	// Record each file's first-known Existed before eviction can remove the
-	// checkpoint that carries it (#1539 case D).
 	if m.fileExisted == nil {
 		m.fileExisted = make(map[string]bool)
 	}
@@ -183,12 +112,6 @@ func (m *Manager) applySaveLocked(cp Checkpoint) {
 		m.fileExisted[cp.FilePath] = cp.Existed
 	}
 
-	// Evict oldest if over limit. Prefer evicting entries that do NOT
-	// belong to the active run, so the tail run segment - and with it the
-	// pre-run baseline UndoRun relies on - stays intact as long as possible
-	// (issue #517). When every entry belongs to the active run, eviction is
-	// unavoidable; the run is then flagged so UndoRun can refuse instead of
-	// silently rolling back to a mid-run state.
 	for len(m.checkpoints) > m.maxCheckpoints {
 		evictIdx := 0
 		for i, c := range m.checkpoints {
@@ -200,20 +123,13 @@ func (m *Manager) applySaveLocked(cp Checkpoint) {
 		if m.evictedRuns == nil {
 			m.evictedRuns = make(map[string]bool)
 		}
-		// FIFO eviction removes a run's earliest surviving entry, which is
-		// either its true baseline (now lost) or evidence the baseline was
-		// already lost. Either way that run's UndoRun is no longer trustworthy.
 		m.evictedRuns[m.checkpoints[evictIdx].RunID] = true
 		m.checkpoints = append(m.checkpoints[:evictIdx], m.checkpoints[evictIdx+1:]...)
 	}
 
-	// New edit invalidates redo history
 	m.redoStack = nil
 }
 
-// Undo rolls back the most recent checkpoint by writing OldContent back to the file.
-// The undone checkpoint is pushed onto the redo stack so it can be re-applied.
-// ErrNothingToUndo reports that the undo stack is empty (#3671-3 sentinel).
 var ErrNothingToUndo = errors.New("checkpoint: nothing to undo")
 
 func (m *Manager) Undo(source string) (*Checkpoint, error) {
@@ -221,21 +137,11 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	defer m.mu.Unlock()
 
 	if len(m.checkpoints) == 0 {
-		// #3671-3: sentinel so callers can distinguish "stack empty" from
-		// IO/corruption failures - the undo tool used to label EVERY error
-		// "Nothing to undo", and the LLM read a corrupt checkpoint file as
-		// an empty stack and diagnosed from wrong disk state.
 		return nil, fmt.Errorf("%w: no checkpoints to undo", ErrNothingToUndo)
 	}
 
-	// Copy the checkpoint value before truncating the slice. Without this copy,
-	// the returned pointer would alias the backing array slot that a subsequent
-	// Save() call could overwrite (append into the truncated capacity).
 	cp := m.checkpoints[len(m.checkpoints)-1]
 
-	// Restore the pre-edit state. A checkpoint with existed=false captured a
-	// file creation, so the restored state is "file missing" - remove it;
-	// writing "" back would leave a stray 0-byte file (issue #554 B).
 	if err := restoreCheckpointState(cp.FilePath, cp.OldContent, cp.Existed); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
@@ -243,7 +149,6 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	m.checkpoints = m.checkpoints[:len(m.checkpoints)-1]
 	m.redoStack = append(m.redoStack, cp)
 
-	// Record the correction so the agent can learn from the rejection.
 	now := time.Now()
 	m.corrections = append(m.corrections, Correction{
 		Files:    []string{cp.FilePath},
@@ -258,31 +163,11 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	return &cp, nil
 }
 
-// Revert rolls back to a specific checkpoint by ID, restoring EVERY file
-// touched by that checkpoint or any of its successors to its state at the
-// moment just before the target checkpoint ran, then removes those
-// checkpoints.
-// Unlike Undo (which reverts the most recent checkpoint), Revert jumps to an
-// arbitrary past state, so the redo stack is cleared (standard undo/redo semantics).
-// A Correction is recorded so the agent can learn from this rejection (#574 Bug G).
-//
-// #678: the pre-fix implementation restored only the target checkpoint's own
-// file while still truncating ALL later checkpoints. In a multi-file run
-// (cp1 edits f1, cp2 edits f2, cp3 edits f1 again), Revert(cp2) left f1 at its
-// cp3 state on disk, deleted cp3 (the record needed to undo that state),
-// recorded a Correction claiming BOTH files were reverted, and produced a
-// mixed disk state that never existed. UndoRun already had the correct
-// semantics (per-file baseline write-back); Revert now follows the same
-// pattern.
 func (m *Manager) Revert(id string) (*Checkpoint, error) {
-	cp, _, err := m.RevertWithFilesSource(id, "user") // panel/CLI entries are user intent
+	cp, _, err := m.RevertWithFilesSource(id, "user")
 	return cp, err
 }
 
-// RevertWithFiles is Revert plus the full list of files that were written
-// back (#1879 case 1); the correction is recorded as USER-sourced. Agent
-// self-reverts must use RevertWithFilesSource(id, "agent") (#1449-A: an
-// agent rollback narrated as a user rejection is a misattribution).
 func (m *Manager) RevertWithFiles(id string) (*Checkpoint, []string, error) {
 	return m.RevertWithFilesSource(id, "user")
 }
@@ -291,10 +176,6 @@ func (m *Manager) RevertWithFilesSource(id, source string) (*Checkpoint, []strin
 	return m.revertWithFiles(id, source)
 }
 
-// revertWithFiles rewrites EVERY file touched at idx or later
-// but historically returned only the target checkpoint - callers cleaning
-// up per-file state (e.g. the agent's expired-read ledger) cleaned a single
-// file and stale state resurfaced on the co-existing reverted files.
 func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -311,18 +192,8 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 		return nil, nil, fmt.Errorf("checkpoint %q not found", id)
 	}
 
-	// Copy the checkpoint value before truncating the slice to avoid aliasing
-	// the backing array (see Undo for details).
 	cp := m.checkpoints[idx]
 
-	// Compute, for every file touched at idx or later, the state it was in at
-	// the revert moment (just before the target checkpoint's edit ran):
-	//   - a file whose latest pre-idx checkpoint is cp_prev was last written
-	//     by that edit, so its state is cp_prev.NewContent (the file exists
-	//     after any edit, hence existed=true even when cp_prev created it);
-	//   - a file with no pre-idx checkpoint is entering its FIRST edit of the
-	//     surviving history, so its pre-state is the first idx-or-later
-	//     checkpoint's OldContent/Existed pair.
 	targets := make(map[string]baselineState)
 	for i := idx; i < len(m.checkpoints); i++ {
 		f := m.checkpoints[i].FilePath
@@ -339,17 +210,6 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 		targets[f] = state
 	}
 
-	// Write every file's revert-moment state back to disk BEFORE truncating
-	// history: only when all writes succeed does disk match the pre-idx
-	// moment. On failure the checkpoint list is left intact so the caller can
-	// retry or fall back to single-step Undo - a partial truncation would
-	// strand the not-yet-restored files exactly like #678.
-	//
-	// #685: iterate in deterministic checkpoint order (first-touch order)
-	// instead of Go's randomized map order - which files got restored before
-	// a write failed used to differ run to run, with zero disclosure. On
-	// failure the error now lists exactly which files WERE restored and which
-	// remain pending, mirroring writeBaselines' disclosure policy.
 	order := make([]string, 0, len(targets))
 	seen := make(map[string]bool, len(targets))
 	for i := idx; i < len(m.checkpoints); i++ {
@@ -362,8 +222,6 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 	files := make([]string, 0, len(order))
 	for _, f := range order {
 		st := targets[f]
-		// #696: seam for the #685 regression tests - swap to record write order
-		// and inject per-path failures deterministically.
 		if err := restoreFile(f, st.content, st.existed); err != nil {
 			if len(files) == 0 {
 				return nil, nil, fmt.Errorf("failed to revert %s: %w", f, err)
@@ -375,21 +233,14 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 	}
 
 	m.checkpoints = m.checkpoints[:idx]
-	// Jumping to a past state invalidates the redo history, exactly like a
-	// new Save does. Without this, Undo → Revert → Redo would re-apply a
-	// checkpoint the user explicitly rolled back past, ending in a state the
-	// user rejected (issue #554 E).
 	m.redoStack = nil
 
-	// Record the correction so the agent can learn from the rejection (#574 Bug G).
-	// Use the ToolCall from the reverted checkpoint to identify what was rejected.
-	// Files is now honest: every listed file was actually written back.
 	m.corrections = append(m.corrections, Correction{
 		Files:    files,
 		ToolCall: cp.ToolCall,
 		RunID:    cp.RunID,
 		Time:     time.Now(),
-		Source:   source, // #1708: caller-declared (#1449-A) - was hardcoded "user"
+		Source:   source,
 	})
 
 	m.journalAppendLocked(journalEvent{Type: evRevert, ID: id, Files: files, Source: source})
@@ -397,11 +248,6 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 	return &cp, files, nil
 }
 
-// restoreCheckpointState writes oldContent back to path. When the checkpoint
-// recorded a file creation (file absent before the edit), the pre-edit state
-// is "missing", so the file is removed instead - a write would leave a stray
-// 0-byte file (issue #554 B). Removal tolerates an already-gone file so undo
-// stays idempotent.
 func restoreCheckpointState(path, oldContent string, existed bool) error {
 	if !existed && oldContent == "" {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -412,20 +258,15 @@ func restoreCheckpointState(path, oldContent string, existed bool) error {
 	return util.AtomicWriteFile(path, []byte(oldContent), 0644)
 }
 
-// restoreFile is the seam over restoreCheckpointState (#696): tests swap it
-// to record write order and inject per-path failures deterministically.
 var restoreFile = restoreCheckpointState
 
-// FileSummary summarizes the edits made to a single file.
 type FileSummary struct {
 	Path     string
 	Edits    int
 	LastTool string
-	IsNew    bool // true if the file did not exist before its first checkpoint
+	IsNew    bool
 }
 
-// ModifiedFiles returns a summary of unique files modified via checkpoints,
-// ordered by first modification time (oldest first).
 func (m *Manager) ModifiedFiles() []FileSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -437,11 +278,7 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 		fs, ok := summary[cp.FilePath]
 		if !ok {
 			fs = &FileSummary{
-				Path: cp.FilePath,
-				// IsNew must reflect the file's state before its first recorded
-				// checkpoint even when that entry was FIFO-evicted (#1539 case D);
-				// NOT merely empty OldContent, which also matches pre-existing
-				// empty files (issue #554 C).
+				Path:     cp.FilePath,
 				IsNew:    !m.firstExisted(cp.FilePath),
 				LastTool: cp.ToolCall,
 			}
@@ -459,10 +296,6 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 	return out
 }
 
-// firstExisted reports whether the file existed before its first recorded
-// checkpoint, an answer that must survive FIFO eviction of that entry
-// (#1539 case D). Paths never recorded default to existed=true so unknown
-// files are conservatively reported as pre-existing, never as new.
 func (m *Manager) firstExisted(path string) bool {
 	if v, ok := m.fileExisted[path]; ok {
 		return v
@@ -470,17 +303,6 @@ func (m *Manager) firstExisted(path string) bool {
 	return true
 }
 
-// UndoRun reverts all checkpoints belonging to the most recent run in one
-// batch operation. It identifies the run ID of the last checkpoint, then
-// reverts every checkpoint with that run ID, writing each file's original
-// (pre-run) content back to disk. The reverted checkpoints are pushed onto
-// the redo stack in reverse order so Redo() can re-apply them one at a time.
-//
-// Returns the reverted checkpoints (in revert order: last-to-first) and nil
-// on success. If no checkpoints exist, returns an error.
-//
-// Files are reverted to their state at the FIRST checkpoint of the run for
-// each unique file path - this is the pre-run baseline.
 func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -489,13 +311,8 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 		return nil, fmt.Errorf("%w: no checkpoints to undo", ErrNothingToUndo)
 	}
 
-	// Identify the run ID of the most recent checkpoint.
 	runID := m.checkpoints[len(m.checkpoints)-1].RunID
 
-	// Refuse when FIFO eviction has truncated this run: the earliest
-	// surviving checkpoint is a mid-run state, not the pre-run baseline, and
-	// writing it back would silently roll the file back to the wrong state
-	// (issue #517 Bug B). Refusal happens before any disk writes.
 	if m.evictedRuns[runID] {
 		return nil, fmt.Errorf(
 			"refusing to undo run %q: its earliest checkpoints were evicted by the %d-checkpoint limit, "+
@@ -509,14 +326,7 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 		return nil, fmt.Errorf("no checkpoints in current run")
 	}
 
-	// Issue #554 D: runSegmentIndices stops at the first checkpoint of a
-	// DIFFERENT run when scanning backward from the tail, so any checkpoints
-	// of the same run BEFORE that boundary (a mid-list segment, left behind
-	// e.g. by writeBaselines' partial-failure cleanup removing only some
-	// files' entries) are invisible to it. Undoing only the tail segment would
-	// restore a mid-run state as if it were the pre-run baseline - the same
-	// silent corruption #517 guards against. Refuse instead.
-	tailStart := runIndices[len(runIndices)-1] // earliest index in the tail segment
+	tailStart := runIndices[len(runIndices)-1]
 	for i := 0; i < tailStart; i++ {
 		if m.checkpoints[i].RunID == runID {
 			return nil, fmt.Errorf(
@@ -526,19 +336,16 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	}
 	baselines := m.preRunBaselines(runIndices)
 
-	// Write baseline content for each unique file.
 	reverted, failErr := m.writeBaselines(runIndices, baselines, runID)
 	if failErr != nil {
 		return reverted, failErr
 	}
 
-	// Remove all run checkpoints from the list and push onto redo stack.
-	cutoff := runIndices[len(runIndices)-1] // earliest index in this run
+	cutoff := runIndices[len(runIndices)-1]
 	removed := make([]Checkpoint, len(m.checkpoints[cutoff:]))
 	copy(removed, m.checkpoints[cutoff:])
 	m.checkpoints = m.checkpoints[:cutoff]
-	delete(m.evictedRuns, runID) // hygiene: run fully undone, flag no longer meaningful
-	// Push in reverse so Redo() re-applies in original order.
+	delete(m.evictedRuns, runID)
 	for i := len(removed) - 1; i >= 0; i-- {
 		m.redoStack = append(m.redoStack, removed[i])
 	}
@@ -550,23 +357,6 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	return reverted, nil
 }
 
-// RevertRecentRuns reverts the last count DISTINCT runs (in newest-to-oldest
-// order), where a "run" is a contiguous checkpoint segment sharing one RunID
-// - i.e. only runs that actually have file edits participate. It is the
-// coordinated-restore half of /rewind (Claude Code checkpoint semantics):
-// the caller drops the last N conversation turns and calls this with N to
-// roll disk state back in lockstep.
-//
-// Each iteration consumes the tail run via UndoRun, inheriting its guards
-// (eviction refusal #517, split-segment refusal #554 D) and pushing every
-// reverted checkpoint onto the redo stack so Redo() can restore them one at
-// a time. If checkpoints run out before count iterations, it stops early —
-// the earlier turns simply had no file edits.
-//
-// Returns all reverted checkpoints. When a refusal fires mid-way, the runs
-// reverted so far are returned together with the error, so the caller can
-// report the partial rollback honestly; disk is never left mid-run because
-// each UndoRun is an atomic per-run batch.
 func (m *Manager) RevertRecentRuns(count int) ([]Checkpoint, error) {
 	if count <= 0 {
 		return nil, nil
@@ -574,11 +364,6 @@ func (m *Manager) RevertRecentRuns(count int) ([]Checkpoint, error) {
 	var all []Checkpoint
 	for i := 0; i < count; i++ {
 		if m.Last() == nil {
-			// Checkpoints exhausted. If evictedRuns still has entries, some
-			// of the remaining turns DID have edits whose pre-run baselines
-			// were dropped by the FIFO limit (#517): silently skipping them
-			// would make the caller believe disk is N turns back when it is
-			// not. Surface it; the runs reverted so far stay reverted.
 			m.mu.Lock()
 			evicted := len(m.evictedRuns)
 			m.mu.Unlock()
@@ -589,7 +374,7 @@ func (m *Manager) RevertRecentRuns(count int) ([]Checkpoint, error) {
 						"use git or single-step Undo inspection to reconcile",
 					i, evicted)
 			}
-			break // remaining turns simply had no file edits
+			break
 		}
 		cps, err := m.UndoRun()
 		if err != nil {
@@ -603,8 +388,6 @@ func (m *Manager) RevertRecentRuns(count int) ([]Checkpoint, error) {
 	return all, nil
 }
 
-// runSegmentIndices returns the indices of checkpoints belonging to runID,
-// collected from the end backward (last-to-first). Must hold m.mu.
 func (m *Manager) runSegmentIndices(runID string) []int {
 	var runIndices []int
 	for i := len(m.checkpoints) - 1; i >= 0; i-- {
@@ -616,10 +399,6 @@ func (m *Manager) runSegmentIndices(runID string) []int {
 	return runIndices
 }
 
-// preRunBaselines maps each unique file path in the run to the baseline of
-// its FIRST checkpoint - the pre-run state. runIndices is in reverse order
-// (last first), so the first occurrence in forward order gives the earliest
-// checkpoint per file. Must hold m.mu.
 func (m *Manager) preRunBaselines(runIndices []int) map[string]baselineState {
 	baselines := make(map[string]baselineState)
 	for i := len(runIndices) - 1; i >= 0; i-- {
@@ -631,20 +410,11 @@ func (m *Manager) preRunBaselines(runIndices []int) map[string]baselineState {
 	return baselines
 }
 
-// baselineState is a file's pre-run state: its original content, or absence
-// when the run created the file (existed=false, content=="").
 type baselineState struct {
 	content string
 	existed bool
 }
 
-// writeBaselines writes each unique file's pre-run baseline to disk, once
-// per file, iterating runIndices last-to-first. On the first write failure it
-// removes ALL checkpoints of the already-reverted files in this run (not just
-// one per file) to keep metadata consistent with disk state - leaving
-// mid-run entries behind would let a later single-step Undo re-apply a
-// mid-run state on top of the rolled-back baseline (issue #517 Bug A) - and
-// returns the partially reverted checkpoints plus the error. Must hold m.mu.
 func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baselineState, runID string) ([]Checkpoint, error) {
 	var reverted []Checkpoint
 	revertedFiles := make(map[string]bool)
@@ -653,14 +423,9 @@ func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baseline
 		if revertedFiles[cp.FilePath] {
 			continue
 		}
-		// Restore the file's pre-run state. When the run created the file,
-		// the baseline is "absent" and the file is removed rather than
-		// written back as a 0-byte file (issue #554 B).
 		if bl, ok := baselines[cp.FilePath]; ok {
 			if err := restoreCheckpointState(cp.FilePath, bl.content, bl.existed); err != nil {
 				m.removeRunCheckpointsFor(reverted, runID)
-				// Persist the partial-failure cleanup so a restart replays it
-				// instead of resurrecting the already-reverted files' entries.
 				dropped := make([]string, 0, len(reverted))
 				seenFile := make(map[string]bool, len(reverted))
 				for _, r := range reverted {
@@ -679,8 +444,6 @@ func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baseline
 	return reverted, nil
 }
 
-// removeRunCheckpointsFor deletes every checkpoint of the given files that
-// belongs to runID, scanning from the tail. Must hold m.mu.
 func (m *Manager) removeRunCheckpointsFor(cps []Checkpoint, runID string) {
 	for _, r := range cps {
 		for j := len(m.checkpoints) - 1; j >= 0; j-- {
@@ -691,9 +454,6 @@ func (m *Manager) removeRunCheckpointsFor(cps []Checkpoint, runID string) {
 	}
 }
 
-// recordRunCorrection appends a Correction covering the unique files of a
-// fully reverted run so the agent can learn from the rejection.
-// Must hold m.mu.
 func (m *Manager) recordRunCorrection(reverted []Checkpoint, runID string) {
 	fileSet := make(map[string]bool)
 	for _, cp := range reverted {
@@ -715,7 +475,6 @@ func (m *Manager) recordRunCorrection(reverted []Checkpoint, runID string) {
 	})
 }
 
-// List returns all checkpoints (most recent last).
 func (m *Manager) List() []Checkpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -725,7 +484,6 @@ func (m *Manager) List() []Checkpoint {
 	return out
 }
 
-// Last returns the most recent checkpoint, or nil if empty.
 func (m *Manager) Last() *Checkpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -733,13 +491,10 @@ func (m *Manager) Last() *Checkpoint {
 	if len(m.checkpoints) == 0 {
 		return nil
 	}
-	// Return a copy to avoid aliasing the backing array.
 	cp := m.checkpoints[len(m.checkpoints)-1]
 	return &cp
 }
 
-// Redo re-applies the most recently undone checkpoint by writing NewContent
-// back to the file. The checkpoint is returned to the main checkpoint list.
 func (m *Manager) Redo() (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -762,14 +517,12 @@ func (m *Manager) Redo() (*Checkpoint, error) {
 	return &cp, nil
 }
 
-// CanRedo returns true if there are checkpoints available for redo.
 func (m *Manager) CanRedo() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.redoStack) > 0
 }
 
-// Clear removes all checkpoints and redo history.
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -777,18 +530,11 @@ func (m *Manager) Clear() {
 	m.redoStack = nil
 	m.corrections = nil
 	m.evictedRuns = nil
-	// #2696: fileExisted must reset too - it caches each file's FIRST
-	// checkpoint's Existed (seen-only write, #1539 case D). Reusing the
-	// Manager across a session switch (TUI switchToSession) kept the old
-	// session's values, misreporting IsNew for every re-touched file and
-	// growing the map unboundedly.
 	m.fileExisted = nil
 
 	m.journalAppendLocked(journalEvent{Type: evClear})
 }
 
-// RecentCorrections returns corrections recorded since the last run start.
-// Returns nil if no user-initiated undos have occurred.
 func (m *Manager) RecentCorrections() []Correction {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -800,8 +546,6 @@ func (m *Manager) RecentCorrections() []Correction {
 	return out
 }
 
-// ClearCorrections removes all recorded corrections. Called at the start
-// of a new agent run so the correction feedback is one-shot.
 func (m *Manager) ClearCorrections() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

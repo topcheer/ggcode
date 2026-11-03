@@ -1,10 +1,5 @@
 package context
 
-// #3726 probe: phase-2b (allFilesSuperseded) must require CONTENT coverage
-// for the multi-file read's OTHER paths, mirroring phase-2 - not mere
-// existence of a later read. A later PARTIAL re-read of one path must not
-// mark the whole multi-file read superseded.
-
 import (
 	"encoding/json"
 	"strings"
@@ -28,13 +23,9 @@ func addToolPair3726(m *Manager, toolName, id, input, output string) {
 
 func TestIssue3726_PartialLaterReadDoesNotSupersedeMultiFile(t *testing.T) {
 	m := NewManager(1000000)
-	// t1: multi_file_read [A, B] full.
 	addToolPair3726(m, "multi_file_read", "mf",
 		`{"files":[{"path":"/a.go"},{"path":"/b.go"}]}`, strings.Repeat("M", 2000))
-	// t2: full read of A (phase-2 trigger: mf's A path covered).
 	addToolPair3726(m, "read_file", "ra", `{"path":"/a.go"}`, strings.Repeat("A", 800))
-	// t3: PARTIAL read of B - a 200-line slice B's full read already
-	// covered. Old phase-2b counted mere existence of this later read.
 	addToolPair3726(m, "read_file", "rb", `{"path":"/b.go","offset":100,"limit":200}`, strings.Repeat("B", 800))
 
 	freed := m.CompactSupersededReads()

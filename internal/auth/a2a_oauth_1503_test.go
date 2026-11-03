@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// TestIntrospectionFromDiscovery verifies #1503: validateOpaqueToken must
-// read the introspection endpoint from the issuer's OIDC discovery document
-// (introspection_endpoint, RFC 7662 §2.1) instead of guessing it from the
-// issuer URL by string surgery.
 func TestIntrospectionFromDiscovery(t *testing.T) {
 	var introspectHits, discoveryHits int
 	var lastToken string
@@ -21,9 +17,6 @@ func TestIntrospectionFromDiscovery(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration"):
 			discoveryHits++
 			w.Header().Set("Content-Type", "application/json")
-			// The endpoint deliberately does NOT follow any guessable
-			// derivation from the issuer: a suffix-swap or append would
-			// never produce this path.
 			_, _ = w.Write([]byte(`{"introspection_endpoint":"` + srvURL(r) + `/oauth2/v1/inspect/tokens","jwks_uri":"` + srvURL(r) + `/jwks"}`))
 		case strings.HasSuffix(r.URL.Path, "/inspect/tokens"):
 			introspectHits++
@@ -57,7 +50,6 @@ func TestIntrospectionFromDiscovery(t *testing.T) {
 		t.Fatal("discovery document was never consulted")
 	}
 
-	// Second call must use the cached endpoint: discovery fetched once.
 	if _, err := v.ValidateToken(context.Background(), "opaque-secret-token"); err != nil {
 		t.Fatalf("ValidateToken second call: %v", err)
 	}
@@ -66,14 +58,10 @@ func TestIntrospectionFromDiscovery(t *testing.T) {
 	}
 }
 
-// TestIntrospectionFallbackGuessedURL verifies the fallback path: when the
-// issuer has no discovery document (or it lacks introspection_endpoint),
-// the legacy derivation is used (suffix-swap /token -> /introspect).
 func TestIntrospectionFallbackGuessedURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
-			// Discovery exists but has no introspection_endpoint -> fallback.
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"issuer":"` + srvURL(r) + `"}`))
 		case "/v1/introspect":
@@ -85,8 +73,6 @@ func TestIntrospectionFallbackGuessedURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Issuer ending in /token exercises the suffix-swap branch after the
-	// discovery lookup returns nothing usable.
 	v, err := NewTokenValidator("client-b", srv.URL+"/v1/token")
 	if err != nil {
 		t.Fatalf("NewTokenValidator: %v", err)
@@ -100,9 +86,6 @@ func TestIntrospectionFallbackGuessedURL(t *testing.T) {
 	}
 }
 
-// srvURL reconstructs the server base URL from an incoming request (the
-// httptest server URL is not visible inside the handler closure at config
-// time in all Go versions used here).
 func srvURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {

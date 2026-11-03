@@ -15,70 +15,35 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Transport manages JSON-RPC 2.0 communication over stdio.
-// All writes to the writer are protected by a mutex to ensure atomic messages.
-// Supports bi-directional communication: both responding to Client requests
-// and sending Agent→Client requests (e.g. session/request_permission, fs/read_text_file).
 type Transport struct {
 	Scanner *bufio.Scanner
 	Writer  io.Writer
 	mu      sync.Mutex
 
-	// #2109: outbound queue + single writer goroutine. The old writeJSON
-	// held t.mu across a BLOCKING Write - when the editor side stopped
-	// reading and the pipe filled, every goroutine froze on t.mu and the
-	// whole agent process became unkillable-by-Stop (write(2) ignores
-	// ctx cancel). Notifications now enqueue fire-and-forget (dropped +
-	// logged when the queue is full - they are incremental chunks);
-	// requests/responses enqueue with an ack wait bounded by a deadline,
-	// so a dead peer fails them with an error instead of freezing the
-	// process. FIFO order across classes is preserved by the single queue.
 	outbox     chan outboundMsg
 	writerOnce sync.Once
 	dropped    atomic.Int64
-	// stopped is closed by stopWriter before outbox is closed; enqueue
-	// paths select on it to fail cleanly instead of racing a closed
-	// channel. sendMu serializes enqueue-vs-close. writerDone closes when
-	// the writer goroutine has drained and exited (CloseWriter waits on it
-	// via stopWriter's contract; tests observe it directly).
 	stopped    chan struct{}
 	sendMu     sync.Mutex
 	stopOnce   sync.Once
 	writerDone chan struct{}
 
-	// Bi-directional request support
 	nextID    atomic.Int64
 	pending   map[int64]chan *JSONRPCResponse
 	pendingMu sync.Mutex
 }
 
-// outboundMsg is one queued wire message. ack is non-nil for the
-// blocking class (requests/responses): closed once the bytes are
-// actually written, so callers keep write-completion semantics.
 type outboundMsg struct {
 	data []byte
-	// ack (blocking class only) carries the write outcome: the writer
-	// goroutine sends the underlying Write error (nil on success) so the
-	// caller sees real failures (#2147 - ack used to mean merely
-	// "dequeued" and EPIPE etc. were swallowed, leaving permission
-	// requests silently lost while the caller waited out the full
-	// response timeout). Buffered 1: the writer never blocks on it.
-	ack chan error
+	ack  chan error
 }
 
-// outboundDeadline bounds how long a blocking-class write may wait for
-// queue space and for the writer to hand the bytes to the OS.
 const outboundDeadline = 10 * time.Second
 
-// outboundQueueCap is the burst buffer for in-flight notifications; a
-// healthy reader drains it in microseconds, a dead one fills it and the
-// notification class starts dropping.
 const outboundQueueCap = 256
 
-// NewTransport creates a new Transport reading from r and writing to w.
 func NewTransport(r io.Reader, w io.Writer) *Transport {
 	s := bufio.NewScanner(r)
-	// Copilot ACP can emit large single-line NDJSON payloads for tool results.
 	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	t := &Transport{
 		Scanner: s,
@@ -89,9 +54,6 @@ func NewTransport(r io.Reader, w io.Writer) *Transport {
 	return t
 }
 
-// WriteRaw writes a raw byte slice to the transport followed by a newline.
-// This is primarily useful for testing — production code should use
-// SendMessage or SendNotification.
 func (t *Transport) WriteRaw(data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -102,9 +64,6 @@ func (t *Transport) WriteRaw(data []byte) error {
 	return err
 }
 
-// ReadRaw reads the next raw line from the transport. Returns the bytes
-// without parsing. Returns io.EOF when the input stream is closed.
-// This is primarily useful for testing.
 func (t *Transport) ReadRaw() ([]byte, error) {
 	if !t.Scanner.Scan() {
 		if err := t.Scanner.Err(); err != nil {
@@ -115,18 +74,7 @@ func (t *Transport) ReadRaw() ([]byte, error) {
 	return t.Scanner.Bytes(), nil
 }
 
-// CloseWriter closes the underlying writer if it implements io.Closer.
 func (t *Transport) CloseWriter() error {
-	// #2109 follow-up: stop the writer goroutine FIRST (drain-then-exit) so
-	// it does not linger parked on the outbox channel after the underlying
-	// writer is closed - each Transport is one ACP agent connection, and a
-	// never-exiting writer leaked a goroutine per spawned agent.
-	// #2148 P2: "drain-then-exit" must actually WAIT for the drain -
-	// stopWriter only signals; closing the underlying writer immediately
-	// made every still-queued message fail against the closed writer
-	// (probe: 32 queued + slow writer -> 31-32 silently lost, CloseWriter
-	// returning in 5.75µs). Bounded wait, then close regardless: a stuck
-	// writer must not turn Close into a hang.
 	t.stopWriter()
 	select {
 	case <-t.writerDone:
@@ -139,8 +87,6 @@ func (t *Transport) CloseWriter() error {
 	return nil
 }
 
-// ReadMessage reads and parses the next JSON-RPC request from stdin.
-// Returns io.EOF when the input stream is closed.
 func (t *Transport) ReadMessage() (*JSONRPCRequest, error) {
 	if !t.Scanner.Scan() {
 		if err := t.Scanner.Err(); err != nil {
@@ -150,7 +96,7 @@ func (t *Transport) ReadMessage() (*JSONRPCRequest, error) {
 	}
 	line := t.Scanner.Bytes()
 	if len(line) == 0 {
-		return nil, nil // skip empty lines
+		return nil, nil
 	}
 	var req JSONRPCRequest
 	if err := json.Unmarshal(line, &req); err != nil {
@@ -159,12 +105,6 @@ func (t *Transport) ReadMessage() (*JSONRPCRequest, error) {
 	return &req, nil
 }
 
-// ReadAnyMessage reads the next JSON-RPC message, which can be either
-// a request (from Client) or a response (to a pending Agent→Client request).
-// Returns (request, nil, nil) for Client requests,
-// (nil, response, nil) for responses to our pending requests,
-// (nil, nil, nil) for empty lines (skip),
-// (nil, nil, io.EOF) when stream ends.
 func (t *Transport) ReadAnyMessage() (*JSONRPCRequest, *JSONRPCResponse, error) {
 	if !t.Scanner.Scan() {
 		if err := t.Scanner.Err(); err != nil {
@@ -174,17 +114,14 @@ func (t *Transport) ReadAnyMessage() (*JSONRPCRequest, *JSONRPCResponse, error) 
 	}
 	line := t.Scanner.Bytes()
 	if len(line) == 0 {
-		return nil, nil, nil // skip empty lines
+		return nil, nil, nil
 	}
 
-	// Try to determine if this is a response or a request
-	// A response has "result" or "error" fields; a request has "method"
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return nil, nil, fmt.Errorf("parsing JSON-RPC message: %w", err)
 	}
 
-	// If it has a "method" field, it's a request
 	if _, hasMethod := raw["method"]; hasMethod {
 		var req JSONRPCRequest
 		if err := json.Unmarshal(line, &req); err != nil {
@@ -193,27 +130,19 @@ func (t *Transport) ReadAnyMessage() (*JSONRPCRequest, *JSONRPCResponse, error) 
 		return &req, nil, nil
 	}
 
-	// Otherwise it's a response
 	var resp JSONRPCResponse
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return nil, nil, fmt.Errorf("parsing JSON-RPC response: %w", err)
 	}
-	// Preserve raw result for SendRequest callers
 	if rawResult, ok := raw["result"]; ok {
 		resp.RawResult = rawResult
 	}
 	return nil, &resp, nil
 }
 
-// SendRequest sends a JSON-RPC request to the Client and waits for the response.
-// This is used for Agent→Client requests like session/request_permission and fs/read_text_file.
-// Returns the raw response result or an error.
-// If ctx is cancelled before the response arrives, the pending request is failed.
-// #1046: Added ctx parameter to respect session/cancel cancellation.
 func (t *Transport) SendRequest(ctx context.Context, method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
 	id := t.nextID.Add(1)
 
-	// Register pending response channel before sending
 	ch := make(chan *JSONRPCResponse, 1)
 	t.pendingMu.Lock()
 	t.pending[id] = ch
@@ -224,7 +153,6 @@ func (t *Transport) SendRequest(ctx context.Context, method string, params inter
 		t.pendingMu.Unlock()
 	}()
 
-	// Build and send request
 	req := struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      int64           `json:"id"`
@@ -247,7 +175,6 @@ func (t *Transport) SendRequest(ctx context.Context, method string, params inter
 		return nil, fmt.Errorf("sending request: %w", err)
 	}
 
-	// Wait for response
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
@@ -267,12 +194,6 @@ func (t *Transport) SendRequest(ctx context.Context, method string, params inter
 	}
 }
 
-// FailAllPending fails every in-flight Agent→Client request with err.
-// It is called when the Client disconnects (EOF) or the server shuts down so
-// waiters parked in SendRequest (e.g. a permission request waiting up to the
-// 5-minute default timeout) return immediately instead of hanging until the
-// timer expires. Requests failed this way observe resp.Error and surface the
-// error through the existing SendRequest error path.
 func (t *Transport) FailAllPending(err error) {
 	if err == nil {
 		err = errors.New("client connection closed")
@@ -287,8 +208,6 @@ func (t *Transport) FailAllPending(err error) {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
 	for id, ch := range t.pending {
-		// Non-blocking send mirrors DeliverResponse: buffer is 1 and each
-		// SendRequest consumes exactly one response.
 		select {
 		case ch <- failure:
 		default:
@@ -297,14 +216,11 @@ func (t *Transport) FailAllPending(err error) {
 	}
 }
 
-// DeliverResponse delivers a response from the Client to a pending SendRequest caller.
-// Called by the Handler's message loop when it receives a JSON-RPC response.
 func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	if resp.ID == nil {
 		return
 	}
 
-	// Convert ID to int64 for pending map lookup
 	var id int64
 	switch v := resp.ID.(type) {
 	case float64:
@@ -314,10 +230,6 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	case int64:
 		id = v
 	default:
-		// JSON-RPC 2.0 requires the peer to echo the request id verbatim, so
-		// a non-numeric id here means the peer violated the spec — the
-		// matching SendRequest will hang until its timeout. Log it so the
-		// failure is diagnosable instead of silent. (#669)
 		debug.Log("acp", "DeliverResponse: dropping response with non-numeric id %v (type %T); JSON-RPC 2.0 requires echoing the request id", resp.ID, resp.ID)
 		return
 	}
@@ -327,9 +239,6 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	t.pendingMu.Unlock()
 
 	if ok {
-		// Non-blocking send: buffer is 1, and SendRequest consumes exactly one.
-		// A duplicate response (buggy agent) would block the readLoop here,
-		// deadlocking all subsequent message processing.
 		select {
 		case ch <- resp:
 		default:
@@ -337,7 +246,6 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	}
 }
 
-// WriteResponse writes a JSON-RPC response with the given result.
 func (t *Transport) WriteResponse(id RequestID, result interface{}) error {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
@@ -347,7 +255,6 @@ func (t *Transport) WriteResponse(id RequestID, result interface{}) error {
 	return t.writeJSON(resp)
 }
 
-// WriteError writes a JSON-RPC error response.
 func (t *Transport) WriteError(id RequestID, code int, msg string) error {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
@@ -360,7 +267,6 @@ func (t *Transport) WriteError(id RequestID, code int, msg string) error {
 	return t.writeJSON(resp)
 }
 
-// WriteErrorNilID writes a JSON-RPC error response with a nil ID.
 func (t *Transport) WriteErrorNilID(code int, msg string) error {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
@@ -372,7 +278,6 @@ func (t *Transport) WriteErrorNilID(code int, msg string) error {
 	return t.writeJSON(resp)
 }
 
-// WriteNotification writes a JSON-RPC notification (no ID).
 func (t *Transport) WriteNotification(method string, params interface{}) error {
 	notif := JSONRPCNotification{
 		JSONRPC: "2.0",
@@ -385,9 +290,6 @@ func (t *Transport) WriteNotification(method string, params interface{}) error {
 		}
 		notif.Params = raw
 	}
-	// #2109: notification class (incremental stream chunks) is
-	// fire-and-forget - a dead reader drops them instead of freezing the
-	// agent. Always nil: callers treat notification failure as non-fatal.
 	data, err := marshalOutbound(notif)
 	if err != nil {
 		return err
@@ -396,17 +298,11 @@ func (t *Transport) WriteNotification(method string, params interface{}) error {
 	return nil
 }
 
-// startWriter lazily spawns the single writer goroutine (Transports
-// built as literals in tests skip NewTransport).
 func (t *Transport) startWriter() {
 	t.writerOnce.Do(func() {
 		t.outbox = make(chan outboundMsg, outboundQueueCap)
 		t.stopped = make(chan struct{})
 		t.writerDone = make(chan struct{})
-		// Goroutine-protection gate: wrap in safego.Go (same treatment as
-		// e48fc4c2 for the wailskit poller) - a panic in the writer loop
-		// would take down the whole process; Recover logs and the loop's
-		// close(writerDone) still runs via defer semantics of safego.Run.
 		safego.Go("acp.transportWriter", func() {
 			defer close(t.writerDone)
 			for msg := range t.outbox {
@@ -420,7 +316,6 @@ func (t *Transport) startWriter() {
 					debug.Log("acp", "outbound write failed: %v", werr)
 				}
 				if msg.ack != nil {
-					// #2147: deliver the outcome, not just the completion.
 					msg.ack <- werr
 				}
 			}
@@ -428,14 +323,6 @@ func (t *Transport) startWriter() {
 	})
 }
 
-// stopWriter closes the outbound queue exactly once so the writer
-// goroutine drains what is already queued and then exits. Each Transport
-// owns one ACP agent connection (client.go spawns one per agent), so a
-// writer that never exits leaked a goroutine plus its queue for every
-// agent the editor session ever spawned (#2109 follow-up). Sends after the
-// close are guarded by sendMu: the closer holds sendMu while closing, so an
-// enqueue either lands before the close or observes the stopped channel and
-// fails cleanly - a send on a closed channel can never race.
 func (t *Transport) stopWriter() {
 	t.startWriter()
 	t.stopOnce.Do(func() {
@@ -446,7 +333,6 @@ func (t *Transport) stopWriter() {
 	})
 }
 
-// marshalOutbound assembles one wire line.
 func marshalOutbound(v interface{}) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -455,26 +341,11 @@ func marshalOutbound(v interface{}) ([]byte, error) {
 	return data, nil
 }
 
-// writeBlocking enqueues a request/response-class message and waits for
-// the writer to hand the bytes to the OS (bounded by outboundDeadline) -
-// preserving the old synchronous write-completion semantics without ever
-// holding t.mu across a stuck write.
 func (t *Transport) writeBlocking(data []byte) error {
 	t.startWriter()
-	// #2147: ack carries the write OUTCOME, not just completion.
 	ack := make(chan error, 1)
 	deadline := time.NewTimer(outboundDeadline)
 	defer deadline.Stop()
-	// #2148 P1: sendMu is held ONLY for the check-stopped + try-send -
-	// never while parking for queue space. The old shape (a select
-	// send/deadline park under sendMu) froze the droppable path (the
-	// per-token session/update stream, agent_loop.go:408/421/441/455)
-	// on sendMu.Lock for up to 10s whenever a blocking write was queued
-	// behind a full queue - probe: writeDroppable 166ns control vs
-	// 9.70s with a parked writeBlocking. A poll-retry loop keeps every
-	// channel send guarded (a send on the closed outbox would panic),
-	// and the sendMu hold shrinks to a non-blocking attempt, which also
-	// bounds stopWriter's lock wait.
 	for {
 		t.sendMu.Lock()
 		select {
@@ -508,13 +379,8 @@ queued:
 	}
 }
 
-// writeDroppable enqueues a notification-class message fire-and-forget;
-// when the queue is full it is dropped and counted - incremental stream
-// chunks must never freeze the agent.
 func (t *Transport) writeDroppable(data []byte) {
 	t.startWriter()
-	// Check-stopped-then-send under sendMu (a select send case on a closed
-	// channel panics even with default/stopped ready - see writeBlocking).
 	t.sendMu.Lock()
 	select {
 	case <-t.stopped:
@@ -538,7 +404,6 @@ func (t *Transport) writeDroppable(data []byte) {
 	}
 }
 
-// writeJSON marshals v and enqueues it as a blocking-class message.
 func (t *Transport) writeJSON(v interface{}) error {
 	data, err := marshalOutbound(v)
 	if err != nil {

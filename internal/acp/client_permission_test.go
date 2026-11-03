@@ -11,9 +11,6 @@ import (
 )
 
 func TestPermissionRequestResponseUsesStableToolKeyAndPersistentAllow(t *testing.T) {
-	// two-mode refactor: supervised defaults to Allow, so the delegate tool
-	// needs an explicit Ask rule to route through the approval pipeline this
-	// test exercises.
 	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{
 		"delegate_copilot_execute": permission.Ask,
 	}, nil, permission.SupervisedMode)

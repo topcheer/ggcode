@@ -25,7 +25,6 @@ func ev(tool, status string) Event {
 	return Event{Tool: tool, Status: status, InputHash: "abc123", DurationMS: 42}
 }
 
-// Happy path: a chain of entries verifies clean.
 func TestAppendVerifyHappyPath(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 5; i++ {
@@ -51,8 +50,6 @@ func TestAppendVerifyHappyPath(t *testing.T) {
 	}
 }
 
-// Chain structure: seqs are 1-based, genesis links to zeros, every hash is
-// distinct and 64 hex chars.
 func TestChainStructure(t *testing.T) {
 	l, path := mkLedger(t)
 	var lastHash string
@@ -84,7 +81,6 @@ func TestChainStructure(t *testing.T) {
 	}
 }
 
-// Editing an entry in place is detected at that exact seq.
 func TestTamperMiddleDetected(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 4; i++ {
@@ -95,7 +91,6 @@ func TestTamperMiddleDetected(t *testing.T) {
 	l.Close()
 	data, _ := os.ReadFile(path)
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	// Flip the status of entry 3 (1-based) from ok to error.
 	lines[2] = strings.Replace(lines[2], `"status":"ok"`, `"status":"error"`, 1)
 	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 
@@ -114,13 +109,8 @@ func TestTamperMiddleDetected(t *testing.T) {
 	}
 }
 
-// r33: A2A handoff attribution (Peer/TaskID) is sealed into the chain hash -
-// post-hoc anonymous-izing a remote submission (rewriting the peer) must trip
-// Verify, and mixed chains (empty-field local entries alongside attributed
-// remote ones) must stay clean (conditional-append chain compatibility).
 func TestPeerTaskIDAttributionSealedIntoChain(t *testing.T) {
 	l, path := mkLedger(t)
-	// Local action (no attribution), then a remote A2A handoff, then local.
 	if _, err := l.Append(ev("read_file", StatusOK)); err != nil {
 		t.Fatalf("Append local: %v", err)
 	}
@@ -134,7 +124,6 @@ func TestPeerTaskIDAttributionSealedIntoChain(t *testing.T) {
 		t.Fatalf("Append local2: %v", err)
 	}
 
-	// Mixed chain verifies clean before tampering.
 	if rep, err := Verify(path); err != nil || !rep.OK() {
 		t.Fatalf("mixed chain should verify clean: err=%v rep=%+v", err, rep)
 	}
@@ -142,8 +131,6 @@ func TestPeerTaskIDAttributionSealedIntoChain(t *testing.T) {
 	l.Close()
 	data, _ := os.ReadFile(path)
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	// Strip the peer attribution from the remote entry (entry 2): an
-	// attacker trying to hide which agent submitted the task.
 	if !strings.Contains(lines[1], `"peer":"peer-node-1"`) {
 		t.Fatalf("entry 2 lacks peer attribution: %s", lines[1])
 	}
@@ -165,7 +152,6 @@ func TestPeerTaskIDAttributionSealedIntoChain(t *testing.T) {
 	}
 }
 
-// Reordering two entries breaks the prev-hash linkage.
 func TestReorderDetected(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 3; i++ {
@@ -188,7 +174,6 @@ func TestReorderDetected(t *testing.T) {
 	}
 }
 
-// Deleting tail entries is detected when a head anchor exists.
 func TestTailTruncationDetectedWithAnchor(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 5; i++ {
@@ -200,7 +185,6 @@ func TestTailTruncationDetectedWithAnchor(t *testing.T) {
 		t.Fatalf("Anchor: %v", err)
 	}
 	l.Close()
-	// Simulate tail truncation: keep only the first 3 entries.
 	data, _ := os.ReadFile(path)
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	os.WriteFile(path, []byte(strings.Join(lines[:3], "\n")+"\n"), 0o600)
@@ -226,8 +210,6 @@ func TestTailTruncationDetectedWithAnchor(t *testing.T) {
 	}
 }
 
-// Without an anchor, tail truncation is (by design) not detectable — the
-// remaining prefix must still verify clean.
 func TestTailTruncationWithoutAnchorStaysClean(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 5; i++ {
@@ -252,7 +234,6 @@ func TestTailTruncationWithoutAnchorStaysClean(t *testing.T) {
 	}
 }
 
-// Re-opening the same file continues the same chain (no fork).
 func TestReopenContinuesChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	l1, err := Open(path, "s")
@@ -290,7 +271,6 @@ func TestReopenContinuesChain(t *testing.T) {
 	}
 }
 
-// Concurrent appends must produce a verifiable chain (mutex correctness).
 func TestConcurrentAppends(t *testing.T) {
 	l, path := mkLedger(t)
 	const n = 32
@@ -314,7 +294,6 @@ func TestConcurrentAppends(t *testing.T) {
 	}
 }
 
-// A malformed line is reported as a break, not a crash.
 func TestMalformedLineDetected(t *testing.T) {
 	l, path := mkLedger(t)
 	if _, err := l.Append(ev("a", StatusOK)); err != nil {
@@ -340,7 +319,6 @@ func TestMalformedLineDetected(t *testing.T) {
 	}
 }
 
-// Anchoring an empty ledger records seq 0 and verifies without truncation.
 func TestAnchorEmptyLedger(t *testing.T) {
 	l, path := mkLedger(t)
 	if err := l.Anchor(); err != nil {
@@ -355,7 +333,6 @@ func TestAnchorEmptyLedger(t *testing.T) {
 	}
 }
 
-// Appending after Close is an error, not a silent no-op.
 func TestAppendAfterCloseErrors(t *testing.T) {
 	l, _ := mkLedger(t)
 	if err := l.Close(); err != nil {
@@ -366,7 +343,6 @@ func TestAppendAfterCloseErrors(t *testing.T) {
 	}
 }
 
-// Verify on a missing file returns an empty clean report.
 func TestVerifyMissingFile(t *testing.T) {
 	rep, err := Verify(filepath.Join(t.TempDir(), "nope.jsonl"))
 	if err != nil {
@@ -377,9 +353,6 @@ func TestVerifyMissingFile(t *testing.T) {
 	}
 }
 
-// The hash must cover the error text: editing only the Err field breaks the
-// chain (length-prefixed hashing cannot be confused by separator-bearing
-// error messages either).
 func TestHashCoversErrorText(t *testing.T) {
 	e1 := Entry{Seq: 1, Time: "t", Tool: "run_command", Status: StatusError, Err: "boom|prev\x00junk", PrevHash: GenesisPrevHash}
 	e2 := e1
@@ -389,7 +362,6 @@ func TestHashCoversErrorText(t *testing.T) {
 	}
 }
 
-// Path returns exactly the path the ledger was opened with.
 func TestLedgerPath(t *testing.T) {
 	l, path := mkLedger(t)
 	if l.Path() != path {
@@ -397,8 +369,6 @@ func TestLedgerPath(t *testing.T) {
 	}
 }
 
-// Opening a ledger whose parent directory does not exist fails with a
-// wrapped error instead of panicking.
 func TestOpenMissingDirErrors(t *testing.T) {
 	_, err := Open(filepath.Join(t.TempDir(), "missing", "audit.jsonl"), "s")
 	if err == nil {
@@ -409,17 +379,12 @@ func TestOpenMissingDirErrors(t *testing.T) {
 	}
 }
 
-// A write failure (here: the underlying fd closed behind the ledger's back,
-// simulating an I/O error such as a yanked disk) is returned to the caller,
-// yields a zero Entry, and must not advance the chain head.
 func TestAppendWriteError(t *testing.T) {
 	l, _ := mkLedger(t)
 	first, err := l.Append(ev("a", StatusOK))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	// Close the raw file handle without going through Ledger.Close so the
-	// next Append hits the write-error path with l.f still non-nil.
 	if err := l.f.Close(); err != nil {
 		t.Fatalf("raw close: %v", err)
 	}
@@ -433,17 +398,13 @@ func TestAppendWriteError(t *testing.T) {
 	if e != (Entry{}) {
 		t.Errorf("failed Append returned %+v, want zero Entry", e)
 	}
-	// The chain head must be unchanged: the in-memory seq/prev still point
-	// at the last successfully persisted entry.
 	if l.seq != first.Seq || l.prev != first.Hash {
 		t.Errorf("chain head advanced past failed write: seq=%d prev=%s", l.seq, l.prev)
 	}
 }
 
-// The per-event Session override wins over the ledger's session; an empty
-// Event.Session falls back to the ledger's. Both persist correctly.
 func TestSessionOverride(t *testing.T) {
-	l, path := mkLedger(t) // ledger session "sess-1"
+	l, path := mkLedger(t)
 	overridden, err := l.Append(Event{Tool: "a", Status: StatusOK, Session: "sess-2"})
 	if err != nil {
 		t.Fatalf("Append override: %v", err)
@@ -470,7 +431,6 @@ func TestSessionOverride(t *testing.T) {
 	}
 }
 
-// writeHeadFile surfaces tmp-write failures (missing parent directory).
 func TestWriteHeadFileMissingDir(t *testing.T) {
 	err := writeHeadFile(filepath.Join(t.TempDir(), "missing", "audit.jsonl.head"), headFile{Version: headVersion})
 	if err == nil {
@@ -481,10 +441,8 @@ func TestWriteHeadFileMissingDir(t *testing.T) {
 	}
 }
 
-// Verify fails hard (returns an error) only when the ledger file itself is
-// unreadable — e.g. a directory — not for content-level problems.
 func TestVerifyUnreadablePath(t *testing.T) {
-	_, err := Verify(t.TempDir()) // a directory: os.ReadFile errors, not IsNotExist
+	_, err := Verify(t.TempDir())
 	if err == nil {
 		t.Fatal("expected an error verifying a directory path")
 	}
@@ -493,15 +451,12 @@ func TestVerifyUnreadablePath(t *testing.T) {
 	}
 }
 
-// A .head sidecar with an unknown schema version is recognized as an anchor
-// (HeadAnchored=true) but its seq is ignored for truncation verdicts.
 func TestHeadFileUnknownVersionIgnoredForTruncation(t *testing.T) {
 	l, path := mkLedger(t)
 	if _, err := l.Append(ev("a", StatusOK)); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	l.Close()
-	// Hand-craft a v999 anchor claiming seq 100 — far beyond the file.
 	data, err := json.Marshal(headFile{Version: 999, Seq: 100, Hash: "deadbeef", Time: "t"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -524,8 +479,6 @@ func TestHeadFileUnknownVersionIgnoredForTruncation(t *testing.T) {
 	}
 }
 
-// A corrupt (unparseable) .head sidecar does not fail Verify and does not
-// claim anchoring.
 func TestHeadFileCorruptJSON(t *testing.T) {
 	l, path := mkLedger(t)
 	if _, err := l.Append(ev("a", StatusOK)); err != nil {
@@ -550,8 +503,6 @@ func TestHeadFileCorruptJSON(t *testing.T) {
 	}
 }
 
-// LastHash stays at the last VERIFIED entry: after an in-place edit at seq 2
-// of 4, the report still counts 4 scanned entries but carries entry 1's hash.
 func TestLastHashStopsAtBreak(t *testing.T) {
 	l, path := mkLedger(t)
 	var hash1 string
@@ -585,9 +536,6 @@ func TestLastHashStopsAtBreak(t *testing.T) {
 	}
 }
 
-// Periodic anchoring mid-session: entries appended AFTER the anchor make the
-// file longer than the anchor — the opposite of truncation — and must stay
-// clean.
 func TestAnchorThenMoreAppendsStaysClean(t *testing.T) {
 	l, path := mkLedger(t)
 	for i := 0; i < 2; i++ {
@@ -616,8 +564,6 @@ func TestAnchorThenMoreAppendsStaysClean(t *testing.T) {
 	}
 }
 
-// ATR-2026-00118 / ESCALATE.md: approval decisions are first-class auditable
-// events. The three approval statuses must append and verify like any other.
 func TestApprovalStatusesAppendAndVerify(t *testing.T) {
 	l, path := mkLedger(t)
 	for _, st := range []string{StatusUserApproved, StatusUserDenied, StatusAskTimeout} {

@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// seedWindowMessages adds the pre-snapshot conversation used by the Defect A
-// tests: a system prompt plus alternating user/assistant turns.
 func seedWindowMessages(cm *Manager) {
 	cm.Add(provider.Message{
 		Role: "system",
@@ -44,8 +42,6 @@ func seedWindowMessages(cm *Manager) {
 	})
 }
 
-// summaryResult fabricates a plausible compaction result (the real path goes
-// through snapshot.Compact with a provider; these tests only exercise Apply).
 func summaryResult() CompactResult {
 	summary := provider.Message{
 		Role: "system",
@@ -60,9 +56,6 @@ func summaryResult() CompactResult {
 	}
 }
 
-// truncateForTest drops the last n live messages — simulating a rewind
-// during the compaction window. Mutates the same internal state the
-// production rewind path maintains (user reset per #663).
 func truncateForTest(cm *Manager, n int) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -72,7 +65,7 @@ func truncateForTest(cm *Manager, n int) {
 	cm.messages = cm.messages[:len(cm.messages)-n]
 	cm.version++
 	cm.nonTailMutSeq++
-	cm.userReset = true // rewind semantics
+	cm.userReset = true
 	cm.recalcTokens()
 }
 
@@ -83,10 +76,6 @@ func TestApplyCompactResult_RejectsEqualLengthDeleteAppend(t *testing.T) {
 	snapshot := cm.CompactSnapshot()
 	result := summaryResult()
 
-	// Race window: rewind removes the last 2 messages (k=2, LastMsgID gone),
-	// then 2 new messages arrive (j=2). Equal length previously bypassed the
-	// shrink guard and the OrigLen fallback made extra empty — the new
-	// messages were silently replaced by the lossy summary.
 	truncateForTest(cm, 2)
 	cm.Add(provider.Message{
 		Role: "user",
@@ -138,8 +127,6 @@ func TestApplyCompactResult_RejectsMoreAppendThanRemoval(t *testing.T) {
 	snapshot := cm.CompactSnapshot()
 	result := summaryResult()
 
-	// k=1 removal, j=2 appends: the old OrigLen fallback replaced the first
-	// new message with the summary range.
 	truncateForTest(cm, 1)
 	cm.Add(provider.Message{
 		Role: "user",
@@ -190,7 +177,6 @@ func TestApplyCompactResult_AnchorPresentStillApplies(t *testing.T) {
 	}
 }
 
-// addReadPair appends a read_file tool_use + tool_result pair.
 func addReadPair(m *Manager, id, input string, output string) {
 	m.Add(provider.Message{
 		Role: "assistant",
@@ -275,8 +261,8 @@ func TestCompactSupersededReads_WholeReadsStillSupersede(t *testing.T) {
 }
 
 func TestHeadRunesPlain_RuneSafe(t *testing.T) {
-	cjk := strings.Repeat("界", 100) // 3 bytes each
-	got := headRunesPlain(cjk, 100) // at most 33 full runes
+	cjk := strings.Repeat("界", 100)
+	got := headRunesPlain(cjk, 100)
 	if !utf8.ValidString(got) {
 		t.Fatal("headRunesPlain must cut on rune boundary")
 	}
@@ -291,10 +277,6 @@ func TestHeadRunesPlain_RuneSafe(t *testing.T) {
 	}
 }
 
-// truncStr is the rune-safe ellipsis truncation helper from the #718 fix.
-// Its last production caller (summarizeClearedResult) was removed as dead
-// code; the helper is retained here so the #718 rune-safety contract stays
-// tested.
 func truncStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -303,7 +285,7 @@ func truncStr(s string, maxLen int) string {
 }
 
 func TestTruncStr_RuneSafe(t *testing.T) {
-	s := strings.Repeat("界", 10) // 30 bytes; maxLen 10 keeps 2 full runes + "..."
+	s := strings.Repeat("界", 10)
 	got := truncStr(s, 10)
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncStr cut mid-rune: %q", got)

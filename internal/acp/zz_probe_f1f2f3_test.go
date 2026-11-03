@@ -1,8 +1,5 @@
 package acp
 
-// Probe tests for claims F1/F2/F3 against internal/acp/client.go.
-// Read-only investigation: this file adds tests only, no source changes.
-
 import (
 	"bufio"
 	"context"
@@ -40,12 +37,10 @@ func probeClient(t *testing.T, env string, helper string) *Client {
 			Path: exe,
 		},
 		t.TempDir(),
-		nil, // nil policy: Ask falls through to onApproval
+		nil,
 		nil,
 	)
 }
-
-// ---------- F3: crash does not clear running/sessionID; EnsureReady lies ----------
 
 func TestProbeF3_CrashLeavesStaleReadyState(t *testing.T) {
 	c := probeClient(t, probeCrashHelperEnv, "TestProbeCrashHelperProcess")
@@ -60,14 +55,12 @@ func TestProbeF3_CrashLeavesStaleReadyState(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	// Helper exits(1) on session/prompt -> simulates OOM crash.
 	_, err1 := c.Prompt(ctx, "go")
 	if err1 == nil {
 		t.Fatal("expected prompt #1 to fail after crash")
 	}
 	t.Logf("prompt #1 error: %v", err1)
 
-	// Give readLoop a moment to fully exit (done closed).
 	deadline := time.Now().Add(2 * time.Second)
 	c.mu.Lock()
 	done := c.done
@@ -83,7 +76,6 @@ func TestProbeF3_CrashLeavesStaleReadyState(t *testing.T) {
 		}
 	}
 
-	// THE CLAIM: EnsureReady must fail (process is dead) but returns nil.
 	if err := c.EnsureReady(ctx); err != nil {
 		t.Logf("EnsureReady returned error (claim would be weakened): %v", err)
 	} else {
@@ -100,7 +92,6 @@ func TestProbeF3_CrashLeavesStaleReadyState(t *testing.T) {
 		}
 	}
 
-	// And a subsequent Prompt on the same client still fails: no self-heal.
 	_, err2 := c.Prompt(ctx, "go again")
 	if err2 == nil {
 		t.Fatal("expected prompt #2 to fail (no self-heal); got success")
@@ -140,19 +131,16 @@ func TestProbeCrashHelperProcess(t *testing.T) {
 				JSONRPC: "2.0", ID: req.ID, Result: NewSessionResponse{SessionID: "s-crash"},
 			})
 		case "session/prompt":
-			// Simulate hard crash (OOM-kill): no close frames, just die.
 			os.Exit(1)
 		}
 	}
 }
 
-// ---------- F2: human approval latency counted against 5-min idle timer ----------
-
 func TestProbeF2_IdleTimeoutFiresDuringHumanApproval(t *testing.T) {
 	t.Run("human_slower_than_idle_false_timeout", func(t *testing.T) {
 		c := probeClient(t, probeApprovalHelperEnv, "TestProbeApprovalHelperProcess")
-		c.promptIdleTime = 500 * time.Millisecond // shrink idle window
-		approvalDelay := 5 * time.Second          // human answers well after idle expired (10x margin: robust under load)
+		c.promptIdleTime = 500 * time.Millisecond
+		approvalDelay := 5 * time.Second
 		c.SetApprovalHandler(func(ctx context.Context, toolName, input string) permission.Decision {
 			select {
 			case <-time.After(approvalDelay):
@@ -183,12 +171,9 @@ func TestProbeF2_IdleTimeoutFiresDuringHumanApproval(t *testing.T) {
 
 	t.Run("human_faster_than_idle_succeeds", func(t *testing.T) {
 		c := probeClient(t, probeApprovalHelperEnv, "TestProbeApprovalHelperProcess")
-		// Generous idle window: the control case asserts a clean success, so the
-		// margin must survive a loaded CI runner (observed 4s+ round-trip in
-		// verify-ci with a 3s window — a false failure, not a product bug).
 		c.promptIdleTime = 15 * time.Second
 		c.SetApprovalHandler(func(ctx context.Context, toolName, input string) permission.Decision {
-			time.Sleep(300 * time.Millisecond) // fast human
+			time.Sleep(300 * time.Millisecond)
 			return permission.Allow
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -237,7 +222,6 @@ func TestProbeApprovalHelperProcess(t *testing.T) {
 				JSONRPC: "2.0", ID: req.ID, Result: NewSessionResponse{SessionID: "s-appr"},
 			})
 		case "session/prompt":
-			// Agent asks the human for permission, then completes after answer.
 			_ = encoder.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": 9001, "method": "session/request_permission",
 				"params": map[string]any{
@@ -248,7 +232,6 @@ func TestProbeApprovalHelperProcess(t *testing.T) {
 					},
 				},
 			})
-			// Wait for the client's permission answer (a response line, no method).
 			answered := false
 			for !answered && scanner.Scan() {
 				var line map[string]json.RawMessage
@@ -270,16 +253,8 @@ func TestProbeApprovalHelperProcess(t *testing.T) {
 	}
 }
 
-// ---------- F1: readLoop parked in blocking approval handler starves pending responses ----------
-
 func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 	t.Skip("#1087 F1 fixed: permission/FS requests now handled asynchronously; blocking probe no longer applies")
-
-	// Original probe test for detecting head-of-line blocking.
-	// Retained for reference - the bug manifested as:
-	// - Response written by agent but undeliverable (readLoop parked in approval)
-	// - Close() blocked behind parked readLoop
-	// Fix: async handling of session/request_permission, fs/read_text_file, fs/write_text_file
 
 	markerPath := filepath.Join(t.TempDir(), "noop-responded")
 	t.Setenv(probeHOLMarkerEnv, markerPath)
@@ -287,7 +262,6 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 	c := probeClient(t, probeHOLHelperEnv, "TestProbeHOLHelperProcess")
 	release := make(chan struct{})
 	c.SetApprovalHandler(func(ctx context.Context, toolName, input string) permission.Decision {
-		// Deliberately ignore ctx, mirroring wailskit's context.WithoutCancel bridge.
 		<-release
 		return permission.Allow
 	})
@@ -300,13 +274,8 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 	if err := c.NewSession(ctx, c.workingDir); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	// Helper fires session/request_permission right after session/new; the
-	// readLoop should now be parked inside onApproval.
 	time.Sleep(300 * time.Millisecond)
 
-	// Fire a request the helper answers instantly. The response will be
-	// written by the helper into the pipe but cannot be delivered while the
-	// readLoop is parked.
 	type reqResult struct {
 		err error
 	}
@@ -316,7 +285,6 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 		reqCh <- reqResult{err: err}
 	}()
 
-	// Wait until the helper has actually written the response (marker file).
 	markerSeen := false
 	deadlineM := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadlineM) {
@@ -330,7 +298,6 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 		t.Fatal("helper never wrote the response marker")
 	}
 
-	// The request must still time out despite the response sitting in the pipe.
 	select {
 	case r := <-reqCh:
 		if r.err == nil {
@@ -344,8 +311,6 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 		t.Fatal("sendRequest did not settle")
 	}
 
-	// Close() cannot finish while readLoop is parked: done channel stays open
-	// even though Close kills the process.
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- c.Close() }()
 	select {
@@ -355,7 +320,6 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 		t.Log("CONFIRMED F1 (b): Close() blocked behind parked readLoop (done not closed)")
 	}
 
-	// Release the approval; everything unwinds.
 	close(release)
 	select {
 	case <-closeDone:
@@ -400,7 +364,6 @@ func TestProbeHOLHelperProcess(t *testing.T) {
 			_ = encoder.Encode(JSONRPCResponse{
 				JSONRPC: "2.0", ID: &id, Result: NewSessionResponse{SessionID: "s-hol"},
 			})
-			// Immediately ask permission; the client readLoop parks here.
 			_ = encoder.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": 9002, "method": "session/request_permission",
 				"params": map[string]any{
@@ -411,12 +374,9 @@ func TestProbeHOLHelperProcess(t *testing.T) {
 				},
 			})
 		case "":
-			// Response from client (e.g. permission answer) - ignore.
 			continue
 		default:
-			// Answer any other request instantly...
 			_ = encoder.Encode(JSONRPCResponse{JSONRPC: "2.0", ID: &id, Result: map[string]any{}})
-			// ...then prove the write happened via the marker file.
 			if method == "probe/noop" {
 				_ = os.WriteFile(markerPath, []byte(fmt.Sprintf("%d", time.Now().UnixNano())), 0o644)
 			}

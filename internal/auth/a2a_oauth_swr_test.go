@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// rsaJWKSBody builds a JWKS document exposing pub under the given kid.
 func rsaJWKSBody(t *testing.T, kid string, pub *rsa.PublicKey) string {
 	t.Helper()
 	n := base64.RawURLEncoding.EncodeToString(pub.N.Bytes())
@@ -26,8 +25,6 @@ func bigNewIntBytes(e int) []byte {
 	return big.NewInt(int64(e)).Bytes()
 }
 
-// newJWKSTestServer serves an OIDC discovery doc pointing at /jwks and returns
-// the validator plus a closer that makes subsequent fetches fail.
 func newJWKSTestServer(t *testing.T, kid string, pub *rsa.PublicKey) (*TokenValidator, func()) {
 	t.Helper()
 	jwksBody := rsaJWKSBody(t, kid, pub)
@@ -58,8 +55,6 @@ func expireJWKSCache(t *testing.T, tv *TokenValidator) {
 	tv.mu.Unlock()
 }
 
-// #H-05: once the JWKS TTL lapses, an unreachable IdP must not brick JWT
-// validation while the cached key set can still verify the signature.
 func TestJWKSStaleWhileRevalidate_ServesStaleKeysOnRefreshFailure(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
@@ -72,7 +67,7 @@ func TestJWKSStaleWhileRevalidate_ServesStaleKeysOnRefreshFailure(t *testing.T) 
 	if err != nil {
 		t.Fatalf("initial fetch: %v", err)
 	}
-	closeServer() // IdP goes down after a successful fetch
+	closeServer()
 
 	expireJWKSCache(t, tv)
 
@@ -87,9 +82,6 @@ func TestJWKSStaleWhileRevalidate_ServesStaleKeysOnRefreshFailure(t *testing.T) 
 	}
 }
 
-// #H-05: the stale window is bounded — beyond maxJWKSStaleAge past the last
-// successful fetch, validation must fail again instead of trusting a key set
-// that may have been revoked long ago.
 func TestJWKSStaleFallback_BoundedStaleness(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
@@ -113,8 +105,6 @@ func TestJWKSStaleFallback_BoundedStaleness(t *testing.T) {
 	}
 }
 
-// A kid absent from the (stale) cache must still surface the refresh failure
-// rather than pretending the key exists.
 func TestJWKSStaleFallback_UnknownKidStillErrors(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {

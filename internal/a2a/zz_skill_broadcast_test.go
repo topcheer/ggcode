@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// #3547: an instance's locally installed skills must be broadcast in the
-// Agent Card. Previously every ggcode node advertised the same hardcoded
-// 6-skill card, so user-built skill assets were invisible to A2A peers.
-// SetSkills replaces the advertised set (empty input keeps the generic
-// baseline) and Skill.Source survives JSON serialization so peers can tell
-// local assets apart from the baseline.
-
 func newSkillBroadcastTestServer(t *testing.T) *Server {
 	t.Helper()
 	handler := NewTaskHandler(".", nil, nil)
@@ -51,8 +44,6 @@ func TestSetSkills_ReplacesCardWithLocalSkills(t *testing.T) {
 		t.Fatalf("injected skill = %+v, want id skill:deploy-to-vercel source project", last)
 	}
 
-	// The Source marker must survive card JSON serialization (peers read the
-	// card over HTTP, not the struct).
 	b, err := json.Marshal(last)
 	if err != nil {
 		t.Fatalf("marshal skill: %v", err)
@@ -69,7 +60,7 @@ func TestSetSkills_EmptyKeepsDefaultBaseline(t *testing.T) {
 	if before == 0 {
 		t.Fatal("server card has no baseline skills before SetSkills")
 	}
-	srv.SetSkills(nil) // empty must be a no-op, not a card wipe
+	srv.SetSkills(nil)
 
 	after := cardSkills(t, srv)
 	if len(after) != before {

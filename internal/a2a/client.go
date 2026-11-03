@@ -21,43 +21,33 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// TokenProvider obtains an OAuth2/OIDC access token interactively.
-// Implementations include PKCE flow, Device flow, or any custom mechanism.
 type TokenProvider interface {
 	GetToken(ctx context.Context) (accessToken, refreshToken string, expiry time.Time, err error)
 }
 
-// Client is an A2A protocol client that sends tasks to remote agents.
 type Client struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
-	card       atomic.Pointer[AgentCard] // #934: cached agent card (nil until discovered); atomic - MCPBridgeTools shares one Client across bridge tools called concurrently by external MCP clients
+	card       atomic.Pointer[AgentCard]
 
-	// mu protects all auth-related fields below from concurrent access.
 	mu            sync.RWMutex
-	authMethod    string // "", "apiKey", "bearer", "mtls"
-	bearerToken   string // cached OAuth2 access token
-	refreshToken  string // for token refresh
+	authMethod    string
+	bearerToken   string
+	refreshToken  string
 	tokenExpiry   time.Time
-	tokenProvider TokenProvider // auto-acquire token when needed
-	apiKeyName    string        // #1458-A: card-declared header name
-	apiKeyIn      string        // #1458-A: card-declared location (header/query)
+	tokenProvider TokenProvider
+	apiKeyName    string
+	apiKeyIn      string
 
-	// delegation declarations (A-JWT-lite, sa-84): injected into outgoing
-	// message metadata when set via SetDelegation/WithDelegation.
 	delegationOnBehalfOf string
 	delegationIntent     string
 
-	// activateExtensions holds the URIs sent in the A2A-Extensions header on
-	// every POST to the remote agent (A2A v1.0 extension activation opt-in).
 	activateExtensions atomic.Pointer[[]string]
 }
 
-// ClientOption configures a Client.
 type ClientOption func(*Client)
 
-// WithBearerToken sets a pre-obtained OAuth2/OIDC bearer token.
 func WithBearerToken(token string) ClientOption {
 	return func(c *Client) {
 		c.bearerToken = token
@@ -65,63 +55,38 @@ func WithBearerToken(token string) ClientOption {
 	}
 }
 
-// WithMTLS configures the client to use mutual TLS.
 func WithMTLS(tlsConfig *tls.Config) ClientOption {
 	return func(c *Client) {
-		// Use util.WrapTransport to preserve proxy support (ProxyFromEnvironment)
-		// and insecure-mode handling that the non-mTLS path gets automatically.
 		transport := util.WrapTransport(&http.Transport{
 			TLSClientConfig:   tlsConfig,
 			ForceAttemptHTTP2: false,
 		})
-		// mTLS explicitly requires full certificate verification for both
-		// directions. Override any InsecureSkipVerify that WrapTransport may
-		// have set from the GGCODE_INSECURE env var (issue #19).
 		transport.TLSClientConfig.InsecureSkipVerify = false
-		// #1458-B: Client.Timeout covers the ENTIRE interaction including
-		// response-body reads - the hard 15min cut killed long SSE streams
-		// (batch/deep-research agents are A2A's core scenarios) with no way
-		// for callers to extend it (ctx deadlines don't override a shorter
-		// Client.Timeout). Header-only timeout + ctx governs duration now.
 		transport.ResponseHeaderTimeout = 15 * time.Minute
 		c.httpClient = &http.Client{
-			Transport: transport,
-			// #1458-C: strip the custom X-API-Key header on cross-host
-			// redirects - Go only strips built-in sensitive headers
-			// (Authorization/Cookies), a custom key followed a 302 to any
-			// host verbatim. Bound to this client so card-declared header
-			// names negotiated via #1458-A are stripped too.
+			Transport:     transport,
 			CheckRedirect: c.checkRedirect,
 		}
 		c.authMethod = "mtls"
 	}
 }
 
-// WithTokenProvider sets a token provider for automatic OAuth2 token acquisition.
-// When NegotiateAuth encounters a server requiring bearer auth and no token is
-// available, it calls the provider to obtain one (e.g., via PKCE or Device flow).
 func WithTokenProvider(p TokenProvider) ClientOption {
 	return func(c *Client) {
 		c.tokenProvider = p
 	}
 }
 
-// WithActivateExtensions opts the client into the given A2A protocol
-// extensions: their URIs are sent in the A2A-Extensions request header on
-// every POST (A2A v1.0 "Extension Activation").
 func WithActivateExtensions(uris []string) ClientOption {
 	return func(c *Client) {
 		c.SetActivateExtensions(uris)
 	}
 }
 
-// SetActivateExtensions sets (or replaces) the extension URIs activated on
-// outgoing requests. Safe for concurrent use.
 func (c *Client) SetActivateExtensions(uris []string) {
 	c.activateExtensions.Store(&uris)
 }
 
-// activatedExtensions returns the configured activation list.
 func (c *Client) activatedExtensions() []string {
 	if p := c.activateExtensions.Load(); p != nil {
 		return *p
@@ -129,10 +94,6 @@ func (c *Client) activatedExtensions() []string {
 	return nil
 }
 
-// MissingRequiredExtensions returns the extension URIs the remote agent card
-// marks as required that this client does NOT activate. Per spec the client
-// must comply with required extensions; callers should refuse to talk to the
-// agent while this is non-empty instead of silently violating its contract.
 func (c *Client) MissingRequiredExtensions() []string {
 	card := c.Card()
 	if card == nil {
@@ -153,9 +114,6 @@ func (c *Client) MissingRequiredExtensions() []string {
 	return missing
 }
 
-// applyExtensions attaches extension activation to an outgoing request after
-// the required-extension pre-flight check. Returns an error when the remote
-// agent requires extensions this client has not activated.
 func (c *Client) applyExtensions(req *http.Request) error {
 	if missing := c.MissingRequiredExtensions(); len(missing) > 0 {
 		return fmt.Errorf("remote agent requires A2A extension(s) not activated: %s", strings.Join(missing, ", "))
@@ -166,19 +124,7 @@ func (c *Client) applyExtensions(req *http.Request) error {
 	return nil
 }
 
-// NewClient creates a new A2A client targeting the given server URL.
 func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
-	// #1556: the DEFAULT client (apiKey/bearer - the overwhelming majority
-	// of A2A calls) still carried BOTH #1458 defects; the fixes landed only
-	// on the WithMTLS branch:
-	//   A) Client.Timeout is a hard cap over the ENTIRE interaction
-	//      including SSE body reads - 15min streams die mid-flight and ctx
-	//      deadlines cannot extend it. Build the header-only-timeout
-	//      variant for the default path too.
-	//   B) CheckRedirect stripping only protected the mTLS client whose
-	//      setAuth sets NO header - the clients actually carrying
-	//      X-API-Key followed a cross-host 302 with the key verbatim (Go
-	//      strips only Authorization/Cookies).
 	client := util.NewInsecureAwareClient(15 * time.Minute)
 	if tr, ok := client.Transport.(interface {
 		http.RoundTripper
@@ -187,8 +133,6 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 		t2 := tr.Clone()
 		t2.ResponseHeaderTimeout = 15 * time.Minute
 		client.Transport = t2
-		// Client.Timeout is the hard cap we are removing; ctx governs the
-		// overall duration now, mirroring the WithMTLS branch.
 		client.Timeout = 0
 	}
 	c := &Client{
@@ -196,9 +140,6 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 		apiKey:     apiKey,
 		httpClient: client,
 	}
-	// #1458-C: strip credential headers on cross-host redirects. Bound to
-	// the client (not a free function) so the card-declared apiKeyName that
-	// #1458-A NegotiateAuth may set to ANY header name is stripped too.
 	client.CheckRedirect = c.checkRedirect
 	if apiKey != "" && c.authMethod == "" {
 		c.authMethod = "apiKey"
@@ -209,14 +150,6 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 	return c
 }
 
-// Discover fetches and caches the remote agent's Agent Card.
-//
-// A2A 0.3.0 renamed the well-known URI from agent.json to agent-card.json
-// and 0.3.x/v1.0 servers may serve only the new path, while legacy ggcode
-// peers serve only the old one. Fallback is limited to 404/405 (path
-// absent) - a card that exists but fails signature verification, decoding,
-// or transport must surface its real error instead of masking it with a
-// second request.
 func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 	card, err := c.fetchCard(ctx, "/.well-known/agent-card.json")
 	if err != nil {
@@ -228,22 +161,15 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 	return card, err
 }
 
-// errCardWellKnownNotFound marks a well-known card URI that the server does
-// not serve (404/405), the only condition that triggers path fallback.
 var errCardWellKnownNotFound = errors.New("a2a discover: well-known card path not served")
 
-// errCardInvalid marks a 200 response that is not a usable agent card. The
-// spec requires name and url; without this check a redirect landing on an
-// unrelated JSON endpoint would silently produce an empty card.
 var errCardInvalid = errors.New("a2a discover: response is not a valid agent card")
 
-// fetchCard fetches the card from one well-known path.
 func (c *Client) fetchCard(ctx context.Context, path string) (*AgentCard, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("a2a discover: %w", err)
 	}
-	// Advertise both A2A JSON media types (1.0.1 prefers a2a+json).
 	req.Header.Set("Accept", acceptHeader)
 
 	resp, err := c.httpClient.Do(req)
@@ -273,7 +199,6 @@ func (c *Client) fetchCard(ctx context.Context, path string) (*AgentCard, error)
 		return nil, errCardInvalid
 	}
 
-	// A2A §8.4: refuse a card whose JWS signature fails to verify.
 	if len(card.Signatures) > 0 {
 		results, tampered := verifyAgentCardSignature(ctx, body, fetchJWKS)
 		for _, r := range results {
@@ -288,31 +213,14 @@ func (c *Client) fetchCard(ctx context.Context, path string) (*AgentCard, error)
 	return &card, nil
 }
 
-// Card returns the cached agent card (nil if Discover hasn't been called).
 func (c *Client) Card() *AgentCard { return c.card.Load() }
 
-// NegotiateAuth reads the Agent Card's securitySchemes and prepares the
-// appropriate authentication mechanism.
-//
-// This must be called after Discover(). It checks what the server requires
-// and configures the client accordingly:
-//
-//   - If server declares no security → no auth needed
-//   - If server has apiKey scheme and client has apiKey → use API Key
-//   - If server has oauth2/openIdConnect scheme → use Bearer token
-//     (must be set via WithBearerToken or SetBearerToken before calling)
-//   - If server has mutualTLS scheme → use mTLS
-//     (must be configured via WithMTLS option)
-//
-// Returns an error if the server requires an auth mechanism the client
-// hasn't been configured for.
 func (c *Client) NegotiateAuth() error {
 	card := c.card.Load()
 	if card == nil {
 		return fmt.Errorf("a2a: NegotiateAuth called before Discover")
 	}
 
-	// No security requirements → nothing to do
 	if len(card.Security) == 0 && len(card.SecuritySchemes) == 0 {
 		c.mu.Lock()
 		c.authMethod = ""
@@ -320,7 +228,6 @@ func (c *Client) NegotiateAuth() error {
 		return nil
 	}
 
-	// Try to match client capabilities with server requirements
 	for _, req := range card.Security {
 		for schemeName := range req {
 			scheme, ok := card.SecuritySchemes[schemeName]
@@ -336,12 +243,6 @@ func (c *Client) NegotiateAuth() error {
 				if hasKey {
 					c.mu.Lock()
 					c.authMethod = "apiKey"
-					// #1458-A: honor the card's declared transport - the old
-					// path accepted any apiKey scheme but setAuth ALWAYS sent
-					// X-API-Key, so a card declaring "name":"X-Goog-Api-Key"
-					// or in:"query" negotiated fine then failed with 401 on
-					// the first RPC (masked in ggcode-to-ggcode by the server's
-					// own hard-coded header).
 					c.apiKeyName = scheme.Name
 					c.apiKeyIn = scheme.Location
 					if c.apiKeyName == "" {
@@ -351,12 +252,6 @@ func (c *Client) NegotiateAuth() error {
 						c.apiKeyIn = "header"
 					}
 					if c.apiKeyIn == "query" {
-						// The client cannot rewrite the endpoint URL per-card
-						// here; report explicitly instead of 401-at-first-call.
-						// #1556-C: return WITHOUT unlocking held c.mu - every
-						// later setAuth/NegotiateAuth/tryBearerToken blocked
-						// forever (Go mutexes have no timeout); the client was
-						// unrecoverable.
 						c.mu.Unlock()
 						return fmt.Errorf("a2a: card requires apiKey in query param %q - not supported", scheme.Name)
 					}
@@ -382,12 +277,6 @@ func (c *Client) NegotiateAuth() error {
 		}
 	}
 
-	// Also check if client already has a configured auth that might work.
-	// The apiKey fallback is only allowed when the server actually declares
-	// an apiKey security scheme — otherwise a client constructed with
-	// NewClient(url, "some-key") would silently "succeed" against a server
-	// that only accepts bearer/oauth2 and fail later with 401 on the first
-	// real request (fix #257).
 	c.mu.RLock()
 	method := c.authMethod
 	c.mu.RUnlock()
@@ -403,8 +292,6 @@ func (c *Client) NegotiateAuth() error {
 		schemeNames(c.card.Load().SecuritySchemes))
 }
 
-// cardDeclaresAPIKey reports whether the discovered AgentCard declares any
-// apiKey security scheme (fix #257).
 func (c *Client) cardDeclaresAPIKey() bool {
 	for _, scheme := range c.card.Load().SecuritySchemes {
 		if scheme.Type == "apiKey" {
@@ -414,9 +301,7 @@ func (c *Client) cardDeclaresAPIKey() bool {
 	return false
 }
 
-// tryBearerToken checks if we have a valid bearer token, or tries to obtain one.
 func (c *Client) tryBearerToken() bool {
-	// Check for a non-expired token under read lock
 	c.mu.RLock()
 	token := c.bearerToken
 	expiry := c.tokenExpiry
@@ -430,18 +315,12 @@ func (c *Client) tryBearerToken() bool {
 		return true
 	}
 
-	// Try to obtain a token via the configured provider.
-	// The GetToken call runs outside the lock to avoid blocking other
-	// readers during interactive OAuth2 flows (can take minutes).
 	if provider != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
 		accessToken, refreshToken, newExpiry, err := provider.GetToken(ctx)
 		if err != nil {
-			// #1458-C: device-code denial / timeout / network errors were
-			// swallowed into a generic 'no matching credential' - at least
-			// surface the cause for diagnostics.
 			debug.Logf("[a2a] token provider failed: %v", err)
 		}
 		if err == nil && accessToken != "" {
@@ -458,7 +337,6 @@ func (c *Client) tryBearerToken() bool {
 	return false
 }
 
-// SetBearerToken updates the bearer token (e.g., after OAuth2 token refresh).
 func (c *Client) SetBearerToken(token string) {
 	c.mu.Lock()
 	c.bearerToken = token
@@ -466,7 +344,6 @@ func (c *Client) SetBearerToken(token string) {
 	c.mu.Unlock()
 }
 
-// SetAPIKey updates the API key.
 func (c *Client) SetAPIKey(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -476,14 +353,12 @@ func (c *Client) SetAPIKey(key string) {
 	}
 }
 
-// AuthMethod returns the negotiated authentication method.
 func (c *Client) AuthMethod() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.authMethod
 }
 
-// setAuth applies the negotiated auth to an outgoing HTTP request.
 func (c *Client) setAuth(req *http.Request) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -496,12 +371,9 @@ func (c *Client) setAuth(req *http.Request) {
 		req.Header.Set(name, c.apiKey)
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
-		// mTLS is handled at TLS level, no headers needed
 	}
 }
 
-// SendMessage sends a synchronous message and waits for task completion.
-// If existingTaskID is non-empty, continues an existing task (multi-turn).
 func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTaskID ...string) (*Task, error) {
 	taskID := ""
 	if len(existingTaskID) > 0 {
@@ -525,7 +397,6 @@ func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTa
 	return &result, nil
 }
 
-// SendMessageWithConfig sends a message with full configuration options.
 func (c *Client) SendMessageWithConfig(ctx context.Context, params SendMessageParams) (*Task, error) {
 	c.injectDelegationMeta(&params.Message)
 	var result Task
@@ -535,7 +406,6 @@ func (c *Client) SendMessageWithConfig(ctx context.Context, params SendMessagePa
 	return &result, nil
 }
 
-// SendMessageStream sends a message and returns a channel of SSE events.
 func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-chan JSONRPCResponse, error) {
 	params := SendMessageParams{
 		Message: Message{
@@ -578,10 +448,6 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		return nil, fmt.Errorf("a2a stream: http request: %w", err)
 	}
 
-	// #446: a 200 response may still carry a sync JSON-RPC error (the
-	// server writes errors as HTTP 200 + application/json before SSE
-	// headers are set) — parse that instead of feeding the JSON body to
-	// the SSE decoder (which would yield a silent empty stream + nil error).
 	if ct := resp.Header.Get("Content-Type"); isJSONMedia(ct) {
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		resp.Body.Close()
@@ -598,9 +464,6 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
-	// #448: pass ctx so decodeSSE can abort blocked channel sends when the
-	// consumer is gone — a bare send leaked the goroutine AND the HTTP
-	// connection permanently (buffer 32 only delayed it).
 	safego.Go("a2a.client.streamRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
@@ -610,7 +473,6 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 	return ch, nil
 }
 
-// GetTask retrieves the current state of a task.
 func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	params := GetTaskParams{ID: taskID}
 	var result Task
@@ -620,13 +482,11 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	return &result, nil
 }
 
-// ListTasksResult holds the paginated response from tasks/list.
 type ListTasksResult struct {
 	Tasks     []Task `json:"tasks"`
 	NextToken string `json:"nextToken,omitempty"`
 }
 
-// ListTasks retrieves a paginated list of tasks from the remote agent.
 func (c *Client) ListTasks(ctx context.Context, pageToken string, pageSize int) (*ListTasksResult, error) {
 	params := map[string]interface{}{}
 	if pageToken != "" {
@@ -642,7 +502,6 @@ func (c *Client) ListTasks(ctx context.Context, pageToken string, pageSize int) 
 	return &result, nil
 }
 
-// CancelTask requests cancellation of a running task.
 func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 	params := CancelTaskParams{ID: taskID}
 	var result Task
@@ -652,9 +511,6 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 	return &result, nil
 }
 
-// GetExtendedAgentCard retrieves the authenticated extended agent card.
-// Like the public card, an extended card carrying signatures (A2A §8.4) is
-// verified before it is handed out; a tampered card is rejected.
 func (c *Client) GetExtendedAgentCard(ctx context.Context) (json.RawMessage, error) {
 	var result json.RawMessage
 	if err := c.rpc(ctx, "agent/getExtendedCard", struct{}{}, &result); err != nil {
@@ -669,7 +525,6 @@ func (c *Client) GetExtendedAgentCard(ctx context.Context) (json.RawMessage, err
 	return result, nil
 }
 
-// SetPushConfig creates or updates a push notification config.
 func (c *Client) SetPushConfig(ctx context.Context, cfg PushNotificationConfig) (*PushNotificationConfig, error) {
 	var result PushNotificationConfig
 	if err := c.rpc(ctx, "tasks/pushNotificationConfig/set", cfg, &result); err != nil {
@@ -678,7 +533,6 @@ func (c *Client) SetPushConfig(ctx context.Context, cfg PushNotificationConfig) 
 	return &result, nil
 }
 
-// GetPushConfig retrieves a push notification config by ID.
 func (c *Client) GetPushConfig(ctx context.Context, id string) (*PushNotificationConfig, error) {
 	var result PushNotificationConfig
 	if err := c.rpc(ctx, "tasks/pushNotificationConfig/get", map[string]string{"id": id}, &result); err != nil {
@@ -687,7 +541,6 @@ func (c *Client) GetPushConfig(ctx context.Context, id string) (*PushNotificatio
 	return &result, nil
 }
 
-// ListPushConfigs returns all push notification configs.
 func (c *Client) ListPushConfigs(ctx context.Context) ([]PushNotificationConfig, error) {
 	var result []PushNotificationConfig
 	if err := c.rpc(ctx, "tasks/pushNotificationConfig/list", struct{}{}, &result); err != nil {
@@ -696,13 +549,10 @@ func (c *Client) ListPushConfigs(ctx context.Context) ([]PushNotificationConfig,
 	return result, nil
 }
 
-// DeletePushConfig removes a push notification config by ID.
 func (c *Client) DeletePushConfig(ctx context.Context, id string) error {
 	return c.rpc(ctx, "tasks/pushNotificationConfig/delete", map[string]string{"id": id}, nil)
 }
 
-// Resubscribe reconnects to a task's SSE stream. Use this when a previous
-// SendMessageStream connection was interrupted.
 func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPCResponse, error) {
 	params := TaskSubscriptionParams{ID: taskID}
 	paramsJSON, err := json.Marshal(params)
@@ -736,7 +586,6 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 		return nil, fmt.Errorf("a2a resubscribe: http request: %w", err)
 	}
 
-	// Check Content-Type: if JSON (not SSE), this is a sync error response.
 	ct := resp.Header.Get("Content-Type")
 	if isJSONMedia(ct) {
 		defer resp.Body.Close()
@@ -754,7 +603,6 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
-	// #448: ctx-guarded decode, same as SendMessageStream.
 	safego.Go("a2a.client.resubscribeRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
@@ -764,18 +612,8 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	return ch, nil
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-// acceptHeader advertises both A2A JSON media types. 1.0.1 prefers
-// application/a2a+json in the HTTP binding; servers may still answer with
-// plain application/json (0.2.x/0.3.x peers always do).
 const acceptHeader = "application/a2a+json, application/json"
 
-// requestContentType returns the media type for JSON-RPC POST bodies. Peers
-// whose card declares a 1.x protocolVersion receive the v1.0 preferred type;
-// legacy peers keep application/json so older strict servers are unaffected.
 func (c *Client) requestContentType() string {
 	if card := c.Card(); card != nil && strings.HasPrefix(card.ProtocolReversion, "1") {
 		return "application/a2a+json"
@@ -783,31 +621,17 @@ func (c *Client) requestContentType() string {
 	return "application/json"
 }
 
-// isJSONMedia reports whether a Content-Type is one of the A2A JSON media
-// types. "application/a2a+json" does NOT contain the substring
-// "application/json", so a plain Contains check misclassified a v1.0
-// server's sync error response as SSE and fed JSON into the SSE decoder.
 func isJSONMedia(ct string) bool {
 	ct = strings.ToLower(ct)
 	return strings.Contains(ct, "application/json") || strings.Contains(ct, "a2a+json")
 }
 
-// rpcMaxAttempts bounds total attempts (1 initial + 2 retries) for a single
-// JSON-RPC call.
 const rpcMaxAttempts = 3
 
-// isRetryableHTTPStatus reports whether an HTTP status is a transient fault
-// worth retrying (rate limiting or server-side failure), per the reliability
-// playbook: never retry 4xx-class client errors (except 429).
 func isRetryableHTTPStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code != http.StatusNotImplemented)
 }
 
-// retryRPCLater sleeps the next backoff interval (with full jitter) and
-// reports whether another attempt should be made. attempt is 1-based.
-// Retries are safe because the server dedups message/send by MessageID
-// (#565 G / #1461-A / #2896) and the remaining methods are read-only or
-// naturally idempotent (GetTask / ListTasks / CancelTask).
 func retryRPCLater(ctx context.Context, attempt int, backoff *time.Duration, method string) bool {
 	if attempt >= rpcMaxAttempts {
 		return false
@@ -823,12 +647,6 @@ func retryRPCLater(ctx context.Context, attempt int, backoff *time.Duration, met
 	}
 }
 
-// rpc sends one JSON-RPC request to the peer, gated by the per-peer
-// circuit breaker (peer_breaker.go, sa-88): an OPEN circuit fast-fails
-// with peerCircuitOpenError instead of burning the full retry+timeout
-// pipeline against a peer that just failed repeatedly, and every call's
-// outcome is recorded so a recovered peer closes the circuit via the
-// half-open probe.
 func (c *Client) rpc(ctx context.Context, method string, params interface{}, result interface{}) error {
 	pb := peerBreakerFor(c.baseURL)
 	if pb != nil && !pb.allow() {
@@ -909,7 +727,6 @@ func (c *Client) rpcCore(ctx context.Context, method string, params interface{},
 			return fmt.Errorf("a2a %s: decode: %w", method, err)
 		}
 		if rpcResp.Error != nil {
-			// JSON-RPC application errors are deterministic; never retry.
 			return rpcResp.Error
 		}
 
@@ -927,10 +744,6 @@ func (c *Client) rpcCore(ctx context.Context, method string, params interface{},
 	}
 }
 
-// emitSSEData parses one accumulated SSE event payload and sends it on ch.
-// Sends are ctx-guarded (#448). Returns false if ctx fired before the send,
-// so the caller can stop decoding. Unparseable payloads are dropped silently,
-// matching the original per-event behavior.
 func emitSSEData(ctx context.Context, ch chan<- JSONRPCResponse, data string) bool {
 	var resp JSONRPCResponse
 	if json.Unmarshal([]byte(data), &resp) != nil {
@@ -944,9 +757,6 @@ func emitSSEData(ctx context.Context, ch chan<- JSONRPCResponse, data string) bo
 	}
 }
 
-// emitSSEFailure sends the terminal JSON-RPC internal-error event for a
-// failed stream read (#565 F) so the consumer sees the stream died instead
-// of waiting forever on a silently truncated one.
 func emitSSEFailure(ctx context.Context, ch chan<- JSONRPCResponse, err error) {
 	select {
 	case ch <- JSONRPCResponse{
@@ -961,24 +771,14 @@ func emitSSEFailure(ctx context.Context, ch chan<- JSONRPCResponse, err error) {
 	}
 }
 
-// decodeSSECtx reads Server-Sent Events from r and sends them on ch. Sends
-// are ctx-guarded (#448): a consumer that stops reading (cancel, timeout,
-// early task-ID pickup) must not leave this goroutine blocked forever on
-// ch <- with the HTTP body unclosed.
 func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 	scanner := bufio.NewScanner(r)
-	// #565 F: default 64KB token limit silently aborted mid-event on large
-	// artifacts — scanner.Scan() returned false, scanner.Err() was never
-	// checked, and the terminal status event after the oversized one was
-	// lost with zero errors. 8MB covers artifact payloads well above the
-	// server's 4MB request cap and SSE line-splitting worst case.
 	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	var dataBuf strings.Builder
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Blank line = event boundary: flush accumulated data.
 		if line == "" {
 			if dataBuf.Len() > 0 {
 				if !emitSSEData(ctx, ch, dataBuf.String()) {
@@ -989,26 +789,19 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 			continue
 		}
 
-		// Comment lines (starting with ":") are ignored per SSE spec.
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 
-		// Accumulate data lines. Other SSE fields (event:, id:, retry:)
-		// are silently ignored.
 		if strings.HasPrefix(line, "data: ") {
 			dataBuf.WriteString(strings.TrimPrefix(line, "data: "))
 			dataBuf.WriteByte('\n')
 		} else if strings.HasPrefix(line, "data:") {
-			// "data:" without space (also valid per spec).
 			dataBuf.WriteString(strings.TrimPrefix(line, "data:"))
 			dataBuf.WriteByte('\n')
 		}
 	}
 
-	// #565 F: scanner errors were swallowed — a token-too-long abort looked
-	// like a normal EOF. Best-effort flush of a complete trailing event,
-	// then the error terminal event.
 	if err := scanner.Err(); err != nil {
 		if dataBuf.Len() > 0 {
 			emitSSEData(ctx, ch, strings.TrimRight(dataBuf.String(), "\n"))
@@ -1017,22 +810,15 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 		return
 	}
 
-	// Flush any remaining data at EOF.
 	if dataBuf.Len() > 0 {
 		emitSSEData(ctx, ch, strings.TrimRight(dataBuf.String(), "\n"))
 	}
 }
 
-// decodeSSE reads Server-Sent Events from a reader and sends them on ch.
-// Handles multi-line data fields per SSE spec: consecutive "data:" lines are
-// joined with "\n" before parsing. It is decodeSSECtx without cancellation —
-// context.Background() never fires, so every send is a plain blocking send,
-// byte-for-byte the legacy behavior (#565 F fix included).
 func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
 	decodeSSECtx(context.Background(), r, ch)
 }
 
-// schemeNames extracts scheme type names for error messages.
 func schemeNames(schemes map[string]Security) []string {
 	names := make([]string, 0, len(schemes))
 	for _, s := range schemes {
@@ -1041,17 +827,6 @@ func schemeNames(schemes map[string]Security) []string {
 	return names
 }
 
-// checkRedirect removes API key headers when a redirect crosses hosts
-// (#1458-C) - the stdlib only strips built-in sensitive headers
-// (Authorization, Cookies), custom keys followed 302s verbatim.
-//
-// It must be a Client method, not a free function: NegotiateAuth (#1458-A)
-// honors the card-declared securityScheme name, which is remote-controlled
-// and can be ANY header name ("X-Custom-Key", "X-My-Key", ...). A hardcoded
-// name list is trivially bypassed by declaring an out-of-list name, so the
-// negotiated c.apiKeyName is stripped as well. The well-known names remain
-// as fallback for requests made before NegotiateAuth ran (Discover itself
-// carries the default X-API-Key credential).
 func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > 0 && via[0].Host != req.Host {
 		c.mu.RLock()

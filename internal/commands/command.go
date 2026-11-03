@@ -22,7 +22,6 @@ const (
 	LoadedFromMCP      LoadedFrom = "mcp"
 )
 
-// Command represents a reusable slash command or skill loaded from markdown.
 type Command struct {
 	Name                   string
 	Template               string
@@ -35,24 +34,19 @@ type Command struct {
 	ArgumentHint           string
 	Arguments              []string
 	WhenToUse              string
-	RequiresTools          []string // external CLI tools that must be on PATH (e.g. docker, kubectl)
-	Dependencies           []string // prerequisite skill names that should be loaded first
-	Version                string   // semantic version declared in frontmatter (e.g. "1.0.0")
+	RequiresTools          []string
+	Dependencies           []string
+	Version                string
 	UserInvocable          bool
 	DisableModelInvocation bool
 	Context                string
-	// NLAH-style harness externalization (r466): skills can declare explicit
-	// contracts and a failure taxonomy instead of relying only on the generic
-	// error classifier when something goes wrong mid-workflow.
-	Precondition  string             // what must hold before the skill starts
-	Postcondition string             // what must hold before the skill's work is accepted as done
-	StateContract string             // cross-stage state semantics (natural-language declaration)
-	FailureModes  []SkillFailureMode // named failure modes with detection signals and recovery paths
-	Enabled       bool               // false = skill is disabled and won't be invoked by the agent
+	Precondition           string
+	Postcondition          string
+	StateContract          string
+	FailureModes           []SkillFailureMode
+	Enabled                bool
 }
 
-// Expand replaces template variables in the command template.
-// Supported: $FILE, $DIR, $ARGS, plus any named variables supplied.
 func (c *Command) Expand(vars map[string]string) string {
 	result := c.Template
 	for k, v := range vars {
@@ -72,7 +66,6 @@ func (c *Command) UserSlashVisible() bool {
 	return c != nil && c.UserInvocable && c.LoadedFrom == LoadedFromCommands && c.SlashName() != ""
 }
 
-// IsBuiltin returns true for bundled/internal skills that cannot be disabled.
 func (c *Command) IsBuiltin() bool {
 	if c == nil {
 		return false
@@ -91,11 +84,6 @@ func (c *Command) Title() string {
 }
 
 func replaceVar(s, key, value string) string {
-	// Simple string replacement. Non-matching bytes are passed through
-	// VERBATIM (#3515): the old `result += string(s[i])` re-encoded each
-	// raw byte as its rune code point, so multi-byte UTF-8 (Chinese text
-	// in a template) turned into Latin-1 mojibake. Keys are ASCII, so
-	// byte-wise matching is unchanged; only the passthrough is fixed.
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {

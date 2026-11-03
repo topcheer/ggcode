@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// newRunMgr builds a Manager in a temp dir with a journal disabled (journal
-// writes only go to disk when a journal file exists; NewManager keeps it
-// in-memory until ConfigureJournal). Enough for revert-semantics tests.
 func newRunMgr(t *testing.T) *Manager {
 	t.Helper()
 	return NewManager(64)
@@ -26,11 +23,9 @@ func TestRevertRecentRuns_RollsBackLastNRuns(t *testing.T) {
 		}
 	}
 
-	// Run 1: edit a.
 	m.StartRun("run-1")
 	m.Save(a, "base\n", "run1-a\n", "edit_file")
 
-	// Run 2: edit a and b.
 	m.StartRun("run-2")
 	m.Save(a, "run1-a\n", "run2-a\n", "edit_file")
 	m.Save(b, "base\n", "run2-b\n", "edit_file")
@@ -60,7 +55,6 @@ func TestRevertRecentRuns_StopsEarlyWhenCheckpointsRunOut(t *testing.T) {
 	if err := os.WriteFile(a, []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Only one run with edits exists; rewinding 5 turns must stop cleanly.
 	m.StartRun("only")
 	m.Save(a, "base\n", "edited\n", "edit_file")
 
@@ -97,9 +91,6 @@ func TestRevertRecentRuns_ZeroCountIsNoop(t *testing.T) {
 }
 
 func TestRevertRecentRuns_EvictionRefusalReturnsPartial(t *testing.T) {
-	// FIFO limit of 2 checkpoints; run-2 alone fills it, evicting run-1's
-	// baseline (issue #517 scenario). RevertRecentRuns(2) must revert run-2
-	// (the tail) and then surface the refusal for run-1 as a partial error.
 	m := NewManager(2)
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")
@@ -143,12 +134,9 @@ func TestRevertRecentRuns_RedoRestoresEachRun(t *testing.T) {
 	if _, err := m.RevertRecentRuns(2); err != nil {
 		t.Fatal(err)
 	}
-	// Undo twice, redo twice: full fidelity round trip.
 	for want := range map[int]string{0: "run1\n", 1: "run2\n"} {
 		_ = want
 	}
-	// Redo stack order: first Redo re-applies the LAST reverted (run-2 second
-	// checkpoint order is internal), verify final state after two Redos.
 	if !m.CanRedo() {
 		t.Fatalf("redo stack must be non-empty after RevertRecentRuns")
 	}

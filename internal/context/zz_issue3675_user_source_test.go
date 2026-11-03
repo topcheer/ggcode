@@ -7,11 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #3675: constraint extraction must be user-source only. Assistant
-// reasoning ("we must not X") and tool_result echoes (code comments,
-// compiler errors) used to be lifted into the "treat as binding" section
-// and self-perpetuate across compactions, locking the agent to its own
-// past self-talk.
 func Test3675UserConstraintSourceFiltersRoles(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "don't modify the existing tests"}}},
@@ -28,8 +23,6 @@ func Test3675UserConstraintSourceFiltersRoles(t *testing.T) {
 }
 
 func Test3675AssistantReasoningNotCrownedBinding(t *testing.T) {
-	// The full pre-compaction payload DOES contain the assistant line;
-	// the user source does not. Only the user constraint may be re-attached.
 	payload := "=== CONVERSATION LOG ===\n[user] please add the feature\n[assistant] we must not touch internal/config - scope is UI only\n[user] don't modify the existing tests\n"
 	userSrc := userConstraintSource([]provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "please add the feature\ndon't modify the existing tests"}}},
@@ -46,8 +39,6 @@ func Test3675AssistantReasoningNotCrownedBinding(t *testing.T) {
 }
 
 func Test3675ToolEchoNotCrownedBinding(t *testing.T) {
-	// Compiler error / code comment echoes in tool output must not become
-	// "user constraints".
 	payload := "[tool] compile error: package must be imported as package y\n[user] keep it simple\n"
 	userSrc := userConstraintSource([]provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "keep it simple"}}},

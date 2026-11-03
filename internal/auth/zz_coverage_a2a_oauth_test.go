@@ -1,11 +1,5 @@
 package auth
 
-// Coverage suite for the offline-testable paths of a2a_oauth.go: token
-// exchange parsing, device-flow polling, mTLS config building, token
-// provider cache hits and preset resolution. Network endpoints are
-// replaced by httptest servers; browser/clipboard side-effect paths are
-// intentionally not exercised.
-
 import (
 	"context"
 	"crypto/ecdsa"
@@ -145,8 +139,6 @@ func TestStartDeviceFlowBadJSON(t *testing.T) {
 	}
 }
 
-// genTestCert writes a self-signed certificate and key to dir and returns
-// their paths plus the PEM of the CA (= the same cert).
 func genTestCert(t *testing.T, dir string) (certPath, keyPath string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -219,7 +211,6 @@ func TestPKCETokenProviderCacheHit(t *testing.T) {
 		t.Fatalf("seed cache: %v", err)
 	}
 	p := &PKCETokenProvider{Provider: "prov-x", Cache: cache}
-	// Point the config at a dead URL: any cache miss would fail loudly.
 	p.Config = A2AOAuth2Config{ClientID: "cid", TokenURL: "http://127.0.0.1:1/dead", AuthorizeURL: "http://127.0.0.1:1/dead"}
 	at, rt, _, err := p.GetToken(context.Background())
 	if err != nil {
@@ -249,7 +240,6 @@ func TestDeviceFlowTokenProviderCacheHit(t *testing.T) {
 }
 
 func TestNewTokenProviderFromPreset(t *testing.T) {
-	// Unknown provider errors out without touching the network.
 	if _, err := NewTokenProviderFromPreset("no-such-provider", "", false); err == nil {
 		t.Fatal("expected error for unknown provider")
 	}

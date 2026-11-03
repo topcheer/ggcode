@@ -1,15 +1,5 @@
 package a2a
 
-// RFC 8785 (JSON Canonicalization Scheme, JCS) canonicalization for Agent
-// Card signature verification (A2A spec §8.4).
-//
-// The A2A spec signs the canonicalized card JSON, so the verifier must
-// reproduce the exact canonical form the signer produced: sorted object keys
-// (UTF-16 code-unit order), ECMAScript Number::toString number formatting,
-// and JSON.stringify-compatible string escaping. This file implements that
-// subset of JCS needed for cards; it is self-contained to avoid pulling in an
-// external canonicalization dependency.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -22,7 +12,6 @@ import (
 	"unicode/utf8"
 )
 
-// jcsCanonicalize returns the RFC 8785 canonical form of the JSON value in raw.
 func jcsCanonicalize(raw []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -90,8 +79,6 @@ func jcsEncode(buf *bytes.Buffer, v interface{}) error {
 	return nil
 }
 
-// jcsKeyLess orders strings by their UTF-16 code unit sequence, as required by
-// RFC 8785 §3.2.3 (matches ECMAScript array sort on strings).
 func jcsKeyLess(a, b string) bool {
 	au := utf16.Encode([]rune(a))
 	bu := utf16.Encode([]rune(b))
@@ -107,8 +94,6 @@ func jcsKeyLess(a, b string) bool {
 	return len(au) < len(bu)
 }
 
-// jcsString escapes per ECMAScript JSON.stringify: only quote, backslash and
-// C0 control characters are escaped; all other runes are emitted as raw UTF-8.
 func jcsString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 	for i := 0; i < len(s); {
@@ -141,16 +126,12 @@ func jcsString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 }
 
-// jcsNumber formats a JSON number the way ECMAScript Number::toString does
-// (RFC 8785 §3.2.2.3): fixed notation for |x| in [1e-6, 1e21), scientific
-// notation otherwise with no leading zeros in the exponent.
 func jcsNumber(n string) (string, error) {
 	f, err := strconv.ParseFloat(n, 64)
 	if err != nil {
 		return "", fmt.Errorf("number %q: %w", n, err)
 	}
 	if f == 0 {
-		// 0 and -0 serialize as "0" (RFC 8785 §3.2.2.3.1).
 		return "0", nil
 	}
 	abs := math.Abs(f)

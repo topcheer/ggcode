@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestSessionTryBeginRun covers the prompt busy guard added in #1033:
-// the first TryBeginRun wins, concurrent attempts fail until EndRun.
 func TestSessionTryBeginRun(t *testing.T) {
 	s := NewSession("/tmp", nil)
 
@@ -23,9 +21,6 @@ func TestSessionTryBeginRun(t *testing.T) {
 	}
 }
 
-// TestSessionTryBeginRunConcurrent ensures exactly one winner across many
-// concurrent attempts - the property handleSessionPrompt relies on to keep a
-// single goroutine driving an AgentLoop (#1033).
 func TestSessionTryBeginRunConcurrent(t *testing.T) {
 	s := NewSession("/tmp", nil)
 

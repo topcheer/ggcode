@@ -26,7 +26,6 @@ func TestPricingTable_CaseInsensitive(t *testing.T) {
 
 func TestPricingTable_PrefixMatch(t *testing.T) {
 	pt := DefaultPricingTable()
-	// "gpt-4o-2024-08-06" should match "gpt-4o" prefix
 	rate, ok := pt.Get("github-copilot", "gpt-4o-2024-08-06")
 	if !ok {
 		t.Fatal("expected prefix match")
@@ -45,8 +44,6 @@ func TestPricingTable_NotFound(t *testing.T) {
 }
 
 func TestPricingTable_NoFakePerTokenPrices(t *testing.T) {
-	// Verify that NO vendor has hardcoded per-token prices.
-	// Per-token pricing should only come from user Merge().
 	pt := DefaultPricingTable()
 	for vendor, models := range pt {
 		for model, rate := range models {
@@ -66,7 +63,6 @@ func TestPricingTable_Merge(t *testing.T) {
 		},
 	}
 	merged := base.Merge(custom)
-	// Copilot entries should survive merge
 	rate, ok := merged.Get("github-copilot", "gpt-4o")
 	if !ok {
 		t.Error("base entries should survive merge")
@@ -74,7 +70,6 @@ func TestPricingTable_Merge(t *testing.T) {
 	if rate.Type != PricingSubscription {
 		t.Error("copilot should still be subscription after merge")
 	}
-	// Custom entries should be added
 	rate, ok = merged.Get("anthropic", "claude-sonnet-4-6")
 	if !ok {
 		t.Error("custom entries should be added")
@@ -119,9 +114,9 @@ func TestIsSubscriptionVendor(t *testing.T) {
 		{"minimax", "MiniMax Token Plan"},
 		{"xiaomi-mimo", "Xiaomi MiMo Token Plan"},
 		{"github-copilot", "GitHub Copilot"},
-		{"zai", ""},       // mixed — has both coding and standard endpoints
-		{"anthropic", ""}, // per-token only
-		{"", ""},          // empty
+		{"zai", ""},
+		{"anthropic", ""},
+		{"", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.vendor, func(t *testing.T) {

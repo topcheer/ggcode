@@ -11,29 +11,26 @@ import (
 	"time"
 )
 
-// Session represents an active ACP session.
 type Session struct {
 	ID         string
 	CWD        string
 	MCPServers []MCPServer
 	CreatedAt  time.Time
 	Cancel     func()
-	mcpManager *MCPManager // MCP server lifecycle manager
-	saveDir    string      // directory for session persistence
+	mcpManager *MCPManager
+	saveDir    string
 
 	conversation []Message
 	mu           sync.Mutex
 
-	runActive bool // prompt busy guard (#1033): one in-flight prompt per session
+	runActive bool
 }
 
-// Message represents a single conversation message within a session.
 type Message struct {
-	Role    string // "user" or "assistant"
+	Role    string
 	Content []ContentBlock
 }
 
-// NewSession creates a new session with a unique ID.
 func NewSession(cwd string, mcpServers []MCPServer) *Session {
 	id := generateSessionID()
 	return &Session{
@@ -44,17 +41,14 @@ func NewSession(cwd string, mcpServers []MCPServer) *Session {
 	}
 }
 
-// SetSaveDir sets the directory where session files are persisted.
 func (s *Session) SetSaveDir(dir string) {
 	s.saveDir = dir
 }
 
-// SaveDir returns the session save directory.
 func (s *Session) SaveDir() string {
 	return s.saveDir
 }
 
-// AddMessage appends a message to the session conversation.
 func (s *Session) AddMessage(role string, content []ContentBlock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -64,7 +58,6 @@ func (s *Session) AddMessage(role string, content []ContentBlock) {
 	})
 }
 
-// Messages returns a copy of the conversation history.
 func (s *Session) Messages() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,8 +66,6 @@ func (s *Session) Messages() []Message {
 	return out
 }
 
-// ReplaceConversation replaces the entire conversation history.
-// Used after context compaction to store the compressed messages.
 func (s *Session) ReplaceConversation(msgs []Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,14 +73,12 @@ func (s *Session) ReplaceConversation(msgs []Message) {
 	copy(s.conversation, msgs)
 }
 
-// SetCancel sets the cancellation function for this session.
 func (s *Session) SetCancel(cancel func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Cancel = cancel
 }
 
-// DoCancel cancels the current operation for this session.
 func (s *Session) DoCancel() {
 	s.mu.Lock()
 	cancel := s.Cancel
@@ -99,9 +88,6 @@ func (s *Session) DoCancel() {
 	}
 }
 
-// TryBeginRun attempts to mark the session as having a prompt in flight.
-// Returns false if another prompt is already running (#1033): the handler
-// must reject the new prompt instead of concurrently driving the same loop.
 func (s *Session) TryBeginRun() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,18 +98,12 @@ func (s *Session) TryBeginRun() bool {
 	return true
 }
 
-// EndRun releases the prompt busy guard set by TryBeginRun.
 func (s *Session) EndRun() {
 	s.mu.Lock()
 	s.runActive = false
 	s.mu.Unlock()
 }
 
-// validSessionID reports whether id matches the format produced by
-// generateSessionID: 32 lowercase hex chars. Session IDs are used to build
-// filesystem paths ("<dir>/<id>.json"); rejecting any other form blocks path
-// traversal via client-supplied session/resume IDs and hostile "id" fields
-// stored inside session files (which would otherwise redirect Save).
 func validSessionID(id string) bool {
 	if len(id) != 32 {
 		return false
@@ -137,14 +117,12 @@ func validSessionID(id string) bool {
 	return true
 }
 
-// generateSessionID creates a random session identifier.
 func generateSessionID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// SessionData is the JSON-serializable form of a session for persistence.
 type SessionData struct {
 	ID         string      `json:"id"`
 	CWD        string      `json:"cwd"`
@@ -154,15 +132,12 @@ type SessionData struct {
 	MCPServers []MCPServer `json:"mcpServers,omitempty"`
 }
 
-// HasMessages returns true if the session has any conversation history.
 func (s *Session) HasMessages() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.conversation) > 0
 }
 
-// Save persists the session to disk.
-// If the session has no conversation history, the file is deleted (or not created).
 func (s *Session) Save(dir string) error {
 	if !validSessionID(s.ID) {
 		return fmt.Errorf("invalid session id %q: refusing to write outside the session store", s.ID)
@@ -173,7 +148,6 @@ func (s *Session) Save(dir string) error {
 
 	path := filepath.Join(dir, s.ID+".json")
 
-	// No conversation history — remove the file if it exists (e.g. from a previous save).
 	if !hasMessages {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
@@ -213,10 +187,7 @@ func (s *Session) Save(dir string) error {
 	return os.Rename(tmp, path)
 }
 
-// LoadSession loads a session from disk.
 func LoadSession(dir, id string) (*Session, error) {
-	// id is client-supplied on the session/resume path; validate it so
-	// "../../etc/foo" cannot escape dir via filepath.Join cleaning.
 	if !validSessionID(id) {
 		return nil, fmt.Errorf("invalid session id %q", id)
 	}
@@ -229,8 +200,6 @@ func LoadSession(dir, id string) (*Session, error) {
 	if err := json.Unmarshal(data, &sd); err != nil {
 		return nil, fmt.Errorf("decoding session: %w", err)
 	}
-	// The id field inside the file feeds Save()'s path on later turns; a
-	// hand-edited/hostile file must not smuggle a traversal payload in.
 	if !validSessionID(sd.ID) {
 		return nil, fmt.Errorf("session file contains invalid id %q", sd.ID)
 	}

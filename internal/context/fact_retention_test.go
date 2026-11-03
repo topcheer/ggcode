@@ -1,9 +1,5 @@
 package context
 
-// applyFactRetention tests (sa-237): dropped constraints and recurring
-// paths are re-attached; preserved facts are a no-op; the appended
-// section respects its char budget.
-
 import (
 	"strings"
 	"testing"
@@ -40,7 +36,6 @@ func TestApplyFactRetention_PreservedFactIsNoop(t *testing.T) {
 }
 
 func TestApplyFactRetention_PreservedFactCaseFolding(t *testing.T) {
-	// Paraphrased casing/spacing still counts as preserved.
 	payload := "NEVER push directly to main branch"
 	summary := "## Decisions & Constraints\n- never push directly to Main Branch"
 	out := applyFactRetention(summary, payload, payload)
@@ -76,7 +71,7 @@ func TestApplyFactRetention_BudgetCap(t *testing.T) {
 	summary := "## Task\nx."
 	out := applyFactRetention(summary, payload, payload)
 	section := out[strings.Index(out, "## Auto-preserved Facts"):]
-	if len(section) > maxRetentionChars+200 { // header + bullets overhead
+	if len(section) > maxRetentionChars+200 {
 		t.Fatalf("appended section exceeded budget: %d chars", len(section))
 	}
 }

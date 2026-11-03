@@ -1,11 +1,5 @@
 package a2a
 
-// Tests for A2A v1.0 protocol extension negotiation:
-//   - Agent Card declaration (capabilities.extensions + legacy flat field)
-//   - A2A-Extensions request/response header activation
-//   - required:true extension gating (-32004 UnsupportedOperation)
-//   - client-side activation opt-in and required-extension pre-flight
-
 import (
 	"context"
 	"encoding/json"
@@ -30,9 +24,9 @@ func TestParseFormatA2AExtensionsHeader(t *testing.T) {
 		{"   ", nil},
 		{testExtURI, []string{testExtURI}},
 		{testExtURI + ", " + testExtReqURI, []string{testExtURI, testExtReqURI}},
-		{testExtURI + " " + testExtReqURI, []string{testExtURI, testExtReqURI}}, // space-separated
+		{testExtURI + " " + testExtReqURI, []string{testExtURI, testExtReqURI}},
 		{testExtURI + ",," + testExtReqURI + ",", []string{testExtURI, testExtReqURI}},
-		{testExtURI + "," + testExtURI, []string{testExtURI}}, // dedup, order preserved
+		{testExtURI + "," + testExtURI, []string{testExtURI}},
 	}
 	for _, tc := range cases {
 		got := ParseA2AExtensionsHeader(tc.in)
@@ -53,7 +47,6 @@ func TestParseFormatA2AExtensionsHeader(t *testing.T) {
 	}
 }
 
-// startExtTestServer builds a minimal A2A server with the given extensions.
 func startExtTestServer(t *testing.T, exts []AgentExtension) *Server {
 	t.Helper()
 	srv := NewServer(ServerConfig{
@@ -97,7 +90,6 @@ func extTestRPC(t *testing.T, endpoint string, hdr http.Header) (int, http.Heade
 func TestServerExtensionActivationEcho(t *testing.T) {
 	srv := startExtTestServer(t, []AgentExtension{{URI: testExtURI, Description: "ts"}})
 
-	// Without activation: request proceeds, no echo header (nothing activated).
 	_, hdr, rpc := extTestRPC(t, srv.Endpoint(), nil)
 	if v := hdr.Get(A2AExtensionsHeader); v != "" {
 		t.Fatalf("unexpected %s echo without activation: %q", A2AExtensionsHeader, v)
@@ -106,8 +98,6 @@ func TestServerExtensionActivationEcho(t *testing.T) {
 		t.Fatalf("optional extension must not gate: %+v", rpc.Error)
 	}
 
-	// With activation (plus an unsupported URI the agent ignores): echoed set
-	// contains only the supported extension.
 	_, hdr, _ = extTestRPC(t, srv.Endpoint(), http.Header{
 		A2AExtensionsHeader: []string{testExtUnknownURI + ", " + testExtURI},
 	})
@@ -122,7 +112,6 @@ func TestServerRequiredExtensionGate(t *testing.T) {
 		{URI: testExtURI},
 	})
 
-	// Missing required activation → -32004 with the offending URIs in data.
 	_, hdr, rpc := extTestRPC(t, srv.Endpoint(), nil)
 	if rpc.Error == nil || rpc.Error.Code != ErrUnsupportedOp.Code {
 		t.Fatalf("want -32004 for missing required extension, got %+v", rpc.Error)
@@ -134,7 +123,6 @@ func TestServerRequiredExtensionGate(t *testing.T) {
 		t.Fatalf("no activation to echo, got %q", v)
 	}
 
-	// Activating exactly the required extension passes the gate.
 	_, hdr, rpc = extTestRPC(t, srv.Endpoint(), http.Header{
 		A2AExtensionsHeader: []string{testExtReqURI},
 	})
@@ -201,9 +189,6 @@ func TestClientExtensionActivation(t *testing.T) {
 		if missing := c.MissingRequiredExtensions(); len(missing) != 0 {
 			t.Fatalf("unexpected missing: %v", missing)
 		}
-		// tasks/list must succeed (server echoes the negotiated set in the
-		// response header; the request would have been rejected with -32004
-		// had the activation header been missing).
 		if _, err := c.ListTasks(ctx, "", 10); err != nil {
 			t.Fatalf("list tasks with activation: %v", err)
 		}
@@ -211,8 +196,6 @@ func TestClientExtensionActivation(t *testing.T) {
 }
 
 func TestClientMissingCardTolerated(t *testing.T) {
-	// No card discovered yet: pre-flight must not spuriously fail, and an
-	// empty activation list must not send the header.
 	c := NewClient("http://127.0.0.1:1", "")
 	if missing := c.MissingRequiredExtensions(); len(missing) != 0 {
 		t.Fatalf("missing without card = %v", missing)

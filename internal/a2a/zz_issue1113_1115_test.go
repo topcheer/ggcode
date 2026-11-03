@@ -15,7 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// rawRPC posts a raw JSON-RPC request and returns the response body.
 func rawRPC(t *testing.T, url, method string, params interface{}) (string, int) {
 	t.Helper()
 	body, err := json.Marshal(map[string]interface{}{
@@ -39,9 +38,6 @@ func rawRPC(t *testing.T, url, method string, params interface{}) (string, int) 
 	return buf.String(), resp.StatusCode
 }
 
-// TestIssue1115_DedupRetryStreamEmitsSingleFinal guards #1115: a dedup-retry
-// message/stream with the MessageID of an already-completed task must emit
-// exactly one final:true event (the A2A stream terminator), not two.
 func TestIssue1115_DedupRetryStreamEmitsSingleFinal(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -61,13 +57,11 @@ func TestIssue1115_DedupRetryStreamEmitsSingleFinal(t *testing.T) {
 		"skill": SkillFullTask,
 	}
 
-	// First request: task completes.
 	sendBody, code := rawRPC(t, tsURL, "message/send", params)
 	if code != 200 || !strings.Contains(sendBody, "completed") {
 		t.Fatalf("send: code=%d body=%s", code, sendBody)
 	}
 
-	// Dedup-retry with the same MessageID over stream.
 	streamBody, code := rawRPC(t, tsURL, "message/stream", params)
 	if code != 200 {
 		t.Fatalf("stream: code=%d body=%s", code, streamBody)
@@ -77,12 +71,6 @@ func TestIssue1115_DedupRetryStreamEmitsSingleFinal(t *testing.T) {
 	}
 }
 
-// TestIssue1113_SweptTaskStreamEmitsTaskNotFound guards #1113: all three
-// GetTask reads in handleMessageStream route through getTaskOrSSEError; a
-// swept task must yield a TaskNotFound SSE event, never a nil deref. The
-// e2e sweep window between Handle and the reads cannot be hit
-// deterministically, so the shared defensive helper is unit-tested here
-// (httptest.ResponseRecorder implements http.Flusher).
 func TestIssue1113_SweptTaskStreamEmitsTaskNotFound(t *testing.T) {
 	s := NewServer(ServerConfig{}, newHandler(nil, newStubRegistry()))
 	rec := httptest.NewRecorder()
@@ -95,7 +83,6 @@ func TestIssue1113_SweptTaskStreamEmitsTaskNotFound(t *testing.T) {
 		t.Fatalf("expected TaskNotFound SSE error, got: %s", rec.Body.String())
 	}
 
-	// Live task: returned intact, no error event.
 	h := newHandler(nil, newStubRegistry())
 	tsk := &Task{ID: "t-live"}
 	tsk.Status.State = TaskStateCompleted
@@ -113,9 +100,6 @@ func TestIssue1113_SweptTaskStreamEmitsTaskNotFound(t *testing.T) {
 	}
 }
 
-// TestIssue1114_ExtendedCardConcurrentReadWrite guards #1114: concurrent
-// SetExtendedCard writes and handleGetExtendedCard reads must be race-free
-// (run under -race this test previously reported the data race).
 func TestIssue1114_ExtendedCardConcurrentReadWrite(t *testing.T) {
 	s := NewServer(ServerConfig{}, newHandler(nil, newStubRegistry()))
 	const writesPerWriter = 2000
@@ -123,9 +107,6 @@ func TestIssue1114_ExtendedCardConcurrentReadWrite(t *testing.T) {
 	var wg sync.WaitGroup
 	var readCount int64
 
-	// Bounded iteration counts instead of a shared timer channel: a timer
-	// fired into busy-spinning goroutines proved unreliable under scheduler
-	// starvation and hung the test for its full timeout.
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func(n int) {
@@ -154,7 +135,6 @@ func TestIssue1114_ExtendedCardConcurrentReadWrite(t *testing.T) {
 	}
 }
 
-// startTestServer boots s on an ephemeral port and returns its URL.
 func startTestServer(t *testing.T, s *Server) string {
 	t.Helper()
 	ts := httptest.NewServer(s.Mux())

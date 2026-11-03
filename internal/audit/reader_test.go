@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// writeTestLedger opens a ledger at a temp path, appends the given events,
-// anchors, and closes it — the fixture every reader test uses.
 func writeTestLedger(t *testing.T, path, session string, evs ...Event) []Entry {
 	t.Helper()
 	l, err := Open(path, session)
@@ -57,7 +55,6 @@ func TestDigestReconstructsRun(t *testing.T) {
 	if !d.VerifyOK {
 		t.Fatalf("chain should verify intact, got break %+v trunc %+v", d.FirstBreak, d.Truncated)
 	}
-	// Tool rollup: edit_file dominates and sorts first.
 	if len(d.ToolStats) == 0 || d.ToolStats[0].Tool != "edit_file" {
 		t.Fatalf("top tool = %+v, want edit_file", d.ToolStats)
 	}
@@ -65,26 +62,21 @@ func TestDigestReconstructsRun(t *testing.T) {
 	if ef.Total != 3 || ef.OK != 1 || ef.Errors != 2 {
 		t.Fatalf("edit_file stat = %+v", ef)
 	}
-	// Approval timeline captured both human-gate decisions.
 	if len(d.Approvals) != 2 {
 		t.Fatalf("approvals = %d, want 2", len(d.Approvals))
 	}
 	if d.Approvals[0].Status != StatusUserApproved || d.Approvals[1].Status != StatusUserDenied {
 		t.Fatalf("approval order/status wrong: %+v", d.Approvals)
 	}
-	// Invariant rejection attributed.
 	if len(d.Invariants) != 1 || d.Invariants[0].InvariantID != "INV-NO-FORCE-PUSH" || d.Invariants[0].Count != 1 {
 		t.Fatalf("invariants = %+v", d.Invariants)
 	}
-	// A2A peer attribution.
 	if len(d.Peers) != 1 || d.Peers[0].Peer != "order-service" || d.Peers[0].TaskID != "t-9" || d.Peers[0].Events != 1 {
 		t.Fatalf("peers = %+v", d.Peers)
 	}
-	// Two same-shape errors cluster together after digit normalization.
 	if len(d.ErrorClusters) != 1 || d.ErrorClusters[0].Count != 2 {
 		t.Fatalf("error clusters = %+v, want 1 cluster of 2", d.ErrorClusters)
 	}
-	// Render smoke: the report mentions the pieces a human reviewer needs.
 	out := d.Render([]string{"internal/db/migrations/001_init.sql"})
 	for _, want := range []string{"VERIFIED intact", "Human-gate decisions", "INV-NO-FORCE-PUSH", "order-service", "edit_file", "Blast radius: critical"} {
 		if !strings.Contains(out, want) {
@@ -117,7 +109,6 @@ func TestDigestCarriesTamperState(t *testing.T) {
 		Event{Tool: "read_file", Status: StatusOK, DurationMS: 10, InputHash: "a"},
 		Event{Tool: "run_command", Status: StatusOK, DurationMS: 10, InputHash: "b"},
 	)
-	// Tamper: edit the second entry's error field in place.
 	data, _ := os.ReadFile(path)
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	lines[1] = strings.Replace(lines[1], `"status":"ok"`, `"err":"sneaky","status":"error"`, 1)
@@ -178,7 +169,7 @@ func TestNormalizeErrPrefixClusters(t *testing.T) {
 
 func TestDigestEmptyLedger(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "missing.jsonl") // never created: absent ledger
+	path := filepath.Join(dir, "missing.jsonl")
 	d, err := Digest(path, "")
 	if err != nil {
 		t.Fatalf("digest on absent ledger should not hard-error: %v", err)
@@ -191,14 +182,11 @@ func TestDigestEmptyLedger(t *testing.T) {
 	}
 }
 
-// Wall-time span must come from entry timestamps, not entry count.
 func TestDigestWallDuration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 	l, _ := Open(path, "")
 	l.Append(Event{Tool: "a", Status: StatusOK, DurationMS: 5, InputHash: "x"})
-	// Manually control the second entry's timestamp via a direct seal path is
-	// not exposed; instead verify span >= 0 and matches timestamps of entries.
 	entries, _ := scanEntries(path)
 	if len(entries) != 1 {
 		t.Fatalf("fixture wrote %d entries", len(entries))

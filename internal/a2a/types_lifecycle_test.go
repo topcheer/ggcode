@@ -78,7 +78,6 @@ func TestAgentCard_LifecycleIntegration(t *testing.T) {
 		},
 	}
 
-	// Verify lifecycle is properly set
 	if card.Lifecycle == nil {
 		t.Fatal("Expected Lifecycle to be set")
 	}
@@ -86,13 +85,11 @@ func TestAgentCard_LifecycleIntegration(t *testing.T) {
 		t.Errorf("Expected state %v, got %v", AgentLifecycleActive, card.Lifecycle.State)
 	}
 
-	// Test deprecated state warning
 	card.Lifecycle.State = AgentLifecycleDeprecated
 	if !card.Lifecycle.State.IsDeprecatedOrWorse() {
 		t.Error("Expected deprecated state to trigger warning")
 	}
 
-	// Test terminal state
 	card.Lifecycle.State = AgentLifecycleRevoked
 	if !card.Lifecycle.State.IsTerminal() {
 		t.Error("Expected revoked state to be terminal")

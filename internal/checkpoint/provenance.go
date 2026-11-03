@@ -1,22 +1,10 @@
 package checkpoint
 
-// sa-91: agent-native edit provenance queries (PROV-AGENT, arXiv 2508.02866;
-// agent-native version control discussions 2025-2026). Checkpoints carry
-// EditIntent (which todo item the edit served) stamped at save time; these
-// helpers turn that trail into task-scoped views: "what did this task touch"
-// and a narrative grouping suitable for PR descriptions or review. Deliberately
-// read-only - RevertTask-style selective rollback is intentionally NOT offered
-// here: interleaved edits to the same file from concurrent tasks make
-// content-based revert unsafe, and that risk deserves its own design round.
-
 import (
 	"fmt"
 	"strings"
 )
 
-// EditsForTask returns all checkpoints whose Intent.TaskID equals taskID, in
-// chronological order. Empty slice when nothing matches (unknown task, legacy
-// checkpoints without intent, or a read-only task).
 func (m *Manager) EditsForTask(taskID string) []Checkpoint {
 	if taskID == "" {
 		return nil
@@ -32,17 +20,13 @@ func (m *Manager) EditsForTask(taskID string) []Checkpoint {
 	return out
 }
 
-// TaskSummary names a task once from its first attributed checkpoint.
 type TaskSummary struct {
 	TaskID   string
 	TaskDesc string
-	Files    []string // unique file paths, first-touch order
-	Edits    int      // number of attributed checkpoints
+	Files    []string
+	Edits    int
 }
 
-// TasksWithEdits summarizes every task that has at least one attributed
-// checkpoint, in first-touch order. This is the "what did each of my todo
-// items actually change" index.
 func (m *Manager) TasksWithEdits() []TaskSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -71,10 +55,6 @@ func (m *Manager) TasksWithEdits() []TaskSummary {
 	return out
 }
 
-// Narrate renders a human-readable provenance report: one block per task
-// (edit intent -> files -> edit count), plus a trailing count of unattributed
-// checkpoints so legacy/no-todo edits stay visible instead of silently
-// vanishing from the story. Empty string when there are no checkpoints.
 func (m *Manager) Narrate() string {
 	m.mu.Lock()
 	snapshot := make([]Checkpoint, len(m.checkpoints))

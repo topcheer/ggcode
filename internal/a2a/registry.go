@@ -15,7 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// InstanceInfo describes a running ggcode instance for discovery.
 type InstanceInfo struct {
 	ID           string `json:"id"`
 	PID          int    `json:"pid"`
@@ -23,11 +22,9 @@ type InstanceInfo struct {
 	StartedAt    string `json:"started_at"`
 	Endpoint     string `json:"endpoint"`
 	AgentCardURL string `json:"agent_card_url"`
-	Status       string `json:"status"` // "ready", "busy", "stopping"
+	Status       string `json:"status"`
 }
 
-// DisplayName returns a human-readable identifier: "workspace-name:port".
-// Two instances in the same directory are distinguished by port.
 func (i InstanceInfo) DisplayName() string {
 	name := filepath.Base(i.Workspace)
 	_, port, err := net.SplitHostPort(i.Endpoint)
@@ -37,43 +34,32 @@ func (i InstanceInfo) DisplayName() string {
 	return name + ":" + port
 }
 
-// Registry manages A2A instance discovery via mDNS.
 type Registry struct {
 	mu       sync.Mutex
 	selfID   string
 	selfInfo *InstanceInfo
-	mdnsSvc  *mdnsService // nil if LAN discovery is disabled
+	mdnsSvc  *mdnsService
 
-	// interfaces controls which NICs mDNS advertises on. Set via
-	// SetInterfaces before Register. If nil, default-route auto-detection
-	// runs inside mdns.start().
 	interfaces []string
 
-	// asyncCache is populated by a background goroutine so the UI thread
-	// never blocks on mDNS lookups.
 	asyncCache   []InstanceInfo
 	asyncCacheOK bool
 }
 
-// backgroundRefreshInterval is how often the background goroutine refreshes.
 const backgroundRefreshInterval = 15 * time.Second
 
-// NewRegistry creates a new registry with mDNS discovery always enabled.
 func NewRegistry() (*Registry, error) {
 	return &Registry{
 		mdnsSvc: newMDNSService(),
 	}, nil
 }
 
-// SetInterfaces configures which network interfaces mDNS should advertise on.
-// Must be called before Register. Pass nil to auto-detect the default route.
 func (r *Registry) SetInterfaces(ifaces []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.interfaces = ifaces
 }
 
-// Register records self info and starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
@@ -90,14 +76,12 @@ func (r *Registry) Register(info InstanceInfo) error {
 	return nil
 }
 
-// SelfID returns this instance's ID.
 func (r *Registry) SelfID() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.selfID
 }
 
-// Unregister stops mDNS broadcasting.
 func (r *Registry) Unregister() error {
 	if r.mdnsSvc != nil {
 		r.mdnsSvc.stop()
@@ -105,24 +89,14 @@ func (r *Registry) Unregister() error {
 	return nil
 }
 
-// Discover returns all running instances found via mDNS (excluding self).
-// When mDNS is not enabled, returns the cached instance list (useful for
-// testing and single-machine scenarios).
 func (r *Registry) Discover() ([]InstanceInfo, error) {
 	var instances []InstanceInfo
 	if r.mdnsSvc != nil {
 		instances = r.mdnsSvc.lookup()
 	} else {
-		// No mDNS — use cached instances (populated by tests or manual injection).
 		instances = r.CachedInstances()
 	}
 
-	// Update cache.
-	// #4501: store a private copy and return a separate one - returning
-	// the cached slice itself (or caching the returned slice) let any
-	// caller-side in-place mutation (sort.Slice, field edits) leak into the
-	// cache and race concurrent readers. CachedInstances/SetCachedInstances
-	// already defensively copy; these two sites were the gaps.
 	r.mu.Lock()
 	r.asyncCache = append([]InstanceInfo(nil), instances...)
 	r.asyncCacheOK = true
@@ -131,9 +105,6 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	return append([]InstanceInfo(nil), instances...), nil
 }
 
-// CachedInstances returns the last background-refreshed instance list without
-// any mDNS I/O. Returns nil if the background refresh hasn't populated the
-// cache yet. Safe to call from the UI thread.
 func (r *Registry) CachedInstances() []InstanceInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -143,12 +114,8 @@ func (r *Registry) CachedInstances() []InstanceInfo {
 	return append([]InstanceInfo(nil), r.asyncCache...)
 }
 
-// StartBackgroundRefresh launches a goroutine that periodically calls
-// Discover() to keep the async cache fresh.
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	safego.Go("a2a.registry.backgroundRefresh", func() {
-		// Initial quick refreshes so cache populates fast (mDNS browser
-		// exponential backoff starts at ~1s, so retry a few times).
 		for i := 0; i < 5; i++ {
 			select {
 			case <-ctx.Done():
@@ -182,8 +149,6 @@ func (r *Registry) refreshCache() {
 	r.mu.Unlock()
 }
 
-// SetCachedInstances manually sets the in-memory instance cache. This is
-// used by tests to inject instances without requiring real mDNS discovery.
 func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
 	r.mu.Lock()
 	r.asyncCache = append([]InstanceInfo(nil), instances...)
@@ -191,29 +156,21 @@ func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
 	r.mu.Unlock()
 }
 
-// UpdateStatus refreshes the status field for this instance.
 func (r *Registry) UpdateStatus(status string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.selfInfo != nil {
 		r.selfInfo.Status = status
-		// mDNS TXT records are set at registration time; future enhancement
-		// could update them dynamically. For now we just update the in-memory copy.
 	}
 	return nil
 }
 
-// GenerateInstanceID creates a unique instance ID.
 func GenerateInstanceID() string {
 	hostname, _ := os.Hostname()
 	pid := os.Getpid()
 	return fmt.Sprintf("ggcode-%s-%d-%d", hostname, pid, time.Now().UnixNano())
 }
-
-// ---------------------------------------------------------------------------
-// Workspace detection
-// ---------------------------------------------------------------------------
 
 func detectWorkspaceMeta(dir string) WorkspaceMeta {
 	meta := WorkspaceMeta{
@@ -222,20 +179,11 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		HasGit:    false,
 	}
 
-	// Check for git. #4562: a git worktree or submodule has a .git FILE
-	// (a "gitdir: ..." pointer), not a directory - the old info.IsDir()
-	// requirement misreported HasGit=false there, which blocked the
-	// git-ops skill in handler.go and exposed has_git=false on the agent
-	// card. Any .git entry (file or dir) means this is a git repository.
-	// ProjName intentionally stays filepath.Base(dir): for worktree-based
-	// instances the worktree name IS the instance identity used by A2A
-	// targets, so no repo-name resolution is done here.
 	gitDir := filepath.Join(dir, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
 		meta.HasGit = true
 	}
 
-	// Detect frameworks.
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		meta.Frameworks = append(meta.Frameworks, "go-modules")
 	}
@@ -302,10 +250,6 @@ func scanWorkspaceSignals(dir string) ([]string, bool) {
 		case ".java":
 			langSet["java"] = true
 		}
-		// #4500: drop the bare "test." substring - it matched ordinary
-		// files like latest.go / contest.go / protest.go (lat-est.-go) and
-		// flipped HasTests to a false true in the agent card. The precise
-		// _test. / _test.go / .test. / .spec. conditions cover real cases.
 		if strings.Contains(name, "_test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
 			hasTests = true
 		}

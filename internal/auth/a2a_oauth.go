@@ -28,21 +28,14 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ---------------------------------------------------------------------------
-// OAuth2 + PKCE (Authorization Code Flow for public clients)
-// ---------------------------------------------------------------------------
-
-// A2AOAuth2Config is the runtime config for A2A OAuth2 authentication.
 type A2AOAuth2Config struct {
 	ClientID     string
-	ClientSecret string // optional; GitHub requires this even with PKCE
+	ClientSecret string
 	AuthorizeURL string
 	TokenURL     string
 	Scopes       []string
-	// PKCE is always enabled for public clients.
 }
 
-// PKCEToken holds tokens obtained via OAuth2 + PKCE flow.
 type PKCEToken struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
@@ -51,9 +44,6 @@ type PKCEToken struct {
 	Scope        string    `json:"scope,omitempty"`
 }
 
-// StartPKCEFlow starts an Authorization Code + PKCE flow.
-// It opens a browser for user consent and waits for the callback.
-// Returns the tokens on success.
 func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error) {
 	verifier, err := GenerateCodeVerifier()
 	if err != nil {
@@ -65,8 +55,6 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	// Start local callback server on a random port.
-	// Use localhost (not 127.0.0.1) because GitHub OAuth Apps treat them differently.
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
@@ -74,7 +62,6 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 	port := listener.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
-	// Build authorization URL
 	authURL, _ := url.Parse(cfg.AuthorizeURL)
 	q := authURL.Query()
 	q.Set("response_type", "code")
@@ -106,7 +93,6 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 			return
 		}
 
-		// Exchange code for token
 		token, err := exchangeCodeForToken(ctx, cfg, code, redirectURI, verifier)
 		if err != nil {
 			errCh <- fmt.Errorf("token exchange: %w", err)
@@ -121,7 +107,6 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 	safego.Go("auth.a2aOAuth.serve", func() { _ = srv.Serve(listener) })
 	defer srv.Close()
 
-	// Open browser
 	debug.Log("a2a.oauth", "opening browser for authentication")
 	debug.Log("a2a.oauth", "auth URL: %s", authURL.String())
 	openBrowser(authURL.String())
@@ -139,9 +124,6 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 }
 
 func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redirectURI, verifier string) (*PKCEToken, error) {
-	// GitHub requires JSON body for PKCE token exchange (not form-urlencoded).
-	// With form-urlencoded, GitHub expects client_secret (confidential client).
-	// With JSON body + Accept: application/json, GitHub accepts PKCE (public client).
 	reqBody := map[string]string{
 		"grant_type":    "authorization_code",
 		"code":          code,
@@ -149,8 +131,6 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 		"client_id":     cfg.ClientID,
 		"code_verifier": verifier,
 	}
-	// GitHub requires client_secret even with PKCE (confidential client).
-	// Read from config or GGCODE_OAUTH_CLIENT_SECRET env var.
 	if cfg.ClientSecret != "" {
 		reqBody["client_secret"] = cfg.ClientSecret
 	} else if secret := os.Getenv("GGCODE_OAUTH_CLIENT_SECRET"); secret != "" {
@@ -178,16 +158,13 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// GitHub returns JSON when Accept header is set, otherwise returns URL-encoded
 	var raw map[string]interface{}
 	if strings.Contains(contentType, "application/json") {
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, fmt.Errorf("parse token response: %w", err)
 		}
 	} else {
-		// Parse URL-encoded or try JSON anyway
 		if err := json.Unmarshal(body, &raw); err != nil {
-			// Try URL-encoded
 			vals, parseErr := url.ParseQuery(string(body))
 			if parseErr != nil {
 				return nil, fmt.Errorf("parse token response (url-encoded): %w", parseErr)
@@ -213,14 +190,7 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 	return token, nil
 }
 
-// ---------------------------------------------------------------------------
-// Device Authorization Flow (headless / CI environments)
-// ---------------------------------------------------------------------------
-
-// StartDeviceFlow starts a Device Authorization flow.
-// No client_secret or browser needed. User visits a URL and enters a code.
 func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error) {
-	// Request device code via JSON (GitHub requires Accept: application/json)
 	reqBody := map[string]string{
 		"client_id": cfg.ClientID,
 		"scope":     strings.Join(cfg.Scopes, " "),
@@ -249,7 +219,6 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 	}
 	respBody, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 
-	// Check for error response first
 	var errResp struct {
 		Error            string `json:"error"`
 		ErrorDescription string `json:"error_description"`
@@ -266,7 +235,6 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 	debug.Log("a2a.oauth", "device visit: %s", deviceResp.VerificationURI)
 	debug.Log("a2a.oauth", "device code: %s", deviceResp.UserCode)
 
-	// Copy code to clipboard and open browser automatically
 	copyToClipboard(deviceResp.UserCode)
 	debug.Log("a2a.oauth", "code copied to clipboard")
 	openBrowser(deviceResp.VerificationURI)
@@ -303,7 +271,6 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 }
 
 func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string) (*PKCEToken, error) {
-	// Device flow is for public clients — no client_secret needed.
 	data := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"client_id":   {cfg.ClientID},
@@ -329,7 +296,7 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 	defer resp.Body.Close()
 
 	body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
-	_ = data // suppress unused
+	_ = data
 	var raw map[string]interface{}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("parse device token response: %w", err)
@@ -353,49 +320,34 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 	return token, nil
 }
 
-// ---------------------------------------------------------------------------
-// Token validation (server-side)
-// ---------------------------------------------------------------------------
-
-// TokenValidator validates incoming Bearer tokens on the A2A server side.
-// Supports:
-//   - JWT tokens: verifies signature (via JWKS or HMAC), expiration, issuer, audience
-//   - Opaque tokens: uses token introspection endpoint
 type TokenValidator struct {
 	clientID      string
 	issuerURL     string
 	jwksURL       string
 	mu            sync.Mutex
-	jwksKeys      map[string]interface{} // cached JWKS public keys (kid → key)
-	jwksExp       time.Time              // when JWKS cache expires
-	jwksFetchedAt time.Time              // last successful JWKS fetch (stale-window anchor, #H-05)
-	introURL      string                 // introspection endpoint from discovery doc (#1503)
-	introExp      time.Time              // when the introspection-endpoint lookup expires
-	validIssuers  []string               // allowed issuer URLs (defaults to issuerURL)
-	hmacSecret    string                 // HMAC signing key (must not be clientID)
+	jwksKeys      map[string]interface{}
+	jwksExp       time.Time
+	jwksFetchedAt time.Time
+	introURL      string
+	introExp      time.Time
+	validIssuers  []string
+	hmacSecret    string
 }
 
-// ValidatorOption configures a TokenValidator.
 type ValidatorOption func(*TokenValidator)
 
-// WithValidIssuers sets additional allowed issuer URLs.
-// The configured issuerURL is always allowed; this adds extras for providers
-// that return different issuers in different contexts (e.g. tenant-specific URLs).
 func WithValidIssuers(issuers []string) ValidatorOption {
 	return func(tv *TokenValidator) {
 		tv.validIssuers = issuers
 	}
 }
 
-// WithHMACSecret sets the HMAC signing key. This must be a secret shared
-// between the A2A server and the token issuer — never use clientID which is public.
 func WithHMACSecret(secret string) ValidatorOption {
 	return func(tv *TokenValidator) {
 		tv.hmacSecret = secret
 	}
 }
 
-// NewTokenValidator creates a validator for the given OAuth2/OIDC issuer.
 func NewTokenValidator(clientID, issuerURL string, opts ...ValidatorOption) (*TokenValidator, error) {
 	if issuerURL == "" {
 		return nil, fmt.Errorf("issuer URL is required for token validation")
@@ -407,7 +359,6 @@ func NewTokenValidator(clientID, issuerURL string, opts ...ValidatorOption) (*To
 	for _, opt := range opts {
 		opt(tv)
 	}
-	// Try OIDC discovery to find JWKS URL
 	if strings.Contains(issuerURL, "/.well-known") {
 		tv.jwksURL = issuerURL
 	} else {
@@ -416,39 +367,28 @@ func NewTokenValidator(clientID, issuerURL string, opts ...ValidatorOption) (*To
 	return tv, nil
 }
 
-// ValidateToken checks if a Bearer token is valid.
-// For JWT tokens, it verifies signature, expiration, issuer, and audience.
-// For opaque tokens, it uses token introspection.
 func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (map[string]interface{}, error) {
-	// Try JWT parsing first (OIDC id_tokens are JWTs)
 	if parts := strings.Split(token, "."); len(parts) == 3 {
 		return v.validateJWT(ctx, token)
 	}
 
-	// Opaque token — use token introspection
 	return v.validateOpaqueToken(ctx, token)
 }
 
-// validateJWT parses and validates a JWT token with full verification.
 func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (map[string]interface{}, error) {
-	// Parse without verification first to get the header (kid)
 	unverifiedToken, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
 	if err != nil {
 		return nil, fmt.Errorf("parse JWT: %w", err)
 	}
 
-	// Get key ID from header
 	kid := ""
 	if kidVal, ok := unverifiedToken.Header["kid"]; ok {
 		kid = fmt.Sprintf("%v", kidVal)
 	}
 
-	// Determine signing method from header
 	alg, _ := unverifiedToken.Header["alg"].(string)
 
-	// Build validation key function
 	keyFunc := func(token *jwt.Token) (interface{}, error) {
-		// Verify signing method
 		switch alg {
 		case "RS256", "RS384", "RS512":
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
@@ -461,7 +401,6 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 			}
 			return v.getPublicKey(ctx, kid)
 		case "HS256", "HS384", "HS512":
-			// HMAC — must use a dedicated secret, never the public clientID
 			if v.hmacSecret == "" {
 				return nil, fmt.Errorf("HMAC token rejected: no hmac_secret configured (clientID must not be used as HMAC key)")
 			}
@@ -471,7 +410,6 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 		}
 	}
 
-	// Parse with signature + audience verification
 	token, err := jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc,
 		jwt.WithAudience(v.clientID),
 	)
@@ -484,11 +422,6 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 		return nil, fmt.Errorf("invalid JWT claims")
 	}
 
-	// Verify issuer against whitelist (config URL + any extras).
-	// iss is REQUIRED: an iss-less signed JWT used to skip the whitelist
-	// entirely (the if-ok guard fell through), so any key holder could
-	// mint issuer-unattributable tokens. OIDC ID tokens and RFC 9068 JWT
-	// access tokens always carry iss; reject without it.
 	iss, ok := claims["iss"].(string)
 	if !ok {
 		return nil, fmt.Errorf("token missing iss claim")
@@ -497,7 +430,6 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 		return nil, fmt.Errorf("token issuer %q not in allowed list", iss)
 	}
 
-	// Verify expiration — reject tokens without exp claim or with wrong type
 	exp, hasExp := claims["exp"]
 	if !hasExp {
 		return nil, fmt.Errorf("token missing exp claim")
@@ -513,10 +445,7 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 	return map[string]interface{}(claims), nil
 }
 
-// isIssuerAllowed checks whether the given issuer matches the configured issuer
-// or any of the additional valid issuers.
 func (v *TokenValidator) isIssuerAllowed(iss string) bool {
-	// Read issuerURL under lock to avoid data race with refreshJWKS
 	v.mu.Lock()
 	issuer := v.issuerURL
 	v.mu.Unlock()
@@ -526,12 +455,9 @@ func (v *TokenValidator) isIssuerAllowed(iss string) bool {
 		if iss == candidate {
 			return true
 		}
-		// Normalize trailing slashes
 		if strings.TrimRight(iss, "/") == strings.TrimRight(candidate, "/") {
 			return true
 		}
-		// If candidate contains /.well-known/..., also compare against the base URL
-		// (e.g., issuerURL is ".../.well-known/openid-configuration" but JWT iss is just the base)
 		if idx := strings.Index(candidate, "/.well-known/"); idx >= 0 {
 			baseURL := candidate[:idx]
 			if strings.TrimRight(iss, "/") == strings.TrimRight(baseURL, "/") {
@@ -542,28 +468,16 @@ func (v *TokenValidator) isIssuerAllowed(iss string) bool {
 	return false
 }
 
-// getPublicKey fetches a public key from JWKS, with caching.
-//
-// #H-05 stale-while-revalidate: when the cache TTL lapses (or an unknown kid
-// forces a re-fetch) and the IdP/JWKS endpoint is unreachable, this used to
-// hard-fail even though the cached key set could still verify the JWT
-// signature — bricking A2A auth for the duration of the outage. The fetch
-// error is now absorbed in favor of serving the stale key set, but only for
-// maxJWKSStaleAge after the last successful fetch, so long-revoked keys can
-// never be trusted indefinitely.
 func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interface{}, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// Check cache
 	if v.jwksKeys != nil && len(v.jwksKeys) > 0 && time.Now().Before(v.jwksExp) {
 		if key, ok := v.jwksKeys[kid]; ok {
 			return key, nil
 		}
-		// If kid not found, try refreshing
 	}
 
-	// Fetch JWKS
 	if err := v.refreshJWKS(ctx); err != nil {
 		if key, ok := v.staleKeyLocked(kid); ok {
 			debug.Log("auth", "JWKS refresh failed (%v); serving stale key set fetched %s ago",
@@ -580,13 +494,8 @@ func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interfac
 	return nil, fmt.Errorf("key ID %q not found in JWKS", kid)
 }
 
-// maxJWKSStaleAge bounds how long a previously fetched JWKS key set may be
-// served after its TTL lapses while refreshes keep failing. After this window
-// validation must fail again (defense against trusting keys revoked long ago).
 const maxJWKSStaleAge = 72 * time.Hour
 
-// staleKeyLocked reports the cached key for kid when the cached set was
-// fetched within maxJWKSStaleAge. Caller must hold v.mu.
 func (v *TokenValidator) staleKeyLocked(kid string) (interface{}, bool) {
 	if len(v.jwksKeys) == 0 || v.jwksFetchedAt.IsZero() {
 		return nil, false
@@ -598,11 +507,9 @@ func (v *TokenValidator) staleKeyLocked(kid string) (interface{}, bool) {
 	return key, ok
 }
 
-// refreshJWKS fetches and caches the JWKS from the OIDC discovery endpoint.
 func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
 	discoveryURL := v.jwksURL
 
-	// If this looks like a discovery URL, fetch it to get the JWKS URL
 	var jwksURL string
 	if strings.HasSuffix(discoveryURL, "/.well-known/openid-configuration") ||
 		strings.HasSuffix(discoveryURL, ".well-known/openid-configuration") {
@@ -636,7 +543,6 @@ func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
 		return fmt.Errorf("no JWKS URL found")
 	}
 
-	// Fetch JWKS
 	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
 		return err
@@ -664,12 +570,11 @@ func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
 		return fmt.Errorf("parse JWKS: %w", err)
 	}
 
-	// Parse and cache keys
 	keys := make(map[string]interface{})
 	for _, key := range jwks.Keys {
 		parsedKey, err := v.parseJWK(key)
 		if err != nil {
-			continue // skip unparseable keys
+			continue
 		}
 		keys[key.Kid] = parsedKey
 	}
@@ -679,12 +584,11 @@ func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
 	}
 
 	v.jwksKeys = keys
-	v.jwksExp = time.Now().Add(1 * time.Hour) // cache for 1 hour
-	v.jwksFetchedAt = time.Now()              // stamps the bounded stale window (#H-05)
+	v.jwksExp = time.Now().Add(1 * time.Hour)
+	v.jwksFetchedAt = time.Now()
 	return nil
 }
 
-// parseJWK converts a JWK key to a Go crypto public key.
 func (v *TokenValidator) parseJWK(jwk struct {
 	Kid string `json:"kid"`
 	Kty string `json:"kty"`
@@ -705,7 +609,6 @@ func (v *TokenValidator) parseJWK(jwk struct {
 		if err != nil {
 			return nil, fmt.Errorf("decode e: %w", err)
 		}
-		// Convert exponent to int
 		exp := 0
 		for _, b := range e {
 			exp = exp*256 + int(b)
@@ -744,21 +647,11 @@ func (v *TokenValidator) parseJWK(jwk struct {
 	}
 }
 
-// validateOpaqueToken validates a non-JWT token via introspection.
 func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) (map[string]interface{}, error) {
-	// Read issuerURL under lock to avoid data race with refreshJWKS
-	// (same fix as isIssuerAllowed in commit 4629ab0a).
 	v.mu.Lock()
 	introspectURL := v.issuerURL
 	v.mu.Unlock()
 
-	// #1503: the old derivation guessed the endpoint from the issuer URL
-	// (suffix-swap "/token"->"/introspect", else append) - RFC 7662 says
-	// the introspection endpoint comes from the provider's discovery
-	// document (introspection_endpoint). The guessed URL is wrong for
-	// every OIDC issuer (Google's discovery URL appended "/introspect"
-	// 404s). Consult the discovery document first; keep the guess as the
-	// fallback for non-OIDC issuers without one.
 	if ep := v.discoverIntrospectionEndpoint(ctx); ep != "" {
 		introspectURL = ep
 	} else if strings.HasSuffix(introspectURL, "/token") {
@@ -788,12 +681,6 @@ func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) 
 	return result, nil
 }
 
-// discoverIntrospectionEndpoint fetches the issuer's OIDC discovery
-// document and returns its introspection_endpoint field (RFC 7662 §2.1:
-// the endpoint MUST come from server metadata/discovery, not guessed).
-// Returns "" on any failure (network, decode, missing field); callers fall
-// back to the legacy URL derivation. Cached for 5 minutes to avoid a
-// discovery round-trip per introspection call.
 func (v *TokenValidator) discoverIntrospectionEndpoint(ctx context.Context) string {
 	v.mu.Lock()
 	if v.introURL != "" && time.Now().Before(v.introExp) {
@@ -804,10 +691,6 @@ func (v *TokenValidator) discoverIntrospectionEndpoint(ctx context.Context) stri
 	discoveryURL := v.jwksURL
 	v.mu.Unlock()
 
-	// jwksURL is set in NewTokenValidator to the issuer's
-	// /.well-known/openid-configuration URL (or passed through when the
-	// issuer URL already contains /.well-known). Without it there is no
-	// discovery document to consult.
 	if discoveryURL == "" || !strings.Contains(discoveryURL, "/.well-known/") {
 		return ""
 	}
@@ -837,9 +720,7 @@ func (v *TokenValidator) discoverIntrospectionEndpoint(ctx context.Context) stri
 	return doc.IntrospectionEndpoint
 }
 
-// base64URLDecode decodes base64url-encoded data (no padding).
 func base64URLDecode(s string) ([]byte, error) {
-	// Add padding if needed
 	switch len(s) % 4 {
 	case 2:
 		s += "=="
@@ -849,18 +730,12 @@ func base64URLDecode(s string) ([]byte, error) {
 	return base64.URLEncoding.DecodeString(s)
 }
 
-// ---------------------------------------------------------------------------
-// Mutual TLS helpers
-// ---------------------------------------------------------------------------
-
-// MTLSConfig holds the runtime mTLS configuration.
 type MTLSConfig struct {
 	CertFile string
 	KeyFile  string
 	CAFile   string
 }
 
-// BuildTLSConfig creates a *tls.Config for mutual TLS.
 func (c *MTLSConfig) BuildTLSConfig() (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
 	if err != nil {
@@ -886,10 +761,6 @@ func (c *MTLSConfig) BuildTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func strVal(v interface{}) string {
 	if v == nil {
 		return ""
@@ -900,7 +771,6 @@ func strVal(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
-// openBrowser tries to open a URL in the default browser.
 func openBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -913,18 +783,15 @@ func openBrowser(url string) {
 	default:
 		return
 	}
-	// Best-effort; failure is non-fatal — URL already printed to stderr.
 	_ = cmd.Start()
 }
 
-// copyToClipboard copies text to the system clipboard (best-effort).
 func copyToClipboard(text string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("pbcopy")
 	case "linux":
-		// Try wl-copy (Wayland) first, fall back to xclip (X11)
 		if _, err := exec.LookPath("wl-copy"); err == nil {
 			cmd = exec.Command("wl-copy", text)
 		} else if _, err := exec.LookPath("xclip"); err == nil {
@@ -950,23 +817,15 @@ func copyToClipboard(text string) {
 	_ = cmd.Wait()
 }
 
-// ---------------------------------------------------------------------------
-// TokenProvider implementations
-// ---------------------------------------------------------------------------
-
-// PKCETokenProvider is a TokenProvider that uses OAuth2 + PKCE authorization code flow.
-// It caches tokens to disk so they survive restarts.
 type PKCETokenProvider struct {
 	Config   A2AOAuth2Config
-	Provider string      // provider name for cache key (e.g. "github")
-	Cache    *TokenCache // optional token cache
+	Provider string
+	Cache    *TokenCache
 }
 
-// GetToken returns a cached token if valid, otherwise opens a browser for authorization.
 func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
 	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
 
-	// Try cache first
 	if p.Cache != nil && cacheKey != "" {
 		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
 			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
@@ -978,7 +837,6 @@ func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.
 		return "", "", time.Time{}, err
 	}
 
-	// Save to cache
 	if p.Cache != nil && cacheKey != "" {
 		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
 	}
@@ -986,19 +844,15 @@ func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil
 }
 
-// DeviceFlowTokenProvider is a TokenProvider that uses the Device Authorization flow.
-// It caches tokens to disk so they survive restarts.
 type DeviceFlowTokenProvider struct {
 	Config   A2AOAuth2Config
-	Provider string      // provider name for cache key
-	Cache    *TokenCache // optional token cache
+	Provider string
+	Cache    *TokenCache
 }
 
-// GetToken returns a cached token if valid, otherwise displays a device code.
 func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
 	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
 
-	// Try cache first
 	if p.Cache != nil && cacheKey != "" {
 		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
 			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
@@ -1010,7 +864,6 @@ func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string,
 		return "", "", time.Time{}, err
 	}
 
-	// Save to cache
 	if p.Cache != nil && cacheKey != "" {
 		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
 	}
@@ -1018,9 +871,6 @@ func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string,
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil
 }
 
-// NewTokenProviderFromPreset creates the best TokenProvider for the given provider preset.
-// Prefers PKCE for desktop environments, Device Flow for headless.
-// Set headless=true to force Device Flow.
 func NewTokenProviderFromPreset(provider string, clientSecret string, headless bool) (interface {
 	GetToken(ctx context.Context) (string, string, time.Time, error)
 }, error) {

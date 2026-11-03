@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// TestIssue1073_StreamingSendsRealStatus tests that tasks/resubscribe sends the
-// actual task status instead of hardcoded working. #1073
 func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
@@ -26,7 +24,6 @@ func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a task that will reach input-required state.
 	taskID := "task-input-required"
 	now := time.Now()
 	task := &Task{
@@ -45,7 +42,6 @@ func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 	handler.tasks[taskID] = task
 	handler.mu.Unlock()
 
-	// Subscribe to the task stream via tasks/resubscribe.
 	params, _ := json.Marshal(TaskSubscriptionParams{ID: taskID})
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -57,24 +53,18 @@ func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 	r.Header.Set("X-API-Key", "test-key")
 	r.Header.Set("Content-Type", "application/json")
 
-	// Use httptest.ResponseRecorder to capture SSE output.
 	w := httptest.NewRecorder()
 	srv.handleRPC(w, r)
 
-	// The response should be SSE with the actual task status (input-required),
-	// not hardcoded working.
 	resp := w.Body.String()
 	if !strings.Contains(resp, `"state":"input-required"`) {
 		t.Errorf("stream should contain input-required state, got: %s", resp)
 	}
-	// The status event should include Final=false since input-required is not terminal.
 	if !strings.Contains(resp, `"final":false`) && strings.Contains(resp, `"state":"input-required"`) {
 		t.Errorf("input-required status should have Final=false")
 	}
 }
 
-// TestIssue1075_CancelRaceCondition tests that handleTaskCancel handles the race
-// condition where a task is deleted after cancellation. #1075
 func TestIssue1075_CancelRaceCondition(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
@@ -87,7 +77,6 @@ func TestIssue1075_CancelRaceCondition(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a task.
 	taskID := "task-cancel-race"
 	now := time.Now()
 	task := &Task{
@@ -105,7 +94,6 @@ func TestIssue1075_CancelRaceCondition(t *testing.T) {
 	handler.tasks[taskID] = task
 	handler.mu.Unlock()
 
-	// Cancel the task.
 	cancelBody, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"1"`),
@@ -136,12 +124,10 @@ func TestIssue1075_CancelRaceCondition(t *testing.T) {
 		t.Fatalf("cancel returned error: %+v", cancelResp.Error)
 	}
 
-	// Delete the task to simulate the race with cleanupExpiredTasksLocked.
 	handler.mu.Lock()
 	delete(handler.tasks, taskID)
 	handler.mu.Unlock()
 
-	// Try to cancel again - should get ErrTaskNotFound, not result:null.
 	r2, _ := http.NewRequest("POST", srv.Endpoint()+"/", bytes.NewReader(cancelBody))
 	r2.Header.Set("X-API-Key", "test-key")
 	r2.Header.Set("Content-Type", "application/json")
@@ -170,8 +156,6 @@ func TestIssue1075_CancelRaceCondition(t *testing.T) {
 	}
 }
 
-// TestIssue1076_PushConfigGetMissing tests that missing push config returns
-// InvalidParams instead of ErrTaskNotFound. #1076
 func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
@@ -184,7 +168,6 @@ func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Try to get a non-existent push config.
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"1"`),
@@ -216,17 +199,14 @@ func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 		t.Fatal("should return error for missing push config")
 	}
 
-	// Should use InvalidParams (-32602), not ErrTaskNotFound (-32001).
 	if respBody.Error.Code != -32602 {
 		t.Errorf("expected error code -32602 (InvalidParams), got %d", respBody.Error.Code)
 	}
 
-	// Error message should mention push config not found.
 	if !strings.Contains(respBody.Error.Message, "Invalid params") {
 		t.Errorf("expected Invalid params message, got: %s", respBody.Error.Message)
 	}
 
-	// Data field should contain detailed error.
 	if respBody.Error.Data == "" {
 		t.Error("expected Data field with push config not found message")
 	} else {
@@ -240,7 +220,6 @@ func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 	}
 }
 
-// TestIssue1076_PushConfigGetExisting tests that existing push config is returned.
 func TestIssue1076_PushConfigGetExisting(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
@@ -253,7 +232,6 @@ func TestIssue1076_PushConfigGetExisting(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a push config directly in the server's config map.
 	testCfg := PushNotificationConfig{
 		ID:     "test-config",
 		TaskID: "task-123",
@@ -263,7 +241,6 @@ func TestIssue1076_PushConfigGetExisting(t *testing.T) {
 	srv.pushConfigs[testCfg.ID] = testCfg
 	srv.pushMu.Unlock()
 
-	// Get the config.
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"1"`),
@@ -295,7 +272,6 @@ func TestIssue1076_PushConfigGetExisting(t *testing.T) {
 		t.Fatalf("should not return error: %+v", respBody.Error)
 	}
 
-	// Verify the returned config.
 	resultBytes, _ := json.Marshal(respBody.Result)
 	var gotCfg PushNotificationConfig
 	if err := json.Unmarshal(resultBytes, &gotCfg); err != nil {

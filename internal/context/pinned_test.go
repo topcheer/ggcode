@@ -8,7 +8,6 @@ import (
 func TestPinnedContext_AddAndRender(t *testing.T) {
 	p := newPinnedContext()
 
-	// Empty initially
 	if !p.IsEmpty() {
 		t.Fatal("expected empty pinned context")
 	}
@@ -16,7 +15,6 @@ func TestPinnedContext_AddAndRender(t *testing.T) {
 		t.Fatal("expected empty render")
 	}
 
-	// Add an item
 	id, err := p.Add("Build with: go build -tags goolm ./...")
 	if err != nil {
 		t.Fatalf("Add failed: %v", err)
@@ -89,7 +87,6 @@ func TestPinnedContext_RemoveByIDPrefix(t *testing.T) {
 	p := newPinnedContext()
 	id, _ := p.Add("test item")
 
-	// ID is like "pin_abcd1234", use prefix
 	if !p.Remove(id[:6]) {
 		t.Fatal("expected Remove by ID prefix to succeed")
 	}
@@ -122,7 +119,6 @@ func TestPinnedContext_Clear(t *testing.T) {
 		t.Fatal("expected empty after Clear")
 	}
 
-	// Clear on empty returns 0
 	n = p.Clear()
 	if n != 0 {
 		t.Fatalf("expected Clear on empty to return 0, got %d", n)
@@ -131,7 +127,6 @@ func TestPinnedContext_Clear(t *testing.T) {
 
 func TestPinnedContext_TotalBudgetEnforcement(t *testing.T) {
 	p := newPinnedContext()
-	// Fill up close to the total budget
 	chunk := strings.Repeat("x", 1000)
 	for i := 0; i < maxPinnedTotal/1000; i++ {
 		_, err := p.Add(chunk)
@@ -139,7 +134,6 @@ func TestPinnedContext_TotalBudgetEnforcement(t *testing.T) {
 			t.Fatalf("Add %d failed: %v", i, err)
 		}
 	}
-	// Adding one more should fail (budget exceeded)
 	_, err := p.Add(chunk)
 	if err == nil {
 		t.Fatal("expected budget exceeded error")

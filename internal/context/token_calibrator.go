@@ -7,44 +7,25 @@ import (
 )
 
 const (
-	defaultASCIIRatio = 3.5 // chars per token for ASCII text
-	// #515: 1.0 chars/token ≈ 1 token per CJK character. The old 1.5 assumed
-	// BPE-level compaction that modern tokenizers (cl100k, Claude, GLM) do not
-	// deliver for common Han characters (1.0–1.5+ tokens/char) — combined with
-	// cjkRatioMin=1.0 the underestimate was mathematically uncapped, delaying
-	// auto-compact in Chinese-heavy sessions until the provider hard-errors.
-	defaultCJKRatio     = 1.0 // chars per token for CJK text
-	calibWarmupSamples  = 5   // samples before calibration starts
-	calibAdjustInterval = 3   // adjust every N samples after warmup
-	asciiRatioMin       = 3.0
-	asciiRatioMax       = 5.0
-	// #515: allow the calibrator to reach 0.6 chars/token (≈1.67 tokens/char)
-	// so models that spend 1.5+ tokens per Han character can be fully
-	// corrected. The old floor of 1.0 capped correction ~45% low for them.
-	cjkRatioMin = 0.6
-	cjkRatioMax = 2.0
-	// latinExtDominantShare (#649): when Latin-Extended characters exceed this
-	// share of the covered composition, the sample's correction residual
-	// belongs mostly to the fixed latinExt estimation tier (3.0 chars/token,
-	// tokenizer.go) — a price no calibrated ratio here can absorb. Feeding that
-	// residual to asciiRatio anyway drove it to the 3.0 clamp, overestimating
-	// pure-ASCII tokens ~17% and firing auto-compact early in Vietnamese-domain
-	// sessions. Such samples keep the adjustment frozen (still counted).
+	defaultASCIIRatio     = 3.5
+	defaultCJKRatio       = 1.0
+	calibWarmupSamples    = 5
+	calibAdjustInterval   = 3
+	asciiRatioMin         = 3.0
+	asciiRatioMax         = 5.0
+	cjkRatioMin           = 0.6
+	cjkRatioMax           = 2.0
 	latinExtDominantShare = 0.5
 )
 
-// TokenCalibrator self-calibrates the char/token ratio using API feedback.
-// It uses incremental averaging: each new adjustment has decreasing weight,
-// so the ratio converges over time without being dominated by outliers.
 type TokenCalibrator struct {
 	mu            sync.Mutex
-	lastEstimated int // estimated-token value of the most recent sample (test accessor, #383)
+	lastEstimated int
 	asciiRatio    float64
 	cjkRatio      float64
 	samples       int
 }
 
-// NewTokenCalibrator creates a calibrator with default ratios.
 func NewTokenCalibrator() *TokenCalibrator {
 	return &TokenCalibrator{
 		asciiRatio: defaultASCIIRatio,
@@ -52,23 +33,6 @@ func NewTokenCalibrator() *TokenCalibrator {
 	}
 }
 
-// RecordSample compares estimated tokens with actual API-reported tokens.
-// If the estimation is consistently off, the ratios are adjusted via
-// incremental averaging. The calibrator uses a warmup period and only
-// adjusts at fixed intervals to avoid overreacting to individual samples.
-//
-// asciiChars/cjkChars/latinExtChars describe the composition of the estimated
-// text (#355): a pure-ASCII sample must only adjust asciiRatio, a pure-CJK
-// sample only cjkRatio. Previously a single factor updated BOTH ratios,
-// so unobserved parameters drifted to their clamp limits (11 pure-ASCII
-// samples pushed cjkRatio 1.5→2.0, undercounting CJK estimates 25%).
-// With no composition info (all zero), only asciiRatio updates — session
-// text is predominantly code/tool output — and cjkRatio stays at default.
-// latinExtChars (#649): Latin-Extended content is priced by a FIXED tier on
-// the estimation side (3.0 chars/token) and never feeds the ratio math. Its
-// share only scales down the ascii/cjk attribution, and a latinExt-dominant
-// sample (>latinExtDominantShare) skips the adjustment entirely so its
-// residual cannot push asciiRatio to the clamp.
 func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars, cjkChars, latinExtChars int) {
 	if actualTokens <= 0 || estimatedTokens <= 0 {
 		debug.Log("context-calibrator", "sample-skipped estimated=%d actual=%d", estimatedTokens, actualTokens)
@@ -80,35 +44,24 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars
 	c.samples++
 	c.lastEstimated = estimatedTokens
 
-	// Warmup: don't adjust during first few samples
 	if c.samples <= calibWarmupSamples {
 		debug.Log("context-calibrator", "warmup sample=%d estimated=%d actual=%d ratio=%.3f/%.3f",
 			c.samples, estimatedTokens, actualTokens, c.asciiRatio, c.cjkRatio)
 		return
 	}
 
-	// Only adjust every Nth sample after warmup
 	if (c.samples-calibWarmupSamples)%calibAdjustInterval != 0 {
 		debug.Log("context-calibrator", "sample=%d estimated=%d actual=%d ratio=%.3f/%.3f (no-adjust)",
 			c.samples, estimatedTokens, actualTokens, c.asciiRatio, c.cjkRatio)
 		return
 	}
 
-	// Compute the correction factor: if estimated < actual, the ratio
-	// (chars/token) is too high, so we need to decrease it.
 	factor := float64(estimatedTokens) / float64(actualTokens)
 	adjustmentNum := (c.samples - calibWarmupSamples) / calibAdjustInterval
 	alpha := 1.0 / float64(adjustmentNum)
 
-	// Split the factor by composition (#355): pure/mixed samples weight
-	// each ratio's adjustment by the share of that script's characters.
-	// #649: shares normalize over the COVERED buckets (ascii+cjk+latinExt).
-	// The latinExt share's residual is deliberately not applied anywhere —
-	// the estimation side prices it on a fixed tier, so no ratio here can
-	// correct it — and a latinExt-dominant sample freezes the whole
-	// adjustment instead of dumping its residual on asciiRatio.
 	totalChars := asciiChars + cjkChars + latinExtChars
-	asciiShare, cjkShare := 1.0, 0.0 // no composition info: ASCII-only assumption
+	asciiShare, cjkShare := 1.0, 0.0
 	if totalChars > 0 {
 		latinExtShare := float64(latinExtChars) / float64(totalChars)
 		if latinExtShare > latinExtDominantShare {
@@ -125,15 +78,14 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars
 	if asciiShare > 0 {
 		newASCIIRatio = c.asciiRatio * (1 - alpha*asciiShare + alpha*asciiShare*factor)
 	} else {
-		newASCIIRatio = c.asciiRatio // unobserved: frozen
+		newASCIIRatio = c.asciiRatio
 	}
 	if cjkShare > 0 {
 		newCJKRatio = c.cjkRatio * (1 - alpha*cjkShare + alpha*cjkShare*factor)
 	} else {
-		newCJKRatio = c.cjkRatio // unobserved: frozen
+		newCJKRatio = c.cjkRatio
 	}
 
-	// Clamp to safe ranges
 	if newASCIIRatio < asciiRatioMin {
 		newASCIIRatio = asciiRatioMin
 	}
@@ -153,37 +105,30 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars
 		c.samples, estimatedTokens, actualTokens, asciiChars, cjkChars, latinExtChars, factor, alpha, oldASCIIRatio, newASCIIRatio, oldCJKRatio, newCJKRatio)
 }
 
-// ASCIICharsPerToken returns the calibrated chars/token ratio for ASCII text.
 func (c *TokenCalibrator) ASCIICharsPerToken() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.asciiRatio
 }
 
-// CJKCharsPerToken returns the calibrated chars/token ratio for CJK text.
 func (c *TokenCalibrator) CJKCharsPerToken() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cjkRatio
 }
 
-// LastEstimated returns the estimated-token value of the most recent
-// calibration sample (test accessor, #383).
 func (c *TokenCalibrator) LastEstimated() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastEstimated
 }
 
-// SampleCount returns the number of recorded calibration samples (test
-// accessor).
 func (c *TokenCalibrator) SampleCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.samples
 }
 
-// Reset returns the calibrator to default ratios and clears sample count.
 func (c *TokenCalibrator) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

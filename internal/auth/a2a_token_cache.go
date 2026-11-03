@@ -10,14 +10,11 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// TokenCache persists OAuth2 tokens to disk so they survive restarts.
-// File location: ~/.ggcode/oauth-tokens/{provider}.json
 type TokenCache struct {
 	dir string
 	mu  sync.Mutex
 }
 
-// tokenEntry is the on-disk format for a cached token.
 type tokenEntry struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
@@ -28,17 +25,14 @@ type tokenEntry struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// NewTokenCache creates a token cache in the given directory.
 func NewTokenCache(dir string) *TokenCache {
 	return &TokenCache{dir: dir}
 }
 
-// DefaultTokenCacheDir returns the default cache directory.
 func DefaultTokenCacheDir() string {
 	return filepath.Join(util.HomeDir(), ".ggcode", "oauth-tokens")
 }
 
-// Save writes a token to the cache.
 func (tc *TokenCache) Save(provider string, token *PKCEToken, clientID string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -62,13 +56,6 @@ func (tc *TokenCache) Save(provider string, token *PKCEToken, clientID string) e
 		return err
 	}
 
-	// Atomic write: temp file + rename to prevent corruption on crash.
-	// os.WriteFile is non-atomic — a crash mid-write leaves a truncated file.
-	// #1505 case 3 (same class as Store.saveAll): the fixed ".tmp" name let
-	// two processes (desktop/daemon/TUI each running an A2A server refreshing
-	// the same provider token) O_TRUNC the same scratch file concurrently,
-	// mixing two JSON documents before rename. CreateTemp gives every writer
-	// its own scratch file, created 0600.
 	path := tc.path(provider)
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -87,8 +74,6 @@ func (tc *TokenCache) Save(provider string, token *PKCEToken, clientID string) e
 	return os.Rename(tmp, path)
 }
 
-// Load reads a cached token for the given provider.
-// Returns nil if no cache exists or if the token is expired.
 func (tc *TokenCache) Load(provider string) *PKCEToken {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -111,7 +96,6 @@ func (tc *TokenCache) Load(provider string) *PKCEToken {
 		Scope:        entry.Scope,
 	}
 
-	// Return nil if expired (no refresh token to revive it)
 	if !token.Expiry.IsZero() && time.Now().After(token.Expiry) && token.RefreshToken == "" {
 		return nil
 	}
@@ -119,17 +103,13 @@ func (tc *TokenCache) Load(provider string) *PKCEToken {
 	return token
 }
 
-// LoadValid reads a cached token that is still valid (not expired).
-// Returns nil if expired or no cache.
 func (tc *TokenCache) LoadValid(provider string) *PKCEToken {
 	token := tc.Load(provider)
 	if token == nil {
 		return nil
 	}
 
-	// Check if expired (with 5-minute buffer)
 	if !token.Expiry.IsZero() && time.Now().Add(5*time.Minute).After(token.Expiry) {
-		// Has refresh token → might still be usable
 		if token.RefreshToken == "" {
 			return nil
 		}
@@ -138,7 +118,6 @@ func (tc *TokenCache) LoadValid(provider string) *PKCEToken {
 	return token
 }
 
-// Delete removes a cached token.
 func (tc *TokenCache) Delete(provider string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -149,13 +128,10 @@ func (tc *TokenCache) path(provider string) string {
 	return filepath.Join(tc.dir, provider+".json")
 }
 
-// CacheKey generates a unique cache key from provider and clientID.
-// Different clientIDs for the same provider won't overwrite each other.
 func CacheKey(provider, clientID string) string {
 	if clientID == "" {
 		return provider
 	}
-	// Use first 8 chars of clientID to keep filename reasonable
 	suffix := clientID
 	if len(suffix) > 12 {
 		suffix = suffix[:12]

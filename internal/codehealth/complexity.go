@@ -1,7 +1,3 @@
-// Package codehealth provides static analysis of Go source code to measure
-// code quality metrics such as cyclomatic complexity, function length, and
-// nesting depth. It is designed to be used by the AI agent as a tool to
-// proactively identify technical debt hotspots and suggest refactoring.
 package codehealth
 
 import (
@@ -16,31 +12,28 @@ import (
 	"strings"
 )
 
-// Severity levels for functions exceeding thresholds.
 type Severity string
 
 const (
-	SeverityCritical Severity = "critical" // complexity > 30
-	SeverityHigh     Severity = "high"     // complexity 20-30
-	SeverityMedium   Severity = "medium"   // complexity 11-19
-	SeverityLow      Severity = "low"      // complexity <= 10 (healthy)
+	SeverityCritical Severity = "critical"
+	SeverityHigh     Severity = "high"
+	SeverityMedium   Severity = "medium"
+	SeverityLow      Severity = "low"
 )
 
-// FuncMetrics holds quality metrics for a single Go function.
 type FuncMetrics struct {
 	File         string   `json:"file"`
 	Function     string   `json:"function"`
 	Line         int      `json:"line"`
 	EndLine      int      `json:"end_line"`
-	Complexity   int      `json:"complexity"`    // cyclomatic complexity
-	Length       int      `json:"length"`        // lines of code (body)
-	NestingDepth int      `json:"nesting_depth"` // max nesting level
-	Params       int      `json:"params"`        // parameter count
-	Statements   int      `json:"statements"`    // total statement count
+	Complexity   int      `json:"complexity"`
+	Length       int      `json:"length"`
+	NestingDepth int      `json:"nesting_depth"`
+	Params       int      `json:"params"`
+	Statements   int      `json:"statements"`
 	Severity     Severity `json:"severity"`
 }
 
-// FileSummary holds aggregated metrics for a single file.
 type FileSummary struct {
 	File            string  `json:"file"`
 	Functions       int     `json:"functions"`
@@ -49,31 +42,24 @@ type FileSummary struct {
 	TotalStatements int     `json:"total_statements"`
 }
 
-// Report is the top-level analysis result.
 type Report struct {
 	Path          string        `json:"path"`
 	FilesScanned  int           `json:"files_scanned"`
 	Functions     int           `json:"functions_analyzed"`
 	AvgComplexity float64       `json:"avg_complexity"`
 	MaxComplexity int           `json:"max_complexity"`
-	TopFunctions  []FuncMetrics `json:"top_functions"`  // sorted by complexity desc
-	FileSummaries []FileSummary `json:"file_summaries"` // sorted by max complexity desc
-	HealthScore   int           `json:"health_score"`   // 0-100, higher is better
+	TopFunctions  []FuncMetrics `json:"top_functions"`
+	FileSummaries []FileSummary `json:"file_summaries"`
+	HealthScore   int           `json:"health_score"`
 }
 
-// Options controls analysis behavior.
 type Options struct {
-	// MaxFiles limits the number of files to scan (0 = no limit).
-	MaxFiles int
-	// MaxFunctions limits the number of functions in TopFunctions (default 20).
-	MaxFunctions int
-	// ThresholdComplexity is the minimum complexity to flag (default 11).
+	MaxFiles            int
+	MaxFunctions        int
 	ThresholdComplexity int
-	// ExcludeDirs are directory names to skip (e.g. vendor, testdata).
-	ExcludeDirs []string
+	ExcludeDirs         []string
 }
 
-// DefaultOptions returns sensible defaults.
 func DefaultOptions() Options {
 	return Options{
 		MaxFunctions:        20,
@@ -82,7 +68,6 @@ func DefaultOptions() Options {
 	}
 }
 
-// Analyze walks a directory and analyzes all .go files for code quality metrics.
 func Analyze(dir string, opts Options) (*Report, error) {
 	if opts.MaxFunctions <= 0 {
 		opts.MaxFunctions = 20
@@ -115,13 +100,10 @@ func Analyze(dir string, opts Options) (*Report, error) {
 
 	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
-			// #1510: an unreadable ROOT (dir exists but chmod 000) used to
-			// be swallowed here, producing a 0-file/100-score "healthy"
-			// report. Only per-entry errors below the root are skipped.
 			if path == dir {
 				return err
 			}
-			return nil // skip unreadable entries
+			return nil
 		}
 		if fi.IsDir() {
 			name := filepath.Base(path)
@@ -133,21 +115,16 @@ func Analyze(dir string, opts Options) (*Report, error) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// Skip generated files (excluded, not counted against the cap).
 		if isGenerated(path) {
 			return nil
 		}
 		if opts.MaxFiles > 0 && filesScanned >= opts.MaxFiles {
-			// #1699 case 2: SkipDir on a FILE only skips the REST of that
-			// directory - sibling and parent-level directories kept scanning
-			// and the "cap" was routinely exceeded. SkipAll aborts the
-			// entire walk, making MaxFiles a real global limit.
 			return filepath.SkipAll
 		}
 
 		funcs, err := analyzeFile(path)
 		if err != nil {
-			return nil // skip unparseable files
+			return nil
 		}
 		allFuncs = append(allFuncs, funcs...)
 		filesScanned++
@@ -163,10 +140,6 @@ func Analyze(dir string, opts Options) (*Report, error) {
 	return buildReport(dir, allFuncs, fileSummaries, filesScanned, opts), nil
 }
 
-// analyzeSingleFile handles the single-file path of Analyze. Generated files
-// are skipped - same policy as the directory walk - so a caller explicitly
-// analyzing a single generated file (.pb.go etc.) does not get advisories
-// about generator output (#1202).
 func analyzeSingleFile(path string, opts Options) (*Report, error) {
 	if isGenerated(path) {
 		return buildReport(path, nil, nil, 0, opts), nil
@@ -182,19 +155,10 @@ func analyzeSingleFile(path string, opts Options) (*Report, error) {
 	return buildReport(path, funcs, fileSummaries, 1, opts), nil
 }
 
-// analyzeFile parses a single Go file and extracts function metrics.
 func analyzeFile(path string) ([]FuncMetrics, error) {
 	return analyzeSource(path, nil)
 }
 
-// analyzeSource extracts function metrics from Go source content. When src is
-// nil the file at filename is read from disk; otherwise src is parsed directly
-// (used by AnalyzeSource for baseline comparisons that must not touch disk).
-//
-// Note: the disk read is explicit rather than relying on parser.ParseFile's
-// nil-src convention - a typed-nil []byte passed as ParseFile's `any` src
-// parameter is a NON-nil interface, which makes the parser use the (empty)
-// content instead of reading the file.
 func analyzeSource(filename string, src []byte) ([]FuncMetrics, error) {
 	if src == nil {
 		data, err := os.ReadFile(filename)
@@ -217,7 +181,6 @@ func analyzeSource(filename string, src []byte) ([]FuncMetrics, error) {
 			continue
 		}
 
-		// Skip functions with empty bodies (interfaces, stubs)
 		if fn.Body == nil {
 			continue
 		}
@@ -245,8 +208,6 @@ func analyzeSource(filename string, src []byte) ([]FuncMetrics, error) {
 	return results, nil
 }
 
-// cyclomaticComplexity calculates McCabe's cyclomatic complexity.
-// Starts at 1, +1 for each decision point: if, for, range, case, &&, ||, etc.
 func cyclomaticComplexity(fn *ast.FuncDecl) int {
 	v := 1
 	ast.Inspect(fn, func(n ast.Node) bool {
@@ -254,17 +215,14 @@ func cyclomaticComplexity(fn *ast.FuncDecl) int {
 		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt:
 			v++
 		case *ast.CaseClause:
-			// 'case' in switch adds a path. 'default' doesn't add complexity.
 			if n.List != nil {
 				v++
 			}
 		case *ast.CommClause:
-			// select case with communication
 			if n.Comm != nil {
 				v++
 			}
 		case *ast.BinaryExpr:
-			// && and || add decision branches
 			if n.Op == token.LAND || n.Op == token.LOR {
 				v++
 			}
@@ -274,7 +232,6 @@ func cyclomaticComplexity(fn *ast.FuncDecl) int {
 	return v
 }
 
-// maxNestingDepth finds the deepest nesting level in a function body.
 func maxNestingDepth(body *ast.BlockStmt, current int) int {
 	max := current
 	for _, stmt := range body.List {
@@ -293,7 +250,6 @@ func nestingDepthOfStmt(stmt ast.Stmt, current int) int {
 		if d := maxNestingDepth(s.Body, depth); d > current {
 			return d
 		}
-		// else branch
 		if s.Else != nil {
 			if d := nestingDepthOfStmt(s.Else, current); d > current {
 				return d
@@ -316,12 +272,10 @@ func nestingDepthOfStmt(stmt ast.Stmt, current int) int {
 	return current
 }
 
-// countStatements counts all executable statements in a function.
 func countStatements(fn *ast.FuncDecl) int {
 	count := 0
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if _, ok := n.(ast.Stmt); ok {
-			// Don't count the function body itself as a statement
 			if bl, ok := n.(*ast.BlockStmt); ok && bl == fn.Body {
 				return true
 			}
@@ -339,7 +293,7 @@ func paramCount(fn *ast.FuncDecl) int {
 	count := 0
 	for _, field := range fn.Type.Params.List {
 		if len(field.Names) == 0 {
-			count++ // unnamed parameter
+			count++
 		} else {
 			count += len(field.Names)
 		}
@@ -349,7 +303,6 @@ func paramCount(fn *ast.FuncDecl) int {
 
 func funcName(fn *ast.FuncDecl) string {
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
-		// Method: ReceiverType.MethodName
 		recvType := ""
 		switch t := fn.Recv.List[0].Type.(type) {
 		case *ast.Ident:
@@ -417,12 +370,10 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 	}
 	r.AvgComplexity = float64(totalC) / float64(len(funcs))
 
-	// Sort functions by complexity descending
 	sort.Slice(funcs, func(i, j int) bool {
 		return funcs[i].Complexity > funcs[j].Complexity
 	})
 
-	// Filter to threshold and limit
 	var flagged []FuncMetrics
 	for _, f := range funcs {
 		if f.Complexity >= opts.ThresholdComplexity {
@@ -434,7 +385,6 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 	}
 	r.TopFunctions = flagged
 
-	// Sort file summaries by max complexity descending
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].MaxComplexity > files[j].MaxComplexity
 	})
@@ -443,7 +393,6 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 	}
 	r.FileSummaries = files
 
-	// Health score: 100 - penalty. Penalty based on ratio of flagged functions.
 	flaggedCount := 0
 	for _, f := range funcs {
 		if f.Complexity >= opts.ThresholdComplexity {
@@ -452,7 +401,6 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 	}
 	ratio := float64(flaggedCount) / float64(len(funcs))
 	penalty := int(ratio * 100)
-	// Extra penalty for critical/high severity
 	for _, f := range funcs {
 		switch f.Severity {
 		case SeverityCritical:
@@ -469,10 +417,6 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 	return r
 }
 
-// AnalyzeSource analyzes in-memory Go source content with the same semantics
-// as single-file Analyze. filename is used only for metric attribution.
-// Exported so callers (e.g. the agent complexity gate) can compute baseline
-// metrics for a previous file revision without writing it to disk (#1202).
 func AnalyzeSource(filename string, src []byte, opts Options) (*Report, error) {
 	if opts.MaxFunctions <= 0 {
 		opts.MaxFunctions = 20
@@ -494,22 +438,14 @@ func AnalyzeSource(filename string, src []byte, opts Options) (*Report, error) {
 	return buildReport(filename, funcs, fileSummaries, 1, opts), nil
 }
 
-// IsGenerated reports whether the Go file at path looks auto-generated
-// (by filename convention or a leading "Code generated" marker).
 func IsGenerated(path string) bool { return isGenerated(path) }
 
-// isGenerated checks if a Go file is auto-generated.
 func isGenerated(path string) bool {
-	// Fast path: check filename
 	base := filepath.Base(path)
 	if strings.HasSuffix(base, "_gen.go") || strings.HasSuffix(base, ".pb.go") ||
 		strings.HasSuffix(base, "_string.go") {
 		return true
 	}
-	// Check first line for "Code generated" comment
-	// #1699 case 3: the comment promised a 200-byte window but ReadFile
-	// slurped the whole file; a long license header could also push the
-	// marker past the window. Read exactly the window.
 	f, err := os.Open(path)
 	if err != nil {
 		return false

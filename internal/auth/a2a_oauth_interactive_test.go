@@ -10,19 +10,6 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// Interactive OAuth2 + PKCE flow test (requires human interaction)
-// ---------------------------------------------------------------------------
-
-// TestInteractive_GitHubPKCEFlow performs a real GitHub OAuth2 + PKCE flow.
-// This test opens a browser for user authorization and waits for the callback.
-//
-// Prerequisites:
-//   - Run with: go test -tags=integration -run TestInteractive_GitHubPKCEFlow -v -timeout 5m
-//   - A browser is available on the machine
-//   - You have a GitHub account to authorize
-//
-// This test is NOT automated — it requires human interaction (browser login).
 func TestInteractive_GitHubPKCEFlow(t *testing.T) {
 	preset := ResolveProviderPreset("github")
 	if preset == nil {
@@ -40,8 +27,6 @@ func TestInteractive_GitHubPKCEFlow(t *testing.T) {
 		t.Skip("No default client_id for GitHub preset")
 	}
 
-	// GitHub requires client_secret even for PKCE (it's a confidential client).
-	// Set GGCODE_OAUTH_CLIENT_SECRET env var before running this test.
 	clientSecret := os.Getenv("GGCODE_OAUTH_CLIENT_SECRET")
 	if clientSecret == "" {
 		t.Skip("Set GGCODE_OAUTH_CLIENT_SECRET env var to run this test.\n" +
@@ -70,7 +55,6 @@ func TestInteractive_GitHubPKCEFlow(t *testing.T) {
 		t.Fatalf("PKCE flow failed: %v", err)
 	}
 
-	// Verify token
 	if token.AccessToken == "" {
 		t.Fatal("expected non-empty access token")
 	}
@@ -97,12 +81,6 @@ func TestInteractive_GitHubPKCEFlow(t *testing.T) {
 	t.Logf("GitHub OAuth2 token obtained: type=%s scope=%s", token.TokenType, token.Scope)
 }
 
-// TestInteractive_GitHubDeviceFlow performs a real GitHub Device Authorization flow.
-// This test displays a code and URL for the user to visit.
-//
-// Prerequisites:
-//   - Run with: go test -tags=integration -run TestInteractive_GitHubDeviceFlow -v -timeout 5m
-//   - You have a GitHub account to authorize
 func TestInteractive_GitHubDeviceFlow(t *testing.T) {
 	preset := ResolveProviderPreset("github")
 	if preset == nil {
@@ -111,7 +89,7 @@ func TestInteractive_GitHubDeviceFlow(t *testing.T) {
 
 	cfg := A2AOAuth2Config{
 		ClientID:     preset.DefaultClientID,
-		AuthorizeURL: preset.DeviceAuthURL, // device authorization endpoint
+		AuthorizeURL: preset.DeviceAuthURL,
 		TokenURL:     preset.TokenURL,
 		Scopes:       preset.DefaultScopes,
 	}
@@ -119,8 +97,6 @@ func TestInteractive_GitHubDeviceFlow(t *testing.T) {
 	if cfg.ClientID == "" {
 		t.Skip("No default client_id for GitHub preset")
 	}
-
-	// Device flow is for public clients — no client_secret needed.
 
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "═══════════════════════════════════════════════\n")

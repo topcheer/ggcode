@@ -1,10 +1,5 @@
 package auth
 
-// Tests for issue #1175: the OAuth2 token-validator issuer must come from the
-// preset's OIDC discovery URL (or explicit issuer_url config), never from the
-// token endpoint. Using TokenURL as issuer made JWT JWKS refresh, issuer
-// whitelisting, and opaque introspection all fail with per-request 401s.
-
 import (
 	"strings"
 	"testing"
@@ -26,8 +21,6 @@ func TestResolveA2AIssuerURLPresetUsesDiscoveryNotTokenURL(t *testing.T) {
 		if strings.Contains(got, preset.TokenURL) {
 			t.Errorf("provider %q: issuer %q must not be derived from TokenURL %q", name, got, preset.TokenURL)
 		}
-		// The discovery URL must itself contain /.well-known so the
-		// validator can locate JWKS from it
 		if !strings.Contains(got, "/.well-known/") {
 			t.Errorf("provider %q: issuer %q should be an OIDC discovery URL", name, got)
 		}
@@ -45,8 +38,6 @@ func TestResolveA2AIssuerURLExplicitConfigWins(t *testing.T) {
 }
 
 func TestResolveA2AIssuerURLNoOIDCPresetReturnsEmpty(t *testing.T) {
-	// github has no OIDC discovery URL; the helper must return "" (callers
-	// fail fast) instead of fabricating an issuer from TokenURL (issue #1175)
 	p := ResolveProviderPreset("github")
 	if p == nil {
 		t.Fatal("missing github preset")
@@ -65,10 +56,6 @@ func TestResolveA2AIssuerURLUnknownProviderReturnsEmpty(t *testing.T) {
 	}
 }
 
-// End-to-end sanity: a Google-style preset flow must produce a validator
-// whose issuer is the discovery URL (so iss=accounts.google.com tokens and
-// base-URL comparisons both pass via the /.well-known stripping rule), and
-// the token endpoint must never appear as the issuer.
 func TestNewTokenValidatorIssuerSeparationFromPreset(t *testing.T) {
 	preset := ResolveProviderPreset("google")
 	if preset == nil {

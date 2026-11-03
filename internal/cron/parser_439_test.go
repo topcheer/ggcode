@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// #439: reversed ranges must be rejected everywhere, including inside lists.
 func TestParseReversedRange(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := NextTime("5,50-10 * * * *", base); err == nil {

@@ -1,7 +1,5 @@
 package a2a
 
-// sa-88 / r33-C: per-peer A2A outbound circuit breaker tests.
-
 import (
 	"context"
 	"errors"
@@ -46,7 +44,7 @@ func TestPeerBreaker_SuccessResetsFailures(t *testing.T) {
 	b := newTestBreaker()
 	b.record(true)
 	b.record(true)
-	b.record(false) // success resets
+	b.record(false)
 	b.record(true)
 	b.record(true)
 	if b.stateSnapshot() != peerBreakerClosed {
@@ -73,12 +71,10 @@ func TestPeerBreaker_CooldownThenHalfOpenProbe(t *testing.T) {
 	if b.allow() {
 		t.Fatal("second call during HALF_OPEN probe must be barred")
 	}
-	// Probe succeeds: circuit closes.
 	b.record(false)
 	if b.stateSnapshot() != peerBreakerClosed {
 		t.Fatal("successful probe must close the circuit")
 	}
-	// Probe failing instead re-opens with a fresh cooldown.
 	for i := 0; i < peerBreakerThreshold; i++ {
 		b.record(true)
 	}
@@ -97,8 +93,6 @@ func TestPeerBreaker_StragglerSuccessClosesOpen(t *testing.T) {
 	for i := 0; i < peerBreakerThreshold; i++ {
 		b.record(true)
 	}
-	// A call that started before the circuit opened finishes late and
-	// succeeds: closes the circuit early.
 	b.record(false)
 	if b.stateSnapshot() != peerBreakerClosed {
 		t.Fatal("straggler success must close an OPEN circuit")
@@ -144,10 +138,6 @@ func TestClassifyRPCError(t *testing.T) {
 	}
 }
 
-// TestRPC_FastFailOnOpenCircuit verifies the client-level integration:
-// after the peer's circuit opens, rpc returns peerCircuitOpenError
-// WITHOUT issuing an HTTP request (fast-fail), and a recovered peer
-// closes the circuit via the half-open probe.
 func TestRPC_FastFailOnOpenCircuit(t *testing.T) {
 	resetPeerBreakers()
 	defer resetPeerBreakers()
@@ -160,7 +150,7 @@ func TestRPC_FastFailOnOpenCircuit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
 		if !healthy {
-			w.WriteHeader(http.StatusInternalServerError) // infra failure
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -178,7 +168,6 @@ func TestRPC_FastFailOnOpenCircuit(t *testing.T) {
 	}
 	hitsAfterFail := hits
 
-	// Circuit is now OPEN: next rpc fast-fails without touching the server.
 	rpcErr := c.rpc(context.Background(), "message/send", map[string]any{}, nil)
 	var open *peerCircuitOpenError
 	if !errors.As(rpcErr, &open) {
@@ -191,9 +180,6 @@ func TestRPC_FastFailOnOpenCircuit(t *testing.T) {
 		t.Fatal("fast-fail must not issue an HTTP request")
 	}
 
-	// Peer recovers; cooldown expires: the next call is the half-open
-	// probe, its success closes the circuit, and the call after that
-	// flows normally.
 	healthy = true
 	time.Sleep(25 * time.Millisecond)
 	if err := c.rpc(context.Background(), "message/send", map[string]any{}, nil); err != nil {

@@ -4,10 +4,6 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// A2A Auth type tests
-// ---------------------------------------------------------------------------
-
 func TestA2AOAuth2ConfigCreation(t *testing.T) {
 	cfg := A2AOAuth2Config{
 		ClientID:     "test-client",

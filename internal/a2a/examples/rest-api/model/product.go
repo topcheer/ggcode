@@ -1,4 +1,3 @@
-// Package model defines the data entities for the REST API.
 package model
 
 import (
@@ -6,7 +5,6 @@ import (
 	"time"
 )
 
-// ProductStatus represents the lifecycle state of a product.
 type ProductStatus string
 
 const (
@@ -15,14 +13,12 @@ const (
 	StatusArchived ProductStatus = "archived"
 )
 
-// ValidStatuses is the set of allowed status values.
 var ValidStatuses = map[ProductStatus]bool{
 	StatusActive:   true,
 	StatusInactive: true,
 	StatusArchived: true,
 }
 
-// Product represents an item in the catalog.
 type Product struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
@@ -36,7 +32,6 @@ type Product struct {
 	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
-// CreateProductInput is the payload for creating a new product.
 type CreateProductInput struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -46,8 +41,6 @@ type CreateProductInput struct {
 	Tags        []string `json:"tags"`
 }
 
-// UpdateProductInput is the payload for updating an existing product.
-// All fields are optional — only provided fields are mutated.
 type UpdateProductInput struct {
 	Name        *string        `json:"name,omitempty"`
 	Description *string        `json:"description,omitempty"`
@@ -58,7 +51,6 @@ type UpdateProductInput struct {
 	Tags        *[]string      `json:"tags,omitempty"`
 }
 
-// ListProductsFilter holds query parameters for listing products.
 type ListProductsFilter struct {
 	Page     int            `json:"page"`
 	PerPage  int            `json:"per_page"`
@@ -68,10 +60,9 @@ type ListProductsFilter struct {
 	MaxPrice *float64       `json:"max_price,omitempty"`
 	Tag      string         `json:"tag,omitempty"`
 	SortBy   string         `json:"sort_by,omitempty"`
-	SortDir  string         `json:"sort_dir,omitempty"` // "asc" or "desc"
+	SortDir  string         `json:"sort_dir,omitempty"`
 }
 
-// ApplyDefaults fills in default values for unset filter fields.
 func (f *ListProductsFilter) ApplyDefaults() {
 	if f.Page < 1 {
 		f.Page = 1
@@ -87,7 +78,6 @@ func (f *ListProductsFilter) ApplyDefaults() {
 	}
 }
 
-// Normalize sanitizes the create input by trimming whitespace and upper-casing currency/SKU.
 func (i *CreateProductInput) Normalize() {
 	i.Name = strings.TrimSpace(i.Name)
 	i.Description = strings.TrimSpace(i.Description)
@@ -98,7 +88,6 @@ func (i *CreateProductInput) Normalize() {
 	}
 }
 
-// Normalize sanitizes the update input by trimming whitespace on provided fields.
 func (i *UpdateProductInput) Normalize() {
 	if i.Name != nil {
 		trimmed := strings.TrimSpace(*i.Name)

@@ -9,9 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestPinnedSurvivesDirectSummarize verifies the pinned contract on the
-// direct Summarize path (PTL recovery, /compact) - not just
-// ApplyCompactResult (#382).
 func TestPinnedSurvivesDirectSummarize(t *testing.T) {
 	cm := NewManager(10000)
 	ctx := context.Background()
@@ -69,9 +66,6 @@ func TestPinnedSurvivesDirectSummarize(t *testing.T) {
 	}
 }
 
-// TestCalibrationSampleIncludesToolOverhead verifies the calibration
-// sample's estimated side includes toolDefinitionOverhead so both sides
-// share the same composition (#383).
 func TestCalibrationSampleIncludesToolOverhead(t *testing.T) {
 	cm := NewManager(100000)
 	cm.SetToolDefinitionOverhead(5000)
@@ -89,11 +83,8 @@ func TestCalibrationSampleIncludesToolOverhead(t *testing.T) {
 	}
 }
 
-// TestPinnedTruncateRuneSafe verifies #386: per-item truncation cuts on
-// rune boundaries so multi-byte CJK content never becomes invalid UTF-8.
 func TestPinnedTruncateRuneSafe(t *testing.T) {
 	cm := NewManager(10000)
-	// 1200 CJK chars = 3600 bytes > maxPinnedChars(2000 as chars/bytes mix)
 	long := strings.Repeat("汉", 1200)
 	if _, err := cm.Pinned().Add(long); err != nil {
 		t.Fatalf("pin add failed: %v", err)
@@ -108,7 +99,6 @@ func TestPinnedTruncateRuneSafe(t *testing.T) {
 		}
 	}
 	if got == "" {
-		// Render may not have run yet; check the pinned store directly.
 		list := cm.Pinned().List()
 		if len(list) == 0 {
 			t.Fatal("pinned item missing")

@@ -14,8 +14,6 @@ func zz4ToolResult(text string) provider.Message {
 	return provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", Text: text}}}
 }
 
-// Scenario 1: single group + system - the current whole-group code returns
-// false here even though the group has an evictable tail.
 func TestTruncateIntraGroup_SingleGroupEvictsTail(t *testing.T) {
 	msgs := []provider.Message{
 		zz4Msg("system", "sys"),
@@ -36,8 +34,6 @@ func TestTruncateIntraGroup_SingleGroupEvictsTail(t *testing.T) {
 	}
 }
 
-// Scenario 2: two real-prompt groups - the oldest prompt head survives; only
-// its tail is evicted (one-message granularity).
 func TestTruncateIntraGroup_TwoGroupsKeepsOldestPromptHead(t *testing.T) {
 	msgs := []provider.Message{
 		zz4Msg("user", "prompt-A"),
@@ -57,7 +53,6 @@ func TestTruncateIntraGroup_TwoGroupsKeepsOldestPromptHead(t *testing.T) {
 	}
 }
 
-// Scenario 3: carrier tail (no prompt head) is evicted before any prompt.
 func TestTruncateIntraGroup_CarrierGroupFullyEvictable(t *testing.T) {
 	msgs := []provider.Message{
 		zz4Msg("user", "prompt-A"),
@@ -70,8 +65,6 @@ func TestTruncateIntraGroup_CarrierGroupFullyEvictable(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true")
 	}
-	// The prompt head stays first; the evicted message is the oldest
-	// carrier in its tail (r1).
 	if got[0].Content[0].Type != "text" || got[0].Content[0].Text != "prompt-A" {
 		t.Fatalf("prompt head must stay first, got %+v", got[0])
 	}
@@ -91,7 +84,6 @@ func TestTruncateIntraGroup_CarrierGroupFullyEvictable(t *testing.T) {
 	}
 }
 
-// Scenario 4: nothing evictable -> false (termination guarantee).
 func TestTruncateIntraGroup_AllPinnedReturnsFalse(t *testing.T) {
 	if _, ok := truncateGroupsForPTLRetry([]provider.Message{zz4Msg("user", "prompt")}); ok {
 		t.Fatalf("nothing evictable: expected false")

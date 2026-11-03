@@ -1,16 +1,3 @@
-// Package bom builds a learning-artifact bill of materials: a read-only,
-// deterministic inventory of every persisted artifact that currently shapes
-// agent behavior - skills, staged skills, memories, and trajectory insights -
-// with content hash, source location, and the promotion gate each artifact
-// passed on its way in.
-//
-// Rationale (sa-78, AgentBOM / arXiv:2606.04990 execution-provenance survey):
-// self-evolving agents accumulate learned state across many subsystems whose
-// stores live in scattered files (.ggcode/skills/, skills-staging/, memory/,
-// trajectory-learnings.jsonl, disabled_skills.json). None of those stores
-// answers the audit question "what is the agent made of right now, and through
-// which gate did each piece enter?". This package aggregates them so one
-// command can. Deliberately lexical: no LLM, no locks, no writes anywhere.
 package bom
 
 import (
@@ -24,44 +11,36 @@ import (
 	"time"
 )
 
-// Artifact type names (Entry.Type).
 const (
-	TypeSkill       = "skill"        // active skill (SKILL.md present under skills/)
-	TypeSkillStaged = "skill-staged" // skill awaiting knight promotion (skills-staging/)
-	TypeMemory      = "memory"       // persisted memory entry (memory/*.md)
-	TypeTrajInsight = "traj-insight" // trajectory learnings ledger (trajectory-learnings.jsonl)
+	TypeSkill       = "skill"
+	TypeSkillStaged = "skill-staged"
+	TypeMemory      = "memory"
+	TypeTrajInsight = "traj-insight"
 )
 
-// Promotion gates (Entry.PromotionGate): the mechanism that admitted the
-// artifact. Kept per-class because that is how the pipelines are factored.
 const (
-	GateKnight        = "knight"         // skill lifecycle: knight index + enable/disable state
-	GateKnightStaging = "knight-staging" // staged, awaiting dawn promotion gate
-	GateHoldout       = "holdout"        // traj insight: shadow-holdout counterfactual Δ gate
-	GateAuto          = "auto"           // auto-saved memory (research-/build-/release-/preference-)
-	GateManual        = "manual"         // hand-written memory or skill
+	GateKnight        = "knight"
+	GateKnightStaging = "knight-staging"
+	GateHoldout       = "holdout"
+	GateAuto          = "auto"
+	GateManual        = "manual"
 )
 
-// autoMemoryPrefixes are the memory key prefixes that the agent itself writes
-// (distill/consolidation/release pipelines). Everything else in memory/ was
-// saved by a human or by explicit instruction, i.e. manual.
 var autoMemoryPrefixes = []string{"research-", "build-", "release-", "preference-"}
 
-// Entry is one learning artifact in the bill of materials.
 type Entry struct {
 	Name          string    `json:"name"`
 	Type          string    `json:"type"`
-	Scope         string    `json:"scope"` // "project" | "global"
+	Scope         string    `json:"scope"`
 	Path          string    `json:"path"`
-	SHA256        string    `json:"sha256"` // first 12 hex chars of content hash
+	SHA256        string    `json:"sha256"`
 	Bytes         int64     `json:"bytes"`
 	Modified      time.Time `json:"modified"`
-	Enabled       bool      `json:"enabled"`         // skills only; memories/insights are always true
-	PromotionGate string    `json:"promotion_gate"`  // gate that admitted the artifact
-	Items         int       `json:"items,omitempty"` // jsonl line count (traj-insight only)
+	Enabled       bool      `json:"enabled"`
+	PromotionGate string    `json:"promotion_gate"`
+	Items         int       `json:"items,omitempty"`
 }
 
-// Report is the full bill of materials.
 type Report struct {
 	GeneratedAt time.Time      `json:"generated_at"`
 	Workspace   string         `json:"workspace"`
@@ -71,10 +50,6 @@ type Report struct {
 	Warnings    []string       `json:"warnings,omitempty"`
 }
 
-// Build scans the workspace (<ws>/.ggcode) and the user home (<home>/.ggcode)
-// for persisted learning artifacts and returns the aggregated BOM. It never
-// returns an error for missing stores - an absent store simply contributes no
-// entries - only for unusful inputs (empty paths).
 func Build(workspace, home string) (*Report, error) {
 	if workspace == "" || home == "" {
 		return nil, os.ErrInvalid
@@ -112,14 +87,10 @@ func Build(workspace, home string) (*Report, error) {
 	return rep, nil
 }
 
-// scanSkills adds one entry per directory containing a SKILL.md under dir.
-// When disabled is non-nil the entry's Enabled flag reflects the persisted
-// disable state (staged skills are never "enabled" - they are not injectable
-// until promoted).
 func scanSkills(rep *Report, dir, scope string, disabled map[string]bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return // no such store: fine
+		return
 	}
 	for _, de := range entries {
 		if !de.IsDir() {
@@ -160,7 +131,6 @@ func scanSkills(rep *Report, dir, scope string, disabled map[string]bool) {
 	}
 }
 
-// scanMemories adds one entry per *.md memory file.
 func scanMemories(rep *Report, dir, scope string) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -202,9 +172,6 @@ func scanMemories(rep *Report, dir, scope string) {
 	}
 }
 
-// scanTraj adds a single entry for the trajectory-learnings ledger. The ledger
-// is a whole store rather than independent artifacts, so it is inventoried as
-// one entry with an item (line) count.
 func scanTraj(rep *Report, path, scope string) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -237,10 +204,6 @@ func scanTraj(rep *Report, path, scope string) {
 	})
 }
 
-// loadDisabledNames reads the persisted disabled-skill list
-// (~/.ggcode/disabled_skills.json, a JSON array of skill names). Mirrors the
-// normalization used by the writer side: trim + lowercase. Any read or parse
-// problem yields an empty set - the BOM stays useful with partial state.
 func loadDisabledNames(path string) map[string]bool {
 	out := map[string]bool{}
 	data, err := os.ReadFile(path)

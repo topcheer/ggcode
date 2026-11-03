@@ -26,7 +26,6 @@ func (m *Manager) Reload() bool {
 		return false
 	}
 	cmds := m.loader.Load()
-	// Apply persisted disabled state to newly loaded commands
 	ApplyDisabledState(cmds)
 	sig := commandSetSignature(cmds)
 	m.mu.Lock()
@@ -84,15 +83,7 @@ func (m *Manager) RecordUsage(name string) {
 	_ = RecordUsage(name)
 }
 
-// SkillNames returns the names of all enabled, model-invocable skills.
-// Used by the skill tool for fuzzy name matching.
 func (m *Manager) SkillNames() []string {
-	// #1513: no RLock here. combinedCommands takes m.mu.Lock() internally
-	// (ApplyDisabledState, 32cb3dd6), and RWMutex is not reentrant - holding
-	// the read lock across that call deadlocked every skill search
-	// (skill '?keyword' and fuzzy suggestions, via interactive_core's
-	// NameLister). combinedCommands returns a snapshot; name/cmd reads
-	// below operate on that local copy and need no lock.
 	cmds := m.combinedCommands()
 	names := make([]string, 0, len(cmds))
 	for name, cmd := range cmds {
@@ -133,8 +124,6 @@ func (m *Manager) SetExtraProviders(providers ...func() []*Command) {
 	m.extraProviders = append([]func() []*Command(nil), providers...)
 }
 
-// WatchedDirs returns the directories scanned for skills/commands.
-// Used by the hot-reload watcher to know which paths to monitor.
 func (m *Manager) WatchedDirs() []string {
 	if m == nil || m.loader == nil {
 		return nil
@@ -142,7 +131,6 @@ func (m *Manager) WatchedDirs() []string {
 	return m.loader.CommandDirs()
 }
 
-// SetEnabled enables or disables a skill by name and persists the state.
 func (m *Manager) SetEnabled(name string, enabled bool) {
 	if m == nil {
 		return
@@ -163,8 +151,6 @@ func (m *Manager) combinedCommands() map[string]*Command {
 		base[name] = cmd
 	}
 	providers := append([]func() []*Command(nil), m.extraProviders...)
-	// Apply disabled state under lock — ApplyDisabledState writes
-	// cmd.Enabled which SetEnabled also writes under m.mu.Lock().
 	m.mu.RUnlock()
 
 	out := make(map[string]*Command)
@@ -188,8 +174,6 @@ func (m *Manager) combinedCommands() map[string]*Command {
 	for name, cmd := range base {
 		out[name] = cmd
 	}
-	// Apply persisted disabled state under lock — ApplyDisabledState
-	// writes cmd.Enabled, which SetEnabled also writes under m.mu.
 	m.mu.Lock()
 	ApplyDisabledState(out)
 	m.mu.Unlock()

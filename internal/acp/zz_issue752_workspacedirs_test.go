@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Regression guard for #752: handleSessionClose must delete the sessionID
-// entry from workspaceDirs alongside its three sibling maps.
 func TestSessionCloseDeletesWorkspaceDir(t *testing.T) {
 	h := NewHandler(&config.Config{}, tool.NewRegistry(), nil, nil)
 	h.initialized = true
@@ -18,7 +16,6 @@ func TestSessionCloseDeletesWorkspaceDir(t *testing.T) {
 		"cwd":        t.TempDir(),
 		"mcpServers": []interface{}{},
 	})
-	// session/new populates sessions + workspaceDirs.
 	sidRaw, err := h.handleSessionNew(params)
 	if err != nil {
 		t.Fatalf("session/new: %v", err)

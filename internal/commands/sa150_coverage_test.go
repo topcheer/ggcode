@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-// --- isolation helpers -------------------------------------------------
-
-// withIsolatedHome redirects HOME at a fresh temp dir so config.HomeDir()
-// based state files (disabled_skills.json, skill_usage.json) stay off the
-// developer's real home. Restored automatically by t.Setenv.
 func withIsolatedHome(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
@@ -21,9 +16,6 @@ func withIsolatedHome(t *testing.T) string {
 	return tmp
 }
 
-// resetDisabledCache snapshots and clears the package-level disabled-set
-// cache, restoring it when the test finishes (same pattern as
-// zz_raceprobe_test.go).
 func resetDisabledCache(t *testing.T) {
 	t.Helper()
 	disabledMu.Lock()
@@ -50,20 +42,16 @@ func resetUsageWriteLog(t *testing.T) {
 	})
 }
 
-// --- version.go: SemVer §11 pre-release ordering -----------------------
-
 func TestSA150_ComparePreReleaseIdentOrdering(t *testing.T) {
 	tests := []struct {
 		a, b string
 		want int
 	}{
-		{"1.0.0-2", "1.0.0-1", 1},            // both identifiers pure numeric: an > bn
-		{"1.0.0-1", "1.0.0-2", -1},           // numeric an < bn
-		{"1.0.0-beta", "1.0.0-alpha", 1},     // both alphanumeric: lexical >
-		{"1.0.0-alpha", "1.0.0-1", 1},        // alphanumeric > numeric
-		{"1.0.0-alpha", "1.0.0-alpha.1", -1}, // left missing identifier: shorter ranks lower
-		// Trailing-dot identifiers produce an empty extra identifier that
-		// equals the missing one, so the compare falls to the length tail.
+		{"1.0.0-2", "1.0.0-1", 1},
+		{"1.0.0-1", "1.0.0-2", -1},
+		{"1.0.0-beta", "1.0.0-alpha", 1},
+		{"1.0.0-alpha", "1.0.0-1", 1},
+		{"1.0.0-alpha", "1.0.0-alpha.1", -1},
 		{"1.0.0-alpha.", "1.0.0-alpha", 1},
 		{"1.0.0-alpha", "1.0.0-alpha.", -1},
 	}
@@ -86,21 +74,16 @@ func TestSA150_SameCoreTuple(t *testing.T) {
 	}
 }
 
-// npm pre-release exclusion rule for range comparators: a pre-release only
-// satisfies a range when the boundary carries a pre-release on the SAME
-// [major,minor,patch] tuple.
 func TestSA150_PrereleaseRangeExclusion(t *testing.T) {
 	tests := []struct {
 		actual, op, required string
 		want                 bool
 	}{
-		{"1.2.0-rc1", ">=", "1.2.0-beta", true},  // same tuple + pre-release boundary
-		{"1.3.0-rc1", ">=", "1.2.0-beta", false}, // different tuple
-		{"2.0.0-rc1", "^", "1.2.0-beta", false},  // caret, tuple mismatch
-		{"1.2.0", ">=", "1.0.0-rc1", true},       // plain release: exclusion rule N/A
-		{"1.2.0-rc1", ">=", "1.2.0", false},      // boundary without pre-release
-		// Operator embedded in requiredVersion is tolerated (^ and ~ both);
-		// the actual pre-release must sit on the SAME tuple as the boundary.
+		{"1.2.0-rc1", ">=", "1.2.0-beta", true},
+		{"1.3.0-rc1", ">=", "1.2.0-beta", false},
+		{"2.0.0-rc1", "^", "1.2.0-beta", false},
+		{"1.2.0", ">=", "1.0.0-rc1", true},
+		{"1.2.0-rc1", ">=", "1.2.0", false},
 		{"1.2.0-rc2", "~", "~1.2.0-beta", true},
 		{"1.2.0-rc1", "^", "^1.2.0-beta", true},
 	}
@@ -111,8 +94,6 @@ func TestSA150_PrereleaseRangeExclusion(t *testing.T) {
 		}
 	}
 }
-
-// --- command.go: nil receivers and title fallbacks ----------------------
 
 func TestSA150_CommandNilReceiverHelpers(t *testing.T) {
 	var nilCmd *Command
@@ -142,8 +123,6 @@ func TestSA150_CommandNilReceiverHelpers(t *testing.T) {
 	}
 }
 
-// --- loader.go: List ordering, dir-entry filtering ----------------------
-
 func TestSA150_LoaderListOrdersBySourceThenName(t *testing.T) {
 	ggHome := withIsolatedHome(t)
 	proj := filepath.Join(ggHome, "proj")
@@ -155,11 +134,9 @@ func TestSA150_LoaderListOrdersBySourceThenName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cmdDir, "zulu.md"), []byte("Z cmd"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// ".md" trims to an empty name and must be skipped.
 	if err := os.WriteFile(filepath.Join(cmdDir, ".md"), []byte("no name"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A directory masquerading as a .md file must be skipped too.
 	if err := os.MkdirAll(filepath.Join(cmdDir, "fake.md"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +154,6 @@ func TestSA150_LoaderListOrdersBySourceThenName(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("len(list) = %d, want 2: %+v", len(list), list)
 	}
-	// Sort is by Source string: "project" < "user".
 	if list[0].Name != "alpha" || list[0].Source != SourceProject || list[0].LoadedFrom != LoadedFromSkills {
 		t.Errorf("list[0] = %s/%s/%s, want alpha/project/skills", list[0].Name, list[0].Source, list[0].LoadedFrom)
 	}
@@ -192,8 +168,6 @@ func TestSA150_SkillsDirSkipsNonSkillEntries(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(skillsDir, "hollow"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Directory without SKILL.md is skipped (ReadFile on the skill path fails).
-	// A plain file entry (not a dir) is skipped too.
 	if err := os.WriteFile(filepath.Join(skillsDir, "stray.md"), []byte("stray"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -251,13 +225,10 @@ func TestSA150_CanonicalTargetDirSymlinkDedupe(t *testing.T) {
 	if got := dedupeLoadTargets(targets); len(got) != 1 {
 		t.Errorf("symlinked duplicate targets not deduped: got %d, want 1", len(got))
 	}
-	// Non-existent path falls back to Abs+Clean instead of failing.
 	if got := canonicalTargetDir(filepath.Join(tmp, "missing", "..", "alsonot")); got == "" {
 		t.Error("canonicalTargetDir returned empty for non-existent path")
 	}
 }
-
-// --- disabled_state.go: persistence + error paths ------------------------
 
 func TestSA150_DisabledStateCorruptAndNormalize(t *testing.T) {
 	tmp := withIsolatedHome(t)
@@ -288,14 +259,12 @@ func TestSA150_DisabledStateCorruptAndNormalize(t *testing.T) {
 func TestSA150_SaveDisabledSetErrorPaths(t *testing.T) {
 	tmp := withIsolatedHome(t)
 	gg := filepath.Join(tmp, ".ggcode")
-	// ~/.ggcode as a regular file: MkdirAll must fail.
 	if err := os.WriteFile(gg, []byte("not a dir"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := saveDisabledSet(map[string]bool{"x": true}); err == nil {
 		t.Error("expected MkdirAll error when ~/.ggcode is a file")
 	}
-	// State path as a directory: WriteFile must fail.
 	os.Remove(gg)
 	if err := os.MkdirAll(filepath.Join(gg, "disabled_skills.json"), 0o755); err != nil {
 		t.Fatal(err)
@@ -308,7 +277,7 @@ func TestSA150_SaveDisabledSetErrorPaths(t *testing.T) {
 func TestSA150_ApplyDisabledStateBranches(t *testing.T) {
 	withIsolatedHome(t)
 	resetDisabledCache(t)
-	PersistEnabledState("gone", false) // seed persisted disabled state
+	PersistEnabledState("gone", false)
 
 	cmds := map[string]*Command{
 		"gone":    {Name: "gone", Enabled: true},
@@ -349,7 +318,6 @@ func TestSA150_SetEnabledPersistsAndReapplies(t *testing.T) {
 		t.Fatalf("disabled state not persisted: %v %q", err, data)
 	}
 
-	// A fresh manager (cold cache) must still see the persisted disable.
 	resetDisabledCache(t)
 	m2 := NewManager(tmp)
 	if cmd, ok := m2.Commands()["deploy"]; !ok || cmd.Enabled {
@@ -360,8 +328,6 @@ func TestSA150_SetEnabledPersistsAndReapplies(t *testing.T) {
 		t.Error("skill should be re-enabled after SetEnabled(true)")
 	}
 }
-
-// --- manager.go: nil guards, filtering, extra providers ------------------
 
 func TestSA150_ManagerNilReceiver(t *testing.T) {
 	var m *Manager
@@ -375,7 +341,7 @@ func TestSA150_ManagerNilReceiver(t *testing.T) {
 		t.Errorf("loader-less WatchedDirs = %v, want nil", got)
 	}
 	var nilSet *Manager
-	nilSet.SetEnabled("anything", true) // must not panic
+	nilSet.SetEnabled("anything", true)
 }
 
 func TestSA150_ManagerWatchedDirs(t *testing.T) {
@@ -402,8 +368,6 @@ func TestSA150_SkillNamesFilters(t *testing.T) {
 		"nilval": nil,
 	}}
 	names := m.SkillNames()
-	// combinedCommands always merges bundled skills, so assert the filter
-	// semantics over the union rather than an exact list.
 	got := make(map[string]bool, len(names))
 	for _, n := range names {
 		got[n] = true
@@ -426,7 +390,7 @@ func TestSA150_CombinedCommandsProviderFiltering(t *testing.T) {
 		func() []*Command {
 			return []*Command{nil, {Name: "  "}, {Name: "prov-skill", Enabled: true}}
 		},
-		nil, // nil provider must be skipped without panicking
+		nil,
 	)
 	cmds := m.Commands()
 	if _, ok := cmds["prov-skill"]; !ok {
@@ -440,9 +404,6 @@ func TestSA150_CombinedCommandsProviderFiltering(t *testing.T) {
 	}
 }
 
-// Loader.List must order same-source entries by LoadedFrom (commands before
-// skills). A single user command + a single user skill guarantees the one
-// comparison the sort makes crosses the LoadedFrom tiebreak.
 func TestSA150_LoaderListLoadedFromTiebreak(t *testing.T) {
 	ggHome := withIsolatedHome(t)
 	cmdDir := filepath.Join(ggHome, ".ggcode", "commands")
@@ -468,7 +429,6 @@ func TestSA150_LoaderListLoadedFromTiebreak(t *testing.T) {
 	}
 }
 
-// Same source and LoadedFrom: List falls through to the name tiebreak.
 func TestSA150_LoaderListNameTiebreak(t *testing.T) {
 	ggHome := withIsolatedHome(t)
 	cmdDir := filepath.Join(ggHome, ".ggcode", "commands")
@@ -486,9 +446,6 @@ func TestSA150_LoaderListNameTiebreak(t *testing.T) {
 	}
 }
 
-// Manager.List with equal usage scores falls through to Source/LoadedFrom
-// tiebreaks; two high-usage user commands with different LoadedFrom force
-// the LoadedFrom comparison when their score tie is resolved.
 func TestSA150_ManagerListLoadedFromTiebreak(t *testing.T) {
 	withIsolatedHome(t)
 	resetUsageWriteLog(t)
@@ -525,8 +482,6 @@ func TestSA150_ManagerListLoadedFromTiebreak(t *testing.T) {
 	}
 }
 
-// --- usage.go: debounce, guards, error paths -----------------------------
-
 func TestSA150_RecordUsageDebounceAndEmptyName(t *testing.T) {
 	tmp := withIsolatedHome(t)
 	resetUsageWriteLog(t)
@@ -543,7 +498,6 @@ func TestSA150_RecordUsageDebounceAndEmptyName(t *testing.T) {
 		t.Fatalf("debounce not applied: %v %q", err, data)
 	}
 
-	// Expire the debounce window: the next call must land.
 	skillUsageMu.Lock()
 	lastWriteByName["deb"] = time.Now().Add(-2 * time.Minute)
 	skillUsageMu.Unlock()
@@ -555,7 +509,6 @@ func TestSA150_RecordUsageDebounceAndEmptyName(t *testing.T) {
 		t.Fatalf("second write missing: %v %q", err, data)
 	}
 
-	// Empty after normalization: no error, no write.
 	if err := RecordUsage("   "); err != nil {
 		t.Errorf("blank RecordUsage should be nil, got %v", err)
 	}
@@ -582,7 +535,6 @@ func TestSA150_UsageScoreGuards(t *testing.T) {
 	if got := usageScoreForCommand(nil, nil, now); got != 0 {
 		t.Errorf("nil command score = %v, want 0", got)
 	}
-	// Empty after normalization short-circuits before any disk access.
 	if got := UsageScore(""); got != 0 {
 		t.Errorf("UsageScore(empty) = %v, want 0", got)
 	}
@@ -600,8 +552,6 @@ func TestSA150_UsageLoadSaveErrorPaths(t *testing.T) {
 	}
 	usageFile := filepath.Join(ggDir, "skill_usage.json")
 
-	// Corrupt JSON: #3517 - treated as an ERROR (quarantined aside), never
-	// as empty-with-nil (that let RecordUsage erase the whole history).
 	if err := os.WriteFile(usageFile, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +560,6 @@ func TestSA150_UsageLoadSaveErrorPaths(t *testing.T) {
 		t.Errorf("corrupt usage JSON: got (%v, %v), want (nil, error)", usage, err)
 	}
 
-	// JSON null: must come back as a non-nil empty map.
 	if err := os.WriteFile(usageFile, []byte("null"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +568,6 @@ func TestSA150_UsageLoadSaveErrorPaths(t *testing.T) {
 		t.Errorf("null usage JSON: got (%v, %v), want (non-nil empty, nil)", usage, err)
 	}
 
-	// Unreadable (directory instead of file): error propagates.
 	os.Remove(usageFile)
 	if err := os.MkdirAll(usageFile, 0o755); err != nil {
 		t.Fatal(err)
@@ -637,7 +585,6 @@ func TestSA150_UsageLoadSaveErrorPaths(t *testing.T) {
 		t.Errorf("loadUsageSnapshot on unreadable file = %v, want empty", got)
 	}
 
-	// Save path: ~/.ggcode as a regular file breaks MkdirAll.
 	os.RemoveAll(ggDir)
 	if err := os.WriteFile(ggDir, []byte("file"), 0o644); err != nil {
 		t.Fatal(err)

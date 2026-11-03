@@ -19,9 +19,6 @@ const (
 	cronLockfileFailImmediately = 0x00000001
 )
 
-// acquireMigrationLock takes a non-blocking exclusive LockFileEx on path.
-// Returns a release func and true on success; (nil, false) when another
-// process holds the lock (#414).
 func acquireMigrationLock(path string) (func(), bool) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
