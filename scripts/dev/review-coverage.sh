@@ -1,32 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic review-coverage ledger for the cron review loops (cron-1/cron-2).
-#
-# Problem it fixes: "reviewed" state previously lived only in issue titles and
-# agent memory, so files reviewed-and-clean left no trace - sampling was random
-# and untraceable, and the long tail (most of ~1100 non-test .go files) was
-# never deterministically swept.
-#
-# The ledger records which files received a FULL review, keyed by git blob SHA
-# (content-based invalidation: edit the file -> stale, needs re-review).
-# Format: exact `git ls-files -s` lines ("100644 <sha> 0\t<path>").
-#
-# Commands:
-#   status                 coverage summary (total / reviewed / stale / unreviewed)
-#   next <egrep> [n]       up to n paths needing review (unreviewed first, then
-#                          stale, each alphabetical). egrep filters paths;
-#                          leading '!' inverts the filter (complement scope).
-#   mark <path>...         record the current blob SHA for each path - call this
-#                          ONLY after a full-file review, not after a diff skim.
-#   prune                  drop ledger entries for files deleted from the repo
-#   reset                  start a NEW epoch: archive the current ledger and begin
-#                          a fresh full-review cycle from zero. Call when the cycle
-#                          reaches 100% so the next sweep re-reviews everything.
-#
-# Tracked sources: non-test *.go plus mobile/flutter *.dart (generated *.g.dart
-# and test files excluded).
-## Scopes (deterministic long-tail sweep; diff-window review stays full-scope):
-#   cron-2: next '^(internal/agent/|desktop/)' 5
-#   cron-1: next '!^(internal/agent/|desktop/)' 5   (the complement)
+
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 EPOCH_FILE=.ggcode/review-epoch.txt
@@ -63,9 +36,9 @@ case "${1:-status}" in
     cut -f2 "$td/cur" | sort > "$td/curpaths"
     if [ -f "$LEDGER" ]; then sort "$LEDGER" > "$td/led"; else : > "$td/led"; fi
     cut -f2 "$td/led" | sort > "$td/ledpaths"
-    # Unreviewed: tracked now, never marked.
+
     comm -13 "$td/ledpaths" "$td/curpaths" > "$td/unrev"
-    # Stale: marked before, but current blob SHA differs.
+
     : > "$td/stale"
     while IFS= read -r p; do
       [ -n "$p" ] || continue
@@ -87,7 +60,7 @@ case "${1:-status}" in
     ;;
   mark)
     shift
-    [ $# -ge 1 ] || { echo "usage: mark <path>..." >&2; exit 2; }
+    [ $
     touch "$LEDGER"
     for p in "$@"; do
       line=$(git ls-files -s -- "$p" || true)
@@ -106,7 +79,7 @@ case "${1:-status}" in
     rm -rf "$td"
     ;;
   reset)
-    # Start the next full-review cycle from zero. Archives the completed epoch.
+
     next=$(( EPOCH + 1 ))
     if [ -f "$LEDGER" ]; then :; else touch "$LEDGER"; fi
     echo "$next" > "$EPOCH_FILE"

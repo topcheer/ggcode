@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// skipE2E skips the test if no API key is configured.
 func skipE2E(t *testing.T) {
 	t.Helper()
 	if os.Getenv("ZAI_API_KEY") == "" && os.Getenv("GGCODE_ZAI_API_KEY") == "" {
@@ -16,7 +15,6 @@ func skipE2E(t *testing.T) {
 	}
 }
 
-// newProviderFromEnv creates a real LLM provider from environment variables.
 func newProviderFromEnv(t *testing.T) provider.Provider {
 	t.Helper()
 	key := os.Getenv("ZAI_API_KEY")

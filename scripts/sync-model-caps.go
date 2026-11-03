@@ -1,24 +1,5 @@
 //go:build ignore
 
-// sync-model-caps fetches model capability data from models.dev (api.json,
-// MIT-licensed, https://github.com/anomalyco/models.dev) and generates the
-// knownModelCapabilities map for context_window.go plus vendor_defaults.go.
-// Single source since v1.3.234 - it replaced the former charmbracelet/catwalk
-// fetch and the OpenRouter /v1/models fallback.
-//
-// Preferred invocation: `make sync-model-caps` (gofmt + build check included).
-// Direct usage with flags:
-//
-//	go run scripts/sync-model-caps.go [--dry-run] [--output FILE]
-//
-// Flags:
-//
-//	--dry-run    Print generated Go code to stdout without writing any file
-//	--output     Output file path (default: internal/config/context_window.go)
-//	             vendor_defaults.go is always rewritten alongside.
-//
-// This tool is NOT run in CI. Run it any time via `make sync-model-caps`;
-// it is a required pre-release step (docs/release-process.md §3.3).
 package main
 
 import (
@@ -36,8 +17,6 @@ import (
 
 const modelsDevAPIURL = "https://models.dev/api.json"
 
-// catwalkProvider is the internal provider representation the generator
-// emits (name kept from the catwalk era; data now comes from models.dev).
 type catwalkProvider struct {
 	ID                  string         `json:"id"`
 	Name                string         `json:"name"`
@@ -46,9 +25,7 @@ type catwalkProvider struct {
 	DefaultLargeModelID string         `json:"default_large_model_id"`
 	DefaultSmallModelID string         `json:"default_small_model_id"`
 	Models              []catwalkModel `json:"models"`
-	// ExtraEndpoints carries locally maintained endpoint URLs that upstream
-	// does not list. Never serialized from JSON; used only for localProviders
-	// so their URLs enter the vendorAPIEndpoints match table.
+
 	ExtraEndpoints []string
 }
 
@@ -61,12 +38,9 @@ type catwalkModel struct {
 	CanReason           bool    `json:"can_reason"`
 	CostPer1mIn         float64 `json:"cost_per_1m_in"`
 	CostPer1mOut        float64 `json:"cost_per_1m_out"`
-	// release_date drives the default-large-model heuristic (newest wins).
-	// Only populated from models.dev; not serialized into the output.
+
 	ReleaseDate string `json:"-"`
-	// SupportsChatOutput: modality.output contains "text". Absent
-	// modality data counts as true (back-compat: an entry with no
-	// modality info stays eligible for defaults).
+
 	SupportsChatOutput bool
 }
 
@@ -74,41 +48,23 @@ func isChatModel(m catwalkModel) bool {
 	return m.SupportsChatOutput
 }
 
-// modelEntry is our output format — one line in the Go map literal.
 type modelEntry struct {
 	ID              string
 	ContextWindow   int
 	MaxOutputTokens int
 	SupportsVision  bool
-	SourceProvider  string // models.dev provider ID (e.g. "openai", "minimax")
+	SourceProvider  string
 }
 
-// Which models.dev providers we sync (provider ID → our section header).
-// models.dev carries 200+ providers; this list keeps the vendors ggcode
-// ships plus the major ones users point custom endpoints at (including
-// the gateway family folded into the "ai-gateway" vendor in config.go).
-// providerMerges folds upstream provider IDs that models.dev renamed or
-// split into the stable ggcode provider ID on the right. Generated tables,
-// vendorAPIEndpointHosts, and user configs key on the stable ID; following
-// upstream renames blindly would silently delete the vendor from the
-// tables. 2026-09-20: "kimi-for-coding" was split into
-// kimi-code-plan-global/cn (same models, api.kimi.ai vs api.kimi.com) -
-// both are folded back into one provider carrying both hosts.
 var providerMerges = map[string]string{
 	"kimi-code-plan-global": "kimi-for-coding",
 	"kimi-code-plan-cn":     "kimi-for-coding",
 }
 
-// providerMergeNames overrides the section display name for folded
-// providers so the merged provider does not carry a "(CN)"/"(Global)"
-// suffix belonging to only one of its sources.
 var providerMergeNames = map[string]string{
 	"kimi-for-coding": "Kimi for Coding",
 }
 
-// mergeProviderInto unions src's endpoints and models into dst (first
-// sighting wins for defaults and duplicate model IDs; the current split
-// carries identical models, so in practice this unions API endpoints).
 func mergeProviderInto(dst, src *catwalkProvider) {
 	for _, e := range append([]string{src.APIEndpoint}, src.ExtraEndpoints...) {
 		if e == "" || e == dst.APIEndpoint || containsString(dst.ExtraEndpoints, e) {
@@ -136,13 +92,6 @@ func mergeProviderInto(dst, src *catwalkProvider) {
 	}
 }
 
-// localModelExtras carries capability entries for models that are still
-// deployed and resolvable at their providers but no longer listed by
-// models.dev (dropped in an upstream refresh). The runtime vision/context
-// inference is table-only (keyword heuristics were removed), so losing the
-// table entry would silently strip real capabilities from live models.
-// 2026-09-20: glm-4v-plus vanished from every upstream provider while zai
-// endpoints still serve it.
 var localModelExtras = []modelEntry{
 	{ID: "glm-4v-plus", ContextWindow: 128000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "zhipuai"},
 }
@@ -169,10 +118,7 @@ var desiredProviders = map[string]string{
 	"groq":                     "Groq",
 	"huggingface":              "HuggingFace",
 	"iflowcn":                  "iFlow",
-	// 2026-09-20: models.dev renamed the single "kimi-for-coding" provider
-	// into split global/cn providers (same models, api.kimi.ai vs
-	// api.kimi.com). Both are consumed and folded back into the stable
-	// ggcode provider ID "kimi-for-coding" by providerMerges below.
+
 	"kimi-code-plan-cn":     "Kimi for Coding (CN)",
 	"kimi-code-plan-global": "Kimi for Coding (Global)",
 	"longcat":               "LongCat",
@@ -215,7 +161,6 @@ var desiredProviders = map[string]string{
 	"zhipuai-coding-plan":   "Zhipu GLM (Coding Plan)",
 }
 
-// models.dev api.json wire types.
 type modelsDevDoc map[string]modelsDevProvider
 
 type modelsDevProvider struct {
@@ -233,10 +178,7 @@ type modelsDevModel struct {
 	Name        string `json:"name"`
 	Attachment  bool   `json:"attachment"`
 	ReleaseDate string `json:"release_date"`
-	// #1862 case 2: modality decides whether a model is a chat model at
-	// all - image-only (gpt-image-*) and realtime models share the model
-	// list and were eligible for DefaultLargeModelID solely by release
-	// date recency.
+
 	Modality struct {
 		Input  []string `json:"input"`
 		Output []string `json:"output"`
@@ -253,14 +195,6 @@ type modelsDevModel struct {
 	} `json:"cost"`
 }
 
-/*
-localProviders carries ggcode-local vendor definitions that upstream
-does not ship (e.g. "xiaomi-mimo", added manually in v1.3.154). Regeneration
-used to wipe them whenever upstream dropped or never had the provider.
-During sync these are merged back: if upstream starts carrying the same
-provider ID, upstream data wins. Capability-less models (e.g. TTS-only) are
-kept in the vendor model list but skipped in the capability table.
-*/
 var localProviders = []*catwalkProvider{
 	{
 		ID:                  "xiaomi-mimo",
@@ -281,29 +215,16 @@ var localProviders = []*catwalkProvider{
 	},
 }
 
-/*
-builtinEndpointFallback fills providers whose upstream api_endpoint is an
-env-var placeholder (e.g. anthropic's "$ANTHROPIC_API_ENDPOINT") with the
-corresponding builtin URL from config.go's builtin vendor definitions.
-Matching-only reference: builtin endpoint URLs themselves are never
-rewritten. Azure is omitted on purpose — its per-deployment hosts
-(*.openai.azure.com) cannot be statically listed.
-*/
 var builtinEndpointFallback = map[string][]string{
 	"anthropic": {"https://api.anthropic.com"},
 }
 
-// main orchestrates the sync phases (#2614: was a 176-line monolith at
-// cyclomatic complexity 32; each phase now lives in its own function -
-// collectProviders / mergeLocalProviders / generate+guard / writeOutputs -
-// with the fail-stop and shrink-guard semantics moved verbatim).
 func main() {
 	dryRun := flag.Bool("dry-run", false, "Print to stdout instead of writing file")
 	forceShrink := flag.Bool("force", false, "Allow >20%% entry-count shrinkage (checked against the existing output file)")
 	output := flag.String("output", "internal/config/context_window.go", "Output file path")
 	flag.Parse()
 
-	// 1. Fetch models.dev api.json (single source of truth).
 	doc, err := fetchModelsDev()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: fetch models.dev: %v\n", err)
@@ -313,28 +234,19 @@ func main() {
 	providers, sections, allEntries := collectProviders(doc)
 	fmt.Fprintf(os.Stderr, "\nTotal models: %d\n\n", len(allEntries))
 
-	// 1b. Merge local-only providers (see localProviders doc comment).
 	providers, sections, allEntries = mergeLocalProviders(providers, sections, allEntries)
 	fmt.Fprintf(os.Stderr, "\nFinal total models: %d\n\n", len(allEntries))
 
-	// 1c. Local model extras: preserve still-deployed models that an
-	// upstream refresh dropped (see localModelExtras doc comment).
 	allEntries = append(allEntries, localModelExtras...)
 
-	// 2. Generate Go source code.
 	code := generateGoCode(allEntries, sections)
 	vdCode := generateVendorDefaults(providers)
 
-	// 3+4. Shrink guard, then write both outputs.
 	writeOutputs(code, vdCode, *output, allEntries, *dryRun, *forceShrink)
 }
 
-// collectProviders adapts every desired upstream provider from the
-// models.dev doc (#2614: phase 1 of the old monolithic main). Preserves
-// the #1668 case-2 fail-stop: a desired provider yielding zero usable
-// entries aborts the whole run to protect the existing tables.
 func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
-	// Deterministic output order: sort provider IDs alphabetically.
+
 	pids := make([]string, 0, len(desiredProviders))
 	for pid := range desiredProviders {
 		pids = append(pids, pid)
@@ -348,10 +260,7 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 			continue
 		}
 		provider := adaptModelsDevProvider(pid, desiredProviders[pid], &mdp)
-		// Fold renamed/split upstream providers into their stable ggcode ID
-		// (see providerMerges) so generated tables and host mappings keep a
-		// single stable provider entry instead of churning with upstream
-		// renames. Entries built below then carry the folded SourceProvider.
+
 		if target, ok := providerMerges[pid]; ok {
 			provider.ID = target
 			if name, ok2 := providerMergeNames[target]; ok2 {
@@ -369,7 +278,7 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 				ContextWindow:   m.ContextWindow,
 				MaxOutputTokens: m.DefaultMaxTokens,
 				SupportsVision:  m.SupportsAttachments,
-				SourceProvider:  provider.ID, // track origin for dedup
+				SourceProvider:  provider.ID,
 			}
 			sectionEntries = append(sectionEntries, e)
 		}
@@ -380,19 +289,13 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 		}
 
 		sections = append(sections, desiredProviders[pid])
-		// #1668 case 2: a desired provider yielding ZERO usable entries is a
-		// fail-stop condition, not a WARNING - a models.dev schema change or a
-		// partially failed fetch used to delete the provider's whole model
-		// list from both generated files while the run exited 0 (bedrock was
-		// lost exactly this way).
+
 		if len(sectionEntries) == 0 {
 			fmt.Fprintf(os.Stderr, "FATAL: provider %q yielded 0 usable entries (models.dev schema change or partial fetch?) - aborting to protect existing tables\n", pid)
 			os.Exit(1)
 		}
 		allEntries = append(allEntries, sectionEntries...)
-		// Same-ID providers (created by providerMerges folds) merge into the
-		// first sighting: union endpoints and any models it lacked. Duplicate
-		// table entries from the later split are same-value last-wins.
+
 		merged := false
 		for i := range providers {
 			if providers[i].ID == provider.ID {
@@ -408,8 +311,6 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 	return providers, sections, allEntries
 }
 
-// mergeLocalProviders appends local-only providers absent from upstream
-// (#2614: phase 1b). Upstream data wins when both carry the provider.
 func mergeLocalProviders(providers []*catwalkProvider, sections []string, allEntries []modelEntry) ([]*catwalkProvider, []string, []modelEntry) {
 	for _, lp := range localProviders {
 		upstream := false
@@ -420,13 +321,13 @@ func mergeLocalProviders(providers []*catwalkProvider, sections []string, allEnt
 			}
 		}
 		if upstream {
-			continue // upstream carries it now; upstream data wins
+			continue
 		}
 		providers = append(providers, lp)
 		sections = append(sections, lp.Name)
 		for _, m := range lp.Models {
 			if m.ContextWindow == 0 && m.DefaultMaxTokens == 0 && !m.SupportsAttachments {
-				continue // no capability signal; keep out of the caps table
+				continue
 			}
 			allEntries = append(allEntries, modelEntry{
 				ID:              strings.ToLower(strings.TrimSpace(m.ID)),
@@ -441,18 +342,8 @@ func mergeLocalProviders(providers []*catwalkProvider, sections []string, allEnt
 	return providers, sections, allEntries
 }
 
-// writeOutputs judges the #2193/#1668 aggregate shrink guard against the
-// OLD table, then writes both generated files (or prints to stdout on
-// dry-run) (#2614: phases 3+4 of the old monolithic main; moved verbatim).
 func writeOutputs(code, vdCode string, output string, allEntries []modelEntry, dryRun, forceShrink bool) {
-	// #1668 case 2: aggregate drop guard - even with every provider
-	// non-empty, a mass schema change (renamed IDs, dropped context data)
-	// could shrink the table >20%. Compare against the file we are about
-	// to overwrite and refuse suspicious shrinkage.
-	// #2193: this guard ran AFTER the write and re-read the freshly
-	// written output (oldCount == newCount, the check was mathematically
-	// false, -force was unreachable dead code, and the abort happened
-	// post-overwrite anyway). Read the OLD table first, judge, THEN write.
+
 	if !dryRun {
 		prevTable, _ := os.ReadFile(output)
 		oldCount := strings.Count(string(prevTable), ": {ContextWindow")
@@ -460,12 +351,11 @@ func writeOutputs(code, vdCode string, output string, allEntries []modelEntry, d
 		if oldCount > 0 && newCount < oldCount*8/10 {
 			fmt.Fprintf(os.Stderr, "FATAL: entry count %d is >20%% below existing %d - aborting (pass -force to override)\n", newCount, oldCount)
 			if !forceShrink {
-				os.Exit(1) // before any write - the old table survives
+				os.Exit(1)
 			}
 		}
 	}
 
-	// 3. Write output.
 	if dryRun {
 		fmt.Print(code)
 	} else {
@@ -476,7 +366,6 @@ func writeOutputs(code, vdCode string, output string, allEntries []modelEntry, d
 		fmt.Fprintf(os.Stderr, "Written to %s\n", output)
 	}
 
-	// 4. Generate vendor_defaults.go path next to the output file.
 	vendorDefaultsPath := "internal/config/vendor_defaults.go"
 	if idx := strings.LastIndex(output, "/"); idx >= 0 {
 		vendorDefaultsPath = output[:idx+1] + "vendor_defaults.go"
@@ -493,9 +382,7 @@ func writeOutputs(code, vdCode string, output string, allEntries []modelEntry, d
 }
 
 func fetchModelsDev() (*modelsDevDoc, error) {
-	// #1668 case 2/B6: a bare http.Get has NO timeout - a hung connection
-	// stalled the regen indefinitely, and a partially failed run still
-	// exited 0, making silent provider deletion look like success.
+
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Get(modelsDevAPIURL)
 	if err != nil {
@@ -519,11 +406,6 @@ func fetchModelsDev() (*modelsDevDoc, error) {
 	return &doc, nil
 }
 
-// adaptModelsDevProvider converts a models.dev provider entry into the
-// generator's internal representation. models.dev has no explicit default
-// model field, so DefaultLargeModelID is derived: the newest model by
-// release_date whose ID is not a third-party re-serve (no "/" in the ID -
-// openrouter-style prefixed entries) wins.
 func adaptModelsDevProvider(pid, sectionName string, mdp *modelsDevProvider) *catwalkProvider {
 	p := &catwalkProvider{
 		ID:          pid,
@@ -547,16 +429,14 @@ func adaptModelsDevProvider(pid, sectionName string, mdp *modelsDevProvider) *ca
 			ReleaseDate:         m.ReleaseDate,
 		})
 	}
-	// Deterministic order: newest release first, then ID.
+
 	sort.SliceStable(p.Models, func(i, j int) bool {
 		if p.Models[i].ReleaseDate != p.Models[j].ReleaseDate {
 			return p.Models[i].ReleaseDate > p.Models[j].ReleaseDate
 		}
 		return p.Models[i].ID < p.Models[j].ID
 	})
-	// Default large model: newest own CHAT model (skip re-served IDs with
-	// "/" and non-chat modalities - #1862 case 2: image-only and realtime
-	// models were eligible purely by release-date recency).
+
 	for _, m := range p.Models {
 		if strings.Contains(m.ID, "/") {
 			continue
@@ -595,31 +475,18 @@ type modelCapability struct {
 // Source: https://models.dev (api.json), MIT-licensed
 `)
 
-	// We don't regenerate the full map literal with sections because the
-	// surrounding code (inferContextWindow, etc.) has manual prefix-based
-	// fallbacks that should be preserved. Instead, we generate ONLY the
-	// knownModelCapabilities map as a data file, and the rest of context_window.go
-	// should import it.
-	//
-	// Actually, the simplest approach: generate the entire file including
-	// the static code that doesn't change.
-
-	// Generate knownModelCapabilities map
 	sb.WriteString("var knownModelCapabilities = map[string]modelCapability{\n")
 
-	// Group by section for readability
 	entryIdx := 0
 	for _, section := range sections {
-		// Find how many entries belong to this section
-		// We just output all entries sorted by ID
+
 		_ = section
 	}
 
-	// Deduplicate: multiple providers may carry the same model.
 	entries = dedupEntries(entries)
 
 	// Output entries grouped loosely — just output sorted with comments
-	// Actually let's just output them sorted
+
 	for _, e := range entries {
 		sb.WriteString(fmt.Sprintf("\t%q: {ContextWindow: %d", e.ID, e.ContextWindow))
 		if e.MaxOutputTokens > 0 {
@@ -633,7 +500,6 @@ type modelCapability struct {
 
 	sb.WriteString("}\n\n")
 
-	// Append the static code that doesn't change
 	sb.WriteString(staticCode())
 
 	_ = entryIdx
@@ -876,7 +742,6 @@ type defaultModelInfo struct {
 var vendorModels = map[string]vendorModelInfo{
 `)
 
-	// Sort providers by ID for deterministic output.
 	sort.Slice(providers, func(i, j int) bool {
 		return providers[i].ID < providers[j].ID
 	})
@@ -922,13 +787,12 @@ var vendorDefaultModels = map[string]defaultModelInfo{
 var vendorAPIEndpointHosts = map[string]string{
 `)
 
-	// Flatten: host -> provider ID, smallest ID wins on conflict.
 	hostToPID := make(map[string]string)
 	for _, p := range providers {
 		cands := append([]string{p.APIEndpoint}, p.ExtraEndpoints...)
 		cands = append(cands, builtinEndpointFallback[p.ID]...)
 		for _, cand := range cands {
-			// Skip env-var placeholders like "$ANTHROPIC_API_ENDPOINT".
+
 			if !strings.HasPrefix(cand, "http://") && !strings.HasPrefix(cand, "https://") {
 				continue
 			}
@@ -1110,13 +974,12 @@ func populateDefaultModels(cfg *Config) {
 }
 
 func dedupEntries(allEntries []modelEntry) []modelEntry {
-	// Phase 1: group by lowercase model ID.
+
 	groups := make(map[string][]modelEntry)
 	for _, e := range allEntries {
 		groups[e.ID] = append(groups[e.ID], e)
 	}
 
-	// Phase 2: for each group, pick the best entry.
 	dedup := make(map[string]modelEntry, len(groups))
 	for id, group := range groups {
 		if len(group) == 1 {
@@ -1124,28 +987,13 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 			continue
 		}
 
-		// Heuristic ranking, lexicographic (strict tuple compare, no additive
-		// scores - additive scores deadlock on ties where the first entry has
-		// already banked the same points):
-		//  1. SourceProvider appears in the model ID ("minimax-m2.7" from
-		//     provider "minimax" beats the same name served by "openrouter").
-		//  2. Richer max output: first-party sources expose larger output
-		//     limits than third-party mirrors serving the same bare model ID
-		//     (glm-5: zai 131072 vs alibaba-cn 16384).
-		//  3. Larger context window.
-		//  4. Prefer re-serve IDs containing "/" LAST: "zai-org/glm-5" from a
-		//     catalog is a worse witness than the bare "glm-5" entry.
-		//  5. #1862 case 1: vision capability - on a name-score tie a
-		//     vision-capable witness beats a blind mirror with bigger
-		//     out/ctx numbers, so the merged entry never silently loses its
-		//     SupportsVision flag to a lagging data source.
 		rank := func(e modelEntry) (nameScore, out, ctx int, vision bool) {
 			if strings.HasPrefix(e.ID, e.SourceProvider) ||
 				strings.Contains(e.ID, e.SourceProvider) {
 				nameScore = 1
 			}
 			if strings.Contains(e.ID, "/") {
-				nameScore = -1 // catalog re-serve: weakest witness
+				nameScore = -1
 			}
 			return nameScore, e.MaxOutputTokens, e.ContextWindow, e.SupportsVision
 		}
@@ -1159,9 +1007,7 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 				best, bestName, bestOut, bestCtx, bestVision = e, n, o, c, v
 			}
 		}
-		// #1862 case 1: same-name entries disagreeing on vision is exactly
-		// the situation where the flag used to vanish silently - surface it
-		// so a lagging upstream source gets noticed.
+
 		for _, e := range group {
 			if e.SupportsVision != best.SupportsVision {
 				fmt.Fprintf(os.Stderr,
@@ -1182,7 +1028,6 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 	return entries
 }
 
-// containsString reports whether s is in list (#1862 case 2 helper).
 func containsString(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

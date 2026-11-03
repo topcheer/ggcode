@@ -1,25 +1,3 @@
-"""Evaluation task templates for Knight automated evaluation.
-
-Each task targets the eval-workbench project at ~/ggai/eval-workbench/.
-Tasks are designed with intentional defects for the agent to discover and fix.
-
-Task types:
-  - code_edit: agent writes/modifies code
-  - test_debug: agent fixes bugs found by tests
-  - docs: agent writes/fixes documentation
-
-Fail-closed verification (arXiv:2610.02142): a task may declare an optional
-`verify` block; when present, run_eval.py additionally requires it to pass
-before success is recorded. Supported assertions (combinable):
-  "verify": {
-      "artifact": "relative/path",          # file must exist
-      "content_contains": ["substr", ...],  # requires "artifact"
-      "command": ["bash", "-c", "..."],     # must exit 0 (60s timeout)
-  }
-Tasks without a verify block are graded "text_only" and explicitly flagged
-as such in the CSV (verify_status column) - they never silently masquerade
-as artifact-verified success.
-"""
 
 TASKS = [
     {
@@ -201,15 +179,11 @@ TASKS = [
     },
 ]
 
-
 def get_task(task_id: str) -> dict | None:
-    """Return a task by ID, or None if not found."""
     for t in TASKS:
         if t["id"] == task_id:
             return t
     return None
 
-
 def get_tasks_by_type(task_type: str) -> list[dict]:
-    """Return all tasks of a given type."""
     return [t for t in TASKS if t["type"] == task_type]

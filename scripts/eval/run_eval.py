@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""Knight evaluation orchestrator.
-
-Drives automated multi-turn conversations with ggcode agent via the dummy IM
-adapter's HTTP+SSE interface. Supports A/B benchmarking (baseline vs
-Knight-assisted) and produces CSV metrics + scorecard.
-
-Can be used standalone (pointing to a running daemon) or in one-shot mode
-where it starts and stops the daemon automatically.
-
-Usage:
-    # One-shot mode (recommended - starts daemon, runs eval, shuts down):
-    python scripts/eval/run_eval.py --auto --output .tmp/knight-eval/results.csv
-
-    # Connect to already-running daemon:
-    python scripts/eval/run_eval.py --port-file .tmp/dummy-adapter-port --output results.csv
-
-    # A/B mode (runs baseline then knight, compares):
-    python scripts/eval/run_eval.py --auto --ab --output .tmp/knight-eval
-"""
 
 import argparse
 import csv
@@ -32,28 +13,16 @@ from pathlib import Path
 
 import httpx
 
-# Add parent to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from llm_client import FALLBACK_ANSWER, LLMClient
 from task_registry import TaskRegistry
 from task_templates import TASKS
 
-
-# ---------------------------------------------------------------------------
-# Daemon lifecycle
-# ---------------------------------------------------------------------------
-
 def write_dummy_binding(working_dir: str):
-    """Pre-write the IM binding JSON so daemon finds the dummy adapter binding.
-
-    The daemon checks bindings before starting adapters. Dummy adapter's autoBind()
-    runs after StartCurrentBindingAdapter has already checked, so we must pre-seed.
-    """
     import hashlib
     bindings_path = Path.home() / ".ggcode" / "im-bindings.json"
 
-    # Normalize workspace path (EvalSymlinks + lowercase on macOS)
     norm_dir = working_dir
     try:
         norm_dir = str(Path(working_dir).resolve())
@@ -70,7 +39,6 @@ def write_dummy_binding(working_dir: str):
         "BoundAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
-    # Load existing bindings, add ours
     existing = {}
     if bindings_path.exists():
         try:
@@ -83,21 +51,15 @@ def write_dummy_binding(working_dir: str):
     bindings_path.write_text(json.dumps(existing, indent=2))
     print(f"[eval] Pre-seeded binding for {norm_dir}")
 
-
 def start_daemon(
     config_path: str,
     port_file: str,
     working_dir: str,
     timeout: float = 180.0,
 ) -> subprocess.Popen:
-    """Start ggcode daemon in background, wait for port file.
 
-    Returns the Popen process handle.
-    """
-    # Clean up stale port file
     Path(port_file).unlink(missing_ok=True)
 
-    # Pre-seed IM binding so daemon finds dummy adapter
     write_dummy_binding(working_dir)
 
     cmd = [
@@ -113,23 +75,20 @@ def start_daemon(
         stderr=subprocess.PIPE,
     )
 
-    # Wait for port file
     deadline = time.time() + timeout
     while time.time() < deadline:
         if proc.poll() is not None:
             stderr = proc.stderr.read().decode() if proc.stderr else ""
             raise RuntimeError(f"Daemon exited early (code {proc.returncode}): {stderr[:500]}")
         if Path(port_file).exists():
-            time.sleep(0.5)  # small grace for server to be ready
+            time.sleep(0.5)
             return proc
         time.sleep(0.5)
 
     proc.kill()
     raise TimeoutError(f"Daemon did not produce port file {port_file} within {timeout}s")
 
-
 def stop_daemon(proc: subprocess.Popen, base_url: str, shutdown_token: str = ""):
-    """Gracefully stop the daemon via /shutdown or SIGTERM."""
     if shutdown_token:
         try:
             httpx.post(
@@ -140,7 +99,6 @@ def stop_daemon(proc: subprocess.Popen, base_url: str, shutdown_token: str = "")
         except Exception:
             pass
 
-    # Give it a moment, then SIGTERM
     try:
         proc.terminate()
         proc.wait(timeout=10)
@@ -148,16 +106,7 @@ def stop_daemon(proc: subprocess.Popen, base_url: str, shutdown_token: str = "")
         proc.kill()
         proc.wait(timeout=5)
 
-
-# ---------------------------------------------------------------------------
-# SSE client
-# ---------------------------------------------------------------------------
-
 def read_port_file(path: str, timeout: float = 30.0) -> tuple[str, str]:
-    """Read addr and shutdown token from the dummy adapter port file.
-
-    Returns (base_url, shutdown_token).
-    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -169,9 +118,7 @@ def read_port_file(path: str, timeout: float = 30.0) -> tuple[str, str]:
             time.sleep(0.5)
     raise FileNotFoundError(f"Port file {path} not found after {timeout}s")
 
-
 def wait_for_healthz(base_url: str, timeout: float = 30.0) -> bool:
-    """Poll /healthz until it returns ok."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -183,28 +130,15 @@ def wait_for_healthz(base_url: str, timeout: float = 30.0) -> bool:
         time.sleep(0.5)
     return False
 
-
-# Idle timeout: how long to wait after last event before declaring task done.
-# After a round_done event, if no new events arrive within this window, the
-# agent has finished processing.
-TASK_IDLE_TIMEOUT = 30.0  # seconds of silence = task complete
-
+TASK_IDLE_TIMEOUT = 30.0
 
 def consume_sse_events(
     base_url: str,
     llm: LLMClient,
-    send_fn,  # callable(text: str) -> None
+    send_fn,
     task_timeout: float,
     log_file: str | None = None,
 ) -> dict:
-    """Connect to /events SSE stream and process events until task completes.
-
-    Task completion is detected by:
-    1. Idle timeout: no events for TASK_IDLE_TIMEOUT seconds after content received
-    2. Hard timeout: task_timeout seconds total elapsed
-
-    Returns event summary dict.
-    """
     summary = {
         "rounds": 0,
         "knight_reports": 0,
@@ -228,19 +162,16 @@ def consume_sse_events(
             for raw_chunk in resp.iter_text():
                 now = time.time()
 
-                # Hard timeout
                 if now > hard_deadline:
                     summary["timed_out"] = True
                     break
 
-                # Idle timeout: after receiving any meaningful content (text/tool),
-                # 30s of silence means the agent finished.
                 if summary["text_chunks"] > 0 and (now - last_event_time) > TASK_IDLE_TIMEOUT:
                     summary["completed"] = True
                     break
 
                 buf += raw_chunk
-                # Parse SSE frames
+
                 while "\n\n" in buf:
                     frame, buf = buf.split("\n\n", 1)
                     event_type, data = _parse_sse_frame(frame)
@@ -275,10 +206,9 @@ def consume_sse_events(
                         summary["text_chunks"] += 1
 
                     elif event_type == "status":
-                        # Status updates don't count as activity for idle detection
+
                         pass
 
-            # Stream ended naturally
             if not summary["timed_out"] and summary["text_chunks"] > 0:
                 summary["completed"] = True
 
@@ -290,9 +220,7 @@ def consume_sse_events(
 
     return summary
 
-
 def _parse_sse_frame(frame: str) -> tuple[str | None, dict]:
-    """Parse a single SSE frame into (event_type, data_dict)."""
     event_type = None
     data_str = ""
 
@@ -310,9 +238,7 @@ def _parse_sse_frame(frame: str) -> tuple[str | None, dict]:
     except json.JSONDecodeError:
         return event_type, {"raw": data_str}
 
-
 def _handle_approval(llm: LLMClient, send_fn, data: dict):
-    """Handle an approval_request by generating an answer and sending it."""
     question = data.get("title", data.get("content", ""))
     if not question:
         send_fn("Yes, proceed.")
@@ -324,29 +250,11 @@ def _handle_approval(llm: LLMClient, send_fn, data: dict):
         answer = FALLBACK_ANSWER
     send_fn(answer)
 
-
-# ---------------------------------------------------------------------------
-# Task runner
-# ---------------------------------------------------------------------------
-
 def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple[str, str]:
-    """Fail-closed task verification (arXiv:2610.02142 diagnostic ladder).
-
-    Supported assertion types (all must pass when present):
-      - artifact: {"artifact": "relative/path"} - file must exist
-      - content_contains: {"artifact": ..., "content_contains": ["s", ...]}
-        - the artifact file must contain every substring
-      - command: {"command": ["bash", "-c", "..."]} - must exit 0
-
-    Returns ("pass" | "fail", detail). A verify block with neither an
-    artifact nor a command is itself a failure (fail-closed, not skipped).
-    """
     try:
         artifact = verify.get("artifact")
         if artifact:
-            # #3455: artifacts are RELATIVE to the task's working_dir (the
-            # daemon cwd, per the docstring and task_templates contract);
-            # the old check ignored the cwd param entirely.
+
             p = Path(artifact)
             if cwd and not p.is_absolute():
                 p = Path(cwd) / p
@@ -371,21 +279,10 @@ def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple
         return "pass", "ok"
     except subprocess.TimeoutExpired:
         return "fail", f"verify command timeout ({timeout}s)"
-    except Exception as e:  # noqa: BLE001 - verifier must never crash the run
+    except Exception as e:
         return "fail", f"verify error: {e}"
 
-
-# sa-124 (arXiv:2602.16666): a single success metric hides operational flaws.
-# Every failed run carries a structured failure-mode reason code so the
-# scorecard, CSV, and trend rows can report a failure-mode distribution and
-# the regression gate can assert on failure-mix drift, not just aggregates.
 def classify_failure_mode(result: dict) -> str:
-    """Map one result row to a stable failure-mode reason code.
-
-    Priority: infrastructure errors first (send/timeout/no response), then
-    verify-layer codes derived from the stable run_verify detail prefixes,
-    then flaky/other. Returns "" for successful runs.
-    """
     if result.get("success"):
         return ""
     if result.get("error"):
@@ -410,9 +307,7 @@ def classify_failure_mode(result: dict) -> str:
         return "verify_other"
     return "other"
 
-
 def _failure_mode_mix(results: list[dict]) -> dict:
-    """Per-mode failure rate over a run's result rows (successes excluded)."""
     if not results:
         return {}
     counts: dict[str, int] = {}
@@ -422,7 +317,6 @@ def _failure_mode_mix(results: list[dict]) -> dict:
             counts[mode] = counts.get(mode, 0) + 1
     return {m: round(c / len(results), 4) for m, c in sorted(counts.items())}
 
-
 def run_task(
     base_url: str,
     task: dict,
@@ -430,17 +324,12 @@ def run_task(
     log_file: str | None = None,
     working_dir: str | None = None,
 ) -> dict:
-    """Run a single evaluation task.
-
-    Returns a result dict with task_id, metrics, and event summary.
-    """
     task_id = task["id"]
     timeout = task.get("timeout_sec", 600)
     print(f"\n{'='*60}")
     print(f"[eval] Starting {task_id}: {task['description'][:60]}...")
     print(f"{'='*60}")
 
-    # Step 1: Generate prompt (optionally via LLM)
     if llm:
         prompt = llm.generate_prompt(task["description"])
     else:
@@ -450,7 +339,6 @@ def run_task(
     start_time = time.time()
 
     def send_fn(text: str):
-        """Send a message to the dummy adapter."""
         try:
             resp = httpx.post(
                 f"{base_url}/send",
@@ -462,12 +350,9 @@ def run_task(
             print(f"[eval] send error: {e}")
             return {}
 
-    # Step 2: Start SSE consumer in a thread FIRST, so we don't miss events.
-    # Then send the prompt. SSE connection must be established before /send
-    # to avoid missing fast agent responses.
     import threading
 
-    sse_result = [None]  # mutable container for thread result
+    sse_result = [None]
 
     def sse_worker():
         try:
@@ -485,10 +370,8 @@ def run_task(
     sse_thread = threading.Thread(target=sse_worker, daemon=True)
     sse_thread.start()
 
-    # Small delay to let SSE connect (larger projects need more time)
     time.sleep(2.0)
 
-    # Step 3: Send prompt with metrics reset (with retry)
     send_ok = False
     for attempt in range(3):
         try:
@@ -517,7 +400,6 @@ def run_task(
             "error": "Failed to send prompt after 3 attempts",
         }
 
-    # Step 4: Wait for SSE consumer to finish
     sse_thread.join(timeout=timeout + 60)
     summary = sse_result[0] or {
         "rounds": 0, "knight_reports": 0, "tool_calls": 0,
@@ -527,7 +409,6 @@ def run_task(
 
     elapsed = time.time() - start_time
 
-    # Step 4: Collect final metrics from /status
     try:
         resp = httpx.get(f"{base_url}/status", timeout=10.0)
         status_data = resp.json()
@@ -537,23 +418,15 @@ def run_task(
         metrics = {}
 
     success = summary["completed"] and not summary["timed_out"]
-    # If we got at least one round_done and the agent produced text, consider it a success
-    # even if we didn't have a clean idle timeout
+
     if summary["rounds"] > 0 and summary["text_chunks"] > 0 and not summary["timed_out"]:
         success = True
 
-    # Fail-closed verification layer (arXiv:2610.02142: keyword/text-only
-    # success judgments are fail-open). When a task declares a `verify`
-    # block, success additionally requires the artifact/content/command
-    # assertion to pass; without one we degrade the judgment explicitly to
-    # "text_only" instead of silently claiming grounded success.
     verify = task.get("verify")
     verify_status = "text_only"
     verify_detail = ""
     if verify:
-        # #3455: thread the task's working_dir (daemon cwd) into the verify
-        # layer and keep the detail - v_detail used to be dropped, so
-        # verify_detail stayed empty in the result rows.
+
         v_status, verify_detail = run_verify(verify, cwd=working_dir)
         if v_status != "pass":
             success = False
@@ -585,13 +458,7 @@ def run_task(
 
     return result
 
-
-# ---------------------------------------------------------------------------
-# Scorecard
-# ---------------------------------------------------------------------------
-
 def compute_knight_score(baseline: list[dict], knight: list[dict]) -> dict:
-    """Compute Knight Score comparing baseline vs knight-assisted results."""
     if not baseline or not knight:
         return {"knight_score": 0, "note": "insufficient data"}
 
@@ -649,32 +516,18 @@ def compute_knight_score(baseline: list[dict], knight: list[dict]) -> dict:
         "trust_score": round(trust, 4),
         "baseline_success_rate": round(b_success / n, 4),
         "knight_success_rate": round(k_success / n, 4),
-        # r102 pass^k (tau-bench lineage): on collapse_repeats() input this IS
-        # pass@k - the fraction of tasks that passed ALL K repeats. Distinct
-        # name so regression_gate can pin it as its own dimension.
+
         "pass_at_k": round(k_success / n, 4),
         "n_tasks": n,
     }
 
-
 def _split_repeat_id(task_id: str) -> tuple[str, int | None]:
-    """Split a '#rN' repeat suffix off a task id (None when absent)."""
     base, sep, suffix = task_id.rpartition("#r")
     if sep and suffix.isdigit() and suffix != "":
         return base, int(suffix)
     return task_id, None
 
-
 def collapse_repeats(results: list[dict]) -> list[dict]:
-    """r102 pass^k: collapse '#rN' repeat entries into one per task.
-
-    tau-bench pass^k semantics: a task counts as passed only if every repeat
-    passed. Success/completed are AND-ed, timed_out OR-ed, numeric metric
-    fields averaged so downstream score comparisons stay meaningful. Tasks
-    that passed some-but-not-all repeats are flagged `flaky` for reporting
-    (the flaky list is surfaced in the score dict, not gated). Entries
-    without a repeat suffix pass through unchanged (deep-ish copy).
-    """
     groups: dict[str, list[dict]] = {}
     order: list[str] = []
     for r in results:
@@ -712,9 +565,7 @@ def collapse_repeats(results: list[dict]) -> list[dict]:
         collapsed.append(merged)
     return collapsed
 
-
 def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
-    """Write a markdown scorecard file."""
     with open(path, "w") as f:
         f.write(f"# Knight Evaluation Scorecard ({mode})\n\n")
         f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M')}\n")
@@ -762,23 +613,12 @@ def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
                     f"({successes[0].get('elapsed_sec', 0):.1f}s, "
                     f"{successes[0].get('tool_calls', 0)} tools)\n")
 
-
-# ---------------------------------------------------------------------------
-# Config generation
-# ---------------------------------------------------------------------------
-
 def generate_config(
     output_path: str,
-    mode: str,  # "baseline" or "knight"
+    mode: str,
     port_file: str,
     metrics_path: str,
 ):
-    """Generate a minimal ggcode config YAML for the given mode.
-
-    Only overrides vendor/endpoint/model/im - ggcode daemon merges these with
-    its built-in defaults (vendor registry, system_prompt, etc.).
-    All paths MUST be absolute so the daemon can find them regardless of cwd.
-    """
     config = {
         "vendor": "zai",
         "endpoint": "cn-coding-openai",
@@ -846,11 +686,6 @@ def generate_config(
             else:
                 f.write(f"        {k}: {v}\n")
 
-
-# ---------------------------------------------------------------------------
-# CSV helpers
-# ---------------------------------------------------------------------------
-
 CSV_FIELDS = [
     "run_id", "phase", "mode", "task_id", "task_type",
     "success", "timed_out", "elapsed_sec", "tool_calls",
@@ -859,15 +694,12 @@ CSV_FIELDS = [
     "verify_status", "verify_detail", "failure_mode",
 ]
 
-
 def write_csv_header(path: str):
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
 
-
 def _git_sha() -> str:
-    """Current repo SHA for trend provenance (empty when git is absent)."""
     try:
         return subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -876,15 +708,8 @@ def _git_sha() -> str:
     except Exception:
         return ""
 
-
 def append_trend_jsonl(out_dir: str | Path, mode: str, task_set: str, task_version: str,
                        results: list[dict], score: dict, run_id: str, meta: dict | None = None):
-    """r442: append one run record to trend.jsonl for regression gating.
-
-    Each line: task_set, task_version, git SHA, timestamp, per-task outcomes,
-    and the aggregate knight score. Append-only so local history accumulates
-    across runs; regression_gate.py consumes it.
-    """
     entry = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "run_id": run_id,
@@ -906,16 +731,10 @@ def append_trend_jsonl(out_dir: str | Path, mode: str, task_set: str, task_versi
         f.write(json.dumps(entry, default=str) + "\n")
     print(f"[eval] trend appended: {path}")
 
-
 def append_csv_row(path: str, result: dict):
     with open(path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writerow({k: result.get(k, "") for k in CSV_FIELDS})
-
-
-# ---------------------------------------------------------------------------
-# Run modes
-# ---------------------------------------------------------------------------
 
 def run_single_mode(
     mode: str,
@@ -928,11 +747,6 @@ def run_single_mode(
     trend_spec: dict | None = None,
     repeat: int = 1,
 ) -> list[dict]:
-    """Run evaluation in a single mode (baseline or knight).
-
-    If auto=True, starts/stops daemon automatically.
-    Returns list of result dicts.
-    """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -945,26 +759,22 @@ def run_single_mode(
     shutdown_token = ""
 
     if auto:
-        # Generate temp config - use absolute paths so daemon can find
-        # port_file and metrics_path regardless of its working directory
+
         port_file = str((out_dir / f".{mode}-port").resolve())
         metrics_path = str((out_dir / f"{mode}-metrics.json").resolve())
         config_path = str((out_dir / f"{mode}-config.yaml").resolve())
         generate_config(config_path, mode, port_file, metrics_path)
 
-        # Start daemon
         proc = start_daemon(config_path, port_file, working_dir or os.getcwd())
         base_url, shutdown_token = read_port_file(port_file)
         print(f"[eval] Daemon started: {base_url}")
 
-        # Wait for healthz
         if not wait_for_healthz(base_url):
             print(f"[eval] ERROR: healthz failed", file=sys.stderr)
             stop_daemon(proc, base_url, shutdown_token)
             sys.exit(1)
     else:
-        # Connect to existing daemon
-        # base_url should be set by caller
+
         pass
 
     print(f"[eval] Running {len(tasks)} tasks in {mode} mode")
@@ -975,9 +785,7 @@ def run_single_mode(
     for task in tasks:
         for rep in range(1, repeat + 1):
             if repeat > 1:
-                # r102 pass^k: strip repeat-1 artifacts so each repeat must
-                # genuinely re-achieve the task (same reset the multi-round
-                # loop applies between rounds).
+
                 if rep > 1 and working_dir:
                     git_reset_workdir(working_dir)
                 t = dict(task, id=f"{task['id']}#r{rep}")
@@ -991,8 +799,6 @@ def run_single_mode(
             results.append(result)
             append_csv_row(csv_path, result)
 
-    # Write scorecard. Scoring runs on collapsed (pass^k) entries; the
-    # per-task table keeps raw '#rN' rows for inspection.
     score_path = str(out_dir / f"{mode}.scorecard.md")
     collapsed = collapse_repeats(results)
     score = compute_knight_score(collapsed, collapsed)
@@ -1002,7 +808,6 @@ def run_single_mode(
         append_trend_jsonl(out_dir, mode, trend_spec["task_set"], trend_spec["task_version"],
                            results, score, run_id, trend_spec.get("meta"))
 
-    # Shutdown daemon if we started it
     if auto and proc:
         print(f"[eval] Shutting down daemon...")
         stop_daemon(proc, base_url, shutdown_token)
@@ -1010,13 +815,7 @@ def run_single_mode(
 
     return results
 
-
-# ---------------------------------------------------------------------------
-# Multi-round helpers
-# ---------------------------------------------------------------------------
-
 def git_reset_workdir(workdir: str):
-    """Git-reset the workdir to clean state between rounds."""
     print(f"[eval] Git reset: {workdir}")
     try:
         subprocess.run(["git", "checkout", "."], cwd=workdir, capture_output=True, timeout=30)
@@ -1024,10 +823,8 @@ def git_reset_workdir(workdir: str):
     except Exception as e:
         print(f"[eval] WARNING: git reset failed: {e}")
 
-
 def write_ab_scorecard(score_path: str, tasks: list, baseline_results: list,
                        knight_results: list, score: dict):
-    """Write an A/B comparison scorecard."""
     with open(score_path, "w") as f:
         f.write("# Knight A/B Comparison\n\n")
         f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M')}\n")
@@ -1058,9 +855,7 @@ def write_ab_scorecard(score_path: str, tasks: list, baseline_results: list,
                 f"{k.get('tool_calls', 0)} | {k.get('elapsed_sec', 0):.1f}s | {delta} |\n"
             )
 
-
 def write_final_report(path: str, all_results: list, duration_hours: float):
-    """Write a comprehensive multi-round final report."""
     total_execs = sum(len(res) for _, _, res in all_results)
     total_pass = sum(1 for _, _, res in all_results for r in res if r.get("success"))
 
@@ -1071,17 +866,14 @@ def write_final_report(path: str, all_results: list, duration_hours: float):
         f.write(f"**Overall success rate:** {total_pass}/{total_execs} "
                 f"({100*total_pass/total_execs if total_execs else 0:.1f}%)\n")
 
-        # Count rounds
         rounds_seen = set(rn for rn, _, _ in all_results)
         f.write(f"**Rounds completed:** {len(rounds_seen)}\n\n")
 
-        # Per-task statistics across rounds
         for mode in ["baseline", "knight"]:
             mode_results = [r for _, m, res in all_results if m == mode for r in res]
             if not mode_results:
                 continue
 
-            # Group by task_id
             by_task = {}
             for r in mode_results:
                 by_task.setdefault(r["task_id"], []).append(r)
@@ -1104,11 +896,6 @@ def write_final_report(path: str, all_results: list, duration_hours: float):
             f.write("\n")
 
     print(f"[eval] Final report saved to {path}")
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Knight evaluation orchestrator")
@@ -1152,10 +939,6 @@ def main():
                         help="Skip appending trend.jsonl (default: append)")
     args = parser.parse_args()
 
-    # #4100: fail fast when the daemon binary is unresolvable. Without this,
-    # start_daemon's bare `ggcode` command raises FileNotFoundError inside the
-    # round loop, every round is swallowed as "FAILED", and the run exits 0
-    # with an empty trend - the gate rejects it but the log hides the cause.
     if args.auto and shutil.which("ggcode") is None:
         sys.exit(
             "[eval] FATAL: `ggcode` binary not found on PATH but --auto needs "
@@ -1169,7 +952,6 @@ def main():
     if not args.auto and not args.base_url and not args.port_file:
         parser.error("Either --auto, --base-url, or --port-file is required")
 
-    # Select task template set
     template_sets = {
         "eval-workbench": TASKS,
     }
@@ -1179,9 +961,6 @@ def main():
     except ImportError:
         pass
 
-    # r15 pr-replay: merged-fix-PR task synthesis (Change2Task-style supply).
-    # Offline JSON is prefetched by the main session via
-    # `pr_task_replay.py prefetch`; absent file = set simply not offered.
     try:
         from pr_task_replay import load_prefetch
         _pr_json = Path(__file__).parent / "pr_replay_tasks.json"
@@ -1189,14 +968,11 @@ def main():
             _pr_tasks = load_prefetch(_pr_json)
             if _pr_tasks:
                 template_sets["pr-replay"] = _pr_tasks
-    except Exception as exc:  # noqa: BLE001 - eval harness must not die on one set
+    except Exception as exc:
         print(f"warning: pr-replay set unavailable: {exc}", file=sys.stderr)
 
     all_templates = template_sets.get(args.templates, TASKS)
 
-    # r442: registry-backed selection - version pinning, date-based rotation,
-    # and random sampling. Default (no --task-set/--sample/--exclude-before)
-    # is exactly the legacy full-set behavior.
     registry = TaskRegistry(template_sets)
     task_version = "v1"
     if args.task_set:
@@ -1212,14 +988,12 @@ def main():
             exclude_before=args.exclude_before, seed=args.seed,
         )
 
-    # Select tasks
     if args.tasks:
         task_ids = [t.strip() for t in args.tasks.split(",")]
         tasks = [t for t in all_templates if t["id"] in task_ids]
     else:
         tasks = all_templates
 
-    # Setup LLM client
     llm = None if args.no_llm else LLMClient(
         base_url=args.llm_base_url,
         model=args.llm_model,
@@ -1227,7 +1001,6 @@ def main():
 
     working_dir = os.path.abspath(args.workdir)
 
-    # Determine termination: duration-based or round-count-based
     use_duration = args.duration > 0
     if use_duration:
         max_rounds = 9999
@@ -1236,7 +1009,6 @@ def main():
         max_rounds = args.rounds
         deadline = None
 
-    # Print header
     mode_label = "A/B" if args.ab else args.mode
     duration_label = f"{args.duration}h" if use_duration else f"{max_rounds} rounds"
     print(f"\n{'#'*60}")
@@ -1248,8 +1020,7 @@ def main():
     print(f"  Duration: {duration_label}")
     print(f"{'#'*60}")
 
-    # Multi-round loop
-    all_results = []  # list of (round_num, mode, results_list)
+    all_results = []
     round_num = 0
     start_time = time.time()
 
@@ -1267,7 +1038,6 @@ def main():
         print(f"  Elapsed: {elapsed_h:.1f}h | {remaining}")
         print(f"{'='*60}")
 
-        # Git reset between rounds (not on first round, unless --no-reset)
         if round_num > 1 and not args.no_reset:
             git_reset_workdir(working_dir)
 
@@ -1275,7 +1045,7 @@ def main():
 
         try:
             if args.ab:
-                # A/B: run baseline then knight in each round
+
                 baseline_results = run_single_mode(
                     "baseline", tasks, llm, args.output, round_run_id,
                     auto=args.auto, working_dir=working_dir, trend_spec=None,
@@ -1297,7 +1067,6 @@ def main():
                 )
                 all_results.append((round_num, "knight", knight_results))
 
-                # Per-round comparison scorecard (pass^k-collapsed both sides)
                 score = compute_knight_score(
                     collapse_repeats(baseline_results), collapse_repeats(knight_results))
                 score_path = str(Path(args.output) / f"round-{round_num:03d}-ab.scorecard.md")
@@ -1316,7 +1085,7 @@ def main():
                 all_results.append((round_num, args.mode, results))
 
             else:
-                # Manual mode (single round only)
+
                 if args.base_url:
                     base_url = args.base_url.rstrip("/")
                 elif args.port_file:
@@ -1358,7 +1127,7 @@ def main():
                 score = compute_knight_score(collapse_repeats(results), collapse_repeats(results))
                 write_scorecard(score_path, results, score, args.mode)
                 all_results.append((round_num, args.mode, results))
-                break  # Manual mode is single-round
+                break
 
         except Exception as e:
             print(f"\n[eval] Round {round_num} FAILED: {e}")
@@ -1371,13 +1140,11 @@ def main():
         total = sum(1 for _, _, res in all_results for r in res)
         print(f"\n[eval] Round {round_num} done: {passed}/{total} passed, {round_mins:.1f} min total")
 
-    # Final aggregate report
     if all_results:
         duration_h = (time.time() - start_time) / 3600
         report_path = str(Path(args.output) / "final-report.md")
         write_final_report(report_path, all_results, duration_h)
 
-        # If A/B, also write aggregate comparison
         if args.ab:
             agg_b = [r for _, m, res in all_results if m == "baseline" for r in res]
             agg_k = [r for _, m, res in all_results if m == "knight" for r in res]
@@ -1395,7 +1162,6 @@ def main():
     if report_file.exists():
         print(f"  Report: {report_file}")
     print(f"{'#'*60}")
-
 
 if __name__ == "__main__":
     main()

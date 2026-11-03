@@ -1,22 +1,3 @@
-// goroutine_check is a CI gate that flags goroutine launches without
-// safego protection. The v1.3.224 crash audit found ~24 unprotected
-// goroutines despite 252 safego.Go call sites - review alone was not
-// catching them (see commit 55eb91c1 for the fallout).
-//
-// A launch is COMPLIANT when any of:
-//  1. go safego.Go(name, fn)          - the canonical wrapper
-//  2. go safego.Run(name, fn)         - spawn-with-recover variant
-//  3. go func() { defer safego.Recover(name); ... }  - manual form;
-//     a `defer safego.Recover(...)` statement directly in the goroutine
-//     frame (blocks inside the frame count; nested closures do NOT - a
-//     defer only protects its lexically enclosing function, #3349)
-//  4. go func() { <body> }() where <body> itself contains ONLY a
-//     safego.Run/safego.Go call (go safego.Run(...) with a wrapper)
-//
-// Everything else must be added to goroutine-allowlist.txt (one path per
-// line, # comments allowed) with a justification comment next to it.
-//
-// Usage: go run ./scripts/dev/goroutine_check.go ./internal ./cmd ./desktop
 package main
 
 import (
@@ -90,36 +71,25 @@ func main() {
 	fmt.Println("goroutine check: OK (all launches safego-protected or allowlisted)")
 }
 
-// compliant reports whether a go statement is protected per the rules above.
 func compliant(fset *token.FileSet, gostmt *ast.GoStmt) bool {
 	call, ok := gostmt.Call.Fun.(*ast.SelectorExpr)
 	if ok {
 		if pkg, isIdent := call.X.(*ast.Ident); isIdent && pkg.Name == safegoPkg {
-			return true // go safego.Go(...) / go safego.Run(...)
+			return true
 		}
 	}
 	lit, ok := gostmt.Call.Fun.(*ast.FuncLit)
 	if !ok {
-		return false // go someFunc(...) - cannot see protection at launch site
+		return false
 	}
 	return bodyHasSafegoRecover(lit.Body) || bodyHasManualRecover(lit.Body)
 }
 
-// bodyHasManualRecover reports whether the body defers a closure that calls
-// recover() - the hand-rolled equivalent of safego.Recover (e.g.
-// check_registry.go's per-worker guard). Counted as compliant.
-//
-// #3349: only defers in the goroutine's OWN frame count. ast.Inspect has no
-// function-boundary semantics, so without an explicit FuncLit stop a defer
-// inside a nested closure (which protects only that closure's frame) would
-// pass the gate while the goroutine body itself stays unprotected. The inner
-// recover-search still descends into the deferred closure itself -
-// `defer func() { recover() }()` is the legitimate manual form.
 func bodyHasManualRecover(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, isLit := n.(*ast.FuncLit); isLit {
-			return false // nested closure defers don't protect the goroutine frame
+			return false
 		}
 		deferStmt, ok := n.(*ast.DeferStmt)
 		if !ok {
@@ -136,19 +106,11 @@ func bodyHasManualRecover(body *ast.BlockStmt) bool {
 	return found
 }
 
-// bodyHasSafegoRecover reports whether the body contains a defer of
-// safego.Recover (or a call to safego.Run/Go, which carries its own recover).
-//
-// #3349: the defer must sit in the goroutine's OWN frame - a
-// `defer safego.Recover` inside a nested closure registers on that closure's
-// defer stack and cannot recover a panic in the goroutine body. The DeferStmt
-// branch is also tightened to Recover only (#1426-C alignment): deferring any
-// other safego.X (e.g. safego.SetLogger) has no recovery semantics at all.
 func bodyHasSafegoRecover(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, isLit := n.(*ast.FuncLit); isLit {
-			return false // nested closure defers don't protect the goroutine frame
+			return false
 		}
 		switch stmt := n.(type) {
 		case *ast.DeferStmt:
@@ -163,19 +125,7 @@ func bodyHasSafegoRecover(body *ast.BlockStmt) bool {
 			if call, ok := stmt.X.(*ast.CallExpr); ok {
 				if sel, ok2 := call.Fun.(*ast.SelectorExpr); ok2 {
 					if pkg, isIdent := sel.X.(*ast.Ident); isIdent && pkg.Name == safegoPkg {
-						// #1426-C: the header rule says ONLY safego.Run/Go
-						// count (they carry their own recover); the old
-						// check accepted ANY safego.X() - safego.SetLogger
-						// inside a goroutine body passed the CI gate with
-						// no recover at all. Restrict to the two runner
-						// entry points per the documented rule.
-						// #1860 case 2: ONLY also means the runner call is
-						// the ENTIRE body. A body like
-						//   go func(){ doRiskyWork(); safego.Go("x", f) }()
-						// still panics bare in doRiskyWork before the
-						// supervised runner ever runs - the gate was
-						// silently bypassable by prepending arbitrary
-						// statements.
+
 						if sel.Sel != nil && (sel.Sel.Name == "Run" || sel.Sel.Name == "Go") &&
 							len(body.List) == 1 {
 							found = true

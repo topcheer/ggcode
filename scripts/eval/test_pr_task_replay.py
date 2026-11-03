@@ -1,7 +1,3 @@
-"""Tests for pr-replay task synthesis (r15, Change2Task-style supply).
-
-Run: python3 -m pytest scripts/eval/test_pr_task_replay.py
-"""
 
 import json
 import sys
@@ -9,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pr_task_replay import REPRODUCE_BRIEF, build_tasks, linked_issue_number, load_prefetch  # noqa: E402
+from pr_task_replay import REPRODUCE_BRIEF, build_tasks, linked_issue_number, load_prefetch
 
 FIXTURE_RECORDS = [
     {
@@ -36,7 +32,6 @@ FIXTURE_RECORDS = [
     },
 ]
 
-
 def test_build_tasks_fields_and_provenance(tmp_path):
     tasks = build_tasks(FIXTURE_RECORDS, schema=1)
     assert [t["id"] for t in tasks] == ["pr-101", "pr-87"], "ids are pr-<number>, sorted"
@@ -50,7 +45,6 @@ def test_build_tasks_fields_and_provenance(tmp_path):
     assert "pr-replay" in t101["tags"] and "src:issue" in t101["tags"]
     assert t101["version"] == "v1"
 
-
 def test_build_tasks_fail_closed_on_missing_fields():
     bad = [dict(FIXTURE_RECORDS[0], base_ref_oid="")]
     try:
@@ -60,7 +54,6 @@ def test_build_tasks_fail_closed_on_missing_fields():
     else:
         raise AssertionError("missing required field must fail loudly, not silently degrade")
 
-
 def test_build_tasks_rejects_unknown_schema():
     try:
         build_tasks(FIXTURE_RECORDS, schema=2)
@@ -69,14 +62,12 @@ def test_build_tasks_rejects_unknown_schema():
     else:
         raise AssertionError("unknown schema must be rejected")
 
-
 def test_load_prefetch_roundtrip(tmp_path):
     p = tmp_path / "prefetch.json"
     p.write_text(json.dumps({"schema": 1, "records": FIXTURE_RECORDS}))
     tasks = load_prefetch(p)
     assert len(tasks) == 2
     assert tasks[0]["id"] == "pr-101"
-
 
 def test_linked_issue_number_patterns():
     assert linked_issue_number("Fixes #3736\n\nsomething") == 3736
@@ -85,9 +76,7 @@ def test_linked_issue_number_patterns():
     assert linked_issue_number("see issue 12") is None, "bare mention is not a link"
     assert linked_issue_number("") is None
 
-
 def test_registry_rotation_compat():
-    """pr-replay tasks must slot into the r442 TaskRegistry unchanged."""
     from task_registry import TaskRegistry
 
     reg = TaskRegistry({"pr-replay": build_tasks(FIXTURE_RECORDS, schema=1)})

@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""Regression gate for continuous agent evaluation (r442).
-
-Compares the latest eval run's aggregate score against a committed baseline
-file (tests/eval-baselines/<task_set>.json). Exits 1 when the score drops
-more than the threshold (default 5%), so CI can block regressions the way
-unit tests block code regressions. Baselines move forward explicitly via
---update-baseline (committed by a human or a maintenance PR, never silently
-inside a gated run).
-
-r101: the gate additionally asserts every sub-dimension the baseline pins
-(per-dimension assertions beat aggregate scoring - a success_delta collapse
-can hide inside the weighted mean behind time/tool gains). Baselines carry
-an optional "dimensions" block; --update-baseline records window means.
-
-Usage:
-    python scripts/eval/regression_gate.py --trend .tmp/agent-eval/trend.jsonl \
-        --task-set eval-workbench --baseline tests/eval-baselines/eval-workbench.json
-    python scripts/eval/regression_gate.py ... --update-baseline  # write new baseline
-"""
 
 import argparse
 import json
@@ -27,36 +8,19 @@ from pathlib import Path
 DEFAULT_THRESHOLD = 0.05
 DEFAULT_DIM_THRESHOLD = 0.10
 
-# Sub-dimensions emitted by run_eval.py alongside knight_score (see
-# compute_knight_score). The gate used to read only the aggregate, so a
-# success_delta collapse could hide behind the other 0.65 of the weight
-# (r101; futureagi 2026 "a CI gate that beats aggregate scoring").
 DIMENSIONS = [
     "success_delta", "pass_at_k", "time_improvement", "tool_reduction",
     "turn_reduction", "skill_rate", "trust_score",
 ]
 
-
 def dim_mean(window: list[dict], dim: str) -> float | None:
-    """Mean of a score sub-dimension across the window, None when absent."""
     vals = [e["score"][dim] for e in window
             if isinstance(e.get("score"), dict)
             and isinstance(e["score"].get(dim), (int, float))]
     return sum(vals) / len(vals) if vals else None
 
-
 def dimension_assertions(window: list[dict], baseline: dict,
                          default_thr: float) -> list[tuple[str, float, float, bool]]:
-    """Per-dimension gate assertions for dims the baseline pins.
-
-    Absolute drop (ref - current), not fractional: dimensions like
-    success_delta legitimately range negative where a fractional comparison
-    is meaningless. success_delta and pass_at_k use a stricter threshold
-    (half) because task success is what users feel first - and single-sample
-    Bernoulli noise on a 5-task run has sigma ~0.22, so the gate only makes
-    sense on pass^k (--repeat) or windowed data. Window entries lacking the
-    dimension are skipped, never counted as drops.
-    """
     refs = baseline.get("dimensions") or {}
     results = []
     for dim, ref in refs.items():
@@ -66,7 +30,6 @@ def dimension_assertions(window: list[dict], baseline: dict,
         thr = default_thr / 2 if dim in ("success_delta", "pass_at_k") else default_thr
         results.append((dim, float(ref), current, (float(ref) - current) <= thr))
     return results
-
 
 def load_trend(path: str) -> list[dict]:
     p = Path(path)
@@ -79,14 +42,12 @@ def load_trend(path: str) -> list[dict]:
             entries.append(json.loads(line))
     return entries
 
-
 def latest_for(entries: list[dict], task_set: str) -> dict | None:
     for e in reversed(entries):
         if e.get("task_set") == task_set and e.get("task_version"):
             return e
-    # Fall back to the last entry regardless of set (single-set trend files).
-    return entries[-1] if entries else None
 
+    return entries[-1] if entries else None
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -138,8 +99,7 @@ def main():
         return 0
 
     if not baseline_path.exists():
-        # No baseline yet: adopt the current score as the reference WITHOUT
-        # gating (first run must not fail the pipeline), but say so loudly.
+
         print(f"WARN: no baseline at {baseline_path}; adopting {current:.4f} as reference. "
               f"Commit it via --update-baseline.")
         return 0
@@ -168,7 +128,6 @@ def main():
                   "assertions catch collapses the aggregate mean hides).")
         return 1
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

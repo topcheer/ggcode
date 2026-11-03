@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build GGCode Desktop (Wails) for Linux, plus AppImage, .deb, and .rpm release assets.
+
 set -euo pipefail
 
 VERSION="${1:?usage: build-desktop-linux.sh <version> <output-dir>}"
@@ -17,7 +17,6 @@ mkdir -p "${OUTPUT_DIR}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-# Install Wails CLI if not present
 ensure_wails() {
   if command -v wails >/dev/null 2>&1; then
     return
@@ -26,7 +25,6 @@ ensure_wails() {
   go install github.com/wailsapp/wails/v2/cmd/wails@latest
 }
 
-# Update wails.json product version
 update_wails_version() {
   sed -i "s/\"productVersion\": \".*\"/\"productVersion\": \"${PACKAGE_VERSION}\"/" "${WAILS_DIR}/wails.json"
 }
@@ -57,7 +55,7 @@ ensure_nfpm() {
   fi
   echo "nfpm not found in PATH; installing it into a temp tool dir"
   mkdir -p "${WORK_DIR}/bin"
-  # Pin to v2.46.3 — v2.47.0+ requires Go >= 1.26.4 which may exceed the CI toolchain
+
   GOBIN="${WORK_DIR}/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
   NFPM_BIN="${WORK_DIR}/bin/nfpm"
 }
@@ -205,7 +203,7 @@ echo "=== Building GGCode Desktop (Wails) for Linux (${PACKAGE_ARCH}) ==="
 RAW_BINARY="${WORK_DIR}/ggcode-desktop"
 PACKAGED_ICON="$(prepare_linux_icon)"
 build_wails_binary "ggcode-desktop"
-# Wails outputs to build/bin/ggcode-desktop — move to work dir
+
 cp "${WAILS_DIR}/build/bin/ggcode-desktop" "${RAW_BINARY}"
 chmod 0755 "${RAW_BINARY}"
 

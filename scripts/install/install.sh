@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# ggcode interactive installer for macOS and Linux
-# Usage:
-#   curl -fsSL https://ggcode.dev/install.sh | bash         # interactive (default: user)
-#   curl -fsSL https://ggcode.dev/install.sh | bash -s -- --system   # non-interactive system
-#   curl -fsSL https://ggcode.dev/install.sh | bash -s -- --user     # non-interactive user
+
 set -euo pipefail
 
 REPO="topcheer/ggcode"
@@ -11,7 +7,6 @@ OWNER="topcheer"
 BINARY_NAME="ggcode"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 
-# Colors
 if [[ -t 1 ]]; then
   BOLD='\033[1m'
   GREEN='\033[0;32m'
@@ -28,7 +23,6 @@ warn()  { echo -e "${YELLOW}warn${NC}: $*"; }
 error() { echo -e "${RED}error${NC}: $*" >&2; }
 ok()    { echo -e "${GREEN}ok${NC}: $*"; }
 
-# --- Determine scope ---
 SCOPE="user"
 SYSTEM_FLAG=false
 
@@ -46,7 +40,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Interactive prompt (skip if piped or --system was given)
 if [[ -t 0 && "${SYSTEM_FLAG}" == "false" ]]; then
   echo ""
   echo -e "${BOLD}Install ggcode for:${NC}"
@@ -65,13 +58,12 @@ if [[ "${SYSTEM_FLAG}" == "true" ]]; then
   SCOPE="system"
 fi
 
-# --- Determine install directory ---
 if [[ "${SCOPE}" == "system" ]]; then
   INSTALL_DIR="/usr/local/bin"
   SUDO=""
   if [[ $EUID -ne 0 ]]; then
     SUDO="sudo"
-    # Check if we can sudo
+
     if ! ${SUDO} -n true 2>/dev/null; then
       warn "System-wide install requires sudo. You will be prompted for your password."
     fi
@@ -83,7 +75,6 @@ fi
 
 info "Installing ggcode to ${BOLD}${INSTALL_DIR}${NC}"
 
-# --- Detect platform ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -107,7 +98,6 @@ esac
 
 info "Platform: ${PLATFORM}/${ARCH}"
 
-# --- Get latest version ---
 info "Fetching latest release..."
 if command -v curl &>/dev/null; then
   FETCH="curl -fsSL"
@@ -127,7 +117,6 @@ fi
 VERSION="${TAG#v}"
 info "Latest version: ${BOLD}${TAG}${NC}"
 
-# --- Download ---
 ARCHIVE_NAME="ggcode_${PLATFORM}_${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE_NAME}"
 
@@ -143,7 +132,6 @@ fi
 info "Extracting..."
 tar -xzf "${TMPDIR}/${ARCHIVE_NAME}" -C "${TMPDIR}"
 
-# Find the binary
 BINARY_PATH=""
 for candidate in \
   "${TMPDIR}/${BINARY_NAME}" \
@@ -156,7 +144,7 @@ for candidate in \
 done
 
 if [[ -z "${BINARY_PATH}" ]]; then
-  # Try to find it
+
   BINARY_PATH="$(find "${TMPDIR}" -name "${BINARY_NAME}" -type f | head -1)"
 fi
 
@@ -167,7 +155,6 @@ fi
 
 chmod +x "${BINARY_PATH}"
 
-# --- Install ---
 mkdir -p "${INSTALL_DIR}"
 
 INSTALL_TARGET="${INSTALL_DIR}/${BINARY_NAME}"
@@ -181,7 +168,6 @@ fi
 
 ok "Installed ${BINARY_NAME} ${TAG} to ${INSTALL_TARGET}"
 
-# --- PATH setup ---
 ensure_path() {
   local dir="$1"
   local shell_rc=""
@@ -196,9 +182,8 @@ ensure_path() {
     return 0
   fi
 
-  # Check if already in PATH
   case ":${PATH}:" in
-    *":${dir}:"*) return 0 ;;  # already in PATH
+    *":${dir}:"*) return 0 ;;
   esac
 
   echo ""
@@ -206,7 +191,6 @@ ensure_path() {
   info "Add this line to ${shell_rc}:"
   echo -e "  ${CYAN}export PATH=\"${dir}:\$PATH\"${NC}"
 
-  # Try to add it automatically
   if [[ -w "${shell_rc}" ]]; then
     printf "\n# Added by ggcode installer\nexport PATH=\"%s:\$PATH\"\n" "${dir}" >> "${shell_rc}"
     ok "Added to ${shell_rc}. Open a new terminal or run: source ${shell_rc}"
@@ -215,7 +199,6 @@ ensure_path() {
 
 ensure_path "${INSTALL_DIR}"
 
-# --- Verify ---
 echo ""
 if [[ -x "${INSTALL_TARGET}" ]]; then
   ok "ggcode ${TAG} is ready."
