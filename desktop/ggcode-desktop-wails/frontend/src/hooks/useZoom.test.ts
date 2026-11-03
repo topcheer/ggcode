@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
-// Mock localStorage
 const localStorageMock = (() => {
   let store: Record<string, string> = {}
   return {
@@ -13,7 +12,6 @@ const localStorageMock = (() => {
 })()
 Object.defineProperty(window, 'localStorage', { value: localStorageMock })
 
-// Mock document.documentElement style
 const styleMock: Record<string, string> = {}
 Object.defineProperty(document.documentElement, 'style', {
   value: {
@@ -22,7 +20,6 @@ Object.defineProperty(document.documentElement, 'style', {
   },
 })
 
-// Must import after mocks are set up
 const { useZoom } = await import('./useZoom')
 
 describe('useZoom', () => {

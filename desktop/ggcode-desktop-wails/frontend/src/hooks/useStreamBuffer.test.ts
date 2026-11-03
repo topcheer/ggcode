@@ -26,7 +26,6 @@ describe('useStreamBuffer', () => {
       result.current.buffer({ type: 'reasoning', content: 'thinking' })
     })
 
-    // Should not have been flushed yet by rAF (we haven't waited)
     expect(result.current.hasPending()).toBe(true)
   })
 

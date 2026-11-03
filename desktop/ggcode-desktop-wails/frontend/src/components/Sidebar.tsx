@@ -71,13 +71,11 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     let cancelled = false
     async function load() {
       try {
-        // Get workDir to display current workspace
         const dir = await App.GetWorkDir() as string
         console.log('[Sidebar] workDir:', dir)
 
         const result = await App.ListSessions()
         if (cancelled || !result) return
-        // result is SessionInfo[] from Go
         setSessions((result as any[]).map((s: any) => ({
           id: s.ID || s.id || '',
           title: s.Title || s.title || t('sidebar.untitled'),
@@ -104,7 +102,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     (s.lastMessage && s.lastMessage.toLowerCase().includes(searchLower))
   )
 
-  // Highlight matched text segments for search results
   const highlightMatch = useCallback((text: string, query: string) => {
     if (!query || !text) return text
     const idx = text.toLowerCase().indexOf(query.toLowerCase())
@@ -116,14 +113,11 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     ]
   }, [])
 
-  // Sort filtered sessions by date desc for grouping
   const sortedFiltered = useMemo(() =>
     [...filtered].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
     [filtered]
   )
 
-  // Group sessions by date
-  // Pinned sessions (localStorage-based, workspace-scoped)
   const pinnedKey = `ggcode:pinned:${workspace || 'default'}`
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
     try {
@@ -212,7 +206,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       showToast?.('info', t('toast.sessionLocked'))
       return
     }
-    // Skip if clicking the already-active session
     if (s.id === activeSessionId) return
     try {
       await App.LoadSession(s.id)
@@ -240,7 +233,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   const handleRename = (s: SessionItem) => {
     setRenamingId(s.id)
     setRenameValue(s.title || '')
-    // Focus input after render
     setTimeout(() => renameInputRef.current?.focus(), 50)
   }
 
@@ -266,13 +258,10 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     else if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null) }
   }
 
-  // Reset selection when filter changes
   useEffect(() => { setSelectedIndex(0) }, [search])
 
-  // Keyboard navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (sortedFiltered.length === 0) return
-    // Don't hijack keyboard when user is typing in an input/textarea
     const target = e.target as HTMLElement
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
     if (e.key === 'ArrowDown' || e.key === 'j') {
@@ -292,13 +281,11 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleKeyDown])
 
-  // Auto-scroll selected item into view
   useEffect(() => {
     const el = itemRefs.current[selectedIndex]
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex])
 
-  // On initial load, scroll active session into view
   const scrolledToActive = useRef(false)
   useEffect(() => {
     if (scrolledToActive.current || loading || sortedFiltered.length === 0) return
@@ -360,7 +347,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       flexDirection: 'column',
       flexShrink: 0,
     }}>
-      {/* Header */}
+      {}
       <div style={{
         display: 'flex', alignItems: 'center',
         padding: '0 var(--spacing-md)',
@@ -386,7 +373,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         </button>
       </div>
 
-      {/* Search */}
+      {}
       <div style={{
         margin: 'var(--spacing-sm) var(--spacing-md)',
         height: 32, borderRadius: 'var(--radius-md)',
@@ -428,7 +415,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         </div>
       )}
 
-      {/* Session list */}
+      {}
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0', textAlign: 'left' }}>
         {loading && (
           <SkeletonList count={5} variant="session" />
@@ -640,7 +627,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         })}
       </div>
 
-      {/* Bottom bar */}
+      {}
       <div style={{
         display: 'flex', alignItems: 'center',
         padding: 'var(--spacing-xs) var(--spacing-sm)',
@@ -657,7 +644,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         )}
       </div>
 
-      {/* Right-click context menu */}
+      {}
       {ctxMenu && (
         <ContextMenu
           x={ctxMenu.x}

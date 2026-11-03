@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': '채팅',
   'nav.files': '파일',
   'nav.im': 'IM 어댑터',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': '예',
   'cron.no': '아니오',
 
-  // Sidebar
   'sidebar.sessions': '세션',
   'sidebar.search': '세션 검색...',
   'sidebar.newSession': '새 세션',
@@ -70,12 +68,10 @@ const en = {
   'sidebar.time.hoursAgo': '{n}시간 전',
   'sidebar.time.yesterday': '어제',
 
-  // StatusBar
   'status.ready': '준비됨',
   'status.thinking': '생각 중...',
   'status.offline': '오프라인',
 
-  // ChatView
   'chat.placeholder': 'ggcode에 메시지 입력...',
   'chat.agentWorking': '에이전트가 작업 중...',
   'chat.welcome.title': '오늘 어떤 도움이 필요하신가요?',
@@ -86,7 +82,6 @@ const en = {
   'chat.welcome.prompt.debug': '문제 디버깅 도와드리기',
   'chat.inputHint': 'Enter로 전송 • Shift+Enter로 새 줄',
 
-  // CommandPalette
   'cmd.recent': '최근',
   'cmd.placeholder': '명령어 입력...',
   'cmd.noResults': '일치하는 명령어가 없습니다',
@@ -120,7 +115,6 @@ const en = {
   'cmd.hintClose': 'esc 닫기',
   'cmd.results': '{count}개 결과',
 
-  // KeyboardShortcuts
   'kb.title': '키보드 단축키',
   'kb.footer': '팁: ⌘K를 언제든 누르면 명령 팔레트가 열립니다',
   'kb.global': '전역',
@@ -157,7 +151,6 @@ const en = {
   'kb.goDebug': '디버그 콘솔로 이동',
   'kb.goLanChat': 'LAN 채팅으로 이동',
 
-  // ContextPanel
   'context.title': '컨텍스트',
   'context.usage': '컨텍스트 사용량',
   'context.input': '입력',
@@ -172,7 +165,6 @@ const en = {
   'context.costDisclaimer': '토큰 사용량과 모델 가격을 기준으로 예상한 비용입니다. 실제 비용은 다를 수 있습니다.',
   'context.planIncluded': "{plan}에 포함됨",
 
-  // SettingsPage
   'settings.title': '설정',
   'settings.vendor': '제공자',
   'settings.endpoint': '엔드포인트',
@@ -191,7 +183,6 @@ const en = {
   'settings.impersonateVersion': '버전',
   'settings.impersonateApply': '적용',
 
-  // Onboarding
   'onboarding.next': '다음',
   'onboarding.back': '뒤로',
   'onboarding.getStarted': '시작하기',
@@ -214,32 +205,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o (수동 입력 또는 가져오기)',
   'onboarding.configureLLM': 'LLM 설정',
 
-  // ApprovalDialog
   'approval.title': '도구 승인 필요',
   'approval.allow': '허용',
   'approval.deny': '거부',
   'approval.alwaysAllow': '항상 허용',
 
-  // AskUserDialog
   'askUser.title': '질문',
   'askUser.submit': '제출',
 
-  // Dialogs (About)
   'about.title': 'GGCode 정보',
   'about.description': '터미널용 AI 코딩 에이전트',
 
-  // PairingCodeDialog
   'pairing.title': '기기 페어링',
   'pairing.close': '닫기',
 
-  // ShareDialog
   'share.title': '세션 공유',
   'share.copy': '복사',
   'share.copied': '복사됨!',
   'share.stopSharing': '공유 중지',
   'share.generating': '생성 중...',
 
-  // IMManagement
   'im.title': 'IM 어댑터',
   'im.addAdapter': '어댑터 추가',
   'im.noAdapters': '설정된 IM 어댑터가 없습니다. "어댑터 추가"를 클릭하여 시작하세요.',
@@ -256,17 +241,14 @@ const en = {
   'im.cancel': '취소',
   'im.selectPlatform': '플랫폼 선택...',
 
-  // MCPServers
   'mcp.title': 'MCP 서버',
   'mcp.add': '추가',
   'mcp.name': '이름',
   'mcp.cancel': '취소',
 
-  // FileBrowser
   'files.fileTooLarge': '파일이 너무 커서 미리볼 수 없습니다 (>2MB)',
   'files.binaryFile': '바이너리 파일',
 
-  // DebugConsole
   'debug.title': '디버그 콘솔',
   'debug.start': '시작',
   'debug.stop': '중지',
@@ -277,7 +259,6 @@ const en = {
   'debug.filterPlaceholder': '필터...',
   'debug.empty': '디버그 로그 캡처를 시작하려면 "시작"을 클릭하세요',
 
-  // TeamBoard
   'team.teams': '팀',
   'team.teammates': '팀원',
   'team.tasks': '작업',
@@ -290,9 +271,6 @@ const en = {
   'team.noInProgress': '차단된 항목이 없습니다',
   'team.noDone': '완료된 항목이 없습니다',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': '에이전트 및 보안',
   'settings.appearance': '외관',
   'settings.integrations': '통합',
@@ -334,7 +312,6 @@ const en = {
   'settings.versionPlaceholder': '버전 문자열...',
   'settings.endpointNamePlaceholder': '내 엔드포인트',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': '파일 브라우저',
   'settings.contextUsage': '컨텍스트 사용량',
   'settings.mcpServers': 'MCP 서버',
@@ -378,23 +355,17 @@ const en = {
   'settings.adding': '추가 중...',
   'settings.lspServersShort': '언어 서버',
 
-  // Sidebar aria labels
   'sidebar.searchAria': '세션 검색',
   'sidebar.clearAria': '지우기',
   'sidebar.deleteSessionAria': '세션 삭제',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': '클릭하여 닉네임, 역할, 팀 편집',
   'chat.regenerate': '응답 다시 생성',
   'chat.copyResult': '결과 복사',
   'chat.copyError': '오류 복사',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': '모델 선택...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': '파일 읽는 중...',
   'chat.activity.editing': '코드 편집 중...',
   'chat.activity.writing': '파일 작성 중...',
@@ -409,7 +380,6 @@ const en = {
   'chat.activity.saving': '메모리 저장 중...',
   'chat.activity.planMode': '계획 모드 진입 중...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': '대화에서 찾기...',
   'chat.sending': '전송 중...',
   'chat.failedToSend': '전송 실패',
@@ -419,7 +389,6 @@ const en = {
   'chat.cancel': '취소',
   'chat.save': '저장',
 
-  // ChatView button titles
   'chat.title.newSession': '새 세션',
   'chat.title.shareSession': '세션 공유 (Cmd+Shift+S)',
   'chat.title.search': '대화에서 검색 (Cmd+F)',
@@ -436,7 +405,6 @@ const en = {
   'chat.title.copyMessage': '메시지 복사',
   'chat.title.teamBoard': '팀 보드 열기',
 
-  // MCPServers
   'mcp.transport': '전송 방식',
   'mcp.transportStdio': 'stdin/stdout을 통한 로컬 프로세스',
   'mcp.transportWs': 'WebSocket을 통한 원격 서버',
@@ -449,7 +417,6 @@ const en = {
   'mcp.resetOAuth': 'OAuth 재설정 (계정 전환)',
   'mcp.remove': '제거',
 
-  // Onboarding
   'onboarding.chooseVendor': '제공자 선택...',
   'onboarding.providerName': '제공자 이름',
   'onboarding.protocol': '프로토콜',
@@ -457,7 +424,6 @@ const en = {
   'onboarding.chooseModel': '모델 선택...',
   'onboarding.chooseEndpoint': '엔드포인트 선택...',
 
-  // LanChatView
   'lanchat.groupChat': '그룹 채팅',
   'lanchat.chat': '채팅',
   'lanchat.agentSuffix': ' (에이전트)',
@@ -466,37 +432,24 @@ const en = {
   'lanchat.broadcastPlaceholder': '모두에게 브로드캐스트...',
   'lanchat.dmPlaceholder': '{name}님에게 메시지...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': '답변 입력...',
 
-  // IMManagement
   'im.editAdapter': '편집: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': '파일 검색...',
   'files.officeDocument': 'Office 문서',
   'files.openExternal': '외부 애플리케이션으로 열어 보기',
   'files.htmlPreview': 'HTML 미리보기',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': '컨텍스트 패널 전환',
 
-  // TeamBoard
   'team.boardTitle': '팀 보드',
 
-  // Common shared
   'common.dismiss': '알림 닫기',
   'common.cancel': '취소',
   'common.save': 'Save',
   'common.copyToClipboard': '클립보드에 복사',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': '기존 데스크톱 파일 브라우저를 사용하여 현재 작업공간의 파일을 탐색합니다.',
   'settings.openFiles': '파일 열기',
   'settings.contextUsageDesc': '긴 작업을 실행하기 전에 활성 컨텍스트 사용량과 토큰/캐시 총량을 확인합니다.',
@@ -513,7 +466,6 @@ const en = {
   'settings.integrationsDesc': '기존 데스크톱 기능을 한 곳에서 관리합니다. 이 바로가기는 백엔드 설정을 변경하지 않고 현재 전용 화면을 엽니다.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': '도구 승인',
   'common.closeDialog': '대화상자 닫기',
   'common.cancelBtn': '취소',
@@ -537,7 +489,6 @@ const en = {
   'common.pinWindow': '창을 맨 위에 고정',
   'common.unpinWindow': '고정 해제',
 
-  // SettingsPage option labels
   'settings.chooseVendor': '제공자 선택...',
   'settings.chooseEndpoint': '엔드포인트 선택...',
   'settings.modeSupervised': '감독 (각 도구 확인)',
@@ -545,37 +496,24 @@ const en = {
   'settings.modeBypassAll': '바이패스 (대부분의 도구 자동 승인)',
   'settings.saveModeHint': '이 기본 모드를 유지하려면 저장하세요. 런타임 모드 변경은 앱의 일반적인 모드 처리를 따릅니다.',
 
-  // Dialogs
   'dialogs.newVersion': '새 버전 사용 가능: v',
   'dialogs.download': '다운로드',
   'dialogs.upToDate': '최신 버전입니다 (v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': '다이어그램 렌더링 중...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': '항상',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'OAuth 로그인 필요',
   'mcp.oauthHint': '이 MCP 서버를 인증하려면 브라우저로 로그인하세요.',
 
-  // Onboarding
   'onboarding.customProvider': '+ 커스텀 제공자',
   'onboarding.a2a': 'A2A 서비스',
   'onboarding.a2aDesc': '에이전트 간 통신 활성화(권장)',
   'onboarding.languageTitle': '언어 선택',
   'onboarding.languageHint': '나중에 설정에서 변경할 수 있습니다',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': '데스크톱 에이전트가 현재 가진 자율성 정도를 확인합니다. 고급 도구 정책을 변경하지 않고 기존 동작을 요약합니다.',
   'settings.workspaceAccessHint': '파일 도구는 현재 작업공간과 설정된 허용 디렉토리 내에서 작동합니다. 고급 허용 디렉토리 편집은 안전 경계를 실수로 변경하지 않도록 여기서 아직 노출하지 않습니다.',
   'settings.appearanceHint': '시각적 테마를 사용자 지정합니다. 앱은 기본적으로 시스템 설정을 따릅니다.',

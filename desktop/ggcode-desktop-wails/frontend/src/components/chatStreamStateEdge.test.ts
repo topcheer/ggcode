@@ -24,7 +24,7 @@ describe('closeOpenAssistantStreams', () => {
     const result = closeOpenAssistantStreams(messages)
     expect(result[0].streaming).toBe(false)
     expect(result[1].streaming).toBe(false)
-    expect(result[2].streaming).toBe(false) // already false
+    expect(result[2].streaming).toBe(false)
   })
 
   it('sets responseDuration based on timestamp', () => {
@@ -50,8 +50,8 @@ describe('closeOpenAssistantStreams', () => {
       { id: 'e', role: 'error', content: 'err', streaming: true },
     ]
     const result = closeOpenAssistantStreams(messages)
-    expect(result[0].streaming).toBe(true) // tool left alone
-    expect(result[1].streaming).toBe(true) // error left alone
+    expect(result[0].streaming).toBe(true)
+    expect(result[1].streaming).toBe(true)
   })
 
   it('returns empty array as-is', () => {
@@ -98,7 +98,7 @@ describe('appendUserMessage', () => {
       content: 'new question',
       streaming: false,
     })
-    expect(result[0].streaming).toBe(false) // assistant closed
+    expect(result[0].streaming).toBe(false)
     expect(result[1].content).toBe('new question')
   })
 })
@@ -117,7 +117,6 @@ describe('appendAssistantChunk edge cases', () => {
       { id: 'shared', role: 'reasoning', content: 'thinking', streaming: true },
     ]
     const result = appendAssistantChunk(messages, null, 'answer', nextID, now, 'shared')
-    // Should create a new assistant message, not append to reasoning
     expect(result.messages).toHaveLength(2)
     expect(result.messages[1].role).toBe('assistant')
   })

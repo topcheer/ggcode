@@ -37,7 +37,6 @@ describe('ToastContainer', () => {
       makeToast({ id: i + 1, message: `toast-${i + 1}` })
     )
     render(<ToastContainer toasts={toasts} onDismiss={() => {}} />)
-    // Only last 4 should be visible (toast-3 through toast-6)
     expect(screen.queryByText('toast-1')).toBeNull()
     expect(screen.queryByText('toast-2')).toBeNull()
     expect(screen.getByText('toast-3')).toBeDefined()

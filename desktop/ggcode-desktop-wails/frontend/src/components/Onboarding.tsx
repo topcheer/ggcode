@@ -7,8 +7,6 @@ interface Props {
   onComplete: () => void
 }
 
-// two-mode refactor: onboarding offers supervised and bypass only (plan is
-// tool-internal; auto/autopilot are legacy config aliases).
 const MODES = [
   { id: 'supervised', labelKey: 'onboarding.modeSupervised', descKey: 'onboarding.modeSupervisedDesc', color: '#eab308' },
   { id: 'bypass', labelKey: 'onboarding.modeBypass', descKey: 'onboarding.modeBypassDesc', color: '#ef4444' },
@@ -35,7 +33,6 @@ export function Onboarding({ onComplete }: Props) {
   const [step, setStep] = useState<'language' | 'workspace' | 'setup' | 'mode'>('language')
   const [workDir, setWorkDir] = useState('')
 
-  // Onboard form state
   const [presets, setPresets] = useState<VendorPreset[]>([])
   const [selectedVendor, setSelectedVendor] = useState('')
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
@@ -45,16 +42,13 @@ export function Onboarding({ onComplete }: Props) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // Custom provider state
   const [customName, setCustomName] = useState('')
   const [customProtocol, setCustomProtocol] = useState('openai')
   const [customBaseURL, setCustomBaseURL] = useState('')
   const [customModels, setCustomModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
 
-  // A2A enabled by default (aligned with TUI)
   const [a2aEnabled, setA2aEnabled] = useState(true)
-  // Auto-fetched models for standard vendor endpoints
   const [fetchedModels, setFetchedModels] = useState<string[]>([])
   const [autoFetching, setAutoFetching] = useState(false)
 
@@ -63,7 +57,6 @@ export function Onboarding({ onComplete }: Props) {
   const currentPreset = presets.find(p => p.id === selectedVendor)
   const currentEndpoint = currentPreset?.endpoints.find(e => e.id === selectedEndpoint)
   const presetModels = currentEndpoint?.models || []
-  // Use fetched models if available, otherwise fall back to preset models
   const models = fetchedModels.length > 0 ? fetchedModels : presetModels
   const showModels = apiKey !== '' && models.length > 0
 
@@ -73,7 +66,6 @@ export function Onboarding({ onComplete }: Props) {
     }).catch(() => {})
   }, [])
 
-  // Auto-fetch models when standard vendor endpoint + API key are set
   useEffect(() => {
     if (isCustom || !selectedVendor || !selectedEndpoint || !apiKey.trim()) {
       setFetchedModels([])
@@ -99,7 +91,6 @@ export function Onboarding({ onComplete }: Props) {
       const dir = await App.SelectWorkspace()
       if (dir) {
         setWorkDir(dir)
-        // Check if already onboarded
         const needs = await App.NeedsOnboard()
         if (!needs) {
           onComplete()
@@ -152,9 +143,7 @@ export function Onboarding({ onComplete }: Props) {
         }
         await App.CompleteOnboard(selectedVendor, selectedEndpoint, selectedModel, apiKey)
       }
-      // Save permission mode
       try { await App.SaveDefaultMode(selectedMode) } catch {}
-      // Save A2A setting
       try { await App.SaveA2AEnabled(a2aEnabled) } catch {}
       onComplete()
     } catch (e: any) {
@@ -164,7 +153,6 @@ export function Onboarding({ onComplete }: Props) {
     }
   }
 
-  // ─── Step 0: Language Selection ───
   if (step === 'language') {
     const locales = Object.entries(LOCALE_LABELS) as [Locale, string][]
     return (
@@ -215,7 +203,6 @@ export function Onboarding({ onComplete }: Props) {
     )
   }
 
-  // ─── Step 1: Workspace Selection ───
   if (step === 'workspace') {
     return (
       <div style={{
@@ -244,8 +231,6 @@ export function Onboarding({ onComplete }: Props) {
     )
   }
 
-  // ─── Step 2: API Setup ───
-  // ─── Step 2.5: Permission Mode ───
   if (step === 'mode') {
     return (
       <div style={{
@@ -281,7 +266,7 @@ export function Onboarding({ onComplete }: Props) {
           ))}
         </div>
 
-        {/* A2A Toggle */}
+        {}
         <label style={{
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '12px 16px', borderRadius: 'var(--radius-md)',
@@ -338,7 +323,7 @@ export function Onboarding({ onComplete }: Props) {
           {t('onboarding.vendorHint')}
         </p>
 
-        {/* Vendor */}
+        {}
         <label style={{ display: 'block', marginBottom: 16 }}>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.vendor')}</span>
           <select value={selectedVendor} onChange={e => {
@@ -357,7 +342,7 @@ export function Onboarding({ onComplete }: Props) {
 
         {isCustom ? (
           <>
-            {/* Custom Provider Name */}
+            {}
             <label style={{ display: 'block', marginBottom: 16 }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('onboarding.providerName')}</span>
               <input
@@ -368,7 +353,7 @@ export function Onboarding({ onComplete }: Props) {
               />
             </label>
 
-            {/* Protocol */}
+            {}
             <label style={{ display: 'block', marginBottom: 16 }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('onboarding.protocol')}</span>
               <select value={customProtocol} onChange={e => setCustomProtocol(e.target.value)} style={selectStyle}>
@@ -376,7 +361,7 @@ export function Onboarding({ onComplete }: Props) {
               </select>
             </label>
 
-            {/* Base URL */}
+            {}
             <label style={{ display: 'block', marginBottom: 16 }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.baseUrl')}</span>
               <input
@@ -387,7 +372,7 @@ export function Onboarding({ onComplete }: Props) {
               />
             </label>
 
-            {/* API Key */}
+            {}
             <label style={{ display: 'block', marginBottom: 16 }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
               <input
@@ -399,7 +384,7 @@ export function Onboarding({ onComplete }: Props) {
               />
             </label>
 
-            {/* Fetch Models button + Model */}
+            {}
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <button
                 onClick={handleFetchModels}
@@ -430,7 +415,7 @@ export function Onboarding({ onComplete }: Props) {
           </>
         ) : (
           <>
-            {/* Endpoint */}
+            {}
             {currentPreset && (
               <label style={{ display: 'block', marginBottom: 16 }}>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.endpoint')}</span>
@@ -447,7 +432,7 @@ export function Onboarding({ onComplete }: Props) {
               </label>
             )}
 
-            {/* API Key */}
+            {}
             {selectedEndpoint && (
               <label style={{ display: 'block', marginBottom: 16 }}>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
@@ -461,7 +446,7 @@ export function Onboarding({ onComplete }: Props) {
               </label>
             )}
 
-            {/* Model */}
+            {}
             {showModels && (
               <label style={{ display: 'block', marginBottom: 16 }}>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>

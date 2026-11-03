@@ -53,7 +53,6 @@ describe('matchesShortcut', () => {
   it('ctrl+meta requires ctrlKey when both are set', () => {
     const config: ShortcutConfig = { key: 'k', ctrl: true, meta: true }
     expect(matchesShortcut(makeKeyEvent({ key: 'k', ctrlKey: true, metaKey: true }), config)).toBe(true)
-    // Only meta without ctrl should not match when both are explicitly wanted
     expect(matchesShortcut(makeKeyEvent({ key: 'k', metaKey: true }), config)).toBe(false)
   })
 
@@ -66,7 +65,6 @@ describe('matchesShortcut', () => {
   it('rejects when shift not wanted but pressed (except for Shift key itself)', () => {
     const config: ShortcutConfig = { key: 'k' }
     expect(matchesShortcut(makeKeyEvent({ key: 'k', shiftKey: true }), config)).toBe(false)
-    // Shift key itself should pass
     const shiftConfig: ShortcutConfig = { key: 'Shift' }
     expect(matchesShortcut(makeKeyEvent({ key: 'Shift', shiftKey: true }), shiftConfig)).toBe(true)
   })
@@ -81,8 +79,8 @@ describe('matchesShortcut', () => {
   it('multi-modifier combo: ctrl+shift', () => {
     const config: ShortcutConfig = { key: 'p', ctrl: true, shift: true }
     expect(matchesShortcut(makeKeyEvent({ key: 'p', ctrlKey: true, shiftKey: true }), config)).toBe(true)
-    expect(matchesShortcut(makeKeyEvent({ key: 'p', metaKey: true, shiftKey: true }), config)).toBe(true) // ctrl cross-platform
-    expect(matchesShortcut(makeKeyEvent({ key: 'p', ctrlKey: true }), config)).toBe(false) // missing shift
+    expect(matchesShortcut(makeKeyEvent({ key: 'p', metaKey: true, shiftKey: true }), config)).toBe(true)
+    expect(matchesShortcut(makeKeyEvent({ key: 'p', ctrlKey: true }), config)).toBe(false)
   })
 
   it('Enter key with no modifiers', () => {

@@ -19,7 +19,6 @@ const MENU_ITEM_HEIGHT = 36
 const MENU_PADDING = 8
 const MENU_MIN_WIDTH = 180
 
-/** Clamp a menu position so it stays on-screen. Pure function for testing. */
 export function clampPosition(x: number, y: number, itemCount: number, viewportW: number, viewportH: number): { left: number; top: number } {
   const menuHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
   return {
@@ -31,7 +30,6 @@ export function clampPosition(x: number, y: number, itemCount: number, viewportW
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
 
-  // Close on outside click or escape
   const handleClickOutside = useCallback((e: MouseEvent) => {
     if (ref.current && !ref.current.contains(e.target as Node)) {
       onClose()
@@ -45,7 +43,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   useEffect(() => {
     document.addEventListener('mousedown', handleClickOutside)
     document.addEventListener('keydown', handleEsc)
-    window.addEventListener('scroll', onClose, true) // close on any scroll (capture phase)
+    window.addEventListener('scroll', onClose, true)
     window.addEventListener('resize', onClose)
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
@@ -55,12 +53,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     }
   }, [handleClickOutside, handleEsc, onClose])
 
-  // Clamp position so the menu doesn't go off-screen
   const { left: clampedX, top: clampedY } = clampPosition(x, y, items.length, window.innerWidth, window.innerHeight)
 
   return (
     <>
-      {/* Invisible overlay to catch right-click events that might propagate */}
+      {}
       <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onContextMenu={e => { e.preventDefault(); onClose() }} />
       <div
         ref={ref}

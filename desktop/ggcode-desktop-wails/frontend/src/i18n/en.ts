@@ -1,5 +1,4 @@
 const en = {
-  // NavRail
   'nav.chat': 'Chat',
   'nav.files': 'Files',
   'nav.im': 'IM Adapters',
@@ -54,7 +53,6 @@ const en = {
   'cron.yes': 'Yes',
   'cron.no': 'No',
 
-  // Sidebar
   'sidebar.sessions': 'Sessions',
   'sidebar.search': 'Search sessions...',
   'sidebar.newSession': 'New Session',
@@ -70,7 +68,6 @@ const en = {
   'sidebar.time.hoursAgo': '{n}h ago',
   'sidebar.time.yesterday': 'yesterday',
 
-  // StatusBar
   'status.ready': 'Ready',
   'status.thinking': 'Thinking...',
   'status.offline': 'Offline',
@@ -78,7 +75,6 @@ const en = {
   'status.zoomOut': 'Zoom Out (Cmd-)',
   'status.zoomReset': 'Reset Zoom (Cmd+0)',
 
-  // ChatView
   'chat.placeholder': 'Message ggcode...',
   'chat.agentWorking': 'Agent is working...',
   'chat.welcome.title': 'How can I help you today?',
@@ -89,7 +85,6 @@ const en = {
   'chat.welcome.prompt.debug': 'Help me debug an issue',
   'chat.inputHint': 'Enter to send • Shift+Enter for new line',
 
-  // CommandPalette
   'cmd.recent': 'Recent',
   'cmd.placeholder': 'Type a command...',
   'cmd.noResults': 'No matching commands',
@@ -126,7 +121,6 @@ const en = {
   'cmd.hintClose': 'esc close',
   'cmd.results': '{count} results',
 
-  // KeyboardShortcuts
   'kb.title': 'Keyboard Shortcuts',
   'kb.footer': 'Tip: Press ⌘K anytime to open the command palette',
   'kb.global': 'Global',
@@ -166,7 +160,6 @@ const en = {
   'kb.zoomOut': 'Zoom Out',
   'kb.zoomReset': 'Reset Zoom',
 
-  // ContextPanel
   'context.title': 'Context',
   'context.usage': 'Context Usage',
   'context.input': 'Input',
@@ -181,7 +174,6 @@ const en = {
   'context.costDisclaimer': 'Estimated based on token usage and model pricing. Actual cost may vary.',
   'context.planIncluded': "Included in {plan}",
 
-  // SettingsPage
   'settings.title': 'Settings',
   'settings.vendor': 'Vendor',
   'settings.endpoint': 'Endpoint',
@@ -200,7 +192,6 @@ const en = {
   'settings.impersonateVersion': 'Version',
   'settings.impersonateApply': 'Apply',
 
-  // Onboarding
   'onboarding.next': 'Next',
   'onboarding.back': 'Back',
   'onboarding.getStarted': 'Get Started',
@@ -223,32 +214,26 @@ const en = {
   'onboarding.modelPlaceholder': 'gpt-4o (enter manually or fetch)',
   'onboarding.configureLLM': 'Configure LLM',
 
-  // ApprovalDialog
   'approval.title': 'Tool Approval Required',
   'approval.allow': 'Allow',
   'approval.deny': 'Deny',
   'approval.alwaysAllow': 'Always Allow',
 
-  // AskUserDialog
   'askUser.title': 'Question',
   'askUser.submit': 'Submit',
 
-  // Dialogs (About)
   'about.title': 'About GGCode',
   'about.description': 'AI coding agent for the terminal',
 
-  // PairingCodeDialog
   'pairing.title': 'Pair Device',
   'pairing.close': 'Close',
 
-  // ShareDialog
   'share.title': 'Share Session',
   'share.copy': 'Copy',
   'share.copied': 'Copied!',
   'share.stopSharing': 'Stop Sharing',
   'share.generating': 'Generating...',
 
-  // IMManagement
   'im.title': 'IM Adapters',
   'im.addAdapter': 'Add Adapter',
   'im.noAdapters': 'No IM adapters configured. Click "Add Adapter" to get started.',
@@ -265,17 +250,14 @@ const en = {
   'im.cancel': 'Cancel',
   'im.selectPlatform': 'Select platform...',
 
-  // MCPServers
   'mcp.title': 'MCP Servers',
   'mcp.add': 'Add',
   'mcp.name': 'Name',
   'mcp.cancel': 'Cancel',
 
-  // FileBrowser
   'files.fileTooLarge': 'File too large to preview (>2MB)',
   'files.binaryFile': 'Binary file',
 
-  // DebugConsole
   'debug.title': 'Debug Console',
   'debug.start': 'Start',
   'debug.stop': 'Stop',
@@ -286,7 +268,6 @@ const en = {
   'debug.filterPlaceholder': 'Filter...',
   'debug.empty': 'Click "Start" to begin capturing debug logs',
 
-  // TeamBoard
   'team.teams': 'teams',
   'team.teammates': 'teammates',
   'team.tasks': 'tasks',
@@ -299,9 +280,6 @@ const en = {
   'team.noInProgress': 'Nobody is blocked here',
   'team.noDone': 'Nothing completed yet',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Agent & Safety',
   'settings.appearance': 'Appearance',
   'settings.integrations': 'Integrations',
@@ -343,7 +321,6 @@ const en = {
   'settings.versionPlaceholder': 'Version string...',
   'settings.endpointNamePlaceholder': 'My Endpoint',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'File Browser',
   'settings.contextUsage': 'Context Usage',
   'settings.mcpServers': 'MCP Servers',
@@ -387,23 +364,17 @@ const en = {
   'settings.adding': 'Adding...',
   'settings.lspServersShort': 'Language Servers',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'Search sessions',
   'sidebar.clearAria': 'Clear',
   'sidebar.deleteSessionAria': 'Delete session',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'Click to edit your nickname, role, and team',
   'chat.regenerate': 'Regenerate response',
   'chat.copyResult': 'Copy result',
   'chat.copyError': 'Copy error',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'Choose model...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'Reading files...',
   'chat.activity.editing': 'Editing code...',
   'chat.activity.writing': 'Writing files...',
@@ -418,7 +389,6 @@ const en = {
   'chat.activity.saving': 'Saving memory...',
   'chat.activity.planMode': 'Entering plan mode...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': 'Find in conversation...',
   'chat.sending': 'Sending...',
   'chat.failedToSend': 'Failed to send',
@@ -428,7 +398,6 @@ const en = {
   'chat.cancel': 'Cancel',
   'chat.save': 'Save',
 
-  // ChatView button titles
   'chat.title.newSession': 'New session',
   'chat.title.shareSession': 'Share session (Cmd+Shift+S)',
   'chat.title.search': 'Search in conversation (Cmd+F)',
@@ -445,7 +414,6 @@ const en = {
   'chat.title.copyMessage': 'Copy message',
   'chat.title.teamBoard': 'Open team board',
 
-  // MCPServers
   'mcp.transport': 'Transport',
   'mcp.transportStdio': 'Local process via stdin/stdout',
   'mcp.transportWs': 'Remote server via WebSocket',
@@ -458,7 +426,6 @@ const en = {
   'mcp.resetOAuth': 'Reset OAuth (switch account)',
   'mcp.remove': 'Remove',
 
-  // Onboarding
   'onboarding.chooseVendor': 'Choose vendor...',
   'onboarding.providerName': 'Provider Name',
   'onboarding.protocol': 'Protocol',
@@ -466,7 +433,6 @@ const en = {
   'onboarding.chooseModel': 'Choose model...',
   'onboarding.chooseEndpoint': 'Choose endpoint...',
 
-  // LanChatView
   'lanchat.groupChat': 'Group Chat',
   'lanchat.chat': 'Chat',
   'lanchat.agentSuffix': ' (agent)',
@@ -475,37 +441,24 @@ const en = {
   'lanchat.broadcastPlaceholder': 'Broadcast to all...',
   'lanchat.dmPlaceholder': 'Message {name}...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': 'Type your answer...',
 
-  // IMManagement
   'im.editAdapter': 'Edit: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'Search files...',
   'files.officeDocument': 'Office document',
   'files.openExternal': 'Open with external application to view',
   'files.htmlPreview': 'HTML Preview',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'Toggle context panel',
 
-  // TeamBoard
   'team.boardTitle': 'Team Board',
 
-  // Common shared
   'common.dismiss': 'Dismiss notification',
   'common.cancel': 'Cancel',
   'common.save': 'Save',
   'common.copyToClipboard': 'Copy to clipboard',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': 'Browse files in the current workspace using the existing desktop file browser.',
   'settings.openFiles': 'Open Files',
   'settings.contextUsageDesc': 'Inspect active context usage and token/cache totals before running long tasks.',
@@ -522,7 +475,6 @@ const en = {
   'settings.integrationsDesc': 'Manage existing desktop features from one place. These shortcuts open the current dedicated screens without changing any backend configuration semantics.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'Tool approval',
   'common.closeDialog': 'Close dialog',
   'common.cancelBtn': 'Cancel',
@@ -546,7 +498,6 @@ const en = {
   'common.pinWindow': 'Pin window on top',
   'common.unpinWindow': 'Unpin window',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'Choose vendor...',
   'settings.chooseEndpoint': 'Choose endpoint...',
   'settings.modeSupervised': 'Supervised (confirm each tool)',
@@ -554,37 +505,24 @@ const en = {
   'settings.modeBypassAll': 'Bypass (auto-approve most tools)',
   'settings.saveModeHint': 'Save to persist this default mode. Runtime mode changes still follow the app\'s normal mode handling.',
 
-  // Dialogs
   'dialogs.newVersion': 'New version available: v',
   'dialogs.download': 'Download',
   'dialogs.upToDate': 'You\'re up to date (v',
   'dialogs.productName': 'GGCode Desktop',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': 'Rendering diagram...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': 'Always',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'OAuth login required',
   'mcp.oauthHint': 'Sign in with your browser to authorize this MCP server.',
 
-  // Onboarding
   'onboarding.customProvider': '+ Custom Provider',
   'onboarding.a2a': 'A2A Service',
   'onboarding.a2aDesc': 'Enable agent-to-agent communication (recommended)',
   'onboarding.languageTitle': 'Choose Your Language',
   'onboarding.languageHint': 'You can change this later in Settings',
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'Review how much autonomy the desktop agent currently has. This summarizes existing behavior without changing advanced tool policies.',
   'settings.workspaceAccessHint': 'File tools operate within the current workspace and configured allowed directories. Advanced allowed-directory editing is intentionally not exposed here yet to avoid changing safety boundaries accidentally.',
   'settings.appearanceHint': 'Customize the visual theme. The app follows your system preference by default.',
@@ -606,7 +544,6 @@ const en = {
   'settings.modeDescFullAutopilot': 'The agent has high autonomy and can continue through many steps automatically. Review workspace state before using it on important code.',
   'settings.modeDescFullSupervised': 'The agent asks before unspecified tool actions. This is a balanced default for normal desktop use.',
 
-  // Toast messages
   'toast.settingsSaved': 'Settings saved',
   'toast.settingsLoadFailed': 'Failed to load settings: {error}',
   'toast.endpointsLoadFailed': 'Failed to load endpoints: {error}',
@@ -642,43 +579,21 @@ const en = {
   'toast.sessionOpenFailed': 'Failed to open session: {error}',
   'toast.copiedMessages': 'Copied {count} messages to clipboard',
 
-  // FileBrowser
-
-  // ApprovalDialog risk levels
   'approval.riskHigh': 'High Risk',
   'approval.riskMedium': 'Medium Risk',
   'approval.riskLow': 'Low Risk',
 
-  // DebugConsole
-
-  // Sidebar context menu
-
-  // ChatView context menu & run stats
-
-  // Dialogs links
-
-  // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
   'mcp.descStdio': 'Local process via stdin/stdout',
   'mcp.descHttp': 'Remote server via HTTP (Streamable HTTP / SSE)',
   'mcp.descWs': 'Remote server via WebSocket',
 
-  // IMManagement
-
-  // PairingCodeDialog
-
-  // LanChatView
-
-  // ContextPanel
-
-  // SettingsPage
   'settings.oauthConnected': 'Connected',
   'settings.oauthNotConnected': 'Not connected',
   'settings.oauthLoggingIn': 'Logging in...',
   'settings.login': 'Login',
   'settings.failedFetchModels': 'Failed to fetch models',
 
-  // Sidebar context menu
   'sidebar.menuOpen': 'Open',
   'sidebar.menuRename': 'Rename',
   'sidebar.menuPin': 'Pin',
@@ -693,19 +608,16 @@ const en = {
   'sidebar.renamedToast': 'Session renamed',
   'sidebar.copyFailedToast': 'Failed to copy',
 
-  // ChatView context menu
   'chat.menuCopy': 'Copy',
   'chat.menuEdit': 'Edit',
   'chat.menuRegenerate': 'Regenerate',
 
-  // ChatView run stats
   'chat.runStatDuration': 'Duration',
   'chat.runStatTools': 'Tools',
   'chat.runStatFiles': 'Files',
   'chat.runStatErrors': 'Errors',
   'chat.runStatTokens': 'Tokens',
 
-  // Dialogs links
   'dialogs.github': 'GitHub',
   'dialogs.releases': 'Releases',
   'dialogs.issues': 'Issues',
@@ -713,12 +625,10 @@ const en = {
   'dialogs.checkUpdate': 'Check for Updates',
   'dialogs.checking': 'Checking...',
 
-  // MCPServers oauth
   'mcp.oauthOpening': 'Opening browser for MCP login...',
   'mcp.oauthCompleteBrowser': 'Complete login in your browser, then return here.',
   'mcp.oauthReconnecting': 'Login complete. Reconnecting MCP server...',
 
-  // AskUser
   'askUser.notesPlaceholder': 'Additional notes (optional)',
 } as const
 

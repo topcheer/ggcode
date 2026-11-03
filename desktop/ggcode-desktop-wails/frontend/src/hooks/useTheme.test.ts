@@ -1,11 +1,8 @@
-/**
- * Tests for useTheme hook - real-time system theme following.
- */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useTheme } from './useTheme'
 
-// Ensure matchMedia exists (jsdom doesn't provide it)
 if (typeof (window as any).matchMedia === 'undefined') {
   ;(window as any).matchMedia = () => ({
     matches: false,
@@ -19,7 +16,6 @@ if (typeof (window as any).matchMedia === 'undefined') {
   })
 }
 
-// Ensure localStorage exists (some jsdom/Node configs lack it)
 if (typeof globalThis.localStorage === 'undefined' || !globalThis.localStorage) {
   const store: Record<string, string> = {}
   const lsMock = {
@@ -40,7 +36,6 @@ describe('useTheme', () => {
     document.documentElement.classList.remove('dark')
   })
 
-  // Helper: mock window.matchMedia with configurable matches value.
   function mockMatchMedia(matches: boolean) {
     const listeners: ((e: MediaQueryListEvent) => void)[] = []
     const mql: any = {
@@ -53,7 +48,6 @@ describe('useTheme', () => {
       removeListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }
-    // jsdom may not have matchMedia; use defineProperty for broad compat
     Object.defineProperty(window, 'matchMedia', {
       value: vi.fn().mockReturnValue(mql),
       writable: true,
@@ -113,13 +107,11 @@ describe('useTheme', () => {
   it('toggle switches between light and dark', () => {
     mockMatchMedia(false)
     const { result } = renderHook(() => useTheme())
-    // auto + system light => isDark=false, toggle => dark
     act(() => {
       const next = result.current.toggle()
       expect(next).toBe('dark')
     })
     expect(result.current.isDark).toBe(true)
-    // now dark => toggle => light
     act(() => {
       const next = result.current.toggle()
       expect(next).toBe('light')
@@ -131,7 +123,6 @@ describe('useTheme', () => {
     const { listeners } = mockMatchMedia(false)
     const { result } = renderHook(() => useTheme())
     expect(result.current.isDark).toBe(false)
-    // Simulate OS switching to dark mode
     act(() => {
       listeners.forEach((cb) =>
         cb({ matches: true, media: '(prefers-color-scheme: dark)' } as MediaQueryListEvent)
@@ -146,7 +137,6 @@ describe('useTheme', () => {
     const { listeners } = mockMatchMedia(false)
     const { result } = renderHook(() => useTheme())
     expect(result.current.isDark).toBe(false)
-    // System switches to dark, but explicit light stays light
     act(() => {
       listeners.forEach((cb) =>
         cb({ matches: true, media: '(prefers-color-scheme: dark)' } as MediaQueryListEvent)

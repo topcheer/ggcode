@@ -67,7 +67,6 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState('')
   const [showAdd, setShowAdd] = useState(false)
 
-  // Add form state
   const [addType, setAddType] = useState<TransportType>('stdio')
   const [addName, setAddName] = useState('')
   const [addCommand, setAddCommand] = useState('')
@@ -97,7 +96,6 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     loadServers()
-    // Real-time updates: backend pushes mcp:status when server connects/disconnects/fails
     EventsOn('mcp:status', () => { loadServers() })
     return () => { EventsOff('mcp:status') }
   }, [])
@@ -118,7 +116,6 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
         if (addArgs.trim()) values.args = addArgs.trim()
       } else {
         values.url = addUrl.trim()
-        // Parse headers: "Key: Value" per line
         if (addHeaders.trim()) {
           addHeaders.trim().split('\n').forEach(line => {
             const idx = line.indexOf(':')
@@ -128,7 +125,6 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           })
         }
       }
-      // Parse env: "KEY=VALUE" per line
       if (addEnv.trim()) {
         addEnv.trim().split('\n').forEach(line => {
           const idx = line.indexOf('=')
@@ -171,8 +167,6 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   const handleForceReauth = async (name: string) => {
     try {
       await App.ForceReauthMCPServer(name)
-      // After resetting credentials, if the server needs OAuth it will show
-      // the oauthRequired banner automatically on next status update.
       await loadServers()
     } catch {}
   }
@@ -212,7 +206,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--color-bg)', overflow: 'auto', minHeight: 0 }}>
-      {/* Header */}
+      {}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 16px',
@@ -234,7 +228,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
         }}><Plus size={14} /> {tr('mcp.add')}</button>
       </div>
 
-      {/* Add form */}
+      {}
       {showAdd && (
         <div style={{
           padding: 12, margin: 8,
@@ -242,7 +236,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           border: '1px solid var(--color-border)',
           display: 'flex', flexDirection: 'column', gap: 10,
         }}>
-          {/* Transport type selector */}
+          {}
           <div style={labelStyle}>{tr('mcp.transport')}</div>
           <div style={{ display: 'flex', gap: 6 }}>
             {TRANSPORTS.map(t => (
@@ -262,12 +256,12 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
             ))}
           </div>
 
-          {/* Name */}
+          {}
           <div style={labelStyle}>{tr('mcp.name')}</div>
           <input placeholder="e.g. github, filesystem" value={addName}
             onChange={e => setAddName(e.target.value)} style={inputStyle} />
 
-          {/* Stdio fields */}
+          {}
           {addType === 'stdio' && (
             <>
               <div style={labelStyle}>{tr('mcp.commandLabel')}</div>
@@ -279,7 +273,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
             </>
           )}
 
-          {/* HTTP/WebSocket fields */}
+          {}
           {(addType === 'http' || addType === 'ws') && (
             <>
               <div style={labelStyle}>URL</div>
@@ -292,7 +286,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
             </>
           )}
 
-          {/* Common: Environment */}
+          {}
           <div style={labelStyle}>{tr('mcp.envVars')}</div>
           <textarea placeholder={"API_KEY=sk-xxx\nDEBUG=true"}
             value={addEnv} onChange={e => setAddEnv(e.target.value)}
@@ -314,7 +308,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
         </div>
       )}
 
-      {/* Server list */}
+      {}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px' }}>
         {loading && (
           <div>
@@ -359,7 +353,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     fontWeight: 500,
                   }}>{server.disabled ? 'disabled' : (server.status || 'unknown')}</span>
                 </div>
-                {/* Transport-specific details */}
+                {}
                 {t === 'stdio' ? (
                   <div style={{ marginTop: 2 }}>
                     <span style={{
@@ -379,7 +373,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     }}>{server.url}</span>
                   </div>
                 )}
-                {/* Environment vars summary */}
+                {}
                 {server.env && Object.keys(server.env).length > 0 && (
                   <div style={{ marginTop: 2 }}>
                     <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
@@ -387,7 +381,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     </span>
                   </div>
                 )}
-                {/* Headers summary */}
+                {}
                 {server.headers && Object.keys(server.headers).length > 0 && (
                   <div style={{ marginTop: 2 }}>
                     <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>

@@ -45,7 +45,6 @@ const I18nContext = createContext<I18nContextValue>({
   t: (key) => key,
 })
 
-/** Translate a key with optional {n} interpolation */
 function translate(
   locale: Locale,
   key: TranslationKey,
@@ -80,7 +79,6 @@ export function I18nProvider({
     return translate(locale, key, params)
   }, [locale])
 
-  // Sync if initialLocale changes externally (e.g. config loaded)
   useEffect(() => {
     setLocaleInternal(initialLocale)
   }, [initialLocale])
@@ -92,22 +90,18 @@ export function I18nProvider({
   )
 }
 
-/** Detect the best matching locale from the browser/OS language setting. */
 export function detectSystemLocale(): Locale {
   const langs = navigator.languages || [navigator.language || 'en']
   for (const lang of langs) {
     const lower = lang.toLowerCase()
-    // Chinese variant detection
     if (lower.startsWith('zh')) {
       if (['zh-tw', 'zh-hant', 'zh-hk', 'zh-mo'].some(r => lower.startsWith(r))) {
         return 'zh-TW' as Locale
       }
       return 'zh' as Locale
     }
-    // Exact match (e.g. "zh", "ja", "ko")
     const exact = lower.split('-')[0] as Locale
     if (exact in LOCALE_LABELS) return exact
-    // Region match (e.g. "zh-CN" → "zh", "pt-BR" → "pt")
     const region = lower.split('-')[0]
     if (region in LOCALE_LABELS) return region as Locale
   }

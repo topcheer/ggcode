@@ -36,7 +36,6 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
   const ctxTotal = formatTokens(statusBarData?.contextTotal)
   const ctxUsed = formatTokens(statusBarData?.contextUsed)
 
-  // Estimate session cost based on token usage and model pricing
   const estimateCost = () => {
     const input = statusBarData?.inputTokens ?? 0
     const output = statusBarData?.outputTokens ?? 0
@@ -44,9 +43,8 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     const cacheWrite = statusBarData?.cacheWrite ?? 0
     if (input === 0 && output === 0) return null
 
-    // Rough pricing per 1M tokens (USD) — conservative estimates
     const model = (statusBarData?.model ?? '').toLowerCase()
-    let inPrice = 3, outPrice = 15  // default (Sonnet-tier)
+    let inPrice = 3, outPrice = 15
     let cacheReadPrice = 0.3
     let cacheWritePrice = 3.75
 
@@ -77,7 +75,6 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     { label: t('context.cacheHit'), value: `${statusBarData?.cacheHit ?? 0}%`, color: 'var(--color-success)' },
   ]
 
-  // Load IM adapters with real-time updates
   useEffect(() => {
     let cancelled = false
     const loadIM = async () => {
@@ -103,9 +100,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
       } catch {}
     }
     void loadMCP()
-    // Poll every 5s as fallback
     const id = window.setInterval(() => { void loadMCP() }, 5000)
-    // Real-time updates: backend pushes mcp:status when server connects/disconnects/fails
     EventsOn('mcp:status', () => { void loadMCP() })
     return () => {
       cancelled = true
@@ -123,7 +118,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
       display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)',
       overflowY: 'auto',
     }}>
-      {/* Header */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontWeight: 600, fontSize: 14 }}>{t('context.title')}</span>
         <div style={{ flex: 1 }} />
@@ -133,7 +128,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         }}>✕</button>
       </div>
 
-      {/* Model card */}
+      {}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 4,
@@ -146,7 +141,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         </span>
       </div>
 
-      {/* Usage */}
+      {}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 8,
@@ -172,9 +167,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         ))}
       </div>
 
-      {/* Estimated cost / plan inclusion (#4727: subscription sessions show
-          "included in {plan}" instead of a per-token estimate that never
-          applies - parity with the TUI's resolveRate display) */}
+      {}
       {statusBarData?.pricingType === 'subscription' ? (
         <div style={{
           padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
@@ -206,7 +199,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         </div>
       )}
 
-      {/* IM adapters */}
+      {}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
@@ -236,7 +229,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         })()}
       </div>
 
-      {/* MCP servers */}
+      {}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,

@@ -135,7 +135,6 @@ describe('desktop chat stream state', () => {
 
     expect(finished[0].streaming).toBe(false)
     expect(finished[1].streaming).toBe(false)
-    // Tool streaming is intentionally left alone; tool_result closes it.
     expect(finished[2].streaming).toBe(true)
   })
 

@@ -7,7 +7,7 @@ export interface StreamChatMessage {
   streaming?: boolean
   timestamp?: number
   source?: string
-  responseDuration?: number // seconds, set when assistant streaming completes
+  responseDuration?: number
 }
 
 export interface DesktopTextEvent {

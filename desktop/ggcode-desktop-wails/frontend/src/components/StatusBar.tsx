@@ -36,16 +36,13 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     status: t('status.ready'),
   })
 
-  // IM adapter active count + mobile tunnel connection status
   const [imCount, setImCount] = useState(0)
   const [mobileConnected, setMobileConnected] = useState(false)
   const { isOnline } = useOnlineStatus()
 
-  // Elapsed timer: tracks how long the agent has been working
   const [workStartTime, setWorkStartTime] = useState<number | null>(null)
   const [, setTick] = useState(0)
 
-  // Detect status transitions to start/stop the timer
   useEffect(() => {
     const isWorking = info.status !== t('status.ready') &&
                       info.status !== 'Ready' &&
@@ -57,7 +54,6 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     }
   }, [info.status, t, workStartTime])
 
-  // 1-second tick to update elapsed display while working
   useEffect(() => {
     if (workStartTime === null) return
     const id = window.setInterval(() => setTick(t => t + 1), 1000)
@@ -94,7 +90,6 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
-  // Merge external data if provided
   useEffect(() => {
     if (data) setInfo(data)
   }, [data])
@@ -105,7 +100,6 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     return String(n)
   }
 
-  // --- Session limits popover ---
   const [showLimitsPopover, setShowLimitsPopover] = useState(false)
   const [sessionCtx, setSessionCtx] = useState(0)
   const [sessionMax, setSessionMax] = useState(0)
@@ -123,7 +117,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
       setEditCtx(formatTokenValue(limits?.contextWindow || 0))
       setEditMax(formatTokenValue(limits?.maxTokens || 0))
       setLimitsError('')
-    } catch { /* ignore */ }
+    } catch {  }
   }
 
   const handleContextPillClick = async () => {
@@ -182,7 +176,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
       }}>
         {modelLabel}
       </span>
-      {/* Context usage progress bar */}
+      {}
       {(() => {
         const pct = info.usagePercent || (info.contextTotal > 0 ? (info.contextUsed / info.contextTotal) * 100 : 0)
         const color = pct >= 85 ? '#ef4444' : pct >= 65 ? '#f59e0b' : '#22c55e'
@@ -288,7 +282,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
           </div>
         </div>
       )}
-      {/* Permission mode indicator */}
+      {}
       {(() => {
         const modeColors: Record<string, string> = {
           auto: 'var(--color-success)',
@@ -328,7 +322,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
       {info.cacheHit > 0 && (
         <span style={{ color: 'var(--color-success)', fontVariantNumeric: 'tabular-nums' }}>cache {info.cacheHit}%</span>
       )}
-      {/* Offline indicator */}
+      {}
       {!isOnline && (
         <span title={t('status.offline')} style={{
           display: 'flex', alignItems: 'center', gap: 3,
@@ -338,7 +332,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
           {t('status.offline')}
         </span>
       )}
-      {/* Zoom controls */}
+      {}
       {zoom !== undefined && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <button
@@ -387,9 +381,9 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
         </div>
       )}
       <div style={{ flex: 1 }} />
-      {/* Vendor usage/balance badge (#2150) - renders nothing without data */}
+      {}
       <UsageBadge />
-      {/* IM adapter count */}
+      {}
       {imCount > 0 && (
         <span title={`${imCount} IM adapter(s) active`} style={{
           display: 'flex', alignItems: 'center', gap: 3,
@@ -399,7 +393,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
           {imCount}
         </span>
       )}
-      {/* Mobile tunnel connected */}
+      {}
       {mobileConnected && (
         <span title={t('status.mobileConnected')} aria-label={t('status.mobileConnectedAria')} style={{
           display: 'flex', alignItems: 'center',

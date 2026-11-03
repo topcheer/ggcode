@@ -57,7 +57,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
         overflow: 'hidden',
       }} onClick={e => e.stopPropagation()}>
-        {/* Header */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '16px 20px',
@@ -75,13 +75,13 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Body */}
+        {}
         <div style={{
           padding: '24px 28px',
           display: 'flex', flexDirection: 'column', gap: 16,
           alignItems: 'center',
         }}>
-          {/* Logo */}
+          {}
           <img src={new URL('../assets/images/app-icon.png', import.meta.url).href}
             alt="GGCode"
             style={{ width: 56, height: 56, borderRadius: 14 }}
@@ -98,7 +98,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
             {t('about.description')}
           </div>
 
-          {/* Links */}
+          {}
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
             {[
               { label: t('dialogs.github'), url: 'https://github.com/topcheer/ggcode' },
@@ -117,7 +117,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
             ))}
           </div>
 
-          {/* Check for updates */}
+          {}
           <div style={{
             width: '100%', padding: '12px 16px',
             borderRadius: 'var(--radius-md)',
@@ -172,6 +172,5 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
 }
 
 export function UpdateNotification({ onClose }: { onClose: () => void }) {
-  // The backend will push an event to show this dialog when an update is found.
   return null
 }

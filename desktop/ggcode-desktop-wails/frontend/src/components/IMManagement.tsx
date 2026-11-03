@@ -5,8 +5,6 @@ import * as App from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useTranslation } from '../i18n'
 
-// ── Types matching Go structs ──
-
 interface IMAdapterInfo {
   name: string
   enabled: boolean
@@ -33,8 +31,6 @@ interface IMPlatformMeta {
   fields: IMPlatformField[]
   qrAuth: boolean
 }
-
-// ── Brand SVG icons (24x24 viewBox, official brand colors) ──
 
 const PLATFORM_ICONS: Record<string, { svg: JSX.Element; color: string }> = {
   qq: {
@@ -97,8 +93,6 @@ function PlatformIcon({ platform, size = 20 }: { platform: string; size?: number
   )
 }
 
-// ── Component ──
-
 export function IMManagement() {
   const { t } = useTranslation()
   const [adapters, setAdapters] = useState<IMAdapterInfo[]>([])
@@ -110,7 +104,6 @@ export function IMManagement() {
 
   useEffect(() => {
     loadData()
-    // Real-time updates: backend pushes im:status when adapter connects/disconnects
     EventsOn('im:status', () => { loadData() })
     return () => { EventsOff('im:status') }
   }, [])
@@ -132,12 +125,10 @@ export function IMManagement() {
     }
   }
 
-  // Find platform meta by ID
   function getPlatform(id: string): IMPlatformMeta | undefined {
     return platforms.find(p => p.id === id)
   }
 
-  // ── Add adapter dialog ──
   if (showAdd) {
     return <AddAdapterDialog
       platforms={platforms}
@@ -156,7 +147,6 @@ export function IMManagement() {
     />
   }
 
-  // ── Edit adapter ──
   if (editAdapter) {
     const adapter = adapters.find(a => a.name === editAdapter)
     const platform = adapter ? getPlatform(adapter.platform) : undefined
@@ -183,7 +173,7 @@ export function IMManagement() {
 
   return (
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, flex: 1, overflow: 'auto', minHeight: 0 }}>
-      {/* Header */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{t('im.title')}</h3>
         <div style={{ flex: 1 }} />
@@ -199,13 +189,12 @@ export function IMManagement() {
 
       {error && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error}</div>}
 
-      {/* Adapter list — grouped by workspace */}
+      {}
       {adapters.length === 0 ? (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 40 }}>
           {t('im.noAdapters')}
         </div>
       ) : (() => {
-        // Group by isCurrent, then workspace, then unbound
         const current = adapters.filter(a => a.isCurrent)
         const other = adapters.filter(a => !a.isCurrent)
         return (
@@ -236,8 +225,6 @@ export function IMManagement() {
     </div>
   )
 }
-
-// ── Add Adapter Dialog ──
 
 function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
   platforms: IMPlatformMeta[]
@@ -270,7 +257,7 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
 
       {(error || localError) && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error || localError}</div>}
 
-      {/* Platform select */}
+      {}
       <label style={{ display: 'block' }}>
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('im.platform')}</span>
         <select value={selectedPlatform} onChange={e => { setSelectedPlatform(e.target.value); setFields({}); setLocalError('') }} style={{
@@ -283,7 +270,7 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
         </select>
       </label>
 
-      {/* Adapter name */}
+      {}
       <label style={{ display: 'block' }}>
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('im.name')}</span>
         <input value={adapterName} onChange={e => setAdapterName(e.target.value)} placeholder="e.g. dingtalk-alerts, telegram-dev" style={{
@@ -293,7 +280,7 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
         }} />
       </label>
 
-      {/* Platform fields */}
+      {}
       {platform?.qrAuth && (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 12, fontStyle: 'italic' }}>
           This platform uses QR code authentication. Save to start the pairing process.
@@ -331,8 +318,6 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
     </div>
   )
 }
-
-// ── Edit Adapter Dialog ──
 
 function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCancel, error }: {
   adapter: IMAdapterInfo
@@ -392,8 +377,6 @@ function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCan
   )
 }
 
-// ── Adapter Row ──
-
 function AdapterRow({ adapter, onReload, onEdit }: {
   adapter: IMAdapterInfo
   onReload: () => void
@@ -401,10 +384,6 @@ function AdapterRow({ adapter, onReload, onEdit }: {
 }) {
   const { t } = useTranslation()
 
-  // Button visibility logic:
-  // - isCurrent: show enable/disable + mute/unmute + edit + delete
-  // - workspace && !isCurrent: show rebind + edit + delete
-  // - !workspace: show bind + edit + delete
   const isBound = !!adapter.workspace
   const isBoundToCurrent = adapter.isCurrent
 
@@ -416,10 +395,10 @@ function AdapterRow({ adapter, onReload, onEdit }: {
       display: 'flex', alignItems: 'center', gap: 12,
       opacity: adapter.enabled ? 1 : 0.5,
     }}>
-      {/* Brand icon */}
+      {}
       <PlatformIcon platform={adapter.platform} size={24} />
 
-      {/* Info */}
+      {}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
           {adapter.name}
@@ -431,7 +410,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </div>
       </div>
 
-      {/* Status badge */}
+      {}
       <div style={{
         padding: '2px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, fontWeight: 600,
         background: adapter.enabled ? 'var(--color-success)' : 'var(--color-border)',
@@ -440,8 +419,8 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         {adapter.enabled ? 'ON' : 'OFF'}
       </div>
 
-      {/* Actions */}
-      {/* Enable/Disable button - only for current workspace binding */}
+      {}
+      {}
       {isBoundToCurrent && (
         <button
           onClick={async () => { try { await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled); onReload() } catch {} }}
@@ -457,7 +436,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </button>
       )}
 
-      {/* Mute/Unmute button - only for current workspace binding */}
+      {}
       {isBoundToCurrent && (
         <button
           onClick={async () => { try { await App.MuteIMAdapter(adapter.name, !adapter.muted); onReload() } catch {} }}
@@ -474,7 +453,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </button>
       )}
 
-      {/* Unbind button - only for current workspace binding */}
+      {}
       {isBoundToCurrent && (
         <button
           onClick={async () => { if (!confirm(`Unbind adapter "${adapter.name}"?`)) return; try { await App.UnbindIMAdapter(adapter.name); onReload() } catch {} }}
@@ -489,7 +468,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </button>
       )}
 
-      {/* Bind button - only for unbound adapters */}
+      {}
       {!isBound && (
         <button
           onClick={async () => { try { await App.BindIMAdapter(adapter.name); onReload() } catch {} }}
@@ -504,7 +483,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </button>
       )}
 
-      {/* Rebind button - for adapters bound to other workspaces */}
+      {}
       {isBound && !isBoundToCurrent && (
         <button
           onClick={async () => { try { await App.RebindIMAdapter(adapter.name); onReload() } catch {} }}
@@ -519,7 +498,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         </button>
       )}
 
-      {/* Edit button - always available */}
+      {}
       <button
         onClick={() => {
           const fields: Record<string, string> = {}
@@ -536,7 +515,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         Edit
       </button>
 
-      {/* Delete button - always available */}
+      {}
       <button
         onClick={async () => { if (!confirm(`Remove adapter "${adapter.name}"?`)) return; try { await App.RemoveIMAdapter(adapter.name); onReload() } catch {} }}
         title={`Remove ${adapter.name}`}

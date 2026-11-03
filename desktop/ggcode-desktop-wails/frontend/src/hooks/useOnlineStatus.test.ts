@@ -53,7 +53,6 @@ describe('useOnlineStatus', () => {
     const { unmount } = renderHook(() => useOnlineStatus())
     unmount()
 
-    // Each event (online, offline) should have been added and removed
     const onlineAdd = addSpy.mock.calls.find(c => c[0] === 'online')
     const offlineAdd = addSpy.mock.calls.find(c => c[0] === 'offline')
     const onlineRemove = removeSpy.mock.calls.find(c => c[0] === 'online')

@@ -1,5 +1,4 @@
 const tr = {
-  // NavRail
   'nav.chat': 'Sohbet',
   'nav.files': 'Dosyalar',
   'nav.im': 'IM Adaptrleri',
@@ -54,7 +53,6 @@ const tr = {
   'cron.yes': 'Evet',
   'cron.no': 'Hayır',
 
-  // Sidebar
   'sidebar.sessions': 'Oturumlar',
   'sidebar.search': 'Oturumları ara...',
   'sidebar.newSession': 'Yeni Oturum',
@@ -70,12 +68,10 @@ const tr = {
   'sidebar.time.hoursAgo': '{n} sa önce',
   'sidebar.time.yesterday': 'dün',
 
-  // StatusBar
   'status.ready': 'Hazır',
   'status.thinking': 'Düşünüyor...',
   'status.offline': 'Cevrimdisi',
 
-  // ChatView
   'chat.placeholder': 'ggcode\'a mesaj gönder...',
   'chat.agentWorking': 'Agent çalışıyor...',
   'chat.welcome.title': 'Bugün size nasıl yardımcı olabilirim?',
@@ -86,7 +82,6 @@ const tr = {
   'chat.welcome.prompt.debug': 'Bir sorunu hata ayıklamama yardım et',
   'chat.inputHint': 'Göndermek için Enter • Yeni satır için Shift+Enter',
 
-  // CommandPalette
   'cmd.recent': 'Son',
   'cmd.placeholder': 'Komut yazın...',
   'cmd.noResults': 'Eşleşen komut yok',
@@ -120,7 +115,6 @@ const tr = {
   'cmd.hintClose': 'esc kapat',
   'cmd.results': '{count} sonuç',
 
-  // KeyboardShortcuts
   'kb.title': 'Klavye Kısayolları',
   'kb.footer': 'İpucu: Komut paletini açmak için her zaman ⌘K tuşlarına basın',
   'kb.global': 'Genel',
@@ -157,7 +151,6 @@ const tr = {
   'kb.goDebug': 'Hata Ayıklama Konsoluna Git',
   'kb.goLanChat': 'LAN Sohbetine Git',
 
-  // ContextPanel
   'context.title': 'Bağlam',
   'context.usage': 'Bağlam Kullanımı',
   'context.input': 'Girdi',
@@ -171,7 +164,6 @@ const tr = {
   'context.estimatedCost': 'Tahmini Maliyet',
   'context.costDisclaimer': 'Token kullanımı ve model fiyatlandırmasına dayalı tahmin. Gerçek maliyet değişebilir.',
 
-  // SettingsPage
   'settings.title': 'Ayarlar',
   'settings.vendor': 'Sağlayıcı',
   'settings.endpoint': 'Uç Nokta',
@@ -190,7 +182,6 @@ const tr = {
   'settings.impersonateVersion': 'Sürüm',
   'settings.impersonateApply': 'Uygula',
 
-  // Onboarding
   'onboarding.next': 'İleri',
   'onboarding.back': 'Geri',
   'onboarding.getStarted': 'Başla',
@@ -213,32 +204,26 @@ const tr = {
   'onboarding.modelPlaceholder': 'gpt-4o (elle girin veya getir)',
   'onboarding.configureLLM': 'LLM Yapılandır',
 
-  // ApprovalDialog
   'approval.title': 'Araç Onayı Gerekli',
   'approval.allow': 'İzin Ver',
   'approval.deny': 'Reddet',
   'approval.alwaysAllow': 'Her Zaman İzin Ver',
 
-  // AskUserDialog
   'askUser.title': 'Soru',
   'askUser.submit': 'Gönder',
 
-  // Dialogs (About)
   'about.title': 'GGCode Hakkında',
   'about.description': 'Terminal için AI kodlama agentı',
 
-  // PairingCodeDialog
   'pairing.title': 'Cihaz Eşle',
   'pairing.close': 'Kapat',
 
-  // ShareDialog
   'share.title': 'Oturumu Paylaş',
   'share.copy': 'Kopyala',
   'share.copied': 'Kopyalandı!',
   'share.stopSharing': 'Paylaşmayı Durdur',
   'share.generating': 'Oluşturuluyor...',
 
-  // IMManagement
   'im.title': 'IM Adaptrleri',
   'im.addAdapter': 'Adaptör Ekle',
   'im.noAdapters': 'IM adaptörü yapılandırılmadı. Başlamak için "Adaptör Ekle"yi tıklayın.',
@@ -255,17 +240,14 @@ const tr = {
   'im.cancel': 'İptal',
   'im.selectPlatform': 'Platform seç...',
 
-  // MCPServers
   'mcp.title': 'MCP Sunucuları',
   'mcp.add': 'Ekle',
   'mcp.name': 'Ad',
   'mcp.cancel': 'İptal',
 
-  // FileBrowser
   'files.fileTooLarge': 'Dosya önizleme için çok büyük (>2MB)',
   'files.binaryFile': 'İkili dosya',
 
-  // DebugConsole
   'debug.title': 'Hata Ayıklama Konsolu',
   'debug.start': 'Başlat',
   'debug.stop': 'Durdur',
@@ -276,7 +258,6 @@ const tr = {
   'debug.filterPlaceholder': 'Filtrele...',
   'debug.empty': 'Hata ayıklama günlüklerini yakalamaya başlamak için "Başlat"ı tıklayın',
 
-  // TeamBoard
   'team.teams': 'takımlar',
   'team.teammates': 'takım arkadaşları',
   'team.tasks': 'görevler',
@@ -289,9 +270,6 @@ const tr = {
   'team.noInProgress': 'Burada kimse engellenmemiş',
   'team.noDone': 'Henüz hiçbir şey tamamlanmadı',
 
-  // --- v1.3.143+ i18n gap fill ---
-
-  // SettingsPage sections
   'settings.agentSafety': 'Agent ve Güvenlik',
   'settings.appearance': 'Görünüm',
   'settings.integrations': 'Entegrasyonlar',
@@ -333,7 +311,6 @@ const tr = {
   'settings.versionPlaceholder': 'Sürüm dizesi...',
   'settings.endpointNamePlaceholder': 'Uç Noktam',
 
-  // SettingsPage integrations checkboxes
   'settings.fileBrowser': 'Dosya Tarayıcısı',
   'settings.contextUsage': 'Bağlam Kullanımı',
   'settings.mcpServers': 'MCP Sunucuları',
@@ -377,23 +354,17 @@ const tr = {
   'settings.adding': 'Ekleniyor...',
   'settings.lspServersShort': 'Dil Sunucuları',
 
-  // Sidebar aria labels
   'sidebar.searchAria': 'Oturumları ara',
   'sidebar.clearAria': 'Temizle',
   'sidebar.deleteSessionAria': 'Oturumu sil',
 
-  // ChatView tooltip extras
   'chat.editNickRoleTeam': 'Rumuzunuzu, rolünüzü ve takımınızı düzenlemek için tıklayın',
   'chat.regenerate': 'Yeniden üret',
   'chat.copyResult': 'Sonucu kopyala',
   'chat.copyError': 'Hatayı kopyala',
 
-  // Permission mode dropdown options
-
-  // Common dropdown placeholders
   'common.chooseModel': 'Model seç...',
 
-  // ChatView activity descriptions
   'chat.activity.reading': 'Dosyalar okunuyor...',
   'chat.activity.editing': 'Kod düzenleniyor...',
   'chat.activity.writing': 'Dosyalar yazılıyor...',
@@ -408,7 +379,6 @@ const tr = {
   'chat.activity.saving': 'Bellek kaydediliyor...',
   'chat.activity.planMode': 'Plan moduna giriliyor...',
 
-  // ChatView UI labels
   'chat.findPlaceholder': 'Konuşmada bul...',
   'chat.sending': 'Gönderiliyor...',
   'chat.failedToSend': 'Gönderme başarısız',
@@ -418,7 +388,6 @@ const tr = {
   'chat.cancel': 'İptal',
   'chat.save': 'Kaydet',
 
-  // ChatView button titles
   'chat.title.newSession': 'Yeni oturum',
   'chat.title.shareSession': 'Oturumu paylaş (Cmd+Shift+S)',
   'chat.title.search': 'Konuşmada ara (Cmd+F)',
@@ -435,7 +404,6 @@ const tr = {
   'chat.title.copyMessage': 'Mesajı kopyala',
   'chat.title.teamBoard': 'Takım panosunu aç',
 
-  // MCPServers
   'mcp.transport': 'Aktarım',
   'mcp.transportStdio': 'stdin/stdout aracılığıyla yerel süreç',
   'mcp.transportWs': 'WebSocket aracılığıyla uzak sunucu',
@@ -448,7 +416,6 @@ const tr = {
   'mcp.resetOAuth': 'OAuth\'u Sıfırla (hesap değiştir)',
   'mcp.remove': 'Kaldır',
 
-  // Onboarding
   'onboarding.chooseVendor': 'Sağlayıcı seç...',
   'onboarding.providerName': 'Sağlayıcı Adı',
   'onboarding.protocol': 'Protokol',
@@ -456,7 +423,6 @@ const tr = {
   'onboarding.chooseModel': 'Model seç...',
   'onboarding.chooseEndpoint': 'Uç nokta seç...',
 
-  // LanChatView
   'lanchat.groupChat': 'Grup Sohbeti',
   'lanchat.chat': 'Sohbet',
   'lanchat.agentSuffix': ' (agent)',
@@ -465,37 +431,24 @@ const tr = {
   'lanchat.broadcastPlaceholder': 'Herkese yayın yap...',
   'lanchat.dmPlaceholder': '{name} kişisine mesaj...',
 
-  // ApprovalDialog hints
-
-  // AskUserDialog
   'askUser.typeAnswer': 'Yanıtınızı yazın...',
 
-  // IMManagement
   'im.editAdapter': 'Düzenle: {name}',
 
-  // FileBrowser
   'files.searchPlaceholder': 'Dosyalarda ara...',
   'files.officeDocument': 'Office belgesi',
   'files.openExternal': 'Görüntülemek için harici uygulamayla aç',
   'files.htmlPreview': 'HTML Önizleme',
 
-  // Dialogs / About
-
-  // TopDragBar (window controls)
-
-  // StatusBar
   'status.toggleContext': 'Bağlam panelini aç/kapat',
 
-  // TeamBoard
   'team.boardTitle': 'Takım Panosu',
 
-  // Common shared
   'common.dismiss': 'Bildirimi kapat',
   'common.cancel': 'İptal',
   'common.save': 'Save',
   'common.copyToClipboard': 'Panoya kopyala',
 
-  // FeatureCard descriptions and actions
   'settings.fileBrowserDesc': 'Mevcut masaüstü dosya tarayıcısını kullanarak geçerli çalışma alanındaki dosyalara göz atın.',
   'settings.openFiles': 'Dosyaları Aç',
   'settings.contextUsageDesc': 'Uzun görevler çalıştırmadan önce aktif bağlam kullanımını ve token/önbellek toplamlarını inceleyin.',
@@ -512,7 +465,6 @@ const tr = {
   'settings.integrationsDesc': 'Mevcut masaüstü özelliklerini tek bir yerden yönetin. Bu kısayollar, herhangi bir backend yapılandırma semantiğini değiştirmeden mevcut özel ekranları açar.',
   'settings.vendorGemini': 'Google Gemini',
 
-  // Dialog aria labels
   'common.toolApproval': 'Araç onayı',
   'common.closeDialog': 'İletişimi kapat',
   'common.cancelBtn': 'İptal',
@@ -536,7 +488,6 @@ const tr = {
   'common.pinWindow': 'Pencereyi üste sabitle',
   'common.unpinWindow': 'Sabitlemeyi kaldır',
 
-  // SettingsPage option labels
   'settings.chooseVendor': 'Sağlayıcı seç...',
   'settings.chooseEndpoint': 'Uç nokta seç...',
   'settings.modeSupervised': 'Denetimli (her aracı onayla)',
@@ -544,37 +495,24 @@ const tr = {
   'settings.modeBypassAll': 'Baypas (çoğu aracı otomatik onayla)',
   'settings.saveModeHint': 'Bu varsayılan modu kalıcı yapmak için kaydetin. Çalışma zamanı mod değişiklikleri yine de uygulamanın normal mod işlemesini izler.',
 
-  // Dialogs
   'dialogs.newVersion': 'Yeni sürüm mevcut: v',
   'dialogs.download': 'İndir',
   'dialogs.upToDate': 'Güncelsiniz (v',
   'dialogs.productName': 'GGCode Masaüstü',
 
-  // TeamBoard
-  // (team.boardTitle already exists above)
-
-  // FileBrowser
   'files.renderingDiagram': 'Diyagram oluşturuluyor...',
-  // (files.officeDocument, files.openExternal already exist above)
 
-  // ApprovalDialog keyboard hints
   'approval.always': 'Her Zaman',
 
-  // IMManagement
-  // (im.editAdapter already exists above)
-
-  // MCPServers
   'mcp.oauthRequired': 'OAuth girişi gerekli',
   'mcp.oauthHint': 'Bu MCP sunucusunu yetkilendirmek için tarayıcınızla oturum açın.',
 
-  // Onboarding
   'onboarding.customProvider': '+ Özel Sağlayıcı',
   'onboarding.a2a': 'A2A Servisi',
   'onboarding.a2aDesc': 'Ajanlar arası iletişimi etkinleştir (önerilir)',
   'onboarding.languageTitle': 'Dilinizi seçin',
   'onboarding.languageHint': "Bunu daha sonra Ayarlar'da değiştirebilirsiniz",
 
-  // SettingsPage mode descriptions (FeatureCard)
   'settings.agentSafetyHint': 'Masaüstü agent\'ının ne kadar özerkliğe sahip olduğunu gözden geçirin. Bu, gelişmiş araç politikalarını değiştirmeden mevcut davranışı özetler.',
   'settings.workspaceAccessHint': 'Dosya araçları, geçerli çalışma alanı ve yapılandırılmış izin verilen dizinler içinde çalışır. Gelişmiş izin verilen dizin düzenleme, güvenlik sınırlarını yanlışlıkla değiştirmemek için burada henüz kasıtlı olarak gösterilmemektedir.',
   'settings.appearanceHint': 'Görsel temayı özelleştirin. Uygulama varsayılan olarak sistem tercihinizi izler.',
@@ -596,7 +534,6 @@ const tr = {
   'settings.modeDescFullAutopilot': 'Agent yüksek özerkliğe sahiptir ve birçok adımı otomatik olarak tamamlayabilir. Önemli kodlarda kullanmadan önce çalışma alanı durumunu gözden geçirin.',
   'settings.modeDescFullSupervised': 'Agent, belirtilmemiş araç eylemlerinden önce sorar. Bu, normal masaüstü kullanımı için dengeli bir varsayılandır.',
 
-  // Toast messages
   'toast.settingsSaved': 'Ayarlar kaydedildi',
   'toast.settingsLoadFailed': 'Ayarlar yüklenemedi: {error}',
   'toast.endpointsLoadFailed': 'Uç noktalar yüklenemedi: {error}',
@@ -632,43 +569,21 @@ const tr = {
   'toast.sessionOpenFailed': 'Oturum açılamadı: {error}',
   'toast.copiedMessages': '{count} mesaj panoya kopyalandı',
 
-  // FileBrowser
-
-  // ApprovalDialog risk levels
   'approval.riskHigh': 'Yüksek Risk',
   'approval.riskMedium': 'Orta Risk',
   'approval.riskLow': 'Düşük Risk',
 
-  // DebugConsole
-
-  // Sidebar context menu
-
-  // ChatView context menu & run stats
-
-  // Dialogs links
-
-  // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
   'mcp.descStdio': 'stdin/stdout aracılığıyla yerel süreç',
   'mcp.descHttp': 'HTTP aracılığıyla uzak sunucu (Streamable HTTP / SSE)',
   'mcp.descWs': 'WebSocket aracılığıyla uzak sunucu',
 
-  // IMManagement
-
-  // PairingCodeDialog
-
-  // LanChatView
-
-  // ContextPanel
-
-  // SettingsPage
   'settings.oauthConnected': 'Bağlı',
   'settings.oauthNotConnected': 'Bağlı değil',
   'settings.oauthLoggingIn': 'Giriş yapılıyor...',
   'settings.login': 'Giriş',
   'settings.failedFetchModels': 'Modeller getirilemedi',
 
-  // Sidebar context menu
   'sidebar.menuOpen': 'Aç',
   'sidebar.menuRename': 'Yeniden Adlandır',
   'sidebar.menuPin': 'Sabitle',
@@ -683,19 +598,16 @@ const tr = {
   'sidebar.renamedToast': 'Oturum yeniden adlandırıldı',
   'sidebar.copyFailedToast': 'Kopyalanamadı',
 
-  // ChatView context menu
   'chat.menuCopy': 'Kopyala',
   'chat.menuEdit': 'Düzenle',
   'chat.menuRegenerate': 'Yeniden Üret',
 
-  // ChatView run stats
   'chat.runStatDuration': 'Süre',
   'chat.runStatTools': 'Araçlar',
   'chat.runStatFiles': 'Dosyalar',
   'chat.runStatErrors': 'Hatalar',
   'chat.runStatTokens': 'Token',
 
-  // Dialogs links
   'dialogs.github': 'GitHub',
   'dialogs.releases': 'Sürümler',
   'dialogs.issues': 'Sorunlar',
@@ -703,12 +615,10 @@ const tr = {
   'dialogs.checkUpdate': 'Güncellemeleri Kontrol Et',
   'dialogs.checking': 'Kontrol ediliyor...',
 
-  // MCPServers oauth
   'mcp.oauthOpening': 'MCP girişi için tarayıcı açılıyor...',
   'mcp.oauthCompleteBrowser': 'Tarayıcınızda oturum açmayı tamamlayın, sonra buraya dönün.',
   'mcp.oauthReconnecting': 'Giriş tamamlandı. MCP sunucusuna yeniden bağlanılıyor...',
 
-  // AskUser
   'askUser.notesPlaceholder': 'Ek notlar (isteğe bağlı)',
 } as const
 

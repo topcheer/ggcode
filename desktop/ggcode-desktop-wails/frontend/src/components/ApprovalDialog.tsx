@@ -4,10 +4,6 @@ import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
 export interface ApprovalRequest {
-  // #4151: key must match the backend event payload ("requestID"); the old
-  // "requestId" typo made request.requestId undefined, so desktop dialog
-  // replies resolved the legacy empty-string ID (or nothing) instead of the
-  // actual pending request.
   requestID: string
   toolName: string
   input: string
@@ -17,8 +13,6 @@ interface ApprovalDialogProps {
   request: ApprovalRequest
   onClose: () => void
 }
-
-// ─── Diff helpers ──────────────────────────────────────────────
 
 const kbdStyle: React.CSSProperties = {
   display: 'inline-block',
@@ -38,14 +32,12 @@ interface DiffLine {
   newNum?: number
 }
 
-/** Lightweight LCS-based line diff (no external deps) */
 function computeDiff(oldText: string, newText: string): DiffLine[] {
   const oldLines = oldText.split('\n')
   const newLines = newText.split('\n')
   const m = oldLines.length
   const n = newLines.length
 
-  // DP table for LCS
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
@@ -82,7 +74,6 @@ function computeDiff(oldText: string, newText: string): DiffLine[] {
     j++; newNum++
   }
 
-  // Collapse long unchanged runs to keep focus on the diff
   const collapsed: DiffLine[] = []
   let contextCount = 0
   for (const line of result) {
@@ -142,15 +133,10 @@ function DiffView({ diff }: { diff: DiffLine[] }) {
   )
 }
 
-// ─── Risk level + diff stats helpers ───────────────────────────
-
 type RiskLevel = 'high' | 'medium' | 'low'
 
-/** Assess risk level based on tool type and arguments */
 function getRiskLevel(toolName: string, input: string): RiskLevel {
-  // High risk: commands can execute arbitrary code; git ops modify repo state
   if (toolName === 'run_command' || toolName.startsWith('git_')) return 'high'
-  // High risk: write_file/multi_file_write can overwrite entire files
   if (toolName === 'write_file' || toolName === 'multi_file_write') {
     const parsed = parseInput(input)
     const totalLen = parsed?.args?.content?.length || 0
@@ -160,11 +146,9 @@ function getRiskLevel(toolName: string, input: string): RiskLevel {
     }
     return totalLen > 500 ? 'high' : 'medium'
   }
-  // Medium risk: file edits modify existing code
   if (toolName === 'edit_file' || toolName === 'multi_edit_file' || toolName === 'multi_file_edit') {
     return 'medium'
   }
-  // Low risk: everything else (read-only, search, etc.)
   return 'low'
 }
 
@@ -174,7 +158,6 @@ interface DiffStats {
   filesChanged: number
 }
 
-/** Count diff additions/deletions from tool input */
 function getDiffStats(toolName: string, input: string): DiffStats | null {
   const parsed = parseInput(input)
   if (!parsed) return null
@@ -292,8 +275,6 @@ function CopyButton({ getText }: { getText: () => string }) {
   )
 }
 
-// ─── Tool-specific renderers ───────────────────────────────────
-
 interface ParsedInput {
   toolName: string
   args: Record<string, any>
@@ -306,7 +287,6 @@ function parseInput(input: string): ParsedInput | null {
       return { toolName: '', args: parsed }
     }
   } catch {
-    // not JSON
   }
   return null
 }
@@ -328,11 +308,9 @@ function FilePath({ path }: { path: string }) {
   )
 }
 
-/** Render tool-specific preview content */
 function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
   const parsed = parseInput(input)
 
-  // ─── edit_file: diff view ───
   if (toolName === 'edit_file' && parsed) {
     const { file_path, old_text, new_text } = parsed.args
     if (typeof old_text === 'string' && typeof new_text === 'string') {
@@ -345,7 +323,6 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     }
   }
 
-  // ─── multi_edit_file: multiple diffs ───
   if (toolName === 'multi_edit_file' && parsed) {
     const { file_path, edits } = parsed.args
     if (Array.isArray(edits)) {
@@ -373,7 +350,6 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     }
   }
 
-  // ─── multi_file_edit: multiple files ───
   if (toolName === 'multi_file_edit' && parsed) {
     const { files } = parsed.args
     if (Array.isArray(files)) {
@@ -405,12 +381,10 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     }
   }
 
-  // ─── write_file: new content ───
   if ((toolName === 'write_file' || toolName === 'multi_file_write') && parsed) {
     const path = parsed.args.path || parsed.args.file_path || ''
     const files = parsed.args.files
     if (files && Array.isArray(files)) {
-      // multi_file_write
       return (
         <div>
           {files.map((f: any, idx: number) => (
@@ -445,7 +419,6 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     )
   }
 
-  // ─── run_command: terminal style ───
   if (toolName === 'run_command' && parsed) {
     const cmd = parsed.args.command || input
     return (
@@ -460,7 +433,6 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     )
   }
 
-  // ─── git operations: show command/message ───
   if (toolName.startsWith('git_') && parsed) {
     const msg = parsed.args.message || parsed.args.files || ''
     return (
@@ -473,7 +445,6 @@ function ToolPreview({ toolName, input }: { toolName: string; input: string }) {
     )
   }
 
-  // ─── Fallback: pretty JSON ───
   return (
     <pre style={{
       margin: 0, fontSize: 12, fontFamily: 'var(--font-mono)',
@@ -493,7 +464,6 @@ function formatJSON(input: string): string {
   }
 }
 
-/** Get appropriate icon for tool type */
 function ToolIcon({ toolName }: { toolName: string }) {
   const size = 16
   if (toolName === 'edit_file' || toolName === 'multi_edit_file' || toolName === 'multi_file_edit') {
@@ -507,8 +477,6 @@ function ToolIcon({ toolName }: { toolName: string }) {
   }
   return <FileJson size={size} style={{ color: 'var(--text-tertiary)' }} />
 }
-
-// ─── Main component ────────────────────────────────────────────
 
 export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
   const { t } = useTranslation()
@@ -525,7 +493,6 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
     onClose()
   }, [responding, request.requestID, onClose])
 
-  // Keyboard shortcuts: Esc=Deny, Enter=Allow, Shift+Enter=Always Allow
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -542,7 +509,6 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
 
   const isWide = ['edit_file', 'multi_edit_file', 'multi_file_edit', 'write_file', 'multi_file_write', 'run_command'].includes(request.toolName)
 
-  // Compute risk level and diff stats once per request
   const riskLevel = useMemo(() => getRiskLevel(request.toolName, request.input), [request.toolName, request.input])
   const diffStats = useMemo(() => getDiffStats(request.toolName, request.input), [request.toolName, request.input])
 
@@ -564,7 +530,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
       }}>
-        {/* Header */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '16px 20px',
@@ -576,7 +542,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
           </span>
         </div>
 
-        {/* Tool badge + risk + stats */}
+        {}
         <div style={{ padding: '12px 20px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -601,7 +567,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
           )}
         </div>
 
-        {/* Preview area */}
+        {}
         <div style={{
           flex: 1, minHeight: 0, margin: '12px 20px',
           padding: 12, borderRadius: 'var(--radius-md)',
@@ -609,20 +575,20 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
           overflow: 'auto', maxHeight: 400,
           position: 'relative',
         }}>
-          {/* Copy button — top-right of preview area */}
+          {}
           <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>
             <CopyButton getText={() => request.input} />
           </div>
           <ToolPreview toolName={request.toolName} input={request.input} />
         </div>
 
-        {/* Buttons */}
+        {}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
           justifyContent: 'space-between',
           padding: '0 20px 16px',
         }}>
-          {/* Keyboard hint */}
+          {}
           <div style={{
             fontSize: 11, color: 'var(--text-tertiary)',
             display: 'flex', alignItems: 'center', gap: 8,

@@ -3,11 +3,6 @@ import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '.
 import { ToggleAlwaysOnTop, IsAlwaysOnTop } from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
-// TopDragBar — fully custom-drawn title bar for ALL platforms.
-// macOS: traffic-light circles on the left (red/yellow/green).
-// Windows/Linux: flat square buttons on the right (−/□/×).
-// No native title bar is used anywhere (Frameless: true + HideTitleBar: true).
-
 const isMac = navigator.platform?.toLowerCase().includes('mac') || navigator.userAgent?.includes('Mac OS')
 
 interface TopDragBarProps {
@@ -51,8 +46,6 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     }
   }
 
-  // Shared styles ----------------------------------------------------------
-
   const barStyle: React.CSSProperties = {
     height: 36,
     flexShrink: 0,
@@ -73,7 +66,6 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     minWidth: 0,
   }
 
-  // macOS traffic-light button
   const lightBtn = (color: string): React.CSSProperties => ({
     width: 12,
     height: 12,
@@ -92,7 +84,6 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     transition: 'background 0.12s',
   })
 
-  // Windows/Linux flat button base
   const flatBtn = (isClose = false): React.CSSProperties => ({
     width: 46,
     height: '100%',
@@ -106,9 +97,6 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     lineHeight: 1,
   })
 
-  // ------------------------------------------------------------------------
-  // macOS traffic lights (left side)
-  // ------------------------------------------------------------------------
   const macLights = isMac ? (
     <div
       style={{ display: 'flex', gap: 8, alignItems: 'center' }}
@@ -128,9 +116,6 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     </div>
   ) : null
 
-  // ------------------------------------------------------------------------
-  // Windows/Linux flat buttons (right side)
-  // ------------------------------------------------------------------------
   const winButtons = !isMac ? (
     <div style={{ display: 'flex', height: '100%' }} onClick={(e) => e.stopPropagation()}>
       <button
@@ -162,7 +147,7 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
 
   return (
     <div style={barStyle}>
-      {/* Left: platform buttons + logo + title */}
+      {}
       <div style={leftSection}>
         {macLights}
         <span style={{
@@ -191,7 +176,7 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
         </div>
       </div>
 
-      {/* Right: pin button (all platforms) + Windows/Linux buttons */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>
         <button
           onClick={handleTogglePin}
