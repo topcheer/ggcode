@@ -135,9 +135,11 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 		new_  string
 	}
 	var positions []editPos
+	var problems []string
 	for i, edit := range edits {
 		if edit.OldText == "" {
-			return "", 0, fmt.Sprintf("edits[%d]: old_text must not be empty", i)
+			problems = append(problems, fmt.Sprintf("edits[%d]: old_text must not be empty", i))
+			continue
 		}
 		mr := resolveOldText(content, edit.OldText)
 		if mr.canonical == "" {
@@ -146,7 +148,8 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 			if hint != "" {
 				msg += ". " + hint
 			}
-			return "", 0, msg
+			problems = append(problems, msg)
+			continue
 		}
 		oldText := mr.canonical
 		count := strings.Count(content, oldText)
@@ -156,14 +159,11 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 				"edits[%d]: old_text found %d times — must be unique. Add 1-3 lines of surrounding context to disambiguate, or copy the exact numbered lines from read_file so this edit is line-number anchored.",
 				i, count,
 			)
-			if len(lines) > 0 {
-				more := ""
-				if count > len(lines) {
-					more = fmt.Sprintf(" (showing first %d)", len(lines))
-				}
-				msg += fmt.Sprintf(" Matches start at line(s): %s%s.", formatMatchLines(lines), more)
+			if hint := MatchLineHint(count, lines); hint != "" {
+				msg += " " + hint
 			}
-			return "", 0, msg
+			problems = append(problems, msg)
+			continue
 		}
 
 		if !mr.anchored && count <= 1 {
@@ -175,7 +175,8 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 				if len(looseLines) > 0 {
 					msg += fmt.Sprintf(" Loose matches start at line(s): %s.", formatMatchLines(looseLines))
 				}
-				return "", 0, msg
+				problems = append(problems, msg)
+				continue
 			}
 		}
 		idx := mr.start
@@ -200,11 +201,14 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 	sort.Slice(positions, func(i, j int) bool { return positions[i].start < positions[j].start })
 	for i := 1; i < len(positions); i++ {
 		if positions[i].start < positions[i-1].end {
-			return "", 0, fmt.Sprintf(
+			problems = append(problems, fmt.Sprintf(
 				"edits[%d] and edits[%d]: overlapping matches — each old_text must not overlap",
 				positions[i-1].idx, positions[i].idx,
-			)
+			))
 		}
+	}
+	if len(problems) > 0 {
+		return "", 0, strings.Join(problems, "\n")
 	}
 
 	out := content
