@@ -973,11 +973,13 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 
 	fmt.Fprint(out, "\n=== IM Adapter Setup Wizard ===\n\n")
 
+	// Step 1: Name
 	name := prompt("Adapter name (e.g. my-qq, my-bot)", "")
 	if name == "" {
 		return "", "", nil, fmt.Errorf("adapter name is required")
 	}
 
+	// Step 2: Platform
 	fmt.Fprintln(out, "\nSupported platforms:")
 	fmt.Fprintln(out, "  1) qq         — QQ (Tencent)")
 	fmt.Fprintln(out, "  2) telegram   — Telegram Bot")
@@ -1002,6 +1004,7 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 		plt = canonical
 	}
 
+	// Step 3: Platform-specific extras
 	fmt.Fprintf(out, "\nConfiguring %s adapter.\n", plt)
 
 	var requiredExtras []string
@@ -1031,6 +1034,7 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 		extras = append(extras, key+"="+val)
 	}
 
+	// Step 4: Optional extras
 	fmt.Fprintln(out, "\nOptional extras (KEY=VALUE). Press Enter on empty line to skip.")
 	for {
 		extra := prompt(fmt.Sprintf("Extra #%d", len(extras)+1), "")
