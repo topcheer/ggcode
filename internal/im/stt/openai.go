@@ -41,8 +41,7 @@ func NewOpenAICompatible(baseURL, apiKey, model, provider string) *OpenAICompati
 		apiKey:   strings.TrimSpace(apiKey),
 		model:    strings.TrimSpace(model),
 		provider: strings.TrimSpace(provider),
-		// #2055: 60s was set when uploads were capped at the 20MB image
-		// ceiling; a 100MB audio upload on a typical uplink takes minutes.
+
 		httpClient: util.NewInsecureAwareClient(300 * time.Second),
 	}
 }
@@ -86,9 +85,7 @@ func (t *OpenAICompatible) Transcribe(ctx context.Context, req Request) (Result,
 	if err != nil {
 		return Result{}, fmt.Errorf("create STT form file: %w", err)
 	}
-	// #1893: same unbounded-read class as the image attachments - the
-	// path can be externally provided, so bound it; #2055: with the
-	// audio-appropriate ceiling, not the 20MB image one.
+
 	f, err := os.Open(audioPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("read STT audio file: %w", err)

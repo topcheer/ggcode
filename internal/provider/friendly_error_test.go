@@ -58,7 +58,7 @@ func TestFriendlyError_403_RateLimit(t *testing.T) {
 }
 
 func TestFriendlyError_403_AccessTerminated(t *testing.T) {
-	// Simulates Kimi coding API quota exhaustion
+
 	err := &openai.APIError{
 		HTTPStatusCode: 403,
 		Message:        "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing",

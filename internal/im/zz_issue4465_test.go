@@ -28,20 +28,16 @@ func TestMattermostSeenNotWrittenForFilteredMessages(t *testing.T) {
 		}
 	}
 
-	// Public channel, no mention -> filtered by mention gating.
 	a.handleWSEvent(nil, mkEvent("p-filtered", "O", "ch1", "hello"))
 	if _, ok := a.seen["p-filtered"]; ok {
 		t.Errorf("filtered (no-mention) message must not be marked seen, seen map = %v", a.seen)
 	}
 
-	// DM passes filters -> seen must be written.
 	a.handleWSEvent(nil, mkEvent("p-live", "D", "dm1", "hello"))
 	if _, ok := a.seen["p-live"]; !ok {
 		t.Errorf("message that passed all filters must be marked seen, seen map = %v", a.seen)
 	}
 
-	// Replay of the same DM post must be deduped: seen already contains it,
-	// so the second delivery is a no-op (postID still present, count stable).
 	before := len(a.seen)
 	a.handleWSEvent(nil, mkEvent("p-live", "D", "dm1", "hello"))
 	if len(a.seen) != before {

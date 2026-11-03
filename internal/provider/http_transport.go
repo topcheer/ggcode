@@ -30,26 +30,16 @@ func newProviderHTTPTransport() http.RoundTripper {
 		MaxIdleConns:          providerMaxIdleConns,
 		MaxIdleConnsPerHost:   providerMaxIdleConnsPerHost,
 		Proxy:                 util.SmartProxyFunc(),
-		// Disable HTTP/2 to prevent a crash in net/http's http2 client conn
-		// readLoop on Windows (Go 1.26.x). The http2Framer.ReadFrameHeader
-		// panics with a nil pointer when the connection is reset by the peer
-		// during the TLS handshake. HTTP/1.1 is universally supported by all
-		// LLM API endpoints and avoids this Go runtime bug entirely.
+
 		ForceAttemptHTTP2: false,
 	}
 	t := util.WrapTransport(base)
 	if t.TLSClientConfig == nil {
 		t.TLSClientConfig = &tls.Config{}
 	}
-	// Restrict ALPN to HTTP/1.1 only — prevents the server from upgrading
-	// to HTTP/2 even if it advertises it.
+
 	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 
-	// Outermost guard: cut off response bodies that stay silent past the
-	// idle-read window (dropped proxy tunnel hang). See
-	// idle_timeout_transport.go. Returns http.RoundTripper so callers cannot
-	// accidentally reach past the guard; none of them currently type-assert
-	// back to *http.Transport.
 	timeout := streamIdleReadTimeoutFromEnv()
 	if timeout > 0 {
 		return &idleTimeoutTransport{base: t, timeout: timeout}

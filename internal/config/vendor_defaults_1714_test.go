@@ -8,8 +8,7 @@ import "testing"
 // it (#1525 lineage). Pin both so a future generator drift that leaks
 // coding-plan models into the moonshot panel (case 3) fails here.
 func TestLookupVendorModelsMoonshotKimi1714(t *testing.T) {
-	// "moonshot" resolves via the populate alias table (moonshotai +
-	// moonshotai-cn), not as a raw vendorModels key.
+
 	mm := lookupVendorModels("moonshotai")
 	if len(mm) == 0 {
 		t.Fatal("moonshotai must resolve to a non-empty model list")
@@ -18,9 +17,7 @@ func TestLookupVendorModelsMoonshotKimi1714(t *testing.T) {
 	if len(kk) == 0 {
 		t.Fatal("kimi-for-coding source must resolve")
 	}
-	// The alias table itself must keep kimi separate from moonshot -
-	// a drift that folds coding-plan sources into "moonshot" changes
-	// the generated panel silently.
+
 	cfg := &Config{Vendors: map[string]VendorConfig{
 		"moonshot": {Endpoints: map[string]EndpointConfig{
 			"e1": {BaseURL: "https://api.moonshot.cn/v1"},

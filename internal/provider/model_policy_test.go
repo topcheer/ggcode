@@ -74,7 +74,6 @@ func TestNewProviderAppliesCallPolicy(t *testing.T) {
 		t.Errorf("policy.maxRetries = %d, want 3", op.policy.maxRetries)
 	}
 
-	// Zero policy: providers stay on defaults.
 	resolved.RequestTimeout, resolved.MaxRetries = 0, 0
 	p2, err := NewProvider(resolved)
 	if err != nil {

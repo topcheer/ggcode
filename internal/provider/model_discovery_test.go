@@ -150,12 +150,6 @@ func TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// #4665: the same-host sharing semantics now require the same base PATH
-	// too (oneapi/litellm real deployments serve both protocols under the
-	// same /v1 registry root). Same host:port + same path across protocols
-	// still shares one cached model list; same host with a DIFFERENT path is
-	// a different upstream (reverse-proxy split) and must not share - pinned
-	// in zz_issue4665_test.go.
 	first, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
 		VendorID:   "custom",
 		EndpointID: "openai",
@@ -301,7 +295,6 @@ func TestForceDiscoverModelsBypassesLiveCache(t *testing.T) {
 		t.Fatalf("unexpected initial models: %v", models)
 	}
 
-	// Server-side registry changed; the cache is still fresh within TTL.
 	fresh := "fresh-model"
 	current.Store(&fresh)
 	models, err = ForceDiscoverModels(context.Background(), resolved)
@@ -315,8 +308,6 @@ func TestForceDiscoverModelsBypassesLiveCache(t *testing.T) {
 		t.Fatalf("force path must hit the remote API again (2 hits total), got %d", hits.Load())
 	}
 
-	// The refreshed list is now cached: a normal discovery serves it with no
-	// further network traffic.
 	models, err = DiscoverModels(context.Background(), resolved)
 	if err != nil {
 		t.Fatalf("post-force cached DiscoverModels: %v", err)
@@ -421,7 +412,7 @@ func TestDiscoverModelsExpandsEnvRefKey(t *testing.T) {
 		EndpointID: "teee",
 		Protocol:   "openai",
 		BaseURL:    server.URL + "/v1",
-		APIKey:     "${" + envVar + "}", // raw env ref, not pre-expanded
+		APIKey:     "${" + envVar + "}",
 	})
 	if err != nil {
 		t.Fatalf("DiscoverModels should expand the env ref and succeed, got: %v", err)
@@ -440,11 +431,11 @@ func TestDiscoverModelsGeminiPaginationPage2Error(t *testing.T) {
 	resetModelDiscoveryCacheForTests(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("pageToken") == "" {
-			// Page 1: fine, but more pages exist.
+
 			_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-2.5-pro"}],"nextPageToken":"tok-2"}`))
 			return
 		}
-		// Page 2: Google-style JSON error body with a non-2xx status.
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"Resource exhausted"}}`))
@@ -464,7 +455,7 @@ func TestDiscoverModelsGeminiPaginationPage2Error(t *testing.T) {
 	if !strings.Contains(err.Error(), "page 2") || !strings.Contains(err.Error(), "429") {
 		t.Errorf("error should name page 2 and status 429, got: %v", err)
 	}
-	// Nothing may be cached from the failed discovery.
+
 	modelDiscoveryCacheMu.Lock()
 	cached := len(modelDiscoveryCache)
 	modelDiscoveryCacheMu.Unlock()

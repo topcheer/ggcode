@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// The guard compares the live HOME against realHomeSnapshot (captured at
-// process init). This package's TestMain already redirects HOME to a
-// scratch dir, so by default the guard sees an isolated home and passes.
-// These tests flip HOME back to the snapshot value to exercise the
-// fail-fast branches.
-
 // withUnisolatedHome temporarily restores the snapshot (real) HOME.
 func withUnisolatedHome(t *testing.T) {
 	t.Helper()
@@ -43,7 +37,7 @@ func TestGuardRealHomeDirPanicsWhenUnisolated(t *testing.T) {
 }
 
 func TestGuardRealHomeDirPassesWhenIsolated(t *testing.T) {
-	// HOME is the package TestMain scratch dir already.
+
 	dir := ConfigDir()
 	if dir == "" {
 		t.Fatal("ConfigDir() returned empty")
@@ -54,7 +48,7 @@ func TestGuardRealHomeDirOptIn(t *testing.T) {
 	withUnisolatedHome(t)
 	os.Setenv("GGCODE_TEST_ALLOW_REAL_HOME", "1")
 	t.Cleanup(func() { os.Unsetenv("GGCODE_TEST_ALLOW_REAL_HOME") })
-	// Must not panic.
+
 	_ = ConfigDir()
 }
 
@@ -72,8 +66,7 @@ func TestGuardRealHomePathRejectsRealHomeTarget(t *testing.T) {
 
 func TestGuardRealHomePathAllowsTempTargets(t *testing.T) {
 	withUnisolatedHome(t)
-	// Explicit temp paths (tests that pass a tempdir file into Load) pass
-	// even though HOME is not isolated.
+
 	if err := GuardRealHomePath(t.TempDir()+"/config.yaml", "Save()"); err != nil {
 		t.Fatalf("temp target should pass: %v", err)
 	}

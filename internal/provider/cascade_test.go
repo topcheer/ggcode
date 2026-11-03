@@ -71,8 +71,6 @@ func TestCascade_MultiLevelFailover(t *testing.T) {
 	fb2 := &mockProvider{name: "fb2"}
 	fp := NewCascadeProvider([]Provider{primary, fb1, fb2}, "p -> fb1 -> fb2")
 
-	// Call 1: primary fails -> retry on fb1 fails -> error returned (one
-	// advancement per call). Active is now fb1.
 	_, err := fp.Chat(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("both sides failing must surface an error on the first call")
@@ -81,7 +79,6 @@ func TestCascade_MultiLevelFailover(t *testing.T) {
 		t.Fatalf("after primary quota failure active must be fb1 (1), got %d", got)
 	}
 
-	// Call 2: fb1 fails (auth) -> retry succeeds on fb2.
 	resp, err := fp.Chat(context.Background(), nil, nil)
 	if err != nil || resp == nil {
 		t.Fatalf("fb2 must serve after primary+fb1 both fail: %v", err)
@@ -97,7 +94,7 @@ func TestCascade_WraparoundToPrimary(t *testing.T) {
 	primary := &mockProvider{name: "primary"}
 	fb1 := &countProvider{name: "fb1", err: errors.New("insufficient_quota: quota exceeded")}
 	fp := NewCascadeProvider([]Provider{primary, fb1}, "p -> fb1")
-	fp.activeIdx.Store(1) // already failed over to fb1
+	fp.activeIdx.Store(1)
 
 	_, err := fp.Chat(context.Background(), nil, nil)
 	if err != nil {
@@ -115,13 +112,12 @@ func TestCascade_RecoveryPrefersPrimary(t *testing.T) {
 	primary := &recoverableProvider{name: "primary"}
 	primary.failing.Store(true)
 	fb1 := &recoverableProvider{name: "fb1"}
-	fb1.failing.Store(true) // also down initially -> chain lands on fb2
+	fb1.failing.Store(true)
 	fb2 := &mockProvider{name: "fb2"}
 
 	fp := NewCascadeProvider([]Provider{primary, fb1, fb2}, "p -> fb1 -> fb2")
 	fp.probeInterval = 10 * time.Millisecond
 
-	// Drive the chain to level 2.
 	for i := 0; i < 4 && fp.activeIdx.Load() != 2; i++ {
 		fp.Chat(context.Background(), nil, nil)
 	}
@@ -129,11 +125,9 @@ func TestCascade_RecoveryPrefersPrimary(t *testing.T) {
 		t.Fatalf("expected chain to reach fb2 (2), got %d", got)
 	}
 
-	// Both higher levels recover simultaneously.
 	fb1.Clear()
 	primary.Clear()
 
-	// Prober must land on the PRIMARY (0) even though fb1 also recovered.
 	deadline := time.Now().Add(3 * time.Second)
 	for fp.activeIdx.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -151,7 +145,7 @@ func TestCascade_RecoveryPrefersPrimary(t *testing.T) {
 // later upgrades to the primary once it recovers too.
 func TestCascade_RecoverySkipsStillDown(t *testing.T) {
 	primary := &recoverableProvider{name: "primary"}
-	primary.failing.Store(true) // stays down
+	primary.failing.Store(true)
 	fb1 := &recoverableProvider{name: "fb1"}
 	fb1.failing.Store(false)
 	fb2 := &mockProvider{name: "fb2"}
@@ -163,7 +157,6 @@ func TestCascade_RecoverySkipsStillDown(t *testing.T) {
 	fp.startRecoveryProberLocked()
 	fp.mu.Unlock()
 
-	// fb1 healthy, primary down -> land on fb1 (1).
 	deadline := time.Now().Add(3 * time.Second)
 	for fp.activeIdx.Load() != 1 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -172,7 +165,6 @@ func TestCascade_RecoverySkipsStillDown(t *testing.T) {
 		t.Fatalf("expected intermediate recovery to fb1 (1), got %d", got)
 	}
 
-	// Primary recovers -> prober (still running on level != 0) upgrades to 0.
 	primary.Clear()
 	deadline = time.Now().Add(3 * time.Second)
 	for fp.activeIdx.Load() != 0 && time.Now().Before(deadline) {

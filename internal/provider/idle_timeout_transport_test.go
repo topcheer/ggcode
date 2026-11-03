@@ -18,7 +18,7 @@ type blockingBody struct {
 func newBlockingBody() *blockingBody { return &blockingBody{closed: make(chan struct{})} }
 
 func (b *blockingBody) Read(p []byte) (int, error) {
-	<-b.closed // block forever until closed
+	<-b.closed
 	return 0, io.EOF
 }
 
@@ -50,10 +50,7 @@ func (s *stubRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 func TestIdleTimeoutTransportCutsSilentBody(t *testing.T) {
-	// The body mimics real net/http semantics: a Read blocked on a dead
-	// connection returns once the request context is cancelled (transport
-	// tears down the conn). This is the guarantee idleTimeoutTransport
-	// relies on to unblock the SSE read loop.
+
 	stub := &ctxBodyTransport{}
 	tr := &idleTimeoutTransport{base: stub, timeout: 80 * time.Millisecond}
 
@@ -109,8 +106,7 @@ func (b ctxBody) Read(p []byte) (int, error) {
 func (b ctxBody) Close() error { return nil }
 
 func TestIdleTimeoutBodyResetsOnData(t *testing.T) {
-	// Feed data slowly: each chunk arrives well within the idle window, so
-	// the watchdog keeps resetting and the stream completes normally.
+
 	slow := io.NopCloser(io.MultiReader(
 		bytes.NewReader([]byte("data: chunk1\n\n")),
 		&delayedReader{d: 150 * time.Millisecond, r: bytes.NewReader([]byte("data: chunk2\n\n"))},
@@ -137,10 +133,7 @@ func TestIdleTimeoutBodyResetsOnData(t *testing.T) {
 }
 
 func TestIdleTimeoutTransportCutsBlockedRoundTrip(t *testing.T) {
-	// Simulates the request-write wedge from the proxy-hang postmortem:
-	// RoundTrip never returns (write to a dead peer / waiting for response
-	// headers on a CLOSE-WAIT conn). net/http aborts such a request once
-	// its context is cancelled, which is what the stub models.
+
 	stub := &ctxBlockedRoundTripper{}
 	tr := &idleTimeoutTransport{base: stub, timeout: 80 * time.Millisecond}
 
@@ -173,7 +166,7 @@ func (s *ctxBlockedRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 func TestIdleTimeoutTransportDisabled(t *testing.T) {
-	// timeout <= 0 must bypass the wrapper entirely.
+
 	stub := &stubRoundTripper{status: 200, body: newBlockingBody()}
 	tr := &idleTimeoutTransport{base: stub, timeout: 0}
 

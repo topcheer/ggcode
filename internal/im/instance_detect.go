@@ -62,15 +62,12 @@ func (d *InstanceDetect) Register() ([]InstanceInfo, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Ensure directory exists
 	if err := os.MkdirAll(d.dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create instances dir: %w", err)
 	}
 
-	// Clean stale entries and collect live ones
 	others := d.cleanAndCollectLocked()
 
-	// Write our PID file
 	data, err := json.Marshal(d.info)
 	if err != nil {
 		return nil, fmt.Errorf("marshal instance info: %w", err)
@@ -94,7 +91,7 @@ func (d *InstanceDetect) Unregister() {
 	}
 
 	pidFile := d.pidFilePath(d.info.PID, d.info.UUID)
-	os.Remove(pidFile) // ignore error — best effort
+	os.Remove(pidFile)
 	d.registered = false
 }
 
@@ -120,7 +117,7 @@ func (d *InstanceDetect) IsPrimary() bool {
 
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
-		return true // no instances dir → we're primary
+		return true
 	}
 
 	for _, entry := range entries {
@@ -132,13 +129,13 @@ func (d *InstanceDetect) IsPrimary() bool {
 			continue
 		}
 		if info.UUID == d.info.UUID {
-			continue // ourselves
+			continue
 		}
 		if !d.checkAlive(info.PID) {
-			continue // crashed leftover PID file - skip (align with ListInstances)
+			continue
 		}
 		if info.StartedAt.Before(d.info.StartedAt) {
-			return false // someone started before us
+			return false
 		}
 	}
 	return true
@@ -207,18 +204,16 @@ func (d *InstanceDetect) cleanAndCollectLocked() []InstanceInfo {
 		fullPath := filepath.Join(d.dir, entry.Name())
 		info, err := d.readInstanceFile(fullPath)
 		if err != nil {
-			// Corrupted file — remove it
+
 			os.Remove(fullPath)
 			continue
 		}
 
-		// Skip ourselves (previous crash left a file with our PID but different UUID)
 		if info.PID == d.info.PID && info.UUID != d.info.UUID {
 			os.Remove(fullPath)
 			continue
 		}
 
-		// Check if process is still alive
 		if !d.checkAlive(info.PID) {
 			os.Remove(fullPath)
 			continue
@@ -248,7 +243,7 @@ func (d *InstanceDetect) readInstanceFile(path string) (InstanceInfo, error) {
 	if err := json.Unmarshal(data, &info); err != nil {
 		return InstanceInfo{}, err
 	}
-	// Validate required fields
+
 	if info.PID <= 0 || info.UUID == "" {
 		return InstanceInfo{}, fmt.Errorf("invalid instance file: %s", path)
 	}

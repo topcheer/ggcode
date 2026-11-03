@@ -9,12 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Model health reporting: when the local LLM becomes unusable (quota
-// exhausted, auth failure, sustained rate limiting), the node broadcasts a
-// degraded status in its presence so peers can make informed decisions when
-// choosing collaboration targets. Advisory only — peers still deliver DMs;
-// the status helps orchestrating agents skip or deprioritize degraded nodes.
-
 // Agent status values broadcast in Participant.AgentStatus.
 const (
 	AgentStatusOK          = ""             // model healthy
@@ -76,8 +70,8 @@ func (h *Hub) SetModel(model string) {
 	if !changed {
 		return
 	}
-	h.setAgentStatus(AgentStatusOK) // clears + broadcasts if was degraded
-	h.broadcastPresence()           // propagate new model name regardless
+	h.setAgentStatus(AgentStatusOK)
+	h.broadcastPresence()
 }
 
 // ReportAgentFailure classifies a run-level LLM failure and updates the
@@ -100,7 +94,7 @@ func (h *Hub) ReportAgentFailure(class provider.FailureClass) {
 			h.setAgentStatus(AgentStatusRateLimited)
 		}
 	default:
-		// FailureNetwork/FailureTransient/FailureNone: not a model health signal.
+
 	}
 }
 
@@ -135,7 +129,7 @@ func (h *Hub) setAgentStatus(status string) {
 	} else {
 		h.agentStatusSince = 0
 	}
-	// Stop any running probe loop; restart below if still degraded.
+
 	if h.probeCancel != nil {
 		h.probeCancel()
 		h.probeCancel = nil
@@ -196,22 +190,20 @@ func (h *Hub) healthProbeLoop(ctx context.Context, status string, prober HealthP
 
 		err := prober(ctx)
 		if ctx.Err() != nil {
-			return // cancelled during probe
+			return
 		}
 		if err == nil {
 			successes++
 			debug.Log("lanchat", "health probe success %d/%d (status=%s)", successes, healthProbeSuccessThreshold, status)
 			if successes >= healthProbeSuccessThreshold {
-				// ReportAgentSuccess -> setAgentStatus(OK) cancels this ctx.
+
 				h.ReportAgentSuccess()
 				return
 			}
 		} else {
 			successes = 0
 			debug.Log("lanchat", "health probe failed (status=%s): %v", status, err)
-			// If the failure class changed (e.g. rate limit turned out to be
-			// quota exhaustion), update the broadcast reason. setAgentStatus
-			// cancels this loop and starts a fresh one with the new backoff.
+
 			if class := provider.ClassifyLLMError(err); class == provider.FailureQuota || class == provider.FailureAuth {
 				if class.String() != status {
 					h.setAgentStatus(class.String())

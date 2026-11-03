@@ -25,7 +25,6 @@ func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal web_search_tool_result: %v", err)
 	}
 
-	// 1. Non-streaming conversion keeps server blocks verbatim.
 	converted := convertAnthropicResponse([]anthropic.ContentBlockUnion{useBlock, resultBlock})
 	if len(converted) != 2 {
 		t.Fatalf("expected 2 blocks, got %d", len(converted))
@@ -42,7 +41,6 @@ func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 		t.Fatalf("server_tool_use Raw not verbatim: %s", converted[0].Raw)
 	}
 
-	// 2. Raw converts back to request-side params.
 	useParam, err := serverToolBlockParam(converted[0].Raw)
 	if err != nil {
 		t.Fatalf("serverToolBlockParam(use): %v", err)
@@ -50,7 +48,7 @@ func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 	if useParam.OfServerToolUse == nil || useParam.OfServerToolUse.ID != "srvtoolu_01ABC" || useParam.OfServerToolUse.Name != "web_search" {
 		t.Fatalf("use param mismatch: %+v", useParam)
 	}
-	// ToParam() decodes Input into map[string]any; compare semantically.
+
 	useInput, err := json.Marshal(useParam.OfServerToolUse.Input)
 	if err != nil || string(useInput) != `{"query":"ggcode anthropic"}` {
 		t.Fatalf("use param input not preserved: %v (%v)", useParam.OfServerToolUse.Input, err)
@@ -64,7 +62,6 @@ func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 		t.Fatalf("result param mismatch: %+v", resultParam)
 	}
 
-	// 3. Round-trip fidelity: params marshal back to equivalent JSON.
 	useBack, _ := json.Marshal(useParam)
 	var useRound anthropic.ServerToolUseBlock
 	if err := json.Unmarshal(useBack, &useRound); err != nil {
@@ -99,7 +96,6 @@ func TestServerToolDeclarationInParams(t *testing.T) {
 		t.Fatal("cache breakpoint missing on last server tool declaration")
 	}
 
-	// Wire format sanity: serialized declaration carries the native types.
 	raw, err := json.Marshal(params.Tools)
 	if err != nil {
 		t.Fatalf("marshal tools: %v", err)
@@ -155,7 +151,7 @@ func TestToolSearchDeclarationAndBetaOpts(t *testing.T) {
 	if len(p.betaHeaderOpts(false)) != 1 {
 		t.Fatal("expected 1 beta request opt")
 	}
-	// Inactive providers must not send the header (proxy compatibility).
+
 	q := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	q.SetServerTools([]ServerToolConfig{{Type: "web_search_20250305"}})
 	if len(q.betaHeaderOpts(false)) != 0 {
@@ -262,7 +258,7 @@ func TestDeferLoadingToolParams(t *testing.T) {
 			t.Fatalf("non-last tool %q must not carry the cache breakpoint", wt.Name)
 		}
 	}
-	// All-deferred edge: no breakpoint anywhere, request still valid.
+
 	all := p.buildParams(context.Background(), []Message{}, []ToolDefinition{
 		{Name: "mcp__srv__c", Description: "c", Parameters: json.RawMessage(`{"type":"object"}`), DeferLoading: true},
 	})

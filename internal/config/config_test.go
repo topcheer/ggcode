@@ -325,7 +325,7 @@ vendors:
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 plaintext findings, got %#v", findings)
 	}
-	// Check that both expected findings exist (order not guaranteed)
+
 	foundAnthropic := false
 	foundZai := false
 	for _, f := range findings {
@@ -551,7 +551,7 @@ func TestLoad_BigmodelBaseURLReusesZaiAnthropicEndpoint(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic/v1")
 	t.Setenv("ANTHROPIC_API_KEY", "test-zai-key")
-	t.Setenv("ANTHROPIC_AUTH_TOKEN", "") // ensure AUTH_TOKEN doesn't override
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
 	if err != nil {
@@ -581,7 +581,7 @@ func TestLoad_BigmodelBaseURLExactMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	// Exact match should also route to zai
+
 	if cfg.Vendor != "zai" {
 		t.Fatalf("expected vendor zai for exact bigmodel URL, got %q", cfg.Vendor)
 	}
@@ -602,8 +602,7 @@ func TestLoad_NonBigmodelURLDoesNotBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	// Non-bigmodel URL should NOT trigger bootstrap at all.
-	// Default vendor/endpoint/model should be preserved.
+
 	if cfg.Vendor != "zai" {
 		t.Fatalf("expected default vendor zai, got %q", cfg.Vendor)
 	}
@@ -997,8 +996,6 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		}
 	}
 
-	// Verify ai-gateway endpoints (formerly top-level vendors + models.dev
-	// gateway family folded in).
 	wantGatewayEndpoints := map[string]string{
 		"302ai":          "302.AI",
 		"aihubmix":       "AIHubMix",
@@ -1208,8 +1205,7 @@ func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
 		t.Fatalf("expected kimi default model kimi-for-coding, got %q", ep.DefaultModel)
 	}
 	if ep.ContextWindow != 1048576 {
-		// 2026-09-20 models.dev: kimi-for-coding context upgraded 256k -> 1M
-		// (k3 generation). Pinned to upstream data via sync-model-caps.
+
 		t.Fatalf("expected kimi context window 1048576, got %d", ep.ContextWindow)
 	}
 	if ep.MaxTokens != 32768 {
@@ -1430,7 +1426,7 @@ func TestAddEndpoint(t *testing.T) {
 	if ep.BaseURL != "https://api.example.com/v1" {
 		t.Errorf("unexpected base_url: %s", ep.BaseURL)
 	}
-	// API key should be stored as env reference
+
 	if ep.APIKey == "" {
 		t.Error("expected non-empty api_key")
 	}
@@ -1468,7 +1464,7 @@ func TestAddEndpointWithEnvRef(t *testing.T) {
 
 func TestRemoveEndpoint(t *testing.T) {
 	cfg := testConfigWithVendor()
-	// Add then remove
+
 	cfg.AddEndpoint("zai", "temp", "openai", "https://example.com", "sk-test")
 	if _, ok := cfg.Vendors["zai"].Endpoints["temp"]; !ok {
 		t.Fatal("endpoint not created")
@@ -1491,11 +1487,11 @@ func TestRemoveEndpointNonExistent(t *testing.T) {
 
 func TestEndpointAPIKeyFallbackToVendor(t *testing.T) {
 	cfg := testConfigWithVendor()
-	// Set vendor-level key with env var
+
 	t.Setenv("ZAI_API_KEY", "sk-vendor-test-key")
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
-	// Create endpoint without key
+
 	vc.Endpoints["fallback-ep"] = EndpointConfig{Protocol: "openai", BaseURL: "https://example.com"}
 	cfg.Vendors["zai"] = vc
 
@@ -1506,7 +1502,7 @@ func TestEndpointAPIKeyFallbackToVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Resolved key should be the expanded value, not the ${VAR} reference
+
 	if resolved.APIKey != "sk-vendor-test-key" {
 		t.Errorf("expected expanded vendor key, got %s", resolved.APIKey)
 	}
@@ -1516,7 +1512,7 @@ func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
-	// Create endpoint WITH its own key that resolves successfully
+
 	t.Setenv("ENDPOINT_OVERRIDDEN_KEY", "sk-endpoint-override-value")
 	vc.Endpoints["override-ep"] = EndpointConfig{
 		Protocol: "openai",
@@ -1532,7 +1528,7 @@ func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Resolved key should be expanded, not the reference
+
 	if resolved.APIKey != "sk-endpoint-override-value" {
 		t.Errorf("expected expanded endpoint key, got %s", resolved.APIKey)
 	}
@@ -1543,7 +1539,7 @@ func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "sk-vendor-fallback-key")
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
-	// Create endpoint with an unresolvable key (env var not set)
+
 	vc.Endpoints["broken-ep"] = EndpointConfig{
 		Protocol: "openai",
 		BaseURL:  "https://example.com",
@@ -1558,8 +1554,7 @@ func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should fall back to vendor key since endpoint key is unresolvable,
-	// and the vendor key should be expanded to its actual value.
+
 	if resolved.APIKey != "sk-vendor-fallback-key" {
 		t.Errorf("expected expanded vendor fallback key, got %s", resolved.APIKey)
 	}
@@ -1567,7 +1562,7 @@ func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 
 func TestMergeDefaultEndpoints_AddsMissingEndpoint(t *testing.T) {
 	cfg := DefaultConfig()
-	// Remove one endpoint to simulate a config file that predates the addition.
+
 	delete(cfg.Vendors["zai"].Endpoints, "global-api-openai")
 
 	mergeDefaultEndpoints(cfg, DefaultConfig())
@@ -1584,7 +1579,7 @@ func TestMergeDefaultEndpoints_AddsMissingEndpoint(t *testing.T) {
 func TestMergeDefaultEndpoints_FixesPlaceholderURL(t *testing.T) {
 	cfg := DefaultConfig()
 	vc := cfg.Vendors["zai"]
-	// Simulate a config file that has the endpoint name but with a placeholder URL.
+
 	vc.Endpoints["global-api-openai"] = EndpointConfig{
 		Protocol: "openai",
 		BaseURL:  "https://your-global-api-endpoint.example.com/v1",
@@ -1598,7 +1593,7 @@ func TestMergeDefaultEndpoints_FixesPlaceholderURL(t *testing.T) {
 	if ep.BaseURL != "https://api.z.ai/api/paas/v4" {
 		t.Fatalf("expected placeholder to be fixed, got %s", ep.BaseURL)
 	}
-	// User customizations should be preserved.
+
 	found := false
 	for _, m := range ep.Models {
 		if m == "custom-model" {
@@ -1613,7 +1608,7 @@ func TestMergeDefaultEndpoints_FixesPlaceholderURL(t *testing.T) {
 func TestMergeDefaultEndpoints_PreservesRealURL(t *testing.T) {
 	cfg := DefaultConfig()
 	vc := cfg.Vendors["zai"]
-	// User has a custom real URL — should NOT be overwritten.
+
 	vc.Endpoints["global-api-openai"] = EndpointConfig{
 		Protocol: "openai",
 		BaseURL:  "https://my-custom-proxy.example.com/v1",
@@ -1629,11 +1624,8 @@ func TestMergeDefaultEndpoints_PreservesRealURL(t *testing.T) {
 	}
 }
 
-// --- API Key edge case tests ---
-
 func TestResolveEndpointExpandsEnvRef(t *testing.T) {
-	// After SetEndpointAPIKey stores a ${VAR} reference, ResolveEndpointSelection
-	// must expand it so the provider gets the actual key value.
+
 	cfg := testConfigWithVendor()
 	t.Setenv("MY_TEST_EP_KEY", "sk-actual-ep-value")
 	vc := cfg.Vendors["zai"]
@@ -1656,7 +1648,7 @@ func TestResolveEndpointExpandsEnvRef(t *testing.T) {
 }
 
 func TestResolveEndpointEmptyEndpointKeyUsesVendorKey(t *testing.T) {
-	// Empty endpoint key should fall back to vendor key (expanded).
+
 	cfg := testConfigWithVendor()
 	t.Setenv("VENDOR_KEY_TEST", "sk-vendor-expanded")
 	vc := cfg.Vendors["zai"]
@@ -1664,7 +1656,6 @@ func TestResolveEndpointEmptyEndpointKeyUsesVendorKey(t *testing.T) {
 	vc.Endpoints["no-key-ep"] = EndpointConfig{
 		Protocol: "openai",
 		BaseURL:  "https://example.com",
-		// APIKey is empty — should use vendor key
 	}
 	cfg.Vendors["zai"] = vc
 	cfg.Vendor = "zai"
@@ -1680,8 +1671,7 @@ func TestResolveEndpointEmptyEndpointKeyUsesVendorKey(t *testing.T) {
 }
 
 func TestResolveEndpointBothKeysUnresolvable(t *testing.T) {
-	// Both endpoint and vendor keys are ${VAR} refs where VAR is not set.
-	// ExpandEnv leaves them as-is, so the key will be the unexpanded ref.
+
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${TOTALLY_MISSING_VENDOR_KEY}"
@@ -1698,19 +1688,18 @@ func TestResolveEndpointBothKeysUnresolvable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should still contain the unexpanded ref (will fail at API call time)
+
 	if resolved.APIKey == "" {
 		t.Error("expected non-empty key ref, got empty string")
 	}
 	if resolved.APIKey == "${TOTALLY_MISSING_EP_KEY}" {
-		// This is the endpoint ref that was returned by resolveEffectiveAPIKeyRef
-		// since neither resolves. ExpandEnv leaves it as-is.
+
 		t.Logf("unresolvable key remains as ref: %s", resolved.APIKey)
 	}
 }
 
 func TestResolveEndpointPlaintextKeyNotExpanded(t *testing.T) {
-	// A plaintext key (no ${} wrapping) should pass through unchanged.
+
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.Endpoints["plain-ep"] = EndpointConfig{
@@ -1733,8 +1722,7 @@ func TestResolveEndpointPlaintextKeyNotExpanded(t *testing.T) {
 
 func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
 	withTestHome(t)
-	// Simulate the full flow: SetEndpointAPIKey stores a ref, then resolve
-	// must expand it to the actual value.
+
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.Endpoints["live-ep"] = EndpointConfig{
@@ -1745,13 +1733,11 @@ func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
 	cfg.Vendor = "zai"
 	cfg.Endpoint = "live-ep"
 
-	// User sets key via panel
 	err := cfg.SetEndpointAPIKey("zai", "live-ep", "sk-user-input-key", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Resolve should return the expanded actual key
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		t.Fatal(err)
@@ -1763,7 +1749,7 @@ func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
 
 func TestResolveEndpointSetVendorAPIKeyThenResolve(t *testing.T) {
 	withTestHome(t)
-	// Same but for vendor-level key
+
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.Endpoints["vendor-ep"] = EndpointConfig{
@@ -1793,21 +1779,21 @@ func TestNormalizedConfigLanguage(t *testing.T) {
 		in   string
 		want string
 	}{
-		// Chinese variants
+
 		{"zh", "zh-CN"},
 		{"zh-CN", "zh-CN"},
 		{"zh_HANS", "zh-CN"},
 		{"cn", "zh-CN"},
-		// Traditional Chinese
+
 		{"zh-TW", "zh-TW"},
 		{"zh_HK", "zh-TW"},
 		{"tw", "zh-TW"},
-		// French variants incl. POSIX locale with codeset suffix
+
 		{"fr", "fr"},
 		{"fr-FR", "fr"},
 		{"french", "fr"},
 		{"fr_FR.UTF-8", "fr"},
-		// Other languages
+
 		{"ja", "ja"},
 		{"ko-KR", "ko"},
 		{"es", "es"},
@@ -1815,7 +1801,7 @@ func TestNormalizedConfigLanguage(t *testing.T) {
 		{"ru", "ru"},
 		{"pt-BR", "pt"},
 		{"vi", "vi"},
-		// Unknown falls back to English
+
 		{"", "en"},
 		{"xx", "en"},
 		{"klingon", "en"},
@@ -1855,7 +1841,7 @@ func TestBuildReplyLanguageGuidance(t *testing.T) {
 		if !strings.Contains(got, tc.wantSub) {
 			t.Errorf("buildReplyLanguageGuidance(%q) = %q, want substring %q", tc.lang, got, tc.wantSub)
 		}
-		// Every guidance must preserve the per-turn override rule.
+
 		if !strings.Contains(got, "follow the user's current request") {
 			t.Errorf("buildReplyLanguageGuidance(%q) missing per-turn override clause: %q", tc.lang, got)
 		}
@@ -1881,7 +1867,7 @@ func TestMergeDefaultEndpointsDeterministic(t *testing.T) {
 	if !ok {
 		t.Fatal("openrouter endpoint not merged")
 	}
-	// Re-run many times: the pick must never flip (it is persisted).
+
 	for i := 0; i < 50; i++ {
 		again := build()
 		got := again.Vendors["ai-gateway"].Endpoints["openrouter"]
@@ -1947,7 +1933,6 @@ func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
 		t.Fatal("expected resolved endpoint Logprobs=true")
 	}
 
-	// Default endpoint stays off.
 	cfg.Endpoint = "cn-coding-openai"
 	resolved2, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
@@ -2007,8 +1992,6 @@ func TestLoad_IdleSection(t *testing.T) {
 		t.Errorf("idle section not parsed: %+v", cfg.Idle)
 	}
 
-	// Defaults when absent: disabled, zero values (ApplyIdleMaintenance
-	// substitutes 10min/0.6).
 	path2 := filepath.Join(dir, "empty.yaml")
 	if err := os.WriteFile(path2, []byte("extra_prompt: \"x\"\n"), 0o644); err != nil {
 		t.Fatal(err)

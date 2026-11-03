@@ -51,7 +51,7 @@ func TestBeginVisionTurn_SwitchAndRestore(t *testing.T) {
 		t.Fatalf("expected switch to vision-model, got %v", *calls)
 	}
 	restore()
-	restore() // idempotent
+	restore()
 	if len(*calls) != 2 || (*calls)[1] != "user-model" {
 		t.Fatalf("expected restore to user-model, got %v", *calls)
 	}
@@ -82,8 +82,7 @@ func TestBeginVisionTurn_VisionAgentNoSwitch(t *testing.T) {
 }
 
 func TestBeginVisionTurn_NoSessionKeepsSwitchUntilNoop(t *testing.T) {
-	// Without a session there is no user model to restore to: the switch
-	// still happens for the turn, restore is a no-op.
+
 	bridge, calls := newVisionTurnBridge(t, false, "")
 	restore, switched := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "image", ImageMIME: "image/png"}})
 	if !switched {

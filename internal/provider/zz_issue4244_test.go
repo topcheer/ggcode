@@ -19,7 +19,7 @@ func TestIssue4244_SortedEmitOrder(t *testing.T) {
 		1: {ID: "c1", Name: "write_file"},
 	}
 	want := []int{0, 1, 3, 7}
-	for i := 0; i < 50; i++ { // re-hash guard: order must hold every run
+	for i := 0; i < 50; i++ {
 		got := slices.Sorted(maps.Keys(acc))
 		if !slices.Equal(got, want) {
 			t.Fatalf("emit order must be the sorted key set %v, got %v", want, got)

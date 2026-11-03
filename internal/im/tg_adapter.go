@@ -82,7 +82,7 @@ func newTGAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 	case "none", "plain", "text":
 		parseMode = ""
 	default:
-		parseMode = "" // default: use entities (tgmd.Convert)
+		parseMode = ""
 	}
 	adapter := &tgAdapter{
 		name:       name,
@@ -127,9 +127,7 @@ func (a *tgAdapter) run(ctx context.Context) {
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
 		} else {
-			// Reset backoff after a clean serve cycle (aligned with the
-			// nostr/mattermost adapters) so one blip after hours of stable
-			// polling does not wait the full 60s backoff again.
+
 			attempt = 0
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
@@ -149,8 +147,7 @@ func (a *tgAdapter) connectAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("getMe: %w", err)
 	}
-	// Telegram getMe returns {"ok":true,"result":{"id":...,"username":"botname"}}
-	// apiRequest stores the full payload, so extract result.username.
+
 	if result, _ := me["result"].(map[string]any); result != nil {
 		if username, ok := result["username"].(string); ok {
 			a.mu.Lock()
@@ -176,13 +173,7 @@ func (a *tgAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("poll updates: %w", err)
 		}
 		for _, update := range updates {
-			// #4526: isolate per-update panics. handleUpdate had no
-			// recover of its own - a malformed update that panicked tore
-			// down the whole safego.Go("im.tg.run") wrapper, killing the
-			// backoff loop too: the adapter stayed dead until process
-			// restart. safego.Run is synchronous, so update ordering is
-			// preserved; one bad update now costs a log line, not the
-			// connection.
+
 			u := update
 			safego.Run("im.tg.update", func() { a.handleUpdate(ctx, u) })
 		}
@@ -238,19 +229,12 @@ func (a *tgAdapter) pollUpdates(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
-	// #2744: dedup runs BEFORE any branch handling. The callback_query arm
-	// used to return ahead of seenUpdate, so a re-delivered callback (the
-	// ack-on-next-poll window: Telegram re-sends updates until the next
-	// successful getUpdates carries the new offset - a timeout, network
-	// failure, or process restart in between re-delivers the same update_id)
-	// executed the handler twice, flipping multi-select choices and
-	// re-answering the callback. Message updates already deduped here.
+
 	updateID, _ := intValue(update["update_id"])
 	if a.seenUpdate(updateID) {
 		return
 	}
 
-	// Handle callback queries (button clicks)
 	if cb, ok := update["callback_query"].(map[string]any); ok {
 		a.handleCallbackQuery(ctx, cb)
 		return
@@ -282,18 +266,13 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 	}
 
 	text := strings.TrimSpace(stringFromAny(msg["text"]))
-	// #1240: photo/document media carry accompanying text in caption, not
-	// text — without merging, "看这个报错截图，是 panic 了" lost its
-	// instruction half and the agent only saw the image.
+
 	caption := strings.TrimSpace(stringFromAny(msg["caption"]))
 	if chatType == "group" || chatType == "supergroup" {
 		a.mu.RLock()
 		botUN := a.botUsername
 		a.mu.RUnlock()
-		// Structured mention stripping via entities: plain ReplaceAll
-		// corrupts text when the bot username is a prefix of another token
-		// (botUN="dev" turned "@devops" into "ops" and
-		// "dev@devtools.com" into "devtools.com") (#540).
+
 		text = tgStripBotMention(text, botUN, msg["entities"])
 		if caption != "" {
 			caption = tgStripBotMention(caption, botUN, msg["caption_entities"])
@@ -334,10 +313,7 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
-		// #1243: message-level errors do not flip the state to warning - the
-		// poll loop keeps running but nothing ever re-publishes connected, so
-		// one transient hiccup showed a permanent warning while messages
-		// flowed fine. Log only (same fix family as signal #1238).
+
 		debug.Log("tg", "adapter=%s pairing error (polling unaffected): %v", a.name, err)
 	}
 	if pairingResult.Consumed {
@@ -356,15 +332,12 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 			_ = a.sendUnauthorized(ctx, chatID, msgID)
 			return
 		}
-		// Processing failed — the message would otherwise be silently dropped.
-		// Acknowledge the failure back to the sender so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
+
 		if sendErr := a.sendReplyText(ctx, chatID, msgID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("tg", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
 		if err != ErrNoChannelBound {
-			// #1243: message-level warning without a recovery path (see
-			// pairing above) - debug log only.
+
 			debug.Log("tg", "adapter=%s inbound processing error: %v", a.name, err)
 		}
 	}
@@ -374,7 +347,6 @@ func (a *tgAdapter) processAttachments(ctx context.Context, msg map[string]any) 
 	var attachments []Attachment
 	var voiceText string
 
-	// Photo attachments (Telegram sends multiple sizes, use the largest)
 	if photos, ok := msg["photo"].([]any); ok && len(photos) > 0 {
 		photo, ok := photos[len(photos)-1].(map[string]any)
 		if ok {
@@ -400,7 +372,6 @@ func (a *tgAdapter) processAttachments(ctx context.Context, msg map[string]any) 
 		}
 	}
 
-	// Voice / audio
 	if voice, ok := msg["voice"].(map[string]any); ok {
 		fileID, _ := voice["file_id"].(string)
 		if fileID != "" {
@@ -420,7 +391,6 @@ func (a *tgAdapter) processAttachments(ctx context.Context, msg map[string]any) 
 		}
 	}
 
-	// Document / file
 	if doc, ok := msg["document"].(map[string]any); ok {
 		fileID, _ := doc["file_id"].(string)
 		filename, _ := doc["file_name"].(string)
@@ -465,7 +435,6 @@ func (a *tgAdapter) transcribeTGVoice(ctx context.Context, fileID string) string
 	audioPath := src.Name()
 	cleanup := func() { _ = os.Remove(audioPath) }
 
-	// Convert to wav if needed
 	if ext != ".wav" {
 		dst, err := os.CreateTemp("", "ggcode-tg-audio-*.wav")
 		if err != nil {
@@ -497,7 +466,7 @@ func (a *tgAdapter) transcribeTGVoice(ctx context.Context, fileID string) string
 }
 
 func (a *tgAdapter) downloadTGFile(ctx context.Context, fileID string) ([]byte, string, error) {
-	// Get file path first
+
 	path := fmt.Sprintf(tgGetFilePath, a.botToken)
 	body := map[string]any{"file_id": fileID}
 	var result map[string]any
@@ -505,9 +474,7 @@ func (a *tgAdapter) downloadTGFile(ctx context.Context, fileID string) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	// apiRequest's out parameter receives the FULL Telegram payload, so
-	// file_path lives under the nested "result" object (same shape as the
-	// getMe/pollUpdates consumers).
+
 	resultMap, _ := result["result"].(map[string]any)
 	filePath, _ := resultMap["file_path"].(string)
 	if filePath == "" {
@@ -596,7 +563,6 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	}
 	debug.Log("tg", "adapter=%s outbound kind=%s channel=%s len=%d", a.name, event.Kind, channelID, len(content))
 
-	// Extract images from text and send them as photos
 	images, remainingText := ExtractImagesFromText(content)
 	sentImages := 0
 	for i, img := range images {
@@ -605,10 +571,7 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			continue
 		}
 		sentImages++
-		// #1242: every delivered photo must respect the ~1 msg/s per-chat
-		// limit — back-to-back multi-image replies and the photo→text
-		// transition otherwise burst past it and Telegram 429s the send
-		// (silently dropping the rest of the images).
+
 		select {
 		case <-time.After(tgInterMessageDelay):
 		case <-ctx.Done():
@@ -616,11 +579,9 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		}
 	}
 
-	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" && len(images) > 0 && sentImages == 0 {
-		// #4464: an image-only message whose sends all failed must not be
-		// silently dropped - fall back to the original markdown text.
+
 		remainingText = content
 	}
 	if remainingText != "" {
@@ -629,8 +590,7 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			return err
 		}
 		for i, msg := range messages {
-			// Rate limit: avoid >1 msg/sec per chat (official Telegram limit).
-			// Source: https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this
+
 			if i > 0 {
 				select {
 				case <-time.After(tgInterMessageDelay):
@@ -684,16 +644,11 @@ func (a *tgAdapter) formatMessages(text string) ([]tgmd.Message, error) {
 	if a.parseMode == "" {
 		return tgmd.ConvertAndSplit(text, tgmd.WithMaxMessageLen(tgMaxTextLen)), nil
 	}
-	// Legacy mode: escape FIRST, then split. Escaping can double the length
-	// (18 special chars each gain a backslash), so splitting before escaping
-	// can produce chunks up to 8192 runes that Telegram rejects with
-	// 400 "message is too long" (issue #970).
+
 	if a.parseMode == "MarkdownV2" {
 		text = EscapeMarkdownV2(text)
 	} else if a.parseMode == "HTML" {
-		// #1241: legacy HTML mode passed text through unescaped — any <, > or
-		// & (code snippets, comparisons) made Telegram reject the whole
-		// message with 400 "can't parse entities".
+
 		text = tgEscapeHTML(text)
 	}
 	chunks := splitTGMessage(text, tgMaxTextLen)
@@ -709,16 +664,16 @@ func (a *tgAdapter) sendTextMessage(ctx context.Context, chatID string, msg tgmd
 	body := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     msg.Text,
-		"disable_web_page_preview": true, // Suppress link preview cards for cleaner UX
+		"disable_web_page_preview": true,
 	}
 
 	if a.parseMode == "" {
-		// Entity-based: attach entities if present
+
 		if len(msg.Entities) > 0 {
 			body["entities"] = tgEntitiesToRaw(msg.Entities)
 		}
 	} else {
-		// Legacy parse_mode (text already escaped in formatMessages)
+
 		body["parse_mode"] = a.parseMode
 	}
 
@@ -737,7 +692,7 @@ func (a *tgAdapter) sendExtractedImage(ctx context.Context, chatID string, img E
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
@@ -826,10 +781,6 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 	path := fmt.Sprintf(tgSendPhotoPath, a.botToken)
 	u := a.apiBase + path
 
-	// #1242: multipart uploads previously bypassed apiRequest's 429 handling
-	// entirely — a rate-limited sendPhoto failed hard and the caller's image
-	// loop dropped it silently. The body is rebuilt per attempt because a
-	// consumed bytes.Buffer cannot be reused.
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
@@ -900,9 +851,6 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 			return err
 		}
 
-		// Handle HTTP 429 with the same retry_after semantics as apiRequest
-		// (#1242): Telegram returns {"ok":false,"error_code":429,
-		// "parameters":{"retry_after":N}} with N in seconds.
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
 			retryAfter := tgExtractRetryAfter(resp)
 			resp.Body.Close()
@@ -995,7 +943,6 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 		return
 	}
 
-	// Answer the callback to remove the loading spinner
 	safego.Go("im.tg.answerCallback", func() {
 		if a.httpClient == nil {
 			return
@@ -1011,7 +958,6 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 		return
 	}
 
-	// Extract sender info
 	from, _ := cb["from"].(map[string]any)
 	senderID := ""
 	senderName := ""
@@ -1030,7 +976,7 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 
 	chat, _ := msg["chat"].(map[string]any)
 	if chat == nil {
-		// Try cb.message
+
 		return
 	}
 	channelID := jsonInt64Str(chat["id"])
@@ -1057,10 +1003,7 @@ func (a *tgAdapter) seenUpdate(updateID int) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// #2744: seenUpdate is now on the mandatory path for EVERY update kind
-	// (callback_query included), so a zero-value adapter must not panic on
-	// the nil map write. Production constructors pre-make it; this guards
-	// test/edge constructions that skip it.
+
 	if a.seen == nil {
 		a.seen = make(map[int]time.Time)
 	}
@@ -1111,10 +1054,6 @@ func (a *tgAdapter) apiRequest(ctx context.Context, method, path string, body an
 			return nil, err
 		}
 
-		// Handle HTTP 429 (Too Many Requests). Telegram returns retry_after
-		// in the JSON response body: {"ok":false,"error_code":429,
-		// "parameters":{"retry_after":N}} where retry_after is seconds.
-		// Source: https://core.telegram.org/bots/api#responseparameters
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
 			retryAfter := tgExtractRetryAfter(resp)
 			resp.Body.Close()
@@ -1184,7 +1123,7 @@ func tgExtractRetryAfter(resp *http.Response) time.Duration {
 			}
 		}
 	}
-	// Final fallback: check the standard Retry-After header.
+
 	return parseRetryAfter(resp)
 }
 
@@ -1192,9 +1131,7 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
-	// #2744: botUsername is written under a.mu by connectAndServe (getMe);
-	// reading it bare here raced on the string header during reconnect.
-	// Same RLock pattern as the group-mention read in handleUpdate.
+
 	a.mu.RLock()
 	botUN := a.botUsername
 	a.mu.RUnlock()
@@ -1248,14 +1185,14 @@ func tgStripBotMention(text, botUsername string, entitiesRaw any) string {
 		if len(spans) == 0 {
 			return text
 		}
-		// Remove spans back-to-front so earlier offsets stay valid.
+
 		for i := len(spans) - 1; i >= 0; i-- {
 			cut := utf16Cut(text, spans[i].start, spans[i].end)
 			text = tgCollapseAdjacentSpace(text, cut, spans[i].start)
 		}
 		return strings.TrimSpace(text)
 	}
-	// No entities available — fall back to word-boundary removal.
+
 	return tgStripBotMentionFallback(text, target)
 }
 
@@ -1433,7 +1370,7 @@ func (a *tgAdapter) legacyCaption(cap string) string {
 	if a.parseMode == "MarkdownV2" {
 		cap = EscapeMarkdownV2(cap)
 	} else if a.parseMode == "HTML" {
-		// #1241: same HTML escaping as formatMessages for photo captions.
+
 		cap = tgEscapeHTML(cap)
 	}
 	return truncateTGRunes(cap, 1024)
@@ -1536,22 +1473,13 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		}
 		rows = append(rows, []map[string]any{button})
 	}
-	// For multi-select, add a "Done" button
+
 	if msg.MultiSelect {
 		rows = append(rows, []map[string]any{
 			{"text": "✅ Done", "callback_data": "__done__"},
 		})
 	}
 
-	// Convert markdown to Telegram format.
-	// #4527: formatMessages may split into multiple chunks (>4096 chars);
-	// the old code took only messages[0].Text and silently dropped the
-	// tail. Loop-send the leading chunks via sendTextMessage (same pattern
-	// as the plain-text path, rate-limit delay included) and attach the
-	// inline keyboard to the LAST chunk, so the buttons sit under the full
-	// message. Entity mode (parseMode == "") also carries the entities so
-	// bold/code formatting survives - sendTextMessage already does this,
-	// and the keyboard chunk below mirrors it.
 	messages, _ := a.formatMessages(msg.Text)
 	if len(messages) == 0 {
 		messages = []tgmd.Message{{Text: msg.Text}}
@@ -1574,7 +1502,7 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 	body := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     textContent,
-		"disable_web_page_preview": true, // Suppress link preview cards for cleaner UX
+		"disable_web_page_preview": true,
 		"reply_markup": map[string]any{
 			"inline_keyboard": rows,
 		},
@@ -1582,9 +1510,7 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 	if a.parseMode != "" {
 		body["parse_mode"] = a.parseMode
 	} else if len(messages[len(messages)-1].Entities) > 0 {
-		// #4527: entity mode must carry the entities, mirroring
-		// sendTextMessage - without them the button message goes out as
-		// plain text and all formatting is lost.
+
 		body["entities"] = tgEntitiesToRaw(messages[len(messages)-1].Entities)
 	}
 
@@ -1593,7 +1519,6 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		return "", err
 	}
 
-	// Extract message_id from response
 	result, _ := respData["result"].(map[string]any)
 	if result != nil {
 		if msgID := jsonInt64Str(result["message_id"]); msgID != "" {

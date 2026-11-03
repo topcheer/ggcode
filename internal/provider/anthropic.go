@@ -70,9 +70,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
-		// #1603: re-key the adaptive cap for the NEW model - sharing the
-		// parent's learned cap pointer mixed per-model state across the
-		// registry's carefully-partitioned keys.
+
 		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		transport:       p.transport,
 		calibrator:      p.calibrator,
@@ -87,28 +85,17 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		thinkingMode:    p.thinkingMode,
 		policy:          p.policy,
 	}
-	// #2567: capability config set at registry time must survive the
-	// clone - named subagents (model override) re-derive everything from
-	// these fields and nothing re-applies SetServerTools/SetMemoryTool on
-	// the clone. files is the shared per-endpoint uploader (no
-	// per-conversation state).
+
 	clone.files = p.files
-	// #2567: contextEditing is an atomic.Pointer - copy through
-	// Load()/Store(), not by struct literal (copying the struct copies the
-	// atomic's zero state, silently dropping the endpoint config).
+
 	if ce := p.contextEditing.Load(); ce != nil {
 		clone.contextEditing.Store(ce)
 	}
-	// #3066: samplingOverride is the same atomic.Pointer trap - a struct
-	// literal (or simply forgetting the field) copies the zero state and the
-	// clone silently loses MaxTokens/StopSequences/Temperature overrides.
+
 	if ov := p.samplingOverride.Load(); ov != nil {
 		clone.samplingOverride.Store(ov)
 	}
-	// Inherit the endpoint capability latch (an endpoint that rejected
-	// output_config stays off), but reset the per-conversation stability
-	// window: the clone re-learns effort stabilization for its own cache
-	// prefix over its first two requests.
+
 	clone.effortCarrier.Store(p.effortCarrier.Load())
 	return clone
 }
@@ -261,8 +248,7 @@ func (p *AnthropicProvider) beginEffortTracking() bool {
 	}
 	effort := strings.ToLower(strings.TrimSpace(p.reasoningEffort))
 	if effort == "" {
-		// Effort off (or adaptive restored its previous level): reset the
-		// stability window so oscillation can never establish a carrier.
+
 		p.lastCallEffort = ""
 		return false
 	}
@@ -375,10 +361,6 @@ const ptcBetaHeader = "programmatic-tool-calling-2026-01-20"
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// #2271 follow-up: StopSequenceSetter (Set/Get) is removed - the
-// per-call stop sequences ride the sampling override exclusively
-// since #2248/#2266 and no production caller set the field.
-
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *AnthropicProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
 
@@ -403,7 +385,7 @@ func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) e
 
 func (p *AnthropicProvider) effectiveMaxTokens() int {
 	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
-		return o.MaxTokens // #2248: active sampling window wins
+		return o.MaxTokens
 	}
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {
@@ -423,7 +405,7 @@ func (p *AnthropicProvider) thinkingBudgetForEffort(effort string) int64 {
 	}
 	maxTok := p.effectiveMaxTokens()
 	if maxTok <= 1024 {
-		return 0 // not enough room for thinking
+		return 0
 	}
 	var budget int64
 	var ceiling int64
@@ -493,7 +475,7 @@ var thinkingErrorAnchors = []string{
 	"does not support extended thinking",
 	"budget_tokens must",
 	"budget_tokens is",
-	"budget_tokens: ", // gateway field-error shape: "budget_tokens: ..."
+	"budget_tokens: ",
 	"thinking parameter",
 	"max_tokens must be greater than budget_tokens",
 }
@@ -501,7 +483,7 @@ var thinkingErrorAnchors = []string{
 // effortErrorAnchors are phrases from real output_config/effort rejection
 // errors (Anthropic direct and gateway-stringified variants).
 var effortErrorAnchors = []string{
-	"output_config", // unknown-parameter and field-error shapes
+	"output_config",
 	"per-turn effort",
 	"per-message effort",
 	"does not support effort",
@@ -557,7 +539,7 @@ func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *
 			headers.Set(key, value)
 		}
 	}
-	// OpenRouter-specific headers for attribution and ranking.
+
 	if isOpenRouterEndpoint(baseURL) {
 		headers.Set("HTTP-Referer", "https://ggcode.dev")
 		headers.Set("X-Title", "GGCode")
@@ -587,9 +569,9 @@ func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *
 func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
-		option.WithMaxRetries(0), // retry handled by our outer loop, not SDK
+		option.WithMaxRetries(0),
 	}
-	// Inject identity headers from impersonation state or protocol defaults.
+
 	headers := BuildHeadersForProvider("anthropic")
 	for key, values := range vendorSpecificAuthHeaders(baseURL, apiKey) {
 		for _, value := range values {
@@ -646,9 +628,7 @@ func (p *AnthropicProvider) SetSessionID(sessionID string) {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78 + #4729: single-wrap deadline when a request_timeout is CONFIGURED
-	// (fail-fast contract, zz_issue2573_test.go); the #4729 in-place timeout
-	// retry only applies on the default path (no configured deadline).
+
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
@@ -662,7 +642,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 		return callErr
 	}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
-	// Retry once without extended thinking if the model rejects it.
+
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
@@ -672,9 +652,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 			return callErr
 		}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	}
-	// Retry once without the effort carrier if the endpoint rejects
-	// output_config (Anthropic-compatible gateways predating the parameter).
-	// The latch keeps effort semantics on budget_tokens for the session.
+
 	if err != nil && isEffortError(err) && p.effortCarrier.CompareAndSwap(true, false) {
 		debug.Log("anthropic", "Chat: retrying without output_config (endpoint rejected the effort carrier)")
 		params.OutputConfig = anthropic.OutputConfigParam{}
@@ -694,14 +672,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	if string(resp.StopReason) == "max_tokens" {
 		p.cap.OnTruncated()
 	}
-	// PTC: capture the container issued for this response so a continuation
-	// request reuses it.
+
 	if resp.Container.ID != "" {
 		p.storePTCContainer(resp.Container.ID, resp.Container.ExpiresAt)
 	}
 
-	// Surface server-side context edits so long-session token savings are
-	// observable (context_management.applied_edits, beta response block).
 	if p.contextEditing.Load() != nil {
 		if summary, ok := parseAppliedEdits([]byte(resp.RawJSON())); ok {
 			debug.Log("anthropic", "Chat %s", summary)
@@ -711,8 +686,6 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	msg := convertAnthropicResponse(resp.Content)
 	usage := anthropicUsage(resp.Usage)
 
-	// #1484-C: relay the real stop reason (SDK field; nil on some
-	// backends) so callers stop guessing from usage numbers.
 	stopReason := ""
 	if resp.StopReason != "" {
 		stopReason = string(resp.StopReason)
@@ -735,28 +708,24 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 	safego.Go("provider.anthropic.streamRead", func() {
 		defer close(ch)
-		// #4729: per-ATTEMPT deadline (was: one withTimeout around the whole
-		// retry loop - see Chat's note). The parent ctx stays live for the
-		// retryability checks; each attempt renews its own deadline below.
+
 		parentCtx := ctx
 		var cancelAttempt context.CancelFunc
-		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
+		defer func() { cancelAttempt() }()
 
 		var usage *TokenUsage
 		var outputChars int
 		var truncated bool
-		streamError := false       // set when a non-retryable error was sent to ch
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		streamError := false
+		budget := newRetryBudget()
 
 		attempts := p.policy.attempts()
 		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
-				cancelAttempt() // release the previous attempt's deadline timer
+				cancelAttempt()
 				debug.Log("anthropic", "Stream retry attempt %d", attempt)
 			}
 
-			// #4729: renewal is a no-op on the default path (parent stays live);
-			// with a configured deadline only attempt 0 derives one (#2573).
 			if attempt == 0 || p.policy.requestTimeout <= 0 {
 				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
@@ -765,10 +734,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 			emitted := false
 			retry := false
-			// #577(C): reset truncated per attempt - attempt 1 could observe
-			// stop_reason=max_tokens and then die to a retryable error; a
-			// complete attempt 2 must not inherit Truncated=true. Mirrors the
-			// gemini.go per-attempt declaration (#561-C) and openai.go (#577-B).
+
 			truncated = false
 
 			func() {
@@ -811,21 +777,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							emitted = true
 						}
 					case "message_delta":
-						// #2129: symmetric zero-guard with the input/cache tokens
-						// below (#722/#1168): the SSE protocol allows MULTIPLE
-						// message_delta events (final value in the last one) - a
-						// gateway replaying/synthesizing a trailing delta with an
-						// all-zero Usage zeroed the accumulated output count,
-						// skewing cost/context stats low while input stayed
-						// guarded.
+
 						if event.Usage.OutputTokens > 0 {
 							outputTokens = int(event.Usage.OutputTokens)
 						}
-						// message_delta in the Anthropic SSE protocol only carries
-						// output_tokens reliably. input_tokens here is often 0 or
-						// just the non-cached portion. Do NOT overwrite inputTokens
-						// (and cache tokens) from message_start unless message_delta
-						// actually provides a non-zero value.
+
 						if event.Usage.InputTokens > 0 && inputTokens == 0 {
 							inputTokens = int(event.Usage.InputTokens)
 						}
@@ -835,18 +791,17 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						if event.Usage.CacheReadInputTokens > 0 {
 							cacheReadTokens = int(event.Usage.CacheReadInputTokens)
 						}
-						// Surface server-side context edits applied by
-						// context_management so the user sees what was cleared.
+
 						if p.contextEditing.Load() != nil {
 							if summary, ok := parseAppliedEdits([]byte(event.RawJSON())); ok {
 								ch <- StreamEvent{Type: StreamEventSystem, Text: "[" + summary + "] "}
 							}
 						}
-						// Check stop_reason for truncation / policy errors.
+
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
 							if stopReason == "max_tokens" {
-								// Output was truncated - NOT an error. Keep partial content.
+
 								p.cap.OnTruncated()
 								truncated = true
 							} else if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
@@ -857,30 +812,21 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "message_start":
-						// #722: same non-zero guard as message_delta above - an
-						// out-of-order (protocol-violating) stream must not zero out
-						// input tokens already counted.
+
 						if event.Message.Usage.InputTokens > 0 && inputTokens == 0 {
 							inputTokens = int(event.Message.Usage.InputTokens)
 						}
 						debug.Log("anthropic", "message_start usage: input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d",
 							event.Message.Usage.InputTokens, event.Message.Usage.OutputTokens,
 							event.Message.Usage.CacheReadInputTokens, event.Message.Usage.CacheCreationInputTokens)
-						// #1168: same non-zero guard for cache counters - a
-						// duplicate or out-of-order message_start (retried or
-						// resumed stream) carrying a zeroed Usage must not
-						// wipe cache tokens already accumulated via
-						// message_delta, matching the #722 inputTokens guard.
+
 						if event.Message.Usage.CacheCreationInputTokens > 0 {
 							cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
 						}
 						if event.Message.Usage.CacheReadInputTokens > 0 {
 							cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
 						}
-						// PTC: capture the code execution container issued for this
-						// response so the continuation request reuses it (a
-						// continuation with pending programmatic calls and no
-						// container ID is rejected).
+
 						if event.Message.Container.ID != "" {
 							p.storePTCContainer(event.Message.Container.ID, event.Message.Container.ExpiresAt)
 							debug.Log("anthropic", "PTC container issued: %s", event.Message.Container.ID)
@@ -893,23 +839,16 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					// Retry without extended thinking if the model rejects it.
+
 					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < attempts-1 {
 						debug.Log("anthropic", "Stream: retrying without extended thinking (model rejected thinking parameters)")
-						// #2115: the downgrade must be VISIBLE - the user set a
-						// reasoning effort and silently losing it for the rest of
-						// the session looked like the model just being dumb.
+
 						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Model rejected extended thinking - retrying without it] "}
 						params.Thinking = anthropic.ThinkingConfigParamUnion{}
 						retry = true
 						return
 					}
-					// Retry without the effort carrier if the endpoint rejects it.
-					// #4227: same attempt guard as the thinking/retry branches -
-					// without it a final-attempt effort error CAS-es the carrier,
-					// sets retry=true, and the for-postfix attempt++ exhausts the
-					// loop into the fallback path that fabricates usage and emits
-					// a false StreamEventDone.
+
 					if !emitted && isEffortError(err) && attempt < attempts-1 && p.effortCarrier.CompareAndSwap(true, false) {
 						debug.Log("anthropic", "Stream: retrying without output_config (endpoint rejected the effort carrier)")
 						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Endpoint rejected output_config effort - retrying without it] "}
@@ -917,7 +856,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						retry = true
 						return
 					}
-					// Retry if no content has been emitted yet and the error is retryable.
+
 					if !emitted && isRetryableForContext(ctx, err) && attempt < attempts-1 {
 						slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
 						if !slept {
@@ -927,7 +866,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							}
 							return
 						}
-						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() {
 							attempts = retryAlwaysAttempts
 						}
 						retry = true
@@ -943,7 +882,6 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 				continue
 			}
 
-			// Stream completed successfully.
 			usage = &TokenUsage{
 				InputTokens:       inputTokens,
 				OutputTokens:      outputTokens,
@@ -955,17 +893,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			break
 		}
 
-		// #602(R5): the "retries exhausted" guard that used to live here was
-		// unreachable dead code - every iteration of the attempt loop above
-		// ends in `continue` (retry), `return` (streamError sent), or the
-		// unconditional usage assignment plus the single `break`, so the loop
-		// can never exit with usage == nil. The defensive estimate fallback
-		// below is kept for symmetry with openai.go/gemini.go.
 		if usage == nil {
-			// Fallback: estimate InputTokens from the messages themselves,
-			// same as the OpenAI provider does. Without this, InputTokens=0
-			// would cause RecordUsage to collapse the baseline to just
-			// OutputTokens, making the TUI context usage display absurdly small.
+
 			inputTokens, estErr := p.CountTokens(ctx, messages)
 			if estErr != nil {
 				inputTokens = 0
@@ -997,37 +926,24 @@ func anthropicUsage(usage anthropic.Usage) TokenUsage {
 func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
 	estimated := estimateTokensForMessages(messages)
 
-	// Fast path: if calibrator is nil or disabled, return local estimate.
 	if p.calibrator == nil {
 		return estimated, nil
 	}
 
-	// Check if we should trigger a calibration.
 	p.calibrator.mu.Lock()
 	needCalibration := p.calibrator.shouldCalibrate()
 	isFirst := p.calibrator.lastCalibrate.IsZero()
 	p.calibrator.mu.Unlock()
 
 	if !needCalibration {
-		// Apply the learned ratio to the local estimate.
+
 		return int(float64(estimated) * p.calibrator.currentRatio()), nil
 	}
 
-	// First calibration: synchronous with a longer timeout.
 	if isFirst {
 		calCtx, cancel := context.WithTimeout(ctx, calibrateFirstTimeout)
 		defer cancel()
-		// #1795 case 1: the guard sat AFTER the remote call - the skip
-		// branch neither applied the result nor recorded a failure, so
-		// lastCalibrate stayed zero, shouldCalibrate was ALWAYS true, and
-		// every CountTokens made a synchronous 2s remote call (competing
-		// with the main API for rate limit) whose precise value was then
-		// DISCARDED for the local estimate. Guard first; when skipping,
-		// mark the calibration as done so the cadence holds.
-		// #1618-A: skip asymmetric samples - the local estimator counts
-		// only text, but image/tool_result-attachment/thinking blocks all
-		// land in the remote count. Feeding such a sample pinned the
-		// ratio at the 3.0 clamp for the whole visual session.
+
 		if messagesContainNonTextBlocks(messages) {
 			debug.Log("provider-calibrator", "first calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
 			p.calibrator.recordSkip()
@@ -1036,9 +952,7 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "first calibration failed: %v", err)
-			// Transient failures (429/5xx/network) back off instead of retrying
-			// a synchronous remote attempt on every call (#708); permanent
-			// 404/403 errors disable inside remoteCountTokens.
+
 			p.calibrator.recordFailure()
 			return estimated, nil
 		}
@@ -1047,14 +961,11 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 		return realTokens, nil
 	}
 
-	// Subsequent calibrations: async, non-blocking.
-	// Return ratio-adjusted estimate immediately, update ratio in background.
 	result := int(float64(estimated) * p.calibrator.currentRatio())
 	safego.Go("provider.calibrateTokens", func() {
 		calCtx, cancel := context.WithTimeout(context.Background(), calibrateAsyncTimeout)
 		defer cancel()
-		// #1795 case 1: same reordering as the first-calibration path -
-		// guard BEFORE paying for the remote call.
+
 		if messagesContainNonTextBlocks(messages) {
 			debug.Log("provider-calibrator", "async calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
 			p.calibrator.recordSkip()
@@ -1063,7 +974,7 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "async calibration failed: %v", err)
-			p.calibrator.recordFailure() // transient errors back off, don't disable (#708)
+			p.calibrator.recordFailure()
 			return
 		}
 		p.calibrator.applyResult(estimated, realTokens)
@@ -1080,14 +991,7 @@ func messagesContainNonTextBlocks(messages []Message) bool {
 	for _, m := range messages {
 		for _, b := range m.Content {
 			switch b.Type {
-			// #1795 case 2: tool_result was filtered WHOLESALE, but the
-			// local estimator already counts its Output text (symmetric) -
-			// only its EMBEDDED IMAGES are asymmetric. Agent sessions
-			// ALWAYS carry tool_result from the first tool call on, so the
-			// async calibration never ran for any real agent session and
-			// the ratio froze on the first pure-text sample. Images and
-			// thinking blocks remain asymmetric (counted remotely,
-			// invisible locally).
+
 			case "image", "thinking", "redacted_thinking":
 				return true
 			}
@@ -1136,8 +1040,7 @@ func appendToToolResultContent(blocks []ContentBlock, prefix string) []ContentBl
 }
 
 func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic.MessageCountTokensParams {
-	// #2819: fold detector-injected text-only user messages into the following
-	// tool_result message (Anthropic ordering: tool_result blocks first).
+
 	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	type sysBlock struct {
@@ -1157,9 +1060,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 		for _, b := range m.Content {
 			switch b.Type {
 			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
-				// Verbatim echo-back of the server-tool exchange; silently skip
-				// only on impossible re-parse failures (raw was captured from
-				// the API itself).
+
 				if pb, err := serverToolBlockParam(b.Raw); err == nil {
 					blocks = append(blocks, *pb)
 				} else {
@@ -1211,7 +1112,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 			}
 		}
 		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
-		// Prepend system blocks into first user message (same as buildParams).
+
 		if m.Role == "user" && len(systemBlocks) > 0 {
 			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(systemBlocks))
 			for i, sb := range systemBlocks {
@@ -1243,11 +1144,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 // resolve large images into Files API file_ids (the upload happens inline here,
 // at most once per unique image, and is cancellable with the request).
 func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
-	// #2819: mid-loop detectors inject guidance as text-only user messages
-	// between assistant tool_use and user tool_result. Anthropic rejects that
-	// sequence with a 400 ("tool_use ids found without tool_result blocks
-	// immediately after") and the loop cannot self-heal. Fold such messages
-	// into the tool_result turn, keeping tool_result blocks first.
+
 	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	// Collect system content blocks preserving cache hints so we can emit
@@ -1261,9 +1158,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		cache bool
 	}
 	var systemBlocks []sysBlock
-	// PTC bookkeeping: remember tool IDs whose invocation was programmatic
-	// (code execution caller) so the answering user message can be checked
-	// against the tool_result-only formatting rule.
+
 	programmaticTools := map[string]bool{}
 	for _, m := range messages {
 		if m.Role == "system" {
@@ -1295,9 +1190,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			case "image":
 				blocks = append(blocks, p.imageContentBlock(ctx, b.ImageMIME, b.ImageData))
 			case "tool_use":
-				// #2566: echo the caller field back on PTC continuations -
-				// programmatic tool_use blocks cannot be matched to their pending
-				// container call without it (count-tokens already did this).
+
 				blocks = append(blocks, toolUseBlockParam(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName, b.CallerRaw))
 			case "tool_result":
 				if len(b.Images) > 0 && !b.IsError {
@@ -1333,21 +1226,18 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 					blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
 				}
 			case "thinking":
-				// Anthropic extended thinking: must echo back with signature
+
 				if b.ThinkingSignature != "" {
 					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
 				}
 			case "redacted_thinking":
-				// Anthropic redacted thinking: must echo back with data
+
 				if b.ThinkingData != "" {
 					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
 				}
 			}
 		}
-		// PTC formatting rule: a user message answering programmatic tool
-		// calls must contain ONLY tool_result blocks; the API rejects the
-		// request otherwise. Strip accidental text/system noise instead of
-		// failing (leftover system blocks flush into params.System below).
+
 		toolResultOnly := false
 		if m.Role == "user" {
 			for _, b := range m.Content {
@@ -1368,8 +1258,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			blocks = filtered
 		}
 		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
-		// Prepend system blocks into first user message, emitting each as a
-		// separate Anthropic text block with selective cache_control.
+
 		if !toolResultOnly && m.Role == "user" && len(systemBlocks) > 0 {
 			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(systemBlocks))
 			for i, sb := range systemBlocks {
@@ -1394,10 +1283,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 		msgParams = append(msgParams, param)
 	}
-	// #786: systemBlocks are flushed when a user message is encountered; a
-	// message list with no user role (assistant-prefill-first resume) used
-	// to silently drop the entire system prompt. Flush any remainder into
-	// params.System as a last resort so the prompt is never lost.
+
 	params := anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: int64(p.effectiveMaxTokens()),
@@ -1413,10 +1299,6 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 	}
 
-	// PTC continuation: when this request answers pending programmatic (code
-	// execution) tool calls, it must reuse the container issued by the paused
-	// response or the API rejects it. An expired ID is omitted and the API
-	// provisions a fresh container.
 	if hasPendingProgrammaticToolCalls(messages) {
 		if id, ok := p.freshPTCContainer(); ok {
 			debug.Log("anthropic", "PTC: reusing container %s for continuation", id)
@@ -1428,25 +1310,10 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 	}
 
-	// #2239: per-call stop sequences (MCP sampling contract) - the
-	// response side already maps "stop_sequence" (#1484-C). #2246: this
-	// used to sit INSIDE the temperature>0 guard, so the default config
-	// (temperature 0 = provider default) silently dropped stop_sequences
-	// - the #2239 symptom reincarnated on Anthropic only, while the
-	// openai/gemini siblings were unconditional.
-	// #2266: the #2248 snapshot switch wired anthropic's MaxTokens half
-	// (effectiveMaxTokens) but left this block reading the field only -
-	// an active sampling override's sequences never reached the request
-	// body. Override wins (the provider.go contract), siblings merged.
-	// #2271 follow-up: the p.stopSequences field had NO writer left
-	// (SetStopSequences has been dead since the override switch) - the
-	// override is now the sole source.
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
 		params.StopSequences = o.StopSequences
 	}
-	// Apply temperature when set (0 means use provider default). The
-	// active sampling override (#1592-A family) wins over the configured
-	// default so an MCP server's temperature hint reaches the request.
+
 	temp := p.temperature
 	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
 		temp = o.Temperature
@@ -1454,20 +1321,11 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	if temp > 0 {
 		params.Temperature = param.NewOpt(temp)
 	}
-	// Apply top_p when set (0 means use provider default).
+
 	if p.topP > 0 {
 		params.TopP = param.NewOpt(p.topP)
 	}
 
-	// Extended thinking carrier (Anthropic 2026):
-	//   - adaptive: thinking:{type:"adaptive"} + output_config.effort - the
-	//     only mode that interleaves thinking between tool calls on Claude
-	//     4.6+/5.x models (manual budget_tokens is deprecated on 4.6 and
-	//     rejected on 4.7+). No budget_tokens: the API forbids combining
-	//     them. Effort, not budget, is the depth control.
-	//   - manual: budget_tokens from the effort level, required for the
-	//     extended-thinking-only generation (Sonnet/Opus/Haiku 4.5 and
-	//     earlier), composed with the effort carrier below.
 	effort := adaptiveEffort(p.reasoningEffort)
 	budget := p.thinkingBudgetForEffort(p.reasoningEffort)
 	useAdaptive := p.useAdaptiveThinking()
@@ -1480,36 +1338,12 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
 
-	// Effort via the top-level output_config (GA effort parameter, 2026):
-	// attach only the established conversation level (see beginEffortTracking)
-	// so the request prefix stays constant across calls. Composed with
-	// budget_tokens this is the documented best practice for models that
-	// support effort alongside extended thinking: effort governs total token
-	// volume, the budget caps explicit thinking. The per-message
-	// output_config marker (cache-preserving mid-conversation switching) is
-	// not expressible in SDK v1.68 typed params; when the SDK gains it, flip
-	// re-establishments to the marker form.
-	// Established means constant: once conversationEffort is set the carrier
-	// rides every request, even when a transient per-turn deviation (the
-	// adaptive adapter's apply/restore cycle) leaves lastCallEffort out of
-	// sync - dropping the carrier for one request would flip the top-level
-	// value to the model default and restart the cache just the same.
 	if p.effortCarrier.Load() && p.conversationEffort != "" {
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffort(p.conversationEffort),
 		}
 	}
-	// Adaptive models have no budget_tokens: effort is their only depth
-	// control, so it rides every request from the first call (subject to
-	// the endpoint latch - an endpoint that rejected output_config keeps
-	// running on the default level, mirroring the manual-mode degradation).
-	// The per-turn effort cannot ride the top-level slot raw: adaptive-adapter
-	// levels oscillate per call and a top-level change does not preserve
-	// cached prefixes (official effort guidance, 2026), so the raw form would
-	// restart the prompt cache every round. Latch the first observed level
-	// and hold it constant; a persistent user switch still re-establishes
-	// conversationEffort through the hysteresis path above (one deliberate
-	// cache rewrite).
+
 	if useAdaptive && params.OutputConfig.Effort == "" && p.effortCarrier.Load() {
 		if p.adaptiveEffortLatch == "" && effort != "" {
 			p.adaptiveEffortLatch = effort
@@ -1529,20 +1363,13 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				Type: "object",
 			}
 			if json.Unmarshal(t.Parameters, &inputSchema) == nil {
-				// populates Properties/Required/Type directly
+
 			}
 			desc := anthropic.String(t.Description)
 			toolParams[i] = anthropic.ToolUnionParamOfTool(inputSchema, t.Name)
 			if toolParams[i].OfTool != nil {
 				toolParams[i].OfTool.Description = desc
-				// Strict tool use (structured outputs): allowlisted tools get
-				// grammar-constrained input decoding. Validation runs against
-				// the raw schema (all top-level fields must be required);
-				// the root "additionalProperties": false that Anthropic
-				// requires goes through ExtraFields because
-				// ToolInputSchemaParam's typed fields cannot carry it.
-				// (Recursive schema injection is applied on the OpenAI path,
-				// which serializes schemas as raw JSON.)
+
 				if p.strictTools[t.Name] {
 					if _, ok := PrepareStrictToolSchema(t.Name, t.Parameters); ok {
 						toolParams[i].OfTool.Strict = param.NewOpt(true)
@@ -1554,21 +1381,13 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 						toolParams[i].OfTool.InputSchema.ExtraFields = extra
 					}
 				}
-				// Server-side Tool Search Tool (advanced-tool-use beta):
-				// defer_loading keeps the schema out of the model's context
-				// until the server search expands it via tool_reference. The
-				// API rejects defer_loading combined with a cache breakpoint
-				// on the same definition, so deferred tools never get one.
+
 				if t.DeferLoading {
 					toolParams[i].OfTool.DeferLoading = param.NewOpt(true)
 				} else {
 					lastCacheable = i
 				}
-				// PTC: allowed_callers governs whether the model may invoke a
-				// tool directly, programmatically from code execution, or both.
-				// With the code execution server tool enabled, tools default to
-				// both (the PTC-recommended setup); an explicit non-empty
-				// AllowedCallers always wins.
+
 				if p.ptcCodeExecutionEnabled() {
 					if len(t.AllowedCallers) > 0 {
 						toolParams[i].OfTool.AllowedCallers = t.AllowedCallers
@@ -1580,20 +1399,13 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				}
 			}
 		}
-		// Cache control breakpoint on the last NON-deferred tool definition
-		// so Anthropic caches all tool schemas (which are large and static
-		// across turns). Only the last item needs the breakpoint - Anthropic
-		// caches everything from the start up to each breakpoint.
+
 		if lastCacheable >= 0 && toolParams[lastCacheable].OfTool != nil {
 			toolParams[lastCacheable].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		}
 		params.Tools = toolParams
 	}
 
-	// Server-side tools (web_search/web_fetch): declared once, executed inside
-	// Anthropic's infrastructure. Names are defaulted by the SDK ("web_search"
-	// /"web_fetch"). Declarations are static, so a cache breakpoint on the
-	// last one keeps the whole tool block cached.
 	if len(p.serverTools) > 0 {
 		for i, st := range p.serverTools {
 			var u anthropic.ToolUnionParam
@@ -1603,9 +1415,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			case "web_fetch_20250910":
 				u = anthropic.ToolUnionParam{OfWebFetchTool20250910: &anthropic.WebFetchTool20250910Param{}}
 			case "tool_search_tool_regex":
-				// Server-side Tool Search Tool (regex variant, advanced-tool-use
-				// beta). Type is api-required with no SDK default; Name elides to
-				// "tool_search_tool_regex".
+
 				u = anthropic.ToolUnionParam{OfToolSearchToolRegex20251119: &anthropic.ToolSearchToolRegex20251119Param{
 					Type: anthropic.ToolSearchToolRegex20251119TypeToolSearchToolRegex20251119,
 				}}
@@ -1614,9 +1424,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 					Type: anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25_20251119,
 				}}
 			case "code_execution_20260120":
-				// Programmatic tool calling (beta): Claude writes bash/python
-				// code executed in an Anthropic-managed container and may call
-				// allowed_callers tools from within it.
+
 				u = anthropic.ToolUnionParam{OfCodeExecutionTool20260120: &anthropic.CodeExecutionTool20260120Param{}}
 			default:
 				debug.Log("anthropic", "unknown server tool type %q ignored", st.Type)
@@ -1629,11 +1437,6 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 	}
 
-	// Anthropic Memory Tool (memory_20250818): declared with no input schema
-	// - the schema is fixed API-side. Execution happens agent-side (see
-	// internal/agent/memory_tool.go). Place a cache breakpoint here only when
-	// this is the trailing static declaration; otherwise the loop above
-	// already put one on the last server tool.
 	if p.memoryTool {
 		u := anthropic.ToolUnionParam{OfMemoryTool20250818: &anthropic.MemoryTool20250818Param{}}
 		if len(p.serverTools) == 0 {
@@ -1642,7 +1445,6 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		params.Tools = append(params.Tools, u)
 	}
 
-	// Apply tool_choice when set. Only sent when tools are present (API requirement).
 	if len(tools) > 0 {
 		switch p.toolChoice {
 		case "auto":
@@ -1659,9 +1461,6 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			}
 		}
 	}
-
-	// Dump full request JSON for debugging protocol violations.
-	// Covers both Chat() (e.g. summarization) and ChatStream() (normal flow).
 
 	return params
 }
@@ -1767,7 +1566,7 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 			tub := ToolUseBlock(b.ID, b.Name, b.Input)
 			tu := b.AsToolUse()
 			if tu.JSON.Caller.Valid() {
-				tub.CallerRaw = callerRawOf(tu.Caller) // PTC echo-back
+				tub.CallerRaw = callerRawOf(tu.Caller)
 			}
 			result = append(result, tub)
 		case "thinking":
@@ -1784,9 +1583,7 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 				ThinkingData: rb.Data,
 			})
 		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
-			// Anthropic server-side tool blocks: executed inside the API, never
-			// surfaced as client tool calls. Keep the raw JSON verbatim so the
-			// full exchange can be echoed back on subsequent requests.
+
 			result = append(result, ContentBlock{Type: b.Type, Raw: json.RawMessage(b.RawJSON())})
 		}
 	}

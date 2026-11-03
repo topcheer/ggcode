@@ -1,10 +1,5 @@
 package provider
 
-// sa-44 companion: LLM response cassette round-trip. Record mode captures
-// Chat + ChatStream through a fake inner provider; a fresh replay-mode
-// wrapper must serve byte-equivalent responses with zero inner calls, and
-// tape exhaustion must fail closed (hard error, never a live call).
-
 import (
 	"context"
 	"encoding/json"
@@ -45,7 +40,6 @@ func TestLLMTapeRecordReplayRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	tape := filepath.Join(dir, "traj.llmtape.jsonl")
 
-	// Record phase.
 	rec := &fakeTapeProvider{}
 	t.Setenv("GGCODE_LLM_TAPE", "record:"+tape)
 	rp := WrapLLMTapeFromEnv(rec)
@@ -73,7 +67,6 @@ func TestLLMTapeRecordReplayRoundTrip(t *testing.T) {
 		t.Fatalf("inner calls: chat=%d stream=%d", rec.chatCalls, rec.streamCalls)
 	}
 
-	// Replay phase: identical requests must be served with ZERO inner calls.
 	rep := &fakeTapeProvider{}
 	t.Setenv("GGCODE_LLM_TAPE", "replay:"+tape)
 	pp := WrapLLMTapeFromEnv(rep)
@@ -105,7 +98,6 @@ func TestLLMTapeRecordReplayRoundTrip(t *testing.T) {
 		t.Fatalf("replay must not hit inner: chat=%d stream=%d", rep.chatCalls, rep.streamCalls)
 	}
 
-	// Exhaustion fails closed.
 	if _, err := pp.Chat(context.Background(), msgs, tools); err == nil {
 		t.Fatal("tape exhaustion must be a hard error, not a silent live call")
 	}

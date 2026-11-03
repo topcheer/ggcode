@@ -7,18 +7,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Invariant tests for the bash tool streaming render path. The scroll
-// machinery relies on two invariants that must hold for EVERY emitted
-// physical line:
-//
-//	(I1) no emitted line exceeds the terminal width (Height() counts
-//	     ceil(w/width) visual lines; List.Render emits physical lines - a
-//	     wider-than-width line desynchronizes them and the viewport drifts:
-//	     content floating mid-screen, blank space below)
-//	(I2) no stray '\r' remains in output (terminals move the cursor to
-//	     column 0 mid-line, mangling borders; Windows CRLF output and
-//	     progress-bar CR rewrites both hit this)
-
 func assertNoLineExceedsWidth(t *testing.T, rendered string, width int, ctx string) {
 	t.Helper()
 	for i, line := range strings.Split(rendered, "\n") {
@@ -36,7 +24,7 @@ func truncateForLog(s string) string {
 }
 
 func TestFormatBodyCRNormalization(t *testing.T) {
-	// CRLF (Windows tool output) must render identically to LF.
+
 	crlf := FormatBodyPlain("alpha\r\nbeta\r\ngamma", 60, 0)
 	lf := FormatBodyPlain("alpha\nbeta\ngamma", 60, 0)
 	if crlf != lf {
@@ -46,7 +34,6 @@ func TestFormatBodyCRNormalization(t *testing.T) {
 		t.Fatalf("stray CR survived normalization: %q", crlf)
 	}
 
-	// Bare CR (progress-bar rewrite) becomes a line break, not a cursor jump.
 	cr := FormatBodyPlain("downloading 10%\rdownloading 99%", 60, 0)
 	if strings.ContainsRune(cr, '\r') {
 		t.Fatalf("bare CR survived normalization: %q", cr)
@@ -57,28 +44,24 @@ func TestFormatBodyCRNormalization(t *testing.T) {
 }
 
 func TestFormatBodyTabExpansion(t *testing.T) {
-	// "a\tb\tc" measures 3 cols but terminals render 17 (8-col stops) - a
-	// 14-col drift that broke borders and Height/physical-line sync. After
-	// expansion no '\t' may survive and alignment must be column-tracked.
+
 	out := FormatBodyPlain("a\tb\tc", 60, 0)
 	if strings.ContainsRune(out, '\t') {
 		t.Fatalf("tab survived expansion: %q", out)
 	}
-	// git status style: leading + mid-line tabs
+
 	out = FormatBodyPlain("M\tinternal/chat/styles.go\n??\tzz.go", 60, 0)
 	if strings.ContainsRune(out, '\t') {
 		t.Fatalf("tabs survived expansion: %q", out)
 	}
-	// Column tracking: a tab after 1 char pads to col 4 (3 spaces), after
-	// 4 chars pads to col 8 (4 spaces).
+
 	if got := expandTabs("a\tb"); got != "a   b" {
 		t.Fatalf("expandTabs col tracking wrong: %q", got)
 	}
 	if got := expandTabs("abcd\te"); got != "abcd    e" {
 		t.Fatalf("expandTabs stop boundary wrong: %q", got)
 	}
-	// Wide chars: column tracking uses visual columns... runes here are all
-	// narrow; CJK alignment is best-effort by rune count (documented).
+
 }
 
 func TestFormatBodyWideLinesInvariant(t *testing.T) {
@@ -114,8 +97,7 @@ func FormatBodyPlain(s string, width, maxLines int) string {
 
 func TestToolHeaderNarrowWidthInvariant(t *testing.T) {
 	styles := DefaultStyles()
-	// Narrow terminal + long params: the old avail<10 -> 10 clamp emitted
-	// lines wider than width (icon+name prefix already at the edge).
+
 	for _, width := range []int{12, 16, 20, 24, 40} {
 		for _, params := range []string{
 			"go build -tags goolm ./internal/... && go test ./internal/chat/ -run TestSomethingVeryLong",

@@ -12,20 +12,16 @@ func normalizeToolInputValue(raw json.RawMessage) any {
 	}
 	var decoded any
 	if err := json.Unmarshal(trimmed, &decoded); err == nil {
-		// Anthropic tool_use input MUST be a JSON object (dict), not a list or scalar.
-		// Some API proxies (e.g. ZAI/open.bigmodel.cn) will crash with
-		// "'list' object has no attribute 'get'" if input is not a dict.
+
 		if _, ok := decoded.(map[string]any); ok {
 			return decoded
 		}
-		// Wrap non-object values into an object.
+
 		return map[string]any{
 			"value": decoded,
 		}
 	}
-	// Attempt JSON repair before falling back to raw wrapper.
-	// Stream truncation and weak models frequently produce nearly-valid
-	// JSON that can be salvaged instead of lost.
+
 	if repaired, ok := RepairJSON(trimmed); ok {
 		if err := json.Unmarshal(repaired, &decoded); err == nil {
 			if _, ok := decoded.(map[string]any); ok {

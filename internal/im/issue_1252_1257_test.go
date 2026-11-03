@@ -1,7 +1,5 @@
 package im
 
-// Regression tests for GitHub issues #1252-#1257 (wecom + whatsapp).
-
 import (
 	"context"
 	"net/http"
@@ -152,9 +150,9 @@ func TestWecomUploadChunkAckRetried(t *testing.T) {
 	defer f.srv.Close()
 	f.chunkDrops = 1
 	a := newWecomMediaAdapter(t, f)
-	a.ackTimeout = 300 * time.Millisecond // keep the dropped-ack wait short
+	a.ackTimeout = 300 * time.Millisecond
 
-	data := make([]byte, 600<<10) // 2 chunks
+	data := make([]byte, 600<<10)
 	mediaID, err := a.wecomUploadMedia(context.Background(), data, "shot.png")
 	if err != nil {
 		t.Fatalf("#1254: chunk ack loss must be retried, got: %v", err)
@@ -162,13 +160,7 @@ func TestWecomUploadChunkAckRetried(t *testing.T) {
 	if mediaID != "MEDIA123" {
 		t.Fatalf("media_id = %q", mediaID)
 	}
-	// #3444: the #1254 contract is "a lost ack is retried, not fatal" - 2
-	// logical chunks + >=1 re-sent chunk. An EXACT frame count (==3) also
-	// counts spurious re-sends when a healthy ack crosses the 300ms ack
-	// window on a loaded CI runner, which is precisely how this family
-	// flaked across five PRs. Assert the drop was consumed exactly once
-	// (retry really happened) plus the >=3 floor; extra latency-induced
-	// re-sends are idempotent by protocol and must not fail the test.
+
 	if got := f.cmdCount(wecomCmdUploadChunk); got < 3 {
 		t.Fatalf("expected >=3 chunk frames (2 chunks + retry), got %d", got)
 	}

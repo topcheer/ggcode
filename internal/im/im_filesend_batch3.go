@@ -1,16 +1,5 @@
 package im
 
-// #3325 batch-3: FileSender implementations for the remaining platforms
-// (feishu, wecom, signal, mattermost, whatsapp). wechat stays URL-only by
-// design - the personal-account channel has no upload API, so it keeps the
-// documented path-text degradation.
-//
-// Caption convention across FileSender adapters (#3322 review note): the
-// caption rides the SAME message when the platform supports it natively
-// (signal message field, whatsapp document Caption, mattermost post
-// message) and follows as a separate text message when it does not
-// (feishu, wecom - same as qq in batch 1).
-
 import (
 	"bytes"
 	"context"
@@ -31,8 +20,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
-
-// --- Feishu ---
 
 // SendFile (#3325): images keep the batch-0 preview semantics (im/v1/images
 // image_key message); every other file rides the im/v1/files endpoint
@@ -207,8 +194,6 @@ func (a *feishuAdapter) feishuSendFileMsg(ctx context.Context, chatID, fileKey s
 	return nil
 }
 
-// --- WeCom ---
-
 // SendFile (#3325): images keep the aibot image flow (10MB cap); other
 // files ride the same chunked upload protocol with type=file and the
 // official 20MB file cap, then a msgtype=file frame. WeCom file messages
@@ -275,8 +260,6 @@ func (a *wecomAdapter) sendWecomFileMsg(chatID, mediaID string) error {
 	return a.writeAndAwaitAck(payloadReqID(frame), frame)
 }
 
-// --- Signal ---
-
 // SendFile (#3325): all files ride the signal-cli /v2/send
 // base64_attachments field (the same data-URL convention
 // sendExtractedImage established) - signal renders previews per MIME on
@@ -312,8 +295,6 @@ func (a *signalAdapter) SendFile(ctx context.Context, binding ChannelBinding, fi
 	debug.Log("signal", "adapter=%s file sent to=%s name=%s bytes=%d", a.name, chatID, filename, len(file.Data))
 	return nil
 }
-
-// --- Mattermost ---
 
 // SendFile (#3325): Mattermost renders file previews per MIME, so images
 // and documents ride the same upload + post-with-file_ids flow (the
@@ -429,8 +410,6 @@ func mattermostExtForMIME(mimeType string) string {
 		return ".bin"
 	}
 }
-
-// --- WhatsApp ---
 
 // SendFile (#3325): images keep the preview semantics via
 // sendImageByUpload; every other file uploads as whatsmeow MediaDocument

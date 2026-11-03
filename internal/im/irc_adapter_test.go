@@ -276,13 +276,12 @@ func TestParseIRCPrefix(t *testing.T) {
 }
 
 func TestSplitIRCMessage(t *testing.T) {
-	// Short message
+
 	chunks := splitIRCMessage("hello", 400)
 	if len(chunks) != 1 || chunks[0] != "hello" {
 		t.Errorf("short message: %v", chunks)
 	}
 
-	// Long message without natural split point
 	long := strings.Repeat("a", 800)
 	chunks = splitIRCMessage(long, 400)
 	if len(chunks) != 2 {
@@ -293,7 +292,6 @@ func TestSplitIRCMessage(t *testing.T) {
 		t.Error("rejoined != original")
 	}
 
-	// Long message with newline
 	longNL := "line1\nline2\nline3\nline4\nline5"
 	chunks = splitIRCMessage(longNL, 12)
 	if len(chunks) < 2 {
@@ -304,11 +302,6 @@ func TestSplitIRCMessage(t *testing.T) {
 		t.Errorf("rejoined mismatch")
 	}
 
-	// Long message with spaces. #1552-A: the splitter counts BYTES
-	// (protocol limit). #1660: IRC no longer trims - whitespace is
-	// content (code-block indentation) - and word boundaries are
-	// preferred over hard cuts, so compare whitespace-normalized for
-	// the multi-space edge and check exact preservation below.
 	longSpace := strings.Repeat("word ", 200)
 	chunks = splitIRCMessage(longSpace, 400)
 	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
@@ -327,13 +320,12 @@ func TestSplitIRCMessage(t *testing.T) {
 // is syntax in Python/Go. Both short (no split) and long (split) inputs
 // keep their leading whitespace verbatim.
 func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
-	// Short indented line: no split, no trim.
+
 	if got := splitIRCMessage("    foo := 1", 400); len(got) != 1 || got[0] != "    foo := 1" {
 		t.Errorf("short indented line trimmed: %q", got)
 	}
-	// Long indented code block: every chunk boundary preserves content;
-	// rejoined output is byte-identical to the input.
-	code := strings.Repeat("    indented := true\n", 40) // 23 * 40 = 920 bytes
+
+	code := strings.Repeat("    indented := true\n", 40)
 	chunks := splitIRCMessage(code, 400)
 	if len(chunks) < 2 {
 		t.Fatalf("expected split, got %d chunks", len(chunks))
@@ -346,7 +338,7 @@ func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
 	if joined := strings.Join(chunks, ""); joined != code {
 		t.Errorf("indented code not preserved verbatim:\n%q\nvs\n%q", joined, code)
 	}
-	// Leading indentation of the very first chunk survives.
+
 	if !strings.HasPrefix(chunks[0], "    ") {
 		t.Errorf("first chunk lost its leading indentation: %q", chunks[0])
 	}
@@ -357,29 +349,28 @@ func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
 // indexing used to slice the original string with offsets computed on a
 // lowercased copy).
 func TestIRCRemoveNick_UnicodeSafety(t *testing.T) {
-	// Turkish dotted capital I (U+0130) shrinks under ToLower.
+
 	got := ircRemoveNick("İşsel #test kanalı bot selam", "bot")
 	if got != "İşsel #test kanalı selam" {
 		t.Errorf("Turkish text corrupted: %q", got)
 	}
-	// Kelvin sign (U+212A) also shrinks under case mapping.
+
 	got = ircRemoveNick("K bot hello", "bot")
 	if got != "K hello" {
 		t.Errorf("Kelvin text corrupted: %q", got)
 	}
-	// Expanding case mapping (Ⱥ U+023A): the old implementation panicked with
-	// an out-of-range slice, permanently killing the adapter goroutine.
+
 	expanding := strings.Repeat("Ⱥ", 30)
 	got = ircRemoveNick(expanding+" bot hi", "bot")
 	if got != expanding+" hi" {
 		t.Errorf("expanding text corrupted: %q", got)
 	}
-	// Punctuation attached to the mention is dropped with it.
+
 	got = ircRemoveNick("bot: run the tests", "bot")
 	if got != "run the tests" {
 		t.Errorf("punctuated mention not removed cleanly: %q", got)
 	}
-	// Case-insensitive matching preserved.
+
 	got = ircRemoveNick("BOT hello Bot", "bot")
 	if got != "hello" {
 		t.Errorf("case-insensitive removal broken: %q", got)

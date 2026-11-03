@@ -1,12 +1,5 @@
 package im
 
-// Regression tests for GitHub issues #1240-#1243 (tg_adapter):
-//
-//	#1240: inbound photo/document caption merged into text
-//	#1241: legacy HTML parse mode escapes & < >
-//	#1242: sendPhotoByUpload 429 retry + image-loop inter-message delay
-//	#1243: message-level errors no longer publish a warning state
-
 import (
 	"context"
 	"fmt"
@@ -78,8 +71,7 @@ func TestTGInboundCaptionMergedIntoText(t *testing.T) {
 	if !strings.Contains(bridge.last.Text, "panic") {
 		t.Fatalf("#1240: caption must be merged into text, got %q", bridge.last.Text)
 	}
-	// (Attachment download requires a live Bot API; the caption merge is
-	// the behavior under test here.)
+
 }
 
 // TestTGInboundGroupCaptionMentionStripped pins #1240's group variant: the
@@ -182,7 +174,7 @@ func TestTGSendImageLoopDelay(t *testing.T) {
 	defer srv.Close()
 
 	a := newTGTestAdapter(srv.URL, "")
-	a.manager = nil // not needed for outbound-only
+	a.manager = nil
 
 	img1 := tinyPNGBase64(t, 255, 0, 0)
 	img2 := tinyPNGBase64(t, 0, 255, 0)
@@ -192,7 +184,7 @@ func TestTGSendImageLoopDelay(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	elapsed := time.Since(start)
-	// 2 delivered images = 2 inter-message gaps (img1->img2, img2->text).
+
 	if elapsed < 1500*time.Millisecond {
 		t.Fatalf("2-image send completed in %v; expected >= ~2s of inter-message spacing (#1242)", elapsed)
 	}
@@ -203,9 +195,7 @@ func TestTGSendImageLoopDelay(t *testing.T) {
 // state that nothing would ever recover from.
 func TestTGMessageLevelErrorNoWarningState(t *testing.T) {
 	a, _, m := newTGAdapterFor1240(t)
-	// Drop the session so HandleInbound fails with a non-ErrNoChannelBound
-	// error — previously this published state {Healthy:false, Status:"warning"}
-	// forever (connected is only published once, before the poll loop).
+
 	m.mu.Lock()
 	m.session = nil
 	m.mu.Unlock()

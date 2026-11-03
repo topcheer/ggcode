@@ -1,9 +1,5 @@
 package config
 
-// r415 probe: session_time_budget validation branch mirrors
-// session_token_budget's (negative rejected, zero and positive pass).
-// DefaultConfig provides the valid vendor/endpoint prerequisite chain.
-
 import (
 	"strings"
 	"testing"

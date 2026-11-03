@@ -6,12 +6,12 @@ import (
 )
 
 func TestSplitMarkdown_NoCodeBlock(t *testing.T) {
-	text := strings.Repeat("line of text\n", 300) // 3900 chars
+	text := strings.Repeat("line of text\n", 300)
 	chunks := SplitMarkdown(text, 2000)
 	if len(chunks) < 2 {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
-	// Without code blocks, behavior should be same as SplitMessage
+
 	expected := SplitMessage(text, 2000)
 	if len(chunks) != len(expected) {
 		t.Errorf("chunk count mismatch: got %d, expected %d", len(chunks), len(expected))
@@ -19,9 +19,9 @@ func TestSplitMarkdown_NoCodeBlock(t *testing.T) {
 }
 
 func TestSplitMarkdown_CodeBlockSplit(t *testing.T) {
-	// Create a message with a code block that will be split
+
 	text := "Here is some code:\n```go\n" +
-		strings.Repeat("// code line\n", 200) + // ~2600 chars inside code block
+		strings.Repeat("// code line\n", 200) +
 		"```\nDone!"
 
 	chunks := SplitMarkdown(text, 2000)
@@ -29,7 +29,6 @@ func TestSplitMarkdown_CodeBlockSplit(t *testing.T) {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
 
-	// Every chunk should have balanced code fences (even count of ```)
 	for i, chunk := range chunks {
 		fenceCount := strings.Count(chunk, "```")
 		if fenceCount%2 != 0 {
@@ -39,9 +38,9 @@ func TestSplitMarkdown_CodeBlockSplit(t *testing.T) {
 }
 
 func TestSplitMarkdown_CodeBlockContinuation(t *testing.T) {
-	// Code block split should reopen in the next chunk
+
 	text := "```python\n" +
-		strings.Repeat("x = 1\n", 500) + // ~3000 chars
+		strings.Repeat("x = 1\n", 500) +
 		"```"
 
 	chunks := SplitMarkdown(text, 2000)
@@ -49,12 +48,10 @@ func TestSplitMarkdown_CodeBlockContinuation(t *testing.T) {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
 
-	// Second chunk should start with ``` (reopened code block)
 	if !strings.HasPrefix(chunks[1], "```") {
 		t.Errorf("second chunk should reopen code block, got: %q", chunks[1][:min(50, len(chunks[1]))])
 	}
 
-	// First chunk should end with ``` (closed code block)
 	if !strings.HasSuffix(strings.TrimRight(chunks[0], " \t\r"), "```") {
 		t.Errorf("first chunk should close code block, got ending: %q", chunks[0][max(0, len(chunks[0])-50):])
 	}
@@ -77,9 +74,7 @@ func TestSplitMarkdown_EmptyCodeBlock(t *testing.T) {
 }
 
 func TestSplitMarkdown_ChunkSizeRespectsMaxLen(t *testing.T) {
-	// Regression: chunks crossing code block boundaries get "```\n" prefix and
-	// "\n```" suffix added (8 chars total). Previously these markers could push
-	// a chunk beyond maxLen, causing Discord HTTP 400 rejections.
+
 	maxLen := 2000
 	text := "```go\n" + strings.Repeat("x", 5000) + "\n```"
 	chunks := SplitMarkdown(text, maxLen)
@@ -92,7 +87,7 @@ func TestSplitMarkdown_ChunkSizeRespectsMaxLen(t *testing.T) {
 }
 
 func TestSplitMarkdown_ChunkSizeRespectsMaxLenSlack(t *testing.T) {
-	// Same regression test with a different limit (Slack uses 4000)
+
 	maxLen := 4000
 	text := "```js\n" + strings.Repeat("const x = 1;\n", 500) + "\n```"
 	chunks := SplitMarkdown(text, maxLen)
@@ -105,9 +100,7 @@ func TestSplitMarkdown_ChunkSizeRespectsMaxLenSlack(t *testing.T) {
 }
 
 func TestSplitMarkdown_LanguageTagPreserved(t *testing.T) {
-	// When a code block with a language tag spans multiple chunks, the
-	// continuation chunk should reopen with the same language tag to preserve
-	// syntax highlighting on platforms like Discord and Slack.
+
 	tests := []struct {
 		name string
 		lang string
@@ -132,11 +125,9 @@ func TestSplitMarkdown_LanguageTagPreserved(t *testing.T) {
 				t.Fatalf("expected multiple chunks, got %d", len(chunks))
 			}
 
-			// Every continuation chunk (index > 0) that reopens a code block
-			// should include the language tag
 			for i := 1; i < len(chunks); i++ {
 				if !strings.HasPrefix(chunks[i], "```") {
-					continue // this chunk doesn't reopen a code block
+					continue
 				}
 				if tt.lang != "" {
 					expected := "```" + tt.lang + "\n"
@@ -145,7 +136,7 @@ func TestSplitMarkdown_LanguageTagPreserved(t *testing.T) {
 							i, expected, chunks[i][:min(len(expected)+10, len(chunks[i]))])
 					}
 				} else {
-					// No language tag — should be bare ```
+
 					if !strings.HasPrefix(chunks[i], "```\n") {
 						t.Errorf("chunk %d: expected bare ```\\n prefix, got %q",
 							i, chunks[i][:min(20, len(chunks[i]))])
@@ -157,8 +148,7 @@ func TestSplitMarkdown_LanguageTagPreserved(t *testing.T) {
 }
 
 func TestSplitMarkdown_MultipleCodeBlocksWithLanguage(t *testing.T) {
-	// Multiple code blocks with different languages in one message.
-	// Each continuation chunk should use the correct language for its block.
+
 	text := "```go\n" + strings.Repeat("a\n", 1000) +
 		"```\n```python\n" + strings.Repeat("b\n", 1000) + "```"
 
@@ -167,7 +157,6 @@ func TestSplitMarkdown_MultipleCodeBlocksWithLanguage(t *testing.T) {
 		t.Fatalf("expected at least 2 chunks, got %d", len(chunks))
 	}
 
-	// Verify all chunks have balanced fences
 	for i, chunk := range chunks {
 		fenceCount := strings.Count(chunk, "```")
 		if fenceCount%2 != 0 {
@@ -176,7 +165,6 @@ func TestSplitMarkdown_MultipleCodeBlocksWithLanguage(t *testing.T) {
 		}
 	}
 
-	// Find which continuation chunks have language tags
 	foundGo := false
 	for i := 1; i < len(chunks); i++ {
 		if strings.HasPrefix(chunks[i], "```go\n") {
@@ -184,8 +172,6 @@ func TestSplitMarkdown_MultipleCodeBlocksWithLanguage(t *testing.T) {
 		}
 	}
 
-	// At least one continuation chunk should use 'go' (the first block is longer
-	// and more likely to be split)
 	if !foundGo {
 		t.Error("no continuation chunk with 'go' language tag found")
 	}

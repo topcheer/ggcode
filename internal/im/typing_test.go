@@ -13,10 +13,6 @@ import (
 	"maunium.net/go/mautrix"
 )
 
-// ============================================================
-// Manager.TriggerTyping
-// ============================================================
-
 // stubTypingSink implements both Sink and TypingIndicator.
 type stubTypingSink struct {
 	name        string
@@ -79,7 +75,6 @@ func TestTriggerTyping_SkipsNonTypingIndicatorSinks(t *testing.T) {
 	sink := &stubNonTypingSink{name: "qq"}
 	mgr.RegisterSink(sink)
 
-	// Should not panic; non-TypingIndicator sinks are silently skipped.
 	mgr.TriggerTyping(context.Background())
 }
 
@@ -90,7 +85,6 @@ func TestTriggerTyping_SkipsEmptyChannelID(t *testing.T) {
 	_, _ = mgr.BindChannel(ChannelBinding{
 		Platform: PlatformQQ,
 		Adapter:  "qq",
-		// ChannelID is empty — no typing indicator should be sent
 	})
 
 	sink := &stubTypingSink{name: "qq"}
@@ -108,7 +102,6 @@ func TestTriggerTyping_NoBindings(t *testing.T) {
 	_ = mgr.SetBindingStore(NewMemoryBindingStore())
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp/project"})
 
-	// No bindings — should not panic.
 	mgr.TriggerTyping(context.Background())
 }
 
@@ -173,10 +166,6 @@ func TestReactionAckValue_IsStablePerTarget(t *testing.T) {
 		t.Fatalf("feishu reaction = %q, want Typing", got)
 	}
 }
-
-// ============================================================
-// Telegram TriggerTyping
-// ============================================================
 
 func TestTGTriggerTyping_SetsReactionWhenMessageIDAvailable(t *testing.T) {
 	var gotPath string
@@ -288,10 +277,6 @@ func TestTGTriggerTyping_ServerError(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Discord TriggerTyping
-// ============================================================
-
 func TestDiscordTriggerTyping_PostsToTypingEndpoint(t *testing.T) {
 	var gotPath string
 	var gotAuth string
@@ -394,17 +379,11 @@ func TestDiscordTriggerTyping_ServerError(t *testing.T) {
 		apiBase:    srv.URL,
 	}
 
-	// Discord returns 403 but TriggerTyping doesn't treat it as a Go error,
-	// just logs it. Verify it doesn't panic.
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{ChannelID: "ch"})
 	if err != nil {
 		t.Errorf("expected nil (error is logged, not returned), got %v", err)
 	}
 }
-
-// ============================================================
-// Feishu TriggerTyping
-// ============================================================
 
 func TestFeishuTriggerTyping_PostsReaction(t *testing.T) {
 	var gotPath string
@@ -425,9 +404,7 @@ func TestFeishuTriggerTyping_PostsReaction(t *testing.T) {
 		domain:     "feishu",
 		token:      "tenant_token_xxx",
 	}
-	// Override resolveAPIBase by pointing httpClient transport at test server.
-	// Since resolveAPIBase returns a hardcoded URL, we use a custom transport
-	// that rewrites the URL to our test server.
+
 	origTransport := srv.Client().Transport
 	_ = origTransport
 	adapter.httpClient = &http.Client{
@@ -452,7 +429,7 @@ func TestFeishuTriggerTyping_PostsReaction(t *testing.T) {
 	if gotAuth != "Bearer tenant_token_xxx" {
 		t.Errorf("auth = %q", gotAuth)
 	}
-	// Verify reaction_type.emoji_type = "Typing"
+
 	rt, _ := gotBody["reaction_type"].(map[string]any)
 	if rt["emoji_type"] != "Typing" {
 		t.Errorf("reaction_type.emoji_type = %v, want Typing", rt["emoji_type"])
@@ -551,7 +528,6 @@ func TestFeishuTriggerTyping_NoMessageID(t *testing.T) {
 
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID: "ch-1",
-		// No message IDs
 	})
 	if err != nil {
 		t.Fatalf("TriggerTyping: %v", err)
@@ -580,7 +556,6 @@ func TestFeishuTriggerTyping_ServerError(t *testing.T) {
 		token:  "token",
 	}
 
-	// Should not return error (logged only).
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID:            "ch",
 		LastInboundMessageID: "msg",
@@ -589,10 +564,6 @@ func TestFeishuTriggerTyping_ServerError(t *testing.T) {
 		t.Errorf("expected nil (error logged, not returned), got %v", err)
 	}
 }
-
-// ============================================================
-// Slack TriggerTyping
-// ============================================================
 
 func TestSlackTriggerTyping_AddsEyesReaction(t *testing.T) {
 	var gotBody map[string]any
@@ -726,7 +697,6 @@ func TestSlackTriggerTyping_NoMessageID(t *testing.T) {
 
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID: "C123",
-		// No message ID
 	})
 	if err != nil {
 		t.Fatalf("TriggerTyping: %v", err)
@@ -749,7 +719,6 @@ func TestSlackTriggerTyping_AlreadyReacted(t *testing.T) {
 		apiBase:    srv.URL,
 	}
 
-	// "already_reacted" is not an error — should return nil.
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID:            "C123",
 		LastInboundMessageID: "ts-1",
@@ -772,7 +741,6 @@ func TestSlackTriggerTyping_OtherError(t *testing.T) {
 		apiBase:    srv.URL,
 	}
 
-	// Other errors are logged but not returned.
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID:            "C123",
 		LastInboundMessageID: "ts-1",
@@ -781,10 +749,6 @@ func TestSlackTriggerTyping_OtherError(t *testing.T) {
 		t.Errorf("expected nil (logged only), got %v", err)
 	}
 }
-
-// ============================================================
-// Matrix TriggerTyping
-// ============================================================
 
 func TestMatrixTriggerTyping_SendsReaction(t *testing.T) {
 	var gotPath string
@@ -832,10 +796,6 @@ func TestMatrixTriggerTyping_SendsReaction(t *testing.T) {
 		t.Errorf("key = %v, want %s", relatesTo["key"], wantReaction)
 	}
 }
-
-// ============================================================
-// Mattermost TriggerTyping
-// ============================================================
 
 func TestMattermostTriggerTyping_PostsReaction(t *testing.T) {
 	var gotPath string
@@ -889,16 +849,12 @@ func TestMattermostTriggerTyping_PostsReaction(t *testing.T) {
 	}
 }
 
-// ============================================================
-// QQ TriggerTyping
-// ============================================================
-
 func TestQQTriggerTyping_C2COnly(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &gotBody)
-		// QQ ensureToken calls /app/getAppAccessToken first
+
 		if strings.Contains(r.URL.Path, "getAppAccessToken") {
 			_, _ = w.Write([]byte(`{"access_token":"fake_token","expires_in":3600}`))
 			return
@@ -990,7 +946,6 @@ func TestQQTriggerTyping_UnknownChatTypeSkipped(t *testing.T) {
 		appID:      "test-app",
 		token:      "test-token",
 	}
-	// No chatTypes entry — treated as non-C2C, should skip.
 
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
 		ChannelID: "unknown-ch",
@@ -1038,14 +993,10 @@ func TestQQTriggerTyping_SeqFromPassiveReplyCount(t *testing.T) {
 		t.Fatalf("TriggerTyping: %v", err)
 	}
 
-	if gotBody["msg_seq"] != float64(4) { // 3 + 1
+	if gotBody["msg_seq"] != float64(4) {
 		t.Errorf("msg_seq = %v, want 4 (PassiveReplyCount + 1)", gotBody["msg_seq"])
 	}
 }
-
-// ============================================================
-// LastMessageID helper
-// ============================================================
 
 func TestLastMessageID_PrefersOutbound(t *testing.T) {
 	got := LastMessageID(ChannelBinding{
@@ -1073,10 +1024,6 @@ func TestLastMessageID_BothEmpty(t *testing.T) {
 		t.Errorf("LastMessageID = %q, want empty", got)
 	}
 }
-
-// ============================================================
-// RecordOutboundMessage
-// ============================================================
 
 func TestRecordOutboundMessage(t *testing.T) {
 	mgr := NewManager()
@@ -1112,13 +1059,11 @@ func TestRecordOutboundMessage_EmptyValues(t *testing.T) {
 		ChannelID: "ch-1",
 	})
 
-	// Empty message ID should be silently ignored.
 	err := mgr.RecordOutboundMessage("/tmp/project", "qq", "")
 	if err != nil {
 		t.Fatalf("RecordOutboundMessage: %v", err)
 	}
 
-	// Empty adapter should be silently ignored.
 	err = mgr.RecordOutboundMessage("/tmp/project", "", "msg-1")
 	if err != nil {
 		t.Fatalf("RecordOutboundMessage: %v", err)
@@ -1135,7 +1080,6 @@ func TestRecordOutboundMessage_WrongAdapter(t *testing.T) {
 		ChannelID: "ch-1",
 	})
 
-	// Adapter "tg" is not bound — should be silently ignored.
 	err := mgr.RecordOutboundMessage("/tmp/project", "tg", "msg-1")
 	if err != nil {
 		t.Fatalf("RecordOutboundMessage: %v", err)
@@ -1220,10 +1164,6 @@ func TestFeishuSend_RecordsOutboundMessageID(t *testing.T) {
 		t.Fatalf("LastOutboundMessageID = %q, want om_dc13264520392913993dd051dba21dcf", updated.LastOutboundMessageID)
 	}
 }
-
-// ============================================================
-// helpers
-// ============================================================
 
 // urlRewriteTransport rewrites request URLs from hardcoded targets to a
 // test server. Used for adapters (feishu, slack, QQ) that construct URLs

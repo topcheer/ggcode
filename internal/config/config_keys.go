@@ -30,7 +30,7 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	// #2911: serialize map writes with all other runtime Vendors writers.
+
 	vendorsWriteMu.Lock()
 	defer vendorsWriteMu.Unlock()
 	vc, ok := c.Vendors[vendor]
@@ -40,25 +40,17 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 
 	apiKey = strings.TrimSpace(apiKey)
 
-	// #3522: for the endpoint-scoped path, validate the endpoint EXISTS
-	// before ANY side effect. The old order ran os.Setenv + writeKeysEnv
-	// first and only then checked the endpoint - a typo'd endpoint name
-	// returned an error while the plaintext secret had already been
-	// persisted to keys.env and leaked into the process env. The env-ref
-	// branch above already validated early; the plaintext branch now
-	// mirrors it (fail fast, zero side effects on the failure path).
 	if !vendorScoped {
 		if _, ok := vc.Endpoints[endpoint]; !ok {
 			return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 		}
 	}
 
-	// If the value is already an env reference (${VAR}), store as-is.
 	if _, isRef := envReferenceVarName(apiKey); isRef || apiKey == "" {
 		if vendorScoped {
 			if apiKey == "" {
-				clearAPIKeyRefEnv(vc.APIKey) // #1706 case 3
-				syncVendorKeyEnv(vendor, "") // #2105: purge the sibling name too
+				clearAPIKeyRefEnv(vc.APIKey)
+				syncVendorKeyEnv(vendor, "")
 			}
 			vc.APIKey = apiKey
 			c.Vendors[vendor] = vc
@@ -68,7 +60,7 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 				return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 			}
 			if apiKey == "" {
-				clearAPIKeyRefEnv(ep.APIKey) // #1706 case 3
+				clearAPIKeyRefEnv(ep.APIKey)
 			}
 			ep.APIKey = apiKey
 			vc.Endpoints[endpoint] = ep
@@ -85,24 +77,14 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 		envVarName = preferredEndpointAPIKeyEnvVar(vendor, endpoint)
 	}
 
-	// Set the actual value in the current process environment so it works
-	// immediately for the current session.
-	util.RegisterSecretEnv(envVarName) // #2284-A
+	util.RegisterSecretEnv(envVarName)
 	os.Setenv(envVarName, apiKey)
 
-	// Persist to keys.env so the key survives restarts.
-	// #1706 case 2: a failure here used to be swallowed (debug-only) -
-	// the key lived in process env, vanished on restart, and NeedsOnboard
-	// could re-trigger. SetVendorAPIKey already hard-errors on this exact
-	// condition (#1517); same semantics now (os.Setenv above keeps the
-	// current session working even when the caller logs and continues).
 	if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
 		return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpoint, err)
 	}
 	if vendorScoped {
-		// #2105: the vendor-level key has a second historic env name -
-		// write it too or a later clear via the other path leaves this
-		// entry resurrecting the old secret at every startup.
+
 		syncVendorKeyEnv(vendor, apiKey)
 	}
 
@@ -141,7 +123,7 @@ func syncVendorKeyEnv(vendor, apiKey string) {
 		os.Unsetenv(sibling)
 		return
 	}
-	util.RegisterSecretEnv(primary, sibling) // #2284-A
+	util.RegisterSecretEnv(primary, sibling)
 	os.Setenv(primary, apiKey)
 	if sibling != primary {
 		os.Setenv(sibling, apiKey)
@@ -172,7 +154,7 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	// #2911: serialize map writes with all other runtime Vendors writers.
+
 	vendorsWriteMu.Lock()
 	defer vendorsWriteMu.Unlock()
 	vc, ok := c.Vendors[vendor]
@@ -181,24 +163,21 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		// #1706 case 3: drop the keys.env entry backing the old ref.
+
 		clearAPIKeyRefEnv(vc.APIKey)
-		syncVendorKeyEnv(vendor, "") // #2105: purge BOTH historic names
+		syncVendorKeyEnv(vendor, "")
 		vc.APIKey = ""
 	} else if _, isRef := envReferenceVarName(apiKey); isRef {
 		vc.APIKey = apiKey
 	} else {
 		envVarName := preferredEndpointAPIKeyEnvVar(vendor, "default")
-		util.RegisterSecretEnv(envVarName) // #2284-A
+		util.RegisterSecretEnv(envVarName)
 		os.Setenv(envVarName, apiKey)
-		// #1517: #1435 fixed this exact class for AddVendor/AddEndpoint
-		// but missed SetVendorAPIKey - the key lived only in process env,
-		// worked until restart, then NeedsOnboard forced re-onboarding on
-		// every fresh terminal. Persist like the siblings.
+
 		if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
 			return fmt.Errorf("persisting API key for vendor %s: %w", vendor, err)
 		}
-		syncVendorKeyEnv(vendor, apiKey) // #2105: keep both names in lockstep
+		syncVendorKeyEnv(vendor, apiKey)
 		vc.APIKey = "${" + envVarName + "}"
 	}
 	c.Vendors[vendor] = vc
@@ -246,24 +225,20 @@ func resolveEffectiveAPIKeyRef(epKey, vcKey string) string {
 	epKey = strings.TrimSpace(epKey)
 	vcKey = strings.TrimSpace(vcKey)
 
-	// If endpoint key is empty, use vendor key directly
 	if epKey == "" {
 		return vcKey
 	}
 
-	// If endpoint key is not a ${VAR} reference, use it directly
 	if !envReferencePattern.MatchString(epKey) {
 		return epKey
 	}
 
-	// Endpoint key is a ${VAR} reference — check if it resolves
 	expanded := ExpandEnv(epKey)
 	if expanded != epKey {
-		// Resolved successfully (env var exists)
+
 		return epKey
 	}
 
-	// Unresolvable ${VAR} — fall back to vendor key if available
 	if vcKey != "" {
 		return vcKey
 	}

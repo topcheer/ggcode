@@ -45,5 +45,5 @@ func (b *plainFakeBridge) SubmitInboundMessage(ctx context.Context, msg InboundM
 func TestIssue4587_SetBridgePlainBridgeSafe(t *testing.T) {
 	m := &Manager{}
 	m.SetBridge(&plainFakeBridge{})
-	m.SetBridge(&plainFakeBridge{}) // no detach method - must not panic
+	m.SetBridge(&plainFakeBridge{})
 }

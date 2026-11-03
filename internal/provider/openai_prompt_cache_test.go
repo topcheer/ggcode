@@ -1,9 +1,5 @@
 package provider
 
-// sa-231 probes: prompt_cache_key transport injection (Chat path),
-// request-field arming (Responses path), and agent-side session key
-// wiring.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -37,7 +33,7 @@ func TestInjectPromptCacheKeyChatBody(t *testing.T) {
 }
 
 func TestInjectPromptCacheKeyPreservesExistingAndNonJSON(t *testing.T) {
-	// Existing key must not be overwritten.
+
 	req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions",
 		io.NopCloser(strings.NewReader(`{"prompt_cache_key":"user-key","model":"m"}`)))
 	injectPromptCacheKey(req, "ggcode-s1")
@@ -46,7 +42,6 @@ func TestInjectPromptCacheKeyPreservesExistingAndNonJSON(t *testing.T) {
 		t.Errorf("existing prompt_cache_key overwritten: %s", got)
 	}
 
-	// Non-JSON body (multipart upload) must pass through untouched.
 	raw := "--boundary\r\nbinary\x00data"
 	req2, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/audio/transcriptions",
 		io.NopCloser(strings.NewReader(raw)))
@@ -56,9 +51,8 @@ func TestInjectPromptCacheKeyPreservesExistingAndNonJSON(t *testing.T) {
 		t.Errorf("non-JSON body mutated: %q", got2)
 	}
 
-	// GET requests must not be touched.
 	req3, _ := http.NewRequest(http.MethodGet, "https://api.openai.com/v1/models", nil)
-	injectPromptCacheKey(req3, "ggcode-s1") // must be a no-op (nil body path)
+	injectPromptCacheKey(req3, "ggcode-s1")
 }
 
 func TestOpenAIProviderPromptCacheKeyRoundTrip(t *testing.T) {
@@ -85,7 +79,7 @@ func TestOpenAIResponsesPromptCacheKeyInRequest(t *testing.T) {
 	if got := p.PromptCacheKey(); got != "ggcode-s1" {
 		t.Fatalf("round-trip = %q", got)
 	}
-	// The assembled request must carry the key (omitempty drops it when unset).
+
 	req := responsesRequest{ServiceTier: "auto", PromptCacheKey: p.promptCacheKey}
 	b, err := json.Marshal(req)
 	if err != nil {

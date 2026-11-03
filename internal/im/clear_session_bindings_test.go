@@ -16,7 +16,6 @@ func TestClearSessionBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create bindings: two reference session "s1", one references "s2".
 	_ = store.Save(ChannelBinding{
 		Workspace:     "/ws",
 		Platform:      PlatformQQ,
@@ -39,12 +38,10 @@ func TestClearSessionBindings(t *testing.T) {
 		LastSessionID: "s2",
 	})
 
-	// Clear bindings for session "s1".
 	mgr := NewManager()
 	_ = mgr.SetBindingStore(store)
 	mgr.ClearSessionBindings("s1")
 
-	// Verify: qq-1 and tg-1 should have empty LastSessionID, dc-1 unchanged.
 	all, _ := store.List()
 	for _, b := range all {
 		if b.Adapter == "qq-1" || b.Adapter == "tg-1" {
@@ -75,13 +72,8 @@ func TestClearSessionBindingsGlobal(t *testing.T) {
 		LastSessionID: "stale-session",
 	})
 
-	// Use the standalone global function (operates on default path).
-	// Since we can't easily override DefaultBindingsPath, test via Manager instead.
-	// This test just verifies ClearSessionBindingsGlobal doesn't panic with
-	// a bogus session ID.
 	ClearSessionBindingsGlobal("nonexistent-session-id")
 
-	// Verify the binding still has its LastSessionID (session didn't match).
 	all, _ := store.List()
 	if len(all) != 1 || all[0].LastSessionID != "stale-session" {
 		t.Errorf("unexpected binding state after clear: %+v", all)

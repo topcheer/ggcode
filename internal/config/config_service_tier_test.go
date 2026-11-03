@@ -1,9 +1,5 @@
 package config
 
-// sa-81: service_tier endpoint field plumbing tests. The provider wire
-// behavior is covered in internal/provider; these assert the yaml tag parses
-// and the resolved endpoint carries the trimmed tier.
-
 import "testing"
 
 func TestResolveEndpointServiceTier(t *testing.T) {
@@ -18,8 +14,7 @@ func TestResolveEndpointServiceTier(t *testing.T) {
 						APIKey:       "sk-test",
 						MaxTokens:    4096,
 						DefaultModel: "gpt-5-codex",
-						// Whitespace proves the resolver trims like it does
-						// for text_verbosity/reasoning_effort.
+
 						ServiceTier: " flex ",
 					},
 				},

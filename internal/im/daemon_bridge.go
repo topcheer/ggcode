@@ -109,23 +109,18 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		sess:     sess,
 		language: emitter.Language(),
 	}
-	// #2205: the remote-dangerous-commands gate resolves the workspace
-	// instance config via workingDir - inherit it from the agent so the
-	// opt-in is actually readable in production daemon deployments (an
-	// unset workingDir hashed the empty string and the gate was stuck
-	// fail-closed even with im.remote_dangerous_commands: true configured).
+
 	if ag != nil {
 		b.workingDir = ag.WorkingDir()
 	}
 	if sess != nil {
 		b.usageTurnIndex = daemonSessionTurnIndex(sess)
 	}
-	// Register interactive callback handler so button clicks from adapters
-	// are routed to the pending ask_user question.
+
 	if mgr != nil {
 		mgr.SetInteractiveCallback(b.handleInteractiveCallback)
 	}
-	// Register approval handler so tool permission requests are pushed to IM.
+
 	if ag != nil {
 		ag.SetApprovalHandler(b.handleApproval)
 		if store != nil && sess != nil {
@@ -150,13 +145,6 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 		return
 	}
 
-	// Correlate the callback with the interactive message that carries the
-	// CURRENT question: the pending question's own emitted IDs (#2134 - the
-	// bridge-level map previously tracked "last emitted" with no ownership,
-	// so stale cards fail-opened against text-only successors). When THIS
-	// question has no IDs (text-only) but an EARLIER button question's IDs
-	// are on record for the adapter, a callback can only be a stale card -
-	// drop it instead of fail-opening.
 	b.mu.Lock()
 	expectedMsgID := pending.msgIDs[cb.Adapter]
 	lastEmitted := b.interactiveMsgIDs[cb.Adapter]
@@ -173,15 +161,13 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 		return
 	}
 
-	// Determine the choice value from the callback.
-	// For multi-select, each click toggles a selection; __done__ submits.
 	choice := ""
 	if len(cb.Values) > 0 {
 		choice = cb.Values[0]
 	}
 
 	if pending.multiSelect && choice != "__done__" {
-		// Toggle the selection
+
 		b.mu.Lock()
 		if b.multiSelectChosen == nil {
 			b.multiSelectChosen = make(map[string]bool)
@@ -200,7 +186,7 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	// Submit: single-select sends immediately; multi-select sends accumulated on Done
 	var values []string
 	if pending.multiSelect {
-		// __done__ was clicked — collect all accumulated selections
+
 		b.mu.Lock()
 		for v := range b.multiSelectChosen {
 			values = append(values, v)
@@ -221,19 +207,12 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	case pending.response <- resp:
 	default:
 	}
-	// Clear pendingAsk to match the text reply path — otherwise a subsequent
-	// text message can route to the same (already consumed) response channel
-	// and block forever (deadlock). Compare-then-clear (#655): if another
-	// inbound path already replaced pendingAsk for the NEXT question, that
-	// registration must survive.
+
 	b.mu.Lock()
 	if b.pendingAsk == pending {
 		b.pendingAsk = nil
 	}
-	// #2134: do NOT wipe interactiveMsgIDs here - it tracks the LAST
-	// EMITTED button set per adapter, which is exactly what lets a later
-	// text-only question reject stale cards. The old blind wipe raced a
-	// concurrent registration and fail-opened the successor.
+
 	b.mu.Unlock()
 }
 
@@ -414,7 +393,7 @@ func (b *DaemonBridge) InterruptActiveRun() bool {
 		return false
 	}
 	cancel()
-	// Cascade-cancel sub-agents and delegates (daemon mode has no swarm).
+
 	if cascade != nil {
 		cascade()
 	}
@@ -460,16 +439,9 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
 		return nil, true
 	}
-	// Begin run slot (inline of beginRunSlot logic).
-	// NOTE: do NOT clear pendingInterruptions here. Messages queued while a
-	// previous run was finishing (the finishRunSlot → next-begin window) are
-	// legitimate queued input; wiping them silently dropped already-ACKed IM
-	// messages (#942). runQueuedLoop drains the queue after the current
-	// content completes, so ordering is preserved.
+
 	ctx, cancel := context.WithCancel(context.Background())
-	// Nil-agent guard: bare DaemonBridges (tests, partial setup, or the
-	// pre-agent wiring window) must not SIGSEGV here. Log and treat as a
-	// queued interruption that will be drained once an agent is attached.
+
 	if b.agent == nil {
 		debug.Log("daemon-bridge", "%stryQueueOrBeginRun: no agent attached; deferring content", logPrefix)
 		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
@@ -484,8 +456,7 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 		}
 		next := b.pendingInterruptions[0]
 		b.pendingInterruptions = b.pendingInterruptions[1:]
-		// #1472-A: FULL content (image blocks included) - extractText here
-		// permanently dropped mid-run screenshots.
+
 		debug.Log("daemon-bridge", "interruption handler returning: %s", truncateStr(extractText(next.Content), 80))
 		return next.Content
 	})
@@ -543,11 +514,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return fmt.Errorf("daemon bridge not initialized")
 	}
 	text := strings.TrimSpace(msg.Text)
-	// #1628-B: gate activity on TEXT only meant a pure-image message (the
-	// exact #1584-A scenario) never tickled the Knight idle timer - an
-	// active user read as idle (idle notices/timeouts skewed). Check the
-	// RAW fields (text or attachments): ProviderContent() has a
-	// non-empty-block fallback (#1628-C) and would be always-true here.
+
 	if text != "" || len(msg.Attachments) > 0 {
 		b.mu.Lock()
 		onActivity := b.onActivity
@@ -563,20 +530,12 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Unlock()
 	route := RouteInboundText(text, hasPendingApproval, hasPendingAsk)
 
-	// Slash commands take priority over everything (including pending approval/ask_user)
 	if route.Kind == InboundRouteSlash {
 		return b.handleSlashCommand(ctx, text, msg)
 	}
 
-	// Shell passthrough ($ cmd / ! cmd): executes immediately even while the
-	// agent is mid-turn, matching the TUI escape - never queued into the agent
-	// loop. Order mirrors RouteInboundText: after slash, before approval/ask
-	// (approval replies y/n/a never start with $ or !).
 	if route.Kind == InboundRouteShell {
-		// #2205: mirror the TUI-side gate (#2185/PR #2203) - arbitrary
-		// shell from a remote IM peer is the dominant attack surface and
-		// is hard-denied without the im.remote_dangerous_commands opt-in
-		// (fail closed, same semantics as the TUI remote path).
+
 		if !b.remoteDangerousAllowed() {
 			if b.emitTextOverride != nil {
 				_ = b.emitTextOverride("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
@@ -589,16 +548,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
-	// #2111: a reply-shaped text arriving within the suppression window
-	// after a question expired is far more likely the late answer to the
-	// EXPIRED prompt than to a successor registered seconds ago — without
-	// question correlation the two are indistinguishable, and the wrong
-	// guess auto-approves a tool or answers a questionnaire (#2111 ProbeB).
-	// #2127: the empty-window half (ProbeB2) needs the same guard on the
-	// MESSAGE route - after expiry the pending registration is cleared, so
-	// a bare "y" routes as an ordinary message and was submitted to the
-	// agent as a fresh prompt. Narrow scope: only approval-SHAPED tokens
-	// (ParseApprovalReply-recognizable), so real messages are untouched.
 	b.mu.Lock()
 	staleUntil := b.staleReplySuppressUntil
 	b.mu.Unlock()
@@ -617,31 +566,20 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		}
 	}
 
-	// Check for pending approval — y/a/n reply for tool permission
 	b.mu.Lock()
 	approvalCh := b.pendingApproval
 	b.mu.Unlock()
 	if route.Kind == InboundRouteApproval {
-		// #569 A: the route decision came from a snapshot taken before this
-		// re-read. If the channel vanished in between (approval timed out),
-		// the late reply must be dropped — leaking it to the agent path would
-		// resubmit "y" as a fresh prompt.
+
 		if approvalCh == nil {
 			debug.Log("daemon-bridge", "dropping approval reply after timeout: %q", truncateStr(text, 80))
 			return nil
 		}
-		// #943: send the full route (Decision + AlwaysAllow) — the old
-		// permission.Decision-only channel silently dropped the always-allow
-		// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
-		// #1551-B: non-blocking send, mirroring the ask_user path's #944 fix —
-		// a bare blocking send deadlocked the SECOND concurrent replier (both
-		// snapshot the channel before compare-then-clear; the first fills the
-		// single buffer, the asker has exited, the second blocks forever) and
-		// leaked the adapter receive goroutine.
+
 		select {
 		case approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}:
 			b.mu.Lock()
-			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
+			if b.pendingApproval == approvalCh {
 				b.pendingApproval = nil
 			}
 			b.mu.Unlock()
@@ -651,39 +589,29 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
-	// Check for pending ask_user — if so, route reply there
 	b.mu.Lock()
 	pending := b.pendingAsk
 	b.mu.Unlock()
 	if route.Kind == InboundRouteAskUser {
 		if pending != nil {
 			resp := BuildAskUserResponseFromText(pending.request, route.Text)
-			// #944: non-blocking send, mirroring the interactive callback path
-			// (L175-178). A second concurrent sender after the buffer is full
-			// would otherwise block forever when HandleAskUser exits via ctx.Done()
-			// without draining — leaking the adapter receive goroutine.
+
 			select {
 			case pending.response <- resp:
 			default:
 			}
 			b.mu.Lock()
-			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
+			if b.pendingAsk == pending {
 				b.pendingAsk = nil
 			}
 			b.mu.Unlock()
 			return nil
 		}
-		// AskUser timed out between snapshot and re-lock
+
 		debug.Log("daemon-bridge", "dropping stale ask_user reply: %s", text)
 		return nil
 	}
 
-	// #569: the agent path dereferences b.agent (interruption handler, run
-	// loop). A bridge constructed without an agent must fail explicitly
-	// instead of panicking. However, when a run is already active
-	// (cancelFunc != nil) the message is only queued as an interruption —
-	// the agent is never dereferenced on this path — so queuing must stay
-	// allowed for agent-less bridges (tests simulate active runs this way).
 	b.mu.Lock()
 	runActive := b.cancelFunc != nil
 	b.mu.Unlock()
@@ -691,61 +619,28 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return fmt.Errorf("daemon bridge has no agent attached")
 	}
 
-	// Normal agent submission
 	content := msg.ProviderContent()
 	if len(content) == 0 {
 		return nil
 	}
-	// sa-221 / r406 prompt-side equivalent for IM: every inbound IM text
-	// gets a provenance header block. The IM channel is REMOTE (#2185/
-	// #2205 threat model): the operator usually talks through it, but a
-	// stolen or mistyped binding turns any IM contact into a prompt-
-	// injection source. A lightweight header (not a full untrusted wrap —
-	// IM messages ARE user messages and must stay obeyable) declares the
-	// channel boundary so embedded hostile directives that contradict the
-	// operating rules are reportable instead of silently obeyed.
+
 	if text != "" {
 		content = withIMProvenance(content, msg.Envelope)
 	}
 
-	// Turn-scoped vision fallback, mirroring the TUI path: switch to a
-	// vision model for this turn when images are present and the active
-	// model cannot accept them. When no vision channel is available the
-	// image blocks are stripped up front (path hints survive as text) -
-	// sending them to a text-only endpoint would 400 and feed the generic
-	// auto-retry loop with the same failing payload, 5 times in a row.
 	restoreVision, visionSwitched := b.beginVisionTurn(content)
 	if !visionSwitched && contentHasImageBlocks(content) {
 		content = stripImageBlocks(content)
 	}
 	defer restoreVision()
 
-	// #1584-A: route-empty OR text-less messages used to drop here even
-	// when the content blocks were non-empty (a pure image or a
-	// text+image pair whose text part was empty) - image-only IM sends
-	// vanished silently, no run, no notice. Gate on CONTENT, not text;
-	// text still informs the follow sink when present.
-	// #2140: the original condition's FIRST disjunct (route.Kind ==
-	// InboundRouteEmpty) logically absorbed the second - RouteInboundText
-	// returns Empty for ANY empty text regardless of attachments, so the
-	// gate degenerated to "text-only" and a pure image (text=="",
-	// content=[image]) was silently dropped again - the exact regression
-	// #1584-A fixed, reintroduced by the 203b5879 refactor and directly
-	// contradicting this comment. Gate on EFFECTIVE content: drop only
-	// when there is nothing meaningful to process (no text AND every
-	// content block is blank - ProviderContent's #1628-C fallback always
-	// emits at least an empty text block, so a bare len()==0 check would
-	// let truly-empty messages queue an empty block).
 	if text == "" && contentEffectivelyEmpty(content) {
 		return nil
 	}
 	b.notifyUserMessage(content)
 
-	// Immediately trigger typing indicator so the user sees feedback
-	// before waiting for the first LLM token.
 	b.emitter.TriggerTyping()
 
-	// Notify follow sink of user message
 	b.mu.Lock()
 	sink := b.followSink
 	b.mu.Unlock()
@@ -753,11 +648,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		sink.OnUserMessage(text)
 	}
 
-	// #1584-A: the original rebuild replaced the WHOLE content with a
-	// bare text block - image and attachment-hint blocks were silently
-	// discarded on the normal first-submission path (the interruption
-	// handler and webchat pass full content; this path was the odd one
-	// out). Keep the blocks; only synthesize text when content is empty.
 	if len(content) == 0 {
 		content = []provider.ContentBlock{{Type: "text", Text: text}}
 	}
@@ -786,7 +676,7 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 	answeredCount := 0
 
 	for i, q := range req.Questions {
-		// Format the question text (for display + fallback)
+
 		singleReq := toolpkg.AskUserRequest{
 			Title:     req.Title,
 			Questions: []toolpkg.AskUserQuestion{q},
@@ -810,31 +700,29 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		var msgIDs map[string]string
 		isMulti := q.Kind == toolpkg.AskUserKindMulti
 		pending := &pendingAskUser{
-			request:     singleReq, // use single-question request for correct answer mapping
+			request:     singleReq,
 			response:    make(chan toolpkg.AskUserResponse, 1),
 			multiSelect: isMulti,
 		}
 		b.mu.Lock()
 		b.pendingAsk = pending
 		if isMulti {
-			b.multiSelectChosen = nil // reset accumulated selections
+			b.multiSelectChosen = nil
 		}
 		b.mu.Unlock()
 
 		if len(q.Choices) > 0 {
-			// Send interactive buttons — callbacks can be safely received now.
+
 			msgIDs = b.emitter.EmitAskUserInteractive(q.Title, q, text)
 			if len(msgIDs) > 0 {
 				b.mu.Lock()
 				b.interactiveMsgIDs = msgIDs
-				// #2134: ownership - record the IDs ON the question they belong
-				// to, so correlation survives registration races and text-only
-				// successors can reject stale cards.
+
 				pending.msgIDs = msgIDs
 				b.mu.Unlock()
 			}
 		} else {
-			// Text-only question — send plain text to all adapters
+
 			if text != "" {
 				b.emitter.EmitAskUser(text)
 			}
@@ -858,17 +746,12 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		case <-ctx.Done():
 			b.mu.Lock()
 			cleared := false
-			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
+			if b.pendingAsk == pending {
 				b.pendingAsk = nil
 				cleared = true
 			}
 			b.mu.Unlock()
-			// #1667: the #1656 expiry notice healed only the approval
-			// half. Same structural hole here: no question-correlation on
-			// text replies, so a late "2" typed at the STALE on-screen
-			// question gets parsed against whatever question registered
-			// NEXT - possibly selecting the wrong option. Symmetric
-			// visible stop sign on the stale screen.
+
 			if cleared {
 				b.mu.Lock()
 				b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
@@ -902,9 +785,6 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 		debug.Log("daemon", "approval: failed to emit prompt for tool=%s: %v", toolName, err)
 	}
 
-	// Create a channel and register it so IM replies can resolve it.
-	// #943: carries approvalReply (Decision + Always) so "always" replies can
-	// establish a persistent grant instead of a one-shot allow.
 	ch := make(chan approvalReply, 1)
 	b.mu.Lock()
 	b.pendingApproval = ch
@@ -941,26 +821,19 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
 		b.mu.Lock()
 		cleared := false
-		if b.pendingApproval == ch { // #655: compare-then-clear, not blind wipe
+		if b.pendingApproval == ch {
 			b.pendingApproval = nil
 			cleared = true
 		}
 		b.mu.Unlock()
-		// #1656: with no question-correlation on TEXT replies (buttons
-		// have interactiveMsgIDs; text has nothing), a late "y" typed at
-		// the STALE on-screen prompt auto-approved whatever question was
-		// registered NEXT. Closing the ambiguity window at the source:
-		// when THIS question's registration dies, tell the user the
-		// prompt is void - a visible stop sign on the stale screen.
+
 		if cleared {
 			b.mu.Lock()
 			b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
 			b.mu.Unlock()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
-		// #3370: no user decision was made - return the non-decision outcome
-		// (Timeout/Cancelled) so downstream audit/memory/throttle do not
-		// attribute a denial to the user.
+
 		return permission.DecisionFromContext(ctx.Err())
 	}
 }
@@ -1014,17 +887,16 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	sink := b.followSink
 	b.mu.Unlock()
 
-	// Save user message to session
 	b.appendUserMessage(content)
 
 	err := b.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		defer safego.Recover("im.daemonBridge.streamCallback")
-		// Broadcast to webchat subscribers
+
 		b.broadcastEvent(event)
 
 		switch event.Type {
 		case provider.StreamEventText:
-			// Accumulate text, do NOT send to IM per-token
+
 			round.AppendText(event.Text)
 			b.emitter.TriggerTyping()
 			if sink != nil {
@@ -1039,9 +911,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !isDaemonSkippedTool(toolName) {
 				round.NoteToolCall()
 			}
-			// enter_plan_mode: emit description text to IM so users know
-			// planning has started (the result is hidden, so without this
-			// IM users see nothing until exit_plan_mode).
+
 			if toolName == "enter_plan_mode" {
 				label := "📝 Planning..."
 				if toolLang(b.language) == ToolLangZhCN {
@@ -1055,9 +925,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				}
 				_ = b.emitter.EmitText(label)
 			}
-			// Sleep tool is special: emit the duration immediately
-			// so the user sees it before the tool blocks.
-			// Only emit in verbose mode — quiet/summary aggregate it.
+
 			if toolName == "sleep" && b.resolveEffectiveOutputMode() == "verbose" {
 				b.emitter.EmitEvent(OutboundEvent{
 					Kind: OutboundEventToolCall,
@@ -1068,11 +936,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 					},
 				})
 			}
-			// Do NOT emit intermediate status to IM — only final results
-			// via OutboundEventToolResult (mirrors terminal follow behavior).
+
 			b.emitter.TriggerTyping()
-			// Note: followSink does NOT get OnToolStatus — only final
-			// OnToolResult is forwarded to keep terminal output clean.
 
 		case provider.StreamEventToolResult:
 			round.NoteToolResult(event.IsError)
@@ -1086,10 +951,10 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 			switch b.resolveEffectiveOutputMode() {
 			case "summary":
-				// Only buffer, never send individual tool results
+
 				round.PendingTools = append(round.PendingTools, toolInfo)
 			case "quiet":
-				// Buffer for aggregation; errors still sent immediately
+
 				if event.IsError {
 					b.emitter.EmitEvent(OutboundEvent{
 						Kind:    OutboundEventToolResult,
@@ -1098,7 +963,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				} else {
 					round.PendingTools = append(round.PendingTools, toolInfo)
 				}
-			default: // verbose
+			default:
 				b.emitter.EmitEvent(OutboundEvent{
 					Kind:    OutboundEventToolResult,
 					ToolRes: &toolInfo,
@@ -1113,7 +978,6 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			text := round.Text()
 			mode := b.resolveEffectiveOutputMode()
 
-			// For quiet/summary modes, emit aggregated tool summary
 			if (mode == "quiet" || mode == "summary") && len(round.PendingTools) > 0 {
 				summary := formatToolSummary(b.language, round.PendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 				if summary != "" {
@@ -1121,14 +985,10 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				}
 			}
 
-			// In summary mode, only send the final LLM text
-			// In quiet/verbose mode, always send the text
 			if strings.TrimSpace(text) != "" {
 				b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 			}
-			// AskUser is already emitted by HandleAskUser when the tool executes;
-			// do not emit again here to avoid duplicate messages.
-			// Save assistant messages to session
+
 			b.appendAssistantMessages()
 			round.Reset()
 			if sink != nil {
@@ -1139,10 +999,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !errors.Is(event.Error, context.Canceled) {
 				_ = b.emitter.EmitText(provider.UserFacingError(event.Error))
 			}
-			// #552-D: a failed round must not leak its partial text into
-			// the next round — without this Reset, half-streamed text from
-			// the failed attempt is concatenated with the retry's text in
-			// the same message bubble at the next StreamEventDone.
+
 			round.Reset()
 			if sink != nil {
 				sink.OnError(event.Error)
@@ -1150,12 +1007,6 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 		}
 	}, "human")
 
-	// r414: preference capture aligned with the TUI/pipe paths. IM is the
-	// highest-frequency surface for durable corrections ("以后都用 pnpm"
-	// typed from a phone); without this hook they die with the session.
-	// Non-cancelled runs only, mirroring the TUI reflection guard; failures
-	// are debug-logged inside memory.CapturePreferences and never disturb
-	// the return path.
 	if ctx.Err() == nil {
 		memory.CapturePreferences(b.agent.WorkingDir(), extractText(content))
 	}
@@ -1187,8 +1038,7 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 			b.sess.Title = text
 		}
 	}
-	// User messages are persisted via onPersist (SetPersistHandler).
-	// Only update in-memory state here.
+
 	b.sess.Messages = append(b.sess.Messages, msg)
 }
 
@@ -1201,13 +1051,11 @@ func (b *DaemonBridge) appendAssistantMessages() {
 	}
 	messages := b.agent.Messages()
 	sessLen := len(b.sess.Messages)
-	// After compaction, agent may have FEWER messages than ses.Messages.
-	// In that case, the compacted messages are already covered by the
-	// checkpoint record on disk. Only append truly new messages.
+
 	if len(messages) <= sessLen {
 		return
 	}
-	// Sync new messages to in-memory session (disk already written by onPersist).
+
 	for i := sessLen; i < len(messages); i++ {
 		b.sess.Messages = append(b.sess.Messages, messages[i])
 	}
@@ -1222,7 +1070,7 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 		ev.Model = ses.Model
 		ev.Vendor = ses.Vendor
 		ev.Endpoint = ses.Endpoint
-		ses.AppendMetricEvent(ev) // #3086: lock-guarded append (was a bare slice append)
+		ses.AppendMetricEvent(ev)
 		ses.AppendMetricForEndpoint(ses.Vendor, ses.Endpoint, ev)
 	}
 	b.mu.Unlock()
@@ -1259,10 +1107,7 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 		return 0
 	}
 	last := 0
-	// #3091: read through the #3086/#3087 lock-guarded snapshot accessors -
-	// the bare slice reads raced the append callbacks on the same slices.
-	// Construction-time-only caller keeps the window near zero (low), but
-	// the accessor comments name exactly this cross-goroutine use.
+
 	if hist := ses.UsageHistorySnapshot(); len(hist) > 0 && hist[len(hist)-1].TurnIndex > last {
 		last = hist[len(hist)-1].TurnIndex
 	}
@@ -1271,8 +1116,6 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 	}
 	return last
 }
-
-// --- helpers ---
 
 type daemonRoundState = SummaryRoundState
 
@@ -1313,7 +1156,6 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 
 	var sb strings.Builder
 
-	// Header line
 	if ToolLanguage(lang) == ToolLangZhCN {
 		sb.WriteString(fmt.Sprintf("⚙ 执行了 %d 个工具调用", total))
 		if failures > 0 {
@@ -1363,11 +1205,11 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 	for _, item := range sorted {
 		var symbol string
 		if item.failures > 0 && item.failures == item.count {
-			symbol = "✗" // all calls failed
+			symbol = "✗"
 		} else if item.failures > 0 {
-			symbol = "⚠" // partial failure
+			symbol = "⚠"
 		} else {
-			symbol = "✓" // all succeeded
+			symbol = "✓"
 		}
 		if item.count == 1 {
 			sb.WriteString(fmt.Sprintf("  %s %s\n", symbol, item.name))
@@ -1461,8 +1303,7 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			return fn("", "", "")
 		},
 		OnExtra: func(parts []string) (string, bool) {
-			// Shared registry dispatch (one-shot query commands + TUI-only
-			// hints). The bridge itself implements SlashDeps (agent + disk).
+
 			return ExecuteRegistrySlashCommand(b, strings.Join(parts, " "))
 		},
 	}); result.Handled {
@@ -1502,8 +1343,6 @@ func (b *DaemonBridge) resolveEffectiveOutputMode() string {
 	return globalMode
 }
 
-// --- ChatBridge implementation (for webui WebChat) ---
-
 // extractText returns the concatenated text from content blocks.
 func extractText(blocks []provider.ContentBlock) string {
 	var text string
@@ -1531,11 +1370,6 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	}
 	b.notifyUserMessage(content)
 
-	// Notify activity hook (Knight idle timer) for webchat messages too.
-	// #1803 case 1: a pure-image message (text=="" but content blocks
-	// present) passed the early-return gate and reached the agent - only
-	// the ACTIVITY hook was skipped, so image-only webchat sessions were
-	// misjudged idle. #1628 fixed the IM path; this webchat twin lagged.
 	if text != "" || len(content) > 0 {
 		b.mu.Lock()
 		onActivity := b.onActivity
@@ -1545,17 +1379,12 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		}
 	}
 
-	// tryQueueOrBeginRun atomically checks if the agent is busy (queue
-	// the interruption) or idle (begin a new run slot). This eliminates
-	// the TOCTOU window between separate tryQueueInterruption and
-	// beginRunSlot calls.
 	ctx2, queued := b.tryQueueOrBeginRun(content, "webchat: ")
 	if queued {
 		return
 	}
 	b.notifyRunStateChange(true)
 
-	// Start the run outside the lock
 	safego.Go("im.daemonBridge.run", func() {
 		b.runQueuedLoop(ctx2, content, "webchat: ", func(ctx context.Context, text string) bool {
 			return false
@@ -1581,7 +1410,7 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 		ch:   make(chan provider.StreamEvent, 256),
 		done: make(chan struct{}),
 	}
-	// Start async forwarder goroutine
+
 	safego.Go("im.daemonBridge.subscriber", func() {
 		defer close(sub.done)
 		for event := range sub.ch {
@@ -1597,12 +1426,7 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	idx := len(b.eventSubs) - 1
 	b.eventSubMu.Unlock()
 	return func() {
-		// #1303: detach and close under the lock, then wait for the
-		// forwarder to drain OUTSIDE it - draining executes the subscriber
-		// callback up to 256 times synchronously; waiting on it while
-		// holding the write lock stalls every broadcastEvent RLock, which
-		// sits on the agent's synchronous emit path. A permanently blocked
-		// callback would have deadlocked ALL subscribers forever.
+
 		b.eventSubMu.Lock()
 		sub := b.eventSubs[idx]
 		b.eventSubs[idx] = nil

@@ -47,11 +47,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if model == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no active model", endpoint, vendor)
 	}
-	// Resolve API key: endpoint key first, but if it's an unresolvable ${VAR}
-	// reference (env var not set), fall back to vendor key.
+
 	apiKey := resolveEffectiveAPIKeyRef(ep.APIKey, vc.APIKey)
-	// Expand any remaining ${VAR} references so the resolved endpoint always
-	// contains the actual key value, not a reference string.
+
 	apiKey = ExpandEnv(apiKey)
 	authType := strings.TrimSpace(ep.AuthType)
 	if authType == "" {
@@ -72,9 +70,7 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 			if endpoint == "enterprise" && enterpriseURL != "" {
 				baseURL = auth.CopilotAPIBaseURL(enterpriseURL)
 			} else if endpoint == "github.com" && baseURL == "" {
-				// #1695 case 5: an explicitly configured base_url (custom
-				// proxy) was silently overwritten with the official API
-				// host. Only default when unset.
+
 				baseURL = auth.CopilotAPIBaseURL("")
 			}
 		}
@@ -86,28 +82,19 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		}
 		if info != nil {
 			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
-				// #1505 case 2: single-flight via refreshClaudeOAuthToken (re-read
-				// under the lock + one bounded refresh attempt).
+
 				apiKey, err = refreshClaudeOAuthToken(auth.DefaultStore())
 				if err != nil {
 					return nil, err
 				}
 			} else {
-				// #2622: expired + no refresh token + non-empty access token
-				// used to fall through here and silently return the known-
-				// expired token (bare 401 downstream, no recovery hint) - the
-				// exact state refreshClaudeOAuthToken's internal guard rejects
-				// with a run-/login error, but the caller's RefreshToken != ""
-				// condition made that branch unreachable. Fail loudly here,
-				// same message shape as the #1695 empty-token guard below.
+
 				if info.IsExpired() {
 					debug.Log("config", "claude oauth: expired token with no refresh token (re-authentication required)")
 					return nil, fmt.Errorf("claude oauth: token expired and no refresh token available; run /login to re-authenticate")
 				}
 				apiKey = strings.TrimSpace(info.AccessToken)
-				// #1695 case 5: an unexpired token with an EMPTY access
-				// token used to resolve successfully and surface as a bare
-				// 401 later - reject at resolution time instead.
+
 				if apiKey == "" {
 					debug.Log("config", "claude oauth: unexpired token has empty access token (re-authentication required)")
 					return nil, fmt.Errorf("claude oauth: stored token has no access token; run /login to re-authenticate")
@@ -122,16 +109,13 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		}
 		if info != nil {
 			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
-				// Same single-flight shape as the Claude OAuth refresh: the
-				// refresh helper re-reads under the store lock.
+
 				apiKey, err = refreshOpenCodeOAuthToken(auth.DefaultStore())
 				if err != nil {
 					return nil, err
 				}
 			} else {
-				// #2622: symmetric with the Claude branch above - expired with
-				// no refresh token must not silently resolve to the expired
-				// access token; fail loudly with the re-login command.
+
 				if info.IsExpired() {
 					debug.Log("config", "opencode oauth: expired token with no refresh token (re-login required)")
 					return nil, fmt.Errorf("opencode oauth: token expired and no refresh token available; run `ggcode login opencode` to re-authenticate")
@@ -147,11 +131,10 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if baseURL == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
-	// Resolution priority for limits: per-model override -> endpoint-level -> inference.
+
 	maxTokens := 0
 	contextWindow := 0
-	// LLM call policy (sa-78): per-model override -> endpoint-level -> zero
-	// (no deadline / provider-wide retry default).
+
 	requestTimeout := time.Duration(0)
 	maxRetries := 0
 	mlPresent := false
@@ -166,12 +149,7 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		maxTokens = ep.MaxTokens
 	}
 	if !mlPresent {
-		// #4408-C2: the documented contract (config.go EndpointConfig/
-		// ModelLimits comments) is "a model_limits entry takes priority,
-		// 0 = none" - an explicit per-model 0 must NOT be overridden by the
-		// endpoint-level value, or there is no way to disable the timeout
-		// for a single model under a 45s endpoint. Inherit endpoint values
-		// only when no model_limits entry exists at all.
+
 		if requestTimeout <= 0 {
 			requestTimeout = ep.RequestTimeout
 		}
@@ -245,7 +223,7 @@ func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, end
 		if ep, ok := vc.Endpoints[endpoint]; ok {
 			epName := ep.DisplayName
 			if epName == "" {
-				epName = endpoint // fallback to raw ID
+				epName = endpoint
 			}
 			endpointDisplay = localizedEndpointDisplay(vendor, endpoint, epName, c.Language)
 		}
@@ -353,8 +331,7 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 	if c == nil {
 		return false
 	}
-	// Explicit re-add revives the name: clear its deletion tombstone so the
-	// merge no longer filters it out.
+
 	c.clearMCPDeleted(server.Name)
 	for i, existing := range c.MCPServers {
 		if existing.Name != server.Name {
@@ -383,14 +360,13 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	merged := base
 
-	// Type switch: clear type-incompatible fields when type changes
 	if patch.Type != "" && patch.Type != merged.Type {
-		// Switching to http, sse, or ws: clear stdio fields
+
 		if patch.Type == "http" || patch.Type == "sse" || patch.Type == "ws" {
 			merged.Command = ""
 			merged.Args = nil
 		}
-		// Switching to stdio: clear http/sse fields
+
 		if patch.Type == "stdio" {
 			merged.URL = ""
 			merged.Headers = nil
@@ -401,7 +377,7 @@ func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 		merged.Type = patch.Type
 	}
 	if patch.CommandClear {
-		// #4386: explicit clear sentinel beats the keep-old-value default.
+
 		merged.Command = ""
 	} else if patch.Command != "" {
 		merged.Command = patch.Command
@@ -484,7 +460,7 @@ func (c *Config) clearMCPDeleted(name string) {
 		}
 	}
 	if len(kept) == len(c.DeletedMCPServers) {
-		return // nothing removed
+		return
 	}
 	c.DeletedMCPServers = kept
 	if err := SaveMCPDeleted(c.externalConfigDir(), c.DeletedMCPServers); err != nil {
@@ -529,11 +505,6 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 		return fmt.Errorf("endpoint name cannot be empty")
 	}
 
-	// #1706 case 1: the openai default previously applied HERE, before
-	// the merge check - so ep.Protocol was never empty and the merge
-	// branch's "empty = keep existing" never applied to protocol: a
-	// partial update (base_url only) silently flipped an anthropic
-	// endpoint to openai. The default now applies only to NEW endpoints.
 	isNew := false
 	if _, exists := vc.Endpoints[endpointName]; !exists {
 		isNew = true
@@ -547,23 +518,17 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 		BaseURL:  strings.TrimSpace(baseURL),
 	}
 
-	// Handle API key: plaintext → env ref + os.Setenv, or pass through ${VAR}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey != "" {
 		if _, isRef := envReferenceVarName(apiKey); isRef {
 			ep.APIKey = apiKey
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(vendor, endpointName)
-			util.RegisterSecretEnv(envVarName) // #2284-A
+			util.RegisterSecretEnv(envVarName)
 			os.Setenv(envVarName, apiKey)
-			// #1435-A: same as AddVendor - persist, or the key lives only
-			// in this process and onboarding loops on fresh terminals.
+
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
-				// #4507: roll the env var back, or a read-only/full keys.env
-				// dir left the PLAINTEXT key in process env while the vendor
-				// never made it into c.Vendors - NeedsOnboard's LookupEnv then
-				// saw a ghost key and split onboarding state from config
-				// state for the life of the process.
+
 				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpointName, err)
 			}
@@ -574,13 +539,7 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 	if vc.Endpoints == nil {
 		vc.Endpoints = make(map[string]EndpointConfig)
 	}
-	// #1517: the function comment says "If the endpoint already exists it
-	// is UPDATED" - but a fresh struct replaced it wholesale, wiping
-	// Models/DefaultModel/SelectedModel/ContextWindow/APIKey and more.
-	// Users changing only base_url via 'config set' lost their API key
-	// reference and discovered models, and clearing the active endpoint's
-	// SelectedModel broke resolution. Merge onto the existing endpoint,
-	// updating only the non-zero incoming fields.
+
 	if existing, ok := vc.Endpoints[endpointName]; ok {
 		if ep.Protocol != "" {
 			existing.Protocol = ep.Protocol
@@ -612,12 +571,7 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 	}
 	delete(vc.Endpoints, endpoint)
 	c.Vendors[vendor] = vc
-	// #1517 case C: if the removed endpoint was the ACTIVE selection, c.Endpoint
-	// dangles - ResolveActiveEndpoint fails "endpoint not configured" with no
-	// fallback branch, and NeedsOnboard treats any resolve error as needing
-	// re-onboarding, so every launch popped onboarding until the user manually
-	// changed the selection. Fall back to the first remaining endpoint under
-	// the same vendor.
+
 	if c.Vendor == vendor && c.Endpoint == endpoint {
 		c.Endpoint = ""
 		for name := range vc.Endpoints {
@@ -626,11 +580,7 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 			}
 		}
 		if c.Endpoint == "" {
-			// No endpoints left under this vendor - fall back to another
-			// vendor. #4407: deterministic successor per #1422-B2 - bare map
-			// iteration picked a RANDOM survivor and the caller's saveConfig()
-			// persisted the random pick as permanent config. Lowest vendor
-			// name, then lowest endpoint name under it.
+
 			otherVendors := make([]string, 0, len(c.Vendors))
 			for vName := range c.Vendors {
 				if vName == vendor {
@@ -678,20 +628,15 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 			vc.APIKey = apiKey
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(name, "default")
-			util.RegisterSecretEnv(envVarName) // #2284-A
+			util.RegisterSecretEnv(envVarName)
 			os.Setenv(envVarName, apiKey)
-			// #1435-A: without persisting to keys.env the value lived ONLY in
-			// this process's env; a fresh terminal (NeedsOnboard LookupEnv
-			// misses) re-entered onboarding forever - the user retyped the
-			// key on every launch. Save()'s migration only moves PLAINTEXT
-			// keys, so the ${VAR} reference path had no persistence owner.
+
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
-				// #4507: same fail-atomic rollback as AddEndpoint - no ghost
-				// plaintext key in process env when the vendor was not added.
+
 				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for vendor %q: %w", name, err)
 			}
-			syncVendorKeyEnv(name, apiKey) // #2105: keep both historic names in lockstep
+			syncVendorKeyEnv(name, apiKey)
 			vc.APIKey = "${" + envVarName + "}"
 		}
 	}
@@ -707,27 +652,17 @@ func (c *Config) RemoveVendor(name string) error {
 	if _, ok := c.Vendors[name]; !ok {
 		return fmt.Errorf("vendor %q not found", name)
 	}
-	// #2161: purge the vendor's key material BEFORE the map delete - the
-	// APIKey ref becomes unreachable afterwards. RemoveVendor used to
-	// leave the secret in keys.env (both historic names, per #2105's
-	// lockstep) re-injected into every startup env, silently reused if
-	// the same vendor name was ever re-added.
+
 	if vc := c.Vendors[name]; vc.APIKey != "" {
 		clearAPIKeyRefEnv(vc.APIKey)
 	}
-	syncVendorKeyEnv(name, "") // both historic names + process env
+	syncVendorKeyEnv(name, "")
 	delete(c.Vendors, name)
-	// #1517 case C: same dangling-selection fallback as RemoveEndpoint -
-	// removing the ACTIVE vendor left c.Vendor dangling and popped
-	// onboarding on every launch until the selection was fixed manually.
+
 	if c.Vendor == name {
 		c.Vendor = ""
 		c.Endpoint = ""
-		// #4407: deterministic successor per #1422-B2 - the old bare map
-		// iteration selected a RANDOM surviving vendor/endpoint and the
-		// caller's saveConfig() persisted the random pick as permanent
-		// config; a randomly-selected vendor with a dead key then failed
-		// silently. Lowest vendor name, then lowest endpoint name.
+
 		vNames := make([]string, 0, len(c.Vendors))
 		for vName := range c.Vendors {
 			if vName == name {
@@ -817,43 +752,20 @@ func refreshClaudeOAuthToken(store *auth.Store) (string, error) {
 	if strings.TrimSpace(info.RefreshToken) == "" {
 		return "", fmt.Errorf("claude oauth: token expired and no refresh token available; run /login to re-authenticate")
 	}
-	// #1505: the sole production refresh call used context.Background() and
-	// RefreshClaudeToken uses http.DefaultClient (no timeout) - a TCP black
-	// hole froze every endpoint resolution for minutes to hours. Bound the
-	// refresh so a TCP black hole cannot hang every endpoint resolution; a
-	// FAILED refresh then fails LOUDLY (#1300) to trigger re-auth.
+
 	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
 	refreshed, refreshErr := auth.RefreshClaudeToken(refreshCtx, info.RefreshToken)
 	cancelRefresh()
 	if refreshErr == nil && refreshed != nil {
-		// #1300: Save errors were discarded. Anthropic rotates the refresh
-		// token on each refresh, so a failed Save leaves the OLD (now
-		// server-side invalidated) refresh token on disk - the next refresh
-		// gets invalid_grant with no self-healing path. Surface the error so
-		// the caller/user can re-auth.
+
 		if saveErr := store.Save(refreshed); saveErr != nil {
-			// #1336: returning the error (not just logging) makes the failure
-			// visible to the 27+ ResolveActiveEndpoint callers that key off
-			// the returned error to trigger re-auth. The in-memory token
-			// would keep THIS session alive while disk holds the
-			// server-side invalidated old refresh token: after restart the
-			// only outcome is invalid_grant and a forced /login anyway -
-			// fail now, while the user is present.
+
 			debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token lost on restart): %v", saveErr)
 			return "", fmt.Errorf("claude oauth: refreshed token could not be persisted (disk/permission error); re-authenticate before restarting: %w", saveErr)
 		}
 		return strings.TrimSpace(refreshed.AccessToken), nil
 	}
-	// #1300: do NOT silently fall back to the known-expired access token -
-	// downstream requests would 401 and mask the real cause (refresh
-	// failure). Fail loudly to trigger re-authentication.
-	// #1805 case 1: a PERMANENT rejection (invalid_grant - the refresh token
-	// was rotated on a Save that failed, or revoked) must also delete the
-	// stored token: the status bar reads disk fields and kept reporting
-	// "connected" while every chat 401'd, with /login as the only exit.
-	// Clearing the dead token flips the status to "not connected"
-	// immediately. Transient errors keep the token - the next resolve
-	// retries the refresh.
+
 	if isPermanentRefreshFailure(refreshErr) {
 		debug.Log("config", "claude oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
 		if delErr := store.Delete(auth.ProviderAnthropic); delErr != nil {
@@ -908,13 +820,7 @@ func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
 		}
 		return strings.TrimSpace(tok.AccessToken), nil
 	}
-	// #4508: mirror the Claude path's #1805 case-1 block - a PERMANENT
-	// rejection (invalid_grant: the refresh token was rotated on a failed
-	// Save, or revoked server-side) must delete the stored token. Without
-	// this the dead token stayed on disk and every resolve did IsExpired →
-	// 30s refresh attempt → failure, with the status stuck on "expired"
-	// instead of flipping to re-onboarding. Transient errors keep the
-	// token; the next resolve retries.
+
 	if isPermanentRefreshFailure(refreshErr) {
 		debug.Log("config", "opencode oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
 		if delErr := store.Delete("opencode"); delErr != nil {

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- Issue #986, Problem 1: communityKey must not bypass a configured key ---
-
 func TestIssue986CommunityKeyRejectedWhenCustomKeyConfigured(t *testing.T) {
 	called := false
 	handler := AuthMiddleware("my-strong-secret", func(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +26,6 @@ func TestIssue986CommunityKeyRejectedWhenCustomKeyConfigured(t *testing.T) {
 		t.Error("handler must not be invoked when the community key is rejected")
 	}
 
-	// The configured key itself still works.
 	req2 := httptest.NewRequest(http.MethodGet, "/lanchat/messages", nil)
 	req2.Header.Set("X-API-Key", "my-strong-secret")
 	rec2 := httptest.NewRecorder()
@@ -51,8 +48,6 @@ func TestIssue986CommunityKeyAcceptedInZeroConfig(t *testing.T) {
 		t.Errorf("zero-config community key: got status %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	// A hub whose configured key IS the community key (EffectiveAPIKey default
-	// on the receiving side) must behave like zero-config.
 	handler2 := AuthMiddleware(communityKey, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -75,8 +70,6 @@ func TestIssue986WrongKeyStillRejected(t *testing.T) {
 		t.Errorf("wrong key in zero-config: got status %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
-
-// --- Issue #986, Problem 1: FromRole self-report must not bypass the gate ---
 
 func newIssue986Hub(t *testing.T, mode string) *Hub {
 	t.Helper()
@@ -153,8 +146,6 @@ func TestIssue986AlwaysPolicyStillAutoApprovesHuman(t *testing.T) {
 		t.Errorf("explicit always policy should still auto-approve, got %d pending", got)
 	}
 }
-
-// --- Issue #986, Problem 2: attachment download MIME whitelist ---
 
 func serveIssue986Attachment(t *testing.T, mimeType, name string) *httptest.ResponseRecorder {
 	t.Helper()

@@ -52,7 +52,6 @@ func TestIssue2819AnthropicFoldsInjectedUserMessages(t *testing.T) {
 		t.Fatalf("#2819: folded guidance text not found after tool_result block: %+v", content)
 	}
 
-	// Same invariant for the countTokens path.
 	ctParams := p.buildCountTokensParams(msgs)
 	if len(ctParams.Messages) != 2 {
 		t.Fatalf("#2819: countTokens path: expected 2 messages, got %d", len(ctParams.Messages))

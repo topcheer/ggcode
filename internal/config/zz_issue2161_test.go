@@ -1,10 +1,5 @@
 package config
 
-// #2161 regression: RemoveVendor deleted the map entry but never purged
-// the vendor's key material - the secret stayed in keys.env (BOTH
-// historic names per #2105's lockstep) and was re-injected into every
-// startup env, silently reused if the vendor name was re-added.
-
 import (
 	"os"
 	"path/filepath"
@@ -34,7 +29,7 @@ func TestRemoveVendorPurgesKey(t *testing.T) {
 			t.Fatalf("%s still set after RemoveVendor: %q", name, v)
 		}
 	}
-	// The vendor-scoped flavor's entry must not survive either.
+
 	c2 := testConfig2105(t, "zai2")
 	if err := c2.SetEndpointAPIKey("zai2", "default", "sk-EP", true); err != nil {
 		t.Fatalf("SetEndpointAPIKey: %v", err)

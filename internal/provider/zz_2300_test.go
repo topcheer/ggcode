@@ -1,9 +1,5 @@
 package provider
 
-// #2300: the thinking-budget derivation must honor an active MCP sampling
-// override (small window => shrink the budget, or disable thinking), not the
-// static cap.
-
 import (
 	"testing"
 
@@ -32,8 +28,7 @@ func Test2300_EffortBudgetHonorsSamplingOverride(t *testing.T) {
 }
 
 func Test2300_SmallOverrideDisablesThinking(t *testing.T) {
-	// The exact bug shape: static cap 8192 + override 512 - the old code
-	// derived budget from 8192 (>=512), exceeding the 512 output window.
+
 	p := newGeminiEffort2300("gemini-2.5-pro", "high")
 	p.SetSamplingOverride(&SamplingOverride{MaxTokens: 512})
 	config := &genai.GenerateContentConfig{}

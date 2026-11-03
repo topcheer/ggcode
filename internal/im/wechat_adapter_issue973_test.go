@@ -14,8 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- test helpers ---
-
 // stubInboundBridge captures inbound messages submitted by HandleInbound.
 type stubInboundBridge struct {
 	mu        sync.Mutex
@@ -108,8 +106,6 @@ func wechatInboundMsg(fromUserID, text, contextToken string, messageID int64) il
 	}
 }
 
-// --- Issue #973 problem 1: pre-auth token poisoning ---
-
 // An unauthorized user's message must NOT overwrite the authorized binding's
 // context_token (previously UpdateBindingContextToken ran before the
 // HandleInbound channel check).
@@ -117,17 +113,15 @@ func TestWechatHandleMessage_UnauthorizedUserDoesNotOverwriteContextToken(t *tes
 	mgr, bridge := newWechatTestManager(t, "user-authorized")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
 
-	// Authorized channel's token in the binding.
 	mgr.currentBindings["wc"].ContextToken = "authorized-token"
 	mgr.currentBindings["wc"].ContextTokenUpdatedAt = time.Now()
 
-	// Stranger (different channel ID) sends a message with their own token.
 	a.handleMessage(context.Background(), wechatInboundMsg("stranger-1", "hello", "stranger-token", 101))
 
 	if got := mgr.GetBindingContextToken("wc"); got != "authorized-token" {
 		t.Fatalf("pre-auth poisoning: binding token = %q, want %q (stranger overwrote it)", got, "authorized-token")
 	}
-	// The unauthorized message must still be rejected by channel auth.
+
 	if bridge.count() != 0 {
 		t.Fatalf("unauthorized message reached the bridge: %+v", bridge.last())
 	}
@@ -160,10 +154,9 @@ func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 	mgr.SetBridge(bridge)
 	mgr.SetBindingStore(NewMemoryBindingStore())
 	mgr.BindSession(SessionBinding{Workspace: "/ws"})
-	// No binding yet → first message triggers pairing challenge.
+
 	a, sent := newWechatTestAdapter(t, mgr, nil)
 
-	// Step 1: stranger's first message → challenge issued (consumed).
 	a.handleMessage(context.Background(), wechatInboundMsg("pairer", "hi", "pairer-token", 201))
 	if bridge.count() != 0 {
 		t.Fatalf("pairing-consumed message should not reach the bridge, got %d", bridge.count())
@@ -171,7 +164,7 @@ func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 	if len(*sent) == 0 {
 		t.Fatal("expected a pairing challenge reply to be sent")
 	}
-	// Challenge phase: not yet bound → token must NOT be persisted.
+
 	if got := mgr.GetBindingContextToken("wc"); got != "" {
 		t.Fatalf("challenge phase: binding token = %q, want empty (pre-auth poisoning)", got)
 	}
@@ -179,7 +172,6 @@ func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 		t.Fatal("expected pending pairing challenge")
 	}
 
-	// Step 2: correct code → pairing success, token persisted.
 	code := mgr.pendingPairing.Code
 	(*sent) = nil
 	a.handleMessage(context.Background(), wechatInboundMsg("pairer", code, "pairer-token-2", 202))
@@ -192,7 +184,7 @@ func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 	if got := mgr.GetBindingContextToken("wc"); got != "pairer-token-2" {
 		t.Fatalf("pairing success should persist the pairing user's token, got %q", got)
 	}
-	// The reply must carry the pairing user's own context_token.
+
 	if (*sent)[0].Msg.ContextToken != "pairer-token-2" {
 		t.Fatalf("pairing reply token = %q, want pairer-token-2", (*sent)[0].Msg.ContextToken)
 	}
@@ -220,8 +212,6 @@ func TestWechatHandleMessage_UnauthorizedReplyUsesStrangerToken(t *testing.T) {
 		t.Fatalf("binding token must be untouched: got %q", got)
 	}
 }
-
-// --- Issue #973 problem 2: silent swallowed replies ---
 
 func TestWechatSendTextToUser_EmptyTokenReturnsError(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
@@ -266,8 +256,6 @@ func TestWechatSendTextToUser_Success(t *testing.T) {
 		t.Errorf("ContextToken = %q, want ctx-tok", (*sent)[0].Msg.ContextToken)
 	}
 }
-
-// --- Issue #973 problem 3: quota enforcement ---
 
 // A stale context_token (older than the documented ~24h TTL) must fail with a
 // visible, actionable error instead of a guaranteed server-side rejection.
@@ -314,9 +302,8 @@ func TestWechatSend_ChunkCapWithTruncationNotice(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
 	a, sent := newWechatTestAdapter(t, mgr, nil)
 
-	// Build text long enough for many chunks: repeat a multi-KB block.
-	block := strings.Repeat("ggcode 测试内容块。", 200) // ~2.6KB per block
-	long := strings.Repeat(block+"\n", 12)        // forces > 5 chunks
+	block := strings.Repeat("ggcode 测试内容块。", 200)
+	long := strings.Repeat(block+"\n", 12)
 
 	if err := a.Send(context.Background(), ChannelBinding{
 		ChannelID:             "user-1",
@@ -333,7 +320,7 @@ func TestWechatSend_ChunkCapWithTruncationNotice(t *testing.T) {
 	if !strings.Contains(last, "[消息过长，已截断]") {
 		t.Errorf("last chunk missing truncation notice: %q", tail(last, 60))
 	}
-	// Every chunk must respect the platform byte limit.
+
 	maxBytes := PlatformLimits[PlatformWechat]
 	for i, s := range *sent {
 		if n := len(s.Msg.ItemList[0].TextItem.Text); n > maxBytes {
@@ -363,16 +350,14 @@ func TestWechatSend_ShortOutputUnaffected(t *testing.T) {
 	}
 }
 
-// --- Issue #973 attachment: inbound MsgId dedup ---
-
 func TestWechatSeenMessageID_Dedup(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "user-1")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
 
 	msg := wechatInboundMsg("user-1", "hello", "tok", 301)
 	a.handleMessage(context.Background(), msg)
-	a.handleMessage(context.Background(), msg) // redelivery
-	a.handleMessage(context.Background(), msg) // redelivery
+	a.handleMessage(context.Background(), msg)
+	a.handleMessage(context.Background(), msg)
 
 	if bridge.count() != 1 {
 		t.Fatalf("duplicate redeliveries were not deduped: bridge got %d", bridge.count())

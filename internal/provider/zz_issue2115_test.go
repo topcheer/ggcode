@@ -1,13 +1,5 @@
 package provider
 
-// #2115 regression: isThinkingError was a bare substring match over the
-// whole error message - unrelated errors mentioning "thinking" (an
-// upstream 5xx about streaming thinking blocks, a gateway error whose
-// MODEL NAME contains "thinking", a quota error mentioning
-// "budget_tokens plan") were misjudged, silently stripped thinking for
-// the rest of the session. Now: anchored phrases + a 4xx parameter-class
-// status gate when a status code is extractable.
-
 import (
 	"errors"
 	"fmt"
@@ -42,7 +34,7 @@ func TestIsThinkingErrorTrueCases(t *testing.T) {
 }
 
 func TestIsThinkingErrorFalseCases(t *testing.T) {
-	// The three probe-reproduced false positives from the issue.
+
 	for _, tc := range []struct {
 		name string
 		err  error

@@ -57,12 +57,7 @@ func (b *InteractiveTextBridge) SubmitInboundMessage(ctx context.Context, msg In
 				} else if route.Decision.String() == "allow" {
 					decision = "allow"
 				}
-				// #1657 case 2: with 2+ pending approvals a bare "y" is
-				// ambiguous - resolving it hit whichever the selector picked
-				// (possibly the dangerous one). Only resolve when the reply
-				// carries the target's index; otherwise fall through to
-				// Submit so the ambiguity is VISIBLE instead of decided
-				// blind. Single pending stays one-tap.
+
 				if b.PendingApprovals != nil {
 					if ids := b.PendingApprovals(); len(ids) > 1 {
 						if idx, ok := approvalIndexFromText(text, len(ids)); ok {

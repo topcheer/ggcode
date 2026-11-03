@@ -18,21 +18,17 @@ import (
 // Returns the character count added and whether anything was emitted; ok=false
 // means the consumer context died mid-flush.
 func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- StreamEvent, toolCalls map[int]*ToolCallDelta, normalEnd, retry bool) (chars int, emittedAny bool, ok bool) {
-	shouldFlush := normalEnd && !retry // #302: cancel no longer flushes half-made tool calls
+	shouldFlush := normalEnd && !retry
 	if !shouldFlush {
 		return 0, false, true
 	}
-	// #4244: sorted emit (same randomized-map fix as the finish_reason
-	// loop in openai.go) - the flush path must not reorder either.
+
 	for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
 		tc := toolCalls[idx]
 		if tc.Name == "" || tc.ID == "" {
 			continue
 		}
-		// Validate arguments look like complete JSON.
-		// If invalid, attempt JSON repair before skipping -
-		// stream truncation and weak models frequently produce
-		// nearly-valid JSON that can be salvaged.
+
 		if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
 			if repaired, ok := RepairJSON(tc.Arguments); ok {
 				debug.Log("openai", "flush tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
@@ -60,8 +56,7 @@ func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- S
 // the caller must emit Error{terminalErr}, set streamError, and return;
 // slept=false with nil err means the consumer context died mid-emit, return.
 func (p *OpenAIProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamEvent, budget *retryBudget, cause error, attempt int) (bool, error) {
-	// #4729: timeout-class failures retry in place - lift the cumulative
-	// backoff budget so the loop is bounded only by context cancellation.
+
 	if isTimeoutClassError(cause) {
 		budget.unlimited = true
 	}
@@ -69,14 +64,13 @@ func (p *OpenAIProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamE
 	if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 		return false, nil
 	}
-	if notice := TimeoutRetryNotice(cause, attempt); notice != "" { // #4729: periodic unbounded-retry notice
+	if notice := TimeoutRetryNotice(cause, attempt); notice != "" {
 		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: notice}) {
 			return false, nil
 		}
 	}
 	if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-		// #722: budget exhausted - stop retrying now; wrap with the
-		// sentinel so the failover layer switches immediately.
+
 		if sleepErr == errRetryBudgetExhausted {
 			sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, cause)
 		}

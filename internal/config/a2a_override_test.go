@@ -135,7 +135,7 @@ func TestMergeA2AConfigAPIKeys(t *testing.T) {
 	if len(base.Auth.APIKeys) != 4 {
 		t.Fatalf("expected 4 merged APIKeys, got %d: %v", len(base.Auth.APIKeys), base.Auth.APIKeys)
 	}
-	// Verify instance keys were appended
+
 	if base.Auth.APIKeys[2] != "instance-key-1" || base.Auth.APIKeys[3] != "instance-key-2" {
 		t.Errorf("instance keys not appended correctly: %v", base.Auth.APIKeys)
 	}
@@ -161,7 +161,6 @@ func TestLoadA2AOverrideLegacyAPIKeyMigration(t *testing.T) {
 	ggcodeDir := filepath.Join(dir, ".ggcode")
 	os.MkdirAll(ggcodeDir, 0755)
 
-	// Write a2a.yaml with legacy api_key format
 	os.WriteFile(filepath.Join(ggcodeDir, "a2a.yaml"),
 		[]byte("api_key: legacy-key\nport: 8888\n"), 0644)
 

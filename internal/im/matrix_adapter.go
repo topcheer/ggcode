@@ -177,14 +177,7 @@ func (a *matrixAdapter) Close() error {
 	if a.cancelFn != nil {
 		a.cancelFn()
 	}
-	// #4518: the crypto db handle was only closed on the NEXT
-	// openPersistentCryptoStore re-entry; after MuteBinding → stopAdapter →
-	// Close the run loop never re-enters, so the SQLite handle (DSN
-	// _txlock=immediate - the file lock rides the connection) stayed open
-	// until process exit, and an unmute with a fresh adapter instance left
-	// the old closer with no owner at all. db.Close does not re-enter a.mu,
-	// so closing under the held lock is safe; nil'ing keeps re-entry
-	// idempotent.
+
 	if a.cryptoDBCloser != nil {
 		_ = a.cryptoDBCloser.Close()
 		a.cryptoDBCloser = nil
@@ -217,7 +210,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 		startedAt := time.Now()
 		err := a.runOnce(ctx)
 		if err == nil {
-			// Clean shutdown
+
 			return
 		}
 
@@ -225,10 +218,6 @@ func (a *matrixAdapter) run(ctx context.Context) {
 			return
 		}
 
-		// #432: after a HEALTHY connection (sync stayed up for a while),
-		// the next failure is a fresh transient - reset backoff like the
-		// Discord adapter's #389 fix instead of resuming the accumulated
-		// 60s wait after hours of stable connectivity.
 		if time.Since(startedAt) >= 60*time.Second {
 			backoff = 5 * time.Second
 		}
@@ -251,7 +240,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 }
 
 func (a *matrixAdapter) runOnce(ctx context.Context) error {
-	// 1. Create mautrix client
+
 	client, err := mautrix.NewClient(a.homeserver, id.UserID(a.userID), a.token)
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
@@ -267,13 +256,11 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	} else {
 		debug.Log("matrix", "adapter=%s sync-token persistence unavailable (falling back to memory): %v", a.name, err)
 	}
-	// #433: a.client/a.userID are read concurrently by Send/sendImage/
-	// TriggerTyping on other goroutines - writes must hold a.mu.
+
 	a.mu.Lock()
 	a.client = client
 	a.mu.Unlock()
 
-	// 2. Whoami to verify token
 	whoami, err := client.Whoami(ctx)
 	if err != nil {
 		return fmt.Errorf("whoami: %w", err)
@@ -285,22 +272,17 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	client.DeviceID = whoami.DeviceID
 	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, client.DeviceID)
 
-	// 3. Setup E2EE crypto
 	if err := a.setupCrypto(ctx); err != nil {
 		debug.Log("matrix", "adapter=%s crypto setup failed (continuing without E2EE): %v", a.name, err)
-		// Non-fatal: continue without crypto support
+
 	}
 
-	// 4. Fetch DM rooms
 	a.fetchDMRooms(ctx)
 
-	// 5. Setup syncer
 	syncer := mautrix.NewDefaultSyncer()
 
-	// Auto-join when invited
 	syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
-		// #4517: this callback runs on the sync goroutine and races
-		// Close/reconnect writes to a.client - snapshot under RLock.
+
 		client := a.currentClient()
 		if client == nil {
 			return
@@ -317,7 +299,6 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		}
 	})
 
-	// OnSync: mark first sync done + process crypto to-device events
 	syncer.OnSync(func(ctx context.Context, resp *mautrix.RespSync, since string) bool {
 		if since != "" {
 			a.didFirstSync.Store(true)
@@ -328,15 +309,14 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		return true
 	})
 
-	// Mark first sync done after initial sync completes
 	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
-		// Feed member/encryption events to OlmMachine for crypto tracking
+
 		if a.mach != nil {
 			if evt.Type == event.StateMember {
 				a.mach.HandleMemberEvent(ctx, evt)
 			}
 		}
-		// Skip events from initial sync (before we have a "since" token)
+
 		if !a.didFirstSync.Load() {
 			debug.Log("matrix", "adapter=%s skipping initial sync event type=%s", a.name, evt.Type.Type)
 			return
@@ -344,37 +324,20 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		a.handleEvent(ctx, evt)
 	})
 
-	// #1661 case 2: wrap the syncer so a persisted next_batch the server
-	// rejects (M_UNKNOWN_POS - a different account sharing the adapter name
-	// across workspaces, or the homeserver GC'd the stream position)
-	// resets the token and falls back to an initial sync, instead of the
-	// DefaultSyncer's infinite same-token retry loop.
 	client.Syncer = &selfHealingSyncer{DefaultSyncer: syncer, store: syncStoreRef, onTokenReset: func() {
-		// #2112: keep the self-heal path semantically identical to a
-		// process restart - the upcoming initial sync replays the recent
-		// per-room timeline, and the gate exists precisely to drop it.
+
 		a.didFirstSync.Store(false)
 	}}
 
 	a.publishState(true, "connected", "")
 	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
 
-	// 6. Run sync (blocking)
 	ctx, cancel := context.WithCancel(ctx)
-	// #2139: the error return below (sync failed, run() re-enters) never
-	// called cancel - each re-entry replaced a.cancelFn with the NEW
-	// cancel, leaking the old child context onto the parent until the
-	// process exits (~115B per flap). Cancel is idempotent, so this defer
-	// composes safely with the closedNow path and Close().
+
 	defer cancel()
 	a.mu.Lock()
 	a.cancelFn = cancel
-	// #2127: Close can land anywhere in the multi-RTT setup above
-	// (Whoami, ShareKeys, fetchDMRooms) - at that point cancelFn was
-	// still nil, so Close cancelled nothing and this Sync would keep a
-	// ghost connection alive after Close, delivering events and even
-	// broadcasting "connected". Re-check under the SAME lock that
-	// registered the cancel: if Close ran, self-cancel now.
+
 	closedNow := a.closed
 	a.mu.Unlock()
 	if closedNow {
@@ -401,21 +364,13 @@ func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
 		return nil, fmt.Errorf("create crypto state dir: %w", err)
 	}
 	dbPath := newCryptoDBForAdapter(dir, a.name, a.userID)
-	// #2126: the dialect string doubles as the database/sql DRIVER name
-	// (dbutil.NewWithDialect calls sql.Open(rawDialect, uri)). The
-	// dependency tree links modernc.org/sqlite only, whose registered
-	// driver name is "sqlite" - the previous "sqlite3" (mattn's name,
-	// absent from the tree) made every open fail with
-	// 'sql: unknown driver "sqlite3"', silently degrading to MemoryStore
-	// and rotating the Olm identity on every restart (the exact #1404-A
-	// symptom this store was built to fix). DSN drops the "sqlite3://"
-	// scheme - modernc takes a bare file: DSN.
+
 	uri := fmt.Sprintf("file:%s?_txlock=immediate", dbPath)
 	db, err := dbutil.NewWithDialect(uri, "sqlite")
 	if err != nil {
 		return nil, fmt.Errorf("open crypto db %s: %w", dbPath, err)
 	}
-	// Register the handle so the next runOnce re-entry closes it (#2126).
+
 	a.mu.Lock()
 	if a.cryptoDBCloser != nil {
 		_ = a.cryptoDBCloser.Close()
@@ -503,24 +458,10 @@ func newCryptoDBForAdapter(dir, adapterName, userID string) string {
 }
 
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
-	// #1404-A: this used to be crypto.NewMemoryStore(nil) - a fresh Olm
-	// device identity on EVERY runOnce re-entry (any transient sync error
-	// backing off, not just process restarts). Consequences: peers had to
-	// re-verify the "new" device (Element warns on unverified devices and
-	// may withhold messages), and offline-period Megolm sessions were
-	// undecryptable with no key-forwarding state - messages failed to
-	// decrypt and were silently dropped (debug.Log + return). The
-	// matrixCryptoDBName constant existed unused - persistence was planned
-	// but never landed. SQLite-backed SQLCryptoStore now keeps the device
-	// identity, sessions and sync token across restarts/reconnects; when
-	// the state file cannot be opened we fall back to MemoryStore rather
-	// than losing the adapter entirely.
+
 	store, err := a.openPersistentCryptoStore()
 	if err != nil {
-		// #2126: keep the fallback, but make it visible - E2EE identity
-		// rotation is a security-relevant degradation (peers must
-		// re-verify; offline Megolm messages become undecryptable), not a
-		// debug-level detail.
+
 		debug.Log("matrix", "adapter=%s WARN: persistent crypto store unavailable (%v) - falling back to in-memory; E2EE identity WILL rotate on reconnect and peers must re-verify", a.name, err)
 		store = crypto.NewMemoryStore(nil)
 	}
@@ -528,26 +469,18 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 	mach := crypto.NewOlmMachine(a.client, nil, store, &cryptoStateStore{adapter: a})
 
 	if err := mach.Load(ctx); err != nil {
-		// #2133 annex 1: openPersistentCryptoStore already CLOSED the
-		// previous db handle before opening the new one - leaving a.mach
-		// pointing at the old machine (bound to the closed db) made every
-		// subsequent encrypted event fail against a closed db and drop
-		// silently (debug-only) until the next reconnect. Drop the stale
-		// machine so the explicit nil path reports "no crypto machine"
-		// instead of a confusing closed-db error.
+
 		a.mu.Lock()
 		a.mach = nil
 		a.mu.Unlock()
 		return fmt.Errorf("load olm machine: %w", err)
 	}
 
-	// Upload device keys and one-time keys so other users can send us encrypted messages
 	if err := mach.ShareKeys(ctx, -1); err != nil {
 		debug.Log("matrix", "adapter=%s ShareKeys failed: %v", a.name, err)
-		// Non-fatal: keys may already be uploaded
+
 	}
 
-	// #4517: snapshot the client - Close/reconnect can nil it concurrently.
 	a.mu.Lock()
 	a.mach = mach
 	a.mu.Unlock()
@@ -556,7 +489,7 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 }
 
 func (a *matrixAdapter) fetchDMRooms(ctx context.Context) {
-	// #4517: snapshot under RLock; Close/reconnect races the raw read.
+
 	client := a.currentClient()
 	if client == nil {
 		return
@@ -584,7 +517,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 
 	debug.Log("matrix", "adapter=%s handleEvent room=%s sender=%s type=%s", a.name, roomID, sender, evt.Type.Type)
 
-	// Handle E2EE: decrypt encrypted events
 	if evt.Type == event.EventEncrypted {
 		if a.mach == nil {
 			debug.Log("matrix", "adapter=%s encrypted event but no crypto machine, dropping", a.name)
@@ -592,10 +524,7 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 		decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
 		if err != nil {
-			// #4644: a missing megolm session is recoverable — request the
-			// key (cryptohelper pattern: sender's devices + our own other
-			// devices) and retry briefly. Without this, E2EE DMs hit by a
-			// new-device/key-backfill gap were silently dropped forever.
+
 			if errors.Is(err, crypto.ErrNoSessionFound) {
 				if enc := evt.Content.AsEncrypted(); enc != nil {
 					reqErr := a.mach.SendRoomKeyRequest(ctx, id.RoomID(roomID), enc.SenderKey, enc.SessionID, "", map[id.UserID][]id.DeviceID{
@@ -607,11 +536,7 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 					} else {
 						debug.Log("matrix", "adapter=%s requested missing megolm key room=%s session=%s", a.name, roomID, enc.SessionID)
 					}
-					// Bounded retry: the key may already be queued in the
-					// to-device stream (ProcessSyncResponse handles shares).
-					// #4698: the wait is ctx-aware - a raw Sleep held the
-					// serial syncer pipeline for up to 2.4s per bad event even
-					// after cancellation, stalling every room behind it.
+
 					for attempt := 0; attempt < 3 && err != nil; attempt++ {
 						select {
 						case <-ctx.Done():
@@ -632,18 +557,15 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		evt = decrypted
 	}
 
-	// Only handle text messages
 	if evt.Type != event.EventMessage {
 		debug.Log("matrix", "adapter=%s skipping non-message type=%s", a.name, evt.Type.Type)
 		return
 	}
 
-	// Skip own messages
 	if sender == a.userID {
 		return
 	}
 
-	// Dedup
 	eventID := string(evt.ID)
 	now := time.Now()
 	a.mu.Lock()
@@ -659,7 +581,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	}
 	a.mu.Unlock()
 
-	// Extract content
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
 	if !ok {
 		debug.Log("matrix", "adapter=%s content not parsed, trying raw (hasRaw=%v)", a.name, evt.Content.Raw != nil)
@@ -685,10 +606,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	msgtype := string(content.MsgType)
 	body := content.Body
 
-	// #4646: an edit (m.replace) carries the corrected text in m.new_content;
-	// Body is only the "* corrected" fallback shape. Process the edit as the
-	// new content instead of double-processing the original intent with a
-	// polluted prefix.
 	if rel := content.GetRelatesTo(); rel != nil && rel.Type == event.RelReplace {
 		if content.NewContent != nil && strings.TrimSpace(content.NewContent.Body) != "" {
 			debug.Log("matrix", "adapter=%s room=%s edit event: using m.new_content body", a.name, roomID)
@@ -697,8 +614,7 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 				msgtype = string(content.NewContent.MsgType)
 			}
 		} else {
-			// Edit without new_content (malformed): strip the fallback prefix
-			// rather than processing the "* " shape as a fresh message.
+
 			body = strings.TrimPrefix(strings.TrimLeft(body, " "), "* ")
 		}
 	}
@@ -708,10 +624,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		return
 	}
 
-	// #4756: for edits (m.replace) the reply relation lives on the INNER
-	// new_content.relates_to (m.in_reply_to) - the outer relates_to is the
-	// replace marker - so the strip gate must consider both shapes, else an
-	// edited reply keeps its '> <@user>' fallback prefix into model input.
 	replyTo := content.GetReplyTo()
 	if replyTo == "" && content.NewContent != nil {
 		replyTo = content.NewContent.GetReplyTo()
@@ -722,13 +634,11 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 
 	debug.Log("matrix", "adapter=%s message room=%s sender=%s body=%.80s", a.name, roomID, sender, body)
 
-	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
 		debug.Log("matrix", "adapter=%s sender=%s not in allowed_users, dropping", a.name, sender)
 		return
 	}
 
-	// DM detection
 	a.mu.RLock()
 	isDM := a.dmRooms[roomID]
 	dmCount := len(a.dmRooms)
@@ -738,7 +648,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	}
 	debug.Log("matrix", "adapter=%s room=%s isDM=%v dmRooms=%d", a.name, roomID, isDM, dmCount)
 
-	// Mention gating for non-DM rooms
 	if !isDM {
 		isFree := entryMatches(a.freeRooms, roomID)
 		if !isFree && a.requireMention {
@@ -751,7 +660,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 	}
 
-	// Build inbound message
 	displayName := a.getDisplayName(ctx, sender)
 	msg := InboundMessage{
 		Envelope: Envelope{
@@ -768,23 +676,16 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 
 	debug.Log("matrix", "adapter=%s -> HandlePairingInbound", a.name)
 
-	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("matrix", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		// #2823: the previous string compare ("no session bound") never
-		// matched the sentinel text ("no active session bound"), so a healthy
-		// adapter without a bound session was flagged warning on every
-		// inbound message. Use sentinel comparison like all other adapters;
-		// errors.Is is also immune to %w wrapping.
+
 		if err != nil && !errors.Is(err, ErrNoSessionBound) {
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
 			if err := a.sendText(ctx, roomID, "", pairingResult.ReplyText); err != nil {
-				// #4756: the binding already applied server-side - a failed ack
-				// must surface (sibling paths above publishState) or the user
-				// gets zero feedback for a pairing that actually succeeded.
+
 				a.publishState(false, "warning", err.Error())
 			}
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
@@ -799,14 +700,11 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	}
 }
 
-// --- DM detection ---
-
 func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool {
-	// #4517: snapshot under RLock (#433 sweep missed this site).
+
 	client := a.currentClient()
 	if client == nil {
-		// #4645: fail-open - returning false here sends real DM traffic
-		// into the mention gate and silently drops mention-less messages.
+
 		return true
 	}
 	// Authoritative source: m.direct account data (same semantics as
@@ -822,20 +720,14 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 			}
 		}
 	} else {
-		// #4645: fail-open on account-data errors - a transient homeserver
-		// 5xx/limit must not turn a real DM into a mention-gated drop.
+
 		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error (failing open): %v", a.name, roomID, err)
 		return true
 	}
-	// Heuristic fallback: exactly 2 joined members. Deliberately NOT cached -
-	// a 2-member room may be a small group rather than a DM, and permanently
-	// caching it as DM would bypass the mention gate irrevocably and could be
-	// induced by anyone inviting the bot into a 2-person room (issue #961).
+
 	members, err := client.JoinedMembers(ctx, id.RoomID(roomID))
 	if err != nil {
-		// #4645: fail-open on membership errors for the same reason - the
-		// cost of wrongly skipping the mention gate is one noisy reply; the
-		// cost of failing closed is silently dropping real DMs.
+
 		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error (failing open): %v", a.name, roomID, err)
 		return true
 	}
@@ -847,10 +739,8 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 	return false
 }
 
-// --- Display names ---
-
 func (a *matrixAdapter) getDisplayName(ctx context.Context, userID string) string {
-	// #4517: snapshot under RLock (runs from the syncer OnEvent callback).
+
 	client := a.currentClient()
 	if client == nil {
 		return userID
@@ -865,12 +755,9 @@ func (a *matrixAdapter) getDisplayName(ctx context.Context, userID string) strin
 	return userID
 }
 
-// --- Mention handling ---
-
 func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 	lower := strings.ToLower(body)
 
-	// Check m.mentions.user_ids (MSC3952)
 	if mentions, _ := raw["m.mentions"].(map[string]any); mentions != nil {
 		if uids, _ := mentions["user_ids"].([]any); uids != nil {
 			for _, uid := range uids {
@@ -881,33 +768,22 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 		}
 	}
 
-	// Check for @user:server in body
 	if strings.Contains(lower, strings.ToLower(a.userID)) {
 		return true
 	}
 
-	// Check formatted_body
 	if fb, _ := raw["formatted_body"].(string); fb != "" {
 		if strings.Contains(strings.ToLower(fb), strings.ToLower(a.userID)) {
 			return true
 		}
 	}
 
-	// @localpart in body. Word-boundary match, same class as #963
-	// (mattermost): a bot named "al" must not fire on "@alex" or on
-	// ordinary words containing "al" (#2719).
 	localPart := a.userID
 	if idx := strings.Index(localPart, ":"); idx > 0 {
-		localPart = localPart[1:idx] // strip @ and :domain
+		localPart = localPart[1:idx]
 	}
 	if localPart != "" {
-		// #2749: \b is an ASCII word boundary and never matches when the
-		// localpart ends with a non-word char (Matrix legal localpart
-		// charset [a-z0-9._=-+/] allows endings like "bot-", "x=", "a."),
-		// silently dropping those mentions. Go's RE2 has no negative
-		// lookahead, so the boundary is a post-match check: the character
-		// after the hit must NOT be a legal localpart continuation char
-		// (refuses the "@bot" inside "@bot.a" prefix confusion, #2719).
+
 		if mentionsLocalPart(lower, localPart) {
 			return true
 		}
@@ -917,20 +793,18 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 }
 
 func (a *matrixAdapter) stripMention(text string) string {
-	// Strip @user_id:domain
+
 	if a.userID != "" {
 		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(a.userID))
 		text = re.ReplaceAllString(text, "")
 	}
-	// Strip @localpart
+
 	localPart := a.userID
 	if idx := strings.Index(localPart, ":"); idx > 0 {
 		localPart = localPart[1:idx]
 	}
 	if localPart != "" {
-		// Post-match boundary check (#2749): keeps a longer handle intact
-		// ("@alex" with localPart "al" is NOT mangled) while still matching
-		// non-word endings like "bot-" that \b missed. RE2 has no lookahead.
+
 		text = stripLocalPartMention(text, localPart)
 	}
 	return strings.TrimSpace(text)
@@ -945,9 +819,7 @@ const matrixLocalPartContChars = "abcdefghijklmnopqrstuvwxyz0123456789._=-+/"
 // mentionsLocalPart reports whether text contains "@localpart" NOT followed
 // by a legal localpart continuation character (RE2-safe boundary).
 func mentionsLocalPart(lower, localPart string) bool {
-	// #2749 case follow-up: the old (?i) regex was case-insensitive, and
-	// self-hosted homeservers may issue mixed-case localparts (@Bot:...).
-	// The body is already lowered by callers; lower the needle too.
+
 	needle := "@" + strings.ToLower(localPart)
 	for start := 0; ; {
 		i := strings.Index(lower[start:], needle)
@@ -966,20 +838,14 @@ func mentionsLocalPart(lower, localPart string) bool {
 // stripLocalPartMention removes "@localpart" occurrences that are not
 // prefixes of a longer handle (same boundary rule as mentionsLocalPart).
 func stripLocalPartMention(text, localPart string) string {
-	// #3572: match and consume in ONE coordinate system. The old code
-	// located matches in strings.ToLower(text) but consumed bytes of the
-	// ORIGINAL text with the same indices - valid only while ToLower is
-	// byte-length-preserving, which expanding mappings like U+0130 break,
-	// misaligning every byte after the first such rune. Matrix localpart
-	// needles are ASCII, so case-insensitive matching on the original is a
-	// per-byte ASCII fold (length-preserving by construction).
+
 	needle := "@" + strings.ToLower(localPart)
 	var b strings.Builder
 	for i := 0; i < len(text); {
 		if n, ok := matrixASCIIFoldPrefix(text[i:], needle); ok {
 			end := i + n
 			if end >= len(text) || !matrixIsLocalPartContByte(text[end]) {
-				i = end // skip the mention
+				i = end
 				continue
 			}
 		}
@@ -1002,8 +868,7 @@ func matrixASCIIFoldPrefix(s, needleLower string) (int, bool) {
 		if d == c {
 			continue
 		}
-		// ASCII letter fold: 'a'-'z' vs 'A'-'Z' only (non-ASCII bytes can
-		// never match an ASCII needle byte).
+
 		if c >= 'a' && c <= 'z' && d == c-('a'-'A') {
 			continue
 		}
@@ -1022,8 +887,6 @@ func matrixIsLocalPartContByte(b byte) bool {
 	return b == '.' || b == '_' || b == '=' || b == '-' || b == '+' || b == '/'
 }
 
-// --- Outbound ---
-
 func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
 	if chatID == "" {
@@ -1035,7 +898,6 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 
-	// Extract images from markdown text and send them as m.image events.
 	images, remainingText := ExtractImagesFromText(text)
 	sentImages := 0
 	for i, img := range images {
@@ -1050,7 +912,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			sentImages++
 			debug.Log("matrix", "adapter=%s image sent [%d/%d] mime=%s size=%d", a.name, i+1, len(images), mimeType, len(data))
 		}
-		// Rate limit between image sends
+
 		select {
 		case <-time.After(matrixInterMessageDelay):
 		case <-ctx.Done():
@@ -1060,8 +922,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 
 	if remainingText == "" {
 		if len(images) > 0 && sentImages == 0 {
-			// #4464: an image-only message whose sends all failed must not
-			// be silently dropped - fall back to the original markdown text.
+
 			remainingText = text
 		} else {
 			return nil
@@ -1080,7 +941,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
 	switch img.Kind {
 	case "data":
-		// data:image/png;base64,XXXXX
+
 		parts := strings.SplitN(img.Data, ",", 2)
 		if len(parts) != 2 {
 			return nil, "", fmt.Errorf("invalid data URL")
@@ -1096,12 +957,9 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 		return data, decoded.MIME, nil
 
 	case "url":
-		// #1016: ExtractImagesFromText emits local paths as Kind "url"; route
-		// them to local read instead of an HTTP request that would fail with
-		// "unsupported protocol scheme" (the old case "local" below was dead -
-		// no extractor ever emitted Kind "local").
+
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return nil, "", fmt.Errorf("read local image: %w", err)
@@ -1168,7 +1026,7 @@ func matrixRetryAfter(msFloat float64) time.Duration {
 
 // sendImage uploads image data to the Matrix homeserver and sends an m.image event.
 func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
-	// #433: snapshot the client under the read lock - reconnect writes it.
+
 	a.mu.RLock()
 	client := a.client
 	a.mu.RUnlock()
@@ -1176,7 +1034,6 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		return fmt.Errorf("matrix adapter not connected")
 	}
 
-	// Upload to Matrix content repository
 	resp, err := client.UploadMedia(ctx, mautrix.ReqUploadMedia{
 		ContentBytes: data,
 		ContentType:  mimeType,
@@ -1203,8 +1060,6 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		}
 	}
 
-	// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
-	// do not land in plaintext on the homeserver.
 	evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
 
 	txnID := fmt.Sprintf("ggcode-img-%d", a.txnID.Add(1))
@@ -1217,10 +1072,7 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
 			retryAfter := matrixInterMessageDelay * 2
 			if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
-				// #664: clamp BEFORE the float→Duration conversion (same family
-				// as #513/#658). retry_after_ms > 9.22e12 or +Inf wraps to a
-				// large negative duration and time.After(negative) fires
-				// immediately, bypassing the server's backoff.
+
 				if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
 					retryAfter = matrixRetryAfter(msFloat)
 				}
@@ -1270,7 +1122,7 @@ func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if roomID == "" || target == "" || !a.reactionAck.NeedsSend(binding, target) {
 		return nil
 	}
-	// #433: snapshot the client under the read lock.
+
 	a.mu.RLock()
 	tClient := a.client
 	a.mu.RUnlock()
@@ -1290,7 +1142,7 @@ func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 }
 
 func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text string) error {
-	// #433: snapshot the client under the read lock.
+
 	a.mu.RLock()
 	client := a.client
 	a.mu.RUnlock()
@@ -1298,18 +1150,9 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 		return fmt.Errorf("matrix adapter not connected")
 	}
 
-	// Use markdown-aware splitting so fenced code blocks are not split mid-way.
-	// Each chunk gets proper ``` open/close markers, producing valid HTML when
-	// goldmark renders it. Plain rune-based splitting (chunkText) would break
-	// code blocks, causing goldmark to emit malformed/incomplete HTML.
-	// #4769 (defect 1): SplitMarkdown counts runes, but the Synapse event
-	// ceiling is BYTES and the event carries Body AND FormattedBody - a
-	// CJK-heavy 60K-rune chunk is ~180KB UTF-8 before the HTML copy doubles
-	// it. matrixChunkMarkdown re-splits at a proportionally smaller cap until
-	// every chunk fits the byte budget.
 	chunks := matrixChunkMarkdown(text)
 	for i, chunk := range chunks {
-		// Rate limit: most homeservers limit ~1 msg/sec/user.
+
 		if i > 0 {
 			select {
 			case <-time.After(matrixInterMessageDelay):
@@ -1337,8 +1180,6 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			}
 		}
 
-		// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
-		// (which may carry code, paths, key fragments) do not land in plaintext.
 		evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
 
 		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
@@ -1353,10 +1194,7 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
 				retryAfter := matrixInterMessageDelay * 2
 				if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
-					// #664: clamp BEFORE the float→Duration conversion (same family
-					// as #513/#658). retry_after_ms > 9.22e12 or +Inf wraps to a
-					// large negative duration and time.After(negative) fires
-					// immediately, bypassing the server's backoff.
+
 					if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
 						retryAfter = matrixRetryAfter(msFloat)
 					}
@@ -1410,14 +1248,13 @@ func matrixChunkMarkdown(text string) []string {
 		if worst*2+2048 <= matrixMaxEventByteBudget {
 			return chunks
 		}
-		// Proportional shrink toward the budget, with a floor of 1000 runes
-		// (below that, markdown structure cannot survive splitting anyway).
+
 		newCap := cap * (matrixMaxEventByteBudget - 2048) / (worst * 2)
 		if newCap >= cap || newCap < 1 {
 			newCap = cap / 2
 		}
 		if newCap < 1000 {
-			return chunks // floor reached: best effort, let M_TOO_LARGE speak
+			return chunks
 		}
 		cap = newCap
 	}
@@ -1443,8 +1280,6 @@ func (a *matrixAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// --- cryptoStateStore implements crypto.StateStore ---
-
 type cryptoStateStore struct {
 	adapter *matrixAdapter
 }
@@ -1454,35 +1289,25 @@ type cryptoStateStore struct {
 // rooms fall back to Matrix's default ("shared"), matching mautrix's own
 // DefaultHistoryVisibility handling.
 func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.RoomID) (*event.HistoryVisibilityEventContent, error) {
-	// #4517: the OlmMachine calls these during sync; snapshot the client
-	// under the adapter lock (#433 sweep missed this family).
+
 	client := s.adapter.currentClient()
 	if client == nil {
 		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
 	}
 	var hv event.HistoryVisibilityEventContent
 	if err := client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil {
-		// #1355: fail CLOSED, aligned with mautrix's own crypto store
-		// (encryptmegolm.go returns the error on state fetch failure).
-		// Returning "shared" on a transient error marked joined/invited
-		// rooms SharedHistory=true; that flag then rides MSC3061
-		// shared_history room keys, key forwards and key backups for the
-		// outbound session's whole lifetime (~7 days / 100 messages) with
-		// no correction path. The message fails to encrypt now and the
-		// caller retries - correct beats silently over-sharing.
+
 		return nil, err
 	}
 	if hv.HistoryVisibility == "" {
-		// The state fetch SUCCEEDED but the room has no visibility event
-		// (or empty content): Matrix's documented default IS "shared" -
-		// a legitimate default, not an error path.
+
 		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
 	}
 	return &hv, nil
 }
 
 func (s *cryptoStateStore) IsEncrypted(ctx context.Context, roomID id.RoomID) (bool, error) {
-	client := s.adapter.currentClient() // #4517
+	client := s.adapter.currentClient()
 	if client == nil {
 		return false, nil
 	}
@@ -1494,7 +1319,7 @@ func (s *cryptoStateStore) IsEncrypted(ctx context.Context, roomID id.RoomID) (b
 }
 
 func (s *cryptoStateStore) GetEncryptionEvent(ctx context.Context, roomID id.RoomID) (*event.EncryptionEventContent, error) {
-	client := s.adapter.currentClient() // #4517
+	client := s.adapter.currentClient()
 	if client == nil {
 		return nil, nil
 	}
@@ -1522,7 +1347,7 @@ func (s *cryptoStateStore) FindSharedRooms(ctx context.Context, userID id.UserID
 }
 
 func (s *cryptoStateStore) GetRoomJoinedOrInvitedMembers(ctx context.Context, roomID id.RoomID) ([]id.UserID, error) {
-	client := s.adapter.currentClient() // #4517
+	client := s.adapter.currentClient()
 	if client == nil {
 		return nil, nil
 	}
@@ -1537,8 +1362,6 @@ func (s *cryptoStateStore) GetRoomJoinedOrInvitedMembers(ctx context.Context, ro
 	return users, nil
 }
 
-// --- Helpers ---
-
 // stripMatrixReplyFallback removes the rich-reply fallback quote block from
 // the TOP of a reply body, per the Matrix spec: the fallback is the leading
 // run of ">" lines plus the blank-line separator that follows it. Body
@@ -1550,10 +1373,7 @@ func stripMatrixReplyFallback(body string) string {
 	for i < len(lines) && strings.HasPrefix(lines[i], ">") {
 		i++
 	}
-	// Keep the body as-is when there is no leading fallback block, when the
-	// block is not terminated by the spec's blank-line separator, or when
-	// nothing follows the separator (indistinguishable from a plain quote
-	// message, so nothing is stripped).
+
 	if i == 0 || i >= len(lines) || strings.TrimSpace(lines[i]) != "" {
 		return strings.TrimSpace(body)
 	}
@@ -1591,12 +1411,10 @@ func (s *fileSyncStore) load() (syncStoreData, error) {
 	var d syncStoreData
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
-		return d, err // absent is fine: zero value
+		return d, err
 	}
 	if err := json.Unmarshal(raw, &d); err != nil {
-		// #1661 case 1: a truncated/corrupt store (crash mid-write under the
-		// old non-atomic save) must not be re-read forever. Quarantine it
-		// aside; the next read is then a clean NotExist -> initial sync.
+
 		debug.Log("matrix", "sync store %s corrupt (%v) - quarantining", s.path, err)
 		_ = os.Rename(s.path, s.path+".corrupt")
 		return syncStoreData{}, err
@@ -1610,9 +1428,7 @@ func (s *fileSyncStore) save(d syncStoreData) error {
 	if err != nil {
 		return err
 	}
-	// #1661 case 1: tmp+rename atomic write - mautrix saves on every sync
-	// (~30s), so a SIGKILL/OOM mid-WriteFile used to leave a truncated
-	// JSON that Load silently swallowed as "".
+
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
@@ -1628,7 +1444,7 @@ func (s *fileSyncStore) save(d syncStoreData) error {
 func (s *fileSyncStore) loadFor(userID id.UserID) (syncStoreData, error) {
 	d, err := s.load()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// Corrupt file already quarantined by load(); treat as absent.
+
 		return syncStoreData{}, nil
 	}
 	if err != nil {
@@ -1663,7 +1479,7 @@ func (s *fileSyncStore) LoadFilterID(ctx context.Context, userID id.UserID) (str
 	defer s.mu.Unlock()
 	d, err := s.loadFor(userID)
 	if err != nil {
-		return "", nil // absent store is not an error
+		return "", nil
 	}
 	return d.FilterID, nil
 }
@@ -1682,7 +1498,7 @@ func (s *fileSyncStore) LoadNextBatch(ctx context.Context, userID id.UserID) (st
 	defer s.mu.Unlock()
 	d, err := s.loadFor(userID)
 	if err != nil {
-		return "", nil // absent store: fresh initial sync
+		return "", nil
 	}
 	return d.NextBatch, nil
 }
@@ -1713,15 +1529,7 @@ func (s *selfHealingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time
 		if s.onTokenReset != nil {
 			s.onTokenReset()
 		}
-		// #1851 case 1: returning nil used to keep mautrix's sync loop
-		// running with its CACHED local nextBatch (LoadNextBatch is read
-		// once before the loop), so the disk reset had no in-process effect:
-		// the loop retried the same rejected token every 2s, churning the
-		// store and receiving zero events while publishState stayed
-		// "connected" - exactly the wedge #1661 claimed to eliminate - until
-		// process restart. Return an error so Sync EXITS: the outer run()
-		// loop then rebuilds the client, whose LoadNextBatch reads the now
-		// empty store and performs a true initial sync.
+
 		return 0, fmt.Errorf("matrix: sync token rejected (M_UNKNOWN_POS); restarting sync with a fresh token")
 	}
 	return s.DefaultSyncer.OnFailedSync(res, err)

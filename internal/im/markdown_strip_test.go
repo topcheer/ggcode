@@ -12,7 +12,6 @@ func TestStripMarkdown_Bold(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	// CommonMark __bold__ (underscore strong emphasis)
 	got = stripMarkdown("This is __bold__ text")
 	want = "This is bold text"
 	if got != want {
@@ -54,13 +53,10 @@ func TestStripMarkdown_CodeBlock(t *testing.T) {
 }
 
 func TestStripMarkdown_CodeBlockWithBackticks(t *testing.T) {
-	// Code block containing a Go raw string with backtick — the
-	// old [^`]* regex would fail to match the entire fenced block,
-	// leaking raw ``` markers to plain-text platforms.
+
 	input := "Code:\n```go\ns := `raw`\n```\nEnd"
 	got := stripMarkdown(input)
-	// Fence markers removed, code content preserved. Inner backticks
-	// are stripped by inline code regex (acceptable for plain text).
+
 	want := "Code:\ns := raw\nEnd"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -158,7 +154,7 @@ func TestStripMarkdown_ConvertsListBullets(t *testing.T) {
 	input := "- Item one\n- Item two\n- Item three"
 	want := "• Item one\n• Item two\n• Item three"
 	got := stripMarkdown(input)
-	// Bullet lists (- or *) at line start are converted to Unicode bullets
+
 	if got != want {
 		t.Errorf("bullets not converted: got %q, want %q", got, want)
 	}
@@ -171,9 +167,9 @@ func TestStripMarkdown_AsteriskItalic(t *testing.T) {
 		{"basic", "This is *italic* text", "This is italic text"},
 		{"single_char", "Use *x* for variable", "Use x for variable"},
 		{"multiple", "*one* and *two*", "one and two"},
-		{"no_space_after_open", "5 * 3 = 15", "5 * 3 = 15"},           // math, not italic
-		{"bullet_list", "* Item one", "• Item one"},                   // bullet → Unicode bullet
-		{"no_match_space_inside", "* not italic *", "• not italic *"}, // bullet with trailing *
+		{"no_space_after_open", "5 * 3 = 15", "5 * 3 = 15"},
+		{"bullet_list", "* Item one", "• Item one"},
+		{"no_match_space_inside", "* not italic *", "• not italic *"},
 		{"combined_bold_italic", "**bold** and *italic*", "bold and italic"},
 	}
 	for _, tc := range tests {
@@ -207,14 +203,14 @@ func TestStripMarkdown_TableWithFormatting(t *testing.T) {
 func TestStripMarkdown_TableWithLinks(t *testing.T) {
 	input := "| [Docs](https://example.com) | text |\n|--------|--------|\n| cell   | data   |"
 	got := stripMarkdown(input)
-	// Links become "text (url)" format
+
 	if !strings.Contains(got, "Docs") || !strings.Contains(got, "cell") {
 		t.Errorf("stripMarkdown table with links = %q, expected Docs and cell", got)
 	}
 }
 
 func TestStripMarkdown_TableWithColons(t *testing.T) {
-	// GFM alignment colons in separator should be handled
+
 	input := "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    | b      | c      |"
 	got := stripMarkdown(input)
 	want := "Left  Center  Right\na  b  c"
@@ -238,7 +234,7 @@ func TestStripMarkdown_TablePreservesSurroundingText(t *testing.T) {
 }
 
 func TestStripMarkdown_NotATableJustPipes(t *testing.T) {
-	// Single line with pipe should not be treated as a table
+
 	input := "Use the pipe | command"
 	got := stripMarkdown(input)
 	if got != "Use the pipe | command" {
@@ -246,10 +242,8 @@ func TestStripMarkdown_NotATableJustPipes(t *testing.T) {
 	}
 }
 
-// --- signalMarkdown tests ---
-
 func TestSignalMarkdown_Bold(t *testing.T) {
-	// **bold** → *bold* (Signal bold uses single asterisk)
+
 	got := signalMarkdown("This is **bold** text")
 	want := "This is *bold* text"
 	if got != want {
@@ -258,7 +252,7 @@ func TestSignalMarkdown_Bold(t *testing.T) {
 }
 
 func TestSignalMarkdown_UnderscoreBold(t *testing.T) {
-	// __bold__ → *bold* (Signal bold uses single asterisk)
+
 	got := signalMarkdown("This is __bold__ text")
 	want := "This is *bold* text"
 	if got != want {
@@ -267,7 +261,7 @@ func TestSignalMarkdown_UnderscoreBold(t *testing.T) {
 }
 
 func TestSignalMarkdown_Italic(t *testing.T) {
-	// _italic_ stays _italic_ (Signal supports underscore italic)
+
 	got := signalMarkdown("This is _italic_ text")
 	want := "This is _italic_ text"
 	if got != want {
@@ -276,7 +270,7 @@ func TestSignalMarkdown_Italic(t *testing.T) {
 }
 
 func TestSignalMarkdown_AsteriskItalic(t *testing.T) {
-	// *italic* → _italic_ (Signal * means bold, so convert to _)
+
 	got := signalMarkdown("This is *italic* text")
 	want := "This is _italic_ text"
 	if got != want {
@@ -285,7 +279,7 @@ func TestSignalMarkdown_AsteriskItalic(t *testing.T) {
 }
 
 func TestSignalMarkdown_Strikethrough(t *testing.T) {
-	// ~~strike~~ → ~strike~ (Signal uses single tilde)
+
 	got := signalMarkdown("This is ~~deleted~~ text")
 	want := "This is ~deleted~ text"
 	if got != want {
@@ -294,7 +288,7 @@ func TestSignalMarkdown_Strikethrough(t *testing.T) {
 }
 
 func TestSignalMarkdown_BoldAndItalic(t *testing.T) {
-	// **bold** and *italic* → *bold* and _italic_
+
 	got := signalMarkdown("**bold** and *italic*")
 	want := "*bold* and _italic_"
 	if got != want {
@@ -303,7 +297,7 @@ func TestSignalMarkdown_BoldAndItalic(t *testing.T) {
 }
 
 func TestSignalMarkdown_InlineCode(t *testing.T) {
-	// `code` stays `code` (Signal supports backtick monospace)
+
 	got := signalMarkdown("Use `fmt.Println` here")
 	want := "Use `fmt.Println` here"
 	if got != want {
@@ -354,7 +348,7 @@ func TestSignalMarkdown_NoFormatting(t *testing.T) {
 }
 
 func TestStripMarkdown_TaskListCheckboxes(t *testing.T) {
-	// GFM task lists should convert [ ] and [x] to readable symbols
+
 	input := "- [ ] unchecked task\n- [x] checked task\n- [X] capital X checked"
 	got := stripMarkdown(input)
 
@@ -367,7 +361,7 @@ func TestStripMarkdown_TaskListCheckboxes(t *testing.T) {
 	if !strings.Contains(got, "✓ capital X checked") {
 		t.Errorf("capital X checked: got %q, expected ✓ symbol", got)
 	}
-	// Should not contain raw bracket syntax
+
 	if strings.Contains(got, "[ ]") {
 		t.Errorf("raw [ ] should be replaced: got %q", got)
 	}

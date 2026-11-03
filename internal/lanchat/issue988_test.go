@@ -31,7 +31,7 @@ func TestIssue988OutboundUsesConfiguredAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := newIssue988Hub(t, "my-strong-secret") // custom key configured
+	h := newIssue988Hub(t, "my-strong-secret")
 	peer := Participant{
 		NodeID:   "peer-1",
 		Endpoint: srv.URL,
@@ -58,7 +58,7 @@ func TestIssue988OutboundZeroConfigStillUsesCommunityKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := newIssue988Hub(t, communityKey) // zero-config: apiKey == communityKey
+	h := newIssue988Hub(t, communityKey)
 	peer := Participant{
 		NodeID:   "peer-2",
 		Endpoint: srv.URL,

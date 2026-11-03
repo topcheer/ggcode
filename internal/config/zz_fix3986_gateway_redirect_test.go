@@ -17,7 +17,7 @@ func TestFix3986MigrationRedirectsActiveVendor(t *testing.T) {
 		},
 	}
 	cfg.Vendor = "openrouter"
-	cfg.Endpoint = "main" // legacy endpoint name, absent under ai-gateway
+	cfg.Endpoint = "main"
 	cfg.Model = "some-model"
 
 	mergeDefaultEndpoints(cfg, DefaultConfig())
@@ -28,7 +28,7 @@ func TestFix3986MigrationRedirectsActiveVendor(t *testing.T) {
 	if cfg.Endpoint == "main" {
 		t.Fatalf("dangling legacy endpoint name must be replaced, got %q", cfg.Endpoint)
 	}
-	// Deterministic fallback (#1422-B2): lowest endpoint name in ai-gateway.
+
 	gw := cfg.Vendors["ai-gateway"]
 	eps := make([]string, 0, len(gw.Endpoints))
 	for k := range gw.Endpoints {

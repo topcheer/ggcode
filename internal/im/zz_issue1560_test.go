@@ -1,9 +1,5 @@
 package im
 
-// #1560-B: /diff over IM returned git's stderr+usage as the diff body on
-// non-zero exit with non-empty output (the TUI path fixed this shape in
-// #909; the IM path was the un-synced parity copy).
-
 import (
 	"os/exec"
 	"strings"
@@ -11,7 +7,7 @@ import (
 )
 
 func TestIssue1560GitDiffErrorNotStderrBody(t *testing.T) {
-	b := &DaemonBridge{workingDir: t.TempDir()} // no repo: git diff fails
+	b := &DaemonBridge{workingDir: t.TempDir()}
 	out, err := b.GitDiff([]string{"HEAD~999"})
 	if err == nil {
 		t.Fatalf("expected error, got output %q", out)

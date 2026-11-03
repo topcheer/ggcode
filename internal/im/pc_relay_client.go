@@ -88,10 +88,6 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 	wsURL := c.buildProviderURL()
 	debug.Log("pc", "relay connecting to %s", wsURL)
 
-	// Dial with the caller's ctx (bounded), but the long-lived ReadLoop must
-	// NOT inherit it: callers pass request-scoped contexts (runtime
-	// sendWithTimeout cancels its ctx as soon as Send returns), which would
-	// kill the connection right after the first outbound reply. #965
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
 	dialCancel()
@@ -99,17 +95,11 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 		return fmt.Errorf("connect relay: %w", err)
 	}
 
-	// Half-open detection: bound reads so a silently dead TCP connection is
-	// reaped within pcHeartbeatTimeout instead of blocking forever. The
-	// deadline is refreshed on every message and every pong (heartbeat pings
-	// every pcHeartbeatInterval expect RFC6455 pongs).
 	_ = conn.SetReadDeadline(time.Now().Add(pcHeartbeatTimeout))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(pcHeartbeatTimeout))
 	})
 
-	// Independent lifecycle ctx for the resident background goroutines,
-	// deliberately disconnected from the caller's request-scoped ctx.
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 
 	readyCh := make(chan struct{})
@@ -126,16 +116,14 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 	c.lifecycleCancel = lifecycleCancel
 	c.mu.Unlock()
 
-	// Start heartbeat
 	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
 	safego.Go("im.pcRelay.heartbeat", func() { c.HeartbeatLoop(heartbeatCtx) })
 
-	// Start ReadLoop in background — it will signal readyCh on provider_ready
 	safego.Go("im.pcRelay.readLoop", func() {
 		readErr := c.ReadLoop(lifecycleCtx)
 		heartbeatCancel()
 		lifecycleCancel()
-		// Clean up conn on exit
+
 		c.cleanupConn()
 		debug.Log("pc", "relay read loop exited: %v", readErr)
 		if c.onDisconnected != nil {
@@ -143,17 +131,13 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 		}
 	})
 
-	// Wait for provider_ready (select on the local readyCh copy — the field
-	// is concurrently closed/nil-ed by handleMessage under c.mu).
 	debug.Log("pc", "relay websocket connected, waiting for provider_ready")
 	select {
 	case <-readyCh:
 		debug.Log("pc", "relay: provider_ready confirmed")
 		return nil
 	case <-time.After(pcReadyTimeout):
-		// Dispose cancels the lifecycle and closes the conn, which unblocks
-		// the ReadLoop above; the onDisconnected callback is a no-op for the
-		// adapter because Connect failed and this client was never installed.
+
 		c.Dispose()
 		return fmt.Errorf("timed out waiting for relay:provider_ready after %s", pcReadyTimeout)
 	case <-ctx.Done():
@@ -174,7 +158,7 @@ func (c *pcRelayClient) Dispose() {
 	cancel := c.lifecycleCancel
 	conn := c.conn
 	c.conn = nil
-	// Signal all pending requests
+
 	for _, ch := range c.pendingCreates {
 		close(ch)
 	}
@@ -185,7 +169,6 @@ func (c *pcRelayClient) Dispose() {
 	c.pendingRenewals = make(map[string]chan *pcRenewResult)
 	c.mu.Unlock()
 
-	// Unblock the ReadLoop (both via ctx and by closing the socket).
 	if cancel != nil {
 		cancel()
 	}
@@ -237,7 +220,7 @@ func (c *pcRelayClient) ReadLoop(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read relay: %w", err)
 		}
-		// Refresh the read deadline: we just proved the peer is alive.
+
 		_ = conn.SetReadDeadline(time.Now().Add(pcHeartbeatTimeout))
 		if err := c.handleMessage(data); err != nil {
 			debug.Log("pc", "relay message handling error: %v", err)
@@ -299,10 +282,7 @@ func (c *pcRelayClient) CreateSession(ctx context.Context, ttlMS *int, label str
 		if !ok {
 			return nil, fmt.Errorf("relay client disposed during create_session")
 		}
-		// #1229: a relay rejection arrives as a result carrying the relay's
-		// own code/message instead of a closed channel, so callers see the
-		// real reason (e.g. session_limit_exceeded) rather than the
-		// misleading fixed "disposed" text.
+
 		if resp.err != nil {
 			return nil, resp.err
 		}
@@ -413,7 +393,7 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 	switch peek.Type {
 	case pcTypeProviderReady:
 		debug.Log("pc", "relay: provider_ready received")
-		// Signal ready
+
 		c.mu.Lock()
 		if c.readyCh != nil {
 			close(c.readyCh)
@@ -475,12 +455,7 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 		}
 		debug.Log("pc", "relay error code=%s message=%s session=%s request=%s",
 			msg.Code, msg.Message, msg.SessionID, msg.RequestID)
-		// Forward to pending requests if applicable. The relay's code and
-		// message travel WITH the result (#1229): closing the channel made
-		// every relay rejection indistinguishable from a local dispose, so
-		// users chased phantom local state instead of the real relay-side
-		// reason (quota/limit/TTL rejections are unretryable and must be
-		// reported as such).
+
 		createErr := fmt.Errorf("relay rejected create_session: %s: %s", msg.Code, msg.Message)
 		renewErr := fmt.Errorf("relay rejected renew_session: %s: %s", msg.Code, msg.Message)
 		c.mu.Lock()
@@ -494,9 +469,7 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 				delete(c.pendingRenewals, msg.RequestID)
 			}
 		} else {
-			// No request id: the relay did not say which request failed.
-			// Fail ALL pending waiters with the relay error instead of
-			// leaving them to a 30s timeout (#1229 amplifier).
+
 			for id, ch := range c.pendingCreates {
 				ch <- &pcCreateResult{err: createErr}
 				delete(c.pendingCreates, id)
@@ -527,8 +500,7 @@ func (c *pcRelayClient) writeJSON(v interface{}) error {
 	if conn == nil {
 		return fmt.Errorf("not connected to relay")
 	}
-	// Bound the write so a wedged peer cannot hold writeMu (and thus every
-	// sender) forever. #965
+
 	_ = conn.SetWriteDeadline(time.Now().Add(pcWriteTimeout))
 	if err := conn.WriteJSON(v); err != nil {
 		return fmt.Errorf("write relay: %w", err)

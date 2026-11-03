@@ -39,7 +39,6 @@ func TestContextManagementPayload(t *testing.T) {
 		t.Fatalf("invalid mode must produce nil payload, got %v", got)
 	}
 
-	// tool_results mode with full tuning.
 	p := contextManagementPayload(&ContextEditingConfig{
 		Mode:               "tool_results",
 		TriggerTokens:      50000,
@@ -71,12 +70,11 @@ func TestContextManagementPayload(t *testing.T) {
 	if ex := e["exclude_tools"].([]string); len(ex) != 2 || ex[0] != "bash" {
 		t.Fatalf("exclude_tools = %v", e["exclude_tools"])
 	}
-	// Payload must serialize cleanly (this exact map is handed to WithJSONSet).
+
 	if _, err := json.Marshal(p); err != nil {
 		t.Fatalf("payload not JSON-serializable: %v", err)
 	}
 
-	// thinking mode with defaults.
 	p = contextManagementPayload(&ContextEditingConfig{Mode: "thinking"})
 	edits = p["edits"].([]map[string]any)
 	if len(edits) != 1 || edits[0]["type"] != contextEditStrategyThinking {
@@ -86,7 +84,6 @@ func TestContextManagementPayload(t *testing.T) {
 		t.Fatalf("default keep must be omitted (API default applies)")
 	}
 
-	// all mode: both strategies.
 	p = contextManagementPayload(&ContextEditingConfig{Mode: "all"})
 	if len(p["edits"].([]map[string]any)) != 2 {
 		t.Fatalf("all mode must carry both strategies, got %v", p)
@@ -106,11 +103,11 @@ func TestParseAppliedEdits(t *testing.T) {
 	if summary != want {
 		t.Fatalf("summary = %q, want %q", summary, want)
 	}
-	// Malformed JSON must be silent, not an error.
+
 	if _, ok := parseAppliedEdits([]byte("not json")); ok {
 		t.Fatalf("malformed payload must report no edits")
 	}
-	// Empty applied_edits array.
+
 	if _, ok := parseAppliedEdits([]byte(`{"context_management":{"applied_edits":[]}}`)); ok {
 		t.Fatalf("empty applied_edits must report no edits")
 	}

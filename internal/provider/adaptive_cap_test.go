@@ -17,9 +17,7 @@ func TestMaxTokensRejection(t *testing.T) {
 		{"context window (not output)", errors.New("context window exceeded"), false, 0},
 		{"max_tokens too large", errors.New("max_tokens is too large, must be at most 4096"), true, 4096},
 		{"max output tokens", errors.New("max output tokens must be <= 16384"), true, 16384},
-		// #577(G): "maximum is" collides with the IsContextOverflowError word
-		// list (#303), so this row uses the "at most" phrasing to test genuine
-		// output-cap rejection without tripping the overflow exemption.
+
 		{"max_completion_tokens", errors.New("max_completion_tokens too large, at most 2048"), true, 2048},
 		{"max_tokens but not too large", errors.New("max_tokens must be > 0"), false, 0},
 	}
@@ -80,7 +78,7 @@ func TestAdaptiveCapString_NonNil(t *testing.T) {
 // through the shared pointer, dragging the parent down).
 func TestCloneWithModelCapIsolation(t *testing.T) {
 	parent := AdaptiveCapFor("testvendor", "https://t.example", "model-a", 8000)
-	parent.OnRejected(9000) // learned: 9000 is too big for model-a
+	parent.OnRejected(9000)
 
 	swapped := AdaptiveCapForModelSwap(parent, "model-b", 4000)
 	if swapped == parent {
@@ -89,7 +87,7 @@ func TestCloneWithModelCapIsolation(t *testing.T) {
 	if swapped.key == parent.key {
 		t.Fatalf("cap key not re-keyed for the new model: %q", swapped.key)
 	}
-	// A rejection on the clone must not touch the parent's bounds.
+
 	swapped.OnRejected(100)
 	parent.mu.Lock()
 	hi := parent.hi

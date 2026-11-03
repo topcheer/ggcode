@@ -523,7 +523,7 @@ func TestBindChannelAutoUnbindsOldWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first BindChannel returned error: %v", err)
 	}
-	// Second bind to same adapter from different workspace should auto-unbind old
+
 	bound, err := mgrB.BindChannel(ChannelBinding{
 		Platform:  PlatformQQ,
 		Adapter:   "qq-bot-1",
@@ -536,12 +536,12 @@ func TestBindChannelAutoUnbindsOldWorkspace(t *testing.T) {
 	if bound.Workspace != normalizeWorkspace("/tmp/b") {
 		t.Fatalf("expected binding to be for /tmp/b, got %q", bound.Workspace)
 	}
-	// Old workspace should no longer have the binding
+
 	oldBindings, _ := store.ListByWorkspace("/tmp/a")
 	if len(oldBindings) != 0 {
 		t.Fatalf("expected old workspace to have no bindings, got %d", len(oldBindings))
 	}
-	// New workspace should have it
+
 	newBindings, _ := store.ListByWorkspace("/tmp/b")
 	if len(newBindings) != 1 || newBindings[0].Adapter != "qq-bot-1" {
 		t.Fatalf("expected new workspace to have the binding, got %v", newBindings)
@@ -583,7 +583,6 @@ func TestSyncSessionHistoryOnlySendsToTargetBinding(t *testing.T) {
 	_ = mgr.SetBindingStore(NewMemoryBindingStore())
 	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
 
-	// Bind two channels: QQ (existing) and DingTalk (newly paired)
 	if _, err := mgr.BindChannel(ChannelBinding{
 		Platform:  PlatformQQ,
 		Adapter:   "qq",
@@ -601,13 +600,11 @@ func TestSyncSessionHistoryOnlySendsToTargetBinding(t *testing.T) {
 		t.Fatalf("BindChannel DingTalk returned error: %v", err)
 	}
 
-	// Register sinks for both adapters
 	qqSink := &stubSink{name: "qq"}
 	dingtalkSink := &stubSink{name: "dingtalk"}
 	mgr.RegisterSink(qqSink)
 	mgr.RegisterSink(dingtalkSink)
 
-	// Sync history to DingTalk only (simulating new pairing)
 	dingtalkBinding := ChannelBinding{
 		Platform:  PlatformDingTalk,
 		Adapter:   "dingtalk",
@@ -621,17 +618,14 @@ func TestSyncSessionHistoryOnlySendsToTargetBinding(t *testing.T) {
 		t.Fatalf("SyncSessionHistory returned error: %v", err)
 	}
 
-	// DingTalk should receive the history
 	if len(dingtalkSink.events) != 2 {
 		t.Fatalf("expected 2 history events on DingTalk, got %d", len(dingtalkSink.events))
 	}
-	// QQ must NOT receive the history — this was the bug
+
 	if len(qqSink.events) != 0 {
 		t.Fatalf("expected 0 history events on QQ (not the target), got %d — history leaked to wrong channel!", len(qqSink.events))
 	}
 }
-
-// --- Additional coverage tests ---
 
 func TestManager_SetOnUpdate_Callback(t *testing.T) {
 	m := NewManager()
@@ -684,7 +678,6 @@ func TestManager_ListBindings_NoStoreWithCurrent(t *testing.T) {
 	m.BindSession(SessionBinding{Workspace: "/ws1"})
 	m.BindChannel(ChannelBinding{Workspace: "/ws1", TargetID: "t1", ChannelID: "c1"})
 
-	// Remove store to test fallback path
 	m.mu.Lock()
 	m.bindingStore = nil
 	m.mu.Unlock()
@@ -703,7 +696,6 @@ func TestManager_RegisterUnregisterSink(t *testing.T) {
 	sink := &stubSink{name: "test-sink"}
 	m.RegisterSink(sink)
 
-	// Verify it is registered via GenerateShareLink
 	_, err := m.GenerateShareLink(context.Background(), "test-sink", "data")
 	if err == nil {
 		t.Error("expected error (not ShareLinkProvider)")
@@ -718,7 +710,7 @@ func TestManager_RegisterUnregisterSink(t *testing.T) {
 
 func TestManager_RegisterSink_Nil(t *testing.T) {
 	m := NewManager()
-	m.RegisterSink(nil) // should not panic
+	m.RegisterSink(nil)
 }
 
 func TestManager_SendDirect_WithSink(t *testing.T) {
@@ -740,8 +732,7 @@ func TestManager_SendDirect_NoSink(t *testing.T) {
 	m := NewManager()
 	binding := ChannelBinding{Workspace: "/ws1", Adapter: "qq", ChannelID: "ch1"}
 	err := m.SendDirect(context.Background(), binding, OutboundEvent{Kind: OutboundEventText})
-	// fix #165: a directed send to a missing adapter sink must surface an
-	// error instead of silently reporting success (message drop).
+
 	if err == nil {
 		t.Fatal("expected error for missing sink, got nil")
 	}
@@ -770,7 +761,6 @@ func TestManager_RegisterApproval_AutoFields(t *testing.T) {
 		t.Error("expected auto-set RequestedAt")
 	}
 
-	// Resolve
 	result, ok, err := m.ResolveApproval(ApprovalResponse{
 		ApprovalID:  registered.ID,
 		Decision:    permission.Allow,
@@ -906,7 +896,6 @@ func TestHandleInboundDedupDuplicateMessageID(t *testing.T) {
 		},
 	}
 
-	// First call should succeed and reach the bridge
 	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
 		t.Fatalf("first HandleInbound returned error: %v", err)
 	}
@@ -914,10 +903,8 @@ func TestHandleInboundDedupDuplicateMessageID(t *testing.T) {
 		t.Fatalf("expected bridge to receive first message, got %#v", bridge.last)
 	}
 
-	// Reset bridge to detect second call
 	bridge.last = InboundMessage{}
 
-	// Second call with same MessageID should be silently dropped
 	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
 		t.Fatalf("duplicate HandleInbound returned error: %v", err)
 	}
@@ -991,18 +978,17 @@ func TestHandleInboundDedupNoMessageID(t *testing.T) {
 		Envelope: Envelope{
 			Adapter:   "qq",
 			ChannelID: "group-1",
-			MessageID: "", // no MessageID — should not dedup
+			MessageID: "",
 		},
 	}
 
-	// Both calls should go through since MessageID is empty
 	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
 		t.Fatalf("first HandleInbound returned error: %v", err)
 	}
 	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
 		t.Fatalf("second HandleInbound returned error: %v", err)
 	}
-	// bridge.last is overwritten on each call, so we just verify no error
+
 }
 
 func TestHandleInboundDedupDifferentAdapters(t *testing.T) {
@@ -1029,7 +1015,6 @@ func TestHandleInboundDedupDifferentAdapters(t *testing.T) {
 		t.Fatalf("BindChannel tg returned error: %v", err)
 	}
 
-	// Same MessageID but different adapters — should both go through
 	msgQQ := InboundMessage{
 		Text: "hello",
 		Envelope: Envelope{
@@ -1053,7 +1038,7 @@ func TestHandleInboundDedupDifferentAdapters(t *testing.T) {
 	if err := mgr.HandleInbound(context.Background(), msgTG); err != nil {
 		t.Fatalf("tg HandleInbound returned error: %v", err)
 	}
-	// Both should have been accepted (dedup key is adapter:messageID)
+
 }
 
 func TestManager_Emit_AutoCreatedAt(t *testing.T) {
@@ -1075,7 +1060,6 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 	store := NewMemoryBindingStore()
 	_ = mgr.SetBindingStore(store)
 
-	// Bind a wechat adapter
 	mgr.BindSession(SessionBinding{Workspace: "/ws"})
 	mgr.currentBindings["wechat"] = &ChannelBinding{
 		Workspace: "/ws",
@@ -1084,16 +1068,13 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 		ChannelID: "user-abc",
 	}
 
-	// Update context token
 	mgr.UpdateBindingContextToken("wechat", "token-123")
 
-	// Verify in-memory
 	got := mgr.GetBindingContextToken("wechat")
 	if got != "token-123" {
 		t.Errorf("GetBindingContextToken: got %q, want %q", got, "token-123")
 	}
 
-	// Verify persisted
 	bindings, _ := store.List()
 	if len(bindings) != 1 {
 		t.Fatalf("store: expected 1, got %d", len(bindings))
@@ -1105,13 +1086,11 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 		t.Error("store ContextTokenUpdatedAt should not be zero")
 	}
 
-	// Non-existent adapter
 	got = mgr.GetBindingContextToken("nonexistent")
 	if got != "" {
 		t.Errorf("nonexistent adapter: got %q, want empty", got)
 	}
 
-	// Update again — should replace
 	mgr.UpdateBindingContextToken("wechat", "token-456")
 	got = mgr.GetBindingContextToken("wechat")
 	if got != "token-456" {
@@ -1125,11 +1104,9 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 // must not introduce a panic path for uninitialized managers).
 func TestClaimUnclaimedBindingsNilStoreNoPanic(t *testing.T) {
 	m := NewManager()
-	// No session, no store: must return cleanly.
+
 	m.claimUnclaimedBindings("sess-1")
 
-	// Store set but no session bound: workspace snapshot is empty, must
-	// still return cleanly without claiming.
 	m.bindingStore = NewMemoryBindingStore()
 	m.claimUnclaimedBindings("sess-1")
 }

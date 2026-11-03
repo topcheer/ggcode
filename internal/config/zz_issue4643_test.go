@@ -43,7 +43,6 @@ vendors:
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Corrupt the main file so Save() takes the unparseable-fallback branch.
 	if err := os.WriteFile(cfgPath, []byte("{{{ not: valid: yaml: [[["), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +60,7 @@ vendors:
 		}
 	}
 	if !strings.Contains(string(got), "testv") || strings.Contains(string(got), "key4643") {
-		// vendor selection may persist as a name reference, but never the key
+
 		t.Fatalf("fallback write must not persist vendor credentials: %s", got)
 	}
 }

@@ -1,14 +1,5 @@
 package lanchat
 
-// Issue #990 companion tests:
-//  1. Store.Append must be a pure O_APPEND write so two Store instances
-//     sharing one session file (TUI + daemon double-open) cannot lose
-//     messages via read-modify-write clobbering.
-//  2. Corrupt approval-policies.json must not be silently wiped by
-//     SetApprovalPolicy write-back; Save must round-trip through Load.
-//  3. SetSessionID must reject session IDs that could escape the
-//     sessions/ directory via path separators or parent traversal.
-
 import (
 	"fmt"
 	"os"
@@ -19,8 +10,6 @@ import (
 	"time"
 )
 
-// --- Problem 1: O_APPEND append semantics ---
-
 func TestStoreAppendTwoInstancesBothMessagesSurvive(t *testing.T) {
 	dir := t.TempDir()
 	storeA := NewStore(dir)
@@ -29,8 +18,6 @@ func TestStoreAppendTwoInstancesBothMessagesSurvive(t *testing.T) {
 	msgA := Message{ID: "msg-a", FromNodeID: "node-a", FromNick: "alice", Content: "from instance A", Timestamp: time.Now().UnixMilli()}
 	msgB := Message{ID: "msg-b", FromNodeID: "node-b", FromNick: "bob", Content: "from instance B", Timestamp: time.Now().UnixMilli()}
 
-	// Sequential appends from two Store handles over the same file: the
-	// in-process approximation of two processes sharing the session dir.
 	if err := storeA.Append("sess", msgA); err != nil {
 		t.Fatalf("storeA.Append: %v", err)
 	}
@@ -77,8 +64,6 @@ func TestStoreAppendConcurrentInstancesNoLoss(t *testing.T) {
 	}
 	wg.Wait()
 
-	// perInstance*2 (50) <= maxHistoryPerSession (100), so the read-side
-	// cap cannot mask any loss.
 	msgs, err := storeA.LoadRecent("sess", 0)
 	if err != nil {
 		t.Fatalf("LoadRecent: %v", err)
@@ -92,7 +77,6 @@ func TestStoreAppendHealsTornTailLine(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	// Simulate a writer that crashed mid-line: fragment without newline.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +98,6 @@ func TestStoreAppendHealsTornTailLine(t *testing.T) {
 	}
 }
 
-// --- Problem 2: approval policy persistence ---
-
 func TestApprovalPoliciesCorruptFileNotWipedBySetApprovalPolicy(t *testing.T) {
 	dir := t.TempDir()
 	corrupt := []byte("{not valid json")
@@ -123,7 +105,6 @@ func TestApprovalPoliciesCorruptFileNotWipedBySetApprovalPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Load must surface the corruption, not silently return an empty map.
 	if _, err := LoadApprovalPolicies(dir); err == nil {
 		t.Fatal("LoadApprovalPolicies should fail on corrupt JSON")
 	}
@@ -133,10 +114,6 @@ func TestApprovalPoliciesCorruptFileNotWipedBySetApprovalPolicy(t *testing.T) {
 		t.Fatal("hub should mark approval policies as not-loaded on corrupt file")
 	}
 
-	// User sets a policy during the session. The in-memory map updates
-	// (policy applies for this run) but must NOT be written back, or the
-	// corrupt-but-recoverable file would be overwritten with an incomplete
-	// map and the original policies permanently wiped.
 	hub.SetApprovalPolicy("PeerHuman", "always")
 
 	after, err := os.ReadFile(filepath.Join(dir, "approval-policies.json"))
@@ -166,8 +143,6 @@ func TestApprovalPoliciesSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-// --- Problem 3: sessionID sanitization ---
-
 func TestSetSessionIDRejectsUnsafeIDs(t *testing.T) {
 	base := t.TempDir()
 	origStore := NewStore(t.TempDir())
@@ -186,7 +161,6 @@ func TestSetSessionIDRejectsUnsafeIDs(t *testing.T) {
 		}
 	}
 
-	// Valid IDs still work.
 	hub.SetSessionID(base, "session-1")
 	hub.mu.RLock()
 	dir := hub.store.dir

@@ -54,7 +54,6 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 	var images []ExtractedImage
 	seen := make(map[string]bool)
 
-	// 1. Extract markdown images: ![alt](url)
 	markdownMatches := markdownImageRe.FindAllStringSubmatch(text, -1)
 	for _, m := range markdownMatches {
 		if len(m) < 3 {
@@ -67,10 +66,9 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 		}
 		images, _ = appendImage(images, seen, kind, imgURL)
 	}
-	// Replace markdown images with just the alt text (preserve meaningful content)
+
 	text = markdownImageRe.ReplaceAllString(text, "$1")
 
-	// 2. Extract bare image URLs
 	urlMatches := bareImageURLRe.FindAllStringSubmatch(text, -1)
 	for _, m := range urlMatches {
 		if len(m) < 2 {
@@ -79,10 +77,9 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 		url := strings.TrimSpace(m[1])
 		images, _ = appendImage(images, seen, "url", url)
 	}
-	// Remove matched bare URLs from text
+
 	text = bareImageURLRe.ReplaceAllString(text, " ")
 
-	// 3. Extract data URLs (base64 images not in markdown)
 	dataMatches := dataURLRe.FindAllStringSubmatch(text, -1)
 	for _, m := range dataMatches {
 		if len(m) < 2 {
@@ -93,17 +90,13 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 	}
 	text = dataURLRe.ReplaceAllString(text, "")
 
-	// 4. Extract bare local image paths (agent tool output pattern: absolute
-	// paths like /tmp/shot.png). Emitted as Kind "url" because all adapter
-	// sendExtractedImage implementations branch on IsLocalFilePath within the
-	// "url" case to read and upload local files.
 	localMatches := localImagePathRe.FindAllString(text, -1)
 	for _, p := range localMatches {
 		if IsLocalFilePath(p) {
 			images, _ = appendImage(images, seen, "url", p)
 		}
 	}
-	// Remove matched local paths from text (the image itself is sent as media).
+
 	text = localImagePathRe.ReplaceAllString(text, " ")
 
 	text = strings.TrimSpace(text)
@@ -117,15 +110,15 @@ func IsLocalFilePath(s string) bool {
 	if s == "" {
 		return false
 	}
-	// Absolute paths
+
 	if strings.HasPrefix(s, "/") {
 		return true
 	}
-	// Relative paths with common prefixes
+
 	if strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
 		return true
 	}
-	// Check if it has a file extension and no URL scheme
+
 	if strings.Contains(s, "://") {
 		return false
 	}

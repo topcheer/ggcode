@@ -35,7 +35,6 @@ func TestDeleteBinding(t *testing.T) {
 	mgr := NewManager()
 	mgr.SetBindingStore(store)
 
-	// Save a binding first
 	binding := ChannelBinding{
 		Workspace: "/test/ws",
 		Adapter:   "qq",
@@ -56,7 +55,6 @@ func TestDeleteBinding(t *testing.T) {
 		t.Errorf("store should be empty, got %d bindings", len(list))
 	}
 
-	// No store
 	mgr2 := NewManager()
 	if err := mgr2.DeleteBinding("qq", "/test/ws"); err == nil {
 		t.Error("expected error with no store")
@@ -83,14 +81,12 @@ func TestUnbindAdapter(t *testing.T) {
 	if _, ok := mgr.currentBindings["tg"]; ok {
 		t.Error("binding should be removed")
 	}
-	// store should also be cleared
+
 	list, _ := store.ListByAdapter("tg")
 	if len(list) != 0 {
 		t.Errorf("store should be empty, got %d", len(list))
 	}
 
-	// No binding at all: idempotent success (#396) — the RemoveIMAdapter
-	// cascade must not fail when the adapter has no bindings.
 	if err := mgr.UnbindAdapter("nonexistent"); err != nil {
 		t.Errorf("expected idempotent nil for nonexistent adapter, got %v", err)
 	}
@@ -126,7 +122,6 @@ func TestClearChannelByAdapter(t *testing.T) {
 		t.Error("LastInboundMessageID should be cleared")
 	}
 
-	// nonexistent adapter
 	if err := mgr.ClearChannelByAdapter("nonexistent"); err == nil {
 		t.Error("expected error for nonexistent adapter")
 	}
@@ -215,18 +210,15 @@ func TestHasNonInteractiveBindings(t *testing.T) {
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
 	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "ch2"}
 
-	// No adapters sent interactively
 	if !mgr.HasNonInteractiveBindings(nil) {
 		t.Error("should have non-interactive when nothing was sent")
 	}
 
-	// Both adapters sent
 	sent := map[string]string{"qq": "msg1", "tg": "msg2"}
 	if mgr.HasNonInteractiveBindings(sent) {
 		t.Error("should not have non-interactive when all sent")
 	}
 
-	// Only one adapter sent
 	sent2 := map[string]string{"qq": "msg1"}
 	if !mgr.HasNonInteractiveBindings(sent2) {
 		t.Error("should have non-interactive for tg")
@@ -265,18 +257,17 @@ func TestAllPersistedBindings(t *testing.T) {
 }
 
 func TestResolveOutputMode(t *testing.T) {
-	// nil manager
+
 	if mode := (*Manager)(nil).ResolveOutputMode("qq", "verbose"); mode != "verbose" {
 		t.Errorf("nil manager: %q", mode)
 	}
 
 	mgr := NewManager()
-	// unknown adapter
+
 	if mode := mgr.ResolveOutputMode("qq", "verbose"); mode != "verbose" {
 		t.Errorf("unknown adapter: %q", mode)
 	}
 
-	// wechat adapter with verbose default
 	mgr.adapters["wechat"] = AdapterState{Platform: PlatformWechat}
 	if mode := mgr.ResolveOutputMode("wechat", "verbose"); mode != WechatDefaultOutputMode {
 		t.Errorf("wechat verbose: %q, want %q", mode, WechatDefaultOutputMode)
@@ -284,12 +275,11 @@ func TestResolveOutputMode(t *testing.T) {
 	if mode := mgr.ResolveOutputMode("wechat", ""); mode != WechatDefaultOutputMode {
 		t.Errorf("wechat empty: %q, want %q", mode, WechatDefaultOutputMode)
 	}
-	// wechat with explicit quiet should keep quiet
+
 	if mode := mgr.ResolveOutputMode("wechat", "quiet"); mode != "quiet" {
 		t.Errorf("wechat quiet: %q", mode)
 	}
 
-	// non-wechat adapter should pass through
 	mgr.adapters["qq"] = AdapterState{Platform: PlatformQQ}
 	if mode := mgr.ResolveOutputMode("qq", "verbose"); mode != "verbose" {
 		t.Errorf("qq verbose: %q", mode)
@@ -305,7 +295,6 @@ func TestEmitExcept(t *testing.T) {
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
 	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "ch2"}
 
-	// Empty excludeAdapter should fall through to Emit (send to all)
 	err := mgr.EmitExcept(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hello"}, "")
 	if err != nil {
 		t.Fatalf("EmitExcept empty exclude: %v", err)
@@ -314,7 +303,6 @@ func TestEmitExcept(t *testing.T) {
 		t.Errorf("both sinks should receive: qq=%d tg=%d", sink1.count(), sink2.count())
 	}
 
-	// Exclude qq
 	sink1.reset()
 	sink2.reset()
 	err = mgr.EmitExcept(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hello"}, "qq")
@@ -356,7 +344,6 @@ func TestEmitExceptAdapters(t *testing.T) {
 		t.Errorf("discord excluded: %d", sink3.count())
 	}
 
-	// Exclude all -> ErrNoChannelBound
 	excludeAll := map[string]bool{"qq": true, "tg": true, "discord": true}
 	err = mgr.EmitExceptAdapters(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hello"}, excludeAll)
 	if err != ErrNoChannelBound {

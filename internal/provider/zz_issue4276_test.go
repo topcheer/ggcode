@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// #4276: moonshot-flavored endpoints reject free-form object schema nodes
-// ({"type":"object"} with neither properties nor additionalProperties) as
-// "detected infinite recursion without termination condition". The gate is
-// dual-axis OR (URL host OR model name) and the normalization must only ever
-// ADD an explicit "additionalProperties": true - never narrow anything.
-
 func TestIssue4276_GateDualAxis(t *testing.T) {
 	cases := []struct {
 		baseURL, model string
@@ -75,16 +69,14 @@ func TestIssue4276_NormalizeStepsFreeFormObject(t *testing.T) {
 	if !ok || ap != true {
 		t.Fatalf("steps.items.properties.args must gain additionalProperties:true after normalization, got %v (ok=%v)", ap, ok)
 	}
-	// The flagged path in the live error ('properties.steps') now carries a
-	// terminating additionalProperties on its free-form leaf.
+
 	if _, hasProps := args["properties"]; hasProps {
 		t.Fatal("normalization must not invent properties")
 	}
 }
 
 func TestIssue4276_NormalizeNeverNarrows(t *testing.T) {
-	// Object with explicit properties and additionalProperties:false must be
-	// untouched; idempotency on already-normalized input.
+
 	in := json.RawMessage(`{
 		"type":"object",
 		"properties":{
@@ -113,15 +105,14 @@ func TestIssue4276_NormalizeNeverNarrows(t *testing.T) {
 }
 
 func TestIssue4276_NormalizeHandlesAnyOfAndInvalidJSON(t *testing.T) {
-	// anyOf branches descend.
+
 	in := json.RawMessage(`{"anyOf":[{"type":"object"},{"type":"string"}]}`)
 	out := string(normalizeMoonshotSchema(in))
 	want := `"additionalProperties":true`
 	if !containsASCII(out, want) {
 		t.Fatalf("anyOf free-form branch must be normalized, got %s", out)
 	}
-	// Invalid JSON passes through untouched (the convertTools fallback
-	// upstream guarantees validity, this is defense in depth).
+
 	if got := string(normalizeMoonshotSchema(json.RawMessage(`{invalid`))); got != `{invalid` {
 		t.Fatalf("invalid JSON must pass through, got %s", got)
 	}

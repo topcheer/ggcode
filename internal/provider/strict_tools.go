@@ -7,30 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Strict tool use (structured outputs) plumbing.
-//
-// Concept: OpenAI ("strict: true" on function definitions) and Anthropic
-// ("strict": true on tool params + beta-GA structured outputs) compile the
-// tool's JSON Schema into a grammar that constrains token generation, so
-// required fields are ALWAYS present with correct types. Without it,
-// `required` is only a semantic hint — session data showed read_file /
-// edit_file / write_file silently omitting their required `description`
-// parameter (see docs/design/tool-schema-strict-mode.md).
-//
-// Hard requirements enforced here (both providers):
-//   - the input schema must carry "additionalProperties": false (injected
-//     recursively for every object node before the request is sent);
-//   - top-level properties must all be listed in "required" (an OpenAI strict
-//     requirement; also keeps Anthropic's 24-optional-parameter grammar
-//     complexity budget safe);
-//   - Anthropic caps strict tools at 20 per request, so the feature is
-//     applied to a curated allowlist (DefaultStrictTools), never to all ~191
-//     registered tools.
-//
-// Docs:
-//   https://platform.claude.com/docs/en/build-with-claude/structured-outputs
-//   https://platform.openai.com/docs/guides/structured-outputs
-
 // StrictToolsSetter is implemented by providers that support strict tool
 // definitions. The allowlist maps tool names to their strict flag; tools not
 // in the map are sent without `strict` (zero risk on every endpoint because
@@ -80,8 +56,7 @@ func InjectAdditionalPropertiesFalse(raw json.RawMessage) json.RawMessage {
 func injectAPF(v any) any {
 	m, ok := v.(map[string]any)
 	if !ok {
-		// Only objects can be schemas; recurse through containers that may
-		// hold schemas (arrays) so nested definitions are covered.
+
 		if arr, isArray := v.([]any); isArray {
 			for i, e := range arr {
 				arr[i] = injectAPF(e)
@@ -89,7 +64,7 @@ func injectAPF(v any) any {
 		}
 		return v
 	}
-	// Recurse into schema-bearing sub-nodes first.
+
 	if props, ok := m["properties"].(map[string]any); ok {
 		for k, sub := range props {
 			props[k] = injectAPF(sub)
@@ -98,9 +73,7 @@ func injectAPF(v any) any {
 	if items, ok := m["items"]; ok {
 		m["items"] = injectAPF(items)
 	}
-	// additionalProperties (any prior value, including schema-form): strict
-	// mode forbids undeclared properties entirely, so normalize to the
-	// canonical false.
+
 	m["additionalProperties"] = false
 	for _, key := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
 		if arr, ok := m[key].([]any); ok {

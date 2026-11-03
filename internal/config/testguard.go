@@ -8,24 +8,6 @@ import (
 	"testing"
 )
 
-// Test HOME isolation guard.
-//
-// Incident: a wailskit test wrote its fixture value
-// (https://new-url.example.com) into the developer's real
-// ~/.ggcode/vendors.yaml, silently corrupting the active endpoint. Tests
-// that touch the real user HOME are always bugs — fixtures leak into
-// developer configs, and config mutations race with concurrently running
-// ggcode instances.
-//
-// Rules enforced here:
-//   - Inside a test binary (testing.Testing()), any config path derived
-//     from an un-isolated HOME fails fast (panic from ConfigDir, error
-//     from Save-family guards).
-//   - Isolation = the test changed HOME (t.Setenv("HOME", t.TempDir()))
-//     relative to the snapshot taken at process start, or set
-//     GGCODE_TEST_ALLOW_REAL_HOME=1 to explicitly opt in.
-//   - Production binaries never fire: testing.Testing() is false there.
-
 // realHomeSnapshot captures the home directory as seen at process start
 // (package init runs before any test can call t.Setenv). On Unix that is
 // $HOME; on Windows, USERPROFILE.
@@ -44,19 +26,18 @@ func firstNonEmpty(vals ...string) string {
 // binary whose HOME has been redirected away from the real user home.
 func homeIsIsolatedForTest() bool {
 	if !testing.Testing() {
-		return true // production: nothing to isolate
+		return true
 	}
 	if os.Getenv("GGCODE_TEST_ALLOW_REAL_HOME") == "1" {
-		return true // explicit opt-in
+		return true
 	}
 	cur := firstNonEmpty(os.Getenv("HOME"), os.Getenv("USERPROFILE"))
 	if cur == "" {
-		// No home resolvable at all — nothing real to protect.
+
 		return true
 	}
 	if realHomeSnapshot == "" {
-		// Process started without a home (unusual); cannot tell isolated
-		// from real. Fail open rather than bricking exotic CI sandboxes.
+
 		return true
 	}
 	return filepath.Clean(cur) != filepath.Clean(realHomeSnapshot)
@@ -91,10 +72,7 @@ func GuardRealHomePath(path, op string) error {
 		abs = filepath.Clean(path)
 	}
 	if underTempRoot(abs) {
-		// On Windows the OS temp root lives under the user profile
-		// (...\AppData\Local\Temp), so the home-prefix check below
-		// would reject every t.TempDir() target. Explicit temp paths
-		// are the documented pass-through pattern on every platform.
+
 		return nil
 	}
 	home := filepath.Clean(realHomeSnapshot)

@@ -41,10 +41,6 @@ const (
 	signalInterMessageDelay = 500 * time.Millisecond
 )
 
-// ---------------------------------------------------------------------------
-// Adapter struct
-// ---------------------------------------------------------------------------
-
 type signalAdapter struct {
 	name    string
 	manager *Manager
@@ -78,7 +74,7 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 	if baseURL == "" {
 		baseURL = signalDefaultBaseURL
 	}
-	// Ensure http:// prefix
+
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "http://" + baseURL
 	}
@@ -92,7 +88,6 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 		return nil, fmt.Errorf("Signal account (phone number) is required for adapter %q (set 'account' in extra or SIGNAL_ACCOUNT env)", name)
 	}
 
-	// Mention policy — default false for DMs, configurable for groups
 	requireMention := false
 	if v := strings.ToLower(stringValue(adapterCfg.Extra, "require_mention")); v == "true" || v == "1" || v == "yes" {
 		requireMention = true
@@ -148,10 +143,6 @@ func (a *signalAdapter) Close() error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Main run loop
-// ---------------------------------------------------------------------------
-
 func (a *signalAdapter) run(ctx context.Context) {
 	backoff := signalInitialBackoff
 	for {
@@ -170,9 +161,7 @@ func (a *signalAdapter) run(ctx context.Context) {
 		if isClosed {
 			return
 		}
-		// #432: after a HEALTHY connection (stayed up for a while), the next
-		// failure is a fresh transient — reset backoff (#389 Discord pattern)
-		// instead of resuming the accumulated value after hours of uptime.
+
 		if time.Since(startedAt) >= 60*time.Second {
 			backoff = signalInitialBackoff
 		}
@@ -192,7 +181,7 @@ func (a *signalAdapter) run(ctx context.Context) {
 }
 
 func (a *signalAdapter) connectAndServe(ctx context.Context) error {
-	// Health check first
+
 	if err := a.healthCheck(); err != nil {
 		return fmt.Errorf("health check: %w", err)
 	}
@@ -209,26 +198,17 @@ func (a *signalAdapter) connectAndServe(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
-	// Start health monitor
 	healthCtx, healthCancel := context.WithCancel(ctx)
 	defer healthCancel()
 	safego.Go("im.signal.health", func() { a.healthLoop(healthCtx) })
 
-	// SSE loop
 	return a.sseLoop(ctx)
 }
-
-// ---------------------------------------------------------------------------
-// Receive loop — polling /v1/receive/{number}
-// ---------------------------------------------------------------------------
 
 func (a *signalAdapter) sseLoop(ctx context.Context) error {
 	receiveURL := a.baseURL + "/v1/receive/" + url.PathEscape(a.account)
 	debug.Log("signal", "adapter=%s long-polling %s", a.name, receiveURL)
 
-	// /v1/receive/ is a long-poll endpoint — it blocks until a message
-	// arrives (or times out server-side). Use a long client timeout and
-	// issue requests sequentially, not on a ticker.
 	client := util.NewInsecureAwareClient(300 * time.Second)
 
 	for {
@@ -261,16 +241,10 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 			continue
 		}
 
-		// #405: migrate to imagepkg.ReadLimited (missed in the #388 sweep) —
-		// bare LimitReader silently truncated >2MB attachments into corrupt
-		// data; the limit is also unified to the shared 20MB.
 		body, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 		resp.Body.Close()
 		if err != nil {
-			// #432: oversized-body / read errors must back off like every
-			// other error path in this loop - a bare continue hot-looped the
-			// CPU and the signal-cli/proxy server when the endpoint kept
-			// returning huge bodies.
+
 			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
 			select {
 			case <-time.After(5 * time.Second):
@@ -292,9 +266,7 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 
 		var envelopes []map[string]any
 		if err := json.Unmarshal(body, &envelopes); err != nil {
-			// #432/#968: a non-JSON body (e.g. a proxy injecting an HTML error
-			// page) must back off like every other error path in this loop -
-			// a bare continue hot-looped the CPU and the server.
+
 			debug.Log("signal", "adapter=%s receive parse error: %v", a.name, err)
 			select {
 			case <-time.After(5 * time.Second):
@@ -312,26 +284,19 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Message processing
-// ---------------------------------------------------------------------------
-
 func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any) {
 	rawJSON, _ := json.Marshal(raw)
 	debug.Log("signal", "adapter=%s processEnvelope: %s", a.name, string(rawJSON))
 
-	// signal-cli-rest-api wraps the actual envelope in an "envelope" field:
-	// {"account":"+...", "envelope":{...}}
 	inner, _ := raw["envelope"].(map[string]any)
 	if inner != nil {
-		// Merge account-level fields into inner envelope
+
 		if acct, ok := raw["account"].(string); ok {
 			inner["account"] = acct
 		}
 		raw = inner
 	}
 
-	// Check for syncMessage (sent by this account from another device)
 	syncMsg, _ := raw["syncMessage"].(map[string]any)
 	isNoteToSelf := false
 	isGroupSync := false
@@ -339,21 +304,18 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		sentMsg, _ := syncMsg["sentMessage"].(map[string]any)
 		if sentMsg != nil {
 			dest, _ := sentMsg["destinationNumber"].(string)
-			// Check if it's a group message sync
+
 			groupInfo, _ := sentMsg["groupInfo"].(map[string]any)
 			if dest != "" && dest == a.account {
-				// Check echo suppression
+
 				ts := jsonInt64(sentMsg, "timestamp")
 				if ts > 0 && a.isSentTimestamp(ts) {
 					a.removeSentTimestamp(ts)
 					return
 				}
-				// Genuine Note to Self
+
 				isNoteToSelf = true
-				// Set source fields so sender extraction works (#968): the sync
-				// envelope carries no sourceNumber/sourceName, so sender extraction
-				// below yielded "" and every Note to Self message was silently
-				// dropped. Mirrors the group sync branch below.
+
 				if _, ok := raw["sourceNumber"]; !ok {
 					raw["sourceNumber"] = a.account
 				}
@@ -362,13 +324,13 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 				}
 				raw["dataMessage"] = sentMsg
 			} else if groupInfo != nil {
-				// Sync of a message sent to a group from another device
+
 				ts := jsonInt64(sentMsg, "timestamp")
 				if ts > 0 && a.isSentTimestamp(ts) {
 					a.removeSentTimestamp(ts)
 					return
 				}
-				// Treat as inbound - set source fields so sender extraction works
+
 				isGroupSync = true
 				raw["dataMessage"] = sentMsg
 				if _, ok := raw["sourceNumber"]; !ok {
@@ -377,7 +339,7 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 				if _, ok := raw["sourceName"]; !ok {
 					raw["sourceName"] = "Me"
 				}
-				// Not our sent message — treat as inbound group message
+
 			}
 		}
 		if !isNoteToSelf && !isGroupSync {
@@ -385,7 +347,6 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		}
 	}
 
-	// Extract sender
 	sender, _ := raw["sourceNumber"].(string)
 	if sender == "" {
 		sender, _ = raw["source"].(string)
@@ -397,12 +358,8 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		return
 	}
 
-	// Self-message filtering (#968): Note to Self and group sync messages
-	// legitimately originate from this account (sent from another device).
-	// Track the flag so the allowed-users check below can exempt them.
 	selfOriginated := (isNoteToSelf || isGroupSync) && sender == a.account
 
-	// Get dataMessage (or editMessage)
 	dataMessage, _ := raw["dataMessage"].(map[string]any)
 	if dataMessage == nil {
 		if editMsg, _ := raw["editMessage"].(map[string]any); editMsg != nil {
@@ -413,13 +370,11 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		return
 	}
 
-	// Timestamp for dedup + message ID
 	ts := jsonInt64(dataMessage, "timestamp")
 	if ts == 0 {
 		return
 	}
 
-	// Dedup
 	a.mu.Lock()
 	if _, seen := a.seen[ts]; seen {
 		a.mu.Unlock()
@@ -436,28 +391,21 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	}
 	a.mu.Unlock()
 
-	// Check for group
 	groupInfo, _ := dataMessage["groupInfo"].(map[string]any)
 	groupID, _ := groupInfo["groupId"].(string)
 	isGroup := groupID != ""
 
-	// Allowed users check - self-originated sync messages bypass the filter,
-	// otherwise a restricted allowed_users list would drop the account's own
-	// Note to Self / group sync messages (#968).
 	if !selfOriginated && len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
 		debug.Log("signal", "adapter=%s user %s not in allowed list", a.name, sender)
 		return
 	}
 
-	// Extract text
 	text, _ := dataMessage["message"].(string)
 
-	// Render mentions
 	if mentions, _ := dataMessage["mentions"].([]any); len(mentions) > 0 && text != "" {
 		text = renderSignalMentions(text, mentions)
 	}
 
-	// Mention gating for groups (#1018).
 	if isGroup && a.requireMention {
 		var drop bool
 		text, drop = a.gateGroupMention(text, dataMessage)
@@ -471,7 +419,6 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		return
 	}
 
-	// Build chat ID
 	chatID := sender
 	if isGroup {
 		chatID = "group:" + groupID
@@ -490,21 +437,15 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		Text: strings.TrimSpace(text),
 	}
 
-	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("signal", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		// #1238: pairing errors do NOT flip Healthy. The SSE loop keeps
-		// delivering messages regardless, but nothing ever re-publishes
-		// connected state (sseLoop retries forever without re-entering
-		// connectAndServe), so a single pairing hiccup showed the channel as
-		// offline in every status surface until process restart. Align with
-		// nostr/whatsapp: log only.
+
 		if err != nil && err != ErrNoSessionBound {
 			debug.Log("signal", "adapter=%s pairing error (connection unaffected): %v", a.name, err)
 		}
 		if pairingResult.Consumed {
-			// Auto-add first paired group to allowlist
+
 			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				debug.Log("signal", "adapter=%s notify previous binding failed: %v", a.name, err)
@@ -518,14 +459,8 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Mention helpers
-// ---------------------------------------------------------------------------
-
 func renderSignalMentions(text string, mentions []any) string {
-	// Signal uses \uFFFC (object replacement character) as mention placeholder
-	// Each mention has: { start, length, [name, number, uuid] }
-	// For simplicity, replace \uFFFC placeholders with @name
+
 	for _, m := range mentions {
 		mention, ok := m.(map[string]any)
 		if !ok {
@@ -535,7 +470,7 @@ func renderSignalMentions(text string, mentions []any) string {
 		if name == "" {
 			continue
 		}
-		// Replace first occurrence of \uFFFC with @name
+
 		idx := strings.Index(text, "\ufffc")
 		if idx >= 0 {
 			text = text[:idx] + "@" + name + text[idx+3:]
@@ -545,21 +480,17 @@ func renderSignalMentions(text string, mentions []any) string {
 }
 
 func stripSignalMention(text, account string) string {
-	// Strip @+phone
+
 	if account != "" {
 		text = strings.ReplaceAll(text, account, "")
 		if len(account) > 1 && account[0] == '+' {
 			text = strings.ReplaceAll(text, account[1:], "")
 		}
 	}
-	// Clean up extra spaces
+
 	text = strings.Join(strings.Fields(text), " ")
 	return strings.TrimSpace(text)
 }
-
-// ---------------------------------------------------------------------------
-// Outbound — JSON-RPC
-// ---------------------------------------------------------------------------
 
 func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
@@ -570,9 +501,6 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 
-	// Images first, then the remaining text - same ordering as the other
-	// media adapters. Extraction failures degrade to a text notice instead of
-	// dropping the whole reply.
 	raw := defaultOutboundText(event)
 	images, remainder := ExtractImagesFromText(raw)
 	for _, img := range images {
@@ -680,9 +608,7 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 		if err != nil {
 			return nil, "", "", fmt.Errorf("decode data URL: %w", err)
 		}
-		// RFC 2397 data URLs are not required to carry a ";" parameter
-		// (e.g. "data:image/png,..." with URL-encoded data). Guard the slice
-		// so a missing ";" falls back instead of panicking (#1018).
+
 		mime := "image/png"
 		header := parts[0]
 		if idx := strings.Index(header, ";"); idx > 0 {
@@ -695,7 +621,7 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return nil, "", "", fmt.Errorf("read local image: %w", err)
@@ -736,8 +662,7 @@ func (a *signalAdapter) gateGroupMention(text string, dataMessage map[string]any
 		return text, true
 	}
 	text = stripSignalMention(text, a.account)
-	// stripSignalMention is number-based; a structured mention leaves a
-	// rendered "@Name" placeholder whose leading "@" must go too.
+
 	if structured {
 		text = strings.TrimSpace(strings.TrimPrefix(text, "@"))
 	}
@@ -771,7 +696,7 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 	chunks := splitSignalMessage(text, signalMaxMessageLen)
 	var lastErr error
 	for i, chunk := range chunks {
-		// Rate limit: signal-cli-rest-api returns 429 on rapid sends.
+
 		if i > 0 {
 			select {
 			case <-time.After(signalInterMessageDelay):
@@ -785,9 +710,7 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			// signal-cli-rest-api double-base64-encodes group IDs:
-			// the groupId from receive is single-encoded, we need to encode it again
-			// and prefix with "group."
+
 			rawGroupID := chatID[6:]
 			doubleEncoded := base64.StdEncoding.EncodeToString([]byte(rawGroupID))
 			payload["recipients"] = []string{"group." + doubleEncoded}
@@ -807,7 +730,7 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, sendErr)
 			continue
 		}
-		// Track sent timestamp for echo suppression
+
 		trackSignalTimestamp(respBody, a.addSentTimestamp)
 	}
 	return lastErr
@@ -817,9 +740,7 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 // the given chatID (direct number or "group:" prefixed group ID).
 func applySignalRecipient(payload map[string]any, chatID string) {
 	if strings.HasPrefix(chatID, "group:") {
-		// signal-cli-rest-api double-base64-encodes group IDs:
-		// the groupId from receive is single-encoded, we need to encode it again
-		// and prefix with "group."
+
 		rawGroupID := chatID[6:]
 		doubleEncoded := base64.StdEncoding.EncodeToString([]byte(rawGroupID))
 		payload["recipients"] = []string{"group." + doubleEncoded}
@@ -864,7 +785,6 @@ func (a *signalAdapter) postSignalBody(ctx context.Context, endpoint string, bod
 			return nil, fmt.Errorf("Signal send: %w", err)
 		}
 
-		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			if attempt < maxRateLimitRetries {
@@ -877,9 +797,6 @@ func (a *signalAdapter) postSignalBody(ctx context.Context, endpoint string, bod
 			return nil, rateLimitExhausted("Signal")
 		}
 
-		// Error-body probe: bounded read, truncation acceptable here
-		// (only used for diagnostics), but go through ReadLimited for a
-		// consistent pattern (#405).
 		respBody, _ := imagepkg.ReadLimited(resp.Body, 4096)
 		resp.Body.Close()
 
@@ -900,10 +817,7 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if chatID == "" {
 		return nil
 	}
-	// #1239: signal-cli-rest-api's TypingIndicatorRequest only has a
-	// Recipient field — the groupId body field never existed, so group typing
-	// silently 400'd (and the unchecked status code hid it). Group recipients
-	// use the same "group." + double-encoded form as sendText.
+
 	recipient := chatID
 	if strings.HasPrefix(chatID, "group:") {
 		rawGroupID := chatID[6:]
@@ -914,7 +828,7 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 		"recipient": recipient,
 	}
 	body, _ := json.Marshal(payload)
-	// Propagate ctx so the request cannot outlive the caller (#968).
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -928,18 +842,12 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 		return err
 	}
 	defer resp.Body.Close()
-	// #1239: surface non-2xx in debug logs (the previous silent nil return
-	// is exactly why the broken group payload survived — the 400 was
-	// invisible).
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		debug.Log("signal", "adapter=%s typing-indicator for %s: HTTP %d", a.name, chatID, resp.StatusCode)
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Health check
-// ---------------------------------------------------------------------------
 
 func (a *signalAdapter) healthCheck() error {
 	req, err := http.NewRequest("GET", a.baseURL+"/v1/health", nil)
@@ -967,15 +875,11 @@ func (a *signalAdapter) healthLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.healthCheck(); err != nil {
 				debug.Log("signal", "adapter=%s health check failed: %v", a.name, err)
-				// Connection may have dropped; the SSE loop will also detect this
+
 			}
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Echo suppression
-// ---------------------------------------------------------------------------
 
 func (a *signalAdapter) addSentTimestamp(ts int64) {
 	a.mu.Lock()
@@ -1008,17 +912,9 @@ func (a *signalAdapter) removeSentTimestamp(ts int64) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Message splitting
-// ---------------------------------------------------------------------------
-
 func splitSignalMessage(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func jsonInt64(m map[string]any, key string) int64 {
 	v, ok := m[key]

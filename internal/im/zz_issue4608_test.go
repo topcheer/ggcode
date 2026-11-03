@@ -26,7 +26,7 @@ func TestIssue4608_NoRetryReplyOnUnboundChannel(t *testing.T) {
 	if branchAt < 0 || branchAt > retryAt {
 		t.Fatal("ErrNoChannelBound branch must guard BEFORE the generic failure reply (#4608)")
 	}
-	// The branch must actually return, not fall through to the reply.
+
 	window := src[branchAt:min(branchAt+400, len(src))]
 	if !strings.Contains(window, "return") {
 		t.Fatal("ErrNoChannelBound branch must return without replying (#4608)")

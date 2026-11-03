@@ -1,14 +1,5 @@
 package im
 
-// #3316 batch-2: FileSender implementations for Matrix, Discord, and Slack.
-// All three ride existing generic upload primitives; the wrapper adds the
-// interface, image-vs-document message typing, and connection/binding
-// guards. Caption convention across FileSender adapters (#3322 review
-// note): the caption rides the SAME message when the platform supports it
-// natively (discord payload_json content, slack initial_comment, matrix
-// filename/body), and follows as a separate message when it does not
-// (qq, see batch 1).
-
 import (
 	"context"
 	"fmt"
@@ -18,8 +9,6 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
-
-// --- Matrix ---
 
 func (a *matrixAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	roomID := strings.TrimSpace(binding.ChannelID)
@@ -72,15 +61,12 @@ func (a *matrixAdapter) SendFile(ctx context.Context, binding ChannelBinding, fi
 	return err
 }
 
-// --- Discord ---
-
 func (a *discordAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
 		return ErrNoChannelBound
 	}
-	// #3353: read connected under the lock like Send/SendInteractive do -
-	// the gateway goroutine writes it on READY/RESUME/Close.
+
 	a.mu.RLock()
 	connected := a.connected
 	a.mu.RUnlock()
@@ -91,21 +77,16 @@ func (a *discordAdapter) SendFile(ctx context.Context, binding ChannelBinding, f
 	if filename == "" {
 		filename = "file"
 	}
-	// sendFileMessage is generic already (multipart files[0] +
-	// payload_json.content caption); images and documents ride the same
-	// channel and Discord renders previews by MIME.
+
 	return a.sendFileMessage(ctx, channelID, filename, file.Data, strings.TrimSpace(caption))
 }
-
-// --- Slack ---
 
 func (a *slackAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
 		return ErrNoChannelBound
 	}
-	// #3353: read connected under the lock like Send does - the connect
-	// loop writes it on connect/close.
+
 	a.mu.RLock()
 	connected := a.connected
 	a.mu.RUnlock()
@@ -116,7 +97,6 @@ func (a *slackAdapter) SendFile(ctx context.Context, binding ChannelBinding, fil
 	if filename == "" {
 		filename = "file"
 	}
-	// uploadFile is generic already (multipart file + initial_comment
-	// caption + thread routing).
+
 	return a.uploadFile(ctx, channelID, "", filename, file.Data, strings.TrimSpace(caption))
 }

@@ -1,9 +1,5 @@
 package im
 
-// #1851 case 2 regression: the matrix sync-token store is keyed by adapter
-// name AND user ID (was name-only), with a one-time migration from the
-// legacy name-only path so an existing token survives the upgrade.
-
 import (
 	"context"
 	"net/http"
@@ -22,8 +18,7 @@ func TestSyncStoreKeyedByNameAndUser(t *testing.T) {
 	if a.path == b.path {
 		t.Fatalf("same-named adapters with different users must get different store files: %q", a.path)
 	}
-	// Write through one; the other must not see it (no cross-account
-	// overwrite - the #1851 case 2 split-brain).
+
 	if err := a.SaveNextBatch(context.Background(), "@alice:example.org", "tok-alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +43,7 @@ func TestSyncStoreMigratesLegacyNameOnlyPath(t *testing.T) {
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatalf("legacy file must be renamed away, stat err = %v", err)
 	}
-	// Second call must NOT recreate or duplicate anything.
+
 	store2 := newSyncStoreForAdapter(dir, "work", "@alice:example.org")
 	if got, _ := store2.LoadNextBatch(context.Background(), "@alice:example.org"); got != "kept-token" {
 		t.Fatalf("token must remain after repeated opens, got %q", got)
@@ -130,7 +125,7 @@ func TestSelfHealingSyncerFiresTokenResetCallback(t *testing.T) {
 	if atomic.LoadInt32(&reset) != 1 {
 		t.Fatal("onTokenReset must fire exactly once on M_UNKNOWN_POS (didFirstSync gate reset #2112)")
 	}
-	// Non-M_UNKNOWN_POS must NOT reset the gate (no initial sync follows).
+
 	_, _ = wrapped.OnFailedSync(nil, &mautrix.HTTPError{
 		RespError: &mautrix.RespError{ErrCode: "M_LIMIT_EXCEEDED", StatusCode: http.StatusTooManyRequests},
 	})

@@ -1,13 +1,5 @@
 package provider
 
-// Gemini structured outputs (sa-229 follow-up to #3312): constrain the
-// final assistant response via generationConfig.responseSchema. Gemini's
-// schema dialect is OpenAPI-style with STRING-typed enums (not JSON
-// Schema), so a recursive converter maps the OpenAI-style JSON Schema
-// that --output-schema accepts onto genai.Schema. Unsupported keywords
-// (additionalProperties, $schema, etc.) are dropped; unknown types are
-// skipped rather than risk a 400.
-
 import (
 	"encoding/json"
 

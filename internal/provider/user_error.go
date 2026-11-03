@@ -35,15 +35,13 @@ func UserFacingErrorLang(err error, lang string) string {
 		return ""
 	}
 
-	// Unwrap once to handle our own fmt.Errorf("xxx: %w", err) wrappers.
 	inner := errors.Unwrap(err)
 	if inner == nil {
 		inner = err
 	}
 
-	zh := lang != "en" // default to Chinese for anything other than "en"
+	zh := lang != "en"
 
-	// ---- Auth / permission errors (never retried) ----
 	if hasHTTPStatus(err, http.StatusUnauthorized) {
 		if zh {
 			return "API 密钥无效或未配置，请检查你的 API Key 设置"
@@ -77,17 +75,9 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Endpoint not found (404). Please check your Base URL and model name"
 	}
 
-	// ---- Rate limiting (429) ----
-	// Many coding plan providers (ZAI/GLM, OpenAI, Anthropic) return 429 for
-	// both transient rate limits AND permanent quota exhaustion. We must
-	// distinguish them to give the user actionable guidance.
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
 		l429 := strings.ToLower(err.Error())
-		// #1000: Anthropic's recoverable 5-hour/weekly window limit also
-		// contains a bare "usage limit" — reuse the #528 exclusion so it
-		// falls through to the transient /retry hint instead of telling
-		// the user their quota is permanently gone. MiniMax-style truly
-		// permanent messages carry no window markers and stay matched.
+
 		if !isAnthropicWindowLimit(l429) &&
 			(strings.Contains(l429, "coding plan") ||
 				strings.Contains(l429, "usage limit") ||
@@ -113,14 +103,13 @@ func UserFacingErrorLang(err error, lang string) string {
 			}
 			return "API quota exhausted or plan expired. Check your provider dashboard, renew your plan or add credits, then retry"
 		}
-		// Transient rate limit — safe to retry immediately
+
 		if zh {
 			return "请求太频繁，服务端已限流。输入 /retry 重试"
 		}
 		return "Rate limited by the server. Type /retry to resend"
 	}
 
-	// ---- Server errors ----
 	if hasHTTPStatus(err, http.StatusBadGateway) ||
 		hasHTTPStatus(err, http.StatusServiceUnavailable) ||
 		hasHTTPStatus(err, http.StatusGatewayTimeout) {
@@ -136,7 +125,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return fmt.Sprintf("Server error (%d). Please retry shortly", code)
 	}
 
-	// ---- Context / timeout errors ----
 	if errors.Is(err, context.Canceled) || errors.Is(inner, context.Canceled) {
 		if zh {
 			return "请求已取消"
@@ -159,7 +147,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Network connection failed. Check your network settings and type /retry"
 	}
 
-	// ---- Anthropic serialization error ----
 	raw := err.Error()
 	if isAnthropicSerializationError(raw) {
 		if zh {
@@ -168,11 +155,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Request failed: incompatible message format. Try /compact and retry"
 	}
 
-	// ---- Context window / prompt too long ----
-	// #783: a bare "max_tokens" mention is usually a parameter 400
-	// ('invalid max_tokens: must be greater than 0'); map it to overflow only
-	// when an overflow cue co-occurs, else /compact advice masks the config
-	// error.
 	maxTokensMention := strings.Contains(raw, "max_tokens")
 	overflowCue := strings.Contains(raw, "exceed") || strings.Contains(raw, "maximum") ||
 		strings.Contains(raw, "context") || strings.Contains(raw, "too long")
@@ -185,7 +167,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Conversation too long, exceeds model context limit. Try /compact or start a new session"
 	}
 
-	// ---- 400 Bad Request ----
 	if hasHTTPStatus(err, http.StatusBadRequest) {
 		if zh {
 			return "请求参数错误 (400)，请尝试 /compact 或重新开始对话"
@@ -193,11 +174,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Bad request (400). Try /compact or start a new session"
 	}
 
-	// #1618-B: 402 needs a dedicated branch BEFORE the generic status
-	// fallback - "retry shortly" misleads on a permanent insufficient-
-	// funds error, and IM/tunnel/daemon paths call UserFacingError
-	// directly (never FriendlyError's correct top-up copy). Anchor table
-	// gains "insufficient credits" (OpenRouter's actual wording).
 	if code := extractHTTPStatus(err); code == 402 || strings.Contains(strings.ToLower(raw), "insufficient credits") {
 		if zh {
 			return "余额不足 (402)。请到 provider 控制台充值后重试"
@@ -205,7 +181,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Insufficient credits (402). Please top up your provider account and retry"
 	}
 
-	// ---- Generic HTTP errors ----
 	if code := extractHTTPStatus(err); code > 0 {
 		if zh {
 			return fmt.Sprintf("请求失败 (%d)，请稍后重试", code)
@@ -213,16 +188,8 @@ func UserFacingErrorLang(err error, lang string) string {
 		return fmt.Sprintf("Request failed (%d). Please retry shortly", code)
 	}
 
-	// ---- Connection refused / DNS ----
-	// #3077: compare against the LOWERCASED raw - relay/proxy wrappers
-	// capitalize ("Connection refused"), and this branch sits before the
-	// lower computation below, so the literal match used to miss and fall
-	// through to the blind-spot fallback, losing the network/Base URL hint.
-	// `lower` is hoisted here and reused by the finish_reason section.
 	lower := strings.ToLower(raw)
-	// #4729: "connection timed out" must map here too — it is FriendlyError's
-	// own timeout wording, and relays that stringify before we see the typed
-	// chain would otherwise fall through to the unrecognized-error blind spot.
+
 	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") ||
 		strings.Contains(lower, "connection timed out") {
 		if zh {
@@ -231,7 +198,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Cannot connect to the API server. Please check your network and Base URL"
 	}
 
-	// ---- Stream finish_reason / stop_reason errors ----
 	if strings.Contains(lower, "finish_reason=length") || strings.Contains(lower, "stop_reason=max_tokens") || strings.Contains(lower, "finish_reason=max_tokens") {
 		if zh {
 			return "回复被截断（超出最大输出长度）。可尝试增加 max_tokens 或缩短问题"
@@ -257,11 +223,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Conversation too long, exceeds model context limit. Try /compact or start a new session"
 	}
 
-	// ---- Quota / billing exhausted (string-based, for when error chain was destroyed) ----
-	// Covers Kimi (access_terminated), ZAI/GLM (coding plan 1308-1321),
-	// Aliyun (allocated quota), Volcengine Ark (QuotaExceeded),
-	// MiniMax (usage limit), Xiaomi MiMo (额度耗尽), OpenAI (quota).
-	// #1000: same Anthropic window-limit exclusion as the 429 branch above.
 	if !isAnthropicWindowLimit(lower) &&
 		(strings.Contains(lower, "access_terminated") ||
 			strings.Contains(lower, "usage limit") ||
@@ -288,7 +249,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "API quota exhausted or plan expired. Check your provider dashboard, renew your plan or add credits, then retry"
 	}
 
-	// ---- Fallback: generic message, strip provider noise ----
 	msg := raw
 	for _, prefix := range []string{
 		"openai chat: ",
@@ -302,10 +262,7 @@ func UserFacingErrorLang(err error, lang string) string {
 		}
 	}
 	if msg != "" && msg != raw {
-		// #3077: sanitize here too - the stripped remainder of a gateway
-		// error can still embed credential-looking pairs (e.g. a Gemini
-		// key-in-URL 403 body). #1720's redaction previously covered ONLY
-		// the blind-spot branch (truncateRawError -> sanitizeRawError);\t	// no outer caller re-sanitizes.
+
 		msg = sanitizeRawError(msg)
 		if zh {
 			return "请求失败：" + msg
@@ -313,9 +270,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Request failed: " + msg
 	}
 
-	// Blind-spot fallback: no category recognized and no strippable SDK
-	// prefix. Surface the raw error instead of hiding it — the generic
-	// message alone is undiagnosable. IsBlindSpotError matches this branch.
 	if zh {
 		return fallbackErrMsgZh + "。原始错误：" + truncateRawError(raw)
 	}
@@ -347,8 +301,7 @@ func truncateRawError(raw string) string {
 	if len(raw) <= blindSpotRawLimit {
 		return sanitizeRawError(raw)
 	}
-	// #1720 case 2: back off to a rune boundary - the byte slice cut
-	// multi-byte UTF-8 mid-rune.
+
 	cut := blindSpotRawLimit
 	for cut > 0 && cut < len(raw) && !utf8.RuneStart(raw[cut]) {
 		cut--

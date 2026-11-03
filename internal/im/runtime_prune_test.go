@@ -28,9 +28,6 @@ func TestPruneApprovalsSendsDeny(t *testing.T) {
 		}
 	}
 
-	// This registration triggers pruneApprovalsLocked, which evicts the stale
-	// entries above. Before the fix, the response channel was closed without a
-	// decision, so a consumer received permission.Allow (zero value).
 	mgr.RegisterApproval(ApprovalRequest{
 		ToolName:    "run_command",
 		Input:       `{"command":"pwd"}`,

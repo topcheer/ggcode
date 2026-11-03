@@ -1,10 +1,5 @@
 package provider
 
-// #4146 companion tests: the tape record and fault-inject stream forwarding
-// goroutines must not leak when the consumer abandons the stream mid-read.
-// Both use the unbuffered `out` + ctx-guarded send + deferred src drain
-// pattern established by fallback.go (#602/#2570).
-
 import (
 	"bufio"
 	"context"
@@ -45,14 +40,14 @@ func (s *slowStreamFake) Chat(ctx context.Context, messages []Message, tools []T
 }
 
 func (s *slowStreamFake) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
-	src := make(chan StreamEvent) // unbuffered on purpose
+	src := make(chan StreamEvent)
 	go func() {
 		defer close(src)
 		for _, ev := range s.events {
 			select {
 			case src <- ev:
 			case <-time.After(10 * time.Second):
-				return // test-scope failsafe; should not trigger post-fix
+				return
 			}
 		}
 		close(s.producerDone)
@@ -77,7 +72,7 @@ func TestTapeRecordStreamAbandonDrainsAndAligns(t *testing.T) {
 		t.Fatalf("ChatStream: %v", err)
 	}
 
-	<-stream // consume exactly one event, then abandon
+	<-stream
 	cancel()
 
 	select {
@@ -86,8 +81,6 @@ func TestTapeRecordStreamAbandonDrainsAndAligns(t *testing.T) {
 		t.Fatal("inner producer never finished: record goroutine leaked on abandoned consumer (src not drained)")
 	}
 
-	// The abandon path must still append the observed events so replay stays
-	// key-aligned (same rationale as the #3933 zero-event placeholder).
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if ok := tapeHasStreamEntry(t, tape); ok {
@@ -148,7 +141,7 @@ func TestFaultInjectStreamAbandonDrains(t *testing.T) {
 		t.Fatalf("ChatStream: %v", err)
 	}
 
-	<-stream // consume one (possibly perturbed) event, then abandon
+	<-stream
 	cancel()
 
 	select {

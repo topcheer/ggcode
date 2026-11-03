@@ -1,10 +1,5 @@
 package im
 
-// #3316 batch-2 probes: discord + slack arbitrary-file delivery over
-// httptest; matrix is pinned by the compile-time interface assertion
-// (its client stack needs a homeserver mock that outlives this batch's
-// scope - the m.image sibling path already carries matrix coverage).
-
 import (
 	"context"
 	"io"

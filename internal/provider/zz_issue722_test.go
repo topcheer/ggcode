@@ -1,22 +1,5 @@
 package provider
 
-// Characteristic tests for issue #722 (provider batch):
-//   Fold 1 (MED): retry × failover budgets multiplied into a ~23min
-//     headless hard-block. Fix: cumulative backoff sleep is capped per
-//     logical call (retryBudget), and budget-exhausted failures carry a
-//     sentinel that FallbackProvider treats as sustained failure —
-//     switching immediately instead of demanding the full threshold again.
-//   Fold 2 (LOW-MED): non-streaming Chat used resp.Usage verbatim; relays
-//     that omit the field produced zero usage (compaction summarizer
-//     understated cost/budget). Fix: CountTokens + chars estimate fallback.
-//   Fold 3 (LOW): tool-call deltas without index were silently discarded.
-//     Fix: a single-call delta defaults to index 0; multi-call deltas
-//     without index stay dropped (cannot be located safely).
-//   Fold 4 (LOW, theoretical): message_start unconditionally overwrote
-//     inputTokens. Fix: non-zero guard, mirroring message_delta.
-//
-// Probes use real httptest round trips, mirroring zz_issue561/577 probes.
-
 import (
 	"context"
 	"errors"
@@ -27,8 +10,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ---- Fold 1: retry budget caps cumulative backoff sleep ----
 
 func TestIssue722_RetryBudgetSleep(t *testing.T) {
 	cases := []struct {
@@ -89,13 +70,13 @@ func TestIssue722_RetryBudgetSleep(t *testing.T) {
 }
 
 func TestIssue722_RetryWithBackoffCtx_BudgetCap(t *testing.T) {
-	// Shrink the per-call budget so the test doesn't sleep for minutes.
+
 	oldBudget := providerRetryTimeBudget
 	providerRetryTimeBudget = 50 * time.Millisecond
 	t.Cleanup(func() { providerRetryTimeBudget = oldBudget })
 
 	var calls atomic.Int32
-	providerErr := errors.New("status code: 503 Service Unavailable") // retryable
+	providerErr := errors.New("status code: 503 Service Unavailable")
 	start := time.Now()
 	err := retryWithBackoffCtx(context.Background(), func() error {
 		calls.Add(1)
@@ -121,22 +102,21 @@ func TestIssue722_RetryWithBackoffCtx_BudgetCap(t *testing.T) {
 }
 
 func TestIssue722_RetryWithBackoffCtx_UnbudgetedStillRetries(t *testing.T) {
-	// Control: with a generous budget the loop keeps its attempt-count
-	// semantics (interactive users still see full retry behavior).
+
 	oldBudget := providerRetryTimeBudget
 	providerRetryTimeBudget = 1 * time.Hour
 	t.Cleanup(func() { providerRetryTimeBudget = oldBudget })
 	oldSleep := retrySleep
-	retrySleep = func(ctx context.Context, delay time.Duration) error { return nil } // instant sleep
+	retrySleep = func(ctx context.Context, delay time.Duration) error { return nil }
 	t.Cleanup(func() { retrySleep = oldSleep })
 
 	var calls atomic.Int32
 	err := retryWithBackoffCtx(context.Background(), func() error {
 		calls.Add(1)
 		if calls.Load() < 3 {
-			return errors.New("status code: 502 Bad Gateway") // retryable
+			return errors.New("status code: 502 Bad Gateway")
 		}
-		return nil // 3rd attempt succeeds
+		return nil
 	}, providerRetryAttempts, false)
 	if err != nil {
 		t.Fatalf("expected success on 3rd attempt, got: %v", err)
@@ -147,9 +127,7 @@ func TestIssue722_RetryWithBackoffCtx_UnbudgetedStillRetries(t *testing.T) {
 }
 
 func TestIssue722_FailoverImmediateOnBudgetExhausted(t *testing.T) {
-	// A budget-exhausted failure already gave the primary a best-effort
-	// chance; the fallback must take over on the FIRST call instead of the
-	// failoverThreshold-th (which headless callers would block ~23min for).
+
 	primaryErr := fmt.Errorf("%w: %w", errRetryBudgetExhausted, errors.New("status code: 503 Service Unavailable"))
 	primary := &mockProvider{name: "primary", chatErr: primaryErr}
 	fallback := &mockProvider{name: "fallback"}
@@ -179,8 +157,7 @@ func TestIssue722_FailoverImmediateOnBudgetExhausted(t *testing.T) {
 }
 
 func TestIssue722_FailoverThresholdUnchangedForPlainTransient(t *testing.T) {
-	// Control: a plain transient error (no budget sentinel) must keep the
-	// old consecutive-failure threshold semantics.
+
 	primary := &mockProvider{name: "primary", chatErr: errors.New("429 rate limit exceeded")}
 	fallback := &mockProvider{name: "fallback"}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
@@ -196,8 +173,6 @@ func TestIssue722_FailoverThresholdUnchangedForPlainTransient(t *testing.T) {
 	}
 }
 
-// ---- Fold 2: non-streaming Chat usage fallback ----
-
 func TestIssue722_ChatUsageFallbackWhenOmitted(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -209,8 +184,8 @@ func TestIssue722_ChatUsageFallbackWhenOmitted(t *testing.T) {
 		{
 			name: "usage omitted by relay falls back to estimates",
 			body: `{"id":"x","object":"chat.completion","created":0,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello world, this is a summary"},"finish_reason":"stop"}]}`,
-			// Fallback: input from CountTokens estimate, output from chars.
-			wantInput:  -1, // assert > 0 below
+
+			wantInput:  -1,
 			wantOutput: -1,
 		},
 		{
@@ -247,8 +222,7 @@ func TestIssue722_ChatUsageFallbackWhenOmitted(t *testing.T) {
 				}
 				return
 			}
-			// Fallback estimates must be non-zero so cost/budget accounting
-			// does not silently undercount.
+
 			if resp.Usage.InputTokens <= 0 {
 				t.Fatalf("usage.InputTokens = %d, want > 0 (relay omitted usage; CountTokens estimate missing)", resp.Usage.InputTokens)
 			}
@@ -258,8 +232,6 @@ func TestIssue722_ChatUsageFallbackWhenOmitted(t *testing.T) {
 		})
 	}
 }
-
-// ---- Fold 3: tool-call delta with nil index ----
 
 func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 	cases := []struct {
@@ -355,12 +327,8 @@ func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 	}
 }
 
-// ---- Fold 4: message_start must not clobber non-zero inputTokens ----
-
 func TestIssue722_AnthropicMessageStartZeroDoesNotClobber(t *testing.T) {
-	// Protocol-violating out-of-order stream: a message_delta carrying
-	// input_tokens arrives BEFORE message_start, whose usage then reports
-	// input_tokens=0. The zero must not erase the value already counted.
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"input_tokens\":99,\"output_tokens\":2}}\n\n")

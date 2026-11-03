@@ -29,7 +29,7 @@ func TestAdaptiveThinkingForModel(t *testing.T) {
 		{"claude-5", true},
 		{"claude-fable-5-1", true},
 		{"claude-mythos-5-1", true},
-		{"CLAUDE-OPUS-4-6", true}, // case-insensitive
+		{"CLAUDE-OPUS-4-6", true},
 	}
 	for _, tc := range cases {
 		if got := adaptiveThinkingForModel(tc.model); got != tc.want {
@@ -40,7 +40,7 @@ func TestAdaptiveThinkingForModel(t *testing.T) {
 
 func TestSetThinkingMode(t *testing.T) {
 	p := NewAnthropicProvider("test-key", "claude-sonnet-4-5", 32000)
-	// Auto-detect: old generation -> manual.
+
 	if p.useAdaptiveThinking() {
 		t.Fatal("claude-sonnet-4-5 must default to manual mode")
 	}
@@ -56,7 +56,7 @@ func TestSetThinkingMode(t *testing.T) {
 	if p.ThinkingMode() != "" || p.useAdaptiveThinking() {
 		t.Fatalf("unknown value must reset to auto: %q adaptive=%v", p.ThinkingMode(), p.useAdaptiveThinking())
 	}
-	// Auto-detect on a 4.6 model.
+
 	p2 := NewAnthropicProvider("test-key", "claude-opus-4-6", 32000)
 	if !p2.useAdaptiveThinking() {
 		t.Fatal("claude-opus-4-6 must auto-select adaptive thinking")
@@ -74,8 +74,7 @@ func TestBuildParamsAdaptiveThinking(t *testing.T) {
 	if params.Thinking.OfEnabled != nil {
 		t.Fatal("adaptive model must not carry budget_tokens")
 	}
-	// First call: effort window not yet stable, but adaptive models need
-	// effort as their only depth control, so it must ride immediately.
+
 	if string(params.OutputConfig.Effort) != "low" {
 		t.Fatalf("adaptive effort = %q, want low", params.OutputConfig.Effort)
 	}
@@ -91,15 +90,14 @@ func TestBuildParamsManualGeneration(t *testing.T) {
 	if params.Thinking.OfAdaptive != nil {
 		t.Fatal("manual generation must not carry adaptive thinking")
 	}
-	// Manual mode composes budget with the carrier hysteresis: no effort on
-	// the first call (stability window not yet established).
+
 	if params.OutputConfig.Effort != "" {
 		t.Fatalf("manual generation first call must not attach effort, got %q", params.OutputConfig.Effort)
 	}
 }
 
 func TestBuildParamsThinkingModeOverride(t *testing.T) {
-	// manual override on an adaptive-capable model -> budget_tokens + beta.
+
 	p := NewAnthropicProvider("test-key", "claude-opus-4-6", 32000)
 	p.SetThinkingMode("manual")
 	p.SetReasoningEffort("medium")
@@ -114,7 +112,6 @@ func TestBuildParamsThinkingModeOverride(t *testing.T) {
 		t.Fatalf("manual non-tool beta = %q, want empty", got)
 	}
 
-	// adaptive override on the extended-thinking-only generation.
 	p2 := NewAnthropicProvider("test-key", "claude-haiku-4-5", 32000)
 	p2.SetThinkingMode("adaptive")
 	p2.SetReasoningEffort("high")
@@ -128,8 +125,7 @@ func TestBuildParamsThinkingModeOverride(t *testing.T) {
 }
 
 func TestBuildParamsXhighEffortCarrier(t *testing.T) {
-	// xhigh/max remain carrier-only (no thinking param) on the manual
-	// generation - unchanged pre-existing behavior.
+
 	p := NewAnthropicProvider("test-key", "claude-sonnet-4-5", 32000)
 	p.SetReasoningEffort("xhigh")
 	params := p.buildParams(context.Background(), []Message{}, nil)
@@ -137,8 +133,6 @@ func TestBuildParamsXhighEffortCarrier(t *testing.T) {
 		t.Fatal("xhigh on manual generation must not enable thinking params")
 	}
 
-	// On adaptive-capable models xhigh/max select adaptive thinking and the
-	// matching effort level directly (they exist in output_config.effort).
 	p2 := NewAnthropicProvider("test-key", "claude-opus-4-6", 32000)
 	p2.SetReasoningEffort("max")
 	p2.effortCarrier.Store(true)
@@ -174,8 +168,7 @@ func TestAdaptiveEffort(t *testing.T) {
 }
 
 func TestAdaptiveThinkingUnionSerialization(t *testing.T) {
-	// The adaptive variant's Type field marshals its zero value as
-	// "adaptive" (SDK default tag) - verify the wire shape we rely on.
+
 	u := anthropic.ThinkingConfigParamUnion{
 		OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
 	}

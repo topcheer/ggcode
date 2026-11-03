@@ -81,7 +81,7 @@ var quotaKeywords = []string{
 	"quotaexceeded",
 	"quota_exceeded",
 	"insufficient_quota",
-	"exceeded_current_quota", // Kimi: exceeded_current_quota_error
+	"exceeded_current_quota",
 	"exceeded your current quota",
 	"额度已用完",
 	"额度耗尽",
@@ -91,12 +91,7 @@ var quotaKeywords = []string{
 	"公平使用",
 	"fair usage",
 	"access_terminated",
-	// MiniMax: "usage limit exceeded, 5-hour usage limit reached" (permanent
-	// until plan reset). Safe to match broadly (#528): Anthropic's
-	// recoverable 5-hour-window 429s are excluded earlier by
-	// anthropicWindowLimitMarkers ("5-hour window", "limit will reset",
-	// "weekly limit") inside isQuotaExhaustedString before this list is
-	// consulted, so the bare keyword cannot misfire on them.
+
 	"usage limit",
 }
 
@@ -104,9 +99,9 @@ var quotaKeywords = []string{
 // Anthropic's recoverable usage-limit 429s (rate_limit_error). These reset
 // within hours, so they are transient rate limits — NOT permanent quota (#528).
 var anthropicWindowLimitMarkers = []string{
-	"5-hour window",    // "would exceed your usage limit for the 5-hour window"
-	"limit will reset", // "Your limit will reset at ..."
-	"weekly limit",     // weekly window variant
+	"5-hour window",
+	"limit will reset",
+	"weekly limit",
 }
 
 // nonAnthropicQuotaCodes are quota error codes emitted by non-Anthropic
@@ -121,7 +116,7 @@ var anthropicWindowLimitMarkers = []string{
 // retried 20 times, all doomed.
 var nonAnthropicQuotaCodes = []string{
 	"insufficient_quota",
-	"exceeded_current_quota", // also a quotaKeyword, matched as a whole
+	"exceeded_current_quota",
 	"quota_exceeded",
 	"quotaexceeded",
 	"quota exceeded",
@@ -152,8 +147,7 @@ func isAnthropicWindowLimit(s string) bool {
 	if containsAny(s, nonAnthropicQuotaCodes) {
 		return false
 	}
-	// #708 folded hardening: veto on strong Chinese quota wording — the
-	// English-code whitelist above only knows OpenAI/Kimi/Volcengine codes.
+
 	if containsAny(s, chineseQuotaMarkers) {
 		return false
 	}
@@ -208,7 +202,7 @@ var authKeywords = []string{
 // from immediate to 3-consecutive-failures.
 var authStatusPatterns = []string{
 	" 401 ",
-	" 401,", // go-openai: "status code: 401, message: ..."
+	" 401,",
 	" 401\n",
 	"code: 401",
 	`status":401`,
@@ -232,10 +226,10 @@ var rateLimitKeywords = []string{
 	"rate_limit",
 	"too many requests",
 	"overloaded",
-	"resource_exhausted",  // Gemini quota/rate limit error type
-	"engine_overloaded",   // Kimi engine_overloaded_error
-	"rate_limit_exceeded", // OpenAI error type
-	"rate_limit_reached",  // Kimi rate_limit_reached_error
+	"resource_exhausted",
+	"engine_overloaded",
+	"rate_limit_exceeded",
+	"rate_limit_reached",
 }
 
 // rateLimitStatusPatterns are context-anchored "429"/"529" matchers (#456,
@@ -244,7 +238,7 @@ var rateLimitKeywords = []string{
 // rate-limited, triggering wrong failover and health downgrades.
 var rateLimitStatusPatterns = []string{
 	" 429 ",
-	" 429,", // go-openai: "status code: 429, message: ..."
+	" 429,",
 	" 429\n",
 	"code: 429",
 	`status":429`,
@@ -254,13 +248,13 @@ var rateLimitStatusPatterns = []string{
 	"429 too many",
 	"code 429",
 	" 529 ",
-	" 529,", // go-openai: "status code: 529, message: ..."
+	" 529,",
 	" 529\n",
 	"code: 529",
 	`status":529`,
 	"http 529",
 	"error 529",
-	"529 overloaded", // Anthropic overloaded pairs 529 with overloaded_error
+	"529 overloaded",
 	"code 529",
 }
 
@@ -362,16 +356,7 @@ func ClassifyLLMError(err error) FailureClass {
 	if errors.Is(err, context.Canceled) {
 		return FailureNone
 	}
-	// #528: client-side deadlines (long-turn deadline, user re-sending after
-	// timeout) say nothing about provider health — same as Canceled (#304's
-	// sibling defect). Must NOT count toward the consecutive-failure failover
-	// threshold, which only exempts FailureNone.
-	// #577(E): BUT a DeadlineExceeded reported through *url.Error IS an HTTP
-	// client timeout (net/http always wraps transport/ctx-deadline errors in
-	// url.Error) — before this, a pure-timeout endpoint accumulated 0 across
-	// 10 real client timeouts and never tripped FailoverTriggerRepeated. Only
-	// the unwrapped agent-side sentinel stays exempt; the url.Error-wrapped
-	// form counts as a network failure.
+
 	if errors.Is(err, context.DeadlineExceeded) {
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
@@ -379,31 +364,23 @@ func ClassifyLLMError(err error) FailureClass {
 		}
 		return FailureNone
 	}
-	// Guard against SDK error types whose .Error() panics on nil internals
-	// (e.g. anthropic.Error with nil Response). Same pattern as
-	// IsContextOverflowError in retry.go.
+
 	s := strings.ToLower(func() string {
 		defer func() { recover() }()
 		return err.Error()
 	}())
 
-	// #303: check context overflow BEFORE keyword matching — token-count
-	// messages ("requested 40123 tokens, maximum is 131072") must reach the
-	// compaction path, not FailureAuth/sticky failover.
 	if IsContextOverflowError(err) {
 		return FailureTransient
 	}
-	// #528: Anthropic 5-hour-window usage limits auto-reset within hours —
-	// transient rate limit, never permanent quota, even though the message
-	// contains "usage limit".
+
 	if isAnthropicWindowLimit(s) {
 		return FailureRateLimit
 	}
 	if isQuotaExhaustedString(s) {
 		return FailureQuota
 	}
-	// #602(R3): status patterns go through the anchored matcher so
-	// `"status":40139` cannot pierce the `status":401` prefix.
+
 	if containsAny(s, authKeywords) || containsAnyAnchored(s, authStatusPatterns) {
 		return FailureAuth
 	}

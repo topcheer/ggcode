@@ -1,9 +1,5 @@
 package config
 
-// sa-72: text_verbosity endpoint field plumbing tests. The provider wire
-// behavior is covered in internal/provider; these assert the yaml tag parses
-// and the resolved endpoint carries the trimmed hint.
-
 import "testing"
 
 func TestResolveEndpointTextVerbosity(t *testing.T) {
@@ -18,8 +14,7 @@ func TestResolveEndpointTextVerbosity(t *testing.T) {
 						APIKey:       "sk-test",
 						MaxTokens:    4096,
 						DefaultModel: "gpt-5-codex",
-						// Whitespace proves the resolver trims like it does
-						// for reasoning_effort/tool_choice.
+
 						TextVerbosity: " high ",
 					},
 				},

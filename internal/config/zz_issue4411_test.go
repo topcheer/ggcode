@@ -1,15 +1,9 @@
 package config
 
-// zz_issue4411_test.go - companion tests for #4411: instance-level vendors
-// override deletion resurrecting as a zombie vendor because diffVendors
-// emits no nil deletion markers, plus the diffA2A same-family nested reset
-// hole. Mirrors the #2936/#4315 nil-marker precedents.
-
 import "testing"
 
 func TestIssue4411VendorPartialDeleteMarker(t *testing.T) {
-	// On disk: vendors A (deleted by user) + B (still overridden).
-	// Delta carries only B - A must get a nil deletion marker.
+
 	existing := map[string]interface{}{
 		"vendors": map[string]interface{}{
 			"A": map[string]interface{}{"api_base": "https://a.example"},
@@ -36,9 +30,7 @@ func TestIssue4411VendorPartialDeleteMarker(t *testing.T) {
 }
 
 func TestIssue4411VendorAllDeletedCreatesSection(t *testing.T) {
-	// diffVendors early-returns on len(current)==0: delta has NO vendors
-	// key at all, yet stale disk keys remain. The reset layer must create
-	// the section delta to carry the deletions.
+
 	existing := map[string]interface{}{
 		"vendors": map[string]interface{}{
 			"A": map[string]interface{}{"api_base": "https://a.example"},
@@ -60,9 +52,7 @@ func TestIssue4411VendorAllDeletedCreatesSection(t *testing.T) {
 }
 
 func TestIssue4411VendorGateRespected(t *testing.T) {
-	// #734 regression probe: without instanceFields["vendors"] the disk
-	// vendors section is NOT governed by this session's delta and must be
-	// left alone.
+
 	existing := map[string]interface{}{
 		"vendors": map[string]interface{}{
 			"A": map[string]interface{}{"api_base": "https://a.example"},
@@ -77,15 +67,14 @@ func TestIssue4411VendorGateRespected(t *testing.T) {
 }
 
 func TestIssue4411VendorDeletionReachesDeepMerge(t *testing.T) {
-	// End-to-end resurrection-chain break: the nil marker must make
-	// deepMergeYAMLMaps actually delete the stale disk key.
+
 	existing := map[string]interface{}{
 		"vendors": map[string]interface{}{
 			"A": map[string]interface{}{"api_base": "https://a.example"},
 			"B": map[string]interface{}{"api_base": "https://b.example"},
 		},
 	}
-	delta := map[string]interface{}{} // all vendors deleted
+	delta := map[string]interface{}{}
 	applyInstanceResets(existing, delta, map[string]bool{"vendors": true})
 	deepMergeYAMLMaps(existing, delta)
 
@@ -99,9 +88,7 @@ func TestIssue4411VendorDeletionReachesDeepMerge(t *testing.T) {
 }
 
 func TestIssue4411A2ANestedResetMarker(t *testing.T) {
-	// diffA2A records only current != global fields. port edited back to
-	// the global default vanishes from the delta while the stale disk
-	// value survives - the #2936 hole one level down.
+
 	existing := map[string]interface{}{
 		"a2a": map[string]interface{}{
 			"port": 9999,
@@ -125,9 +112,7 @@ func TestIssue4411A2ANestedResetMarker(t *testing.T) {
 }
 
 func TestIssue4411A2AWholeSectionReset(t *testing.T) {
-	// Every a2a field back at global defaults: no a2a key in the delta,
-	// stale disk port must still get a deletion marker via the created
-	// section delta.
+
 	existing := map[string]interface{}{
 		"a2a": map[string]interface{}{"port": 9999, "host": "stale"},
 	}

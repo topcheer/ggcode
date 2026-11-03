@@ -54,7 +54,7 @@ func TestReportAgentFailure_NetworkNeverDegrades(t *testing.T) {
 func TestReportAgentSuccess_ClearsAndResets(t *testing.T) {
 	hub := newHealthTestHub(t)
 	hub.ReportAgentFailure(provider.FailureRateLimit)
-	hub.ReportAgentSuccess() // resets streak before threshold
+	hub.ReportAgentSuccess()
 	hub.ReportAgentFailure(provider.FailureRateLimit)
 	if got := hub.AgentStatus(); got != AgentStatusOK {
 		t.Errorf("streak should have been reset by success, got %q", got)
@@ -77,7 +77,7 @@ func TestSetModel_ClearsDegraded(t *testing.T) {
 	if hub.AgentStatus() != AgentStatusQuota {
 		t.Fatal("precondition: degraded")
 	}
-	hub.SetModel("other-model") // switching models = new quota pool
+	hub.SetModel("other-model")
 	if got := hub.AgentStatus(); got != AgentStatusOK {
 		t.Errorf("model switch should clear degraded status, got %q", got)
 	}
@@ -87,7 +87,7 @@ func TestSetModel_ClearsDegraded(t *testing.T) {
 }
 
 func TestHealthProbeLoop_RecoversAfterSuccesses(t *testing.T) {
-	// Shorten backoff for the test (package vars follow ageOffline pattern).
+
 	origInit, origMax := healthProbeInitialSticky, healthProbeMax
 	healthProbeInitialSticky = 10 * time.Millisecond
 	healthProbeMax = 20 * time.Millisecond
@@ -99,9 +99,9 @@ func TestHealthProbeLoop_RecoversAfterSuccesses(t *testing.T) {
 	var calls atomic.Int32
 	hub.SetHealthProber(func(ctx context.Context) error {
 		calls.Add(1)
-		return nil // model healthy again
+		return nil
 	})
-	hub.ReportAgentFailure(provider.FailureQuota) // starts probe loop
+	hub.ReportAgentFailure(provider.FailureQuota)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for hub.AgentStatus() != AgentStatusOK && time.Now().Before(deadline) {
@@ -124,13 +124,11 @@ func TestHealthProbeLoop_FailureClassEscalation(t *testing.T) {
 	hub := newHealthTestHub(t)
 	defer hub.Close()
 
-	// Probe keeps failing, and the error reveals it's actually quota
-	// exhaustion, not transient rate limiting.
 	hub.SetHealthProber(func(ctx context.Context) error {
 		return errors.New("429: exceeded your current quota")
 	})
 	hub.ReportAgentFailure(provider.FailureRateLimit)
-	hub.ReportAgentFailure(provider.FailureRateLimit) // → rate_limited, probe starts
+	hub.ReportAgentFailure(provider.FailureRateLimit)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for hub.AgentStatus() != AgentStatusQuota && time.Now().Before(deadline) {
@@ -153,10 +151,10 @@ func TestHealthProbeLoop_StopsOnClose(t *testing.T) {
 		return errors.New("still broken")
 	})
 	hub.ReportAgentFailure(provider.FailureQuota)
-	time.Sleep(50 * time.Millisecond) // let a few probes run
+	time.Sleep(50 * time.Millisecond)
 	hub.Close()
 	stopped := calls.Load()
-	time.Sleep(60 * time.Millisecond) // several probe intervals
+	time.Sleep(60 * time.Millisecond)
 	if got := calls.Load(); got != stopped {
 		t.Errorf("probe loop should stop on Close: calls grew %d → %d", stopped, got)
 	}
@@ -166,8 +164,8 @@ func TestSetAgentStatus_Idempotent(t *testing.T) {
 	hub := newHealthTestHub(t)
 	hub.ReportAgentFailure(provider.FailureQuota)
 	since := hub.SelfParticipant().AgentStatusSince
-	time.Sleep(1100 * time.Millisecond)  // cross a unix-second boundary
-	hub.setAgentStatus(AgentStatusQuota) // same value → no-op
+	time.Sleep(1100 * time.Millisecond)
+	hub.setAgentStatus(AgentStatusQuota)
 	if got := hub.SelfParticipant().AgentStatusSince; got != since {
 		t.Errorf("idempotent set should not refresh timestamp: %d → %d", since, got)
 	}

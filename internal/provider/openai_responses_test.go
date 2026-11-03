@@ -1,7 +1,5 @@
 package provider
 
-// sa-40 tests for the OpenAI Responses API adapter.
-
 import (
 	"context"
 	"encoding/json"
@@ -29,9 +27,7 @@ func TestBuildResponsesInputOrderAndMapping(t *testing.T) {
 	if len(items) != 5 {
 		t.Fatalf("want 5 items, got %d: %+v", len(items), items)
 	}
-	// Order matters: assistant text must precede its function_call item, and
-	// the function_call_output must come after the function_call (protocol red
-	// line: no role-boundary violation between call and result).
+
 	if items[0].Role != "system" {
 		t.Errorf("item0 role = %q, want system", items[0].Role)
 	}
@@ -211,7 +207,6 @@ func TestRegistryDispatchesOpenAIResponses(t *testing.T) {
 		t.Fatalf("want *OpenAIResponsesProvider, got %T", p)
 	}
 
-	// URL-sniff fallback: protocol "openai" + /responses suffix.
 	p2, err := NewProvider(testResolvedEndpoint("", "openai", "https://api.openai.com/v1/responses"))
 	if err != nil {
 		t.Fatalf("NewProvider(sniff): %v", err)
@@ -220,7 +215,6 @@ func TestRegistryDispatchesOpenAIResponses(t *testing.T) {
 		t.Fatalf("sniff: want *OpenAIResponsesProvider, got %T", p2)
 	}
 
-	// Plain chat-completions endpoint must stay on the legacy adapter.
 	p3, err := NewProvider(testResolvedEndpoint("", "openai", "https://api.openai.com/v1"))
 	if err != nil {
 		t.Fatalf("NewProvider(legacy): %v", err)

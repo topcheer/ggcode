@@ -66,12 +66,11 @@ func TestContentToText(t *testing.T) {
 }
 
 func TestFormatToolSummary(t *testing.T) {
-	// No tools
+
 	if got := formatToolSummary("en", nil, 0, 0, 0); got != "" {
 		t.Errorf("empty: %q", got)
 	}
 
-	// Single tool, no failures
 	tools := []ToolResultInfo{{ToolName: "read_file"}}
 	got := formatToolSummary("en", tools, 1, 1, 0)
 	if !strings.Contains(got, "1 tool calls") {
@@ -81,33 +80,28 @@ func TestFormatToolSummary(t *testing.T) {
 		t.Errorf("tool name: %q", got)
 	}
 
-	// With failures
 	got2 := formatToolSummary("en", tools, 3, 2, 1)
 	if !strings.Contains(got2, "2 ok, 1 failed") {
 		t.Errorf("with failures: %q", got2)
 	}
 
-	// Chinese
 	got3 := formatToolSummary("zh-CN", tools, 1, 1, 0)
 	if !strings.Contains(got3, "1 个工具调用") {
 		t.Errorf("zh header: %q", got3)
 	}
 
-	// Multiple same tool -> count suffix
 	tools2 := []ToolResultInfo{{ToolName: "run_command"}, {ToolName: "run_command"}, {ToolName: "read_file"}}
 	got4 := formatToolSummary("en", tools2, 3, 3, 0)
 	if !strings.Contains(got4, "Run ×2") {
 		t.Errorf("multi count: %q", got4)
 	}
 
-	// Failure indicator: all calls failed -> ✗
 	failedTools := []ToolResultInfo{{ToolName: "edit_file", IsError: true}}
 	got5 := formatToolSummary("en", failedTools, 1, 0, 1)
 	if !strings.Contains(got5, "✗") {
 		t.Errorf("all failed: expected ✗, got %q", got5)
 	}
 
-	// Failure indicator: partial failure -> ⚠
 	mixedTools := []ToolResultInfo{
 		{ToolName: "run_command"},
 		{ToolName: "run_command", IsError: true},
@@ -117,7 +111,6 @@ func TestFormatToolSummary(t *testing.T) {
 		t.Errorf("partial failure: expected ⚠, got %q", got6)
 	}
 
-	// Success indicator: all succeeded -> ✓
 	got7 := formatToolSummary("en", tools2, 3, 3, 0)
 	if !strings.Contains(got7, "✓") {
 		t.Errorf("all succeeded: expected ✓, got %q", got7)
@@ -137,7 +130,6 @@ func TestFormatToolSummaryChinese(t *testing.T) {
 		t.Errorf("tool name: %q", got)
 	}
 
-	// With failures in Chinese
 	got2 := formatToolSummary("zh-CN", tools, 3, 1, 2)
 	if !strings.Contains(got2, "1 成功，2 失败") {
 		t.Errorf("zh failures: %q", got2)
@@ -145,12 +137,12 @@ func TestFormatToolSummaryChinese(t *testing.T) {
 }
 
 func TestFormatIMToolDisplayName(t *testing.T) {
-	// Known tool - returns short display name
+
 	got := formatIMToolDisplayName("read_file")
 	if got == "" {
 		t.Error("should have a display name")
 	}
-	// Unknown tool - returns prettified name
+
 	got2 := formatIMToolDisplayName("custom_tool_xyz")
 	if got2 != "Custom Tool Xyz" {
 		t.Errorf("unknown: %q", got2)
@@ -202,7 +194,7 @@ func TestLocalizedToolLabel(t *testing.T) {
 }
 
 func TestLocalizedToolActivity(t *testing.T) {
-	// Without target
+
 	got := localizedToolActivity(ToolLangEn, "read", "")
 	if got != "Reading file" {
 		t.Errorf("en read no target: %q", got)
@@ -212,13 +204,11 @@ func TestLocalizedToolActivity(t *testing.T) {
 		t.Errorf("zh read no target: %q", got2)
 	}
 
-	// With target
 	got3 := localizedToolActivity(ToolLangEn, "read", "main.go")
 	if !strings.Contains(got3, "main.go") {
 		t.Errorf("en read with target: %q", got3)
 	}
 
-	// Unknown action
 	got4 := localizedToolActivity(ToolLangEn, "unknown", "")
 	if got4 == "" {
 		t.Error("unknown action should not be empty")
@@ -334,15 +324,15 @@ func TestExtractFilePath(t *testing.T) {
 }
 
 func TestDisplayToolFileTarget(t *testing.T) {
-	// Empty input
+
 	if got := displayToolFileTarget(""); got != "" {
 		t.Errorf("empty: %q", got)
 	}
-	// Just slashes
+
 	if got := displayToolFileTarget("///"); got != "" {
 		t.Errorf("slashes: %q", got)
 	}
-	// Relative path
+
 	if got := displayToolFileTarget("main.go"); got != "main.go" {
 		t.Errorf("relative: %q", got)
 	}
@@ -353,7 +343,7 @@ func TestNormalizeDisplayPath(t *testing.T) {
 	if got == "" {
 		t.Error("should return non-empty path")
 	}
-	// Should contain the filename at least
+
 	if !strings.Contains(got, "file.go") {
 		t.Errorf("should contain filename: %q", got)
 	}

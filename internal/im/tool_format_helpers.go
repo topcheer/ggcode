@@ -310,7 +310,7 @@ func imLabel(lang ToolLanguage, key string) string {
 		case "lsp_code_actions":
 			return "Code actions"
 		}
-	default: // zh-CN
+	default:
 		switch key {
 		case "run_command":
 			return "执行命令"
@@ -572,8 +572,6 @@ func formatIMAskUserResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("💬 %s", imLabel(toolLang(tr.Lang), "reply_received"))
 }
 
-// --- Background command tools ---
-
 // formatIMStartCommandResult renders start_command result.
 func formatIMStartCommandResult(tr *ToolResultInfo) string {
 	return "⚡ " + tool.StartCommandResultText(redactResult(tr.Result), tr.IsError)
@@ -644,8 +642,6 @@ func formatIMListCommandsResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📋\n%s", imCodeBlock(output))
 }
 
-// --- Agent tools ---
-
 // formatIMSpawnAgentResult renders spawn_agent result.
 func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 	name := extractArgValue(tr.Args, "description")
@@ -685,8 +681,6 @@ func formatIMListAgentsResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🤖\n%s", imCodeBlock(output))
 }
 
-// --- MCP internal tools ---
-
 // formatIMMCPCapabilitiesResult renders list_mcp_capabilities result.
 func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
@@ -724,8 +718,6 @@ func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 	}
 	return fmt.Sprintf("🔗\n%s", imCodeBlock(output))
 }
-
-// --- Productivity tools ---
 
 // formatIMSkillResult renders skill result.
 func formatIMSkillResult(tr *ToolResultInfo) string {
@@ -772,8 +764,7 @@ func formatIMSleepResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("⏳ Sleep\n%s", imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
 	}
-	// Suppress successful sleep results — the ToolCall event already
-	// told the user "⏳ Sleep for Xs", no need to repeat.
+
 	return ""
 }
 
@@ -941,7 +932,6 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 
 	firstLine := firstLineOf(output)
 
-	// Document extraction: "[Extracted from pdf, 3 pages]"
 	if strings.HasPrefix(firstLine, "[Extracted from ") {
 		format, pages := parseExtractedInfo(firstLine)
 		lines := countResultLines(output)
@@ -963,10 +953,9 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 		return fmt.Sprintf("%s %s", icon, baseName)
 	}
 
-	// Archive: "[Archive: zip format, 15 files]"
 	if strings.HasPrefix(firstLine, "[Archive: ") {
 		_, fileCount := parseArchiveInfo(firstLine)
-		// Check second line for truncation notice
+
 		lines := strings.SplitN(output, "\n", 3)
 		var truncShown, truncTotal int
 		if len(lines) >= 2 {
@@ -984,7 +973,6 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 		return fmt.Sprintf("%s %s", icon, baseName)
 	}
 
-	// Plain text or unknown: show file name + range hint if applicable
 	rangeHint := imFormatReadRange(lang, tr.Args)
 	if path == "" {
 		if rangeHint != "" {
@@ -1053,7 +1041,7 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("%s Edit\n%s", icon, imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
 	}
-	// Parse added/removed from rawArgs (same logic as TUI renderEditDiff)
+
 	added, removed := countEditLines(tr.Args)
 	if path == "" {
 		return fmt.Sprintf("%s Edit (+%d -%d)", icon, added, removed)
@@ -1076,7 +1064,7 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("%s Write\n%s", icon, imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
 	}
-	// Count lines from content arg in rawArgs (same logic as TUI renderFileLineCount)
+
 	lines := countWriteLines(tr.Args)
 	if path == "" {
 		return fmt.Sprintf("%s Write (%d %s)", icon, lines, imLabel(lang, "lines"))
@@ -1100,7 +1088,7 @@ func formatIMMultiEditResult(tr *ToolResultInfo) string {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(redactResult(tr.Result))), &raw); err != nil {
-		// Non-JSON result — show trimmed output
+
 		return fmt.Sprintf("✏ %s", strings.TrimSpace(redactResult(tr.Result)))
 	}
 	successCount := 0
@@ -1133,7 +1121,7 @@ func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return formatIMErrorResult(tr)
 	}
-	// multi_file_write returns "Successfully wrote N files" or similar
+
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if output == "" {
 		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
@@ -1161,7 +1149,7 @@ func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("📝 %d %s", successCount, imLabel(lang, "files_written"))
 	}
-	// Non-JSON fallback
+
 	return fmt.Sprintf("📝 %s", output)
 }
 
@@ -1195,14 +1183,14 @@ func formatIMGitShowResult(tr *ToolResultInfo) string {
 	if output == "" {
 		return "🔍 git show"
 	}
-	// Show first few lines (commit hash, author, date, message)
+
 	lines := strings.SplitN(output, "\n", 6)
 	var summary string
 	if len(lines) > 0 {
-		// First line is usually "commit <hash>"
+
 		summary = lines[0]
 		if len(lines) > 4 {
-			// Include up to the commit message line
+
 			summary = strings.Join(lines[:5], "\n")
 		} else {
 			summary = strings.Join(lines, "\n")
@@ -1365,8 +1353,6 @@ func extractArgValue(args, key string) string {
 	return stringFromAny(a[key])
 }
 
-// --- read_file format-aware display helpers ---
-
 // imFileExt returns the file extension, supporting double extensions like .tar.gz.
 func imFileExt(path string) string {
 	name := strings.ToLower(filepath.Base(path))
@@ -1472,11 +1458,10 @@ func firstLineOf(text string) string {
 // parseExtractedInfo parses "[Extracted from pdf, 3 pages]" header.
 // Returns (format, pageCount). pageCount is 0 if not present.
 func parseExtractedInfo(header string) (format string, pages int) {
-	// "[Extracted from pdf, 3 pages]"
-	// "[Extracted from docx]"
+
 	s := strings.TrimPrefix(header, "[Extracted from ")
 	s = strings.TrimSuffix(s, "]")
-	if s == header { // prefix didn't match
+	if s == header {
 		return "", 0
 	}
 	parts := strings.SplitN(s, ", ", 2)
@@ -1493,13 +1478,13 @@ func parseExtractedInfo(header string) (format string, pages int) {
 // parseArchiveInfo parses "[Archive: zip format, 15 files]" header.
 // Returns (format, fileCount).
 func parseArchiveInfo(header string) (format string, files int) {
-	// "[Archive: zip format, 15 files]"
+
 	s := strings.TrimPrefix(header, "[Archive: ")
 	s = strings.TrimSuffix(s, "]")
 	if s == header {
 		return "", 0
 	}
-	// "zip format, 15 files"
+
 	parts := strings.SplitN(s, ", ", 2)
 	if len(parts) == 2 {
 		format = strings.TrimSuffix(strings.TrimSpace(parts[0]), " format")
@@ -1521,7 +1506,7 @@ func parseArchiveTruncation(line string) (shown, total int) {
 	if s == line {
 		return 0, 0
 	}
-	// "500 of 1000 files"
+
 	parts := strings.SplitN(s, " of ", 2)
 	if len(parts) != 2 {
 		return 0, 0

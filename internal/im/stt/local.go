@@ -95,7 +95,6 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 		return Result{}, fmt.Errorf("local whisper: audio file not found: %w", err)
 	}
 
-	// Create temp dir for whisper output
 	outDir, err := os.MkdirTemp("", "ggcode-whisper-out-*")
 	if err != nil {
 		return Result{}, fmt.Errorf("local whisper: create temp dir: %w", err)
@@ -114,25 +113,6 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 
 	debug.Log("stt", "local whisper: running %s %v", w.binPath, args)
 
-	// #1562: ctx is the ADAPTER lifecycle context with no deadline - and
-	// Telegram (among others) processes updates serially inline, so a
-	// hanging transcription (whisper.cpp can wedge) froze the whole
-	// message pump: later texts/commands went unprocessed. The remote
-	// engine has a 60s HTTP timeout; give the local engine a generous
-	// wall-clock bound of its own.
-	// #1743 case 3: openai-whisper's FIRST run downloads its model
-	// ("minutes-to-hours", no resume) before transcribing - the flat
-	// 10-minute bound killed the one-time download on slow links, looping
-	// the failure forever since nothing ever completes it. The transcription
-	// path (post-download, the recurring case) keeps the tight 10-minute
-	// bound; the openai flavor gets a one-time-wider bound to let the
-	// download land. The model is cached after the first success, so the
-	// wider bound is paid at most once per model.
-	// #2738: "one-time" is now enforced, not just promised by this
-	// comment: once a model's download has landed (observed by a prior
-	// successful transcription, or probed in ~/.cache/whisper), later
-	// transcriptions take the tight bound. Without this, a cached-model
-	// wedge held the Telegram pump for 60 minutes instead of 10.
 	bound := 10 * time.Minute
 	if w.flavor == flavorOpenAI && !w.modelDownloaded(modelUsed) {
 		bound = 60 * time.Minute
@@ -147,16 +127,11 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 	if err := cmd.Run(); err != nil {
 		return Result{}, fmt.Errorf("local whisper: execution failed (binary %q, flavor %s): %w", w.binPath, w.flavorName(), err)
 	}
-	// #2738: a successful run proves the model download has landed
-	// (openai-whisper caches it under ~/.cache/whisper before transcribing)
-	// - later runs of the same model take the tight bound.
+
 	if w.flavor == flavorOpenAI {
 		w.markModelDownloaded(modelUsed)
 	}
 
-	// Both flavors write <outdir>/<audiobase>.txt: openai-whisper because
-	// --output_format txt names output after the input; whisper.cpp because
-	// -of sets the output path prefix and -otxt appends the extension.
 	txtPath := filepath.Join(outDir, base+".txt")
 	data, err := os.ReadFile(txtPath)
 	if err != nil {
@@ -285,14 +260,12 @@ func (w *LocalWhisper) ensureAvailable() error {
 			debug.Log("stt", "local whisper: found binary at %s", p)
 			return nil
 		}
-		// This candidate exists but is not usable (e.g. whisper.cpp without
-		// a ggml model); remember why and keep looking for another flavor.
+
 		probeErr = err
 	}
 	switch {
 	case probeErr != nil:
-		// A binary was found but is unusable; report the concrete cause
-		// (e.g. missing ggml model) instead of a misleading "not found".
+
 		w.unavailableReason = probeErr.Error()
 	case explicitBin != "":
 		w.unavailableReason = fmt.Sprintf("binary %q not found in PATH and no whisper/whisper-cpp/whisper-cli candidate available", explicitBin)
@@ -342,7 +315,7 @@ func defaultCPPModelSearchDirs() []string {
 		)
 	}
 	return append(dirs,
-		"models", // whisper.cpp build-tree default
+		"models",
 		"/usr/share/whisper.cpp/models",
 		"/usr/local/share/whisper.cpp/models",
 	)

@@ -66,7 +66,7 @@ type tokenCountCalibrator struct {
 func newTokenCountCalibrator() *tokenCountCalibrator {
 	return &tokenCountCalibrator{
 		enabled: true,
-		ratio:   1.0, // neutral ratio until calibrated
+		ratio:   1.0,
 	}
 }
 
@@ -76,10 +76,7 @@ func (c *tokenCountCalibrator) shouldCalibrate() bool {
 	if !c.enabled {
 		return false
 	}
-	// Failure backoff (#708): after a failed attempt, suppress any new
-	// calibration attempt (synchronous or async) until the exponential
-	// backoff elapses. Callers fall back to the local ratio-adjusted
-	// estimate without hitting the remote endpoint.
+
 	if !c.lastFailure.IsZero() {
 		backoff := calibrateFailureBackoff << uint(c.failCount-1)
 		if backoff > calibrateFailureBackoffMax || backoff <= 0 {
@@ -91,7 +88,7 @@ func (c *tokenCountCalibrator) shouldCalibrate() bool {
 	}
 	c.callCount++
 	if c.lastCalibrate.IsZero() {
-		return true // first calibration
+		return true
 	}
 	if c.callCount < calibrateMinCalls {
 		return false
@@ -119,11 +116,10 @@ func (c *tokenCountCalibrator) applyResult(estimated, realTokens int) {
 	observedRatio := float64(realTokens) / float64(estimated)
 
 	if c.ratio == 1.0 && c.lastCalibrate.IsZero() {
-		// First calibration: accept directly.
+
 		c.ratio = clampRatio(observedRatio)
 	} else {
-		// Incremental average: weight new sample at 30%, keep 70% of old ratio.
-		// This prevents single samples from swinging the ratio too far.
+
 		c.ratio = clampRatio(c.ratio*0.7 + observedRatio*0.3)
 	}
 
@@ -181,7 +177,7 @@ func (c *tokenCountCalibrator) disable() {
 	defer c.mu.Unlock()
 	if c.enabled {
 		c.enabled = false
-		c.ratio = 1.0 // fall back to raw local estimate
+		c.ratio = 1.0
 		debug.Log("provider-calibrator", "remote counting disabled (endpoint does not support count_tokens)")
 	}
 }

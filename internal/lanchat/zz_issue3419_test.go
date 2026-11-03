@@ -1,10 +1,5 @@
 package lanchat
 
-// #3419 probe: Message.ID is part of the signed canonical payload, so a
-// captured DM replayed under a NEW id (to dodge the seenMsgIDs dedup, or
-// after a dedup-table restart) no longer verifies - tampering any field,
-// including the id, breaks the signature.
-
 import "testing"
 
 func TestIssue3419_TamperedIDFailsVerification(t *testing.T) {
@@ -20,7 +15,7 @@ func TestIssue3419_TamperedIDFailsVerification(t *testing.T) {
 	if ok, _, err := verifyMessage(&m); !ok || err != nil {
 		t.Fatalf("roundtrip must verify, ok=%v err=%v", ok, err)
 	}
-	// Replay under a fresh id, every other byte identical: must NOT verify.
+
 	replay := m
 	replay.ID = "replay-fresh-id"
 	if ok, _, _ := verifyMessage(&replay); ok {

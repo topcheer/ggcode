@@ -1,12 +1,5 @@
 package provider
 
-// sa-65 companion tests: GGCODE_LLM_FAULT deterministic fault injection
-// (AgentChaos taxonomy: crash / omission / value × content / tool-call).
-// Each test pins one observable behavior, including the
-// "verify fault triggered" contract (Fired only records faults the
-// agent could actually observe) and the no-mutation contract for shared
-// replay-tape entries.
-
 import (
 	"context"
 	"encoding/json"
@@ -66,7 +59,7 @@ func TestSA65FaultSpecParsingSkipsInvalid(t *testing.T) {
 	if len(fp.plan) != 2 {
 		t.Fatalf("want 2 valid directives, got %d: %+v", len(fp.plan), fp.plan)
 	}
-	// Entirely-invalid spec must not wrap at all (fail-open, like the tape).
+
 	t.Setenv(llmFaultEnv, "nope")
 	if w := WrapLLMFaultFromEnv(fake); w != Provider(fake) {
 		t.Fatal("invalid-only spec must return the provider unchanged")
@@ -110,8 +103,7 @@ func TestSA65FaultOmitToolChat(t *testing.T) {
 	if len(resp.Message.Content) != 1 || resp.Message.Content[0].Type != "text" {
 		t.Fatalf("omit-tool must leave only text, got %+v", resp.Message.Content)
 	}
-	// No-mutation contract: the original response (a stand-in for a shared
-	// replay-tape entry) must keep its tool_use block.
+
 	if len(fake.resp.Message.Content) != 2 || fake.resp.Message.Content[1].Type != "tool_use" {
 		t.Fatalf("original response was mutated: %+v", fake.resp.Message.Content)
 	}
@@ -244,8 +236,7 @@ func TestSA65FaultPassThroughUnplanned(t *testing.T) {
 }
 
 func TestSA65FaultFiredOnlyWhenObservable(t *testing.T) {
-	// omit-tool on a text-only response: nothing observable happened, so
-	// Fired must stay empty (AgentChaos verify-triggered semantics).
+
 	fake := &sa65FakeLLM{resp: &ChatResponse{Message: Message{Role: "assistant",
 		Content: []ContentBlock{{Type: "text", Text: "just text"}}}}}
 	fp := sa65Wrap(t, fake, "omit-tool@1")

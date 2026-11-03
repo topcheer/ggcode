@@ -204,8 +204,6 @@ func LocalizeIMProgress(lang ToolLanguage, text string) string {
 	}
 }
 
-// --- internal helpers ---
-
 func toolPresentationFor(lang ToolLanguage, action, target string) ToolPresentation {
 	return ToolPresentation{
 		DisplayName: localizedToolLabel(lang, action),
@@ -516,7 +514,7 @@ func displayToolFileTarget(value string) string {
 	if value == "" {
 		return ""
 	}
-	// Try to make absolute paths relative to cwd
+
 	if filepath.IsAbs(value) {
 		cwd, _ := os.Getwd()
 		normCWD := normalizeDisplayPath(cwd)

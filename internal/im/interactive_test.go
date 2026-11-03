@@ -17,10 +17,6 @@ import (
 func atomicAdd(v *int64, d int64) { atomic.AddInt64(v, d) }
 func atomicLoad(v *int64) int64   { return atomic.LoadInt64(v) }
 
-// ============================================================
-// Mock Sink + InteractiveSender
-// ============================================================
-
 // testSink implements Sink but NOT InteractiveSender.
 type testSink struct {
 	name string
@@ -54,10 +50,6 @@ func (m *mockInteractiveAdapter) lastInteractive() *InteractiveMessage {
 	}
 	return &m.sentInteractive[len(m.sentInteractive)-1]
 }
-
-// ============================================================
-// Manager.SendInteractive
-// ============================================================
 
 func TestSendInteractive_DispatchesToInteractiveSenders(t *testing.T) {
 	mgr := NewManager()
@@ -105,7 +97,7 @@ func TestSendInteractive_DispatchesToInteractiveSenders(t *testing.T) {
 
 func TestSendInteractive_SkipsNonInteractiveAdapters(t *testing.T) {
 	mgr := NewManager()
-	// mockSink does NOT implement InteractiveSender
+
 	mgr.sinks["qq"] = &testSink{name: "qq"}
 	mgr.currentBindings["qq"] = &ChannelBinding{
 		Adapter:   "qq",
@@ -150,10 +142,6 @@ func TestSendInteractive_EmptyBindings(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Manager.HandleInteractiveCallback
-// ============================================================
-
 func TestHandleInteractiveCallback_DispatchesToHandler(t *testing.T) {
 	mgr := NewManager()
 	var received InteractiveCallback
@@ -191,22 +179,17 @@ func TestHandleInteractiveCallback_DispatchesToHandler(t *testing.T) {
 
 func TestHandleInteractiveCallback_NoPanicWithoutHandler(t *testing.T) {
 	mgr := NewManager()
-	// No handler set — should not panic
+
 	mgr.HandleInteractiveCallback(InteractiveCallback{
 		MessageID: "msg_x",
 		Values:    []string{"1"},
 	})
 }
 
-// ============================================================
-// DaemonBridge Interactive Callback → pendingAsk
-// ============================================================
-
 func TestDaemonBridge_InteractiveCallbackFillsAsk(t *testing.T) {
 	mgr := NewManager()
 	bridge := NewDaemonBridge(mgr, nil, NewIMEmitter(mgr, "en", "/ws"), nil, nil)
 
-	// Set up a pending ask_user
 	req := toolpkg.AskUserRequest{
 		Title: "Choose a color",
 		Questions: []toolpkg.AskUserQuestion{
@@ -228,14 +211,12 @@ func TestDaemonBridge_InteractiveCallbackFillsAsk(t *testing.T) {
 	bridge.pendingAsk = pending
 	bridge.mu.Unlock()
 
-	// Simulate button click (user clicked "Red" = choice 1)
 	mgr.HandleInteractiveCallback(InteractiveCallback{
 		MessageID: "msg_123",
 		Values:    []string{"1"},
 		Adapter:   "tg",
 	})
 
-	// Should receive the answer
 	select {
 	case resp := <-pending.response:
 		if len(resp.Answers) != 1 {
@@ -256,13 +237,12 @@ func TestDaemonBridge_InteractiveCallbackIgnoredWithoutPendingAsk(t *testing.T) 
 	mgr := NewManager()
 	_ = NewDaemonBridge(mgr, nil, NewIMEmitter(mgr, "en", "/ws"), nil, nil)
 
-	// No pending ask — callback should be silently ignored
 	mgr.HandleInteractiveCallback(InteractiveCallback{
 		MessageID: "msg_x",
 		Values:    []string{"1"},
 		Adapter:   "tg",
 	})
-	// If we get here without panic, test passes
+
 }
 
 func TestDaemonBridge_InteractiveCallbackMultiSelect(t *testing.T) {
@@ -291,9 +271,6 @@ func TestDaemonBridge_InteractiveCallbackMultiSelect(t *testing.T) {
 	bridge.pendingAsk = pending
 	bridge.mu.Unlock()
 
-	// User clicked buttons 1 and 3 (Go + Rust)
-	// Note: In real multi-select, each click sends a separate callback.
-	// For our test, we simulate the "Done" with comma-joined values.
 	mgr.HandleInteractiveCallback(InteractiveCallback{
 		Values:  []string{"1", "3"},
 		Adapter: "tg",
@@ -304,7 +281,7 @@ func TestDaemonBridge_InteractiveCallbackMultiSelect(t *testing.T) {
 		if !resp.Answers[0].Answered {
 			t.Error("expected answered")
 		}
-		// Should have selected Go (index 0) and Rust (index 2)
+
 		ids := resp.Answers[0].SelectedChoiceIDs
 		if len(ids) != 2 {
 			t.Fatalf("expected 2 choices, got %d: %v", len(ids), ids)
@@ -325,10 +302,6 @@ func TestDaemonBridge_InteractiveCallbackMultiSelect(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
-
-// ============================================================
-// DaemonBridge HandleAskUser Interactive Path
-// ============================================================
 
 func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 	mgr := NewManager()
@@ -352,7 +325,6 @@ func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 		},
 	}
 
-	// Run HandleAskUser in goroutine (it blocks waiting for reply)
 	done := make(chan toolpkg.AskUserResponse, 1)
 	go func() {
 		resp, err := bridge.HandleAskUser(context.Background(), req)
@@ -362,7 +334,6 @@ func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 		done <- resp
 	}()
 
-	// Wait for the interactive message to be sent
 	time.Sleep(100 * time.Millisecond)
 
 	last := adapter.lastInteractive()
@@ -372,7 +343,7 @@ func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 	if len(last.Buttons) != 2 {
 		t.Errorf("expected 2 buttons, got %d", len(last.Buttons))
 	}
-	// Binary choice → first button should be "primary"
+
 	if last.Buttons[0].Style != "primary" {
 		t.Errorf("expected primary style for binary choice button 0, got %s", last.Buttons[0].Style)
 	}
@@ -380,7 +351,6 @@ func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 		t.Errorf("button 0 mismatch: %+v", last.Buttons[0])
 	}
 
-	// Simulate button click reply
 	bridge.mu.Lock()
 	pending := bridge.pendingAsk
 	bridge.mu.Unlock()
@@ -413,7 +383,7 @@ func TestDaemonBridge_HandleAskUserTriesInteractive(t *testing.T) {
 
 func TestDaemonBridge_HandleAskUserFallbackToText(t *testing.T) {
 	mgr := NewManager()
-	// Only non-interactive adapter
+
 	plain := &testSink{name: "qq"}
 	mgr.sinks["qq"] = plain
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "group1"}
@@ -442,7 +412,6 @@ func TestDaemonBridge_HandleAskUserFallbackToText(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Reply via text (no interactive adapter available)
 	bridge.mu.Lock()
 	pending := bridge.pendingAsk
 	bridge.mu.Unlock()
@@ -468,10 +437,6 @@ func TestDaemonBridge_HandleAskUserFallbackToText(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
-
-// ============================================================
-// Telegram Callback Parsing
-// ============================================================
 
 func TestTGHandleCallbackQuery_ExtractsData(t *testing.T) {
 	mgr := NewManager()
@@ -522,14 +487,13 @@ func TestTGHandleUpdate_IgnoresNonCallbackNonMessage(t *testing.T) {
 	mgr := NewManager()
 	adapter := newTGAdapterForTest(mgr)
 
-	// Update with neither message nor callback_query
 	update := map[string]any{
 		"update_id": 101,
 		"edited_message": map[string]any{
 			"message_id": 50.0,
 		},
 	}
-	// Should not panic
+
 	adapter.handleUpdate(context.Background(), update)
 }
 
@@ -541,10 +505,6 @@ func newTGAdapterForTest(mgr *Manager) *tgAdapter {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 }
-
-// ============================================================
-// Slack Interactive Parsing
-// ============================================================
 
 func TestSlackHandleInteractive_ExtractsButtonValue(t *testing.T) {
 	mgr := NewManager()
@@ -591,12 +551,11 @@ func TestSlackHandleInteractive_IgnoresNonBlockActions(t *testing.T) {
 		manager: mgr,
 	}
 
-	// Wrong type — should be ignored
 	payload := map[string]any{
 		"type": "message_action",
 	}
 	adapter.handleInteractive(context.Background(), payload)
-	// No panic = pass
+
 }
 
 func TestSlackHandleInteractive_MultipleButtons(t *testing.T) {
@@ -630,10 +589,6 @@ func TestSlackHandleInteractive_MultipleButtons(t *testing.T) {
 		t.Errorf("values mismatch: %v", received.Values)
 	}
 }
-
-// ============================================================
-// Discord Interaction Parsing
-// ============================================================
 
 func TestDiscordHandleInteraction_ExtractsCustomID(t *testing.T) {
 	mgr := NewManager()
@@ -687,18 +642,13 @@ func TestDiscordHandleInteraction_MissingData(t *testing.T) {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 
-	// No data field
 	d := map[string]any{
 		"id":    "inter_x",
 		"token": "tok_x",
 	}
 	adapter.handleInteraction(context.Background(), d)
-	// No panic = pass
-}
 
-// ============================================================
-// Discord SendInteractive Format Validation
-// ============================================================
+}
 
 func TestDiscordSendInteractive_MessageFormat(t *testing.T) {
 	var reqBody map[string]any
@@ -740,7 +690,6 @@ func TestDiscordSendInteractive_MessageFormat(t *testing.T) {
 		t.Errorf("message ID mismatch: %s", msgID)
 	}
 
-	// Validate message structure
 	if reqBody["content"] != "Pick one:" {
 		t.Errorf("content mismatch: %v", reqBody["content"])
 	}
@@ -754,21 +703,19 @@ func TestDiscordSendInteractive_MessageFormat(t *testing.T) {
 		t.Fatalf("expected 3 buttons, got %d", len(btns))
 	}
 
-	// Check styles
 	btn0, _ := btns[0].(map[string]any)
-	if btn0["style"] != 1.0 { // primary = blurple
+	if btn0["style"] != 1.0 {
 		t.Errorf("button 0 style should be primary (1), got %v", btn0["style"])
 	}
 	btn1, _ := btns[1].(map[string]any)
-	if btn1["style"] != 4.0 { // danger = red
+	if btn1["style"] != 4.0 {
 		t.Errorf("button 1 style should be danger (4), got %v", btn1["style"])
 	}
 	btn2, _ := btns[2].(map[string]any)
-	if btn2["style"] != 2.0 { // default = secondary
+	if btn2["style"] != 2.0 {
 		t.Errorf("button 2 style should be secondary (2), got %v", btn2["style"])
 	}
 
-	// Check custom_id values
 	if btn0["custom_id"] != "1" {
 		t.Errorf("button 0 custom_id: %v", btn0["custom_id"])
 	}
@@ -777,14 +724,7 @@ func TestDiscordSendInteractive_MessageFormat(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Slack SendInteractive Format Validation
-// ============================================================
-
 func TestSlackSendInteractive_MessageFormat(t *testing.T) {
-	// Validate the JSON body that would be sent to Slack.
-	// We can't intercept the HTTP call (hardcoded API URL), so we
-	// validate the message construction logic directly.
 
 	adapter := &slackAdapter{
 		name:      "test_slack",
@@ -801,12 +741,9 @@ func TestSlackSendInteractive_MessageFormat(t *testing.T) {
 		},
 	}
 
-	// Build the expected blocks structure manually and compare
-	// We're testing the button→Block Kit mapping logic
 	_ = adapter
 	_ = msg
 
-	// Verify button construction logic
 	buttons := msg.Buttons
 	if len(buttons) != 2 {
 		t.Fatalf("expected 2 buttons")
@@ -846,10 +783,6 @@ func TestSlackSendInteractive_MessageFormat(t *testing.T) {
 	}
 }
 
-// ============================================================
-// InteractiveMessage with MultiSelect + Done button
-// ============================================================
-
 func TestSendInteractive_MultiSelectAddsDoneButton(t *testing.T) {
 	mgr := NewManager()
 	adapter := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
@@ -878,14 +811,8 @@ func TestSendInteractive_MultiSelectAddsDoneButton(t *testing.T) {
 	if len(last.Buttons) != 2 {
 		t.Errorf("expected 2 explicit buttons, got %d", len(last.Buttons))
 	}
-	// Note: the "Done" button is added by each adapter's SendInteractive
-	// implementation, not in the InteractiveMessage itself. So we only
-	// check that MultiSelect flag is preserved correctly.
-}
 
-// ============================================================
-// Edge cases
-// ============================================================
+}
 
 func TestSendInteractive_EmptyButtons(t *testing.T) {
 	mgr := NewManager()
@@ -896,7 +823,6 @@ func TestSendInteractive_EmptyButtons(t *testing.T) {
 	msg := InteractiveMessage{ID: "empty", Text: "No buttons", Buttons: nil}
 	result := mgr.SendInteractive(context.Background(), msg)
 
-	// Should still send (text-only interactive message)
 	if len(result) != 1 {
 		t.Errorf("expected 1 result even with no buttons, got %d", len(result))
 	}
@@ -925,10 +851,6 @@ func TestHandleInteractiveCallback_ConcurrentCallbacks(t *testing.T) {
 		t.Errorf("expected 100 callbacks, got %d", atomicLoad(&count))
 	}
 }
-
-// ============================================================
-// EmitToNonInteractive — fallback filtering by interface type
-// ============================================================
 
 // trackingSink records every outbound event it receives.
 type trackingSink struct {
@@ -962,12 +884,10 @@ func (s *trackingSink) eventCount() int {
 func TestEmitToNonInteractive_OnlySendsToNonInteractiveAdapters(t *testing.T) {
 	mgr := NewManager()
 
-	// Interactive adapter — should NOT receive fallback
 	intAdapter := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
 	mgr.sinks["tg"] = intAdapter
 	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "chat1"}
 
-	// Non-interactive adapter — SHOULD receive fallback
 	plainSink := &trackingSink{testSink: testSink{name: "qq"}}
 	mgr.sinks["qq"] = plainSink
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "group1"}
@@ -980,7 +900,6 @@ func TestEmitToNonInteractive_OnlySendsToNonInteractiveAdapters(t *testing.T) {
 		t.Fatalf("EmitToNonInteractive error: %v", err)
 	}
 
-	// QQ should have received the fallback
 	if plainSink.eventCount() != 1 {
 		t.Fatalf("expected 1 event on qq, got %d", plainSink.eventCount())
 	}
@@ -988,7 +907,6 @@ func TestEmitToNonInteractive_OnlySendsToNonInteractiveAdapters(t *testing.T) {
 		t.Errorf("qq text mismatch: %q", plainSink.lastEvent().Text)
 	}
 
-	// TG should NOT have received anything (it's interactive)
 	if intAdapter.lastInteractive() != nil {
 		t.Error("tg should not receive fallback via EmitToNonInteractive")
 	}
@@ -997,7 +915,6 @@ func TestEmitToNonInteractive_OnlySendsToNonInteractiveAdapters(t *testing.T) {
 func TestEmitToNonInteractive_AllInteractive(t *testing.T) {
 	mgr := NewManager()
 
-	// Only interactive adapters
 	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
 	mgr.sinks["tg"] = tg
 	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
@@ -1006,7 +923,6 @@ func TestEmitToNonInteractive_AllInteractive(t *testing.T) {
 	mgr.sinks["discord"] = discord
 	mgr.currentBindings["discord"] = &ChannelBinding{Adapter: "discord", ChannelID: "c2"}
 
-	// No non-interactive adapters → should return nil (no targets)
 	err := mgr.EmitToNonInteractive(context.Background(), OutboundEvent{
 		Kind: OutboundEventText,
 		Text: "should not go anywhere",
@@ -1050,19 +966,13 @@ func TestEmitToNonInteractive_AllNonInteractive(t *testing.T) {
 	}
 }
 
-// ============================================================
-// EmitAskUserInteractive — unified interactive + fallback
-// ============================================================
-
 func TestEmitAskUserInteractive_MixedAdapters_FallbackOnlyToNonInteractive(t *testing.T) {
 	mgr := NewManager()
 
-	// Interactive adapters
 	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
 	mgr.sinks["tg"] = tg
 	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
 
-	// Non-interactive adapter
 	qq := &trackingSink{testSink: testSink{name: "qq"}}
 	mgr.sinks["qq"] = qq
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
@@ -1079,7 +989,6 @@ func TestEmitAskUserInteractive_MixedAdapters_FallbackOnlyToNonInteractive(t *te
 		},
 	}, "fallback: Go or Rust?")
 
-	// TG should have received interactive message
 	if len(msgIDs) != 1 || msgIDs["tg"] == "" {
 		t.Fatalf("expected 1 msgID for tg, got %v", msgIDs)
 	}
@@ -1094,7 +1003,6 @@ func TestEmitAskUserInteractive_MixedAdapters_FallbackOnlyToNonInteractive(t *te
 		t.Errorf("button 0 label: %s", last.Buttons[0].Label)
 	}
 
-	// QQ should have received text fallback
 	if qq.eventCount() != 1 {
 		t.Fatalf("qq expected 1 fallback event, got %d", qq.eventCount())
 	}
@@ -1122,15 +1030,10 @@ func TestEmitAskUserInteractive_NoChoices_SendsPlainTextToAll(t *testing.T) {
 		Kind:  toolpkg.AskUserKindText,
 	}, "fallback: describe the feature")
 
-	// No interactive message sent (text-only question)
 	if len(msgIDs) != 0 {
 		t.Errorf("expected no msgIDs for text question, got %v", msgIDs)
 	}
 
-	// EmitAskUser is called internally → emits to all via event queue
-	// We can't easily verify exact delivery in unit test without waiting
-	// for the async emitter goroutine, so we just verify no panic and
-	// no interactive message was sent.
 	if tg.lastInteractive() != nil {
 		t.Error("tg should not receive interactive for text question")
 	}
@@ -1139,7 +1042,6 @@ func TestEmitAskUserInteractive_NoChoices_SendsPlainTextToAll(t *testing.T) {
 func TestEmitAskUserInteractive_OnlyNonInteractiveAdapters(t *testing.T) {
 	mgr := NewManager()
 
-	// Only non-interactive adapter — no InteractiveSender
 	qq := &trackingSink{testSink: testSink{name: "qq"}}
 	mgr.sinks["qq"] = qq
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
@@ -1156,7 +1058,6 @@ func TestEmitAskUserInteractive_OnlyNonInteractiveAdapters(t *testing.T) {
 		},
 	}, "fallback: A or B?")
 
-	// No interactive adapters → msgIDs empty, falls back to EmitAskUser (plain text)
 	if len(msgIDs) != 0 {
 		t.Errorf("expected no msgIDs, got %v", msgIDs)
 	}
@@ -1190,7 +1091,6 @@ func TestEmitAskUserInteractive_EmptyFallback(t *testing.T) {
 
 	emitter := NewIMEmitter(mgr, "en", "/ws")
 
-	// Empty fallback text — QQ should NOT receive anything
 	msgIDs := emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
 		ID:    "q1",
 		Title: "Choose",
@@ -1242,7 +1142,7 @@ func TestEmitAskUserInteractive_MultiSelect(t *testing.T) {
 	if !strings.Contains(last.Text, "Multi-select") {
 		t.Errorf("card text should mention multi-select: %s", last.Text)
 	}
-	// Non-binary → all buttons should be "default" style
+
 	for _, btn := range last.Buttons {
 		if btn.Style != "default" {
 			t.Errorf("non-binary multi-select button should be default, got %s", btn.Style)
@@ -1279,10 +1179,6 @@ func TestEmitAskUserInteractive_WithPrompt(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Slash command takes priority over pendingAsk
-// ============================================================
-
 func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 	mgr := NewManager()
 
@@ -1296,7 +1192,6 @@ func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 	var restartCalled atomic.Bool
 	bridge.SetRestartHook(func() { restartCalled.Store(true) })
 
-	// Set up a pending ask_user
 	bridge.mu.Lock()
 	bridge.pendingAsk = &pendingAskUser{
 		request: toolpkg.AskUserRequest{
@@ -1309,7 +1204,6 @@ func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 	}
 	bridge.mu.Unlock()
 
-	// Send /restart while ask_user is pending
 	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Envelope: Envelope{
 			Adapter:  "qq",
@@ -1321,14 +1215,12 @@ func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
 
-	// Restart is async (1s delay), wait for it
 	time.Sleep(1500 * time.Millisecond)
 
 	if !restartCalled.Load() {
 		t.Fatal("/restart should have triggered restart even with pendingAsk")
 	}
 
-	// pendingAsk should still be set (not consumed)
 	bridge.mu.Lock()
 	pending := bridge.pendingAsk
 	bridge.mu.Unlock()
@@ -1347,7 +1239,6 @@ func TestSubmitInboundMessage_TextGoesToPendingAsk(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", "ws")
 	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
 
-	// Set up a pending ask_user
 	respCh := make(chan toolpkg.AskUserResponse, 1)
 	bridge.mu.Lock()
 	bridge.pendingAsk = &pendingAskUser{
@@ -1361,7 +1252,6 @@ func TestSubmitInboundMessage_TextGoesToPendingAsk(t *testing.T) {
 	}
 	bridge.mu.Unlock()
 
-	// Send regular text — should be consumed as ask_user answer
 	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Envelope: Envelope{
 			Adapter:  "qq",
@@ -1373,7 +1263,6 @@ func TestSubmitInboundMessage_TextGoesToPendingAsk(t *testing.T) {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
 
-	// The answer should have been sent to the response channel
 	select {
 	case resp := <-respCh:
 		if len(resp.Answers) == 0 || resp.Answers[0].FreeformText != "my answer" {
@@ -1383,7 +1272,6 @@ func TestSubmitInboundMessage_TextGoesToPendingAsk(t *testing.T) {
 		t.Fatal("timeout waiting for ask_user response")
 	}
 
-	// pendingAsk should be cleared
 	bridge.mu.Lock()
 	pending := bridge.pendingAsk
 	bridge.mu.Unlock()

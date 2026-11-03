@@ -47,32 +47,30 @@ func ExpandEnvWithLookup(s string, lookup envLookupFunc) string {
 	return envDefaultPattern.ReplaceAllStringFunc(s, func(match string) string {
 		sub := envDefaultPattern.FindStringSubmatch(match)
 		if sub == nil {
-			// Should be impossible (match came from the same pattern), but never
-			// silently fabricate a value.
+
 			debug.Log("config", "env expansion: unrecognized form %q left unchanged", match)
 			return match
 		}
 		varName := sub[1]
-		rest := match[2+len(varName):] // ":default}", "-default}", or "}"
+		rest := match[2+len(varName):]
 		colonForm := strings.HasPrefix(rest, ":-")
 		dashForm := !colonForm && strings.HasPrefix(rest, "-")
 		val, set := lookup(varName)
 		switch {
 		case colonForm:
-			// ${VAR:-default}: VAR unset OR empty → default.
+
 			if set && val != "" {
 				return val
 			}
 			return sub[2]
 		case dashForm:
-			// ${VAR-default}: VAR unset → default; set (even empty) → value.
+
 			if set {
 				return val
 			}
 			return sub[2]
 		default:
-			// Plain ${VAR}: set → value; unset → keep pattern (existing behavior —
-			// later stages detect unresolved ${...} and surface onboarding errors).
+
 			if set {
 				return val
 			}
@@ -124,8 +122,7 @@ func WarnUnresolvedEnvRefs(raw map[string]interface{}) {
 	walk = func(v interface{}) {
 		switch val := v.(type) {
 		case string:
-			// Any ${...} occurrence the expander does not consume is a form we
-			// do not support — report it instead of passing it through silently.
+
 			for _, m := range envAnyRefPattern.FindAllString(val, -1) {
 				debug.Log("config", "unrecognized env reference %q left as literal value; supported forms are ${VAR} and ${VAR:-default}", m)
 			}
@@ -150,12 +147,7 @@ func HomeDir() string {
 // ConfigDir returns ~/.ggcode
 func ConfigDir() string {
 	guardRealHomeDir("ConfigDir()")
-	// #1837 case 2: mirror util.ConfigDir's empty-home guard. HomeDir()
-	// returns "" when no home can be determined (HOME unset in a container
-	// and os.UserHomeDir failing); the old strings.Join then produced the
-	// ABSOLUTE path /.ggcode at the filesystem root, and the loader tried
-	// to read and create it. filepath.Join on "" degrades to a harmless
-	// relative path instead.
+
 	home := HomeDir()
 	if home == "" {
 		return ""
@@ -165,8 +157,7 @@ func ConfigDir() string {
 
 // ConfigPath returns the default config file path.
 func ConfigPath() string {
-	// filepath.Join("", name) = name (relative) — never a root-absolute
-	// path (#1837 case 2).
+
 	return filepath.Join(ConfigDir(), "ggcode.yaml")
 }
 
@@ -197,27 +188,15 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 		env[name] = value
 	}
 
-	// Load ~/.ggcode/keys.env — these take precedence over shell rc files
-	// but not over the current process environment (already loaded above).
 	if err := loadKeysEnvInto(func(key, val string) error {
 		if _, exists := env[key]; !exists {
 			env[key] = val
 		}
 		return nil
 	}, KeysEnvPath()); err == nil {
-		// #2284-A phase 1: the wholesale os.Setenv loop is REMOVED. It copied
-		// every vendor API key / A2A secret into the PROCESS environment, so
-		// any child command inherited all of them (`env` alone dumped every
-		// key in plaintext) and MCP servers leaked them by default. The
-		// comment claimed "subsequent lookups" needed it - false: this lookup
-		// walks the local map above, and a fresh Load re-reads keys.env from
-		// disk. The one real consumer (anthropic_bootstrap's os.Getenv trio)
-		// now reads from this map instead - see applyFirstLaunchAnthropicBootstrap.
+
 	}
 
-	// #2293: instance-scope keys.env joins the resolver map the same way
-	// (instance wins over global keys, lookup-time - never os.Setenv).
-	// #2308: read via the atomic pointer (writer swaps it COW).
 	if p := instanceKeysEnvPointer.Load(); p != nil {
 		for k, v := range *p {
 			env[k] = v
@@ -253,18 +232,12 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 				continue
 			}
 			env[name] = ExpandEnvWithLookup(value, func(key string) (string, bool) {
-				// #1803 case 2: rc files reference EACH OTHER (A=1 / B=${A})
-				// and the map iteration order is random - when B expanded
-				// first, ${A} was unset and the literal-preservation fallback
-				// silently kept "${A}" (a coin-flip bad value per run). Fall
-				// through to the same file's not-yet-processed values.
+
 				if val, ok := env[key]; ok {
 					return val, true
 				}
 				if val, ok := values[key]; ok {
-					// Values may themselves contain references; expand one
-					// level lazily (chained rc references are rare and one
-					// level covers the A/B shape).
+
 					expanded := ExpandEnvWithLookup(val, func(k2 string) (string, bool) {
 						v2, ok2 := env[k2]
 						return v2, ok2
@@ -311,8 +284,7 @@ func referencedEnvVars(raw map[string]interface{}) map[string]struct{} {
 	walk = func(v interface{}) {
 		switch val := v.(type) {
 		case string:
-			// #559 (Bug F): also pick up ${VAR} names inside ${VAR:-default}
-			// so keys.env / shell-rc fallback resolution covers them.
+
 			for _, match := range envDefaultPattern.FindAllStringSubmatch(val, -1) {
 				if len(match) >= 2 {
 					names[match[1]] = struct{}{}
@@ -370,20 +342,13 @@ func parseEnvAssignment(line string) (string, string, bool) {
 	if value == "" {
 		return name, "", true
 	}
-	// #2104: len >= 2 guards the lone double-quote typo (`export FOO="`) -
-	// prefix AND suffix both match a single '"', Unquote fails, and the
-	// #1519 fall-through below sliced value[1:0] -> panic at STARTUP from
-	// any shell rc line. The single-quote branch already had this guard.
+
 	if len(value) >= 2 && strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
 		unquoted, err := strconv.Unquote(value)
 		if err == nil {
 			return name, unquoted, true
 		}
-		// #1519: strict Unquote fails on embedded escapes that are legal in
-		// shell rc files (Windows paths, regexes: MY_KEY="a\qb"). Falling
-		// through kept the QUOTES as part of the value and auth silently
-		// failed. Strip the delimiters and use the raw interior, matching
-		// the single-quote branch's behavior.
+
 		return name, value[1 : len(value)-1], true
 	}
 	if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {

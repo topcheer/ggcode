@@ -13,7 +13,7 @@ func (c *Config) AddGRPCPlugin(name string, command []string, env map[string]str
 	if c == nil {
 		return
 	}
-	// Remove existing entry with the same name
+
 	c.RemovePlugin(name)
 
 	entry := PluginConfigEntry{

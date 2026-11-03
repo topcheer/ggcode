@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #2106 probes: instance-scope partial reset must actually remove the
-// overridden key from instance.yaml instead of letting the deep-merge keep
-// it (and MergeInstance resurrect it on the next load).
-
 // instanceTestEnv isolates HOME once per test so InstanceDir stays stable
 // across multiple saves.
 func instanceTestEnv(t *testing.T, globalPath string) {
@@ -41,10 +37,6 @@ func TestInstancePartialResetScalarRemovedFromDisk(t *testing.T) {
 	}
 	instanceTestEnv(t, globalPath)
 
-	// Step 1: set two overrides - default_mode=plan and max_iterations=50.
-	// (max_iterations is a plain int with no default-fill path; language and
-	// endpoint both have dedicated load/default chains that shadow the
-	// instance merge - see the #734 probe notes.)
 	instPath := saveInstanceVia(t, globalPath, ws, func(c *Config) {
 		c.DefaultMode = "plan"
 		c.MaxIterations = 50
@@ -57,13 +49,11 @@ func TestInstancePartialResetScalarRemovedFromDisk(t *testing.T) {
 		t.Fatalf("expected both overrides on disk, got:\n%s", data)
 	}
 
-	// Step 2: reset ONLY default_mode back to global ("") - keep max_iterations.
 	saveInstanceVia(t, globalPath, ws, func(c *Config) {
-		c.DefaultMode = "" // reset
+		c.DefaultMode = ""
 		c.MaxIterations = 50
 	})
 
-	// Probe: default_mode must be gone from disk; max_iterations must survive.
 	data, err = os.ReadFile(instPath)
 	if err != nil {
 		t.Fatalf("instance file missing after partial reset: %v", err)
@@ -75,7 +65,6 @@ func TestInstancePartialResetScalarRemovedFromDisk(t *testing.T) {
 		t.Fatalf("unrelated override max_iterations lost:\n%s", data)
 	}
 
-	// Probe: reload + merge must not resurrect the reset value.
 	cfg, err := LoadWithInstance(globalPath, ws)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -96,7 +85,6 @@ func TestInstanceFullResetRemovesInstanceFile(t *testing.T) {
 	}
 	instanceTestEnv(t, globalPath)
 
-	// Override max_iterations and default_mode, then reset BOTH.
 	instPath := saveInstanceVia(t, globalPath, ws, func(c *Config) {
 		c.MaxIterations = 50
 		c.DefaultMode = "plan"
@@ -106,13 +94,10 @@ func TestInstanceFullResetRemovesInstanceFile(t *testing.T) {
 	}
 
 	saveInstanceVia(t, globalPath, ws, func(c *Config) {
-		c.MaxIterations = 0 // reset
-		c.DefaultMode = ""  // reset
+		c.MaxIterations = 0
+		c.DefaultMode = ""
 	})
 
-	// Probe: with every override reset the instance file must be REMOVED
-	// (previously it survived with stale keys; only the empty-delta path
-	// ever removed it).
 	if _, err := os.Stat(instPath); !os.IsNotExist(err) {
 		t.Fatalf("#2106: fully-reset instance file still exists (err=%v)", err)
 	}
@@ -126,9 +111,6 @@ func TestInstanceResetKeepsUnmanagedKeys(t *testing.T) {
 	}
 	instanceTestEnv(t, globalPath)
 
-	// An existing instance file carrying a key OUTSIDE the managed reset
-	// family must survive a save that resets a managed key (deletion is
-	// scoped to the diff-managed scalar family).
 	instDir := InstanceDir(ws)
 	if err := os.MkdirAll(instDir, 0755); err != nil {
 		t.Fatal(err)
@@ -139,7 +121,7 @@ func TestInstanceResetKeepsUnmanagedKeys(t *testing.T) {
 	}
 
 	instPath := saveInstanceVia(t, globalPath, ws, func(c *Config) {
-		c.DefaultMode = "" // reset
+		c.DefaultMode = ""
 	})
 	data, err := os.ReadFile(instPath)
 	if err != nil {

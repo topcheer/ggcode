@@ -6,20 +6,6 @@ import (
 	"strings"
 )
 
-// Anthropic context management (context editing).
-//
-// Server-side strategies that rewrite the conversation before it reaches the
-// model: older tool results and thinking blocks are cleared once Claude has
-// processed them, keeping long agent sessions inside the window and cutting
-// input-token spend without any client-side compaction.
-//
-// Requires the beta flag context-management-2025-06-27 (set on the transport
-// header by SetContextEditing) and the top-level context_management request
-// field (attached per call by contextEditingOptions via option.WithJSONSet —
-// the SDK's typed MessageNewParams predates the parameter).
-//
-// Docs: https://platform.claude.com/docs/en/build-with-claude/context-editing
-
 const (
 	// anthropicContextManagementBeta is the beta header token enabling both
 	// the request field and the response's context_management block.

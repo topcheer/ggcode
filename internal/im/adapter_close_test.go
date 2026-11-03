@@ -26,7 +26,7 @@ func testWSServer(t *testing.T) (url string) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return "ws" + srv.URL[4:] // http:// → ws://
+	return "ws" + srv.URL[4:]
 }
 
 func dialWS(t *testing.T, url string) *websocket.Conn {
@@ -57,12 +57,12 @@ func TestQQAdapterClose(t *testing.T) {
 	if a.ws != nil {
 		t.Fatal("ws should be nil after Close")
 	}
-	// Verify the connection is actually closed — writing should fail
+
 	a.mu.Lock()
 	old := a.ws
 	a.ws = nil
 	a.mu.Unlock()
-	_ = old // already nil, but confirm no panic
+	_ = old
 }
 
 func TestQQAdapterCloseNoConnection(t *testing.T) {
@@ -156,12 +156,12 @@ func TestTGAdapterClose(t *testing.T) {
 }
 
 func TestTGAdapterCloseIdleConnections(t *testing.T) {
-	// Verify Close() calls CloseIdleConnections on the httpClient.
+
 	a := &tgAdapter{httpClient: &http.Client{}}
 	if err := a.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	// After Close, the adapter should be marked disconnected.
+
 	a.mu.RLock()
 	connected := a.connected
 	a.mu.RUnlock()

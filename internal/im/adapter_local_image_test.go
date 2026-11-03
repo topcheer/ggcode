@@ -78,7 +78,3 @@ func TestFeishuUploadImageRejectsOversized(t *testing.T) {
 		t.Fatalf("expected oversize error, got %v", err)
 	}
 }
-
-// Note: exactly-10MB boundary (len == limit passes the guard) is intentionally
-// not exercised here - proceeding past the precheck requires a live HTTP
-// client on the adapter, which a zero-value test instance lacks.

@@ -1,12 +1,5 @@
 package lanchat
 
-// #3399/#3402 (A-track TUFU) probes: DM-layer Ed25519 signatures with
-// first-sight identity pinning and fingerprint-bound strict-mode
-// exemptions. The forged-from_node_id attack from #3399 (enumerate a
-// trusted node_id, POST with a spoofed body field) must no longer reach
-// the exemption: the claim only exempts when the message carries a valid
-// signature from the exact key pinned at endorsement time.
-
 import (
 	"path/filepath"
 	"testing"
@@ -71,7 +64,6 @@ func TestIssue3402_ForgedNodeIDWithValidOwnKeyDoesNotExempt(t *testing.T) {
 	realDir := filepath.Join(t.TempDir(), "real")
 	realKey := issue3402Key(t, realDir)
 
-	// Pin the real key via a first signed DM, then bind trust to it.
 	h.HandleIncomingMessage(issue3402SignedDM(t, realKey, "m1", "friend-node", "hello"))
 	h.SetTrustedPeer("friend-node", true)
 

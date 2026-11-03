@@ -15,7 +15,7 @@ func TestAnnotateVisionFlags(t *testing.T) {
 	if out[1] != "deepseek-chat" {
 		t.Errorf("deepseek-chat should not be marked vision, got %q", out[1])
 	}
-	// Vision via exact capability-table match, without a -v/-vl naming hint.
+
 	if out[2] != "glm-5.3-flash [vision]" {
 		t.Errorf("glm-5.3-flash should be marked vision from capability table, got %q", out[2])
 	}
@@ -32,7 +32,7 @@ func TestBuildSystemPrompt_ModelListHasVisionFlags(t *testing.T) {
 	if !strings.Contains(prompt, "accept image input") {
 		t.Error("system prompt should explain the [vision] marker")
 	}
-	// The non-vision model must not gain the marker.
+
 	if strings.Contains(prompt, "deepseek-chat [vision]") {
 		t.Error("deepseek-chat must not be marked [vision]")
 	}

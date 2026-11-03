@@ -165,9 +165,7 @@ func (a *qqAdapter) run(ctx context.Context) {
 		if err != nil {
 			a.publishState(false, "error", err.Error())
 		}
-		// Successful return (nil error) means the connection served until a
-		// clean disconnect — reset the backoff counter so the NEXT first retry
-		// uses the short delay instead of the capped 60s (#389).
+
 		if err == nil {
 			attempt = 0
 		}
@@ -194,7 +192,7 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 		return err
 	}
 	debug.Log("qq", "adapter=%s gateway ready", a.name)
-	// 30s dial timeout prevents indefinite hang on unreachable QQ gateway
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, gatewayURL, nil)
 	dialCancel()
@@ -207,9 +205,7 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 	a.publishState(false, "handshaking", "")
-	// Close exactly the connection this call dialed. a.ws may already have
-	// been swapped by a concurrent Close()/reconnect, and closing whatever
-	// a.ws currently points at could kill a fresher connection's window (#966).
+
 	defer func() {
 		a.mu.Lock()
 		a.connected = false
@@ -234,9 +230,7 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("read QQ gateway: %s", qqCloseReason(err))
 		}
 		if err := a.handleGatewayPayload(ctx, data); err != nil {
-			// op 7 / op 9 ask for a reconnect: return immediately so run() redials
-			// and the retained session makes HELLO send RESUME instead of a fresh
-			// IDENTIFY (#966).
+
 			if errors.Is(err, errQQReconnect) {
 				return err
 			}
@@ -265,18 +259,10 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	}
 	debug.Log("qq", "adapter=%s outbound kind=%s channel=%s len=%d reply_to=%q msg_seq=%d markdown=%t", a.name, event.Kind, channelID, len(content), replyTo, replySeq, a.markdownSupport)
 
-	// Extract images from text and send them as rich media (msg_type: 7)
 	images, remainingText := ExtractImagesFromText(content)
-	// Single monotonically increasing msg_seq cursor shared by images and text
-	// chunks. For passive replies msg_id+msg_seq is the server-side dedup key:
-	// every outbound request within one Send must consume a unique seq, else
-	// QQ silently drops it as a duplicate (#966).
+
 	seq := replySeq
-	// #3319: reserve all seq slots for this Send atomically in the binding
-	// store (cross-process file lock) so a concurrent ggcode instance (TUI +
-	// daemon both serving the same QQ adapter) can't allocate the same
-	// msg_seq. Falls back to the snapshot-based counter when the store lacks
-	// the capability (single-instance semantics, unchanged).
+
 	reserved := false
 	if replyTo != "" && a.manager != nil {
 		n := len(images) + qqChunkCount(a.markdownSupport, remainingText)
@@ -296,10 +282,7 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			debug.Log("qq", "adapter=%s image resolve failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
-		// Each successfully sent image consumes one seq slot; failures do not
-		// (the server never saw them). #3317: the slot is recorded IMMEDIATELY
-		// per send - the old batch-at-the-end recording left a whole-loop crash
-		// window where a restart after a successful send reused the burned seq.
+
 		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, seq); err != nil {
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
@@ -310,21 +293,14 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		seq++
 		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
-		// #1230: rate limit across ALL outbound messages - every delivered
-		// image is followed by the inter-message delay so back-to-back
-		// multi-image replies and the image->text transition stay under the
-		// 5 msg/s cap.
+
 		select {
 		case <-time.After(qqInterMessageDelay):
 		case <-ctx.Done():
-			return ctx.Err() // slots already recorded incrementally above
+			return ctx.Err()
 		}
 	}
 
-	// Send remaining text (images stripped), split into chunks for QQ's message length limit.
-	// Use markdown-aware splitter when markdown is enabled so code blocks and fenced
-	// syntax aren't broken across chunks. When markdown is off, the plain splitter
-	// is fine (stripMarkdown runs per-chunk inside sendTextMessage).
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText != "" {
 		var chunks []string
@@ -334,22 +310,19 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			chunks = SplitMessageForPlatform(remainingText, PlatformQQ)
 		}
 		for i, chunk := range chunks {
-			// Rate limit: max 5 messages/second per channel. Also delay before
-			// the FIRST chunk when images were sent in this Send - the last image
-			// and the first text otherwise go back-to-back (#1230).
+
 			if i > 0 || consumedSeqs > 0 {
 				select {
 				case <-time.After(qqInterMessageDelay):
 				case <-ctx.Done():
-					return ctx.Err() // slots already recorded incrementally
+					return ctx.Err()
 				}
 			}
-			// Chunks continue the shared seq cursor (NOT the chunk index) so they
-			// never reuse a seq burned by an image or an earlier chunk (#966).
+
 			if _, err := a.sendTextMessage(ctx, path, chatType, chunk, replyTo, seq); err != nil {
 				return err
 			}
-			// #3317: per-send incremental recording (see the image loop).
+
 			if !reserved {
 				a.recordPassiveReplies(binding, replyTo, 1)
 			}
@@ -382,20 +355,12 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 	if strings.TrimSpace(replyTo) != "" {
 		replySeq = 1
 	}
-	// #3317: this echo path CONSUMES the server-side (msg_id, 1) slot but
-	// historically never recorded it - the next regular Send starts at
-	// PassiveReplyCount+1 = 1 and collides head-on with the echo, and the
-	// server deduplicates it away. Record the consumed slot on success.
-	// The echo sites carry a channel/message id, not a binding - resolve
-	// the workspace by matching the inbound message id so the counter
-	// lands on the right binding.
+
 	recordEcho := func(sent bool) {
 		if !sent || a.manager == nil || strings.TrimSpace(replyTo) == "" {
 			return
 		}
-		// #3326: resolve-and-record under the manager lock - the previous
-		// bare range over currentBindings raced the binding watcher's
-		// locked deletes.
+
 		if err := a.manager.RecordPassiveReplyByMessage(replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
 			debug.Log("qq", "adapter=%s echo passive-reply record failed: %v", a.name, err)
 		}
@@ -512,7 +477,7 @@ func (a *qqAdapter) heartbeatLoop(ctx context.Context) {
 			if ok {
 				payload["d"] = seq
 			}
-			// Don't log routine heartbeats — extremely noisy
+
 			if err := a.writeJSON(payload); err != nil {
 				debug.Log("qq", "adapter=%s heartbeat write error: %v", a.name, err)
 				a.closeWS()
@@ -540,16 +505,14 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 	case 10:
 		return a.handleHello(payload)
 	case 7:
-		// Server-requested reconnect: drop the connection at once but keep
-		// sessionID/lastSeq so the next HELLO sends RESUME (op 6) and missed
-		// events are replayed instead of being lost to a fresh session (#966).
+
 		debug.Log("qq", "adapter=%s gateway requested reconnect (op 7)", a.name)
 		a.closeWS()
 		return errQQReconnect
 	case 9:
 		return a.handleInvalidSession(payload)
 	case 11:
-		// Don't log routine heartbeat acks
+
 		return nil
 	case 0:
 		if eventType != "" {
@@ -569,8 +532,7 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 			return nil
 		}
 		if eventType == "RESUMED" {
-			// Gateways that dispatch RESUMED after a successful op 6 resume:
-			// mirror READY's connected transition (#966).
+
 			debug.Log("qq", "adapter=%s gateway session resumed", a.name)
 			a.mu.Lock()
 			a.connected = true
@@ -597,7 +559,7 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 }
 
 func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, payload map[string]any) {
-	// Exit immediately if the adapter has been stopped (muted/disabled).
+
 	if ctx.Err() != nil {
 		return
 	}
@@ -635,8 +597,7 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 		Text:        text,
 		Attachments: attachments,
 	}
-	// Re-check ctx before making manager calls — the adapter may have been
-	// muted between the goroutine start and now.
+
 	if ctx.Err() != nil {
 		return
 	}
@@ -912,9 +873,7 @@ func (a *qqAdapter) sendResume() error {
 	if err := a.writeJSON(payload); err != nil {
 		return err
 	}
-	// QQ does not reliably dispatch an explicit RESUMED event after a successful
-	// resume, so optimistically mark connected. An invalid resume triggers op 9,
-	// which clears the session (d=false) and forces a fresh IDENTIFY.
+
 	a.mu.Lock()
 	a.connected = true
 	a.mu.Unlock()
@@ -1130,9 +1089,7 @@ func (a *qqAdapter) refreshTokenOnce(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Check the HTTP status before JSON parsing so non-JSON error pages (HTML
-	// 502s etc.) surface the real failure instead of a confusing decode error
-	// (#966).
+
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("QQ token request failed [%d]: %s", resp.StatusCode, truncateStr(strings.TrimSpace(string(respBody)), 200))
 	}
@@ -1273,13 +1230,12 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 	}
 	chatType := a.chatType(channelID)
 	if chatType != "c2c" {
-		return nil // QQ typing notify only works for C2C
+		return nil
 	}
 
-	// Need a msg_id to send as passive reply; without it QQ treats this as proactive message.
 	msgID := strings.TrimSpace(binding.LastInboundMessageID)
 	if msgID == "" {
-		return nil // No passive context, skip to avoid proactive rate limit
+		return nil
 	}
 
 	path := "/v2/users/" + channelID + "/messages"
@@ -1300,11 +1256,7 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 		debug.Log("qq", "adapter=%s typing notify failed: %v", a.name, err)
 		return err
 	}
-	// #3345: the typing notify carries (msg_id, msg_seq) and burns a
-	// server-side passive slot exactly like an echo or media message - every
-	// other carrier in this file records its slot (#3317 echo, #3319
-	// pre-reservation, #3326 locked resolve). Record it, or the next Send
-	// reuses this seq and the server deduplicates it away.
+
 	a.recordPassiveReplies(binding, msgID, 1)
 	return nil
 }
@@ -1359,8 +1311,7 @@ func (a *qqAdapter) recordPassiveReplies(binding ChannelBinding, replyTo string,
 
 func (a *qqAdapter) sendTextMessage(ctx context.Context, path, chatType, content, replyTo string, replySeq int) (string, error) {
 	useMarkdown := a.markdownSupport
-	// Strip markdown syntax when sending as plain text to avoid showing
-	// literal **bold**, _italic_ etc. to users on non-markdown contexts.
+
 	sentContent := content
 	if !useMarkdown {
 		sentContent = stripMarkdown(content)
@@ -1380,8 +1331,6 @@ func (a *qqAdapter) sendTextMessage(ctx context.Context, path, chatType, content
 	}
 	return replyTo, nil
 }
-
-// --- Image upload and media message ---
 
 func qqUploadPath(chatType, targetID string) string {
 	switch normalizeQQChatType(chatType) {
@@ -1412,7 +1361,7 @@ func (a *qqAdapter) getUploadCache(key string) (string, bool) {
 func (a *qqAdapter) setUploadCache(key, fileInfo string) {
 	a.uploadCacheMu.Lock()
 	defer a.uploadCacheMu.Unlock()
-	// Evict expired entries if at capacity
+
 	if len(a.uploadCache) >= qqUploadCacheMaxEntries {
 		now := time.Now()
 		for k, v := range a.uploadCache {
@@ -1434,7 +1383,6 @@ func (a *qqAdapter) uploadMedia(ctx context.Context, chatType, targetID, base64D
 		return "", fmt.Errorf("unsupported chat type for media upload: %s", chatType)
 	}
 
-	// Check cache
 	cacheKey := a.uploadCacheKey(base64Data, chatType, targetID, qqFileTypeImage)
 	if fileInfo, ok := a.getUploadCache(cacheKey); ok {
 		debug.Log("qq", "adapter=%s upload cache hit for %s", a.name, targetID)
@@ -1748,8 +1696,7 @@ func truncateStr(s string, maxLen int) string {
 	if maxLen <= 0 || len(s) <= maxLen {
 		return s
 	}
-	// Use rune-based truncation to avoid splitting multi-byte UTF-8 characters.
-	// This is critical for QQ adapter which frequently handles Chinese text.
+
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
@@ -1761,19 +1708,17 @@ func truncateStr(s string, maxLen int) string {
 func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) (string, error) {
 	switch img.Kind {
 	case "data_url":
-		// data:image/png;base64,XXXXX
+
 		parts := strings.SplitN(img.Data, ",", 2)
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid data URL")
 		}
-		// Validate base64 by decoding
+
 		data, err := base64.StdEncoding.DecodeString(parts[1])
 		if err != nil {
 			return "", fmt.Errorf("invalid base64 in data URL: %w", err)
 		}
-		// #1557: the URL branch enforces imagepkg.MaxSize via ReadLimited;
-		// this branch decoded unbounded - a huge data-URL attachment passed
-		// through verbatim (same attachment, inconsistent limits).
+
 		if int64(len(data)) > imagepkg.MaxSize {
 			return "", fmt.Errorf("data URL image exceeds %d bytes", imagepkg.MaxSize)
 		}
@@ -1783,9 +1728,7 @@ func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) 
 		return parts[1], nil
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// Local file path
-			// #1557: match the URL branch's size cap (ReadLimited) - the
-			// local path read was unbounded.
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return "", fmt.Errorf("read local image: %w", err)
@@ -1801,7 +1744,7 @@ func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) 
 			}
 			return imagepkg.EncodeBase64(decoded), nil
 		}
-		// HTTP(S) URL
+
 		data, mimeType, err := a.downloadImageURL(ctx, img.Data)
 		if err != nil {
 			return "", err

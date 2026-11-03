@@ -37,9 +37,6 @@ func (m *Manager) RegisterAdapterCancel(adapterName string, cancel context.Cance
 func (m *Manager) stopAdapter(adapterName string) {
 	debug.Log("im", "stopAdapter: name=%s", adapterName)
 
-	// 1. Cancel the adapter's context FIRST so the run loop exits and
-	//    won't reconnect. Cancel alone doesn't interrupt a blocking
-	//    ReadMessage, so we also need step 2.
 	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
 		debug.Log("im", "stopAdapter: cancelling context for %s", adapterName)
 		cancel()
@@ -47,7 +44,7 @@ func (m *Manager) stopAdapter(adapterName string) {
 	} else {
 		debug.Log("im", "stopAdapter: no cancel func for %s", adapterName)
 	}
-	// 2. Physically close the connection to unblock any in-flight reads.
+
 	if sink, ok := m.sinks[adapterName]; ok {
 		if closer, ok := sink.(Closer); ok {
 			debug.Log("im", "stopAdapter: calling Close() on %s", adapterName)
@@ -61,7 +58,7 @@ func (m *Manager) stopAdapter(adapterName string) {
 		debug.Log("im", "stopAdapter: no sink registered for %s", adapterName)
 	}
 	delete(m.sinks, adapterName)
-	// 3. Mark adapter state as disconnected so the UI reflects the real state.
+
 	if state, ok := m.adapters[adapterName]; ok {
 		state.Healthy = false
 		state.Status = "disconnected"
@@ -107,23 +104,12 @@ func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData s
 
 func (m *Manager) PublishAdapterState(state AdapterState) {
 	m.mu.Lock()
-	// Ignore state updates from muted adapters — the adapter goroutine may
-	// still publish one final error during shutdown; we don't want it
-	// overwriting the "disconnected" state set by stopAdapter.
+
 	if b, ok := m.currentBindings[state.Name]; ok && b.Muted {
 		m.mu.Unlock()
 		return
 	}
-	// Terminal state guard: once an adapter is explicitly marked as disconnected
-	// (by stopAdapter), don't allow late error states to overwrite it. This prevents
-	// stale error messages from appearing in the UI after clean shutdown.
-	// Pattern from whatsapp_adapter L330.
-	// #1558: but a CONNECTED report is the legitimate restart signal - mute→
-	// unmute re-runs StartNamedAdapter, the adapter reconnects and publishes
-	// "connected", and the guard swallowed every one of them: the snapshot/UI/
-	// health check stayed "disconnected" until process restart even though the
-	// adapter was actively sending and receiving. Only LATE ERROR frames are
-	// suppressed; connected always wins.
+
 	if existing, ok := m.adapters[state.Name]; ok && existing.Status == "disconnected" && state.Status != "connected" {
 		m.mu.Unlock()
 		debug.Log("im", "PublishAdapterState: ignoring late state update for %s (already disconnected)", state.Name)

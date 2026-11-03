@@ -17,8 +17,7 @@ import (
 func fakeBin(t *testing.T, dir, name, outText string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	// -of handling mirrors whisper.cpp: the next argument after -of is the
-	// output path prefix and -otxt appends .txt.
+
 	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + argvLog(dir, name) + "; done\n" +
 		"prefix=\"\"\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n" +
 		"  case \"$prev\" in\n" +
@@ -90,8 +89,7 @@ func forceAvailable(t *testing.T, w *LocalWhisper) {
 	w.available = true
 	w.flavor = flavorFromBin(w.binPath)
 	if w.flavor == flavorCPP && w.cppModel == "" {
-		// Keep an explicitly configured model path; otherwise fall back to
-		// any placeholder so argv construction can proceed.
+
 		if w.model != "" {
 			w.cppModel = w.model
 		} else {
@@ -120,8 +118,6 @@ func TestTranscribeOpenAIWhisperUsesLongOptions(t *testing.T) {
 	}
 	argv := readArgv(t, argvLog(dir, "whisper"))
 
-	// First arg must be the positional audio path, followed by openai-whisper
-	// long options --model/--output_dir/--output_format/--verbose (issue #969).
 	if len(argv) < 8 {
 		t.Fatalf("unexpected argv shape: %v", argv)
 	}
@@ -175,14 +171,12 @@ func TestTranscribeWhisperCPPUsesShortOptions(t *testing.T) {
 	argv := readArgv(t, argvLog(dir, "whisper-cpp"))
 	joined := strings.Join(argv, " ")
 
-	// whisper.cpp short-option interface: -m <model> -f <audio> -otxt -of <prefix>.
 	for _, want := range []string{"-m " + model, "-f " + audio, "-otxt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("whisper.cpp argv missing %q: %v", want, argv)
 		}
 	}
-	// -of must set an output path prefix ending with the audio base name
-	// (the .txt extension is appended by -otxt).
+
 	foundOf := false
 	for i, a := range argv {
 		if a == "-of" && i+1 < len(argv) {
@@ -195,11 +189,11 @@ func TestTranscribeWhisperCPPUsesShortOptions(t *testing.T) {
 	if !foundOf {
 		t.Errorf("whisper.cpp argv missing -of <prefix>: %v", argv)
 	}
-	// Language goes through -l, never --language.
+
 	if !strings.Contains(joined, "-l en") || strings.Contains(joined, "--language") {
 		t.Errorf("whisper.cpp language flag wrong: %v", argv)
 	}
-	// No openai-whisper long options may leak into the whisper.cpp call.
+
 	for _, bad := range []string{"--model", "--output_dir", "--output_format", "--verbose"} {
 		if strings.Contains(joined, bad) {
 			t.Errorf("whisper.cpp argv must not contain %q: %v", bad, argv)
@@ -236,13 +230,11 @@ func TestResolveCPPModelExplicitAndFallback(t *testing.T) {
 		t.Fatalf("write model: %v", err)
 	}
 
-	// Explicit model wins.
 	w := NewLocalWhisper("", model, "")
 	if p, err := w.resolveCPPModel(); err != nil || p != model {
 		t.Fatalf("explicit model: got %q, %v", p, err)
 	}
 
-	// Missing explicit model produces an actionable error, not a generic one.
 	t.Setenv("GGCODE_WHISPER_CPP_MODEL", "")
 	w2 := NewLocalWhisper("", filepath.Join(dir, "ggml-missing.bin"), "")
 	_, err := w2.resolveCPPModel()
@@ -274,8 +266,7 @@ func TestResolveCPPModelAutoDetectsDownloadedModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auto-detect: %v", err)
 	}
-	// Deterministic pick: lexicographically-first ggml-*.bin in the first
-	// matching search dir.
+
 	if p != small {
 		t.Errorf("auto-detect should pick lexicographically-first model, got %q want %q", p, small)
 	}
@@ -291,9 +282,7 @@ func swapCPPModelSearchDirs(t *testing.T, dirs []string) func() {
 }
 
 func TestProbeFlavorCPPWithoutModelMarksUnavailable(t *testing.T) {
-	// No configured model, no env override, empty search dirs: resolution
-	// must fail with an error that explains the ggml model requirement
-	// rather than "binary not found".
+
 	t.Setenv("GGCODE_WHISPER_CPP_MODEL", "")
 	restore := swapCPPModelSearchDirs(t, []string{t.TempDir()})
 	defer restore()
@@ -313,7 +302,7 @@ func TestProbeFlavorCPPWithoutModelMarksUnavailable(t *testing.T) {
 	if !strings.Contains(err.Error(), "whisper.cpp") {
 		t.Errorf("error should mention whisper.cpp, got: %v", err)
 	}
-	// The stored reason must survive into the cached unavailable state.
+
 	if !strings.Contains(w.unavailableReason, "ggml") {
 		t.Errorf("unavailableReason should keep the concrete cause, got: %q", w.unavailableReason)
 	}
@@ -331,8 +320,7 @@ func TestProbeFlavorOpenAINeedsNoModel(t *testing.T) {
 }
 
 func TestEnsureAvailableCachedErrorIsActionable(t *testing.T) {
-	// The cached-unavailable path must replay the stored concrete reason,
-	// not the old misleading "binary not found at %q" with an empty path.
+
 	w := NewLocalWhisper("", "", "")
 	w.mu.Lock()
 	w.checked = true

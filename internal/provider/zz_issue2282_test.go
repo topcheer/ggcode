@@ -30,7 +30,7 @@ func TestIssue2282GeminiFallbackChain(t *testing.T) {
 	if got := g.effectiveMaxTokens(); got != 0 {
 		t.Errorf("no override/cap/config: zero must hold, got %d", got)
 	}
-	// and the config leg must stay silent on zero (no fake cap)
+
 	cfg := &genai.GenerateContentConfig{}
 	g.applySamplingConfig(cfg)
 	if cfg.MaxOutputTokens != 0 {

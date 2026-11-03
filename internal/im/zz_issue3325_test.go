@@ -1,12 +1,5 @@
 package im
 
-// #3325 batch-3 probes: signal + mattermost arbitrary-file delivery over
-// httptest; feishu/wecom/whatsapp are pinned by the compile-time interface
-// assertions plus guard/limit probes (feishu's resolveAPIBase has no test
-// injection point - same precedent as matrix in batch 2; wecom's chunked
-// upload needs a live websocket; whatsapp's upload needs the whatsmeow
-// media stack).
-
 import (
 	"context"
 	"encoding/base64"
@@ -88,7 +81,7 @@ func TestIssue3325_SignalSendFileGroupRecipient(t *testing.T) {
 	if len(recipients) != 1 {
 		t.Fatalf("recipients missing: %v", gotBody["recipients"])
 	}
-	// applySignalRecipient double-base64-encodes group IDs ("group." prefix)
+
 	r, _ := recipients[0].(string)
 	if !strings.HasPrefix(r, "group.") {
 		t.Fatalf("group recipient not double-encoded: %q", r)
@@ -161,8 +154,7 @@ func TestIssue3325_MattermostExtensionlessFilename(t *testing.T) {
 
 	a := &mattermostAdapter{name: "mm", baseURL: srv.URL, token: "TOK", conn: srv.Client()}
 	binding := ChannelBinding{Adapter: "mm", ChannelID: "c"}
-	// Extensionless name: the extension Mattermost keys previews on must be
-	// derived from the MIME type.
+
 	file := OutboundFile{Filename: "screenshot", MIME: "image/png", Data: []byte("PNG")}
 	if err := a.SendFile(context.Background(), binding, file, ""); err != nil {
 		t.Fatalf("SendFile failed: %v", err)
@@ -176,7 +168,6 @@ func TestIssue3325_SendFileGuards(t *testing.T) {
 	ctx := context.Background()
 	file := OutboundFile{Filename: "f.bin", MIME: "application/octet-stream", Data: []byte("DATA")}
 
-	// Empty binding → ErrNoChannelBound on all five adapters.
 	cases := []struct {
 		name string
 		call func() error
@@ -199,15 +190,11 @@ func TestIssue3325_SendFileGuards(t *testing.T) {
 			t.Errorf("%s: empty binding must return ErrNoChannelBound, got %v", tc.name, err)
 		}
 	}
-	// whatsapp checks connection BEFORE the binding (same order as its
-	// Send), so an empty binding on a disconnected adapter reports the
-	// connection error - an explicit failure either way.
+
 	if err := (&whatsappAdapter{name: "wa"}).SendFile(ctx, ChannelBinding{Adapter: "wa"}, file, ""); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Errorf("whatsapp: empty binding on disconnected adapter must fail explicitly, got %v", err)
 	}
 
-	// Bound channel but not connected → explicit connection error, not a
-	// silent nil deref or false success.
 	bound := ChannelBinding{Adapter: "fs", ChannelID: "oc_chat"}
 	if err := (&feishuAdapter{name: "fs"}).SendFile(ctx, bound, file, ""); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Errorf("feishu disconnected must fail explicitly, got %v", err)
@@ -233,8 +220,7 @@ func TestIssue3332_SignalFilenameSemicolonNeutralized(t *testing.T) {
 
 	a := &signalAdapter{name: "sig", account: "+10000000000", baseURL: srv.URL, conn: srv.Client()}
 	binding := ChannelBinding{Adapter: "sig", ChannelID: "+15550001111"}
-	// #3332 repro: the raw name would make the server-side ';'-split parse
-	// FileName="a" and silently drop ";b.pdf" (extension lost).
+
 	file := OutboundFile{Filename: "a;b.pdf", MIME: "application/pdf", Data: []byte("%PDF")}
 	if err := a.SendFile(context.Background(), binding, file, ""); err != nil {
 		t.Fatalf("SendFile failed: %v", err)
@@ -244,8 +230,7 @@ func TestIssue3332_SignalFilenameSemicolonNeutralized(t *testing.T) {
 		t.Fatalf("base64_attachments missing: %v", gotBody["base64_attachments"])
 	}
 	att, _ := atts[0].(string)
-	// The metadata section before ";base64," must contain exactly one
-	// filename segment ending in the preserved extension.
+
 	head := att[:strings.LastIndex(att, ";base64,")]
 	if !strings.HasSuffix(head, "filename=a_b.pdf") {
 		t.Fatalf("filename must be neutralized with extension kept, got %q", head)
@@ -257,10 +242,7 @@ func TestIssue3332_SignalFilenameSemicolonNeutralized(t *testing.T) {
 
 func TestIssue3325_WecomFileCapDistinctFromImageCap(t *testing.T) {
 	a := &wecomAdapter{name: "wc"}
-	// Between the image cap (10MB) and the file cap (20MB): must pass the
-	// file path's size gate (the probe below asserts the gate reads the
-	// file cap, not the image cap) - a >20MB payload must fail before any
-	// websocket traffic.
+
 	big := make([]byte, wecomMaxFileBytes+1)
 	_, err := a.wecomUploadMediaTyped(context.Background(), big, "big.bin", "file", wecomMaxFileBytes)
 	if err == nil || !strings.Contains(err.Error(), "limit is") {
@@ -269,7 +251,7 @@ func TestIssue3325_WecomFileCapDistinctFromImageCap(t *testing.T) {
 	if strings.Contains(err.Error(), "image") {
 		t.Fatalf("file path must not report the image wording: %v", err)
 	}
-	// Image path keeps its own cap and wording.
+
 	_, err = a.wecomUploadMediaTyped(context.Background(), make([]byte, wecomMaxImageBytes+1), "big.png", "image", wecomMaxImageBytes)
 	if err == nil || !strings.Contains(err.Error(), "image") {
 		t.Fatalf("oversized image must keep the image wording, got %v", err)

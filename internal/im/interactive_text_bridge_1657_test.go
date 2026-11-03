@@ -16,18 +16,18 @@ func Test1657ApprovalIndexFromText(t *testing.T) {
 	if idx, ok := approvalIndexFromText("n 1", 2); !ok || idx != 1 {
 		t.Fatalf(`"n 1" -> (%d,%v), want (1,true)`, idx, ok)
 	}
-	// Bare decision with no index: not extractable.
+
 	if _, ok := approvalIndexFromText("y", 3); ok {
 		t.Fatal(`"y" with 3 pending must NOT carry an index`)
 	}
-	// Out of range / non-integer tokens are not indexes.
+
 	if _, ok := approvalIndexFromText("y 9", 3); ok {
 		t.Fatal(`"y 9" out of range must not match`)
 	}
 	if _, ok := approvalIndexFromText("y 02", 3); ok {
 		t.Fatal(`leading-zero token must not match (strconv round-trip guard)`)
 	}
-	// Single pending: no disambiguation needed.
+
 	if _, ok := approvalIndexFromText("y 1", 1); ok {
 		t.Fatal("n<=1 must never consume an index")
 	}
@@ -41,7 +41,6 @@ func Test1657MultiPendingDisambiguation(t *testing.T) {
 		return InboundMessage{Envelope: Envelope{Adapter: "qq"}, Text: text}
 	}
 
-	// Bare "y", two pending: falls through to Submit, nothing resolved.
 	submitted := ""
 	b := &InteractiveTextBridge{
 		Submit: func(_ context.Context, text, _ string) error {
@@ -61,7 +60,6 @@ func Test1657MultiPendingDisambiguation(t *testing.T) {
 		t.Fatalf("bare y must fall through to Submit, got %q", submitted)
 	}
 
-	// "y 2", two pending: resolves exactly id-2 with allow.
 	resolved := ""
 	b2 := &InteractiveTextBridge{
 		Submit: func(context.Context, string, string) error {
@@ -79,7 +77,6 @@ func Test1657MultiPendingDisambiguation(t *testing.T) {
 		t.Fatalf(`"y 2" must resolve id-2:allow, got %q`, resolved)
 	}
 
-	// Single pending: bare "y" stays one-tap (resolves directly).
 	resolved = ""
 	b3 := &InteractiveTextBridge{
 		Submit:           func(context.Context, string, string) error { return nil },

@@ -15,18 +15,6 @@ import (
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
-// WeCom AI Bot media support (#1017 follow-up parity work).
-//
-// The long-connection protocol sends images as msgtype=image frames carrying
-// a media_id from the chunked temporary-media upload:
-//   aibot_upload_media_init   → upload_id
-//   aibot_upload_media_chunk  (base64 chunks, idempotent, order-free)
-//   aibot_upload_media_finish → media_id (valid 3 days)
-// Then: aibot_send_msg {msgtype: "image", image: {media_id}}.
-//
-// Official limits: image <=10MB, png/jpg/jpeg/gif; <=100 chunks; upload
-// session valid 30min; 30 uploads/min per bot.
-
 const (
 	wecomCmdUploadInit   = "aibot_upload_media_init"
 	wecomCmdUploadChunk  = "aibot_upload_media_chunk"
@@ -93,7 +81,6 @@ func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, f
 	sum := md5.Sum(data)
 	totalChunks := (len(data) + wecomChunkBytes - 1) / wecomChunkBytes
 
-	// Step 1: init
 	initFrame := map[string]any{
 		"cmd":     wecomCmdUploadInit,
 		"headers": map[string]any{"req_id": newWeComReqID("upload-init")},
@@ -115,7 +102,6 @@ func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, f
 		return "", fmt.Errorf("WeCom upload init: no upload_id in ack")
 	}
 
-	// Step 2: chunks (base64, sequential for simplicity; server accepts any order)
 	for i := 0; i < totalChunks; i++ {
 		end := (i + 1) * wecomChunkBytes
 		if end > len(data) {
@@ -155,7 +141,6 @@ func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, f
 		}
 	}
 
-	// Step 3: finish → media_id
 	finFrame := map[string]any{
 		"cmd":     wecomCmdUploadFinish,
 		"headers": map[string]any{"req_id": newWeComReqID("upload-finish")},
@@ -234,7 +219,7 @@ func (a *wecomAdapter) wecomResolveImageBytes(ctx context.Context, img Extracted
 
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return nil, "", fmt.Errorf("read local image: %w", err)

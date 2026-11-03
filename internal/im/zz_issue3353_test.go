@@ -1,10 +1,5 @@
 package im
 
-// #3353 probes: the batch-2 discord/slack SendFile guards must read
-// `connected` under the adapter lock. The churn loop toggles the field the
-// way the gateway goroutines do (locked writes) while SendFile runs - the
-// pre-fix bare reads trip the race detector.
-
 import (
 	"context"
 	"net/http"
@@ -26,7 +21,7 @@ func TestIssue3353_SendFileConnectedReadUnderLock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { // gateway-style locked toggling (discord)
+	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
 			discord.mu.Lock()
@@ -37,7 +32,7 @@ func TestIssue3353_SendFileConnectedReadUnderLock(t *testing.T) {
 		discord.connected = true
 		discord.mu.Unlock()
 	}()
-	go func() { // gateway-style locked toggling (slack)
+	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
 			slack.mu.Lock()
@@ -48,7 +43,7 @@ func TestIssue3353_SendFileConnectedReadUnderLock(t *testing.T) {
 		slack.connected = true
 		slack.mu.Unlock()
 	}()
-	go func() { // SendFile paths racing the writers
+	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
 			_ = discord.SendFile(context.Background(), binding, file, "")
@@ -56,8 +51,7 @@ func TestIssue3353_SendFileConnectedReadUnderLock(t *testing.T) {
 		}
 	}()
 	wg.Wait()
-	// Final state connected=true: both paths must deliver cleanly (guards
-	// pass, request succeeds) - pins the success path beyond the race check.
+
 	if err := discord.SendFile(context.Background(), binding, file, ""); err != nil {
 		t.Fatalf("discord SendFile final send failed: %v", err)
 	}

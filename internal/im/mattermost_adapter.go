@@ -90,7 +90,6 @@ func newMattermostAdapter(name string, _ config.IMConfig, adapterCfg config.IMAd
 		return nil, fmt.Errorf("Mattermost token is required for adapter %q (set 'token' in extra or MATTERMOST_TOKEN env)", name)
 	}
 
-	// Mention policy
 	requireMention := true
 	if v := strings.ToLower(stringValue(adapterCfg.Extra, "require_mention")); v == "false" || v == "0" || v == "no" {
 		requireMention = false
@@ -141,8 +140,7 @@ func (a *mattermostAdapter) Close() error {
 	ws := a.ws
 	a.ws = nil
 	a.mu.Unlock()
-	// Close outside the lock to avoid potential deadlock if ws.Close()
-	// triggers internal callbacks that try to acquire a.mu.RLock().
+
 	if ws != nil {
 		ws.Close()
 	}
@@ -162,14 +160,7 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 			a.publishState(false, "error", err.Error())
 			debug.Log("mattermost", "adapter=%s error: %v", a.name, err)
 		}
-		// #3565: the old `if err == nil { attempt = 0 }` reset was dead code
-		// - the ONLY nil return of connectAndServe is the serve-loop's
-		// ctx.Done, and the run loop exits on the same ctx immediately
-		// after, so the reset never mattered. What actually needs the reset
-		// is a session that served HEALTHILY for a while and then dropped:
-		// that drop is a fresh transient (same family as matrix #432 /
-		// discord #389 / irc #3562). Short sessions keep the accumulated
-		// ladder so rapid-fail loops still back off.
+
 		if !a.healthyAt.IsZero() && time.Since(a.healthyAt) >= mattermostHealthySession {
 			attempt = 0
 		}
@@ -192,7 +183,7 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 }
 
 func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
-	// 1. Authenticate via REST to get bot identity
+
 	me, err := a.apiGet("users/me")
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
@@ -203,10 +194,8 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	a.mu.Unlock()
 	debug.Log("mattermost", "adapter=%s authenticated as @%s (%s)", a.name, a.botUsername, a.botUserID)
 
-	// Fetch first team for ContactURI deep link
 	a.fetchTeamInfo(ctx)
 
-	// 2. Connect WebSocket
 	wsURL := strings.Replace(a.baseURL, "http", "ws", 1) + "/" + mattermostAPIVersion + "/websocket"
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dialCancel()
@@ -215,7 +204,6 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("ws dial: %w", err)
 	}
 
-	// 3. Authenticate WebSocket
 	authMsg := map[string]any{
 		"seq":    1,
 		"action": "authentication_challenge",
@@ -226,9 +214,6 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("ws auth: %w", err)
 	}
 
-	// Set read deadline to detect dead connections. The heartbeat goroutine
-	// sends application-level pings every 30s; if no message (including pong)
-	// arrives within 60s, ReadMessage times out and triggers reconnect.
 	ws.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
 	ws.SetPongHandler(func(string) error {
 		ws.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
@@ -240,12 +225,9 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	a.connected = true
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
-	a.healthyAt = time.Now() // #3565: healthy connection established
+	a.healthyAt = time.Now()
 	debug.Log("mattermost", "adapter=%s connected to %s", a.name, wsURL)
 
-	// 3.5 Heartbeat goroutine: send application-level ping to keep connection alive.
-	// Mattermost server closes idle WebSocket connections; sending periodic pings
-	// prevents silent TCP drops (NAT expiry, intermediate router timeouts).
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
 	defer heartbeatCancel()
 	safego.Go("im.mattermost.heartbeat", func() {
@@ -287,7 +269,6 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
-	// 4. Read loop
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -302,10 +283,7 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("ws read: %w", err)
 		}
-		// Renew the read deadline on every successful read. The heartbeat reply
-		// is an application-level JSON text frame (not a WS pong), so the
-		// PongHandler never fires — without this the absolute deadline set at
-		// connect time expires ~60s in and forces a reconnect loop (#963).
+
 		wsConn.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
 		var event map[string]any
 		if err := json.Unmarshal(msgBytes, &event); err != nil {
@@ -336,14 +314,11 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		return
 	}
 
-	// Ignore own messages
 	userID, _ := post["user_id"].(string)
 	if userID == a.botUserID {
 		return
 	}
 
-	// Ignore system posts (join/leave, channel created, etc.)
-	// System posts have non-empty "type" field (e.g. "system_join_channel", "system_leave_channel")
 	if postType, _ := post["type"].(string); postType != "" {
 		return
 	}
@@ -353,11 +328,6 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		return
 	}
 
-	// Dedup check (read-only). #4465: the seen write is deferred until every
-	// filter (allowed-users, mention gating, empty text) has passed; writing
-	// it here would only burn dedup capacity on messages that get filtered
-	// again on replay, and a >1k/5min filtered burst could evict live
-	// postIDs from the window (duplicate agent replies on WS replay).
 	a.mu.Lock()
 	if _, seen := a.seen[postID]; seen {
 		a.mu.Unlock()
@@ -371,23 +341,19 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	senderName, _ := data["sender_name"].(string)
 	senderName = strings.TrimPrefix(senderName, "@")
 
-	// Determine if DM
 	isDM := channelTypeRaw == "D"
 
-	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, userID) {
 		debug.Log("mattermost", "adapter=%s user %s not in allowed list", a.name, userID)
 		return
 	}
 
-	// Mention gating for non-DM channels
 	if !isDM {
 		isFree := entryMatches(a.freeChannels, channelID)
 		if !isFree && a.requireMention {
 			hasMention := a.hasMention(messageText)
 			if !hasMention {
-				// #4322: previously this drop was silent, making trailing "-"/"."
-				// usernames undiagnosable; keep a debug trace for the rest.
+
 				debug.Log("mattermost", "adapter=%s channel %s message without mention dropped", a.name, channelID)
 				return
 			}
@@ -399,8 +365,6 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		return
 	}
 
-	// #4465: all filters passed - mark seen now (re-checked under the lock so
-	// two concurrent replays of the same post cannot both proceed).
 	a.mu.Lock()
 	if _, seen := a.seen[postID]; seen {
 		a.mu.Unlock()
@@ -414,8 +378,7 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 				delete(a.seen, k)
 			}
 		}
-		// Burst within the 5-minute window can still leave the map oversized;
-		// evict oldest entries until back under the cap (#963).
+
 		for len(a.seen) > mattermostDedupMaxSize {
 			oldestKey := ""
 			var oldestTime time.Time
@@ -429,10 +392,8 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	}
 	a.mu.Unlock()
 
-	// Thread support
 	threadID, _ := post["root_id"].(string)
 
-	// Extract file IDs as attachment metadata
 	fileIDs, _ := post["file_ids"].([]any)
 	var attachments []Attachment
 	for _, fid := range fileIDs {
@@ -440,7 +401,7 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		if idStr != "" {
 			attachments = append(attachments, Attachment{
 				Kind: AttachmentFile,
-				Name: idStr, // Will be resolved to URL by downstream if needed
+				Name: idStr,
 				URL:  fmt.Sprintf("%s/%s/files/%s", a.baseURL, mattermostAPIVersion, idStr),
 			})
 		}
@@ -461,7 +422,6 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		Attachments: attachments,
 	}
 
-	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("mattermost", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
@@ -529,7 +489,7 @@ func stripMattermostHandle(text, handle string) string {
 		if n, ok := matrixASCIIFoldPrefix(text[i:], needle); ok {
 			end := i + n
 			if end >= len(text) || !mattermostIsUsernameContByte(text[end]) {
-				i = end // skip the mention
+				i = end
 				continue
 			}
 		}
@@ -541,8 +501,7 @@ func stripMattermostHandle(text, handle string) string {
 
 func (a *mattermostAdapter) hasMention(text string) bool {
 	lower := strings.ToLower(text)
-	// Username-boundary match: bot name "al" must not fire on "@alex"
-	// (#963), while trailing "-"/"." usernames still match (#4322).
+
 	for _, id := range []string{a.botUsername, a.botUserID} {
 		if id == "" {
 			continue
@@ -555,9 +514,7 @@ func (a *mattermostAdapter) hasMention(text string) bool {
 }
 
 func (a *mattermostAdapter) stripMention(text string) string {
-	// Strip @bot_username and @bot_user_id mentions, with a username
-	// boundary so a short bot name ("al") doesn't carve text out of
-	// "@alex" (#963) while non-word endings "\b" missed still strip (#4322).
+
 	for _, handle := range []string{a.botUsername, a.botUserID} {
 		if handle == "" {
 			continue
@@ -566,8 +523,6 @@ func (a *mattermostAdapter) stripMention(text string) string {
 	}
 	return strings.TrimSpace(text)
 }
-
-// --- Outbound ---
 
 func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
@@ -579,7 +534,6 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 		return nil
 	}
 
-	// Extract images from markdown text and upload them as file attachments.
 	images, remainingText := ExtractImagesFromText(text)
 	var fileIDs []string
 	for i, img := range images {
@@ -595,7 +549,7 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 		}
 		fileIDs = append(fileIDs, fileID)
 		debug.Log("mattermost", "adapter=%s image uploaded [%d/%d] mime=%s size=%d file_id=%s", a.name, i+1, len(images), mimeType, len(data), fileID)
-		// Rate limit between uploads
+
 		if i < len(images)-1 {
 			select {
 			case <-time.After(mattermostInterMsgDelay):
@@ -607,9 +561,7 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 
 	if remainingText == "" && len(fileIDs) == 0 {
 		if len(images) > 0 {
-			// #4464: every image failed to resolve/upload and nothing
-			// readable remains - fall back to the original markdown text
-			// instead of silently dropping the message.
+
 			remainingText = text
 		} else {
 			return nil
@@ -632,10 +584,9 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 		return nil
 	}
 
-	// Split using markdown-aware logic so code blocks aren't broken across chunks.
 	chunks := SplitMarkdown(text, mattermostDefaultMaxPostLen)
 	if len(chunks) == 0 && len(fileIDs) > 0 {
-		// No text but we have files — send a post with just file attachments
+
 		chunks = []string{""}
 	}
 	for i, chunk := range chunks {
@@ -643,14 +594,11 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 			"channel_id": channelID,
 			"message":    chunk,
 		}
-		// Only thread the first chunk; subsequent chunks are replies in the same thread
+
 		if rootID != "" && a.replyMode == "thread" {
 			payload["root_id"] = rootID
 		}
-		// Attach file_ids to the first chunk only. This MUST happen BEFORE
-		// apiPostCtx serializes and sends the payload — writing it after the
-		// call only mutates the local map, leaving the files uploaded but never
-		// attached to any post (orphaned on the server) (#963).
+
 		if i == 0 && len(fileIDs) > 0 {
 			payload["file_ids"] = fileIDs
 		}
@@ -658,14 +606,13 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 		if err != nil {
 			return fmt.Errorf("Mattermost send chunk %d/%d: %w", i+1, len(chunks), err)
 		}
-		// If this is the first chunk in a thread and we have no rootID yet,
-		// use the new post's ID as root for subsequent chunks.
+
 		if rootID == "" && len(chunks) > 1 && i == 0 {
 			if newID, ok := result["id"].(string); ok && newID != "" {
 				rootID = newID
 			}
 		}
-		// Small inter-message delay for multi-chunk sends to avoid rate limiting.
+
 		if i < len(chunks)-1 {
 			select {
 			case <-time.After(mattermostInterMsgDelay):
@@ -730,8 +677,6 @@ func (a *mattermostAdapter) triggerNativeTyping(channelID string) error {
 	return ws.WriteJSON(typingMsg)
 }
 
-// --- REST API helpers ---
-
 func (a *mattermostAdapter) apiURL(path string) string {
 	return a.baseURL + "/" + mattermostAPIVersion + "/" + strings.TrimPrefix(path, "/")
 }
@@ -786,7 +731,6 @@ func (a *mattermostAdapter) apiPostCtx(ctx context.Context, path string, payload
 			return nil, fmt.Errorf("POST %s: %w", path, err)
 		}
 
-		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			if attempt < maxRateLimitRetries {
@@ -885,12 +829,9 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 		return data, decoded.MIME, nil
 
 	case "url":
-		// #1016: ExtractImagesFromText emits local paths as Kind "url"; route
-		// them to local read instead of an HTTP request that would fail with
-		// "unsupported protocol scheme" (the old case "local" below was dead -
-		// no extractor ever emitted Kind "local").
+
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return nil, "", fmt.Errorf("read local image: %w", err)
@@ -940,7 +881,7 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 // uploadFile uploads a file to Mattermost via multipart form POST and returns the file ID.
 // API: POST /api/v4/files?channel_id=<channel_id>
 func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, data []byte, mimeType string) (string, error) {
-	// Determine file extension from MIME type
+
 	ext := ".png"
 	switch mimeType {
 	case "image/jpeg", "image/jpg":
@@ -954,7 +895,6 @@ func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, da
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	// Create a form file field with proper MIME header
 	h := textproto.MIMEHeader{}
 	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="files"; filename="image%s"`, ext))
 	h.Set("Content-Type", mimeType)
@@ -1002,8 +942,6 @@ func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, da
 	}
 	return fileID, nil
 }
-
-// --- Helpers ---
 
 func parseCommaList(values ...string) []string {
 	for _, v := range values {

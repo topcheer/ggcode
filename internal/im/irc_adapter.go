@@ -37,10 +37,6 @@ const (
 	ircInterMessageDelay = 300 * time.Millisecond
 )
 
-// ---------------------------------------------------------------------------
-// Adapter struct
-// ---------------------------------------------------------------------------
-
 type ircAdapter struct {
 	name    string
 	manager *Manager
@@ -154,18 +150,12 @@ func (a *ircAdapter) Close() error {
 	a.connected = false
 	a.mu.Unlock()
 
-	// Send QUIT and close OUTSIDE the lock to avoid self-deadlock:
-	// sendRaw acquires a.mu.RLock(), which deadlocks if we hold a.mu.Lock().
 	if conn != nil {
 		a.sendRaw("QUIT :ggcode shutting down")
 		conn.Close()
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Main run loop
-// ---------------------------------------------------------------------------
 
 // ircBackoffAfterDisconnect (#3562) decides the next reconnect wait after a
 // disconnect: a session that stayed healthy past ircHealthySession resets
@@ -190,10 +180,7 @@ func (a *ircAdapter) run(ctx context.Context) {
 			a.publishState(false, "error", err.Error())
 			debug.Log("irc", "adapter=%s error: %v", a.name, err)
 		}
-		// #3562: after a HEALTHY connection (stayed up past the healthy
-		// threshold), the next disconnect is a fresh transient - reset the
-		// backoff like matrix #432 / discord #389 instead of resuming the
-		// accumulated 120s wait after hours of stable connectivity.
+
 		if !a.healthySince.IsZero() {
 			backoff = ircBackoffAfterDisconnect(backoff, time.Since(a.healthySince))
 		}
@@ -252,7 +239,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	a.conn = conn
 	a.connected = true
 	a.mu.Unlock()
-	a.healthySince = time.Now() // #3562: healthy connection established
+	a.healthySince = time.Now()
 	a.publishState(true, "connected", "")
 	debug.Log("irc", "adapter=%s connected to %s", a.name, addr)
 
@@ -264,23 +251,18 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
-	// Register
 	if a.password != "" {
 		a.sendRaw(fmt.Sprintf("PASS %s", a.password))
 	}
 	a.sendRaw(fmt.Sprintf("NICK %s", a.nick))
 	a.sendRaw(fmt.Sprintf("USER %s 0 * :%s", a.nick, a.realName))
 
-	// Read loop
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
 
 	var lastPongNs atomic.Int64
 	lastPongNs.Store(time.Now().UnixNano())
 
-	// Keepalive: send periodic PING and detect dead connections.
-	// scanner.Scan() blocks indefinitely when the server goes silent,
-	// so the timeout must run in a separate goroutine.
 	keepAliveDone := make(chan struct{})
 	safego.Go("im.irc.keepalive", func() {
 		ticker := time.NewTicker(ircPingInterval)
@@ -321,13 +303,13 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 			lastPongNs.Store(time.Now().UnixNano())
 		case "PONG":
 			lastPongNs.Store(time.Now().UnixNano())
-		case "001": // RPL_WELCOME
+		case "001":
 			debug.Log("irc", "adapter=%s registered as %s", a.name, a.nick)
-			// NickServ identify
+
 			if a.nickPass != "" {
 				a.sendRaw(fmt.Sprintf("PRIVMSG NickServ :IDENTIFY %s", a.nickPass))
 			}
-			// Join channels
+
 			for _, ch := range a.channels {
 				ch = strings.TrimSpace(ch)
 				if ch != "" {
@@ -335,7 +317,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 					debug.Log("irc", "adapter=%s joining %s", a.name, ch)
 				}
 			}
-		case "433": // NICK in use
+		case "433":
 			newNick := a.nick + "_"
 			debug.Log("irc", "adapter=%s nick in use, trying %s", a.name, newNick)
 			a.mu.Lock()
@@ -348,17 +330,11 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 
 	}
 
-	// Connection closed (by keepalive goroutine on timeout, or by server)
-
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// IRC message parsing
-// ---------------------------------------------------------------------------
 
 type ircMessage struct {
 	Prefix   string
@@ -430,7 +406,7 @@ func parseIRCLine(line string) *ircMessage {
 }
 
 func parseIRCPrefix(prefix string) (nick, user, host string) {
-	// nick!user@host or server.name
+
 	bangIdx := strings.Index(prefix, "!")
 	if bangIdx < 0 {
 		return prefix, "", ""
@@ -444,23 +420,17 @@ func parseIRCPrefix(prefix string) (nick, user, host string) {
 	return nick, rest[:atIdx], rest[atIdx+1:]
 }
 
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
-
 func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 	senderNick, _, _ := parseIRCPrefix(msg.Prefix)
 	if senderNick == "" {
 		return
 	}
 
-	// Ignore messages from IRC services
 	switch senderNick {
 	case "NickServ", "ChanServ", "MemoServ", "OperServ", "HostServ", "BotServ", "InfoServ", "StatServ", "ALIS":
 		return
 	}
 
-	// Target is first param (channel or our nick for DM)
 	if len(msg.Params) == 0 {
 		return
 	}
@@ -471,15 +441,13 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 		return
 	}
 
-	// Determine if it's a channel or DM
 	channelID := target
 	isDM := !strings.HasPrefix(target, "#") && !strings.HasPrefix(target, "&")
 	if isDM {
-		// DM - target is our nick, sender is the user
+
 		channelID = senderNick
 	}
 
-	// Ignore messages from ourselves (IRC nicks are case-insensitive, RFC 2812)
 	a.mu.RLock()
 	currentNick := a.nick
 	a.mu.RUnlock()
@@ -487,11 +455,8 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 		return
 	}
 
-	// Mention gating for channels (not DMs).
-	// IRC nick comparison is case-insensitive per RFC 2812 casemapping,
-	// so mention matching and self-echo filtering must be too (issue #960).
 	if !isDM {
-		// Check if we were mentioned
+
 		if !ircTextContainsNick(text, currentNick) {
 			return
 		}
@@ -515,7 +480,6 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 		Text: strings.TrimSpace(text),
 	}
 
-	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(ircMsg)
 		debug.Log("irc", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
@@ -536,10 +500,6 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Outbound
-// ---------------------------------------------------------------------------
-
 func (a *ircAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	target := binding.ChannelID
 	if target == "" {
@@ -553,9 +513,7 @@ func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) er
 	if text == "" || target == "" {
 		return nil
 	}
-	// Split by newlines first - each line is a separate PRIVMSG.
-	// The delay applies between ALL messages (not just chunks within a line),
-	// so a multi-line message doesn't burst all lines at once.
+
 	sent := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -587,10 +545,7 @@ func (a *ircAdapter) sendRaw(line string) error {
 	if c == nil {
 		return fmt.Errorf("not connected")
 	}
-	// Serialize writes across the three concurrent writer goroutines
-	// (read loop PONG/NICK/JOIN, keepalive PING, SendMessage PRIVMSG).
-	// RLock does not serialize; without this mutex two writers can interleave
-	// partial writes into malformed IRC lines (issue #960).
+
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
@@ -598,14 +553,7 @@ func (a *ircAdapter) sendRaw(line string) error {
 }
 
 func splitIRCMessage(text string, maxLen int) []string {
-	// #1552-A: the IRC line limit is 512 BYTES (RFC 2812 2.3.1, minus the
-	// nick!user@host prefix and CRLF - ircMaxMessageLen=400 usable), not
-	// 400 runes: 400 CJK runes are 1200 bytes and the server truncated or
-	// rejected the line, possibly mid-rune. Route through the byte splitter
-	// (rune-boundary safe) instead of the rune counter.
-	// #1660 case 1: trim=false restores the old rune-based splitter's
-	// contract - leading/trailing whitespace (code-block indentation) must
-	// survive; trimming was only ever intended for the WeCom family.
+
 	return splitMessageBytes(text, maxLen, false)
 }
 
@@ -636,8 +584,7 @@ func ircRemoveNick(text, nick string) string {
 	}
 	var b strings.Builder
 	for _, field := range strings.Fields(text) {
-		// Punctuation commonly attached to a mention ("bot:" / "bot,") is
-		// trimmed for the comparison so the whole token is dropped cleanly.
+
 		core := strings.Trim(field, ".,:;!?<>\"'()[]")
 		if strings.EqualFold(core, nick) {
 			continue
@@ -654,10 +601,6 @@ func ircRemoveNick(text, nick string) string {
 func (a *ircAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func (a *ircAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {

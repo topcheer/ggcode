@@ -1,11 +1,5 @@
 package im
 
-// #3326 probes: the echo-path counter must resolve and record under the
-// manager lock. Regression 1 pins the locked lookup-by-message behavior
-// (single + first-match semantics); regression 2 runs the echo against a
-// concurrent locked deleter under -race - the old bare map range would
-// trip the race detector.
-
 import (
 	"context"
 	"sync"
@@ -42,13 +36,13 @@ func TestIssue3326_EchoRecordRacesWatcherDelete(t *testing.T) {
 	var wg sync.WaitGroup
 	const rounds = 50
 	wg.Add(2)
-	go func() { // echo path: recordEcho via sendReplyText success
+	go func() {
 		defer wg.Done()
 		for i := 0; i < rounds; i++ {
 			_ = adapter.sendReplyText(context.Background(), "group-1", "msg-7", "echo")
 		}
 	}()
-	go func() { // watcher-style locked delete + re-add churn
+	go func() {
 		defer wg.Done()
 		for i := 0; i < rounds; i++ {
 			m.mu.Lock()

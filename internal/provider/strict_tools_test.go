@@ -44,7 +44,7 @@ func TestInjectAdditionalPropertiesFalse(t *testing.T) {
 	if defs["extra"].(map[string]any)["additionalProperties"] != false {
 		t.Errorf("$defs additionalProperties not injected")
 	}
-	// required/properties payload preserved
+
 	if _, ok := props["path"]; !ok {
 		t.Errorf("properties lost during injection")
 	}
@@ -72,7 +72,7 @@ func TestInjectAdditionalPropertiesFalseInvalidPassthrough(t *testing.T) {
 }
 
 func TestPrepareStrictToolSchema(t *testing.T) {
-	// All top-level properties required: strict-compatible.
+
 	okSchema := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"description":{"type":"string"}},"required":["path","description"]}`)
 	prepared, ok := PrepareStrictToolSchema("read_file", okSchema)
 	if !ok {
@@ -82,13 +82,11 @@ func TestPrepareStrictToolSchema(t *testing.T) {
 		t.Errorf("injection missing from prepared schema: %s", prepared)
 	}
 
-	// Optional top-level field violates the all-required rule: skip strict.
 	optionalSchema := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"number"}},"required":["path"]}`)
 	if _, ok := PrepareStrictToolSchema("read_file", optionalSchema); ok {
 		t.Errorf("schema with optional top-level field must not be strict-compatible")
 	}
 
-	// Invalid schema: skip strict.
 	if _, ok := PrepareStrictToolSchema("x", json.RawMessage(`not-json`)); ok {
 		t.Errorf("invalid schema must not be strict-compatible")
 	}
@@ -159,7 +157,7 @@ func TestAnthropicStrictToolSerialization(t *testing.T) {
 	if !strings.Contains(s, `"additionalProperties":false`) {
 		t.Errorf("missing input_schema.additionalProperties:false: %s", s)
 	}
-	// Plain (non-strict) union params stay byte-compatible with today.
+
 	plain := anthropic.ToolUnionParamOfTool(anthropic.ToolInputSchemaParam{Type: "object"}, "grep")
 	pb, err := json.Marshal(plain)
 	if err != nil {

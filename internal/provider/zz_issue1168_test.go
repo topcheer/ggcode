@@ -1,14 +1,5 @@
 package provider
 
-// Tests for issue #1168: the anthropic ChatStream message_start branch
-// assigned cacheWriteTokens/cacheReadTokens unconditionally, so a
-// duplicate or out-of-order message_start (retried / resumed stream,
-// zeroed Usage) wiped cache counters already accumulated via
-// message_delta. The #722 fix already guarded inputTokens the same way;
-// this replicates that guard for the cache fields.
-//
-// Probes use real httptest SSE round trips, mirroring zz_issue722 Fold 4.
-
 import (
 	"context"
 	"fmt"

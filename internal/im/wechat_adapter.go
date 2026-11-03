@@ -300,10 +300,7 @@ func (a *WechatAdapter) run(ctx context.Context) {
 				debug.Log("wechat", "adapter=%s error: %v", a.name, err)
 			}
 		} else {
-			// #760: a successful (long-)poll is the healthy path; without
-			// resetting, attempt grows monotonically and every normal cycle
-			// accumulates up to 60s+jitter of artificial delay (~95s total).
-			// Same pattern already fixed in slack/whatsapp adapters.
+
 			attempt = 0
 			continue
 		}
@@ -328,7 +325,6 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 		return fmt.Errorf("no bot_token configured")
 	}
 
-	// Long-poll for messages
 	body := map[string]interface{}{
 		"get_updates_buf": cursor,
 		"base_info": map[string]string{
@@ -365,7 +361,6 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 		return fmt.Errorf("decode getupdates: %w", err)
 	}
 
-	// Check for session expiry or errors
 	if result.ErrCode == -14 {
 		return fmt.Errorf("session expired — bot_token may need re-scan")
 	}
@@ -374,14 +369,12 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 	}
 	debug.Log("wechat", "adapter=%s getupdates OK: msgs=%d cursor_len=%d", a.name, len(result.Msgs), len(result.GetUpdatesBuf))
 
-	// Update cursor
 	if result.GetUpdatesBuf != "" {
 		a.mu.Lock()
 		a.cursor = result.GetUpdatesBuf
 		a.mu.Unlock()
 	}
 
-	// Mark connected
 	a.mu.Lock()
 	if !a.connected {
 		a.connected = true
@@ -389,7 +382,6 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
 
-	// Process messages
 	for _, msg := range result.Msgs {
 		if msg.MessageType != ilinkMsgTypeUser {
 			continue
@@ -403,23 +395,11 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	text := wechatMessageText(msg)
 	debug.Log("wechat", "adapter=%s handleMessage: from=%s to=%s items=%d text=%q context_token=%q", a.name, msg.FromUserID, msg.ToUserID, len(msg.ItemList), text, msg.ContextToken)
 
-	// #973: the cursor is memory-only (at-most-once), so the server may
-	// redeliver the same message after a reconnect; skip duplicates before
-	// they reach pairing/routing (same mutex+TTL pattern as the tg adapter).
 	if a.seenMessageID(msg.MessageID) {
 		debug.Log("wechat", "adapter=%s handleMessage: duplicate message_id=%d, skipping", a.name, msg.MessageID)
 		return
 	}
 
-	// #1251: voice/video messages have no iLink mapping (no upload API, no
-	// STT path) — the text below comes out empty and the old flow logged
-	// "empty text, skipping" while the message was consumed by the seen-dedup.
-	// To the user the bot simply never reacted, and resending hit the same
-	// wall. Reply with an explicit notice instead of dropping silently.
-	// Quality-review correction: the notice must ONLY fire when the message
-	// carries no usable text — mixed items (voice + transcribed/accompanying
-	// text) route the text normally; intercepting them dropped usable content
-	// behind an "unsupported" notice.
 	if strings.TrimSpace(text) == "" {
 		if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
 			notice := "[暂不支持语音消息，请发送文字]"
@@ -445,19 +425,10 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		return
 	}
 
-	// Determine channel ID (group or direct)
 	channelID := msg.FromUserID
 	if msg.GroupID != "" {
 		channelID = msg.GroupID
 	}
-
-	// #973 (pre-auth token poisoning): do NOT persist msg.ContextToken into
-	// the binding here. This update used to run BEFORE the channel check in
-	// HandleInbound, so ANY WeChat user who could message the bot overwrote
-	// the authorized session's context_token — the authorized session's next
-	// reply then carried a stranger's token and was rejected by the server.
-	// The token is now persisted only AFTER authorization passes: on pairing
-	// success (below) or when HandleInbound accepts the inbound.
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -474,8 +445,6 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		},
 	}
 
-	// Pairing flow: first inbound message triggers pairing to obtain ChannelID/TargetID
-	// 1. Try HandlePairingInbound — if consumed, reply with pairing instructions
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
 		a.publishState(false, "warning", err.Error())
@@ -485,7 +454,6 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		return
 	}
 
-	// 2. Normal inbound routing
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
 			a.replyUnauthorized(ctx, channelID, msg)
@@ -496,8 +464,7 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		}
 		return
 	}
-	// #973: authorized inbound (HandleInbound's channel check passed) — now
-	// persist the fresh context_token so Send replies carry a valid token.
+
 	if a.manager != nil && msg.ContextToken != "" {
 		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
 	}
@@ -507,10 +474,7 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 // in the message, or 0 if none (#1251 — these have no inbound mapping).
 func wechatUnsupportedItemKind(msg ilinkMessage) int {
 	for _, item := range msg.ItemList {
-		// #1567-A: image(2)/file(4) previously fell through to the silent
-		// "empty text, skipping" drop - pure image/file inbound messages had
-		// empty text (wechatMessageText joins Type==1 only), so the #1251
-		// notice never fired for them and the bot simply never reacted.
+
 		switch item.Type {
 		case ilinkItemVoice, ilinkItemVideo, ilinkItemImage, ilinkItemFile:
 			return item.Type
@@ -628,16 +592,12 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, c
 		ErrMsg  string `json:"errmsg"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		// If we can't decode the body, don't fail the send — the
-		// HTTP status was 200, so the message was likely accepted.
+
 		debug.Log("wechat", "adapter=%s sendmessage response decode failed: %v", a.name, err)
 		return nil
 	}
 	if result.Ret != 0 || result.ErrCode != 0 {
-		// #1567-C: ret=0 with errcode!=0 is still a server-side rejection
-		// (e.g. rate limit) - the sibling sendSingleChunk checks both; this
-		// path returned nil and every out-of-band reply (pairing guidance,
-		// unauthorized denial, #1251 notices) counted as delivered.
+
 		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
 	}
 	debug.Log("wechat", "adapter=%s sendmessage OK", a.name)
@@ -653,22 +613,12 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	token := a.botToken
 	a.mu.RUnlock()
 
-	// context_token from binding (persisted across restarts via UpdateBindingContextToken).
-	// Per iLink protocol it is required for every sendmessage. Tokens expire after ~24h;
-	// a fresh inbound message is needed to renew it.
 	contextToken := binding.ContextToken
 
 	if token == "" {
 		return fmt.Errorf("wechat adapter %q: no bot_token", a.name)
 	}
 
-	// #973: enforce the token age limit the header comment documented. iLink
-	// context_tokens expire after ~24h; sending with a stale token is a
-	// guaranteed server-side rejection. There is no proactive refresh API —
-	// the only refresh path is a fresh inbound from the authorized channel —
-	// so fail visibly with an actionable message instead. A zero timestamp
-	// (legacy binding persisted before the field existed) is treated as
-	// unknown-age and allowed through; the server remains the source of truth.
 	if contextToken != "" && !binding.ContextTokenUpdatedAt.IsZero() {
 		if age := time.Since(binding.ContextTokenUpdatedAt); age > wechatContextTokenTTL {
 			debug.Log("wechat", "adapter=%s Send: context_token expired (age=%s)", a.name, age.Truncate(time.Minute))
@@ -678,13 +628,8 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 
 	toUserID := binding.ChannelID
 
-	// WeChat iLink API renders plain text only — strip markdown syntax so
-	// users don't see raw **bold**, # headings, or `code` backticks.
 	text := stripMarkdown(strings.TrimSpace(a.outboundText(event)))
 
-	// Image pass: the iLink protocol carries images as item type 2 with a
-	// public image_url (no upload API), so only http(s) URLs can be sent as
-	// real images. Local paths and data URLs degrade to a visible notice.
 	images, remainder := ExtractImagesFromText(text)
 	text = stripMarkdown(strings.TrimSpace(remainder))
 	sentImage := false
@@ -703,10 +648,7 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		}
 		sentImage = true
 		sentImages++
-		// #1250: match the text-chunk path's spacing — iLink is a passive-reply
-		// window protocol that is rate sensitive (5 msgs/inbound); back-to-back
-		// image POSTs asked for throttling the same way the chunks do. This
-		// also spaces the last image from the first text chunk.
+
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
@@ -719,9 +661,7 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
 			return nil
 		}
-		// #1250: every image failed or was undeliverable — the old "[image
-		// sent above]" placeholder claimed success while the images were
-		// lost, misleading both the user and the agent. Fail honestly.
+
 		if attempted > 0 {
 			return fmt.Errorf("wechat: all %d image(s) failed to send via iLink", attempted)
 		}
@@ -731,26 +671,15 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",
 		a.name, toUserID, truncateStr(contextToken, 12), len(text), event.Kind)
 
-	// Split long messages — WeChat iLink API has a ~2048 byte limit per message.
-	// Without splitting, long messages get silently truncated or rejected.
 	chunks := SplitMessageForPlatform(text, PlatformWechat)
-	// #973: iLink caps passive replies at ~5 messages per inbound. Cap the
-	// chunk count and make the truncation visible via a notice on the last
-	// chunk, instead of sending chunks the server silently drops past quota
-	// (user saw partial replies with no indication anything was lost).
-	// #1567-B: images share the same inbound quota - N images + 5 text
-	// chunks = N+5 sends and the server silently dropped the tail. The cap
-	// now subtracts the images already sent this turn.
+
 	textQuota := wechatMaxChunksPerSend - sentImages
 	if textQuota < 1 {
 		textQuota = 1
 	}
 	if len(chunks) > textQuota {
 		origChunks := len(chunks)
-		// #1599-A: index by textQuota, not wechatMaxChunksPerSend - the
-		// fixed index panicked (chunks[4] with quota 3) and re-inflated
-		// the send count past the shared image+text budget the cap exists
-		// to enforce.
+
 		last := chunks[textQuota-1]
 		if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {
 			last = truncateWechatBytes(last, maxBytes-len(wechatTruncateNotice))
@@ -763,7 +692,7 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			debug.Log("wechat", "adapter=%s chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
 			return err
 		}
-		// Small delay between chunks to avoid WeChat iLink API rate limiting.
+
 		if i < len(chunks)-1 {
 			select {
 			case <-time.After(500 * time.Millisecond):
@@ -918,8 +847,7 @@ func (a *WechatAdapter) seenMessageID(msgID int64) bool {
 				delete(a.seen, id)
 			}
 		}
-		// Still over capacity (burst of unique IDs inside the TTL window):
-		// drop the oldest half rather than grow without bound.
+
 		if len(a.seen) >= wechatSeenMsgCapacity {
 			type aged struct {
 				id int64

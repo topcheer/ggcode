@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #4527 pin: the interactive-message path must loop-send ALL formatMessages
-// chunks (only messages[0] used to survive) and carry entities in entity
-// mode - the plain-text path already did both.
 func TestIssue4527_InteractiveSendsAllChunksWithEntities(t *testing.T) {
 	b, err := os.ReadFile("tg_adapter.go")
 	if err != nil {
@@ -23,15 +20,12 @@ func TestIssue4527_InteractiveSendsAllChunksWithEntities(t *testing.T) {
 	if !strings.Contains(s, "for i := 0; i < len(messages)-1; i++") {
 		t.Fatal("#4527 regression: leading chunks not loop-sent")
 	}
-	// Entity mode must attach entities on the keyboard chunk too.
+
 	if !strings.Contains(s, `body["entities"] = tgEntitiesToRaw(messages[len(messages)-1].Entities)`) {
 		t.Fatal("#4527 regression: entity mode drops entities on the button message")
 	}
 }
 
-// #4528 pin: handleMessage must run asynchronously off the Slack read loop -
-// synchronous processing stalled pong-driven deadline renewal (reconnect) and
-// envelopes were already acked, so messages in the blocked window were lost.
 func TestIssue4528_SlackHandleMessageAsync(t *testing.T) {
 	b, err := os.ReadFile("slack_adapter.go")
 	if err != nil {

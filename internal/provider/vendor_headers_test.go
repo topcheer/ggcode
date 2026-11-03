@@ -28,7 +28,7 @@ func TestIsOpenRouterEndpoint(t *testing.T) {
 		{baseURL: "https://api.anthropic.com", want: false},
 		{baseURL: "", want: false},
 		{baseURL: "not a url", want: false},
-		// Ensure lookalike domain is not matched.
+
 		{baseURL: "https://openrouter.ai.evil.com/v1", want: false},
 	}
 	for _, tc := range tests {

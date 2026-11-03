@@ -120,8 +120,6 @@ func TestDingtalkBotCallbackDataParsing(t *testing.T) {
 	}
 }
 
-// --- json.Marshal error handling tests ---
-
 func TestDingtalkRefreshToken_MarshalError(t *testing.T) {
 	a := &dingtalkAdapter{
 		name:      "test",
@@ -132,13 +130,11 @@ func TestDingtalkRefreshToken_MarshalError(t *testing.T) {
 	a.accessToken = ""
 	a.mu.Unlock()
 
-	// Verify the refreshToken method works correctly
-	// by checking it returns an error when the HTTP call fails (no server running).
 	err := a.refreshToken(context.Background())
 	if err == nil {
 		t.Fatal("expected error from refreshToken with no server")
 	}
-	// Should be a connection refused error, not a marshal error
+
 	if strings.Contains(err.Error(), "marshal") {
 		t.Errorf("should not be a marshal error, got: %v", err)
 	}
@@ -157,7 +153,7 @@ func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		// Return a valid token response
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"accessToken":"test-token-123","expireIn":7200}`))
 	}))
@@ -169,9 +165,6 @@ func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
 		appSecret: "myAppSecret",
 	}
 
-	// Override the API base to our test server
-	// We need to call refreshToken but the URL is hardcoded.
-	// Instead, test the marshaling directly by creating the expected body.
 	body := map[string]any{
 		"appKey":    a.appKey,
 		"appSecret": a.appSecret,
@@ -191,7 +184,6 @@ func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
 		t.Errorf("appSecret = %v, want myAppSecret", decoded["appSecret"])
 	}
 
-	// Verify server received the correct body
 	resp, err := http.Post(server.URL, "application/json", strings.NewReader(string(bodyJSON)))
 	if err != nil {
 		t.Fatal(err)
@@ -203,8 +195,7 @@ func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
 }
 
 func TestDingtalkStreamOpen_MarshalError(t *testing.T) {
-	// The streamOpen method also does json.Marshal for the request body.
-	// Verify the error message format when the HTTP call fails.
+
 	a := &dingtalkAdapter{
 		name:      "test",
 		appKey:    "key123",
@@ -216,14 +207,14 @@ func TestDingtalkStreamOpen_MarshalError(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := a.streamOpen(ctx)
-	// Will fail because the API base is unreachable, not because of marshal
+
 	if err == nil {
 		t.Fatal("expected error from streamOpen with no server")
 	}
 }
 
 func TestDingtalkStreamOpen_SuccessfulMarshal(t *testing.T) {
-	// Verify the stream open request body is correctly constructed
+
 	a := &dingtalkAdapter{
 		name:      "test",
 		appKey:    "myKey",
@@ -308,13 +299,11 @@ func TestDingtalkSendMarkdownViaWebhook_MarshalError(t *testing.T) {
 		appSecret: "secret456",
 	}
 
-	// Test that an empty webhook URL returns nil (fast path)
 	err := a.sendMarkdownViaWebhook(context.Background(), "", "hello", "robot1")
 	if err != nil {
 		t.Errorf("expected nil for empty webhook URL, got: %v", err)
 	}
 
-	// Test that empty text returns nil (fast path)
 	err = a.sendMarkdownViaWebhook(context.Background(), "http://example.com/webhook", "", "robot1")
 	if err != nil {
 		t.Errorf("expected nil for empty text, got: %v", err)
@@ -370,10 +359,9 @@ func TestDingtalkSendMarkdownViaAPI_MarshalError(t *testing.T) {
 		appSecret: "secret456",
 	}
 	a.mu.Lock()
-	a.accessToken = "" // no token
+	a.accessToken = ""
 	a.mu.Unlock()
 
-	// No access token should return error
 	err := a.sendMarkdownViaAPI(context.Background(), ChannelBinding{ChannelID: "user123"}, "hello")
 	if err == nil {
 		t.Fatal("expected error with no access token")
@@ -382,7 +370,6 @@ func TestDingtalkSendMarkdownViaAPI_MarshalError(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	// No userId should return error
 	a.mu.Lock()
 	a.accessToken = "valid-token"
 	a.mu.Unlock()
@@ -414,8 +401,6 @@ func TestDingtalkSendMarkdownViaAPI_SuccessfulMarshal(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Temporarily override the API base for the adapter
-	// Since we can't override the constant, we test the marshal correctness directly
 	a := &dingtalkAdapter{
 		name:      "test",
 		appKey:    "testRobotCode",
@@ -425,7 +410,6 @@ func TestDingtalkSendMarkdownViaAPI_SuccessfulMarshal(t *testing.T) {
 	a.accessToken = "test-token"
 	a.mu.Unlock()
 
-	// Test the body construction logic directly
 	body := map[string]any{
 		"robotCode": a.appKey,
 		"userIds":   []string{"staff123"},
@@ -475,8 +459,7 @@ func TestDingtalkMarkdownTitle(t *testing.T) {
 }
 
 func TestDingtalkSendFrameResponse_MarshalError(t *testing.T) {
-	// Verify sendFrameResponse doesn't panic with various inputs.
-	// The method uses json.Marshal internally and logs errors.
+
 	a := &dingtalkAdapter{
 		name: "test",
 	}
@@ -491,8 +474,6 @@ func TestDingtalkSendFrameResponse_MarshalError(t *testing.T) {
 		Data: "",
 	}
 
-	// The response should marshal fine for normal cases.
-	// Just verify it doesn't panic when ws is nil.
 	a.sendFrameResponse(nil, frame, dfStatusOK, "pong")
 }
 
@@ -528,7 +509,7 @@ func TestDingtalkMarshalErrorWithUnmarshallableField(t *testing.T) {
 
 func TestDingtalkTriggerTyping_NoIncomingMessage(t *testing.T) {
 	a := &dingtalkAdapter{name: "test"}
-	// No lastConvID/lastMsgID set — should be a silent no-op
+
 	err := a.TriggerTyping(context.Background(), ChannelBinding{})
 	if err != nil {
 		t.Errorf("TriggerTyping with no incoming message should be noop, got: %v", err)
@@ -542,16 +523,16 @@ func TestDingtalkTriggerTyping_DeduplicatesPerMessage(t *testing.T) {
 		reactedMsgs: make(map[string]bool),
 		httpClient:  &http.Client{Timeout: 5 * time.Second},
 	}
-	// Per-user callback context keyed by staffId (#948).
+
 	a.recordCallbackContext("staff1", dingtalkCallbackContext{convID: "cid123", msgID: "mid456"})
-	// First call marks the message as reacted
+
 	_ = a.TriggerTyping(context.Background(), ChannelBinding{ChannelID: "staff1"})
 	if !a.reactedMsgs["mid456"] {
 		t.Error("expected mid456 to be marked as reacted")
 	}
-	// Second call should be a no-op (dedup)
+
 	_ = a.TriggerTyping(context.Background(), ChannelBinding{ChannelID: "staff1"})
-	// Should still only have one entry
+
 	if len(a.reactedMsgs) != 1 {
 		t.Errorf("expected 1 reacted message, got %d", len(a.reactedMsgs))
 	}

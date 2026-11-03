@@ -2,13 +2,6 @@ package config
 
 import "testing"
 
-// zz_issue4259_test.go - A2AConfig.EffectiveAPIKey must not fall back to the
-// public built-in default key (DefaultA2AAPIKey) when any authentication
-// mechanism (api_keys / oauth2 / oidc / mTLS) is explicitly configured.
-// Previously an api_keys-only config still merged ggcode-lan-a2a-v1 into the
-// server's accepted key list, letting anyone who read the source bypass the
-// configured credentials.
-
 func TestA2AEffectiveAPIKey_Issue4259(t *testing.T) {
 	cases := []struct {
 		name string

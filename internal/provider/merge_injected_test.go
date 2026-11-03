@@ -75,12 +75,11 @@ func TestMergeInjectedUserMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := mergeInjectedUserMessages(tt.messages)
 
-			// Check the guidance text is present somewhere in the result
 			found := false
 			standaloneGuidance := false
 			for _, m := range result {
 				for _, b := range m.Content {
-					// Check all text fields including Output
+
 					textToCheck := b.Text
 					if b.Type == "tool_result" {
 						textToCheck = b.Output
@@ -88,7 +87,7 @@ func TestMergeInjectedUserMessages(t *testing.T) {
 					if strings.Contains(textToCheck, tt.wantText) {
 						found = true
 					}
-					// Check if guidance is a standalone text-only user message
+
 					if b.Type == "text" && strings.Contains(b.Text, tt.wantText) {
 						if m.Role == "user" && isTextOnly(m.Content) {
 							standaloneGuidance = true
@@ -108,7 +107,7 @@ func TestMergeInjectedUserMessages(t *testing.T) {
 }
 
 func TestMergeInjectedUserMessagesPreservesIDs(t *testing.T) {
-	// Ensure tool_call IDs are preserved after merging
+
 	msgs := []Message{
 		{Role: "assistant", Content: []ContentBlock{
 			{Type: "tool_use", ToolID: "write_file:13", ToolName: "write_file"},
@@ -123,7 +122,6 @@ func TestMergeInjectedUserMessagesPreservesIDs(t *testing.T) {
 
 	result := mergeInjectedUserMessages(msgs)
 
-	// Should have exactly 2 messages: assistant + merged tool_result
 	if len(result) != 2 {
 		t.Fatalf("expected 2 messages after merge, got %d", len(result))
 	}
@@ -170,7 +168,6 @@ func TestFoldInjectedUserMessagesAppendOrder(t *testing.T) {
 		t.Fatalf("expected merged message to be user, got %q", merged.Role)
 	}
 
-	// The first block must remain a tool_result — APIs reject a text part first.
 	if len(merged.Content) == 0 || merged.Content[0].Type != "tool_result" {
 		t.Fatalf("expected first block of merged message to be tool_result, got %+v", merged.Content)
 	}
@@ -178,7 +175,6 @@ func TestFoldInjectedUserMessagesAppendOrder(t *testing.T) {
 		t.Errorf("expected tool_result ID 'call_1', got %q", merged.Content[0].ToolID)
 	}
 
-	// Guidance text must be present after the tool_result block.
 	foundGuidance, foundOriginal := false, false
 	for _, b := range merged.Content {
 		if b.Type == "text" && strings.Contains(b.Text, "guidance warning") {

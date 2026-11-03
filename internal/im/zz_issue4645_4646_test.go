@@ -24,8 +24,7 @@ func TestIssue4645_DMLookupFailsOpen(t *testing.T) {
 		end = len(text)
 	}
 	body := text[fn:end]
-	// Only the ERROR paths must fail open; the function's final
-	// return false (API succeeded, room confirmed NOT a DM) is legitimate.
+
 	for _, want := range []string{
 		"m.direct lookup room=%s error (failing open)",
 		"checkIsDMViaAPI room=%s error (failing open)",
@@ -37,7 +36,7 @@ func TestIssue4645_DMLookupFailsOpen(t *testing.T) {
 	if strings.Count(body, "failing open") != 2 {
 		t.Fatalf("expected exactly 2 fail-open error paths, found %d (#4645)", strings.Count(body, "failing open"))
 	}
-	// The 2-member heuristic positive must still exist.
+
 	if !strings.Contains(body, "len(members.Joined) == 2") {
 		t.Fatal("2-member DM heuristic must be preserved (#961)")
 	}

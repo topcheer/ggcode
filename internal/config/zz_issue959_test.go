@@ -51,9 +51,6 @@ vendors:
 		t.Fatalf("migrated endpoint lost vendor-level API key: got %q", got)
 	}
 
-	// Load performs an unconditional compact Save; reloading must still see
-	// the key (plaintext or as a ${VAR} reference resolved from keys.env
-	// after MigratePlaintextAPIKeys moved it).
 	reloaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("re-Load: %v", err)
@@ -79,9 +76,7 @@ func TestGatewayVendorMigrationNoEndpointsKeepsVendorKey(t *testing.T) {
 	if _, still := cfg.Vendors["openrouter"]; still {
 		t.Fatal("expected legacy openrouter vendor to be migrated away")
 	}
-	// DefaultConfig seeds ai-gateway.endpoints.openrouter, so the orphan key
-	// lands on that default endpoint (endpoint-level carry); vendor-level
-	// fallback only applies when no such endpoint exists at all.
+
 	if got := cfg.Vendors["ai-gateway"].Endpoints["openrouter"].APIKey; got != "sk-or-orphan-456" {
 		t.Fatalf("orphan vendor key not carried to migrated endpoint: got %q", got)
 	}
@@ -121,13 +116,13 @@ func TestShouldBellExplicitFalseDisablesBell(t *testing.T) {
 		cfg  NotificationConfig
 		want bool
 	}{
-		{NotificationConfig{}, true},                                      // nil = default on
-		{NotificationConfig{Bell: boolPtr(true)}, true},                   // explicit on
-		{NotificationConfig{Bell: boolPtr(false)}, false},                 // explicit off (#959)
-		{NotificationConfig{Desktop: true}, true},                         // bell unset -> default on
-		{NotificationConfig{Bell: boolPtr(false), Desktop: false}, false}, // the exact #959 trap
-		{NotificationConfig{Bell: boolPtr(true), Desktop: true}, true},    // explicit on with desktop
-		{NotificationConfig{Bell: boolPtr(false), Desktop: true}, false},  // explicit off wins
+		{NotificationConfig{}, true},
+		{NotificationConfig{Bell: boolPtr(true)}, true},
+		{NotificationConfig{Bell: boolPtr(false)}, false},
+		{NotificationConfig{Desktop: true}, true},
+		{NotificationConfig{Bell: boolPtr(false), Desktop: false}, false},
+		{NotificationConfig{Bell: boolPtr(true), Desktop: true}, true},
+		{NotificationConfig{Bell: boolPtr(false), Desktop: true}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.cfg.ShouldBell(); got != tc.want {

@@ -1,16 +1,5 @@
 package provider
 
-// LLM response cassette (sa-44 trajectory-replay gap): GGCODE_LLM_TAPE
-// records or replays every LLM response, symmetric with the tool-level
-// tape (internal/agent tool_tape.go, GGCODE_TOOL_TAPE). With the tool tape
-// alone, a replayed run still performs real network calls for each model
-// turn - a complete trajectory could not be reproduced offline. This
-// wrapper closes that loop: record captures Chat/ChatStream responses to
-// a JSONL tape; replay serves them back keyed by request fingerprint, with
-// FIFO fallback (same semantics as the tool tape) for runs whose message
-// IDs were regenerated. A replay miss is a hard error - never a silent
-// live call, matching tool_tape's fail-closed contract.
-
 import (
 	"bufio"
 	"context"
@@ -91,8 +80,7 @@ func WrapLLMTapeFromEnv(p Provider) Provider {
 	tp := &TapeProvider{inner: p, mode: mode, path: path}
 	if mode == "replay" {
 		if err := tp.load(); err != nil {
-			// Fail-closed at construction: a broken tape must never
-			// degrade into live calls mid-replay.
+
 			panic(fmt.Sprintf("%s replay: cannot load tape %s: %v", llmTapeEnv, path, err))
 		}
 	} else {
@@ -110,7 +98,7 @@ func WrapLLMTapeFromEnv(p Provider) Provider {
 func (t *TapeProvider) Name() string { return t.inner.Name() }
 
 func (t *TapeProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
-	return t.inner.CountTokens(ctx, messages) // local computation, no capture
+	return t.inner.CountTokens(ctx, messages)
 }
 
 // requestKey fingerprints the request: messages (IDs stripped for
@@ -145,7 +133,7 @@ func (t *TapeProvider) Chat(ctx context.Context, messages []Message, tools []Too
 	}
 	resp, err := t.inner.Chat(ctx, messages, tools)
 	if err != nil {
-		return resp, err // errors are live signal, not replay state
+		return resp, err
 	}
 	t.append(&llmTapeEntry{Key: key, Kind: "chat", Response: resp})
 	return resp, nil
@@ -177,12 +165,7 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 		defer safego.Recover("tape.recordStream")
 		defer close(out)
 		var evs []tapeEvent
-		// #4146: consumers that abandon the stream (agent-loop panic recovery,
-		// harness early exit) stop reading `out` forever. The old bare
-		// `out <- ev` parked this goroutine permanently and, through it, the
-		// inner provider's producer. Align with the #602/#2570 standard set in
-		// fallback.go: ctx-guarded sends plus a deferred drain so the producer
-		// can always reach its end-of-stream close.
+
 		drainSrc := func() {
 			go safego.Run("tape.recordStream.drain", func() {
 				for range src {
@@ -195,20 +178,12 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 			select {
 			case out <- ev:
 			case <-ctx.Done():
-				// Abandoned mid-stream: still append what was observed so the
-				// tape stays key-aligned for replay (same rationale as the
-				// zero-event placeholder below, #3933).
+
 				t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
 				return
 			}
 		}
-		// #3933: record a placeholder for ZERO-event streams too. A zero-
-		// event turn (ctx cancelled before the first event landed - the
-		// sendEvent drop path is reachable, `emitted=false` in logs) left a
-		// HOLE in the tape; replay then FIFO-fed the NEXT turn's response to
-		// this key - one round of silent misalignment before the hard error.
-		// A placeholder keeps key alignment; replaying it yields an empty
-		// stream, faithful to what was recorded.
+
 		t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
 	}()
 	return out, nil
@@ -221,21 +196,12 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 func (t *TapeProvider) take(key string) *llmTapeEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// #3933: a key match at i > cursor must NOT advance the cursor past
-	// unconsumed middle entries. The old `cursor = i + 1` made recorded
-	// [A, B, A] replayed as [A, A] skip B forever (later take(B) hit the
-	// hard exhaustion error while B sat unconsumed). Consume the matched
-	// entry by splicing it out; the cursor stays put, so skipped entries
-	// remain reachable - and the FIFO fallback below still serves the
-	// earliest unconsumed entry when the key never recurs.
+
 	for i := t.cursor; i < len(t.order); i++ {
 		if t.order[i].Key == key {
 			matched := t.order[i]
 			t.order = append(t.order[:i], t.order[i+1:]...)
-			// Head match (i == cursor): the splice pulled the next entry
-			// INTO the cursor slot - keep the cursor put. Match beyond the
-			// cursor: nothing before i moved - keep the cursor put. Either
-			// way the cursor lands on the earliest unconsumed entry.
+
 			return matched
 		}
 	}
@@ -286,7 +252,7 @@ func fromStreamEvent(ev StreamEvent) tapeEvent {
 		ToolArgs: string(ev.Tool.Arguments),
 		Result:   ev.Result, IsError: ev.IsError, Usage: ev.Usage,
 		Truncated: ev.Truncated, PolicyBlocked: ev.PolicyBlocked,
-		// #3938: carry the five business fields through the tape.
+
 		Confidence:     ev.Confidence,
 		ToolServerTool: ev.Tool.ServerTool,
 		ToolThoughtSig: string(ev.Tool.ThoughtSignature),
@@ -309,7 +275,7 @@ func (te tapeEvent) toStreamEvent() StreamEvent {
 		Tool: ToolCallDelta{
 			ID: te.ToolID, Index: te.ToolIndex, Name: te.ToolName,
 			Arguments: json.RawMessage(te.ToolArgs),
-			// #3938: restore the dropped fields on replay.
+
 			ServerTool:       te.ToolServerTool,
 			ThoughtSignature: []byte(te.ToolThoughtSig),
 			Caller:           json.RawMessage(te.ToolCallerRaw),
@@ -322,7 +288,7 @@ func (te tapeEvent) toStreamEvent() StreamEvent {
 		ev.Error = errors.New(te.Err)
 	}
 	if te.Block != nil {
-		ev.Block = *te.Block // #3938: verbatim server-tool echo-back block
+		ev.Block = *te.Block
 	}
 	return ev
 }

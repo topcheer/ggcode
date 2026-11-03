@@ -40,7 +40,6 @@ func TestIssue2576_CopilotBranchAppliesCallPolicy(t *testing.T) {
 		t.Errorf("#2576: policy.maxRetries = %d, want 2", got)
 	}
 
-	// Zero policy: defaults stay (no deadline, provider default attempts).
 	resolved.RequestTimeout, resolved.MaxRetries = 0, 0
 	p2, err := NewProvider(resolved)
 	if err != nil {

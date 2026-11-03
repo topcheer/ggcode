@@ -1,11 +1,5 @@
 package im
 
-// Feature tests for GitHub issue #556 (internal/im side).
-//   D: BindAdapterToWorkspace contract documentation (ghost-binding guard
-//      lives at the desktop entry point; this test pins the supported
-//      bind-before-start flow that a runtime-side existence check would
-//      have broken).
-
 import (
 	"os"
 	"strings"
@@ -24,8 +18,6 @@ func TestIssue556BindBeforeStartStillAllowed(t *testing.T) {
 		t.Fatalf("SetBindingStore: %v", err)
 	}
 
-	// "ghost-adapter" is intentionally absent from m.adapters — deferred
-	// activation must still be allowed at the runtime layer.
 	if err := m.BindAdapterToWorkspace("ghost-adapter", "/tmp/ws-556"); err != nil {
 		t.Fatalf("bind-before-start flow broken: %v", err)
 	}

@@ -1,9 +1,5 @@
 package im
 
-// PrivateClaw protocol types for communicating with the Relay Server.
-
-// ---- Encrypted Envelope ----
-
 type pcEncryptedEnvelope struct {
 	Version    int    `json:"version"`
 	MessageID  string `json:"messageId"`
@@ -12,8 +8,6 @@ type pcEncryptedEnvelope struct {
 	Tag        string `json:"tag"`
 	SentAt     string `json:"sentAt"`
 }
-
-// ---- Invite ----
 
 type PCInvite struct {
 	Version       int    `json:"version"`
@@ -25,10 +19,6 @@ type PCInvite struct {
 	ProviderLabel string `json:"providerLabel,omitempty"`
 	RelayLabel    string `json:"relayLabel,omitempty"`
 }
-
-// ---- Relay WebSocket Messages ----
-
-// Provider → Relay messages
 
 type pcProviderCreateSession struct {
 	Type      string `json:"type"`
@@ -65,8 +55,6 @@ type pcProviderRenewSession struct {
 	TTLMS     int    `json:"ttlMs"`
 }
 
-// Relay → Provider messages
-
 type pcRelaySessionCreated struct {
 	Type      string `json:"type"`
 	RequestID string `json:"requestId"`
@@ -100,8 +88,6 @@ type pcRelayError struct {
 	SessionID string `json:"sessionId,omitempty"`
 	RequestID string `json:"requestId,omitempty"`
 }
-
-// ---- Encrypted Payload kinds ----
 
 const (
 	pcKindClientHello      = "client_hello"

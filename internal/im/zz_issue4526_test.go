@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #4526 pin: the Telegram update loop must isolate per-update panics via
-// synchronous safego.Run - a malformed update used to tear down the whole
-// safego.Go("im.tg.run") wrapper including the backoff loop, leaving the
-// adapter dead until process restart.
 func TestIssue4526_PerUpdatePanicIsolation(t *testing.T) {
 	b, err := os.ReadFile("tg_adapter.go")
 	if err != nil {

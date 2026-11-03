@@ -1,11 +1,5 @@
 package im
 
-// Regression tests for issue #968:
-//  1. signal Note to Self messages were 100% dropped (missing source fields)
-//  2. slack Socket Mode ack required accepts_response_payload==true
-//  3. slack handleMessage had no (channel, ts) dedup table
-// plus small follow-ups: group-sync sender bypassing allowed_users.
-
 import (
 	"context"
 	"encoding/json"
@@ -15,8 +9,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 )
-
-// --- #968 problem 1: signal Note to Self -------------------------------
 
 // TestSignalNoteToSelfNotDropped verifies that a syncMessage envelope whose
 // destination is the adapter's own account (Note to Self, sent from another
@@ -48,7 +40,6 @@ func TestSignalNoteToSelfNotDropped(t *testing.T) {
 	}
 	a.processEnvelope(context.Background(), envelope)
 
-	// The fix sets source fields on the envelope itself.
 	if got, _ := envelope["sourceNumber"].(string); got != "+1234567890" {
 		t.Errorf("sourceNumber = %q, want %q (sender extraction would fail)", got, "+1234567890")
 	}
@@ -56,7 +47,6 @@ func TestSignalNoteToSelfNotDropped(t *testing.T) {
 		t.Errorf("sourceName = %q, want %q", got, "Me")
 	}
 
-	// Passed the sender gate => timestamp recorded in the dedup map.
 	a.mu.RLock()
 	_, marked := a.seen[1718000000000]
 	a.mu.RUnlock()
@@ -99,8 +89,6 @@ func TestSignalNoteToSelfEchoSuppressionStillWorks(t *testing.T) {
 	}
 }
 
-// --- #968 follow-up: group sync from own account bypasses allowed_users ---
-
 // TestSignalGroupSyncSelfBypassAllowedUsers: a group sync message whose
 // sender is the account itself must not be killed by a restrictive
 // allowed_users list (it legitimately originates from this account).
@@ -110,7 +98,7 @@ func TestSignalGroupSyncSelfBypassAllowedUsers(t *testing.T) {
 		Platform: "signal",
 		Extra: map[string]interface{}{
 			"account":         "+1234567890",
-			"allowed_users":   "+9999999999", // does NOT include own account
+			"allowed_users":   "+9999999999",
 			"group_allowlist": "*",
 		},
 	}
@@ -136,21 +124,17 @@ func TestSignalGroupSyncSelfBypassAllowedUsers(t *testing.T) {
 	}
 }
 
-// --- #968 problem 2: slack Socket Mode ack ------------------------------
-
 // TestSlackAckForEnvelopeWithoutResponsePayload verifies an ack is produced
 // for envelopes regardless of accepts_response_payload. Slack requires an
 // ack for EVERY envelope with an envelope_id; the flag only governs whether
 // the ack may carry a payload. message/app_mention envelopes commonly carry
 // accepts_response_payload=false and previously went unacked (=> redelivery).
 func TestSlackAckForEnvelopeWithoutResponsePayload(t *testing.T) {
-	// Empty envelope_id (hello/disconnect frames) - nothing to ack.
+
 	if _, ok := slackAckForEnvelope(""); ok {
 		t.Error("empty envelope_id should not produce an ack")
 	}
 
-	// Envelope id as delivered for message events with
-	// accepts_response_payload=false - must still ack.
 	ack, ok := slackAckForEnvelope("16d5332e-XXXX")
 	if !ok {
 		t.Fatal("envelope with accepts_response_payload=false must be acked")
@@ -163,8 +147,6 @@ func TestSlackAckForEnvelopeWithoutResponsePayload(t *testing.T) {
 		t.Errorf("ack envelope_id = %q, want %q", got, "16d5332e-XXXX")
 	}
 }
-
-// --- #968 problem 3: slack (channel, ts) dedup --------------------------
 
 // TestSlackMarkSeenDedup verifies the dedup table: the same (channel, ts) is
 // processed exactly once, while other channels/ts pairs are independent.
@@ -181,16 +163,14 @@ func TestSlackMarkSeenDedup(t *testing.T) {
 		t.Error("third delivery of the same (channel, ts) must be dropped")
 	}
 
-	// Same ts in a different channel is a different message.
 	if !a.markSeenDedup("C222", "1718000000.000100") {
 		t.Error("same ts in another channel must be processed")
 	}
-	// Same channel, new ts is a new message.
+
 	if !a.markSeenDedup("C111", "1718000000.000200") {
 		t.Error("new ts in same channel must be processed")
 	}
 
-	// Unknown ids must not crash or poison the table.
 	if !a.markSeenDedup("", "1718000000.000300") {
 		t.Error("empty channel should pass through (no dedup key)")
 	}

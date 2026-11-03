@@ -9,16 +9,9 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Integration-level regression: the 429075b0 commit shipped the shell route
-// classifier and handler but MISSED the dispatch wiring in
-// SubmitInboundMessage (only an emitTextOverride field landed), so $ commands
-// from IM fell through to the agent queue exactly as before. These tests go
-// through the full SubmitInboundMessage path so a missing dispatch branch
-// cannot slip through again.
-
 func TestSubmitInboundMessage_ShellExecutesNotQueued(t *testing.T) {
 	em := &captureEmitter{}
-	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	allowDangerous := true
 	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 
 	err := b.SubmitInboundMessage(context.Background(), InboundMessage{Text: "$ printf submitshell-ok"})
@@ -26,14 +19,13 @@ func TestSubmitInboundMessage_ShellExecutesNotQueued(t *testing.T) {
 		t.Fatalf("SubmitInboundMessage: %v", err)
 	}
 
-	// handleShellInbound runs async; poll for the pushed result.
 	for i := 0; i < 150; i++ {
 		em.mu.Lock()
 		texts := append([]string(nil), em.texts...)
 		em.mu.Unlock()
 		for _, tx := range texts {
 			if strings.Contains(tx, "submitshell-ok") {
-				return // pass: executed and pushed, not queued for the agent
+				return
 			}
 		}
 		sleepMs(20)
@@ -42,10 +34,9 @@ func TestSubmitInboundMessage_ShellExecutesNotQueued(t *testing.T) {
 }
 
 func TestSubmitInboundMessage_ShellWithPendingAskStillImmediate(t *testing.T) {
-	// Agent busy + ask_user pending: $ cmd must STILL route to shell, not be
-	// swallowed by the ask-reply channel.
+
 	em := &captureEmitter{}
-	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	allowDangerous := true
 	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 	b.mu.Lock()
 	b.pendingAsk = &pendingAskUser{
@@ -64,7 +55,7 @@ func TestSubmitInboundMessage_ShellWithPendingAskStillImmediate(t *testing.T) {
 		em.mu.Unlock()
 		for _, tx := range texts {
 			if strings.Contains(tx, "askbusy-ok") {
-				return // pass
+				return
 			}
 		}
 		sleepMs(20)
@@ -73,11 +64,9 @@ func TestSubmitInboundMessage_ShellWithPendingAskStillImmediate(t *testing.T) {
 }
 
 func TestSubmitInboundMessage_PlainTextStillQueues(t *testing.T) {
-	// Guard the other direction: ordinary text must NOT hit the shell path.
-	// The bare bridge has no agent loop, so the queue path may panic/nil-deref
-	// — recover it; the assertion is only that no shell pushback happened.
+
 	em := &captureEmitter{}
-	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	allowDangerous := true
 	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 
 	func() {
@@ -85,7 +74,7 @@ func TestSubmitInboundMessage_PlainTextStillQueues(t *testing.T) {
 		_ = b.SubmitInboundMessage(context.Background(), InboundMessage{Text: "hello not a command"})
 	}()
 
-	sleepMs(300) // well past shell exec latency
+	sleepMs(300)
 	em.mu.Lock()
 	texts := append([]string(nil), em.texts...)
 	em.mu.Unlock()

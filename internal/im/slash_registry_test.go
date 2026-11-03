@@ -49,7 +49,7 @@ func TestExecuteRegistrySlashCommand_Dispatch(t *testing.T) {
 			t.Fatalf("%s: handled=%v resp=%q want=%q", cmd, handled, resp, want)
 		}
 	}
-	// Case-insensitive.
+
 	if resp, handled := ExecuteRegistrySlashCommand(d, "/COST"); !handled || resp != "cost-text" {
 		t.Fatalf("case-insensitive: handled=%v resp=%q", handled, resp)
 	}
@@ -57,17 +57,17 @@ func TestExecuteRegistrySlashCommand_Dispatch(t *testing.T) {
 
 func TestExecuteRegistrySlashCommand_Mode(t *testing.T) {
 	d := &stubDeps{mode: "supervised"}
-	// Show form.
+
 	resp, handled := ExecuteRegistrySlashCommand(d, "/mode")
 	if !handled || resp != "Current permission mode: supervised" {
 		t.Fatalf("show: handled=%v resp=%q", handled, resp)
 	}
-	// Valid switch.
+
 	resp, handled = ExecuteRegistrySlashCommand(d, "/mode bypass")
 	if !handled || d.switched != "bypass" || !strings.Contains(resp, "bypass") {
 		t.Fatalf("switch: handled=%v switched=%q resp=%q", handled, d.switched, resp)
 	}
-	// #743: invalid name rejected, no silent supervised fallback.
+
 	resp, handled = ExecuteRegistrySlashCommand(d, "/mode autoo")
 	if !handled || !strings.Contains(resp, "unknown mode") || d.switched != "bypass" {
 		t.Fatalf("invalid: handled=%v resp=%q switched=%q", handled, resp, d.switched)
@@ -118,11 +118,11 @@ func TestIMSlashRegistry_Integrity(t *testing.T) {
 		if c.Help == "" {
 			t.Fatalf("%s: missing help text", c.Name)
 		}
-		// Lookup must find every registered command.
+
 		if _, ok := LookupIMSlashCommand(c.Name); !ok {
 			t.Fatalf("lookup cannot find %s", c.Name)
 		}
-		// Help generation must list every one-shot command.
+
 		help := strings.Join(IMSlashHelpLines(), "\n")
 		if !c.Interactive && !strings.Contains(help, "/"+c.Name+" ") {
 			t.Fatalf("help lines missing one-shot command %s", c.Name)

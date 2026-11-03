@@ -1,10 +1,5 @@
 package config
 
-// #1515 case A: .ggcode/a2a.yaml is the ONE config surface that did not
-// expand ${VAR} - auth.api_key merged as the literal "${A2A_KEY}" and
-// auth failed silently. Both the flat api_key form and the nested
-// auth.api_key form must resolve like the main config does.
-
 import (
 	"os"
 	"path/filepath"

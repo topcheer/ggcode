@@ -25,13 +25,11 @@ func TestRegisterCreatesPIDFile(t *testing.T) {
 		t.Fatalf("expected 0 others, got %d", len(others))
 	}
 
-	// Verify PID file exists
 	entries, _ := os.ReadDir(filepath.Join(dir, ".ggcode", instancesDir))
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 PID file, got %d", len(entries))
 	}
 
-	// Verify contents
 	data, _ := os.ReadFile(filepath.Join(dir, ".ggcode", instancesDir, entries[0].Name()))
 	var info InstanceInfo
 	if err := json.Unmarshal(data, &info); err != nil {
@@ -74,8 +72,6 @@ func TestRegisterCleansStaleFiles(t *testing.T) {
 	instancesDir := filepath.Join(dir, ".ggcode", instancesDir)
 	os.MkdirAll(instancesDir, 0o755)
 
-	// Write a stale file with a PID that's definitely not alive.
-	// Use the real isProcessAlive (default) which will return false for 999999999.
 	staleInfo := InstanceInfo{
 		PID:       999999999,
 		UUID:      "stale-uuid-1234",
@@ -86,13 +82,12 @@ func TestRegisterCleansStaleFiles(t *testing.T) {
 	os.WriteFile(staleFile, staleData, 0o644)
 
 	d := NewInstanceDetect(dir)
-	// Keep default checkAlive (real isProcessAlive) so stale PID is cleaned
+
 	_, err := d.Register()
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// Stale file should be removed
 	entries, _ := os.ReadDir(instancesDir)
 	for _, e := range entries {
 		if e.Name() == "999999999-stale-uu.json" {
@@ -135,7 +130,6 @@ func TestDetectMultipleInstances(t *testing.T) {
 	instancesDir := filepath.Join(dir, ".ggcode", instancesDir)
 	os.MkdirAll(instancesDir, 0o755)
 
-	// Simulate a "first" instance with a fake PID
 	firstInfo := InstanceInfo{
 		PID:       11111,
 		UUID:      "first-uuid-abcd",
@@ -144,7 +138,6 @@ func TestDetectMultipleInstances(t *testing.T) {
 	firstData, _ := json.Marshal(firstInfo)
 	os.WriteFile(filepath.Join(instancesDir, "11111-first-uu.json"), firstData, 0o644)
 
-	// "Second" instance registers
 	d := NewInstanceDetect(dir)
 	d.checkAlive = alwaysAlive
 	others, err := d.Register()
@@ -164,7 +157,6 @@ func TestIsPrimary(t *testing.T) {
 	instancesDir := filepath.Join(dir, ".ggcode", instancesDir)
 	os.MkdirAll(instancesDir, 0o755)
 
-	// No other instances → primary
 	d := NewInstanceDetect(dir)
 	d.checkAlive = alwaysAlive
 	d.Register()
@@ -172,7 +164,6 @@ func TestIsPrimary(t *testing.T) {
 		t.Fatal("should be primary when no other instances")
 	}
 
-	// Add an older instance
 	olderInfo := InstanceInfo{
 		PID:       22222,
 		UUID:      "older-uuid-1234",
@@ -191,7 +182,6 @@ func TestListInstances(t *testing.T) {
 	instancesDir := filepath.Join(dir, ".ggcode", instancesDir)
 	os.MkdirAll(instancesDir, 0o755)
 
-	// Create fake instances with different PIDs
 	infos := []InstanceInfo{
 		{PID: 10001, UUID: "aaa-first-inst", StartedAt: time.Now().Add(-10 * time.Minute)},
 		{PID: 10002, UUID: "bbb-second-ins", StartedAt: time.Now().Add(-5 * time.Minute)},
@@ -206,11 +196,11 @@ func TestListInstances(t *testing.T) {
 	d.Register()
 
 	list := d.ListInstances()
-	// Should include the 2 fakes + self = 3
+
 	if len(list) != 3 {
 		t.Fatalf("expected 3 instances, got %d", len(list))
 	}
-	// Should be sorted by StartedAt
+
 	if !list[0].StartedAt.Before(list[1].StartedAt) {
 		t.Fatal("instances should be sorted by StartedAt ascending")
 	}

@@ -13,7 +13,6 @@ import (
 func TestIMEmitterNil(t *testing.T) {
 	var e *IMEmitter
 
-	// All methods on nil should be safe no-ops
 	_ = e.EmitText("hello")
 	e.EmitUserText("hello")
 	e.EmitUserTextExcept("hello", "qq")
@@ -82,7 +81,6 @@ func TestIMEmitterEmitText(t *testing.T) {
 	e := NewIMEmitter(mgr, "en", "/tmp")
 	_ = e.EmitText("hello world")
 
-	// Give the async goroutine time to process
 	time.Sleep(150 * time.Millisecond)
 
 	events := sink.events()
@@ -93,7 +91,6 @@ func TestIMEmitterEmitText(t *testing.T) {
 		t.Errorf("text = %q, want %q", events[len(events)-1].Text, "hello world")
 	}
 
-	// Empty text should not emit
 	sink.reset()
 	_ = e.EmitText("")
 	_ = e.EmitText("   ")
@@ -147,7 +144,6 @@ func TestIMEmitterEmitStatus(t *testing.T) {
 		t.Errorf("status = %q, want %q", last.Status, "thinking")
 	}
 
-	// Duplicate should be suppressed
 	sink.reset()
 	e.EmitStatus("thinking")
 	time.Sleep(50 * time.Millisecond)
@@ -155,7 +151,6 @@ func TestIMEmitterEmitStatus(t *testing.T) {
 		t.Error("duplicate status should be suppressed")
 	}
 
-	// Different status should emit
 	e.EmitStatus("writing")
 	time.Sleep(50 * time.Millisecond)
 	if len(sink.events()) == 0 {
@@ -205,7 +200,6 @@ func TestIMEmitterEmitKnightReport(t *testing.T) {
 		t.Errorf("text = %q", last.Text)
 	}
 
-	// Empty report should not emit
 	sink.reset()
 	e.EmitKnightReport("")
 	time.Sleep(50 * time.Millisecond)
@@ -217,19 +211,16 @@ func TestIMEmitterEmitKnightReport(t *testing.T) {
 func TestIMEmitterFormatAskUserPrompt(t *testing.T) {
 	e := NewIMEmitter(NewManager(), "en", "/tmp")
 
-	// Valid JSON with title
 	result := e.FormatAskUserPrompt(`{"title":"Choose option","questions":[{"id":"q1","title":"Pick one","kind":"single","choices":[{"id":"a","label":"Option A"}]}]}`)
 	if !strings.Contains(result, "Choose option") {
 		t.Errorf("result = %q", result)
 	}
 
-	// Invalid JSON but has title-like structure
 	result2 := e.FormatAskUserPrompt(`{"title":"My Title"}`)
 	if !strings.Contains(result2, "My Title") {
 		t.Errorf("result2 = %q", result2)
 	}
 
-	// Empty
 	if s := e.FormatAskUserPrompt(""); s != "" {
 		t.Errorf("empty should return empty: %q", s)
 	}
@@ -351,7 +342,7 @@ func TestIMEmitterAskUserInteractiveRedactsSecrets(t *testing.T) {
 	if !strings.Contains(got, "Confirm key") {
 		t.Errorf("non-secret fallback text mangled: %q", got)
 	}
-	// The helper itself must sanitize title text too.
+
 	if out := e.redactOutbound(q.Title); strings.Contains(out, "sk-ant-api03-AbCdEf") {
 		t.Errorf("redactOutbound left secret in ask_user title: %q", out)
 	}

@@ -21,11 +21,7 @@ func NewFallback(primary, secondary Transcriber) *FallbackTranscriber {
 func (f *FallbackTranscriber) Transcribe(ctx context.Context, req Request) (Result, error) {
 	if f.primary != nil {
 		result, err := f.primary.Transcribe(ctx, req)
-		// #1560-D: an EMPTY result with err == nil is a SUCCESS - silent
-		// audio legitimately transcribes to "". The old `Text != ""`
-		// condition treated it as failure and ran the local whisper
-		// fallback, whose hallucinated filler ("Thank you.") replaced the
-		// correct empty transcript. Only real errors fall through.
+
 		if err == nil {
 			return result, nil
 		}

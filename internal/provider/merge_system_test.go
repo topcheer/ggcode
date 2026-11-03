@@ -40,17 +40,14 @@ func TestMergeSystemMessages_MultipleSystemMergedIntoOne(t *testing.T) {
 	}
 	result := MergeSystemMessages(msgs)
 
-	// Expected: 1 merged system + 3 non-system = 4
 	if len(result) != 4 {
 		t.Fatalf("expected 4, got %d", len(result))
 	}
 
-	// First must be system
 	if result[0].Role != "system" {
 		t.Fatalf("expected first to be system, got %s", result[0].Role)
 	}
 
-	// All three system texts merged into first message
 	if len(result[0].Content) != 3 {
 		t.Fatalf("expected 3 content blocks in merged system, got %d", len(result[0].Content))
 	}
@@ -58,7 +55,6 @@ func TestMergeSystemMessages_MultipleSystemMergedIntoOne(t *testing.T) {
 		t.Fatalf("unexpected system texts: %v", result[0].Content)
 	}
 
-	// Non-system messages preserve order
 	if result[1].Role != "user" || result[2].Role != "assistant" || result[3].Role != "user" {
 		t.Fatalf("unexpected non-system order: %s %s %s", result[1].Role, result[2].Role, result[3].Role)
 	}
@@ -87,7 +83,6 @@ func TestMergeSystemMessages_EmptySystemTextsFiltered(t *testing.T) {
 	}
 	result := MergeSystemMessages(msgs)
 
-	// Empty system texts should be filtered, only "real" survives
 	if result[0].Role != "system" {
 		t.Fatalf("expected system, got %s", result[0].Role)
 	}

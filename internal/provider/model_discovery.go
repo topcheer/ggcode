@@ -64,9 +64,7 @@ func discoverModels(ctx context.Context, resolved *config.ResolvedEndpoint, forc
 	if resolved == nil {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
-	// Expand ${VAR} references in the API key so a freshly-saved key (stored as
-	// an env reference like ${ZAI_TEEE_API_KEY}) resolves to its real value here,
-	// matching how ResolveActiveEndpoint resolves keys for normal requests.
+
 	resolved.APIKey = config.ExpandEnv(resolved.APIKey)
 	if !hasUsableAPIKey(resolved.APIKey) && !isLocalBaseURL(resolved.BaseURL) {
 		return nil, fmt.Errorf("endpoint %q has no API key configured", resolved.EndpointID)
@@ -112,10 +110,7 @@ func discoverModels(ctx context.Context, resolved *config.ResolvedEndpoint, forc
 }
 
 func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL string, resolved *config.ResolvedEndpoint) ([]string, error) {
-	// #1288: gemini ListModels defaults to pageSize=50 and paginates via
-	// nextPageToken; the registry has far more than 50 public entries. Ask
-	// for 1000 per page AND follow the token so the discovery list is not
-	// silently truncated and solidified into the 6h cache.
+
 	buildRequest := func(pageToken string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, nil)
 		if err != nil {
@@ -159,13 +154,7 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", endpointURL, err)
 	}
-	// #2574: closure defer - Go evaluates a plain defer's receiver at
-	// REGISTRATION time, binding the FIRST page's body; the pagination
-	// loop below swaps resp = pageResp, so every exit after page 1 leaked
-	// the latest body (last page on break/token-empty/cap, error returns
-	// mid-loop). Capturing the resp VARIABLE closes whatever is current
-	// at exit; the loop's own early Close of consumed pages stays (the
-	// deferred call is a no-op on an already-closed body).
+
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -182,9 +171,6 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 		return nil, fmt.Errorf("decode %s: %w", endpointURL, err)
 	}
 
-	// #1288: follow gemini pagination. Guards: hard page cap and a
-	// repeated-token circuit breaker (a broken relay echoing the same
-	// nextPageToken forever must not spin the loop).
 	if resolved.Protocol == "gemini" {
 		const maxPages = 50
 		seenTokens := map[string]struct{}{payload.NextPageToken: {}}
@@ -200,11 +186,7 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 				return nil, fmt.Errorf("GET %s (page %d): %w", endpointURL, page+1, perr)
 			}
 			resp = pageResp
-			// #1338: check the status BEFORE decoding. A 429/500 on page 2+
-			// returns a JSON error body that decodes cleanly into an empty
-			// payload (nil models, empty token) - the loop then "succeeded"
-			// with page-1 models only and the truncated list got cached to
-			// disk for 6h. Mirror the first-page check exactly.
+
 			if pageResp.StatusCode < 200 || pageResp.StatusCode >= 300 {
 				body, _ := io.ReadAll(io.LimitReader(pageResp.Body, 512))
 				detail := strings.TrimSpace(string(body))
@@ -312,23 +294,17 @@ func isLocalBaseURL(baseURL string) bool {
 	u := strings.TrimSpace(baseURL)
 	u = strings.TrimPrefix(u, "http://")
 	u = strings.TrimPrefix(u, "https://")
-	// #2572: port of the tui copy's #906 fix. The old IndexByte(u, ':')
-	// host extraction hit index 0 for '::1' and index 1 for '[::1]' -
-	// both IPv6 branches below were dead code, and every IPv6 loopback
-	// form misjudged as remote (model discovery refused keyless local
-	// endpoints while the provider panel, using the fixed tui copy,
-	// called them local in the same user action).
+
 	host := u
 	if i := strings.IndexByte(u, '/'); i >= 0 {
 		host = host[:i]
 	}
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h // strip :port (SplitHostPort also unbrackets [::1])
+		host = h
 	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = host[1 : len(host)-1] // bracketed host without port
+		host = host[1 : len(host)-1]
 	} else if strings.Count(host, ":") > 1 {
-		// bare IPv6 with port ('::1:11434') - SplitHostPort rejects it
-		// (too many colons); strip the last colon-group as the port.
+
 		if i := strings.LastIndexByte(host, ':'); i >= 0 {
 			host = host[:i]
 		}
@@ -351,16 +327,7 @@ func modelDiscoveryCacheKey(resolved *config.ResolvedEndpoint) string {
 	if isGatewayModelDiscovery(resolved) {
 		return fmt.Sprintf("endpoint:%s:%s:%s", vendorID, strings.TrimSpace(strings.ToLower(resolved.EndpointID)), host)
 	}
-	// #4665: the non-gateway key must distinguish same-host upstreams, not
-	// just the host. The old key used bare Hostname() - no port, no path - so
-	// (a) localhost:11434 vs localhost:1234 collided, and (b) a reverse
-	// proxy splitting gw.example.com/oa -> upstream A and /gw -> upstream B
-	// cross-contaminated model lists for the 6h TTL (persisted to disk): the
-	// second endpoint silently returned the first endpoint's models and
-	// model selection 404'd on the wrong upstream. Keying by host:port plus
-	// the normalized base path keeps the intentional oneapi/litellm sharing
-	// (same host:port AND same base path = one registry) while isolating
-	// port-distinct and path-split upstreams.
+
 	return fmt.Sprintf("host:%s:%s|%s", vendorID, host, normalizedDiscoveryPath(resolved.BaseURL))
 }
 
@@ -384,10 +351,7 @@ func normalizedDiscoveryHost(baseURL string) string {
 	if err != nil {
 		return strings.ToLower(strings.TrimSpace(baseURL))
 	}
-	// #4665: keep the port (parsed.Host), not bare Hostname() - different
-	// ports on one host are different upstreams (localhost:11434 ollama vs
-	// localhost:1234 lm-studio). Scheme-default ports (443/https, 80/http)
-	// normalize away so gw.io and gw.io:443 still share one entry.
+
 	hostPort := strings.TrimSpace(parsed.Host)
 	if hostPort == "" {
 		hostPort = strings.TrimSpace(parsed.Hostname())
@@ -510,11 +474,7 @@ func persistModelDiscoveryCacheLocked() error {
 	if err != nil {
 		return err
 	}
-	// #1309 P1: was a FIXED path+".tmp" + os.WriteFile - two processes
-	// persisting concurrently interleaved on the same temp name (one's
-	// O_TRUNC zeroed the other's in-flight content) and the rename could
-	// publish a truncated file. AtomicWriteFile uses a unique temp + fsync,
-	// the project standard for cache files.
+
 	return util.AtomicWriteFile(path, data, 0o600)
 }
 

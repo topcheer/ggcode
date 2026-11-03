@@ -1,20 +1,5 @@
 package im
 
-// Issue #689: binding lifecycle defects in internal/im.
-//
-// Defect 1 (HIGH): BindAdapterToWorkspace never purged the adapter's
-// disabledBindings tombstone — after disable→rebind the fresh binding was
-// skipped by reloadBindingLocked (dead adapter until restart) and EnableBinding
-// resurrected the stale pre-rebind copy (ghost, #434).
-//
-// Defect 2 (MED-HIGH): UnmuteBinding had no ownership check — instance B
-// could unmute session A's foreign-muted binding and rewrite LastSessionID,
-// silently stealing the channel.
-//
-// Defect 3 (MED): reloadBindingLocked cleared currentBindings BEFORE the
-// bindingStore==nil / session==nil early return, wiping all in-memory
-// bindings and the collected prevMuted state on the pre-session path.
-
 import (
 	"testing"
 	"time"
@@ -24,9 +9,6 @@ import (
 func TestIssue689_RebindPurgesDisabledTombstone(t *testing.T) {
 	mgr, _ := testDummyManager()
 
-	// Bind adapter to the session workspace, then disable it (tombstone
-	// created). reloadBindingLocked only loads bindings for the session
-	// workspace, so the rebind below must also target it.
 	if err := mgr.BindAdapterToWorkspace("tg", "/tmp/test-workspace"); err != nil {
 		t.Fatalf("bind to session workspace: %v", err)
 	}
@@ -37,17 +19,14 @@ func TestIssue689_RebindPurgesDisabledTombstone(t *testing.T) {
 		t.Fatal("expected binding disabled")
 	}
 
-	// Rebind (same adapter, exclusive) — must purge the stale tombstone.
 	if err := mgr.BindAdapterToWorkspace("tg", "/tmp/test-workspace"); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 
-	// The tombstone must be gone — the old persisted binding no longer exists.
 	if mgr.IsBindingDisabled("tg") {
 		t.Fatal("#689: stale disabledBindings tombstone survived rebind; EnableBinding would resurrect the pre-rebind copy (ghost)")
 	}
-	// And the fresh binding must be live in currentBindings (previously
-	// reloadBindingLocked skipped it because of the surviving tombstone).
+
 	b, ok := mgr.getBindingForTest("tg")
 	if !ok {
 		t.Fatal("#689: fresh binding not active after rebind (dead adapter until restart)")
@@ -71,7 +50,7 @@ func TestIssue689_UnmuteOwnershipCheck(t *testing.T) {
 	mgr.currentBindings["tg"] = &ChannelBinding{
 		Adapter:       "tg",
 		Workspace:     "/tmp/test-workspace",
-		LastSessionID: "other-session", // foreign-mute: belongs to instance A
+		LastSessionID: "other-session",
 		Muted:         true,
 	}
 	mgr.mu.Unlock()
@@ -88,7 +67,7 @@ func TestIssue689_UnmuteOwnBindingStillWorks(t *testing.T) {
 	mgr.currentBindings["tg"] = &ChannelBinding{
 		Adapter:       "tg",
 		Workspace:     "/tmp/test-workspace",
-		LastSessionID: "test-session", // matches testDummyManager session
+		LastSessionID: "test-session",
 		Muted:         true,
 	}
 	mgr.mu.Unlock()
@@ -105,8 +84,7 @@ func TestIssue689_UnmuteOwnBindingStillWorks(t *testing.T) {
 func TestIssue689_ReloadWithoutSessionKeepsMemoryState(t *testing.T) {
 	mgr := NewManager()
 	_ = mgr.SetBindingStore(NewMemoryBindingStore())
-	// No session bound — BindAdapterToWorkspace path reaches
-	// reloadBindingLocked with m.session == nil.
+
 	mgr.mu.Lock()
 	mgr.currentBindings["tg"] = &ChannelBinding{
 		Adapter:   "tg",

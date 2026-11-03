@@ -21,14 +21,14 @@ func TestPatchMCPServerTypeSwitchClearsWS(t *testing.T) {
 	if patched.URL != "ws://h/ws" {
 		t.Fatalf("URL not patched: %q", patched.URL)
 	}
-	// Control: the pre-existing http/sse branches still clear too.
+
 	for _, ty := range []string{"http", "sse"} {
 		p := patchMCPServerConfig(base, MCPServerConfig{Type: ty, URL: "https://h"})
 		if p.Command != "" || p.Args != nil {
 			t.Fatalf("stdio→%s kept stdio fields", ty)
 		}
 	}
-	// And stdio→stdio (no type change) keeps the fields.
+
 	same := patchMCPServerConfig(base, MCPServerConfig{Type: "stdio", Command: "other"})
 	if same.Command != "other" || len(same.Args) != 2 {
 		t.Fatalf("same-type patch clobbered fields: %+v", same)

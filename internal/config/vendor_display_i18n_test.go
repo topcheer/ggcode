@@ -15,7 +15,7 @@ func TestLocalizedVendorDisplay(t *testing.T) {
 		{"aliyun", "Aliyun Bailian Coding Plan", "zh-TW", "阿里云百炼"},
 		{"aliyun", "Aliyun Bailian Coding Plan", "en", "Aliyun Bailian Coding Plan"},
 		{"ark", "Volcengine Ark Coding Plan", "zh-CN", "火山引擎方舟"},
-		{"openai", "OpenAI", "zh-CN", "OpenAI"}, // not in map, fallback to english
+		{"openai", "OpenAI", "zh-CN", "OpenAI"},
 		{"custom-vendor", "My Custom Vendor", "zh-CN", "My Custom Vendor"},
 	}
 	for _, tt := range tests {
@@ -53,7 +53,6 @@ func TestLocalizedEndpointDisplay(t *testing.T) {
 func TestResolveDisplayName(t *testing.T) {
 	cfg := DefaultConfig()
 
-	// English
 	cfg.Language = "en"
 	v, e := cfg.ResolveDisplayName("zai", "cn-coding-openai")
 	if v != "Z.ai" {
@@ -63,7 +62,6 @@ func TestResolveDisplayName(t *testing.T) {
 		t.Errorf("en endpoint: got %q, want CN Coding Plan", e)
 	}
 
-	// Chinese
 	cfg.Language = "zh-CN"
 	v, e = cfg.ResolveDisplayName("zai", "cn-coding-openai")
 	if v != "智谱 Z.AI" {
@@ -73,7 +71,6 @@ func TestResolveDisplayName(t *testing.T) {
 		t.Errorf("zh endpoint: got %q, want 国内编程套餐", e)
 	}
 
-	// Unknown vendor/endpoint should fall back to raw keys
 	v, e = cfg.ResolveDisplayName("custom-vendor", "custom-endpoint")
 	if v != "custom-vendor" {
 		t.Errorf("unknown vendor: got %q, want custom-vendor", v)
@@ -89,7 +86,6 @@ func TestResolveEndpointSelection_LocalizedDisplay(t *testing.T) {
 	cfg.Endpoint = "cn-coding-openai"
 	cfg.Model = "glm-5-turbo"
 
-	// English: display names unchanged
 	cfg.Language = "en"
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
@@ -102,7 +98,6 @@ func TestResolveEndpointSelection_LocalizedDisplay(t *testing.T) {
 		t.Errorf("en EndpointName: got %q, want CN Coding Plan", resolved.EndpointName)
 	}
 
-	// Chinese: display names localized
 	cfg.Language = "zh-CN"
 	resolved, err = cfg.ResolveActiveEndpoint()
 	if err != nil {

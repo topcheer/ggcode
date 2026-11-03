@@ -25,7 +25,7 @@ func TestAddEndpointExistingMergesNotReplaces(t *testing.T) {
 	if len(ep.Models) != 2 || ep.SelectedModel != "m1" || ep.APIKey != "${K}" {
 		t.Fatalf("existing fields must be preserved: models=%v selected=%q key=%q", ep.Models, ep.SelectedModel, ep.APIKey)
 	}
-	// Fresh endpoint still works.
+
 	if err := c.AddEndpoint("v", "e2", "", "https://x", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -43,18 +43,18 @@ func TestMCPTombstoneRollback(t *testing.T) {
 	if len(c.DeletedMCPServers) != 1 || c.DeletedMCPServers[0] != "srv" {
 		t.Fatalf("tombstone must be recorded, got %v", c.DeletedMCPServers)
 	}
-	// Idempotent double-record (failure paths may re-record).
+
 	c.RecordMCPDeleted("srv")
 	if len(c.DeletedMCPServers) != 1 {
 		t.Fatalf("double record must be idempotent, got %v", c.DeletedMCPServers)
 	}
-	// Rollback removes exactly the name.
+
 	c.RecordMCPDeleted("other")
 	c.ClearMCPDeleted("srv")
 	if len(c.DeletedMCPServers) != 1 || c.DeletedMCPServers[0] != "other" {
 		t.Fatalf("rollback must remove only the target, got %v", c.DeletedMCPServers)
 	}
-	// Clearing a name that is not tombstoned is a no-op.
+
 	c.ClearMCPDeleted("absent")
 	if len(c.DeletedMCPServers) != 1 {
 		t.Fatalf("clear of absent name must be a no-op, got %v", c.DeletedMCPServers)
@@ -97,7 +97,6 @@ func TestResolveEndpointSelectionStrictTools(t *testing.T) {
 		t.Fatalf("resolved.StrictToolsAllow = %v, want [grep]", resolved.StrictToolsAllow)
 	}
 
-	// Endpoint without the knob stays disabled (nil => false, no allowlist).
 	cfg.Endpoint = "plain-ep"
 	resolved, err = cfg.ResolveActiveEndpoint()
 	if err != nil {
@@ -146,7 +145,6 @@ func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
 		t.Errorf("per-model override: MaxRetries = %d, want 1", resolved.MaxRetries)
 	}
 
-	// A model without a model_limits entry falls back to endpoint-level.
 	cfg.Model = "gpt-5-mini"
 	resolved, err = cfg.ResolveActiveEndpoint()
 	if err != nil {
@@ -159,7 +157,6 @@ func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
 		t.Errorf("endpoint fallback: MaxRetries = %d, want 4", resolved.MaxRetries)
 	}
 
-	// No policy configured anywhere: zero values (opt-in default behavior).
 	relay := cfg.Vendors["acme"].Endpoints["relay"]
 	relay.RequestTimeout = 0
 	relay.MaxRetries = 0

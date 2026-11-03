@@ -12,7 +12,7 @@ import (
 // round-trip to 64-char hex that GetPublicKey accepts; hex input passes
 // through unchanged; garbage stays garbage (validation rejects it earlier).
 func TestNormalizeNostrPrivateKeyExport(t *testing.T) {
-	// Build a valid nsec from a known hex key.
+
 	hexKey := strings.Repeat("ab", 32)
 	nsec, err := nip19.EncodePrivateKey(hexKey)
 	if err != nil {

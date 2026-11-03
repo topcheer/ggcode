@@ -25,7 +25,7 @@ func bindingStatChanged(mod time.Time, size int64, lastMod time.Time, lastSize i
 	if mod.After(lastMod) {
 		return true
 	}
-	// Equal timestamp (same granularity window): fall back to size.
+
 	return !mod.Before(lastMod) && size != lastSize
 }
 
@@ -46,7 +46,7 @@ func (m *Manager) StartBindingWatcher() {
 	m.mu.Lock()
 	if m.bindingWatcherCancel != nil {
 		m.mu.Unlock()
-		return // already running
+		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.bindingWatcherCtx = ctx
@@ -68,10 +68,6 @@ func (m *Manager) StartBindingWatcher() {
 
 	debug.Log("im", "binding watcher: started for session=%s workspace=%s", sessionID, workspace)
 
-	// Capture the poll interval BEFORE spawning: tests (and future callers)
-	// may reassign the package-level var while a previous watcher goroutine is
-	// still between spawn and its first read — a data race under -race. The
-	// captured local is immutable for this watcher's lifetime.
 	interval := bindingWatcherInterval
 
 	safego.Go("im.binding-watcher", func() {
@@ -94,18 +90,18 @@ func (m *Manager) StartBindingWatcher() {
 				return
 			case <-ticker.C:
 				if bindPath != "" {
-					// Fast path: check mtime first. Only read the file if it changed.
+
 					fi, err := os.Stat(bindPath)
 					if err != nil {
 						continue
 					}
 					if !bindingStatChanged(fi.ModTime(), fi.Size(), lastMod, lastSize) {
-						continue // file not modified since last check
+						continue
 					}
 					lastMod = fi.ModTime()
 					lastSize = fi.Size()
 				}
-				// Either no file path (MemoryBindingStore) or file was modified.
+
 				m.checkBindingOwnership(store, workspace, sessionID)
 			}
 		}
@@ -133,7 +129,6 @@ func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID
 		return
 	}
 
-	// Build a map of persisted LastSessionID per adapter.
 	persistedSessionIDs := make(map[string]string, len(bindings))
 	for _, b := range bindings {
 		persistedSessionIDs[b.Adapter] = b.LastSessionID
@@ -144,22 +139,20 @@ func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID
 	var toRemove []string
 	for name, binding := range m.currentBindings {
 		if binding.Muted {
-			continue // already muted
+			continue
 		}
 		persistedSID, exists := persistedSessionIDs[name]
 		if !exists {
-			// Binding deleted from our store — another workspace took it over.
-			// Must mute AND remove from memory + disconnect adapter.
+
 			toRemove = append(toRemove, name)
 			continue
 		}
-		// If the persisted LastSessionID is non-empty and differs from our session,
-		// another instance has claimed this binding.
+
 		if persistedSID != "" && persistedSID != sessionID {
 			toMute = append(toMute, name)
 		}
 	}
-	// Remove bindings that were taken over by another workspace.
+
 	for _, name := range toRemove {
 		binding, ok := m.currentBindings[name]
 		if !ok {
@@ -170,7 +163,7 @@ func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID
 		m.stopAdapter(name)
 		delete(m.currentBindings, name)
 	}
-	// Mute the stale bindings while holding the lock.
+
 	for _, name := range toMute {
 		if binding, ok := m.currentBindings[name]; ok {
 			binding.Muted = true

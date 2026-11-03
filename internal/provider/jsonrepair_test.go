@@ -31,7 +31,7 @@ func TestRepairJSON_Empty(t *testing.T) {
 }
 
 func TestRepairJSON_TruncatedMissingClosingBrace(t *testing.T) {
-	// Stream truncated mid-object: missing closing }
+
 	input := `{"name":"edit_file","arguments":{"file_path":"/tmp/test.go","old_text":"foo"`
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -51,7 +51,7 @@ func TestRepairJSON_TruncatedMissingClosingBrace(t *testing.T) {
 }
 
 func TestRepairJSON_TruncatedMissingNestedClose(t *testing.T) {
-	// Missing both nested } and outer }
+
 	input := `{"name":"multi_edit_file","arguments":{"file_path":"/tmp/test.go","edits":[{"old_text":"a"`
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -122,7 +122,7 @@ func TestRepairJSON_SurroundingProse(t *testing.T) {
 }
 
 func TestRepairJSON_SmartQuotes(t *testing.T) {
-	// Smart/curly quotes instead of straight quotes
+
 	input := "{\u201cname\u201d:\u201cread_file\u201d}"
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -138,10 +138,7 @@ func TestRepairJSON_SmartQuotes(t *testing.T) {
 }
 
 func TestRepairJSON_TruncatedStringRefused(t *testing.T) {
-	// #3069: stream truncated inside a string value. The old behavior
-	// closed the quote and "succeeded", producing a valid-but-mutilated
-	// old_text that edit_file would silently run on. Repair must now be
-	// refused so the caller retries instead of executing partial args.
+
 	input := `{"name":"edit_file","arguments":{"file_path":"/tmp/test.go","old_text":"func main() {`
 	result, repaired := RepairJSON([]byte(input))
 	if repaired {
@@ -150,7 +147,7 @@ func TestRepairJSON_TruncatedStringRefused(t *testing.T) {
 }
 
 func TestRepairJSON_TrailingCommaAndTruncation(t *testing.T) {
-	// Both trailing comma and missing closing braces
+
 	input := `{"name":"multi_file_edit","arguments":{"file_path":"/tmp/test.go","edits":[{"old_text":"a","new_text":"b",`
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -163,7 +160,7 @@ func TestRepairJSON_TrailingCommaAndTruncation(t *testing.T) {
 }
 
 func TestRepairJSON_Unrepairable(t *testing.T) {
-	// Completely garbled input — should return false
+
 	inputs := []string{
 		"this is just text with no json at all",
 		"<<<>>>",
@@ -177,10 +174,7 @@ func TestRepairJSON_Unrepairable(t *testing.T) {
 }
 
 func TestRepairJSON_RealWorldTruncatedArgsRefused(t *testing.T) {
-	// #3069 real-world example: vLLM streaming truncation mid new_text.
-	// The old repair closed the string and returned a valid object whose
-	// new_text was silently cut in half — edit_file would apply a partial
-	// edit. Refusal forces the provider loop to regenerate the call.
+
 	input := `{"file_path":"/Volumes/new/ggai/ggcode/internal/agent/agent.go","old_text":"func (a *Agent) runIteration() {","new_text":"func (a *Agent) runIteration(ctx context.Context) {`
 	result, repaired := RepairJSON([]byte(input))
 	if repaired {
@@ -189,7 +183,7 @@ func TestRepairJSON_RealWorldTruncatedArgsRefused(t *testing.T) {
 }
 
 func TestRepairJSON_ArrayWithTruncation(t *testing.T) {
-	// Truncated JSON array inside an object
+
 	input := `{"edits":[{"old_text":"a","new_text":"b"},{"old_text":"c"`
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -202,7 +196,7 @@ func TestRepairJSON_ArrayWithTruncation(t *testing.T) {
 }
 
 func TestRepairJSON_PreservesEscapedQuotes(t *testing.T) {
-	// JSON with escaped quotes inside string values should not be corrupted
+
 	input := `{"name":"edit_file","arguments":{"old_text":"he said \"hello\""}}`
 	result, repaired := RepairJSON([]byte(input))
 	if repaired {
@@ -233,7 +227,7 @@ func TestStripCodeFences(t *testing.T) {
 }
 
 func TestCloseUnclosed_BalancedInput(t *testing.T) {
-	// Already balanced — should be unchanged
+
 	input := `{"a":[1,2,3]}`
 	got, ok := closeUnclosed(input)
 	if !ok || got != input {
@@ -262,8 +256,7 @@ func TestCloseUnclosed_MissingMultiple(t *testing.T) {
 }
 
 func TestCloseUnclosed_MidStringRefused(t *testing.T) {
-	// #3069: ending inside a string is unrepairable: closing the quote
-	// would fabricate a truncated-but-valid value.
+
 	for _, input := range []string{
 		`{"old_text":"func main() {`,
 		`{"a":"b","key":"partial value with`,
@@ -276,7 +269,7 @@ func TestCloseUnclosed_MidStringRefused(t *testing.T) {
 }
 
 func TestNormalizeQuotes(t *testing.T) {
-	input := "\u201chello\u201d" // "hello"
+	input := "\u201chello\u201d"
 	got := normalizeQuotes(input)
 	if got != `"hello"` {
 		t.Errorf("normalizeQuotes = %q, want %q", got, `"hello"`)
@@ -320,8 +313,7 @@ func TestRepairJSON_PythonLiterals(t *testing.T) {
 }
 
 func TestRepairJSON_PythonLiteralsInsideStringPreserved(t *testing.T) {
-	// Bare keys + Python literal inside a string value: the string content
-	// must not be rewritten.
+
 	input := `{msg: "it is True and None", n: 1}`
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -367,7 +359,7 @@ func TestRepairJSON_SingleQuotedEmbeddedDoubleQuote(t *testing.T) {
 }
 
 func TestRepairJSON_SingleQuotedAmbiguousApostrophe(t *testing.T) {
-	// Embedded apostrophe makes pairing ambiguous - must NOT be repaired.
+
 	input := `{content: 'don't stop'}`
 	_, repaired := RepairJSON([]byte(input))
 	if repaired {
@@ -376,8 +368,7 @@ func TestRepairJSON_SingleQuotedAmbiguousApostrophe(t *testing.T) {
 }
 
 func TestRepairJSON_CombinedMalformations(t *testing.T) {
-	// Real-world combo: prose wrapper + bare keys + single quotes + Python
-	// literal, all in one broken payload.
+
 	input := "Here are the arguments:\n{file_path: 'a.go', old_text: 'foo', all: True}\nDone."
 	result, repaired := RepairJSON([]byte(input))
 	if !repaired {
@@ -393,7 +384,7 @@ func TestRepairJSON_CombinedMalformations(t *testing.T) {
 }
 
 func TestQuoteUnquotedKeys_ArrayValuesNotQuoted(t *testing.T) {
-	// Array element positions must not be treated as keys.
+
 	input := `[alpha, beta]`
 	got := quoteUnquotedKeys(input)
 	if got != input {

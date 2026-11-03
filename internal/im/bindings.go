@@ -207,11 +207,7 @@ func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 		binding.BoundAt = time.Now()
 	}
 	key := compositeKey(binding.Workspace, binding.Adapter)
-	// Preserve LastSessionID from the file if it was recently updated by
-	// another instance (e.g. via UnmuteBinding/EnableBinding). Without this,
-	// a persistBinding call (triggered by inbound message, context token
-	// update, etc.) would overwrite the file with a stale in-memory
-	// LastSessionID, causing the binding watcher to auto-mute the adapter.
+
 	if existing, ok := all[key]; ok && existing.LastSessionID != "" && binding.LastSessionID != existing.LastSessionID {
 		binding.LastSessionID = existing.LastSessionID
 	}
@@ -309,14 +305,12 @@ func (s *JSONFileBindingStore) BindExclusive(binding ChannelBinding) error {
 		binding.BoundAt = time.Now()
 	}
 
-	// Remove every binding for this adapter, regardless of workspace.
 	for key, b := range all {
 		if b.Adapter == binding.Adapter {
 			delete(all, key)
 		}
 	}
 
-	// Insert the new binding.
 	all[compositeKey(binding.Workspace, binding.Adapter)] = binding
 	return s.writeAllLocked(all)
 }
@@ -372,7 +366,7 @@ func (s *JSONFileBindingStore) UpdateSessionID(workspace, adapter, sessionID str
 		all[key] = b
 		return s.writeAllLocked(all)
 	}
-	return nil // binding not found — no-op
+	return nil
 }
 
 func (s *JSONFileBindingStore) readAllLocked() (map[string]ChannelBinding, error) {
@@ -390,13 +384,13 @@ func (s *JSONFileBindingStore) readAllLocked() (map[string]ChannelBinding, error
 	if raw == nil {
 		raw = make(map[string]ChannelBinding)
 	}
-	// Migrate legacy format: keys that don't contain \x00 are old workspace-only keys.
+
 	migrated := false
 	for key, binding := range raw {
 		if strings.ContainsRune(key, '\x00') {
 			continue
 		}
-		// Legacy key — rebuild with composite key.
+
 		if strings.TrimSpace(binding.Adapter) == "" {
 			continue
 		}
@@ -418,9 +412,7 @@ func (s *JSONFileBindingStore) writeAllLocked(bindings map[string]ChannelBinding
 	if err != nil {
 		return fmt.Errorf("marshal IM bindings: %w", err)
 	}
-	// Use a unique temp file name to avoid collision with other processes
-	// that may be writing concurrently (each holds the flock but uses the
-	// same .tmp path without the lock in legacy code paths).
+
 	tmp := fmt.Sprintf("%s.tmp.%d", s.path, os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing IM bindings: %w", err)

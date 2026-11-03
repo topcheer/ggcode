@@ -1,15 +1,5 @@
 package provider
 
-// Regression probes for #3071 (openai.go, two points):
-//   V1: the ChatStream producer used 14 bare `ch <- StreamEvent{...}` sends -
-//       a cancelling consumer that stopped reading filled the 64-event buffer
-//       and parked the goroutine forever (#3068's sibling; the fallback
-//       wrapper never covered the no-fallback path).
-//   V2: foldInjectedUserMessages' else branch appended only messages[i+1]
-//       and skipped to i+2, silently DROPPING messages[i+2..j-1] when ≥2
-//       consecutive text-only user messages followed a tool_use assistant
-//       turn without a tool_result.
-
 import (
 	"context"
 	"encoding/json"
@@ -36,7 +26,7 @@ func TestIssue3071_FoldPreservesConsecutiveGuidanceUsers(t *testing.T) {
 	}
 
 	got := foldInjectedUserMessages(messages, func(blocks []ContentBlock, prefix string) []ContentBlock {
-		return blocks // fold no-op; the else path must not reach it anyway
+		return blocks
 	})
 
 	if len(got) != len(messages) {
@@ -100,19 +90,16 @@ func TestIssue3071_ChatStreamProducerExitsAfterConsumerCancel(t *testing.T) {
 		t.Fatalf("ChatStream error: %v", err)
 	}
 
-	// Read a couple of events, then cancel and stop reading entirely.
 	<-ch
 	<-ch
 	cancel()
 
-	// The producer must observe cancellation and close the channel instead
-	// of parking on a full buffer. Generous 10s guard against CI jitter.
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case _, ok := <-ch:
 			if !ok {
-				return // closed: producer exited cleanly
+				return
 			}
 		case <-deadline:
 			t.Fatal("producer goroutine leaked: channel not closed within 10s of consumer cancel (V1)")

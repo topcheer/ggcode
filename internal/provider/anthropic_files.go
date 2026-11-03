@@ -17,25 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Anthropic Files API integration (GA since 2025, no beta header).
-//
-// The agent re-sends the full conversation on every turn, so a large image
-// attachment is re-inlined as base64 in every request payload. Images at or
-// above filesUploadThresholdBytes are uploaded once to /v1/files and then
-// referenced by file_id (ImageBlockParam source type "file"), which:
-//   - removes the recurring per-turn payload cost for repeated attachments;
-//   - lifts Anthropic's 5 MB base64 inline cap (Files API allows 500 MB), so
-//     huge screenshots no longer hard-fail the request with a 400.
-//
-// The uploader is per-provider and in-memory: file_ids are cached by
-// content hash so each unique image uploads exactly once. Anthropic
-// retains stored files only for a limited window, so cache entries carry
-// an upload timestamp and expire after filesCacheTTL - a stale file_id
-// fails every /v1/messages request with a 400 that noteFailure never
-// sees (it only classifies upload errors), so expired entries are
-// evicted and re-uploaded instead of trusted forever. Failures degrade
-// gracefully to inline base64 — the feature is strictly additive.
-
 const (
 	// filesUploadThresholdBytes is the minimum decoded image size (2 MiB)
 	// worth an upload round-trip. Smaller images inline as base64 exactly
@@ -116,8 +97,7 @@ func filesAPIAllowed(baseURL string) bool {
 // resolve returns the file_id for the given image bytes, uploading them on
 // first sight. ok=false means the caller should fall back to inline base64.
 func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (fileID string, ok bool) {
-	// client/enabled are immutable after construction - safe to read
-	// outside the lock. endpointBroken is mutated under mu; checked inside.
+
 	if u == nil || u.client == nil || !u.enabled || len(data) == 0 {
 		return "", false
 	}
@@ -134,9 +114,7 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 			u.mu.Unlock()
 			return e.fileID, true
 		}
-		// Expired: the stored file may have been deleted server-side; a
-		// stale file_id would 400 every messages request with no eviction
-		// path. Drop it and fall through to a fresh upload (#3066).
+
 		delete(u.cache, key)
 	}
 	if t, hit := u.failed[key]; hit {
@@ -144,8 +122,7 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 			u.mu.Unlock()
 			return "", false
 		}
-		// Expired transient failure (#2568): retry with a fresh attempt
-		// instead of poisoning this hash for the provider lifetime.
+
 		delete(u.failed, key)
 	}
 	u.mu.Unlock()
@@ -158,7 +135,7 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 
 	u.mu.Lock()
 	u.cache[key] = filesCacheEntry{fileID: id, uploadedAt: time.Now()}
-	delete(u.failed, key) // stale transient marker, if any, must not survive a success
+	delete(u.failed, key)
 	u.uploads++
 	u.mu.Unlock()
 	debug.Log("anthropic-files", "uploaded image to Files API: %d bytes %s -> %s (dedupe #%d)", len(data), mime, id, u.uploads)
@@ -190,19 +167,16 @@ func (u *fileUploader) upload(ctx context.Context, mime string, data []byte, key
 func (u *fileUploader) noteFailure(key string, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	// Classification runs under the lock: the first-upload heuristic reads
-	// u.uploads, which is mu-guarded.
+
 	permanent := false
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
 		switch sc := apiErr.StatusCode; {
 		case sc == 404 || sc == 403:
-			// capability/permission: this endpoint or key will not serve
-			// /v1/files, ever.
+
 			permanent = true
 		case sc == 400 && u.uploads == 0:
-			// 400 before any success: endpoint-level mismatch (proxy without
-			// /v1/files). After a success, 400s are content-level.
+
 			permanent = true
 		}
 	}
@@ -235,8 +209,7 @@ func filesExtForMIME(mime string) string {
 // back to inline base64 otherwise. Malformed base64 never blocks: the caller
 // keeps the original string.
 func (p *AnthropicProvider) filesImageSource(ctx context.Context, mime, b64 string) (anthropic.ImageBlockParamSourceUnion, bool) {
-	// Cheap pre-check: base64 is ~4/3 of raw bytes, so anything shorter than
-	// the threshold cannot reach it — skip the decode entirely.
+
 	if p.files == nil || len(b64) < filesUploadThresholdBytes {
 		return anthropic.ImageBlockParamSourceUnion{}, false
 	}

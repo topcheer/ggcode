@@ -8,17 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// OpenAI Responses built-in (server-side) tools (sa-63).
-//
-// The Responses API hosts certain tools inside OpenAI's infrastructure: the
-// model invokes them and the result is folded into the response in-band, so
-// the agent loop never sees a client-side function_call for them. This file
-// wires the declarative `server_tools` endpoint configuration (shared with
-// the Anthropic and Gemini legs) into the Responses request envelope and
-// surfaces the server-executed artifacts (code interpreter transcripts,
-// file search hits, generated-file citations) back into the conversation as
-// text, mirroring the Gemini grounding leg.
-
 // responsesIncludeFileSearchResults asks the API to inline retrieved chunk
 // text in file_search_call items so the agent can quote its sources.
 const responsesIncludeFileSearchResults = "file_search_call.results"
@@ -33,12 +22,7 @@ const responsesIncludeFileSearchResults = "file_search_call.results"
 // Unknown declarations are ignored (fail closed), mirroring the Anthropic
 // and Gemini legs.
 func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
-	// Union of the sa-62 hosted set (web_search family) and the sa-63
-	// built-in set; unrecognized declarations are filtered out, and the
-	// recognized remainder is applied unconditionally - including the empty
-	// set, which CLEARS the stored tools so removing server_tools from the
-	// config actually disables them on provider reuse (#3073). Only an
-	// unrecognized-only set keeps the previous value (fail closed).
+
 	kept := make([]ServerToolConfig, 0, len(tools))
 	for _, t := range tools {
 		if _, ok := responsesHostedTool(t); ok {
@@ -208,9 +192,7 @@ func formatCodeInterpreterCall(raw json.RawMessage) (string, bool) {
 		b.WriteString(strings.TrimRight(item.Code, "\n"))
 		b.WriteString("\n```")
 	}
-	// Output entries come in two shapes across API revisions: a console
-	// string directly, or a {console:{outputs:[{text:...}]}} object. Parse
-	// each entry tolerantly; unknown shapes contribute nothing.
+
 	for _, rawOut := range item.Outputs {
 		var asString string
 		if json.Unmarshal(rawOut, &asString) == nil && strings.TrimSpace(asString) != "" {

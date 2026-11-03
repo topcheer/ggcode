@@ -1,11 +1,5 @@
 package config
 
-// #3533 probe: restoreEnvRefs aligns array elements by INDEX, so removing a
-// leading server (index shift) or reordering servers made the equality test
-// compare two DIFFERENT servers - the ${VAR} restore never fired and the
-// expanded plaintext was silently persisted. SaveMCPServers must re-align
-// the on-disk list by server NAME before restoring.
-
 import (
 	"os"
 	"strings"
@@ -33,7 +27,6 @@ func TestIssue3533_RemoveLeadingServerKeepsTrailingRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// In-memory: Load expanded github's header; `search` removed by the user.
 	servers := []MCPServerConfig{{
 		Name: "github",
 		Headers: map[string]string{
@@ -76,7 +69,6 @@ func TestIssue3533_ReorderKeepsRefsOnOwnServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Swap order in memory (both values unchanged, just expanded by Load).
 	servers := []MCPServerConfig{
 		{Name: "second", Env: map[string]string{"B": "other-secret"}},
 		{Name: "first", Env: map[string]string{"A": "reordered-secret"}},

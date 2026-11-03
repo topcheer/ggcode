@@ -140,15 +140,7 @@ func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 }
 
 func resolveFeishuSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
-	// #1562: start from the GLOBAL config and overlay adapter extras -
-	// the resolveSTTConfigFunc contract every other implementation
-	// (slack/qq/tg/discord) establishes. This function started from a
-	// zero value and returned the sparse extra-only config as the
-	// PRIMARY, so a global base_url+api_key plus a feishu-only model
-	// override built a primary with empty credentials that failed every
 
-	// Transcribe ("STT is not configured") - feishu voice was dead
-	// while the same global config worked everywhere else.
 	cfg := global
 	hasOverride := false
 	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
@@ -164,17 +156,13 @@ func resolveFeishuSTTConfig(global config.IMSTTConfig, extra map[string]interfac
 		if global.Provider == "" && global.BaseURL == "" && global.APIKey == "" {
 			return nil
 		}
-		// #1743 case 2: the sibling contract (discord/slack/qq) is a
-		// 3-field STRICT check on the resolved config - a global with
-		// url+key but no Model built a primary that ALWAYS failed at
-		// openai.go ("STT is not configured") on every voice message,
-		// instead of falling straight to local whisper.
+
 		if strings.TrimSpace(global.BaseURL) == "" || strings.TrimSpace(global.APIKey) == "" || strings.TrimSpace(global.Model) == "" {
 			return nil
 		}
 		return &global
 	}
-	// Same strictness for the extras-resolved shape.
+
 	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
 		return nil
 	}
@@ -208,11 +196,7 @@ func (a *feishuAdapter) Close() error {
 }
 
 func (a *feishuAdapter) run(ctx context.Context) {
-	// Initial token fetch (needed for sending messages regardless of transport).
-	// Retry with backoff instead of dead-ending on the first failure: a
-	// transient network blip at startup must not leave the adapter in a
-	// terminal error state until a manual restart (#540). Mirrors the
-	// reconnect loops of DingTalk/Discord/WhatsApp.
+
 	if err := a.fetchTokenWithRetry(ctx, []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}); err != nil {
 		if ctx.Err() == nil {
 			a.publishState(false, "error", fmt.Sprintf("token refresh: %v", err))
@@ -223,7 +207,6 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	a.connected = true
 	a.mu.Unlock()
 
-	// Fetch bot info (open_id) for ContactURI
 	if err := a.fetchBotInfo(ctx); err != nil {
 		debug.Log("feishu", "adapter=%s fetchBotInfo error (non-fatal): %v", a.name, err)
 	}
@@ -231,7 +214,6 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	a.publishState(true, "connected", "")
 	debug.Log("feishu", "adapter=%s connected (token obtained)", a.name)
 
-	// Start token refresh goroutine
 	safego.Go("im.feishu.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
 
 	// Start webhook server if port configured (legacy mode)
@@ -240,7 +222,7 @@ func (a *feishuAdapter) run(ctx context.Context) {
 		a.startWebhookServer(ctx)
 		<-ctx.Done()
 	} else {
-		// Default: use WebSocket long connection via Feishu SDK
+
 		wsErr = a.runWebSocket(ctx)
 	}
 
@@ -248,7 +230,7 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	a.connected = false
 	a.mu.Unlock()
 	if wsErr != nil {
-		// WS client failure must surface as an error state, not "stopped" (#540).
+
 		a.publishState(false, "error", wsErr.Error())
 	} else {
 		a.publishState(false, "stopped", "")
@@ -285,12 +267,6 @@ func (a *feishuAdapter) fetchTokenWithRetry(ctx context.Context, backoffs []time
 }
 
 func (a *feishuAdapter) runWebSocket(ctx context.Context) error {
-	// We bypass the SDK's WS client entirely because it silently drops
-	// MessageTypeCard frames (case MessageTypeCard: return in handleDataFrame).
-	// Instead, we establish our own single WS connection that handles both
-	// event (messages) and card (button callbacks) message types.
-	// Using a single connection avoids the conflict where two WS connections
-	// for the same appID cause the earlier one to be disconnected (error 200340).
 
 	eventHandler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
@@ -307,10 +283,6 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) error {
 		domain = "https://open.larksuite.com"
 	}
 
-	// Use the official Feishu SDK WS client so the platform recognizes
-	// this connection as capable of receiving card callbacks.
-	// Our hand-rolled WS connection was not registering the callback
-	// capability, so card.action.trigger was never delivered.
 	wsClient := larkws.NewClient(
 		a.appID, a.appSecret,
 		larkws.WithEventHandler(eventHandler),
@@ -334,9 +306,7 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) error {
 			return nil
 		}
 		debug.Log("feishu", "adapter=%s SDK WS client exited: %v", a.name, err)
-		// Surface the failure as an error state instead of only logging it —
-		// the optimistic "online" published above would otherwise stand
-		// uncorrected (#540).
+
 		return fmt.Errorf("ws client: %w", err)
 	}
 
@@ -409,10 +379,8 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 
 	debug.Log("feishu", "adapter=%s raw inbound: chat=%s msgType=%s chatType=%s sender=%s contentLen=%d", a.name, chatID, msgType, chatType, openID, len(content))
 
-	// Process non-text message types into attachments
 	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
 
-	// Parse text content
 	text := a.parseMessageContent(content)
 	text = strings.TrimSpace(text)
 	if voiceText != "" {
@@ -461,10 +429,7 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
 			return
 		}
-		// Processing failed — the message would otherwise be silently dropped
-		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
-		// the failure back to the sender via the chat so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
+
 		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
@@ -580,8 +545,7 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Cap body size to prevent OOM DoS via Content-Length: 5G style attacks.
-	// 1 MiB is generous for Feishu event envelopes (typical size is <10 KiB).
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	bodyBytes, err := util.ReadAll(r.Body, util.ReadLimitGeneral)
 	if err != nil {
@@ -590,7 +554,6 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Verify signature if encryptKey is set
 	if a.encryptKey != "" {
 		timestamp := r.Header.Get("X-Lark-Request-Timestamp")
 		nonce := r.Header.Get("X-Lark-Request-Nonce")
@@ -600,10 +563,7 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "signature mismatch", http.StatusUnauthorized)
 			return
 		}
-		// Reject stale or replayed requests. Feishu sends timestamp as a
-		// unix-second string. ±5min window matches Feishu's documented
-		// recommendation; combined with nonce LRU this defeats replay even
-		// when the original signature is captured.
+
 		if !a.acceptTimestamp(timestamp) {
 			debug.Log("feishu", "adapter=%s webhook stale timestamp=%s", a.name, timestamp)
 			http.Error(w, "stale request", http.StatusUnauthorized)
@@ -622,15 +582,6 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #2110: Feishu's Encrypt Key callback protocol. When the console has
-	// an Encrypt Key configured, the ENTIRE body is {"encrypt":"<b64>"} -
-	// the signature above is computed over the raw (encrypted) body so it
-	// still passes, but header/token/challenge all live INSIDE the
-	// ciphertext. Previously the encrypt field was never read: the header
-	// assertion below failed, and every encrypted event was silently
-	// dropped with a bare 200 and no log of any level. Official scheme:
-	// AES-256-CBC, key = sha256(encrypt_key), IV = first 16 bytes of the
-	// key, PKCS7-padded JSON payload.
 	if enc, ok := payload["encrypt"].(string); ok && enc != "" {
 		if a.encryptKey == "" {
 			debug.Log("feishu", "adapter=%s webhook body is encrypted (encrypt key set in the console) but no encrypt_key configured - dropping", a.name)
@@ -650,16 +601,12 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Verify the verification token when configured (#955). Previously this
-	// config was dead (never checked), leaving an unauthenticated callback
-	// surface when encrypt_key was not set.
 	if !a.webhookTokenValid(payload) {
 		debug.Log("feishu", "adapter=%s webhook verification token mismatch", a.name)
 		http.Error(w, "token mismatch", http.StatusUnauthorized)
 		return
 	}
 
-	// Handle URL verification challenge
 	if challenge, ok := payload["challenge"].(string); ok {
 		resp := map[string]any{
 			"challenge": challenge,
@@ -669,15 +616,11 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process event
 	header, _ := payload["header"].(map[string]any)
 	if header == nil {
 		return
 	}
-	// Dedup by event_id (preferred) or message_id. Feishu retries up to 3x
-	// when the webhook does not reply 200 within ~3s; agent runs commonly
-	// exceed that, so without dedup the same message triggers 2-3 parallel
-	// agent turns and 2-3x the side effects.
+
 	eventID, _ := header["event_id"].(string)
 	dedupKey := eventID
 	if dedupKey == "" {
@@ -699,15 +642,13 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if eventType == "im.message.receive_v1" {
 		event, _ := payload["event"].(map[string]any)
 		if event != nil {
-			// Reply 200 immediately so Feishu does not retry; process the
-			// event in a detached goroutine. Use background ctx because the
-			// HTTP request ctx is cancelled the moment we return.
+
 			w.WriteHeader(http.StatusOK)
 			safego.Go("im.feishu.handleMessageEvent", func() { a.handleMessageEvent(a.ctx, event) })
 			return
 		}
 	}
-	// Handle card action callbacks (button clicks from interactive messages)
+
 	if eventType == "card.action.trigger" {
 		w.WriteHeader(http.StatusOK)
 		safego.Go("im.feishu.handleCardAction", func() { a.handleCardAction(a.ctx, payload) })
@@ -752,7 +693,7 @@ func decryptFeishuPayload(encB64, encryptKey string) ([]byte, error) {
 	}
 	plain := make([]byte, len(ciphertext))
 	cipher.NewCBCDecrypter(block, key[:aes.BlockSize]).CryptBlocks(plain, ciphertext)
-	// Strip PKCS7 padding.
+
 	pad := int(plain[len(plain)-1])
 	if pad <= 0 || pad > aes.BlockSize || pad > len(plain) {
 		return nil, fmt.Errorf("invalid PKCS7 padding")
@@ -793,9 +734,7 @@ func (a *feishuAdapter) acceptTimestamp(timestamp string) bool {
 // already seen within the freshness window.
 func (a *feishuAdapter) acceptNonce(timestamp, nonce string) bool {
 	if nonce == "" {
-		// Feishu does include a nonce on real requests; an empty nonce is
-		// suspicious but we don't want to break legitimate clients that omit
-		// it. Skip the check rather than reject outright.
+
 		return true
 	}
 	key := timestamp + "|" + nonce
@@ -868,8 +807,6 @@ func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string
 		return
 	}
 
-	// Card action fields are nested under "event". Fall back to the payload
-	// top level for tolerance against older/alternate envelopes.
 	event, _ := payload["event"].(map[string]any)
 	lookup := func(key string) (map[string]any, bool) {
 		if event != nil {
@@ -881,7 +818,6 @@ func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string
 		return v, ok
 	}
 
-	// The button value contains {"choice": "1"} etc.
 	action, _ := lookup("action")
 	if action == nil {
 		return
@@ -895,13 +831,11 @@ func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string
 		return
 	}
 
-	// Sender: operator.open_id (falls back to operator at top level).
 	openID := ""
 	if operator, ok := lookup("operator"); ok {
 		openID, _ = operator["open_id"].(string)
 	}
 
-	// Message context: context.open_message_id / open_chat_id.
 	messageID, chatID := "", ""
 	if actionCtx, ok := lookup("context"); ok {
 		messageID, _ = actionCtx["open_message_id"].(string)
@@ -941,14 +875,15 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	messageID, _ := message["message_id"].(string)
 	content, _ := message["content"].(string)
 	chatType, _ := message["chat_type"].(string)
+
 	// #1550: the WS branch reads message_type and routes non-text types
 	// through processAttachments; the webhook branch did neither, so an
 	// image message's {"image_key":...} JSON fell through
 	// parseMessageContent (no text key, no post structure) and the RAW
 	// JSON string reached the agent as text.
+
 	msgType, _ := message["message_type"].(string)
 
-	// Parse text content
 	text := a.parseMessageContent(content)
 	text = strings.TrimSpace(text)
 	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
@@ -997,10 +932,7 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
 			return
 		}
-		// Processing failed — the message would otherwise be silently dropped
-		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
-		// the failure back to the sender via the chat so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
+
 		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
@@ -1026,7 +958,7 @@ func (a *feishuAdapter) processAttachments(ctx context.Context, msgType, content
 	case "file":
 		return a.processFileAttachment(ctx, parsed, messageID)
 	case "sticker":
-		// Sticker is essentially an image
+
 		return a.processImageAttachment(ctx, parsed)
 	}
 	return nil, ""
@@ -1045,7 +977,7 @@ func (a *feishuAdapter) processImageAttachment(ctx context.Context, parsed map[s
 	if len(data) == 0 {
 		return nil, ""
 	}
-	// Detect real MIME type from content
+
 	if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
 		mimeType = decoded.MIME
 	}
@@ -1071,7 +1003,6 @@ func (a *feishuAdapter) processAudioAttachment(ctx context.Context, parsed map[s
 		return nil, ""
 	}
 
-	// Try STT transcription
 	transcript := ""
 	if a.stt != nil {
 		transcript = a.transcribeFeishuAudio(ctx, data, mimeType)
@@ -1099,7 +1030,7 @@ func (a *feishuAdapter) processFileAttachment(ctx context.Context, parsed map[st
 	if len(data) == 0 {
 		return nil, ""
 	}
-	// Cache file locally
+
 	localPath, cacheErr := cacheFeishuAttachment(data, fileName, mimeType)
 	if cacheErr != nil {
 		debug.Log("feishu", "adapter=%s cache file failed: %v", a.name, cacheErr)
@@ -1175,7 +1106,6 @@ func (a *feishuAdapter) transcribeFeishuAudio(ctx context.Context, data []byte, 
 	audioPath := src.Name()
 	cleanup := func() { _ = os.Remove(audioPath) }
 
-	// Convert to wav if needed
 	if ext != ".wav" {
 		dst, err := os.CreateTemp("", "ggcode-feishu-audio-*.wav")
 		if err != nil {
@@ -1260,10 +1190,7 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 	if text, ok := parsed["text"].(string); ok {
 		return text
 	}
-	// Rich text (post) format. Official payloads wrap the language map:
-	// {"post":{"zh_cn":{"content":[...]}, ...}} - unwrap first (#2309),
-	// otherwise the range below walks the wrapper layer (no "content"
-	// key) and every post message collapses to "".
+
 	if post, ok := parsed["post"].(map[string]any); ok {
 		parsed = post
 	}
@@ -1320,11 +1247,7 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 	if bestRank >= 0 {
 		return bestText
 	}
-	// #1550: the content IS structured JSON but carries no text/post
-	// (image_key, file_key, ... media payloads). Returning the raw JSON
-	// string fed it to the agent as message text; the WS branch routes
-	// these through processAttachments. Structured-but-textless means
-	// empty TEXT - the attachments pipeline owns the payload.
+
 	if strings.HasPrefix(strings.TrimSpace(content), "{") {
 		return ""
 	}
@@ -1344,7 +1267,6 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 
-	// Extract images and upload/send them
 	images, remainingText := ExtractImagesFromText(content)
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, chatID, img); err != nil {
@@ -1352,7 +1274,6 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		}
 	}
 
-	// Send remaining text as post (rich text) for better formatting
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
 		return nil
@@ -1361,14 +1282,11 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	for i, chunk := range chunks {
 		msgID, err := a.sendPostMessage(ctx, chatID, chunk)
 		if err != nil {
-			// Fallback to plain text if post format fails
+
 			debug.Log("feishu", "adapter=%s post send failed, falling back to text: %v", a.name, err)
 			msgID, err = a.sendTextMessage(ctx, chatID, stripMarkdown(chunk))
 			if err != nil {
-				// #2297-form post-verification: a Close racing past the entry
-				// gate (check-then-use window) surfaces here as a raw API
-				// error that hides the real state - re-check and report the
-				// honest "not online" instead.
+
 				if !a.isConnected() {
 					return fmt.Errorf("Feishu bot %q is not online", a.name)
 				}
@@ -1376,8 +1294,7 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			}
 		}
 		a.recordOutboundMessage(binding, msgID)
-		// Inter-message delay to respect Feishu's 5 QPS rate limit.
-		// Source: https://open.feishu.cn/document/server-docs/im-v1/message/create
+
 		if i < len(chunks)-1 {
 			select {
 			case <-time.After(feishuInterMsgDelay):
@@ -1453,8 +1370,7 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 		if err != nil {
 			return "", err
 		}
-		// Feishu returns HTTP 429 with x-ogw-ratelimit-reset header when rate-limited.
-		// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
+
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
 			delay := parseRetryAfter(resp)
 			resp.Body.Close()
@@ -1596,8 +1512,7 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1893: feishu was the one adapter the #1739 sweep missed -
-			// every other adapter reads local paths via ReadLimited.
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
@@ -1610,7 +1525,7 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 			data = d
 			filename = filepath.Base(img.Data)
 		} else {
-			// Download the image with context for cancellation
+
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
 			if err != nil {
 				return fmt.Errorf("create image download request: %w", err)
@@ -1660,13 +1575,11 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 		return nil
 	}
 
-	// Step 1: Upload image to get image_key
 	imageKey, err := a.uploadImage(ctx, data, filename)
 	if err != nil {
 		return fmt.Errorf("upload image: %w", err)
 	}
 
-	// Step 2: Send image message
 	return a.sendImageMessage(ctx, chatID, imageKey)
 }
 
@@ -1769,7 +1682,7 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 		if err != nil {
 			return err
 		}
-		// Feishu returns HTTP 429 with x-ogw-ratelimit-reset header when rate-limited.
+
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
 			delay := parseRetryAfter(resp)
 			resp.Body.Close()
@@ -1800,11 +1713,7 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 }
 
 func splitFeishuMessage(text string, maxLen int) []string {
-	// #757: the Feishu interactive card limit (~30KB) applies to the JSON
-	// payload BYTES. The old rune-based split let a 28000-rune CJK chunk
-	// reach ~84KB (3 bytes/rune) -- every long Chinese reply exceeded the
-	// card limit, failed, and degraded to plain text via fallback. Split on
-	// bytes; maxLen (28000) already leaves headroom for card structure.
+
 	return splitMessageBytes(text, maxLen, true)
 }
 
@@ -1839,8 +1748,6 @@ func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content str
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
 
-	// Card JSON 2.0 structure: schema + config + body.elements
-	// This enables full markdown rendering (tables, headings, code blocks, etc.)
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -1907,8 +1814,7 @@ func parseFeishuMessageID(r io.Reader) (string, error) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		return "", nil
 	}
-	// Feishu Open API returns HTTP 200 with code != 0 for errors
-	// (rate limits, invalid token, content too long, etc.)
+
 	if result.Code != 0 {
 		return "", fmt.Errorf("Feishu API error [%d]: %s", result.Code, result.Msg)
 	}
@@ -1946,7 +1852,6 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 		return "", fmt.Errorf("Feishu channel is not configured")
 	}
 
-	// Build card with markdown + button column set
 	elements := []any{
 		map[string]any{
 			"tag":     "markdown",

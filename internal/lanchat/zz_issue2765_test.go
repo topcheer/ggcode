@@ -25,10 +25,6 @@ func TestIssue2765SingleDatagramDeliveredToHub(t *testing.T) {
 	hub.SetCallbacks(func(m Message) { got <- m }, nil, nil, nil, nil, nil)
 	udp.Start()
 
-	// Build a message envelope exactly as SendUnicast does: marshal the
-	// envelope, compress, then run the production splitter - small payloads
-	// take the single non-fragment datagram path with a base64-wrapped
-	// Payload.
 	msg := Message{ID: "msg-2765", FromNodeID: "peer-2765", Content: "single datagram body"}
 	payload, err := json.Marshal(msg)
 	if err != nil {
@@ -53,7 +49,6 @@ func TestIssue2765SingleDatagramDeliveredToHub(t *testing.T) {
 		t.Fatal("small payload must take the non-fragment single-datagram path")
 	}
 
-	// Feed the exact production wire bytes through a real UDP socket.
 	addr, ok := udp.conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		t.Fatalf("transport addr is %T", addr)

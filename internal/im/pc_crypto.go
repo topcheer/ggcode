@@ -64,10 +64,8 @@ func pcEncryptPayload(sessionID, sessionKeyB64 string, payload pcPayload) (*pcEn
 		return nil, err
 	}
 
-	// AAD = sessionId UTF-8 bytes
 	sealed := aesgcm.Seal(nil, iv, plaintext, []byte(sessionID))
 
-	// Go GCM Seal appends tag to ciphertext; split them.
 	tagSize := aesgcm.Overhead()
 	ciphertext := sealed[:len(sealed)-tagSize]
 	tag := sealed[len(sealed)-tagSize:]
@@ -119,7 +117,6 @@ func pcDecryptPayload(sessionID, sessionKeyB64 string, envelope *pcEncryptedEnve
 		return nil, err
 	}
 
-	// Go GCM Open expects ciphertext || tag concatenated.
 	sealed := append(ciphertext, tag...)
 	plaintext, err := aesgcm.Open(nil, iv, sealed, []byte(sessionID))
 	if err != nil {

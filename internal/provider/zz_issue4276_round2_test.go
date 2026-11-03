@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// #4276 round 2: live evidence (2026-10-17, binary 727cc6ddf which already
-// contained the round-1 additionalProperties fix) shows moonshot still
-// rejecting with "At path 'properties.steps': detected infinite recursion
-// without termination condition". MoonshotAI/walle - the open-source
-// validator behind the API - defines that rejection as a $ref reference
-// cycle (required-hop cycles, mutual refs, array self-reference with
-// minItems>=1). Round 1 never touched $refs; round 2 dereferences them with
-// cycle cutting. These cases replay walle's own invalid.jsonl corpus.
-
 func mustNormalize4276R2(t *testing.T, in string) map[string]any {
 	t.Helper()
 	out := normalizeMoonshotSchema(json.RawMessage(in))
@@ -42,9 +33,7 @@ func Test4276R2_DefsSelfReferenceCycleCut(t *testing.T) {
 	in := `{"$defs":{"XXX":{"properties":{"next":{"$ref":"#/$defs/XXX"}},"required":["next"],"type":"object"}},"properties":{"node":{"$ref":"#/$defs/XXX"}},"type":"object"}`
 	doc := mustNormalize4276R2(t, in)
 	assertNoRefs4276R2(t, doc)
-	// The cycle must unwind into a FINITE chain: each hop retains the real
-	// object shape, and the chain terminates (depth cap) in a permissive
-	// free-form node with no further "next" - no infinite recursion left.
+
 	node := doc["properties"].(map[string]any)["node"].(map[string]any)
 	cur := node
 	for hops := 0; hops < 10; hops++ {
@@ -64,7 +53,7 @@ func Test4276R2_DefsSelfReferenceCycleCut(t *testing.T) {
 	if props, _ := cur["properties"].(map[string]any); len(props) != 0 {
 		t.Fatalf("terminal node must be free-form (no properties), got: %v", cur)
 	}
-	// Idempotent.
+
 	once, _ := json.Marshal(doc)
 	twice := normalizeMoonshotSchema(once)
 	if string(once) != string(twice) {
@@ -96,7 +85,7 @@ func Test4276R2_UnresolvableRefFallsBack(t *testing.T) {
 	if b["type"] != "object" || b["additionalProperties"] != true {
 		t.Fatalf("unresolvable ref must cut to permissive object, got: %v", b)
 	}
-	// Sibling keywords of the ref survive.
+
 	in2 := `{"type":"object","properties":{"x":{"$ref":"https://example.com/x.json","description":"keep me"}}}`
 	doc2 := mustNormalize4276R2(t, in2)
 	x := doc2["properties"].(map[string]any)["x"].(map[string]any)
@@ -123,7 +112,7 @@ func Test4276R2_DeepChainCut(t *testing.T) {
 	in := `{"type":"object","properties":{"p":{"$ref":"#/$defs/L1"}},"$defs":{"L1":{"properties":{"n":{"$ref":"#/$defs/L2"}}},"L2":{"properties":{"n":{"$ref":"#/$defs/L3"}}},"L3":{"properties":{"n":{"$ref":"#/$defs/L4"}}},"L4":{"properties":{"n":{"$ref":"#/$defs/L5"}}},"L5":{"type":"object"}}}`
 	doc := mustNormalize4276R2(t, in)
 	assertNoRefs4276R2(t, doc)
-	// 5-hop chain: L1->L2->L3->L4 cut at depth cap, the tail is permissive.
+
 	raw, _ := json.Marshal(doc)
 	if !strings.Contains(string(raw), "additionalProperties") {
 		t.Fatalf("depth-cut node must carry the permissive fallback: %s", raw)
@@ -147,8 +136,7 @@ func Test4276R2_RefFreeUnchanged(t *testing.T) {
 // permissive free-form object instead of failing every request in the
 // session.
 func Test4276R3_SizeGuardDegradesOversizedSchema(t *testing.T) {
-	// A natively huge schema (the real-world case: large MCP tool schemas
-	// arrive over the cap already, no deref inflation needed).
+
 	props := make([]string, 260)
 	sub := make([]string, 8)
 	for j := range sub {
@@ -182,7 +170,7 @@ func Test4276R3_SizeGuardDegradesOversizedSchema(t *testing.T) {
 
 // A schema just under the cap keeps its full shape (guard must not fire early).
 func Test4276R3_SizeGuardKeepsUnderCap(t *testing.T) {
-	props := make([]string, 150) // ~60KB, safely under 100000
+	props := make([]string, 150)
 	for i := range props {
 		props[i] = fmt.Sprintf(`"p%03d":{"$ref":"#/$defs/S"}`, i)
 	}

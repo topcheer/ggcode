@@ -67,7 +67,7 @@ func (l *List) trimLocked() {
 	target := l.maxItems * 3 / 4
 	drop := len(l.items) - target
 	kept := make([]Item, target)
-	copy(kept, l.items[drop:]) // copy: don't pin dropped items via the backing array
+	copy(kept, l.items[drop:])
 	l.items = kept
 	l.offsetIdx -= drop
 	if l.offsetIdx < 0 {
@@ -238,7 +238,7 @@ func (l *List) ScrollDown(n int) {
 	defer l.mu.Unlock()
 	l.follow = false
 	l.scrollByLocked(n)
-	// Re-enable follow when the viewport lands on the end position.
+
 	endIdx, endLine := l.calcEndPositionLocked()
 	if l.offsetIdx >= endIdx && l.offsetLine >= endLine {
 		l.follow = true
@@ -282,7 +282,7 @@ func (l *List) AtBottom() bool {
 	if len(l.items) == 0 {
 		return true
 	}
-	// Compute total height from offsetIdx to end
+
 	total := 0
 	for i := l.offsetIdx; i < len(l.items); i++ {
 		total += l.items[i].Height(l.width)
@@ -309,8 +309,6 @@ func (l *List) YOffset() int {
 func (l *List) Render() string {
 	l.mu.Lock()
 
-	// Re-sync scroll when follow is active — item content may have changed
-	// since last scroll calculation (e.g. streaming text updates).
 	if l.follow {
 		l.scrollToEndLocked()
 	}
@@ -329,11 +327,10 @@ func (l *List) Render() string {
 		content := l.items[idx].Render(l.width)
 		itemLines := splitVisualLines(content)
 
-		// Skip lines before the offset
 		if offset > 0 && offset < len(itemLines) {
 			itemLines = itemLines[offset:]
 		} else if offset >= len(itemLines) {
-			// Gap/spacing lines
+
 			gap := offset - len(itemLines)
 			if gap < needed {
 				for i := 0; i < gap; i++ {
@@ -346,14 +343,12 @@ func (l *List) Render() string {
 			continue
 		}
 
-		// Take only what fits
 		if len(itemLines) > needed {
 			itemLines = itemLines[:needed]
 		}
 		lines = append(lines, itemLines...)
 		needed -= len(itemLines)
 
-		// Add 1-line gap between items
 		if needed > 0 && idx < len(l.items)-1 {
 			lines = append(lines, "")
 			needed--
@@ -365,8 +360,6 @@ func (l *List) Render() string {
 
 	l.dirty = false
 
-	// Pad with empty lines so the output is always exactly l.height lines.
-	// This prevents lipgloss from expanding or contracting the container.
 	for len(lines) < l.height {
 		lines = append(lines, "")
 	}
@@ -395,10 +388,10 @@ func (l *List) scrollByLocked(n int) {
 		return
 	}
 	if n > 0 {
-		// Scroll down
+
 		for n > 0 && l.offsetIdx < len(l.items) {
 			itemHeight := l.items[l.offsetIdx].Height(l.width)
-			remaining := itemHeight - l.offsetLine + 1 // +1 for gap
+			remaining := itemHeight - l.offsetLine + 1
 			if n >= remaining {
 				n -= remaining
 				l.offsetIdx++
@@ -408,12 +401,10 @@ func (l *List) scrollByLocked(n int) {
 				n = 0
 			}
 		}
-		// Clamp: prevent scrolling past the point where the last item
-		// would be at the bottom of the viewport. Without this, rapid
-		// scrolling produces blank space below all content.
+
 		l.clampMaxScrollLocked()
 	} else if n < 0 {
-		// Scroll up
+
 		n = -n
 		for n > 0 {
 			if l.offsetLine > 0 {
@@ -443,11 +434,8 @@ func (l *List) clampMaxScrollLocked() {
 		return
 	}
 
-	// Calculate the maximum scroll position (same as scrollToEndLocked).
 	maxIdx, maxLine := l.calcEndPositionLocked()
 
-	// Compare current position with max position.
-	// Positions are compared as (offsetIdx, offsetLine) tuples.
 	if l.offsetIdx > maxIdx || (l.offsetIdx == maxIdx && l.offsetLine > maxLine) {
 		l.offsetIdx = maxIdx
 		l.offsetLine = maxLine
@@ -461,19 +449,13 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 		return 0, 0
 	}
 
-	// Strategy: compute total content height from each candidate start
-	// position and find the one that fills exactly l.height lines with
-	// the last item's last line at the bottom.
-
-	// Walk backward from the last item, accumulating height (including
-	// 1-line gaps between items) until we exceed l.height.
 	remaining := l.height
 	idx = len(l.items) - 1
 	for idx >= 0 {
 		itemH := l.items[idx].Height(l.width)
 		totalH := itemH
 		if idx < len(l.items)-1 {
-			totalH++ // gap line
+			totalH++
 		}
 		if remaining-totalH < 0 {
 			break
@@ -488,11 +470,7 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 
 	itemH := l.items[idx].Height(l.width)
 	if idx < len(l.items)-1 {
-		// remaining is the space left after fitting items [idx+1..last].
-		// We need to fit: visible_from_idx + gap(1) + items_below = l.height.
-		// So visible_from_idx = remaining - 1(gap).
-		// If remaining <= 1, there's no room for item content, only the gap
-		// (or less). In that case skip the item entirely.
+
 		if remaining <= 1 {
 			return idx + 1, 0
 		}
@@ -514,14 +492,11 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 // number of lines, causing scroll-position miscalculation.
 func splitVisualLines(s string) []string {
 	lines := strings.Split(s, "\n")
-	// strings.Split("a\n", "\n") produces ["a", ""] — the trailing empty
-	// element has no visual presence. measureHeight also subtracts 1 for a
-	// trailing newline, so strip exactly one trailing empty element when the
-	// string ends with "\n".
+
 	if len(lines) > 0 && strings.HasSuffix(s, "\n") && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	// measureHeight("") returns 1 (an empty string is one visual line).
+
 	if len(lines) == 0 {
 		return []string{""}
 	}

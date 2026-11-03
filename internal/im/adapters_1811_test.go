@@ -31,7 +31,6 @@ func Test1811AdapterBindings(t *testing.T) {
 		t.Fatalf("expected [/ws/a], got %v", got)
 	}
 
-	// BindExclusive replaces: rebind elsewhere leaves only the new one.
 	if err := m.BindAdapterToWorkspace("qq", "/ws/b"); err != nil {
 		t.Fatal(err)
 	}

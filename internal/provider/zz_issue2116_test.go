@@ -1,11 +1,5 @@
 package provider
 
-// #2116 regression: tiered context probing billed ~tier tokens of real
-// input per attempt with no cumulative cap - a small-window model behind
-// a gateway whose overflow errors carry no exact number descended the
-// whole ladder (1M+512K+256K ≈ 1.8M tokens) silently. The descent is now
-// capped by probeTokenBudget.
-
 import "testing"
 
 func TestTierFitsBudget(t *testing.T) {
@@ -37,7 +31,7 @@ func TestTierLadderBudgetWalk(t *testing.T) {
 		if !tierFitsBudget(spent, tier, probeTokenBudget) {
 			break
 		}
-		spent += tier // billed whether the tier succeeds or fails
+		spent += tier
 		attempted++
 	}
 	if spent > probeTokenBudget {
@@ -46,7 +40,7 @@ func TestTierLadderBudgetWalk(t *testing.T) {
 	if attempted < 1 {
 		t.Fatal("first tier must always fit an empty budget")
 	}
-	// The exact walk: 1M fits, 512K does not (1.512M > 1.5M).
+
 	if attempted != 1 || spent != 1_000_000 {
 		t.Fatalf("expected the walk to stop after the 1M tier (spent=%d attempted=%d), got spent=%d attempted=%d", 1_000_000, 1, spent, attempted)
 	}

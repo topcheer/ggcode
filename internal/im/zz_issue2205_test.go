@@ -6,18 +6,14 @@ import (
 	"testing"
 )
 
-// #2205: the daemon bridge must mirror the TUI-side im.remote_dangerous_commands
-// gate (#2185/PR #2203) - shell passthrough and mode escalation from a remote
-// IM peer are hard-denied without the opt-in (fail closed).
-
 func TestIssue2205DaemonShellPassthroughGated(t *testing.T) {
 	em := &captureEmitter{}
-	b := &DaemonBridge{emitTextOverride: em.EmitText} // no override: fail closed
+	b := &DaemonBridge{emitTextOverride: em.EmitText}
 
 	if err := b.SubmitInboundMessage(context.Background(), InboundMessage{Text: "$ printf leak-2205"}); err != nil {
 		t.Fatalf("SubmitInboundMessage: %v", err)
 	}
-	// The refusal notice must be pushed; the command must NOT run.
+
 	found := false
 	for i := 0; i < 50 && !found; i++ {
 		em.mu.Lock()
@@ -52,7 +48,7 @@ func TestIssue2205DaemonShellPassthroughAllowedWithOptIn(t *testing.T) {
 		em.mu.Unlock()
 		for _, tx := range texts {
 			if strings.Contains(tx, "ok-2205") {
-				return // pass: executed under the opt-in
+				return
 			}
 			if strings.Contains(tx, "remote_dangerous_commands") {
 				t.Fatal("gate open: refusal sent anyway")
@@ -72,12 +68,11 @@ func TestIssue2205RemoteDangerousAllowedSemantics(t *testing.T) {
 	if (&DaemonBridge{remoteDangerousOverride: &deny}).remoteDangerousAllowed() {
 		t.Fatal("override false must deny")
 	}
-	// no override, workingDir without an instance config -> fail closed
+
 	if (&DaemonBridge{}).remoteDangerousAllowed() {
 		t.Fatal("nil config must fail closed")
 	}
-	// SwitchMode escalation gate is upstream of the agent lookup only in
-	// the no-agent case; the mode-name validation runs first for garbage.
+
 	err := (&DaemonBridge{}).SwitchMode("not-a-mode")
 	if err == nil || !strings.Contains(err.Error(), "unknown permission mode") {
 		t.Fatalf("garbage mode name must error with validation message, got %v", err)
@@ -89,22 +84,18 @@ func TestIssue2205RemoteDangerousAllowedSemantics(t *testing.T) {
 // just the garbage-name validation path above. The refusal happens
 // before the agent lookup, so no live agent is needed.
 func TestIssue2185DaemonSwitchModeEscalationGate(t *testing.T) {
-	// Gate closed (no override, no instance config): valid escalation
-	// target must be refused by the opt-in gate, not by "no agent".
+
 	err := (&DaemonBridge{}).SwitchMode("bypass")
 	if err == nil || !strings.Contains(err.Error(), "remote_dangerous_commands") {
 		t.Fatalf("escalation without opt-in must hit the gate, got %v", err)
 	}
-	// Gate open (override true): the gate must pass - the call then fails
-	// at the agent lookup with a DIFFERENT error, proving the gate let it
-	// through.
+
 	allow := true
 	err = (&DaemonBridge{remoteDangerousOverride: &allow}).SwitchMode("bypass")
 	if err == nil || !strings.Contains(err.Error(), "no agent attached") {
 		t.Fatalf("opt-in must open the gate and reach the agent lookup, got %v", err)
 	}
-	// Ungated level switch: even with the gate closed, a non-escalation
-	// mode must NOT be refused by the gate (same downstream error).
+
 	err = (&DaemonBridge{}).SwitchMode("auto")
 	if err == nil || !strings.Contains(err.Error(), "no agent attached") {
 		t.Fatalf("non-escalation switch must not be gated, got %v", err)

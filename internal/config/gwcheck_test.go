@@ -19,7 +19,7 @@ func TestAIGatewayEndpointsGetOwnModels(t *testing.T) {
 	if checked < 12 {
 		t.Fatalf("expected >=12 populated gateway endpoints, got %d", checked)
 	}
-	// Distinctness: 302.ai and OpenRouter must NOT share aihubmix's list.
+
 	or := gw.Endpoints["openrouter"].Models
 	ai := gw.Endpoints["302ai"].Models
 	if len(or) > 0 && len(ai) > 0 && or[0] == ai[0] {

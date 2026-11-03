@@ -46,7 +46,7 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 	}
 
 	markers := []marker{
-		// --- Go ---
+
 		{"go.mod", func(p string) {
 			profile.Languages = appendUnique(profile.Languages, "Go")
 			if profile.BuildSystem == "" {
@@ -58,7 +58,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			detectGoModFrameworks(profile, p)
 		}},
 
-		// --- Node.js / JavaScript / TypeScript ---
 		{"package.json", func(p string) {
 			profile.Languages = appendUnique(profile.Languages, "JavaScript/TypeScript")
 			if profile.BuildSystem == "" {
@@ -69,12 +68,10 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			detectNpmFrameworks(profile, p)
 		}},
 
-		// --- TypeScript config ---
 		{"tsconfig.json", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "TypeScript")
 		}},
 
-		// --- Rust ---
 		{"Cargo.toml", func(p string) {
 			profile.Languages = appendUnique(profile.Languages, "Rust")
 			if profile.BuildSystem == "" {
@@ -86,7 +83,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			detectCargoFrameworks(profile, p)
 		}},
 
-		// --- Python ---
 		{"pyproject.toml", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "Python")
 			if profile.BuildSystem == "" {
@@ -112,7 +108,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			}
 		}},
 
-		// --- Java/Kotlin ---
 		{"pom.xml", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "Java/Kotlin")
 			if profile.BuildSystem == "" {
@@ -138,7 +133,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			}
 		}},
 
-		// --- Ruby ---
 		{"Gemfile", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "Ruby")
 			if profile.BuildSystem == "" {
@@ -148,7 +142,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			}
 		}},
 
-		// --- C/C++ ---
 		{"CMakeLists.txt", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "C/C++")
 			if profile.BuildSystem == "" {
@@ -158,7 +151,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			}
 		}},
 
-		// --- Flutter/Dart ---
 		{"pubspec.yaml", func(p string) {
 			profile.Languages = appendUnique(profile.Languages, "Dart")
 			if profile.BuildSystem == "" {
@@ -169,7 +161,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			profile.Frameworks = appendUnique(profile.Frameworks, "Flutter")
 		}},
 
-		// --- Docker ---
 		{"Dockerfile", func(_ string) {
 			profile.Frameworks = appendUnique(profile.Frameworks, "Docker")
 		}},
@@ -177,7 +168,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 			profile.Frameworks = appendUnique(profile.Frameworks, "Docker Compose")
 		}},
 
-		// --- Swift ---
 		{"Package.swift", func(_ string) {
 			profile.Languages = appendUnique(profile.Languages, "Swift")
 			if profile.BuildSystem == "" {
@@ -188,7 +178,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 		}},
 	}
 
-	// Run detections
 	for _, m := range markers {
 		fullPath := filepath.Join(workingDir, m.filename)
 		if _, err := os.Stat(fullPath); err == nil {
@@ -197,19 +186,16 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 		}
 	}
 
-	// Check for .go files even without go.mod (rare but possible)
 	if !sliceContains(profile.Languages, "Go") {
 		if hasFilesWithSuffix(workingDir, ".go") {
 			profile.Languages = appendUnique(profile.Languages, "Go")
 		}
 	}
 
-	// Detect monorepo (multiple package.json or go.mod in subdirs)
 	if isMonorepo(workingDir) {
 		profile.Frameworks = appendUnique(profile.Frameworks, "monorepo")
 	}
 
-	// No useful detection
 	if len(profile.Languages) == 0 && profile.BuildSystem == "" && len(profile.KeyFiles) == 0 {
 		return nil
 	}
@@ -264,8 +250,6 @@ func detectProfileText(workingDir string) string {
 	return profile.FormatForSystemPrompt()
 }
 
-// --- helpers ---
-
 func appendUnique(slice []string, val string) []string {
 	for _, s := range slice {
 		if s == val {
@@ -300,21 +284,21 @@ func hasFilesWithSuffix(dir, suffix string) bool {
 
 // isMonorepo checks for common monorepo indicators.
 func isMonorepo(dir string) bool {
-	// package.json with "workspaces" field
+
 	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
 		if strings.Contains(string(data), "\"workspaces\"") {
 			return true
 		}
 	}
-	// pnpm-workspace.yaml
+
 	if _, err := os.Stat(filepath.Join(dir, "pnpm-workspace.yaml")); err == nil {
 		return true
 	}
-	// lerna.json
+
 	if _, err := os.Stat(filepath.Join(dir, "lerna.json")); err == nil {
 		return true
 	}
-	// nx.json
+
 	if _, err := os.Stat(filepath.Join(dir, "nx.json")); err == nil {
 		return true
 	}
@@ -325,16 +309,12 @@ func isMonorepo(dir string) bool {
 func detectGoMakefileTags(p *ProjectProfile, workingDir string) {
 	if data, err := os.ReadFile(filepath.Join(workingDir, "Makefile")); err == nil {
 		mf := string(data)
-		// #1523: TAGS must look like a real goolm-tag usage, not any
-		// substring - DOCKER_TAGS/IMAGE_TAGS/BUILD_TAGS used to inject
-		// `-tags goolm` for projects that never use it.
+
 		if strings.Contains(mf, "goolm") || goolmTagUsage(mf) {
 			p.BuildCommand = "go build -tags goolm ./..."
 			p.TestCommand = "go test -tags goolm ./..."
 		}
-		// #1523: only claim Make when nothing earlier set a build system -
-		// go.mod's "go" used to be overwritten here while BuildCommand
-		// stayed "go build" (paired fields diverged).
+
 		if p.BuildSystem == "" {
 			p.BuildSystem = "Make"
 		}
@@ -376,9 +356,7 @@ func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
 		p.LintCommand = "npm run lint"
 	}
 	if strings.Contains(pj, "\"test\"") && p.TestCommand == "" {
-		// #1523: fill-don't-overwrite, per the profile's own priority
-		// contract ("earlier entries take priority") - a Go+npm hybrid
-		// repo used to get its go test command replaced by npm test.
+
 		p.TestCommand = "npm test"
 	}
 	if strings.Contains(pj, "\"build\"") && p.BuildCommand == "" {
@@ -395,14 +373,7 @@ func goolmTagUsage(makefile string) bool {
 		if strings.HasPrefix(t, "-tags $(TAGS)") || strings.Contains(t, "-tags=$(TAGS)") {
 			return true
 		}
-		// #2054: a bare TAGS assignment only counts when its VALUE names
-		// goolm (TAGS := goolm / TAGS ?= goolm). The old HasPrefix(t,
-		// "TAGS") matched any TAGS-prefixed line - release-image labels
-		// like `TAGS := v1.2.3 production`, `TAGS_APPEND := ...`,
-		// `TAGS ?= docker` - and injected `-tags goolm` into projects that
-		// never use it, the same #1523 false-positive class in a narrower
-		// form. TAGS_APPEND & friends cannot match: the operators below
-		// must immediately follow the exact word TAGS.
+
 		if v, ok := tagsAssignmentValue(t); ok && strings.Contains(v, "goolm") {
 			return true
 		}

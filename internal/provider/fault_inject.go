@@ -1,29 +1,5 @@
 package provider
 
-// LLM fault injection layer (sa-65 agent-chaos gap, AgentChaos ASE 2026 /
-// arXiv:2608.06790): GGCODE_LLM_FAULT deterministically perturbs LLM
-// responses at the shared provider boundary with an explicit fault
-// taxonomy — crash / omission / value, acting on content and tool-call
-// fields. Resilience mechanisms EXISTING (retry, fallback chain, error
-// classification, JSON repair, truncation detection) is not the same as
-// resilience being VERIFIED; this layer turns those defenses into
-// testable properties. Composes with the tape cassette: pair
-// GGCODE_LLM_TAPE=replay:<good tape> with GGCODE_LLM_FAULT for offline,
-// zero-network chaos tests.
-//
-// Spec grammar: comma-separated directives "<kind>@<call>", 1-based call
-// index in arrival order across Chat and ChatStream. Kinds:
-//
-//	crash        — provider-level failure before the call is made
-//	omit-tool    — drop tool_use blocks / tool-call events
-//	omit-content — drop text blocks / text events
-//	value-args   — corrupt tool arguments into invalid JSON
-//	value-text   — truncate text mid-content (half, rune-safe)
-//
-// Faults are recorded in Fired() only when observable in agent input
-// (AgentChaos "verify fault triggered"): an omit-tool on a response with
-// no tool calls did not happen as far as the agent can tell.
-
 import (
 	"context"
 	"encoding/json"
@@ -134,7 +110,7 @@ func (f *FaultProvider) Name() string { return f.inner.Name() }
 func (f *FaultProvider) InnerProvider() Provider { return f.inner }
 
 func (f *FaultProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
-	return f.inner.CountTokens(ctx, messages) // local computation, no injection
+	return f.inner.CountTokens(ctx, messages)
 }
 
 func (f *FaultProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
@@ -172,9 +148,7 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 		defer safego.Recover("fault.injectStream")
 		defer close(out)
 		applied := false
-		// #4146: abandoning consumers (see tape_provider recordStream) parked
-		// this goroutine on the bare `out <- nev` forever. ctx-guarded send +
-		// deferred src drain, matching the fallback.go #602/#2570 standard.
+
 		defer func() {
 			go safego.Run("fault.injectStream.drain", func() {
 				for range src {
@@ -193,9 +167,7 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 			select {
 			case out <- nev:
 			case <-ctx.Done():
-				// The fault was (at least partially) observed before the
-				// abandon; record it as consumed so call numbering stays
-				// aligned with what the harness actually saw.
+
 				if applied {
 					f.fire(d)
 				}

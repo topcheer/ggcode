@@ -8,16 +8,6 @@ import (
 	"time"
 )
 
-// zz_issue2970_test.go - regression probes for #2970: socks5Dial used single
-// Read calls for fixed-size SOCKS5 fields. Fragmented delivery (proxy writes
-// VER and METHOD separately, or TCP segmentation splits the reply) caused
-// (a) a zero-filled greeting byte to wrongly pass the no-auth check, leaving
-// the real method byte in the stream, and (b) bound-address bytes to remain
-// in the connection so the caller's next write interleaved with proxy bytes.
-//
-// Fix: io.ReadFull for the greeting and reply header, then drain BND.ADDR +
-// BND.PORT per ATYP (RFC 1928).
-
 // fakeSOCKS5Server accepts one handshake, answering with the given write
 // chunking, and echoes everything after a successful CONNECT back to the
 // client. writeChunk splits server writes into separate TCP writes of
@@ -44,13 +34,12 @@ func fakeSOCKS5Server(t *testing.T, ln net.Listener, chunk int, greeting []byte,
 		}
 	}
 
-	// consume client greeting (3 bytes)
 	req := make([]byte, 3)
 	if _, err := readFull(conn, req); err != nil {
 		return
 	}
 	if proxyRejectMethod {
-		writeChunked([]byte{0x05, 0xFF}) // no acceptable methods
+		writeChunked([]byte{0x05, 0xFF})
 		return
 	}
 	writeChunked(greeting)
@@ -62,7 +51,7 @@ func fakeSOCKS5Server(t *testing.T, ln net.Listener, chunk int, greeting []byte,
 		n, err := conn.Read(buf)
 		if n > 0 {
 			connectReq = append(connectReq, buf[:n]...)
-			// minimum request: 5 header + addr >= 7 + 2 port
+
 			if len(connectReq) >= 10 {
 				break
 			}
@@ -73,8 +62,6 @@ func fakeSOCKS5Server(t *testing.T, ln net.Listener, chunk int, greeting []byte,
 	}
 	writeChunked(reply)
 
-	// After the CONNECT reply, echo: proves the connection stream is clean
-	// (no leftover bound-addr bytes desynchronize the caller).
 	echo := make([]byte, 64)
 	for {
 		n, err := conn.Read(echo)
@@ -122,7 +109,6 @@ func TestIssue2970FragmentedGreeting(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Stream must be clean: echo round-trip proves no stray bytes.
 	if _, err := conn.Write([]byte("PING")); err != nil {
 		t.Fatal(err)
 	}

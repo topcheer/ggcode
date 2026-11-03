@@ -39,33 +39,32 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		{"*italic*", "_italic_"},
 		{"~~strike~~", "~strike~"},
 		{"**bold** and *italic*", "*bold* and _italic_"},
-		// HTML entities are NOT escaped — Slack mrkdwn doesn't decode them.
-		// Escaping would cause literal &lt; display instead of <.
+
 		{"<script>", "<script>"},
 		{"a & b", "a & b"},
 		{"plain text", "plain text"},
-		// Link conversion: [text](url) → <url|text>
+
 		{"[docs](https://example.com)", "<https://example.com|docs>"},
 		{"See [link](https://foo.bar/baz) here", "See <https://foo.bar/baz|link> here"},
-		// Header conversion: # Header → *Header*
+
 		{"# Title", "*Title*"},
 		{"## Section", "*Section*"},
 		{"### Subsection", "*Subsection*"},
-		// Header + text on next line
+
 		{"# Header\nBody", "*Header*\nBody"},
-		// No header conversion for inline # (not at line start)
+
 		{"not a # header", "not a # header"},
-		// Code protection: * and ~~ inside code spans/blocks are preserved
+
 		{"`a * b`", "`a * b`"},
 		{"`~~tilde~~`", "`~~tilde~~`"},
 		{"```\nx * y\n```", "```\nx * y\n```"},
 		{"Use `git log --oneline *.*` to list", "Use `git log --oneline *.*` to list"},
-		// Code protected, surrounding markdown converted
+
 		{"See `a * b` and *italic*", "See `a * b` and _italic_"},
-		// Unpaired asterisks (math, bullet points) should NOT be converted to _
+
 		{"5 * 3 = 15", "5 * 3 = 15"},
 		{"a * b * c", "a * b * c"},
-		// Unpaired tildes should NOT be converted
+
 		{"~ approximate ~", "~ approximate ~"},
 	}
 	for _, tc := range tests {

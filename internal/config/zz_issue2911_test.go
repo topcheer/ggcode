@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue2911_test.go - regression probes for #2911: SyncVendorEndpointToGlobal
-// (model-switch hooks in the cmd daemon and desktop ChatBridge, which hold no
-// configAccess instance and thus cannot take cfgMu) used to mutate the Vendors
-// map lock-free, racing the cfgMu-guarded writers (SetVendorAPIKey /
-// SetEndpointAPIKey) into a Go runtime-fatal concurrent map write. All runtime
-// Vendors writers must now serialize under vendorsWriteMu.
-
 func TestIssue2911UpsertSemantics(t *testing.T) {
 	cfg := &Config{}
 	if cfg.UpsertVendorEndpoint("", "ep") {
@@ -51,7 +44,7 @@ func TestIssue2911ConcurrentVendorsWriters(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			// Env-ref form: pure in-memory mutation, no keys.env disk write.
+
 			for j := 0; j < 50; j++ {
 				if err := cfg.SetVendorAPIKey("existing", "${TEST_KEY_2911}"); err != nil {
 					t.Errorf("SetVendorAPIKey: %v", err)

@@ -24,7 +24,6 @@ func TestIssue2936NestedZeroResetOverwritesStaleDiskValue(t *testing.T) {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Session 1: instance-scope override.
 	cfg.Swarm.MaxTeammatesPerTeam = 30
 	cfg.Swarm.PollInterval = 45 * time.Second
 	if err := cfg.SaveInstanceScoped(workspace); err != nil {
@@ -39,7 +38,6 @@ func TestIssue2936NestedZeroResetOverwritesStaleDiskValue(t *testing.T) {
 		t.Fatalf("override not persisted; got:\n%s", instData)
 	}
 
-	// Session 2: reset back to zero-value defaults.
 	cfg2, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -53,8 +51,6 @@ func TestIssue2936NestedZeroResetOverwritesStaleDiskValue(t *testing.T) {
 		t.Fatalf("SaveInstanceScoped (reset): %v", err)
 	}
 
-	// The reset must survive a reload: explicit 0 in the delta overwrites
-	// the stale merged value instead of being silently dropped.
 	cfg3, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload after reset: %v", err)
@@ -80,8 +76,6 @@ func TestIssue2936NestedResetAllAffectedFields(t *testing.T) {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Set non-zero overrides, save, then reset everything to zero and build
-	// the delta: every field must appear as an explicit zero, not be dropped.
 	cfg.KnightConfig.TrustLevel = "high"
 	cfg.KnightConfig.DailyTokenBudget = 1000
 	cfg.KnightConfig.IdleDelaySec = 60
@@ -112,10 +106,6 @@ func TestIssue2936NestedResetAllAffectedFields(t *testing.T) {
 		t.Fatalf("SaveInstanceScoped (reset): %v", err)
 	}
 
-	// With global defaults at zero, current == global after the reset, so
-	// the diff omits the keys - the nested nil deletion markers written by
-	// applyInstanceResets (#2936) must remove the stale on-disk values
-	// instead of letting the deep merge resurrect them.
 	cfg3, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload after reset: %v", err)
@@ -163,7 +153,6 @@ func TestIssue2936ImpersonationHeaderSwapAndClear(t *testing.T) {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Same-length swap: {x-a:"1"} -> {x-b:"2"}.
 	cfg.Impersonation.CustomHeaders = map[string]string{"x-a": "1"}
 	if err := cfg.SaveInstanceScoped(workspace); err != nil {
 		t.Fatalf("SaveInstanceScoped: %v", err)
@@ -177,7 +166,7 @@ func TestIssue2936ImpersonationHeaderSwapAndClear(t *testing.T) {
 		instData2, _ := os.ReadFile(filepath.Join(InstanceDir(workspace), "ggcode.yaml"))
 		t.Fatalf("precondition: initial header not persisted: %#v; instance file:\n%s", cfg2.Impersonation.CustomHeaders, instData2)
 	}
-	cfg2.Impersonation.CustomHeaders = map[string]string{"x-b": "2"} // same length
+	cfg2.Impersonation.CustomHeaders = map[string]string{"x-b": "2"}
 	delta := cfg2.marshalInstanceDelta()
 	imp, _ := delta["impersonation"].(map[string]interface{})
 	if imp == nil {
@@ -188,7 +177,6 @@ func TestIssue2936ImpersonationHeaderSwapAndClear(t *testing.T) {
 		t.Errorf("custom_headers not snapshotted in delta; got: %#v", imp["custom_headers"])
 	}
 
-	// Clear path: empty headers must be written, not suppressed.
 	cfg2.Impersonation.CustomHeaders = map[string]string{}
 	delta2 := cfg2.marshalInstanceDelta()
 	imp2, _ := delta2["impersonation"].(map[string]interface{})
@@ -200,9 +188,6 @@ func TestIssue2936ImpersonationHeaderSwapAndClear(t *testing.T) {
 		t.Errorf("cleared custom_headers must be an explicit empty map; got %#v", imp2["custom_headers"])
 	}
 
-	// End to end: the clear must survive a reload (wholesale map replace
-	// beats the key-merge in deepMergeYAMLMaps because map[string]string
-	// fails the map[string]interface{} assertion).
 	if err := cfg2.SaveInstanceScoped(workspace); err != nil {
 		t.Fatalf("SaveInstanceScoped (clear): %v", err)
 	}

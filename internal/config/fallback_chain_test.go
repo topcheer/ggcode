@@ -18,9 +18,9 @@ func TestFallbackChainOrdering(t *testing.T) {
 	c.Fallback = FallbackConfig{Enabled: true, Vendor: "kimi", Model: "k2"}
 	c.Fallbacks = []FallbackConfig{
 		{Enabled: true, Vendor: "zhipu", Model: "glm-5"},
-		{Enabled: false, Vendor: "disabled", Model: "x"}, // skipped: not enabled
+		{Enabled: false, Vendor: "disabled", Model: "x"},
 		{Enabled: true, Vendor: "anthropic", Endpoint: "primary", Model: "claude"},
-		{Enabled: true, Vendor: "incomplete"}, // skipped: no model
+		{Enabled: true, Vendor: "incomplete"},
 	}
 	chain := c.FallbackChain()
 	want := []string{"kimi", "zhipu", "anthropic"}

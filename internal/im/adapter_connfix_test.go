@@ -1,7 +1,5 @@
 package im
 
-// Companion tests for connection-layer fixes #964 (nostr) and #963 (mattermost).
-
 import (
 	"context"
 	"encoding/json"
@@ -18,13 +16,9 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// ---------------------------------------------------------------------------
-// #964 nostr: backoff reset semantics
-// ---------------------------------------------------------------------------
-
 func TestNostrBackoffNextResetsAfterServedDisconnect(t *testing.T) {
-	// Connect-phase failures double up to the cap.
-	b := nostrReconnectBackoff // 5s
+
+	b := nostrReconnectBackoff
 	for want := 2 * nostrReconnectBackoff; want <= nostrMaxBackoff; want *= 2 {
 		if want > nostrMaxBackoff {
 			want = nostrMaxBackoff
@@ -37,28 +31,23 @@ func TestNostrBackoffNextResetsAfterServedDisconnect(t *testing.T) {
 			break
 		}
 	}
-	// Capped at max.
+
 	if got := nostrBackoffNext(nostrMaxBackoff, errors.New("connect failed")); got != nostrMaxBackoff {
 		t.Fatalf("cap: backoff = %v, want %v", got, nostrMaxBackoff)
 	}
-	// Serve-phase disconnect (watchdog / subscription closed) resets to the
-	// short initial delay instead of staying pinned at 120s.
+
 	if got := nostrBackoffNext(nostrMaxBackoff, fmt.Errorf("watchdog: %w", errNostrServed)); got != nostrReconnectBackoff {
 		t.Fatalf("served disconnect: backoff = %v, want reset to %v", got, nostrReconnectBackoff)
 	}
-	// Clean exit (nil error, ctx canceled) also resets.
+
 	if got := nostrBackoffNext(nostrMaxBackoff, nil); got != nostrReconnectBackoff {
 		t.Fatalf("nil error: backoff = %v, want reset to %v", got, nostrReconnectBackoff)
 	}
-	// errors.Is must see the sentinel through wrapping.
+
 	if !errors.Is(fmt.Errorf("subscription closed: %w", errNostrServed), errNostrServed) {
 		t.Fatal("errors.Is should detect errNostrServed through wrapping")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// #964 nostr: empty relay conns must surface an error, not nil
-// ---------------------------------------------------------------------------
 
 func TestNostrSendNostrDMNoRelaysReturnsError(t *testing.T) {
 	priv := nostr.GeneratePrivateKey()
@@ -80,10 +69,6 @@ func TestNostrSendNostrDMNoRelaysReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// #963 mattermost: file_ids must be in the POST payload
-// ---------------------------------------------------------------------------
 
 func TestMattermostSendTextWithFilesIncludesFileIDsInPost(t *testing.T) {
 	var mu sync.Mutex
@@ -126,10 +111,6 @@ func TestMattermostSendTextWithFilesIncludesFileIDsInPost(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// #963 mattermost: read deadline must be renewed on every message
-// ---------------------------------------------------------------------------
-
 func TestMattermostReadDeadlineRenewedOnMessages(t *testing.T) {
 	saved := mattermostWSReadTimeout
 	mattermostWSReadTimeout = 400 * time.Millisecond
@@ -152,10 +133,7 @@ func TestMattermostReadDeadlineRenewedOnMessages(t *testing.T) {
 				return
 			}
 			defer c.Close()
-			// Consume the auth frame, then stream app-level text frames far
-			// more often than the shortened read timeout. If the read loop
-			// only set the deadline at connect time (absolute deadline), the
-			// client would time out at ~400ms despite this traffic.
+
 			if _, _, err := c.ReadMessage(); err != nil {
 				return
 			}
@@ -193,7 +171,7 @@ func TestMattermostReadDeadlineRenewedOnMessages(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		// Ctx cancellation returns nil; a deadline bug returns "ws read: timeout".
+
 		if err != nil && strings.Contains(err.Error(), "timeout") {
 			t.Fatalf("read deadline expired despite message traffic (not renewed): %v", err)
 		}
@@ -216,10 +194,6 @@ func sleepWS(tick <-chan time.Time) bool {
 		return false
 	}
 }
-
-// ---------------------------------------------------------------------------
-// #963 mattermost incidental: mention word boundary
-// ---------------------------------------------------------------------------
 
 func TestMattermostMentionWordBoundary(t *testing.T) {
 	a := &mattermostAdapter{botUsername: "al", botUserID: "botid123"}

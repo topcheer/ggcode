@@ -151,7 +151,7 @@ func TestGeminiProvider_ReasoningEffort(t *testing.T) {
 		{"low", 8192, false},
 		{"medium", 8192, false},
 		{"high", 8192, false},
-		{"low", 256, true}, // too small → budget 0
+		{"low", 256, true},
 	}
 	for _, tc := range cases {
 		p := &GeminiProvider{maxTokens: tc.maxTokens}
@@ -184,7 +184,6 @@ func TestGeminiProvider_ReasoningEffort(t *testing.T) {
 		}
 	}
 
-	// Empty effort should not set ThinkingConfig
 	p := &GeminiProvider{maxTokens: 8192}
 	p.SetReasoningEffort("")
 	config := &genai.GenerateContentConfig{}
@@ -224,7 +223,6 @@ func TestGeminiProvider_ToolChoice(t *testing.T) {
 		}
 	}
 
-	// Empty choice should not set ToolConfig
 	p := &GeminiProvider{}
 	config := &genai.GenerateContentConfig{}
 	p.applyToolChoice(config, tools)
@@ -232,7 +230,6 @@ func TestGeminiProvider_ToolChoice(t *testing.T) {
 		t.Fatalf("empty choice: expected ToolConfig to be nil")
 	}
 
-	// No tools should not set ToolConfig even with non-empty choice
 	p = &GeminiProvider{}
 	p.SetToolChoice("required")
 	config = &genai.GenerateContentConfig{}
@@ -287,8 +284,7 @@ data: {"candidates":[{"finishReason":"SAFETY"}],"usageMetadata":{"promptTokenCou
 `,
 		},
 		{
-			// #1301: input-side block - no candidates, no finishReason,
-			// reason only in top-level promptFeedback.blockReason.
+
 			name: "promptFeedback block without candidates",
 			stream: `data: {"promptFeedback":{"blockReason":"SAFETY"},"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":0}}
 
@@ -413,7 +409,6 @@ func TestGeminiProvider_Logprobs(t *testing.T) {
 		t.Fatal("expected LogprobsRequested() to report enabled")
 	}
 
-	// Disabled: no request changes, no relay.
 	p2 := &GeminiProvider{}
 	if p2.LogprobsRequested() {
 		t.Fatal("expected LogprobsRequested() default false")

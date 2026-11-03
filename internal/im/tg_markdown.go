@@ -29,17 +29,16 @@ func EscapeMarkdownV2(text string) string {
 			b.WriteByte('\n')
 		}
 
-		// Handle code block boundaries (``` fenced)
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			inCodeBlock = !inCodeBlock
-			// Emit the ``` line as-is (no escaping)
+
 			b.WriteString(line)
 			continue
 		}
 
 		if inCodeBlock {
-			// Inside code block: no escaping
+
 			b.WriteString(line)
 			continue
 		}
@@ -60,28 +59,26 @@ func escapeLine(b *strings.Builder, line string) {
 	for i < n {
 		c := line[i]
 
-		// Inline code span: find matching closing backtick
 		if c == '`' {
 			j := i + 1
 			for j < n && line[j] != '`' {
 				j++
 			}
 			if j < n {
-				// Found closing backtick — emit the span verbatim
+
 				b.WriteString(line[i : j+1])
 				i = j + 1
 				continue
 			}
-			// No closing backtick — escape the opening backtick
+
 			b.WriteString("\\`")
 			i++
 			continue
 		}
 
-		// Bold: **text**
 		if c == '*' && i+1 < n && line[i+1] == '*' {
 			if end := findClosingSeq(line, i+2, '*'); end >= 0 {
-				// Emit ** (unescaped) + escaped content + ** (unescaped)
+
 				b.WriteString("**")
 				escapeText(b, line[i+2:end])
 				b.WriteString("**")
@@ -90,7 +87,6 @@ func escapeLine(b *strings.Builder, line string) {
 			}
 		}
 
-		// Italic: __text__
 		if c == '_' && i+1 < n && line[i+1] == '_' {
 			if end := findClosingSeq(line, i+2, '_'); end >= 0 {
 				b.WriteString("__")
@@ -101,7 +97,6 @@ func escapeLine(b *strings.Builder, line string) {
 			}
 		}
 
-		// Strikethrough: ~~text~~
 		if c == '~' && i+1 < n && line[i+1] == '~' {
 			if end := findClosingSeq(line, i+2, '~'); end >= 0 {
 				b.WriteString("~~")
@@ -112,10 +107,9 @@ func escapeLine(b *strings.Builder, line string) {
 			}
 		}
 
-		// Image: ![alt](url)
 		if c == '!' && i+1 < n && line[i+1] == '[' {
 			if end := findLinkEnd(line, i+1); end > 0 {
-				// Emit ![ ]( ) structure unescaped, escape alt text
+
 				altStart := i + 2
 				altEnd := strings.IndexByte(line[altStart:], ']')
 				if altEnd >= 0 {
@@ -123,7 +117,7 @@ func escapeLine(b *strings.Builder, line string) {
 					b.WriteString("![")
 					escapeText(b, line[altStart:altEnd])
 					b.WriteString("](")
-					urlEnd := end - 1 // before the closing ')'
+					urlEnd := end - 1
 					escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
 					b.WriteString(")")
 					i = end + 1
@@ -132,7 +126,6 @@ func escapeLine(b *strings.Builder, line string) {
 			}
 		}
 
-		// Link: [text](url)
 		if c == '[' {
 			if end := findLinkEnd(line, i); end > 0 {
 				altEnd := strings.IndexByte(line[i+1:], ']')
@@ -150,7 +143,6 @@ func escapeLine(b *strings.Builder, line string) {
 			}
 		}
 
-		// Default: escape special character
 		if isMDV2Special(c) {
 			b.WriteByte('\\')
 		}
@@ -192,7 +184,7 @@ func findClosingSeq(line string, start int, ch byte) int {
 		if line[i] == ch && line[i+1] == ch {
 			return i
 		}
-		// Don't span across backtick boundaries
+
 		if line[i] == '`' {
 			return -1
 		}
@@ -203,23 +195,17 @@ func findClosingSeq(line string, start int, ch byte) int {
 // findLinkEnd finds the closing ) of a markdown link/image starting from the [ position.
 // Returns the index of ), or -1 if not found.
 func findLinkEnd(line string, bracketStart int) int {
-	// Find ]
+
 	bracketEnd := strings.IndexByte(line[bracketStart:], ']')
 	if bracketEnd < 0 {
 		return -1
 	}
 	bracketEnd += bracketStart
 
-	// Check for (
 	if bracketEnd+1 >= len(line) || line[bracketEnd+1] != '(' {
 		return -1
 	}
 
-	// Find the closing ) with BALANCED paren matching (#1246): a plain
-	// IndexByte ended the link at the first ')' - truncating every
-	// parenthesized URL (Wikipedia's ...Go_(programming_language)) so the
-	// link lost its closing paren and the stray ')' escaped into trailing
-	// text. A ')' only closes the link when no unmatched '(' precedes it.
 	depth := 0
 	for i := bracketEnd + 2; i < len(line); i++ {
 		switch line[i] {

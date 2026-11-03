@@ -183,7 +183,6 @@ func TestFeishuStartSetsCtxAndCancel(t *testing.T) {
 	ctx := context.Background()
 	a.Start(ctx)
 
-	// After Start, ctx and cancel should be set
 	if a.ctx == nil {
 		t.Error("ctx should be set after Start")
 	}
@@ -191,20 +190,17 @@ func TestFeishuStartSetsCtxAndCancel(t *testing.T) {
 		t.Error("cancel should be set after Start")
 	}
 
-	// Verify context is not done yet
 	select {
 	case <-a.ctx.Done():
 		t.Error("ctx should not be done yet")
 	default:
 	}
 
-	// Close should cancel the context
 	a.Close()
 
-	// After close, context should be cancelled
 	select {
 	case <-a.ctx.Done():
-		// expected
+
 	case <-time.After(200 * time.Millisecond):
 		t.Error("ctx should be cancelled after Close")
 	}

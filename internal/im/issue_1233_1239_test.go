@@ -1,13 +1,5 @@
 package im
 
-// Regression tests for GitHub issues #1233-#1239 (batch 5):
-//
-//	#1233: DisableAll/DisableBinding ownership guard (foreign-live claims)
-//	#1234: DisableAll/EnableAll syncInstanceActiveChannels parity
-//	#1236: slack bot_id self-filter for file_share loopback
-//	#1237: slack SendInteractive 200-body ratelimited retry
-//	#1239: signal TriggerTyping group recipient form
-
 import (
 	"context"
 	"encoding/base64"
@@ -21,10 +13,8 @@ import (
 	"time"
 )
 
-// ---- #1233 / #1234: DisableAll / DisableBinding ownership + sync ----
-
 func TestDisableAllSkipsForeignLiveAndMuted(t *testing.T) {
-	m, store := newManager967(t, true) // live peer session-B
+	m, store := newManager967(t, true)
 	ws := m.session.Workspace
 	if err := store.Save(ChannelBinding{Workspace: ws, Adapter: "adp-ours", ChannelID: "c1", LastSessionID: "sess-A"}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -36,9 +26,9 @@ func TestDisableAllSkipsForeignLiveAndMuted(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	m.currentBindings["adp-ours"] = &ChannelBinding{Workspace: ws, Adapter: "adp-ours", ChannelID: "c1", LastSessionID: "sess-A"}
-	// Foreign-owned bindings are parked muted (#689/#693)...
+
 	m.currentBindings["adp-foreign"] = &ChannelBinding{Workspace: ws, Adapter: "adp-foreign", ChannelID: "c2", LastSessionID: "sess-B", Muted: true}
-	// ...but an unmuted foreign-live binding must also be skipped (race window).
+
 	m.currentBindings["adp-race"] = &ChannelBinding{Workspace: ws, Adapter: "adp-race", ChannelID: "c3", LastSessionID: "sess-B"}
 
 	n, err := m.DisableAll()
@@ -93,7 +83,7 @@ func TestDisableAllEnableAllSyncInstanceChannels(t *testing.T) {
 	m, _ := newManager967(t, false)
 	ws := m.session.Workspace
 	m.currentBindings["adp-1"] = &ChannelBinding{Workspace: ws, Adapter: "adp-1", ChannelID: "c1", LastSessionID: "sess-A"}
-	m.syncInstanceActiveChannels() // simulate the pre-existing true snapshot
+	m.syncInstanceActiveChannels()
 
 	hasActive := func() bool {
 		d := m.InstanceDetect()
@@ -122,8 +112,6 @@ func TestDisableAllEnableAllSyncInstanceChannels(t *testing.T) {
 		t.Fatal("#1234: EnableAll must sync HasActiveChannels=true")
 	}
 }
-
-// ---- #1236: slack bot_id self-filter ----
 
 type recordingBridge1236 struct {
 	mu    sync.Mutex
@@ -159,9 +147,6 @@ func newSlackSelfFilterAdapter1236(t *testing.T) (*slackAdapter, *recordingBridg
 func TestSlackSkipsOwnBotFileShareLoopback(t *testing.T) {
 	a, bridge := newSlackSelfFilterAdapter1236(t)
 
-	// Bot's own file_share: bot_id set, no user field. Before #1236 this
-	// passed the (dead) user filter and the whitelisted subtype, feeding the
-	// agent its own uploaded image as a fresh user turn.
 	a.handleMessage(context.Background(), map[string]any{
 		"channel": "ch-1",
 		"ts":      "1700000000.000100",
@@ -173,7 +158,6 @@ func TestSlackSkipsOwnBotFileShareLoopback(t *testing.T) {
 		t.Fatalf("own bot file_share must be dropped, got %d inbound", bridge.count)
 	}
 
-	// A real user's message still flows through.
 	a.handleMessage(context.Background(), map[string]any{
 		"channel": "ch-1",
 		"ts":      "1700000000.000200",
@@ -184,8 +168,6 @@ func TestSlackSkipsOwnBotFileShareLoopback(t *testing.T) {
 		t.Fatalf("user message must reach the bridge once, got %d msgs, last=%+v", bridge.count, bridge.last)
 	}
 
-	// Another app's bot message (different bot_id) keeps current behavior:
-	// not our loopback, still delivered.
 	a.handleMessage(context.Background(), map[string]any{
 		"channel": "ch-1",
 		"ts":      "1700000000.000300",
@@ -196,8 +178,6 @@ func TestSlackSkipsOwnBotFileShareLoopback(t *testing.T) {
 		t.Fatalf("foreign bot message must not be filtered by our bot_id, got %d", bridge.count)
 	}
 }
-
-// ---- #1237: SendInteractive 200-body ratelimited retry ----
 
 func TestSlackSendInteractiveRetriesRateLimitedBody(t *testing.T) {
 	var requests int
@@ -238,8 +218,6 @@ func TestSlackSendInteractiveRetriesRateLimitedBody(t *testing.T) {
 	}
 }
 
-// ---- #1239: signal TriggerTyping group recipient ----
-
 func TestSignalTriggerTypingGroupRecipientForm(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +243,7 @@ func TestSignalTriggerTypingGroupRecipientForm(t *testing.T) {
 		t.Fatal("#1239: groupId field does not exist in the typing API and must not be sent")
 	}
 	recipient, _ := body["recipient"].(string)
-	// group IDs use the same "group." + double-encoded form as sendText.
+
 	want := "group." + base64.StdEncoding.EncodeToString([]byte("abc123"))
 	if recipient != want {
 		t.Fatalf("recipient = %q, want %q", recipient, want)

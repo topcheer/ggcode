@@ -6,19 +6,6 @@ import (
 	"testing"
 )
 
-// zz_issue4881_test.go pins the fix for #4881: Load discards the legacy
-// a2a.api_key migration when the plaintext-key migration rewrites the file.
-//
-// Regression shape: migrateLegacyA2AAPIKey(raw) at the top of Load mutates the
-// in-memory raw map only; MigratePlaintextAPIKeys(path) then rewrites the disk
-// file from its own disk-based raw copy (a2a section untouched), and the
-// migrated>0 reload path wholly replaced raw with the DISK content — silently
-// discarding the legacy migration. A2AConfig has no top-level legacy api_key
-// field, so cfg.A2A.Auth.APIKey ended up empty and the A2A server ran with NO
-// auth for the whole first session after upgrade (fail-open).
-//
-// The fix re-runs migrateLegacyA2AAPIKey on the reloaded raw map.
-
 // TestLoadPlaintextMigrationKeepsLegacyA2AKey: a config carrying BOTH a legacy
 // a2a.api_key and a plaintext vendor key (the exact trigger — the vendor key
 // makes MigratePlaintextAPIKeys rewrite the file, activating the reload path)
@@ -54,9 +41,6 @@ vendors:
 		t.Fatalf("#4881 regression: legacy a2a api_key lost across the plaintext-migration reload - A2A server would run with NO auth this session; cfg.A2A.Auth.APIKey = %q, want %q", got, "legacy-a2a-secret-123")
 	}
 
-	// Second Load: plaintext keys are gone from disk (now ${VAR} refs), so the
-	// reload path must NOT trigger; the pre-reload migration path applies and
-	// the key must still be there (no flip-flop between the two paths).
 	reloaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("second Load: %v", err)

@@ -296,15 +296,12 @@ func TestWeComDedup(t *testing.T) {
 		replyReqIDs: make(map[string]string),
 	}
 
-	// Add a message ID
 	a.seen["msg-1"] = time.Now()
 
-	// Check it's seen
 	if _, ok := a.seen["msg-1"]; !ok {
 		t.Error("expected msg-1 to be in seen map")
 	}
 
-	// Add many more to trigger eviction
 	for i := 0; i < wecomDedupMaxSize+10; i++ {
 		a.seen[fmt.Sprintf("msg-%d", i+100)] = time.Now()
 	}
@@ -320,17 +317,15 @@ func TestWeComReplyReqIDTracking(t *testing.T) {
 		replyReqIDs: make(map[string]string),
 	}
 
-	// Simulate tracking
 	a.replyReqIDs["msg-1"] = "req-abc-123"
 	if a.replyReqIDs["msg-1"] != "req-abc-123" {
 		t.Error("replyReqIDs not stored correctly")
 	}
 
-	// Overflow eviction
 	for i := 0; i < wecomDedupMaxSize+10; i++ {
 		a.replyReqIDs[fmt.Sprintf("msg-%d", i+100)] = fmt.Sprintf("req-%d", i)
 	}
-	// First entries should be evicted
+
 	if len(a.replyReqIDs) > wecomDedupMaxSize {
 		t.Logf("replyReqIDs size: %d (expected <= %d)", len(a.replyReqIDs), wecomDedupMaxSize)
 	}

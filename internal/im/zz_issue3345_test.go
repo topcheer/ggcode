@@ -1,9 +1,5 @@
 package im
 
-// #3345 probes: the typing notify burns a server-side (msg_id, seq) slot
-// and must record it like every other passive carrier in qq_adapter.go
-// (#3317 discipline chain, fourth member).
-
 import (
 	"context"
 	"testing"
@@ -27,7 +23,6 @@ func TestIssue3345_TypingRecordsConsumedSlot(t *testing.T) {
 		t.Fatalf("TriggerTyping failed: %v", err)
 	}
 
-	// The typing notify carried msg_seq = count+1 = 2.
 	typed := false
 	for _, r := range *sent {
 		if r.Body["msg_type"] == nil {
@@ -43,13 +38,11 @@ func TestIssue3345_TypingRecordsConsumedSlot(t *testing.T) {
 	if !typed {
 		t.Fatal("no typing notify (msg_type=6) request captured")
 	}
-	// #3345: the consumed slot must be recorded, or the next Send reuses
-	// seq 2 and the server deduplicates it away.
+
 	if stored.PassiveReplyCount != 2 {
 		t.Fatalf("typing must record its consumed slot: count=%d, want 2", stored.PassiveReplyCount)
 	}
 
-	// The follow-up regular Send must start PAST the typing's slot.
 	if err := adapter.Send(context.Background(), *stored, OutboundEvent{Kind: OutboundEventText, Text: "reply"}); err != nil {
 		t.Fatalf("regular send failed: %v", err)
 	}
@@ -59,7 +52,7 @@ func TestIssue3345_TypingRecordsConsumedSlot(t *testing.T) {
 			continue
 		}
 		if mt, _ := r.Body["msg_type"].(float64); int(mt) == 6 {
-			continue // the typing itself
+			continue
 		}
 		if int(f) == 2 {
 			t.Fatalf("regular Send reused slot 2 burned by the typing notify (server would dedup it): %s", r.RawBody)

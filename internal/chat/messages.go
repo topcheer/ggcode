@@ -122,26 +122,26 @@ func wrapLines(text string, width int) []string {
 			result = append(result, "")
 			continue
 		}
-		// Visual-width-aware wrapping
+
 		for paragraph != "" {
 			if lipgloss.Width(paragraph) <= width {
 				result = append(result, paragraph)
 				break
 			}
-			// Walk runes forward to find the longest prefix that fits
+
 			runes := []rune(paragraph)
 			cut := 0
 			for cut < len(runes) && lipgloss.Width(string(runes[:cut+1])) <= width {
 				cut++
 			}
 			if cut == 0 {
-				// Single wide character wider than width — emit it anyway
+
 				cut = 1
 			}
-			// Try to break at a space for cleaner wrapping
+
 			chunk := string(runes[:cut])
 			if spaceIdx := strings.LastIndex(chunk, " "); spaceIdx > 0 {
-				// Convert byte index to rune index for safe slicing
+
 				runeIdx := utf8.RuneCountInString(chunk[:spaceIdx])
 				chunk = string(runes[:runeIdx])
 				cut = runeIdx
@@ -155,8 +155,6 @@ func wrapLines(text string, width int) []string {
 	}
 	return result
 }
-
-// --- Assistant Item ---
 
 // AssistantItem renders an assistant message (supports streaming).
 type AssistantItem struct {
@@ -236,14 +234,10 @@ func (a *AssistantItem) Render(width int) string {
 
 	var result string
 
-	// Render reasoning block if present.
 	if a.reasoning != "" {
 		result = a.renderReasoning(width, prefixWidth, contentWidth)
 	}
 
-	// Render main assistant content — but only if there is actual text content.
-	// When a turn has reasoning but no body text (e.g. only tool calls),
-	// rendering the empty prefix line is visually noise.
 	if a.text != "" || (a.reasoning == "" && !a.streaming) {
 		rendered := a.renderMainContent(contentWidth)
 		lines := strings.Split(rendered, "\n")
@@ -281,7 +275,7 @@ func (a *AssistantItem) renderMainContent(contentWidth int) string {
 }
 
 func (a *AssistantItem) renderReasoning(width, prefixWidth, contentWidth int) string {
-	// Always render full reasoning text — no collapsing (TUI can't expand).
+
 	reasoningRendered := a.reasoning
 	if !a.reasoningOk {
 		rendered, cache := renderStreamingMarkdown(a.reasoning, contentWidth, &a.reasoningCache)
@@ -313,8 +307,6 @@ func (a *AssistantItem) Height(width int) int {
 	}
 	return measureHeightWidth(a.Render(width), width)
 }
-
-// --- System Item ---
 
 // SystemItem renders a system/status/info message.
 type SystemItem struct {
@@ -359,11 +351,6 @@ func (s *SystemItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	// TAB/CR control normalization happens inside wrapLines (choke point):
-	// tab-separated build/test output ("FAIL\tpkg") and CR-rewritten progress
-	// lines otherwise measure as fitting while the terminal wraps them,
-	// desyncing Height() from displayed lines. See #995 and the SystemItem
-	// verify-output viewport corruption.
 	textLines := wrapLines(s.text, contentWidth)
 	var sb strings.Builder
 	for i, line := range textLines {

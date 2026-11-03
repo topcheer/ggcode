@@ -1,12 +1,5 @@
 package config
 
-// #4386: Command/URL are strings, so the patch layer's "empty = not
-// provided" semantics left the form no way to clear them - a cleared field
-// saved "successfully" while the old command/url silently resurrected. The
-// CommandClear/URLClear sentinels mirror #979's env_clear / #1434-B's
-// args_clear (non-nil empties, possible because those fields are
-// maps/slices).
-
 import "testing"
 
 func TestIssue4386_CommandClearSentinel(t *testing.T) {

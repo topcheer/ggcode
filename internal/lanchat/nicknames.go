@@ -45,7 +45,7 @@ func RandomNick() string {
 
 // AgentNick returns the agent nickname derived from a human nick.
 func AgentNick(humanNick string) string {
-	// If already ends with _agent, don't double up.
+
 	if strings.HasSuffix(humanNick, "_agent") {
 		return humanNick
 	}

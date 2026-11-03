@@ -109,7 +109,7 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 			}
 		}
 	}
-	// --- Scan IM adapters: extra fields matching secret/token/password/credential ---
+
 	im, _ := raw["im"].(map[string]interface{})
 	adapters, _ := im["adapters"].(map[string]interface{})
 	for adapterName, adapterValue := range adapters {
@@ -136,7 +136,6 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 		}
 	}
 
-	// --- Scan MCP servers: env block (all values are secrets) ---
 	mcpServers, _ := raw["mcp_servers"].([]interface{})
 	for i, srvVal := range mcpServers {
 		srv, ok := srvVal.(map[string]interface{})
@@ -147,7 +146,7 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 		if srvName == "" {
 			srvName = fmt.Sprintf("mcp_%d", i)
 		}
-		// env block: all string values are secrets
+
 		env, _ := srv["env"].(map[string]interface{})
 		for key, val := range env {
 			s, ok := val.(string)
@@ -162,7 +161,7 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 				EnvVar:  envVar,
 			})
 		}
-		// headers block: all string values are secrets
+
 		headers, _ := srv["headers"].(map[string]interface{})
 		for key, val := range headers {
 			s, ok := val.(string)
@@ -188,8 +187,7 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 // looksLikeSecretField returns true if the key name suggests it holds a secret.
 // Matches: secret, token, password, credential (case-insensitive, as substring).
 func looksLikeSecretField(key string) bool {
-	// #2180: single source - this was copy #1 of four diverging word
-	// lists (tui, provider panel, desktop registry the others).
+
 	return secretfield.LooksLikeSecretField(key)
 }
 
@@ -407,14 +405,12 @@ func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFindin
 		return nil, nil
 	}
 
-	// Apply env var prefix for instance configs to avoid collisions.
 	if envPrefix != "" {
 		for i := range findings {
 			findings[i].EnvVar = envPrefix + findings[i].EnvVar
 		}
 	}
 
-	// Collect key=value pairs for keys.env.
 	envEntries := make(map[string]string)
 
 	for _, f := range findings {
@@ -428,16 +424,14 @@ func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFindin
 		}
 	}
 
-	// Determine where to write keys.env.
 	if keysPath == "" {
 		keysPath = KeysEnvPath()
 	}
-	// Persist to keys.env (merge with existing entries).
+
 	if err := writeKeysEnvTo(envEntries, keysPath); err != nil {
 		return nil, fmt.Errorf("writing keys.env: %w", err)
 	}
 
-	// Rewrite the config YAML with ${VAR} references.
 	updated, err := yaml.Marshal(raw)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling migrated config: %w", err)
@@ -464,9 +458,7 @@ var keysEnvPathOverride string
 // process environment. Keys that are already set in the environment take
 // precedence and are not overwritten.
 func LoadKeysEnv() error {
-	// #2284-A: register the names so command tools strip them from child
-	// envs (the values still go to the process env - same-process ${VAR}
-	// expansion depends on it, per the R240 audit).
+
 	return loadKeysEnvInto(func(key, val string) error {
 		util.RegisterSecretEnv(key)
 		return os.Setenv(key, val)
@@ -495,18 +487,13 @@ func LoadInstanceKeysEnv(instanceDir string) error {
 	}
 	m := map[string]string{}
 	if err := loadKeysEnvInto(func(key, val string) error {
-		// instance keys win over already-captured globals within the map
+
 		m[key] = val
 		return nil
 	}, filepath.Join(instanceDir, "keys.env")); err != nil {
 		return err
 	}
-	// #2308: COW build + atomic pointer swap - LoadInstanceKeysEnv runs from
-	// 9 wailskit bridge goroutines while two resident pollers
-	// (startConfigFileSync / config_hotreload) read the map via
-	// loadRuntimeEnv, so a plain assignment is a word-size data race
-	// (-race flake in CI; readers could observe the previous instance's
-	// keys for one Load). The published map is never mutated in place.
+
 	instanceKeysEnvPointer.Store(&m)
 	return nil
 }
@@ -524,11 +511,7 @@ func loadKeysEnvInto(setenv func(string, string) error, path string) error {
 		if !ok {
 			continue
 		}
-		// Do not overwrite existing env vars — user's shell env takes precedence.
-		// #1515-D: but an EMPTY shell placeholder (export OPENAI_API_KEY= in an
-		// rc file) must NOT mask the real key in keys.env — exists-with-empty
-		// is a placeholder, not a choice. Skip only when a non-empty value is
-		// already set.
+
 		if v, exists := os.LookupEnv(name); exists && v != "" {
 			continue
 		}
@@ -593,8 +576,7 @@ func removeKeysEnv(names []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
 		return err
 	}
-	// #3519: atomic write, same as writeKeysEnvTo below - a crash mid
-	// truncate-and-write here would lose EVERY remaining API key at once.
+
 	if err := util.AtomicWriteFile(path, []byte(b.String()), secureConfigFileMode); err != nil {
 		return fmt.Errorf("writing keys.env: %w", err)
 	}
@@ -603,12 +585,10 @@ func removeKeysEnv(names []string) error {
 
 // writeKeysEnvTo merges new entries into the keys.env file at the given path.
 func writeKeysEnvTo(newEntries map[string]string, path string) error {
-	// Acquire cross-process lock to prevent concurrent read-modify-write
-	// from multiple goroutines (e.g. WebUI setting two different vendor keys).
+
 	unlock := lockConfigFile(path)
 	defer unlock()
 
-	// Load existing entries first so we merge rather than overwrite.
 	existing := make(map[string]string)
 	if data, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -619,12 +599,10 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 		}
 	}
 
-	// Merge new entries.
 	for k, v := range newEntries {
 		existing[k] = v
 	}
 
-	// Write deterministic output (sorted by key).
 	keys := make([]string, 0, len(existing))
 	for k := range existing {
 		keys = append(keys, k)
@@ -635,14 +613,14 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 	b.WriteString("# Managed by ggcode — DO NOT EDIT manually.\n")
 	b.WriteString("# Use ggcode config to change API keys.\n")
 	for _, k := range keys {
-		// Use single quotes to avoid shell expansion issues.
+
 		fmt.Fprintf(&b, "export %s='%s'\n", k, existing[k])
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	// 0600: only owner can read/write — these are secrets.
+
 	if err := util.AtomicWriteFile(path, []byte(b.String()), 0600); err != nil {
 		return fmt.Errorf("writing keys.env: %w", err)
 	}
@@ -665,7 +643,6 @@ func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyF
 		return nil, nil
 	}
 
-	// Wrap under "vendors" so the shared detection/migration helpers apply.
 	wrapped := map[string]interface{}{"vendors": raw}
 	findings := detectPlaintextAPIKeysFromRaw(wrapped)
 	if len(findings) == 0 {
@@ -720,7 +697,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 		if !ok || !isPlaintextAPIKeyValue(value) {
 			return
 		}
-		util.RegisterSecretEnv(f.EnvVar) // #2284-A
+		util.RegisterSecretEnv(f.EnvVar)
 		os.Setenv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		vendorMap["api_key"] = "${" + f.EnvVar + "}"
@@ -734,7 +711,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 		if !ok || !isPlaintextAPIKeyValue(value) {
 			return
 		}
-		util.RegisterSecretEnv(f.EnvVar) // #2284-A
+		util.RegisterSecretEnv(f.EnvVar)
 		os.Setenv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		epMap["api_key"] = "${" + f.EnvVar + "}"
@@ -747,7 +724,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
 	im, _ := raw["im"].(map[string]interface{})
 	adapters, _ := im["adapters"].(map[string]interface{})
-	// KeyPath format: "im.adapters.{adapterName}.extra.{key}"
+
 	parts := strings.SplitN(f.KeyPath, ".", 5)
 	if len(parts) < 5 {
 		return
@@ -763,7 +740,7 @@ func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries ma
 	if !ok || !isPlaintextAPIKeyValue(value) {
 		return
 	}
-	util.RegisterSecretEnv(f.EnvVar) // #2284-A
+	util.RegisterSecretEnv(f.EnvVar)
 	os.Setenv(f.EnvVar, value)
 	envEntries[f.EnvVar] = value
 	extra[keyName] = "${" + f.EnvVar + "}"
@@ -774,15 +751,14 @@ func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries ma
 // migrateMCPFinding handles migration for mcp_servers[].env.* and mcp_servers[].headers.*.
 func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
 	mcpServers, _ := raw["mcp_servers"].([]interface{})
-	// KeyPath format: "mcp_servers[{srvName}].env.{key}" or "mcp_servers[{srvName}].headers.{key}"
-	// Extract server name between [ and ]
+
 	start := strings.Index(f.KeyPath, "[")
 	end := strings.Index(f.KeyPath, "]")
 	if start < 0 || end < 0 || end <= start+1 {
 		return
 	}
 	srvName := f.KeyPath[start+1 : end]
-	// Determine if env or headers
+
 	isHeader := strings.Contains(f.KeyPath, ".headers.")
 	var keyName string
 	if isHeader {
@@ -805,11 +781,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			continue
 		}
 		name, _ := srv["name"].(string)
-		// #3524: resolve the SAME key detectPlaintextAPIKeysFromRaw used:
-		// a named server by its name, an anonymous one by its mcp_%d
-		// fallback. The old `name != srvName` never matched anonymous
-		// servers (their stored name is "", never "mcp_0"), so their
-		// plaintext keys silently failed to migrate.
+
 		resolved := name
 		if resolved == "" {
 			resolved = fmt.Sprintf("mcp_%d", i)
@@ -821,13 +793,10 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			headers, _ := srv["headers"].(map[string]interface{})
 			value, ok := stringValue(headers[keyName])
 			if !ok || !isPlaintextAPIKeyValue(value) {
-				// #3524: per-server skip (not a loop-wide return) so a
-				// DUPLICATE-named server later in the list can still be
-				// migrated; also keep scanning when this server was already
-				// migrated by an earlier identical finding.
+
 				continue
 			}
-			util.RegisterSecretEnv(f.EnvVar) // #2284-A
+			util.RegisterSecretEnv(f.EnvVar)
 			os.Setenv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			headers[keyName] = "${" + f.EnvVar + "}"
@@ -836,16 +805,15 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			env, _ := srv["env"].(map[string]interface{})
 			value, ok := stringValue(env[keyName])
 			if !ok || !isPlaintextAPIKeyValue(value) {
-				continue // #3524: see headers branch
+				continue
 			}
-			util.RegisterSecretEnv(f.EnvVar) // #2284-A
+			util.RegisterSecretEnv(f.EnvVar)
 			os.Setenv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			env[keyName] = "${" + f.EnvVar + "}"
 			srv["env"] = env
 		}
 		mcpServers[i] = srv
-		// #3524: no break - duplicate-named servers sharing the finding
-		// key must EACH be migrated, not just the first match.
+
 	}
 }

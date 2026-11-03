@@ -1,9 +1,5 @@
 package provider
 
-// Regression tests for GitHub issue #1244: async-error-triggered retry
-// streams must keep the failover chain alive (recursive watcher), bounded by
-// a hop budget so a fully-broken chain terminates instead of recursing.
-
 import (
 	"context"
 	"errors"
@@ -124,9 +120,7 @@ func TestFallback_FullyBrokenAsyncChainTerminates(t *testing.T) {
 	if lastErr == nil {
 		t.Fatalf("fully-broken chain must surface the error, got texts %v", texts)
 	}
-	// Hop budget = one full revolution: A gets its initial attempt plus the
-	// #936 wrap-around retry, B one attempt — then the error is relayed
-	// instead of looping through the chain forever.
+
 	if a.calls.Load() != 2 || b.calls.Load() != 1 {
 		t.Fatalf("expected A=2 (initial + wrap retry), B=1 (budget = one revolution); got A=%d, B=%d", a.calls.Load(), b.calls.Load())
 	}

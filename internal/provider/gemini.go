@@ -44,9 +44,7 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
-		// #1603: re-key the adaptive cap for the NEW model - sharing the
-		// parent's learned cap pointer mixed per-model state across the
-		// registry's carefully-partitioned keys.
+
 		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
@@ -56,15 +54,10 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
 		policy:          p.policy,
 		logprobs:        p.logprobs,
-		// #4419: these two were silently dropped by the struct literal -
-		// the same trap #3066 fixed for anthropic. responseSchema is a
-		// plain slice (zero-value = constraint silently lost);
-		// samplingOverride is an atomic.Pointer whose literal copy carries
-		// only zero state. Clone AFTER the literal via Load/Store.
+
 		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
-	// #4419/#3066: atomic.Pointer must be carried via Load/Store AFTER the
-	// literal - a struct-literal copy only carries zero state.
+
 	if ov := p.samplingOverride.Load(); ov != nil {
 		clone.samplingOverride.Store(ov)
 	}
@@ -94,9 +87,6 @@ func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *GeminiProvider) SetTemperature(temp float64) { p.temperature = temp }
-
-// #2271 follow-up: StopSequenceSetter (Set/Get) removed - per-call stop
-// sequences ride the sampling override exclusively; no production caller.
 
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *GeminiProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
@@ -271,8 +261,7 @@ func normalizeGeminiFinishReason(r genai.FinishReason) string {
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
-	// in-place timeout retry only on the default path.
+
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	contents, systemInstruction := p.convertMessages(messages)
@@ -305,8 +294,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
 		p.cap.OnTruncated()
 	}
-	// #1301: prompt-level safety blocks arrive with no candidates at all -
-	// surface them as an error instead of returning an empty reply.
+
 	if pf := resp.PromptFeedback; pf != nil && pf.BlockReason != genai.BlockedReasonUnspecified && len(resp.Candidates) == 0 {
 		reason := string(pf.BlockReason)
 		if pf.BlockReasonMessage != "" {
@@ -316,9 +304,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	content, usage := p.convertResponse(resp)
-	// #1484-C: relay the real finish reason, normalized to the anthropic
-	// value family (MAX_TOKENS→max_tokens, STOP→end_turn, safety family→
-	// refusal) so MCP sampling stops guessing from usage numbers.
+
 	finishReason := ""
 	if len(resp.Candidates) > 0 {
 		finishReason = normalizeGeminiFinishReason(resp.Candidates[0].FinishReason)
@@ -344,12 +330,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 // wrapper layer only - this is the underlying-provider half. Every send in
 // the streamRead goroutine must go through here.
 func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
-	// #4295 family: same fix as openai_responses (#4293) - when the
-	// per-call deadline fires at the same instant the terminal error event
-	// is sent, the racing select below dropped the very error the deadline
-	// produced (silent stream close). Buffered channel + draining consumer
-	// makes a non-blocking send deterministic; only a full buffer falls
-	// through to the racing select (#3068 leak guard preserved).
+
 	select {
 	case ch <- ev:
 		return true
@@ -382,20 +363,19 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
-		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
-		// retry loop - see anthropic.go Chat's note). Parent ctx stays live.
+
 		parentCtx := ctx
 		var cancelAttempt context.CancelFunc
-		defer func() { cancelAttempt() }()     // idempotent; covers mid-loop returns
-		budget := newRetryBudget()             // #722: cap cumulative retry backoff sleep per stream call
-		grounding := newGeminiGroundingAccum() // built-in tool grounding sources, deduped across chunks/attempts
+		defer func() { cancelAttempt() }()
+		budget := newRetryBudget()
+		grounding := newGeminiGroundingAccum()
 		attempts := p.policy.attempts()
 		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
-				cancelAttempt() // release the previous attempt's deadline timer (#4729)
+				cancelAttempt()
 			}
-			ctx, cancelAttempt = p.policy.withTimeout(parentCtx) // fresh per-attempt deadline
-			var usage TokenUsage                                 // reset per attempt to avoid leaking failed-attempt usage
+			ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
+			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
 			var policyBlocked bool
 			var avgConf *float64 // sa-74: turn-average logprob, reset per attempt
@@ -409,12 +389,12 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 						p.cap.OnRejected(parsed)
 					}
 					if !emitted && isRetryableForContext(ctx, err) && attempt < attempts-1 {
-						// Notify user about retry
+
 						delay := retryDelay(err, attempt)
 						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 							return
 						}
-						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() {
 							budget.unlimited = true
 							attempts = retryAlwaysAttempts
 						}
@@ -424,8 +404,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 						}
 						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-							// #722: budget exhausted - stop retrying now; wrap with the
-							// sentinel so failover switches immediately.
+
 							if sleepErr == errRetryBudgetExhausted {
 								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 							}
@@ -443,23 +422,18 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					return
 				}
 
-				// Extract usage metadata
 				if resp.UsageMetadata != nil {
 					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
-					// Gemini bills thinking tokens at output rates (#225).
+
 					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount)
 					usage.CacheRead = int(resp.UsageMetadata.CachedContentTokenCount)
 					usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
 				}
 
-				// Accumulate grounding metadata from this chunk (built-in
-				// google_search/url_context tools surface sources per-chunk).
 				if len(resp.Candidates) > 0 {
 					grounding.add(resp.Candidates[0].GroundingMetadata)
 				}
 
-				// sa-74: each chunk carries the running avgLogprobs; the last
-				// chunk before finish wins.
 				if p.logprobs && len(resp.Candidates) > 0 {
 					avg := resp.Candidates[0].AvgLogprobs
 					avgConf = &avg
@@ -474,30 +448,21 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				if len(resp.Candidates) > 0 {
 					fr := resp.Candidates[0].FinishReason
 					if fr == genai.FinishReasonMaxTokens {
-						// Output was truncated - NOT an error. Keep partial content.
+
 						p.cap.OnTruncated()
 						truncated = true
 					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
-						// Fatal finish reason, but any text already streamed is
-						// preserved. Surface the reason as a system notice, mark the
-						// response truncated, and close the stream normally (Done)
-						// instead of erroring out so partial content reaches history.
+
 						debug.Log("provider", "gemini stream fatal finish reason: %v", finishErr)
 						finishNotice = fmt.Sprintf("[Warning: %v] ", finishErr)
 						truncated = true
-						// These finish reasons are provider policy filters, not
-						// output-length truncation: auto-continuation would resend
-						// the full context just to hit the same filter again (#266).
+
 						policyBlocked = true
 					}
 				}
 
 				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-					// #1301: input-side safety blocks carry NO candidates and
-					// NO finishReason - the reason lives in the top-level
-					// promptFeedback.blockReason. Without this check a blocked
-					// prompt streamed an empty "success" reply (Done with
-					// PolicyBlocked=false) and the agent spun on nothing.
+
 					if pf := resp.PromptFeedback; pf != nil && pf.BlockReason != genai.BlockedReasonUnspecified {
 						reason := string(pf.BlockReason)
 						if pf.BlockReasonMessage != "" {
@@ -510,8 +475,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 						policyBlocked = true
 						truncated = true
 					}
-					// Nothing to stream from this chunk; emit the finish notice
-					// (if any) so fully blocked responses still surface the reason.
+
 					if finishNotice != "" {
 						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: finishNotice}) {
 							return
@@ -543,7 +507,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 								ID:               id,
 								Name:             part.FunctionCall.Name,
 								Arguments:        args,
-								ThoughtSignature: part.ThoughtSignature, // #1610-A
+								ThoughtSignature: part.ThoughtSignature,
 							},
 						}) {
 							return
@@ -551,8 +515,6 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 				}
 
-				// Emit the finish notice after the chunk's parts so partial text
-				// is streamed before the warning (#232 ordering).
 				if finishNotice != "" {
 					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: finishNotice}) {
 						return
@@ -562,10 +524,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			if retry {
 				continue
 			}
-			// #561(C): when the stream never carried UsageMetadata, don't emit
-			// all-zero usage (it zeroes context-budget accounting and disables
-			// compaction). Fall back to CountTokens + char estimation, mirroring
-			// openai.go and anthropic.go.
+
 			if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheRead == 0 {
 				inputTokens, err := p.CountTokens(ctx, messages)
 				if err != nil {
@@ -587,7 +546,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			}
 			return
 		}
-		// All retry attempts exhausted without success.
+
 		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %d retry attempts exhausted", p.policy.attempts())}) {
 			return
 		}
@@ -622,14 +581,8 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 	if p.reasoningEffort == "" {
 		return
 	}
-	maxTok := p.effectiveMaxTokens() // #2300: override-aware - the old
-	// p.maxTokens/p.cap chain ignored an active sampling window, so a
-	// small MCP override (512) still derived budget from the static cap
-	// (8192): budget clamped to >=512 exceeded MaxOutputTokens 4-12x -
-	// either a hard 400 (#1610-B family) or a reply fully consumed by
-	// thinking (FinishReason=MAX_TOKENS, empty text).
-	// Circuit-breaker mirrors anthropic's dual-guarantee form: below 1024
-	// there is no room for both meaningful thinking and a reply.
+	maxTok := p.effectiveMaxTokens()
+
 	if maxTok <= 1024 {
 		if isGemini3Model(p.model) {
 			config.ThinkingConfig = &genai.ThinkingConfig{
@@ -637,17 +590,13 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 			}
 			return
 		}
-		// Non-3 models: budget 0 disables thinking entirely.
+
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			ThinkingBudget: ptrToInt32(0),
 		}
 		return
 	}
-	// #1610-B: gemini-3 models REJECT thinkingBudget and only accept
-	// thinkingLevel - routing them through the budget path 400'd every
-	// request once an effort was set (user or adaptive). Level-based for
-	// gemini-3*, budget-based for everything else; the <=512 disable also
-	// uses level (budget 0 is likewise rejected).
+
 	if isGemini3Model(p.model) {
 		var level genai.ThinkingLevel
 		switch p.reasoningEffort {
@@ -708,9 +657,7 @@ func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, to
 	default:
 		return
 	}
-	// Gemini API rejects FunctionCallingConfigMode=ANY combined with built-in
-	// tools (google_search/url_context); degrade to AUTO instead of failing
-	// every request when both are configured.
+
 	if mode == genai.FunctionCallingConfigModeAny && p.hasBuiltinTools() {
 		mode = genai.FunctionCallingConfigModeAuto
 	}
@@ -731,7 +678,7 @@ func ptrToInt32(v int32) *int32 { return &v }
 // MCP sampling budgets ran to the model default on this provider.
 func (p *GeminiProvider) effectiveMaxTokens() int {
 	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
-		return o.MaxTokens // #2248/#2282: active sampling window wins
+		return o.MaxTokens
 	}
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {
@@ -746,7 +693,7 @@ func (p *GeminiProvider) effectiveMaxTokens() int {
 func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig) {
 	temp := p.temperature
 	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
-		temp = o.Temperature // #1592-A family: server's temperature hint wins
+		temp = o.Temperature
 	}
 	if temp > 0 {
 		config.Temperature = ptrToFloat32(float32(temp))
@@ -754,13 +701,11 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 	if p.topP > 0 {
 		config.TopP = ptrToFloat32(float32(p.topP))
 	}
-	// #2282: the output-budget leg the other two providers already had.
+
 	if v := p.effectiveMaxTokens(); v > 0 {
 		config.MaxOutputTokens = int32(v)
 	}
-	// #2239: per-call stop sequences (MCP sampling contract). #2271
-	// follow-up: the p.stopSequences field had no writer left - the
-	// override is the sole source.
+
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
 		config.StopSequences = o.StopSequences
 	}
@@ -769,18 +714,12 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 func ptrToFloat32(v float32) *float32 { return &v }
 
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
-	// #2819 (Gemini leg): fold detector-injected text-only "user" messages into
-	// the following tool_result message. The Gemini API requires every model
-	// functionCall turn to be immediately followed by the user turn carrying its
-	// functionResponse parts; a text-only user turn wedged between them 400s the
-	// whole agentic multi-turn request. Append after the tool_result blocks so
-	// functionResponse parts stay first in the turn (same ordering Anthropic
-	// needs); extra Text parts alongside functionResponse parts are accepted.
+
 	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var contents []*genai.Content
 	var systemParts []*genai.Part
 	toolNamesByID := make(map[string]string)
-	// sigsByID carries tool-call thought signatures into the responses (#1610-A).
+
 	sigsByID := make(map[string][]byte)
 
 	for _, m := range messages {
@@ -804,11 +743,7 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 			case "text":
 				parts = append(parts, &genai.Part{Text: b.Text})
 			case "image":
-				// Gemini uses InlineData for inline images
-				// #780: ImageData is a base64 STRING (provider contract, same as
-				// openai.go/anthropic.go); Blob.Data is raw bytes and encoding/json
-				// re-encodes []byte on marshal, so []byte(b.ImageData)
-				// double-encoded every vision payload.
+
 				imgBytes, decErr := base64.StdEncoding.DecodeString(b.ImageData)
 				if decErr != nil {
 					imgBytes = []byte(b.ImageData)
@@ -856,9 +791,7 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 						},
 					},
 				}
-				// #1610-A: gemini-3 with thinking on REQUIRES the thought
-				// signature echoed with the function response - omitting it
-				// 400s every agentic multi-turn.
+
 				if sig, ok := sigsByID[b.ToolID]; ok {
 					frPart.ThoughtSignature = sig
 				}
@@ -884,8 +817,7 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 }
 
 func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
-	// Built-in tools first: each must be its own genai.Tool entry, disjoint
-	// from the FunctionDeclarations entry (Gemini API contract).
+
 	toolList := p.builtinGeminiTools()
 
 	functionDecls := make([]*genai.FunctionDeclaration, 0, len(tools))
@@ -917,7 +849,7 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 
 	if resp.UsageMetadata != nil {
 		usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
-		// Gemini bills thinking tokens at output rates (#225).
+
 		usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount)
 		usage.CacheRead = int(resp.UsageMetadata.CachedContentTokenCount)
 		usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
@@ -935,15 +867,12 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 					id = part.FunctionCall.Name
 				}
 				blk := ToolUseBlock(id, part.FunctionCall.Name, args)
-				blk.ThinkingSignature = string(part.ThoughtSignature) // #1610-A
+				blk.ThinkingSignature = string(part.ThoughtSignature)
 				blocks = append(blocks, blk)
 			}
 		}
 	}
 
-	// Built-in google_search/url_context: surface grounding sources so the
-	// agent (and user) can see where server-side tool content came from.
-	// Appended after the response body so citations follow the text.
 	if len(resp.Candidates) > 0 {
 		if s := newGeminiGroundingAccum().add(resp.Candidates[0].GroundingMetadata).summary(); s != "" {
 			blocks = append(blocks, TextBlock(s))

@@ -64,8 +64,6 @@ var (
 	dingtalkImageToLinkRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 )
 
-// ---- DataFrame protocol ----
-
 type dingtalkDataFrame struct {
 	SpecVersion string            `json:"specVersion"`
 	Type        string            `json:"type"`
@@ -79,8 +77,6 @@ type dingtalkDataFrameResponse struct {
 	Data    string            `json:"data"`
 	Message string            `json:"message,omitempty"`
 }
-
-// ---- Bot callback message (parsed from DataFrame.Data) ----
 
 type dingtalkBotCallbackData struct {
 	ConversationID   string `json:"conversationId"`
@@ -104,8 +100,6 @@ type dingtalkBotCallbackData struct {
 	RobotCode string `json:"robotCode"`
 	MsgType   string `json:"msgtype"`
 }
-
-// ---- dingtalkAdapter ----
 
 type dingtalkAdapter struct {
 	name       string
@@ -153,7 +147,7 @@ func (a *dingtalkAdapter) recordCallbackContext(channelID string, c dingtalkCall
 		a.callbacks = make(map[string]dingtalkCallbackContext)
 	}
 	a.callbacks[channelID] = c
-	// Trim to prevent unbounded growth
+
 	if len(a.callbacks) > 100 {
 		for k := range a.callbacks {
 			delete(a.callbacks, k)
@@ -172,9 +166,7 @@ func (a *dingtalkAdapter) callbackContext(channelID string) (dingtalkCallbackCon
 }
 
 func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterConfig) (*dingtalkAdapter, error) {
-	// #1027: accept both key spellings - the CLI wizard/help historically
-	// wrote client_id/client_secret while the adapter reads app_key/app_secret,
-	// producing configs that could never start.
+
 	appKey := stringValue(adapterCfg.Extra, "app_key", "client_id")
 	appSecret := stringValue(adapterCfg.Extra, "app_secret", "client_secret")
 	if appKey == "" || appSecret == "" {
@@ -198,8 +190,6 @@ func (a *dingtalkAdapter) client() *http.Client {
 	}
 	return a.httpClient
 }
-
-// ---- Sink interface ----
 
 func (a *dingtalkAdapter) Name() string {
 	return a.name
@@ -231,10 +221,8 @@ func (a *dingtalkAdapter) Close() error {
 	return nil
 }
 
-// ---- Main run loop with reconnect ----
-
 func (a *dingtalkAdapter) run(ctx context.Context) {
-	// Start token refresh goroutine
+
 	safego.Go("dingtalk.tokenRefresher", func() { a.tokenRefresher(ctx) })
 
 	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
@@ -262,16 +250,14 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				// Don't publish late errors after context cancellation
-				// They would override the "disconnected" state set above
+
 				return
 			default:
 			}
 			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
 			a.publishState(false, "error", err.Error())
 		}
-		// NOTE: must assign (=), not declare (:=) — := would shadow the loop-scoped
-		// attempt and freeze the backoff at backoffs[0] forever (#946).
+
 		delay, attempt = backoffFor(err, attempt, backoffs)
 		debug.Log("dingtalk", "adapter=%s reconnecting in %v (attempt %d)", a.name, delay, attempt)
 
@@ -294,21 +280,17 @@ func backoffFor(err error, attempt int, backoffs []time.Duration) (time.Duration
 	return backoffs[min(attempt, len(backoffs)-1)], attempt + 1
 }
 
-// ---- Connect + serve messages (single connection lifecycle) ----
-
 func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
-	// 1. Refresh token
+
 	if err := a.refreshToken(ctx); err != nil {
 		return fmt.Errorf("refresh token: %w", err)
 	}
 
-	// 2. Open stream → get endpoint + ticket
 	wsURL, err := a.streamOpen(ctx)
 	if err != nil {
 		return fmt.Errorf("stream open: %w", err)
 	}
 
-	// 3. Connect WebSocket (30s dial timeout prevents indefinite hang on unreachable endpoints)
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
 	dialCancel()
@@ -331,7 +313,6 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 		conn.Close()
 	}()
 
-	// 4. Read loop with ping/pong
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	conn.SetPongHandler(func(appData string) error {
 		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
@@ -344,7 +325,6 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 
 	readErr := make(chan error, 1)
 
-	// Read goroutine (safego protects against panic)
 	safego.Go("im.dingtalk.read", func() {
 		for {
 			_, message, err := conn.ReadMessage()
@@ -356,7 +336,6 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 		}
 	})
 
-	// Main loop: read errors, ping, context cancellation
 	for {
 		select {
 		case <-ctx.Done():
@@ -379,8 +358,6 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	}
 }
 
-// ---- DataFrame handling ----
-
 func (a *dingtalkAdapter) handleDataFrame(ctx context.Context, conn *websocket.Conn, raw []byte) {
 	var frame dingtalkDataFrame
 	if err := json.Unmarshal(raw, &frame); err != nil {
@@ -395,31 +372,27 @@ func (a *dingtalkAdapter) handleDataFrame(ctx context.Context, conn *websocket.C
 
 	switch {
 	case frame.Type == dingtalkSubCallback && topic == dingtalkBotCallbackTopic:
-		// Bot message callback — ACK first, then process asynchronously (#949).
-		// Synchronous processing would run the full agent turn inside the WS
-		// read goroutine; a long run (>wsReadTimeout) starves the read loop and
-		// causes reconnect flapping. Redelivery/concurrency races are absorbed
-		// by the manager-level seenMessages dedup (runtime.go HandleInbound).
+
 		a.sendFrameResponse(conn, frame, dfStatusOK, "")
 		safego.Go("im.dingtalk.botCallback", func() { a.processBotCallback(ctx, frame) })
 
 	case frame.Type == dingtalkSubCallback && topic == dingtalkCardCallbackTopic:
-		// Card callback — ACK only for now
+
 		a.sendFrameResponse(conn, frame, dfStatusOK, "")
 
 	case topic == dingtalkSystemPingTopic:
-		// System ping — ACK
+
 		a.sendFrameResponse(conn, frame, dfStatusOK, "pong")
 
 	case topic == dingtalkSystemDisconnectTopic:
-		// Server requests disconnect — close and reconnect
+
 		debug.Log("dingtalk", "adapter=%s server disconnect requested", a.name)
 		a.sendFrameResponse(conn, frame, dfStatusOK, "")
 		conn.Close()
 
 	default:
 		debug.Log("dingtalk", "adapter=%s unhandled frame type=%s topic=%s", a.name, frame.Type, topic)
-		// ACK with 404 (handler not found) as per SDK
+
 		if frame.Type == dingtalkSubCallback || frame.Type == dingtalkSubEvent {
 			a.sendFrameResponse(conn, frame, 404, "handler not found")
 		}
@@ -444,9 +417,6 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 		return
 	}
 
-	// Strip @bot mention prefix
-
-	// Strip @bot mention prefix
 	atPrefix := "@" + callbackData.RobotCode + " "
 	text = strings.TrimPrefix(text, atPrefix)
 	text = strings.TrimSpace(text)
@@ -459,9 +429,6 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 		channelID = callbackData.SenderID
 	}
 
-	// Cache webhook/robotCode/convID/msgId keyed by the sender's staffId so
-	// Send/TriggerTyping always address this user — never the most recent
-	// callback globally (#948).
 	a.recordCallbackContext(channelID, dingtalkCallbackContext{
 		webhook:   callbackData.SessionWebhook,
 		robotCode: callbackData.RobotCode,
@@ -489,7 +456,6 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 		},
 	}
 
-	// Pairing flow (same as QQ and WeChat)
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	debug.Log("dingtalk", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 	if err != nil && err != ErrNoSessionBound {
@@ -503,7 +469,6 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 		return
 	}
 
-	// Normal inbound
 	debug.Log("dingtalk", "adapter=%s calling HandleInbound channel=%s sender=%s", a.name, channelID, senderID)
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
@@ -549,8 +514,6 @@ func (a *dingtalkAdapter) sendFrameResponse(conn *websocket.Conn, reqFrame dingt
 		}
 	}
 }
-
-// ---- Token management ----
 
 func (a *dingtalkAdapter) tokenRefresher(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -625,8 +588,6 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	return nil
 }
 
-// ---- Stream open (get WS endpoint + ticket) ----
-
 func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	url := dingtalkAPIBase + "/v1.0/gateway/connections/open"
 	a.mu.RLock()
@@ -682,8 +643,6 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	return wsURL, nil
 }
 
-// ---- Send messages ----
-
 func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.mu.RLock()
 	connected := a.connected
@@ -697,22 +656,10 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return nil
 	}
 
-	// DingTalk markdown renderer has unreliable inline image support for
-	// ![alt](url) syntax. Convert to clickable [alt](url) links so users
-	// always get a usable reference to the image.
 	content = dingtalkImageToLinkRe.ReplaceAllString(content, `[$1]($2)`)
 
-	// Split long messages for readability. DingTalk webhook markdown allows
-	// up to ~20480 bytes and API markdown up to ~5000 chars; 4000 chars is
-	// a safe split that works for both delivery paths and keeps messages readable.
-	// Use SplitMarkdown (not SplitMessageForPlatform) because DingTalk receives
-	// markdown-formatted messages — code blocks and other fenced syntax must not
-	// be broken mid-block across chunks, or the renderer will misinterpret content.
 	chunks := SplitMarkdown(content, PlatformLimits[PlatformDingTalk])
 
-	// Try the sessionWebhook cached for THIS binding's user (staffId). Never use
-	// another user's webhook — delivery is always addressed by binding (#948).
-	// A cache miss falls through to the REST API fallback below.
 	webhook := ""
 	robotCode := ""
 	if ctxInfo, ok := a.callbackContext(binding.ChannelID); ok {
@@ -721,8 +668,7 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	}
 
 	for i, chunk := range chunks {
-		// Rate limit: DingTalk allows max 20 msgs/min per robot.
-		// Without this delay, multi-chunk sends get throttled and blocked for 10 min.
+
 		if i > 0 {
 			select {
 			case <-time.After(dingtalkInterMsgDelay):
@@ -739,7 +685,6 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 			debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
 		}
 
-		// Fallback: use REST API with userId (staffId from ChannelID).
 		debug.Log("dingtalk", "adapter=%s Send via API userId=%s chunk=%d/%d text_len=%d", a.name, binding.ChannelID, i+1, len(chunks), len(chunk))
 		err := a.sendMarkdownViaAPI(ctx, binding, chunk)
 		if err != nil {
@@ -782,7 +727,7 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 	}
 
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
-		// Re-create the request each attempt since the body reader is consumed.
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(bodyJSON))
 		if err != nil {
 			return err
@@ -806,10 +751,7 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 		}
 		if err := json.Unmarshal(respBody, &wresp); err == nil && wresp.ErrCode != 0 {
 			if dingTalkRateLimitErrcodes[wresp.ErrCode] && attempt < maxRateLimitRetries {
-				// Use dingtalkInterMsgDelay (3s) instead of defaultRetryDelay (2s) because
-				// DingTalk's limit is 20 msgs/min = 3s/msg. Retrying after 2s stays within
-				// the rate window and triggers a 10-minute ban on the 21st message.
-				// Source: https://help.dingtalk.io/open/development/call-frequency-limit
+
 				debug.Log("dingtalk", "adapter=%s webhook rate-limited (errcode=%d), retry %d/%d after %v",
 					a.name, wresp.ErrCode, attempt+1, maxRateLimitRetries, dingtalkInterMsgDelay)
 				if err := sleepRetry(ctx, dingtalkInterMsgDelay); err != nil {
@@ -834,8 +776,6 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 		return fmt.Errorf("no access token")
 	}
 
-	// DingTalk oToMessages/batchSend requires userIds (staffId).
-	// ChannelID stores the sender's staffId.
 	userID := strings.TrimSpace(binding.ChannelID)
 	if userID == "" {
 		return fmt.Errorf("no userId in binding (ChannelID is empty)")
@@ -870,8 +810,7 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 			resp.Body.Close()
 			return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
 		}
-		// DingTalk API can also return HTTP 200 with errcode in JSON body on failure.
-		// Same pattern as webhook — must check errcode to avoid silent failures.
+
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		resp.Body.Close()
 		var aresp struct {
@@ -894,16 +833,13 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 	return rateLimitExhausted("DingTalk API")
 }
 
-// ---- Helpers ----
-
 func (a *dingtalkAdapter) publishState(healthy bool, status, errMsg string) {
 	if a.manager == nil {
 		return
 	}
 	contactURI := ""
 	if a.appKey != "" {
-		// DingTalk enterprise bots don't have a public scan-to-add URL.
-		// Link to the developer console app detail page instead.
+
 		contactURI = "https://dev.dingtalk.com/app/detail?appKey=" + a.appKey
 	}
 	a.manager.PublishAdapterState(AdapterState{
@@ -1041,8 +977,7 @@ func redactSecret(value string) string {
 // providing visual feedback that the bot received the message and is processing.
 // Uses DingTalk's robot messageReactions API.
 func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
-	// Reaction target is looked up per binding user, not from the most recent
-	// global callback (#948).
+
 	convID := ""
 	msgID := ""
 	if ctxInfo, ok := a.callbackContext(binding.ChannelID); ok {
@@ -1054,10 +989,9 @@ func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 	a.mu.RUnlock()
 
 	if convID == "" || msgID == "" {
-		return nil // no incoming message to react to
+		return nil
 	}
 
-	// Dedup: only react once per message
 	a.mu.Lock()
 	if a.reactedMsgs == nil {
 		a.reactedMsgs = make(map[string]bool)
@@ -1067,7 +1001,7 @@ func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 		return nil
 	}
 	a.reactedMsgs[msgID] = true
-	// Trim map to prevent unbounded growth
+
 	if len(a.reactedMsgs) > 50 {
 		for k := range a.reactedMsgs {
 			delete(a.reactedMsgs, k)
@@ -1106,7 +1040,7 @@ func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 	resp, err := a.client().Do(req)
 	if err != nil {
 		debug.Log("dingtalk", "adapter=%s TriggerTyping reaction failed: %v", a.name, err)
-		return nil // best-effort, don't block on reaction errors
+		return nil
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
@@ -1115,5 +1049,5 @@ func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 		debug.Log("dingtalk", "adapter=%s TriggerTyping HTTP %d: %s",
 			a.name, resp.StatusCode, redactDingTalkResponse(string(respBody)))
 	}
-	return nil // best-effort
+	return nil
 }

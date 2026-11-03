@@ -1,15 +1,5 @@
 package provider
 
-// #2573 regression tests: the sa-78 callPolicy (request_timeout /
-// max_retries) must actually reach the openai-responses provider instead of
-// being silently dropped by the registry. Before the fix:
-//   - registry resolved the policy but never called setCallPolicy for
-//     openai-responses (both the explicit protocol branch and the URL-sniff
-//     /responses fallback),
-//   - OpenAIResponsesProvider had no policy field, no callPolicySetter
-//     implementation, no retry loop and no per-call deadline in
-//     Chat/ChatStream.
-
 import (
 	"context"
 	"io"
@@ -170,25 +160,18 @@ func TestIssue2573RegistryWiresPolicyURLSniffFallback(t *testing.T) {
 // an eternal stream.
 func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() { _ = recover() }() // #flake: client-side deadline closes the conn - the delta write may hit EPIPE
+		defer func() { _ = recover() }()
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done() // hang until the client-side deadline kills the conn
+		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
 	p := NewOpenAIResponsesProvider("sk-test", "gpt-5-codex", 1024, srv.URL+"/v1")
-	// Determinization (CI runs 39042845474 / 39042902916 both flaked at
-	// 0.30s): the 300ms deadline raced three ways on loaded runners -
-	// (a) the delta event could lose to the deadline (text=""), (b) a
-	// broken-pipe write raced the ctx error out of the select (i/o error
-	// won), (c) the 3s elapsed budget included ChatStream's connect setup.
-	// A hang is a hang: widen to 5s (no need for a tight race), tolerate
-	// EPIPE/EOF terminal wording, and start the elapsed clock at the first
-	// event so it measures stream lifetime, not connect time.
+
 	p.setCallPolicy(callPolicy{requestTimeout: 5 * time.Second})
 
 	ch, err := p.ChatStream(context.Background(), []Message{
@@ -203,7 +186,7 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	first := true
 	for ev := range ch {
 		if first {
-			start = time.Now() // exclude connect setup from the deadline-budget check
+			start = time.Now()
 			first = false
 		}
 		switch ev.Type {
@@ -231,8 +214,7 @@ func TestIssue2573StreamRetriesTransportFailureBeforeEmission(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits.Add(1) == 1 {
-			// Truncated body: declared Content-Length never delivered →
-			// client scanner dies with unexpected EOF, nothing emitted.
+
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Content-Length", "2048")
 			io.WriteString(w, ": keepalive\n\n")
@@ -292,7 +274,7 @@ func TestIssue2573StreamDoesNotRetryAfterEmission(t *testing.T) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			return // truncate: client sees unexpected EOF after the delta
+			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{}}\n\n")

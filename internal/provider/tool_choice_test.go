@@ -9,7 +9,6 @@ import (
 func TestAnthropicProvider_SetToolChoice(t *testing.T) {
 	p := NewAnthropicProvider("test-key", "claude-sonnet-4-20250514", 4096)
 
-	// Default should be empty
 	if got := p.ToolChoice(); got != "" {
 		t.Fatalf("expected empty tool_choice, got %q", got)
 	}
@@ -19,7 +18,6 @@ func TestAnthropicProvider_SetToolChoice(t *testing.T) {
 		t.Fatalf("expected %q, got %q", "required", got)
 	}
 
-	// Whitespace and case normalization
 	p.SetToolChoice("  NONE  ")
 	if got := p.ToolChoice(); got != "none" {
 		t.Fatalf("expected %q, got %q", "none", got)
@@ -44,7 +42,6 @@ func TestAnthropicProvider_ToolChoicePreservedInClone(t *testing.T) {
 func TestOpenAIProvider_SetToolChoice(t *testing.T) {
 	p := NewOpenAIProviderWithBaseURL("test-key", "gpt-4o", 4096, "https://api.openai.com/v1")
 
-	// Default should be empty
 	if got := p.ToolChoice(); got != "" {
 		t.Fatalf("expected empty tool_choice, got %q", got)
 	}
@@ -54,7 +51,6 @@ func TestOpenAIProvider_SetToolChoice(t *testing.T) {
 		t.Fatalf("expected %q, got %q", "required", got)
 	}
 
-	// Whitespace and case normalization
 	p.SetToolChoice("  NONE  ")
 	if got := p.ToolChoice(); got != "none" {
 		t.Fatalf("expected %q, got %q", "none", got)
@@ -82,14 +78,12 @@ func TestOpenAIProvider_ApplyToolChoice(t *testing.T) {
 		t.Fatalf("expected nil tool_choice when no tools, got %v", req.ToolChoice)
 	}
 
-	// Add tools and test
 	req.Tools = []openai.Tool{{}}
 	p.applyToolChoice(&req)
 	if got, ok := req.ToolChoice.(string); !ok || got != "required" {
 		t.Fatalf("expected tool_choice %q, got %v", "required", req.ToolChoice)
 	}
 
-	// Empty tool_choice should not set anything
 	req = openai.ChatCompletionRequest{}
 	req.Tools = []openai.Tool{{}}
 	p.SetToolChoice("")

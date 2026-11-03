@@ -84,7 +84,7 @@ func TestSignalSendExtractedImageLocalPath(t *testing.T) {
 	if len(recips) != 1 {
 		t.Fatalf("expected 1 recipient, got %v", gotBody["recipients"])
 	}
-	// group recipients use the double-encoded "group." prefix form
+
 	first, ok := recips[0].(string)
 	if !ok || !strings.HasPrefix(first, "group.") {
 		t.Fatalf("expected group. prefix, got %v", recips)

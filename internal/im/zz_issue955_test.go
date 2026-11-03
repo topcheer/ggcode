@@ -1,12 +1,5 @@
 package im
 
-// Issue #955: webhook-mode card.action.trigger callbacks were parsed from the
-// wrong envelope layout (top-level action/open_id/message_id instead of the
-// real event.action / event.operator.open_id / event.context.open_message_id
-// nesting), so 100% of card callbacks were silently dropped after the webhook
-// had already replied 200 (unrecoverable). Additionally verification_token was
-// dead config — never checked — leaving an unauthenticated callback surface.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -136,7 +129,6 @@ func TestFeishuWebhookVerificationTokenEnforced(t *testing.T) {
 		t.Errorf("wrong token: status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 
-	// Correct token passes and the card callback is dispatched.
 	body["header"].(map[string]any)["token"] = "tok-955"
 	body["header"].(map[string]any)["event_id"] = "evt-token-2"
 	raw, _ = json.Marshal(body)
@@ -154,7 +146,6 @@ func TestFeishuWebhookVerificationTokenEnforced(t *testing.T) {
 		t.Fatal("card callback not dispatched after token verification")
 	}
 
-	// Unset token config (verification disabled) must not 401 everything.
 	a2 := newFeishu955Adapter(mgr, "")
 	body["header"].(map[string]any)["event_id"] = "evt-token-3"
 	raw, _ = json.Marshal(body)

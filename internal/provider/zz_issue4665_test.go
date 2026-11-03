@@ -11,16 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #4665: the non-gateway discovery cache key must distinguish same-host
-// upstreams. The old key was bare Hostname() - no port, no path - so
-// model lists cross-contaminated for the 6h (disk-persisted) TTL:
-//   - same host, different PORT (localhost:11434 vs localhost:1234);
-//   - same host:port, different base PATH (reverse proxy splitting
-//     gw.example.com/oa -> A and /gw -> B).
-// Sharing stays intentional for the oneapi/litellm form: same host:port
-// AND same base path = one registry (asserted by the updated
-// TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor).
-
 func issue4665CountingServer(hits *atomic.Int32, models string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -62,7 +52,7 @@ func TestIssue4665DifferentPortSameHostDoesNotShare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover B: %v", err)
 	}
-	// httptest servers share host 127.0.0.1 but bind different ports.
+
 	if hitsA.Load() != 1 || hitsB.Load() != 1 {
 		t.Fatalf("hits A=%d B=%d, want 1/1 (different ports must not share cache)", hitsA.Load(), hitsB.Load())
 	}
@@ -79,7 +69,6 @@ func TestIssue4665DifferentPathSameHostPortDoesNotShare(t *testing.T) {
 	srvB := issue4665CountingServer(&hitsB, `{"data":[{"id":"upstream-b-model"}]}`)
 	defer srvB.Close()
 
-	// Reverse-proxy split form: one host, path routes to different upstreams.
 	_, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
 		VendorID: "custom", EndpointID: "oa", Protocol: "openai",
 		BaseURL: "http://127.0.0.1:" + issue4665Port(t, srvA) + "/oa", APIKey: "k",

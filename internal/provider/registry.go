@@ -28,13 +28,8 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
 
-	// One adaptive max-output-tokens cap per (vendor, baseURL, model). Shared
-	// across reconstructions of the same logical endpoint so learned bounds
-	// survive provider swaps.
 	cap := AdaptiveCapFor(resolved.VendorID, resolved.BaseURL, resolved.Model, resolved.MaxTokens)
-	// sa-78: resolved call policy (timeout/retry budget). Applied to the
-	// OpenAI/Anthropic/Gemini providers via callPolicySetter; protocols
-	// without the setter keep the pre-existing defaults.
+
 	policy := callPolicyFromResolved(resolved)
 
 	switch resolved.Protocol {
@@ -57,16 +52,15 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return p, nil
 
 	case "openai-responses":
-		// sa-40: OpenAI Responses API (/v1/responses) - serves Codex-family
-		// and o-series models that have no Chat Completions surface.
+
 		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
-		rp.setCallPolicy(policy) // #2573: honor request_timeout / max_retries
+		rp.setCallPolicy(policy)
 		rp.SetReasoningEffort(resolved.ReasoningEffort)
 		rp.SetTextVerbosity(resolved.TextVerbosity)
 		rp.SetServiceTier(resolved.ServiceTier)
 		rp.SetToolChoice(resolved.ToolChoice)
 		if len(resolved.ServerTools) > 0 {
-			rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
+			rp.SetServerTools(resolved.ServerTools)
 		}
 		if resolved.ResponsesBackground {
 			rp.SetBackgroundMode(true)
@@ -74,17 +68,16 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return rp, nil
 
 	case "openai":
-		// URL-sniff fallback: an "openai" protocol endpoint pointed at a
-		// /responses path is a Responses-API endpoint, not a relay.
+
 		if strings.HasSuffix(strings.TrimRight(resolved.BaseURL, "/"), "/responses") {
 			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
-			rp.setCallPolicy(policy) // #2573: honor request_timeout / max_retries
+			rp.setCallPolicy(policy)
 			rp.SetReasoningEffort(resolved.ReasoningEffort)
 			rp.SetTextVerbosity(resolved.TextVerbosity)
 			rp.SetServiceTier(resolved.ServiceTier)
 			rp.SetToolChoice(resolved.ToolChoice)
 			if len(resolved.ServerTools) > 0 {
-				rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
+				rp.SetServerTools(resolved.ServerTools)
 			}
 			if resolved.ResponsesBackground {
 				rp.SetBackgroundMode(true)
@@ -97,7 +90,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p.SetReasoningEffort(resolved.ReasoningEffort)
 		p.SetServiceTier(resolved.ServiceTier)
 		p.SetToolChoice(resolved.ToolChoice)
-		p.SetLogprobsRequest(resolved.Logprobs) // sa-74
+		p.SetLogprobsRequest(resolved.Logprobs)
 		p.SetStrictTools(strictToolsAllow(resolved))
 		return p, nil
 
@@ -107,12 +100,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		}
 		p := NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
-		// #2576: copilot embeds *OpenAIProvider whose Chat/ChatStream
-		// consume p.policy.withTimeout/attempts - without this line the
-		// endpoint's request_timeout/max_retries resolved at the top of
-		// NewProvider were silently dropped (zero-value policy: no
-		// deadline, 20-attempt default), the same failure mode #2573
-		// fixed for openai-responses.
+
 		p.setCallPolicy(policy)
 		return p, nil
 
@@ -125,7 +113,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		prov.setCallPolicy(policy)
 		prov.SetReasoningEffort(resolved.ReasoningEffort)
 		prov.SetToolChoice(resolved.ToolChoice)
-		prov.SetLogprobsRequest(resolved.Logprobs) // sa-74
+		prov.SetLogprobsRequest(resolved.Logprobs)
 		if len(resolved.ServerTools) > 0 {
 			prov.SetServerTools(resolved.ServerTools)
 		}

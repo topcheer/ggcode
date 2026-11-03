@@ -28,7 +28,6 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 		return raw, false
 	}
 
-	// Fast path: already valid JSON.
 	if json.Valid(trimmed) {
 		return trimmed, false
 	}
@@ -36,30 +35,19 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 	original := string(trimmed)
 	repaired := original
 
-	// Step 1: Strip markdown code fences (```json ... ``` or ``` ... ```).
 	repaired = stripCodeFences(repaired)
 
-	// Step 2: Replace smart/curly quotes with straight quotes.
 	repaired = normalizeQuotes(repaired)
 
-	// Re-check after fence stripping and quote normalization.
 	if json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by fence/quote normalization: %s -> %s", truncateForLog(original), truncateForLog(repaired))
 		return []byte(repaired), true
 	}
 
-	// Step 2.5: Normalize Python-style literals (True/False/None) outside of
-	// strings. Weak models trained on Python corpora emit these as boolean/null
-	// values, which strict JSON rejects.
 	repaired = normalizePythonLiterals(repaired)
 
-	// Step 2.6: Quote bare object keys (JavaScript object literal style,
-	// e.g. {path: "x.go"} instead of {"path": "x.go"}).
 	repaired = quoteUnquotedKeys(repaired)
 
-	// Step 2.7: Convert single-quoted string values to double-quoted.
-	// Conservative: ambiguous content (embedded apostrophes or backslashes)
-	// is left untouched.
 	repaired = normalizeSingleQuotedStrings(repaired)
 
 	if json.Valid([]byte(repaired)) {
@@ -67,26 +55,18 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 		return []byte(repaired), true
 	}
 
-	// Step 3: Extract the JSON object — find the first '{' and try to
-	// extend to the matching '}'. This removes leading/trailing prose.
 	repaired = extractJSONObject(repaired)
 	if json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by object extraction: %s -> %s", truncateForLog(original), truncateForLog(repaired))
 		return []byte(repaired), true
 	}
 
-	// Step 4: Remove trailing commas before closing braces/brackets.
 	repaired = removeTrailingCommas(repaired)
 	if json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by trailing comma removal: %s -> %s", truncateForLog(original), truncateForLog(repaired))
 		return []byte(repaired), true
 	}
 
-	// Step 5: Close unclosed braces and brackets (stream truncation fix).
-	// A stream that ends INSIDE a string is refused (#3069): fabricating the
-	// closing quote turns a truncated value into valid-but-mutilated JSON
-	// (e.g. edit_file silently running on partial old_text). Refusal lets
-	// the caller retry instead of executing wrong arguments.
 	repaired, closable := closeUnclosed(repaired)
 	if closable && json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by closing unclosed delimiters: %s -> %s", truncateForLog(original), truncateForLog(repaired))
@@ -96,7 +76,6 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 		debug.Log("jsonrepair", "refused repair: stream ends inside an unterminated string (truncated value): %s", truncateForLog(original))
 	}
 
-	// Repair failed — return original.
 	debug.Log("jsonrepair", "repair failed for: %s", truncateForLog(original))
 	return raw, false
 }
@@ -104,13 +83,13 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 // stripCodeFences removes markdown code fence wrappers.
 func stripCodeFences(s string) string {
 	s = strings.TrimSpace(s)
-	// Match ```json\n...\n``` or ```\n...\n```
+
 	if strings.HasPrefix(s, "```") {
-		// Find the opening fence end (first newline after ```)
+
 		nl := strings.IndexByte(s, '\n')
 		if nl > 0 {
 			rest := s[nl+1:]
-			// Remove closing fence if present
+
 			if idx := strings.LastIndex(rest, "```"); idx >= 0 {
 				rest = rest[:idx]
 			}
@@ -125,21 +104,21 @@ func normalizeQuotes(s string) string {
 	r := make([]byte, 0, len(s))
 	for _, b := range []byte(s) {
 		switch b {
-		case 0xe2: // UTF-8 multi-byte start for smart quotes
-			// Handled below via rune-level replacement
+		case 0xe2:
+
 			r = append(r, b)
 		default:
 			r = append(r, b)
 		}
 	}
-	// Rune-level replacement for multi-byte smart quotes
+
 	result := string(r)
-	result = strings.ReplaceAll(result, "\u201c", `"`) // left double quotation mark
-	result = strings.ReplaceAll(result, "\u201d", `"`) // right double quotation mark
-	result = strings.ReplaceAll(result, "\u2018", "'") // left single quotation mark
-	result = strings.ReplaceAll(result, "\u2019", "'") // right single quotation mark
-	result = strings.ReplaceAll(result, "\u00ab", `"`) // left angle quote
-	result = strings.ReplaceAll(result, "\u00bb", `"`) // right angle quote
+	result = strings.ReplaceAll(result, "\u201c", `"`)
+	result = strings.ReplaceAll(result, "\u201d", `"`)
+	result = strings.ReplaceAll(result, "\u2018", "'")
+	result = strings.ReplaceAll(result, "\u2019", "'")
+	result = strings.ReplaceAll(result, "\u00ab", `"`)
+	result = strings.ReplaceAll(result, "\u00bb", `"`)
 	return result
 }
 
@@ -153,7 +132,7 @@ func extractJSONObject(s string) string {
 	}
 	last := strings.LastIndexByte(s, '}')
 	if last <= first {
-		// No closing brace — return from first '{' to end (closeUnclosed will handle)
+
 		return s[first:]
 	}
 	return s[first : last+1]
@@ -168,17 +147,17 @@ func removeTrailingCommas(s string) string {
 	for i := 0; i < len(runes); i++ {
 		c := runes[i]
 		if c == ',' {
-			// Look ahead: skip whitespace, check for } or ]
+
 			j := i + 1
 			for j < len(runes) && (runes[j] == ' ' || runes[j] == '\t' || runes[j] == '\n' || runes[j] == '\r') {
 				j++
 			}
 			if j < len(runes) && (runes[j] == '}' || runes[j] == ']') {
-				// Skip the comma
+
 				continue
 			}
 		}
-		// Handle comma at end of input (truncated)
+
 		if c == ',' && i == len(runes)-1 {
 			continue
 		}
@@ -223,25 +202,19 @@ func closeUnclosed(s string) (string, bool) {
 		case '[':
 			stack = append(stack, ']')
 		case '}', ']':
-			// Pop matching close from stack
+
 			if len(stack) > 0 {
 				stack = stack[:len(stack)-1]
 			}
 		}
 	}
 
-	// Stream ends inside an unterminated string: unrepairable. Closing the
-	// quote here would silently truncate the value (valid-but-mutilated
-	// JSON); refuse so the caller retries instead of acting on partial
-	// data (#3069).
 	if inString {
 		return s, false
 	}
 
-	// Remove trailing comma if present (common before truncation point).
 	s = strings.TrimRight(strings.TrimSpace(s), ",")
 
-	// Append closing delimiters in reverse order.
 	for i := len(stack) - 1; i >= 0; i-- {
 		s += string(stack[i])
 	}

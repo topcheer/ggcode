@@ -10,10 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// --- Fix 1 (#981, problem 1): migration must hold the config lock and use
-// read-merge-delete-write semantics so a concurrent writer's field changes
-// are not silently dropped by a stale full-file rewrite. ---
-
 // TestMigrateSectionToExternalHoldsLock verifies that migrateSectionToExternal
 // acquires lockConfigFile(mainConfigPath) before reading the file. While the
 // test holds the lock, the migration goroutine must not complete (it blocks on
@@ -36,14 +32,14 @@ func TestMigrateSectionToExternalHoldsLock(t *testing.T) {
 		unlock()
 		t.Fatal("migrateSectionToExternal completed while the config lock was held; it does not acquire lockConfigFile")
 	case <-time.After(300 * time.Millisecond):
-		// Blocked as expected.
+
 	}
 
 	unlock()
 
 	select {
 	case <-done:
-		// Completed after the lock was released.
+
 	case <-time.After(5 * time.Second):
 		t.Fatal("migrateSectionToExternal did not complete after the lock was released")
 	}
@@ -62,7 +58,6 @@ func TestMigrateSectionToExternalFreshReadPreservesConcurrentWrites(t *testing.T
 
 	unlock := lockConfigFile(mainPath)
 
-	// Concurrent writer adds a field while the migration is blocked on the lock.
 	concurrentData := "im:\n  output_mode: quiet\nmodel: glm-4.6\nvendor: zai\n"
 	if err := os.WriteFile(mainPath, []byte(concurrentData), 0o600); err != nil {
 		unlock()
@@ -125,10 +120,6 @@ func TestMigrateSectionToExternalPreservesOtherFields(t *testing.T) {
 	assertYAMLNotHasKey(t, data, "im", "")
 }
 
-// --- Fix 2 (#981, problem 2): an empty / comment-only im.yaml must not wipe
-// an IM section that is still present in the main config (pre-migration
-// layouts); external IM values merge field-level, like mergeVendors (#559). ---
-
 // TestLoadExternalSectionsEmptyIMFilePreservesIM verifies the reported scenario:
 // the main config still has an im section (old layout) and the user manually
 // touched an empty im.yaml. Previously cfg.IM = *im replaced the populated
@@ -149,7 +140,6 @@ func TestLoadExternalSectionsEmptyIMFilePreservesIM(t *testing.T) {
 		},
 	}
 
-	// Empty file (user ran `touch im.yaml`).
 	writeTestFile(t, filepath.Join(dir, "im.yaml"), "")
 
 	loadExternalSections(cfg, mainPath)
@@ -164,7 +154,6 @@ func TestLoadExternalSectionsEmptyIMFilePreservesIM(t *testing.T) {
 		t.Errorf("IM.Adapters[telegram] lost: %+v (ok=%v)", a, ok)
 	}
 
-	// Comment-only variant (parses to zero-value too).
 	writeTestFile(t, filepath.Join(dir, "im.yaml"), "# intentionally empty\n")
 	cfg2 := &Config{}
 	cfg2.IM = cfg.IM
@@ -191,12 +180,12 @@ func TestMergeIMConfigFieldPrecedence(t *testing.T) {
 	}
 
 	ext := IMConfig{
-		OutputMode: "quiet",                              // override wins
-		Streaming:  IMStreamingConfig{Transport: "http"}, // one field only
-		STT:        IMSTTConfig{Model: "gemini"},         // one field only
+		OutputMode: "quiet",
+		Streaming:  IMStreamingConfig{Transport: "http"},
+		STT:        IMSTTConfig{Model: "gemini"},
 		Adapters: map[string]IMAdapterConfig{
-			"telegram": {Command: "/ext/cmd"},                // partial override
-			"discord":  {Enabled: true, Platform: "discord"}, // new adapter
+			"telegram": {Command: "/ext/cmd"},
+			"discord":  {Enabled: true, Platform: "discord"},
 		},
 	}
 
@@ -252,8 +241,6 @@ func TestMergeIMConfigZeroExternalKeepsBase(t *testing.T) {
 		t.Errorf("zero external changed base: %+v", got)
 	}
 }
-
-// --- helpers ---
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()

@@ -36,18 +36,18 @@ func TestInboundMessageProviderContentBuildsImageAndTranscript(t *testing.T) {
 // type is auto-detected from the decoded image data so the LLM receives
 // the image as a proper ImageBlock instead of silently dropping it.
 func TestProviderContentAutoDetectsMIME(t *testing.T) {
-	// Minimal valid 1x1 transparent PNG (67 bytes)
+
 	b64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9AwAAAABJRU5ErkJggg=="
 
 	msg := InboundMessage{
 		Text: "WeCom image without MIME",
 		Attachments: []Attachment{
-			{Kind: AttachmentImage, DataBase64: b64}, // no MIME set
+			{Kind: AttachmentImage, DataBase64: b64},
 		},
 	}
 
 	blocks := msg.ProviderContent()
-	// Should have: text block + image block (MIME auto-detected as image/png)
+
 	hasImageBlock := false
 	for _, b := range blocks {
 		if b.Type == "image" {

@@ -11,7 +11,6 @@ func TestMarkdownToWhatsApp_Bold(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	// CommonMark __bold__ → WhatsApp *bold*
 	got = markdownToWhatsApp("This is __bold__ text")
 	want = "This is *bold* text"
 	if got != want {
@@ -28,7 +27,7 @@ func TestMarkdownToWhatsApp_Strikethrough(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_Italic(t *testing.T) {
-	// Italic uses _ which is the same in both markdown and WhatsApp
+
 	got := markdownToWhatsApp("This is _italic_ text")
 	want := "This is _italic_ text"
 	if got != want {
@@ -37,7 +36,7 @@ func TestMarkdownToWhatsApp_Italic(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_InlineCode(t *testing.T) {
-	// Inline code uses ` which is the same in both
+
 	got := markdownToWhatsApp("Use `fmt.Println` here")
 	want := "Use `fmt.Println` here"
 	if got != want {
@@ -46,7 +45,7 @@ func TestMarkdownToWhatsApp_InlineCode(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_CodeBlock(t *testing.T) {
-	// Code blocks use triple backticks, same in both
+
 	input := "```go\nfmt.Println(\"hi\")\n```"
 	got := markdownToWhatsApp(input)
 	want := "```go\nfmt.Println(\"hi\")\n```"
@@ -73,8 +72,7 @@ func TestMarkdownToWhatsApp_Headers(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_Links(t *testing.T) {
-	// WhatsApp auto-hyperlinks plain URLs, so keep the URL as plain text.
-	// Source: https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/text-messages/
+
 	got := markdownToWhatsApp("See [the docs](https://example.com) for more")
 	want := "See the docs (https://example.com) for more"
 	if got != want {
@@ -91,7 +89,7 @@ func TestMarkdownToWhatsApp_Images(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_Blockquote(t *testing.T) {
-	// Blockquotes use > which is the same in both
+
 	got := markdownToWhatsApp("> This is a quote")
 	want := "> This is a quote"
 	if got != want {
@@ -132,8 +130,7 @@ func TestMarkdownToWhatsApp_HorizontalRule(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_AsteriskItalic(t *testing.T) {
-	// Markdown *text* means italic, but WhatsApp *text* means bold.
-	// markdownToWhatsApp must convert *italic* → _italic_ to preserve semantics.
+
 	tests := []struct {
 		input string
 		want  string
@@ -161,7 +158,7 @@ func TestMarkdownToWhatsApp_PreservesListBullets(t *testing.T) {
 func TestMarkdownToWhatsApp_Table(t *testing.T) {
 	input := "| **Name** | Value |\n|----------|--------|\n| foo      | bar    |"
 	got := markdownToWhatsApp(input)
-	// Bold should convert to WhatsApp *bold*, pipes and separator removed
+
 	want := "*Name*  Value\nfoo  bar"
 	if got != want {
 		t.Errorf("table: got %q, want %q", got, want)
@@ -169,10 +166,7 @@ func TestMarkdownToWhatsApp_Table(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_CodeBlockProtection(t *testing.T) {
-	// Code blocks must NOT have their content converted.
-	// A Python comment `# comment` should NOT become `*comment*` (WhatsApp bold).
-	// A link `[text](url)` inside code should NOT be converted.
-	// Bold `**text**` inside code should NOT become `*text*`.
+
 	input := "```python\n# This is a comment\nx = a * b\n[some](link)\n```"
 	got := markdownToWhatsApp(input)
 	want := "```python\n# This is a comment\nx = a * b\n[some](link)\n```"
@@ -182,7 +176,7 @@ func TestMarkdownToWhatsApp_CodeBlockProtection(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_InlineCodeProtection(t *testing.T) {
-	// Inline code with markdown-like chars must be preserved
+
 	input := "Use `a ** b` for multiplication"
 	got := markdownToWhatsApp(input)
 	want := "Use `a ** b` for multiplication"
@@ -192,8 +186,7 @@ func TestMarkdownToWhatsApp_InlineCodeProtection(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_MixedCodeAndMarkdown(t *testing.T) {
-	// Markdown outside code blocks should still be converted,
-	// but code inside blocks should be preserved.
+
 	input := "**Bold text** then `a * b = c` and a header:\n\n## Section"
 	got := markdownToWhatsApp(input)
 	want := "*Bold text* then `a * b = c` and a header:\n\n*Section*"
@@ -203,7 +196,7 @@ func TestMarkdownToWhatsApp_MixedCodeAndMarkdown(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_TaskList(t *testing.T) {
-	// GFM task lists should convert to Unicode checkbox symbols
+
 	input := "- [ ] Pending task\n- [x] Done task"
 	got := markdownToWhatsApp(input)
 	want := "- ○ Pending task\n- ✓ Done task"
@@ -211,7 +204,6 @@ func TestMarkdownToWhatsApp_TaskList(t *testing.T) {
 		t.Errorf("task list: got %q, want %q", got, want)
 	}
 
-	// Asterisk variant
 	input2 := "* [ ] Pending\n* [x] Done"
 	got2 := markdownToWhatsApp(input2)
 	want2 := "* ○ Pending\n* ✓ Done"

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// --- MemoryBindingStore ---
-
 func TestMemoryBindingStore_SaveListDelete(t *testing.T) {
 	store := NewMemoryBindingStore()
 
@@ -39,7 +37,6 @@ func TestMemoryBindingStore_SaveListDelete(t *testing.T) {
 		t.Errorf("expected TargetID=user123, got %v", loaded)
 	}
 
-	// Also findable by adapter
 	byAdapter, err := store.ListByAdapter("qq-bot")
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +86,6 @@ func TestMemoryBindingStore_MultipleBindings(t *testing.T) {
 		t.Errorf("expected 5 bindings, got %d", len(list))
 	}
 
-	// All 5 should be in the same workspace
 	byWorkspace, err := store.ListByWorkspace("/ws1")
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +115,6 @@ func TestMemoryBindingStore_BoundAtAutoSet(t *testing.T) {
 		t.Error("expected BoundAt to be auto-set")
 	}
 }
-
-// --- JSONFileBindingStore ---
 
 func TestJSONFileBindingStore_SaveListDelete(t *testing.T) {
 	dir := t.TempDir()
@@ -238,7 +232,6 @@ func TestJSONFileBindingStore_LegacyMigration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bindings.json")
 
-	// Write a legacy format: keys are workspace-only (no \x00 separator)
 	legacy := `{
   "/ws1": {
     "Workspace": "/ws1",
@@ -257,7 +250,6 @@ func TestJSONFileBindingStore_LegacyMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should auto-migrate and be findable by adapter
 	byAdapter, err := store.ListByAdapter("qq-bot")
 	if err != nil {
 		t.Fatal(err)
@@ -267,16 +259,12 @@ func TestJSONFileBindingStore_LegacyMigration(t *testing.T) {
 	}
 }
 
-// --- normalizeWorkspace ---
-
 func TestNormalizeWorkspace(t *testing.T) {
 	result := normalizeWorkspace("/test/path")
 	if result == "" {
 		t.Error("expected non-empty result")
 	}
 }
-
-// --- DefaultBindingsPath ---
 
 func TestDefaultBindingsPath(t *testing.T) {
 	path, err := DefaultBindingsPath()
@@ -331,12 +319,10 @@ func TestDefaultBindingsPath_WriteReadUnderOverrideHome(t *testing.T) {
 		ChannelID: "test-channel",
 	}
 
-	// Save
 	if err := store.Save(binding); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Read back via ListByWorkspace
 	all, err := store.ListByWorkspace(binding.Workspace)
 	if err != nil {
 		t.Fatalf("ListByWorkspace: %v", err)
@@ -348,7 +334,6 @@ func TestDefaultBindingsPath_WriteReadUnderOverrideHome(t *testing.T) {
 		t.Errorf("ChannelID = %q, want %q", all[0].ChannelID, binding.ChannelID)
 	}
 
-	// Confirm file exists under tmpdir
 	data, err := os.ReadFile(tmp + "/.ggcode/im-bindings.json")
 	if err != nil {
 		t.Fatalf("file should exist under tmpdir: %v", err)
@@ -374,7 +359,6 @@ func TestJSONFileBindingStore_ContextTokenRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "bindings.json")
 	store, _ := NewJSONFileBindingStore(path)
 
-	// Save a binding with ContextToken
 	b := ChannelBinding{
 		Workspace:             "/tmp/ws",
 		Platform:              PlatformWechat,
@@ -388,7 +372,6 @@ func TestJSONFileBindingStore_ContextTokenRoundTrip(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Reload from disk
 	all, err := store.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -404,7 +387,6 @@ func TestJSONFileBindingStore_ContextTokenRoundTrip(t *testing.T) {
 		t.Error("ContextTokenUpdatedAt should not be zero")
 	}
 
-	// Update token
 	b.ContextToken = "NEW-TOKEN-XYZ"
 	b.ContextTokenUpdatedAt = time.Now()
 	if err := store.Save(b); err != nil {
@@ -420,8 +402,6 @@ func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bindings.json")
 
-	// Write an old-format file without ContextToken fields
-	// Use Go string with actual null byte in key (JSON key = workspace + \x00 + adapter)
 	key := "/tmp/ws\x00wechat"
 	oldMap := map[string]ChannelBinding{
 		key: {
@@ -437,7 +417,6 @@ func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Load — should not fail, ContextToken should be empty string
 	store, _ := NewJSONFileBindingStore(path)
 	all, err := store.List()
 	if err != nil {
@@ -454,7 +433,6 @@ func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
 		t.Errorf("ChannelID: got %q", got.ChannelID)
 	}
 
-	// Save with new token — should preserve all fields
 	got.ContextToken = "fresh-token"
 	got.ContextTokenUpdatedAt = time.Now()
 	if err := store.Save(got); err != nil {
@@ -468,8 +446,6 @@ func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
 		t.Errorf("ChannelID preserved: got %q", all[0].ChannelID)
 	}
 }
-
-// --- Home override for pairing and pc_session_store paths ---
 
 func TestDefaultPairingStatePath_RespectsHomeOverride(t *testing.T) {
 	orig := os.Getenv("HOME")

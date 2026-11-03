@@ -293,7 +293,7 @@ func TestWechatAdapter_Start_NoToken(t *testing.T) {
 	defer cancel()
 
 	a.Start(ctx)
-	// Should not crash, just log "waiting_for_auth" state
+
 	time.Sleep(50 * time.Millisecond)
 }
 
@@ -366,7 +366,6 @@ func TestWechatAdapter_Send_UsesBindingContextToken(t *testing.T) {
 		},
 	}, nil)
 
-	// Send with ContextToken in binding
 	err := a.Send(context.Background(), ChannelBinding{
 		ChannelID:    "user-123",
 		ContextToken: "saved-token-xyz",
@@ -399,7 +398,6 @@ func TestWechatAdapter_Send_EmptyContextToken(t *testing.T) {
 		},
 	}, nil)
 
-	// Send without ContextToken (first boot, no inbound yet)
 	err := a.Send(context.Background(), ChannelBinding{
 		ChannelID: "user-123",
 	}, OutboundEvent{Kind: OutboundEventText, Text: "Hello"})
@@ -407,7 +405,6 @@ func TestWechatAdapter_Send_EmptyContextToken(t *testing.T) {
 		t.Fatalf("Send error: %v", err)
 	}
 
-	// Should still send (empty context_token) — WeChat will accept ~2 messages
 	if receivedBody.Msg.ContextToken != "" {
 		t.Errorf("ContextToken should be empty, got %q", receivedBody.Msg.ContextToken)
 	}

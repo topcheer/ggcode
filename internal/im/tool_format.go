@@ -112,19 +112,19 @@ func formatToolCallText(tc *ToolCallInfo) string {
 	case "cron_list":
 		return "⏰ List cron jobs"
 	case "task_get", "task_update", "task_list", "task_stop", "task_output":
-		return "" // hidden
+		return ""
 	case "enter_plan_mode":
 		return "📝 Planning..."
 	case "exit_plan_mode":
-		return "" // plan content sent as separate text via result
-	// Task lifecycle — show creation/completion, hide internal tracking
+		return ""
+
 	case "task_create":
 		subject := extractArgValue(args, "subject")
 		if subject == "" {
 			subject = tc.Detail
 		}
 		return fmt.Sprintf("📋 %s: %s", imLabel(lang, "task_create"), subject)
-	// LSP tools — show concise operation type
+
 	case "lsp_definition":
 		return "🔍 " + imLabel(lang, "lsp_definition")
 	case "lsp_references":
@@ -156,10 +156,10 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("🌿 Exit worktree (%s)", action)
 	case "list_worktree":
 		return "📋 List worktrees"
-	// Team/swarm/a2a tools
+
 	case "teammate_list", "swarm_task_list", "swarm_task_claim",
 		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
-		return "" // hidden
+		return ""
 	case "team_create":
 		name := extractArgValue(args, "name")
 		if name == "" {
@@ -204,14 +204,14 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			target = tc.Detail
 		}
 		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_send_task"), target)
-	// Multi-file operations
+
 	case "multi_file_read":
 		return fmt.Sprintf("📖 %s", imLabel(lang, "read_multi"))
 	case "multi_file_edit":
 		return fmt.Sprintf("✏ %s", imLabel(lang, "edit_multi"))
 	case "multi_file_write":
 		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
-	// Git operations (beyond diff/status/log already handled)
+
 	case "git_add":
 		return fmt.Sprintf("📦 %s", imLabel(lang, "git_stage"))
 	case "git_commit":
@@ -226,7 +226,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("🔍 %s", imLabel(lang, "git_blame"))
 	case "git_branch_list":
 		return fmt.Sprintf("🌿 %s", imLabel(lang, "git_branch_list"))
-	// Browser automation
+
 	case "browser":
 		action := extractArgValue(args, "action")
 		url := extractArgValue(args, "url")
@@ -237,28 +237,28 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			return fmt.Sprintf("🌐 %s: %s", imLabel(lang, "browser"), action)
 		}
 		return fmt.Sprintf("🌐 %s", imLabel(lang, "browser"))
-	// Mode switching
+
 	case "switch_mode":
 		mode := extractArgValue(args, "mode")
 		if mode == "" {
 			mode = tc.Detail
 		}
 		return fmt.Sprintf("🔄 %s → %s", imLabel(lang, "switch_mode"), mode)
-	// Notebook editing
+
 	case "notebook_edit":
 		path := extractFilePathFromArgs(args)
 		if path == "" {
 			path = tc.Detail
 		}
 		return fmt.Sprintf("📓 %s: `%s`", imLabel(lang, "edit_notebook"), path)
-	// Delegate to external agent
+
 	case "delegate":
 		agent := extractArgValue(args, "agent")
 		if agent == "" {
 			agent = tc.Detail
 		}
 		return fmt.Sprintf("🤝 %s: %s", imLabel(lang, "delegate"), agent)
-	// Newer cron tools
+
 	case "cron_update":
 		return fmt.Sprintf("⏰ %s", imLabel(lang, "cron_update"))
 	case "cron_pause":
@@ -267,7 +267,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("▶ %s", imLabel(lang, "cron_resume"))
 	case "cron_get":
 		return fmt.Sprintf("⏰ %s", imLabel(lang, "cron_get"))
-	// Agent lifecycle
+
 	case "spawn_agent":
 		task := extractArgValue(args, "task")
 		if task == "" {
@@ -279,7 +279,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("🚀 %s", imLabel(lang, "spawn_agent"))
 	case "wait_agent":
 		return fmt.Sprintf("⏳ %s", imLabel(lang, "wait_agent"))
-	// Memory & config
+
 	case "save_memory":
 		key := extractArgValue(args, "key")
 		if key == "" {
@@ -298,7 +298,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			setting = tc.Detail
 		}
 		return fmt.Sprintf("⚙ %s: `%s`", imLabel(lang, "config"), setting)
-	// Visual tools
+
 	case "screenshot":
 		return "📸 Screenshot"
 	case "mobile_device":
@@ -307,14 +307,14 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			action = tc.Detail
 		}
 		return fmt.Sprintf("📱 %s: %s", imLabel(lang, "mobile_device"), action)
-	// IM management
+
 	case "im":
 		action := extractArgValue(args, "action")
 		if action == "" {
 			action = tc.Detail
 		}
 		return fmt.Sprintf("💬 %s: %s", imLabel(lang, "im_manage"), action)
-	// Additional git operations
+
 	case "git_diff":
 		return fmt.Sprintf("🔍 %s", imLabel(lang, "git_diff"))
 	case "git_status":
@@ -325,10 +325,10 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("🔗 %s", imLabel(lang, "git_remote"))
 	case "git_stash", "git_stash_list":
 		return fmt.Sprintf("📦 %s", imLabel(lang, "git_stash"))
-	// User interaction
+
 	case "ask_user":
 		return "❓ " + imLabel(lang, "ask_user")
-	// Background command management
+
 	case "stop_command", "wait_command":
 		return fmt.Sprintf("⏹ %s", imLabel(lang, "command_manage"))
 	case "write_command_input":
@@ -353,7 +353,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		}
 		return "🖥 Warp"
 	default:
-		// Prettify tool names (especially MCP tools like mcp__cf__search → Mcp Cf Search)
+
 		pretty := prettifyToolName(name)
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", pretty, tc.Detail)
@@ -366,25 +366,21 @@ func formatToolCallText(tc *ToolCallInfo) string {
 // mirroring the terminal follow display style: icon + tool name + brief summary.
 // Returns empty string if the tool result should be silently suppressed (e.g. read_file success).
 func formatToolResultText(tr *ToolResultInfo) string {
-	// Special formatting for certain tool types.
-	// handled is true when formatSpecialIMToolResult has handled this tool
-	// (including the "suppress" case like read_file success).
+
 	handled, special := formatSpecialIMToolResult(tr)
 	if handled {
-		// When a tool-call start notification was already sent, strip the
-		// tool name header from the result to avoid duplicate IM messages.
+
 		if tr.CallNotified && special != "" {
 			special = stripToolHeader(tr.ToolName, special)
 		}
 		return special
 	}
 
-	// Default: prettified tool name
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if output != "" {
 		if tr.CallNotified {
-			// Only show the result output, no tool name header
+
 			return imCodeBlock(output)
 		}
 		return fmt.Sprintf("🔧 %s\n%s", pretty, imCodeBlock(output))
@@ -396,11 +392,10 @@ func formatToolResultText(tr *ToolResultInfo) string {
 // string when the tool-call start notification was already sent to IM.
 // For example, "⚡ Run command\n```\noutput\n```" becomes "```\noutput\n```".
 func stripToolHeader(toolName, formatted string) string {
-	// If the result starts with an icon + label on the first line,
-	// strip everything up to the first newline (or code block start).
+
 	lines := strings.SplitN(formatted, "\n", 2)
 	if len(lines) < 2 {
-		return formatted // single-line result, keep as-is
+		return formatted
 	}
 	rest := strings.TrimSpace(lines[1])
 	if rest == "" {
@@ -415,7 +410,7 @@ func stripToolHeader(toolName, formatted string) string {
 func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	switch tr.ToolName {
 	case "run_command", "bash", "powershell":
-		// Command tools always use the dedicated formatter (handles both success and error)
+
 		return true, formatIMCommandResult(tr)
 	case "todo_write":
 		return true, formatIMTodoResult(tr)
@@ -442,23 +437,23 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "start_command":
 		return true, formatIMStartCommandResult(tr)
 	case "stop_command":
-		return true, "" // hidden
+		return true, ""
 	case "read_command_output":
-		return true, "" // hidden — result consumed internally
+		return true, ""
 	case "wait_command":
-		return true, "" // hidden
+		return true, ""
 	case "write_command_input":
-		return true, "" // hidden
+		return true, ""
 	case "list_commands":
-		return true, "" // hidden
+		return true, ""
 	case "spawn_agent":
 		return true, formatIMSpawnAgentResult(tr)
 	case "wait_agent":
-		return true, "" // hidden — result consumed by LLM
+		return true, ""
 	case "list_agents":
-		return true, "" // hidden
+		return true, ""
 	case "list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource":
-		return true, "" // hidden — internal MCP inspection tools
+		return true, ""
 	case "skill":
 		return true, formatIMSkillResult(tr)
 	case "save_memory":
@@ -472,7 +467,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "cron_delete":
 		return true, "⏰ Cron job deleted"
 	case "cron_list":
-		return true, "" // hidden
+		return true, ""
 	case "task_create":
 		subject := extractArgValue(tr.Args, "subject")
 		if subject == "" {
@@ -480,9 +475,9 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		}
 		return true, fmt.Sprintf("📋 %s: %s", imLabel(toolLang(tr.Lang), "task_create"), subject)
 	case "task_get", "task_list", "task_output":
-		return true, "" // hidden — internal LLM task tracking
+		return true, ""
 	case "task_update":
-		// Show completion notification when task is marked completed
+
 		status := extractArgValue(tr.Args, "status")
 		if status == "completed" {
 			subject := extractArgValue(tr.Args, "subject")
@@ -491,21 +486,16 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 			}
 			return true, fmt.Sprintf("✅ %s: %s", imLabel(toolLang(tr.Lang), "task_create"), subject)
 		}
-		return true, "" // hidden — internal status updates
+		return true, ""
 	case "task_stop":
-		// Show stop notification
+
 		return true, "⏹ " + imLabel(toolLang(tr.Lang), "task_stopped")
 	case "enter_plan_mode":
-		return true, "" // hidden — shows system message instead
+		return true, ""
 	case "exit_plan_mode":
 		plan := extractArgValue(tr.Args, "plan")
 		if plan == "" {
-			// #1565 case C: tr.Detail is the human-readable display string
-			// (describeTool text or "" in daemon mode), never JSON -
-			// extractArgValue returned "" for it unconditionally, so the
-			// fallback was dead code and the plan notification was
-			// swallowed whenever Args lacked the field. Use Detail
-			// directly, exactly like task_create/task_update above.
+
 			plan = tr.Detail
 		}
 		if plan != "" {
@@ -518,11 +508,11 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMWorktreeResult("🌿", tr)
 	case "list_worktree":
 		return true, formatIMWorktreeResult("📋", tr)
-	// Team/swarm/a2a tools — hidden
+
 	case "teammate_list", "swarm_task_list", "swarm_task_claim",
 		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
 		return true, ""
-	// Team/swarm/a2a tools — header only
+
 	case "team_create":
 		name := extractArgValue(tr.Args, "name")
 		if name == "" {
@@ -565,10 +555,10 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 			target = tr.Detail
 		}
 		return true, fmt.Sprintf("🔗 %s → %s", imLabel(toolLang(tr.Lang), "task_sent"), target)
-	// Team/swarm/a2a tools — body markdown
+
 	case "teammate_results":
 		return true, formatIMTeammateResultsResult(tr)
-	// Newer cron tools
+
 	case "cron_update":
 		return true, "⏰ " + imLabel(toolLang(tr.Lang), "cron_update_done")
 	case "cron_pause":
@@ -576,8 +566,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "cron_resume":
 		return true, "▶ " + imLabel(toolLang(tr.Lang), "cron_resumed")
 	case "cron_get":
-		return true, "" // hidden — detail consumed by LLM
-	// Git operations — show stage/commit, hide others
+		return true, ""
+
 	case "git_add":
 		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_staged")
 	case "git_commit":
@@ -585,21 +575,21 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "git_show":
 		return true, formatIMGitShowResult(tr)
 	case "git_blame":
-		return true, "" // hidden — secondary git tool
+		return true, ""
 	case "git_branch_list":
 		return true, "🌿 " + imLabel(toolLang(tr.Lang), "git_branch_list")
 	case "git_remote":
-		return true, "" // hidden — secondary git tool
+		return true, ""
 	case "git_stash_list":
 		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_stash_list")
 	case "git_stash":
 		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_stash")
-	// Mode switching
+
 	case "switch_mode":
 		return true, "🔄 " + imLabel(toolLang(tr.Lang), "mode_switched")
-	// Multi-file operations
+
 	case "multi_file_read":
-		// Show a brief summary instead of hiding completely
+
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
 		}
@@ -609,9 +599,9 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMMultiEditResult(tr)
 	case "multi_file_write":
 		return true, formatIMMultiWriteResult(tr)
-	// Browser — hidden (verbose), notebook — show like edit_file
+
 	case "browser":
-		return true, "" // hidden — result is typically very large HTML/image
+		return true, ""
 	case "notebook_edit":
 		return true, formatIMNotebookEditResult(tr)
 	case "delegate":
@@ -621,26 +611,23 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		}
 		return true, fmt.Sprintf("🤝 %s: %s", imLabel(toolLang(tr.Lang), "delegated_to"), agent)
 	case "lanchat":
-		// Hidden on success — LAN chat coordination is internal
+
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
 		}
 		return true, ""
 	case "warp":
-		// Hidden — terminal management results are not useful in IM
+
 		return true, ""
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
 		}
-		// LSP tools → hidden (result is structured data consumed by LLM).
-		// Must be checked BEFORE the MCP heuristic below: every lsp_* tool
-		// name contains "_" and would otherwise be captured as an MCP tool,
-		// flooding IM with one "🔧 Lsp X(...)" message per call (#971).
+
 		if strings.HasPrefix(tr.ToolName, "lsp_") {
 			return true, ""
 		}
-		// Check for MCP-style tool names (contain underscores or dots)
+
 		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
 			return true, formatIMMCPToolResult(tr)
 		}

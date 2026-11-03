@@ -1,10 +1,5 @@
 package stt
 
-// #1560-D: an empty SUCCESS from the primary transcriber must stand -
-// silent audio legitimately transcribes to "". The old Text != ""
-// condition treated it as failure and ran the local whisper fallback,
-// whose hallucinated filler replaced the correct empty transcript.
-
 import (
 	"context"
 	"errors"
@@ -24,7 +19,7 @@ func (s *stub1560) Transcribe(ctx context.Context, req Request) (Result, error) 
 
 func TestIssue1560DEmptySuccessDoesNotFallThrough(t *testing.T) {
 	primary := &stub1560{text: ""}
-	secondary := &stub1560{text: "Thank you."} // whisper hallucination
+	secondary := &stub1560{text: "Thank you."}
 	f := NewFallback(primary, secondary)
 	res, err := f.Transcribe(context.Background(), Request{})
 	if err != nil {

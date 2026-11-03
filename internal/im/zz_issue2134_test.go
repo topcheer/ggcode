@@ -1,12 +1,5 @@
 package im
 
-// #2134 regression: interactiveMsgIDs had no ownership - a stale button
-// card (from an answered/expired/text-answered question) could silently
-// submit as a successor question's answer whenever the successor was
-// text-only (fail-open: expected=="" accepted anything). IDs now live on
-// the pending question; the bridge-level map records the LAST EMITTED set
-// so text-only successors reject stale cards instead of fail-opening.
-
 import (
 	"context"
 	"testing"
@@ -23,11 +16,11 @@ func TestStaleCardRejectedByTextOnlySuccessor(t *testing.T) {
 	req := toolpkg.AskUserRequest{Title: "Q2 (text-only)"}
 	ch2 := make(chan toolpkg.AskUserResponse, 1)
 	b := &DaemonBridge{
-		pendingAsk: &pendingAskUser{ // successor: text-only, NO msgIDs
+		pendingAsk: &pendingAskUser{
 			request:  req,
 			response: ch2,
 		},
-		// Last emitted set belongs to the EARLIER button question.
+
 		interactiveMsgIDs: map[string]string{"tg": "tg_msg_1"},
 	}
 
@@ -41,9 +34,9 @@ func TestStaleCardRejectedByTextOnlySuccessor(t *testing.T) {
 	case r := <-ch2:
 		t.Fatalf("stale card submitted as the text-only successor's answer: %+v", r)
 	case <-time.After(100 * time.Millisecond):
-		// dropped - correct
+
 	}
-	// The successor's registration must survive (no blind wipe).
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.pendingAsk == nil {
@@ -65,7 +58,7 @@ func TestStaleCardRejectedBySuccessorButtons(t *testing.T) {
 	}
 	b.handleInteractiveCallback(InteractiveCallback{
 		Adapter:   "tg",
-		MessageID: "tg_msg_1", // stale card from Q1
+		MessageID: "tg_msg_1",
 		Values:    []string{"yes"},
 	})
 	select {
@@ -101,7 +94,6 @@ func TestCallbackConsumeKeepsLastEmitted(t *testing.T) {
 		t.Fatal("consume must keep the last-emitted map (stale rejection depends on it)")
 	}
 
-	// Now a text-only successor: the SAME card tapped again must drop.
 	req2 := toolpkg.AskUserRequest{Title: "Q2"}
 	ch2 := make(chan toolpkg.AskUserResponse, 1)
 	b.mu.Lock()

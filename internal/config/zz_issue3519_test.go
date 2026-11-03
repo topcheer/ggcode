@@ -1,9 +1,5 @@
 package config
 
-// #3519 probe: removeKeysEnv must rewrite keys.env ATOMICALLY (temp+rename,
-// same as writeKeysEnvTo) so a crash mid-write cannot destroy every
-// remaining API key at once.
-
 import (
 	"os"
 	"path/filepath"
@@ -43,14 +39,14 @@ func TestIssue3519_RemoveKeysEnvPreservesRemainingAtomically(t *testing.T) {
 			t.Fatalf("remaining key %s lost (silent history erasure class):\n%s", keep, got)
 		}
 	}
-	// No temp residue from the atomic write.
+
 	entries, _ := os.ReadDir(filepath.Dir(path))
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Fatalf("atomic write left tmp residue: %s", e.Name())
 		}
 	}
-	// Mode survives the rewrite (secrets stay owner-only).
+
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +67,7 @@ func TestIssue3519_RemoveKeysEnvNoopWhenAbsent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(seed), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Removing a key that does not exist must not touch the file at all.
+
 	if err := removeKeysEnv([]string{"GHOST"}); err != nil {
 		t.Fatalf("removeKeysEnv(ghost) error = %v", err)
 	}

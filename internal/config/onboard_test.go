@@ -35,7 +35,7 @@ func TestNeedsOnboard(t *testing.T) {
 					},
 				}
 			},
-			want: true, // no endpoint "api" defined → ResolveActiveEndpoint fails
+			want: true,
 		},
 		{
 			name: "vendor and endpoint but no api key env",
@@ -60,7 +60,7 @@ func TestNeedsOnboard(t *testing.T) {
 					},
 				}
 			},
-			want: true, // API key env var not set → resolved.APIKey == ""
+			want: true,
 		},
 		{
 			name: "fully configured",
@@ -129,7 +129,7 @@ func TestVendorPresets(t *testing.T) {
 	if len(presets) == 0 {
 		t.Fatal("VendorPresets() returned empty list")
 	}
-	// Should have at least the well-known vendors
+
 	known := map[string]bool{
 		"openai": false, "anthropic": false, "google": false,
 		"deepseek": false, "zai": false,
@@ -144,7 +144,7 @@ func TestVendorPresets(t *testing.T) {
 			t.Errorf("VendorPresets() missing known vendor %q", id)
 		}
 	}
-	// Each preset should have at least one endpoint
+
 	for _, p := range presets {
 		if len(p.Endpoints) == 0 {
 			t.Errorf("vendor %q has no endpoints", p.ID)
@@ -176,15 +176,13 @@ func TestExtractEnvVarName(t *testing.T) {
 
 func TestNeedsOnboardWithRealConfig(t *testing.T) {
 	withTestHome(t)
-	// Test that DefaultConfig does NOT need onboard (has ZAI key)
+
 	cfg := DefaultConfig()
 	if cfg.NeedsOnboard() {
-		// DefaultConfig uses ${ZAI_API_KEY} which resolves to empty if env not set
-		// This is expected behavior — the default config is a template, not a working config
+
 		t.Log("DefaultConfig needs onboard (expected — ZAI_API_KEY not set)")
 	}
 
-	// Test that saving and loading back with a real key makes it work
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
 	t.Setenv("TEST_ONBOARD_REAL", "real-key-123")
@@ -217,10 +215,10 @@ func TestNeedsOnboardWithRealConfig(t *testing.T) {
 
 func TestNeedsOnboardEmptyHome(t *testing.T) {
 	withTestHome(t)
-	// Simulate a completely fresh user: no env vars, no config.
+
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
-	// Clear all known API key env vars.
+
 	for _, key := range []string{
 		"ZAI_API_KEY", "GGCODE_ZAI_API_KEY", "OPENAI_API_KEY",
 		"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
@@ -229,7 +227,6 @@ func TestNeedsOnboardEmptyHome(t *testing.T) {
 		os.Unsetenv(key)
 	}
 
-	// Simulate what DefaultConfig returns — vendor set but no working API key.
 	cfg := DefaultConfig()
 	cfg.FilePath = filepath.Join(tmpHome, ".ggcode", "ggcode.yaml")
 
@@ -237,20 +234,17 @@ func TestNeedsOnboardEmptyHome(t *testing.T) {
 		t.Error("DefaultConfig with all env vars cleared should need onboard")
 	}
 
-	// Save and reload to verify round-trip.
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
-	// #1865 owner invariant: once the config FILE exists on disk, onboarding
-	// never triggers again - even with every env var cleared. Key resolution
-	// failures must surface at provider-call time, not as a re-onboard.
+
 	if cfg.NeedsOnboard() {
 		t.Error("saved config file on disk must never re-onboard (owner invariant #1865)")
 	}
 }
 
 func TestNeedsOnboardPartialConfig(t *testing.T) {
-	// Config has vendor set but env var not set.
+
 	tmpHome := t.TempDir()
 	cfgPath := filepath.Join(tmpHome, ".ggcode", "ggcode.yaml")
 	os.Unsetenv("ANTHROPIC_API_KEY")
@@ -278,7 +272,6 @@ func TestNeedsOnboardPartialConfig(t *testing.T) {
 		t.Error("config with unset env var should need onboard")
 	}
 
-	// Set the env var — should NOT need onboard anymore.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-123")
 	if cfg.NeedsOnboard() {
 		t.Error("config with set env var should NOT need onboard")
@@ -326,7 +319,7 @@ func TestVendorPresetsNeedsAPIKey(t *testing.T) {
 			}
 		}
 	}
-	// github-copilot should NOT need API key
+
 	for _, p := range presets {
 		if p.ID == "github-copilot" {
 			if p.NeedsAPIKey {
@@ -353,7 +346,7 @@ func TestVendorPresetDefaultEndpointOfficial1712(t *testing.T) {
 	if copilot.DefaultEndpoint != "github.com" {
 		t.Fatalf("DefaultEndpoint = %q, want github.com (not the enterprise placeholder)", copilot.DefaultEndpoint)
 	}
-	// Deterministic across calls.
+
 	for i := 0; i < 20; i++ {
 		if again := VendorPresets(); again != nil {
 			for _, vp := range again {

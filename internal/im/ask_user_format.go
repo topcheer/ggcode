@@ -13,7 +13,6 @@ func FormatAskUserPrompt(lang string, req toolpkg.AskUserRequest) string {
 	multiQuestion := len(req.Questions) > 1
 	lines := make([]string, 0, 16+len(req.Questions)*4)
 
-	// Title
 	title := strings.TrimSpace(req.Title)
 	switch lang {
 	case "zh-CN":
@@ -30,13 +29,11 @@ func FormatAskUserPrompt(lang string, req toolpkg.AskUserRequest) string {
 		}
 	}
 
-	// Questions
 	for idx, question := range req.Questions {
 		qLines := formatQuestionBlock(lang, idx, question, multiQuestion)
 		lines = append(lines, qLines...)
 	}
 
-	// Reply instructions
 	lines = append(lines, "")
 	lines = append(lines, formatReplyInstructions(lang, req.Questions, multiQuestion))
 
@@ -51,14 +48,12 @@ func formatQuestionBlock(lang string, idx int, q toolpkg.AskUserQuestion, multiQ
 
 	var lines []string
 
-	// Question header
 	if multiQuestion {
 		lines = append(lines, fmt.Sprintf("**%d. %s**", idx+1, prompt))
 	} else {
 		lines = append(lines, fmt.Sprintf("**%s**", prompt))
 	}
 
-	// Choices with numbered labels
 	for ci, choice := range q.Choices {
 		label := strings.TrimSpace(choice.Label)
 		if label == "" {
@@ -71,7 +66,6 @@ func formatQuestionBlock(lang string, idx int, q toolpkg.AskUserQuestion, multiQ
 		}
 	}
 
-	// Question-type hint
 	switch q.Kind {
 	case toolpkg.AskUserKindText:
 		placeholder := strings.TrimSpace(q.Placeholder)
@@ -163,7 +157,6 @@ func formatReplyInstructions(lang string, questions []toolpkg.AskUserQuestion, m
 		return ""
 	}
 
-	// Multi-question: provide structured reply guidance
 	switch lang {
 	case "zh-CN":
 		result := "💬 **回复格式：**\n"

@@ -113,13 +113,11 @@ func TestNormalizeNostrKey(t *testing.T) {
 	sk := nostr.GeneratePrivateKey()
 	nsec, _ := nip19.EncodePrivateKey(sk)
 
-	// nsec should decode back to hex
 	got := normalizeNostrKey(nsec)
 	if got != sk {
 		t.Errorf("normalizeNostrKey(nsec) = %q, want %q", got, sk)
 	}
 
-	// Hex should lowercase
 	got = normalizeNostrKey("ABC123")
 	if got != "abc123" {
 		t.Errorf("normalizeNostrKey(ABC123) = %q, want abc123", got)
@@ -135,7 +133,6 @@ func TestNIP04EncryptDecryptRoundTrip(t *testing.T) {
 
 	message := "Hello, Nostr world! 这是一个测试 🌍"
 
-	// Encrypt from sk1 → pk2
 	shared1, err := nip04.ComputeSharedSecret(pk2, sk1)
 	if err != nil {
 		t.Fatalf("shared secret 1: %v", err)
@@ -145,7 +142,6 @@ func TestNIP04EncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	// Decrypt from sk2 ← pk1
 	shared2, err := nip04.ComputeSharedSecret(pk1, sk2)
 	if err != nil {
 		t.Fatalf("shared secret 2: %v", err)
@@ -192,13 +188,12 @@ func TestNostrEventSignAndVerify(t *testing.T) {
 }
 
 func TestResolveNostrPubkey(t *testing.T) {
-	// Hex pubkey should pass through
+
 	hex := strings.Repeat("a", 64)
 	if got := resolveNostrPubkey(hex); got != hex {
 		t.Errorf("hex pass-through: got %q", got)
 	}
 
-	// npub should decode
 	sk := nostr.GeneratePrivateKey()
 	pk, _ := nostr.GetPublicKey(sk)
 	npub, _ := nip19.EncodePublicKey(pk)
@@ -206,7 +201,6 @@ func TestResolveNostrPubkey(t *testing.T) {
 		t.Errorf("npub decode: got %q, want %q", got, pk)
 	}
 
-	// Invalid input passes through
 	if got := resolveNostrPubkey("not-valid"); got != "not-valid" {
 		t.Errorf("invalid should pass through: got %q", got)
 	}
@@ -243,7 +237,7 @@ func TestNostrSendNoDMEmptyTarget(t *testing.T) {
 		Enabled: true, Platform: "nostr",
 		Extra: map[string]interface{}{"private_key": sk},
 	}, nil)
-	// Should not error on empty target
+
 	if err := a.sendNostrDM(context.Background(), "", "hello"); err != nil {
 		t.Errorf("sendNostrDM empty target should be nil, got: %v", err)
 	}
@@ -304,18 +298,15 @@ func TestNostrEventSerialization(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	// Verify ID matches serialized hash
 	computedID := evt.GetID()
 	if evt.ID != computedID {
 		t.Errorf("ID mismatch: evt.ID=%q, computed=%q", evt.ID, computedID)
 	}
 
-	// Verify CheckID
 	if !evt.CheckID() {
 		t.Error("CheckID should return true")
 	}
 
-	// Verify signature
 	ok, err := evt.CheckSignature()
 	if err != nil {
 		t.Fatalf("check signature: %v", err)
@@ -332,20 +323,18 @@ func TestNostrFoldChunk(t *testing.T) {
 	e1 := fmt.Errorf("publish to r1: boom")
 	e2 := fmt.Errorf("publish to r2: bang")
 
-	// Fresh state, partial success: no error surfaces.
 	if got := nostrFoldChunk(nil, 1, e1); got != nil {
 		t.Errorf("partial success on clean state: got %v, want nil", got)
 	}
-	// Fresh state, zero success: error surfaces (#964).
+
 	if got := nostrFoldChunk(nil, 0, e1); got == nil {
 		t.Error("zero success on clean state: want error")
 	}
-	// Earlier chunk fully failed, later chunk partially succeeds: the sticky
-	// error MUST survive (regression: `lastErr = nil` erased it).
+
 	if got := nostrFoldChunk(e1, 1, e2); got == nil {
 		t.Error("delivered chunk erased an earlier chunk's total failure")
 	}
-	// Earlier chunk failed, later chunk also fully fails: still an error.
+
 	if got := nostrFoldChunk(e1, 0, e2); got == nil {
 		t.Error("consecutive total failures must surface an error")
 	}
@@ -355,7 +344,7 @@ func TestNostrFoldChunk(t *testing.T) {
 // accept a valid hex key, reject garbage/short keys and surface the
 // derivation error - callers rely on it BEFORE persisting config.
 func TestValidateNostrPrivateKey(t *testing.T) {
-	// A valid 32-byte hex key (arbitrary but well-formed).
+
 	good := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 	if err := ValidateNostrPrivateKey(good); err != nil {
 		t.Fatalf("valid key rejected: %v", err)

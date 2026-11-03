@@ -117,8 +117,7 @@ func TestTGDownloadFileUsesAPIBase(t *testing.T) {
 // medium). Previously 4096 '*' runes split first became 8192 after escaping.
 func TestTGFormatMessagesEscapeBeforeSplit(t *testing.T) {
 	a := newTGTestAdapter("", "MarkdownV2")
-	// '.' is not part of any markdown structure, so every rune becomes "\."
-	// and the escaped length doubles: 4000 -> 8000 runes before splitting.
+
 	text := strings.Repeat(".", 4000) + " tail"
 	msgs, err := a.formatMessages(text)
 	if err != nil {
@@ -146,7 +145,7 @@ func TestTGTruncateRunesDanglingEscape(t *testing.T) {
 	if got := truncateTGRunes("abc\\", 10); got != "abc\\" {
 		t.Fatalf("no-truncation case changed input: %q", got)
 	}
-	// 4 runes: 'a','*','\\','b' -> cut at 3 leaves dangling backslash.
+
 	if got := truncateTGRunes("a\\*b", 3); got != "a\\*" {
 		t.Fatalf("dangling backslash not dropped: %q", got)
 	}

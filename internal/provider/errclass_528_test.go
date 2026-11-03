@@ -18,7 +18,7 @@ func TestClassifyAnthropicFiveHourWindowLimitNotQuota(t *testing.T) {
 	errs := []error{
 		errors.New(`rate_limit_error - This request would exceed your usage limit for the 5-hour window. Your limit will reset at 2026-01-01T12:00:00Z. Please try again then`),
 		errors.New(`429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your usage limit for the 5-hour window. Your limit will reset at 5pm"}`),
-		// Weekly window variant.
+
 		errors.New(`rate_limit_error: This request would exceed your weekly limit. Your limit will reset on Monday`),
 	}
 	for _, err := range errs {
@@ -52,7 +52,7 @@ func TestClassifyDeadlineExceededNotCounted(t *testing.T) {
 	if got := ClassifyLLMError(context.DeadlineExceeded); got != FailureNone {
 		t.Errorf("ClassifyLLMError(context.DeadlineExceeded) = %v, want FailureNone", got)
 	}
-	// Wrapped deadline (the form the agent loop actually sees).
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
@@ -60,8 +60,7 @@ func TestClassifyDeadlineExceededNotCounted(t *testing.T) {
 	if got := ClassifyLLMError(wrapped); got != FailureNone {
 		t.Errorf("ClassifyLLMError(wrapped DeadlineExceeded) = %v, want FailureNone", got)
 	}
-	// A server-reported deadline string (not a client context error) stays
-	// transient — only errors.Is(context.DeadlineExceeded) is exempt.
+
 	if got := ClassifyLLMError(errors.New("server-side processing deadline exceeded")); got == FailureNone {
 		t.Error("plain string deadline should not be FailureNone")
 	}

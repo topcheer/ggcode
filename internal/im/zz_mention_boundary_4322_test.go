@@ -36,7 +36,7 @@ func TestStripMentionBoundaryPreservesSeparator(t *testing.T) {
 	if got := b.stripMention("@al hello there"); got != "hello there" {
 		t.Errorf("strip = %q, want %q", got, "hello there")
 	}
-	// "@alex" must not be carved by short bot "al".
+
 	if got := b.stripMention("@alex hello"); got != "@alex hello" {
 		t.Errorf("strip = %q, want unchanged %q", got, "@alex hello")
 	}

@@ -50,8 +50,6 @@ vendors:
 		t.Errorf("file_search parse wrong: %+v", fs)
 	}
 
-	// JSON marshaling must omit zero-valued parameters so simple
-	// declarations (Anthropic-style {type: ...}) stay byte-identical.
 	b, _ := json.Marshal(ServerToolConfig{Type: "web_search_20250305"})
 	if string(b) != `{"type":"web_search_20250305"}` {
 		t.Errorf("simple declaration not omitempty: %s", b)

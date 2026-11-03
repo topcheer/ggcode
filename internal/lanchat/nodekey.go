@@ -1,16 +1,5 @@
 package lanchat
 
-// #3399/#3402 (A-track, TUFU): DM-layer Ed25519 signatures with
-// trust-on-first-use identity pinning. Each node holds a static keypair;
-// every outbound message carries the public key plus a signature over a
-// canonical payload. Receivers verify the signature and pin
-// node_id -> public key on first sight; a later claim under the same
-// node_id with a different key is rejected as unverified. The strict-mode
-// trusted-peer exemption additionally requires the message to be
-// signature-verified AND the sender's key fingerprint to match the one
-// bound at trust time - a forged from_node_id (plain body field) no
-// longer reaches the exemption (#3399 attack chain step 2).
-
 import (
 	"crypto/ed25519"
 	"crypto/sha256"

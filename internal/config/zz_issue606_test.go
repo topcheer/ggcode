@@ -18,7 +18,6 @@ func TestIssue606PatchExplicitClearVsAbsent(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer t"},
 	}
 
-	// Absent (nil) fields are preserved.
 	keep := &Config{MCPServers: []MCPServerConfig{base}}
 	keep.UpsertMCPServer(MCPServerConfig{Name: "s", Type: "stdio", Command: "node"})
 	got := keep.MCPServers[0]
@@ -32,7 +31,6 @@ func TestIssue606PatchExplicitClearVsAbsent(t *testing.T) {
 		t.Fatalf("absent Headers must be preserved, got %v", got.Headers)
 	}
 
-	// Empty non-nil fields are an explicit clear.
 	clear := &Config{MCPServers: []MCPServerConfig{base}}
 	clear.UpsertMCPServer(MCPServerConfig{
 		Name:    "s",
@@ -52,7 +50,7 @@ func TestIssue606PatchExplicitClearVsAbsent(t *testing.T) {
 	if len(got.Headers) != 0 {
 		t.Fatalf("explicit clear of Headers not applied, got %v", got.Headers)
 	}
-	// Unrelated fields still patched normally.
+
 	if got.Command != "node" {
 		t.Fatalf("Command patch lost, got %q", got.Command)
 	}

@@ -13,7 +13,7 @@ import (
 func TestIssue2293InstanceKeysStayOutOfProcessEnv(t *testing.T) {
 	dir := t.TempDir()
 	key := "GGCODE_I_2293_PROBE"
-	t.Setenv(key, "") // ensure absent-ish; we assert the real env stays unset
+	t.Setenv(key, "")
 	os.Unsetenv(key)
 
 	if err := os.WriteFile(filepath.Join(dir, "keys.env"), []byte(key+"=supersecret\n"), 0600); err != nil {
@@ -28,7 +28,7 @@ func TestIssue2293InstanceKeysStayOutOfProcessEnv(t *testing.T) {
 	if p := instanceKeysEnvPointer.Load(); p == nil || (*p)[key] != "supersecret" {
 		t.Fatalf("instance key must land in the resolver map, got %v", p)
 	}
-	// and the resolver serves it (instance wins)
+
 	if got, ok := runtimeEnvLookup(nil)(key); !ok || got != "supersecret" {
 		t.Fatalf("resolver must serve the instance key, got %q ok=%v", got, ok)
 	}

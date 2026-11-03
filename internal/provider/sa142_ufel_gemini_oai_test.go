@@ -14,8 +14,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// ---- UserFacingErrorLang: full branch taxonomy -----------------------------
-
 func TestSA142_UFEL_ServerAndTransportBranches(t *testing.T) {
 	cases := []struct {
 		name string
@@ -57,7 +55,7 @@ func TestSA142_UFEL_ServerAndTransportBranches(t *testing.T) {
 			}
 		})
 	}
-	// SDK prefix stripping keeps the recognizable part visible.
+
 	if got := UserFacingErrorLang(errors.New("openai chat: boom"), "zh-CN"); !strings.Contains(got, "请求失败：boom") {
 		t.Fatalf("prefix strip: %q", got)
 	}
@@ -78,23 +76,19 @@ func TestSA142_FailureClassString(t *testing.T) {
 	}
 }
 
-// ---- Cascade construction edges ---------------------------------------------
-
 func TestSA142_NewCascadeProviderEdges(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("empty chain must panic")
 		}
 	}()
-	// Default description when empty.
+
 	single := NewCascadeProvider([]Provider{&mockProvider{name: "only"}}, "")
 	if single.Description() != "cascade(1)" {
 		t.Fatalf("default description = %q", single.Description())
 	}
 	NewCascadeProvider(nil, "x")
 }
-
-// ---- Gemini paths -----------------------------------------------------------
 
 func newSA142Gemini(t *testing.T, handler http.HandlerFunc) *GeminiProvider {
 	t.Helper()
@@ -127,14 +121,13 @@ func TestSA142_GeminiChatTextAndToolCall(t *testing.T) {
 	if got := p.ModelName(); got != "gemini-sa142" {
 		t.Fatalf("ModelName = %q", got)
 	}
-	// Sampling override roundtrip.
+
 	p.SetSamplingOverride(&SamplingOverride{MaxTokens: 9, Temperature: 0.1})
 	if o := p.SamplingOverride(); o == nil || o.MaxTokens != 9 {
 		t.Fatalf("SamplingOverride = %+v", p.SamplingOverride())
 	}
 	p.SetSamplingOverride(nil)
 
-	// Effort setter normalizes case and rejects unknown levels.
 	p.SetReasoningEffort("HIGH")
 	if p.ReasoningEffort() != "high" {
 		t.Fatalf("ReasoningEffort = %q", p.ReasoningEffort())
@@ -145,10 +138,6 @@ func TestSA142_GeminiChatTextAndToolCall(t *testing.T) {
 	}
 	p.SetReasoningEffort("")
 
-	// Session ID + runtime headers. SetSessionID runs first (production
-	// order: agent startup, then a later impersonation switch); the
-	// impersonation header set has no session ID, and UpdateRuntimeHeaders
-	// must carry the existing one over instead of dropping it.
 	p.SetSessionID("sess-g")
 	h := http.Header{}
 	h.Set("X-G", "1")
@@ -175,7 +164,7 @@ func TestSA142_GeminiChatTextAndToolCall(t *testing.T) {
 }
 
 func TestSA142_GeminiChatToolUseAndFinishReasons(t *testing.T) {
-	// Function-call response.
+
 	p := newSA142Gemini(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"SF"},"id":"fc_1"}}]},"finishReason":"STOP"}]}`)
@@ -194,7 +183,6 @@ func TestSA142_GeminiChatToolUseAndFinishReasons(t *testing.T) {
 		t.Fatalf("tool block missing: %+v", resp.Message.Content)
 	}
 
-	// finish_reason normalization + error mapping.
 	if got := normalizeGeminiFinishReason("MAX_TOKENS"); got != "max_tokens" {
 		t.Fatalf("MAX_TOKENS = %q", got)
 	}
@@ -221,14 +209,14 @@ func TestSA142_GeminiChatToolUseAndFinishReasons(t *testing.T) {
 }
 
 func TestSA142_GeminiProbes(t *testing.T) {
-	// probeModelsAPI: models endpoint returns the token limit.
+
 	p := newSA142Gemini(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/models/") && r.Method == http.MethodGet {
 			fmt.Fprint(w, `{"name":"models/gemini-sa142","inputTokenLimit":123456,"displayName":"SA142"}`)
 			return
 		}
-		// generateContent (probeChat): always fails with 500.
+
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(w, `{"error":{"code":500,"message":"boom"}}`)
 	})
@@ -238,8 +226,7 @@ func TestSA142_GeminiProbes(t *testing.T) {
 	if err := p.probeChat(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}); err == nil {
 		t.Fatal("probeChat must surface the 500")
 	}
-	// tryModelsAPI dispatch: gemini provider routes to probeModelsAPI; the
-	// mock provider is skipped.
+
 	if got := tryModelsAPI(context.Background(), p); got != 123456 {
 		t.Fatalf("tryModelsAPI(gemini) = %d", got)
 	}
@@ -273,36 +260,36 @@ func (m *sa142ProbeProvider) probeChat(ctx context.Context, messages []Message) 
 }
 
 func TestSA142_ProbePhases(t *testing.T) {
-	// Simple probe parses the window straight out of the error.
+
 	overflow := &sa142ProbeProvider{name: "p", probeErr: errors.New("request too large: maximum context length is 48000 tokens")}
 	if got := trySimpleProbe(context.Background(), overflow); got != 48000 {
 		t.Fatalf("trySimpleProbe = %d, want 48000", got)
 	}
-	// Context error without a parseable number: inconclusive (0), not abort.
+
 	vague := &sa142ProbeProvider{name: "p", probeErr: errors.New("conversation context exceeded")}
 	if got := trySimpleProbe(context.Background(), vague); got != 0 {
 		t.Fatalf("vague context probe = %d, want 0", got)
 	}
-	// Auth error aborts (-1).
+
 	auth := &sa142ProbeProvider{name: "p", probeErr: &openai.APIError{HTTPStatusCode: 401, Message: "invalid key"}}
 	if got := trySimpleProbe(context.Background(), auth); got != -1 {
 		t.Fatalf("auth probe = %d, want -1", got)
 	}
-	// 429 is inconclusive (falls through to tiers), not an abort (#1788).
+
 	limited := &sa142ProbeProvider{name: "p", probeErr: &openai.APIError{HTTPStatusCode: 429, Message: "slow down"}}
 	if got := trySimpleProbe(context.Background(), limited); got != 0 {
 		t.Fatalf("429 probe = %d, want 0", got)
 	}
-	// Tier probe: success returns the tier itself.
+
 	ok := &sa142ProbeProvider{name: "p"}
 	if got := tryTierProbe(context.Background(), ok, 64000); got != 64000 {
 		t.Fatalf("tier success = %d, want 64000", got)
 	}
-	// Tier probe: overflow error yields the parsed window.
+
 	if got := tryTierProbe(context.Background(), overflow, 128000); got != 48000 {
 		t.Fatalf("tier overflow = %d, want 48000", got)
 	}
-	// chatNoRetry with a provider lacking probeChat errors cleanly.
+
 	if err := chatNoRetry(context.Background(), &mockProvider{name: "x"}, nil); err == nil {
 		t.Fatal("chatNoRetry must reject providers without probeChat")
 	}
@@ -313,8 +300,6 @@ func TestSA142_ProbePhases(t *testing.T) {
 		t.Fatalf("parse plain = %d", got)
 	}
 }
-
-// ---- OpenAI accessors -------------------------------------------------------
 
 func TestSA142_OpenAIAccessors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +352,7 @@ func TestSA142_OpenAIAccessors(t *testing.T) {
 		t.Fatalf("openai headers = %v", snap)
 	}
 	_ = p.RateLimitInfo()
-	// Happy-path Chat still works after all the configuration churn.
+
 	resp, err := p.Chat(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}, nil)
 	if err != nil || resp == nil {
 		t.Fatalf("Chat = %v, %v", resp, err)

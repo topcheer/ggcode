@@ -16,7 +16,6 @@ func TestSetServerToolsEmptyDisables(t *testing.T) {
 		t.Fatalf("expected 1 stored tool after web_search, got %d", len(p.serverTools))
 	}
 
-	// Disable: empty set clears (the #3073 fix).
 	p.SetServerTools(nil)
 	if len(p.serverTools) != 0 {
 		t.Fatalf("SetServerTools(nil) must clear stored tools, still %d", len(p.serverTools))
@@ -27,14 +26,12 @@ func TestSetServerToolsEmptyDisables(t *testing.T) {
 		t.Fatalf("SetServerTools([]) must clear stored tools, still %d", len(p.serverTools))
 	}
 
-	// Fail-closed: an unrecognized-only set keeps the previous value.
 	p.SetServerTools([]ServerToolConfig{{Type: "code_interpreter"}})
 	p.SetServerTools([]ServerToolConfig{{Type: "definitely_not_a_tool"}})
 	if len(p.serverTools) != 1 || p.serverTools[0].Type != "code_interpreter" {
 		t.Fatalf("unrecognized-only set must keep previous tools (fail closed), got %v", p.serverTools)
 	}
 
-	// Mixed set applies only the recognized entries.
 	p.SetServerTools([]ServerToolConfig{{Type: "file_search", VectorStoreIDs: []string{"vs_1"}}, {Type: "nope"}})
 	if len(p.serverTools) != 1 || p.serverTools[0].Type != "file_search" {
 		t.Fatalf("mixed set must keep only recognized tools, got %v", p.serverTools)

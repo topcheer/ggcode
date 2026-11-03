@@ -1,14 +1,5 @@
 package provider
 
-// sa-231: OpenAI prompt-cache routing control. OpenAI's prompt caching
-// (50% discount on >1k-token shared prefixes) only hits when repeated
-// requests land on the same cache machine; the optional request-level
-// prompt_cache_key gives the router a stable affinity hint. Without it,
-// multi-turn agent traffic can be routed away from its own warm cache.
-// Anthropic already had explicit cache_control breakpoints; this closes
-// the OpenAI-side asymmetry. Key source: the agent session ID (stable
-// per conversation, injected by agent.SetSessionID).
-
 import (
 	"bytes"
 	"encoding/json"

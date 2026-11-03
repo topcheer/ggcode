@@ -135,13 +135,13 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 	icon := s.ToolIcon(status)
 	switch status {
 	case StatusSuccess:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render(icon) // green
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render(icon)
 	case StatusError:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(icon) // red
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(icon)
 	case StatusPending, StatusRunning:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(icon) // orange
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(icon)
 	case StatusCanceled:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(icon) // gray
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(icon)
 	default:
 		return icon
 	}
@@ -198,14 +198,10 @@ func (s Styles) toolHeaderPrefix(icon, name string, width int) (prefix string, p
 	if prefixW <= width || width <= 0 {
 		return prefix, prefixW
 	}
-	// Budget the NAME so the final prefix leaves 1 column for params:
-	// icon + space + name + space. Derive from the measured icon width,
-	// not assumptions about the styled string; 3 fixed cols (2 spaces +
-	// 1 params col).
+
 	avail := width - lipgloss.Width(icon) - 3
 	if avail <= len(toolNameTruncSuffix) {
-		// Degenerate: no room for a truncated name; icon only (trimmed of
-		// trailing space; empty when even that overflows).
+
 		prefix = strings.TrimSuffix(icon, " ")
 		if lipgloss.Width(prefix) > width {
 			prefix = ""
@@ -230,11 +226,11 @@ func capHeaderParams(paramStr string, prefixW int) string {
 	if lipgloss.Width(paramStr)+prefixW <= toolHeaderMaxRenderWidth {
 		return paramStr
 	}
-	avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
+	avail := toolHeaderMaxRenderWidth - prefixW - 1
 	if avail < 10 {
 		avail = 10
 	}
-	// Truncate by visual width, no word-break — just cut at rune boundary
+
 	cut := truncateRunesByWidth(paramStr, avail)
 	return paramStr[:cut] + "…"
 }
@@ -274,7 +270,7 @@ func splitAtWidth(s string, maxW int) (string, string) {
 	if lipgloss.Width(s) <= maxW {
 		return s, ""
 	}
-	// Walk runes, tracking visual width
+
 	runes := []rune(s)
 	totalW := 0
 	breakIdx := len(runes)
@@ -290,7 +286,7 @@ func splitAtWidth(s string, maxW int) (string, string) {
 			spaceIdx = i
 		}
 	}
-	// Prefer breaking at last space before break point
+
 	if spaceIdx > 0 && spaceIdx < breakIdx {
 		return string(runes[:spaceIdx]), string(runes[spaceIdx+1:])
 	}
@@ -304,9 +300,9 @@ func truncateTailByWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
 	}
-	// Remove trailing runes until width fits
+
 	runes := []rune(s)
-	// Strip ANSI-aware: work on rune level; lipgloss.Width handles ANSI internally
+
 	for len(runes) > 0 {
 		runes = runes[:len(runes)-1]
 		if lipgloss.Width(string(runes)) <= maxW {
@@ -361,26 +357,9 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 		return "", false
 	}
 
-	// Normalize carriage returns BEFORE any line processing. Windows tool
-	// output is CRLF and progress-bar tools (npm/gradle/docker) rewrite the
-	// line with a bare CR. Both left a stray '\r' inside an emitted line:
-	// lipgloss.Width counts it as zero-width so the height math looked
-	// right, but the terminal moves the cursor to column 0 mid-line,
-	// mangling borders (most visible on Windows) and desynchronizing the
-	// physical-line split from the visual-line count - the scroll offsets
-	// then drift, showing content floating mid-screen with blank space
-	// below. Treating CR as a line break feeds both cases through the
-	// normal wrap/cap machinery.
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
 
-	// Expand TABs to spaces: width libraries count '\t' as ONE column but
-	// terminals advance the cursor to the next 8-column tab stop, so
-	// "a\tb\tc" measures 3 cols and renders 17 - a per-line drift of up to
-	// 7x(tab count) columns that breaks the width invariant (borders, and
-	// Height() vs physical-line desync) on common bash output (git status,
-	// ls, compiler alignment all emit tabs). Expanding to a fixed 4-col
-	// stop makes measurement and terminal agree exactly.
 	content = expandTabs(content)
 
 	// Split into lines, then wrap each line that exceeds visual width.
@@ -394,7 +373,7 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 			wrapped = append(wrapped, line)
 			continue
 		}
-		// Visual-width-aware wrapping
+
 		runes := []rune(line)
 		for len(runes) > 0 {
 			cut := 0
@@ -404,7 +383,7 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 			if cut == 0 {
 				cut = 1
 			}
-			// Prefer breaking at a space
+
 			chunk := string(runes[:cut])
 			if spaceIdx := strings.LastIndex(chunk, " "); spaceIdx > 0 {
 				runeIdx := utf8.RuneCountInString(chunk[:spaceIdx])
@@ -422,8 +401,7 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 		truncated = true
 		hidden := len(wrapped) - maxLines
 		wrapped = wrapped[len(wrapped)-maxLines:]
-		// sa-86: the hint advertises the level-2 disclosure key; degrades
-		// width-safely (see truncationHint).
+
 		wrapped = append([]string{truncationHint(hidden, width)}, wrapped...)
 	}
 

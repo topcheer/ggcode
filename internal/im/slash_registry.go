@@ -8,25 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// Shared slash-command registry for IM inbound.
-//
-// Both IM inbound paths dispatch from this single table:
-//   - Path A: the daemon bridge (IM bound to a daemon session)
-//   - Path B: the TUI remote handler (IM bound to an attached TUI session)
-//
-// Before this registry existed the two paths hand-enumerated commands in
-// separate switches with separately maintained help texts, which is how
-// commands drifted (429075b0 shipped a classifier+handler but no dispatch;
-// /cost /mode landed on path A only). The registry is the structural fix:
-// a command lands here once and both paths serve it, the help text is
-// generated from the same entries, and the parity test fails if a one-shot
-// command is not routable on either path.
-//
-// Scope rule: only one-shot, text-output commands get handlers. Commands
-// that need interactive TUI surfaces (panels, editors, pickers) are
-// registered with Interactive=true so IM answers with a clear "TUI-only"
-// hint instead of "Unknown command".
-
 // SlashDeps supplies path-specific state to registry handlers. Each inbound
 // path implements it from its own live state: the daemon bridge reads the
 // agent and disk stores; the TUI adapter reads the live model/session.
@@ -85,8 +66,7 @@ var imSlashRegistry = []SlashCommand{
 			if len(args) == 0 {
 				return "Current permission mode: " + d.CurrentMode(), nil
 			}
-			// #743: reject invalid names instead of silently falling back to
-			// the ParsePermissionMode default while reporting success.
+
 			name := strings.ToLower(strings.TrimSpace(args[0]))
 			if !permission.IsValidPermissionMode(name) {
 				return "", fmt.Errorf("unknown mode %q (usage: /mode supervised|plan|auto|bypass|autopilot)", args[0])
@@ -125,12 +105,7 @@ var imSlashRegistry = []SlashCommand{
 		Name:     "nick",
 		Help:     "[name[@role][@team]] Show or set LAN chat identity",
 		Category: "query",
-		// /nick is a one-shot text command in the TUI (lanchat_panel.go
-		// handleNickCommand) but was never registered here, so IM inbound
-		// fell through to "Unknown command". The LAN hub is only wired in
-		// TUI-attached paths (the daemon bridge has no hub), so the
-		// capability is an OPTIONAL interface: deps that carry a hub
-		// implement it; others get a precise unavailable hint.
+
 		Handler: func(d SlashDeps, args []string) (string, error) {
 			setter, ok := d.(interface {
 				SetLanIdentity(nick, role, team string) (string, error)
@@ -148,8 +123,7 @@ var imSlashRegistry = []SlashCommand{
 			return setter.SetLanIdentity(nick, role, team)
 		},
 	},
-	// Interactive TUI commands: surfaced so IM users get a precise hint
-	// instead of "Unknown command".
+
 	{Name: "stats", Help: "Statistics panel (TUI-only)", Category: "tui", Interactive: true},
 	{Name: "status", Help: "Status inspector panel (TUI-only)", Category: "tui", Interactive: true},
 	{Name: "edit", Help: "Edit last message in editor (TUI-only)", Category: "tui", Interactive: true},

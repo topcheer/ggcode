@@ -50,11 +50,7 @@ type streamRenderCache struct {
 }
 
 func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (string, streamRenderCache) {
-	// normalized adds a closing fence to unclosed code blocks so the tail
-	// renders correctly. The PREFIX COMPARISON below must use the raw
-	// (fence-unclosed) source: the appended fence breaks HasPrefix for the
-	// next chunk, so during code-block streaming every chunk missed the
-	// cache and re-rendered every block (#184).
+
 	rawSource := mdpkg.Normalize(text)
 
 	trimStart := stickyTrimStart(text, cache, width)
@@ -65,10 +61,6 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 		return "", streamRenderCache{width: width, source: rawSource, trimStart: trimStart}
 	}
 
-	// Cap the growing tail block: only the last block changes between
-	// chunks, and only its visible tail matters during streaming. Truncate
-	// from the top so recent content stays intact. The stored block keeps
-	// the truncated form so the cache comparison below stays consistent.
 	blocks[len(blocks)-1] = capStreamingBlock(blocks[len(blocks)-1])
 
 	blockCut, hiddenLines := stickyBlockCut(blocks, trimStart, cache, width)
@@ -218,9 +210,7 @@ func capStreamingBlock(block string) string {
 	kept := lines[drop:]
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "... (%d earlier lines hidden while streaming)\n\n", drop)
-	// If truncation removed the opening fence of a code block, the kept
-	// closing fence would instead OPEN a new never-closed block and mangle
-	// the streaming display. Re-open the fence to keep markdown valid.
+
 	if fence := missingOpenFence(kept); fence != "" {
 		sb.WriteString(fence + "\n")
 	}
@@ -303,17 +293,14 @@ func extractBlockMarkdown(node ast.Node, source []byte) string {
 		switch v := n.(type) {
 		case *ast.Text:
 			sb.Write(v.Segment.Value(source))
-			// Goldmark separates lines within a paragraph with SoftLineBreak
-			// nodes. Without this, consecutive Text segments concatenate
-			// without any separator, losing whitespace and line breaks.
+
 			if v.SoftLineBreak() {
 				sb.WriteByte('\n')
 			}
 		case *ast.String:
 			sb.Write(v.Value)
 		case *ast.Link:
-			// Links have a Text child with the link text and an attribute
-			// with the URL. We only need the text - the child walk handles it.
+
 		}
 		return ast.WalkContinue, nil
 	})

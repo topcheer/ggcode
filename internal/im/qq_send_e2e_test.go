@@ -16,15 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestE2EQQSend10Scenarios sends 10 different message types to a real QQ channel
-// to verify the complete outbound pipeline works end-to-end.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a QQ adapter config
-//   - GGCODE_E2E_QQ_CHANNEL set to a QQ channel ID
-//   - GGCODE_E2E_QQ_CHAT_TYPE (optional, default "group")
-//
-// This test sends real messages — check QQ to verify.
 func TestE2EQQSend10Scenarios(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -62,13 +53,11 @@ func TestE2EQQSend10Scenarios(t *testing.T) {
 	}
 	adapter.rememberChatType(channelID, chatType)
 
-	// Mark connected (bypasses WebSocket check)
 	adapter.mu.Lock()
 	adapter.connected = true
 	adapter.ws = dummyWSConn(t)
 	adapter.mu.Unlock()
 
-	// A small 1x1 red PNG for image tests
 	pngBase64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 
 	scenarios := []struct {
@@ -141,7 +130,6 @@ func TestE2EQQSend10Scenarios(t *testing.T) {
 			passed++
 			t.Logf("Sent OK (%d bytes)", len(sc.content))
 
-			// Small delay between messages to avoid rate limiting
 			time.Sleep(2 * time.Second)
 		})
 	}
@@ -152,7 +140,6 @@ func TestE2EQQSend10Scenarios(t *testing.T) {
 	}
 }
 
-// TestE2EQQImageUploadOnly tests uploading a real image to QQ CDN without sending a message.
 func TestE2EQQImageUploadOnly(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -185,7 +172,6 @@ func TestE2EQQImageUploadOnly(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create a valid 1x1 PNG
 	pngData := createTestPNG(t)
 	b64 := base64.StdEncoding.EncodeToString(pngData)
 
@@ -198,7 +184,6 @@ func TestE2EQQImageUploadOnly(t *testing.T) {
 	}
 	t.Logf("Image uploaded successfully: file_info=%s", truncateStr(fileInfo, 60))
 
-	// Test cache hit
 	fileInfo2, cacheErr := adapter.uploadMedia(ctx, chatType, channelID, b64)
 	if cacheErr != nil {
 		t.Fatalf("uploadMedia (cached): %v", cacheErr)
@@ -211,7 +196,7 @@ func TestE2EQQImageUploadOnly(t *testing.T) {
 
 func createTestPNG(t *testing.T) []byte {
 	t.Helper()
-	// Minimal valid 1x1 red PNG
+
 	b64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
@@ -220,23 +205,6 @@ func createTestPNG(t *testing.T) []byte {
 	return data
 }
 
-// TestE2ERealLLMToQQCallRealLLM is a TRUE end-to-end test that mimics the exact
-// user workflow: user prompt → agent (LLM + tools) → response → QQ send.
-//
-// Each sub-test creates a fresh project directory and agent with full built-in tools,
-// just like the TUI does. The prompts are real project tasks designed to trigger the
-// LLM to write files, execute commands, and include image references in its response.
-//
-// Image pipeline: LLM writes HTML → run_command takes screenshot → LLM references
-// the screenshot file path in its text response → ExtractImagesFromText extracts it
-// → resolveImageSource reads the local file → uploadMedia uploads to QQ CDN → send.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a valid provider and QQ adapter config
-//   - GGCODE_E2E_QQ_CHANNEL set to a QQ channel ID
-//   - GGCODE_E2E_QQ_CHAT_TYPE (optional, default "c2c")
-//
-// This test sends real messages — check QQ to verify.
 func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -257,7 +225,6 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 		t.Skip("no enabled QQ adapter")
 	}
 
-	// Allow overriding the adapter via environment variable.
 	if envAdapter := os.Getenv("GGCODE_E2E_QQ_ADAPTER"); envAdapter != "" {
 		if a, ok := cfg.IM.Adapters[envAdapter]; ok && a.Enabled && a.Platform == "qq" {
 			adapterName = envAdapter
@@ -289,23 +256,16 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 	}
 	adapter.rememberChatType(channelID, chatType)
 
-	// Mark connected (bypasses WebSocket check)
 	adapter.mu.Lock()
 	adapter.connected = true
 	adapter.ws = dummyWSConn(t)
 	adapter.mu.Unlock()
 
-	// Resolve vision support from config (matches TUI behavior).
 	resolved, resolveErr := cfg.ResolveActiveEndpoint()
 	if resolveErr != nil {
 		t.Fatalf("resolve endpoint: %v", resolveErr)
 	}
 
-	// Real project-task prompts that trigger the LLM to:
-	//  1. write_file → create HTML/JS files
-	//  2. run_command → open browser + take screenshot
-	//  3. Reference the screenshot file in its text response
-	//  4. The file path gets extracted by ExtractImagesFromText → uploaded to QQ
 	prompts := []struct {
 		name   string
 		prompt string
@@ -345,11 +305,10 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 	totalImages := 0
 	for _, p := range prompts {
 		t.Run(p.name, func(t *testing.T) {
-			// Each sub-test gets its own project directory (like a real user workspace).
+
 			projectDir := t.TempDir()
 			t.Logf("Project dir: %s", projectDir)
 
-			// Create agent with full built-in tools (exactly like TUI does).
 			registry := tool.NewRegistry()
 			if regErr := tool.RegisterBuiltinTools(registry, nil, projectDir, nil, nil); regErr != nil {
 				t.Fatalf("register builtin tools: %v", regErr)
@@ -362,8 +321,6 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 			ag.SetWorkingDir(projectDir)
 			ag.SetSupportsVision(resolved.SupportsVision)
 
-			// Per-subtest timeout to prevent commands like `open` from blocking forever.
-			// Multi-image scenarios need more time (more tool call iterations).
 			timeout := 150 * time.Second
 			if strings.HasPrefix(p.name, "06_") || strings.HasPrefix(p.name, "07_") {
 				timeout = 200 * time.Second
@@ -391,14 +348,12 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 			}
 			t.Logf("LLM response (%d chars): %s", len(output), truncateStr(output, 500))
 
-			// Extract images from LLM response text.
 			images, remainingText := ExtractImagesFromText(output)
 			t.Logf("Extracted %d image(s) from response", len(images))
 			for i, img := range images {
 				t.Logf("  image[%d]: kind=%s data_len=%d preview=%s", i, img.Kind, len(img.Data), truncateStr(img.Data, 100))
 			}
 
-			// Send the full LLM response to real QQ.
 			sendCtx, sendCancel := context.WithCancel(ctx)
 			defer sendCancel()
 
@@ -425,7 +380,6 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 			}
 			t.Logf("Sent to QQ OK (%d chars text, %d images, remaining: %q)", len(output), len(images), remaining)
 
-			// Delay between messages to avoid rate limiting
 			time.Sleep(5 * time.Second)
 		})
 	}
@@ -436,7 +390,6 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 	}
 }
 
-// pngChunk creates a PNG chunk with length, type, data, and CRC.
 func pngChunk(chunkType []byte, data []byte) []byte {
 	length := make([]byte, 4)
 	length[0] = byte(len(data) >> 24)
@@ -444,7 +397,6 @@ func pngChunk(chunkType []byte, data []byte) []byte {
 	length[2] = byte(len(data) >> 8)
 	length[3] = byte(len(data))
 
-	// CRC over type + data
 	crcInput := make([]byte, len(chunkType)+len(data))
 	copy(crcInput, chunkType)
 	copy(crcInput[len(chunkType):], data)
@@ -463,9 +415,8 @@ func pngChunk(chunkType []byte, data []byte) []byte {
 	return result
 }
 
-// crc32Checksum computes CRC32 using the standard PNG polynomial.
 func crc32Checksum(data []byte) uint32 {
-	// PNG uses CRC32 with polynomial 0xEDB88320
+
 	crc := uint32(0xFFFFFFFF)
 	for _, b := range data {
 		crc ^= uint32(b)
@@ -480,17 +431,15 @@ func crc32Checksum(data []byte) uint32 {
 	return crc ^ 0xFFFFFFFF
 }
 
-// zlibCompress wraps data with zlib header/trailer (store mode, no compression).
 func zlibCompress(data []byte) []byte {
-	// Zlib header: CMF=0x78 (deflate, window 32K), FLG=0x01 (no dict, check bits)
+
 	var result []byte
 	result = append(result, 0x78, 0x01)
 
-	// Deflate store blocks (max 65535 bytes each)
 	offset := 0
 	for offset < len(data) {
 		blockLen := len(data) - offset
-		final := byte(1) // last block
+		final := byte(1)
 		if blockLen > 65535 {
 			blockLen = 65535
 			final = 0
@@ -502,7 +451,6 @@ func zlibCompress(data []byte) []byte {
 		offset += blockLen
 	}
 
-	// Adler32 checksum
 	s1, s2 := uint32(1), uint32(0)
 	for _, b := range data {
 		s1 = (s1 + uint32(b)) % 65521

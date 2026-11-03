@@ -1,13 +1,5 @@
 package provider
 
-// Regression probes for #3077 (user_error.go, two points):
-//   V1: the prefix-strip fallback branch returned the stripped error text
-//       without sanitizeRawError - a #1720 bypass (only the blind-spot
-//       branch was redacted; no outer caller re-sanitizes).
-//   V2: the connection-refused check matched case-sensitively BEFORE the
-//       ToLower - relay/proxy wrappers capitalizing "Connection refused"
-//       fell through to the blind-spot fallback.
-
 import (
 	"errors"
 	"strings"
@@ -28,7 +20,7 @@ func TestIssue3077_PrefixStripBranchSanitizes(t *testing.T) {
 	if !strings.Contains(got, "[REDACTED]") {
 		t.Fatalf("expected redaction marker, got: %q", got)
 	}
-	// Non-credential text must survive the strip path.
+
 	if !strings.Contains(got, "403 forbidden") {
 		t.Fatalf("diagnostic text lost by sanitization: %q", got)
 	}
@@ -49,12 +41,12 @@ func TestIssue3077_ConnectionRefusedCaseInsensitive(t *testing.T) {
 	if !strings.Contains(got, "Cannot connect to the API server") {
 		t.Fatalf("capitalized Connection refused fell to blind spot (V2): %q", got)
 	}
-	// Original lowercase phrasing still matches.
+
 	got = UserFacingErrorLang(errors.New("dial tcp: connection refused"), "en")
 	if !strings.Contains(got, "Cannot connect to the API server") {
 		t.Fatalf("lowercase connection refused regressed (V2): %q", got)
 	}
-	// Mixed case "No Such Host" too.
+
 	got = UserFacingErrorLang(errors.New("lookup api.example.com: No Such Host"), "en")
 	if !strings.Contains(got, "Cannot connect to the API server") {
 		t.Fatalf("mixed-case no such host missed (V2): %q", got)

@@ -118,8 +118,7 @@ func IsContextOverflowError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Guard against SDK error types whose .Error() panics on nil internals
-	// (e.g., anthropic.Error with nil Response).
+
 	msg := func() string {
 		defer func() { recover() }()
 		return err.Error()
@@ -128,7 +127,7 @@ func IsContextOverflowError(err error) bool {
 	keywords := []string{
 		"context_length_exceeded",
 		"maximum context",
-		"maximum is", // e.g. "requested 40123 tokens, maximum is 131072" (#303)
+		"maximum is",
 		"context length",
 		"prompt is too long",
 		"prompt too long",
@@ -168,24 +167,14 @@ func isRetryable(err error) bool {
 		return false
 	}
 
-	// User/session cancellation is never retryable. DeadlineExceeded is handled
-	// below as a retryable timeout unless the caller context has already ended.
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
 
-	// Prompt-too-long errors are permanent: retrying the same oversized request
-	// will never succeed. Let the agent layer handle reactive compaction instead.
 	if IsContextOverflowError(err) {
 		return false
 	}
 
-	// Fail fast on permanent failures: quota/billing exhaustion and auth
-	// errors will never succeed on retry. ClassifyLLMError uses keyword
-	// matching that works for ALL error types (typed SDK errors AND raw
-	// string errors), catching cases the per-type checks below miss -
-	// e.g. a string error like "coding plan expired" or a generic HTTP
-	// error wrapper around a 429 quota response.
 	switch ClassifyLLMError(err) {
 	case FailureQuota, FailureAuth:
 		return false
@@ -194,9 +183,7 @@ func isRetryable(err error) bool {
 	// Check for HTTP status codes from known SDK error types.
 	var openaiAPIErr *openai.APIError
 	if errors.As(err, &openaiAPIErr) {
-		// 429 is normally retryable, but coding plan providers (ZAI/GLM, Kimi,
-		// OpenAI) return 429 for permanent quota exhaustion too. Detect those
-		// and don't waste retry attempts.
+
 		if openaiAPIErr.HTTPStatusCode == http.StatusTooManyRequests && isQuotaExhaustedError(err) {
 			return false
 		}
@@ -227,12 +214,8 @@ func isRetryable(err error) bool {
 		return true
 	}
 
-	// Fallback: check error message for known non-retryable status codes.
 	msg := err.Error()
-	// #1617-C: bare leading codes ("401 Unauthorized: invalid api key" -
-	// a common wrapper/relay format with no 'HTTP'/'status' prefix) hit
-	// NONE of the containsHTTPStatus forms and defaulted to retryable,
-	// burning the full budget on a permanent auth error. Anchor at start.
+
 	for _, code := range []string{"400", "401", "402", "403", "404", "413", "422"} {
 		if strings.HasPrefix(msg, code) && (len(msg) == len(code) || msg[len(code)] == ' ') {
 			return false
@@ -241,42 +224,19 @@ func isRetryable(err error) bool {
 	if containsHTTPStatus(msg, "401") || containsHTTPStatus(msg, "403") || containsHTTPStatus(msg, "404") {
 		return false
 	}
-	// #306: 400 must be excluded in the string-fallback path too - Bad Request
-	// is always permanent (malformed request body, invalid tool_use/tool_result
-	// pairing, bad parameters). Without this, a non-typed "status code: 400"
-	// from an OpenAI-compatible relay was retried 20 times with exponential
-	// backoff (~6-7 minutes) before surfacing.
+
 	if containsHTTPStatus(msg, "400") {
 		return false
 	}
-	// #518: 422 must be excluded too - the typed path (isRetryableHTTPStatus)
-	// treats Unprocessable Entity as permanent (schema/semantic rejection;
-	// FriendlyError's own guidance is "switch model"). Without this, a
-	// non-typed go-openai stream error (plain fmt.Errorf, errors.As misses)
-	// from any OpenAI-compatible relay retried 20 times (~7m16s) per turn.
+
 	if containsHTTPStatus(msg, "422") {
 		return false
 	}
-	// #602(R1): 402 (payment required) and 413 (payload too large) complete
-	// the string-fallback exclusion list. The typed path
-	// (isRetryableHTTPStatus, #267) already treats both as permanent, but the
-	// string fallback only excluded 400/401/403/404/422 - a non-typed
-	// "status code: 402" from an OpenAI-compatible relay fell through to the
-	// default-retryable branch and burned 20 retries (~7 min) on a billing
-	// error that can never succeed. Fourth instance of the #306/#518/#267
-	// string-vs-typed divergence class.
+
 	if containsHTTPStatus(msg, "402") || containsHTTPStatus(msg, "413") {
 		return false
 	}
 
-	// Any other error with a recognizable HTTP status code is retryable.
-	// (400/402/413/422 are permanently excluded above - see #306/#518/#602.)
-	// #518: 422 must NOT be in this string-fallback list - the typed path
-	// (isRetryableHTTPStatus) treats 422 as permanent (schema/semantic
-	// rejection), so a non-typed go-openai stream error (plain fmt.Errorf,
-	// errors.As misses) must not spin ~7 minutes in 20 doomed retries.
-	// Anchor via containsHTTPStatus so digit coincidences like "id=42913"
-	// don't count as status codes (#518 low-risk side item).
 	for _, code := range []string{
 		"408", "409", "429",
 		"500", "502", "503", "504", "520", "521", "522", "523", "524", "529",
@@ -286,13 +246,10 @@ func isRetryable(err error) bool {
 		}
 	}
 
-	// ZAI platform transient errors.
 	if strings.Contains(msg, "网络错误") {
 		return true
 	}
 
-	// Default: retry unknown errors. It's better to retry once too many
-	// than to fail permanently on a transient issue.
 	return true
 }
 
@@ -308,11 +265,7 @@ func isRetryable(err error) bool {
 // patterns, fell through to the default-retryable path, and burned 19
 // retries (~7.5 min) on a permanent auth failure.
 func containsHTTPStatus(msg, code string) bool {
-	// #602(R3): digit-terminated patterns go through containsPatternAnchored
-	// (errclass.go), which requires a non-digit (or end-of-string) boundary
-	// after the code. Bare substring matching let a 5-digit coincidence like
-	// `"status":40139` count as status 401 - the same digit-piercing class the
-	// classifier closed (#303/#456/#577).
+
 	return containsPatternAnchored(msg, " "+code+" ") ||
 		containsPatternAnchored(msg, " "+code+",") ||
 		containsPatternAnchored(msg, " "+code+"\n") ||
@@ -326,28 +279,19 @@ func containsHTTPStatus(msg, code string) bool {
 }
 
 func isRetryableForContext(ctx context.Context, err error) bool {
-	// User cancellation is never retryable.
+
 	if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
 		return false
 	}
-	// DeadlineExceeded from the caller context means the agent turn
-	// timed out - not retryable. But DeadlineExceeded from an HTTP
-	// client timeout (where ctx is still alive) IS retryable.
+
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
 	}
-	// #4214: context overflow is mathematically deterministic - the same
-	// request bytes cannot fit no matter how many times they are resent.
-	// Exclude it from retry-always, whose rationale is intermittent
-	// misleading permanent codes from flaky gateways, not deterministic
-	// failures (an unattended pipe would spin 2^30 attempts / unbounded
-	// budget on a zero-probability retry).
+
 	if IsContextOverflowError(err) {
 		return false
 	}
-	// Retry-always mode: retry EVERYTHING except the caller-context
-	// cancellations above (Ctrl-C / agent-turn timeout must still work).
-	// The permanent-error classifier below is deliberately bypassed.
+
 	if retryAlwaysEnabled.Load() {
 		return true
 	}
@@ -392,8 +336,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int, 
 	}
 	budget := newRetryBudget()
 	if retryAlwaysEnabled.Load() {
-		// Retry-always (--llm-retry-always): no cumulative backoff cap - only context
-		// cancellation ends the loop.
+
 		budget.unlimited = true
 	}
 	for i := 0; ; i++ {
@@ -408,9 +351,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int, 
 			return err
 		}
 		if sleepErr := budget.sleep(ctx, retryDelay(err, i)); sleepErr != nil {
-			// #722: budget exhaustion wraps the LAST provider error so the
-			// failover layer recognizes best-effort exhaustion and switches
-			// immediately instead of running the full threshold again.
+
 			if errors.Is(sleepErr, errRetryBudgetExhausted) {
 				return fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 			}
@@ -421,11 +362,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int, 
 
 func retryDelay(err error, attempt int) time.Duration {
 	if delay, ok := retryAfterDelay(err); ok && delay > 0 {
-		// Cap Retry-After at providerRetryBackoffCap. Some providers return
-		// very large Retry-After values (60-300s); an interactive agent must
-		// not freeze for minutes. If the cap expires and the server is still
-		// rate-limiting, it will return 429 again and we retry - acceptable
-		// for an interactive tool.
+
 		if delay > providerRetryBackoffCap {
 			delay = providerRetryBackoffCap
 		}
@@ -438,13 +375,12 @@ func retryDelay(err error, attempt int) time.Duration {
 	if delay > providerRetryBackoffCap {
 		delay = providerRetryBackoffCap
 	}
-	// Add ±25% jitter to prevent thundering herd when multiple clients
-	// retry simultaneously (e.g., shared rate limit across instances).
+
 	jitterRange := delay / 4
 	if jitterRange > 0 {
 		delay = delay - jitterRange/2 + time.Duration(rand.Int64N(int64(jitterRange)))
 	}
-	// Re-clamp after jitter so the effective delay never exceeds the cap.
+
 	if delay > providerRetryBackoffCap {
 		delay = providerRetryBackoffCap
 	}
@@ -539,9 +475,7 @@ func isTimeoutClassError(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
 		return true
 	}
-	// Guard against SDK error types whose .Error() panics on nil internals
-	// (e.g., anthropic.Error with nil Response) - same guard as
-	// IsContextOverflowError.
+
 	msg := func() (m string) {
 		defer func() { recover() }()
 		return err.Error()
@@ -600,7 +534,6 @@ func FriendlyError(err error) string {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
 
-	// Extract HTTP status code if available
 	statusCode := 0
 	var anthropicErr *anthropic.Error
 	if errors.As(err, &anthropicErr) {
@@ -619,12 +552,7 @@ func FriendlyError(err error) string {
 		}
 	}
 	if statusCode == 0 {
-		// #577(A): anchor via containsHTTPStatus - the same helper isRetryable
-		// uses - instead of bare substring matching. Digit coincidences like
-		// "40123 tokens remaining" in a quota message were misreported as
-		// auth failure ("invalid API key, run config set api_key"), sending
-		// users down the wrong debugging path. Third occurrence of this bug
-		// class (#303, #561-F fixed the other two).
+
 		for _, code := range []int{400, 401, 402, 403, 404, 408, 413, 422, 429, 500, 502, 503, 504} {
 			if containsHTTPStatus(msg, strconv.Itoa(code)) {
 				statusCode = code
@@ -633,7 +561,6 @@ func FriendlyError(err error) string {
 		}
 	}
 
-	// Context overflow - special handling
 	if IsContextOverflowError(err) {
 		return "The conversation has exceeded the model's context window. " +
 			"Run /compact to compress the conversation history, or start a new session with /clear."
@@ -696,11 +623,9 @@ func FriendlyError(err error) string {
 			"This is usually temporary - try again."
 	}
 
-	// Cancellation
 	if errors.Is(err, context.Canceled) {
 		return "Request cancelled."
 	}
 
-	// Fallback: return original error
 	return msg
 }

@@ -119,7 +119,7 @@ func (s *pcSession) AppendHistory(turn pcConversationTurn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.History = append(s.History, turn)
-	// Keep last 200 turns
+
 	if len(s.History) > 200 {
 		s.History = s.History[len(s.History)-200:]
 	}

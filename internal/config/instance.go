@@ -132,13 +132,6 @@ func MergeInstance(global, instance *Config) {
 		global.instanceFields = make(map[string]bool)
 	}
 
-	// Simple scalar fields — only override if global is zero, OR when the
-	// instance file explicitly contains the key (#2284-C: an explicit
-	// "max_iterations: 0" is a deliberate clear-to-default, not a gap to
-	// fill - the old gate resurrected the cleared global value).
-	// NOTE: Vendor, Endpoint, and Model are now SESSION-scoped (persisted in
-	// session JSONL). Instance config no longer overrides them — each session
-	// remembers its own model selection independently.
 	explicit := func(key string) bool { return instance.explicitKeys[key] }
 	if (global.Language == "" && instance.Language != "") || (explicit("language") && instance.Language != "") {
 		global.Language = instance.Language
@@ -157,50 +150,27 @@ func MergeInstance(global, instance *Config) {
 		global.instanceFields["max_iterations"] = true
 	}
 
-	// UI
 	mergeUIConfig(&global.UI, &instance.UI, global.instanceFields)
 
-	// IM
 	mergeIMConfig(&global.IM, &instance.IM, global.instanceFields)
 
-	// Vendors - add instance vendors not in global
-	// #2289: vendors - instance-wins on conflict, mirroring the #524
-	// ToolPerms read-side semantics (same fix shape). The old merge only
-	// adopted instance keys ABSENT from global, but diffVendors
-	// deliberately persists in-place edits of globally configured vendors
-	// (marshal-compare branch) - those persisted deltas were silently
-	// dropped on reload: SaveInstanceScoped wrote them, MergeInstance
-	// ignored them, the user's change vanished.
 	if global.Vendors == nil && instance.Vendors != nil {
 		global.Vendors = make(map[string]VendorConfig, len(instance.Vendors))
 	}
-	// #731: register the flag per adopted vendor KEY (same key-level semantics
-	// as ToolPerms below). Previously the flag was only set when global.Vendors
-	// was nil (global has A, instance has B) merged B into
-	// memory without marking "vendors" as instance-sourced, so the desktop
-	// write-back gate (InstanceFields() contains "vendors") never opened and
-	// AddCustomEndpoint/SaveAPIKey changes were silently lost on restart.
+
 	for k, v := range instance.Vendors {
-		// VendorConfig contains maps (Endpoints) so it is not ==-comparable;
-		// same deep-equality shape diffVendors uses on the write side.
+
 		if gv, exists := global.Vendors[k]; !exists || !reflect.DeepEqual(gv, v) {
 			global.Vendors[k] = v
 			global.instanceFields["vendors"] = true
 		}
 	}
 
-	// AllowedDirs — only use instance if global is empty
 	if len(global.AllowedDirs) == 0 && len(instance.AllowedDirs) > 0 {
 		global.AllowedDirs = instance.AllowedDirs
 		global.instanceFields["allowed_dirs"] = true
 	}
 
-	// ToolPerms — instance-wins on conflict (#524 Bug A, read side). The old
-	// merge only adopted instance keys ABSENT from global, so an instance
-	// allow→deny change on a globally-configured tool reverted to the global
-	// value after reload. Instance values now override global values; the
-	// overridden keys are recorded in instanceFields so Save() keeps them out
-	// of the global file (they persist via SaveInstance).
 	if global.ToolPerms == nil && len(instance.ToolPerms) > 0 {
 		global.ToolPerms = make(map[string]ToolPermission, len(instance.ToolPerms))
 	}
@@ -211,55 +181,33 @@ func MergeInstance(global, instance *Config) {
 		}
 	}
 
-	// MCPServers — only use instance if global is empty
 	if len(global.MCPServers) == 0 && len(instance.MCPServers) > 0 {
 		global.MCPServers = instance.MCPServers
 		global.instanceFields["mcp_servers"] = true
 	}
 
-	// Plugins — only use instance if global is empty
 	if len(global.Plugins) == 0 && len(instance.Plugins) > 0 {
 		global.Plugins = instance.Plugins
 		global.instanceFields["plugins"] = true
 	}
 
-	// Knight
-	// #609: the four sub-merges below now register their top-level YAML keys
-	// in instanceFields — without this, instance knight/a2a/subagents/swarm
-	// values leaked into the global ggcode.yaml on Save() (same class of bug
-	// the hook leak was fixed with via mergeHookConfig's tracked map).
 	mergeKnightConfig(&global.KnightConfig, &instance.KnightConfig, global.instanceFields, explicit)
 
-	// A2A
 	mergeA2AConfigFields(&global.A2A, &instance.A2A, global.instanceFields, explicit)
 
-	// SubAgents
 	mergeSubAgentConfig(&global.SubAgents, &instance.SubAgents, global.instanceFields)
 
-	// Impersonation
-	// #2936: any non-zero instance field opens the merge, not just Preset -
-	// a CustomHeaders-only override (gateway auth headers with no preset)
-	// previously failed this gate and was silently dropped on load even
-	// though SaveInstance had persisted it correctly.
 	instanceImpNonZero := instance.Impersonation.Preset != "" ||
 		instance.Impersonation.CustomVersion != "" ||
 		len(instance.Impersonation.CustomHeaders) > 0
 	if global.Impersonation.Preset == "" && instanceImpNonZero {
 		global.Impersonation = instance.Impersonation
-		// #1815 case 3: register the merged section like every other merge
-		// field. Without the registration, Save's instance-strip step never
-		// removed "impersonation" from the global view, so the instance's
-		// value (including CustomHeaders, which may carry gateway auth
-		// tokens) leaked into the global ggcode.yaml on the next unrelated
-		// cfg.Save() - the #524/#609 family, missed for this field. The dead
-		// "impersonation"→"impersonation" API mapping never triggered it.
+
 		global.instanceFields["impersonation"] = true
 	}
 
-	// Swarm
 	mergeSwarmConfig(&global.Swarm, &instance.Swarm, global.instanceFields)
 
-	// Hooks
 	mergeHookConfig(&global.Hooks, &instance.Hooks, global.instanceFields)
 }
 
@@ -297,7 +245,7 @@ func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 		global.STT = instance.STT
 		tracked["im"] = true
 	}
-	// Adapters — add instance adapters not in global
+
 	if global.Adapters == nil && instance.Adapters != nil {
 		global.Adapters = make(map[string]IMAdapterConfig, len(instance.Adapters))
 		tracked["im"] = true
@@ -314,17 +262,9 @@ func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 // from the instance are recorded in tracked so Save() strips them from the
 // global file write (#609).
 func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool, explicit func(string) bool) {
-	// #2702: an instance file that EXPLICITLY contains knight.<key>
-	// overrides the global even with a zero/false value - the write side
-	// (diffKnight) deliberately persists explicit clears/disables, and the
-	// old gap-fill-only gates silently resurrected the global value on
-	// reload (knight.enabled=false written, knight re-enabled on restart).
+
 	if !global.Enabled && instance.Enabled {
-		// Global is false (could be default or explicit), instance wants true.
-		// Since we can't tell, we let instance fill the gap.
-		// NOTE: This means if user explicitly set enabled:false in global,
-		// instance CAN turn it back on. This is by design — the instance admin
-		// may want to enable knight for a specific project.
+
 		global.Enabled = instance.Enabled
 		tracked["knight"] = true
 	} else if explicit("knight.enabled") && global.Enabled != instance.Enabled {
@@ -366,9 +306,7 @@ func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool, 
 // Uses the same "global wins if set" rule. Instance-filled fields are
 // tracked so Save() keeps them out of the global file (#609).
 func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool, explicit func(string) bool) {
-	// #2702: same explicit-override rule as mergeKnightConfig - diffA2A
-	// deliberately writes explicit clears (a2a.auth.api_key="" etc.),
-	// which gap-fill-only gates resurrected on reload.
+
 	if !global.Disabled && instance.Disabled || explicit("a2a.disabled") {
 		if global.Disabled != instance.Disabled {
 			global.Disabled = instance.Disabled
@@ -489,7 +427,6 @@ func (c *Config) SaveInstance(workspace string) error {
 	}
 	path := filepath.Join(dir, "ggcode.yaml")
 
-	// Compute the minimal diff: fields in current config that differ from globalSnap.
 	delta := c.marshalInstanceDelta()
 
 	// Read the existing instance file BEFORE deciding emptiness: reset
@@ -501,7 +438,7 @@ func (c *Config) SaveInstance(workspace string) error {
 	if readErr == nil && len(existingData) > 0 {
 		existingRaw = map[string]interface{}{}
 		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr != nil {
-			existingRaw = nil // unparseable — overwrite with delta below
+			existingRaw = nil
 		}
 	}
 	if existingRaw != nil {
@@ -509,7 +446,7 @@ func (c *Config) SaveInstance(workspace string) error {
 	}
 
 	if len(delta) == 0 && (existingRaw == nil || len(existingRaw) == 0) {
-		// No overrides — remove the instance file if it exists.
+
 		if _, err := os.Stat(path); err == nil {
 			if err := os.Remove(path); err != nil {
 				debug.Log("config", "SaveInstance: failed to remove empty instance config: %v", err)
@@ -522,8 +459,7 @@ func (c *Config) SaveInstance(workspace string) error {
 	var data []byte
 	if existingRaw != nil && len(existingRaw) > 0 {
 		deepMergeYAMLMaps(existingRaw, delta)
-		// After applying reset deletions the file may have become empty —
-		// every override was reset back to global (#2106).
+
 		if len(existingRaw) == 0 {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				debug.Log("config", "SaveInstance: failed to remove fully-reset instance config: %v", err)
@@ -549,10 +485,8 @@ func (c *Config) SaveInstance(workspace string) error {
 		return err
 	}
 
-	// Migrate any plaintext API keys in the instance config to instance keys.env.
-	// Use instance-prefixed env vars to avoid overwriting global keys.
 	if c.instanceDir != "" {
-		hash := filepath.Base(c.instanceDir) // the SHA256 short hash
+		hash := filepath.Base(c.instanceDir)
 		if migrated, migrateErr := MigrateInstancePlaintextAPIKeys(path, hash); migrateErr != nil {
 			debug.Log("config", "SaveInstance: migration error: %v", migrateErr)
 		} else if len(migrated) > 0 {
@@ -720,41 +654,23 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 		return nil, err
 	}
 
-	// Save a deep copy of the global config before any instance merge.
-	// This allows Save() to distinguish global fields from instance overrides.
 	cfg.globalSnap = deepCopyConfig(cfg)
 
-	// Attempt to migrate legacy .ggcode/a2a.yaml if instance config doesn't exist yet.
 	MigrateA2AYaml(workspace)
 
-	// Load instance-level API keys into the resolver map (NOT the process
-	// env) so ${VAR} expansion can resolve them. Instance keys override
-	// globals at lookup time. #2293: the old wholesale os.Setenv leg here
-	// leaked every instance key to child commands and MCP subprocesses;
-	// the "${VAR} expansion needs it" comment was false - LoadInstanceConfig
-	// does no expansion and lookups walk the resolver map (see loadRuntimeEnv).
 	instDir := InstanceDir(workspace)
 	LoadInstanceKeysEnv(instDir)
 
-	// Apply instance-level config if available.
 	instanceCfg := LoadInstanceConfig(workspace)
 	if instanceCfg != nil {
 		MergeInstance(cfg, instanceCfg)
 	}
-	// Always record instance paths so HasInstanceConfigAttached() returns true
-	// even when no instance config file exists yet. This allows the user to
-	// switch to instance scope and create the first instance config.
+
 	cfg.SetInstancePaths(workspace)
 
-	// Also apply legacy .ggcode/a2a.yaml if it exists (for backward compat).
-	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
 	if a2aOverride := LoadA2AOverride(workspace); a2aOverride != nil {
 		MergeA2AConfig(&cfg.A2A, a2aOverride)
-		// #1519-B: register the merged section like mergeA2AConfigFields does
-		// on the instance path. Without the registration, Save's strip step
-		// never removed "a2a" from the global view, so a workspace's legacy
-		// port/api_key deep-merged into the GLOBAL ggcode.yaml - inherited by
-		// every other workspace (#524/#609/#1815 family, missed for this path).
+
 		if cfg.instanceFields == nil {
 			cfg.instanceFields = make(map[string]bool)
 		}
@@ -770,15 +686,13 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 func MigrateA2AYaml(workspace string) bool {
 	legacyPath := filepath.Join(workspace, ".ggcode", "a2a.yaml")
 	if _, err := os.Stat(legacyPath); err != nil {
-		return false // no legacy file
+		return false
 	}
 
-	// Legacy file exists. Check if instance config already exists.
 	if HasInstanceConfig(workspace) {
-		return false // already migrated or manually created
+		return false
 	}
 
-	// Read the legacy A2A config
 	data, err := os.ReadFile(legacyPath)
 	if err != nil {
 		return false
@@ -790,7 +704,6 @@ func MigrateA2AYaml(workspace string) bool {
 		return false
 	}
 
-	// Create instance config with A2A content
 	instanceData := map[string]interface{}{
 		"a2a": a2aRaw,
 	}
@@ -799,7 +712,6 @@ func MigrateA2AYaml(workspace string) bool {
 		return false
 	}
 
-	// Write to instance config
 	instDir := InstanceDir(workspace)
 	if instDir == "" {
 		return false
@@ -812,11 +724,6 @@ func MigrateA2AYaml(workspace string) bool {
 		return false
 	}
 
-	// #1519-B: the migration wrote the instance config - remove the legacy
-	// file so every subsequent load stops re-merging it (the legacy path
-	// deep-merged its values into BOTH the global yaml via the missing
-	// registration above AND the instance file via diffA2A - double
-	// definition, never converging).
 	if err := os.Remove(legacyPath); err != nil {
 		debug.Log("config", "a2a migration: legacy file left in place (remove failed, values may re-merge): %v", err)
 	}

@@ -37,12 +37,12 @@ func TestInstanceDir(t *testing.T) {
 			if dir == "" {
 				t.Fatal("InstanceDir returned empty string")
 			}
-			// Should end with a 16-char hex string
+
 			base := filepath.Base(dir)
 			if len(base) != tt.wantLen {
 				t.Errorf("InstanceDir hash length = %d, want %d (dir=%s)", len(base), tt.wantLen, dir)
 			}
-			// Should be under ~/.ggcode/instances/
+
 			if !filepath.IsAbs(dir) {
 				t.Errorf("InstanceDir should return absolute path, got %s", dir)
 			}
@@ -54,7 +54,6 @@ func TestInstanceDir(t *testing.T) {
 		})
 	}
 
-	// Same workspace should produce same hash
 	dir1 := InstanceDir("/home/user/projects/myapp")
 	dir2 := InstanceDir("/home/user/projects/myapp")
 	if dir1 != dir2 {
@@ -107,7 +106,7 @@ func TestLoadInstanceConfig_NotExists(t *testing.T) {
 
 func TestLoadInstanceConfig_Exists(t *testing.T) {
 	withTestHome(t)
-	// Create a temp instance config
+
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
@@ -115,7 +114,6 @@ func TestLoadInstanceConfig_Exists(t *testing.T) {
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 
-	// Write an instance config
 	instCfg := []byte("model: gpt-4o-mini\nvendor: openai\nlanguage: zh-CN\n")
 	if err := os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), instCfg, 0644); err != nil {
 		t.Fatal(err)
@@ -167,7 +165,7 @@ func TestMergeInstance_ScalarFields(t *testing.T) {
 			name:      "instance no longer fills global Model (session-scoped)",
 			global:    &Config{Model: ""},
 			instance:  &Config{Model: "gpt-4o-mini"},
-			wantModel: "", // Model is now session-scoped, instance does not override
+			wantModel: "",
 		},
 		{
 			name:      "instance does not override non-empty global",
@@ -220,11 +218,10 @@ func TestMergeInstance_Vendors(t *testing.T) {
 
 	MergeInstance(global, instance)
 
-	// Global vendor should be preserved
 	if _, ok := global.Vendors["openai"]; !ok {
 		t.Error("global vendor 'openai' should be preserved")
 	}
-	// Instance vendor should be added (not in global)
+
 	if _, ok := global.Vendors["anthropic"]; !ok {
 		t.Error("instance vendor 'anthropic' should be added")
 	}
@@ -248,9 +245,6 @@ func TestMergeInstance_VendorsNoOverride(t *testing.T) {
 
 	MergeInstance(global, instance)
 
-	// #2289: instance-wins on conflict (aligned with #524 ToolPerms and
-	// diffVendors' persist-in-place branch) - the old global-wins merge
-	// silently dropped persisted instance deltas on reload.
 	if global.Vendors["openai"].Endpoints["main"].BaseURL != "https://custom.api.com" {
 		t.Errorf("instance vendor override should win, got %s", global.Vendors["openai"].Endpoints["main"].BaseURL)
 	}
@@ -283,7 +277,7 @@ func TestMergeInstance_IMAdapters(t *testing.T) {
 }
 
 func TestMergeInstance_Slices(t *testing.T) {
-	// MCPServers: instance only used when global is empty
+
 	t.Run("mcp_servers instance fills empty global", func(t *testing.T) {
 		global := &Config{}
 		instance := &Config{
@@ -330,13 +324,11 @@ func TestSaveInstance(t *testing.T) {
 		t.Fatalf("SaveInstance error: %v", err)
 	}
 
-	// Verify file exists
 	instPath := InstanceConfigPath(workspace)
 	if _, err := os.Stat(instPath); err != nil {
 		t.Fatalf("instance config file not found: %v", err)
 	}
 
-	// Verify content
 	loaded := LoadInstanceConfig(workspace)
 	if loaded == nil {
 		t.Fatal("LoadInstanceConfig returned nil")
@@ -399,25 +391,20 @@ func TestSaveGlobalNoLeak(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 
-	// Create a global config file (minimal)
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	globalContent := "language: en\n"
 	os.WriteFile(globalPath, []byte(globalContent), 0644)
 
-	// Load global config
 	cfg, _ := Load(globalPath)
 	cfg.globalSnap = deepCopyConfig(cfg)
-	cfg.instanceFields = map[string]bool{"default_mode": true} // simulate instance fill
+	cfg.instanceFields = map[string]bool{"default_mode": true}
 
-	// Simulate instance merge
 	cfg.DefaultMode = "auto"
 
-	// Save should not leak instance-only fields
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	// Read back the saved file and check it doesn't contain leaked fields
 	saved, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +413,7 @@ func TestSaveGlobalNoLeak(t *testing.T) {
 	if containsYAMLKey(savedStr, "default_mode") {
 		t.Errorf("Save() leaked instance field 'default_mode' into global config:\n%s", savedStr)
 	}
-	// Global fields should be preserved
+
 	if !containsYAMLKey(savedStr, "language") {
 		t.Error("Save() lost global field 'language'")
 	}
@@ -436,7 +423,6 @@ func TestSaveGlobalPreservesRuntimeChanges(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 
-	// Create a global config file
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	globalContent := "language: en\n"
 	os.WriteFile(globalPath, []byte(globalContent), 0644)
@@ -445,21 +431,19 @@ func TestSaveGlobalPreservesRuntimeChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No globalSnap, no instanceFields → normal Save() path
+
 	cfg.Language = "zh-CN"
 
-	// Save should work without error
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	// Verify language was persisted
 	saved, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	savedStr := string(saved)
-	// Check that zh-CN appears somewhere in the saved file
+
 	found := false
 	for i := 0; i < len(savedStr); i++ {
 		if i+5 <= len(savedStr) && savedStr[i:i+5] == "zh-CN" {
@@ -483,38 +467,32 @@ func TestLoadWithInstance(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 
-	// Create global config (minimal, no vendor/endpoint)
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	globalContent := "language: en\n"
 	os.WriteFile(globalPath, []byte(globalContent), 0644)
 
-	// Create workspace and instance config
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
 
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
-	// Use default_mode which doesn't get a default from Load()
+
 	instContent := "default_mode: auto\n"
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte(instContent), 0644)
 
-	// Load with instance merge
 	cfg, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Language should be from global
 	if cfg.Language != "en" {
 		t.Errorf("Language = %q, want %q", cfg.Language, "en")
 	}
 
-	// DefaultMode should be filled from instance (global has none — default is empty)
 	if cfg.DefaultMode != "auto" {
 		t.Errorf("DefaultMode = %q, want %q (instance fills gap)", cfg.DefaultMode, "auto")
 	}
 
-	// globalSnap should be set
 	if cfg.globalSnap == nil {
 		t.Error("globalSnap should be set")
 	}
@@ -522,7 +500,6 @@ func TestLoadWithInstance(t *testing.T) {
 		t.Errorf("globalSnap.Language = %q, want %q", cfg.globalSnap.Language, "en")
 	}
 
-	// instanceFields should record that default_mode came from instance
 	if !cfg.instanceFields["default_mode"] {
 		t.Error("instanceFields should contain 'default_mode'")
 	}
@@ -530,7 +507,7 @@ func TestLoadWithInstance(t *testing.T) {
 
 // containsYAMLKey checks if a YAML string contains a top-level key.
 func containsYAMLKey(s, key string) bool {
-	// Simple check: key: at start of line (possibly with whitespace)
+
 	return len(s) > 0 && (s[:len(key)+1] == key+":" ||
 		containsLine(s, key+":"))
 }
@@ -538,7 +515,7 @@ func containsYAMLKey(s, key string) bool {
 func containsLine(s, substr string) bool {
 	for i := 0; i+len(substr) <= len(s); i++ {
 		if s[i:i+len(substr)] == substr {
-			// Check it's at start of line or after newline
+
 			if i == 0 || s[i-1] == '\n' {
 				return true
 			}
@@ -550,8 +527,6 @@ func containsLine(s, substr string) bool {
 func containsYAMLValue(s, value string) bool {
 	return containsLine(s, value) || containsLine(s, "\""+value+"\"")
 }
-
-// --- Coverage: InstanceDirPath, HasInstanceConfigAttached, InstanceWorkspace ---
 
 func TestInstanceAccessors_NoInstance(t *testing.T) {
 	cfg := &Config{}
@@ -585,8 +560,6 @@ func TestInstanceAccessors_WithInstance(t *testing.T) {
 		t.Errorf("InstanceWorkspace = %q, want %q", cfg.InstanceWorkspace(), workspace)
 	}
 }
-
-// --- Coverage: SaveScoped ---
 
 func TestSaveScoped_Global(t *testing.T) {
 	withTestHome(t)
@@ -623,8 +596,6 @@ func TestSaveScoped_Instance(t *testing.T) {
 	}
 }
 
-// --- Coverage: InstanceSummary ---
-
 func TestInstanceSummary(t *testing.T) {
 	withTestHome(t)
 	cfg := &Config{}
@@ -643,16 +614,12 @@ func TestInstanceSummary(t *testing.T) {
 	}
 }
 
-// --- Coverage: deepCopyConfig ---
-
 func TestDeepCopyConfig_Nil(t *testing.T) {
 	result := deepCopyConfig(nil)
 	if result != nil {
 		t.Error("deepCopyConfig(nil) should return nil")
 	}
 }
-
-// --- Coverage: MergeInstance complex sub-structs ---
 
 func TestMergeInstance_KnightConfig(t *testing.T) {
 	global := &Config{KnightConfig: KnightConfig{Enabled: false}}
@@ -776,7 +743,7 @@ func TestMergeInstance_SubAgentConfig(t *testing.T) {
 	global := &Config{}
 	instance := &Config{SubAgents: SubAgentConfig{
 		MaxConcurrent: 5,
-		Timeout:       60000000000, // 1 minute
+		Timeout:       60000000000,
 	}}
 	MergeInstance(global, instance)
 	if global.SubAgents.MaxConcurrent != 5 {
@@ -799,11 +766,7 @@ func TestMergeInstance_SwarmConfig(t *testing.T) {
 }
 
 func TestMergeInstance_HookConfig(t *testing.T) {
-	// A non-empty instance hook list REPLACES the global list (#524 Bug B):
-	// replace semantics can express "change or remove a global hook" and stay
-	// stable across save/reload cycles, where append semantics would
-	// duplicate entries. It is identical to append for the previously-
-	// reachable case (global list empty, covered below).
+
 	global := &Config{Hooks: hooks.HookConfig{
 		PreToolUse:  []hooks.Hook{{Command: "echo global-pre"}},
 		PostToolUse: []hooks.Hook{{Command: "echo global-post"}},
@@ -826,7 +789,6 @@ func TestMergeInstance_HookConfig(t *testing.T) {
 		t.Errorf("Active post hook should be instance, got %q", global.Hooks.PostToolUse[0].Command)
 	}
 
-	// Empty instance lists leave the global hooks in place (no accidental wipe).
 	global2 := &Config{Hooks: hooks.HookConfig{
 		PreToolUse: []hooks.Hook{{Command: "echo global-pre"}},
 	}}
@@ -835,8 +797,6 @@ func TestMergeInstance_HookConfig(t *testing.T) {
 		t.Errorf("empty instance hooks must not clear global hooks; got %+v", global2.Hooks.PreToolUse)
 	}
 
-	// Instance hooks on an empty global list are adopted directly (the
-	// previously-reachable case, unchanged by the new semantics).
 	global3 := &Config{}
 	MergeInstance(global3, instance)
 	if len(global3.Hooks.PreToolUse) != 1 || global3.Hooks.PreToolUse[0].Command != "echo instance-pre" {
@@ -956,8 +916,6 @@ func TestMergeInstance_NilInstance(t *testing.T) {
 	}
 }
 
-// --- Coverage: Save merge semantics (replaces former marshalGlobalOnly tests) ---
-
 func TestSave_NoInstanceFields_PreservesExistingFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -966,12 +924,11 @@ func TestSave_NoInstanceFields_PreservesExistingFile(t *testing.T) {
 
 	cfg, _ := Load(globalPath)
 	cfg.globalSnap = deepCopyConfig(cfg)
-	// No instanceFields → should just merge normally
 
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
-	// File should still exist with content
+
 	data, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatalf("reading saved file: %v", err)
@@ -1005,8 +962,6 @@ func TestSave_WithInstanceFields_ExcludesFromGlobal(t *testing.T) {
 	}
 }
 
-// --- Coverage: LoadWithInstance no instance config ---
-
 func TestLoadWithInstance_NoInstanceConfig(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -1021,29 +976,26 @@ func TestLoadWithInstance_NoInstanceConfig(t *testing.T) {
 	if cfg.Language != "en" {
 		t.Errorf("Language = %q, want %q", cfg.Language, "en")
 	}
-	// globalSnap is always set (records original global state)
+
 	if cfg.globalSnap == nil {
 		t.Error("globalSnap should always be set by LoadWithInstance")
 	}
-	// No instance fields should be recorded
+
 	if len(cfg.instanceFields) > 0 {
 		t.Errorf("instanceFields should be empty, got %v", cfg.instanceFields)
 	}
-	// SetInstancePaths is always called — allows user to switch to instance scope
-	// even when no instance config file exists yet.
+
 	if !cfg.HasInstanceConfigAttached() {
 		t.Error("HasInstanceConfigAttached should be true (instanceWS set)")
 	}
 	if cfg.InstanceWorkspace() != workspace {
 		t.Errorf("InstanceWorkspace = %q, want %q", cfg.InstanceWorkspace(), workspace)
 	}
-	// But no instance file exists yet
+
 	if cfg.HasInstanceConfigFile() {
 		t.Error("HasInstanceConfigFile should be false (no file created yet)")
 	}
 }
-
-// --- Coverage: LoadWithInstance with legacy a2a.yaml ---
 
 func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 	withTestHome(t)
@@ -1051,7 +1003,6 @@ func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
 
-	// Create .ggcode/a2a.yaml in workspace
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
 	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"), []byte("auth:\n  api_key: test-key\n"), 0644)
@@ -1065,15 +1016,9 @@ func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 	}
 }
 
-// --- Coverage: writeFileAtomic error paths ---
-
 func TestWriteFileAtomic_BadPath(t *testing.T) {
 	withTestHome(t)
-	// Use an existing FILE as a parent directory component: every platform
-	// fails with ENOTDIR and nothing is created on disk. A literal
-	// "/nonexistent/dir/..." path only errors on systems where the root is
-	// unwritable — on Windows C:\ is writable, so writeSecureConfigFile's
-	// MkdirAll actually creates the tree and pollutes the machine.
+
 	f := filepath.Join(t.TempDir(), "afile")
 	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
 		t.Fatal(err)
@@ -1084,8 +1029,6 @@ func TestWriteFileAtomic_BadPath(t *testing.T) {
 	}
 }
 
-// --- Coverage: remaining merge branches ---
-
 func TestMergeInstance_Scalar_MaxIterations(t *testing.T) {
 	global := &Config{}
 	instance := &Config{MaxIterations: 50}
@@ -1094,7 +1037,6 @@ func TestMergeInstance_Scalar_MaxIterations(t *testing.T) {
 		t.Errorf("MaxIterations = %d, want 50", global.MaxIterations)
 	}
 
-	// Global wins
 	global2 := &Config{MaxIterations: 30}
 	MergeInstance(global2, instance)
 	if global2.MaxIterations != 30 {
@@ -1148,7 +1090,6 @@ func TestMergeInstance_AllowedDirs(t *testing.T) {
 		t.Errorf("AllowedDirs len = %d, want 1", len(global.AllowedDirs))
 	}
 
-	// Global wins
 	global2 := &Config{AllowedDirs: []string{"/home"}}
 	MergeInstance(global2, instance)
 	if len(global2.AllowedDirs) != 1 || global2.AllowedDirs[0] != "/home" {
@@ -1176,8 +1117,6 @@ func TestMergeInstance_Plugins(t *testing.T) {
 	}
 }
 
-// --- Coverage: edge case — instance fields with empty instance ---
-
 func TestMergeInstance_EmptyInstance(t *testing.T) {
 	global := &Config{Language: "en"}
 	instance := &Config{}
@@ -1186,8 +1125,6 @@ func TestMergeInstance_EmptyInstance(t *testing.T) {
 		t.Error("empty instance should not modify global")
 	}
 }
-
-// --- Coverage: SaveGlobalNoLeak end-to-end via LoadWithInstance ---
 
 func TestSaveGlobalNoLeak_EndToEnd(t *testing.T) {
 	withTestHome(t)
@@ -1198,24 +1135,20 @@ func TestSaveGlobalNoLeak_EndToEnd(t *testing.T) {
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
 
-	// Create instance config
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
 		[]byte("default_mode: auto\n"), 0644)
 
-	// Load with instance
 	cfg, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify instance filled the gap
 	if cfg.DefaultMode != "auto" {
 		t.Errorf("DefaultMode = %q, want %q", cfg.DefaultMode, "auto")
 	}
 
-	// Save global — should NOT leak default_mode
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
@@ -1228,14 +1161,11 @@ func TestSaveGlobalNoLeak_EndToEnd(t *testing.T) {
 		t.Error("Save() lost global field 'language'")
 	}
 
-	// Verify instance config still exists and is intact
 	inst := LoadInstanceConfig(workspace)
 	if inst == nil || inst.DefaultMode != "auto" {
 		t.Error("instance config should be unchanged")
 	}
 }
-
-// --- Coverage: MigrateA2AYaml ---
 
 func TestMigrateA2AYaml_NoLegacyFile(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1254,7 +1184,6 @@ func TestMigrateA2AYaml_AlreadyMigrated(t *testing.T) {
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
 	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"), []byte("api_key: test\n"), 0644)
 
-	// Create instance config
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("language: en\n"), 0644)
@@ -1275,7 +1204,7 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	if !MigrateA2AYaml(workspace) {
 		t.Fatal("MigrateA2AYaml should return true on successful migration")
 	}
-	// Verify instance config was created with a2a content
+
 	inst := LoadInstanceConfig(workspace)
 	if inst == nil {
 		t.Fatal("instance config should exist after migration")
@@ -1287,15 +1216,10 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 		t.Errorf("A2A.Host = %q, want %q", inst.A2A.Host, "0.0.0.0")
 	}
 
-	// #1519-B: the legacy file is REMOVED after a successful migration -
-	// keeping it made every load re-merge its values (into the global
-	// yaml via the missing registration AND the instance file via
-	// diffA2A) - double definition, never converging.
 	if _, err := os.Stat(filepath.Join(workspace, ".ggcode", "a2a.yaml")); !os.IsNotExist(err) {
 		t.Errorf("legacy .ggcode/a2a.yaml must be removed after migration, stat err=%v", err)
 	}
 
-	// Second call should return false (already migrated)
 	if MigrateA2AYaml(workspace) {
 		t.Error("second MigrateA2AYaml call should return false")
 	}
@@ -1339,8 +1263,6 @@ func TestMigrateA2AYaml_SecuresPermissions(t *testing.T) {
 	}
 }
 
-// --- Coverage: patchConfigFile & effectiveFilePath ---
-
 func TestEffectiveFilePath_Global(t *testing.T) {
 	cfg := &Config{FilePath: "/home/user/.ggcode/ggcode.yaml"}
 	if cfg.effectiveFilePath("global") != "/home/user/.ggcode/ggcode.yaml" {
@@ -1363,7 +1285,7 @@ func TestEffectiveFilePath_Instance(t *testing.T) {
 
 func TestEffectiveFilePath_InstanceFallback(t *testing.T) {
 	cfg := &Config{FilePath: "/home/user/.ggcode/ggcode.yaml"}
-	// instancePath is empty → fallback to FilePath
+
 	if cfg.effectiveFilePath("instance") != "/home/user/.ggcode/ggcode.yaml" {
 		t.Error("effectiveFilePath should fallback to FilePath when instancePath is empty")
 	}
@@ -1383,7 +1305,6 @@ func TestPatchConfigFile_Global(t *testing.T) {
 		t.Fatalf("patchConfigFile error: %v", err)
 	}
 
-	// Verify file was patched
 	data, _ := os.ReadFile(globalPath)
 	if !strings.Contains(string(data), "zh-CN") {
 		t.Errorf("file should contain zh-CN:\n%s", string(data))
@@ -1403,7 +1324,6 @@ func TestPatchConfigFile_Instance(t *testing.T) {
 	cfg.SetInstancePaths(workspace)
 	cfg.saveScope = "instance"
 
-	// Create instance config
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
@@ -1415,12 +1335,11 @@ func TestPatchConfigFile_Instance(t *testing.T) {
 		t.Fatalf("patchConfigFile error: %v", err)
 	}
 
-	// Verify instance file was patched (not global)
 	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
 	if !strings.Contains(string(instData), "supervised") {
 		t.Errorf("instance file should contain supervised:\n%s", string(instData))
 	}
-	// Global file should be unchanged
+
 	globalData, _ := os.ReadFile(globalPath)
 	if strings.Contains(string(globalData), "supervised") {
 		t.Error("global file should NOT contain supervised")
@@ -1459,7 +1378,6 @@ func TestSaveLanguagePreference_Instance(t *testing.T) {
 	cfg.SetInstancePaths(workspace)
 	cfg.saveScope = "instance"
 
-	// Create instance config
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
@@ -1468,12 +1386,11 @@ func TestSaveLanguagePreference_Instance(t *testing.T) {
 		t.Fatalf("SaveLanguagePreference error: %v", err)
 	}
 
-	// Language should be in instance config
 	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
 	if !strings.Contains(string(instData), "zh-TW") {
 		t.Errorf("instance config should contain zh-TW:\n%s", string(instData))
 	}
-	// Global should be unchanged
+
 	globalData, _ := os.ReadFile(globalPath)
 	if strings.Contains(string(globalData), "zh-TW") {
 		t.Error("global config should NOT contain zh-TW")
@@ -1515,21 +1432,16 @@ func TestSaveDefaultModePreference_Invalid(t *testing.T) {
 	}
 }
 
-// --- Instance keys.env isolation tests ---
-
 func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 
-	// Set up global keys.env with an existing key
 	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
 	os.WriteFile(globalKeysEnv, []byte("export GGCODE_OPENAI_API_KEY='sk-global-key'\n"), 0600)
 
-	// Override keys.env path for testing
 	keysEnvPathOverride = globalKeysEnv
 	defer func() { keysEnvPathOverride = "" }()
 
-	// Create instance config with a different key for the same vendor
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
 	instDir := InstanceDir(workspace)
@@ -1537,7 +1449,6 @@ func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 	instPath := filepath.Join(instDir, "ggcode.yaml")
 	os.WriteFile(instPath, []byte("vendors:\n  openai:\n    api_key: sk-instance-key\n    endpoints:\n      cn:\n        base_url: https://api.example.com\n"), 0644)
 
-	// Run instance migration
 	hash := filepath.Base(instDir)
 	findings, err := MigrateInstancePlaintextAPIKeys(instPath, hash)
 	if err != nil {
@@ -1547,7 +1458,6 @@ func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 		t.Fatal("expected to find plaintext API key in instance config")
 	}
 
-	// Verify global keys.env was NOT changed
 	globalData, _ := os.ReadFile(globalKeysEnv)
 	if strings.Contains(string(globalData), "sk-instance-key") {
 		t.Errorf("global keys.env should NOT contain instance key:\n%s", string(globalData))
@@ -1556,7 +1466,6 @@ func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 		t.Errorf("global keys.env should still contain global key:\n%s", string(globalData))
 	}
 
-	// Verify instance keys.env was created with prefixed var name
 	instKeysEnv := filepath.Join(instDir, "keys.env")
 	instData, err := os.ReadFile(instKeysEnv)
 	if err != nil {
@@ -1569,7 +1478,6 @@ func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 		t.Errorf("instance keys.env should NOT contain global key:\n%s", string(instData))
 	}
 
-	// Verify instance YAML now uses ${PREFIXED_VAR} reference
 	instYAML, _ := os.ReadFile(instPath)
 	if !strings.Contains(string(instYAML), "${GGCODE_I_"+hash+"_") {
 		t.Errorf("instance YAML should use prefixed env var reference:\n%s", string(instYAML))
@@ -1579,26 +1487,21 @@ func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
 func TestLoadInstanceKeysEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create instance keys.env with prefixed vars
 	instDir := filepath.Join(tmpDir, "inst")
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "keys.env"),
 		[]byte("export GGCODE_I_abc123_OPENAI_API_KEY='sk-inst-key'\n"), 0600)
 
-	// Clean env
 	os.Unsetenv("GGCODE_I_abc123_OPENAI_API_KEY")
 
-	// Load instance keys
 	if err := LoadInstanceKeysEnv(instDir); err != nil {
 		t.Fatalf("LoadInstanceKeysEnv error: %v", err)
 	}
 
-	// #2293: keys land in the resolver map, NOT the process environment
-	// (the old os.Setenv leg leaked them to every child command).
 	if _, exists := os.LookupEnv("GGCODE_I_abc123_OPENAI_API_KEY"); exists {
 		t.Error("instance key must NOT be set in the process environment (#2293)")
 	}
-	// #2308: read via the atomic pointer (writer swaps it COW).
+
 	if p := instanceKeysEnvPointer.Load(); p == nil || (*p)["GGCODE_I_abc123_OPENAI_API_KEY"] != "sk-inst-key" {
 		t.Errorf("resolver map not set correctly: got %v, want %q",
 			p, "sk-inst-key")
@@ -1617,14 +1520,6 @@ func TestLoadInstanceKeysEnv_NoFile(t *testing.T) {
 		t.Errorf("LoadInstanceKeysEnv with no keys.env should not error: %v", err)
 	}
 }
-
-// ============================================================
-// COMPREHENSIVE INSTANCE CONFIG SAFETY TESTS
-// These tests verify that instance-level config operations
-// NEVER corrupt, leak into, or overwrite global config.
-// ============================================================
-
-// --- SaveImpersonation: instance scope ---
 
 func TestSaveImpersonation_Instance(t *testing.T) {
 	withTestHome(t)
@@ -1676,7 +1571,6 @@ func TestSaveImpersonation_ClearInstance(t *testing.T) {
 	cfg.SetInstancePaths(workspace)
 	cfg.saveScope = "instance"
 
-	// Clear impersonation
 	err := cfg.SaveImpersonation(ImpersonationConfig{})
 	if err != nil {
 		t.Fatalf("SaveImpersonation clear error: %v", err)
@@ -1687,8 +1581,6 @@ func TestSaveImpersonation_ClearInstance(t *testing.T) {
 		t.Errorf("instance config should not have impersonation after clear:\n%s", string(instData))
 	}
 }
-
-// --- SaveSidebarPreference: instance scope ---
 
 func TestSaveSidebarPreference_Instance(t *testing.T) {
 	withTestHome(t)
@@ -1715,8 +1607,6 @@ func TestSaveSidebarPreference_Instance(t *testing.T) {
 	}
 }
 
-// --- patchConfigFile: instance key migration ---
-
 func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -1737,7 +1627,6 @@ func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 	cfg.SetInstancePaths(workspace)
 	cfg.saveScope = "instance"
 
-	// Patch with a vendor API key — should trigger instance migration
 	err := cfg.patchConfigFile(func(raw map[string]interface{}) {
 		raw["vendors"] = map[string]interface{}{
 			"openai": map[string]interface{}{
@@ -1754,7 +1643,6 @@ func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 		t.Fatalf("patchConfigFile error: %v", err)
 	}
 
-	// Global keys.env must be unchanged
 	globalData, _ := os.ReadFile(globalKeysEnv)
 	if strings.Contains(string(globalData), "sk-instance-key-from-patch") {
 		t.Errorf("global keys.env MUST NOT contain instance key:\n%s", string(globalData))
@@ -1763,7 +1651,6 @@ func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 		t.Errorf("global keys.env lost its original key:\n%s", string(globalData))
 	}
 
-	// Instance keys.env must exist with prefixed key
 	instKeysEnv := filepath.Join(instDir, "keys.env")
 	instKeysData, err := os.ReadFile(instKeysEnv)
 	if err != nil {
@@ -1774,8 +1661,6 @@ func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 		t.Errorf("instance keys.env should use prefixed env var:\n%s", string(instKeysData))
 	}
 }
-
-// --- AddIMAdapter: instance scope with token ---
 
 func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
 	withTestHome(t)
@@ -1808,13 +1693,11 @@ func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
 		t.Fatalf("AddIMAdapter error: %v", err)
 	}
 
-	// Verify instance config has the adapter
 	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
 	if !strings.Contains(string(instData), "mybot") {
 		t.Errorf("instance config should contain adapter 'mybot':\n%s", string(instData))
 	}
 
-	// Global keys.env must still have the original token
 	globalData, _ := os.ReadFile(globalKeysEnv)
 	if !strings.Contains(string(globalData), "global-bot-token") {
 		t.Errorf("global keys.env lost original token:\n%s", string(globalData))
@@ -1823,14 +1706,11 @@ func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
 		t.Errorf("global keys.env MUST NOT contain instance token:\n%s", string(globalData))
 	}
 
-	// Global config must not have the adapter
 	globalCfgData, _ := os.ReadFile(globalPath)
 	if strings.Contains(string(globalCfgData), "mybot") {
 		t.Errorf("global config MUST NOT contain instance adapter:\n%s", string(globalCfgData))
 	}
 }
-
-// --- SetIMAdapterExtra: instance scope ---
 
 func TestSetIMAdapterExtra_Instance(t *testing.T) {
 	withTestHome(t)
@@ -1864,8 +1744,6 @@ func TestSetIMAdapterExtra_Instance(t *testing.T) {
 	}
 }
 
-// --- RemoveIMAdapter: instance scope ---
-
 func TestRemoveIMAdapter_Instance(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -1897,8 +1775,6 @@ func TestRemoveIMAdapter_Instance(t *testing.T) {
 		t.Errorf("global im.yaml should still have globalbot:\n%s", string(globalData))
 	}
 }
-
-// --- SetIMAdapterEnabled: instance scope ---
 
 func TestSetIMAdapterEnabled_Instance(t *testing.T) {
 	withTestHome(t)
@@ -1934,8 +1810,6 @@ func TestSetIMAdapterEnabled_Instance(t *testing.T) {
 	}
 }
 
-// --- AddIMTarget: instance scope ---
-
 func TestAddIMTarget_Instance(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -1967,18 +1841,9 @@ func TestAddIMTarget_Instance(t *testing.T) {
 	}
 }
 
-// ============================================================
-// DISASTER SCENARIO TESTS
-// Verify that no combination of operations corrupts config.
-// ============================================================
-
-// Disaster 1: Global has openai key, instance saves different openai key,
-// then global saves again — global key must survive.
-
 func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
 	withTestHome(t)
-	// LoadWithInstance merges instance config, then Save() must not leak
-	// instance fields into the global file.
+
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1995,10 +1860,8 @@ func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
 		t.Fatalf("DefaultMode should be auto from instance, got %q", cfg.DefaultMode)
 	}
 
-	// Modify a global-only field
 	cfg.Language = "zh-TW"
 
-	// Save to global — instance fields must NOT leak
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
@@ -2014,7 +1877,7 @@ func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
 
 func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
 	withTestHome(t)
-	// Two workspaces with different instance configs — verify no cross-contamination
+
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -2024,12 +1887,10 @@ func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
 	os.MkdirAll(ws1, 0755)
 	os.MkdirAll(ws2, 0755)
 
-	// Instance 1: default_mode = auto
 	inst1Dir := InstanceDir(ws1)
 	os.MkdirAll(inst1Dir, 0755)
 	os.WriteFile(filepath.Join(inst1Dir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
 
-	// Instance 2: default_mode = plan
 	inst2Dir := InstanceDir(ws2)
 	os.MkdirAll(inst2Dir, 0755)
 	os.WriteFile(filepath.Join(inst2Dir, "ggcode.yaml"), []byte("default_mode: plan\n"), 0644)
@@ -2044,19 +1905,16 @@ func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
 		t.Errorf("ws2 DefaultMode = %q, want plan", cfg2.DefaultMode)
 	}
 
-	// Verify global config untouched by both loads
 	globalData, _ := os.ReadFile(globalPath)
 	if strings.Contains(string(globalData), "auto") || strings.Contains(string(globalData), "plan") {
 		t.Errorf("DISASTER: global config contains instance modes!\n%s", string(globalData))
 	}
 
-	// Verify instance 1 config
 	inst1Data, _ := os.ReadFile(filepath.Join(inst1Dir, "ggcode.yaml"))
 	if strings.Contains(string(inst1Data), "plan") {
 		t.Errorf("DISASTER: instance1 config contains ws2 mode 'plan'!\n%s", string(inst1Data))
 	}
 
-	// Verify instance 2 config
 	inst2Data, _ := os.ReadFile(filepath.Join(inst2Dir, "ggcode.yaml"))
 	if strings.Contains(string(inst2Data), "auto") {
 		t.Errorf("DISASTER: instance2 config contains ws1 mode 'auto'!\n%s", string(inst2Data))
@@ -2065,8 +1923,7 @@ func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
 
 func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
 	withTestHome(t)
-	// LoadWithInstance records instanceFields. Then Save() excludes them.
-	// This tests the core guarantee: instance fields never appear in global file.
+
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -2086,14 +1943,12 @@ func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
 		t.Fatal("instanceFields should be populated")
 	}
 
-	// Modify global field and save
 	cfg.Language = "zh-CN"
 	cfg.saveScope = "global"
 	if err := cfg.SaveScoped("global"); err != nil {
 		t.Fatalf("SaveScoped(global) error: %v", err)
 	}
 
-	// Global: has zh-CN, does NOT have "auto"
 	globalData, _ := os.ReadFile(globalPath)
 	if !strings.Contains(string(globalData), "zh-CN") {
 		t.Errorf("global should have zh-CN:\n%s", string(globalData))
@@ -2102,7 +1957,6 @@ func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
 		t.Errorf("DISASTER: global contains instance 'auto'!\n%s", string(globalData))
 	}
 
-	// Instance: still has auto
 	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
 	if !strings.Contains(string(instData), "auto") {
 		t.Errorf("instance should have 'auto':\n%s", string(instData))
@@ -2124,7 +1978,6 @@ func TestSave_LeakPrevention_MultipleInstanceFields(t *testing.T) {
 
 	cfg, _ := LoadWithInstance(globalPath, workspace)
 
-	// Verify instance fields were merged
 	if cfg.DefaultMode != "auto" {
 		t.Errorf("DefaultMode = %q, want auto", cfg.DefaultMode)
 	}
@@ -2135,7 +1988,6 @@ func TestSave_LeakPrevention_MultipleInstanceFields(t *testing.T) {
 		t.Fatal("instanceFields should be populated")
 	}
 
-	// Now save global — instance fields must NOT leak
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
@@ -2175,7 +2027,6 @@ func TestMigrateInstanceKeys_IMAdapterToken(t *testing.T) {
 		t.Fatal("should find bot_token as plaintext key")
 	}
 
-	// Global keys.env must be untouched
 	globalData, _ := os.ReadFile(globalKeysEnv)
 	if !strings.Contains(string(globalData), "global-tg-token") {
 		t.Errorf("global keys.env lost its token:\n%s", string(globalData))
@@ -2184,7 +2035,6 @@ func TestMigrateInstanceKeys_IMAdapterToken(t *testing.T) {
 		t.Errorf("DISASTER: instance IM token leaked to global keys.env!\n%s", string(globalData))
 	}
 
-	// Instance keys.env must have prefixed token
 	instKeysData, _ := os.ReadFile(filepath.Join(instDir, "keys.env"))
 	prefix := "GGCODE_I_" + hash + "_"
 	if !strings.Contains(string(instKeysData), prefix) {
@@ -2195,11 +2045,8 @@ func TestMigrateInstanceKeys_IMAdapterToken(t *testing.T) {
 	}
 }
 
-// --- Verify IM adapter extra merge doesn't lose global extra ---
-
 func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
-	// When global and instance have same adapter name, global wins (adapter-level isolation).
-	// Instance adapter with a NEW name gets added.
+
 	global := &Config{IM: IMConfig{
 		Enabled: true,
 		Adapters: map[string]IMAdapterConfig{
@@ -2212,11 +2059,11 @@ func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
 	instance := &Config{IM: IMConfig{
 		Adapters: map[string]IMAdapterConfig{
 			"globalbot": {
-				// Same name as global — global wins, this is ignored
+
 				Extra: map[string]interface{}{"bot_token": "instance-token"},
 			},
 			"instancebot": {
-				// New adapter — gets added
+
 				Platform: "slack",
 				Extra:    map[string]interface{}{"bot_token": "instance-slack-token"},
 			},
@@ -2225,13 +2072,11 @@ func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
 
 	MergeInstance(global, instance)
 
-	// Global adapter unchanged
 	globalBot := global.IM.Adapters["globalbot"]
 	if globalBot.Extra["bot_token"] != "global-token" {
 		t.Errorf("global adapter should keep its token, got %v", globalBot.Extra["bot_token"])
 	}
 
-	// Instance adapter added
 	instBot, ok := global.IM.Adapters["instancebot"]
 	if !ok {
 		t.Fatal("instance adapter 'instancebot' should be added")
@@ -2240,8 +2085,6 @@ func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
 		t.Errorf("instance adapter should have its token, got %v", instBot.Extra["bot_token"])
 	}
 }
-
-// --- MCP server instance migration ---
 
 func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
 	withTestHome(t)
@@ -2267,13 +2110,11 @@ func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
 		t.Fatal("should find MCP env as plaintext key")
 	}
 
-	// Global keys.env untouched
 	globalData, _ := os.ReadFile(globalKeysEnv)
 	if strings.Contains(string(globalData), "instance-mcp-key") {
 		t.Errorf("DISASTER: instance MCP key leaked to global:\n%s", string(globalData))
 	}
 
-	// Instance keys.env has prefixed MCP key
 	instKeysData, _ := os.ReadFile(filepath.Join(instDir, "keys.env"))
 	if !strings.Contains(string(instKeysData), "GGCODE_I_"+hash+"_") {
 		t.Errorf("instance keys.env should use prefix:\n%s", string(instKeysData))
@@ -2288,19 +2129,16 @@ func TestHasInstanceConfigFile(t *testing.T) {
 
 	workspace := filepath.Join(tmpDir, "project")
 
-	// No instance at all — false
 	cfg, _ := Load(globalPath)
 	if cfg.HasInstanceConfigFile() {
 		t.Error("should be false without LoadWithInstance")
 	}
 
-	// LoadWithInstance but no file — false
 	cfg, _ = LoadWithInstance(globalPath, workspace)
 	if cfg.HasInstanceConfigFile() {
 		t.Error("should be false when instance file doesn't exist yet")
 	}
 
-	// Create instance file — true
 	instDir := InstanceDir(workspace)
 	os.MkdirAll(instDir, 0755)
 	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("language: zh\n"), 0644)
@@ -2309,8 +2147,6 @@ func TestHasInstanceConfigFile(t *testing.T) {
 		t.Error("should be true when instance file exists")
 	}
 }
-
-// --- SetIMAdapterEnabled: global scope ---
 
 func TestSetIMAdapterEnabled_Global(t *testing.T) {
 	withTestHome(t)
@@ -2323,12 +2159,10 @@ func TestSetIMAdapterEnabled_Global(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Disable
 	if err := cfg.SetIMAdapterEnabled("mybot", false); err != nil {
 		t.Fatalf("SetIMAdapterEnabled(false): %v", err)
 	}
 
-	// Reload and verify persisted
 	reloaded, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
@@ -2341,7 +2175,6 @@ func TestSetIMAdapterEnabled_Global(t *testing.T) {
 		t.Errorf("adapter should be disabled, got enabled=%v", adapter.Enabled)
 	}
 
-	// Re-enable
 	if err := reloaded.SetIMAdapterEnabled("mybot", true); err != nil {
 		t.Fatalf("SetIMAdapterEnabled(true): %v", err)
 	}
@@ -2407,12 +2240,10 @@ func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Disable qq1
 	if err := cfg.SetIMAdapterEnabled("qq1", false); err != nil {
 		t.Fatalf("SetIMAdapterEnabled qq1 false: %v", err)
 	}
 
-	// Reload — qq1 should be disabled, tg1 enabled
 	cfg2, _ := Load(cfgPath)
 	if cfg2.IM.Adapters["qq1"].Enabled != false {
 		t.Error("qq1 should be disabled after reload")
@@ -2421,12 +2252,10 @@ func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 		t.Error("tg1 should remain enabled")
 	}
 
-	// Disable tg1 too
 	if err := cfg2.SetIMAdapterEnabled("tg1", false); err != nil {
 		t.Fatalf("SetIMAdapterEnabled tg1 false: %v", err)
 	}
 
-	// Reload — both disabled
 	cfg3, _ := Load(cfgPath)
 	if cfg3.IM.Adapters["qq1"].Enabled != false {
 		t.Error("qq1 should still be disabled")
@@ -2435,12 +2264,10 @@ func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 		t.Error("tg1 should be disabled")
 	}
 
-	// Re-enable qq1
 	if err := cfg3.SetIMAdapterEnabled("qq1", true); err != nil {
 		t.Fatalf("SetIMAdapterEnabled qq1 true: %v", err)
 	}
 
-	// Reload — qq1 enabled, tg1 disabled
 	cfg4, _ := Load(cfgPath)
 	if cfg4.IM.Adapters["qq1"].Enabled != true {
 		t.Error("qq1 should be re-enabled")
@@ -2459,7 +2286,6 @@ func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
 
-	// Process A loads and adds a custom vendor
 	cfgA, _ := Load(globalPath)
 	if cfgA.Vendors == nil {
 		cfgA.Vendors = make(map[string]VendorConfig)
@@ -2475,28 +2301,24 @@ func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 		t.Fatalf("Process A save: %v", err)
 	}
 
-	// Verify vendor was written to vendors.yaml (external file)
 	vendorsPath := VendorsPath(filepath.Dir(globalPath))
 	dataA, _ := os.ReadFile(vendorsPath)
 	if !strings.Contains(string(dataA), "myvendor") {
 		t.Fatalf("vendor myvendor should be in vendors.yaml after Process A save:\n%s", string(dataA))
 	}
 
-	// Process B loads the same file (simulating a separate instance)
 	cfgB, _ := Load(globalPath)
-	// Process B changes language — its in-memory config may not have myvendor
-	// if it was stripped by defaults or lost during load.
+
 	cfgB.Language = "zh-CN"
 	if err := cfgB.Save(); err != nil {
 		t.Fatalf("Process B save: %v", err)
 	}
 
-	// Verify: myvendor must STILL be in vendors.yaml (external file preserved it)
 	dataB, _ := os.ReadFile(vendorsPath)
 	if !strings.Contains(string(dataB), "myvendor") {
 		t.Errorf("DISASTER: Process B's save clobbered Process A's vendor!\n%s", string(dataB))
 	}
-	// Language change should be in main config file (not vendors.yaml)
+
 	mainData, _ := os.ReadFile(globalPath)
 	if !strings.Contains(string(mainData), "zh-CN") {
 		t.Errorf("Process B's language change should be in main config:\n%s", string(mainData))
@@ -2510,7 +2332,7 @@ func TestSave_MergePreservesUnknownYAMLFields(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
-	// Write a config with a future/unknown field
+
 	os.WriteFile(globalPath, []byte("language: en\nfuture_field: {nested: value}\n"), 0644)
 
 	cfg, _ := Load(globalPath)

@@ -1,9 +1,5 @@
 package config
 
-// #3524 probe: migrateMCPFinding must resolve server identity the same way
-// detectPlaintextAPIKeysFromRaw does (name, or mcp_%d for anonymous) and
-// must migrate duplicate-named servers, not just the first match.
-
 import (
 	"strings"
 	"testing"
@@ -26,7 +22,7 @@ func srvEnv(name string, env map[string]interface{}) map[string]interface{} {
 }
 
 func TestIssue3524_AnonymousServerMigrates(t *testing.T) {
-	// Anonymous server at index 0: detect names it "mcp_0".
+
 	raw := rawWithServers(srvEnv("", map[string]interface{}{"TOKEN": "sk-plain-123456"}))
 	f := APIKeyFinding{Section: "mcp_env", KeyPath: "mcp_servers[mcp_0].env.TOKEN", EnvVar: "MCP_0_TOKEN"}
 	entries := map[string]string{}

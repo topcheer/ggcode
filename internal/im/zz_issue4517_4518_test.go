@@ -8,15 +8,10 @@ import (
 	"testing"
 )
 
-// fakeCloser records Close calls for the #4518 behavioral test.
 type fakeCloser struct{ closed int }
 
 func (f *fakeCloser) Close() error { f.closed++; return nil }
 
-// #4518: Close() must close the crypto db handle - it used to only flip
-// closed/connected and cancel, so a MuteBinding → stopAdapter → Close path
-// (which never re-enters openPersistentCryptoStore) leaked the SQLite
-// connection (and its _txlock=immediate file lock) until process exit.
 func TestIssue4518_CloseClosesCryptoDB(t *testing.T) {
 	a := &matrixAdapter{}
 	fc := &fakeCloser{}
@@ -30,7 +25,7 @@ func TestIssue4518_CloseClosesCryptoDB(t *testing.T) {
 	if a.cryptoDBCloser != nil {
 		t.Fatal("cryptoDBCloser must be nil after Close (idempotent re-entry)")
 	}
-	// Idempotent: a second Close must not double-close.
+
 	if err := a.Close(); err != nil {
 		t.Fatalf("second close: %v", err)
 	}
@@ -39,10 +34,6 @@ func TestIssue4518_CloseClosesCryptoDB(t *testing.T) {
 	}
 }
 
-// #4517 pin: the #433-missed read sites must go through currentClient()
-// (the RLock snapshot helper) instead of raw a.client / s.adapter.client
-// reads, and the success-path mach write must be lock-guarded like the
-// failure path already was.
 func TestIssue4517_MissedSitesSnapshotUnderLock(t *testing.T) {
 	b, err := os.ReadFile("matrix_adapter.go")
 	if err != nil {
@@ -71,7 +62,7 @@ func TestIssue4517_MissedSitesSnapshotUnderLock(t *testing.T) {
 			t.Fatalf("#4517 regression: raw client read in %s", site)
 		}
 	}
-	// The mach success-path write must be lock-guarded.
+
 	machIdx := strings.LastIndex(s, "a.mach = mach")
 	if machIdx < 0 {
 		t.Fatal("mach write not found")

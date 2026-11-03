@@ -19,7 +19,7 @@ func TestIssue4698_KeyRetryCtxAware(t *testing.T) {
 	if i < 0 {
 		t.Fatal("ctx cancellation abort missing from the retry loop (#4698)")
 	}
-	// The select must sit INSIDE the retry loop, before the decrypt call.
+
 	region := text[max(0, i-600) : i+400]
 	if !strings.Contains(region, "case <-ctx.Done():") || !strings.Contains(region, "case <-time.After(800 * time.Millisecond):") {
 		t.Fatal("retry wait must be a select over ctx.Done and time.After (#4698)")

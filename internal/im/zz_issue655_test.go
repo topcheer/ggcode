@@ -27,7 +27,6 @@ func newIssue655Bridge() *DaemonBridge {
 func TestIssue655SingleRegistrationChoice(t *testing.T) {
 	b := newIssue655Bridge()
 
-	// Pretend the interactive send recorded a message ID for adapter "test".
 	b.mu.Lock()
 	b.interactiveMsgIDs = map[string]string{"test": "m1"}
 	b.mu.Unlock()
@@ -68,15 +67,11 @@ func TestIssue655SingleRegistrationChoice(t *testing.T) {
 	if pending == nil {
 		t.Fatal("pendingAsk never registered")
 	}
-	// #2134: production registration writes the emitted IDs onto the
-	// pending question itself - mirror that for the simulated interactive
-	// send (the empty test emitter emits nothing on its own).
+
 	b.mu.Lock()
 	pending.msgIDs = map[string]string{"test": "m1"}
 	b.mu.Unlock()
 
-	// Callback for the exact interactive message — must resolve the CURRENT
-	// registration (the only one) so HandleAskUser returns promptly.
 	b.handleInteractiveCallback(InteractiveCallback{
 		Adapter:   "test",
 		MessageID: "m1",
@@ -104,19 +99,16 @@ func TestIssue655SingleRegistrationChoice(t *testing.T) {
 func TestIssue655AnswerDoesNotClearNextRegistration(t *testing.T) {
 	b := newIssue655Bridge()
 
-	// Q1 registered with interactive message m2.
 	first := &pendingAskUser{
 		request:  toolpkg.AskUserRequest{},
 		response: make(chan toolpkg.AskUserResponse, 1),
-		msgIDs:   map[string]string{"test": "m2"}, // #2134: ownership mirror
+		msgIDs:   map[string]string{"test": "m2"},
 	}
 	b.mu.Lock()
 	b.pendingAsk = first
 	b.interactiveMsgIDs = map[string]string{"test": "m2"}
 	b.mu.Unlock()
 
-	// Answer Q1 via the production callback path — must deliver into first's
-	// channel AND clear pendingAsk (it is still the current registration).
 	b.handleInteractiveCallback(InteractiveCallback{Adapter: "test", MessageID: "m2", Values: []string{"x"}})
 	select {
 	case <-first.response:
@@ -130,9 +122,6 @@ func TestIssue655AnswerDoesNotClearNextRegistration(t *testing.T) {
 		t.Fatal("answered registration was not cleared")
 	}
 
-	// Q2 gets registered (with its own interactive message m3) — then a LATE
-	// duplicate callback for Q1's message m2 arrives. The correlation guard
-	// must drop it and Q2's registration must survive untouched.
 	next := &pendingAskUser{
 		request:  toolpkg.AskUserRequest{},
 		response: make(chan toolpkg.AskUserResponse, 1),

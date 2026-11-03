@@ -80,7 +80,6 @@ func TestDummyAdapter_SendRecordsMetrics(t *testing.T) {
 func TestEvalMetrics_RecordEvent(t *testing.T) {
 	m := NewEvalMetrics()
 
-	// Tool result — success
 	m.RecordEvent(OutboundEvent{
 		Kind: OutboundEventToolResult,
 		ToolRes: &ToolResultInfo{
@@ -95,7 +94,6 @@ func TestEvalMetrics_RecordEvent(t *testing.T) {
 		t.Errorf("ToolErrors=%d, want 0", m.ToolErrors)
 	}
 
-	// Tool result — error
 	m.RecordEvent(OutboundEvent{
 		Kind: OutboundEventToolResult,
 		ToolRes: &ToolResultInfo{
@@ -110,7 +108,6 @@ func TestEvalMetrics_RecordEvent(t *testing.T) {
 		t.Errorf("ToolErrorsByTool[\"bash\"]=%d, want 1", m.ToolErrorsByTool["bash"])
 	}
 
-	// Knight report detection
 	m.RecordEvent(OutboundEvent{
 		Kind: OutboundEventText,
 		Text: "🌙 Knight detected a pattern",
@@ -119,7 +116,6 @@ func TestEvalMetrics_RecordEvent(t *testing.T) {
 		t.Errorf("KnightReports=%d, want 1", m.KnightReports)
 	}
 
-	// Round done detection (text with tool counts)
 	m.RecordEvent(OutboundEvent{
 		Kind: OutboundEventText,
 		Text: "Round complete: 5 tool calls (4 success, 1 failure)",
@@ -128,10 +124,6 @@ func TestEvalMetrics_RecordEvent(t *testing.T) {
 		t.Errorf("Rounds=%d, want 1", m.Rounds)
 	}
 
-	// Rework detection — consecutive same tool
-	// Up to this point, "bash" was called twice in a row (success then error),
-	// which already added 1 rework. Now test with "edit" — two consecutive
-	// calls will add 1 more rework.
 	m.RecordEvent(OutboundEvent{
 		Kind:    OutboundEventToolResult,
 		ToolRes: &ToolResultInfo{ToolName: "edit", IsError: true},
@@ -215,17 +207,15 @@ func TestDummyServer_StatusEndpoint(t *testing.T) {
 }
 
 func TestDummyAdapter_IntegrationFlow(t *testing.T) {
-	// Setup
+
 	mgr, _ := testDummyManager()
 	adapterCfg := testDummyAdapterConfig(t)
 	a := newDummyAdapter("eval", config.IMConfig{}, adapterCfg, mgr)
 
-	// Auto-bind
 	if err := a.autoBind(); err != nil {
 		t.Fatalf("autoBind: %v", err)
 	}
 
-	// Create HTTP server
 	srv := newHTTPServer(a)
 	handler := srv.handler()
 
@@ -234,7 +224,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 	var submitMu sync.Mutex
 	mgr.SetBridge(&captureBridge{mu: &submitMu, msgs: &submitted})
 
-	// Simulate agent sending events to the adapter (Sink.Send)
 	binding := ChannelBinding{
 		Workspace: "/tmp/test-workspace",
 		Platform:  PlatformDummy,
@@ -243,7 +232,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// 1. Agent sends tool result
 	a.Send(ctx, binding, OutboundEvent{
 		Kind: OutboundEventToolResult,
 		ToolRes: &ToolResultInfo{
@@ -253,19 +241,16 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		},
 	})
 
-	// 2. Agent sends text (round summary)
 	a.Send(ctx, binding, OutboundEvent{
 		Kind: OutboundEventText,
 		Text: "All tests passed. tool calls: 3",
 	})
 
-	// 3. Agent sends knight report
 	a.Send(ctx, binding, OutboundEvent{
 		Kind: OutboundEventText,
 		Text: "🌙 Detected repeated build-test pattern, creating skill",
 	})
 
-	// Verify metrics
 	m := a.metrics
 	if m.TotalToolCalls != 1 {
 		t.Errorf("TotalToolCalls=%d, want 1", m.TotalToolCalls)
@@ -277,7 +262,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		t.Errorf("Rounds=%d, want 1", m.Rounds)
 	}
 
-	// 4. Orchestrator sends message via HTTP
 	body := `{"text":"fix the failing test in internal/extract"}`
 	req := httptest.NewRequest("POST", "/send", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -288,9 +272,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		t.Fatalf("POST /send status=%d, want 200", w.Code)
 	}
 
-	// Wait for the async HandleInbound goroutine to submit the message.
-	// The HTTP handler spawns a goroutine via safego.Go, so we need to
-	// give it time to complete.
 	for i := 0; i < 50; i++ {
 		submitMu.Lock()
 		count := len(submitted)
@@ -301,7 +282,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Verify message was submitted to bridge
 	submitMu.Lock()
 	if len(submitted) != 1 {
 		t.Fatalf("submitted messages=%d, want 1", len(submitted))
@@ -317,12 +297,10 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 	}
 	submitMu.Unlock()
 
-	// Verify metrics track user message
 	if m.UserMessages != 1 {
 		t.Errorf("UserMessages=%d, want 1", m.UserMessages)
 	}
 
-	// 5. Check status endpoint
 	req2 := httptest.NewRequest("GET", "/status", nil)
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -330,8 +308,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		t.Errorf("GET /status status=%d, want 200", w2.Code)
 	}
 }
-
-// --- test helpers ---
 
 // captureBridge records submitted messages for test assertions.
 type captureBridge struct {

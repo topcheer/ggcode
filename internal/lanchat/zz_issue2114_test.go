@@ -1,14 +1,5 @@
 package lanchat
 
-// #2114 regression:
-//   - sendReceipt ignored http.NewRequest's error: a malformed peer
-//     Endpoint (arbitrary string from presence JSON) left req nil and
-//     req.Header.Set panicked inside the safego wrapper - the receipt was
-//     silently lost.
-//   - receipts grew without bound; every DM receipt from every LAN agent
-//     added a permanent entry. Now FIFO-evicted at receiptCap, mirroring
-//     markSeenLocked.
-
 import (
 	"testing"
 )
@@ -29,7 +20,7 @@ func TestReceiptsFIFOEviction(t *testing.T) {
 	if len(h.receiptOrder) != receiptCap {
 		t.Fatalf("receiptOrder = %d, want %d", len(h.receiptOrder), receiptCap)
 	}
-	// The oldest 50 must be evicted; the newest must survive.
+
 	if _, ok := h.receipts["msg-a-0"]; ok {
 		t.Fatal("oldest receipt must be evicted")
 	}

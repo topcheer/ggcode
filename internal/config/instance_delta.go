@@ -18,22 +18,18 @@ func (c *Config) marshalInstanceDelta() map[string]interface{} {
 	delta := map[string]interface{}{}
 
 	if c.globalSnap == nil {
-		// No global snapshot — try to load the global config file as baseline.
+
 		if c.FilePath != "" {
 			if globalCfg, err := Load(c.FilePath); err == nil {
 				c.globalSnap = globalCfg
 			}
 		}
 		if c.globalSnap == nil {
-			// No global file either. This happens when SaveInstance is called on
-			// a manually-constructed Config (e.g. tests, or config set via slash
-			// commands before any file exists). Use an empty Config as the baseline
-			// so all non-zero fields are included in the delta.
+
 			c.globalSnap = &Config{}
 		}
 	}
 
-	// Compare each scalar field.
 	c.diffScalar("vendor", c.Vendor, c.globalSnap.Vendor, delta)
 	c.diffScalar("endpoint", c.Endpoint, c.globalSnap.Endpoint, delta)
 	c.diffScalar("model", c.Model, c.globalSnap.Model, delta)
@@ -42,32 +38,16 @@ func (c *Config) marshalInstanceDelta() map[string]interface{} {
 	c.diffScalar("default_mode", c.DefaultMode, c.globalSnap.DefaultMode, delta)
 	c.diffInt("max_iterations", c.MaxIterations, c.globalSnap.MaxIterations, delta)
 
-	// UI
 	c.diffUI(&c.UI, &c.globalSnap.UI, delta)
 
-	// IM — only write the whole im block if something changed
 	c.diffIM(&c.IM, &c.globalSnap.IM, delta)
 
-	// Vendors — only include vendors that exist in current but not in globalSnap
 	c.diffVendors(c.Vendors, c.globalSnap.Vendors, delta)
 
-	// A2A
 	c.diffA2A(&c.A2A, &c.globalSnap.A2A, delta)
 
-	// Knight
 	c.diffKnight(&c.KnightConfig, &c.globalSnap.KnightConfig, delta)
 
-	// Impersonation
-	// #2936: compare CustomHeaders by content, not length — a same-length
-	// key swap (e.g. {a:1} -> {b:2}) or a full clear previously produced a
-	// delta indistinguishable from "unchanged" and the stale disk value
-	// resurrected via deep-merge. Write all three fields unconditionally
-	// (snapshot semantics): the delta is a map, an explicit "" or empty
-	// map overwrites the deep-merged old value — same #1519-C reasoning.
-	// CustomHeaders is map[string]string, which fails the
-	// map[string]interface{} assertion in deepMergeYAMLMaps and is therefore
-	// replaced wholesale rather than key-merged, so swaps and clears both
-	// round-trip correctly.
 	if c.Impersonation.Preset != c.globalSnap.Impersonation.Preset ||
 		c.Impersonation.CustomVersion != c.globalSnap.Impersonation.CustomVersion ||
 		!reflect.DeepEqual(c.Impersonation.CustomHeaders, c.globalSnap.Impersonation.CustomHeaders) {
@@ -78,48 +58,32 @@ func (c *Config) marshalInstanceDelta() map[string]interface{} {
 		delta["impersonation"] = impMap
 	}
 
-	// AllowedDirs
 	c.diffStringSlice("allowed_dirs", c.AllowedDirs, c.globalSnap.AllowedDirs, delta)
 
-	// ToolPerms — only include tool permissions that exist in current but not globalSnap
 	c.diffToolPerms(c.ToolPerms, c.globalSnap.ToolPerms, delta)
 
-	// MCPServers
 	c.diffSlice("mcp_servers", c.MCPServers, c.globalSnap.MCPServers, delta)
 
-	// Plugins
 	c.diffSlice("plugins", c.Plugins, c.globalSnap.Plugins, delta)
 
-	// SubAgents
 	c.diffSubAgents(&c.SubAgents, &c.globalSnap.SubAgents, delta)
 
-	// Swarm
 	c.diffSwarm(&c.Swarm, &c.globalSnap.Swarm, delta)
 
-	// Hooks
 	c.diffHooks(&c.Hooks, &c.globalSnap.Hooks, delta)
 
 	return delta
 }
 
-// --- diff helpers ---
-
 func (*Config) diffScalar(key, current, global string, delta map[string]interface{}) {
-	// #1519-C: no zero-value suppression. The delta is a MAP - an explicit
-	// "" overwrites the deep-merged old value correctly, and Save() strips
-	// registered fields either way. The old guard made a reset-to-default
-	// (e.g. clearing system_prompt) silently impossible: the diff dropped
-	// it, SaveInstance kept the stale merged value, and the old value
-	// resurrected on reload with no error. The im.enabled bool diff never
-	// had this suppression - it round-trips false fine.
+
 	if current != global {
 		delta[key] = current
 	}
 }
 
 func (*Config) diffInt(key string, current, global int, delta map[string]interface{}) {
-	// #1519-C: same reasoning as diffScalar - clearing max_iterations to 0
-	// ("use the global default") was silently dropped and 80 resurrected.
+
 	if current != global {
 		delta[key] = current
 	}
@@ -146,7 +110,7 @@ func (*Config) diffStringSlice(key string, current, global []string, delta map[s
 }
 
 func (*Config) diffSlice(key string, current, global interface{}, delta map[string]interface{}) {
-	// Use YAML round-trip to compare — only include if different.
+
 	cData, _ := yaml.Marshal(current)
 	gData, _ := yaml.Marshal(global)
 	if len(cData) > 0 && string(cData) != string(gData) {
@@ -157,7 +121,6 @@ func (*Config) diffSlice(key string, current, global interface{}, delta map[stri
 func (*Config) diffUI(current, global *UIConfig, delta map[string]interface{}) {
 	uiDelta := map[string]interface{}{}
 
-	// SidebarVisible: compare pointer values
 	curVal := current.SidebarVisible != nil && *current.SidebarVisible
 	gloVal := global.SidebarVisible != nil && *global.SidebarVisible
 	if current.SidebarVisible != nil && (global.SidebarVisible == nil || curVal != gloVal) {
@@ -178,7 +141,7 @@ func (cfg *Config) diffIM(current, global *IMConfig, delta map[string]interface{
 	if current.ActiveSessionPolicy != global.ActiveSessionPolicy && current.ActiveSessionPolicy != "" {
 		imDelta["active_session_policy"] = current.ActiveSessionPolicy
 	}
-	// RequireLocalSession
+
 	if current.RequireLocalSession != nil && (global.RequireLocalSession == nil ||
 		*current.RequireLocalSession != *global.RequireLocalSession) {
 		imDelta["require_local_session"] = *current.RequireLocalSession
@@ -186,19 +149,19 @@ func (cfg *Config) diffIM(current, global *IMConfig, delta map[string]interface{
 	if current.OutputMode != global.OutputMode && current.OutputMode != "" {
 		imDelta["output_mode"] = current.OutputMode
 	}
-	// Streaming
+
 	if current.Streaming.Enabled != global.Streaming.Enabled {
 		streamDelta := map[string]interface{}{}
 		streamDelta["enabled"] = current.Streaming.Enabled
 		imDelta["streaming"] = streamDelta
 	}
-	// STT
+
 	if current.STT.Provider != global.STT.Provider && current.STT.Provider != "" {
 		sttDelta := map[string]interface{}{}
 		sttDelta["provider"] = current.STT.Provider
 		imDelta["stt"] = sttDelta
 	}
-	// Adapters — only include adapters that exist in current but not in global
+
 	for k, v := range current.Adapters {
 		if _, exists := global.Adapters[k]; !exists {
 			adapterMap := map[string]interface{}{
@@ -231,11 +194,11 @@ func (*Config) diffVendors(current, global map[string]VendorConfig, delta map[st
 	for k, v := range current {
 		gv, exists := global[k]
 		if !exists {
-			// Vendor only in current — include it
+
 			vendorDelta[k] = v
 			continue
 		}
-		// Vendor exists in both — check if they differ
+
 		cData, _ := yaml.Marshal(v)
 		gData, _ := yaml.Marshal(gv)
 		if string(cData) != string(gData) {
@@ -259,22 +222,16 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	if current.Host != global.Host {
 		a2aDelta["host"] = current.Host
 	}
-	// NOTE: api_key is written ONLY via authDelta below (#3531). The old
-	// first write here could record an explicit clear (""), which the later
-	// `a2aDelta["auth"] = authDelta` wholesale-overwrote whenever any other
-	// auth field was added - silently dropping the clear from the delta.
+
 	if current.MaxTasks != global.MaxTasks {
 		a2aDelta["max_tasks"] = current.MaxTasks
 	}
 	if current.TaskTimeout != global.TaskTimeout {
 		a2aDelta["task_timeout"] = current.TaskTimeout
 	}
-	// Auth
+
 	authDelta := map[string]interface{}{}
-	// #3531: no `!= ""` guard - an explicit CLEAR (api_key set to "") must
-	// stay in the delta so deepMerge materializes it. The guard used to
-	// drop clears, and together with the removed first write they vanished
-	// whenever another auth field was also being added.
+
 	if current.Auth.APIKey != global.Auth.APIKey {
 		authDelta["api_key"] = current.Auth.APIKey
 	}
@@ -305,10 +262,7 @@ func (*Config) diffKnight(current, global *KnightConfig, delta map[string]interf
 	if current.Enabled != global.Enabled {
 		knightDelta["enabled"] = current.Enabled
 	}
-	// #2936: no zero-value suppression on these three — same #1519-C
-	// reasoning as diffScalar/diffInt: the delta is a map, an explicit ""/
-	// 0 ("use the global default") overwrites the deep-merged old value.
-	// The old guards made a nested reset silently impossible.
+
 	if current.TrustLevel != global.TrustLevel {
 		knightDelta["trust_level"] = current.TrustLevel
 	}
@@ -342,11 +296,7 @@ func (*Config) diffToolPerms(current, global map[string]ToolPermission, delta ma
 	}
 	permDelta := map[string]interface{}{}
 	for k, v := range current {
-		// Write the key when the VALUE differs from global, not only when the
-		// key is absent from global (#524 Bug A, write side). The old
-		// existence-only check silently dropped instance-scope value changes
-		// (e.g. allow→deny on a globally-configured tool), making SaveInstance
-		// a no-op that returned success while the override was lost.
+
 		if gv, exists := global[k]; !exists || gv != v {
 			permDelta[k] = string(v)
 		}
@@ -358,8 +308,7 @@ func (*Config) diffToolPerms(current, global map[string]ToolPermission, delta ma
 
 func (*Config) diffSubAgents(current, global *SubAgentConfig, delta map[string]interface{}) {
 	subDelta := map[string]interface{}{}
-	// #2936: no zero-value suppression — nested reset must reach the
-	// deep merge as an explicit 0/"0s" to overwrite the stale value.
+
 	if current.MaxConcurrent != global.MaxConcurrent {
 		subDelta["max_concurrent"] = current.MaxConcurrent
 	}
@@ -373,8 +322,7 @@ func (*Config) diffSubAgents(current, global *SubAgentConfig, delta map[string]i
 
 func (*Config) diffSwarm(current, global *SwarmConfig, delta map[string]interface{}) {
 	swDelta := map[string]interface{}{}
-	// #2936: no zero-value suppression — nested reset must reach the
-	// deep merge as an explicit 0/"0s" to overwrite the stale value.
+
 	if current.MaxTeammatesPerTeam != global.MaxTeammatesPerTeam {
 		swDelta["max_teammates_per_team"] = current.MaxTeammatesPerTeam
 	}
@@ -394,12 +342,7 @@ func (*Config) diffSwarm(current, global *SwarmConfig, delta map[string]interfac
 
 func (*Config) diffHooks(current, global *hooks.HookConfig, delta map[string]interface{}) {
 	hookDelta := map[string]interface{}{}
-	// The old `len(global.X)==0` guard silently dropped every instance hook
-	// change whenever the global config already had hooks (#524 Bug B). With
-	// replace-on-merge semantics (mergeHookConfig), write the instance list
-	// whenever it differs from the global list: on reload the instance list
-	// replaces the global one verbatim — neither dropped (the old guard) nor
-	// duplicated (what append semantics would do across save/reload cycles).
+
 	if len(current.PreToolUse) > 0 && !hookSlicesEqual(current.PreToolUse, global.PreToolUse) {
 		hookDelta["pre_tool_use"] = current.PreToolUse
 	}

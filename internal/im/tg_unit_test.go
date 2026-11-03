@@ -14,8 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// --- TG pure functions unit tests ---
-
 func TestSplitTGMessage(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -125,14 +123,14 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_edit", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`}}, "✏ 编辑文件: `main.go`"},
 		{"tool_call_todo", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "todo_write"}}, "📋 更新待办列表"},
 		{"tool_result_nil", OutboundEvent{Kind: OutboundEventToolResult}, ""},
-		// Tool results — new style
+
 		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "✅ 命令完成"},
 		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "✅\n```\nls\n```"},
 		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"bad_cmd"}`, Result: "command not found", IsError: true}}, "❌\n```\nbad_cmd\n```\n```\ncommand not found\n```"},
 		{"tool_result_read_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"chart.html"}`, Result: "file content..."}}, "📖 chart.html"},
 		{"tool_result_read_ok_nopath", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "content"}}, "📖 Read"},
 		{"tool_result_read_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"missing.txt"}`, Result: "no such file", IsError: true}}, "📖 missing.txt\n```\nno such file\n```"},
-		// read_file format-aware display
+
 		{"tool_call_read_pdf", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"report.pdf"}`}}, "📄 读取 PDF: `report.pdf`"},
 		{"tool_call_read_xlsx", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"data.xlsx"}`}}, "📊 读取 Excel: `data.xlsx`"},
 		{"tool_call_read_zip", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"/tmp/src.zip"}`}}, "📦 读取 ZIP: `src.zip`"},
@@ -143,7 +141,7 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_result_read_docx_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"doc.docx"}`, Result: "[Extracted from docx]\n     1\thello world"}}, "📄 doc.docx (读取 1 行)"},
 		{"tool_result_read_zip_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"src.zip"}`, Result: "[Archive: zip format, 15 files]\n\n--- README.md ---\nhello"}}, "📦 src.zip (15 个文件)"},
 		{"tool_result_read_zip_truncated", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"big.tar.gz"}`, Result: "[Archive: tar.gz format, 500 files]\n[Showing first 500 of 1000 files]\n--- main.go ---\npackage main"}}, "📦 big.tar.gz (1000 个文件, 展示前 500)"},
-		// read_file with range
+
 		{"tool_call_read_offset", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"log.txt","offset":100,"limit":50}`}}, "📖 读取文件: `log.txt` [行 100-149]"},
 		{"tool_call_read_offset_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"log.txt","offset":200}`}}, "📖 读取文件: `log.txt` [从行 200]"},
 		{"tool_call_read_limit_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"log.txt","limit":10}`}}, "📖 读取文件: `log.txt` [前 10 行]"},
@@ -181,7 +179,7 @@ func TestTGOutboundText_English(t *testing.T) {
 		event OutboundEvent
 		want  string
 	}{
-		// Tool calls — English
+
 		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Lang: "en", Args: `{"command":"ls -la"}`}}, "⚡ Run command:\n```\nls -la\n```"},
 		{"tool_call_read", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"file_path":"chart.html"}`}}, "📖 Reading file: `chart.html`"},
 		{"tool_call_read_pdf", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`}}, "📄 Reading PDF: `report.pdf`"},
@@ -197,7 +195,6 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_call_websearch", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "web_search", Lang: "en", Args: `{"query":"golang tutorial"}`}}, "🔍 Search: golang tutorial"},
 		{"tool_call_skill", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "skill", Lang: "en", Detail: "commit"}}, "🔧 Load skill: `commit`"},
 
-		// Tool results — English
 		{"tool_result_bash_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Lang: "en", Args: `{"command":"echo ok"}`, Result: ""}}, "✅\n```\necho ok\n```"},
 		{"tool_result_read_pdf", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`, Result: "[Extracted from pdf, 3 pages]\n     1\tline1\n     2\tline2"}}, "📄 report.pdf (3 pages, 2 lines)"},
 		{"tool_result_read_docx", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"doc.docx"}`, Result: "[Extracted from docx]\n     1\thello world"}}, "📄 doc.docx (1 lines extracted)"},
@@ -206,32 +203,27 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Lang: "en", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz` — 0 matches"},
 		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Lang: "en", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST` — 0 matches"},
 
-		// Read range — English
 		{"tool_call_read_offset", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`}}, "📖 Reading file: `log.txt` [lines 100-149]"},
 		{"tool_call_read_offset_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":200}`}}, "📖 Reading file: `log.txt` [from line 200]"},
 		{"tool_call_read_limit_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","limit":10}`}}, "📖 Reading file: `log.txt` [first 10 lines]"},
 		{"tool_result_read_offset", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`, Result: "line100\nline101"}}, "📖 log.txt [lines 100-149]"},
 
-		// Background commands — English
 		{"tool_result_start_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "start_command", Lang: "en", Result: ""}}, "⚡ Started"},
 		{"tool_result_stop_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "stop_command", Lang: "en", Result: ""}}, ""},
 		{"tool_result_wait_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_command", Lang: "en", Result: ""}}, ""},
 		{"tool_result_write_input", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_command_input", Lang: "en", Result: ""}}, ""},
 		{"tool_result_list_cmds", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_commands", Lang: "en", Result: ""}}, ""},
 
-		// Agent tools — English
 		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "🤖 sub-agent"},
 		{"tool_result_wait_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_agent", Lang: "en", Result: ""}}, ""},
 		{"tool_result_list_agents", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_agents", Lang: "en", Result: ""}}, ""},
 
-		// MCP / Skill / Memory — English
 		{"tool_result_skill_loaded", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "skill", Lang: "en", Result: ""}}, "🔧 Skill loaded"},
 		{"tool_result_memory_saved", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "save_memory", Lang: "en", Result: ""}}, "💾 Memory saved"},
 		{"tool_result_mcp_capabilities", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_mcp_capabilities", Lang: "en", Result: ""}}, ""},
 		{"tool_result_mcp_resource", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_mcp_resource", Lang: "en", Result: ""}}, ""},
 		{"tool_result_ask_user", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "ask_user", Lang: "en", Result: ""}}, "💬 Reply received"},
 
-		// Todo — English
 		{"tool_result_todo_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "todo_write", Lang: "en", Args: `{}`}}, "📋 Update todos"},
 	}
 
@@ -289,15 +281,14 @@ func TestTGResolveReplyTo(t *testing.T) {
 func TestTGSeenUpdate(t *testing.T) {
 	adapter := &tgAdapter{seen: make(map[int]time.Time)}
 
-	// First time should not be seen
 	if adapter.seenUpdate(1) {
 		t.Error("update 1 should not be seen initially")
 	}
-	// Second time should be seen
+
 	if !adapter.seenUpdate(1) {
 		t.Error("update 1 should be seen after first call")
 	}
-	// Different update should not be seen
+
 	if adapter.seenUpdate(2) {
 		t.Error("update 2 should not be seen")
 	}
@@ -305,8 +296,7 @@ func TestTGSeenUpdate(t *testing.T) {
 
 func TestTGSendUnauthorized(t *testing.T) {
 	adapter := &tgAdapter{}
-	// sendUnauthorized just sends text — test it doesn't panic
-	// (it will fail on no connection but we're testing the message content)
+
 	_ = adapter
 }
 
@@ -369,10 +359,10 @@ func TestTGNewAdapter_ParseMode(t *testing.T) {
 		{"MarkdownV2", "MarkdownV2"},
 		{"MARKDOWN", "MarkdownV2"},
 		{"html", "HTML"},
-		{"", ""},        // default: entity mode (tgmd.Convert)
-		{"unknown", ""}, // unknown falls back to entity mode
-		{"none", ""},    // explicit "none" disables parse mode
-		{"plain", ""},   // explicit "plain" disables parse mode
+		{"", ""},
+		{"unknown", ""},
+		{"none", ""},
+		{"plain", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
@@ -390,12 +380,11 @@ func TestTGNewAdapter_ParseMode(t *testing.T) {
 }
 
 func TestTGResolveSTTConfig(t *testing.T) {
-	// Empty config → nil
+
 	if cfg := resolveTGSTTConfig(config.IMSTTConfig{}, nil); cfg != nil {
 		t.Error("expected nil for empty STT config")
 	}
 
-	// Global config with required fields
 	cfg := resolveTGSTTConfig(config.IMSTTConfig{
 		BaseURL: "https://api.example.com",
 		APIKey:  "key123",
@@ -408,7 +397,6 @@ func TestTGResolveSTTConfig(t *testing.T) {
 		t.Errorf("BaseURL = %q", cfg.BaseURL)
 	}
 
-	// Extra override
 	cfg = resolveTGSTTConfig(config.IMSTTConfig{
 		BaseURL: "https://global.com",
 		APIKey:  "global-key",
@@ -478,8 +466,7 @@ func TestTGMDConvert(t *testing.T) {
 }
 
 func TestTGMDConvert_StrikethroughNotError(t *testing.T) {
-	// This was the original bug: ~~strikethrough~~ caused MarkdownV2 parse errors.
-	// With tgmd.Convert, it produces plain text + strikethrough entity.
+
 	input := "This is ~~deleted~~ text"
 	msg := tgmd.Convert(input)
 	if msg.Text != "This is deleted text" {

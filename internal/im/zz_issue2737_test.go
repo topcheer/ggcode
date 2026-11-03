@@ -41,7 +41,7 @@ func TestIssue2737SendPathsRouteThroughEncryption(t *testing.T) {
 		if idx < 0 {
 			t.Fatalf("function %q not found", fn)
 		}
-		// Function body extends to the next top-level func at column 0.
+
 		end := strings.Index(text[idx+len(fn):], "\nfunc ")
 		if end < 0 {
 			t.Fatalf("end of %q not found", fn)
@@ -54,8 +54,7 @@ func TestIssue2737SendPathsRouteThroughEncryption(t *testing.T) {
 			t.Errorf("%q still hardcodes event.EventMessage in SendMessageEvent (#2737 regression)", fn)
 		}
 	}
-	// The helper itself must keep the E2EE path: EventEncrypted return on
-	// success and plaintext fallback on error (never silently drop).
+
 	if !strings.Contains(text, "mach.EncryptMegolmEvent(ctx, id.RoomID(roomID), event.EventMessage, content)") {
 		t.Error("maybeEncryptMessage no longer wraps content with EncryptMegolmEvent (#2737 regression)")
 	}
