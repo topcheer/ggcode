@@ -23,7 +23,7 @@ type failingAgent struct {
 	calls int
 }
 
-func (a *failingAgent) RunStream(_ context.Context, _ string, _ func(provider.StreamEvent)) error {
+func (a *failingAgent) RunStream(_ context.Context, _ string, _ func(provider.StreamEvent), origin ...string) error {
 	a.mu.Lock()
 	a.calls++
 	a.mu.Unlock()

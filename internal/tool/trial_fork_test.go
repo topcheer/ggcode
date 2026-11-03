@@ -51,7 +51,7 @@ func initTrialRepo(t *testing.T) string {
 // work left uncommitted in the worktree).
 type trialStubRunner struct{}
 
-func (r *trialStubRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r *trialStubRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if strings.Contains(prompt, "fail-now") {
 		return errors.New("stub trial failed")
 	}

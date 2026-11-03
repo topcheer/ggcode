@@ -211,7 +211,7 @@ func TestIssue621_SuccessCompleteAfterCancelKeepsResult(t *testing.T) {
 // zero-value meta).
 type issue622Runner struct{}
 
-func (r *issue622Runner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r *issue622Runner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{
 		Type: provider.StreamEventToolCallDone,
 		Tool: provider.ToolCallDelta{Name: "toolA", Arguments: []byte(`{"a":1}`)},

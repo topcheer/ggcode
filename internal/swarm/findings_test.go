@@ -13,14 +13,14 @@ import (
 // quietAgent emits no text output (used to pin the empty-result path).
 type quietAgent struct{}
 
-func (quietAgent) RunStream(_ context.Context, _ string, _ func(provider.StreamEvent)) error {
+func (quietAgent) RunStream(_ context.Context, _ string, _ func(provider.StreamEvent), origin ...string) error {
 	return nil
 }
 
 // longAgent emits a result of the given rune length.
 type longAgent struct{ runes int }
 
-func (a longAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent)) error {
+func (a longAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if onEvent != nil {
 		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: strings.Repeat("r", a.runes)})
 	}

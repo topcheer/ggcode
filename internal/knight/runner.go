@@ -23,7 +23,8 @@ type TaskResult struct {
 // AgentRunner is the interface Knight uses to run LLM-powered tasks.
 // It mirrors subagent.AgentRunner for compatibility.
 type AgentRunner interface {
-	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
+	// #4537: variadic origin mirrors agent.Agent.RunStream (human-origin tag).
+	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error
 }
 
 // AgentFactory creates a Knight agent with restricted tools.

@@ -58,7 +58,7 @@ func (fakeSkillMCPRuntime) ReadResource(ctx context.Context, server, uri string)
 	return nil, nil
 }
 
-func (r fakeRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r fakeRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
 	return nil
 }

@@ -1069,6 +1069,17 @@ func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 		if m.Role != "user" {
 			return "", false
 		}
+		// #4537: turns the interactive surfaces tagged as human-authored are
+		// NEVER collapsible. A byte-identical "yes"/"continue" across turns is
+		// a genuine second answer - collapsing it orphaned the assistant reply
+		// that followed and desynced the dialogue. Machine re-fires (the #2324
+		// cron/strategist storm shape, #3351 image re-fire) carry no Origin and
+		// keep the exact global-collapse behavior the guard tests pin; legacy
+		// records pre-dating the tag are untagged too, so old sessions load
+		// identically.
+		if m.Origin == "human" {
+			return "", false
+		}
 		var sb strings.Builder
 		for _, b := range m.Content {
 			if b.Type == "tool_result" {

@@ -1148,7 +1148,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				sink.OnError(event.Error)
 			}
 		}
-	})
+	}, "human")
 
 	// r414: preference capture aligned with the TUI/pipe paths. IM is the
 	// highest-frequency surface for durable corrections ("以后都用 pnpm"

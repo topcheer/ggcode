@@ -1480,8 +1480,9 @@ func (a *Agent) Clear() {
 
 // --- Core agent loop ---
 // RunStream runs the agent loop with streaming, sending events to the callback.
-func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
-	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
+func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent), origin ...string) error {
+	content := []provider.ContentBlock{{Type: "text", Text: userMsg}}
+	return a.RunStreamWithContent(ctx, content, onEvent, origin...)
 }
 
 // SetIdleMaintainer wires the sleep-time-compute watcher (r373). The
@@ -1529,7 +1530,16 @@ func estimateToolDefinitionOverhead(defs []provider.ToolDefinition) int {
 }
 
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
-func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
+//
+// The optional origin argument (#4537) tags the appended user turn's
+// provenance: pass "human" from interactive surfaces so the session-store
+// dedupe never collapses a byte-identical re-typed confirmation. Machine
+// callers omit it (default "" = collapsible re-fire).
+func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent), origin ...string) (err error) {
+	userOrigin := ""
+	if len(origin) > 0 {
+		userOrigin = origin[0]
+	}
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
 	// r444 user-edit ratchet: the idle gap before this new user message is
 	// where user rewrites of agent-written files happen. Check now, before
@@ -1824,10 +1834,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// the summarization LLM call keeps failing.
 		a.maybeFallbackCheckpoint()
 	}()
-	a.contextManager.Add(provider.Message{
+	userTurn := provider.Message{
 		Role:    "user",
 		Content: content,
-	})
+		Origin:  userOrigin, // #4537: human-tagged turns survive cross-turn dedupe
+	}
+	a.contextManager.Add(userTurn)
 	// on_user_message hook (synchronous, can block).
 	userText := ""
 	for _, b := range content {

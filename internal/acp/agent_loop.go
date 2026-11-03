@@ -340,7 +340,7 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 	// would resolve against whichever loop was constructed last.
 	ctx = context.WithValue(ctx, acpAskUserSessionKey{}, al.session.ID)
 
-	err := al.agent.RunStreamWithContent(ctx, providerContent, onEvent)
+	err := al.agent.RunStreamWithContent(ctx, providerContent, onEvent, "human")
 	if err != nil {
 		return fmt.Errorf("agent execution: %w", err)
 	}

@@ -25,7 +25,7 @@ func newMockAgent() *mockAgent {
 	}
 }
 
-func (a *mockAgent) RunStream(_ context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (a *mockAgent) RunStream(_ context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	a.mu.Lock()
 	a.calls = append(a.calls, prompt)
 	resp, ok := a.results[prompt]
@@ -55,7 +55,7 @@ func (a *usageAwareMockAgent) SetUsageHandler(fn func(provider.TokenUsage)) {
 	a.onUsage = fn
 }
 
-func (a *usageAwareMockAgent) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (a *usageAwareMockAgent) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if a.onUsage != nil {
 		a.onUsage(provider.TokenUsage{InputTokens: 23, OutputTokens: 8})
 	}
@@ -527,7 +527,7 @@ type mockAgentRunner struct {
 	runStreamFn func(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
 }
 
-func (m *mockAgentRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (m *mockAgentRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if m.runStreamFn != nil {
 		return m.runStreamFn(ctx, prompt, onEvent)
 	}

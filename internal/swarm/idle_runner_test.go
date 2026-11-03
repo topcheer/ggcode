@@ -19,7 +19,7 @@ type countingAgent struct {
 	prompts []string
 }
 
-func (a *countingAgent) RunStream(_ context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (a *countingAgent) RunStream(_ context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	a.mu.Lock()
 	a.calls++
 	a.prompts = append(a.prompts, prompt)
@@ -542,7 +542,7 @@ type blockingAgent struct {
 	unblock chan struct{}
 }
 
-func (a *blockingAgent) RunStream(ctx context.Context, _ string, onEvent func(provider.StreamEvent)) error {
+func (a *blockingAgent) RunStream(ctx context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if onEvent != nil {
 		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "working..."})
 	}
@@ -743,7 +743,7 @@ func TestIdleRunner_SkipsTaskWithUnmetDependency(t *testing.T) {
 // case 1).
 type panicAgent struct{}
 
-func (a *panicAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent)) error {
+func (a *panicAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "boom"})
 	panic("agent exploded mid-stream")
 }
