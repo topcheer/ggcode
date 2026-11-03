@@ -3694,8 +3694,12 @@ func (b *ChatBridge) CycleReasoningEffort() (string, bool) {
 }
 
 func (b *ChatBridge) SwitchModel(model string) error {
-	if model == "" || b.cfg == nil {
-		return fmt.Errorf("model is empty or config is nil")
+	if model == "" {
+		return fmt.Errorf("model is empty")
+	}
+	b.refreshConfigSnapshot()
+	if b.cfg == nil {
+		return fmt.Errorf("config is nil")
 	}
 	resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, b.cfg.Vendor, b.cfg.Endpoint, model)
 	if err != nil {
@@ -3743,6 +3747,7 @@ func (b *ChatBridge) SwitchModel(model string) error {
 }
 
 func (b *ChatBridge) OnConfigProviderChanged() {
+	b.refreshConfigSnapshot()
 	if b.cfg == nil {
 		return
 	}
@@ -3788,7 +3793,25 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 	}
 }
 
+// refreshConfigSnapshot re-syncs the bridge's config pointer with the global
+// config. The configFileSync ticker replaces globalCfg with a freshly loaded
+// object on external file changes; without this re-sync the bridge keeps a
+// stale snapshot and provider switches get reverted to the old selection
+// (#4973).
+func (b *ChatBridge) refreshConfigSnapshot() {
+	g := GetGlobalConfig()
+	if g == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.cfg != g {
+		b.cfg = g
+	}
+	b.mu.Unlock()
+}
+
 func (b *ChatBridge) RefreshEndpointLimits() {
+	b.refreshConfigSnapshot()
 	if b.cfg == nil {
 		return
 	}
