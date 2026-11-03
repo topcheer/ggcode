@@ -304,3 +304,25 @@ func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
 	adapter.Start(adapterCtx)
 	debug.Log("pc", "auto-started _pc_builtin, sinks=%d", len(mgr.Snapshot().Adapters))
 }
+
+func SupportedPlatforms() []string {
+	return []string{
+		string(PlatformQQ),
+		string(PlatformTelegram),
+		string(PlatformPrivateClaw),
+		string(PlatformDiscord),
+		string(PlatformFeishu),
+		string(PlatformDingTalk),
+		string(PlatformSlack),
+		string(PlatformDummy),
+		string(PlatformWechat),
+		string(PlatformWeCom),
+		string(PlatformMattermost),
+		string(PlatformMatrix),
+		string(PlatformSignal),
+		string(PlatformIRC),
+		string(PlatformNostr),
+		string(PlatformTwitch),
+		string(PlatformWhatsApp),
+	}
+}

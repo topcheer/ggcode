@@ -30,51 +30,18 @@ import (
 // im.AdapterPlatformCanonical) rather than a duplicated wailskit-style
 // field registry: the CLI wizard keeps its own extras prompts.
 
-var imSupportedPlatforms = []string{
-	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
-	"wechat", "wecom", "mattermost", "matrix", "signal", "irc", "nostr", "twitch", "whatsapp", "dummy",
+func imSupportedPlatforms() []string {
+	return im.SupportedPlatforms()
 }
 
 func imValidatePlatform(platform string) (string, error) {
-	switch strings.ToLower(platform) {
-	case string(im.PlatformQQ):
-		return string(im.PlatformQQ), nil
-	case string(im.PlatformTelegram):
-		return string(im.PlatformTelegram), nil
-	case string(im.PlatformFeishu):
-		return string(im.PlatformFeishu), nil
-	case string(im.PlatformDingTalk):
-		return string(im.PlatformDingTalk), nil
-	case string(im.PlatformDiscord):
-		return string(im.PlatformDiscord), nil
-	case string(im.PlatformSlack):
-		return string(im.PlatformSlack), nil
-	case "privateclaw":
-		return "privateclaw", nil
-	case string(im.PlatformWechat):
-		return string(im.PlatformWechat), nil
-	case string(im.PlatformWeCom):
-		return string(im.PlatformWeCom), nil
-	case string(im.PlatformMattermost):
-		return string(im.PlatformMattermost), nil
-	case string(im.PlatformMatrix):
-		return string(im.PlatformMatrix), nil
-	case string(im.PlatformSignal):
-		return string(im.PlatformSignal), nil
-	case string(im.PlatformIRC):
-		return string(im.PlatformIRC), nil
-	case string(im.PlatformNostr):
-		return string(im.PlatformNostr), nil
-	case string(im.PlatformTwitch):
-		return string(im.PlatformTwitch), nil
-	case string(im.PlatformWhatsApp):
-		return string(im.PlatformWhatsApp), nil
-	case string(im.PlatformDummy):
-		return string(im.PlatformDummy), nil
-	default:
-		supported := strings.Join(imSupportedPlatforms, ", ")
-		return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, supported)
+	lower := strings.ToLower(platform)
+	for _, supported := range im.SupportedPlatforms() {
+		if lower == supported {
+			return supported, nil
+		}
 	}
+	return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, strings.Join(im.SupportedPlatforms(), ", "))
 }
 
 func newIMCmd(cfgFile *string) *cobra.Command {
