@@ -9,30 +9,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// #669 defect 2: DeliverResponse drops responses whose id is non-numeric
-// (peer violated JSON-RPC 2.0 id echo). The drop must be logged so the
-// subsequent SendRequest timeout is diagnosable.
 func TestIssue669DeliverResponseLogsStringID(t *testing.T) {
 	debug.EnableForTest(t)
 	defer debug.Close()
 
 	tr := NewTransport(strings.NewReader(""), &strings.Builder{})
 
-	// Sanity: numeric ids still route to the pending map.
 	id := tr.nextID.Add(1)
 	registerPendingForTest(t, tr, id)
 
 	resp := &JSONRPCResponse{ID: json.Number("123")}
-	tr.DeliverResponse(resp) // numeric — no drop log expected for this one
+	tr.DeliverResponse(resp)
 
-	// String id: silently dropped before the fix; must log now.
 	dropped := &JSONRPCResponse{ID: "abc-123"}
 	tr.DeliverResponse(dropped)
 
-	// Use a large window: background goroutines from earlier tests may
-	// still be emitting entries into the shared ring between our
-	// DeliverResponse call and this read, evicting our entry from a
-	// small window (observed as cross-test flake in full-suite runs).
 	entries := debug.RingHistory(2000, "acp")
 	found := false
 	for _, e := range entries {
@@ -45,7 +36,6 @@ func TestIssue669DeliverResponseLogsStringID(t *testing.T) {
 	}
 }
 
-// registerPendingForTest registers a pending SendRequest channel for id.
 func registerPendingForTest(t *testing.T, tr *Transport, id int64) {
 	t.Helper()
 	tr.pendingMu.Lock()
@@ -53,8 +43,6 @@ func registerPendingForTest(t *testing.T, tr *Transport, id int64) {
 	tr.pendingMu.Unlock()
 }
 
-// #669 defect 2 companion: numeric ids are unaffected — a float64 id
-// (standard json decoding of a number) still reaches the pending caller.
 func TestIssue669DeliverResponseNumericStillWorks(t *testing.T) {
 	tr := NewTransport(strings.NewReader(""), &strings.Builder{})
 	id := tr.nextID.Add(1)

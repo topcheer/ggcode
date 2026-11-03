@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// Vectors from RFC 8785 Appendix B (number formatting per ECMAScript
-// Number::toString).
 func TestJCSNumbers(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`333333333.33333329`, `333333333.3333333`},
@@ -53,8 +51,6 @@ func TestJCSStrings(t *testing.T) {
 }
 
 func TestJCSKeyOrder(t *testing.T) {
-	// UTF-16 code-unit ordering (RFC 8785 §3.2.3): "" (0x00) < "1" (0x31)
-	// < "A" (0x41) < "ö" (0xF6) < "€" (0x20AC).
 	raw := "{\"€\":1,\"ö\":2,\"\":3,\"1\":4,\"A\":5}"
 	got, err := jcsCanonicalize([]byte(raw))
 	if err != nil {
@@ -67,7 +63,6 @@ func TestJCSKeyOrder(t *testing.T) {
 }
 
 func TestJCSStructure(t *testing.T) {
-	// Whitespace stripped, arrays keep order, nested objects sorted.
 	raw := "{\n  \"b\": [ {\"z\": true, \"a\": null} ], \"a\": 1 }"
 	got, err := jcsCanonicalize([]byte(raw))
 	if err != nil {

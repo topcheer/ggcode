@@ -14,13 +14,13 @@ func TestEstimateTokens(t *testing.T) {
 		want  int
 	}{
 		{"empty", "", 1},
-		{"ascii_short", "hello", 2},      // 5/3.5+1 = 2
-		{"ascii_long", "hello world", 4}, // 11/3.5+1 = 4
-		{"cjk_short", "你好", 3},           // 2*1.0+1 = 3 (#515: 1 token/char)
-		{"cjk_long", "你好世界", 5},          // 4*1.0+1 = 5
-		{"mixed", "hello你好", 4},          // 5/3.5+2*1.0+1 = 4
-		{"single_ascii", "a", 1},         // 1/3.5+1 = 1
-		{"single_cjk", "中", 2},           // 1*1.0+1 = 2
+		{"ascii_short", "hello", 2},
+		{"ascii_long", "hello world", 4},
+		{"cjk_short", "你好", 3},
+		{"cjk_long", "你好世界", 5},
+		{"mixed", "hello你好", 4},
+		{"single_ascii", "a", 1},
+		{"single_cjk", "中", 2},
 	}
 
 	for _, tt := range tests {
@@ -42,8 +42,6 @@ func TestEstimateTokens_CJKMoreThanASCII(t *testing.T) {
 }
 
 func TestEstimateTokensWithMessageOverhead(t *testing.T) {
-	// estimateTokens adds structural overhead per message.
-	// A pure text message should be estimate + 4 (role overhead).
 	pureText := "hello world this is a test"
 	estimatedText := EstimateTokens(pureText)
 
@@ -57,14 +55,12 @@ func TestEstimateTokensWithMessageOverhead(t *testing.T) {
 	if got < estimatedText {
 		t.Errorf("estimateTokens with overhead (%d) should be >= raw text estimate (%d)", got, estimatedText)
 	}
-	// Verify there's at least 4 tokens of overhead.
 	if got < estimatedText+4 {
 		t.Errorf("expected at least %d (text+4 overhead), got %d", estimatedText+4, got)
 	}
 }
 
 func TestEstimateTokensWithToolCall(t *testing.T) {
-	// Tool calls should add JSON structure overhead.
 	msg := provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{
@@ -72,14 +68,12 @@ func TestEstimateTokensWithToolCall(t *testing.T) {
 		},
 	}
 	got := estimateTokensStandalone(msg)
-	// Should include text estimate + 4 (message overhead) + 6 (tool call overhead).
 	if got < 10 {
 		t.Errorf("expected significant token estimate for tool call, got %d", got)
 	}
 }
 
 func TestEstimateTokensWithImage(t *testing.T) {
-	// Images should add ~170 tokens.
 	msg := provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{
@@ -87,7 +81,6 @@ func TestEstimateTokensWithImage(t *testing.T) {
 		},
 	}
 	got := estimateTokensStandalone(msg)
-	// Should include at least 170 (image) + 4 (message overhead).
 	if got < 170 {
 		t.Errorf("expected at least 174 tokens for image message, got %d", got)
 	}
@@ -103,14 +96,13 @@ func TestEstimateTokensMultipleToolCalls(t *testing.T) {
 		},
 	}
 	got := estimateTokensStandalone(msg)
-	// 3 tool calls × 6 overhead = 18 structural tokens.
 	if got < 18 {
 		t.Errorf("expected at least 18 tokens for 3 tool calls, got %d", got)
 	}
 }
 
 func BenchmarkEstimateTokens_ASCII(b *testing.B) {
-	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 500) // ~22KB
+	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 500)
 	b.SetBytes(int64(len(text)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -119,7 +111,7 @@ func BenchmarkEstimateTokens_ASCII(b *testing.B) {
 }
 
 func BenchmarkEstimateTokens_CJK(b *testing.B) {
-	text := strings.Repeat("敏捷的棕色狐狸跳过了懒狗。", 500) // ~6KB
+	text := strings.Repeat("敏捷的棕色狐狸跳过了懒狗。", 500)
 	b.SetBytes(int64(len(text)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -128,7 +120,7 @@ func BenchmarkEstimateTokens_CJK(b *testing.B) {
 }
 
 func BenchmarkEstimateTokens_Mixed(b *testing.B) {
-	text := strings.Repeat("function 测试() { return 'hello 世界'; }", 200) // ~8KB
+	text := strings.Repeat("function 测试() { return 'hello 世界'; }", 200)
 	b.SetBytes(int64(len(text)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

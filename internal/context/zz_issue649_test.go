@@ -1,12 +1,5 @@
 package context
 
-// #649: after #634 unfroze Vietnamese samples, their calibration residual
-// was 100% attributed to asciiRatio (RecordSample ignored latinExtChars):
-// estimated=chars/3.0 < actual pushed factor<1 on every sample until
-// asciiRatio hit its 3.0 clamp, overestimating pure-ASCII tokens ~17% and
-// firing auto-compact early. The residual belongs to the fixed latinExt
-// tier — samples dominated by latinExt must not adjust any ratio.
-
 import (
 	"strings"
 	"testing"
@@ -14,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Vietnamese-dominant samples (latinExt > 50% of covered composition) must
-// leave asciiRatio at the default — pre-fix they drove it to the 3.0 clamp.
 func TestIssue649_LatinExtDominantSamplesDoNotDragAsciiRatio(t *testing.T) {
 	cal := NewTokenCalibrator()
 	text := strings.Repeat("ậẹộộịụự ếềễểẫ", 60) +
@@ -29,9 +20,7 @@ func TestIssue649_LatinExtDominantSamplesDoNotDragAsciiRatio(t *testing.T) {
 			latinExtDominantShare*100, float64(le)/float64(a+le)*100)
 	}
 
-	// estimated = chars/3.0 tier (under-estimate → factor<1 → pre-fix pushed
-	// asciiRatio down toward the 3.0 clamp on every adjustment sample).
-	cal = NewTokenCalibrator() // fresh instance: the probes above were precondition-only
+	cal = NewTokenCalibrator()
 	for i := 0; i < 40; i++ {
 		cal.RecordSample(1000, 1400, a, c, le)
 	}
@@ -44,9 +33,6 @@ func TestIssue649_LatinExtDominantSamplesDoNotDragAsciiRatio(t *testing.T) {
 	}
 }
 
-// End-to-end via Manager.RecordUsage: a Vietnamese-dominant context must not
-// freeze the sample entirely (#634 keeps working) AND must not drag asciiRatio
-// to its clamp (#649).
 func TestIssue649_ManagerVietnameseResidualNotAttributedToAscii(t *testing.T) {
 	text := strings.Repeat("ậẹộộịụự ếềễểẫ", 60) +
 		"func main() { println() }"
@@ -63,11 +49,8 @@ func TestIssue649_ManagerVietnameseResidualNotAttributedToAscii(t *testing.T) {
 	}
 }
 
-// A latinExt-minority sample (accents in mostly-ASCII code) must still
-// calibrate asciiRatio — the fix must not freeze ordinary mixed code.
 func TestIssue649_MinorityLatinExtStillCalibratesAscii(t *testing.T) {
 	cal := NewTokenCalibrator()
-	// 4000 ascii + 100 latinExt = 2.4% latinExt — well below the freeze share.
 	for i := 0; i < 8; i++ {
 		cal.RecordSample(2000, 1000, 4000, 0, 100)
 	}

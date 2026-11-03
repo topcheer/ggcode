@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// #667 defect 1: Update() on a paused job must not write a non-zero NextFire
-// — the paused zero-NextFire invariant (#311, maintained by Pause/Load) would
-// break and the UI would show a fire time that never arrives.
 func TestIssue667UpdatePausedKeepsZeroNextFire(t *testing.T) {
 	s := NewScheduler(func(string, bool) {}, filepath.Join(t.TempDir(), "jobs.json"))
 	defer s.Shutdown()
@@ -21,8 +18,6 @@ func TestIssue667UpdatePausedKeepsZeroNextFire(t *testing.T) {
 	if err := s.Pause(job.ID); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	// Create returns a value snapshot; Pause mutates the stored *Job.
-	// Re-fetch before asserting the paused invariant (#311).
 	paused, ok := s.Get(job.ID)
 	if !ok {
 		t.Fatalf("job %s disappeared after Pause", job.ID)
@@ -51,7 +46,6 @@ func TestIssue667UpdatePausedKeepsZeroNextFire(t *testing.T) {
 		t.Fatalf("Get after Update: %+v", got)
 	}
 
-	// Resume recomputes NextFire from the NEW expression.
 	if err := s.Resume(job.ID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -61,10 +55,6 @@ func TestIssue667UpdatePausedKeepsZeroNextFire(t *testing.T) {
 	}
 }
 
-// #667 defect 2 (rollback path): when persistence fails after Update, the
-// rollback must restore the original cron expr AND preserve the paused
-// zero-NextFire invariant, not blindly recompute (and the previously-ignored
-// NextTime error on rollback must be handled).
 func TestIssue667UpdateRollbackPausedInvariant(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "jobs.json")
@@ -80,12 +70,6 @@ func TestIssue667UpdateRollbackPausedInvariant(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	// Make persistence fail: replace the store with a same-name directory.
-	// Every persistence strategy (direct write, temp-file + rename) fails
-	// deterministically on all platforms. (The previous os.Chmod(dir, 0o500)
-	// injection was a no-op on Windows — the readonly attribute does not
-	// block creating/renaming files inside a directory — found during
-	// windows/amd64 verification of #667.)
 	if err := os.Remove(storePath); err != nil {
 		t.Fatalf("remove store for dir-swap: %v", err)
 	}
@@ -114,7 +98,6 @@ func TestIssue667UpdateRollbackPausedInvariant(t *testing.T) {
 	}
 }
 
-// Sanity: Update on an ACTIVE job still recomputes NextFire.
 func TestIssue667UpdateActiveRecomputesNextFire(t *testing.T) {
 	s := NewScheduler(func(string, bool) {}, filepath.Join(t.TempDir(), "jobs.json"))
 	defer s.Shutdown()

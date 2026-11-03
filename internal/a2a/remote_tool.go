@@ -13,13 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// RemoteTool lets a ggcode agent discover and call other ggcode instances
-// via A2A protocol. This is for agent-to-agent communication within ggcode
-// itself — NOT for external MCP clients.
-//
-// The agent says "call the order-service and ask it to list orders" and this
-// tool figures out which instance matches "order-service", connects to it,
-// and returns the result.
 type RemoteTool struct {
 	mu       sync.RWMutex
 	registry *Registry
@@ -28,7 +21,6 @@ type RemoteTool struct {
 	cacheAt  time.Time
 }
 
-// NewRemoteTool creates an A2A remote tool for agent-to-agent calls.
 func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
 	if apiKey == "" {
 		apiKey = config.DefaultA2AAPIKey
@@ -77,18 +69,15 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
 	}
 
-	// Special case: list all instances.
 	if params.Target == "list" || params.Target == "" {
 		return t.listInstances(ctx)
 	}
 
-	// Find the target instance.
 	inst, err := t.findInstance(params.Target)
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
 
-	// Create A2A client and send task.
 	client := NewClient(inst.Endpoint, t.apiKey)
 	task, err := client.SendMessage(ctx, params.Skill, params.Message)
 	if err != nil {
@@ -98,7 +87,6 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 		}, nil
 	}
 
-	// Format result.
 	result := fmt.Sprintf("📋 Task sent to %s (%s)\n", params.Target, inst.Workspace)
 	result += fmt.Sprintf("Task ID: %s\n", task.ID)
 	result += fmt.Sprintf("Status: %s\n", task.Status.State)
@@ -113,7 +101,6 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 		}
 	}
 
-	// Include last agent message from history if available.
 	if len(task.History) > 0 {
 		lastMsg := task.History[len(task.History)-1]
 		if lastMsg.Role == "agent" && len(lastMsg.Parts) > 0 {
@@ -124,7 +111,6 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 	return tool.Result{Content: result}, nil
 }
 
-// listInstances returns a formatted list of all discovered instances.
 func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	instances, err := t.discover()
 	if err != nil {
@@ -146,11 +132,6 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	return tool.Result{Content: sb.String()}, nil
 }
 
-// findInstance locates an instance by name or name:port.
-// Matching priority:
-//  1. Exact "name:port" match on DisplayName
-//  2. Exact name match on workspace basename
-//  3. Partial (contains) match on workspace basename
 func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	instances, err := t.discover()
 	if err != nil {
@@ -162,14 +143,12 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 
 	target = strings.ToLower(target)
 
-	// 1) Exact name:port match
 	for i := range instances {
 		if strings.ToLower(instances[i].DisplayName()) == target {
 			return &instances[i], nil
 		}
 	}
 
-	// 2) Exact basename match
 	var exactMatches []InstanceInfo
 	for _, inst := range instances {
 		if strings.ToLower(filepath.Base(inst.Workspace)) == target {
@@ -187,7 +166,6 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
 	}
 
-	// 3) Partial (contains) match
 	var matches []InstanceInfo
 	for _, inst := range instances {
 		name := strings.ToLower(filepath.Base(inst.Workspace))
@@ -213,13 +191,11 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	return &matches[0], nil
 }
 
-// discover returns cached instances or refreshes from registry if stale (>10s).
 func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	t.mu.RLock()
 	if t.cache != nil && time.Since(t.cacheAt) < 10*time.Second {
 		cache := t.cache
 		t.mu.RUnlock()
-		// #4501: hand out a copy, not the cached backing array.
 		return append([]InstanceInfo(nil), cache...), nil
 	}
 	t.mu.RUnlock()
@@ -230,9 +206,6 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	}
 
 	t.mu.Lock()
-	// #4501: same defensive-copy posture as Registry.Discover - cache a
-	// private copy so in-place mutation of the returned slice cannot
-	// corrupt the cache or race concurrent readers.
 	t.cache = append([]InstanceInfo(nil), instances...)
 	t.cacheAt = time.Now()
 	t.mu.Unlock()
@@ -240,21 +213,13 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	return append([]InstanceInfo(nil), instances...), nil
 }
 
-// RemoteAgentMeta holds enrichment data (from lanchat presence) for a remote
-// agent instance, used to make the system prompt more informative.
 type RemoteAgentMeta struct {
-	Team        string   // e.g. "platform", "mobile"
-	Role        string   // e.g. "frontend", "backend", "devops"
-	Languages   []string // e.g. ["go", "typescript"]
-	ProjectName string   // short project identifier
+	Team        string
+	Role        string
+	Languages   []string
+	ProjectName string
 }
 
-// FormatRemoteAgents formats a list of discovered instances into a
-// system-prompt-friendly summary. Exported so non-RemoteTool callers
-// (e.g. daemon, desktop) can use it directly from a Registry.
-//
-// meta is optional enrichment data keyed by instance ID (from lanchat
-// presence exchange). Pass nil if lanchat is not available.
 func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMeta) string {
 	if len(instances) == 0 {
 		return ""
@@ -285,7 +250,6 @@ func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMet
 	return sb.String()
 }
 
-// RefreshCache forces a cache refresh. Called periodically by background goroutine.
 func (t *RemoteTool) RefreshCache() {
 	instances, err := t.registry.Discover()
 	if err != nil {

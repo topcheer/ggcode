@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// #721: read_file with an omitted offset but a supplied limit ({path, limit: N}
-// - the common head-peek form) must NOT be recorded as a full-file read.
-// Previously `full: args.Offset == 0` classified it as full:true, so the
-// readCovers later.full short-circuit marked earlier non-overlapping
-// mid-file reads as superseded and silently dropped their content.
-
 func TestExtractReadCall_HeadPeekWithLimitIsNotFull(t *testing.T) {
 	rc := extractReadCall("read_file", json.RawMessage(`{"path":"/big.go","limit":50}`))
 	if len(rc.paths) != 1 || rc.paths[0] != "/big.go" {
@@ -26,11 +20,6 @@ func TestExtractReadCall_HeadPeekWithLimitIsNotFull(t *testing.T) {
 }
 
 func TestReadCovers_HeadPeekDoesNotCoverMidSegment(t *testing.T) {
-	// later = {limit:50} head peek; earlier = {offset:50, limit:10}.
-	// With the #721 bug, later.full was true and readCovers returned true,
-	// suppressing the earlier mid-file segment even though the head peek
-	// (lines 1-50) does not overlap it (lines 50-59 overlap only line 50;
-	// coverage requires containment which fails regardless of off-by-one).
 	later := extractReadCall("read_file", json.RawMessage(`{"path":"/x.go","limit":50}`)).rng
 	earlier := extractReadCall("read_file", json.RawMessage(`{"path":"/x.go","offset":50,"limit":10}`)).rng
 	if readCovers(later, earlier) {
@@ -57,8 +46,6 @@ func TestCompactSupersededReads_HeadPeekDoesNotSupersedeMidSegment(t *testing.T)
 }
 
 func TestCompactSupersededReads_HeadPeekStillSupersedesItsOwnRange(t *testing.T) {
-	// Guard the other direction: a later head peek must still supersede an
-	// earlier read fully contained within its window (lines 1-50 cover 1-10).
 	m := NewManager(100000)
 	addReadPair(m, "read-top", `{"path":"/h.go","offset":1,"limit":10}`, strings.Repeat("T", 500))
 	addReadPair(m, "read-head", `{"path":"/h.go","limit":50}`, strings.Repeat("H", 500))

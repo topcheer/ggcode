@@ -36,24 +36,16 @@ type frontmatter struct {
 	FailureModes           []SkillFailureMode `yaml:"failure-modes,omitempty"`
 }
 
-// SkillFailureMode is one entry in a skill's declared failure taxonomy
-// (NLAH-style harness externalization, r466): a named failure mode, how to
-// detect it, and the author's intended recovery path.
 type SkillFailureMode struct {
 	Name    string `yaml:"name"`
 	Detect  string `yaml:"detect"`
 	Recover string `yaml:"recover"`
 }
 
-// Loader finds and loads reusable skills and legacy custom slash commands.
 type Loader struct {
 	targets []loadTarget
 }
 
-// NewLoader creates a loader scanning global and project-local skills and commands.
-// Agent Plugins (agent-plugins.org, sa-114) ship skills in
-// <project>/.agent-plugins/<dir>/skills/; they are prepended so every native
-// directory overrides plugin skills of the same name.
 func NewLoader(projectDir string) *Loader {
 	home := config.HomeDir()
 	native := []loadTarget{
@@ -93,8 +85,6 @@ func canonicalTargetDir(dir string) string {
 	return filepath.Clean(dir)
 }
 
-// Load scans all command directories and returns loaded commands.
-// Later targets override earlier ones for the same command name.
 func (l *Loader) Load() map[string]*Command {
 	cmds := make(map[string]*Command)
 	for _, target := range l.targets {
@@ -103,7 +93,6 @@ func (l *Loader) Load() map[string]*Command {
 	return cmds
 }
 
-// CommandDirs returns the directories being scanned (for display purposes).
 func (l *Loader) CommandDirs() []string {
 	out := make([]string, 0, len(l.targets))
 	for _, target := range l.targets {

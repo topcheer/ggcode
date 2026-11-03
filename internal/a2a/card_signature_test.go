@@ -20,9 +20,6 @@ import (
 
 func b64u(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// signCard produces the card JSON with one JWS signature (A2A §8.4 shape).
-// jwkMap is embedded into the protected header when non-nil; jku is set when
-// non-empty.
 func signCard(t *testing.T, card map[string]interface{}, kid, alg string, key interface{}, jwkMap map[string]string, jku string) []byte {
 	t.Helper()
 	raw, err := json.Marshal(card)
@@ -59,8 +56,6 @@ func signCard(t *testing.T, card map[string]interface{}, kid, alg string, key in
 
 	var sig []byte
 	if alg == "HS256" {
-		// Symmetric alg never actually signed here; verifier must reject it
-		// as unsupported before the bytes matter.
 		sig = []byte("garbage-signature-bytes")
 	} else {
 		switch k := key.(type) {
@@ -137,7 +132,6 @@ func TestVerifyCardSignatureES256(t *testing.T) {
 func TestVerifyCardSignatureTampered(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	cardBytes := signCard(t, baseCard(), "key-1", "ES256", key, p256JWK(key, "key-1"), "")
-	// Tamper: bump the version after signing.
 	var cm map[string]interface{}
 	if err := json.Unmarshal(cardBytes, &cm); err != nil {
 		t.Fatal(err)
@@ -180,8 +174,6 @@ func TestVerifyCardSignatureRS256AndEdDSA(t *testing.T) {
 }
 
 func TestVerifyCardSignatureUnsupportedAlg(t *testing.T) {
-	// HS256 is symmetric and deliberately unsupported; it must NOT count as
-	// tampering.
 	cardBytes := signCard(t, baseCard(), "hmac-1", "HS256", nil,
 		map[string]string{"kty": "oct", "kid": "hmac-1", "k": b64u([]byte("secret"))}, "")
 	results, tampered := VerifyAgentCardSignature(cardBytes)
@@ -248,8 +240,6 @@ func TestHasCardSignatures(t *testing.T) {
 	}
 }
 
-// TestDiscoverTamperedCardRejected covers the end-to-end Discover policy: a
-// card whose signature no longer matches is refused, a valid one is served.
 func TestDiscoverTamperedCardRejected(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	validCard := signCard(t, baseCard(), "key-1", "ES256", key, p256JWK(key, "key-1"), "")
@@ -279,7 +269,7 @@ func TestDiscoverTamperedCardRejected(t *testing.T) {
 	}
 
 	mu <- tamperedCard
-	c.card.Store(nil) // force re-discovery
+	c.card.Store(nil)
 	_, err = c.Discover(ctx)
 	if err == nil {
 		t.Fatal("tampered card must be rejected by Discover")

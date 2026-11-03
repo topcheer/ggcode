@@ -13,9 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// pccTestProvider is a configurable mock for PCC probes: it answers each
-// Chat call with a marker derived from the request text (so block order
-// can be verified), counts concurrency, and can inject failures.
 type pccTestProvider struct {
 	mu          sync.Mutex
 	calls       int
@@ -61,9 +58,6 @@ func (p *pccTestProvider) Chat(ctx context.Context, msgs []provider.Message, too
 	if p.failOn != nil && p.failOn(reqText) {
 		return nil, errors.New("injected block failure")
 	}
-	// Hold each call open briefly so fan-out overlap is observable even
-	// without -race scheduler interleaving: all three goroutines are
-	// spawned before the first 10ms window can elapse.
 	time.Sleep(10 * time.Millisecond)
 	text := "block-summary-ok"
 	if p.emptyOn != nil && p.emptyOn(reqText) {
@@ -88,11 +82,9 @@ func (p *pccTestProvider) CountTokens(ctx context.Context, msgs []provider.Messa
 	return 100, nil
 }
 
-// bigPayload builds a payload well above pccMinPayloadTokens with N
-// message units, each tagged MARK-i so block membership is verifiable.
 func bigPayload(units int, fillerLines int) string {
 	var sb strings.Builder
-	line := strings.Repeat("x", 60) // ~15 tokens per line
+	line := strings.Repeat("x", 60)
 	for i := 0; i < units; i++ {
 		sb.WriteString(fmt.Sprintf("[user]\nMARK-%d start\n", i))
 		for j := 0; j < fillerLines; j++ {
@@ -118,7 +110,7 @@ func TestSplitPayloadBlocksSingleUnitReturnsNil(t *testing.T) {
 }
 
 func TestSplitPayloadBlocksCapsAtMaxAndPreservesOrder(t *testing.T) {
-	payload := bigPayload(20, 60) // ~20 units × ~900 tokens > pccMinPayloadTokens
+	payload := bigPayload(20, 60)
 	blocks := splitPayloadBlocks(payload, pccMinPayloadTokens)
 	if len(blocks) < 2 {
 		t.Fatalf("expected multi-block split, got %d", len(blocks))
@@ -126,7 +118,6 @@ func TestSplitPayloadBlocksCapsAtMaxAndPreservesOrder(t *testing.T) {
 	if len(blocks) > pccMaxBlocks {
 		t.Fatalf("blocks %d exceed cap %d", len(blocks), pccMaxBlocks)
 	}
-	// MARK tags must appear in strictly increasing order across blocks.
 	seen := 0
 	for _, b := range blocks {
 		for i := seen; i < 20; i++ {
@@ -186,8 +177,6 @@ func TestSummarizeParallelEmptyBlockFallsBack(t *testing.T) {
 }
 
 func TestSummarizeMessagesSmallPayloadSingleRequest(t *testing.T) {
-	// Zero-regression guard: a payload below the PCC floor must make
-	// exactly one prov.Chat call through the sequential path.
 	p := &pccTestProvider{}
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "short conversation"}}},

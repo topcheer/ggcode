@@ -28,23 +28,16 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-// newTestRequest creates an HTTP request with the test API key for direct HTTP calls.
 func newTestRequest(method, url string, body io.Reader) *http.Request {
 	req, _ := http.NewRequest(method, url, body)
 	req.Header.Set("X-API-Key", "test-key")
 	return req
 }
 
-// testGet performs an authenticated GET request.
 func testGet(url string) (*http.Response, error) {
 	return http.DefaultClient.Do(newTestRequest("GET", url, nil))
 }
 
-// testPost performs an authenticated POST request.
 func testPost(url, contentType string, body io.Reader) (*http.Response, error) {
 	req := newTestRequest("POST", url, body)
 	req.Header.Set("Content-Type", contentType)
@@ -160,7 +153,6 @@ func TestTaskStatusSerialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Per A2A spec, status must be {"state": "working"}, not bare "working".
 	if !containsStr(string(data), `"status":{"state":"working","timestamp"`) {
 		t.Errorf("expected status as object with state and timestamp, got: %s", string(data))
 	}
@@ -198,10 +190,6 @@ func TestJSONRPCResponseSerialization(t *testing.T) {
 		t.Errorf("unexpected jsonrpc: %s", resp2.JSONRPC)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Server + Client integration
-// ---------------------------------------------------------------------------
 
 func TestAgentCardEndpoint(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
@@ -242,7 +230,7 @@ func TestAgentCardEndpoint(t *testing.T) {
 
 func TestAgentCardNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key
+	srv := NewServer(ServerConfig{Port: 0}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +244,6 @@ func TestAgentCardNoAuth(t *testing.T) {
 
 	var card AgentCard
 	json.NewDecoder(resp.Body).Decode(&card)
-	// No security schemes when no API key.
 	if len(card.SecuritySchemes) != 0 {
 		t.Error("expected no security schemes without API key")
 	}
@@ -401,10 +388,6 @@ func TestClientGetTaskNotFound(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler
-// ---------------------------------------------------------------------------
-
 func TestDefaultSkills(t *testing.T) {
 	skills := DefaultSkills()
 	names := map[string]bool{}
@@ -513,14 +496,12 @@ func TestHandleUnknownSkill(t *testing.T) {
 
 func TestHandleEmptyInput(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	// Empty text input for file-search should fail during execution.
 	task, err := handler.Handle(context.Background(), SkillFileSearch, Message{
 		Role: "user", Parts: []Part{},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Wait for async execution to finish.
 	time.Sleep(500 * time.Millisecond)
 	gotTask, ok := handler.GetTask(task.ID)
 	if !ok {
@@ -563,8 +544,6 @@ func TestCancelTask(t *testing.T) {
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
 	}, "")
 
-	// Cancel the task. With a nil agent, the goroutine may complete
-	// before we get here, so CancelTask is allowed to fail.
 	err := handler.CancelTask(task.ID)
 
 	gotTask, ok := handler.GetTask(task.ID)
@@ -573,26 +552,21 @@ func TestCancelTask(t *testing.T) {
 	}
 
 	if err != nil {
-		// Cancel lost the race — task already finished (failed).
 		if gotTask.Status.State != TaskStateFailed {
 			t.Errorf("expected failed (race), got %s", gotTask.Status.State)
 		}
 	} else {
-		// Cancel won the race — task should be canceled.
 		if gotTask.Status.State != TaskStateCanceled {
 			t.Errorf("expected canceled, got %s", gotTask.Status.State)
 		}
 	}
 
-	// Cancel again: idempotent if canceled, error if already failed.
 	err2 := handler.CancelTask(task.ID)
 	if err == nil {
-		// First cancel succeeded (canceled state) — second should be idempotent.
 		if err2 != nil {
 			t.Errorf("idempotent cancel should succeed, got: %v", err2)
 		}
 	} else {
-		// First cancel lost race (failed state) — second should also fail.
 		if err2 == nil {
 			t.Error("expected error for canceling failed task")
 		}
@@ -620,10 +594,6 @@ func TestWorkspaceMetadata(t *testing.T) {
 		t.Errorf("expected workspace ., got %s", meta.Workspace)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// MCP Bridge
-// ---------------------------------------------------------------------------
 
 func TestMCPBridgeToolsCount(t *testing.T) {
 	client := NewClient("http://localhost:9999", "")
@@ -673,7 +643,6 @@ func TestMCPBridgeToolParameters(t *testing.T) {
 func TestMCPBridgeSendTaskValidation(t *testing.T) {
 	client := NewClient("http://localhost:9999", "")
 	tools := MCPBridgeTools(client)
-	// Find the send_task tool.
 	var sendTool *a2aSendTaskTool
 	for _, tool := range tools {
 		if t, ok := tool.(*a2aSendTaskTool); ok {
@@ -685,13 +654,10 @@ func TestMCPBridgeSendTaskValidation(t *testing.T) {
 		t.Fatal("send_task tool not found")
 	}
 
-	// Invalid JSON input.
 	_, err := sendTool.Execute(context.Background(), json.RawMessage(`{invalid}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Result should be an error.
-	// (Can't test actual execution without a running server.)
 }
 
 func TestMCPBridgeGetTaskValidation(t *testing.T) {
@@ -708,7 +674,6 @@ func TestMCPBridgeGetTaskValidation(t *testing.T) {
 		t.Fatal("get_task tool not found")
 	}
 
-	// Invalid input.
 	result, err := getTool.Execute(context.Background(), json.RawMessage(`{invalid}`))
 	if err != nil {
 		t.Fatal(err)
@@ -717,10 +682,6 @@ func TestMCPBridgeGetTaskValidation(t *testing.T) {
 		t.Error("expected error result for invalid input")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SSE decode
-// ---------------------------------------------------------------------------
 
 func TestDecodeSSE(t *testing.T) {
 	ch := make(chan JSONRPCResponse, 10)
@@ -753,10 +714,6 @@ func TestDecodeSSESkipNonDataLines(t *testing.T) {
 		t.Errorf("unexpected jsonrpc: %s", resp.JSONRPC)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
 
 func TestGenerateInstanceID(t *testing.T) {
 	ids := make(map[string]bool)
@@ -822,10 +779,6 @@ func TestDetectWorkspaceMetaScansProjectSignals(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Concurrent safety
-// ---------------------------------------------------------------------------
-
 func TestHandlerConcurrentAccess(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil, WithMaxTasks(100), WithTimeout(1*time.Hour))
 	var wg sync.WaitGroup
@@ -840,16 +793,10 @@ func TestHandlerConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// All 50 tasks should be in the handler (they'll be "working" since there's no agent to complete them).
 	if handler.ActiveTaskCount() != 50 {
 		t.Logf("active tasks: %d (some may have completed)", handler.ActiveTaskCount())
-		// Don't fail — tasks without agent will complete as failed.
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Multi-turn (input-required flow)
-// ---------------------------------------------------------------------------
 
 func TestRequestInput(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
@@ -860,12 +807,10 @@ func TestRequestInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Manually set to working for the test.
 	handler.mu.Lock()
 	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateWorking}
 	handler.mu.Unlock()
 
-	// Request input.
 	if err := handler.RequestInput(task.ID, "What file do you want to edit?"); err != nil {
 		t.Fatal(err)
 	}
@@ -877,7 +822,6 @@ func TestRequestInput(t *testing.T) {
 	if gotTask.Status.State != TaskStateInputRequired {
 		t.Errorf("expected input-required, got %s", gotTask.Status.State)
 	}
-	// Check agent question is in history.
 	lastMsg := gotTask.History[len(gotTask.History)-1]
 	if lastMsg.Role != "agent" || !containsStr(lastMsg.Parts[0].Text, "What file") {
 		t.Errorf("expected agent question in history, got: %+v", lastMsg)
@@ -893,8 +837,6 @@ func TestContinueTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for async execution to complete (no agent → fails quickly).
-	// Poll the done channel instead of sleeping to avoid race conditions.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		handler.mu.Lock()
@@ -911,19 +853,15 @@ func TestContinueTask(t *testing.T) {
 		runtime.Gosched()
 	}
 done:
-	// Put task into input-required state directly on the internal task.
 	handler.mu.Lock()
 	internal := handler.tasks[task.ID]
 	internal.Status = TaskStatus{State: TaskStateInputRequired}
-	// Clear history set by async execution to get deterministic state
 	internal.History = []Message{{Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}}}}
-	// Re-open done channel since it was closed by the execute goroutine.
 	if internal.done == nil {
 		internal.done = make(chan struct{})
 	}
 	handler.mu.Unlock()
 
-	// Continue with user response.
 	_, err = handler.Handle(context.Background(), "", Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "main.go"}},
 	}, task.ID)
@@ -932,11 +870,9 @@ done:
 	}
 
 	gotTask, _ := handler.GetTask(task.ID)
-	// original msg + continue msg (no agent question msg in this test)
 	if len(gotTask.History) != 2 {
 		t.Errorf("expected 2 history messages, got %d", len(gotTask.History))
 	}
-	// Last message should be the continuation.
 	lastMsg := gotTask.History[len(gotTask.History)-1]
 	if lastMsg.Parts[0].Text != "main.go" {
 		t.Errorf("expected 'main.go' in last message, got %s", lastMsg.Parts[0].Text)
@@ -951,7 +887,6 @@ func TestContinueTaskRejectsNonInputRequired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Task is in "submitted" or "working" state — not input-required.
 	time.Sleep(100 * time.Millisecond)
 
 	_, err = handler.Handle(context.Background(), "", Message{
@@ -980,10 +915,8 @@ func TestRequestInputRejectsNonWorking(t *testing.T) {
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
 	}, "")
-	// Wait for async execution to finish (no agent → will fail quickly).
 	time.Sleep(200 * time.Millisecond)
 
-	// Force to completed state.
 	handler.mu.Lock()
 	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateCompleted}
 	handler.mu.Unlock()
@@ -993,10 +926,6 @@ func TestRequestInputRejectsNonWorking(t *testing.T) {
 		t.Fatal("expected error for non-working task")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Resubscribe (server-level)
-// ---------------------------------------------------------------------------
 
 func TestClientResubscribe(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
@@ -1008,7 +937,6 @@ func TestClientResubscribe(t *testing.T) {
 
 	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
 
-	// Resubscribe to nonexistent task should fail.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, err := client.Resubscribe(ctx, "nonexistent")
@@ -1016,10 +944,6 @@ func TestClientResubscribe(t *testing.T) {
 		t.Fatal("expected error for resubscribing to nonexistent task")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
@@ -1040,10 +964,6 @@ func (r *stringReader) Read(p []byte) (n int, err error) {
 	r.pos += n
 	return n, nil
 }
-
-// ---------------------------------------------------------------------------
-// RemoteTool
-// ---------------------------------------------------------------------------
 
 func TestRemoteToolName(t *testing.T) {
 	remote := NewRemoteTool(&Registry{}, "key")
@@ -1071,7 +991,6 @@ func TestRemoteToolListInstances(t *testing.T) {
 	reg := &Registry{}
 	remote := NewRemoteTool(reg, "key")
 
-	// No instances → friendly message.
 	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"list","skill":"full-task","message":"test"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -1114,7 +1033,6 @@ func TestRemoteToolTargetNotFound(t *testing.T) {
 func TestRemoteToolCacheRefresh(t *testing.T) {
 	remote := NewRemoteTool(&Registry{}, "key")
 
-	// Initially empty.
 	instances, err := remote.discover()
 	if err != nil {
 		t.Fatal(err)
@@ -1123,7 +1041,6 @@ func TestRemoteToolCacheRefresh(t *testing.T) {
 		t.Error("expected 0 instances")
 	}
 
-	// Refresh (no-op since registry is empty).
 	remote.RefreshCache()
 
 	instances, err = remote.discover()
@@ -1135,10 +1052,6 @@ func TestRemoteToolCacheRefresh(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests for optimization changes (snapshot, channel notification, cleanup, etc.)
-// ---------------------------------------------------------------------------
-
 func TestGetTaskReturnsSnapshot(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
@@ -1148,14 +1061,12 @@ func TestGetTaskReturnsSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// GetTask returns a snapshot — mutating it should not affect internal state.
 	snap, ok := handler.GetTask(task.ID)
 	if !ok {
 		t.Fatal("task not found")
 	}
 	snap.Status = TaskStatus{State: TaskStateFailed}
 
-	// Internal task should be unchanged.
 	internal := handler.tasks[task.ID]
 	if internal.Status.State == TaskStateFailed {
 		t.Error("mutating snapshot affected internal task state")
@@ -1181,11 +1092,9 @@ func TestSnapshotDeepCopiesSlices(t *testing.T) {
 
 	snap := orig.Snapshot()
 
-	// Mutate snapshot's slices.
 	snap.History[0].Parts[0].Text = "mutated"
 	snap.Artifacts[0].Parts[0].Text = "mutated2"
 
-	// Original should be unchanged.
 	if orig.History[0].Parts[0].Text != "hello" {
 		t.Error("snapshot History was not deep copied")
 	}
@@ -1193,7 +1102,6 @@ func TestSnapshotDeepCopiesSlices(t *testing.T) {
 		t.Error("snapshot Artifacts was not deep copied")
 	}
 
-	// done channel should not be copied.
 	if snap.done != nil {
 		t.Error("done channel should not be in snapshot")
 	}
@@ -1219,13 +1127,11 @@ func TestDoneChannelClosedOnTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Get the done channel.
 	done := handler.GetTaskDone(task.ID)
 	if done == nil {
 		t.Fatal("done channel should exist for new task")
 	}
 
-	// Put task into terminal state.
 	handler.mu.Lock()
 	it := handler.tasks[task.ID]
 	it.Status = TaskStatus{State: TaskStateCompleted}
@@ -1236,15 +1142,12 @@ func TestDoneChannelClosedOnTerminal(t *testing.T) {
 	}
 	handler.mu.Unlock()
 
-	// done channel should be closed.
 	select {
 	case <-done:
-		// OK
 	default:
 		t.Error("done channel should be closed after terminal state")
 	}
 
-	// GetTaskDone should return nil after terminal.
 	done2 := handler.GetTaskDone(task.ID)
 	if done2 != nil {
 		t.Error("GetTaskDone should return nil for terminal task")
@@ -1254,7 +1157,6 @@ func TestDoneChannelClosedOnTerminal(t *testing.T) {
 func TestCleanupExpiredTasks(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
-	// Create a task and force it to completed with old timestamp.
 	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
 	}, "")
@@ -1282,7 +1184,6 @@ func TestCleanupExpiredTasks(t *testing.T) {
 	internal.UpdatedAt = time.Now().Add(-maxCompletedAge - time.Minute)
 	handler.mu.Unlock()
 
-	// Create another fresh task.
 	task2, err := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello2"}},
 	}, "")
@@ -1290,7 +1191,6 @@ func TestCleanupExpiredTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Trigger cleanup by calling Handle (which calls cleanupExpiredTasksLocked).
 	_, err = handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello3"}},
 	}, "")
@@ -1298,13 +1198,11 @@ func TestCleanupExpiredTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Old task should be cleaned up.
 	_, ok := handler.GetTask(task.ID)
 	if ok {
 		t.Error("old completed task should have been cleaned up")
 	}
 
-	// Fresh task should still exist.
 	_, ok = handler.GetTask(task2.ID)
 	if !ok {
 		t.Error("fresh task should still exist")
@@ -1321,21 +1219,15 @@ func TestClientDisconnectCancelsWait(t *testing.T) {
 
 	client := NewClient(srv.Endpoint(), "")
 
-	// Create a context that we cancel early.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Cancel quickly — the server-side handler won't complete in time.
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		cancel()
 	}()
 
-	// This should not block forever — it should return when ctx is cancelled.
 	_, err := client.SendMessage(ctx, SkillFullTask, "test")
-	// Context cancelled should result in an error (context cancelled or EOF).
 	if err == nil {
-		// The task might have completed before the cancel took effect.
-		// That's OK — the important thing is it didn't hang.
 		t.Log("task completed before cancel (acceptable)")
 	}
 }
@@ -1369,10 +1261,6 @@ func TestSSECommentLines(t *testing.T) {
 		t.Fatal("timeout waiting for SSE event")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// P0/P1/P2 spec alignment tests
-// ---------------------------------------------------------------------------
 
 func TestWellKnownA2AJSON(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
@@ -1507,7 +1395,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 
 	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
 
-	// Set
 	cfg := PushNotificationConfig{
 		TaskID: "task-1",
 		URL:    "http://example.com/push",
@@ -1529,7 +1416,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 	if setResp.Error != nil {
 		t.Fatalf("set error: %v", setResp.Error)
 	}
-	// Extract the auto-generated ID.
 	var cfgResult map[string]interface{}
 	json.Unmarshal(mustMarshal(setResp.Result), &cfgResult)
 	pushID, _ := cfgResult["id"].(string)
@@ -1537,7 +1423,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 		t.Fatal("expected auto-generated push ID")
 	}
 
-	// Get
 	getBody, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"2"`),
@@ -1555,7 +1440,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 		t.Fatalf("get error: %v", getResp.Error)
 	}
 
-	// List
 	listBody, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"3"`),
@@ -1573,7 +1457,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 		t.Fatalf("list error: %v", listResp.Error)
 	}
 
-	// Delete
 	delBody, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"4"`),
@@ -1591,7 +1474,6 @@ func TestPushNotificationCRUD(t *testing.T) {
 		t.Fatalf("delete error: %v", delResp.Error)
 	}
 
-	// Get after delete → should fail
 	resp, err = testPost(base, "application/json", bytes.NewReader(getBody))
 	if err != nil {
 		t.Fatal(err)
@@ -1613,7 +1495,6 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 
 	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
 
-	// Unsupported mode → error
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"1"`),
@@ -1637,14 +1518,13 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 		t.Errorf("expected ErrUnsupportedMode (%d), got %d", ErrUnsupportedMode.Code, rpcResp.Error.Code)
 	}
 
-	// Supported mode → should not get ErrUnsupportedMode
 	body2, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"2"`),
 		Method:  "message/send",
 		Params: mustMarshal(SendMessageParams{
 			Message:       Message{Role: "user", Parts: []Part{{Kind: "text", Text: "test"}}},
-			Skill:         SkillFileSearch, // use file-search for quick failure
+			Skill:         SkillFileSearch,
 			Configuration: &SendMessageConfig{AcceptedOutputModes: []string{"text/plain"}},
 		}),
 	})
@@ -1655,7 +1535,6 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 	var rpcResp2 JSONRPCResponse
 	json.NewDecoder(resp2.Body).Decode(&rpcResp2)
 	resp2.Body.Close()
-	// Should not be ErrUnsupportedMode (may be other errors due to no agent)
 	if rpcResp2.Error != nil && rpcResp2.Error.Code == ErrUnsupportedMode.Code {
 		t.Errorf("text/plain should be supported, got error: %v", rpcResp2.Error)
 	}
@@ -1669,7 +1548,6 @@ func TestHistoryLengthFilter(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a task and wait for it to finish (no agent → fails quickly)
 	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
 	}, "")
@@ -1678,7 +1556,6 @@ func TestHistoryLengthFilter(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	// Now force history to have multiple messages (after async execution is done)
 	handler.mu.Lock()
 	handler.tasks[task.ID].History = []Message{
 		{Role: "user", Parts: []Part{{Kind: "text", Text: "msg1"}}},
@@ -1689,7 +1566,6 @@ func TestHistoryLengthFilter(t *testing.T) {
 
 	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
 
-	// Get with historyLength=1
 	hl := 1
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -1717,7 +1593,6 @@ func TestHistoryLengthFilter(t *testing.T) {
 		t.Errorf("expected last message (msg3), got %s", resultTask.History[0].Parts[0].Text)
 	}
 
-	// Get with historyLength=0 → empty history
 	hl0 := 0
 	body0, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -1806,7 +1681,6 @@ func TestGetExtendedAgentCard(t *testing.T) {
 		t.Errorf("expected custom=data, got %v", result["custom"])
 	}
 
-	// Verify capability flag via agent card endpoint
 	resp2, _ := testGet(base + "/.well-known/a2a.json")
 	var card AgentCard
 	json.NewDecoder(resp2.Body).Decode(&card)
@@ -1833,7 +1707,6 @@ func TestTaskEventCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for async execution to complete (no agent → fails quickly)
 	time.Sleep(300 * time.Millisecond)
 
 	evMu.Lock()
@@ -1842,7 +1715,6 @@ func TestTaskEventCallback(t *testing.T) {
 		t.Fatal("expected at least one event callback")
 	}
 
-	// Events should contain at least one type
 	if events[0].Type == "" {
 		t.Error("expected event type to be set")
 	}
@@ -1850,7 +1722,6 @@ func TestTaskEventCallback(t *testing.T) {
 		t.Errorf("expected task ID %s, got %s", task.ID, events[0].TaskID)
 	}
 
-	// Should have "fail" event (no agent to run)
 	foundFail := false
 	for _, e := range events {
 		if e.Type == "fail" {
@@ -1873,25 +1744,21 @@ func TestActiveTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Task is executed asynchronously. Since no agent is configured,
-	// SkillFullTask will immediately fail and complete. Wait for it.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		active := handler.ActiveTasks()
 		for _, at := range active {
 			if at.ID == task.ID {
-				return // found in active list
+				return
 			}
 		}
-		// Check if task already completed (agent is nil, fails fast).
 		info, ok := handler.GetTask(task.ID)
 		if ok && info.Status.State.IsTerminal() {
-			return // completed before observed, which is fine
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Final check: task should at least exist.
 	info, ok := handler.GetTask(task.ID)
 	if !ok {
 		t.Fatalf("task %s not found in handler", task.ID)
@@ -1909,7 +1776,6 @@ func TestListTasksRPC(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a task
 	_, err := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
 	}, "")
@@ -2077,12 +1943,7 @@ func mustMarshal(v interface{}) json.RawMessage {
 	return data
 }
 
-// ---------------------------------------------------------------------------
-// Multi-scheme auth tests
-// ---------------------------------------------------------------------------
-
 func TestSecuritySchemeTypes(t *testing.T) {
-	// API Key scheme
 	apiKey := SecurityScheme{
 		Type:        "apiKey",
 		In:          "header",
@@ -2096,7 +1957,6 @@ func TestSecuritySchemeTypes(t *testing.T) {
 		t.Errorf("unexpected: %+v", parsed)
 	}
 
-	// OAuth2 scheme
 	oauth2Scheme := SecurityScheme{
 		Type:        "oauth2",
 		Description: "OAuth2 + PKCE",
@@ -2121,7 +1981,6 @@ func TestSecuritySchemeTypes(t *testing.T) {
 		t.Errorf("unexpected auth URL: %s", parsed2.Flows.AuthorizationCode.AuthorizationURL)
 	}
 
-	// OpenID Connect scheme
 	oidcScheme := SecurityScheme{
 		Type:             "openIdConnect",
 		OpenIDConnectURL: "https://accounts.google.com/.well-known/openid-configuration",
@@ -2133,7 +1992,6 @@ func TestSecuritySchemeTypes(t *testing.T) {
 		t.Errorf("expected openIdConnect, got %s", parsed3.Type)
 	}
 
-	// Mutual TLS scheme
 	mtls := SecurityScheme{
 		Type:        "mutualTLS",
 		Description: "Mutual TLS authentication",
@@ -2186,7 +2044,6 @@ func TestOAuthFlowsSerialization(t *testing.T) {
 func TestServerAuthenticateNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
-	// No auth configured → all requests denied (including localhost)
 	req, _ := http.NewRequest("POST", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	if srv.authenticate(req) {
@@ -2204,19 +2061,16 @@ func TestServerAuthenticateAPIKey(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "secret123"}, handler)
 
-	// No key → reject
 	req, _ := http.NewRequest("POST", "/", nil)
 	if srv.authenticate(req) {
 		t.Error("expected rejection without API key")
 	}
 
-	// Wrong key → reject
 	req.Header.Set("X-API-Key", "wrong")
 	if srv.authenticate(req) {
 		t.Error("expected rejection with wrong key")
 	}
 
-	// Correct key → allow
 	req.Header.Set("X-API-Key", "secret123")
 	if !srv.authenticate(req) {
 		t.Error("expected allow with correct key")
@@ -2226,7 +2080,6 @@ func TestServerAuthenticateAPIKey(t *testing.T) {
 func TestServerAuthenticateBearerToken(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "fallback-key"}, handler)
-	// No token validator → Bearer should be rejected
 	req, _ := http.NewRequest("POST", "/", nil)
 	req.Header.Set("Authorization", "Bearer some-token")
 	if srv.authenticate(req) {
@@ -2239,13 +2092,11 @@ func TestServerAuthenticateMTLS(t *testing.T) {
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	srv.SetMTLSEnabled(true)
 
-	// No TLS → reject
 	req, _ := http.NewRequest("POST", "/", nil)
 	if srv.authenticate(req) {
 		t.Error("expected rejection without TLS client cert")
 	}
 
-	// With TLS + peer cert → allow
 	req.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{{}},
 	}
@@ -2255,7 +2106,6 @@ func TestServerAuthenticateMTLS(t *testing.T) {
 }
 
 func TestA2AAuthConfigYAML(t *testing.T) {
-	// Verify the config struct supports all auth schemes
 	yaml := `
 a2a:
   enabled: true
@@ -2275,19 +2125,13 @@ a2a:
       key_file: "/etc/ggcode/server.key"
       ca_file: "/etc/ggcode/ca.crt"
 `
-	// Just verify it parses — actual YAML parsing tested in config package
 	if yaml == "" {
 		t.Error("yaml should not be empty")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Auth negotiation tests
-// ---------------------------------------------------------------------------
-
 func TestClientNegotiateAuthNoSecurity(t *testing.T) {
 	client := NewClient("http://example.com", "")
-	// Simulate discovered card with no security
 	client.card.Store(&AgentCard{Name: "test"})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -2334,7 +2178,7 @@ func TestClientNegotiateAuthBearerToken(t *testing.T) {
 }
 
 func TestClientNegotiateAuthNoMatchingCredential(t *testing.T) {
-	client := NewClient("http://example.com", "") // no key, no token
+	client := NewClient("http://example.com", "")
 	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"oauth2": {Type: "oauth2"},
@@ -2407,7 +2251,6 @@ func TestClientDiscoverAndNegotiateE2E(t *testing.T) {
 		t.Fatal("expected non-nil card")
 	}
 
-	// Card should show apiKey security (server has APIKey configured)
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("negotiate failed: %v", err)
 	}
@@ -2416,17 +2259,12 @@ func TestClientDiscoverAndNegotiateE2E(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Missing coverage: Push callback fire, SSE stream, multi-auth, E2E
-// ---------------------------------------------------------------------------
-
 func TestPushNotificationFiredOnTaskCompletion(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
 	var pushPayloads []StreamResponse
 	var pushMu sync.Mutex
 
-	// Set push notifier directly (same as what NewServer does)
 	handler.SetPushNotifier(func(taskID string, payload StreamResponse) {
 		pushMu.Lock()
 		t.Logf("push notifier called for task %s, final=%v", taskID, payload.StatusUpdate != nil && payload.StatusUpdate.Final)
@@ -2434,7 +2272,6 @@ func TestPushNotificationFiredOnTaskCompletion(t *testing.T) {
 		pushMu.Unlock()
 	})
 
-	// Use SkillFileSearch which goes to executeDirectTool (no agent needed, will fail on nil registry)
 	task, err := handler.Handle(context.Background(), SkillFileSearch, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
 	}, "")
@@ -2442,10 +2279,8 @@ func TestPushNotificationFiredOnTaskCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for async execution
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify task reached terminal state
 	snap, _ := handler.GetTask(task.ID)
 	t.Logf("task %s state=%s", task.ID, snap.Status.State)
 
@@ -2468,7 +2303,6 @@ func TestServerMultiAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "key123"}, handler)
 
-	// Also configure bearer token validator
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
 	srv.SetTokenValidator(tv)
 
@@ -2479,7 +2313,6 @@ func TestServerMultiAuth(t *testing.T) {
 
 	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
 
-	// 1) API key should work
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0", ID: json.RawMessage(`"1"`), Method: "tasks/list", Params: json.RawMessage(`{}`),
 	})
@@ -2495,7 +2328,6 @@ func TestServerMultiAuth(t *testing.T) {
 		t.Errorf("API key auth: expected 200, got %d", resp.StatusCode)
 	}
 
-	// 2) Bearer token (since our validator accepts any JWT-like token)
 	req2, _ := http.NewRequest("POST", base, bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig")
@@ -2504,10 +2336,7 @@ func TestServerMultiAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp2.Body.Close()
-	// Note: validator does basic JWT structure check, may accept or reject
-	// The key test is that both paths are exercised
 
-	// 3) Neither key nor token → reject
 	req3, _ := http.NewRequest("POST", base, bytes.NewReader(body))
 	req3.Header.Set("Content-Type", "application/json")
 	resp3, err := http.DefaultClient.Do(req3)
@@ -2539,7 +2368,6 @@ func TestClientNegotiateAuthOIDCScheme(t *testing.T) {
 }
 
 func TestClientNegotiateAuthMultiScheme(t *testing.T) {
-	// Server supports both apiKey and oauth2; client has apiKey
 	client := NewClient("http://example.com", "my-key")
 	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
@@ -2560,7 +2388,6 @@ func TestClientNegotiateAuthMultiScheme(t *testing.T) {
 }
 
 func TestClientNegotiateAuthMultiSchemeFallback(t *testing.T) {
-	// Server supports apiKey and oauth2; client only has bearer token
 	client := NewClient("http://example.com", "", WithBearerToken("token"))
 	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
@@ -2612,9 +2439,7 @@ func TestBearerTokenSentToServer(t *testing.T) {
 	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "",
 		WithBearerToken("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig"))
 
-	// Send should include Authorization header
 	task, err := client.SendMessage(context.Background(), SkillFileSearch, "test")
-	// Whether it succeeds depends on token validation, but it should not panic
 	_ = task
 	_ = err
 }
@@ -2634,7 +2459,6 @@ func TestSSEStreamE2E(t *testing.T) {
 		t.Fatalf("Stream failed: %v", err)
 	}
 
-	// Should get at least one event before channel closes
 	gotEvent := false
 	for range ch {
 		gotEvent = true
@@ -2673,13 +2497,9 @@ func TestResubscribeRPC(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Agent Card Security Schemes
-// ---------------------------------------------------------------------------
-
 func TestAgentCardSecurityNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key
+	srv := NewServer(ServerConfig{Port: 0}, handler)
 	if len(srv.card.SecuritySchemes) != 0 {
 		t.Errorf("expected no schemes, got %v", srv.card.SecuritySchemes)
 	}
@@ -2704,7 +2524,7 @@ func TestAgentCardSecurityAPIKeyOnly(t *testing.T) {
 
 func TestAgentCardSecurityOAuth2Only(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key, only OAuth2
+	srv := NewServer(ServerConfig{Port: 0}, handler)
 	tv, _ := auth.NewTokenValidator("test", "https://example.com")
 	srv.SetTokenValidator(tv)
 	if _, ok := srv.card.SecuritySchemes["bearer"]; !ok {
@@ -2738,7 +2558,6 @@ func TestAgentCardSecurityMultiScheme(t *testing.T) {
 		t.Errorf("expected 3 security requirements, got %d", len(srv.card.Security))
 	}
 
-	// Each scheme should be present
 	for _, name := range []string{"apiKey", "bearer", "mutualTLS"} {
 		if _, ok := srv.card.SecuritySchemes[name]; !ok {
 			t.Errorf("missing scheme: %s", name)
@@ -2748,21 +2567,18 @@ func TestAgentCardSecurityMultiScheme(t *testing.T) {
 
 func TestAgentCardSecurityUpdatedDynamically(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key initially
+	srv := NewServer(ServerConfig{Port: 0}, handler)
 
-	// Initially no auth
 	if len(srv.card.SecuritySchemes) != 0 {
 		t.Error("expected no schemes initially")
 	}
 
-	// Add token validator
 	tv, _ := auth.NewTokenValidator("test", "https://example.com")
 	srv.SetTokenValidator(tv)
 	if len(srv.card.SecuritySchemes) != 1 {
 		t.Error("expected 1 scheme after adding validator")
 	}
 
-	// Add mTLS
 	srv.SetMTLSEnabled(true)
 	if len(srv.card.SecuritySchemes) != 2 {
 		t.Error("expected 2 schemes after adding mTLS")
@@ -2773,7 +2589,6 @@ func TestServerMTLSSetsTLSConfig(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 
-	// Generate self-signed cert for testing
 	cert, key := generateTestCert(t)
 	certFile := filepath.Join(t.TempDir(), "cert.pem")
 	keyFile := filepath.Join(t.TempDir(), "key.pem")
@@ -2851,10 +2666,6 @@ func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
 	return certBuf.Bytes(), keyBuf.Bytes()
 }
 
-// ---------------------------------------------------------------------------
-// Client auto token acquisition
-// ---------------------------------------------------------------------------
-
 type mockTokenProvider struct {
 	token   string
 	refresh string
@@ -2869,7 +2680,6 @@ func (m *mockTokenProvider) GetToken(ctx context.Context) (string, string, time.
 }
 
 func TestClientAutoTokenAcquisition(t *testing.T) {
-	// Server requiring bearer auth
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
@@ -2877,7 +2687,6 @@ func TestClientAutoTokenAcquisition(t *testing.T) {
 	srv.Start()
 	defer srv.Stop()
 
-	// Client with mock token provider
 	provider := &mockTokenProvider{
 		token:   "auto-acquired-token",
 		expiry:  time.Now().Add(time.Hour),
@@ -2976,7 +2785,6 @@ func TestClientTokenProviderError(t *testing.T) {
 }
 
 func TestClientServerMultiAuthDifferentClients(t *testing.T) {
-	// Server accepts both apiKey and bearer
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "shared-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
@@ -2984,7 +2792,6 @@ func TestClientServerMultiAuthDifferentClients(t *testing.T) {
 	srv.Start()
 	defer srv.Stop()
 
-	// Client A uses apiKey
 	clientA := NewClient(srv.Endpoint(), "shared-key")
 	card, err := clientA.Discover(context.Background())
 	if err != nil {
@@ -2997,7 +2804,6 @@ func TestClientServerMultiAuthDifferentClients(t *testing.T) {
 		t.Errorf("clientA expected apiKey, got %s", clientA.authMethod)
 	}
 
-	// Client B uses bearer token (via provider)
 	provider := &mockTokenProvider{
 		token:  "bearer-token-for-B",
 		expiry: time.Now().Add(time.Hour),
@@ -3014,7 +2820,6 @@ func TestClientServerMultiAuthDifferentClients(t *testing.T) {
 		t.Errorf("clientB expected bearer, got %s", clientB.authMethod)
 	}
 
-	// Verify agent card advertises both schemes
 	if len(card.SecuritySchemes) != 2 {
 		t.Errorf("expected 2 schemes, got %d: %v", len(card.SecuritySchemes), card.SecuritySchemes)
 	}

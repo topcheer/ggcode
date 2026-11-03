@@ -29,17 +29,11 @@ func loadDisabledSet() map[string]bool {
 	}
 	disabledMu.RUnlock()
 
-	// Cache miss: upgrade to the write lock before populating -
-	// loadDisabledSetLocked requires the writer lock, and an unlocked call
-	// races with PersistEnabledState's locked writes to the same globals
-	// (lost update of a just-disabled skill + data race).
 	disabledMu.Lock()
 	defer disabledMu.Unlock()
 	return loadDisabledSetLocked()
 }
 
-// loadDisabledSetLocked populates the disabled-set cache from disk.
-// Caller MUST hold disabledMu for writing.
 func loadDisabledSetLocked() map[string]bool {
 	if disabledCacheOK {
 		return disabledCache
@@ -93,8 +87,6 @@ func saveDisabledSet(disabled map[string]bool) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// ApplyDisabledState sets the Enabled field on each command based on persisted state.
-// New skills (not in the persisted set) default to enabled.
 func ApplyDisabledState(cmds map[string]*Command) {
 	disabled := loadDisabledSet()
 	for name, cmd := range cmds {
@@ -108,24 +100,16 @@ func ApplyDisabledState(cmds map[string]*Command) {
 		if disabled[name] {
 			cmd.Enabled = false
 		}
-		// else: defaults to whatever the loader set (true for new skills)
 	}
 }
 
-// PersistEnabledState saves the enabled/disabled state for a single skill.
 func PersistEnabledState(name string, enabled bool) {
-	// #1702 case 5: the read-copy-write ran OUTSIDE any lock spanning the
-	// whole RMW - two concurrent calls both copied the same cache, each
-	// dropped the other's change (lost update), and the interleaved disk
-	// writes made the file nondeterministic. Serialize the full RMW.
 	disabledMu.Lock()
 	defer disabledMu.Unlock()
 	cached := disabledCache
 	if !disabledCacheOK {
 		cached = loadDisabledSetLocked()
 	}
-	// Copy the cached map before mutating to avoid concurrent map access
-	// with readers that hold the same map pointer from the cache.
 	disabled := make(map[string]bool, len(cached)+1)
 	for k, v := range cached {
 		disabled[k] = v
@@ -137,12 +121,10 @@ func PersistEnabledState(name string, enabled bool) {
 	}
 	_ = saveDisabledSet(disabled)
 
-	// Update cache (lock already held)
 	disabledCache = disabled
 	disabledCacheOK = true
 }
 
-// InvalidateDisabledCache clears the in-memory cache so next load reads from disk.
 func InvalidateDisabledCache() {
 	disabledMu.Lock()
 	disabledCacheOK = false

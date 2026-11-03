@@ -87,5 +87,5 @@ func TestNewTokenValidator_EmptyIssuer(t *testing.T) {
 	if err != nil {
 		t.Logf("NewTokenValidator('') error (expected): %v", err)
 	}
-	_ = tv // may be nil
+	_ = tv
 }

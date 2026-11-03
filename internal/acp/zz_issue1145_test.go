@@ -1,20 +1,5 @@
 package acp
 
-// Characteristic tests for issue #1145.
-//
-// handleSetConfigOption previously treated the "mode" config option as
-// echo-only: it updated CurrentValue in the response copy without writing
-// h.sessionModes or applying the mode to the active agent loop, silently
-// ignoring permission downgrades (auto -> supervised). These tests pin the
-// fixed behavior:
-//
-//   - a mode set via session/set_config_option persists in h.sessionModes and
-//     is applied to any registered active loop (same semantics as set_mode)
-//   - an unknown session is rejected instead of returning success
-//   - values not declared in the select options are rejected (no "banana")
-//   - a valid value echoes back consistently with what was actually applied
-//   - non-mode config options keep their previous echo-only behavior
-
 import (
 	"bytes"
 	"encoding/json"
@@ -31,7 +16,6 @@ func newIssue1145Handler(t *testing.T) *Handler {
 	transport := NewTransport(strings.NewReader(""), &buf)
 	h := NewHandler(&config.Config{}, tool.NewRegistry(), transport, nil)
 	h.initialized = true
-	// Redirect session storage into a temp dir so the test is hermetic.
 	h.sessionsDir = t.TempDir()
 	return h
 }
@@ -75,10 +59,6 @@ func issue1145ModeValue(t *testing.T, res interface{}) SessionConfigValueId {
 	return ""
 }
 
-// TestIssue1145ConfigOptionModeDowngradeReallyApplies verifies that setting
-// mode=supervised through session/set_config_option is not just echoed back:
-// h.sessionModes records the downgrade and the active loop adopts it, matching
-// handleSessionSetMode semantics.
 func TestIssue1145ConfigOptionModeDowngradeReallyApplies(t *testing.T) {
 	h := newIssue1145Handler(t)
 	sessionID := issue1145RegisterSession(t, h)
@@ -110,9 +90,6 @@ func TestIssue1145ConfigOptionModeDowngradeReallyApplies(t *testing.T) {
 	}
 }
 
-// TestIssue1145ConfigOptionUnknownSessionErrors verifies the additional defect:
-// set_config_option on a nonexistent session must fail like set_mode does,
-// instead of returning a success response with default config options.
 func TestIssue1145ConfigOptionUnknownSessionErrors(t *testing.T) {
 	h := newIssue1145Handler(t)
 
@@ -135,9 +112,6 @@ func TestIssue1145ConfigOptionUnknownSessionErrors(t *testing.T) {
 	}
 }
 
-// TestIssue1145ConfigOptionInvalidModeValueRejected verifies that values which
-// are not declared select options are rejected instead of being echoed back
-// as accepted (the "banana" case), and that nothing is applied on rejection.
 func TestIssue1145ConfigOptionInvalidModeValueRejected(t *testing.T) {
 	h := newIssue1145Handler(t)
 	sessionID := issue1145RegisterSession(t, h)
@@ -163,9 +137,6 @@ func TestIssue1145ConfigOptionInvalidModeValueRejected(t *testing.T) {
 	}
 }
 
-// TestIssue1145ConfigOptionValidEchoConsistentWithoutLoop verifies the happy
-// path when no agent loop is active yet: a valid value still succeeds, is
-// persisted for later prompts, and the response echo matches the applied value.
 func TestIssue1145ConfigOptionValidEchoConsistentWithoutLoop(t *testing.T) {
 	h := newIssue1145Handler(t)
 	sessionID := issue1145RegisterSession(t, h)
@@ -192,11 +163,6 @@ func TestIssue1145ConfigOptionValidEchoConsistentWithoutLoop(t *testing.T) {
 	}
 }
 
-// TestIssue1145NonModeConfigOptionBehaviorUnchanged pins requirement 3: config
-// options other than "mode" keep their previous behavior. The server currently
-// only declares the "mode" select option, so an unknown/non-mode configId
-// succeeds without error, leaves every echoed option unchanged (mode stays at
-// its current value), and never touches permission-mode bookkeeping.
 func TestIssue1145NonModeConfigOptionBehaviorUnchanged(t *testing.T) {
 	h := newIssue1145Handler(t)
 	sessionID := issue1145RegisterSession(t, h)

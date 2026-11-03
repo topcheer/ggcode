@@ -9,12 +9,6 @@ import (
 	"time"
 )
 
-// TestTokenCacheSaveConcurrentWritersNoCorruption pins the #1505-case-3-class
-// fix in TokenCache.Save: concurrent Save calls must never interleave into a
-// corrupted JSON document. The old fixed path+".tmp" scratch name let two
-// writers O_TRUNC the same scratch file, mixing two JSON payloads before the
-// rename; with per-writer CreateTemp scratch files every writer renames a
-// complete document and the final file always parses.
 func TestTokenCacheSaveConcurrentWritersNoCorruption(t *testing.T) {
 	dir := t.TempDir()
 	cache := NewTokenCache(dir)
@@ -43,8 +37,6 @@ func TestTokenCacheSaveConcurrentWritersNoCorruption(t *testing.T) {
 	}
 	wg.Wait()
 
-	// The final file must parse as exactly one valid tokenEntry - the old
-	// interleaved-scratch corruption produced a mixed document here.
 	data, err := os.ReadFile(filepath.Join(dir, "provider-x.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +48,6 @@ func TestTokenCacheSaveConcurrentWritersNoCorruption(t *testing.T) {
 	if entry.AccessToken != "tok-concurrent" {
 		t.Fatalf("unexpected access token: %q", entry.AccessToken)
 	}
-	// No scratch files may be left behind on the success path.
 	remaining, err := filepath.Glob(filepath.Join(dir, "provider-x.json.tmp-*"))
 	if err != nil {
 		t.Fatal(err)

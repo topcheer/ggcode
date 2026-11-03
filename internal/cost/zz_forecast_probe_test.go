@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// r434 pre-execution token forecasting probes. Discriminating power: the
-// ForecastTokens function and its band/degradation semantics do not exist
-// before this change (compile-level red).
-
-// samplePrompt builds prompts sharing task vocabulary so similarity ranks
-// them near the query.
 func samplePrompt(i int) string {
 	return fmt.Sprintf("fix the parser bug in module %d and add regression tests", i)
 }
@@ -21,7 +15,7 @@ func TestForecastSimilarRunsGiveTightBand(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		samples = append(samples, RunSample{
 			FirstPrompt: samplePrompt(i),
-			Tokens:      100_000 + i*1_000, // 100k..111k, tight cluster
+			Tokens:      100_000 + i*1_000,
 		})
 	}
 	fc := ForecastTokens(samples, "fix the parser bug in the token scanner and add regression tests")
@@ -31,7 +25,6 @@ func TestForecastSimilarRunsGiveTightBand(t *testing.T) {
 	if fc.Degraded {
 		t.Fatalf("Degraded=true with 12 usable samples, want false")
 	}
-	// Band must be drawn from the sample cluster.
 	if fc.Low < 100_000 || fc.High > 111_000 {
 		t.Fatalf("band [%d,%d] outside sample cluster [100000,111000]", fc.Low, fc.High)
 	}
@@ -56,8 +49,6 @@ func TestForecastThinSampleDegrades(t *testing.T) {
 }
 
 func TestForecastNoUsableSamples(t *testing.T) {
-	// Zero-token runs and an empty pool must yield an empty forecast, not
-	// a panic or a fabricated band.
 	fc := ForecastTokens([]RunSample{{FirstPrompt: "x", Tokens: 0}}, "anything")
 	if fc.Neighbors != 0 || fc.Low != 0 || fc.High != 0 || fc.Median != 0 {
 		t.Fatalf("zero-token-only pool: got %+v, want zero forecast", fc)
@@ -76,9 +67,6 @@ func TestForecastSingleSampleBandCollapses(t *testing.T) {
 }
 
 func TestForecastDissimilarRankedBehindSimilar(t *testing.T) {
-	// Two clusters: parser-fix runs (~100k tokens) and doc-writing runs
-	// (~5k tokens). A parser-flavored query must draw its band from the
-	// parser cluster even though doc runs are in the pool.
 	var samples []RunSample
 	for i := 0; i < 8; i++ {
 		samples = append(samples, RunSample{

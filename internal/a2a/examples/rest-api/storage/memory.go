@@ -1,4 +1,3 @@
-// Package storage provides an in-memory, concurrency-safe data store for products.
 package storage
 
 import (
@@ -12,15 +11,13 @@ import (
 	"github.com/topcheer/ggcode/examples/rest-api/model"
 )
 
-// ProductStore manages products in memory with full concurrency safety.
 type ProductStore struct {
 	mu       sync.RWMutex
 	products map[string]*model.Product
-	bySKU    map[string]string // sku -> id lookup
+	bySKU    map[string]string
 	nextID   int
 }
 
-// NewProductStore creates a new empty product store.
 func NewProductStore() *ProductStore {
 	return &ProductStore{
 		products: make(map[string]*model.Product),
@@ -29,18 +26,15 @@ func NewProductStore() *ProductStore {
 	}
 }
 
-// generateID produces a unique product ID.
 func (s *ProductStore) generateID() string {
 	s.nextID++
 	return fmt.Sprintf("prod_%d", s.nextID)
 }
 
-// Create adds a new product to the store. Returns an error if the SKU is already taken.
 func (s *ProductStore) Create(input *model.CreateProductInput) (*model.Product, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check SKU uniqueness.
 	normalizedSKU := strings.ToUpper(strings.TrimSpace(input.SKU))
 	if _, exists := s.bySKU[normalizedSKU]; exists {
 		return nil, errors.NewConflict("product", "sku", normalizedSKU)
@@ -55,27 +49,17 @@ func (s *ProductStore) Create(input *model.CreateProductInput) (*model.Product, 
 		Currency:    input.Currency,
 		SKU:         normalizedSKU,
 		Status:      model.StatusActive,
-		// #1746 case 1: clone the CALLER's slice too - storing it directly
-		// let a post-Create mutation of input.Tags write into storage
-		// outside the lock (the commit's stated motivation, in-bound half).
-		Tags:      append([]string(nil), input.Tags...),
-		CreatedAt: now,
-		UpdatedAt: now,
+		Tags:        append([]string(nil), input.Tags...),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	s.products[product.ID] = product
 	s.bySKU[normalizedSKU] = product.ID
 
-	// #1563: GetByID/List return copies (#1461-B) but Create/Update
-	// returned the STORED pointer - the same race class via two more
-	// exits (caller json.Marshal after lock release vs concurrent
-	// Update). Return a copy with a deep-copied Tags slice (shallow
-	// copies shared the backing array, so caller mutations wrote through
-	// into storage outside the lock).
 	return cloneProduct(product), nil
 }
 
-// cloneProduct returns a deep copy safe to hand past the lock boundary.
 func cloneProduct(p *model.Product) *model.Product {
 	cp := *p
 	if p.Tags != nil {
@@ -84,7 +68,6 @@ func cloneProduct(p *model.Product) *model.Product {
 	return &cp
 }
 
-// GetByID retrieves a product by its ID.
 func (s *ProductStore) GetByID(id string) (*model.Product, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -93,14 +76,9 @@ func (s *ProductStore) GetByID(id string) (*model.Product, error) {
 	if !exists {
 		return nil, errors.NewNotFound("product", id)
 	}
-	// #1461-B: return a shallow copy - handing out the stored pointer lets
-	// a caller's json.Marshal race with Update's in-place writes under
-	// -race (the lock only protects the map structure, not the object
-	// graph).
 	return cloneProduct(product), nil
 }
 
-// Update modifies an existing product. Only non-nil fields in the input are applied.
 func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*model.Product, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,7 +88,6 @@ func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*mode
 		return nil, errors.NewNotFound("product", id)
 	}
 
-	// If SKU is being changed, check uniqueness.
 	if input.SKU != nil {
 		newSKU := strings.ToUpper(strings.TrimSpace(*input.SKU))
 		if newSKU != product.SKU {
@@ -123,7 +100,6 @@ func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*mode
 		}
 	}
 
-	// Apply non-nil updates.
 	if input.Name != nil {
 		product.Name = *input.Name
 	}
@@ -140,16 +116,13 @@ func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*mode
 		product.Status = *input.Status
 	}
 	if input.Tags != nil {
-		// #1746 case 1: same in-bound clone for Update.
 		product.Tags = append([]string(nil), (*input.Tags)...)
 	}
 
 	product.UpdatedAt = time.Now().UTC()
-	// #1563: same race class as Create - never hand out the stored pointer.
 	return cloneProduct(product), nil
 }
 
-// Delete removes a product from the store by ID.
 func (s *ProductStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -164,31 +137,24 @@ func (s *ProductStore) Delete(id string) error {
 	return nil
 }
 
-// List returns a filtered, sorted, and paginated slice of products.
 func (s *ProductStore) List(filter *model.ListProductsFilter) ([]*model.Product, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	filter.ApplyDefaults()
 
-	// Collect all products and apply filters.
 	var result []*model.Product
 	for _, p := range s.products {
 		if !matchesFilter(p, filter) {
 			continue
 		}
-		// #1746 case 2: cloneProduct (deep Tags) - the shallow cp := *p kept
-		// backing arrays shared, the exact thing #1461-B/#1563 judged
-		// insufficient for the return paths.
 		result = append(result, cloneProduct(p))
 	}
 
 	total := len(result)
 
-	// Sort.
 	sortProducts(result, filter.SortBy, filter.SortDir)
 
-	// Paginate.
 	start := (filter.Page - 1) * filter.PerPage
 	if start >= total {
 		return []*model.Product{}, total, nil
@@ -201,14 +167,12 @@ func (s *ProductStore) List(filter *model.ListProductsFilter) ([]*model.Product,
 	return result[start:end], total, nil
 }
 
-// Count returns the total number of products in the store.
 func (s *ProductStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.products)
 }
 
-// matchesFilter checks if a product matches the given filter criteria.
 func matchesFilter(p *model.Product, f *model.ListProductsFilter) bool {
 	if f.Name != "" && !strings.Contains(
 		strings.ToLower(p.Name),
@@ -240,7 +204,6 @@ func matchesFilter(p *model.Product, f *model.ListProductsFilter) bool {
 	return true
 }
 
-// sortProducts sorts the slice in place according to sortBy and sortDir.
 func sortProducts(products []*model.Product, sortBy, sortDir string) {
 	asc := func(i, j int) bool {
 		var less bool
@@ -258,10 +221,6 @@ func sortProducts(products []*model.Product, sortBy, sortDir string) {
 		}
 		return less
 	}
-	// #939: descending must REVERSE THE INDICES, not negate the result.
-	// '!less' turns strict '<' into '>=' (less(i,i)=true), violating
-	// sort.Slice's strict-weak-ordering contract - correct output today is
-	// a pdqsort coincidence, not a guarantee.
 	var less func(i, j int) bool
 	if sortDir == "desc" {
 		less = func(i, j int) bool { return asc(j, i) }

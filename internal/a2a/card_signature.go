@@ -1,22 +1,5 @@
 package a2a
 
-// Agent Card JWS signature verification (A2A spec §8.4 "Agent Card Signing").
-//
-// The publisher signs the RFC 8785 (JCS) canonicalized Agent Card JSON —
-// excluding the signatures field itself — and attaches AgentCardSignature
-// blocks to the card. This verifier reproduces the canonical payload, fetches
-// the signing key from an embedded JWK or the jku JWKS URL, and checks the
-// JWS signature per RFC 7515.
-//
-// Policy (fail-closed on tampering):
-//   - a signature whose crypto check fails with a known algorithm marks the
-//     card as tampered and discovery refuses to proceed;
-//   - unsupported algorithms (e.g. HS256 symmetric) are reported but never
-//     count as tampering — a card may legitimately carry signatures this
-//     build cannot validate;
-//   - when no verifiable key is obtainable the card is used unverified, the
-//     same behavior as clients without this capability, with a debug log.
-
 import (
 	"context"
 	"crypto"
@@ -37,15 +20,12 @@ import (
 	"time"
 )
 
-// AgentCardSignature is one JWS (RFC 7515) signature block attached to an
-// Agent Card (A2A spec §8.4).
 type AgentCardSignature struct {
 	Protected string            `json:"protected"`
 	Signature string            `json:"signature"`
 	Header    map[string]string `json:"header,omitempty"`
 }
 
-// CardSigStatus classifies the outcome of verifying one signature.
 type CardSigStatus string
 
 const (
@@ -55,7 +35,6 @@ const (
 	CardSigNoKey       CardSigStatus = "no-key"
 )
 
-// CardSignatureResult is the per-signature verification outcome.
 type CardSignatureResult struct {
 	Index  int
 	Alg    string
@@ -64,8 +43,6 @@ type CardSignatureResult struct {
 	Err    error
 }
 
-// CardTamperedError is returned when a card's JWS signature fails to verify,
-// proving the card (or its signature) was modified in transit.
 type CardTamperedError struct {
 	Index int
 	Alg   string
@@ -77,12 +54,8 @@ func (e *CardTamperedError) Error() string {
 
 const jwksFetchTimeout = 5 * time.Second
 
-// cardMaxBodyBytes caps how much of a card response body the client reads
-// before signature verification (cards are small; anything larger is abuse).
 const cardMaxBodyBytes = 1 << 20
 
-// hasCardSignatures reports whether a raw card JSON object carries a
-// non-empty signatures field.
 func hasCardSignatures(raw json.RawMessage) bool {
 	var m struct {
 		Signatures []json.RawMessage `json:"signatures"`
@@ -93,16 +66,8 @@ func hasCardSignatures(raw json.RawMessage) bool {
 	return len(m.Signatures) > 0
 }
 
-// jwksFetcher is injectable for tests; production uses fetchJWKS.
 type jwksFetcher func(ctx context.Context, jku string) (map[string]json.RawMessage, error)
 
-// VerifyAgentCardSignature verifies all JWS signatures on a raw Agent Card
-// (A2A spec §8.4). rawCard is the card JSON exactly as received; the signed
-// payload is its RFC 8785 canonicalization with the signatures field removed.
-//
-// Returns per-signature results. The second return value is true when at
-// least one signature with a supported algorithm failed cryptographically —
-// callers must treat that as tampering and reject the card.
 func VerifyAgentCardSignature(rawCard []byte) ([]CardSignatureResult, bool) {
 	return verifyAgentCardSignature(context.Background(), rawCard, fetchJWKS)
 }
@@ -110,8 +75,6 @@ func VerifyAgentCardSignature(rawCard []byte) ([]CardSignatureResult, bool) {
 func verifyAgentCardSignature(ctx context.Context, rawCard []byte, fetcher jwksFetcher) ([]CardSignatureResult, bool) {
 	var cardMap map[string]json.RawMessage
 	if err := json.Unmarshal(rawCard, &cardMap); err != nil {
-		// Caller decoded the same bytes into AgentCard already, so this is
-		// not reachable in practice; treat as tampered to stay fail-closed.
 		return []CardSignatureResult{{Status: CardSigInvalid, Err: err}}, true
 	}
 	sigsJSON, ok := cardMap["signatures"]
@@ -126,8 +89,6 @@ func verifyAgentCardSignature(ctx context.Context, rawCard []byte, fetcher jwksF
 		return nil, false
 	}
 
-	// Signed payload: canonicalized card WITHOUT the signatures field
-	// (A2A §8.4: exclusion avoids the circular-dependency problem).
 	delete(cardMap, "signatures")
 	stripped, err := json.Marshal(cardMap)
 	if err != nil {
@@ -186,7 +147,6 @@ func verifyOneCardSignature(ctx context.Context, idx int, sig *AgentCardSignatur
 	}
 	signingInput := []byte(sig.Protected + "." + payloadB64)
 
-	// Resolve the verification key: embedded JWK first, then jku JWKS URL.
 	var jwk json.RawMessage
 	switch {
 	case len(prot.JWK) > 0:
@@ -232,9 +192,6 @@ type errUnsupportedAlg string
 
 func (e errUnsupportedAlg) Error() string { return "unsupported JWS algorithm: " + string(e) }
 
-// jwsVerify verifies signingInput against sigBytes using the JWK. It supports
-// ES256, RS256 and EdDSA — the asymmetric algorithms appropriate for
-// publisher-signed cards. Symmetric algorithms are deliberately refused.
 func jwsVerify(alg string, jwk json.RawMessage, signingInput, sig []byte) (bool, error) {
 	digest := sha256.Sum256(signingInput)
 	switch alg {
@@ -356,8 +313,6 @@ func jwkEd25519(jwk json.RawMessage) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(k), nil
 }
 
-// matchJWKSKey picks the keys entry matching kid (empty kid matches the
-// single entry when the set has exactly one key).
 func matchJWKSKey(set map[string]json.RawMessage, kid string) json.RawMessage {
 	if set == nil {
 		return nil
@@ -386,9 +341,6 @@ func matchJWKSKey(set map[string]json.RawMessage, kid string) json.RawMessage {
 	return nil
 }
 
-// fetchJWKS downloads a JWKS from the jku URL. Only https (plus loopback
-// plain http for local development and tests) is accepted; a card publisher
-// must not direct key lookups to arbitrary plaintext origins.
 func fetchJWKS(ctx context.Context, jku string) (map[string]json.RawMessage, error) {
 	u, err := parseSecureHTTP(jku)
 	if err != nil {
@@ -433,9 +385,7 @@ func parseSecureHTTP(raw string) (string, error) {
 			host = h
 		}
 		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-			// loopback http allowed (local dev / tests)
 		} else if host == "localhost" {
-			// allowed
 		} else {
 			return "", fmt.Errorf("jku %q: plain http only allowed for loopback", raw)
 		}

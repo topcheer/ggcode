@@ -1,4 +1,3 @@
-// Package middleware provides HTTP middleware for the REST API.
 package middleware
 
 import (
@@ -12,12 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// contextKey is an unexported type for context keys defined in this package.
 type contextKey string
 
 const requestIDKey contextKey = "request_id"
 
-// RequestIDFromContext retrieves the request ID from a context.
 func RequestIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(requestIDKey).(string); ok {
 		return v
@@ -25,7 +22,6 @@ func RequestIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// RequestID injects a unique X-Request-ID into the response and context.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
@@ -38,7 +34,6 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
 	status int
@@ -49,7 +44,6 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// Logging logs each request as structured JSON via slog.
 func Logging(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +67,6 @@ func Logging(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// Recovery catches panics and returns a 500 error.
 func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +88,6 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// CORS adds Cross-Origin Resource Sharing headers.
 func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	origins := strings.Join(allowedOrigins, ", ")
 	if origins == "" {
@@ -119,13 +111,12 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// RateLimiter provides a simple token-bucket rate limiter per IP.
 type RateLimiter struct {
 	mu        sync.Mutex
 	clients   map[string]*clientBucket
-	rate      int           // max requests per window
-	window    time.Duration // time window
-	cleanup   time.Duration // cleanup interval
+	rate      int
+	window    time.Duration
+	cleanup   time.Duration
 	lastSweep time.Time
 }
 
@@ -134,7 +125,6 @@ type clientBucket struct {
 	resetAt time.Time
 }
 
-// NewRateLimiter creates a rate limiter allowing `rate` requests per `window`.
 func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
 	return &RateLimiter{
 		clients:   make(map[string]*clientBucket),
@@ -145,7 +135,6 @@ func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
 	}
 }
 
-// Middleware returns an HTTP middleware that enforces rate limiting.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.RemoteAddr
@@ -168,7 +157,6 @@ func (rl *RateLimiter) allow(key string) bool {
 
 	now := time.Now()
 
-	// Periodic cleanup of stale entries.
 	if now.Sub(rl.lastSweep) > rl.cleanup {
 		for k, v := range rl.clients {
 			if now.After(v.resetAt) {
@@ -191,7 +179,6 @@ func (rl *RateLimiter) allow(key string) bool {
 	return bucket.count <= rl.rate
 }
 
-// ContentType enforces Content-Type: application/json on write operations.
 func ContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {

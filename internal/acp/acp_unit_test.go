@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	// "fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,10 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// ---------------------------------------------------------------------------
-// Session: SaveDir / SetSaveDir
-// ---------------------------------------------------------------------------
-
 func TestSessionSaveDirRoundTrip(t *testing.T) {
 	s := NewSession("/tmp", nil)
 	if s.SaveDir() != "" {
@@ -32,10 +27,6 @@ func TestSessionSaveDirRoundTrip(t *testing.T) {
 		t.Errorf("expected '/some/path', got %q", s.SaveDir())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Session: Save with multiple messages round-trip
-// ---------------------------------------------------------------------------
 
 func TestSessionSaveLoadMultiMsg(t *testing.T) {
 	dir := t.TempDir()
@@ -80,10 +71,6 @@ func TestSessionSaveLoadMultiMsg(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// generateSessionID format
-// ---------------------------------------------------------------------------
-
 func TestGenerateSessionIDFormat(t *testing.T) {
 	id := generateSessionID()
 	if len(id) != 32 {
@@ -96,10 +83,6 @@ func TestGenerateSessionIDFormat(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// acpToProviderContent: unknown type fallback
-// ---------------------------------------------------------------------------
 
 func TestACPToProviderContentUnknownType(t *testing.T) {
 	blocks := []ContentBlock{
@@ -115,10 +98,6 @@ func TestACPToProviderContentUnknownType(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// acpToProviderContent: resource blocks (#1659 case 1)
-// ---------------------------------------------------------------------------
-
 func TestACPToProviderContentResource(t *testing.T) {
 	blocks := []ContentBlock{
 		{Type: "resource", Resource: &EmbeddedResource{Text: &TextResourceContents{
@@ -130,7 +109,7 @@ func TestACPToProviderContentResource(t *testing.T) {
 			Blob:     "aGVsbG8=",
 			MIMEType: "image/png",
 		}}},
-		{Type: "resource"}, // no resource payload - dropped, no panic
+		{Type: "resource"},
 	}
 	result := acpToProviderContent(blocks)
 	if len(result) != 2 {
@@ -143,10 +122,6 @@ func TestACPToProviderContentResource(t *testing.T) {
 		t.Errorf("expected blob placeholder with URI and MIME, got %+v", result[1])
 	}
 }
-
-// ---------------------------------------------------------------------------
-// workspaceSessionsDir
-// ---------------------------------------------------------------------------
 
 func TestWorkspaceSessionsDirEmptyCWD(t *testing.T) {
 	result := workspaceSessionsDir("/base", "")
@@ -163,21 +138,15 @@ func TestWorkspaceSessionsDirWithCWD(t *testing.T) {
 	if !strings.HasPrefix(result, "/base/") {
 		t.Errorf("expected result under /base/, got %q", result)
 	}
-	// Should be deterministic
 	result2 := workspaceSessionsDir("/base", "/home/user/project")
 	if result != result2 {
 		t.Errorf("expected deterministic result, got %q then %q", result, result2)
 	}
-	// Different CWDs should produce different dirs
 	result3 := workspaceSessionsDir("/base", "/home/user/other")
 	if result == result3 {
 		t.Error("expected different CWDs to produce different session dirs")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// getDefaultSessionModeState / getDefaultConfigOptions
-// ---------------------------------------------------------------------------
 
 func TestGetDefaultSessionModeStateValues(t *testing.T) {
 	modes := getDefaultSessionModeState()
@@ -225,10 +194,6 @@ func TestGetDefaultConfigOptionsValues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: WriteRaw / ReadRaw
-// ---------------------------------------------------------------------------
-
 func TestTransportWriteRawAppendsNewline(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -270,10 +235,6 @@ func TestTransportReadRawLines(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: CloseWriter
-// ---------------------------------------------------------------------------
-
 func TestTransportCloseWriterNonCloser(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -281,10 +242,6 @@ func TestTransportCloseWriterNonCloser(t *testing.T) {
 		t.Errorf("CloseWriter on non-closer should return nil, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Transport: WriteErrorNilID
-// ---------------------------------------------------------------------------
 
 func TestTransportWriteErrorNilIDResponse(t *testing.T) {
 	var buf bytes.Buffer
@@ -306,19 +263,13 @@ func TestTransportWriteErrorNilIDResponse(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: DeliverResponse
-// ---------------------------------------------------------------------------
-
 func TestTransportDeliverResponseNilID(t *testing.T) {
 	transport := NewTransport(strings.NewReader(""), io.Discard)
-	// Should not panic with nil ID
 	transport.DeliverResponse(&JSONRPCResponse{ID: nil})
 }
 
 func TestTransportDeliverResponseUnknownType(t *testing.T) {
 	transport := NewTransport(strings.NewReader(""), io.Discard)
-	// ID as string — not float64/int/int64 — should be ignored silently
 	transport.DeliverResponse(&JSONRPCResponse{ID: "string-id"})
 }
 
@@ -341,10 +292,6 @@ func TestTransportDeliverResponseInt64ID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: ReadMessage invalid JSON
-// ---------------------------------------------------------------------------
-
 func TestTransportReadMessageInvalidJSON(t *testing.T) {
 	input := "not-json\n"
 	transport := NewTransport(strings.NewReader(input), io.Discard)
@@ -363,10 +310,6 @@ func TestTransportReadAnyMessageInvalidJSON(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: SendRequest timeout
-// ---------------------------------------------------------------------------
-
 func TestTransportSendRequestTimeout(t *testing.T) {
 	r, _ := io.Pipe()
 	transport := NewTransport(r, io.Discard)
@@ -381,16 +324,10 @@ func TestTransportSendRequestTimeout(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: SendRequest with error response
-// ---------------------------------------------------------------------------
-
-// Transport: SendRequest with nil params (no params field)
 func TestTransportSendRequestNilParams(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
 
-	// Send with nil params — should not include "params" field
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		transport.DeliverResponse(&JSONRPCResponse{ID: float64(1), RawResult: json.RawMessage(`"ok"`)})
@@ -404,17 +341,12 @@ func TestTransportSendRequestNilParams(t *testing.T) {
 		t.Errorf("expected '\"ok\"', got %s", string(result))
 	}
 
-	// Verify no "params" in the written JSON
 	var req map[string]json.RawMessage
 	json.Unmarshal(buf.Bytes(), &req)
 	if _, ok := req["params"]; ok {
 		t.Error("expected no params field when params is nil")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: handleInitialize
-// ---------------------------------------------------------------------------
 
 func TestHandlerInitializeComplete(t *testing.T) {
 	var buf bytes.Buffer
@@ -459,10 +391,6 @@ func TestHandlerInitializeComplete(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionNew not initialized
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionNewNotInitialized(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -476,10 +404,6 @@ func TestHandlerSessionNewNotInitialized(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleAuthenticate unknown method
-// ---------------------------------------------------------------------------
-
 func TestHandlerAuthenticateUnknownMethod(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -492,10 +416,6 @@ func TestHandlerAuthenticateUnknownMethod(t *testing.T) {
 		t.Error("expected error for unknown auth method")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: dispatch with notification (nil ID)
-// ---------------------------------------------------------------------------
 
 func TestHandlerDispatchNotification(t *testing.T) {
 	var buf bytes.Buffer
@@ -520,10 +440,6 @@ func TestHandlerDispatchNotification(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionSetMode not initialized
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionSetModeNotInit(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -537,10 +453,6 @@ func TestHandlerSessionSetModeNotInit(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionLoad not initialized
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionLoadNotInit(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -553,10 +465,6 @@ func TestHandlerSessionLoadNotInit(t *testing.T) {
 		t.Error("expected error when not initialized")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: handleSetConfigOption
-// ---------------------------------------------------------------------------
 
 func TestHandlerSetConfigOptionUpdatesValue(t *testing.T) {
 	var buf bytes.Buffer
@@ -594,10 +502,6 @@ func TestHandlerSetConfigOptionUpdatesValue(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionCancel with active session
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionCancelActive(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -626,10 +530,6 @@ func TestHandlerSessionCancelActive(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleRequest method not found
-// ---------------------------------------------------------------------------
-
 func TestHandlerHandleRequestMethodNotFound(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -651,10 +551,6 @@ func TestHandlerHandleRequestMethodNotFound(t *testing.T) {
 		t.Errorf("expected method not found error, got %+v", resp.Error)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: cleanupEmptySessions
-// ---------------------------------------------------------------------------
 
 func TestHandlerCleanupEmptySessionsRemovesFiles(t *testing.T) {
 	var buf bytes.Buffer
@@ -682,10 +578,6 @@ func TestHandlerCleanupEmptySessionsRemovesFiles(t *testing.T) {
 		t.Error("expected empty session file to be cleaned up")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: handleAuthenticate with api-key (env var check)
-// ---------------------------------------------------------------------------
 
 func TestHandlerAuthenticateAPIKeyMissingEnvVar(t *testing.T) {
 	var buf bytes.Buffer
@@ -721,10 +613,6 @@ func TestHandlerAuthenticateAPIKeyEnvVarSet(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: getAuthMethods
-// ---------------------------------------------------------------------------
-
 func TestHandlerGetAuthMethodsReturnsExpected(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -745,10 +633,6 @@ func TestHandlerGetAuthMethodsReturnsExpected(t *testing.T) {
 		t.Error("expected 'api-key' auth method")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AuthHandler: HandleEnvVarAuth
-// ---------------------------------------------------------------------------
 
 func TestAuthHandlerHandleEnvVarAuthRequiredMissing(t *testing.T) {
 	ah := NewAuthHandler(nil, "session-1")
@@ -788,10 +672,6 @@ func TestAuthHandlerHandleEnvVarAuthPresent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// MCP Bridge: acpMCPServerToConfig edge cases
-// ---------------------------------------------------------------------------
-
 func TestACPMCPServerToConfigDefaultType(t *testing.T) {
 	srv := MCPServer{Name: "default-type", Command: "npx", Args: []string{"mcp-server"}}
 	cfg := acpMCPServerToConfig(srv)
@@ -816,10 +696,6 @@ func TestACPMCPServerToConfigNoCommandNoType(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// MCPManager: Close / ConnectServers
-// ---------------------------------------------------------------------------
-
 func TestMCPManagerCloseNoClients(t *testing.T) {
 	mgr := NewMCPManager(nil)
 	if err := mgr.Close(); err != nil {
@@ -833,10 +709,6 @@ func TestMCPManagerConnectServersEmpty(t *testing.T) {
 		t.Errorf("ConnectServers with nil should return nil, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// JSON-RPC type serialization: notification with locations
-// ---------------------------------------------------------------------------
 
 func TestSessionNotificationWithLocations(t *testing.T) {
 	line := 42
@@ -876,10 +748,6 @@ func TestSessionNotificationWithLocations(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PermissionOutcome JSON round-trip
-// ---------------------------------------------------------------------------
-
 func TestPermissionOutcomeRoundTrip(t *testing.T) {
 	outcome := RequestPermissionOutcome{
 		Outcome: "selected",
@@ -906,10 +774,6 @@ func TestPermissionOutcomeRoundTrip(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ContentBlock tool_result round-trip
-// ---------------------------------------------------------------------------
-
 func TestContentBlockToolResultRoundTrip(t *testing.T) {
 	block := ContentBlock{
 		Type:     "tool_result",
@@ -934,10 +798,6 @@ func TestContentBlockToolResultRoundTrip(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// EmbeddedResource JSON
-// ---------------------------------------------------------------------------
-
 func TestEmbeddedResourceRoundTrip(t *testing.T) {
 	res := EmbeddedResource{
 		Text: &TextResourceContents{
@@ -957,10 +817,6 @@ func TestEmbeddedResourceRoundTrip(t *testing.T) {
 		t.Error("text resource mismatch")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// NewSessionRequest JSON round-trip
-// ---------------------------------------------------------------------------
 
 func TestNewSessionRequestRoundTrip(t *testing.T) {
 	req := NewSessionRequest{
@@ -996,10 +852,6 @@ func TestNewSessionRequestMarshalIncludesEmptyMCPServers(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// StopReason constants
-// ---------------------------------------------------------------------------
-
 func TestStopReasonValues(t *testing.T) {
 	tests := []struct {
 		val StopReason
@@ -1019,10 +871,6 @@ func TestStopReasonValues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ToolCallStatus constants
-// ---------------------------------------------------------------------------
-
 func TestToolCallStatusValues(t *testing.T) {
 	if ToolCallStatusPending != "pending" {
 		t.Errorf("ToolCallStatusPending = %q", ToolCallStatusPending)
@@ -1037,10 +885,6 @@ func TestToolCallStatusValues(t *testing.T) {
 		t.Errorf("ToolCallStatusFailed = %q", ToolCallStatusFailed)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ToolKind constants
-// ---------------------------------------------------------------------------
 
 func TestToolKindConstantsValues(t *testing.T) {
 	if ToolKindRead != "read" {
@@ -1057,10 +901,6 @@ func TestToolKindConstantsValues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: loadSessionFromWorkspaces (nonexistent)
-// ---------------------------------------------------------------------------
-
 func TestHandlerLoadSessionFromWorkspacesNotFound(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -1071,10 +911,6 @@ func TestHandlerLoadSessionFromWorkspacesNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent session")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: handleSessionLoad nonexistent
-// ---------------------------------------------------------------------------
 
 func TestHandlerSessionLoadNonexistentID(t *testing.T) {
 	var buf bytes.Buffer
@@ -1089,10 +925,6 @@ func TestHandlerSessionLoadNonexistentID(t *testing.T) {
 		t.Error("expected error for nonexistent session")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: handleSessionLoad with real session
-// ---------------------------------------------------------------------------
 
 func TestHandlerSessionLoadWithSavedSession(t *testing.T) {
 	dir := t.TempDir()
@@ -1120,8 +952,6 @@ func TestHandlerSessionLoadWithSavedSession(t *testing.T) {
 		t.Errorf("expected nil result after message replay, got %+v", result)
 	}
 
-	// The #2109 outbound writer goroutine is asynchronous - poll until
-	// the replay notifications are flushed.
 	output := ""
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1139,10 +969,6 @@ func TestHandlerSessionLoadWithSavedSession(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionResume nonexistent
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionResumeNonexistentID(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -1156,17 +982,11 @@ func TestHandlerSessionResumeNonexistentID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: handleSessionResume with saved session
-// ---------------------------------------------------------------------------
-
 func TestHandlerSessionResumeWithSavedSession(t *testing.T) {
 	validCWD := t.TempDir()
 
-	// Simulate the directory structure: baseDir/workspace-hash/session-id.json
 	baseDir := t.TempDir()
 	session := NewSession(validCWD, nil)
-	// Need a message so Save actually writes the file
 	session.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
 	sessionDir := workspaceSessionsDir(baseDir, validCWD)
 	os.MkdirAll(sessionDir, 0o755)
@@ -1192,16 +1012,6 @@ func TestHandlerSessionResumeWithSavedSession(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: session/resume must wire persistence back to the workspace dir
-// ---------------------------------------------------------------------------
-
-// Regression: handleSessionResume previously left the loaded session's
-// saveDir as "" (handleSessionNew sets it, the resume path did not). The
-// post-prompt Save in AgentLoop.ExecutePrompt then joined "" into a relative
-// path, dumping <id>.json into the process CWD while the real workspace file
-// never advanced — a resume→extend→resume cycle silently lost every turn
-// after the resume.
 func TestHandlerSessionResumeSetsSaveDirAndWorkspaceDir(t *testing.T) {
 	validCWD := t.TempDir()
 	baseDir := t.TempDir()
@@ -1240,8 +1050,6 @@ func TestHandlerSessionResumeSetsSaveDirAndWorkspaceDir(t *testing.T) {
 		t.Errorf("workspaceDirs[%s] = %q, want %q", session.ID, registeredDir, sessionDir)
 	}
 
-	// Simulate the post-prompt persistence call with a foreign process CWD:
-	// the write must land in the workspace dir, not the CWD.
 	origWd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -1263,13 +1071,6 @@ func TestHandlerSessionResumeSetsSaveDirAndWorkspaceDir(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Session ID validation (path traversal via client-supplied IDs)
-// ---------------------------------------------------------------------------
-
-// Regression: LoadSession joined the client-supplied session/resume ID into
-// a filesystem path without validation, so "../../etc/foo" escaped the
-// sessions directory via filepath.Join cleaning.
 func TestLoadSessionRejectsPathTraversalID(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{
@@ -1286,8 +1087,6 @@ func TestLoadSessionRejectsPathTraversalID(t *testing.T) {
 	}
 }
 
-// A session file whose inner "id" field is hostile must be rejected too —
-// that field feeds Save()'s path on later turns.
 func TestLoadSessionRejectsHostileInnerID(t *testing.T) {
 	dir := t.TempDir()
 	content := `{"id": "../../evil", "cwd": "/tmp", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}`
@@ -1306,10 +1105,6 @@ func TestValidSessionIDFormat(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Handler: connectMCPServers with empty list
-// ---------------------------------------------------------------------------
-
 func TestHandlerConnectMCPServersEmptyList(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -1320,10 +1115,6 @@ func TestHandlerConnectMCPServersEmptyList(t *testing.T) {
 		t.Errorf("expected nil for empty servers, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Update type constants
-// ---------------------------------------------------------------------------
 
 func TestSessionUpdateTypeConstantValues(t *testing.T) {
 	if UpdateAgentMessageChunk != "agent_message_chunk" {
@@ -1342,10 +1133,6 @@ func TestSessionUpdateTypeConstantValues(t *testing.T) {
 		t.Errorf("UpdatePlan = %q", UpdatePlan)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Handler: session/prompt with uninitialized handler
-// ---------------------------------------------------------------------------
 
 func TestHandlerSessionPromptNotInit(t *testing.T) {
 	var buf bytes.Buffer

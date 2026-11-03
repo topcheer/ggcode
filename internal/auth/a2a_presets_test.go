@@ -25,7 +25,6 @@ func TestProviderPresetsExist(t *testing.T) {
 }
 
 func TestProviderPresetsPKCE(t *testing.T) {
-	// All built-in providers should support PKCE
 	for name, p := range ProviderPresets {
 		if !p.SupportsPKCE {
 			t.Errorf("preset %q should support PKCE", name)
@@ -114,19 +113,13 @@ func TestStringsJoin(t *testing.T) {
 }
 
 func TestProviderPresetContainsNoClientID(t *testing.T) {
-	// Verify that presets do NOT contain client_id values
-	// (each installation must register its own)
 	for name, p := range ProviderPresets {
-		// The struct has no ClientID field, so this is a design assertion
 		_ = p
 		_ = name
 	}
-	// This test is a documentation assertion — presets only contain
-	// public endpoint URLs, never credentials
 }
 
 func TestResolveA2AAuthGitHubDefaultClientID(t *testing.T) {
-	// No client_id provided → should use GitHub preset default
 	authURL, _, clientID, scopes, err := ResolveA2AAuth("github", "", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +136,6 @@ func TestResolveA2AAuthGitHubDefaultClientID(t *testing.T) {
 }
 
 func TestResolveA2AAuthGitHubUserOverridesDefaultClientID(t *testing.T) {
-	// User provides client_id → overrides default
 	_, _, clientID, _, err := ResolveA2AAuth("github", "my-custom-id", "", "")
 	if err != nil {
 		t.Fatal(err)

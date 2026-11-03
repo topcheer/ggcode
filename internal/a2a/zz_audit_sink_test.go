@@ -9,12 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/audit"
 )
 
-// r33: inbound remote A2A handoffs must leave a non-repudiable audit record.
-// Tasks submitted by peer agents execute locally with the caller's tool
-// permissions - previously zero audit trace on the inbound path.
-
-// TestAuditSinkSealsReceivedAndTerminalEvents runs a task to a terminal state
-// and asserts the governance ledger received both lifecycle events.
 func TestAuditSinkSealsReceivedAndTerminalEvents(t *testing.T) {
 	var mu sync.Mutex
 	var events []audit.Event
@@ -27,15 +21,11 @@ func TestAuditSinkSealsReceivedAndTerminalEvents(t *testing.T) {
 		}),
 	)
 
-	// file-search with a nil agent: Handle accepts the skill, execute
-	// starts (received event) and fails at "agent required" (terminal
-	// event) - full lifecycle without mocking an LLM.
 	task, err := h.Handle(context.Background(), SkillFileSearch, Message{MessageID: "audit-m1", Role: "user", Parts: []Part{{Kind: "text", Text: "find TODOs"}}}, "")
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 
-	// execute runs in a goroutine; poll for the terminal audit event.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -67,9 +57,6 @@ func TestAuditSinkSealsReceivedAndTerminalEvents(t *testing.T) {
 	}
 }
 
-// TestAuditSinkSealsErrSummaryCap asserts the error summary is truncated to
-// auditErrMax before sealing (governance ledgers prove what ran without
-// duplicating large payloads) and that the configured sink is invoked.
 func TestAuditSinkSealsErrSummaryCap(t *testing.T) {
 	h := NewTaskHandler(stubWorkspace(), nil, newStubRegistry(),
 		WithMaxTasks(5), WithTimeout(5*time.Second))
@@ -96,8 +83,6 @@ func TestAuditSinkSealsErrSummaryCap(t *testing.T) {
 	}
 }
 
-// TestAuditSinkNilIsInert asserts handlers without a sink skip audit work
-// entirely (default configuration is unchanged, zero overhead).
 func TestAuditSinkNilIsInert(t *testing.T) {
 	h := NewTaskHandler(stubWorkspace(), nil, newStubRegistry(),
 		WithMaxTasks(5), WithTimeout(5*time.Second))
@@ -105,5 +90,5 @@ func TestAuditSinkNilIsInert(t *testing.T) {
 	fake := &Task{ID: "t", Skill: "bogus"}
 	h.auditSink = nil
 	h.mu.Unlock()
-	h.auditTaskEvent(fake, "a2a.task.received", audit.StatusOK, "") // must not panic
+	h.auditTaskEvent(fake, "a2a.task.received", audit.StatusOK, "")
 }

@@ -1,10 +1,5 @@
 package acp
 
-// #672 (#668 regression): permanent errors (DNS resolution failure, TLS,
-// 4xx-non-429, non-JSON body) must abort the device-flow token poll
-// immediately instead of retrying for the whole device-code lifetime, and a
-// 200 with an empty token must fail instead of being persisted as success.
-
 import (
 	"context"
 	"crypto/tls"
@@ -20,8 +15,6 @@ import (
 	"time"
 )
 
-// Permanent HTTP status: a 404 (wrong endpoint) must abort the flow on the
-// first poll instead of retrying ~180 times across the 15-minute lifetime.
 func TestIssue672PermanentHTTP404AbortsImmediately(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +42,6 @@ func TestIssue672PermanentHTTP404AbortsImmediately(t *testing.T) {
 	}
 }
 
-// Permanent transport: DNS resolution failure (NXDOMAIN) must classify as
-// permanent and abort — exercised directly with the error shape
-// http.Client.Do produces, no live network needed.
 func TestIssue672ClassifyTransportErrorPermanentDNS(t *testing.T) {
 	raw := &url.Error{Op: "Post", URL: "https://ghost.invalid/token", Err: &net.OpError{
 		Op:  "dial",
@@ -67,7 +57,6 @@ func TestIssue672ClassifyTransportErrorPermanentDNS(t *testing.T) {
 	}
 }
 
-// Permanent transport: TLS certificate verification failure.
 func TestIssue672ClassifyTransportErrorPermanentTLS(t *testing.T) {
 	raw := &url.Error{Op: "Post", URL: "https://self-signed.invalid/token", Err: fmt.Errorf(
 		"tls: failed to verify certificate: %w", &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})}
@@ -80,8 +69,6 @@ func TestIssue672ClassifyTransportErrorPermanentTLS(t *testing.T) {
 	}
 }
 
-// Transient transport: a timeout stays retryable so a proxy blip cannot
-// waste an already-entered user_code (#668 behavior preserved).
 func TestIssue672ClassifyTransportErrorTimeoutTransient(t *testing.T) {
 	raw := &url.Error{Op: "Post", URL: "https://github.com/token", Err: context.DeadlineExceeded}
 	wrapped := classifyTransportError(fmt.Errorf("POST access_token: %w", raw))
@@ -93,8 +80,6 @@ func TestIssue672ClassifyTransportErrorTimeoutTransient(t *testing.T) {
 	}
 }
 
-// HTTP 429 and 5xx are transient: one failure then success must still yield
-// the token.
 func TestIssue672Transient429And500Retried(t *testing.T) {
 	for _, code := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
 		code := code
@@ -125,18 +110,14 @@ func TestIssue672Transient429And500Retried(t *testing.T) {
 	}
 }
 
-// 200 with an empty token (e.g. `{}`) must be a terminal failure, never a
-// success whose empty token gets persisted.
 func TestIssue672EmptyTokenOn200IsFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{}`) // 200, no error field, no access_token
+		fmt.Fprintf(w, `{}`)
 	}))
 	defer srv.Close()
 
 	ah := &AuthHandler{accessTokenURL: srv.URL}
-	// Direct checkToken: must NOT return ("", nil) — that path persisted
-	// the empty token and reported the flow successful (#672 defect 2).
 	_, err := ah.checkToken(context.Background(), "dc")
 	if err == nil {
 		t.Fatalf("200 with empty token must be an error, not success")
@@ -144,7 +125,6 @@ func TestIssue672EmptyTokenOn200IsFailure(t *testing.T) {
 	if classifyDevicePollError(err) != devicePollAbort {
 		t.Fatalf("empty-token 200 must be terminal, classified %v", classifyDevicePollError(err))
 	}
-	// Loop level: pollForToken must abort rather than return an empty token.
 	_, err = ah.pollForToken(context.Background(), &DeviceCodeResponse{
 		DeviceCode: "dc", Interval: 1, ExpiresIn: 30,
 	})
@@ -156,8 +136,6 @@ func TestIssue672EmptyTokenOn200IsFailure(t *testing.T) {
 	}
 }
 
-// A 200 whose body is not JSON (HTML error page) is a permanent
-// misconfiguration and must abort on the first poll.
 func TestIssue672NonJSON200AbortsImmediately(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -178,10 +156,8 @@ func TestIssue672NonJSON200AbortsImmediately(t *testing.T) {
 	}
 }
 
-// The consecutive-transient streak cap bounds the retry loop (#672).
 func TestIssue672TransientStreakCap(t *testing.T) {
 	var st transientStreakTracker
-	// authorization_pending does not count toward the streak.
 	for i := 0; i < maxConsecutiveTransientPollErrors*2; i++ {
 		if st.record(errDeviceAuthPending) {
 			t.Fatalf("authorization_pending must never exhaust the budget")
@@ -197,8 +173,6 @@ func TestIssue672TransientStreakCap(t *testing.T) {
 	}
 }
 
-// slow_down interval growth stays cumulative (RFC 8628 §3.5, #668) but is
-// capped (#672 secondary).
 func TestIssue672SlowDownIntervalCapped(t *testing.T) {
 	if got := growDevicePollInterval(5); got != 10 {
 		t.Fatalf("RFC 8628 cumulative growth broken: 5→%d (want 10)", got)

@@ -56,7 +56,7 @@ func foo(x int) {
 		_ = 0
 	}
 }`,
-			want: 3, // 1 base + 2 case clauses (default doesn't add)
+			want: 3,
 		},
 		{
 			name: "binary operators",
@@ -66,7 +66,7 @@ func foo(a, b, c bool) {
 		_ = a
 	}
 }`,
-			want: 4, // 1 base + 1 if + 1 && + 1 ||
+			want: 4,
 		},
 		{
 			name: "range loop",
@@ -156,7 +156,6 @@ func Qux() {}`
 func TestAnalyzeDirectory(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a simple file
 	src := `package p
 func simple() {
 	_ = 1
@@ -174,7 +173,6 @@ func complex(x int) {
 		t.Fatal(err)
 	}
 
-	// Write a generated file that should be skipped
 	gen := `// Code generated DO NOT EDIT
 package p
 func genFunc() {}`
@@ -182,11 +180,10 @@ func genFunc() {}`
 		t.Fatal(err)
 	}
 
-	// Write a non-go file that should be skipped
 	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hello"), 0644)
 
 	opts := DefaultOptions()
-	opts.ThresholdComplexity = 3 // lower threshold to flag the medium-complexity function
+	opts.ThresholdComplexity = 3
 	report, err := Analyze(dir, opts)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
@@ -204,7 +201,6 @@ func genFunc() {}`
 	if len(report.TopFunctions) < 1 {
 		t.Fatal("expected at least 1 flagged function")
 	}
-	// The complex function should be ranked first
 	if report.TopFunctions[0].Function != "complex" {
 		t.Errorf("expected 'complex' as top function, got %q", report.TopFunctions[0].Function)
 	}
@@ -258,7 +254,7 @@ func complex(a, b, c, d int) int {
 			dir := t.TempDir()
 			os.WriteFile(filepath.Join(dir, "test.go"), []byte(tt.src), 0644)
 			opts := DefaultOptions()
-			opts.ThresholdComplexity = 5 // lower threshold so complex functions get penalized
+			opts.ThresholdComplexity = 5
 			report, err := Analyze(dir, opts)
 			if err != nil {
 				t.Fatalf("Analyze failed: %v", err)
@@ -273,11 +269,9 @@ func complex(a, b, c, d int) int {
 func TestExcludeDirs(t *testing.T) {
 	dir := t.TempDir()
 
-	// Main package
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package p
 func main() {}`), 0644)
 
-	// Vendor directory
 	vendorDir := filepath.Join(dir, "vendor", "lib")
 	os.MkdirAll(vendorDir, 0755)
 	os.WriteFile(filepath.Join(vendorDir, "lib.go"), []byte(`package lib
@@ -345,8 +339,6 @@ func complex(x int) {
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
-	// Only medium (complexity 3) and complex (complexity 6+) should be flagged
-	// Actually medium has complexity 3, so only complex should be above 5
 	for _, f := range report.TopFunctions {
 		if f.Complexity < 5 {
 			t.Errorf("function %q has complexity %d but threshold is 5", f.Function, f.Complexity)
@@ -412,7 +404,6 @@ func Alpha(x int) int {
 		t.Fatalf("Alpha missing from TopFunctions: %v", report.TopFunctions)
 	}
 
-	// nil src must fall back to reading the file from disk.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ondisk.go")
 	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
@@ -470,8 +461,6 @@ func TestAnalyzeSingleFileSkipsGenerated(t *testing.T) {
 	}
 }
 
-// Regression for #1510: an unreadable root directory used to be swallowed
-// into a 0-file/100-score "healthy" report.
 func TestAnalyzeUnreadableRootReturnsError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod cannot make a dir unreadable on Windows")
@@ -492,8 +481,6 @@ func TestAnalyzeUnreadableRootReturnsError(t *testing.T) {
 	}
 	defer os.Chmod(sub, 0o755) //nolint
 
-	// The walk root itself is readable; point Analyze AT the locked dir so
-	// the root-entry read fails and must surface as an error, not a score.
 	if _, err := Analyze(sub, DefaultOptions()); err == nil {
 		t.Fatal("unreadable root must return an error, not a healthy report")
 	}

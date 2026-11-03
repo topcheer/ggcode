@@ -6,17 +6,6 @@ import (
 	"time"
 )
 
-// TestDebounceBranchAdvancesNextFire reproduces issue #519: when the timer
-// callback hits the debounce branch (double-trigger race: Update created a
-// same-instant timer during the enqueue window), it used to reschedule
-// WITHOUT advancing job.NextFire. Since the just-fired slot is in the past,
-// scheduleJobLocked clamped the delay to 0 → AfterFunc(0) fired immediately
-// → debounce hit again → busy spin for the whole 5s window, after which the
-// dedup was defeated and a duplicate prompt was enqueued anyway.
-//
-// The test simulates the race by invoking the extracted callback body
-// (fireJob) directly, twice, as if the stale timer fired on top of a fresh
-// enqueue.
 func TestDebounceBranchAdvancesNextFire(t *testing.T) {
 	var enqueued atomic.Int32
 	s := NewScheduler(func(prompt string, _ bool) { enqueued.Add(1) }, "")
@@ -24,19 +13,17 @@ func TestDebounceBranchAdvancesNextFire(t *testing.T) {
 
 	job := &Job{
 		ID:        "debounce-1",
-		CronExpr:  "0 * * * *", // hourly
+		CronExpr:  "0 * * * *",
 		Prompt:    "p",
 		Recurring: true,
-		NextFire:  time.Now().Add(-2 * time.Second), // slot just consumed by the racing fire
+		NextFire:  time.Now().Add(-2 * time.Second),
 	}
 	s.mu.Lock()
 	s.jobs[job.ID] = job
 	s.generations[job.ID] = 1
-	// Pretend the first fire of the race just enqueued (inside the 5s window).
 	s.lastEnqueue[job.ID] = time.Now()
 	s.mu.Unlock()
 
-	// First duplicate fire hits the debounce branch.
 	s.fireJob(job, 1)
 
 	if got := enqueued.Load(); got != 0 {
@@ -46,12 +33,9 @@ func TestDebounceBranchAdvancesNextFire(t *testing.T) {
 		t.Fatalf("debounce branch must advance NextFire to a future slot (a stale NextFire means AfterFunc(0) busy-spin); delay=%v", delay)
 	}
 
-	// Second trigger — the old code's immediate 0-delay re-entry. The first
-	// debounce reschedule bumped the generation, so the new timer's callback
-	// carries the new generation.
 	s.mu.Lock()
 	gen2 := s.generations[job.ID]
-	s.lastEnqueue[job.ID] = time.Now() // still inside the 5s dedup window
+	s.lastEnqueue[job.ID] = time.Now()
 	s.mu.Unlock()
 	s.fireJob(job, gen2)
 
@@ -63,9 +47,6 @@ func TestDebounceBranchAdvancesNextFire(t *testing.T) {
 	}
 }
 
-// TestFireOutsideDebounceWindowEnqueues is the control for the fix above:
-// a fire whose last enqueue is older than the 5s window is a legitimate fire
-// and must still enqueue exactly once and reschedule into the future.
 func TestFireOutsideDebounceWindowEnqueues(t *testing.T) {
 	var enqueued atomic.Int32
 	s := NewScheduler(func(string, bool) { enqueued.Add(1) }, "")
@@ -81,7 +62,7 @@ func TestFireOutsideDebounceWindowEnqueues(t *testing.T) {
 	s.mu.Lock()
 	s.jobs[job.ID] = job
 	s.generations[job.ID] = 1
-	s.lastEnqueue[job.ID] = time.Now().Add(-6 * time.Second) // window expired
+	s.lastEnqueue[job.ID] = time.Now().Add(-6 * time.Second)
 	s.mu.Unlock()
 
 	s.fireJob(job, 1)
@@ -94,10 +75,6 @@ func TestFireOutsideDebounceWindowEnqueues(t *testing.T) {
 	}
 }
 
-// TestDebounceOneShotDoesNotReschedule: a debounced duplicate fire of a
-// one-shot job must neither reschedule (which would resurrect the job
-// forever) nor delete it (the original fire's post-enqueue path owns the
-// deletion). It must simply drop the duplicate.
 func TestDebounceOneShotDoesNotReschedule(t *testing.T) {
 	var enqueued atomic.Int32
 	s := NewScheduler(func(string, bool) { enqueued.Add(1) }, "")

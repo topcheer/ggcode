@@ -1,16 +1,5 @@
 package a2a
 
-// #715 regression tests: push-notification callback SSRF guard + auth gate.
-//
-// Covers:
-//   1. Registration is refused when no real auth is configured (no key, or
-//      only the public default key) — ErrPushAuthNotConfigured.
-//   2. Callback URLs pointing at loopback / RFC1918 / link-local
-//      (169.254.169.254 metadata) / non-http(s) schemes are rejected.
-//   3. Wildcard (TaskID=="") configs require explicit opt-in.
-//   4. Allowlist entries (hostname, CIDR) restore rejected targets.
-//   5. Redirect hops are re-validated by the dedicated push client.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -24,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// issue715Server starts a server with a real (non-default) API key so push
-// registration reaches the URL-validation stage.
 func issue715Server(t *testing.T, mutate func(*ServerConfig)) *Server {
 	t.Helper()
 	handler := NewTaskHandler(".", nil, nil)
@@ -45,8 +32,6 @@ func issue715Server(t *testing.T, mutate func(*ServerConfig)) *Server {
 	return srv
 }
 
-// issue715SetPush sends a tasks/pushNotificationConfig/set RPC with the
-// given key and returns the JSON-RPC response body.
 func issue715SetPush(t *testing.T, srv *Server, apiKey string, cfg PushNotificationConfig) JSONRPCResponse {
 	t.Helper()
 	params, err := json.Marshal(cfg)
@@ -85,8 +70,6 @@ func issue715SetPush(t *testing.T, srv *Server, apiKey string, cfg PushNotificat
 func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
-	// Case 1: no key at all → authenticate() allows everyone, but push
-	// registration must be refused.
 	srvNoAuth := NewServer(ServerConfig{Port: 0}, handler)
 	if err := srvNoAuth.Start(); err != nil {
 		t.Fatal(err)
@@ -100,7 +83,6 @@ func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 		t.Fatalf("expected ErrPushAuthNotConfigured, got %+v", resp.Error)
 	}
 
-	// Case 2: only the public default key → still refused.
 	srvDefault := NewServer(ServerConfig{Port: 0, APIKey: config.DefaultA2AAPIKey}, handler)
 	if err := srvDefault.Start(); err != nil {
 		t.Fatal(err)
@@ -114,7 +96,6 @@ func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 		t.Fatalf("expected ErrPushAuthNotConfigured, got %+v", resp.Error)
 	}
 
-	// Case 3: a real key → registration allowed (subject to URL checks).
 	srvReal := NewServer(ServerConfig{Port: 0, APIKey: "real-secret"}, handler)
 	if err := srvReal.Start(); err != nil {
 		t.Fatal(err)
@@ -128,18 +109,18 @@ func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 func TestIssue715_RejectsInternalAndUnsafeURLs(t *testing.T) {
 	srv := issue715Server(t, nil)
 	bad := []string{
-		"http://127.0.0.1:8080/cb",                  // loopback + plain http
-		"http://169.254.169.254/latest/meta-data/",  // link-local metadata (plain http)
-		"https://169.254.169.254/latest/meta-data/", // link-local metadata (https)
-		"https://10.1.2.3/cb",                       // RFC1918
-		"https://192.168.1.1/cb",                    // RFC1918
-		"https://172.16.0.5/cb",                     // RFC1918
-		"https://[fd00::1]/cb",                      // ULA
-		"https://[::1]/cb",                          // IPv6 loopback
-		"ftp://example.invalid/cb",                  // non-http scheme
-		"not-a-url",                                 // not absolute
-		"file:///etc/passwd",                        // file scheme
-		"https:///nohost/cb",                        // no host
+		"http://127.0.0.1:8080/cb",
+		"http://169.254.169.254/latest/meta-data/",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.1.2.3/cb",
+		"https://192.168.1.1/cb",
+		"https://172.16.0.5/cb",
+		"https://[fd00::1]/cb",
+		"https://[::1]/cb",
+		"ftp://example.invalid/cb",
+		"not-a-url",
+		"file:///etc/passwd",
+		"https:///nohost/cb",
 	}
 	for _, u := range bad {
 		resp := issue715SetPush(t, srv, "issue715-real-key", PushNotificationConfig{TaskID: "t1", URL: u})
@@ -176,7 +157,7 @@ func TestIssue715_AcceptsValidURL(t *testing.T) {
 func TestIssue715_WildcardRequiresOptIn(t *testing.T) {
 	srv := issue715Server(t, nil)
 	resp := issue715SetPush(t, srv, "issue715-real-key", PushNotificationConfig{
-		TaskID: "", // wildcard: matches ALL tasks
+		TaskID: "",
 		URL:    "https://push-ok.invalid/cb",
 	})
 	if resp.Error == nil {
@@ -186,7 +167,6 @@ func TestIssue715_WildcardRequiresOptIn(t *testing.T) {
 		t.Errorf("expected wildcard explanation, got %+v", resp.Error)
 	}
 
-	// With opt-in the same request succeeds.
 	srvOpt := issue715Server(t, func(c *ServerConfig) { c.AllowWildcardPushCallbacks = true })
 	resp = issue715SetPush(t, srvOpt, "issue715-real-key", PushNotificationConfig{
 		TaskID: "",
@@ -215,7 +195,6 @@ func TestIssue715_AllowlistCIDRAndHost(t *testing.T) {
 	if err := srv.validatePushCallbackURL("http://collector.lan/cb"); err != nil {
 		t.Errorf("host-allowlisted plain http should pass: %v", err)
 	}
-	// Outside the CIDR and not allowlisted → rejected.
 	if err := srv.validatePushCallbackURL("https://192.168.99.9/cb"); err == nil {
 		t.Error("private IP outside allowlist CIDR should be rejected")
 	}
@@ -225,7 +204,6 @@ func TestIssue715_AllowlistCIDRAndHost(t *testing.T) {
 }
 
 func TestIssue715_HostnameResolvingToPrivateIPRejected(t *testing.T) {
-	// A test server bound to loopback, advertised by hostname "localhost".
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer ts.Close()
 
@@ -242,14 +220,12 @@ func TestIssue715_HostnameResolvingToPrivateIPRejected(t *testing.T) {
 }
 
 func TestIssue715_RedirectRevalidated(t *testing.T) {
-	// Destination: "internal" endpoint modeled by loopback (guard must block).
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("internal endpoint must never be reached")
 		w.WriteHeader(200)
 	}))
 	defer internal.Close()
 
-	// Redirector: allowlisted host that 302s to the internal endpoint.
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, internal.URL+"/secret", http.StatusFound)
 	}))
@@ -266,10 +242,6 @@ func TestIssue715_RedirectRevalidated(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// On this server 127.0.0.1 is allowlisted, so the internal loopback URL
-	// itself passes URL validation (operator opt-in) — but the guard still
-	// blocks a hop to a NON-allowlisted internal range (asserted below via
-	// CheckRedirect), which is the actual #715 redirect-SSRF scenario.
 	if err := srv.validatePushCallbackURL(internal.URL + "/secret"); err != nil {
 		t.Errorf("allowlisted loopback URL should pass validation: %v", err)
 	}
@@ -281,17 +253,14 @@ func TestIssue715_RedirectRevalidated(t *testing.T) {
 	if client.CheckRedirect == nil {
 		t.Fatal("expected CheckRedirect to be set")
 	}
-	// Redirect hop to an allowlisted host passes...
 	hopOK, _ := http.NewRequest("GET", "http://127.0.0.1/cb", nil)
 	if err := client.CheckRedirect(hopOK, []*http.Request{}); err != nil {
 		t.Errorf("allowlisted redirect hop should pass: %v", err)
 	}
-	// ...but a hop to the link-local metadata endpoint is blocked.
 	badHop, _ := http.NewRequest("GET", "https://169.254.169.254/", nil)
 	if err := client.CheckRedirect(badHop, []*http.Request{}); err == nil {
 		t.Error("redirect to link-local metadata endpoint must be blocked")
 	}
-	// Hop-limit: a 6th redirect in the chain is refused.
 	var via []*http.Request
 	for i := 0; i < 5; i++ {
 		r, _ := http.NewRequest("GET", fmt.Sprintf("https://push-ok.invalid/h%d", i), nil)
@@ -311,8 +280,6 @@ func TestIssue715_FireSkipsUnverifiableConfigs(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Plant an unvalidated config directly (simulating pre-guard state or a
-	// bug) — firePushNotifications must re-check the URL and never dial it.
 	srv.pushMu.Lock()
 	srv.pushConfigs["stale"] = PushNotificationConfig{
 		ID:     "stale",
@@ -328,10 +295,6 @@ func TestIssue715_FireSkipsUnverifiableConfigs(t *testing.T) {
 
 	done := make(chan struct{})
 	safegoDone := func() {
-		// firePushNotifications dispatches asynchronously; give the
-		// goroutines a moment, then verify no dial happened by asserting the
-		// configs were filtered out of any delivery attempt (observable via
-		// absence of panic/error and clean completion).
 		srv.firePushNotifications("t1", StreamResponse{
 			Task: &Task{ID: "t1"},
 		})

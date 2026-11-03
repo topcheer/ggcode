@@ -1,13 +1,5 @@
 package acp
 
-// #2109 regression: writeJSON held t.mu across a blocking Write - when the
-// editor side stopped reading and the pipe filled, SendRequest froze on
-// t.mu.Lock() (never reaching its own select), the main loop froze in
-// handleStreamEvent, and Stop() could not help (write(2) ignores ctx).
-// The outbound queue + single writer goroutine keeps the mutex off the
-// write path: notifications drop when the queue is full, requests fail
-// with a bounded error instead of freezing the process.
-
 import (
 	"context"
 	"strings"
@@ -15,7 +7,6 @@ import (
 	"time"
 )
 
-// stuckWriter blocks every Write until released.
 type stuckWriter struct{ release chan struct{} }
 
 func (w *stuckWriter) Write(p []byte) (int, error) {
@@ -25,10 +16,8 @@ func (w *stuckWriter) Write(p []byte) (int, error) {
 
 func TestNotificationFloodDoesNotFreezeSendRequest(t *testing.T) {
 	w := &stuckWriter{release: make(chan struct{})}
-	tr := NewTransport(strings.NewReader(""), w) // reader irrelevant here
+	tr := NewTransport(strings.NewReader(""), w)
 
-	// Flood far past the queue capacity - every call must return
-	// promptly (drops after the queue fills), never block on write(2).
 	floodDone := make(chan struct{})
 	go func() {
 		defer close(floodDone)
@@ -45,9 +34,6 @@ func TestNotificationFloodDoesNotFreezeSendRequest(t *testing.T) {
 		t.Fatal("notification flood is blocked - the writer goroutine freeze is back")
 	}
 
-	// A SendRequest under the same stuck writer must fail with a bounded
-	// error (queue full / write stalled), NOT hang on the mutex past its
-	// own deadline.
 	reqDone := make(chan error, 1)
 	go func() {
 		_, err := tr.SendRequest(context.Background(), "session/request_permission", nil, 200*time.Millisecond)
@@ -62,6 +48,5 @@ func TestNotificationFloodDoesNotFreezeSendRequest(t *testing.T) {
 		t.Fatal("SendRequest froze past the outbound deadline - mutex-held write is back")
 	}
 
-	// Release the writer so the test goroutine's deferred writes drain.
 	close(w.release)
 }

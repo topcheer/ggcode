@@ -1,22 +1,13 @@
 package audit
 
-// #3692 probe: a Verify IO failure must fail CLOSED. Digest initialized
-// RunDigest{VerifyOK: true} and only overwrote it when Verify returned
-// err == nil - an IO error (TOCTOU between Digest's own scanEntries read
-// and Verify's) left VerifyOK=true and Render() reported "VERIFIED intact"
-// for a chain that could not even be read. The seam (verifyChain var)
-// exists because the error window is only reachable via that TOCTOU.
-
 import "testing"
 
 func TestIssue3692_VerifyIOErrorFailsClosed(t *testing.T) {
 	orig := verifyChain
 	defer func() { verifyChain = orig }()
 	verifyChain = func(path string) (bool, *Break, *Truncation) {
-		return false, nil, nil // what the fail-closed fold yields on error
+		return false, nil, nil
 	}
-	// Any existing ledger shape: the digest's chain fields come solely from
-	// verifyChain in this probe.
 	l, err := Open(t.TempDir()+"/ledger.jsonl", "probe")
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +25,6 @@ func TestIssue3692_VerifyIOErrorFailsClosed(t *testing.T) {
 }
 
 func TestIssue3692_RealVerifyStillWired(t *testing.T) {
-	// The default seam must be the real Verify: a genuine chain verifies OK.
 	l, err := Open(t.TempDir()+"/ledger.jsonl", "probe")
 	if err != nil {
 		t.Fatal(err)

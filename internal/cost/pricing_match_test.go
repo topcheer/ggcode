@@ -62,8 +62,6 @@ func TestPricingTable_Get_SuffixMatch(t *testing.T) {
 		}
 	})
 	t.Run("longest suffix wins with boundary respected", func(t *testing.T) {
-		// "4" is a longer-relative suffix candidate but "org/gpt-" lacks a "/"
-		// boundary, so it must be skipped; "gpt-4" wins as the longest valid one.
 		rate, ok := table.Get("test", "org/gpt-4")
 		if !ok {
 			t.Fatal("expected suffix match for org/gpt-4")
@@ -73,7 +71,6 @@ func TestPricingTable_Get_SuffixMatch(t *testing.T) {
 		}
 	})
 	t.Run("hyphen boundary rejected (#559 Bug B)", func(t *testing.T) {
-		// "my-proxy-o3" ends with "-o3", not "/o3" - must NOT hit the o3 rate.
 		if _, ok := table.Get("test", "my-proxy-o3"); ok {
 			t.Error("expected no match for my-proxy-o3 (hyphen is not a boundary)")
 		}
@@ -88,8 +85,6 @@ func TestPricingTable_Get_PrefixForwardOnly(t *testing.T) {
 		},
 	}
 	t.Run("query shorter than key must not match (#559 Bug A)", func(t *testing.T) {
-		// Reverse-prefix matching would make "glm-4" hit "glm-4.5-air" (free)
-		// and understate costs; forward-only means no match.
 		if _, ok := table.Get("p", "glm-4"); ok {
 			t.Error("expected no match: query being a prefix of a key must not match")
 		}
@@ -106,7 +101,6 @@ func TestPricingTable_Get_PrefixForwardOnly(t *testing.T) {
 }
 
 func TestPricingTable_Get_ProviderCaseFallback(t *testing.T) {
-	// Uppercase provider names fall back to the lowercased table key.
 	rate, ok := DefaultPricingTable().Get("ZHIPU", "glm-4.5-air")
 	if !ok {
 		t.Fatal("expected provider case-insensitive fallback to find zhipu/glm-4.5-air")

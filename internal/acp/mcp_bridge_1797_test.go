@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #1797: ConnectServers must not swallow per-server failures silently -
-// one unreachable server yields an aggregate error naming it, while other
-// servers still connect (isolation preserved).
 func Test1797ConnectServersSurfacesFailures(t *testing.T) {
 	m := NewMCPManager(nil)
 	servers := []MCPServer{
@@ -24,7 +21,6 @@ func Test1797ConnectServersSurfacesFailures(t *testing.T) {
 			t.Errorf("aggregate error missing server %q: %v", want, err)
 		}
 	}
-	// No servers at all -> no error.
 	if err := m.ConnectServers(context.Background(), nil); err != nil {
 		t.Fatalf("empty server list must not error: %v", err)
 	}

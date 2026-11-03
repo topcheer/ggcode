@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestCompactedArchiveSummaryReplacesButArchiveKeeps: after a successful
-// ApplyCompactResult, the summarized-away messages must be retrievable from
-// the archive even though they are gone from the live window.
 func TestCompactedArchiveSummaryReplacesButArchiveKeeps(t *testing.T) {
 	cm := NewManager(1000)
 	seedWindowMessages(cm)
@@ -17,7 +14,6 @@ func TestCompactedArchiveSummaryReplacesButArchiveKeeps(t *testing.T) {
 	snapshot := cm.CompactSnapshot()
 	result := summaryResult()
 
-	// The old question text must be findable BEFORE compaction (sanity).
 	live := cm.Messages()
 	foundLive := false
 	for _, msg := range live {
@@ -47,7 +43,6 @@ func TestCompactedArchiveSummaryReplacesButArchiveKeeps(t *testing.T) {
 		t.Fatalf("expected reason 'summarized', got %q", hits[0].Reason)
 	}
 
-	// The live window no longer carries it.
 	live = cm.Messages()
 	for _, msg := range live {
 		for _, blk := range msg.Content {
@@ -58,8 +53,6 @@ func TestCompactedArchiveSummaryReplacesButArchiveKeeps(t *testing.T) {
 	}
 }
 
-// TestCompactedArchiveSkipsSystemPrompt: the (huge) system prompt must not
-// be archived, only user/assistant content.
 func TestCompactedArchiveSkipsSystemPrompt(t *testing.T) {
 	cm := NewManager(1000)
 	seedWindowMessages(cm)
@@ -74,11 +67,9 @@ func TestCompactedArchiveSkipsSystemPrompt(t *testing.T) {
 	}
 }
 
-// TestCompactedArchiveSupersededToolResult: mechanical supersession must
-// archive the original tool output before stubbing it.
 func TestCompactedArchiveSupersededToolResult(t *testing.T) {
 	cm := NewManager(10000)
-	long := strings.Repeat("make: *** [target] Error 1\n", 40) // >200 chars
+	long := strings.Repeat("make: *** [target] Error 1\n", 40)
 	cm.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{
@@ -107,8 +98,6 @@ func TestCompactedArchiveSupersededToolResult(t *testing.T) {
 	}
 }
 
-// TestCompactedArchiveNewestFirstAndLimit: hits are returned newest first
-// and honor the limit.
 func TestCompactedArchiveNewestFirstAndLimit(t *testing.T) {
 	cm := NewManager(1000)
 	cm.mu.Lock()
@@ -130,8 +119,6 @@ func TestCompactedArchiveNewestFirstAndLimit(t *testing.T) {
 	}
 }
 
-// TestCompactedArchiveCapacityEviction: exceeding the byte cap evicts the
-// oldest entries first.
 func TestCompactedArchiveCapacityEviction(t *testing.T) {
 	cm := NewManager(1000)
 	big := strings.Repeat("x", maxCompactedArchiveBytes/2+100)
@@ -143,14 +130,12 @@ func TestCompactedArchiveCapacityEviction(t *testing.T) {
 			Text:   big + "-marker-" + string(rune('A'+i)),
 		})
 	}
-	// total = 4 * (~half cap) > cap -> trim keeps ~2 newest
 	cm.trimCompactedArchiveLocked()
 	size := len(cm.compactedArchive)
 	cm.mu.Unlock()
 	if size > 2 {
 		t.Fatalf("cap trim should keep at most ~2 half-cap entries, got %d", size)
 	}
-	// Newest must survive, oldest must be gone.
 	if got := cm.SearchCompactedArchive("marker-D", 5); len(got) == 0 {
 		t.Fatal("newest entry must survive eviction")
 	}
@@ -159,8 +144,6 @@ func TestCompactedArchiveCapacityEviction(t *testing.T) {
 	}
 }
 
-// TestCompactedArchiveEmptyQueryGuard: blank queries and non-positive
-// limits are rejected without touching the archive.
 func TestCompactedArchiveEmptyQueryGuard(t *testing.T) {
 	cm := NewManager(1000)
 	cm.mu.Lock()

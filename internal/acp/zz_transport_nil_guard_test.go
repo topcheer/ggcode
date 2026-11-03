@@ -7,14 +7,8 @@ import (
 	"time"
 )
 
-// TestSendRequestNilTransportReturnsError verifies the nil-transport guard in
-// sendRequest. Close() nils c.transport after waiting only for the readLoop;
-// the prompt-send goroutine (acp.sendPromptRequest) can still be entering
-// sendRequest at that point. Bare c.transport derefs nil-derefed there while
-// every sibling (writeNotification/writeResponse/writeError) used
-// transportSnapshot. The guard must return an error, not panic.
 func TestSendRequestNilTransportReturnsError(t *testing.T) {
-	c := &Client{} // zero value: transport == nil
+	c := &Client{}
 	done := make(chan error, 1)
 	go func() {
 		_, err := c.sendRequest(context.Background(), "session/prompt", nil, time.Second)

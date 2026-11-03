@@ -20,26 +20,20 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// PromptResult is the aggregated result of a prompt execution.
 type PromptResult struct {
-	Text       string            // agent's text response
-	StopReason StopReason        // why the agent stopped
-	ToolCalls  []ToolCallSummary // summary of tool calls made
+	Text       string
+	StopReason StopReason
+	ToolCalls  []ToolCallSummary
 }
 
-// ToolCallSummary is a simplified view of a tool call for display.
 type ToolCallSummary struct {
 	Name   string
 	Title  string
-	Status string // "completed", "failed"
+	Status string
 }
 
-// PermissionHandler is called when the agent requests permission.
-// Return the response to send back to the agent.
 type PermissionHandler func(ctx context.Context, req RequestPermissionRequest) (RequestPermissionResponse, error)
 
-// ApprovalHandler is the host-side interactive approval bridge used when ACP
-// requests need to flow through ggcode's existing approval UX.
 type ApprovalHandler func(ctx context.Context, toolName string, input string) permission.Decision
 
 const (
@@ -48,21 +42,17 @@ const (
 	defaultCloseSessionTimeout  = 1 * time.Second
 )
 
-// Client manages a single ACP agent process.
-// It handles lifecycle (start/stop), session management, and prompt execution.
 type Client struct {
 	def        DiscoveredAgent
 	workingDir string
 	policy     permission.PermissionPolicy
 	mcpServers []MCPServer
 
-	// Process management
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
 	transport  *Transport
 	cancelProc context.CancelFunc
 
-	// State
 	mu          sync.Mutex
 	setupMu     sync.Mutex
 	execMu      sync.Mutex
@@ -74,18 +64,15 @@ type Client struct {
 	sessionCWD  string
 	running     bool
 
-	// Permission handling
 	onPermission PermissionHandler
 	onApproval   ApprovalHandler
 
-	// Read loop management
 	cancelRead context.CancelFunc
 	done       chan struct{}
 	readErr    error
 	stderrTail outputTail
 	activity   activityTrail
 
-	// Prompt execution state
 	promptMu       sync.Mutex
 	promptText     strings.Builder
 	promptTools    []ToolCallSummary
@@ -97,7 +84,6 @@ type Client struct {
 	promptReqTime  time.Duration
 }
 
-// NewClient creates a new ACP client for the given discovered agent.
 func NewClient(agent DiscoveredAgent, workingDir string, policy permission.PermissionPolicy, mcpServers []MCPServer) *Client {
 	return &Client{
 		def:            agent,
@@ -110,7 +96,6 @@ func NewClient(agent DiscoveredAgent, workingDir string, policy permission.Permi
 	}
 }
 
-// SetPermissionHandler sets the handler for agent permission requests.
 func (c *Client) SetPermissionHandler(h PermissionHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -132,23 +117,18 @@ func (c *Client) SetWorkingDir(dir string) {
 	}
 }
 
-// Name returns the canonical agent name.
 func (c *Client) Name() string { return c.def.Def.Name }
 
-// Title returns the display name.
 func (c *Client) Title() string { return c.def.Def.Title }
 
-// Description returns the agent description.
 func (c *Client) Description() string { return c.def.Def.Description }
 
-// Capabilities returns the agent's declared capabilities (after initialize).
 func (c *Client) Capabilities() AgentCapabilities {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.caps
 }
 
-// Start launches the agent process and performs ACP initialize handshake.
 func (c *Client) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.running {
@@ -170,25 +150,24 @@ func (c *Client) Start(ctx context.Context) error {
 	cmd.Stderr = &c.stderrTail
 	configureACPCommandProcess(cmd)
 
-	// Wire stdin/stdout
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		cancelProc()
-		c.abandonStartDone() // #1051: readLoop never starts; close done so Close() cannot hang
+		c.abandonStartDone()
 		return fmt.Errorf("creating stdin pipe for %s: %w", c.def.Def.Name, err)
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		stdinPipe.Close()
 		cancelProc()
-		c.abandonStartDone() // #1051
+		c.abandonStartDone()
 		return fmt.Errorf("creating stdout pipe for %s: %w", c.def.Def.Name, err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		stdinPipe.Close()
 		cancelProc()
-		c.abandonStartDone() // #1051
+		c.abandonStartDone()
 		return fmt.Errorf("starting process %s: %w", c.def.Def.Name, err)
 	}
 
@@ -199,16 +178,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cancelProc = cancelProc
 	c.readErr = nil
 
-	// Start read loop
 	readCtx, cancelRead := context.WithCancel(context.Background())
-	// #1117: cancel any prior generation's read context BEFORE overwriting
-	// c.cancelRead. If a previous Start's readLoop returned via EOF/read
-	// error it historically left its ctx uncancelled; a later Start then
-	// overwrote c.cancelRead and the stale ctx leaked together with every
-	// async handleAgentRequest goroutine spawned on it (a Desktop approval
-	// can block up to 15 min). The read-loop defer added below covers this
-	// case directly; this overwrite-guard is defensive for any future path
-	// that abandons a generation without running the defer.
 	if c.cancelRead != nil {
 		c.cancelRead()
 	}
@@ -217,20 +187,13 @@ func (c *Client) Start(ctx context.Context) error {
 	c.mu.Unlock()
 	c.spawnReadLoop(readCtx, cancelRead)
 
-	// Perform initialize handshake
 	if err := c.initialize(ctx); err != nil {
 		cancelRead()
 		cancelProc()
 		_ = killACPProcess(cmd)
 		_ = cmd.Wait()
-		// Wait for the readLoop to fully exit before clearing state (#1032).
-		// Without this, a retried Start() installs a new transport while the
-		// old readLoop is still running: the old loop then dereferences
-		// c.transport after we nil it (panic window) or races the new
-		// generation's readLoop for message delivery. Close() already waits
-		// for the same reason - see its comment.
 		c.mu.Lock()
-		done := c.done // capture current readLoop's done channel
+		done := c.done
 		c.mu.Unlock()
 		if done != nil {
 			<-done
@@ -282,8 +245,6 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 	return c.NewSession(ctx, workingDir)
 }
 
-// initialize sends the ACP initialize request and waits for the response.
-// The read loop goroutine must already be running to deliver the response.
 func (c *Client) initialize(ctx context.Context) error {
 	initParams := InitializeRequest{
 		ProtocolVersion: ProtocolVersion,
@@ -321,7 +282,6 @@ func (c *Client) initialize(ctx context.Context) error {
 	return nil
 }
 
-// NewSession creates a new session on the agent.
 func (c *Client) NewSession(ctx context.Context, cwd string) error {
 	c.mu.Lock()
 	if !c.running {
@@ -375,8 +335,6 @@ func cloneMCPServers(servers []MCPServer) []MCPServer {
 	return cloned
 }
 
-// promptInternal sends a prompt and collects the full response.
-// Blocks until the agent completes (end_turn, error, etc.).
 func (c *Client) promptInternal(
 	ctx context.Context,
 	prompt string,
@@ -393,7 +351,6 @@ func (c *Client) promptInternal(
 	}
 	c.mu.Unlock()
 
-	// Reset prompt state
 	c.promptMu.Lock()
 	c.promptText.Reset()
 	c.promptTools = nil
@@ -455,12 +412,6 @@ func (c *Client) promptInternal(
 			return pr, nil
 		case rpc := <-promptRespCh:
 			if rpc.err != nil {
-				// #1106: rpc-layer errors (timeouts, parse failures) must
-				// also send session/cancel - the agent-side run keeps
-				// executing otherwise and its stale session/update stream
-				// pollutes the next prompt. Aligned with the ctx.Done and
-				// idle-timeout exit branches. sendCancel is fire-and-forget
-				// and idempotent.
 				c.sendCancel(sessionID)
 				c.promptMu.Lock()
 				c.clearPromptStateLocked()
@@ -519,13 +470,6 @@ func (c *Client) promptInternal(
 	}
 }
 
-// Close sends session/close (if session exists) and kills the process.
-// abandonStartDone closes the pre-Start done channel after an early Start
-// failure (#1051). The channel created by NewClient is otherwise only closed
-// by readLoop's defer, which never runs on these paths - so Close() blocked
-// on <-done forever (ClientManager.CloseAll amplified this across agents).
-// The channel is nil'ed so a later Close skips the wait and a later Start
-// rebuilds it.
 func (c *Client) abandonStartDone() {
 	c.mu.Lock()
 	if c.done != nil {
@@ -544,7 +488,7 @@ func (c *Client) Close() error {
 	cmd := c.cmd
 	stdin := c.stdin
 	transport := c.transport
-	done := c.done // capture current readLoop's done channel
+	done := c.done
 	c.mu.Unlock()
 
 	if running && sessionID != "" {
@@ -570,10 +514,6 @@ func (c *Client) Close() error {
 		_ = cmd.Wait()
 	}
 
-	// Wait for the readLoop to fully exit before clearing state.
-	// Without this, a subsequent Start() replaces c.done, and the
-	// old readLoop's defer close(c.done) closes the NEW channel,
-	// causing a panic: close of closed channel.
 	if done != nil {
 		<-done
 	}
@@ -594,13 +534,7 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// sendRequest sends a JSON-RPC request via the transport and waits for response.
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
-	// Snapshot the transport under the lock, like writeNotification et al.
-	// Close() nils c.transport after waiting only for the readLoop to exit;
-	// the prompt-send goroutine (acp.sendPromptRequest) can still be entering
-	// or parked in SendRequest at that point. Reading c.transport bare raced
-	// Close and nil-derefed the interface.
 	transport := c.transportSnapshot()
 	if transport == nil {
 		return nil, fmt.Errorf("acp: transport closed")
@@ -612,7 +546,6 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	return nil, c.annotateTimeoutError(err, c.activity.Snapshot())
 }
 
-// sendCancel sends a session/cancel notification.
 func (c *Client) sendCancel(sessionID string) {
 	_ = c.writeNotification("session/cancel", CancelNotification{
 		SessionID: sessionID,
@@ -620,10 +553,6 @@ func (c *Client) sendCancel(sessionID string) {
 }
 
 func (c *Client) closeSession(sessionID string) {
-	// Snapshot under the lock like sendRequest (see its comment): Close()
-	// nils c.transport under c.mu, and the EnsureReady cleanup path can call
-	// closeSession concurrently with a user-initiated Close(). A bare read
-	// here raced that write.
 	if sessionID == "" || c.transportSnapshot() == nil {
 		return
 	}
@@ -675,16 +604,9 @@ func (c *Client) getReadErr() error {
 	return c.readErr
 }
 
-// ---------- read loop ----------
-
-// spawnReadLoop launches the read loop with a caller-side guarantee that its
-// generation's readCtx is cancelled whenever the loop exits (#1117). The old
-// inline safego.Go wiring cancelled the ctx only via Stop()/Close(); EOF and
-// read-error returns from readLoop never called cancelRead, so once a later
-// Start() overwrote c.cancelRead the orphaned context leaked.
 func (c *Client) spawnReadLoop(readCtx context.Context, cancelRead context.CancelFunc) {
 	safego.Go("acp.readLoop", func() {
-		defer cancelRead() // #1117: release this generation even on EOF/read-error return
+		defer cancelRead()
 		c.readLoop(readCtx)
 	})
 }
@@ -703,10 +625,7 @@ func (c *Client) readLoop(ctx context.Context) {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				debug.Log("acp-client", "agent %q process EOF", c.def.Def.Name)
-				// #1052: Fail all pending requests so prompt waiters don't hang
-				// until their 5-minute timeout expires.
 				c.transport.FailAllPending(io.EOF)
-				// #1087 F3: Clear state on EOF to allow recovery
 				c.mu.Lock()
 				c.running = false
 				c.sessionID = ""
@@ -717,9 +636,7 @@ func (c *Client) readLoop(ctx context.Context) {
 			c.recordActivity("transport read error=%s", summarizeError(err))
 			c.setReadErr(err)
 			debug.Log("acp-client", "agent %q read error: %v", c.def.Def.Name, err)
-			// #1052: Fail all pending requests on any read error.
 			c.transport.FailAllPending(err)
-			// #1087 F3: Clear state on read error to allow recovery
 			c.mu.Lock()
 			c.running = false
 			c.sessionID = ""
@@ -728,16 +645,12 @@ func (c *Client) readLoop(ctx context.Context) {
 			return
 		}
 
-		// Response to our pending request
 		if resp != nil {
 			c.transport.DeliverResponse(resp)
 			continue
 		}
 
-		// Request/notification FROM the agent
 		if req != nil {
-			// #1087 F1: Handle blocking requests (permission, FS) asynchronously
-			// to prevent head-of-line blocking of other pending responses.
 			if req.Method == "session/request_permission" ||
 				req.Method == "fs/read_text_file" ||
 				req.Method == "fs/write_text_file" {
@@ -853,11 +766,6 @@ func (c *Client) writeError(id interface{}, code int, message string) error {
 	return transport.WriteError(id, code, message)
 }
 
-// ---------- session/update ----------
-
-// terminalStopReason reports whether the given session/update stopReason
-// ends the prompt loop (#1053). Non-terminal values (tool_use keeps the loop
-// alive; empty means no signal at all) do not complete the prompt.
 func terminalStopReason(r StopReason) bool {
 	switch r {
 	case StopReasonEndTurn, StopReasonMaxTurns, StopReasonMaxTokens,
@@ -932,11 +840,6 @@ func (c *Client) handleSessionUpdate(req *JSONRPCRequest) {
 		}
 	}
 	onEvent := c.promptOnEvent
-	// #1053: standard-compliant third-party agents signal prompt completion
-	// with a terminal stopReason on session/update (the ggcode agent adds
-	// session/prompt_complete on top; others do not). Without this feed the
-	// client never noticed completion and the 5-minute idle timer sent a
-	// cancel to a finished agent plus a timeout error for a successful task.
 	if terminalStopReason(notif.Update.StopReason) &&
 		c.activePromptID != "" && notif.SessionID == c.activePromptID && c.promptDone != nil {
 		select {
@@ -1158,8 +1061,6 @@ func (c *Client) handlePromptComplete(req *JSONRPCRequest) {
 	}
 }
 
-// ---------- FS operations ----------
-
 func (c *Client) handleFSRead(ctx context.Context, req *JSONRPCRequest) {
 	var params ReadTextFileRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -1230,8 +1131,6 @@ func (c *Client) handleFSWrite(ctx context.Context, req *JSONRPCRequest) {
 	_ = c.writeResponse(req.ID, WriteTextFileResponse{})
 }
 
-// ---------- Permission ----------
-
 func (c *Client) resolvePath(path string) (string, error) {
 	c.mu.Lock()
 	workingDir := c.workingDir
@@ -1297,8 +1196,6 @@ func (c *Client) handlePermission(ctx context.Context, req *JSONRPCRequest) {
 	}
 	c.recordActivity("sent session/request_permission %s", summarizePermissionResponseActivity(resp))
 	_ = c.writeResponse(req.ID, resp)
-	// #1087 F2: Reset idle timer after approval completes to prevent
-	// false timeout during long approval waits (Desktop path can wait up to 15min).
 	c.notePromptActivity()
 }
 
@@ -1471,8 +1368,6 @@ func sanitizePermissionKey(s string) string {
 	}
 	return out
 }
-
-// ---------- Terminal (stub — not supported yet) ----------
 
 func (c *Client) handleTerminalCreate(req *JSONRPCRequest) {
 	var params CreateTerminalRequest

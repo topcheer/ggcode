@@ -202,7 +202,6 @@ func TestStoreDelete(t *testing.T) {
 	}
 
 	if err := store.Delete("test"); err != nil {
-		// Delete may return error for non-dir path, that's OK
 		t.Logf("Delete error (acceptable): %v", err)
 	}
 }
@@ -210,7 +209,6 @@ func TestStoreDelete(t *testing.T) {
 func TestStoreLoadNoFile(t *testing.T) {
 	store := NewStore(t.TempDir() + "/nonexistent.json")
 	_, err := store.Load("any")
-	// Load may or may not error for nonexistent file (creates empty)
 	_ = err
 }
 

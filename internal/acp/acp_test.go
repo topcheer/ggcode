@@ -20,14 +20,12 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestTransportReadMessage tests reading JSON-RPC messages from a pipe
 func TestTransportReadMessage(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}
 {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp"}}
 `
 	transport := NewTransport(strings.NewReader(input), io.Discard)
 
-	// Read first message
 	req, err := transport.ReadMessage()
 	if err != nil {
 		t.Fatalf("ReadMessage() error: %v", err)
@@ -39,7 +37,6 @@ func TestTransportReadMessage(t *testing.T) {
 		t.Errorf("expected id 1, got %v", req.ID)
 	}
 
-	// Read second message
 	req, err = transport.ReadMessage()
 	if err != nil {
 		t.Fatalf("ReadMessage() error: %v", err)
@@ -48,19 +45,16 @@ func TestTransportReadMessage(t *testing.T) {
 		t.Errorf("expected method 'session/new', got %q", req.Method)
 	}
 
-	// Read past end — should return io.EOF
 	_, err = transport.ReadMessage()
 	if err != io.EOF {
 		t.Errorf("expected io.EOF after stream end, got %v", err)
 	}
 }
 
-// TestTransportReadMessageEmptyLines tests that empty lines are skipped
 func TestTransportReadMessageEmptyLines(t *testing.T) {
 	input := "\n\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"test\"}\n\n"
 	transport := NewTransport(strings.NewReader(input), io.Discard)
 
-	// ReadMessage returns nil,nil for empty lines; loop until we get a real message
 	var req *JSONRPCRequest
 	var err error
 	for {
@@ -77,7 +71,6 @@ func TestTransportReadMessageEmptyLines(t *testing.T) {
 	}
 }
 
-// TestTransportWriteResponse tests writing JSON-RPC responses
 func TestTransportWriteResponse(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -102,7 +95,6 @@ func TestTransportWriteResponse(t *testing.T) {
 	}
 }
 
-// TestTransportWriteError tests writing JSON-RPC error responses
 func TestTransportWriteError(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -124,9 +116,6 @@ func TestTransportWriteError(t *testing.T) {
 	}
 }
 
-// zzSyncBuffer is a mutex-guarded bytes.Buffer for tests of the async
-// outbound writer (#2109): the writer goroutine and the polling test
-// goroutine both touch the buffer.
 type zzSyncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -150,9 +139,6 @@ func (w *zzSyncBuffer) ReadString(delim byte) (string, error) {
 	return w.b.ReadString(delim)
 }
 
-// zzWaitLine polls an async-written bytes.Buffer until at least one
-// complete line is present (the #2109 outbound writer goroutine makes
-// notification writes asynchronous).
 func zzWaitLine(t *testing.T, buf *zzSyncBuffer) string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -180,7 +166,6 @@ func zzWaitReadLine(t *testing.T, buf *zzSyncBuffer) string {
 	return ""
 }
 
-// TestTransportWriteNotification tests writing JSON-RPC notifications
 func TestTransportWriteNotification(t *testing.T) {
 	buf := &zzSyncBuffer{}
 	transport := NewTransport(strings.NewReader(""), buf)
@@ -190,7 +175,6 @@ func TestTransportWriteNotification(t *testing.T) {
 		t.Fatalf("WriteNotification() error: %v", err)
 	}
 
-	// Parse the notification
 	line := zzWaitLine(t, buf)
 	if !strings.HasSuffix(line, "\n") {
 		t.Error("notification should end with newline")
@@ -203,13 +187,11 @@ func TestTransportWriteNotification(t *testing.T) {
 	if notif["method"] != "session/update" {
 		t.Errorf("expected method 'session/update', got %v", notif["method"])
 	}
-	// Should have no "id" field (notification)
 	if _, hasID := notif["id"]; hasID {
 		t.Error("notification should not have id field")
 	}
 }
 
-// TestTransportWriteResponseEndsWithNewline tests that messages end with \n
 func TestTransportWriteResponseEndsWithNewline(t *testing.T) {
 	buf := &zzSyncBuffer{}
 	transport := NewTransport(strings.NewReader(""), buf)
@@ -219,14 +201,12 @@ func TestTransportWriteResponseEndsWithNewline(t *testing.T) {
 	if !strings.HasSuffix(output, "\n") {
 		t.Error("response should end with newline")
 	}
-	// Should not contain embedded newlines
 	trimmed := strings.TrimSuffix(output, "\n")
 	if strings.Contains(trimmed, "\n") {
 		t.Error("response should not contain embedded newlines")
 	}
 }
 
-// TestNewSession tests session creation
 func TestNewSession(t *testing.T) {
 	session := NewSession("/tmp/test", nil)
 	if session.ID == "" {
@@ -240,7 +220,6 @@ func TestNewSession(t *testing.T) {
 	}
 }
 
-// TestNewSessionUniqueIDs tests that session IDs are unique
 func TestNewSessionUniqueIDs(t *testing.T) {
 	s1 := NewSession("/tmp", nil)
 	s2 := NewSession("/tmp", nil)
@@ -249,7 +228,6 @@ func TestNewSessionUniqueIDs(t *testing.T) {
 	}
 }
 
-// TestSessionAddMessage tests adding messages to a session
 func TestSessionAddMessage(t *testing.T) {
 	session := NewSession("/tmp", nil)
 	content := []ContentBlock{{Type: "text", Text: "hello"}}
@@ -267,7 +245,6 @@ func TestSessionAddMessage(t *testing.T) {
 	}
 }
 
-// TestSessionCancel tests session cancellation
 func TestSessionCancel(t *testing.T) {
 	session := NewSession("/tmp", nil)
 	cancelled := false
@@ -280,14 +257,11 @@ func TestSessionCancel(t *testing.T) {
 	}
 }
 
-// TestSessionCancelNil tests that DoCancel is safe with nil cancel
 func TestSessionCancelNil(t *testing.T) {
 	session := NewSession("/tmp", nil)
-	// Should not panic
 	session.DoCancel()
 }
 
-// TestACPToProviderContent tests content block conversion
 func TestACPToProviderContent(t *testing.T) {
 	blocks := []ContentBlock{
 		{Type: "text", Text: "hello"},
@@ -305,7 +279,6 @@ func TestACPToProviderContent(t *testing.T) {
 	}
 }
 
-// TestACPToProviderContentEmpty tests conversion with empty input
 func TestACPToProviderContentEmpty(t *testing.T) {
 	result := acpToProviderContent(nil)
 	if len(result) != 0 {
@@ -313,7 +286,6 @@ func TestACPToProviderContentEmpty(t *testing.T) {
 	}
 }
 
-// TestPermissionRequestTypes tests permission request type marshaling
 func TestPermissionRequestTypes(t *testing.T) {
 	req := ToolCallUpdate{
 		Title: "Write test file",
@@ -338,7 +310,6 @@ func TestPermissionRequestTypes(t *testing.T) {
 	}
 }
 
-// TestClientCapabilitiesFS tests FS capability detection
 func TestClientCapabilitiesFS(t *testing.T) {
 	caps := ClientCapabilities{
 		FS: &FSCapability{
@@ -354,7 +325,6 @@ func TestClientCapabilitiesFS(t *testing.T) {
 	}
 }
 
-// TestClientCapabilitiesTerminal tests terminal capability
 func TestClientCapabilitiesTerminal(t *testing.T) {
 	caps := ClientCapabilities{
 		Terminal: true,
@@ -364,7 +334,6 @@ func TestClientCapabilitiesTerminal(t *testing.T) {
 	}
 }
 
-// TestFSReadTextFileParams tests FS read params marshaling
 func TestFSReadTextFileParams(t *testing.T) {
 	params := FSReadTextFileParams{Path: "/some/file.go"}
 	data, err := json.Marshal(params)
@@ -385,12 +354,10 @@ func TestSessionSaveLoad(t *testing.T) {
 	session.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
 	session.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
 
-	// Save
 	if err := session.Save(dir); err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
 
-	// Load
 	loaded, err := LoadSession(dir, session.ID)
 	if err != nil {
 		t.Fatalf("LoadSession() error: %v", err)
@@ -478,8 +445,6 @@ func TestACPMCPServerHTTP(t *testing.T) {
 	}
 }
 
-// --- Transport bi-directional tests ---
-
 func TestTransportReadAnyMessageRequest(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n"
 	transport := NewTransport(strings.NewReader(input), io.Discard)
@@ -535,29 +500,20 @@ func TestTransportReadAnyMessageEmptyLine(t *testing.T) {
 }
 
 func TestTransportSendRequest(t *testing.T) {
-	// Simulate: send request, then read response from pipe
 	pr, pw := io.Pipe()
 	transport := NewTransport(pr, pw)
 
-	// Start a goroutine that reads the request and sends back a response
 	go func() {
 		defer pw.Close()
 		req, err := transport.ReadMessage()
 		if err != nil {
 			return
 		}
-		// Write a response back
 		resp := `{"jsonrpc":"2.0","id":` + strings.Trim(string(mustMarshal(req.ID)), `"`) + `,"result":{"approved":true}}` + "\n"
 		pw.Write([]byte(resp))
 	}()
 
-	// The SendRequest should get the response
-	// Note: this test uses the same transport for both sides,
-	// which isn't ideal but tests the pending mechanism
-	// We need a separate reader/writer pair for proper testing
 }
-
-// --- Tool Call Update tests ---
 
 func TestToolCallUpdateJSON(t *testing.T) {
 	update := ToolCallUpdate{
@@ -613,8 +569,6 @@ func TestSessionUpdateWithToolCall(t *testing.T) {
 	}
 }
 
-// --- toolKind tests ---
-
 func TestToolKind(t *testing.T) {
 	tests := []struct {
 		toolName string
@@ -639,8 +593,6 @@ func TestToolKind(t *testing.T) {
 		}
 	}
 }
-
-// --- AgentLoop SetMode tests ---
 
 func TestAgentLoopSetMode(t *testing.T) {
 	cfg := &config.Config{MaxIterations: 10}
@@ -675,16 +627,12 @@ func TestAgentLoopSetMode(t *testing.T) {
 	}
 }
 
-// --- Session with MCPManager ---
-
 func TestSessionWithMCPManager(t *testing.T) {
 	session := NewSession("/tmp", nil)
 	if session.mcpManager != nil {
 		t.Error("expected nil mcpManager initially")
 	}
 }
-
-// --- Handler method routing tests ---
 
 func TestHandlerSessionNew(t *testing.T) {
 	var buf bytes.Buffer
@@ -733,10 +681,6 @@ func TestHandlerSessionSetMode(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session first. Use t.TempDir() so the CWD exists on every
-	// platform: validateCWD stats the directory, and "/tmp" does not exist
-	// on Windows (this unchecked-assertion panic used to kill the whole
-	// acp test binary, swallowing all later test results).
 	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
 	newResult, err := h.handleSessionNew(newParamsJSON)
@@ -745,7 +689,6 @@ func TestHandlerSessionSetMode(t *testing.T) {
 	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
-	// Set mode
 	modeParams := SessionSetModeParams{SessionID: sessionID, Mode: "bypass"}
 	modeParamsJSON, _ := json.Marshal(modeParams)
 	_, err = h.handleSessionSetMode(modeParamsJSON)
@@ -753,8 +696,6 @@ func TestHandlerSessionSetMode(t *testing.T) {
 		t.Fatalf("handleSessionSetMode error: %v", err)
 	}
 }
-
-// --- RawResult preservation test ---
 
 func TestTransportReadAnyMessageRawResult(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"result":{"approved":true,"reason":"ok"}}` + "\n"
@@ -770,7 +711,6 @@ func TestTransportReadAnyMessageRawResult(t *testing.T) {
 	if resp.RawResult == nil {
 		t.Fatal("expected RawResult to be preserved")
 	}
-	// Verify raw result contains the full result object
 	var result struct {
 		Approved bool   `json:"approved"`
 		Reason   string `json:"reason"`
@@ -791,8 +731,6 @@ func mustMarshal(v interface{}) []byte {
 	return data
 }
 
-// --- New handler method tests ---
-
 func TestHandlerSessionClose(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(strings.NewReader(""), &buf)
@@ -801,10 +739,6 @@ func TestHandlerSessionClose(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session first. Use t.TempDir() so the CWD exists on every
-	// platform: validateCWD stats the directory, and "/tmp" does not exist
-	// on Windows (the unchecked assertion below used to panic and kill the
-	// whole acp test binary).
 	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
 	newResult, newErr := h.handleSessionNew(newParamsJSON)
@@ -813,7 +747,6 @@ func TestHandlerSessionClose(t *testing.T) {
 	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
-	// Close it
 	closeParams := CloseSessionRequest{SessionID: sessionID}
 	closeParamsJSON, _ := json.Marshal(closeParams)
 	result, err := h.handleSessionClose(closeParamsJSON)
@@ -824,7 +757,6 @@ func TestHandlerSessionClose(t *testing.T) {
 		t.Error("expected CloseSessionResponse")
 	}
 
-	// Verify session is removed
 	h.sessionsMu.RLock()
 	_, exists := h.sessions[sessionID]
 	h.sessionsMu.RUnlock()
@@ -832,7 +764,6 @@ func TestHandlerSessionClose(t *testing.T) {
 		t.Error("session should be removed after close")
 	}
 
-	// Close nonexistent should error
 	closeParams2 := CloseSessionRequest{SessionID: "nonexistent"}
 	closeParamsJSON2, _ := json.Marshal(closeParams2)
 	_, err = h.handleSessionClose(closeParamsJSON2)
@@ -849,14 +780,12 @@ func TestHandlerSessionList(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create two sessions
 	for _, cwd := range []string{"/tmp/a", "/tmp/b"} {
 		params := SessionNewParams{CWD: cwd}
 		paramsJSON, _ := json.Marshal(params)
 		h.handleSessionNew(paramsJSON)
 	}
 
-	// List sessions
 	listParams := ListSessionsRequest{}
 	listParamsJSON, _ := json.Marshal(listParams)
 	result, err := h.handleSessionList(listParamsJSON)
@@ -867,7 +796,6 @@ func TestHandlerSessionList(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ListSessionsResponse")
 	}
-	// Sessions may be 0 if not persisted to disk, but should not error
 	if listResult.Sessions == nil {
 		t.Error("Sessions should be non-nil slice")
 	}
@@ -881,8 +809,6 @@ func TestHandlerSessionSetConfigOption(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session. Use t.TempDir() so the CWD exists on every platform:
-	// validateCWD stats the directory, and "/tmp" does not exist on Windows.
 	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
 	newResult, err := h.handleSessionNew(newParamsJSON)
@@ -891,7 +817,6 @@ func TestHandlerSessionSetConfigOption(t *testing.T) {
 	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
-	// Set config option
 	configParams := SetSessionConfigOptionRequest{
 		SessionID: sessionID,
 		ConfigID:  "mode",
@@ -906,7 +831,6 @@ func TestHandlerSessionSetConfigOption(t *testing.T) {
 	if !ok {
 		t.Fatal("expected SetSessionConfigOptionResponse")
 	}
-	// Verify mode option updated
 	found := false
 	for _, opt := range configResult.ConfigOptions {
 		if opt.ID == "mode" && opt.CurrentValue == "auto" {
@@ -917,8 +841,6 @@ func TestHandlerSessionSetConfigOption(t *testing.T) {
 		t.Error("expected mode config option with currentValue 'auto'")
 	}
 }
-
-// --- Spec type serialization tests ---
 
 func TestSessionModeStateJSON(t *testing.T) {
 	state := getDefaultSessionModeState()
@@ -936,7 +858,6 @@ func TestSessionModeStateJSON(t *testing.T) {
 	if decoded.Current != "auto" {
 		t.Errorf("expected current 'auto', got %q", decoded.Current)
 	}
-	// Verify modes have required fields
 	for _, m := range decoded.Modes {
 		if m.ID == "" {
 			t.Error("mode ID should not be empty")
@@ -972,7 +893,6 @@ func TestPermissionOptionJSON(t *testing.T) {
 }
 
 func TestRequestPermissionOutcomeJSON(t *testing.T) {
-	// Test "selected" outcome
 	outcome := RequestPermissionOutcome{
 		Outcome: "selected",
 		SelectedOption: &SelectedPermissionOutcome{
@@ -997,7 +917,6 @@ func TestRequestPermissionOutcomeJSON(t *testing.T) {
 		t.Error("expected selectedOption with optionId 'allow'")
 	}
 
-	// Test "cancelled" outcome
 	outcome2 := RequestPermissionOutcome{Outcome: "cancelled"}
 	data2, _ := json.Marshal(outcome2)
 	var decoded2 RequestPermissionOutcome
@@ -1009,7 +928,6 @@ func TestRequestPermissionOutcomeJSON(t *testing.T) {
 		t.Error("expected nil SelectedOption for cancelled outcome")
 	}
 
-	// Legacy nested form should still decode for compatibility.
 	var legacyDecoded RequestPermissionOutcome
 	if err := json.Unmarshal([]byte(`{"outcome":"selected","selectedOption":{"optionId":"allow"}}`), &legacyDecoded); err != nil {
 		t.Fatalf("unmarshal legacy selected outcome: %v", err)
@@ -1255,15 +1173,9 @@ func TestHandlerSessionNewRejectsInvalidCWD(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AskUser handler tests — use real Transport with io.Pipe
-// ---------------------------------------------------------------------------
-
-// askUserTestHarness sets up a real Transport with bidirectional pipes.
-// The test can read JSON-RPC requests from agentOutput and write responses to agentInput.
 type askUserTestHarness struct {
-	agentInput  *io.PipeWriter // test writes responses here (agent reads)
-	agentOutput *io.PipeReader // test reads requests here (agent writes)
+	agentInput  *io.PipeWriter
+	agentOutput *io.PipeReader
 	registry    *tool.Registry
 	session     *Session
 	agentLoop   *AgentLoop
@@ -1306,10 +1218,8 @@ func newAskUserTestHarness(t *testing.T) *askUserTestHarness {
 	}
 }
 
-// readRequest reads a JSON-RPC request from agent output (what the agent sends).
 func (h *askUserTestHarness) readRequest(t *testing.T) map[string]interface{} {
 	t.Helper()
-	// Read a line from agentOutput
 	scanner := bufio.NewScanner(h.agentOutput)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	if !scanner.Scan() {
@@ -1323,7 +1233,6 @@ func (h *askUserTestHarness) readRequest(t *testing.T) map[string]interface{} {
 	return req
 }
 
-// writeResponse writes a JSON-RPC response to agent input.
 func (h *askUserTestHarness) writeResponse(t *testing.T, id interface{}, result interface{}) {
 	t.Helper()
 	data, err := json.Marshal(map[string]interface{}{
@@ -1340,19 +1249,14 @@ func (h *askUserTestHarness) writeResponse(t *testing.T, id interface{}, result 
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AskUser handler tests — use dual-pipe Transport like e2e tests
-// ---------------------------------------------------------------------------
-
 func setupAskUserTest(t *testing.T) (*tool.AskUserTool, *Transport, context.CancelFunc) {
 	t.Helper()
 
-	// Dual pipe: agent reads client-writes, client reads agent-writes
-	cr, cw := io.Pipe() // client → agent
-	ar, aw := io.Pipe() // agent → client
+	cr, cw := io.Pipe()
+	ar, aw := io.Pipe()
 
 	agentTransport := NewTransport(cr, aw)
-	_ = NewTransport(ar, cw) // clientTransport — we read/write raw from ar/cw
+	_ = NewTransport(ar, cw)
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
@@ -1367,10 +1271,8 @@ func setupAskUserTest(t *testing.T) (*tool.AskUserTool, *Transport, context.Canc
 	handler.initialized = true
 	handler.sessions["test-session"] = session
 
-	// Create AgentLoop (this sets up the ask_user handler)
 	_ = NewAgentLoop(cfg, registry, agentTransport, session, ClientCapabilities{}, nil)
 
-	// Run handler in background to process responses
 	ctx, cancel := context.WithCancel(context.Background())
 	go handler.Run(ctx)
 
@@ -1382,7 +1284,6 @@ func setupAskUserTest(t *testing.T) (*tool.AskUserTool, *Transport, context.Canc
 	return askTool.(*tool.AskUserTool), agentTransport, cancel
 }
 
-// readAgentRequest reads a JSON-RPC request that the agent sent out.
 func readAgentRequest(t *testing.T, reader *io.PipeReader) map[string]interface{} {
 	t.Helper()
 	scanner := bufio.NewScanner(reader)
@@ -1397,7 +1298,6 @@ func readAgentRequest(t *testing.T, reader *io.PipeReader) map[string]interface{
 	return req
 }
 
-// writeAgentResponse writes a JSON-RPC response back to the agent.
 func writeAgentResponse(t *testing.T, writer *io.PipeWriter, id interface{}, result interface{}) {
 	t.Helper()
 	data, err := json.Marshal(map[string]interface{}{
@@ -1415,9 +1315,8 @@ func writeAgentResponse(t *testing.T, writer *io.PipeWriter, id interface{}, res
 }
 
 func TestAskUserHandlerSingleChoice(t *testing.T) {
-	// Setup dual pipes
-	cr, cw := io.Pipe() // client → agent
-	ar, aw := io.Pipe() // agent → client
+	cr, cw := io.Pipe()
+	ar, aw := io.Pipe()
 
 	agentTransport := NewTransport(cr, aw)
 
@@ -1440,7 +1339,6 @@ func TestAskUserHandlerSingleChoice(t *testing.T) {
 
 	askTool, _ := registry.Get("ask_user")
 
-	// Run ask_user in goroutine
 	done := make(chan tool.AskUserResponse, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -1474,21 +1372,18 @@ func TestAskUserHandlerSingleChoice(t *testing.T) {
 		done <- resp
 	}()
 
-	// Read permission request from agent (via agent→client pipe)
 	req := readAgentRequest(t, ar)
 	if req["method"] != "session/request_permission" {
 		t.Fatalf("expected method session/request_permission, got %v", req["method"])
 	}
 	reqID := req["id"]
 
-	// Verify options
 	params, _ := req["params"].(map[string]interface{})
 	options, _ := params["options"].([]interface{})
 	if len(options) != 2 {
 		t.Errorf("expected 2 options, got %d", len(options))
 	}
 
-	// Respond: user selected opt_a
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
 		"outcome": map[string]interface{}{
 			"outcome":  "selected",
@@ -1543,8 +1438,8 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 
 	askTool, _ := registry.Get("ask_user")
 
-	done := make(chan string, 1)       // error message
-	doneResult := make(chan string, 1) // result content
+	done := make(chan string, 1)
+	doneResult := make(chan string, 1)
 	go func() {
 		input := json.RawMessage(`{
 			"title": "Enter name",
@@ -1570,7 +1465,6 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 	req := readAgentRequest(t, ar)
 	reqID := req["id"]
 
-	// User submits
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
 		"outcome": map[string]interface{}{
 			"outcome":  "selected",
@@ -1580,7 +1474,6 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 
 	select {
 	case errMsg := <-done:
-		// Should get an error telling LLM to ask in plain text
 		if !strings.Contains(errMsg, "does not support text input") {
 			t.Errorf("expected 'does not support text input' in error, got: %s", errMsg)
 		}
@@ -1613,8 +1506,8 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 
 	askTool, _ := registry.Get("ask_user")
 
-	done := make(chan string, 1)       // error message
-	doneResult := make(chan string, 1) // result content
+	done := make(chan string, 1)
+	doneResult := make(chan string, 1)
 	go func() {
 		input := json.RawMessage(`{
 			"title": "Pick",
@@ -1641,7 +1534,6 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 	req := readAgentRequest(t, ar)
 	reqID := req["id"]
 
-	// User cancels
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
 		"outcome": map[string]interface{}{
 			"outcome": "cancelled",
@@ -1650,7 +1542,6 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 
 	select {
 	case errMsg := <-done:
-		// Should get an error telling LLM to ask in plain text
 		if !strings.Contains(errMsg, "dismissed") {
 			t.Errorf("expected 'dismissed' in error, got: %s", errMsg)
 		}
@@ -1686,12 +1577,7 @@ func TestAskUserHandlerNoHandlerWithoutACP(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SessionUpdate JSON structure tests (flattened format per ACP spec)
-// ---------------------------------------------------------------------------
-
 func TestSessionUpdateToolCallJSON(t *testing.T) {
-	// tool_call notification — flat fields, no nested objects
 	update := SessionUpdateParams{
 		SessionID: "sess-1",
 		Update: SessionUpdate{
@@ -1708,19 +1594,16 @@ func TestSessionUpdateToolCallJSON(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	// Verify JSON has flat structure (toolCallId as direct child, not nested)
 	raw := string(data)
 	for _, key := range []string{`"sessionUpdate":"tool_call"`, `"toolCallId":"call-001"`, `"title":"read_file"`, `"kind":"read"`, `"status":"pending"`, `"rawInput"`} {
 		if !strings.Contains(raw, key) {
 			t.Errorf("JSON missing %q in: %s", key, raw)
 		}
 	}
-	// Should NOT have nested "toolCall" object
 	if strings.Contains(raw, `"toolCall":{`) {
 		t.Errorf("JSON should not have nested toolCall object: %s", raw)
 	}
 
-	// Round-trip
 	var decoded SessionUpdateParams
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -1740,7 +1623,6 @@ func TestSessionUpdateToolCallJSON(t *testing.T) {
 }
 
 func TestSessionUpdateToolCallUpdateJSON(t *testing.T) {
-	// tool_call_update — status update with formatted title, no content/result
 	update := SessionUpdateParams{
 		SessionID: "sess-1",
 		Update: SessionUpdate{
@@ -1765,14 +1647,12 @@ func TestSessionUpdateToolCallUpdateJSON(t *testing.T) {
 	if !strings.Contains(raw, `"status":"completed"`) {
 		t.Errorf("missing status: %s", raw)
 	}
-	// Should NOT have content field (no result)
 	if strings.Contains(raw, `"content"`) {
 		t.Errorf("tool_call_update should not have content field: %s", raw)
 	}
 }
 
 func TestSessionUpdateAgentMessageJSON(t *testing.T) {
-	// agent_message_chunk — content is a single ContentBlock
 	update := SessionUpdateParams{
 		SessionID: "sess-1",
 		Update: SessionUpdate{
@@ -1795,7 +1675,6 @@ func TestSessionUpdateAgentMessageJSON(t *testing.T) {
 }
 
 func TestSessionUpdateToolCallUpdateWithContentArray(t *testing.T) {
-	// tool_call_update can also have content as array (for future use)
 	contentEntries := []ToolCallContentEntry{
 		{Type: "content", Content: &ContentBlock{Type: "text", Text: "result text"}},
 	}
@@ -1819,12 +1698,7 @@ func TestSessionUpdateToolCallUpdateWithContentArray(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleStreamEvent integration tests
-// ---------------------------------------------------------------------------
-
 func TestHandleStreamEventToolCallFormat(t *testing.T) {
-	// Verify that tool_call notification uses plain tool name (not formatted)
 	buf := &zzSyncBuffer{}
 	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
@@ -1845,7 +1719,6 @@ func TestHandleStreamEventToolCallFormat(t *testing.T) {
 		t.Fatalf("handleStreamEvent: %v", err)
 	}
 
-	// Read notification from buffer
 	line := zzWaitReadLine(t, buf)
 
 	var notif map[string]interface{}
@@ -1860,7 +1733,6 @@ func TestHandleStreamEventToolCallFormat(t *testing.T) {
 	if update["sessionUpdate"] != "tool_call" {
 		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
 	}
-	// tool_call should have plain tool name (not formatted)
 	if update["title"] != "read_file" {
 		t.Errorf("title = %v, want plain 'read_file'", update["title"])
 	}
@@ -1873,7 +1745,6 @@ func TestHandleStreamEventToolCallFormat(t *testing.T) {
 }
 
 func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
-	// Verify that tool_call_update uses DescribeTool formatted title
 	buf := &zzSyncBuffer{}
 	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
@@ -1907,14 +1778,12 @@ func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
 	if update["sessionUpdate"] != "tool_call_update" {
 		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
 	}
-	// tool_call_update should have formatted title from DescribeTool
 	if update["title"] != "Read /tmp/test.go" {
 		t.Errorf("title = %v, want formatted 'Read /tmp/test.go'", update["title"])
 	}
 	if update["status"] != "completed" {
 		t.Errorf("status = %v", update["status"])
 	}
-	// Should NOT have content (no result)
 	if _, hasContent := update["content"]; hasContent {
 		t.Errorf("tool_call_update should not have content, got: %v", update["content"])
 	}
@@ -1949,7 +1818,6 @@ func TestHandleStreamEventToolCallUpdateFailed(t *testing.T) {
 	if update["sessionUpdate"] != "tool_call_update" {
 		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
 	}
-	// run_command → formatted as command text directly
 	if update["title"] != "go test ./..." {
 		t.Errorf("title = %v, want 'go test ./...'", update["title"])
 	}
@@ -1990,16 +1858,11 @@ func TestHandleStreamEventAgentMessage(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Empty session cleanup tests
-// ---------------------------------------------------------------------------
-
 func TestSaveSkipsEmptySession(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession("/tmp", nil)
 	s.SetSaveDir(dir)
 
-	// Save with no messages — should NOT create a file.
 	if err := s.Save(dir); err != nil {
 		t.Fatalf("Save empty session: %v", err)
 	}
@@ -2015,8 +1878,6 @@ func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
 	s := NewSession("/tmp", nil)
 	s.SetSaveDir(dir)
 
-	// Simulate a session that had messages, got saved, then messages were somehow removed.
-	// First, add a message and save.
 	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hi"}})
 	if err := s.Save(dir); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -2026,7 +1887,6 @@ func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
 		t.Fatal("session file should exist after first save")
 	}
 
-	// Now create a fresh empty session with the same ID and save — should delete the file.
 	s2 := &Session{ID: s.ID, CWD: "/tmp", saveDir: dir}
 	if err := s2.Save(dir); err != nil {
 		t.Fatalf("Save empty: %v", err)
@@ -2080,7 +1940,6 @@ func TestHasMessages(t *testing.T) {
 func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create two sessions: one with messages, one without.
 	cr, cw := io.Pipe()
 	_, aw := io.Pipe()
 	transport := NewTransport(cr, aw)
@@ -2094,7 +1953,6 @@ func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 	handler.sessionsDir = dir
 	handler.initialized = true
 
-	// Session with messages
 	sessionWith := NewSession("/tmp", nil)
 	sessionWith.AddMessage("user", []ContentBlock{{Type: "text", Text: "hi"}})
 	sessionDir := filepath.Join(dir, "ws1")
@@ -2102,7 +1960,6 @@ func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 	sessionWith.SetSaveDir(sessionDir)
 	sessionWith.Save(sessionDir)
 
-	// Session without messages
 	sessionEmpty := NewSession("/tmp", nil)
 	sessionDir2 := filepath.Join(dir, "ws2")
 	os.MkdirAll(sessionDir2, 0o755)
@@ -2115,24 +1972,20 @@ func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 	handler.workspaceDirs[sessionEmpty.ID] = sessionDir2
 	handler.sessionsMu.Unlock()
 
-	// Create a file for the empty session to verify it gets deleted.
 	emptyPath := filepath.Join(sessionDir2, sessionEmpty.ID+".json")
 	os.WriteFile(emptyPath, []byte(`{"id":"`+sessionEmpty.ID+`"}`), 0o644)
 
-	// Simulate EOF by closing the reader.
 	cw.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	handler.Run(ctx)
 
-	// Session with messages should still exist.
 	withPath := filepath.Join(sessionDir, sessionWith.ID+".json")
 	if _, err := os.Stat(withPath); os.IsNotExist(err) {
 		t.Error("session with messages should be preserved")
 	}
 
-	// Empty session file should be deleted.
 	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
 		t.Error("empty session file should have been cleaned up")
 	}
@@ -2178,7 +2031,6 @@ func TestReplaceConversation(t *testing.T) {
 		t.Fatalf("expected 2 messages, got %d", len(s.Messages()))
 	}
 
-	// Replace with compacted version
 	s.ReplaceConversation([]Message{
 		{Role: "system", Content: []ContentBlock{{Type: "text", Text: "summary of previous conversation"}}},
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}},
@@ -2199,7 +2051,6 @@ func TestReplaceConversation(t *testing.T) {
 func TestCheckpointHandlerPersistsCompactedSession(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create session and save with initial messages.
 	s := NewSession("/tmp", nil)
 	s.SetSaveDir(dir)
 	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
@@ -2214,7 +2065,6 @@ func TestCheckpointHandlerPersistsCompactedSession(t *testing.T) {
 		t.Fatalf("initial: expected 2 messages, got %d", len(sd1.Messages))
 	}
 
-	// Simulate checkpoint handler: compact replaces conversation and saves.
 	s.ReplaceConversation([]Message{
 		{Role: "system", Content: []ContentBlock{{Type: "text", Text: "summary"}}},
 	})

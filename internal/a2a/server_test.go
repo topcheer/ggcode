@@ -37,12 +37,10 @@ func TestAuthenticateMultipleAPIKeys(t *testing.T) {
 }
 
 func TestAuthenticateMergedAPIKeyAndAPIKeys(t *testing.T) {
-	// Simulate NewServer merging APIKey + APIKeys
 	srv := &Server{
 		apiKeys: []string{"new-key-1", "new-key-2", "legacy-key"},
 	}
 
-	// Both legacy and new keys should work
 	for _, key := range []string{"legacy-key", "new-key-1", "new-key-2"} {
 		r := httptest.NewRequest("POST", "/", nil)
 		r.Header.Set("X-API-Key", key)
@@ -51,7 +49,6 @@ func TestAuthenticateMergedAPIKeyAndAPIKeys(t *testing.T) {
 		}
 	}
 
-	// Wrong key
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-API-Key", "wrong")
 	if srv.authenticate(r) {
@@ -60,10 +57,6 @@ func TestAuthenticateMergedAPIKeyAndAPIKeys(t *testing.T) {
 }
 
 func TestAuthenticateNoKeys(t *testing.T) {
-	// With no auth configured at all, all requests are allowed.
-	// A2A + mDNS is always-on by design; EffectiveAPIKey() provides the
-	// community key in production, so this scenario only arises in tests
-	// where apiKeys is explicitly empty.
 	srv := &Server{
 		apiKeys: nil,
 	}
@@ -122,7 +115,6 @@ func TestInstanceDisplayName(t *testing.T) {
 }
 
 func TestDiscoverMergesAndDeduplicates(t *testing.T) {
-	// Registry without mDNS enabled — Discover returns empty.
 	r := &Registry{}
 	r.selfID = "self-id"
 	r.selfInfo = &InstanceInfo{ID: "self-id", Endpoint: "127.0.0.1:11111"}
@@ -144,7 +136,6 @@ func TestMDNSAlwaysEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// mDNS is always enabled now
 	if r.mdnsSvc == nil {
 		t.Error("mdnsSvc should not be nil (always enabled)")
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// waitFor polls cond until true or timeout (avoids flaky sleeps).
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -21,10 +20,6 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatalf("condition not met within %v", timeout)
 }
 
-// TestPatrolRecurringReschedulesAfterMissedFire verifies the wall-clock patrol
-// compensates for a monotonic timer that never fired (issue #311A): a recurring
-// job whose NextFire is in the past gets rescheduled to the next future slot,
-// and the missed slot is skipped (no catch-up replay).
 func TestPatrolRecurringReschedulesAfterMissedFire(t *testing.T) {
 	var mu sync.Mutex
 	fired := 0
@@ -40,9 +35,6 @@ func TestPatrolRecurringReschedulesAfterMissedFire(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Simulate sleep: push NextFire into the past beyond patrolGrace,
-	// and replace the timer with a long-lived monotonic one that would
-	// never fire (as happens while the machine sleeps).
 	s.mu.Lock()
 	j := s.jobs[job.ID]
 	j.NextFire = time.Now().Add(-time.Hour)
@@ -50,7 +42,6 @@ func TestPatrolRecurringReschedulesAfterMissedFire(t *testing.T) {
 		old.Stop()
 		delete(s.timers, job.ID)
 	}
-	// A stale long timer simulating a monotonic clock paused by sleep.
 	s.timers[job.ID] = time.AfterFunc(time.Hour, func() {})
 	s.mu.Unlock()
 
@@ -69,7 +60,6 @@ func TestPatrolRecurringReschedulesAfterMissedFire(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("patrol must not replay missed historical fires, but fired %d times", n)
 	}
-	// Timer must now target the new future slot.
 	s.mu.Lock()
 	_, hasTimer := s.timers[job.ID]
 	s.mu.Unlock()
@@ -78,8 +68,6 @@ func TestPatrolRecurringReschedulesAfterMissedFire(t *testing.T) {
 	}
 }
 
-// TestPatrolOneShotFiresImmediatelyWhenOverdue verifies a one-shot job whose
-// fire was missed during sleep fires immediately, exactly once (issue #311A).
 func TestPatrolOneShotFiresImmediatelyWhenOverdue(t *testing.T) {
 	var mu sync.Mutex
 	fired := 0
@@ -97,7 +85,6 @@ func TestPatrolOneShotFiresImmediatelyWhenOverdue(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Simulate wake-up with the fire time long past.
 	s.mu.Lock()
 	s.jobs[job.ID].NextFire = time.Now().Add(-time.Hour)
 	if old, ok := s.timers[job.ID]; ok {
@@ -114,7 +101,6 @@ func TestPatrolOneShotFiresImmediatelyWhenOverdue(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("one-shot job did not fire after patrol")
 	}
-	// Job must be removed after firing (one-shot semantics).
 	waitFor(t, 2*time.Second, func() bool {
 		_, ok := s.Get(job.ID)
 		return !ok
@@ -126,8 +112,6 @@ func TestPatrolOneShotFiresImmediatelyWhenOverdue(t *testing.T) {
 	}
 }
 
-// TestPatrolSkipsPausedAndFreshJobs ensures the patrol doesn't touch paused
-// jobs or jobs whose fire time hasn't been missed.
 func TestPatrolSkipsPausedAndFreshJobs(t *testing.T) {
 	s := NewScheduler(func(string, bool) {}, "")
 	defer s.Shutdown()
@@ -148,7 +132,6 @@ func TestPatrolSkipsPausedAndFreshJobs(t *testing.T) {
 	s.patrolCheck()
 	after, _ := s.Get(active.ID)
 
-	// Fresh job: patrol must not have moved its NextFire backwards.
 	if after.NextFire.Before(before.NextFire) {
 		t.Fatalf("patrol must not regress a fresh job's NextFire: %v -> %v", before.NextFire, after.NextFire)
 	}
@@ -158,8 +141,6 @@ func TestPatrolSkipsPausedAndFreshJobs(t *testing.T) {
 	}
 }
 
-// TestPauseClearsNextFire verifies Pause zeroes NextFire so UIs stop showing a
-// stale "next fire" time, and Resume recomputes it (issue #311B).
 func TestPauseClearsNextFire(t *testing.T) {
 	s := NewScheduler(func(string, bool) {}, "")
 	defer s.Shutdown()
@@ -183,8 +164,6 @@ func TestPauseClearsNextFire(t *testing.T) {
 		t.Fatalf("Pause must clear NextFire, got %v", got.NextFire)
 	}
 
-	// Paused job must not fire even if the patrol runs with an overdue value
-	// (NextFire is zero, so patrol skips it — but double-check no timer).
 	s.mu.Lock()
 	_, hasTimer := s.timers[job.ID]
 	s.mu.Unlock()
@@ -201,8 +180,6 @@ func TestPauseClearsNextFire(t *testing.T) {
 	}
 }
 
-// TestPatrolPersistenceWithPausedJob ensures a paused job with zero NextFire
-// persists and loads back cleanly (zero NextFire never touches jobJSON).
 func TestPatrolPersistenceWithPausedJob(t *testing.T) {
 	dir := t.TempDir()
 	store := filepath.Join(dir, "cron.json")

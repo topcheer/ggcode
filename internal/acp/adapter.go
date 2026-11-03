@@ -6,19 +6,15 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Compile-time interface checks.
 var (
 	_ tool.ACPAgentRegistry = (*ClientManager)(nil)
 	_ tool.ACPAgentClient   = (*Client)(nil)
 )
 
-// Get returns a running client by name, starting it lazily if needed.
-// Satisfies tool.ACPAgentRegistry.
 func (m *ClientManager) Get(ctx context.Context, name string) (tool.ACPAgentClient, error) {
 	return m.getInternal(ctx, name)
 }
 
-// getInternal is the unexported implementation that returns *Client.
 func (m *ClientManager) getInternal(ctx context.Context, name string) (*Client, error) {
 	client, err := m.newClient(name)
 	if err != nil {
@@ -30,8 +26,6 @@ func (m *ClientManager) getInternal(ctx context.Context, name string) (*Client, 
 	return client, nil
 }
 
-// Prompt sends a prompt and collects the full response.
-// Satisfies tool.ACPAgentClient by converting to tool types.
 func (c *Client) Prompt(ctx context.Context, prompt string) (*tool.ACPPromptResult, error) {
 	result, err := c.promptInternal(ctx, prompt, nil)
 	if err != nil {
@@ -68,7 +62,6 @@ func toolPromptResult(result *PromptResult) *tool.ACPPromptResult {
 	}
 }
 
-// ErrAgentNotFound is returned when the requested agent is not installed.
 type ErrAgentNotFound struct {
 	name string
 }

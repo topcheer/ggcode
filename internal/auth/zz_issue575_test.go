@@ -8,20 +8,14 @@ import (
 	"time"
 )
 
-// TestIssue575_RefreshToken_EmptyAccessToken verifies that RefreshClaudeToken
-// returns an error when HTTP 200 response is missing access_token (Bug D:
-// failure masked as success with empty credential).
 func TestIssue575_RefreshToken_EmptyAccessToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify this is a refresh request
 		body := make(map[string]interface{})
 		json.NewDecoder(r.Body).Decode(&body)
 		if body["grant_type"] != "refresh_token" {
 			t.Errorf("Expected grant_type=refresh_token, got %v", body["grant_type"])
 		}
 
-		// Return 200 but with missing access_token (e.g., error JSON with 200 status,
-		// or proxy rewriting response)
 		resp := map[string]interface{}{
 			"error":             "invalid_grant",
 			"error_description": "Refresh token expired",
@@ -31,27 +25,14 @@ func TestIssue575_RefreshToken_EmptyAccessToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Monkey-patch the token URL for this test
 	oldURL := claudeOAuthTokenURL
-	// Note: We can't assign to const, so we skip this test if we can't mock
-	// Instead, we'll verify the logic by creating a mock that checks the response
 
-	// Since claudeOAuthTokenURL is a const, we'll test the validation logic
-	// indirectly by checking that RefreshClaudeToken calls the endpoint correctly
-	// and validates the response
-
-	// For this test, we'll skip the URL replacement and instead test the
-	// validation logic directly through a different approach
-	_ = server // Suppress unused variable warning
+	_ = server
 	_ = oldURL
 
-	// Skip test: can't override const at runtime
 	t.Skip("cannot override const claudeOAuthTokenURL at runtime")
 }
 
-// TestIssue575_ClockSkewTolerance verifies that tokens expired less than
-// 30 seconds ago are still considered valid (Bug D.2: add clock skew
-// tolerance to avoid race conditions at exact expiration).
 func TestIssue575_ClockSkewTolerance(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -97,7 +78,6 @@ func TestIssue575_ClockSkewTolerance(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a token that expired tt.expiresOffset ago
 			expiresAt := time.Now().Add(tt.expiresOffset)
 
 			info := &Info{
@@ -107,10 +87,8 @@ func TestIssue575_ClockSkewTolerance(t *testing.T) {
 				ExpiresAt:    expiresAt,
 			}
 
-			// Test the expiration check logic directly
 			isExpired := !info.ExpiresAt.IsZero() && time.Now().After(info.ExpiresAt)
 			if isExpired {
-				// Add 30s clock skew tolerance
 				if time.Now().Sub(info.ExpiresAt) < 30*time.Second {
 					isExpired = false
 				}

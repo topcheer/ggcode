@@ -1,29 +1,3 @@
-// Package audit implements a tamper-evident, hash-chained audit ledger of
-// agent actions.
-//
-// The ledger is an append-only JSONL file where every entry commits to the
-// previous one with a SHA-256 hash chain (entry.Hash covers all of the
-// entry's own fields including entry.PrevHash, which holds the previous
-// entry's Hash; the genesis entry links to a fixed all-zeros prev hash).
-// This is the "cryptographic governance audit trail" pattern from 2025-2026
-// agent-governance work (EU AI Act Article 12 logging obligations, OWASP
-// LLM06, SIEM-forward agent auditing): standard logs can be rewritten after
-// the fact, a hash chain cannot — any edit, reorder, or un-anchored tail
-// deletion breaks verification at a precisely reportable position.
-//
-// Threat model (tamper-EVIDENT, not tamper-PROOF): the ledger detects
-//   - editing any entry in place        → hash mismatch at that seq
-//   - reordering or inserting entries   → sequence/prev-hash link mismatch
-//   - deleting trailing entries         → head-anchor mismatch (Anchor)
-//
-// It does not defend against an adversary who recomputes the whole chain
-// AND replaces the head anchor; that requires external anchoring (SIEM
-// export, WORM storage) which is the operator's responsibility.
-//
-// Durability follows the same rule as the tool tape: flush after every
-// append. Auditing a crash or a hang is exactly when the tail matters most,
-// so a ledger captured up to the failure point is strictly more valuable
-// than none.
 package audit
 
 import (
@@ -39,80 +13,49 @@ import (
 	"time"
 )
 
-// Status values for audited actions.
 const (
-	StatusOK        = "ok"
-	StatusError     = "error"
-	StatusCancelled = "cancelled"
-	StatusInvalid   = "invalid" // rejected before execution (e.g. preflight)
-	// Approval-decision statuses (ATR-2026-00118 / ESCALATE.md): the human
-	// gate itself is auditable - who approved what when. The local CLI has a
-	// single approver (the interactive user), so approver identity is the
-	// session's user; timeout covers an Ask that expired without an answer.
+	StatusOK           = "ok"
+	StatusError        = "error"
+	StatusCancelled    = "cancelled"
+	StatusInvalid      = "invalid"
 	StatusUserApproved = "approved"
 	StatusUserDenied   = "user_denied"
 	StatusAskTimeout   = "ask_timeout"
-	// StatusPolicyDenied: rejected by an explicit policy rule (mode-
-	// independent Deny or command rule), NOT a human decision. Governance
-	// requires the policy's own effect to be auditable too - the most
-	// compliance-relevant event ("rule X fired") was previously the only
-	// silent one, while user denials were recorded.
 	StatusPolicyDenied = "policy_denied"
 )
 
-// GenesisPrevHash is the prev_hash of the first entry in a chain.
 const GenesisPrevHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
-// headVersion is the schema version of the .head anchor sidecar.
 const headVersion = 1
 
-// Event is a single audited action, submitted to Ledger.Append.
-// InputHash is expected to be the canonical SHA-256 of the action's input
-// JSON (see toolreplay.HashInput); raw inputs are deliberately NOT stored —
-// tool arguments can carry secrets, and a governance ledger should prove
-// what ran without duplicating sensitive payloads.
 type Event struct {
-	Tool       string // tool (or action) name
-	Status     string // StatusOK / StatusError / StatusCancelled / StatusInvalid
-	InputHash  string // canonical SHA-256 hex of input JSON
-	DurationMS int64  // wall time of the action in milliseconds
-	Err        string // short error/result summary, already truncated by the caller
-	Session    string // optional per-event session override (falls back to the ledger's)
-	// InvariantID (r454) names the declared behavior invariant that caused
-	// a rejection; empty for normal actions.
+	Tool        string
+	Status      string
+	InputHash   string
+	DurationMS  int64
+	Err         string
+	Session     string
 	InvariantID string
-	// Peer and TaskID attribute the event to a REMOTE A2A handoff (r33):
-	// tasks submitted by a peer agent that execute locally. Peer identifies
-	// the calling agent when known (auth-derived); TaskID ties the entry to
-	// the A2A task lifecycle (received -> terminal).
-	Peer   string
-	TaskID string
+	Peer        string
+	TaskID      string
 }
 
-// Entry is a sealed ledger record: the event plus chain bookkeeping.
 type Entry struct {
-	Seq        int64  `json:"seq"`               // 1-based position in the chain
-	Time       string `json:"time"`              // RFC3339Nano UTC
-	Session    string `json:"session,omitempty"` // session ID, optional
-	Tool       string `json:"tool"`
-	Status     string `json:"status"`
-	InputHash  string `json:"input_hash"`
-	DurationMS int64  `json:"duration_ms"`
-	Err        string `json:"err,omitempty"`
-	// InvariantID tags rejections caused by a declared behavior invariant
-	// (r454); empty for normal actions. Backward-compatible (omitempty).
+	Seq         int64  `json:"seq"`
+	Time        string `json:"time"`
+	Session     string `json:"session,omitempty"`
+	Tool        string `json:"tool"`
+	Status      string `json:"status"`
+	InputHash   string `json:"input_hash"`
+	DurationMS  int64  `json:"duration_ms"`
+	Err         string `json:"err,omitempty"`
 	InvariantID string `json:"invariant_id,omitempty"`
-	// Peer/TaskID attribute the entry to a remote A2A handoff (r33);
-	// empty for purely local actions. Backward-compatible (omitempty).
-	Peer     string `json:"peer,omitempty"`
-	TaskID   string `json:"task_id,omitempty"`
-	PrevHash string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
-	Hash     string `json:"hash"`      // SHA-256 over all fields above
+	Peer        string `json:"peer,omitempty"`
+	TaskID      string `json:"task_id,omitempty"`
+	PrevHash    string `json:"prev_hash"`
+	Hash        string `json:"hash"`
 }
 
-// hashEntry computes the chain hash over every field of e except Hash
-// itself. Fields are length-prefixed so no separator ambiguity (an error
-// message containing "|" or "\x00") can make two different entries collide.
 func hashEntry(e Entry) string {
 	var b strings.Builder
 	writeField := func(s string) {
@@ -129,21 +72,6 @@ func hashEntry(e Entry) string {
 	writeField(e.InputHash)
 	writeField(fmt.Sprintf("%d", e.DurationMS))
 	writeField(e.Err)
-	// #4707: the three attribution fields are written with unconditional
-	// 1-byte field tags whenever ANY of them is set, so values cannot slide
-	// between slots. The old conditional append (non-empty -> len+value,
-	// empty -> nothing) lost field-boundary information: E1{Inv:"X", Peer:"",
-	// Task:"Y"} and E2{Inv:"X", Peer:"Y", Task:""} hashed byte-identically,
-	// so a tamperer with ledger write access (inside Verify's threat model)
-	// could move an invariant attribution into the Peer slot - or erase a
-	// remote submission's attribution - without tripping the chain, exactly
-	// what the #3240/r33 sealing comments promise to prevent.
-	//
-	// Compatibility fold: when ALL THREE are empty (the only shape pre-r33/
-	// pre-r454 chains ever wrote) nothing is emitted - byte-identical to
-	// the old encoder, so old chains still Verify (#3240 compat test).
-	// Any non-empty attribution switches to the fully-tagged form, where
-	// every slot (including empty ones) is unambiguous.
 	if e.InvariantID != "" || e.Peer != "" || e.TaskID != "" {
 		writeTagged := func(tag byte, s string) {
 			b.WriteByte(tag)
@@ -158,19 +86,15 @@ func hashEntry(e Entry) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Ledger is an append-only, crash-safe audit ledger backed by a JSONL file.
-// All methods are safe for concurrent use.
 type Ledger struct {
 	mu      sync.Mutex
 	path    string
 	session string
 	f       *os.File
-	seq     int64  // last written seq
-	prev    string // last written hash (or GenesisPrevHash)
+	seq     int64
+	prev    string
 }
 
-// headFile is the .head anchor sidecar: a signed-off statement of where the
-// chain ended as of Anchor time. Verify uses it to detect tail truncation.
 type headFile struct {
 	Version int    `json:"version"`
 	Seq     int64  `json:"seq"`
@@ -178,10 +102,6 @@ type headFile struct {
 	Time    string `json:"time"`
 }
 
-// Open opens (creating if needed) the ledger at path and recovers the chain
-// position from any existing contents, so re-opening the same file within a
-// later session continues the same chain instead of forking a second one
-// that would verify as broken.
 func Open(path, session string) (*Ledger, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -189,17 +109,8 @@ func Open(path, session string) (*Ledger, error) {
 	}
 	l := &Ledger{path: path, session: session, f: f, prev: GenesisPrevHash}
 	entries, scanErr := scanEntries(path)
-	// #2692: a crash-torn trailing partial line scans into the malformed
-	// sentinel, and taking it as the chain tail (seq=0, prev="") made every
-	// subsequent Append write a broken entry - Verify failed forever on the
-	// crash-recovery path the ledger exists for. The torn line never
-	// committed (line-level atomicity, same rule as the session store's
-	// torn-tail recovery), so heal it: truncate to the last complete line
-	// and recover from the last DURABLE entry. Mid-file malformed lines are
-	// corruption evidence and are never touched - only a trailing sentinel
-	// triggers the heal, and only when it is the last entry.
 	if scanErr == nil && len(entries) > 0 && isMalformedSentinel(entries[len(entries)-1]) {
-		_ = truncateTornTail(f) // best-effort; on failure fall through with the sentinel tail (pre-#2692 behavior)
+		_ = truncateTornTail(f)
 		entries, scanErr = scanEntries(path)
 	}
 	if scanErr == nil && len(entries) > 0 {
@@ -209,24 +120,13 @@ func Open(path, session string) (*Ledger, error) {
 			l.prev = last.Hash
 		}
 	}
-	// A scan error on an existing file is deliberately tolerated here (the
-	// file may be mid-verification by another process); Append will still
-	// extend the file, and Verify will surface the pre-existing corruption.
 	return l, nil
 }
 
-// isMalformedSentinel reports whether e is the placeholder scanEntries emits
-// for an unparseable line (used to keep corruption visible to Verify).
 func isMalformedSentinel(e Entry) bool {
 	return e.Seq == 0 && e.Tool == "malformed line"
 }
 
-// truncateTornTail walks the file backwards, dropping trailing non-empty
-// lines that do not parse as entries (crash-torn partial writes), and
-// truncates the file to the end of the last kept line. A trailing line that
-// parses, or an empty/whitespace tail, stops the walk - only never-committed
-// partial writes are discarded. The file is then flush-to-disk consistent
-// with the hash chain over its complete lines.
 func truncateTornTail(f *os.File) error {
 	data, err := os.ReadFile(f.Name())
 	if err != nil {
@@ -234,28 +134,23 @@ func truncateTornTail(f *os.File) error {
 	}
 	cut := len(data)
 	for cut > 0 {
-		// The last line is data[lineStart:end]: strip ONE terminating '\n'
-		// first - after dropping a line, cut points at the next line's start
-		// and the '\n' at cut-1 belongs to the line BEFORE it; searching
-		// without stripping it located an empty segment and stopped the walk
-		// early, leaving interior torn lines unhealed.
 		end := cut
 		if data[end-1] == '\n' {
 			end--
 		}
 		if end == 0 {
-			break // only newline(s) remain; keep
+			break
 		}
 		lineStart := bytes.LastIndexByte(data[:end], '\n') + 1
 		line := bytes.TrimSpace(data[lineStart:end])
 		if len(line) == 0 {
-			break // harmless trailing whitespace; keep
+			break
 		}
 		var probe Entry
 		if json.Unmarshal(line, &probe) == nil {
-			break // complete entry: durable tail
+			break
 		}
-		cut = lineStart // never-committed partial line: drop with its newline
+		cut = lineStart
 	}
 	if cut == len(data) {
 		return nil
@@ -266,14 +161,8 @@ func truncateTornTail(f *os.File) error {
 	return f.Sync()
 }
 
-// Path returns the ledger file path.
 func (l *Ledger) Path() string { return l.path }
 
-// Append seals e into the chain, assigns seq/time/hash, persists the entry
-// as one JSONL line, and returns the sealed entry. It never blocks on fsync
-// (append + OS flush semantics match the tool tape's crash-safety posture);
-// a write error is returned to the caller, which is expected to log and
-// continue — an audit sink must never take the agent down.
 func (l *Ledger) Append(e Event) (Entry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -312,9 +201,6 @@ func (l *Ledger) Append(e Event) (Entry, error) {
 	return entry, nil
 }
 
-// Anchor writes the <path>.head sidecar recording the current chain head.
-// Calling it periodically (and at session end) upgrades tail truncation from
-// undetectable to detected: Verify compares the file against the anchor.
 func (l *Ledger) Anchor() error {
 	l.mu.Lock()
 	hf := headFile{
@@ -327,7 +213,6 @@ func (l *Ledger) Anchor() error {
 	return writeHeadFile(l.path+".head", hf)
 }
 
-// Close flushes and closes the underlying file. Append after Close errors.
 func (l *Ledger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -355,36 +240,26 @@ func writeHeadFile(path string, hf headFile) error {
 	return nil
 }
 
-// Break describes the first verification failure found in a ledger file.
 type Break struct {
-	Seq    int64  // seq of the offending entry (0 for a malformed preamble line)
-	Reason string // human-readable cause
+	Seq    int64
+	Reason string
 }
 
-// Truncation describes a head-anchor vs file mismatch: the anchor says the
-// chain reached AnchoredSeq, but the file ends at FileSeq.
 type Truncation struct {
 	AnchoredSeq int64
 	FileSeq     int64
 }
 
-// Report is the result of Verify.
 type Report struct {
 	Entries      int
 	LastHash     string
-	FirstBreak   *Break      // nil when the chain is intact
-	HeadAnchored bool        // a .head sidecar was found
-	Truncated    *Truncation // non-nil when the anchor proves missing tail entries
+	FirstBreak   *Break
+	HeadAnchored bool
+	Truncated    *Truncation
 }
 
-// OK reports whether verification found no problems.
 func (r Report) OK() bool { return r.FirstBreak == nil && r.Truncated == nil }
 
-// Verify recomputes the hash chain over the ledger file at path and checks
-// it against the .head anchor when present. It stops at the first break —
-// everything after an early break is untrusted anyway — and returns a
-// structured report rather than an error, because a broken ledger is a
-// successful verification outcome.
 func Verify(path string) (Report, error) {
 	entries, err := scanEntries(path)
 	if err != nil {
@@ -407,7 +282,6 @@ func Verify(path string) (Report, error) {
 			rep.LastHash = e.Hash
 			continue
 		}
-		// rep.LastHash deliberately stays at the last verified entry.
 		return rep.finalize(path, int64(len(entries))), nil
 	}
 	return rep.finalize(path, int64(len(entries))), nil
@@ -440,10 +314,6 @@ func readHeadFile(path string) (headFile, error) {
 	return hf, nil
 }
 
-// scanEntries parses the JSONL ledger, skipping blank lines. It returns a
-// hard error only for an unreadable file; a malformed line inside the file
-// is itself evidence of tampering (or corruption) and is surfaced as a
-// sentinel entry with Seq 0, letting Verify report it as a break.
 func scanEntries(path string) ([]Entry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

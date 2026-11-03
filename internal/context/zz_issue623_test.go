@@ -7,15 +7,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestIssue623_SpaceCountedASCIIBypassesFreeze verifies the #623 fix: the
-// #605 G3 freeze used to require asciiChars+cjkChars == 0, but
-// scriptTokenClasses counts spaces/punctuation as ASCII — Cyrillic prose
-// with a single space returned asciiChars>0, bypassed the freeze, and fed
-// RecordSample at asciiShare=1.0, driving asciiRatio 3.5→3.0 (clamp).
-// The freeze must now trigger by uncovered-script SHARE, not absolute zero.
 func TestIssue623_SpaceCountedASCIIBypassesFreeze(t *testing.T) {
-	// Cyrillic prose + spaces + one ASCII identifier: reproduces the issue
-	// probe (ascii count almost entirely space-derived, Cyrillic dominant).
 	cyrillic := strings.Repeat("Привет мир эксперимент ", 52) + "identifier"
 
 	a, c, le, cy, g, o := scriptTokenClasses(cyrillic)
@@ -35,8 +27,6 @@ func TestIssue623_SpaceCountedASCIIBypassesFreeze(t *testing.T) {
 	cm := NewManager(100000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: cyrillic}}})
 
-	// Enough samples to pass warmup and land on adjustment steps. Pre-fix,
-	// each adjustment drove asciiRatio down toward its 3.0 clamp.
 	for i := 0; i < 16; i++ {
 		cm.RecordUsage(provider.TokenUsage{InputTokens: 200, OutputTokens: 1})
 	}
@@ -52,10 +42,8 @@ func TestIssue623_SpaceCountedASCIIBypassesFreeze(t *testing.T) {
 	}
 }
 
-// TestIssue623_SpaceFreeCyrillicStillFrozen: #605 G3's original (0,0)
-// boundary must keep working — Cyrillic text with NO ASCII at all.
 func TestIssue623_SpaceFreeCyrillicStillFrozen(t *testing.T) {
-	text := strings.Repeat("Приветмир", 100) // no spaces, no ASCII
+	text := strings.Repeat("Приветмир", 100)
 	cm := NewManager(100000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: text}}})
 	for i := 0; i < 8; i++ {
@@ -66,13 +54,10 @@ func TestIssue623_SpaceFreeCyrillicStillFrozen(t *testing.T) {
 	}
 }
 
-// TestIssue623_DominantCoveredScriptsStillCalibrate: the freeze must not
-// over-trigger — English text (optionally with a small Cyrillic quote) is
-// dominated by covered scripts and must still record samples.
 func TestIssue623_DominantCoveredScriptsStillCalibrate(t *testing.T) {
 	cm := NewManager(100000)
 	text := strings.Repeat("hello world the quick brown fox jumps over the lazy dog ", 20) +
-		strings.Repeat("Привет ", 5) // ~4% uncovered — well under the 20% share
+		strings.Repeat("Привет ", 5)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: text}}})
 	for i := 0; i < 3; i++ {
 		cm.RecordUsage(provider.TokenUsage{InputTokens: 200, OutputTokens: 1})
@@ -82,8 +67,6 @@ func TestIssue623_DominantCoveredScriptsStillCalibrate(t *testing.T) {
 	}
 }
 
-// TestIssue623_CJKDominantStillCalibrates: CJK is a covered script — a
-// Chinese session must never be frozen by the share check.
 func TestIssue623_CJKDominantStillCalibrates(t *testing.T) {
 	cm := NewManager(100000)
 	text := strings.Repeat("你好世界测试 ", 100)

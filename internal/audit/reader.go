@@ -7,90 +7,64 @@ import (
 	"time"
 )
 
-// Reader-side reconstruction of a run from the audit ledger ("the log exists,
-// the reader is missing" — Meta Muse Code 2026-08 shipped an append-only event
-// log for crash recovery; the audit-trail gap is the human-review consumption
-// surface that answers, after the fact, "what did the agent actually do and
-// which decisions mattered").
-//
-// Digest is read-only: it never mutates the ledger, never needs the ledger to
-// be open, and works on any chain state (a broken chain digests everything up
-// to the break, exactly the entries Verify still vouches for).
-
-// ToolStat is a per-tool rollup inside a digest.
 type ToolStat struct {
 	Tool   string
 	Total  int
 	OK     int
 	Errors int
-	Other  int // cancelled / invalid / approval decisions
+	Other  int
 	AvgMS  float64
 	MaxMS  int64
 }
 
-// ApprovalLine is one human-gate decision on the timeline.
 type ApprovalLine struct {
 	Time   string
 	Tool   string
-	Status string // approved / user_denied / ask_timeout
+	Status string
 	Err    string
 }
 
-// InvariantRejection counts rejections caused by a declared invariant (r454).
 type InvariantRejection struct {
 	InvariantID string
 	Count       int
 }
 
-// PeerAttribution aggregates events attributed to remote A2A handoffs (r33).
 type PeerAttribution struct {
 	Peer   string
 	TaskID string
 	Events int
 }
 
-// ErrorCluster groups failed actions by a normalized error prefix, so a digest
-// shows "edit_file failed 7x with 'old_text not found'" instead of 7 rows.
 type ErrorCluster struct {
 	Prefix string
 	Count  int
 	Tools  []string
 }
 
-// RunDigest is the human-readable reconstruction of what a ledger records.
 type RunDigest struct {
 	Path           string
-	Session        string // empty = all sessions
-	Entries        int    // entries considered (after session filter)
-	SkippedOther   int    // entries belonging to other sessions
+	Session        string
+	Entries        int
+	SkippedOther   int
 	FirstTime      string
 	LastTime       string
-	WallDurationMS int64 // last.Time - first.Time (coarse run wall time)
+	WallDurationMS int64
 	ToolStats      []ToolStat
 	Approvals      []ApprovalLine
 	Invariants     []InvariantRejection
 	Peers          []PeerAttribution
 	ErrorClusters  []ErrorCluster
-	// Verify is filled by Digest from Verify(path) so the tamper state of the
-	// chain fronts the report; a reader must know whether the evidence itself
-	// is intact before trusting anything below.
-	VerifyOK   bool
-	FirstBreak *Break
-	Truncated  *Truncation
+	VerifyOK       bool
+	FirstBreak     *Break
+	Truncated      *Truncation
 }
 
-// approvalStatuses are the Event statuses that represent human-gate decisions
-// rather than tool executions.
 var approvalStatuses = map[string]bool{
 	StatusUserApproved: true,
 	StatusUserDenied:   true,
 	StatusAskTimeout:   true,
 }
 
-// Digest reconstructs a run view from the ledger at path. When session is
-// non-empty, only entries with that session (or no session set — legacy
-// chains) are considered. The chain's Verify report is embedded so consumers
-// render the tamper state alongside the reconstruction.
 func Digest(path, session string) (RunDigest, error) {
 	entries, err := scanEntries(path)
 	if err != nil {
@@ -104,8 +78,6 @@ func Digest(path, session string) (RunDigest, error) {
 	errClusters := map[string]*ErrorCluster{}
 
 	for _, e := range entries {
-		// Sentinel for a malformed line: it is Verify's evidence, not digest
-		// content. Count it but do not attribute it.
 		if e.Seq == 0 {
 			continue
 		}
@@ -166,7 +138,6 @@ func Digest(path, session string) (RunDigest, error) {
 		}
 	}
 
-	// Averages and duration rollups need a second pass over the same filter.
 	if d.FirstTime != "" && d.LastTime != "" {
 		if t0, err0 := time.Parse(time.RFC3339Nano, d.FirstTime); err0 == nil {
 			if t1, err1 := time.Parse(time.RFC3339Nano, d.LastTime); err1 == nil {
@@ -214,15 +185,6 @@ func Digest(path, session string) (RunDigest, error) {
 		return d.ErrorClusters[i].Count > d.ErrorClusters[j].Count
 	})
 
-	// Embed chain tamper state: a digest over a broken chain is still useful
-	// (everything before the break is vouched), but the break must travel with
-	// it or a consumer could mistake post-break absence for "nothing happened".
-	// #3692: a Verify IO failure must fail CLOSED - the initial VerifyOK=true
-	// used to survive the error branch and Render() reported "VERIFIED
-	// intact" for a chain it could not even read. Unverifiable != intact.
-	// verifyChain is a seam: the IO error is only reachable via a TOCTOU
-	// between Digest's own scanEntries read and Verify's (same path, two
-	// opens); tests swap this to exercise the failure deterministically.
 	ok, firstBreak, truncated := verifyChain(path)
 	d.VerifyOK = ok
 	d.FirstBreak = firstBreak
@@ -230,9 +192,6 @@ func Digest(path, session string) (RunDigest, error) {
 	return d, nil
 }
 
-// verifyChain runs Verify and folds its error into a fail-closed triple.
-// Package var (not a plain func) so tests can swap it: the IO error is only
-// reachable via a TOCTOU between Digest's scanEntries read and Verify's.
 var verifyChain = func(path string) (ok bool, firstBreak *Break, truncated *Truncation) {
 	rep, err := Verify(path)
 	if err != nil {
@@ -241,9 +200,6 @@ var verifyChain = func(path string) (ok bool, firstBreak *Break, truncated *Trun
 	return rep.OK(), rep.FirstBreak, rep.Truncated
 }
 
-// Render formats a digest as the human-readable audit report. Blast radius
-// (when the caller knows the changed files) is appended as review guidance:
-// review depth should match blast radius, not be flat across every run.
 func (d RunDigest) Render(changedFiles []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Audit ledger: %s\n", d.Path)
@@ -310,17 +266,12 @@ func (d RunDigest) Render(changedFiles []string) string {
 	return b.String()
 }
 
-// Blast radius tiers for review-depth guidance. The ledger deliberately does
-// not store file paths (InputHash only — secrets never enter the chain), so
-// the changed-file set comes from the caller (git diff of the run's work).
 const (
-	BlastCopy     = "copy"     // docs, comments, marketing text
-	BlastCode     = "code"     // regular source changes
-	BlastCritical = "critical" // migrations, auth, infra, CI, secrets
+	BlastCopy     = "copy"
+	BlastCode     = "code"
+	BlastCritical = "critical"
 )
 
-// blastRules maps path substrings to the critical tier. Order-independent:
-// critical wins over code wins over copy.
 var blastRules = []struct {
 	sub string
 }{
@@ -332,8 +283,6 @@ var blastRules = []struct {
 	{"secret"}, {"credential"}, {".pem"}, {".env"},
 }
 
-// BlastRadius classifies a changed-file set into a review-depth tier.
-// Unknown/empty inputs default to BlastCode (never under-review code).
 func BlastRadius(files []string) string {
 	tier := BlastCopy
 	for _, f := range files {
@@ -347,7 +296,6 @@ func BlastRadius(files []string) string {
 		switch {
 		case strings.HasSuffix(fl, ".md"), strings.HasPrefix(fl, "docs/"),
 			strings.Contains(fl, "README"), strings.HasSuffix(fl, ".txt"):
-			// stays copy unless promoted by a rule above
 		default:
 			hit = true
 		}
@@ -358,11 +306,6 @@ func BlastRadius(files []string) string {
 	return tier
 }
 
-// normalizeErrPrefix reduces an error string to a stable clustering key: the
-// first clause up to a delimiter, truncated, with values normalized so the
-// same failure shape clusters: paths -> <path>, file-ish tokens -> <file>,
-// digit runs -> #. "old_text not found in a.go" and "in /x/b.go" both become
-// "old_text not found in <file>".
 func normalizeErrPrefix(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\n:"); i > 0 {
@@ -386,8 +329,6 @@ func normalizeErrPrefix(s string) string {
 	return strings.Join(out, " ")
 }
 
-// isFileIsh reports whether a bare token looks like a filename: no path
-// separators, contains a dot, and consists only of filename-safe characters.
 func isFileIsh(f string) bool {
 	if len(f) == 0 || len(f) > 64 || !strings.Contains(f, ".") {
 		return false
@@ -404,7 +345,6 @@ func isFileIsh(f string) bool {
 	return true
 }
 
-// collapseDigits replaces each maximal digit run with a single '#'.
 func collapseDigits(f string) string {
 	var b strings.Builder
 	prevDigit := false

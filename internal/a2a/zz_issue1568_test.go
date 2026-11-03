@@ -1,9 +1,5 @@
 package a2a
 
-// #1568 case B: stop() cleared m.browser unlocked while the refresh
-// ticker's lookup() read it in a check-then-use pattern - the lock now
-// pairs both sides (source pin; the race itself is a timing window).
-
 import (
 	"os"
 	"strings"

@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestEventTaskIDJSONTagSpec pins #1470-B: A2A events serialize the task
-// reference as taskId (the spec field) - the old house-dialect "id" tag
-// left spec-parsing third-party receivers with an empty TaskID.
 func TestEventTaskIDJSONTagSpec(t *testing.T) {
 	b, err := json.Marshal(TaskStatusUpdateEvent{TaskID: "T-1", Status: TaskStatus{State: TaskStateWorking}})
 	if err != nil {
@@ -24,7 +21,4 @@ func TestEventTaskIDJSONTagSpec(t *testing.T) {
 	if !strings.Contains(string(b2), `"taskId":"T-1"`) {
 		t.Fatalf("artifact event missing spec taskId field: %s", b2)
 	}
-	// A single json tag cannot accept both spellings; the spec alignment
-	// is intentionally breaking for house-dialect peers - the in-house
-	// client shares these structs so round-trips stay consistent.
 }

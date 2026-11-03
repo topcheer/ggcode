@@ -1,19 +1,5 @@
 package acp
 
-// Regression tests for GitHub issues #1116 and #1117 (internal/acp).
-//
-// #1116 - setupAskUserHandler overwrote a single SetHandler slot on the
-// shared ask_user tool singleton, so with >=2 concurrent ACP sessions the
-// last-created loop captured every session's ask_user traffic (same
-// last-writer-wins class as #1047). Fix: a registry-level dispatcher keyed by
-// session ID; each AgentLoop registers its own handler.
-//
-// #1117 - Start() installed readCtx/cancelRead but readLoop's EOF/read-error
-// returns never cancelled the context. A later Start() overwrote c.cancelRead
-// and the stale generation leaked together with async handleAgentRequest
-// goroutines spawned on it. Fix: spawnReadLoop defers cancelRead on any exit,
-// and Start() defensively cancels the previous generation before overwrite.
-
 import (
 	"bytes"
 	"context"
@@ -26,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// newIssue1116Fixture builds ONE shared registry holding the ask_user
-// singleton plus a loop per session, each wired to its own transport whose
-// outbound bytes land in the returned buffers. Mirrors the real #1116 shape:
-// concurrent ACP sessions share a single tool registry.
 func newIssue1116Fixture(t *testing.T, sessionIDs ...string) ([]*AgentLoop, []*bytes.Buffer) {
 	t.Helper()
 
@@ -56,10 +38,6 @@ func issue1116Ctx(sessionID string) (context.Context, context.CancelFunc) {
 	)
 }
 
-// TestIssue1116_PerSessionAskUserHandlerRouting verifies that handlers set by
-// earlier loops remain reachable after later loops are created, and that each
-// ask_user call is routed to the session named on the run context (the old
-// code let the last-created loop steal all traffic).
 func TestIssue1116_PerSessionAskUserHandlerRouting(t *testing.T) {
 	loops, bufs := newIssue1116Fixture(t, "sess-A", "sess-B", "sess-C")
 	loopA, loopB, loopC := loops[0], loops[1], loops[2]
@@ -81,9 +59,6 @@ func TestIssue1116_PerSessionAskUserHandlerRouting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dispatcher Execute(%s): %v", sessionID, err)
 		}
-		// The per-loop handler forwards to RequestPermission on the owning
-		// loop's transport; our short ctx makes the wait fail, so the routed
-		// call shows up as an error result mentioning the permission request.
 		if !res.IsError {
 			t.Fatalf("Execute(%s): expected error result from aborted approval wait", sessionID)
 		}
@@ -95,22 +70,15 @@ func TestIssue1116_PerSessionAskUserHandlerRouting(t *testing.T) {
 		}
 	}
 
-	// Routing works even for loops created before other sessions constructed
-	// their own loops - this is exactly what last-writer-wins broke (#1116).
 	routeAndExpect("sess-A", bufA)
 	routeAndExpect("sess-B", bufB)
 	if loopB.registry != loopA.registry {
 		t.Fatal("loops A and B unexpectedly use different registries")
 	}
-	_ = loopC // third construction must not have displaced A/B handlers
+	_ = loopC
 
-	// The base singleton's SetHandler slot must remain untouched so no stale
-	// global handler can answer for sessions it does not belong to.
 }
 
-// TestIssue1116_UnknownTaggedSessionGetsCleanError verifies that a request
-// tagged with a session ID that has no registered handler fails cleanly
-// instead of falling through to some other session's legacy default (#1116).
 func TestIssue1116_UnknownTaggedSessionGetsCleanError(t *testing.T) {
 	loops, _ := newIssue1116Fixture(t, "sess-A")
 
@@ -134,10 +102,6 @@ func TestIssue1116_UnknownTaggedSessionGetsCleanError(t *testing.T) {
 	}
 }
 
-// TestIssue1116_LegacyDefaultPreservedButRegistryReplaced checks both sides
-// of the compatibility contract: the registry slot becomes the dispatcher,
-// while the raw singleton retains its legacy default handler so pre-existing
-// untagged callers keep functioning (#1116).
 func TestIssue1116_LegacyDefaultPreservedButRegistryReplaced(t *testing.T) {
 	registry := tool.NewRegistry()
 	base := tool.NewAskUserTool()
@@ -161,26 +125,23 @@ func TestIssue1116_LegacyDefaultPreservedButRegistryReplaced(t *testing.T) {
 	}
 }
 
-// TestIssue1117_ReadLoopEOFCancelsStaleGeneration drives a real EOF return
-// out of readLoop and asserts that the generation's read context is cancelled
-// even though Stop()/Close() were never called (the #1117 leak).
 func TestIssue1117_ReadLoopEOFCancelsStaleGeneration(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 
-	trReader := strings.NewReader("") // no input needed; EOF comes from pipe close
+	trReader := strings.NewReader("")
 	c := &Client{
 		def:       DiscoveredAgent{Def: AgentDef{Name: "issue1117-agent"}},
 		done:      make(chan struct{}),
 		transport: NewTransport(pr, io.Discard),
 	}
-	c.stderrTail = outputTail{} // zero value ready for use
-	_ = trReader                // reader side of EOF is the pipe itself
+	c.stderrTail = outputTail{}
+	_ = trReader
 
 	readCtx, genCancel := context.WithCancel(context.Background())
 
 	c.spawnReadLoop(readCtx, genCancel)
-	pw.Close() // agent stdout closes -> ReadAnyMessage returns io.EOF
+	pw.Close()
 
 	select {
 	case <-c.done:

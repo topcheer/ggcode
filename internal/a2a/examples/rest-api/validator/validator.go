@@ -1,4 +1,3 @@
-// Package validator provides validation logic for model inputs.
 package validator
 
 import (
@@ -18,11 +17,9 @@ const (
 	maxPrice             = 10_000_000
 )
 
-// ValidateCreate validates a CreateProductInput and returns field errors.
 func ValidateCreate(input *model.CreateProductInput) error {
 	var fields []errors.FieldError
 
-	// Name
 	input.Name = strings.TrimSpace(input.Name)
 	switch {
 	case input.Name == "":
@@ -34,7 +31,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 		})
 	}
 
-	// Description
 	if len(input.Description) > maxDescriptionLength {
 		fields = append(fields, errors.FieldError{
 			Field:   "description",
@@ -42,7 +38,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 		})
 	}
 
-	// Price
 	switch {
 	case input.Price <= 0:
 		fields = append(fields, errors.FieldError{
@@ -61,7 +56,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 		})
 	}
 
-	// Currency
 	input.Currency = strings.ToUpper(strings.TrimSpace(input.Currency))
 	switch {
 	case input.Currency == "":
@@ -76,7 +70,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 		})
 	}
 
-	// SKU
 	input.SKU = strings.TrimSpace(input.SKU)
 	switch {
 	case input.SKU == "":
@@ -96,7 +89,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 		})
 	}
 
-	// Tags
 	if len(input.Tags) > maxTags {
 		fields = append(fields, errors.FieldError{
 			Field:   "tags",
@@ -126,7 +118,6 @@ func ValidateCreate(input *model.CreateProductInput) error {
 	return nil
 }
 
-// ValidateUpdate validates an UpdateProductInput. Only provided fields are checked.
 func ValidateUpdate(input *model.UpdateProductInput) error {
 	var fields []errors.FieldError
 
@@ -230,7 +221,6 @@ func ValidateUpdate(input *model.UpdateProductInput) error {
 	return nil
 }
 
-// isAlphanumeric checks whether the string contains only letters, digits, and hyphens.
 func isAlphanumeric(s string) bool {
 	for _, r := range s {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {

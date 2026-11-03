@@ -1,9 +1,5 @@
 package a2a
 
-// A2A v1.0 compatibility tests (sa-71): ProtoJSON enum decoding (1.0.0
-// changelog #1384), legacy well-known URI fallback (0.3.0 rename), and
-// application/a2a+json media-type preference (1.0.1 #1753).
-
 import (
 	"context"
 	"encoding/json"
@@ -27,14 +23,11 @@ func TestTaskStateV1Unmarshal(t *testing.T) {
 		{`"TASK_STATE_SUBMITTED"`, TaskStateSubmitted, false},
 		{`"TASK_STATE_INPUT_REQUIRED"`, TaskStateInputRequired, false},
 		{`"TASK_STATE_AUTH_REQUIRED"`, TaskStateAuthRequired, false},
-		// legacy lowercase (0.2.x/0.3.x JSON-RPC peers)
 		{`"completed"`, TaskStateCompleted, true},
 		{`"working"`, TaskStateWorking, false},
-		// historical spellings tolerated for interop
 		{`"cancelled"`, TaskStateCanceled, true},
 		{`"input_required"`, TaskStateInputRequired, false},
 		{`"auth_required"`, TaskStateAuthRequired, false},
-		// unknown states preserved verbatim (forward compat)
 		{`"brand-new-state"`, TaskState("brand-new-state"), false},
 	}
 	for _, tc := range cases {
@@ -51,9 +44,6 @@ func TestTaskStateV1Unmarshal(t *testing.T) {
 	}
 }
 
-// The motivating bug: a v1.0 remote agent reporting TASK_STATE_COMPLETED
-// decoded as an unknown state whose IsTerminal() is false, so the caller
-// waited forever on a finished task.
 func TestTaskStatusV1DecodeTerminal(t *testing.T) {
 	var st TaskStatus
 	wire := []byte(`{"state":"TASK_STATE_COMPLETED","timestamp":"2026-01-01T00:00:00Z"}`)
@@ -65,8 +55,6 @@ func TestTaskStatusV1DecodeTerminal(t *testing.T) {
 	}
 }
 
-// MarshalJSON keeps emitting the legacy lowercase name so older ggcode
-// peers round-trip unchanged (1.0.0 changelog #1401 compat allowance).
 func TestTaskStateMarshalLegacy(t *testing.T) {
 	b, err := json.Marshal(TaskStateCompleted)
 	if err != nil {
@@ -115,25 +103,20 @@ func TestIsJSONMedia(t *testing.T) {
 }
 
 func TestRequestContentType(t *testing.T) {
-	// No card discovered yet: legacy default.
 	c := NewClient("http://127.0.0.1:1", "k")
 	if got := c.requestContentType(); got != "application/json" {
 		t.Fatalf("no card: got %q", got)
 	}
-	// v1.0 card: a2a+json.
 	c.card.Store(&AgentCard{ProtocolReversion: "1.0"})
 	if got := c.requestContentType(); got != "application/a2a+json" {
 		t.Fatalf("v1 card: got %q", got)
 	}
-	// Legacy card (0.2.x, no protocolVersion): application/json.
 	c.card.Store(&AgentCard{})
 	if got := c.requestContentType(); got != "application/json" {
 		t.Fatalf("legacy card: got %q", got)
 	}
 }
 
-// Discover must fall back to the legacy agent.json well-known URI when a
-// v1 server serves only agent-card.json (0.3.0 rename) — and vice versa.
 func TestDiscoverWellKnownFallback(t *testing.T) {
 	v1Card := `{"name":"v1","protocolVersion":"1.0","url":"http://x"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,14 +186,12 @@ func TestPrefersA2AJSON(t *testing.T) {
 }
 
 func TestWriteRPCContentTypeNegotiation(t *testing.T) {
-	// Legacy request path: plain recorder keeps application/json.
 	rec := httptest.NewRecorder()
 	writeRPCResult(rec, json.RawMessage(`1`), map[string]string{"ok": "true"})
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("legacy result CT=%q", ct)
 	}
 
-	// Negotiated request path: rpcWriter emits a2a+json.
 	rec2 := httptest.NewRecorder()
 	nw := &rpcWriter{ResponseWriter: rec2, respCT: "application/a2a+json"}
 	writeRPCResult(nw, json.RawMessage(`1`), map[string]string{"ok": "true"})
@@ -229,9 +210,6 @@ func TestWriteRPCContentTypeNegotiation(t *testing.T) {
 	}
 }
 
-// The server's agent card must serialize the required protocolVersion field
-// (spec-mandatory since 0.2.5) so v1 clients can negotiate media types and
-// enum encodings against ggcode.
 func TestServerCardSerializesProtocolVersion(t *testing.T) {
 	if A2AProtocolVersion != "1.0" {
 		t.Fatalf("A2AProtocolVersion=%q, want \"1.0\"", A2AProtocolVersion)

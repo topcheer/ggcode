@@ -6,49 +6,28 @@ import (
 	"sync"
 )
 
-// PricingType indicates how a model is billed.
 type PricingType string
 
 const (
-	// PricingUnknown: no pricing data available. Display "(no pricing data)".
-	// This is the default — we do NOT hardcode per-token prices because
-	// model pricing changes frequently and stale data is worse than no data.
-	PricingUnknown PricingType = ""
-	// PricingPerToken: standard per-million-token billing.
-	// Only set when the user has explicitly configured pricing via Merge().
-	PricingPerToken PricingType = "per_token"
-	// PricingSubscription: flat-rate subscription with monthly quota.
-	// Display "included in <Plan>" instead of dollar amount.
+	PricingUnknown      PricingType = ""
+	PricingPerToken     PricingType = "per_token"
 	PricingSubscription PricingType = "subscription"
-	// PricingBundled: included in a bundle (e.g., Google One AI Premium).
-	PricingBundled PricingType = "bundled"
-	// PricingFree: free tier, no cost.
-	PricingFree PricingType = "free"
+	PricingBundled      PricingType = "bundled"
+	PricingFree         PricingType = "free"
 )
 
-// ModelRate holds pricing info for a single model.
-// For subscription/bundled/free models, the per-token fields are zero
-// and PricingType indicates the billing model.
 type ModelRate struct {
 	InputPerM      float64     `json:"input_per_m,omitempty"`
 	OutputPerM     float64     `json:"output_per_m,omitempty"`
 	CacheReadPerM  float64     `json:"cache_read_per_m,omitempty"`
 	CacheWritePerM float64     `json:"cache_write_per_m,omitempty"`
 	Type           PricingType `json:"type,omitempty"`
-	Plan           string      `json:"plan,omitempty"` // e.g., "GitHub Copilot", "GLM Coding Plan"
+	Plan           string      `json:"plan,omitempty"`
 
-	// CacheReadSet / CacheWriteSet are presence markers for the cache rate
-	// fields. #559 (Bug C): a user explicitly configuring `cache_read_per_m: 0`
-	// (free cache reads) previously fell back to the 0.10x-input heuristic
-	// ($18 reported as $123, 6.8x). With omitempty on the wire, presence cannot
-	// be recovered from the value alone, so an explicit marker is set during
-	// JSON unmarshal when the key appears.
 	CacheReadSet  bool `json:"-"`
 	CacheWriteSet bool `json:"-"`
 }
 
-// UnmarshalJSON records presence of the explicit cache rate fields so an
-// explicit 0 (free) is distinguishable from an absent field.
 func (r *ModelRate) UnmarshalJSON(data []byte) error {
 	type rawModelRate ModelRate
 	var raw rawModelRate
@@ -68,21 +47,16 @@ func (r *ModelRate) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// IsMetered returns true if the model is billed per-token.
 func (r ModelRate) IsMetered() bool {
 	return r.Type == PricingPerToken
 }
 
-// IsKnown returns true if any pricing information is available.
 func (r ModelRate) IsKnown() bool {
 	return r.Type != PricingUnknown || r.InputPerM > 0 || r.OutputPerM > 0
 }
 
-// PricingTable maps provider+model to pricing info.
-type PricingTable map[string]map[string]ModelRate // provider → model → rate
+type PricingTable map[string]map[string]ModelRate
 
-// Get returns the rate for a provider+model, or false if not found.
-// Uses fuzzy matching for versioned model names.
 func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	models, ok := t[provider]
 	if !ok {
@@ -92,13 +66,11 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 		}
 	}
 
-	// Exact match
 	rate, ok := models[model]
 	if ok {
 		return rate, true
 	}
 
-	// Case-insensitive match
 	lowerModel := strings.ToLower(model)
 	for k, v := range models {
 		if strings.ToLower(k) == lowerModel {
@@ -106,12 +78,6 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 		}
 	}
 
-	// Prefix match (longest wins for specificity)
-	// #559 (Bug A): forward-only. The old `HasPrefix(lowerModel, lk) ||
-	// HasPrefix(lk, lowerModel)` also matched when the QUERY was a prefix of the
-	// KEY, so querying "glm-4.5" (paid) hit "glm-4.5-air" (free) and $11 showed
-	// as $0. Only accept model names that START WITH a table key; shorter
-	// queries no longer match longer keys.
 	bestKey := ""
 	var bestRate ModelRate
 	for k, v := range models {
@@ -127,12 +93,6 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 		return bestRate, true
 	}
 
-	// Suffix match (longest wins)
-	// #559 (Bug B): require a hard boundary so "my-proxy-o3" no longer hits
-	// the "o3" subscription rate ($180 shown as included). "-" cannot serve as
-	// a boundary (model names are hyphen-heavy, so "my-proxy-o3" ends with
-	// "-o3"); only a path separator ("/", as in "anthropic/o3") or the exact
-	// name qualifies.
 	bestKey = ""
 	for k, v := range models {
 		lk := strings.ToLower(k)
@@ -154,7 +114,6 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	return ModelRate{}, false
 }
 
-// Merge overlays another pricing table on top of this one.
 func (t PricingTable) Merge(other PricingTable) PricingTable {
 	result := make(PricingTable)
 	for p, models := range t {
@@ -174,9 +133,6 @@ func (t PricingTable) Merge(other PricingTable) PricingTable {
 	return result
 }
 
-// IsCodingPlanEndpoint returns true if the endpoint name indicates a coding plan.
-// Coding plan endpoints use subscription billing (monthly quota), not per-token.
-// Examples: "cn-coding-openai", "global-coding-anthropic", "kimi-coding", "ark-coding"
 func IsCodingPlanEndpoint(endpoint string) bool {
 	if endpoint == "" {
 		return false
@@ -187,45 +143,19 @@ func IsCodingPlanEndpoint(endpoint string) bool {
 		strings.Contains(lower, "token_plan")
 }
 
-// subscriptionVendors is the set of vendors whose built-in config is
-// entirely subscription-based (all endpoints are coding/token plans).
 var subscriptionVendors = map[string]string{
-	// vendor key → plan display name
-	// Verified via online research, see sources below.
-	"aliyun":         "Aliyun Bailian Coding Plan", // https://www.aliyun.com/benefit/scene/codingplan
-	"kimi":           "Kimi Coding Plan",           // https://www.kimi.com/zh-cn/help/membership/membership-pricing
-	"ark":            "Volcengine Ark Coding Plan", // https://www.volcengine.com/activity/codingplan
-	"minimax":        "MiniMax Token Plan",         // https://platform.minimaxi.com/docs/guides/pricing-token-plan
-	"xiaomi-mimo":    "Xiaomi MiMo Token Plan",     // https://mimo.mi.com/docs/zh-CN/tokenplan/subscription
-	"github-copilot": "GitHub Copilot",             // https://github.com/features/copilot/plans
+	"aliyun":         "Aliyun Bailian Coding Plan",
+	"kimi":           "Kimi Coding Plan",
+	"ark":            "Volcengine Ark Coding Plan",
+	"minimax":        "MiniMax Token Plan",
+	"xiaomi-mimo":    "Xiaomi MiMo Token Plan",
+	"github-copilot": "GitHub Copilot",
 }
 
-// DefaultPricingTable returns built-in billing-type info for known providers.
-//
-// IMPORTANT: We deliberately do NOT hardcode per-token prices. Model pricing
-// changes frequently and stale data is misleading. This table only contains
-// billing TYPE information (subscription vs per-token vs free) that is
-// verifiable from each provider's official pricing page.
-//
-// For per-token pricing, users can configure custom rates via Merge().
-// defaultPricingTable caches the built-in table. DefaultPricingTable() sits
-// on hot paths (estimateSessionCost walks every UsageHistory entry per View
-// frame); rebuilding the nested maps per call cost 316MB of allocations per
-// frame on long sessions — the root cause of the "long session renders
-// sluggish" regression.
 var defaultPricingTable = sync.OnceValue(func() PricingTable {
 	return PricingTable{
-		// Z.ai: both coding plan (subscription) and standard API (per-token).
-		// The coding plan endpoints (cn-coding-*, global-coding-*) are subscription.
-		// The standard API endpoints (cn-api-*, global-api-*) are per-token.
-		// We mark all zai models as unknown here — the actual billing type
-		// is determined by the endpoint in IsCodingPlanEndpoint().
-		// Source: https://z.ai/subscribe (Lite/Pro/Max plans from $18/mo)
 		"zai": {},
 
-		// GitHub Copilot: $10/mo (Pro), $19/user/mo (Business).
-		// All models included in subscription.
-		// Source: https://github.com/features/copilot/plans
 		"github-copilot": {
 			"claude-haiku-4.5":       {Type: PricingSubscription, Plan: "GitHub Copilot"},
 			"claude-opus-4.5":        {Type: PricingSubscription, Plan: "GitHub Copilot"},
@@ -247,24 +177,16 @@ var defaultPricingTable = sync.OnceValue(func() PricingTable {
 			"o4-mini":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
 		},
 
-		// GLM-4-Air: permanently free model on Zhipu/ZAI platform.
-		// Source: https://open.bigmodel.cn/pricing
 		"zhipu": {
 			"glm-4.5-air": {Type: PricingFree, Plan: "Zhipu Free Tier"},
 		},
 	}
 })
 
-// DefaultPricingTable returns the cached built-in pricing table. Callers
-// must treat the returned map as read-only; use Merge() to derive modified
-// copies.
 func DefaultPricingTable() PricingTable {
 	return defaultPricingTable()
 }
 
-// IsSubscriptionVendor returns the plan name if the vendor is entirely
-// subscription-based (all built-in endpoints are coding/token plans).
-// Returns empty string if the vendor is not a subscription vendor.
 func IsSubscriptionVendor(vendor string) string {
 	if plan, ok := subscriptionVendors[strings.ToLower(vendor)]; ok {
 		return plan

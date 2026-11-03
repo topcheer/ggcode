@@ -8,8 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-// --- PreferredIP ---
-
 func TestPreferredIP(t *testing.T) {
 	ip := PreferredIP()
 	if ip == "" {
@@ -21,8 +19,6 @@ func TestPreferredIP(t *testing.T) {
 	}
 	t.Logf("PreferredIP: %s", ip)
 }
-
-// --- parseTXTFields ---
 
 func TestParseTXTFields(t *testing.T) {
 	tests := []struct {
@@ -72,8 +68,6 @@ func TestParseTXTFields(t *testing.T) {
 	}
 }
 
-// --- sanitizeMDNSName ---
-
 func TestSanitizeMDNSName(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -108,10 +102,8 @@ func TestSanitizeMDNSNameMaxLength(t *testing.T) {
 	}
 }
 
-// #934: byte-slicing at 63 cut CJK names mid-rune (invalid UTF-8 that
-// strict resolvers reject). Truncation must land on rune boundaries.
 func TestSanitizeMDNSNameCJKRuneBoundary(t *testing.T) {
-	long := strings.Repeat("好", 100) // 100 runes, 300 bytes
+	long := strings.Repeat("好", 100)
 	result := sanitizeMDNSName(long)
 	if len(result) > 63 {
 		t.Errorf("result length %d exceeds 63", len(result))
@@ -124,18 +116,14 @@ func TestSanitizeMDNSNameCJKRuneBoundary(t *testing.T) {
 	}
 }
 
-// --- mdnsService lifecycle ---
-
 func TestMDNSServiceStartStop(t *testing.T) {
 	m := newMDNSService()
 	if m == nil {
 		t.Fatal("newMDNSService returned nil")
 	}
 
-	// stop on uninitialized should be safe
 	m.stop()
 
-	// start with a valid instance
 	info := InstanceInfo{
 		ID:        "test-id",
 		PID:       os.Getpid(),
@@ -148,10 +136,8 @@ func TestMDNSServiceStartStop(t *testing.T) {
 		t.Fatalf("start failed: %v", err)
 	}
 
-	// Should be able to stop cleanly
 	m.stop()
 
-	// Double stop should be safe
 	m.stop()
 }
 
@@ -167,7 +153,6 @@ func TestMDNSServiceStartInvalidEndpoint(t *testing.T) {
 
 func TestMDNSServiceLookupWithoutStart(t *testing.T) {
 	m := newMDNSService()
-	// lookup without start should return nil
 	instances := m.lookup()
 	if instances != nil {
 		t.Logf("lookup found %d instances (expected nil without start)", len(instances))
@@ -187,7 +172,6 @@ func TestMDNSServiceSelfExclusion(t *testing.T) {
 	}
 	defer m.stop()
 
-	// lookup should not include self
 	for _, inst := range m.lookup() {
 		if inst.ID == "self-id" {
 			t.Error("lookup should exclude self")

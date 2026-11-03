@@ -9,7 +9,6 @@ import (
 )
 
 func TestDiscoverEmpty(t *testing.T) {
-	// With an empty PATH, nothing should be found
 	t.Setenv("PATH", t.TempDir())
 	agents := Discover()
 	if len(agents) != 0 {
@@ -18,10 +17,8 @@ func TestDiscoverEmpty(t *testing.T) {
 }
 
 func TestDiscoverKnownAgents(t *testing.T) {
-	// Create a temp dir with fake agent binaries
 	dir := t.TempDir()
 
-	// Create fake "copilot" binary
 	for _, name := range []string{"copilot", "droid", "opencode"} {
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
@@ -29,17 +26,14 @@ func TestDiscoverKnownAgents(t *testing.T) {
 		}
 	}
 
-	// Add an unrelated binary
 	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("#!/bin/sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Set PATH to our temp dir
 	origPath := os.Getenv("PATH")
 	t.Setenv("PATH", dir)
 	defer t.Setenv("PATH", origPath)
 
-	// Clear exec.LookPath cache by using the environment directly
 	agents := Discover()
 
 	names := make([]string, len(agents))
@@ -58,7 +52,6 @@ func TestDiscoverKnownAgents(t *testing.T) {
 		}
 	}
 
-	// Verify paths are correct
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +64,6 @@ func TestDiscoverKnownAgents(t *testing.T) {
 }
 
 func TestDiscoverPartial(t *testing.T) {
-	// Only create "droid"
 	dir := t.TempDir()
 	path := filepath.Join(dir, "droid")
 	if err := os.WriteFile(path, []byte("#!/bin/sh"), 0o755); err != nil {
@@ -97,7 +89,6 @@ func TestFindBinaryNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent binary")
 	}
 	if !os.IsNotExist(err) && err != exec.ErrNotFound {
-		// exec.LookPath returns exec.ErrNotFound on some platforms
 		t.Logf("got error: %v (acceptable)", err)
 	}
 }
@@ -122,7 +113,6 @@ func TestFindBinaryRejectsWorkspaceLocalPath(t *testing.T) {
 }
 
 func TestKnownAgentsStructure(t *testing.T) {
-	// Verify KnownAgents has expected entries
 	names := make(map[string]bool)
 	for _, def := range KnownAgents {
 		if def.Name == "" {

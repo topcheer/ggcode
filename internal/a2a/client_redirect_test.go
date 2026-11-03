@@ -8,14 +8,8 @@ import (
 	"time"
 )
 
-// Regression test for the #1458-A / #1458-C composition gap: NegotiateAuth
-// honors the card-declared securityScheme name, which can be ANY header name.
-// When a redirect crosses hosts, the client must strip the credential header
-// even if its name is outside the well-known list - a hardcoded list is
-// bypassed by an out-of-list card declaration.
 func TestClientCustomKeyHeaderStrippedOnCrossHostRedirect(t *testing.T) {
 	var gotCustom, gotDefault string
-	// Redirect target (stand-in for a hostile/other host).
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotCustom = r.Header.Get("X-Custom-Key")
 		gotDefault = r.Header.Get("X-API-Key")
@@ -24,8 +18,6 @@ func TestClientCustomKeyHeaderStrippedOnCrossHostRedirect(t *testing.T) {
 	}))
 	defer target.Close()
 
-	// Source server: card declares a custom apiKey header name, then 302s
-	// every RPC POST to the target host.
 	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/agent.json" {
 			_, _ = w.Write([]byte(`{"name":"src","url":"` + r.Host + `","securitySchemes":{"k":{"type":"apiKey","in":"header","name":"X-Custom-Key"}},"security":[{"k":[]}]}`))

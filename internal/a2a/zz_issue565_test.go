@@ -1,8 +1,5 @@
 package a2a
 
-// Feature tests for issue #565 (ver-53 probe findings A, C, D, E, F, G).
-// Finding B was rejected in triage and is intentionally not tested.
-
 import (
 	"context"
 	"encoding/json"
@@ -20,11 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// ---------------------------------------------------------------------------
-// Shared stubs
-// ---------------------------------------------------------------------------
-
-// scriptProvider serves a scripted ChatStream per call (agent path).
 type scriptProvider struct {
 	mu     sync.Mutex
 	script [][]provider.StreamEvent
@@ -59,7 +51,6 @@ func (p *scriptProvider) CountTokens(ctx context.Context, messages []provider.Me
 	return 1, nil
 }
 
-// stubTool records executions.
 type stubTool struct {
 	name string
 	ran  int
@@ -100,7 +91,6 @@ func newHandler(a *agent.Agent, reg *tool.Registry) *TaskHandler {
 		WithMaxTasks(5), WithTimeout(10*time.Second))
 }
 
-// tTempDir returns a fresh temp dir for shared handler construction.
 func tTempDir() string {
 	d, err := os.MkdirTemp("", "issue565-*")
 	if err != nil {
@@ -109,16 +99,10 @@ func tTempDir() string {
 	return d
 }
 
-// ---------------------------------------------------------------------------
-// A: skill allowlist enforced on the agent path (security)
-// ---------------------------------------------------------------------------
-
-// TestIssue565A_ReadOnlySkillWhitelistsAreActuallyReadOnly verifies the
-// built-in read-only skills do not whitelist any side-effecting tool.
 func TestIssue565A_ReadOnlySkillWhitelistsAreActuallyReadOnly(t *testing.T) {
 	for skill, allowed := range skillPermissions {
 		if skill == SkillFullTask || skill == SkillCodeEdit || skill == SkillCommandExec {
-			continue // deliberately side-effecting skills
+			continue
 		}
 		for _, name := range allowed.AllowedTools {
 			for _, dangerous := range []string{"write_file", "edit_file", "multi_edit_file", "file_ops", "git_commit", "git_reset", "run_command", "batch_replace"} {
@@ -130,8 +114,6 @@ func TestIssue565A_ReadOnlySkillWhitelistsAreActuallyReadOnly(t *testing.T) {
 	}
 }
 
-// TestIssue565A_RestrictRegistry_Unit verifies restrictRegistry exposes only
-// allowlisted tools and tolerates unknown names / nil source.
 func TestIssue565A_RestrictRegistry_Unit(t *testing.T) {
 	read := &stubTool{name: "read_file"}
 	write := &stubTool{name: "write_file"}
@@ -149,16 +131,11 @@ func TestIssue565A_RestrictRegistry_Unit(t *testing.T) {
 	}
 }
 
-// TestIssue565A_AllowlistExcludesWriteToolsOnAgentPath runs the REAL
-// executeAgent path with a file-search skill whose whitelist excludes
-// write_file, and proves the write tool is unreachable (regression test for
-// the privilege escalation found by the ver-53 probe).
 func TestIssue565A_AllowlistExcludesWriteToolsOnAgentPath(t *testing.T) {
 	read := &stubTool{name: "read_file"}
 	write := &stubTool{name: "write_file"}
 
 	inputArgs, _ := json.Marshal(map[string]string{"path": "/tmp/x", "content": "pwned"})
-	// Turn 1: model requests write_file; turn 2: model finishes with text.
 	script := [][]provider.StreamEvent{{
 		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{
 			ID: "tc1", Name: "write_file", Arguments: inputArgs,
@@ -176,8 +153,6 @@ func TestIssue565A_AllowlistExcludesWriteToolsOnAgentPath(t *testing.T) {
 		t.Fatalf("no permissions declared for %s", SkillFileSearch)
 	}
 
-	// #565 A: executeAgent must honor perm; previously it built the agent
-	// from the FULL registry, letting file-search invoke write_file.
 	_, err := h.executeAgent(context.Background(), perm, SkillFileSearch,
 		[]Message{{Parts: []Part{{Kind: "text", Text: "do it"}}}})
 	if err != nil {
@@ -188,9 +163,6 @@ func TestIssue565A_AllowlistExcludesWriteToolsOnAgentPath(t *testing.T) {
 	}
 }
 
-// TestIssue565A_PositiveControl_UnrestrictedSkillCanExecuteTool proves the
-// harness actually drives tool execution when nothing is restricted —
-// guarding against a vacuously-passing A test.
 func TestIssue565A_PositiveControl_UnrestrictedSkillCanExecuteTool(t *testing.T) {
 	write := &stubTool{name: "write_file"}
 	inputArgs, _ := json.Marshal(map[string]string{"path": "/tmp/x", "content": "data"})
@@ -206,7 +178,7 @@ func TestIssue565A_PositiveControl_UnrestrictedSkillCanExecuteTool(t *testing.T)
 	a := agent.NewAgent(&scriptProvider{script: script}, reg, "test", 10)
 	h := newHandler(a, reg)
 
-	perm := &SkillPermission{AllowedTools: nil} // unrestricted
+	perm := &SkillPermission{AllowedTools: nil}
 	_, err := h.executeAgent(context.Background(), perm, SkillFullTask,
 		[]Message{{Parts: []Part{{Kind: "text", Text: "write"}}}})
 	if err != nil {
@@ -217,12 +189,6 @@ func TestIssue565A_PositiveControl_UnrestrictedSkillCanExecuteTool(t *testing.T)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// F: SSE scanner robustness
-// ---------------------------------------------------------------------------
-
-// TestIssue565F_ScannerBufferSizePresent guards the buffer setup so a future
-// refactor cannot silently drop it.
 func TestIssue565F_ScannerBufferSizePresent(t *testing.T) {
 	b, err := os.ReadFile("client.go")
 	if err != nil {
@@ -233,8 +199,6 @@ func TestIssue565F_ScannerBufferSizePresent(t *testing.T) {
 	}
 }
 
-// TestIssue565F_LargeSSEEventsNotTruncated feeds a >64KB single-line SSE
-// data event followed by a terminal completed event; both must decode.
 func TestIssue565F_LargeSSEEventsNotTruncated(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"kind\":\"status-update\",\"status\":{\"state\":\"working\"}}}\n\n")
@@ -295,7 +259,6 @@ func TestIssue565F_LargeSSEEventsNotTruncated(t *testing.T) {
 	}
 }
 
-// errReader delivers its payload, then a permanent read error.
 type errReader struct {
 	payload string
 	done    bool
@@ -309,8 +272,6 @@ func (r *errReader) Read(p []byte) (int, error) {
 	return 0, fmt.Errorf("connection reset by peer")
 }
 
-// TestIssue565F_ScannerErrorSurfaced proves a mid-stream transport failure
-// reaches the consumer as a JSON-RPC error instead of a silent EOF.
 func TestIssue565F_ScannerErrorSurfaced(t *testing.T) {
 	r := &errReader{payload: "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"kind\":\"status-update\",\"status\":{\"state\":\"working\"}}}\n\n"}
 	ch := make(chan JSONRPCResponse, 8)
@@ -328,13 +289,6 @@ func TestIssue565F_ScannerErrorSurfaced(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// C: card mutex
-// ---------------------------------------------------------------------------
-
-// TestIssue565C_CardConcurrentReadsAndWrites hammers card reads (HTTP card
-// endpoint + accessors) against setter writes; guarded by cardMu this is
-// race-detector clean.
 func TestIssue565C_CardConcurrentReadsAndWrites(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -350,14 +304,14 @@ func TestIssue565C_CardConcurrentReadsAndWrites(t *testing.T) {
 	writersDone := make(chan struct{})
 
 	wg.Add(1)
-	go func() { // writers
+	go func() {
 		defer wg.Done()
 		defer close(writersDone)
 		for i := 0; i < 200; i++ {
 			s.SetExtendedCard(json.RawMessage(`{"extra":true}`))
 		}
 	}()
-	for r := 0; r < 3; r++ { // readers via HTTP + accessors
+	for r := 0; r < 3; r++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -377,17 +331,11 @@ func TestIssue565C_CardConcurrentReadsAndWrites(t *testing.T) {
 			}
 		}()
 	}
-	<-writersDone // stop readers once writers finish
+	<-writersDone
 	close(stop)
 	wg.Wait()
 }
 
-// ---------------------------------------------------------------------------
-// E: id null in error responses
-// ---------------------------------------------------------------------------
-
-// TestIssue565E_ParseErrorResponseHasNullID posts garbage; the parse-error
-// response MUST carry "id":null per JSON-RPC 2.0 (not omit the member).
 func TestIssue565E_ParseErrorResponseHasNullID(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -421,13 +369,8 @@ func TestIssue565E_ParseErrorResponseHasNullID(t *testing.T) {
 	if decoded.Error == nil || decoded.Error.Code != -32700 {
 		t.Fatalf("expected parse error -32700, got: %s", buf.String())
 	}
-	// Note: json.Unmarshal of JSON null into *json.RawMessage sets the
-	// pointer to nil, so decoded.ID == nil is EXPECTED here — the raw-body
-	// Contains check above is the actual proof that "id":null was emitted
-	// rather than omitted.
 }
 
-// TestIssue565E_NormalizeResponseID unit-checks the mapping.
 func TestIssue565E_NormalizeResponseID(t *testing.T) {
 	if got := string(normalizeResponseID(nil)); got != "null" {
 		t.Errorf("nil id → %q, want null", got)
@@ -437,12 +380,6 @@ func TestIssue565E_NormalizeResponseID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// D: artifact events in stream
-// ---------------------------------------------------------------------------
-
-// TestIssue565D_ArtifactEventsEmittedInStream drives a full task through
-// message/stream and requires an artifact event before the terminal status.
 func TestIssue565D_ArtifactEventsEmittedInStream(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -512,12 +449,6 @@ collect:
 	}
 }
 
-// ---------------------------------------------------------------------------
-// G: messageId idempotency
-// ---------------------------------------------------------------------------
-
-// TestIssue565G_MessageIdIdempotency re-sends the same messageId and must
-// get the SAME task back, not a duplicate (timeout-retry double execution).
 func TestIssue565G_MessageIdIdempotency(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -530,8 +461,6 @@ func TestIssue565G_MessageIdIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first handle: %v", err)
 	}
-	// The idempotency check happens at Handle entry regardless of the
-	// first task's state, so no need to wait for completion here.
 	t2, err := h.Handle(context.Background(), SkillCodeEdit, msg, "")
 	if err != nil {
 		t.Fatalf("second handle: %v", err)
@@ -540,7 +469,6 @@ func TestIssue565G_MessageIdIdempotency(t *testing.T) {
 		t.Fatalf("BUG G: duplicate task spawned on retry — t1=%s t2=%s (double execution of %s)", t1.ID, t2.ID, SkillCodeEdit)
 	}
 
-	// Different messageId → different task.
 	msg2 := msg
 	msg2.MessageID = "different"
 	t3, err := h.Handle(context.Background(), SkillCodeEdit, msg2, "")
@@ -552,8 +480,6 @@ func TestIssue565G_MessageIdIdempotency(t *testing.T) {
 	}
 }
 
-// TestIssue565G_MessageIdIndexReapedWithTasks verifies the idempotency
-// index does not outlive its tasks (memory growth guard).
 func TestIssue565G_MessageIdIndexReapedWithTasks(t *testing.T) {
 	reg := newStubRegistry()
 	a := agent.NewAgent(&scriptProvider{script: [][]provider.StreamEvent{
@@ -572,8 +498,6 @@ func TestIssue565G_MessageIdIndexReapedWithTasks(t *testing.T) {
 		h.mu.Unlock()
 		t.Fatal("index entry missing right after creation — setup assumption wrong")
 	}
-	// Simulate the task expiring (as cleanupExpiredTasksLocked would do),
-	// then run the reaper and confirm the index entry goes with it.
 	delete(h.tasks, tid)
 	h.cleanupExpiredTasksLocked()
 	if _, ok := h.messageIndex["gone-soon"]; ok {

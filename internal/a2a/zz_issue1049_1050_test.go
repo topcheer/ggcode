@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// TestIssue1049_CancelTaskPushAsync verifies that CancelTask does not block
-// on push notifier callback (DNS validation). The push callback should be
-// invoked via safego.Go, allowing CancelTask to return immediately.
 func TestIssue1049_CancelTaskPushAsync(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
@@ -20,7 +17,6 @@ func TestIssue1049_CancelTaskPushAsync(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	// Create a task and move it to working state.
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role:  "user",
 		Parts: []Part{{Kind: "text", Text: "test"}},
@@ -29,30 +25,25 @@ func TestIssue1049_CancelTaskPushAsync(t *testing.T) {
 	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateWorking}
 	handler.mu.Unlock()
 
-	// Simulate a slow push callback (like DNS resolution would block).
 	var pushCalled bool
 	var pushMu sync.Mutex
 	handler.SetPushNotifier(func(taskID string, payload StreamResponse) {
 		pushMu.Lock()
 		defer pushMu.Unlock()
 		pushCalled = true
-		// Simulate blocking DNS resolution (actual push_guard uses 3s timeout).
 		time.Sleep(100 * time.Millisecond)
 	})
 
-	// CancelTask should return immediately, not wait for push callback.
 	start := time.Now()
 	if err := handler.CancelTask(task.ID); err != nil {
 		t.Fatalf("CancelTask failed: %v", err)
 	}
 	elapsed := time.Since(start)
 
-	// Should complete well before the simulated 100ms delay.
 	if elapsed > 50*time.Millisecond {
 		t.Errorf("CancelTask took too long (%v), should return before push callback completes", elapsed)
 	}
 
-	// Wait for async push callback to fire.
 	time.Sleep(200 * time.Millisecond)
 	pushMu.Lock()
 	if !pushCalled {
@@ -61,9 +52,6 @@ func TestIssue1049_CancelTaskPushAsync(t *testing.T) {
 	pushMu.Unlock()
 }
 
-// TestIssue1050_RequestInputNotifiesSubscribers verifies that RequestInput
-// triggers both onTaskEvent and pushNotifier callbacks, so webhook clients
-// can detect input-required state.
 func TestIssue1050_RequestInputNotifiesSubscribers(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
@@ -91,7 +79,6 @@ func TestIssue1050_RequestInputNotifiesSubscribers(t *testing.T) {
 		}
 	})
 
-	// Create a task and move it to working state.
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role:  "user",
 		Parts: []Part{{Kind: "text", Text: "test"}},
@@ -100,12 +87,10 @@ func TestIssue1050_RequestInputNotifiesSubscribers(t *testing.T) {
 	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateWorking}
 	handler.mu.Unlock()
 
-	// RequestInput should trigger both callbacks.
 	if err := handler.RequestInput(task.ID, "please provide more info"); err != nil {
 		t.Fatalf("RequestInput failed: %v", err)
 	}
 
-	// Give async callbacks time to fire.
 	time.Sleep(100 * time.Millisecond)
 
 	taskEventMu.Lock()
@@ -121,8 +106,6 @@ func TestIssue1050_RequestInputNotifiesSubscribers(t *testing.T) {
 	pushMu.Unlock()
 }
 
-// TestIssue1050_InputRequiredEventInUpdateStatus verifies that the
-// updateStatus method handles TaskStateInputRequired and fires onTaskEvent.
 func TestIssue1050_InputRequiredEventInUpdateStatus(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
@@ -138,8 +121,6 @@ func TestIssue1050_InputRequiredEventInUpdateStatus(t *testing.T) {
 		}
 	})
 
-	// Create a task and immediately request input via RequestInput.
-	// This internally calls updateStatus and should trigger onTaskEvent.
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role:  "user",
 		Parts: []Part{{Kind: "text", Text: "test"}},
@@ -152,7 +133,6 @@ func TestIssue1050_InputRequiredEventInUpdateStatus(t *testing.T) {
 		t.Fatalf("RequestInput failed: %v", err)
 	}
 
-	// Give async callback time to fire.
 	time.Sleep(100 * time.Millisecond)
 
 	eventMu.Lock()

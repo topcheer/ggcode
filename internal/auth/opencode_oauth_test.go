@@ -15,7 +15,6 @@ func TestOpenCodeDeviceAuthVerificationURL(t *testing.T) {
 	if got != want {
 		t.Fatalf("VerificationURL = %q, want %q", got, want)
 	}
-	// Absolute URLs pass through untouched.
 	d2 := &OpenCodeDeviceAuth{VerificationURIComplete: "https://other.example/x"}
 	if got := d2.VerificationURL("https://opencode.ai/console"); got != "https://other.example/x" {
 		t.Fatalf("absolute passthrough = %q", got)

@@ -115,11 +115,6 @@ func loadUsageLocked() (map[string]skillUsageEntry, error) {
 	}
 	var usage map[string]skillUsageEntry
 	if err := json.Unmarshal(data, &usage); err != nil {
-		// #3517: a corrupt skill_usage.json must NOT read as "empty, fine" -
-		// that nil-error empty map let RecordUsage overwrite the file and
-		// silently erase the entire usage history. Quarantine the damaged
-		// file aside (never delete: it is the only copy of the history) and
-		// return the error so callers short-circuit instead of rewriting.
 		path, perr := usagePath()
 		if perr == nil {
 			_ = os.Rename(path, path+".corrupt-"+time.Now().Format("20060102-150405"))
@@ -144,9 +139,6 @@ func saveUsageLocked(usage map[string]skillUsageEntry) error {
 	if err != nil {
 		return err
 	}
-	// #3517: write-then-rename so a crash mid-write can never leave a
-	// truncated JSON file behind (which the loader would then quarantine,
-	// losing history to a partial write).
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err

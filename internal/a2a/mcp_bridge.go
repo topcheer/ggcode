@@ -9,13 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// MCPBridgeTools returns MCP-compatible tool definitions that wrap A2A client operations.
-// These tools are for external MCP clients (Claude, Cursor, Copilot, etc.) that don't
-// speak A2A natively. They let the MCP client discover and interact with this ggcode
-// instance as if it were a set of MCP tools.
-//
-// ggcode instances talking to each other should use A2A protocol directly,
-// NOT through MCP.
 func MCPBridgeTools(client *Client) []tool.Tool {
 	return []tool.Tool{
 		&a2aDiscoverTool{client: client},
@@ -25,10 +18,6 @@ func MCPBridgeTools(client *Client) []tool.Tool {
 		&a2aCancelTaskTool{client: client},
 	}
 }
-
-// ---------------------------------------------------------------------------
-// a2a_discover tool
-// ---------------------------------------------------------------------------
 
 type a2aDiscoverTool struct {
 	client *Client
@@ -72,10 +61,6 @@ func (t *a2aDiscoverTool) Execute(ctx context.Context, input json.RawMessage) (t
 
 	return tool.Result{Content: output}, nil
 }
-
-// ---------------------------------------------------------------------------
-// a2a_send_task tool
-// ---------------------------------------------------------------------------
 
 type a2aSendTaskTool struct {
 	client *Client
@@ -136,10 +121,6 @@ func (t *a2aSendTaskTool) Execute(ctx context.Context, input json.RawMessage) (t
 	return tool.Result{Content: result}, nil
 }
 
-// ---------------------------------------------------------------------------
-// a2a_get_task tool
-// ---------------------------------------------------------------------------
-
 type a2aGetTaskTool struct {
 	client *Client
 }
@@ -180,10 +161,6 @@ func (t *a2aGetTaskTool) Execute(ctx context.Context, input json.RawMessage) (to
 
 	return tool.Result{Content: formatTaskResult(task)}, nil
 }
-
-// ---------------------------------------------------------------------------
-// a2a_list_tasks tool
-// ---------------------------------------------------------------------------
 
 type a2aListTasksTool struct {
 	client *Client
@@ -241,10 +218,6 @@ func (t *a2aListTasksTool) Execute(ctx context.Context, input json.RawMessage) (
 	return tool.Result{Content: sb.String()}, nil
 }
 
-// ---------------------------------------------------------------------------
-// a2a_cancel_task tool
-// ---------------------------------------------------------------------------
-
 type a2aCancelTaskTool struct {
 	client *Client
 }
@@ -281,10 +254,6 @@ func (t *a2aCancelTaskTool) Execute(ctx context.Context, input json.RawMessage) 
 
 	return tool.Result{Content: fmt.Sprintf("Task %s canceled (state: %s)", task.ID, task.Status.State)}, nil
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func formatTaskResult(t *Task) string {
 	result := fmt.Sprintf("Task %s\nStatus: %s\nSkill: %s", t.ID, t.Status.State, t.Skill)

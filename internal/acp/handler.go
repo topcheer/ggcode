@@ -21,7 +21,6 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-// JSON-RPC 2.0 error codes
 const (
 	ErrCodeParseError     = -32700
 	ErrCodeInvalidRequest = -32600
@@ -30,33 +29,28 @@ const (
 	ErrCodeInternalError  = -32603
 )
 
-// Handler processes ACP JSON-RPC requests and dispatches to appropriate methods.
 type Handler struct {
-	transport   *Transport
-	sessions    map[string]*Session
-	sessionsMu  sync.RWMutex
-	initialized bool
-	// Auth state — guarded by authMu (written by the background device-flow
-	// goroutine, read from handleSessionPrompt/handleAuthenticate).
+	transport      *Transport
+	sessions       map[string]*Session
+	sessionsMu     sync.RWMutex
+	initialized    bool
 	authMu         sync.Mutex
 	authenticated  bool
-	authErr        error  // last async device-flow failure, propagated to the next prompt/authenticate call
-	authMethodUsed string // auth method the Client negotiated via session/authenticate
+	authErr        error
+	authMethodUsed string
 	version        int
 	clientCaps     ClientCapabilities
 	clientInfo     *ImplementationInfo
 	cfg            *config.Config
 	toolRegistry   *tool.Registry
 	prov           provider.Provider
-	sessionsDir    string                // directory for persistent sessions
-	workspaceDirs  map[string]string     // sessionID → per-workspace sessionsDir
-	agentLoops     map[string]*AgentLoop // sessionID → active agent loop for mode changes
-	sessionModes   map[string]string     // sessionID → explicitly-set permission mode (survives prompt gaps)
+	sessionsDir    string
+	workspaceDirs  map[string]string
+	agentLoops     map[string]*AgentLoop
+	sessionModes   map[string]string
 }
 
-// NewHandler creates a new ACP handler.
 func NewHandler(cfg *config.Config, registry *tool.Registry, transport *Transport, prov provider.Provider) *Handler {
-	// Set up sessions directory
 	homeDir := config.HomeDir()
 	sessionsDir := filepath.Join(homeDir, ".ggcode", "acp-sessions")
 	os.MkdirAll(sessionsDir, 0o755)
@@ -74,23 +68,14 @@ func NewHandler(cfg *config.Config, registry *tool.Registry, transport *Transpor
 	}
 }
 
-// isAuthMethodRequired reports whether the negotiated auth method requires
-// successful authentication before prompts are allowed. "api-key" (env vars)
-// is validated synchronously in handleAuthenticate; "agent" completes async.
 func isAuthMethodRequired(methodID string) bool {
 	return methodID == "agent" || methodID == "api-key"
 }
 
-// Run starts the main ACP message loop. It reads messages from the transport
-// and dispatches them to the appropriate handler methods.
-// Supports bi-directional communication: Client requests are dispatched to handlers,
-// and Client responses (to our Agent→Client requests) are delivered to pending callers.
 func (h *Handler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Fail all in-flight Agent→Client requests so waiters don't hang on
-			// their timeouts while the server is shutting down.
 			h.transport.FailAllPending(ctx.Err())
 			h.cleanupEmptySessions()
 			return ctx.Err()
@@ -99,10 +84,6 @@ func (h *Handler) Run(ctx context.Context) error {
 
 		req, resp, err := h.transport.ReadAnyMessage()
 		if err != nil {
-			// EOF means client disconnected — normal shutdown.
-			// Fail all in-flight Agent→Client requests immediately so callers
-			// (e.g. permission requests with 5-minute timeouts) don't hang, then
-			// clean up any sessions that have no conversation history.
 			if errors.Is(err, io.EOF) {
 				h.transport.FailAllPending(fmt.Errorf("client disconnected"))
 				h.cleanupEmptySessions()
@@ -112,22 +93,18 @@ func (h *Handler) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Client response to our pending request (e.g. session/request_permission)
 		if resp != nil {
 			h.transport.DeliverResponse(resp)
 			continue
 		}
 
-		// Client request
 		if req != nil {
 			h.handleRequest(ctx, req)
 		}
 	}
 }
 
-// handleRequest dispatches a single JSON-RPC request.
 func (h *Handler) handleRequest(_ context.Context, req *JSONRPCRequest) {
-	// Route to method handler
 	switch req.Method {
 	case "initialize":
 		h.dispatch(req, h.handleInitialize)
@@ -158,7 +135,6 @@ func (h *Handler) handleRequest(_ context.Context, req *JSONRPCRequest) {
 	}
 }
 
-// dispatch handles a request with standard error handling.
 func (h *Handler) dispatch(req *JSONRPCRequest, handler func(json.RawMessage) (interface{}, error)) {
 	result, err := handler(req.Params)
 	if err != nil {
@@ -172,7 +148,6 @@ func (h *Handler) dispatch(req *JSONRPCRequest, handler func(json.RawMessage) (i
 	}
 }
 
-// handleInitialize handles the "initialize" method.
 func (h *Handler) handleInitialize(params json.RawMessage) (interface{}, error) {
 	var initParams InitializeParams
 	if err := json.Unmarshal(params, &initParams); err != nil {
@@ -213,8 +188,6 @@ func (h *Handler) handleInitialize(params json.RawMessage) (interface{}, error) 
 	return result, nil
 }
 
-// handleAuthenticate handles the "authenticate" method.
-// It processes the Client's authentication request based on the auth method ID.
 func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error) {
 	var authParams AuthenticateParams
 	if err := json.Unmarshal(params, &authParams); err != nil {
@@ -223,10 +196,6 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 
 	switch authParams.AuthMethodID {
 	case "agent":
-		// GitHub Device Flow — runs in background, sends user_code via notification.
-		// Failures are recorded (under authMu) and propagated to the next
-		// session/prompt or session/authenticate call instead of being silently
-		// dropped in a debug log.
 		authHandler := NewAuthHandler(h.transport, "")
 		h.authMu.Lock()
 		h.authMethodUsed = "agent"
@@ -250,7 +219,6 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 		})
 		return AuthenticateResult{}, nil
 	case "api-key":
-		// Env Var Auth — validate required env vars
 		authHandler := NewAuthHandler(h.transport, "")
 		authMethods := h.getAuthMethods()
 		for _, m := range authMethods {
@@ -272,7 +240,6 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 	}
 }
 
-// handleSessionNew handles the "session/new" method.
 func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) {
 	if !h.initialized {
 		return nil, fmt.Errorf("not initialized")
@@ -283,14 +250,12 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 		return nil, fmt.Errorf("invalid session/new params: %w", err)
 	}
 
-	// Validate CWD: spec requires an absolute path. Reject empty, "/", or relative paths.
 	if err := validateCWD(sessionParams.CWD); err != nil {
 		return nil, err
 	}
 
 	session := NewSession(sessionParams.CWD, sessionParams.MCPServers)
 
-	// Ensure per-workspace session directory exists
 	sessionDir := workspaceSessionsDir(h.sessionsDir, sessionParams.CWD)
 	os.MkdirAll(sessionDir, 0o755)
 	session.SetSaveDir(sessionDir)
@@ -300,7 +265,6 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 	h.workspaceDirs[session.ID] = sessionDir
 	h.sessionsMu.Unlock()
 
-	// Start MCP servers if provided
 	if len(sessionParams.MCPServers) > 0 {
 		mgr := NewMCPManager(h.toolRegistry)
 		if err := mgr.ConnectServers(context.Background(), sessionParams.MCPServers); err != nil {
@@ -316,10 +280,6 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 	}, nil
 }
 
-// handleSessionPrompt handles the "session/prompt" method.
-// checkPromptAuth returns an error when the negotiated auth method has not
-// completed successfully (either still in progress or failed), and nil when
-// prompts may proceed.
 func (h *Handler) checkPromptAuth() error {
 	h.authMu.Lock()
 	authenticated := h.authenticated
@@ -335,10 +295,6 @@ func (h *Handler) checkPromptAuth() error {
 	return fmt.Errorf("authentication required (%s): authentication is still in progress", authMethod)
 }
 
-// agentLoopForSession returns the existing agent loop for the session or
-// creates and registers a new one (restoring any prior conversation), so
-// loops are reused across prompts. Callers must then ApplyMode to re-apply
-// any explicitly-set permission mode.
 func (h *Handler) agentLoopForSession(session *Session) *AgentLoop {
 	h.sessionsMu.Lock()
 	defer h.sessionsMu.Unlock()
@@ -346,7 +302,6 @@ func (h *Handler) agentLoopForSession(session *Session) *AgentLoop {
 		return loop
 	}
 	loop := NewAgentLoop(h.cfg, h.toolRegistry, h.transport, session, h.clientCaps, h.prov)
-	// If session has existing messages, restore them into the agent context.
 	if msgs := session.Messages(); len(msgs) > 0 {
 		loop.RestoreConversation(msgs)
 	}
@@ -371,24 +326,14 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("session not found: %s", promptParams.SessionID)
 	}
 
-	// Enforce the negotiated auth method: if the Client authenticated via
-	// session/authenticate and that flow has not completed (or has failed),
-	// prompts are rejected so the negotiated method is actually honored.
 	if err := h.checkPromptAuth(); err != nil {
 		return nil, err
 	}
 
 	loop := h.agentLoopForSession(session)
-	// Busy guard (#1033): if a prompt is already running on this session's
-	// cached loop, reject instead of letting two goroutines concurrently
-	// drive the same AgentLoop (data race on loop state + interleaved agent
-	// output). ACP prompts are async (response via session/update), so the
-	// client should wait for prompt_complete or cancel before re-prompting.
 	if !session.TryBeginRun() {
 		return nil, fmt.Errorf("session %s already has a prompt in flight; wait for session/prompt_complete or send session/cancel first", promptParams.SessionID)
 	}
-	// Re-apply any explicitly-set permission mode so it survives loop
-	// recreation between prompts (prevents silent revert to "auto").
 	h.sessionsMu.RLock()
 	mode, hasMode := h.sessionModes[session.ID]
 	h.sessionsMu.RUnlock()
@@ -401,11 +346,8 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 
 	safego.Go("acp.handler.agentLoop", func() {
 		defer cancel()
-		defer session.EndRun() // release the prompt busy guard (#1033)
+		defer session.EndRun()
 		defer func() {
-			// Clean up agent loop reference when done. The session's explicitly-set
-			// mode (h.sessionModes) intentionally survives so the next prompt
-			// re-applies it instead of silently reverting to "auto".
 			h.sessionsMu.Lock()
 			delete(h.agentLoops, promptParams.SessionID)
 			h.sessionsMu.Unlock()
@@ -425,11 +367,6 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 				StopReason: stopReason,
 			},
 		})
-		// Persist session after prompt execution
-		// #1096: Check if session is still registered before saving.
-		// If the session was closed while the prompt was running, do not
-		// resurrect it by saving it to disk. This prevents closed sessions
-		// from appearing in session/list or creating orphan files.
 		h.sessionsMu.RLock()
 		_, stillActive := h.sessions[promptParams.SessionID]
 		sDir := h.workspaceDirs[promptParams.SessionID]
@@ -437,25 +374,15 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 		if !stillActive {
 			debug.Log("acp", "session %s was closed during prompt, skipping save", promptParams.SessionID)
 		} else if sDir == "" {
-			// Session is active but has no workspace dir (should not happen
-			// with current initialization logic). Skip save to avoid creating
-			// orphan files in the root sessionsDir.
 			debug.Log("acp", "session %s has no workspace dir, skipping save", promptParams.SessionID)
 		} else if saveErr := session.Save(sDir); saveErr != nil {
 			debug.Log("acp", "failed to save session: %v", saveErr)
 		}
-		// Clean up MCP connections
-		// #751: MCP servers are SESSION-level (per ACP spec); closing the
-		// manager in this per-prompt defer killed all MCP tools from prompt #2
-		// onward (no reconnection path exists). Close now happens in
-		// handleSessionClose / on manager replacement in connectMCPServers.
 	})
 
-	// Return immediately; updates come via session/update notifications
 	return SessionPromptResult{}, nil
 }
 
-// handleSessionCancel handles the "session/cancel" method.
 func (h *Handler) handleSessionCancel(params json.RawMessage) (interface{}, error) {
 	var cancelParams SessionCancelParams
 	if err := json.Unmarshal(params, &cancelParams); err != nil {
@@ -473,8 +400,6 @@ func (h *Handler) handleSessionCancel(params json.RawMessage) (interface{}, erro
 	return struct{}{}, nil
 }
 
-// handleSessionLoad handles the "session/load" method.
-// It loads a previously persisted session and replays its messages.
 func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error) {
 	if !h.initialized {
 		return nil, fmt.Errorf("not initialized")
@@ -485,10 +410,6 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 		return nil, fmt.Errorf("invalid session/load params: %w", err)
 	}
 
-	// #1095: Check if an agent loop is already running for this session.
-	// If so, refuse the load to prevent double goroutine driving the
-	// same session, which would bypass the #1033 TryBeginRun guard.
-	// This mirrors the guard added to session/resume in #1056.
 	h.sessionsMu.RLock()
 	_, exists := h.sessions[loadParams.SessionID]
 	h.sessionsMu.RUnlock()
@@ -496,21 +417,13 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 		return nil, fmt.Errorf("session %s already active: cannot load", loadParams.SessionID)
 	}
 
-	// Load session from disk
 	session, err := LoadSession(h.sessionsDir, loadParams.SessionID)
 	if err != nil {
-		// Try to find in workspace subdirectories
 		session, err = h.loadSessionFromWorkspaces(loadParams.SessionID)
 		if err != nil {
 			return nil, fmt.Errorf("loading session: %w", err)
 		}
 	} else {
-		// #1594-C: legacy root layout shadow. Save now redirects to the
-		// per-CWD subdirectory, but a leftover root <id>.json wins every
-		// future top-level load (read path) while saves keep updating the
-		// subdirectory copy - the user sees conversations roll back. When
-		// the subdirectory copy exists, prefer it and remove the stale
-		// root original (the subdirectory copy is the one saves update).
 		sub := filepath.Join(workspaceSessionsDir(h.sessionsDir, session.CWD), loadParams.SessionID+".json")
 		if sub != filepath.Join(h.sessionsDir, loadParams.SessionID+".json") {
 			if subData, subErr := os.ReadFile(sub); subErr == nil {
@@ -525,21 +438,14 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 		}
 	}
 
-	// Register the loaded session
 	sessionDir := workspaceSessionsDir(h.sessionsDir, session.CWD)
 	os.MkdirAll(sessionDir, 0o755)
-	// #1477-B: the top-level load path forgot SetSaveDir (session/new at
-	// L296 and the workspace scan at L645 both have it; a sibling comment
-	// documents the same bug class for the scan branch). Without it, a
-	// later Save(SaveDir()=="") wrote <id>.json into the process CWD
-	// (daemon: / or $HOME) and compaction checkpoints were lost.
 	session.SetSaveDir(sessionDir)
 	h.sessionsMu.Lock()
 	h.sessions[session.ID] = session
 	h.workspaceDirs[session.ID] = sessionDir
 	h.sessionsMu.Unlock()
 
-	// Replay messages as session/update notifications
 	for _, msg := range session.Messages() {
 		for _, block := range msg.Content {
 			updateType := "agent_message_chunk"
@@ -556,12 +462,9 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 		}
 	}
 
-	// Per ACP spec: respond with null after replaying all messages
 	return nil, nil
 }
 
-// handleSessionSetMode handles the "session/set_mode" method.
-// It allows the Client to change the session's permission mode.
 func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, error) {
 	if !h.initialized {
 		return nil, fmt.Errorf("not initialized")
@@ -576,8 +479,6 @@ func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, err
 	session, ok := h.sessions[modeParams.SessionID]
 	loop := h.agentLoops[modeParams.SessionID]
 	if ok {
-		// Persist the mode for this session so it survives loop recreation
-		// between prompts and is re-applied by handleSessionPrompt.
 		h.sessionModes[modeParams.SessionID] = modeParams.Mode
 	}
 	h.sessionsMu.Unlock()
@@ -585,7 +486,6 @@ func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, err
 		return nil, fmt.Errorf("session not found: %s", modeParams.SessionID)
 	}
 
-	// Update the active agent loop's permission mode (if one is running)
 	if loop != nil {
 		loop.SetMode(modeParams.Mode)
 	}
@@ -595,7 +495,6 @@ func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, err
 	return SessionSetModeResult{}, nil
 }
 
-// getAuthMethods returns the supported authentication methods.
 func (h *Handler) getAuthMethods() []AuthMethod {
 	secret := true
 	optional := false
@@ -621,8 +520,6 @@ func (h *Handler) getAuthMethods() []AuthMethod {
 	}
 }
 
-// validateCWD checks that the given path is a valid project working directory.
-// Rejects empty, "/", relative paths, and non-existent/non-directory paths.
 func validateCWD(cwd string) error {
 	if cwd == "" || cwd == "/" || !filepath.IsAbs(cwd) {
 		return fmt.Errorf("invalid cwd %q: must be an absolute project directory path", cwd)
@@ -637,24 +534,16 @@ func validateCWD(cwd string) error {
 	return nil
 }
 
-// workspaceSessionsDir returns a per-workspace session directory.
-// This allows multiple ggcode ACP instances to maintain separate session stores
-// for different workspaces without conflicts.
 func workspaceSessionsDir(baseDir, cwd string) string {
 	if cwd == "" {
 		return baseDir
 	}
 	absCWD := cwd
 	h := sha256.Sum256([]byte(absCWD))
-	short := fmt.Sprintf("%x", h[:8]) // first 8 bytes = 16 hex chars
+	short := fmt.Sprintf("%x", h[:8])
 	return filepath.Join(baseDir, short)
 }
 
-// loadSessionFromWorkspaces searches workspace subdirectories for a session.
-// The session's SaveDir is set to the workspace directory its file was found
-// in, so subsequent Save calls overwrite the original file (the resume path
-// previously left saveDir "" — Save then joined "" into a relative path and
-// wrote <id>.json into the process CWD while the real file went stale).
 func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) {
 	entries, err := os.ReadDir(h.sessionsDir)
 	if err != nil {
@@ -674,10 +563,6 @@ func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) 
 	return nil, fmt.Errorf("session %s not found in any workspace", sessionID)
 }
 
-// cleanupEmptySessions removes session files for sessions that have no
-// conversation history. Called when the transport disconnects (EOF) or
-// context is cancelled, so empty sessions from "open and close" don't
-// accumulate on disk.
 func (h *Handler) cleanupEmptySessions() {
 	h.sessionsMu.RLock()
 	type sessionInfo struct {
@@ -703,7 +588,6 @@ func (h *Handler) cleanupEmptySessions() {
 	}
 }
 
-// handleSessionClose closes an active session and cleans up resources.
 func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error) {
 	var req CloseSessionRequest
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -718,27 +602,18 @@ func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error
 		return nil, fmt.Errorf("session %s not found", req.SessionID)
 	}
 
-	// Cancel any ongoing work (DoCancel takes the session lock)
 	session.DoCancel()
 
-	// #751: close the session-level MCP manager here -- its lifetime is
-	// session/new -> session/close. Previously it was closed in the per-prompt
-	// defer (breaking MCP from prompt #2) and never closed when a session was
-	// closed before any prompt completed (stdio process leak).
 	if session.mcpManager != nil {
 		if err := session.mcpManager.Close(); err != nil {
 			debug.Log("acp", "MCP cleanup error on session close: %v", err)
 		}
 	}
 
-	// Remove from active sessions and forget the session's explicit mode
 	h.sessionsMu.Lock()
 	delete(h.sessions, req.SessionID)
 	delete(h.agentLoops, req.SessionID)
 	delete(h.sessionModes, req.SessionID)
-	// #752: the fourth sessionID-keyed map was omitted here; its only reader
-	// looks up via h.sessions, so a stale entry is unreachable and leaks
-	// ~150-250 bytes per closed session for the process lifetime.
 	delete(h.workspaceDirs, req.SessionID)
 	h.sessionsMu.Unlock()
 
@@ -746,26 +621,17 @@ func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error
 	return CloseSessionResponse{}, nil
 }
 
-// handleSessionList lists existing sessions for the given cwd.
 func (h *Handler) handleSessionList(params json.RawMessage) (interface{}, error) {
 	var req ListSessionsRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("parsing session/list params: %w", err)
 	}
 
-	// The actual on-disk layout (see Session.Save) is:
-	//
-	//	<sessionsDir>/<workspace-hash>/<sessionID>.json
-	//
-	// Sessions are stored as flat per-ID files inside each workspace-hash
-	// subdirectory — there is no "session.json" metadata file. Listing walks
-	// every workspace subdirectory and reads each <id>.json directly.
 	var sessions []SessionInfo
 	for _, dir := range h.sessionSearchDirs(req.CWD) {
 		sessions = append(sessions, readSessionInfos(dir)...)
 	}
 
-	// Sort most-recently-updated first so clients show the latest session on top.
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
 	})
@@ -775,9 +641,6 @@ func (h *Handler) handleSessionList(params json.RawMessage) (interface{}, error)
 	return ListSessionsResponse{Sessions: sessions}, nil
 }
 
-// sessionSearchDirs returns the workspace-hash directories to scan for the
-// given CWD. A non-empty cwd scopes the listing to that workspace's hash
-// directory; an empty cwd scans every workspace subdirectory.
 func (h *Handler) sessionSearchDirs(cwd string) []string {
 	if cwd != "" {
 		return []string{workspaceSessionsDir(h.sessionsDir, cwd)}
@@ -795,7 +658,6 @@ func (h *Handler) sessionSearchDirs(cwd string) []string {
 	return dirs
 }
 
-// sessionFileMeta is the minimal on-disk shape needed by session/list.
 type sessionFileMeta struct {
 	ID        string    `json:"id"`
 	CWD       string    `json:"cwd"`
@@ -803,9 +665,6 @@ type sessionFileMeta struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// readSessionInfos loads every <id>.json session file in dir. Unreadable,
-// malformed, or anonymous entries are skipped — listing must never fail
-// because one file is corrupt.
 func readSessionInfos(dir string) []SessionInfo {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -834,7 +693,6 @@ func readSessionInfos(dir string) []SessionInfo {
 	return infos
 }
 
-// handleSessionResume resumes an existing session.
 func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, error) {
 	var req ResumeSessionRequest
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -846,13 +704,6 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("loading session: %w", err)
 	}
 
-	// #1604 (from #1594-B): the already-active guard used to run AFTER
-	// connectMCPServers - a resume of an active session that carried
-	// mcpServers spawned stdio clients first, then the guard rejected and
-	// returned, dropping the session (and its MCP manager) on the floor:
-	// the clients' processes leaked, the ctx cancel was never called, and
-	// any tools registered into the SHARED registry stayed as dead
-	// entries. Check BEFORE any side-effectful setup.
 	h.sessionsMu.Lock()
 	if _, exists := h.sessions[req.SessionID]; exists {
 		h.sessionsMu.Unlock()
@@ -860,19 +711,11 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}
 	h.sessionsMu.Unlock()
 
-	// If client provided a CWD, validate and update; otherwise keep session's original CWD
 	if req.CWD != "" {
 		if err := validateCWD(req.CWD); err != nil {
 			return nil, err
 		}
 		session.CWD = req.CWD
-		// #3483: the CWD override must re-anchor SaveDir to the NEW
-		// workspace-hash directory (the session/new and session/load
-		// registration points both SetSaveDir; resume was the only one
-		// that skipped it - the same bug class #1477-B fixed for load).
-		// Without this, a resume from a different CWD kept saving into
-		// the OLD workspace's sessions/<hash(old-cwd)> directory and
-		// compaction checkpoints landed in the wrong store.
 		sessionDir := workspaceSessionsDir(h.sessionsDir, req.CWD)
 		os.MkdirAll(sessionDir, 0o755)
 		session.SetSaveDir(sessionDir)
@@ -883,7 +726,6 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	ctx, cancel := context.WithCancel(context.Background())
 	session.SetCancel(cancel)
 
-	// Connect MCP servers if provided
 	if len(req.MCPServers) > 0 {
 		if err := h.connectMCPServers(ctx, session, req.MCPServers); err != nil {
 			debug.Log("acp", "MCP server connection errors: %v", err)
@@ -891,14 +733,7 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}
 
 	h.sessionsMu.Lock()
-	// #1604: the already-active check ran here (after MCP connect); it
-	// now runs before any side effects - see the guard above. The narrow
-	// check-then-insert window between the two lock sections is covered
-	// by the #1033 TryBeginRun guard at run level (#1056 was the second
-	// line of defense, not the only one).
 	h.sessions[req.SessionID] = session
-	// Register the workspace dir so cleanupEmptySessions can manage the
-	// resumed session like a session/new one (previously skipped on resume).
 	h.workspaceDirs[req.SessionID] = session.SaveDir()
 	h.sessionsMu.Unlock()
 
@@ -912,14 +747,6 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}, nil
 }
 
-// handleSetConfigOption sets a configuration option for a session.
-// #1145: the "mode" option follows the same semantics as session/set_mode -
-// the requested value is validated against the declared select options,
-// persisted in h.sessionModes so it survives loop recreation between prompts,
-// and applied to the active agent loop when one is running. Only echoing the
-// value back would silently ignore permission downgrades such as
-// auto -> supervised and let destructive commands run unconfirmed.
-// Non-mode config options keep their previous echo-only behavior.
 func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, error) {
 	var req SetSessionConfigOptionRequest
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -935,8 +762,6 @@ func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, er
 	}
 
 	if req.ConfigID == "mode" {
-		// #1145: reject values that were never declared in the select options
-		// instead of echoing them back as if accepted.
 		valid := false
 		for _, m := range getDefaultSessionModeState().Modes {
 			if SessionConfigValueId(m.ID) == req.Value {
@@ -947,8 +772,6 @@ func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, er
 		if !valid {
 			return nil, fmt.Errorf("invalid value %q for config option \"mode\"", string(req.Value))
 		}
-		// Mirror handleSessionSetMode: persist under the sessions lock first,
-		// then apply to the active loop outside the lock.
 		h.sessionsMu.Lock()
 		h.sessionModes[req.SessionID] = string(req.Value)
 		h.sessionsMu.Unlock()
@@ -970,7 +793,6 @@ func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, er
 	}, nil
 }
 
-// getDefaultSessionModeState returns the default modes for ACP sessions.
 func getDefaultSessionModeState() SessionModeState {
 	return SessionModeState{
 		Modes: []SessionMode{
@@ -988,7 +810,6 @@ func getDefaultSessionModeStatePtr() *SessionModeState {
 	return &s
 }
 
-// getDefaultConfigOptions returns config options for ACP sessions.
 func getDefaultConfigOptions() []SessionConfigOption {
 	modes := getDefaultSessionModeState()
 	var modeOptions []interface{}
@@ -1011,26 +832,16 @@ func getDefaultConfigOptions() []SessionConfigOption {
 	}
 }
 
-// connectMCPServers connects MCP servers for a session.
 func (h *Handler) connectMCPServers(ctx context.Context, session *Session, servers []MCPServer) error {
 	if len(servers) == 0 {
 		return nil
 	}
-	// #751: replacing a manager (session/resume with new MCP servers) must
-	// close the old one -- otherwise its stdio processes leak and its tools
-	// linger in the shared registry.
 	if session.mcpManager != nil {
 		if err := session.mcpManager.Close(); err != nil {
 			debug.Log("acp", "MCP close on manager replacement: %v", err)
 		}
 	}
 	mgr := NewMCPManager(h.toolRegistry)
-	// #1797: ConnectServers now returns an aggregate error so failures are
-	// no longer silent, but per-server isolation is preserved here - one
-	// bad server (e.g. a type:"sse" mount the client rejects) must not
-	// fail the whole session/resume. Log and continue with the servers
-	// that DID connect; the peer sees the missing tools plus a logged
-	// reason instead of a hard session error.
 	if err := mgr.ConnectServers(ctx, servers); err != nil {
 		debug.Log("acp", "MCP server connection errors: %v", err)
 	}

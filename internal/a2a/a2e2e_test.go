@@ -14,12 +14,6 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// Multi-instance mutual discovery & cross-instance communication tests
-// ---------------------------------------------------------------------------
-
-// discoveryCluster sets up 3 A2A instances sharing one registry file.
-// It simulates the real scenario where 3 ggcode processes discover each other.
 type discoveryCluster struct {
 	t         *testing.T
 	regDir    string
@@ -37,7 +31,6 @@ type discoveryNode struct {
 func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 	t.Helper()
 
-	// Isolated registry dir.
 	regDir := filepath.Join(t.TempDir(), "a2a")
 	os.MkdirAll(regDir, 0755)
 
@@ -73,10 +66,6 @@ func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 	return c
 }
 
-// registerAll writes each instance into its own per-ID file,
-// simulating each process having registered on startup.
-// It also populates the Registry cache so Discover() returns the instances
-// without requiring real mDNS.
 func (c *discoveryCluster) registerAll() {
 	c.t.Helper()
 	for _, n := range c.instances {
@@ -93,9 +82,6 @@ func (c *discoveryCluster) registerAll() {
 	c.refreshFromDisk()
 }
 
-// refreshFromDisk reads all instance JSON files from regDir and populates
-// each node's Registry cache. This simulates the real discovery flow where
-// instances are registered on disk and discovered via mDNS or file scanning.
 func (c *discoveryCluster) refreshFromDisk() {
 	c.t.Helper()
 	entries, err := os.ReadDir(c.regDir)
@@ -116,20 +102,17 @@ func (c *discoveryCluster) refreshFromDisk() {
 			instances = append(instances, inst)
 		}
 	}
-	// Populate each node's Registry cache.
 	for _, n := range c.instances {
 		n.registry.SetCachedInstances(instances)
 	}
 }
 
-// addInstance writes an instance JSON file and refreshes all registries.
 func (c *discoveryCluster) addInstance(inst InstanceInfo) {
 	data, _ := json.MarshalIndent(inst, "", "  ")
 	os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
 	c.refreshFromDisk()
 }
 
-// removeInstance deletes an instance JSON file and refreshes all registries.
 func (c *discoveryCluster) removeInstance(id string) {
 	os.Remove(filepath.Join(c.regDir, id+".json"))
 	c.refreshFromDisk()
@@ -145,9 +128,6 @@ func (c *discoveryCluster) node(name string) *discoveryNode {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-
-// TestCluster_MutualDiscovery tests that all 3 instances see each other.
 func TestCluster_MutualDiscovery(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
@@ -159,8 +139,6 @@ func TestCluster_MutualDiscovery(t *testing.T) {
 			t.Fatalf("[%s] list failed: %v", node.name, err)
 		}
 
-		// Each node should see 3 instances total.
-		// (They don't exclude themselves since selfID is not set in test registries.)
 		for _, expected := range []string{"user-service", "order-service", "gateway"} {
 			if !containsStr(result.Content, expected) {
 				t.Errorf("[%s] expected to see %s in:\n%s", node.name, expected, result.Content)
@@ -170,14 +148,12 @@ func TestCluster_MutualDiscovery(t *testing.T) {
 	}
 }
 
-// TestCluster_CrossInstanceCall tests A→B, B→C, C→A calls.
 func TestCluster_CrossInstanceCall(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
 
-	// A calls B
 	result, err := c.node("user-service").remote.Execute(ctx, json.RawMessage(
 		`{"target":"order-service","skill":"file-search","message":"find orders"}`))
 	if err != nil {
@@ -191,20 +167,16 @@ func TestCluster_CrossInstanceCall(t *testing.T) {
 	}
 	t.Logf("A→B ✅")
 
-	// B calls C
 	result, err = c.node("order-service").remote.Execute(ctx, json.RawMessage(
 		`{"target":"gateway","skill":"file-search","message":"show status"}`))
 	if err != nil {
 		t.Fatalf("B→C: %v", err)
 	}
-	// The task may succeed or fail (workspace may not have content), but the
-	// important thing is the call went through — "Task sent" proves cross-instance routing.
 	if !containsStr(result.Content, "Task sent to gateway") {
 		t.Errorf("B→C unexpected result: %s", result.Content)
 	}
 	t.Logf("B→C ✅")
 
-	// C calls A
 	result, err = c.node("gateway").remote.Execute(ctx, json.RawMessage(
 		`{"target":"user-service","skill":"command-exec","message":"ls files"}`))
 	if err != nil {
@@ -216,28 +188,24 @@ func TestCluster_CrossInstanceCall(t *testing.T) {
 	t.Logf("C→A ✅")
 }
 
-// TestCluster_ChainedCall tests A calls B, then uses B's result to call C.
 func TestCluster_ChainedCall(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
 
-	// A sends task to B
 	result, err := c.node("user-service").remote.Execute(ctx, json.RawMessage(
 		`{"target":"order-service","skill":"file-search","message":"list orders"}`))
 	if err != nil {
 		t.Fatalf("A→B: %v", err)
 	}
 
-	// Extract task ID from result (contains "Task ID: xxx").
 	taskID := extractTaskID(result.Content)
 	if taskID == "" {
 		t.Fatalf("no task ID in A→B result: %s", result.Content)
 	}
 	t.Logf("A→B task ID: %s", taskID)
 
-	// Now C checks status of B's task (simulating a chained workflow).
 	bClient := c.node("order-service").client
 	task, err := bClient.GetTask(ctx, taskID)
 	if err != nil {
@@ -248,7 +216,6 @@ func TestCluster_ChainedCall(t *testing.T) {
 	}
 	t.Logf("C→B (get task %s: %s) ✅", taskID, task.Status.State)
 
-	// Then C sends its own task to A based on that info.
 	result, err = c.node("gateway").remote.Execute(ctx, json.RawMessage(
 		`{"target":"user-service","skill":"full-task","message":"process result from order-service"}`))
 	if err != nil {
@@ -257,8 +224,6 @@ func TestCluster_ChainedCall(t *testing.T) {
 	t.Logf("C→A (chained) ✅")
 }
 
-// TestCluster_NewInstanceDiscovered tests that a new instance D is visible
-// after refreshing the cache.
 func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
@@ -266,7 +231,6 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	ctx := context.Background()
 	nodeA := c.node("user-service")
 
-	// Initially A sees 3 instances.
 	result, _ := nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"list","skill":"full-task","message":"test"}`))
 	if !containsStr(result.Content, "Found 3") {
@@ -274,7 +238,6 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	}
 	t.Logf("Before: A sees 3 instances ✅")
 
-	// Instance D starts up.
 	handlerD := NewTaskHandler("/tmp/test-a2a/notification-service", nil, nil)
 	srvD := NewServer(ServerConfig{Port: 0}, handlerD)
 	if err := srvD.Start(); err != nil {
@@ -282,7 +245,6 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	}
 	defer srvD.Stop()
 
-	// D registers itself via per-ID file.
 	newInst := InstanceInfo{
 		ID:        "notification-service-id",
 		PID:       os.Getpid(),
@@ -292,10 +254,8 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	}
 	c.addInstance(newInst)
 
-	// A's cache is stale (10s TTL). Force refresh.
 	nodeA.remote.RefreshCache()
 
-	// Now A should see 4 instances including notification-service.
 	result, _ = nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"list","skill":"full-task","message":"test"}`))
 	if !containsStr(result.Content, "notification-service") {
@@ -303,7 +263,6 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	}
 	t.Logf("After refresh: A sees 4 instances (including notification-service) ✅")
 
-	// A can now call D directly.
 	result, err := nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"notification","skill":"file-search","message":"find handlers"}`))
 	if err != nil {
@@ -315,7 +274,6 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	t.Logf("A→D (notification-service) ✅")
 }
 
-// TestCluster_InstanceGone tests that a departed instance is cleaned up.
 func TestCluster_InstanceGone(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
@@ -323,7 +281,6 @@ func TestCluster_InstanceGone(t *testing.T) {
 	ctx := context.Background()
 	nodeA := c.node("user-service")
 
-	// A sees all 3.
 	result, _ := nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"list","skill":"full-task","message":"test"}`))
 	if !containsStr(result.Content, "order-service") {
@@ -331,11 +288,9 @@ func TestCluster_InstanceGone(t *testing.T) {
 	}
 	t.Logf("Before: A sees order-service ✅")
 
-	// Stop order-service's server and remove its per-ID file.
 	c.node("order-service").server.Stop()
 	c.removeInstance("order-service-id")
 
-	// Refresh and verify.
 	nodeA.remote.RefreshCache()
 
 	result, _ = nodeA.remote.Execute(ctx, json.RawMessage(
@@ -349,8 +304,6 @@ func TestCluster_InstanceGone(t *testing.T) {
 	t.Logf("After removal: A correctly can't find order-service ✅")
 }
 
-// TestCluster_ConcurrentCrossCalls tests all 3 instances calling each other
-// simultaneously.
 func TestCluster_ConcurrentCrossCalls(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
@@ -358,7 +311,6 @@ func TestCluster_ConcurrentCrossCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 6 call pairs: A→B, A→C, B→A, B→C, C→A, C→B
 	pairs := [][2]string{
 		{"user-service", "order-service"},
 		{"user-service", "gateway"},
@@ -410,7 +362,6 @@ func TestCluster_ConcurrentCrossCalls(t *testing.T) {
 	}
 }
 
-// TestCluster_FuzzyMatching tests partial name matching.
 func TestCluster_FuzzyMatching(t *testing.T) {
 	c := newDiscoveryCluster(t)
 	c.registerAll()
@@ -418,7 +369,6 @@ func TestCluster_FuzzyMatching(t *testing.T) {
 	ctx := context.Background()
 	nodeA := c.node("user-service")
 
-	// Exact match.
 	result, err := nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"order-service","skill":"file-search","message":"test"}`))
 	if err != nil || result.IsError {
@@ -426,7 +376,6 @@ func TestCluster_FuzzyMatching(t *testing.T) {
 	}
 	t.Logf("exact 'order-service' ✅")
 
-	// Partial match — "order" should match "order-service".
 	result, err = nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"order","skill":"file-search","message":"test"}`))
 	if err != nil || result.IsError {
@@ -434,7 +383,6 @@ func TestCluster_FuzzyMatching(t *testing.T) {
 	}
 	t.Logf("partial 'order' → order-service ✅")
 
-	// Partial match — "gate" should match "gateway".
 	result, err = nodeA.remote.Execute(ctx, json.RawMessage(
 		`{"target":"gate","skill":"file-search","message":"test"}`))
 	if err != nil || result.IsError {
@@ -443,12 +391,7 @@ func TestCluster_FuzzyMatching(t *testing.T) {
 	t.Logf("partial 'gate' → gateway ✅")
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func extractTaskID(content string) string {
-	// Find "Task ID: xxx" in content.
 	prefix := "Task ID: "
 	idx := containsStrAt(content, prefix)
 	if idx < 0 {

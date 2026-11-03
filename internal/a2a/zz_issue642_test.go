@@ -1,9 +1,5 @@
 package a2a
 
-// Regression tests for #642: Message.snapshot() and Artifact.snapshot() must
-// deep-copy the Metadata protocol-extension field, or every Snapshot-based
-// tasks API path (tasks/get, tasks/list, ActiveTasks) silently drops it.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -27,8 +23,6 @@ func TestIssue642_MessageSnapshotPreservesMetadata(t *testing.T) {
 		t.Fatalf("Message.metadata not copied: got %s want %s", cp.Metadata, orig.Metadata)
 	}
 
-	// Deep copy, not slice sharing: mutating the original must not affect the
-	// snapshot (json.RawMessage shares the backing array on shallow copy).
 	orig.Metadata[0] = ' '
 	orig.Metadata[len(orig.Metadata)-1] = ' '
 	var snapMap, wantMap map[string]any
@@ -75,9 +69,6 @@ func TestIssue642_ArtifactSnapshotPreservesMetadata(t *testing.T) {
 }
 
 func TestIssue642_TaskSnapshotPropagatesNestedMetadata(t *testing.T) {
-	// The end-to-end path from the issue: GetTask/ListTasks/ActiveTasks all
-	// return t.Snapshot(), so nested Message/Artifact metadata must survive
-	// the top-level Snapshot too.
 	task := &Task{
 		ID:       "task-42",
 		Status:   TaskStatus{State: TaskStateCompleted},

@@ -1,4 +1,3 @@
-// Package response provides helpers for writing structured HTTP responses.
 package response
 
 import (
@@ -9,7 +8,6 @@ import (
 	apierrors "github.com/topcheer/ggcode/examples/rest-api/errors"
 )
 
-// Response is the standard envelope for all API responses.
 type Response struct {
 	Success bool       `json:"success"`
 	Data    any        `json:"data,omitempty"`
@@ -17,14 +15,12 @@ type Response struct {
 	Meta    *Meta      `json:"meta,omitempty"`
 }
 
-// ErrorBody is the error payload included when success is false.
 type ErrorBody struct {
 	Code    string                 `json:"code"`
 	Message string                 `json:"message"`
 	Details []apierrors.FieldError `json:"details,omitempty"`
 }
 
-// Meta carries pagination and request metadata.
 type Meta struct {
 	Page       int `json:"page"`
 	PerPage    int `json:"per_page"`
@@ -32,7 +28,6 @@ type Meta struct {
 	TotalPages int `json:"total_pages"`
 }
 
-// JSON writes a JSON response with the given status code.
 func JSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -47,7 +42,6 @@ func JSON(w http.ResponseWriter, status int, data any) {
 	}
 }
 
-// Paginated writes a paginated JSON response with metadata.
 func Paginated(w http.ResponseWriter, data any, page, perPage, total int) {
 	totalPages := total / perPage
 	if total%perPage > 0 {
@@ -76,7 +70,6 @@ func Paginated(w http.ResponseWriter, data any, page, perPage, total int) {
 	}
 }
 
-// Error writes a structured error response from an APIError.
 func Error(w http.ResponseWriter, err error) {
 	if apiErr, ok := err.(*apierrors.APIError); ok {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -97,7 +90,6 @@ func Error(w http.ResponseWriter, err error) {
 		return
 	}
 
-	// Unexpected error — wrap as internal.
 	slog.Error("unhandled error", "error", err)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)

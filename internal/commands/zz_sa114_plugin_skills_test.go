@@ -1,8 +1,5 @@
 package commands
 
-// sa-114: plugin-shipped skills (agent-plugins.org) load from
-// <project>/.agent-plugins/<dir>/skills/ and are overridable by native dirs.
-
 import (
 	"os"
 	"path/filepath"
@@ -42,8 +39,6 @@ func TestPluginSkillLoaded(t *testing.T) {
 func TestNativeSkillOverridesPluginSkill(t *testing.T) {
 	project := t.TempDir()
 	writePluginWithSkill(t, project, "toolkit", "deploy")
-	// Same name in project .ggcode/skills: native wins (plugin targets are
-	// prepended; later targets override earlier ones).
 	nativeDir := filepath.Join(project, ".ggcode", "skills", "deploy")
 	if err := os.MkdirAll(nativeDir, 0755); err != nil {
 		t.Fatal(err)
@@ -64,8 +59,6 @@ func TestNativeSkillOverridesPluginSkill(t *testing.T) {
 
 func TestManifestlessPluginDirIgnored(t *testing.T) {
 	project := t.TempDir()
-	// skills/ directory under .agent-plugins without plugin.json: not a
-	// plugin package, contributes nothing.
 	skillDir := filepath.Join(project, ".agent-plugins", "stray", "skills", "ghost")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		t.Fatal(err)

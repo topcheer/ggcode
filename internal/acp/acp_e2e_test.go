@@ -35,18 +35,15 @@ const (
 	acpRealCopilotAsk      = "GGCODE_REAL_COPILOT_ACP_E2E_PROMPT"
 )
 
-// --- pipeTransport wraps a pair of pipes for bidirectional testing ---
 type pipeTransport struct {
-	clientWrite *io.PipeWriter // client writes here (agent reads)
+	clientWrite *io.PipeWriter
 	agentRead   *io.PipeReader
-	agentWrite  *io.PipeWriter // agent writes here (client reads)
+	agentWrite  *io.PipeWriter
 	clientRead  *io.PipeReader
 }
 
 func newPipeTransport() (*Transport, *Transport) {
-	// Client → Agent pipe
 	cr, cw := io.Pipe()
-	// Agent → Client pipe
 	ar, aw := io.Pipe()
 
 	agentTransport := NewTransport(cr, aw)
@@ -55,9 +52,6 @@ func newPipeTransport() (*Transport, *Transport) {
 	return agentTransport, clientTransport
 }
 
-// --- E2E Test: Full ACP lifecycle ---
-
-// TestE2EInitializeFlow tests: client sends initialize → agent responds with capabilities
 func TestE2EInitializeFlow(t *testing.T) {
 	agentTransport, clientTransport := newPipeTransport()
 	defer agentTransport.Writer.(*io.PipeWriter).Close()
@@ -67,16 +61,13 @@ func TestE2EInitializeFlow(t *testing.T) {
 	registry := tool.NewRegistry()
 	handler := NewHandler(cfg, registry, agentTransport, nil)
 
-	// Run handler in background
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go handler.Run(ctx)
 
-	// Client sends initialize
 	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"terminal":true}}}` + "\n"
 	clientTransport.Writer.Write([]byte(initReq))
 
-	// Read response from agent
 	if !clientTransport.Scanner.Scan() {
 		t.Fatal("expected response from agent")
 	}
@@ -92,7 +83,6 @@ func TestE2EInitializeFlow(t *testing.T) {
 		t.Fatalf("unexpected error: %v", resp.Error)
 	}
 
-	// Verify result contains agent capabilities
 	resultBytes, _ := json.Marshal(resp.Result)
 	if !strings.Contains(string(resultBytes), "agentCapabilities") {
 		t.Errorf("response missing agentCapabilities: %s", string(resultBytes))
@@ -102,7 +92,6 @@ func TestE2EInitializeFlow(t *testing.T) {
 	}
 }
 
-// TestE2ESessionNewAndPrompt tests: initialize → session/new → verify session created
 func TestE2ESessionNewAndPrompt(t *testing.T) {
 	agentTransport, clientTransport := newPipeTransport()
 	defer agentTransport.Writer.(*io.PipeWriter).Close()
@@ -116,20 +105,17 @@ func TestE2ESessionNewAndPrompt(t *testing.T) {
 	defer cancel()
 	go handler.Run(ctx)
 
-	// Step 1: Initialize
 	sendAndReadResponse(t, clientTransport, 1, "initialize", InitializeParams{
 		ProtocolVersion:    1,
 		ClientCapabilities: ClientCapabilities{},
 	})
 
-	// Step 2: Session/New
 	resp := sendAndReadResponse(t, clientTransport, 2, "session/new", SessionNewParams{
 		CWD: "/tmp",
 	})
 
 	var newResult SessionNewResult
 	if err := json.Unmarshal(resp.RawResult, &newResult); err != nil {
-		// Try extracting from Result field
 		resultBytes, _ := json.Marshal(resp.Result)
 		json.Unmarshal(resultBytes, &newResult)
 	}
@@ -138,24 +124,17 @@ func TestE2ESessionNewAndPrompt(t *testing.T) {
 	}
 }
 
-// TestE2EPermissionRequestResponse tests the core bidirectional flow:
-// Agent sends session/request_permission → Client responds → Agent receives response
 func TestE2EPermissionRequestResponse(t *testing.T) {
-	// Create a direct pipe for testing SendRequest
 	agentRead, clientWrite := io.Pipe()
 	clientRead, agentWrite := io.Pipe()
 
 	agentTransport := NewTransport(agentRead, agentWrite)
 	clientTransport := NewTransport(clientRead, clientWrite)
 
-	// Agent sends a request in background
 	var result json.RawMessage
 	var sendErr error
 	done := make(chan struct{})
 
-	// Start a background reader on agentTransport that reads incoming
-	// messages and delivers responses to pending SendRequest calls.
-	// This simulates what Handler.Run() does in production.
 	go func() {
 		for {
 			_, resp, err := agentTransport.ReadAnyMessage()
@@ -188,10 +167,8 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 		)
 	}()
 
-	// Wait a bit for the request to be sent
 	time.Sleep(50 * time.Millisecond)
 
-	// Client reads the request
 	req, err := clientTransport.ReadMessage()
 	if err != nil {
 		t.Fatalf("client read request error: %v", err)
@@ -200,19 +177,16 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 		t.Errorf("expected method 'session/request_permission', got %q", req.Method)
 	}
 
-	// Client sends response
 	if err := clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "selected", "optionId": "allow"}}); err != nil {
 		t.Fatalf("client write response error: %v", err)
 	}
 
-	// Wait for agent to receive response
 	<-done
 
 	if sendErr != nil {
 		t.Fatalf("SendRequest error: %v", sendErr)
 	}
 
-	// Verify response content
 	var permResp RequestPermissionResponse
 	if err := json.Unmarshal(result, &permResp); err != nil {
 		t.Fatalf("unmarshal permission response: %v", err)
@@ -222,7 +196,6 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 	}
 }
 
-// TestE2EPermissionDenied tests: Client denies permission → Agent receives denial
 func TestE2EPermissionDenied(t *testing.T) {
 	agentRead, clientWrite := io.Pipe()
 	clientRead, agentWrite := io.Pipe()
@@ -234,7 +207,6 @@ func TestE2EPermissionDenied(t *testing.T) {
 	var sendErr error
 	done := make(chan struct{})
 
-	// Start readLoop to deliver responses to pending SendRequest calls.
 	go func() {
 		for {
 			_, resp, err := agentTransport.ReadAnyMessage()
@@ -269,7 +241,6 @@ func TestE2EPermissionDenied(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Client reads and denies
 	req, _ := clientTransport.ReadMessage()
 	clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "cancelled"}})
 
@@ -286,7 +257,6 @@ func TestE2EPermissionDenied(t *testing.T) {
 	}
 }
 
-// TestE2EFSReadFileViaClient tests: Agent requests fs/read_text_file → Client responds with content
 func TestE2EFSReadFileViaClient(t *testing.T) {
 	agentRead, clientWrite := io.Pipe()
 	clientRead, agentWrite := io.Pipe()
@@ -298,7 +268,6 @@ func TestE2EFSReadFileViaClient(t *testing.T) {
 	var sendErr error
 	done := make(chan struct{})
 
-	// Start readLoop to deliver responses to pending SendRequest calls.
 	go func() {
 		for {
 			_, resp, err := agentTransport.ReadAnyMessage()
@@ -323,20 +292,17 @@ func TestE2EFSReadFileViaClient(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Client reads the request
 	req, _ := clientTransport.ReadMessage()
 	if req.Method != "fs/read_text_file" {
 		t.Errorf("expected method 'fs/read_text_file', got %q", req.Method)
 	}
 
-	// Verify the path in the request
 	var params FSReadTextFileParams
 	json.Unmarshal(req.Params, &params)
 	if params.Path != "/remote/project/main.go" {
 		t.Errorf("expected path '/remote/project/main.go', got %q", params.Path)
 	}
 
-	// Client responds with file content
 	clientTransport.WriteResponse(req.ID, FSReadTextFileResult{
 		Content: "package main\n\nfunc main() {}\n",
 	})
@@ -354,19 +320,13 @@ func TestE2EFSReadFileViaClient(t *testing.T) {
 	}
 }
 
-// TestE2ESendRequestTimeout tests: Agent sends request → no response → timeout
 func TestE2ESendRequestTimeout(t *testing.T) {
-	// Use buffered pipes so that writeJSON does not block on send.
-	// io.Pipe is synchronous and blocks until the other side reads.
 	agentRead, clientWrite := io.Pipe()
 	clientRead, agentWrite := io.Pipe()
 
 	agentTransport := NewTransport(agentRead, agentWrite)
 
-	// Drain the client side in background so the agent's writeJSON to agentWrite
-	// doesn't block (agentWrite → clientRead pipe needs a reader).
 	go io.Copy(io.Discard, clientRead)
-	// Also close clientWrite so agentRead sees EOF after we're done.
 	defer clientWrite.Close()
 
 	done := make(chan struct{})
@@ -376,19 +336,16 @@ func TestE2ESendRequestTimeout(t *testing.T) {
 			context.Background(),
 			"session/request_permission",
 			PermissionRequestParams{SessionID: "test"},
-			200*time.Millisecond, // short timeout
+			200*time.Millisecond,
 		)
 	}()
 
 	select {
 	case <-done:
-		// Expected: timeout
 	case <-time.After(5 * time.Second):
 		t.Fatal("SendRequest did not timeout")
 	}
 }
-
-// --- Mock Provider for agent loop E2E ---
 
 type mockProvider struct {
 	mu        sync.Mutex
@@ -435,11 +392,6 @@ func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Mess
 	return 100, nil
 }
 
-// TestE2EAgentLoopStreamEvents tests: agent produces events → ACP notifications sent to client
-// NOTE: This test requires a real LLM provider or a fully mocked agent loop.
-// The mock provider approach deadlocks on pipe transport because the agent loop
-// internally calls SendRequest for permissions, which blocks on the pipe.
-// TODO: Re-enable with real provider integration tests.
 func TestE2EAgentLoopStreamEvents(t *testing.T) {
 	t.Skip("requires real LLM provider; mock pipe transport deadlocks")
 	mock := &mockProvider{
@@ -473,13 +425,11 @@ func TestE2EAgentLoopStreamEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Run agent loop
 	done := make(chan error, 1)
 	go func() {
 		done <- loop.ExecutePrompt(ctx, []ContentBlock{{Type: "text", Text: "read the file"}})
 	}()
 
-	// Client reads notifications
 	var notifications []map[string]interface{}
 	for {
 		if !clientTransport.Scanner.Scan() {
@@ -494,12 +444,11 @@ func TestE2EAgentLoopStreamEvents(t *testing.T) {
 			continue
 		}
 		notifications = append(notifications, notif)
-		if len(notifications) >= 3 { // expect at least 3 notifications
+		if len(notifications) >= 3 {
 			break
 		}
 	}
 
-	// Close pipes to let agent loop finish
 	clientWrite.Close()
 	agentWrite.Close()
 
@@ -509,18 +458,15 @@ func TestE2EAgentLoopStreamEvents(t *testing.T) {
 		t.Fatal("agent loop did not finish")
 	}
 
-	// Verify we got the right notifications
 	if len(notifications) < 3 {
 		t.Fatalf("expected at least 3 notifications, got %d", len(notifications))
 	}
 
-	// First: agent_message_chunk
 	first := notifications[0]
 	if first["method"] != "session/update" {
 		t.Errorf("expected method 'session/update', got %v", first["method"])
 	}
 
-	// Check that session has messages persisted
 	msgs := session.Messages()
 	if len(msgs) < 2 {
 		t.Fatalf("expected at least 2 messages in session (user + assistant), got %d", len(msgs))
@@ -533,9 +479,6 @@ func TestE2EAgentLoopStreamEvents(t *testing.T) {
 	}
 }
 
-// TestE2EFullHandlerWithBidirectional tests the complete flow through Handler
-// NOTE: Same pipe transport limitation as TestE2EAgentLoopStreamEvents.
-// TODO: Re-enable with real provider integration tests.
 func TestE2EFullHandlerWithBidirectional(t *testing.T) {
 	t.Skip("requires real LLM provider; mock pipe transport deadlocks")
 	agentRead, clientWrite := io.Pipe()
@@ -559,16 +502,12 @@ func TestE2EFullHandlerWithBidirectional(t *testing.T) {
 	defer cancel()
 	go handler.Run(ctx)
 
-	// Step 1: Initialize
 	sendLine(t, clientTransport, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":true}}}}`)
 	readAndVerifyID(t, clientTransport, 1)
 
-	// Step 2: session/authenticate
 	sendLine(t, clientTransport, `{"jsonrpc":"2.0","id":2,"method":"session/authenticate","params":{"authMethodId":"api-key"}}`)
-	// Note: this may fail if GGCODE_API_KEY is not set, but we just need to test the routing
 	time.Sleep(100 * time.Millisecond)
 
-	// Step 3: session/new
 	sendLine(t, clientTransport, `{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/tmp/e2e-test"}}`)
 	respBytes := scanLine(t, clientTransport)
 	var sessionResp JSONRPCResponse
@@ -577,7 +516,6 @@ func TestE2EFullHandlerWithBidirectional(t *testing.T) {
 		t.Fatalf("session/new error: %v", sessionResp.Error)
 	}
 
-	// Extract session ID
 	var newResult map[string]interface{}
 	resultBytes, _ := json.Marshal(sessionResp.Result)
 	json.Unmarshal(resultBytes, &newResult)
@@ -586,18 +524,14 @@ func TestE2EFullHandlerWithBidirectional(t *testing.T) {
 		t.Fatal("expected session ID")
 	}
 
-	// Step 4: session/prompt
 	promptReq := fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"hello"}]}}`, sessionID)
 	sendLine(t, clientTransport, promptReq)
 
-	// Read the prompt response (returns immediately) + session/update notifications
 	time.Sleep(200 * time.Millisecond)
 
-	// Step 5: session/cancel
 	cancelReq := fmt.Sprintf(`{"jsonrpc":"2.0","id":5,"method":"session/cancel","params":{"sessionId":%q}}`, sessionID)
 	sendLine(t, clientTransport, cancelReq)
 
-	// Cleanup
 	clientWrite.Close()
 	agentWrite.Close()
 }
@@ -648,7 +582,6 @@ func TestACPTimeoutHelperProcess(t *testing.T) {
 			}
 		case "session/prompt":
 			fmt.Fprintln(os.Stderr, acpTimeoutStderrMarker)
-			// Intentionally do not respond so the client-side timeout path fires.
 		case "session/close":
 			if err := encoder.Encode(JSONRPCResponse{
 				JSONRPC: "2.0",
@@ -794,9 +727,7 @@ func TestACPIncompletePromptHelperProcess(t *testing.T) {
 					t.Fatalf("write tool update notification: %v", err)
 				}
 			}
-			// Intentionally omit session/prompt_complete to reproduce a hung agent.
 		case "session/cancel":
-			// Accept cancel notification and keep waiting for session/close.
 		case "session/close":
 			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
 				t.Fatalf("write session/close response: %v", err)
@@ -874,7 +805,6 @@ func TestACPPermissionStallHelperProcess(t *testing.T) {
 				}, 30*time.Second)
 			}()
 		case "session/cancel":
-			// Ignore; the parent test expects the client to time out before completing.
 		case "session/close":
 			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
 				t.Fatalf("write session/close response: %v", err)
@@ -950,9 +880,7 @@ func TestACPPromptResponseHelperProcess(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("write delayed session/prompt response: %v", err)
 			}
-			// Intentionally omit session/prompt_complete to mimic Copilot ACP behavior.
 		case "session/cancel":
-			// Ignore cancel; the parent test controls lifecycle.
 		case "session/close":
 			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
 				t.Fatalf("write session/close response: %v", err)
@@ -1370,8 +1298,6 @@ func TestE2EClientPromptTimeoutShowsPermissionStallActivity(t *testing.T) {
 		t.Fatalf("expected stalled permission request without response activity, got %v", err)
 	}
 }
-
-// --- Test helpers ---
 
 func sendAndReadResponse(t *testing.T, ct *Transport, id int, method string, params interface{}) *JSONRPCResponse {
 	t.Helper()

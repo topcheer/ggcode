@@ -20,7 +20,6 @@ func TestCreateEveryNMinutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// #1308: IDs are "cron-<n>-<rand>" for cross-process uniqueness.
 	if !strings.HasPrefix(job.ID, "cron-1-") {
 		t.Errorf("expected cron-1-<rand>, got %s", job.ID)
 	}
@@ -31,13 +30,11 @@ func TestCreateEveryNMinutes(t *testing.T) {
 		t.Error("expected recurring")
 	}
 
-	// Check the job is listed
 	jobs := s.List()
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
 
-	// Delete
 	if !s.Delete(job.ID) {
 		t.Error("expected delete to succeed")
 	}
@@ -60,7 +57,6 @@ func TestOneShotJob(t *testing.T) {
 		called.Add(1)
 	}, "")
 
-	// Use minimum allowed interval for testing
 	job, err := s.Create("*/5 * * * *", "test", false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +65,6 @@ func TestOneShotJob(t *testing.T) {
 		t.Error("expected non-recurring")
 	}
 
-	// Verify job exists
 	if _, ok := s.Get(job.ID); !ok {
 		t.Error("job should exist")
 	}
@@ -114,8 +109,6 @@ func TestGetNonexistent(t *testing.T) {
 	}
 }
 
-// --- Persistence tests (session-scoped) ---
-
 func withTestStore(t *testing.T) (storePath string, cleanup func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -134,7 +127,6 @@ func TestCreatePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify file was written
 	data, err := os.ReadFile(storePath)
 	if err != nil {
 		t.Fatalf("expected store file to exist: %v", err)
@@ -167,7 +159,6 @@ func TestOneShotNotPersisted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// File should not exist (no recurring jobs to persist)
 	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
 		t.Error("expected store file to not exist for one-shot job")
 	}
@@ -184,12 +175,10 @@ func TestDeletePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Delete
 	if !s.Delete(job.ID) {
 		t.Fatal("expected delete to succeed")
 	}
 
-	// File should be removed (no jobs remaining)
 	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
 		t.Error("expected store file to be removed after deleting all jobs")
 	}
@@ -198,7 +187,6 @@ func TestDeletePersists(t *testing.T) {
 func TestLoadRestoresJobs(t *testing.T) {
 	storePath, _ := withTestStore(t)
 
-	// Create a scheduler, add a recurring job
 	s1 := NewScheduler(nil, storePath)
 	s1.Load()
 	job1, err := s1.Create("*/5 * * * *", "check CI", true, false)
@@ -207,7 +195,6 @@ func TestLoadRestoresJobs(t *testing.T) {
 	}
 	s1.Shutdown()
 
-	// Create a new scheduler and load from the same store
 	s2 := NewScheduler(nil, storePath)
 	s2.Load()
 
@@ -241,7 +228,6 @@ func TestLoadNoFileIsNoop(t *testing.T) {
 func TestLoadCorruptedFileIsNoop(t *testing.T) {
 	storePath, _ := withTestStore(t)
 
-	// Write corrupted JSON
 	os.MkdirAll(filepath.Dir(storePath), 0755)
 	os.WriteFile(storePath, []byte("not json"), 0644)
 
@@ -257,7 +243,6 @@ func TestLoadCorruptedFileIsNoop(t *testing.T) {
 func TestMultipleJobsInSession(t *testing.T) {
 	storePath, _ := withTestStore(t)
 
-	// Create two jobs in the same session
 	s := NewScheduler(nil, storePath)
 	s.Load()
 
@@ -271,7 +256,6 @@ func TestMultipleJobsInSession(t *testing.T) {
 	}
 	s.Shutdown()
 
-	// Load — should see both jobs
 	s2 := NewScheduler(nil, storePath)
 	s2.Load()
 
@@ -281,15 +265,12 @@ func TestMultipleJobsInSession(t *testing.T) {
 	}
 }
 
-// --- Migration tests ---
-
 func TestMigrateWorkspaceJobs(t *testing.T) {
 	tmpDir := t.TempDir()
 	oldPath := filepath.Join(tmpDir, "cron-jobs.json")
 	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
 	wsDir := "/test/workspace"
 
-	// Write old-format file with this workspace's jobs
 	wsKey := workspaceKey(wsDir)
 	oldData := oldStoreFile{
 		wsKey: {
@@ -307,10 +288,8 @@ func TestMigrateWorkspaceJobs(t *testing.T) {
 	out, _ := json.MarshalIndent(oldData, "", "  ")
 	os.WriteFile(oldPath, out, 0644)
 
-	// Migrate
 	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
 
-	// Verify new session file has the migrated jobs
 	data, err := os.ReadFile(newPath)
 	if err != nil {
 		t.Fatalf("expected new session file: %v", err)
@@ -323,7 +302,6 @@ func TestMigrateWorkspaceJobs(t *testing.T) {
 		t.Fatalf("expected 2 migrated jobs, got %d", len(ss.Jobs))
 	}
 
-	// Verify old file no longer has this workspace's bucket
 	data2, _ := os.ReadFile(oldPath)
 	var oldAfter oldStoreFile
 	json.Unmarshal(data2, &oldAfter)
@@ -341,7 +319,6 @@ func TestMigrateSkipsIfSessionFileExists(t *testing.T) {
 	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
 	wsDir := "/test/workspace"
 
-	// Create old file
 	wsKey := workspaceKey(wsDir)
 	oldData := oldStoreFile{
 		wsKey: {Workspace: wsDir, Jobs: []jobJSON{{ID: "cron-1", CronExpr: "*/5 * * * *", Prompt: "check CI", Recurring: true}}},
@@ -349,14 +326,11 @@ func TestMigrateSkipsIfSessionFileExists(t *testing.T) {
 	out, _ := json.MarshalIndent(oldData, "", "  ")
 	os.WriteFile(oldPath, out, 0644)
 
-	// Pre-create the new session file (simulates already-migrated)
 	os.MkdirAll(filepath.Dir(newPath), 0755)
 	os.WriteFile(newPath, []byte(`{"jobs":[]}`), 0644)
 
-	// Migrate should be a no-op
 	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
 
-	// Old file should still have the bucket (migration skipped)
 	data, _ := os.ReadFile(oldPath)
 	var oldAfter oldStoreFile
 	json.Unmarshal(data, &oldAfter)
@@ -371,7 +345,6 @@ func TestMigrateNoOldFile(t *testing.T) {
 	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
 	wsDir := "/test/workspace"
 
-	// Should be a no-op, no panic
 	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
 
 	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
@@ -379,25 +352,17 @@ func TestMigrateNoOldFile(t *testing.T) {
 	}
 }
 
-// TestRecurringRescheduleFromNextFire verifies that when a recurring job's
-// timer fires slightly early (e.g., NextFire=08:55:00 but OS fires at 08:54:59),
-// the reschedule computes the next slot from NextFire, not time.Now(). Without
-// this, NextTime would return the same slot (08:55:00) and cause a double-fire.
 func TestRecurringRescheduleFromNextFire(t *testing.T) {
-	expr := "25,55 * * * *" // fires at minute 25 and 55
+	expr := "25,55 * * * *"
 
-	// Simulate NextFire = 08:55:00, but actual fire at 08:54:59 (1s early).
 	nextFire := time.Date(2026, 1, 1, 8, 55, 0, 0, time.UTC)
-	actualFire := nextFire.Add(-1 * time.Second) // 08:54:59
+	actualFire := nextFire.Add(-1 * time.Second)
 
-	// Demonstrate the bug: NextTime from actualFire returns the same slot.
-	// This is why the old code (time.Now()-based) caused double-fires.
 	buggyNext, _ := NextTime(expr, actualFire)
 	if !buggyNext.Equal(nextFire) {
 		t.Fatalf("expected bug demonstration: NextTime(actualFire)=%v should equal nextFire=%v", buggyNext, nextFire)
 	}
 
-	// Verify the fix: NextTime from NextFire skips to the NEXT slot (09:25:00).
 	fixedNext, _ := NextTime(expr, nextFire)
 	expected := time.Date(2026, 1, 1, 9, 25, 0, 0, time.UTC)
 	if !fixedNext.Equal(expected) {
@@ -416,36 +381,27 @@ func TestWorkspaceKeyDeterministic(t *testing.T) {
 		t.Errorf("expected 64-char hex SHA256, got %d chars", len(k1))
 	}
 
-	// Different dirs produce different keys
 	k3 := workspaceKey("/Users/user/projects/other")
 	if k1 == k3 {
 		t.Error("different dirs should produce different keys")
 	}
 }
 
-// #1308: the store file is shared across processes; a save from a stale
-// snapshot used to rewrite the whole file and silently erase jobs another
-// process had created. save() must now preserve on-disk recurring jobs this
-// process has never seen - while our own deleted jobs stay deleted.
 func TestSaveMergesForeignJobs(t *testing.T) {
 	storePath, _ := withTestStore(t)
 
-	// Process A loads, creates one job, saves.
 	a := NewScheduler(nil, storePath)
 	a.Load()
 	if _, err := a.Create("*/5 * * * *", "ours", true, false); err != nil {
 		t.Fatal(err)
 	}
 
-	// Process B loads A's job, then A creates a second job behind B's back.
 	b := NewScheduler(nil, storePath)
 	b.Load()
 	if _, err := a.Create("*/10 * * * *", "foreign-to-B", true, false); err != nil {
 		t.Fatal(err)
 	}
 
-	// B saves (e.g. pausing its own job) from a snapshot that predates the
-	// second job - the merge must keep it.
 	if _, err := b.Create("*/15 * * * *", "bs-own", true, false); err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +424,6 @@ func TestSaveMergesForeignJobs(t *testing.T) {
 		}
 	}
 
-	// Deleting our own job must still persist (not resurrected by merge).
 	b.mu.Lock()
 	var oursID string
 	for id, j := range b.jobs {
@@ -495,9 +450,6 @@ func TestSaveMergesForeignJobs(t *testing.T) {
 	}
 }
 
-// r372: Emit fires an immediate prompt through the enqueue callback -
-// ambient file-watch triggers share this channel. Nil default stays a
-// no-op, and SetEnqueue wiring later is honored.
 func TestEmit_ImmediateThroughEnqueue(t *testing.T) {
 	var got atomic.Value
 	s := NewScheduler(func(prompt string, queueIfBusy bool) {
@@ -510,7 +462,7 @@ func TestEmit_ImmediateThroughEnqueue(t *testing.T) {
 	}
 
 	nilSched := NewScheduler(nil, "")
-	nilSched.Emit("safe no-op", false) // must not panic
+	nilSched.Emit("safe no-op", false)
 }
 
 func boolStr(b bool) string {

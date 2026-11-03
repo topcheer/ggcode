@@ -34,12 +34,6 @@ func mustRead2692(t *testing.T, path string) []byte {
 	return b
 }
 
-// #2692: a crash-torn trailing partial JSON line was scanned into the
-// malformed sentinel, and Open unconditionally took it as the chain tail
-// (seq=0, prev=""), so post-crash Append wrote a broken entry and Verify
-// failed forever - exactly the crash-recovery scenario the package doc
-// calls "when the tail matters most". The torn line never committed; Open
-// must heal it (truncate to the last complete line) and continue the chain.
 func TestIssue2692_TornTailHealsChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	l := openLedger2692(t, path)
@@ -48,7 +42,6 @@ func TestIssue2692_TornTailHealsChain(t *testing.T) {
 	e3 := append2692(t, l, "t3")
 	l.Close()
 
-	// Simulate the crash-torn tail: a partial JSON line without a newline.
 	torn := append(mustRead2692(t, path), []byte(`{"seq":3,"tool":"par`)...)
 	if err := os.WriteFile(path, torn, 0o600); err != nil {
 		t.Fatal(err)
@@ -76,9 +69,6 @@ func TestIssue2692_TornTailHealsChain(t *testing.T) {
 	}
 }
 
-// Mid-file corruption - garbage BETWEEN valid entries - is tamper evidence,
-// NOT a torn tail: the tail is a real entry, no heal fires, and Verify
-// keeps reporting it.
 func TestIssue2692_MidfileCorruptionPreserved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	l := openLedger2692(t, path)
@@ -86,7 +76,6 @@ func TestIssue2692_MidfileCorruptionPreserved(t *testing.T) {
 	append2692(t, l, "t2")
 	l.Close()
 
-	// Splice garbage between the two valid lines (edit-in-place evidence).
 	raw := mustRead2692(t, path)
 	nl := bytes.IndexByte(raw, '\n')
 	spliced := append(append(append([]byte{}, raw[:nl+1]...), []byte("GARBAGE-NOT-JSON\n")...), raw[nl+1:]...)
@@ -109,8 +98,6 @@ func TestIssue2692_MidfileCorruptionPreserved(t *testing.T) {
 	}
 }
 
-// Multiple trailing torn lines (torn write + later garbage appends) all
-// heal; the chain continues from the last complete entry.
 func TestIssue2692_MultipleTornTailLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	l := openLedger2692(t, path)

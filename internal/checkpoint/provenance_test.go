@@ -1,10 +1,5 @@
 package checkpoint
 
-// sa-91 tests: edit provenance (why-this-edit attribution). Covers intent
-// stamping lifecycle (set/clear/run-reset), task-scoped queries, per-task
-// grouping, narrative rendering, and legacy compatibility (zero-value intent
-// changes nothing).
-
 import (
 	"strings"
 	"testing"
@@ -14,7 +9,6 @@ func TestEditIntent_StampedOnSaveAndCleared(t *testing.T) {
 	m := NewManager(100)
 	m.StartRun("run-1")
 
-	// Before any intent: legacy checkpoint, no attribution.
 	cp0 := m.Save("/a.go", "old", "new", "edit_file")
 	if cp0.Intent != (EditIntent{}) {
 		t.Fatalf("legacy checkpoint should carry zero intent, got %+v", cp0.Intent)
@@ -26,14 +20,12 @@ func TestEditIntent_StampedOnSaveAndCleared(t *testing.T) {
 		t.Fatalf("intent not stamped: %+v", cp1.Intent)
 	}
 
-	// Clearing stops attribution on subsequent saves.
 	m.SetActiveIntent(EditIntent{})
 	cp2 := m.Save("/a.go", "newer", "newest", "edit_file")
 	if cp2.Intent.TaskID != "" {
 		t.Fatalf("cleared intent still stamped: %+v", cp2.Intent)
 	}
 
-	// A new run resets any stale intent (does not cross runs).
 	m.SetActiveIntent(EditIntent{TaskID: "t-1"})
 	m.StartRun("run-2")
 	cp3 := m.Save("/a.go", "x", "y", "edit_file")
@@ -49,7 +41,7 @@ func TestEditsForTask_FiltersAndOrders(t *testing.T) {
 	m.Save("/b.go", "1", "2", "edit_file")
 	m.SetActiveIntent(EditIntent{TaskID: "t-2", TaskDesc: "task two"})
 	m.Save("/c.go", "1", "2", "edit_file")
-	m.SetActiveIntent(EditIntent{}) // unattributed
+	m.SetActiveIntent(EditIntent{})
 	m.Save("/d.go", "1", "2", "edit_file")
 
 	got := m.EditsForTask("t-1")
@@ -79,10 +71,10 @@ func TestTasksWithEdits_GroupsByTask(t *testing.T) {
 	m := NewManager(100)
 	m.SetActiveIntent(EditIntent{TaskID: "t-1", TaskDesc: "first"})
 	m.Save("/a.go", "1", "2", "edit_file")
-	m.Save("/a.go", "2", "3", "edit_file") // same file twice
+	m.Save("/a.go", "2", "3", "edit_file")
 	m.Save("/b.go", "1", "2", "edit_file")
 	m.SetActiveIntent(EditIntent{TaskID: "t-2", TaskDesc: "second"})
-	m.Save("/b.go", "2", "3", "edit_file") // b.go shared across tasks
+	m.Save("/b.go", "2", "3", "edit_file")
 
 	sums := m.TasksWithEdits()
 	if len(sums) != 2 {
@@ -112,7 +104,7 @@ func TestNarrate_RendersTasksAndUnattributed(t *testing.T) {
 	m.SetActiveIntent(EditIntent{TaskID: "t-1", TaskDesc: "add tests"})
 	m.Save("/x_test.go", "", "package", "write_file")
 	m.SetActiveIntent(EditIntent{})
-	m.Save("/y.go", "1", "2", "edit_file") // unattributed
+	m.Save("/y.go", "1", "2", "edit_file")
 
 	n := m.Narrate()
 	for _, want := range []string{"[t-1]", "add tests", "/x_test.go", "edits: 1", "unattributed: 1"} {

@@ -17,10 +17,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// ---------------------------------------------------------------------------
-// TokenValidator — JWT validation tests
-// ---------------------------------------------------------------------------
-
 func TestTokenValidatorHS256JWT(t *testing.T) {
 	tv, err := NewTokenValidator("test-client", "https://example.com",
 		WithHMACSecret("test-hmac-secret"),
@@ -71,9 +67,6 @@ func TestTokenValidatorExpiredJWT(t *testing.T) {
 	}
 }
 
-// An iss-less JWT must be rejected even when correctly signed: the issuer
-// whitelist is the validator's core pinning guarantee, and the old if-ok
-// guard let issuer-unattributable tokens through silently.
 func TestTokenValidatorMissingIssRejected(t *testing.T) {
 	tv, err := NewTokenValidator("test-client", "https://example.com",
 		WithHMACSecret("test-hmac-secret"),
@@ -86,7 +79,6 @@ func TestTokenValidatorMissingIssRejected(t *testing.T) {
 		"sub": "user123",
 		"aud": "test-client",
 		"exp": time.Now().Add(time.Hour).Unix(),
-		// no "iss"
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte("test-hmac-secret"))
@@ -103,7 +95,6 @@ func TestTokenValidatorMissingIssRejected(t *testing.T) {
 func TestTokenValidatorNonJWT(t *testing.T) {
 	tv, _ := NewTokenValidator("test-client", "https://example.com")
 	_, err := tv.ValidateToken(context.Background(), "opaque-token-abc123")
-	// Will fail because there's no introspection endpoint
 	if err == nil {
 		t.Log("opaque token accepted (introspection endpoint responded)")
 	} else {

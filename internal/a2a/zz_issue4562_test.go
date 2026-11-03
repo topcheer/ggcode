@@ -1,12 +1,5 @@
 package a2a
 
-// #4562: detectWorkspaceMeta required .git to be a directory. In a git
-// worktree or submodule, .git is a FILE (a "gitdir: ..." pointer) - HasGit
-// came back false, handler.go rejected the git-ops skill in those trees
-// ("workspace has no git repository"), and the agent card exposed
-// has_git=false, skewing remote skill selection. Any .git entry means a git
-// repository.
-
 import (
 	"os"
 	"os/exec"
@@ -14,8 +7,6 @@ import (
 	"testing"
 )
 
-// The real-world scenario: `git worktree add` produces a .git file, and the
-// workspace under it must report HasGit=true.
 func TestIssue4562_WorktreeDotGitFileIsAGitRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -40,7 +31,6 @@ func TestIssue4562_WorktreeDotGitFileIsAGitRepo(t *testing.T) {
 	run("-C", "main", "commit", "-qm", "init")
 	run("-C", "main", "worktree", "add", "-q", "../wt")
 
-	// Sanity: the worktree really has .git as a FILE.
 	info, err := os.Stat(filepath.Join(base, "wt", ".git"))
 	if err != nil || info.IsDir() {
 		t.Fatalf("test premise: worktree .git should be a file, got dir=%v err=%v", info != nil && info.IsDir(), err)
@@ -49,17 +39,14 @@ func TestIssue4562_WorktreeDotGitFileIsAGitRepo(t *testing.T) {
 	if meta := detectWorkspaceMeta(filepath.Join(base, "wt")); !meta.HasGit {
 		t.Fatal("#4562: a git worktree (.git as file) must report HasGit=true - git-ops was rejected and the agent card exposed has_git=false")
 	}
-	// Plain repo (.git as dir) keeps working.
 	if meta := detectWorkspaceMeta(filepath.Join(base, "main")); !meta.HasGit {
 		t.Fatal("plain repo (.git dir) must keep HasGit=true")
 	}
-	// Non-repo keeps HasGit=false.
 	if meta := detectWorkspaceMeta(t.TempDir()); meta.HasGit {
 		t.Fatal("non-repo dir must stay HasGit=false")
 	}
 }
 
-// Synthetic pointer file without git (covers submodule layout cheaply).
 func TestIssue4562_DotGitPointerFileDetected(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /elsewhere/repo.git\n"), 0644); err != nil {

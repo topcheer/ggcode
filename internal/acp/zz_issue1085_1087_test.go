@@ -1,7 +1,5 @@
 package acp
 
-// Regression tests for #1085, #1086, #1087.
-
 import (
 	"encoding/json"
 	"testing"
@@ -9,11 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// ---------- #1085: Approval handler respects hard security doors ----------
-// Note: The actual behavior is tested by the passing probe tests.
-// These unit tests verify the conversion logic works correctly.
-
-// SimplePermissionPolicy is a minimal policy for testing.
 type SimplePermissionPolicy struct {
 	DenyPattern string
 }
@@ -26,7 +19,6 @@ func (p *SimplePermissionPolicy) Check(toolName string, input json.RawMessage) (
 }
 
 func TestIssue1085_PolicyDenyDecision(t *testing.T) {
-	// Verify the policy can return Deny for dangerous tools
 	policy := &SimplePermissionPolicy{
 		DenyPattern: "^edit_file$",
 	}
@@ -41,7 +33,6 @@ func TestIssue1085_PolicyDenyDecision(t *testing.T) {
 }
 
 func TestIssue1085_PolicyAllowDecision(t *testing.T) {
-	// Verify the policy returns Allow for safe tools
 	policy := &SimplePermissionPolicy{}
 
 	decision, err := policy.Check("read_file", json.RawMessage(`{"path":"/tmp/test"}`))
@@ -53,10 +44,7 @@ func TestIssue1085_PolicyAllowDecision(t *testing.T) {
 	}
 }
 
-// ---------- #1086: Preserve tool_use/tool_result blocks ----------
-
 func TestIssue1086_PreserveToolUseBlock(t *testing.T) {
-	// Test that tool_use blocks are preserved during restore.
 	blocks := []ContentBlock{
 		{Type: "text", Text: "before"},
 		{
@@ -90,7 +78,6 @@ func TestIssue1086_PreserveToolUseBlock(t *testing.T) {
 }
 
 func TestIssue1086_PreserveToolResultBlock(t *testing.T) {
-	// Test that tool_result blocks are preserved during restore.
 	blocks := []ContentBlock{
 		{
 			Type:     "tool_result",
@@ -116,7 +103,6 @@ func TestIssue1086_PreserveToolResultBlock(t *testing.T) {
 }
 
 func TestIssue1086_PreserveToolResultWithError(t *testing.T) {
-	// Test that tool_result with IsError flag is preserved.
 	blocks := []ContentBlock{
 		{
 			Type:     "tool_result",
@@ -138,8 +124,6 @@ func TestIssue1086_PreserveToolResultWithError(t *testing.T) {
 	}
 }
 
-// ---------- #1087 F3: State cleared on error paths ----------
-
 func TestIssue1087_F3_StateClearedOnEOF(t *testing.T) {
 	c := &Client{}
 	c.mu.Lock()
@@ -148,14 +132,12 @@ func TestIssue1087_F3_StateClearedOnEOF(t *testing.T) {
 	c.sessionCWD = "/old/path"
 	c.mu.Unlock()
 
-	// Simulate the error path in readLoop - verify state can be cleared
 	c.mu.Lock()
 	c.running = false
 	c.sessionID = ""
 	c.sessionCWD = ""
 	c.mu.Unlock()
 
-	// Verify state is cleared
 	c.mu.Lock()
 	running := c.running
 	sessionID := c.sessionID
@@ -173,10 +155,7 @@ func TestIssue1087_F3_StateClearedOnEOF(t *testing.T) {
 	}
 }
 
-// ---------- Additional edge cases for #1086 ----------
-
 func TestIssue1086_TextBlocksPreserved(t *testing.T) {
-	// Test that text blocks are still handled correctly
 	blocks := []ContentBlock{
 		{Type: "text", Text: "hello"},
 		{Type: "text", Text: "world"},
@@ -196,12 +175,11 @@ func TestIssue1086_TextBlocksPreserved(t *testing.T) {
 }
 
 func TestIssue1086_ImageBlocksPreserved(t *testing.T) {
-	// Test that image blocks are still handled correctly
 	blocks := []ContentBlock{
 		{
 			Type:      "image",
 			ImageMIME: "image/png",
-			ImageData: "ZmFrZSBwbmcgZGF0YQ==", // base64 of "fake png data"
+			ImageData: "ZmFrZSBwbmcgZGF0YQ==",
 		},
 	}
 
@@ -216,7 +194,6 @@ func TestIssue1086_ImageBlocksPreserved(t *testing.T) {
 }
 
 func TestIssue1086_MixedBlocks(t *testing.T) {
-	// Test a realistic mix of blocks
 	blocks := []ContentBlock{
 		{Type: "text", Text: "Let me run a command"},
 		{
@@ -241,7 +218,6 @@ func TestIssue1086_MixedBlocks(t *testing.T) {
 		t.Fatalf("expected 4 blocks, got %d", len(providerBlocks))
 	}
 
-	// Verify each block type
 	if providerBlocks[0].Type != "text" || providerBlocks[0].Text != "Let me run a command" {
 		t.Error("first block mismatch")
 	}

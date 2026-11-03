@@ -58,12 +58,6 @@ func TestStoreHasUsableToken(t *testing.T) {
 	}
 }
 
-// TestStoreConcurrentSavesNoLostUpdate is the #1505 case 3 regression:
-// DefaultStore() hands out a fresh Store per call, so per-instance mutexes
-// never serialized anything - N concurrent load-modify-write cycles on the
-// same path dropped each other's entries. Every instance sharing a path
-// must now serialize through one mutex (plus the cross-process flock), so
-// N distinct providers saved concurrently must all survive.
 func TestStoreConcurrentSavesNoLostUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "provider_auth.json")
 	const n = 8
@@ -72,8 +66,6 @@ func TestStoreConcurrentSavesNoLostUpdate(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			// A separate instance per goroutine is the point: this is what
-			// DefaultStore() callers actually get.
 			store := NewStore(path)
 			info := &Info{
 				ProviderID:  fmt.Sprintf("provider-%d", i),
@@ -102,9 +94,6 @@ func TestStoreConcurrentSavesNoLostUpdate(t *testing.T) {
 	}
 }
 
-// TestStoreSaveNoTmpResidue pins the #1505 case 3 scratch-file fix: every
-// save must consume its uniquely-named temp file via rename, leaving no
-// fixed ".tmp" and no "*.tmp-*" residue in the directory.
 func TestStoreSaveNoTmpResidue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "provider_auth.json")
@@ -119,7 +108,7 @@ func TestStoreSaveNoTmpResidue(t *testing.T) {
 	leftover := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if strings.HasSuffix(e, ".lock") {
-			continue // cross-process lock file is expected, not residue
+			continue
 		}
 		leftover = append(leftover, filepath.Base(e))
 	}

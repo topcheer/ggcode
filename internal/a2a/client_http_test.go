@@ -26,10 +26,6 @@ func TestClientRPCReturnsHTTPErrorBody(t *testing.T) {
 	}
 }
 
-// TestDeclaredAPIKeyNameHonored pins #1458-A: a card declaring
-// {"type":"apiKey","name":"X-Goog-Api-Key","location":"header"} must get
-// its declared header - the old path always sent X-API-Key and the third
-// party RPC failed 401 after 'successful' negotiation.
 func TestDeclaredAPIKeyNameHonored(t *testing.T) {
 	var gotHeader string
 	var gotVal string

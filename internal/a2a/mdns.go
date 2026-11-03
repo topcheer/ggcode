@@ -18,14 +18,8 @@ const (
 	mDNSDomain      = "local."
 )
 
-// mdnsService manages mDNS registration (broadcasting self) and
-// discovery (finding peers on the LAN) using the topcheer/mdns library.
-//
-// A persistent Browser is kept running so that the instance list is always
-// up-to-date. lookup() reads the browser's current state without any
-// network I/O, eliminating timing gaps that caused peer flickering.
 type mdnsService struct {
-	mu      sync.Mutex // #1568-B: browser/server fields race between stop() and lookup()
+	mu      sync.Mutex
 	server  *mdnslib.Server
 	browser *mdnslib.Browser
 	info    *InstanceInfo
@@ -35,23 +29,17 @@ func newMDNSService() *mdnsService {
 	return &mdnsService{}
 }
 
-// start broadcasts this instance via mDNS and begins continuous discovery.
-// interfaces controls which NICs are used for advertising; if nil, the
-// default-route interface is auto-detected.
 func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 	m.info = &info
 
-	// Resolve effective interfaces (auto-detect default route if not specified).
 	effectiveIfaces := ResolveInterfaces(interfaces)
 
-	// Compute the IPs to advertise — only from the selected interfaces.
 	advertiseIPs := IPsForInterfaces(effectiveIfaces)
 	if len(advertiseIPs) == 0 {
 		debug.Log("a2a.mdns", "no IPs from interfaces %v, falling back to all", effectiveIfaces)
 		advertiseIPs = allNonLoopbackIPv4s()
 	}
 
-	// Extract port from endpoint (may include http:// scheme).
 	endpoint := info.Endpoint
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
@@ -64,10 +52,8 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 		return fmt.Errorf("mDNS: parse port %q: %w", portStr, err)
 	}
 
-	// Instance name: workspace basename + port for uniqueness.
 	name := sanitizeMDNSName(info.DisplayName())
 
-	// TXT records carry metadata for discovery without needing to connect.
 	txt := []string{
 		"id=" + info.ID,
 		"workspace=" + info.Workspace,
@@ -94,7 +80,7 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 		Name: name,
 		Port: uint16(port),
 		Text: txt,
-		IPs:  advertiseIPs, // explicitly set which IPs to advertise in A records
+		IPs:  advertiseIPs,
 	}
 
 	if err := srv.RegisterService(svc); err != nil {
@@ -102,7 +88,6 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 		return fmt.Errorf("mDNS register: %w", err)
 	}
 
-	// Start persistent browser for continuous discovery.
 	browser, err := srv.Browse(mDNSServiceType)
 	if err != nil {
 		srv.Close()
@@ -114,8 +99,6 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 		return fmt.Errorf("mDNS browser start: %w", err)
 	}
 
-	// Drain events so the browser's internal instances map stays updated.
-	// The browser handles add/remove via cache events automatically.
 	safego.Go("a2a.mdns.browserDrain", func() {
 		for ev := range events {
 			if ev.Instance != nil {
@@ -137,11 +120,7 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 	return nil
 }
 
-// stop shuts down the mDNS browser and server (sends goodbye records).
 func (m *mdnsService) stop() {
-	// #1568-B: check-then-use against lookup() was unlocked - the ticker
-	// goroutine could read m.browser between the nil check and Stop(),
-	// or call Instances() on a browser stop() had just torn down.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.browser != nil {
@@ -154,10 +133,7 @@ func (m *mdnsService) stop() {
 	}
 }
 
-// lookup returns all discovered instances (excluding self) by reading the
-// persistent browser's current state. No network I/O — instant and reliable.
 func (m *mdnsService) lookup() []InstanceInfo {
-	// #1568-B: snapshot under the same lock stop() clears the field with.
 	m.mu.Lock()
 	browser := m.browser
 	m.mu.Unlock()
@@ -186,22 +162,15 @@ func (m *mdnsService) lookup() []InstanceInfo {
 	return result
 }
 
-// serviceInfoToInstance converts a ServiceInstanceInfo to InstanceInfo.
 func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 	if inst == nil || len(inst.IPs) == 0 {
 		return nil
 	}
 
-	// Prefer an IPv4 address that's reachable on a local subnet.
-	// This avoids picking a Docker/VPN IP that the receiver can't reach.
 	ip := pickBestIP(inst.IPs)
 
-	// #1463-B: net.JoinHostPort brackets IPv6 - the bare format produced
-	// `http://fe80::1:8080`, which url.Parse rejects ("invalid port") and
-	// the whole IPv6-only discovery chain dies at card fetch.
 	endpoint := "http://" + net.JoinHostPort(ip, strconv.Itoa(int(inst.Port)))
 
-	// Parse TXT records into a map.
 	txt := parseTXTFields(inst.Text)
 
 	id := txt["id"]
@@ -230,7 +199,6 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 	}
 }
 
-// parseTXTFields converts TXT record string slice to a map.
 func parseTXTFields(fields []string) map[string]string {
 	m := make(map[string]string, len(fields))
 	for _, f := range fields {
@@ -241,23 +209,12 @@ func parseTXTFields(fields []string) map[string]string {
 	return m
 }
 
-// sanitizeMDNSName makes a string safe for use as an mDNS service instance name.
 func sanitizeMDNSName(name string) string {
 	name = strings.ReplaceAll(name, ":", "-")
 	name = strings.ReplaceAll(name, " ", "-")
 	name = strings.ReplaceAll(name, "_", "-")
-	// Both separators are invalid in an mDNS label (RFC 1034: letters,
-	// digits, hyphen only) and both can appear in a path on Windows
-	// ("C:/x/y" is legal), so the exclusion must not key on
-	// os.PathSeparator — on Windows that left "/" through and produced an
-	// invalid broadcast name.
 	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "\\", "-")
-	// #934: the mDNS label budget is 63 BYTES (RFC wire format), but
-	// truncation must land on rune boundaries - byte slicing cut CJK names
-	// mid-rune, producing invalid UTF-8 that strict resolvers (Avahi/
-	// Bonjour) reject. Take the longest rune-aligned prefix that fits the
-	// byte budget.
 	if len(name) > 63 {
 		var b strings.Builder
 		for _, r := range name {
@@ -271,16 +228,9 @@ func sanitizeMDNSName(name string) string {
 	return name
 }
 
-// pickBestIP selects the best IP address from a list of discovered IPs.
-// Preference order:
-//  1. IPv4 addresses on a local subnet (reachable without routing)
-//  2. Any IPv4 address
-//  3. First address (IPv6 fallback)
 func pickBestIP(ips []net.IP) string {
-	// Collect local subnets once.
 	localSubnets := localSubnetList()
 
-	// Pass 1: IPv4 on a local subnet.
 	for _, addr := range ips {
 		if ip4 := addr.To4(); ip4 != nil {
 			for _, subnet := range localSubnets {
@@ -291,22 +241,18 @@ func pickBestIP(ips []net.IP) string {
 		}
 	}
 
-	// Pass 2: any IPv4.
 	for _, addr := range ips {
 		if ip4 := addr.To4(); ip4 != nil {
 			return ip4.String()
 		}
 	}
 
-	// Pass 3: fallback.
 	if len(ips) > 0 {
 		return ips[0].String()
 	}
 	return ""
 }
 
-// localSubnetList returns all local network subnets (IPv4 only) for
-// use in pickBestIP preference matching.
 func localSubnetList() []*net.IPNet {
 	var subnets []*net.IPNet
 	ifaces, err := net.Interfaces()

@@ -1,21 +1,5 @@
 package acp
 
-// Regression tests for GitHub issue #1140 (internal/acp).
-//
-// #1140 - the ACP ask_user handler closure only processed req.Questions[0].
-// A batch of N>1 questions produced ONE permission round trip for the first
-// question yet still returned status=submitted with QuestionCount=N and
-// AnsweredCount=1, silently dropping questions 2..N behind a fake success
-// signal. The TUI path (internal/tui) renders one tab per question, so
-// multi-question batches are a product contract.
-//
-// Fix contract verified here: every question gets its own
-// session/request_permission round trip carrying that question's OWN choice
-// options, answers are aggregated in question order, AnsweredCount equals
-// QuestionCount, a mid-batch dismissal fails loudly instead of faking
-// success, and text-kind questions keep their pre-#1140 explicit fallback
-// error (also fired when a text question appears mid-batch).
-
 import (
 	"context"
 	"encoding/json"
@@ -29,22 +13,15 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// issue1140Executor is the minimal surface the tests need from the registry
-// entry (either the #1116 per-session dispatcher or the base singleton).
 type issue1140Executor interface {
 	Execute(ctx context.Context, input json.RawMessage) (tool.Result, error)
 }
 
-// issue1140Setup wires the full stack used by the pre-existing ask_user
-// tests: a dual-pipe Transport, builtin tools, a Handler pumping messages,
-// and an AgentLoop whose constructor installs the ask_user handler. Returns
-// the executable registry entry plus the client-side pipe ends the test
-// impersonates the IDE with.
 func issue1140Setup(t *testing.T) (issue1140Executor, *io.PipeReader, *io.PipeWriter, context.CancelFunc) {
 	t.Helper()
 
-	cr, cw := io.Pipe() // client -> agent (responses)
-	ar, aw := io.Pipe() // agent -> client (requests)
+	cr, cw := io.Pipe()
+	ar, aw := io.Pipe()
 
 	agentTransport := NewTransport(cr, aw)
 
@@ -77,8 +54,6 @@ func issue1140Setup(t *testing.T) (issue1140Executor, *io.PipeReader, *io.PipeWr
 	return ex, ar, cw, cancel
 }
 
-// issue1140Run executes an ask_user payload off-turn and surfaces either the
-// decoded response or the tool-level error content.
 func issue1140Run(t *testing.T, ex issue1140Executor, input string) (<-chan tool.AskUserResponse, <-chan string) {
 	t.Helper()
 	respCh := make(chan tool.AskUserResponse, 1)
@@ -103,9 +78,6 @@ func issue1140Run(t *testing.T, ex issue1140Executor, input string) (<-chan tool
 	return respCh, errCh
 }
 
-// issue1140AnswerOne performs one IDE-side round trip: read the agent's
-// permission request, optionally verify it carries the expected option ids,
-// then answer with the given option id (or "" for a cancelled outcome).
 func issue1140AnswerOne(t *testing.T, ar *io.PipeReader, cw *io.PipeWriter, wantOptionIDs []string, answerOptionID string) {
 	t.Helper()
 
@@ -137,10 +109,6 @@ func issue1140AnswerOne(t *testing.T, ar *io.PipeReader, cw *io.PipeWriter, want
 	})
 }
 
-// TestIssue1140_AllQuestionsRoundTrippedAndAnswered drives a three-question
-// batch (single + multi + single) and asserts N permission round trips, one
-// aggregated answer per question in order, and AnsweredCount == QuestionCount.
-// Pre-fix this test saw one round trip and got AnsweredCount=1.
 func TestIssue1140_AllQuestionsRoundTrippedAndAnswered(t *testing.T) {
 	ex, ar, cw, cancel := issue1140Setup(t)
 	defer cancel()
@@ -158,8 +126,6 @@ func TestIssue1140_AllQuestionsRoundTrippedAndAnswered(t *testing.T) {
 	}`
 	respCh, errCh := issue1140Run(t, ex, input)
 
-	// IDE answers the three successive modals, each showing that
-	// question's own options.
 	issue1140AnswerOne(t, ar, cw, []string{"opt_red", "opt_blue"}, "opt_blue")
 	issue1140AnswerOne(t, ar, cw, []string{"top_choc", "top_mint"}, "top_mint")
 	issue1140AnswerOne(t, ar, cw, []string{"fl_vanilla", "fl_cocoa"}, "fl_vanilla")
@@ -207,9 +173,6 @@ func TestIssue1140_AllQuestionsRoundTrippedAndAnswered(t *testing.T) {
 	}
 }
 
-// TestIssue1140_CancelMidBatchFailsLoudly verifies a dismissal on question 2
-// of 3 surfaces an error instead of the old silent fake success
-// (status=submitted with questions dropped).
 func TestIssue1140_CancelMidBatchFailsLoudly(t *testing.T) {
 	ex, ar, cw, cancel := issue1140Setup(t)
 	defer cancel()
@@ -227,7 +190,7 @@ func TestIssue1140_CancelMidBatchFailsLoudly(t *testing.T) {
 	respCh, errCh := issue1140Run(t, ex, input)
 
 	issue1140AnswerOne(t, ar, cw, []string{"a1", "b1"}, "a1")
-	issue1140AnswerOne(t, ar, cw, []string{"a2", "b2"}, "") // user dismisses Q2
+	issue1140AnswerOne(t, ar, cw, []string{"a2", "b2"}, "")
 
 	select {
 	case errMsg := <-errCh:
@@ -242,10 +205,6 @@ func TestIssue1140_CancelMidBatchFailsLoudly(t *testing.T) {
 	}
 }
 
-// TestIssue1140_TextMidBatchGetsExplicitFallback keeps the pre-#1140
-// guarantee for text questions (explicit IsError telling the LLM to fall back
-// to plain text) even when the text question trails answered choice
-// questions - never a silent drop.
 func TestIssue1140_TextMidBatchGetsExplicitFallback(t *testing.T) {
 	ex, ar, cw, cancel := issue1140Setup(t)
 	defer cancel()
@@ -260,8 +219,6 @@ func TestIssue1140_TextMidBatchGetsExplicitFallback(t *testing.T) {
 	respCh, errCh := issue1140Run(t, ex, input)
 
 	issue1140AnswerOne(t, ar, cw, []string{"env_dev", "env_prod"}, "env_prod")
-	// Text question presents Submit/Cancel; user submits, handler must then
-	// emit the explicit fallback error naming the question.
 	req := readAgentRequest(t, ar)
 	params, _ := req["params"].(map[string]interface{})
 	options, _ := params["options"].([]interface{})
