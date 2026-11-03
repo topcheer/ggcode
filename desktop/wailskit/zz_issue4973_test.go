@@ -240,3 +240,56 @@ vendors:
 		t.Fatalf("empty model on vendor switch must reset to endpoint selection glm-5.3, got %s (stale k3-256k leak = #4973)", res.Model)
 	}
 }
+
+// TestIssue4973SwitchModelPersistsToConfig covers the follow-up: switching the
+// model from the main chat view must persist to the config file, not just the
+// in-memory cfg and the session metadata. Before the fix a restart resolved
+// the stale on-disk model for new sessions.
+func TestIssue4973SwitchModelPersistsToConfig(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "ggcode.yaml")
+	yaml := `vendor: zai
+endpoint: cn
+model: glm-5.3
+vendors:
+  zai:
+    api_key: test-key
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://api.z.ai/api/coding/paas/v4
+        default_model: glm-5.3
+        models:
+          - glm-5.3
+          - glm-5.3-flash
+`
+	if err := os.WriteFile(mainPath, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(mainPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	SetConfig(cfg)
+
+	b := &ChatBridge{cfg: cfg}
+	defer SetChatBridge(nil)
+	SetChatBridge(b)
+
+	if err := b.SwitchModel("glm-5.3-flash"); err != nil {
+		t.Fatalf("SwitchModel: %v", err)
+	}
+
+	// In-memory selection switched.
+	if b.cfg.Model != "glm-5.3-flash" {
+		t.Fatalf("cfg.Model = %q, want glm-5.3-flash", b.cfg.Model)
+	}
+	// And it must survive on disk (fresh load sees the switched model).
+	fresh, err := config.Load(mainPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if fresh.Model != "glm-5.3-flash" {
+		t.Fatalf("on-disk model = %q, want glm-5.3-flash (switch must persist to config, not just session)", fresh.Model)
+	}
+}

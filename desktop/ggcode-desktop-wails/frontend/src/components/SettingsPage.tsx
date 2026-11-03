@@ -79,6 +79,15 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           setCurrentVendor(resolved.vendorId || '')
           setCurrentEndpoint(resolved.endpointId || '')
           setCurrentModel(resolved.model || '')
+        // #4973: when the active selection has no explicit model (fresh
+        // endpoint, cfg.model empty), preselect the endpoint's default so the
+        // dropdown never sits on the placeholder on page load.
+        if (!(resolved.model || '') && resolved.vendorId && resolved.endpointId) {
+          try {
+            const d = await App.GetEndpointDetails(resolved.vendorId, resolved.endpointId) as any
+            if (d && d.defaultModel) setCurrentModel(d.defaultModel)
+          } catch { /* keep placeholder on details failure */ }
+        }
           setResolvedBaseURL(resolved.baseUrl || '')
           setResolvedProtocol(resolved.protocol || '')
           setApiKeySet(resolved.apiKeySet || false)

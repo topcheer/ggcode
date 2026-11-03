@@ -3726,6 +3726,16 @@ func (b *ChatBridge) SwitchModel(model string) error {
 		agentruntime.SyncVendorEndpointToGlobal(b.cfg, b.cfg.Vendor, b.cfg.Endpoint)
 	}
 
+	// Persist the model selection to the config file. Without this the switch
+	// only lives in memory + the current session's metadata; after a restart
+	// InitAgent resolves the stale on-disk model and new sessions get the old
+	// model (#4973 follow-up). UpdateConfig reuses the full validation/save/
+	// instance-writeback chain; its trailing OnConfigProviderChanged is
+	// idempotent for the same selection.
+	if err := UpdateConfig(map[string]interface{}{"model": model}); err != nil {
+		debug.Log("chat", "SwitchModel: persist model %q to config failed (switch stays session-scoped): %v", model, err)
+	}
+
 	sessionCW2, sessionMT2 := 0, 0
 	if ses != nil {
 		sessionCW2 = ses.ContextWindow
