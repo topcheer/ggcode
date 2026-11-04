@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -205,7 +206,7 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 			if !strings.HasPrefix(line, "??") {
 				continue
 			}
-			if len(paths) > 0 && !untrackedLineInPaths(line, paths) {
+			if len(paths) > 0 && !untrackedLineInPaths(workingDir, line, paths) {
 				// Other agents' untracked leftovers are not this run's output.
 				continue
 			}
@@ -220,13 +221,25 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 
 // untrackedLineInPaths reports whether a `git status --porcelain` untracked
 // line ("?? path" or "?? dir/") falls under any of the given path scopes.
-func untrackedLineInPaths(line string, paths []string) bool {
-	p := strings.TrimSpace(strings.TrimPrefix(line, "??"))
-	if p == "" {
+// Scopes are recorded verbatim from tool args and are typically absolute,
+// while porcelain paths are repo-relative (#5034): both sides are normalized
+// to repo-root-relative slash form so either spelling matches. Directory
+// entries ("?? dir/") also match file-level scopes inside that directory
+// (reverse containment).
+func untrackedLineInPaths(workingDir, line string, paths []string) bool {
+	pRaw := strings.TrimSpace(strings.TrimPrefix(line, "??"))
+	if pRaw == "" {
 		return false
 	}
+	isDirEntry := strings.HasSuffix(pRaw, "/")
+	p := strings.TrimSuffix(pRaw, "/")
+	p = filepath.ToSlash(normalizeReconcilePath(workingDir, p))
 	for _, scope := range paths {
-		if p == scope || strings.HasPrefix(p, scope+"/") {
+		s := strings.TrimSuffix(filepath.ToSlash(normalizeReconcilePath(workingDir, scope)), "/")
+		if p == s || strings.HasPrefix(p, s+"/") {
+			return true
+		}
+		if isDirEntry && strings.HasPrefix(s, p+"/") {
 			return true
 		}
 	}
