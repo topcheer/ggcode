@@ -26,7 +26,16 @@ Write-Host "token acquired (expires in $($tokenResp.expires_in)s)"
 $app = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId"
 Write-Host "app: $($app.primaryName) (id=$($app.id))"
 
-$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions"
+# Skip when a submission is already in flight: creating another one on top
+# of an in-flight submission is rejected by the Ingestion API and would fail
+# the release job. Exiting 0 keeps the pipeline green while the existing
+# submission continues its Store-side review.
+if ($app.inFlightSubmissionId) {
+  Write-Host "in-flight submission $($app.inFlightSubmissionId) exists; skipping store submit (release continues without a new submission)"
+  exit 0
+}
+
+$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json" -Body "{}"
 $subId = $sub.id
 Write-Host "submission created: $subId (state=$($sub.status))"
 
