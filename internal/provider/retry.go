@@ -113,6 +113,14 @@ func IsContextOverflowError(err error) bool {
 		"maximum input tokens",
 		"input tokens exceeded",
 		"context window",
+		// GLM (zai) reports context overflow on chat completions as a generic
+		// 400 with "messages 参数非法" (illegal messages parameter) instead of
+		// an explicit prompt-too-long message - recognize it so reactive
+		// compaction can recover instead of the run dying (observed on
+		// long-running sub-agent sessions, issue to follow).
+		"参数非法",
+		"messages 参数",
+		"invalid messages",
 	}
 	for _, kw := range keywords {
 		if strings.Contains(s, kw) {
