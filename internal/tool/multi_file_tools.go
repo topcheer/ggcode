@@ -30,7 +30,7 @@ func (t MultiFileRead) Parameters() json.RawMessage {
 	"properties": {
 		"files": {
 			"type": "array",
-			"description": "Files to read, returned in the same order. Keep batches small, use absolute unique paths, and prefer offset/limit around the lines you plan to edit.",
+			"description": "Files to read, returned in the same order. Keep batches small and use absolute paths. The same file may appear multiple times with different offset/limit windows; identical duplicate windows are collapsed (deduped). Prefer offset/limit around the lines you plan to edit.",
 			"items": {
 				"type": "object",
 				"properties": {
@@ -82,9 +82,17 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		Path   string
 		Offset int
 		Limit  int
+		Cont   bool
+	}
+	type reqKey struct {
+		path   string
+		offset int
+		limit  int
 	}
 	reqs := make([]readReq, 0, len(args.Files))
-	seen := map[string]struct{}{}
+	seen := map[reqKey]struct{}{}
+	pathWindow := map[string]int{}
+	deduped := 0
 	for i, f := range args.Files {
 		path, err := cleanAbsolutePath(f.Path)
 		if err != nil {
@@ -100,12 +108,14 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if f.Limit > maxExplicitMultiFileReadLimit {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: limit %d exceeds max %d. Narrow the range or split the batch.", i, f.Limit, maxExplicitMultiFileReadLimit)}, nil
 		}
-		if _, ok := seen[path]; ok {
-
+		key := reqKey{path: path, offset: f.Offset, limit: f.Limit}
+		if _, ok := seen[key]; ok {
+			deduped++
 			continue
 		}
-		seen[path] = struct{}{}
-		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
+		seen[key] = struct{}{}
+		pathWindow[path]++
+		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit, Cont: pathWindow[path] > 1})
 	}
 
 	type readResult struct {
@@ -138,7 +148,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 				if err != nil {
 					block = formatMultiFileReadErrorBlock(r.Path, err.Error())
 				} else {
-					block = formatMultiFileReadFileBlock(r.Path, text)
+					block = formatMultiFileReadFileBlockWindow(r.Path, text, r.Cont)
 				}
 			}
 			results[idx] = readResult{index: idx, block: block}
@@ -180,7 +190,10 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 	}
 
-	summary := fmt.Sprintf("[multi_file_read summary] requested=%d succeeded=%d failed=%d skipped=%d", len(reqs), succeeded, failed, skipped)
+	summary := fmt.Sprintf("[multi_file_read summary] requested=%d succeeded=%d failed=%d skipped=%d deduped=%d", len(args.Files), succeeded, failed, skipped, deduped)
+	if deduped > 0 {
+		summary += " [identical duplicate windows collapsed]"
+	}
 	if skipped > 0 {
 		summary += " [split batch or narrow ranges to read skipped files]"
 	}
@@ -693,6 +706,13 @@ func rollbackPlans(written []PlannedFileEdit) error {
 }
 
 func formatMultiFileReadFileBlock(path, text string) string {
+	return formatMultiFileReadFileBlockWindow(path, text, false)
+}
+
+func formatMultiFileReadFileBlockWindow(path, text string, cont bool) string {
+	if cont {
+		return fmt.Sprintf("=== FILE: %s (cont.) ===\n%s[end file]\n", path, ensureTrailingNewline(text))
+	}
 	return fmt.Sprintf("=== FILE: %s ===\n%s[end file]\n", path, ensureTrailingNewline(text))
 }
 
