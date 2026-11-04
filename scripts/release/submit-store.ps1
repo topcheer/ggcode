@@ -26,7 +26,7 @@ Write-Host "token acquired (expires in $($tokenResp.expires_in)s)"
 $app = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId"
 Write-Host "app: $($app.primaryName) (id=$($app.id))"
 
-$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions"
+$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json" -Body "{}"
 $subId = $sub.id
 Write-Host "submission created: $subId (state=$($sub.status))"
 
