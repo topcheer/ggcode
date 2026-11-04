@@ -33,17 +33,22 @@ type usageHandlerSetter interface {
 }
 
 type RunnerConfig struct {
-	Provider            provider.Provider
-	AllTools            []ToolInfo
-	Task                string
-	AllowedTools        []string
-	Manager             *Manager
-	SubAgentID          string
-	AgentFactory        AgentFactory
-	BuildToolSet        func(allowedTools []string, allTools []ToolInfo) interface{}
-	Model               string
-	AgentType           string
-	WorkingDir          string
+	Provider     provider.Provider
+	AllTools     []ToolInfo
+	Task         string
+	AllowedTools []string
+	Manager      *Manager
+	SubAgentID   string
+	AgentFactory AgentFactory
+	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{}
+	Model        string
+	AgentType    string
+	WorkingDir   string
+	// MaxToolCalls caps the sub-agent agent loop (0 = unbounded, the
+	// historical default). Passed through to the AgentFactory maxTurns
+	// parameter so a looping sub-agent is killed with a partial result
+	// instead of burning tokens until manual cancel (#5013).
+	MaxToolCalls        int
 	OnStreamText        func(agentID, text string)
 	OnUsage             func(provider.TokenUsage)
 	OnMetric            func(metrics.MetricEvent)
@@ -124,7 +129,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		runProv = provider.CloneProviderWithModel(cfg.Provider, cfg.Model)
 		debug.Log("subagent", "Run: model override id=%s model=%s", cfg.SubAgentID, cfg.Model)
 	}
-	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, 0)
+	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, cfg.MaxToolCalls)
 
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
