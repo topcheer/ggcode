@@ -3637,6 +3637,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
+			// #4995: fail fast on raw `git worktree add` without -b (detached
+			// HEAD) and rescue late push failures with the same hint.
+			if wtHint := worktreeDetachedHint(tc.Name, extractCommandFromToolCall(tc.Arguments), result.Content, result.IsError); wtHint != "" {
+				a.appendGuidance(&result, wtHint)
+			}
+
 			a.planDrift.adherence.noteToolCall(a.planDrift.items, runStats)
 			if tc.Name == "run_command" || tc.Name == "start_command" {
 				cmd := extractCommandFromToolCall(tc.Arguments)
