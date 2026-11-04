@@ -17,6 +17,8 @@ import (
 
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/sessionidx"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
@@ -99,6 +101,14 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	_ = registry.Register(tool.NewListMemoryTool(autoMem, projectAutoMem))
 
 	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
+
+	// Session-recall index: own-session writes + sibling-session read-only
+	// aggregation (background prewarm; refresh cadence per manager defaults).
+	if sessDir, err := session.DefaultDir(); err == nil {
+		idxMgr := sessionidx.NewManager(sessDir, "")
+		registry.SetSessionIndex(idxMgr)
+		go idxMgr.Start()
+	}
 
 	_ = registry.Register(tool.NewRecallToolFlowTool())
 

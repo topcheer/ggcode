@@ -1193,7 +1193,15 @@ func (a *Agent) SetSessionID(id string) {
 	a.mu.Lock()
 	a.sessionID = id
 	a.syncContextManagerTodoPathLocked()
+	reg := a.tools
 	a.mu.Unlock()
+
+	// Bind the session-recall index to this session (own-index ownership).
+	if reg != nil {
+		if m := reg.SessionIndex(); m != nil {
+			go m.SetLiveID(id)
+		}
+	}
 
 	if pcs, ok := a.provider.(provider.PromptCacheKeySetter); ok {
 		pcs.SetPromptCacheKey("ggcode-" + id)
