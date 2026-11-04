@@ -9,6 +9,10 @@
         <string>{{.OutputFilename}}</string>
         <key>CFBundleIdentifier</key>
         <string>com.ggcode.desktop</string>
+        <key>ITSAppUsesNonExemptEncryption</key>
+        <false/>
+        <key>LSApplicationCategoryType</key>
+        <string>public.app-category.developer-tools</string>
         <key>CFBundleVersion</key>
         <string>{{.Info.ProductVersion}}</string>
         <key>CFBundleGetInfoString</key>
