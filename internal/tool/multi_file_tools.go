@@ -84,7 +84,13 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		Limit  int
 	}
 	reqs := make([]readReq, 0, len(args.Files))
+	// #4992: dedup key must include offset+limit. A bare-path key silently
+	// dropped any later window for the same file (data-integrity defect:
+	// callers editing from a batch read got a partial view). Exact duplicate
+	// window requests are still coalesced (idempotent); distinct windows are
+	// all returned.
 	seen := map[string]struct{}{}
+	coalesced := 0
 	for i, f := range args.Files {
 		path, err := cleanAbsolutePath(f.Path)
 		if err != nil {
@@ -100,11 +106,13 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if f.Limit > maxExplicitMultiFileReadLimit {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: limit %d exceeds max %d. Narrow the range or split the batch.", i, f.Limit, maxExplicitMultiFileReadLimit)}, nil
 		}
-		if _, ok := seen[path]; ok {
+		key := fmt.Sprintf("%s|%d|%d", path, f.Offset, f.Limit)
+		if _, ok := seen[key]; ok {
+			coalesced++
 
 			continue
 		}
-		seen[path] = struct{}{}
+		seen[key] = struct{}{}
 		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
 	}
 
@@ -181,6 +189,9 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	summary := fmt.Sprintf("[multi_file_read summary] requested=%d succeeded=%d failed=%d skipped=%d", len(reqs), succeeded, failed, skipped)
+	if coalesced > 0 {
+		summary += fmt.Sprintf(" coalesced=%d (exact duplicate window requests)", coalesced)
+	}
 	if skipped > 0 {
 		summary += " [split batch or narrow ranges to read skipped files]"
 	}
