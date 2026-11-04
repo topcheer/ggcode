@@ -296,6 +296,11 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 	case "batch_replace":
 
 		recordBatchReplacePaths(args, s)
+	case "lsp_rename":
+
+		if path, ok := args["path"].(string); ok {
+			s.recordFileEdit(path)
+		}
 	}
 }
 
