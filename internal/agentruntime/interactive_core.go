@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
+	"github.com/topcheer/ggcode/internal/safego"
 
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -107,7 +108,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	if sessDir, err := session.DefaultDir(); err == nil {
 		idxMgr := sessionidx.NewManager(sessDir, "")
 		registry.SetSessionIndex(idxMgr)
-		go idxMgr.Start()
+		safego.Go("agentruntime.sessionidxStart", idxMgr.Start)
 	}
 
 	_ = registry.Register(tool.NewRecallToolFlowTool())

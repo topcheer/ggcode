@@ -1223,7 +1223,7 @@ func (a *Agent) SetSessionID(id string) {
 	// Bind the session-recall index to this session (own-index ownership).
 	if reg != nil {
 		if m := reg.SessionIndex(); m != nil {
-			go m.SetLiveID(id)
+			safego.Go("agent.setLiveID", func() { m.SetLiveID(id) })
 		}
 	}
 
