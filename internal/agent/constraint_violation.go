@@ -347,6 +347,36 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 		rest = strings.TrimSuffix(rest, suffix)
 	}
 
+	// Trim directory-suffix words from the full remaining text before the
+	// token-terminating scan below: that scan cuts at the first whitespace, so
+	// phrases like "the billing module" would otherwise lose the noun phrase
+	// ("billing") that precedes the suffix word and yield no pattern (#5006).
+	// Trailing sentence punctuation is trimmed first so "... module." still
+	// matches, mirroring the TrimRight applied to the plain-token path.
+	trimmedRest := strings.TrimRight(rest, " \t\n.,;!)")
+	for _, suffix := range []string{" directory", " module", " layer", " package", " folder"} {
+		trimmed := strings.TrimSuffix(trimmedRest, suffix)
+		if trimmed == trimmedRest {
+			continue
+		}
+		name := strings.TrimSpace(trimmed)
+		for _, prefix := range []string{"the ", "any ", "all "} {
+			name = strings.TrimPrefix(name, prefix)
+		}
+		// Keep only the final word of the phrase as the pattern; earlier words
+		// are determiners/adjectives like "the new billing".
+		if idx := strings.LastIndexAny(name, " \t"); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if name != "" {
+			return name
+		}
+		// Degenerate phrase (bare suffix word): fall through with the suffix
+		// removed and let the plain-token path decide.
+		rest = trimmed
+		break
+	}
+
 	end := len(rest)
 	for i, ch := range rest {
 		if ch == ' ' || ch == '\t' || ch == '\n' || ch == ',' ||
@@ -377,16 +407,6 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 	}
 	if moduleKeywords[token] {
 		return token
-	}
-
-	for _, suffix := range []string{" directory", " module", " layer", " package", " folder"} {
-		if strings.HasSuffix(rest[:end], suffix) {
-			name := strings.TrimSpace(rest[:end-len(suffix)])
-			name = strings.TrimPrefix(name, "the ")
-			if name != "" {
-				return name
-			}
-		}
 	}
 
 	return ""
