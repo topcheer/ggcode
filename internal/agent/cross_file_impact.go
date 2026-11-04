@@ -514,6 +514,15 @@ func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
 		ast.Walk(v, node.X)
 		return nil
 	case *ast.CompositeLit:
+		// Walk the type expression: CompositeLit.Type (e.g. the Ident in
+		// `myStruct{Field: 1}` or `[]myStruct{...}`) is a real reference to
+		// the named type. Skipping it made the visitor silently drop
+		// sibling-file references whose only hit was at Type position
+		// (#5010). Keys of KeyValueExpr are still skipped to avoid
+		// field-name false positives.
+		if node.Type != nil {
+			ast.Walk(v, node.Type)
+		}
 		for _, elt := range node.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
 
