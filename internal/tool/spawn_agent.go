@@ -124,6 +124,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		SubagentType string   `json:"subagent_type"`
 		Isolation    string   `json:"isolation"`
 		Description  string   `json:"description"`
+		MaxToolCalls int      `json:"max_tool_calls"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -181,13 +182,14 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	args.Task += readBackNudge(args.Task)
 
 	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
-		Name:        name,
-		Task:        args.Task,
-		DisplayTask: displayTask,
-		Tools:       args.Tools,
-		Model:       args.Model,
-		AgentType:   args.SubagentType,
-		Isolation:   isolation,
+		Name:         name,
+		Task:         args.Task,
+		DisplayTask:  displayTask,
+		Tools:        args.Tools,
+		Model:        args.Model,
+		AgentType:    args.SubagentType,
+		Isolation:    isolation,
+		MaxToolCalls: args.MaxToolCalls,
 	})
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
@@ -208,6 +210,11 @@ type LaunchOptions struct {
 	Model       string
 	AgentType   string
 	Isolation   string
+	// MaxToolCalls is a deterministic hard budget for the sub-agent's
+	// agent loop (max iterations, each iteration being one LLM turn that
+	// may issue tool calls). 0 keeps the pre-existing unbounded behavior;
+	// N > 0 stops the run after N turns with the partial result (#5013).
+	MaxToolCalls int
 }
 
 func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string, string, error) {
@@ -267,6 +274,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 			AgentFactory:        t.AgentFactory,
 			Model:               model,
 			AgentType:           opts.AgentType,
+			MaxToolCalls:        opts.MaxToolCalls,
 			WorkingDir:          runWorkDir,
 			OnUsage:             t.OnUsage,
 			OnMetric:            t.OnMetric,

@@ -247,3 +247,28 @@ func TestSpawnAgentLaunchDirectCompanion(t *testing.T) {
 		t.Fatal("launched run must be visible via mgr.Snapshot(id)")
 	}
 }
+
+func TestSpawnAgentMaxToolCallsAccepted(t *testing.T) {
+	mgr := subagent.NewManager(config.SubAgentConfig{
+		MaxConcurrent: 2,
+		Timeout:       5 * time.Second,
+	})
+	defer mgr.Shutdown()
+
+	s := SpawnAgentTool{Manager: mgr, Provider: nil}
+
+	input, _ := json.Marshal(map[string]interface{}{
+		"task":           "test task with budget",
+		"max_tool_calls": 12,
+	})
+	result, err := s.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !containsStr(result.Content, "Sub-agent spawned") {
+		t.Errorf("expected spawn message: %s", result.Content)
+	}
+}
