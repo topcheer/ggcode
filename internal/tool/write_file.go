@@ -118,6 +118,23 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	unlockWrite := LockWritePath(args.Path)
 	defer unlockWrite()
 
+	// Vacated-path gate (#5026, #5019 option 2): this tracked path was
+	// vacated by an external mv/rm during a run_command in this session and
+	// is still missing. Refuse so the agent does not silently recreate a
+	// truncated twin at the old location; one read_file (the ack route,
+	// which returns not-found + move hint and clears the marker) unblocks
+	// an intentional recreate. Paths that exist again are not refused.
+	if defaultFileTracker.VacancyCheck(args.Path) {
+		defaultFileTracker.ClearVacated(args.Path)
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"refusing to write %s: this path was vacated by an external move during this session "+
+				"(a run_command mv/rm removed it; the original content now lives at the new location). "+
+				"Re-read the current location or write to the new path. If you intentionally want to recreate "+
+				"this file at the old path, the refusal itself acknowledges the move -- the next write proceeds "+
+				"as fresh creation.",
+			args.Path)}, nil
+	}
+
 	if fileExists {
 		if stale, since := defaultFileTracker.CheckStale(args.Path); stale {
 			return Result{IsError: true, Content: fmt.Sprintf(

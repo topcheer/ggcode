@@ -87,6 +87,14 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			if suggestion := suggestFilePath(args.Path); suggestion != "" {
 				msg += suggestion
 			}
+			// Vacated-path hint (#5026): this tracked path disappeared during a
+			// run_command in this session. Enrich not-found with the move hint
+			// and clear the vacancy marker so a subsequent intentional write
+			// proceeds as fresh creation (the acknowledgment route).
+			if defaultFileTracker.VacancyCheck(args.Path) {
+				defaultFileTracker.ClearVacated(args.Path)
+				msg += "\nNote: this path was vacated by a move/rm during this session (see recent run_command renames). The vacancy has been acknowledged; writing here again will create a fresh file."
+			}
 		}
 		return Result{IsError: true, Content: msg}, nil
 	}
