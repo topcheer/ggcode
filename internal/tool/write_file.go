@@ -147,6 +147,8 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	CaptureDiagnosticBaseline(t.WorkingDir, args.Path)
 
+	blindWarn := blindWriteWarning(args.Path)
+
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
 		ClearDiagnosticBaseline(args.Path)
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
@@ -167,7 +169,7 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	msg += CheckContentForConflicts(string(writeData))
 	msg += criticalFileWarning(args.Path)
-	msg += blindWriteWarning(args.Path)
+	msg += blindWarn
 
 	defaultFileTracker.RecordWrite(args.Path)
 	msg += compactDiff(oldContent, string(writeData))
