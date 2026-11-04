@@ -1168,6 +1168,16 @@ func (a *Agent) SetPersistHandler(fn func(msg provider.Message)) {
 	}
 }
 
+// SetEarlyCompactRatio forwards an earlier auto-compact trigger ratio to the
+// context manager (#5002 gap 2). Sub-agent harnesses use this to schedule
+// proactive background compaction at ~70% of the window instead of waiting
+// for the ~90% reactive path.
+func (a *Agent) SetEarlyCompactRatio(r float64) {
+	if m, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		m.SetEarlyCompactRatio(r)
+	}
+}
+
 func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
