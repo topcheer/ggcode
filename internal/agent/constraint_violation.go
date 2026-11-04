@@ -379,13 +379,22 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 		return token
 	}
 
+	// #5006: the suffix fallback used to match rest[:end], which by
+	// construction contains no whitespace (the end-scan above breaks at the
+	// first whitespace), so suffixes with a leading space could never match -
+	// the loop was dead and "the X module/directory/..." constraints were
+	// silently dropped (systematic false negative). Match against `rest`
+	// (pre-truncation) instead; a multi-token name guard keeps
+	// "the billing module today" from extracting "billing module today".
+	probe := strings.TrimRight(rest, ".,;!")
 	for _, suffix := range []string{" directory", " module", " layer", " package", " folder"} {
-		if strings.HasSuffix(rest[:end], suffix) {
-			name := strings.TrimSpace(rest[:end-len(suffix)])
-			name = strings.TrimPrefix(name, "the ")
-			if name != "" {
-				return name
-			}
+		if !strings.HasSuffix(probe, suffix) {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimSuffix(probe, suffix))
+		name = strings.TrimPrefix(name, "the ")
+		if name != "" && !strings.ContainsAny(name, " \t\n") {
+			return name
 		}
 	}
 
