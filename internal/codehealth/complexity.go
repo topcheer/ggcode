@@ -246,16 +246,19 @@ func maxNestingDepth(body *ast.BlockStmt, current int) int {
 func nestingDepthOfStmt(stmt ast.Stmt, current int) int {
 	switch s := stmt.(type) {
 	case *ast.IfStmt:
+		// #5037: the else branch was dead code before - maxNestingDepth
+		// always returns >= its current argument, so the early return on
+		// the body made the Else traversal unreachable and else-side
+		// nesting was silently undercounted. Measure both branches (each
+		// is one level below the if) and take the max.
 		depth := current + 1
-		if d := maxNestingDepth(s.Body, depth); d > current {
-			return d
-		}
+		d := maxNestingDepth(s.Body, depth)
 		if s.Else != nil {
-			if d := nestingDepthOfStmt(s.Else, current); d > current {
-				return d
+			if ed := maxOf(depth, nestingDepthOfStmt(s.Else, depth)); ed > d {
+				d = ed
 			}
 		}
-		return current + 1
+		return d
 	case *ast.ForStmt:
 		return maxOf(current+1, maxNestingDepth(s.Body, current+1))
 	case *ast.RangeStmt:
