@@ -382,13 +382,37 @@ type modeAwarePolicy interface {
 	Mode() permission.PermissionMode
 }
 
+// defaultContextWindow is the legacy fallback used when the provider does
+// not expose model metadata or the model is not in the known-window table.
+const defaultContextWindow = 128000
+
+// initialContextWindow derives the context manager window from provider
+// model metadata instead of hardcoding it (#5002): a smaller real endpoint
+// window previously let auto-compact fire too late, so runs hit the raw
+// overflow error first. Falls back to defaultContextWindow when the
+// provider lacks model metadata or the model is unknown.
+func initialContextWindow(p provider.Provider) int {
+	mp, ok := p.(provider.ModelNameProvider)
+	if !ok {
+		return defaultContextWindow
+	}
+	model := mp.ModelName()
+	if model == "" {
+		return defaultContextWindow
+	}
+	if w := provider.LookupKnownModelContextWindow(model); w > 0 {
+		return w
+	}
+	return defaultContextWindow
+}
+
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
 		provider:               p,
 		tools:                  tools,
 		maxIter:                maxIter,
-		contextManager:         ctxpkg.NewManager(128000),
+		contextManager:         ctxpkg.NewManager(initialContextWindow(p)),
 		projectMemory:          make(map[string]struct{}),
 		baseSystemPrompt:       systemPrompt,
 		shutdownCtx:            ctx,
