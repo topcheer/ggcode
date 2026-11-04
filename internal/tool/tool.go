@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/sessionidx"
 )
 
 type ToolProgressKey struct{}
@@ -64,11 +65,12 @@ type SandboxSafe interface {
 }
 
 type Registry struct {
-	tools       map[string]Tool
-	codeIndex   *CodeIndexManager
-	jobManager  *CommandJobManager
-	descAugment func(toolName string) string
-	mu          sync.RWMutex
+	tools        map[string]Tool
+	codeIndex    *CodeIndexManager
+	jobManager   *CommandJobManager
+	descAugment  func(toolName string) string
+	sessionIndex *sessionidx.Manager
+	mu           sync.RWMutex
 }
 
 func NewRegistry() *Registry {
@@ -85,6 +87,20 @@ func (r *Registry) JobManager() *CommandJobManager {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.jobManager
+}
+
+// SessionIndex returns the session-recall index manager (nil until set).
+func (r *Registry) SessionIndex() *sessionidx.Manager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sessionIndex
+}
+
+// SetSessionIndex attaches the session-recall index manager.
+func (r *Registry) SetSessionIndex(m *sessionidx.Manager) {
+	r.mu.Lock()
+	r.sessionIndex = m
+	r.mu.Unlock()
 }
 
 func (r *Registry) Register(t Tool) error {
