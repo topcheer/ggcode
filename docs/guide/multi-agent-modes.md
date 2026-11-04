@@ -61,6 +61,10 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 - If worktree creation fails (not a git repo, git errors), the spawn is rejected and the sub-agent cancelled rather than silently downgraded to non-isolated.
 - Note: the worktree starts from the last commit (`HEAD`); uncommitted changes in the parent tree are not visible to the sub-agent.
 
+### Hard tool-call budget (`max_tool_calls`)
+
+Written task-contract budgets have no enforcement power on their own: a sub-agent that loops on reads keeps burning tokens until cancelled. Pass `max_tool_calls` (integer, 0 = unbounded historical default) to cap the agent loop at N LLM turns — the run is then stopped with its partial result instead of running unbounded (#5013).
+
 ### Model Selection
 
 The `spawn_agent` tool accepts an optional `model` parameter:
