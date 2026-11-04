@@ -132,6 +132,7 @@ type Manager struct {
 	userReset                bool
 	lastReject               CompactRejectReason
 	lastSummarizeApplied     bool
+	earlyCompactRatio        float64
 }
 
 func NewManager(contextWindow int) *Manager {
@@ -1885,6 +1886,33 @@ func (m *Manager) tokenCountLocked() int {
 	return m.tokens + m.toolDefinitionOverhead
 }
 
+// SetEarlyCompactRatio enables an earlier auto-compact trigger (#5002 gap 2):
+// when r is in (0, 1), the effective auto-compact threshold becomes
+// min(window-reserve, r*window). Single long-task sessions (sub-agents) grow
+// monotonically with no user-turn pacing, so firing the pre-compact earlier
+// keeps them off the reactive overflow path. r <= 0 disables the early
+// trigger (default).
+func (m *Manager) SetEarlyCompactRatio(r float64) {
+	if r < 0 {
+		r = 0
+	}
+	if r >= 1 {
+		r = 0
+	}
+	m.mu.Lock()
+	m.earlyCompactRatio = r
+	m.lastLoggedThreshold = 0
+	m.mu.Unlock()
+}
+
+// EarlyCompactRatio reports the configured early auto-compact trigger ratio
+// (0 = disabled).
+func (m *Manager) EarlyCompactRatio() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.earlyCompactRatio
+}
+
 func (m *Manager) autoCompactThresholdLocked() int {
 	if m.contextWindow <= 0 {
 		debug.Log("ctx", "autoCompactThreshold: contextWindow=0 → threshold=0")
@@ -1892,13 +1920,18 @@ func (m *Manager) autoCompactThresholdLocked() int {
 	}
 	reserve := m.effectiveOutputReserveLocked()
 	threshold := m.contextWindow - reserve
+	if r := m.earlyCompactRatio; r > 0 && r < 1 {
+		if early := int(float64(m.contextWindow) * r); early < threshold {
+			threshold = early
+		}
+	}
 	result := threshold
 	if threshold < minSummaryReserve {
 		result = minSummaryReserve
 	}
 	if m.lastLoggedThreshold != result {
-		debug.Log("ctx", "autoCompactThreshold: contextWindow=%d outputReserve=%d rawThreshold=%d finalThreshold=%d",
-			m.contextWindow, reserve, threshold, result)
+		debug.Log("ctx", "autoCompactThreshold: contextWindow=%d outputReserve=%d earlyRatio=%.2f rawThreshold=%d finalThreshold=%d",
+			m.contextWindow, reserve, m.earlyCompactRatio, threshold, result)
 		m.lastLoggedThreshold = result
 	}
 	return result
