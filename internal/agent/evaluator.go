@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -80,7 +79,7 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 	a.adversarialReviewRounds++
 	a.mu.Unlock()
 
-	diff := a.collectAdversarialDiff()
+	diff := a.collectAdversarialDiff(runStats.FilesEdited)
 	if strings.TrimSpace(diff) == "" {
 		debug.Log("evaluator", "empty diff, skipping review")
 		return ""
@@ -170,16 +169,26 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 	return verdict, findings
 }
 
-func (a *Agent) collectAdversarialDiff() string {
+// collectAdversarialDiff returns the diff the adversarial reviewer should see.
+// paths scopes the diff to the files this agent actually edited in the run
+// (RunStats.FilesEdited): the review gate is per-agent, so the diff must be
+// too — on a shared working tree a bare `git diff HEAD` would attribute
+// other agents' in-flight changes to this run (#5018). When paths is empty
+// (no per-file tracking available) the historical whole-tree diff is kept.
+func (a *Agent) collectAdversarialDiff(paths []string) string {
 	workingDir := a.WorkingDir()
 
 	cmdCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd, _, err := util.NewShellCommandContext(cmdCtx, "git diff HEAD")
-	if err != nil {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", "git diff HEAD")
+	// Pass paths as distinct argv entries (no shell re-parsing) so spaces and
+	// metacharacters in filenames stay intact.
+	args := []string{"diff", "HEAD"}
+	if len(paths) > 0 {
+		args = append(args, "--")
+		args = append(args, paths...)
 	}
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	cmd.Dir = workingDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -188,20 +197,38 @@ func (a *Agent) collectAdversarialDiff() string {
 	}
 	diff := string(out)
 
-	st, _, err := util.NewShellCommandContext(cmdCtx, "git status --porcelain")
-	if err == nil {
-		st.Dir = workingDir
-		if sOut, sErr := st.Output(); sErr == nil {
-			var untracked []string
-			for _, line := range strings.Split(string(sOut), "\n") {
-				if strings.HasPrefix(line, "??") {
-					untracked = append(untracked, line)
-				}
+	st := exec.CommandContext(cmdCtx, "git", "status", "--porcelain")
+	st.Dir = workingDir
+	if sOut, sErr := st.Output(); sErr == nil {
+		var untracked []string
+		for _, line := range strings.Split(string(sOut), "\n") {
+			if !strings.HasPrefix(line, "??") {
+				continue
 			}
-			if len(untracked) > 0 {
-				diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
+			if len(paths) > 0 && !untrackedLineInPaths(line, paths) {
+				// Other agents' untracked leftovers are not this run's output.
+				continue
 			}
+			untracked = append(untracked, line)
+		}
+		if len(untracked) > 0 {
+			diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
 		}
 	}
 	return diff
+}
+
+// untrackedLineInPaths reports whether a `git status --porcelain` untracked
+// line ("?? path" or "?? dir/") falls under any of the given path scopes.
+func untrackedLineInPaths(line string, paths []string) bool {
+	p := strings.TrimSpace(strings.TrimPrefix(line, "??"))
+	if p == "" {
+		return false
+	}
+	for _, scope := range paths {
+		if p == scope || strings.HasPrefix(p, scope+"/") {
+			return true
+		}
+	}
+	return false
 }
