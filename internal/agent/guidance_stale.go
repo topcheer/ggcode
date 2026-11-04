@@ -85,8 +85,18 @@ func analyzeStaleGuidance(path, currentModel string) {
 		}
 		others := 0
 		for m, tags := range deliveredPerModel {
-			if m != currentModel && tags[tag].Delivered >= staleOtherModelDelivered {
-				others += tags[tag].Delivered
+			// #5038: another qualifying model (>= staleMinRuns) may never
+			// have recorded this tag - inner-map miss yields a nil
+			// *guidanceTagStat. Guard instead of dereferencing.
+			if m == currentModel {
+				continue
+			}
+			stat := tags[tag]
+			if stat == nil {
+				continue
+			}
+			if stat.Delivered >= staleOtherModelDelivered {
+				others += stat.Delivered
 			}
 		}
 		if others == 0 {
