@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Manager aggregates the indexes of every session file in a sessions
@@ -105,7 +106,7 @@ func (m *Manager) Start() {
 	}
 	m.scanExternal()
 	m.stopped.Add(1)
-	go m.loop()
+	safego.Go("sessionidx.loop", m.loop)
 }
 
 // loop periodically refreshes: self (cheap tail) and external entries whose
