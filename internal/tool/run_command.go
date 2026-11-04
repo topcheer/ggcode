@@ -343,7 +343,19 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
 
-	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+	result := t.finalizeCommandResult(ctx, args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+
+	// #4995: a raw `git worktree add <path> <commit-ish>` (no -b) that landed
+	// detached is the silent half of the broken push chain - the failure only
+	// surfaces at push time, one round-trip later. Probe detach-prone creation
+	// commands right after they succeed and attach an advisory naming the
+	// worktree(s) actually detached, so commit+push flows create a branch
+	// BEFORE committing instead of discovering the trap at push time.
+	if err == nil {
+		if advisory := verifyWorktreeAddResult(ctx, args.Command, t.WorkingDir); advisory != "" {
+			result.Content += "\n\n" + advisory
+		}
+	}
 
 	elapsed := time.Since(costStart)
 	recordCommandCost(args.Command, elapsed)
@@ -365,7 +377,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return result, nil
 }
 
-func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
+func (t RunCommand) finalizeCommandResult(ctx context.Context, command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
 
 	output = truncateMiddleSpill(output, maxOutputSize, "output", t.OmittedOutputSpiller)
 	errOutput = truncateMiddleSpill(errOutput, maxOutputSize, "stderr", t.OmittedOutputSpiller)
@@ -388,7 +400,15 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, runErr)
 		}
-		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(command, sb.String(), errOutput, runErr, exitCode)}
+		msg := t.buildFailureMessage(command, sb.String(), errOutput, runErr, exitCode)
+		// #4995: `git push` from a detached HEAD fails with git's
+		// "destination ... not a full refname" fingerprint. Without a hint
+		// the recovery is a blind round-trip (sessions A/B each needed one).
+		// Append the verified, actionable recovery recipe to the failure.
+		if pushHint := detectDetachedWorktreePush(ctx, command, sb.String(), errOutput, t.WorkingDir); pushHint != "" {
+			msg += "\n\n" + pushHint
+		}
+		return Result{IsError: true, Content: preWarning + msg}
 	}
 
 	if t.OnPostExec != nil {
