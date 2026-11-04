@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -205,7 +206,7 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 			if !strings.HasPrefix(line, "??") {
 				continue
 			}
-			if len(paths) > 0 && !untrackedLineInPaths(line, paths) {
+			if len(paths) > 0 && !untrackedLineInPaths(line, paths, workingDir) {
 				// Other agents' untracked leftovers are not this run's output.
 				continue
 			}
@@ -220,13 +221,28 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 
 // untrackedLineInPaths reports whether a `git status --porcelain` untracked
 // line ("?? path" or "?? dir/") falls under any of the given path scopes.
-func untrackedLineInPaths(line string, paths []string) bool {
+// Porcelain paths are repo-relative while FilesEdited scopes are recorded
+// verbatim from tool args (typically absolute), so both forms are compared
+// after normalizing scopes against workingDir (#5034). Directory entries
+// ("?? dir/") also match file scopes inside that directory (reverse
+// containment).
+func untrackedLineInPaths(line string, paths []string, workingDir string) bool {
 	p := strings.TrimSpace(strings.TrimPrefix(line, "??"))
+	p = strings.TrimSuffix(p, "/")
 	if p == "" {
 		return false
 	}
 	for _, scope := range paths {
-		if p == scope || strings.HasPrefix(p, scope+"/") {
+		s := filepath.Clean(scope)
+		if filepath.IsAbs(s) && workingDir != "" {
+			if rel, err := filepath.Rel(workingDir, s); err == nil && !strings.HasPrefix(rel, "..") {
+				s = rel
+			}
+		}
+		s = filepath.ToSlash(s)
+		// File scope matches itself or anything under it; directory entry
+		// (porcelain side, p) matches file scopes it contains.
+		if p == s || strings.HasPrefix(p, s+"/") || strings.HasPrefix(s, p+"/") {
 			return true
 		}
 	}

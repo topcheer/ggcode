@@ -93,7 +93,7 @@ func TestUntrackedLineInPaths(t *testing.T) {
 		{"M  a.go", false}, // not an untracked line
 	}
 	for _, tc := range cases {
-		if got := untrackedLineInPaths(tc.line, paths); got != tc.want {
+		if got := untrackedLineInPaths(tc.line, paths, ""); got != tc.want {
 			t.Errorf("untrackedLineInPaths(%q) = %v, want %v", tc.line, got, tc.want)
 		}
 	}
