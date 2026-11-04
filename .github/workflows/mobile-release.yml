@@ -110,6 +110,15 @@ jobs:
           channel: 'stable'
           cache: true
 
+      # Flutter 3.47 defaults to the runner's Java 25, which the project's
+      # Gradle 8.14.3 wrapper does not support (needs >=9.1.0). Pin JDK 17 -
+      # the stable Flutter/AGP combination - instead of bumping Gradle.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
