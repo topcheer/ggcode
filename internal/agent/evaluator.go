@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -80,7 +79,11 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 	a.adversarialReviewRounds++
 	a.mu.Unlock()
 
-	diff := a.collectAdversarialDiff()
+	// Scope the diff to the files this run edited: shared worktrees may hold
+	// other agents' in-flight edits, and the evaluator attributes every finding
+	// to "your diff" (#5018). Empty paths falls back to the full-worktree diff
+	// (e.g. edits made indirectly through run_command).
+	diff := a.collectAdversarialDiff(adversarialDiffPaths(a.WorkingDir(), runStats))
 	if strings.TrimSpace(diff) == "" {
 		debug.Log("evaluator", "empty diff, skipping review")
 		return ""
@@ -170,16 +173,61 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 	return verdict, findings
 }
 
-func (a *Agent) collectAdversarialDiff() string {
+// adversarialDiffPaths normalizes the files this run edited (RunStats.FilesEdited,
+// absolute or working-dir-relative) into repo-relative paths suitable for
+// `git diff -- <paths>`. Returns nil when nothing was recorded, which makes
+// collectAdversarialDiff fall back to the unscoped worktree diff.
+func adversarialDiffPaths(workingDir string, runStats *RunStats) []string {
+	if runStats == nil || len(runStats.FilesEdited) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(runStats.FilesEdited))
+	paths := make([]string, 0, len(runStats.FilesEdited))
+	for _, f := range runStats.FilesEdited {
+		if strings.TrimSpace(f) == "" {
+			continue
+		}
+		p := normalizeReconcilePath(workingDir, f)
+		if p == "" || p == "." || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+// adversarialPathInSet reports whether a `git status --porcelain` untracked
+// entry refers to a path this run edited. Git collapses a wholly new directory
+// to "?? dir/", so also match any edited path under that prefix.
+func adversarialPathInSet(workingDir, p string, edited map[string]bool) bool {
+	if edited[normalizeReconcilePath(workingDir, p)] {
+		return true
+	}
+	if strings.HasSuffix(p, "/") {
+		for e := range edited {
+			if strings.HasPrefix(e, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *Agent) collectAdversarialDiff(paths []string) string {
 	workingDir := a.WorkingDir()
 
 	cmdCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd, _, err := util.NewShellCommandContext(cmdCtx, "git diff HEAD")
-	if err != nil {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", "git diff HEAD")
+	// Direct argv (no shell) so paths containing spaces or shell metacharacters
+	// stay literal.
+	gitArgs := []string{"diff", "HEAD"}
+	if len(paths) > 0 {
+		gitArgs = append(gitArgs, "--")
+		gitArgs = append(gitArgs, paths...)
 	}
+	cmd := exec.CommandContext(cmdCtx, "git", gitArgs...)
 	cmd.Dir = workingDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -188,19 +236,29 @@ func (a *Agent) collectAdversarialDiff() string {
 	}
 	diff := string(out)
 
-	st, _, err := util.NewShellCommandContext(cmdCtx, "git status --porcelain")
-	if err == nil {
-		st.Dir = workingDir
-		if sOut, sErr := st.Output(); sErr == nil {
-			var untracked []string
-			for _, line := range strings.Split(string(sOut), "\n") {
-				if strings.HasPrefix(line, "??") {
-					untracked = append(untracked, line)
-				}
+	st := exec.CommandContext(cmdCtx, "git", "status", "--porcelain")
+	st.Dir = workingDir
+	if sOut, sErr := st.Output(); sErr == nil {
+		edited := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			edited[p] = true
+		}
+		var untracked []string
+		for _, line := range strings.Split(string(sOut), "\n") {
+			if !strings.HasPrefix(line, "??") {
+				continue
 			}
-			if len(untracked) > 0 {
-				diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
+			f := strings.TrimSpace(line[2:])
+			if f == "" {
+				continue
 			}
+			if len(edited) > 0 && !adversarialPathInSet(workingDir, f, edited) {
+				continue
+			}
+			untracked = append(untracked, line)
+		}
+		if len(untracked) > 0 {
+			diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
 		}
 	}
 	return diff
