@@ -6,16 +6,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // #4995: `git worktree add` without -b leaves the new worktree on a
-// detached HEAD when the target is a commit-ish (SHA, remote-tracking ref);
-// the failure only surfaces at push time ("destination ... not a full
-// refname"), costing a recovery round-trip. Two guards:
-//   - creation-time advisory: after a raw `git worktree add` succeeds, probe
-//     detach-prone targets and name the detached worktrees in the result
-//   - push-time hint: a failed `git push` from a detached HEAD gets the
-//     verified recovery recipe (switch -c + push, or HEAD:refs/heads/<b>)
+// detached HEAD when the target is a commit-ish (SHA, remote-tracking ref,
+// tag, refs/heads/<branch>); the failure only surfaces at push time
+// ("destination ... not a full refname"), costing a recovery round-trip.
+// Guards (tool layer, probe-grounded):
+//   - creation-time advisory: after a raw `git worktree add` succeeds
+//     (run_command sync path AND background job completion), probe
+//     two-positional forms and name the detached worktrees in the result
+//   - push-time hint: a failed `git push` from a detached HEAD (sync
+//     failure message OR background job failure) gets the verified
+//     recovery recipe (switch -c + push, or HEAD:refs/heads/<b>)
+//
+// Empirical ground truth recorded 2026-11-04 on git 2.56 (see
+// TestIssue4995_WorktreeAddAdvisoryOnFullyQualifiedLocalRef):
+//   detaches: SHA, origin/x, refs/remotes/*, refs/tags/*, refs/heads/*, tags,
+//             rev expressions (HEAD~1, x^0)
+//   attaches: short local branch name, path-only form, -b/-B forms
 
 // --- target-shape classification ---
 
@@ -24,9 +34,9 @@ func TestIssue4995_DetachingTargetShapes(t *testing.T) {
 		target string
 		want   bool
 	}{
-		{"refs/heads/main", false}, // fully-qualified local branch attaches
-		{"main", false},            // bare local branch name attaches
-		{"origin/main", true},      // remote-tracking ref detaches
+		{"refs/heads/main", true}, // git 2.56: fully-qualified local ref DETACHES (only short names attach)
+		{"main", false},           // ambiguous short name: local branch attaches, tag detaches - probe decides
+		{"origin/main", true},     // remote-tracking ref detaches
 		{"refs/remotes/origin/main", true},
 		{"refs/tags/v1.0", true},
 		{"82f35bd", true},                                  // abbreviated SHA
@@ -37,6 +47,23 @@ func TestIssue4995_DetachingTargetShapes(t *testing.T) {
 	for _, c := range cases {
 		if got := isDetachingWorktreeTarget(c.target); got != c.want {
 			t.Errorf("isDetachingWorktreeTarget(%q) = %v, want %v", c.target, got, c.want)
+		}
+	}
+}
+
+// The classifier feeds a PROBE, not a verdict: every two-positional form
+// without -b/-B/--detach is probe-worthy (the probe decides attached vs
+// detached on the real checkout).
+func TestIssue4995_EveryExplicitTargetIsProbeWorthy(t *testing.T) {
+	for _, cmd := range []string{
+		"git worktree add /tmp/x main",            // short local branch
+		"git worktree add /tmp/x refs/heads/main", // fully-qualified local ref
+		"git worktree add /tmp/x v1.0",            // tag name
+		"git worktree add /tmp/x origin/main",     // remote-tracking
+		"git worktree add /tmp/x 82f35bd",         // SHA
+	} {
+		if got := detectWorktreeAddSegments(cmd); len(got) == 0 {
+			t.Errorf("detectWorktreeAddSegments(%q) = none, want >=1 (probe-worthy)", cmd)
 		}
 	}
 }
@@ -82,6 +109,51 @@ func TestIssue4995_WorktreeAddAdvisoryOnRemoteRef(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, worktreeSafetyMarker) || !strings.Contains(res.Content, "wt-origin") {
 		t.Errorf("expected detached advisory for origin/main target, got:\n%s", res.Content)
+	}
+}
+
+// git 2.56 empirical correction: `git worktree add <path> refs/heads/<b>`
+// checks out DETACHED (only the short-name DWIM form attaches). The
+// classifier must probe this shape and the advisory must fire.
+func TestIssue4995_WorktreeAddAdvisoryOnFullyQualifiedLocalRef(t *testing.T) {
+	dir := initTestGitRepo(t)
+	branch := gitCurrentBranch(t, dir)
+
+	rc := RunCommand{WorkingDir: dir}
+	res, err := rc.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command":     "git worktree add " + filepath.Join(dir, "wt-fq") + " refs/heads/" + branch,
+		"description": "create worktree from fully-qualified local ref",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("worktree add failed (branch %q may be checked out elsewhere; fixture bug): %s", branch, res.Content)
+	}
+	if !strings.Contains(res.Content, worktreeSafetyMarker) {
+		t.Errorf("expected detached advisory for refs/heads/%s target, got:\n%s", branch, res.Content)
+	}
+}
+
+// A bare tag name (no refs/tags/ prefix) also detaches; classifier marks it
+// ambiguous (could be a branch), the probe must still catch it.
+func TestIssue4995_WorktreeAddAdvisoryOnTagName(t *testing.T) {
+	dir := initTestGitRepo(t)
+	gitIn(t, dir, "tag", "v1.0")
+
+	rc := RunCommand{WorkingDir: dir}
+	res, err := rc.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command":     "git worktree add " + filepath.Join(dir, "wt-tag") + " v1.0",
+		"description": "create worktree from tag",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("worktree add failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, worktreeSafetyMarker) {
+		t.Errorf("expected detached advisory for tag target, got:\n%s", res.Content)
 	}
 }
 
@@ -233,14 +305,21 @@ func TestIssue4995_ParserShapes(t *testing.T) {
 		}
 	}
 	safe := []string{
-		"git worktree add /tmp/x",                 // path only
-		"git worktree add /tmp/x topic",           // local branch
-		"git worktree add -b wt /tmp/x HEAD",      // -b
-		"git worktree add -B wt /tmp/x HEAD",      // -B
-		"git worktree add --detach /tmp/x HEAD",   // explicit detach
-		"git worktree add /tmp/x refs/heads/main", // qualified local branch
+		"git worktree add /tmp/x",               // path only
+		"git worktree add -b wt /tmp/x HEAD",    // -b
+		"git worktree add -B wt /tmp/x HEAD",    // -B
+		"git worktree add --detach /tmp/x HEAD", // explicit detach
 		"git status",
 		"go test ./...",
+	}
+	// These forms ATTACH but are still probe-worthy (probe, not verdict):
+	for _, cmd := range []string{
+		"git worktree add /tmp/x topic",           // short local branch - probe, stays silent when attached
+		"git worktree add /tmp/x refs/heads/main", // fully-qualified - DETACHES on git 2.56, must probe
+	} {
+		if got := detectWorktreeAddSegments(cmd); len(got) != 1 {
+			t.Errorf("detectWorktreeAddSegments(%q) = %v, want 1 (probe-worthy)", cmd, got)
+		}
 	}
 	for _, cmd := range safe {
 		if got := detectWorktreeAddSegments(cmd); len(got) != 0 {
@@ -266,4 +345,130 @@ func gitRevParseHead(t *testing.T, dir string) string {
 		t.Fatalf("rev-parse HEAD: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func gitCurrentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "" {
+		t.Fatal("no current branch (detached fixture repo?)")
+	}
+	return b
+}
+
+func firstCommandJobID(mgr *CommandJobManager) string {
+	for _, s := range mgr.List() {
+		return s.ID
+	}
+	return ""
+}
+
+// --- background job coverage (start_command/wait_command path; replaces
+// the #4996 agent-layer hook for start_command) ---
+
+func TestIssue4995_BackgroundJobWorktreeAddAdvisory(t *testing.T) {
+	dir := initTestGitRepo(t)
+	sha := gitRevParseHead(t, dir)
+
+	mgr := NewCommandJobManager(dir)
+	defer mgr.ShutdownAll(2 * time.Second)
+	sc := StartCommandTool{Manager: mgr}
+	res, err := sc.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command": "git worktree add " + filepath.Join(dir, "wt-bg") + " " + sha,
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("start_command failed: %s", res.Content)
+	}
+	// Wait for job completion, then read the snapshot back: the advisory
+	// must surface via the finished-job snapshot (wait_command/read path).
+	jobID := firstCommandJobID(mgr)
+	if jobID == "" {
+		t.Fatal("no job id found after start_command")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		snap, rerr := mgr.Read(jobID, 20, 0)
+		if rerr != nil {
+			t.Fatalf("read job: %v", rerr)
+		}
+		if snap.Status == CommandJobCompleted || snap.Status == CommandJobFailed {
+			if !strings.Contains(snap.SafetyHint, worktreeSafetyMarker) || !strings.Contains(snap.SafetyHint, "wt-bg") {
+				t.Fatalf("expected detached advisory in finished snapshot SafetyHint, got: %q (status %s)", snap.SafetyHint, snap.Status)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job did not finish in 15s (status %s)", snap.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestIssue4995_BackgroundJobPushFailureHint(t *testing.T) {
+	dir := initTestGitRepo(t)
+	bare := filepath.Join(dir, "origin.git")
+	gitIn(t, dir, "init", "--bare", bare)
+	gitIn(t, dir, "remote", "add", "origin", bare)
+	gitIn(t, dir, "worktree", "add", "--detach", filepath.Join(dir, "wt-bgpush"), "HEAD")
+	wt := filepath.Join(dir, "wt-bgpush")
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = wt
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %s: %v", name, args, string(out), err)
+		}
+	}
+	run("sh", "-c", "echo work > f.txt")
+	run("git", "add", "f.txt")
+	run("git", "commit", "-m", "work")
+
+	mgr := NewCommandJobManager(wt)
+	defer mgr.ShutdownAll(2 * time.Second)
+	sc := StartCommandTool{Manager: mgr}
+	res, err := sc.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command": "git push origin HEAD",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("start_command failed: %s", res.Content)
+	}
+	jobID := firstCommandJobID(mgr)
+	if jobID == "" {
+		t.Fatal("no job id found after start_command")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		snap, rerr := mgr.Read(jobID, 20, 0)
+		if rerr != nil {
+			t.Fatalf("read job: %v", rerr)
+		}
+		if snap.Status == CommandJobFailed {
+			if !strings.Contains(snap.SafetyHint, worktreeSafetyMarker) || !strings.Contains(snap.SafetyHint, "switch -c") {
+				t.Fatalf("expected push-recovery hint in finished snapshot SafetyHint, got: %q", snap.SafetyHint)
+			}
+			// The formatted output must surface it too.
+			if out := formatCommandJobSnapshot(snap, true); !strings.Contains(out, worktreeSafetyMarker) {
+				t.Fatalf("formatCommandJobSnapshot must surface SafetyHint, got:\n%s", out)
+			}
+			break
+		}
+		if snap.Status == CommandJobCompleted {
+			t.Fatal("push unexpectedly succeeded (fixture broken: bare origin accepted HEAD?)")
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job did not finish in 15s (status %s)", snap.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -172,13 +172,17 @@ func isShellEnvAssignment(tok string) bool {
 }
 
 // worktreeAddTarget analyzes one `git worktree add` command segment and
-// reports whether it is prone to leaving the new worktree on a detached
-// HEAD. Per #4995 the managed paths (enter_worktree's own -b flow, and
-// `git worktree add <path>` with no commit-ish) are safe; the trap is the
-// commit-ish forms without -b/-B: SHA targets, remote-tracking refs
-// (origin/<branch>), and any path-qualified ref that is not a local branch.
-// Explicit --detach is deliberate (read-only review worktrees) and is
-// deliberately NOT flagged.
+// reports whether it is worth probing for a detached HEAD. Per #4995 the
+// managed paths (enter_worktree's own -b flow, and `git worktree add
+// <path>` with no commit-ish) are safe; the trap is any explicit
+// commit-ish target without -b/-B. Empirically (git 2.56) EVERY such form
+// detaches except a SHORT LOCAL BRANCH NAME: SHAs, remote-tracking refs,
+// `refs/heads/<branch>` (!), tags, and rev expressions all land detached.
+// Since the shape alone cannot distinguish "short local branch name" from
+// "tag name", every two-positional form is probe-worthy and the post-run
+// symbolic-ref probe (not the string shape) decides whether the advisory
+// fires. Explicit --detach is deliberate (read-only review worktrees) and
+// is deliberately NOT flagged.
 type worktreeAddAnalysis struct {
 	prone bool
 	path  string
@@ -224,7 +228,7 @@ func analyzeWorktreeAdd(segment string) worktreeAddAnalysis {
 		switch {
 		case w == "-b" || w == "-B" || strings.HasPrefix(w, "-b") || strings.HasPrefix(w, "-B"):
 			hasB = true
-		case w == "--detach":
+		case w == "--detach" || strings.HasPrefix(w, "--detach="):
 			explicitDetach = true
 		case strings.HasPrefix(w, "--") && strings.Contains(w, "="):
 			// value-attached long flag (--checkout=... ), consumes nothing extra
@@ -233,18 +237,17 @@ func analyzeWorktreeAdd(segment string) worktreeAddAnalysis {
 			positionals = append(positionals, w)
 		}
 	}
-	if hasB {
+	if hasB || explicitDetach {
 		return worktreeAddAnalysis{}
 	}
-	// Detach forms per #4995:
+	// Detach decision per #4995 (verified against git 2.56):
 	// - explicit --detach: deliberate, never flagged.
 	// - one positional (path only): git checks out the current branch - safe.
-	// - two+ positionals: path + commit-ish. A local branch name attaches;
-	//   SHAs and remote-tracking refs detach. We cannot know every local
-	//   branch from the command string alone, so treat commit-ish targets
-	//   that are clearly NOT local-branch-shaped as prone, and let the
-	//   probe (post-run verification) settle ambiguous bare names.
-	_ = explicitDetach
+	// - two+ positionals (path + commit-ish): only a SHORT LOCAL BRANCH NAME
+	//   attaches; SHAs, remote-tracking refs, tags, rev expressions, and even
+	//   fully-qualified `refs/heads/<branch>` (!) detach. The string shape
+	//   cannot tell a local branch from a tag, so probe every two-positional
+	//   form and let the symbolic-ref result decide.
 	path := ""
 	if len(positionals) > 0 {
 		path = positionals[0]
@@ -252,41 +255,37 @@ func analyzeWorktreeAdd(segment string) worktreeAddAnalysis {
 	if len(positionals) < 2 {
 		return worktreeAddAnalysis{path: path}
 	}
-	target := positionals[len(positionals)-1]
-	if isDetachingWorktreeTarget(target) {
-		return worktreeAddAnalysis{prone: true, path: path}
-	}
-	return worktreeAddAnalysis{path: path}
+	return worktreeAddAnalysis{prone: true, path: path}
 }
 
-// isDetachingWorktreeTarget reports whether a `git worktree add <path>
-// <commit-ish>` target is expected to check out detached. Local branch names
-// attach; everything git treats as "not a branch" detaches: raw SHAs,
-// remote-tracking refs (origin/x), tag names, and ref expressions.
+// isDetachingWorktreeTarget answers "does this target STRING already prove
+// a detach". Everything that passes here detaches by shape alone: SHAs,
+// remote-tracking refs, tag-qualified refs, rev expressions - and, per git
+// 2.56 empirical verification (2026-11-04), fully-qualified
+// refs/heads/<branch> too (worktree add only attaches for the DWIM
+// short-name form). Short names stay ambiguous (local branch attaches, tag
+// detaches); the post-run probe settles them.
 func isDetachingWorktreeTarget(target string) bool {
-	// refs/heads/<branch> is the only ref form that attaches.
 	if strings.HasPrefix(target, "refs/heads/") {
-		return false
+		// Verified on git 2.56: `git worktree add <path> refs/heads/<b>`
+		// checks out DETACHED; only the short name form attaches.
+		return true
 	}
-	// refs/remotes/... (origin/main), refs/tags/..., HEAD~1, <sha>^0,
-	// and plain 7-40 hex SHAs all resolve to commits, not local branches.
 	if strings.HasPrefix(target, "refs/") {
 		return true
 	}
 	if isHexCommitSHA(target) {
 		return true
 	}
-	// Annotated/plain tag names and <rev>^<n> / <rev>~<n> expressions detach.
 	if strings.ContainsAny(target, "~^") {
 		return true
 	}
-	// Bare names are ambiguous (could be a local branch or a tag). Heuristic
-	// split: remote-tracking-shaped names (contains '/') like origin/main
-	// detach; a plain word could be a local branch and attaches - the
-	// post-run probe covers residual ambiguity for those.
+	// origin/main, feature/x - slash-containing bare names are not local
+	// branch names; they resolve as remote-tracking refs (or fail).
 	if strings.Contains(target, "/") {
 		return true
 	}
+	// Ambiguous short name: local branch (attaches) or tag (detaches).
 	return false
 }
 

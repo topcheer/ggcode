@@ -50,11 +50,14 @@ type CommandJob struct {
 	Lines        []string
 	ErrText      string
 
-	cancel  context.CancelFunc
-	done    chan struct{}
-	partial string
-	stdin   io.WriteCloser
-	mu      sync.Mutex
+	// safetyHint is set once at job completion (see waitForJob) and copied
+	// into snapshots by CommandJobManager.snapshot.
+	safetyHint string
+	cancel     context.CancelFunc
+	done       chan struct{}
+	partial    string
+	stdin      io.WriteCloser
+	mu         sync.Mutex
 }
 
 type CommandJobSnapshot struct {
@@ -71,6 +74,12 @@ type CommandJobSnapshot struct {
 	ErrText       string
 	Running       bool
 	TruncatedHead bool
+
+	// SafetyHint carries a post-completion safety advisory (#4995): a
+	// detached-HEAD worktree advisory for successful `git worktree add`
+	// jobs, or a push-recovery hint for failed `git push` jobs. Computed
+	// once when the job finishes; surfaced by formatCommandJobSnapshot.
+	SafetyHint string
 }
 
 type CommandJobManager struct {
@@ -492,8 +501,10 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 			}
 		}
 		job.finish(CommandJobFailed, errMsg)
+		job.safetyHint = detectDetachedWorktreePush(context.Background(), job.Command, strings.Join(job.Lines, "\n"), job.ErrText, m.workingDir)
 	default:
 		job.finish(CommandJobCompleted, "")
+		job.safetyHint = verifyWorktreeAddResult(context.Background(), job.Command, m.workingDir)
 	}
 
 	m.mu.Lock()
@@ -583,6 +594,7 @@ func (m *CommandJobManager) snapshot(job *CommandJob) CommandJobSnapshot {
 		ErrText:       job.ErrText,
 		Running:       job.Status == CommandJobRunning,
 		TruncatedHead: false,
+		SafetyHint:    job.safetyHint,
 	}
 }
 
@@ -755,6 +767,9 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 	}
 	if snapshot.ErrText != "" {
 		sb.WriteString(fmt.Sprintf("Error: %s\n", util.StripANSI(snapshot.ErrText)))
+	}
+	if snapshot.SafetyHint != "" {
+		sb.WriteString("\n" + snapshot.SafetyHint + "\n")
 	}
 	if includeLines {
 		sb.WriteString("Recent output:\n")
