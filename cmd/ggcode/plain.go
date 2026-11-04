@@ -26,8 +26,21 @@ import (
 )
 
 func isDumbTerminal() bool {
-	term := strings.TrimSpace(os.Getenv("TERM"))
-	return term == "" || strings.EqualFold(term, "dumb")
+	return termLooksDumb(strings.TrimSpace(os.Getenv("TERM")), runtime.GOOS == "windows")
+}
+
+// termLooksDumb decides whether the TERM value signals a dumb terminal.
+// Unix shells always set TERM, so an empty value there means a dumb or
+// non-standard environment. Windows terminals (cmd, PowerShell, Windows
+// Terminal) do not set TERM by default, so an empty TERM there is normal
+// rather than a dumb-terminal signal — treating it as dumb forced every
+// Windows user into the linear plain frontend (regression from #4964's
+// detection). Only an explicit TERM=dumb opts Windows out of the TUI.
+func termLooksDumb(term string, isWindows bool) bool {
+	if strings.EqualFold(term, "dumb") {
+		return true
+	}
+	return !isWindows && term == ""
 }
 
 func plainApproval(_ context.Context, toolName, _ string) permission.Decision {
