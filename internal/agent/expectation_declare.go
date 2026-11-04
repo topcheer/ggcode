@@ -49,7 +49,10 @@ func expectCheckPositive(check string) bool {
 }
 
 func evaluateExpectCheck(check, resultContent string, isError bool) (passed bool, detail string) {
-	structuredFail := foresightResultFailureRe.MatchString(resultContent)
+	// Failure signal comes from the structured isError flag plus the bounded
+	// status envelope only (#5023): searching file contents for "panic:"-like
+	// markers must not make a successful command count as failed.
+	structuredFail := foresightResultFailureSignal(resultContent, isError)
 	switch check {
 	case "exit=0":
 		if isError || structuredFail {
