@@ -17,19 +17,50 @@ var foresightEmptyPredRe = regexp.MustCompile(`(?i)(?:should|will|must|expect)\s
 
 var foresightFailurePredRe = regexp.MustCompile(`(?i)(?:should|will|might|may|expect)\s+(?:it\s+to\s+)?(?:fail|error|not\s+(?:work|exist|be\s+found|compile|pass)|throw|crash|return\s+(?:an?\s+)?error|be\s+(?:missing|absent|null|undefined))`)
 
-var foresightResultFailureRe = regexp.MustCompile(`(?i)(?:exit\s+code\s+[1-9]|exit\s+status\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|panic:|fatal:|traceback\s+\(|compilation\s+failed|\bIsError\b|tool_result_error)`)
+// Line-start anchored: a real status line ("panic: ...", "exit code 1", ...)
+// begins with the marker. Grep hits carry a file:line prefix, so their
+// markers are mid-line and never match (#5023).
+var foresightResultFailureRe = regexp.MustCompile(`(?im)^(?:exit\s+code\s+[1-9]|exit\s+status\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|panic:|fatal:|traceback\s+\(|compilation\s+failed|tool_result_error)`)
 
-var foresightResultEmptyRe = regexp.MustCompile(`(?i)^(?:$|no\s+(?:results?|matches?|content|output|data)\s+found$|(?:is\s+)?empty$|0\s+(?:bytes|lines|matches|results)$|nothing\s+(?:found|returned|matched)$)`)
+var foresightResultEmptyRe = regexp.MustCompile(`(?im)^(?:no\s+(?:results?|matches?|content|output|data)\s+found$|(?:is\s+)?empty$|0\s+(?:bytes|lines|matches|results)$|nothing\s+(?:found|returned|matched)$)`)
+
+// foresightResultFailureSignal reports whether a tool result encodes failure.
+// isError is the authoritative structured signal; the text failure markers are
+// only trusted inside the bounded status envelope (the first non-empty line,
+// where tool status headers live) -- never against the full body. Matching the
+// full body made any grep for "panic:"/"fatal:"/IsError trip the check on its
+// own search hits, a content-based false positive on an extremely common
+// operation (#5023).
+func foresightResultFailureSignal(content string, isError bool) bool {
+	if isError {
+		return true
+	}
+	first := firstContentLine(content)
+	if first == "" {
+		return false
+	}
+	return foresightResultFailureRe.MatchString(first)
+}
+
+// firstContentLine returns the first non-empty (trimmed) line of content.
+func firstContentLine(content string) string {
+	for _, ln := range strings.Split(content, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
+}
 
 func foresightResultEmpty(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return true
 	}
-	if len(trimmed) > 80 {
-
-		return false
-	}
+	// Line-aware (#5023): with (?m) anchors, any line that is an explicit
+	// empty-signal ("No matches found", "0 results", ...) marks the result as
+	// empty even inside multi-line output (e.g. "searched 12 files\nNo matches
+	// found"), so a declared >=1_match no longer passes with zero matches.
 	return foresightResultEmptyRe.MatchString(trimmed)
 }
 
@@ -231,7 +262,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 		)
 	}
 
-	actualOK := !isError && !foresightResultFailureRe.MatchString(resultContent)
+	actualOK := !foresightResultFailureSignal(resultContent, isError)
 	actualEmpty := foresightResultEmpty(resultContent)
 
 	mismatch := false
