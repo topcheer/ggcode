@@ -187,6 +187,15 @@ func stmtIsTerminating(s ast.Stmt) bool {
 		return selectTerminates(v)
 	case *ast.SwitchStmt:
 		return switchTerminates(v)
+	case *ast.ExprStmt:
+		// #5021: the Go spec lists a call to the builtin panic as a
+		// terminating statement; the warning text already promises it.
+		call, ok := v.X.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		ident, ok := call.Fun.(*ast.Ident)
+		return ok && ident.Name == "panic"
 	}
 	return false
 }
