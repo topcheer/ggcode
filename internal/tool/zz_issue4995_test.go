@@ -27,30 +27,6 @@ import (
 //             rev expressions (HEAD~1, x^0)
 //   attaches: short local branch name, path-only form, -b/-B forms
 
-// --- target-shape classification ---
-
-func TestIssue4995_DetachingTargetShapes(t *testing.T) {
-	cases := []struct {
-		target string
-		want   bool
-	}{
-		{"refs/heads/main", true}, // git 2.56: fully-qualified local ref DETACHES (only short names attach)
-		{"main", false},           // ambiguous short name: local branch attaches, tag detaches - probe decides
-		{"origin/main", true},     // remote-tracking ref detaches
-		{"refs/remotes/origin/main", true},
-		{"refs/tags/v1.0", true},
-		{"82f35bd", true},                                  // abbreviated SHA
-		{"82f35bdabc123def456abc123def456abc123def", true}, // full SHA
-		{"HEAD~1", true},                                   // rev expression
-		{"main^0", true},
-	}
-	for _, c := range cases {
-		if got := isDetachingWorktreeTarget(c.target); got != c.want {
-			t.Errorf("isDetachingWorktreeTarget(%q) = %v, want %v", c.target, got, c.want)
-		}
-	}
-}
-
 // The classifier feeds a PROBE, not a verdict: every two-positional form
 // without -b/-B/--detach is probe-worthy (the probe decides attached vs
 // detached on the real checkout).

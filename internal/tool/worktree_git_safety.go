@@ -258,52 +258,6 @@ func analyzeWorktreeAdd(segment string) worktreeAddAnalysis {
 	return worktreeAddAnalysis{prone: true, path: path}
 }
 
-// isDetachingWorktreeTarget answers "does this target STRING already prove
-// a detach". Everything that passes here detaches by shape alone: SHAs,
-// remote-tracking refs, tag-qualified refs, rev expressions - and, per git
-// 2.56 empirical verification (2026-11-04), fully-qualified
-// refs/heads/<branch> too (worktree add only attaches for the DWIM
-// short-name form). Short names stay ambiguous (local branch attaches, tag
-// detaches); the post-run probe settles them.
-func isDetachingWorktreeTarget(target string) bool {
-	if strings.HasPrefix(target, "refs/heads/") {
-		// Verified on git 2.56: `git worktree add <path> refs/heads/<b>`
-		// checks out DETACHED; only the short name form attaches.
-		return true
-	}
-	if strings.HasPrefix(target, "refs/") {
-		return true
-	}
-	if isHexCommitSHA(target) {
-		return true
-	}
-	if strings.ContainsAny(target, "~^") {
-		return true
-	}
-	// origin/main, feature/x - slash-containing bare names are not local
-	// branch names; they resolve as remote-tracking refs (or fail).
-	if strings.Contains(target, "/") {
-		return true
-	}
-	// Ambiguous short name: local branch (attaches) or tag (detaches).
-	return false
-}
-
-// isHexCommitSHA reports whether s is a 7-40 char lowercase/uppercase hex
-// object name (full or abbreviated commit SHA).
-func isHexCommitSHA(s string) bool {
-	if len(s) < 4 || len(s) > 40 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
 // detectWorktreeAddSegments returns the segments of cmd that are `git
 // worktree add` invocations with a detach-prone target shape.
 func detectWorktreeAddSegments(cmd string) []worktreeAddAnalysis {
