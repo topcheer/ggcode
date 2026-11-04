@@ -705,10 +705,6 @@ func rollbackPlans(written []PlannedFileEdit) error {
 	return firstErr
 }
 
-func formatMultiFileReadFileBlock(path, text string) string {
-	return formatMultiFileReadFileBlockWindow(path, text, false)
-}
-
 func formatMultiFileReadFileBlockWindow(path, text string, cont bool) string {
 	if cont {
 		return fmt.Sprintf("=== FILE: %s (cont.) ===\n%s[end file]\n", path, ensureTrailingNewline(text))
