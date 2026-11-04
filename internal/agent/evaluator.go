@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -80,7 +80,10 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 	a.adversarialReviewRounds++
 	a.mu.Unlock()
 
-	diff := a.collectAdversarialDiff()
+	workingDir := a.WorkingDir()
+	paths := adversarialDiffPaths(workingDir, runStats)
+	scoped := len(paths) > 0
+	diff := a.collectAdversarialDiff(paths...)
 	if strings.TrimSpace(diff) == "" {
 		debug.Log("evaluator", "empty diff, skipping review")
 		return ""
@@ -95,9 +98,19 @@ func (a *Agent) checkAdversarialReviewGate(ctx context.Context, runStats *RunSta
 		findings = findings[:adversarialMaxFindingsBytes] + "\n… (truncated)"
 	}
 	debug.Log("evaluator", "FAIL verdict, injecting findings (round %d/%d)", rounds+1, adversarialReviewMaxRounds)
+	return adversarialReviewFindingsMessage(findings, scoped, rounds+1)
+}
+
+func adversarialReviewFindingsMessage(findings string, scoped bool, round int) string {
+	var scope string
+	if scoped {
+		scope = "An independent evaluator agent (fresh context, did not write your changes) reviewed the diff of the files you edited in this run (git diff HEAD -- <your files>) against the original task and returned VERDICT: FAIL with these findings:"
+	} else {
+		scope = "An independent evaluator agent (fresh context, did not write your changes) reviewed the full uncommitted worktree diff (git diff HEAD, including possible in-flight edits by other agents on a shared worktree) against the original task and returned VERDICT: FAIL with these findings. Findings on files you did not edit this run may belong to other agents; do not revert their work — state why they are not yours to fix."
+	}
 	return fmt.Sprintf(
-		"An independent evaluator agent (fresh context, did not write your changes) reviewed your diff against the original task and returned VERDICT: FAIL with these findings:\n\n%s\n\nFix each concrete finding, or explicitly state why it does not apply. This is adversarial review round %d of %d; after the last round you must either fix or justify every finding yourself.",
-		findings, rounds+1, adversarialReviewMaxRounds)
+		"%s\n\n%s\n\nFix each concrete finding, or explicitly state why it does not apply. This is adversarial review round %d of %d; after the last round you must either fix or justify every finding yourself.",
+		scope, findings, round, adversarialReviewMaxRounds)
 }
 
 func (a *Agent) runAdversarialEvaluator(ctx context.Context, taskPrompt, diff string) (verdict, findings string) {
@@ -170,17 +183,14 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 	return verdict, findings
 }
 
-func (a *Agent) collectAdversarialDiff() string {
+func (a *Agent) collectAdversarialDiff(paths ...string) string {
 	workingDir := a.WorkingDir()
 
 	cmdCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd, _, err := util.NewShellCommandContext(cmdCtx, "git diff HEAD")
-	if err != nil {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", "git diff HEAD")
-	}
-	cmd.Dir = workingDir
+	diffArgs := append([]string{"diff", "HEAD"}, paths...)
+	cmd := exec.CommandContext(cmdCtx, "git", append([]string{"-C", workingDir}, diffArgs...)...)
 	out, err := cmd.Output()
 	if err != nil {
 		debug.Log("evaluator", "git diff failed: %v", err)
@@ -188,20 +198,54 @@ func (a *Agent) collectAdversarialDiff() string {
 	}
 	diff := string(out)
 
-	st, _, err := util.NewShellCommandContext(cmdCtx, "git status --porcelain")
-	if err == nil {
-		st.Dir = workingDir
-		if sOut, sErr := st.Output(); sErr == nil {
-			var untracked []string
-			for _, line := range strings.Split(string(sOut), "\n") {
-				if strings.HasPrefix(line, "??") {
-					untracked = append(untracked, line)
-				}
+	statusArgs := []string{"status", "--porcelain"}
+	if stOut, stErr := runGitCommandWithTimeout(gitCommand(workingDir, statusArgs...), 15*time.Second); stErr == nil {
+		var untracked []string
+		for _, line := range strings.Split(stOut, "\n") {
+			if !strings.HasPrefix(line, "??") {
+				continue
 			}
-			if len(untracked) > 0 {
-				diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
+			entry := strings.TrimSpace(line[2:])
+			if entry == "" {
+				continue
 			}
+			if len(paths) == 0 || adversarialPathInScope(entry, paths) {
+				untracked = append(untracked, line)
+			}
+		}
+		if len(untracked) > 0 {
+			diff += "\n# Untracked files (contents not shown):\n" + strings.Join(untracked, "\n")
 		}
 	}
 	return diff
+}
+
+func adversarialDiffPaths(workingDir string, runStats *RunStats) []string {
+	if runStats == nil || len(runStats.FilesEdited) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(runStats.FilesEdited))
+	var paths []string
+	for _, f := range runStats.FilesEdited {
+		p := filepath.ToSlash(normalizeReconcilePath(workingDir, f))
+		if p == "" || p == "." || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func adversarialPathInScope(entry string, paths []string) bool {
+	entry = strings.TrimSuffix(entry, "/")
+	if entry == "" {
+		return false
+	}
+	for _, p := range paths {
+		if entry == p || strings.HasPrefix(entry, p+"/") || strings.HasPrefix(p, entry+"/") {
+			return true
+		}
+	}
+	return false
 }
