@@ -105,27 +105,11 @@ $pricingShape = ($sub.pricing | ConvertTo-Json -Depth 12 -Compress)
 if (-not $pricingShape) { $pricingShape = "<absent>" }
 if ($pricingShape.Length -gt 2000) { $pricingShape = $pricingShape.Substring(0, 2000) + "...(truncated)" }
 Write-Host "pricing shape (raw, pre-normalize): $pricingShape"
-
-$script:priceIdFixCount = 0
-function Normalize-PriceId($node, [string]$path) {
-  if ($null -eq $node) { return }
-  if ($node -is [System.Management.Automation.PSCustomObject]) {
-    foreach ($p in @($node.PSObject.Properties)) {
-      if ($p.Name -eq "priceId" -and $p.Value -is [string] -and $p.Value -ne "0") {
-        Write-Host "normalizing priceId '$($p.Value)' -> '0' at $($path).priceId"
-        $p.Value = "0"
-        $script:priceIdFixCount++
-      } else {
-        Normalize-PriceId $p.Value "$path.$($p.Name)"
-      }
-    }
-  } elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
-    $i = 0
-    foreach ($el in @($node)) { Normalize-PriceId $el "$path[$i]"; $i++ }
-  }
-}
-Normalize-PriceId $sub "submission"
-Write-Host "priceId normalization complete ($($script:priceIdFixCount) fix(es) applied)"
+# Run 41978717488 proved the normalization premise wrong in both directions:
+# 'Base' was rewritten to '0' and ASC rejected it with
+# "'0' is not a valid 'PriceId' value" (target submissionRequest.pricing.priceId).
+# 'Base' IS the canonical Store priceId; keep it untouched. The dump lines
+# above stay as diagnostics for any future submission-rejection debugging.
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
