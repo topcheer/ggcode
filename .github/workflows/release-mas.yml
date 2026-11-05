@@ -11,7 +11,7 @@ on:
         default: "v0.0.0"
 
 concurrency:
-  group: release-mas-b4-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -23,6 +23,7 @@ permissions:
   # publisher step is ever added.
 
 jobs:
+  verify:
   build-desktop-darwin:
     name: Build desktop macOS
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -30,8 +31,8 @@ jobs:
     permissions:
       contents: write
     env:
-      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
-      GGCODE_COMMIT: ${{ github.sha }}
+      GGCODE_VERSION: v1.3.274
+      GGCODE_COMMIT: bisect
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
     steps:
@@ -52,5 +53,50 @@ jobs:
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
-      - name: bisect-cut-ok
+      - name: Prepare Apple signing credentials
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "${APPLE_DEVELOPER_ID_P12}" && -n "${APPLE_API_KEY_P8}" ]]; then
+            echo "APPLE_SIGN_IDENTITY=Developer ID Application: Junjun Zhang (EGZFS7M525)" >> "${GITHUB_ENV}"
+            P12_FILE="${RUNNER_TEMP}/cert.p12"
+            printf '%s' "${APPLE_DEVELOPER_ID_P12}" | base64 -d > "${P12_FILE}"
+            echo "APPLE_DEVELOPER_ID_P12_PATH=${P12_FILE}" >> "${GITHUB_ENV}"
+            printf '%s\n' "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
+
+            KEY_FILE="${RUNNER_TEMP}/AuthKey.p8"
+            printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > "${KEY_FILE}"
+            echo "APPLE_API_KEY_PATH=${KEY_FILE}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_KEY_ID=${APPLE_API_KEY_ID}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_ISSUER_ID=${APPLE_API_ISSUER_ID}" >> "${GITHUB_ENV}"
+            echo "Apple signing credentials prepared"
+          else
+            echo "No Apple signing credentials found — building unsigned"
+          fi
+      - name: Build desktop macOS DMG
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-darwin.sh
+          ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin
+          path: |
+            dist/*.dmg
+            dist/ggcode-desktop_*_darwin_*
+
+      # ------------------------------------------------------------------
+      # Mac App Store submission (same trigger/credentials flow as the iOS
+      # TestFlight lane): builds a sandboxed universal .app with the MAS
+      # bundle id, embeds the provisioning profile, signs with the Apple
+      # Distribution identity, packages with the Mac Installer identity and
+      # uploads via altool. Runs only when MAS secrets are configured.
+      # ------------------------------------------------------------------
+      - name: bisect-ok
         run: echo ok
