@@ -9,8 +9,12 @@ on:
 permissions:
   contents: write
 jobs:
-  b1:
-    runs-on: ubuntu-latest
+  b2:
+    runs-on: macos-15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v6
-      - run: echo "b1 checkout-v6 ok"
+      - run: echo "b2 macos+oidc-job-level ok"
