@@ -36,6 +36,14 @@ if ($ResumeSubmissionId) {
   $subId = $ResumeSubmissionId
   Write-Host "resuming explicit submission $subId (-ResumeSubmissionId)"
   $sub = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId"
+} elseif ($app.pendingApplicationSubmission) {
+  # Store API surfaces a blocked draft as "pendingApplicationSubmission" on
+  # the application resource (not "inFlightSubmissionId") - verified against
+  # the app JSON logged by run 41968716223. Resuming it instead of creating
+  # avoids the 409 Conflict create-submission rejects with.
+  $subId = $app.pendingApplicationSubmission.id
+  Write-Host "pending submission $subId found; resuming it instead of creating a new one"
+  $sub = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId"
 } elseif ($app.inFlightSubmissionId) {
   $subId = $app.inFlightSubmissionId
   Write-Host "in-flight submission $subId found; resuming it instead of creating a new one"
