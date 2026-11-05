@@ -307,11 +307,12 @@ jobs:
           security find-certificate -c "Apple Root CA" -p /System/Library/Keychains/SystemRootCertificates.keychain \
             > "${RUNNER_TEMP}/appleroot.pem" 2>/dev/null || true
           if [[ -s "${RUNNER_TEMP}/appleroot.pem" ]]; then
+            # Import only. Do NOT use add-trusted-cert here: on a headless
+            # runner it can hang the step waiting for a GUI trust prompt
+            # (run 42013525611: prepare stalled 12+ min on exactly this).
+            # The Apple Root CA is already trusted via the system trust
+            # domain; user-domain trust settings cannot override it anyway.
             security import "${RUNNER_TEMP}/appleroot.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign > /dev/null
-            # Import is not trust: the anchor has to be marked as a trusted
-            # root or the chain terminates at an "untrusted self-signed root".
-            security add-trusted-cert -r trustRoot -k "${KEYCHAIN}" "${RUNNER_TEMP}/appleroot.pem" \
-              || echo "::warning::add-trusted-cert failed; relying on system trust domain"
           else
             echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
           fi
