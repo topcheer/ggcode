@@ -226,6 +226,13 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 // to repo-root-relative slash form so either spelling matches. Directory
 // entries ("?? dir/") also match file-level scopes inside that directory
 // (reverse containment).
+// #5086: porcelain paths are relative to the REPO ROOT even when the working
+// directory is a repo subdirectory, so normalization must anchor at
+// `git rev-parse --show-toplevel`, not workingDir - anchoring at a subdir
+// turned "sub/file.go" into a phantom <subdir>/sub/file.go that no scope
+// matched and agent-created files escaped adversarial review. Outside a git
+// repo (or if rev-parse fails) we fall back to the workingDir anchor, which
+// preserves the pre-#5086 frame (root-relative == cwd-relative there).
 func untrackedLineInPaths(workingDir, line string, paths []string) bool {
 	pRaw := strings.TrimSpace(strings.TrimPrefix(line, "??"))
 	if pRaw == "" {
@@ -233,9 +240,10 @@ func untrackedLineInPaths(workingDir, line string, paths []string) bool {
 	}
 	isDirEntry := strings.HasSuffix(pRaw, "/")
 	p := strings.TrimSuffix(pRaw, "/")
-	p = filepath.ToSlash(normalizeReconcilePath(workingDir, p))
+	root := gitRepoRoot(workingDir)
+	p = canonicalReconcilePath(root, p)
 	for _, scope := range paths {
-		s := strings.TrimSuffix(filepath.ToSlash(normalizeReconcilePath(workingDir, scope)), "/")
+		s := strings.TrimSuffix(filepath.ToSlash(canonicalReconcilePath(root, scope)), "/")
 		if p == s || strings.HasPrefix(p, s+"/") {
 			return true
 		}
@@ -244,4 +252,58 @@ func untrackedLineInPaths(workingDir, line string, paths []string) bool {
 		}
 	}
 	return false
+}
+
+// gitRepoRoot resolves the repo toplevel for path-frame anchoring, falling
+// back to workingDir when git is unavailable or the directory is not a repo.
+func gitRepoRoot(workingDir string) string {
+	cmd := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
+	if out, err := runGitCommandWithTimeout(cmd, gitDiffTimeout); err == nil {
+		if r := strings.TrimSpace(out); r != "" {
+			return r
+		}
+	}
+	return workingDir
+}
+
+// canonicalReconcilePath normalizes path against the repo-root frame and then
+// resolves symlinked absolute results to their canonical form: git rev-parse
+// emits the canonical root (e.g. /private/var on macOS) while tool-arg scopes
+// may spell the same file through a symlinked prefix (e.g. /var), and Rel
+// between the two spellings escapes, reintroducing the frame mismatch.
+func canonicalReconcilePath(root, path string) string {
+	p := normalizeReconcilePath(root, path)
+	if filepath.IsAbs(p) {
+		// EvalSymlinks fails on files that do not exist yet (typical for
+		// agent-created untracked targets), so canonicalize the longest
+		// existing ancestor and rejoin the remainder (#5086).
+		p = evalCanonicalBestEffort(p)
+		// Re-relativize the canonical absolute result against the canonical
+		// root frame; git rev-parse emits the canonical root (e.g. /private/var
+		// on macOS) while scope spellings may go through a symlinked prefix
+		// (e.g. /var), and plain Rel between the two spellings escapes.
+		if cr, err := filepath.EvalSymlinks(root); err == nil {
+			if rel, rerr := filepath.Rel(cr, p); rerr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return filepath.ToSlash(p)
+}
+
+// evalCanonicalBestEffort resolves symlinks for the deepest existing ancestor
+// of p and rejoins the non-existent remainder verbatim.
+func evalCanonicalBestEffort(p string) string {
+	parts := strings.Split(filepath.Clean(p), string(filepath.Separator))
+	for i := len(parts); i >= 2; i-- {
+		prefix := string(filepath.Separator) + filepath.Join(parts[1:i]...)
+		if c, err := filepath.EvalSymlinks(prefix); err == nil {
+			rest := parts[i:]
+			if len(rest) == 0 {
+				return c
+			}
+			return filepath.Join(append([]string{c}, rest...)...)
+		}
+	}
+	return p
 }
