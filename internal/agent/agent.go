@@ -2176,40 +2176,41 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 
-			if isAgentRetryableLLMError(err) && agentLLMRetries < agentLLMRetryLimit() {
-
-				// Rate-limited calls get a LONG fixed-interval retry that is
-				// independent of the short-backoff counter: a coding-plan window
-				// resets on the hour scale, so three 5-15s backoffs would always
-				// give up right before it could recover. Retry in place at the
-				// configured interval (default 5m) until success or cancel, and
-				// tell the user how to switch provider/endpoint meanwhile.
-				if isRateLimitedLLMError(err) {
-					interval, maxAttempts := rateLimitRetryPolicy()
-					if maxAttempts > 0 && rateLimitRetries >= maxAttempts {
-						debug.Log("agent", "rate-limit retry budget exhausted (%d/%d): %v", rateLimitRetries, maxAttempts, err)
+			// Rate-limited calls get a LONG fixed-interval retry that is
+			// independent of the short-backoff counter AND of the English-keyword
+			// retryable gate below: GLM window-limit errors arrive in Chinese and
+			// would never reach a branch nested inside that gate. ClassifyLLMError
+			// already recognizes them. Retry in place at the configured interval
+			// (default 5m) until success or cancel, and tell the user how to
+			// switch provider/endpoint meanwhile.
+			if isRateLimitedLLMError(err) {
+				interval, maxAttempts := rateLimitRetryPolicy()
+				if maxAttempts > 0 && rateLimitRetries >= maxAttempts {
+					debug.Log("agent", "rate-limit retry budget exhausted (%d/%d): %v", rateLimitRetries, maxAttempts, err)
+				} else {
+					rateLimitRetries++
+					if rateLimitRetries == 1 {
+						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+							Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying this call every %s until it recovers (Ctrl+C to stop). "+
+								"This may be a short throttle or a plan window quota that resets later. "+
+								"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", interval)})
 					} else {
-						rateLimitRetries++
-						if rateLimitRetries == 1 {
-							onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-								Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying this call every %s until it recovers (Ctrl+C to stop). "+
-									"This may be a short throttle or a plan window quota that resets later. "+
-									"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", interval)})
-						} else {
-							onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-								Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, interval)})
-						}
-						debug.Log("agent", "rate limited (attempt %d, max %d), retrying in %v: %v",
-							rateLimitRetries, maxAttempts, interval, err)
-						select {
-						case <-time.After(interval):
-						case <-ctx.Done():
-							onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-							return ctx.Err()
-						}
-						continue
+						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+							Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, interval)})
 					}
+					debug.Log("agent", "rate limited (attempt %d, max %d), retrying in %v: %v",
+						rateLimitRetries, maxAttempts, interval, err)
+					select {
+					case <-time.After(interval):
+					case <-ctx.Done():
+						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+						return ctx.Err()
+					}
+					continue
 				}
+			}
+
+			if isAgentRetryableLLMError(err) && agentLLMRetries < agentLLMRetryLimit() {
 
 				agentLLMRetries++
 
