@@ -732,7 +732,18 @@ func hasSkipMarkersInCommands(commands []string) bool {
 		if isSkipMarkerRemovalCommand(cmd) || isReadOnlySearchCommand(cmd) {
 			continue
 		}
-		lower := strings.ToLower(cmd)
+		// #5101: for REPORT verbs (gh/hub/glab/curl...) markers merely QUOTED
+		// into message bodies (gh issue create --body "... @pytest.mark.skip
+		// ...") are references, not additions - blank quoted segments before
+		// the substring checks. All other verbs keep the legacy raw scan:
+		// write-shaped tools (echo/printf/sed -i/tee) can introduce real
+		// markers with quoted text, and only shell-level `>` is not the only
+		// write channel (sed -i writes via args).
+		effective := cmd
+		if leadingReportVerb(cmd) {
+			effective = stripQuotedReferences(cmd)
+		}
+		lower := strings.ToLower(effective)
 		if containsBoundarySkipMarker(lower) {
 			return true
 		}
@@ -745,12 +756,121 @@ func hasSkipMarkersInCommands(commands []string) bool {
 
 			escapedMarker := strings.ReplaceAll(marker, "(", "\\(")
 			escapedMarker = strings.ReplaceAll(escapedMarker, ".", "\\.")
-			if strings.Contains(cmd, escapedMarker) {
+			if strings.Contains(effective, escapedMarker) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// reportQuotedVerbs: commands whose quoted arguments are messages/
+// payloads sent to external services (issues, PRs, HTTP bodies) - markers
+// quoted there are references to skip markers, not additions to code.
+var reportQuotedVerbs = map[string]bool{
+	"gh": true, "hub": true, "glab": true, "tea": true, "gitea": true,
+	"curl": true, "wget": true,
+}
+
+func leadingReportVerb(cmd string) bool {
+	fields := strings.Fields(cmd)
+	i := 0
+	for i < len(fields) && (strings.Contains(fields[i], "=") || fields[i] == "sudo" || fields[i] == "command" || fields[i] == "env") {
+		i++
+	}
+	if i >= len(fields) {
+		return false
+	}
+	return reportQuotedVerbs[strings.ToLower(filepath.Base(fields[i]))]
+}
+
+// stripQuotedReferences (#5101) replaces quoted literal segments with
+// same-length space filler so position-sensitive checks keep alignment,
+// except: (a) segments that are the target of a shell redirection - the
+// shell writes that text into a file, a real marker injection; (b) $( )
+// command-substitution bodies inside double quotes - executed content,
+// kept conservatively so the detector cannot be blinded by nesting.
+// Unterminated quotes treat the rest as literal (consistent with the
+// #5094 scan: malformed input degrades to no filtering).
+func stripQuotedReferences(cmd string) string {
+	var b strings.Builder
+	b.Grow(len(cmd))
+
+	isRedirectTarget := func(end int) bool {
+		// #5101 heuristic: a '>' redirection AFTER the segment within the
+		// same command (echo/printf '...' > file.go) makes the quoted text
+		// write-shaped - the shell writes it into the target file. Scan
+		// stops at command boundaries (; | & newline). Conservative
+		// residual: "gh ... --body '...' > /dev/null" also fires.
+		for k := end; k < len(cmd); k++ {
+			switch cmd[k] {
+			case ' ', '\t':
+				continue
+			case '>':
+				return true
+			default:
+				return false
+			}
+		}
+		return false
+	}
+
+	i := 0
+	for i < len(cmd) {
+		c := cmd[i]
+		if c == '\\' && i+1 < len(cmd) {
+			b.WriteString(cmd[i : i+2])
+			i += 2
+			continue
+		}
+		if c != '\'' && c != '"' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		quote := c
+		start := i
+		end := len(cmd) // unterminated: rest of the string is the segment
+		for j := i + 1; j < len(cmd); j++ {
+			if quote == '\'' {
+				if cmd[j] == '\'' {
+					end = j
+					break
+				}
+				continue
+			}
+			if cmd[j] == '\\' && j+1 < len(cmd) {
+				j++
+				continue
+			}
+			if cmd[j] == '"' {
+				end = j
+				break
+			}
+			if cmd[j] == '$' && j+1 < len(cmd) && cmd[j+1] == '(' {
+				depth := 1
+				k := j + 2
+				for k < len(cmd) && depth > 0 {
+					if cmd[k] == '(' {
+						depth++
+					} else if cmd[k] == ')' {
+						depth--
+					}
+					k++
+				}
+				j = k - 1 // scan resumes past ')'; for-loop j++ re-enters at ')' successor
+			}
+		}
+		if isRedirectTarget(end + 1) {
+			b.WriteString(cmd[start:min(end+1, len(cmd))])
+		} else {
+			for k := start; k <= end && k < len(cmd); k++ {
+				b.WriteByte(' ')
+			}
+		}
+		i = end + 1
+	}
+	return b.String()
 }
 
 func hasSkipMarkersInEdits(contents []string) bool {
