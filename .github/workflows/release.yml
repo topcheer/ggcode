@@ -292,14 +292,31 @@ jobs:
           # evidence-driven, not guess-driven.
           echo "--- identity list (incl. invalid) ---"
           security find-identity -p codesigning || true
-          for CERT_NAME in "Apple Distribution" "Apple WWDR"; do
-            PEM=$(security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null || true)
+          # Run 41986711593 verdict: CSSMERR_TP_NOT_TRUSTED while PEM-level
+          # verify-cert succeeds -> the break is issuer resolution, most
+          # likely the leaf was issued by a WWDR generation (G2?) that we
+          # do not have in the keychain. Dump issuer/subject of every
+          # certificate so the missing link is named exactly.
+          for CERT_NAME in "Apple Distribution" "Apple Worldwide Developer Relations"; do
+            PEM=$(security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null | head -1)
             if [[ -n "$PEM" ]]; then
-              echo "--- $CERT_NAME ---"
-              printf '%s' "$PEM" | openssl x509 -noout -subject -dates
+              echo "--- $CERT_NAME (all matches) ---"
+              security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null | csplit -szf /tmp/cert_ - '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+              for C in /tmp/cert_*; do
+                [[ -s "$C" ]] || continue
+                echo "  [$(basename $C)]"
+                openssl x509 -noout -subject -issuer -dates -in "$C" 2>/dev/null | sed 's/^/    /'
+              done
             else
               echo "--- $CERT_NAME: NOT FOUND in ${KEYCHAIN} ---"
             fi
+          done
+          echo "--- Apple roots visible to this runner (search for G2/G3 roots) ---"
+          security find-certificate -a -p /Library/Keychains/System.keychain 2>/dev/null | awk '/BEGIN/{n++} n' | csplit -szf /tmp/root_ - '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+          for C in /tmp/root_*; do
+            [[ -s "$C" ]] || continue
+            S=$(openssl x509 -noout -subject -in "$C" 2>/dev/null)
+            case "$S" in *Apple*) echo "  $S";; esac
           done
           echo "--- trust chain verify ---"
           security find-certificate -c "Apple Distribution" -p "${KEYCHAIN}" > /tmp/leaf.pem 2>/dev/null || true
