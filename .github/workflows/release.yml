@@ -16,8 +16,11 @@ concurrency:
 
 permissions:
   contents: write
-  attestations: write
-  id-token: write
+  # attestations/id-token (OIDC) removed round 8: no step consumes them and
+  # dispatches started uniformly failing at startup (0 jobs) from 12:2x UTC
+  # on 2026-11-05 - suspected GitHub OIDC backend outage. site-release.yml
+  # (no such block) stayed green throughout. Restore only if an attestation
+  # publisher step is ever added.
 
 jobs:
   verify:
