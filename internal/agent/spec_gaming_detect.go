@@ -474,53 +474,69 @@ func carriesSearchDownstreamMutation(cmd string, tail []string) bool {
 //   - outside quotes, a backslash escapes the next character
 //     (so grep foo\|bar is a literal | in the pattern, not a pipe)
 func carriesShellOperators(cmd string) bool {
-	inSingle, inDouble := false, false
-	subDepth := 0 // $( ) nesting depth inside double quotes
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
-		switch {
-		case inSingle:
-			if c == '\'' {
-				inSingle = false
+		switch c {
+		case '\\':
+			i++ // escaped next char outside quotes
+		case '\'':
+			// Single-quoted segment is fully literal (POSIX, no escapes).
+			j := strings.IndexByte(cmd[i+1:], '\'')
+			if j < 0 {
+				i = len(cmd) // unterminated quote: the rest is a literal
+				break
 			}
-		case inDouble:
-			switch {
-			case c == '\\' && i+1 < len(cmd):
-				i++ // escaped char is literal inside double quotes
-			case c == '"' && subDepth == 0:
-				inDouble = false
-			case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(':
-				subDepth++
-				i++ // consume '('
-			case c == ')' && subDepth > 0:
-				subDepth--
-			case subDepth > 0:
-				// Inside $( ): operators are executed for real.
-				if c == '|' || c == '>' || c == ';' || c == '\n' {
-					return true
-				}
-				if c == '&' && i+1 < len(cmd) && cmd[i+1] == '&' {
-					return true
-				}
-			}
-		default:
-			switch c {
-			case '\\':
-				i++ // escaped next char outside quotes
-			case '\'':
-				inSingle = true
-			case '"':
-				inDouble = true
-			case '|', '>', ';', '\n':
+			i += j + 1 // resume right after the closing quote
+		case '"':
+			found, end := doubleQuotedOperatorAt(cmd, i+1)
+			if found {
 				return true
-			case '&':
-				if i+1 < len(cmd) && cmd[i+1] == '&' {
-					return true
-				}
+			}
+			// end == len(cmd) means the quote never terminates and the
+			// rest is a literal; either way resume after the segment.
+			i = end
+		case '|', '>', ';', '\n':
+			return true
+		case '&':
+			if i+1 < len(cmd) && cmd[i+1] == '&' {
+				return true
 			}
 		}
 	}
 	return false
+}
+
+// doubleQuotedOperatorAt scans the double-quoted segment starting at i
+// (just past the opening quote). Quoted text is literal except for
+// backslash escapes and $( ) command substitution, whose body re-enables
+// operator detection (the inner pipeline really runs). It returns
+// found=true as soon as a real operator is seen, or the index of the
+// closing quote (end == len(cmd) when the segment never terminates).
+func doubleQuotedOperatorAt(cmd string, i int) (found bool, end int) {
+	subDepth := 0 // $( ) nesting depth
+	for ; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '\\' && i+1 < len(cmd):
+			i++ // escaped char is literal inside double quotes
+		case c == '"' && subDepth == 0:
+			return false, i
+		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(':
+			subDepth++
+			i++ // consume '('
+		case c == ')' && subDepth > 0:
+			subDepth--
+		case subDepth > 0:
+			// Inside $( ): operators are executed for real.
+			if c == '|' || c == '>' || c == ';' || c == '\n' {
+				return true, i
+			}
+			if c == '&' && i+1 < len(cmd) && cmd[i+1] == '&' {
+				return true, i
+			}
+		}
+	}
+	return false, len(cmd)
 }
 
 func isTestWritingTask(userPrompt string) bool {
