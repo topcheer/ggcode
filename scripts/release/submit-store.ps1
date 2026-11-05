@@ -105,11 +105,16 @@ $pricingShape = ($sub.pricing | ConvertTo-Json -Depth 12 -Compress)
 if (-not $pricingShape) { $pricingShape = "<absent>" }
 if ($pricingShape.Length -gt 2000) { $pricingShape = $pricingShape.Substring(0, 2000) + "...(truncated)" }
 Write-Host "pricing shape (raw, pre-normalize): $pricingShape"
-# Run 41978717488 proved the normalization premise wrong in both directions:
-# 'Base' was rewritten to '0' and ASC rejected it with
-# "'0' is not a valid 'PriceId' value" (target submissionRequest.pricing.priceId).
-# 'Base' IS the canonical Store priceId; keep it untouched. The dump lines
-# above stay as diagnostics for any future submission-rejection debugging.
+# Evidence chain (runs 41947777908..41982183318):
+# - '0' rejected: "'0' is not a valid 'PriceId' value" (41978717488)
+# - 'Base' rejected: "'Base' is not a valid PriceId for base price"
+#   (41982183318) - 'Base' is Partner Center labeling that GET returns
+#   verbatim, not an Ingestion API price tier.
+# - MS docs (MSIX schedule-pricing-changes): "You can set the Base price
+#   to Free, or you can choose an available price tier" - the free tier's
+#   API identifier is 'Free'.
+$sub.pricing.priceId = "Free"
+Write-Host "priceId set to 'Free' (original visible in the raw shape line above)"
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
