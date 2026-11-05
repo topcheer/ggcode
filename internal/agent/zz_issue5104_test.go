@@ -3,22 +3,31 @@ package agent
 import "testing"
 
 // #5104: the three spec-gaming faces share ONE boundary scanner
-// (quotedSegmentEnd/skipDollarParen) but keep DELIBERATELY OPPOSITE
-// $() policies. This pin freezes the fork so a future "unification"
-// cannot silently flatten it:
+// (quotedSegmentEnd/skipDollarParen) but keep face-local policies. This
+// pin freezes them so a future "unification" cannot silently flatten:
 //   - read-only face (#5094): operators inside $( ) are REAL - detected;
-//   - report-verb face (#5102/#5103): the whole quoted segment incl.
-//     $( ) output is a reference (sent to an API) - exempt.
+//   - report-verb face (#5102 + #5105 residual): quoted literal text is
+//     blanked, but $() substitution spans stay VERBATIM (executed
+//     content - markers produced by a substitution cannot hide in the
+//     filler), so a marker inside such a span still fires.
 func TestIssue5104DollarParenPolicyFork(t *testing.T) {
-	// Same substitution body, opposite verdicts by face.
+	// #5105 semantics: the quoted literal text around the substitution is
+	// blanked, but the $(grep @skip f) span is copied verbatim - the
+	// marker inside it is visible to the substring checks, so the command
+	// fires (write-shaped content must not hide behind the filler).
 	reportBody := `gh issue create --body "pipeline $(grep @skip f | wc -l) noted"`
-	if hasSkipMarkersInCommands([]string{reportBody}) {
-		t.Errorf("report-verb face must exempt quoted segment incl. $( ) output: %q", reportBody)
+	if !hasSkipMarkersInCommands([]string{reportBody}) {
+		t.Errorf("report-verb face must keep $( ) spans visible (marker inside fires): %q", reportBody)
 	}
 
-	// The read-only face treats the SAME $( ) body as executed content:
-	// simulate by running carriesShellOperators on a command whose
-	// double-quoted segment contains a substitution pipeline.
+	// A substitution that produces NO marker stays exempt end-to-end.
+	cleanBody := `gh issue create --body "pipeline $(grep hits f | wc -l) noted"`
+	if hasSkipMarkersInCommands([]string{cleanBody}) {
+		t.Errorf("report-verb face must exempt marker-free substitution body: %q", cleanBody)
+	}
+
+	// The read-only face treats substitution bodies as executed content:
+	// operators inside them are detected.
 	readOnly := `grep "note $(cat x | tee y)" file.txt`
 	if !carriesShellOperators(readOnly) {
 		t.Errorf("read-only face must detect operators inside $( ): %q", readOnly)
