@@ -5,7 +5,8 @@ param(
   [Parameter(Mandatory=$true)][string]$ClientSecret,
   [Parameter(Mandatory=$true)][string]$ProductId,
   [string]$PackageDir,
-  [string]$ReleaseNotes = ""
+  [string]$ReleaseNotes = "",
+  [string]$ResumeSubmissionId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +32,11 @@ Write-Host "app: $($app.primaryName) (id=$($app.id))"
 # Resuming makes reruns idempotent: a draft left dangling by an earlier failed
 # step (e.g. the pre-#5048 Invoke-AzUpload crash) gets its package uploaded and
 # committed instead of blocking every future run until 30-day expiry.
-if ($app.inFlightSubmissionId) {
+if ($ResumeSubmissionId) {
+  $subId = $ResumeSubmissionId
+  Write-Host "resuming explicit submission $subId (-ResumeSubmissionId)"
+  $sub = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId"
+} elseif ($app.inFlightSubmissionId) {
   $subId = $app.inFlightSubmissionId
   Write-Host "in-flight submission $subId found; resuming it instead of creating a new one"
   $sub = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId"
@@ -39,7 +44,16 @@ if ($app.inFlightSubmissionId) {
   # Create-submission takes no request body; a non-empty JSON body would be
   # parsed as a draft submission and rejected ("The size of Listings must be
   # 1 or more"). PS 7 keeps the explicit JSON content-type on a bodyless POST.
-  $sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json"
+  # On Conflict (a draft exists that GET application did not surface via
+  # inFlightSubmissionId) there is nothing to recover the id from, so surface
+  # the app JSON to make diagnosis possible and fail loudly.
+  try {
+    $sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json"
+  } catch {
+    Write-Host "create-submission failed; app JSON for diagnosis:"
+    $app | ConvertTo-Json -Depth 8 | Write-Host
+    throw
+  }
   $subId = $sub.id
   Write-Host "submission created: $subId (state=$($sub.status))"
 }
