@@ -23,7 +23,6 @@ permissions:
   # publisher step is ever added.
 
 jobs:
-  verify:
   build-desktop-darwin:
     name: Build desktop macOS
     if: ${{ github.event_name == 'workflow_dispatch' }}
