@@ -1,8 +1,11 @@
 package safego
 
 import (
+	"fmt"
+	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 )
 
 var logFn func(category, format string, args ...any)
@@ -43,6 +46,12 @@ func Recover(name string) {
 		return
 	}
 	stack := debug.Stack()
+	// PANIC is fatal-class: always mirror to stderr so the failure is
+	// visible even when debug logging is disabled or its sinks are nil
+	// (silent-swallow defect: a recovered panic that nobody can see turns
+	// into a "3s timeout" mystery at the call site - #5060 family).
+	fmt.Fprintf(os.Stderr, "[%s] [safego] PANIC in goroutine %q: %v\n%s\n",
+		time.Now().UTC().Format(time.RFC3339), name, r, stack)
 	if logFn != nil {
 		logFn("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
 	}
@@ -51,6 +60,7 @@ func Recover(name string) {
 		func() {
 			defer func() {
 				if r2 := recover(); r2 != nil {
+					fmt.Fprintf(os.Stderr, "[safego] PANIC in PanicHook for %q: %v\n", name, r2)
 					if logFn != nil {
 						logFn("safego", "PANIC in PanicHook for %q: %v", name, r2)
 					}
