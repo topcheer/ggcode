@@ -115,6 +115,21 @@ Write-Host "pricing shape (raw, pre-normalize): $pricingShape"
 #   API identifier is 'Free'.
 $sub.pricing.priceId = "Free"
 Write-Host "priceId set to 'Free' (original visible in the raw shape line above)"
+
+# Run 41989824196: with priceId settled ('Free' accepted), the API moved to
+# the next gap: "AllowTargetFutureDeviceFamilies needs to be initialized
+# for all supported platform, [Desktop, Mobile, Xbox, Holographic]".
+# The GET body omits/nulls the field; the PUT requires all four platforms
+# explicit. Standard desktop distribution: Desktop true, the rest false.
+$devFamOrig = ($sub.allowTargetFutureDeviceFamilies | ConvertTo-Json -Compress -Depth 4)
+Write-Host "allowTargetFutureDeviceFamilies (raw): $devFamOrig"
+$sub.allowTargetFutureDeviceFamilies = [PSCustomObject]@{
+  Desktop     = $true
+  Mobile      = $false
+  Xbox        = $false
+  Holographic = $false
+}
+Write-Host "allowTargetFutureDeviceFamilies initialized (Desktop=true, others=false)"
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
