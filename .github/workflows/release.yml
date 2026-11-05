@@ -251,11 +251,13 @@ jobs:
         env:
           APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
           APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
           APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
-          if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
+          if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
             echo "MAS secrets not configured — skipping Mac App Store submission"
             exit 0
           fi
@@ -266,7 +268,11 @@ jobs:
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
           security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
             -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productbuild
-          # Apple Distribution identity (app signing) also lives in the same p12
+          # Apple Distribution identity (.app signing) ships in its own p12 -
+          # a single p12 cannot carry two private keys, so we import a second one.
+          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
+          security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \
+            -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -T /usr/bin/codesign
           security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
           security find-identity -v -p codesigning
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
