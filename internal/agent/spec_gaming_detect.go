@@ -828,39 +828,8 @@ func stripQuotedReferences(cmd string) string {
 			i++
 			continue
 		}
-		quote := c
 		start := i
-		end := len(cmd) // unterminated: rest of the string is the segment
-		for j := i + 1; j < len(cmd); j++ {
-			if quote == '\'' {
-				if cmd[j] == '\'' {
-					end = j
-					break
-				}
-				continue
-			}
-			if cmd[j] == '\\' && j+1 < len(cmd) {
-				j++
-				continue
-			}
-			if cmd[j] == '"' {
-				end = j
-				break
-			}
-			if cmd[j] == '$' && j+1 < len(cmd) && cmd[j+1] == '(' {
-				depth := 1
-				k := j + 2
-				for k < len(cmd) && depth > 0 {
-					if cmd[k] == '(' {
-						depth++
-					} else if cmd[k] == ')' {
-						depth--
-					}
-					k++
-				}
-				j = k - 1 // scan resumes past ')'; for-loop j++ re-enters at ')' successor
-			}
-		}
+		end := quotedSegmentEnd(cmd, i)
 		if isRedirectTarget(end + 1) {
 			b.WriteString(cmd[start:min(end+1, len(cmd))])
 		} else {
@@ -871,6 +840,53 @@ func stripQuotedReferences(cmd string) string {
 		i = end + 1
 	}
 	return b.String()
+}
+
+// quotedSegmentEnd returns the index of the closing quote for the segment
+// opening at start; len(cmd) when unterminated (the rest is literal).
+// Inside double quotes, backslash escapes are honored and $( ... )
+// command-substitution bodies (which may themselves contain quotes) are
+// skipped as a unit so their inner quotes cannot end the segment early.
+func quotedSegmentEnd(cmd string, start int) int {
+	quote := cmd[start]
+	for j := start + 1; j < len(cmd); j++ {
+		if quote == '\'' {
+			if cmd[j] == '\'' {
+				return j
+			}
+			continue
+		}
+		if cmd[j] == '\\' && j+1 < len(cmd) {
+			j++
+			continue
+		}
+		if cmd[j] == '"' {
+			return j
+		}
+		if cmd[j] == '$' && j+1 < len(cmd) && cmd[j+1] == '(' {
+			j = skipDollarParen(cmd, j+1)
+		}
+	}
+	return len(cmd)
+}
+
+// skipDollarParen returns the index of the ')' matching the '(' at open,
+// or len(cmd) when unterminated.
+func skipDollarParen(cmd string, open int) int {
+	depth := 1
+	k := open + 1
+	for k < len(cmd) && depth > 0 {
+		if cmd[k] == '(' {
+			depth++
+		} else if cmd[k] == ')' {
+			depth--
+		}
+		k++
+	}
+	if depth > 0 {
+		return len(cmd)
+	}
+	return k - 1 // index of the closing ')'
 }
 
 func hasSkipMarkersInEdits(contents []string) bool {
