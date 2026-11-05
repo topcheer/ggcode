@@ -210,8 +210,6 @@ jobs:
           APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
           APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           if [[ -n "${APPLE_DEVELOPER_ID_P12}" && -n "${APPLE_API_KEY_P8}" ]]; then
             echo "APPLE_SIGN_IDENTITY=Developer ID Application: Junjun Zhang (EGZFS7M525)" >> "${GITHUB_ENV}"
@@ -256,17 +254,12 @@ jobs:
           APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
           APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
           APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
-          APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           echo "stub: env-only prepare"
       - name: Submit desktop app to Mac App Store
         if: env.MAS_READY == 'true'
         shell: bash
         env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           cd desktop/ggcode-desktop-wails
           # Round 5 (run 42008131651: prepare step green - G3 asserted, default
@@ -904,4 +897,5 @@ jobs:
             --asset-dir dist-site/desktop-linux-amd64 \
             --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"
+
 
