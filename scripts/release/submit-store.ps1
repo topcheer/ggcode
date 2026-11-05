@@ -95,6 +95,16 @@ if ($ReleaseNotes) {
 $rawShape = ($sub.listings | ConvertTo-Json -Depth 12 -Compress)
 if ($rawShape.Length -gt 4000) { $rawShape = $rawShape.Substring(0, 4000) + "...(truncated)" }
 Write-Host "listings shape (raw, pre-normalize): $rawShape"
+# Round 10 (run 41971159695): listings dump proved listings carries NO priceId
+# at all ("0 fix(es) applied") while the API error targets "pricing" - the
+# offending "Base" priceId lives in the submission-level pricing subtree
+# (sibling of listings), which rounds 1-9 never touched. Dump pricing too and
+# normalize the WHOLE submission object so the offender is caught wherever it
+# sits (pricing, listings, or any future sibling).
+$pricingShape = ($sub.pricing | ConvertTo-Json -Depth 12 -Compress)
+if (-not $pricingShape) { $pricingShape = "<absent>" }
+if ($pricingShape.Length -gt 2000) { $pricingShape = $pricingShape.Substring(0, 2000) + "...(truncated)" }
+Write-Host "pricing shape (raw, pre-normalize): $pricingShape"
 
 $script:priceIdFixCount = 0
 function Normalize-PriceId($node, [string]$path) {
@@ -114,7 +124,7 @@ function Normalize-PriceId($node, [string]$path) {
     foreach ($el in @($node)) { Normalize-PriceId $el "$path[$i]"; $i++ }
   }
 }
-Normalize-PriceId $sub.listings "listings"
+Normalize-PriceId $sub "submission"
 Write-Host "priceId normalization complete ($($script:priceIdFixCount) fix(es) applied)"
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
