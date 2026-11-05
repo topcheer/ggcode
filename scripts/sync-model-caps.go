@@ -509,7 +509,7 @@ type modelCapability struct {
 }
 
 func staticCode() string {
-	return `var contextWindowHintPattern = regexp.MustCompile(` + "`" + `(^|[^0-9])(\d+)(k|m)($|[^a-z0-9])` + "`" + `)
+	return `var contextWindowHintPattern = regexp.MustCompile(` + "`" + `(\d+)(k|m)($|[^a-z0-9])` + "`" + `)
 
 // #2857: GLM vision naming is a version-suffix v (glm-4.5v / glm-4.6v).
 var glmVisionSuffixRe = regexp.MustCompile(` + "`" + `glm-[0-9.]+v` + "`" + `)
@@ -691,17 +691,26 @@ func lookupModelCapability(model string) (modelCapability, bool) {
 }
 
 func parseContextWindowHint(model string) int {
-	matches := contextWindowHintPattern.FindAllStringSubmatch(strings.ToLower(model), -1)
+	// #5050: Go regexp has no lookaround and FindAll* is non-overlapping, so a
+	// consumed trailing boundary (the '-' after 8k) is also the leading boundary
+	// of the next token and later tokens never matched (8k-128k -> 8000). The
+	// pattern therefore only carries the trailing boundary; the leading boundary
+	// (start-of-string or non-digit) is enforced in code below so adjacent tokens
+	// are both counted and the take-max loop sees every hint.
+	m := strings.ToLower(model)
 	best := 0
-	for _, match := range matches {
-		if len(match) < 4 {
+	for _, loc := range contextWindowHintPattern.FindAllStringSubmatchIndex(m, -1) {
+		if len(loc) < 8 {
 			continue
 		}
-		n, err := strconv.Atoi(match[2])
+		if start := loc[0]; start > 0 && m[start-1] >= '0' && m[start-1] <= '9' {
+			continue
+		}
+		n, err := strconv.Atoi(m[loc[2]:loc[3]])
 		if err != nil || n <= 0 {
 			continue
 		}
-		switch match[3] {
+		switch m[loc[4]:loc[5]] {
 		case "k":
 			n *= 1000
 		case "m":

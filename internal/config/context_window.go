@@ -1796,7 +1796,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"~z-ai/glm-latest":                                         {ContextWindow: 1048576, MaxOutputTokens: 131072},
 }
 
-var contextWindowHintPattern = regexp.MustCompile(`(^|[^0-9])(\d+)(k|m)($|[^a-z0-9])`)
+var contextWindowHintPattern = regexp.MustCompile(`(\d+)(k|m)($|[^a-z0-9])`)
 
 func inferContextWindow(model, protocol string) int {
 	if cap, ok := lookupModelCapability(model); ok && cap.ContextWindow > 0 {
@@ -1924,17 +1924,26 @@ func lookupModelCapability(model string) (modelCapability, bool) {
 }
 
 func parseContextWindowHint(model string) int {
-	matches := contextWindowHintPattern.FindAllStringSubmatch(strings.ToLower(model), -1)
+	// #5050: Go regexp has no lookaround and FindAll* is non-overlapping, so a
+	// consumed trailing boundary (the '-' after 8k) is also the leading boundary
+	// of the next token and later tokens never matched (8k-128k -> 8000). The
+	// pattern therefore only carries the trailing boundary; the leading boundary
+	// (start-of-string or non-digit) is enforced in code below so adjacent tokens
+	// are both counted and the take-max loop sees every hint.
+	m := strings.ToLower(model)
 	best := 0
-	for _, match := range matches {
-		if len(match) < 4 {
+	for _, loc := range contextWindowHintPattern.FindAllStringSubmatchIndex(m, -1) {
+		if len(loc) < 8 {
 			continue
 		}
-		n, err := strconv.Atoi(match[2])
+		if start := loc[0]; start > 0 && m[start-1] >= '0' && m[start-1] <= '9' {
+			continue
+		}
+		n, err := strconv.Atoi(m[loc[2]:loc[3]])
 		if err != nil || n <= 0 {
 			continue
 		}
-		switch match[3] {
+		switch m[loc[4]:loc[5]] {
 		case "k":
 			n *= 1000
 		case "m":
