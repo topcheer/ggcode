@@ -135,8 +135,12 @@ $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
 Write-Host "submission body updated"
 
+# Run 41992932188: commit POST without a body let PowerShell send a
+# form content type -> "Only JSON content is accepted" (target=mediaType).
+# Send an explicit empty JSON document with the JSON content type.
 $null = Invoke-RestMethod -Method Post -Headers $hdr `
-  -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId/commit"
+  -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId/commit" `
+  -ContentType "application/json" -Body "{}"
 Write-Host "committed; polling status..."
 
 $deadline = (Get-Date).AddMinutes(10)
