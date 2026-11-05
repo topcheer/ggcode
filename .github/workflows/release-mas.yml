@@ -175,15 +175,13 @@ jobs:
 
   build-desktop-darwin:
     name: Build desktop macOS
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: macos-15
-    needs:
-      - verify
     permissions:
       contents: write
     env:
-      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
-      GGCODE_COMMIT: ${{ github.sha }}
+      GGCODE_VERSION: v1.3.274
+      GGCODE_COMMIT: bisect-b17
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
     steps:
@@ -195,117 +193,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
-          df -h /
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - name: Capture build date
-        shell: bash
-        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
-      - name: Prepare Apple signing credentials
-        shell: bash
-        env:
-          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
-          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        run: |
-          if [[ -n "${APPLE_DEVELOPER_ID_P12}" && -n "${APPLE_API_KEY_P8}" ]]; then
-            echo "APPLE_SIGN_IDENTITY=Developer ID Application: Junjun Zhang (EGZFS7M525)" >> "${GITHUB_ENV}"
-            P12_FILE="${RUNNER_TEMP}/cert.p12"
-            printf '%s' "${APPLE_DEVELOPER_ID_P12}" | base64 -d > "${P12_FILE}"
-            echo "APPLE_DEVELOPER_ID_P12_PATH=${P12_FILE}" >> "${GITHUB_ENV}"
-            printf '%s\n' "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
-
-            KEY_FILE="${RUNNER_TEMP}/AuthKey.p8"
-            printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > "${KEY_FILE}"
-            echo "APPLE_API_KEY_PATH=${KEY_FILE}" >> "${GITHUB_ENV}"
-            echo "APPLE_API_KEY_ID=${APPLE_API_KEY_ID}" >> "${GITHUB_ENV}"
-            echo "APPLE_API_ISSUER_ID=${APPLE_API_ISSUER_ID}" >> "${GITHUB_ENV}"
-            echo "Apple signing credentials prepared"
-          else
-            echo "No Apple signing credentials found — building unsigned"
-          fi
-      - name: Build desktop macOS DMG
-        shell: bash
-        run: |
-          chmod +x ./scripts/release/build-desktop-darwin.sh
-          ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
-      - name: Upload desktop macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-darwin
-          path: |
-            dist/*.dmg
-            dist/ggcode-desktop_*_darwin_*
-
-      # ------------------------------------------------------------------
-      # Mac App Store submission (same trigger/credentials flow as the iOS
-      # TestFlight lane): builds a sandboxed universal .app with the MAS
-      # bundle id, embeds the provisioning profile, signs with the Apple
-      # Distribution identity, packages with the Mac Installer identity and
-      # uploads via altool. Runs only when MAS secrets are configured.
-      # ------------------------------------------------------------------
-      - name: Prepare Mac App Store credentials
-        shell: bash
-        env:
-          APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
-          APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
-          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
-          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
-        run: |
-          echo "stub: env-only prepare"
-      - name: Submit desktop app to Mac App Store
-        if: env.MAS_READY == 'true'
-        shell: bash
-        run: |
-          cd desktop/ggcode-desktop-wails
-          # Round 5 (run 42008131651: prepare step green - G3 asserted, default
-          # keychain set, partition list with codesign: - yet codesign still
-          # failed errSecInternalComponent). Each Actions step is a separate
-          # process, and the six-minute wails rebuild before signing gives the
-          # keychain time to lock; without an explicit unlock here the private
-          # key stays inaccessible to codesign.
-          KC="$HOME/Library/Keychains/login.keychain-db"
-          security unlock-keychain "$KC" 2>/dev/null || security unlock-keychain -p action "$KC" 2>/dev/null || true
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "$KC" > /dev/null 2>&1 || true
-          echo "--- pre-sign identity check (submit step) ---"
-          security find-identity -v -p codesigning || true
-          # universal sandboxed build with the MAS bundle id
-          wails build -clean -tags goolm -platform darwin/universal
-          APP="build/bin/GGCode Desktop.app"
-          plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
-          plutil -replace CFBundleShortVersionString -string "${GGCODE_VERSION#v}" "$APP/Contents/Info.plist"
-          plutil -replace CFBundleVersion -string "$(date -u +%Y%m%d01)" "$APP/Contents/Info.plist"
-          plutil -replace LSMinimumSystemVersion -string "12.0" "$APP/Contents/Info.plist"
-          cp "${RUNNER_TEMP}/mas.mobileprovision" "$APP/Contents/embedded.provisionprofile"
-          cat > "${RUNNER_TEMP}/mas_ent.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>com.apple.security.app-sandbox</key><true/>
-            <key>com.apple.security.network.client</key><true/>
-            <key>com.apple.security.network.server</key><true/>
-            <key>com.apple.security.files.user-selected.read-write</key><true/>
-            <key>com.apple.security.cs.allow-jit</key><true/>
-            <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-            <key>com.apple.security.cs.disable-library-validation</key><true/>
-            <key>com.apple.application-identifier</key><string>EGZFS7M525.gg.ai.ggcode</string>
-            <key>com.apple.developer.team-identifier</key><string>EGZFS7M525</string>
-          </dict>
-          </plist>
-          PLIST
-          codesign --force --sign "Apple Distribution: Junjun Zhang (EGZFS7M525)" \
-            --entitlements "${RUNNER_TEMP}/mas_ent.plist" --options runtime --timestamp "$APP"
-          codesign --verify --deep --strict "$APP"
-          productbuild --component "$APP" /Applications \
-            --sign "3rd Party Mac Developer Installer: Junjun Zhang (EGZFS7M525)" \
-            --timestamp "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg"
-          xcrun altool --upload-app -f "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg" -t macOS \
-            --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
-
+      - name: bisect-ok
+        run: echo ok
   build-desktop-windows:
     name: Build desktop Windows
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
@@ -896,5 +785,6 @@ jobs:
             --asset-dir dist-site/desktop-linux-amd64 \
             --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"
+
 
 
