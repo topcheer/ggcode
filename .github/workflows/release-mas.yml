@@ -11,7 +11,7 @@ on:
         default: "v0.0.0"
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-mas-b4-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
