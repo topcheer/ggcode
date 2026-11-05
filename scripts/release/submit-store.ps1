@@ -92,9 +92,18 @@ if ($ReleaseNotes) {
 # shape-agnostic: walk every object/array node under listings and rewrite any
 # string priceId that is not "0". Covers object-map AND array marketPricings,
 # baseListing nesting, and any future depth change.
+# Round 10 (run 41971159695): the listings dump finally landed and proved
+# listings contains NO pricing node at all - the rejected 'Base' priceId lives
+# in the submission's TOP-LEVEL `pricing` field (a sibling of listings: the
+# app submission resource carries pricing.marketPricings.{market}.priceId).
+# Walk both subtrees; the recursion stays shape-agnostic.
 $rawShape = ($sub.listings | ConvertTo-Json -Depth 12 -Compress)
 if ($rawShape.Length -gt 4000) { $rawShape = $rawShape.Substring(0, 4000) + "...(truncated)" }
 Write-Host "listings shape (raw, pre-normalize): $rawShape"
+$pricingShape = ($sub.pricing | ConvertTo-Json -Depth 12 -Compress)
+if (-not $pricingShape) { $pricingShape = "<absent>" }
+if ($pricingShape.Length -gt 2000) { $pricingShape = $pricingShape.Substring(0, 2000) + "...(truncated)" }
+Write-Host "top-level pricing shape (raw, pre-normalize): $pricingShape"
 
 $script:priceIdFixCount = 0
 function Normalize-PriceId($node, [string]$path) {
@@ -115,6 +124,7 @@ function Normalize-PriceId($node, [string]$path) {
   }
 }
 Normalize-PriceId $sub.listings "listings"
+Normalize-PriceId $sub.pricing "pricing"
 Write-Host "priceId normalization complete ($($script:priceIdFixCount) fix(es) applied)"
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
