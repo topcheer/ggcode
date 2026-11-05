@@ -543,8 +543,8 @@ jobs:
             Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
             Start-Sleep -Seconds 5
           }
-          Write-Host "::Error::Fork sync failed after 3 attempts. Proceeding anyway."
-          exit 0
+          Write-Host "::Error::Fork sync failed after 3 attempts; a stale fork base produced Internal-Error-PRs before (v1.3.273 #470562/#470563). Failing fast instead of submitting from a stale base."
+          exit 1
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
@@ -607,8 +607,8 @@ jobs:
             Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
             Start-Sleep -Seconds 5
           }
-          Write-Host "::Error::Fork sync failed after 3 attempts. Proceeding anyway."
-          exit 0
+          Write-Host "::Error::Fork sync failed after 3 attempts; a stale fork base produced Internal-Error-PRs before (v1.3.273 #470562/#470563). Failing fast instead of submitting from a stale base."
+          exit 1
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
