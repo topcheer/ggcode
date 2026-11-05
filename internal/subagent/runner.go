@@ -172,6 +172,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 
 	var unnamedTools []pendingToolMeta
 	var textBuf strings.Builder
+
+	// #5013 Ask-2: same-file reread circuit breaker (deterministic guard
+	// complementing the written task contract).
+	rereads := newRereadBreaker()
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -226,6 +230,15 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				pendingTools[event.Tool.ID] = meta
 			} else {
 				unnamedTools = append(unnamedTools, meta)
+			}
+
+			if path, n, tripped := rereads.record(meta.Name, meta.RawArgs); tripped {
+				debug.Log("subagent", "reread breaker tripped id=%s path=%s reads=%d", cfg.SubAgentID, path, n)
+				if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+					sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "[reread-breaker] " + rereads.reason()})
+				}
+				cfg.Manager.NotifySystem(cfg.SubAgentID, "[reread-breaker] terminating: "+rereads.reason())
+				cancel()
 			}
 		case provider.StreamEventToolResult:
 			flushText()
@@ -338,7 +351,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	os.Remove(todoPath)
 
 	if err != nil {
-		if subCtx.Err() == context.DeadlineExceeded {
+		if reason := rereads.reason(); reason != "" && subCtx.Err() == context.Canceled {
+			debug.Log("subagent", "Run: reread breaker termination id=%s", cfg.SubAgentID)
+			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("%s", reason))
+		} else if subCtx.Err() == context.DeadlineExceeded {
 			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("sub-agent timed out after %v", timeout))
 		} else if subCtx.Err() == context.Canceled {
 			debug.Log("cancel", "Run: context cancelled, calling Complete id=%s", cfg.SubAgentID)
