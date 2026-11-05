@@ -100,7 +100,7 @@ jobs:
   release-macos-pkg:
     name: Build macOS pkg
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
-    runs-on: macos-latest
+    runs-on: macos-15
     needs:
       - verify
     permissions:
@@ -176,7 +176,7 @@ jobs:
   build-desktop-darwin:
     name: Build desktop macOS
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
-    runs-on: macos-latest
+    runs-on: macos-15
     needs:
       - verify
     permissions:
