@@ -215,12 +215,17 @@ func (w *LocalWhisper) ensureAvailable() error {
 			continue
 		}
 		w.binPath = p
-		if err := w.probeFlavor(); err == nil {
+		// #5095: use a distinct variable for the probe result. Reusing `err`
+		// here shadowed probeFlavor's error with the (nil) LookPath result,
+		// so probeErr stayed nil and the accurate probe diagnosis (e.g. a
+		// whisper-cpp binary present but no ggml model) was overwritten by
+		// the generic "no whisper binary found" message.
+		if perr := w.probeFlavor(); perr == nil {
 			debug.Log("stt", "local whisper: found binary at %s", p)
 			return nil
+		} else {
+			probeErr = perr
 		}
-
-		probeErr = err
 	}
 	switch {
 	case probeErr != nil:
