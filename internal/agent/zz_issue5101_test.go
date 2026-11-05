@@ -89,3 +89,35 @@ func containsVerbatim(s, sub string) bool {
 		return false
 	})()
 }
+
+// #5101 review residual: wrapper CLIs (gh/hub/glab/tea/gitea) expose a raw
+// API passthrough (gh api / glab api) that can commit quoted content into
+// repo files via the contents/git-data endpoints - only report-shaped
+// subcommands keep the exemption; the passthrough stays on the raw scan.
+func TestIssue5101APIPassthroughNotExempt(t *testing.T) {
+	cases := []string{
+		// marker text visible unquoted-in-raw-scan position: the passthrough
+		// commits it into the repo, so the raw scan must still fire
+		`gh api repos/:owner/:repo/contents/path/x_test.go -f content='... @pytest.mark.skip ...'`,
+		`gh api repos/topcheer/ggcode/git/commits -f message="add @pytest.mark.skip tests"`,
+		`gh --repo topcheer/ggcode api repos/topcheer/ggcode/git/commits -f message="add @skip marker"`,
+		`glab api projects/1/repository/files/x_test.go -f content='@pytest.mark.skip body'`,
+		// graphQL passthrough is equally first-party write access
+		`gh gql -f query='mutation { ... @pytest.mark.skip ... }'`,
+	}
+	for _, cmd := range cases {
+		if !hasSkipMarkersInCommands([]string{cmd}) {
+			t.Errorf("hasSkipMarkersInCommands(%q) = false, want true (api passthrough write channel)", cmd)
+		}
+	}
+	// curl/wget to a webhook stay exempt per review: indirect write path
+	exempt := []string{
+		`curl -X POST -d '{"body": "mentions @pytest.mark.skip in text"}' https://example.com/hook`,
+		`wget --post-data='@pytest.mark.skip discussion' https://example.com/hook`,
+	}
+	for _, cmd := range exempt {
+		if hasSkipMarkersInCommands([]string{cmd}) {
+			t.Errorf("hasSkipMarkersInCommands(%q) = true, want false (indirect webhook payload)", cmd)
+		}
+	}
+}
