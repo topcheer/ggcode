@@ -35,7 +35,10 @@ if ($app.inFlightSubmissionId) {
   exit 0
 }
 
-$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json" -Body "{}"
+# Create-submission takes no request body; a non-empty JSON body would be
+# parsed as a draft submission and rejected ("The size of Listings must be
+# 1 or more"). PS 7 keeps the explicit JSON content-type on a bodyless POST.
+$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json"
 $subId = $sub.id
 Write-Host "submission created: $subId (state=$($sub.status))"
 
