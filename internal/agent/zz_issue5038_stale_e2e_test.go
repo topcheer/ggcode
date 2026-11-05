@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// TestIssue5038 pins the nil-deref in analyzeStaleGuidance's others loop: a
-// qualifying model (>= staleMinRuns runs) that never recorded the tag being
-// probed yields tags[tag] == nil, and the pre-fix code dereferenced it for
-// the delivered comparison. Scenario: glm-5.2 (current) has 10 zero-delivery
-// runs of "Multi File Edit"; glm-5.3 also has 10 runs but only ever recorded
-// a different tag, so deliveredPerModel["glm-5.3"]["Multi File Edit"] is nil.
+// TestIssue5038QualifyingModelWithoutTagNoPanic pins the original #5038
+// concern (a qualifying sibling model that never recorded the probed tag)
+// under the #5088 absence-as-signal gate: glm-5.2 (current) considered
+// "Multi File Edit" (present, never delivered) so it is NOT stale, while
+// "Context Decay" - delivered 3x by the tagless-for-MFE sibling glm-5.3 -
+// is absent from glm-5.2 entirely and IS reported. No panic.
 func TestIssue5038QualifyingModelWithoutTagNoPanic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "guidance-stats.jsonl")
 	var lines []string
@@ -24,21 +24,24 @@ func TestIssue5038QualifyingModelWithoutTagNoPanic(t *testing.T) {
 
 	analyzeStaleGuidance(path, "glm-5.2")
 
-	if s := staleHeuristicSummary(path, ""); len(s) != 0 {
-		t.Fatalf("tag never delivered by any model must not be reported, got %v", s)
+	got := staleHeuristicSummary(path, "")
+	if len(got) != 1 || got[0] != "Context Decay" {
+		t.Fatalf("want stale report only for absent Context Decay, got %v", got)
 	}
 }
 
-// TestIssue5038MixedOtherModels verifies the nil guard does not mask a real
-// cross-model contrast: with two qualifying other models, one recording the
-// tag and one never recording it, the probe must skip the nil entry and still
-// report from the recording model.
+// TestIssue5038MixedOtherModels verifies a tagless sibling does not mask a
+// real cross-model contrast: glm-5.4 delivers "Multi File Edit" above the
+// bar while glm-5.3 never records it; glm-5.2 never considered the tag at
+// all and recorded "Context Decay" only as suppressed (budget-starved, not
+// stale), so exactly Multi File Edit is reported.
 func TestIssue5038MixedOtherModelsStillReports(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "guidance-stats.jsonl")
 	var lines []string
 	for i := 0; i < staleMinRuns; i++ {
 		lines = append(lines,
-			statLine("2026-11-04T10:00:"+pad(i), "glm-5.2", "Multi File Edit", 0),
+			statLineSuppressed("2026-11-04T09:30:"+pad(i), "glm-5.2", "Context Decay", 0, 1),
+			statLine("2026-11-04T10:00:"+pad(i), "glm-5.2", "Filler Guidance", 1),
 			statLine("2026-11-04T11:00:"+pad(i), "glm-5.3", "Context Decay", 3),
 			statLine("2026-11-04T12:00:"+pad(i), "glm-5.4", "Multi File Edit", 1),
 		)

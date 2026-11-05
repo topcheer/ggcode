@@ -71,6 +71,38 @@ func analyzeStaleGuidance(path, currentModel string) {
 		}
 	}
 
+	// #5088: production stats only contain lines for tags that were actually
+	// considered in a run (record() increments exactly one of delivered or
+	// suppressed), so a (0,0) aggregate line can never exist — the old (0,0)
+	// gate was unsatisfiable and the feature could never fire on real data.
+	// Detect staleness by absence instead: a tag with NO stat line at all for
+	// the current model (never even considered across its >= staleMinRuns
+	// runs) while a qualifying sibling model still delivers it above the bar.
+	// A tag recorded with suppressions only is budget-starved, not stale.
+	own, currentQualifies := deliveredPerModel[currentModel]
+	if !currentQualifies {
+		return
+	}
+	candidates := map[string]int{}
+	for m, tags := range deliveredPerModel {
+		if m == currentModel {
+			continue
+		}
+		for tag, st := range tags {
+			if st.Delivered >= staleOtherModelDelivered {
+				candidates[tag] += st.Delivered
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	sortedTags := make([]string, 0, len(candidates))
+	for tag := range candidates {
+		sortedTags = append(sortedTags, tag)
+	}
+	sort.Strings(sortedTags)
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		debug.Log("guidance-stale", "open failed: %v", err)
@@ -78,28 +110,10 @@ func analyzeStaleGuidance(path, currentModel string) {
 	}
 	defer f.Close()
 
-	for tag, zero := range deliveredPerModel[currentModel] {
-
-		if zero.Delivered != 0 || zero.Suppressed > 0 || reported[tagKey{currentModel, tag}] {
-			continue
-		}
-		others := 0
-		for m, tags := range deliveredPerModel {
-			// #5038: another qualifying model (>= staleMinRuns) may never
-			// have recorded this tag - inner-map miss yields a nil
-			// *guidanceTagStat. Guard instead of dereferencing.
-			if m == currentModel {
-				continue
-			}
-			stat := tags[tag]
-			if stat == nil {
-				continue
-			}
-			if stat.Delivered >= staleOtherModelDelivered {
-				others += stat.Delivered
-			}
-		}
-		if others == 0 {
+	for _, tag := range sortedTags {
+		// own[tag] != nil means the current model did consider the tag:
+		// delivered -> alive; suppressed-only -> budget-starved, not stale.
+		if own[tag] != nil || reported[tagKey{currentModel, tag}] {
 			continue
 		}
 		b, err := json.Marshal(guidanceStatRecord{
@@ -113,7 +127,7 @@ func analyzeStaleGuidance(path, currentModel string) {
 		}
 		f.Write(append(b, '\n'))
 		debug.Log("guidance-stale", "stale heuristic on %s: %q never delivered in %d runs (other models delivered %d)",
-			currentModel, tag, len(runSet[currentModel]), others)
+			currentModel, tag, len(runSet[currentModel]), candidates[tag])
 	}
 }
 
