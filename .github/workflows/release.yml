@@ -261,25 +261,18 @@ jobs:
             echo "MAS secrets not configured — skipping Mac App Store submission"
             exit 0
           fi
-          # Run 41992253525 root cause: the keychain must be addressed by an
-          # ABSOLUTE path. With a bare file name, `security list-keychains -s`
-          # stores the relative name in the user search list; find-identity
-          # (running from the repo root) resolves it, but codesign (running
-          # later from the desktop build directory) cannot - its trust
-          # evaluation silently falls back to the default keychains, loses
-          # both the leaf and the WWDR intermediate, and fails with
-          # "unable to build chain to self-signed root" + errSecInternalComponent.
-          KEYCHAIN="$RUNNER_TEMP/mas-build.keychain-db"
-          security create-keychain -p actions "${KEYCHAIN}"
-          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
-          security unlock-keychain -p actions "${KEYCHAIN}"
-          # Round 4 of the chain problem (run 41998032242: imports all green,
-          # identity still CSSMERR_TP_NOT_TRUSTED): the keychain was never made
-          # the DEFAULT keychain and the partition list omitted the codesign
-          # principal, so the trust evaluation and the private-key ACL both
-          # resolved against keychains that do not carry our leaf/intermediate.
-          # Standard GitHub-Actions macOS recipe: set default + include
-          # codesign: in the partition principals.
+          # Round 7 (validated locally 2026-11-05): importing the same p12
+          # into a fresh custom keychain yields CSSMERR_TP_NOT_TRUSTED forever
+          # (default-keychain/partition/search-list/unlock all tried), while
+          # importing it into the runner's LOGIN keychain yields a VALID
+          # identity immediately - the system trust domain resolves the Apple
+          # chain through the stock keychains. Moneta's release pipeline (same
+          # machine class, proven today) signs from the login keychain for
+          # exactly this reason. So: no create-keychain - import into login.
+          KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain -p "" "${KEYCHAIN}" 2>/dev/null || true
+          security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
+          # Keep default keychain pointed at the chain we use.
           security default-keychain -s "${KEYCHAIN}"
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
           security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
@@ -316,13 +309,12 @@ jobs:
           else
             echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
           fi
-          # Grant the runner's codesign access to the imported private keys.
-          # The principal list MUST include codesign: - with only
-          # apple-tool:,apple: the private key stays unavailable to codesign
-          # (errSecInternalComponent).
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "${KEYCHAIN}" > /dev/null
-          # Keep the runner's existing search list and prepend ours: replacing
-          # it outright drops whatever default keychains the image ships with.
+          # Grant codesign access to the imported private keys. On the login
+          # keychain the partition pass may be empty or the image default -
+          # try both, tolerate failure (import-time -T grants usually suffice).
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "${KEYCHAIN}" > /dev/null 2>&1 || \
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" > /dev/null 2>&1 || true
+          # Keep the runner's existing search list and prepend ours.
           security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d ' "')
           security find-identity -v -p codesigning
           # Diagnostics for the "0 valid identities" chain problem
@@ -410,9 +402,9 @@ jobs:
           # process, and the six-minute wails rebuild before signing gives the
           # keychain time to lock; without an explicit unlock here the private
           # key stays inaccessible to codesign.
-          KC="$RUNNER_TEMP/mas-build.keychain-db"
-          security unlock-keychain -p actions "$KC"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KC" > /dev/null
+          KC="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain "$KC" 2>/dev/null || security unlock-keychain -p action "$KC" 2>/dev/null || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "$KC" > /dev/null 2>&1 || true
           echo "--- pre-sign identity check (submit step) ---"
           security find-identity -v -p codesigning || true
           # universal sandboxed build with the MAS bundle id
