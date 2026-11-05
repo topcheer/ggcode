@@ -26,26 +26,32 @@ Write-Host "token acquired (expires in $($tokenResp.expires_in)s)"
 $app = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId"
 Write-Host "app: $($app.primaryName) (id=$($app.id))"
 
-# Skip when a submission is already in flight: creating another one on top
-# of an in-flight submission is rejected by the Ingestion API and would fail
-# the release job. Exiting 0 keeps the pipeline green while the existing
-# submission continues its Store-side review.
+# If a submission is already in flight, resume it instead of creating a new
+# one (the Ingestion API rejects creating on top of an in-flight submission).
+# Resuming makes reruns idempotent: a draft left dangling by an earlier failed
+# step (e.g. the pre-#5048 Invoke-AzUpload crash) gets its package uploaded and
+# committed instead of blocking every future run until 30-day expiry.
 if ($app.inFlightSubmissionId) {
-  Write-Host "in-flight submission $($app.inFlightSubmissionId) exists; skipping store submit (release continues without a new submission)"
-  exit 0
+  $subId = $app.inFlightSubmissionId
+  Write-Host "in-flight submission $subId found; resuming it instead of creating a new one"
+  $sub = Invoke-RestMethod -Method Get -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId"
+} else {
+  # Create-submission takes no request body; a non-empty JSON body would be
+  # parsed as a draft submission and rejected ("The size of Listings must be
+  # 1 or more"). PS 7 keeps the explicit JSON content-type on a bodyless POST.
+  $sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json"
+  $subId = $sub.id
+  Write-Host "submission created: $subId (state=$($sub.status))"
 }
-
-# Create-submission takes no request body; a non-empty JSON body would be
-# parsed as a draft submission and rejected ("The size of Listings must be
-# 1 or more"). PS 7 keeps the explicit JSON content-type on a bodyless POST.
-$sub = Invoke-RestMethod -Method Post -Headers $hdr -Uri "$api/v1.0/my/applications/$ProductId/submissions" -ContentType "application/json"
-$subId = $sub.id
-Write-Host "submission created: $subId (state=$($sub.status))"
 
 $zipPath = Join-Path $env:TEMP "store-sub-$subId.zip"
 Compress-Archive -Path ($msixFiles.FullName) -DestinationPath $zipPath -Force
 $az = $sub.fileUploadUrl
-Invoke-AzUpload -SasUri $az -FilePath $zipPath
+# Upload via plain Azure Blob REST PUT against the submission's SAS URL —
+# no Az PowerShell module (the old Invoke-AzUpload call never existed and
+# crashed the run after the submission draft was created).
+Invoke-RestMethod -Method Put -Uri $az -Headers @{ "x-ms-blob-type" = "BlockBlob" } `
+  -InFile $zipPath -ContentType "application/zip"
 Write-Host "packages uploaded ($($msixFiles.Count) msix, $((Get-Item $zipPath).Length) bytes zipped)"
 
 if ($ReleaseNotes) {
