@@ -352,6 +352,34 @@ jobs:
             fi
           done
           echo "--- Apple roots visible to this runner (search for G2/G3 roots) ---"
+          # Round 6 forensics: material is proven right (leaf AKI == G3 SKI,
+          # extensions carry Code Signing, validity fresh) and every keychain
+          # recipe knob has been pulled, yet find-identity still reports
+          # CSSMERR_TP_NOT_TRUSTED even under the basic policy locally and in
+          # CI. Dump the actual trust domain state instead of guessing:
+          echo "--- user trust settings ---"
+          security dump-trust-settings -d 2>&1 || true
+          echo "--- admin trust settings ---"
+          security dump-trust-settings -s 2>&1 || true
+          echo "--- SystemRootCertificates: Apple roots present? ---"
+          security find-certificate -a -c "Apple" -p /System/Library/Keychains/SystemRootCertificates.keychain 2>/dev/null > /tmp/sysroots.pem || true
+          echo "apple-cert-count=$(grep -c 'BEGIN CERTIFICATE' /tmp/sysroots.pem 2>/dev/null || echo 0)"
+          csplit -szkf /tmp/sr- /tmp/sysroots.pem '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+          for C in /tmp/sr-*; do
+            [[ -s "$C" ]] || continue
+            S=$(openssl x509 -noout -subject -in "$C" 2>/dev/null)
+            case "$S" in *Apple*) echo "  SYS: $S";; esac
+          done
+          echo "--- verify-cert with explicit anchor (G3 pem) ---"
+          security find-certificate -c "Apple Worldwide Developer Relations" -p "${KEYCHAIN}" > /tmp/g3.pem 2>/dev/null || true
+          if [[ -s /tmp/g3.pem && -s /tmp/leafdeep.pem ]]; then :; fi
+          security verify-cert -c /tmp/leaf.pem -r /tmp/g3.pem -p basic -R /System/Library/Keychains/SystemRootCertificates.keychain 2>&1 | head -5 || true
+          echo "--- codesign probe with explicit keychain ---"
+          ID_SHA=$(security find-identity -p codesigning "${KEYCHAIN}" 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1)
+          if [[ -n "$ID_SHA" ]]; then
+            security cms -H -i /tmp/leafdeep.pem -o /dev/null 2>&1 | head -3 || true
+            echo "  probe identity sha=$ID_SHA"
+          fi
           security find-certificate -a -p /Library/Keychains/System.keychain 2>/dev/null | awk '/BEGIN/{n++} n' | csplit -szf /tmp/root_ - '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
           for C in /tmp/root_*; do
             [[ -s "$C" ]] || continue
