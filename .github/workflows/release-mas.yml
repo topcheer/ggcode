@@ -259,8 +259,8 @@ jobs:
           APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-      - name: bisect-ok
-        run: echo ok
+        run: |
+          echo "stub: env-only prepare"
       - name: Submit desktop app to Mac App Store
         if: env.MAS_READY == 'true'
         shell: bash
