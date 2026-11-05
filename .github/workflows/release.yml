@@ -273,6 +273,11 @@ jobs:
           printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
           security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \
             -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -T /usr/bin/codesign
+          # A p12 carries only the leaf cert + private key. Codesign needs the
+          # full chain to the Apple root, so import the WWDR G3 intermediate
+          # (the issuer of our Distribution certs). Apple has removed the G3
+          # download page, so the cert ships in-repo (public trust material).
+          security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
           security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
           security find-identity -v -p codesigning
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
