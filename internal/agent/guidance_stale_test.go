@@ -56,11 +56,13 @@ func TestAnalyzeStaleGuidanceBudgetStarvedNotStale(t *testing.T) {
 }
 
 func TestAnalyzeStaleGuidanceReportsCrossModelDeadWeight(t *testing.T) {
+	// #5088 absence-as-signal: the current model never recorded the tag at
+	// all (production-writable lines only) while a sibling still delivers it.
 	path := filepath.Join(t.TempDir(), "guidance-stats.jsonl")
 	var lines []string
 	for i := 0; i < staleMinRuns; i++ {
 		lines = append(lines,
-			statLine("2026-10-05T10:00:"+pad(i), "glm-5.2", "Attention Fragmentation", 0),
+			statLine("2026-10-05T10:00:"+pad(i), "glm-5.2", "Filler Guidance", 1),
 			statLine("2026-10-05T11:00:"+pad(i), "glm-5.3", "Attention Fragmentation", 1),
 		)
 	}
@@ -115,7 +117,7 @@ func TestAnalyzeStaleGuidanceDedup(t *testing.T) {
 	var lines []string
 	for i := 0; i < staleMinRuns; i++ {
 		lines = append(lines,
-			statLine("2026-10-05T10:00:"+pad(i), "glm-5.2", "ACT NOW", 0),
+			statLine("2026-10-05T10:00:"+pad(i), "glm-5.2", "Filler Guidance", 1),
 			statLine("2026-10-05T11:00:"+pad(i), "glm-5.3", "ACT NOW", 2),
 		)
 	}

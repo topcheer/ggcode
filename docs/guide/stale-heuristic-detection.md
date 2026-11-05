@@ -19,7 +19,7 @@ At the end of each run, a cross-model analysis appends `stale_heuristic` entries
 A tag is reported stale for a model when **all** of the following hold:
 
 - The model has at least **10 recorded runs**.
-- The tag was **never delivered** in any of those runs.
+- The tag has **no stat line at all** for that model - it was never even considered (neither delivered nor suppressed) in any of those runs. Tags recorded as suppressed-only are budget-starved, not stale, and are excluded; the production writer only emits lines for tags it actually considered (#5088 made this absence-based gate explicit after the original `(delivered=0, suppressed=0)` gate proved unsatisfiable on real data).
 - The tag is **still delivering (>= 2 times) for at least one other model** in the same project.
 
 The cross-model contrast is what separates "model behavior changed" from "this project never trips this detector" — a docs workspace will not fire build-related detectors on *any* model, so nothing is reported.
