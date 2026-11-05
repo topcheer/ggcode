@@ -62,7 +62,7 @@ var selfModPatterns = []selfModTarget{
 	{
 		name: "MCP server config",
 
-		patterns: []string{".ggcode/mcp", "mcp_servers.json", "mcp_server.json", "mcp_server.yaml", "mcp_server.yml"},
+		patterns: []string{".ggcode/mcp", "mcp_servers.json", "mcp_server.json", "mcp_server.yaml", "mcp_server.yml", ".mcp.json"},
 		severity: "medium",
 		reason:   "MCP server configuration controls external tool integrations. Changes can introduce new attack surfaces.",
 	},
@@ -105,7 +105,17 @@ func normalizeSelfModPath(p, root string) string {
 	if root != "" && strings.HasPrefix(p, root+"/") {
 		p = p[len(root)+1:]
 	}
-	return p
+	// CVE-2026-103572 (VS/SSMS Copilot `.mcp.json.` RCE) class: Windows
+	// path normalization strips trailing dots and spaces from EVERY path
+	// component, so `ggcode.yaml.` resolves back to `ggcode.yaml` while an
+	// exact-match self-mod guard sees a different name. Normalize each
+	// component the same way before matching - warning on a path that is
+	// only similar is safe; silently missing a protected file is not.
+	segs := strings.Split(p, "/")
+	for i, seg := range segs {
+		segs[i] = strings.TrimRight(seg, ". ")
+	}
+	return strings.Join(segs, "/")
 }
 
 func (s *selfModState) checkSelfModification(toolName string, args json.RawMessage) string {
