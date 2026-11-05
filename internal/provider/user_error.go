@@ -66,6 +66,16 @@ func UserFacingErrorLang(err error, lang string) string {
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
 		l429 := strings.ToLower(err.Error())
 
+		// GLM/Zhipu coding-plan window limit: recoverable on a schedule.
+		// Show the reset semantics (含"额度"字样，区别于真耗尽) and the
+		// auto-retry cadence, NOT the hard-quota renewal message.
+		if isGLMWindowLimit(l429) {
+			if zh {
+				return "已达套餐时段额度上限（限流窗口将自动重置）。将每隔 5 分钟自动重试；如需立即继续，请切换其他 provider/endpoint"
+			}
+			return "Plan window quota reached (auto-resets on schedule). Auto-retrying every 5 minutes; switch provider/endpoint to continue immediately"
+		}
+
 		if !isAnthropicWindowLimit(l429) &&
 			(strings.Contains(l429, "coding plan") ||
 				strings.Contains(l429, "usage limit") ||
