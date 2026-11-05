@@ -273,6 +273,14 @@ jobs:
           security create-keychain -p actions "${KEYCHAIN}"
           security set-keychain-settings -lut 21600 "${KEYCHAIN}"
           security unlock-keychain -p actions "${KEYCHAIN}"
+          # Round 4 of the chain problem (run 41998032242: imports all green,
+          # identity still CSSMERR_TP_NOT_TRUSTED): the keychain was never made
+          # the DEFAULT keychain and the partition list omitted the codesign
+          # principal, so the trust evaluation and the private-key ACL both
+          # resolved against keychains that do not carry our leaf/intermediate.
+          # Standard GitHub-Actions macOS recipe: set default + include
+          # codesign: in the partition principals.
+          security default-keychain -s "${KEYCHAIN}"
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
           security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
             -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productbuild
@@ -286,12 +294,31 @@ jobs:
           # (the issuer of our Distribution certs). Apple has removed the G3
           # download page, so the cert ships in-repo (public trust material).
           security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
+          # Fail loud if the intermediate did not land - a silent import is
+          # exactly how the earlier rounds burned CI runs guessing.
+          if ! security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" > /dev/null 2>&1; then
+            echo "::error::WWDR G3 intermediate not found in keychain after import"
+            exit 1
+          fi
+          # Anchor the chain: the G3 intermediate is signed by Apple Root CA,
+          # which ships in the runner's SystemRootCertificates. Importing it
+          # into the temp keychain too makes the trust evaluation independent
+          # of whatever default trust domain the image happens to expose.
+          security find-certificate -c "Apple Root CA" -p /System/Library/Keychains/SystemRootCertificates.keychain \
+            > "${RUNNER_TEMP}/appleroot.pem" 2>/dev/null || true
+          if [[ -s "${RUNNER_TEMP}/appleroot.pem" ]]; then
+            security import "${RUNNER_TEMP}/appleroot.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign > /dev/null
+          else
+            echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
+          fi
           # Grant the runner's codesign access to the imported private keys.
-          # Without a partition list the keychain ACL blocks codesign with
-          # errSecInternalComponent (run 41971828737: both p12s + G3 imported
-          # fine, find-identity reported 0 valid identities, codesign failed).
-          security set-key-partition-list -S apple-tool:,apple: -s -k actions "${KEYCHAIN}" > /dev/null
-          security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
+          # The principal list MUST include codesign: - with only
+          # apple-tool:,apple: the private key stays unavailable to codesign
+          # (errSecInternalComponent).
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "${KEYCHAIN}" > /dev/null
+          # Keep the runner's existing search list and prepend ours: replacing
+          # it outright drops whatever default keychains the image ships with.
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d ' "')
           security find-identity -v -p codesigning
           # Diagnostics for the "0 valid identities" chain problem
           # (runs 41971828737 / 41980707576: imports all green, identity
