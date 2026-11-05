@@ -175,13 +175,15 @@ jobs:
 
   build-desktop-darwin:
     name: Build desktop macOS
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
     runs-on: macos-15
+    needs:
+      - verify
     permissions:
       contents: write
     env:
-      GGCODE_VERSION: v1.3.274
-      GGCODE_COMMIT: bisect-b17
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
     steps:
@@ -193,8 +195,256 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: bisect-ok
-        run: echo ok
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Prepare Apple signing credentials
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "${APPLE_DEVELOPER_ID_P12}" && -n "${APPLE_API_KEY_P8}" ]]; then
+            echo "APPLE_SIGN_IDENTITY=Developer ID Application: Junjun Zhang (EGZFS7M525)" >> "${GITHUB_ENV}"
+            P12_FILE="${RUNNER_TEMP}/cert.p12"
+            printf '%s' "${APPLE_DEVELOPER_ID_P12}" | base64 -d > "${P12_FILE}"
+            echo "APPLE_DEVELOPER_ID_P12_PATH=${P12_FILE}" >> "${GITHUB_ENV}"
+            printf '%s\n' "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
+
+            KEY_FILE="${RUNNER_TEMP}/AuthKey.p8"
+            printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > "${KEY_FILE}"
+            echo "APPLE_API_KEY_PATH=${KEY_FILE}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_KEY_ID=${APPLE_API_KEY_ID}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_ISSUER_ID=${APPLE_API_ISSUER_ID}" >> "${GITHUB_ENV}"
+            echo "Apple signing credentials prepared"
+          else
+            echo "No Apple signing credentials found — building unsigned"
+          fi
+      - name: Build desktop macOS DMG
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-darwin.sh
+          ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin
+          path: |
+            dist/*.dmg
+            dist/ggcode-desktop_*_darwin_*
+
+      # ------------------------------------------------------------------
+      # Mac App Store submission (same trigger/credentials flow as the iOS
+      # TestFlight lane): builds a sandboxed universal .app with the MAS
+      # bundle id, embeds the provisioning profile, signs with the Apple
+      # Distribution identity, packages with the Mac Installer identity and
+      # uploads via altool. Runs only when MAS secrets are configured.
+      # ------------------------------------------------------------------
+      - name: Prepare MAS keychain + imports (A)
+        shell: bash
+        env:
+          APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+          APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
+            echo "MAS secrets not configured — skipping Mac App Store submission"
+            exit 0
+          fi
+          # Round 7 (validated locally 2026-11-05): importing the same p12
+          # into a fresh custom keychain yields CSSMERR_TP_NOT_TRUSTED forever
+          # (default-keychain/partition/search-list/unlock all tried), while
+          # importing it into the runner's LOGIN keychain yields a VALID
+          # identity immediately - the system trust domain resolves the Apple
+          # chain through the stock keychains. Moneta's release pipeline (same
+          # machine class, proven today) signs from the login keychain for
+          # exactly this reason. So: no create-keychain - import into login.
+          KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain -p "" "${KEYCHAIN}" 2>/dev/null || true
+          security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
+          # Keep default keychain pointed at the chain we use.
+          security default-keychain -s "${KEYCHAIN}"
+          printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
+          security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
+            -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productbuild
+          # Apple Distribution identity (.app signing) ships in its own p12 -
+          # a single p12 cannot carry two private keys, so we import a second one.
+          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
+          security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \
+            -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -T /usr/bin/codesign
+          # A p12 carries only the leaf cert + private key. Codesign needs the
+          # full chain to the Apple root, so import the WWDR G3 intermediate
+          # (the issuer of our Distribution certs). Apple has removed the G3
+          # download page, so the cert ships in-repo (public trust material).
+          security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
+          # Fail loud if the intermediate did not land - a silent import is
+          # exactly how the earlier rounds burned CI runs guessing.
+          if ! security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" > /dev/null 2>&1; then
+            echo "::error::WWDR G3 intermediate not found in keychain after import"
+            exit 1
+          fi
+          # Anchor the chain: the G3 intermediate is signed by Apple Root CA,
+          # which ships in the runner's SystemRootCertificates. Importing it
+          # into the temp keychain too makes the trust evaluation independent
+          # of whatever default trust domain the image happens to expose.
+          security find-certificate -c "Apple Root CA" -p /System/Library/Keychains/SystemRootCertificates.keychain \
+            > "${RUNNER_TEMP}/appleroot.pem" 2>/dev/null || true
+          if [[ -s "${RUNNER_TEMP}/appleroot.pem" ]]; then
+            # Import only. Do NOT use add-trusted-cert here: on a headless
+            # runner it can hang the step waiting for a GUI trust prompt
+            # (run 42013525611: prepare stalled 12+ min on exactly this).
+            # The Apple Root CA is already trusted via the system trust
+            # domain; user-domain trust settings cannot override it anyway.
+            security import "${RUNNER_TEMP}/appleroot.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign > /dev/null
+          else
+            echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
+          fi
+          # Grant codesign access to the imported private keys. On the login
+          # keychain the partition pass may be empty or the image default -
+          # try both, tolerate failure (import-time -T grants usually suffice).
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "${KEYCHAIN}" > /dev/null 2>&1 || \
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" > /dev/null 2>&1 || true
+      - name: Prepare MAS profile + API key (B)
+        shell: bash
+        env:
+          APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          # Keep the runner's existing search list and prepend ours.
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d ' "')
+          security find-identity -v -p codesigning
+          # Diagnostics for the "0 valid identities" chain problem
+          # (runs 41971828737 / 41980707576: imports all green, identity
+          # validity still zero). Dump leaf + intermediate validity windows
+          # and run a full trust-chain verification so the next fix is
+          # evidence-driven, not guess-driven.
+          echo "--- identity list (incl. invalid) ---"
+          security find-identity -p codesigning || true
+          # Run 41986711593 verdict: CSSMERR_TP_NOT_TRUSTED while PEM-level
+          # verify-cert succeeds -> the break is issuer resolution, most
+          # likely the leaf was issued by a WWDR generation (G2?) that we
+          # do not have in the keychain. Dump issuer/subject of every
+          # certificate so the missing link is named exactly.
+          for CERT_NAME in "Apple Distribution" "Apple Worldwide Developer Relations"; do
+            PEM=$(security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null | head -1)
+            if [[ -n "$PEM" ]]; then
+              echo "--- $CERT_NAME (all matches) ---"
+              security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null | csplit -szf /tmp/cert_ - '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+              for C in /tmp/cert_*; do
+                [[ -s "$C" ]] || continue
+                echo "  [$(basename $C)]"
+                openssl x509 -noout -subject -issuer -dates -in "$C" 2>/dev/null | sed 's/^/    /'
+              done
+            else
+              echo "--- $CERT_NAME: NOT FOUND in ${KEYCHAIN} ---"
+            fi
+          done
+          echo "--- Apple roots visible to this runner (search for G2/G3 roots) ---"
+          # Round 6 forensics: material is proven right (leaf AKI == G3 SKI,
+          # extensions carry Code Signing, validity fresh) and every keychain
+          # recipe knob has been pulled, yet find-identity still reports
+          # CSSMERR_TP_NOT_TRUSTED even under the basic policy locally and in
+          # CI. Dump the actual trust domain state instead of guessing:
+          echo "--- user trust settings ---"
+          security dump-trust-settings -d 2>&1 || true
+          echo "--- admin trust settings ---"
+          security dump-trust-settings -s 2>&1 || true
+          echo "--- SystemRootCertificates: Apple roots present? ---"
+          security find-certificate -a -c "Apple" -p /System/Library/Keychains/SystemRootCertificates.keychain 2>/dev/null > /tmp/sysroots.pem || true
+          echo "apple-cert-count=$(grep -c 'BEGIN CERTIFICATE' /tmp/sysroots.pem 2>/dev/null || echo 0)"
+          csplit -szkf /tmp/sr- /tmp/sysroots.pem '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+          for C in /tmp/sr-*; do
+            [[ -s "$C" ]] || continue
+            S=$(openssl x509 -noout -subject -in "$C" 2>/dev/null)
+            case "$S" in *Apple*) echo "  SYS: $S";; esac
+          done
+          echo "--- verify-cert with explicit anchor (G3 pem) ---"
+          security find-certificate -c "Apple Worldwide Developer Relations" -p "${KEYCHAIN}" > /tmp/g3.pem 2>/dev/null || true
+          if [[ -s /tmp/g3.pem && -s /tmp/leafdeep.pem ]]; then :; fi
+          security verify-cert -c /tmp/leaf.pem -r /tmp/g3.pem -p basic -R /System/Library/Keychains/SystemRootCertificates.keychain 2>&1 | head -5 || true
+          echo "--- codesign probe with explicit keychain ---"
+          ID_SHA=$(security find-identity -p codesigning "${KEYCHAIN}" 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1)
+          if [[ -n "$ID_SHA" ]]; then
+            security cms -H -i /tmp/leafdeep.pem -o /dev/null 2>&1 | head -3 || true
+            echo "  probe identity sha=$ID_SHA"
+          fi
+          security find-certificate -a -p /Library/Keychains/System.keychain 2>/dev/null | awk '/BEGIN/{n++} n' | csplit -szf /tmp/root_ - '/-----BEGIN CERTIFICATE-----/' '{*}' 2>/dev/null || true
+          for C in /tmp/root_*; do
+            [[ -s "$C" ]] || continue
+            S=$(openssl x509 -noout -subject -in "$C" 2>/dev/null)
+            case "$S" in *Apple*) echo "  $S";; esac
+          done
+          echo "--- trust chain verify ---"
+          security find-certificate -c "Apple Distribution" -p "${KEYCHAIN}" > /tmp/leaf.pem 2>/dev/null || true
+          security find-certificate -p "${KEYCHAIN}" > /tmp/all.pem 2>/dev/null || true
+          cat /tmp/leaf.pem /tmp/all.pem > /tmp/chain.pem 2>/dev/null || true
+          security verify-cert -c /tmp/leaf.pem -p codesign -r /tmp/chain.pem 2>&1 || true
+          printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
+          mkdir -p ~/private_keys
+          if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then cp "${APPLE_API_KEY_PATH}" ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8; fi
+          echo "MAS_READY=true" >> "${GITHUB_ENV}"
+
+      - name: Submit desktop app to Mac App Store
+        if: env.MAS_READY == 'true'
+        shell: bash
+        run: |
+          cd desktop/ggcode-desktop-wails
+          # Round 5 (run 42008131651: prepare step green - G3 asserted, default
+          # keychain set, partition list with codesign: - yet codesign still
+          # failed errSecInternalComponent). Each Actions step is a separate
+          # process, and the six-minute wails rebuild before signing gives the
+          # keychain time to lock; without an explicit unlock here the private
+          # key stays inaccessible to codesign.
+          KC="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain "$KC" 2>/dev/null || security unlock-keychain -p action "$KC" 2>/dev/null || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "$KC" > /dev/null 2>&1 || true
+          echo "--- pre-sign identity check (submit step) ---"
+          security find-identity -v -p codesigning || true
+          # universal sandboxed build with the MAS bundle id
+          wails build -clean -tags goolm -platform darwin/universal
+          APP="build/bin/GGCode Desktop.app"
+          plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "${GGCODE_VERSION#v}" "$APP/Contents/Info.plist"
+          plutil -replace CFBundleVersion -string "$(date -u +%Y%m%d01)" "$APP/Contents/Info.plist"
+          plutil -replace LSMinimumSystemVersion -string "12.0" "$APP/Contents/Info.plist"
+          cp "${RUNNER_TEMP}/mas.mobileprovision" "$APP/Contents/embedded.provisionprofile"
+          cat > "${RUNNER_TEMP}/mas_ent.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.app-sandbox</key><true/>
+            <key>com.apple.security.network.client</key><true/>
+            <key>com.apple.security.network.server</key><true/>
+            <key>com.apple.security.files.user-selected.read-write</key><true/>
+            <key>com.apple.security.cs.allow-jit</key><true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.application-identifier</key><string>EGZFS7M525.gg.ai.ggcode</string>
+            <key>com.apple.developer.team-identifier</key><string>EGZFS7M525</string>
+          </dict>
+          </plist>
+          PLIST
+          codesign --force --sign "Apple Distribution: Junjun Zhang (EGZFS7M525)" \
+            --entitlements "${RUNNER_TEMP}/mas_ent.plist" --options runtime --timestamp "$APP"
+          codesign --verify --deep --strict "$APP"
+          productbuild --component "$APP" /Applications \
+            --sign "3rd Party Mac Developer Installer: Junjun Zhang (EGZFS7M525)" \
+            --timestamp "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg"
+          xcrun altool --upload-app -f "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg" -t macOS \
+            --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
+
   build-desktop-windows:
     name: Build desktop Windows
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
@@ -785,6 +1035,4 @@ jobs:
             --asset-dir dist-site/desktop-linux-amd64 \
             --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"
-
-
 
