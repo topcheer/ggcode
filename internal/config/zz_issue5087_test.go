@@ -71,3 +71,25 @@ func TestIssue5087MixedUnitTokens(t *testing.T) {
 		}
 	}
 }
+
+// Remaining #5053 edge-case rows the first pass dropped (QA review of PR #5089
+// flagged them as hardening-left-on-the-table): greedy digit-run and the
+// b-suffix false-positive shape, plus separator variants.
+func TestIssue5087EdgeRows(t *testing.T) {
+	cases := []struct {
+		model string
+		want  int
+	}{
+		{"test-16384k-x", 16384000}, // greedy digit-run: trailing -x must not eat the hint
+		{"v2-30b-128k", 128000},     // 30b is NOT a window hint (no k/m); 128k wins
+		{"qwen3-32b-1m", 1000000},   // sibling b-suffix shape: 32b ignored, 1m wins
+		{"model-4k_1m", 1000000},    // underscore separator
+		{"model 8k 128k", 128000},   // space separator
+		{"model.4k.1m", 1000000},    // dot separator
+	}
+	for _, tc := range cases {
+		if got := parseContextWindowHint(tc.model); got != tc.want {
+			t.Errorf("parseContextWindowHint(%q) = %d, want %d", tc.model, got, tc.want)
+		}
+	}
+}
