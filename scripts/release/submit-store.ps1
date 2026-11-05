@@ -71,6 +71,19 @@ Write-Host "packages uploaded ($($msixFiles.Count) msix, $((Get-Item $zipPath).L
 if ($ReleaseNotes) {
   $sub | Add-Member -NotePropertyName releaseNotes -NotePropertyValue $ReleaseNotes -Force
 }
+# Draft submissions created via the API can carry placeholder market pricing
+# (priceId "Base"), which the Ingestion API rejects on PUT ("'Base' is not a
+# valid PriceId for base price."). Normalize to the Free tier ("0") before
+# round-tripping the submission body.
+foreach ($listing in @($sub.listings)) {
+  $pricing = $listing.pricing
+  if (-not $pricing -or -not $pricing.marketPricings) { continue }
+  foreach ($prop in @($pricing.marketPricings.PSObject.Properties)) {
+    if ($prop.Value.priceId -and $prop.Value.priceId -notin @("0")) {
+      $prop.Value.priceId = "0"
+    }
+  }
+}
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
