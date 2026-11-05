@@ -74,8 +74,14 @@ if ($ReleaseNotes) {
 # Draft submissions created via the API can carry placeholder market pricing
 # (priceId "Base"), which the Ingestion API rejects on PUT ("'Base' is not a
 # valid PriceId for base price."). Normalize to the Free tier ("0") before
-# round-tripping the submission body.
-foreach ($listing in @($sub.listings)) {
+# round-tripping the submission body. NOTE: `listings` is a market->listing
+# object map (not an array), so iterate its property VALUES; the same applies
+# to marketPricings inside each listing.
+$listingValues = @()
+if ($sub.listings) {
+  $listingValues = @($sub.listings.PSObject.Properties | ForEach-Object { $_.Value })
+}
+foreach ($listing in $listingValues) {
   $pricing = $listing.pricing
   if (-not $pricing -or -not $pricing.marketPricings) { continue }
   foreach ($prop in @($pricing.marketPricings.PSObject.Properties)) {
