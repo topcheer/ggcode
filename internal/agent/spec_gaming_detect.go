@@ -768,8 +768,17 @@ func hasSkipMarkersInCommands(commands []string) bool {
 // payloads sent to external services (issues, PRs, HTTP bodies) - markers
 // quoted there are references to skip markers, not additions to code.
 var reportQuotedVerbs = map[string]bool{
-	"gh": true, "hub": true, "glab": true, "tea": true, "gitea": true,
 	"curl": true, "wget": true,
+}
+
+// apiPassthroughReportCLIs: wrapper CLIs whose report-shaped subcommands
+// (issue/pr/release/comment) deliver quoted text as external-service
+// payloads, but which ALSO expose a raw API passthrough subcommand (gh api
+// / glab api / hub api) that can commit file content straight into the
+// repo via the contents/git-data endpoints - so only non-api subcommands
+// get the quoted-reference exemption (#5101 review residual).
+var apiPassthroughReportCLIs = map[string]bool{
+	"gh": true, "hub": true, "glab": true, "tea": true, "gitea": true,
 }
 
 func leadingReportVerb(cmd string) bool {
@@ -781,7 +790,23 @@ func leadingReportVerb(cmd string) bool {
 	if i >= len(fields) {
 		return false
 	}
-	return reportQuotedVerbs[strings.ToLower(filepath.Base(fields[i]))]
+	verb := strings.ToLower(filepath.Base(fields[i]))
+	if reportQuotedVerbs[verb] {
+		return true
+	}
+	if apiPassthroughReportCLIs[verb] {
+		// the passthrough can appear after global flags (gh --repo r api);
+		// deny the exemption when any bare token after the CLI is the
+		// passthrough. Denial is conservative: a stray unquoted "api" word
+		// in another argument just restores the legacy raw scan.
+		for _, f := range fields[i+1:] {
+			if sub := strings.ToLower(f); sub == "api" || sub == "gql" {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // stripQuotedReferences (#5101) replaces quoted literal segments with
