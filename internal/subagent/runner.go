@@ -44,10 +44,13 @@ type RunnerConfig struct {
 	Model        string
 	AgentType    string
 	WorkingDir   string
-	// MaxToolCalls caps the sub-agent agent loop (0 = unbounded, the
-	// historical default). Passed through to the AgentFactory maxTurns
-	// parameter so a looping sub-agent is killed with a partial result
-	// instead of burning tokens until manual cancel (#5013).
+	// MaxToolCalls bounds the sub-agent run on BOTH axes (#5013): it is
+	// passed to the AgentFactory maxTurns parameter (LLM-turn cap, each
+	// turn may issue several tool calls) AND, when N>0, wired through the
+	// agent's SetToolCallBudget so the exec layer hard-stops after N
+	// actual tool invocations (parallel batching can no longer smuggle
+	// many calls under one turn - sa-18: 248 calls under a 12-call task
+	// budget). 0 = historical default (turn-derived call budget).
 	MaxToolCalls        int
 	OnStreamText        func(agentID, text string)
 	OnUsage             func(provider.TokenUsage)
@@ -130,6 +133,20 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		debug.Log("subagent", "Run: model override id=%s model=%s", cfg.SubAgentID, cfg.Model)
 	}
 	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, cfg.MaxToolCalls)
+
+	// #5013 call-semantics: max_tool_calls must bound actual tool
+	// invocations, not just LLM turns (parallel batching lets one turn
+	// issue many calls - the sa-18 shape: 248 calls under a 12-call task
+	// budget). The exec-layer per-call counter and its hard-stop chain
+	// already exist in the agent loop (record()/check()); wiring the same
+	// number through SetToolCallBudget makes the parameter name true. N>0
+	// is a dual gate (N turns AND N calls); 0 keeps the historical
+	// turn-derived default budget.
+	if cfg.MaxToolCalls > 0 {
+		if ba, ok := subAgent.(interface{ SetToolCallBudget(int) }); ok {
+			ba.SetToolCallBudget(cfg.MaxToolCalls)
+		}
+	}
 
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {

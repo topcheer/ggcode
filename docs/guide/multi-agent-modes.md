@@ -63,7 +63,7 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 
 ### Hard tool-call budget (`max_tool_calls`)
 
-Written task-contract budgets have no enforcement power on their own: a sub-agent that loops on reads keeps burning tokens until cancelled. Pass `max_tool_calls` (integer) to cap the agent loop at N LLM turns — the run is then stopped with its partial result instead of running unbounded (#5013). If omitted (or <= 0), a conservative default of 60 LLM turns applies, so spawns are always bounded; the spawn result discloses the effective budget. Raise it explicitly for tasks that legitimately need more turns (#5013 same-day recurrence).
+Written task-contract budgets have no enforcement power on their own: a sub-agent that loops on reads keeps burning tokens until cancelled. Pass `max_tool_calls` (integer) to bound the run on BOTH axes: N LLM turns AND N actual tool calls — whichever is hit first stops the run with its partial result (#5013; the per-call gate exists because parallel tool batching can issue many calls in one turn — an incident run made 248 calls under a 12-call task budget without ever nearing its turn cap). If omitted (or <= 0), a conservative default of 60 turns / 60 calls applies, so spawns are always bounded; the spawn result discloses the effective budget. Raise it explicitly for tasks that legitimately need more calls (#5013 same-day recurrence). A complementary same-file reread circuit breaker terminates runs that read the same path more than 3 times with no intervening edit, with the looped path and count in the termination reason.
 
 ### Model Selection
 
