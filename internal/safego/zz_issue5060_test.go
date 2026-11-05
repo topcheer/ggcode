@@ -2,53 +2,56 @@ package safego
 
 import (
 	"io"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// captureStderr swaps os.Stderr for a pipe, runs fn, and returns whatever
-// was written to stderr during that window.
-func captureStderr(t *testing.T, fn func()) string {
+// captureStderrSink swaps the package-level stderrSink for a synchronized
+// buffer, runs fn, and returns what was written. Production code always
+// writes to os.Stderr; only tests redirect via this sink.
+func captureStderrSink(t *testing.T, fn func()) string {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	old := os.Stderr
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-
-	done := make(chan struct{})
-	var buf strings.Builder
 	var mu sync.Mutex
-	go func() {
-		defer close(done)
-		b, _ := io.ReadAll(r)
-		mu.Lock()
-		buf.Write(b)
-		mu.Unlock()
-	}()
+	var buf strings.Builder
+	old := stderrSink.Load()
+	w := io.Writer(syncWriter{&mu, &buf})
+	stderrSink.Store(&w)
+	defer func() { stderrSink.Store(old) }()
 
 	fn()
 
-	w.Close()
-	<-done
+	// Give async goroutines a beat to flush their writes.
+	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	return buf.String()
 }
 
-// #5060 pin: a recovered panic must ALWAYS be visible on stderr, even when
-// no logger and no panic hook are wired (the silent-swallow path).
-func TestPanicAlwaysVisibleOnStderrWithoutLogger(t *testing.T) {
-	savedLog := logFn
-	logFn = nil
-	defer func() { logFn = savedLog }()
+type syncWriter struct {
+	mu *sync.Mutex
+	b  *strings.Builder
+}
 
-	out := captureStderr(t, func() {
+func (w syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+// #5060 pin: a recovered panic must ALWAYS be visible on the stderr sink,
+// even when no logger and no panic hook are wired (the silent-swallow path).
+func TestPanicAlwaysVisibleOnStderrWithoutLogger(t *testing.T) {
+	// Deliberately unwire the logger: the exact silent-swallow path.
+	var saved func(category, format string, args ...any)
+	if l := logger(); l != nil {
+		saved = l
+	}
+	SetLogger(nil)
+	defer SetLogger(saved)
+
+	out := captureStderrSink(t, func() {
 		done := make(chan struct{})
 		Go("silent-goroutine", func() {
 			defer close(done)
@@ -59,8 +62,6 @@ func TestPanicAlwaysVisibleOnStderrWithoutLogger(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("goroutine did not finish")
 		}
-		// Give the deferred Recover a beat to flush its stderr write.
-		time.Sleep(50 * time.Millisecond)
 	})
 
 	if !strings.Contains(out, "PANIC in goroutine") || !strings.Contains(out, "silent-goroutine") || !strings.Contains(out, "boom-5060") {
@@ -73,11 +74,14 @@ func TestPanicAlwaysVisibleOnStderrWithoutLogger(t *testing.T) {
 
 // Pin: stderr mirroring also works through Run (synchronous path).
 func TestRunPanicVisibleOnStderr(t *testing.T) {
-	savedLog := logFn
-	logFn = nil
-	defer func() { logFn = savedLog }()
+	var saved func(category, format string, args ...any)
+	if l := logger(); l != nil {
+		saved = l
+	}
+	SetLogger(nil)
+	defer SetLogger(saved)
 
-	out := captureStderr(t, func() {
+	out := captureStderrSink(t, func() {
 		Run("sync-goroutine", func() { panic("run-boom") })
 	})
 
