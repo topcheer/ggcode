@@ -186,6 +186,13 @@ jobs:
       GGCODE_COMMIT: ${{ github.sha }}
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
+      APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+      APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+      APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+      APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
+      APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -249,13 +256,8 @@ jobs:
       # Distribution identity, packages with the Mac Installer identity and
       # uploads via altool. Runs only when MAS secrets are configured.
       # ------------------------------------------------------------------
-      - name: Prepare MAS keychain + imports (A)
+      - name: Prepare Mac App Store credentials
         shell: bash
-        env:
-          APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
-          APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
-          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
-          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
         run: |
           if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
             echo "MAS secrets not configured — skipping Mac App Store submission"
@@ -314,13 +316,6 @@ jobs:
           # try both, tolerate failure (import-time -T grants usually suffice).
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "${KEYCHAIN}" > /dev/null 2>&1 || \
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" > /dev/null 2>&1 || true
-      - name: Prepare MAS profile + API key (B)
-        shell: bash
-        env:
-          APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: |
           # Keep the runner's existing search list and prepend ours.
           security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d ' "')
           security find-identity -v -p codesigning
@@ -398,6 +393,9 @@ jobs:
       - name: Submit desktop app to Mac App Store
         if: env.MAS_READY == 'true'
         shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           cd desktop/ggcode-desktop-wails
           # Round 5 (run 42008131651: prepare step green - G3 asserted, default
