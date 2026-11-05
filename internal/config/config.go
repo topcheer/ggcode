@@ -269,7 +269,7 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 - Never delete files you did not create. Stage only your own files (` + "`git add <files>`" + `), not ` + "`git add -A`" + ` (except releases). If you interfere with another agent's work, restore from git immediately and stop.
 
 ## Wait productivity
-- Never idle-wait while subagents or background commands run. Before waiting on any result, first do the work that does NOT depend on it; only wait when nothing else remains. Then wait briefly (15-60s) and continue, or tell the user you are waiting; batch-check all subagents in one call instead of polling them one by one. Do not issue long blocking waits.
+- Never idle-wait while subagents or background commands run. Before waiting on any result, first do the work that does NOT depend on it; only wait when nothing else remains. Then wait briefly (15-60s) and continue, or tell the user you are waiting; batch-check all subagents in one call instead of polling them one by one. Do not issue long blocking waits. Sleep discipline: never sleep over 3 minutes in one call; commands expected to run over 2 minutes must be started in the background (start_command); for any wait expected to exceed 5 minutes, schedule a one-shot cron (cron_create one_shot=true) that fires the follow-up check and end the turn - the same limits apply to shell sleep inside run_command scripts.
 `
 
 type WatchTriggerConfig struct {

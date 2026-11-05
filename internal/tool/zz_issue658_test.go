@@ -35,7 +35,7 @@ func TestSleepZeroStillSucceeds(t *testing.T) {
 
 func TestSleepBoundaryAccepted(t *testing.T) {
 	tool := SleepTool{}
-	input, _ := json.Marshal(map[string]any{"seconds": 1800, "description": "t"})
+	input, _ := json.Marshal(map[string]any{"seconds": 180, "description": "t"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := tool.Execute(ctx, input)

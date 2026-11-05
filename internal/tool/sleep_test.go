@@ -9,13 +9,13 @@ import (
 
 func TestSleepToolDescriptionClarifiesDelayUse(t *testing.T) {
 	tool := SleepTool{}
-	for _, want := range []string{"Max 30 minutes", "wait_command", "never sleep the full expected duration", "15-60s"} {
+	for _, want := range []string{"Hard cap 3 minutes", "wait_command", "never sleep the full expected duration", "15-60s", "start_command", "one_shot=true"} {
 		if !containsAny(tool.Description(), want) {
 			t.Fatalf("sleep description should mention %q, got %q", want, tool.Description())
 		}
 	}
 	params := string(tool.Parameters())
-	if !containsAny(params, "Total duration must not exceed 30 minutes") {
+	if !containsAny(params, "Hard cap 180s") {
 		t.Fatalf("sleep schema should mention max duration, got %s", params)
 	}
 }
@@ -57,7 +57,7 @@ func TestSleep_WithMilliseconds(t *testing.T) {
 func TestSleep_ExceedsMax(t *testing.T) {
 	s := SleepTool{}
 	input, _ := json.Marshal(map[string]interface{}{
-		"seconds": 1900,
+		"seconds": 190,
 	})
 	result, err := s.Execute(context.Background(), input)
 	if err != nil {

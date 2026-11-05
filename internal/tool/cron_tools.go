@@ -65,6 +65,7 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Cron        string `json:"cron"`
 		Prompt      string `json:"prompt"`
 		Recurring   *bool  `json:"recurring"`
+		OneShot     *bool  `json:"one_shot"`
 		QueueIfBusy *bool  `json:"queue_if_busy"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
@@ -81,6 +82,12 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if args.Recurring != nil {
 		recurring = *args.Recurring
 	}
+	// one_shot is the canonical route for deferred follow-ups: the job fires
+	// once and removes itself. Preferred over recurring=false for any wait
+	// expected to exceed 5 minutes (sleep-discipline routing).
+	if args.OneShot != nil && *args.OneShot {
+		recurring = false
+	}
 
 	queueIfBusy := false
 	if args.QueueIfBusy != nil {
@@ -92,7 +99,11 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	out, _ := json.Marshal(job)
-	return Result{Content: string(out) + "\n"}, nil
+	suffix := ""
+	if !recurring {
+		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+	}
+	return Result{Content: string(out) + suffix + "\n"}, nil
 }
 
 type CronDeleteTool struct {

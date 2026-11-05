@@ -11,7 +11,7 @@ type SleepTool struct{}
 
 func (t SleepTool) Name() string { return "sleep" }
 func (t SleepTool) Description() string {
-	return "Sleep a SHORT interval (15-60s), then re-check the result - never sleep the full expected duration in one call: external tasks often fail early, and a blind long sleep wastes the whole window. Max 30 minutes per call. Prefer wait_command when you have a job ID."
+	return "Sleep a SHORT interval (15-60s), then re-check the result - never sleep the full expected duration in one call: external tasks often fail early, and a blind long sleep wastes the whole window. Hard cap 3 minutes per call. Commands expected to run over 2 minutes must use start_command (background) instead; for any wait expected to exceed 5 minutes, schedule a one-shot cron (cron_create with one_shot=true) that fires the follow-up check, and end the current turn - do not hold the session with long sleeps. Prefer wait_command when you have a job ID."
 }
 func (t SleepTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -19,11 +19,11 @@ func (t SleepTool) Parameters() json.RawMessage {
 	"properties": {
 			"seconds": {
 				"type": "integer",
-				"description": "Seconds to sleep (combined with milliseconds). Total duration must not exceed 30 minutes."
+				"description": "Seconds to sleep (combined with milliseconds). Hard cap 180s. Commands expected to take over 2 minutes: use start_command. Waits over 5 minutes: use a one-shot cron (one_shot=true) instead of sleeping."
 			},
 			"milliseconds": {
 				"type": "integer",
-				"description": "Additional milliseconds to sleep (combined with seconds). Total duration must not exceed 30 minutes."
+				"description": "Additional milliseconds to sleep (combined with seconds). Total must not exceed 180s."
 			},
 		"description": {
 			"type": "string",
@@ -52,19 +52,19 @@ func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "milliseconds must be non-negative"}, nil
 	}
 
-	if args.Seconds > 1800 {
-		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %ds exceeds maximum of 30m", args.Seconds)}, nil
+	if args.Seconds > 180 {
+		return Result{IsError: true, Content: "sleep duration exceeds the 3-minute cap. Use start_command (background) for commands expected to run over 2 minutes; for waits over 5 minutes schedule a one-shot cron (cron_create one_shot=true) that fires the follow-up check instead of sleeping."}, nil
 	}
-	if args.Milliseconds > 1800*1000 {
-		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %dms exceeds maximum of 30m", args.Milliseconds)}, nil
+	if args.Milliseconds > 180*1000 {
+		return Result{IsError: true, Content: "sleep duration exceeds the 3-minute cap. For waits over 5 minutes schedule a one-shot cron (cron_create one_shot=true) instead of sleeping."}, nil
 	}
 
 	d := time.Duration(args.Seconds)*time.Second + time.Duration(args.Milliseconds)*time.Millisecond
 	if d <= 0 {
 		return Result{Content: "Slept for 0s"}, nil
 	}
-	if d > 30*time.Minute {
-		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %s exceeds maximum of 30m", d)}, nil
+	if d > 3*time.Minute {
+		return Result{IsError: true, Content: "sleep duration exceeds the 3-minute cap. For waits over 5 minutes schedule a one-shot cron (cron_create one_shot=true) instead of sleeping."}, nil
 	}
 
 	timer := time.NewTimer(d)
