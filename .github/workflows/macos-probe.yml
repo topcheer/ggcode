@@ -1,0 +1,10 @@
+name: macos-probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    steps:
+      - run: echo "macos runner alive"
