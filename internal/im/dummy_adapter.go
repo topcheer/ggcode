@@ -36,19 +36,29 @@ func (a *dummyAdapter) Name() string { return a.name }
 
 func (a *dummyAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.metrics.RecordEvent(event)
-	if a.server != nil {
-		a.server.pushEvent(event)
+	a.mu.Lock()
+	srv := a.server
+	a.mu.Unlock()
+	if srv != nil {
+		srv.pushEvent(event)
 	}
 	return nil
 }
 
 func (a *dummyAdapter) Start(ctx context.Context) {
+	// #5078: assign the server BEFORE autoBind. Send only becomes reachable
+	// once autoBind registers the channel in the manager, so assignment
+	// before registration establishes the happens-before chain for the
+	// emit path. The mu guard below additionally covers any unsynchronized
+	// direct callers (the old code wrote/read a.server with no lock at all).
+	a.mu.Lock()
+	a.server = newHTTPServer(a)
+	a.mu.Unlock()
+
 	if err := a.autoBind(); err != nil {
 		debug.Log("dummy", "auto-bind failed: %v", err)
 		return
 	}
-
-	a.server = newHTTPServer(a)
 
 	listenAddr := dummyStringValue(a.cfg.Extra, "listen_addr", "127.0.0.1:0")
 	portFile := dummyStringValue(a.cfg.Extra, "port_file", "")
