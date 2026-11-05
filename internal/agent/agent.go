@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,48 @@ type runResultHandler func([]provider.ContentBlock, error)
 var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 const maxAgentLLMRetries = 3
+
+// Rate-limit retry policy: when the LLM is rate limited (transient 429 or a
+// coding-plan window/quota that resets on a schedule), keep retrying the SAME
+// call in place at a fixed long interval instead of failing the turn after a
+// few short backoffs. The interval defaults to 5 minutes; the attempt count
+// defaults to unlimited (0) because window limits routinely need hours to
+// reset, and the user can cancel at any time. Both are overridable via env.
+const (
+	defaultRateLimitRetryInterval = 5 * time.Minute
+	rateLimitRetryIntervalEnvVar  = "GGCODE_RATE_LIMIT_RETRY_INTERVAL"
+	rateLimitRetryMaxEnvVar       = "GGCODE_RATE_LIMIT_RETRY_MAX"
+)
+
+// rateLimitRetryPolicy returns the fixed retry interval and max attempts for
+// rate-limited LLM calls (max <= 0 means unlimited).
+func rateLimitRetryPolicy() (interval time.Duration, maxAttempts int) {
+	interval = defaultRateLimitRetryInterval
+	if v := strings.TrimSpace(os.Getenv(rateLimitRetryIntervalEnvVar)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		} else if secs, err2 := strconv.Atoi(v); err2 == nil && secs > 0 {
+			interval = time.Duration(secs) * time.Second
+		}
+	}
+	maxAttempts = 0
+	if v := strings.TrimSpace(os.Getenv(rateLimitRetryMaxEnvVar)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			maxAttempts = n
+		}
+	}
+	return interval, maxAttempts
+}
+
+// isRateLimitedLLMError reports whether the error is a rate limit that should
+// be retried at the long fixed interval (transient 429s AND coding-plan
+// window/quota resets both classify as FailureRateLimit).
+func isRateLimitedLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return provider.ClassifyLLMError(err) == provider.FailureRateLimit
+}
 
 func agentLLMRetryLimit() int {
 	if provider.RetryAlwaysEnabled() {
@@ -1591,6 +1634,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	reactiveCompactRetries := 0
 	agentLLMRetries := 0
+	rateLimitRetries := 0
 	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
 	truncationContinues := 0
@@ -2133,6 +2177,40 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 
 			if isAgentRetryableLLMError(err) && agentLLMRetries < agentLLMRetryLimit() {
+
+				// Rate-limited calls get a LONG fixed-interval retry that is
+				// independent of the short-backoff counter: a coding-plan window
+				// resets on the hour scale, so three 5-15s backoffs would always
+				// give up right before it could recover. Retry in place at the
+				// configured interval (default 5m) until success or cancel, and
+				// tell the user how to switch provider/endpoint meanwhile.
+				if isRateLimitedLLMError(err) {
+					interval, maxAttempts := rateLimitRetryPolicy()
+					if maxAttempts > 0 && rateLimitRetries >= maxAttempts {
+						debug.Log("agent", "rate-limit retry budget exhausted (%d/%d): %v", rateLimitRetries, maxAttempts, err)
+					} else {
+						rateLimitRetries++
+						if rateLimitRetries == 1 {
+							onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+								Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying this call every %s until it recovers (Ctrl+C to stop). "+
+									"This may be a short throttle or a plan window quota that resets later. "+
+									"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", interval)})
+						} else {
+							onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+								Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, interval)})
+						}
+						debug.Log("agent", "rate limited (attempt %d, max %d), retrying in %v: %v",
+							rateLimitRetries, maxAttempts, interval, err)
+						select {
+						case <-time.After(interval):
+						case <-ctx.Done():
+							onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+							return ctx.Err()
+						}
+						continue
+					}
+				}
+
 				agentLLMRetries++
 
 				multiplier := 2
