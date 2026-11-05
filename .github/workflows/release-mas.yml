@@ -25,10 +25,8 @@ permissions:
 jobs:
   build-desktop-darwin:
     name: Build desktop macOS
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: macos-15
-    needs:
-      - verify
     permissions:
       contents: write
     env:
