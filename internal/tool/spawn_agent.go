@@ -41,6 +41,23 @@ var subAgentBlockedTools = []string{
 	"a2a_send_task",
 }
 
+// DefaultSubAgentMaxToolCalls is the conservative turn budget applied when a
+// spawn omits max_tool_calls. Before this default an omitted budget meant an
+// unbounded agent loop; a looping sub-agent then burned tokens until manual
+// cancel (33min / 290 tool calls, #5013 same-day recurrence sa-16). Spawns
+// are bounded by default now; pass max_tool_calls explicitly for a different
+// budget.
+const DefaultSubAgentMaxToolCalls = 60
+
+// normalizeMaxToolCalls maps an omitted or invalid budget to the conservative
+// default so a spawn can never run unbounded by accident (#5013 recurrence).
+func normalizeMaxToolCalls(n int) (effective int, defaulted bool) {
+	if n > 0 {
+		return n, false
+	}
+	return DefaultSubAgentMaxToolCalls, true
+}
+
 type SpawnAgentTool struct {
 	Manager             *subagent.Manager
 	Provider            provider.Provider
@@ -103,6 +120,10 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
+		},
+		"max_tool_calls": {
+			"type": "integer",
+			"description": "Hard budget for the sub-agent's agent loop, in LLM turns (each turn may issue several tool calls). The run stops with its partial result when the budget is reached. If omitted (or <= 0), a conservative default of 60 LLM turns applies - unbounded runs are no longer possible. Raise it explicitly for tasks that legitimately need more turns."
 		}
 	},
 	"required": [
@@ -181,6 +202,8 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	args.Task += readBackNudge(args.Task)
 
+	maxToolCalls, budgetDefaulted := normalizeMaxToolCalls(args.MaxToolCalls)
+
 	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
 		Name:         name,
 		Task:         args.Task,
@@ -189,13 +212,17 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		Model:        args.Model,
 		AgentType:    args.SubagentType,
 		Isolation:    isolation,
-		MaxToolCalls: args.MaxToolCalls,
+		MaxToolCalls: maxToolCalls,
 	})
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
 	}
 
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.", id)
+	budgetSource := "explicit max_tool_calls"
+	if budgetDefaulted {
+		budgetSource = "conservative default; pass max_tool_calls to change it"
+	}
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.\nBudget: %d LLM turns (%s). The run stops with its partial result when the budget is reached.", id, maxToolCalls, budgetSource)
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}
@@ -212,12 +239,18 @@ type LaunchOptions struct {
 	Isolation   string
 	// MaxToolCalls is a deterministic hard budget for the sub-agent's
 	// agent loop (max iterations, each iteration being one LLM turn that
-	// may issue tool calls). 0 keeps the pre-existing unbounded behavior;
-	// N > 0 stops the run after N turns with the partial result (#5013).
+	// may issue tool calls). Values <= 0 fall back to the conservative
+	// DefaultSubAgentMaxToolCalls - an unbounded run is no longer possible
+	// via this tool; N > 0 stops the run after N turns with the partial
+	// result (#5013 and its same-day recurrence).
 	MaxToolCalls int
 }
 
 func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string, string, error) {
+	// Defense in depth: no Launch caller can produce an unbounded run by
+	// passing 0 (#5013 recurrence - the loop only stops on manual cancel).
+	opts.MaxToolCalls, _ = normalizeMaxToolCalls(opts.MaxToolCalls)
+
 	id := t.Manager.Spawn(opts.Name, opts.Task, opts.DisplayTask, opts.Tools, ctx)
 
 	displayModel := opts.Model

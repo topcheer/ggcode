@@ -63,7 +63,7 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 
 ### Hard tool-call budget (`max_tool_calls`)
 
-Written task-contract budgets have no enforcement power on their own: a sub-agent that loops on reads keeps burning tokens until cancelled. Pass `max_tool_calls` (integer, 0 = unbounded historical default) to cap the agent loop at N LLM turns — the run is then stopped with its partial result instead of running unbounded (#5013).
+Written task-contract budgets have no enforcement power on their own: a sub-agent that loops on reads keeps burning tokens until cancelled. Pass `max_tool_calls` (integer) to cap the agent loop at N LLM turns — the run is then stopped with its partial result instead of running unbounded (#5013). If omitted (or <= 0), a conservative default of 60 LLM turns applies, so spawns are always bounded; the spawn result discloses the effective budget. Raise it explicitly for tasks that legitimately need more turns (#5013 same-day recurrence).
 
 ### Model Selection
 
