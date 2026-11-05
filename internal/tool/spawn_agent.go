@@ -123,7 +123,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"max_tool_calls": {
 			"type": "integer",
-			"description": "Hard budget for the sub-agent's agent loop, in LLM turns (each turn may issue several tool calls). The run stops with its partial result when the budget is reached. If omitted (or <= 0), a conservative default of 60 LLM turns applies - unbounded runs are no longer possible. Raise it explicitly for tasks that legitimately need more turns."
+			"description": "Hard budget for the sub-agent run, enforced on BOTH axes: N LLM turns AND N actual tool calls (parallel tool batching cannot smuggle extra calls under one turn). The run stops with its partial result when either budget is reached. If omitted (or <= 0), a conservative default of 60 turns / 60 calls applies - unbounded runs are no longer possible. Raise it explicitly for tasks that legitimately need more calls."
 		}
 	},
 	"required": [
@@ -222,7 +222,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if budgetDefaulted {
 		budgetSource = "conservative default; pass max_tool_calls to change it"
 	}
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.\nBudget: %d LLM turns (%s). The run stops with its partial result when the budget is reached.", id, maxToolCalls, budgetSource)
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.\nBudget: %d LLM turns AND %d tool calls, whichever is hit first (%s). The run stops with its partial result when either budget is reached.", id, maxToolCalls, maxToolCalls, budgetSource)
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}

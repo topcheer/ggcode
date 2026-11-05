@@ -322,8 +322,8 @@ func TestSpawnAgentDefaultBudgetBounded(t *testing.T) {
 	if !containsStr(result.Content, "conservative default") {
 		t.Errorf("spawn without max_tool_calls must report the conservative default budget, got: %s", result.Content)
 	}
-	if !containsStr(result.Content, "Budget: 60 LLM turns") {
-		t.Errorf("spawn without max_tool_calls must report Budget: 60 LLM turns, got: %s", result.Content)
+	if !containsStr(result.Content, "Budget: 60 LLM turns AND 60 tool calls") {
+		t.Errorf("spawn without max_tool_calls must report Budget: 60 LLM turns AND 60 tool calls, got: %s", result.Content)
 	}
 }
 
@@ -347,7 +347,7 @@ func TestSpawnAgentExplicitBudgetRespected(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	if !containsStr(result.Content, "Budget: 12 LLM turns") {
+	if !containsStr(result.Content, "Budget: 12 LLM turns AND 12 tool calls") {
 		t.Errorf("explicit max_tool_calls=12 must be respected verbatim, got: %s", result.Content)
 	}
 	if containsStr(result.Content, "conservative default") {
