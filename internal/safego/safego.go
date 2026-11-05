@@ -1,14 +1,42 @@
 package safego
 
 import (
+	"fmt"
+	"io"
+	"os"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
-var logFn func(category, format string, args ...any)
+// stderrSink is atomically swappable for tests; production always writes
+// to os.Stderr. atomic access keeps panic-path writes race-free even when
+// a test swaps the sink concurrently.
+var stderrSink atomic.Pointer[io.Writer]
+
+func init() {
+	w := io.Writer(os.Stderr)
+	stderrSink.Store(&w)
+}
+
+func stderrWrite(format string, args ...any) {
+	if w := stderrSink.Load(); w != nil {
+		fmt.Fprintf(*w, format, args...)
+	}
+}
+
+var logSink atomic.Pointer[func(category, format string, args ...any)]
 
 func SetLogger(fn func(category, format string, args ...any)) {
-	logFn = fn
+	logSink.Store(&fn)
+}
+
+func logger() func(category, format string, args ...any) {
+	if p := logSink.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 var (
@@ -43,16 +71,23 @@ func Recover(name string) {
 		return
 	}
 	stack := debug.Stack()
-	if logFn != nil {
-		logFn("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
+	// PANIC is fatal-class: always mirror to stderr so the failure is
+	// visible even when debug logging is disabled or its sinks are nil
+	// (silent-swallow defect: a recovered panic that nobody can see turns
+	// into a "3s timeout" mystery at the call site - #5060 family).
+	stderrWrite("[%s] [safego] PANIC in goroutine %q: %v\n%s\n",
+		time.Now().UTC().Format(time.RFC3339), name, r, stack)
+	if l := logger(); l != nil {
+		l("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
 	}
 	if hook := GetPanicHook(); hook != nil {
 
 		func() {
 			defer func() {
 				if r2 := recover(); r2 != nil {
-					if logFn != nil {
-						logFn("safego", "PANIC in PanicHook for %q: %v", name, r2)
+					stderrWrite("[safego] PANIC in PanicHook for %q: %v\n", name, r2)
+					if l := logger(); l != nil {
+						l("safego", "PANIC in PanicHook for %q: %v", name, r2)
 					}
 				}
 			}()
