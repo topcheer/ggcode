@@ -488,6 +488,9 @@ func carriesShellOperators(cmd string) bool {
 			}
 			i += j + 1 // resume right after the closing quote
 		case '"':
+			// #5104: boundary math comes from the shared segment scanner;
+			// the read-only FACE POLICY (operators inside $() are real and
+			// must be detected) stays local via doubleQuotedOperatorAt.
 			found, end := doubleQuotedOperatorAt(cmd, i+1)
 			if found {
 				return true
@@ -512,31 +515,47 @@ func carriesShellOperators(cmd string) bool {
 // operator detection (the inner pipeline really runs). It returns
 // found=true as soon as a real operator is seen, or the index of the
 // closing quote (end == len(cmd) when the segment never terminates).
+//
+// #5104: the $() EXTENT comes from the shared skipDollarParen primitive
+// so all faces agree on where substitution bodies end; only this face
+// chooses to look INSIDE them.
 func doubleQuotedOperatorAt(cmd string, i int) (found bool, end int) {
-	subDepth := 0 // $( ) nesting depth
 	for ; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
 		case c == '\\' && i+1 < len(cmd):
 			i++ // escaped char is literal inside double quotes
-		case c == '"' && subDepth == 0:
+		case c == '"':
 			return false, i
 		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(':
-			subDepth++
-			i++ // consume '('
-		case c == ')' && subDepth > 0:
-			subDepth--
-		case subDepth > 0:
-			// Inside $( ): operators are executed for real.
-			if c == '|' || c == '>' || c == ';' || c == '\n' {
-				return true, i
+			// FACE POLICY (read-only): operators inside $( ) are executed
+			// for real - scan the substitution body instead of skipping it.
+			closeParen := skipDollarParen(cmd, i+1)
+			if hasOperatorInSpan(cmd, i+2, closeParen) {
+				return true, closeParen
 			}
-			if c == '&' && i+1 < len(cmd) && cmd[i+1] == '&' {
-				return true, i
-			}
+			i = closeParen
 		}
 	}
 	return false, len(cmd)
+}
+
+// hasOperatorInSpan reports whether cmd[lo:hi] contains a shell control
+// operator (| > ; newline, or &&). Used by the read-only face policy to
+// detect real operators inside $() substitution bodies.
+func hasOperatorInSpan(cmd string, lo, hi int) bool {
+	hi = min(hi, len(cmd))
+	for k := lo; k < hi; k++ {
+		switch cmd[k] {
+		case '|', '>', ';', '\n':
+			return true
+		case '&':
+			if k+1 < hi && cmd[k+1] == '&' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isTestWritingTask(userPrompt string) bool {
