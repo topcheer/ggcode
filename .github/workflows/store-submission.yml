@@ -16,6 +16,10 @@ on:
         description: "What's new notes (optional)"
         required: false
         default: ""
+      resume_submission_id:
+        description: "Resume an existing draft submission id (optional, for crash recovery)"
+        required: false
+        default: ""
   push:
     tags:
       - 'v*'
@@ -59,7 +63,7 @@ jobs:
           TENANT: ${{ secrets.STORE_TENANT_ID }}
           CLIENT: ${{ secrets.STORE_CLIENT_ID }}
           SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
-        run: .\scripts\release\submit-store.ps1 -TenantId $env:TENANT -ClientId $env:CLIENT -ClientSecret $env:SECRET -ProductId "${{ secrets.STORE_PRODUCT_ID }}" -PackageDir dist -ReleaseNotes "${{ github.event.inputs.release_notes }}"
+        run: .\scripts\release\submit-store.ps1 -TenantId $env:TENANT -ClientId $env:CLIENT -ClientSecret $env:SECRET -ProductId "${{ secrets.STORE_PRODUCT_ID }}" -PackageDir dist -ReleaseNotes "${{ github.event.inputs.release_notes }}" -ResumeSubmissionId "${{ github.event.inputs.resume_submission_id }}"
 
       - name: Keep packages as artifact (audit trail)
         uses: actions/upload-artifact@v4
