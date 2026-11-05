@@ -43,12 +43,17 @@ func (a *dummyAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 }
 
 func (a *dummyAdapter) Start(ctx context.Context) {
+	// #5078: create the server BEFORE autoBind publishes the channel binding.
+	// Once the binding is visible, manager Emit paths may call Send from any
+	// goroutine; assigning a.server first means every such Send already
+	// observes a fully-set server (no write/read race, no dropped events).
+	a.server = newHTTPServer(a)
+
 	if err := a.autoBind(); err != nil {
 		debug.Log("dummy", "auto-bind failed: %v", err)
+		a.server = nil
 		return
 	}
-
-	a.server = newHTTPServer(a)
 
 	listenAddr := dummyStringValue(a.cfg.Extra, "listen_addr", "127.0.0.1:0")
 	portFile := dummyStringValue(a.cfg.Extra, "port_file", "")
