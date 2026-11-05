@@ -76,6 +76,39 @@ var nonAnthropicQuotaCodes = []string{
 	"quota exceeded",
 }
 
+// glmWindowLimitMarkers identifies GLM/Zhipu coding-plan WINDOW limits (the
+// "5-hour usage window" that resets on a schedule), which are recoverable and
+// must be retried in place - distinct from a genuinely exhausted balance.
+// Real response captured 2026-11-05:
+//
+//	429 {"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在 ... 重置。"}}
+var glmWindowLimitMarkers = []string{
+	"小时的使用上限",
+	"限额将在",
+	"小时使用上限",
+	"配额将在",
+}
+
+// glmHardQuotaMarkers are the ones that mean the plan/balance is really out -
+// retrying those blindly would loop forever.
+var glmHardQuotaMarkers = []string{
+	"余额不足",
+	"欠费",
+	"请充值",
+	"额度已用完",
+	"额度耗尽",
+	"配额耗尽",
+	"套餐已到期",
+}
+
+// isGLMWindowLimit reports a recoverable GLM coding-plan window limit.
+func isGLMWindowLimit(s string) bool {
+	if containsAny(s, glmHardQuotaMarkers) {
+		return false
+	}
+	return containsAny(s, glmWindowLimitMarkers)
+}
+
 var chineseQuotaMarkers = []string{
 	"使用上限",
 	"配额超限",
@@ -88,6 +121,9 @@ var chineseQuotaMarkers = []string{
 }
 
 func isAnthropicWindowLimit(s string) bool {
+	if isGLMWindowLimit(s) {
+		return true
+	}
 	if containsAny(s, nonAnthropicQuotaCodes) {
 		return false
 	}
