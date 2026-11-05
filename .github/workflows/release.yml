@@ -278,6 +278,11 @@ jobs:
           # (the issuer of our Distribution certs). Apple has removed the G3
           # download page, so the cert ships in-repo (public trust material).
           security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
+          # Grant the runner's codesign access to the imported private keys.
+          # Without a partition list the keychain ACL blocks codesign with
+          # errSecInternalComponent (run 41971828737: both p12s + G3 imported
+          # fine, find-identity reported 0 valid identities, codesign failed).
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions "${KEYCHAIN}" > /dev/null
           security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
           security find-identity -v -p codesigning
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
