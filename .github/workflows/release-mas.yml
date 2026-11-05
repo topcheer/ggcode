@@ -250,6 +250,15 @@ jobs:
       # uploads via altool. Runs only when MAS secrets are configured.
       # ------------------------------------------------------------------
       - name: Prepare Mac App Store credentials
+        shell: bash
+        env:
+          APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+          APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
       - name: bisect-ok
         run: echo ok
       - name: Submit desktop app to Mac App Store
