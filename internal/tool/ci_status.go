@@ -23,7 +23,10 @@ func (t CIStatusTool) Name() string { return "ci_status" }
 func (t CIStatusTool) Description() string {
 	return "Check CI/CD pipeline status for the current branch using GitHub CLI (gh). " +
 		"Supports three actions: 'status' (latest run for current branch), 'list' (recent runs), " +
-		"'logs' (failed job logs for diagnosis). Requires gh CLI to be installed and authenticated."
+		"'logs' (failed job logs for diagnosis). Pass 'pr' to verify a PR's head branch " +
+		"instead of the current/default branch - when reviewing from a main checkout, the " +
+		"default branch query can report main's green while the PR head is red. " +
+		"Requires gh CLI to be installed and authenticated."
 }
 
 func (t CIStatusTool) Parameters() json.RawMessage {
@@ -38,6 +41,10 @@ func (t CIStatusTool) Parameters() json.RawMessage {
 			"branch": {
 				"type": "string",
 				"description": "Branch name (default: current branch from git)"
+			},
+			"pr": {
+				"type": "integer",
+				"description": "PR number: resolve and query its head branch (takes precedence over 'branch' and the current-branch default). Use this when verifying a PR - querying from a main checkout defaults to main's checks, not the PR head."
 			},
 			"path": {
 				"type": "string",
@@ -56,6 +63,7 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	var args struct {
 		Action string `json:"action"`
 		Branch string `json:"branch"`
+		PR     int    `json:"pr"`
 		Path   string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
@@ -75,6 +83,22 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 
 	resolveBranch := func() (string, error) {
+		// #5055-adjacent: PR context must resolve the PR's head branch -
+		// from a main checkout the default query reports main's checks
+		// while the PR head may be failing (false-green risk).
+		if args.PR > 0 {
+			out, err := ghRun(ctx, dir, "pr", "view", fmt.Sprintf("%d", args.PR), "--json", "headRefName")
+			if err != nil {
+				return "", fmt.Errorf("could not resolve PR #%d head branch: %w", args.PR, err)
+			}
+			var pr struct {
+				HeadRefName string `json:"headRefName"`
+			}
+			if err := json.Unmarshal([]byte(out), &pr); err != nil || pr.HeadRefName == "" {
+				return "", fmt.Errorf("PR #%d returned no headRefName", args.PR)
+			}
+			return pr.HeadRefName, nil
+		}
 		if args.Branch != "" {
 			return args.Branch, nil
 		}

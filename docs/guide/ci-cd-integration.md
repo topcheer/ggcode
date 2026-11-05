@@ -27,6 +27,20 @@ Output includes:
 - Workflow name, commit SHA, event type
 - Run ID for follow-up queries
 
+### Querying a PR's head branch (`pr` parameter)
+
+By default, `status` and `logs` query the current branch (or an explicit
+`branch` argument). When you are verifying a PR from a `main` checkout, that
+default reports **main's** checks while the PR head may be failing - a
+false-green. Pass the PR number to resolve and query its head branch:
+
+```
+ci_status action=status pr=5035
+ci_status action=logs pr=5035
+```
+
+`pr` takes precedence over `branch` and the current-branch default.
+
 ### `list`
 Show the 10 most recent workflow runs across all branches.
 
