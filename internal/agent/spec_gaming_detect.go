@@ -857,12 +857,57 @@ func stripQuotedReferences(cmd string) string {
 		end := quotedSegmentEnd(cmd, i)
 		if isRedirectTarget(end + 1) {
 			b.WriteString(cmd[start:min(end+1, len(cmd))])
+		} else if cmd[start] == '"' {
+			// #5101 QA residual: $( ) substitution bodies inside double
+			// quotes are executed content - blank the literal text but keep
+			// those spans verbatim so markers produced by the substitution
+			// cannot hide behind the filler (single-quoted segments have no
+			// substitution semantics in POSIX shells, so they blank fully).
+			b.WriteString(blankQuotedKeepingSubstitutions(cmd, start, end))
 		} else {
 			for k := start; k <= end && k < len(cmd); k++ {
 				b.WriteByte(' ')
 			}
 		}
 		i = end + 1
+	}
+	return b.String()
+}
+
+// blankQuotedKeepingSubstitutions blanks the double-quoted segment
+// cmd[start:end+1] with same-length filler (alignment contract of
+// stripQuotedReferences) except $( ) command-substitution spans, which are
+// copied verbatim: the shell executes them, so any skip marker inside a
+// substitution body stays visible to the caller's substring checks. Mirrors
+// quotedSegmentEnd's segmentation exactly (same skipDollarParen), so the
+// two functions can never disagree about where a span begins or ends.
+func blankQuotedKeepingSubstitutions(cmd string, start, end int) string {
+	var b strings.Builder
+	b.Grow(end + 1 - start)
+	b.WriteByte(' ') // opening quote
+	j := start + 1
+	for j < end && j < len(cmd) {
+		if cmd[j] == '\\' && j+1 < len(cmd) {
+			b.WriteString("  ")
+			j += 2
+			continue
+		}
+		if cmd[j] == '$' && j+1 < len(cmd) && cmd[j+1] == '(' {
+			close := skipDollarParen(cmd, j+1)
+			if close >= end {
+				// unterminated substitution body: the segment end (closing
+				// quote or end of command) bounds the verbatim span
+				close = end - 1
+			}
+			b.WriteString(cmd[j : close+1])
+			j = close + 1
+			continue
+		}
+		b.WriteByte(' ')
+		j++
+	}
+	if end < len(cmd) {
+		b.WriteByte(' ') // closing quote
 	}
 	return b.String()
 }

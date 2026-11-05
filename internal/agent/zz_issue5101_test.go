@@ -121,3 +121,60 @@ func TestIssue5101APIPassthroughNotExempt(t *testing.T) {
 		}
 	}
 }
+
+// #5101 QA residual: $( ) substitution bodies inside double-quoted report
+// bodies are EXECUTED content - the shell runs them, so a marker produced
+// by the substitution must stay visible to the scan instead of hiding in
+// the blanked filler (bypass regression found in the #5102 review).
+func TestIssue5101SubstitutionBodiesVisible(t *testing.T) {
+	cases := []string{
+		// substitution that writes a marker into a test file via a report verb
+		`gh issue create --title X --body "$(echo '@skip' > x_test.go)"`,
+		// substitution emitting the marker into the body text
+		`gh issue create --title X --body "value $(echo '@skip') end"`,
+		// boundary-marker variant through the api passthrough
+		`gh api repos/:owner/:repo/contents/x -f body="pre $(printf 'xit(') post"`,
+		// marker inside the substitution, not in the literal text
+		`gh pr comment 1 --body "note: $(printf 't.Skip(') in the log"`,
+	}
+	for _, cmd := range cases {
+		if !hasSkipMarkersInCommands([]string{cmd}) {
+			t.Errorf("hasSkipMarkersInCommands(%q) = false, want true (executed substitution body)", cmd)
+		}
+	}
+	// literal references with harmless substitutions stay exempt
+	exempt := []string{
+		`gh issue create --body "discusses $(pwd) and mentions @pytest.mark.skip here"`,
+		`gh issue comment 2 --body 'plain @skip reference, no substitution'`,
+	}
+	for _, cmd := range exempt {
+		if hasSkipMarkersInCommands([]string{cmd}) {
+			t.Errorf("hasSkipMarkersInCommands(%q) = true, want false (literal reference)", cmd)
+		}
+	}
+}
+
+// the filler must keep alignment even when substitution spans are copied
+// verbatim, and malformed input (unterminated bodies) must not panic.
+func TestIssue5101SubstitutionAlignment(t *testing.T) {
+	cmds := []string{
+		`gh issue create --body "value $(echo '@skip') end"`,
+		`gh issue create --body "a $(b) c $(d) e"`,
+		`gh issue create --body "unterminated $(tail`,
+		`gh issue create --body "nested $(echo $(pwd)) ok"`,
+	}
+	for _, cmd := range cmds {
+		got := stripQuotedReferences(cmd)
+		if len(got) != len(cmd) {
+			t.Errorf("stripQuotedReferences(%q) length = %d, want %d (alignment)", cmd, len(got), len(cmd))
+		}
+	}
+	// the verbatim substitution text must survive the blanking
+	got := stripQuotedReferences(`gh issue create --body "value $(echo '@skip') end"`)
+	if !containsVerbatim(got, `$(echo '@skip')`) {
+		t.Errorf("substitution span lost in filler: %q", got)
+	}
+	if containsVerbatim(got, "value") || containsVerbatim(got, "end") {
+		t.Errorf("literal text not blanked: %q", got)
+	}
+}
