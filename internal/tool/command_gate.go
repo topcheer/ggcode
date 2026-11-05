@@ -150,6 +150,11 @@ func NewCommandGate() *CommandGate {
 		{kind: "security", desc: "download and execute script",
 			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*>\s*/tmp/.*\.\w+\s*&&\s*(ba)?sh\s+/tmp/`)},
 
+		{kind: "security", desc: "git config writing exec-capable key (diff.external/core.pager/core.editor/core.hooksPath/core.fsmonitor/filter.*/alias.*)",
+			pattern: regexp.MustCompile(`(?i)\bgit\s+config\b[^;&|\n]*\b(diff\.external|core\.(pager|editor|fsmonitor|hooksPath)|filter\.[^\s='\"]+\.(command|smudge|clean|process)|alias\.[^\s='\"]+)\s+[^\s;&|\n]`)},
+		{kind: "security", desc: "git -c inline exec-capable config key (config-driven code execution, CVE-2026-112346 / adversa 2026-11 class)",
+			pattern: regexp.MustCompile(`(?i)\bgit\s+(?:-[A-Za-z]+\s+)*-c\s+[\"']?(diff\.external|core\.(pager|editor|fsmonitor|hooksPath)|filter\.[^\s='\"]+\.(command|smudge|clean|process)|alias\.[^\s='\"]+)\s*=`)},
+
 		{kind: "destructive", desc: "git reset --hard may discard uncommitted changes",
 			pattern: regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`)},
 		{kind: "destructive", desc: "git push --force may overwrite remote history",
@@ -181,6 +186,12 @@ func NewCommandGate() *CommandGate {
 		{desc: "remove dangerous GIT_PAGER override",
 
 			pattern: regexp.MustCompile(`(?i)^((?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)*)(?:env\s+)?GIT_PAGER=(?:'[^']*'|"[^"]*"|\S+)\s*`),
+
+			replace: "$1",
+		},
+		{desc: "remove dangerous GIT_EDITOR override",
+
+			pattern: regexp.MustCompile(`(?i)^((?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)*)(?:env\s+)?GIT_EDITOR=(?:'[^']*'|"[^"]*"|\S+)\s*`),
 
 			replace: "$1",
 		},
