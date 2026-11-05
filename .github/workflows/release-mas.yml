@@ -126,42 +126,5 @@ jobs:
           # Keep default keychain pointed at the chain we use.
           security default-keychain -s "${KEYCHAIN}"
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
-          security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
-            -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productbuild
-          # Apple Distribution identity (.app signing) ships in its own p12 -
-          # a single p12 cannot carry two private keys, so we import a second one.
-          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
-          security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \
-            -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -T /usr/bin/codesign
-          # A p12 carries only the leaf cert + private key. Codesign needs the
-          # full chain to the Apple root, so import the WWDR G3 intermediate
-          # (the issuer of our Distribution certs). Apple has removed the G3
-          # download page, so the cert ships in-repo (public trust material).
-          security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
-          # Fail loud if the intermediate did not land - a silent import is
-          # exactly how the earlier rounds burned CI runs guessing.
-          if ! security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" > /dev/null 2>&1; then
-            echo "::error::WWDR G3 intermediate not found in keychain after import"
-            exit 1
-          fi
-          # Anchor the chain: the G3 intermediate is signed by Apple Root CA,
-          # which ships in the runner's SystemRootCertificates. Importing it
-          # into the temp keychain too makes the trust evaluation independent
-          # of whatever default trust domain the image happens to expose.
-          security find-certificate -c "Apple Root CA" -p /System/Library/Keychains/SystemRootCertificates.keychain \
-            > "${RUNNER_TEMP}/appleroot.pem" 2>/dev/null || true
-          if [[ -s "${RUNNER_TEMP}/appleroot.pem" ]]; then
-            # Import only. Do NOT use add-trusted-cert here: on a headless
-            # runner it can hang the step waiting for a GUI trust prompt
-            # (run 42013525611: prepare stalled 12+ min on exactly this).
-            # The Apple Root CA is already trusted via the system trust
-            # domain; user-domain trust settings cannot override it anyway.
-            security import "${RUNNER_TEMP}/appleroot.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign > /dev/null
-          else
-            echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
-          fi
-          # Grant codesign access to the imported private keys. On the login
-          # keychain the partition pass may be empty or the image default -
-          # try both, tolerate failure (import-time -T grants usually suffice).
       - name: bisect-ok
         run: echo ok
