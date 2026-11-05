@@ -691,25 +691,33 @@ func lookupModelCapability(model string) (modelCapability, bool) {
 }
 
 func parseContextWindowHint(model string) int {
-	matches := contextWindowHintPattern.FindAllStringSubmatch(strings.ToLower(model), -1)
+	// #5050: FindAllStringSubmatch consumes each match's trailing boundary
+	// char, which is also the LEADING boundary of the next k/m token - a
+	// later, larger token ("8k-128k") then never matches and the take-max
+	// degrades to the smaller hint. RE2 has no lookahead, so scan manually
+	// and resume each match at the END of the k/m suffix, leaving the
+	// trailing boundary char available for the next token.
+	s := strings.ToLower(model)
 	best := 0
-	for _, match := range matches {
-		if len(match) < 4 {
-			continue
+	for i := 0; i < len(s); {
+		loc := contextWindowHintPattern.FindStringSubmatchIndex(s[i:])
+		if loc == nil {
+			break
 		}
-		n, err := strconv.Atoi(match[2])
-		if err != nil || n <= 0 {
-			continue
+		n, err := strconv.Atoi(s[i+loc[4] : i+loc[5]])
+		if err == nil && n > 0 {
+			switch s[i+loc[6] : i+loc[7]] {
+			case "k":
+				n *= 1000
+			case "m":
+				n *= 1000000
+			}
+			if n > best {
+				best = n
+			}
 		}
-		switch match[3] {
-		case "k":
-			n *= 1000
-		case "m":
-			n *= 1000000
-		}
-		if n > best {
-			best = n
-		}
+		// Advance past the digits+k/m suffix only (loc[7] = end of group 3).
+		i += loc[7]
 	}
 	return best
 }
