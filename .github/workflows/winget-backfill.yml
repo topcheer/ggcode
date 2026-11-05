@@ -19,6 +19,22 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-desktop
     steps:
       - uses: actions/checkout@v6
+      - name: Sync winget-pkgs fork
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "winget-pkgs fork synced successfully (attempt $i)."
+              exit 0
+            }
+            Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "::Error::Fork sync failed after 3 attempts; refusing to submit from a stale fork base (Internal-Error-PR risk, cf. v1.3.273 #470562/#470563)."
+          exit 1
       - name: Submit winget update
         shell: pwsh
         run: |
@@ -47,6 +63,22 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-cli
     steps:
       - uses: actions/checkout@v6
+      - name: Sync winget-pkgs fork
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "winget-pkgs fork synced successfully (attempt $i)."
+              exit 0
+            }
+            Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "::Error::Fork sync failed after 3 attempts; refusing to submit from a stale fork base (Internal-Error-PR risk, cf. v1.3.273 #470562/#470563)."
+          exit 1
       - name: Submit winget update
         shell: pwsh
         run: |
