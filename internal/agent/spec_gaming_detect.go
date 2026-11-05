@@ -455,7 +455,72 @@ func carriesSearchDownstreamMutation(cmd string, tail []string) bool {
 			return true
 		}
 	}
-	return strings.ContainsAny(cmd, "|>;\n") || strings.Contains(cmd, "&&")
+	// #5093: raw ContainsAny flagged the regex alternation '|' inside
+	// quoted search patterns (rg '(@skip|xit)\(') as a pipeline, voiding
+	// the read-only exemption. Only operators OUTSIDE quoted literal
+	// segments indicate a downstream mutation.
+	return carriesShellOperators(cmd)
+}
+
+// carriesShellOperators reports whether cmd contains shell control
+// operators (pipe |, redirect >, separators ; and newline, logical &&)
+// outside quoted literal segments.
+//
+// Quoting rules implemented:
+//   - single-quoted segments are fully literal (no escapes, POSIX)
+//   - double-quoted segments are literal except for backslash escapes
+//     and $( ) command substitution, whose body re-enables operator
+//     detection (the inner pipeline really runs)
+//   - outside quotes, a backslash escapes the next character
+//     (so grep foo\|bar is a literal | in the pattern, not a pipe)
+func carriesShellOperators(cmd string) bool {
+	inSingle, inDouble := false, false
+	subDepth := 0 // $( ) nesting depth inside double quotes
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case inDouble:
+			switch {
+			case c == '\\' && i+1 < len(cmd):
+				i++ // escaped char is literal inside double quotes
+			case c == '"' && subDepth == 0:
+				inDouble = false
+			case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(':
+				subDepth++
+				i++ // consume '('
+			case c == ')' && subDepth > 0:
+				subDepth--
+			case subDepth > 0:
+				// Inside $( ): operators are executed for real.
+				if c == '|' || c == '>' || c == ';' || c == '\n' {
+					return true
+				}
+				if c == '&' && i+1 < len(cmd) && cmd[i+1] == '&' {
+					return true
+				}
+			}
+		default:
+			switch c {
+			case '\\':
+				i++ // escaped next char outside quotes
+			case '\'':
+				inSingle = true
+			case '"':
+				inDouble = true
+			case '|', '>', ';', '\n':
+				return true
+			case '&':
+				if i+1 < len(cmd) && cmd[i+1] == '&' {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func isTestWritingTask(userPrompt string) bool {
