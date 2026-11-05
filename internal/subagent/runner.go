@@ -131,6 +131,17 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, cfg.MaxToolCalls)
 
+	// #5013: the factory argument bounds LLM turns, but the parameter is
+	// named max_tool_calls. Wire the same value into the exec-layer
+	// per-invocation budget so a read-heavy parallel-batch loop cannot run
+	// ~8x the stated budget before the turn cap engages (sa-18: 248 calls
+	// under an explicit 12-call prompt budget, 60-turn cap never reached).
+	if cfg.MaxToolCalls > 0 {
+		if ba, ok := subAgent.(interface{ SetToolCallBudget(int) }); ok {
+			ba.SetToolCallBudget(cfg.MaxToolCalls)
+		}
+	}
+
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
 			wd.SetWorkingDir(cfg.WorkingDir)
