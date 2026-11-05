@@ -74,26 +74,40 @@ if ($ReleaseNotes) {
 # Draft submissions created via the API can carry placeholder market pricing
 # (priceId "Base"), which the Ingestion API rejects on PUT ("'Base' is not a
 # valid PriceId for base price."). Normalize to the Free tier ("0") before
-# round-tripping the submission body. The Ingestion shape is
-# listings.{market}.baseListing.pricing.marketPricings.{market} — pricing
-# lives one level below baseListing (which is why iterating the market
-# values directly kept missing it).
-$marketValues = @()
-if ($sub.listings) {
-  $marketValues = @($sub.listings.PSObject.Properties | ForEach-Object { $_.Value })
-}
-foreach ($market in $marketValues) {
-  $listing = $market.baseListing
-  if (-not $listing) { $listing = $market } # tolerate a flattened listing
-  $pricing = $listing.pricing
-  if (-not $pricing -or -not $pricing.marketPricings) { continue }
-  foreach ($prop in @($pricing.marketPricings.PSObject.Properties)) {
-    if ($prop.Value.priceId -and $prop.Value.priceId -notin @("0")) {
-      Write-Host "normalizing priceId '$($prop.Value.priceId)' -> '0' (market $($prop.Name))"
-      $prop.Value.priceId = "0"
+# round-tripping the submission body.
+#
+# Round 9 (runs 41954855268/41958211337): three shape assumptions in a row
+# (flattened listing -> market map -> baseListing nesting) each missed, and the
+# round-8 log probe ("normalizing priceId" never printed) proved the loop body
+# never executed - so the shape is none of the three. Stop guessing: dump the
+# raw listings subtree (evidence for THIS run's log) and normalize recursively,
+# shape-agnostic: walk every object/array node under listings and rewrite any
+# string priceId that is not "0". Covers object-map AND array marketPricings,
+# baseListing nesting, and any future depth change.
+$rawShape = ($sub.listings | ConvertTo-Json -Depth 12 -Compress)
+if ($rawShape.Length -gt 4000) { $rawShape = $rawShape.Substring(0, 4000) + "...(truncated)" }
+Write-Host "listings shape (raw, pre-normalize): $rawShape"
+
+$script:priceIdFixCount = 0
+function Normalize-PriceId($node, [string]$path) {
+  if ($null -eq $node) { return }
+  if ($node -is [System.Management.Automation.PSCustomObject]) {
+    foreach ($p in @($node.PSObject.Properties)) {
+      if ($p.Name -eq "priceId" -and $p.Value -is [string] -and $p.Value -ne "0") {
+        Write-Host "normalizing priceId '$($p.Value)' -> '0' at $($path).priceId"
+        $p.Value = "0"
+        $script:priceIdFixCount++
+      } else {
+        Normalize-PriceId $p.Value "$path.$($p.Name)"
+      }
     }
+  } elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
+    $i = 0
+    foreach ($el in @($node)) { Normalize-PriceId $el "$path[$i]"; $i++ }
   }
 }
+Normalize-PriceId $sub.listings "listings"
+Write-Host "priceId normalization complete ($($script:priceIdFixCount) fix(es) applied)"
 $null = Invoke-RestMethod -Method Put -Headers $hdr `
   -Uri "$api/v1.0/my/applications/$ProductId/submissions/$subId" `
   -ContentType "application/json" -Body ($sub | ConvertTo-Json -Depth 32)
