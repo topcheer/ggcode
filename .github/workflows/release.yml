@@ -261,7 +261,15 @@ jobs:
             echo "MAS secrets not configured — skipping Mac App Store submission"
             exit 0
           fi
-          KEYCHAIN=mas-build.keychain-db
+          # Run 41992253525 root cause: the keychain must be addressed by an
+          # ABSOLUTE path. With a bare file name, `security list-keychains -s`
+          # stores the relative name in the user search list; find-identity
+          # (running from the repo root) resolves it, but codesign (running
+          # later from the desktop build directory) cannot - its trust
+          # evaluation silently falls back to the default keychains, loses
+          # both the leaf and the WWDR intermediate, and fails with
+          # "unable to build chain to self-signed root" + errSecInternalComponent.
+          KEYCHAIN="$RUNNER_TEMP/mas-build.keychain-db"
           security create-keychain -p actions "${KEYCHAIN}"
           security set-keychain-settings -lut 21600 "${KEYCHAIN}"
           security unlock-keychain -p actions "${KEYCHAIN}"
