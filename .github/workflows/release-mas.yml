@@ -99,6 +99,11 @@ jobs:
       # ------------------------------------------------------------------
       - name: Prepare Mac App Store credentials
         shell: bash
+        env:
+          APPLE_MAC_INSTALLER_P12: \${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+          APPLE_MAC_INSTALLER_P12_PASSWORD: \${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+          APPLE_MAS_DISTRIBUTION_P12: \${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: \${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
         run: |
           if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
             echo "MAS secrets not configured — skipping Mac App Store submission"
@@ -120,4 +125,5 @@ jobs:
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
       - name: bisect-ok
         run: echo ok
+
 
