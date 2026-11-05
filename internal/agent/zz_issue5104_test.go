@@ -77,6 +77,10 @@ func TestIssue5104CrossFaceParityCorpus(t *testing.T) {
 		{"plain quoted marker", `"see @pytest.mark.skip docs"`, false, false},
 		{"marker inside $() body", `"$(grep @skip f)"`, true, false},
 		{"operator inside $() body", `"$(cat x | tee y)"`, false, true},
+		// #5109 carry-over per watchdog adjudication: a marker-free
+		// substitution body stays exempt on the report face even when it
+		// contains operators - span visibility is not blanket firing.
+		{"marker-free $() with operator", `"pipeline $(grep hits f | wc -l) noted"`, false, true},
 		{"nested quotes in $()", `"$(echo "$(date)" y)"`, false, false},
 		{"backslash-escaped operator", `"a\|b"`, false, false},
 		{"unterminated quote", `"never closed @pytest.mark.skip`, false, false},
