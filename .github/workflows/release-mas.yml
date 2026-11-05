@@ -259,7 +259,6 @@ jobs:
       - name: Submit desktop app to Mac App Store
         if: env.MAS_READY == 'true'
         shell: bash
-        env:
         run: |
           cd desktop/ggcode-desktop-wails
           # Round 5 (run 42008131651: prepare step green - G3 asserted, default
