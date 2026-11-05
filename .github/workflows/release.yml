@@ -285,6 +285,27 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k actions "${KEYCHAIN}" > /dev/null
           security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db
           security find-identity -v -p codesigning
+          # Diagnostics for the "0 valid identities" chain problem
+          # (runs 41971828737 / 41980707576: imports all green, identity
+          # validity still zero). Dump leaf + intermediate validity windows
+          # and run a full trust-chain verification so the next fix is
+          # evidence-driven, not guess-driven.
+          echo "--- identity list (incl. invalid) ---"
+          security find-identity -p codesigning || true
+          for CERT_NAME in "Apple Distribution" "Apple WWDR"; do
+            PEM=$(security find-certificate -c "$CERT_NAME" -p "${KEYCHAIN}" 2>/dev/null || true)
+            if [[ -n "$PEM" ]]; then
+              echo "--- $CERT_NAME ---"
+              printf '%s' "$PEM" | openssl x509 -noout -subject -dates
+            else
+              echo "--- $CERT_NAME: NOT FOUND in ${KEYCHAIN} ---"
+            fi
+          done
+          echo "--- trust chain verify ---"
+          security find-certificate -c "Apple Distribution" -p "${KEYCHAIN}" > /tmp/leaf.pem 2>/dev/null || true
+          security find-certificate -p "${KEYCHAIN}" > /tmp/all.pem 2>/dev/null || true
+          cat /tmp/leaf.pem /tmp/all.pem > /tmp/chain.pem 2>/dev/null || true
+          security verify-cert -c /tmp/leaf.pem -p codesign -r /tmp/chain.pem 2>&1 || true
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
           mkdir -p ~/private_keys
           if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then cp "${APPLE_API_KEY_PATH}" ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8; fi
