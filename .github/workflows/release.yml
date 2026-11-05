@@ -308,6 +308,10 @@ jobs:
             > "${RUNNER_TEMP}/appleroot.pem" 2>/dev/null || true
           if [[ -s "${RUNNER_TEMP}/appleroot.pem" ]]; then
             security import "${RUNNER_TEMP}/appleroot.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign > /dev/null
+            # Import is not trust: the anchor has to be marked as a trusted
+            # root or the chain terminates at an "untrusted self-signed root".
+            security add-trusted-cert -r trustRoot -k "${KEYCHAIN}" "${RUNNER_TEMP}/appleroot.pem" \
+              || echo "::warning::add-trusted-cert failed; relying on system trust domain"
           else
             echo "::warning::Apple Root CA not found in SystemRootCertificates; relying on system trust domain"
           fi
@@ -371,6 +375,17 @@ jobs:
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           cd desktop/ggcode-desktop-wails
+          # Round 5 (run 42008131651: prepare step green - G3 asserted, default
+          # keychain set, partition list with codesign: - yet codesign still
+          # failed errSecInternalComponent). Each Actions step is a separate
+          # process, and the six-minute wails rebuild before signing gives the
+          # keychain time to lock; without an explicit unlock here the private
+          # key stays inaccessible to codesign.
+          KC="$RUNNER_TEMP/mas-build.keychain-db"
+          security unlock-keychain -p actions "$KC"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KC" > /dev/null
+          echo "--- pre-sign identity check (submit step) ---"
+          security find-identity -v -p codesigning || true
           # universal sandboxed build with the MAS bundle id
           wails build -clean -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
