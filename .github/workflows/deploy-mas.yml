@@ -210,13 +210,22 @@ jobs:
         run: |
           mkdir -p ~/private_keys
           printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
-          xcrun altool --validate-package -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
+          xcrun altool --validate-app -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
 
       - name: Upload package (altool --upload-package)
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
-          xcrun altool --upload-package -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
+          # --upload-package usage (altool -h, run5 evidence): package-only
+          # channel requiring the metadata group; -f/-t is the DEPRECATED
+          # --upload-app form and is rejected.
+          xcrun altool --upload-package "${PKG_PATH}" \
+            --type macos \
+            --apple-id "6755946388" \
+            --bundle-id "gg.ai.ggcode" \
+            --bundle-version "$(date -u +%Y%m%d01)" \
+            --bundle-short-version-string "${GGCODE_VERSION#v}" \
+            --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
 
       - name: Poll processing and submit for review
         if: env.MAS_READY == 'true' && env.APPLE_API_KEY_P8 != ''
