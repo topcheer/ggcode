@@ -75,7 +75,22 @@ jobs:
           # One value feeds CFBundleVersion, altool --bundle-version AND the
           # submit script's build poll; a divergence makes the poll spin to
           # timeout (#5139 invariant 1).
-          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d01)" >> "${GITHUB_ENV}"
+          # Date+HHMMSS, not date+"01": san's manual 2026-11-06 upload already
+          # owns build 2026110601 (MAC_OS VALID), so a plain date-derived
+          # value collides and ASC rejects the duplicate. Seconds resolution
+          # stays monotonic within a day and unique per run.
+          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d%H%M%S)" >> "${GITHUB_ENV}"
+          # CFBundleShortVersionString must be 1-3 period-separated integers
+          # (altool -19239). Strip pre-release/build metadata so labels like
+          # v1.3.275-rc10 become 1.3.275 instead of failing validation.
+          SHORT="${GGCODE_VERSION#v}"
+          SHORT="${SHORT%%-*}"
+          SHORT="${SHORT%%+*}"
+          if ! printf '%s' "$SHORT" | grep -qE '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::GGCODE_VERSION '${GGCODE_VERSION}' does not yield a numeric short version ('$SHORT')"; exit 1
+          fi
+          echo "MAS_SHORT_VERSION=${SHORT}" >> "${GITHUB_ENV}"
+          echo "short version: ${SHORT} (from ${GGCODE_VERSION})"
 
       - name: Guard - MAS secrets configured?
         shell: bash
@@ -171,7 +186,7 @@ jobs:
           wails build -clean -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
           plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
-          plutil -replace CFBundleShortVersionString -string "${GGCODE_VERSION#v}" "$APP/Contents/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "${MAS_SHORT_VERSION}" "$APP/Contents/Info.plist"
           plutil -replace CFBundleVersion -string "${MAS_BUILD_VERSION}" "$APP/Contents/Info.plist"
           plutil -replace LSMinimumSystemVersion -string "12.0" "$APP/Contents/Info.plist"
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
@@ -220,20 +235,18 @@ jobs:
           printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
           xcrun altool --validate-app -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
-      - name: Upload package (altool --upload-package)
+      - name: Upload package (altool --upload-app, deprecated but functional)
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
-          # --upload-package usage (altool -h, run5 evidence): package-only
-          # channel requiring the metadata group; -f/-t is the DEPRECATED
-          # --upload-app form and is rejected.
-          xcrun altool --upload-package "${PKG_PATH}" \
-            --type macos \
-            --apple-id "6755946388" \
-            --bundle-id "gg.ai.ggcode" \
-            --bundle-version "${MAS_BUILD_VERSION}" \
-            --bundle-short-version-string "${GGCODE_VERSION#v}" \
-            --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
+          # --upload-app is marked DEPRECATED but is the form that actually
+          # works: san's manual 2026-11-06 uploads (builds 2026110601/602,
+          # MAC_OS VALID) used it. `--upload-package` requires --apple-id to be
+          # the ASC *app resource id*; passing the developer/apple-id number
+          # 6755946388 fails with 409 ENTITY_ERROR.RELATIONSHIP.INVALID
+          # (run 42207908525: pointer /data/relationships/app/data/id). altool
+          # reads identity, versions and bundle id from the pkg itself here.
+          xcrun altool --upload-app -f "${PKG_PATH}" -t macOS \             --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
       - name: Poll processing and submit for review
         if: env.MAS_READY == 'true' && env.APPLE_API_KEY_P8 != ''
@@ -245,7 +258,7 @@ jobs:
           ./scripts/release/mas-submit-review.sh \
             --bundle-id "gg.ai.ggcode" \
             --app-id "${MAS_APP_ID:-6755946388}" \
-            --version "${GGCODE_VERSION#v}" \
+            --version "${MAS_SHORT_VERSION}" \
             --build "${MAS_BUILD_VERSION}" \
             --platform MAC_OS \
             --key-path ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8 \
