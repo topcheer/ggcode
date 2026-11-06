@@ -44,8 +44,11 @@ type Manager struct {
 	// indexes, and an idle window unloads them again.
 	wsActive   map[string]time.Time // workspace -> last query
 	idleUnload time.Duration
-	stop       chan struct{}
-	stopped    sync.WaitGroup
+	// probeFn: daemon-liveness check consulted at Start (#5149 ① pure
+	// client); nil keeps the legacy local self build.
+	probeFn func() bool
+	stop    chan struct{}
+	stopped sync.WaitGroup
 }
 
 type extEntry struct {
@@ -111,10 +114,85 @@ func (m *Manager) Self() *Index {
 	return m.self
 }
 
+// SetSelfProbe installs a daemon-liveness check consulted at Start. When it
+// reports a live shared host (#5149 ①), the instance skips building its own
+// self index entirely - it becomes a pure client: recall queries flow
+// through the host socket, and the host's tail owns every session's index
+// (including this instance's live one). If the host is unreachable at
+// Start, the instance falls back to the legacy local self build. Call
+// before Start; nil (the default) keeps the legacy behavior.
+func (m *Manager) SetSelfProbe(fn func() bool) {
+	m.mu.Lock()
+	m.probeFn = fn
+	m.mu.Unlock()
+}
+
+// DefaultTailMaxSourceBytes bounds what the host tail will index: sessions
+// whose jsonl exceeds this serve recall from bounded source scans instead
+// of materializing a giant idx (the #5149 class again, write side).
+const DefaultTailMaxSourceBytes int64 = 200 << 20
+
+// TailMissingSources builds indexes for sessions that have a jsonl but no
+// idx file yet - the host-side ownership half of #5149 ①. Existing idx
+// files stay owned by their writers (mtime refresh handles changes);
+// oversized sources are skipped (bounded source scan covers recall).
+// Returns the number of indexes built. Safe to call periodically.
+func (m *Manager) TailMissingSources(maxSourceBytes int64) int {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		return 0
+	}
+	built := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".jsonl")
+		if !ValidSessionID(id) {
+			continue
+		}
+		if _, err := os.Stat(IdxPath(m.dir, id)); err == nil {
+			continue // file exists: owned by its writer / RefreshExternal
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.Size() == 0 || (maxSourceBytes > 0 && fi.Size() > maxSourceBytes) {
+			continue
+		}
+		ix, err := Load(m.dir, id)
+		if err != nil || ix == nil || ix.Capped() {
+			continue
+		}
+		if err := ix.Refresh(); err != nil {
+			debug.Log("sessionidx", "tail: build %s: %v", id, err)
+			continue
+		}
+		built++
+	}
+	if built > 0 {
+		debug.Log("sessionidx", "tail: built %d missing indexes", built)
+	}
+	return built
+}
+
 // Start builds/refreshes the self index and scans sibling indexes, then
 // spawns the background refresher. Safe to call once per process.
 func (m *Manager) Start() {
 	m.mu.Lock()
+	if m.liveID != "" && m.probeFn != nil && m.probeFn() {
+		// Pure-client mode: a live shared host owns every index (① of
+		// #5149 idx-123). Local self build is redundant heap; recall goes
+		// through the host socket with the bounded source scan as fallback.
+		debug.Log("sessionidx", "start: host alive - pure client, self index skipped")
+		m.mu.Unlock()
+		m.scanExternal()
+		m.stopped.Add(1)
+		safego.Go("sessionidx.loop", m.loop)
+		return
+	}
 	if m.liveID != "" {
 		ix, err := Load(m.dir, m.liveID)
 		if err != nil {
@@ -224,11 +302,25 @@ func (m *Manager) scanExternal() {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".idx")
-		if m.liveID != "" && id == m.liveID {
-			continue
-		}
 		info, err := e.Info()
 		if err != nil {
+			continue
+		}
+		// Dead-idx cleanup (#5149): past the skip threshold the file is
+		// permanently frozen (every Load caps, capped Refresh is a no-op) -
+		// remove it. The path is built from the DIRECTORY-ENUMERATED name
+		// (os.ReadDir product, not caller input), which also keeps the
+		// CodeQL path-expression taint chain clean.
+		if info.Size() > idxSkipDecodeBytes {
+			path := filepath.Join(IdxDir(m.dir), name)
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+				debug.Log("sessionidx", "scan: dead-idx remove %s: %v", name, rmErr)
+				continue
+			}
+			debug.Log("sessionidx", "scan: removed dead idx %s (%.1fMB)", name, float64(info.Size())/(1<<20))
+			continue
+		}
+		if m.liveID != "" && id == m.liveID {
 			continue
 		}
 		if info.Size() > m.externalLimit {

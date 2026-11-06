@@ -138,3 +138,40 @@ func TestStartHost_DisabledByEnv(t *testing.T) {
 		t.Fatal("GGCODE_SESSIONIDX_DAEMON=0 must disable the host role")
 	}
 }
+
+// Host tail pin (#5149 ①): the watch tick must build an idx for a session
+// that has a jsonl but no idx file (writer is gone). Shrinks scanEvery so
+// the tick fires inside the test deadline.
+func TestHostTail_BuildsMissingIndexes(t *testing.T) {
+	old := scanEvery
+	scanEvery = 100 * time.Millisecond
+	defer func() { scanEvery = old }()
+
+	sessions := seedSharedSession(t, "tailme")
+	home := shortHome(t)
+	// Strip the idx the seed helper built: leave jsonl-only state.
+	entries, err := os.ReadDir(filepath.Join(sessions, "idx"))
+	if err != nil {
+		t.Fatalf("readdir idx: %v", err)
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(sessions, "idx", e.Name()))
+	}
+
+	stop, err := StartHost(sessions, home)
+	if err != nil {
+		t.Fatalf("StartHost: %v", err)
+	}
+	defer stop()
+	waitHostReady(t, home)
+
+	idxPath := filepath.Join(sessions, "idx", "tailme.idx")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(idxPath); err == nil {
+			return // tail built it
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("host tail did not build the missing idx in time")
+}

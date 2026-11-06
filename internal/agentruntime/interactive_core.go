@@ -110,7 +110,13 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// Session-recall index: own-session writes + sibling-session read-only
 	// aggregation (background prewarm; refresh cadence per manager defaults).
 	if sessDir, err := session.DefaultDir(); err == nil {
+		home := filepath.Join(config.HomeDir(), ".ggcode")
 		idxMgr := sessionidx.NewManager(sessDir, "")
+		// ① (#5149 idx-123): when a shared host is alive, this instance is
+		// a pure client - skip the local self-index heap; the host tail
+		// owns every session (incl. our live one) and recall flows through
+		// the socket. Host unreachable -> legacy local build at Start.
+		idxMgr.SetSelfProbe(func() bool { return sessionidxd.ProbeAlive(home) })
 		registry.SetSessionIndex(idxMgr)
 		safego.Go("agentruntime.sessionidxStart", idxMgr.Start)
 
@@ -125,7 +131,6 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		// $HOME and break the legacy-addr rolling upgrade (both were found
 		// live at /Users/<u>/ on 2026-11-06). The host endpoint must stay
 		// machine-scoped for the single-host election.
-		home := filepath.Join(config.HomeDir(), ".ggcode")
 		// Under `go test` the home dir is the developer's REAL ~/.ggcode:
 		// never bind the machine-wide endpoint or enumerate the live idx
 		// dir from a test binary.

@@ -35,9 +35,12 @@ const (
 	// DefaultBudgetBytes is the machine-global admission cap for decoded
 	// indexes (env override GGCODE_SESSIONIDX_BUDGET).
 	DefaultBudgetBytes int64 = 1 << 30
-	// scanEvery: how often the host re-scans the idx dir (size+mtime keyed).
-	scanEvery = 30 * time.Second
 )
+
+// scanEvery: how often the host re-scans the idx dir (size+mtime keyed)
+// and tails missing indexes. Package-level var (not const) so tests can
+// shrink the tick.
+var scanEvery = 30 * time.Second
 
 // Paths returns the discovery artifact paths for a ggcode home (the dir
 // holding sessions/, i.e. ~/.ggcode). The addr file is written for
@@ -129,6 +132,10 @@ func StartHost(sessionsDir, home string) (stop func(), err error) {
 				return
 			case <-t.C:
 				d.mgr.RefreshExternal()
+				// ① (#5149 idx-123): host owns indexes for sessions that
+				// never got one (dead/foreign writers). Existing files stay
+				// writer-owned; oversized sources stay source-scanned.
+				d.mgr.TailMissingSources(sessionidx.DefaultTailMaxSourceBytes)
 			}
 		}
 	})

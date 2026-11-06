@@ -36,13 +36,29 @@ session_recall(query, session_id?, role?, limit)
   `~/.ggcode/sessions/idx/<session-id>.idx`). Postings store byte offsets into
   the append-only JSONL, so a query seeks straight to matching lines instead
   of scanning the file.
+- **Storage format (v2, grouped)**: postings are grouped per source line on
+  disk — line metadata (offset/length/role/timestamp) is stored once per
+  line and trigrams become dictionary IDs. Measured ~8x smaller than the
+  legacy per-posting format (937MB session: 938MB → ~120MB idx). Indexes
+  in a foreign (older) format are treated as not-yet-reindexed and rebuilt
+  by their owner's next refresh — no migration step.
+- **Dead-index cleanup**: a persisted idx past the decode-skip threshold
+  (64 MB) is permanently frozen (loads capped, never rewritten); Load
+  deletes it on sight. Its session still recalls via the bounded source
+  scan — only derived data is reclaimed.
 - **Ownership**: each ggcode instance writes the index for its own live
   session only (incrementally, as messages are appended). Sibling sessions'
-  indexes are written by their own instances.
+  indexes are written by their own instances. When a shared host is alive,
+  instances become **pure clients**: they skip the local live-session
+  index entirely (the host's 30s tail owns every session, including the
+  live one) and recall flows through the host socket, falling back to the
+  local path whenever the host is unreachable.
 - **Refresh**: the own index tails new messages on each query; sibling
   indexes are checked every 30 minutes and reloaded when they change.
 - **Size gates**: if the own index exceeds 500 MB, sibling indexes are not
   loaded (self-only mode). Any sibling index larger than 200 MB is skipped.
+  The host tail never builds an index for a session whose JSONL exceeds
+  200 MB — recall for those serves from the bounded source scan.
 - The first query against a large never-indexed history pays a one-time
   index build; queries afterwards are posting-list lookups.
 
