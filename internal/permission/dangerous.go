@@ -106,6 +106,20 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerMedium, regexp.MustCompile(`(?i)\bwget\b.*\|\s*sh\b`), "piping remote script to shell"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bnc\b.*-e\b`), "netcat in listen mode could be a reverse shell"},
 
+		// CVE-2026-2256-class bypasses (round-24/26 NEW_GAP): single-entry
+		// deny-list evasion via decode pipes, remote-content eval, allowed
+		// interpreters running arbitrary logic, and staged download-execute
+		// chains. Each alone looks benign; the combinations are the attack.
+		{DangerHigh, regexp.MustCompile(`(?i)\b(?:base64\s+(?:-d|--decode)|openssl\s+enc\b[^|;\n]*\s-d|xxd\s+(?:-r|--revert))\s*[^|;\n]*\|\s*(?:ba|z|da)?sh\b`), "decode output piped straight into a shell - obfuscated command execution"},
+		{DangerHigh, regexp.MustCompile(`(?i)\beval\s+["']?\$\(\s*(?:curl|wget)\b`), "fetching remote content straight into eval executes attacker-controlled code"},
+		{DangerHigh, regexp.MustCompile(`(?i)(?:\bsource\b|(?:^|[\s;&|])\.)\s+<\(\s*(?:curl|wget)\b`), "fetching remote content via process substitution into source executes attacker-controlled code"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bpython3?\s+(?:-\w+\s+)*-c\b[^|\n]{0,400}\b(?:os\.system|subprocess\.|pty\.spawn|socket\.socket)`), "interpreter -c embedding OS/subprocess/socket calls bypasses command deny-lists"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bperl\s+(?:-\w+\s+)*-e\b[^|\n]{0,400}\b(?:system\s*\(|exec\s*\(|open\s*\([^)]*\|)`), "perl -e with system/exec/pipe-open runs arbitrary logic outside the deny-list"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bnode\s+(?:-\w+\s+)*-e\b[^|\n]{0,400}\b(?:child_process|execSync|spawnSync)`), "node -e spawning child processes bypasses command deny-lists"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bruby\s+(?:-\w+\s+)*-e\b[^|\n]{0,400}\b(?:system\s*\(|IO\.popen|Open3\.)`), "ruby -e with system/popen runs arbitrary logic outside the deny-list"},
+		{DangerHigh, regexp.MustCompile(`(?i)\b(?:ba|z|da)?sh\s+-c\b[^|;\n]{0,200}(?:curl|wget)\b[^|;\n]{0,200}\|\s*(?:ba|z|da)?sh\b`), "sh -c wrapping a remote fetch piped back into a shell"},
+		{DangerMedium, regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^&;\n]{0,200}(?:&&|;)\s*chmod\s+(?:\+x|777)[^&;\n]{0,200}(?:&&|;)\s*\.{0,2}/?[A-Za-z0-9_./-]+`), "download -> chmod executable -> run chain stages attacker-controlled code"},
+
 		{DangerCritical, regexp.MustCompile(`(?i)>{1,2}\s*/dev/(sd|hd|nvme|vd|r?disk|mmcblk|mapper|loop|dm-|xvd)`), "writing directly to a disk device would destroy it"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bcrontab\b`), "modifying cron jobs"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bnsenter\b`), "nsenter can escape containers"},
