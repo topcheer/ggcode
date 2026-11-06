@@ -230,19 +230,9 @@ func (m *Manager) scanExternal() {
 			debug.Log("sessionidx", "scan: skip external idx %s (%.1fMB over total budget %.0fMB)", id, float64(info.Size())/(1<<20), float64(m.totalBudget)/(1<<20))
 			continue
 		}
-		// Lazy admission: record the entry WITHOUT decoding (decode on
-		// first query under the total budget, LRU-evicting if needed).
-		ent := &extEntry{idxSize: info.Size(), modTime: info.ModTime()}
-		if m.totalBudget <= 0 {
-			// Plain-instance behavior: decode eagerly as before.
-			ix, err := Load(m.dir, id)
-			if err != nil || ix == nil {
-				continue
-			}
-			ent.idx = ix
-			ent.decoded = true
-		}
-		ext[id] = ent
+		// Lazy admission (plain mode too, #5149 scanlazy): record the
+		// entry WITHOUT decoding - decode on first query.
+		ext[id] = &extEntry{idxSize: info.Size(), modTime: info.ModTime()}
 	}
 	m.external = ext
 }
@@ -263,36 +253,21 @@ func (m *Manager) refreshExternal() {
 			delete(m.external, id)
 			continue
 		}
-		// R1: the daemon uses SetTotalBudget - over-budget sessions are
-		// admitted lazily in Query, not decoded here. Eager decode only
-		// in plain-instance mode (totalBudget==0).
-		if m.totalBudget <= 0 {
-			ix, err := Load(m.dir, id)
-			if err != nil || ix == nil {
-				continue
-			}
-			ent := m.external[id]
-			if ent != nil {
-				ent.idx = ix
-				ent.decoded = true
-				ent.modTime = st.ModTime()
-			}
-		} else {
-			// New/changed file: invalidate any decoded copy so the next
-			// query re-decodes under the budget.
-			if ent := m.external[id]; ent != nil {
-				if ent.decoded {
-					m.totalDecoded -= ent.idxSize
-				}
-				ent.idx = nil
-				ent.decoded = false
-				ent.modTime = st.ModTime()
-				ent.idxSize = st.Size()
-			} else {
-				m.external[id] = &extEntry{idxSize: st.Size(), modTime: st.ModTime()}
-			}
+		// Changed file: invalidate any decoded copy so the next query
+		// re-decodes lazily (plain mode via decodeInto, budgeted under R1).
+		ent := m.external[id]
+		if ent == nil {
+			m.external[id] = &extEntry{idxSize: st.Size(), modTime: st.ModTime()}
+			continue
 		}
-		debug.Log("sessionidx", "refresh: reloaded external idx %s", id)
+		if m.totalBudget > 0 && ent.decoded {
+			m.totalDecoded -= ent.idxSize
+		}
+		ent.idx = nil
+		ent.decoded = false
+		ent.modTime = st.ModTime()
+		ent.idxSize = st.Size()
+		debug.Log("sessionidx", "refresh: invalidated external idx %s (lazy re-decode)", id)
 	}
 	// pick up newly created sibling indexes too (cheap dir scan)
 	if len(m.external) < countIdxFiles(m.dir) {
@@ -399,7 +374,11 @@ func (m *Manager) ensureLoaded(id string, ent *extEntry) *Index {
 		return ent.idx
 	}
 	if m.totalBudget <= 0 {
-		return nil
+		// Plain-instance mode (no machine budget): decode on FIRST QUERY,
+		// never at startup (#5149 scanlazy - scanExternal eagerly decoding
+		// every sibling <= externalLimit put ~276MB live on the heap
+		// before the first user interaction).
+		return m.decodeInto(id, ent)
 	}
 	// LRU eviction until there is room.
 	for m.totalDecoded+ent.idxSize > m.totalBudget && len(m.evictionOrder) > 0 {
@@ -418,6 +397,17 @@ func (m *Manager) ensureLoaded(id string, ent *extEntry) *Index {
 	if m.totalDecoded+ent.idxSize > m.totalBudget {
 		return nil // cannot fit even after full eviction - skip this session
 	}
+	if m.decodeInto(id, ent) == nil {
+		return nil
+	}
+	m.totalDecoded += ent.idxSize
+	m.evictionOrder = append(m.evictionOrder, id)
+	return ent.idx
+}
+
+// decodeInto loads id's index into ent (no budget bookkeeping). Corrupt
+// files degrade to source scan (#5156), never silently-empty results.
+func (m *Manager) decodeInto(id string, ent *extEntry) *Index {
 	ix, err := Load(m.dir, id)
 	if err != nil || ix == nil {
 		return nil
@@ -432,9 +422,7 @@ func (m *Manager) ensureLoaded(id string, ent *extEntry) *Index {
 	}
 	ent.idx = ix
 	ent.decoded = true
-	m.totalDecoded += ent.idxSize
-	m.evictionOrder = append(m.evictionOrder, id)
-	return ix
+	return ent.idx
 }
 
 // externalSorted returns external entries in the R2 deterministic order:
