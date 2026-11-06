@@ -646,7 +646,7 @@ var verifyCommands = map[string]bool{
 	"jest":             true,
 	"dart test":        true,
 	"composer test":    true,
-	"go test-race":     false,
+	"go test -race":    true,
 	"python -m pytest": true,
 
 	"golangci-lint": true,
