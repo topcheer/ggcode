@@ -230,6 +230,42 @@ func countIdxFiles(dir string) int {
 	return n
 }
 
+// SetExternalLimit adjusts the per-file external idx admission cap. The
+// shared daemon (sessionidxd) raises this to its machine budget so
+// over-cap sibling indexes become searchable; plain instances keep the
+// conservative default. Call before Start.
+func (m *Manager) SetExternalLimit(limit int64) {
+	if limit <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.externalLimit = limit
+	m.mu.Unlock()
+}
+
+// RefreshExternal re-scans sibling indexes now (size+mtime keyed). Safe to
+// call concurrently with the background loop.
+func (m *Manager) RefreshExternal() {
+	m.refreshExternal()
+}
+
+// Dir returns the sessions directory this manager aggregates.
+func (m *Manager) Dir() string { return m.dir }
+
+// LiveID returns this instance's live session id ("" when none).
+func (m *Manager) LiveID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.liveID
+}
+
+// IndexCount reports how many external indexes are currently loaded.
+func (m *Manager) IndexCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.external)
+}
+
 // Result is one recall hit across sessions.
 type Result struct {
 	SessionID string

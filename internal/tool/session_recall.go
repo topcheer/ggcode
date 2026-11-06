@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/sessionidx"
+	"github.com/topcheer/ggcode/internal/sessionidxd"
 )
 
 // SessionRecall lets the agent recall content from its own and sibling
@@ -16,6 +18,7 @@ import (
 type SessionRecall struct {
 	Manager  *sessionidx.Manager
 	Registry *Registry // fallback: lazy lookup when Manager not set at build time
+	Home     string    // ggcode home (dir holding sessions/); daemon-first when set
 }
 
 func (t SessionRecall) Name() string { return "session_recall" }
@@ -104,7 +107,23 @@ func (t SessionRecall) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	terms := strings.Fields(strings.ToLower(args.Query))
-	results := t.Manager.Query(terms, args.SessionID, args.Limit*2) // headroom for role filter
+
+	// Daemon-first (#5149): the shared sessionidxd serves sibling-session
+	// queries for the whole machine, so this process keeps zero external
+	// index memory. Miss (no daemon/slow/err) -> local Manager fallback.
+	home := t.Home
+	if home == "" {
+		home = filepath.Dir(t.Manager.Dir()) // sessions/ parent = ggcode home
+	}
+	var results []sessionidx.Result
+	if home != "" && args.SessionID == "" {
+		if daemonRes, ok := sessionidxd.Query(home, t.Manager.Dir(), terms, "", t.Manager.LiveID(), args.Limit*2); ok {
+			results = daemonRes
+		}
+	}
+	if results == nil {
+		results = t.Manager.Query(terms, args.SessionID, args.Limit*2) // headroom for role filter
+	}
 
 	var sb strings.Builder
 	shown := 0
