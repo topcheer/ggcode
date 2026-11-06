@@ -37,8 +37,13 @@ type Manager struct {
 	evictedTotal  int64
 	evictedCount  int64
 	evictionOrder []string // least-recently-used first
-	stop          chan struct{}
-	stopped       sync.WaitGroup
+	// Cold per-workspace loading (#5149, user-directed): nothing is
+	// decoded at rest; the first query naming a workspace activates its
+	// indexes, and an idle window unloads them again.
+	wsActive   map[string]time.Time // workspace -> last query
+	idleUnload time.Duration
+	stop       chan struct{}
+	stopped    sync.WaitGroup
 }
 
 type extEntry struct {
@@ -65,6 +70,8 @@ func NewManager(sessionsDir, liveSessionID string) *Manager {
 		externalLimit:  DefaultExternalLimitBytes,
 		refreshEvery:   DefaultRefreshEvery,
 		external:       map[string]*extEntry{},
+		wsActive:       map[string]time.Time{},
+		idleUnload:     DefaultWsIdleUnload,
 		stop:           make(chan struct{}),
 	}
 }
@@ -123,6 +130,22 @@ func (m *Manager) Start() {
 	m.scanExternal()
 	m.stopped.Add(1)
 	safego.Go("sessionidx.loop", m.loop)
+	// Idle-unload janitor: returns a workspace's heap to zero when nobody
+	// asks for it (minute granularity is plenty for a 30min window).
+	m.stopped.Add(1)
+	safego.Go("sessionidx.wsJanitor", func() {
+		defer m.stopped.Done()
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-m.stop:
+				return
+			case <-t.C:
+				m.unloadIdleWorkspaces()
+			}
+		}
+	})
 }
 
 // loop periodically refreshes: self (cheap tail) and external entries whose
@@ -458,6 +481,9 @@ func (m *Manager) QueryScoped(terms []string, sessionID string, limit int, works
 	var wsMap map[string]string
 	if workspace != "" {
 		wsMap = LoadWorkspaceMap(m.dir)
+		// Cold load (#5149): first query for this workspace decodes its
+		// indexes; every query resets the idle-unload window.
+		m.touchWorkspace(workspace)
 	}
 	allowed := func(sessID string) bool {
 		if workspace == "" {

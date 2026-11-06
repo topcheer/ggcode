@@ -185,9 +185,10 @@ type statusResponse struct {
 	BudgetMB  int64     `json:"budgetMb"`
 	Indexes   int       `json:"indexes"`
 	// R1: budget pressure visibility (QA requirement).
-	DecodedMB      int64 `json:"decodedMb"`
-	EvictedBytes   int64 `json:"evictedBytes"`
-	EvictedIndexes int64 `json:"evictedIndexes"`
+	DecodedMB        int64 `json:"decodedMb"`
+	ActiveWorkspaces int   `json:"activeWorkspaces"`
+	EvictedBytes     int64 `json:"evictedBytes"`
+	EvictedIndexes   int64 `json:"evictedIndexes"`
 }
 
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +197,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// forever (defeating idle-exit).
 	evictedBytes, evictedCount := d.mgr.Evictions()
 	writeJSON(w, statusResponse{OK: true, StartedAt: d.started, BudgetMB: d.budget >> 20, Indexes: d.mgr.IndexCount(),
-		DecodedMB: d.mgr.TotalDecodedBytes() >> 20, EvictedBytes: evictedBytes, EvictedIndexes: evictedCount})
+		DecodedMB: d.mgr.TotalDecodedBytes() >> 20, ActiveWorkspaces: d.mgr.ActiveWorkspaces(), EvictedBytes: evictedBytes, EvictedIndexes: evictedCount})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
