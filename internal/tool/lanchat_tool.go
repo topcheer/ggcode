@@ -89,6 +89,47 @@ func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
 	delete(r.dmLastSent, key)
 }
 
+// #5117: a resolved-but-offline recipient (stale node_id after a seat
+// restarts) turns every send into a ~10s unicast timeout that callers
+// retry 2-3 times as a network transient before discovering the truth
+// via action=list. Warn up front in the send result so the caller can
+// refresh addressing immediately instead of burning retries.
+func (t *LanChatTool) staleRecipientHint(recipientNodeIDs []string) string {
+	if t.Hub == nil {
+		return ""
+	}
+	recipientSet := make(map[string]bool, len(recipientNodeIDs))
+	for _, id := range recipientNodeIDs {
+		recipientSet[id] = true
+	}
+	var stale []string
+	for _, p := range t.Hub.Participants() {
+		if !recipientSet[p.NodeID] || p.Online {
+			continue
+		}
+		name := p.AgentNick
+		if name == "" {
+			name = p.HumanNick
+		}
+		if name == "" {
+			name = p.NodeID
+		}
+		age := ""
+		if p.LastSeen > 0 {
+			age = fmt.Sprintf(", last seen %s ago", time.Since(time.Unix(p.LastSeen, 0)).Round(time.Second))
+		}
+		stale = append(stale, fmt.Sprintf("%s (%s%s)", name, p.NodeID, age))
+	}
+	if len(stale) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\nWarning: %d recipient(s) are currently OFFLINE in the hub: %s. "+
+			"node_ids from earlier sessions are invalid after restart - "+
+			"call action='list' and re-address with a current node_id instead of retrying this send.",
+		len(stale), strings.Join(stale, ", "))
+}
+
 func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
 	if t.Hub == nil {
 		return ""
@@ -642,6 +683,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(resolved)
 		}
+		errMsg += t.staleRecipientHint(resolved)
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
@@ -669,6 +711,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	if asAgent {
 		result += t.sharedWorkspaceHint(resolved)
 	}
+	result += t.staleRecipientHint(resolved)
 	return Result{Content: result + ".\n"}, nil
 }
 
