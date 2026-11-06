@@ -61,6 +61,38 @@ var knownModelContextWindows = []struct {
 	{"glm-4v", 128_000, false},
 	{"glm-4", 128_000, true},
 
+	// GLM 4.5-4.7 and 5.x series (#5119). Values mirror the vendor-scoped
+	// context-window table in internal/config/context_window.go (canonical
+	// base-name entries). Prefix matching is order-sensitive: more specific
+	// patterns must precede their general prefixes (e.g. glm-5.3-flash
+	// before glm-5.3 before glm-5).
+	//
+	// #1287 contract preserved: bare glm-4.5, glm-4.5-air, glm-4.6, glm-4.7
+	// and glm-5 deliberately have NO static entry - they are retired-family
+	// names that must fall through to the live probe (see
+	// lookupKnownRetiredFamilyHijack and TestIssue1287_GLM4ExactOnly), so
+	// static entries here would re-hijack them and re-poison probe-cache
+	// migration. Their variants below are not on that victim list.
+	{"glm-4.5-flash", 131_072, false},
+	{"glm-4.5v", 64_000, false},
+	{"glm-4.6v", 128_000, false},
+	{"glm-4.7-flashx", 200_000, false},
+	{"glm-4.7-flash", 200_000, false},
+	{"glm-4.7-free", 204_800, false},
+	{"glm-5.3-flashx", 1_000_000, false},
+	{"glm-5.3-flash", 1_000_000, false},
+	{"glm-5.3-highspeed", 1_000_000, false},
+	{"glm-5.3", 1_048_576, false},
+	{"glm-5.2-fast", 1_000_000, false},
+	{"glm-5.2-highspeed", 1_000_000, false},
+	{"glm-5.2", 1_048_576, false},
+	{"glm-5.1", 204_800, false},
+	{"glm-5-2-260617", 1_000_000, false},
+	{"glm-5-3-flash-260828", 1_000_000, false},
+	{"glm-5v-turbo", 200_000, false},
+	{"glm-5-turbo", 200_000, false},
+	{"glm-5-free", 204_800, false},
+
 	{"mistral-large", 128_000, false},
 	{"mistral-medium", 32_000, false},
 	{"mistral-small", 32_000, false},
