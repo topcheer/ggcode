@@ -14,6 +14,12 @@ type DuplicateCheck struct {
 	SimilarTo       string
 	Similarity      float64
 	ExistingContent string
+
+	// SameKey marks an EXACT same-key hit (an intentional overwrite under
+	// the r488 archive-on-overwrite contract). Same-key re-saves are
+	// updates, not duplicates; duplicate warnings belong to different-key
+	// collisions. (#5121)
+	SameKey bool
 }
 
 func (dc DuplicateCheck) IsDuplicate() bool {
@@ -52,6 +58,7 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 				SimilarTo:       m.Key,
 				Similarity:      1.0,
 				ExistingContent: readExistingSnippet(am.dir, m.Key),
+				SameKey:         true,
 			}
 		}
 	}

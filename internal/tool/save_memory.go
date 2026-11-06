@@ -101,7 +101,10 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	var dupWarning string
-	if dc := target.CheckDuplicate(params.Key, params.Content); dc.IsDuplicate() {
+	// #5121: a same-key hit is an intentional overwrite (the previous
+	// version archives to .history per the tool contract) - not a
+	// duplicate. Only different-key/similar-content collisions warn.
+	if dc := target.CheckDuplicate(params.Key, params.Content); dc.IsDuplicate() && !dc.SameKey {
 		dupWarning = dc.FormatDuplicateWarning(params.Key)
 	}
 
