@@ -27,7 +27,11 @@ jobs:
     name: Detect desktop changes
     runs-on: ubuntu-latest
     outputs:
-      desktop: ${{ steps.filter.outputs.desktop }}
+      cli: ${{ steps.filter.outputs.cli }}
+      desktop_darwin: ${{ steps.filter.outputs.desktop_darwin }}
+      desktop_windows: ${{ steps.filter.outputs.desktop_windows }}
+      desktop_linux: ${{ steps.filter.outputs.desktop_linux }}
+      site: ${{ steps.filter.outputs.site }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,13 +41,25 @@ jobs:
           set -euo pipefail
           PREV="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || true)"
           if [ -z "${PREV:-}" ]; then
-            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            # First tag on the repo: build everything.
+            for k in cli desktop_darwin desktop_windows desktop_linux site; do
+              echo "$k=true" >> "$GITHUB_OUTPUT"
+            done
             exit 0
           fi
           CHANGED="$(git diff --name-only "${PREV}..${GITHUB_SHA}")"
           has() { echo "$CHANGED" | grep -qE "$1" && echo true || echo false; }
           {
-            echo "desktop=$(has '^(desktop/|internal/|cmd/|scripts/release/|go\\.(mod|sum)|\\.github/workflows/(release-mas|deploy-mas)\\.yml)')"
+            # CLI: GoReleaser binaries + linux packages + checksums.
+            echo "cli=$(has '^(cmd/|internal/|go\\.(mod|sum)|\\.goreleaser\\.yaml|\\.github/workflows/release-mas\\.yml)')"
+            # Desktop macOS (notarized DMG + MAS pkg): desktop embeds internal.
+            echo "desktop_darwin=$(has '^(desktop/|internal/|go\\.(mod|sum)|scripts/release/|\\.github/workflows/release-mas\\.yml)')"
+            # Desktop Windows (signed MSI + winget desktop).
+            echo "desktop_windows=$(has '^(desktop/|internal/|go\\.(mod|sum)|scripts/release/|\\.github/workflows/release-mas\\.yml)')"
+            # Desktop Linux.
+            echo "desktop_linux=$(has '^(desktop/|internal/|go\\.(mod|sum)|scripts/release/|\\.github/workflows/release-mas\\.yml)')"
+            # Site branch.
+            echo "site=$(has '^(docs/site/|scripts/release/publish-site-branch\\.sh|scripts/install/|\\.github/workflows/(release-mas|site-release)\\.yml)')"
           } >> "$GITHUB_OUTPUT"
 
   verify:
@@ -66,7 +82,7 @@ jobs:
 
   release:
     name: Build & Release
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.desktop == 'true')) }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.cli == 'true')) }}
     runs-on: ubuntu-latest
     needs:
       - verify
@@ -124,7 +140,7 @@ jobs:
 
   release-macos-pkg:
     name: Build macOS pkg
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.desktop == 'true')) }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.desktop_darwin == 'true')) }}
     runs-on: macos-15
     needs:
       - verify
@@ -162,10 +178,11 @@ jobs:
 
   release-windows-msi:
     name: Build Windows msi
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success' && needs.changes.outputs.desktop_windows == 'true') }}
     runs-on: windows-latest
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
@@ -201,10 +218,11 @@ jobs:
 
   build-desktop-darwin:
     name: Build desktop macOS
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success' && needs.changes.outputs.desktop_darwin == 'true') }}
     runs-on: macos-15
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
@@ -275,10 +293,11 @@ jobs:
 
   build-desktop-windows:
     name: Build desktop Windows
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success' && needs.changes.outputs.desktop_windows == 'true') }}
     runs-on: windows-latest
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
@@ -324,10 +343,11 @@ jobs:
 
   build-desktop-linux-amd64:
     name: Build desktop Linux amd64
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success' && needs.changes.outputs.desktop_linux == 'true') }}
     runs-on: ubuntu-22.04
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
@@ -367,10 +387,11 @@ jobs:
 
   build-desktop-linux-arm64:
     name: Build desktop Linux arm64
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success' && needs.changes.outputs.desktop_linux == 'true') }}
     runs-on: ubuntu-22.04-arm
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
@@ -411,9 +432,11 @@ jobs:
 
   upload-release-assets:
     name: Upload release assets
-    if: github.event_name != 'workflow_dispatch'
+    if: >-
+      ${{ always() && github.event_name != 'workflow_dispatch' && (needs.release.result != 'skipped' || needs.release-macos-pkg.result != 'skipped' || needs.release-windows-msi.result != 'skipped' || needs.build-desktop-darwin.result != 'skipped' || needs.build-desktop-windows.result != 'skipped' || needs.build-desktop-linux-amd64.result != 'skipped' || needs.build-desktop-linux-arm64.result != 'skipped') }}
     runs-on: ubuntu-latest
     needs:
+      - changes
       - release
       - release-macos-pkg
       - release-windows-msi
@@ -427,26 +450,32 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/download-artifact@v4
+        if: needs.release-macos-pkg.result != 'skipped'
         with:
           name: macos-pkg
           path: dist/macos-pkg
       - uses: actions/download-artifact@v4
+        if: needs.release-windows-msi.result != 'skipped'
         with:
           name: windows-msi
           path: dist/windows-msi
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-darwin.result != 'skipped'
         with:
           name: desktop-darwin
           path: dist/desktop-darwin
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-windows.result != 'skipped'
         with:
           name: desktop-windows
           path: dist/desktop-windows
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-linux-amd64.result != 'skipped'
         with:
           name: desktop-linux-amd64
           path: dist/desktop-linux-amd64
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-linux-arm64.result != 'skipped'
         with:
           name: desktop-linux-arm64
           path: dist/desktop-linux-arm64
@@ -475,9 +504,10 @@ jobs:
 
   publish-winget:
     name: Publish desktop to winget
-    if: github.event_name != 'workflow_dispatch'
+    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.changes.outputs.desktop_windows == 'true' && needs.upload-release-assets.result == 'success' }}
     runs-on: windows-latest
     needs:
+      - changes
       - upload-release-assets
     permissions:
       contents: read
@@ -539,9 +569,10 @@ jobs:
 
   publish-winget-cli:
     name: Publish CLI to winget
-    if: github.event_name != 'workflow_dispatch'
+    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.changes.outputs.cli == 'true' && needs.upload-release-assets.result == 'success' }}
     runs-on: windows-latest
     needs:
+      - changes
       - upload-release-assets
     permissions:
       contents: read
@@ -603,9 +634,10 @@ jobs:
 
   publish-homebrew-desktop:
     name: Publish desktop to Homebrew Cask
-    if: github.event_name != 'workflow_dispatch'
+    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.changes.outputs.desktop_darwin == 'true' && needs.upload-release-assets.result == 'success' }}
     runs-on: ubuntu-latest
     needs:
+      - changes
       - upload-release-assets
     permissions:
       contents: read
@@ -804,11 +836,10 @@ jobs:
 
   publish-site-release-branch:
     name: Publish site release branch
-    if: github.event_name != 'workflow_dispatch'
+    if: ${{ always() && github.event_name != 'workflow_dispatch' && needs.changes.outputs.site == 'true' }}
     runs-on: ubuntu-latest
     needs:
-      - upload-release-assets
-      - publish-winget
+      - changes
       - publish-winget-cli
     permissions:
       contents: write
@@ -824,26 +855,32 @@ jobs:
           name: goreleaser-dist
           path: dist
       - uses: actions/download-artifact@v4
+        if: needs.release-macos-pkg.result != 'skipped'
         with:
           name: macos-pkg
           path: dist-site/macos-pkg
       - uses: actions/download-artifact@v4
+        if: needs.release-windows-msi.result != 'skipped'
         with:
           name: windows-msi
           path: dist-site/windows-msi
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-darwin.result != 'skipped'
         with:
           name: desktop-darwin
           path: dist-site/desktop-darwin
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-windows.result != 'skipped'
         with:
           name: desktop-windows
           path: dist-site/desktop-windows
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-linux-amd64.result != 'skipped'
         with:
           name: desktop-linux-amd64
           path: dist-site/desktop-linux-amd64
       - uses: actions/download-artifact@v4
+        if: needs.build-desktop-linux-arm64.result != 'skipped'
         with:
           name: desktop-linux-arm64
           path: dist-site/desktop-linux-arm64
