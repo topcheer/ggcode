@@ -218,7 +218,7 @@ jobs:
         run: |
           mkdir -p ~/private_keys
           printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
-          xcrun altool --validate-app -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
+          xcrun altool --validate-app -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
       - name: Upload package (altool --upload-package)
         if: env.MAS_READY == 'true'
@@ -233,7 +233,7 @@ jobs:
             --bundle-id "gg.ai.ggcode" \
             --bundle-version "${MAS_BUILD_VERSION}" \
             --bundle-short-version-string "${GGCODE_VERSION#v}" \
-            --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
+            --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
       - name: Poll processing and submit for review
         if: env.MAS_READY == 'true' && env.APPLE_API_KEY_P8 != ''
