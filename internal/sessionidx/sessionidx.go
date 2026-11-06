@@ -9,6 +9,8 @@
 package sessionidx
 
 import (
+	"sort"
+
 	"bufio"
 	"bytes"
 
@@ -39,9 +41,25 @@ type indexFile struct {
 	Version     int
 	IndexedTo   int64 // byte offset covered in the source jsonl
 	LineCount   int32
-	Trigrams    map[string][]Posting
-	SourceBytes int64 // size of jsonl at build time
+	Trigrams    map[string][]Posting // v1 format (nil in v2)
+	SourceBytes int64                // size of jsonl at build time
 	BuiltAt     int64
+	// v2 grouped format (#5149 disk): postings grouped per source line so
+	// line metadata (offset/length/role/ts) is stored ONCE per line instead
+	// of once per posting, and trigrams become dictionary IDs. Measured on
+	// the 937MB production session: v1 938MB -> v2 ~120MB (~8x).
+	Dict  []string  // distinct trigrams, sorted; IDs are dict indexes
+	Lines []lineRec // one record per indexed source line, sorted by Offset
+}
+
+// lineRec is the v2 grouped on-disk unit: one indexed line's metadata plus
+// the sorted dictionary IDs of the trigrams it contains.
+type lineRec struct {
+	Offset int64
+	Length int32
+	Role   byte
+	TsNano int64
+	TriIDs []uint32
 }
 
 // Index is the in-memory index for one session file. Safe for concurrent
@@ -76,7 +94,7 @@ type Index struct {
 	selfBudget int64
 }
 
-const idxVersion = 1
+const idxVersion = 2
 
 // Size returns the approximate memory footprint of loaded postings.
 func (ix *Index) Size() int {
@@ -183,7 +201,14 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 	// birth, recall degrades to the bounded source scan, and nothing ever
 	// re-materializes the giant map.
 	if fi, err := f.Stat(); err == nil && fi.Size() > idxSkipDecodeBytes {
-		debug.Log("sessionidx", "load: idx for %s is %dMB, skipping decode (capped)", sessionID, fi.Size()>>20)
+		// #5149 dead-idx cleanup: past the skip threshold the file is
+		// PERMANENTLY useless - every loader gets capped, capped Refresh is
+		// a no-op, so no instance ever reads or rewrites it again. Delete
+		// (derived data; the source jsonl remains, recall serves from the
+		// bounded source scan) instead of leaving frozen gigabytes on disk.
+		debug.Log("sessionidx", "load: idx for %s is %dMB over skip threshold - deleting dead idx", sessionID, fi.Size()>>20)
+		f.Close()
+		_ = os.Remove(idx.IdxPath)
 		idx.capped = true
 		idx.approxBytes = fi.Size() * 4 // postings-memory estimate, over any budget
 		return idx, nil
@@ -201,6 +226,23 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		// Refresh - readers just see this session as not-yet-reindexed.
 		idx.stale = true
 		return idx, nil
+	}
+	if d.Trigrams == nil {
+		// v2 grouped: rebuild the in-memory inverted map from the line
+		// records, then release the transient decode buffers.
+		m := make(map[string][]Posting, len(d.Dict))
+		for _, lr := range d.Lines {
+			p := Posting{Offset: lr.Offset, Length: lr.Length, Role: lr.Role, TsNano: lr.TsNano}
+			for _, id := range lr.TriIDs {
+				if int(id) < len(d.Dict) {
+					tg := d.Dict[id]
+					m[tg] = append(m[tg], p)
+				}
+			}
+		}
+		d.Trigrams = m
+		d.Dict = nil
+		d.Lines = nil
 	}
 	idx.data = d
 	idx.approxBytes = int64(idx.Size())
@@ -296,7 +338,8 @@ func (ix *Index) saveLocked() error {
 	tmpName := tmp.Name()
 	bw := bufio.NewWriter(tmp)
 	enc := gob.NewEncoder(bw)
-	if err := enc.Encode(&ix.data); err != nil {
+	gl := ix.groupedLocked()
+	if err := enc.Encode(gl); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
 		return err
@@ -572,4 +615,45 @@ type msgRec struct {
 	Role   string
 	Texts  []string
 	TsNano int64
+}
+
+// groupedLocked renders the in-memory inverted map as the v2 grouped
+// on-disk form (line records + trigram dictionary). Caller holds ix.mu.
+func (ix *Index) groupedLocked() *indexFile {
+	dict := make([]string, 0, len(ix.data.Trigrams))
+	for tg := range ix.data.Trigrams {
+		dict = append(dict, tg)
+	}
+	sort.Strings(dict)
+	idOf := make(map[string]uint32, len(dict))
+	for i, tg := range dict {
+		idOf[tg] = uint32(i)
+	}
+	lrs := make(map[int64]*lineRec)
+	for tg, ps := range ix.data.Trigrams {
+		id := idOf[tg]
+		for _, p := range ps {
+			lr := lrs[p.Offset]
+			if lr == nil {
+				lr = &lineRec{Offset: p.Offset, Length: p.Length, Role: p.Role, TsNano: p.TsNano}
+				lrs[p.Offset] = lr
+			}
+			lr.TriIDs = append(lr.TriIDs, id)
+		}
+	}
+	lines := make([]lineRec, 0, len(lrs))
+	for _, lr := range lrs {
+		sort.Slice(lr.TriIDs, func(i, j int) bool { return lr.TriIDs[i] < lr.TriIDs[j] })
+		lines = append(lines, *lr)
+	}
+	sort.Slice(lines, func(i, j int) bool { return lines[i].Offset < lines[j].Offset })
+	return &indexFile{
+		Version:     idxVersion,
+		IndexedTo:   ix.data.IndexedTo,
+		LineCount:   ix.data.LineCount,
+		SourceBytes: ix.data.SourceBytes,
+		BuiltAt:     ix.data.BuiltAt,
+		Dict:        dict,
+		Lines:       lines,
+	}
 }

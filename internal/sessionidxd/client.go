@@ -66,3 +66,21 @@ func dialClient(home string) (*http.Client, bool) {
 		},
 	}, true
 }
+
+// ProbeAlive reports whether a live shared host currently holds the
+// machine-scoped endpoint (#5149 ①). Pure-client wiring consults this at
+// Manager.Start: alive -> skip the local self build entirely. Bounded by
+// the same dial timeout as Query so a wedged host degrades to legacy
+// local behavior instead of stalling startup.
+func ProbeAlive(home string) bool {
+	c, ok := dialClient(home)
+	if !ok {
+		return false
+	}
+	resp, err := c.Get("http://sessionidxd.internal/status")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}

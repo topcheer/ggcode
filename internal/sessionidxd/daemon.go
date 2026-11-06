@@ -129,6 +129,10 @@ func StartHost(sessionsDir, home string) (stop func(), err error) {
 				return
 			case <-t.C:
 				d.mgr.RefreshExternal()
+				// ① (#5149 idx-123): host owns indexes for sessions that
+				// never got one (dead/foreign writers). Existing files stay
+				// writer-owned; oversized sources stay source-scanned.
+				d.mgr.TailMissingSources(sessionidx.DefaultTailMaxSourceBytes)
 			}
 		}
 	})
