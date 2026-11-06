@@ -80,6 +80,17 @@ jobs:
           # value collides and ASC rejects the duplicate. Seconds resolution
           # stays monotonic within a day and unique per run.
           echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d%H%M%S)" >> "${GITHUB_ENV}"
+          # CFBundleShortVersionString must be 1-3 period-separated integers
+          # (altool -19239). Strip pre-release/build metadata so labels like
+          # v1.3.275-rc10 become 1.3.275 instead of failing validation.
+          SHORT="${GGCODE_VERSION#v}"
+          SHORT="${SHORT%%-*}"
+          SHORT="${SHORT%%+*}"
+          if ! printf '%s' "$SHORT" | grep -qE '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::GGCODE_VERSION '${GGCODE_VERSION}' does not yield a numeric short version ('$SHORT')"; exit 1
+          fi
+          echo "MAS_SHORT_VERSION=${SHORT}" >> "${GITHUB_ENV}"
+          echo "short version: ${SHORT} (from ${GGCODE_VERSION})"
 
       - name: Guard - MAS secrets configured?
         shell: bash
@@ -175,7 +186,7 @@ jobs:
           wails build -clean -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
           plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
-          plutil -replace CFBundleShortVersionString -string "${GGCODE_VERSION#v}" "$APP/Contents/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "${MAS_SHORT_VERSION}" "$APP/Contents/Info.plist"
           plutil -replace CFBundleVersion -string "${MAS_BUILD_VERSION}" "$APP/Contents/Info.plist"
           plutil -replace LSMinimumSystemVersion -string "12.0" "$APP/Contents/Info.plist"
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
@@ -236,7 +247,7 @@ jobs:
             --apple-id "6755946388" \
             --bundle-id "gg.ai.ggcode" \
             --bundle-version "${MAS_BUILD_VERSION}" \
-            --bundle-short-version-string "${GGCODE_VERSION#v}" \
+            --bundle-short-version-string "${MAS_SHORT_VERSION}" \
             --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
       - name: Poll processing and submit for review
@@ -249,7 +260,7 @@ jobs:
           ./scripts/release/mas-submit-review.sh \
             --bundle-id "gg.ai.ggcode" \
             --app-id "${MAS_APP_ID:-6755946388}" \
-            --version "${GGCODE_VERSION#v}" \
+            --version "${MAS_SHORT_VERSION}" \
             --build "${MAS_BUILD_VERSION}" \
             --platform MAC_OS \
             --key-path ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8 \
