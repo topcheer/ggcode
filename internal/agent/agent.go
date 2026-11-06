@@ -4333,7 +4333,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				seenReadOnly[dedupK] = len(toolResults) - 1
-			} else if !speculativeSafeTools[tc.Name] && !result.IsError {
+			} else if !speculativeSafeTools[tc.Name] && (!result.IsError || partialEditWroteDespiteError(tc.Name, result.Content, result.IsError)) {
+				// #5153: a tool that errored but still wrote (multi_file_edit
+				// partial_success) mutated the source tree, so cached
+				// read-only results must be dropped here too - same
+				// condition as the toolMemo invalidation at the
+				// mutatesSourceTree site (#2991). Otherwise a same-batch
+				// re-read replays stale pre-edit content with IsError
+				// false and no staleness marker.
 
 				if len(seenReadOnly) > 0 {
 					debug.Log("agent", "in-turn dedup invalidated: %s mutated state, %d cached read-only results dropped", tc.Name, len(seenReadOnly))
