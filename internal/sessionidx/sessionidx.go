@@ -242,6 +242,14 @@ func (ix *Index) Refresh() error {
 	ix.data.IndexedTo = offset
 	ix.data.SourceBytes = st.Size()
 	ix.data.BuiltAt = time.Now().UnixNano()
+	if ix.capped {
+		// Capped: do NOT persist. The in-RAM state is emptied postings plus
+		// an advanced IndexedTo; saving it would reload as capped=false with
+		// an empty index and no source-scan fallback (silent recall loss).
+		// The last-good idx stays on disk; on reload SetSelfBudget's
+		// retroactive drop re-caps it and the degraded scan re-engages.
+		return nil
+	}
 	return ix.saveLocked()
 }
 
