@@ -197,7 +197,18 @@ func (m *Manager) scanExternal() {
 	defer m.mu.Unlock()
 	if m.self != nil {
 		if st, err := os.Stat(m.self.IdxPath); err == nil && st.Size() > m.selfLimitBytes {
+			// #5184: dropping the whole external table must release the
+			// budget slots of every decoded entry and clear the LRU order,
+			// or ghosts block all future decodes until daemon restart.
+			if m.totalBudget > 0 {
+				for _, oe := range m.external {
+					if oe != nil && oe.decoded {
+						m.totalDecoded -= oe.idxSize
+					}
+				}
+			}
 			m.external = map[string]*extEntry{}
+			m.evictionOrder = nil
 			debug.Log("sessionidx", "scan: self idx %.1fMB over limit, external skipped", float64(st.Size())/(1<<20))
 			return
 		}
@@ -233,6 +244,36 @@ func (m *Manager) scanExternal() {
 		// Lazy admission (plain mode too, #5149 scanlazy): record the
 		// entry WITHOUT decoding - decode on first query.
 		ext[id] = &extEntry{idxSize: info.Size(), modTime: info.ModTime()}
+	}
+	// #5184: a full rebuild discarded every decoded entry while keeping its
+	// totalDecoded slot and its evictionOrder position - ghost occupancy
+	// that double-counts on re-decode and eventually rejects all admissions
+	// until daemon restart. Carry decoded state across the rebuild for
+	// unchanged files (id+mtime+size), and release the budget slot of every
+	// decoded entry the rebuild drops.
+	if m.totalBudget > 0 {
+		carried := make([]string, 0, len(m.evictionOrder))
+		seen := make(map[string]bool, len(m.evictionOrder))
+		for _, oid := range m.evictionOrder {
+			if seen[oid] {
+				continue
+			}
+			seen[oid] = true
+			old, ok := m.external[oid]
+			if !ok || old == nil || !old.decoded {
+				continue // already gone or never decoded
+			}
+			if ne, ok2 := ext[oid]; ok2 && ne != nil &&
+				ne.modTime.Equal(old.modTime) && ne.idxSize == old.idxSize {
+				// Unchanged file: keep the decoded copy, no budget churn.
+				ne.idx, ne.decoded = old.idx, old.decoded
+				carried = append(carried, oid)
+			} else {
+				// Changed, dropped or skipped: release the slot.
+				m.totalDecoded -= old.idxSize
+			}
+		}
+		m.evictionOrder = carried
 	}
 	m.external = ext
 }
