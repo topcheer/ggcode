@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -128,5 +129,42 @@ func TestLoopbackTransport_CarriesHTTP(t *testing.T) {
 func dialContextFor(tr Transport, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
 	return func(context.Context, string, string) (net.Conn, error) {
 		return tr.Dial(timeout)
+	}
+}
+
+// Descriptor pins (#5149 hostify): the legacy sessionidxd.addr dial form.
+func TestLoopbackTransport_Descriptor(t *testing.T) {
+	tr := newLoopbackTransport(t)
+	if got := tr.Descriptor(); got != "" {
+		t.Fatalf("Descriptor before Listen = %q, want empty", got)
+	}
+	ln, err := tr.Listen()
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	desc := tr.Descriptor()
+	const p = "tcp:127.0.0.1:"
+	if len(desc) <= len(p) || desc[:len(p)] != p {
+		t.Fatalf("Descriptor = %q, want prefix %q<port>", desc, p)
+	}
+}
+
+func TestUnixTransport_Descriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix transport unused on windows")
+	}
+	tr := newUnixTransport(t)
+	if got := tr.Descriptor(); got != "" {
+		t.Fatalf("Descriptor before Listen = %q, want empty", got)
+	}
+	ln, err := tr.Listen()
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	want := "unix:" + tr.path
+	if got := tr.Descriptor(); got != want {
+		t.Fatalf("Descriptor = %q, want %q", got, want)
 	}
 }
