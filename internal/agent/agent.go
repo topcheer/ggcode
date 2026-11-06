@@ -443,6 +443,12 @@ func initialContextWindow(p provider.Provider) int {
 	if model == "" {
 		return defaultContextWindow
 	}
+	if w := config.LookupSyncedContextWindow(model); w > 0 {
+		// #5123: the weekly models.dev sync table is the single source
+		// of truth - consult it BEFORE the hand-maintained static table
+		// so new model generations stop rotting the cold-start fallback.
+		return w
+	}
 	if w := provider.LookupKnownModelContextWindow(model); w > 0 {
 		return w
 	}
