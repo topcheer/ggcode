@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,7 +119,13 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		// indexes in-process; everyone else stays a client (StartHost
 		// returns nil,nil when a live host holds the endpoint) and falls
 		// back to its local Manager when the host is unreachable.
-		home := config.HomeDir()
+		// Daemon home MUST be the machine-level ~/.ggcode (the parent of
+		// session.DefaultDir()), NOT config.HomeDir() - HomeDir is the raw
+		// user home, which would scatter idxd.sock / sessionidxd.addr into
+		// $HOME and break the legacy-addr rolling upgrade (both were found
+		// live at /Users/<u>/ on 2026-11-06). The host endpoint must stay
+		// machine-scoped for the single-host election.
+		home := filepath.Join(config.HomeDir(), ".ggcode")
 		// Under `go test` the home dir is the developer's REAL ~/.ggcode:
 		// never bind the machine-wide endpoint or enumerate the live idx
 		// dir from a test binary.
