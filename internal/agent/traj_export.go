@@ -204,7 +204,7 @@ func (a *Agent) maybeExportTrainingSample(workingDir string, stats *RunStats) {
 	sample := TrainSample{
 		SchemaVer:  trainSampleSchemaVer,
 		RunID:      stats.runID,
-		Task:       stats.UserPrompt,
+		Task:       redactTrainText(stats.UserPrompt),
 		Messages:   redactTrainMessages(msgs),
 		Reward:     computeTrainReward(stats),
 		Outcome:    outcome,
@@ -240,7 +240,7 @@ func ExportSessionTrainingSample(workingDir, task string, msgs []provider.Messag
 	sample := TrainSample{
 		SchemaVer:  trainSampleSchemaVer,
 		RunID:      "manual-" + time.Now().UTC().Format("20060102T150405"),
-		Task:       task,
+		Task:       redactTrainText(task),
 		Messages:   redactTrainMessages(msgs),
 		Reward:     0,
 		Outcome:    "manual",
