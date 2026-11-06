@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"testing"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -118,14 +119,19 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		// returns nil,nil when a live host holds the endpoint) and falls
 		// back to its local Manager when the host is unreachable.
 		home := config.HomeDir()
-		safego.Go("agentruntime.sessionidxHost", func() {
-			stop, err := sessionidxd.StartHost(sessDir, home)
-			if err != nil && !errors.Is(err, sessionidx.ErrLeaderAlive) {
-				debug.Log("sessionidxd", "host start: %v", err)
-				return
-			}
-			_ = stop // held for the process lifetime; released on exit
-		})
+		// Under `go test` the home dir is the developer's REAL ~/.ggcode:
+		// never bind the machine-wide endpoint or enumerate the live idx
+		// dir from a test binary.
+		if !testing.Testing() {
+			safego.Go("agentruntime.sessionidxHost", func() {
+				stop, err := sessionidxd.StartHost(sessDir, home)
+				if err != nil && !errors.Is(err, sessionidx.ErrLeaderAlive) {
+					debug.Log("sessionidxd", "host start: %v", err)
+					return
+				}
+				_ = stop // held for the process lifetime; released on exit
+			})
+		}
 	}
 
 	_ = registry.Register(tool.NewRecallToolFlowTool())
