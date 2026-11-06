@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // #5184: scanExternal full rebuild discarded decoded entries without
@@ -109,5 +110,74 @@ func TestIssue5184_SelfOverLimitReleasesSlots(t *testing.T) {
 	}
 	if len(m.evictionOrder) != 0 {
 		t.Fatalf("evictionOrder must be cleared with the table, got %d entries", len(m.evictionOrder))
+	}
+}
+
+// TestIssue5184_OverLimitRefreshReleasesDecodedSlot pins the QA-flagged
+// residual in the same ghost class: refreshExternal's over-limit branch
+// deleted a decoded entry from m.external without decrementing
+// totalDecoded. Neither the rebuild carry loop nor the LRU eviction loop
+// can release a slot whose id is gone from the map, so the ghost survived
+// until daemon restart - the exact failure mode this issue describes.
+func TestIssue5184_OverLimitRefreshReleasesDecodedSlot(t *testing.T) {
+	dir := t.TempDir()
+	seedIdx(t, dir, "grow", 40)
+	m := NewManager(dir, "")
+	// externalLimit above the idx size so "grow" is admitted, but small
+	// enough that a doubled file will exceed it.
+	seedIdx(t, dir, "filler", 40)
+	var base int64
+	for _, id := range []string{"grow", "filler"} {
+		st, err := os.Stat(IdxPath(dir, id))
+		if err != nil {
+			t.Fatalf("stat %s: %v", id, err)
+		}
+		if st.Size() > base {
+			base = st.Size()
+		}
+	}
+	m.SetExternalLimit(base + 1)
+	m.SetTotalBudget(1 << 20)
+	m.scanExternal()
+	_ = m.Query([]string{"token-alpha"}, "grow", 2)
+	first := m.TotalDecodedBytes()
+	if first == 0 {
+		t.Fatal("grow must be decoded after first query")
+	}
+
+	// Rewrite the idx to 2x size (newer mtime) so the refresh takes the
+	// grown-past-limit delete branch while the entry is still decoded.
+	seedIdx(t, dir, "grow", 80)
+	st, err := os.Stat(IdxPath(dir, "grow"))
+	if err != nil {
+		t.Fatalf("stat grown idx: %v", err)
+	}
+	if st.Size() <= base+1 {
+		t.Fatalf("grown idx %d must exceed externalLimit %d", st.Size(), base+1)
+	}
+	future := time.Now().Add(2 * time.Second)
+	_ = os.Chtimes(IdxPath(dir, "grow"), future, future)
+	m.refreshExternal()
+
+	if got := m.TotalDecodedBytes(); got != 0 {
+		t.Fatalf("over-limit refresh delete must release decoded slot: totalDecoded=%d want 0", got)
+	}
+	m.mu.Lock()
+	hasGrow := m.external["grow"] != nil
+	lru := len(m.evictionOrder)
+	m.mu.Unlock()
+	if hasGrow {
+		t.Fatal("grown-past-limit entry must be deleted from the external table")
+	}
+	// The refresh triggers a scanExternal rebuild (count mismatch), which
+	// now also scrubs the stale id out of evictionOrder - pin both halves.
+	if lru != 0 {
+		t.Fatalf("evictionOrder must not keep ghost ids after over-limit delete: %d entries", lru)
+	}
+
+	// Budget must still admit new decodes (no ghost blockage).
+	_ = m.Query([]string{"token-alpha"}, "filler", 2)
+	if m.TotalDecodedBytes() == 0 {
+		t.Fatal("new decode must be admissible after ghost release")
 	}
 }

@@ -291,6 +291,13 @@ func (m *Manager) refreshExternal() {
 			continue
 		}
 		if st.Size() > m.externalLimit {
+			// #5184 residual: a grown-past-limit file whose decoded copy is
+			// deleted here would otherwise keep a ghost budget slot forever -
+			// the carry loop and the eviction loop both skip ids missing from
+			// m.external, so nothing ever releases it. Release it now.
+			if m.totalBudget > 0 && ent.decoded {
+				m.totalDecoded -= ent.idxSize
+			}
 			delete(m.external, id)
 			continue
 		}
