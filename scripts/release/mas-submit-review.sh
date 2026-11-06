@@ -39,6 +39,7 @@ done
 
 [[ -n "$BUNDLE_ID" && -n "$VERSION" && -n "$KEY_PATH" && -n "$KEY_ID" && -n "$ISSUER" ]] || {
   echo "missing required flags" >&2; exit 2; }
+echo "config: bundle=$BUNDLE_ID version=$VERSION build=${BUILD_VERSION:-<latest>} platform=$PLATFORM app_id_hint=${APP_ID_ARG:-none} issuer=$ISSUER key_id=$KEY_ID"
 
 # ---------- JWT (ES256, the only scheme ASC accepts for API keys) ----------
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
@@ -48,14 +49,27 @@ PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d}' "$ISSUER" "$((NOW))" "$((NOW+1
 SIG_INPUT="${HEADER}.${PAYLOAD}"
 SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | b64url)
 JWT="${SIG_INPUT}.${SIG}"
+LOGD=/tmp/asc-debug.log
+logd() { printf '%s\n' "$*" | tee -a "$LOGD" >&2; }
+
 asc() { # asc METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
+  local resp http_code
   if [[ -n "$body" ]]; then
-    curl -sS --max-time 60 -X "$method" "$API_BASE$path" \
-      -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
+      -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body")
   else
-    curl -sS --max-time 60 "$API_BASE$path" -H "Authorization: Bearer $JWT"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $JWT")
   fi
+  http_code="${resp##*__HTTP__}"
+  resp="${resp%\n__HTTP__*}"
+  logd "=== ASC $method $path -> HTTP $http_code ==="
+  logd "request-body: ${body:-(none)}"
+  logd "response: $resp"
+  if [[ "$http_code" != 2* ]]; then
+    echo "::warning::ASC $method $path returned HTTP $http_code (non-2xx) - response logged" >&2
+  fi
+  printf '%s' "$resp"
 }
 
 # ---------- locate the app ----------
@@ -89,6 +103,8 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   fi
   STATE=$(echo "$B" | jq -r '.data[0].attributes.processingState // empty' 2>/dev/null)
   BUILD_ID=$(echo "$B" | jq -r '.data[0].id // empty' 2>/dev/null)
+  N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
+  echo "poll #$i: state=${STATE:-NONE} build_id=${BUILD_ID:-NONE} matches=$N_BUILDS"
   case "$STATE" in
     VALID) echo "build ${BUILD_ID} processed (VALID) after ~$((i/2)) min"; break;;
     FAILED|INVALID) echo "::error::build processing failed: $(echo "$B" | jq -c '.data[0].attributes // .')" >&2; exit 1;;
