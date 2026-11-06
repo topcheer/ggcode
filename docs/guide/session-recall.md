@@ -15,6 +15,12 @@ re-reading and re-parsing multi-hundred-megabyte files on every query.
 
 ```
 session_recall(query, session_id?, role?, limit)
+
+## 内存上界（自帽）
+
+- 每实例**本会话索引**常驻上界默认 256MB（`GGCODE_SESSIONIDX_SELF_BUDGET` 可调，字节）；超帽后停止摄入 trigram，检索自动降级为有界源扫描（结果仍正确，代价为按查询的 I/O）。
+- 跨会话/兄弟席索引由机器全局预算（默认 1GB）+ 30 分钟空闲卸载约束；宿主 socket 位于 `~/.ggcode/idxd.sock`。
+
 ```
 
 | Parameter | Description |

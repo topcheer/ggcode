@@ -118,6 +118,7 @@ func (m *Manager) Start() {
 		if err != nil {
 			debug.Log("sessionidx", "start: self load %s: %v", m.liveID, err)
 		} else {
+			ix.SetSelfBudget(DefaultSelfBudget())
 			m.self = ix
 		}
 	}
@@ -493,6 +494,17 @@ func (m *Manager) QueryScoped(terms []string, sessionID string, limit int, works
 	}
 	push := func(sessID string, ix *Index) {
 		if ix == nil || !allowed(sessID) {
+			return
+		}
+		if ix.Capped() {
+			// Self-budget cap: bounded source scan keeps recall correct
+			// without the resident gigabytes.
+			if len(out) < limit {
+				for _, r := range scanSourceForTerms(m.dir, sessID, terms, limit-len(out)) {
+					r.Workspace = wsMap[sessID]
+					out = append(out, r)
+				}
+			}
 			return
 		}
 		hits := ix.Query(terms, limit)

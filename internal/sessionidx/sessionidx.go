@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,17 @@ type Index struct {
 	// rebuilds it on its next Refresh).
 	corrupt bool
 	stale   bool
+	// capped: the self-budget cap was hit - trigram ingestion stops while
+	// IndexedTo keeps advancing (nothing re-decodes), and Query degrades
+	// to a bounded source scan via the manager.
+	capped bool
+	// approxBytes tracks the estimated postings memory (the same 40B /
+	// posting basis Size() uses) so the cap check is O(1) per line.
+	approxBytes int64
+	// selfBudget caps postings memory for THIS instance's live-session
+	// index; 0 disables the cap (external entries stay governed by the
+	// manager's machine budget).
+	selfBudget int64
 }
 
 const idxVersion = 1
@@ -75,6 +87,44 @@ func (ix *Index) Size() int {
 		n += len(ps) * 40
 	}
 	return n
+}
+
+// SetSelfBudget caps this index's postings memory (bytes, approximate).
+// Only meaningful for the live self index; 0 disables the cap.
+func (ix *Index) SetSelfBudget(b int64) {
+	ix.mu.Lock()
+	ix.selfBudget = b
+	if b > 0 && ix.approxBytes > b {
+		// Retroactive: already over cap (Start loaded a huge persisted
+		// idx) - drop the postings NOW; recall degrades to the bounded
+		// source scan. approxBytes stays above the cap so ingestion
+		// never resumes; IndexedTo is untouched so nothing re-decodes.
+		ix.data.Trigrams = map[string][]Posting{}
+		ix.capped = true
+	}
+	ix.mu.Unlock()
+}
+
+// Capped reports whether ingestion stopped at the self-budget cap.
+func (ix *Index) Capped() bool {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.capped
+}
+
+// DefaultSelfBudget is the resident cap for one instance's live-session
+// index (env GGCODE_SESSIONIDX_SELF_BUDGET, bytes). A live session whose
+// transcript outgrows the cap degrades its recall queries to a bounded
+// source scan instead of holding gigabytes in the heap - the #5149
+// amplification class, self-side this time (a 547MB idx file decoded to
+// ~2-3GB of Go heap on 2026-11-06).
+func DefaultSelfBudget() int64 {
+	if v := os.Getenv("GGCODE_SESSIONIDX_SELF_BUDGET"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 256 << 20
 }
 
 // IdxDir returns the directory holding index files for a sessions dir.
@@ -128,6 +178,7 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		return idx, nil
 	}
 	idx.data = d
+	idx.approxBytes = int64(idx.Size())
 	idx.loadedAt = time.Now()
 	return idx, nil
 }
@@ -152,6 +203,9 @@ func (ix *Index) Refresh() error {
 		ix.data = indexFile{Version: idxVersion, Trigrams: map[string][]Posting{}}
 	}
 	if st.Size() == ix.data.IndexedTo {
+		if ix.selfBudget > 0 && ix.approxBytes > ix.selfBudget {
+			ix.capped = true // already-over-cap: flag even with no new tail
+		}
 		return nil
 	}
 
@@ -171,7 +225,13 @@ func (ix *Index) Refresh() error {
 		consumed := int64(len(line))
 		trimmed := bytes.TrimRight(line, "\r\n")
 		if len(trimmed) > 0 {
-			ix.indexLine(offset, int32(len(trimmed)), trimmed)
+			if ix.selfBudget > 0 && ix.approxBytes >= ix.selfBudget {
+				// Self-budget cap hit: stop ingesting postings but keep
+				// advancing IndexedTo so the tail is never re-decoded.
+				ix.capped = true
+			} else {
+				ix.indexLine(offset, int32(len(trimmed)), trimmed)
+			}
 			ix.data.LineCount++
 		}
 		offset += consumed
@@ -235,9 +295,12 @@ func (ix *Index) indexLine(offset int64, length int32, line []byte) {
 		return
 	}
 	roleByte := roleToByte(rec.Role)
+	total := 0
 	for _, txt := range rec.Texts {
 		addPostings(ix.data.Trigrams, txt, offset, length, roleByte, rec.TsNano)
+		total += len(txt)
 	}
+	ix.approxBytes += int64(total) * 40
 }
 
 func roleToByte(role string) byte {
@@ -293,6 +356,9 @@ type Hit struct {
 }
 
 func (ix *Index) Query(terms []string, limit int) []Hit {
+	if ix.capped {
+		return nil // capped: the manager degrades to a bounded source scan
+	}
 	limit = clampLimit(limit)
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
