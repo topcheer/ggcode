@@ -20,6 +20,18 @@ func TestIssue5130GoTestRaceIsVerifyCommand(t *testing.T) {
 	}
 }
 
+// Table sweep guard (hardening suggested in #5130 thread by fixer + QA):
+// verifyCommands' bool values are never read (the only consumer iterates
+// keys), so a behavior test cannot catch a false dead key re-entering the
+// table. Assert the invariant directly: every entry is true.
+func TestIssue5130VerifyTableNoDeadEntries(t *testing.T) {
+	for cmd, ok := range verifyCommands {
+		if !ok {
+			t.Errorf("verifyCommands entry %q is false: dead key (values are never read; #5130 Face 1 rot class)", cmd)
+		}
+	}
+}
+
 func TestIssue5130StillWrongCJKIsNegative(t *testing.T) {
 	s := newUserSentimentState()
 
