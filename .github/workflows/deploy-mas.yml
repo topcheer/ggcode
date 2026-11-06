@@ -87,7 +87,7 @@ jobs:
           # this runner class, the stock trust domain resolves the Apple
           # chain (round-7 verdict, validated 2026-11-05).
           KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-          security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
+          security unlock-keychain -p action "${KEYCHAIN}" 2>/dev/null || security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
           security default-keychain -s "${KEYCHAIN}"
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
           security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \
@@ -108,7 +108,7 @@ jobs:
           # Actions step is a separate process; without an explicit unlock +
           # partition grant the wails rebuild window can relock the keychain
           # (errSecInternalComponent, round-5).
-          security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
+          security unlock-keychain -p action "${KEYCHAIN}" 2>/dev/null || security unlock-keychain "${KEYCHAIN}" 2>/dev/null || true
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "${KEYCHAIN}" > /dev/null 2>&1 || \
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" > /dev/null 2>&1 || true
           echo "--- pre-sign identity check ---"
@@ -120,7 +120,13 @@ jobs:
         run: |
           cd desktop/ggcode-desktop-wails
           KC="$HOME/Library/Keychains/login.keychain-db"
-          security unlock-keychain "${KC}" 2>/dev/null || true
+          security unlock-keychain -p action "${KC}" || { echo "::error::cannot unlock login keychain"; exit 1; }
+          # Identity gate BEFORE codesign: a hang at "replacing existing signature" is
+          # codesign prompting for a locked keychain on a headless runner (no round-5
+          # re-unlock). Fail loud here instead of hanging for the step timeout.
+          if ! security find-identity -v -p codesigning "${KC}" | grep -q "1 valid identities\|[2-9] valid identities"; then
+            echo "::error::no valid signing identity after unlock"; security find-identity -v -p codesigning; exit 1
+          fi
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KC}" > /dev/null 2>&1 || true
           wails build -clean -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
