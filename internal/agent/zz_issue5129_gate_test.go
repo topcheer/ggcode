@@ -67,9 +67,17 @@ func TestIssue5129CompoundReadonlyPatrol(t *testing.T) {
 	}
 
 	// First-action MEDIUM command (grounding window empty) must not gate.
+	// #1798 guard: run_command is deliberately NOT first-action-exempt
+	// (self-grounding hole), so the medium exemption is pinned via a
+	// non-shell medium tool instead.
 	s2 := newIrrevGateState()
-	if warn := s2.recordAction("run_command", "make build"); warn != "" {
-		t.Errorf("first-action medium command gated (S-70): %q", warn)
+	if warn := s2.recordAction("git_commit", `{"message":"x"}`); warn != "" {
+		t.Errorf("first-action medium tool gated (S-70): %q", warn)
+	}
+	// #1798 pinned: first run_command (medium) still gates.
+	s2b := newIrrevGateState()
+	if warn := s2b.recordAction("run_command", `{"command":"make build"}`); warn == "" {
+		t.Error("first-action medium run_command must still gate (#1798 self-grounding guard)")
 	}
 
 	// First-action HIGH-IMPACT command still gates - the exemption is

@@ -87,6 +87,23 @@ func irrevClassifyTool(toolName, args string) int {
 			if json.Unmarshal([]byte(args), &a) == nil && a.Action == "delete" && a.Recursive {
 				return irrevTierHigh
 			}
+			// #1798 true implementation: file_ops real payloads nest the
+			// operations as [{action, recursive, ...}] - the flat top-level
+			// shape above never fires for them. A recursive delete must be
+			// High regardless of payload shape.
+			var ops struct {
+				Operations []struct {
+					Action    string `json:"action"`
+					Recursive bool   `json:"recursive"`
+				} `json:"operations"`
+			}
+			if json.Unmarshal([]byte(args), &ops) == nil {
+				for _, op := range ops.Operations {
+					if op.Action == "delete" && op.Recursive {
+						return irrevTierHigh
+					}
+				}
+			}
 		}
 		return irrevTierMedium
 	case "start_command", "run_command":
@@ -369,7 +386,12 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	// medium-tier command would always gate (structurally unavoidable - there
 	// is no way to accumulate grounding before any tool call exists). Exempt
 	// the very first action from the MEDIUM threshold; HIGH still gates.
-	firstAction := len(s.grounding) == 0
+	// #1798 guard: the exemption must NOT re-open the self-grounding hole
+	// ("current call counts as its own grounding") - run_command stays gated
+	// even as a first action, exactly as #1798 pinned. Only non-shell medium
+	// tools (git_commit / file_ops / batch_replace / lsp_rename ...) get the
+	// first-action exemption.
+	firstAction := len(s.grounding) == 0 && toolName != "run_command" && toolName != "start_command"
 
 	recentGrounding := 0
 	start := len(s.grounding) - irrevGroundingWindow
