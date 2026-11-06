@@ -78,61 +78,60 @@ jobs:
           fi
           echo "MAS_READY=true" >> "${GITHUB_ENV}"
 
-      - name: Prepare Mac App Store credentials (full-verbose, probe-gated)
+      - name: Prepare Mac App Store credentials (canonical temp keychain)
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
           set -x
-          # DIAGNOSTIC MODE (run 42176757052 + 42181457124 both hung 15+ min at
-          # codesign "replacing existing signature" with zero output). Every
-          # security op below now (a) echoes its result, (b) fails loud, and
-          # (c) the step ends with a 60s PROBE signing of a throwaway binary:
-          # if the probe hangs, the problem is key access/trust (keychain),
-          # NOT the wails bundle - we learn that in minute 1, not minute 15.
-          KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-          echo "=== [1] keychain lock state (before) ==="
-          security show-keychain-info "${KEYCHAIN}" 2>&1 || true
-          echo "=== [2] unlock (passworded, fail-loud) ==="
-          if ! security unlock-keychain -p action "${KEYCHAIN}" 2>&1; then
-            echo "::error::unlock with runner password failed (see stderr above)"
-            exit 1
-          fi
-          security show-keychain-info "${KEYCHAIN}" 2>&1 || true
-          security default-keychain -s "${KEYCHAIN}"
-          echo "=== [3] import installer p12 ==="
+          # RECIPE CHANGE (run 1+2 both hung at codesign "replacing existing
+          # signature"): the login-keychain route contradicts the canonical
+          # pattern (GitHub docs "Installing an Apple certificate on macOS
+          # runners" + our own proven DMG lane in
+          # scripts/release/build-desktop-darwin.sh, which has signed every
+          # release without a single hang). Round-7's "custom keychain yields
+          # CSSMERR_TP_NOT_TRUSTED forever" verdict was diagnosed while the
+          # p12s were corrupt copies - invalid for rebuilt certs. Mirror the
+          # DMG lane exactly: dedicated temp keychain with a fresh password,
+          # import -A, partition-list with THAT password, search-list first,
+          # and codesign --keychain (so it can never resolve identities or
+          # ACLs from the runner login keychain).
+          KEYCHAIN="${RUNNER_TEMP}/signing.keychain-db"
+          KEYCHAIN_PASSWORD="ci-$(date +%s)"
+          echo "KC_PATH=${KEYCHAIN}" >> "${GITHUB_ENV}"
+          echo "KC_PASSWORD=${KEYCHAIN_PASSWORD}" >> "${GITHUB_ENV}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          echo "=== import installer p12 ==="
+          set +x
           printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
-          ls -l "${RUNNER_TEMP}/installer.p12"
-          set +x
-          security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \             -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productbuild 2>&1
+          security import "${RUNNER_TEMP}/installer.p12" -k "${KEYCHAIN}" \             -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" -A -t cert -f pkcs12 \             -T /usr/bin/codesign -T /usr/bin/productbuild 2>&1
           set -x
-          echo "=== [4] import distribution p12 ==="
-          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
-          ls -l "${RUNNER_TEMP}/dist.p12"
+          echo "=== import distribution p12 ==="
           set +x
-          if ! security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \               -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -T /usr/bin/codesign 2>&1; then
-            echo "::error::distribution p12 import failed (stderr above)"
-            exit 1
+          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
+          if ! security import "${RUNNER_TEMP}/dist.p12" -k "${KEYCHAIN}" \               -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" -A -t cert -f pkcs12 \               -T /usr/bin/codesign 2>&1; then
+            echo "::error::distribution p12 import failed (stderr above)"; exit 1
           fi
           set -x
-          echo "=== [5] import WWDR G3 intermediate ==="
+          echo "=== import WWDR G3 + verify presence ==="
           security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign 2>&1
-          security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" 2>&1 | head -3
-          echo "=== [6] partition-list grant (visible) ==="
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" 2>&1 | tail -2
-          echo "=== [7] identity list after import ==="
+          security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" 2>&1 | head -2
+          echo "=== partition-list (temp-KC password, visible) ==="
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>&1 | tail -2
+          echo "=== search-list first ==="
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d ' "')
+          echo "=== identity list (temp KC only) ==="
           security find-identity -v -p codesigning "${KEYCHAIN}" 2>&1
-          echo "=== [8] PROBE: 60s throwaway-binary signature ==="
-          # Signs a 3-byte script with the Distribution identity. Hang here
-          # = key-access prompt (ACL/trust), i.e. the exact "replacing
-          # existing signature" hang isolated from the real bundle.
+          echo "=== PROBE: 60s throwaway-binary signature ==="
           PROBE_BIN="${RUNNER_TEMP}/probe.bin"
           printf '#!/bin/sh\n' > "${PROBE_BIN}"; chmod +x "${PROBE_BIN}"
           set +x
-          if ! perl -e 'alarm 60; exec @ARGV' codesign -f -vvv -s "Apple Distribution: Junjun Zhang (EGZFS7M525)" "${PROBE_BIN}" 2>&1; then
-            echo "::error::PROBE SIGN FAILED OR TIMED OUT (60s) - key access/trust problem, NOT bundle-specific. See codesign -vvv output above."; exit 1
+          if ! perl -e 'alarm 60; exec @ARGV' codesign -f -vvv -s "Apple Distribution: Junjun Zhang (EGZFS7M525)" --keychain "${KEYCHAIN}" "${PROBE_BIN}" 2>&1; then
+            echo "::error::PROBE SIGN FAILED/TIMED OUT (60s) - key access problem, NOT bundle-specific. codesign -vvv output above."; exit 1
           fi
           set -x
-          echo "PROBE OK: key access works; any later hang is bundle-specific"
+          echo "PROBE OK: key access works via temp keychain"
 
       - name: Build and sign universal MAS app (verbose + watchdogs)
         if: env.MAS_READY == 'true'
@@ -140,12 +139,11 @@ jobs:
         run: |
           set -x
           cd desktop/ggcode-desktop-wails
-          KC="$HOME/Library/Keychains/login.keychain-db"
-          echo "=== re-unlock after wails window (fail-loud) ==="
-          security unlock-keychain -p action "${KC}" 2>&1 || { echo "::error::re-unlock failed"; exit 1; }
-          echo "=== partition-list re-grant (visible) ==="
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KC}" 2>&1 | tail -2
-          echo "=== identity gate (valid list) ==="
+          KC="${KC_PATH}"
+          echo "=== re-unlock temp KC after wails window (fail-loud) ==="
+          security unlock-keychain -p "${KC_PASSWORD}" "${KC}" 2>&1 || { echo "::error::re-unlock failed"; exit 1; }
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KC_PASSWORD}" "${KC}" 2>&1 | tail -2
+          echo "=== identity gate ==="
           security find-identity -v -p codesigning "${KC}" 2>&1
           wails build -clean -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
@@ -172,22 +170,24 @@ jobs:
           </dict>
           </plist>
           PLIST
-          echo "=== codesign app (300s watchdog, -vvv, explicit keychain) ==="
+          echo "=== codesign app (300s watchdog, -vvv, temp keychain) ==="
           set +x
           if ! perl -e 'alarm 300; exec @ARGV' codesign -f -vvv --keychain "${KC}" \               --sign "Apple Distribution: Junjun Zhang (EGZFS7M525)" \               --entitlements "${RUNNER_TEMP}/mas_ent.plist" --options runtime --timestamp "$APP" 2>&1; then
             echo "::error::codesign app failed/timed out (300s) - full -vvv output above"; exit 1
           fi
           set -x
           echo "=== verify (verbose) ==="
-          codesign --verify --deep --strict --verbose=4 "$APP" 2>&1
-          echo "=== productbuild (300s watchdog) ==="
+          codesign --verify --deep --strict --verbose=4 --keychain "${KC}" "$APP" 2>&1
+          echo "=== productbuild (300s watchdog, installer identity from temp KC) ==="
           set +x
-          if ! perl -e 'alarm 300; exec @ARGV' productbuild --component "$APP" /Applications \               --sign "3rd Party Mac Developer Installer: Junjun Zhang (EGZFS7M525)" \               --timestamp "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg" 2>&1; then
+          if ! perl -e 'alarm 300; exec @ARGV' productbuild --component "$APP" /Applications \               --sign "3rd Party Mac Developer Installer: Junjun Zhang (EGZFS7M525)" \               --keychain "${KC}" \               --timestamp "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg" 2>&1; then
             echo "::error::productbuild failed/timed out (300s) - output above"; exit 1
           fi
           set -x
           ls -l "${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg"
           echo "PKG_PATH=${RUNNER_TEMP}/GGCode_Desktop_MAS.pkg" >> "${GITHUB_ENV}"
+          echo "=== cleanup temp keychain (no-op if job fails earlier) ==="
+          security delete-keychain "${KC}" 2>/dev/null || true
 
       - name: Validate package (altool --validate-package)
         if: env.MAS_READY == 'true'
