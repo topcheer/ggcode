@@ -127,6 +127,11 @@ func DefaultSelfBudget() int64 {
 	return 256 << 20
 }
 
+// idxSkipDecodeBytes is the persisted-idx size above which Load skips the
+// gob decode outright (test-overridable). At the conventional 3-5x postings
+// expansion, a 64MB idx file implies well over the 256MB self budget.
+var idxSkipDecodeBytes int64 = 64 << 20
+
 // IdxDir returns the directory holding index files for a sessions dir.
 func IdxDir(sessionsDir string) string {
 	return filepath.Join(sessionsDir, "idx")
@@ -155,6 +160,13 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 	idx.data.Version = idxVersion
 	idx.data.Trigrams = map[string][]Posting{}
 
+	// #5149 startup-spike guard: decoding a multi-hundred-MB gob spikes the
+	// heap to gigabytes before SetSelfBudget can drop it (RSS then sits at
+	// the GC/MADV_FREE lag peak - observed 5.7GB at 3.5min uptime). When the
+	// persisted idx is already past the self-budget scale, skip the decode
+	// entirely: capped from birth, recall degrades to the bounded source
+	// scan, and the owning instance never rebuilds (capped Refresh is a
+	// no-op), so nothing re-materializes the map.
 	f, err := os.Open(idx.IdxPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -163,6 +175,19 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		return nil, err
 	}
 	defer f.Close()
+	// #5149 startup-spike guard: decoding a multi-hundred-MB gob spikes the
+	// heap to gigabytes before SetSelfBudget can drop it (RSS then sits at
+	// the GC/MADV_FREE lag peak - observed 5.7GB at 3.5min uptime). Size is
+	// taken from the ALREADY-OPEN handle (f.Stat, no new path-dependent
+	// operation); oversized files skip the decode entirely - capped from
+	// birth, recall degrades to the bounded source scan, and nothing ever
+	// re-materializes the giant map.
+	if fi, err := f.Stat(); err == nil && fi.Size() > idxSkipDecodeBytes {
+		debug.Log("sessionidx", "load: idx for %s is %dMB, skipping decode (capped)", sessionID, fi.Size()>>20)
+		idx.capped = true
+		idx.approxBytes = fi.Size() * 4 // postings-memory estimate, over any budget
+		return idx, nil
+	}
 	dec := gob.NewDecoder(bufio.NewReader(f))
 	var d indexFile
 	if err := dec.Decode(&d); err != nil {
@@ -188,6 +213,11 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 // the source shrank (should not happen for append-only files) the index is
 // rebuilt from scratch.
 func (ix *Index) Refresh() error {
+	if ix.Capped() {
+		// Capped (self-budget or skip-decode): no ingestion, no reads - the
+		// bounded source scan serves queries; keep it that way.
+		return nil
+	}
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 

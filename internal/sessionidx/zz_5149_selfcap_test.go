@@ -145,3 +145,40 @@ func TestDefaultSelfBudget_EnvOverride(t *testing.T) {
 		t.Fatalf("bad env must fall back to default, got %d", got)
 	}
 }
+
+func TestSelfCap_SkipDecodeForOversizedIdx(t *testing.T) {
+	dir := t.TempDir()
+	const id = "selfcap4"
+	seedSelfCapSession(t, dir, id, 10)
+
+	// Simulate an oversized persisted idx without writing 64MB: shrink the
+	// skip threshold, then write a file bigger than it.
+	old := idxSkipDecodeBytes
+	idxSkipDecodeBytes = 1024
+	defer func() { idxSkipDecodeBytes = old }()
+	big := make([]byte, 4096)
+	if err := os.MkdirAll(IdxDir(dir), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(IdxPath(dir, id), big, 0o600); err != nil {
+		t.Fatalf("write idx: %v", err)
+	}
+
+	ix, err := Load(dir, id)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ix.Capped() {
+		t.Fatal("oversized idx must load capped (decode skipped)")
+	}
+	if ix.Size() != 0 {
+		t.Fatalf("no postings may be decoded, Size=%d", ix.Size())
+	}
+	// Refresh is a no-op: no ingestion, capped persists.
+	if err := ix.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if !ix.Capped() {
+		t.Fatal("cap must persist across refresh")
+	}
+}
