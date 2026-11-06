@@ -1,68 +1,60 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
+// #5141 Face A: this table used to hand-pin ~30 exact window values for
+// external models. The table is regenerated WEEKLY from models.dev, so
+// every upstream revision redded the pin - a hand-frozen copy of live
+// external data cannot stay green by construction. Now:
+//   - sampled rows assert self-consistency (infer == table value)
+//   - hand-pinned SHAPE cases that don't depend on upstream values
+//   - a plausibility guard over the whole table (catches sync corruption)
 func TestInferContextWindow_KnownModels(t *testing.T) {
-	tests := []struct {
-		model string
-		want  int
-	}{
-
-		{"gpt-4.1", 1047576},
-		{"gpt-4.1-mini", 1047576},
-		{"gpt-4.1-nano", 1047576},
-		{"gpt-4o", 128000},
-		{"gpt-4o-mini", 128000},
-		{"gpt-4-turbo", 128000},
-		{"gpt-4", 8192},
-		{"o3", 200000},
-		{"o3-mini", 200000},
-		{"o4-mini", 200000},
-
-		{"gpt-4.1-2025-04-14", 1_000_000},
-		{"gpt-4o-2024-08-06", 128000},
-		{"gpt-4-turbo-2024-04-09", 128000},
-
-		{"claude-sonnet-4-6", 1_000_000},
-		{"claude-opus-4-7", 1_000_000},
-		{"claude-sonnet-4-5-20250929", 1_000_000},
-		{"claude-opus-4-5-20251101", 200000},
-		{"claude-opus-4-20250514", 200000},
-		{"claude-sonnet-4-20250514", 200000},
-		{"claude-haiku-4-5-20251001", 200000},
-
-		{"gemini-2.5-pro", 1048576},
-		{"gemini-2.5-flash", 1048576},
-		{"gemini-2.0-flash", 1_000_000},
-		{"gemini-1.5-pro", 2_000_000},
-		{"gemini-1.5-flash", 1_000_000},
-
-		{"deepseek-chat", 128000},
-		{"deepseek-reasoner", 128000},
-
-		{"llama-3.3-70b-versatile", 131072},
-		{"mixtral-8x7b-32768", 32768},
-
-		{"glm-5", 204800},
-		{"glm-5.1", 204800},
-		{"glm-4-long", 1_000_000},
-
-		{"moonshot-v1-128k", 128000},
-		{"moonshot-v1-32k", 32000},
-		{"moonshot-v1-8k", 8000},
-		{"kimi-k2", 262144},
-
-		{"MiMo-V2.5-Pro", 1_048_576},
-		{"MiMo-V2.5", 1_048_576},
-		{"MiMo-V2-Pro", 1_048_576},
-
-		{"unknown-model", 128000},
+	// Self-consistency samples: the inference path must read the synced
+	// table exactly (case-insensitive exact key, so mixed-case input too).
+	samples := []string{
+		"gpt-4.1", "gpt-4o-mini", "o3",
+		"claude-sonnet-4-6", "claude-opus-4-5-20251101",
+		"gemini-2.5-pro", "deepseek-ai/deepseek-v3",
+		"glm-5", "glm-5.1", "kimi-k2",
+		"moonshotai/kimi-k2", "deepseek-ai/deepseek-r1",
+	}
+	for _, model := range samples {
+		want, ok := knownModelCapabilities[strings.ToLower(model)]
+		if !ok {
+			t.Fatalf("sample %q missing from table (renamed upstream?) - update the sample list", model)
+		}
+		if got := inferContextWindow(model, "openai"); got != want.ContextWindow {
+			t.Errorf("inferContextWindow(%q) = %d, table says %d - inference no longer reads the synced table", model, got, want.ContextWindow)
+		}
 	}
 
-	for _, tt := range tests {
-		got := inferContextWindow(tt.model, "openai")
-		if got != tt.want {
-			t.Errorf("inferContextWindow(%q) = %d, want %d", tt.model, got, tt.want)
+	// SHAPE pins: these do not depend on any specific upstream value.
+	// Unknown model falls through to the protocol default...
+	if got := inferContextWindow("unknown-model", "openai"); got != 128000 {
+		t.Errorf("unknown openai fallback = %d, want 128000", got)
+	}
+	// ...while a region-suffixed synced row still resolves.
+	if _, ok := knownModelCapabilities["glm-5.2@eu"]; ok {
+		if got := inferContextWindow("glm-5.2@eu", "openai"); got != knownModelCapabilities["glm-5.2@eu"].ContextWindow {
+			t.Errorf("region-suffixed row must resolve via the table, got %d", got)
+		}
+	}
+}
+
+// TestInferContextWindow_TablePlausibility guards the whole synced table:
+// catches upstream corruption or a bad regen (zero, negative, or absurd
+// windows) without freezing any exact external value.
+func TestInferContextWindow_TablePlausibility(t *testing.T) {
+	for model, cap := range knownModelCapabilities {
+		if cap.ContextWindow <= 0 {
+			t.Errorf("table row %q has non-positive window %d", model, cap.ContextWindow)
+		}
+		if cap.ContextWindow > 10_000_000 {
+			t.Errorf("table row %q has implausible window %d (>10M)", model, cap.ContextWindow)
 		}
 	}
 }
