@@ -597,6 +597,10 @@ func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 		}
 		var l trajectoryLearning
 		if json.Unmarshal([]byte(line), &l) == nil && l.Insight != "" {
+			// #5136: never propagate a pre-fix raw prompt into another
+			// project's store - redact at merge intake. (dst entries are
+			// already cured by loadTrajFile below.)
+			l.Task = redactTrainText(l.Task)
 			src = append(src, l)
 		}
 	}
@@ -654,6 +658,7 @@ func loadTrajFile(path string) ([]trajectoryLearning, error) {
 		return nil, err
 	}
 	var out []trajectoryLearning
+	cured := false
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -661,7 +666,20 @@ func loadTrajFile(path string) ([]trajectoryLearning, error) {
 		}
 		var l trajectoryLearning
 		if json.Unmarshal([]byte(line), &l) == nil {
+			// #5136: pre-#5118 lines carry the raw user prompt in Task.
+			// Redact on load so no consumer (prompt render, export,
+			// merge) ever sees the raw value, and cure the at-rest file
+			// once when a change was detected.
+			if red := redactTrainText(l.Task); red != l.Task {
+				l.Task = red
+				cured = true
+			}
 			out = append(out, l)
+		}
+	}
+	if cured {
+		if werr := writeTrajFile(path, out); werr != nil {
+			debug.Log("memory", "#5136: failed to cure %s in place: %v", path, werr)
 		}
 	}
 	return out, nil

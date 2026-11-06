@@ -43,6 +43,10 @@ func setupReflection(a *agent.Agent) {
 			return
 		}
 
+		// #5136: pre-#5118 insight entries still embed raw prompts and are
+		// re-injected into future prompts - cure them once, idempotently.
+		agent.ScrubPromptLeakedMemoryEntries(workingDir)
+
 		if corpus := stats.AssistantCorpus(); corpus != "" {
 			autoMem.ScanConsumption(corpus)
 			if globalMem := memory.NewAutoMemory(); globalMem != nil {
