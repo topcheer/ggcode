@@ -482,6 +482,12 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	}
 	if snapshot != nil && snapshot.Status == CommandJobFailed {
 		t.JobManager.forget(snapshot.ID)
+		// #5194: the job-path ctx has no defer cancel() at its creation site
+		// (run_command.go execute), and this early return previously skipped
+		// cancel() unlike the err and nil-job branches. finish() normally
+		// fires the stored cancel already; call it explicitly so this exit
+		// can never leak the timeout timer if that coupling changes.
+		cancel()
 
 		content := snapshot.ErrText
 		if isSpawnEnoentFailureText(content) {
