@@ -63,7 +63,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions
           df -h /
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@v0.24.3
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -186,6 +186,13 @@ jobs:
       GGCODE_COMMIT: ${{ github.sha }}
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
+      APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+      APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+      APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+      APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
+      APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -251,14 +258,6 @@ jobs:
       # ------------------------------------------------------------------
       - name: Prepare Mac App Store credentials
         shell: bash
-        env:
-          APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
-          APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
-          APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
-          APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
-          APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
             echo "MAS secrets not configured — skipping Mac App Store submission"
@@ -1034,3 +1033,4 @@ jobs:
             --asset-dir dist-site/desktop-linux-amd64 \
             --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"
+
