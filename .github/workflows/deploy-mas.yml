@@ -243,7 +243,9 @@ jobs:
           # works: san's manual 2026-11-06 uploads (builds 2026110601/602,
           # MAC_OS VALID) used it. `--upload-package` requires --apple-id to be
           # the ASC *app resource id*; passing the developer/apple-id number
-          # 6755946388 fails with 409 ENTITY_ERROR.RELATIONSHIP.INVALID
+          # 6755946388 (developer number) fails: 409 RELATIONSHIP.INVALID on upload, and as an
+          # app id it queries a nonexistent resource (poll: last=none 40min while the build sat VALID
+          # in TestFlight). 6771007556 is the real ASC app resource id for gg.ai.ggcode (owner-provided).
           # (run 42207908525: pointer /data/relationships/app/data/id). altool
           # reads identity, versions and bundle id from the pkg itself here.
           xcrun altool --upload-app -f "${PKG_PATH}" -t macOS \             --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
@@ -257,7 +259,7 @@ jobs:
           chmod +x scripts/release/mas-submit-review.sh
           ./scripts/release/mas-submit-review.sh \
             --bundle-id "gg.ai.ggcode" \
-            --app-id "${MAS_APP_ID:-6755946388}" \
+            --app-id "${MAS_APP_ID:-6771007556}" \
             --version "${MAS_SHORT_VERSION}" \
             --build "${MAS_BUILD_VERSION}" \
             --platform MAC_OS \

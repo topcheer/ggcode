@@ -61,8 +61,14 @@ asc() { # asc METHOD PATH [JSON_BODY]
 # ---------- locate the app ----------
 APP_JSON=$(asc GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
 APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
+if [[ -z "$APP_ID" ]]; then
+  # Run 13 evidence: this failure was silent, and the fallback id pointed at a
+  # nonexistent resource (build stayed VALID in TestFlight while poll said
+  # last=none for 40 min). Always surface the raw response for diagnosis.
+  echo "::warning::bundleId lookup returned no app; raw response: ${APP_JSON:0:400}"
+fi
 if [[ -z "$APP_ID" && -n "$APP_ID_ARG" ]]; then
-  echo "::warning::bundleId lookup failed; falling back to --app-id ${APP_ID_ARG}"
+  echo "::warning::falling back to --app-id ${APP_ID_ARG}"
   APP_ID="$APP_ID_ARG"
 fi
 [[ -n "$APP_ID" ]] || { echo "::error::no ASC app for bundleId ${BUNDLE_ID}: ${APP_JSON}" >&2; exit 1; }
