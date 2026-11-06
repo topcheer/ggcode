@@ -62,7 +62,8 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"run_command", `{"command":"git push --force origin main"}`, irrevTierHigh},
 		{"run_command", `{"command":"git reset --hard HEAD~3"}`, irrevTierHigh},
 		{"run_command", `{"command":"rm -rf /tmp/foo"}`, irrevTierHigh},
-		{"run_command", `{"command":"echo hello"}`, irrevTierMedium},
+		// #5129: echo (no redirect) is side-effect-free read-only now.
+		{"run_command", `{"command":"echo hello"}`, irrevTierNone},
 
 		{"unknown_tool", `{}`, irrevTierLow},
 	}
@@ -108,7 +109,6 @@ func TestIrrevGate_FirstReadOnlyCommandNoAdvisory(t *testing.T) {
 
 func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 	stayNonReadOnly := []string{
-		"echo hello",
 		"go test ./... > out.txt",
 		"git status 2>err.txt",
 		"cat $(pwd)/x",
@@ -119,6 +119,7 @@ func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 		"npm install",
 		"sed -i '' s/a/b/ f.txt",
 		"git config user.name val",
+		"echo with redirect > /tmp/x", // #5129: redirect disqualifies
 	}
 	for _, c := range stayNonReadOnly {
 		if irrevIsReadOnlyCommand(`{"command":` + strconv.Quote(c) + `}`) {
@@ -178,6 +179,10 @@ func TestIrrevGate_HighImpactWithGrounding(t *testing.T) {
 
 func TestIrrevGate_MediumImpactInsufficientGrounding(t *testing.T) {
 	s := newIrrevGateState()
+	// #5129: the session's very FIRST action is medium-exempt, so seed one
+	// non-grounding low-tier action first; the medium commit that follows
+	// must still gate with zero grounding.
+	s.recordAction("edit_file", `{}`)
 
 	warn := s.recordAction("git_commit", `{"message":"x"}`)
 	if warn == "" {
@@ -242,6 +247,8 @@ func TestIrrevGate_MaxWarningsNoReset(t *testing.T) {
 
 func TestIrrevGate_Reset(t *testing.T) {
 	s := newIrrevGateState()
+	// #5129: first action is medium-exempt; seed non-grounding action first.
+	s.recordAction("edit_file", `{}`)
 	s.recordAction("git_commit", `{"message":"x"}`)
 	if s.warnings != 1 {
 		t.Errorf("expected 1 warning, got %d", s.warnings)

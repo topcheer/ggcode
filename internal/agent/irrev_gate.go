@@ -87,6 +87,23 @@ func irrevClassifyTool(toolName, args string) int {
 			if json.Unmarshal([]byte(args), &a) == nil && a.Action == "delete" && a.Recursive {
 				return irrevTierHigh
 			}
+			// #1798 true implementation: file_ops real payloads nest the
+			// operations as [{action, recursive, ...}] - the flat top-level
+			// shape above never fires for them. A recursive delete must be
+			// High regardless of payload shape.
+			var ops struct {
+				Operations []struct {
+					Action    string `json:"action"`
+					Recursive bool   `json:"recursive"`
+				} `json:"operations"`
+			}
+			if json.Unmarshal([]byte(args), &ops) == nil {
+				for _, op := range ops.Operations {
+					if op.Action == "delete" && op.Recursive {
+						return irrevTierHigh
+					}
+				}
+			}
 		}
 		return irrevTierMedium
 	case "start_command", "run_command":
@@ -193,6 +210,7 @@ var irrevReadOnlyBinaries = map[string]bool{
 	"cksum": true, "basename": true, "dirname": true, "realpath": true,
 	"readlink": true, "jq": true, "awk": true, "gawk": true,
 	"tr": true, "cut": true, "xxd": true, "od": true, "strings": true,
+	"echo": true, "printf": true,
 }
 
 var irrevReadOnlyGitSubcommands = map[string]bool{
@@ -201,6 +219,11 @@ var irrevReadOnlyGitSubcommands = map[string]bool{
 	"rev-parse": true, "rev-list": true, "ls-files": true,
 	"describe": true, "shortlog": true, "reflog": true, "grep": true,
 	"tag": true, "merge-base": true, "cat-file": true,
+	// Probe-class subcommands (read-only remote/repo inspection):
+	// #5129 - ls-remote absence misclassified pure read-only patrols as
+	// medium, which gated the very grounding the gate demands.
+	"ls-remote": true, "name-rev": true, "for-each-ref": true,
+	"check-attr": true,
 }
 
 var irrevReadOnlyGoSubcommands = map[string]bool{
@@ -359,6 +382,17 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	tier := irrevClassifyTool(toolName, args)
 	isGrounding := irrevIsGroundingAction(toolName)
 
+	// #5129 (S-70): the grounding window starts empty, so a session's FIRST
+	// medium-tier command would always gate (structurally unavoidable - there
+	// is no way to accumulate grounding before any tool call exists). Exempt
+	// the very first action from the MEDIUM threshold; HIGH still gates.
+	// #1798 guard: the exemption must NOT re-open the self-grounding hole
+	// ("current call counts as its own grounding") - run_command stays gated
+	// even as a first action, exactly as #1798 pinned. Only non-shell medium
+	// tools (git_commit / file_ops / batch_replace / lsp_rename ...) get the
+	// first-action exemption.
+	firstAction := len(s.grounding) == 0 && toolName != "run_command" && toolName != "start_command"
+
 	recentGrounding := 0
 	start := len(s.grounding) - irrevGroundingWindow
 	if start < 0 {
@@ -387,6 +421,9 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	switch tier {
 	case irrevTierMedium:
 		threshold = 1
+		if firstAction {
+			return ""
+		}
 	case irrevTierHigh:
 		threshold = 2
 	default:
