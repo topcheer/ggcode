@@ -38,6 +38,10 @@ func isCorruptIdx(ix *Index, idxSize int64) bool {
 // only return records the index would also match). Bounded by limit and
 // by the same per-line size gate as indexLine. Read-only: never writes.
 func scanSourceForTerms(sessionsDir, sessionID string, terms []string, limit int) []Result {
+	// CodeQL path-injection guard (same class as Load).
+	if !ValidSessionID(sessionID) {
+		return nil
+	}
 	if limit <= 0 {
 		limit = 20
 	}
