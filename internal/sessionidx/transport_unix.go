@@ -62,3 +62,12 @@ func (t *UnixTransport) Cleanup() {
 	}
 	_ = os.Remove(t.path)
 }
+
+func (t *UnixTransport) Descriptor() string {
+	// A live leader keeps its endpoint; a stale file answers nothing.
+	if c, derr := net.DialTimeout("unix", t.path, 200*time.Millisecond); derr == nil {
+		c.Close()
+		return "unix:" + t.path
+	}
+	return ""
+}

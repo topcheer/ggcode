@@ -19,6 +19,7 @@ import (
 // Windows-specific.
 type LoopbackTransport struct {
 	discPath string
+	lastPort int // set by Listen; 0 when not bound
 }
 
 func (t *LoopbackTransport) Name() string { return "loopback" }
@@ -40,6 +41,7 @@ func (t *LoopbackTransport) Listen() (net.Listener, error) {
 		ln.Close()
 		return nil, fmt.Errorf("sessionidx: publish discovery %s: %w", t.discPath, werr)
 	}
+	t.lastPort = tcp.Port
 	return ln, nil
 }
 
@@ -59,4 +61,11 @@ func (t *LoopbackTransport) Cleanup() {
 		return
 	}
 	_ = os.Remove(t.discPath)
+}
+
+func (t *LoopbackTransport) Descriptor() string {
+	if t.lastPort <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("tcp:127.0.0.1:%d", t.lastPort)
 }

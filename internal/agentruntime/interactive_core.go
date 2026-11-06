@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -20,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/sessionidx"
+	"github.com/topcheer/ggcode/internal/sessionidxd"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
@@ -109,6 +111,21 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		idxMgr := sessionidx.NewManager(sessDir, "")
 		registry.SetSessionIndex(idxMgr)
 		safego.Go("agentruntime.sessionidxStart", idxMgr.Start)
+
+		// Shared-index host (#5149, single-binary constraint): the FIRST
+		// interactive instance binds the transport and serves sibling
+		// indexes in-process; everyone else stays a client (StartHost
+		// returns nil,nil when a live host holds the endpoint) and falls
+		// back to its local Manager when the host is unreachable.
+		home := config.HomeDir()
+		safego.Go("agentruntime.sessionidxHost", func() {
+			stop, err := sessionidxd.StartHost(sessDir, home)
+			if err != nil && !errors.Is(err, sessionidx.ErrLeaderAlive) {
+				debug.Log("sessionidxd", "host start: %v", err)
+				return
+			}
+			_ = stop // held for the process lifetime; released on exit
+		})
 	}
 
 	_ = registry.Register(tool.NewRecallToolFlowTool())

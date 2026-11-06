@@ -1,27 +1,25 @@
 // Package sessionidxd implements the machine-wide shared session-index
-// daemon (#5149). One daemon process serves all ggcode instances on the
-// machine so sibling .idx decoding happens once instead of per-process
-// (measured 2026-11-06: 3.0GB of idx across 23 files vs N instances each
-// loading a share — the fleet was shut down over this).
+// service (#5149) under the SINGLE-BINARY constraint (user order): there is
+// no separate daemon binary and no spawned process. The first interactive
+// ggcode instance whose Transport.Listen() succeeds IS the host - the
+// service runs in its process; every other instance is a client and falls
+// back to its local Manager when no host answers. When the host exits, the
+// next instance that tries becomes the host (stale endpoints are reclaimed
+// by the transport's election semantics).
 //
-// v1 decisions (locked in the issue thread, QA-verdict informed):
-//   - the daemon REUSES sessionidx.Manager for query semantics, so
-//     daemon-vs-local result parity holds by construction;
-//   - admission budget is machine-global (default 1GB, env override)
-//     instead of Manager's 200MB per-file external cap — over-cap files
-//     (894MB top file today) become searchable for the first time;
-//   - transport: unix socket (darwin/linux). Windows v1: not wired here;
-//     the client falls back to in-process Manager (status quo) — the
-//     localhost+discovery-file transport is a follow-up slice;
-//   - self-launch: the first client that fails to connect spawns
-//     "<argv0> sessionidxd-serve" detached; idle-exit after 30min;
+// Memory semantics (v1.3.275, QA-verified):
+//   - machine-global decoded-bytes budget with LRU eviction (a single
+//     894MB idx is never decoded whole into the heap);
+//   - cold per-workspace load: nothing decoded at rest, first query
+//     activates that workspace, 30min without a request unloads it;
+//   - workspace scoping: results are filtered to the caller's project;
 //   - refresh: 30s scan keyed on size+mtime (not mtime alone).
 package sessionidxd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -35,21 +33,19 @@ import (
 
 const (
 	// DefaultBudgetBytes is the machine-global admission cap for decoded
-	// indexes. Must be >= the loadable set (742MB measured 2026-11-06);
-	// 1GB default with env override GGCODE_SESSIONIDX_BUDGET.
+	// indexes (env override GGCODE_SESSIONIDX_BUDGET).
 	DefaultBudgetBytes int64 = 1 << 30
-	// DefaultIdleExit: daemon exits after this long without any request.
-	DefaultIdleExit = 30 * time.Minute
-	// scanEvery: how often the daemon re-scans the idx dir (size+mtime keyed).
+	// scanEvery: how often the host re-scans the idx dir (size+mtime keyed).
 	scanEvery = 30 * time.Second
 )
 
-// Paths returns the daemon's discovery file and unix socket paths for a
-// ggcode home (the dir holding sessions/, i.e. ~/.ggcode).
-func Paths(home string) (addrFile, sockPath, pidFile string) {
+// Paths returns the discovery artifact paths for a ggcode home (the dir
+// holding sessions/, i.e. ~/.ggcode). The addr file is written for
+// rolling-upgrade compatibility with older clients that parse it; current
+// clients dial through the platform transport instead.
+func Paths(home string) (addrFile, sockPath string) {
 	return filepath.Join(home, "sessionidxd.addr"),
-		filepath.Join(home, "sessionidxd.sock"),
-		filepath.Join(home, "sessionidxd.pid")
+		filepath.Join(home, "idxd.sock")
 }
 
 // Daemon is one shared-index server bound to a sessions dir.
@@ -57,52 +53,61 @@ type Daemon struct {
 	sessionsDir string
 	budget      int64
 	mgr         *sessionidx.Manager
-	lastUse     atomic.Int64 // unix nano of last request
+	lastUse     atomic.Int64 // unix nano of last search request
 	started     time.Time
 }
 
-// Serve runs the daemon foreground (used by the hidden `sessionidxd-serve`
-// subcommand and tests). It blocks until the listener fails or the idle
-// deadline passes.
-func Serve(sessionsDir, home string) error {
-	budget := DefaultBudgetBytes
+func budgetFromEnv() int64 {
 	if v := os.Getenv("GGCODE_SESSIONIDX_BUDGET"); v != "" {
 		var n int64
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
-			budget = n
+			return n
 		}
 	}
-	// Manager with machine budget: over-cap externals become loadable.
+	return DefaultBudgetBytes
+}
+
+// StartHost attempts to make THIS process the machine's shared-index host.
+// Election is the transport bind: success = we are the host; a live host
+// already holding the endpoint returns (nil, nil) and this instance stays
+// a client; a stale endpoint left by a crashed previous host is reclaimed.
+// The returned stop func tears the service down; passing nil stop with nil
+// err means "another live host exists".
+// GGCODE_SESSIONIDX_DAEMON=0 disables the host role entirely.
+func StartHost(sessionsDir, home string) (stop func(), err error) {
+	if os.Getenv("GGCODE_SESSIONIDX_DAEMON") == "0" {
+		return nil, nil
+	}
+	budget := budgetFromEnv()
+
+	// Manager with machine budget + cold per-workspace loading: nothing is
+	// decoded at rest; the first query activates one workspace; 30min idle
+	// unloads it. The total budget is NOT the per-file cap - without it a
+	// single 894MB idx would be decoded into the heap (the exact #5149
+	// amplification this whole effort removes).
 	mgr := sessionidx.NewManager(sessionsDir, "")
 	mgr.SetExternalLimit(budget)
-	// R1: machine-global decoded-bytes admission with LRU eviction - the
-	// total budget is NOT the per-file cap; without this a single 894MB idx
-	// would be decoded into the heap (the exact #5149 amplification).
 	mgr.SetTotalBudget(budget)
 	mgr.Start()
 
 	d := &Daemon{sessionsDir: sessionsDir, budget: budget, mgr: mgr, started: time.Now()}
-	_ = home
-
-	addrFile, sockPath, pidFile := Paths(home)
-	_ = os.Remove(sockPath)
-	ln, err := net.Listen("unix", sockPath)
+	tr := sessionidx.NewTransport(home)
+	ln, err := tr.Listen()
 	if err != nil {
-		return fmt.Errorf("sessionidxd: listen %s: %w", sockPath, err)
+		mgr.Stop()
+		if errors.Is(err, sessionidx.ErrLeaderAlive) {
+			// A live host exists: this instance is a client.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sessionidxd: bind: %w", err)
 	}
 
-	// Discovery + pidfile (fixed machine-global paths — Correction C).
-	if err := os.WriteFile(addrFile, []byte("unix:"+sockPath), 0o600); err != nil {
-		ln.Close()
-		return err
+	// Rolling-upgrade compat: older clients parse sessionidxd.addr
+	// ("unix:<path>"). Current clients dial through the transport.
+	addrFile, _ := Paths(home)
+	if desc := tr.Descriptor(); desc != "" {
+		_ = os.WriteFile(addrFile, []byte(desc), 0o600)
 	}
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
-		// non-fatal: addr discovery is what clients need
-		debug.Log("sessionidxd", "pidfile write: %v", err)
-	}
-	defer os.Remove(addrFile)
-	defer os.Remove(pidFile)
-	defer ln.Close()
 
 	d.lastUse.Store(time.Now().UnixNano())
 
@@ -111,7 +116,9 @@ func Serve(sessionsDir, home string) error {
 	mux.HandleFunc("/status", d.handleStatus)
 	srv := &http.Server{Handler: mux}
 
-	// Idle-exit + periodic rescan loop.
+	// Background refresh (size+mtime keyed). NO idle exit: the host is a
+	// live ggcode instance, not a resident daemon - it disappears when its
+	// instance exits, and another instance re-elects on its next start.
 	done := make(chan struct{})
 	safego.Go("sessionidxd.watch", func() {
 		t := time.NewTicker(scanEvery)
@@ -122,23 +129,24 @@ func Serve(sessionsDir, home string) error {
 				return
 			case <-t.C:
 				d.mgr.RefreshExternal()
-				idle := time.Since(time.Unix(0, d.lastUse.Load()))
-				if idle > DefaultIdleExit {
-					debug.Log("sessionidxd", "idle %.0fmin — exiting", idle.Minutes())
-					srv.Close()
-					return
-				}
 			}
 		}
 	})
-	defer close(done)
+	safego.Go("sessionidxd.serve", func() {
+		if serr := srv.Serve(ln); serr != http.ErrServerClosed {
+			debug.Log("sessionidxd", "serve: %v", serr)
+		}
+	})
+	debug.Log("sessionidxd", "host up (%s, budget=%dMB)", tr.Name(), budget>>20)
 
-	debug.Log("sessionidxd", "serving %s (budget=%dMB)", sockPath, budget>>20)
-	err = srv.Serve(ln)
-	if err == http.ErrServerClosed {
-		return nil
+	stop = func() {
+		close(done)
+		srv.Close()
+		ln.Close()
+		mgr.Stop()
+		_ = os.Remove(addrFile)
 	}
-	return err
+	return stop, nil
 }
 
 func (d *Daemon) touch() { d.lastUse.Store(time.Now().UnixNano()) }
@@ -167,7 +175,7 @@ func (d *Daemon) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The caller handles its OWN live session locally (it owns those
-	// writes); the daemon serves everything else.
+	// writes); the host serves everything else.
 	res := d.mgr.QueryScoped(req.Terms, req.Session, req.Limit, req.Workspace)
 	out := make([]sessionidx.Result, 0, len(res))
 	for _, x := range res {
@@ -192,9 +200,8 @@ type statusResponse struct {
 }
 
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
-	// R3: status is a health probe - it must NOT reset the idle clock,
-	// otherwise a periodic liveness check keeps the daemon resident
-	// forever (defeating idle-exit).
+	// R3: status is a health probe - it must NOT reset the idle clock.
+	// (The cold-load idle window tracks search requests only.)
 	evictedBytes, evictedCount := d.mgr.Evictions()
 	writeJSON(w, statusResponse{OK: true, StartedAt: d.started, BudgetMB: d.budget >> 20, Indexes: d.mgr.IndexCount(),
 		DecodedMB: d.mgr.TotalDecodedBytes() >> 20, ActiveWorkspaces: d.mgr.ActiveWorkspaces(), EvictedBytes: evictedBytes, EvictedIndexes: evictedCount})
