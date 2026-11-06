@@ -13,6 +13,7 @@ import (
 	"bytes"
 
 	"encoding/gob"
+	"fmt"
 
 	"io"
 	"os"
@@ -52,6 +53,15 @@ type Index struct {
 	data     indexFile
 	lastMod  time.Time
 	loadedAt time.Time
+	// rootDir is the sessions directory this index was loaded from; paths
+	// are rebuilt from it (never taken raw) when reading snippets.
+	rootDir string
+	// corrupt: the persisted gob failed to decode (真损坏 - degrade to
+	// source scan). stale: the gob decoded but carries another
+	// idxVersion (format upgrade - NOT corrupt, an owning instance
+	// rebuilds it on its next Refresh).
+	corrupt bool
+	stale   bool
 }
 
 const idxVersion = 1
@@ -80,11 +90,17 @@ func IdxPath(sessionsDir, sessionID string) string {
 // Load reads an existing .idx for the session, or returns an empty index
 // when none exists. It does NOT tail the source; call Refresh for that.
 func Load(sessionsDir, sessionID string) (*Index, error) {
+	// CodeQL path-injection guard: the id is joined into filesystem
+	// paths, and it can arrive from tool arguments.
+	if !ValidSessionID(sessionID) {
+		return nil, fmt.Errorf("sessionidx: invalid session id")
+	}
 	src := filepath.Join(sessionsDir, sessionID+".jsonl")
 	idx := &Index{
 		Session: sessionID,
 		SrcPath: src,
 		IdxPath: IdxPath(sessionsDir, sessionID),
+		rootDir: sessionsDir,
 	}
 	idx.data.Version = idxVersion
 	idx.data.Trigrams = map[string][]Posting{}
@@ -102,9 +118,13 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 	if err := dec.Decode(&d); err != nil {
 		// Corrupt index: start over rather than fail.
 		debug.Log("sessionidx", "load: corrupt idx for %s (%v), rebuilding on refresh", sessionID, err)
+		idx.corrupt = true
 		return idx, nil
 	}
 	if d.Version != idxVersion {
+		// Format upgrade: the owning instance rebuilds on its next
+		// Refresh - readers just see this session as not-yet-reindexed.
+		idx.stale = true
 		return idx, nil
 	}
 	idx.data = d
@@ -273,6 +293,7 @@ type Hit struct {
 }
 
 func (ix *Index) Query(terms []string, limit int) []Hit {
+	limit = clampLimit(limit)
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	if len(terms) == 0 || limit <= 0 {
@@ -387,9 +408,15 @@ func trigrams(s string) []string {
 // file (used to materialize snippets at query time).
 func (ix *Index) ReadLineAt(offset int64, length int32) ([]byte, error) {
 	ix.mu.RLock()
-	src := ix.SrcPath
+	dir, sess := ix.rootDir, ix.Session
 	ix.mu.RUnlock()
-	f, err := os.Open(src)
+	// Rebuild the path from validated parts instead of trusting a stored
+	// path: keeps this read inside the sessions directory (CodeQL
+	// path-injection finding on the #5164 diff).
+	if !ValidSessionID(sess) {
+		return nil, fmt.Errorf("sessionidx: invalid session id")
+	}
+	f, err := os.Open(filepath.Join(dir, sess+".jsonl"))
 	if err != nil {
 		return nil, err
 	}
