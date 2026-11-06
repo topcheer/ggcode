@@ -302,11 +302,25 @@ func (m *Manager) scanExternal() {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".idx")
-		if m.liveID != "" && id == m.liveID {
-			continue
-		}
 		info, err := e.Info()
 		if err != nil {
+			continue
+		}
+		// Dead-idx cleanup (#5149): past the skip threshold the file is
+		// permanently frozen (every Load caps, capped Refresh is a no-op) -
+		// remove it. The path is built from the DIRECTORY-ENUMERATED name
+		// (os.ReadDir product, not caller input), which also keeps the
+		// CodeQL path-expression taint chain clean.
+		if info.Size() > idxSkipDecodeBytes {
+			path := filepath.Join(IdxDir(m.dir), name)
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+				debug.Log("sessionidx", "scan: dead-idx remove %s: %v", name, rmErr)
+				continue
+			}
+			debug.Log("sessionidx", "scan: removed dead idx %s (%.1fMB)", name, float64(info.Size())/(1<<20))
+			continue
+		}
+		if m.liveID != "" && id == m.liveID {
 			continue
 		}
 		if info.Size() > m.externalLimit {

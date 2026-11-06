@@ -10,9 +10,9 @@ import (
 // ---------- ③ dead-idx cleanup ----------
 
 // A persisted idx past the skip threshold is permanently useless (every
-// loader caps; capped Refresh is a no-op): Load must DELETE it instead of
-// leaving frozen gigabytes on disk, and a second Load must behave as if the
-// file never existed.
+// loader caps; capped Refresh is a no-op): Load flags it capped, and the
+// manager's directory-enumeration side deletes it on scan (CodeQL-clean:
+// the removal path comes from os.ReadDir, not caller input).
 func TestDeadIdx_DeletedOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	const id = "deadidx"
@@ -37,8 +37,15 @@ func TestDeadIdx_DeletedOnLoad(t *testing.T) {
 	if !ix.Capped() {
 		t.Fatal("oversized idx must load capped")
 	}
+	if _, err := os.Stat(IdxPath(dir, id)); err != nil {
+		t.Fatal("Load itself must NOT remove (taint-clean); manager scan does")
+	}
+
+	// Manager scan (enumerated side) removes the dead file.
+	m := NewManager(dir, "")
+	m.scanExternal()
 	if _, err := os.Stat(IdxPath(dir, id)); !os.IsNotExist(err) {
-		t.Fatalf("dead idx must be deleted on load, stat err=%v", err)
+		t.Fatalf("dead idx must be deleted by manager scan, stat err=%v", err)
 	}
 
 	// Second load: file gone -> behaves like a fresh index.
