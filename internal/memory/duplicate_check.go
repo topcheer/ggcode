@@ -34,7 +34,24 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 
 	var best DuplicateCheck
 
+	// #5121: same-key re-save is the documented update path (r488
+	// contract: overwrite with .history archival). Treat it as a duplicate
+	// only when the rewrite is a no-op (content identical); an intentional
+	// refresh with changed content must not spam the duplicate warning.
+	sameKey := disambiguateKey(key, sanitizeKey(key))
+
 	for _, m := range metas {
+		if m.Key == sameKey {
+			if readExistingContent(am.dir, m.Key) == content {
+				return DuplicateCheck{
+					SimilarTo:       m.Key,
+					Similarity:      1.0,
+					ExistingContent: readExistingSnippet(am.dir, m.Key),
+				}
+			}
+			continue
+		}
+
 		existingTokens := tokenizeOrdered(m.Key)
 		sim := keySimilarity(newTokens, existingTokens)
 
@@ -42,15 +59,6 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 			best = DuplicateCheck{
 				SimilarTo:       m.Key,
 				Similarity:      sim,
-				ExistingContent: readExistingSnippet(am.dir, m.Key),
-			}
-		}
-
-		if m.Key == disambiguateKey(key, sanitizeKey(key)) {
-
-			return DuplicateCheck{
-				SimilarTo:       m.Key,
-				Similarity:      1.0,
 				ExistingContent: readExistingSnippet(am.dir, m.Key),
 			}
 		}
@@ -156,6 +164,17 @@ func (dc DuplicateCheck) FormatDuplicateWarning(newKey string) string {
 	}
 	return fmt.Sprintf("Warning: memory %q is very similar to existing %q (similarity: %.0f%%). Consider updating the existing entry or using a more distinct key.",
 		newKey, dc.SimilarTo, dc.Similarity*100)
+}
+
+// readExistingContent returns the full stored content for a key (unlike
+// readExistingSnippet's 200-rune window) so the #5121 same-key refresh
+// check can compare for a no-op rewrite.
+func readExistingContent(dir, key string) string {
+	data, err := os.ReadFile(filepath.Join(dir, key+".md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func readExistingSnippet(dir, key string) string {

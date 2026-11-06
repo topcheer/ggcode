@@ -37,7 +37,9 @@ func TestIssue3827_GenuinelySimilarOrderedKeysStillFlagged(t *testing.T) {
 		t.Fatal(err)
 	}
 	am := &AutoMemory{dir: dir}
-	dup := am.CheckDuplicate("build-process", "value")
+	// #5121: exact-key detection at 1.0 applies to the no-op rewrite face
+	// (identical content); changed-content refresh is the update path.
+	dup := am.CheckDuplicate("build-process", "old")
 	if !dup.IsDuplicate() || dup.Similarity < 1.0 {
 		t.Fatalf("exact key must still be detected at 1.0: %+v", dup)
 	}

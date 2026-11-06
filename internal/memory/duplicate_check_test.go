@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -10,12 +11,42 @@ func TestCheckDuplicateExact(t *testing.T) {
 
 	am.SaveMemory("build-process", "content 1")
 
+	// #5121: same-key overwrite with CHANGED content is the intentional
+	// update path (r488 archival contract) - not a duplicate.
 	dc := am.CheckDuplicate("build-process", "new content")
+	if dc.IsDuplicate() {
+		t.Errorf("same-key intentional refresh must NOT be flagged duplicate (#5121), got sim=%f", dc.Similarity)
+	}
+
+	// No-op rewrite (content identical) stays flagged: pointless write.
+	dc = am.CheckDuplicate("build-process", "content 1")
 	if !dc.IsDuplicate() {
-		t.Error("expected exact key match to be duplicate")
+		t.Error("same-key no-op rewrite should still be flagged duplicate")
 	}
 	if dc.Similarity != 1.0 {
 		t.Errorf("expected similarity 1.0, got %f", dc.Similarity)
+	}
+}
+
+// #5121 acceptance: snapshot-style keys saved N times with changing
+// content emit zero duplicate warnings, while a near-duplicate DIFFERENT
+// key still fires.
+func TestIssue5121SameKeyRefreshNoDupWarn(t *testing.T) {
+	dir := t.TempDir()
+	am := &AutoMemory{dir: dir}
+
+	for i := 0; i < 5; i++ {
+		am.SaveMemory("pool-snapshot", fmt.Sprintf("round %d: entries=42", i))
+		dc := am.CheckDuplicate("pool-snapshot", fmt.Sprintf("round %d: entries=43", i+1))
+		if dc.IsDuplicate() {
+			t.Fatalf("round %d: snapshot refresh falsely flagged duplicate (sim=%f, similarTo=%q)", i, dc.Similarity, dc.SimilarTo)
+		}
+	}
+
+	am.SaveMemory("pool-snapshot-archive", "archived pool snapshot")
+	dc := am.CheckDuplicate("pool-snapshot-old", "another pool snapshot variant")
+	if !dc.IsDuplicate() {
+		t.Errorf("near-duplicate different key must still fire, got sim=%f", dc.Similarity)
 	}
 }
 
