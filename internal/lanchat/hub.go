@@ -401,6 +401,20 @@ func (h *Hub) shouldNotifyLeave(nick, excludeNodeID string) bool {
 	return true
 }
 
+// SetPeerOfflineForTest flips a tracked peer offline with the given
+// last-seen timestamp. Test-support seam (#5117): cross-package tests
+// (internal/tool) cannot reach the private peers map, and HandlePresence
+// upserts force Online=true, so there is no other deterministic way to
+// build stale-recipient state from outside this package.
+func (h *Hub) SetPeerOfflineForTest(nodeID string, lastSeen time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p, ok := h.peers[nodeID]; ok {
+		p.Online = false
+		p.LastSeen = lastSeen.Unix()
+	}
+}
+
 func (h *Hub) Participants() []Participant {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
