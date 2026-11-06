@@ -207,8 +207,18 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		// (derived data; the source jsonl remains, recall serves from the
 		// bounded source scan) instead of leaving frozen gigabytes on disk.
 		debug.Log("sessionidx", "load: idx for %s is %dMB over skip threshold - deleting dead idx", sessionID, fi.Size()>>20)
-		f.Close()
-		_ = os.Remove(idx.IdxPath)
+		// CodeQL path-injection guard: remove only the exact path we can
+		// re-derive from the VALIDATED id inside the idx dir - never a
+		// caller-shaped string. (Clean + dir-containment + extension.)
+		delPath := filepath.Clean(IdxPath(idx.rootDir, sessionID))
+		if ValidSessionID(sessionID) &&
+			filepath.Dir(delPath) == filepath.Clean(IdxDir(idx.rootDir)) &&
+			filepath.Ext(delPath) == ".idx" {
+			f.Close()
+			if rmErr := os.Remove(delPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				debug.Log("sessionidx", "load: dead-idx remove %s: %v", sessionID, rmErr)
+			}
+		}
 		idx.capped = true
 		idx.approxBytes = fi.Size() * 4 // postings-memory estimate, over any budget
 		return idx, nil
