@@ -8,10 +8,13 @@ on:
         description: "v"
         required: false
         default: "v0"
+concurrency:
+  group: probe3-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
   p:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "probe3 v2 dispatch+tags"
+      - run: echo "probe3 v3 +concurrency"
