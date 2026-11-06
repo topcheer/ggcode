@@ -392,6 +392,7 @@ jobs:
           echo "MAS_READY=true" >> "${GITHUB_ENV}"
 
       - name: Submit desktop app to Mac App Store
+        continue-on-error: true
         if: env.MAS_READY == 'true'
         shell: bash
         env:
