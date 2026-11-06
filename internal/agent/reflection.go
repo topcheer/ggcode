@@ -352,7 +352,9 @@ func GenerateInsights(stats RunStats) string {
 		b.WriteString("[verified: no - this run FAILED; the observations below are unverified post-mortem notes, not proven practices]\n")
 	}
 	if stats.UserPrompt != "" {
-		fmt.Fprintf(&b, "Task: %s\n\n", stats.UserPrompt)
+		// #5118: same redaction as the training-export pipeline - run
+		// insights persist to project auto-memory, raw secrets must not.
+		fmt.Fprintf(&b, "Task: %s\n\n", redactTrainText(stats.UserPrompt))
 	}
 
 	if len(stats.ToolCalls) > 0 {
