@@ -62,7 +62,7 @@ asc() { # asc METHOD PATH [JSON_BODY]
     resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $JWT")
   fi
   http_code="${resp##*__HTTP__}"
-  resp="${resp%\n__HTTP__*}"
+  resp="${resp%__HTTP__*}"
   logd "=== ASC $method $path -> HTTP $http_code ==="
   logd "request-body: ${body:-(none)}"
   logd "response: $resp"
