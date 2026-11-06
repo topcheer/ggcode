@@ -235,6 +235,16 @@ func (g *CommandGate) Check(cmd string) GateResult {
 		}
 	}
 
+	if secs := inlineSleepSeconds(blankQuotedAndHeredocs(cmd)); secs > inlineSleepBlockSeconds {
+		return GateResult{
+			Behavior:   Block,
+			CleanedCmd: cmd,
+			Reason: fmt.Sprintf(
+				"Command blocked: inline sleep totals ~%d s, exceeding the %d s cap (the same abuse the sleep tool hard-caps). Long blocking waits inside a command burn the session's timeout budget. Split the work instead: start the long-running step with start_command and poll with wait_command/read_command_output, or schedule a one-shot cron for >5-minute waits; keep inline sleeps under %d s.",
+				int(secs), int(inlineSleepBlockSeconds), int(inlineSleepWarnSeconds)),
+		}
+	}
+
 	inertUnwrapped := blankQuotedAndHeredocs(unwrapSimpleQuotedTokens(cmd))
 	var askReasons []string
 	for _, rule := range g.askRules {
@@ -262,6 +272,12 @@ func (g *CommandGate) Check(cmd string) GateResult {
 
 	if interactive := g.InteractiveCommandWarning(cmd); interactive != "" {
 		result.Warnings = append(result.Warnings, interactive)
+	}
+
+	if secs := inlineSleepSeconds(blankQuotedAndHeredocs(cmd)); secs > inlineSleepWarnSeconds {
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"Inline sleep totals ~%d s; prefer start_command + wait_command/read_command_output polling over blocking waits.",
+			int(secs)))
 	}
 
 	cleaned := cmd
