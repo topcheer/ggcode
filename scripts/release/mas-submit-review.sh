@@ -39,23 +39,60 @@ done
 
 [[ -n "$BUNDLE_ID" && -n "$VERSION" && -n "$KEY_PATH" && -n "$KEY_ID" && -n "$ISSUER" ]] || {
   echo "missing required flags" >&2; exit 2; }
+echo "config: bundle=$BUNDLE_ID version=$VERSION build=${BUILD_VERSION:-<latest>} platform=$PLATFORM app_id_hint=${APP_ID_ARG:-none} issuer=$ISSUER key_id=$KEY_ID"
 
 # ---------- JWT (ES256, the only scheme ASC accepts for API keys) ----------
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+# Convert a DER ECDSA-Signature (stdin) to the raw 64-byte r||s form JWT needs.
+# Minimal DER walk: SEQUENCE { INTEGER r, INTEGER s } — strip tag/len, drop
+# leading zero bytes, left-pad each integer to exactly 32 bytes.
+der_to_raw() {
+python3 -c '
+import sys
+der = sys.stdin.buffer.read()
+def read_int(i):
+    assert der[i] == 0x02, "expected INTEGER tag"
+    ln = der[i+1]
+    return der[i+2:i+2+ln].lstrip(b"\x00").rjust(32, b"\x00"), i + 2 + ln
+i = 2
+r, i = read_int(i)
+s2, i = read_int(i)
+sys.stdout.buffer.write(r + s2)
+'
+}
 NOW=$(date +%s)
 HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
 PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d}' "$ISSUER" "$((NOW))" "$((NOW+1200))" | b64url)
 SIG_INPUT="${HEADER}.${PAYLOAD}"
-SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | b64url)
+# ES256 per RFC 7515 requires the RAW 64-byte r||s signature. `openssl dgst
+# -sign` emits DER (~70 bytes) — signing with DER verbatim yields ASC
+# 401 NOT_AUTHORIZED (run 42224235910 verbose evidence). Strip DER to r||s:
+# NOTE: DER bytes must NEVER pass through a shell variable — command
+# substitution strips NUL/newline bytes. Pipe openssl -> der_to_raw -> b64url.
+SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | der_to_raw | b64url)
 JWT="${SIG_INPUT}.${SIG}"
+LOGD=/tmp/asc-debug.log
+logd() { printf '%s\n' "$*" | tee -a "$LOGD" >&2; }
+
 asc() { # asc METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
+  local resp http_code
   if [[ -n "$body" ]]; then
-    curl -sS --max-time 60 -X "$method" "$API_BASE$path" \
-      -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
+      -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body")
   else
-    curl -sS --max-time 60 "$API_BASE$path" -H "Authorization: Bearer $JWT"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $JWT")
   fi
+  http_code="${resp##*__HTTP__}"
+  resp="${resp%__HTTP__*}"
+  logd "=== ASC $method $path -> HTTP $http_code ==="
+  logd "request-body: ${body:-(none)}"
+  logd "response: $resp"
+  if [[ "$http_code" != 2* ]]; then
+    echo "::warning::ASC $method $path returned HTTP $http_code (non-2xx) - response logged" >&2
+  fi
+  printf '%s' "$resp"
 }
 
 # ---------- locate the app ----------
@@ -89,6 +126,8 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   fi
   STATE=$(echo "$B" | jq -r '.data[0].attributes.processingState // empty' 2>/dev/null)
   BUILD_ID=$(echo "$B" | jq -r '.data[0].id // empty' 2>/dev/null)
+  N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
+  echo "poll #$i: state=${STATE:-NONE} build_id=${BUILD_ID:-NONE} matches=$N_BUILDS"
   case "$STATE" in
     VALID) echo "build ${BUILD_ID} processed (VALID) after ~$((i/2)) min"; break;;
     FAILED|INVALID) echo "::error::build processing failed: $(echo "$B" | jq -c '.data[0].attributes // .')" >&2; exit 1;;
