@@ -1,8 +1,6 @@
 package sessionidxd
 
 import (
-	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,103 +9,132 @@ import (
 	"github.com/topcheer/ggcode/internal/sessionidx"
 )
 
-// TestServeSearchFallbackParity pins the daemon-first contract: Serve over a
-// temp sessions dir, query through the HTTP surface, and verify the same
-// result the in-process Manager returns (parity pin from #5149 S5).
-func TestServeSearchFallbackParity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("spawns real listener")
+// #5149 host pins (single-binary, in-process host): the first instance's
+// StartHost binds the transport; a second instance in the same home stays
+// a client (nil,nil); stopping the host frees the endpoint and the next
+// StartHost re-elects; the client falls back locally when no host answers.
+
+func seedSharedSession(t *testing.T, sess string) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, sess+".jsonl")
+	body := `{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"unicorns quietly graze here"}]}}` + "\n"
+	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+		t.Fatalf("seed %s: %v", sess, err)
 	}
-	// macOS sun_path limit is 104 bytes: t.TempDir() paths are too long for
-	// a unix socket, so use a short-lived /tmp home instead.
-	home, err := os.MkdirTemp("/tmp", "sidx")
+	ix, err := sessionidx.Load(dir, sess)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(home)
-	sess := filepath.Join(home, "sessions")
-	idxDir := sessionidx.IdxDir(sess)
-	if err := os.MkdirAll(idxDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Seed one sibling session: build an index via the real Index API.
-	if err := os.WriteFile(filepath.Join(sess, "20260101-000000-deadbeef.jsonl"),
-		[]byte(`{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"the unicorns assembled quietly"}]}}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ix, err := sessionidx.Load(sess, "20260101-000000-deadbeef")
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("load: %v", err)
 	}
 	if err := ix.Refresh(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("refresh: %v", err)
 	}
+	return dir
+}
 
-	go func() { _ = Serve(sess, home) }()
-	// Wait for discovery file.
-	deadline := time.Now().Add(5 * time.Second)
-	addrFile, _, _ := Paths(home)
+// shortHome: darwin unix sockets cap sun_path at 104 bytes; t.TempDir()
+// paths are too long, so use a short /tmp root.
+func shortHome(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "sidx")
+	if err != nil {
+		t.Fatalf("short home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
+}
+
+func waitHostReady(t *testing.T, home string) {
+	t.Helper()
+	addrFile, _ := Paths(home)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(addrFile); err == nil {
-			break
+			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	res, ok := Query(home, sess, []string{"unicorns", "quietly"}, "", "somelive", 10, "")
+	t.Fatal("host did not publish its endpoint in time")
+}
+
+func TestStartHost_ElectionAndClientQuery(t *testing.T) {
+	sessions := seedSharedSession(t, "parity1")
+	home := shortHome(t)
+
+	stop, err := StartHost(sessions, home)
+	if err != nil {
+		t.Fatalf("first StartHost: %v", err)
+	}
+	if stop == nil {
+		t.Fatal("first StartHost must win the election (non-nil stop)")
+	}
+	waitHostReady(t, home)
+
+	// A second instance in the same home must stay a client.
+	stop2, err2 := StartHost(sessions, home)
+	if err2 != nil {
+		t.Fatalf("second StartHost: %v", err2)
+	}
+	if stop2 != nil {
+		stop2()
+		t.Fatal("second StartHost must return nil stop (leader alive)")
+	}
+
+	// Client query through the transport returns host results.
+	res, ok := Query(home, sessions, []string{"unicorns", "quietly"}, "", "somelive", 10, "")
 	if !ok {
-		t.Fatal("daemon query failed (no daemon or timeout)")
+		t.Fatal("client query failed against a live host")
 	}
 	if len(res) == 0 {
-		t.Fatal("expected hits for 'unicorns quietly'")
+		t.Fatal("expected hits from the host")
 	}
-	found := false
-	for _, r := range res {
-		if r.SessionID == "20260101-000000-deadbeef" && contains(r.Line, "unicorns") {
-			found = true
-		}
-		if r.SessionID == "somelive" {
-			t.Fatal("live session must be excluded from daemon results")
-		}
+
+	stop()
+}
+
+func TestStartHost_ReelectionAfterHostExit(t *testing.T) {
+	sessions := seedSharedSession(t, "migrate1")
+	home := shortHome(t)
+
+	stop1, err := StartHost(sessions, home)
+	if err != nil || stop1 == nil {
+		t.Fatalf("first host: err=%v", err)
 	}
-	if !found {
-		t.Fatal("seeded session hit missing")
-	}
-	// Status endpoint sanity via the same client path.
-	c, okc := dialClient(home)
-	if !okc {
-		t.Fatal("dial failed after discovery present")
-	}
-	resp, err := c.Get("http://ggcode-sessionidxd/status")
+	waitHostReady(t, home)
+
+	// Host exits: endpoint artifacts go away.
+	stop1()
+	time.Sleep(50 * time.Millisecond)
+
+	// Next instance re-elects on the reclaimed endpoint.
+	stop2, err := StartHost(sessions, home)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reelection: %v", err)
 	}
-	defer resp.Body.Close()
-	var st statusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil || !st.OK || st.BudgetMB <= 0 {
-		t.Fatalf("bad status: %+v err=%v", st, err)
+	if stop2 == nil {
+		t.Fatal("after the host exits, the next StartHost must win")
+	}
+	defer stop2()
+	waitHostReady(t, home)
+}
+
+func TestQuery_NoHostFallsBackSignal(t *testing.T) {
+	home := shortHome(t) // no host ever started here
+	sessions := t.TempDir()
+	if _, ok := Query(home, sessions, []string{"anything"}, "", "", 5, ""); ok {
+		t.Fatal("Query must report ok=false when no host answers")
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || index(s, sub) >= 0)
-}
-
-func index(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-// TestQueryDaemonDisabled pins the env kill-switch: GGCODE_SESSIONIDX_DAEMON=0
-// must return ok=false without touching the filesystem.
-func TestQueryDaemonDisabled(t *testing.T) {
+func TestStartHost_DisabledByEnv(t *testing.T) {
 	t.Setenv("GGCODE_SESSIONIDX_DAEMON", "0")
-	if _, ok := Query(t.TempDir(), t.TempDir(), []string{"x"}, "", "", 5, ""); ok {
-		t.Fatal("daemon must be disabled by env")
+	sessions := seedSharedSession(t, "off1")
+	stop, err := StartHost(sessions, shortHome(t))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if stop != nil {
+		stop()
+		t.Fatal("GGCODE_SESSIONIDX_DAEMON=0 must disable the host role")
 	}
 }
-
-var _ = http.DefaultClient

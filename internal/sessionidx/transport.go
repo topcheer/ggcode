@@ -34,6 +34,11 @@ type Transport interface {
 	// Cleanup removes any endpoint artifacts the previous leader left
 	// behind. Safe to call when nothing is bound.
 	Cleanup()
+	// Descriptor returns a dial descriptor for the bound endpoint in the
+	// legacy "network:address" form ("unix:/path" or
+	// "tcp:127.0.0.1:port"), for the sessionidxd.addr rolling-upgrade
+	// file. Empty when not currently listening.
+	Descriptor() string
 }
 
 // ErrLeaderAlive is returned by Listen when another live instance
