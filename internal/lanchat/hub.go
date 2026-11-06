@@ -415,6 +415,38 @@ func (h *Hub) SetPeerOfflineForTest(nodeID string, lastSeen time.Time) {
 	}
 }
 
+// SetPeerLastSeenForTest backdates only LastSeen, leaving Online untouched.
+// Test-support seam (#5117): pins the sweep-lag shape (Online=true but
+// LastSeen older than ageOffline) in which the registry entry still resolves
+// but delivery can no longer succeed.
+func (h *Hub) SetPeerLastSeenForTest(nodeID string, lastSeen time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p, ok := h.peers[nodeID]; ok {
+		p.LastSeen = lastSeen.Unix()
+	}
+}
+
+// StaleRecipient reports whether nodeID refers to a stale-but-cached peer:
+// still in the registry (not yet swept past peerDeleteAfter) but whose
+// LastSeen is older than ageOffline. Such ids still resolve at the tool
+// layer yet cannot be delivered to, so sends to them must fail fast instead
+// of burning the ~10s unicast ACK timeout (#5117). The returned age is how
+// long ago the peer was last seen.
+func (h *Hub) StaleRecipient(nodeID string) (time.Duration, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if nodeID == h.nodeID {
+		return 0, false
+	}
+	p, ok := h.peers[nodeID]
+	if !ok {
+		return 0, false
+	}
+	age := time.Since(time.Unix(p.LastSeen, 0))
+	return age, age > ageOffline
+}
+
 func (h *Hub) Participants() []Participant {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

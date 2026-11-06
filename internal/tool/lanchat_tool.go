@@ -130,6 +130,40 @@ func (t *LanChatTool) staleRecipientHint(recipientNodeIDs []string) string {
 		len(stale), strings.Join(stale, ", "))
 }
 
+// staleRecipientIDs returns the subset of recipientNodeIDs that are stale
+// per the hub freshness gate (#5117): registered but LastSeen older than
+// ageOffline. These ids resolve at the tool layer but cannot be delivered
+// to, so the send loop must skip them instead of burning the unicast ACK
+// timeout.
+func (t *LanChatTool) staleRecipientIDs(recipientNodeIDs []string) []string {
+	if t.Hub == nil {
+		return nil
+	}
+	var stale []string
+	for _, id := range recipientNodeIDs {
+		if _, staleHit := t.Hub.StaleRecipient(id); staleHit {
+			stale = append(stale, id)
+		}
+	}
+	return stale
+}
+
+// staleRecipientLines renders one fail-fast line per stale id: display
+// name, node_id, and last-seen age, plus the action='list' refresh hint the
+// issue text prescribes.
+func (t *LanChatTool) staleRecipientLines(staleIDs []string) []string {
+	if len(staleIDs) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(staleIDs))
+	for _, id := range staleIDs {
+		age, _ := t.Hub.StaleRecipient(id)
+		lines = append(lines, fmt.Sprintf("%s (%s): stale/offline node - last seen %s ago; call action='list' and refresh node_id",
+			t.displayName(id), id, age.Round(time.Second)))
+	}
+	return lines
+}
+
 func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
 	if t.Hub == nil {
 		return ""
@@ -649,6 +683,28 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		resolved = allowed
 	}
 
+	// #5117: stale-but-cached ids resolve fine but cannot be delivered to.
+	// Fail fast instead of burning the ~10s unicast ACK timeout: when every
+	// recipient is stale, refuse the send outright; otherwise drop the stale
+	// ids and report them as skipped alongside the fresh sends.
+	stale := t.staleRecipientIDs(resolved)
+	if len(stale) > 0 {
+		staleLines := t.staleRecipientLines(stale)
+		if len(stale) == len(resolved) {
+			hint := t.doList("")
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"stale recipient(s), not sending:\n%s\nnode_id(s) are invalid after a peer restarts/migrates - call action='list' and re-address with a current node_id.\n%s",
+				strings.Join(staleLines, "\n"), hint.Content)}, nil
+		}
+		fresh := make([]string, 0, len(resolved))
+		for _, nodeID := range resolved {
+			if _, staleHit := t.Hub.StaleRecipient(nodeID); !staleHit {
+				fresh = append(fresh, nodeID)
+			}
+		}
+		resolved = fresh
+	}
+
 	var errors []string
 	sent := 0
 	for _, nodeID := range resolved {
@@ -704,6 +760,9 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 	if len(errors) > 0 {
 		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
+	}
+	if len(stale) > 0 {
+		result += fmt.Sprintf("\nStale/offline recipients skipped (not sent, no unicast attempt):\n%s", strings.Join(t.staleRecipientLines(stale), "\n"))
 	}
 	if len(rateLimited) > 0 {
 		result += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
