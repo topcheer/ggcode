@@ -43,11 +43,34 @@ echo "config: bundle=$BUNDLE_ID version=$VERSION build=${BUILD_VERSION:-<latest>
 
 # ---------- JWT (ES256, the only scheme ASC accepts for API keys) ----------
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+# Convert a DER ECDSA-Signature (stdin) to the raw 64-byte r||s form JWT needs.
+# Minimal DER walk: SEQUENCE { INTEGER r, INTEGER s } — strip tag/len, drop
+# leading zero bytes, left-pad each integer to exactly 32 bytes.
+der_to_raw() {
+python3 -c '
+import sys
+der = sys.stdin.buffer.read()
+def read_int(i):
+    assert der[i] == 0x02, "expected INTEGER tag"
+    ln = der[i+1]
+    return der[i+2:i+2+ln].lstrip(b"\x00").rjust(32, b"\x00"), i + 2 + ln
+i = 2
+r, i = read_int(i)
+s2, i = read_int(i)
+sys.stdout.buffer.write(r + s2)
+'
+}
 NOW=$(date +%s)
 HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
 PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d}' "$ISSUER" "$((NOW))" "$((NOW+1200))" | b64url)
 SIG_INPUT="${HEADER}.${PAYLOAD}"
-SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | b64url)
+# ES256 per RFC 7515 requires the RAW 64-byte r||s signature. `openssl dgst
+# -sign` emits DER (~70 bytes) — signing with DER verbatim yields ASC
+# 401 NOT_AUTHORIZED (run 42224235910 verbose evidence). Strip DER to r||s:
+# NOTE: DER bytes must NEVER pass through a shell variable — command
+# substitution strips NUL/newline bytes. Pipe openssl -> der_to_raw -> b64url.
+SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | der_to_raw | b64url)
 JWT="${SIG_INPUT}.${SIG}"
 LOGD=/tmp/asc-debug.log
 logd() { printf '%s\n' "$*" | tee -a "$LOGD" >&2; }
