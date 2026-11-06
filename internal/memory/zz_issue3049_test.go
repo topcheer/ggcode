@@ -66,7 +66,9 @@ func TestIssue3049_C3_ExactMatchCarriesOwnContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	am := &AutoMemory{dir: dir}
-	dup := am.CheckDuplicate("build-cmd", "value")
+	// #5121: same-key duplicate fires only on no-op rewrite (identical
+	// content); a changed-content refresh is the intentional update path.
+	dup := am.CheckDuplicate("build-cmd", "RIGHT ENTRY")
 	if dup.Similarity != 1.0 || dup.SimilarTo != "build-cmd" {
 		t.Fatalf("exact key must be detected, got %+v", dup)
 	}
