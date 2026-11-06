@@ -1,0 +1,54 @@
+name: Deploy Site (docs/site only)
+
+# Pages deploy that fires ONLY when the site actually changes (user
+# request: stop publishing on every merge). This workflow requires the
+# repo Pages source to be switched to "GitHub Actions" (build_type:
+# workflow) - after that switch the legacy per-push "pages build and
+# deployment" bot stops firing entirely and this workflow becomes the
+# only site publisher.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/site/**
+      - .github/workflows/pages-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy docs/site to Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # docs/site is the published root (index.html, assets, ...). Copy it
+      # to the artifact root so URLs resolve at the site base path.
+      - name: Stage site content
+        run: |
+          mkdir -p /tmp/site
+          cp -R docs/site/. /tmp/site/
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
