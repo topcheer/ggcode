@@ -59,7 +59,13 @@ var sentimentPositiveWhitelist = []string{
 	"垃圾回收", "没用上", "没用到", "没用过", "不对齐",
 	"帮我停一下", "我是说中文", "我是说英文", "我是说英语",
 
-	"还是错误",
+	// #5130 Face 2 + #4181 reconciliation: bare 还是错误 ("still wrong")
+	// is genuine negative feedback and must fire via the 还是错 pattern -
+	// but the compound noun readings 还是错误处理 ("error handling instead")
+	// and 还是错误码 ("error code still...") are neutral (#4181 pins), so
+	// the allowlist protects exactly those compounds, not the bare phrase.
+
+	"还是错误处理", "还是错误码",
 
 	"区别动", "重庆来",
 }

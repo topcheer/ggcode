@@ -210,7 +210,17 @@ var declarationLineRe = regexp.MustCompile(`^\s*(?:` +
 	`)`)
 
 func swallowedDeclarationWarning(oldText, newText string) string {
-	matches := declarationLineRe.FindAllString(strings.ReplaceAll(oldText, "\r\n", "\n"), -1)
+	// #5130 Face 3 (#4796 follow-up): declarationLineRe matches only a
+	// PREFIX of the line ("^\s*func\s" -> "func "), so FindAllString
+	// returned fragments that can never equal a kept full line - a
+	// preserved declaration (e.g. field-add inside an existing func)
+	// always looked "vanished". Match per full line instead.
+	var matches []string
+	for _, line := range strings.Split(strings.ReplaceAll(oldText, "\r\n", "\n"), "\n") {
+		if declarationLineRe.MatchString(line) {
+			matches = append(matches, line)
+		}
+	}
 	if len(matches) == 0 {
 		return ""
 	}
