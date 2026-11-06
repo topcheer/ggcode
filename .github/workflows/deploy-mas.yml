@@ -235,20 +235,18 @@ jobs:
           printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
           xcrun altool --validate-app -f "${PKG_PATH}" -t macOS  --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
-      - name: Upload package (altool --upload-package)
+      - name: Upload package (altool --upload-app, deprecated but functional)
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
-          # --upload-package usage (altool -h, run5 evidence): package-only
-          # channel requiring the metadata group; -f/-t is the DEPRECATED
-          # --upload-app form and is rejected.
-          xcrun altool --upload-package "${PKG_PATH}" \
-            --type macos \
-            --apple-id "6755946388" \
-            --bundle-id "gg.ai.ggcode" \
-            --bundle-version "${MAS_BUILD_VERSION}" \
-            --bundle-short-version-string "${MAS_SHORT_VERSION}" \
-            --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
+          # --upload-app is marked DEPRECATED but is the form that actually
+          # works: san's manual 2026-11-06 uploads (builds 2026110601/602,
+          # MAC_OS VALID) used it. `--upload-package` requires --apple-id to be
+          # the ASC *app resource id*; passing the developer/apple-id number
+          # 6755946388 fails with 409 ENTITY_ERROR.RELATIONSHIP.INVALID
+          # (run 42207908525: pointer /data/relationships/app/data/id). altool
+          # reads identity, versions and bundle id from the pkg itself here.
+          xcrun altool --upload-app -f "${PKG_PATH}" -t macOS \             --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
 
       - name: Poll processing and submit for review
         if: env.MAS_READY == 'true' && env.APPLE_API_KEY_P8 != ''
