@@ -75,6 +75,10 @@ func Serve(sessionsDir, home string) error {
 	// Manager with machine budget: over-cap externals become loadable.
 	mgr := sessionidx.NewManager(sessionsDir, "")
 	mgr.SetExternalLimit(budget)
+	// R1: machine-global decoded-bytes admission with LRU eviction - the
+	// total budget is NOT the per-file cap; without this a single 894MB idx
+	// would be decoded into the heap (the exact #5149 amplification).
+	mgr.SetTotalBudget(budget)
 	mgr.Start()
 
 	d := &Daemon{sessionsDir: sessionsDir, budget: budget, mgr: mgr, started: time.Now()}
@@ -144,6 +148,9 @@ type searchRequest struct {
 	Session  string   `json:"session"`
 	Limit    int      `json:"limit"`
 	LiveSelf string   `json:"liveSelf"` // caller's live session id (excluded from daemon results)
+	// Workspace scopes results to the caller's project (#5149): the
+	// machine-global index holds every workspace's sessions.
+	Workspace string `json:"workspace"`
 }
 
 type searchResponse struct {
@@ -161,7 +168,7 @@ func (d *Daemon) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	// The caller handles its OWN live session locally (it owns those
 	// writes); the daemon serves everything else.
-	res := d.mgr.Query(req.Terms, req.Session, req.Limit)
+	res := d.mgr.QueryScoped(req.Terms, req.Session, req.Limit, req.Workspace)
 	out := make([]sessionidx.Result, 0, len(res))
 	for _, x := range res {
 		if x.SessionID == req.LiveSelf {
@@ -177,11 +184,19 @@ type statusResponse struct {
 	StartedAt time.Time `json:"startedAt"`
 	BudgetMB  int64     `json:"budgetMb"`
 	Indexes   int       `json:"indexes"`
+	// R1: budget pressure visibility (QA requirement).
+	DecodedMB      int64 `json:"decodedMb"`
+	EvictedBytes   int64 `json:"evictedBytes"`
+	EvictedIndexes int64 `json:"evictedIndexes"`
 }
 
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
-	d.touch()
-	writeJSON(w, statusResponse{OK: true, StartedAt: d.started, BudgetMB: d.budget >> 20, Indexes: d.mgr.IndexCount()})
+	// R3: status is a health probe - it must NOT reset the idle clock,
+	// otherwise a periodic liveness check keeps the daemon resident
+	// forever (defeating idle-exit).
+	evictedBytes, evictedCount := d.mgr.Evictions()
+	writeJSON(w, statusResponse{OK: true, StartedAt: d.started, BudgetMB: d.budget >> 20, Indexes: d.mgr.IndexCount(),
+		DecodedMB: d.mgr.TotalDecodedBytes() >> 20, EvictedBytes: evictedBytes, EvictedIndexes: evictedCount})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

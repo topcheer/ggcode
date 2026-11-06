@@ -53,7 +53,7 @@ func TestServeSearchFallbackParity(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	res, ok := Query(home, sess, []string{"unicorns", "quietly"}, "", "somelive", 10)
+	res, ok := Query(home, sess, []string{"unicorns", "quietly"}, "", "somelive", 10, "")
 	if !ok {
 		t.Fatal("daemon query failed (no daemon or timeout)")
 	}
@@ -105,7 +105,7 @@ func index(s, sub string) int {
 // must return ok=false without touching the filesystem.
 func TestQueryDaemonDisabled(t *testing.T) {
 	t.Setenv("GGCODE_SESSIONIDX_DAEMON", "0")
-	if _, ok := Query(t.TempDir(), t.TempDir(), []string{"x"}, "", "", 5); ok {
+	if _, ok := Query(t.TempDir(), t.TempDir(), []string{"x"}, "", "", 5, ""); ok {
 		t.Fatal("daemon must be disabled by env")
 	}
 }

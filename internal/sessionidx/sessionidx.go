@@ -52,6 +52,12 @@ type Index struct {
 	data     indexFile
 	lastMod  time.Time
 	loadedAt time.Time
+	// corrupt: the persisted gob failed to decode (真损坏 - degrade to
+	// source scan). stale: the gob decoded but carries another
+	// idxVersion (format upgrade - NOT corrupt, an owning instance
+	// rebuilds it on its next Refresh).
+	corrupt bool
+	stale   bool
 }
 
 const idxVersion = 1
@@ -102,9 +108,13 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 	if err := dec.Decode(&d); err != nil {
 		// Corrupt index: start over rather than fail.
 		debug.Log("sessionidx", "load: corrupt idx for %s (%v), rebuilding on refresh", sessionID, err)
+		idx.corrupt = true
 		return idx, nil
 	}
 	if d.Version != idxVersion {
+		// Format upgrade: the owning instance rebuilds on its next
+		// Refresh - readers just see this session as not-yet-reindexed.
+		idx.stale = true
 		return idx, nil
 	}
 	idx.data = d

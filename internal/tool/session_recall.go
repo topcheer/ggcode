@@ -19,6 +19,9 @@ type SessionRecall struct {
 	Manager  *sessionidx.Manager
 	Registry *Registry // fallback: lazy lookup when Manager not set at build time
 	Home     string    // ggcode home (dir holding sessions/); daemon-first when set
+	// Workspace scopes recall to this instance's project (#5149): sessions
+	// recorded under another workspace are never returned.
+	Workspace string
 }
 
 func (t SessionRecall) Name() string { return "session_recall" }
@@ -117,12 +120,12 @@ func (t SessionRecall) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 	var results []sessionidx.Result
 	if home != "" && args.SessionID == "" {
-		if daemonRes, ok := sessionidxd.Query(home, t.Manager.Dir(), terms, "", t.Manager.LiveID(), args.Limit*2); ok {
+		if daemonRes, ok := sessionidxd.Query(home, t.Manager.Dir(), terms, "", t.Manager.LiveID(), args.Limit*2, t.Workspace); ok {
 			results = daemonRes
 		}
 	}
 	if results == nil {
-		results = t.Manager.Query(terms, args.SessionID, args.Limit*2) // headroom for role filter
+		results = t.Manager.QueryScoped(terms, args.SessionID, args.Limit*2, t.Workspace) // headroom for role filter
 	}
 
 	var sb strings.Builder

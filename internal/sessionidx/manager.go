@@ -3,6 +3,7 @@ package sessionidx
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,14 +26,29 @@ type Manager struct {
 	mu       sync.Mutex
 	self     *Index
 	external map[string]*extEntry
-	stop     chan struct{}
-	stopped  sync.WaitGroup
+	// R1 (#5156 review): total-decoded-bytes admission with LRU eviction.
+	// externalLimit only caps each file's size; without a total budget a
+	// single 894MB idx (and friends) would be decoded into the heap -
+	// the exact amplification #5149 exists to remove. totalBudget<=0
+	// disables the budget (plain-instance default keeps the historical
+	// per-file cap behavior).
+	totalBudget   int64
+	totalDecoded  int64
+	evictedTotal  int64
+	evictedCount  int64
+	evictionOrder []string // least-recently-used first
+	stop          chan struct{}
+	stopped       sync.WaitGroup
 }
 
 type extEntry struct {
 	idx     *Index
 	idxSize int64
 	modTime time.Time
+	decoded bool // lazy: true once the full gob decode has been done
+	// degraded: the idx file is corrupt/unreadable - serve this session by
+	// scanning its source JSONL (read-only) instead of pretending it is empty.
+	degraded bool
 }
 
 const (
@@ -176,11 +192,25 @@ func (m *Manager) scanExternal() {
 			debug.Log("sessionidx", "scan: skip external idx %s (%.1fMB over %.0fMB)", id, float64(info.Size())/(1<<20), float64(m.externalLimit)/(1<<20))
 			continue
 		}
-		ix, err := Load(m.dir, id)
-		if err != nil || ix == nil {
+		// R1: files larger than the total budget can NEVER fit - skip them
+		// here (before any decode) so a single 894MB idx is never admitted.
+		if m.totalBudget > 0 && info.Size() > m.totalBudget {
+			debug.Log("sessionidx", "scan: skip external idx %s (%.1fMB over total budget %.0fMB)", id, float64(info.Size())/(1<<20), float64(m.totalBudget)/(1<<20))
 			continue
 		}
-		ext[id] = &extEntry{idx: ix, idxSize: info.Size(), modTime: info.ModTime()}
+		// Lazy admission: record the entry WITHOUT decoding (decode on
+		// first query under the total budget, LRU-evicting if needed).
+		ent := &extEntry{idxSize: info.Size(), modTime: info.ModTime()}
+		if m.totalBudget <= 0 {
+			// Plain-instance behavior: decode eagerly as before.
+			ix, err := Load(m.dir, id)
+			if err != nil || ix == nil {
+				continue
+			}
+			ent.idx = ix
+			ent.decoded = true
+		}
+		ext[id] = ent
 	}
 	m.external = ext
 }
@@ -201,11 +231,35 @@ func (m *Manager) refreshExternal() {
 			delete(m.external, id)
 			continue
 		}
-		ix, err := Load(m.dir, id)
-		if err != nil || ix == nil {
-			continue
+		// R1: the daemon uses SetTotalBudget - over-budget sessions are
+		// admitted lazily in Query, not decoded here. Eager decode only
+		// in plain-instance mode (totalBudget==0).
+		if m.totalBudget <= 0 {
+			ix, err := Load(m.dir, id)
+			if err != nil || ix == nil {
+				continue
+			}
+			ent := m.external[id]
+			if ent != nil {
+				ent.idx = ix
+				ent.decoded = true
+				ent.modTime = st.ModTime()
+			}
+		} else {
+			// New/changed file: invalidate any decoded copy so the next
+			// query re-decodes under the budget.
+			if ent := m.external[id]; ent != nil {
+				if ent.decoded {
+					m.totalDecoded -= ent.idxSize
+				}
+				ent.idx = nil
+				ent.decoded = false
+				ent.modTime = st.ModTime()
+				ent.idxSize = st.Size()
+			} else {
+				m.external[id] = &extEntry{idxSize: st.Size(), modTime: st.ModTime()}
+			}
 		}
-		m.external[id] = &extEntry{idx: ix, idxSize: st.Size(), modTime: st.ModTime()}
 		debug.Log("sessionidx", "refresh: reloaded external idx %s", id)
 	}
 	// pick up newly created sibling indexes too (cheap dir scan)
@@ -249,6 +303,33 @@ func (m *Manager) RefreshExternal() {
 	m.refreshExternal()
 }
 
+// SetTotalBudget enables the machine-global decoded-bytes admission cap
+// with LRU eviction (#5156 R1). The shared daemon sets this to its machine
+// budget (default 1GB) so NO single over-cap file is ever decoded into the
+// heap unless there is room; when the budget is full the least-recently-used
+// decoded external is evicted first. Call before Start.
+func (m *Manager) SetTotalBudget(b int64) {
+	m.mu.Lock()
+	m.totalBudget = b
+	m.mu.Unlock()
+}
+
+// TotalDecodedBytes reports the current decoded-bytes footprint of loaded
+// external indexes (lazy decode happens on first query per session).
+func (m *Manager) TotalDecodedBytes() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.totalDecoded
+}
+
+// Evictions reports cumulative evicted bytes and index count (#5156 R1 -
+// surfaced at /status so operators can see budget pressure).
+func (m *Manager) Evictions() (bytes, count int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.evictedTotal, m.evictedCount
+}
+
 // Dir returns the sessions directory this manager aggregates.
 func (m *Manager) Dir() string { return m.dir }
 
@@ -272,17 +353,120 @@ type Result struct {
 	Role      byte
 	TsNano    int64
 	Line      string // raw JSONL line (caller extracts snippet)
+	// Workspace is the recorded workspace path of the hit's session (""
+	// when unattributed). Populated so callers can assert scoping.
+	Workspace string
+}
+
+// ensureLoaded decodes an external index on first use (#5156 R1 lazy
+// admission) under the total budget: evict least-recently-used decoded
+// entries until the new one fits, or reject it if it alone exceeds the
+// budget. Returns nil when the entry cannot be admitted.
+func (m *Manager) ensureLoaded(id string, ent *extEntry) *Index {
+	if ent.decoded {
+		return ent.idx
+	}
+	if m.totalBudget <= 0 {
+		return nil
+	}
+	// LRU eviction until there is room.
+	for m.totalDecoded+ent.idxSize > m.totalBudget && len(m.evictionOrder) > 0 {
+		oldest := m.evictionOrder[0]
+		m.evictionOrder = m.evictionOrder[1:]
+		oe, ok := m.external[oldest]
+		if !ok || !oe.decoded {
+			continue
+		}
+		m.totalDecoded -= oe.idxSize
+		m.evictedTotal += oe.idxSize
+		m.evictedCount++
+		oe.idx = nil
+		oe.decoded = false
+	}
+	if m.totalDecoded+ent.idxSize > m.totalBudget {
+		return nil // cannot fit even after full eviction - skip this session
+	}
+	ix, err := Load(m.dir, id)
+	if err != nil || ix == nil {
+		return nil
+	}
+	// QA (#5156): corrupt sibling idx -> degraded source scan, never an
+	// empty result that silently hides the session.
+	if isCorruptIdx(ix, ent.idxSize) {
+		ent.degraded = true
+		ent.decoded = false
+		debug.Log("sessionidx", "degraded: corrupt idx for %s - serving from source jsonl", id)
+		return nil
+	}
+	ent.idx = ix
+	ent.decoded = true
+	m.totalDecoded += ent.idxSize
+	m.evictionOrder = append(m.evictionOrder, id)
+	return ix
+}
+
+// externalSorted returns external entries in the R2 deterministic order:
+// newest mtime first, session id as tiebreak. The daemon's ordering IS the
+// API once results cross the wire - map iteration order must never leak.
+func (m *Manager) externalSorted() []struct {
+	id  string
+	ent *extEntry
+} {
+	m.mu.Lock()
+	out := make([]struct {
+		id  string
+		ent *extEntry
+	}, 0, len(m.external))
+	for id, e := range m.external {
+		out = append(out, struct {
+			id  string
+			ent *extEntry
+		}{id, e})
+	}
+	m.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ent.modTime.Equal(out[j].ent.modTime) {
+			return out[i].id < out[j].id
+		}
+		return out[i].ent.modTime.After(out[j].ent.modTime)
+	})
+	return out
 }
 
 // Query searches self + external indexes. terms are ANDed; sessions are
 // searched newest-activity first; limit caps total results.
+// Query searches self + external indexes across ALL workspaces. Callers
+// that must stay inside one workspace use QueryScoped.
 func (m *Manager) Query(terms []string, sessionID string, limit int) []Result {
+	return m.QueryScoped(terms, sessionID, limit, "")
+}
+
+// QueryScoped is Query restricted to sessions recorded under one
+// workspace path (#5149). A non-empty workspace drops hits whose session
+// is attributed to a different workspace; unattributed sessions
+// (pre-workspace-era) are dropped too - "only my workspace" must not
+// quietly include the rest of the machine. An empty workspace keeps the
+// historic unscoped behavior.
+func (m *Manager) QueryScoped(terms []string, sessionID string, limit int, workspace string) []Result {
 	if limit <= 0 {
 		limit = 20
 	}
 	var out []Result
+	// #5149 workspace scoping: one small index.json read per query,
+	// content-cached on size+mtime (LoadWorkspaceMap), so this costs no
+	// extra per-session I/O.
+	var wsMap map[string]string
+	if workspace != "" {
+		wsMap = LoadWorkspaceMap(m.dir)
+	}
+	allowed := func(sessID string) bool {
+		if workspace == "" {
+			return true
+		}
+		return wsMap[sessID] == workspace
+	}
 	push := func(sessID string, ix *Index) {
-		if ix == nil {
+		if ix == nil || !allowed(sessID) {
 			return
 		}
 		hits := ix.Query(terms, limit)
@@ -291,7 +475,7 @@ func (m *Manager) Query(terms []string, sessionID string, limit int) []Result {
 			if err != nil {
 				continue
 			}
-			out = append(out, Result{SessionID: sessID, Role: h.Role, TsNano: h.TsNano, Line: string(line)})
+			out = append(out, Result{SessionID: sessID, Role: h.Role, TsNano: h.TsNano, Line: string(line), Workspace: wsMap[sessID]})
 			if len(out) >= limit {
 				return
 			}
@@ -303,26 +487,52 @@ func (m *Manager) Query(terms []string, sessionID string, limit int) []Result {
 		} else {
 			m.mu.Lock()
 			ent := m.external[sessionID]
-			m.mu.Unlock()
+			// R1: lazy admission - decode under the total budget on
+			// first targeted query (same path as the full scan).
+			var ix *Index
+			var degraded bool
 			if ent != nil {
-				push(sessionID, ent.idx)
+				ix = m.ensureLoaded(sessionID, ent)
+				degraded = ent.degraded
+			}
+			m.mu.Unlock()
+			if ix != nil {
+				push(sessionID, ix)
+			} else if degraded && allowed(sessionID) {
+				out = append(out, scanSourceForTerms(m.dir, sessionID, terms, limit)...)
 			}
 		}
 		return out
 	}
-	// self first (most relevant), then externals
+	// self first (most relevant), then externals in R2 deterministic order
 	push(m.liveID, m.Self())
 	if len(out) >= limit {
 		return out[:limit]
 	}
-	m.mu.Lock()
-	ents := make([]*extEntry, 0, len(m.external))
-	for _, e := range m.external {
-		ents = append(ents, e)
-	}
-	m.mu.Unlock()
-	for _, e := range ents {
-		push(e.idx.Session, e.idx)
+	for _, item := range m.externalSorted() {
+		if !allowed(item.id) {
+			continue // other workspace: never decode it just to discard hits
+		}
+		m.mu.Lock()
+		ent := m.external[item.id]
+		if ent == nil {
+			m.mu.Unlock()
+			continue
+		}
+		var ix *Index
+		var degraded bool
+		if ent != nil {
+			ix = m.ensureLoaded(item.id, ent)
+			degraded = ent.degraded
+		}
+		m.mu.Unlock()
+		if ix == nil {
+			if degraded && len(out) < limit {
+				out = append(out, scanSourceForTerms(m.dir, item.id, terms, limit-len(out))...)
+			}
+			continue // over-budget or unloadable - skip, never crash
+		}
+		push(item.id, ix)
 		if len(out) >= limit {
 			break
 		}

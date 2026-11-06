@@ -24,7 +24,7 @@ const dialTimeout = 500 * time.Millisecond
 // falls back to its in-process Manager (graceful degradation, never data
 // loss). liveSelf is excluded from results (the caller serves its own live
 // session locally — it owns those writes).
-func Query(home, sessionsDir string, terms []string, session, liveSelf string, limit int) ([]sessionidx.Result, bool) {
+func Query(home, sessionsDir string, terms []string, session, liveSelf string, limit int, workspace string) ([]sessionidx.Result, bool) {
 	if os.Getenv("GGCODE_SESSIONIDX_DAEMON") == "0" {
 		return nil, false
 	}
@@ -33,7 +33,7 @@ func Query(home, sessionsDir string, terms []string, session, liveSelf string, l
 		maybeSelfLaunch(home, sessionsDir)
 		return nil, false
 	}
-	body, _ := json.Marshal(searchRequest{Terms: terms, Session: session, LiveSelf: liveSelf, Limit: limit})
+	body, _ := json.Marshal(searchRequest{Terms: terms, Session: session, LiveSelf: liveSelf, Limit: limit, Workspace: workspace})
 	resp, err := client.Post("http://ggcode-sessionidxd/search", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, false
@@ -76,8 +76,19 @@ func dialClient(home string) (*http.Client, bool) {
 func maybeSelfLaunch(home, sessionsDir string) {
 	if _, _, pid := Paths(home); pid != "" {
 		if raw, err := os.ReadFile(pid); err == nil {
-			_ = raw // pidfile exists: daemon may be starting up; don't dogpile
-			debug.Log("sessionidxd", "client: discovery missing but pidfile present — assuming daemon startup")
+			_ = raw
+			// R4: another instance is spawning the daemon right now -
+			// wait briefly for its discovery file instead of assuming the
+			// worst (this process would otherwise do the heavy local load
+			// at the exact moment the fleet is most memory-tight).
+			addrFile, _, _ := Paths(home)
+			for i := 0; i < 20; i++ {
+				if _, err := os.Stat(addrFile); err == nil {
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			debug.Log("sessionidxd", "client: discovery still missing after 2s wait - falling back locally")
 			return
 		}
 	}
