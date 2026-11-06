@@ -843,9 +843,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 				debug.Log("openai-responses", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
 
-			if attempt == 0 || p.policy.requestTimeout <= 0 {
-				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
-			}
+			ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			httpResp, err := p.post(ctx, req)
 			if err != nil {
 				if isRetryableForContext(ctx, err) && attempt < attempts-1 {
