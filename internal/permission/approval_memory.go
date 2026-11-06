@@ -16,6 +16,12 @@ import (
 const (
 	autoApproveThreshold = 3
 
+	// neverAutoApproveMarker suffixes command signatures that must never be
+	// auto-approved, no matter how many times the identical command was
+	// approved before. Introduced with #777's chained rejection; enforced as
+	// a hard gate by #5191.
+	neverAutoApproveMarker = "no-auto-approve:chained"
+
 	maxTrackedKeys = 200
 )
 
@@ -61,8 +67,18 @@ func commandSignature(cmd string) string {
 		return ""
 	}
 
-	if strings.ContainsAny(cmd, ";|&\n$`") || strings.Contains(cmd, "$(") {
-		return cmd + ":no-auto-approve:chained"
+	// #777: newlines, $( ) and backticks execute/embed additional commands
+	// beyond the ;|& chain forms. Never memorize shell metacharacter
+	// commands. #5191: the marker is also an enforcement gate now -
+	// ShouldAutoApprove and RecordApproval refuse marker keys, so the
+	// identical chained command keeps re-asking the user instead of
+	// silently freeing the 4th identical run after 3 approvals.
+	// Process substitution <( )/>( ) executes an embedded command too and
+	// previously fell into the :redirect disambiguator tag, leaving e.g.
+	// "bash <(curl ...)" auto-approvable on its exact key.
+	if strings.ContainsAny(cmd, ";|&\n$`") || strings.Contains(cmd, "$(") ||
+		strings.Contains(cmd, "<(") || strings.Contains(cmd, ">(") {
+		return cmd + ":" + neverAutoApproveMarker
 	}
 
 	if strings.Contains(cmd, ">") || strings.Contains(cmd, "<") {
@@ -199,6 +215,13 @@ func (am *ApprovalMemory) ShouldAutoApprove(toolName string, input json.RawMessa
 		return false
 	}
 	key, _ := MakeKey(toolName, input)
+	// #5191: marker keys are never auto-approved. A unique signature alone
+	// did not stop the leak: approving the identical chained command three
+	// times flipped autoApproved and silently freed the fourth run. Chained
+	// commands must re-ask on every invocation.
+	if strings.HasSuffix(key, ":"+neverAutoApproveMarker) {
+		return false
+	}
 	am.mu.RLock()
 	defer am.mu.RUnlock()
 	entry, ok := am.store[key]
@@ -213,6 +236,13 @@ func (am *ApprovalMemory) RecordApproval(toolName string, input json.RawMessage)
 		return
 	}
 	key, _ := MakeKey(toolName, input)
+	// #5191: never record auto-approve state for marker-tagged chained
+	// commands - the entry stays unreadable through the ShouldAutoApprove
+	// gate and autoApproved stays false so AutoApprovedKeys cannot list a
+	// chained key as actively auto-approved.
+	if strings.HasSuffix(key, ":"+neverAutoApproveMarker) {
+		return
+	}
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
