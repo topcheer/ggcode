@@ -82,6 +82,10 @@ jobs:
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
+          # WHOLE-STEP WATCHDOG (run3 42186107234 hung 23min inside this step;
+          # probe alarm only covers the 3-byte sign, not the security ops).
+          # Alarm kills the subshell -> named timeout in log, never a hang.
+          perl -e 'alarm 240; $SIG{ALRM}=sub{ print "::error::CREDENTIALS STEP TIMED OUT (240s) - hang in security op above last printed marker\n"; exit 9 }; exec @ARGV' bash -euo pipefail <<'WATCHDOG'
           set -x
           # RECIPE CHANGE (run 1+2 both hung at codesign "replacing existing
           # signature"): the login-keychain route contradicts the canonical
@@ -132,6 +136,7 @@ jobs:
           fi
           set -x
           echo "PROBE OK: key access works via temp keychain"
+          WATCHDOG
 
       - name: Build and sign universal MAS app (verbose + watchdogs)
         if: env.MAS_READY == 'true'
