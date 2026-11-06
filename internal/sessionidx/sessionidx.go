@@ -167,12 +167,6 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 	// entirely: capped from birth, recall degrades to the bounded source
 	// scan, and the owning instance never rebuilds (capped Refresh is a
 	// no-op), so nothing re-materializes the map.
-	if fi, err := os.Stat(idx.IdxPath); err == nil && fi.Size() > idxSkipDecodeBytes {
-		debug.Log("sessionidx", "load: idx for %s is %dMB, skipping decode (capped)", sessionID, fi.Size()>>20)
-		idx.capped = true
-		idx.approxBytes = fi.Size() * 4 // postings-memory estimate, over any budget
-		return idx, nil
-	}
 	f, err := os.Open(idx.IdxPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -181,6 +175,19 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		return nil, err
 	}
 	defer f.Close()
+	// #5149 startup-spike guard: decoding a multi-hundred-MB gob spikes the
+	// heap to gigabytes before SetSelfBudget can drop it (RSS then sits at
+	// the GC/MADV_FREE lag peak - observed 5.7GB at 3.5min uptime). Size is
+	// taken from the ALREADY-OPEN handle (f.Stat, no new path-dependent
+	// operation); oversized files skip the decode entirely - capped from
+	// birth, recall degrades to the bounded source scan, and nothing ever
+	// re-materializes the giant map.
+	if fi, err := f.Stat(); err == nil && fi.Size() > idxSkipDecodeBytes {
+		debug.Log("sessionidx", "load: idx for %s is %dMB, skipping decode (capped)", sessionID, fi.Size()>>20)
+		idx.capped = true
+		idx.approxBytes = fi.Size() * 4 // postings-memory estimate, over any budget
+		return idx, nil
+	}
 	dec := gob.NewDecoder(bufio.NewReader(f))
 	var d indexFile
 	if err := dec.Decode(&d); err != nil {
