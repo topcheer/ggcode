@@ -204,7 +204,7 @@ jobs:
           echo "=== cleanup temp keychain (no-op if job fails earlier) ==="
           security delete-keychain "${KC}" 2>/dev/null || true
 
-      - name: Validate package (altool --validate-package)
+      - name: Validate package (altool --validate-app)
         if: env.MAS_READY == 'true'
         shell: bash
         run: |
