@@ -39,6 +39,8 @@
   ├── knight-20260419-docker.md
   └── knight-20260420-git.md
 
+~/.ggcode/skills-snapshots/          ← 系统级快照（回滚用，#5114）
+
 项目/.ggcode/skills/                  ← 项目级（跟项目走）
   ├── build-flow/SKILL.md
   ├── api-conventions/SKILL.md
