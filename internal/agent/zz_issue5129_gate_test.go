@@ -21,6 +21,9 @@ func TestIssue5129ProbeClassGitSubcommands(t *testing.T) {
 		"git name-rev HEAD",
 		"git for-each-ref refs/heads",
 		"git check-attr text README.md",
+		"git show-ref --heads",
+		"git show-ref --verify refs/heads/main",
+		"git var GIT_AUTHOR_IDENT",
 	} {
 		if !irrevIsReadOnlyCommand(sub) {
 			t.Errorf("probe command misclassified as not-read-only: %q", sub)

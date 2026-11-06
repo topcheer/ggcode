@@ -223,7 +223,7 @@ var irrevReadOnlyGitSubcommands = map[string]bool{
 	// #5129 - ls-remote absence misclassified pure read-only patrols as
 	// medium, which gated the very grounding the gate demands.
 	"ls-remote": true, "name-rev": true, "for-each-ref": true,
-	"check-attr": true,
+	"check-attr": true, "show-ref": true, "var": true,
 }
 
 var irrevReadOnlyGoSubcommands = map[string]bool{
