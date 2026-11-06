@@ -60,7 +60,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	targetPath := filepath.Join(skillDir, "SKILL.md")
 
 	if _, err := os.Stat(targetPath); err == nil {
-		if snapErr := p.createSnapshot(name, targetPath); snapErr != nil {
+		if snapErr := p.createSnapshot(name, targetPath, entry.Scope); snapErr != nil {
 
 			return fmt.Errorf("promote %q aborted: snapshot of existing active version failed (refusing to overwrite without a rollback point): %w", entry.Name, snapErr)
 		}
@@ -171,7 +171,7 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 		return err
 	}
 
-	snapshots, err := p.listSnapshots(name)
+	snapshots, err := p.listSnapshots(name, entry.Scope)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 	latest := snapshots[len(snapshots)-1]
 
 	if _, err := os.Stat(entry.Path); err == nil {
-		if snapErr := p.createSnapshot(entry.Name, entry.Path); snapErr != nil {
+		if snapErr := p.createSnapshot(entry.Name, entry.Path, entry.Scope); snapErr != nil {
 
 			return fmt.Errorf("rollback %q aborted: pre-rollback snapshot of current version failed (refusing to overwrite without a backup): %w", entry.Name, snapErr)
 		}
@@ -248,12 +248,15 @@ func (p *Promoter) stagingDir(scope string) string {
 	return filepath.Join(p.projectDir, ".ggcode", "skills-staging")
 }
 
-func (p *Promoter) createSnapshot(name, activePath string) error {
+func (p *Promoter) createSnapshot(name, activePath, scope string) error {
 	name, err := validateSkillName(name)
 	if err != nil {
 		return err
 	}
-	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
+	snapDir, err := p.snapshotDir(scope)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(snapDir, 0755); err != nil {
 		return err
 	}
@@ -312,12 +315,28 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 	}
 }
 
-func (p *Promoter) listSnapshots(name string) ([]string, error) {
+// #5114: snapshot storage must follow the skill's scope, mirroring
+// activeDir/stagingDir. A global-scope skill snapshot written into the
+// project tree breaks cross-project rollback and pollutes project view.
+func (p *Promoter) snapshotDir(scope string) (string, error) {
+	if scope == "global" {
+		return filepath.Join(p.homeDir, ".ggcode", "skills-snapshots"), nil
+	}
+	if scope == "project" {
+		return filepath.Join(p.projectDir, ".ggcode", "skills-snapshots"), nil
+	}
+	return "", fmt.Errorf("unknown scope %q for snapshot directory", scope)
+}
+
+func (p *Promoter) listSnapshots(name, scope string) ([]string, error) {
 	name, err := validateSkillName(name)
 	if err != nil {
 		return nil, err
 	}
-	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
+	snapDir, err := p.snapshotDir(scope)
+	if err != nil {
+		return nil, err
+	}
 
 	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6,12}\.md$`)
 	des, err := os.ReadDir(snapDir)

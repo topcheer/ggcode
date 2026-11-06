@@ -31,7 +31,7 @@ func TestRollbackDottedSkillNameNoCrosstalk(t *testing.T) {
 
 	writeSnap("a.b", "20250101-000000", "content-B")
 
-	snaps, err := p.listSnapshots("a")
+	snaps, err := p.listSnapshots("a", "project")
 	if err != nil {
 		t.Fatal(err)
 	}

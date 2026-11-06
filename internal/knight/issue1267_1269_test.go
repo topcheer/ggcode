@@ -86,15 +86,15 @@ func TestSnapshotSameSecondNotOverwritten(t *testing.T) {
 
 	active := filepath.Join(proj, ".ggcode", "skills", "s", "SKILL.md")
 	mustWrite(t, active, "v1")
-	if err := p.createSnapshot("s", active); err != nil {
+	if err := p.createSnapshot("s", active, "project"); err != nil {
 		t.Fatal(err)
 	}
 	mustWrite(t, active, "v2")
-	if err := p.createSnapshot("s", active); err != nil {
+	if err := p.createSnapshot("s", active, "project"); err != nil {
 		t.Fatal(err)
 	}
 
-	snaps, err := p.listSnapshots("s")
+	snaps, err := p.listSnapshots("s", "project")
 	if err != nil {
 		t.Fatal(err)
 	}
