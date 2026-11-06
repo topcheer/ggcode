@@ -209,7 +209,7 @@ var localProviders = []*catwalkProvider{
 			{ID: "MiMo-V2.5-TTS-VoiceDesign"},
 			{ID: "MiMo-V2.5-TTS"},
 			{ID: "MiMo-V2-Pro", ContextWindow: 1000000},
-			{ID: "MiMo-V2-Omni", SupportsAttachments: true},
+			{ID: "MiMo-V2-Omni", ContextWindow: 262144, SupportsAttachments: true},
 			{ID: "MiMo-V2-TTS"},
 		},
 	},
@@ -511,9 +511,6 @@ type modelCapability struct {
 func staticCode() string {
 	return `var contextWindowHintPattern = regexp.MustCompile(` + "`" + `(^|[^0-9])(\d+)(k|m)($|[^a-z0-9])` + "`" + `)
 
-// #2857: GLM vision naming is a version-suffix v (glm-4.5v / glm-4.6v).
-var glmVisionSuffixRe = regexp.MustCompile(` + "`" + `glm-[0-9.]+v` + "`" + `)
-
 // inferContextWindow resolves an approximate input context window.
 // Explicit endpoint config should override this; this heuristic exists so
 // auto-compaction can track common models more accurately than a fixed 128k.
@@ -642,44 +639,16 @@ func inferMaxOutputTokens(model, protocol string) int {
 	}
 }
 
+// #2613/#5141: the caps table is authoritative - trust a hit even when it
+// says false (table-only semantics). Unknown models fall back to the
+// gemini protocol default; keyword heuristics were removed in 3bfd20bfe1
+// because they misreport proxy/gateway names (my-claude-proxy,
+// custom-gpt-gateway) as vision-capable. The template MUST stay in sync
+// with the committed fix or every regen reverts it (Face A drift guard:
+// TestInferVisionSupportCapabilityTableOnly).
 func inferVisionSupport(model, protocol string) bool {
-	// #2613: the caps table is authoritative - trust a hit even when it
-	// says false (table-only semantics; keyword heuristics only serve the
-	// no-hit fallback below).
 	if cap, ok := lookupModelCapability(model); ok {
 		return cap.SupportsVision
-	}
-
-	m := strings.ToLower(strings.TrimSpace(model))
-	switch {
-	case strings.Contains(m, "claude"),
-		strings.Contains(m, "gpt"),
-		strings.Contains(m, "gemini"),
-		strings.Contains(m, "gemma"),
-		strings.Contains(m, "grok"),
-		strings.Contains(m, "seed-2"),
-		strings.Contains(m, "qwen3.5"),
-		strings.Contains(m, "qwen-3.5"),
-		strings.Contains(m, "qwen3.6"),
-		strings.Contains(m, "qwen-3.6"),
-		// #2857: GLM vision models follow the version-suffix convention
-		// (glm-4.5v / glm-4.6v). A bare Contains(m,"v") matched the "v" in
-		// vendor prefixes (no**v**ita/...) and words like preview/voice,
-		// misreporting plain-text GLM bases as vision-capable.
-		(strings.Contains(m, "glm-") && glmVisionSuffixRe.MatchString(m)),
-		strings.Contains(m, "kimi-2.5"),
-		strings.Contains(m, "kimi-k2"),
-		strings.Contains(m, "kimi-vl"):
-		return true
-	case strings.Contains(m, "glm-"),
-		strings.Contains(m, "kimi"),
-		strings.Contains(m, "deepseek"),
-		strings.Contains(m, "mistral"),
-		strings.Contains(m, "qwen"),
-		strings.Contains(m, "moonshot"),
-		strings.Contains(m, "minimax"),
-		strings.Contains(m, "llama"):
-		return false
 	}
 
 	return strings.EqualFold(strings.TrimSpace(protocol), "gemini")
