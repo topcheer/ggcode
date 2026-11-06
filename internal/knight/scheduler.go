@@ -138,6 +138,7 @@ func (k *Knight) Start(ctx context.Context) error {
 	for _, dir := range []string{
 		filepath.Join(k.homeDir, ".ggcode", "skills-staging"),
 		filepath.Join(k.projDir, ".ggcode", "skills-staging"),
+		filepath.Join(k.homeDir, ".ggcode", "skills-snapshots"),
 		filepath.Join(k.projDir, ".ggcode", "skills-snapshots"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
