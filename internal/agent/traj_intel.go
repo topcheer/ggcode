@@ -70,7 +70,10 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 		return nil
 	}
 
-	task := truncateTask(stats.UserPrompt, 120)
+	// #5118: the user prompt is the most common secret carrier - redact
+	// BEFORE truncation so a key spanning the 120-rune boundary cannot leak
+	// a partial (unmatchable) fragment.
+	task := truncateTask(redactTrainText(stats.UserPrompt), 120)
 	now := time.Now()
 	totalToolCalls := totalToolCallCount(stats.ToolCalls)
 
