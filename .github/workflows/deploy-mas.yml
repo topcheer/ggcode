@@ -123,7 +123,13 @@ jobs:
           fi
           set -x
           echo "=== import WWDR G3 + verify presence ==="
-          security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign 2>&1
+          # Idempotent import: G3 is already present on the runner from the
+          # DMG lane's own imports (and login-KC reuse), and security exits
+          # nonzero on duplicates, which bash -e would kill the step on
+          # (run4 42196592308: SecKeychainItemImport already exists). Treat
+          # already-present as success; the next line's find-certificate is
+          # the real gate anyway.
+          security import "${GITHUB_WORKSPACE}/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign 2>&1 | grep -v "already exists in the keychain" || true
           security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" 2>&1 | head -2
           echo "=== partition-list (temp-KC password, visible) ==="
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>&1 | tail -2
