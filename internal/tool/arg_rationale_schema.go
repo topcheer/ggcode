@@ -21,7 +21,7 @@ var argRationaleWriteToolNames = map[string]bool{
 
 const ArgRationaleField = "arg_rationale"
 
-const argRationaleDesc = "Optional one-line justification for this call's heavy parameters (why this target, why this scope, why now). Required only when the argument-complexity gate has rejected this call once; attaching it skips that reject round and is recorded in debug logs."
+const argRationaleDesc = "One-line justification for this call's heavy parameters (why this target, why this scope, why now). ATTACH PROACTIVELY whenever the parameters are non-trivial: chained/piped or >200-char shell commands, multi-file edits, bulk rewrites - the argument-complexity gate blocks most such calls without it, and each block wastes a full round-trip. After a first rejection it is required."
 
 func injectArgRationaleSchema(name string, params json.RawMessage) json.RawMessage {
 	if !argRationaleWriteToolNames[name] || len(params) == 0 {
