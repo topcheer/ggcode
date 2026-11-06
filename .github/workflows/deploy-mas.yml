@@ -75,7 +75,11 @@ jobs:
           # One value feeds CFBundleVersion, altool --bundle-version AND the
           # submit script's build poll; a divergence makes the poll spin to
           # timeout (#5139 invariant 1).
-          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d01)" >> "${GITHUB_ENV}"
+          # Date+HHMMSS, not date+"01": san's manual 2026-11-06 upload already
+          # owns build 2026110601 (MAC_OS VALID), so a plain date-derived
+          # value collides and ASC rejects the duplicate. Seconds resolution
+          # stays monotonic within a day and unique per run.
+          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d%H%M%S)" >> "${GITHUB_ENV}"
 
       - name: Guard - MAS secrets configured?
         shell: bash
