@@ -1,6 +1,8 @@
 package sessionidx
 
 import (
+	stddebug "runtime/debug"
+
 	"os"
 	"path/filepath"
 	"sort"
@@ -124,6 +126,12 @@ func (m *Manager) Start() {
 	}
 	m.mu.Unlock()
 	if m.self != nil {
+		if m.self.Capped() {
+			// A large persisted idx was skipped (or retroactively dropped):
+			// force a GC pass so any transient decode spike returns to the
+			// OS now instead of sitting in MADV_FREE lag for minutes.
+			stddebug.FreeOSMemory()
+		}
 		if err := m.self.Refresh(); err != nil {
 			debug.Log("sessionidx", "start: self refresh: %v", err)
 		}
