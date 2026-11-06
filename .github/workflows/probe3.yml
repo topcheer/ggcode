@@ -1,0 +1,15 @@
+name: probe3-dispatch-bisect
+on:
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: "v"
+        required: false
+        default: "v0"
+permissions:
+  contents: read
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "probe3 v1 dispatch-only"
