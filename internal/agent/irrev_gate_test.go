@@ -62,7 +62,7 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"run_command", `{"command":"git push --force origin main"}`, irrevTierHigh},
 		{"run_command", `{"command":"git reset --hard HEAD~3"}`, irrevTierHigh},
 		{"run_command", `{"command":"rm -rf /tmp/foo"}`, irrevTierHigh},
-		{"run_command", `{"command":"echo hello"}`, irrevTierMedium},
+		{"run_command", `{"command":"echo hello"}`, irrevTierNone},
 
 		{"unknown_tool", `{}`, irrevTierLow},
 	}
@@ -108,7 +108,7 @@ func TestIrrevGate_FirstReadOnlyCommandNoAdvisory(t *testing.T) {
 
 func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 	stayNonReadOnly := []string{
-		"echo hello",
+		"echo done >> /tmp/finish.log", // redirect: still side-effecting (#5129)
 		"go test ./... > out.txt",
 		"git status 2>err.txt",
 		"cat $(pwd)/x",
@@ -179,7 +179,14 @@ func TestIrrevGate_HighImpactWithGrounding(t *testing.T) {
 func TestIrrevGate_MediumImpactInsufficientGrounding(t *testing.T) {
 	s := newIrrevGateState()
 
+	// #5129: the session's first medium action is exempt (empty grounding
+	// history is structurally unavoidable on turn 1).
 	warn := s.recordAction("git_commit", `{"message":"x"}`)
+	if warn != "" {
+		t.Error("first-turn medium action must be exempt (#5129)")
+	}
+	// A second ungrounded medium action must still warn.
+	warn = s.recordAction("git_commit", `{"message":"x"}`)
 	if warn == "" {
 		t.Error("expected warning for medium-impact action with no grounding")
 	}
@@ -242,6 +249,8 @@ func TestIrrevGate_MaxWarningsNoReset(t *testing.T) {
 
 func TestIrrevGate_Reset(t *testing.T) {
 	s := newIrrevGateState()
+	// First medium is exempt (#5129); second ungrounded medium warns.
+	s.recordAction("git_commit", `{"message":"x"}`)
 	s.recordAction("git_commit", `{"message":"x"}`)
 	if s.warnings != 1 {
 		t.Errorf("expected 1 warning, got %d", s.warnings)

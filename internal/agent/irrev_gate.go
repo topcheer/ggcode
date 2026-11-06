@@ -193,6 +193,9 @@ var irrevReadOnlyBinaries = map[string]bool{
 	"cksum": true, "basename": true, "dirname": true, "realpath": true,
 	"readlink": true, "jq": true, "awk": true, "gawk": true,
 	"tr": true, "cut": true, "xxd": true, "od": true, "strings": true,
+	// #5129: echo/printf are side-effect-free without redirection; any
+	// redirect (>/>>) still fails the segment check in irrevSegmentIsReadOnly.
+	"echo": true, "printf": true,
 }
 
 var irrevReadOnlyGitSubcommands = map[string]bool{
@@ -201,6 +204,13 @@ var irrevReadOnlyGitSubcommands = map[string]bool{
 	"rev-parse": true, "rev-list": true, "ls-files": true,
 	"describe": true, "shortlog": true, "reflog": true, "grep": true,
 	"tag": true, "merge-base": true, "cat-file": true,
+	// #5129: probe-class read-only subcommands. A pure `git ls-remote`
+	// patrol previously classified irrevTierMedium and got gated, blocking
+	// exactly the verification the gate demands. These are always read-only;
+	// destructive forms (if any emerge) are caught earlier by
+	// irrevIsDestructiveCommand patterns.
+	"ls-remote": true, "name-rev": true, "for-each-ref": true,
+	"check-attr": true,
 }
 
 var irrevReadOnlyGoSubcommands = map[string]bool{
@@ -359,6 +369,10 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	tier := irrevClassifyTool(toolName, args)
 	isGrounding := irrevIsGroundingAction(toolName)
 
+	// #5129: capture emptiness BEFORE appending so a session's very first
+	// recorded action can be exempted below.
+	firstAction := len(s.grounding) == 0
+
 	recentGrounding := 0
 	start := len(s.grounding) - irrevGroundingWindow
 	if start < 0 {
@@ -394,6 +408,15 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	}
 
 	if recentGrounding >= threshold {
+		return ""
+	}
+
+	// #5129 Face 1: the session's FIRST medium command structurally cannot
+	// have grounding credit (the grounding window only fills from prior
+	// actions), so gating it on "0 grounding actions" is a guaranteed false
+	// trigger on fresh autopilot turns. Exempt first-action medium only;
+	// HIGH-impact actions still gate.
+	if tier == irrevTierMedium && firstAction {
 		return ""
 	}
 
