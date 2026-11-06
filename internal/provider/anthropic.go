@@ -581,9 +581,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 				debug.Log("anthropic", "Stream retry attempt %d", attempt)
 			}
 
-			if attempt == 0 || p.policy.requestTimeout <= 0 {
-				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
-			}
+			ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 
 			toolCalls := make(map[int]*ToolCallDelta)
 			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
