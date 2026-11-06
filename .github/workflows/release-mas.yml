@@ -23,6 +23,29 @@ permissions:
   # publisher step is ever added.
 
 jobs:
+  changes:
+    name: Detect desktop changes
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "${PREV:-}" ]; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "${PREV}..${GITHUB_SHA}")"
+          has() { echo "$CHANGED" | grep -qE "$1" && echo true || echo false; }
+          {
+            echo "desktop=$(has '^(desktop/|internal/|cmd/|scripts/release/|go\\.(mod|sum)|\\.github/workflows/(release-mas|deploy-mas)\\.yml)')"
+          } >> "$GITHUB_OUTPUT"
+
   verify:
     name: Verify release inputs
     if: github.event_name != 'workflow_dispatch'
@@ -43,9 +66,11 @@ jobs:
 
   release:
     name: Build & Release
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.desktop == 'true')) }}
     runs-on: ubuntu-latest
-    needs: verify
+    needs:
+      - verify
+      - changes
     env:
       CGO_ENABLED: 0
       GOTOOLCHAIN: local
@@ -99,10 +124,11 @@ jobs:
 
   release-macos-pkg:
     name: Build macOS pkg
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.verify.result == 'success' && needs.changes.outputs.desktop == 'true')) }}
     runs-on: macos-15
     needs:
       - verify
+      - changes
     permissions:
       contents: write
     env:
