@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-BUNDLE_ID="" VERSION="" PLATFORM="MAC_OS" KEY_PATH="" KEY_ID="" ISSUER=""
+BUNDLE_ID="" VERSION="" BUILD_VERSION="" APP_ID_ARG="" PLATFORM="MAC_OS" KEY_PATH="" KEY_ID="" ISSUER=""
 MAX_WAIT=40 NO_SUBMIT=0 API_BASE="https://api.appstoreconnect.apple.com"
 
 while [[ $# -gt 0 ]]; do
@@ -30,6 +30,8 @@ while [[ $# -gt 0 ]]; do
     --key-id) KEY_ID="$2"; shift 2;;
     --issuer) ISSUER="$2"; shift 2;;
     --max-wait) MAX_WAIT="$2"; shift 2;;
+    --build) BUILD_VERSION="$2"; shift 2;;
+    --app-id) APP_ID_ARG="$2"; shift 2;;
     --no-submit) NO_SUBMIT=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -59,6 +61,10 @@ asc() { # asc METHOD PATH [JSON_BODY]
 # ---------- locate the app ----------
 APP_JSON=$(asc GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
 APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
+if [[ -z "$APP_ID" && -n "$APP_ID_ARG" ]]; then
+  echo "::warning::bundleId lookup failed; falling back to --app-id ${APP_ID_ARG}"
+  APP_ID="$APP_ID_ARG"
+fi
 [[ -n "$APP_ID" ]] || { echo "::error::no ASC app for bundleId ${BUNDLE_ID}: ${APP_JSON}" >&2; exit 1; }
 echo "app id: ${APP_ID}"
 
@@ -68,7 +74,13 @@ echo "app id: ${APP_ID}"
 echo "polling build ${VERSION} for processing (max ${MAX_WAIT} min)..."
 BUILD_ID=""
 for i in $(seq 1 "$((MAX_WAIT*2))"); do
-  B=$(asc GET "/v1/apps/${APP_ID}/builds?filter%5Bversion%5D=${VERSION}&sort=-uploadedDate&limit=1")
+  # Poll keyed on the BUILD number (CFBundleVersion) when given - the short
+  # version alone can match a stale build or none at all (#5139 invariant 1).
+  if [[ -n "$BUILD_VERSION" ]]; then
+    B=$(asc GET "/v1/apps/${APP_ID}/builds?filter%5Bversion%5D=${BUILD_VERSION}&sort=-uploadedDate&limit=1")
+  else
+    B=$(asc GET "/v1/apps/${APP_ID}/builds?sort=-uploadedDate&limit=1")
+  fi
   STATE=$(echo "$B" | jq -r '.data[0].attributes.processingState // empty' 2>/dev/null)
   BUILD_ID=$(echo "$B" | jq -r '.data[0].id // empty' 2>/dev/null)
   case "$STATE" in
@@ -97,7 +109,17 @@ echo "reviewSubmission: ${RS_ID}"
 # ---------- locate the appStoreVersion to submit ----------
 AV=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=PREPARE_FOR_SUBMISSION&filter%5Bplatform%5D=${PLATFORM}")
 AV_ID=$(echo "$AV" | jq -r '.data[0].id // empty')
-[[ -n "$AV_ID" ]] || { echo "::error::no PREPARE_FOR_SUBMISSION version: ${AV}" >&2; exit 1; }
+if [[ -z "$AV_ID" ]]; then
+  # A version already in review means nothing to submit - that is the EXPECTED
+  # conflict class, not a defect. Emit a uniquely greppable line so acceptance
+  # logic never conflates it with a real failure (#5139 invariant 2).
+  INREVIEW=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=WAITING_FOR_REVIEW&filter%5Bplatform%5D=${PLATFORM}")
+  if [[ "$(echo "$INREVIEW" | jq -r '.data | length')" -gt 0 ]]; then
+    echo "EXPECTED_CONFLICT_ALREADY_IN_REVIEW: version $(echo "$INREVIEW" | jq -r '.data[0].attributes.versionString') is WAITING_FOR_REVIEW - nothing to submit"
+    exit 0
+  fi
+  echo "::error::no PREPARE_FOR_SUBMISSION version and none in review: ${AV}" >&2; exit 1
+fi
 
 # ---------- attach + submit ----------
 asc POST "/v1/reviewSubmissions/${RS_ID}/items" \

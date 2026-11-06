@@ -69,6 +69,14 @@ jobs:
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
 
+      - name: Derive build version (single source of truth)
+        shell: bash
+        run: |
+          # One value feeds CFBundleVersion, altool --bundle-version AND the
+          # submit script's build poll; a divergence makes the poll spin to
+          # timeout (#5139 invariant 1).
+          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d01)" >> "${GITHUB_ENV}"
+
       - name: Guard - MAS secrets configured?
         shell: bash
         run: |
@@ -164,7 +172,7 @@ jobs:
           APP="build/bin/GGCode Desktop.app"
           plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
           plutil -replace CFBundleShortVersionString -string "${GGCODE_VERSION#v}" "$APP/Contents/Info.plist"
-          plutil -replace CFBundleVersion -string "$(date -u +%Y%m%d01)" "$APP/Contents/Info.plist"
+          plutil -replace CFBundleVersion -string "${MAS_BUILD_VERSION}" "$APP/Contents/Info.plist"
           plutil -replace LSMinimumSystemVersion -string "12.0" "$APP/Contents/Info.plist"
           printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > "${RUNNER_TEMP}/mas.mobileprovision"
           cp "${RUNNER_TEMP}/mas.mobileprovision" "$APP/Contents/embedded.provisionprofile"
@@ -223,7 +231,7 @@ jobs:
             --type macos \
             --apple-id "6755946388" \
             --bundle-id "gg.ai.ggcode" \
-            --bundle-version "$(date -u +%Y%m%d01)" \
+            --bundle-version "${MAS_BUILD_VERSION}" \
             --bundle-short-version-string "${GGCODE_VERSION#v}" \
             --apiKey "${APPLE_API_KEY_ID}" --api-issuer "${APPLE_API_ISSUER_ID}"
 
@@ -234,4 +242,13 @@ jobs:
           SUBMIT_FOR_REVIEW: "true"
         run: |
           chmod +x scripts/release/mas-submit-review.sh
-          ./scripts/release/mas-submit-review.sh  --bundle-id "gg.ai.ggcode"  --version "${GGCODE_VERSION#v}"  --platform MAC_OS  --key-path ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8  --key-id "${APPLE_API_KEY_ID}"  --issuer "${APPLE_API_ISSUER_ID}"  --max-wait 40
+          ./scripts/release/mas-submit-review.sh \
+            --bundle-id "gg.ai.ggcode" \
+            --app-id "${MAS_APP_ID:-6755946388}" \
+            --version "${GGCODE_VERSION#v}" \
+            --build "${MAS_BUILD_VERSION}" \
+            --platform MAC_OS \
+            --key-path ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8 \
+            --key-id "${APPLE_API_KEY_ID}" \
+            --issuer "${APPLE_API_ISSUER_ID}" \
+            --max-wait 40
