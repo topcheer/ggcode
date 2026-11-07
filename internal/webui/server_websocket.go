@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -15,8 +16,20 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
+// CheckOrigin 收紧(CSWSH 防护):同源放行;无 Origin 头(非浏览器客户端)放行;
+// 跨 Origin 拒绝。配合 auth 中间件的 Bearer/query token 双重校验。
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" {
+			return false
+		}
+		return u.Host == r.Host
+	},
 }
 
 func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
