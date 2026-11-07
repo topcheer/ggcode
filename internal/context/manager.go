@@ -1335,11 +1335,7 @@ func (m *Manager) CompactOldReasoningBlocks() int {
 		}
 	}
 
-	before := m.tokens
-	m.version++
-	m.nonTailMutSeq++
-	m.recalcTokens()
-	freed := before - m.tokens
+	freed := m.commitMechanicalCompaction()
 	debug.Log("ctx", "CompactOldReasoningBlocks: compacted %d reasoning blocks, freed ~%d tokens", len(targets), freed)
 	return freed
 }
