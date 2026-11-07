@@ -39,8 +39,10 @@ func TestIssue4794_GhWriteCommandsStayGated(t *testing.T) {
 		"gh issue close 4794 --reason completed",
 		"gh issue comment 4794 --body 'x'",
 		"gh issue create --title x",
-		"gh api repos/topcheer/ggcode/pages/builds",
 		"gh api -X POST repos/topcheer/ggcode/pages/builds",
+		// gh api without -X is a GET by gh's own default (#5199): verb-less
+		// api calls are now read-only, so the verb-explicit write forms
+		// carry this pin's gate contract instead.
 		"gh release create v1.2.3",
 		"gh run rerun 41288527298",
 		"gh issue 4794",

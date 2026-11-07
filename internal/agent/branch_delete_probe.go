@@ -1,0 +1,248 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+)
+
+// #5212: raw `git branch -D` via run_command bypassed every tool-seam guard
+// (exit_worktree remove has a rev-list probe; the detector only warns AFTER
+// the branch is already gone), so a completed unpushed fix branch was
+// silently deleted. This pre-flight probe resolves the branch names in a
+// force-delete command, counts commits not reachable from any remote, and
+// HARD-BLOCKS before execution while they exist - echoing the exit_worktree
+// semantics (block + name SHAs + explicit-intent escape).
+
+// allowUnpushedDeleteEnv is the explicit-intent escape: setting it to 1 in
+// the same command (env prefix or export) confirms the deletion is
+// intentional, mirroring exit_worktree(remove, discard_changes=true).
+const allowUnpushedDeleteEnv = "GGCODE_ALLOW_UNPUSHED_DELETE=1"
+
+// probeBudgetMarker is appended when a force-delete names more branches
+// than the probe budget covers; branchDeleteGuardBlock then fails closed
+// instead of silently skipping the unprobed tail (#5212 hardening).
+const probeBudgetMarker = "#probe-budget-exhausted#"
+
+var (
+	reBranchSegment   = regexp.MustCompile(`\bgit\s+branch\s+([^\n;|&]*)`)
+	reBranchDelFlag   = regexp.MustCompile(`^-D$|^-df$|^-fd$`)
+	reBranchDelLongD  = regexp.MustCompile(`^--delete$`)
+	reBranchDelLongF  = regexp.MustCompile(`^--force$`)
+	probeMaxBranches  = 12
+	probeCmdTimeout   = 3 * time.Second
+	probeMaxSHAsNamed = 5
+)
+
+// gitLedSegments returns the shell segments that actually INVOKE git
+// (first non-env-assignment token is "git"), #5217: prose that merely
+// mentions "git branch -D" inside a gh comment body or review text must
+// not match substring patterns - matching is argv-grounded per segment.
+func gitLedSegments(cmd string) []string {
+	var out []string
+	for _, seg := range irrevSplitShellSegments(cmd) {
+		fields := strings.Fields(strings.TrimSpace(seg))
+		for len(fields) > 0 && isEnvAssignment(fields[0]) {
+			fields = fields[1:]
+		}
+		if len(fields) > 0 && fields[0] == "git" {
+			out = append(out, strings.Join(fields, " "))
+		}
+	}
+	return out
+}
+
+// allowUnpushedDeletePrefix reports whether the explicit-intent escape is
+// present as a command-segment env assignment (GGCODE_ALLOW_UNPUSHED_DELETE=1
+// git branch -D x, possibly after &&/;/cd chains) rather than as a bare
+// substring (echo "GGCODE_ALLOW_UNPUSHED_DELETE=1" does NOT authorize).
+func allowUnpushedDeletePrefix(command string) bool {
+	for _, seg := range strings.FieldsFunc(command, func(r rune) bool {
+		return r == '\n' || r == ';' || r == '|' || r == '&'
+	}) {
+		fields := strings.Fields(seg)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "GGCODE_ALLOW_UNPUSHED_DELETE=1" &&
+				strings.HasPrefix(fields[i+1], "git") {
+				return true
+			}
+		}
+	}
+	return false
+
+}
+
+// extractForceDeletedBranches returns the branch names targeted by a force
+// delete (-D / -df / -fd / --delete --force) in git-led segments of the
+// command. Safe deletes (-d / --delete without --force) return nothing:
+// git already refuses those on unmerged branches. (#5217: prose mentions
+// inside non-git segments are ignored.)
+func extractForceDeletedBranches(cmd string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, seg := range gitLedSegments(cmd) {
+		matches := reBranchSegment.FindAllStringSubmatch(seg, -1)
+		for _, m := range matches {
+			fields := strings.Fields(m[1])
+			force := false
+			hasLongDelete, hasLongForce := false, false
+			for _, f := range fields {
+				if strings.HasPrefix(f, "-") {
+					if reBranchDelFlag.MatchString(f) {
+						force = true
+					}
+					if reBranchDelLongD.MatchString(f) {
+						hasLongDelete = true
+					}
+					if reBranchDelLongF.MatchString(f) {
+						hasLongForce = true
+					}
+				}
+			}
+			if hasLongDelete && hasLongForce {
+				force = true
+			}
+			if !force {
+				continue
+			}
+			for _, f := range fields {
+				if f == "" || strings.HasPrefix(f, "-") {
+					continue
+				}
+				if !seen[f] {
+					seen[f] = true
+					out = append(out, f)
+				}
+			}
+		}
+	}
+	if len(out) > probeMaxBranches {
+		// #5212 ownership hardening: a silent cap is the same silent-loss
+		// failure mode this guard exists for - a force-delete naming > cap
+		// branches where only the over-cap tail is unpushed slipped through
+		// unprobed (empirically confirmed: dirty 5th branch escaped cap=4).
+		// The cap now only bounds the probe budget; exhaustion fails CLOSED
+		// via the sentinel below, never a silent skip.
+		out = append(out[:probeMaxBranches], probeBudgetMarker)
+	}
+	return out
+}
+
+// gitProbe runs a read-only git probe in workDir. Any failure returns a
+// zero value: the probe is fail-safe and never blocks on its own errors
+// (the post-exec advisory detector still covers those cases).
+func gitProbe(workDir string, args ...string) string {
+	if workDir == "" {
+		workDir = "."
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeCmdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", workDir}, args...)...).
+		CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// branchUnpushedState returns (count, shaList) of commits on branch that no
+// remote ref reaches. Empty shaList with count 0 means fully pushed.
+func branchUnpushedState(workDir, branch string) (int, string) {
+	countStr := gitProbe(workDir, "rev-list", "--count", branch, "--not", "--remotes")
+	if countStr == "" {
+		return 0, ""
+	}
+	count := 0
+	if _, err := fmt.Sscanf(countStr, "%d", &count); err != nil || count <= 0 {
+		return 0, ""
+	}
+	shas := gitProbe(workDir, "rev-list", branch, "--not", "--remotes",
+		fmt.Sprintf("--max-count=%d", probeMaxSHAsNamed))
+	return count, shas
+}
+
+// branchDeleteGuardBlock returns a hard-block message when the command
+// force-deletes branches that carry unpushed commits. "" means allowed.
+func branchDeleteGuardBlock(workDir, command string) string {
+	if allowUnpushedDeletePrefix(command) {
+		return ""
+	}
+	branches := extractForceDeletedBranches(command)
+	if len(branches) == 0 {
+		return ""
+	}
+	if slices.Contains(branches, probeBudgetMarker) {
+		// Fail closed: > probeMaxBranches force-deleted in one command; the
+		// unprobed tail could carry the unpushed work (a silent cap is the
+		// same silent-loss failure mode this guard exists for).
+		return fmt.Sprintf(
+			"[branch-delete-guard] BLOCKED (pre-execution, #5212): force-deleting %d+ branches at once exceeds the probe budget (%d). "+
+				"Split the command so each force-delete can be probed for unpushed commits, or re-run the exact command prefixed with %s to confirm intentional deletion.",
+			len(branches), probeMaxBranches, allowUnpushedDeleteEnv)
+	}
+	var offenders []string
+	for _, br := range branches {
+		count, shas := branchUnpushedState(workDir, br)
+		if count > 0 {
+			offenders = append(offenders, fmt.Sprintf("- %s: %d unpushed commit(s)%s",
+				br, count, formatProbeSHAs(shas)))
+		}
+	}
+	if len(offenders) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"[branch-delete-guard] BLOCKED (pre-execution, #5212): force-deleting %s. "+
+			"These branches carry commits not on ANY remote:\n%s\n"+
+			"Silent deletion is the failure mode this guard exists for. Options: "+
+			"(1) push first (git push origin <branch>); (2) merge/rebase so the commits land on a remote-reachable branch; "+
+			"(3) if the work is INTENTIONALLY abandoned, re-run the exact command prefixed with %s to confirm you have read the SHAs above. "+
+			"Recovery note: deleted tips remain reachable via reflog for ~90 days (git reflog show <branch>).",
+		quoteBranches(branches),
+		strings.Join(offenders, "\n"),
+		allowUnpushedDeleteEnv)
+}
+
+func formatProbeSHAs(shas string) string {
+	if shas == "" {
+		return ""
+	}
+	lines := strings.Split(shas, "\n")
+	if len(lines) > probeMaxSHAsNamed {
+		lines = lines[:probeMaxSHAsNamed]
+	}
+	return ": " + strings.Join(lines, " ")
+}
+
+func quoteBranches(branches []string) string {
+	quoted := make([]string, len(branches))
+	for i, b := range branches {
+		quoted[i] = "'" + b + "'"
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// branchForceDeleteInGitSegment reports whether some git-led segment of
+// the command contains a branch -D / --delete --force invocation.
+func branchForceDeleteInGitSegment(cmd string) bool {
+	for _, seg := range gitLedSegments(cmd) {
+		if reGitBranchDelete.MatchString(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// branchForceMoveInGitSegment is the #5217 same-family check for branch -f.
+func branchForceMoveInGitSegment(cmd string) bool {
+	for _, seg := range gitLedSegments(cmd) {
+		if reGitBranchForceMove.MatchString(seg) {
+			return true
+		}
+	}
+	return false
+}

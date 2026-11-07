@@ -156,9 +156,10 @@ func NewSubAgentManager(
 	// Single-shot context-isolated LLM calls (translate/polish/SVG/...) share
 	// the same provider wiring as spawn but bypass the agent loop entirely.
 	_ = registry.Register(tool.LLMCallTool{
-		Provider:       prov,
-		ProviderGetter: providerGetter,
-		WorkingDir:     workingDir,
+		Provider:        prov,
+		ProviderGetter:  providerGetter,
+		AvailableModels: availableModels,
+		WorkingDir:      workingDir,
 	})
 
 	_ = registry.Register(tool.BestOfNTool{

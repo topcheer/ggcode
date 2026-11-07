@@ -342,9 +342,14 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 		defer close(out)
 		defer safego.Recover("provider.fallback.streamWatcher")
 		sawOutput := false
+		sawError := false
+		// #5193: a clean close resets the consecutive-fail counter even with
+		// zero output events - the request cycle succeeded (stream opened
+		// and closed without an error event), matching the Chat path's
+		// unconditional err==nil reset. Only a stream that DELIVERED an
+		// error event keeps the counter alive.
 		resetOnSuccess := func() {
-			if sawOutput {
-
+			if !sawError {
 				f.consecutiveFail.Store(0)
 			}
 		}
@@ -379,7 +384,6 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 			}
 			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
 				_, canRetry := f.maybeFailover(ev.Error, failedIdx)
-
 				if canRetry && hopsLeft > 0 {
 					f.mu.RLock()
 					newIdx2 := int(f.activeIdx.Load())
@@ -419,6 +423,8 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 
 								if ev2.Type != StreamEventError {
 									sawOutput = sawOutput || ev2.Type != StreamEventSystem
+								} else {
+									sawError = true
 								}
 								if !send(ev2) {
 									return
@@ -440,6 +446,9 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 				}
 			}
 			sawOutput = sawOutput || (ev.Type != StreamEventError && ev.Type != StreamEventSystem)
+			if ev.Type == StreamEventError {
+				sawError = true // delivered-to-consumer error keeps the counter
+			}
 			if !send(ev) {
 				return
 			}

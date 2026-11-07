@@ -264,7 +264,7 @@ func (t LanChatTool) Description() string {
 		"- Check action='list' for agent_busy status before messaging. Don't message busy agents unless urgent.\n" +
 		"- One message per task. No follow-up pings - check action='list' or wait.\n\n" +
 		"Actions: list, send (DM), broadcast (your team), broadcast_all (everyone), send_team, history, pending, approve, reject, set_identity. " +
-		"Nick format: <name>_<role>. Use node_id from list as 'to' field, not nick."
+		"Nick format: <name>_<role>. Prefer addressing DMs by nick (survives peer restarts); use node_id only to break ties between identical nicks."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {
@@ -282,7 +282,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"to": {
 				"type": "string",
-				"description": "Recipient node_id(s) for 'send' action (DM). Single recipient: \"node-id\". Multiple recipients: comma-separated \"id1,id2,id3\". Using to='*' is equivalent to action='broadcast_all'. Find via action='list'. Ignored by broadcast/broadcast_all/send_team actions."
+				"description": "Recipient for 'send' action (DM). Prefer the recipient's nick (e.g. 'alice_dev') - nicks are stable across peer restarts and are re-resolved at send time. A node_id works too but rotates every time the peer process restarts. Multiple recipients: comma-separated. Using to='*' is equivalent to action='broadcast_all'. Find current participants via action='list'."
 			},
 			"nick": {
 				"type": "string",
@@ -425,6 +425,181 @@ func joinNodeIDs(set map[string]bool) string {
 	return strings.Join(ids, ", ")
 }
 
+// rebindStaleIDs rewrites stale resolved ids to the node_id currently
+// holding the same nick (#5200: node_ids rotate on every peer restart, so a
+// sender holding the previous id must re-resolve instead of bouncing). A
+// rebind applies only when the nick has exactly one fresh holder that is
+// not the sender (Hub.LookupPeerIDByNick enforces uniqueness under one
+// lock); anything else keeps the stale id in the output so the #5117
+// fail-fast refusal reports it with the re-list hint. A second copy of a
+// fresh target collapses onto the target instead of duplicating it.
+// Lookup order: live map nick (covers the pre-sweep window where the stale
+// entry still coexists with the fresh registration) then the archive ring
+// (covers post-sweep: the stale entry was archived + deleted after 10m,
+// the archived nick still identifies the restarted peer).
+func (t LanChatTool) rebindStaleIDs(resolved []string) ([]string, []staleRebind) {
+	var out []string
+	var rebinds []staleRebind
+	seenOut := make(map[string]bool, len(resolved))
+	for _, id := range resolved {
+		if _, stale := t.Hub.StaleRecipient(id); !stale {
+			if !seenOut[id] {
+				out = append(out, id)
+				seenOut[id] = true
+			}
+			continue
+		}
+		target, ok := "", false
+		nick := t.nickOf(id)
+		if nick != "" {
+			target, ok = t.Hub.LookupPeerIDByNick(nick)
+		}
+		if !ok {
+			// #4782 Gap A chain: entry already swept (archived + deleted
+			// after peerDeleteAfter), or its live nick holder set was itself
+			// ambiguous - the archive still remembers which nick the stale id
+			// carried, so a DM addressed to the dead id can follow the peer
+			// into its new process.
+			if ap := t.Hub.LookupArchiveByNodeID(id); ap != nil {
+				archNick := ap.AgentNick
+				if archNick == "" {
+					archNick = ap.HumanNick
+				}
+				if archNick != "" {
+					target, ok = t.Hub.LookupPeerIDByNick(archNick)
+					if ok {
+						nick = archNick
+					}
+				}
+			}
+		}
+		if ok && target != t.Hub.NodeID() {
+			rebinds = append(rebinds, staleRebind{oldID: id, nick: nick, newID: target})
+			if !seenOut[target] {
+				out = append(out, target)
+				seenOut[target] = true
+			}
+			continue
+		}
+		if !seenOut[id] {
+			out = append(out, id)
+			seenOut[id] = true
+		}
+	}
+	return out, rebinds
+}
+
+// nickNearMatches lists fresh participants whose nick is one edit away from
+// target (case-insensitive). Used when addressing fails: a one-char slip
+// (techwriter22 vs techwriter222) is exactly the mis-send shape #5200
+// reports, so the sender must see the valid neighbors before guessing.
+func (t LanChatTool) nickNearMatches(target string) []string {
+	if t.Hub == nil {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(target))
+	if lower == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var near []string
+	for _, p := range t.Hub.Participants() {
+		if _, stale := t.Hub.StaleRecipient(p.NodeID); stale {
+			continue
+		}
+		for _, nick := range []string{p.AgentNick, p.HumanNick} {
+			if nick == "" || seen[nick] {
+				continue
+			}
+			seen[nick] = true
+			if levenshtein(lower, strings.ToLower(nick)) == 1 {
+				near = append(near, nick)
+			}
+		}
+	}
+	sort.Strings(near)
+	return near
+}
+
+// nickOneEditAway reports whether any OTHER fresh participant's nick is
+// exactly one edit from the nick that resolved to nodeID. True means the
+// addressing sits one keystroke from a different, live recipient - the
+// fail-dangerous mis-DM shape from the S-73 report. Distance-1 only:
+// broader fuzzy matching would fire on ordinary nick families.
+func (t LanChatTool) nickOneEditAway(nodeID string) (string, bool) {
+	if t.Hub == nil {
+		return "", false
+	}
+	var mine []string
+	for _, p := range t.Hub.Participants() {
+		if p.NodeID != nodeID {
+			continue
+		}
+		for _, nick := range []string{p.AgentNick, p.HumanNick} {
+			if nick != "" {
+				mine = append(mine, strings.ToLower(nick))
+			}
+		}
+		break
+	}
+	if len(mine) == 0 {
+		return "", false
+	}
+	for _, p := range t.Hub.Participants() {
+		if p.NodeID == nodeID || p.NodeID == t.Hub.NodeID() {
+			continue
+		}
+		if _, stale := t.Hub.StaleRecipient(p.NodeID); stale {
+			continue
+		}
+		for _, nick := range []string{p.AgentNick, p.HumanNick} {
+			if nick == "" {
+				continue
+			}
+			nickLower := strings.ToLower(nick)
+			for _, m := range mine {
+				if levenshtein(m, nickLower) == 1 {
+					return nick, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func (t LanChatTool) nickOf(nodeID string) string {
+	if t.Hub == nil {
+		return ""
+	}
+	for _, p := range t.Hub.Participants() {
+		if p.NodeID == nodeID {
+			if p.AgentNick != "" {
+				return p.AgentNick
+			}
+			return p.HumanNick
+		}
+	}
+	return ""
+}
+
+type staleRebind struct {
+	oldID string
+	nick  string
+	newID string
+}
+
+// freshHoldersFrom filters a nick's holder id set down to fresh entries,
+// dropping stale pre-restart twins still awaiting the sweep (#5200).
+func (t LanChatTool) freshHoldersFrom(idSet map[string]bool) map[string]bool {
+	fresh := make(map[string]bool, len(idSet))
+	for id := range idSet {
+		if _, stale := t.Hub.StaleRecipient(id); !stale {
+			fresh[id] = true
+		}
+	}
+	return fresh
+}
+
 func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	resolved, ambiguous, _ := t.resolveRecipientsFull(ids)
 	return resolved, ambiguous
@@ -486,23 +661,35 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 		}
 
 		if idSet, ok := byNick[lower]; ok {
-			if len(idSet) > 1 {
+			// #5200: a nick's holders can include a stale pre-restart entry
+			// alongside the restarted peer's fresh registration. Only fresh
+			// holders count; the stale twin must not make nick addressing
+			// ambiguous.
+			freshSet := t.freshHoldersFrom(idSet)
+			if len(freshSet) > 1 {
 				ambiguous = append(ambiguous, fmt.Sprintf("%q matches %d peers with the same nick: %s - address by node_id instead",
-					raw, len(idSet), joinNodeIDs(idSet)))
+					raw, len(freshSet), joinNodeIDs(freshSet)))
 				continue
 			}
-			for id := range idSet {
-				if !seen[id] {
-					resolved = append(resolved, id)
-					seen[id] = true
+			if len(freshSet) == 1 {
+				for id := range freshSet {
+					if !seen[id] {
+						resolved = append(resolved, id)
+						seen[id] = true
+					}
 				}
+				continue
 			}
-			continue
 		}
 		var prefixHits []string
 		scanDedup := map[string]bool{}
 		for _, entry := range byPrefix {
 			if strings.HasPrefix(entry.nick, lower) && !scanDedup[entry.id] {
+				// #5200: stale pre-restart registrations must not count as
+				// prefix hits either (their nicks duplicate the fresh entry).
+				if _, staleHit := t.Hub.StaleRecipient(entry.id); staleHit {
+					continue
+				}
 				scanDedup[entry.id] = true
 				prefixHits = append(prefixHits, entry.id)
 			}
@@ -530,6 +717,24 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 		if ap == nil {
 
 			ap = t.Hub.LookupArchiveByNick(raw)
+		}
+
+		// #5200/#4782 Gap A: a stale/archived node_id resolves to the current
+		// fresh holder of the same nick (old id -> nick -> latest id), so a DM
+		// addressed to a pre-restart id follows the peer into its new process
+		// instead of bouncing.
+		if ap != nil && strings.EqualFold(ap.NodeID, strings.TrimSpace(raw)) {
+			archNick := ap.AgentNick
+			if archNick == "" {
+				archNick = ap.HumanNick
+			}
+			if archNick != "" {
+				if id, ok := t.Hub.LookupPeerIDByNick(archNick); ok && id != t.Hub.NodeID() && !seen[id] {
+					resolved = append(resolved, id)
+					seen[id] = true
+					continue
+				}
+			}
 		}
 
 		if ap != nil && ap.Team != "" && ap.Role != "" {
@@ -649,11 +854,31 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 			strings.Join(ambiguous, "\n"), hint.Content)}, nil
 	}
 	if len(resolved) == 0 {
-
+		nearHint := ""
+		var nears []string
+		for _, raw := range toNodeIDs {
+			nears = append(nears, t.nickNearMatches(raw)...)
+		}
+		if len(nears) > 0 {
+			nearHint = fmt.Sprintf("\nDid you mean: %s? (one-character difference - a near miss here can silently DM a different peer)", strings.Join(nears, ", "))
+		}
 		hint := t.doList("")
 		return Result{IsError: true, Content: fmt.Sprintf(
-			"no recipient found for: %s. Use action='list' to see valid node_ids and nicks.\n%s",
-			strings.Join(toNodeIDs, ", "), hint.Content)}, nil
+			"no recipient found for: %s.%s Use action='list' to see valid node_ids and nicks.\n%s",
+			strings.Join(toNodeIDs, ", "), nearHint, hint.Content)}, nil
+	}
+
+	// #5200: node_ids rotate on every peer restart. A resolved-but-stale
+	// id the sender cached from an earlier list means the peer restarted;
+	// if that peer's nick now has exactly one fresh holder, rebind the send
+	// to the current node_id (with a report line) instead of bouncing the
+	// DM. Un-rebindable stale ids fall through to the #5117 fail-fast gate
+	// below.
+	var rebindLines []string
+	resolved, rebindLines2 := t.rebindStaleIDs(resolved)
+	for _, rb := range rebindLines2 {
+		rebindLines = append(rebindLines, fmt.Sprintf("%s restarted; rebound %s -> %s (current holder of nick %q)",
+			rb.nick, rb.oldID, rb.newID, rb.nick))
 	}
 
 	if toRole == "" {
@@ -753,6 +978,24 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	result := fmt.Sprintf("Message sent to %s as %s", target, role)
+
+	if len(rebindLines) > 0 {
+		result += fmt.Sprintf("\nRebound after peer restart (#5200):\n%s", strings.Join(rebindLines, "\n"))
+	}
+	// #5200 mis-send guard: if any recipient's nick sits one edit from
+	// another live peer's nick (techwriter22 vs techwriter222), say so on
+	// the success line - a one-char addressing slip otherwise delivers
+	// silently to the wrong seat.
+	var nearWarns []string
+	for _, id := range resolved {
+		if near, hit := t.nickOneEditAway(id); hit {
+			nearWarns = append(nearWarns, fmt.Sprintf("delivered to %s; peer %q has a near-identical nick - verify the intended recipient before sending secrets or retraction commands",
+				t.displayName(id), near))
+		}
+	}
+	if len(nearWarns) > 0 {
+		result += fmt.Sprintf("\n⚠ Near-identical nick warning (#5200):\n%s", strings.Join(nearWarns, "\n"))
+	}
 
 	if len(unresolvedInputs) > 0 {
 		result += fmt.Sprintf(" (%d recipient(s) could not be resolved and were skipped: %s)",

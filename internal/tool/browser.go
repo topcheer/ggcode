@@ -45,6 +45,12 @@ type Browser struct {
 	gcStop   chan struct{}
 	gcClose  sync.Once
 	refs     *browserRefRegistry
+	// #5215: Browser has local-file side effects (screenshot output_path
+	// write, upload path read) and previously bypassed the sandbox
+	// architecture entirely. Nil checkers = fail-open (matches
+	// readSandboxFor semantics when no policy is configured).
+	SandboxCheck     AllowedPathChecker // screenshot output_path (write face)
+	ReadSandboxCheck AllowedPathChecker // upload path (read face)
 }
 
 func NewBrowser() *Browser {
@@ -53,6 +59,13 @@ func NewBrowser() *Browser {
 		gcStop:   make(chan struct{}),
 		refs:     newBrowserRefRegistry(),
 	}
+}
+
+func NewBrowserWithSandbox(writeCheck, readCheck AllowedPathChecker) *Browser {
+	b := NewBrowser()
+	b.SandboxCheck = writeCheck
+	b.ReadSandboxCheck = readCheck
+	return b
 }
 
 func (b *Browser) Name() string { return "browser" }
@@ -331,13 +344,18 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+		// #5209 D2: layered snapshot budget - top-level min(wait_timeout
+		// default 3s, 8s hard cap) via ctx; iframe budgets are enforced inside
+		// the probe JS (1s shared / 500ms per child). A timed-out frame yields
+		// zero refs and the output carries an explicit truncation marker;
+		// partial results beat total failure.
+		timeoutCtx, cancel := context.WithTimeout(tab.ctx, snapshotTopLevelBudget(a.WaitTimeout))
 		defer cancel()
-		entries, err := b.collectBrowserRefs(timeoutCtx, a.Profile, a.Session)
+		entries, timedOut, err := b.collectBrowserRefs(timeoutCtx, a.Profile, a.Session)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("snapshot failed: %v", err)}, nil
 		}
-		return Result{Content: renderRefTree(entries) + "\n\nUse a ref (e.g. '@e3') in the selector parameter of click/type/extract/select/hover/upload/scroll. Refs stay valid until this tab navigates."}, nil
+		return Result{Content: renderSnapshotOutput(entries, timedOut)}, nil
 	},
 
 	"open_tab": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
@@ -664,6 +682,31 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	urlBefore, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateBefore := b.evaluateClickState(timeoutCtx, selector)
 
+	// #5209 D1: disambiguate before dispatching - ambiguous selectors (no
+	// unique visible match) report with top-5 candidates instead of clicking
+	// the first document-order match (often a hidden responsive duplicate).
+	matched, matchIndex, resolveErr := b.resolveTarget(timeoutCtx, selector)
+	if resolveErr != nil && !isProbeTransportError(resolveErr) {
+		return Result{IsError: true, Content: resolveErr.Error()}, nil
+	}
+	if matched && matchIndex > 0 {
+		// Unique visible match is NOT the first document-order match:
+		// chromedp.Click would hit the hidden duplicate - dispatch at the
+		// resolved index instead.
+		if _, jsErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](clickAtMatchJS(selector, matchIndex))); jsErr != nil {
+			return b.browserActionFailure("click", tab.ctx, selector, jsErr), nil
+		}
+		if waitFor != "" {
+			if wErr := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(waitFor))); wErr != nil {
+				return b.browserActionFailure("click", tab.ctx, waitFor, wErr), nil
+			}
+		}
+		urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
+		stateAfter := b.evaluateClickState(timeoutCtx, selector)
+		note := clickEffectNote(urlBefore, "", stateBefore, stateAfter)
+		return Result{Content: fmt.Sprintf("Clicked: %s (visible match #%d)\nCurrent URL: %s%s", selector, matchIndex, urlAfter, note)}, nil
+	}
+
 	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.WaitVisible(chromedp.CSS(selector)),
 		chromedp.Click(chromedp.CSS(selector)),
@@ -739,6 +782,19 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate - same probe as click. When the unique
+	// visible match is not the first document-order match, the SendKeys chain
+	// would type into the hidden duplicate: refuse with a clear message
+	// rather than silently mistype (exact retargeting lands with D3).
+	typeMatched, typeIndex, typeResolveErr := b.resolveTarget(timeoutCtx, selector)
+	if typeResolveErr != nil && !isProbeTransportError(typeResolveErr) {
+		return Result{IsError: true, Content: typeResolveErr.Error()}, nil
+	}
+	if typeMatched && typeIndex > 0 {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"type: unique visible match for %q is document-order match #%d (the first match is hidden); use snapshot @eN refs to target it exactly", selector, typeIndex)}, nil
+	}
 
 	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.WaitVisible(chromedp.CSS(selector)),
@@ -836,7 +892,38 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 	return Result{Content: pageText}, nil
 }
 
+// checkScreenshotPath is the #5215 write-face gate for output_path.
+// Returns (blockMsg, blocked). Pure so it is unit-testable without a
+// browser session.
+func (b *Browser) checkScreenshotPath(abs string) (string, bool) {
+	if b.SandboxCheck != nil && !b.SandboxCheck(abs) {
+		return fmt.Sprintf(
+			"screenshot output_path blocked by workspace sandbox: %s "+
+				"(use a path inside the workspace, #5215/#712)", abs), true
+	}
+	return "", false
+}
+
+// checkUploadPath is the #5215 read-face gate for the upload path.
+func (b *Browser) checkUploadPath(absPath string) (string, bool) {
+	if b.ReadSandboxCheck != nil && !b.ReadSandboxCheck(absPath) {
+		return fmt.Sprintf(
+			"upload file blocked by workspace sandbox: %s "+
+				"(file reads for upload must stay inside the allowed paths, #5215/#712)", absPath), true
+	}
+	return "", false
+}
+
 func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool, outputPath string) (Result, error) {
+	if outputPath != "" {
+		abs0, err0 := filepath.Abs(outputPath)
+		if err0 != nil {
+			abs0 = outputPath
+		}
+		if msg, blocked := b.checkScreenshotPath(abs0); blocked {
+			return Result{IsError: true, Content: msg}, nil
+		}
+	}
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -937,6 +1024,13 @@ func (b *Browser) doWait(ctx context.Context, profile, session, selector string,
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate for wait - an ambiguous selector (no
+	// unique visible match) fails fast with candidates instead of silently
+	// timing out on whichever element the engine picks.
+	if waitRes := b.precheckTarget(timeoutCtx, selector); waitRes != nil {
+		return *waitRes, nil
+	}
 
 	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("wait timed out after %ds: %v", timeout, err)}, nil
@@ -1192,6 +1286,12 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
+	// #5209 D1: disambiguation gate (report-only for select; exact
+	// retargeting follows the type-action pattern until D3).
+	if selRes := b.precheckTarget(timeoutCtx, selector); selRes != nil {
+		return *selRes, nil
+	}
+
 	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
 	}
@@ -1245,6 +1345,23 @@ func (b *Browser) doHover(ctx context.Context, profile, session, selector string
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate - dispatch mouse events at the unique
+	// visible match, not the first document-order (possibly hidden) one.
+	hoverMatched, hoverIndex, hoverErr := b.resolveTarget(timeoutCtx, selector)
+	if hoverErr != nil && !isProbeTransportError(hoverErr) {
+		return Result{IsError: true, Content: hoverErr.Error()}, nil
+	}
+	if hoverMatched && hoverIndex > 0 {
+		hoverJS := fmt.Sprintf(`(() => { const m = document.querySelectorAll(%q); if (m.length <= %d) return false; const el = m[%d];
+			el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+			el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true })); return true; })()`, selector, hoverIndex, hoverIndex)
+		if _, jsErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](hoverJS)); jsErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("hover failed: %v", jsErr)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Hovered over: %s (visible match #%d)", selector, hoverIndex)}, nil
+	}
 
 	js := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%q);
@@ -1322,14 +1439,17 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 }
 
 func (b *Browser) doUpload(ctx context.Context, profile, session, selector, filePath string, headless *bool) (Result, error) {
-	tab, err := b.getSession(profile, session, headless)
-	if err != nil {
-		return Result{IsError: true, Content: err.Error()}, nil
-	}
-
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid file path: %v", err)}, nil
+	}
+	// #5215: fail fast on the read-face gate before any browser work.
+	if msg, blocked := b.checkUploadPath(absPath); blocked {
+		return Result{IsError: true, Content: msg}, nil
+	}
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	if _, err := os.Stat(absPath); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("file not found: %s", absPath)}, nil
