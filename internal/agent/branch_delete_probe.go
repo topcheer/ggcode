@@ -38,6 +38,24 @@ var (
 	probeMaxSHAsNamed = 5
 )
 
+// gitLedSegments returns the shell segments that actually INVOKE git
+// (first non-env-assignment token is "git"), #5217: prose that merely
+// mentions "git branch -D" inside a gh comment body or review text must
+// not match substring patterns - matching is argv-grounded per segment.
+func gitLedSegments(cmd string) []string {
+	var out []string
+	for _, seg := range irrevSplitShellSegments(cmd) {
+		fields := strings.Fields(strings.TrimSpace(seg))
+		for len(fields) > 0 && isEnvAssignment(fields[0]) {
+			fields = fields[1:]
+		}
+		if len(fields) > 0 && fields[0] == "git" {
+			out = append(out, strings.Join(fields, " "))
+		}
+	}
+	return out
+}
+
 // allowUnpushedDeletePrefix reports whether the explicit-intent escape is
 // present as a command-segment env assignment (GGCODE_ALLOW_UNPUSHED_DELETE=1
 // git branch -D x, possibly after &&/;/cd chains) rather than as a bare
@@ -55,45 +73,50 @@ func allowUnpushedDeletePrefix(command string) bool {
 		}
 	}
 	return false
+
 }
 
 // extractForceDeletedBranches returns the branch names targeted by a force
-// delete (-D / -df / -fd / --delete --force) in the command. Safe deletes
-// (-d / --delete without --force) return nothing: git already refuses those
-// on unmerged branches.
+// delete (-D / -df / -fd / --delete --force) in git-led segments of the
+// command. Safe deletes (-d / --delete without --force) return nothing:
+// git already refuses those on unmerged branches. (#5217: prose mentions
+// inside non-git segments are ignored.)
 func extractForceDeletedBranches(cmd string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, m := range reBranchSegment.FindAllStringSubmatch(cmd, -1) {
-		fields := strings.Fields(m[1])
-		force := false
-		hasLongDelete, hasLongForce := false, false
-		for _, f := range fields {
-			if strings.HasPrefix(f, "-") {
-				if reBranchDelFlag.MatchString(f) {
-					force = true
-				}
-				if reBranchDelLongD.MatchString(f) {
-					hasLongDelete = true
-				}
-				if reBranchDelLongF.MatchString(f) {
-					hasLongForce = true
+	for _, seg := range gitLedSegments(cmd) {
+		matches := reBranchSegment.FindAllStringSubmatch(seg, -1)
+		for _, m := range matches {
+			fields := strings.Fields(m[1])
+			force := false
+			hasLongDelete, hasLongForce := false, false
+			for _, f := range fields {
+				if strings.HasPrefix(f, "-") {
+					if reBranchDelFlag.MatchString(f) {
+						force = true
+					}
+					if reBranchDelLongD.MatchString(f) {
+						hasLongDelete = true
+					}
+					if reBranchDelLongF.MatchString(f) {
+						hasLongForce = true
+					}
 				}
 			}
-		}
-		if hasLongDelete && hasLongForce {
-			force = true
-		}
-		if !force {
-			continue
-		}
-		for _, f := range fields {
-			if f == "" || strings.HasPrefix(f, "-") {
+			if hasLongDelete && hasLongForce {
+				force = true
+			}
+			if !force {
 				continue
 			}
-			if !seen[f] {
-				seen[f] = true
-				out = append(out, f)
+			for _, f := range fields {
+				if f == "" || strings.HasPrefix(f, "-") {
+					continue
+				}
+				if !seen[f] {
+					seen[f] = true
+					out = append(out, f)
+				}
 			}
 		}
 	}
@@ -201,4 +224,25 @@ func quoteBranches(branches []string) string {
 		quoted[i] = "'" + b + "'"
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// branchForceDeleteInGitSegment reports whether some git-led segment of
+// the command contains a branch -D / --delete --force invocation.
+func branchForceDeleteInGitSegment(cmd string) bool {
+	for _, seg := range gitLedSegments(cmd) {
+		if reGitBranchDelete.MatchString(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// branchForceMoveInGitSegment is the #5217 same-family check for branch -f.
+func branchForceMoveInGitSegment(cmd string) bool {
+	for _, seg := range gitLedSegments(cmd) {
+		if reGitBranchForceMove.MatchString(seg) {
+			return true
+		}
+	}
+	return false
 }
