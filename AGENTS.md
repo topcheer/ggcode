@@ -30,6 +30,16 @@ go vet -tags goolm ./...
 CGO_ENABLED=0 go build -tags goolm ./...
 ```
 
+**Deadcode/unreachable caveat** (#5204): the reachability pass does NOT
+see interface-value dispatch. Methods whose only call path is a struct
+stored in an interface field, a `Register(x Interface)` call, or an
+interface-typed parameter (the standard house wiring - LLMCallTool,
+MemoryBindingStore.Delete, PKCETokenProvider.GetToken were all
+false-positived) report as unreachable. Before deleting anything
+flagged, grep the symbol AND its registration/wiring site; an
+interface-dispatched symbol is live until that cross-check comes back
+empty.
+
 **Key rule**: Always use `-tags goolm`. Without it, CGO-only packages (e.g. `go-olm`) will fail to compile.
 
 ## Major Directories
