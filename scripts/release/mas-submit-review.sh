@@ -249,10 +249,20 @@ if [[ -z "${LOC_IDS// }" ]]; then
 fi
 for LOC_ID in $LOC_IDS; do
   refresh_jwt_if_needed
-  if asc "-" PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null; then
+  # Soft asc() cannot fail its caller: it warns on non-2xx and still ends
+  # with `printf '%s' "$resp"`, so it always returns exit 0 - the old
+  # `if asc ...` always took the then-branch and printed "whats-new set on"
+  # after a failed PATCH (HTTP 409, run 42359007107), leaving the warning
+  # branch below dead code (#5234). Judge success by the HTTP status asc()
+  # records in /tmp/asc-last-code (same source the poll loop trusts for its
+  # 401 streak); `|| true` keeps set -e out of this arm, and "000" covers
+  # curl transport failures where no HTTP status exists at all.
+  asc "-" PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null || true
+  LOC_PATCH_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+  if [[ "$LOC_PATCH_CODE" == 2* ]]; then
     echo "whats-new set on ${LOC_ID}"
   else
-    echo "::warning::whats-new patch failed on ${LOC_ID} - continuing"
+    echo "::warning::whats-new patch failed on ${LOC_ID} (HTTP ${LOC_PATCH_CODE}) - continuing"
   fi
 done
 
