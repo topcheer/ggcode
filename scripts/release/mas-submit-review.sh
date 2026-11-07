@@ -294,7 +294,26 @@ for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
       asc "clear-stale-submission" DELETE "/v1/appStoreVersionSubmissions/${STALE_ID}" > /dev/null
       echo "submit: cleared stale submission ${STALE_ID} (attempt $w/12)"
     else
-      echo "submit: CREATE still blocked, no stale object found - waiting 15s (attempt $w/12)"
+      # Run 42372506928: legacy relationship 404 yet CREATE blocked - the
+      # blocker is a NEW-style reviewSubmission (created by the pre-#5230
+      # flow, left unsubmitted) holding this version as an item. Remove the
+      # item to release the version (reviewSubmissions has no DELETE; its
+      # items do - DELETE /v1/reviewSubmissionItems/{id}).
+      refresh_jwt_if_needed
+      RS_LIST=$(asc "-" GET "/v1/reviewSubmissions?filter%5Bapp%5D=${APP_ID}&limit=20")
+      CLEARED_ANY=0
+      for RS_ID in $(echo "$RS_LIST" | jq -r '.data[].id // empty' 2>/dev/null); do
+        refresh_jwt_if_needed
+        ITEMS=$(asc "-" GET "/v1/reviewSubmissions/${RS_ID}/items?limit=50")
+        for ITEM_ID in $(echo "$ITEMS" | jq -r --arg av "${AV_ID}" '.data[] | select(.relationships.appStoreVersion.data.id == $av) | .id // empty' 2>/dev/null); do
+          asc "clear-review-submission-item" DELETE "/v1/reviewSubmissionItems/${ITEM_ID}" > /dev/null
+          echo "submit: removed reviewSubmissionItem ${ITEM_ID} (submission ${RS_ID}) holding the version"
+          CLEARED_ANY=1
+        done
+      done
+      if [[ "$CLEARED_ANY" == "0" ]]; then
+        echo "submit: CREATE blocked, neither legacy submission nor reviewSubmissionItem found - waiting 15s (attempt $w/12)"
+      fi
     fi
     sleep 15
     continue
