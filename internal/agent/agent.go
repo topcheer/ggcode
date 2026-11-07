@@ -3399,7 +3399,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError && (fileEditingTools[tc.Name] || tc.Name == "apply_patch") {
 
 				a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
-				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+				for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
 
 					if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
@@ -3466,7 +3466,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if result.IsError && fileEditingTools[tc.Name] {
 				a.convergenceRecordEditError()
-				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+				for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
