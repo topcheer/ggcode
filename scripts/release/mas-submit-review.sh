@@ -71,7 +71,7 @@ make_jwt() {
   now=$(date +%s)
   JWT_EXP=$((now + 1200))
   hdr=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
-  payload=$(printf '{"iss":"%s","iat":%d,"exp":%d}' "$ISSUER" "$now" "$JWT_EXP" | b64url)
+  payload=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$ISSUER" "$now" "$JWT_EXP" | b64url)
   sig_input="${hdr}.${payload}"
   # ES256 per RFC 7515 requires the RAW 64-byte r||s signature. `openssl dgst
   # -sign` emits DER (~70 bytes) — signing with DER verbatim yields ASC
