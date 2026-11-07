@@ -525,8 +525,16 @@ func isSourceCodeFile(path string) bool {
 	return sourceCodeExtensions[ext]
 }
 
+// mutatingSourceEdit is the #5249-consistent gate: the #3006-pinned
+// canonical map UNION apply_patch (Responses-native edits ride
+// mutatesSourceTree semantics). Use this wherever edits feed trackers or
+// evidence gates - do not re-enlarge the pinned map.
+func mutatingSourceEdit(toolName string) bool {
+	return fileEditingTools[toolName] || toolName == "apply_patch"
+}
+
 func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string {
-	if !fileEditingTools[toolName] {
+	if !mutatingSourceEdit(toolName) { // #5249: was bare fileEditingTools - apply_patch never incremented sourceEditsThisRun
 		return ""
 	}
 
