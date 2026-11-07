@@ -125,7 +125,10 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitBranchDelete.MatchString(cmd) {
+	// #5217: argv-grounded - only fire when a shell segment actually
+	// INVOKES git; prose quoting "git branch -D" inside a gh comment body
+	// or review text must not trigger a CRITICAL.
+	if branchForceDeleteInGitSegment(cmd) {
 		found = append(found, destructivePattern{
 			name:        "branch_force_delete",
 			severity:    "critical",
@@ -134,7 +137,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitBranchForceMove.MatchString(cmd) {
+	if branchForceMoveInGitSegment(cmd) { // #5217 argv-grounding, same family
 		found = append(found, destructivePattern{
 			name:     "branch_force_move",
 			severity: "warning",
