@@ -253,7 +253,12 @@ func (t ExitWorktree) Parameters() json.RawMessage {
 		"discard_changes": {
 			"type": "boolean",
 			"default": false,
-			"description": "If true, discard uncommitted changes when removing. Required when there are uncommitted changes."
+			"description": "If true, discard uncommitted changes when removing. Required when there are uncommitted changes. Does NOT authorize deleting branches that carry unpushed/unmerged commits - that needs force_delete_branch."
+		},
+		"force_delete_branch": {
+			"type": "boolean",
+			"default": false,
+			"description": "(#5212) Required to delete a branch that carries commits not on any remote or not merged into HEAD. discard_changes alone never deletes such a branch."
 		},
 		"description": {
 			"type": "string",
@@ -269,8 +274,9 @@ func (t ExitWorktree) Parameters() json.RawMessage {
 
 func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		Action         string `json:"action"`
-		DiscardChanges bool   `json:"discard_changes"`
+		Action            string `json:"action"`
+		DiscardChanges    bool   `json:"discard_changes"`
+		ForceDeleteBranch bool   `json:"force_delete_branch"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -354,9 +360,53 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		unmerged, _ := strconv.Atoi(strings.TrimSpace(string(unmergedOut)))
 		unpushed, _ := strconv.Atoi(strings.TrimSpace(string(unpushedOut)))
 
-		if uerr1 == nil && uerr2 == nil && (unmerged > 0 || unpushed > 0) && !args.DiscardChanges {
+		// #5212 gate: count commits that would be ORPHANED by `branch -D` -
+		// neither reachable from the main HEAD nor present on any remote.
+		// `--not --remotes` alone is too blunt: in a repo without remotes it
+		// counts every branch as unpushed, which must not block cleaning a
+		// creation branch whose commits all live on main (#4905 flow).
+		orphanedCmd := exec.CommandContext(ctx, "git", "rev-list", "--count", branchName, "--not", "HEAD", "--not", "--remotes")
+		orphanedCmd.Dir = mainRepoRoot
+		orphanedCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		orphanedOut, oerr := orphanedCmd.Output()
+		orphaned, _ := strconv.Atoi(strings.TrimSpace(string(orphanedOut)))
+
+		if uerr1 == nil && uerr2 == nil && oerr == nil && orphaned > 0 {
+			// #5212: discard_changes consents to losing UNCOMMITTED FILE changes
+			// only - it used to also silently authorize `branch -D` on branches
+			// carrying unpushed/unmerged commits, which is how a completed
+			// local fix (fix/issue-5201) got silently deleted. Deleting such a
+			// branch now needs the dedicated force_delete_branch override, and
+			// the keep path names the tip SHAs so the evidence is on screen.
+			evidenceCmd := exec.CommandContext(ctx, "git", "rev-list", "--max-count=3", branchName)
+			evidenceCmd.Dir = mainRepoRoot
+			evidenceCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+			evidence, eerr := evidenceCmd.Output()
+			evidenceLine := "(tip SHAs unavailable)"
+			if eerr == nil && len(strings.TrimSpace(string(evidence))) > 0 {
+				evidenceLine = strings.ReplaceAll(strings.TrimSpace(string(evidence)), "\n", " ")
+			}
+			if args.ForceDeleteBranch {
+				delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
+				delCmd.Dir = mainRepoRoot
+				delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+				if err := delCmd.Run(); err == nil {
+					deletedBranch = branchName
+					result := fmt.Sprintf("Removed worktree %s", worktreePath)
+					result += fmt.Sprintf(". WARNING: force-deleted branch %s carrying %d orphaned commit(s); tip SHAs: %s (recoverable via reflog for ~30 days)", branchName, orphaned, evidenceLine)
+					return Result{
+						Content:             result,
+						SuggestedWorkingDir: mainRepoRoot,
+					}, nil
+				}
+				return Result{
+					IsError:             true,
+					Content:             fmt.Sprintf("worktree removed, but force-deleting branch %s failed; branch kept (tip SHAs: %s)", branchName, evidenceLine),
+					SuggestedWorkingDir: mainRepoRoot,
+				}, nil
+			}
 			return Result{
-				Content:             fmt.Sprintf("worktree removed, but branch %s has %d unmerged and %d unpushed commit(s); branch kept. Set discard_changes=true to delete the branch too, or push/merge it first (recoverable via reflog for ~30 days after -D).", branchName, unmerged, unpushed),
+				Content:             fmt.Sprintf("worktree removed, but branch %s has %d orphaned commit(s) (%d unmerged, %d unpushed); branch kept (#5212: discard_changes does not delete branches). tip SHAs: %s. To delete anyway, re-run with force_delete_branch=true; or push/merge first.", branchName, orphaned, unmerged, unpushed, evidenceLine),
 				SuggestedWorkingDir: mainRepoRoot,
 			}, nil
 		}
