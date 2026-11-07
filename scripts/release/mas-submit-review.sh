@@ -263,7 +263,22 @@ echo "build ${BUILD_VERSION} (${BUILD_ID}) bound to version ${VERSION}"
 
 # submit for review
 refresh_jwt_if_needed
-SUB=$(asc "submit-for-review" POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
-NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
-[[ -n "$NEWSUB" ]] || { echo "::error::submit failed: ${SUB:0:400}" >&2; exit 1; }
+# submit for review. Run 42366577692: right after a developer-reject, ASC
+# returns 403 "does not allow 'CREATE'. Allowed operation is: DELETE" while
+# the submission resource's allowed-op set rotates back (propagation delay;
+# observed at 17s post-reject). Retry THIS specific error with backoff.
+NEWSUB=""
+for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  SUB=$(asc "-" POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+  NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
+  [[ -n "$NEWSUB" ]] && break
+  if echo "$SUB" | grep -q "does not allow 'CREATE'"; then
+    echo "submit: ASC allowed-op set still rotating after reject (attempt $w/12) - waiting 15s"
+    sleep 15
+    continue
+  fi
+  echo "::error::ASC submit-for-review failed - $(echo "$SUB" | jq -rj '.errors[0].detail // .errors[0].title // empty' 2>/dev/null) | raw: ${SUB:0:300}" >&2
+  exit 1
+done
+[[ -n "$NEWSUB" ]] || { echo "::error::submit never succeeded after 12 attempts (allowed-op rotation timeout, ~3min)" >&2; exit 1; }
 echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NEWSUB})"
