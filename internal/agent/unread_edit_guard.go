@@ -196,28 +196,11 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 		return extractSinglePath(m, "path")
 	case "notebook_edit":
 		return extractSinglePath(m, "notebook_path")
-	case "file_ops":
-
-		if ops, ok := m["operations"].([]any); ok {
-			var paths []string
-			for _, o := range ops {
-				om, ok := o.(map[string]any)
-				if !ok {
-					continue
-				}
-				if act, _ := om["action"].(string); act == "mkdir" {
-					continue
-				}
-				for _, key := range []string{"source", "destination"} {
-					if s, ok := om[key].(string); ok && s != "" {
-						paths = append(paths, s)
-					}
-				}
-			}
-			return paths
-		}
-		return nil
 	}
+	// file_ops is deliberately absent: its delete/move/mkdir operations are
+	// not content edits, so the unread-edit guard ("you are editing without
+	// reading") does not apply - it was misfiring twice on every batch
+	// delete (delete paths are never previously read).
 
 	return nil
 }

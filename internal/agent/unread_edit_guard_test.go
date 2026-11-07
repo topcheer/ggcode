@@ -148,17 +148,20 @@ func TestExtractEditFilePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("file_ops_delete_move_kept", func(t *testing.T) {
-
+	t.Run("file_ops_all_ops_excluded", func(t *testing.T) {
+		// file_ops delete/move/mkdir are not content edits: extracting their
+		// paths made the unread-edit guard append "editing without reading"
+		// hints to every batch delete (live misfire screenshot, 2026-11-07).
 		args, _ := json.Marshal(map[string]any{
 			"operations": []any{
 				map[string]any{"action": "delete", "source": "/a/old.go"},
 				map[string]any{"action": "move", "source": "/b/x.go", "destination": "/b/y.go"},
+				map[string]any{"action": "mkdir", "source": "/c/dir"},
 			},
 		})
 		paths := extractEditFilePaths("file_ops", args)
-		if len(paths) != 3 {
-			t.Fatalf("expected 3 paths from delete+move ops, got %d: %v", len(paths), paths)
+		if paths != nil {
+			t.Fatalf("expected nil paths for all file_ops ops, got %v", paths)
 		}
 	})
 
