@@ -421,7 +421,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"deepseek-v3.2-thinking":                                   {ContextWindow: 128000, MaxOutputTokens: 128000},
 	"deepseek-v4-1-flash":                                      {ContextWindow: 1000000, MaxOutputTokens: 262144, SupportsVision: true},
 	"deepseek-v4-1-flash-1017":                                 {ContextWindow: 1000000, MaxOutputTokens: 262144, SupportsVision: true},
-	"deepseek-v4-1-flash-1017-ultrafast":                       {ContextWindow: 1000000, MaxOutputTokens: 131072},
+	"deepseek-v4-1-flash-1017-ultrafast":                       {ContextWindow: 1000000, MaxOutputTokens: 131072, SupportsVision: true},
 	"deepseek-v4-1-flash-1017-uncensored":                      {ContextWindow: 1000000, MaxOutputTokens: 131072, SupportsVision: true},
 	"deepseek-v4-1-flash-uncensored":                           {ContextWindow: 1000000, MaxOutputTokens: 131072, SupportsVision: true},
 	"deepseek-v4-flash":                                        {ContextWindow: 1048576, MaxOutputTokens: 393216, SupportsVision: true},
