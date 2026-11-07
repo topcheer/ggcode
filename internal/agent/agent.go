@@ -3395,8 +3395,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// #5244: apply_patch (OpenAI Responses-native) edits source too,
 			// but #3006/#737 pin sourceMutatingTools at nine - extensions
 			// ride mutatesSourceTree() semantics instead of the canonical
-			// map. Gate on the union: canonical 9 + apply_patch.
-			if !result.IsError && (fileEditingTools[tc.Name] || tc.Name == "apply_patch") {
+			// map (#5249: helper shared with the other tracker gates).
+			if !result.IsError && mutatingSourceEdit(tc.Name) {
 
 				a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
@@ -4167,7 +4167,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.irrevGate.recordOutcome(tc.Name, result.IsError)
 			}
 
-			if fileEditingTools[tc.Name] && !result.IsError {
+			if mutatingSourceEdit(tc.Name) && !result.IsError { // #5249: apply_patch must count as a write
 				a.futileCycle.recordWrite()
 
 				a.phantomVerify.invalidateEdits()
@@ -4197,7 +4197,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.appendGuidance(&result, wtMsg)
 				}
 			}
-			if fileEditingTools[tc.Name] && !result.IsError {
+			if mutatingSourceEdit(tc.Name) && !result.IsError { // #5249: apply_patch must feed edit trackers
 				a.verifyDebt.recordSourceEdit()
 				a.stalledConvergence.recordEdit()
 
@@ -4209,7 +4209,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
 			}
 
-			if fileEditingTools[tc.Name] || tc.Name == "run_command" {
+			if mutatingSourceEdit(tc.Name) || tc.Name == "run_command" { // #5249: apply_patch counts as a success-claim edit
 				a.successDeclare.recordToolCall()
 			}
 			a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
