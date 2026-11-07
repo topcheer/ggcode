@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { configApi } from "@/api/client";
 import DomainPage from "@/pages/DomainPage";
+import VendorsPage from "@/pages/VendorsPage";
 
 /** SettingsShell:七域 tab 导航;Config=JSON 编辑代表页,其余六域=DomainPage 取数框架 */
 const TABS = [
   { id: "config", label: "配置", comp: ConfigPage },
   { id: "general", label: "常规", comp: ConfigPage }, // general 复用配置编辑形态
-  { id: "vendors", label: "供应商", comp: () => <DomainPage domain="vendors" /> },
+  { id: "vendors", label: "供应商", comp: VendorsPage },
   { id: "mcp", label: "MCP", comp: () => <DomainPage domain="mcp" /> },
   { id: "im", label: "IM", comp: () => <DomainPage domain="im" /> },
   { id: "a2a", label: "A2A", comp: () => <DomainPage domain="a2a" /> },
