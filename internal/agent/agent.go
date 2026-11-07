@@ -3464,7 +3464,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
-			if result.IsError && fileEditingTools[tc.Name] {
+			if result.IsError && mutatingSourceEdit(tc.Name) { // #5249: error path too - apply_patch failures must reach editFailRecovery
 				a.convergenceRecordEditError()
 				for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
