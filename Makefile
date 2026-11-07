@@ -35,7 +35,10 @@ ci: verify-ci
 ## weekly via .github/workflows/model-caps-sync.yml. Needs network access.
 sync-model-caps:
 	go run scripts/sync-model-caps.go
-	gofmt -w internal/config/context_window.go internal/config/vendor_defaults.go
+	# #5241: regen must format with the go.mod-pinned toolchain — bare
+	# gofmt uses the machine default (e.g. 1.27.3) and re-introduces the
+	# formatting skew the pinned hooks then reject.
+	./scripts/dev/gofmt-pinned.sh -w internal/config/context_window.go internal/config/vendor_defaults.go
 	@go build -tags "$(TAGS)" ./internal/config/ || (echo "sync-model-caps: generated code failed to build" && exit 1)
 	@echo "sync-model-caps: done. Review 'git diff internal/config/' and include it in your commit."
 

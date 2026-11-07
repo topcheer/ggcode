@@ -92,3 +92,43 @@ func TestIssue5241GoModPinnedVersionResolvable(t *testing.T) {
 		t.Errorf("pinned toolchain resolved to %q, want go%s", got, pinned)
 	}
 }
+
+// #5241 class guard: no repo gate may invoke a bare `gofmt` command anymore.
+// A bare gofmt resolves from PATH to the machine's default toolchain (e.g.
+// 1.27.3) while go.mod pins 1.26.10 for CI, reintroducing exactly the
+// format/verify skew this issue fixed (pre-commit silently reformatting
+// CI-clean files, pre-push false-reds, regen scripts stamping 1.27 style).
+// The pinned wrapper is the only sanctioned gofmt path. Detected shapes:
+// command-substitution invocations and command-position invocations;
+// messages and comments merely mentioning gofmt stay allowed.
+func TestIssue5241NoBareGofmtInRepoGates(t *testing.T) {
+	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Skipf("not in a git repo: %v", err)
+	}
+	repo := strings.TrimSpace(string(root))
+
+	gates := []string{
+		".githooks/pre-commit",
+		".githooks/pre-push",
+		"scripts/dev/verify-ci.sh",
+		"Makefile",
+	}
+	for _, gate := range gates {
+		body, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(gate)))
+		if err != nil {
+			t.Errorf("gate %s missing: %v", gate, err)
+			continue
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			if strings.Contains(line, "gofmt-pinned.sh") {
+				continue
+			}
+			bare := strings.Contains(line, "$(gofmt ") ||
+				strings.HasPrefix(strings.TrimLeft(line, " \t"), "gofmt ")
+			if bare {
+				t.Errorf("%s:%d uses bare gofmt: %q", gate, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
