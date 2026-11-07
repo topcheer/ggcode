@@ -266,13 +266,8 @@ func installRG() {
 	case hasCommand("cargo"):
 		cmd = exec.Command("cargo", "install", "ripgrep")
 		mgr = "cargo"
-	case hasCommand("pip"):
-		cmd = exec.Command("pip", "install", "ripgrep")
-		mgr = "pip"
-	case hasCommand("pip3"):
-		cmd = exec.Command("pip3", "install", "ripgrep")
-		mgr = "pip3"
 	default:
+		debug.Log("grep", "ripgrep not installed and no official package manager found; install the official BurntSushi ripgrep yourself, e.g. brew install ripgrep / cargo install ripgrep / apt install ripgrep, or download from https://github.com/BurntSushi/ripgrep/releases (the PyPI 'ripgrep' package is a third-party wrapper and is deliberately not auto-installed); grep falls back to the built-in Go engine until then")
 		return
 	}
 
