@@ -183,10 +183,104 @@ func TestLLMCall_SchemaModeFailsAfterMaxAttempts(t *testing.T) {
 
 func TestLLMCall_ProviderErrorPropagates(t *testing.T) {
 	f := &fakeLLMProvider{name: "fake", chatErr: errors.New("boom")}
-	_, err := LLMCallTool{Provider: f}.Execute(context.Background(), json.RawMessage(`{"prompt":"x"}`))
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("provider error must propagate, got %v", err)
+	res, _ := LLMCallTool{Provider: f}.Execute(context.Background(), json.RawMessage(`{"prompt":"x"}`))
+	// New semantics: provider failures surface as an actionable IsError
+	// result (not a Go error) so the calling LLM gets retry guidance.
+	if !res.IsError || !strings.Contains(res.Content, "boom") {
+		t.Fatalf("provider failure must surface as actionable IsError, got %+v", res)
 	}
+}
+
+// multiModelFake fails Chat for specific model names (CloneWithModel target).
+type multiModelFake struct {
+	fakeLLMProvider
+	failFor    map[string]bool
+	mu         sync.Mutex
+	lastModel  string
+	modelsSeen []string
+}
+
+func (m *multiModelFake) CloneWithModel(model string) provider.Provider {
+	m.mu.Lock()
+	m.lastModel = model
+	m.modelsSeen = append(m.modelsSeen, model)
+	m.mu.Unlock()
+	return m
+}
+
+func (m *multiModelFake) Chat(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	m.mu.Lock()
+	fail := m.failFor[m.lastModel]
+	m.mu.Unlock()
+	if fail {
+		return nil, errors.New("image input not supported by this model")
+	}
+	return m.fakeLLMProvider.Chat(ctx, msgs, tools)
+}
+
+func TestLLMCall_VisionFallbackSkipsNonVision(t *testing.T) {
+	png := writeTinyPNG(t)
+	m := &multiModelFake{fakeLLMProvider: fakeLLMProvider{name: "fake", replies: []string{"served"}}, failFor: map[string]bool{"text-model": true}}
+	res, _ := LLMCallTool{Provider: m, WorkingDir: filepath.Dir(png), AvailableModels: func() []string {
+		return []string{"text-model", "glm-4.5v"}
+	}}.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"x","image_paths":["`+filepath.Base(png)+`"],"model":"text-model"}`))
+	if res.IsError {
+		t.Fatalf("fallback should have served the image, got %+v", res)
+	}
+	if !strings.Contains(res.Content, "fallback model glm-4.5v") {
+		t.Fatalf("expected fallback note naming glm-4.5v, got %q", res.Content)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.modelsSeen) < 2 || m.modelsSeen[0] != "text-model" {
+		t.Fatalf("explicit model must be tried first, seen %v", m.modelsSeen)
+	}
+}
+
+func TestLLMCall_VisionNoModelTriesVisionOrdered(t *testing.T) {
+	png := writeTinyPNG(t)
+	m := &multiModelFake{fakeLLMProvider: fakeLLMProvider{name: "fake", replies: []string{"ok"}}, failFor: map[string]bool{"plain-text-model": true}}
+	res, _ := LLMCallTool{Provider: m, WorkingDir: filepath.Dir(png), AvailableModels: func() []string {
+		return []string{"plain-text-model", "glm-4.5v"}
+	}}.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"x","image_paths":["`+filepath.Base(png)+`"]}`))
+	if res.IsError {
+		t.Fatalf("vision-ordered candidates should succeed, got %+v", res)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.modelsSeen) == 0 || m.modelsSeen[0] != "glm-4.5v" {
+		t.Fatalf("vision-annotated model must be tried first, seen %v", m.modelsSeen)
+	}
+}
+
+func TestLLMCall_VisionAllCandidatesFail(t *testing.T) {
+	png := writeTinyPNG(t)
+	m := &multiModelFake{fakeLLMProvider: fakeLLMProvider{name: "fake"}, failFor: map[string]bool{"m1": true, "m2": true}}
+	res, _ := LLMCallTool{Provider: m, WorkingDir: filepath.Dir(png), AvailableModels: func() []string {
+		return []string{"m1", "m2"}
+	}}.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"x","image_paths":["`+filepath.Base(png)+`"]}`))
+	if !res.IsError || !strings.Contains(res.Content, "all 2 endpoint model candidate(s)") {
+		t.Fatalf("expected aggregated all-fail error, got %+v", res)
+	}
+}
+
+// writeTinyPNG writes a 1x1 transparent PNG into a temp dir and returns its path.
+func writeTinyPNG(t *testing.T) string {
+	t.Helper()
+	const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	dir := t.TempDir()
+	p := filepath.Join(dir, "probe.png")
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("bad embedded png: %v", err)
+	}
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatalf("write png: %v", err)
+	}
+	return p
 }
 
 func TestLLMCall_ConcurrentCallsSafe(t *testing.T) {

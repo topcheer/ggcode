@@ -740,9 +740,10 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	// explicit registration list is the only path TUI/interactive sessions
 	// load tools from, so register here too.
 	tools.Register(tool.LLMCallTool{
-		Provider:       prov,
-		ProviderGetter: providerGetter,
-		WorkingDir:     r.model.agent.WorkingDir(),
+		Provider:        prov,
+		ProviderGetter:  providerGetter,
+		AvailableModels: availableModelsGetter,
+		WorkingDir:      r.model.agent.WorkingDir(),
 	})
 
 	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
