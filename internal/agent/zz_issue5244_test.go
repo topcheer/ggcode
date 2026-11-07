@@ -54,3 +54,31 @@ func TestIssue5244_ExtractorNilSafeAndOtherToolsUnchanged(t *testing.T) {
 		t.Errorf("file_ops must stay absent from guard extraction, got %v", got)
 	}
 }
+
+// #5249: #5246's union gated only the L3399 hook block; the other
+// tracker/evidence gates (futileCycle, verifyDebt, successDeclare,
+// postEditVerifyHint -> sourceEditsThisRun -> finalTurnEvidenceGate)
+// still keyed on the bare canonical map, so apply_patch-only runs never
+// accumulated final-turn edit evidence. All gates now go through
+// mutatingSourceEdit.
+
+func TestIssue5249_MutatingSourceEditGate(t *testing.T) {
+	if !mutatingSourceEdit("apply_patch") {
+		t.Fatal("apply_patch must pass mutatingSourceEdit")
+	}
+	// canonical members unchanged through the helper
+	for name := range sourceMutatingTools {
+		if !mutatingSourceEdit(name) {
+			t.Errorf("canonical tool %q must still pass mutatingSourceEdit", name)
+		}
+	}
+	// non-mutating tools stay out (note: file_ops IS in the canonical
+	// mutating map - the #5240 exemption lives only in the guard's path
+	// extraction, not in the mutation classification)
+	if mutatingSourceEdit("read_file") || mutatingSourceEdit("glob") || mutatingSourceEdit("run_command") {
+		t.Error("read_file/glob/run_command must not pass mutatingSourceEdit")
+	}
+	if !mutatingSourceEdit("file_ops") {
+		t.Error("file_ops must keep passing (canonical member; #5240 exemption is extraction-only)")
+	}
+}
