@@ -97,7 +97,8 @@ refresh_jwt_if_needed() {
   fi
 }
 
-asc() { # asc METHOD PATH [JSON_BODY]
+asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: + exit 1
+  local fatal="${1:-}"; shift
   local method="$1" path="$2" body="${3:-}"
   local resp http_code
   if (( $(date +%s) >= JWT_EXP - 300 )); then
@@ -108,7 +109,7 @@ asc() { # asc METHOD PATH [JSON_BODY]
     resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
       -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body")
   else
-    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $JWT")
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" -H "Authorization: Bearer $JWT")
   fi
   http_code="${resp##*__HTTP__}"
   resp="${resp%__HTTP__*}"
@@ -117,6 +118,14 @@ asc() { # asc METHOD PATH [JSON_BODY]
   logd "request-body: ${body:-(none)}"
   logd "response: $resp"
   if [[ "$http_code" != 2* ]]; then
+    if [[ "$fatal" != "-" ]]; then
+      # Run 42359007107 lesson: soft-warning here produced false-success logs
+      # ("removed"/"set on"/"bound" printed after 403/409) and the failure
+      # only surfaced at the very last submit. State-mutating steps must be
+      # fatal with the ASC error detail inlined.
+      echo "::error::ASC $fatal failed: HTTP $http_code $method $path - $(echo "$resp" | jq -rj '.errors[0].detail // .errors[0].title // empty' 2>/dev/null) | raw: ${resp:0:300}" >&2
+      exit 1
+    fi
     echo "::warning::ASC $method $path returned HTTP $http_code (non-2xx) - response logged" >&2
   fi
   printf '%s' "$resp"
@@ -208,7 +217,7 @@ if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
   SUBL=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
   SUB_ID=$(echo "$SUBL" | jq -r '.data.id // empty')
   if [[ -n "$SUB_ID" ]]; then
-    asc DELETE "/v1/appStoreVersionSubmissions/${SUB_ID}" > /dev/null
+    asc "developer-reject" DELETE "/v1/appStoreVersionSubmissions/${SUB_ID}" > /dev/null
     echo "submission ${SUB_ID} removed (Developer Rejected)"
     for w in 1 2 3 4 5 6 8 10; do
       sleep 10
@@ -240,7 +249,7 @@ if [[ -z "${LOC_IDS// }" ]]; then
 fi
 for LOC_ID in $LOC_IDS; do
   refresh_jwt_if_needed
-  if asc PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null; then
+  if asc "-" PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null; then
     echo "whats-new set on ${LOC_ID}"
   else
     echo "::warning::whats-new patch failed on ${LOC_ID} - continuing"
@@ -249,12 +258,12 @@ done
 
 # bind the fresh build to the version
 refresh_jwt_if_needed
-asc PATCH "/v1/appStoreVersions/${AV_ID}" '{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'","relationships":{"build":{"data":{"type":"builds","id":"'"${BUILD_ID}"'"}}}}}' > /dev/null
+asc "bind-build" PATCH "/v1/appStoreVersions/${AV_ID}" '{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'","relationships":{"build":{"data":{"type":"builds","id":"'"${BUILD_ID}"'"}}}}}' > /dev/null
 echo "build ${BUILD_VERSION} (${BUILD_ID}) bound to version ${VERSION}"
 
 # submit for review
 refresh_jwt_if_needed
-SUB=$(asc POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+SUB=$(asc "submit-for-review" POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
 NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
 [[ -n "$NEWSUB" ]] || { echo "::error::submit failed: ${SUB:0:400}" >&2; exit 1; }
 echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NEWSUB})"
