@@ -1,0 +1,97 @@
+import { useEffect, useRef, useState } from "react";
+import { useChat } from "@/store/chat";
+import MentionPopover from "@/chat/MentionPopover";
+
+/** Composer(§4.3):发光活跃态+⌘⏎发送+Esc 中断面;P1.5 加 @mention 弹层 */
+export default function Composer({ onSend }: { onSend: (text: string) => void }) {
+  const [value, setValue] = useState("");
+  const [focused, setFocused] = useState(false);
+  const busy = useChat((s) => s.busy);
+  const conn = useChat((s) => s.conn);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [mention, setMention] = useState<{ query: string; rect: DOMRect | null } | null>(null);
+
+  // 自适应高度
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+  }, [value]);
+
+  // 发光呼吸(仅 focus 且非 busy)
+  useEffect(() => {
+    const el = taRef.current?.closest("[data-composer]") as HTMLElement | null;
+    if (!el) return;
+    el.style.animation = focused && !busy ? "composer-breathe 2.4s ease-in-out infinite" : "";
+    el.style.boxShadow = focused || busy ? "" : "var(--shadow-composer-idle)";
+  }, [focused, busy]);
+
+  const submit = () => {
+    const text = value.trim();
+    if (!text || busy || conn !== "open") return;
+    onSend(text);
+    setValue("");
+  };
+
+  return (
+    <div className="border-t border-border bg-background px-6 py-4">
+      <div
+        data-composer
+        className="mx-auto max-w-[860px] rounded-2xl border border-border bg-card p-3 transition-shadow"
+      >
+        <textarea
+          ref={taRef}
+          className="text-ui-base w-full resize-none bg-transparent text-wrap-phrase text-foreground placeholder:text-foreground-subtlest focus:outline-none"
+          placeholder={conn === "open" ? "输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)" : `连接中(${conn})…`}
+          rows={2}
+          value={value}
+          disabled={conn !== "open"}
+          onChange={(e) => {
+            setValue(e.target.value);
+            // @ 触发 mention 弹层(§4.3)
+            const upto = e.target.value.slice(0, e.target.selectionStart ?? 0);
+            const at = upto.lastIndexOf("@");
+            if (at >= 0 && !upto.slice(at).includes(" ")) {
+              setMention({ query: upto.slice(at + 1), rect: taRef.current?.getBoundingClientRect() ?? null });
+            } else {
+              setMention(null);
+            }
+          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+        {mention && (
+          <MentionPopover
+            query={mention.query}
+            anchorRect={mention.rect}
+            onPick={(text) => {
+              setMention(null);
+              if (!text) return;
+              setValue((v) => v + text);
+              taRef.current?.focus();
+            }}
+          />
+        )}
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-ui-xs text-foreground-subtlest">
+            {conn !== "open" ? "离线中,消息将在重连后补发" : busy ? "生成中…(等待完成)" : "⌘⏎ 发送"}
+          </span>
+          <button
+            className="text-ui-sm rounded-lg bg-brand px-4 py-1.5 font-medium text-white transition-opacity disabled:opacity-40"
+            disabled={!value.trim() || busy || conn !== "open"}
+            onClick={submit}
+          >
+            发送
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

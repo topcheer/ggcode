@@ -9,6 +9,13 @@ TAGS := goolm
 build:
 	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
 
+# WebUI 前端构建:web/ → internal/webui/dist (go:embed 嵌入)
+webui-build:
+	cd web && pnpm install --frozen-lockfile --prefer-offline && pnpm run build
+
+webui-dev:
+	cd web && pnpm install --prefer-offline && pnpm run dev
+
 build-desktop-wails:
 	cd desktop/ggcode-desktop-wails && wails build -tags "$(TAGS)" -clean
 
