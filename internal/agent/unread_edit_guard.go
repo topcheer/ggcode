@@ -180,6 +180,8 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 		return nil
 	}
 	switch toolName {
+	case "apply_patch": // #5244: args carry a top-level path
+		return extractSinglePath(m, "path")
 	case "edit_file":
 		return extractSinglePath(m, "file_path", "path")
 	case "multi_edit_file":

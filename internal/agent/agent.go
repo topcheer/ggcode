@@ -3392,7 +3392,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
-			if !result.IsError && fileEditingTools[tc.Name] {
+			// #5244: apply_patch (OpenAI Responses-native) edits source too,
+			// but #3006/#737 pin sourceMutatingTools at nine - extensions
+			// ride mutatesSourceTree() semantics instead of the canonical
+			// map. Gate on the union: canonical 9 + apply_patch.
+			if !result.IsError && (fileEditingTools[tc.Name] || tc.Name == "apply_patch") {
 
 				a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
