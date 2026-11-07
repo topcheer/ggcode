@@ -17,7 +17,9 @@ func ApplyResolvedLimitsToAgent(agentInst *agent.Agent, resolved *config.Resolve
 		return
 	}
 	if resolved.ContextWindow > 0 {
+		oldCW := agentInst.ContextManager().ContextWindow()
 		agentInst.ContextManager().SetContextWindow(resolved.ContextWindow)
+		agentInst.NoteContextWindowChanged(oldCW, resolved.ContextWindow)
 	}
 	if resolved.MaxTokens > 0 {
 		agentInst.ContextManager().SetOutputReserve(resolved.MaxTokens)
@@ -76,6 +78,7 @@ func startAsyncRelayModelLimitRefreshWithSession(cfg *config.Config, resolved *c
 		}
 
 		applied := false
+		oldCW := agentInst.ContextManager().ContextWindow()
 		if allowContextOverride && resp.ContextWindow > 0 {
 			agentInst.ContextManager().SetContextWindow(resp.ContextWindow)
 			applied = true
@@ -92,6 +95,12 @@ func startAsyncRelayModelLimitRefreshWithSession(cfg *config.Config, resolved *c
 		if sessionMT > 0 {
 			agentInst.ContextManager().SetOutputReserve(sessionMT)
 			applied = true
+		}
+		if applied {
+			// #5206 follow-up: enlarged windows need an in-context
+			// correction so stale pressure advisories don't keep steering
+			// the model (it cannot see the limit moved).
+			agentInst.NoteContextWindowChanged(oldCW, agentInst.ContextManager().ContextWindow())
 		}
 		if applied && onApplied != nil {
 			onApplied(resp)

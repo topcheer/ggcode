@@ -43,3 +43,16 @@ func TestIssue5204_HeadroomMath(t *testing.T) {
 		t.Errorf("headroom percent must be compaction-relative (1-0.85), got: %s", msg)
 	}
 }
+
+func TestIssue5206_WindowGrowthInjectsCorrection(t *testing.T) {
+	msg := contextWindowCorrectionMsg(128000, 400000, 120000, 360000)
+	if !strings.Contains(msg, "changed from 128000 to 400000") {
+		t.Errorf("correction must state the limit change: %s", msg)
+	}
+	if !strings.Contains(msg, "no longer apply") {
+		t.Errorf("correction must invalidate stale advisories: %s", msg)
+	}
+	if strings.Contains(msg, "raw window") {
+		t.Errorf("correction must use compaction scale: %s", msg)
+	}
+}
