@@ -433,6 +433,10 @@ func joinNodeIDs(set map[string]bool) string {
 // lock); anything else keeps the stale id in the output so the #5117
 // fail-fast refusal reports it with the re-list hint. A second copy of a
 // fresh target collapses onto the target instead of duplicating it.
+// Lookup order: live map nick (covers the pre-sweep window where the stale
+// entry still coexists with the fresh registration) then the archive ring
+// (covers post-sweep: the stale entry was archived + deleted after 10m,
+// the archived nick still identifies the restarted peer).
 func (t LanChatTool) rebindStaleIDs(resolved []string) ([]string, []staleRebind) {
 	var out []string
 	var rebinds []staleRebind
@@ -445,10 +449,29 @@ func (t LanChatTool) rebindStaleIDs(resolved []string) ([]string, []staleRebind)
 			}
 			continue
 		}
-		nick := t.nickOf(id)
 		target, ok := "", false
+		nick := t.nickOf(id)
 		if nick != "" {
 			target, ok = t.Hub.LookupPeerIDByNick(nick)
+		}
+		if !ok {
+			// #4782 Gap A chain: entry already swept (archived + deleted
+			// after peerDeleteAfter), or its live nick holder set was itself
+			// ambiguous - the archive still remembers which nick the stale id
+			// carried, so a DM addressed to the dead id can follow the peer
+			// into its new process.
+			if ap := t.Hub.LookupArchiveByNodeID(id); ap != nil {
+				archNick := ap.AgentNick
+				if archNick == "" {
+					archNick = ap.HumanNick
+				}
+				if archNick != "" {
+					target, ok = t.Hub.LookupPeerIDByNick(archNick)
+					if ok {
+						nick = archNick
+					}
+				}
+			}
 		}
 		if ok && target != t.Hub.NodeID() {
 			rebinds = append(rebinds, staleRebind{oldID: id, nick: nick, newID: target})
@@ -694,6 +717,24 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 		if ap == nil {
 
 			ap = t.Hub.LookupArchiveByNick(raw)
+		}
+
+		// #5200/#4782 Gap A: a stale/archived node_id resolves to the current
+		// fresh holder of the same nick (old id -> nick -> latest id), so a DM
+		// addressed to a pre-restart id follows the peer into its new process
+		// instead of bouncing.
+		if ap != nil && strings.EqualFold(ap.NodeID, strings.TrimSpace(raw)) {
+			archNick := ap.AgentNick
+			if archNick == "" {
+				archNick = ap.HumanNick
+			}
+			if archNick != "" {
+				if id, ok := t.Hub.LookupPeerIDByNick(archNick); ok && id != t.Hub.NodeID() && !seen[id] {
+					resolved = append(resolved, id)
+					seen[id] = true
+					continue
+				}
+			}
 		}
 
 		if ap != nil && ap.Team != "" && ap.Role != "" {

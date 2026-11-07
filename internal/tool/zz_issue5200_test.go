@@ -238,3 +238,40 @@ func TestIssue5200LookupPeerIDByNick(t *testing.T) {
 		t.Fatalf("two fresh holders must not resolve to a coin-flip id")
 	}
 }
+
+// Post-sweep shape (#4782 Gap A chain): the peer restarted long enough ago
+// that the sweep archived its OLD node_id (peerDeleteAfter 10m) and deleted
+// it from the live map. The sender still holds the archived id. The DM must
+// follow the archive (old id -> nick -> current fresh holder) and deliver,
+// not bounce.
+func TestIssue5200ArchivedNodeIDFollowsNickToFreshHolder(t *testing.T) {
+	tool, hub, delivered, _ := hub5200(t)
+	hub.ArchivePeer(lanchat.Participant{
+		NodeID:    "node-archived-5200",
+		HumanNick: "techwriter_techwriter222",
+		AgentNick: "techwriter_techwriter222",
+		Endpoint:  "http://localhost:1",
+	})
+
+	res, err := tool.doSend(context.Background(), "status?", []string{"node-archived-5200"}, false, "")
+	if err != nil {
+		t.Fatalf("doSend: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("archived-id send must follow the archive to the fresh holder, got error: %s", res.Content)
+	}
+	for _, marker := range []string{"no recipient found", "stale recipient", "not sending"} {
+		if strings.Contains(res.Content, marker) {
+			t.Fatalf("archive follow must not produce %q, got: %s", marker, res.Content)
+		}
+	}
+	// The resolver-level follow-through reports delivery under the nick (the
+	// stable identity); the archived id itself is correctly absent from the
+	// report - the DM landed on the fresh node_id.
+	if !strings.Contains(res.Content, "techwriter_techwriter222") {
+		t.Fatalf("send report must name the resolved recipient nick, got: %s", res.Content)
+	}
+	if n := atomic.LoadInt32(delivered); n != 1 {
+		t.Fatalf("message must be delivered to the fresh holder exactly once, got %d deliveries", n)
+	}
+}
