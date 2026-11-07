@@ -254,41 +254,52 @@ func rgAvailable() bool {
 	return false
 }
 
+// rgInstallChannel is one auto-install attempt for the ripgrep fallback.
+type rgInstallChannel struct {
+	bin  string   // package-manager binary to look up
+	args []string // install arguments
+	name string   // debug label
+}
+
+// rgInstallChannels lists auto-install channels in preference order.
+// PyPI ("pip install ripgrep") is deliberately NOT included (#5231): the
+// PyPI package is a third-party wrapper around an unofficial binary, so
+// users would get an unaudited substitute with divergent flags/output that
+// this tool's parsing does not expect. Official channels only.
+var rgInstallChannels = []rgInstallChannel{
+	{"brew", []string{"install", "ripgrep"}, "brew"},
+	{"cargo", []string{"install", "ripgrep"}, "cargo"},
+	{"conda", []string{"install", "-c", "conda-forge", "ripgrep"}, "conda"},
+}
+
 func installRG() {
 	defer rgTrying.Store(false)
 
-	var cmd *exec.Cmd
-	var mgr string
-	switch {
-	case hasCommand("brew"):
-		cmd = exec.Command("brew", "install", "ripgrep")
-		mgr = "brew"
-	case hasCommand("cargo"):
-		cmd = exec.Command("cargo", "install", "ripgrep")
-		mgr = "cargo"
-	case hasCommand("pip"):
-		cmd = exec.Command("pip", "install", "ripgrep")
-		mgr = "pip"
-	case hasCommand("pip3"):
-		cmd = exec.Command("pip3", "install", "ripgrep")
-		mgr = "pip3"
-	default:
+	for _, ch := range rgInstallChannels {
+		if !hasCommand(ch.bin) {
+			continue
+		}
+		// Preserve the original first-available-channel semantics: try the
+		// highest-preference available manager once, then stop (cargo/conda
+		// installs can be slow; never chain them).
+		cmd := exec.Command(ch.bin, ch.args...)
+		if err := cmd.Run(); err != nil {
+			debug.Log("grep", "ripgrep install via %s failed: %v", ch.name, err)
+			return
+		}
+
+		p, err := exec.LookPath("rg")
+		if err != nil {
+			debug.Log("grep", "ripgrep install via %s succeeded but 'rg' not found in PATH (may need PATH update)", ch.name)
+			return
+		}
+
+		rgPath.Store(&p)
+		debug.Log("grep", "ripgrep installed successfully via %s at %s", ch.name, p)
 		return
 	}
 
-	if err := cmd.Run(); err != nil {
-		debug.Log("grep", "ripgrep install via %s failed: %v", mgr, err)
-		return
-	}
-
-	p, err := exec.LookPath("rg")
-	if err != nil {
-		debug.Log("grep", "ripgrep install via %s succeeded but 'rg' not found in PATH (may need PATH update)", mgr)
-		return
-	}
-
-	rgPath.Store(&p)
-	debug.Log("grep", "ripgrep installed successfully via %s at %s", mgr, p)
+	debug.Log("grep", "ripgrep not auto-installable: no official channel (brew/cargo/conda) available; install manually from https://github.com/BurntSushi/ripgrep/releases - grep keeps using the built-in Go fallback until then")
 }
 
 func hasCommand(name string) bool {
