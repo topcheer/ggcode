@@ -108,7 +108,11 @@ func TestPTGuardAdvisoryContent(t *testing.T) {
 	msg := ptGuardAdvisory(6, 10, 0.7)
 	pins := []string{
 		"Continuation Advisory",
-		"30% of the context window is still available",
+		// #5199-user-report: occupancy/advisory moved to the compaction
+		// scale (raw-window framing fired "nearly exhausted" ~30 points
+		// before the real compaction point).
+		"70% of the compaction threshold",
+		"30% of the headroom before auto-compaction is still available",
 		"6 of last 10",
 		"DIFFERENT strategy",
 		"arXiv 2606.29718",
