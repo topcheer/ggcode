@@ -133,7 +133,7 @@ asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: 
 
 # ---------- locate the app ----------
 refresh_jwt_if_needed
-APP_JSON=$(asc GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
+APP_JSON=$(asc "-" GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
 APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
 if [[ -z "$APP_ID" ]]; then
   # Run 13 evidence: this failure was silent, and the fallback id pointed at a
@@ -162,7 +162,7 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   # builds-in-app relationship endpoint (HTTP 400 PARAMETER_ERROR.ILLEGAL,
   # one error per parameter) - the 401 chain previously masked this. Fetch a
   # page without filter/sort and match client-side instead.
-  B=$(asc GET "/v1/apps/${APP_ID}/builds?limit=50")
+  B=$(asc "-" GET "/v1/apps/${APP_ID}/builds?limit=50")
   if [[ -n "$BUILD_VERSION" ]]; then
     MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0]")
   else
@@ -206,7 +206,7 @@ done
 WHATS_NEW="${MAS_WHATS_NEW:-Bug fixes and stability improvements.}"
 
 refresh_jwt_if_needed
-AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+AVS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
 AV=$(echo "$AVS" | jq -c "[.data[] | select(.attributes.versionString == \"${VERSION}\")] | .[0] // empty")
 AV_ID=$(echo "$AV" | jq -r '.id // empty')
 AV_STATE=$(echo "$AV" | jq -r '.attributes.appStoreState // empty')
@@ -214,7 +214,7 @@ AV_STATE=$(echo "$AV" | jq -r '.attributes.appStoreState // empty')
 # developer reject: remove the live submission so the version is editable
 if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
   echo "version ${VERSION} is ${AV_STATE} - developer-rejecting to rebind build ${BUILD_VERSION}"
-  SUBL=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
+  SUBL=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
   SUB_ID=$(echo "$SUBL" | jq -r '.data.id // empty')
   if [[ -n "$SUB_ID" ]]; then
     asc "developer-reject" DELETE "/v1/appStoreVersionSubmissions/${SUB_ID}" > /dev/null
@@ -222,7 +222,7 @@ if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
     for w in 1 2 3 4 5 6 8 10; do
       sleep 10
       refresh_jwt_if_needed
-      AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+      AVS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
       AV_STATE=$(echo "$AVS" | jq -r "[.data[] | select(.id == \"${AV_ID}\")][0].attributes.appStoreState // empty")
       [[ "$AV_STATE" != "WAITING_FOR_REVIEW" && "$AV_STATE" != "IN_REVIEW" ]] && break
     done
@@ -235,14 +235,14 @@ fi
 if [[ -z "$AV_ID" ]]; then
   echo "version ${VERSION} not found on ASC - creating"
   refresh_jwt_if_needed
-  AVC=$(asc POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
+  AVC=$(asc "create-version" POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
   AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
   [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
 fi
 
 # generic What's New across all localizations (MAS_WHATS_NEW overrides)
 refresh_jwt_if_needed
-LOCS=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
+LOCS=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
 LOC_IDS=$(echo "$LOCS" | jq -r '.data[].id // empty' | tr '\n' ' ')
 if [[ -z "${LOC_IDS// }" ]]; then
   echo "::warning::no appStoreVersionLocalizations on version ${VERSION} - skipping What's New"
