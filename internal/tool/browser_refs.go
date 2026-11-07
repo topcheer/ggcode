@@ -90,11 +90,38 @@ func (b *Browser) resolveSelectorArg(profile, session, selector string) (string,
 	return "", false
 }
 
+// D2 (#5209 design §1, verdict ① CONFIRM): layered snapshot budgets.
+// Top-level traversal: min(wait_timeout default 3s, 8s hard cap) - enforced
+// by the Go-side context. Iframe collection: 1s shared budget across all
+// same-origin iframes, 500ms per child frame - enforced inside the probe JS
+// (a single Evaluate cannot be interrupted mid-flight by ctx, so the JS
+// self-limits with Date.now()). Timed-out frames yield ZERO entries (no
+// @eN refs for partially collected subtrees) and the rendered snapshot
+// carries an explicit "[timeout: budget exhausted]" marker: partial results
+// beat total failure, but they must never masquerade as complete.
+const (
+	snapshotTopLevelDefault = 3 * time.Second
+	snapshotTopLevelHardCap = 8 * time.Second
+)
+
+// snapshotTopLevelBudget derives the top-level snapshot deadline from the
+// user-supplied wait_timeout (seconds; 0 or negative -> default). The hard
+// cap clamps any user request.
+func snapshotTopLevelBudget(waitTimeoutSec int) time.Duration {
+	d := snapshotTopLevelDefault
+	if waitTimeoutSec > 0 {
+		d = time.Duration(waitTimeoutSec) * time.Second
+	}
+	if d > snapshotTopLevelHardCap {
+		d = snapshotTopLevelHardCap
+	}
+	return d
+}
+
 const browserSnapshotJS = `(() => {
 	const out = [];
 	const cap = 200;
 	const interactive = 'a,button,input,textarea,select,[role],[onclick],[tabindex],label,h1,h2,h3,h4,h5,h6,img,summary,details,video,audio,canvas,svg[role]';
-	const nodes = document.querySelectorAll(interactive);
 	const roleName = (el) => {
 		const r = el.getAttribute('role');
 		if (r) return r;
@@ -116,14 +143,12 @@ const browserSnapshotJS = `(() => {
 			el.getAttribute('value') || (el.innerText || el.textContent || '');
 		return n.replace(/\s+/g, ' ').trim().slice(0, 80);
 	};
-	const cssPath = (el) => {
-		// nth-of-type chain up to <body>; stops at any element with an id
-		// (ids are stable anchors). Depth-capped at 8.
+	const cssPath = (el, rootTag) => {
 		const parts = [];
 		let cur = el, depth = 0;
 		while (cur && cur.nodeType === 1 && depth < 8) {
 			const tag = cur.tagName.toLowerCase();
-			if (tag === 'html' || tag === 'body') { parts.unshift(tag); break; }
+			if (tag === 'html' || tag === 'body') { parts.unshift(rootTag || tag); break; }
 			if (cur.id) { parts.unshift('#' + CSS.escape(cur.id)); break; }
 			const parent = cur.parentNode;
 			if (parent) {
@@ -137,35 +162,83 @@ const browserSnapshotJS = `(() => {
 		}
 		return parts.join(' > ');
 	};
-	for (const el of nodes) {
-		if (out.length >= cap) break;
-		const cs = getComputedStyle(el);
-		if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-		const rect = el.getBoundingClientRect();
-		if (rect.width === 0 && rect.height === 0) continue;
-		const href = el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : '';
-		out.push({ role: roleName(el), name: nameOf(el), sel: cssPath(el), href: href.slice(0, 200) });
+	const collectInto = (doc, label) => {
+		let n = 0;
+		if (!doc) return n;
+		const nodes = doc.querySelectorAll(interactive);
+		for (const el of nodes) {
+			if (out.length >= cap) break;
+			const cs = (doc.defaultView && doc.defaultView.getComputedStyle) ? doc.defaultView.getComputedStyle(el) : getComputedStyle(el);
+			if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+			const rect = el.getBoundingClientRect();
+			if (rect.width === 0 && rect.height === 0) continue;
+			const href = el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : '';
+			const p = cssPath(el, label);
+			out.push({ role: roleName(el), name: nameOf(el), sel: (label ? label + ' ' : '') + p, href: href.slice(0, 200) });
+			n++;
+		}
+		return n;
+	};
+	// Top-level document: always collected (fast, ctx-bounded by the caller).
+	collectInto(document, '');
+	// Iframe collection under a shared 1s budget, 500ms per child frame.
+	// Timed-out frames yield zero entries and are reported, not raised.
+	const IFRAME_TOTAL_MS = 1000, IFRAME_CHILD_MS = 500;
+	const iframeStart = Date.now();
+	const frames = [];
+	let timedOut = false;
+	const ifr = document.querySelectorAll('iframe');
+	for (let i = 0; i < ifr.length; i++) {
+		const remainingTotal = iframeStart + IFRAME_TOTAL_MS - Date.now();
+		if (remainingTotal <= 50) { frames.push({idx: i, ok: false, timeout: true}); timedOut = true; continue; }
+		const childDeadline = Date.now() + Math.min(remainingTotal, IFRAME_CHILD_MS);
+		let fdoc = null;
+		try { fdoc = ifr[i].contentDocument; } catch (e) { fdoc = null; }
+		if (!fdoc || !fdoc.body) { frames.push({idx: i, ok: false, timeout: false, reason: 'cross-origin-or-empty'}); continue; }
+		// Approximate per-child budget guard: a frame whose body cannot even be
+		// enumerated within its slice is treated as timed out. DOM enumeration is
+		// synchronous; the deadline check bounds pathological trees by bailing
+		// before entering heavy subtrees once the slice is spent.
+		if (Date.now() > childDeadline) { frames.push({idx: i, ok: false, timeout: true}); timedOut = true; continue; }
+		const label = 'iframe:nth-of-type(' + (i + 1) + ')';
+		const before = out.length;
+		collectInto(fdoc, label);
+		// If the cap was hit mid-frame the frame is partial: report it, and
+		// treat only genuinely budget-driven skips as timeouts.
+		if (out.length >= cap && before < cap) {
+			frames.push({idx: i, ok: true, partial: true});
+		} else {
+			frames.push({idx: i, ok: true});
+		}
+		if (Date.now() > childDeadline) { /* collected within slice */ }
 	}
-	return JSON.stringify(out);
+	return JSON.stringify({ entries: out, frames: frames, timedOut: timedOut });
 })()`
 
-func (b *Browser) collectBrowserRefs(ctx context.Context, profile, session string) ([]browserRefEntry, error) {
-	key := browserRefKey(profile, session)
-	raw, err := chromedp.Run(ctx, chromedp.Evaluate[string](browserSnapshotJS))
-	if err != nil {
-		return nil, err
+// collectBrowserRefsForPayload decodes a snapshot probe payload into ref
+// entries. Exposed for unit tests (acceptance ②: refs are minted strictly
+// from decoded entries - a timed-out frame contributes no entry, hence no
+// ref, by construction).
+func (b *Browser) collectBrowserRefsForPayload(raw string) ([]browserRefEntry, bool, error) {
+	var payload struct {
+		Entries []struct {
+			Role string `json:"role"`
+			Name string `json:"name"`
+			Sel  string `json:"sel"`
+			Href string `json:"href"`
+		} `json:"entries"`
+		Frames []struct {
+			Idx     int  `json:"idx"`
+			OK      bool `json:"ok"`
+			Timeout bool `json:"timeout"`
+		} `json:"frames"`
+		TimedOut bool `json:"timedOut"`
 	}
-	var flat []struct {
-		Role string `json:"role"`
-		Name string `json:"name"`
-		Sel  string `json:"sel"`
-		Href string `json:"href"`
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, false, fmt.Errorf("snapshot decode failed: %w", err)
 	}
-	if err := json.Unmarshal([]byte(raw), &flat); err != nil {
-		return nil, fmt.Errorf("snapshot decode failed: %w", err)
-	}
-	entries := make([]browserRefEntry, 0, len(flat))
-	for i, f := range flat {
+	entries := make([]browserRefEntry, 0, len(payload.Entries))
+	for i, f := range payload.Entries {
 		name := f.Name
 		if f.Href != "" && name == "" {
 			name = f.Href
@@ -177,8 +250,36 @@ func (b *Browser) collectBrowserRefs(ctx context.Context, profile, session strin
 			Selector: f.Sel,
 		})
 	}
-	b.refs.store(key, entries)
-	return entries, nil
+	return entries, payload.TimedOut, nil
+}
+
+func (b *Browser) collectBrowserRefs(ctx context.Context, profile, session string) ([]browserRefEntry, bool, error) {
+	raw, err := chromedp.Run(ctx, chromedp.Evaluate[string](browserSnapshotJS))
+	if err != nil {
+		return nil, false, err
+	}
+	entries, timedOut, err := b.collectBrowserRefsForPayload(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	b.refs.store(browserRefKey(profile, session), entries)
+	return entries, timedOut, nil
+}
+
+// snapshotTimeoutMarker is the explicit truncation marker required by the
+// D2 verdict acceptance assertion ①: when any iframe budget is exhausted
+// the rendered snapshot must carry this exact line.
+const snapshotTimeoutMarker = "[timeout: budget exhausted]"
+
+// renderSnapshotOutput assembles the full snapshot tool output, including
+// the truncation marker when frame budgets were exhausted (acceptance ①),
+// and the standing ref-usage footer.
+func renderSnapshotOutput(entries []browserRefEntry, timedOut bool) string {
+	out := renderRefTree(entries)
+	if timedOut {
+		out += "\n" + snapshotTimeoutMarker + " some iframes were skipped; elements inside them have NO refs"
+	}
+	return out + "\n\nUse a ref (e.g. '@e3') in the selector parameter of click/type/extract/select/hover/upload/scroll. Refs stay valid until this tab navigates."
 }
 
 func renderRefTree(entries []browserRefEntry) string {
