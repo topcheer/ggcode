@@ -467,6 +467,21 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	hookCfg := a.hookConfig
 	workDir := a.workingDir
 	a.mu.RUnlock()
+
+	// #5212: raw git branch -D bypasses every tool-seam guard, so probe
+	// BEFORE execution and hard-block while unpushed commits exist (the
+	// post-exec advisory below cannot save a branch that is already gone).
+	if tc.Name == "run_command" || tc.Name == "start_command" {
+		var m map[string]any
+		if err := json.Unmarshal(tc.Arguments, &m); err == nil {
+			if cmd, ok := m["command"].(string); ok && cmd != "" {
+				if blockMsg := branchDeleteGuardBlock(workDir, cmd); blockMsg != "" {
+					debug.Log("agent", "branch-delete guard blocked pre-exec")
+					return tool.Result{Content: blockMsg, IsError: true}
+				}
+			}
+		}
+	}
 	env := hooks.HookEnv{
 		ToolName:   tc.Name,
 		WorkingDir: workDir,
