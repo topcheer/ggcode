@@ -23,6 +23,23 @@ echo "[pre-push] running go vet"
 go vet -tags goolm ./...
 
 echo "[pre-push] running go build"
-CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode
+# 8+ ggcode instances share one GOCACHE; concurrent eviction corrupts
+# entries and the build fails with cache-class errors ("not in std",
+# "no such file or directory ... go-build") while the same tree builds
+# fine on retry (#5251). Retry once against a fresh private cache
+# instead of failing - never nuke the shared cache from a hook.
+if ! CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode; then
+  build_err=$(CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode 2>&1 || true)
+  case "$build_err" in
+    *"not in std"*|*go-build*)
+      echo "[pre-push] cache-class build failure detected - retrying with a fresh private GOCACHE"
+      CGO_ENABLED=0 GOCACHE="$(mktemp -d)" go build -tags goolm -o /dev/null ./cmd/ggcode
+      ;;
+    *)
+      printf '%s\n' "$build_err"
+      exit 1
+      ;;
+  esac
+fi
 
 echo "[pre-push] checks passed"
