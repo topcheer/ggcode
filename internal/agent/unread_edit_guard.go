@@ -171,13 +171,33 @@ func extractStringArrayPaths(m map[string]any) []string {
 	return paths
 }
 
+// extractEditFilePaths is the GUARD view (#5240): file_ops is excluded
+// because delete paths are never previously read and the unread-edit
+// guard must not fire on batch deletes.
 func extractEditFilePaths(toolName string, args json.RawMessage) []string {
+	return extractEditPaths(toolName, args, false)
+}
+
+// extractTrackedEditPaths is the TRACKER view (#5242): the post-edit
+// recorders (freshness/readHash/redundantRead/editFailRecovery) and the
+// failure counter DO need file_ops paths - a move's destination must be
+// registered as freshly written, and a successful file_ops must reset
+// the consecutive-edit-failure counter. Without this, #5240's guard fix
+// silently starved three tracker call sites.
+func extractTrackedEditPaths(toolName string, args json.RawMessage) []string {
+	return extractEditPaths(toolName, args, true)
+}
+
+func extractEditPaths(toolName string, args json.RawMessage, includeFileOps bool) []string {
 	if len(args) == 0 {
 		return nil
 	}
 	var m map[string]any
 	if json.Unmarshal(args, &m) != nil {
 		return nil
+	}
+	if includeFileOps && toolName == "file_ops" {
+		return extractFileOpsPaths(m)
 	}
 	switch toolName {
 	case "edit_file":
@@ -197,12 +217,45 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	case "notebook_edit":
 		return extractSinglePath(m, "notebook_path")
 	}
-	// file_ops is deliberately absent: its delete/move/mkdir operations are
-	// not content edits, so the unread-edit guard ("you are editing without
-	// reading") does not apply - it was misfiring twice on every batch
-	// delete (delete paths are never previously read).
+	// file_ops reaches here only in the guard view (includeFileOps=false):
+	// its delete/move/mkdir operations are not content edits, so the
+	// unread-edit guard ("you are editing without reading") does not apply
+	// - it was misfiring twice on every batch delete (delete paths are
+	// never previously read). The tracker view handled it above.
 
 	return nil
+}
+
+// extractFileOpsPaths flattens file_ops operations into tracked paths:
+// move destinations AND sources (destination = fresh write; source =
+// path the write displaced), delete sources.
+func extractFileOpsPaths(m map[string]any) []string {
+	ops, ok := m["operations"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, op := range ops {
+		o, ok := op.(map[string]any)
+		if !ok {
+			continue
+		}
+		action, _ := o["action"].(string)
+		switch action {
+		case "move":
+			if d, _ := o["destination"].(string); d != "" {
+				out = append(out, d)
+			}
+			if src, _ := o["source"].(string); src != "" {
+				out = append(out, src)
+			}
+		case "delete":
+			if src, _ := o["source"].(string); src != "" {
+				out = append(out, src)
+			}
+		}
+	}
+	return out
 }
 
 func extractSinglePath(m map[string]any, keys ...string) []string {
