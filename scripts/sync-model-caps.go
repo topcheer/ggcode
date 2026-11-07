@@ -245,6 +245,45 @@ func main() {
 	writeOutputs(code, vdCode, *output, allEntries, *dryRun, *forceShrink)
 }
 
+// officialFamilyOutputCaps pins vendor-mirror rows to the vendor's own
+// documented output ceiling (#5141 Class 2). models.dev mirrors inflate
+// MaxOutputTokens above the official cap: e.g. deepseek-v4 mirrors report
+// ~0.94M-1.05M while api-docs.deepseek.com caps max_tokens at "1 and 384K
+// (393216)" (verified 2026-11-07). Clamping at emit keeps sibling spellings
+// (@cf/, bare, vendor-prefixed) in sync with the official family cap and
+// stops the weekly-drift reds from mirror inflation.
+var officialFamilyOutputCaps = []struct {
+	substr string
+	cap    int
+}{
+	{"deepseek", 393216},
+	// GLM official output ceiling is 128K (131072) per z.ai docs; pinned by
+	// the #4946 router-alias contract ("must mirror official caps").
+	{"glm", 131072},
+	// Kimi K3 officially supports 1M output (1048576), pinned by #4946;
+	// models.dev mirror rows under-report ~0.9M (943718).
+	{"kimi", 1048576},
+}
+
+// clampMaxOutputTokens ceilings vendor-mirror rows at the family's official
+// cap; router-alias rows ("~" prefix, e.g. "~moonshotai/kimi-latest") are
+// pinned EXACTLY to the official cap in both directions, per the #4946
+// contract "router alias must mirror official caps".
+func clampMaxOutputTokens(model string, maxOut int) int {
+	for _, c := range officialFamilyOutputCaps {
+		if !strings.Contains(model, c.substr) {
+			continue
+		}
+		if strings.HasPrefix(model, "~") {
+			return c.cap
+		}
+		if maxOut > c.cap {
+			return c.cap
+		}
+	}
+	return maxOut
+}
+
 func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
 
 	pids := make([]string, 0, len(desiredProviders))
@@ -276,7 +315,7 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 			e := modelEntry{
 				ID:              strings.ToLower(strings.TrimSpace(m.ID)),
 				ContextWindow:   m.ContextWindow,
-				MaxOutputTokens: m.DefaultMaxTokens,
+				MaxOutputTokens: clampMaxOutputTokens(strings.ToLower(strings.TrimSpace(m.ID)), m.DefaultMaxTokens),
 				SupportsVision:  m.SupportsAttachments,
 				SourceProvider:  provider.ID,
 			}
