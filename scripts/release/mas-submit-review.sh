@@ -289,7 +289,7 @@ NRS_ID=$(echo "$NRS" | jq -r '.data.id // empty')
 echo "reviewSubmission created: ${NRS_ID}"
 
 refresh_jwt_if_needed
-asc "attach-review-item" POST "/v1/reviewSubmissions/${NRS_ID}/items" '{"data":{"type":"reviewSubmissionItems","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}' > /dev/null
+asc "attach-review-item" POST "/v1/reviewSubmissionItems" '{"data":{"type":"reviewSubmissionItems","attributes":{},"relationships":{"reviewSubmission":{"data":{"type":"reviewSubmissions","id":"'"${NRS_ID}"'"}},"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}' > /dev/null
 echo "version ${AV_ID} attached to ${NRS_ID}"
 
 refresh_jwt_if_needed
