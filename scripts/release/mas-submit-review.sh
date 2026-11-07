@@ -187,46 +187,74 @@ done
 [[ "$STATE" == "VALID" ]] || { echo "::error::build not VALID after ${MAX_WAIT} min (last=${STATE:-none})" >&2; exit 1; }
 [[ "$NO_SUBMIT" == "1" ]] && { echo "--no-submit: stopping after processing poll"; exit 0; }
 
-# ---------- open/attach the review submission ----------
-# A submission may already exist in PREPARE_FOR_SUBMISSION state (e.g. the
-# metadata round created one); reuse it, else create.
-refresh_jwt_if_needed
-RS=$(asc GET "/v1/reviewSubmissions?filter%5Bapp%5D=${APP_ID}&filter%5Bplatform%5D=${PLATFORM}&filter%5Bstate%5D=PREPARE_FOR_SUBMISSION")
-RS_ID=$(echo "$RS" | jq -r '.data[0].id // empty')
-if [[ -z "$RS_ID" ]]; then
-  refresh_jwt_if_needed
-  RS=$(asc POST /v1/reviewSubmissions '{"data":{"type":"reviewSubmissions","attributes":{"platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
-  RS_ID=$(echo "$RS" | jq -r '.data.id // empty')
-fi
-[[ -n "$RS_ID" ]] || { echo "::error::could not obtain reviewSubmission: ${RS}" >&2; exit 1; }
-echo "reviewSubmission: ${RS_ID}"
 
-# ---------- locate the appStoreVersion to submit ----------
+# ---------- fully automated review submission ----------
+# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource has
+# NO cancel endpoint, and filter[appStoreState]=PREPARE_FOR_SUBMISSION is
+# rejected with HTTP 400 on the versions endpoint - run 42355690984 log).
+# Flow: locate version -> developer-reject if WAITING_FOR_REVIEW/IN_REVIEW
+# -> generic What's New -> bind the fresh build -> submit for review.
+WHATS_NEW="${MAS_WHATS_NEW:-Bug fixes and stability improvements.}"
+
 refresh_jwt_if_needed
-AV=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=PREPARE_FOR_SUBMISSION&filter%5Bplatform%5D=${PLATFORM}")
-AV_ID=$(echo "$AV" | jq -r '.data[0].id // empty')
-if [[ -z "$AV_ID" ]]; then
-  # A version already in review means nothing to submit - that is the EXPECTED
-  # conflict class, not a defect. Emit a uniquely greppable line so acceptance
-  # logic never conflates it with a real failure (#5139 invariant 2).
-  refresh_jwt_if_needed
-  INREVIEW=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=WAITING_FOR_REVIEW&filter%5Bplatform%5D=${PLATFORM}")
-  if [[ "$(echo "$INREVIEW" | jq -r '.data | length')" -gt 0 ]]; then
-    echo "EXPECTED_CONFLICT_ALREADY_IN_REVIEW: version $(echo "$INREVIEW" | jq -r '.data[0].attributes.versionString') is WAITING_FOR_REVIEW - nothing to submit"
-    exit 0
+AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+AV=$(echo "$AVS" | jq -c "[.data[] | select(.attributes.versionString == \"${VERSION}\")] | .[0] // empty")
+AV_ID=$(echo "$AV" | jq -r '.id // empty')
+AV_STATE=$(echo "$AV" | jq -r '.attributes.appStoreState // empty')
+
+# developer reject: remove the live submission so the version is editable
+if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
+  echo "version ${VERSION} is ${AV_STATE} - developer-rejecting to rebind build ${BUILD_VERSION}"
+  SUBL=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
+  SUB_ID=$(echo "$SUBL" | jq -r '.data.id // empty')
+  if [[ -n "$SUB_ID" ]]; then
+    asc DELETE "/v1/appStoreVersionSubmissions/${SUB_ID}" > /dev/null
+    echo "submission ${SUB_ID} removed (Developer Rejected)"
+    for w in 1 2 3 4 5 6 8 10; do
+      sleep 10
+      refresh_jwt_if_needed
+      AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+      AV_STATE=$(echo "$AVS" | jq -r "[.data[] | select(.id == \"${AV_ID}\")][0].attributes.appStoreState // empty")
+      [[ "$AV_STATE" != "WAITING_FOR_REVIEW" && "$AV_STATE" != "IN_REVIEW" ]] && break
+    done
+  else
+    echo "::warning::no live appStoreVersionSubmission found for ${AV_STATE} version - continuing"
   fi
-  echo "::error::no PREPARE_FOR_SUBMISSION version and none in review: ${AV}" >&2; exit 1
 fi
 
-# ---------- attach + submit ----------
+# create the version if it does not exist yet
+if [[ -z "$AV_ID" ]]; then
+  echo "version ${VERSION} not found on ASC - creating"
+  refresh_jwt_if_needed
+  AVC=$(asc POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
+  AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+  [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
+fi
+
+# generic What's New across all localizations (MAS_WHATS_NEW overrides)
 refresh_jwt_if_needed
-asc POST "/v1/reviewSubmissions/${RS_ID}/items" \
-  '{"data":{"type":"reviewSubmissionItems","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}' \
-  > /dev/null || true # already-attached items are not an error
+LOCS=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
+LOC_IDS=$(echo "$LOCS" | jq -r '.data[].id // empty' | tr '\n' ' ')
+if [[ -z "${LOC_IDS// }" ]]; then
+  echo "::warning::no appStoreVersionLocalizations on version ${VERSION} - skipping What's New"
+fi
+for LOC_ID in $LOC_IDS; do
+  refresh_jwt_if_needed
+  if asc PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null; then
+    echo "whats-new set on ${LOC_ID}"
+  else
+    echo "::warning::whats-new patch failed on ${LOC_ID} - continuing"
+  fi
+done
+
+# bind the fresh build to the version
 refresh_jwt_if_needed
-RES=$(asc PATCH "/v1/reviewSubmissions/${RS_ID}" '{"data":{"type":"reviewSubmissions","id":"'"${RS_ID}"'","attributes":{"submitted":true}}}')
-ST=$(echo "$RES" | jq -r '.data.attributes.state // empty')
-case "$ST" in
-  WAITING_FOR_REVIEW) echo "submitted: version ${VERSION} is now WAITING_FOR_REVIEW";;
-  *) echo "::warning::submit patch returned state=${ST:-none}: $(echo "$RES" | head -c 400)"; exit 1;;
-esac
+asc PATCH "/v1/appStoreVersions/${AV_ID}" '{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'","relationships":{"build":{"data":{"type":"builds","id":"'"${BUILD_ID}"'"}}}}}' > /dev/null
+echo "build ${BUILD_VERSION} (${BUILD_ID}) bound to version ${VERSION}"
+
+# submit for review
+refresh_jwt_if_needed
+SUB=$(asc POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
+[[ -n "$NEWSUB" ]] || { echo "::error::submit failed: ${SUB:0:400}" >&2; exit 1; }
+echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NEWSUB})"
