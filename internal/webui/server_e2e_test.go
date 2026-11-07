@@ -1109,6 +1109,45 @@ func TestE2EMCPStatusCallback(t *testing.T) {
 	}
 }
 
+func TestE2EChatWSCheckOrigin(t *testing.T) {
+	bridge := &mockChatBridge{}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetChatBridge(bridge)
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsBase := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
+
+	// 同源 Origin:放行
+	sameOrigin := http.Header{}
+	sameOrigin.Set("Origin", srv.URL)
+	ws, _, err := websocket.DefaultDialer.Dial(wsBase, sameOrigin)
+	if err != nil {
+		t.Fatalf("same-origin dial should succeed: %v", err)
+	}
+	ws.Close()
+
+	// 无 Origin(非浏览器客户端):放行
+	ws, _, err = websocket.DefaultDialer.Dial(wsBase, nil)
+	if err != nil {
+		t.Fatalf("origin-less dial should succeed: %v", err)
+	}
+	ws.Close()
+
+	// 跨 Origin:拒绝(CSWSH 防护)
+	crossOrigin := http.Header{}
+	crossOrigin.Set("Origin", "https://evil.example.com")
+	ws, resp, err := websocket.DefaultDialer.Dial(wsBase, crossOrigin)
+	if err == nil {
+		ws.Close()
+		t.Fatal("cross-origin dial must be rejected")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 for cross-origin, got resp=%v err=%v", resp, err)
+	}
+}
+
 func TestE2EIMStatusCallback(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
