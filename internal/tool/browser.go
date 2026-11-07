@@ -796,6 +796,25 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 			"type: unique visible match for %q is document-order match #%d (the first match is hidden); use snapshot @eN refs to target it exactly", selector, typeIndex)}, nil
 	}
 
+	// #5209 D3: focus-token guard - plant a one-shot token, focus the target,
+	// read back document.activeElement; a mismatch means focus was hijacked
+	// between focus and typing: refuse (verdict ③: never retry) instead of
+	// typing into the wrong element. The token is cleared on BOTH paths.
+	guardClear, guardErr := b.runFocusTokenGuard(timeoutCtx, selector)
+	if guardErr != nil {
+		if strings.Contains(guardErr.Error(), "focus token guard failed") ||
+			strings.Contains(guardErr.Error(), "malformed data") {
+			// Probe transport failure: degrade to the legacy path (the guard
+			// is advisory, like the D1 probe).
+			guardClear = nil
+		} else {
+			return Result{IsError: true, Content: guardErr.Error()}, nil
+		}
+	}
+	if guardClear != nil {
+		defer guardClear()
+	}
+
 	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.WaitVisible(chromedp.CSS(selector)),
 		chromedp.Clear(chromedp.CSS(selector)),
