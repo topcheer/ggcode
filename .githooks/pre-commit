@@ -10,8 +10,8 @@ cd "${repo_root}"
 
 mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
 if ((${#staged_go_files[@]} > 0)); then
-  echo "[pre-commit] formatting staged Go files"
-  gofmt -w "${staged_go_files[@]}"
+  echo "[pre-commit] formatting staged Go files (go.mod-pinned toolchain)"
+  "${repo_root}/scripts/dev/gofmt-pinned.sh" -w "${staged_go_files[@]}"
   git add -- "${staged_go_files[@]}"
 fi
 
