@@ -10,7 +10,13 @@ const (
 	ptGuardWindow          = 12
 	ptGuardMinSteps        = 8
 	ptGuardStruggleDensity = 0.5
-	ptGuardOccupancy       = 0.6
+	// #5199-user-report alignment: measured against CompactionFill (the
+	// real auto-compact threshold), not the raw window. 0.85 of the
+	// compaction point ≈ 76% of the raw window with the default 10%
+	// output reserve - close enough to compaction that "context is high"
+	// is true when said, instead of firing at 60% of the raw window while
+	// compaction sits ~30 points away.
+	ptGuardOccupancy = 0.85
 )
 
 type prematureTerminationGuard struct {
@@ -50,8 +56,8 @@ func (g *prematureTerminationGuard) struggleDensity() float64 {
 func ptGuardAdvisory(errSteps, steps int, occupancy float64) string {
 	remainingPct := int((1 - occupancy) * 100)
 	return fmt.Sprintf(
-		"[Continuation Advisory] Recent steps are failing repeatedly (%d of last %d) while context usage is high (%d%% used). "+
-			"%d%% of the context window is still available - do not wrap up or give up yet. "+
+		"[Continuation Advisory] Recent steps are failing repeatedly (%d of last %d) while context usage is high (%d%% of the compaction threshold). "+
+			"%d%% of the headroom before auto-compaction is still available - do not wrap up or give up yet. "+
 			"Instead of surrendering to the errors: (1) re-read the exact error text of the LAST failure, "+
 			"(2) name the assumption that failure disproved, (3) pick a DIFFERENT strategy (narrower scope, "+
 			"smaller repro, different tool) rather than retrying the same shape. "+
@@ -71,7 +77,14 @@ func (a *Agent) maybeWarnTermination() string {
 	if density < ptGuardStruggleDensity {
 		return ""
 	}
-	occupancy := a.contextManager.UsageRatio()
+	// #5199-user-report: compaction-relative fill (tokens vs the ACTUAL
+	// auto-compact threshold), not the raw window - the raw-window ratio
+	// reads "nearly exhausted" at 60% while compaction fires around 90%.
+	threshold := a.contextManager.AutoCompactThreshold()
+	occupancy := 0.0
+	if threshold > 0 {
+		occupancy = float64(a.contextManager.TokenCount()) / float64(threshold)
+	}
 	if occupancy < ptGuardOccupancy {
 		return ""
 	}

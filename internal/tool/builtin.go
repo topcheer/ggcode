@@ -101,7 +101,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		WebFetch{},
 		WebSearch{},
-		NewBrowser(),
+		NewBrowserWithSandbox(sandboxFor("browser"), readSandboxFor("browser")),
 
 		NewAskUserTool(),
 		NewTodoWrite(""),

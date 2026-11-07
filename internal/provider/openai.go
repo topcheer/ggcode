@@ -599,9 +599,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
 
-			if attempt == 0 || p.policy.requestTimeout <= 0 {
-				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
-			}
+			ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 
 			usage = nil
 			logprobSum, logprobN = 0, 0

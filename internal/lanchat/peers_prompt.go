@@ -141,7 +141,7 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		sb.WriteString("- When you finish a task someone asked for: DM them the result (one concise message, no \"done?\" pings).\n")
 	} else {
 		sb.WriteString("- For cross-workspace questions: DM the specific person (action='send'). For task delegation: use a2a_remote.\n")
-		sb.WriteString("- Two peers may share the same nickname - when nicks collide, address the DM by node_id (id=... above) instead of nick.\n")
+		sb.WriteString("- Address DMs by nick (e.g. to='alice_dev'); nicks are stable across peer restarts. Reserve node_id addressing for tie-breaking identical nicks - node_ids rotate on every peer restart.\n")
 		sb.WriteString("- Check agent_busy before messaging — busy agents will see your message after their current task.\n")
 	}
 

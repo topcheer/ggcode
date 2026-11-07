@@ -734,6 +734,18 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	}
 	tools.Register(spawnTool)
 
+	// Single-shot context-isolated LLM calls (translate/polish/SVG/...) share
+	// the spawn provider wiring. #5187 registered these only into the
+	// sub-agent registry (agentruntime/subsystems.go); the main session's
+	// explicit registration list is the only path TUI/interactive sessions
+	// load tools from, so register here too.
+	tools.Register(tool.LLMCallTool{
+		Provider:        prov,
+		ProviderGetter:  providerGetter,
+		AvailableModels: availableModelsGetter,
+		WorkingDir:      r.model.agent.WorkingDir(),
+	})
+
 	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
 		var out []agent.SubagentCompletion
 		for _, st := range mgr.Statuses() {

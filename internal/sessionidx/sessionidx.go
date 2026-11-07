@@ -375,8 +375,14 @@ func (ix *Index) indexLine(offset int64, length int32, line []byte) {
 	}
 	roleByte := roleToByte(rec.Role)
 	total := 0
+	// Line-level dedup across all text blocks of the record (#5201): the
+	// same trigram appearing in two blocks of one line used to add two
+	// postings with the same offset, and Query's coverage arithmetic
+	// (score >= len(gr)-1) assumes each distinct trigram contributes at
+	// most one posting per line. One shared seen map keeps that contract.
+	seen := map[string]struct{}{}
 	for _, txt := range rec.Texts {
-		addPostings(ix.data.Trigrams, txt, offset, length, roleByte, rec.TsNano)
+		addPostings(ix.data.Trigrams, seen, txt, offset, length, roleByte, rec.TsNano)
 		total += len(txt)
 	}
 	ix.approxBytes += int64(total) * 40
@@ -397,12 +403,12 @@ func roleToByte(role string) byte {
 }
 
 // addPostings tokenizes text into rune trigrams and records one posting per
-// trigram occurrence (deduped per line) pointing at the whole line.
-func addPostings(tg map[string][]Posting, text string, offset int64, length int32, role byte, ts int64) {
+// distinct trigram (deduped per line via the caller-owned seen map shared
+// across all text blocks of the record, #5201) pointing at the whole line.
+func addPostings(tg map[string][]Posting, seen map[string]struct{}, text string, offset int64, length int32, role byte, ts int64) {
 	if len(text) < 3 {
 		return
 	}
-	seen := map[string]struct{}{}
 	rs := make([]rune, 0, 64)
 	for _, r := range text {
 		rs = append(rs, r)
@@ -449,6 +455,7 @@ func (ix *Index) Query(terms []string, limit int) []Hit {
 		p     Posting
 		bits  uint8
 		score int
+		got   map[string]struct{} // distinct trigrams of this term seen for the line
 	}
 	sets := make([]map[int64]*acc, len(terms))
 	for ti, term := range terms {
@@ -462,14 +469,24 @@ func (ix *Index) Query(terms []string, limit int) []Hit {
 			for _, p := range ix.data.Trigrams[g] {
 				a := m[p.Offset]
 				if a == nil {
-					m[p.Offset] = &acc{p: p}
+					a = &acc{p: p, got: map[string]struct{}{g: {}}}
+					m[p.Offset] = a
 				} else {
-					a.score++
+					// #5201: legacy on-disk indexes can carry duplicate
+					// postings for the same (line, trigram) when the same
+					// trigram appeared in multiple text blocks. Score must
+					// count DISTINCT trigrams of the term that hit the
+					// line, otherwise a line missing a required trigram
+					// can still pass the coverage threshold.
+					if _, dup := a.got[g]; !dup {
+						a.got[g] = struct{}{}
+						a.score++
+					}
 				}
 			}
 		}
-		// Keep only lines covering ALL trigrams of this term: approximate by
-		// requiring score >= len(gr)-1 (each trigram adds one beyond the first).
+		// Keep only lines covering ALL trigrams of this term: score counts
+		// distinct term trigrams hitting the line (see #5201 note above).
 		keep := map[int64]*acc{}
 		for off, a := range m {
 			if a.score >= len(gr)-1 {

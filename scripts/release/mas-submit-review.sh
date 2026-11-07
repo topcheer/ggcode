@@ -61,23 +61,49 @@ s2, i = read_int(i)
 sys.stdout.buffer.write(r + s2)
 '
 }
-NOW=$(date +%s)
-HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
-PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d}' "$ISSUER" "$((NOW))" "$((NOW+1200))" | b64url)
-SIG_INPUT="${HEADER}.${PAYLOAD}"
-# ES256 per RFC 7515 requires the RAW 64-byte r||s signature. `openssl dgst
-# -sign` emits DER (~70 bytes) — signing with DER verbatim yields ASC
-# 401 NOT_AUTHORIZED (run 42224235910 verbose evidence). Strip DER to r||s:
-# NOTE: DER bytes must NEVER pass through a shell variable — command
-# substitution strips NUL/newline bytes. Pipe openssl -> der_to_raw -> b64url.
-SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | der_to_raw | b64url)
-JWT="${SIG_INPUT}.${SIG}"
+make_jwt() {
+  # ASC API keys: exp - iat must be <= 20 min. The poll loop runs up to
+  # MAX_WAIT (40) minutes, so a token minted once at script start expires
+  # mid-loop and every subsequent call 401s (run 42333602022: poll #80 401
+  # after 40 min, early polls were 200/NOT-YET-VISIBLE). Mint lazily and
+  # refresh with a 5-minute safety margin before each asc() call.
+  local now hdr payload sig sig_input
+  now=$(date +%s)
+  JWT_EXP=$((now + 1200))
+  hdr=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
+  payload=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$ISSUER" "$now" "$JWT_EXP" | b64url)
+  sig_input="${hdr}.${payload}"
+  # ES256 per RFC 7515 requires the RAW 64-byte r||s signature. `openssl dgst
+  # -sign` emits DER (~70 bytes) — signing with DER verbatim yields ASC
+  # 401 NOT_AUTHORIZED (run 42224235910 verbose evidence). Strip DER to r||s:
+  # NOTE: DER bytes must NEVER pass through a shell variable — command
+  # substitution strips NUL/newline bytes. Pipe openssl -> der_to_raw -> b64url.
+  sig=$(printf '%s' "$sig_input" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | der_to_raw | b64url)
+  JWT="${sig_input}.${sig}"
+}
+JWT=""
+JWT_EXP=0
+make_jwt
 LOGD=/tmp/asc-debug.log
 logd() { printf '%s\n' "$*" | tee -a "$LOGD" >&2; }
+
+# Refresh helper - MUST be called from the parent scope. asc() also tries,
+# but every call site uses $(asc ...), a subshell whose variable mutations
+# never propagate - that made the first attempt at in-asc refresh a no-op.
+refresh_jwt_if_needed() {
+  if (( $(date +%s) >= JWT_EXP - 300 )); then
+    logd "JWT expired/near-expiry - refreshing (exp was ${JWT_EXP})"
+    make_jwt
+  fi
+}
 
 asc() { # asc METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
   local resp http_code
+  if (( $(date +%s) >= JWT_EXP - 300 )); then
+    logd "JWT expired/near-expiry - refreshing (exp was ${JWT_EXP})"
+    make_jwt
+  fi
   if [[ -n "$body" ]]; then
     resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
       -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body")
@@ -86,6 +112,7 @@ asc() { # asc METHOD PATH [JSON_BODY]
   fi
   http_code="${resp##*__HTTP__}"
   resp="${resp%__HTTP__*}"
+  printf '%s' "$http_code" > /tmp/asc-last-code
   logd "=== ASC $method $path -> HTTP $http_code ==="
   logd "request-body: ${body:-(none)}"
   logd "response: $resp"
@@ -96,6 +123,7 @@ asc() { # asc METHOD PATH [JSON_BODY]
 }
 
 # ---------- locate the app ----------
+refresh_jwt_if_needed
 APP_JSON=$(asc GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
 APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
 if [[ -z "$APP_ID" ]]; then
@@ -116,17 +144,37 @@ echo "app id: ${APP_ID}"
 # becomes usable (and submittable) once processingState == VALID.
 echo "polling build ${VERSION} for processing (max ${MAX_WAIT} min)..."
 BUILD_ID=""
+CONSEC_401=0
 for i in $(seq 1 "$((MAX_WAIT*2))"); do
+  refresh_jwt_if_needed
   # Poll keyed on the BUILD number (CFBundleVersion) when given - the short
   # version alone can match a stale build or none at all (#5139 invariant 1).
+  # Run 42351262813: ASC rejects BOTH filter[version] and sort on the
+  # builds-in-app relationship endpoint (HTTP 400 PARAMETER_ERROR.ILLEGAL,
+  # one error per parameter) - the 401 chain previously masked this. Fetch a
+  # page without filter/sort and match client-side instead.
+  B=$(asc GET "/v1/apps/${APP_ID}/builds?limit=50")
   if [[ -n "$BUILD_VERSION" ]]; then
-    B=$(asc GET "/v1/apps/${APP_ID}/builds?filter%5Bversion%5D=${BUILD_VERSION}&sort=-uploadedDate&limit=1")
+    MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0]")
   else
-    B=$(asc GET "/v1/apps/${APP_ID}/builds?sort=-uploadedDate&limit=1")
+    MATCH=$(echo "$B" | jq -c '.data | sort_by(.attributes.uploadedDate) | reverse | .[0]')
   fi
-  STATE=$(echo "$B" | jq -r '.data[0].attributes.processingState // empty' 2>/dev/null)
-  BUILD_ID=$(echo "$B" | jq -r '.data[0].id // empty' 2>/dev/null)
+  STATE=$(echo "$MATCH" | jq -r '.attributes.processingState // empty' 2>/dev/null)
+  BUILD_ID=$(echo "$MATCH" | jq -r '.id // empty' 2>/dev/null)
   N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
+  LAST_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+  if [[ "$LAST_CODE" == "401" ]]; then
+    CONSEC_401=$((CONSEC_401 + 1))
+    # Fresh token + still 401 = credentials problem (key revoked, kid/issuer
+    # mismatch), not a timing problem - fail fast with a pointed message
+    # instead of looping silently for the remaining wait budget.
+    if (( CONSEC_401 >= 5 )); then
+      echo "::error::ASC still returning 401 after ${CONSEC_401} consecutive polls with freshly-signed JWTs - check APPLE_API_KEY_P8/APPLE_API_KEY_ID/APPLE_API_ISSUER_ID secret pairing and key validity; last response: ${B:0:300}" >&2
+      exit 1
+    fi
+  else
+    CONSEC_401=0
+  fi
   echo "poll #$i: state=${STATE:-NONE} build_id=${BUILD_ID:-NONE} matches=$N_BUILDS"
   case "$STATE" in
     VALID) echo "build ${BUILD_ID} processed (VALID) after ~$((i/2)) min"; break;;
@@ -139,40 +187,74 @@ done
 [[ "$STATE" == "VALID" ]] || { echo "::error::build not VALID after ${MAX_WAIT} min (last=${STATE:-none})" >&2; exit 1; }
 [[ "$NO_SUBMIT" == "1" ]] && { echo "--no-submit: stopping after processing poll"; exit 0; }
 
-# ---------- open/attach the review submission ----------
-# A submission may already exist in PREPARE_FOR_SUBMISSION state (e.g. the
-# metadata round created one); reuse it, else create.
-RS=$(asc GET "/v1/reviewSubmissions?filter%5Bapp%5D=${APP_ID}&filter%5Bplatform%5D=${PLATFORM}&filter%5Bstate%5D=PREPARE_FOR_SUBMISSION")
-RS_ID=$(echo "$RS" | jq -r '.data[0].id // empty')
-if [[ -z "$RS_ID" ]]; then
-  RS=$(asc POST /v1/reviewSubmissions '{"data":{"type":"reviewSubmissions","attributes":{"platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
-  RS_ID=$(echo "$RS" | jq -r '.data.id // empty')
-fi
-[[ -n "$RS_ID" ]] || { echo "::error::could not obtain reviewSubmission: ${RS}" >&2; exit 1; }
-echo "reviewSubmission: ${RS_ID}"
 
-# ---------- locate the appStoreVersion to submit ----------
-AV=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=PREPARE_FOR_SUBMISSION&filter%5Bplatform%5D=${PLATFORM}")
-AV_ID=$(echo "$AV" | jq -r '.data[0].id // empty')
-if [[ -z "$AV_ID" ]]; then
-  # A version already in review means nothing to submit - that is the EXPECTED
-  # conflict class, not a defect. Emit a uniquely greppable line so acceptance
-  # logic never conflates it with a real failure (#5139 invariant 2).
-  INREVIEW=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?filter%5BappStoreState%5D=WAITING_FOR_REVIEW&filter%5Bplatform%5D=${PLATFORM}")
-  if [[ "$(echo "$INREVIEW" | jq -r '.data | length')" -gt 0 ]]; then
-    echo "EXPECTED_CONFLICT_ALREADY_IN_REVIEW: version $(echo "$INREVIEW" | jq -r '.data[0].attributes.versionString') is WAITING_FOR_REVIEW - nothing to submit"
-    exit 0
+# ---------- fully automated review submission ----------
+# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource has
+# NO cancel endpoint, and filter[appStoreState]=PREPARE_FOR_SUBMISSION is
+# rejected with HTTP 400 on the versions endpoint - run 42355690984 log).
+# Flow: locate version -> developer-reject if WAITING_FOR_REVIEW/IN_REVIEW
+# -> generic What's New -> bind the fresh build -> submit for review.
+WHATS_NEW="${MAS_WHATS_NEW:-Bug fixes and stability improvements.}"
+
+refresh_jwt_if_needed
+AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+AV=$(echo "$AVS" | jq -c "[.data[] | select(.attributes.versionString == \"${VERSION}\")] | .[0] // empty")
+AV_ID=$(echo "$AV" | jq -r '.id // empty')
+AV_STATE=$(echo "$AV" | jq -r '.attributes.appStoreState // empty')
+
+# developer reject: remove the live submission so the version is editable
+if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
+  echo "version ${VERSION} is ${AV_STATE} - developer-rejecting to rebind build ${BUILD_VERSION}"
+  SUBL=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
+  SUB_ID=$(echo "$SUBL" | jq -r '.data.id // empty')
+  if [[ -n "$SUB_ID" ]]; then
+    asc DELETE "/v1/appStoreVersionSubmissions/${SUB_ID}" > /dev/null
+    echo "submission ${SUB_ID} removed (Developer Rejected)"
+    for w in 1 2 3 4 5 6 8 10; do
+      sleep 10
+      refresh_jwt_if_needed
+      AVS=$(asc GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+      AV_STATE=$(echo "$AVS" | jq -r "[.data[] | select(.id == \"${AV_ID}\")][0].attributes.appStoreState // empty")
+      [[ "$AV_STATE" != "WAITING_FOR_REVIEW" && "$AV_STATE" != "IN_REVIEW" ]] && break
+    done
+  else
+    echo "::warning::no live appStoreVersionSubmission found for ${AV_STATE} version - continuing"
   fi
-  echo "::error::no PREPARE_FOR_SUBMISSION version and none in review: ${AV}" >&2; exit 1
 fi
 
-# ---------- attach + submit ----------
-asc POST "/v1/reviewSubmissions/${RS_ID}/items" \
-  '{"data":{"type":"reviewSubmissionItems","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}' \
-  > /dev/null || true # already-attached items are not an error
-RES=$(asc PATCH "/v1/reviewSubmissions/${RS_ID}" '{"data":{"type":"reviewSubmissions","id":"'"${RS_ID}"'","attributes":{"submitted":true}}}')
-ST=$(echo "$RES" | jq -r '.data.attributes.state // empty')
-case "$ST" in
-  WAITING_FOR_REVIEW) echo "submitted: version ${VERSION} is now WAITING_FOR_REVIEW";;
-  *) echo "::warning::submit patch returned state=${ST:-none}: $(echo "$RES" | head -c 400)"; exit 1;;
-esac
+# create the version if it does not exist yet
+if [[ -z "$AV_ID" ]]; then
+  echo "version ${VERSION} not found on ASC - creating"
+  refresh_jwt_if_needed
+  AVC=$(asc POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
+  AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+  [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
+fi
+
+# generic What's New across all localizations (MAS_WHATS_NEW overrides)
+refresh_jwt_if_needed
+LOCS=$(asc GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
+LOC_IDS=$(echo "$LOCS" | jq -r '.data[].id // empty' | tr '\n' ' ')
+if [[ -z "${LOC_IDS// }" ]]; then
+  echo "::warning::no appStoreVersionLocalizations on version ${VERSION} - skipping What's New"
+fi
+for LOC_ID in $LOC_IDS; do
+  refresh_jwt_if_needed
+  if asc PATCH "/v1/appStoreVersionLocalizations/${LOC_ID}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_ID}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null; then
+    echo "whats-new set on ${LOC_ID}"
+  else
+    echo "::warning::whats-new patch failed on ${LOC_ID} - continuing"
+  fi
+done
+
+# bind the fresh build to the version
+refresh_jwt_if_needed
+asc PATCH "/v1/appStoreVersions/${AV_ID}" '{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'","relationships":{"build":{"data":{"type":"builds","id":"'"${BUILD_ID}"'"}}}}}' > /dev/null
+echo "build ${BUILD_VERSION} (${BUILD_ID}) bound to version ${VERSION}"
+
+# submit for review
+refresh_jwt_if_needed
+SUB=$(asc POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
+[[ -n "$NEWSUB" ]] || { echo "::error::submit failed: ${SUB:0:400}" >&2; exit 1; }
+echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NEWSUB})"

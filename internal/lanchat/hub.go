@@ -447,6 +447,36 @@ func (h *Hub) StaleRecipient(nodeID string) (time.Duration, bool) {
 	return age, age > ageOffline
 }
 
+// LookupPeerIDByNick resolves a nick (HumanNick or AgentNick,
+// case-insensitive) to the node_id of its unique fresh holder, ignoring
+// stale pre-restart entries still awaiting the peer sweep (#5200). A nick
+// held by zero or multiple fresh peers does not resolve: senders must get
+// an explicit ambiguity error rather than a silent coin-flip delivery. The
+// returned id is how a DM addressed by nick keeps working across a peer's
+// process restarts: node_ids rotate per process, nicks do not.
+func (h *Hub) LookupPeerIDByNick(nick string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(nick))
+	if lower == "" {
+		return "", false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	found := ""
+	for _, p := range h.peers {
+		if strings.ToLower(p.HumanNick) != lower && strings.ToLower(p.AgentNick) != lower {
+			continue
+		}
+		if time.Since(time.Unix(p.LastSeen, 0)) > ageOffline {
+			continue
+		}
+		if found != "" {
+			return "", false
+		}
+		found = p.NodeID
+	}
+	return found, found != ""
+}
+
 func (h *Hub) Participants() []Participant {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

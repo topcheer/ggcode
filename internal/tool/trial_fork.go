@@ -229,15 +229,18 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		keep = winner
 		results[winner].Kept = true
 	}
-	t.cleanupWorktrees(root, dirs, keep)
-
+	keptDirty := t.cleanupWorktrees(root, dirs, keep)
+	keptDirtyDirs := map[string]bool{}
+	for _, d := range keptDirty {
+		keptDirtyDirs[d] = true
+	}
 	anyUsable := false
 	for _, r := range results {
 		if r.Commits > 0 || r.VerifyPass {
 			anyUsable = true
 		}
 	}
-	report := formatTrialReport(base, in.VerifyCmd, results, winner, anyUsable)
+	report := formatTrialReport(base, in.VerifyCmd, results, winner, anyUsable, keptDirtyDirs)
 	return Result{IsError: !anyUsable, Content: report}, nil
 }
 
@@ -312,17 +315,26 @@ func runTrialVerify(ctx context.Context, dir, verifyCmd string, cap time.Duratio
 	return res
 }
 
-func (t *TrialForkTool) cleanupWorktrees(root string, dirs []string, keep ...int) {
+// cleanupWorktrees removes finished trial worktrees (#5212: the automated
+// sweeper must not silently discard uncommitted work - a worktree with a
+// dirty status line is KEPT for manual recovery and reported, not removed).
+func (t *TrialForkTool) cleanupWorktrees(root string, dirs []string, keep ...int) []string {
 	skip := map[int]bool{}
 	for _, i := range keep {
 		skip[i] = true
 	}
+	var keptDirty []string
 	for i, dir := range dirs {
 		if dir == "" || skip[i] {
 			continue
 		}
+		if out, err := t.gitOut(dir, "status", "--porcelain"); err == nil && strings.TrimSpace(out) != "" {
+			keptDirty = append(keptDirty, dir)
+			continue
+		}
 		_, _ = t.gitOut(root, "worktree", "remove", "--force", dir)
 	}
+	return keptDirty
 }
 
 func trialTaskPrompt(goal, strategy, worktree string) string {
@@ -423,7 +435,7 @@ func trimSummary(s string, max int) string {
 	return cut + "…"
 }
 
-func formatTrialReport(base, verifyCmd string, results []trialResult, winner int, usable bool) string {
+func formatTrialReport(base, verifyCmd string, results []trialResult, winner int, usable bool, keptDirtyDirs map[string]bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Trial fork complete: %d trials forked from %s\n", len(results), abbrevSHA(base))
 	if verifyCmd != "" {
@@ -471,6 +483,15 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 			abbrevSHA(base), w.Branch)
 	}
 	sb.WriteString("Losing trial worktrees were removed; all trial/* branches are kept.\n")
+	if len(keptDirtyDirs) > 0 {
+		sb.WriteString("#5212 warning: some losing trial worktrees were KEPT because they still carry uncommitted changes (silent discard is the failure mode this guard exists for); inspect and clean them up manually:\n")
+		for _, r := range results {
+			if keptDirtyDirs[r.Worktree] && r.Index-1 != winner {
+				sb.WriteString(fmt.Sprintf("  - %s (trial %d, uncommitted changes present)\n", r.Worktree, r.Index))
+			}
+		}
+		sb.WriteString("Their trial/* branches remain available for diff/apply.\n")
+	}
 	return sb.String()
 }
 

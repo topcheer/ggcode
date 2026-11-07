@@ -30,6 +30,22 @@ go vet -tags goolm ./...
 CGO_ENABLED=0 go build -tags goolm ./...
 ```
 
+**Deadcode/unreachable caveat** (#5204): the maintenance-sweep analyzer
+is the external `golang.org/x/tools/cmd/deadcode` CLI; it resolves
+interface dispatch (struct in an interface field, `Register(x Interface)`,
+interface-typed params) correctly. The real FP source is **module scope**:
+symbols whose production callers live only in `desktop/ggcode-desktop-wails`
+(a separate Go module) - e.g. `NewSubAgentManager` and every tool it
+registers, `LLMCallTool` included - are invisible to a root-rooted
+`deadcode ./...` sweep and report as unreachable. Run the sweep from BOTH
+roots (`./...` at the repo root and `./...` inside
+`desktop/ggcode-desktop-wails`) before acting on any verdict. Note that
+test-only symbols are still TRUE findings: `NewMemoryBindingStore` and
+`NewTokenProviderFromPreset` have zero non-test callers, so
+`MemoryBindingStore.Delete` / `PKCETokenProvider.GetToken` being flagged
+was correct - before deleting anything, grep the symbol AND its
+constructor/registration sites outside `*_test.go`.
+
 **Key rule**: Always use `-tags goolm`. Without it, CGO-only packages (e.g. `go-olm`) will fail to compile.
 
 ## Major Directories
