@@ -302,6 +302,11 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		if len(rest) == 0 {
 			return true
 		}
+		// #5199: bare patrol inventory variant (list is read-only;
+		// add/remove/prune are stateful and stay gated).
+		if rest[0] == "worktree" && len(rest) > 1 && rest[1] == "list" {
+			return true
+		}
 		return irrevReadOnlyGitSubcommands[rest[0]]
 	case "go":
 		if len(rest) == 0 {
@@ -312,6 +317,39 @@ func irrevSegmentIsReadOnly(seg string) bool {
 
 		if len(rest) == 0 {
 			return true
+		}
+		// #5199: `gh api` is the dominant patrol signature (check-run
+		// annotations, merge-state probes) but was absent from the read-only
+		// table, so every round's first batched call tripped the
+		// zero-grounding flag. GET-by-default is read-only UNLESS an
+		// explicit mutating method or body/field flag is present
+		// (conservative: field flags imply a write payload even without -X).
+		if rest[0] == "api" {
+			mutating := false
+			for i := 1; i < len(rest); i++ {
+				a := rest[i]
+				if a == "-X" || a == "--method" {
+					if i+1 < len(rest) {
+						m := strings.ToUpper(rest[i+1])
+						if m != "GET" && m != "HEAD" {
+							mutating = true
+						}
+						i++
+					}
+					continue
+				}
+				if strings.HasPrefix(a, "-X") && len(a) > 2 {
+					m := strings.ToUpper(a[2:])
+					if m != "GET" && m != "HEAD" {
+						mutating = true
+					}
+					continue
+				}
+				if a == "-f" || a == "--field" || a == "-F" || a == "--field-file" || a == "--input" || a == "--slurp" {
+					mutating = true
+				}
+			}
+			return !mutating
 		}
 		resource, ok := irrevReadOnlyGhSubcommands[rest[0]]
 		if !ok {
