@@ -45,6 +45,12 @@ type Browser struct {
 	gcStop   chan struct{}
 	gcClose  sync.Once
 	refs     *browserRefRegistry
+	// #5215: Browser has local-file side effects (screenshot output_path
+	// write, upload path read) and previously bypassed the sandbox
+	// architecture entirely. Nil checkers = fail-open (matches
+	// readSandboxFor semantics when no policy is configured).
+	SandboxCheck     AllowedPathChecker // screenshot output_path (write face)
+	ReadSandboxCheck AllowedPathChecker // upload path (read face)
 }
 
 func NewBrowser() *Browser {
@@ -53,6 +59,13 @@ func NewBrowser() *Browser {
 		gcStop:   make(chan struct{}),
 		refs:     newBrowserRefRegistry(),
 	}
+}
+
+func NewBrowserWithSandbox(writeCheck, readCheck AllowedPathChecker) *Browser {
+	b := NewBrowser()
+	b.SandboxCheck = writeCheck
+	b.ReadSandboxCheck = readCheck
+	return b
 }
 
 func (b *Browser) Name() string { return "browser" }
@@ -874,7 +887,38 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 	return Result{Content: pageText}, nil
 }
 
+// checkScreenshotPath is the #5215 write-face gate for output_path.
+// Returns (blockMsg, blocked). Pure so it is unit-testable without a
+// browser session.
+func (b *Browser) checkScreenshotPath(abs string) (string, bool) {
+	if b.SandboxCheck != nil && !b.SandboxCheck(abs) {
+		return fmt.Sprintf(
+			"screenshot output_path blocked by workspace sandbox: %s "+
+				"(use a path inside the workspace, #5215/#712)", abs), true
+	}
+	return "", false
+}
+
+// checkUploadPath is the #5215 read-face gate for the upload path.
+func (b *Browser) checkUploadPath(absPath string) (string, bool) {
+	if b.ReadSandboxCheck != nil && !b.ReadSandboxCheck(absPath) {
+		return fmt.Sprintf(
+			"upload file blocked by workspace sandbox: %s "+
+				"(file reads for upload must stay inside the allowed paths, #5215/#712)", absPath), true
+	}
+	return "", false
+}
+
 func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool, outputPath string) (Result, error) {
+	if outputPath != "" {
+		abs0, err0 := filepath.Abs(outputPath)
+		if err0 != nil {
+			abs0 = outputPath
+		}
+		if msg, blocked := b.checkScreenshotPath(abs0); blocked {
+			return Result{IsError: true, Content: msg}, nil
+		}
+	}
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -1390,14 +1434,17 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 }
 
 func (b *Browser) doUpload(ctx context.Context, profile, session, selector, filePath string, headless *bool) (Result, error) {
-	tab, err := b.getSession(profile, session, headless)
-	if err != nil {
-		return Result{IsError: true, Content: err.Error()}, nil
-	}
-
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid file path: %v", err)}, nil
+	}
+	// #5215: fail fast on the read-face gate before any browser work.
+	if msg, blocked := b.checkUploadPath(absPath); blocked {
+		return Result{IsError: true, Content: msg}, nil
+	}
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	if _, err := os.Stat(absPath); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("file not found: %s", absPath)}, nil
