@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -101,4 +102,43 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// #5212 automated-sweeper face: trial_fork's cleanup force-removed losing
+// worktrees even when they still carried UNCOMMITTED changes (the losing
+// trial's last save is silently discarded). The sweeper must probe status
+// and KEEP dirty worktrees, reporting them for manual recovery.
+func TestIssue5212TrialForkCleanupKeepsDirtyWorktree(t *testing.T) {
+	root := t.TempDir()
+	mainRepo := root + "/main"
+	run := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main", mainRepo)
+	run("-C", mainRepo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "base")
+	cleanWt := root + "/wt-clean"
+	dirtyWt := root + "/wt-dirty"
+	run("-C", mainRepo, "worktree", "add", "-q", "-b", "trial/clean", cleanWt, "main")
+	run("-C", mainRepo, "worktree", "add", "-q", "-b", "trial/dirty", dirtyWt, "main")
+	if err := os.WriteFile(dirtyWt+"/wip.txt", []byte("uncommitted work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tf := TrialForkTool{}
+	kept := tf.cleanupWorktrees(mainRepo, []string{cleanWt, dirtyWt})
+
+	if len(kept) != 1 || kept[0] != dirtyWt {
+		t.Fatalf("dirty worktree must be kept, got %v", kept)
+	}
+	if _, err := os.Stat(cleanWt); !os.IsNotExist(err) {
+		t.Errorf("clean worktree must be removed, still present: %v", err)
+	}
+	if _, err := os.Stat(dirtyWt + "/wip.txt"); err != nil {
+		t.Fatalf("BUG #5212: uncommitted work was silently discarded: %v", err)
+	}
+
 }

@@ -119,3 +119,40 @@ func TestIssue5212_MultipleOffendersAllNamed(t *testing.T) {
 		t.Errorf("pushed branch must not be listed as offender:\n%s", msg)
 	}
 }
+
+// #5212 ownership hardening: a force-delete naming more branches than the
+// probe budget must FAIL CLOSED (a silent cap is the same silent-loss
+// failure mode), and the explicit-intent escape must be an env assignment
+// prefixing a git command - not a bare substring anywhere in the command.
+func TestIssue5212_ProbeBudgetFailsClosed(t *testing.T) {
+	names := []string{}
+	for i := 0; i < 13; i++ {
+		names = append(names, fmt.Sprintf("b%d", i))
+	}
+	cmd := "git branch -D " + strings.Join(names, " ")
+	if got := extractForceDeletedBranches(cmd); len(got) != 13 || got[12] != probeBudgetMarker {
+		t.Fatalf("expected 12 branches + sentinel, got %d: %v", len(got), got)
+	}
+	msg := branchDeleteGuardBlock(t.TempDir(), cmd)
+	for _, pin := range []string{"exceeds the probe budget", "GGCODE_ALLOW_UNPUSHED_DELETE=1"} {
+		if !strings.Contains(msg, pin) {
+			t.Errorf("budget block missing %q:\n%s", pin, msg)
+		}
+	}
+	// The escape still works for the oversized delete.
+	if msg := branchDeleteGuardBlock(t.TempDir(), "GGCODE_ALLOW_UNPUSHED_DELETE=1 "+cmd); msg != "" {
+		t.Errorf("escape over budget-delete must pass, got:\n%s", msg)
+	}
+}
+
+func TestIssue5212_EscapeMustBeCommandPrefixNotSubstring(t *testing.T) {
+	dir := setupProbeRepo(t)
+	// The token merely quoted/echoed does NOT authorize a dirty delete.
+	if msg := branchDeleteGuardBlock(dir, `echo "GGCODE_ALLOW_UNPUSHED_DELETE=1" && git branch -D main`); msg == "" {
+		t.Fatal("quoted-token echo must NOT count as explicit intent")
+	}
+	// A real env-prefix assignment (possibly after a benign chain) does.
+	if msg := branchDeleteGuardBlock(dir, "cd /tmp && GGCODE_ALLOW_UNPUSHED_DELETE=1 git branch -D main"); msg != "" {
+		t.Errorf("chained env-prefix escape must pass, got:\n%s", msg)
+	}
+}

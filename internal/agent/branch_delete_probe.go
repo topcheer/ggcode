@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -22,12 +23,17 @@ import (
 // intentional, mirroring exit_worktree(remove, discard_changes=true).
 const allowUnpushedDeleteEnv = "GGCODE_ALLOW_UNPUSHED_DELETE=1"
 
+// probeBudgetMarker is appended when a force-delete names more branches
+// than the probe budget covers; branchDeleteGuardBlock then fails closed
+// instead of silently skipping the unprobed tail (#5212 hardening).
+const probeBudgetMarker = "#probe-budget-exhausted#"
+
 var (
 	reBranchSegment   = regexp.MustCompile(`\bgit\s+branch\s+([^\n;|&]*)`)
 	reBranchDelFlag   = regexp.MustCompile(`^-D$|^-df$|^-fd$`)
 	reBranchDelLongD  = regexp.MustCompile(`^--delete$`)
 	reBranchDelLongF  = regexp.MustCompile(`^--force$`)
-	probeMaxBranches  = 4
+	probeMaxBranches  = 12
 	probeCmdTimeout   = 3 * time.Second
 	probeMaxSHAsNamed = 5
 )
@@ -48,6 +54,26 @@ func gitLedSegments(cmd string) []string {
 		}
 	}
 	return out
+}
+
+// allowUnpushedDeletePrefix reports whether the explicit-intent escape is
+// present as a command-segment env assignment (GGCODE_ALLOW_UNPUSHED_DELETE=1
+// git branch -D x, possibly after &&/;/cd chains) rather than as a bare
+// substring (echo "GGCODE_ALLOW_UNPUSHED_DELETE=1" does NOT authorize).
+func allowUnpushedDeletePrefix(command string) bool {
+	for _, seg := range strings.FieldsFunc(command, func(r rune) bool {
+		return r == '\n' || r == ';' || r == '|' || r == '&'
+	}) {
+		fields := strings.Fields(seg)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "GGCODE_ALLOW_UNPUSHED_DELETE=1" &&
+				strings.HasPrefix(fields[i+1], "git") {
+				return true
+			}
+		}
+	}
+	return false
+
 }
 
 // extractForceDeletedBranches returns the branch names targeted by a force
@@ -95,7 +121,13 @@ func extractForceDeletedBranches(cmd string) []string {
 		}
 	}
 	if len(out) > probeMaxBranches {
-		out = out[:probeMaxBranches]
+		// #5212 ownership hardening: a silent cap is the same silent-loss
+		// failure mode this guard exists for - a force-delete naming > cap
+		// branches where only the over-cap tail is unpushed slipped through
+		// unprobed (empirically confirmed: dirty 5th branch escaped cap=4).
+		// The cap now only bounds the probe budget; exhaustion fails CLOSED
+		// via the sentinel below, never a silent skip.
+		out = append(out[:probeMaxBranches], probeBudgetMarker)
 	}
 	return out
 }
@@ -136,12 +168,21 @@ func branchUnpushedState(workDir, branch string) (int, string) {
 // branchDeleteGuardBlock returns a hard-block message when the command
 // force-deletes branches that carry unpushed commits. "" means allowed.
 func branchDeleteGuardBlock(workDir, command string) string {
-	if strings.Contains(command, allowUnpushedDeleteEnv) {
+	if allowUnpushedDeletePrefix(command) {
 		return ""
 	}
 	branches := extractForceDeletedBranches(command)
 	if len(branches) == 0 {
 		return ""
+	}
+	if slices.Contains(branches, probeBudgetMarker) {
+		// Fail closed: > probeMaxBranches force-deleted in one command; the
+		// unprobed tail could carry the unpushed work (a silent cap is the
+		// same silent-loss failure mode this guard exists for).
+		return fmt.Sprintf(
+			"[branch-delete-guard] BLOCKED (pre-execution, #5212): force-deleting %d+ branches at once exceeds the probe budget (%d). "+
+				"Split the command so each force-delete can be probed for unpushed commits, or re-run the exact command prefixed with %s to confirm intentional deletion.",
+			len(branches), probeMaxBranches, allowUnpushedDeleteEnv)
 	}
 	var offenders []string
 	for _, br := range branches {
