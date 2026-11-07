@@ -25,7 +25,7 @@ func TestIssue3224_AllFailedNoWinnerBlock(t *testing.T) {
 		mkResult3224(2, 0, false, false),
 	}
 
-	report := formatTrialReport("0123456789abcdef", "", results, 0, false)
+	report := formatTrialReport("0123456789abcdef", "", results, 0, false, nil)
 	if strings.Contains(report, "WINNER: trial") {
 		t.Fatalf("all-failed run must not print a WINNER block:\n%s", report)
 	}
@@ -45,7 +45,7 @@ func TestIssue3224_AllFailedNoWinnerBlock(t *testing.T) {
 
 func TestIssue3224_RealWinnerUnchanged(t *testing.T) {
 	r := mkResult3224(1, 3, false, true)
-	report := formatTrialReport("0123456789abcdef", "", []trialResult{r}, 0, true)
+	report := formatTrialReport("0123456789abcdef", "", []trialResult{r}, 0, true, nil)
 	if !strings.Contains(report, "WINNER: trial 1") {
 		t.Fatalf("committed winner must keep its WINNER block:\n%s", report)
 	}
@@ -60,7 +60,7 @@ func TestIssue3224_RealWinnerUnchanged(t *testing.T) {
 func TestIssue3224_VerifyPassZeroCommitWarningKept(t *testing.T) {
 
 	r := mkResult3224(1, 0, true, true)
-	report := formatTrialReport("0123456789abcdef", "go test ./...", []trialResult{r}, 0, true)
+	report := formatTrialReport("0123456789abcdef", "go test ./...", []trialResult{r}, 0, true, nil)
 	if !strings.Contains(report, "passed verify but committed nothing") {
 		t.Fatalf("#2795 scenario (verify-pass kept winner) must keep the warning:\n%s", report)
 	}
@@ -71,7 +71,7 @@ func TestIssue3224_VerifyPassZeroCommitWarningKept(t *testing.T) {
 
 func TestIssue3224_NoWinnerIndexStillHandled(t *testing.T) {
 	results := []trialResult{mkResult3224(1, 0, false, false)}
-	report := formatTrialReport("0123456789abcdef", "", results, -1, false)
+	report := formatTrialReport("0123456789abcdef", "", results, -1, false, nil)
 	if !strings.Contains(report, "No usable trial") {
 		t.Fatalf("winner<0 path must remain:\n%s", report)
 	}
