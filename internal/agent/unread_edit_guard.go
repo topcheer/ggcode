@@ -337,6 +337,14 @@ func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 		if p, ok := m["path"].(string); ok {
 			return []string{p}
 		}
+	case "apply_patch": // #5249: create_file targets a brand-new file - exempt from the
+		// unread-edit nag exactly like write_file (recordCreated parity); update_file
+		// and delete_file keep returning nothing so the guard still applies to them.
+		if t, _ := m["type"].(string); t == "create_file" {
+			if p, ok := m["path"].(string); ok {
+				return []string{p}
+			}
+		}
 	case "multi_file_write":
 		if files, ok := m["files"].([]any); ok {
 			var paths []string
