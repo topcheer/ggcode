@@ -664,6 +664,31 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	urlBefore, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateBefore := b.evaluateClickState(timeoutCtx, selector)
 
+	// #5209 D1: disambiguate before dispatching - ambiguous selectors (no
+	// unique visible match) report with top-5 candidates instead of clicking
+	// the first document-order match (often a hidden responsive duplicate).
+	matched, matchIndex, resolveErr := b.resolveTarget(timeoutCtx, selector)
+	if resolveErr != nil && !isProbeTransportError(resolveErr) {
+		return Result{IsError: true, Content: resolveErr.Error()}, nil
+	}
+	if matched && matchIndex > 0 {
+		// Unique visible match is NOT the first document-order match:
+		// chromedp.Click would hit the hidden duplicate - dispatch at the
+		// resolved index instead.
+		if _, jsErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](clickAtMatchJS(selector, matchIndex))); jsErr != nil {
+			return b.browserActionFailure("click", tab.ctx, selector, jsErr), nil
+		}
+		if waitFor != "" {
+			if wErr := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(waitFor))); wErr != nil {
+				return b.browserActionFailure("click", tab.ctx, waitFor, wErr), nil
+			}
+		}
+		urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
+		stateAfter := b.evaluateClickState(timeoutCtx, selector)
+		note := clickEffectNote(urlBefore, "", stateBefore, stateAfter)
+		return Result{Content: fmt.Sprintf("Clicked: %s (visible match #%d)\nCurrent URL: %s%s", selector, matchIndex, urlAfter, note)}, nil
+	}
+
 	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.WaitVisible(chromedp.CSS(selector)),
 		chromedp.Click(chromedp.CSS(selector)),
@@ -739,6 +764,19 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate - same probe as click. When the unique
+	// visible match is not the first document-order match, the SendKeys chain
+	// would type into the hidden duplicate: refuse with a clear message
+	// rather than silently mistype (exact retargeting lands with D3).
+	typeMatched, typeIndex, typeResolveErr := b.resolveTarget(timeoutCtx, selector)
+	if typeResolveErr != nil && !isProbeTransportError(typeResolveErr) {
+		return Result{IsError: true, Content: typeResolveErr.Error()}, nil
+	}
+	if typeMatched && typeIndex > 0 {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"type: unique visible match for %q is document-order match #%d (the first match is hidden); use snapshot @eN refs to target it exactly", selector, typeIndex)}, nil
+	}
 
 	actions := []chromedp.Action[chromedp.Void]{
 		chromedp.WaitVisible(chromedp.CSS(selector)),
@@ -937,6 +975,13 @@ func (b *Browser) doWait(ctx context.Context, profile, session, selector string,
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate for wait - an ambiguous selector (no
+	// unique visible match) fails fast with candidates instead of silently
+	// timing out on whichever element the engine picks.
+	if waitRes := b.precheckTarget(timeoutCtx, selector); waitRes != nil {
+		return *waitRes, nil
+	}
 
 	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("wait timed out after %ds: %v", timeout, err)}, nil
@@ -1192,6 +1237,12 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
+	// #5209 D1: disambiguation gate (report-only for select; exact
+	// retargeting follows the type-action pattern until D3).
+	if selRes := b.precheckTarget(timeoutCtx, selector); selRes != nil {
+		return *selRes, nil
+	}
+
 	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
 	}
@@ -1245,6 +1296,23 @@ func (b *Browser) doHover(ctx context.Context, profile, session, selector string
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
 	defer cancel()
+
+	// #5209 D1: disambiguation gate - dispatch mouse events at the unique
+	// visible match, not the first document-order (possibly hidden) one.
+	hoverMatched, hoverIndex, hoverErr := b.resolveTarget(timeoutCtx, selector)
+	if hoverErr != nil && !isProbeTransportError(hoverErr) {
+		return Result{IsError: true, Content: hoverErr.Error()}, nil
+	}
+	if hoverMatched && hoverIndex > 0 {
+		hoverJS := fmt.Sprintf(`(() => { const m = document.querySelectorAll(%q); if (m.length <= %d) return false; const el = m[%d];
+			el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+			el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true })); return true; })()`, selector, hoverIndex, hoverIndex)
+		if _, jsErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](hoverJS)); jsErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("hover failed: %v", jsErr)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Hovered over: %s (visible match #%d)", selector, hoverIndex)}, nil
+	}
 
 	js := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%q);
