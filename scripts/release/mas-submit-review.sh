@@ -283,7 +283,19 @@ for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
   NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
   [[ -n "$NEWSUB" ]] && break
   if echo "$SUB" | grep -q "does not allow 'CREATE'"; then
-    echo "submit: ASC allowed-op set still rotating after reject (attempt $w/12) - waiting 15s"
+    # Run 42369905096 evidence: the version was already PREPARE_FOR_SUBMISSION
+    # (no reject in that run) yet CREATE stayed blocked - the error means a
+    # stale appStoreVersionSubmission object still exists for this version
+    # (ASC says the resource allows DELETE). Clear it, then retry CREATE.
+    refresh_jwt_if_needed
+    STALE=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
+    STALE_ID=$(echo "$STALE" | jq -r '.data.id // empty')
+    if [[ -n "$STALE_ID" ]]; then
+      asc "clear-stale-submission" DELETE "/v1/appStoreVersionSubmissions/${STALE_ID}" > /dev/null
+      echo "submit: cleared stale submission ${STALE_ID} (attempt $w/12)"
+    else
+      echo "submit: CREATE still blocked, no stale object found - waiting 15s (attempt $w/12)"
+    fi
     sleep 15
     continue
   fi
