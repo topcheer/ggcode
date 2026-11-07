@@ -149,11 +149,19 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   refresh_jwt_if_needed
   # Poll keyed on the BUILD number (CFBundleVersion) when given - the short
   # version alone can match a stale build or none at all (#5139 invariant 1).
+  # Run 42351262813: ASC rejects BOTH filter[version] and sort on the
+  # builds-in-app relationship endpoint (HTTP 400 PARAMETER_ERROR.ILLEGAL,
+  # one error per parameter) - the 401 chain previously masked this. Fetch a
+  # page without filter/sort and match client-side instead.
+  B=$(asc GET "/v1/apps/${APP_ID}/builds?limit=50")
   if [[ -n "$BUILD_VERSION" ]]; then
-    B=$(asc GET "/v1/apps/${APP_ID}/builds?filter%5Bversion%5D=${BUILD_VERSION}&sort=-uploadedDate&limit=1")
+    MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0]")
   else
-    B=$(asc GET "/v1/apps/${APP_ID}/builds?sort=-uploadedDate&limit=1")
+    MATCH=$(echo "$B" | jq -c '.data | sort_by(.attributes.uploadedDate) | reverse | .[0]')
   fi
+  STATE=$(echo "$MATCH" | jq -r '.attributes.processingState // empty' 2>/dev/null)
+  BUILD_ID=$(echo "$MATCH" | jq -r '.id // empty' 2>/dev/null)
+  N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
   LAST_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
   if [[ "$LAST_CODE" == "401" ]]; then
     CONSEC_401=$((CONSEC_401 + 1))
@@ -167,9 +175,6 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   else
     CONSEC_401=0
   fi
-  STATE=$(echo "$B" | jq -r '.data[0].attributes.processingState // empty' 2>/dev/null)
-  BUILD_ID=$(echo "$B" | jq -r '.data[0].id // empty' 2>/dev/null)
-  N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
   echo "poll #$i: state=${STATE:-NONE} build_id=${BUILD_ID:-NONE} matches=$N_BUILDS"
   case "$STATE" in
     VALID) echo "build ${BUILD_ID} processed (VALID) after ~$((i/2)) min"; break;;
