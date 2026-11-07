@@ -18,6 +18,11 @@ import (
 
 const subagentRedactedReasoningPlaceholder = "Reasoning hidden by model."
 
+// subagentEarlyCompactRatio is the proactive pre-compact trigger for
+// sub-agent runs (#5002 gap 2): fire background compaction at ~70% of the
+// context window instead of waiting for the ~90% reactive threshold.
+const subagentEarlyCompactRatio = 0.70
+
 type ToolInfo interface {
 	Name() string
 }
@@ -146,6 +151,22 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		if ba, ok := subAgent.(interface{ SetToolCallBudget(int) }); ok {
 			ba.SetToolCallBudget(cfg.MaxToolCalls)
 		}
+	}
+
+	// #5002 gap 2: sub-agent sessions are single long tasks with no user-turn
+	// pacing, so token usage grows monotonically. Enable an early pre-compact
+	// trigger at 70% of the (metadata-derived) window so the proactive path
+	// fires well before the reactive overflow recovery. The window itself is
+	// already derived from provider model metadata in agent.NewAgent (#5002
+	// gap 1); 128000 remains the fallback for metadata-less providers.
+	if ec, ok := subAgent.(interface{ SetEarlyCompactRatio(float64) }); ok {
+		ec.SetEarlyCompactRatio(subagentEarlyCompactRatio)
+	} else if cm, ok := subAgent.(interface {
+		ContextManager() interface {
+			SetEarlyCompactRatio(float64)
+		}
+	}); ok && cm.ContextManager() != nil {
+		cm.ContextManager().SetEarlyCompactRatio(subagentEarlyCompactRatio)
 	}
 
 	if cfg.WorkingDir != "" {
