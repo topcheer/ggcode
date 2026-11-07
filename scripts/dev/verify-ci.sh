@@ -4,6 +4,9 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
+# #5241: gofmt gates must match CI's pinned toolchain, not the default one.
+gofmt_pinned="${repo_root}/scripts/dev/gofmt-pinned.sh"
+
 while IFS='=' read -r name _; do
   case "${name}" in
     GIT_*)
@@ -318,9 +321,9 @@ if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
 fi
 
 echo "[verify-ci] checking gofmt cleanliness"
-if ! test -z "$(gofmt -l ./cmd ./internal)"; then
+if ! test -z "$("${gofmt_pinned}" -l ./cmd ./internal)"; then
   echo "[verify-ci] gofmt found unformatted files:"
-  gofmt -l ./cmd ./internal
+  "${gofmt_pinned}" -l ./cmd ./internal
   exit 1
 fi
 
@@ -380,9 +383,9 @@ if [ "${FULL}" = "1" ]; then
   if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
     echo ""
     echo "[verify-ci:desktop] checking gofmt cleanliness"
-    if ! test -z "$(gofmt -l "${desktop_dir}")"; then
+    if ! test -z "$("${gofmt_pinned}" -l "${desktop_dir}")"; then
       echo "[verify-ci:desktop] gofmt found unformatted files:"
-      gofmt -l "${desktop_dir}"
+      "${gofmt_pinned}" -l "${desktop_dir}"
       exit 1
     fi
 

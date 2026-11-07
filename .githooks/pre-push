@@ -8,12 +8,14 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
-# Check gofmt cleanliness
-unformatted=$(gofmt -l .)
+# Check gofmt cleanliness (pinned to the go.mod toolchain, #5241).
+# Exclude dot-dirs: gofmt -l . walks .ggcode/worktrees scratch copies that
+# the Go tooling never builds; they are not part of the module.
+unformatted=$("${repo_root}/scripts/dev/gofmt-pinned.sh" -l . 2>/dev/null | grep -v -E '^\.[a-zA-Z0-9_]+/' || true)
 if [[ -n "${unformatted}" ]]; then
   echo "[pre-push] ERROR: unformatted files:"
   echo "${unformatted}"
-  echo "Run: gofmt -w <files>"
+  echo "Run: scripts/dev/gofmt-pinned.sh -w <files>"
   exit 1
 fi
 
