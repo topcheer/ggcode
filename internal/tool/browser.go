@@ -344,13 +344,18 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+		// #5209 D2: layered snapshot budget - top-level min(wait_timeout
+		// default 3s, 8s hard cap) via ctx; iframe budgets are enforced inside
+		// the probe JS (1s shared / 500ms per child). A timed-out frame yields
+		// zero refs and the output carries an explicit truncation marker;
+		// partial results beat total failure.
+		timeoutCtx, cancel := context.WithTimeout(tab.ctx, snapshotTopLevelBudget(a.WaitTimeout))
 		defer cancel()
-		entries, err := b.collectBrowserRefs(timeoutCtx, a.Profile, a.Session)
+		entries, timedOut, err := b.collectBrowserRefs(timeoutCtx, a.Profile, a.Session)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("snapshot failed: %v", err)}, nil
 		}
-		return Result{Content: renderRefTree(entries) + "\n\nUse a ref (e.g. '@e3') in the selector parameter of click/type/extract/select/hover/upload/scroll. Refs stay valid until this tab navigates."}, nil
+		return Result{Content: renderSnapshotOutput(entries, timedOut)}, nil
 	},
 
 	"open_tab": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
