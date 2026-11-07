@@ -273,53 +273,29 @@ echo "build ${BUILD_VERSION} (${BUILD_ID}) bound to version ${VERSION}"
 
 # submit for review
 refresh_jwt_if_needed
-# submit for review. Run 42366577692: right after a developer-reject, ASC
-# returns 403 "does not allow 'CREATE'. Allowed operation is: DELETE" while
-# the submission resource's allowed-op set rotates back (propagation delay;
-# observed at 17s post-reject). Retry THIS specific error with backoff.
-NEWSUB=""
-for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  SUB=$(asc "-" POST "/v1/appStoreVersionSubmissions" '{"data":{"type":"appStoreVersionSubmissions","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
-  NEWSUB=$(echo "$SUB" | jq -r '.data.id // empty')
-  [[ -n "$NEWSUB" ]] && break
-  if echo "$SUB" | grep -q "does not allow 'CREATE'"; then
-    # Run 42369905096 evidence: the version was already PREPARE_FOR_SUBMISSION
-    # (no reject in that run) yet CREATE stayed blocked - the error means a
-    # stale appStoreVersionSubmission object still exists for this version
-    # (ASC says the resource allows DELETE). Clear it, then retry CREATE.
-    refresh_jwt_if_needed
-    STALE=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionSubmission")
-    STALE_ID=$(echo "$STALE" | jq -r '.data.id // empty')
-    if [[ -n "$STALE_ID" ]]; then
-      asc "clear-stale-submission" DELETE "/v1/appStoreVersionSubmissions/${STALE_ID}" > /dev/null
-      echo "submit: cleared stale submission ${STALE_ID} (attempt $w/12)"
-    else
-      # Run 42372506928: legacy relationship 404 yet CREATE blocked - the
-      # blocker is a NEW-style reviewSubmission (created by the pre-#5230
-      # flow, left unsubmitted) holding this version as an item. Remove the
-      # item to release the version (reviewSubmissions has no DELETE; its
-      # items do - DELETE /v1/reviewSubmissionItems/{id}).
-      refresh_jwt_if_needed
-      RS_LIST=$(asc "-" GET "/v1/reviewSubmissions?filter%5Bapp%5D=${APP_ID}&limit=20")
-      CLEARED_ANY=0
-      for RS_ID in $(echo "$RS_LIST" | jq -r '.data[].id // empty' 2>/dev/null); do
-        refresh_jwt_if_needed
-        ITEMS=$(asc "-" GET "/v1/reviewSubmissions/${RS_ID}/items?limit=50")
-        for ITEM_ID in $(echo "$ITEMS" | jq -r --arg av "${AV_ID}" '.data[] | select(.relationships.appStoreVersion.data.id == $av) | .id // empty' 2>/dev/null); do
-          asc "clear-review-submission-item" DELETE "/v1/reviewSubmissionItems/${ITEM_ID}" > /dev/null
-          echo "submit: removed reviewSubmissionItem ${ITEM_ID} (submission ${RS_ID}) holding the version"
-          CLEARED_ANY=1
-        done
-      done
-      if [[ "$CLEARED_ANY" == "0" ]]; then
-        echo "submit: CREATE blocked, neither legacy submission nor reviewSubmissionItem found - waiting 15s (attempt $w/12)"
-      fi
-    fi
-    sleep 15
-    continue
-  fi
-  echo "::error::ASC submit-for-review failed - $(echo "$SUB" | jq -rj '.errors[0].detail // .errors[0].title // empty' 2>/dev/null) | raw: ${SUB:0:300}" >&2
-  exit 1
-done
-[[ -n "$NEWSUB" ]] || { echo "::error::submit never succeeded after 12 attempts (allowed-op rotation timeout, ~3min)" >&2; exit 1; }
-echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NEWSUB})"
+# submit for review via the NEW reviewSubmissions API. Evidence chain
+# (runs 42366577692 / 42369905096 / 42372506928 / 42375326486): legacy
+# appStoreVersionSubmissions CREATE returned 403 "does not allow 'CREATE'.
+# Allowed operation is: DELETE" in EVERY run regardless of version state,
+# while legacy DELETE (developer-reject) succeeded and the new-API chain
+# (POST reviewSubmissions + items attach + PATCH submitted) succeeded under
+# the same key in run 42355690984. The 403 is the key's permission matrix
+# on the legacy resource, not a state lock - so submit goes through the
+# new API; only the reject path uses the legacy DELETE.
+refresh_jwt_if_needed
+NRS=$(asc "create-reviewSubmission" POST "/v1/reviewSubmissions" '{"data":{"type":"reviewSubmissions","attributes":{"platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
+NRS_ID=$(echo "$NRS" | jq -r '.data.id // empty')
+[[ -n "$NRS_ID" ]] || { echo "::error::reviewSubmissions create failed: ${NRS:0:400}" >&2; exit 1; }
+echo "reviewSubmission created: ${NRS_ID}"
+
+refresh_jwt_if_needed
+asc "attach-review-item" POST "/v1/reviewSubmissions/${NRS_ID}/items" '{"data":{"type":"reviewSubmissionItems","attributes":{},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}' > /dev/null
+echo "version ${AV_ID} attached to ${NRS_ID}"
+
+refresh_jwt_if_needed
+NSUB=$(asc "submit-reviewSubmission" PATCH "/v1/reviewSubmissions/${NRS_ID}" '{"data":{"type":"reviewSubmissions","id":"'"${NRS_ID}"'","attributes":{"submitted":true}}}')
+ST=$(echo "$NSUB" | jq -r '.data.attributes.state // empty')
+case "$ST" in
+  WAITING_FOR_REVIEW) echo "submitted: version ${VERSION} with build ${BUILD_VERSION} is now WAITING_FOR_REVIEW (submission ${NRS_ID})";;
+  *) echo "::error::submit PATCH returned state=${ST:-none}: $(echo "$NSUB" | head -c 400)" >&2; exit 1;;
+esac
