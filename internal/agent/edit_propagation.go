@@ -33,7 +33,8 @@ func newEditPropagationState() *editPropagationState {
 }
 
 func (s *editPropagationState) recordEdit(toolName, args string) bool {
-	if !fileEditingTools[toolName] {
+	// #5254: apply_patch (Responses-native) edits propagate like the rest.
+	if !mutatingSourceEdit(toolName) {
 		return false
 	}
 	paths := propagationExtractPaths(args)

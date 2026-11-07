@@ -34,7 +34,10 @@ func newRepetitionTracker() *repetitionTracker {
 }
 
 func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMessage, isError bool) string {
-	if !fileEditingTools[toolName] {
+	// #5254: apply_patch (Responses-native) edit attempts count for
+	// repeated-failed-edit tracking (its args carry a top-level path that
+	// extractFilePathFromArgs already reads).
+	if !mutatingSourceEdit(toolName) {
 		return ""
 	}
 
