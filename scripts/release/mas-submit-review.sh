@@ -109,7 +109,7 @@ asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: 
     resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
       -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body")
   else
-    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $JWT")
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" -H "Authorization: Bearer $JWT")
   fi
   http_code="${resp##*__HTTP__}"
   resp="${resp%__HTTP__*}"
