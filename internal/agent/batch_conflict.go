@@ -32,7 +32,9 @@ func detectBatchEditConflicts(toolCalls []provider.ToolCallDelta) map[int]string
 	fileToIndices := make(map[string][]int)
 
 	for i, tc := range toolCalls {
-		if !fileEditingTools[tc.Name] && tc.Name != "notebook_edit" {
+		// #5254: apply_patch (Responses-native) participates in same-file
+		// batch conflicts like every other source edit.
+		if !mutatingSourceEdit(tc.Name) && tc.Name != "notebook_edit" {
 			continue
 		}
 		paths := extractFilePathsForConflict(tc)
@@ -102,6 +104,8 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 		appendStr("file_path")
 
 		appendFromList("edits", "path")
+	case "apply_patch": // #5254: top-level path, same shape as edit_file
+		appendStr("path")
 	case "multi_file_edit", "multi_file_write":
 		appendFromList("files", "path")
 	case "notebook_edit":

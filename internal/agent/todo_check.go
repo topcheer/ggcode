@@ -58,7 +58,8 @@ func (a *Agent) checkIncompleteTodos() string {
 
 func codeChangedInRun(runStats *RunStats) bool {
 	for name := range runStats.ToolCalls {
-		if fileEditingTools[name] {
+		// #5254: apply_patch edits are code changes for todo discipline too.
+		if mutatingSourceEdit(name) {
 			return true
 		}
 	}
