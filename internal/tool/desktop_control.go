@@ -304,7 +304,13 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 		return Result{}, fmt.Errorf("parse params: %w", err)
 	}
 	clampDesktopDefaults(&params)
-	return executeDesktopControl(ctx, params)
+	// #5209 D4: same Execute-level errcode choke point as the browser tool
+	// (narrow scope: browser + desktop_control only).
+	res, err := executeDesktopControl(ctx, params)
+	if err != nil {
+		return res, err
+	}
+	return annotateErrcode(res), nil
 }
 
 func clampDesktopDefaults(params *desktopParams) {

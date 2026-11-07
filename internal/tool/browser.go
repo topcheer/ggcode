@@ -373,7 +373,7 @@ func errResult(msg string) (Result, error) {
 func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args browserActionArgs
 	if err := json.Unmarshal(input, &args); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+		return annotateErrcode(Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}), nil
 	}
 
 	if args.Profile == "" {
@@ -388,9 +388,16 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	handler, ok := browserActions[args.Action]
 	if !ok {
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
+		return annotateErrcode(Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}), nil
 	}
-	return handler(b, ctx, &args)
+	// #5209 D4: Execute-level errcode choke point - every IsError Result
+	// from any action leaves with exactly one [error_code=X] prefix
+	// (idempotent: browserActionFailure output passes through untouched).
+	res, herr := handler(b, ctx, &args)
+	if herr != nil {
+		return res, herr
+	}
+	return annotateErrcode(res), nil
 }
 
 const minChromeMajorVersion = 90
