@@ -39,8 +39,11 @@ func TestSPA_ComposerWiring(t *testing.T) {
 	if !strings.Contains(src, "metaKey || e.ctrlKey") {
 		t.Error("Composer must support Cmd/Ctrl+Enter to send")
 	}
-	if !strings.Contains(src, "disabled={conn !== \"open\"}") {
-		t.Error("Composer must disable input while WS offline (queue resend handled by client)")
+	if strings.Contains(src, "disabled={conn !== \"open\"}") {
+		t.Error("#5300: Composer must NOT disable input while WS offline — sendUser enqueues when not OPEN (client.ts), disabling made enqueue unreachable and the offline copy (将补发) a lie")
+	}
+	if !strings.Contains(src, "#5300") {
+		t.Error("#5300: offline submit must pass through to sendUser queue (documented in code)")
 	}
 }
 

@@ -14,7 +14,7 @@ export default function Composer({
   const busy = useChat((s) => s.busy);
   const conn = useChat((s) => s.conn);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const [mention, setMention] = useState<{ query: string; rect: DOMRect | null } | null>(null);
+  const [mention, setMention] = useState<{ query: string; at: number; rect: DOMRect | null } | null>(null);
 
   // 自适应高度
   useEffect(() => {
@@ -34,7 +34,8 @@ export default function Composer({
 
   const submit = () => {
     const text = value.trim();
-    if ((!text && pastedImages.length === 0) || busy || conn !== "open") return;
+    // #5300: 断线不再禁发——sendUser 非 OPEN 入队、onopen 补发(client.ts §4.4)
+    if ((!text && pastedImages.length === 0) || busy) return;
     onSend(text, pastedImages.length ? pastedImages : undefined);
     setValue("");
     setPastedImages([]);
@@ -61,10 +62,9 @@ export default function Composer({
         <textarea
           ref={taRef}
           className="text-ui-base w-full resize-none bg-transparent text-wrap-phrase text-foreground placeholder:text-foreground-subtlest focus:outline-none"
-          placeholder={conn === "open" ? "输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)" : `连接中(${conn})…`}
+          placeholder="输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)"
           rows={2}
           value={value}
-          disabled={conn !== "open"}
           onPaste={onPaste}
           onChange={(e) => {
             setValue(e.target.value);
@@ -72,7 +72,7 @@ export default function Composer({
             const upto = e.target.value.slice(0, e.target.selectionStart ?? 0);
             const at = upto.lastIndexOf("@");
             if (at >= 0 && !upto.slice(at).includes(" ")) {
-              setMention({ query: upto.slice(at + 1), rect: taRef.current?.getBoundingClientRect() ?? null });
+              setMention({ query: upto.slice(at + 1), at, rect: taRef.current?.getBoundingClientRect() ?? null });
             } else {
               setMention(null);
             }
@@ -109,8 +109,15 @@ export default function Composer({
             onPick={(text) => {
               setMention(null);
               if (!text) return;
-              setValue((v) => v + text);
+              // #5299: 替换触发性 @+query,而非末尾 append(曾必产 @@file: 畸形 token)
+              const m = mention;
+              setValue((v) => {
+                if (!m) return v + text;
+                return v.slice(0, m.at) + text + v.slice(m.at + 1 + m.query.length);
+              });
+              const pos = (m?.at ?? value.length) + text.length;
               taRef.current?.focus();
+              requestAnimationFrame(() => taRef.current?.setSelectionRange(pos, pos));
             }}
           />
         )}
@@ -120,7 +127,7 @@ export default function Composer({
           </span>
           <button
             className="text-ui-sm rounded-lg bg-brand px-4 py-1.5 font-medium text-white transition-opacity disabled:opacity-40"
-            disabled={!value.trim() || busy || conn !== "open"}
+            disabled={!value.trim() || busy}
             onClick={submit}
           >
             发送
