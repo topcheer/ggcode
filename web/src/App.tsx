@@ -30,6 +30,9 @@ export default function App() {
   const [view, setView] = useState<View>("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const resetChat = useChat((s) => s.reset);
+  const loadHistory = useChat((s) => s.loadHistory);
+  // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
+  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
 
   // ⌘K 全局快捷键(§2 键盘映射表)
   useEffect(() => {
@@ -54,7 +57,26 @@ export default function App() {
     { id: "go-settings", label: "打开设置", hint: "视图", run: () => setView("settings") },
     { id: "theme", label: `切换主题 (当前:${THEME_LABEL[theme]})`, hint: "dark→light→system", run: cycleTheme },
     { id: "new-chat", label: "新建会话(清空当前聊天视图)", hint: "⌘N", run: resetChat },
+    // 历史会话切换(P4-2):点击后回 chat 视图并重拉该 session 镜像
+    ...sessions.slice(0, 8).map((s) => ({
+      id: `session-${s.id}`,
+      label: `切换到会话: ${s.title || s.id.slice(0, 12)}`,
+      hint: "历史会话",
+      run: () => {
+        setView("chat");
+        void loadHistory();
+      },
+    })),
   ];
+
+  // ⌘K 面板打开时拉最近会话(P4-2 数据源)
+  useEffect(() => {
+    if (!paletteOpen) return;
+    fetch("/api/sessions")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d: Array<{ id: string; title?: string; updated_at?: string }>) => setSessions(Array.isArray(d) ? d : []))
+      .catch(() => setSessions([]));
+  }, [paletteOpen]);
 
   // ⌘N 新会话
   useEffect(() => {
