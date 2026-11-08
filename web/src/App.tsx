@@ -35,6 +35,8 @@ export default function App() {
   // 右 Pane(P5-6):Spawn 详情推入右栏并排阅读(§6.1)
   const paneSpawn = usePane((s) => s.active);
   const closePane = usePane((s) => s.close);
+  // 移动端抽屉(P5-7):窄屏左栏抽屉化
+  const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
   const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
 
@@ -111,7 +113,8 @@ export default function App() {
   return (
     <div className="flex h-full bg-background text-foreground">
       {/* 三栏骨架:左会话栏 + 主区(Chat/Settings 切换) + 右 Pane(P1.5) */}
-      <aside className="hidden w-[232px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-[232px] shrink-0 flex-col border-r border-border bg-sidebar transition-transform md:static md:flex ${drawerOpen ? "flex" : "hidden"}`}>
+        {drawerOpen && <div className="fixed inset-0 z-[-1] bg-black/40 md:hidden" onClick={() => setDrawerOpen(false)} />}
         <div className="border-b border-border px-4 py-5">
           <h1 className="text-ui-lg font-bold tracking-tight">
             gg<span className="text-brand">code</span>
@@ -161,6 +164,16 @@ export default function App() {
         </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2 md:hidden">
+          <button
+            className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
+            onClick={() => setDrawerOpen(true)}
+            title="打开菜单"
+          >
+            ☰
+          </button>
+          <span className="text-ui-sm font-semibold">ggcode</span>
+        </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
       <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn ? { width: "380px" } : undefined}>
