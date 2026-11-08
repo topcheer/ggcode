@@ -178,7 +178,14 @@ func normalizeFilePath(path string) string {
 		path = path[2:]
 	}
 
-	return strings.ToLower(path)
+	// #5290: the unconditional strings.ToLower collapsed case-distinct
+	// paths on case-sensitive filesystems (linux), merging distinct files
+	// in repetition/premature-commit tracking. Mirror the batch-conflict
+	// normalization: fold only on case-insensitive platforms, ASCII-only.
+	if batchPathFoldActive() {
+		return asciiFoldLower(path)
+	}
+	return path
 }
 
 func truncateRunesSafe(s string, max int) string {
