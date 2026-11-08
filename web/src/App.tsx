@@ -3,6 +3,7 @@ import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
 import { useChat } from "@/store/chat";
+import { usePane } from "@/store/pane";
 
 type Theme = "dark" | "light" | "system";
 type View = "chat" | "settings";
@@ -31,6 +32,9 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const resetChat = useChat((s) => s.reset);
   const loadHistory = useChat((s) => s.loadHistory);
+  // 右 Pane(P5-6):Spawn 详情推入右栏并排阅读(§6.1)
+  const paneSpawn = usePane((s) => s.active);
+  const closePane = usePane((s) => s.close);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
   const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
 
@@ -159,7 +163,31 @@ export default function App() {
       <main className="min-w-0 flex-1 overflow-hidden">
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-0 shrink-0 border-l border-border lg:block" />
+      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn ? { width: "380px" } : undefined}>
+        {paneSpawn ? (
+          <div className="flex h-full flex-col">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ background: paneSpawn.isError ? "var(--color-destructive)" : paneSpawn.done ? "var(--color-success)" : "var(--color-trajectory-tool-call)" }}
+              />
+              <h3 className="text-ui-sm flex-1 truncate font-medium" style={{ color: "var(--color-agent-node-fg)" }}>
+                Spawn {paneSpawn.name}
+              </h3>
+              <button
+                className="text-ui-xs rounded px-2 py-0.5 text-foreground-subtlest hover:bg-hover"
+                onClick={closePane}
+                title="关闭"
+              >
+                ✕
+              </button>
+            </div>
+            <pre className="text-ui-xs flex-1 overflow-auto p-4 font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+              {paneSpawn.result || paneSpawn.argsText || "(运行中…结果就绪后自动更新)"}
+            </pre>
+          </div>
+        ) : null}
+      </aside>
       {paletteOpen && (
         <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />
       )}

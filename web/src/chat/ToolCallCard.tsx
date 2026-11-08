@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { ToolInvocation } from "@/store/chat";
+import { usePane } from "@/store/pane";
 
 /** ToolCallCard(§4.2 状态机):spinner→绿/红状态灯+耗时徽章;对齐 TUI 分类学的特判渲染 */
-export default function ToolCallCard({ tool, onOpenPane }: { tool: ToolInvocation; onOpenPane?: (tool: ToolInvocation) => void }) {
+export default function ToolCallCard({ tool }: { tool: ToolInvocation }) {
   const [expanded, setExpanded] = useState(false);
+  const openPane = usePane((s) => s.open);
   const dur = tool.endedAt ? tool.endedAt - tool.startedAt : null;
 
   // 特判:diff 类工具内嵌 diff 视图(TUI editdiff 同判);P1.5 随 tool_result_rich 结构化升级
@@ -18,7 +20,7 @@ export default function ToolCallCard({ tool, onOpenPane }: { tool: ToolInvocatio
       <div className="rounded-xl border border-[var(--color-agent-node)] bg-card overflow-hidden">
         <button
           className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-hover)]"
-          onClick={() => (onOpenPane ? onOpenPane(tool) : setExpanded(!expanded))}
+          onClick={() => openPane(tool)}
         >
           <StateLight tool={tool} />
           <span
@@ -30,15 +32,8 @@ export default function ToolCallCard({ tool, onOpenPane }: { tool: ToolInvocatio
           {!tool.done && <span className="text-ui-xs text-foreground-subtlest">推理中…</span>}
           {tool.done && !tool.isError && <span className="text-ui-xs text-foreground-subtlest">已完成 → 点击查看报告</span>}
           {tool.isError && <span className="text-ui-xs text-[var(--color-destructive-surface-fg)]">失败</span>}
-          <span className="ml-auto text-ui-xs text-foreground-subtlest">{onOpenPane ? "⤢" : expanded ? "▾" : "▸"}</span>
+          <span className="ml-auto text-ui-xs text-foreground-subtlest">⤢ 并排查看</span>
         </button>
-        {expanded && !onOpenPane && tool.result && (
-          <pre
-            className="text-ui-xs max-h-72 overflow-auto border-t border-border p-3 font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle"
-          >
-            {tool.result}
-          </pre>
-        )}
       </div>
     );
   }
