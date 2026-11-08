@@ -9,7 +9,7 @@ const EFFORTS = ["low", "medium", "high"];
  *  提交走 /api/chat/commands(TUI slash 全链),反馈系统消息经 WS 回流 */
 export default function ChatControls() {
   const [ctrl, setCtrl] = useState<Controls>({});
-  const [models, setModels] = useState<string[]>([]);
+  const [groups, setGroups] = useState<{ vendor: string; endpoint: string; models: string[] }[]>([]);
   const [busy, setBusy] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
@@ -18,15 +18,18 @@ export default function ChatControls() {
       .then((r) => (r.ok ? r.json() : {}))
       .then((d) => setCtrl(d))
       .catch(() => {});
-      // 模型可选列表:config vendors(map)→endpoints(map)→models 扁平
+      // 模型可选列表:provider(vendor)→endpoint 两级分组,models 保留层级
     fetch("/api/config")
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg: { vendors?: Record<string, { endpoints?: Record<string, { models?: string[] }> }> } | null) => {
-        const list: string[] = [];
-        for (const v of Object.values(cfg?.vendors ?? {})) {
-          for (const e of Object.values(v?.endpoints ?? {})) for (const m of e?.models ?? []) list.push(m);
+        const gs: { vendor: string; endpoint: string; models: string[] }[] = [];
+        for (const [vname, v] of Object.entries(cfg?.vendors ?? {})) {
+          for (const [ename, e] of Object.entries(v?.endpoints ?? {})) {
+            const ms = [...new Set(e?.models ?? [])];
+            if (ms.length) gs.push({ vendor: vname, endpoint: ename, models: ms });
+          }
         }
-        setModels([...new Set(list)]);
+        setGroups(gs);
       })
       .catch(() => {});
   };
@@ -63,11 +66,19 @@ export default function ChatControls() {
         <option value="" disabled>
           {ctrl.model || "模型"}
         </option>
-        {models.filter((m) => m !== ctrl.model).map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
+        {groups.map((g) => {
+          const ms = g.models.filter((m) => m !== ctrl.model);
+          if (!ms.length) return null;
+          return (
+            <optgroup key={`${g.vendor}/${g.endpoint}`} label={`${g.vendor} · ${g.endpoint}`}>
+              {ms.map((m) => (
+                <option key={`${g.vendor}/${g.endpoint}/${m}`} value={m}>
+                  {m}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
       </select>
       <select
         className={select}
