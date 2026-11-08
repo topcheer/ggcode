@@ -17,3 +17,4 @@
 - [11-08 21:15 巡检52] WS隧道403根因=CheckOrigin跨源比对(Origin vs 回环Host)——持证跨源放行+authScript双token去重+3分支钉测；模型选择器 vendor·endpoint optgroup 层级化；et发现(Host未转发/X-Forwarded-Host缺/PROTOCOL.md漂移)已DM et席(DapperShark,正改stream.go/proxy.go)；webui测试+pnpm build 双绿已推+二进制更新；阻塞无。
 - [11-08 21:20 巡检53] handleChatWS 复杂度45→19(223行→101行)拆5个helper;坏文件continue语义曾一度丢失被钉测捕获并恢复;webui/tui双包全绿已推+二进制更新;阻塞无。
 - [11-08 21:20 巡检54·最小形态] handleChatWS拆分轮收官(f46520455重构+b1be53c24台账已推);pnpm build绿;P0-P3维持P1交付态+增量(会话锁定/切换/三能力/队列事件/隧道/模型层级);阻塞无。
+- [11-08 21:40 巡检55·最小形态] 死代码扫描主线占用中(主树deadcode 1006项→internal559四关核实后台运行);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
