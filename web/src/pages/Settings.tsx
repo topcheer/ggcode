@@ -4,6 +4,7 @@ import DomainPage from "@/pages/DomainPage";
 import VendorsPage from "@/pages/VendorsPage";
 import CronPage from "@/pages/CronPage";
 import CheckpointsPage from "@/pages/CheckpointsPage";
+import SessionsPage from "@/pages/SessionsPage";
 
 /** SettingsShell:七域 tab 导航;Config=JSON 编辑代表页,其余六域=DomainPage 取数框架 */
 const TABS = [
@@ -13,7 +14,7 @@ const TABS = [
   { id: "mcp", label: "MCP", comp: () => <DomainPage domain="mcp" /> },
   { id: "im", label: "IM", comp: () => <DomainPage domain="im" /> },
   { id: "a2a", label: "A2A", comp: () => <DomainPage domain="a2a" /> },
-  { id: "sessions", label: "会话", comp: () => <DomainPage domain="sessions" /> },
+  { id: "sessions", label: "会话", comp: SessionsPage },
   { id: "knight", label: "Knight", comp: () => <DomainPage domain="knight" /> },
   { id: "cron", label: "定时任务", comp: CronPage },
   { id: "checkpoints", label: "检查点", comp: CheckpointsPage },
