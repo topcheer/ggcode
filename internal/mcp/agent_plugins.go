@@ -22,10 +22,6 @@ type AgentPlugin struct {
 	ManifestPath string
 }
 
-func (p AgentPlugin) SkillsDir() string {
-	return filepath.Join(p.Root, "skills")
-}
-
 func (p AgentPlugin) MCPConfigPath() string {
 	return filepath.Join(p.Root, "mcp.json")
 }
