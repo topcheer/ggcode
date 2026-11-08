@@ -1149,6 +1149,23 @@ func TestE2EChatWSCheckOrigin(t *testing.T) {
 	}
 	ws.Close()
 
+	// 跨源+有效 query token:放行(etunnel 隧道场景——本地 Host 为回环,
+	// 与公网 Origin 必然失配;持证即合法客户端)
+	crossTok := http.Header{}
+	crossTok.Set("Origin", "https://daring-coyote-96.t.ggcode.uk")
+	wsCross, _, err := websocket.DefaultDialer.Dial(wsBase, crossTok)
+	if err != nil {
+		t.Fatalf("cross-origin dial with valid token should pass: %v", err)
+	}
+	wsCross.Close()
+
+	// 跨源无 token:拒绝(CSWSH 防护底线)
+	crossNoTok := http.Header{}
+	crossNoTok.Set("Origin", "https://evil.example.com")
+	if _, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/chat/ws", crossNoTok); err == nil {
+		t.Fatal("cross-origin dial without token must be rejected")
+	}
+
 	// 无 Origin(非浏览器客户端):放行
 	ws, _, err = websocket.DefaultDialer.Dial(wsBase, nil)
 	if err != nil {
@@ -1156,16 +1173,16 @@ func TestE2EChatWSCheckOrigin(t *testing.T) {
 	}
 	ws.Close()
 
-	// 跨 Origin:拒绝(CSWSH 防护)
+	// 跨 Origin 无 token:拒绝(CSWSH 防护;持证跨源为隧道场景合法分支)
 	crossOrigin := http.Header{}
 	crossOrigin.Set("Origin", "https://evil.example.com")
-	ws, resp, err := websocket.DefaultDialer.Dial(wsBase, crossOrigin)
+	ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/chat/ws", crossOrigin)
 	if err == nil {
 		ws.Close()
 		t.Fatal("cross-origin dial must be rejected")
 	}
-	if resp == nil || resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected 403 for cross-origin, got resp=%v err=%v", resp, err)
+	if resp == nil || (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusUnauthorized) {
+		t.Errorf("expected 401(auth gate) or 403(origin gate) for cross-origin, got resp=%v err=%v", resp, err)
 	}
 }
 

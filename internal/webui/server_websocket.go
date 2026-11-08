@@ -17,19 +17,26 @@ import (
 )
 
 // CheckOrigin 收紧(CSWSH 防护):同源放行;无 Origin 头(非浏览器客户端)放行;
-// 跨 Origin 拒绝。配合 auth 中间件的 Bearer/query token 双重校验。
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return false
-		}
-		return u.Host == r.Host
-	},
+// 携带有效 query token 的跨源 WS 放行——隧道/反代(如 etunnel)下本地 Host 被
+// 重写为回环地址、原始公网 Host 不可恢复,同源比对必失配;持证请求的 CSRF
+// 风险由 token 门槛兜底(攻击页无法构造 token)。其余跨源拒绝。
+func (s *Server) wsUpgrader() websocket.Upgrader {
+	return websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, err := url.Parse(origin)
+			if err != nil || u.Host == "" {
+				return false
+			}
+			if u.Host == r.Host {
+				return true
+			}
+			return s.authToken != "" && authTokenMatches(r.URL.Query().Get("token"), s.authToken)
+		},
+	}
 }
 
 func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +97,8 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not available", http.StatusServiceUnavailable)
 		return
 	}
-	conn, err := upgrader.Upgrade(w, r, nil)
+	up := s.wsUpgrader()
+	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		debug.Log("webui", "ws upgrade error: %v", err)
 		return
