@@ -197,9 +197,14 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPut:
+		// #5294: pointer fields so an ABSENT key means "keep existing" -
+		// with a plain string, an omitted api_key decoded as "" and any
+		// non-"__unchanged__" value (including "") destroyed the stored
+		// key. Now: nil = keep; non-nil = explicit set (empty string =
+		// intentional clear); "__unchanged__" kept for old clients.
 		var req struct {
-			DisplayName string `json:"display_name"`
-			APIKey      string `json:"api_key"`
+			DisplayName *string `json:"display_name"`
+			APIKey      *string `json:"api_key"`
 		}
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -212,19 +217,19 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "vendor not found")
 			return
 		}
-		if req.DisplayName != "" {
-			vc.DisplayName = req.DisplayName
+		if req.DisplayName != nil && *req.DisplayName != "" {
+			vc.DisplayName = *req.DisplayName
 		}
 
-		if req.APIKey != "__unchanged__" {
-			if err := s.cfg.SetVendorAPIKey(vendor, req.APIKey); err != nil {
+		if req.APIKey != nil && *req.APIKey != "__unchanged__" {
+			if err := s.cfg.SetVendorAPIKey(vendor, *req.APIKey); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 
 			vc = s.cfg.Vendors[vendor]
-			if req.DisplayName != "" {
-				vc.DisplayName = req.DisplayName
+			if req.DisplayName != nil && *req.DisplayName != "" {
+				vc.DisplayName = *req.DisplayName
 			}
 		}
 		s.cfg.Vendors[vendor] = vc
@@ -324,8 +329,13 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, ep)
 
 	case http.MethodPut:
-		var ep config.EndpointConfig
-		if err := readJSON(r, &ep); err != nil {
+		// #5293: full-struct replace destroyed fields the client did not
+		// project (api_key and ~20 others were zeroed on every save from
+		// a partial GET projection). Decode the body as a presence map
+		// and patch only keys the client actually sent onto the existing
+		// endpoint; absent keys keep their stored values.
+		var raw map[string]json.RawMessage
+		if err := readJSON(r, &raw); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -338,6 +348,82 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		if vc.Endpoints == nil {
 			vc.Endpoints = make(map[string]config.EndpointConfig)
+		}
+		ep := vc.Endpoints[endpoint]
+		patchStr := func(dst *string, key string) {
+			if v, ok := raw[key]; ok {
+				var sv string
+				_ = json.Unmarshal(v, &sv)
+				*dst = sv
+			}
+		}
+		patchInt := func(dst *int, key string) {
+			if v, ok := raw[key]; ok {
+				var n int
+				_ = json.Unmarshal(v, &n)
+				*dst = n
+			}
+		}
+		patchBool := func(dst *bool, key string) {
+			if v, ok := raw[key]; ok {
+				var b bool
+				_ = json.Unmarshal(v, &b)
+				*dst = b
+			}
+		}
+		patchStr(&ep.DisplayName, "display_name")
+		patchStr(&ep.Protocol, "protocol")
+		patchStr(&ep.BaseURL, "base_url")
+		patchStr(&ep.AuthType, "auth_type")
+		patchStr(&ep.APIKey, "api_key")
+		patchStr(&ep.ReasoningEffort, "reasoning_effort")
+		patchStr(&ep.TextVerbosity, "text_verbosity")
+		patchStr(&ep.ToolChoice, "tool_choice")
+		patchStr(&ep.ThinkingMode, "thinking_mode")
+		patchStr(&ep.DefaultModel, "default_model")
+		patchStr(&ep.SelectedModel, "selected_model")
+		patchStr(&ep.ContextEditing, "context_editing")
+		patchStr(&ep.ServiceTier, "service_tier")
+		patchInt(&ep.ContextWindow, "context_window")
+		patchInt(&ep.MaxTokens, "max_tokens")
+		patchInt(&ep.MaxRetries, "max_retries")
+		patchBool(&ep.Logprobs, "logprobs")
+		patchBool(&ep.MemoryTool, "memory_tool")
+		patchBool(&ep.ResponsesBackground, "responses_background")
+		if v, ok := raw["request_timeout"]; ok {
+			var d int64
+			_ = json.Unmarshal(v, &d)
+			ep.RequestTimeout = time.Duration(d)
+		}
+		if v, ok := raw["supports_vision"]; ok {
+			var b *bool
+			_ = json.Unmarshal(v, &b)
+			ep.SupportsVision = b
+		}
+		if v, ok := raw["strict_tools"]; ok {
+			var b *bool
+			_ = json.Unmarshal(v, &b)
+			ep.StrictTools = b
+		}
+		patchStrings := func(dst *[]string, key string) {
+			if v, ok := raw[key]; ok {
+				var ss []string
+				_ = json.Unmarshal(v, &ss)
+				*dst = ss
+			}
+		}
+		patchStrings(&ep.Models, "models")
+		patchStrings(&ep.Tags, "tags")
+		patchStrings(&ep.StrictToolsAllow, "strict_tools_allow")
+		if v, ok := raw["server_tools"]; ok {
+			var st []config.ServerToolConfig
+			_ = json.Unmarshal(v, &st)
+			ep.ServerTools = st
+		}
+		if v, ok := raw["model_limits"]; ok {
+			var ml map[string]config.ModelLimitConfig
+			_ = json.Unmarshal(v, &ml)
+			ep.ModelLimits = ml
 		}
 		vc.Endpoints[endpoint] = ep
 		s.cfg.Vendors[vendor] = vc
