@@ -39,6 +39,8 @@ export default function App() {
   const streams = useChat((s) => s.subagentStreams);
   const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
   const todos = useChat((s) => s.todos);
+  const cronEvents = useChat((s) => s.cronEvents);
+  const [actTab, setActTab] = useState<"todos" | "subs" | "cron">("todos");
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
@@ -257,51 +259,92 @@ export default function App() {
         </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 ? { width: "380px" } : undefined}>
-        {/* agent loop 运行时 todo 实时面板(todo_write tool_result 推送聚合;零事件自动隐藏) */}
-        {todos.length > 0 && (
-          <div className="max-h-[40%] overflow-auto border-b border-border">
-            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">
-              任务清单 {todos.filter((t) => t.status === "done").length}/{todos.length}
-            </div>
-            {todos.map((t) => (
-              <div key={t.id} className="flex items-start gap-2 border-t border-border px-4 py-1.5">
-                <span
-                  className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
-                  style={{
-                    background:
-                      t.status === "done" ? "var(--color-success)" : t.status === "in_progress" ? "var(--color-trajectory-tool-call)" : "var(--color-foreground-subtlest)",
-                  }}
-                  title={t.status}
-                />
-                <span
-                  className={`text-ui-xs text-wrap-phrase ${t.status === "done" ? "text-foreground-subtlest line-through" : t.status === "in_progress" ? "text-foreground" : "text-foreground-subtle"}`}
+      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
+        {/* 活动面板:任务清单/子代理/Cron 三 tab 独立区域(零事件 tab 灰显) */}
+        {(todos.length > 0 || activeStreams.length > 0 || cronEvents.length > 0) && (
+          <div className="flex min-h-0 flex-col border-b border-border">
+            <div className="text-ui-xs flex shrink-0 border-b border-border">
+              {([
+                { id: "todos", label: `任务 ${todos.length}`, on: todos.length > 0 },
+                { id: "subs", label: `子代理 ${activeStreams.length}`, on: activeStreams.length > 0 },
+                { id: "cron", label: `Cron ${cronEvents.length}`, on: cronEvents.length > 0 },
+              ] as const).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActTab(t.id)}
+                  className={`flex-1 border-b-2 px-2 py-2 transition-colors ${
+                    actTab === t.id ? "border-brand text-foreground" : t.on ? "border-transparent text-foreground-subtle hover:text-foreground" : "border-transparent text-foreground-subtlest"
+                  }`}
                 >
-                  {t.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {/* §6.1 二层:活跃子代理实时流监视(一等键=SubAgentID;零事件自动隐藏) */}
-        {activeStreams.length > 0 && (
-          <div className="max-h-[50%] overflow-auto border-b border-border">
-            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">子代理实时流</div>
-            {activeStreams.map(([id, s]) => (
-              <div key={id} className="border-t border-border px-4 py-2">
-                <div className="mb-1 flex items-center gap-2">
-                  <span
-                    className="inline-block h-2 w-2 rounded-full"
-                    style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
-                  />
-                  <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
-                  <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
-                </div>
-                <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
-                  {s.text || s.reasoning || "…"}
-                </pre>
-              </div>
-            ))}
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              {actTab === "todos" && (
+                todos.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">暂无任务清单(agent 运行 todo_write 时出现)</div>
+                ) : (
+                  <>
+                    <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">
+                      进度 {todos.filter((t) => t.status === "done").length}/{todos.length}
+                    </div>
+                    {todos.map((t) => (
+                      <div key={t.id} className="flex items-start gap-2 border-t border-border px-4 py-1.5">
+                        <span
+                          className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
+                          style={{
+                            background:
+                              t.status === "done" ? "var(--color-success)" : t.status === "in_progress" ? "var(--color-trajectory-tool-call)" : "var(--color-foreground-subtlest)",
+                          }}
+                          title={t.status}
+                        />
+                        <span
+                          className={`text-ui-xs text-wrap-phrase ${t.status === "done" ? "text-foreground-subtlest line-through" : t.status === "in_progress" ? "text-foreground" : "text-foreground-subtle"}`}
+                        >
+                          {t.content}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )
+              )}
+              {actTab === "subs" && (
+                activeStreams.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">无活跃子代理(spawn_agent 运行时实时流在此)</div>
+                ) : (
+                  activeStreams.map(([id, s]) => (
+                    <div key={id} className="border-t border-border px-4 py-2 first:border-t-0">
+                      <div className="mb-1 flex items-center gap-2">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
+                        />
+                        <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
+                        <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
+                      </div>
+                      <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+                        {s.text || s.reasoning || "…"}
+                      </pre>
+                    </div>
+                  ))
+                )
+              )}
+              {actTab === "cron" && (
+                cronEvents.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">暂无 Cron 触发事件(定时任务到点时在此归集)</div>
+                ) : (
+                  cronEvents.map((e, i) => (
+                    <div key={`${i}-${e.at}`} className="flex items-start gap-2 border-t border-border px-4 py-1.5 first:border-t-0">
+                      <span className="mt-0.5 inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--color-trajectory-tool-call)" }} />
+                      <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtlest">{e.at}</span>
+                      <span className="text-ui-xs text-wrap-phrase text-foreground-subtle">{e.text}</span>
+                    </div>
+                  ))
+                )
+              )}
+            </div>
           </div>
         )}
         {paneSpawn ? (

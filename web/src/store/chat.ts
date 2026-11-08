@@ -52,6 +52,7 @@ type ChatStore = {
   lastError: string | null;
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
+  cronEvents: { text: string; at: string }[]; // [cron] 前缀系统消息归集(右栏 Cron tab)
   loadHistory: () => Promise<void>;
   syncQueue: (items: string[]) => void; // 会话切换/重连后重拉队列快照
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
@@ -79,6 +80,7 @@ export const useChat = create<ChatStore>((set) => ({
   lastError: null,
   subagentStreams: {},
   todos: [],
+  cronEvents: [],
 
   setConn: (conn) => set({ conn }),
 
@@ -227,7 +229,12 @@ export const useChat = create<ChatStore>((set) => ({
         case "system": {
           const msgs = [...st.messages];
           msgs.push({ id: nid(), role: "system", text: m.text, reasoning: "", tools: [] });
-          return { messages: msgs };
+          // [cron] 前缀 → 归集到右栏 Cron tab(最多留 50 条)
+          let cronEvents = st.cronEvents;
+          if (m.text.startsWith("[cron] ")) {
+            cronEvents = [{ text: m.text.slice(7), at: new Date().toLocaleTimeString() }, ...st.cronEvents].slice(0, 50);
+          }
+          return { messages: msgs, cronEvents };
         }
         // §6.1 二层一等流(SubAgentID 键;后端 emit 后自动激活,零事件不渲染)
         case "subagent_delta": {
