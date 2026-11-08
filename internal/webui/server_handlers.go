@@ -198,8 +198,8 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPut:
 		var req struct {
-			DisplayName string `json:"display_name"`
-			APIKey      string `json:"api_key"`
+			DisplayName string  `json:"display_name"`
+			APIKey      *string `json:"api_key"`
 		}
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -216,8 +216,10 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 			vc.DisplayName = req.DisplayName
 		}
 
-		if req.APIKey != "__unchanged__" {
-			if err := s.cfg.SetVendorAPIKey(vendor, req.APIKey); err != nil {
+		// #5294: an absent api_key (nil) means "leave unchanged"; only an
+		// explicit value ("" to clear, or the "__unchanged__" sentinel) is honored.
+		if req.APIKey != nil && *req.APIKey != "__unchanged__" {
+			if err := s.cfg.SetVendorAPIKey(vendor, *req.APIKey); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -324,8 +326,8 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, ep)
 
 	case http.MethodPut:
-		var ep config.EndpointConfig
-		if err := readJSON(r, &ep); err != nil {
+		var incoming config.EndpointConfig
+		if err := readJSON(r, &incoming); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -339,11 +341,35 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		if vc.Endpoints == nil {
 			vc.Endpoints = make(map[string]config.EndpointConfig)
 		}
+		ep := incoming
+		if existing, exists := vc.Endpoints[endpoint]; exists {
+			// #5293: the GET projection (sanitizeEndpoints) only exposes
+			// base_url/protocol/models, so a round-tripped PUT carries just those
+			// fields. Merge them onto the existing config instead of replacing it
+			// wholesale — this preserves APIKey (incl. ${ENV} refs), max_tokens,
+			// context_window, selected_model and the other unprojected fields.
+			ep = existing
+			ep.BaseURL = incoming.BaseURL
+			if strings.TrimSpace(incoming.Protocol) != "" {
+				ep.Protocol = incoming.Protocol
+			}
+			if incoming.Models != nil {
+				ep.Models = incoming.Models
+			}
+		}
 		vc.Endpoints[endpoint] = ep
 		s.cfg.Vendors[vendor] = vc
 		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if raw, err := json.Marshal(ep); err == nil {
+			var m map[string]interface{}
+			if json.Unmarshal(raw, &m) == nil {
+				sanitizeMap(m)
+				writeJSON(w, m)
+				return
+			}
 		}
 		writeJSON(w, ep)
 
