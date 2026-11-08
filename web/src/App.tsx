@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
@@ -42,7 +42,10 @@ export default function App() {
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
+  // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 busy/current 标示)
   const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>("");
+  const [switching, setSwitching] = useState(false);
 
   // ⌘K 全局快捷键(§2 键盘映射表)
   useEffect(() => {
@@ -100,6 +103,50 @@ export default function App() {
       .then((d: Array<{ id: string; title?: string; updated_at?: string }>) => setSessions(Array.isArray(d) ? d : []))
       .catch(() => setSessions([]));
   }, [paletteOpen]);
+
+  // 会话列表:打开面板或每 30s 拉取(当前 workspace 全量,含 current 标记)
+  const loadSessions = useCallback(() => {
+    fetch("/api/sessions")
+      .then((r) => (r.ok ? r.json() : { groups: [] }))
+      .then((d) => {
+        const groups = Array.isArray(d?.groups) ? d.groups : [];
+        const flat = groups.flatMap((g: { sessions: Array<{ id: string; title?: string; updated_at?: string }> }) => g.sessions || []);
+        setSessions(flat);
+        const cur = groups.find((g: { current?: boolean }) => g.current);
+        if (cur?.sessions?.length) setCurrentSessionId(cur.sessions[0].id);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadSessions();
+    const t = setInterval(loadSessions, 30000);
+    return () => clearInterval(t);
+  }, [loadSessions]);
+
+  // 切换请求:busy(锁定)时后端返回 409,前端以禁用态呈现锁定
+  const switchSession = useCallback(
+    (id: string) => {
+      if (id === currentSessionId || switching) return;
+      setSwitching(true);
+      fetch("/api/sessions/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      })
+        .then((r) => {
+          if (r.ok) {
+            setCurrentSessionId(id);
+            // 后端切换经 program msg 队列异步落地:800ms+2.5s 双保险重拉聊天历史
+            setTimeout(() => useChat.getState().loadHistory(), 800);
+            setTimeout(() => useChat.getState().loadHistory(), 2500);
+          }
+          loadSessions();
+        })
+        .catch(() => {})
+        .finally(() => setSwitching(false));
+    },
+    [currentSessionId, switching, loadSessions]
+  );
 
   // ⌘N 新会话
   useEffect(() => {
@@ -163,6 +210,32 @@ export default function App() {
             字号: {fontSize.replace("px", "")}
           </button>
         </nav>
+        {/* 会话列表(同桌面逻辑:本 workspace 全量;busy 会话锁定不可点) */}
+        <div className="border-t border-border flex-1 overflow-y-auto p-2">
+          <div className="text-ui-xs px-3 py-1.5 text-foreground-subtlest">会话</div>
+          {sessions.map((s) => {
+            const current = s.id === currentSessionId;
+            return (
+              <button
+                key={s.id}
+                disabled={current || switching}
+                title={current ? "当前会话" : switching ? "切换中…" : "切换到此会话"}
+                className={
+                  "w-full truncate rounded-lg px-3 py-1.5 text-left text-ui-xs transition-colors " +
+                  (current
+                    ? "bg-selected font-medium text-foreground"
+                    : switching
+                      ? "cursor-wait text-foreground-subtlest"
+                      : "text-foreground-subtle hover:bg-hover hover:text-foreground")
+                }
+                onClick={() => switchSession(s.id)}
+              >
+                {s.title || s.id.slice(0, 16)}
+              </button>
+            );
+          })}
+          {sessions.length === 0 && <div className="px-3 py-1.5 text-ui-xs text-foreground-subtlest">(暂无会话)</div>}
+        </div>
         <div className="border-t border-border px-4 py-3 text-ui-xs text-foreground-subtlest">
           WebUI {view === "chat" ? "P1 · 聊天" : "P2 · 设置"} · 建设中
         </div>

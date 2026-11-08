@@ -1260,6 +1260,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
+	// 会话切换执行面注入(webui 发起,实际切换由 TUI resume 全链执行)
+	webuiSrv.SetSessionSwitchFn(repl.RequestSessionSwitch)
+	// 聊天三能力(模型/effort/mode)注入:webui 复用 TUI slash 命令全链
+	webuiSrv.SetChatCommandFn(repl.SubmitCommand)
+	webuiSrv.SetChatControlsFn(repl.ChatControlsSnapshot)
 
 	// 子代理实时流一等接线(§6.1):manager 回调构造 StreamEvent 广播进总线,
 	// TUI/webui/桌面共用同一契约(webui WS 由 streamEventToJSON 转 subagent_delta 帧)
