@@ -178,7 +178,16 @@ func normalizeFilePath(path string) string {
 		path = path[2:]
 	}
 
-	return strings.ToLower(path)
+	// #5290: fold case only where the filesystem is case-insensitive
+	// (darwin/windows), mirroring normalizeBatchPath semantics. The
+	// former unconditional strings.ToLower merged case-distinct sibling
+	// files on Linux, inflating repetition warnings and letting the
+	// premature-commit guard miss unread-file edits. ASCII-only fold
+	// matches batch_conflict (no Unicode fold divergence).
+	if !batchPathFoldActive() {
+		return path
+	}
+	return asciiFoldLower(path)
 }
 
 func truncateRunesSafe(s string, max int) string {
