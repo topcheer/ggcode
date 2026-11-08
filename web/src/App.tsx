@@ -102,9 +102,20 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : { groups: [] }))
       .then((d) => {
         const groups = Array.isArray(d?.groups) ? d.groups : [];
-        const flat = groups.flatMap((g: { sessions: Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }> }) => g.sessions || []);
-        setSessions(flat);
-        const cur = groups.find((g: { current?: boolean }) => g.current);
+        // 只显示当前 workspace 的会话(同桌面逻辑;后端 groups 已标记 current,
+        // 缺标记时回退 current_workspace 匹配)
+        const cur =
+          groups.find((g: { current?: boolean }) => g.current) ??
+          groups.find((g: { workspace?: string }) => g.workspace === d?.current_workspace);
+        const rows = [...(cur?.sessions ?? [])];
+        // 锁定的会话排到最后(活会话优先,锁定态不打断浏览)
+        rows.sort((a: { locked_by_pid?: number; updated_at?: string }, b: { locked_by_pid?: number; updated_at?: string }) => {
+          const la = a.locked_by_pid ? 1 : 0;
+          const lb = b.locked_by_pid ? 1 : 0;
+          if (la !== lb) return la - lb;
+          return (b.updated_at ?? "").localeCompare(a.updated_at ?? "");
+        });
+        setSessions(rows);
         if (cur?.sessions?.length) setCurrentSessionId(cur.sessions[0].id);
       })
       .catch(() => {});
