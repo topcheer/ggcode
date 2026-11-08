@@ -62,6 +62,7 @@ function ConfigPage() {
   const [cfg, setCfg] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -82,8 +83,10 @@ function ConfigPage() {
       const parsed = JSON.parse(cfg) as Record<string, unknown>;
       configApi
         .put(parsed)
-        .then(() => {
+        .then((res: { applied?: string[]; ignored?: string[] }) => {
           setSaved(true);
+          // #5298: 白名单外字段(vendors/mcp_servers/im/a2a 及脱敏键)服务端忽略,回显给用户
+          setNote(res.ignored?.length ? `已应用 ${res.applied?.length ?? 0} 项;仅字段级页可改而被忽略: ${res.ignored.join("、")}` : null);
           setTimeout(() => setSaved(false), 1500);
         })
         .catch((e: Error) => setErr(e.message));
@@ -115,6 +118,7 @@ function ConfigPage() {
           保存
         </button>
         {saved && <span className="text-ui-sm text-[var(--color-success)]">已保存</span>}
+        {note && <span className="text-ui-xs text-foreground-subtle">{note}</span>}
       </div>
     </div>
   );
