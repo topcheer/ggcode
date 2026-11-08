@@ -15,7 +15,7 @@ var ErrGuidanceAtBudget = errors.New("mid-run guidance arrived at iteration budg
 var ErrSessionBudgetExhausted = errors.New("session budget exhausted (token/cost/delegated/time limit reached)")
 
 const (
-	defaultAutopilotSessionTimeout = 600 * time.Minute
+	defaultAutopilotSessionTimeout = 72 * time.Hour // wall-clock budget default (was 600m/10h, raised 2026-11-08 per ops request)
 )
 
 type sessionTimeoutState struct {
