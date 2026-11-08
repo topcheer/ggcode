@@ -4,6 +4,12 @@ type Controls = { model?: string; mode?: string; reasoning_effort?: string };
 
 const MODES = ["supervised", "bypass"] as const;
 const EFFORTS = ["low", "medium", "high"] as const;
+// effort 低→高彩色渐进 chip:灰→蓝→橙(高消耗警示)
+const EFFORT_STYLES: Record<(typeof EFFORTS)[number], { idle: string; active: string }> = {
+  low: { idle: "text-foreground-subtle", active: "bg-[var(--color-success-surface)] text-[var(--color-success-surface-fg)]" },
+  medium: { idle: "text-foreground-subtle", active: "bg-[var(--color-info-surface)] text-[var(--color-info-surface-fg)]" },
+  high: { idle: "text-foreground-subtle", active: "bg-[var(--color-warning-surface)] text-[var(--color-warning-surface-fg)]" },
+};
 
 /** chat-controls 全局单例 store:头部(模型+effort)与输入框下(mode toggle)
  *  共享同一份快照与 busy,消除多组件各开 20s 轮询的竞态(切态回显抖动根因) */
@@ -51,10 +57,14 @@ function useChatControls() {
     };
   }, []);
 
-  /** submitCommand:提交 slash;乐观更新由调用方在 resolve 后做,失败弹错误 */
+  /** submitCommand:提交 slash;busy 在 finally 可靠复位(防切一次后全控件锁死) */
   const submitCommand = (text: string) => {
     snapBusy = true;
     notify();
+    const done = () => {
+      snapBusy = false;
+      notify();
+    };
     return fetch("/api/chat/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -63,9 +73,14 @@ function useChatControls() {
       if (!r.ok) {
         // 409/400:后端拒绝(命令层校验失败),读错误体弹给 UI
         return r.text().then((t) => {
+          done();
           throw new Error(t || `command rejected (${r.status})`);
         });
       }
+      done();
+    }).catch((e) => {
+      done();
+      throw e;
     });
   };
 
@@ -123,21 +138,25 @@ export default function ChatControls() {
             </option>
           ))}
       </select>
-      {/* effort 分段胶囊条:三档单选,当前档反色高亮 */}
-      <div className="text-ui-xs flex items-center rounded-full border border-border bg-card p-0.5" title="推理力度">
-        {EFFORTS.map((e) => (
-          <button
-            key={e}
-            type="button"
-            disabled={busy}
-            onClick={() => run(`/effort ${e}`)}
-            className={`rounded-full px-2 py-0.5 transition-colors disabled:opacity-50 ${
-              effort === e ? "bg-foreground text-background" : "text-foreground-subtle hover:text-foreground"
-            }`}
-          >
-            {e}
-          </button>
-        ))}
+      {/* effort 彩色 chip 组:低→高 灰→蓝→橙 渐进,当前档着色填充 */}
+      <div className="text-ui-xs flex items-center gap-1" title="推理力度">
+        {EFFORTS.map((e) => {
+          const on = effort === e;
+          const st = EFFORT_STYLES[e];
+          return (
+            <button
+              key={e}
+              type="button"
+              disabled={busy}
+              onClick={() => run(`/effort ${e}`)}
+              className={`rounded-full border px-2 py-0.5 transition-colors disabled:opacity-50 ${
+                on ? `${st.active} border-transparent font-medium` : `border-border ${st.idle} hover:text-foreground`
+              }`}
+            >
+              {e}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
