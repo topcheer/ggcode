@@ -211,3 +211,34 @@ html[data-document-hidden] *::after {
     transform: none;
   }
 }
+
+/* 无痕主题滚动条:默认隐形,hover/聚焦容器时拇指浮现;webkit+firefox 双通道 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+  scrollbar-color: var(--color-foreground-subtlest) transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background: var(--color-foreground-subtlest);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-foreground-subtle);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
