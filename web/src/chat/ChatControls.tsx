@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-type Controls = { model?: string; mode?: string; reasoning_effort?: string; vendor?: string; endpoint?: string };
+type Controls = { model?: string; mode?: string; reasoning_effort?: string };
 
 const MODES = ["supervised", "bypass"];
 const EFFORTS = ["low", "medium", "high"];
@@ -10,6 +10,8 @@ const EFFORTS = ["low", "medium", "high"];
 export default function ChatControls() {
   const [ctrl, setCtrl] = useState<Controls>({});
   const [groups, setGroups] = useState<{ vendor: string; endpoint: string; models: string[] }[]>([]);
+  // 活动 provider·endpoint 取自 /api/config 顶层(/api/chat/controls 不含这两项)
+  const [active, setActive] = useState<{ vendor?: string; endpoint?: string }>({});
   const [busy, setBusy] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
@@ -21,7 +23,8 @@ export default function ChatControls() {
       // 模型可选列表:仅当前活动 provider·endpoint 的模型(切换 provider 去设置页
     fetch("/api/config")
       .then((r) => (r.ok ? r.json() : null))
-      .then((cfg: { vendors?: Record<string, { endpoints?: Record<string, { models?: string[] }> }> } | null) => {
+      .then((cfg: { vendor?: string; endpoint?: string; vendors?: Record<string, { endpoints?: Record<string, { models?: string[] }> }> } | null) => {
+        setActive({ vendor: cfg?.vendor, endpoint: cfg?.endpoint });
         const gs: { vendor: string; endpoint: string; models: string[] }[] = [];
         for (const [vname, v] of Object.entries(cfg?.vendors ?? {})) {
           for (const [ename, e] of Object.entries(v?.endpoints ?? {})) {
@@ -67,7 +70,7 @@ export default function ChatControls() {
           {ctrl.model || "模型"}
         </option>
         {/* 仅活动 provider·endpoint 的模型;切换 provider 请到设置-供应商 */}
-        {(groups.find((g) => g.vendor === ctrl.vendor && g.endpoint === ctrl.endpoint)?.models ?? [])
+        {(groups.find((g) => g.vendor === active.vendor && g.endpoint === active.endpoint)?.models ?? [])
           .filter((m) => m !== ctrl.model)
           .map((m) => (
             <option key={m} value={m}>
