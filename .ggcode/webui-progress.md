@@ -19,3 +19,4 @@
 - [11-08 21:20 巡检54·最小形态] handleChatWS拆分轮收官(f46520455重构+b1be53c24台账已推);pnpm build绿;P0-P3维持P1交付态+增量(会话锁定/切换/三能力/队列事件/隧道/模型层级);阻塞无。
 - [11-08 21:40 巡检55·最小形态] 死代码扫描主线占用中(主树deadcode 1006项→internal559四关核实后台运行);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
 - [11-08 21:57 修复] 模型下拉只显1个:根因=/api/chat/controls无vendor·endpoint字段,活动选择改从/api/config顶层读取;build绿已推+二进制更新;阻塞无。
+- [11-08 22:00 设计轮] effort→分段胶囊条(头部)、mode→iOS式toggle移至输入框下方(bypass态警示色);useChatControls共享轮询;build绿已推+二进制更新;阻塞无。
