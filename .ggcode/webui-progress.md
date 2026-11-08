@@ -13,3 +13,4 @@
 - [11-08 20:45 /webui tunnel 交付] etunnel SDK 接入（go.mod replace ../et）：webui.TunnelCtl 单例+ 打印公网 https URL（含 #token 鉴权）+ 关闭；tui/webui 双包全绿。注：wt 内构建需临时改 replace 绝对路径；官方 SDK 已发布 pub.dev（文档注记待补）。
 - [11-08 20:46 巡检50并入] /webui tunnel 提交遇 replace 路径问题：wt 相对 ../et 不存在（go.mod 相对 wt 目录解析）——已回退 wt 绝对路径待解决提交策略（go.work 或 SDK vendoring 或发版依赖），巡检态：webui 构建绿。阻塞：etunnel 依赖路径策略待定。
 - [11-08 20:48 /webui tunnel 交付] etunnel SDK 接入落定：go.mod replace ../et（主树正路）+未跟踪 go.work 供 wt 构建（.gitignore 补 go.work）；TunnelCtl+三态命令+off 关闭；双包全绿已推；二进制已更新。
+- [11-08 21:02 巡检51+off/修复] /webui tunnel off 词位 bug（parts[1]=tunnel，off 应检 parts[2]）+公网 URL 缺 #token 修复（已激活打印与异步就绪消息均带）；StopClearsURL 钉测；双包全绿已推；二进制已更新；阻塞无。
