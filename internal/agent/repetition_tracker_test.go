@@ -235,7 +235,17 @@ func TestRepetitionTrackerCaseInsensitiveNormalization(t *testing.T) {
 	if !hardFired {
 		t.Fatal("expected hard intervention with mixed-case paths (9 failures)")
 	}
-	if len(rt.failedEditsByFile) != 1 {
-		t.Fatalf("expected single normalized key, got %d: %v", len(rt.failedEditsByFile), rt.failedEditsByFile)
+	// #5290: case folding is per-OS (see normalizeFilePath). On
+	// case-insensitive filesystems (darwin/windows) the case-drifted
+	// spellings refer to the same file and merge into one key; on
+	// case-sensitive filesystems they are distinct files with separate
+	// failure series. The even-index spelling alone reaches the hard
+	// threshold (5), so hardFired holds either way.
+	if batchPathFoldActive() {
+		if len(rt.failedEditsByFile) != 1 {
+			t.Fatalf("fold OS: expected single normalized key, got %d: %v", len(rt.failedEditsByFile), rt.failedEditsByFile)
+		}
+	} else if len(rt.failedEditsByFile) != 2 {
+		t.Fatalf("case-sensitive OS: expected two distinct keys, got %d: %v", len(rt.failedEditsByFile), rt.failedEditsByFile)
 	}
 }
