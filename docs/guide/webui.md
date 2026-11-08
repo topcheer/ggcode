@@ -20,7 +20,7 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 - **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、工具调用状态卡片（spinner→绿/红+耗时；diff 类结果逐行红绿着色）、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
 - **Composer**：`⌘/Ctrl+Enter` 发送、`Shift+Enter` 换行、输入 `@` 唤起文件（实时搜索 workspace 真实路径）/技能/Agent 彩色引用弹层、活跃发光态
 - **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现，点击展开运行报告（子代理实时流规划中）
-- **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话
+- **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（服务器未运行时友好提示）
 - **设置页**：配置（JSON 编辑）、供应商、MCP、IM、A2A、会话、Knight、定时任务（只读）、检查点（只读时间线）九域
 - **双主题**：暗色/亮色/跟随系统（主题选择先于首帧渲染，无闪白）；侧栏字号循环按钮（12/13/14/16px，localStorage 持久化）
 - **只读 API**：`GET /api/workspace/files?q=`（文件搜索）、`GET /api/cron/jobs`（当前 workspace 定时任务）、`GET /api/checkpoints`（最近编辑检查点）

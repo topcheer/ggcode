@@ -168,6 +168,15 @@ Available inside the TUI and over IM (`/usage`):
   never an error). Data is cached 3 minutes; rate-limited endpoints are
   re-probed only after the server's Retry-After window (#2150).
 
+### webui (slash command)
+
+Available inside the TUI (`/webui`):
+
+- Prints the URL of the running WebUI server (address + `#token=` fragment
+  for one-click auth) and opens it in the system browser.
+- If no WebUI server is running in this session (e.g. `--no-webui` or
+  headless mode), prints a friendly notice instead of an error.
+
 ### llm-probe
 
 Test LLM provider connectivity, authentication, and token usage accuracy:
