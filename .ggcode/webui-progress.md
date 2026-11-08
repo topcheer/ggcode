@@ -1,2 +1,12 @@
 - [11-08 17:04 报障修e2e补齐+台账入库] 新增 3 用例（非法 payload 非静默 error/合法提交触达派发面/system 反馈通道契约）合计 10 用例三新增面+报障修全覆盖；发现并修 helper 时序死锁（上行/广播须先于 skip，helper 传参式读消息）；台账随本笔入库（评审要求）；双包全绿+web build ✓；阻塞无。
 - [11-08 17:20 巡检41] wt 净（c9b18ed0d 十用例已推）；web build ✓562ms；#5285 CI 观察中（红灯项见下）；P0-P2 完成态、P3 e2e 已扩至 10 用例；阻塞无。
+- [11-08 17:40 巡检42] #5285 已 MERGED（8 笔全入 main：报障四修+队列镜像+审计修+e2e 十用例）；wt 构建绿 ✓534ms；P0-P2 完成态、P3 e2e 覆盖三新增面+报障修链；阻塞无。
+- [11-08 18:00 巡检43] #5285 已入 main（main 前进至 801b56405，他席 #5286 亦合）；wt 净（仅台账本地行）；web build ✓552ms；P0-P3 维持全完成态；阻塞无。
+- [11-08 18:20 巡检44] #5285 已入 main 后全域无新面；wt 净；web build 零错误；P0-P3 维持全完成态；阻塞无——巡检维持收口态，无代码动作。
+- [11-08 18:40 巡检45并入] dead code 扫描改 wt 分支核对（主树他席分支无新面，引用计数失真已修正）；web build 零错误；P0-P3 收口态；阻塞无。
+- [11-08 18:42 dead code 扫描] 委派卡死取消改主线程降级法；基线 vet/build RC=0；核对 r188 存档+本席新面 11 符号（全活跃）；清理 ChatBridge.SetTunnelHost（四关确认：Go 0 调用/App 委托层无/前端 0/字符串 0；GetTunnelHost+字段保留——app.go:2219 活跃读链）；GetTeamBoard 确认活跃保留；wt 复验 build/vet/test 全绿已推；注意：本笔在 wt 分支，进 main 需开 PR（留用户验收令）。
+- [11-08 19:00 巡检45] wt 含未 PR 的 dead code 清理笔（3d3a93373，等验收令）；web build 零错误；P0-P3 收口态；遗留三项待令（PR/浏览器 e2e/P2 逐端点回归）；阻塞无。
+- [11-08 19:20 巡检46] wt 态不变（3d3a93373 等 PR 令）；web build 零错误；P0-P3 收口态；三项遗留待令不变；阻塞无。
+- [11-08 19:40 巡检47] 态不变（3d3a93373 等 PR 令）；web build 零错误；收口态；阻塞无。
+- [11-08 20:00 巡检48] 态不变（3d3a93373 等 PR 令）；web build 零错误；收口态；阻塞无。
+- [11-08 20:21 巡检49+锁定态交付] 会话锁定态全链（用户报障）：/api/sessions 新增 locked_by_pid（session.ProbeLockHolderPID non-blocking flock 试锁即放，unix 实现+windows 桩）+左栏锁图标/禁点/PID tooltip；session/webui 双包全绿+web build ✓534ms；二进制已更新；阻塞无。
