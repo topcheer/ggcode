@@ -8,7 +8,8 @@ export default function MessageBubble({ msg }: { msg: UIMessage }) {
   if (msg.role === "system") {
     return (
       <div className="text-ui-xs rounded-lg bg-[var(--color-surface)] px-3 py-2 text-center text-foreground-subtle">
-        {msg.text}
+        {/* 策略师响应走 system 通道:markdown 渲染(派修件——裸 {msg.text} 丢语法结构) */}
+        <MarkdownLite text={msg.text} />
       </div>
     );
   }
