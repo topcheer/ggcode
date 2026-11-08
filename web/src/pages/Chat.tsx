@@ -11,6 +11,7 @@ export default function Chat() {
   const messages = useChat((s) => s.messages);
   const conn = useChat((s) => s.conn);
   const lastError = useChat((s) => s.lastError);
+  const queueItems = useChat((s) => s.queueItems);
   const applyMsg = useChat((s) => s.applyMsg);
   const setConn = useChat((s) => s.setConn);
   const loadHistory = useChat((s) => s.loadHistory);
@@ -64,6 +65,12 @@ export default function Chat() {
           <div className="min-h-0 flex-1">
             <MessageList />
           </div>
+          {queueItems.length > 0 && (
+            <div className="border-t border-border px-4 py-1.5 text-ui-xs text-foreground-subtle">
+              排队中 {queueItems.length} 条(本轮结束后依次发送)
+              <div className="mt-0.5 truncate text-foreground-subtlest">{queueItems[queueItems.length - 1]}</div>
+            </div>
+          )}
           <Composer onSend={send} />
         </>
       ) : (

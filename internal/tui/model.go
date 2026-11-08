@@ -273,6 +273,7 @@ type Model struct {
 	historySearch        historySearchState
 	compactMode          bool
 	pending              *pendingQueue
+	queueNotifyFn        func(event, text string, count int)
 	sessionMu            *sync.Mutex
 
 	persistedMsgCount    int

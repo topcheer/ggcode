@@ -48,6 +48,7 @@ type ChatStore = {
   messages: UIMessage[];
   conn: ConnState;
   busy: boolean; // agent 处理中(§ WS busy error)
+  queueItems: string[]; // 插入消息队列镜像(append/dequeue/clear/list 四事件同步)
   lastError: string | null;
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
@@ -73,6 +74,7 @@ export const useChat = create<ChatStore>((set) => ({
   messages: [],
   conn: "closed",
   busy: false,
+  queueItems: [],
   lastError: null,
   subagentStreams: {},
   todos: [],
@@ -240,6 +242,27 @@ export const useChat = create<ChatStore>((set) => ({
               [m.id]: { ...prev, done: true, result: m.result, isError: m.is_error },
             },
           };
+        }
+        case "queue": {
+          // 插入消息队列镜像:TUI 排队全链三时机事件+连接时 list 快照
+          switch (m.event) {
+            case "append":
+              return { queueItems: [...st.queueItems, m.text ?? ""] };
+            case "dequeue": {
+              // 按文本移除首条匹配(队列无 id 语义;重复文本罕见可接受)
+              const idx = st.queueItems.indexOf(m.text ?? "");
+              if (idx < 0) return {};
+              const next = [...st.queueItems];
+              next.splice(idx, 1);
+              return { queueItems: next };
+            }
+            case "clear":
+              return { queueItems: [] };
+            case "list":
+              return { queueItems: m.items ?? [] };
+            default:
+              return {};
+          }
         }
       }
     }),

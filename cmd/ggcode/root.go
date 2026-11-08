@@ -1265,6 +1265,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// 聊天三能力(模型/effort/mode)注入:webui 复用 TUI slash 命令全链
 	webuiSrv.SetChatCommandFn(repl.SubmitCommand)
 	webuiSrv.SetChatControlsFn(repl.ChatControlsSnapshot)
+	// 插入消息队列:三事件广播(append/dequeue/clear)+连接时快照
+	repl.SetQueueNotifyFn(webuiSrv.EmitQueueEvent)
+	webuiSrv.SetQueueSnapshotFn(repl.QueuedSubmissions)
 
 	// 子代理实时流一等接线(§6.1):manager 回调构造 StreamEvent 广播进总线,
 	// TUI/webui/桌面共用同一契约(webui WS 由 streamEventToJSON 转 subagent_delta 帧)

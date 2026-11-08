@@ -63,12 +63,20 @@ func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
 	}
 	m.chatWriteUser(chatID, displayText)
 	m.chatListScrollToBottom()
+	// 队列事件(append):webui 端镜像排队条目(nil fn=TUI 单机,安全 no-op)
+	if m.queueNotifyFn != nil {
+		m.queueNotifyFn("append", displayText, count)
+	}
 }
 
 func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok bool) {
 	text, imgs, ok = m.pending.popLastVisible()
 	if !ok {
 		return "", nil, false
+	}
+	// 队列事件(dequeue):↑ 键取回也是出列,webui 端同步移除
+	if m.queueNotifyFn != nil {
+		m.queueNotifyFn("dequeue", text, m.pending.count())
 	}
 
 	if m.lastQueuedChatID != "" {
@@ -104,7 +112,18 @@ func (m *Model) pendingHeadIsAgentOrigin() bool {
 }
 
 func (m *Model) clearPendingSubmissions() {
+	count := m.pending.count()
 	m.pending.clear()
+	// 队列事件(clear):cancel 等清队,webui 端全清
+	if count > 0 && m.queueNotifyFn != nil {
+		m.queueNotifyFn("clear", "", 0)
+	}
+}
+
+// QueuedSubmissions 返回可见排队项文本快照(webui GET /api/chat/queue 用,
+// hidden 内部队列不暴露)
+func (m *Model) QueuedSubmissions() []string {
+	return m.pending.visibleTexts()
 }
 
 func (m *Model) cancelActiveRun() {
@@ -185,6 +204,10 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 	text, hidden, override, imgs, remote := m.pending.consumeDetailed()
 	if text == "" && len(imgs) == 0 {
 		return nil
+	}
+	// 队列事件(dequeue):turn 结束自动消费,webui 端同步移除(hidden 内部队列不通知)
+	if !hidden && m.queueNotifyFn != nil {
+		m.queueNotifyFn("dequeue", text, m.pending.count())
 	}
 	if remote {
 
@@ -436,6 +459,19 @@ func (q *pendingQueue) count() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.items)
+}
+
+// visibleTexts 返回可见排队项文本(hidden 内部队列不暴露),webui 队列快照用
+func (q *pendingQueue) visibleTexts() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]string, 0, len(q.items))
+	for _, it := range q.items {
+		if !it.Hidden {
+			out = append(out, it.Text)
+		}
+	}
+	return out
 }
 
 func (q *pendingQueue) clear() {

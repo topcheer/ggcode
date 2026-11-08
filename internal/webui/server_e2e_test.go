@@ -509,7 +509,15 @@ func TestE2EChatWSFullLifecycle(t *testing.T) {
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "explain goroutines"})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	for {
+		if err := ws.ReadJSON(&ack); err != nil {
+			t.Fatal(err)
+		}
+		// 跳过连接时队列快照(新事件:连接建立先推 type=queue event=list)
+		if ack["type"] != "queue" {
+			break
+		}
+	}
 	if ack["type"] != "user_ack" {
 		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}
@@ -621,7 +629,7 @@ func TestE2EChatWSErrorEvent(t *testing.T) {
 
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "cause error"})
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
@@ -637,6 +645,9 @@ func TestE2EChatWSErrorEvent(t *testing.T) {
 	for {
 		var msg map[string]interface{}
 		ws.ReadJSON(&msg)
+		if msg["type"] == "queue" {
+			continue // 连接时队列快照
+		}
 		if msg["type"] == "error" {
 			gotError = true
 			if !strings.Contains(msg["error"].(string), "rate limit") {
@@ -674,7 +685,14 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 
 	conns[0].WriteJSON(map[string]string{"type": "user_message", "text": "broadcast test"})
 	var ack map[string]interface{}
-	conns[0].ReadJSON(&ack)
+	for {
+		if err := conns[0].ReadJSON(&ack); err != nil {
+			t.Fatal(err)
+		}
+		if ack["type"] != "queue" {
+			break // 跳过连接时队列快照
+		}
+	}
 
 	events := []provider.StreamEvent{
 		{Type: provider.StreamEventText, Text: "chunk1 "},
@@ -697,6 +715,9 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 			var msg map[string]interface{}
 			if err := ws.ReadJSON(&msg); err != nil {
 				t.Fatalf("conn %d read error after %d events: %v", i, received, err)
+			}
+			if msg["type"] == "queue" {
+				continue // 队列快照/事件不计入流事件数
 			}
 			received++
 			if msg["type"] == "done" {
@@ -729,7 +750,7 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 		ws.WriteJSON(map[string]string{"type": "user_message", "text": m})
 		var ack map[string]interface{}
 		ws.SetReadDeadline(time.Now().Add(2 * time.Second))
-		ws.ReadJSON(&ack)
+		skipQueueSnapshot(t, ws, &ack)
 		if ack["type"] != "user_ack" {
 			t.Errorf("expected user_ack for '%s', got %v", m, ack["type"])
 		}
@@ -773,7 +794,7 @@ func TestE2EChatWSMultipleImages(t *testing.T) {
 	})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 	if ack["type"] != "user_ack" {
 		t.Fatal("expected user_ack")
 	}
@@ -810,12 +831,12 @@ func TestE2EChatWSInvalidBase64File(t *testing.T) {
 	})
 
 	var firstMsg map[string]interface{}
-	ws.ReadJSON(&firstMsg)
+	skipQueueSnapshot(t, ws, &firstMsg)
 
 	if firstMsg["type"] == "error" {
 
 		var secondMsg map[string]interface{}
-		ws.ReadJSON(&secondMsg)
+		skipQueueSnapshot(t, ws, &secondMsg)
 		if secondMsg["type"] != "user_ack" {
 			t.Errorf("expected user_ack after error, got %v", secondMsg["type"])
 		}
@@ -851,7 +872,7 @@ func TestE2EChatWSMixedAttachments(t *testing.T) {
 	})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 	if ack["type"] != "user_ack" {
 		t.Fatal("expected user_ack")
 	}
@@ -897,7 +918,7 @@ func TestE2EChatWSDisconnectCleanup(t *testing.T) {
 
 	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg map[string]interface{}
-	ws2.ReadJSON(&msg)
+	skipQueueSnapshot(t, ws2, &msg)
 	if msg["type"] != "text_delta" || msg["text"] != "still alive" {
 		t.Errorf("ws2 should still receive events after ws1 disconnected, got %v", msg)
 	}
@@ -932,7 +953,7 @@ func TestE2EChatWSConcurrentSends(t *testing.T) {
 			})
 			ws.SetReadDeadline(time.Now().Add(3 * time.Second))
 			var ack map[string]interface{}
-			ws.ReadJSON(&ack)
+			skipQueueSnapshot(t, ws, &ack)
 			if ack["type"] == "user_ack" {
 				atomic.AddInt32(&ackCount, 1)
 			}
@@ -1241,5 +1262,19 @@ func TestE2EIMStatusCallback(t *testing.T) {
 	}
 	if result[1]["adapter"] != "discord" {
 		t.Errorf("expected adapter discord, got %v", result[1]["adapter"])
+	}
+}
+
+// skipQueueSnapshot 跳过连接建立时服务端推送的队列快照(type=queue event=list),
+// 使 ack 断言与流事件计数不受新事件影响
+func skipQueueSnapshot(t *testing.T, ws *websocket.Conn, ack *map[string]interface{}) {
+	t.Helper()
+	for {
+		if err := ws.ReadJSON(ack); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if (*ack)["type"] != "queue" {
+			return
+		}
 	}
 }

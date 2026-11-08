@@ -125,6 +125,9 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 
 	writeCh := make(chan interface{}, 64)
 	writeDone := make(chan struct{})
+	// 队列事件 sink 注册:断开时注销(快照在 send 定义后推送)
+	unregisterQueue := s.registerQueueSink(writeCh)
+	defer unregisterQueue()
 	safego.Go("webui.ws.writeLoop", func() {
 		defer close(writeDone)
 		for msg := range writeCh {
@@ -144,6 +147,8 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deltaDrops := int64(0)
+	// 连接建立先推一次队列全量快照(重连/切会话后同步)
+	send(s.queueSnapshotMsg())
 	sendTerminal := func(msg map[string]interface{}) {
 		if msg["type"] == "done" && deltaDrops > 0 {
 			msg["dropped_deltas"] = deltaDrops
