@@ -9,8 +9,11 @@ import (
 const authScript = `<script>
 (function(){
 	var m=location.hash.match(/token=([a-f0-9]+)/);
-	if(!m)return;
-	var t=m[1];
+	// 会话持久化:首次经 #token= 进入时存 sessionStorage,刷新/再开同源标签页
+	// 不再丢凭证(此前 replaceState 抹掉 hash 后刷新即失联,WS 403 无限重试)
+	var t=m?m[1]:sessionStorage.getItem('ggcode-ws-token');
+	if(!t)return;
+	if(m)try{sessionStorage.setItem('ggcode-ws-token',t)}catch(e){}
 	history.replaceState(null,'',location.pathname);
 	var origFetch=window.fetch;
 	window.fetch=function(url,opts){
