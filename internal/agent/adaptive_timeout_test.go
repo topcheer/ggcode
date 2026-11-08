@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+// llm_call must never be timed out at the catDefault 2m wall nor shrunk by
+// fast history: one-shot LLM calls (thinking models, schema re-asks) are
+// high-variance by nature (user report 2026-11-08: most calls died at 2m0s).
+func TestLLMCallTimeoutCategory(t *testing.T) {
+	if got := categoryDefaultTimeout(catLLM); got != 10*time.Minute {
+		t.Errorf("categoryDefaultTimeout(catLLM) = %v, want 10m", got)
+	}
+	lt := NewLatencyTracker()
+	for i := 0; i < 10; i++ {
+		lt.RecordAndCheck("llm_call", 2*time.Second) // fast history
+	}
+	if got := lt.computeAdaptiveTimeout("llm_call"); got != 10*time.Minute {
+		t.Errorf("computeAdaptiveTimeout(llm_call) with fast history = %v, want 10m (non-adaptive)", got)
+	}
+}
+
 func TestClassifyTool(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -38,6 +54,7 @@ func TestClassifyTool(t *testing.T) {
 		{"mobile_device", catBrowser},
 		{"mcp__filesystem__read", catMCP},
 		{"mcp__github__create_issue", catMCP},
+		{"llm_call", catLLM},
 		{"unknown_tool", catDefault},
 	}
 

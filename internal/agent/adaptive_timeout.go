@@ -28,6 +28,7 @@ const (
 	catGit
 	catDefault
 	catBrowser
+	catLLM
 )
 
 func categoryDefaultTimeout(cat toolTimeoutCategory) time.Duration {
@@ -48,6 +49,12 @@ func categoryDefaultTimeout(cat toolTimeoutCategory) time.Duration {
 		return 60 * time.Second
 	case catBrowser:
 		return 180 * time.Second
+	case catLLM:
+		// One-shot LLM calls (llm_call) run non-streaming and inherit the
+		// session reasoning effort; thinking models routinely take minutes
+		// server-side before the full response returns. 2m (catDefault)
+		// killed most real calls (#5286-class user report 2026-11-08).
+		return 10 * time.Minute
 	default:
 		return 120 * time.Second
 	}
@@ -82,6 +89,8 @@ var timeoutCategoryByTool = map[string]toolTimeoutCategory{
 	"browser":       catBrowser,
 	"screenshot":    catBrowser,
 	"mobile_device": catBrowser,
+
+	"llm_call": catLLM,
 }
 
 func classifyTool(toolName string) toolTimeoutCategory {
@@ -108,6 +117,13 @@ func (lt *LatencyTracker) computeAdaptiveTimeout(toolName string) time.Duration 
 
 	cat := classifyTool(toolName)
 	catDefault := categoryDefaultTimeout(cat)
+
+	// LLM one-shot latency is high-variance (model queue, thinking depth,
+	// schema re-ask loops); adaptive shrinkage must never cut it below the
+	// category default — a fast history does not mean the next call is fast.
+	if cat == catLLM {
+		return catDefault
+	}
 
 	if lt.sampleCount(toolName) < adaptiveMinSamples {
 		return catDefault
