@@ -26,6 +26,12 @@
   --color-primary: var(--color-brand);
   --color-selected: rgba(255, 255, 255, 0.1);
   --color-hover: rgba(255, 255, 255, 0.06);
+
+  /* markdown 语义面(行内码/标签/引用块) */
+  --color-tag: #2a2a34;
+  --color-tag-fg: var(--color-foreground);
+  --color-quote-surface: rgba(255, 255, 255, 0.04);
+  --color-quote-border: rgba(255, 255, 255, 0.14);
   --color-surface: rgba(255, 255, 255, 0.04);
   --color-surface-hover: rgba(255, 255, 255, 0.07);
   --color-border: rgba(255, 255, 255, 0.1);
@@ -91,6 +97,12 @@
   --color-brand: #0ea5e9;
   --color-selected: rgba(0, 0, 0, 0.08);
   --color-hover: rgba(0, 0, 0, 0.05);
+
+  /* markdown 语义面(行内码/标签/引用块) */
+  --color-tag: #ececf0;
+  --color-tag-fg: #3f3f46;
+  --color-quote-surface: rgba(0, 0, 0, 0.035);
+  --color-quote-border: rgba(0, 0, 0, 0.14);, 0.05);
   --color-surface: rgba(0, 0, 0, 0.03);
   --color-surface-hover: rgba(0, 0, 0, 0.06);
   --color-border: rgba(0, 0, 0, 0.1);
