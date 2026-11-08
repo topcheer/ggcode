@@ -36,9 +36,9 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const send = (text: string) => {
+  const send = (text: string, images?: string[]) => {
     pushOptimistic(text);
-    wsRef.current?.sendUser(text);
+    wsRef.current?.sendUser(text, images);
   };
 
   const hasMessages = messages.length > 0;

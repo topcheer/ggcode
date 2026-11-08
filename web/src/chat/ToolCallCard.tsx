@@ -2,12 +2,46 @@ import { useState } from "react";
 import type { ToolInvocation } from "@/store/chat";
 
 /** ToolCallCard(§4.2 状态机):spinner→绿/红状态灯+耗时徽章;对齐 TUI 分类学的特判渲染 */
-export default function ToolCallCard({ tool }: { tool: ToolInvocation }) {
+export default function ToolCallCard({ tool, onOpenPane }: { tool: ToolInvocation; onOpenPane?: (tool: ToolInvocation) => void }) {
   const [expanded, setExpanded] = useState(false);
   const dur = tool.endedAt ? tool.endedAt - tool.startedAt : null;
 
   // 特判:diff 类工具内嵌 diff 视图(TUI editdiff 同判);P1.5 随 tool_result_rich 结构化升级
   const isDiffTool = /^(edit_file|multi_edit_file|write_file|apply_patch|notebook_edit)$/.test(tool.name);
+
+  // Spawn 条目形态(§6.1):子代理委派类工具渲染为独立入口——
+  // 主聊天流只出现一行 "Spawn <name> →"(状态灯),点击展开推理/结果,
+  // 可推入右侧 Pane 并排阅读(不污染主流——ZCode 关键体验)
+  const spawnName = parseSpawnTarget(tool);
+  if (spawnName !== null) {
+    return (
+      <div className="rounded-xl border border-[var(--color-agent-node)] bg-card overflow-hidden">
+        <button
+          className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-hover)]"
+          onClick={() => (onOpenPane ? onOpenPane(tool) : setExpanded(!expanded))}
+        >
+          <StateLight tool={tool} />
+          <span
+            className="text-ui-sm font-medium"
+            style={{ color: "var(--color-agent-node-fg)" }}
+          >
+            Spawn {spawnName}
+          </span>
+          {!tool.done && <span className="text-ui-xs text-foreground-subtlest">推理中…</span>}
+          {tool.done && !tool.isError && <span className="text-ui-xs text-foreground-subtlest">已完成 → 点击查看报告</span>}
+          {tool.isError && <span className="text-ui-xs text-[var(--color-destructive-surface-fg)]">失败</span>}
+          <span className="ml-auto text-ui-xs text-foreground-subtlest">{onOpenPane ? "⤢" : expanded ? "▾" : "▸"}</span>
+        </button>
+        {expanded && !onOpenPane && tool.result && (
+          <pre
+            className="text-ui-xs max-h-72 overflow-auto border-t border-border p-3 font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle"
+          >
+            {tool.result}
+          </pre>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
@@ -72,6 +106,26 @@ function safePretty(s: string): string {
     return JSON.stringify(JSON.parse(s), null, 2);
   } catch {
     return s;
+  }
+}
+
+/** 子代理委派类工具识别:返回展示名(agent/template),非委派类返回 null */
+function parseSpawnTarget(tool: ToolInvocation): string | null {
+  try {
+    const o = JSON.parse(tool.argsText || "{}") as Record<string, unknown>;
+    switch (tool.name) {
+      case "spawn_agent":
+      case "delegate":
+        return String(o.task ?? o.prompt ?? "agent").slice(0, 40) || "agent";
+      case "use_namedagent":
+        return String(o.name ?? "named agent");
+      case "teammate_spawn":
+        return String(o.name ?? "teammate");
+      default:
+        return null;
+    }
+  } catch {
+    return null;
   }
 }
 
