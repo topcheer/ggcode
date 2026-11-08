@@ -53,6 +53,7 @@ type ChatStore = {
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
   loadHistory: () => Promise<void>;
+  syncQueue: (items: string[]) => void; // 会话切换/重连后重拉队列快照
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
   pushOptimistic: (text: string) => void;
   setConn: (s: ConnState) => void;
@@ -141,6 +142,8 @@ export const useChat = create<ChatStore>((set) => ({
     })),
 
   reset: () => set({ messages: [], busy: false, lastError: null }),
+
+  syncQueue: (items) => set({ queueItems: items }),
 
   applyMsg: (m) =>
     set((st) => {
