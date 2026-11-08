@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-type Controls = { model?: string; mode?: string; reasoning_effort?: string };
+type Controls = { model?: string; mode?: string; reasoning_effort?: string; vendor?: string; endpoint?: string };
 
 const MODES = ["supervised", "bypass"];
 const EFFORTS = ["low", "medium", "high"];
@@ -18,7 +18,7 @@ export default function ChatControls() {
       .then((r) => (r.ok ? r.json() : {}))
       .then((d) => setCtrl(d))
       .catch(() => {});
-      // 模型可选列表:provider(vendor)→endpoint 两级分组,models 保留层级
+      // 模型可选列表:仅当前活动 provider·endpoint 的模型(切换 provider 去设置页
     fetch("/api/config")
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg: { vendors?: Record<string, { endpoints?: Record<string, { models?: string[] }> }> } | null) => {
@@ -66,19 +66,14 @@ export default function ChatControls() {
         <option value="" disabled>
           {ctrl.model || "模型"}
         </option>
-        {groups.map((g) => {
-          const ms = g.models.filter((m) => m !== ctrl.model);
-          if (!ms.length) return null;
-          return (
-            <optgroup key={`${g.vendor}/${g.endpoint}`} label={`${g.vendor} · ${g.endpoint}`}>
-              {ms.map((m) => (
-                <option key={`${g.vendor}/${g.endpoint}/${m}`} value={m}>
-                  {m}
-                </option>
-              ))}
-            </optgroup>
-          );
-        })}
+        {/* 仅活动 provider·endpoint 的模型;切换 provider 请到设置-供应商 */}
+        {(groups.find((g) => g.vendor === ctrl.vendor && g.endpoint === ctrl.endpoint)?.models ?? [])
+          .filter((m) => m !== ctrl.model)
+          .map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
       </select>
       <select
         className={select}
