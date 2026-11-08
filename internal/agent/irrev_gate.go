@@ -365,6 +365,24 @@ func irrevSegmentIsReadOnly(seg string) bool {
 			mutating := false
 			for i := 1; i < len(rest); i++ {
 				a := rest[i]
+				// #5289: pflag equals form (--method=DELETE, -X=POST,
+				// --field=k=v, --input=file) bypassed the space-form
+				// detection below because the token is glued to its value.
+				// Split at the first '=' and run the same flag checks.
+				if eq := strings.IndexByte(a, '='); eq > 0 && a[0] == '-' {
+					flag, val := a[:eq], a[eq+1:]
+					switch flag {
+					case "-X", "--method":
+						m := strings.ToUpper(val)
+						if m != "GET" && m != "HEAD" {
+							mutating = true
+						}
+						continue
+					case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
+						mutating = true
+						continue
+					}
+				}
 				if a == "-X" || a == "--method" {
 					if i+1 < len(rest) {
 						m := strings.ToUpper(rest[i+1])
