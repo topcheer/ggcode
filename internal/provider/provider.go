@@ -166,6 +166,7 @@ type StreamEvent struct {
 	Truncated         bool
 	PolicyBlocked     bool
 	Block             ContentBlock
+	Subagent          *SubagentEvent
 }
 
 type StreamEventType int
@@ -180,7 +181,19 @@ const (
 	StreamEventServerTool
 	StreamEventReasoning
 	StreamEventSystem
+	StreamEventSubagentDelta // 子代理实时流(§6.1):Subagent.ID 标识来源,Text 为增量
+	StreamEventSubagentDone  // 子代理运行完结:Subagent.Result/IsError
 )
+
+// SubagentEvent carries live sub-agent stream data on the main event bus so
+// every consumer (TUI, WebUI, desktop) sees the same first-class contract.
+type SubagentEvent struct {
+	ID      string // SubAgentID
+	Kind    string // "text" | "reasoning"
+	Text    string // delta payload
+	Result  string // final report (done events only)
+	IsError bool
+}
 
 type ToolCallDelta struct {
 	ID               string

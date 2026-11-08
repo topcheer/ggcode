@@ -27,11 +27,22 @@ export type ToolInvocation = {
 
 type ConnState = "connecting" | "open" | "closed";
 
+/** 子代理实时流(P 二层一等键=SubAgentID,与桌面面板语义一致) */
+export type SubagentStream = {
+  id: string;
+  text: string;
+  reasoning: string;
+  done: boolean;
+  result?: string;
+  isError?: boolean;
+};
+
 type ChatStore = {
   messages: UIMessage[];
   conn: ConnState;
   busy: boolean; // agent 处理中(§ WS busy error)
   lastError: string | null;
+  subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   loadHistory: () => Promise<void>;
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
   pushOptimistic: (text: string) => void;
@@ -55,6 +66,7 @@ export const useChat = create<ChatStore>((set) => ({
   conn: "closed",
   busy: false,
   lastError: null,
+  subagentStreams: {},
 
   setConn: (conn) => set({ conn }),
 
@@ -183,6 +195,23 @@ export const useChat = create<ChatStore>((set) => ({
           const msgs = [...st.messages];
           msgs.push({ id: nid(), role: "system", text: m.text, reasoning: "", tools: [] });
           return { messages: msgs };
+        }
+        // §6.1 二层一等流(SubAgentID 键;后端 emit 后自动激活,零事件不渲染)
+        case "subagent_delta": {
+          const prev = st.subagentStreams[m.id] ?? { id: m.id, text: "", reasoning: "", done: false };
+          const cur = { ...prev };
+          if (m.kind === "reasoning") cur.reasoning += m.text;
+          else cur.text += m.text;
+          return { subagentStreams: { ...st.subagentStreams, [m.id]: cur } };
+        }
+        case "subagent_done": {
+          const prev = st.subagentStreams[m.id] ?? { id: m.id, text: "", reasoning: "", done: false };
+          return {
+            subagentStreams: {
+              ...st.subagentStreams,
+              [m.id]: { ...prev, done: true, result: m.result, isError: m.is_error },
+            },
+          };
         }
       }
     }),

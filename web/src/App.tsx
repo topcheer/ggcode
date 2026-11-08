@@ -35,6 +35,9 @@ export default function App() {
   // 右 Pane(P5-6):Spawn 详情推入右栏并排阅读(§6.1)
   const paneSpawn = usePane((s) => s.active);
   const closePane = usePane((s) => s.close);
+  // §6.1 二层:活跃子代理流(未完结的在前)
+  const streams = useChat((s) => s.subagentStreams);
+  const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
@@ -176,7 +179,28 @@ export default function App() {
         </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn ? { width: "380px" } : undefined}>
+      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 ? { width: "380px" } : undefined}>
+        {/* §6.1 二层:活跃子代理实时流监视(一等键=SubAgentID;零事件自动隐藏) */}
+        {activeStreams.length > 0 && (
+          <div className="max-h-[50%] overflow-auto border-b border-border">
+            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">子代理实时流</div>
+            {activeStreams.map(([id, s]) => (
+              <div key={id} className="border-t border-border px-4 py-2">
+                <div className="mb-1 flex items-center gap-2">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
+                  />
+                  <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
+                  <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
+                </div>
+                <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+                  {s.text || s.reasoning || "…"}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
         {paneSpawn ? (
           <div className="flex h-full flex-col">
             <div className="flex items-center gap-2 border-b border-border px-4 py-3">

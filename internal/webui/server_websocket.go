@@ -323,6 +323,24 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 			"type": "tool_result", "name": event.Tool.Name,
 			"result": event.Result, "is_error": event.IsError,
 		}
+	case provider.StreamEventSubagentDelta:
+		sa := event.Subagent
+		if sa == nil {
+			return nil
+		}
+		return map[string]interface{}{
+			"type": "subagent_delta", "id": sa.ID,
+			"kind": sa.Kind, "text": sa.Text,
+		}
+	case provider.StreamEventSubagentDone:
+		sa := event.Subagent
+		if sa == nil {
+			return nil
+		}
+		return map[string]interface{}{
+			"type": "subagent_done", "id": sa.ID,
+			"result": sa.Result, "is_error": sa.IsError,
+		}
 	case provider.StreamEventReasoning:
 
 		return map[string]interface{}{"type": "reasoning_delta", "text": event.Text}
