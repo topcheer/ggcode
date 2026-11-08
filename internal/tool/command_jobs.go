@@ -743,6 +743,50 @@ func capCommandOutputText(s, label string) string {
 	return s
 }
 
+// segmentHeaderLike reports whether a line looks like a deliberate
+// multi-section separator (the "══/── label ══" style used in compound
+// shell commands to fence sections of output). Its purpose here is NOT to
+// interpret user style: it detects output that ENDS on such a header with
+// no body after it - the signature of a truncated tail (observed #5274:
+// compound echo+gh chains occasionally lose mid/late sections to transient
+// transport failures, and exit-0 commands look complete when they are not).
+func segmentHeaderLike(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	// Runs of 3+ box/light characters (═ ─ ━ ─) possibly with a label.
+	n := 0
+	for _, r := range t {
+		if r == '═' || r == '─' || r == '━' {
+			n++
+		}
+	}
+	return n >= 3
+}
+
+// detectOrphanSegmentHeaders returns the number of trailing segment
+// headers (scanning back over blank lines) that have no body content
+// after them.
+func detectOrphanSegmentHeaders(lines []string) int {
+	i := len(lines) - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+	if i < 0 {
+		return 0
+	}
+	count := 0
+	for i >= 0 && segmentHeaderLike(lines[i]) {
+		count++
+		i--
+		for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+			i--
+		}
+	}
+	return count
+}
+
 func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Job ID: %s\n", snapshot.ID))
@@ -779,6 +823,14 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 			for _, line := range snapshot.Lines {
 				sb.WriteString(util.StripANSI(line))
 				sb.WriteString("\n")
+			}
+			// #5274: compound commands that fence sections with separator
+			// headers should never END on a header - that shape means the
+			// last section's body never arrived (transient transport loss).
+			// Surface it so the model re-reads instead of trusting a
+			// complete-looking tail.
+			if orphans := detectOrphanSegmentHeaders(snapshot.Lines); orphans > 0 {
+				sb.WriteString(fmt.Sprintf("[warning: output ends on %d segment header(s) with no body - the tail may be truncated; re-read with read_command_output/since_line to verify]\n", orphans))
 			}
 		}
 	}

@@ -438,6 +438,18 @@ gh run watch <run-id>
 gh release view vX.Y.Z
 ```
 
+> **Never trust `gh run watch` exit status alone** (#5274). `--exit-status` returns 0
+> even when the trailing status poll failed transiently (observed: run 42415985612
+> exited 0 while the run was still `in_progress`). After every watch that exits 0,
+> do ONE independent final-state check before acting on the result:
+>
+> ```bash
+> gh api repos/topcheer/ggcode/actions/runs/<run-id> --jq '{status, conclusion}'
+> ```
+>
+> Proceed only when this shows `status=completed` and the expected `conclusion`.
+> The same rule applies to any scripted gate that wraps `gh run watch`.
+
 If a job fails and you need details:
 
 ```bash
