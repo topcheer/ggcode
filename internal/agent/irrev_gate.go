@@ -270,9 +270,37 @@ func irrevNeutralizeSafeRedirects(cmd string) string {
 }
 
 func irrevSplitShellSegments(cmd string) []string {
-	return strings.FieldsFunc(cmd, func(r rune) bool {
-		return r == ';' || r == '|' || r == '&' || r == '\n'
-	})
+	// #5269: the splitter was quote-blind, so a quoted jq program like
+	// `gh api ... -q '.[] | select(.x) | .number]'` was shredded on the pipes
+	// INSIDE the quotes; the fragment then failed the read-only table and the
+	// whole GET-class patrol call gated (the "0 grounding" FP). Split on
+	// separators only OUTSIDE single/double quotes.
+	var segs []string
+	var cur strings.Builder
+	var quote rune
+	for _, r := range cmd {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+			cur.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+			cur.WriteRune(r)
+		case r == ';' || r == '|' || r == '&' || r == '\n':
+			if cur.Len() > 0 {
+				segs = append(segs, cur.String())
+			}
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		segs = append(segs, cur.String())
+	}
+	return segs
 }
 
 func irrevSegmentIsReadOnly(seg string) bool {
@@ -297,6 +325,15 @@ func irrevSegmentIsReadOnly(seg string) bool {
 	}
 	bin := fields[0]
 	rest := fields[1:]
+	// #5269: bare shell control keywords (for/do/done/while/case ...) are
+	// transparent - the loop BODY is already split into its own segments and
+	// classified there, so `for n in 1 2; do gh api ...; done` patrols no
+	// longer gate on the keyword segments while a mutating body still does.
+	switch bin {
+	case "for", "do", "done", "while", "until", "{", "}",
+		"if", "then", "fi", "elif", "else", "case", "esac", "in":
+		return true
+	}
 	switch bin {
 	case "git":
 		if len(rest) == 0 {
