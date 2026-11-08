@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"sync"
@@ -286,6 +287,17 @@ func (s *Server) routes() {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, "{\"error\":\"unknown api endpoint: %s\"}", r.URL.Path)
 	})
+
+	// SPA 静态资源:Vite 产物 /assets/* 必须由文件服务应答(带正确 MIME),
+	// 否则被下方 "/" catch-all 的 serveSPA 以 text/html 兜底,浏览器按
+	// Strict MIME 拒绝加载 module script(白屏)。fs.Sub 限定子树防穿越。
+	if assetsFS, err := fs.Sub(spafs, "assets"); err == nil {
+		assetsHandler := http.StripPrefix("/assets/", http.FileServer(http.FS(assetsFS)))
+		s.mux.Handle("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			assetsHandler.ServeHTTP(w, r)
+		}))
+	}
 
 	s.mux.HandleFunc("/", s.serveSPA)
 

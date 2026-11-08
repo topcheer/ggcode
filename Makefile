@@ -2,12 +2,19 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build build-desktop-wails test lint verify-ci ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots sync-model-caps
+.PHONY: build build-all build-desktop-wails webui-sync-artifacts test lint verify-ci ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots sync-model-caps
 
 TAGS := goolm
 
 build:
 	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
+
+# 一站式构建:前端制品 + Go 二进制(dist/assets 已入库;前端变更时跑本 target 刷新产物并入库)
+build-all: webui-build webui-sync-artifacts build
+
+# dist/assets 被 .gitignore dist/ 挡住,制品入库需显式 force-add(流程可重放,避免漏文件)
+webui-sync-artifacts:
+	git add -f internal/webui/dist/assets/
 
 # WebUI 前端构建:web/ → internal/webui/dist (go:embed 嵌入)
 webui-build:
