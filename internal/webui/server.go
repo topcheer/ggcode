@@ -154,6 +154,7 @@ type Server struct {
 	imStatusFn      IMStatusFunc
 	imActionFn      IMActionFunc
 	restartFn       func()
+	sessionSwitchFn func(sessionID string) error
 	a2aDiscoverFn   A2ADiscoverFunc
 	knightStatusFn  KnightStatusFunc
 	knightActionFn  KnightActionFunc
@@ -323,6 +324,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/a2a", a(s.handleA2A))
 	s.mux.HandleFunc("/api/a2a/discover", a(s.handleA2ADiscover))
 	s.mux.HandleFunc("/api/sessions", a(s.handleSessions))
+	s.mux.HandleFunc("/api/sessions/switch", a(s.handleSessionSwitch))
 	s.mux.HandleFunc("/api/sessions/", a(s.handleSessionDetail))
 	s.mux.HandleFunc("/api/workspace/files", a(s.handleWorkspaceFiles))
 	s.mux.HandleFunc("/api/cron/jobs", a(s.handleCronJobs))

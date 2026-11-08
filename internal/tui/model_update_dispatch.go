@@ -30,6 +30,7 @@ func regNoop[M tea.Msg]() {
 
 func init() {
 	regUpdatePlain(func(m Model, msg logoMsg) (tea.Model, tea.Cmd) { return m.handleLogoMsg(msg) })
+	regUpdatePlain(func(m Model, msg resumeRequestMsg) (tea.Model, tea.Cmd) { return m.handleResumeRequest(msg) })
 	regUpdatePlain(func(m Model, msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) { return m.handleWindowSizeMsg(msg) })
 	regNoop[imRuntimeUpdatedMsg]()
 	regUpdatePlain(func(m Model, msg inspectorItemsLoadedMsg) (tea.Model, tea.Cmd) {
