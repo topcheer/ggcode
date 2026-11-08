@@ -17,9 +17,9 @@ import (
 )
 
 // CheckOrigin 收紧(CSWSH 防护):同源放行;无 Origin 头(非浏览器客户端)放行;
-// 携带有效 query token 的跨源 WS 放行——隧道/反代(如 etunnel)下本地 Host 被
-// 重写为回环地址、原始公网 Host 不可恢复,同源比对必失配;持证请求的 CSRF
-// 风险由 token 门槛兜底(攻击页无法构造 token)。其余跨源拒绝。
+// 代理感知同源——etunnel 等反代经 X-Forwarded-Host 还原公网 Host 后,Origin
+// 与转发头匹配即视为同源;携带有效 query token 的跨源放行(纵深防御,攻击页
+// 无法伪造 token);其余跨源拒绝。
 func (s *Server) wsUpgrader() websocket.Upgrader {
 	return websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
@@ -32,6 +32,10 @@ func (s *Server) wsUpgrader() websocket.Upgrader {
 				return false
 			}
 			if u.Host == r.Host {
+				return true
+			}
+			// 反代链只透传 X-Forwarded-Host(不回写 Host)时,与其匹配即同源
+			if u.Host == r.Header.Get("X-Forwarded-Host") {
 				return true
 			}
 			return s.authToken != "" && authTokenMatches(r.URL.Query().Get("token"), s.authToken)

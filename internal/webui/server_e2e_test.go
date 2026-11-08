@@ -1166,6 +1166,16 @@ func TestE2EChatWSCheckOrigin(t *testing.T) {
 		t.Fatal("cross-origin dial without token must be rejected")
 	}
 
+	// 代理感知同源:Origin 与 X-Forwarded-Host 匹配(反代还原公网 Host 场景)→放行
+	fwdHost := http.Header{}
+	fwdHost.Set("Origin", "https://daring-coyote-96.t.ggcode.uk")
+	fwdHost.Set("X-Forwarded-Host", "daring-coyote-96.t.ggcode.uk")
+	wsFwd, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/chat/ws?token="+s.Token(), fwdHost)
+	if err != nil {
+		t.Fatalf("proxy-aware same-origin dial should pass: %v", err)
+	}
+	wsFwd.Close()
+
 	// 无 Origin(非浏览器客户端):放行
 	ws, _, err = websocket.DefaultDialer.Dial(wsBase, nil)
 	if err != nil {
