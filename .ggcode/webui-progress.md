@@ -50,3 +50,4 @@
 - [11-09 05:40 巡检80·最小形态] 维持收口态(21b2a19eb后无新改动);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
 - [11-09 05:52 重构] mergeEndpointPut抽取(handleEndpointDetail 20→15);#5293/#5294双钉测+全量绿;webui全量2.1s ok;阻塞无。
 - [11-09 06:00 巡检81·最小形态] #5293/#5294并案+重构收口(bf48fafe5+5378ba55c已推);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
+- [11-09 06:08 重构] decodeVendorPatch/vendorPutShouldShouldSetKey抽取(handleVendorDetail 21→15,健康87/100);三钉测+全量绿;阻塞无。
