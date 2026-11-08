@@ -16,6 +16,7 @@ import (
 
 type webuiTunnelReadyMsg struct {
 	url     string
+	suffix  string // "#token=…"（公网访问鉴权必须随 URL；本地 webuiURL 中提取）
 	err     error
 	started bool // false=已激活直接复用
 }
@@ -28,7 +29,7 @@ func (m Model) handleWebuiTunnelReadyMsg(msg webuiTunnelReadyMsg) (tea.Model, te
 	if !msg.started {
 		prefix = "⬢ WebUI tunnel (already active)"
 	}
-	m.chatWriteSystem(nextSystemID(), prefix+": "+msg.url+"  (free plan: 4h lifetime, 1 Mbps)")
+	m.chatWriteSystem(nextSystemID(), prefix+": "+msg.url+msg.suffix+"  (free plan: 4h lifetime, 1 Mbps)")
 	return m, nil
 }
 
@@ -38,13 +39,31 @@ func (m Model) handleWebuiTunnelCommand(parts []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), "ⓘ WebUI tunnel is not available in this session.")
 		return nil
 	}
-	if len(parts) > 1 && strings.EqualFold(parts[1], "off") {
+	// 入口分流：parts = [/webui, tunnel, off]（也容忍直接 /webui off）
+	offWord := ""
+	if len(parts) > 2 && strings.EqualFold(parts[1], "tunnel") {
+		offWord = parts[2]
+	} else if len(parts) > 1 {
+		offWord = parts[1]
+	}
+	if strings.EqualFold(offWord, "off") {
+		if m.webuiTunnel.TunnelURL() == "" {
+			m.chatWriteSystem(nextSystemID(), "ⓘ WebUI tunnel is not active.")
+			return nil
+		}
 		m.webuiTunnel.StopTunnel()
 		m.chatWriteSystem(nextSystemID(), "⬢ WebUI tunnel closed.")
 		return nil
 	}
+	// 从 webuiURL 提取 #token= 片段（公网 URL 必须携带，否则 WS 握手 401）
+	suffix := ""
+	if m.webuiURL != "" {
+		if idx := strings.Index(m.webuiURL, "#token="); idx >= 0 {
+			suffix = m.webuiURL[idx:]
+		}
+	}
 	if u := m.webuiTunnel.TunnelURL(); u != "" {
-		m.chatWriteSystem(nextSystemID(), "⬢ WebUI tunnel (already active): "+u)
+		m.chatWriteSystem(nextSystemID(), "⬢ WebUI tunnel (already active): "+u+suffix)
 		return nil
 	}
 	if m.webuiURL == "" {
@@ -62,6 +81,6 @@ func (m Model) handleWebuiTunnelCommand(parts []string) tea.Cmd {
 	return func() tea.Msg {
 		tunnelURL, started, terr := m.webuiTunnel.StartTunnel(localAddr)
 		debug.Log("tui", "webui tunnel ready: %s started=%v err=%v", tunnelURL, started, terr)
-		return webuiTunnelReadyMsg{url: tunnelURL, err: terr, started: started}
+		return webuiTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started}
 	}
 }

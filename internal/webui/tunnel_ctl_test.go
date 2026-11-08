@@ -35,3 +35,21 @@ func TestTunnelCtlOfflineBranches(t *testing.T) {
 	}
 	c.StopTunnel() // failed-start state must be safe to stop again
 }
+
+// 钉测(/webui tunnel off 词位):入口分流 parts=[/webui,tunnel,off] 时
+// off 在 parts[2]——历史 bug 曾错检 parts[1] 导致 off 永不命中。
+// 该行为在 TUI 层,此处锁定 TunnelURL 清空语义(off 依赖的前置读)。
+func TestTunnelCtlStopClearsURL(t *testing.T) {
+	c := &TunnelCtl{}
+	c.mu.Lock()
+	c.tunnel = nil // Stop 走 cancel/url 清空路径
+	c.url = "https://x.t.ggcode.uk"
+	c.mu.Unlock()
+	if c.TunnelURL() == "" {
+		t.Fatal("setup: url should be present")
+	}
+	c.StopTunnel()
+	if c.TunnelURL() != "" {
+		t.Fatalf("stop must clear url, got %q", c.TunnelURL())
+	}
+}
